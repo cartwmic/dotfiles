@@ -1,7 +1,11 @@
 config:
-  backup: true
+  backup: false
   create: true
   dotpath: dotfiles
+actions:
+  pre:
+    zim_install: test -e $HOME/.zim || (curl -fsSL https://raw.githubusercontent.com/zimfw/install/master/install.zsh | zsh)
+    nvm_install: test -e $HOME/.config/nvm || (curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash)
 dotfiles:
   d_nvim:
     src: config/nvim
@@ -10,10 +14,14 @@ dotfiles:
     src: zshrc
     dst: ~/.zshrc
     chmod: '600'
+    actions: 
+      - nvm_install
   f_zimrc:
     src: zimrc
     dst: ~/.zimrc
     chmod: '600'
+    actions:
+      - zim_install
 profiles:
   personal:
     dotfiles:
