@@ -1,0 +1,22 @@
+config:
+  backup: true
+  create: true
+  dotpath: dotfiles
+dotfiles:
+  d_nvim:
+    src: config/nvim
+    dst: ~/.config/nvim
+  f_zshrc:
+    src: zshrc
+    dst: ~/.zshrc
+    chmod: '600'
+  f_zimrc:
+    src: zimrc
+    dst: ~/.zimrc
+    chmod: '600'
+profiles:
+  personal:
+    dotfiles:
+    - d_nvim
+    - f_zshrc
+    - f_zimrc
