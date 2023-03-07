@@ -5,9 +5,11 @@ config:
 actions:
   pre:
     macOs_fonts_install: brew tap homebrew/cask-fonts
-    macOs_source_code_font_install: brew install --cask font-sauce-code-pro-nerd-font; echo -e "\xf0\x9f\x90\x8d"; echo -e "\xee\x82\xa0"
+    macOs_source_code_font_install: brew install --cask font-sauce-code-pro-nerd-font;
+      echo -e "\xf0\x9f\x90\x8d"; echo -e "\xee\x82\xa0"
     starship_install: command -v starship || (brew install starship)
     alacritty_install: command -v alacritty || (brew install alacitty)
+    kitty_install: command -v kitty || (brew install kitty)
     nvm_install: test -e $HOME/.config/nvm || (curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh
       | bash)
     antidote_install: test -e $HOME/.antidote || (git clone --depth=1 https://github.com/mattmc3/antidote.git
@@ -43,6 +45,18 @@ dotfiles:
     - starship_install
     - macOs_fonts_install
     - macOs_source_code_font_install
+  f_zsh_plugins.txt:
+    src: zsh_plugins.txt
+    dst: ~/.zsh_plugins.txt
+    actions:
+    - antidote_install
+  d_kitty:
+    src: config/kitty
+    dst: ~/.config/kitty
+    actions:
+    - alacritty_install
+    - macOs_fonts_install
+    - macOs_source_code_font_install
 profiles:
   personal:
     dotfiles:
@@ -50,3 +64,5 @@ profiles:
     - d_nvim
     - f_zshrc
     - f_starship.toml
+    - f_zsh_plugins.txt
+    - d_kitty

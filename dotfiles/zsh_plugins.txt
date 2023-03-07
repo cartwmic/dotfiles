@@ -1,0 +1,7 @@
+
+
+zsh-users/zsh-autosuggestions
+zsh-users/zsh-history-substring-search
+belak/zsh-utils path:utility
+zdharma-continuum/fast-syntax-highlighting kind:defer
+jeffreytse/zsh-vi-mode
