@@ -6,6 +6,7 @@ source $HOME/.antidote/antidote.zsh
 autoload -Uz compinit
 ZSH_COMPDUMP=${ZSH_COMPDUMP:-${ZDOTDIR:-~}/.zcompdump}
 
+# copy and pasted, this is supposed to cache completions to reduce shell load times
 # cache .zcompdump for about a day
 if [[ $ZSH_COMPDUMP(#qNmh-20) ]]; then
   compinit -C -d "$ZSH_COMPDUMP"
@@ -20,6 +21,7 @@ fi
 } &!
 
 # fzf-tab needs to be loaded after compninit but before plugins which will wrap widgets, such as zsh-autosuggestions or fast-syntax-highlighting
+# not included in zsh_plugins.txt because it doesn't load it in the correct order
 source $HOME/fzf-tab/fzf-tab.plugin.zsh
 
 # initialize plugins statically with ${ZDOTDIR:-~}/.zsh_plugins.txt
@@ -53,7 +55,8 @@ export NVM_DIR="$HOME/.config/nvm"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 
 # fzf hook
-[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
+# needs to happen after zsh vi mode plugin is initialized in order to get everything to work correclty. See https://github.com/jeffreytse/zsh-vi-mode/issues/24
+zvm_after_init_commands+=('[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh')
 
 # starship hook
 eval "$(starship init zsh)"
