@@ -18,6 +18,7 @@ actions:
       $HOME/.fzf; $HOME/.fzf/install)
     fzf_tab_install: test -e $HOME/fzf-tab || (git clone https://github.com/Aloxaf/fzf-tab
       $HOME/fzf-tab)
+    zellij_install: command -v zellij || (brew install zellij)
 dotfiles:
   d_nvim:
     src: config/nvim
@@ -57,6 +58,11 @@ dotfiles:
     - alacritty_install
     - macOs_fonts_install
     - macOs_source_code_font_install
+  d_zellij:
+    src: config/zellij
+    dst: ~/.config/zellij
+    actions:
+    - zellij_install
 profiles:
   personal:
     dotfiles:
@@ -66,3 +72,4 @@ profiles:
     - f_starship.toml
     - f_zsh_plugins.txt
     - d_kitty
+    - d_zellij
