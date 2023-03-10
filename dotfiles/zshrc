@@ -30,7 +30,7 @@ antidote load
 export DOTDROP_PROFILE="personal"
 
 # General PATH updates
-export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:$HOME/git/git-sync:$HOME/git/git-sync/contrib:$HOME/.cargo/bin"
+export PATH="$PATH:/usr/local/bin:/usr/local/lib:/opt/homebrew/bin:$HOME/git/git-sync:$HOME/git/git-sync/contrib:$HOME/.cargo/bin"
 
 export XDG_CONFIG_HOME="$HOME/.config"
 
@@ -65,3 +65,6 @@ eval "$(starship init zsh)"
 export EDITOR=nvim
 export ZVM_VI_EDITOR=$EDITOR
 ZVM_VI_INSERT_ESCAPE_BINDKEY=jk
+
+# ranger configuration
+RANGER_LOAD_DEFAULT_RC=false

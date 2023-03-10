@@ -4,6 +4,8 @@ config:
   dotpath: dotfiles
 actions:
   pre:
+    pynvim_install: command -v pynvim || (pip3 install pynvim --user)
+    ranger_install: command -v ranger || (brew install ranger)
     macOs_fonts_install: brew tap homebrew/cask-fonts
     macOs_source_code_font_install: brew install --cask font-sauce-code-pro-nerd-font;
       echo -e "\xf0\x9f\x90\x8d"; echo -e "\xee\x82\xa0"
@@ -55,7 +57,7 @@ dotfiles:
     src: config/kitty
     dst: ~/.config/kitty
     actions:
-    - alacritty_install
+    - kitty_install
     - macOs_fonts_install
     - macOs_source_code_font_install
   d_zellij:
@@ -63,6 +65,12 @@ dotfiles:
     dst: ~/.config/zellij
     actions:
     - zellij_install
+  d_ranger:
+    src: config/ranger
+    dst: ~/.config/ranger
+    actions:
+    - ranger_install
+    - pynvim_install
 profiles:
   personal:
     dotfiles:
@@ -73,3 +81,4 @@ profiles:
     - f_zsh_plugins.txt
     - d_kitty
     - d_zellij
+    - d_ranger
