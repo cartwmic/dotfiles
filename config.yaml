@@ -1,18 +1,25 @@
+uservariables:
+  local_profile: "profile"
+  os: "operating_system"
 config:
+  func_file:
+    - ./dotdrop_funcs.py
+  import_variables:
+    - uservariables.yaml:optional
   backup: false
   create: true
   dotpath: dotfiles
 actions:
   pre:
-    lazygit_install: command -v lazygit || (brew install lazygit)
-    pynvim_install: command -v pynvim || (pip3 install pynvim --user)
-    ranger_install: command -v ranger || (brew install ranger)
+    lazygit_install: command -v lazygit || (./os_pkg_installer.sh {{@@ os @@}} lazygit)
+    pynvim_install: pip3 show pynvim || (pip3 install pynvim --user)
+    ranger_install: command -v ranger || (./os_pkg_installer.sh {{@@ os @@}} ranger)
     macOs_fonts_install: brew tap homebrew/cask-fonts
     macOs_source_code_font_install: brew install --cask font-sauce-code-pro-nerd-font;
       echo -e "\xf0\x9f\x90\x8d"; echo -e "\xee\x82\xa0"
-    starship_install: command -v starship || (brew install starship)
-    alacritty_install: command -v alacritty || (brew install alacitty)
-    kitty_install: command -v kitty || (brew install kitty)
+    starship_install: command -v starship || (./os_pkg_installer.sh {{@@ os @@}} starship)
+    alacritty_install: command -v alacritty || (./os_pkg_installer.sh {{@@ os @@}} alacritty)
+    kitty_install: command -v kitty || (./os_pkg_installer.sh {{@@ os @@}} kitty)
     nvm_install: test -e $HOME/.config/nvm || (curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh
       | bash)
     antidote_install: test -e $HOME/.antidote || (git clone --depth=1 https://github.com/mattmc3/antidote.git
@@ -21,7 +28,7 @@ actions:
       $HOME/.fzf; $HOME/.fzf/install)
     fzf_tab_install: test -e $HOME/fzf-tab || (git clone https://github.com/Aloxaf/fzf-tab
       $HOME/fzf-tab)
-    zellij_install: command -v zellij || (brew install zellij)
+    zellij_install: command -v zellij || (./os_pkg_installer.sh {{@@ os @@}} zellij)
 dotfiles:
   d_nvim:
     src: config/nvim
@@ -30,62 +37,62 @@ dotfiles:
     src: config/alacritty
     dst: ~/.config/alacritty
     actions:
-    - alacritty_install
-    - macOs_fonts_install
-    - macOs_source_code_font_install
+      - alacritty_install
+      - macOs_fonts_install
+      - macOs_source_code_font_install
   f_zshrc:
     src: zshrc
     dst: ~/.zshrc
     chmod: '600'
     actions:
-    - nvm_install
-    - antidote_install
-    - fzf_install
-    - fzf_tab_install
+      - nvm_install
+      - antidote_install
+      - fzf_install
+      - fzf_tab_install
   f_starship.toml:
     src: config/starship.toml
     dst: ~/.config/starship.toml
     actions:
-    - starship_install
-    - macOs_fonts_install
-    - macOs_source_code_font_install
+      - starship_install
+      - macOs_fonts_install
+      - macOs_source_code_font_install
   f_zsh_plugins.txt:
     src: zsh_plugins.txt
     dst: ~/.zsh_plugins.txt
     actions:
-    - antidote_install
+      - antidote_install
   d_kitty:
     src: config/kitty
     dst: ~/.config/kitty
     actions:
-    - kitty_install
-    - macOs_fonts_install
-    - macOs_source_code_font_install
+      - kitty_install
+      - macOs_fonts_install
+      - macOs_source_code_font_install
   d_zellij:
     src: config/zellij
     dst: ~/.config/zellij
     actions:
-    - zellij_install
+      - zellij_install
   d_ranger:
     src: config/ranger
     dst: ~/.config/ranger
     actions:
-    - ranger_install
-    - pynvim_install
+      - ranger_install
+      - pynvim_install
   f_config.yml:
     src: config/lazygit/config.yml
     dst: ~/.config/lazygit/config.yml
     actions:
-    - lazygit_install
+      - lazygit_install
 profiles:
   personal:
     dotfiles:
-    - d_alacritty
-    - d_nvim
-    - f_zshrc
-    - f_starship.toml
-    - f_zsh_plugins.txt
-    - d_kitty
-    - d_zellij
-    - d_ranger
-    - f_config.yml
+      - d_alacritty
+      - d_nvim
+      - f_zshrc
+      - f_starship.toml
+      - f_zsh_plugins.txt
+      - d_kitty
+      - d_zellij
+      - d_ranger
+      - f_config.yml
