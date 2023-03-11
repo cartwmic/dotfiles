@@ -4,6 +4,7 @@ config:
   dotpath: dotfiles
 actions:
   pre:
+    lazygit_install: command -v lazygit || (brew install lazygit)
     pynvim_install: command -v pynvim || (pip3 install pynvim --user)
     ranger_install: command -v ranger || (brew install ranger)
     macOs_fonts_install: brew tap homebrew/cask-fonts
@@ -71,6 +72,11 @@ dotfiles:
     actions:
     - ranger_install
     - pynvim_install
+  f_config.yml:
+    src: config/lazygit/config.yml
+    dst: ~/.config/lazygit/config.yml
+    actions:
+    - lazygit_install
 profiles:
   personal:
     dotfiles:
@@ -82,3 +88,4 @@ profiles:
     - d_kitty
     - d_zellij
     - d_ranger
+    - f_config.yml
