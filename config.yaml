@@ -1,7 +1,7 @@
 uservariables:
-  local_profile: "profile"
-  os: "operating_system"
-  skip_fonts_install: "skip_fonts_install"
+  local_profile: profile
+  os: operating_system
+  skip_fonts_install: skip_fonts_install
 config:
   import_variables:
     - uservariables.yaml:optional
@@ -16,7 +16,9 @@ actions:
     ranger_install: command -v ranger || (./os_pkg_installer.sh {{@@ os @@}} ranger)
     fonts_install: ./os_fonts_installer.sh {{@@ skip_fonts_install @@}} {{@@ os @@}}
     starship_install: command -v starship || (./os_pkg_installer.sh {{@@ os @@}} starship)
-    alacritty_install: command -v alacritty || (./os_pkg_installer.sh {{@@ os @@}} alacritty)
+    alacritty_install:
+      command -v alacritty || (./os_pkg_installer.sh {{@@ os @@}}
+      alacritty)
     kitty_install: command -v kitty || (./os_pkg_installer.sh {{@@ os @@}} kitty)
     nvm_install:
       test -e $HOME/.config/nvm || (curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh
