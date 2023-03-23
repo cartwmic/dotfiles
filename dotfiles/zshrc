@@ -42,7 +42,7 @@ export LSCOLORS=ExFxBxDxCxegedabagacad
 
 # ALIASES
 alias place_displays_home='displayplacer "id:4ED03108-0390-4016-6ED0-D1D84F2102C5 res:2560x1600 color_depth:8 scaling:off origin:(0,0) degree:0" "id:61A09114-B3A2-27AE-C9BB-FD6CD102F640 res:3840x2160 hz:60 color_depth:8 scaling:off origin:(-2656,-2160) degree:0" "id:E1C7ACF2-F1A9-B218-C9FF-BD8DFA835B57 res:3840x2160 hz:60 color_depth:8 scaling:off origin:(1184,-2160) degree:0"'
-alias place_displays_work='displayplacer "id:2E7FC41C-2E3B-63A0-F2F0-3B9DB191A1E5 res:2880x1800 color_depth:8 scaling:off origin:(0,0) degree:0" "id:61A09114-B3A2-27AE-C9BB-FD6CD102F640 res:3840x2160 hz:60 color_depth:8 scaling:on origin:(1365,-2160) degree:0" "id:E1C7ACF2-F1A9-B218-C9FF-BD8DFA835B57 res:3840x2160 hz:60 color_depth:8 scaling:on origin:(-2475,-2160) degree:0"'
+alias place_displays_work='displayplacer "id:2E7FC41C-2E3B-63A0-F2F0-3B9DB191A1E5 res:2880x1800 color_depth:8 scaling:off origin:(0,0) degree:0" "id:61A09114-B3A2-27AE-C9BB-FD6CD102F640 res:3840x2160 hz:60 color_depth:8 scaling:on origin:(-2475,-2160) degree:0" "id:E1C7ACF2-F1A9-B218-C9FF-BD8DFA835B57 res:3840x2160 hz:60 color_depth:8 scaling:on origin:(1365,-2160) degree:0"'
 
 
 # Dotdrop
