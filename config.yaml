@@ -10,6 +10,7 @@ config:
   dotpath: dotfiles
 actions:
   pre:
+    tasks_install: command -v task || (./os_pkg_installer.sh {{@@ os @@}} go-task)
     ripgrep_install: command -v rg || (./os_pkg_installer.sh {{@@ os @@}} ripgrep)
     lazygit_install: command -v lazygit || (./os_pkg_installer.sh {{@@ os @@}} lazygit)
     pynvim_install: pip3 show pynvim || (pip3 install pynvim --user)
@@ -54,6 +55,7 @@ dotfiles:
       - antidote_install
       - fzf_install
       - fzf_tab_install
+      - tasks_install
   f_starship.toml:
     src: config/starship.toml
     dst: ~/.config/starship.toml
