@@ -1,5 +1,8 @@
 #!/bin/zsh
 
+# update fpath to include custom completion files, see https://github.com/zsh-users/zsh-completions/blob/master/zsh-completions-howto.org#telling-zsh-which-function-to-use-for-completing-a-command
+fpath=($HOME/.config/zsh-completions $fpath)
+
 # source antidote
 source $HOME/.antidote/antidote.zsh
 
@@ -68,3 +71,8 @@ ZVM_VI_INSERT_ESCAPE_BINDKEY=jk
 
 # ranger configuration
 RANGER_LOAD_DEFAULT_RC=false
+
+# task zsh-completions, see https://github.com/go-task/task/blob/f22389a82440286eb0e2457ac0b272d47c3cfead/docs/docs/installation.md#setup-completions
+# needed to specifically autoload _task and compdef _task for some reason, not sure why. 
+autoload -U _task
+compdef _task task

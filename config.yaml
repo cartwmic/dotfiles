@@ -4,7 +4,7 @@ uservariables:
   skip_fonts_install: skip_fonts_install
 config:
   import_variables:
-  - uservariables.yaml:optional
+    - uservariables.yaml:optional
   backup: false
   create: true
   dotpath: dotfiles
@@ -16,16 +16,21 @@ actions:
     ranger_install: command -v ranger || (./os_pkg_installer.sh {{@@ os @@}} ranger)
     fonts_install: ./os_fonts_installer.sh {{@@ skip_fonts_install @@}} {{@@ os @@}}
     starship_install: command -v starship || (./os_pkg_installer.sh {{@@ os @@}} starship)
-    alacritty_install: command -v alacritty || (./os_pkg_installer.sh {{@@ os @@}}
+    alacritty_install:
+      command -v alacritty || (./os_pkg_installer.sh {{@@ os @@}}
       alacritty)
     kitty_install: command -v kitty || (./os_pkg_installer.sh {{@@ os @@}} kitty)
-    nvm_install: test -e $HOME/.config/nvm || (curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh
+    nvm_install:
+      test -e $HOME/.config/nvm || (curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh
       | bash)
-    antidote_install: test -e $HOME/.antidote || (git clone --depth=1 https://github.com/mattmc3/antidote.git
+    antidote_install:
+      test -e $HOME/.antidote || (git clone --depth=1 https://github.com/mattmc3/antidote.git
       $HOME/.antidote)
-    fzf_install: test -e $HOME/.fzf.zsh || (git clone --depth 1 https://github.com/junegunn/fzf.git
+    fzf_install:
+      test -e $HOME/.fzf.zsh || (git clone --depth 1 https://github.com/junegunn/fzf.git
       $HOME/.fzf; $HOME/.fzf/install)
-    fzf_tab_install: test -e $HOME/fzf-tab || (git clone https://github.com/Aloxaf/fzf-tab
+    fzf_tab_install:
+      test -e $HOME/fzf-tab || (git clone https://github.com/Aloxaf/fzf-tab
       $HOME/fzf-tab)
     zellij_install: command -v zellij || (./os_pkg_installer.sh {{@@ os @@}} zellij)
 dotfiles:
@@ -33,64 +38,69 @@ dotfiles:
     src: config/nvim
     dst: ~/.config/nvim
     actions:
-    - ripgrep_install
+      - ripgrep_install
   d_alacritty:
     src: config/alacritty
     dst: ~/.config/alacritty
     actions:
-    - fonts_install
-    - alacritty_install
+      - fonts_install
+      - alacritty_install
   f_zshrc:
     src: zshrc
     dst: ~/.zshrc
-    chmod: '600'
+    chmod: "600"
     actions:
-    - nvm_install
-    - antidote_install
-    - fzf_install
-    - fzf_tab_install
+      - nvm_install
+      - antidote_install
+      - fzf_install
+      - fzf_tab_install
   f_starship.toml:
     src: config/starship.toml
     dst: ~/.config/starship.toml
     actions:
-    - starship_install
-    - fonts_install
+      - starship_install
+      - fonts_install
   f_zsh_plugins.txt:
     src: zsh_plugins.txt
     dst: ~/.zsh_plugins.txt
     actions:
-    - antidote_install
+      - antidote_install
   d_kitty:
     src: config/kitty
     dst: ~/.config/kitty
     actions:
-    - kitty_install
-    - fonts_install
+      - kitty_install
+      - fonts_install
   d_zellij:
     src: config/zellij
     dst: ~/.config/zellij
     actions:
-    - zellij_install
+      - zellij_install
   d_ranger:
     src: config/ranger
     dst: ~/.config/ranger
     actions:
-    - ranger_install
-    - pynvim_install
+      - ranger_install
+      - pynvim_install
   f_config.yml:
     src: config/lazygit/config.yml
     dst: ~/.config/lazygit/config.yml
     actions:
-    - lazygit_install
+      - lazygit_install
+  d_zsh-completions:
+    src: config/zsh-completions
+    dst: ~/.config/zsh-completions
+    chmod: "744"
 profiles:
   personal:
     dotfiles:
-    - d_alacritty
-    - d_nvim
-    - f_zshrc
-    - f_starship.toml
-    - f_zsh_plugins.txt
-    - d_kitty
-    - d_zellij
-    - d_ranger
-    - f_config.yml
+      - d_alacritty
+      - d_nvim
+      - f_zshrc
+      - f_starship.toml
+      - f_zsh_plugins.txt
+      - d_kitty
+      - d_zellij
+      - d_ranger
+      - f_config.yml
+      - d_zsh-completions
