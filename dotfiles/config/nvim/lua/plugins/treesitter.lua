@@ -5,7 +5,7 @@ return {
       ensure_installed = {
         "bash",
         "c",
-        "help",
+        "vimdoc",
         "hcl",
         "html",
         "javascript",
