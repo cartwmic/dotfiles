@@ -83,3 +83,4 @@ export SDKMAN_DIR="$HOME/.sdkman"
 # needed to specifically autoload _task and compdef _task for some reason, not sure why. 
 autoload -U _task
 compdef _task task
+
