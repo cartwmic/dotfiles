@@ -11,10 +11,8 @@ return {
             on_attach = function(client, buffer)
               -- for some reason this is set to false even though yamlls supports it
               if client.name == "yamlls" then
-                print("here1")
                 client.server_capabilities.documentFormattingProvider = true
               end
-              print("here2")
               -- need to redo the side effects of these on_attach since I've updated server_capabilities
               -- and they depend on the values of server_capabilities
               -- require("lazyvim.plugins.lsp.format").on_attach(client, buffer)
