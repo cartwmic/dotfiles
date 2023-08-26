@@ -103,6 +103,9 @@ profiles:
       - d_ranger
       - f_config.yml
       - d_zsh-completions
+  ubuntu:
+    include:
+      - personal
   axon_work_computer:
     include:
       - personal
