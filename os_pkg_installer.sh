@@ -11,11 +11,12 @@ elif [ "$1" = 'ubuntu' ]; then
 		if [ "$2" = 'go-task' ]; then
 			sudo sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d
 		elif [ "$2" = 'lazygit' ]; then
-			mkdir "$HOME/lazygit"
+			cd $HOME || exit
+			mkdir "lazygit"
 			LAZYGIT_VERSION=$(curl -s "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" | grep -Po '"tag_name": "v\K[^"]*')
-			curl -Lo "$HOME/lazygit.tar.gz" "https://github.com/jesseduffield/lazygit/releases/latest/download/lazygit_${LAZYGIT_VERSION}_Linux_x86_64.tar.gz"
-			tar xf "$HOME/lazygit.tar.gz" "$HOME/lazygit"
-			sudo install "$HOME/lazygit" /usr/local/bin
+			curl -Lo "lazygit.tar.gz" "https://github.com/jesseduffield/lazygit/releases/latest/download/lazygit_${LAZYGIT_VERSION}_Linux_x86_64.tar.gz"
+			tar xf "lazygit.tar.gz" "lazygit"
+			sudo install "lazygit" /usr/local/bin
 		elif [ "$2" = 'starship' ]; then
 			curl -sS https://starship.rs/install.sh | sudo sh
 		elif [ "$2" = 'zellij' ]; then
