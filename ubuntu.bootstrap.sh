@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # install zsh for shell and python for dotdrop
-sudo apt install zsh python3-pip unzip zip -y
+sudo apt install zsh python3-pip unzip zip software-properties-common -y
 
 # make zsh the default shell
 sudo chsh -s "$(which zsh)" "$(whoami)"
