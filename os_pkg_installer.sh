@@ -2,7 +2,7 @@
 
 if [ "$2" = 'sdkman' ]; then # install via install script regardless of os
 	if [ "$2" = 'sdkman' ]; then
-		sudo curl -s "https://get.sdkman.io" | zsh
+		sudo curl -s "https://get.sdkman.io" | sudo zsh
 	fi
 elif [ "$1" = 'macos' ]; then
 	brew install "$2"
@@ -16,7 +16,7 @@ elif [ "$1" = 'ubuntu' ]; then
 			tar xf "$HOME/lazygit.tar.gz" "$HOME/lazygit"
 			sudo install "$HOME/lazygit" /usr/local/bin
 		elif [ "$2" = 'starship' ]; then
-			sudo curl -sS https://starship.rs/install.sh | sh
+			curl -sS https://starship.rs/install.sh | sudo sh
 		elif [ "$2" = 'zellij' ]; then
 			cargo install --locked zellij
 		fi
