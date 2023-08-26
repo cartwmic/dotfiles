@@ -2,21 +2,21 @@
 
 if [ "$2" = 'sdkman' ]; then # install via install script regardless of os
 	if [ "$2" = 'sdkman' ]; then
-		curl -s "https://get.sdkman.io" | zsh
+		sudo curl -s "https://get.sdkman.io" | zsh
 	fi
 elif [ "$1" = 'macos' ]; then
 	brew install "$2"
 elif [ "$1" = 'ubuntu' ]; then
 	if [ "$2" = 'go-task' ] || [ "$2" = 'lazygit' ] || [ "$2" = 'starship' ] || [ "$2" = 'zellij' ]; then # install via install script
 		if [ "$2" = 'go-task' ]; then
-			sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d
+			sudo sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d
 		elif [ "$2" = 'lazygit' ]; then
 			LAZYGIT_VERSION=$(curl -s "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" | grep -Po '"tag_name": "v\K[^"]*')
 			curl -Lo "$HOME/lazygit.tar.gz" "https://github.com/jesseduffield/lazygit/releases/latest/download/lazygit_${LAZYGIT_VERSION}_Linux_x86_64.tar.gz"
 			tar xf "$HOME/lazygit.tar.gz" "$HOME/lazygit"
 			sudo install "$HOME/lazygit" /usr/local/bin
 		elif [ "$2" = 'starship' ]; then
-			curl -sS https://starship.rs/install.sh | sh
+			sudo curl -sS https://starship.rs/install.sh | sh
 		elif [ "$2" = 'zellij' ]; then
 			cargo install --locked zellij
 		fi
@@ -30,7 +30,7 @@ elif [ "$1" = 'ubuntu' ]; then
 			echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
 			sudo apt-get update
 		fi
-		apt install -y "$2"
+		sudo apt install -y "$2"
 	fi
 else
 	echo "os: '$1' is not supported"
