@@ -34,12 +34,14 @@ actions:
       $HOME/fzf-tab)
     rust_install: command -v cargo || (curl https://sh.rustup.rs -sSf | sh)
     zellij_install: command -v zellij || (./os_pkg_installer.sh {{@@ os @@}} zellij)
+    nvim_install: command -v nvim || (./os_pkg_installer.sh {{@@ os @@}} neovim)
 dotfiles:
   d_nvim:
     src: config/nvim
     dst: ~/.config/nvim
     actions:
       - ripgrep_install
+      - nvim_install
   f_zshrc:
     src: zshrc
     dst: ~/.zshrc
