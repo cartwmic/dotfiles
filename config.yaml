@@ -19,9 +19,6 @@ actions:
     ranger_install: command -v ranger || (./os_pkg_installer.sh {{@@ os @@}} ranger)
     fonts_install: ./os_fonts_installer.sh {{@@ skip_fonts_install @@}} {{@@ os @@}}
     starship_install: command -v starship || (./os_pkg_installer.sh {{@@ os @@}} starship)
-    alacritty_install:
-      command -v alacritty || (./os_pkg_installer.sh {{@@ os @@}}
-      alacritty)
     kitty_install: command -v kitty || (./os_pkg_installer.sh {{@@ os @@}} kitty)
     nvm_install:
       test -e $HOME/.config/nvm || (curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh
@@ -35,6 +32,7 @@ actions:
     fzf_tab_install:
       test -e $HOME/fzf-tab || (git clone https://github.com/Aloxaf/fzf-tab
       $HOME/fzf-tab)
+    rust_install: command -v cargo || (curl https://sh.rustup.rs -sSf | sh)
     zellij_install: command -v zellij || (./os_pkg_installer.sh {{@@ os @@}} zellij)
 dotfiles:
   d_nvim:
@@ -60,6 +58,7 @@ dotfiles:
       - tasks_install
       - sdkman_install
       - kubectl_install
+      - rust_install
   f_starship.toml:
     src: config/starship.toml
     dst: ~/.config/starship.toml
