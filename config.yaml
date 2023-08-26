@@ -40,12 +40,6 @@ dotfiles:
     dst: ~/.config/nvim
     actions:
       - ripgrep_install
-  d_alacritty:
-    src: config/alacritty
-    dst: ~/.config/alacritty
-    actions:
-      - fonts_install
-      - alacritty_install
   f_zshrc:
     src: zshrc
     dst: ~/.zshrc
@@ -100,7 +94,6 @@ dotfiles:
 profiles:
   personal:
     dotfiles:
-      - d_alacritty
       - d_nvim
       - f_zshrc
       - f_starship.toml
