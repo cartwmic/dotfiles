@@ -35,6 +35,8 @@ actions:
     rust_install: command -v cargo || (curl https://sh.rustup.rs -sSf | sh)
     zellij_install: command -v zellij || (./os_pkg_installer.sh {{@@ os @@}} zellij)
     nvim_install: command -v nvim || (./os_pkg_installer.sh {{@@ os @@}} neovim)
+    kustomize_install: command -v kustomize || (./os_pkg_installer.sh {{@@ os @@}} kustomize)
+    helm_install: command -v helm || (./os_pkg_installer.sh {{@@ os @@}} helm)
 dotfiles:
   d_nvim:
     src: config/nvim
