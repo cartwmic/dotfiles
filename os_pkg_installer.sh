@@ -22,8 +22,6 @@ elif [ "$1" = 'ubuntu' ]; then
 		elif [ "$2" = 'zellij' ]; then
 			cargo install --locked zellij
 		fi
-	elif [ "$2" = 'kitty' ]; then # don't install
-		exit 0
 	else # install via apt
 		if [ "$2" = 'kubectl' ]; then
 			sudo apt-get update
