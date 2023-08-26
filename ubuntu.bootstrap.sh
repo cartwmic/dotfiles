@@ -10,6 +10,3 @@ sudo chsh -s "$(which zsh)" "$(whoami)"
 cd dotdrop || exit
 pip3 install .
 cd - || exit
-
-# install rust/cargo
-curl https://sh.rustup.rs -sSf | sh
