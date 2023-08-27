@@ -7,7 +7,7 @@ if [ "$2" = 'sdkman' ]; then # install via install script regardless of os
 elif [ "$1" = 'macos' ]; then
 	brew install "$2"
 elif [ "$1" = 'ubuntu' ]; then
-	if [ "$2" = 'go-task' ] || [ "$2" = 'lazygit' ] || [ "$2" = 'starship' ] || [ "$2" = 'zellij' ] || [ "$2" = 'kustomize' ]; then # install via install script
+	if [ "$2" = 'go-task' ] || [ "$2" = 'lazygit' ] || [ "$2" = 'starship' ] || [ "$2" = 'zellij' ] || [ "$2" = 'kustomize' ] || [ "$2" = 'kubeseal' ]; then # install via install script
 		if [ "$2" = 'go-task' ]; then
 			sudo -u cartwmic sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b "$HOME/.local/bin"
 		elif [ "$2" = 'lazygit' ]; then
@@ -25,6 +25,21 @@ elif [ "$1" = 'ubuntu' ]; then
 			cd "$HOME/.local/bin" || exit
 			curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
 			cd - || exit
+		elif [ "$2" = 'kubeseal' ]; then
+			sudo apt install jq
+
+			# Fetch the latest sealed-secrets version using GitHub API
+			KUBESEAL_VERSION=$(curl -s https://api.github.com/repos/bitnami-labs/sealed-secrets/tags | jq -r '.[0].name' | cut -c 2-)
+
+			# Check if the version was fetched successfully
+			if [ -z "$KUBESEAL_VERSION" ]; then
+				echo "Failed to fetch the latest KUBESEAL_VERSION"
+				exit 1
+			fi
+
+			wget "https://github.com/bitnami-labs/sealed-secrets/releases/download/v${KUBESEAL_VERSION}/kubeseal-${KUBESEAL_VERSION}-linux-amd64.tar.gz"
+			tar -xvzf "kubeseal-${KUBESEAL_VERSION}-linux-amd64.tar.gz" kubeseal
+			sudo install -m 755 kubeseal /usr/local/bin/kubeseal
 		fi
 	else # install via apt
 		if [ "$2" = 'kubectl' ]; then
