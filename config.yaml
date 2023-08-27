@@ -10,7 +10,8 @@ config:
   dotpath: dotfiles
 actions:
   pre:
-    kubectl_install: command -v kubectl || (./os_pkg_installer.sh {{@@ os @@}} )
+    kubectl_install: command -v kubectl || (./os_pkg_installer.sh {{@@ os @@}} kubectl)
+    kubeseal_install: command -v kubeseal || (./os_pkg_installer.sh {{@@ os @@}} kubeseal)
     sdkman_install: command -v sdk || (./os_pkg_installer.sh {{@@ os @@}} sdkman)
     tasks_install: command -v task || (./os_pkg_installer.sh {{@@ os @@}} go-task)
     ripgrep_install: command -v rg || (./os_pkg_installer.sh {{@@ os @@}} ripgrep)
@@ -58,6 +59,7 @@ dotfiles:
       - tasks_install
       - sdkman_install
       - kubectl_install
+      - kubeseal_install
       - rust_install
   f_starship.toml:
     src: config/starship.toml

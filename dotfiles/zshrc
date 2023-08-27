@@ -1,6 +1,5 @@
 #!/bin/zsh
 
-
 # update fpath to include custom completion files, see https://github.com/zsh-users/zsh-completions/blob/master/zsh-completions-howto.org#telling-zsh-which-function-to-use-for-completing-a-command
 fpath=($HOME/.config/zsh-completions $fpath)
 
