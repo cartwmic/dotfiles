@@ -2,6 +2,7 @@ uservariables:
   local_profile: profile
   os: operating_system
   skip_fonts_install: skip_fonts_install
+  user: user
 config:
   import_variables:
     - uservariables.yaml:optional
@@ -10,17 +11,17 @@ config:
   dotpath: dotfiles
 actions:
   pre:
-    kubectl_install: command -v kubectl || (./os_pkg_installer.sh {{@@ os @@}} kubectl)
-    kubeseal_install: command -v kubeseal || (./os_pkg_installer.sh {{@@ os @@}} kubeseal)
-    sdkman_install: command -v sdk || (./os_pkg_installer.sh {{@@ os @@}} sdkman)
-    tasks_install: command -v task || (./os_pkg_installer.sh {{@@ os @@}} go-task)
-    ripgrep_install: command -v rg || (./os_pkg_installer.sh {{@@ os @@}} ripgrep)
-    lazygit_install: command -v lazygit || (./os_pkg_installer.sh {{@@ os @@}} lazygit)
+    kubectl_install: command -v kubectl || (./os_pkg_installer.sh {{@@ os @@}} kubectl {{@@ user @@}})
+    kubeseal_install: command -v kubeseal || (./os_pkg_installer.sh {{@@ os @@}} kubeseal {{@@ user @@}})
+    sdkman_install: command -v sdk || (./os_pkg_installer.sh {{@@ os @@}} sdkman {{@@ user @@}})
+    tasks_install: command -v task || (./os_pkg_installer.sh {{@@ os @@}} go-task {{@@ user @@}})
+    ripgrep_install: command -v rg || (./os_pkg_installer.sh {{@@ os @@}} ripgrep {{@@ user @@}})
+    lazygit_install: command -v lazygit || (./os_pkg_installer.sh {{@@ os @@}} lazygit {{@@ user @@}})
     pynvim_install: pip3 show pynvim || (pip3 install pynvim --user)
-    ranger_install: command -v ranger || (./os_pkg_installer.sh {{@@ os @@}} ranger)
-    fonts_install: ./os_fonts_installer.sh {{@@ skip_fonts_install @@}} {{@@ os @@}}
-    starship_install: command -v starship || (./os_pkg_installer.sh {{@@ os @@}} starship)
-    kitty_install: command -v kitty || (./os_pkg_installer.sh {{@@ os @@}} kitty)
+    ranger_install: command -v ranger || (./os_pkg_installer.sh {{@@ os @@}} ranger {{@@ user @@}})
+    fonts_install: ./os_fonts_installer.sh {{@@ skip_fonts_install @@}} {{@@ os @@} {{@@ user @@})}
+    starship_install: command -v starship || (./os_pkg_installer.sh {{@@ os @@}} starship {{@@ user @@}})
+    kitty_install: command -v kitty || (./os_pkg_installer.sh {{@@ os @@}} kitty {{@@ user @@}})
     nvm_install:
       test -e $HOME/.config/nvm || (curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh
       | bash)
@@ -34,12 +35,12 @@ actions:
       test -e $HOME/fzf-tab || (git clone https://github.com/Aloxaf/fzf-tab
       $HOME/fzf-tab)
     rust_install: command -v cargo || (curl https://sh.rustup.rs -sSf | sh)
-    zellij_install: command -v zellij || (./os_pkg_installer.sh {{@@ os @@}} zellij)
-    nvim_install: command -v nvim || (./os_pkg_installer.sh {{@@ os @@}} neovim)
+    zellij_install: command -v zellij || (./os_pkg_installer.sh {{@@ os @@}} zellij {{@@ user @@}})
+    nvim_install: command -v nvim || (./os_pkg_installer.sh {{@@ os @@}} neovim {{@@ user @@}})
     kustomize_install:
       command -v kustomize || (./os_pkg_installer.sh {{@@ os @@}}
-      kustomize)
-    helm_install: command -v helm || (./os_pkg_installer.sh {{@@ os @@}} helm)
+      kustomize {{@@ user @@}})
+    helm_install: command -v helm || (./os_pkg_installer.sh {{@@ os @@}} helm {{@@ user @@}})
 dotfiles:
   d_nvim:
     src: config/nvim
