@@ -1,0 +1,4 @@
+{%@@if local_profile == 'axon_work_computer' @@%}
+services:
+  'git.work.example': 'github:git.work.example'
+{%@@ endif @@%}
