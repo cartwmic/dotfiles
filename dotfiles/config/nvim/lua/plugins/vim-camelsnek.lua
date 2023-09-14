@@ -1,0 +1,5 @@
+return {
+  {
+    "nicwest/vim-camelsnek",
+  },
+}
