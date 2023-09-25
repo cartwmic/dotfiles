@@ -5,7 +5,6 @@ return {
       ensure_installed = {
         "bash",
         "c",
-        "help",
         "hcl",
         "html",
         "javascript",
@@ -23,6 +22,7 @@ return {
         "typescript",
         "vim",
         "yaml",
+        "scala",
       },
     },
   },
