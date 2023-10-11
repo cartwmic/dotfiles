@@ -1,7 +1,10 @@
 return {
   {
     "scalameta/nvim-metals",
-    dependencies = { "nvim-lua/plenary.nvim" }, -- Also require coursier https://get-coursier.io/docs/cli-installation to install metals
+    dependencies = {
+      { "mfussenegger/nvim-dap" },
+      { "nvim-lua/plenary.nvim" }, -- Also require coursier https://get-coursier.io/docs/cli-installation to install metals
+    },
     event = "VeryLazy",
     config = function(_, _)
       local metals = require("metals")
@@ -11,6 +14,10 @@ return {
       }
       metals_config.init_options.statusBarProvider = "on"
       metals_config.capabilities = require("cmp_nvim_lsp").default_capabilities()
+
+      metals_config.on_attach = function(client, bufnr)
+        metals.setup_dap()
+      end
 
       vim.keymap.set("n", "<leader>fm", function()
         require("telescope").extensions.metals.commands()
