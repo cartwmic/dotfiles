@@ -3,3 +3,4 @@
 -- Add any additional keymaps here
 vim.keymap.set("i", "jk", "<ESC>", { noremap = true, desc = "Escape insert mode" })
 vim.keymap.set("t", "<C-\\>", "<C-\\><C-n>", { noremap = true, desc = "Escape terminal mode" })
+vim.keymap.set("n", "<leader>dT", vim.lsp.codelens.run, { noremap = true, desc = "Run codelens" })
