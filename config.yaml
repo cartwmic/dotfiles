@@ -91,7 +91,7 @@ dotfiles:
       - ranger_install
       - pynvim_install
     chmod: "744"
-  f_config.yml:
+  f_lazygit_config.yml:
     src: config/lazygit/config.yml
     dst: ~/.config/lazygit/config.yml
     actions:
@@ -110,7 +110,7 @@ profiles:
       - d_kitty
       - d_zellij
       - d_ranger
-      - f_config.yml
+      - f_lazygit_config.yml
       - d_zsh-completions
   ubuntu:
     include:
