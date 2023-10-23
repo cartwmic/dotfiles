@@ -1,3 +1,5 @@
+local util = require("lspconfig.util")
+
 return {
   {
     "neovim/nvim-lspconfig",
@@ -5,6 +7,11 @@ return {
       -- you can do any additional lsp server setup here
       -- return true if you don't want this server to be setup with lspconfig
       ---@type table<string, fun(server:string, opts:_.lspconfig.options):boolean?>
+      servers = {
+        dartls = {
+          mason = false,
+        },
+      },
       setup = {
         yamlls = function(_, _)
           require("lspconfig").yamlls.setup({
@@ -27,6 +34,27 @@ return {
                 },
               },
             },
+          })
+          return true
+        end,
+        dartls = function(_, _)
+          require("lspconfig").dartls.setup({
+            -- cmd = { "dart", "language-server", "--protocol=lsp" },
+            -- filetypes = { "dart" },
+            -- root_dir = util.root_pattern("pubspec.yaml"),
+            -- init_options = {
+            --   onlyAnalyzeProjectsWithOpenFiles = true,
+            --   suggestFromUnimportedLibraries = true,
+            --   closingLabels = true,
+            --   outline = true,
+            --   flutterOutline = true,
+            -- },
+            -- settings = {
+            --   dart = {
+            --     completeFunctionCalls = true,
+            --     showTodos = true,
+            --   },
+            -- },
           })
           return true
         end,
