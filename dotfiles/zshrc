@@ -40,7 +40,7 @@ antidote load
 export DOTDROP_PROFILE={{@@ local_profile @@}}
 
 # General PATH updates
-export PATH="$PATH:/usr/local/bin:/usr/local/lib:/opt/homebrew/bin:$HOME/git/git-sync:$HOME/git/git-sync/contrib:$HOME/.cargo/bin:$HOME/.local/bin"
+export PATH="$PATH:/usr/local/bin:/usr/local/lib:/opt/homebrew/bin:$HOME/git/git-sync:$HOME/git/git-sync/contrib:$HOME/.cargo/bin:$HOME/.local/bin:$HOME/fvm/default/bin"
 
 export XDG_CONFIG_HOME="$HOME/.config"
 
