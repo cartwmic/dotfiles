@@ -1,3 +1,4 @@
+-- Source: https://www.youtube.com/watch?v=v3o9YaHBM4Q
 local run_formatter = function(text)
   local split = vim.split(text, "\n")
   local result = table.concat(vim.list_slice(split, 2, #split - 1), "\n")
