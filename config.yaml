@@ -11,6 +11,7 @@ config:
   dotpath: dotfiles
 actions:
   pre:
+    zoxide_install: command -v z || (./os_pkg_installer.sh {{@@ os @@}} zoxide {{@@ user @@}})
     kubectl_install: command -v kubectl || (./os_pkg_installer.sh {{@@ os @@}} kubectl {{@@ user @@}})
     kubeseal_install: command -v kubeseal || (./os_pkg_installer.sh {{@@ os @@}} kubeseal {{@@ user @@}})
     sdkman_install: command -v sdk || (./os_pkg_installer.sh {{@@ os @@}} sdkman {{@@ user @@}})
@@ -62,6 +63,7 @@ dotfiles:
       - kubectl_install
       - kubeseal_install
       - rust_install
+      - zoxide_install
   f_starship.toml:
     src: config/starship.toml
     dst: ~/.config/starship.toml

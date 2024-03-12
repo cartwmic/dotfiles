@@ -91,3 +91,7 @@ export SDKMAN_DIR="$HOME/.sdkman"
 autoload -U _task
 compdef _task task
 
+source $(brew --prefix nvm)/nvm.sh
+
+export _ZO_ECHO=1
+eval "$(zoxide init zsh)"
