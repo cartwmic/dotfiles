@@ -95,3 +95,8 @@ source $(brew --prefix nvm)/nvm.sh
 
 export _ZO_ECHO=1
 eval "$(zoxide init zsh)"
+
+# pyenv setup
+export PYENV_ROOT="$HOME/.pyenv"
+[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init -)"

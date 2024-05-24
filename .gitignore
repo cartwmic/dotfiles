@@ -1,2 +1,5 @@
 uservariables.yaml
 __pycache__
+bin/
+lib/
+pyvenv*
