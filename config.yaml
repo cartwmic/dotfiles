@@ -11,6 +11,7 @@ config:
   dotpath: dotfiles
 actions:
   pre:
+    just_install: command -v just || (./os_pkg_installer.sh {{@@ os @@}} just {{@@ user @@}})
     pyenv_install: command -v pyenv || (./os_pkg_installer.sh {{@@ os @@}} pyenv {{@@ user @@}})
     zoxide_install: command -v z || (./os_pkg_installer.sh {{@@ os @@}} zoxide {{@@ user @@}})
     kubectl_install: command -v kubectl || (./os_pkg_installer.sh {{@@ os @@}} kubectl {{@@ user @@}})
@@ -66,6 +67,7 @@ dotfiles:
       - rust_install
       - zoxide_install
       - pyenv_install
+      - just_install
   f_starship.toml:
     src: config/starship.toml
     dst: ~/.config/starship.toml
