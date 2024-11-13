@@ -22,7 +22,7 @@ actions:
     lazygit_install: command -v lazygit || (./os_pkg_installer.sh {{@@ os @@}} lazygit {{@@ user @@}})
     pynvim_install: pip3 show pynvim || (pip3 install pynvim --user)
     ranger_install: command -v ranger || (./os_pkg_installer.sh {{@@ os @@}} ranger {{@@ user @@}})
-    fonts_install: ./os_fonts_installer.sh {{@@ skip_fonts_install @@}} {{@@ os @@} {{@@ user @@})}
+    fonts_install: ./os_fonts_installer.sh {{@@ skip_fonts_install @@}} {{@@ os @@}} {{@@ user @@}}
     starship_install: command -v starship || (./os_pkg_installer.sh {{@@ os @@}} starship {{@@ user @@}})
     kitty_install: command -v kitty || (./os_pkg_installer.sh {{@@ os @@}} kitty {{@@ user @@}})
     nvm_install:
