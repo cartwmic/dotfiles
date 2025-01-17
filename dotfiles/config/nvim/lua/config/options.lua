@@ -3,3 +3,4 @@
 -- Add any additional options here
 
 vim.opt.mouse = ""
+vim.g.snacks_animate = false
