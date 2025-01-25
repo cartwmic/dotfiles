@@ -19,6 +19,8 @@ return {
               filename,
               modify(filename, ":r"),
               modify(filename, ":e"),
+              modify(filepath, ":.:h"),
+              modify(filepath, ":h"),
             }
 
             -- absolute path to clipboard
@@ -30,6 +32,8 @@ return {
               "4. Filename: " .. results[4],
               "5. Filename without extension: " .. results[5],
               "6. Extension of the filename: " .. results[6],
+              "7. Path relative to CWD of selection's directory: " .. results[7],
+              "8. Absolute path of selection's directory: " .. results[8],
             })
 
             if i > 0 then
