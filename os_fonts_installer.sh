@@ -10,9 +10,12 @@ elif [ "$2" = 'macos' ]; then
 elif [ "$2" = 'ubuntu' ]; then
   echo "ubuntu OS selected"
   cd /tmp || exit
-  curl -o SourceCodePro.zip https://github.com/ryanoasis/nerd-fonts/releases/download/v3.0.2/SourceCodePro.zip
+  curl -L -o SourceCodePro.zip https://github.com/ryanoasis/nerd-fonts/releases/download/v3.3.0/SourceCodePro.zip
   unzip SourceCodePro.zip
-  mv ./SourceCodePro/*ttf ~/.local/share/fonts
+  if [ ! -d "$HOME/.local/share/fonts" ]; then
+    mkdir "$HOME/.local/share/fonts"
+  fi
+  mv ./*ttf "$HOME/.local/share/fonts"
   fc-cache -fv
   cd - || exit
   ret=$?
