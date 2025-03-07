@@ -3,5 +3,5 @@
 -- Add any additional options here
 
 vim.opt.mouse = ""
-vim.g.snacks_animate = false
+vim.g.snacks_animate = true
 vim.opt.relativenumber = false
