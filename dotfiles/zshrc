@@ -4,7 +4,6 @@
 export HISTFILE="$HOME/.zsh_history"
 export HISTSIZE=1000000
 export SAVEHIST=$HISTSIZE
-setopt INC_APPEND_HISTORY        # Append to HISTFILE as soon as commands are entered
 setopt EXTENDED_HISTORY          # Write the history file in the ':start:elapsed;command' format.
 setopt HIST_EXPIRE_DUPS_FIRST    # Expire a duplicate event first when trimming history.
 setopt HIST_FIND_NO_DUPS         # Do not display a previously found event.
@@ -12,7 +11,7 @@ setopt HIST_IGNORE_ALL_DUPS      # Delete an old recorded event if a new event i
 setopt HIST_IGNORE_DUPS          # Do not record an event that was just recorded again.
 setopt HIST_IGNORE_SPACE         # Do not record an event starting with a space.
 setopt HIST_SAVE_NO_DUPS         # Do not write a duplicate event to the history file.
-setopt SHARE_HISTORY             # Share history between all sessions.
+setopt SHARE_HISTORY             # Share history between all sessions. Also works as INC_APPEND_HISTORY
 
 # update fpath to include custom completion files, see https://github.com/zsh-users/zsh-completions/blob/master/zsh-completions-howto.org#telling-zsh-which-function-to-use-for-completing-a-command
 fpath=($HOME/.config/zsh-completions $fpath)
