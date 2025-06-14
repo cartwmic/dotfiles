@@ -104,3 +104,24 @@ eval "$(zoxide init zsh)"
 export PYENV_ROOT="$HOME/.pyenv"
 [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
+
+# secrets via 1password
+# on windows with WSL, alias to windows op cli tool to integrate with desktop auth. May break some scripts as passing env vars to windows exe may not work correctly
+if command -v op.exe > /dev/null 2>&1; then
+  alias op=op.exe
+fi
+
+# Load ANTHROPIC_API_KEY from 1Password if not already set
+if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+  if command -v op >/dev/null 2>&1; then
+    api_key=$(op.exe item get "Anthropic - key-1" --format json --field credential 2>&1 | jq .reference 2>&1 | sed "s/\"//g" 2>&1) 
+    if [[ $? -eq 0 ]]; then
+      export ANTHROPIC_API_KEY=$(op read "$api_key")
+      echo "✓ Loaded ANTHROPIC_API_KEY from 1Password"
+    else
+      echo "⚠️  Failed to load ANTHROPIC_API_KEY from 1Password: $api_key" >&2
+    fi
+  else
+    echo "⚠️  1Password CLI (op) not found - skipping ANTHROPIC_API_KEY load" >&2
+  fi
+fi
