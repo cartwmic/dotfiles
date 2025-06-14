@@ -9,7 +9,7 @@ if [ "$2" = 'sdkman' ] || [ "$2" = 'just' ]; then # install via install script r
 elif [ "$1" = 'macos' ]; then
   brew install "$2"
 elif [ "$1" = 'ubuntu' ]; then
-  if [ "$2" = 'go-task' ] || [ "$2" = 'lazygit' ] || [ "$2" = 'starship' ] || [ "$2" = 'zellij' ] || [ "$2" = 'kustomize' ] || [ "$2" = 'kubeseal' ] || [ "$2" = 'pyenv' ]; then # install via install script
+  if [ "$2" = 'go-task' ] || [ "$2" = 'lazygit' ] || [ "$2" = 'starship' ] || [ "$2" = 'zellij' ] || [ "$2" = 'kustomize' ] || [ "$2" = 'kubeseal' ] || [ "$2" = 'pyenv' ] || [ "$2" = "1password-cli" ]; then # install via install script
     if [ "$2" = 'go-task' ]; then
       sudo -u "$3" sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b "$HOME/.local/bin"
     elif [ "$2" = 'lazygit' ]; then
@@ -29,6 +29,18 @@ elif [ "$1" = 'ubuntu' ]; then
       cd "$HOME/.local/bin" || exit
       curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
       cd - || exit
+    elif [ "$2" = '1password-cli' ]; then
+      curl -sS https://downloads.1password.com/linux/keys/1password.asc |
+        sudo gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg &&
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/$(dpkg --print-architecture) stable main" |
+        sudo tee /etc/apt/sources.list.d/1password.list &&
+        sudo mkdir -p /etc/debsig/policies/AC2D62742012EA22/ &&
+        curl -sS https://downloads.1password.com/linux/debian/debsig/1password.pol |
+        sudo tee /etc/debsig/policies/AC2D62742012EA22/1password.pol &&
+        sudo mkdir -p /usr/share/debsig/keyrings/AC2D62742012EA22 &&
+        curl -sS https://downloads.1password.com/linux/keys/1password.asc |
+        sudo gpg --dearmor --output /usr/share/debsig/keyrings/AC2D62742012EA22/debsig.gpg &&
+        sudo apt update && sudo apt install 1password-cli
     elif [ "$2" = 'kubeseal' ]; then
       sudo apt install jq
 
