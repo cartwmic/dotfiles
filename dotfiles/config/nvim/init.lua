@@ -12,3 +12,5 @@ vim.api.nvim_create_user_command("UserPutCurrentTimestampToClipboard", function(
   local time = vim.fn.strftime("%H:%M:%S")
   vim.fn.setreg("+", time)
 end, {})
+
+require("spinner-codecompanion"):init()
