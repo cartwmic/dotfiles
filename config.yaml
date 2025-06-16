@@ -11,6 +11,8 @@ config:
   dotpath: dotfiles
 actions:
   pre:
+    k9s_install: command -v k9s || (./os_pkg_installer.sh {{@@ os @@}} k9s {{@@
+      user @@}})
     just_install:
       command -v just || (./os_pkg_installer.sh {{@@ os @@}} just {{@@
       user @@}})
@@ -105,6 +107,7 @@ dotfiles:
       - pyenv_install
       - just_install
       - one_password_install
+      - k9s_install
   f_starship.toml:
     src: config/starship.toml
     dst: ~/.config/starship.toml
