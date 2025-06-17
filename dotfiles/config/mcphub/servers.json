@@ -1,0 +1,13 @@
+{
+  "nativeMCPServers": [
+    
+  ],
+  "mcpServers": {
+    "git": {
+      "args": [
+        "mcp-server-git"
+      ],
+      "command": "uvx"
+    }
+  }
+}
