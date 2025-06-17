@@ -15,7 +15,7 @@ elif [ "$1" = 'macos' ]; then
     brew install "$2"
   fi
 elif [ "$1" = 'ubuntu' ]; then
-  if [ "$2" = 'go-task' ] || [ "$2" = 'lazygit' ] || [ "$2" = 'starship' ] || [ "$2" = 'zellij' ] || [ "$2" = 'kustomize' ] || [ "$2" = 'kubeseal' ] || [ "$2" = 'pyenv' ] || [ "$2" = "1password-cli" ] || [ "$2" = "k9s" ]; then # install via install script
+  if [ "$2" = 'go-task' ] || [ "$2" = 'lazygit' ] || [ "$2" = 'starship' ] || [ "$2" = 'zellij' ] || [ "$2" = 'kustomize' ] || [ "$2" = 'kubeseal' ] || [ "$2" = "1password-cli" ] || [ "$2" = "k9s" ]; then # install via install script
     if [ "$2" = 'go-task' ]; then
       sudo -u "$3" sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b "$HOME/.local/bin"
     elif [ "$2" = 'lazygit' ]; then
@@ -29,8 +29,6 @@ elif [ "$1" = 'ubuntu' ]; then
       curl -sS https://starship.rs/install.sh | sudo -u "$3" sh
     elif [ "$2" = 'zellij' ]; then
       cargo install --locked zellij
-    elif [ "$2" = 'pyenv' ]; then
-      curl https://pyenv.run | bash
     elif [ "$2" = 'k9s' ]; then
       wget https://github.com/derailed/k9s/releases/latest/download/k9s_linux_amd64.deb && apt install ./k9s_linux_amd64.deb && rm k9s_linux_amd64.deb
     elif [ "$2" = 'kustomize' ]; then
