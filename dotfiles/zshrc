@@ -100,11 +100,6 @@ compdef _task task
 export _ZO_ECHO=1
 eval "$(zoxide init zsh)"
 
-# pyenv setup
-export PYENV_ROOT="$HOME/.pyenv"
-[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
-eval "$(pyenv init -)"
-
 # secrets via 1password
 # on windows with WSL, alias to windows op cli tool to integrate with desktop auth. May break some scripts as passing env vars to windows exe may not work correctly
 # if command -v op.exe > /dev/null 2>&1; then

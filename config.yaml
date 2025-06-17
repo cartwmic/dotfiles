@@ -15,8 +15,6 @@ actions:
       user @@}})
     just_install: command -v just || (./os_pkg_installer.sh {{@@ os @@}} just
       {{@@ user @@}})
-    pyenv_install: command -v pyenv || (./os_pkg_installer.sh {{@@ os @@}} pyenv
-      {{@@ user @@}})
     zoxide_install: command -v z || (./os_pkg_installer.sh {{@@ os @@}} zoxide
       {{@@ user @@}})
     kubectl_install: command -v kubectl || (./os_pkg_installer.sh {{@@ os @@}}
@@ -86,7 +84,6 @@ dotfiles:
       - kubeseal_install
       - rust_install
       - zoxide_install
-      - pyenv_install
       - just_install
       - one_password_install
       - k9s_install
