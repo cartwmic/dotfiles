@@ -5,6 +5,8 @@ if [ "$2" = 'sdkman' ] || [ "$2" = 'just' ]; then # install via install script r
     curl -s "https://get.sdkman.io" | sudo -u "$3" bash
   elif [ "$2" = 'just' ]; then
     cargo install just
+  elif [ "$2" = 'uv' ]; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
   fi
 elif [ "$1" = 'macos' ]; then
   if [ "$2" = 'k9s' ]; then
