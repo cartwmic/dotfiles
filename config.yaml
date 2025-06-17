@@ -13,73 +13,54 @@ actions:
   pre:
     k9s_install: command -v k9s || (./os_pkg_installer.sh {{@@ os @@}} k9s {{@@
       user @@}})
-    just_install:
-      command -v just || (./os_pkg_installer.sh {{@@ os @@}} just {{@@
-      user @@}})
-    pyenv_install:
-      command -v pyenv || (./os_pkg_installer.sh {{@@ os @@}} pyenv {{@@
-      user @@}})
-    zoxide_install:
-      command -v z || (./os_pkg_installer.sh {{@@ os @@}} zoxide {{@@
-      user @@}})
-    kubectl_install:
-      command -v kubectl || (./os_pkg_installer.sh {{@@ os @@}} kubectl
+    just_install: command -v just || (./os_pkg_installer.sh {{@@ os @@}} just
       {{@@ user @@}})
-    kubeseal_install:
-      command -v kubeseal || (./os_pkg_installer.sh {{@@ os @@}} kubeseal
+    pyenv_install: command -v pyenv || (./os_pkg_installer.sh {{@@ os @@}} pyenv
       {{@@ user @@}})
-    sdkman_install:
-      command -v sdk || (./os_pkg_installer.sh {{@@ os @@}} sdkman {{@@
-      user @@}})
-    tasks_install:
-      command -v task || (./os_pkg_installer.sh {{@@ os @@}} go-task
+    zoxide_install: command -v z || (./os_pkg_installer.sh {{@@ os @@}} zoxide
       {{@@ user @@}})
-    ripgrep_install:
-      command -v rg || (./os_pkg_installer.sh {{@@ os @@}} ripgrep
+    kubectl_install: command -v kubectl || (./os_pkg_installer.sh {{@@ os @@}}
+      kubectl {{@@ user @@}})
+    kubeseal_install: command -v kubeseal || (./os_pkg_installer.sh {{@@ os @@}}
+      kubeseal {{@@ user @@}})
+    sdkman_install: command -v sdk || (./os_pkg_installer.sh {{@@ os @@}} sdkman
       {{@@ user @@}})
-    lazygit_install:
-      command -v lazygit || (./os_pkg_installer.sh {{@@ os @@}} lazygit
-      {{@@ user @@}})
+    tasks_install: command -v task || (./os_pkg_installer.sh {{@@ os @@}}
+      go-task {{@@ user @@}})
+    ripgrep_install: command -v rg || (./os_pkg_installer.sh {{@@ os @@}}
+      ripgrep {{@@ user @@}})
+    lazygit_install: command -v lazygit || (./os_pkg_installer.sh {{@@ os @@}}
+      lazygit {{@@ user @@}})
     pynvim_install: pip3 show pynvim || (pip3 install pynvim --user)
-    ranger_install:
-      command -v ranger || (./os_pkg_installer.sh {{@@ os @@}} ranger
+    ranger_install: command -v ranger || (./os_pkg_installer.sh {{@@ os @@}}
+      ranger {{@@ user @@}})
+    fonts_install: ./os_fonts_installer.sh {{@@ skip_fonts_install @@}} {{@@ os
+      @@}} {{@@ user @@}}
+    starship_install: command -v starship || (./os_pkg_installer.sh {{@@ os @@}}
+      starship {{@@ user @@}})
+    kitty_install: command -v kitty || (./os_pkg_installer.sh {{@@ os @@}} kitty
       {{@@ user @@}})
-    fonts_install:
-      ./os_fonts_installer.sh {{@@ skip_fonts_install @@}} {{@@ os @@}}
-      {{@@ user @@}}
-    starship_install:
-      command -v starship || (./os_pkg_installer.sh {{@@ os @@}} starship
-      {{@@ user @@}})
-    kitty_install:
-      command -v kitty || (./os_pkg_installer.sh {{@@ os @@}} kitty {{@@
-      user @@}})
-    nvm_install:
-      test -e $HOME/.config/nvm || (curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh
-      | bash)
-    antidote_install:
-      test -e $HOME/.antidote || (git clone --depth=1 https://github.com/mattmc3/antidote.git
-      $HOME/.antidote)
-    fzf_install:
-      test -e $HOME/.fzf.zsh || (git clone --depth 1 https://github.com/junegunn/fzf.git
-      $HOME/.fzf; $HOME/.fzf/install)
-    fzf_tab_install:
-      test -e $HOME/fzf-tab || (git clone https://github.com/Aloxaf/fzf-tab
-      $HOME/fzf-tab)
+    nvm_install: test -e $HOME/.config/nvm || (curl -o-
+      https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash)
+    antidote_install: test -e $HOME/.antidote || (git clone --depth=1
+      https://github.com/mattmc3/antidote.git $HOME/.antidote)
+    fzf_install: test -e $HOME/.fzf.zsh || (git clone --depth 1
+      https://github.com/junegunn/fzf.git $HOME/.fzf; $HOME/.fzf/install)
+    fzf_tab_install: test -e $HOME/fzf-tab || (git clone
+      https://github.com/Aloxaf/fzf-tab $HOME/fzf-tab)
     rust_install: command -v cargo || (curl https://sh.rustup.rs -sSf | sh)
-    zellij_install:
-      command -v zellij || (./os_pkg_installer.sh {{@@ os @@}} zellij
+    zellij_install: command -v zellij || (./os_pkg_installer.sh {{@@ os @@}}
+      zellij {{@@ user @@}})
+    nvim_install: command -v nvim || (./os_pkg_installer.sh {{@@ os @@}} neovim
       {{@@ user @@}})
-    nvim_install:
-      command -v nvim || (./os_pkg_installer.sh {{@@ os @@}} neovim {{@@
+    kustomize_install: command -v kustomize || (./os_pkg_installer.sh {{@@ os
+      @@}} kustomize {{@@ user @@}})
+    helm_install: command -v helm || (./os_pkg_installer.sh {{@@ os @@}} helm
+      {{@@ user @@}})
+    one_password_install: command -v op || (./os_pkg_installer.sh {{@@ os @@}}
+      1password-cli {{@@ user @@}})
+    uv_install: command -v uv || (./os_pkg_installer.sh {{@@ os @@}} uv {{@@
       user @@}})
-    kustomize_install:
-      command -v kustomize || (./os_pkg_installer.sh {{@@ os @@}}
-      kustomize {{@@ user @@}})
-    helm_install:
-      command -v helm || (./os_pkg_installer.sh {{@@ os @@}} helm {{@@
-      user @@}})
-    one_password_install: command -v op || (./os_pkg_installer.sh {{@@ os @@}} 1password-cli {{@@ user @@}})
-    uv_install: command -v uv || (./os_pkg_installer.sh {{@@ os @@}} uv {{@@ user @@}})
 dotfiles:
   d_nvim:
     src: config/nvim
@@ -148,6 +129,9 @@ dotfiles:
     src: config/zsh-completions
     dst: ~/.config/zsh-completions
     chmod: "744"
+  d_mcphub:
+    src: config/mcphub
+    dst: ~/.config/mcphub
 profiles:
   personal:
     dotfiles:
@@ -161,6 +145,7 @@ profiles:
       - d_ranger
       - f_lazygit_config.yml
       - d_zsh-completions
+      - d_mcphub
   ubuntu:
     include:
       - personal
