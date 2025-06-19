@@ -27,7 +27,7 @@ return {
       openai_work = function()
         return require("codecompanion.adapters").extend("openai", {
           env = {
-            api_key = "cmd:op read 'op://personal/OpenAI - Axon - key-1/credential' --no-newline",
+            api_key = "cmd:op read 'op://personal/OpenAI - Axon - 2025-06-19/credential' --no-newline",
           },
         })
       end,
