@@ -79,6 +79,7 @@ install_cross_platform() {
     ;;
   rust)
     curl https://sh.rustup.rs -sSf | sh
+    . "$HOME"/.zshrc
     ;;
   *)
     log_error "Unknown cross-platform package: ${PACKAGE}"
