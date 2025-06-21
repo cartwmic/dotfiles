@@ -36,7 +36,7 @@ cleanup() {
 
 is_cross_platform_package() {
   case "${PACKAGE}" in
-  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage) return 0 ;;
+  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -76,6 +76,9 @@ install_cross_platform() {
     ;;
   rage)
     cargo install rage
+    ;;
+  rust)
+    curl https://sh.rustup.rs -sSf | sh
     ;;
   *)
     log_error "Unknown cross-platform package: ${PACKAGE}"
