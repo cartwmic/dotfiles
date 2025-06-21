@@ -181,6 +181,10 @@ install_ubuntu_apt() {
     sudo add-apt-repository -y ppa:neovim-ppa/unstable
     sudo apt-get update
     ;;
+  yq)
+    sudo add-apt-repository ppa:rmescandon/yq
+    sudo apt update
+    ;;
   terraform)
     wget -O - https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
@@ -207,7 +211,7 @@ is_special_ubuntu_package() {
 install_ubuntu() {
   # stuff to always install and is idempotent
   sudo apt-get update
-  sudo apt-get install -y software-properties-common yq jq tar curl wget git sed gnupg
+  sudo apt-get install -y software-properties-common jq tar curl wget git sed gnupg
 
   if is_special_ubuntu_package; then
     install_ubuntu_special
@@ -294,6 +298,7 @@ main() {
   command -v helm >/dev/null 2>&1 || missing_executables="$missing_executables helm"
   command -v rage >/dev/null 2>&1 || missing_executables="$missing_executables rage"
   command -v terraform >/dev/null 2>&1 || missing_executables="$missing_executables terraform"
+  command -v yq >/dev/null 2>&1 || missing_executables="$missing_executables yq"
 
   for executable in $missing_executables; do
     log_info "Installing ${executable}"
