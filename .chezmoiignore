@@ -1,3 +1,2 @@
 ./example.chezmoi.yaml
-*.sh
 *.diff
