@@ -127,11 +127,7 @@ install_ubuntu_special() {
     sudo install lazygit -D -t /usr/local/bin/
     ;;
   starship)
-    if [ -z "${USER}" ]; then
-      log_error "User parameter required for starship installation"
-      exit 1
-    fi
-    curl -sS https://starship.rs/install.sh | sudo -u "${USER}" sh
+    cargo install starship --locked
     ;;
   zellij)
     cargo install --locked zellij
