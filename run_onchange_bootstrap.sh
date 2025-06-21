@@ -3,7 +3,7 @@
 # Exit on error and undefined variables
 set -eu
 
-. ./utils.sh
+. "$HOME"/.local/share/chezmoi/utils.sh
 
 # Constants
 SCRIPT_NAME="$(basename "$0")"
