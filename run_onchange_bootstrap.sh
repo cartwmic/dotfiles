@@ -36,7 +36,7 @@ cleanup() {
 
 is_cross_platform_package() {
   case "${PACKAGE}" in
-  sdkman | just | uv | nvm | antidote | fzf | fzf-tab) return 0 ;;
+  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -74,6 +74,9 @@ install_cross_platform() {
   helm)
     curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
     ;;
+  rage)
+    cargo install rage
+    ;;
   *)
     log_error "Unknown cross-platform package: ${PACKAGE}"
     return 1
@@ -87,6 +90,10 @@ install_macos() {
   case "${PACKAGE}" in
   k9s)
     brew install derailed/k9s/k9s
+    ;;
+  terraform)
+    brew tap hashicorp/tap
+    brew install hashicorp/tap/terraform
     ;;
   *)
     brew install "${PACKAGE}"
@@ -174,6 +181,11 @@ install_ubuntu_apt() {
     sudo add-apt-repository -y ppa:neovim-ppa/unstable
     sudo apt-get update
     ;;
+  terraform)
+    wget -O - https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+    sudo apt update
+    ;;
   esac
 
   sudo apt install -y "${PACKAGE}"
@@ -195,7 +207,7 @@ is_special_ubuntu_package() {
 install_ubuntu() {
   # stuff to always install and is idempotent
   sudo apt-get update
-  sudo apt-get install -y software-properties-common yq jq tar curl wget git sed
+  sudo apt-get install -y software-properties-common yq jq tar curl wget git sed gnupg
 
   if is_special_ubuntu_package; then
     install_ubuntu_special
@@ -280,6 +292,8 @@ main() {
   command -v nvim >/dev/null 2>&1 || missing_executables="$missing_executables neovim"
   command -v kustomize >/dev/null 2>&1 || missing_executables="$missing_executables kustomize"
   command -v helm >/dev/null 2>&1 || missing_executables="$missing_executables helm"
+  command -v rage >/dev/null 2>&1 || missing_executables="$missing_executables rage"
+  command -v terraform >/dev/null 2>&1 || missing_executables="$missing_executables terraform"
 
   for executable in $missing_executables; do
     log_info "Installing ${executable}"
