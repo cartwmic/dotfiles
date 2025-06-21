@@ -212,10 +212,6 @@ is_special_ubuntu_package() {
 }
 
 install_ubuntu() {
-  # stuff to always install and is idempotent
-  sudo apt-get update
-  sudo apt-get install -y build-essential software-properties-common jq tar curl wget git sed gnupg
-
   if is_special_ubuntu_package; then
     install_ubuntu_special
   else
@@ -249,6 +245,12 @@ main() {
 
   is_macos && IS_MACOS=true || IS_MACOS=false
   is_ubuntu && IS_UBUNTU=true || IS_UBUNTU=false
+
+  if $IS_UBUNTU; then
+    # stuff to always install and is idempotent
+    sudo apt-get update
+    sudo apt-get install -y build-essential software-properties-common jq tar curl wget git sed gnupg
+  fi
 
   missing_prerequisites=""
 
