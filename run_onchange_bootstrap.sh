@@ -44,6 +44,15 @@ is_cross_platform_package() {
 # Installation functions
 install_cross_platform() {
   case "${PACKAGE}" in
+  gvm)
+    # have to do the below manually
+    # bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')
+    echo "INSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\n"
+    echo "INSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\n"
+    echo "REMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\n"
+    echo "REMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\n"
+    echo "REMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\n"
+    ;;
   sdkman)
     if [ -z "${USER}" ]; then
       log_error "User parameter required for sdkman installation"
@@ -190,9 +199,6 @@ install_ubuntu_apt() {
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
     sudo apt update
     ;;
-  go)
-    sudo apt install golang-go
-    ;;
   esac
 
   sudo apt install -y "${PACKAGE}"
@@ -249,7 +255,7 @@ main() {
   if $IS_UBUNTU; then
     # stuff to always install and is idempotent
     sudo apt-get update
-    sudo apt-get install -y build-essential software-properties-common jq tar curl wget git sed gnupg zip zsh fontconfig sed util-linux
+    sudo apt-get install -y build-essential software-properties-common jq tar curl wget git sed gnupg zip zsh fontconfig sed util-linux bison mercurial
     sudo chsh "$USER" -s /usr/bin/zsh
   fi
 
@@ -305,7 +311,7 @@ main() {
   command -v rage >/dev/null 2>&1 || missing_executables="$missing_executables rage"
   command -v terraform >/dev/null 2>&1 || missing_executables="$missing_executables terraform"
   command -v yq >/dev/null 2>&1 || missing_executables="$missing_executables yq"
-  command -v go >/dev/null 2>&1 || missing_executables="$missing_executables go"
+  command -v gvm >/dev/null 2>&1 || missing_executables="$missing_executables gvm"
 
   for executable in $missing_executables; do
     log_info "Installing ${executable}"
@@ -336,6 +342,13 @@ main() {
     log_error "Unsupported operating system or distribution"
     exit 1
   fi
+
+  echo "REMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\n"
+  echo "REMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\n"
+  echo "REMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\n"
+  echo "REMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\n"
+  echo "REMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\n"
+  echo "REMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\n"
 
 }
 
