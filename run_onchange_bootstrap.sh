@@ -190,6 +190,9 @@ install_ubuntu_apt() {
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
     sudo apt update
     ;;
+  go)
+    sudo apt install golang-go
+    ;;
   esac
 
   sudo apt install -y "${PACKAGE}"
@@ -302,6 +305,7 @@ main() {
   command -v rage >/dev/null 2>&1 || missing_executables="$missing_executables rage"
   command -v terraform >/dev/null 2>&1 || missing_executables="$missing_executables terraform"
   command -v yq >/dev/null 2>&1 || missing_executables="$missing_executables yq"
+  command -v go >/dev/null 2>&1 || missing_executables="$missing_executables go"
 
   for executable in $missing_executables; do
     log_info "Installing ${executable}"
