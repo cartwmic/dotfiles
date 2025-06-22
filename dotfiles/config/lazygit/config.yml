@@ -1,5 +1,0 @@
-# {{@@ header() @@}}
-{%@@ if local_profile == 'axon_work_computer' @@%}
-services:
-  'git.taservs.net': 'github:git.taservs.net'
-{%@@ endif @@%}

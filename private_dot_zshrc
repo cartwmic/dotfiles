@@ -43,8 +43,6 @@ source $HOME/fzf-tab/fzf-tab.plugin.zsh
 # initialize plugins statically with ${ZDOTDIR:-~}/.zsh_plugins.txt
 antidote load
 
-export DOTDROP_PROFILE={{@@ local_profile @@}}
-
 # General PATH updates
 export PATH="$PATH:/usr/local/bin:/usr/local/lib:/opt/homebrew/bin:$HOME/git/git-sync:$HOME/git/git-sync/contrib:$HOME/.cargo/bin:$HOME/.local/bin:$HOME/fvm/default/bin"
 
@@ -85,9 +83,6 @@ export EDITOR=nvim
 export ZVM_VI_EDITOR=$EDITOR
 ZVM_VI_INSERT_ESCAPE_BINDKEY=jk
 
-# ranger configuration
-RANGER_LOAD_DEFAULT_RC=false
-#
 #THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
 export SDKMAN_DIR="$HOME/.sdkman"
 [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
