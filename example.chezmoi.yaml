@@ -1,0 +1,8 @@
+# Place this file in ~/.config/chezmoi
+data:
+  profile: "personal"
+
+hooks:
+  read-source-state:
+    pre:
+      command: ".local/share/chezmoi/.install-password-manager.sh"
