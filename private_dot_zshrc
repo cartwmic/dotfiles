@@ -83,9 +83,6 @@ export EDITOR=nvim
 export ZVM_VI_EDITOR=$EDITOR
 ZVM_VI_INSERT_ESCAPE_BINDKEY=jk
 
-# ranger configuration
-RANGER_LOAD_DEFAULT_RC=false
-#
 #THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
 export SDKMAN_DIR="$HOME/.sdkman"
 [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
