@@ -1,4 +1,6 @@
 -- Place any preconfigured lazyvim plugins here if you want to disable them
 return {
   { "akinsho/bufferline.nvim", enabled = false },
+  {{- if eq .profile "axon-work-computer" }}
+  { "supermaven-inc/supermaven-nvim", enabled = false },{{- end }}
 }
