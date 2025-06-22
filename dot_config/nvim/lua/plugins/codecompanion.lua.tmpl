@@ -3,10 +3,18 @@ return {
   opts = {
     strategies = {
       chat = {
+        {{- if eq .profile "axon-work-computer" }}
+        adapter = "openai_work",
+        {{- else }}
         adapter = "anthropic",
+        {{- end }}
       },
       inline = {
+        {{- if eq .profile "axon-work-computer" }}
+        adapter = "openai_work",
+        {{- else }}
         adapter = "anthropic",
+        {{- end }}
       },
     },
     adapters = {
@@ -47,5 +55,9 @@ return {
     "nvim-lua/plenary.nvim",
     "nvim-treesitter/nvim-treesitter",
     "ravitemer/mcphub.nvim",
+  },
+  keys = {
+    {"<leader>zcaa1", mode = { "n" }, "<cmd>CodeCompanionChat<cr>", desc = "Code Companion Chat (Default Model)"}
+    {"<leader>zcaa1", mode = { "n" }, "<cmd>CodeCompanionActions<cr>", desc = "Code Companion Actions"}
   },
 }
