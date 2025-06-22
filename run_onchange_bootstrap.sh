@@ -247,7 +247,7 @@ main() {
     # stuff to always install and is idempotent
     sudo apt-get update
     sudo apt-get install -y build-essential software-properties-common jq tar curl wget git sed gnupg zip zsh fontconfig sed
-    sudo chsh "$USER" /usr/bin/zsh
+    sudo chsh "$USER" -s /usr/bin/zsh
   fi
 
   missing_prerequisites=""
