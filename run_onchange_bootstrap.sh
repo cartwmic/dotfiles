@@ -49,7 +49,7 @@ install_cross_platform() {
       log_error "User parameter required for sdkman installation"
       exit 1
     fi
-    curl -s "https://get.sdkman.io" | sudo -u "${USER}" bash
+    curl -s "https://get.sdkman.io" | bash
     ;;
   just)
     cargo install just
@@ -156,6 +156,10 @@ install_ubuntu_special() {
     tar -xvzf "kubeseal-${KUBESEAL_VERSION}-linux-amd64.tar.gz" kubeseal
     sudo install -m 755 kubeseal /usr/local/bin/kubeseal
     ;;
+  yq)
+    sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_"$(dpkg --print-architecture)" -O /usr/local/bin/yq &&
+      sudo chmod +x /usr/local/bin/yq
+    ;;
   *)
     log_error "Unknown special Ubuntu package: ${PACKAGE}"
     return 1
@@ -181,10 +185,6 @@ install_ubuntu_apt() {
     sudo add-apt-repository -y ppa:neovim-ppa/unstable
     sudo apt-get update
     ;;
-  yq)
-    sudo add-apt-repository ppa:rmescandon/yq
-    sudo apt update
-    ;;
   terraform)
     wget -O - https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
@@ -199,7 +199,7 @@ install_ubuntu_apt() {
 
 is_special_ubuntu_package() {
   case "${PACKAGE}" in
-  go-task | lazygit | starship | zellij | kustomize | kubeseal | k9s)
+  go-task | lazygit | starship | zellij | kustomize | kubeseal | k9s | yq)
     return 0
     ;;
   *)
@@ -246,7 +246,7 @@ main() {
   if $IS_UBUNTU; then
     # stuff to always install and is idempotent
     sudo apt-get update
-    sudo apt-get install -y build-essential software-properties-common jq tar curl wget git sed gnupg zip zsh fontconfig sed
+    sudo apt-get install -y build-essential software-properties-common jq tar curl wget git sed gnupg zip zsh fontconfig sed util-linux
     sudo chsh "$USER" -s /usr/bin/zsh
   fi
 
