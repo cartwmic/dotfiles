@@ -246,7 +246,7 @@ main() {
   if $IS_UBUNTU; then
     # stuff to always install and is idempotent
     sudo apt-get update
-    sudo apt-get install -y build-essential software-properties-common jq tar curl wget git sed gnupg zip zsh
+    sudo apt-get install -y build-essential software-properties-common jq tar curl wget git sed gnupg zip zsh fontconfig sed
     sudo chsh "$USER" /usr/bin/zsh
   fi
 
@@ -293,7 +293,7 @@ main() {
   command -v kitty >/dev/null 2>&1 || missing_executables="$missing_executables kitty"
   test -e "$HOME/.config/nvm" || missing_executables="$missing_executables nvm"
   test -e "$HOME/.antidote" || missing_executables="$missing_executables antidote"
-  test -e "$HOME/.fzf" || missing_executables="$missing_executables fzf"
+  (test -e "$HOME/.fzf" && command -v fzf) || missing_executables="$missing_executables fzf"
   test -e "$HOME/fzf-tab" || missing_executables="$missing_executables fzf-tab"
   command -v zellij >/dev/null 2>&1 || missing_executables="$missing_executables zellij"
   command -v nvim >/dev/null 2>&1 || missing_executables="$missing_executables neovim"
