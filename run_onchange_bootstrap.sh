@@ -246,7 +246,8 @@ main() {
   if $IS_UBUNTU; then
     # stuff to always install and is idempotent
     sudo apt-get update
-    sudo apt-get install -y build-essential software-properties-common jq tar curl wget git sed gnupg zip
+    sudo apt-get install -y build-essential software-properties-common jq tar curl wget git sed gnupg zip zsh
+    sudo chsh "$USER" /usr/bin/zsh
   fi
 
   missing_prerequisites=""
