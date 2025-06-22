@@ -16,3 +16,6 @@ vim.keymap.set(
   "<cmd>UserPutPKMSFileDateTimestampToClipboard<CR>p",
   { noremap = true, desc = "Get local date timestamp to clipboard and paste it" }
 )
+vim.keymap.set("n", "<leader>zc", "", { noremap = true, desc = "Custom Code Keymaps" })
+vim.keymap.set("n", "<leader>zca", "", { noremap = true, desc = "Custom AI Keymaps" })
+vim.keymap.set("n", "<leader>zcaa", "", { noremap = true, desc = "Custom Code Companion Keymaps" })
