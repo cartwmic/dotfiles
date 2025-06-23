@@ -1,13 +1,30 @@
 {
-  "nativeMCPServers": [
-    
-  ],
+  "nativeMCPServers": {
+    "mcphub": {
+      "disabled": false
+    }
+  },
   "mcpServers": {
+    "sequential-thinking": {
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "command": "npx",
+      "disabled": false
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch"
+      ]
+    },
     "git": {
       "args": [
         "mcp-server-git"
       ],
-      "command": "uvx"
+      "command": "uvx",
+      "disabled": false
     }
   }
 }
