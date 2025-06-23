@@ -36,7 +36,7 @@ cleanup() {
 
 is_cross_platform_package() {
   case "${PACKAGE}" in
-  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust | helm) return 0 ;;
+  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust | helm | gvm) return 0 ;;
   *) return 1 ;;
   esac
 }
