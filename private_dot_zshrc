@@ -97,6 +97,9 @@ eval "$(zoxide init zsh)"
 
 [[ -s "$HOME/.gvm/scripts/gvm" ]] && source "$HOME/.gvm/scripts/gvm"
 
+. $HOME/utils.sh
+command -v magick >/dev/null 2>&1 && is_macos && export DISPLAY=:0
+
 # secrets via 1password
 # on windows with WSL, alias to windows op cli tool to integrate with desktop auth. May break some scripts as passing env vars to windows exe may not work correctly
 # if command -v op.exe > /dev/null 2>&1; then
