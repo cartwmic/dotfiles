@@ -36,7 +36,7 @@ cleanup() {
 
 is_cross_platform_package() {
   case "${PACKAGE}" in
-  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust | helm | gvm) return 0 ;;
+  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust | helm | gvm | kitty | mmdc) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -44,15 +44,17 @@ is_cross_platform_package() {
 # Installation functions
 install_cross_platform() {
   case "${PACKAGE}" in
+  mmdc)
+    npm install -g @mermaid-js/mermaid-cli
+    ;;
+  kitty)
+    curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin
+    ;;
   gvm)
     # have to do the below manually
     # bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')
-    echo "INSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\n"
-    echo "INSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\n"
-    echo "INSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\nINSTALL GVM MANUALLY\n"
-    echo "REMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\n"
-    echo "REMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\n"
-    echo "REMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\n"
+    echo "INSTALL GVM MANUALLY"
+    echo "REMEMBER TO INSTALL AND SET A GO VERSION"
     ;;
   sdkman)
     if [ -z "${USER}" ]; then
@@ -102,6 +104,10 @@ install_cross_platform() {
 
 install_macos() {
   case "${PACKAGE}" in
+  magick)
+    brew install imagemagick xquartz
+    echo "REMEMBER TO ADD XQUARTZ AS A LOGIN ITEM"
+    ;;
   k9s)
     brew install derailed/k9s/k9s
     ;;
@@ -313,6 +319,8 @@ main() {
   command -v terraform >/dev/null 2>&1 || missing_executables="$missing_executables terraform"
   command -v yq >/dev/null 2>&1 || missing_executables="$missing_executables yq"
   command -v gvm >/dev/null 2>&1 || missing_executables="$missing_executables gvm"
+  command -v magick >/dev/null 2>&1 || missing_executables="$missing_executables magick"
+  command -v mmdc >/dev/null 2>&1 || missing_executables="$missing_executables mmdc"
 
   for executable in $missing_executables; do
     log_info "Installing ${executable}"
@@ -344,12 +352,11 @@ main() {
     exit 1
   fi
 
-  echo "REMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\n"
-  echo "REMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\n"
-  echo "REMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\nREMEMBER TO INSTALL AND SET A GO VERSION\n"
-  echo "REMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\n"
-  echo "REMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\n"
-  echo "REMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\nREMEMBER TO INSTALL AND SET A NODE VERSION\n"
+  echo "INSTALL GVM MANUALLY"
+  echo "REMEMBER TO INSTALL AND SET A GO VERSION"
+  if $IS_MACOS; then
+    echo "REMEMBER TO ADD XQUARTZ AS A LOGIN ITEM"
+  fi
 
 }
 
