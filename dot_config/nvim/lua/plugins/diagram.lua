@@ -1,5 +1,5 @@
 return {
-  "3rd/diagram.nvim",
+  "cartwmic/diagram.nvim",
   dependencies = {
     "3rd/image.nvim",
   },
