@@ -104,7 +104,7 @@ install_cross_platform() {
 
 install_macos() {
   case "${PACKAGE}" in
-  magick)
+  imagemagick)
     brew install imagemagick xquartz
     echo "REMEMBER TO ADD XQUARTZ AS A LOGIN ITEM"
     ;;
@@ -319,7 +319,7 @@ main() {
   command -v terraform >/dev/null 2>&1 || missing_executables="$missing_executables terraform"
   command -v yq >/dev/null 2>&1 || missing_executables="$missing_executables yq"
   command -v gvm >/dev/null 2>&1 || missing_executables="$missing_executables gvm"
-  command -v magick >/dev/null 2>&1 || missing_executables="$missing_executables magick"
+  command -v magick >/dev/null 2>&1 || missing_executables="$missing_executables imagemagick"
   command -v mmdc >/dev/null 2>&1 || missing_executables="$missing_executables mmdc"
 
   for executable in $missing_executables; do
