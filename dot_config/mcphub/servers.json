@@ -6,12 +6,12 @@
   },
   "mcpServers": {
     "sequential-thinking": {
+      "command": "npx",
+      "disabled": false,
       "args": [
         "-y",
         "@modelcontextprotocol/server-sequential-thinking"
-      ],
-      "command": "npx",
-      "disabled": false
+      ]
     },
     "fetch": {
       "command": "uvx",
@@ -20,11 +20,11 @@
       ]
     },
     "git": {
+      "command": "uvx",
+      "disabled": false,
       "args": [
         "mcp-server-git"
-      ],
-      "command": "uvx",
-      "disabled": false
+      ]
     }
   }
 }
