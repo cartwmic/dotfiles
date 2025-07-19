@@ -61,7 +61,7 @@ return {
           },
           {
             role = "user",
-            content = "Using @{mcp} create a git commit message based on the current chezmoi lazylock file updates. Make sure to use nvim to get the correct workspace first"
+            content = "Using @{mcp} create a git commit message based on the current chezmoi lazylock file updates. Make sure to use #{mcp:neovim://workspace} to get the correct workspace first."
           }
         },
       },
@@ -75,7 +75,7 @@ return {
           },
           {
             role = "user",
-            content = "Using @{mcp} create a git commit message based on the current unstaged files. Make sure to use nvim to get the correct workspace first"
+            content = "Using @{mcp} create a git commit message based on the current unstaged files. Make sure to use #{mcp:neovim://workspace} to get the correct workspace first."
           }
         },
       },
@@ -89,7 +89,7 @@ return {
           },
           {
             role = "user",
-            content = "Make sure to use @{mcp} tools of nvim to get the correct workspace first. Please explain how to fix the current #{buffer}'s diagnostics: #{mcp:neovim://diagnostics/buffer}\nThe language is: "
+            content = "Make sure to use #{mcp:neovim://workspace} to get the correct workspace first. Please explain how to fix the current #{buffer}'s diagnostics: #{mcp:neovim://diagnostics/buffer}\nThe language is: "
           }
         },
       }
