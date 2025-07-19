@@ -53,7 +53,7 @@ return {
     prompt_library = {
       ["Git Commit Chezmoi - Lazylock Update"] = {
         strategy = "chat",
-        description = "Create a git commit message for the current chezmoi lazylock update",
+        description = "Create a git commit for the current chezmoi lazylock update",
         prompts = {
           {
             role = "system",
@@ -61,7 +61,7 @@ return {
           },
           {
             role = "user",
-            content = "The current workspace is #{mcp:neovim://workspace}. Using @{mcp} create a git commit message based on the current chezmoi lazylock file updates."
+            content = "The current workspace is #{mcp:neovim://workspace}. Using @{mcp} create a git commit and message based on the current chezmoi lazylock file updates."
           }
         },
       },
