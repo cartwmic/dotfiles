@@ -140,6 +140,9 @@ return {
       ["Git Commit Chezmoi - Lazylock Update"] = {
         strategy = "chat",
         description = "Create a git commit for the current chezmoi lazylock update",
+        opts = {
+          auto_submit = true
+        },
         prompts = {
           {
             role = "system",
@@ -154,6 +157,9 @@ return {
       ["Git Commit Message - Unstaged"] = {
         strategy = "chat",
         description = "Create a git commit message for the current unstaged changes",
+        opts = {
+          auto_submit = true
+        },
         prompts = {
           {
             role = "system",
