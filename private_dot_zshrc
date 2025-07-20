@@ -92,6 +92,10 @@ export SDKMAN_DIR="$HOME/.sdkman"
 autoload -U _task
 compdef _task task
 
+
+autoload -U _vectorcode
+compdef _task vectorcode
+
 export _ZO_ECHO=1
 eval "$(zoxide init zsh)"
 
