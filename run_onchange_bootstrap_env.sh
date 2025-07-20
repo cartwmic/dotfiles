@@ -36,7 +36,7 @@ cleanup() {
 
 is_cross_platform_package() {
   case "${PACKAGE}" in
-  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust | helm | gvm | kitty | mmdc) return 0 ;;
+  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust | helm | gvm | kitty | mmdc | vectorcode) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -44,6 +44,9 @@ is_cross_platform_package() {
 # Installation functions
 install_cross_platform() {
   case "${PACKAGE}" in
+  vectorcode)
+    uv tool install vectorcode
+    ;;
   mmdc)
     npm install -g @mermaid-js/mermaid-cli
     ;;
@@ -321,6 +324,7 @@ main() {
   command -v gvm >/dev/null 2>&1 || missing_executables="$missing_executables gvm"
   command -v magick >/dev/null 2>&1 || missing_executables="$missing_executables imagemagick"
   command -v mmdc >/dev/null 2>&1 || missing_executables="$missing_executables mmdc"
+  command -v vectorcode >/dev/null 2>&1 || missing_executables="$missing_executables vectorcode"
 
   for executable in $missing_executables; do
     log_info "Installing ${executable}"
