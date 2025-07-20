@@ -135,6 +135,7 @@ return {
           ]]
         },
       },
+      spinner = {},
     },
     prompt_library = {
       ["Git Commit Chezmoi - Lazylock Update"] = {
@@ -191,10 +192,17 @@ return {
     "nvim-lua/plenary.nvim",
     "nvim-treesitter/nvim-treesitter",
     "ravitemer/mcphub.nvim",
-    "ravitemer/codecompanion-history.nvim"
+    "ravitemer/codecompanion-history.nvim",
+    -- for fidget spinner above status line: "j-hui/fidget.nvim",
+    "folke/noice.nvim",
+    "franco-ruggeri/codecompanion-spinner.nvim",
   },
   keys = {
     {"<leader>zcaa1", mode = { "n" }, "<cmd>CodeCompanionChat<cr>", desc = "Code Companion Chat (Default Model)"},
     {"<leader>zcaaa", mode = { "n" }, "<cmd>CodeCompanionActions<cr>", desc = "Code Companion Actions"}
   },
+  init = function()
+    -- for fidget spinner above status line: require("plugins.codecompanion.fidget-spinner"):init()
+    require("plugins.codecompanion.companion-notification").init()
+  end,
 }
