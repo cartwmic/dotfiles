@@ -9,7 +9,7 @@
   "cmp-path": { "branch": "main", "commit": "e52e640b7befd8113b3350f46e8cfcfe98fcf730" },
   "codecompanion-history.nvim": { "branch": "main", "commit": "811b9af74c8fd4752a3422acf2379fba0639a96c" },
   "codecompanion-spinner.nvim": { "branch": "main", "commit": "1f53b8d402de2a5ee6f9d64793f5eda49ed12a64" },
-  "codecompanion.nvim": { "branch": "main", "commit": "0a5c13c97d93307c05652ea182a4b4dcea54d4a0" },
+  "codecompanion.nvim": { "branch": "main", "commit": "afa34ebe3c48d74dc7e1c8b26d74f7f3a02cb531" },
   "conform.nvim": { "branch": "master", "commit": "973f3cb73887d510321653044791d7937c7ec0fa" },
   "crates.nvim": { "branch": "main", "commit": "c915ab5334a46178f64ce17ab606a79454bcd14f" },
   "diagram.nvim": { "branch": "master", "commit": "648e60c116e18d19487505f33e8c686bf5c23a92" },
