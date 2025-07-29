@@ -37,6 +37,11 @@ return {
           env = {
             api_key = "cmd:op read 'op://personal/OpenAI - Axon - 2025-06-19/credential' --no-newline",
           },
+          schema = {
+            model = {
+              default = "gpt-4o"
+            }
+          }
         })
       end,
     },
