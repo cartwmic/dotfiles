@@ -13,6 +13,13 @@
         "--repository",
         "${userHome}/.config/mcp_servers"
       ],
+      "autoApprove": [
+        "git_add",
+        "git_diff",
+        "git_diff_staged",
+        "git_diff_unstaged",
+        "git_status"
+      ],
       "command": "uvx"
     },
     "sequential-thinking": {
