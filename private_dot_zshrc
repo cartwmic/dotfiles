@@ -104,6 +104,9 @@ eval "$(zoxide init zsh)"
 . $HOME/utils.sh
 command -v magick >/dev/null 2>&1 && is_macos && export DISPLAY=:0
 
+# running this at the end so that zsh vi mode plugin doesn't overwrite keybinding for fzf-tab. See https://github.com/jeffreytse/zsh-vi-mode/issues/24
+zvm_after_init_commands+=('[ -f ~/fzf-tab/fzf-tab.plugin.zsh ] && source ~/fzf-tab/fzf-tab.plugin.zsh')
+
 # secrets via 1password
 # on windows with WSL, alias to windows op cli tool to integrate with desktop auth. May break some scripts as passing env vars to windows exe may not work correctly
 # if command -v op.exe > /dev/null 2>&1; then
