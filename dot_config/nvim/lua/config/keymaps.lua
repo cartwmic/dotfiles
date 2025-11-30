@@ -19,3 +19,5 @@ vim.keymap.set(
 vim.keymap.set("n", "<leader>zc", "", { noremap = true, desc = "Custom Code Keymaps" })
 vim.keymap.set("n", "<leader>zca", "", { noremap = true, desc = "Custom AI Keymaps" })
 vim.keymap.set("n", "<leader>zcaa", "", { noremap = true, desc = "Custom Code Companion Keymaps" })
+vim.keymap.set("n", "<leader>zG", "", { noremap = true, desc = "Custom Git Keymaps" })
+vim.keymap.set("n", "<leader>zGq", "<cmd>UserGitChangedFilesToQuickfix<cr>", { desc = "Git changed files to quickfix" })
