@@ -281,6 +281,7 @@ return {
   },
   keys = {
     {"<leader>zcaa1", mode = { "n" }, "<cmd>CodeCompanionChat<cr>", desc = "Code Companion Chat (Default Model)"},
+    {"<leader>zcaa2", mode = { "n" }, "<cmd>CodeCompanionChat claude_code<cr>", desc = "Code Companion Chat (Claude Code)"},
     {"<leader>zcaaa", mode = { "n" }, "<cmd>CodeCompanionActions<cr>", desc = "Code Companion Actions"}
   },
   init = function()
@@ -288,3 +289,4 @@ return {
     require("plugins.codecompanion.companion-notification").init()
   end,
 }
+
