@@ -41,6 +41,17 @@ return {
           env = {
             api_key = "cmd:op read 'op://personal/OpenAI - key-1/credential' --no-newline",
           },
+          schema = {
+            model = {
+              choices = {
+                ["gpt-5.1"] = {
+                  formatted_name = "GPT 5.1",
+                  opts = { can_reason = true, has_vision = true },
+                },
+              },
+              default = "gpt-5.1"
+            },
+          }
         })
       end,
       openai_work = function()
@@ -50,8 +61,14 @@ return {
           },
           schema = {
             model = {
-              default = "gpt-4o"
-            }
+              choices = {
+                ["gpt-5.1"] = {
+                  formatted_name = "GPT 5.1",
+                  opts = { can_reason = true, has_vision = true },
+                },
+              },
+              default = "gpt-5.1"
+            },
           }
         })
       end,
