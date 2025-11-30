@@ -36,7 +36,7 @@ cleanup() {
 
 is_cross_platform_package() {
   case "${PACKAGE}" in
-  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust | helm | gvm | kitty | mmdc | vectorcode) return 0 ;;
+  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust | helm | gvm | kitty | mmdc | vectorcode | claude | claude-code-acp) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -44,6 +44,12 @@ is_cross_platform_package() {
 # Installation functions
 install_cross_platform() {
   case "${PACKAGE}" in
+  claude-code-acp)
+    npm install -g @zed-industries/claude-code-acp
+    ;;
+  claude)
+    curl -fsSL https://claude.ai/install.sh | bash
+    ;;
   vectorcode)
     uv tool install vectorcode
     ;;
@@ -325,6 +331,8 @@ main() {
   command -v magick >/dev/null 2>&1 || missing_executables="$missing_executables imagemagick"
   command -v mmdc >/dev/null 2>&1 || missing_executables="$missing_executables mmdc"
   command -v vectorcode >/dev/null 2>&1 || missing_executables="$missing_executables vectorcode"
+  command -v claude >/dev/null 2>&1 || missing_executables="$missing_executables claude"
+  command -v claude-code-acp >/dev/null 2>&1 || missing_executables="$missing_executables claude-code-acp"
 
   for executable in $missing_executables; do
     log_info "Installing ${executable}"
