@@ -23,6 +23,17 @@ return {
           env = {
             api_key = "cmd:op read 'op://personal/Anthropic - key-1/credential' --no-newline",
           },
+          schema = {
+            model = {
+              choices = {
+                ["claude-opus-4-5-20251101"] = {
+                  formatted_name = "Claude Opus 4.5",
+                  opts = { can_reason = true, has_vision = true },
+                },
+              },
+              default = "claude-opus-4-5-20251101"
+            },
+          },
         })
       end,
       openai_personal = function()
