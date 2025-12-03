@@ -14,24 +14,31 @@ vim.api.nvim_create_user_command("UserPutCurrentTimestampToClipboard", function(
 end, {})
 
 vim.api.nvim_create_user_command("UserGitChangedFilesToQuickfix", function(_)
-  -- Get changed files from git (both staged and unstaged)
-  local git_cmd = "git diff --name-only HEAD && git diff --name-only --cached"
-  local output = vim.fn.system(git_cmd)
-
-  if vim.v.shell_error ~= 0 then
-    vim.notify("Error getting git changed files", vim.log.levels.ERROR)
-    return
-  end
-
-  -- Split output into lines and remove duplicates
+  -- Get all changed files: modified, staged, and untracked
   local files = {}
   local seen = {}
-  for file in output:gmatch("[^\r\n]+") do
-    if file ~= "" and not seen[file] then
-      seen[file] = true
-      table.insert(files, file)
+
+  -- Helper to add files from git command
+  local function add_files(cmd)
+    local output = vim.fn.system(cmd)
+    if vim.v.shell_error == 0 then
+      for file in output:gmatch("[^\r\n]+") do
+        if file ~= "" and not seen[file] then
+          seen[file] = true
+          table.insert(files, file)
+        end
+      end
     end
   end
+
+  -- Get unstaged changes (modified files)
+  add_files("git diff --name-only")
+
+  -- Get staged changes
+  add_files("git diff --name-only --cached")
+
+  -- Get untracked files
+  add_files("git ls-files --others --exclude-standard")
 
   if #files == 0 then
     vim.notify("No changed files found", vim.log.levels.INFO)
