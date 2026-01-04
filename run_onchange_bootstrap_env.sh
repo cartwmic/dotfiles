@@ -36,7 +36,7 @@ cleanup() {
 
 is_cross_platform_package() {
   case "${PACKAGE}" in
-  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust | helm | gvm | kitty | mmdc | vectorcode | claude | claude-code-acp) return 0 ;;
+  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust | helm | gvm | kitty | mmdc | vectorcode | claude | claude-code-acp | claude-monitor) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -44,6 +44,9 @@ is_cross_platform_package() {
 # Installation functions
 install_cross_platform() {
   case "${PACKAGE}" in
+  claude-monitor)
+    uv tool install claude-monitor
+    ;;
   claude-code-acp)
     npm install -g @zed-industries/claude-code-acp
     ;;
@@ -333,6 +336,7 @@ main() {
   command -v vectorcode >/dev/null 2>&1 || missing_executables="$missing_executables vectorcode"
   command -v claude >/dev/null 2>&1 || missing_executables="$missing_executables claude"
   command -v claude-code-acp >/dev/null 2>&1 || missing_executables="$missing_executables claude-code-acp"
+  command -v claude-monitor >/dev/null 2>&1 || missing_executables="$missing_executables claude-monitor"
 
   for executable in $missing_executables; do
     log_info "Installing ${executable}"
