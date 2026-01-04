@@ -36,7 +36,7 @@ cleanup() {
 
 is_cross_platform_package() {
   case "${PACKAGE}" in
-  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust | helm | gvm | kitty | mmdc | vectorcode | claude | claude-code-acp | claude-monitor | mistral-vibe) return 0 ;;
+  sdkman | just | uv | nvm | antidote | fzf | fzf-tab | rage | rust | helm | gvm | kitty | mmdc | vectorcode | claude | claude-code-acp | mistral-vibe) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -46,9 +46,6 @@ install_cross_platform() {
   case "${PACKAGE}" in
   mistral-vibe)
     uv tool install mistral-vibe
-    ;;
-  claude-monitor)
-    uv tool install claude-monitor
     ;;
   claude-code-acp)
     npm install -g @zed-industries/claude-code-acp
@@ -339,7 +336,6 @@ main() {
   command -v vectorcode >/dev/null 2>&1 || missing_executables="$missing_executables vectorcode"
   command -v claude >/dev/null 2>&1 || missing_executables="$missing_executables claude"
   command -v claude-code-acp >/dev/null 2>&1 || missing_executables="$missing_executables claude-code-acp"
-  command -v claude-monitor >/dev/null 2>&1 || missing_executables="$missing_executables claude-monitor"
   command -v vibe >/dev/null 2>&1 || missing_executables="$missing_executables mistral-vibe"
 
   for executable in $missing_executables; do
