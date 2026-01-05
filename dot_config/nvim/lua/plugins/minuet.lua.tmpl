@@ -1,0 +1,89 @@
+return {
+  {
+    "milanglacier/minuet-ai.nvim",
+    {{- if eq .profile "axon-work-computer" }}
+    enabled = false,
+    {{- else }}
+    dependencies = { "nvim-lua/plenary.nvim" },
+    event = "VeryLazy",
+    config = function()
+      -- Fetch API key asynchronously in background
+      -- Start with a placeholder to prevent error on module load
+      local api_key_holder = { value = "placeholder-fetching-from-1password" }
+      local debug = false  -- Set to true to see API key loading messages
+      
+      if debug then
+        vim.notify("[minuet] Fetching API key from 1Password in background...", vim.log.levels.INFO)
+      end
+      
+      vim.system(
+        { "timeout", "30s", "op", "read", "op://personal/mistral - AI Studio/api-key", "--no-newline" },
+        { text = true },
+        function(result)
+          vim.schedule(function()
+            if result.code == 0 and result.stdout and result.stdout ~= "" then
+              api_key_holder.value = result.stdout:gsub("%s+$", "")
+              if debug then
+                vim.notify(string.format("[minuet] API key retrieved (length: %d)", #api_key_holder.value), vim.log.levels.INFO)
+              end
+            else
+              local reason = result.code == 124 and "timeout after 30s" or (result.stderr or ""):gsub("%s+$", "")
+              vim.notify(string.format("[minuet] Failed to get API key: %s", reason), vim.log.levels.ERROR)
+            end
+          end)
+        end
+      )
+      
+      require("minuet").setup({
+        provider = "codestral",
+        cmp = { 
+          enable = true,
+          enable_auto_complete = false,  -- Only trigger on Alt+y
+        },
+        blink = { enable = false },
+        virtualtext = { enable = false },
+        
+        provider_options = {
+          codestral = {
+            api_key = function()
+              return api_key_holder.value
+            end,
+            model = "codestral-latest",
+            end_point = "https://api.mistral.ai/v1/fim/completions",
+            optional = {},
+          },
+        },
+        
+        throttle = 1000,
+        debounce = 400,
+        request_timeout = 5,
+        context_window = 8192,
+        n_completions = 3,
+        notify = "error",  -- Only show errors. Set to "verbose" for troubleshooting
+      })
+      
+      if debug then
+        vim.notify("[minuet] Setup complete, waiting for API key from 1Password...", vim.log.levels.INFO)
+      end
+    end,
+    {{- end }}
+  },
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
