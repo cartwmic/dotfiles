@@ -104,6 +104,23 @@ eval "$(zoxide init zsh)"
 . $HOME/utils.sh
 command -v magick >/dev/null 2>&1 && is_macos && export DISPLAY=:0
 
+
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.internal.cartwmic.com:80
+
+# Android SDK and NDK paths on my windows WSL2
+export ANDROID_HOME="$HOME/Android"
+export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+
+# Add Android tools to PATH
+export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/tools"
+
+# Flutter SDK
+export FLUTTER_HOME="$HOME/flutter_sdk"
+export PATH="$PATH:$FLUTTER_HOME/bin"
+
 # running this at the end so that zsh vi mode plugin doesn't overwrite keybinding for fzf-tab. See https://github.com/jeffreytse/zsh-vi-mode/issues/24
 zvm_after_init_commands+=('[ -f ~/fzf-tab/fzf-tab.plugin.zsh ] && source ~/fzf-tab/fzf-tab.plugin.zsh')
 
