@@ -28,6 +28,9 @@ return {
     },
 
     adapters = {
+      opts = {
+        cmd_timeout = 60000, -- 60 seconds, timeout for thing slike `cmd:op read ...`
+      },
       http = {
         anthropic = function()
           return require("codecompanion.adapters").extend("anthropic", {
@@ -95,6 +98,11 @@ return {
               CLAUDE_CODE_OAUTH_TOKEN = "cmd:op read 'op://personal/Anthropic - Claude - 1/oauth token' --no-newline",
               ANTHROPIC_MODEL = "haiku",
             },
+
+            defaults = {
+              -- Give the ACP server some time to initialize on first request.
+              timeout = 60000, -- 60 seconds
+            },
           })
         end,
 
@@ -103,6 +111,11 @@ return {
             env = {
               CLAUDE_CODE_OAUTH_TOKEN = "cmd:op read 'op://personal/Anthropic - Claude - 2/oauth token' --no-newline",
               ANTHROPIC_MODEL = "haiku",
+            },
+
+            defaults = {
+              -- Give the ACP server some time to initialize on first request.
+              timeout = 60000, -- 60 seconds
             },
           })
         end,
