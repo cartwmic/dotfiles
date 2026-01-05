@@ -1,9 +1,9 @@
 return {
   "olimorris/codecompanion.nvim",
   opts = {
-    opts = {
-      log_level = "TRACE", -- or "DEBUG"
-    },
+    -- opts = {
+      -- log_level = "TRACE", -- or "DEBUG"
+    -- },
     display = {
       chat = {
         show_token_count = true,
@@ -89,10 +89,19 @@ return {
 
       acp = {
         -- Existing Claude Code ACP adapter
-        claude_code = function()
+        claude_code_acct1 = function()
           return require("codecompanion.adapters").extend("claude_code", {
             env = {
-              CLAUDE_CODE_OAUTH_TOKEN = "cmd:op read 'op://personal/Anthropic - Claude/oauth token' --no-newline",
+              CLAUDE_CODE_OAUTH_TOKEN = "cmd:op read 'op://personal/Anthropic - Claude - 1/oauth token' --no-newline",
+              ANTHROPIC_MODEL = "haiku",
+            },
+          })
+        end,
+
+        claude_code_acct2 = function()
+          return require("codecompanion.adapters").extend("claude_code", {
+            env = {
+              CLAUDE_CODE_OAUTH_TOKEN = "cmd:op read 'op://personal/Anthropic - Claude - 2/oauth token' --no-newline",
               ANTHROPIC_MODEL = "haiku",
             },
           })
@@ -113,9 +122,6 @@ return {
             commands = {
               -- Standard ACP server
               default = { "vibe-acp" },
-
-              -- Optional: auto-approve mode (Vibe supports `--auto-approve`) :contentReference[oaicite:8]{index=8}
-              auto_approve = { "vibe-acp", "--auto-approve" },
             },
 
             defaults = {
