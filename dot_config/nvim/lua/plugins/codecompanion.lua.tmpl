@@ -96,7 +96,6 @@ return {
           return require("codecompanion.adapters").extend("claude_code", {
             env = {
               CLAUDE_CODE_OAUTH_TOKEN = "cmd:op read 'op://personal/Anthropic - Claude - 1/oauth token' --no-newline",
-              ANTHROPIC_MODEL = "haiku",
             },
 
             defaults = {
@@ -110,7 +109,6 @@ return {
           return require("codecompanion.adapters").extend("claude_code", {
             env = {
               CLAUDE_CODE_OAUTH_TOKEN = "cmd:op read 'op://personal/Anthropic - Claude - 2/oauth token' --no-newline",
-              ANTHROPIC_MODEL = "haiku",
             },
 
             defaults = {

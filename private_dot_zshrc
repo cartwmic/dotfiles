@@ -105,6 +105,7 @@ eval "$(zoxide init zsh)"
 command -v magick >/dev/null 2>&1 && is_macos && export DISPLAY=:0
 
 
+export ANTHROPIC_DEFAULT_MODEL=haiku # model selection by env var or claude settings.json is not currently respected by claude-code-acp: https://github.com/zed-industries/claude-code-acp/issues/225
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
 export OTEL_METRICS_EXPORTER=otlp
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
