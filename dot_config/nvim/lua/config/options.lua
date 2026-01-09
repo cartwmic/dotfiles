@@ -5,3 +5,6 @@
 vim.opt.mouse = ""
 vim.g.snacks_animate = true
 vim.opt.relativenumber = false
+
+-- Use blink.cmp as the completion engine (default in LazyVim)
+vim.g.lazyvim_cmp = "blink.cmp"

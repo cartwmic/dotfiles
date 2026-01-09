@@ -13,7 +13,7 @@ return {
         showImplicitArguments = true,
       }
       metals_config.init_options.statusBarProvider = "on"
-      metals_config.capabilities = require("cmp_nvim_lsp").default_capabilities()
+      metals_config.capabilities = require("blink.cmp").get_lsp_capabilities()
 
       metals_config.on_attach = function(client, bufnr)
         metals.setup_dap()
