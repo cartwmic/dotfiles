@@ -38,11 +38,11 @@ return {
       
       -- Shared configuration
       local common_config = {
-        cmp = { 
+        cmp = { enable = false },  -- Disable nvim-cmp in favor of blink.cmp
+        blink = { 
           enable = true,
           enable_auto_complete = false,  -- Only trigger on Alt+y
         },
-        blink = { enable = false },
         virtualtext = { enable = false },
         throttle = 1000,
         debounce = 400,
@@ -103,6 +103,7 @@ return {
     end,
   },
 }
+
 
 
 
