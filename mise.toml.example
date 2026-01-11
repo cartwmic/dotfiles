@@ -1,11 +1,14 @@
 # mise.toml - Universal Development Environment Configuration
 # This replaces the run_onchange_bootstrap_env.sh script
 #
+# IMPORTANT: This is NOT a complete drop-in replacement for the bootstrap script.
+# See the "Critical Differences" section at the bottom for details.
+#
 # Installation:
 #   macOS:   brew install mise
 #   Ubuntu:  curl https://mise.run | sh
 #
-# After installing mise, run: mise install
+# After installing mise, run: mise install && mise run bootstrap
 # Add to ~/.zshrc: eval "$(mise activate zsh)"
 
 # =============================================================================
@@ -13,19 +16,17 @@
 # =============================================================================
 [tools]
 # Core language runtimes (mise's primary strength)
-node = "lts"              # Replaces nvm
+# NOTE: node/nvm installed via task to match bootstrap script behavior
 python = "latest"         # System Python management
 rust = "latest"           # Replaces rustup (includes cargo)
-go = "latest"             # Replaces gvm
-java = "openjdk-21"       # Replaces SDKMAN for Java
+# NOTE: go/gvm handled manually - see bootstrap task notes
+# NOTE: java/SDKMAN handled manually - see bootstrap task notes
 
 # =============================================================================
 # Shell & Terminal Tools
 # =============================================================================
-# Zsh plugin managers and shell tools
-"github:mattmc3/antidote" = "latest"         # Zsh plugin manager
-"github:junegunn/fzf" = "latest"             # Fuzzy finder
-"github:Aloxaf/fzf-tab" = "latest"           # Fzf integration for zsh completions
+# NOTE: antidote, fzf, and fzf-tab are installed via tasks to match bootstrap
+# script's git clone behavior to specific directories
 starship = "latest"                          # Shell prompt (from registry)
 zellij = "latest"                            # Terminal multiplexer (from registry)
 zoxide = "latest"                            # Smart directory jumper
@@ -73,11 +74,11 @@ yq = "latest"                                # YAML processor (from registry)
 # =============================================================================
 # AI & Developer Productivity Tools
 # =============================================================================
-# Python-based tools via pipx backend
-"pipx:vectorcode" = "latest"                 # AI code tool
-"pipx:mistral-vibe" = "latest"               # Mistral AI CLI
+# NOTE: Python tools (vectorcode, mistral-vibe) installed via uv in tasks
+# to match bootstrap script which uses "uv tool install"
 
 # Node.js-based tools via npm backend
+# NOTE: These require nvm to be installed first - see tasks
 "npm:@mermaid-js/mermaid-cli" = "latest"     # Diagram generation (mmdc)
 "npm:@zed-industries/claude-code-acp" = "latest"  # Claude ACP
 
@@ -171,10 +172,62 @@ sudo chsh "$USER" -s /usr/bin/zsh
 '''
 condition = '[[ "$OSTYPE" == "linux-gnu"* ]]'
 
+[tasks."install-uv"]
+description = "Install uv (Python package manager)"
+run = 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+condition = '! command -v uv &> /dev/null'
+
+[tasks."install-nvm"]
+description = "Install nvm (Node version manager)"
+run = '''
+NVM_VERSION=$(curl -s https://api.github.com/repos/nvm-sh/nvm/tags | jq -r '.[0].name')
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/"$NVM_VERSION"/install.sh | bash
+'''
+condition = '! test -e "$HOME/.config/nvm"'
+
+[tasks."install-antidote"]
+description = "Install antidote (Zsh plugin manager)"
+run = 'git clone --depth=1 https://github.com/mattmc3/antidote.git "$HOME/.antidote"'
+condition = '! test -e "$HOME/.antidote"'
+
+[tasks."install-fzf"]
+description = "Install fzf with shell integration"
+run = '''
+git clone --depth 1 https://github.com/junegunn/fzf.git "$HOME/.fzf"
+"$HOME/.fzf/install" --all
+'''
+condition = '! test -e "$HOME/.fzf"'
+
+[tasks."install-fzf-tab"]
+description = "Install fzf-tab (Zsh completion enhancement)"
+run = 'git clone https://github.com/Aloxaf/fzf-tab "$HOME/fzf-tab"'
+condition = '! test -e "$HOME/fzf-tab"'
+
+[tasks."install-sdkman"]
+description = "Install SDKMAN (Java/JVM tool manager)"
+run = 'curl -s "https://get.sdkman.io" | bash'
+condition = '! command -v sdk &> /dev/null'
+
+[tasks."install-uv-tools"]
+description = "Install Python tools via uv"
+depends = ["install-uv"]
+run = '''
+uv tool install vectorcode
+uv tool install mistral-vibe
+'''
+condition = '! command -v vectorcode &> /dev/null || ! command -v vibe &> /dev/null'
+
 [tasks.bootstrap]
 description = "Complete system bootstrap - install all tools and fonts"
 depends = [
   "setup-ubuntu-essentials",
+  "install-uv",
+  "install-nvm",
+  "install-antidote",
+  "install-fzf",
+  "install-fzf-tab",
+  "install-sdkman",
+  "install-uv-tools",
   "install-fonts",
   "install-kitty",
   "install-claude",
@@ -185,12 +238,13 @@ run = '''
 echo "✅ Bootstrap complete!"
 echo ""
 echo "📝 Manual steps still required:"
-echo "  1. Configure SDKMAN if using Java (mise handles openjdk, but SDKMAN needed for other JVM tools)"
-echo "  2. Install gvm manually if needed: bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')"
-echo "  3. Set a default Go version with gvm after installation"
+echo "  1. Install gvm manually: bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')"
+echo "  2. Set a default Go version with gvm after installation"
 if [[ "$OSTYPE" == "darwin"* ]]; then
-  echo "  4. [macOS] Add XQuartz as a login item"
+  echo "  3. [macOS] Add XQuartz as a login item"
 fi
+echo ""
+echo "⚠️  IMPORTANT: You may need to restart your shell or source ~/.zshrc for all changes to take effect"
 '''
 
 # =============================================================================
@@ -215,33 +269,73 @@ verbose = false
 # Notes & Migration Guide
 # =============================================================================
 #
-# Comparison with bootstrap script:
+# CRITICAL DIFFERENCES from bootstrap script:
 #
-# ✅ Replaced with mise core tools:
-#   - nvm → node version in [tools]
-#   - rustup → rust version in [tools]
-#   - cargo packages → cargo:package-name
-#   - npm packages → npm:package-name
-#   - Python tools → pipx:package-name
-#   - Most GitHub releases → github:owner/repo or registry shortcuts
+# This mise configuration is designed to replicate the bootstrap script behavior
+# as closely as possible, but there are important differences:
 #
-# ⚠️  Still need manual handling (via tasks):
-#   - Kitty (custom installer script)
-#   - Claude CLI (custom installer)
-#   - Fonts (platform-specific)
-#   - ImageMagick (requires XQuartz on macOS)
-#   - Ubuntu base packages (apt-get)
+# 1. **Installation locations match original**:
+#    - nvm → $HOME/.config/nvm (git clone + install script)
+#    - antidote → $HOME/.antidote (git clone)
+#    - fzf → $HOME/.fzf (git clone + shell integration)
+#    - fzf-tab → $HOME/fzf-tab (git clone)
+#    - SDKMAN → installed via curl script
+#    - uv → installed via curl script
 #
-# ❌ Not recommended to replace:
-#   - SDKMAN: Keep separate if you need multiple JVM tools beyond OpenJDK
-#   - gvm: mise's go support may be sufficient, but gvm offers more Go-specific features
-#   - fzf shell integration: mise installs the binary but fzf's install script
-#     does additional shell configuration - may want to handle separately
+# 2. **Tools managed by mise** (in mise's tool directory):
+#    - rust/cargo
+#    - python
+#    - Most CLI tools (kubectl, helm, k9s, terraform, etc.)
+#    - cargo packages (just, rage)
+#    - npm packages (mmdc, claude-code-acp) - requires nvm first
 #
-# Usage:
-#   mise install              # Install all tools
+# 3. **Manual installation still required**:
+#    - gvm: bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')
+#    - After gvm: Set a default Go version
+#    - [macOS only] Add XQuartz as a login item
+#
+# =============================================================================
+# Chezmoi Integration
+# =============================================================================
+#
+# To integrate mise with chezmoi for automatic environment setup:
+#
+# 1. Create run_once_install_mise.sh in your chezmoi source:
+#    #!/bin/sh
+#    if ! command -v mise &> /dev/null; then
+#      if [[ "$OSTYPE" == "darwin"* ]]; then
+#        brew install mise
+#      else
+#        curl https://mise.run | sh
+#      fi
+#    fi
+#
+# 2. Rename this file to dot_config/mise/config.toml in chezmoi source
+#    (This will be deployed to ~/.config/mise/config.toml)
+#
+# 3. Create run_onchange_mise_bootstrap.sh.tmpl:
+#    #!/bin/sh
+#    # Hash: {{ include "dot_config/mise/config.toml" | sha256sum }}
+#    mise install
+#    mise run bootstrap
+#
+# This ensures:
+# - mise is installed once when setting up a new machine
+# - mise.toml is managed by chezmoi and synced across machines
+# - Tools are reinstalled whenever mise.toml changes
+#
+# =============================================================================
+# Usage
+# =============================================================================
+#
+# Basic commands:
+#   mise install              # Install all tools defined in [tools]
+#   mise run bootstrap        # Run full bootstrap (tools + tasks)
 #   mise upgrade              # Upgrade all tools to latest
-#   mise run bootstrap        # Run full bootstrap including tasks
-#   mise use node@20          # Switch to specific version
 #   mise ls                   # List installed tools
 #   mise doctor               # Diagnose issues
+#
+# Version management (if using mise for node/go/java instead of nvm/gvm/sdkman):
+#   mise use node@20          # Switch to specific version
+#   mise use go@latest        # Use latest Go version
+#   mise local python@3.11    # Set Python version for current directory only
