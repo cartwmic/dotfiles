@@ -4,18 +4,24 @@ This document explains how mise is integrated with chezmoi for automatic environ
 
 ## Overview
 
+**Drop-in replacement for the existing bootstrap workflow.**
+
 The setup is designed so that **a single command sets up everything**:
 
 ```bash
 chezmoi apply
 ```
 
-This command:
-1. Installs mise (if not already installed)
+This is identical to the previous bootstrap workflow - just run `chezmoi apply` and everything happens automatically.
+
+What happens:
+1. Installs mise (if not already installed) via `run_once_install_mise.sh`
 2. Deploys mise configuration to `~/.config/mise/config.toml`
-3. Installs all tools via mise
-4. Runs bootstrap tasks for special installations
-5. Configures zsh to use mise
+3. Deploys updated `~/.zshrc` with mise integration
+4. Runs `run_onchange_mise_bootstrap.sh.tmpl` which:
+   - Installs all tools via `mise install` (parallel)
+   - Runs `mise run bootstrap` for custom tasks
+5. Everything is ready after shell restart
 
 ## File Structure
 
@@ -172,6 +178,51 @@ Examples:
 
 - **uv** → Installed via task, `uv` CLI available
   - Use: `uv tool install <package>`
+
+## Node Version Management (nvm Replacement)
+
+mise provides **full version switching capabilities** just like nvm:
+
+### Command Comparison
+
+| Task | nvm | mise |
+|------|-----|------|
+| Install version | `nvm install 20` | `mise install node@20` |
+| Switch version | `nvm use 20` | `mise use node@20` |
+| Set global default | `nvm alias default 20` | `mise use -g node@20` |
+| List installed | `nvm list` | `mise ls node` |
+| List available | `nvm ls-remote` | `mise ls-remote node` |
+| Current version | `nvm current` | `mise current node` |
+
+### Automatic Version Switching
+
+mise automatically switches Node versions based on:
+- `.nvmrc` files (reads existing nvm configs)
+- `.node-version` files
+- `mise.toml` or `.mise.toml` files
+
+**Example:**
+```bash
+# Install multiple versions
+mise install node@20
+mise install node@18
+mise install node@16
+
+# Set global default
+mise use -g node@20
+
+# In a project with .nvmrc
+cd ~/my-project
+echo "18" > .nvmrc
+cd .                    # mise auto-switches to node 18
+
+# Or use mise.toml for the project
+mise use node@16        # Creates .mise.toml with node@16
+```
+
+### Key Advantage
+
+With `eval "$(mise activate zsh)"` in your zshrc (already configured), version switching happens **automatically** when you cd into directories. No need to run `nvm use` manually!
 
 ## Troubleshooting
 

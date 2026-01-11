@@ -127,26 +127,68 @@ Both bootstrap script and mise require these manual steps:
 2. ✋ Set default Go version with gvm
 3. ✋ [macOS only] Add XQuartz as login item
 
+## Version Management Capabilities
+
+mise provides **full version manager functionality** - it's a true nvm/rustup replacement.
+
+### Node.js Version Switching (nvm replacement)
+```bash
+# Install multiple versions
+mise install node@20
+mise install node@18
+mise install node@16
+
+# Switch versions
+mise use -g node@20         # Global default
+mise use node@18            # Current project
+mise ls node                # List installed
+mise ls-remote node         # List available
+
+# Automatic switching based on config files
+cd project-with-nvmrc       # Auto-switches if .nvmrc exists
+echo "18" > .nvmrc          # mise reads this automatically
+```
+
+mise reads `.nvmrc`, `.node-version`, and `mise.toml` files - **no need to manually run version switch commands** when you cd into directories!
+
+### Same Pattern for Other Languages
+```bash
+mise install python@3.11 python@3.12
+mise use python@3.12
+mise install rust@stable rust@beta
+mise use rust@stable
+```
+
 ## Advantages of mise Over Bootstrap Script
 
-1. **Parallel Installation**: All [tools] install concurrently (faster)
-2. **Declarative**: Tools defined in TOML, not scattered in shell script
-3. **Version Management**: Easy to pin/update versions
-4. **Automatic Updates**: `mise upgrade` updates everything
-5. **Per-Project Versions**: Can override globally with local config
-6. **Better Error Handling**: mise handles missing tools gracefully
-7. **Cross-Platform**: mise's registry handles platform differences
-8. **Automatic PATH Management**: No manual PATH manipulation needed
+1. **Same One-Command Workflow**: Still just `chezmoi apply`
+2. **Parallel Installation**: All [tools] install concurrently (much faster)
+3. **Declarative**: Tools defined in TOML, not scattered in shell script
+4. **Full Version Management**: Complete nvm/rustup replacement with version switching
+5. **Automatic Version Switching**: Changes based on directory config files (no manual commands)
+6. **Automatic Updates**: `mise upgrade` updates everything at once
+7. **Per-Project Versions**: Different tool versions per project
+8. **Better Error Handling**: mise handles missing tools and dependencies gracefully
+9. **Cross-Platform**: mise's registry handles platform differences automatically
+10. **Automatic PATH Management**: No manual PATH manipulation needed
 
 ## Testing Checklist
 
 To verify mise is a complete replacement:
 
+### One-Command Setup (Recommended)
+- [ ] Run `chezmoi apply` (everything else happens automatically)
+- [ ] Restart shell: `exec zsh`
+- [ ] Verify mise is active: `mise doctor`
+
+### Manual Testing (if needed)
 - [ ] Install mise: `curl https://mise.run | sh` or `brew install mise`
 - [ ] Copy mise.toml to `~/.config/mise/config.toml`
 - [ ] Update zshrc with mise changes
 - [ ] Run `mise install` and verify all tools install
 - [ ] Run `mise run bootstrap` and verify tasks complete
+
+### Tool Verification
 - [ ] Test each tool is accessible:
   - [ ] `node --version`
   - [ ] `python --version`
@@ -180,6 +222,18 @@ To verify mise is a complete replacement:
 
 ## Conclusion
 
-✅ **mise.toml is a COMPLETE drop-in replacement** for run_onchange_bootstrap_env.sh
+✅ **mise is a COMPLETE drop-in replacement** for run_onchange_bootstrap_env.sh
 
-All tools from the bootstrap script are accounted for, and the zshrc has been updated to work with mise's installation paths.
+**Same workflow:**
+- Before: `chezmoi apply` → bootstrap script runs → tools installed
+- After: `chezmoi apply` → mise bootstrap runs → tools installed
+
+**All tools accounted for:**
+- ✅ All 40+ tools from bootstrap script
+- ✅ Same manual steps (gvm, XQuartz)
+- ✅ zshrc updated for mise paths
+- ✅ Full version management (nvm/rustup replacement)
+- ✅ Automatic version switching
+- ✅ Parallel installation (faster)
+
+**It just works!** Run `chezmoi apply` and everything is set up automatically.

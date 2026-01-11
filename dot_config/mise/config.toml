@@ -227,6 +227,10 @@ verbose = false
 #
 # Version Manager CLIs:
 #   - nvm: mise has built-in node support, does NOT install nvm CLI
+#     * Full version switching: mise use node@20, mise use node@18, etc.
+#     * Reads .nvmrc and .node-version files automatically
+#     * Commands: mise install node@X, mise use node@X, mise ls node
+#     * Drop-in replacement for nvm functionality
 #   - rustup: mise replaces rustup CLI entirely
 #   - gvm: NOT managed by mise, must install manually (same as bootstrap)
 #   - SDKMAN: Installed via task, SDK CLI remains available
