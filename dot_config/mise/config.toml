@@ -29,8 +29,9 @@ zellij = "latest"   # Terminal multiplexer
 zoxide = "latest"   # Smart cd replacement
 
 # Zsh tools
-"github:junegunn/fzf" = "latest" # Fuzzy finder (has binary releases)
-# Note: antidote and fzf-tab don't have binary releases, installed via zsh plugin manager in zshrc
+"github:junegunn/fzf" = "latest"     # Fuzzy finder (has binary releases)
+"github:mattmc3/antidote" = "latest" # Zsh plugin manager
+"github:Aloxaf/fzf-tab" = "latest"   # Fuzzy tab completion
 
 # =============================================================================
 # Development Tools
