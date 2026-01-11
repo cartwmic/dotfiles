@@ -5,6 +5,14 @@ Personal dotfiles managed with [chezmoi](https://www.chezmoi.io/) and [mise](htt
 ## Quick Start
 
 ```bash
+# Install zsh and set as default shell (required before running chezmoi)
+# Ubuntu/WSL:
+sudo apt-get update && sudo apt-get install -y zsh
+sudo chsh "$USER" -s /usr/bin/zsh
+
+# macOS (zsh is already default on modern macOS)
+# Skip this step
+
 # Install chezmoi and apply dotfiles (automatically installs mise + all tools)
 sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply cartwmic
 
