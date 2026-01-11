@@ -13,6 +13,19 @@ sudo chsh "$USER" -s /usr/bin/zsh
 # macOS (zsh is already default on modern macOS)
 # Skip this step
 
+# Create chezmoi config directory
+mkdir -p ~/.config/chezmoi
+
+# Copy example config (download from repo or create manually)
+# Option 1: Download from GitHub
+curl -fsSL https://raw.githubusercontent.com/cartwmic/dotfiles/main/example.chezmoi.yaml -o ~/.config/chezmoi/chezmoi.yaml
+
+# Option 2: Create manually
+cat > ~/.config/chezmoi/chezmoi.yaml << 'EOF'
+data:
+  profile: "personal"
+EOF
+
 # Install chezmoi and apply dotfiles (automatically installs mise + all tools)
 sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply cartwmic
 
