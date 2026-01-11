@@ -35,6 +35,13 @@ if ! command -v mise &> /dev/null; then
 fi
 
 log_info "mise version: $(mise --version)"
+
+# IMPORTANT: Run setup-ubuntu-essentials FIRST to install build tools
+# This ensures build-essential (C compiler) is available before mise tries
+# to compile Rust packages (cargo:just, cargo:rage)
+log_info "Setting up essential build tools..."
+mise run setup-ubuntu-essentials
+
 log_info "Installing tools from mise config..."
 
 # Install all tools defined in [tools] section
@@ -47,3 +54,4 @@ mise run bootstrap
 
 log_info "mise bootstrap complete!"
 log_info "Please restart your shell or run: exec zsh"
+
