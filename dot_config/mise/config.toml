@@ -28,10 +28,9 @@ starship = "latest"       # Shell prompt
 zellij = "latest"         # Terminal multiplexer
 zoxide = "latest"         # Smart cd replacement
 
-# Zsh plugins via GitHub backend
-"github:mattmc3/antidote" = "latest"     # Zsh plugin manager
-"github:junegunn/fzf" = "latest"         # Fuzzy finder
-"github:Aloxaf/fzf-tab" = "latest"       # Fzf tab completion
+# Zsh tools
+"github:junegunn/fzf" = "latest"         # Fuzzy finder (has binary releases)
+# Note: antidote and fzf-tab don't have binary releases, installed via zsh plugin manager in zshrc
 
 # =============================================================================
 # Development Tools
@@ -41,13 +40,13 @@ lazygit = "latest"        # Git TUI
 ripgrep = "latest"        # Fast grep alternative
 
 # Build tools & task runners
-"cargo:just" = "latest"                  # Rust-based task runner
+# cargo:just configured in [tools."cargo:just"] section below
 "github:go-task/task" = "latest"         # Go-based task runner
 
 # =============================================================================
 # Kubernetes Tools
 # =============================================================================
-kubectl = "latest"        # Kubernetes CLI
+# kubectl installed via task due to SSL issues with aqua backend in some environments
 k9s = "latest"            # Kubernetes TUI
 helm = "latest"           # Kubernetes package manager
 kustomize = "latest"      # Kubernetes config management
@@ -67,21 +66,23 @@ yq = "latest"             # YAML processor
 # =============================================================================
 # Security & Encryption
 # =============================================================================
-"cargo:rage" = "latest"   # Age encryption tool
+# cargo:rage configured in [tools."cargo:rage"] section below
 
 # =============================================================================
 # AI & Productivity Tools (require node)
 # =============================================================================
-"npm:@mermaid-js/mermaid-cli" = "latest"         # Diagram generation (mmdc)
+# mermaid-cli installed via task due to puppeteer chrome download issues
 "npm:@zed-industries/claude-code-acp" = "latest" # Claude ACP
 
 # =============================================================================
 # Tool Options
 # =============================================================================
 [tools."cargo:just"]
+version = "latest"
 locked = true
 
 [tools."cargo:rage"]
+version = "latest"
 locked = true
 
 # =============================================================================
@@ -97,74 +98,131 @@ locked = true
 [tasks."setup-ubuntu-essentials"]
 description = "Install Ubuntu base packages and set zsh as default shell"
 run = '''
-sudo apt-get update
-sudo apt-get install -y build-essential software-properties-common jq tar curl wget \
-  git sed gnupg zip zsh fontconfig util-linux bison mercurial
-sudo chsh "$USER" -s /usr/bin/zsh
+case "$OSTYPE" in
+  linux-gnu*)
+    sudo apt-get update
+    sudo apt-get install -y build-essential software-properties-common jq tar curl wget \
+      git sed gnupg zip zsh fontconfig util-linux bison mercurial
+    sudo chsh "$USER" -s /usr/bin/zsh
+    ;;
+esac
 '''
-condition = '[[ "$OSTYPE" == "linux-gnu"* ]]'
 
 [tasks."install-uv"]
 description = "Install uv (Python package installer)"
-run = 'curl -LsSf https://astral.sh/uv/install.sh | sh'
-condition = '! command -v uv &> /dev/null'
+run = '''
+if ! command -v uv &> /dev/null; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+'''
 
 [tasks."install-uv-tools"]
 description = "Install Python tools via uv"
 depends = ["install-uv"]
 run = '''
-uv tool install vectorcode
-uv tool install mistral-vibe
+if ! command -v vectorcode &> /dev/null || ! command -v vibe &> /dev/null; then
+  uv tool install vectorcode
+  uv tool install mistral-vibe
+fi
 '''
-condition = '! command -v vectorcode &> /dev/null || ! command -v vibe &> /dev/null'
 
 [tasks."install-sdkman"]
 description = "Install SDKMAN (Java/JVM tools)"
-run = 'curl -s "https://get.sdkman.io" | bash'
-condition = '! command -v sdk &> /dev/null'
+run = '''
+if ! command -v sdk &> /dev/null; then
+  curl -s "https://get.sdkman.io" | bash
+fi
+'''
 
 [tasks."install-kitty"]
 description = "Install Kitty terminal emulator"
-run = 'curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin'
-condition = '! command -v kitty &> /dev/null'
+run = '''
+if ! command -v kitty &> /dev/null; then
+  curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin
+fi
+'''
 
 [tasks."install-claude"]
 description = "Install Claude CLI"
-run = 'curl -fsSL https://claude.ai/install.sh | bash'
-condition = '! command -v claude &> /dev/null'
+run = '''
+if ! command -v claude &> /dev/null; then
+  curl -fsSL https://claude.ai/install.sh | bash
+fi
+'''
+
+[tasks."install-kubectl"]
+description = "Install kubectl CLI"
+run = '''
+if ! command -v kubectl &> /dev/null; then
+  VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt 2>/dev/null || echo "v1.31.0")
+  curl -LO "https://dl.k8s.io/release/${VERSION}/bin/linux/amd64/kubectl" || curl -k -LO "https://dl.k8s.io/release/${VERSION}/bin/linux/amd64/kubectl"
+  chmod +x kubectl
+  mkdir -p $HOME/.local/bin
+  mv kubectl $HOME/.local/bin/
+fi
+'''
+
+[tasks."install-mermaid-cli"]
+description = "Install mermaid-cli (mmdc)"
+run = '''
+if ! command -v mmdc &> /dev/null; then
+  export PUPPETEER_SKIP_DOWNLOAD=true
+  npm install -g @mermaid-js/mermaid-cli
+fi
+'''
 
 [tasks."install-imagemagick-macos"]
 description = "Install ImageMagick with XQuartz on macOS"
 run = '''
-brew install imagemagick xquartz
-echo "⚠️  REMEMBER TO ADD XQUARTZ AS A LOGIN ITEM"
+case "$OSTYPE" in
+  darwin*)
+    if ! command -v magick >/dev/null 2>&1; then
+      brew install imagemagick xquartz
+      echo "⚠️  REMEMBER TO ADD XQUARTZ AS A LOGIN ITEM"
+    fi
+    ;;
+esac
 '''
-condition = '[[ "$OSTYPE" == "darwin"* ]] && ! command -v magick &> /dev/null'
 
 [tasks."install-imagemagick-ubuntu"]
 description = "Install ImageMagick on Ubuntu"
-run = 'sudo apt-get install -y imagemagick'
-condition = '[[ "$OSTYPE" == "linux-gnu"* ]] && ! command -v magick &> /dev/null'
+run = '''
+case "$OSTYPE" in
+  linux-gnu*)
+    if ! command -v magick >/dev/null 2>&1; then
+      sudo apt-get install -y imagemagick
+    fi
+    ;;
+esac
+'''
 
 [tasks."install-fonts-macos"]
 description = "Install Nerd Fonts on macOS"
-run = 'brew install --cask font-sauce-code-pro-nerd-font'
-condition = '[[ "$OSTYPE" == "darwin"* ]]'
+run = '''
+case "$OSTYPE" in
+  darwin*)
+    brew install --cask font-sauce-code-pro-nerd-font
+    ;;
+esac
+'''
 
 [tasks."install-fonts-ubuntu"]
 description = "Install Nerd Fonts on Ubuntu"
 run = '''
-VERSION=$(curl -s https://api.github.com/repos/ryanoasis/nerd-fonts/tags | jq -r '.[0].name')
-TEMP_DIR=$(mktemp -d)
-cd "$TEMP_DIR"
-curl -L -o SourceCodePro.zip "https://github.com/ryanoasis/nerd-fonts/releases/download/$VERSION/SourceCodePro.zip"
-unzip SourceCodePro.zip
-mkdir -p "$HOME/.local/share/fonts"
-mv ./*ttf "$HOME/.local/share/fonts"
-fc-cache -fv
-cd - && rm -rf "$TEMP_DIR"
+case "$OSTYPE" in
+  linux-gnu*)
+    VERSION=$(curl -s https://api.github.com/repos/ryanoasis/nerd-fonts/tags | jq -r '.[0].name')
+    TEMP_DIR=$(mktemp -d)
+    cd "$TEMP_DIR"
+    curl -L -o SourceCodePro.zip "https://github.com/ryanoasis/nerd-fonts/releases/download/$VERSION/SourceCodePro.zip"
+    unzip SourceCodePro.zip
+    mkdir -p "$HOME/.local/share/fonts"
+    mv ./*ttf "$HOME/.local/share/fonts"
+    fc-cache -fv
+    cd - && rm -rf "$TEMP_DIR"
+    ;;
+esac
 '''
-condition = '[[ "$OSTYPE" == "linux-gnu"* ]]'
 
 [tasks."install-fonts"]
 description = "Install fonts for current platform"
@@ -173,12 +231,15 @@ depends = ["install-fonts-*"]
 [tasks."setup-fzf-shell"]
 description = "Setup fzf shell integration"
 run = '''
-FZF_PATH=$(mise where fzf)
-if [ -f "$FZF_PATH/install" ]; then
-  "$FZF_PATH/install" --all
+if ! test -f ~/.fzf.zsh; then
+  if command -v fzf >/dev/null 2>&1; then
+    FZF_PATH=$(mise where fzf 2>/dev/null || echo "")
+    if [ -n "$FZF_PATH" ] && [ -f "$FZF_PATH/install" ]; then
+      "$FZF_PATH/install" --all
+    fi
+  fi
 fi
 '''
-condition = '! test -f ~/.fzf.zsh'
 
 [tasks.bootstrap]
 description = "Complete system bootstrap"
@@ -189,6 +250,8 @@ depends = [
   "install-sdkman",
   "install-kitty",
   "install-claude",
+  "install-kubectl",
+  "install-mermaid-cli",
   "install-imagemagick-macos",
   "install-imagemagick-ubuntu",
   "install-fonts",
@@ -200,9 +263,11 @@ echo ""
 echo "📝 Manual steps remaining:"
 echo "  1. Install gvm manually: bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')"
 echo "  2. Set a default Go version with gvm"
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  echo "  3. [macOS] Add XQuartz as a login item"
-fi
+case "$OSTYPE" in
+  darwin*)
+    echo "  3. [macOS] Add XQuartz as a login item"
+    ;;
+esac
 echo ""
 echo "⚠️  Restart your shell or run: source ~/.zshrc"
 '''
