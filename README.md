@@ -1,55 +1,102 @@
 # Dotfiles
 
-Personal dotfiles managed with [chezmoi](https://www.chezmoi.io/).
+Personal dotfiles managed with [chezmoi](https://www.chezmoi.io/) and [mise](https://mise.jdx.dev/).
 
 ## Quick Start
 
 ```bash
-# Install chezmoi and apply dotfiles
-sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply <your-github-username>
+# Install chezmoi and apply dotfiles (automatically installs mise + all tools)
+sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply cartwmic
 
-# Bootstrap development environment
-chezmoi apply
+# That's it! Restart your shell
+exec zsh
 ```
 
 ## What's Included
 
-- **Shell**: Zsh with [antidote](https://getantidote.github.io/) plugin manager
-- **Terminal**: Kitty with Zellij multiplexer
-- **Editor**: Neovim (LazyVim-based)
-- **Prompt**: Starship
-- **Version Managers**: nvm, SDKMAN, gvm, rustup
-- **Dev Tools**: kubectl, k9s, terraform, lazygit, ripgrep, fzf, zoxide
+**Shell & Terminal:**
+- Zsh with [antidote](https://getantidote.github.io/) plugin manager
+- Kitty terminal with Zellij multiplexer
+- Starship prompt, fzf fuzzy finder, zoxide smart cd
+
+**Development Tools:**
+- Editor: Neovim (LazyVim)
+- Git: lazygit TUI
+- Languages: Node.js, Python, Rust (managed by mise)
+- Version Management: mise (replaces nvm/rustup), SDKMAN, gvm
+
+**DevOps/Cloud:**
+- Kubernetes: kubectl, k9s, helm, kustomize, kubeseal
+- Infrastructure: terraform
+- Utilities: ripgrep, jq, yq, just, task
+
+**AI Tools:**
+- claude, claude-code-acp, vectorcode, mistral-vibe, mermaid-cli
+
+## Tool Management with mise
+
+mise handles version management for Node.js, Python, and Rust with automatic version switching:
+
+```bash
+# Install multiple Node versions
+mise install node@20 node@18
+
+# Switch versions globally or per-project
+mise use -g node@20              # Global default
+mise use node@18                 # Current project
+
+# Automatic switching via .nvmrc
+cd project/
+echo "18" > .nvmrc
+cd .                             # Auto-switches to Node 18
+```
+
+mise reads `.nvmrc`, `.node-version`, and `mise.toml` files automatically.
+
+**Common commands:**
+- `mise ls` - List installed tools
+- `mise upgrade` - Update all tools
+- `mise install` - Install missing tools
+- `mise doctor` - Check setup
 
 ## Structure
 
 ```
-dot_config/                    # XDG config files (.config/)
-  ├── nvim/                    # Neovim configuration
-  ├── kitty/                   # Kitty terminal
-  ├── lazygit/                 # Lazygit TUI
-  └── zellij/                  # Zellij multiplexer
-run_onchange_bootstrap_env.sh  # Auto-installs dev tools
-private_dot_zshrc              # Zsh configuration
-dot_zsh_plugins.txt            # Plugin list
+dot_config/
+  ├── mise/config.toml           # Tool versions & installation
+  ├── nvim/                      # Neovim configuration
+  ├── kitty/                     # Kitty terminal
+  ├── lazygit/                   # Lazygit TUI
+  └── zellij/                    # Zellij multiplexer
+run_once_install_mise.sh         # Installs mise once
+run_onchange_mise_bootstrap.sh   # Runs when mise config changes
+private_dot_zshrc                # Zsh configuration
+dot_zsh_plugins.txt              # Antidote plugin list
 ```
 
 ## Platform Support
 
-- **macOS**: Homebrew-based installation
-- **Ubuntu/WSL**: apt + source builds where needed
+- **macOS**: Homebrew + mise
+- **Ubuntu/WSL**: apt + mise
+
+All tools install automatically via `chezmoi apply`.
 
 ## Making Changes
 
 ```bash
-# Edit source files
+# Edit config files
 chezmoi edit ~/.zshrc
+chezmoi edit ~/.config/mise/config.toml
 
-# Preview changes
-chezmoi apply --dry-run --verbose
-
-# Apply changes
+# Apply changes (auto-runs mise bootstrap if config changed)
 chezmoi apply
 ```
 
-See [CLAUDE.md](./CLAUDE.md) for detailed documentation.
+## Manual Steps
+
+After `chezmoi apply`, only these require manual setup:
+- Install gvm: `bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')`
+- Set default Go version: `gvm use go1.21 --default`
+- [macOS] Add XQuartz as login item
+
+See [CLAUDE.md](./CLAUDE.md) for project-specific documentation.
