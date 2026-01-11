@@ -275,7 +275,8 @@ if ! test -f ~/.fzf.zsh; then
   # Clone fzf repo temporarily to get shell integration files
   TEMP_DIR=$(mktemp -d)
   git clone --depth 1 https://github.com/junegunn/fzf.git "$TEMP_DIR"
-  "$TEMP_DIR/install" --bin --key-bindings --completion --no-update-rc
+  # --all enables key bindings and completion, --no-update-rc prevents modifying .zshrc
+  "$TEMP_DIR/install" --all --no-update-rc
   rm -rf "$TEMP_DIR"
 fi
 '''
