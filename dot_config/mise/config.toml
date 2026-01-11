@@ -101,10 +101,19 @@ run = '''
 OS="$(uname -s)"
 case "$OS" in
   Linux)
-    sudo apt-get update
-    sudo apt-get install -y build-essential software-properties-common jq tar curl wget \
-      git sed gnupg zip zsh fontconfig util-linux bison mercurial
-    sudo chsh "$USER" -s /usr/bin/zsh
+    # Check if build-essential is installed
+    if ! dpkg -l | grep -q "^ii  build-essential"; then
+      echo "Installing Ubuntu essential packages..."
+      sudo apt-get update
+      sudo apt-get install -y build-essential software-properties-common jq tar curl wget \
+        git sed gnupg zip zsh fontconfig util-linux bison mercurial
+    else
+      echo "build-essential already installed"
+    fi
+    # Set zsh as default shell if not already
+    if [ "$SHELL" != "/usr/bin/zsh" ] && [ -x /usr/bin/zsh ]; then
+      sudo chsh "$USER" -s /usr/bin/zsh
+    fi
     ;;
 esac
 '''
