@@ -2,20 +2,22 @@
 
 ## Project Overview
 
-This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.io/), a dotfile manager that helps maintain configuration files across multiple machines. The repository contains shell configurations, editor settings, and automated environment setup scripts.
+This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.io/) and [mise](https://mise.jdx.dev/). Chezmoi manages the dotfiles and configuration sync, while mise handles development tool installation and version management.
 
 ## Repository Structure
 
 ```
 .
 ├── dot_config/               # XDG config directory files
+│   ├── mise/config.toml     # mise tool configuration
 │   ├── nvim/                # Neovim configuration (LazyVim-based)
 │   ├── kitty/               # Kitty terminal configuration
 │   ├── lazygit/             # Lazygit TUI configuration
 │   ├── zellij/              # Zellij terminal multiplexer config
 │   ├── mcphub/              # MCP Hub configuration
 │   └── zsh-completions/     # Custom zsh completion scripts
-├── run_onchange_bootstrap_env.sh  # Environment bootstrap script
+├── run_once_install_mise.sh      # Installs mise once
+├── run_onchange_mise_bootstrap.sh.tmpl  # Runs when mise config changes
 ├── private_dot_zshrc        # Main zsh configuration
 ├── dot_zsh_plugins.txt      # Antidote plugin list
 ├── dot_zshenv               # Zsh environment variables
@@ -34,15 +36,15 @@ This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.
 ### Development Tools
 - **Editor**: Neovim (LazyVim distribution)
 - **Git UI**: Lazygit
-- **Version Managers**: 
-  - nvm (Node.js)
+- **Tool Management**: mise (manages Node.js, Python, Rust, and 40+ dev tools)
+- **Version Managers**:
+  - mise (Node.js, Python, Rust - replaces nvm/rustup)
   - SDKMAN (Java/JVM)
-  - gvm (Go)
-  - rustup (Rust)
-- **Package Managers**: 
+  - gvm (Go - manual install)
+- **Package Managers**:
   - uv (Python)
-  - cargo (Rust)
-  - npm (Node.js)
+  - cargo (Rust, via mise)
+  - npm (Node.js, via mise)
 
 ### DevOps/Cloud Tools
 - kubectl, k9s, kustomize, kubeseal (Kubernetes)
@@ -72,14 +74,15 @@ This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.
 - Log with consistent prefixes: `[script_name] LEVEL: message`
 - Always clean up temp directories with traps
 
-### Bootstrap Script Behavior
-- Idempotent: safe to run multiple times
-- Cross-platform: detects macOS/Ubuntu and installs accordingly
-- Prerequisites first: installs rust/cargo and uv before other tools
-- Package categories:
-  - **Cross-platform**: handled by language package managers or curl scripts
-  - **macOS**: installed via Homebrew
-  - **Ubuntu**: apt packages or special installation procedures
+### Tool Installation with mise
+- **Automatic**: `chezmoi apply` triggers mise installation
+- **Idempotent**: safe to run multiple times
+- **Parallel**: tools install concurrently for speed
+- **Cross-platform**: mise handles platform differences
+- Tool categories:
+  - **mise-managed**: Node.js, Python, Rust, kubectl, terraform, etc. (installed to `~/.local/share/mise/installs/`)
+  - **Custom tasks**: uv, SDKMAN, kitty, claude, fonts, imagemagick
+  - **Manual**: gvm (Go version manager)
 
 ## Working with This Repository
 
@@ -90,10 +93,25 @@ This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.
 4. Commit and push to version control
 
 ### Adding New Tools
-1. Add installation logic to `run_onchange_bootstrap_env.sh`
-2. Classify as cross-platform, macOS-specific, or Ubuntu-specific
-3. Add executable check to the `missing_executables` section
-4. Ensure installation is idempotent
+
+**For tools in mise registry:**
+1. Edit `~/.local/share/chezmoi/dot_config/mise/config.toml`
+2. Add tool to `[tools]` section: `newtool = "latest"`
+3. Run `chezmoi apply` to install
+
+**For custom installations:**
+1. Add a task to `dot_config/mise/config.toml` under `[tasks]`
+2. Add task to bootstrap dependencies
+3. Ensure task has a condition for idempotency
+4. Run `chezmoi apply` to test
+
+Example:
+```toml
+[tasks."install-mytool"]
+description = "Install my custom tool"
+run = 'curl -L https://example.com/install.sh | sh'
+condition = '! command -v mytool &> /dev/null'
+```
 
 ### Configuration Files
 - Prefer editing template files (`.tmpl`) over target files
@@ -107,22 +125,22 @@ This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.
 - Use rage/age for encrypting sensitive files if needed
 
 ## Known Manual Steps
-The bootstrap script requires some manual intervention:
-- Install and configure gvm (Go version manager)
-- Set a default Go version after gvm installation
-- On macOS: Add XQuartz as a login item (for imagemagick)
+After `chezmoi apply`, these require manual setup:
+- Install gvm: `bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')`
+- Set default Go version: `gvm use go1.21 --default`
+- [macOS only] Add XQuartz as a login item (for imagemagick)
 
 ## Platform-Specific Notes
 
 ### macOS
-- Uses Homebrew for most packages
+- mise installed via Homebrew
 - XQuartz required for imagemagick X11 support
 - Display management aliases available for multi-monitor setups
 
 ### Ubuntu/WSL
-- Updates apt repositories before installing packages
-- Compiles some tools from source (starship, zellij)
-- Downloads binaries directly for some tools (lazygit, k9s)
+- mise installed via curl script to `~/.local/bin/mise`
+- Base packages installed via apt (build-essential, git, etc.)
+- mise handles platform-specific tool installation automatically
 - Font installation includes Nerd Fonts (Source Code Pro)
 
 ## AI Assistant Integration
