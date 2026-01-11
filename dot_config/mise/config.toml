@@ -71,19 +71,12 @@ yq = "latest" # YAML processor
 # =============================================================================
 # AI & Productivity Tools (require node)
 # =============================================================================
-# mermaid-cli installed via task due to puppeteer chrome download issues
-"npm:@zed-industries/claude-code-acp" = "latest" # Claude ACP
+# mermaid-cli and claude-code-acp installed via tasks to ensure node is available first
 
 # =============================================================================
 # Tool Options
 # =============================================================================
-[tools."cargo:just"]
-version = "latest"
-locked = true
-
-[tools."cargo:rage"]
-version = "latest"
-locked = true
+# cargo:just and cargo:rage moved to tasks to ensure build-essential is installed first
 
 # =============================================================================
 # Environment Variables
@@ -180,6 +173,27 @@ if [ ! -d "$HOME/.antidote" ]; then
 fi
 '''
 
+[tasks."install-cargo-tools"]
+description = "Install cargo-based tools (just, rage)"
+depends = ["setup-ubuntu-essentials"]
+run = '''
+# Ensure cargo is available (mise should have installed rust by now)
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "ERROR: cargo not found. Rust must be installed first."
+  exit 1
+fi
+
+# Install just
+if ! command -v just >/dev/null 2>&1; then
+  cargo install just --locked
+fi
+
+# Install rage
+if ! command -v rage >/dev/null 2>&1; then
+  cargo install rage --locked
+fi
+'''
+
 [tasks."install-kubectl"]
 description = "Install kubectl CLI"
 run = '''
@@ -192,10 +206,28 @@ if ! command -v kubectl >/dev/null 2>&1; then
 fi
 '''
 
+[tasks."install-claude-code-acp"]
+description = "Install Claude Code ACP"
+run = '''
+if ! command -v claude-code-acp >/dev/null 2>&1; then
+  # Ensure npm is available
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: npm not found. Node.js must be installed first."
+    exit 1
+  fi
+  npm install -g @zed-industries/claude-code-acp
+fi
+'''
+
 [tasks."install-mermaid-cli"]
 description = "Install mermaid-cli (mmdc)"
 run = '''
 if ! command -v mmdc >/dev/null 2>&1; then
+  # Ensure npm is available
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: npm not found. Node.js must be installed first."
+    exit 1
+  fi
   export PUPPETEER_SKIP_DOWNLOAD=true
   npm install -g @mermaid-js/mermaid-cli
 fi
@@ -285,11 +317,13 @@ fi
 description = "Complete system bootstrap"
 depends = [
   "setup-ubuntu-essentials",
+  "install-cargo-tools",
   "install-uv",
   "install-uv-tools",
   "install-sdkman",
   "install-kitty",
   "install-claude",
+  "install-claude-code-acp",
   "install-antidote",
   "install-fzf-tab",
   "install-kubectl",
