@@ -221,10 +221,16 @@ esac
 
 [tasks."install-fonts-ubuntu"]
 description = "Install Nerd Fonts on Ubuntu"
+depends = ["setup-ubuntu-essentials"]
 run = '''
 OS="$(uname -s)"
 case "$OS" in
   Linux)
+    # Ensure fontconfig is installed first
+    if ! command -v fc-cache >/dev/null 2>&1; then
+      sudo apt-get install -y fontconfig
+    fi
+    
     VERSION=$(curl -s https://api.github.com/repos/ryanoasis/nerd-fonts/tags | jq -r '.[0].name')
     TEMP_DIR=$(mktemp -d)
     cd "$TEMP_DIR"
