@@ -1,0 +1,277 @@
+# mise.toml - Universal Development Environment Configuration
+# Complete replacement for run_onchange_bootstrap_env.sh
+#
+# Installation:
+#   macOS:   brew install mise
+#   Ubuntu:  curl https://mise.run | sh
+#
+# Usage:
+#   mise install              # Install all tools
+#   mise run bootstrap        # Run full bootstrap including custom tasks
+#   mise upgrade              # Upgrade all tools
+#
+# IMPORTANT: Add to ~/.zshrc EARLY (before other version managers):
+#   eval "$(mise activate zsh)"
+
+# =============================================================================
+# Core Language Runtimes
+# =============================================================================
+[tools]
+rust = "latest"           # Replaces rustup, provides cargo
+python = "latest"         # System Python
+node = "lts"              # Replaces nvm
+
+# =============================================================================
+# Shell & Terminal Tools
+# =============================================================================
+starship = "latest"       # Shell prompt
+zellij = "latest"         # Terminal multiplexer
+zoxide = "latest"         # Smart cd replacement
+
+# Zsh plugins via GitHub backend
+"github:mattmc3/antidote" = "latest"     # Zsh plugin manager
+"github:junegunn/fzf" = "latest"         # Fuzzy finder
+"github:Aloxaf/fzf-tab" = "latest"       # Fzf tab completion
+
+# =============================================================================
+# Development Tools
+# =============================================================================
+neovim = "latest"         # Editor
+lazygit = "latest"        # Git TUI
+ripgrep = "latest"        # Fast grep alternative
+
+# Build tools & task runners
+"cargo:just" = "latest"                  # Rust-based task runner
+"github:go-task/task" = "latest"         # Go-based task runner
+
+# =============================================================================
+# Kubernetes Tools
+# =============================================================================
+kubectl = "latest"        # Kubernetes CLI
+k9s = "latest"            # Kubernetes TUI
+helm = "latest"           # Kubernetes package manager
+kustomize = "latest"      # Kubernetes config management
+"github:bitnami-labs/sealed-secrets" = "latest"  # kubeseal
+
+# =============================================================================
+# Infrastructure & Cloud
+# =============================================================================
+terraform = "latest"      # Infrastructure as Code
+
+# =============================================================================
+# Data Processing
+# =============================================================================
+jq = "latest"             # JSON processor
+yq = "latest"             # YAML processor
+
+# =============================================================================
+# Security & Encryption
+# =============================================================================
+"cargo:rage" = "latest"   # Age encryption tool
+
+# =============================================================================
+# AI & Productivity Tools (require node)
+# =============================================================================
+"npm:@mermaid-js/mermaid-cli" = "latest"         # Diagram generation (mmdc)
+"npm:@zed-industries/claude-code-acp" = "latest" # Claude ACP
+
+# =============================================================================
+# Tool Options
+# =============================================================================
+[tools."cargo:just"]
+locked = true
+
+[tools."cargo:rage"]
+locked = true
+
+# =============================================================================
+# Environment Variables
+# =============================================================================
+[env]
+# mise will manage PATH automatically
+
+# =============================================================================
+# Custom Installation Tasks
+# =============================================================================
+
+[tasks."setup-ubuntu-essentials"]
+description = "Install Ubuntu base packages and set zsh as default shell"
+run = '''
+sudo apt-get update
+sudo apt-get install -y build-essential software-properties-common jq tar curl wget \
+  git sed gnupg zip zsh fontconfig util-linux bison mercurial
+sudo chsh "$USER" -s /usr/bin/zsh
+'''
+condition = '[[ "$OSTYPE" == "linux-gnu"* ]]'
+
+[tasks."install-uv"]
+description = "Install uv (Python package installer)"
+run = 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+condition = '! command -v uv &> /dev/null'
+
+[tasks."install-uv-tools"]
+description = "Install Python tools via uv"
+depends = ["install-uv"]
+run = '''
+uv tool install vectorcode
+uv tool install mistral-vibe
+'''
+condition = '! command -v vectorcode &> /dev/null || ! command -v vibe &> /dev/null'
+
+[tasks."install-sdkman"]
+description = "Install SDKMAN (Java/JVM tools)"
+run = 'curl -s "https://get.sdkman.io" | bash'
+condition = '! command -v sdk &> /dev/null'
+
+[tasks."install-kitty"]
+description = "Install Kitty terminal emulator"
+run = 'curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin'
+condition = '! command -v kitty &> /dev/null'
+
+[tasks."install-claude"]
+description = "Install Claude CLI"
+run = 'curl -fsSL https://claude.ai/install.sh | bash'
+condition = '! command -v claude &> /dev/null'
+
+[tasks."install-imagemagick-macos"]
+description = "Install ImageMagick with XQuartz on macOS"
+run = '''
+brew install imagemagick xquartz
+echo "⚠️  REMEMBER TO ADD XQUARTZ AS A LOGIN ITEM"
+'''
+condition = '[[ "$OSTYPE" == "darwin"* ]] && ! command -v magick &> /dev/null'
+
+[tasks."install-imagemagick-ubuntu"]
+description = "Install ImageMagick on Ubuntu"
+run = 'sudo apt-get install -y imagemagick'
+condition = '[[ "$OSTYPE" == "linux-gnu"* ]] && ! command -v magick &> /dev/null'
+
+[tasks."install-fonts-macos"]
+description = "Install Nerd Fonts on macOS"
+run = 'brew install --cask font-sauce-code-pro-nerd-font'
+condition = '[[ "$OSTYPE" == "darwin"* ]]'
+
+[tasks."install-fonts-ubuntu"]
+description = "Install Nerd Fonts on Ubuntu"
+run = '''
+VERSION=$(curl -s https://api.github.com/repos/ryanoasis/nerd-fonts/tags | jq -r '.[0].name')
+TEMP_DIR=$(mktemp -d)
+cd "$TEMP_DIR"
+curl -L -o SourceCodePro.zip "https://github.com/ryanoasis/nerd-fonts/releases/download/$VERSION/SourceCodePro.zip"
+unzip SourceCodePro.zip
+mkdir -p "$HOME/.local/share/fonts"
+mv ./*ttf "$HOME/.local/share/fonts"
+fc-cache -fv
+cd - && rm -rf "$TEMP_DIR"
+'''
+condition = '[[ "$OSTYPE" == "linux-gnu"* ]]'
+
+[tasks."install-fonts"]
+description = "Install fonts for current platform"
+depends = ["install-fonts-*"]
+
+[tasks."setup-fzf-shell"]
+description = "Setup fzf shell integration"
+run = '''
+FZF_PATH=$(mise where fzf)
+if [ -f "$FZF_PATH/install" ]; then
+  "$FZF_PATH/install" --all
+fi
+'''
+condition = '! test -f ~/.fzf.zsh'
+
+[tasks.bootstrap]
+description = "Complete system bootstrap"
+depends = [
+  "setup-ubuntu-essentials",
+  "install-uv",
+  "install-uv-tools",
+  "install-sdkman",
+  "install-kitty",
+  "install-claude",
+  "install-imagemagick-macos",
+  "install-imagemagick-ubuntu",
+  "install-fonts",
+  "setup-fzf-shell"
+]
+run = '''
+echo "✅ Bootstrap complete!"
+echo ""
+echo "📝 Manual steps remaining:"
+echo "  1. Install gvm manually: bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')"
+echo "  2. Set a default Go version with gvm"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  echo "  3. [macOS] Add XQuartz as a login item"
+fi
+echo ""
+echo "⚠️  Restart your shell or run: source ~/.zshrc"
+'''
+
+# =============================================================================
+# Settings
+# =============================================================================
+[settings]
+experimental = true
+jobs = 4
+verbose = false
+
+# =============================================================================
+# Tool Coverage Audit
+# =============================================================================
+#
+# Bootstrap script tools → mise mapping:
+#
+# ✅ Prerequisites:
+#   - uv → task (curl installer)
+#   - cargo/rust → rust in [tools]
+#
+# ✅ Language runtimes:
+#   - nvm → node in [tools]
+#   - rustup → rust in [tools]
+#   - python → python in [tools]
+#   - gvm → MANUAL (as in bootstrap)
+#   - sdkman → task (as in bootstrap)
+#
+# ✅ Shell tools:
+#   - antidote → github:mattmc3/antidote
+#   - fzf → github:junegunn/fzf (+ postinstall)
+#   - fzf-tab → github:Aloxaf/fzf-tab
+#   - starship → starship
+#   - zellij → zellij
+#   - zoxide → zoxide
+#
+# ✅ Dev tools:
+#   - neovim → neovim
+#   - lazygit → lazygit
+#   - ripgrep → ripgrep
+#   - just → cargo:just
+#   - rage → cargo:rage
+#   - go-task → github:go-task/task
+#
+# ✅ Kubernetes:
+#   - kubectl → kubectl
+#   - k9s → k9s
+#   - helm → helm
+#   - kustomize → kustomize
+#   - kubeseal → github:bitnami-labs/sealed-secrets
+#
+# ✅ Infrastructure:
+#   - terraform → terraform
+#   - yq → yq
+#   - jq → jq (mise includes this)
+#
+# ✅ AI/Productivity:
+#   - vectorcode → task (uv tool install)
+#   - mistral-vibe → task (uv tool install)
+#   - mmdc → npm:@mermaid-js/mermaid-cli
+#   - claude → task (custom installer)
+#   - claude-code-acp → npm:@zed-industries/claude-code-acp
+#
+# ✅ Platform-specific:
+#   - kitty → task (custom installer)
+#   - imagemagick → tasks (platform-specific)
+#   - fonts → tasks (platform-specific)
+#
+# ✅ Manual (as in bootstrap):
+#   - gvm
+#   - XQuartz login item (macOS)
