@@ -29,9 +29,8 @@ zellij = "latest"   # Terminal multiplexer
 zoxide = "latest"   # Smart cd replacement
 
 # Zsh tools
-"github:junegunn/fzf" = "latest"     # Fuzzy finder (has binary releases)
-"github:mattmc3/antidote" = "latest" # Zsh plugin manager
-"github:Aloxaf/fzf-tab" = "latest"   # Fuzzy tab completion
+"github:junegunn/fzf" = "latest" # Fuzzy finder (has binary releases)
+# antidote and fzf-tab are pure zsh scripts (no binary releases), installed via tasks
 
 # =============================================================================
 # Development Tools
@@ -161,6 +160,26 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 '''
 
+[tasks."install-antidote"]
+description = "Install antidote zsh plugin manager"
+run = '''
+if [ ! -d "$HOME/.antidote" ]; then
+  git clone --depth=1 https://github.com/mattmc3/antidote.git "$HOME/.antidote"
+fi
+'''
+
+[tasks."install-fzf-tab"]
+description = "Install fzf-tab completion plugin"
+depends = ["install-antidote"]
+run = '''
+# fzf-tab is installed via antidote in .zshrc
+# This task ensures antidote is ready for it
+if [ ! -d "$HOME/.antidote" ]; then
+  echo "antidote not installed, run install-antidote task first"
+  exit 1
+fi
+'''
+
 [tasks."install-kubectl"]
 description = "Install kubectl CLI"
 run = '''
@@ -271,6 +290,8 @@ depends = [
   "install-sdkman",
   "install-kitty",
   "install-claude",
+  "install-antidote",
+  "install-fzf-tab",
   "install-kubectl",
   "install-mermaid-cli",
   "install-imagemagick-macos",
