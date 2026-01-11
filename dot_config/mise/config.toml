@@ -17,51 +17,51 @@
 # Core Language Runtimes
 # =============================================================================
 [tools]
-rust = "latest"           # Replaces rustup, provides cargo
-python = "latest"         # System Python
-node = "lts"              # Replaces nvm
+rust = "latest"   # Replaces rustup, provides cargo
+python = "latest" # System Python
+node = "lts"      # Replaces nvm
 
 # =============================================================================
 # Shell & Terminal Tools
 # =============================================================================
-starship = "latest"       # Shell prompt
-zellij = "latest"         # Terminal multiplexer
-zoxide = "latest"         # Smart cd replacement
+starship = "latest" # Shell prompt
+zellij = "latest"   # Terminal multiplexer
+zoxide = "latest"   # Smart cd replacement
 
 # Zsh tools
-"github:junegunn/fzf" = "latest"         # Fuzzy finder (has binary releases)
+"github:junegunn/fzf" = "latest" # Fuzzy finder (has binary releases)
 # Note: antidote and fzf-tab don't have binary releases, installed via zsh plugin manager in zshrc
 
 # =============================================================================
 # Development Tools
 # =============================================================================
-neovim = "latest"         # Editor
-lazygit = "latest"        # Git TUI
-ripgrep = "latest"        # Fast grep alternative
+neovim = "latest"  # Editor
+lazygit = "latest" # Git TUI
+ripgrep = "latest" # Fast grep alternative
 
 # Build tools & task runners
 # cargo:just configured in [tools."cargo:just"] section below
-"github:go-task/task" = "latest"         # Go-based task runner
+"github:go-task/task" = "latest" # Go-based task runner
 
 # =============================================================================
 # Kubernetes Tools
 # =============================================================================
 # kubectl installed via task due to SSL issues with aqua backend in some environments
-k9s = "latest"            # Kubernetes TUI
-helm = "latest"           # Kubernetes package manager
-kustomize = "latest"      # Kubernetes config management
-"github:bitnami-labs/sealed-secrets" = "latest"  # kubeseal
+k9s = "latest"                                  # Kubernetes TUI
+helm = "latest"                                 # Kubernetes package manager
+kustomize = "latest"                            # Kubernetes config management
+"github:bitnami-labs/sealed-secrets" = "latest" # kubeseal
 
 # =============================================================================
 # Infrastructure & Cloud
 # =============================================================================
-terraform = "latest"      # Infrastructure as Code
+terraform = "latest" # Infrastructure as Code
 
 # =============================================================================
 # Data Processing
 # =============================================================================
-jq = "latest"             # JSON processor
-yq = "latest"             # YAML processor
+jq = "latest" # JSON processor
+yq = "latest" # YAML processor
 
 # =============================================================================
 # Security & Encryption
@@ -98,8 +98,9 @@ locked = true
 [tasks."setup-ubuntu-essentials"]
 description = "Install Ubuntu base packages and set zsh as default shell"
 run = '''
-case "$OSTYPE" in
-  linux-gnu*)
+OS="$(uname -s)"
+case "$OS" in
+  Linux)
     sudo apt-get update
     sudo apt-get install -y build-essential software-properties-common jq tar curl wget \
       git sed gnupg zip zsh fontconfig util-linux bison mercurial
@@ -111,7 +112,7 @@ esac
 [tasks."install-uv"]
 description = "Install uv (Python package installer)"
 run = '''
-if ! command -v uv &> /dev/null; then
+if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 '''
@@ -120,7 +121,7 @@ fi
 description = "Install Python tools via uv"
 depends = ["install-uv"]
 run = '''
-if ! command -v vectorcode &> /dev/null || ! command -v vibe &> /dev/null; then
+if ! command -v vectorcode >/dev/null 2>&1 || ! command -v vibe >/dev/null 2>&1; then
   uv tool install vectorcode
   uv tool install mistral-vibe
 fi
@@ -129,7 +130,7 @@ fi
 [tasks."install-sdkman"]
 description = "Install SDKMAN (Java/JVM tools)"
 run = '''
-if ! command -v sdk &> /dev/null; then
+if ! command -v sdk >/dev/null 2>&1; then
   curl -s "https://get.sdkman.io" | bash
 fi
 '''
@@ -137,7 +138,7 @@ fi
 [tasks."install-kitty"]
 description = "Install Kitty terminal emulator"
 run = '''
-if ! command -v kitty &> /dev/null; then
+if ! command -v kitty >/dev/null 2>&1; then
   curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin
 fi
 '''
@@ -145,7 +146,7 @@ fi
 [tasks."install-claude"]
 description = "Install Claude CLI"
 run = '''
-if ! command -v claude &> /dev/null; then
+if ! command -v claude >/dev/null 2>&1; then
   curl -fsSL https://claude.ai/install.sh | bash
 fi
 '''
@@ -153,19 +154,19 @@ fi
 [tasks."install-kubectl"]
 description = "Install kubectl CLI"
 run = '''
-if ! command -v kubectl &> /dev/null; then
+if ! command -v kubectl >/dev/null 2>&1; then
   VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt 2>/dev/null || echo "v1.31.0")
   curl -LO "https://dl.k8s.io/release/${VERSION}/bin/linux/amd64/kubectl" || curl -k -LO "https://dl.k8s.io/release/${VERSION}/bin/linux/amd64/kubectl"
   chmod +x kubectl
-  mkdir -p $HOME/.local/bin
-  mv kubectl $HOME/.local/bin/
+  mkdir -p "$HOME/.local/bin"
+  mv kubectl "$HOME/.local/bin/"
 fi
 '''
 
 [tasks."install-mermaid-cli"]
 description = "Install mermaid-cli (mmdc)"
 run = '''
-if ! command -v mmdc &> /dev/null; then
+if ! command -v mmdc >/dev/null 2>&1; then
   export PUPPETEER_SKIP_DOWNLOAD=true
   npm install -g @mermaid-js/mermaid-cli
 fi
@@ -174,8 +175,9 @@ fi
 [tasks."install-imagemagick-macos"]
 description = "Install ImageMagick with XQuartz on macOS"
 run = '''
-case "$OSTYPE" in
-  darwin*)
+OS="$(uname -s)"
+case "$OS" in
+  Darwin)
     if ! command -v magick >/dev/null 2>&1; then
       brew install imagemagick xquartz
       echo "⚠️  REMEMBER TO ADD XQUARTZ AS A LOGIN ITEM"
@@ -187,8 +189,9 @@ esac
 [tasks."install-imagemagick-ubuntu"]
 description = "Install ImageMagick on Ubuntu"
 run = '''
-case "$OSTYPE" in
-  linux-gnu*)
+OS="$(uname -s)"
+case "$OS" in
+  Linux)
     if ! command -v magick >/dev/null 2>&1; then
       sudo apt-get install -y imagemagick
     fi
@@ -199,8 +202,9 @@ esac
 [tasks."install-fonts-macos"]
 description = "Install Nerd Fonts on macOS"
 run = '''
-case "$OSTYPE" in
-  darwin*)
+OS="$(uname -s)"
+case "$OS" in
+  Darwin)
     brew install --cask font-sauce-code-pro-nerd-font
     ;;
 esac
@@ -209,17 +213,18 @@ esac
 [tasks."install-fonts-ubuntu"]
 description = "Install Nerd Fonts on Ubuntu"
 run = '''
-case "$OSTYPE" in
-  linux-gnu*)
+OS="$(uname -s)"
+case "$OS" in
+  Linux)
     VERSION=$(curl -s https://api.github.com/repos/ryanoasis/nerd-fonts/tags | jq -r '.[0].name')
     TEMP_DIR=$(mktemp -d)
     cd "$TEMP_DIR"
     curl -L -o SourceCodePro.zip "https://github.com/ryanoasis/nerd-fonts/releases/download/$VERSION/SourceCodePro.zip"
     unzip SourceCodePro.zip
     mkdir -p "$HOME/.local/share/fonts"
-    mv ./*ttf "$HOME/.local/share/fonts"
+    find . -name "*.ttf" -exec mv {} "$HOME/.local/share/fonts/" \;
     fc-cache -fv
-    cd - && rm -rf "$TEMP_DIR"
+    cd - >/dev/null && rm -rf "$TEMP_DIR"
     ;;
 esac
 '''
@@ -255,7 +260,7 @@ depends = [
   "install-imagemagick-macos",
   "install-imagemagick-ubuntu",
   "install-fonts",
-  "setup-fzf-shell"
+  "setup-fzf-shell",
 ]
 run = '''
 echo "✅ Bootstrap complete!"
@@ -263,8 +268,9 @@ echo ""
 echo "📝 Manual steps remaining:"
 echo "  1. Install gvm manually: bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')"
 echo "  2. Set a default Go version with gvm"
-case "$OSTYPE" in
-  darwin*)
+OS="$(uname -s)"
+case "$OS" in
+  Darwin)
     echo "  3. [macOS] Add XQuartz as a login item"
     ;;
 esac
