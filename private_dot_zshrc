@@ -133,7 +133,7 @@ export FLUTTER_HOME="$HOME/flutter_sdk"
 export PATH="$PATH:$FLUTTER_HOME/bin"
 
 # running this at the end so that zsh vi mode plugin doesn't overwrite keybinding for fzf-tab. See https://github.com/jeffreytse/zsh-vi-mode/issues/24
-# fzf-tab already loaded earlier, no need to source again here
+zvm_after_init_commands+=('[ -f "$(mise where fzf-tab)/fzf-tab.plugin.zsh" ] && source "$(mise where fzf-tab)/fzf-tab.plugin.zsh"')
 
 # secrets via 1password
 # on windows with WSL, alias to windows op cli tool to integrate with desktop auth. May break some scripts as passing env vars to windows exe may not work correctly
