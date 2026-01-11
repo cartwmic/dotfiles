@@ -1,13 +1,17 @@
-. "$HOME/.cargo/env"
+# Add ~/.local/bin to PATH early so mise is available
+export PATH="$HOME/.local/bin:$PATH"
 
+# Cargo environment (if rust installed via cargo directly)
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+
+# NVM is replaced by mise's node support
+# Keeping these lines for backwards compatibility if needed
 export NVM_DIR="$HOME/.config/nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 
-# source antidote
-source $HOME/.antidote/antidote.zsh
-
-. ~/.fzf.zsh
+# antidote and fzf are now sourced in .zshrc after mise activation
+# DO NOT source them here - they're installed by mise and need mise in PATH
 
 #THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
 export SDKMAN_DIR="$HOME/.sdkman"
