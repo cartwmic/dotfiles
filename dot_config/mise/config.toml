@@ -272,12 +272,11 @@ depends = ["install-fonts-*"]
 description = "Setup fzf shell integration"
 run = '''
 if ! test -f ~/.fzf.zsh; then
-  if command -v fzf >/dev/null 2>&1; then
-    FZF_PATH=$(mise where fzf 2>/dev/null || echo "")
-    if [ -n "$FZF_PATH" ] && [ -f "$FZF_PATH/install" ]; then
-      "$FZF_PATH/install" --all
-    fi
-  fi
+  # Clone fzf repo temporarily to get shell integration files
+  TEMP_DIR=$(mktemp -d)
+  git clone --depth 1 https://github.com/junegunn/fzf.git "$TEMP_DIR"
+  "$TEMP_DIR/install" --bin --key-bindings --completion --no-update-rc
+  rm -rf "$TEMP_DIR"
 fi
 '''
 
