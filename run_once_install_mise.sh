@@ -16,33 +16,40 @@ log_error() {
 }
 
 # Check if mise is already installed
-if command -v mise &> /dev/null; then
+if command -v mise >/dev/null 2>&1; then
   log_info "mise is already installed ($(mise --version))"
   exit 0
 fi
 
 log_info "Installing mise..."
 
-if [[ "$OSTYPE" == "darwin"* ]]; then
+# Detect OS using uname (POSIX-compliant)
+OS="$(uname -s)"
+
+case "$OS" in
+Darwin)
   # macOS installation via Homebrew
-  if ! command -v brew &> /dev/null; then
+  if ! command -v brew >/dev/null 2>&1; then
     log_error "Homebrew is not installed. Please install Homebrew first: https://brew.sh"
     exit 1
   fi
   brew install mise
-elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+  ;;
+Linux)
   # Linux installation via official installer
   curl https://mise.run | sh
 
   # Add mise to PATH for this session
   export PATH="$HOME/.local/bin:$PATH"
-else
-  log_error "Unsupported operating system: $OSTYPE"
+  ;;
+*)
+  log_error "Unsupported operating system: $OS"
   exit 1
-fi
+  ;;
+esac
 
 # Verify installation
-if command -v mise &> /dev/null; then
+if command -v mise >/dev/null 2>&1; then
   log_info "mise successfully installed: $(mise --version)"
   log_info "mise will be activated when you restart your shell (via ~/.zshrc)"
 else
