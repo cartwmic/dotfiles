@@ -15,8 +15,11 @@ return {
         end
         
         vim.system(
-          { "timeout", "30s", "op", "read", op_path, "--no-newline" },
-          { text = true },
+          { "op", "read", op_path, "--no-newline" },
+          {
+            text = true,
+            timeout = 30 * 1000, -- 30s, in milliseconds
+          },
           function(result)
             vim.schedule(function()
               if result.code == 0 and result.stdout and result.stdout ~= "" then
