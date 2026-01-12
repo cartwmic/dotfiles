@@ -36,22 +36,26 @@ exec zsh
 ## What's Included
 
 **Shell & Terminal:**
+
 - Zsh with [antidote](https://getantidote.github.io/) plugin manager
 - Kitty terminal with Zellij multiplexer
 - Starship prompt, fzf fuzzy finder, zoxide smart cd
 
 **Development Tools:**
+
 - Editor: Neovim (LazyVim)
 - Git: lazygit TUI
 - Languages: Node.js, Python, Rust (managed by mise)
 - Version Management: mise (replaces nvm/rustup), SDKMAN, gvm
 
 **DevOps/Cloud:**
+
 - Kubernetes: kubectl, k9s, helm, kustomize, kubeseal
 - Infrastructure: terraform
-- Utilities: ripgrep, jq, yq, just, task
+- Utilities: ripgrep, jq, yq, task
 
 **AI Tools:**
+
 - claude, claude-code-acp, vectorcode, mistral-vibe, mermaid-cli
 
 ## Tool Management with mise
@@ -75,6 +79,7 @@ cd .                             # Auto-switches to Node 18
 mise reads `.nvmrc`, `.node-version`, and `mise.toml` files automatically.
 
 **Common commands:**
+
 - `mise ls` - List installed tools
 - `mise upgrade` - Update all tools
 - `mise install` - Install missing tools
@@ -116,6 +121,7 @@ chezmoi apply
 ## Manual Steps
 
 After `chezmoi apply`, only these require manual setup:
+
 - Install gvm: `bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')`
 - Set default Go version: `gvm use go1.21 --default`
 - [macOS] Add XQuartz as login item

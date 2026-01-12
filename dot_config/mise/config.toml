@@ -40,7 +40,6 @@ lazygit = "latest" # Git TUI
 ripgrep = "latest" # Fast grep alternative
 
 # Build tools & task runners
-# cargo:just configured in [tools."cargo:just"] section below
 "github:go-task/task" = "latest" # Go-based task runner
 
 # =============================================================================
@@ -76,7 +75,7 @@ yq = "latest" # YAML processor
 # =============================================================================
 # Tool Options
 # =============================================================================
-# cargo:just and cargo:rage moved to tasks to ensure build-essential is installed first
+# cargo:rage moved to tasks to ensure build-essential is installed first
 
 # =============================================================================
 # Environment Variables
@@ -174,18 +173,13 @@ fi
 '''
 
 [tasks."install-cargo-tools"]
-description = "Install cargo-based tools (just, rage)"
+description = "Install cargo-based tools (rage)"
 depends = ["setup-ubuntu-essentials"]
 run = '''
 # Ensure cargo is available (mise should have installed rust by now)
 if ! command -v cargo >/dev/null 2>&1; then
   echo "ERROR: cargo not found. Rust must be installed first."
   exit 1
-fi
-
-# Install just
-if ! command -v just >/dev/null 2>&1; then
-  cargo install just --locked
 fi
 
 # Install rage
@@ -412,7 +406,6 @@ verbose = false
 #   - neovim → neovim
 #   - lazygit → lazygit
 #   - ripgrep → ripgrep
-#   - just → cargo:just
 #   - rage → cargo:rage
 #   - go-task → github:go-task/task
 #
