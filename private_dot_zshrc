@@ -1,6 +1,11 @@
 #!/bin/zsh
 
-# set up zsh history file 
+# Activate mise - MUST be early to set up PATH correctly
+if command -v mise &> /dev/null; then
+  eval "$(mise activate zsh)"
+fi
+
+# set up zsh history file
 export HISTFILE="$HOME/.zsh_history"
 export HISTSIZE=1000000
 export SAVEHIST=$HISTSIZE
@@ -16,8 +21,8 @@ setopt SHARE_HISTORY             # Share history between all sessions. Also work
 # update fpath to include custom completion files, see https://github.com/zsh-users/zsh-completions/blob/master/zsh-completions-howto.org#telling-zsh-which-function-to-use-for-completing-a-command
 fpath=($HOME/.config/zsh-completions $fpath)
 
-# source antidote
-source $HOME/.antidote/antidote.zsh
+# source antidote (installed via git clone in ~/.antidote)
+[ -f "$HOME/.antidote/antidote.zsh" ] && source "$HOME/.antidote/antidote.zsh"
 
 autoload -Uz compinit
 ZSH_COMPDUMP=${ZSH_COMPDUMP:-${ZDOTDIR:-~}/.zcompdump}
@@ -38,7 +43,9 @@ fi
 
 # fzf-tab needs to be loaded after compninit but before plugins which will wrap widgets, such as zsh-autosuggestions or fast-syntax-highlighting
 # not included in zsh_plugins.txt because it doesn't load it in the correct order
-source $HOME/fzf-tab/fzf-tab.plugin.zsh
+# Installed via antidote (git clone) since it has no binary releases
+FZF_TAB_DIR="${ZDOTDIR:-$HOME}/.antidote/https-COLON--SLASH--SLASH-github.com-SLASH-Aloxaf-SLASH-fzf-tab"
+[ -f "$FZF_TAB_DIR/fzf-tab.plugin.zsh" ] && source "$FZF_TAB_DIR/fzf-tab.plugin.zsh"
 
 # initialize plugins statically with ${ZDOTDIR:-~}/.zsh_plugins.txt
 antidote load
@@ -67,12 +74,15 @@ export DOTREPO="$HOME/git/dotfiles"
 alias dotdrop="$DOTREPO/dotdrop.sh"
 # end Dotdrop
 
-export NVM_DIR="$HOME/.config/nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+# nvm replaced by mise's node support
+# If you need nvm for specific projects, uncomment below:
+# export NVM_DIR="$HOME/.config/nvm"
+# [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+# [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 
 # fzf hook
 # needs to happen after zsh vi mode plugin is initialized in order to get everything to work correclty. See https://github.com/jeffreytse/zsh-vi-mode/issues/24
+# fzf installed by mise, shell integration at ~/.fzf.zsh
 zvm_after_init_commands+=('[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh')
 
 # starship hook
@@ -94,7 +104,7 @@ compdef _task task
 
 
 autoload -U _vectorcode
-compdef _task vectorcode
+compdef _vectorcode vectorcode
 
 export _ZO_ECHO=1
 eval "$(zoxide init zsh)"
@@ -123,7 +133,8 @@ export FLUTTER_HOME="$HOME/flutter_sdk"
 export PATH="$PATH:$FLUTTER_HOME/bin"
 
 # running this at the end so that zsh vi mode plugin doesn't overwrite keybinding for fzf-tab. See https://github.com/jeffreytse/zsh-vi-mode/issues/24
-zvm_after_init_commands+=('[ -f ~/fzf-tab/fzf-tab.plugin.zsh ] && source ~/fzf-tab/fzf-tab.plugin.zsh')
+FZF_TAB_PLUGIN="${ZDOTDIR:-$HOME}/.antidote/https-COLON--SLASH--SLASH-github.com-SLASH-Aloxaf-SLASH-fzf-tab/fzf-tab.plugin.zsh"
+zvm_after_init_commands+=("[ -f \"$FZF_TAB_PLUGIN\" ] && source \"$FZF_TAB_PLUGIN\"")
 
 # secrets via 1password
 # on windows with WSL, alias to windows op cli tool to integrate with desktop auth. May break some scripts as passing env vars to windows exe may not work correctly
@@ -161,3 +172,7 @@ zvm_after_init_commands+=('[ -f ~/fzf-tab/fzf-tab.plugin.zsh ] && source ~/fzf-t
 #     echo "⚠️  1Password CLI (op) not found - skipping PERSONAL_OPENAI_API_KEY load" >&2
 #   fi
 # fi
+
+
+
+
