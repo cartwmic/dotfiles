@@ -131,7 +131,7 @@ fi
 [tasks."install-sdkman"]
 description = "Install SDKMAN (Java/JVM tools)"
 run = '''
-if ! command -v sdk >/dev/null 2>&1; then
+if [ ! -d "$HOME/.sdkman" ]; then
   curl -s "https://get.sdkman.io" | bash
 fi
 '''
@@ -139,9 +139,19 @@ fi
 [tasks."install-kitty"]
 description = "Install Kitty terminal emulator"
 run = '''
-if ! command -v kitty >/dev/null 2>&1; then
-  curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin
-fi
+OS="$(uname -s)"
+case "$OS" in
+  Darwin)
+    if [ ! -d "/Applications/kitty.app" ]; then
+      curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin
+    fi
+    ;;
+  Linux)
+    if [ ! -d "$HOME/.local/kitty.app" ]; then
+      curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin
+    fi
+    ;;
+esac
 '''
 
 [tasks."install-claude"]
@@ -247,7 +257,8 @@ run = '''
 OS="$(uname -s)"
 case "$OS" in
   Linux)
-    if ! command -v magick >/dev/null 2>&1; then
+    if ! command -v magick >/dev/null 2>&1 && ! command -v convert >/dev/null 2>&1; then
+      sudo apt-get update
       sudo apt-get install -y imagemagick
     fi
     ;;
@@ -272,6 +283,11 @@ run = '''
 OS="$(uname -s)"
 case "$OS" in
   Linux)
+    # Check if Source Code Pro Nerd Font is already installed
+    if fc-list | grep -qi "SauceCodePro"; then
+      exit 0
+    fi
+    
     # Ensure fontconfig is installed first
     if ! command -v fc-cache >/dev/null 2>&1; then
       sudo apt-get install -y fontconfig
