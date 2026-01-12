@@ -1,5 +1,8 @@
 
 
+# fzf-tab must be loaded early (via antidote bundle but sourced manually in .zshrc)
+Aloxaf/fzf-tab
+
 zsh-users/zsh-autosuggestions
 zsh-users/zsh-history-substring-search
 belak/zsh-utils path:utility
