@@ -14,8 +14,7 @@ return {
         },
       },
       sources = {
-        -- Add minuet to default sources for auto-complete
-        default = { "lsp", "path", "snippets", "buffer", "minuet" },
+        default = { "lsp", "path", "snippets", "buffer" },
         providers = {
           minuet = {
             name = "minuet",

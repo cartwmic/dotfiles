@@ -55,7 +55,7 @@ return {
       {{- if eq .profile "axon-work-computer" }}
       -- Axon work computer: Use Claude API with 1Password
       local api_key_holder = fetch_api_key_async(
-        "op://personal/anthropic - claude/api-key",
+        "op://personal/anthropic - axon - claude/api-key",
         "Claude",
         debug and function()
           vim.notify("[minuet] Setup complete with Claude provider", vim.log.levels.INFO)
