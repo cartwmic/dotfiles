@@ -196,6 +196,11 @@ fi
 if ! command -v rage >/dev/null 2>&1; then
   cargo install rage --locked
 fi
+
+# Install kickstart
+if ! command -v kickstart >/dev/null 2>&1; then
+  cargo install kickstart --features=cli
+fi
 '''
 
 [tasks."install-kubectl"]
