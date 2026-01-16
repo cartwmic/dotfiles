@@ -1,0 +1,22 @@
+{{- if eq .profile "axon-work-computer" }}
+{
+   "awsAuthRefresh": "aws sso login --profile ContributorAccess-367723636604",
+   "env": {
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "AWS_REGION": "us-gov-west-1",
+        "AWS_PROFILE": "ContributorAccess-367723636604",
+        "ANTHROPIC_MODEL": "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
+   }
+}
+{{- else }}
+{
+  "env": {
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel-collector.internal.cartwmic.com:80",
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "ANTHROPIC_DEFAULT_MODEL": "haiku"
+  },
+  "model": "haiku"
+}
+{{- end }}
