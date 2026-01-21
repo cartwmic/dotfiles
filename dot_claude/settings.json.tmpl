@@ -1,15 +1,100 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch",
+      "Bash(go *)",
+      "Bash(make *)",
+      "Bash(cargo *)",
+      "Bash(npm *)",
+      "Bash(yarn *)",
+      "Bash(pnpm *)",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(pip *)",
+      "Bash(docker *)",
+      "Bash(kubectl *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git branch*)",
+      "Bash(git checkout*)",
+      "Bash(git fetch*)",
+      "Bash(git pull*)",
+      "Bash(git show*)",
+      "Bash(git mv*)",
+      "Bash(tree *)",
+      "Bash(find *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(grep *)",
+      "Bash(sed *)",
+      "Bash(awk *)",
+      "Bash(sort *)",
+      "Bash(uniq *)",
+      "Bash(wc *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(mkdir *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
+      "Bash(rm *)",
+      "Bash(touch *)",
+      "Bash(echo *)",
+      "Bash(printf *)",
+      "Bash(test *)",
+      "Bash(which *)",
+      "Bash(whereis *)",
+      "Bash(man *)",
+      "Bash(help *)",
+      "Bash(export *)",
+      "Bash(source *)",
+      "Bash(. *)",
+      "Bash(cd *)",
+      "Bash(pwd*)",
+      "Bash(done)",
+      "Read",
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(rm -rf /)",
+      "Bash(rm -rf ~)",
+      "Bash(git push*)",
+      "Bash(git push *)",
+      "Bash(git commit*)",
+      "Bash(git commit *)",
+      "Bash(git add*)",
+      "Bash(git add *)",
+      "Bash(git stage*)",
+      "Bash(git reset --hard*)",
+      "Bash(git reset --hard *)",
+      "Bash(git push --force*)",
+      "Bash(git push --force *)",
+      "Bash(git push -f*)",
+      "Bash(git push -f *)",
+      "Bash(dd if=*)",
+      "Bash(mkfs*)",
+      "Bash(format*)",
+      "Bash(> /dev/*)",
+      "Bash(chmod -R 777 /)",
+      "Bash(chown -R * /)",
+      "Bash(curl * | sh)",
+      "Bash(curl * | bash)",
+      "Bash(wget * | sh)",
+      "Bash(wget * | bash)"
+    ]
+  },
 {{- if eq .profile "axon-work-computer" }}
-{
-   "awsAuthRefresh": "aws sso login --profile ContributorAccess-367723636604",
-   "env": {
-        "CLAUDE_CODE_USE_BEDROCK": "1",
-        "AWS_REGION": "us-gov-west-1",
-        "AWS_PROFILE": "ContributorAccess-367723636604",
-        "ANTHROPIC_MODEL": "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
-   }
-}
+  "awsAuthRefresh": "aws sso login --profile ContributorAccess-367723636604",
+  "env": {
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "AWS_REGION": "us-gov-west-1",
+    "AWS_PROFILE": "ContributorAccess-367723636604",
+    "ANTHROPIC_MODEL": "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
+  },
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true
+  }
 {{- else }}
-{
   "env": {
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
     "OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel-collector.internal.cartwmic.com:80",
@@ -18,5 +103,5 @@
     "ANTHROPIC_DEFAULT_MODEL": "haiku"
   },
   "model": "haiku"
-}
 {{- end }}
+}
