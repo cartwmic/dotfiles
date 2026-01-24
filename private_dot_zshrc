@@ -67,12 +67,8 @@ alias place_displays_work='displayplacer "id:2E7FC41C-2E3B-63A0-F2F0-3B9DB191A1E
 # copies terminfo for kitty over to remote shells, may hang when in zellij
 # but once terminfo is copied I can just use regular ssh
 alias s="kitty +kitten ssh"
+alias cclint="npx @carlrannaberg/cclint"
 
-
-# Dotdrop
-export DOTREPO="$HOME/git/dotfiles"
-alias dotdrop="$DOTREPO/dotdrop.sh"
-# end Dotdrop
 
 # nvm replaced by mise's node support
 # If you need nvm for specific projects, uncomment below:
