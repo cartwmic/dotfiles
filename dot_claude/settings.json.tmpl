@@ -52,8 +52,8 @@
       "Bash(cd *)",
       "Bash(pwd*)",
       "Bash(done)",
-      "Bash(curl *)"
-      "Read(*)",
+      "Bash(curl *)",
+      "Read(*)"
     ],
     "deny": [
       "Bash(rm -rf *)",
@@ -101,8 +101,11 @@
     "OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel-collector.internal.cartwmic.com:80",
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "OTEL_METRICS_EXPORTER": "otlp",
-    "ANTHROPIC_DEFAULT_MODEL": "haiku"
+    "ANTHROPIC_DEFAULT_MODEL": "opus"
   },
-  "model": "haiku"
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true
+  },
+  "model": "opus"
 {{- end }}
 }
