@@ -13,15 +13,7 @@
       "Bash(pip *)",
       "Bash(docker *)",
       "Bash(kubectl *)",
-      "Bash(git status*)",
-      "Bash(git diff*)",
-      "Bash(git log*)",
-      "Bash(git branch*)",
-      "Bash(git checkout*)",
-      "Bash(git fetch*)",
-      "Bash(git pull*)",
-      "Bash(git show*)",
-      "Bash(git mv*)",
+      "Bash(git *)",
       "Bash(tree *)",
       "Bash(find *)",
       "Bash(ls *)",
@@ -55,6 +47,7 @@
       "Bash(curl *)",
       "Read(*)"
     ],
+{{- if eq .profile "axon-work-computer" }}
     "deny": [
       "Bash(rm -rf *)",
       "Bash(rm -rf /)",
@@ -84,7 +77,6 @@
       "Bash(wget * | bash)"
     ]
   },
-{{- if eq .profile "axon-work-computer" }}
   "awsAuthRefresh": "aws sso login --profile ContributorAccess-367723636604",
   "env": {
     "CLAUDE_CODE_USE_BEDROCK": "1",
@@ -96,6 +88,21 @@
     "superpowers@claude-plugins-official": true
   }
 {{- else }}
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf ~)",
+      "Bash(dd if=*)",
+      "Bash(mkfs*)",
+      "Bash(format*)",
+      "Bash(> /dev/*)",
+      "Bash(chmod -R 777 /)",
+      "Bash(chown -R * /)",
+      "Bash(curl * | sh)",
+      "Bash(curl * | bash)",
+      "Bash(wget * | sh)",
+      "Bash(wget * | bash)"
+    ]
+  },
   "env": {
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
     "OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel-collector.internal.cartwmic.com:80",
