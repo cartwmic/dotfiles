@@ -68,6 +68,8 @@ alias place_displays_work='displayplacer "id:2E7FC41C-2E3B-63A0-F2F0-3B9DB191A1E
 # but once terminfo is copied I can just use regular ssh
 alias s="kitty +kitten ssh"
 alias cclint="npx @carlrannaberg/cclint"
+alias update-claude-settings="$HOME/update_claude_settings.sh"
+alias reset-claude-settings="$HOME/reset_claude_settings.sh"
 
 
 # nvm replaced by mise's node support
