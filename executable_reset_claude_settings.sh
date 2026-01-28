@@ -23,6 +23,7 @@ jq '
   .env.CLAUDE_CODE_ENABLE_TELEMETRY = "1" |
   del(.env.ANTHROPIC_BASE_URL) |
   del(.env.API_TIMEOUT_MS) |
+  del(.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS) |
   del(.apiKeyHelper)
 ' "$SETTINGS_FILE" >"$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
 
