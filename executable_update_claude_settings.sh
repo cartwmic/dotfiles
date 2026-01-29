@@ -18,12 +18,27 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+# Check if op is available
+if ! command -v op >/dev/null 2>&1; then
+  echo "[update_claude_settings] ERROR: 1Password CLI (op) is required but not installed"
+  exit 1
+fi
+
+# Get auth token from 1Password
+echo "[update_claude_settings] INFO: Retrieving ANTHROPIC_AUTH_TOKEN from 1Password..."
+ANTHROPIC_AUTH_TOKEN=$(op read 'op://personal/z.ai - key 1/credential' --no-newline 2>&1)
+if [ $? -ne 0 ]; then
+  echo "[update_claude_settings] ERROR: Failed to retrieve auth token from 1Password: $ANTHROPIC_AUTH_TOKEN"
+  exit 1
+fi
+
 # Update settings.json using jq
-jq --arg apiKeyHelperPath "$HOME/.claude/z-ai-api-key-helper.sh" '
+jq --arg auth_token "$ANTHROPIC_AUTH_TOKEN" '
   .env.CLAUDE_CODE_ENABLE_TELEMETRY = "0" |
   .env.ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic" |
   .env.API_TIMEOUT_MS = "3000000" |
-  .apiKeyHelper = $apiKeyHelperPath 
+  .env.ANTHROPIC_AUTH_TOKEN = $auth_token |
+  .env.ANTHROPIC_API_KEY = ""
 ' "$SETTINGS_FILE" >"$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
 
 if [ $? -eq 0 ]; then
