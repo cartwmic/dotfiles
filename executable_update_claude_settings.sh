@@ -23,7 +23,6 @@ jq --arg apiKeyHelperPath "$HOME/.claude/z-ai-api-key-helper.sh" '
   .env.CLAUDE_CODE_ENABLE_TELEMETRY = "0" |
   .env.ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic" |
   .env.API_TIMEOUT_MS = "3000000" |
-  .env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS  = "999999999999" |
   .apiKeyHelper = $apiKeyHelperPath 
 ' "$SETTINGS_FILE" >"$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
 
