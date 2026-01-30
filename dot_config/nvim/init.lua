@@ -2,6 +2,8 @@
 
 require("config.lazy")
 
+vim.opt.clipboard = "unnamedplus"
+
 -- User Commands
 vim.api.nvim_create_user_command("UserPutPKMSFileDateTimestampToClipboard", function(_)
   local time = vim.fn.strftime("%Y-%m-%d-%H%M%S")
