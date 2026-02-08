@@ -1,3 +1,4 @@
 ./example.chezmoi.yaml
 ./bootstrap_chezmoi.sh
 *.diff
+CLAUDE.md
