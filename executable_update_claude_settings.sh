@@ -3,6 +3,7 @@
 # Script to update ~/.claude/settings.json
 # - Disables telemetry
 # - Sets ANTHROPIC_BASE_URL, API_TIMEOUT_MS, and ANTHROPIC_AUTH_TOKEN from 1Password
+# - Sets model to GLM-5 and configures GLM model overrides
 
 SETTINGS_FILE="$HOME/.claude/settings.json"
 
@@ -37,7 +38,11 @@ jq --arg auth_token "$ANTHROPIC_AUTH_TOKEN" '
   .env.CLAUDE_CODE_ENABLE_TELEMETRY = "0" |
   .env.ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic" |
   .env.API_TIMEOUT_MS = "3000000" |
-  .env.ANTHROPIC_AUTH_TOKEN = $auth_token
+  .env.ANTHROPIC_AUTH_TOKEN = $auth_token |
+  .env.ANTHROPIC_DEFAULT_OPUS_MODEL = "GLM-5" |
+  .env.ANTHROPIC_DEFAULT_SONNET_MODEL = "GLM-5" |
+  .env.ANTHROPIC_DEFAULT_HAIKU_MODEL = "GLM-5" |
+  .model = "GLM-5"
 ' "$SETTINGS_FILE" >"$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
 
 if [ $? -eq 0 ]; then

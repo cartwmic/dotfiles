@@ -3,6 +3,7 @@
 # Script to reset ~/.claude/settings.json to defaults
 # - Re-enables telemetry
 # - Removes ANTHROPIC_BASE_URL, API_TIMEOUT_MS, and ANTHROPIC_AUTH_TOKEN from env
+# - Removes GLM model overrides and resets model to opus
 
 SETTINGS_FILE="$HOME/.claude/settings.json"
 
@@ -23,7 +24,11 @@ jq '
   .env.CLAUDE_CODE_ENABLE_TELEMETRY = "1" |
   del(.env.ANTHROPIC_BASE_URL) |
   del(.env.API_TIMEOUT_MS) |
-  del(.env.ANTHROPIC_AUTH_TOKEN)
+  del(.env.ANTHROPIC_AUTH_TOKEN) |
+  del(.env.ANTHROPIC_DEFAULT_OPUS_MODEL) |
+  del(.env.ANTHROPIC_DEFAULT_SONNET_MODEL) |
+  del(.env.ANTHROPIC_DEFAULT_HAIKU_MODEL) |
+  .model = "opus"
 ' "$SETTINGS_FILE" >"$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
 
 if [ $? -eq 0 ]; then
