@@ -143,7 +143,7 @@ zvm_after_init_commands+=("[ -f \"$FZF_TAB_PLUGIN\" ] && source \"$FZF_TAB_PLUGI
 # That's what I've currently done
 
 # Setup serena MCP server if not already configured
-[ -x "$HOME/.local/share/chezmoi/executable_setup_serena_mcp.sh" ] && "$HOME/.local/share/chezmoi/executable_setup_serena_mcp.sh"
+[ -x "$HOME/.local/share/chezmoi/setup_serena_mcp.sh" ] && "$HOME/.local/share/chezmoi/setup_serena_mcp.sh"
 
 # # Load ANTHROPIC_API_KEY from 1Password if not already set
 # if [[ -z "$PERSONAL_ANTHROPIC_API_KEY" ]]; then
