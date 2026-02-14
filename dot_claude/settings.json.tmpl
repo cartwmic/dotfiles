@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__4_5v_mcp__analyze_image",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'BLOCKED: mcp__4_5v_mcp__analyze_image is disabled.' && exit 2"
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
