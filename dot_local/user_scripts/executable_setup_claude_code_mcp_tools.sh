@@ -57,6 +57,9 @@ log_info "Installing MCP servers..."
 # Add new servers below using add_mcp_server "name" command args...
 # ============================================================================
 
+# Basic Memory - local knowledge base via uvx
+add_mcp_server "basic-memory" claude mcp add -s user basic-memory -- uvx basic-memory mcp
+
 # Context7 - requires API key from 1Password
 CONTEXT7_API_KEY=$(get_op_secret "op://personal/context7 - api key/credential")
 if [ -n "$CONTEXT7_API_KEY" ]; then
