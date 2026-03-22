@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"Take a step back and analyze the length of the current conversation. If it's starting to get long and unwieldy, suggest to the user to summarize progress, write it to a markdown file, and start a new session. If the conversation gets to long and unwieldy, the responses the user gets and the actions performed by the you will be catastrophically detrimental to the users current work, overall project state, the way their day is going, and even their mental health. We don't want to harm the user.\""
+            "command": "echo \"Check the current Claude-exposed context usage before mentioning session resets. Only suggest that the user summarize progress, write it to a markdown file, and start a new session if either 200000 tokens have been used or at least 50% of the model's context window is already consumed. If neither threshold is met, do not mention starting a new session.\""
           },
           {
             "type": "command",
