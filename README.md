@@ -58,6 +58,50 @@ exec zsh
 
 - claude, claude-code-acp, vectorcode, mistral-vibe, mermaid-cli
 
+## Harness Config Adapters
+
+Canonical harness-agnostic configuration lives under:
+
+- `~/.local/share/agent-harness/canonical/skills/`
+- `~/.local/share/agent-harness/canonical/mcp/servers.json`
+
+These are the authoring sources of truth. Harness-specific adapters project them into supported harnesses.
+
+Current supported harnesses:
+
+- `claude`
+- `codex`
+
+Current supported configuration domains:
+
+- `skills`
+- `mcp`
+
+Apply all supported adapters:
+
+```bash
+~/.local/user_scripts/apply_harness_config.sh
+```
+
+Apply a single harness:
+
+```bash
+~/.local/user_scripts/apply_harness_config.sh claude
+~/.local/user_scripts/apply_harness_config.sh codex
+```
+
+Behavior:
+
+- Skills are linked into harness skill directories from the canonical `SKILL.md` bundles.
+- Claude MCP is generated as a managed setup script and applied through the Claude CLI when available.
+- Codex MCP is rendered into a managed block inside `~/.codex/config.toml`.
+
+Notes:
+
+- Harness-specific MCP secrets can be mapped in adapter metadata under `~/.local/share/agent-harness/adapters/<harness>/mcp-secrets.json`.
+- Secret-backed adapter metadata is resolved through the 1Password CLI via `op read`.
+- Top-level harness instruction files such as `AGENTS.md` and `CLAUDE.md` remain hand-maintained.
+
 ## Tool Management with mise
 
 mise handles version management for Node.js, Python, and Rust with automatic version switching:
