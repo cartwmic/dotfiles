@@ -1,0 +1,12 @@
+#!/bin/sh
+
+set -eu
+
+SCRIPT="$HOME/.local/user_scripts/apply_harness_config.sh"
+
+if [ ! -x "$SCRIPT" ]; then
+  echo "[apply_harness_config] INFO: Harness config adapter not found at $SCRIPT, skipping"
+  exit 0
+fi
+
+exec "$SCRIPT"
