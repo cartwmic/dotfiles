@@ -97,12 +97,15 @@ Behavior:
 - Skills are linked into harness skill directories from the canonical `SKILL.md` bundles.
 - Claude MCP is generated as a managed setup script and applied through the Claude CLI when available.
 - Codex MCP is rendered into a managed block inside `~/.codex/config.toml`.
+- Canonical MCP entries are authored in `dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl`.
 
 Notes:
 
 - Harness-specific MCP secrets can be mapped in adapter metadata under `~/.local/share/agent-harness/adapters/<harness>/mcp-secrets.json`.
 - Secret-backed adapter metadata is resolved through the 1Password CLI via `op read`.
 - Top-level harness instruction files such as `AGENTS.md` and `CLAUDE.md` remain hand-maintained.
+- `furi` is installed by the `mise` bootstrap task, and bootstrap registers and starts `ashwwwin/automation-mcp` so the canonical `furi` MCP entry works for both Claude and Codex after apply.
+- On macOS, `automation-mcp` also needs Accessibility and Screen Recording permissions in System Settings > Privacy & Security before its tools can fully control the machine.
 
 ## Tool Management with mise
 
