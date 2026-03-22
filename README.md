@@ -77,6 +77,8 @@ Current supported configuration domains:
 - `skills`
 - `mcp`
 
+Maintenance and extension documentation lives in [dot_local/share/agent-harness/README.md](./dot_local/share/agent-harness/README.md).
+
 Apply all supported adapters:
 
 ```bash
