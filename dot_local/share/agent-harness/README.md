@@ -65,20 +65,20 @@ Example HTTP server:
 }
 ```
 
-Example direct `bun` bridge:
+Example `furi` bridge:
 
 ```json
 {
   "mcpServers": {
-    "automation": {
-      "command": "bun",
-      "args": ["run", "/Users/example/.furikake/installed/ashwwwin/automation-mcp/index.ts", "--stdio"]
+    "furi": {
+      "command": "furi",
+      "args": ["connect"]
     }
   }
 }
 ```
 
-For `ashwwwin/automation-mcp`, this repo manages the bridge in `canonical/mcp/servers.json.tmpl` and provisions the backing checkout directly through `dot_config/mise/config.toml`.
+For `ashwwwin/automation-mcp`, this repo manages the bridge in `canonical/mcp/servers.json.tmpl` and installs, registers, and starts the backing package through `dot_config/mise/config.toml`.
 
 On macOS, remember to grant Accessibility and Screen Recording permissions in System Settings > Privacy & Security for the process path running `automation-mcp`, or the server will start but desktop automation will be limited.
 
