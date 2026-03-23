@@ -104,7 +104,7 @@ Notes:
 - Harness-specific MCP secrets can be mapped in adapter metadata under `~/.local/share/agent-harness/adapters/<harness>/mcp-secrets.json`.
 - Secret-backed adapter metadata is resolved through the 1Password CLI via `op read`.
 - Top-level harness instruction files such as `AGENTS.md` and `CLAUDE.md` remain hand-maintained.
-- `ashwwwin/automation-mcp` is provisioned directly by the `mise` bootstrap task under `~/.furikake/installed/ashwwwin/automation-mcp`, and the canonical MCP entry runs it with `bun`.
+- `furi` is installed by the `mise` bootstrap task, and bootstrap registers and starts `ashwwwin/automation-mcp` so the canonical `furi` MCP entry works for both Claude and Codex after apply.
 - On macOS, `automation-mcp` also needs Accessibility and Screen Recording permissions in System Settings > Privacy & Security before its tools can fully control the machine.
 
 ## Tool Management with mise
