@@ -7,10 +7,12 @@
         "mcp"
       ]
     },
-    "furi": {
-      "command": "furi",
+    "automation": {
+      "command": "bun",
       "args": [
-        "connect"
+        "run",
+        "{{ .chezmoi.homeDir }}/.furikake/installed/ashwwwin/automation-mcp/index.ts",
+        "--stdio"
       ]
     },
     "context7": {

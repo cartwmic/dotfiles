@@ -162,49 +162,26 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 '''
 
-[tasks."install-furi"]
-description = "Install furi and register automation-mcp"
+[tasks."install-automation-mcp"]
+description = "Install automation-mcp for direct bun-based MCP use"
 run = '''
-if ! command -v furi >/dev/null 2>&1; then
-  if ! command -v bun >/dev/null 2>&1; then
-    curl -fsSL https://bun.sh/install | bash
-    export PATH="$HOME/.bun/bin:$PATH"
-  fi
-
-  if ! command -v bun >/dev/null 2>&1; then
-    echo "ERROR: bun not found after installation"
-    exit 1
-  fi
-
-  FURI_SRC_DIR="$HOME/.local/share/furi/src"
-  mkdir -p "$(dirname "$FURI_SRC_DIR")"
-
-  if [ ! -d "$FURI_SRC_DIR/.git" ]; then
-    git clone --depth 1 https://github.com/ashwwwin/furi "$FURI_SRC_DIR"
-  fi
-
-  mkdir -p "$HOME/.local/bin"
-  cd "$FURI_SRC_DIR"
-  bun install
-  bun run compile
-  cp "$FURI_SRC_DIR/dist/furi" "$HOME/.local/bin/furi"
+if ! command -v bun >/dev/null 2>&1; then
+  curl -fsSL https://bun.sh/install | bash
+  export PATH="$HOME/.bun/bin:$PATH"
 fi
 
-if ! command -v furi >/dev/null 2>&1; then
-  export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
+if ! command -v bun >/dev/null 2>&1; then
+  export PATH="$HOME/.bun/bin:$PATH"
 fi
 
-if ! command -v furi >/dev/null 2>&1; then
-  echo "ERROR: furi not found after installation"
+if ! command -v bun >/dev/null 2>&1; then
+  echo "ERROR: bun not found after installation"
   exit 1
 fi
 
 AUTOMATION_MCP_DIR="$HOME/.furikake/installed/ashwwwin/automation-mcp"
 mkdir -p "$(dirname "$AUTOMATION_MCP_DIR")"
 
-# furi add currently fails for this repo because automation-mcp ships an
-# out-of-sync package-lock.json that breaks the npm ci path used by furi.
-# Install and register it manually until upstream fixes that path.
 if [ ! -d "$AUTOMATION_MCP_DIR/.git" ]; then
   git clone --depth 1 https://github.com/ashwwwin/automation-mcp "$AUTOMATION_MCP_DIR"
 fi
@@ -213,103 +190,39 @@ cd "$AUTOMATION_MCP_DIR"
 bun install
 npm rebuild node-mac-permissions
 
-cat > "$AUTOMATION_MCP_DIR/furi-start.sh" <<'SH'
-#!/bin/sh
-set -eu
-exec bun run index.ts --stdio
-SH
-chmod +x "$AUTOMATION_MCP_DIR/furi-start.sh"
-
-cat > "$AUTOMATION_MCP_DIR/furi-transport-wrapper.mjs" <<'JS'
-#!/usr/bin/env node
-import { spawn } from "child_process";
-import fs from "fs";
-import net from "net";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const socketPath = path.join(process.env.HOME, ".furikake", "transport", "furi_ashwwwin-automation-mcp.sock");
-const wrapperArgs = process.argv.slice(2);
-const originalCommand = wrapperArgs.length > 0 ? wrapperArgs.join(" ") : "./furi-start.sh";
-
-const transportDir = path.dirname(socketPath);
-if (!fs.existsSync(transportDir)) {
-  fs.mkdirSync(transportDir, { recursive: true });
-}
-
-if (fs.existsSync(socketPath)) {
-  fs.unlinkSync(socketPath);
-}
-
-const mcpProcess = spawn("sh", ["-c", originalCommand], {
-  cwd: __dirname,
-  env: { ...process.env, NODE_OPTIONS: "--no-warnings" },
-  stdio: "pipe",
-});
-
-mcpProcess.stdout.on("data", (data) => process.stdout.write(data));
-mcpProcess.stderr.on("data", (data) => process.stderr.write(data));
-process.stdin.pipe(mcpProcess.stdin);
-
-mcpProcess.stdout.on("error", () => {});
-mcpProcess.stdin.on("error", () => {});
-
-const server = net.createServer((socket) => {
-  socket.on("error", () => {});
-  socket.pipe(mcpProcess.stdin, { end: false });
-  mcpProcess.stdout.pipe(socket, { end: false });
-});
-
-server.listen(socketPath, () => {
-  fs.chmodSync(socketPath, "666");
-});
-
-const cleanup = () => {
-  if (fs.existsSync(socketPath)) {
-    fs.unlinkSync(socketPath);
-  }
-  if (!mcpProcess.killed) {
-    mcpProcess.kill();
-  }
-};
-
-process.on("SIGINT", cleanup);
-process.on("SIGTERM", cleanup);
-mcpProcess.on("exit", (code) => {
-  cleanup();
-  process.exit(code || 0);
-});
-JS
-chmod +x "$AUTOMATION_MCP_DIR/furi-transport-wrapper.mjs"
-
 python3 - <<'PY'
-import json
 import pathlib
 
-home = pathlib.Path.home()
-config_path = home / ".furikake" / "configuration.json"
-config = {}
+index_path = pathlib.Path.home() / ".furikake" / "installed" / "ashwwwin" / "automation-mcp" / "index.ts"
+source = index_path.read_text()
 
-if config_path.exists() and config_path.read_text().strip():
-    config = json.loads(config_path.read_text())
+if "const emitStatus = (...args: any[]) => {" not in source:
+    source = source.replace(
+        'import { screenInfo } from "./screenInfo";\n',
+        'import { screenInfo } from "./screenInfo";\n\n'
+        'const emitStatus = (...args: any[]) => {\n'
+        '  process.stderr.write(\n'
+        '    `${args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" ")}\\n`\n'
+        '  );\n'
+        '};\n',
+    )
 
-config.setdefault("installed", {})
-config["installed"]["ashwwwin/automation-mcp"] = {
-    "run": "node furi-transport-wrapper.mjs",
-    "source": str(home / ".furikake" / "installed" / "ashwwwin" / "automation-mcp"),
-    "socketPath": str(home / ".furikake" / "transport" / "furi_ashwwwin-automation-mcp.sock"),
-    "originalRun": "./furi-start.sh",
-    "transportWrapper": True,
+replacements = {
+    '  console.log("✅ nutjs loaded successfully");': '  emitStatus("✅ nutjs loaded successfully");',
+    '  console.warn("⚠️ nutjs not fully available:", error.message);': '  emitStatus("⚠️ nutjs not fully available:", error.message);',
+    '  console.log(\n    "📋 Basic screenshot functionality will still work via macOS screencapture"\n  );': '  emitStatus(\n    "📋 Basic screenshot functionality will still work via macOS screencapture"\n  );',
+    "    console.log(\n      '⚠️ Please enable Accessibility (\"Control your Mac\") for this app in System Settings > Privacy & Security > Accessibility.'\n    );": "    emitStatus(\n      '⚠️ Please enable Accessibility (\"Control your Mac\") for this app in System Settings > Privacy & Security > Accessibility.'\n    );",
+    '    console.log(\n      "⚠️ Please enable Screen Recording for this app in System Settings > Privacy & Security > Screen Recording."\n    );': '    emitStatus(\n      "⚠️ Please enable Screen Recording for this app in System Settings > Privacy & Security > Screen Recording."\n    );',
+    '  console.warn("⚠️ macOS permissions module not available:", error.message);': '  emitStatus("⚠️ macOS permissions module not available:", error.message);',
+    "    originalConsoleLog(...args);": "    emitStatus(...args);",
+    "console.warn = () => {}; // Suppress all warning logs from FastMCP": "console.warn = (...args: any[]) => {\n  if (args[0] && typeof args[0] === \"string\" && /^[🚀📋🔐⚠️✅]/.test(args[0])) {\n    emitStatus(...args);\n  }\n};",
 }
 
-config_path.write_text(json.dumps(config, indent=2) + "\n")
-PY
+for old, new in replacements.items():
+    source = source.replace(old, new)
 
-if ! furi status ashwwwin/automation-mcp >/dev/null 2>&1; then
-  furi start ashwwwin/automation-mcp
-fi
+index_path.write_text(source)
+PY
 '''
 
 [tasks."install-antidote"]
@@ -488,7 +401,7 @@ depends = [
   "install-sdkman",
   "install-kitty",
   "install-claude",
-  "install-furi",
+  "install-automation-mcp",
   "install-claude-code-acp",
   "install-antidote",
   "install-fzf-tab",
