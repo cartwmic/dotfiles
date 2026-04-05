@@ -3,3 +3,4 @@
 *.diff
 CLAUDE.md
 docs/
+.playwright-mcp/
