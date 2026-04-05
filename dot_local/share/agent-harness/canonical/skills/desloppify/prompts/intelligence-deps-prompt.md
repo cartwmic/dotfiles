@@ -83,5 +83,5 @@ Groups of modules that are tightly coupled to each other but loosely coupled to 
 - Work at module/directory level for large projects, file level for small ones
 - If project has a package.json, Cargo.toml, go.mod etc., include external dep analysis
 - Use existing tooling if available (e.g., `madge` for JS, `pydeps` for Python)
-- Report structure, don't judge — analysis comes in later phases
+- **DATA ONLY — do NOT suggest fixes, improvements, or refactoring actions.** Report the dependency structure as-is. Judgment and recommendations happen in later phases, not here.
 ```
