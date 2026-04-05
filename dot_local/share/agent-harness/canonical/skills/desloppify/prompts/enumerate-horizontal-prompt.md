@@ -21,11 +21,13 @@ Horizontal slices are cross-cutting concerns and abstraction layers that span mu
 Examples: "Error Handling", "Data Access Layer", "Authentication Middleware", "Logging", "Configuration Management"
 
 **How to find them:**
-1. Look at what's shared across vertical slices — utilities, middleware, base classes
-2. Identify architectural layers from the dependency graph
-3. Identify cross-cutting concerns from patterns in the code
-4. Look for high fan-in modules (many things depend on them)
-5. Note informal patterns used consistently but not formalized
+1. **Read existing project docs first** — check AGENTS.md, CLAUDE.md, README, ADRs for documented architectural patterns, layer rules, or design principles. These are high-confidence horizontal slices.
+2. Look at what's shared across vertical slices — utilities, middleware, base classes
+3. Identify architectural layers from the dependency graph
+4. Identify cross-cutting concerns from patterns in the code
+5. Look for high fan-in modules (many things depend on them)
+6. Note informal patterns used consistently but not formalized
+7. **Identify overarching organizational patterns** — if multiple layers follow a directional dependency rule (e.g., clean architecture, hexagonal architecture, layered architecture), name that pattern as its own horizontal slice. Don't just list the individual layers — also capture the *relationship rule* that governs them.
 
 ## Use Intelligence Data
 
@@ -40,7 +42,7 @@ For each slice:
 
 ```markdown
 ## Slice: [Name]
-- **Type:** [Architectural layer / Cross-cutting concern / Shared infrastructure / Pattern]
+- **Type:** [Architectural pattern / Architectural layer / Cross-cutting concern / Shared infrastructure / Informal pattern]
 - **Description:** [What this concern/layer is responsible for]
 - **Modules/files:** [Where it lives]
 - **Vertical slices touched:** [Which features depend on this]
