@@ -87,4 +87,7 @@ Large files with no recent commits. Old code that may be stale.
 - If the repo is very large, sample rather than exhaustive analysis
 - Focus on source code, not generated files, build artifacts, or lock files
 - **DATA ONLY — do NOT suggest fixes, improvements, or refactoring actions.** Report what the data shows. Analysis and recommendations happen in later phases, not here.
+
+## When Complete
+The orchestrator will merge your output into `docs/desloppify/intelligence.md`. Return your structured report in the format above. Do not write the file yourself.
 ```

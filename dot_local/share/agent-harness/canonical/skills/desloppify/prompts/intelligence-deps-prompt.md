@@ -84,4 +84,7 @@ Groups of modules that are tightly coupled to each other but loosely coupled to 
 - If project has a package.json, Cargo.toml, go.mod etc., include external dep analysis
 - Use existing tooling if available (e.g., `madge` for JS, `pydeps` for Python)
 - **DATA ONLY — do NOT suggest fixes, improvements, or refactoring actions.** Report the dependency structure as-is. Judgment and recommendations happen in later phases, not here.
+
+## When Complete
+The orchestrator will merge your output into `docs/desloppify/intelligence.md`. Return your structured report in the format above. Do not write the file yourself.
 ```

@@ -70,4 +70,7 @@ If git history is unavailable, note this and focus on structural signals only.
 - If intelligence data has gaps (no git history, no coverage data), acknowledge and work with what's available
 - Focus on relationships and structure, not individual code issues
 - Keep it concise — this artifact is read by many downstream subagents
+
+## When Complete
+The orchestrator will validate your draft with the user and write `docs/desloppify/holistic-view.md`. Return your structured draft in the format above. Do not write the file yourself.
 ```
