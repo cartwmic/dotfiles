@@ -24,18 +24,16 @@ For each slice (vertical and horizontal), dispatch a subagent using `./prompts/m
 
 **Parallelism:** Dispatch subagents in batches of **3 at a time** (configurable — ask the user during Phase 1 or before Phase 6 dispatch). Do not dispatch all slices simultaneously. Wait for a batch to complete before dispatching the next.
 
-**Context per subagent — ORCHESTRATOR PREPARES, subagent does NOT read artifacts from disk:**
+**Context per subagent:** The orchestrator prepares the prompt by pasting the slice description, then the subagent reads artifacts from disk:
+- The specific slice being analyzed (pasted into the prompt by the orchestrator)
+- `config.md` — analysis criteria (subagent reads from disk)
+- `intelligence.md` — hotspot, coupling, coverage data (subagent reads from disk)
+- `holistic-view.md` — cross-referencing (subagent reads from disk)
+- The opposite enumeration set — vertical subagents get `horizontal-slices.md` and vice versa (subagent reads from disk)
+- If config lists convention docs (AGENTS.md, etc.), subagent should read those too
+- The actual source code for files listed in the slice description
 
-The orchestrator extracts and injects only the relevant context into each subagent's prompt. This is critical for token efficiency — do NOT tell subagents to read full artifact files.
-
-For each subagent, the orchestrator prepares:
-1. **Slice description** — paste the full slice entry from the enumeration artifact
-2. **Analysis criteria** — paste the criteria section from `config.md` (once, same for all)
-3. **Relevant intelligence excerpt** — extract ONLY the rows/entries from `intelligence.md` that mention this slice's files (hotspot entries, coupling pairs, coverage data). Do NOT paste the full intelligence file.
-4. **Relevant holistic context** — 2-3 sentences from `holistic-view.md` about where this slice sits in the overall health picture. Do NOT paste the full holistic view.
-5. **Opposite enumeration summary** — for a vertical slice, list just the horizontal slice NAMES that touch it (from the enumeration). For a horizontal slice, list just the vertical slice NAMES. Do NOT paste full enumeration files.
-
-The subagent then reads only the **actual source code** for the files listed in the slice description. This is the only disk reading the subagent should do.
+Subagents need the full artifacts to do meaningful cross-reference analysis. The throttled batch size (not context starvation) is what controls cost.
 
 ## What Each Subagent Analyzes
 
