@@ -9,12 +9,22 @@ Identify systemic patterns, set-level coupling, and cross-set insights across al
 
 ## Input
 
-Read these artifacts from `docs/desloppify/`:
-- `config.md` — Analysis criteria
-- `holistic-view.md` — Unified codebase understanding
-- All Phase 6 vertical analyses: `docs/desloppify/analysis/vertical-*.md`
-- `horizontal-slices.md` — Horizontal slice enumeration
-- Phase 6 horizontal analysis summaries: read only the **Summary** section from each `docs/desloppify/analysis/horizontal-*.md` (not full text — keep context lean)
+All context is provided below by the orchestrator. **Do NOT read artifact files from `docs/desloppify/`** — everything you need is in this prompt.
+
+**Analysis criteria:**
+[ORCHESTRATOR: Paste criteria from config.md]
+
+**Holistic context:**
+[ORCHESTRATOR: Paste relevant sections from holistic-view.md]
+
+**Vertical slice Phase 6 analyses (Findings + Summary per slice):**
+[ORCHESTRATOR: Paste Findings and Summary sections from each analysis/vertical-*.md]
+
+**Horizontal slice summaries:**
+[ORCHESTRATOR: Paste Summary section only from each analysis/horizontal-*.md]
+
+**Horizontal slice enumeration (names and descriptions):**
+[ORCHESTRATOR: Paste from horizontal-slices.md]
 
 ## Analysis to Perform
 
