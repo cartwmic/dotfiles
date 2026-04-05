@@ -114,4 +114,11 @@ If an improvement can't be deployed independently, split it into independently-d
 - Quick wins section is critical — give the user easy wins to build momentum
 - Be honest about effort estimates — underestimating effort is worse than overestimating
 - If two improvements conflict, explain the trade-off clearly
+
+## When Complete
+Write your full output to `docs/desloppify/desloppify-plan-draft.md`. Return only a brief summary to the orchestrator:
+- Total improvements: N (H high-impact, M medium, L low)
+- Quick wins: N
+- Deferred candidates: N
+- Any blockers or issues encountered
 ```

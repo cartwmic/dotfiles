@@ -119,4 +119,13 @@ Compare the plan against all analysis outputs:
 - If the plan is solid, say so — don't manufacture problems
 - Focus on issues that would actually change the plan, not theoretical concerns
 - Your goal is to make the plan more reliable, not to prove it's bad
+
+## When Complete
+Write your full review to `docs/desloppify/review-contextual.md`. Return only a brief summary to the orchestrator:
+- Deduplication issues: N
+- Evidence gaps: N
+- Dropped findings: N
+- Scoring inconsistencies: N
+- Dependency issues: N
+- Overall plan rigor: Strong/Adequate/Needs work
 ```

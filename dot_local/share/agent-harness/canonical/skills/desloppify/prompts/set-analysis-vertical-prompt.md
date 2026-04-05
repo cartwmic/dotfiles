@@ -79,4 +79,11 @@ Look across all per-member analyses for:
 - Every pattern must cite evidence from at least 2 member analyses
 - Read horizontal analysis summaries only (Summary section) — not full text
 - Distinguish between "inconsistent" and "wrong" — inconsistency is only bad if consistency would be better
+
+## When Complete
+Write your full output to `docs/desloppify/set-analysis-vertical.md`. Return only a brief summary to the orchestrator:
+- Systemic patterns found: N
+- Set health: Strong/Mixed/Weak
+- Top set-level improvement (one sentence)
+- Any blockers or issues encountered
 ```

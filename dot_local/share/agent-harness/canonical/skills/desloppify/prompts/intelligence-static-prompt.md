@@ -103,4 +103,7 @@ find . -name '*.{ext}' -not -path '*/test*' -not -path '*/node_modules/*' -exec 
 - Don't install new tools or add new configs
 - **DATA ONLY — do NOT suggest fixes, improvements, or refactoring actions.** Capture raw numbers and tool output. Interpretation and recommendations happen in later phases, not here.
 - If tests take too long, use --dry-run or skip coverage
+
+## When Complete
+The orchestrator will merge your output into `docs/desloppify/intelligence.md`. Return your structured report in the format above. Do not write the file yourself.
 ```

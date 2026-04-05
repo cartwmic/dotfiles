@@ -88,4 +88,12 @@ For this slice, identify:
 - Don't list issues you're not confident about — flag uncertainty explicitly
 - Keep findings actionable — "this is bad" without a suggestion is not useful
 - If a slice has no findings, say so and explain why (either it's genuinely clean or your analysis may be incomplete)
+
+## When Complete
+Write your full output to the artifact file (the orchestrator will tell you the path, e.g. `docs/desloppify/analysis/vertical-auth.md`). Return only a brief summary to the orchestrator:
+- Slice name and type
+- Total findings: N (H high, M medium, L low)
+- Risk profile: High/Medium/Low
+- Top finding (one sentence)
+- Any blockers or issues encountered
 ```

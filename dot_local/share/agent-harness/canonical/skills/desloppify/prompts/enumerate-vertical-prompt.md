@@ -58,4 +58,7 @@ For each slice:
 - If hotspot data is unavailable (no git history), note "Unknown" and move on
 - Adapt entry point identification to the project type (app, library, infrastructure, etc.)
 - **ENUMERATION ONLY — do NOT suggest fixes, improvements, or refactoring actions.** Map what exists and where. Evaluation happens in Phase 6+, not here.
+
+## When Complete
+The orchestrator will refine your draft with the user and write `docs/desloppify/vertical-slices.md`. Return your structured draft in the format above. Do not write the file yourself.
 ```

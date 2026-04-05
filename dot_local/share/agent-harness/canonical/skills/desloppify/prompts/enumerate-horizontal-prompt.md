@@ -57,4 +57,7 @@ For each slice:
 - If hotspot/fan-in data is unavailable, note "Unknown" and move on
 - Include informal patterns (conventions followed by most but not all code)
 - **ENUMERATION ONLY — do NOT suggest fixes, improvements, or refactoring actions.** Map what exists and where. Evaluation happens in Phase 6+, not here.
+
+## When Complete
+The orchestrator will refine your draft with the user and write `docs/desloppify/horizontal-slices.md`. Return your structured draft in the format above. Do not write the file yourself.
 ```

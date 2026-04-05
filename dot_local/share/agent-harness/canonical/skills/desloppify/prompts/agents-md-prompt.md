@@ -94,4 +94,11 @@ Produce a complete draft from scratch.
 - Don't duplicate README content — reference it
 - Don't include transient information (current sprint, recent changes)
 - Convention recommendations from Phase 8 holistic analysis should be incorporated as prescriptive conventions
+
+## When Complete
+Write your full draft to `docs/desloppify/agents-md-draft.md`. The orchestrator will present it to the user for review. Return only a brief summary to the orchestrator:
+- Based on existing doc: Yes/No
+- Sections: N
+- Total lines: ~N
+- Key changes from existing (if applicable): [brief list]
 ```

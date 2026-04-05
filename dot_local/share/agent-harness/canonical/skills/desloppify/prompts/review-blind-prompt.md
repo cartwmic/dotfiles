@@ -89,4 +89,12 @@ What would you flag if you were auditing this codebase for the first time?
 - If you agree with the plan, say so — don't manufacture objections
 - Focus on substantive issues, not nitpicks
 - You're helping improve the plan, not blocking it
+
+## When Complete
+Write your full review to `docs/desloppify/review-blind.md`. Return only a brief summary to the orchestrator:
+- Coverage gaps found: N
+- Unjustified items: N
+- Prioritization disagreements: N
+- New findings: N
+- Overall plan quality: Strong/Adequate/Needs work
 ```

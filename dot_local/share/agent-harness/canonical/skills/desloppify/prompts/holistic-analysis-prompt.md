@@ -114,4 +114,13 @@ These feed directly into Phase 12 (agents.md draft).
 - Be honest about architectural fitness — "adequate" is a valid assessment
 - Distinguish between "nice to have" and "architecturally important"
 - Convention recommendations should be actionable, not aspirational
+
+## When Complete
+Write your full output to `docs/desloppify/holistic-analysis.md`. Return only a brief summary to the orchestrator:
+- Architectural fitness: Strong/Adequate/Weak
+- Cross-cutting improvements: N
+- Critical risks: N
+- Health trajectory: Improving/Stable/Degrading
+- Top priority (one sentence)
+- Any blockers or issues encountered
 ```
