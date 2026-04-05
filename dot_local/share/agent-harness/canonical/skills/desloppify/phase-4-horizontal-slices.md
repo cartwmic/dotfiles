@@ -36,6 +36,7 @@ Show the draft enumeration. For each slice, show:
 Ask the user to validate and extend, one question at a time:
 
 - "Does this capture the major cross-cutting concerns? What am I missing?"
+- "Does the project follow an overarching architectural pattern (e.g., clean architecture, hexagonal, layered)? Is it captured as its own slice, or just fragmented across individual layer slices?"
 - "I've categorized X as an architectural layer — is that how you think about it?"
 - "The dependency data shows Y is depended on by almost everything — is that intentional?"
 - "Are there informal patterns (not enforced, but conventionally followed) that I should include?"
@@ -53,7 +54,7 @@ Write `docs/desloppify/horizontal-slices.md`:
 # Horizontal Slices
 
 ## Slice: [Name]
-- **Type:** [Architectural layer / Cross-cutting concern / Shared infrastructure / Pattern]
+- **Type:** [Architectural pattern / Architectural layer / Cross-cutting concern / Shared infrastructure / Informal pattern]
 - **Description:** [What this concern/layer is responsible for]
 - **Modules/files:** [Where it lives]
 - **Vertical slices touched:** [Which features depend on this]
