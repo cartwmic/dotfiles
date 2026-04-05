@@ -45,7 +45,7 @@ For each slice:
 - **Modules/files:** [Where it lives]
 - **Vertical slices touched:** [Which features depend on this]
 - **Fan-in:** [How many modules depend on this, if data available]
-- **Consistency:** [Applied uniformly or patchily across the codebase?]
+- **Coverage:** [Which parts of the codebase use this concern vs. which don't — factual observation only]
 - **Confidence:** [High/Medium/Low — how sure you are about boundaries]
 - **Open questions:** [Anything ambiguous the user should clarify]
 ```
@@ -56,4 +56,5 @@ For each slice:
 - Use the intelligence data, don't just read directory names
 - If hotspot/fan-in data is unavailable, note "Unknown" and move on
 - Include informal patterns (conventions followed by most but not all code)
+- **ENUMERATION ONLY — do NOT suggest fixes, improvements, or refactoring actions.** Map what exists and where. Evaluation happens in Phase 6+, not here.
 ```

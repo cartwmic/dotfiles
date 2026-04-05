@@ -39,6 +39,8 @@ Ask the user to validate and extend, one question at a time:
 - "I flagged X as high-churn — does that match your experience?"
 - "The change coupling data suggests A and B are entangled — is that intentional?"
 
+**Stay focused on enumeration — if the user or subagent starts identifying problems to fix, redirect: "Good observation — I'll capture that for Phase 6 analysis. For now, let's finish mapping what exists."**
+
 Iterate until the user confirms the enumeration is complete.
 
 ## Step 4: Write Artifact
