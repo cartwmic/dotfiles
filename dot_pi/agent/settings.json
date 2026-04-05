@@ -11,7 +11,6 @@
   "packages": [
     "npm:@marckrenn/pi-sub-bar",
     "npm:pi-codex-web-search",
-    "npm:@malinamnam/pi-phone",
     "npm:pi-mcp-adapter",
     "npm:pi-subagents"
   ],
