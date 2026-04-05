@@ -22,16 +22,20 @@ For each slice (vertical and horizontal), dispatch a subagent using `./prompts/m
 
 **Before dispatching:** The orchestrator must prepare each prompt by pasting the specific slice entry from the enumeration artifact into the `[ORCHESTRATOR: ...]` placeholder in the prompt template. Each subagent gets a customized copy of the prompt with its slice description filled in.
 
-**Parallelism:** Dispatch multiple subagents concurrently. Group by set — all vertical slice analyses can run in parallel, all horizontal slice analyses can run in parallel. Both sets can also run in parallel with each other.
+**Parallelism:** Dispatch subagents in batches of **3 at a time** (configurable — ask the user during Phase 1 or before Phase 6 dispatch). Do not dispatch all slices simultaneously. Wait for a batch to complete before dispatching the next.
 
-**Context per subagent:** Each subagent receives:
-- The specific slice being analyzed (pasted into the prompt by the orchestrator)
-- The full `config.md` (criteria and verification methods; if config lists convention docs, subagent should read those too)
-- The `intelligence.md` (for hotspot, coupling, coverage data relevant to this slice)
-- The `holistic-view.md` (for cross-referencing)
-- The opposite enumeration set (vertical subagents get `horizontal-slices.md` and vice versa)
+**Context per subagent — ORCHESTRATOR PREPARES, subagent does NOT read artifacts from disk:**
 
-**Token efficiency note:** For large codebases, consider extracting only the relevant sections of `intelligence.md` per slice (e.g., hotspot data for this slice's files only) rather than passing the full intelligence artifact to every subagent.
+The orchestrator extracts and injects only the relevant context into each subagent's prompt. This is critical for token efficiency — do NOT tell subagents to read full artifact files.
+
+For each subagent, the orchestrator prepares:
+1. **Slice description** — paste the full slice entry from the enumeration artifact
+2. **Analysis criteria** — paste the criteria section from `config.md` (once, same for all)
+3. **Relevant intelligence excerpt** — extract ONLY the rows/entries from `intelligence.md` that mention this slice's files (hotspot entries, coupling pairs, coverage data). Do NOT paste the full intelligence file.
+4. **Relevant holistic context** — 2-3 sentences from `holistic-view.md` about where this slice sits in the overall health picture. Do NOT paste the full holistic view.
+5. **Opposite enumeration summary** — for a vertical slice, list just the horizontal slice NAMES that touch it (from the enumeration). For a horizontal slice, list just the vertical slice NAMES. Do NOT paste full enumeration files.
+
+The subagent then reads only the **actual source code** for the files listed in the slice description. This is the only disk reading the subagent should do.
 
 ## What Each Subagent Analyzes
 

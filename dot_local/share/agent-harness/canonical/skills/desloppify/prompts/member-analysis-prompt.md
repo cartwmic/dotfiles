@@ -9,16 +9,24 @@ Analyze the slice described below against the configured criteria, cross-referen
 
 ## Input
 
+All context is provided below by the orchestrator. **Do NOT read artifact files from `docs/desloppify/`** — everything you need is in this prompt.
+
 **Slice to analyze:**
-[ORCHESTRATOR: Paste the full slice entry from the enumeration artifact here before dispatching]
+[ORCHESTRATOR: Paste the full slice entry from the enumeration artifact]
 
-**Read these artifacts from `docs/desloppify/`:**
-- `config.md` — Analysis criteria and verification methods
-- `intelligence.md` — Git history, dependency, and static analysis data
-- `holistic-view.md` — Unified codebase understanding
-- `vertical-slices.md` and `horizontal-slices.md` — Both enumeration sets
+**Analysis criteria:**
+[ORCHESTRATOR: Paste the criteria section from config.md]
 
-**Read the actual source code** for the files listed in the slice description.
+**Intelligence excerpt (this slice only):**
+[ORCHESTRATOR: Paste only the hotspot entries, coupling pairs, and coverage data relevant to this slice's files]
+
+**Holistic context (this slice only):**
+[ORCHESTRATOR: 2-3 sentences from holistic-view.md about where this slice fits]
+
+**Related slices from the opposite set:**
+[ORCHESTRATOR: List the names of horizontal slices this vertical touches, or vice versa]
+
+**Read the actual source code** for the files listed in the slice description. This is the only disk reading you should do.
 
 ## Analysis to Perform
 
