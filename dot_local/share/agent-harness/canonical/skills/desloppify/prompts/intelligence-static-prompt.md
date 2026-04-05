@@ -101,6 +101,6 @@ find . -name '*.{ext}' -not -path '*/test*' -not -path '*/node_modules/*' -exec 
 - Only run tooling the project already has configured
 - If a tool isn't configured, note its absence and move on
 - Don't install new tools or add new configs
-- Capture raw numbers — interpretation comes in later phases
+- **DATA ONLY — do NOT suggest fixes, improvements, or refactoring actions.** Capture raw numbers and tool output. Interpretation and recommendations happen in later phases, not here.
 - If tests take too long, use --dry-run or skip coverage
 ```

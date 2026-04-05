@@ -59,10 +59,12 @@ After all subagents complete, merge their outputs into `docs/desloppify/intellig
 [Subagent 3 output]
 
 ## Key Signals
-[Orchestrator summary: top hotspots, critical coupling, major gaps]
+[Orchestrator summary: top 5 hotspots by churn, strongest coupling pairs, notable coverage gaps — DATA ONLY, no recommendations or fixes]
 ```
 
-Present the Key Signals summary to the user before proceeding. Ask: "Anything surprising here? Anything you expected to see that's missing?"
+Present the Key Signals summary to the user before proceeding. **Do NOT suggest fixes, improvements, or next steps based on the data.** This phase is data gathering only — interpretation happens in Phases 6-8.
+
+Ask: "Anything surprising here? Anything you expected to see that's missing?"
 
 ## Graceful Degradation
 
