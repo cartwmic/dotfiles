@@ -57,4 +57,5 @@ For each slice:
 - Use the intelligence data, don't just read directory names
 - If hotspot data is unavailable (no git history), note "Unknown" and move on
 - Adapt entry point identification to the project type (app, library, infrastructure, etc.)
+- **ENUMERATION ONLY — do NOT suggest fixes, improvements, or refactoring actions.** Map what exists and where. Evaluation happens in Phase 6+, not here.
 ```

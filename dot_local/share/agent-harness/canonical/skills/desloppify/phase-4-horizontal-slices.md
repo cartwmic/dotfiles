@@ -41,6 +41,8 @@ Ask the user to validate and extend, one question at a time:
 - "Are there informal patterns (not enforced, but conventionally followed) that I should include?"
 - "Any concerns or layers that exist in some parts of the codebase but not others?"
 
+**Stay focused on enumeration — if the user or subagent starts identifying problems to fix, redirect: "Good observation — I'll capture that for Phase 6 analysis. For now, let's finish mapping what exists."**
+
 Iterate until the user confirms the enumeration is complete.
 
 ## Step 4: Write Artifact
