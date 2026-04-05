@@ -65,7 +65,8 @@ If git history is unavailable, note this and focus on structural signals only.
 ```
 
 ## Constraints
-- This is a synthesis, not an analysis — connect dots between slices, don't evaluate code quality yet (that's Phase 6+)
+- **SYNTHESIS ONLY — do NOT suggest fixes, improvements, or refactoring actions.** Describe how the codebase fits together. Evaluation and recommendations happen in Phases 6-8, not here.
+- This is a map, not a diagnosis — connect dots between slices, don't judge code quality
 - If intelligence data has gaps (no git history, no coverage data), acknowledge and work with what's available
 - Focus on relationships and structure, not individual code issues
 - Keep it concise — this artifact is read by many downstream subagents
