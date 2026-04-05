@@ -1,0 +1,20 @@
+{
+  "lastChangelogVersion": "0.65.0",
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-opus-4-6",
+  "defaultThinkingLevel": "medium",
+  "enabledModels": [
+    "openai-codex/gpt-5.4",
+    "anthropic/claude-opus-4-6",
+    "anthropic/claude-sonnet-4-6"
+  ],
+  "packages": [
+    "npm:@marckrenn/pi-sub-bar",
+    "npm:pi-codex-web-search",
+    "npm:@malinamnam/pi-phone",
+    "npm:pi-mcp-adapter"
+  ],
+  "compaction": {
+    "enabled": false
+  }
+}
