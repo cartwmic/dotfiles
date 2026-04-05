@@ -10,6 +10,8 @@
 
 Automated data gathering that feeds all subsequent phases. Dispatch up to three parallel subagents, then merge their outputs into a single intelligence artifact.
 
+**Model selection:** Intelligence gathering is mechanical — run commands, format output. A **cheaper/faster model** is appropriate here.
+
 ## Subagents to Dispatch
 
 ### 1. Git History Analysis

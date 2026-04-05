@@ -24,6 +24,8 @@ For each slice (vertical and horizontal), dispatch a subagent using `./prompts/m
 
 **Parallelism:** Dispatch subagents in batches of **3 at a time** (configurable — ask the user during Phase 1 or before Phase 6 dispatch). Do not dispatch all slices simultaneously. Wait for a batch to complete before dispatching the next.
 
+**Model selection:** Phase 6 is the highest-volume, most mechanical phase — subagents apply criteria checklists to code and list findings. A **cheaper/faster model** is appropriate here (e.g., Sonnet-class instead of Opus-class, GPT-4o-mini instead of GPT-4o). Ask the user which model to use for Phase 6 subagents before dispatching. Reserve stronger models for Phases 8 and 10 where judgment matters most.
+
 **Context per subagent:** The orchestrator prepares the prompt by pasting the slice description, then the subagent reads artifacts from disk:
 - The specific slice being analyzed (pasted into the prompt by the orchestrator)
 - `config.md` — analysis criteria (subagent reads from disk)
