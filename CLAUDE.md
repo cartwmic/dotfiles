@@ -165,8 +165,27 @@ After `chezmoi apply`, these require manual setup:
 This repository includes configurations for:
 
 - Claude Code (with ACP support)
+- OpenAI Codex CLI
+- Pi coding agent (with pi-mcp-adapter extension)
 - VectorCode for semantic code search
 - CodeCompanion plugin in Neovim (configured with GPT and Claude models)
+
+### Agent Harness
+
+Skills and MCP servers are managed centrally via the **agent-harness** system:
+
+- **Canonical source**: `dot_local/share/agent-harness/canonical/` (skills and MCP config)
+- **Adapters**: `dot_local/share/agent-harness/adapters/{claude,codex,pi}/` (per-agent secrets)
+- **Sync script**: `dot_local/user_scripts/executable_apply_harness_config.sh`
+
+When `chezmoi apply` runs, the harness script:
+1. Symlinks canonical skills → `~/.claude/skills/`, `~/.codex/skills/`, `~/.pi/agent/skills/`, `~/.agents/skills/`
+2. Generates MCP config for each agent in its native format
+3. Resolves secrets via 1Password where available
+
+**Adding a new skill**: Create a directory under `dot_local/share/agent-harness/canonical/skills/<name>/SKILL.md` and run `chezmoi apply`. It will be available in all agents.
+
+**Adding a new MCP server**: Edit `dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl` and add secrets to each adapter's `mcp-secrets.json.tmpl` if needed.
 
 When working with this repository, prefer:
 

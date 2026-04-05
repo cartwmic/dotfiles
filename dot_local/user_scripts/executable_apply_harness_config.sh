@@ -346,9 +346,28 @@ apply_codex() {
   log "Updated Codex config: $HOME/.codex/config.toml"
 }
 
+apply_pi() {
+  log "Applying Pi adapters"
+  link_skill_dirs "$HOME/.pi/agent/skills"
+
+  resolved_mcp="$GENERATED_ROOT/pi/mcp-resolved.json"
+  pi_mcp_json="$HOME/.pi/agent/mcp.json"
+  render_harness_mcp_json "pi" "$resolved_mcp"
+  ensure_parent "$pi_mcp_json"
+  cp "$resolved_mcp" "$pi_mcp_json"
+  log "Updated Pi MCP config: $pi_mcp_json"
+}
+
+apply_agents_shared() {
+  log "Applying shared ~/.agents/skills"
+  link_skill_dirs "$HOME/.agents/skills"
+}
+
 apply_all() {
+  apply_agents_shared
   apply_claude
   apply_codex
+  apply_pi
 }
 
 main() {
@@ -368,6 +387,9 @@ main() {
             ;;
           codex)
             apply_codex
+            ;;
+          pi)
+            apply_pi
             ;;
           *)
             log_error "Unsupported harness: $harness"
