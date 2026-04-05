@@ -45,14 +45,27 @@ Present the defaults from `./default-verification.md`:
 
 Ask what testing/verification infrastructure the project already has.
 
-### 5. Agree on Scope
+### 5. Agree on Execution Settings
+
+Discuss operational settings for the subagent-heavy phases:
+
+**Batch size:** "Phase 6 dispatches one subagent per slice (you have N slices). How many should run concurrently? Default is 3."
+
+**Model selection:** "Some phases are mechanical (data gathering, checklist analysis) and can use a cheaper model. Others need strong reasoning (architectural assessment, adversarial review). Want to use a cheaper model for the mechanical phases?"
+
+Suggested model tiers:
+- **Mechanical** (Phases 2, 6): cheaper/faster model (e.g., Sonnet, GPT-4o-mini, Gemini Flash)
+- **Analytical** (Phases 3-5, 7, 9, 12): default model
+- **Judgment** (Phases 8, 10): strongest available model
+
+### 6. Agree on Scope
 
 For large codebases, discuss:
 - Should we audit the entire codebase or a subsystem?
 - Are there areas to explicitly exclude?
 - Any known problem areas to focus on?
 
-### 6. Write Config Artifact
+### 7. Write Config Artifact
 
 Write `docs/desloppify/config.md`:
 
@@ -73,4 +86,11 @@ Write `docs/desloppify/config.md`:
 
 ## Project Context
 [Key project details: language, framework, build system, test framework, CI]
+
+## Execution Settings
+- **Batch size:** [N concurrent subagents for Phase 6, default 3]
+- **Model tiers:**
+  - Mechanical (Phases 2, 6): [model name]
+  - Analytical (Phases 3-5, 7, 9, 12): [model name]
+  - Judgment (Phases 8, 10): [model name]
 ```
