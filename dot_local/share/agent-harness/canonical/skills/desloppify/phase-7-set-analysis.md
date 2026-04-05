@@ -16,16 +16,14 @@ Use separate prompt files per set:
 - Vertical set: `./prompts/set-analysis-vertical-prompt.md`
 - Horizontal set: `./prompts/set-analysis-horizontal-prompt.md`
 
-**Context per subagent — ORCHESTRATOR PREPARES, subagent does NOT read artifact files from disk:**
+**Context per subagent:**
+- All Phase 6 analyses for its own set (full text)
+- The other set's Phase 6 analysis **summaries only** (Summary section from each file — not full text)
+- The other set's enumeration
+- `holistic-view.md`
+- `config.md` (criteria)
 
-The orchestrator compiles and injects all context into the prompt:
-1. **Own set's Phase 6 analyses** — orchestrator reads each `analysis/{vertical or horizontal}-*.md` file and pastes the **Findings + Summary** sections (skip full Seam Assessment details)
-2. **Other set's Phase 6 summaries** — orchestrator extracts only the **Summary** section from each file in the other set
-3. **Holistic context** — paste the relevant sections from `holistic-view.md`
-4. **Other set's enumeration** — paste slice names and descriptions from the enumeration file
-5. **Criteria** — paste from `config.md`
-
-The subagent does NOT read any files from `docs/desloppify/`. All context is in the prompt.
+Subagents read these artifacts from disk.
 
 ## What Each Subagent Analyzes
 
