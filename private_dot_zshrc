@@ -171,6 +171,10 @@ zvm_after_init_commands+=("[ -f \"$FZF_TAB_PLUGIN\" ] && source \"$FZF_TAB_PLUGI
 #   fi
 # fi
 
+# bun completions
+[ -s "/Users/mcartwright/.bun/_bun" ] && source "/Users/mcartwright/.bun/_bun"
 
-
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
 
