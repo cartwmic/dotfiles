@@ -81,18 +81,18 @@ digraph desloppify {
 
 ## Phase Summary
 
-| Phase | Instruction File | Prompt Template(s) | Produces |
-|-------|-----------------|--------------------:|----------|
-| 1 | `./phase-1-configure.md` | — | `config.md` |
-| 2 | `./phase-2-intelligence.md` | `./prompts/intelligence-*.md` | `intelligence.md` |
-| 3 | `./phase-3-vertical-slices.md` | `./prompts/enumerate-vertical-prompt.md` | `vertical-slices.md` |
-| 4 | `./phase-4-horizontal-slices.md` | `./prompts/enumerate-horizontal-prompt.md` | `horizontal-slices.md` |
-| 5 | `./phase-5-holistic-view.md` | `./prompts/holistic-view-prompt.md` | `holistic-view.md` |
-| 6 | `./phase-6-investigate.md` | `./prompts/investigate-concern-prompt.md` | `investigation/concern-*.md` |
-| 7 | `./phase-7-consolidate-plan.md` | `./prompts/plan-draft-prompt.md` | `desloppify-plan-draft.md` |
-| 8 | `./phase-8-adversarial-review.md` | `./prompts/review-blind-prompt.md`, `./prompts/review-contextual-prompt.md` | `review-blind.md`, `review-contextual.md` |
-| 9 | `./phase-9-finalize-plan.md` | — | `desloppify-plan.md` |
-| 10 | `./phase-10-agents-md.md` | `./prompts/agents-md-prompt.md` | `agents-md-draft.md` |
+| Phase | Instruction File | Prompt Template(s) | Reads | Produces |
+|-------|-----------------|--------------------:|-------|----------|
+| 1 | `./phase-1-configure.md` | — | Project docs | `config.md` |
+| 2 | `./phase-2-intelligence.md` | `./prompts/intelligence-*.md` | `config.md` | `intelligence.md` |
+| 3 | `./phase-3-vertical-slices.md` | `./prompts/enumerate-vertical-prompt.md` | config + intelligence | `vertical-slices.md` |
+| 4 | `./phase-4-horizontal-slices.md` | `./prompts/enumerate-horizontal-prompt.md` | config + intelligence + vertical | `horizontal-slices.md` |
+| 5 | `./phase-5-holistic-view.md` | `./prompts/holistic-view-prompt.md` | All prior artifacts | `holistic-view.md` |
+| 6 | `./phase-6-investigate.md` | `./prompts/investigate-concern-prompt.md` | holistic-view (flags) + source code | `investigation/concern-*.md` |
+| 7 | `./phase-7-consolidate-plan.md` | `./prompts/plan-draft-prompt.md` | holistic-view + investigations | `desloppify-plan-draft.md` |
+| 8 | `./phase-8-adversarial-review.md` | `./prompts/review-blind-prompt.md`, `./prompts/review-contextual-prompt.md` | Plan + codebase (blind) / All (contextual) | `review-blind.md`, `review-contextual.md` |
+| 9 | `./phase-9-finalize-plan.md` | — | Plan draft + both reviews | `desloppify-plan.md` |
+| 10 | `./phase-10-agents-md.md` | `./prompts/agents-md-prompt.md` | All artifacts + existing docs | `agents-md-draft.md` |
 
 ## Flags for Investigation
 
