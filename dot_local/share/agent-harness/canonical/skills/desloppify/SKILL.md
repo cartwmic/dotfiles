@@ -94,6 +94,13 @@ digraph desloppify {
 | 9 | `./phase-9-finalize-plan.md` | — | Plan draft + both reviews | `desloppify-plan.md` |
 | 10 | `./phase-10-agents-md.md` | `./prompts/agents-md-prompt.md` | All artifacts + existing docs | `agents-md-draft.md` |
 
+## Subagent Return Patterns
+
+Two patterns exist depending on who owns the artifact:
+
+- **Phases 2-5 (orchestrator owns artifact):** Subagents return their full structured output. The orchestrator merges (Phase 2) or refines with the user (Phases 3-5) before writing the final artifact. Full output is required because the orchestrator needs it to do its job.
+- **Phases 6-8, 10 (subagent owns artifact):** Subagents write their full output to disk and return only a brief summary to the orchestrator. This keeps the orchestrator's context lean.
+
 ## Flags for Investigation
 
 Phases 2-5 each produce a **Flags for Investigation** section in their artifacts. Flags are factual observations that warrant closer inspection — not diagnoses or fix suggestions.
