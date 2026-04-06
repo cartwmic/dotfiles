@@ -12,6 +12,8 @@ Horizontal slices are cross-cutting concerns and abstraction layers that span mu
 
 ## Step 1: Dispatch Enumeration Subagent
 
+**Model selection:** Use the analytical-tier model.
+
 Use `./prompts/enumerate-horizontal-prompt.md`.
 
 The subagent reads intelligence + vertical slices to produce a draft with flags for notable observations.

@@ -12,6 +12,8 @@ Vertical slices are feature-oriented end-to-end paths through the codebase. Each
 
 ## Step 1: Dispatch Enumeration Subagent
 
+**Model selection:** Use the analytical-tier model.
+
 Use `./prompts/enumerate-vertical-prompt.md`.
 
 The subagent reads the intelligence artifact and project structure to produce a draft enumeration with flags for notable observations.

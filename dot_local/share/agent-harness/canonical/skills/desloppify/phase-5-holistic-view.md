@@ -12,6 +12,8 @@ Combine vertical and horizontal slice enumerations with intelligence data into a
 
 ## Step 1: Dispatch Synthesis Subagent
 
+**Model selection:** Use the analytical-tier model.
+
 Use `./prompts/holistic-view-prompt.md`.
 
 The subagent reads all four input artifacts and produces a draft holistic view covering:

@@ -12,6 +12,8 @@ Merge all findings from Phase 6 investigations into a comprehensive, prioritized
 
 ## Dispatch
 
+**Model selection:** Use the analytical-tier model.
+
 Use `./prompts/plan-draft-prompt.md`.
 
 The subagent reads the investigation outputs and consolidates them into a scored, dependency-mapped plan.

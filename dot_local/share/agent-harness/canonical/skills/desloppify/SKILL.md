@@ -98,6 +98,12 @@ digraph desloppify {
 
 Phases 2-5 each produce a **Flags for Investigation** section in their artifacts. Flags are factual observations that warrant closer inspection — not diagnoses or fix suggestions.
 
+## Subagent Return Patterns
+
+**Phases 2-5 (merge/refine pattern):** Subagents return their full structured output to the orchestrator, which merges (Phase 2) or refines with the user (Phases 3-5) before writing the final artifact. These subagents do not write to disk themselves.
+
+**Phases 6-8, 10 (write-to-disk pattern):** Subagents write their full output to an artifact file on disk and return only a brief summary to the orchestrator. Success is verified by checking the artifact file exists.
+
 A flag is: **location + what was observed + why it caught attention.** One line each.
 
 Phase 6 collects all flags, groups them into concerns, and presents them to the user for validation before dispatching investigation subagents.
