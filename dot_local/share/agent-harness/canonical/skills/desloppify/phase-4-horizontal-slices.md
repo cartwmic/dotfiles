@@ -8,41 +8,33 @@
 
 ## Overview
 
-Horizontal slices are cross-cutting concerns and abstraction layers. These span across multiple vertical slices at the same conceptual level. They can be traditional architectural layers, shared infrastructure, patterns, or other abstractions — whatever naturally emerges from how the code is organized.
+Horizontal slices are cross-cutting concerns and abstraction layers that span multiple vertical slices. They can be traditional architectural layers, shared infrastructure, patterns, or other abstractions — whatever naturally emerges from how the code is organized.
 
 ## Step 1: Dispatch Enumeration Subagent
 
 Use `./prompts/enumerate-horizontal-prompt.md`.
 
-The subagent reads intelligence + vertical slices to produce a draft. It should:
-- Identify architectural layers (if present): presentation, business logic, data access, etc.
-- Identify cross-cutting concerns: error handling, logging, auth, validation, config, etc.
-- Identify shared infrastructure: utilities, helpers, base classes, middleware, etc.
-- Use dependency graph data to reveal actual abstraction boundaries
-- Use fan-in/fan-out data to identify highly-depended-upon modules
-- Note where vertical slices share horizontal infrastructure
+The subagent reads intelligence + vertical slices to produce a draft with flags for notable observations.
 
 ## Step 2: Present Draft to User
 
 Show the draft enumeration. For each slice, show:
-- **Name** — The concern or layer (e.g., "Error Handling", "Data Access Layer")
-- **Type** — Architectural layer / cross-cutting concern / shared infrastructure / pattern
-- **Modules/files** — Where this concern lives in the codebase
+- **Name** — The concern or layer
+- **Type** — Architectural pattern / layer / cross-cutting concern / shared infrastructure / informal pattern
+- **Modules/files** — Where it lives
 - **Vertical slices touched** — Which vertical slices depend on this
-- **Fan-in** — How many modules depend on this
 
 ## Step 3: Socratic Refinement
 
 Ask the user to validate and extend, one question at a time:
 
 - "Does this capture the major cross-cutting concerns? What am I missing?"
-- "Does the project follow an overarching architectural pattern (e.g., clean architecture, hexagonal, layered)? Is it captured as its own slice, or just fragmented across individual layer slices?"
 - "I've categorized X as an architectural layer — is that how you think about it?"
 - "The dependency data shows Y is depended on by almost everything — is that intentional?"
 - "Are there informal patterns (not enforced, but conventionally followed) that I should include?"
-- "Any concerns or layers that exist in some parts of the codebase but not others?"
+- "Does this codebase follow an overarching architectural pattern (e.g., clean architecture, hexagonal) that should be its own horizontal slice?"
 
-**Stay focused on enumeration — if the user or subagent starts identifying problems to fix, redirect: "Good observation — I'll capture that for Phase 6 analysis. For now, let's finish mapping what exists."**
+Stay focused on enumeration. If observations about issues come up, capture them as flags: "Good observation — I'll add that as a flag for Phase 6 investigation."
 
 Iterate until the user confirms the enumeration is complete.
 
@@ -59,7 +51,7 @@ Write `docs/desloppify/horizontal-slices.md`:
 - **Modules/files:** [Where it lives]
 - **Vertical slices touched:** [Which features depend on this]
 - **Fan-in:** [Number of dependents]
-- **Consistency:** [Is it applied uniformly or patchy?]
+- **Coverage:** [Which parts of the codebase use this vs. which don't]
 - **Notes:** [User-provided context]
 
 [Repeat per slice]
@@ -68,5 +60,8 @@ Write `docs/desloppify/horizontal-slices.md`:
 - Total slices: N
 - By type: [count per type]
 - Most depended-upon: [top 3]
-- Patchily applied: [list of inconsistent concerns]
+
+## Flags for Investigation
+[Merge subagent flags + any user-surfaced observations]
+- **[location]** — [observation] — [why notable]
 ```

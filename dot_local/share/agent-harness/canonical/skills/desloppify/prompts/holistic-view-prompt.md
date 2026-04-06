@@ -5,15 +5,15 @@ You are synthesizing a unified understanding of a codebase from its vertical sli
 
 ## Your Task
 
-Combine all enumeration and intelligence data into a holistic view that captures how the codebase fits together.
+Combine all enumeration and intelligence data into a holistic view. Consolidate all flags from prior phases and add your own observations.
 
 ## Input
 
 Read these artifacts from `docs/desloppify/`:
 - `config.md` — Scope and project context
-- `intelligence.md` — Git history, dependency graph, static analysis data
-- `vertical-slices.md` — All vertical (feature) slices
-- `horizontal-slices.md` — All horizontal (cross-cutting) slices
+- `intelligence.md` — Git history, dependency graph, static analysis data (includes Phase 2 flags)
+- `vertical-slices.md` — All vertical slices (includes Phase 3 flags)
+- `horizontal-slices.md` — All horizontal slices (includes Phase 4 flags)
 
 ## Analysis to Perform
 
@@ -24,17 +24,18 @@ Read these artifacts from `docs/desloppify/`:
 - Where are boundaries clean vs. blurred?
 
 ### 2. Structural Health Signals
-- **Coupling hotspots:** Areas where slices are unexpectedly entangled (from intelligence + enumeration data; skip if no git data available)
+- **Coupling hotspots:** Areas where slices are unexpectedly entangled (skip if no git data)
 - **Coverage gaps:** Horizontal concerns that don't reach all vertical slices they should
 - **Consistency patterns:** Where the codebase is consistent vs. fragmented
 - **Architectural alignment:** Does the actual structure match documented/intended architecture?
 
 ### 3. Codebase Trajectory
-- Is the codebase improving, degrading, or stable? (from git history trends if available)
+- Is the codebase improving, degrading, or stable? (from git history if available)
 - Which areas are actively evolving vs. stagnant?
 - Where is technical debt concentrated?
 
-If git history is unavailable, note this and focus on structural signals only.
+### 4. Consolidate All Flags
+Collect the "Flags for Investigation" sections from intelligence.md, vertical-slices.md, and horizontal-slices.md. Deduplicate, organize by theme, and add any new flags you notice during synthesis.
 
 ## Output Format
 
@@ -46,7 +47,7 @@ If git history is unavailable, note this and focus on structural signals only.
 
 ## Structural Health
 ### Coupling Hotspots
-[Areas of unexpected entanglement — or "No git data available" if applicable]
+[Areas of unexpected entanglement]
 
 ### Coverage Gaps
 [Horizontal concerns missing from vertical slices]
@@ -58,18 +59,22 @@ If git history is unavailable, note this and focus on structural signals only.
 [Actual vs. intended architecture]
 
 ## Codebase Trajectory
-[Improving / degrading / stable, by area — or structural assessment only if no git history]
+[Improving / degrading / stable, by area]
 
 ## Technical Debt Concentration
 [Where debt is concentrated and why]
+
+## Consolidated Flags for Investigation
+[ALL flags from Phases 2-4, deduplicated and organized by theme, plus any new flags from synthesis]
+- **[location]** — [observation] — [why notable] — [source: Phase N or "synthesis"]
 ```
 
 ## Constraints
-- **SYNTHESIS ONLY — do NOT suggest fixes, improvements, or refactoring actions.** Describe how the codebase fits together. Evaluation and recommendations happen in Phases 6-8, not here.
-- This is a map, not a diagnosis — connect dots between slices, don't judge code quality
-- If intelligence data has gaps (no git history, no coverage data), acknowledge and work with what's available
-- Focus on relationships and structure, not individual code issues
-- Keep it concise — this artifact is read by many downstream subagents
+- This is synthesis — describe how the codebase fits together. Connect dots between slices.
+- Report observations as flags. State what you see and why it's notable.
+- Leave diagnosis and fix suggestions to Phase 6.
+- If intelligence data has gaps, acknowledge and work with what's available.
+- Keep it concise — this artifact is read by downstream subagents.
 
 ## When Complete
 The orchestrator will validate your draft with the user and write `docs/desloppify/holistic-view.md`. Return your structured draft in the format above. Do not write the file yourself.

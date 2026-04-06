@@ -5,7 +5,7 @@ You are analyzing a codebase's dependency structure for a codebase audit.
 
 ## Your Task
 
-Map the actual dependency graph of this project and produce a structured report.
+Map the actual dependency graph and produce a structured data report with factual observations.
 
 ## Input
 
@@ -14,41 +14,29 @@ Read `docs/desloppify/config.md` for scope, project context, and language/framew
 ## Analysis to Perform
 
 ### 1. Import/Module Graph
-Analyze actual import/require/use statements to map dependencies:
+Analyze actual import/require/use statements. Build a module-level dependency map.
 
 ```bash
 # Adapt to project language:
-# JavaScript/TypeScript
-grep -rn "^import\|^const.*require" --include="*.ts" --include="*.js" --include="*.tsx" --include="*.jsx" src/
-
-# Python
-grep -rn "^import\|^from.*import" --include="*.py" src/
-
-# Go
-grep -rn "^import" --include="*.go" .
-
-# Rust
-grep -rn "^use\|^mod\|^extern crate" --include="*.rs" src/
+# JS/TS: grep -rn "^import\|^const.*require" --include="*.ts" src/
+# Python: grep -rn "^import\|^from.*import" --include="*.py" src/
+# Go: grep -rn "^import" --include="*.go" .
+# Rust: grep -rn "^use\|^mod\|^extern crate" --include="*.rs" src/
 ```
 
-Build a module-level dependency map (not file-level unless project is small).
-
 ### 2. Circular Dependencies
-Identify cycles in the dependency graph. Trace import chains that loop back.
+Identify cycles in the dependency graph.
 
 ### 3. Fan-In / Fan-Out
 For each module/directory:
 - **Fan-in:** How many other modules depend on this one
 - **Fan-out:** How many modules this one depends on
 
-High fan-in = widely depended upon (changes are risky).
-High fan-out = depends on everything (fragile, hard to test).
-
 ### 4. Orphan Modules
 Code that nothing imports. Potentially dead code.
 
 ### 5. Dependency Clusters
-Groups of modules that are tightly coupled to each other but loosely coupled to the rest. These are natural boundaries.
+Groups of modules tightly coupled to each other but loosely coupled to the rest.
 
 ## Output Format
 
@@ -56,34 +44,35 @@ Groups of modules that are tightly coupled to each other but loosely coupled to 
 ## Dependency Graph Analysis
 
 ### Module Map
-[High-level dependency summary — which modules depend on which]
+[High-level dependency summary]
 
 ### Circular Dependencies
 | Cycle | Modules Involved | Severity |
-|-------|-----------------|----------|
-[Any cycles found]
 
 ### Fan-In / Fan-Out
 | Module | Fan-In | Fan-Out | Assessment |
-|--------|--------|---------|------------|
 [Top 15 by fan-in, then top 15 by fan-out]
 
 ### Orphan Modules
-[Modules with zero fan-in — potentially dead code]
+[Modules with zero fan-in]
 
 ### Dependency Clusters
 [Natural groupings of tightly-coupled modules]
 
 ### External Dependencies
-[Key external libraries/frameworks and what depends on them]
+[Key external libraries and what depends on them]
+
+## Flags for Investigation
+- **[module or area]** — [what you observed] — [why it caught your attention]
+[Examples: circular dependency between modules that should be independent, a module with fan-in of 30+, orphan modules that look non-trivial, a dependency cluster that crosses architectural boundaries]
 ```
 
 ## Constraints
 - Adapt analysis to the project's language and module system
 - Work at module/directory level for large projects, file level for small ones
-- If project has a package.json, Cargo.toml, go.mod etc., include external dep analysis
+- Include external dep analysis if package manifest exists
 - Use existing tooling if available (e.g., `madge` for JS, `pydeps` for Python)
-- **DATA ONLY — do NOT suggest fixes, improvements, or refactoring actions.** Report the dependency structure as-is. Judgment and recommendations happen in later phases, not here.
+- Report structure factually. Note observations in the Flags section. Leave diagnosis to later phases.
 
 ## When Complete
 The orchestrator will merge your output into `docs/desloppify/intelligence.md`. Return your structured report in the format above. Do not write the file yourself.

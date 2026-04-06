@@ -14,20 +14,15 @@ Vertical slices are feature-oriented end-to-end paths through the codebase. Each
 
 Use `./prompts/enumerate-vertical-prompt.md`.
 
-The subagent reads the intelligence artifact and project structure to produce a draft enumeration. It should:
-- Identify entry points (routes, commands, event handlers, UI components)
-- Trace each entry point through the layers it touches
-- Use hotspot data to flag high-churn slices
-- Use change coupling data to identify slices that may be entangled
-- Name each slice clearly by its user-facing capability
+The subagent reads the intelligence artifact and project structure to produce a draft enumeration with flags for notable observations.
 
 ## Step 2: Present Draft to User
 
 Show the draft enumeration. For each slice, show:
-- **Name** — The capability (e.g., "User Authentication")
-- **Entry points** — Where it starts (route, command, etc.)
+- **Name** — The capability
+- **Entry points** — Where it starts
 - **Files/modules touched** — The path through the codebase
-- **Hotspot indicator** — High/medium/low based on intelligence data
+- **Hotspot indicator** — High/medium/low from intelligence data
 
 ## Step 3: Socratic Refinement
 
@@ -39,7 +34,7 @@ Ask the user to validate and extend, one question at a time:
 - "I flagged X as high-churn — does that match your experience?"
 - "The change coupling data suggests A and B are entangled — is that intentional?"
 
-**Stay focused on enumeration — if the user or subagent starts identifying problems to fix, redirect: "Good observation — I'll capture that for Phase 6 analysis. For now, let's finish mapping what exists."**
+Stay focused on enumeration. If observations about issues come up, capture them as flags: "Good observation — I'll add that as a flag for Phase 6 investigation."
 
 Iterate until the user confirms the enumeration is complete.
 
@@ -64,4 +59,8 @@ Write `docs/desloppify/vertical-slices.md`:
 - Total slices: N
 - High-churn slices: [list]
 - Entangled slices: [pairs]
+
+## Flags for Investigation
+[Merge subagent flags + any user-surfaced observations]
+- **[location]** — [observation] — [why notable]
 ```
