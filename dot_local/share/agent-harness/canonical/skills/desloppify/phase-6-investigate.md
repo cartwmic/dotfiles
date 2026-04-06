@@ -52,6 +52,8 @@ mkdir -p docs/desloppify/investigation
 
 Use `./prompts/investigate-concern-prompt.md` for each concern.
 
+**Use the analytical-tier model** for investigation subagents.
+
 **Dispatch in batches** per the configured batch size (default 3). Wait for a batch to complete before dispatching the next.
 
 **Each subagent receives (injected into prompt by orchestrator):**
