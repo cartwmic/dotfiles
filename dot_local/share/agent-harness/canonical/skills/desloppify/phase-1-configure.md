@@ -47,16 +47,16 @@ Ask what testing/verification infrastructure the project already has.
 
 ### 5. Agree on Execution Settings
 
-Discuss operational settings for the subagent-heavy phases:
+Discuss operational settings:
 
-**Batch size:** "Phase 6 dispatches one subagent per slice (you have N slices). How many should run concurrently? Default is 3."
-
-**Model selection:** "Some phases are mechanical (data gathering, checklist analysis) and can use a cheaper model. Others need strong reasoning (architectural assessment, adversarial review). Want to use a cheaper model for the mechanical phases?"
+**Model selection:** "Some phases are mechanical (data gathering) and can use a cheaper model. Others need strong reasoning (adversarial review). Want to use different models per tier?"
 
 Suggested model tiers:
-- **Mechanical** (Phases 2, 6): cheaper/faster model (e.g., Sonnet, GPT-4o-mini, Gemini Flash)
-- **Analytical** (Phases 3-5, 7, 9, 12): default model
-- **Judgment** (Phases 8, 10): strongest available model
+- **Mechanical** (Phase 2): cheaper/faster model (e.g., Sonnet, GPT-4o-mini, Gemini Flash)
+- **Analytical** (Phases 3-6): default model
+- **Judgment** (Phase 8): strongest available model
+
+**Batch size:** "Phase 6 dispatches 3-5 investigation subagents. Phase 2 dispatches 3 intelligence subagents. Any concurrency preferences?"
 
 ### 6. Agree on Scope
 
@@ -88,9 +88,9 @@ Write `docs/desloppify/config.md`:
 [Key project details: language, framework, build system, test framework, CI]
 
 ## Execution Settings
-- **Batch size:** [N concurrent subagents for Phase 6, default 3]
 - **Model tiers:**
-  - Mechanical (Phases 2, 6): [model name]
-  - Analytical (Phases 3-5, 7, 9, 12): [model name]
-  - Judgment (Phases 8, 10): [model name]
+  - Mechanical (Phase 2): [model name]
+  - Analytical (Phases 3-6): [model name]
+  - Judgment (Phase 8): [model name]
+- **Batch size:** [default 3]
 ```
