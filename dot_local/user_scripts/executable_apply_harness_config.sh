@@ -346,6 +346,36 @@ apply_codex() {
   log "Updated Codex config: $HOME/.codex/config.toml"
 }
 
+merge_pi_mcp() {
+  harness_json="$1"
+  target_json="$2"
+
+  python3 - "$harness_json" "$target_json" <<'PY'
+import json
+import pathlib
+import sys
+
+harness_path = pathlib.Path(sys.argv[1])
+target_path = pathlib.Path(sys.argv[2])
+
+harness = json.loads(harness_path.read_text())
+harness_servers = harness.get("mcpServers", {})
+
+if target_path.exists():
+    existing = json.loads(target_path.read_text())
+else:
+    existing = {"mcpServers": {}}
+
+existing_servers = existing.get("mcpServers", {})
+
+# Harness-managed servers overwrite their keys; manual additions are preserved
+merged_servers = {**existing_servers, **harness_servers}
+result = {**existing, "mcpServers": merged_servers}
+
+target_path.write_text(json.dumps(result, indent=2) + "\n")
+PY
+}
+
 apply_pi() {
   log "Applying Pi adapters"
   link_skill_dirs "$HOME/.pi/agent/skills"
@@ -354,7 +384,7 @@ apply_pi() {
   pi_mcp_json="$HOME/.pi/agent/mcp.json"
   render_harness_mcp_json "pi" "$resolved_mcp"
   ensure_parent "$pi_mcp_json"
-  cp "$resolved_mcp" "$pi_mcp_json"
+  merge_pi_mcp "$resolved_mcp" "$pi_mcp_json"
   log "Updated Pi MCP config: $pi_mcp_json"
 }
 

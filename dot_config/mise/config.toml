@@ -186,6 +186,7 @@ if ! command -v furi >/dev/null 2>&1; then
   mkdir -p "$HOME/.local/bin"
   cd "$FURI_SRC_DIR"
   bun install
+  bun add -d effect @valibot/to-json-schema
   bun run compile
   cp "$FURI_SRC_DIR/dist/furi" "$HOME/.local/bin/furi"
 fi
