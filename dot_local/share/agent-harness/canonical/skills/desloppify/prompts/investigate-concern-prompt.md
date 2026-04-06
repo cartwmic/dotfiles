@@ -93,7 +93,7 @@ Write your output to the artifact path the orchestrator specifies.
 ## Constraints
 - Read every listed file. Base findings on what the code actually says.
 - Every finding must have file:line references. No vague observations.
-- Confirm or dismiss every flag — do not skip any.
+- Confirm or dismiss every flag — complete coverage is required.
 - Keep suggested approaches to one sentence each. Detailed planning happens later.
 - If a flag leads you to related code not in your file list, read it and include findings.
 
