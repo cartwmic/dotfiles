@@ -1,5 +1,4 @@
 {
-  "lastChangelogVersion": "0.65.2",
   "defaultProvider": "anthropic",
   "defaultModel": "claude-opus-4-6",
   "defaultThinkingLevel": "medium",
@@ -12,7 +11,8 @@
     "npm:@marckrenn/pi-sub-bar",
     "npm:pi-codex-web-search",
     "npm:pi-mcp-adapter",
-    "npm:pi-subagents"
+    "npm:pi-subagents",
+    "npm:pi-claude-cli"
   ],
   "compaction": {
     "enabled": false
