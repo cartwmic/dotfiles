@@ -11,8 +11,7 @@
     "npm:@marckrenn/pi-sub-bar",
     "npm:pi-codex-web-search",
     "npm:pi-mcp-adapter",
-    "npm:pi-subagents",
-    "npm:pi-claude-cli"
+    "npm:pi-subagents"
   ],
   "compaction": {
     "enabled": false
