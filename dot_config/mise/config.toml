@@ -379,6 +379,32 @@ if ! command -v claude-code-acp >/dev/null 2>&1; then
 fi
 '''
 
+[tasks."install-meridian"]
+description = "Install Meridian proxy"
+run = '''
+if ! command -v meridian >/dev/null 2>&1; then
+  # Ensure npm is available
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: npm not found. Node.js must be installed first."
+    exit 1
+  fi
+  npm install -g @rynfar/meridian
+fi
+'''
+
+[tasks."install-pi-meridian-extension"]
+description = "Install pi-meridian-extension package"
+run = '''
+if ! command -v pi >/dev/null 2>&1; then
+  echo "ERROR: pi not found. Install pi before installing pi-meridian-extension."
+  exit 1
+fi
+
+if ! pi list | grep -q '^  npm:pi-meridian-extension$'; then
+  pi install npm:pi-meridian-extension
+fi
+'''
+
 [tasks."install-mermaid-cli"]
 description = "Install mermaid-cli (mmdc)"
 run = '''
@@ -491,6 +517,8 @@ depends = [
   "install-claude",
   "install-furi",
   "install-claude-code-acp",
+  "install-meridian",
+  "install-pi-meridian-extension",
   "install-antidote",
   "install-fzf-tab",
   "install-kubectl",
