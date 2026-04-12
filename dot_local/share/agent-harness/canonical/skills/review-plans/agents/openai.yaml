@@ -1,4 +1,4 @@
 interface:
   display_name: "Adversarial Plan Review"
   short_description: "Adversarially review plans to surface hidden risks"
-  default_prompt: "Use $review-superpower-plans to aggressively challenge this plan and improve it before execution."
+  default_prompt: "Use $review-plans to aggressively challenge this plan and improve it before execution."
