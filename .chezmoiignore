@@ -4,3 +4,7 @@
 CLAUDE.md
 docs/
 .playwright-mcp/
+.claude/
+.codex/
+.pi/
+openspec/

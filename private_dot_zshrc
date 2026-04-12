@@ -70,6 +70,7 @@ alias s="kitty +kitten ssh"
 alias cclint="npx @carlrannaberg/cclint"
 alias update-claude-settings="$HOME/update_claude_settings.sh"
 alias reset-claude-settings="$HOME/reset_claude_settings.sh"
+alias setup-openspec="$HOME/.local/user_scripts/setup_openspec.sh"
 
 
 # nvm replaced by mise's node support
