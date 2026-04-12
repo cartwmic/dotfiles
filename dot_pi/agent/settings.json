@@ -17,7 +17,7 @@
     "npm:pi-codex-web-search",
     "npm:pi-mcp-adapter",
     "npm:pi-subagents",
-    "npm:pi-meridian-extension"
+    "https://github.com/cartwmic/pi-meridian-extension"
   ],
   "compaction": {
     "enabled": false
