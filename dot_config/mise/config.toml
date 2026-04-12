@@ -388,7 +388,19 @@ if ! command -v meridian >/dev/null 2>&1; then
     echo "ERROR: npm not found. Node.js must be installed first."
     exit 1
   fi
-  npm install -g @rynfar/meridian
+  npm install -g github:cartwmic/meridian#pi-patches
+fi
+'''
+
+[tasks."install-openspec"]
+description = "Install OpenSpec CLI"
+run = '''
+if ! command -v openspec >/dev/null 2>&1; then
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: npm not found. Node.js must be installed first."
+    exit 1
+  fi
+  npm install -g @fission-ai/openspec@latest
 fi
 '''
 
@@ -400,8 +412,8 @@ if ! command -v pi >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! pi list | grep -q '^  npm:pi-meridian-extension$'; then
-  pi install npm:pi-meridian-extension
+if ! pi list | grep -q 'pi-meridian-extension'; then
+  pi install git:github.com/cartwmic/pi-meridian-extension#pi-patches
 fi
 '''
 
@@ -518,6 +530,7 @@ depends = [
   "install-furi",
   "install-claude-code-acp",
   "install-meridian",
+  "install-openspec",
   "install-pi-meridian-extension",
   "install-antidote",
   "install-fzf-tab",
