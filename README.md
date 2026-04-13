@@ -71,6 +71,7 @@ Current supported harnesses:
 
 - `claude`
 - `codex`
+- `pi`
 
 Current supported configuration domains:
 
@@ -90,11 +91,21 @@ Apply a single harness:
 ```bash
 ~/.local/user_scripts/apply_harness_config.sh claude
 ~/.local/user_scripts/apply_harness_config.sh codex
+~/.local/user_scripts/apply_harness_config.sh pi
+```
+
+Interactively sync canonical skills (shows diff, prompts before applying):
+
+```bash
+~/.local/user_scripts/sync_harness_skills.sh            # interactive
+~/.local/user_scripts/sync_harness_skills.sh --dry-run   # preview only
+~/.local/user_scripts/sync_harness_skills.sh --yes        # no prompt
 ```
 
 Behavior:
 
 - Skills are linked into harness skill directories from the canonical `SKILL.md` bundles.
+- `sync_harness_skills.sh` compares chezmoi source against deployed canonical skills, showing additions, removals (orphans), and content changes before applying.
 - Claude MCP is generated as a managed setup script and applied through the Claude CLI when available.
 - Codex MCP is rendered into a managed block inside `~/.codex/config.toml`.
 - Canonical MCP entries are authored in `dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl`.
