@@ -176,14 +176,17 @@ Skills and MCP servers are managed centrally via the **agent-harness** system:
 
 - **Canonical source**: `dot_local/share/agent-harness/canonical/` (skills and MCP config)
 - **Adapters**: `dot_local/share/agent-harness/adapters/{claude,codex,pi}/` (per-agent secrets)
-- **Sync script**: `dot_local/user_scripts/executable_apply_harness_config.sh`
+- **Apply script**: `dot_local/user_scripts/executable_apply_harness_config.sh` (auto-runs on `chezmoi apply`)
+- **Sync script**: `dot_local/user_scripts/executable_sync_harness_skills.sh` (manual, interactive)
 
-When `chezmoi apply` runs, the harness script:
+When `chezmoi apply` runs, the apply script:
 1. Symlinks canonical skills → `~/.claude/skills/`, `~/.codex/skills/`, `~/.pi/agent/skills/`, `~/.agents/skills/`
 2. Generates MCP config for each agent in its native format
 3. Resolves secrets via 1Password where available
 
-**Adding a new skill**: Create a directory under `dot_local/share/agent-harness/canonical/skills/<name>/SKILL.md` and run `chezmoi apply`. It will be available in all agents.
+**Syncing skills**: Run `~/.local/user_scripts/sync_harness_skills.sh` to compare chezmoi source skills against what's deployed. It shows a color-coded diff (additions, removals, content changes) and prompts before applying. Flags: `--dry-run` (preview only), `--yes` (skip prompt). This also cleans up stale symlinks across all harnesses.
+
+**Adding a new skill**: Create a directory under `dot_local/share/agent-harness/canonical/skills/<name>/SKILL.md` and run `sync_harness_skills.sh` or `chezmoi apply`. It will be available in all agents.
 
 **Adding a new MCP server**: Edit `dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl` and add secrets to each adapter's `mcp-secrets.json.tmpl` if needed.
 

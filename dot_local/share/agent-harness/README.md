@@ -112,10 +112,12 @@ Guidelines:
 
 After adding a skill:
 
-1. Apply with `chezmoi apply --force`.
-2. Verify the symlinks exist:
+1. Run `~/.local/user_scripts/sync_harness_skills.sh` to preview and apply.
+2. Or apply with `chezmoi apply --force` (no preview).
+3. Verify the symlinks exist:
    - `find ~/.claude/skills -mindepth 1 -maxdepth 1 -type l`
    - `find ~/.codex/skills -mindepth 1 -maxdepth 1 -type l`
+   - `find ~/.pi/agent/skills -mindepth 1 -maxdepth 1 -type l`
 
 ## Add Harness-Specific MCP Secrets
 
@@ -171,6 +173,28 @@ Guidelines:
 - Harness-only behavior belongs in the adapter layer.
 - If a new domain starts requiring lots of harness-only semantics, revisit whether it should be canonical at all.
 
+## Sync Skills
+
+Use `sync_harness_skills.sh` to interactively sync canonical skills from chezmoi source to the deployed location. It compares the two directories and shows a color-coded diff before making changes.
+
+```bash
+# Preview what would change
+~/.local/user_scripts/sync_harness_skills.sh --dry-run
+
+# Interactive — shows diff, prompts before applying
+~/.local/user_scripts/sync_harness_skills.sh
+
+# Non-interactive — shows diff, applies immediately
+~/.local/user_scripts/sync_harness_skills.sh --yes
+```
+
+The script detects:
+- **Additions**: skills in chezmoi source not yet deployed
+- **Removals**: deployed skills no longer in chezmoi source (orphans)
+- **Updates**: skills present in both but with content differences
+
+After syncing canonical skills it automatically runs `apply_harness_config.sh` to update symlinks and clean up stale links across all harnesses.
+
 ## Apply And Verify
 
 Canonical changes are meant to be applied through chezmoi, not by manually copying files around.
@@ -178,7 +202,11 @@ Canonical changes are meant to be applied through chezmoi, not by manually copyi
 Apply:
 
 ```bash
+# Full chezmoi apply (skills + MCP + everything else)
 chezmoi apply --force
+
+# Or sync just skills interactively
+~/.local/user_scripts/sync_harness_skills.sh
 ```
 
 Useful verification commands:
@@ -188,6 +216,7 @@ claude mcp list
 codex mcp list
 find ~/.claude/skills -mindepth 1 -maxdepth 1 -type l | sort
 find ~/.codex/skills -mindepth 1 -maxdepth 1 -type l | sort
+find ~/.pi/agent/skills -mindepth 1 -maxdepth 1 -type l | sort
 ```
 
 ## Current Canonical Policy
