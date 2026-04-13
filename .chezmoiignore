@@ -6,5 +6,4 @@ docs/
 .playwright-mcp/
 .claude/
 .codex/
-.pi/
 openspec/
