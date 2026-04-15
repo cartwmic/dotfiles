@@ -72,6 +72,27 @@ alias update-claude-settings="$HOME/update_claude_settings.sh"
 alias reset-claude-settings="$HOME/reset_claude_settings.sh"
 alias setup-openspec="$HOME/.local/user_scripts/setup_openspec.sh"
 
+# Pi + Bedrock helper. Resolve the effective AWS profile/region at runtime,
+# then scope them to this command so regular aws CLI usage is not redirected.
+pi-bedrock() {
+  local profile region
+
+  profile="${AWS_PROFILE:-${AWS_DEFAULT_PROFILE:-hip-management}}"
+
+  if [[ -n "${AWS_REGION:-}" ]]; then
+    region="$AWS_REGION"
+  elif [[ -n "${AWS_DEFAULT_REGION:-}" ]]; then
+    region="$AWS_DEFAULT_REGION"
+  elif [[ "$profile" == "default" ]]; then
+    region="$(aws configure get region 2>/dev/null)"
+  else
+    region="$(aws configure get region --profile "$profile" 2>/dev/null)"
+  fi
+
+  region="${region:-us-east-2}"
+  AWS_PROFILE="$profile" AWS_REGION="$region" pi --provider amazon-bedrock "$@"
+}
+
 
 # nvm replaced by mise's node support
 # If you need nvm for specific projects, uncomment below:
