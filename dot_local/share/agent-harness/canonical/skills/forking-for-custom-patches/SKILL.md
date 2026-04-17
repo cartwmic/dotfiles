@@ -63,11 +63,11 @@ FORK_REPO="$FORK_OWNER/$(basename "$UPSTREAM")"
 
 If already forked, `gh repo fork` will report the existing fork. Continue with it.
 
-### Step 3: Clone the Fork (if not already cloned)
+### Step 3: Clone the Fork (if not already in ~/git/)
 
 ```bash
-gh repo clone "$FORK_REPO"
-cd "$(basename "$UPSTREAM")"
+gh repo clone "$FORK_REPO" "$HOME/git/$(basename "$UPSTREAM")"
+cd "$HOME/git/$(basename "$UPSTREAM")"
 
 # Verify upstream remote exists
 git remote -v | grep upstream || git remote add upstream "https://github.com/$UPSTREAM.git"
@@ -135,7 +135,7 @@ Or use GitHub's built-in **"Sync fork"** button in the web UI.
 | Step | Command | Purpose |
 |------|---------|---------|
 | Fork | `gh repo fork OWNER/REPO` | Create fork on GitHub |
-| Clone | `gh repo clone FORK` | Clone locally |
+| Clone | `gh repo clone FORK ~/git/REPO` | Clone to ~/git/ |
 | Upstream | `git remote add upstream URL` | Track upstream |
 | Edit | Work on default branch | Apply custom patches |
 | Push | `git push origin main` | Publish changes |
