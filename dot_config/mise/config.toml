@@ -68,8 +68,9 @@ yq = "latest" # YAML processor
 # cargo:rage configured in [tools."cargo:rage"] section below
 
 # =============================================================================
-# AI & Productivity Tools (require node)
+# AI & Productivity Tools
 # =============================================================================
+"github:rtk-ai/rtk" = "latest" # RTK - Rust Token Killer (AI coding agent proxy)
 # mermaid-cli and claude-code-acp installed via tasks to ensure node is available first
 
 # =============================================================================
