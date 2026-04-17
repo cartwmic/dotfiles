@@ -1,15 +1,15 @@
 ---
-name: rebase-custom-forks
-description: Use when syncing forked repositories with upstream, rebasing custom patches onto upstream main, or when user says to update or rebase forks
+name: sync-custom-forks
+description: Use when syncing forked repositories with upstream, merging upstream changes into forks, or when user says to update or sync forks
 ---
 
-# Rebase Custom Forks
+# Sync Custom Forks
 
 ## Overview
 
-Interactively sync forked GitHub repos with their upstream, rebasing custom patch branches onto the latest upstream main. Uses `gh` CLI to discover all forks automatically.
+Interactively sync forked GitHub repos with their upstream by merging upstream changes into the fork's default branch. Uses `gh` CLI to discover all forks automatically.
 
-**Announce at start:** "I'm using the rebase-custom-forks skill to sync your forks with upstream."
+**Announce at start:** "I'm using the sync-custom-forks skill to sync your forks with upstream."
 
 ## Prerequisites
 
@@ -30,7 +30,7 @@ gh repo list "$(gh api user --jq '.login')" --fork --json name,parent,defaultBra
 This returns all forks with:
 - `name` — repo name
 - `parent.owner.login` / `parent.name` — upstream owner/repo
-- `defaultBranchRef.name` — the custom patches branch (set as default by forking-for-custom-patches skill)
+- `defaultBranchRef.name` — the default branch (where custom patches live)
 - `url` — fork URL
 
 ### Step 2: Present Fork List to User
@@ -40,11 +40,11 @@ Display a numbered list of all discovered forks:
 ```
 Found N forked repositories:
 
-  1. meridian (upstream: rynfar/meridian) — branch: pi-patches
-  2. pi-mcp-adapter (upstream: nicobailon/pi-mcp-adapter) — branch: cartwmic/main
-  3. pi-meridian-extension (upstream: lnilluv/pi-meridian-extension) — branch: pi-patches
+  1. meridian (upstream: rynfar/meridian) — branch: main
+  2. pi-mcp-adapter (upstream: nicobailon/pi-mcp-adapter) — branch: main
+  3. pi-meridian-extension (upstream: lnilluv/pi-meridian-extension) — branch: master
 
-Which forks would you like to rebase? (e.g. "all", "1,3", or "none")
+Which forks would you like to sync? (e.g. "all", "1,3", or "none")
 ```
 
 **Wait for user selection before proceeding.** Do not process any forks without explicit confirmation.
@@ -68,7 +68,7 @@ else
 fi
 ```
 
-If a repo exists in multiple locations, prefer `~/git/<name>` as the canonical clone to rebase. Note the pi extension location if it exists — it may need updating after rebase (see Step 7).
+If a repo exists in multiple locations, prefer `~/git/<name>` as the canonical clone. Note the pi extension location if it exists — it may need updating after sync (see Step 7).
 
 ### Step 4: Ensure Upstream Remote
 
@@ -87,7 +87,7 @@ elif [ "$UPSTREAM_URL" != "$EXPECTED_UPSTREAM" ]; then
 fi
 ```
 
-### Step 5: Fetch Upstream and Determine Branch
+### Step 5: Fetch and Determine Branch
 
 ```bash
 git fetch upstream
@@ -95,15 +95,15 @@ git fetch upstream
 # Determine upstream default branch (usually main or master)
 UPSTREAM_DEFAULT=$(git remote show upstream | sed -n 's/.*HEAD branch: //p')
 
-# The custom branch is the fork's default branch from Step 1
-CUSTOM_BRANCH="<defaultBranchRef.name>"
+# The fork's default branch should match upstream's default
+DEFAULT_BRANCH="<defaultBranchRef.name>"
 ```
 
-### Step 6: Attempt Rebase
+### Step 6: Merge Upstream
 
 ```bash
-# Make sure we're on the custom branch
-git checkout "$CUSTOM_BRANCH"
+# Make sure we're on the default branch
+git checkout "$DEFAULT_BRANCH"
 
 # Check if there are uncommitted changes
 if ! git diff --quiet || ! git diff --cached --quiet; then
@@ -111,20 +111,17 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   # Ask user how to proceed
 fi
 
-# Attempt the rebase
-git rebase "upstream/$UPSTREAM_DEFAULT"
+# Merge upstream changes
+git merge "upstream/$UPSTREAM_DEFAULT" --no-edit
 ```
 
-#### If Rebase Succeeds (No Conflicts)
-
-Report success and move to push:
+#### If Merge Succeeds (No Conflicts)
 
 ```
-✅ <name>: Rebased <custom_branch> onto upstream/<upstream_default> successfully.
-   X commits replayed, no conflicts.
+✅ <name>: Merged upstream/<upstream_default> into <default_branch> successfully.
 ```
 
-#### If Rebase Has Conflicts
+#### If Merge Has Conflicts
 
 **STOP and present conflicts to the user:**
 
@@ -139,7 +136,7 @@ git diff --diff-filter=U
 Present to user:
 
 ```
-⚠️  <name>: Rebase conflicts detected.
+⚠️  <name>: Merge conflicts detected.
 
 Conflicting files:
   1. src/adapter.ts
@@ -148,28 +145,25 @@ Conflicting files:
 Options:
   a) Show conflict details for a specific file
   b) Open in editor to resolve manually
-  c) Abort rebase (git rebase --abort) and skip this repo
+  c) Abort merge (git merge --abort) and skip this repo
   d) Accept upstream version for all conflicts (git checkout --theirs .)
   e) Keep custom version for all conflicts (git checkout --ours .)
 ```
 
-**For option (a):** Show the conflicting hunks with surrounding context so the user can decide. Offer to resolve intelligently:
-- If conflict is in version numbers / lockfiles → suggest accepting upstream
-- If conflict is in the custom patch area → show both versions, ask user which to keep or how to merge
+**For option (a):** Show conflicting hunks with context. Offer to resolve intelligently:
+- Conflicts in version numbers / lockfiles → suggest accepting upstream
+- Conflicts in custom patch area → show both versions, ask user
 
 After resolution:
 ```bash
 git add -A
-git rebase --continue
+git commit --no-edit
 ```
 
-Repeat until rebase completes or user aborts.
-
-### Step 7: Push and Post-Rebase Actions
+### Step 7: Push and Post-Sync Actions
 
 ```bash
-# Force push the rebased branch (required after rebase)
-git push --force-with-lease origin "$CUSTOM_BRANCH"
+git push origin "$DEFAULT_BRANCH"
 ```
 
 **If the repo also exists as a pi extension** (`~/.pi/agent/git/github.com/cartwmic/<name>`):
@@ -178,17 +172,17 @@ Note: This repo is also installed as a pi extension at:
   ~/.pi/agent/git/github.com/cartwmic/<name>
 
 You may want to update it:
-  cd ~/.pi/agent/git/github.com/cartwmic/<name> && git pull --rebase origin <custom_branch>
+  cd ~/.pi/agent/git/github.com/cartwmic/<name> && git pull origin <default_branch>
 
 Or reinstall:
-  pi install git:github.com/cartwmic/<name>#<custom_branch>
+  pi install git:github.com/cartwmic/<name>
 ```
 
 **If the repo is installed via npm** (e.g. meridian):
 ```
 Note: This repo is installed globally via npm.
 You may want to reinstall:
-  npm install -g github:cartwmic/<name>#<custom_branch>
+  npm install -g github:cartwmic/<name>
 ```
 
 ### Step 8: Report Summary
@@ -196,15 +190,15 @@ You may want to reinstall:
 After processing all selected forks:
 
 ```
-Rebase Summary:
-  ✅ meridian: Rebased pi-patches onto upstream/main — pushed
-  ✅ pi-mcp-adapter: Rebased cartwmic/main onto upstream/main — pushed
+Sync Summary:
+  ✅ meridian: Merged upstream/main — pushed
+  ✅ pi-mcp-adapter: Merged upstream/main — pushed
   ⚠️  pi-meridian-extension: Conflicts resolved manually — pushed
   ⏭️  other-repo: Skipped by user
 
-Post-rebase actions needed:
-  - [ ] Reinstall meridian: npm install -g github:cartwmic/meridian#pi-patches
-  - [ ] Update pi extension: pi install git:github.com/cartwmic/pi-meridian-extension#pi-patches
+Post-sync actions needed:
+  - [ ] Reinstall meridian: npm install -g github:cartwmic/meridian
+  - [ ] Update pi extension: cd ~/.pi/agent/git/... && git pull
 ```
 
 ## Quick Reference
@@ -213,35 +207,29 @@ Post-rebase actions needed:
 |------|---------|---------|
 | Discover | `gh repo list --fork --json ...` | Find all forks |
 | Fetch | `git fetch upstream` | Get latest upstream |
-| Rebase | `git rebase upstream/main` | Replay patches |
+| Merge | `git merge upstream/main --no-edit` | Pull in upstream changes |
 | Conflicts | `git diff --diff-filter=U` | Show conflict details |
-| Abort | `git rebase --abort` | Cancel rebase |
-| Continue | `git add -A && git rebase --continue` | After resolving |
-| Push | `git push --force-with-lease` | Update remote |
+| Abort | `git merge --abort` | Cancel merge |
+| Push | `git push origin main` | Update remote |
 
 ## Common Mistakes
 
 **Not fetching upstream first**
-- Problem: Rebase against stale upstream
-- Fix: Always `git fetch upstream` before rebasing
-
-**Using `--force` instead of `--force-with-lease`**
-- Problem: Can overwrite collaborator commits
-- Fix: Always use `--force-with-lease`
+- Problem: Merge against stale upstream
+- Fix: Always `git fetch upstream` before merging
 
 **Forgetting to update secondary install locations**
 - Problem: pi extension or npm global still on old version
 - Fix: Always check for secondary locations and remind user
 
-**Rebasing with uncommitted changes**
-- Problem: Rebase fails or loses work
+**Merging with uncommitted changes**
+- Problem: Merge fails or loses work
 - Fix: Check for clean working tree before starting
 
 ## Red Flags
 
 **Never:**
-- Rebase without user selecting which forks to process
-- Force push without `--force-with-lease`
+- Sync without user selecting which forks to process
 - Auto-resolve conflicts without showing them to user
 - Skip repos silently on error — always report status
 
