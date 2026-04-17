@@ -1,0 +1,9 @@
+# External resources pulled by chezmoi on apply
+# https://www.chezmoi.io/user-guide/include-files-from-elsewhere/
+
+[".local/share/agent-harness/external-skills/basic-memory-skills"]
+  type = "git-repo"
+  url = "https://github.com/basicmachines-co/basic-memory-skills.git"
+  refreshPeriod = "168h"
+  clone.args = ["--depth", "1"]
+  pull.args = ["--ff-only"]

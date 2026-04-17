@@ -175,18 +175,25 @@ This repository includes configurations for:
 Skills and MCP servers are managed centrally via the **agent-harness** system:
 
 - **Canonical source**: `dot_local/share/agent-harness/canonical/` (skills and MCP config)
+- **External skills**: `~/.local/share/agent-harness/external-skills/` (git repos pulled by chezmoi)
 - **Adapters**: `dot_local/share/agent-harness/adapters/{claude,codex,pi}/` (per-agent secrets)
 - **Apply script**: `dot_local/user_scripts/executable_apply_harness_config.sh` (auto-runs on `chezmoi apply`)
 - **Sync script**: `dot_local/user_scripts/executable_sync_harness_skills.sh` (manual, interactive)
+- **External repos**: `.chezmoiexternal.toml` (declares git repos chezmoi clones/pulls)
 
 When `chezmoi apply` runs, the apply script:
 1. Symlinks canonical skills → `~/.claude/skills/`, `~/.codex/skills/`, `~/.pi/agent/skills/`, `~/.agents/skills/`
-2. Generates MCP config for each agent in its native format
-3. Resolves secrets via 1Password where available
+2. Symlinks external skills (from cloned repos) → same agent skill directories
+3. Generates MCP config for each agent in its native format
+4. Resolves secrets via 1Password where available
 
-**Syncing skills**: Run `~/.local/user_scripts/sync_harness_skills.sh` to compare chezmoi source skills against what's deployed. It shows a color-coded diff (additions, removals, content changes) and prompts before applying. Flags: `--dry-run` (preview only), `--yes` (skip prompt). This also cleans up stale symlinks across all harnesses.
+**Skill precedence**: Canonical skills are linked first and win on name collisions with external skills.
+
+**Syncing skills**: Run `~/.local/user_scripts/sync_harness_skills.sh` to compare chezmoi source skills against what's deployed. It shows a color-coded diff (additions, removals, content changes) and prompts before applying. Flags: `--dry-run` (preview only), `--yes` (skip prompt). This also cleans up stale symlinks across all harnesses. Note: the sync script only manages canonical skills; external skills are updated automatically by `chezmoi apply` via git pull.
 
 **Adding a new skill**: Create a directory under `dot_local/share/agent-harness/canonical/skills/<name>/SKILL.md` and run `sync_harness_skills.sh` or `chezmoi apply`. It will be available in all agents.
+
+**Adding external skill repos**: Add a `["path"]` entry to `.chezmoiexternal.toml` with `type = "git-repo"`. The repo is cloned to `~/.local/share/agent-harness/external-skills/<name>/` and any top-level directories containing `SKILL.md` are automatically symlinked into all agent skill directories on `chezmoi apply`. Use `refreshPeriod` to control how often chezmoi re-pulls (e.g., `"168h"` for weekly).
 
 **Adding a new MCP server**: Edit `dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl` and add secrets to each adapter's `mcp-secrets.json.tmpl` if needed.
 
