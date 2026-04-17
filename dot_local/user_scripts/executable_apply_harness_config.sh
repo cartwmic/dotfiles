@@ -8,6 +8,7 @@ SKILLS_ROOT="$CANONICAL_ROOT/skills"
 MCP_FILE="$CANONICAL_ROOT/mcp/servers.json"
 GENERATED_ROOT="${AGENT_HARNESS_GENERATED_ROOT:-$HOME/.local/share/agent-harness/generated}"
 ADAPTERS_ROOT="${AGENT_HARNESS_ADAPTERS_ROOT:-$HOME/.local/share/agent-harness/adapters}"
+EXTERNAL_ROOT="${AGENT_HARNESS_EXTERNAL_ROOT:-$HOME/.local/share/agent-harness/external-skills}"
 
 log() {
   echo "[$SCRIPT_NAME] $1"
@@ -111,25 +112,16 @@ PY
   fi
 }
 
-link_skill_dirs() {
-  dest_root="$1"
+# Link skills from a single source directory into dest_root.
+# Only replaces existing symlinks if they point into the same source tree,
+# so canonical skills (linked first) win over external ones on name collisions.
+_link_skills_from() {
+  source_root="$1"
+  dest_root="$2"
 
-  require_dir "$SKILLS_ROOT"
-  mkdir -p "$dest_root"
+  [ -d "$source_root" ] || return 0
 
-  find "$dest_root" -mindepth 1 -maxdepth 1 -type l | while IFS= read -r existing_link; do
-    link_target=$(readlink "$existing_link")
-    case "$link_target" in
-      "$SKILLS_ROOT"/*)
-        if [ ! -d "$link_target" ]; then
-          rm -f "$existing_link"
-          log "Removed stale skill link: $existing_link"
-        fi
-        ;;
-    esac
-  done
-
-  find "$SKILLS_ROOT" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r skill_dir; do
+  find "$source_root" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r skill_dir; do
     if [ ! -f "$skill_dir/SKILL.md" ]; then
       continue
     fi
@@ -143,7 +135,16 @@ link_skill_dirs() {
         log "Skill already linked: $dest_path"
         continue
       fi
-      rm -f "$dest_path"
+      # Only replace if existing link points into the same source tree
+      case "$current_target" in
+        "$source_root"/*)
+          rm -f "$dest_path"
+          ;;
+        *)
+          log "Skill $skill_name already linked from another source, skipping"
+          continue
+          ;;
+      esac
     elif [ -e "$dest_path" ]; then
       log "Skipping existing non-symlink skill path: $dest_path"
       continue
@@ -152,6 +153,36 @@ link_skill_dirs() {
     ln -s "$skill_dir" "$dest_path"
     log "Linked skill: $dest_path -> $skill_dir"
   done
+}
+
+link_skill_dirs() {
+  dest_root="$1"
+
+  require_dir "$SKILLS_ROOT"
+  mkdir -p "$dest_root"
+
+  # Clean stale symlinks pointing into canonical or external skill roots
+  find "$dest_root" -mindepth 1 -maxdepth 1 -type l | while IFS= read -r existing_link; do
+    link_target=$(readlink "$existing_link")
+    case "$link_target" in
+      "$SKILLS_ROOT"/*|"$EXTERNAL_ROOT"/*)
+        if [ ! -d "$link_target" ]; then
+          rm -f "$existing_link"
+          log "Removed stale skill link: $existing_link"
+        fi
+        ;;
+    esac
+  done
+
+  # Link canonical skills first (they take precedence)
+  _link_skills_from "$SKILLS_ROOT" "$dest_root"
+
+  # Link external skills from each cloned repo
+  if [ -d "$EXTERNAL_ROOT" ]; then
+    find "$EXTERNAL_ROOT" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r repo_dir; do
+      _link_skills_from "$repo_dir" "$dest_root"
+    done
+  fi
 }
 
 render_claude_mcp_commands() {
