@@ -1,15 +1,15 @@
 ---
 name: forking-for-custom-patches
-description: Use when needing to make custom edits to an open source dependency, library, framework, extension, or plugin - handles forking, branch setup, upstream sync workflow, and push. Also suggest when editing installed open source code or vendored dependencies.
+description: Use when needing to make custom edits to an open source dependency, library, framework, extension, or plugin - handles forking, patching, and push. Also suggest when editing installed open source code or vendored dependencies.
 ---
 
 # Forking for Custom Patches
 
 ## Overview
 
-Systematically fork, patch, and maintain custom changes to open source dependencies with automatic upstream sync.
+Systematically fork, patch, and maintain custom changes to open source dependencies.
 
-**Core principle:** Custom branch as default + automated upstream sync = maintainable fork that stays current.
+**Core principle:** Custom commits go directly on the fork's default branch (`main` or `master`). Sync with upstream via `git fetch upstream && git merge` or GitHub's built-in "Sync fork" button.
 
 **Announce at start:** "I'm using the forking-for-custom-patches skill to set up a maintainable fork."
 
@@ -71,18 +71,18 @@ cd "$(basename "$UPSTREAM")"
 
 # Verify upstream remote exists
 git remote -v | grep upstream || git remote add upstream "https://github.com/$UPSTREAM.git"
+
+# Determine upstream's default branch
+UPSTREAM_DEFAULT=$(git remote show upstream | sed -n 's/.*HEAD branch: //p')
 ```
 
-### Step 4: Create Custom Branch
+### Step 4: Make the Custom Changes
+
+Work directly on the fork's default branch (usually `main` or `master` — matching upstream's default branch).
 
 ```bash
-# Always use cartwmic/main as the custom branch name
-CUSTOM_BRANCH="cartwmic/main"
-
-git checkout -b "$CUSTOM_BRANCH"
+git checkout "$UPSTREAM_DEFAULT"
 ```
-
-### Step 5: Make the Custom Changes
 
 Apply the needed edits. Commit with a clear message:
 
@@ -95,100 +95,57 @@ Reason: <why this patch is needed>
 "
 ```
 
-### Step 6: Push and Set Custom Branch as Default
+### Step 5: Push
 
 ```bash
-# Push the custom branch
-git push -u origin "$CUSTOM_BRANCH"
-
-# Set as default branch on GitHub
-gh repo edit "$FORK_REPO" --default-branch "$CUSTOM_BRANCH"
+git push origin "$UPSTREAM_DEFAULT"
 ```
 
-**Why set as default:** Ensures clones/installs from your fork get the patched version by default, not the unmodified main.
-
-### Step 7: Add Upstream Sync Workflow
-
-Create `.github/workflows/sync-upstream.yml`:
-
-```yaml
-name: Sync upstream
-on:
-  schedule:
-    - cron: '0 6 * * 1'  # Weekly on Monday at 06:00 UTC
-  workflow_dispatch: {}    # Allow manual trigger
-
-permissions:
-  contents: write
-
-jobs:
-  sync:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Pull upstream main
-        run: |
-          git remote add upstream https://github.com/${{ env.UPSTREAM }}.git || true
-          git fetch upstream
-          git merge upstream/main --no-edit
-          git push origin main
-        env:
-          UPSTREAM: UPSTREAM_PLACEHOLDER
-```
-
-```bash
-# Replace placeholder with actual upstream
-sed -i'' -e "s|UPSTREAM_PLACEHOLDER|$UPSTREAM|" .github/workflows/sync-upstream.yml
-
-git add .github/workflows/sync-upstream.yml
-git commit -m "ci: add weekly upstream sync workflow"
-git push
-```
-
-**After sync runs:** The `main` branch stays current with upstream. Your `cartwmic/main` branch diverges only by your patches. To manually rebase onto updated main:
-
-```bash
-git fetch origin main
-git checkout cartwmic/main
-git rebase origin/main
-git push --force-with-lease
-```
-
-### Step 8: Report Summary
+### Step 6: Report Summary
 
 ```
 Fork ready:
   Fork:     https://github.com/<FORK_REPO>
-  Branch:   cartwmic/main (set as default)
+  Branch:   <default_branch> (commits on top of upstream)
   Upstream: https://github.com/<UPSTREAM>
-  Sync:     Weekly via GitHub Actions (main ← upstream)
+  Sync:     git fetch upstream && git merge upstream/<default_branch>
+            Or use GitHub's "Sync fork" button (web UI)
 ```
+
+## Syncing with Upstream
+
+No automated workflow needed. Use any of these approaches when you want upstream changes:
+
+```bash
+# CLI: fetch and merge upstream
+git fetch upstream
+git merge upstream/main --no-edit
+git push
+
+# Or use gh CLI
+gh repo sync owner/repo
+```
+
+Or use GitHub's built-in **"Sync fork"** button in the web UI.
+
+**If merge conflicts occur:** Resolve them manually — your custom patches are on top, so conflicts show exactly where upstream diverged from your edits.
 
 ## Quick Reference
 
 | Step | Command | Purpose |
 |------|---------|---------|
 | Fork | `gh repo fork OWNER/REPO` | Create fork on GitHub |
-| Branch | `git checkout -b cartwmic/main` | Isolate custom changes |
-| Default | `gh repo edit --default-branch cartwmic/main` | Installs use patched version |
-| Sync workflow | `.github/workflows/sync-upstream.yml` | Keep main current |
-| Push | `git push -u origin cartwmic/main` | Publish changes |
-| Rebase | `git rebase origin/main` | Manual sync of custom branch |
+| Clone | `gh repo clone FORK` | Clone locally |
+| Upstream | `git remote add upstream URL` | Track upstream |
+| Edit | Work on default branch | Apply custom patches |
+| Push | `git push origin main` | Publish changes |
+| Sync | `git fetch upstream && git merge upstream/main` | Pull upstream changes |
 
 ## Common Mistakes
 
-**Forgetting to set default branch**
-- Problem: Consumers clone/install main (unpatched)
-- Fix: Always `gh repo edit --default-branch cartwmic/main` after push
-
-**No upstream sync**
-- Problem: Fork drifts, patches conflict later
-- Fix: Always add sync workflow in Step 7
+**No upstream remote configured**
+- Problem: Can't sync with upstream later
+- Fix: Always `git remote add upstream` after cloning
 
 **Vague commit messages**
 - Problem: Can't tell custom patches from upstream
@@ -198,16 +155,20 @@ Fork ready:
 - Problem: Fork wrong repo, or fork when unnecessary
 - Fix: Always confirm upstream repo with user before forking
 
+**Creating separate branches or sync workflows**
+- Problem: Over-engineering — adds complexity without benefit
+- Fix: Work directly on the default branch, sync manually when needed
+
 ## Red Flags
 
 **Never:**
 - Fork without confirming the upstream repo with the user
-- Leave main as default branch on a patched fork
-- Skip the sync workflow
-- Make custom edits directly on main
+- Create a separate custom branch and set it as default (over-engineered)
+- Add automated sync workflows (unnecessary — use GitHub's built-in sync)
+- Forget to set up the upstream remote
 
 **Always:**
-- Use `cartwmic/main` as the custom branch name
-- Set `cartwmic/main` as default branch
-- Add upstream sync workflow
+- Work directly on the fork's default branch (`main` or `master`)
+- Prefix custom commits with `custom:` and include upstream URL
+- Keep the upstream remote configured for manual syncing
 - Include upstream URL and reason in commit messages
