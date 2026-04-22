@@ -33,9 +33,40 @@ Cut a new semver tag for work since the previous tag: review commits, decide bum
 | 3 | Ask user: major / minor / patch | no explicit answer |
 | 4 | Suggest summary suffix; user edits or approves | — |
 | 5 | Update version refs (table below) | field missing in a detected file |
-| 6 | `git add -A && git commit -m "chore(release): NEW"` | — |
-| 7 | `git tag -a NEW -m "<commit list>"` | — |
-| 8 | `git push origin HEAD && git push origin NEW` | rejection — do not delete local tag |
+| 6 | Run project build (see "Project Build Step"), then `git status --porcelain` to capture any generated-file drift | build fails; no build command can be identified |
+| 7 | `git add -A && git commit -m "chore(release): NEW"` (includes build-generated changes) | — |
+| 8 | `git tag -a NEW -m "<commit list>"` | — |
+| 9 | `git push origin HEAD && git push origin NEW` | rejection — do not delete local tag |
+
+## Project Build Step
+
+A version bump often causes the project's build to regenerate files (lockfiles with the new version, formatter output, FFI/codegen artifacts). Running the build **before** the release commit folds that drift into the release commit instead of leaving the working tree dirty immediately after tagging.
+
+**Core principle (same as the rest of the skill):** do not guess the build command. Ask the user, or identify candidates and have the user confirm.
+
+### Identifying the build command
+
+Look in this order and surface what you find to the user — do not auto-pick:
+
+1. `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `README.md` — project instructions often name the canonical build command (e.g. `./build_apk.sh debug`, `make release`, `pnpm build`)
+2. Repo-root scripts: `build*.sh`, `Makefile` targets, `justfile`, `Taskfile.yml`
+3. Ecosystem defaults only as **candidates to confirm**, never as silent fallback:
+   - Rust: `cargo build --workspace`
+   - Node: `package.json` `scripts.build`
+   - Flutter: `flutter build <target>`
+   - Go: `go build ./...`
+
+If the project explicitly forbids running ecosystem tools directly (e.g. "always use `./build_apk.sh`, do not run `cargo` or `flutter` directly"), honor that — run the wrapper script the project mandates.
+
+### Handling build output
+
+- **Build succeeds, tree still clean** → proceed to commit with just the version-ref edits.
+- **Build succeeds, tree dirty** → inspect the drift. If it's clearly a side-effect of the bump (lockfile version strings, formatter reflows, regenerated FFI bindings), `git add -A` and fold it into the release commit. If the drift looks unrelated or suspicious (source edits, secret files, unrelated config), **stop and ask the user**.
+- **Build fails** → stop. Do not tag a broken release. Surface the error and let the user decide whether to fix forward or abort the release.
+
+### Skipping the build step
+
+Only skip if the user explicitly says "skip build" or the repo has no build command at all (pure docs, pure config). Record the skip in your summary so the user knows the release was not build-verified.
 
 ## Version Reference Locations
 
@@ -64,6 +95,9 @@ Multiple authoritative sources disagree? Show each and ask the user to resolve. 
 - Tempted to auto-stash a dirty tree
 - Tempted to delete the local tag after a failed push
 - Tempted to create `CHANGELOG.md` without being asked
+- Tempted to skip the build step because "it'll probably be fine"
+- Tempted to guess the build command instead of asking
+- Tempted to tag after a failed build
 
 **All of these mean: stop and ask the user.**
 
@@ -76,6 +110,8 @@ Multiple authoritative sources disagree? Show each and ask the user to resolve. 
 | Tagging before verifying `PREV..HEAD` is non-empty | Empty range = nothing to release; stop |
 | Pushing tag before commit | Push HEAD first, then tag |
 | Swallowing push rejection and retrying | Surface the error, let the user decide |
+| Committing before running the project build | Build regenerates lockfiles / formatter output / codegen; run it first so that drift lands in the release commit, not right after it |
+| Running a raw ecosystem tool (`cargo`, `flutter`) when the project mandates a wrapper | Honor the project's build wrapper (e.g. `./build_apk.sh debug`); check `AGENTS.md`/`CLAUDE.md` |
 
 ## Out of Scope
 
