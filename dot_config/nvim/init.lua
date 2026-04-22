@@ -1,5 +1,20 @@
 -- bootstrap lazy.nvim, LazyVim and your plugins
 
+-- Python3 provider: point at a dedicated venv that has `pynvim` installed.
+-- Avoids the `Failed to load python3 host` cascade when the PATH python
+-- (e.g. a fresh mise-managed interpreter) lacks pynvim.
+-- Set up once with:  python3 -m venv ~/.local/share/nvim-python && \
+--                   ~/.local/share/nvim-python/bin/pip install pynvim
+do
+  local nvim_py = vim.fn.expand("~/.local/share/nvim-python/bin/python3")
+  if vim.fn.executable(nvim_py) == 1 then
+    vim.g.python3_host_prog = nvim_py
+  else
+    -- Fall back to disabling the provider rather than erroring on startup.
+    vim.g.loaded_python3_provider = 0
+  end
+end
+
 require("config.lazy")
 
 vim.opt.clipboard = "unnamedplus"
