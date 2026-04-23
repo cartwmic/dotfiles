@@ -7,3 +7,5 @@ Do not prefix bash tool calls with `cd <project_dir> &&` or similar directory ch
 When using the `subagent` tool from the `pi-subagents` extension, prefer isolated context (`context: "fresh"` or omit `context`) by default.
 
 Only use `context: "fork"` if the user explicitly asks for forked or parent-session context, or explicitly asks to preserve/share the current conversation context with the subagent.
+
+Before kicking off subagents, check the current model list by running `pi --list-models` and use it to confirm the exact `<prefix>/<model-id>` value to pass in the subagent `model` field. Do not guess or hand-construct model identifiers when an exact current value can be verified from `pi --list-models`.
