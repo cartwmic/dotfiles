@@ -1,6 +1,9 @@
 # Add ~/.local/bin to PATH early so mise is available
 export PATH="$HOME/.local/bin:$PATH"
 
+# Source machine-local overrides (not managed by chezmoi)
+[ -f "$HOME/.zshenv.local" ] && . "$HOME/.zshenv.local"
+
 # Cargo environment (if rust installed via cargo directly)
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 

@@ -551,6 +551,62 @@ if ! test -f ~/.fzf.zsh; then
 fi
 '''
 
+[tasks."install-nvim-rosetta"]
+description = "Install x86_64 neovim under Rosetta for managed Macs where ad-hoc signed arm64 binaries are blocked"
+run = '''
+PROFILE=$(chezmoi data --format json 2>/dev/null | grep -v "^op " | python3 -c "import json,sys; print(json.load(sys.stdin).get('profile',''))" 2>/dev/null || echo "")
+if [ "$PROFILE" != "axon-work-computer" ]; then
+  echo "Skipping: profile is '$PROFILE', not 'axon-work-computer'"
+  exit 0
+fi
+
+# Disable mise-managed neovim via env var in ~/.zshenv.local (not managed by chezmoi).
+# This prevents mise activate from adding the arm64 binary to PATH.
+# Must run before the idempotency check so it's always applied.
+ENV_FILE="$HOME/.zshenv.local"
+if ! grep -qF "MISE_DISABLE_TOOLS" "$ENV_FILE" 2>/dev/null; then
+  echo "# Added by install-nvim-rosetta: disable mise neovim (arm64 blocked by macOS code signing)" >> "$ENV_FILE"
+  echo 'export MISE_DISABLE_TOOLS=neovim' >> "$ENV_FILE"
+  echo "Added MISE_DISABLE_TOOLS=neovim to $ENV_FILE"
+fi
+
+INSTALL_DIR="$HOME/.local/share/nvim-x86_64"
+WRAPPER="$HOME/.local/bin/nvim"
+# Get target version: check mise config, then fall back to latest GitHub release
+VERSION=$(MISE_DISABLE_TOOLS= mise current neovim 2>/dev/null || \
+  curl -sL https://api.github.com/repos/neovim/neovim/releases/latest | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'].lstrip('v'))" 2>/dev/null || \
+  echo "0.12.1")
+
+# Skip if already installed at this version
+if [ -x "$INSTALL_DIR/bin/nvim" ]; then
+  INSTALLED=$($INSTALL_DIR/bin/nvim --version 2>/dev/null | head -1 | awk '{print $2}' || echo "")
+  if [ "v$VERSION" = "$INSTALLED" ] && [ -x "$WRAPPER" ]; then
+    echo "nvim x86_64 v$VERSION already installed"
+    exit 0
+  fi
+fi
+
+echo "Installing neovim $VERSION (x86_64) for Rosetta..."
+TEMP_DIR=$(mktemp -d)
+trap "rm -rf $TEMP_DIR" EXIT
+curl -sL "https://github.com/neovim/neovim/releases/download/v${VERSION}/nvim-macos-x86_64.tar.gz" -o "$TEMP_DIR/nvim.tar.gz"
+tar xzf "$TEMP_DIR/nvim.tar.gz" -C "$TEMP_DIR"
+
+rm -rf "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR"
+cp -R "$TEMP_DIR/nvim-macos-x86_64/"* "$INSTALL_DIR/"
+
+mkdir -p "$(dirname "$WRAPPER")"
+cat > "$WRAPPER" << 'WRAPPER_EOF'
+#!/bin/bash
+exec arch -x86_64 "$HOME/.local/share/nvim-x86_64/bin/nvim" "$@"
+WRAPPER_EOF
+chmod +x "$WRAPPER"
+
+echo "✅ nvim x86_64 installed at $INSTALL_DIR"
+echo "✅ Wrapper at $WRAPPER (uses Rosetta)"
+'''
+
 [tasks.bootstrap]
 description = "Complete system bootstrap"
 depends = [
@@ -574,6 +630,7 @@ depends = [
   "install-imagemagick-ubuntu",
   "install-fonts",
   "setup-fzf-shell",
+  "install-nvim-rosetta",
 ]
 run = '''
 echo "✅ Bootstrap complete!"
