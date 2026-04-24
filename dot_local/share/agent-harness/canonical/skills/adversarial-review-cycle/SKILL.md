@@ -11,6 +11,19 @@ Iteratively improve plan artifacts through blind multi-model adversarial reviews
 
 **REQUIRED SUB-SKILL:** Use review-plans for each reviewer subagent.
 
+## Scope Discipline — Default Answer Is No
+
+Expand scope only when (a) **required** — the original goal is unachievable without it — or (b) **explicitly approved by the user** in the decision audit. Everything else is a follow-up, not part of this cycle. Operational mechanics live in Step 4 and Step 9.
+
+**Red Flags — STOP and ask:**
+
+- "While we're in here, we should also…"
+- Reviewer question has multiple valid answers; the one you'd pick enlarges the plan
+- Adding a task, artifact, or acceptance criterion not in source requirements
+- Fix for a P1/P2 requires *new* functionality rather than correcting existing functionality
+
+**All of these mean: surface in Step 6 before applying, not after.**
+
 ## Inputs
 
 | Input | Required? |
