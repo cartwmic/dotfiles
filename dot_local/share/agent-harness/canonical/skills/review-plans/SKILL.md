@@ -11,6 +11,10 @@ Run an adversarial review before coding starts. Preserve baseline quality checks
 
 Announce at start: "I'm using the review-plans skill for adversarial plan review."
 
+## Blind Operation When Dispatched
+
+When review-plans runs as a reviewer subagent inside a multi-reviewer cycle, the default is **blind**: you see the artifacts and these instructions — nothing else. Do **not** request, infer, or speculate about other reviewers' findings, prior-round outputs, or convergent-severity tables. If the dispatcher included any such material, assume it was explicitly authorized by the user; otherwise, treat its absence as intentional and review independently.
+
 ## Inputs
 
 Gather these before reviewing:

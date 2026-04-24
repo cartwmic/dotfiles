@@ -11,6 +11,19 @@ Iteratively improve plan artifacts through blind multi-model adversarial reviews
 
 **REQUIRED SUB-SKILL:** Use review-plans for each reviewer subagent.
 
+## Blind Reviews — Default
+
+Reviewer subagents are **blind by default**: each one sees only the artifacts and the review-plans skill. They do **not** see other reviewers' output, prior-round findings, the round tracker, or the convergent-findings table. Break blindness only when the user explicitly requests it (e.g., "let reviewer B see A's P1 findings", "run a consensus round after disclosure").
+
+**Red Flags — STOP:**
+
+- About to pass prior-round findings to a reviewer "for context"
+- About to share Reviewer A's output with Reviewer B "to save a round"
+- Including the round tracker or a previous convergent-findings table in a reviewer prompt
+- Telling a reviewer which severity other reviewers assigned
+
+**Blind means:** same prompt, same artifact set, independent analysis. Disagreement between reviewers is the signal — don't collapse it by leakage.
+
 ## Scope Discipline — Default Answer Is No
 
 Expand scope only when (a) **required** — the original goal is unachievable without it — or (b) **explicitly approved by the user** in the decision audit. Everything else is a follow-up, not part of this cycle. Operational mechanics live in Step 4 and Step 9.
@@ -38,7 +51,7 @@ Expand scope only when (a) **required** — the original goal is unachievable wi
 
 ### Step 1: Launch Blind Reviews
 
-Dispatch reviewer subagents per user's configuration. Each reviewer reads all artifact files and gets the review-plans skill. Reviewers do not see each other's output.
+Dispatch reviewer subagents per user's configuration. Each reviewer reads all artifact files and gets the review-plans skill. Reviewers operate **blind** (see "Blind Reviews — Default" above): no cross-reviewer leakage, no prior-round findings, no round tracker in the prompt. Same input, independent analysis, every round.
 
 If a subagent fails, stop the cycle and report the failure. Let the user decide how to proceed.
 
@@ -129,6 +142,7 @@ Run one last blind review round against the cleaned-up artifacts. This catches i
 
 | Mistake | Fix |
 |---|---|
+| Leaking prior findings into a reviewer prompt "for context" | Blind by default — break only with explicit user instruction |
 | Auto-applying scope additions without flagging | Distinguish bug fixes from new scope in Step 4 |
 | No round tracker — can't tell if converging | Maintain the P0/P1 table every round |
 | Chasing P3s forever | Stop condition keys off P0+P1 trajectory, not total count |
