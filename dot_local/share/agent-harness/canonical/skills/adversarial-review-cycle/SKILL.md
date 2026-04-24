@@ -51,7 +51,7 @@ Expand scope only when (a) **required** — the original goal is unachievable wi
 
 ### Step 1: Launch Blind Reviews
 
-Dispatch reviewer subagents per user's configuration. Each reviewer reads all artifact files and gets the review-plans skill. Reviewers operate **blind** (see "Blind Reviews — Default" above): no cross-reviewer leakage, no prior-round findings, no round tracker in the prompt. Same input, independent analysis, every round.
+Dispatch reviewer subagents per user's configuration. Each reviewer reads all artifact files and gets the review-plans skill. Reviewers operate blind — see "Blind Reviews — Default" above for what that means and when to break it.
 
 If a subagent fails, stop the cycle and report the failure. Let the user decide how to proceed.
 
