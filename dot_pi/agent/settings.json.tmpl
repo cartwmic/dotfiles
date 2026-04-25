@@ -1,18 +1,24 @@
 {
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.4",
+{{- if eq .profile "axon-work-computer" }}
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-opus-4-6",
+{{- else }}
+  "defaultProvider": "claude-agent-sdk",
+  "defaultModel": "claude-opus-4-6",
+{{- end }}
   "defaultThinkingLevel": "high",
   "enabledModels": [
-    "openai-codex/gpt-5.4",
 {{- if eq .profile "axon-work-computer" }}
+    "openai-codex/gpt-5.4",
     "anthropic/claude-sonnet-4-6",
     "anthropic/claude-opus-4-6",
     "amazon-bedrock/us.anthropic.claude-sonnet-4-6",
     "amazon-bedrock/us.anthropic.claude-opus-4-6-v1",
     "amazon-bedrock/us.anthropic.claude-opus-4-7"
 {{- else }}
-    "anthropic/claude-sonnet-4-6",
-    "anthropic/claude-opus-4-6"
+    "openai-codex/gpt-5.4",
+    "claude-agent-sdk/claude-sonnet-4-6",
+    "claude-agent-sdk/claude-opus-4-6"
 {{- end }}
   ],
   "packages": [
