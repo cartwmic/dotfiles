@@ -3,7 +3,7 @@
   "defaultProvider": "anthropic",
   "defaultModel": "claude-opus-4-6",
 {{- else }}
-  "defaultProvider": "claude-agent-sdk",
+  "defaultProvider": "claude-bridge",
   "defaultModel": "claude-opus-4-6",
 {{- end }}
   "defaultThinkingLevel": "high",
@@ -17,8 +17,8 @@
     "amazon-bedrock/us.anthropic.claude-opus-4-7"
 {{- else }}
     "openai-codex/gpt-5.4",
-    "claude-agent-sdk/claude-sonnet-4-6",
-    "claude-agent-sdk/claude-opus-4-6"
+    "claude-bridge/claude-sonnet-4-6",
+    "claude-bridge/claude-opus-4-6"
 {{- end }}
   ],
   "packages": [
@@ -31,7 +31,7 @@
     "https://github.com/hk-vk/pi-connect",
     "https://github.com/ndraiman/pi-cursor-provider",
     "https://github.com/olixis/pi-openrouter-plus",
-    "npm:claude-agent-sdk-pi"
+    "https://github.com/elidickinson/pi-claude-bridge"
   ],
   "compaction": {
     "enabled": false
