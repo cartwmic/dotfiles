@@ -40,9 +40,8 @@ Display a numbered list of all discovered forks:
 ```
 Found N forked repositories:
 
-  1. meridian (upstream: rynfar/meridian) — branch: main
-  2. pi-mcp-adapter (upstream: nicobailon/pi-mcp-adapter) — branch: main
-  3. pi-meridian-extension (upstream: lnilluv/pi-meridian-extension) — branch: master
+  1. pi-mcp-adapter (upstream: nicobailon/pi-mcp-adapter) — branch: main
+  2. pi-rtk-optimizer (upstream: example/pi-rtk-optimizer) — branch: main
 
 Which forks would you like to sync? (e.g. "all", "1,3", or "none")
 ```
@@ -178,7 +177,7 @@ Or reinstall:
   pi install git:github.com/cartwmic/<name>
 ```
 
-**If the repo is installed via npm** (e.g. meridian):
+**If the repo is installed via npm**:
 ```
 Note: This repo is installed globally via npm.
 You may want to reinstall:
@@ -191,13 +190,11 @@ After processing all selected forks:
 
 ```
 Sync Summary:
-  ✅ meridian: Merged upstream/main — pushed
   ✅ pi-mcp-adapter: Merged upstream/main — pushed
-  ⚠️  pi-meridian-extension: Conflicts resolved manually — pushed
+  ✅ pi-rtk-optimizer: Merged upstream/main — pushed
   ⏭️  other-repo: Skipped by user
 
 Post-sync actions needed:
-  - [ ] Reinstall meridian: npm install -g github:cartwmic/meridian
   - [ ] Update pi extension: cd ~/.pi/agent/git/... && git pull
 ```
 

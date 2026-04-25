@@ -393,52 +393,6 @@ if ! command -v claude-code-acp >/dev/null 2>&1; then
 fi
 '''
 
-[tasks."install-meridian"]
-description = "Install Meridian proxy"
-run = '''
-if ! command -v meridian >/dev/null 2>&1; then
-  # Ensure required tooling is available
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "ERROR: npm not found. Node.js must be installed first."
-    exit 1
-  fi
-  if ! command -v bun >/dev/null 2>&1; then
-    echo "ERROR: bun not found. Meridian build requires bun."
-    exit 1
-  fi
-  if ! command -v git >/dev/null 2>&1; then
-    echo "ERROR: git not found. Meridian install requires git."
-    exit 1
-  fi
-
-  NPM_GLOBAL_ROOT="$(npm root -g)"
-  MERIDIAN_PKG_PATH="$NPM_GLOBAL_ROOT/@rynfar/meridian"
-
-  if [ -L "$MERIDIAN_PKG_PATH" ]; then
-    MERIDIAN_TARGET="$(readlink "$MERIDIAN_PKG_PATH" || true)"
-    case "$MERIDIAN_TARGET" in
-      *".npm/_cacache/tmp/"*"/git-clone"*)
-        echo "Removing stale Meridian npm symlink: $MERIDIAN_PKG_PATH -> $MERIDIAN_TARGET"
-        rm -f "$MERIDIAN_PKG_PATH"
-        ;;
-    esac
-  fi
-
-  TEMP_DIR="$(mktemp -d)"
-  cleanup() {
-    rm -rf "$TEMP_DIR"
-  }
-  trap cleanup EXIT INT TERM
-
-  git clone --depth 1 --branch pi-patches https://github.com/cartwmic/meridian "$TEMP_DIR/repo"
-  cd "$TEMP_DIR/repo"
-  bun install
-  bun run build
-  PKG_TGZ="$(npm pack | tail -n 1)"
-  npm install -g "$PKG_TGZ"
-fi
-'''
-
 [tasks."install-openspec"]
 description = "Install OpenSpec CLI"
 run = '''
@@ -620,7 +574,6 @@ depends = [
   "install-claude",
   "install-furi",
   "install-claude-code-acp",
-  "install-meridian",
   "install-openspec",
   "install-antidote",
   "install-fzf-tab",
