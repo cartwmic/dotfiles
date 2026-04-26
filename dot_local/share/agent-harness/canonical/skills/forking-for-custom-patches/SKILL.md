@@ -76,6 +76,19 @@ git remote -v | grep upstream || git remote add upstream "https://github.com/$UP
 UPSTREAM_DEFAULT=$(git remote show upstream | sed -n 's/.*HEAD branch: //p')
 ```
 
+### Step 3b: Set Default Tracking to Origin
+
+After cloning, `gh repo clone` may set the local branch to track upstream. Update it to track your fork so `git push`/`git pull` go to origin by default, while keeping the upstream remote available for syncing.
+
+```bash
+git branch --set-upstream-to=origin/$UPSTREAM_DEFAULT $UPSTREAM_DEFAULT
+```
+
+Verify:
+```bash
+git branch -vv  # should show origin/<branch>, not upstream/<branch>
+```
+
 ### Step 4: Make the Custom Changes
 
 Work directly on the fork's default branch (usually `main` or `master` — matching upstream's default branch).
@@ -137,6 +150,7 @@ Or use GitHub's built-in **"Sync fork"** button in the web UI.
 | Fork | `gh repo fork OWNER/REPO` | Create fork on GitHub |
 | Clone | `gh repo clone FORK ~/git/REPO` | Clone to ~/git/ |
 | Upstream | `git remote add upstream URL` | Track upstream |
+| Track origin | `git branch --set-upstream-to=origin/main` | Push/pull default to fork |
 | Edit | Work on default branch | Apply custom patches |
 | Push | `git push origin main` | Publish changes |
 | Sync | `git fetch upstream && git merge upstream/main` | Pull upstream changes |
