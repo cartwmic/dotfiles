@@ -1,10 +1,10 @@
 {
 {{- if eq .profile "axon-work-computer" }}
   "defaultProvider": "anthropic",
-  "defaultModel": "claude-opus-4-6",
+  "defaultModel": "claude-opus-4-7",
 {{- else }}
   "defaultProvider": "claude-bridge",
-  "defaultModel": "claude-opus-4-6",
+  "defaultModel": "claude-opus-4-7",
 {{- end }}
   "defaultThinkingLevel": "high",
   "enabledModels": [
@@ -12,12 +12,14 @@
     "openai-codex/gpt-5.4",
     "anthropic/claude-sonnet-4-6",
     "anthropic/claude-opus-4-6",
+    "anthropic/claude-opus-4-7",
     "amazon-bedrock/us.anthropic.claude-sonnet-4-6",
     "amazon-bedrock/us.anthropic.claude-opus-4-6-v1",
     "amazon-bedrock/us.anthropic.claude-opus-4-7"
 {{- else }}
     "openai-codex/gpt-5.4",
     "claude-bridge/claude-sonnet-4-6",
+    "claude-bridge/claude-opus-4-7",
     "claude-bridge/claude-opus-4-6"
 {{- end }}
   ],
