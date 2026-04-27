@@ -98,19 +98,42 @@ For pre-submit assertions (no Enter ever pressed — the extension acted in the 
 - Per-script timeout in the batch runner (default 5 min) — Pi can hang on subtle bugs.
 - `--no-session` keeps your session JSONL out of `~/.pi/agent/sessions/`.
 
-### Cross-scenario isolation in batch mode
+### Private tmux server per scenario (cross-scenario + parallel-safe)
 
-When scenarios run back-to-back in a single shell (a `for` loop, a `run-all-scenarios.sh` batch), tmux state and stray `pi` processes from the previous scenario leak into the next. The next scenario's `tmux new-session` succeeds, but pi inside it doesn't reach a fully-focused input state — and `tmux send-keys` fires into the void. **Symptom:** bridge log shows only `provider: registered (models=N)` with no `fresh query` line. Test silently hangs until the per-scenario timeout fires.
+The default tmux server is **shared** across the user's whole session. If two scenarios run on the same server (sequentially in a batch loop, or concurrently), they can interfere: `kill-server` in one nukes both, a stray pi process from one poisons the other's session, and `tmux send-keys` into the wrong session is silently lost.
 
-**The fix is hard reset between every scenario:**
+**Fix: every scenario runs against its own tmux server, selected via `tmux -L <socket>`:**
 
 ```bash
-tmux kill-server 2>/dev/null || true
-pkill -9 -f "pi --no-session" 2>/dev/null || true   # only test-harness pi, never user's interactive pi
-sleep 5                                              # let kernel + tmux server release resources
+: "${SCN_TMUX_SOCKET:=pi-scn-$$}"
+TMUX_CMD=(tmux -L "$SCN_TMUX_SOCKET")
+"${TMUX_CMD[@]}" new-session -d -s "$SESSION" ...
+"${TMUX_CMD[@]}" send-keys ...
+"${TMUX_CMD[@]}" kill-server   # only kills *this scenario's* server
 ```
 
-`scenario-lib.sh` exposes this as `scn_clean_state` and `run-all-scenarios.sh` runs it before every scenario. Anything less and ~10–30% of scenarios in a batch will silently hang depending on machine load.
+The lib's `scn_pi_start`, `scn_pi_stop`, `scn_send`, `scn_capture`, etc. all use `${TMUX_CMD[@]}` instead of bare `tmux`. Each scenario's `scn_pi_stop` runs `kill-server` — harmless because the server is dedicated. No `pkill -f "pi --no-session"` needed (and dangerous in parallel mode: it kills siblings).
+
+**Symptom of getting this wrong:** in a batch, ~10–30% of scenarios silently hang. Bridge log shows `provider: registered` but no `fresh query` line — pi inside the new session was contending with leftover state from the previous scenario's tmux server.
+
+### Parallel execution
+
+With private servers, `run-all-scenarios.sh` supports concurrent execution:
+
+```bash
+SCENARIO_PARALLEL=4 ./run-all-scenarios.sh   # 4 scenarios at once
+SCENARIO_FILTER="^s(0|1|18)$" SCENARIO_PARALLEL=3 ./run-all-scenarios.sh   # subset
+```
+
+Each child runs with `SCN_TMUX_SOCKET=pi-scn-<name>-<dispatcher-pid>` so no two children share a server. The dispatcher polls **`.<name>.done` marker files** rather than `kill -0` (which returns 0 for zombies — fooling naive poll loops into thinking children are still running).
+
+**Concurrency tuning:**
+
+- haiku — `SCENARIO_PARALLEL=4` is usually safe per Anthropic account.
+- opus — drop to 2 or 3; per-account rate limits are tighter.
+- Watch for HTTP 429s in scenario `.run.log` files; back off if they appear.
+
+**Don't parallelize scenarios that mutate the same files.** Most scenarios use `--no-session` and per-scenario `/tmp/<name>-*` paths, which is parallel-safe. If you add a scenario that writes to a shared cwd, namespace its outputs by scenario name or run it sequentially (filter it out of parallel batches).
 
 ### Wait for pi readiness, never `sleep N`
 
@@ -154,8 +177,10 @@ The catalog at `examples/SCENARIOS.md` covers 18 provider/bridge scenarios (text
 | Asserting on bridge log for extension-only changes | Doesn't tell you what the user saw | Also assert pane / file state |
 | Default tmux key handling | `M-Enter` → `Enter`, Alt+Enter scenarios pass falsely | Enable extended keys |
 | Pre-submit scenario uses Enter + completion wait | Adds model latency for nothing | `scn_send_no_enter` + capture |
-| `tmux kill-session` only between batch runs | Stray pi processes hold state, next scenario hangs silently | `scn_clean_state` (kill-server + pkill -9 -f "pi --no-session" + sleep 5) |
+| Sharing the default tmux server across scenarios | `kill-server` arms race; stray pi poisons next scenario; ~10-30% of batch hangs silently | `tmux -L pi-scn-<name>-$$ ...` per scenario (private server) |
 | `sleep 3` after `tmux new-session` | Loses keystrokes when pi startup is slow (opus, contention) | Poll the pane for `(provider)` ready marker, then `sleep 1` |
+| `pkill -9 -f "pi --no-session"` between scenarios | Kills sibling scenarios' pi processes in parallel mode | Use private tmux servers; kill-server cleans only this scenario's pi |
+| `kill -0 $pid` to detect "child still running" | Zombies pass kill -0 until reaped — dispatcher loops forever | Use file-marker completion signaling (`<name>.done`); reap on file appearance |
 | `grep -c PATTERN \| head -1 \| tr -d ' \\n' \|\| echo 0` | grep returns 1 with no match → under pipefail concatenates "0\\n0" → `(( var ))` errors with `bad math expression: 00` | Single grep with `\|\| true`, then `${var:-0}` |
 
 ## Red flags — STOP
