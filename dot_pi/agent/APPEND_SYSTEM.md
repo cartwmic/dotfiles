@@ -1,3 +1,7 @@
+## Response style
+
+Be concise but meaningful with your prose. Choose each word carefully and intentionally. Don't overwhelm with walls of text unless the user asks for more detail.
+
 ## Bash tool usage
 
 Do not prefix bash tool calls with `cd <project_dir> &&` or similar directory changes unless the user explicitly asks to cd. The bash tool already executes in the correct working directory (the project root). Adding unnecessary `cd` commands clutters output and wastes tokens.
