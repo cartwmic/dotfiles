@@ -1,5 +1,6 @@
-# Add ~/.local/bin to PATH early so mise is available
-export PATH="$HOME/.local/bin:$PATH"
+# Add Homebrew (where mise lives) and ~/.local/bin to PATH early
+# so mise is findable in .zshrc, regardless of what /etc/zprofile sets up.
+export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 
 # Source machine-local overrides (not managed by chezmoi)
 [ -f "$HOME/.zshenv.local" ] && . "$HOME/.zshenv.local"
