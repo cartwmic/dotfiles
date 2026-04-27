@@ -1,10 +1,5 @@
 #!/bin/zsh
 
-# Activate mise - MUST be early to set up PATH correctly
-if command -v mise &> /dev/null; then
-  eval "$(mise activate zsh)"
-fi
-
 # set up zsh history file
 export HISTFILE="$HOME/.zsh_history"
 export HISTSIZE=1000000
@@ -50,8 +45,15 @@ FZF_TAB_DIR="${ZDOTDIR:-$HOME}/.antidote/https-COLON--SLASH--SLASH-github.com-SL
 # initialize plugins statically with ${ZDOTDIR:-~}/.zsh_plugins.txt
 antidote load
 
+# Activate mise AFTER antidote so plugins (zsh-autosuggestions, zsh-vi-mode)
+# don't clobber precmd_functions and wipe out __mise_hook.
+if command -v mise &> /dev/null; then
+  eval "$(mise activate zsh)"
+fi
+
 # General PATH updates
-export PATH="$PATH:/usr/local/bin:/usr/local/lib:/opt/homebrew/bin:$HOME/git/git-sync:$HOME/git/git-sync/contrib:$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.local/user_scripts:$HOME/fvm/default/bin:$HOME/.local/share/nvim/mason/bin"
+# /opt/homebrew/bin is prepended in ~/.zshenv so mise is findable during .zshrc.
+export PATH="$PATH:/usr/local/bin:/usr/local/lib:$HOME/git/git-sync:$HOME/git/git-sync/contrib:$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.local/user_scripts:$HOME/fvm/default/bin:$HOME/.local/share/nvim/mason/bin"
 
 export XDG_CONFIG_HOME="$HOME/.config"
 
