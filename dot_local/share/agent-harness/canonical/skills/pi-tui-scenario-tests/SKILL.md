@@ -98,6 +98,37 @@ For pre-submit assertions (no Enter ever pressed — the extension acted in the 
 - Per-script timeout in the batch runner (default 5 min) — Pi can hang on subtle bugs.
 - `--no-session` keeps your session JSONL out of `~/.pi/agent/sessions/`.
 
+### Cross-scenario isolation in batch mode
+
+When scenarios run back-to-back in a single shell (a `for` loop, a `run-all-scenarios.sh` batch), tmux state and stray `pi` processes from the previous scenario leak into the next. The next scenario's `tmux new-session` succeeds, but pi inside it doesn't reach a fully-focused input state — and `tmux send-keys` fires into the void. **Symptom:** bridge log shows only `provider: registered (models=N)` with no `fresh query` line. Test silently hangs until the per-scenario timeout fires.
+
+**The fix is hard reset between every scenario:**
+
+```bash
+tmux kill-server 2>/dev/null || true
+pkill -9 -f "pi --no-session" 2>/dev/null || true   # only test-harness pi, never user's interactive pi
+sleep 5                                              # let kernel + tmux server release resources
+```
+
+`scenario-lib.sh` exposes this as `scn_clean_state` and `run-all-scenarios.sh` runs it before every scenario. Anything less and ~10–30% of scenarios in a batch will silently hang depending on machine load.
+
+### Wait for pi readiness, never `sleep N`
+
+A fixed `sleep 3` after `tmux new-session` is the second source of "tests pass alone, fail in batch" flakiness. Pi's startup time depends on extension count, model boot, tmux contention. **Poll for the pi prompt instead:**
+
+```bash
+deadline=$((SECONDS + 30))
+while (( SECONDS < deadline )); do
+    if tmux capture-pane -t "$SESSION:0" -p | grep -qE "\($SCENARIO_PROVIDER\)"; then
+        break
+    fi
+    sleep 0.5
+done
+sleep 1   # one beat after the line appears, so pi's draw loop settles
+```
+
+The bottom-status line `(<provider>) <model>` is pi's "input is ready" signal. `scenario-lib.sh`'s `scn_pi_start` polls for this; don't replace it with `sleep`.
+
 ## Writing a new scenario
 
 1. State the user story (one sentence) and pick `S<N>`.
@@ -123,6 +154,9 @@ The catalog at `examples/SCENARIOS.md` covers 18 provider/bridge scenarios (text
 | Asserting on bridge log for extension-only changes | Doesn't tell you what the user saw | Also assert pane / file state |
 | Default tmux key handling | `M-Enter` → `Enter`, Alt+Enter scenarios pass falsely | Enable extended keys |
 | Pre-submit scenario uses Enter + completion wait | Adds model latency for nothing | `scn_send_no_enter` + capture |
+| `tmux kill-session` only between batch runs | Stray pi processes hold state, next scenario hangs silently | `scn_clean_state` (kill-server + pkill -9 -f "pi --no-session" + sleep 5) |
+| `sleep 3` after `tmux new-session` | Loses keystrokes when pi startup is slow (opus, contention) | Poll the pane for `(provider)` ready marker, then `sleep 1` |
+| `grep -c PATTERN \| head -1 \| tr -d ' \\n' \|\| echo 0` | grep returns 1 with no match → under pipefail concatenates "0\\n0" → `(( var ))` errors with `bad math expression: 00` | Single grep with `\|\| true`, then `${var:-0}` |
 
 ## Red flags — STOP
 
