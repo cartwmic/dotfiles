@@ -61,6 +61,12 @@ scn_setup() {
 scn_pi_start() {
 	# Start pi in a fresh tmux session. Background; returns after pi renders.
 	# Caller can pass extra args; SCENARIO_PI_ARGS gives a stable per-project default.
+	#
+	# Readiness: poll the pane until pi's prompt is rendered, rather than a
+	# fixed `sleep 3`. A fixed sleep loses keystrokes when pi's startup is
+	# slow (tmux contention from a prior scenario, opus boot time, etc.) —
+	# the tmux session exists but pi's input area isn't focused yet, so
+	# `tmux send-keys` fires into the void and the test silently hangs.
 	local extra_args="${SCENARIO_PI_ARGS}"
 	if (( $# > 0 )); then extra_args="$extra_args $*"; fi
 
@@ -72,12 +78,43 @@ scn_pi_start() {
 	tmux new-session -d -s "$SESSION" -x 200 -y 50 \
 		"cd '$SCENARIO_CWD' && $provider_env \
 		 pi --provider '$SCENARIO_PROVIDER' --model '$SCENARIO_MODEL' $extra_args"
-	# Give pi time to render its prompt
-	sleep 3
+
+	# Poll until pi has rendered its bottom status line that contains
+	# `(<provider>) <model>` — this is the unambiguous "input is ready" signal.
+	# Falls back to a 30s deadline if pi never reaches that state (in which
+	# case the scenario will fail loudly rather than silently hang).
+	local deadline=$((SECONDS + 30))
+	local ready_pat
+	ready_pat="$(printf '%s' "$SCENARIO_PROVIDER" | sed 's/[[:punct:]]/./g')"
+	while (( SECONDS < deadline )); do
+		if tmux capture-pane -t "$SESSION:0" -p -S -50 2>/dev/null | grep -qE "\(${ready_pat}\)"; then
+			break
+		fi
+		sleep 0.5
+	done
+	# Extra breath so any draining startup notifications settle.
+	sleep 1
 }
 
 scn_pi_stop() {
 	tmux kill-session -t "$SESSION" 2>/dev/null || true
+}
+
+# ─── Cross-scenario isolation ────────────────────────────────────────────────
+# Run BEFORE scn_setup in batch contexts where multiple scenarios run
+# back-to-back in the same shell. Without this, leftover pi processes and
+# tmux state from a prior scenario can leak: the new tmux new-session
+# creates a session but pi inside it may inherit a half-dead state, or a
+# previous pi process holds a session id and the new keystrokes get lost.
+#
+# Idempotent: safe to call when nothing is leftover.
+scn_clean_state() {
+	tmux kill-server 2>/dev/null || true
+	# Kill stray pi instances ONLY if they were launched with --no-session
+	# (a test harness convention) — never touches the user's interactive pi.
+	pkill -9 -f "pi --no-session" 2>/dev/null || true
+	# Give the kernel + tmux server a beat to release their resources.
+	sleep 5
 }
 
 # ─── Input ───────────────────────────────────────────────────────────────────
@@ -222,10 +259,16 @@ scn_assert_file_contains() {
 }
 
 # Helper: count regex matches, sanitizing output to a single integer.
+# Why this is non-trivial: grep -c returns exit 1 with "0" on stdout when
+# there are no matches. Under `set -euo pipefail`, the naive form
+#   n=$(grep -cE ... | head -1 | tr -d ' \n' || echo 0)
+# concatenates "0" (from grep) AND "0" (from `|| echo 0` because the pipe
+# fails), producing "0\n0" — which then breaks `(( n >= 1 ))` later with
+# `bash: bad math expression: 00`. Use a single grep with `|| true`.
 scn_grep_count() {
 	# scn_grep_count "<regex>" "<file>"
 	local n
-	n=$(grep -cE "$1" "$2" 2>/dev/null | head -1 | tr -d ' \n' || echo 0)
+	n=$(grep -cE "$1" "$2" 2>/dev/null || true)
 	echo "${n:-0}"
 }
 
@@ -288,9 +331,12 @@ scn_cache_profile() {
 
 scn_session_count() {
 	# How many distinct CC session_ids did the bridge cache during this run?
+	# Single substitution + `|| true` to avoid the "0\n0" arithmetic bug
+	# (see scn_grep_count comment).
 	[[ -f "$BRIDGE_LOG" ]] || { echo 0; return; }
-	grep -oE "caching session=[a-f0-9]+" "$BRIDGE_LOG" 2>/dev/null \
-		| sort -u | wc -l | tr -d ' \n' || echo 0
+	local n
+	n=$(grep -oE "caching session=[a-f0-9]+" "$BRIDGE_LOG" 2>/dev/null | sort -u | wc -l | tr -d ' \n' || true)
+	echo "${n:-0}"
 }
 
 # Each scenario script begins with `SCN_FAILED=0` and ends with

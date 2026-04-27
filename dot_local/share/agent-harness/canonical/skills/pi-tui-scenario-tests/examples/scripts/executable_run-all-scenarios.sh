@@ -17,11 +17,26 @@ FAIL=0
 
 PER_SCRIPT_TIMEOUT="${SCENARIO_TIMEOUT:-300}"  # 5 min per scenario default
 
+# Reset state once at start. Each scenario also runs scn_clean_state via
+# its scn_setup, so this is belt-and-suspenders for the very first run.
+tmux kill-server 2>/dev/null || true
+pkill -9 -f "pi --no-session" 2>/dev/null || true
+sleep 3
+
 for s in "$SCRIPT_DIR"/run-scenario-s*.sh; do
 	[[ -x "$s" ]] || continue
 	name="$(basename "$s" .sh | sed 's/^run-scenario-//')"
 	logfile="$RESULTS_DIR/${name}.run.log"
 	printf "%-30s " "$name"
+
+	# Critical: hard reset between scenarios. Without this, a prior
+	# scenario's tmux state or stray pi process makes the next scenario's
+	# `tmux new-session` produce a session that pi can't fully claim, and
+	# scn_send's keystrokes get lost. Symptom: bridge log has only
+	# "provider: registered" with no fresh query.
+	tmux kill-server 2>/dev/null || true
+	pkill -9 -f "pi --no-session" 2>/dev/null || true
+	sleep 5
 	# Use gtimeout if available (macOS coreutils), else timeout, else fallback.
 	if command -v gtimeout >/dev/null 2>&1; then
 		TIMEOUT_BIN=gtimeout
