@@ -142,6 +142,50 @@ keybinds clear-defaults=true {
         bind "Alt =" { Resize "Increase"; }
         bind "Alt [" { PreviousSwapLayout; }
         bind "Alt ]" { NextSwapLayout; }
+
+        // ----------------------------------------------------------------
+        // Mobile-friendly single-chord bindings (for Zellij over SSH from
+        // Termux on Android). Active in BOTH normal and locked modes, so
+        // no unlock-dance is needed before invoking them.
+        //
+        // Why single chords: Termux extra-keys macros can dispatch one
+        // chord reliably, but multi-step mode-entry sequences ("CTRL g p f")
+        // race with Zellij's input handling when bytes arrive batched over
+        // SSH — the mode change applies between bytes within a single read,
+        // so the post-mode keys miss their binding. Zellij PR #4623 (0.44.0)
+        // fixed this for the Locked→Normal→Pane transition but not for
+        // Pane→action dispatch. Single Alt+chord bindings sidestep the bug.
+        //
+        // Capital letters here = Alt+Shift+letter; chosen so they don't
+        // collide with the lowercase Alt+letter bindings unbound below.
+        //
+        // Matching Termux config (~/.termux/termux.properties on the phone):
+        //
+        //   extra-keys-text-all-caps = false
+        //   extra-keys = [[
+        //     {key: 'ESC',   display: 'esc | unlock',   popup: {macro: 'CTRL g', display: 'unlock'}},
+        //     {key: 'CTRL',  display: 'ctrl | fullscr', popup: {macro: 'ALT F',  display: 'fullscreen'}},
+        //     {key: 'ALT',   display: 'alt | new pane', popup: {macro: 'ALT N',  display: 'new pane'}},
+        //     {key: 'TAB',   display: 'tab | new tab',  popup: {macro: 'ALT T',  display: 'new tab'}},
+        //     {key: 'LEFT',  display: '< | prev tab',   popup: {macro: 'ALT B',  display: 'prev tab'}},
+        //     {key: 'DOWN',  display: 'v | close',      popup: {macro: 'ALT X',  display: 'close'}},
+        //     {key: 'UP',    display: '^ | scroll',     popup: {macro: 'ALT S',  display: 'scroll'}},
+        //     {key: 'RIGHT', display: '> | next tab',   popup: {macro: 'ALT M',  display: 'next tab'}}
+        //   ]]
+        //
+        // Each button: tap = the literal `key`; swipe up = fires `popup.macro`.
+        // Reload Termux after editing: `termux-reload-settings` (or use the
+        // notification's RELOAD STYLE action). Zellij requires 0.44.0+ for
+        // even the unlock chord (CTRL g) to dispatch reliably over SSH.
+        // ----------------------------------------------------------------
+        bind "Alt F" { ToggleFocusFullscreen; }
+        bind "Alt T" { NewTab; }
+        bind "Alt N" { NewPane; }
+        bind "Alt X" { CloseFocus; }
+        bind "Alt S" { SwitchToMode "scroll"; }
+        bind "Alt B" { GoToPreviousTab; }
+        bind "Alt M" { GoToNextTab; }
+
         unbind "Alt f" { ToggleFloatingPanes; }
         unbind "Alt h" { MoveFocusOrTab "left"; }
         unbind "Alt i" { MoveTab "left"; }
