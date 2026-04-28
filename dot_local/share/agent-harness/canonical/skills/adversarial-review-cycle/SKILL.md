@@ -101,13 +101,21 @@ Return to Step 1 with updated artifacts.
 
 ### Step 6: Decision Audit
 
-Present the owner with all autonomous decisions from Step 4, categorized:
+Present autonomous decisions from Step 4 as **three tiers**, sorted so the owner can skip what's safe to trust. Each row: stable `#` id, short decision name, one-sentence context (pick + consequence + alternative).
 
-- **Design choices** — you picked approach A over B
-- **Scope changes** — items added or removed
-- **Questions you answered yourself** — reviewer asked, you decided
+- 🔴 **Need your call** — material UX consequences or behaviorally significant; pick is genuinely contestable.
+- 🟡 **Worth a glance** — real tradeoffs, conservative pick made; flag for visibility, not approval.
+- 🟢 **Trust me, not consequential** — sane defaults, cosmetic, mechanically derived, or already explicitly approved.
 
-For each: what you decided, what the alternatives were. Ask: "Anything you disagree with or want changed?"
+```
+### 🔴 Need your call
+
+| # | Decision | Brief context |
+|---|---|---|
+| 17 | Chunked build deferred | Rejected splitting build into setImmediate batches. Consequence: cache-miss path freezes editor 3-10s on Termux. Alt: 10-20% wall-clock overhead now for responsive worst case. |
+```
+
+Close with a **focused ask**, not an open one: "To unblock Step 7, I need calls on the 🔴 tier — particularly #17 and #13. Others ship as-is unless you object." Never "anything you disagree with?"
 
 ### Step 7: Apply Owner Amendments
 
@@ -149,3 +157,5 @@ Run one last blind review round against the cleaned-up artifacts. This catches i
 | Skipping artifact cleanup | Review rounds cause semantic bleed between artifacts |
 | Skipping backlog cross-reference | Artifacts drift from the original goal over many rounds |
 | Skipping final validation | Cleanup edits can introduce new inconsistencies |
+| Step 6 audit dumped as a flat unsorted list | Tier into 🔴/🟡/🟢; one-sentence context per row; close with a focused ask, not "anything you disagree with?" |
+| Editing one artifact (spec) without simultaneously editing its dependents (tasks) in the same round | After every Step 4 batch, grep for the changed terms across all artifacts before declaring the round done; round-N reviewers will catch the contradiction as a P0 in round N+1, inflating the trajectory |
