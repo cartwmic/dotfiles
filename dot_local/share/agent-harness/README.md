@@ -145,11 +145,62 @@ Shape:
 }
 ```
 
+Headers that need a prefix (e.g. `Authorization: Bearer <token>`) belong in
+the canonical file with a `${VAR}` placeholder; the adapter only declares
+the env-to-`op://` mapping:
+
+Canonical:
+```json
+{
+  "mcpServers": {
+    "mcp-memory": {
+      "type": "http",
+      "url": "https://mcp-memory.internal.cartwmic.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_MEMORY_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+Adapter:
+```json
+{
+  "mcpServers": {
+    "mcp-memory": {
+      "headers": {
+        "Authorization": {
+          "env": "MCP_MEMORY_API_KEY",
+          "op": "op://personal/mcp-memory - api key/credential"
+        }
+      }
+    }
+  }
+}
+```
+
+The apply script:
+
+1. Reads canonical, preserving any value the canonical declares for a header.
+2. Reads each adapter's secrets file; for every `{env, op}` pair it `op read`s
+   the secret and exports it into the apply step's environment.
+3. Substitutes every `${VAR}` reference in the resolved JSON with the actual
+   exported value, so the credential is **persisted as a literal string**
+   into each harness's MCP config on disk. This is intentional: harnesses
+   don't need the env var set at runtime.
+
+Advanced: `format` field. If you ever need the adapter to *override* the
+canonical value (rare — prefer fixing the canonical), pass an explicit
+`format` string and it will be used verbatim before env substitution.
+
 Guidelines:
 
-- Keep mappings per harness.
+- Keep adapter mappings minimal (`env` + `op`). Put header shape in canonical.
 - Match the server name and env/header keys used by the harness projection.
 - If secret resolution fails during apply, the adapter should skip only the affected server configuration.
+- To disable inlining (keep `${VAR}` placeholders in harness configs), set
+  `AGENT_HARNESS_INLINE_SECRETS=0` before running the apply script.
 
 ## Add A New Domain
 

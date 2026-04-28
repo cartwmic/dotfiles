@@ -25,6 +25,13 @@
       "args": [
         "@playwright/mcp"
       ]
+    },
+    "mcp-memory": {
+      "type": "http",
+      "url": "https://mcp-memory.internal.cartwmic.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_MEMORY_API_KEY}"
+      }
     }
   }
 }
