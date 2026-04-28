@@ -41,9 +41,9 @@ Example stdio server:
 ```json
 {
   "mcpServers": {
-    "basic-memory": {
+    "my-server": {
       "command": "uvx",
-      "args": ["basic-memory", "mcp"]
+      "args": ["my-server", "mcp"]
     }
   }
 }
