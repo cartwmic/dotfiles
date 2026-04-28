@@ -490,9 +490,8 @@ in-flight handler" assumptions of the pre-refactor bridge.
 - Mechanical:
   - One `subagent` tool call observed; subagent runs to completion; returns
     a non-empty result. (Pre-existing pi-subagents bug: empty returns despite
-    success — see basic-memory note `bug-pi-subagent-returns-empty-result`.
-    This scenario also doubles as a regression check on whether the bridge
-    contributes to that bug.)
+    success. This scenario also doubles as a regression check on whether the
+    bridge contributes to that bug.)
   - Parent and subagent each have their own pi session JSONL; bridge tracks
     independent CC session_ids per `query()` instance.
   - No interleaving of parent and child stream events in the parent's UI.
