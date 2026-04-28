@@ -83,15 +83,30 @@ if secrets_arg:
                 continue
             target.setdefault(section_name, {})
             for key, cfg in section.items():
-                env_name = cfg.get("env") if isinstance(cfg, dict) else None
-                if env_name:
+                if not isinstance(cfg, dict):
+                    continue
+                fmt = cfg.get("format")
+                env_name = cfg.get("env")
+                if fmt:
+                    # Explicit format string wins; lets us inject prefixes
+                    # like "Bearer ${MCP_MEMORY_API_KEY}" into a header
+                    # value that the env-substitution pass then resolves.
+                    target[section_name][key] = fmt
+                elif env_name and key not in target[section_name]:
+                    # Only synthesize a placeholder if the canonical didn't
+                    # already provide one. Avoids clobbering canonical values
+                    # like "Bearer ${VAR}" with a bare "${VAR}".
                     target[section_name][key] = "${" + env_name + "}"
 
 out_file.write_text(json.dumps(resolved, indent=2) + "\n")
 PY
 
   if [ -n "$secrets_file" ]; then
-    python3 - "$secrets_file" <<'PY' | while IFS='	' read -r env_name secret_ref; do
+    # Extract (env_name, op_ref) pairs into a variable so the while loop
+    # below runs in the *current* shell (a `py | while` pipeline runs the
+    # loop in a subshell, which would discard `export` calls before our
+    # substitution pass below could see them).
+    secrets_pairs=$(python3 - "$secrets_file" <<'PY'
 import json
 import pathlib
 import sys
@@ -103,12 +118,51 @@ for _, cfg in data.get("mcpServers", {}).items():
             if isinstance(mapping, dict) and mapping.get("env") and mapping.get("op"):
                 print(f"{mapping['env']}\t{mapping['op']}")
 PY
+)
+    while IFS='	' read -r env_name secret_ref; do
+      [ -z "$env_name" ] && continue
       if value=$(resolve_secret "$secret_ref"); then
         export "$env_name=$value"
       else
         log "1Password secret unavailable for $env_name from $secret_ref"
       fi
-    done
+    done <<HEREDOC_END
+$secrets_pairs
+HEREDOC_END
+  fi
+
+  # Inline pass: substitute ${VAR} references in the resolved JSON with the
+  # actual env values that op resolution just exported. Result: each harness
+  # config ends up with the literal credential persisted on disk, so harnesses
+  # don't depend on env vars being set at session start. If a referenced env
+  # is unset we leave the placeholder intact (skip-server semantics already
+  # handle that downstream).
+  if [ "${AGENT_HARNESS_INLINE_SECRETS:-1}" = "1" ]; then
+    python3 - "$out_file" <<'PY'
+import json
+import os
+import pathlib
+import re
+import sys
+
+out = pathlib.Path(sys.argv[1])
+data = json.loads(out.read_text())
+env_re = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
+
+def substitute(obj):
+    if isinstance(obj, str):
+        def replace(m):
+            val = os.environ.get(m.group(1))
+            return val if val is not None else m.group(0)
+        return env_re.sub(replace, obj)
+    if isinstance(obj, dict):
+        return {k: substitute(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [substitute(v) for v in obj]
+    return obj
+
+out.write_text(json.dumps(substitute(data), indent=2) + "\n")
+PY
   fi
 }
 
@@ -195,12 +249,15 @@ render_claude_mcp_commands() {
   python3 - "$mcp_json" "$out_file" <<'PY'
 import json
 import pathlib
+import re
 import sys
 
 mcp_file = pathlib.Path(sys.argv[1])
 out_file = pathlib.Path(sys.argv[2])
 data = json.loads(mcp_file.read_text())
 servers = data.get("mcpServers", {})
+
+env_ref_re = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 
 lines = [
     "#!/bin/sh",
@@ -233,18 +290,18 @@ for name, cfg in servers.items():
             + " || true"
         )
     elif cfg.get("type") == "http" or "url" in cfg:
-        parts = [f"\"${{CLAUDE_BIN:-claude}}\" mcp add --transport http {json.dumps(name)} {json.dumps(cfg['url'])}"]
+        parts = [f"\"${{CLAUDE_BIN:-claude}}\" mcp add -s user --transport http {json.dumps(name)} {json.dumps(cfg['url'])}"]
         required_env_names = []
         for header_name, header_value in cfg.get("headers", {}).items():
-            env_name = None
-            if isinstance(header_value, str) and header_value.startswith("${") and header_value.endswith("}"):
-                env_name = header_value[2:-1]
-            if env_name:
-                required_env_names.append(env_name)
-                rendered = f"{header_name}: ${env_name}"
-                parts.append(f"--header {json.dumps(rendered)}")
-            else:
-                parts.append(f"--header {json.dumps(f'{header_name}: {header_value}')}")
+            if isinstance(header_value, str):
+                # Track every ${VAR} reference inside the header value so the
+                # generated script can guard the registration on those vars
+                # being set (e.g. "Bearer ${MCP_MEMORY_API_KEY}" depends on
+                # MCP_MEMORY_API_KEY being exported by the apply step).
+                refs = env_ref_re.findall(header_value)
+                if refs:
+                    required_env_names.extend(refs)
+            parts.append(f"--header {json.dumps(f'{header_name}: {header_value}')}")
         command = " ".join(parts) + " || true"
         if required_env_names:
             condition = " || ".join([f"[ -z \"${{{env_name}:-}}\" ]" for env_name in required_env_names])

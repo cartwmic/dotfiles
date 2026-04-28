@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# chezmoi modify_ script for ~/.codex/AGENTS.md.
+#
+# Idempotently inserts (or refreshes) the canonical mcp-memory guidance as
+# a managed block, preserving any existing content (e.g. desloppify). The
+# block is delimited by HTML comment markers so re-runs replace only the
+# managed section.
+#
+# Chezmoi runs modify_ scripts with the existing target file content piped
+# on stdin and uses stdout as the new content.
+
+set -eu
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+cat - > "$WORK/existing"
+
+cat > "$WORK/managed" <<'BLOCK_END'
+<!-- chezmoi:mcp-memory-guidance:begin -->
+{{ include "dot_local/share/agent-harness/canonical/instructions/mcp-memory-guidance.md" -}}
+<!-- chezmoi:mcp-memory-guidance:end -->
+BLOCK_END
+
+python3 - "$WORK/existing" "$WORK/managed" <<'PY'
+import pathlib
+import re
+import sys
+
+existing = pathlib.Path(sys.argv[1]).read_text()
+managed = pathlib.Path(sys.argv[2]).read_text().rstrip("\n")
+
+pattern = re.compile(
+    r"<!-- chezmoi:mcp-memory-guidance:begin -->.*?<!-- chezmoi:mcp-memory-guidance:end -->",
+    re.DOTALL,
+)
+
+if pattern.search(existing):
+    new = pattern.sub(managed, existing)
+elif existing.strip():
+    new = existing.rstrip() + "\n\n" + managed + "\n"
+else:
+    new = managed + "\n"
+
+sys.stdout.write(new)
+PY

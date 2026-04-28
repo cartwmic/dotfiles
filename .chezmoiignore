@@ -4,6 +4,8 @@
 CLAUDE.md
 docs/
 .playwright-mcp/
-.claude/
-.codex/
+.claude/*
+.codex/*
+!.claude/CLAUDE.md
+!.codex/AGENTS.md
 openspec/

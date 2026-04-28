@@ -1,4 +1,15 @@
 #!/bin/sh
+#
+# chezmoi run_onchange — re-applies the agent-harness config whenever any
+# canonical source, adapter, or the apply script itself changes. The hash
+# comments below give chezmoi a content-derived trigger; do not edit them
+# by hand — chezmoi templating regenerates them on apply.
+#
+# canonical/mcp:           {{ include "dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl" | sha256sum }}
+# adapters/pi/secrets:     {{ include "dot_local/share/agent-harness/adapters/pi/mcp-secrets.json.tmpl" | sha256sum }}
+# adapters/claude/secrets: {{ include "dot_local/share/agent-harness/adapters/claude/mcp-secrets.json.tmpl" | sha256sum }}
+# adapters/codex/secrets:  {{ include "dot_local/share/agent-harness/adapters/codex/mcp-secrets.json.tmpl" | sha256sum }}
+# apply-script:            {{ include "dot_local/user_scripts/executable_apply_harness_config.sh" | sha256sum }}
 
 set -eu
 
