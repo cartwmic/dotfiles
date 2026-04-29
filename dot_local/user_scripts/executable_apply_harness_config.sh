@@ -43,6 +43,19 @@ resolve_secret() {
     return 1
   fi
 
+  # Prefer a 1Password service-account token so `op` runs fully
+  # non-interactive (no biometric / desktop-app prompt). Token is loaded
+  # from $OP_SERVICE_ACCOUNT_TOKEN if already exported, otherwise from a
+  # local file (default: ~/.config/agent-harness/op-service-token).
+  # Override the path with $AGENT_HARNESS_OP_TOKEN_FILE.
+  if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+    token_file="${AGENT_HARNESS_OP_TOKEN_FILE:-$HOME/.config/agent-harness/op-service-token}"
+    if [ -r "$token_file" ]; then
+      OP_SERVICE_ACCOUNT_TOKEN=$(cat "$token_file")
+      export OP_SERVICE_ACCOUNT_TOKEN
+    fi
+  fi
+
   op read "$secret_ref" --no-newline 2>/dev/null
 }
 

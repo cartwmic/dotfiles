@@ -166,6 +166,16 @@ zvm_after_init_commands+=("[ -f \"$FZF_TAB_PLUGIN\" ] && source \"$FZF_TAB_PLUGI
 # Alternatively, symlink op.exe to op via `sudo ln -s $(which op.exe) /usr/local/bin/op`
 # That's what I've currently done
 
+# Load 1Password service-account token into env so `op` runs non-interactively
+# for any tool spawned from this shell (apply harness, lazyvim plugins,
+# scripts, etc). The token file is created/refreshed via:
+#   ~/.local/user_scripts/refresh_op_service_account_token.sh
+# which uses biometric `op` once to fetch the SA token from 1Password and
+# writes it to ~/.config/agent-harness/op-service-token (mode 0600).
+if [[ -z "$OP_SERVICE_ACCOUNT_TOKEN" && -r "$HOME/.config/agent-harness/op-service-token" ]]; then
+  export OP_SERVICE_ACCOUNT_TOKEN="$(<"$HOME/.config/agent-harness/op-service-token")"
+fi
+
 # # Load ANTHROPIC_API_KEY from 1Password if not already set
 # if [[ -z "$PERSONAL_ANTHROPIC_API_KEY" ]]; then
 #   if command -v op >/dev/null 2>&1; then

@@ -1,3 +1,17 @@
+{{- /*
+  Read the existing lastChangelogVersion from the live file (pi auto-bumps it
+  on every CLI run). Without this, chezmoi sees drift every time pi runs. We
+  preserve whatever's currently on disk and fall back to a sensible default
+  on a fresh machine where the file doesn't exist yet.
+*/ -}}
+{{- $version := "0.70.2" -}}
+{{- $settingsPath := joinPath .chezmoi.homeDir ".pi/agent/settings.json" -}}
+{{- if stat $settingsPath -}}
+{{-   $found := output "jq" "-r" ".lastChangelogVersion // empty" $settingsPath | trim -}}
+{{-   if $found -}}
+{{-     $version = $found -}}
+{{-   end -}}
+{{- end -}}
 {
 {{- if eq .profile "axon-work-computer" }}
   "defaultProvider": "anthropic",
@@ -38,5 +52,5 @@
   "compaction": {
     "enabled": false
   },
-  "lastChangelogVersion": "0.70.2"
+  "lastChangelogVersion": {{ $version | quote }}
 }
