@@ -27,7 +27,7 @@ fi
 
 # Get auth token from 1Password
 echo "[update_claude_settings] INFO: Retrieving ANTHROPIC_AUTH_TOKEN from 1Password..."
-ANTHROPIC_AUTH_TOKEN=$(op read 'op://personal/z.ai - key 1/credential' --no-newline 2>&1)
+ANTHROPIC_AUTH_TOKEN=$(op read 'op://developer/z.ai - key 1/credential' --no-newline 2>&1)
 if [ $? -ne 0 ]; then
   echo "[update_claude_settings] ERROR: Failed to retrieve auth token from 1Password: $ANTHROPIC_AUTH_TOKEN"
   exit 1

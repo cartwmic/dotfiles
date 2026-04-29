@@ -137,7 +137,7 @@ Shape:
       "headers": {
         "CONTEXT7_API_KEY": {
           "env": "CONTEXT7_API_KEY",
-          "op": "op://personal/context7 - api key/credential"
+          "op": "op://developer/context7 - api key/credential"
         }
       }
     }
@@ -172,7 +172,7 @@ Adapter:
       "headers": {
         "Authorization": {
           "env": "MCP_MEMORY_API_KEY",
-          "op": "op://personal/mcp-memory - api key/credential"
+          "op": "op://developer/mcp-memory - api key/credential"
         }
       }
     }
