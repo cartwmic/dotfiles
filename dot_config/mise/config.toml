@@ -561,6 +561,53 @@ echo "✅ nvim x86_64 installed at $INSTALL_DIR"
 echo "✅ Wrapper at $WRAPPER (uses Rosetta)"
 '''
 
+[tasks."install-zellij-plugins"]
+description = "Install/build Zellij plugins (room from release, harpoon from source)"
+run = '''
+set -euo pipefail
+
+PLUGIN_DIR="$HOME/.config/zellij/plugins"
+mkdir -p "$PLUGIN_DIR"
+
+# Pinned versions — bump to upgrade
+ROOM_VERSION="v1.2.1"
+HARPOON_VERSION="v0.3.0"
+
+# --- room: prebuilt wasm from GitHub release ---
+ROOM_STAMP="$PLUGIN_DIR/.room.version"
+if [ ! -f "$PLUGIN_DIR/room.wasm" ] || [ "$(cat "$ROOM_STAMP" 2>/dev/null)" != "$ROOM_VERSION" ]; then
+  echo "Installing rvcas/room $ROOM_VERSION..."
+  curl -fsSL "https://github.com/rvcas/room/releases/download/${ROOM_VERSION}/room.wasm" \
+    -o "$PLUGIN_DIR/room.wasm"
+  echo "$ROOM_VERSION" > "$ROOM_STAMP"
+else
+  echo "room $ROOM_VERSION already installed"
+fi
+
+# --- harpoon: build from source (no prebuilt release) ---
+HARPOON_STAMP="$PLUGIN_DIR/.harpoon.version"
+if [ ! -f "$PLUGIN_DIR/harpoon.wasm" ] || [ "$(cat "$HARPOON_STAMP" 2>/dev/null)" != "$HARPOON_VERSION" ]; then
+  echo "Building Nacho114/harpoon $HARPOON_VERSION..."
+  rustup target add wasm32-wasip1 >/dev/null 2>&1 || true
+
+  HARPOON_SRC="$HOME/.local/share/harpoon-zellij/src"
+  mkdir -p "$(dirname "$HARPOON_SRC")"
+  if [ ! -d "$HARPOON_SRC/.git" ]; then
+    git clone https://github.com/Nacho114/harpoon "$HARPOON_SRC"
+  fi
+  cd "$HARPOON_SRC"
+  git fetch --tags --quiet
+  git checkout "$HARPOON_VERSION"
+  cargo build --release
+  cp target/wasm32-wasip1/release/harpoon.wasm "$PLUGIN_DIR/harpoon.wasm"
+  echo "$HARPOON_VERSION" > "$HARPOON_STAMP"
+else
+  echo "harpoon $HARPOON_VERSION already installed"
+fi
+
+echo "✅ Zellij plugins installed in $PLUGIN_DIR"
+'''
+
 [tasks.bootstrap]
 description = "Complete system bootstrap"
 depends = [
@@ -584,6 +631,7 @@ depends = [
   "install-fonts",
   "setup-fzf-shell",
   "install-nvim-rosetta",
+  "install-zellij-plugins",
 ]
 run = '''
 echo "✅ Bootstrap complete!"

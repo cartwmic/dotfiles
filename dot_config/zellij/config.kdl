@@ -199,6 +199,22 @@ keybinds clear-defaults=true {
         bind "Ctrl g" { SwitchToMode "locked"; }
         bind "Ctrl q" { Quit; }
     }
+    // Plugin launchers — bound in all modes (incl. locked) so they're one-press accessible
+    shared_except "renametab" "renamepane" "entersearch" {
+        bind "Ctrl y" {
+            LaunchOrFocusPlugin "file:~/.config/zellij/plugins/harpoon.wasm" {
+                floating true
+                move_to_focused_tab true
+            }
+        }
+        bind "Ctrl t" {
+            LaunchOrFocusPlugin "file:~/.config/zellij/plugins/room.wasm" {
+                floating true
+                ignore_case true
+                quick_jump true
+            }
+        }
+    }
     shared_except "locked" "entersearch" {
         bind "enter" { SwitchToMode "locked"; }
     }
