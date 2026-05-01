@@ -170,6 +170,23 @@ This repository includes configurations for:
 - VectorCode for semantic code search
 - CodeCompanion plugin in Neovim (configured with GPT and Claude models)
 
+### pi runtime patches
+
+Not every fix lands upstream on our timeline. The `dot_local/share/pi-patches/` tree holds idempotent runtime patches against the user's installed `@mariozechner/pi-coding-agent` / `@mariozechner/pi-ai` files.
+
+- **Apply script**: `dot_local/user_scripts/executable_apply_pi_patches.sh` (auto-runs on `chezmoi apply` via the onchange template below)
+- **Onchange trigger**: `run_onchange_apply_pi_patches.sh.tmpl` — embeds sha256 of each `patch.mjs`, the apply script, and the currently installed pi-coding-agent / pi-ai versions. Re-runs on any change.
+- **State**: `~/.local/state/chezmoi-pi-patches/<patch-name>.json` (last-applied revision, fingerprints, backup path)
+- **Backup**: each patched file is backed up alongside as `<file>.orig.chezmoi-pi-patch` on first patch.
+
+**User-facing rule**: after `npm update -g @mariozechner/pi-coding-agent` (or any mise/npm reinstall), run `chezmoi apply` to re-apply patches.
+
+**Active patches**:
+
+- `anthropic-idle-watchdog` — adds an SSE per-chunk idle watchdog and forwards Anthropic `ping` events through pi-ai's event stream. Fixes the "working… stuck" stall on the native anthropic provider. Tracks upstream issue [pi-mono#3020](https://github.com/badlogic/pi-mono/issues/3020). See its `README.md` for failure modes (anchor-not-found, stale revision, etc.) and resolution.
+
+**Adding a patch**: create `dot_local/share/pi-patches/<name>/patch.mjs` (and ideally a `README.md`). The apply script auto-discovers any directory containing `patch.mjs` and invokes it.
+
 ### Agent Harness
 
 Skills and MCP servers are managed centrally via the **agent-harness** system:
