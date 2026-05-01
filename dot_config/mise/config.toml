@@ -571,7 +571,12 @@ mkdir -p "$PLUGIN_DIR"
 
 # Pinned versions — bump to upgrade
 ROOM_VERSION="v1.2.1"
-HARPOON_VERSION="v0.3.0"
+# harpoon: pinned to a commit on the cartwmic fork carrying a custom patch
+# (see HARPOON_REPO below). Bump both together when re-syncing with upstream.
+# Patch: keep focused_pane sticky when harpoon itself has focus, so `a` can
+# add multiple panes from the same tab. Upstream issue: not yet filed.
+HARPOON_REPO="https://github.com/cartwmic/harpoon"
+HARPOON_VERSION="da678cbccde8ffb5512cd1345f63b1ca3d5dc631"
 
 # --- room: prebuilt wasm from GitHub release ---
 ROOM_STAMP="$PLUGIN_DIR/.room.version"
@@ -593,10 +598,13 @@ if [ ! -f "$PLUGIN_DIR/harpoon.wasm" ] || [ "$(cat "$HARPOON_STAMP" 2>/dev/null)
   HARPOON_SRC="$HOME/.local/share/harpoon-zellij/src"
   mkdir -p "$(dirname "$HARPOON_SRC")"
   if [ ! -d "$HARPOON_SRC/.git" ]; then
-    git clone https://github.com/Nacho114/harpoon "$HARPOON_SRC"
+    git clone "$HARPOON_REPO" "$HARPOON_SRC"
+  else
+    # Ensure remote URL matches in case it was migrated to/from a fork
+    git -C "$HARPOON_SRC" remote set-url origin "$HARPOON_REPO"
   fi
   cd "$HARPOON_SRC"
-  git fetch --tags --quiet
+  git fetch --tags --quiet origin
   git checkout "$HARPOON_VERSION"
   cargo build --release
   cp target/wasm32-wasip1/release/harpoon.wasm "$PLUGIN_DIR/harpoon.wasm"
