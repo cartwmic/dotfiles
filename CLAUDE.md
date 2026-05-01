@@ -13,7 +13,7 @@ This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.
 │   ├── nvim/                # Neovim configuration (LazyVim-based)
 │   ├── kitty/               # Kitty terminal configuration
 │   ├── lazygit/             # Lazygit TUI configuration
-│   ├── zellij/              # Zellij terminal multiplexer config
+│   ├── zellij/              # Zellij terminal multiplexer config (see dot_config/zellij/README.md for plugin/fork notes)
 │   ├── mcphub/              # MCP Hub configuration
 │   └── zsh-completions/     # Custom zsh completion scripts
 ├── run_once_install_mise.sh      # Installs mise once
