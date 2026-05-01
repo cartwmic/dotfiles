@@ -1,0 +1,24 @@
+#!/bin/sh
+#
+# chezmoi run_onchange — re-applies pi-coding-agent runtime patches when
+# any of (a) the patch payload, (b) the apply script, or (c) the installed
+# pi-coding-agent version changes.
+#
+# The hash comments below give chezmoi a content-derived trigger; do not
+# edit them by hand — chezmoi templating regenerates them on apply.
+#
+# patch.mjs (anthropic-idle-watchdog): {{ include "dot_local/share/pi-patches/anthropic-idle-watchdog/patch.mjs" | sha256sum }}
+# apply script:                        {{ include "dot_local/user_scripts/executable_apply_pi_patches.sh" | sha256sum }}
+# pi-coding-agent installed version:   {{ output "node" "-e" "const f=require('fs'),p=require('path'),c=require('child_process');try{const r=c.execFileSync('npm',['root','-g'],{encoding:'utf8'}).trim();console.log(JSON.parse(f.readFileSync(p.join(r,'@mariozechner/pi-coding-agent/package.json'),'utf8')).version)}catch(e){console.log('not-installed')}" | trim }}
+# pi-ai installed version:             {{ output "node" "-e" "const f=require('fs'),p=require('path'),c=require('child_process');try{const r=c.execFileSync('npm',['root','-g'],{encoding:'utf8'}).trim();console.log(JSON.parse(f.readFileSync(p.join(r,'@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-ai/package.json'),'utf8')).version)}catch(e){console.log('not-installed')}" | trim }}
+
+set -eu
+
+SCRIPT="$HOME/.local/user_scripts/apply_pi_patches.sh"
+
+if [ ! -x "$SCRIPT" ]; then
+  echo "[apply_pi_patches] INFO: pi-patches apply script not found at $SCRIPT, skipping"
+  exit 0
+fi
+
+exec "$SCRIPT"
