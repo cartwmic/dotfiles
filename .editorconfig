@@ -1,0 +1,12 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Pi rewrites this file with no trailing newline on every run.
+# Match its on-disk shape so `chezmoi diff` stays clean.
+[dot_pi/agent/settings.json.tmpl]
+insert_final_newline = false
