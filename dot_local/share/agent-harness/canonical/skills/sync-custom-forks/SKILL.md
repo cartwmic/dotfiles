@@ -24,8 +24,10 @@ gh auth status || echo "STOP: Run gh auth login first"
 ### Step 1: Discover Forks
 
 ```bash
-gh repo list "$(gh api user --jq '.login')" --fork --json name,parent,defaultBranchRef,url --limit 100
+gh repo list "$(gh api user --jq '.login')" --fork --no-archived --json name,parent,defaultBranchRef,url --limit 100
 ```
+
+Note: `--no-archived` excludes archived forks. Archive forks you no longer want to sync to keep the list clean.
 
 This returns all forks with:
 - `name` — repo name
