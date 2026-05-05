@@ -100,29 +100,104 @@ UPSTREAM_DEFAULT=$(git remote show upstream | sed -n 's/.*HEAD branch: //p')
 DEFAULT_BRANCH="<defaultBranchRef.name>"
 ```
 
-### Step 6: Merge Upstream
+### Step 6: Review and Merge Upstream
+
+A clean merge is not the goal — a *coherent* fork is. Even when upstream merges without conflict, the result may duplicate effort, fight a custom patch, or quietly invalidate one. Always review the divergence before merging.
 
 ```bash
-# Make sure we're on the default branch
+# Make sure we're on the default branch and clean
 git checkout "$DEFAULT_BRANCH"
-
-# Check if there are uncommitted changes
 if ! git diff --quiet || ! git diff --cached --quiet; then
   echo "WARNING: Uncommitted changes in $REPO_NAME. Stash or commit first."
   # Ask user how to proceed
 fi
+```
 
-# Merge upstream changes
+#### 6a. Inventory what's changing
+
+Before merging, build a picture of both sides of the divergence:
+
+```bash
+MERGE_BASE=$(git merge-base HEAD "upstream/$UPSTREAM_DEFAULT")
+
+# Our custom commits (on the fork, not in upstream)
+git log --oneline "$MERGE_BASE..HEAD"
+
+# Incoming upstream commits (in upstream, not yet on fork)
+git log --oneline "$MERGE_BASE..upstream/$UPSTREAM_DEFAULT"
+
+# Files our custom patches touch
+git diff --name-only "$MERGE_BASE..HEAD" | sort -u > /tmp/ours.txt
+
+# Files upstream is changing
+git diff --name-only "$MERGE_BASE..upstream/$UPSTREAM_DEFAULT" | sort -u > /tmp/theirs.txt
+
+# Overlap — areas where upstream and our patches both made changes
+comm -12 /tmp/ours.txt /tmp/theirs.txt
+```
+
+#### 6b. Review for compatibility, redundancy, and intent drift
+
+Present to the user **before** merging:
+
+```
+Fork has N custom commits; upstream has M new commits since last sync.
+Files touched by both: <list>
+
+Custom commits on this fork:
+  <oneline list>
+
+Incoming upstream commits:
+  <oneline list>
+
+Overlapping files (review carefully):
+  <file>: ours touches X, theirs touches Y
+```
+
+Specifically look for:
+
+- **Redundant fixes** — upstream has fixed something our patch also fixed (differently). Our patch may now be obsolete, or worse, may fight upstream's fix.
+- **Reimplemented features** — upstream adopted the same feature our patch adds, but with a different API/approach. Prefer dropping our patch in favor of upstream.
+- **Refactors that invalidate our patch** — upstream renamed/restructured the code our patch depends on. Patch needs to be ported, not just merged.
+- **Behavioral conflicts at a distance** — non-overlapping files but coupled behavior (e.g. upstream changes a config schema our patch reads).
+- **License / dependency / lockfile churn** — usually safe to take upstream as-is.
+
+For each overlapping file, show both histories so the user can compare:
+
+```bash
+git log --oneline -p "$MERGE_BASE..HEAD" -- <file>
+git log --oneline -p "$MERGE_BASE..upstream/$UPSTREAM_DEFAULT" -- <file>
+```
+
+#### 6c. Choose a merge strategy
+
+Based on the review, present options:
+
+```
+Options:
+  a) Plain merge — our patches stay, upstream gets pulled in (conflicts resolved manually)
+  b) Drop a custom patch — upstream now does it natively; revert/skip our commit
+  c) Rewrite a custom patch — upstream refactor invalidates ours; port it on top
+  d) Abort and investigate — too risky to sync today
+```
+
+Do **not** auto-pick a strategy. Even when there's no overlap, confirm the user wants to proceed before merging.
+
+#### 6d. Execute the merge
+
+```bash
 git merge "upstream/$UPSTREAM_DEFAULT" --no-edit
 ```
 
-#### If Merge Succeeds (No Conflicts)
+##### If Merge Succeeds (No Conflicts)
 
 ```
 ✅ <name>: Merged upstream/<upstream_default> into <default_branch> successfully.
 ```
 
-#### If Merge Has Conflicts
+Note: a clean merge is not proof of correctness — if 6b flagged concerns, still verify (build/test/inspect) before pushing.
+
+##### If Merge Has Conflicts
 
 **STOP and present conflicts to the user:**
 
