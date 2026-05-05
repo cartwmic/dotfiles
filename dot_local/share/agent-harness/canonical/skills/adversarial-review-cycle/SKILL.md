@@ -1,6 +1,6 @@
 ---
 name: adversarial-review-cycle
-description: User-invoked only. Do not auto-select. Run blind multi-model adversarial reviews on plan artifacts with iterative revision, owner decision audit, and artifact cleanup.
+description: User-invoked only. Do not auto-select. Use when the user explicitly asks to run adversarial review on plan artifacts before execution and wants multi-model pressure with owner sign-off only at the end.
 ---
 
 # Adversarial Review Cycle
@@ -23,6 +23,30 @@ Reviewer subagents are **blind by default**: each one sees only the artifacts an
 - Telling a reviewer which severity other reviewers assigned
 
 **Blind means:** same prompt, same artifact set, independent analysis. Disagreement between reviewers is the signal — don't collapse it by leakage.
+
+## Autonomous Loop — Default
+
+**Steps 1–5 are a single autonomous loop.** Step 6 is the first owner checkpoint. Between launching Round 1 and reaching a stop condition, you do not prompt the owner, summarize for the owner, ask whether to continue, or pause for approval. You relaunch reviews, summarize internally, apply revisions, and loop again — until a Step 3 stop condition fires.
+
+The only legitimate early exit is a subagent failure in Step 1 (report and let the user decide).
+
+**Red Flags — STOP (you are about to break the loop early):**
+
+- About to ask the owner *anything* between Step 1 and Step 5
+- About to present findings, decisions, or a round summary to the owner before a Step 3 stop condition has fired
+- Round 1 just finished — about to write a recap message instead of relaunching reviewers
+- Treating Step 4's scope flag as "ask the owner now" rather than "record and surface in Step 6"
+- Thinking "I'll just confirm the direction before round 2"
+- Reviewer disagreement makes you want to consult the owner mid-loop
+
+**All of these mean: do not message the owner. Continue to the next step.**
+
+| Excuse | Reality |
+|---|---|
+| "The owner would want to weigh in here" | Step 6 exists for that. Surface it there. |
+| "This decision is too consequential to auto-apply" | If it's scope/feature addition, record it in the tracker and defer to Step 6. If it's a bug fix, apply it. Either way, do not stop. |
+| "I should at least confirm I'm interpreting the findings right" | No. Apply your best interpretation; the next round's reviewers will catch errors. |
+| "It's been several rounds, the owner should know the status" | Stop conditions are objective (Step 3). Status updates are not a stop condition. |
 
 ## Scope Discipline — Default Answer Is No
 
@@ -89,13 +113,13 @@ Do NOT stop when P0 or unaddressed P1 findings exist and the trajectory is still
 For each finding, classify before applying:
 
 - **Bug fix / gap fill** (reviewer identified a problem, fix is clear) → auto-apply
-- **New scope / feature addition** (fix requires adding something the plan didn't originally include) → flag for owner, apply only with confirmation
+- **New scope / feature addition** (fix requires adding something the plan didn't originally include) → record in the decision tracker, do **not** apply, do **not** pause the loop. It surfaces in Step 6 for the owner.
 
-Track every autonomous decision: what you changed, what alternatives existed, whether it was a direct reviewer recommendation or your design choice.
+Track every autonomous decision: what you changed (or deferred), what alternatives existed, whether it was a direct reviewer recommendation or your design choice. The tracker is internal — do not present it to the owner now.
 
 ### Step 5: Loop
 
-Return to Step 1 with updated artifacts.
+Return immediately to Step 1 with the updated artifacts. Do **not** summarize the round for the owner. Do **not** ask whether to continue. Do **not** wait for input. Step 6 is the first owner-facing message in this cycle.
 
 ---
 
@@ -159,3 +183,5 @@ Run one last blind review round against the cleaned-up artifacts. This catches i
 | Skipping final validation | Cleanup edits can introduce new inconsistencies |
 | Step 6 audit dumped as a flat unsorted list | Tier into 🔴/🟡/🟢; one-sentence context per row; close with a focused ask, not "anything you disagree with?" |
 | Editing one artifact (spec) without simultaneously editing its dependents (tasks) in the same round | After every Step 4 batch, grep for the changed terms across all artifacts before declaring the round done; round-N reviewers will catch the contradiction as a P0 in round N+1, inflating the trajectory |
+| Pausing after Round 1 (or any pre-stop round) to check in with the owner | Steps 1–5 are autonomous. Step 6 is the first owner checkpoint. Only break the loop if a subagent fails in Step 1. |
+| Treating Step 4's scope flag as a synchronous confirmation prompt | Record in the decision tracker and continue. The owner sees it in Step 6's 🔴 tier. |
