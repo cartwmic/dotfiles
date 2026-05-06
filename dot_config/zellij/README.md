@@ -9,7 +9,11 @@ plugin set with one custom-patched fork.
 ```
 dot_config/zellij/
 ├── README.md          # This file (deploys to ~/.config/zellij/README.md)
-├── config.kdl         # Keybinds, theme, modes
+├── config.kdl         # Keybinds, theme, modes, status-bar (zjstatus) config
+├── bin/               # Helper scripts called by zjstatus widgets
+│   ├── cpu.sh         # System-wide CPU % (macOS / Linux)
+│   ├── mem.sh         # System-wide memory % (macOS / Linux)
+│   └── load.sh        # 1-minute load average
 └── (no plugins/ dir — wasm binaries are NOT version-controlled;
                        they're built/downloaded by mise — see below)
 ```
@@ -25,6 +29,51 @@ Two third-party plugins are installed on bootstrap by the mise task
 | --- | --- | --- | --- |
 | [room](https://github.com/rvcas/room) | upstream prebuilt wasm release | `Ctrl-t` | Fuzzy-jump between sessions/tabs/panes |
 | [harpoon](https://github.com/Nacho114/harpoon) | **cartwmic fork**, built from source | `Ctrl-y` | Pin & quick-switch favorite panes |
+| [zjstatus](https://github.com/dj95/zjstatus) | upstream prebuilt wasm release | n/a (status bar) | Configurable status bar with CPU / MEM / load widgets |
+| [zjstatus-hints](https://github.com/b0o/zjstatus-hints) | upstream prebuilt wasm release | n/a (background) | Mode-aware keybind hints rendered through zjstatus |
+
+### zjstatus: at-a-glance host metrics
+
+`zjstatus` replaces zellij's built-in `status-bar` plugin via the alias
+mechanism in `config.kdl` (`plugins { status-bar location="file:...zjstatus.wasm" { ... } }`).
+Every default layout that references `status-bar` automatically picks it up—
+no separate layout file is needed.
+
+The right-aligned segment shows three live system metrics, refreshed every 5s
+by the `command_*` widgets:
+
+- **CPU %** — system-wide, integer. macOS uses `ps -A -o %cpu=` summed and
+  divided by core count; Linux samples `/proc/stat` 1s apart.
+- **MEM %** — (active + wired + compressed) ÷ total on macOS via `vm_stat`;
+  `(MemTotal - MemAvailable) / MemTotal` on Linux via `/proc/meminfo`.
+- **Load** — 1-minute load average. macOS reads `sysctl -n vm.loadavg`;
+  Linux reads `/proc/loadavg`.
+
+All three are implemented as POSIX `sh` scripts in
+`~/.config/zellij/bin/` (chezmoi `executable_*.sh` to preserve the +x bit)
+and invoked by zjstatus through `command_NAME_command "sh $HOME/.config/zellij/bin/NAME.sh"`.
+
+#### Tradeoffs / gotchas
+
+- **Keybind hints come from a companion plugin.** zjstatus itself does not
+  render the mode-aware hint footer that zellij's built-in `status-bar`
+  shows. We restore it with [`b0o/zjstatus-hints`](https://github.com/b0o/zjstatus-hints):
+  it runs as a background plugin (preloaded via `load_plugins {}`),
+  publishes the current mode's bindings to the named pipe `zjstatus_hints`,
+  and zjstatus consumes it through the `{pipe_zjstatus_hints}` token in
+  `format_center` plus the required `pipe_zjstatus_hints_format "{output}"`
+  setting. `hide_in_base_mode` is left **false** because the configured
+  base mode is `locked` and seeing those bindings is the whole point.
+  Wasm binary is downloaded by the same mise task and pinned via
+  `ZJSTATUS_HINTS_VERSION`.
+- **Don't drop `command_*_interval` below ~2s.** Tight intervals can pin
+  zellij; 5s is a comfortable balance between freshness and overhead.
+- **First-time launch downloads ~4MB.** The wasm is fetched once by the
+  mise task on bootstrap; if it's missing, run
+  `mise run install-zellij-plugins`. Reload via Plugin Manager (`Ctrl-o p`)
+  or session restart after upgrading the pinned `ZJSTATUS_VERSION`.
+- **Tilde does NOT expand inside `command_*_command`.** Use `$HOME/...`
+  (zjstatus shells the command via `/bin/sh -c`).
 
 ### Why harpoon is on a fork
 
