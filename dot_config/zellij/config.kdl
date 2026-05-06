@@ -282,7 +282,66 @@ plugins {
     }
     plugin-manager location="zellij:plugin-manager"
     session-manager location="zellij:session-manager"
-    status-bar location="zellij:status-bar"
+    // status-bar overridden with zjstatus (CPU/MEM/load + datetime).
+    // Mode-aware keybind hints are restored by the zjstatus-hints plugin
+    // below (pipes its output into the `{pipe_zjstatus_hints}` token).
+    // Helper scripts live in $HOME/.config/zellij/bin/ (deployed by chezmoi).
+    // Wasm binary installed by mise task `install-zellij-plugins`.
+    status-bar location="file:~/.config/zellij/plugins/zjstatus.wasm" {
+        format_left   "#[bg=#7aa2f7,fg=#1a1b26,bold] {session} #[bg=#1a1b26,fg=#7aa2f7]"
+        format_center "#[fg=#a9b1d6]{pipe_zjstatus_hints}"
+        format_right  "#[fg=#9ece6a]⎛ CPU {command_cpu}%#[fg=#1a1b26] | #[fg=#e0af68] MEM {command_mem}%#[fg=#1a1b26] | #[fg=#ff9e64]≡ {command_load}#[fg=#1a1b26] | #[fg=#bb9af7] {datetime} "
+        format_space  ""
+        format_hide_on_overlength "true"
+        format_precedence "lrc"
+
+        // Render keybind hints injected by the zjstatus-hints plugin via pipe.
+        pipe_zjstatus_hints_format "{output}"
+
+        border_enabled  "false"
+        hide_frame_for_single_pane "true"
+
+        mode_normal       "#[bg=#9ece6a,fg=#1a1b26,bold] NORMAL "
+        mode_locked       "#[bg=#7dcfff,fg=#1a1b26,bold] LOCKED "
+        mode_resize       "#[bg=#f7768e,fg=#1a1b26,bold] RESIZE "
+        mode_pane         "#[bg=#bb9af7,fg=#1a1b26,bold] PANE "
+        mode_tab          "#[bg=#e0af68,fg=#1a1b26,bold] TAB "
+        mode_scroll       "#[bg=#73daca,fg=#1a1b26,bold] SCROLL "
+        mode_session      "#[bg=#ff9e64,fg=#1a1b26,bold] SESSION "
+        mode_search       "#[bg=#7dcfff,fg=#1a1b26,bold] SEARCH "
+        mode_default_to_mode "locked"
+
+        // CPU % (system-wide). Helper picks platform (macOS/Linux).
+        command_cpu_command  "sh $HOME/.config/zellij/bin/cpu.sh"
+        command_cpu_format   "{stdout}"
+        command_cpu_interval "5"
+        command_cpu_rendermode "static"
+
+        // Memory %. Helper picks platform (macOS/Linux).
+        command_mem_command  "sh $HOME/.config/zellij/bin/mem.sh"
+        command_mem_format   "{stdout}"
+        command_mem_interval "5"
+        command_mem_rendermode "static"
+
+        // 1-min load average.
+        command_load_command  "sh $HOME/.config/zellij/bin/load.sh"
+        command_load_format   "{stdout}"
+        command_load_interval "5"
+        command_load_rendermode "static"
+
+        datetime          "{format}"
+        datetime_format   "%Y-%m-%d %H:%M"
+        datetime_timezone ""
+    }
+    // Companion to zjstatus: streams keybind hints for the current mode
+    // through a named pipe consumed by zjstatus's `{pipe_zjstatus_hints}` token.
+    // Wasm binary installed by mise task `install-zellij-plugins`.
+    zjstatus-hints location="file:~/.config/zellij/plugins/zjstatus-hints.wasm" {
+        max_length 0          // 0 = unlimited
+        overflow_str "..."
+        pipe_name "zjstatus_hints"  // must match the `pipe_<name>` token above
+        hide_in_base_mode false     // base mode here is `locked`; show hints there too
+    }
     strider location="zellij:strider"
     tab-bar location="zellij:tab-bar"
     welcome-screen location="zellij:session-manager" {
@@ -294,6 +353,10 @@ plugins {
 // eg. "file:/path/to/my-plugin.wasm"
 // eg. "https://example.com/my-plugin.wasm"
 load_plugins {
+    // Required: zjstatus-hints publishes mode-aware keybind hints to a pipe
+    // that the zjstatus status-bar reads. Without preloading, the hints pane
+    // never appears until the plugin is launched manually.
+    zjstatus-hints
 }
  
 // Use a simplified UI without special fonts (arrow glyphs)

@@ -571,6 +571,8 @@ mkdir -p "$PLUGIN_DIR"
 
 # Pinned versions — bump to upgrade
 ROOM_VERSION="v1.2.1"
+ZJSTATUS_VERSION="v0.23.0"
+ZJSTATUS_HINTS_VERSION="v0.1.4"
 # harpoon: pinned to a commit on the cartwmic fork carrying a custom patch
 # (see HARPOON_REPO below). Bump both together when re-syncing with upstream.
 # Patch: keep focused_pane sticky when harpoon itself has focus, so `a` can
@@ -587,6 +589,28 @@ if [ ! -f "$PLUGIN_DIR/room.wasm" ] || [ "$(cat "$ROOM_STAMP" 2>/dev/null)" != "
   echo "$ROOM_VERSION" > "$ROOM_STAMP"
 else
   echo "room $ROOM_VERSION already installed"
+fi
+
+# --- zjstatus: prebuilt wasm from GitHub release (replaces built-in status-bar) ---
+ZJSTATUS_STAMP="$PLUGIN_DIR/.zjstatus.version"
+if [ ! -f "$PLUGIN_DIR/zjstatus.wasm" ] || [ "$(cat "$ZJSTATUS_STAMP" 2>/dev/null)" != "$ZJSTATUS_VERSION" ]; then
+  echo "Installing dj95/zjstatus $ZJSTATUS_VERSION..."
+  curl -fsSL "https://github.com/dj95/zjstatus/releases/download/${ZJSTATUS_VERSION}/zjstatus.wasm" \
+    -o "$PLUGIN_DIR/zjstatus.wasm"
+  echo "$ZJSTATUS_VERSION" > "$ZJSTATUS_STAMP"
+else
+  echo "zjstatus $ZJSTATUS_VERSION already installed"
+fi
+
+# --- zjstatus-hints: prebuilt wasm from GitHub release (keybind hints for zjstatus) ---
+ZJSTATUS_HINTS_STAMP="$PLUGIN_DIR/.zjstatus-hints.version"
+if [ ! -f "$PLUGIN_DIR/zjstatus-hints.wasm" ] || [ "$(cat "$ZJSTATUS_HINTS_STAMP" 2>/dev/null)" != "$ZJSTATUS_HINTS_VERSION" ]; then
+  echo "Installing b0o/zjstatus-hints $ZJSTATUS_HINTS_VERSION..."
+  curl -fsSL "https://github.com/b0o/zjstatus-hints/releases/download/${ZJSTATUS_HINTS_VERSION}/zjstatus-hints.wasm" \
+    -o "$PLUGIN_DIR/zjstatus-hints.wasm"
+  echo "$ZJSTATUS_HINTS_VERSION" > "$ZJSTATUS_HINTS_STAMP"
+else
+  echo "zjstatus-hints $ZJSTATUS_HINTS_VERSION already installed"
 fi
 
 # --- harpoon: build from source (no prebuilt release) ---
