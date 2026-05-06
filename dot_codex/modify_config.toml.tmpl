@@ -1,0 +1,91 @@
+#!/bin/sh
+#
+# chezmoi modify_ script for ~/.codex/config.toml.
+#
+# Idempotently writes/refreshes the `developer_instructions` key with the
+# canonical caveman-style content. Preserves everything else in the file
+# (model, projects, [features], MCP block managed by apply_harness_config,
+# etc.). The block is delimited by TOML comment markers so re-runs replace
+# only the managed section.
+#
+# Chezmoi runs modify_ scripts with the existing target file content piped
+# on stdin and uses stdout as the new content.
+
+set -eu
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+cat - > "$WORK/existing"
+
+# Render the canonical caveman markdown into a file. We then embed it into
+# config.toml as a TOML triple-single-quoted literal so no escaping is
+# required inside.
+cat > "$WORK/payload.md" <<'PAYLOAD_END'
+{{ include "dot_local/share/agent-harness/canonical/instructions/caveman-style.md" -}}
+PAYLOAD_END
+
+python3 - "$WORK/existing" "$WORK/payload.md" <<'PY'
+import pathlib
+import re
+import sys
+
+existing_path = pathlib.Path(sys.argv[1])
+payload_path = pathlib.Path(sys.argv[2])
+
+existing = existing_path.read_text() if existing_path.stat().st_size else ""
+payload = payload_path.read_text().rstrip("\n")
+
+# TOML triple-single-quoted strings cannot contain ''' — assert and fail
+# loudly rather than corrupt the file.
+assert "'''" not in payload, (
+    "caveman-style.md contains ''' which would break TOML triple-quoted literal"
+)
+
+block = (
+    "# chezmoi:caveman-style:begin\n"
+    "developer_instructions = '''\n"
+    + payload
+    + "\n'''\n"
+    + "# chezmoi:caveman-style:end"
+)
+
+begin_re = re.compile(r"# chezmoi:caveman-style:begin")
+end_re = re.compile(r"# chezmoi:caveman-style:end")
+block_re = re.compile(
+    r"# chezmoi:caveman-style:begin\n.*?# chezmoi:caveman-style:end\n?",
+    re.DOTALL,
+)
+
+# 1. Strip any prior caveman-style block wherever it lives.
+stripped = block_re.sub("", existing)
+
+# 2. Re-insert the block at the TOP of the file, before any [section]
+# headers. TOML parses keys after a [table] header as part of that table,
+# so a top-level key like developer_instructions must precede every
+# section. Preserve any leading top-level key=value lines that already
+# sit above the first [section] (e.g. model = "gpt-5.4").
+lines = stripped.splitlines(keepends=True)
+first_section_idx = None
+for i, line in enumerate(lines):
+    if re.match(r"\s*\[", line):
+        first_section_idx = i
+        break
+
+if first_section_idx is None:
+    # No [section] headers in file. Append at end.
+    head = "".join(lines).rstrip("\n")
+    if head:
+        new = head + "\n\n" + block + "\n"
+    else:
+        new = block + "\n"
+else:
+    head = "".join(lines[:first_section_idx]).rstrip("\n")
+    tail = "".join(lines[first_section_idx:])
+    if head:
+        new = head + "\n\n" + block + "\n\n" + tail
+    else:
+        new = block + "\n\n" + tail
+
+sys.stdout.write(new)
+PY
