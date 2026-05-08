@@ -2,5 +2,8 @@ uservariables.yaml
 __pycache__
 bin/
 lib/
+# but allow chezmoi-managed scripts in dot_local/bin/
+!dot_local/bin/
+!dot_local/bin/**
 *.diff
 .playwright-mcp/

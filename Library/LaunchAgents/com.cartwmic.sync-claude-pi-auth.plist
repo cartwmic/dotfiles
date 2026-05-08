@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cartwmic.sync-claude-pi-auth</string>
+
+    <!--
+      Sync Claude Code OAuth (~/.claude/.credentials.json) into pi auth.json
+      whenever Claude Code rotates the token, plus periodically as a safety
+      net, plus once at login. Source script + rationale:
+        ~/.local/bin/sync-claude-pi-auth.sh
+    -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/cartwmic/.local/bin/sync-claude-pi-auth.sh</string>
+        <string>--quiet</string>
+    </array>
+
+    <!-- Re-run when Claude Code rewrites its credentials file. -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/cartwmic/.claude/.credentials.json</string>
+    </array>
+
+    <!-- Belt-and-suspenders: also poll every 30 min in case WatchPaths misses
+         a write (atomic-rename / hard-link replace patterns sometimes do). -->
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <!-- Sync immediately at login so the first pi launch of the day is fresh. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Avoid backoff loops if sync fails; one shot per trigger. -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Inherit a usable PATH. launchd jobs get a minimal PATH by default;
+         jq + security + /usr/bin tools all need to be reachable. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- mise shims first so jq (mise-managed) resolves; then homebrew + system. -->
+        <key>PATH</key>
+        <string>/Users/cartwmic/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/cartwmic/.local/state/sync-claude-pi-auth.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/cartwmic/.local/state/sync-claude-pi-auth.log</string>
+
+    <!-- Nice low priority; this is housekeeping. -->
+    <key>Nice</key>
+    <integer>5</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
