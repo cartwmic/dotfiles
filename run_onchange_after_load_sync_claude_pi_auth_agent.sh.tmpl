@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+#
+# Reload the sync-claude-pi-auth launchd agent whenever its plist changes.
+# Chezmoi reruns this script when the embedded plist hash changes, so a
+# `chezmoi apply` after editing the plist guarantees a clean reload.
+#
+# macOS-only; no-op elsewhere.
+#
+# Plist hash (changes whenever the plist file content does, forcing rerun):
+#   {{ include "Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist" | sha256sum }}
+
+set -euo pipefail
+
+{{- if eq .chezmoi.os "darwin" }}
+
+LABEL="com.cartwmic.sync-claude-pi-auth"
+PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
+DOMAIN="gui/$(id -u)"
+
+mkdir -p "${HOME}/.local/state"
+
+if [ ! -f "$PLIST" ]; then
+  echo "plist not deployed yet at $PLIST; skipping reload" >&2
+  exit 0
+fi
+
+# bootout is idempotent-ish; ignore failure when not loaded.
+launchctl bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
+launchctl bootstrap "$DOMAIN" "$PLIST"
+launchctl enable "${DOMAIN}/${LABEL}"
+launchctl kickstart -k "${DOMAIN}/${LABEL}"
+
+echo "reloaded launchd agent: $LABEL"
+
+{{- else }}
+
+echo "non-darwin platform ({{ .chezmoi.os }}); skipping launchd agent reload"
+
+{{- end }}
