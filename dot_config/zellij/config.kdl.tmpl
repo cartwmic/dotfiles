@@ -288,14 +288,18 @@ plugins {
     // Helper scripts live in $HOME/.config/zellij/bin/ (deployed by chezmoi).
     // Wasm binary installed by mise task `install-zellij-plugins`.
     status-bar location="file:~/.config/zellij/plugins/zjstatus.wasm" {
-        format_left   "#[bg=#7aa2f7,fg=#1a1b26,bold] {session} #[bg=#1a1b26,fg=#7aa2f7]"
-        format_center "#[fg=#a9b1d6]{pipe_zjstatus_hints}"
-        format_right  "#[fg=#9ece6a]⎛ CPU {command_cpu}%#[fg=#1a1b26] | #[fg=#e0af68] MEM {command_mem}%#[fg=#1a1b26] | #[fg=#ff9e64]≡ {command_load}#[fg=#1a1b26] | #[fg=#bb9af7] {datetime} "
+        // Hints in format_left so precedence overlap check uses safe
+        // (Left,Right) path: a_count + b_count > cols (no usize underflow).
+        // zjstatus (Right,Center) check has unchecked subtraction that
+        // underflows when center > 2x center_pos (e.g. long Normal/Tab hints
+        // on a 60-col Termux pane), so right is never dropped. Putting hints
+        // in left with precedence "lcr" cleanly drops right when they collide.
+        format_left   "#[fg=#a9b1d6]{pipe_zjstatus_hints}"
+        format_center ""
+        format_right  "#[bg=#7aa2f7,fg=#1a1b26,bold] {session} #[bg=#1a1b26]#[fg=#9ece6a]⎛ CPU {command_cpu}%#[fg=#1a1b26] | #[fg=#e0af68] MEM {command_mem}%#[fg=#1a1b26] | #[fg=#ff9e64]≡ {command_load}#[fg=#1a1b26] | #[fg=#bb9af7] {datetime} "
         format_space  ""
-        // On narrow screens (e.g. Termux on Android), drop right/left sections
-        // instead of truncating mid-string so the centered keybind hints survive.
         format_hide_on_overlength "true"
-        format_precedence "crl"
+        format_precedence "lcr"
 
         // Render keybind hints injected by the zjstatus-hints plugin via pipe.
         pipe_zjstatus_hints_format "{output}"
@@ -339,10 +343,11 @@ plugins {
     // through a named pipe consumed by zjstatus's `{pipe_zjstatus_hints}` token.
     // Wasm binary installed by mise task `install-zellij-plugins`.
     zjstatus-hints location="file:~/.config/zellij/plugins/zjstatus-hints.wasm" {
-        // Unlimited: let zjstatus's format_precedence "crl" + hide_on_overlength
-        // drop the right/left sections to make room. A hard cap here would let
-        // hints fit alongside the right panel and prevent the precedence from
-        // ever triggering, leaving hints clipped instead of right/left dropped.
+        // Unlimited: let zjstatus's format_precedence "lcr" + hide_on_overlength
+        // drop the right section (session + CPU/MEM/load/datetime) to make
+        // room when hints in format_left exceed available width. A hard cap
+        // here would let hints fit alongside the right panel and prevent the
+        // precedence from ever triggering, leaving hints clipped instead.
         max_length 0          // 0 = unlimited
         overflow_str "..."
         pipe_name "zjstatus_hints"  // must match the `pipe_<name>` token above
