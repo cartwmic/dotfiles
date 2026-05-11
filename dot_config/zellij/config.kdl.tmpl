@@ -392,7 +392,31 @@ plugins {
         max_length 56
         overflow_str "..."
         pipe_name "zjstatus_hints"  // must match the `pipe_<name>` token above
-        hide_in_base_mode false     // base mode here is `locked`; show hints there too
+
+        // hide_in_base_mode=true blanks hints when current mode == base_mode.
+        // base_mode here is `locked` (set by zellij's `default_mode "locked"`
+        // and zjstatus' `mode_default_to_mode "locked"`), so this only blanks
+        // hints in locked mode.
+        //
+        // Why: locked mode's only binding is `Ctrl g -> normal`, which would
+        // emit a ~15-char hint. Combined with the ~70-char right panel
+        // (session/CPU/MEM/load/datetime), the (Right,Left) overlap check in
+        // zjstatus' trim_output fires whenever cols < ~85, dropping the entire
+        // right panel. Result: locked mode shows a tiny hint at far left and
+        // huge empty space where CPU/MEM should be.
+        //
+        // With hide_in_base_mode=true the plugin emits "" in locked mode, the
+        // left section measures 0, the overlap check becomes
+        // `right_count > cols` (collides only if right alone exceeds the pane),
+        // and the full right panel renders. Tradeoff: no on-screen reminder of
+        // `Ctrl g` to unlock, but the `LOCKED` mode indicator stays visible in
+        // the right panel's mode block and Ctrl g is a single keybind.
+        //
+        // Non-base modes (pane/tab/resize/move/scroll/search/session) are
+        // unaffected: they still render hints, still get truncated to 56 by
+        // max_length, and still drop the right panel via format_precedence
+        // "lrc" when hints+right exceed cols.
+        hide_in_base_mode true
     }
     strider location="zellij:strider"
     tab-bar location="zellij:tab-bar"
