@@ -288,18 +288,34 @@ plugins {
     // Helper scripts live in $HOME/.config/zellij/bin/ (deployed by chezmoi).
     // Wasm binary installed by mise task `install-zellij-plugins`.
     status-bar location="file:~/.config/zellij/plugins/zjstatus.wasm" {
-        // Hints in format_left so precedence overlap check uses safe
-        // (Left,Right) path: a_count + b_count > cols (no usize underflow).
-        // zjstatus (Right,Center) check has unchecked subtraction that
-        // underflows when center > 2x center_pos (e.g. long Normal/Tab hints
-        // on a 60-col Termux pane), so right is never dropped. Putting hints
-        // in left with precedence "lcr" cleanly drops right when they collide.
+        // Hints in format_left; precedence "lrc" so the decisive overlap
+        // check is (Right,Left): a_count + b_count > cols. Right drops only
+        // when hints + right truly collide.
+        //
+        // Do NOT use precedence "lcr" here. With "lcr" the first iterated
+        // combination is (Right,Center), and zjstatus computes overlap as
+        //   right_count > center_pos - (center_count / 2)
+        // With center empty (center_count = 0) that collapses to
+        //   right_count > cols / 2
+        // which is true whenever the right section is wider than half the
+        // bar — so right gets dropped unconditionally, even on wide panes
+        // where it fits alongside hints. Symptom: hints alone jammed to
+        // the left, session/CPU/MEM/datetime block missing.
+        //
+        // With "lrc" the combinations iterated are (Center,Right),
+        // (Right,Left), (Center,Left). The (Center,Right) and (Center,Left)
+        // branches both compare `0 > something` (center is the empty
+        // section, so a_count = 0) — false either way, and blanking the
+        // already-empty center is a no-op. The (Right,Left) check uses the
+        // safe additive form and drops right only when it actually overlaps
+        // hints. The pre-existing usize-underflow bug in (X,Center) checks
+        // doesn't bite because center is never the wide section here.
         format_left   "#[fg=#a9b1d6]{pipe_zjstatus_hints}"
         format_center ""
         format_right  "#[bg=#7aa2f7,fg=#1a1b26,bold] {session} #[bg=#1a1b26]#[fg=#9ece6a]⎛ CPU {command_cpu}%#[fg=#1a1b26] | #[fg=#e0af68] MEM {command_mem}%#[fg=#1a1b26] | #[fg=#ff9e64]≡ {command_load}#[fg=#1a1b26] | #[fg=#bb9af7] {datetime} "
         format_space  ""
         format_hide_on_overlength "true"
-        format_precedence "lcr"
+        format_precedence "lrc"
 
         // Render keybind hints injected by the zjstatus-hints plugin via pipe.
         pipe_zjstatus_hints_format "{output}"
@@ -343,11 +359,11 @@ plugins {
     // through a named pipe consumed by zjstatus's `{pipe_zjstatus_hints}` token.
     // Wasm binary installed by mise task `install-zellij-plugins`.
     zjstatus-hints location="file:~/.config/zellij/plugins/zjstatus-hints.wasm" {
-        // Unlimited: let zjstatus's format_precedence "lcr" + hide_on_overlength
-        // drop the right section (session + CPU/MEM/load/datetime) to make
-        // room when hints in format_left exceed available width. A hard cap
-        // here would let hints fit alongside the right panel and prevent the
-        // precedence from ever triggering, leaving hints clipped instead.
+        // Unlimited: let zjstatus's format_precedence "lrc" + hide_on_overlength
+        // drop the right section (session + CPU/MEM/load/datetime) when
+        // hints + right truly collide. Capping max_length here would let
+        // hints fit alongside the right panel and prevent the precedence
+        // from ever triggering, leaving hints clipped instead.
         max_length 0          // 0 = unlimited
         overflow_str "..."
         pipe_name "zjstatus_hints"  // must match the `pipe_<name>` token above
