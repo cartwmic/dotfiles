@@ -359,12 +359,37 @@ plugins {
     // through a named pipe consumed by zjstatus's `{pipe_zjstatus_hints}` token.
     // Wasm binary installed by mise task `install-zellij-plugins`.
     zjstatus-hints location="file:~/.config/zellij/plugins/zjstatus-hints.wasm" {
-        // Unlimited: let zjstatus's format_precedence "lrc" + hide_on_overlength
-        // drop the right section (session + CPU/MEM/load/datetime) when
-        // hints + right truly collide. Capping max_length here would let
-        // hints fit alongside the right panel and prevent the precedence
-        // from ever triggering, leaving hints clipped instead.
-        max_length 0          // 0 = unlimited
+        // Cap hints to 56 visible chars (incl. plugin's leading space) so
+        // they never exceed Termux's typical ~60-col pane width.
+        //
+        // Why a cap is mandatory:
+        //   - zjstatus-hints renders mode hint strings of arbitrary length;
+        //     in PANE/TAB/RESIZE modes the rendered width easily reaches
+        //     100-120 chars (7 action sequences + rename + 4-direction
+        //     focus + select, each ~12-17 chars).
+        //   - zjstatus's `format_hide_on_overlength true` only drops WHOLE
+        //     sections (Left/Center/Right); it cannot truncate a section
+        //     down to fit. Once Right drops via `format_precedence "lrc"`,
+        //     the full Left string still emits and zellij itself clips
+        //     anything past `cols`, producing the "hints cut off, only
+        //     show on the far left" symptom on any pane < hint width.
+        //   - The plugin's `render(_rows, _cols)` ignores cols (verified in
+        //     b0o/zjstatus-hints `src/main.rs`), so dynamic width-aware
+        //     truncation is not available. `max_length` is the only knob.
+        //   - Loaded via `load_plugins {}` the plugin has no visible pane,
+        //     so even forking to use `_cols` would not yield a reliable
+        //     pane width. Upstream README's TODO "improved handling of
+        //     long outputs" confirms this is a known limitation.
+        //
+        // Tradeoff: on very wide monitors, hints are capped at 56 chars
+        // even though more would fit. Acceptable because (a) hints are
+        // most informative on narrow terminals where they would otherwise
+        // be clipped, and (b) the right panel (~70 chars) plus 56-char
+        // hints fits comfortably from ~130 cols up.
+        //
+        // Counts visible chars only (ANSI-aware); overflow_str appended
+        // when truncated so it's clear the hints continued.
+        max_length 56
         overflow_str "..."
         pipe_name "zjstatus_hints"  // must match the `pipe_<name>` token above
         hide_in_base_mode false     // base mode here is `locked`; show hints there too
