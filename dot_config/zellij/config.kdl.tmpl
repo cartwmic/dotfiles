@@ -292,8 +292,10 @@ plugins {
         format_center "#[fg=#a9b1d6]{pipe_zjstatus_hints}"
         format_right  "#[fg=#9ece6a]⎛ CPU {command_cpu}%#[fg=#1a1b26] | #[fg=#e0af68] MEM {command_mem}%#[fg=#1a1b26] | #[fg=#ff9e64]≡ {command_load}#[fg=#1a1b26] | #[fg=#bb9af7] {datetime} "
         format_space  ""
+        // On narrow screens (e.g. Termux on Android), drop right/left sections
+        // instead of truncating mid-string so the centered keybind hints survive.
         format_hide_on_overlength "true"
-        format_precedence "lrc"
+        format_precedence "crl"
 
         // Render keybind hints injected by the zjstatus-hints plugin via pipe.
         pipe_zjstatus_hints_format "{output}"
@@ -312,19 +314,19 @@ plugins {
         mode_default_to_mode "locked"
 
         // CPU % (system-wide). Helper picks platform (macOS/Linux).
-        command_cpu_command  "sh $HOME/.config/zellij/bin/cpu.sh"
+        command_cpu_command  "sh {{ .chezmoi.homeDir }}/.config/zellij/bin/cpu.sh"
         command_cpu_format   "{stdout}"
         command_cpu_interval "5"
         command_cpu_rendermode "static"
 
         // Memory %. Helper picks platform (macOS/Linux).
-        command_mem_command  "sh $HOME/.config/zellij/bin/mem.sh"
+        command_mem_command  "sh {{ .chezmoi.homeDir }}/.config/zellij/bin/mem.sh"
         command_mem_format   "{stdout}"
         command_mem_interval "5"
         command_mem_rendermode "static"
 
         // 1-min load average.
-        command_load_command  "sh $HOME/.config/zellij/bin/load.sh"
+        command_load_command  "sh {{ .chezmoi.homeDir }}/.config/zellij/bin/load.sh"
         command_load_format   "{stdout}"
         command_load_interval "5"
         command_load_rendermode "static"
@@ -337,7 +339,7 @@ plugins {
     // through a named pipe consumed by zjstatus's `{pipe_zjstatus_hints}` token.
     // Wasm binary installed by mise task `install-zellij-plugins`.
     zjstatus-hints location="file:~/.config/zellij/plugins/zjstatus-hints.wasm" {
-        max_length 0          // 0 = unlimited
+        max_length 80         // cap hint length so narrow widths can still fit them
         overflow_str "..."
         pipe_name "zjstatus_hints"  // must match the `pipe_<name>` token above
         hide_in_base_mode false     // base mode here is `locked`; show hints there too
