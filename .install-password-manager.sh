@@ -3,9 +3,9 @@
 
 . "$HOME"/.local/share/chezmoi/utils.sh
 
-# Check if 'op' command already exists
+# Check if 'op' command already exists. Silent on the happy path so chezmoi
+# diff/apply doesn't print noise on every run.
 if command -v op >/dev/null 2>&1; then
-  echo "op command already exists"
   exit 0
 fi
 
