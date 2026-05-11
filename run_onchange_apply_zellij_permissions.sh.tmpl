@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Writes Zellij plugin permissions to the OS-specific cache path.
+# Granting these via the in-app modal is unreliable when plugins load as
+# part of the layout/load_plugins (modal gets buried). Pre-seeding here
+# avoids the broken UX entirely.
+#
+# chezmoi re-runs run_onchange_* scripts whenever the rendered file
+# content changes, so editing the perms block below is enough to
+# trigger reapplication.
+
+set -euo pipefail
+
+case "{{ .chezmoi.os }}" in
+  darwin)
+    cache_dir="${HOME}/Library/Caches/org.Zellij-Contributors.Zellij"
+    ;;
+  linux)
+    cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/zellij"
+    ;;
+  *)
+    echo "zellij permissions: unsupported OS, skipping" >&2
+    exit 0
+    ;;
+esac
+
+mkdir -p "${cache_dir}"
+perms_file="${cache_dir}/permissions.kdl"
+
+plugins_dir="${HOME}/.config/zellij/plugins"
+
+cat > "${perms_file}" <<EOF
+"${plugins_dir}/zjstatus.wasm" {
+    ReadApplicationState
+    ChangeApplicationState
+    RunCommands
+}
+"${plugins_dir}/zjstatus-hints.wasm" {
+    ReadApplicationState
+    MessageAndLaunchOtherPlugins
+}
+"${plugins_dir}/harpoon.wasm" {
+    ReadApplicationState
+    ChangeApplicationState
+    RunCommands
+}
+"${plugins_dir}/room.wasm" {
+    ReadApplicationState
+    ChangeApplicationState
+}
+EOF
+
+echo "zellij permissions written to ${perms_file}"
