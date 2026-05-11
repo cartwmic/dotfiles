@@ -339,7 +339,11 @@ plugins {
     // through a named pipe consumed by zjstatus's `{pipe_zjstatus_hints}` token.
     // Wasm binary installed by mise task `install-zellij-plugins`.
     zjstatus-hints location="file:~/.config/zellij/plugins/zjstatus-hints.wasm" {
-        max_length 80         // cap hint length so narrow widths can still fit them
+        // Unlimited: let zjstatus's format_precedence "crl" + hide_on_overlength
+        // drop the right/left sections to make room. A hard cap here would let
+        // hints fit alongside the right panel and prevent the precedence from
+        // ever triggering, leaving hints clipped instead of right/left dropped.
+        max_length 0          // 0 = unlimited
         overflow_str "..."
         pipe_name "zjstatus_hints"  // must match the `pipe_<name>` token above
         hide_in_base_mode false     // base mode here is `locked`; show hints there too
