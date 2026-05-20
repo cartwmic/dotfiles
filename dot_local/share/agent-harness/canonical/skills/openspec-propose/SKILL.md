@@ -39,6 +39,18 @@ When ready to implement, run /opsx-apply
    ```
    This creates a scaffolded change at `openspec/changes/<name>/` with `.openspec.yaml`.
 
+2.5 **Detect schema and branch behavior**
+
+   Read the project's `openspec/config.yaml` `schema:` field. Also confirm via:
+   ```bash
+   openspec status --change "<name>" --json
+   ```
+   Parse `schemaName`. Log clearly which path will execute:
+
+   - If `schemaName == "opsx-superpowers"`: follow the alternate procedure documented at `~/.pi/agent/skills/openspec-propose/references/opsx-superpowers-mode.md` (loaded as needed). This adds: up-front Scale + Spec Level prompt, EARS-pattern picker for specs, clarify-spec invocation before design, analyze cross-check before tasks, adversarial-review-cycle invocation at Scale ≥ L. Then the artifact loop below proceeds with the schema's declared graph.
+
+   - If `schemaName == "spec-driven"` (default) or anything else: log "[feature off] running default flow" and proceed with the existing steps unchanged below.
+
 3. **Get the artifact build order**
    ```bash
    openspec status --change "<name>" --json

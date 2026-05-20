@@ -91,6 +91,21 @@ This tells you:
 - Their names, schemas, and status
 - What the user might be working on
 
+### Schema awareness (opsx-superpowers)
+
+If the active change uses `schema: opsx-superpowers` (visible from `openspec list --json` per-change `schemaName` field), you have extra responsibility:
+
+- When the exploration crystallizes into a concrete proposal candidate, RECOMMEND a Scale tier (`XS | S | M | L | XL`) based on the conversation. Cite the heuristic from the schema README's Scale-tier table:
+  - XS: typo, comment fix, single-line config tweak
+  - S: single-file bug fix, small refactor
+  - M: typical feature, cross-file but single capability
+  - L: cross-capability change, breaking change, new ADR-worthy decisions
+  - XL: new capability, migration, multi-week project
+- If the explored area touches an existing capability, READ `openspec/specs/<capability>/spec.md` AND `openspec/domain.md` AND `openspec/constitution.md` before drafting any proposal. Cite invariants that constrain the exploration.
+- Surface ambiguity early. If the user's intent has multiple plausible interpretations, name them; this saves the clarify artifact later.
+
+When the schema is NOT `opsx-superpowers` (e.g., default `spec-driven`), the explore stance is unchanged from the existing skill body.
+
 ### When no change exists
 
 Think freely. When insights crystallize, you might offer:

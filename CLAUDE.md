@@ -160,6 +160,23 @@ After `chezmoi apply`, these require manual setup:
 - mise handles platform-specific tool installation automatically
 - Font installation includes Nerd Fonts (Source Code Pro)
 
+## OpenSpec workflow schemas
+
+This repo ships a custom OpenSpec workflow schema `opsx-superpowers` at `dot_local/share/openspec/schemas/opsx-superpowers/` (deploys to `~/.local/share/openspec/schemas/opsx-superpowers/`). Per-project opt-in via `schema: opsx-superpowers` in the project's `openspec/config.yaml`. Default `spec-driven` schema remains the fallback and is byte-identically unaffected.
+
+The schema adds: EARS-shaped acceptance criteria with canonical IDs, constitution + domain referencing, 3-pass clarify quality gate, cross-artifact analyze lint, scale-adaptive workflow (XS/S/M/L/XL), mode switchboard in review.md, per-task file contracts with TDD-aware allow-new-files exemption, AC↔test mapping verify gate, and skill-managed post-apply discipline (verify.md, ADR promotion, retrospective → mcp-memory).
+
+Four pi skills under `dot_local/share/agent-harness/canonical/skills/` were updated with schema-detection backward-compat blocks. A new `clarify-spec` skill provides the 3-pass quality gate as a reusable subagent.
+
+When to opt in:
+- Adopt for any new capability work (Scale L or XL).
+- Adopt for typical features (Scale M) once the project has a few changes to dogfood the workflow.
+- Stay on default `spec-driven` for trivial work (typos, small fixes) until the project has critical-path complexity worth ceremonious discipline.
+
+Schema documentation: `~/.local/share/openspec/schemas/opsx-superpowers/README.md`.
+Schema source: `dot_local/share/openspec/schemas/opsx-superpowers/`.
+Dogfooding constitution + domain templates for THIS repo: `openspec/constitution.md` + `openspec/domain.md` (NOT chezmoi-deployed; gitignored from deploys via `.chezmoiignore` `openspec/`).
+
 ## AI Assistant Integration
 
 This repository includes configurations for:

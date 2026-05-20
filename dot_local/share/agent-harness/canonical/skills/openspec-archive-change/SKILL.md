@@ -37,6 +37,11 @@ Archive a completed change in the experimental workflow.
    - Use **AskUserQuestion tool** to confirm user wants to proceed
    - Proceed if user confirms
 
+2.5 **Branch on schema**
+
+   - If `schemaName == "opsx-superpowers"`: load the alternate archive procedure documented at `~/.pi/agent/skills/openspec-archive-change/references/opsx-superpowers-mode.md` and follow it INSTEAD of the steps below. It adds: HARD-GATE on `verify.md` Completion Decision = green (when Verification Mode = retained-required); AC↔test mapping grep using canonical IDs; ADR promotion candidate prompts (decisions passing the 4-point test get promoted to `<repo>/adr/ADR-NNNN-<slug>.md`); `retrospective.md` Promote-candidates parsed for per-row `mcp_memory_store_memory` confirm/skip prompts. Log "[opsx-superpowers mode] following alternate procedure".
+   - If `schemaName == "spec-driven"` (default) or anything else: log "[feature off] running default flow" and proceed with the existing steps below unchanged.
+
 3. **Check task completion status**
 
    Read the tasks file (typically `tasks.md`) to check for incomplete tasks.
