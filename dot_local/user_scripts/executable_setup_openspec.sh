@@ -30,6 +30,36 @@ require_dir() {
   fi
 }
 
+# Skills that the agent-harness canonical pipeline owns; openspec init/update
+# would otherwise write per-repo copies of these and collide with the
+# canonical symlinks in ~/.pi/agent/skills, ~/.claude/skills, ~/.codex/skills.
+# Keep this list in sync with dot_local/share/agent-harness/canonical/skills/
+# entries that openspec emits on init.
+CANONICAL_OPENSPEC_SKILLS="openspec-explore openspec-propose openspec-apply-change openspec-archive-change clarify-spec"
+
+strip_canonical_skill_copies() {
+  repo_path="$1"
+
+  for tool_dir in .pi .claude .codex; do
+    skills_dir="$repo_path/$tool_dir/skills"
+    [ -d "$skills_dir" ] || continue
+
+    for skill_name in $CANONICAL_OPENSPEC_SKILLS; do
+      target="$skills_dir/$skill_name"
+      if [ -e "$target" ] || [ -L "$target" ]; then
+        rm -rf "$target"
+        log "Stripped per-repo skill copy: $target (canonical-owned)"
+      fi
+    done
+
+    # Remove now-empty skills dir to avoid leaving a stub.
+    if [ -d "$skills_dir" ] && [ -z "$(ls -A "$skills_dir" 2>/dev/null)" ]; then
+      rmdir "$skills_dir"
+      log "Removed empty skills dir: $skills_dir"
+    fi
+  done
+}
+
 summarize_repo_outputs() {
   repo_path="$1"
 
@@ -85,6 +115,8 @@ main() {
   openspec config profile "$PROFILE"
   openspec init "$repo_path" --tools "$TOOLS" --profile "$PROFILE" $FORCE
   openspec update "$repo_path" --force
+
+  strip_canonical_skill_copies "$repo_path"
 
   summarize_repo_outputs "$repo_path"
   summarize_codex_outputs
