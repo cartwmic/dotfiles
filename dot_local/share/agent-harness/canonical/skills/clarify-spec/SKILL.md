@@ -2,7 +2,7 @@
 name: clarify-spec
 description: Three-pass quality gate over EARS acceptance criteria — ambiguity, inconsistency, completeness. Produces a clarify.md findings file with 2-option questions for resolution. Used by the opsx-superpowers schema's clarify artifact (and invokable directly against any specs/**/spec.md).
 license: MIT
-compatibility: Requires OpenSpec 1.3.0+ AND a project using `schema: opsx-superpowers` (or another schema declaring a `clarify` artifact). For standalone use, no schema requirement — just point at a specs/ directory.
+compatibility: "Requires OpenSpec 1.3.0+ AND a project using `schema: opsx-superpowers` (or another schema declaring a `clarify` artifact). For standalone use, no schema requirement — just point at a specs/ directory."
 metadata:
   author: cartwmic
   version: "1.0"
