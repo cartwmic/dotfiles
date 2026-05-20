@@ -32,6 +32,11 @@ Implement tasks from an OpenSpec change.
    - `schemaName`: The workflow being used (e.g., "spec-driven")
    - Which artifact contains the tasks (typically "tasks" for spec-driven, check status for others)
 
+2.5 **Branch on schema**
+
+   - If `schemaName == "opsx-superpowers"`: load the alternate apply procedure documented at `~/.pi/agent/skills/openspec-apply-change/references/opsx-superpowers-mode.md` and follow it INSTEAD of the steps below. It adds: mode dispatch from `review.md`, pre-flight commit, Worktree Base SHA capture, file-contract enforcement, intent-aware repair prompts, post-apply `verify.md` production. Log "[opsx-superpowers mode] following alternate procedure".
+   - If `schemaName == "spec-driven"` (default) or anything else: log "[feature off] running default flow" and proceed with the existing steps below unchanged.
+
 3. **Get apply instructions**
 
    ```bash

@@ -1,0 +1,518 @@
+name: opsx-superpowers
+version: 1
+description: >
+  Scale-adaptive spec-driven workflow with EARS acceptance criteria,
+  constitution + domain references, 3-pass clarify, cross-artifact analyze,
+  mode switchboard, per-task file contracts, and skill-managed post-apply
+  discipline (ADR promotion, verify gate, retrospective with mcp-memory
+  promotion). Optional capability-hooks degrade gracefully when
+  Superpowers-style skills are absent. See README.md for activation,
+  Scale tiers, and the post-apply-skill contract.
+
+artifacts:
+  # 1. proposal — Why + What + Capabilities + Impact
+  - id: proposal
+    generates: proposal.md
+    description: Why + What Changes + Capabilities + Impact
+    template: proposal.md
+    requires: []
+    instruction: |
+      Establish WHY this change exists, WHAT changes, WHICH capabilities
+      are affected, IMPACT envelope.
+
+      Before drafting, read (or create from this schema's
+      constitution-template.md / domain-template.md if absent for
+      non-XS work):
+        - openspec/constitution.md  — immutable principles
+        - openspec/domain.md        — invariants the agent must respect
+
+      Sections (≤80 lines for M; ≤30 for XS/S):
+        - Why:           1-2 sentences. Problem. Why now?
+        - What Changes:  Bullets. Mark BREAKING.
+        - Capabilities:
+            New: kebab-case names, each becomes specs/<name>/spec.md
+            Modified: existing folder names from openspec/specs/
+        - Impact: code, APIs, dependencies, systems
+
+      Cite specific constitution principles or domain invariants when
+      they drive a choice. If Scale = XS, you may skip Capabilities
+      and jump straight to tasks.
+
+  # 2. specs — EARS-shaped acceptance criteria with 5 quality properties
+  - id: specs
+    generates: specs/**/*.md
+    description: Capability specifications with EARS acceptance criteria
+    template: spec.md
+    requires:
+      - proposal
+    instruction: |
+      One spec file per capability listed in proposal.md.
+      New capability: specs/<kebab-name>/spec.md
+      Modified: existing folder name from openspec/specs/<capability>/
+
+      Write acceptance criteria in EARS notation (Mavin RE'09):
+
+        Ubiquitous:    THE <system> SHALL <response>
+        Event-driven:  WHEN <trigger>, THE <system> SHALL <response>
+        State-driven:  WHILE <state>, THE <system> SHALL <response>
+        Optional:      WHERE <feature>, THE <system> SHALL <response>
+        Unwanted/err:  IF <condition>, THEN THE <system> SHALL <response>
+
+      Compound chains permitted (WHILE <state>, WHEN <trigger>, ...).
+
+      HARD RULES:
+        - Error/unwanted conditions MUST use IF…THEN. Never WHEN.
+          analyze check 2 flags violations (treated as major with
+          mandatory human triage; see analyze instruction).
+        - Use SHALL/MUST for normative requirements. Avoid should/may.
+        - Every requirement has at least one Scenario.
+
+      Each AC MUST pass the 5 quality properties (Testable /
+      Solution-free / Unambiguous / Consistent / Complete). Add the
+      5-property checklist at the bottom of each spec.md with a row
+      per requirement.
+
+      ACCEPTANCE CRITERION IDs (canonical format used by verify gate):
+        <capability>.<requirement-slug>
+
+      Where <requirement-slug> is the requirement name with:
+        - lowercased
+        - non-alnum replaced with '-'
+        - repeated '-' collapsed to one
+        - leading/trailing '-' stripped
+
+      Example:
+        Requirement: "User can export data"
+        Capability:  user-export
+        AC ID:       user-export.user-can-export-data
+
+      Tests cite ACs by this canonical ID in a comment, docstring, or
+      string literal. The verify gate's check 5 greps for exact matches.
+
+      Delta operations (## headers):
+        ## ADDED Requirements
+        ## MODIFIED Requirements      (full updated content)
+        ## REMOVED Requirements        (include Reason + Migration)
+        ## RENAMED Requirements        (FROM:/TO: format)
+
+      Scenarios MUST use exactly 4 hashtags (#### Scenario:).
+      Bullets use **WHEN** / **THEN** bolded.
+
+      Read openspec/domain.md before drafting; cite invariants that
+      constrain ACs. For changes to existing capabilities, read the
+      current spec.md first and produce a delta — do not restate
+      unchanged behavior.
+
+      BROWNFIELD NOTE: clarify and analyze operate over THIS change's
+      delta spec content, not the merged current+delta corpus. The
+      delta scope keeps pairwise/combinatorial passes tractable.
+
+  # 3. clarify — 3-pass quality gate over specs (delta only)
+  - id: clarify
+    generates: clarify.md
+    description: 3-pass findings (ambiguity, inconsistency, completeness)
+    template: clarify.md
+    requires:
+      - specs
+    instruction: |
+      Run 3 passes over the EARS ACs in THIS CHANGE's
+      specs/**/*.md (delta content only — not the merged current+delta
+      corpus). Surface each finding as a numbered 2-option question
+      with status `unanswered | answered | deferred`.
+
+      Pass 1 — Ambiguity (semantic-entropy lite):
+        Paraphrase each AC 3 times. Any pair of paraphrases
+        semantically divergent → ambiguity finding:
+          "Q: <description>. A) keep meaning X. B) change to meaning Y."
+
+      Pass 2 — Inconsistency (pairwise antecedent overlap):
+        N² scaling — for N AC pairs, this is the cost. At N>20 in a
+        single change, prefer prioritized review: focus on pairs
+        within the same Requirement and pairs sharing entity names.
+        Record minimal contradicting set per finding.
+
+      Pass 3 — Completeness (priority-bounded enumeration):
+        Do NOT enumerate the full cartesian product of events × states
+        — that produces combinatorial noise. Instead:
+          1. List the events and states actually declared in this
+             change's specs.
+          2. For each event, list the states under which it can fire.
+          3. For each (event, state) combination NOT covered by any
+             AC, decide: is this combination realistic given the
+             domain invariants in openspec/domain.md?
+          4. Cap at 10 findings per spec file; record the 10 highest-
+             impact uncovered combinations.
+
+      CAPABILITY HOOK: if `clarify-spec` skill is available
+      (capability-hooks.md), invoke it. Otherwise execute manually.
+
+      Findings with status `unanswered` BLOCK design progression.
+      Findings with status `deferred` MUST be echoed into analyze.md
+      outstanding-risks section.
+
+      Scale = XS: skip this artifact entirely.
+      Scale = S: ambiguity pass only.
+
+  # 4. design — HOW; includes ADR-candidate Decisions block
+  - id: design
+    generates: design.md
+    description: Technical design; Decisions block feeds ADR candidates
+    template: design.md
+    requires:
+      - clarify
+    instruction: |
+      Explain HOW. Reference proposal.md, specs/**/spec.md, clarify.md.
+      Read openspec/constitution.md and openspec/domain.md; cite
+      principles and invariants the design respects.
+
+      Sections (~150 lines for M; more for L/XL):
+        - Context
+        - Goals / Non-Goals
+        - Decisions (numbered D1, D2, …; Choice + Alternatives +
+          Rationale per decision)
+        - Risks / Trade-offs (table: Risk | Likelihood | Severity |
+          Mitigation)
+        - Migration Plan
+        - Open Questions
+
+      Each Decision is an ADR CANDIDATE. Apply the 4-point test:
+        1. Multiple viable approaches?
+        2. Lasting consequences (affect future work)?
+        3. Reasonable engineers could disagree?
+        4. Constrains future options?
+      Decisions passing ≥3 of 4 SHOULD become ADRs.
+
+      ADR PROMOTION IS A SKILL RESPONSIBILITY, NOT A SCHEMA ARTIFACT.
+      At Scale ≥ L, the openspec-archive-change skill checks each
+      design Decision against the 4-point test and offers to promote
+      qualifying decisions to <repo>/adr/ADR-NNNN-<slug>.md before
+      archive. The schema templates/adr.md provides the MADR 4.0
+      short form the skill uses.
+
+      Rationale for skill-managed (not artifact-managed) ADRs:
+      OpenSpec's artifact `generates` field doesn't support
+      change-scoped template substitution, so an `adr` artifact
+      with `generates: ../../../adr/ADR-*.md` would match any
+      pre-existing ADR (e.g., ADR-0001 from a prior change) and
+      report itself "done" before any work happens this change.
+      Skill-managed promotion sidesteps this and runs at the right
+      moment in the lifecycle (archive time).
+
+  # 5. analyze — Read-only cross-artifact lint
+  - id: analyze
+    generates: analyze.md
+    description: Read-only cross-artifact lint findings
+    template: analyze.md
+    requires:
+      - design
+    instruction: |
+      STRICTLY READ-ONLY. Produce a remediation report; do not modify
+      proposal/specs/clarify/design. Severity:
+      `blocker | major | minor`. Blockers HALT tasks generation.
+
+      The 7 checks (each in its own sub-table in analyze.md):
+
+      1. Constitution check — for each principle in
+         openspec/constitution.md, report `compliant | violated |
+         inapplicable` with one-line rationale citing the offending
+         artifact location.
+
+      2. EARS pattern check (major, human-triage) — grep specs/**/*.md
+         for ACs using WHEN with error/failure language:
+           /WHEN\s+[^.]*\b(error|fail|invalid|reject|deny|unauthor)/i
+         For each match:
+           - Read the matching AC IN CONTEXT.
+           - Decide: is the match a true positive (error condition
+             expressed as WHEN), or false positive (e.g., named entity
+             contains the keyword as substring)?
+           - True positives are recorded as MAJOR findings with a
+             suggested rewrite. They do NOT auto-block — the analyze
+             author confirms before promoting to blocker.
+           - False positives are noted with the substring + context
+             and skipped.
+
+      3. AC↔design coverage — every `### Requirement:` in specs/**
+         SHOULD have a corresponding design section or rationale.
+         Missing pairs: major.
+
+      4. design↔ADR coverage — every Decision passing the 4-point
+         test SHOULD be flagged for ADR promotion at archive (or
+         carry an explicit "ADR not warranted because…" note in
+         design.md).
+
+      5. Duplicate detection — flag ACs or design sections that
+         repeat the same constraint with different wording.
+
+      6. Implementation language in specs — flag ACs prescribing a
+         specific technology, schema, or algorithm without behavioral
+         justification (violates Solution-free property).
+
+      7. Unresolved clarify findings — clarify.md findings with
+         status != answered (deferred or unanswered).
+
+      CAPABILITY HOOK: when Scale ≥ L, invoke `adversarial-review`
+      capability instead of single-model self-review. Record
+      round-by-round findings as appendices.
+
+      Scale = XS: skip.
+      Scale = S: checks 1, 2, 7 only.
+
+  # 6. review — Mode switchboard (controlled-vocabulary modes)
+  - id: review
+    generates: review.md
+    description: Mode switchboard controlling apply-time behavior
+    template: review.md
+    requires:
+      - analyze
+    instruction: |
+      Declare controlled-vocabulary modes for this change. The apply
+      instruction reads these to dispatch behavior.
+
+      Required modes (default in parentheses):
+
+        Scale:             XS | S | M | L | XL  (default: S)
+        Execution Mode:    standard | tdd-preferred | tdd-required
+                           (default: standard)
+        Verification Mode: inline-only | retained-recommended |
+                           retained-required
+                           (default: retained-recommended)
+        Debug Mode:        standard | systematic-debugging
+                           (default: standard)
+        Review Status:     not-requested | requested |
+                           findings-received | resolved
+                           (default: not-requested)
+        Delegation Mode:   single-agent | subagent-eligible |
+                           subagent-required (default: single-agent)
+        Worktree Mode:     same-tree | worktree-eligible |
+                           worktree-required (default: same-tree)
+        Spec Level:        spec-anchored | spec-first | spec-as-source
+                           (default: spec-anchored)
+
+      Selecting `spec-as-source` MUST emit a warning citing MDD-era
+      trade-offs documented in README.md; intended for experimentation.
+
+      Free-text sections:
+        Worktree Base SHA  — captured by apply at worktree creation
+                              (`git rev-parse HEAD`); used by file-
+                              contract diffs so per-task commits don't
+                              advance the diff base mid-task
+        Manual Adjustments — author overrides to defaults
+        Execution Notes    — transient observations during apply
+
+      Scale = XS: skip (defaults assumed).
+
+  # 7. tasks — Per-task file contracts + intent fields
+  - id: tasks
+    generates: tasks.md
+    description: Implementation checklist with per-task contracts + intent
+    template: tasks.md
+    requires:
+      - review
+    instruction: |
+      Break implementation work into trackable tasks. Apply phase
+      parses `- [ ]` checkboxes.
+
+      Group tasks under ## numbered headings:
+        - [ ] X.Y <description>
+
+      Each task MAY declare optional contract fields immediately below,
+      as a sub-bullet block (strict format — `openspec-apply-change`
+      parses this with a fixed regex):
+
+        - [ ] 4.2 Implement export function
+          - intent: feature       # fix | feature | refactor | infra
+          - files_allowed:        # one minimatch glob per indented line
+              - src/export/**/*.ts
+              - tests/export/**/*.ts
+          - files_forbidden:
+              - "**/*.bak"
+              - "**/secrets/**"
+          - allow_new_files: true   # default true
+
+      Strict format rules:
+        - Each contract field is exactly one sub-bullet (2-space indent)
+        - List values are one-per-line, each as a nested sub-bullet
+          (4-space indent); never comma-separated
+        - Glob strings with special chars MUST be quoted
+        - `intent` and `allow_new_files` are scalars (one line)
+
+      Contract enforcement: at task wrap-up (or subagent completion
+      when Delegation Mode is subagent-*), the diff is computed as
+      `git diff --name-only <worktree-base-sha>..HEAD` where
+      `<worktree-base-sha>` is captured at apply start (review.md
+      Worktree Base SHA field). Diff is checked against the globs.
+      Violations → `scope_violation` findings that BLOCK task
+      completion.
+
+      TDD interaction with allow_new_files:
+        When Execution Mode = tdd-required AND
+             allow_new_files = false,
+        the contract auto-permits new files under `tests/**/*` for
+        the failing-test step. This avoids the unsatisfiable
+        combination of "no new files" + "first step writes a new
+        failing test".
+
+      Intent shapes the repair prompt on validator failure:
+        fix      — "Fix only failing validators. No refactor. No
+                    new features. Tests may be added when TDD mode
+                    is on."
+        feature  — minimal constraints
+        refactor — no fix-mode constraints; permits unrelated
+                   cleanup within files_allowed
+        infra    — permits dependency / build / CI changes within
+                   files_allowed
+
+      Group tasks by phase. Order by dependency. Each task small
+      enough for one session.
+
+  # 8. plan — Fine-grained execution driver mapping back to tasks
+  - id: plan
+    generates: plan.md
+    description: Fine-grained execution driver mapping to tasks.md
+    template: plan.md
+    requires:
+      - tasks
+    instruction: |
+      `tasks.md` is COARSE (task IDs + contracts).
+      `plan.md` is FINE-GRAINED execution driver consumed by
+      openspec-apply-change.
+
+      Per plan step:
+        - Covers: T<id>, T<id>, …
+        - Pre-conditions: env, files, prior steps
+        - Action: 5-step micro-tasks
+            1. Write failing test (cite AC by canonical ID
+               <capability>.<requirement-slug>)
+            2. Run test → expect FAIL
+            3. Minimal implementation
+            4. Run test → expect PASS
+            5. Commit with subject ≤72 chars
+        - Verification: which validators run
+        - Rollback: undo procedure
+
+      When Debug Mode = systematic-debugging, include per step:
+        - Observed Failure: error message verbatim, repro steps
+        - Debugging Trail: prior attempts, what they ruled out
+
+      Plan steps are the unit dispatched to subagents when
+      Delegation Mode = subagent-required.
+
+      Scale = XS or S without tdd-required: plan may be a simple
+      ordered list without 5-step micro-task expansion.
+
+# apply — drives implementation
+apply:
+  requires:
+    - tasks
+  tracks: tasks.md
+  instruction: |
+    Read context files (proposal, specs, clarify, design, analyze,
+    review, tasks, plan). Read openspec/constitution.md and
+    openspec/domain.md.
+
+    Mode dispatch (read from review.md):
+
+      Worktree Mode worktree-eligible|worktree-required:
+        Pre-flight commit:
+          1. Run `git status --porcelain openspec/changes/<name>/`
+          2. If anything unstaged/uncommitted under that subtree,
+             stage + commit ONLY that subtree on the integration
+             branch BEFORE creating any worktree. Ensures artifact
+             files exist in both checkouts.
+          3. Note: dirty non-artifact files in repo root persist
+             into the main checkout's working dir but do NOT
+             contaminate the worktree (independent checkout).
+        Create worktree per the pi-subagents convention.
+        Capture base SHA:
+          `git -C <worktree-path> rev-parse HEAD` → write to
+          review.md "Worktree Base SHA" field. Used by all
+          subsequent file-contract diffs in this apply session.
+
+      Delegation Mode subagent-eligible|subagent-required:
+        CAPABILITY HOOK: subagent-driven-implementation. Dispatch each
+        task to a fresh subagent. Main agent remains WRITEBACK OWNER —
+        subagents return structured handoffs, never edit artifact
+        files directly.
+
+      Output redirection (always on; defensive even when no
+      Superpowers-style skills are installed):
+        Subagents and capability hooks MUST write to this change's
+        <artifact>.md. They MUST NOT create files under
+        docs/superpowers/, docs/plans/, docs/specs/, or any
+        parallel doc tree. This guards against future skill drift.
+
+    Per-task workflow:
+      1. Read description, contract fields, intent from tasks.md
+      2. Read covering plan steps from plan.md
+      3. Execute. Tests first if Execution Mode = tdd-required.
+      4. Run validators (project-specific; see project.md)
+      5. On validator failure, build repair prompt with intent-
+         specific constraints:
+
+         fix:
+           CONSTRAINTS: Fix only failing validators. Do NOT refactor
+           unrelated code. Do NOT add new features. Tests MAY be
+           added when TDD mode is on. Checkpoint after every
+           iteration.
+         feature/refactor/infra:
+           CONSTRAINTS: stay within files_allowed; no scope creep.
+
+         Append structured Issues list (file, line, error code,
+         message). Re-run implementer.
+
+      6. Contract check (fixed base SHA):
+         `git diff --name-only <worktree-base-sha>..HEAD`
+         against files_allowed / files_forbidden / allow_new_files.
+         Block on scope_violation findings.
+         TDD exemption: tests/**/* permitted even when
+         allow_new_files = false AND Execution Mode = tdd-required.
+
+      7. Mark task `- [x]` in tasks.md.
+      8. Append one-line Execution Notes entry to review.md if
+         a non-trivial decision was made during the task.
+
+    Post-apply discipline (SKILL RESPONSIBILITY, not schema-tracked):
+
+      verify.md   — produced by openspec-apply-change at the end of
+                    apply when Verification Mode is retained-required
+                    or retained-recommended. Uses
+                    templates/verify.md. Runs the 6 hard checks
+                    documented there. openspec-archive-change
+                    HARD-GATES on Completion Decision = green when
+                    Verification Mode = retained-required.
+
+      ADR promotion — at archive, openspec-archive-change scans
+                    design.md Decisions for those passing the
+                    4-point test. Offers to promote qualifying
+                    decisions to <repo>/adr/ADR-NNNN-<slug>.md
+                    using templates/adr.md.
+
+      retrospective.md — at Scale = XL (required) or L (optional),
+                    openspec-archive-change prompts the user to
+                    author retrospective.md from
+                    templates/retrospective.md. Parses
+                    Promote-candidates and offers per-row
+                    confirm/skip prompts for
+                    mcp_memory_store_memory ingestion.
+
+    These three are intentionally OUT of the schema's `artifacts:`
+    list because:
+      - OpenSpec's artifact-completion check is existence-only
+        (graph.js `isComplete`); declaring them as artifacts would
+        leave `isComplete: false` perpetually for changes that don't
+        need them, breaking `openspec status --json` consumers.
+      - The schema would have no way to scope them per Scale tier;
+        artifacts are required for all changes using the schema.
+      - ADRs writing outside the change dir via a `generates` glob
+        would match any pre-existing ADR and report itself done
+        before any work happens (see design.md for the source bug).
+
+    The templates remain available at
+    ~/.local/share/openspec/schemas/opsx-superpowers/templates/
+    for the skills to use directly.
+
+    HARD GATES (apply refuses to mark complete unless):
+      - All required tasks (per declared Scale) are checked
+      - No scope_violation findings remain unresolved
+      - When Verification Mode = retained-required: the skill has
+        produced verify.md with Completion Decision = green
