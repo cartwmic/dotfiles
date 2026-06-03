@@ -20,6 +20,7 @@
 rust = "latest"   # Replaces rustup, provides cargo
 python = "latest" # System Python
 node = "lts"      # Replaces nvm
+zig = "0.15.2"    # Pinned: builds the cartwmic/claude-p fork (pi-claude-bridge build-on-install)
 
 # =============================================================================
 # Shell & Terminal Tools
