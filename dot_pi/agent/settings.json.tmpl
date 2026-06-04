@@ -5,20 +5,25 @@
   on a fresh machine where the file doesn't exist yet.
 */ -}}
 {{- $version := "0.70.2" -}}
+{{- $theme := "dark" -}}
 {{- $settingsPath := joinPath .chezmoi.homeDir ".pi/agent/settings.json" -}}
 {{- if stat $settingsPath -}}
 {{-   $found := output "jq" "-r" ".lastChangelogVersion // empty" $settingsPath | trim -}}
 {{-   if $found -}}
 {{-     $version = $found -}}
 {{-   end -}}
+{{-   $themeFound := output "jq" "-r" ".theme // empty" $settingsPath | trim -}}
+{{-   if $themeFound -}}
+{{-     $theme = $themeFound -}}
+{{-   end -}}
 {{- end -}}
 {
 {{- if eq .profile "axon-work-computer" }}
   "defaultProvider": "anthropic",
-  "defaultModel": "claude-opus-4-7",
+  "defaultModel": "claude-opus-4-8",
 {{- else }}
   "defaultProvider": "claude-bridge",
-  "defaultModel": "claude-opus-4-7",
+  "defaultModel": "claude-opus-4-8",
 {{- end }}
   "defaultThinkingLevel": "high",
   "enabledModels": [
@@ -27,12 +32,14 @@
     "anthropic/claude-sonnet-4-6",
     "anthropic/claude-opus-4-6",
     "anthropic/claude-opus-4-7",
+    "anthropic/claude-opus-4-8",
     "amazon-bedrock/us.anthropic.claude-sonnet-4-6",
     "amazon-bedrock/us.anthropic.claude-opus-4-6-v1",
     "amazon-bedrock/us.anthropic.claude-opus-4-7"
 {{- else }}
     "openai-codex/gpt-5.4",
     "claude-bridge/claude-sonnet-4-6",
+    "claude-bridge/claude-opus-4-8",
     "claude-bridge/claude-opus-4-7",
     "claude-bridge/claude-opus-4-6"
 {{- end }}
@@ -52,5 +59,6 @@
   "compaction": {
     "enabled": false
   },
-  "lastChangelogVersion": {{ $version | quote }}
+  "lastChangelogVersion": {{ $version | quote }},
+  "theme": {{ $theme | quote }}
 }
