@@ -321,7 +321,17 @@ plugins {
         pipe_zjstatus_hints_format "{output}"
 
         border_enabled  "false"
-        hide_frame_for_single_pane "true"
+        // DISABLED: caused a whole-screen flicker + input lag on launch
+        // (version-independent, seen on zellij 0.44.1 and 0.44.3). zjstatus
+        // implements this by issuing a frame/fullscreen toggle action every
+        // render; with zellij's own `pane_frames` left at its default (true)
+        // the state never converges, so zjstatus re-issues the toggle in a
+        // tight loop -> log floods with "failed to toggle full screen in
+        // plugin zjstatus.wasm: failed to route action" and the screen
+        // thread saturates. Documented upstream as dj95/zjstatus#174.
+        // Fix per upstream: don't let zjstatus manage frames. If you want
+        // frameless panes, set zellij's own `pane_frames false` instead.
+        // hide_frame_for_single_pane "true"
 
         mode_normal       "#[bg=#9ece6a,fg=#1a1b26,bold] NORMAL "
         mode_locked       "#[bg=#7dcfff,fg=#1a1b26,bold] LOCKED "
