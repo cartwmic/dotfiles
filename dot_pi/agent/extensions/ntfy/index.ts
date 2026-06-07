@@ -149,26 +149,25 @@ export function resolveZellijTabName(cwd: string): string | undefined {
 
 /**
  * Build the ntfy title + body.
- * Body: `<tab name | cwd fallback> · pane <id?> · <excerpt>`.
- * The pane segment is omitted when no pane id is available.
+ * Title: `<zellij session> · <zellij tab> · <pi session name>` (each segment
+ * omitted when unavailable; the pi session name always present, falling back to
+ * a short session id). Body: the excerpt only.
  */
 export function buildNotification(opts: {
 	sessionName?: string;
 	sessionId: string;
+	zellijSession?: string;
 	tabName?: string;
-	cwd: string;
-	paneId?: string;
 	excerpt: string;
 }): { title: string; body: string } {
-	const name =
+	const piName =
 		opts.sessionName && opts.sessionName.trim()
 			? opts.sessionName.trim()
 			: opts.sessionId.slice(0, 8);
-	const segments: string[] = [];
-	segments.push(opts.tabName && opts.tabName.trim() ? opts.tabName.trim() : opts.cwd);
-	if (opts.paneId && opts.paneId.trim()) segments.push(`pane ${opts.paneId.trim()}`);
-	segments.push(opts.excerpt);
-	return { title: `pi ready: ${name}`, body: segments.join(" · ") };
+	const titleParts = [opts.zellijSession?.trim(), opts.tabName?.trim(), piName].filter(
+		(p): p is string => !!p && p.length > 0,
+	);
+	return { title: titleParts.join(" · "), body: opts.excerpt };
 }
 
 /** POST a notification to ntfy. Fire-and-forget; caller swallows errors. */
@@ -225,14 +224,12 @@ export default function (pi: ExtensionAPI): void {
 		if (!config.url) return;
 
 		const sm = ctx.sessionManager;
-		const cwd = sm.getCwd();
 		const excerpt = extractExcerpt(lastAssistantText(event.messages ?? []), config.maxExcerptChars);
 		const { title, body } = buildNotification({
 			sessionName: sm.getSessionName(),
 			sessionId: sm.getSessionId(),
-			tabName: resolveZellijTabName(cwd),
-			cwd,
-			paneId: process.env.ZELLIJ_PANE_ID,
+			zellijSession: process.env.ZELLIJ_SESSION_NAME,
+			tabName: resolveZellijTabName(sm.getCwd()),
 			excerpt,
 		});
 
