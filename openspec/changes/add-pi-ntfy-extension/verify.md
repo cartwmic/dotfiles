@@ -33,8 +33,9 @@ Capability `pi-ntfy-notify` is NEW (no `openspec/specs/pi-ntfy-notify/` exists).
 | pi-ntfy-notify.notification-includes-content-excerpt | spec, analyze, tasks, plan, index.test.ts | PASS |
 | pi-ntfy-notify.no-op-when-unconfigured | spec, analyze, tasks, plan, index.test.ts | PASS |
 | pi-ntfy-notify.delivery-failures-are-non-fatal | spec, analyze, design | PASS |
+| pi-ntfy-notify.notifications-can-be-toggled | spec, index.test.ts | PASS |
 
-**Reverse** — test file `index.test.ts` cites canonical IDs: `notification-includes-content-excerpt`, `notification-identifies-session`, `no-op-when-unconfigured`. **PASS**
+**Reverse** — test file `index.test.ts` cites canonical IDs: `notification-includes-content-excerpt`, `notification-identifies-session`, `no-op-when-unconfigured`, `notifications-can-be-toggled`. **PASS**
 
 ## Check 6 — Constitution compliance audit
 
@@ -52,8 +53,8 @@ Changed files: 4 code (`dot_pi/agent/extensions/ntfy/*`) + 10 openspec artifacts
 
 ## Unit tests
 
-`node --test dot_pi/agent/extensions/ntfy/index.test.ts` → **10 pass, 0 fail.**
-Covers excerpt truncation/whitespace/placeholder, reasoning exclusion, session-name fallback, zellij-omission, unconfigured no-op.
+`node --test dot_pi/agent/extensions/ntfy/index.test.ts` → **13 pass, 0 fail.**
+Covers excerpt truncation/whitespace/placeholder, reasoning exclusion, session-name fallback, zellij-omission, unconfigured no-op, enabled-default/explicit-false, parseToggle action mapping, and state.json override precedence.
 
 ## Integration verification (live)
 
@@ -69,6 +70,12 @@ Exercised the extension's real code path (`loadConfig → lastAssistantText → 
 
 `chezmoi apply ~/.pi/agent/extensions/ntfy` → files present at `~/.pi/agent/extensions/ntfy/` (index.ts, config.json, index.test.ts, README.md). Auto-discovered by pi on next launch (no `settings.json` entry needed).
 
+## Post-apply additions
+
+- **Bug fix:** `ctx.isInteractive()` → `ctx.hasUI` (the former does not exist in pi 0.78.1; it threw after every turn). Captured as a learning + ADR-0004 consequence.
+- **Toggle setting:** added `enabled` config default + `/ntfy on|off|toggle|status` command persisted to a non-chezmoi `state.json` override. New requirement `pi-ntfy-notify.notifications-can-be-toggled` + tests; integration-verified (off suppresses delivery, on resumes, state persists).
+- **ADR promoted:** D1 → `adr/ADR-0004-notify-on-agent-end-not-turn-end.md`.
+
 ## Completion Decision
 
-**green** — all 6 checks pass; unit + live integration verified; extension deployed.
+**green** — all 6 checks pass; 13 unit tests + live integration verified; extension deployed; ADR-0004 promoted.

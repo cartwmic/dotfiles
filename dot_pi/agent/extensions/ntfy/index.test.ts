@@ -114,6 +114,7 @@ test("loadConfig: disabled config when dir has no config.json", () => {
 });
 
 // --- toggle setting ---
+// Covers acceptance criterion: pi-ntfy-notify.notifications-can-be-toggled
 
 test("loadConfig: enabled defaults true, honors explicit false", () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-cfg-"));
