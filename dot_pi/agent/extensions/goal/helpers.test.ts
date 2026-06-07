@@ -68,6 +68,13 @@ describe("parseGoalArg — goal-loop.clear-a-goal", () => {
 		expect(parseGoalArg("   ").mode).toBe("status");
 	});
 
+	test("explicit status keyword and ? are status (not a set)", () => {
+		expect(parseGoalArg("status").mode).toBe("status");
+		expect(parseGoalArg("  STATUS ").mode).toBe("status");
+		expect(parseGoalArg("?").mode).toBe("status");
+		expect(parseGoalArg("check status of the build").mode).toBe("set");
+	});
+
 	test("clear and all aliases", () => {
 		for (const a of ["clear", "stop", "off", "reset", "none", "cancel", "CLEAR", "  Stop "]) {
 			expect(parseGoalArg(a).mode).toBe("clear");
