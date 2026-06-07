@@ -5,8 +5,19 @@
 //   pi-ntfy-notify.notification-includes-content-excerpt
 //   pi-ntfy-notify.notification-identifies-session
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
-import { buildNotification, extractExcerpt, lastAssistantText, loadConfig } from "./index.ts";
+import {
+	buildNotification,
+	extractExcerpt,
+	lastAssistantText,
+	loadConfig,
+	loadEnabled,
+	parseToggle,
+	saveEnabled,
+} from "./index.ts";
 
 // --- pi-ntfy-notify.notification-includes-content-excerpt ---
 
@@ -99,4 +110,47 @@ test("loadConfig: disabled config when dir has no config.json", () => {
 	const cfg = loadConfig("/nonexistent-dir-xyz");
 	assert.equal(cfg.url, "");
 	assert.equal(cfg.maxExcerptChars, 200);
+	assert.equal(cfg.enabled, true);
+});
+
+// --- toggle setting ---
+
+test("loadConfig: enabled defaults true, honors explicit false", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-cfg-"));
+	try {
+		fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ url: "u" }));
+		assert.equal(loadConfig(dir).enabled, true, "absent -> true");
+		fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ url: "u", enabled: false }));
+		assert.equal(loadConfig(dir).enabled, false, "false -> false");
+		fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ url: "u", enabled: true }));
+		assert.equal(loadConfig(dir).enabled, true, "true -> true");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("parseToggle: maps args to actions", () => {
+	assert.equal(parseToggle(""), "status");
+	assert.equal(parseToggle("status"), "status");
+	assert.equal(parseToggle("on"), "on");
+	assert.equal(parseToggle(" ON "), "on");
+	assert.equal(parseToggle("enable"), "on");
+	assert.equal(parseToggle("off"), "off");
+	assert.equal(parseToggle("disable"), "off");
+	assert.equal(parseToggle("toggle"), "toggle");
+	assert.equal(parseToggle("nonsense"), "invalid");
+});
+
+test("loadEnabled: state.json override wins over config default", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-state-"));
+	try {
+		assert.equal(loadEnabled(dir, true), true, "no override -> config default");
+		assert.equal(loadEnabled(dir, false), false, "no override -> config default");
+		saveEnabled(dir, false);
+		assert.equal(loadEnabled(dir, true), false, "override false beats config true");
+		saveEnabled(dir, true);
+		assert.equal(loadEnabled(dir, false), true, "override true beats config false");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 });

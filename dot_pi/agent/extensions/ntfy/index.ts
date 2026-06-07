@@ -14,6 +14,10 @@
  * Behavior:
  *   - Skips non-interactive sessions (print/json mode) via `ctx.hasUI`.
  *   - No-ops silently when `url` is empty/missing.
+ *   - Can be toggled on/off at runtime with the `/ntfy` command, or by default
+ *     via the `enabled` field in config.json. The runtime toggle is persisted
+ *     to a sidecar `state.json` (NOT chezmoi-managed) that overrides the config
+ *     default, so live toggling never drifts the chezmoi source.
  *   - Delivery is fire-and-forget with a 5s timeout; failures never block or
  *     crash the turn.
  */
@@ -23,10 +27,13 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 const DEFAULT_MAX_EXCERPT = 200;
+const STATE_FILE = "state.json";
 
 export interface NtfyConfig {
 	url: string;
 	maxExcerptChars: number;
+	/** Default on/off, from config.json. Overridden at runtime by state.json. */
+	enabled: boolean;
 }
 
 /** Read config.json beside this module. Missing/unreadable -> disabled config. */
@@ -39,10 +46,45 @@ export function loadConfig(dir: string): NtfyConfig {
 			typeof parsed.maxExcerptChars === "number" && parsed.maxExcerptChars > 0
 				? Math.floor(parsed.maxExcerptChars)
 				: DEFAULT_MAX_EXCERPT;
-		return { url, maxExcerptChars };
+		// enabled defaults to true unless explicitly set to false.
+		const enabled = parsed.enabled !== false;
+		return { url, maxExcerptChars, enabled };
 	} catch {
-		return { url: "", maxExcerptChars: DEFAULT_MAX_EXCERPT };
+		return { url: "", maxExcerptChars: DEFAULT_MAX_EXCERPT, enabled: true };
 	}
+}
+
+/**
+ * Effective enabled state: the runtime override in state.json (if present and
+ * valid) wins over the config.json default. Returns `configDefault` when no
+ * valid override exists.
+ */
+export function loadEnabled(dir: string, configDefault: boolean): boolean {
+	try {
+		const raw = fs.readFileSync(path.join(dir, STATE_FILE), "utf8");
+		const parsed = JSON.parse(raw) as { enabled?: unknown };
+		if (typeof parsed.enabled === "boolean") return parsed.enabled;
+	} catch {
+		/* no override */
+	}
+	return configDefault;
+}
+
+/** Persist the runtime on/off override to the sidecar state.json. */
+export function saveEnabled(dir: string, value: boolean): void {
+	fs.writeFileSync(path.join(dir, STATE_FILE), `${JSON.stringify({ enabled: value }, null, 2)}\n`);
+}
+
+export type ToggleAction = "on" | "off" | "toggle" | "status" | "invalid";
+
+/** Parse `/ntfy <args>` into an action. */
+export function parseToggle(args: string): ToggleAction {
+	const a = (args ?? "").trim().toLowerCase();
+	if (a === "" || a === "status") return "status";
+	if (a === "on" || a === "enable" || a === "true") return "on";
+	if (a === "off" || a === "disable" || a === "false") return "off";
+	if (a === "toggle") return "toggle";
+	return "invalid";
 }
 
 /** Extract the last assistant message's response text (thinking excluded). */
@@ -104,11 +146,42 @@ function extensionDir(): string {
 }
 
 export default function (pi: ExtensionAPI): void {
-	const config = loadConfig(extensionDir());
+	const dir = extensionDir();
+	const config = loadConfig(dir);
+	// Effective on/off: runtime override (state.json) wins over config default.
+	let enabled = loadEnabled(dir, config.enabled);
+
+	pi.registerCommand("ntfy", {
+		description: "Toggle ntfy notifications on/off (on | off | toggle | status)",
+		getArgumentCompletions: (prefix) =>
+			["on", "off", "toggle", "status"]
+				.filter((v) => v.startsWith(prefix.toLowerCase()))
+				.map((v) => ({ value: v, label: v })),
+		handler: async (args, ctx) => {
+			const action = parseToggle(args);
+			if (action === "invalid") {
+				ctx.ui.notify("Usage: /ntfy [on | off | toggle | status]", "warning");
+				return;
+			}
+			if (action === "on") enabled = true;
+			else if (action === "off") enabled = false;
+			else if (action === "toggle") enabled = !enabled;
+			if (action !== "status") {
+				try {
+					saveEnabled(dir, enabled);
+				} catch {
+					/* non-fatal: in-memory toggle still applies for this session */
+				}
+			}
+			const detail = config.url ? "" : " (no url configured — still inactive)";
+			ctx.ui.notify(`ntfy notifications ${enabled ? "ON" : "OFF"}${detail}`, "info");
+		},
+	});
 
 	pi.on("agent_end", async (event, ctx) => {
 		// hasUI is true in TUI and RPC modes, false in print (-p) / json modes.
 		if (!ctx.hasUI) return;
+		if (!enabled) return;
 		if (!config.url) return;
 
 		const sm = ctx.sessionManager;
