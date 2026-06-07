@@ -81,7 +81,7 @@ test("buildNotification: title = zellij session + tab + pi name; body = excerpt"
 		tabName: "chezmoi",
 		excerpt: "what next?",
 	});
-	assert.equal(n.title, "workspace · chezmoi · bug123");
+	assert.equal(n.title, "workspace / chezmoi / bug123");
 	assert.equal(n.body, "what next?");
 });
 
@@ -92,7 +92,7 @@ test("buildNotification: falls back to short session id when unnamed", () => {
 		tabName: "chezmoi",
 		excerpt: "x",
 	});
-	assert.equal(n.title, "workspace · chezmoi · a3f9c201");
+	assert.equal(n.title, "workspace / chezmoi / a3f9c201");
 });
 
 test("buildNotification: omits zellij/tab segments when unavailable (pi name only)", () => {
