@@ -70,6 +70,21 @@
   - files_allowed:
       - "dot_pi/agent/extensions/goal/**"
 
+## 4b. Settings (AC: configurable-judge-and-budget)
+
+- [x] 4b.1 Add `normalizeGoalConfig` + `resolveSetting` pure helpers (env > config > default precedence) with tests citing `goal-loop.configurable-judge-and-budget`.
+  - intent: feature
+  - files_allowed:
+      - "dot_pi/agent/extensions/goal/**"
+- [x] 4b.2 Load co-located `config.json` in index.ts (relative to `import.meta.url`, tolerant of missing/invalid); apply precedence to `maxTurns` and the judge model spec (D9).
+  - intent: feature
+  - files_allowed:
+      - "dot_pi/agent/extensions/goal/**"
+- [x] 4b.3 Ship seed `create_config.json` (chezmoi `create_` — deploy once, never clobber user edits) with `judgeModel` + `maxTurns` defaults.
+  - intent: feature
+  - files_allowed:
+      - "dot_pi/agent/extensions/goal/**"
+
 ## 5. Tests (pure helpers; cite AC IDs for the verify gate)
 
 - [x] 5.1 Unit-test `parseVerdict` (valid JSON, embedded JSON, garbage→not-met) citing `goal-loop.handle-evaluation-failure`; and budget arithmetic citing `goal-loop.bound-the-loop-with-a-turn-budget` and `goal-loop.evaluate-each-turn-once`.

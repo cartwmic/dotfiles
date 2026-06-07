@@ -33,6 +33,8 @@ The spike also surfaced a teardown crash in another extension caused by a captur
 
 **D7 — Bounded transcript to the judge.** Choice: feed only the latest worker turn's surfaced text (and its tool results when cheaply available), not full history (clarify A1). Alternatives: full transcript (cost/latency growth). Rationale: preserves "judge sees only surfaced output" while capping spend. *(ADR test: 2/4.)*
 
+**D9 — Settings via co-located `config.json` with env override.** Choice: ship a seed `create_config.json` (chezmoi `create_` — deployed once to `~/.pi/agent/extensions/goal/config.json`, never clobbering user edits) holding `judgeModel` and `maxTurns`; resolve each setting by precedence env var > `config.json` > built-in default. Alternatives: env-only (not persistent/discoverable); pi global `settings.json` (ExtensionContext exposes no settings accessor — would require reading pi internals); a managed (non-`create_`) file (chezmoi would revert user edits). Rationale: matches the established extension-config convention (`subagent/config.json`, token-usage) and Principle I (config persists in source) while keeping the deployed copy user-editable. *(ADR test: 3/4 — promote candidate.)*
+
 **D8 — Set during active streaming queues as follow-up (clarify C1).** Choice: if a worker turn is mid-stream when `/goal <cond>` is set, deliver the condition via `deliverAs: "followUp"` rather than rejecting. Alternatives: reject with "agent busy" (worse UX, inconsistent with the loop's own injection mechanism). Rationale: uniform delivery path. *(ADR test: 2/4.)*
 
 ## Risks / Trade-offs
