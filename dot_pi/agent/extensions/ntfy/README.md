@@ -44,7 +44,14 @@ config default, delete `state.json`.
 
 - Notifies on every `agent_end` (the awaiting-input boundary), not per internal turn.
 - Title: `pi ready: <session name | short id>`.
-- Body: `zellij:<name> · <cwd> · <excerpt>` (zellij segment omitted when not under zellij).
+- Body: `<zellij tab name> · pane <id> · <excerpt>`.
+  - **Tab name** is resolved by running `zellij action dump-layout` and matching
+    this session's `cwd` to its enclosing tab (works regardless of which tab is
+    focused). Falls back to `cwd` when not under zellij or no match.
+  - **pane `<id>`** is `ZELLIJ_PANE_ID`; omitted when unset. Zellij does not
+    expose a per-pane *name* to the process, so the numeric pane id is used.
+  - Costs one `zellij action dump-layout` subprocess per turn (only inside
+    zellij; 1.5s timeout; failure → cwd fallback).
 - Excerpt: last assistant response text only (reasoning/thinking excluded), truncated.
 - Skips non-interactive sessions (via `ctx.hasUI`); failures are swallowed.
 - Honors the on/off toggle (`/ntfy` command / `enabled` config); no delivery while off.

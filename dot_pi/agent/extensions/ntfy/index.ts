@@ -21,6 +21,7 @@
  *   - Delivery is fire-and-forget with a 5s timeout; failures never block or
  *     crash the turn.
  */
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,12 +113,51 @@ export function extractExcerpt(text: string, maxChars: number): string {
 	return `${collapsed.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 }
 
-/** Build the ntfy title + body. Omits the zellij segment when unset. */
+/**
+ * Parse `zellij action dump-layout` output for the tab name whose pane has the
+ * given cwd. dump-layout stores cwd without a leading slash. Returns the first
+ * matching tab's name, or undefined when not found.
+ */
+export function parseZellijTabName(layout: string, cwd: string): string | undefined {
+	const target = cwd.replace(/^\/+/, "");
+	let currentTab: string | undefined;
+	for (const line of layout.split("\n")) {
+		const tabMatch = line.match(/^\s*tab\b[^\n]*\bname="([^"]*)"/);
+		if (tabMatch) currentTab = tabMatch[1];
+		if (line.includes(`cwd="${target}"`)) return currentTab;
+	}
+	return undefined;
+}
+
+/**
+ * Best-effort current zellij tab name for `cwd`. Undefined when not running
+ * under zellij or the lookup fails (caller falls back to cwd). cwd-matched, so
+ * it identifies THIS session's tab regardless of which tab is focused.
+ */
+export function resolveZellijTabName(cwd: string): string | undefined {
+	if (!process.env.ZELLIJ) return undefined;
+	try {
+		const out = execFileSync("zellij", ["action", "dump-layout"], {
+			encoding: "utf8",
+			timeout: 1500,
+		});
+		return parseZellijTabName(out, cwd);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Build the ntfy title + body.
+ * Body: `<tab name | cwd fallback> · pane <id?> · <excerpt>`.
+ * The pane segment is omitted when no pane id is available.
+ */
 export function buildNotification(opts: {
 	sessionName?: string;
 	sessionId: string;
-	zellij?: string;
+	tabName?: string;
 	cwd: string;
+	paneId?: string;
 	excerpt: string;
 }): { title: string; body: string } {
 	const name =
@@ -125,8 +165,8 @@ export function buildNotification(opts: {
 			? opts.sessionName.trim()
 			: opts.sessionId.slice(0, 8);
 	const segments: string[] = [];
-	if (opts.zellij && opts.zellij.trim()) segments.push(`zellij:${opts.zellij.trim()}`);
-	segments.push(opts.cwd);
+	segments.push(opts.tabName && opts.tabName.trim() ? opts.tabName.trim() : opts.cwd);
+	if (opts.paneId && opts.paneId.trim()) segments.push(`pane ${opts.paneId.trim()}`);
 	segments.push(opts.excerpt);
 	return { title: `pi ready: ${name}`, body: segments.join(" · ") };
 }
@@ -185,12 +225,14 @@ export default function (pi: ExtensionAPI): void {
 		if (!config.url) return;
 
 		const sm = ctx.sessionManager;
+		const cwd = sm.getCwd();
 		const excerpt = extractExcerpt(lastAssistantText(event.messages ?? []), config.maxExcerptChars);
 		const { title, body } = buildNotification({
 			sessionName: sm.getSessionName(),
 			sessionId: sm.getSessionId(),
-			zellij: process.env.ZELLIJ_SESSION_NAME,
-			cwd: sm.getCwd(),
+			tabName: resolveZellijTabName(cwd),
+			cwd,
+			paneId: process.env.ZELLIJ_PANE_ID,
 			excerpt,
 		});
 

@@ -16,6 +16,7 @@ import {
 	loadConfig,
 	loadEnabled,
 	parseToggle,
+	parseZellijTabName,
 	saveEnabled,
 } from "./index.ts";
 
@@ -72,16 +73,28 @@ test("lastAssistantText: empty when no assistant message", () => {
 
 // --- pi-ntfy-notify.notification-identifies-session ---
 
-test("buildNotification: uses session name + zellij + cwd + excerpt", () => {
+test("buildNotification: uses session name + tab + pane + excerpt", () => {
 	const n = buildNotification({
 		sessionName: "bug123",
 		sessionId: "a3f9c2010000",
-		zellij: "work",
+		tabName: "chezmoi",
 		cwd: "/home/me/proj",
+		paneId: "7",
 		excerpt: "what next?",
 	});
 	assert.equal(n.title, "pi ready: bug123");
-	assert.equal(n.body, "zellij:work · /home/me/proj · what next?");
+	assert.equal(n.body, "chezmoi · pane 7 · what next?");
+});
+
+test("buildNotification: falls back to cwd when no tab name", () => {
+	const n = buildNotification({
+		sessionName: "s",
+		sessionId: "id",
+		cwd: "/home/me/proj",
+		paneId: "7",
+		excerpt: "x",
+	});
+	assert.equal(n.body, "/home/me/proj · pane 7 · x");
 });
 
 test("buildNotification: falls back to short session id when unnamed", () => {
@@ -93,15 +106,31 @@ test("buildNotification: falls back to short session id when unnamed", () => {
 	assert.equal(n.title, "pi ready: a3f9c201");
 });
 
-test("buildNotification: omits zellij segment when env unset", () => {
+test("buildNotification: omits pane segment when no pane id", () => {
 	const n = buildNotification({
 		sessionName: "s",
 		sessionId: "id",
-		zellij: undefined,
+		tabName: "chezmoi",
 		cwd: "/p",
 		excerpt: "x",
 	});
-	assert.equal(n.body, "/p · x");
+	assert.equal(n.body, "chezmoi · x");
+});
+
+test("parseZellijTabName: finds tab whose pane matches cwd (leading slash stripped)", () => {
+	const layout = [
+		'    tab name="chezmoi" focus=true {',
+		'        pane command="pi" cwd="Users/me/.local/share/chezmoi" focus=true {',
+		"        }",
+		"    }",
+		'    tab name="homelab" {',
+		'        pane command="pi" cwd="Volumes/Workshop/git/homelab" {',
+		"        }",
+		"    }",
+	].join("\n");
+	assert.equal(parseZellijTabName(layout, "/Users/me/.local/share/chezmoi"), "chezmoi");
+	assert.equal(parseZellijTabName(layout, "/Volumes/Workshop/git/homelab"), "homelab");
+	assert.equal(parseZellijTabName(layout, "/nowhere"), undefined);
 });
 
 // --- pi-ntfy-notify.no-op-when-unconfigured ---
