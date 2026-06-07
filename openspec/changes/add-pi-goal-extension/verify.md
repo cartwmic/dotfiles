@@ -44,6 +44,7 @@ Changed code files: `dot_pi/agent/extensions/goal/{index.ts, helpers.ts, helpers
 ## Post-apply bug fixes (owner-reported)
 - **Stuck working spinner on cancel** → root cause: `agent_end` re-injected a follow-up even when the turn ended `aborted`, fighting the user's interrupt. Fixed by `stopReason` detection (design D10): `aborted`/`error` now clears the goal and stops. (`goal-loop.interrupt-stops-the-loop`)
 - **"No way to clear"** → `/goal clear` now also `ctx.abort()`s any in-flight turn so a running loop halts immediately.
+- **Goal never met (even "echo hello world")** → root cause: the judge instruction was in `systemPrompt`, which the claude-bridge judge (runs the `claude` CLI) ignores — it answered conversationally so the verdict never parsed. Fixed by moving the instruction into the user message (design D11); probe confirmed bridge sonnet then returns `{"met":true,…}`. Transcript now also falls back to session entries when `agent_end` carries no assistant text.
 
 ## Residual / manual (honest gaps)
 - **Command-triggered first turn (`/goal` → turn 1) and the live `setStatus` indicator / `notify`** are only exercisable in a human-interactive session. Every headless/PTY harness (`-p`, stdin-pipe, `expect`, `script`) processes the initial input then exits before pumping the queued `sendUserMessage`, so the very first turn was not auto-verified. The continuation loop *after* a real first turn is spike-proven; the branch logic is unit-proven. **Action:** manual interactive confirmation (tasks 6.2) before relying on it unattended.
