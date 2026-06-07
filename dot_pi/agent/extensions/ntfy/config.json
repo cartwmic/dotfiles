@@ -1,4 +1,5 @@
 {
   "url": "https://ntfy.internal.cartwmic.com/pi",
-  "maxExcerptChars": 200
+  "maxExcerptChars": 200,
+  "enabled": true
 }

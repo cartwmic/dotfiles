@@ -21,6 +21,24 @@ phone receives it via the ntfy app, decoupled from SSH/zellij liveness.
 
 - `url` — full ntfy publish URL (base + topic). Empty/missing → extension no-ops.
 - `maxExcerptChars` — max length of the assistant-message excerpt in the body.
+- `enabled` — default on/off (default `true`). Set `false` to ship disabled.
+
+## Toggle on/off
+
+Use the `/ntfy` command at runtime:
+
+```
+/ntfy            # show current state (on/off)
+/ntfy status     # same as above
+/ntfy on         # enable
+/ntfy off        # disable
+/ntfy toggle     # flip
+```
+
+The runtime choice is persisted to a sidecar `state.json` (next to `index.ts`,
+NOT chezmoi-managed) that overrides the `enabled` config default, so live
+toggling survives restarts without drifting the chezmoi source. To reset to the
+config default, delete `state.json`.
 
 ## Behavior
 
@@ -28,7 +46,8 @@ phone receives it via the ntfy app, decoupled from SSH/zellij liveness.
 - Title: `pi ready: <session name | short id>`.
 - Body: `zellij:<name> · <cwd> · <excerpt>` (zellij segment omitted when not under zellij).
 - Excerpt: last assistant response text only (reasoning/thinking excluded), truncated.
-- Skips non-interactive sessions and auto-retry turns; failures are swallowed.
+- Skips non-interactive sessions (via `ctx.hasUI`); failures are swallowed.
+- Honors the on/off toggle (`/ntfy` command / `enabled` config); no delivery while off.
 
 ## Tests
 

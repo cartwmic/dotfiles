@@ -66,6 +66,27 @@ IF notification delivery fails for any reason, THEN THE extension SHALL suppress
 - **WHEN** a notification is dispatched
 - **THEN** dispatch SHALL be fire-and-forget and SHALL NOT delay turn completion
 
+### Requirement: Notifications Can Be Toggled
+
+THE extension SHALL expose an on/off setting; WHILE notifications are disabled, no notification SHALL be delivered. The default state is on, and a runtime toggle SHALL override the default and persist across restarts.
+
+#### Scenario: Disabled by default setting
+- **WHILE** the on/off setting is off
+- **WHEN** an assistant turn ends
+- **THEN** no notification is delivered
+
+#### Scenario: Runtime toggle off then on
+- **WHEN** the user toggles notifications off and a later turn ends
+- **THEN** no notification is delivered until the user toggles them back on
+
+#### Scenario: Toggle persists across restarts
+- **WHEN** the user toggles notifications off
+- **THEN** the off state persists for subsequent sessions until toggled on again
+
+#### Scenario: Status query
+- **WHEN** the user requests the current state without an on/off argument
+- **THEN** the extension reports whether notifications are on or off without changing the state
+
 <!-- Requirement "Channel Secret Excluded From Source" removed: the ntfy URL
 (https://ntfy.internal.cartwmic.com/pi) is an internal-only, non-externally-
 reachable host and is not a secret; it is committed as a plain config value. -->
@@ -81,3 +102,4 @@ reachable host and is not a secret; it is committed as a plain config value. -->
 | pi-ntfy-notify.notification-includes-content-excerpt | [x] | [x] | [x] | [x] | [x] |
 | pi-ntfy-notify.no-op-when-unconfigured | [x] | [x] | [x] | [x] | [x] |
 | pi-ntfy-notify.delivery-failures-are-non-fatal | [x] | [x] | [x] | [x] | [x] |
+| pi-ntfy-notify.notifications-can-be-toggled | [x] | [x] | [x] | [x] | [x] |
