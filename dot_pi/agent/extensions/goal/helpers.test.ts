@@ -5,7 +5,14 @@
 //   goal-loop.bound-the-loop-with-a-turn-budget
 //   goal-loop.evaluate-each-turn-once
 import { describe, expect, test } from "bun:test";
-import { decideAfterEvaluation, parseGoalArg, parseVerdict, shouldStopForBudget } from "./helpers.ts";
+import {
+	decideAfterEvaluation,
+	normalizeGoalConfig,
+	parseGoalArg,
+	parseVerdict,
+	resolveSetting,
+	shouldStopForBudget,
+} from "./helpers.ts";
 
 describe("parseVerdict — goal-loop.handle-evaluation-failure", () => {
 	test("clean JSON object", () => {
@@ -70,6 +77,40 @@ describe("shouldStopForBudget — goal-loop.bound-the-loop-with-a-turn-budget / 
 	test("continues while under budget", () => {
 		expect(shouldStopForBudget(1, 25)).toBe(false);
 		expect(shouldStopForBudget(24, 25)).toBe(false);
+	});
+});
+
+describe("normalizeGoalConfig / resolveSetting — goal-loop.configurable-judge-and-budget", () => {
+	test("valid config fields are kept", () => {
+		expect(normalizeGoalConfig({ judgeModel: "deepseek/deepseek-v4-flash", maxTurns: 10 })).toEqual({
+			judgeModel: "deepseek/deepseek-v4-flash",
+			maxTurns: 10,
+		});
+	});
+
+	test("invalid/empty fields are dropped, never throws", () => {
+		expect(normalizeGoalConfig({ judgeModel: "  ", maxTurns: -3 })).toEqual({});
+		expect(normalizeGoalConfig(null)).toEqual({});
+		expect(normalizeGoalConfig("nope")).toEqual({});
+		expect(normalizeGoalConfig({ maxTurns: 4.9 })).toEqual({ maxTurns: 4 });
+	});
+
+	const num = (s: string) => {
+		const n = Number.parseInt(s, 10);
+		return Number.isFinite(n) && n > 0 ? n : undefined;
+	};
+
+	test("env overrides config overrides default", () => {
+		expect(resolveSetting("7", num, 10, 25)).toBe(7); // env wins
+		expect(resolveSetting(undefined, num, 10, 25)).toBe(10); // config wins
+		expect(resolveSetting("", num, undefined, 25)).toBe(25); // default
+		expect(resolveSetting("garbage", num, 10, 25)).toBe(10); // bad env falls through to config
+	});
+
+	test("string setting precedence (judge model)", () => {
+		const id = (s: string) => s;
+		expect(resolveSetting("anthropic/claude-haiku-4-5", id, "deepseek/x", "")).toBe("anthropic/claude-haiku-4-5");
+		expect(resolveSetting(undefined, id, "deepseek/x", "")).toBe("deepseek/x");
 	});
 });
 
