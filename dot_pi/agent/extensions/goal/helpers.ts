@@ -7,6 +7,13 @@ export interface Verdict {
 }
 
 const CLEAR_ALIASES = new Set(["clear", "stop", "off", "reset", "none", "cancel"]);
+const STATUS_KEYWORDS = new Set(["status", "?"]);
+
+/** Subcommand suggestions for argument autocomplete. */
+export const GOAL_SUBCOMMANDS: ReadonlyArray<{ value: string; label: string; description: string }> = [
+	{ value: "status", label: "status", description: "Show the active goal's condition, turns, and last verdict" },
+	{ value: "clear", label: "clear", description: "Stop and clear the active goal (aliases: stop, off, reset, none, cancel)" },
+];
 
 export type GoalArg =
 	| { mode: "status" }
@@ -15,17 +22,21 @@ export type GoalArg =
 
 /**
  * Classify the `/goal` argument.
- * - empty / whitespace        → status
- * - exactly a clear alias     → clear
- * - anything else             → set (the trimmed text is the condition)
+ * - empty / whitespace             → status
+ * - exactly "status" or "?"         → status
+ * - exactly a clear alias          → clear
+ * - anything else                  → set (the trimmed text is the condition)
  *
  * Matching is exact (case-insensitive, trimmed) so a condition that merely
- * contains an alias word (e.g. "stop the flaky tests") is still a set.
+ * contains a keyword (e.g. "stop the flaky tests", "check status of x") is
+ * still a set.
  */
 export function parseGoalArg(raw: string): GoalArg {
 	const arg = (raw ?? "").trim();
 	if (arg.length === 0) return { mode: "status" };
-	if (CLEAR_ALIASES.has(arg.toLowerCase())) return { mode: "clear" };
+	const lower = arg.toLowerCase();
+	if (STATUS_KEYWORDS.has(lower)) return { mode: "status" };
+	if (CLEAR_ALIASES.has(lower)) return { mode: "clear" };
 	return { mode: "set", condition: arg };
 }
 

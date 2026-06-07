@@ -27,12 +27,20 @@ WHEN the user issues the goal command with a non-empty completion condition, THE
 
 ### Requirement: Check Goal Status
 
-WHEN the user issues the goal command with no condition, THE goal-loop SHALL report whether a goal is active and, if so, its condition, elapsed turn count, configured turn budget, and the most recent evaluation reason.
+WHEN the user issues the goal command with no condition or with the explicit status keyword, THE goal-loop SHALL report whether a goal is active and, if so, its condition, elapsed turn count, configured turn budget, and the most recent evaluation reason. THE goal-loop SHALL offer the status and clear directives as argument completions so they are discoverable.
 
 #### Scenario: Status with an active goal
 - **WHILE** a goal is active
 - **WHEN** the user issues the goal command with no condition
 - **THEN** the report shows the active condition, the elapsed turn count, the turn budget, and the most recent evaluation reason
+
+#### Scenario: Explicit status keyword is not treated as a condition
+- **WHEN** the user issues the goal command with the argument `status` (or `?`)
+- **THEN** the status is reported and no goal is set to that word
+
+#### Scenario: Subcommands are discoverable via completion
+- **WHEN** the user begins typing an argument to the goal command
+- **THEN** `status` and `clear` are offered as argument completions
 
 #### Scenario: Status with no active goal
 - **WHILE** no goal is active

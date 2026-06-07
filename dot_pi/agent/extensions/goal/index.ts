@@ -23,6 +23,7 @@ import { complete, type Tool } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import {
 	decideAfterEvaluation,
+	GOAL_SUBCOMMANDS,
 	isInterruptedStop,
 	lastAssistantInfo,
 	normalizeGoalConfig,
@@ -207,8 +208,11 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	pi.registerCommand("goal", {
-		description:
-			"Autonomous completion loop — a small judge checks your condition after each turn until met",
+		description: "Autonomous loop: /goal <condition> | /goal status | /goal clear",
+		getArgumentCompletions: (prefix: string) => {
+			const p = prefix.trim().toLowerCase();
+			return GOAL_SUBCOMMANDS.filter((s) => s.value.startsWith(p));
+		},
 		handler: async (args: string, ctx: ExtensionContext) => {
 			const parsed = parseGoalArg(args ?? "");
 
