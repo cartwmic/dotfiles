@@ -77,7 +77,7 @@ No secret resolution, no template, no 1Password. The extension reads the value v
 
 ### D5: Guards and no-op semantics
 
-**Choice:** Skip delivery when `!ctx.isInteractive()` (print/json), when `event.willRetry`, and when no resolved `url` (unconfigured). Registration always succeeds.
+**Choice:** Skip delivery when `!ctx.hasUI` (print/json), when `event.willRetry`, and when no resolved `url` (unconfigured). Registration always succeeds.
 
 **Rationale:** directly encodes `notify-on-turn-end` preconditions, `no-op-when-unconfigured`, and clarify I1 (unconfigured precedence). `willRetry` excludes non-awaiting boundaries.
 

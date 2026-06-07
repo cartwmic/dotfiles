@@ -12,8 +12,7 @@
  *   - ntfy Android app installed and subscribed to the topic (`pi`).
  *
  * Behavior:
- *   - Skips non-interactive sessions (print/json mode).
- *   - Skips when the turn will auto-retry (not yet awaiting input).
+ *   - Skips non-interactive sessions (print/json mode) via `ctx.hasUI`.
  *   - No-ops silently when `url` is empty/missing.
  *   - Delivery is fire-and-forget with a 5s timeout; failures never block or
  *     crash the turn.
@@ -108,8 +107,8 @@ export default function (pi: ExtensionAPI): void {
 	const config = loadConfig(extensionDir());
 
 	pi.on("agent_end", async (event, ctx) => {
-		if (!ctx.isInteractive()) return;
-		if (event.willRetry) return;
+		// hasUI is true in TUI and RPC modes, false in print (-p) / json modes.
+		if (!ctx.hasUI) return;
 		if (!config.url) return;
 
 		const sm = ctx.sessionManager;

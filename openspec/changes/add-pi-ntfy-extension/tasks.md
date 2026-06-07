@@ -36,7 +36,7 @@
 
 ## 4. Event wiring + delivery
 
-- [x] 4.1 Register `pi.on("agent_end", ...)`. Guard: return early when `!ctx.isInteractive()`, when `event.willRetry`, or when config is disabled (no resolved url). (AC: pi-ntfy-notify.notify-on-turn-end, pi-ntfy-notify.no-op-when-unconfigured; design D1, D5; clarify I1)
+- [x] 4.1 Register `pi.on("agent_end", ...)`. Guard: return early when `!ctx.hasUI`, when `event.willRetry`, or when config is disabled (no resolved url). (AC: pi-ntfy-notify.notify-on-turn-end, pi-ntfy-notify.no-op-when-unconfigured; design D1, D5; clarify I1)
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/ntfy/**

@@ -45,7 +45,7 @@ are ordered, not full TDD micro-tasks. -->
 - **Covers:** T4.1, T4.2
 - **Pre-conditions:** steps 1–3 committed.
 - **Action:**
-  1. `pi.on("agent_end")` with guards: `!ctx.isInteractive()`, `event.willRetry`, disabled config → early return (AC `pi-ntfy-notify.notify-on-turn-end`, `pi-ntfy-notify.no-op-when-unconfigured`).
+  1. `pi.on("agent_end")` with guards: `!ctx.hasUI`, `event.willRetry`, disabled config → early return (AC `pi-ntfy-notify.notify-on-turn-end`, `pi-ntfy-notify.no-op-when-unconfigured`).
   2. POST via global `fetch` with `Title`/`Priority`/`Tags` headers, body from `buildNotification`, `AbortSignal.timeout(5000)`, `.catch(() => {})` (AC `pi-ntfy-notify.delivery-failures-are-non-fatal`).
   3. Commit `feat(pi): ntfy agent_end delivery with guards`.
 - **Verification:** `tsc --noEmit`; manual smoke in step 5.
