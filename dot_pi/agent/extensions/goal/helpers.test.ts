@@ -7,6 +7,8 @@
 import { describe, expect, test } from "bun:test";
 import {
 	decideAfterEvaluation,
+	isInterruptedStop,
+	lastAssistantInfo,
 	normalizeGoalConfig,
 	parseGoalArg,
 	parseVerdict,
@@ -111,6 +113,33 @@ describe("normalizeGoalConfig / resolveSetting — goal-loop.configurable-judge-
 		const id = (s: string) => s;
 		expect(resolveSetting("anthropic/claude-haiku-4-5", id, "deepseek/x", "")).toBe("anthropic/claude-haiku-4-5");
 		expect(resolveSetting(undefined, id, "deepseek/x", "")).toBe("deepseek/x");
+	});
+});
+
+describe("lastAssistantInfo / isInterruptedStop — goal-loop.interrupt-stops-the-loop", () => {
+	const mk = (role: string, text: string, stopReason?: string) => ({
+		role,
+		content: [{ type: "text", text }],
+		stopReason,
+	});
+
+	test("returns latest assistant text + stopReason", () => {
+		const info = lastAssistantInfo([mk("user", "hi"), mk("assistant", "working", "aborted")]);
+		expect(info.text).toBe("working");
+		expect(info.stopReason).toBe("aborted");
+	});
+
+	test("non-array / empty is safe", () => {
+		expect(lastAssistantInfo(undefined)).toEqual({ text: "" });
+		expect(lastAssistantInfo([])).toEqual({ text: "" });
+	});
+
+	test("aborted and error count as interrupted; stop/toolUse do not", () => {
+		expect(isInterruptedStop("aborted")).toBe(true);
+		expect(isInterruptedStop("error")).toBe(true);
+		expect(isInterruptedStop("stop")).toBe(false);
+		expect(isInterruptedStop("toolUse")).toBe(false);
+		expect(isInterruptedStop(undefined)).toBe(false);
 	});
 });
 

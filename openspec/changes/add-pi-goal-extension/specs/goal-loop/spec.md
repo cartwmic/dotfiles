@@ -112,6 +112,25 @@ WHILE a goal is active, THE goal-loop SHALL evaluate exactly one time per comple
 - **WHEN** the goal-loop injects a continuation turn after a not-met result
 - **THEN** that continuation turn is evaluated exactly once on completion, with no overlapping or duplicate evaluation of the prior turn
 
+### Requirement: Interrupt Stops the Loop
+
+IF a worker turn ends because the user interrupted it or because the turn errored, THEN THE goal-loop SHALL stop the loop and clear the active goal instead of starting another turn. THE clear directive SHALL additionally stop any in-flight worker turn.
+
+#### Scenario: User interrupt halts the loop
+- **WHILE** a goal is active
+- **IF** the user interrupts the current worker turn
+- **THEN** the goal-loop clears the goal and does not start another turn, and the user is informed the goal was stopped
+
+#### Scenario: Turn error halts the loop
+- **WHILE** a goal is active
+- **IF** a worker turn ends in error
+- **THEN** the goal-loop clears the goal and does not start another turn
+
+#### Scenario: Clear stops in-flight work
+- **WHILE** a goal is active and a worker turn is in progress
+- **WHEN** the user issues the clear directive
+- **THEN** the active goal is removed and the in-progress worker turn is stopped
+
 ### Requirement: Configurable Judge and Budget
 
 WHERE a configuration file co-located with the extension is present, THE goal-loop SHALL read the judge model and the turn budget from it. An environment variable SHALL override the file value, and a built-in default SHALL apply when neither the environment variable nor the file supplies a valid value. Invalid or missing configuration values SHALL be ignored without error.
@@ -159,3 +178,4 @@ WHILE a goal is active, THE goal-loop SHALL display a status indicator showing t
 | goal-loop.evaluate-each-turn-once | [x] | [x] | [x] | [x] | [x] |
 | goal-loop.show-active-goal-indicator | [x] | [x] | [x] | [x] | [x] |
 | goal-loop.configurable-judge-and-budget | [x] | [x] | [x] | [x] | [x] |
+| goal-loop.interrupt-stops-the-loop | [x] | [x] | [x] | [x] | [x] |
