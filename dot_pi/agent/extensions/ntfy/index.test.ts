@@ -73,48 +73,36 @@ test("lastAssistantText: empty when no assistant message", () => {
 
 // --- pi-ntfy-notify.notification-identifies-session ---
 
-test("buildNotification: uses session name + tab + pane + excerpt", () => {
+test("buildNotification: title = zellij session + tab + pi name; body = excerpt", () => {
 	const n = buildNotification({
 		sessionName: "bug123",
 		sessionId: "a3f9c2010000",
+		zellijSession: "workspace",
 		tabName: "chezmoi",
-		cwd: "/home/me/proj",
-		paneId: "7",
 		excerpt: "what next?",
 	});
-	assert.equal(n.title, "pi ready: bug123");
-	assert.equal(n.body, "chezmoi · pane 7 · what next?");
-});
-
-test("buildNotification: falls back to cwd when no tab name", () => {
-	const n = buildNotification({
-		sessionName: "s",
-		sessionId: "id",
-		cwd: "/home/me/proj",
-		paneId: "7",
-		excerpt: "x",
-	});
-	assert.equal(n.body, "/home/me/proj · pane 7 · x");
+	assert.equal(n.title, "workspace · chezmoi · bug123");
+	assert.equal(n.body, "what next?");
 });
 
 test("buildNotification: falls back to short session id when unnamed", () => {
 	const n = buildNotification({
 		sessionId: "a3f9c2010000",
-		cwd: "/p",
+		zellijSession: "workspace",
+		tabName: "chezmoi",
 		excerpt: "x",
 	});
-	assert.equal(n.title, "pi ready: a3f9c201");
+	assert.equal(n.title, "workspace · chezmoi · a3f9c201");
 });
 
-test("buildNotification: omits pane segment when no pane id", () => {
+test("buildNotification: omits zellij/tab segments when unavailable (pi name only)", () => {
 	const n = buildNotification({
-		sessionName: "s",
+		sessionName: "solo",
 		sessionId: "id",
-		tabName: "chezmoi",
-		cwd: "/p",
 		excerpt: "x",
 	});
-	assert.equal(n.body, "chezmoi · x");
+	assert.equal(n.title, "solo");
+	assert.equal(n.body, "x");
 });
 
 test("parseZellijTabName: finds tab whose pane matches cwd (leading slash stripped)", () => {
