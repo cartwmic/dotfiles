@@ -70,6 +70,46 @@ export function shouldStopForBudget(turns: number, maxTurns: number): boolean {
 	return turns >= maxTurns;
 }
 
+export interface GoalConfig {
+	judgeModel?: string;
+	maxTurns?: number;
+}
+
+/**
+ * Normalize an untrusted parsed config.json into a GoalConfig.
+ * Invalid/missing fields are dropped (never throws).
+ */
+export function normalizeGoalConfig(raw: unknown): GoalConfig {
+	const out: GoalConfig = {};
+	if (typeof raw !== "object" || raw === null) return out;
+	const obj = raw as Record<string, unknown>;
+	if (typeof obj.judgeModel === "string" && obj.judgeModel.trim().length > 0) {
+		out.judgeModel = obj.judgeModel.trim();
+	}
+	if (typeof obj.maxTurns === "number" && Number.isFinite(obj.maxTurns) && obj.maxTurns > 0) {
+		out.maxTurns = Math.floor(obj.maxTurns);
+	}
+	return out;
+}
+
+/**
+ * Resolve a setting by precedence: env var (highest) > config file > default.
+ * Empty/whitespace env values are ignored.
+ */
+export function resolveSetting<T>(
+	envValue: string | undefined,
+	parseEnv: (s: string) => T | undefined,
+	configValue: T | undefined,
+	defaultValue: T,
+): T {
+	if (envValue && envValue.trim().length > 0) {
+		const parsed = parseEnv(envValue.trim());
+		if (parsed !== undefined) return parsed;
+	}
+	if (configValue !== undefined) return configValue;
+	return defaultValue;
+}
+
 export type LoopAction = "achieved" | "exhausted" | "continue";
 
 /**

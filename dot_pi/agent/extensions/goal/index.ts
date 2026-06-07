@@ -15,10 +15,20 @@
  *   PI_GOAL_MAX_TURNS    hard turn budget (default 25)
  *   PI_GOAL_JUDGE_MODEL  "provider/model-id" override for the judge
  */
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { complete } from "@mariozechner/pi-ai";
-import { decideAfterEvaluation, parseGoalArg, parseVerdict, type Verdict } from "./helpers.ts";
+import {
+	decideAfterEvaluation,
+	normalizeGoalConfig,
+	parseGoalArg,
+	parseVerdict,
+	resolveSetting,
+	type GoalConfig,
+	type Verdict,
+} from "./helpers.ts";
 
 // Optional debug trace (set PI_GOAL_DEBUG=/path/to/log). No-op otherwise.
 const DEBUG = process.env.PI_GOAL_DEBUG;
@@ -43,19 +53,48 @@ interface GoalState {
 
 const DEFAULT_MAX_TURNS = 25;
 // Small/cheap judge preference, tried in order; falls back to the session model.
+// Used only when no judge model is set via config.json or PI_GOAL_JUDGE_MODEL.
 const JUDGE_PREFERENCE: ReadonlyArray<readonly [string, string]> = [
 	["anthropic", "claude-haiku-4-5"],
 	["deepseek", "deepseek-v4-flash"],
 ];
 
+// Settings, lowest-to-highest precedence: built-in default < config.json < env var.
+// config.json is co-located with this file (deployed to ~/.pi/agent/extensions/goal/).
+function loadConfig(): GoalConfig {
+	try {
+		const path = join(dirname(fileURLToPath(import.meta.url)), "config.json");
+		if (!existsSync(path)) return {};
+		return normalizeGoalConfig(JSON.parse(readFileSync(path, "utf-8")));
+	} catch {
+		return {};
+	}
+}
+
+function parsePositiveInt(s: string): number | undefined {
+	const n = Number.parseInt(s, 10);
+	return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 export default function (pi: ExtensionAPI) {
 	// Long-lived closure state. NEVER capture `ctx` here (it goes stale across
 	// session switch/fork/reload — design D5); use the per-call ctx instead.
 	let goal: GoalState | undefined;
+	const config = loadConfig();
 
+	// env PI_GOAL_MAX_TURNS > config.maxTurns > built-in default (goal-loop.configurable-judge-and-budget)
 	function resolveMaxTurns(): number {
-		const n = Number.parseInt(process.env.PI_GOAL_MAX_TURNS ?? "", 10);
-		return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_TURNS;
+		return resolveSetting(process.env.PI_GOAL_MAX_TURNS, parsePositiveInt, config.maxTurns, DEFAULT_MAX_TURNS);
+	}
+
+	// env PI_GOAL_JUDGE_MODEL > config.judgeModel > (preference list, handled in resolveJudge)
+	function configuredJudgeSpec(): string | undefined {
+		return resolveSetting<string | undefined>(
+			process.env.PI_GOAL_JUDGE_MODEL,
+			(s) => s,
+			config.judgeModel,
+			undefined,
+		);
 	}
 
 	function renderStatus(ctx: ExtensionContext): void {
@@ -74,11 +113,11 @@ export default function (pi: ExtensionAPI) {
 		ctx: ExtensionContext,
 	): Promise<{ model: any; apiKey?: string; headers?: Record<string, string> } | undefined> {
 		const candidates: any[] = [];
-		const env = process.env.PI_GOAL_JUDGE_MODEL?.trim();
-		if (env) {
-			const slash = env.indexOf("/");
+		const spec = configuredJudgeSpec();
+		if (spec) {
+			const slash = spec.indexOf("/");
 			if (slash > 0) {
-				const m = ctx.modelRegistry.find(env.slice(0, slash), env.slice(slash + 1));
+				const m = ctx.modelRegistry.find(spec.slice(0, slash), spec.slice(slash + 1));
 				if (m) candidates.push(m);
 			}
 		}
