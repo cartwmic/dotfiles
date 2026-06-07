@@ -14,6 +14,7 @@ import {
 	parseVerdict,
 	resolveSetting,
 	shouldStopForBudget,
+	verdictFromToolArgs,
 } from "./helpers.ts";
 
 describe("parseVerdict — goal-loop.handle-evaluation-failure", () => {
@@ -44,6 +45,20 @@ describe("parseVerdict — goal-loop.handle-evaluation-failure", () => {
 	test("non-boolean met coerces to not-met", () => {
 		const v = parseVerdict('{"met": "yes", "reason": "x"}');
 		expect(v.met).toBe(false);
+	});
+});
+
+describe("verdictFromToolArgs — goal-loop.judge-each-completed-turn (capture path)", () => {
+	test("valid tool args become a verdict", () => {
+		expect(verdictFromToolArgs({ met: true, reason: "echoed back" })).toEqual({ met: true, reason: "echoed back" });
+		expect(verdictFromToolArgs({ met: false, reason: "  " })).toEqual({ met: false, reason: "(no reason given)" });
+	});
+
+	test("missing/invalid met → undefined (caller falls back to text parse)", () => {
+		expect(verdictFromToolArgs({ reason: "x" })).toBeUndefined();
+		expect(verdictFromToolArgs({ met: "yes", reason: "x" })).toBeUndefined();
+		expect(verdictFromToolArgs(null)).toBeUndefined();
+		expect(verdictFromToolArgs("nope")).toBeUndefined();
 	});
 });
 

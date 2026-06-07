@@ -19,7 +19,8 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { complete } from "@mariozechner/pi-ai";
+import { complete, type Tool } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 import {
 	decideAfterEvaluation,
 	isInterruptedStop,
@@ -28,9 +29,21 @@ import {
 	parseGoalArg,
 	parseVerdict,
 	resolveSetting,
+	verdictFromToolArgs,
 	type GoalConfig,
 	type Verdict,
 } from "./helpers.ts";
+
+// Structured-output "capture" path: the judge calls this tool instead of
+// emitting free text. Reliable across providers incl. the claude-bridge CLI.
+const SUBMIT_VERDICT: Tool = {
+	name: "submit_verdict",
+	description: "Submit the completion verdict for the GOAL. Call this exactly once.",
+	parameters: Type.Object({
+		met: Type.Boolean({ description: "true only if the TRANSCRIPT demonstrably satisfies the GOAL" }),
+		reason: Type.String({ maxLength: 300, description: "one-sentence justification" }),
+	}),
+};
 
 // Optional debug trace (set PI_GOAL_DEBUG=/path/to/log). No-op otherwise.
 const DEBUG = process.env.PI_GOAL_DEBUG;
@@ -161,20 +174,28 @@ export default function (pi: ExtensionAPI) {
 		const resolved = await resolveJudge(ctx);
 		if (!resolved) return { met: false, reason: "no judge model available/authenticated" };
 
-		// The instruction goes in the USER message, not systemPrompt: some
-		// providers (e.g. the claude-bridge CLI) ignore systemPrompt, which made
-		// the judge answer conversationally and never return a verdict.
+		// Instruction in the USER message (some providers, e.g. the claude-bridge
+		// CLI, ignore systemPrompt). Ask for a structured tool call; fall back to
+		// free-text JSON parsing if the model emits text instead of a tool call.
 		const prompt =
 			"You are a strict completion evaluator. Decide ONLY from the TRANSCRIPT whether the GOAL is " +
-			'satisfied. Respond with ONLY a JSON object on a single line: {"met": boolean, "reason": string}. ' +
-			"No other text. Set met=true only if the transcript demonstrably satisfies the goal; keep reason " +
-			`to one sentence.\n\nGOAL:\n${condition}\n\nTRANSCRIPT:\n${transcript || "(no worker output captured)"}`;
+			"satisfied, then call submit_verdict exactly once. Set met=true only if the transcript " +
+			`demonstrably satisfies the goal.\n\nGOAL:\n${condition}\n\nTRANSCRIPT:\n${transcript || "(no worker output captured)"}`;
 		try {
 			const res: any = await complete(
 				resolved.model,
-				{ messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }] },
+				{
+					messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+					tools: [SUBMIT_VERDICT],
+				},
 				{ apiKey: resolved.apiKey, headers: resolved.headers, maxTokens: 300, signal: ctx.signal },
 			);
+			const toolCall = (res?.content ?? []).find(
+				(c: any) => c?.type === "toolCall" && c.name === "submit_verdict",
+			);
+			const fromTool = toolCall && verdictFromToolArgs(toolCall.arguments);
+			if (fromTool) return fromTool;
+			// Fallback: free-text JSON.
 			const text = (res?.content ?? [])
 				.filter((c: any) => c?.type === "text")
 				.map((c: any) => c.text)

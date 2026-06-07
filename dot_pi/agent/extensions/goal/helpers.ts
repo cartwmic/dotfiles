@@ -61,6 +61,20 @@ export function parseVerdict(text: string): Verdict {
 }
 
 /**
+ * Build a verdict from a submit_verdict tool call's arguments (the bridge
+ * "capture" path). Returns undefined when the args are not a valid verdict,
+ * so the caller can fall back to free-text parsing.
+ */
+export function verdictFromToolArgs(args: unknown): Verdict | undefined {
+	if (typeof args !== "object" || args === null) return undefined;
+	const a = args as Record<string, unknown>;
+	if (typeof a.met !== "boolean") return undefined;
+	const reason =
+		typeof a.reason === "string" && a.reason.trim().length > 0 ? a.reason.trim() : "(no reason given)";
+	return { met: a.met, reason };
+}
+
+/**
  * Whether the loop must stop because the turn budget is exhausted.
  * `turns` is the count of evaluated turns (incremented once per evaluation,
  * including the initial set turn — clarify A2).
