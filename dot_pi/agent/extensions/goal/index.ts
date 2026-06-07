@@ -136,6 +136,23 @@ export default function (pi: ExtensionAPI) {
 		return undefined;
 	}
 
+	// Latest worker turn's surfaced text (fallback to the session entries when
+	// the agent_end event carries no assistant text). Bounded — clarify A1 / D7.
+	function extractTranscript(ctx: ExtensionContext): string {
+		const entries = ctx.sessionManager.getEntries() as any[];
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const msg = entries[i]?.message ?? entries[i];
+			if (msg?.role === "assistant" && Array.isArray(msg.content)) {
+				return msg.content
+					.filter((c: any) => c?.type === "text")
+					.map((c: any) => c.text)
+					.join("\n")
+					.trim();
+			}
+		}
+		return "";
+	}
+
 	async function judge(
 		ctx: ExtensionContext,
 		condition: string,
@@ -144,28 +161,18 @@ export default function (pi: ExtensionAPI) {
 		const resolved = await resolveJudge(ctx);
 		if (!resolved) return { met: false, reason: "no judge model available/authenticated" };
 
+		// The instruction goes in the USER message, not systemPrompt: some
+		// providers (e.g. the claude-bridge CLI) ignore systemPrompt, which made
+		// the judge answer conversationally and never return a verdict.
+		const prompt =
+			"You are a strict completion evaluator. Decide ONLY from the TRANSCRIPT whether the GOAL is " +
+			'satisfied. Respond with ONLY a JSON object on a single line: {"met": boolean, "reason": string}. ' +
+			"No other text. Set met=true only if the transcript demonstrably satisfies the goal; keep reason " +
+			`to one sentence.\n\nGOAL:\n${condition}\n\nTRANSCRIPT:\n${transcript || "(no worker output captured)"}`;
 		try {
 			const res: any = await complete(
 				resolved.model,
-				{
-					systemPrompt:
-						"You are a strict completion evaluator. Given a GOAL and the latest worker output " +
-						"(TRANSCRIPT), decide ONLY from what the transcript proves. Reply with a single JSON " +
-						'object: {"met": boolean, "reason": string}. Set met=true only if the transcript ' +
-						"demonstrably satisfies the goal. Keep reason to one sentence.",
-					messages: [
-						{
-							role: "user",
-							content: [
-								{
-									type: "text",
-									text: `GOAL:\n${condition}\n\nTRANSCRIPT:\n${transcript || "(no worker output captured)"}`,
-								},
-							],
-							timestamp: Date.now(),
-						},
-					],
-				},
+				{ messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }] },
 				{ apiKey: resolved.apiKey, headers: resolved.headers, maxTokens: 300, signal: ctx.signal },
 			);
 			const text = (res?.content ?? [])
@@ -245,7 +252,7 @@ export default function (pi: ExtensionAPI) {
 			session.turns += 1;
 			renderStatus(ctx);
 
-			const verdict = await judge(ctx, session.condition, info.text);
+			const verdict = await judge(ctx, session.condition, info.text || extractTranscript(ctx));
 			dbg(`turn ${session.turns}/${session.maxTurns} met=${verdict.met} reason="${verdict.reason}"`);
 
 			// Goal may have been cleared or replaced during the async judge call.
