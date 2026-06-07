@@ -110,6 +110,39 @@ export function resolveSetting<T>(
 	return defaultValue;
 }
 
+export interface AssistantInfo {
+	text: string;
+	stopReason?: string;
+}
+
+/**
+ * Extract the latest assistant message's text + stopReason from a run's
+ * message list. stopReason "aborted" means the user interrupted the turn;
+ * "error" means the turn failed. Pure / never throws.
+ */
+export function lastAssistantInfo(messages: unknown): AssistantInfo {
+	if (!Array.isArray(messages)) return { text: "" };
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i] as any;
+		if (m?.role === "assistant") {
+			const text = Array.isArray(m.content)
+				? m.content
+						.filter((c: any) => c?.type === "text")
+						.map((c: any) => c.text)
+						.join("\n")
+						.trim()
+				: "";
+			return { text, stopReason: typeof m.stopReason === "string" ? m.stopReason : undefined };
+		}
+	}
+	return { text: "" };
+}
+
+/** A turn the user interrupted or that errored should not auto-continue. */
+export function isInterruptedStop(stopReason: string | undefined): boolean {
+	return stopReason === "aborted" || stopReason === "error";
+}
+
 export type LoopAction = "achieved" | "exhausted" | "continue";
 
 /**

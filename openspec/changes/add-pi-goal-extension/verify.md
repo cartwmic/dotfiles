@@ -19,8 +19,8 @@ New capability `goal-loop`; delta is ADDED-only (no existing `openspec/specs/goa
 Both ≤72. **PASS**.
 
 ## Check 5 — AC ↔ test mapping (canonical IDs)
-- **Forward:** all 11 `goal-loop.*` AC IDs (incl. `configurable-judge-and-budget`) appear in committed files. **PASS**.
-- **Reverse:** `helpers.test.ts` cites 6 canonical AC IDs as string literals (adds `configurable-judge-and-budget`). ≥1 match. **PASS**.
+- **Forward:** all 12 `goal-loop.*` AC IDs (incl. `configurable-judge-and-budget`, `interrupt-stops-the-loop`) appear in committed files. **PASS**.
+- **Reverse:** `helpers.test.ts` cites 7 canonical AC IDs as string literals. ≥1 match. **PASS**.
 
 ## Check 6 — Constitution compliance (all changed files; ≤10)
 Changed code files: `dot_pi/agent/extensions/goal/{index.ts, helpers.ts, helpers.test.ts, create_config.json}`.
@@ -36,10 +36,14 @@ Changed code files: `dot_pi/agent/extensions/goal/{index.ts, helpers.ts, helpers
 ## Completion Decision: **green**
 
 ## Test evidence
-- `bun test` → **19 pass / 0 fail / 41 expect()** (parseVerdict incl. failure modes; parseGoalArg incl. all clear aliases; shouldStopForBudget; decideAfterEvaluation incl. clarify-I1 met-wins; normalizeGoalConfig + resolveSetting precedence env>config>default).
+- `bun test` → **22 pass / 0 fail / 50 expect()** (parseVerdict; parseGoalArg incl. all clear aliases; shouldStopForBudget; decideAfterEvaluation incl. clarify-I1 met-wins; normalizeGoalConfig + resolveSetting precedence; lastAssistantInfo + isInterruptedStop for abort/error).
 - **Config-driven settings confirmed:** a `config.json` with `maxTurns: 3` was honored at runtime (debug log `maxTurns=3`); `create_config.json` maps to `~/.pi/agent/extensions/goal/config.json` (chezmoi `create_` — user edits preserved on re-apply).
 - Extension **loads in real pi** (interactive TUI shows `[Extensions] goal`) and the `/goal` command executes + sets state (debug-log confirmed, headless + PTY).
 - `agent_end` → `complete()` judge → `sendUserMessage(followUp)` continuation loop and JSON verdict parsing: **spike-validated against the live runtime** (design.md Context; FIRST-TURN-OK→SECOND-TURN-OK, clean `{"met":...}` verdict).
+
+## Post-apply bug fixes (owner-reported)
+- **Stuck working spinner on cancel** → root cause: `agent_end` re-injected a follow-up even when the turn ended `aborted`, fighting the user's interrupt. Fixed by `stopReason` detection (design D10): `aborted`/`error` now clears the goal and stops. (`goal-loop.interrupt-stops-the-loop`)
+- **"No way to clear"** → `/goal clear` now also `ctx.abort()`s any in-flight turn so a running loop halts immediately.
 
 ## Residual / manual (honest gaps)
 - **Command-triggered first turn (`/goal` → turn 1) and the live `setStatus` indicator / `notify`** are only exercisable in a human-interactive session. Every headless/PTY harness (`-p`, stdin-pipe, `expect`, `script`) processes the initial input then exits before pumping the queued `sendUserMessage`, so the very first turn was not auto-verified. The continuation loop *after* a real first turn is spike-proven; the branch logic is unit-proven. **Action:** manual interactive confirmation (tasks 6.2) before relying on it unattended.

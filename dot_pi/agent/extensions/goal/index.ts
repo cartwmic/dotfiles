@@ -22,6 +22,8 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { complete } from "@mariozechner/pi-ai";
 import {
 	decideAfterEvaluation,
+	isInterruptedStop,
+	lastAssistantInfo,
 	normalizeGoalConfig,
 	parseGoalArg,
 	parseVerdict,
@@ -134,29 +136,14 @@ export default function (pi: ExtensionAPI) {
 		return undefined;
 	}
 
-	// Latest worker turn's surfaced text only (bounded — clarify A1 / design D7).
-	// Tool results are intentionally omitted in this minimal version.
-	function extractTranscript(ctx: ExtensionContext): string {
-		const entries = ctx.sessionManager.getEntries() as any[];
-		for (let i = entries.length - 1; i >= 0; i--) {
-			const msg = entries[i]?.message ?? entries[i];
-			if (msg?.role === "assistant" && Array.isArray(msg.content)) {
-				return msg.content
-					.filter((c: any) => c?.type === "text")
-					.map((c: any) => c.text)
-					.join("\n")
-					.trim()
-					.slice(0, 12000);
-			}
-		}
-		return "";
-	}
-
-	async function judge(ctx: ExtensionContext, condition: string): Promise<Verdict> {
+	async function judge(
+		ctx: ExtensionContext,
+		condition: string,
+		transcript: string,
+	): Promise<Verdict> {
 		const resolved = await resolveJudge(ctx);
 		if (!resolved) return { met: false, reason: "no judge model available/authenticated" };
 
-		const transcript = extractTranscript(ctx);
 		try {
 			const res: any = await complete(
 				resolved.model,
@@ -212,6 +199,8 @@ export default function (pi: ExtensionAPI) {
 				if (!goal?.active) return "No active goal to clear.";
 				const cond = goal.condition;
 				clearGoal(ctx);
+				// Also stop any in-flight turn so a running loop halts immediately.
+				if (!ctx.isIdle()) ctx.abort();
 				return `Cleared goal: ${cond}`;
 			}
 
@@ -236,15 +225,27 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("agent_end", async (_event: unknown, ctx: ExtensionContext) => {
+	pi.on("agent_end", async (event: any, ctx: ExtensionContext) => {
 		if (!goal?.active || goal.evaluating) return; // inactive (clarify C3) or re-entrant (D4)
+
+		const info = lastAssistantInfo(event?.messages);
+		// User interrupted (or the turn errored): stop the loop instead of
+		// re-injecting, otherwise the cancel fights an immediate new turn.
+		if (isInterruptedStop(info.stopReason)) {
+			const cond = goal.condition;
+			clearGoal(ctx);
+			dbg(`interrupted stopReason=${info.stopReason} — loop stopped`);
+			ctx.ui.notify(`◎ Goal stopped (${info.stopReason}): ${cond}`, "warning");
+			return;
+		}
+
 		const session = goal;
 		session.evaluating = true;
 		try {
 			session.turns += 1;
 			renderStatus(ctx);
 
-			const verdict = await judge(ctx, session.condition);
+			const verdict = await judge(ctx, session.condition, info.text);
 			dbg(`turn ${session.turns}/${session.maxTurns} met=${verdict.met} reason="${verdict.reason}"`);
 
 			// Goal may have been cleared or replaced during the async judge call.

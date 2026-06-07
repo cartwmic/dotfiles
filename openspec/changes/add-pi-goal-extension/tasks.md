@@ -85,6 +85,21 @@
   - files_allowed:
       - "dot_pi/agent/extensions/goal/**"
 
+## 4c. Interrupt handling (AC: interrupt-stops-the-loop)
+
+- [x] 4c.1 Add `lastAssistantInfo` + `isInterruptedStop` pure helpers with tests citing `goal-loop.interrupt-stops-the-loop`.
+  - intent: feature
+  - files_allowed:
+      - "dot_pi/agent/extensions/goal/**"
+- [x] 4c.2 In `agent_end`, read `stopReason` from `event.messages`; on `aborted`/`error` clear the goal and skip re-injection (D10). Feed the same message text to the judge.
+  - intent: fix
+  - files_allowed:
+      - "dot_pi/agent/extensions/goal/**"
+- [x] 4c.3 `/goal clear` also calls `ctx.abort()` when a turn is in flight, so a running loop halts immediately.
+  - intent: fix
+  - files_allowed:
+      - "dot_pi/agent/extensions/goal/**"
+
 ## 5. Tests (pure helpers; cite AC IDs for the verify gate)
 
 - [x] 5.1 Unit-test `parseVerdict` (valid JSON, embedded JSON, garbage→not-met) citing `goal-loop.handle-evaluation-failure`; and budget arithmetic citing `goal-loop.bound-the-loop-with-a-turn-budget` and `goal-loop.evaluate-each-turn-once`.
