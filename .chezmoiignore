@@ -12,3 +12,4 @@ docs/
 !.codex/AGENTS.md
 !.codex/config.toml
 openspec/
+adr/
