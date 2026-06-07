@@ -9,7 +9,7 @@ When pi runs on a remote PC (phone → Termux → SSH → zellij → pi), the as
 - Notification carries: title = pi session name (fallback to short session id) + zellij session name; body = excerpt of the last assistant message (truncated, text-only).
 - Read the ntfy URL from an extension config file (`config.json` beside `index.ts`); extension no-ops cleanly when unconfigured/missing.
 - The ntfy URL (`https://ntfy.internal.cartwmic.com/pi`) is an internal-only, non-externally-reachable host — **not a secret** — so it is committed directly as a plain value in `config.json`. No 1Password/secret injection needed (Constitution **Principle III** is not engaged). Extension still lives under chezmoi (**Principle I**).
-- Guards: skip when `!ctx.isInteractive()` (print/json mode) and when `event.willRetry` (auto-retry ≠ awaiting input). All network calls fire-and-forget with error swallow so they never block or crash a turn.
+- Guards: skip when `!ctx.hasUI` (print/json mode) and when `event.willRetry` (auto-retry ≠ awaiting input). All network calls fire-and-forget with error swallow so they never block or crash a turn.
 - Self-hosted ntfy server (`ntfy.internal.cartwmic.com`); excerpts contain conversation text and never leave the internal network.
 
 ## Capabilities
