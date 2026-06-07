@@ -149,9 +149,12 @@ export function resolveZellijTabName(cwd: string): string | undefined {
 
 /**
  * Build the ntfy title + body.
- * Title: `<zellij session> · <zellij tab> · <pi session name>` (each segment
+ * Title: `<zellij session> / <zellij tab> / <pi session name>` (each segment
  * omitted when unavailable; the pi session name always present, falling back to
- * a short session id). Body: the excerpt only.
+ * a short session id). The separator is ASCII because the title is sent as an
+ * HTTP header (ntfy `Title:`), which is not UTF-8 safe — non-ASCII renders as
+ * the replacement char. Body: the excerpt only (sent as the UTF-8 request
+ * body, so Unicode there is fine).
  */
 export function buildNotification(opts: {
 	sessionName?: string;
@@ -167,7 +170,7 @@ export function buildNotification(opts: {
 	const titleParts = [opts.zellijSession?.trim(), opts.tabName?.trim(), piName].filter(
 		(p): p is string => !!p && p.length > 0,
 	);
-	return { title: titleParts.join(" · "), body: opts.excerpt };
+	return { title: titleParts.join(" / "), body: opts.excerpt };
 }
 
 /** POST a notification to ntfy. Fire-and-forget; caller swallows errors. */
