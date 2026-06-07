@@ -112,6 +112,24 @@ WHILE a goal is active, THE goal-loop SHALL evaluate exactly one time per comple
 - **WHEN** the goal-loop injects a continuation turn after a not-met result
 - **THEN** that continuation turn is evaluated exactly once on completion, with no overlapping or duplicate evaluation of the prior turn
 
+### Requirement: Configurable Judge and Budget
+
+WHERE a configuration file co-located with the extension is present, THE goal-loop SHALL read the judge model and the turn budget from it. An environment variable SHALL override the file value, and a built-in default SHALL apply when neither the environment variable nor the file supplies a valid value. Invalid or missing configuration values SHALL be ignored without error.
+
+#### Scenario: Config file supplies the judge model and budget
+- **WHERE** the config file sets a judge model and a turn budget
+- **WHEN** a goal is set
+- **THEN** the configured judge model is used for evaluation and the configured value is used as the turn budget
+
+#### Scenario: Environment variable overrides the config file
+- **WHERE** both the config file and the corresponding environment variable set a value
+- **WHEN** a goal is set
+- **THEN** the environment variable's value takes precedence over the config file
+
+#### Scenario: Invalid configuration falls back
+- **IF** a configuration value is missing or invalid
+- **THEN** the next source in precedence (environment variable, then built-in default) applies, with no error
+
 ### Requirement: Show Active-Goal Indicator
 
 WHILE a goal is active, THE goal-loop SHALL display a status indicator showing that a goal is running and how many turns have elapsed, and SHALL remove the indicator when the goal is cleared, achieved, or its budget is exhausted.
@@ -140,3 +158,4 @@ WHILE a goal is active, THE goal-loop SHALL display a status indicator showing t
 | goal-loop.handle-evaluation-failure | [x] | [x] | [x] | [x] | [x] |
 | goal-loop.evaluate-each-turn-once | [x] | [x] | [x] | [x] | [x] |
 | goal-loop.show-active-goal-indicator | [x] | [x] | [x] | [x] | [x] |
+| goal-loop.configurable-judge-and-budget | [x] | [x] | [x] | [x] | [x] |

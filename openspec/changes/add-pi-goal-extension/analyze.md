@@ -44,6 +44,7 @@ All error/unwanted conditions correctly use IF…THEN (`spec.md:89` budget exhau
 | goal-loop.handle-evaluation-failure | D3 | — |
 | goal-loop.evaluate-each-turn-once | D4 (evaluating guard) | — |
 | goal-loop.show-active-goal-indicator | Covered in Risks + Migration (tasks 4.4); no dedicated Decision | minor |
+| goal-loop.configurable-judge-and-budget | D9 (config.json + env-override precedence) | — |
 
 All requirements covered. One **minor**: the status indicator has no dedicated design Decision — acceptable, it is a trivial `setStatus` call with no design tension; tracked in tasks 4.4.
 
@@ -78,6 +79,8 @@ Scan for tech/algorithm leakage (`agent_end`, `sendUserMessage`, `complete()`, `
 ## Check 7 — Unresolved clarify findings
 
 clarify.md: 6 findings, all `answered` (A1, A2, I1, C1 → Option A; C2, C3 inline). 0 unanswered, 0 deferred. No outstanding risks to carry forward.
+
+**Post-clarify addition:** `goal-loop.configurable-judge-and-budget` was added during apply at the owner's request. Self-clarified — low ambiguity: WHERE pattern for the optional config file, explicit env > file > default precedence, IF…THEN for invalid values. EARS check 2 clean (no WHEN+error). No new unanswered findings.
 
 ## Summary
 
