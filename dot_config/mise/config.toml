@@ -576,10 +576,11 @@ ZJSTATUS_VERSION="v0.23.0"
 ZJSTATUS_HINTS_VERSION="v0.1.4"
 # harpoon: pinned to a commit on the cartwmic fork carrying a custom patch
 # (see HARPOON_REPO below). Bump both together when re-syncing with upstream.
-# Patch: keep focused_pane sticky when harpoon itself has focus, so `a` can
-# add multiple panes from the same tab. Upstream issue: not yet filed.
+# Patches: (1) keep focused_pane sticky when harpoon itself has focus, so `a`
+# can add multiple panes from the same tab; (2) fullscreen the selected pane on
+# jump (Enter / l). Upstream issues: not yet filed.
 HARPOON_REPO="https://github.com/cartwmic/harpoon"
-HARPOON_VERSION="da678cbccde8ffb5512cd1345f63b1ca3d5dc631"
+HARPOON_VERSION="eea6172c6d6a53661b2f44513f8c95eb3ac92bc4"
 
 # --- room: prebuilt wasm from GitHub release ---
 ROOM_STAMP="$PLUGIN_DIR/.room.version"
