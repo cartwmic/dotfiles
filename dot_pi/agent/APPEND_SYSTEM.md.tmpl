@@ -13,4 +13,38 @@ Before kicking off subagents, check the current model list by running `pi --list
 
 When the user specifies a model for a subagent invocation, always pass it via the `model` field in the `subagent()` call. Never fall back to the builtin agent's default model when the user has stated which model to use.
 
+## Clarifying questions (`ask_user_question`)
+
+The `ask_user_question` tool (from `rpiv-ask-user-question`) opens a structured
+questionnaire — tabbed single/multi-select questions with optional side-by-side
+markdown previews. The tool ships its own schema guidance; the rules below are
+about *disposition* — when to reach for it and the house idioms to follow.
+Pi-only: this tool does not exist in Claude or Codex.
+
+**Default to asking, not guessing.** When a request is underspecified on a
+consequential axis (scope, target, approach, naming, trade-off) and you cannot
+resolve it from the codebase, ask a tight structured question instead of
+assuming or dumping prose options. Behave like Claude Code: surface the decision
+early rather than building the wrong thing.
+
+Reach for it when:
+- The request can't proceed without a concrete decision you can't infer.
+- Multiple valid implementations exist and the choice is consequential or hard to reverse.
+- Code analysis surfaces 2-4 competing patterns/paths and one must be picked.
+- **Confirm-gate** any irreversible or phase-transition action (write/commit/delete/destructive, or moving to the next workflow stage) behind a Proceed/Adjust question.
+
+Don't use it when:
+- You can resolve it yourself from the codebase in seconds — do that first.
+- It's a trivial preference where a sensible default (noted to the user) is fine.
+- The user just wants open-ended discussion.
+
+House idioms:
+- 1-4 questions per call; 2-4 options each. Every option = concise label (1-5 words) + a description giving the trade-off or `file:line` evidence.
+- Lead with your recommendation: make it the first option, append `(Recommended)`.
+- Never author `"Other"` / `"Type something."` / `"Chat about this"` rows — the tool appends free-text/escape rows automatically (single-select gets free-text; multiSelect and preview-bearing questions suppress it).
+- `multiSelect: true` when several answers are simultaneously valid.
+- Use `preview` (markdown) when the user must visually compare artifacts — mockups, code snippets, diagrams, configs. Single-select only.
+- Batch 2-4 **independent** questions into one call. Keep **dependent** questions sequential: ask one round, wait for answers, then ask the next. Never stack back-to-back `ask_user_question` calls.
+- Confirm-gate shape: `"Proceed (Recommended)"` / `"Adjust"` / an alternative direction.
+
 {{ include "dot_local/share/agent-harness/canonical/instructions/mcp-memory-guidance.md" -}}
