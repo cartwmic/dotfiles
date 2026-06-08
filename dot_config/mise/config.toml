@@ -578,9 +578,10 @@ ZJSTATUS_HINTS_VERSION="v0.1.4"
 # (see HARPOON_REPO below). Bump both together when re-syncing with upstream.
 # Patches: (1) keep focused_pane sticky when harpoon itself has focus, so `a`
 # can add multiple panes from the same tab; (2) fullscreen the selected pane on
-# jump (Enter / l). Upstream issues: not yet filed.
+# jump; plus the filter/jump-modes rewrite (cargo workspace: harpoon-core lib +
+# harpoon-plugin wasm crate). Upstream issues: not yet filed.
 HARPOON_REPO="https://github.com/cartwmic/harpoon"
-HARPOON_VERSION="eea6172c6d6a53661b2f44513f8c95eb3ac92bc4"
+HARPOON_VERSION="7abdb7202b6ee59f1cc74e13fbfcac0d4da7f536"
 
 # --- room: prebuilt wasm from GitHub release ---
 ROOM_STAMP="$PLUGIN_DIR/.room.version"
@@ -632,7 +633,12 @@ if [ ! -f "$PLUGIN_DIR/harpoon.wasm" ] || [ "$(cat "$HARPOON_STAMP" 2>/dev/null)
   cd "$HARPOON_SRC"
   git fetch --tags --quiet origin
   git checkout "$HARPOON_VERSION"
-  cargo build --release
+  # Cargo workspace (harpoon-core lib + harpoon-plugin wasm crate). The
+  # wasm32-wasip1 target pin lives in harpoon-plugin/.cargo/config.toml,
+  # which cargo does NOT read from the workspace root, so the target must
+  # be passed explicitly. -p harpoon selects the plugin package (its
+  # package name is `harpoon`, dir is harpoon-plugin/).
+  cargo build --release -p harpoon --target wasm32-wasip1
   cp target/wasm32-wasip1/release/harpoon.wasm "$PLUGIN_DIR/harpoon.wasm"
   echo "$HARPOON_VERSION" > "$HARPOON_STAMP"
 else
