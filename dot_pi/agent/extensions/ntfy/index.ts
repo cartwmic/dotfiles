@@ -114,6 +114,24 @@ export function extractExcerpt(text: string, maxChars: number): string {
 }
 
 /**
+ * Build a notification excerpt from `ask_user_question` tool args. Uses the
+ * first question's text, prefixed with a `[N questions]` count when the call
+ * batches several. The leading `❓` rides in the UTF-8 request body (not the
+ * header), so the emoji renders fine.
+ */
+export function extractQuestionExcerpt(args: unknown, maxChars: number): string {
+	const questions =
+		args && typeof args === "object" && Array.isArray((args as { questions?: unknown }).questions)
+			? (args as { questions: Array<{ question?: unknown }> }).questions
+			: [];
+	if (questions.length === 0) return extractExcerpt("❓ (waiting for your answer)", maxChars);
+	const first = questions[0];
+	const text = first && typeof first.question === "string" ? first.question : "(question)";
+	const prefix = questions.length > 1 ? `[${questions.length} questions] ` : "";
+	return extractExcerpt(`❓ ${prefix}${text}`, maxChars);
+}
+
+/**
  * Parse `zellij action dump-layout` output for the tab name whose pane has the
  * given cwd. dump-layout stores cwd without a leading slash. Returns the first
  * matching tab's name, or undefined when not found.
@@ -174,10 +192,15 @@ export function buildNotification(opts: {
 }
 
 /** POST a notification to ntfy. Fire-and-forget; caller swallows errors. */
-export async function sendNotification(url: string, title: string, body: string): Promise<void> {
+export async function sendNotification(
+	url: string,
+	title: string,
+	body: string,
+	tags = "robot",
+): Promise<void> {
 	await fetch(url, {
 		method: "POST",
-		headers: { Title: title, Priority: "high", Tags: "robot" },
+		headers: { Title: title, Priority: "high", Tags: tags },
 		body,
 		signal: AbortSignal.timeout(5000),
 	});
@@ -237,5 +260,29 @@ export default function (pi: ExtensionAPI): void {
 		});
 
 		void sendNotification(config.url, title, body).catch(() => {});
+	});
+
+	// The agent pauses mid-turn while an `ask_user_question` dialog is open, so
+	// `agent_end` never fires for it. Notify on the tool's execution start (which
+	// runs just before the blocking overlay) so a remote user knows a question is
+	// waiting. `tool_execution_start` carries a ctx (hasUI + sessionManager); the
+	// raw `rpiv:ask-user:prompt` event channel does not.
+	pi.on("tool_execution_start", async (event, ctx) => {
+		if (event.toolName !== "ask_user_question") return;
+		if (!ctx.hasUI) return;
+		if (!enabled) return;
+		if (!config.url) return;
+
+		const sm = ctx.sessionManager;
+		const excerpt = extractQuestionExcerpt(event.args, config.maxExcerptChars);
+		const { title, body } = buildNotification({
+			sessionName: sm.getSessionName(),
+			sessionId: sm.getSessionId(),
+			zellijSession: process.env.ZELLIJ_SESSION_NAME,
+			tabName: resolveZellijTabName(sm.getCwd()),
+			excerpt,
+		});
+
+		void sendNotification(config.url, title, body, "question").catch(() => {});
 	});
 }

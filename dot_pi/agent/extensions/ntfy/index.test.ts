@@ -12,6 +12,7 @@ import { test } from "node:test";
 import {
 	buildNotification,
 	extractExcerpt,
+	extractQuestionExcerpt,
 	lastAssistantText,
 	loadConfig,
 	loadEnabled,
@@ -19,6 +20,33 @@ import {
 	parseZellijTabName,
 	saveEnabled,
 } from "./index.ts";
+
+// --- ask_user_question excerpt ---
+
+test("extractQuestionExcerpt: uses first question text", () => {
+	const out = extractQuestionExcerpt({ questions: [{ question: "Which approach?" }] }, 200);
+	assert.equal(out, "❓ Which approach?");
+});
+
+test("extractQuestionExcerpt: prefixes count when batched", () => {
+	const out = extractQuestionExcerpt(
+		{ questions: [{ question: "A?" }, { question: "B?" }, { question: "C?" }] },
+		200,
+	);
+	assert.equal(out, "❓ [3 questions] A?");
+});
+
+test("extractQuestionExcerpt: placeholder when no questions", () => {
+	assert.equal(extractQuestionExcerpt({ questions: [] }, 200), "❓ (waiting for your answer)");
+	assert.equal(extractQuestionExcerpt(undefined, 200), "❓ (waiting for your answer)");
+	assert.equal(extractQuestionExcerpt({}, 200), "❓ (waiting for your answer)");
+});
+
+test("extractQuestionExcerpt: truncates long question", () => {
+	const out = extractQuestionExcerpt({ questions: [{ question: "x".repeat(50) }] }, 10);
+	assert.ok(out.endsWith("…"));
+	assert.ok(out.length <= 10);
+});
 
 // --- pi-ntfy-notify.notification-includes-content-excerpt ---
 
