@@ -2,10 +2,12 @@
 #
 # chezmoi modify_ script for ~/.codex/AGENTS.md.
 #
-# Idempotently inserts (or refreshes) the canonical mcp-memory guidance as
-# a managed block, preserving any existing content (e.g. desloppify). The
-# block is delimited by HTML comment markers so re-runs replace only the
-# managed section.
+# Idempotently inserts (or refreshes) the canonical memory guidance (now
+# Hindsight) as a managed block, preserving any existing content (e.g.
+# desloppify). The block is delimited by HTML comment markers so re-runs
+# replace only the managed section. The marker id is kept as
+# `mcp-memory-guidance` for continuity so already-deployed AGENTS.md files
+# get their existing block refreshed in place rather than orphaned.
 #
 # Chezmoi runs modify_ scripts with the existing target file content piped
 # on stdin and uses stdout as the new content.
@@ -19,7 +21,7 @@ cat - > "$WORK/existing"
 
 cat > "$WORK/managed" <<'BLOCK_END'
 <!-- chezmoi:mcp-memory-guidance:begin -->
-{{ include "dot_local/share/agent-harness/canonical/instructions/mcp-memory-guidance.md" -}}
+{{ include "dot_local/share/agent-harness/canonical/instructions/hindsight-guidance.md" -}}
 <!-- chezmoi:mcp-memory-guidance:end -->
 BLOCK_END
 

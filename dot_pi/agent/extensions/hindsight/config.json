@@ -1,0 +1,18 @@
+{
+  "apiUrl": "https://hindsight-api.internal.cartwmic.com",
+  "bankId": "cartwmic",
+  "apiToken": "",
+  "autoRecall": true,
+  "autoRetain": true,
+  "recallBudget": "mid",
+  "recallMaxTokens": 1024,
+  "recallTypes": ["observation"],
+  "recallMaxQueryChars": 800,
+  "retainEveryNTurns": 10,
+  "retainOnSessionEnd": true,
+  "retainRoles": ["user", "assistant"],
+  "retainToolCalls": false,
+  "requestTimeoutMs": 12000,
+  "enabled": true,
+  "debug": false
+}
