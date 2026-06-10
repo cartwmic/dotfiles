@@ -172,7 +172,13 @@ zvm_after_init_commands+=("[ -f \"$FZF_TAB_PLUGIN\" ] && source \"$FZF_TAB_PLUGI
 #   ~/.local/user_scripts/refresh_op_service_account_token.sh
 # which uses biometric `op` once to fetch the SA token from 1Password and
 # writes it to ~/.config/agent-harness/op-service-token (mode 0600).
-if [[ -z "$OP_SERVICE_ACCOUNT_TOKEN" && -r "$HOME/.config/agent-harness/op-service-token" ]]; then
+#
+# Rotation-proof: the file always wins. A stale token inherited from a
+# long-lived parent (e.g. a zellij/tmux server started before a rotation)
+# must not shadow a freshly-refreshed file, so we overwrite the env var
+# from the file whenever the file is readable. Fall back to whatever is
+# already in the env only when the file is absent.
+if [[ -r "$HOME/.config/agent-harness/op-service-token" ]]; then
   export OP_SERVICE_ACCOUNT_TOKEN="$(<"$HOME/.config/agent-harness/op-service-token")"
 fi
 
