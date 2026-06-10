@@ -153,11 +153,11 @@ Canonical:
 ```json
 {
   "mcpServers": {
-    "mcp-memory": {
+    "my-http-server": {
       "type": "http",
-      "url": "https://mcp-memory.internal.cartwmic.com/mcp",
+      "url": "https://my-http-server.example.com/mcp",
       "headers": {
-        "Authorization": "Bearer ${MCP_MEMORY_API_KEY}"
+        "Authorization": "Bearer ${MY_SERVER_API_KEY}"
       }
     }
   }
@@ -168,11 +168,11 @@ Adapter:
 ```json
 {
   "mcpServers": {
-    "mcp-memory": {
+    "my-http-server": {
       "headers": {
         "Authorization": {
-          "env": "MCP_MEMORY_API_KEY",
-          "op": "op://developer/mcp-memory - api key/credential"
+          "env": "MY_SERVER_API_KEY",
+          "op": "op://developer/my-http-server - api key/credential"
         }
       }
     }
