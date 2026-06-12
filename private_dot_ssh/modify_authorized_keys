@@ -1,0 +1,34 @@
+#!/bin/sh
+#
+# chezmoi modify_ script for ~/.ssh/authorized_keys.
+#
+# Append-safe: chezmoi pipes the EXISTING target file on stdin and uses our
+# stdout as the new content. We pass through whatever is already there
+# (work keys, CI keys, other people's keys) untouched and append our own
+# public key only if its key blob is not already present. Idempotent.
+#
+# Matching is done on the base64 key blob (field 2), so changing the
+# trailing comment never causes a duplicate to be appended.
+
+set -eu
+
+KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIe/9P7N9fERnMuJZoaiKQToUkAie/ktc6xz1QoNp5uH cartwmic@chezmoi'
+BLOB='AAAAC3NzaC1lZDI1NTE5AAAAIIe/9P7N9fERnMuJZoaiKQToUkAie/ktc6xz1QoNp5uH'
+
+# Read stdin, preserving any trailing newlines via a sentinel.
+existing=$(cat; printf x)
+existing=${existing%x}
+
+# Pass the existing content through verbatim.
+printf '%s' "$existing"
+
+# Append our key only if the blob is absent.
+if ! printf '%s' "$existing" | grep -qF "$BLOB"; then
+	case "$existing" in
+		"") : ;;            # empty file, no separator needed
+		*'
+') : ;;                  # already ends with a newline
+		*) printf '\n' ;;   # ensure key starts on its own line
+	esac
+	printf '%s\n' "$KEY"
+fi
