@@ -25,7 +25,9 @@
 
 set -euo pipefail
 
-OP_SSH_KEY_REF="${OP_SSH_KEY_REF:-op://personal/ssh-termux/private key}"
+# SSH_KEY item in 1Password: append ?ssh-format=openssh so op returns native
+# OpenSSH format (the default PKCS#8 'BEGIN PRIVATE KEY' is flaky for ed25519).
+OP_SSH_KEY_REF="${OP_SSH_KEY_REF:-op://developer/cartwmic-homelab ssh key/private key?ssh-format=openssh}"
 OP_TOKEN_FILE="${OP_TOKEN_FILE:-$HOME/.config/agent-harness/op-service-token}"
 KEY_PATH="${KEY_PATH:-$HOME/.ssh/id_ed25519}"
 DISTRO="${DISTRO:-debian}"
