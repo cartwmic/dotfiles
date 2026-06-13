@@ -36,12 +36,16 @@ mkdir -p ~/.config/agent-harness && chmod 700 ~/.config/agent-harness
 printf '%s' 'ops_...' > ~/.config/agent-harness/op-service-token
 chmod 600 ~/.config/agent-harness/op-service-token
 
-# 2. run the bootstrap (override the op:// ref if needed)
-OP_SSH_KEY_REF='op://personal/ssh-termux/private key' bash setup-ssh-key.sh
+# 2. run the bootstrap (default ref points at the homelab SSH key)
+bash setup-ssh-key.sh
 ```
 
-The private key must already exist in 1Password (e.g. item `ssh-termux`, field
-`private key`). Bump `OP_VERSION` in the script as the 1Password CLI releases.
+The key is the `cartwmic-homelab ssh key` SSH_KEY item in the `developer`
+vault (its public key is the `...Np5uH` blob distributed via
+`modify_authorized_keys`). The default `OP_SSH_KEY_REF` includes
+`?ssh-format=openssh` so `op` returns native OpenSSH format rather than the
+flaky default PKCS#8. Override `OP_SSH_KEY_REF` for a different key. Bump
+`OP_VERSION` in the script as the 1Password CLI releases.
 
 ## Sync to device
 
