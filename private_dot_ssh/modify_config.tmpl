@@ -1,0 +1,67 @@
+#!/bin/sh
+#
+# chezmoi modify_ script for ~/.ssh/config.
+#
+# Append-safe: chezmoi pipes the EXISTING target file on stdin and uses our
+# stdout as the new content. We pass through whatever is already there
+# (work hosts, other people's hosts, manual edits) untouched.
+#
+# Our managed block is delimited by the markers below. On every apply we
+# strip any prior copy of that block and (on the personal profile only)
+# re-append the current version. This makes it idempotent AND update-safe:
+# editing the block here replaces the old one instead of duplicating it.
+#
+# Profile gating: the append is emitted by chezmoi's template engine only
+# when .profile == "personal". On the work profile the append code is
+# absent, so the file is passed through verbatim and the phone host is
+# never added.
+
+set -eu
+
+BEGIN='# >>> chezmoi-managed: phone ssh >>>'
+END='# <<< chezmoi-managed: phone ssh <<<'
+
+# Read stdin, preserving trailing newlines via a sentinel.
+existing=$(cat; printf x)
+existing=${existing%x}
+
+# Emit the existing file with any previously-managed block removed.
+cleaned=$(printf '%s' "$existing" | awk -v b="$BEGIN" -v e="$END" '
+	$0 == b { skip = 1; next }
+	skip && $0 == e { skip = 0; next }
+	!skip { print }
+')
+
+printf '%s' "$cleaned"
+{{ if eq .profile "personal" -}}
+
+# Ensure the managed block starts on its own line.
+case "$cleaned" in
+	"") : ;;
+	*'
+') : ;;
+	*) printf '\n' ;;
+esac
+
+cat <<EOF
+$BEGIN
+# phone (Termux sshd on :8022). Auto-pick the reachable path:
+#   - 10.21.1.6   = phone's WireGuard IP (wg1 peer on OPNsense). Works whenever
+#                   the tunnel is up, home or remote, routed via the gateway.
+#   - 10.19.1.222 = phone's home Wi-Fi DHCP IP. Works only on LAN with WG off.
+# First-obtained HostName wins, so the WG probe is tried first.
+Match host phone exec "/usr/bin/nc -z -G 1 -w 1 10.21.1.6 8022 >/dev/null 2>&1"
+    HostName 10.21.1.6
+
+Match host phone exec "/usr/bin/nc -z -G 1 -w 1 10.19.1.222 8022 >/dev/null 2>&1"
+    HostName 10.19.1.222
+
+Host phone
+    HostName 10.21.1.6
+    Port 8022
+    User u0_a540
+    IdentityFile ~/.ssh/homelab
+    IdentitiesOnly yes
+$END
+EOF
+{{- end }}
