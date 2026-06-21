@@ -54,7 +54,7 @@ export const DEFAULTS: HindsightConfig = {
 	retainOnSessionEnd: true,
 	retainRoles: ["user", "assistant"],
 	retainToolCalls: false,
-	requestTimeoutMs: 12000,
+	requestTimeoutMs: 30000,
 	enabled: true,
 	debug: false,
 };
