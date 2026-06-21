@@ -35,6 +35,8 @@ export interface HindsightConfig {
 	retainToolCalls: boolean;
 
 	requestTimeoutMs: number;
+	/** Surface a UI warning when auto-recall fails (e.g. times out). */
+	notifyOnRecallFailure: boolean;
 	/** Default on/off, from config.json. Overridden at runtime by state.json. */
 	enabled: boolean;
 	debug: boolean;
@@ -55,6 +57,7 @@ export const DEFAULTS: HindsightConfig = {
 	retainRoles: ["user", "assistant"],
 	retainToolCalls: false,
 	requestTimeoutMs: 30000,
+	notifyOnRecallFailure: true,
 	enabled: true,
 	debug: false,
 };
@@ -102,6 +105,7 @@ export function parseConfig(raw: string | undefined): HindsightConfig {
 		retainRoles: asStringArray(p.retainRoles, DEFAULTS.retainRoles),
 		retainToolCalls: asBool(p.retainToolCalls, DEFAULTS.retainToolCalls),
 		requestTimeoutMs: asPosInt(p.requestTimeoutMs, DEFAULTS.requestTimeoutMs),
+		notifyOnRecallFailure: asBool(p.notifyOnRecallFailure, DEFAULTS.notifyOnRecallFailure),
 		enabled: asBool(p.enabled, DEFAULTS.enabled),
 		debug: asBool(p.debug, DEFAULTS.debug),
 	};

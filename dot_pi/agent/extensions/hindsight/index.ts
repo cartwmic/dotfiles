@@ -103,7 +103,17 @@ export default function (pi: ExtensionAPI): void {
 			debugLog(cfg, `recall: injected ${results.length} memories`);
 			return { message: { customType: "hindsight_memories", content: block, display: false } };
 		} catch (err) {
-			debugLog(cfg, `recall failed: ${err instanceof Error ? err.message : String(err)}`);
+			const msg = err instanceof Error ? err.message : String(err);
+			debugLog(cfg, `recall failed: ${msg}`);
+			if (cfg.notifyOnRecallFailure && ctx.hasUI) {
+				const timedOut = /timed out/i.test(msg);
+				ctx.ui.notify(
+					timedOut
+						? `Hindsight recall timed out (>${cfg.requestTimeoutMs}ms) — no memories injected`
+						: `Hindsight recall failed (${msg}) — no memories injected`,
+					"warning",
+				);
+			}
 			return;
 		}
 	});

@@ -13,6 +13,7 @@
   "retainRoles": ["user", "assistant"],
   "retainToolCalls": false,
   "requestTimeoutMs": 30000,
+  "notifyOnRecallFailure": true,
   "enabled": true,
   "debug": false
 }
