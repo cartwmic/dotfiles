@@ -150,6 +150,29 @@ function findAuthConfig(): AuthConfig | null {
 }
 
 // ---------------------------------------------------------------------------
+// Live auth resolution
+//
+// Tokens (keychain `Claude Code-credentials`, ~/.pi/agent/auth.json) are
+// refreshed out-of-band while a pi session runs. Resolving auth once at load
+// captures a snapshot that expires mid-session → 401 → forced session reload,
+// even though pi's own Claude path keeps working off the freshly-rotated token.
+// Re-resolve on every tool call, with a short TTL cache so we don't spawn the
+// `security` keychain subprocess on every invocation.
+// ---------------------------------------------------------------------------
+
+const AUTH_CACHE_TTL_MS = 60_000;
+let cachedAuth: AuthConfig | null = null;
+let cachedAuthAt = 0;
+
+function resolveAuth(): AuthConfig | null {
+  const now = Date.now();
+  if (cachedAuth && now - cachedAuthAt < AUTH_CACHE_TTL_MS) return cachedAuth;
+  cachedAuth = findAuthConfig();
+  cachedAuthAt = now;
+  return cachedAuth;
+}
+
+// ---------------------------------------------------------------------------
 // Anthropic API call (shared between search + fetch)
 // ---------------------------------------------------------------------------
 
@@ -547,10 +570,10 @@ function truncate(s: string, n: number): string {
 }
 
 export default function webSearchExtension(pi: ExtensionAPI): void {
-  const auth = findAuthConfig();
+  const initialAuth = resolveAuth();
   const model = process.env.ANTHROPIC_SEARCH_MODEL ?? DEFAULT_MODEL;
 
-  if (!auth) {
+  if (!initialAuth) {
     const errMsg =
       "web_search/web_fetch unconfigured. Run `claude login` (writes to macOS Keychain), " +
       "set ANTHROPIC_SEARCH_API_KEY, or run `pi login` to populate ~/.pi/agent/auth.json.";
@@ -583,10 +606,18 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       "Returns a synthesized natural-language answer with cited sources and the queries Claude " +
       "issued. Server-side max_uses defaults to 5; raise via max_searches up to 20. " +
       "For just-the-page-contents, use web_fetch instead. " +
-      `Auth: ${auth.source}.`,
+      `Auth: ${initialAuth.source}.`,
     parameters: SearchSchema,
     async execute(_toolCallId, params, signal) {
       const p = params as SearchParams;
+      const auth = resolveAuth();
+      if (!auth) {
+        return {
+          content: [{ type: "text" as const, text: "web_search failed: no auth source found." }],
+          isError: true,
+          details: { error: "no auth config" },
+        };
+      }
       try {
         const tool: Record<string, unknown> = {
           type: "web_search_20250305",
@@ -687,11 +718,19 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       "extracted page content. Use this when you have a specific URL (often from web_search) and " +
       "want to read the full page rather than a synthesized summary. Returns the page as markdown " +
       "with title and final-URL metadata. Truncates past max_bytes (default 200000). " +
-      `Auth: ${auth.source}.`,
+      `Auth: ${initialAuth.source}.`,
     parameters: FetchSchema,
     async execute(_toolCallId, params, signal) {
       const p = params as FetchParams;
       const maxBytes = p.max_bytes ?? 200_000;
+      const auth = resolveAuth();
+      if (!auth) {
+        return {
+          content: [{ type: "text" as const, text: "web_fetch failed: no auth source found." }],
+          isError: true,
+          details: { error: "no auth config", url: p.url },
+        };
+      }
       try {
         const tool = { type: "web_fetch_20250910", name: "web_fetch", max_uses: 1 };
         // System prompt constrains Claude to fetch-and-return rather than analyze.
