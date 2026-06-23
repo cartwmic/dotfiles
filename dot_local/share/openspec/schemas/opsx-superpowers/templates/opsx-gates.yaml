@@ -1,0 +1,23 @@
+# opsx-gates.yaml — project validation manifest (copy to openspec/opsx-gates.yaml).
+#
+# opsx-gate runs each command BY EXIT CODE, with cwd = the located implementation
+# worktree and these vars exported: OPSX_CHANGE, OPSX_CHANGE_DIR, OPSX_WORKTREE,
+# OPSX_DIFF_BASE, OPSX_HEAD.
+#
+#   required: true   -> non-zero exit FAILS the gate (GATE-FAIL)
+#   required: false  -> non-zero exit only WARNS    (GATE-WARN)
+#
+# At Scale >= M the gate requires at least one `required: true` command here (or a
+# non-empty OPSX_VALIDATE), unless review.md front-matter sets validation_source_mode: waived.
+#
+# Parsed with `yq`; if yq is unavailable, supply commands via OPSX_VALIDATE instead.
+gates:
+  - id: lint
+    run: mise run lint
+    required: true
+  - id: test
+    run: mise run test
+    required: true
+  - id: build
+    run: mise run build
+    required: false

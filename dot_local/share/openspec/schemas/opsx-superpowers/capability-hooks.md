@@ -41,6 +41,9 @@ For each capability hook in an artifact's instruction:
 | `systematic-debugging` | apply (when Debug Mode = systematic-debugging) | 1. `systematic-debugging` (this repo) | Execute the 4-phase root-cause investigation inline per the skill's own SKILL.md reference. |
 | `finish-development-branch` | apply (final step, optional) | 1. `finishing-a-development-branch` (Superpowers, if installed) | Manual merge/PR procedure documented per-project. |
 | `memory-promotion` | archive (when retrospective.md present) | 1. `mcp_memory_store_memory` MCP tool | If MCP tool not available, write the candidates to a `retrospective-promote-pending.md` file in the change dir for later ingestion. |
+| `adversarial-review-postimpl` | code-review (post-apply, when Code Review Mode != none) | 1. `adversarial-review-cycle` (this repo) over the diff `Diff Base SHA..HEAD` | Single-model self-review of the diff; mark `review_mode: degraded-single-model` in code-review.md. Degraded does NOT satisfy gating-required or Constitution IX. |
+| `subagent-dispatch` | apply (Delegation Mode subagent-*) + every review/validation-judgment step | 1. `pi-subagents` (pi adapter) 2. host-native subagent (Claude Task, etc.) | Run inline; the verdict is `degraded-single-model` (gate-failing for gating-required). The schema names NO specific harness — pi-subagents is just the pi adapter. |
+| `loop-continuation` | the opsx drive loop | 1. `goal` extension command-judge (`PI_GOAL_JUDGE_CMD=opsx-gate <change>`) 2. `opsx-loop` bash driver (`AGENT_CMD`-parameterized) | The bash `opsx-loop` driver always works; deleting the extension loses only convenience. |
 
 ## Notes on each capability
 
