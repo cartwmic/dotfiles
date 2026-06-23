@@ -42,16 +42,16 @@
 
 ## 3. Schema edits
 
-- [ ] 3.1 `templates/review.md`: YAML front-matter block, `Code Review Mode`, `Loop Max Iterations`, worktree-required default
+- [x] 3.1 `templates/review.md`: YAML front-matter block, `Code Review Mode`, `Loop Max Iterations`, worktree-required default
   - intent: feature
   - files_allowed:
       - dot_local/share/openspec/schemas/opsx-superpowers/templates/review.md
-- [ ] 3.2 New `templates/code-review.md` (diff scope, base SHA, round tracker, applied-fixes, Verdict) + `templates/opsx-gates.yaml` example
+- [x] 3.2 New `templates/code-review.md` (diff scope, base SHA, round tracker, applied-fixes, Verdict) + `templates/opsx-gates.yaml` example
   - intent: feature
   - files_allowed:
       - dot_local/share/openspec/schemas/opsx-superpowers/templates/code-review.md
       - dot_local/share/openspec/schemas/opsx-superpowers/templates/opsx-gates.yaml
-- [ ] 3.3 `schema.yaml`: document worktree-required default + lifecycle, Code Review Mode, Loop Max Iterations, opsx-gates.yaml manifest, front-matter; `capability-hooks.md`: post-impl adversarial-review hook + subagent-dispatch as a port; `README.md`: artifact/Scale tables
+- [x] 3.3 `schema.yaml`: document worktree-required default + lifecycle, Code Review Mode, Loop Max Iterations, opsx-gates.yaml manifest, front-matter; `capability-hooks.md`: post-impl adversarial-review hook + subagent-dispatch as a port; `README.md`: artifact/Scale tables
   - intent: feature
   - files_allowed:
       - dot_local/share/openspec/schemas/opsx-superpowers/schema.yaml

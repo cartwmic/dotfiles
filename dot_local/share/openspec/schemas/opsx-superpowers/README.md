@@ -57,7 +57,10 @@ Each mode has a controlled vocabulary. Default values shown in **bold**.
 | `Debug Mode` | **standard** / systematic-debugging | systematic-debugging: `plan.md` MUST contain `Observed Failure` and `Debugging Trail` before code changes |
 | `Review Status` | **not-requested** / requested / findings-received / resolved | State machine for `adversarial-review-cycle` invocation |
 | `Delegation Mode` | **single-agent** / subagent-eligible / subagent-required | subagent-*: `openspec-apply-change` dispatches tasks via `pi-subagents` |
-| `Worktree Mode` | **same-tree** / worktree-eligible / worktree-required | worktree-required: every task runs in `git worktree`, main agent owns writeback |
+| `Worktree Mode` | **worktree-required** / worktree-eligible / same-tree | Default for ALL Scales; every task runs in a `git worktree` (the loop's blast-radius sandbox), main agent owns writeback; same-tree is an explicit override |
+| `Code Review Mode` | none / advisory / **gating-required (M+)** | gating-required: `code-review.md` adversarial diff review must pass before archive |
+| `Loop Max Iterations` | integer (**S~20 / M~40 / L~80**) | drive-loop budget; mapped onto the loop runtime turn budget |
+| `Validation Source Mode` | **required** / waived | required: Scale ≥ M must declare an agent-independent validation source |
 | `Spec Level` | **spec-anchored** / spec-first / spec-as-source | spec-anchored = OpenSpec's natural mode; spec-as-source warns about MDD-era trade-offs |
 
 ## Schema-managed vs skill-managed artifacts
@@ -77,6 +80,28 @@ The templates are still available at `~/.local/share/openspec/schemas/opsx-super
 When an artifact's instruction prefers a Superpowers-style capability (e.g., `verification-before-completion`), the schema invokes the locally-registered skill via the capability-hook lookup in `capability-hooks.md`. If no local skill matches, the artifact instruction's manual fallback executes. The schema **always works** without any Superpowers-style skills installed.
 
 See `capability-hooks.md` for the current capability → skill mapping.
+
+## Driving a change (the loop)
+
+After `openspec-explore` freezes `intent.md`, drive the change to completion behind
+the deterministic gate:
+
+- **`opsx-gate <change>`** — the single (primary) source of enforcement truth. Reads
+  modes from `review.md` front-matter, runs required-artifacts-by-Scale, the
+  `openspec/opsx-gates.yaml` validation manifest (+ `OPSX_VALIDATE`), and mode-aware
+  verify/code-review verdicts (freshness-bound to an immutable `Diff Base SHA`). Exits
+  0 when ready to archive; else prints `GATE-FAIL <check_id> <blocking> <message>`.
+- **`openspec-loop` skill** — single orchestrator agent: each turn runs `opsx-gate`,
+  fixes the earliest blocking failure, delegates every review verdict to a blind
+  subagent judged against the frozen baseline. Stops when the gate is green.
+- **Loop runtime** — the pi `goal` extension with a command-judge
+  (`PI_GOAL_JUDGE_CMD='opsx-gate <change>'`) continues turns until the gate passes.
+  Harness-agnostic fallback: the **`opsx-loop`** bash driver (`AGENT_CMD`-parameterized).
+
+Enforcement lives below the harness (exit codes), so the same workflow runs on pi
+today or another harness tomorrow by swapping one adapter. The `opsx-gates.yaml`
+manifest + git/CI are where deterministic teeth live; the skills are prose the gate
+backs up.
 
 ## Files in this schema
 
