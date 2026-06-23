@@ -32,8 +32,8 @@ spec_level: spec-anchored
 
 ## Diff Base + Worktree locator
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
+**Diff Base SHA:** e637ef5c0b30509ca9fcba61317f6f3e26ef859e
+**Worktree Path:** /Users/cartwmic/.local/share/.opsx-worktrees/add-opsx-loop-kickoff
 **Integration Branch:** main
 
 ## Manual Adjustments
