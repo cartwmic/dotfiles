@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# opsx-loop <change> [--worktree <path>]
+#
+# Harness-agnostic Ralph-style fallback driver for the opsx drive-to-completion
+# loop. Repeatedly invokes a headless agent until `opsx-gate <change>` exits 0.
+# This is the PORTABILITY fallback: the primary path is the in-harness
+# orchestrator (openspec-loop skill driven by the goal extension's command-judge).
+# Swap harness by changing AGENT_CMD only.
+#
+#   AGENT_CMD   headless agent invocation (default: 'pi -p')
+#               e.g. 'claude -p --dangerously-skip-permissions' | 'codex exec'
+#   MAX_ITERS   iteration budget (default: review.md loop_max_iterations or 40)
+#
+# Capability: opsx-loop-orchestration (fallback continuation).
+set -uo pipefail
+
+CHANGE="${1:?usage: opsx-loop <change> [--worktree <path>]}"; shift || true
+WT_PATH=""
+[ "${1:-}" = "--worktree" ] && { WT_PATH="${2:?}"; shift 2; }
+
+: "${AGENT_CMD:=pi -p}"
+ROOT="$(git rev-parse --show-toplevel)"
+CDIR="$ROOT/openspec/changes/$CHANGE"
+PROMPT="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../share/openspec/schemas/opsx-superpowers/opsx-PROMPT.md"
+[ -f "$PROMPT" ] || PROMPT="$HOME/.local/share/openspec/schemas/opsx-superpowers/opsx-PROMPT.md"
+
+# Budget: explicit MAX_ITERS, else review.md front-matter loop_max_iterations, else 40.
+if [ -z "${MAX_ITERS:-}" ]; then
+  MAX_ITERS="$(awk '
+    NR==1{ if($0!="---") exit; next } $0=="---"{exit}
+    /^loop_max_iterations:/{ v=$2; gsub(/[^0-9]/,"",v); print v; exit }' \
+    "$CDIR/review.md" 2>/dev/null)"
+  : "${MAX_ITERS:=40}"
+fi
+
+gate() {
+  if [ -n "$WT_PATH" ]; then opsx-gate "$CHANGE" --worktree "$WT_PATH"
+  else opsx-gate "$CHANGE"; fi
+}
+
+i=0
+while ! report="$(gate 2>&1)"; do
+  i=$((i+1))
+  if [ "$i" -gt "$MAX_ITERS" ]; then
+    echo "opsx-loop: budget exhausted ($MAX_ITERS); worktree preserved for inspection" >&2
+    echo "$report" >&2
+    exit 2
+  fi
+  echo "── opsx-loop iter $i/$MAX_ITERS: gate red ──" >&2
+  {
+    [ -f "$PROMPT" ] && cat "$PROMPT"
+    printf '\n\nCHANGE=%s\nopsx-gate reports (fix the earliest blocking line first):\n%s\n' \
+      "$CHANGE" "$report"
+  } | $AGENT_CMD
+done
+echo "✅ opsx-loop: $CHANGE — gate green. Ready to archive."

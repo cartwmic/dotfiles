@@ -4,8 +4,10 @@
 //   goal-loop.clear-a-goal
 //   goal-loop.bound-the-loop-with-a-turn-budget
 //   goal-loop.evaluate-each-turn-once
+//   goal-loop.pluggable-command-judge
 import { describe, expect, test } from "bun:test";
 import {
+	commandVerdict,
 	decideAfterEvaluation,
 	isInterruptedStop,
 	lastAssistantInfo,
@@ -101,6 +103,38 @@ describe("shouldStopForBudget — goal-loop.bound-the-loop-with-a-turn-budget / 
 	test("continues while under budget", () => {
 		expect(shouldStopForBudget(1, 25)).toBe(false);
 		expect(shouldStopForBudget(24, 25)).toBe(false);
+	});
+});
+
+describe("commandVerdict — goal-loop.pluggable-command-judge", () => {
+	test("exit 0 is met", () => {
+		expect(commandVerdict(0, "GATE-PASS: x")).toEqual({ met: true, reason: "GATE-PASS: x" });
+	});
+	test("exit 0 with empty output still met", () => {
+		expect(commandVerdict(0, "   ")).toEqual({ met: true, reason: "judge command exited 0" });
+	});
+	test("non-zero is not met, output surfaced as reason", () => {
+		expect(commandVerdict(1, "GATE-FAIL tasks 1 3 unchecked")).toEqual({
+			met: false,
+			reason: "GATE-FAIL tasks 1 3 unchecked",
+		});
+	});
+	test("non-zero with empty output reports the code", () => {
+		expect(commandVerdict(7, "")).toEqual({ met: false, reason: "judge command exited 7" });
+	});
+	test("null code (spawn-level) is not met", () => {
+		expect(commandVerdict(null, "").met).toBe(false);
+	});
+});
+
+describe("normalizeGoalConfig — goal-loop.pluggable-command-judge", () => {
+	test("accepts a judgeCommand string", () => {
+		expect(normalizeGoalConfig({ judgeCommand: "opsx-gate my-change" })).toEqual({
+			judgeCommand: "opsx-gate my-change",
+		});
+	});
+	test("drops blank judgeCommand", () => {
+		expect(normalizeGoalConfig({ judgeCommand: "   " })).toEqual({});
 	});
 });
 
