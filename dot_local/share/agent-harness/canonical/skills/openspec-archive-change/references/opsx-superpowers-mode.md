@@ -1,6 +1,10 @@
 # openspec-archive-change under schema: opsx-superpowers
 
-Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds verify HARD-GATE, AC↔test mapping check, ADR promotion, retrospective-driven mcp-memory ingestion.
+Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds verify HARD-GATE, code-review HARD-GATE, opsx-gate confirmation, worktree merge/cleanup, AC↔test mapping check, ADR promotion, retrospective-driven mcp-memory ingestion.
+
+## HARD-GATE 0: opsx-gate green (primary)
+
+Run `opsx-gate <name> --worktree <Worktree Path>` (read Worktree Path from review.md). If it exits non-zero, REFUSE archive and print the `GATE-FAIL` lines — this is the primary, deterministic check. The HARD-GATEs below re-assert specific fields as defense-in-depth (a human may archive without the gate).
 
 ## HARD-GATE 1: verify.md green
 
@@ -130,9 +134,25 @@ If `retrospective.md` is missing:
   ```
 - Scale = M / S / XS → silent skip.
 
+## HARD-GATE 2: code-review.md pass (Code Review Mode = gating-required)
+
+Read `Code Review Mode` from review.md front-matter. If `gating-required`:
+1. `code-review.md` must exist with `Verdict: pass`. If absent or not pass, REFUSE archive.
+2. If `review_mode: degraded-single-model` AND the change edits an existing skill (Constitution IX), REFUSE archive — a degraded review does not satisfy the multi-model adversarial requirement.
+
+## Worktree merge + cleanup (Worktree Mode != same-tree)
+
+After all HARD-GATEs pass and ONLY then:
+1. Land `opsx/<name>` onto the Integration Branch (read from review.md) using the configured strategy.
+2. **If the merge conflicts** (integration branch advanced): ABORT archive with an actionable error; PRESERVE the worktree + `opsx/<name>` branch; do NOT move the change to archive.
+3. On clean merge: `git worktree remove <Worktree Path>` and delete the branch.
+4. Same-tree override: skip merge/remove.
+
+**chezmoi guard:** never run `chezmoi apply` against real `$HOME` from the loop worktree; deploy-affecting verification runs post-merge or with `CHEZMOI_SOURCE_DIR`/`--source`.
+
 ## Then: proceed with existing archive steps
 
-After all HARD-GATEs pass (or are overridden), continue with the existing skill's steps 3-6:
+After all HARD-GATEs pass (or are overridden) and the worktree is merged+removed, continue with the existing skill's steps 3-6:
 - Check task completion
 - Assess delta spec sync
 - Perform the archive (`mv openspec/changes/<name> openspec/changes/archive/YYYY-MM-DD-<name>`)
