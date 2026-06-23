@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+# opsx-gate <change> [--worktree <path>]
+#
+# Single (primary) source of enforcement truth for opsx-superpowers changes.
+# Exit 0 = all required checks pass; the change is ready to archive.
+# Exit non-zero = not ready; one stable line per failed check is printed to stderr:
+#
+#     GATE-FAIL <check_id> <blocking> <message>
+#     GATE-WARN <check_id> 0 <message>
+#
+# Machine consumers rely on <check_id>, the <blocking> flag (1/0), and line order.
+# Mode values are sourced ONLY from review.md YAML front-matter (never the prose
+# table). Deterministic: no language-model judgment.
+#
+# Capability: opsx-gate-enforcement.
+set -uo pipefail
+
+PROG=opsx-gate
+CHANGE=""
+WORKTREE_ARG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --worktree) WORKTREE_ARG="${2:-}"; shift 2 ;;
+    -h|--help) echo "usage: $PROG <change> [--worktree <path>]"; exit 0 ;;
+    -*) echo "$PROG: unknown option $1" >&2; exit 2 ;;
+    *) CHANGE="$1"; shift ;;
+  esac
+done
+[ -n "$CHANGE" ] || { echo "usage: $PROG <change> [--worktree <path>]" >&2; exit 2; }
+
+ROOT="$(git -C "${OPSX_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" \
+  || { echo "GATE-FAIL repo 1 not inside a git repository" >&2; exit 1; }
+CDIR="$ROOT/openspec/changes/$CHANGE"
+REVIEW="$CDIR/review.md"
+
+rc=0
+fail() { echo "GATE-FAIL $1 1 $2" >&2; rc=1; }
+warn() { echo "GATE-WARN $1 0 $2" >&2; }
+
+[ -d "$CDIR" ] || { fail change "change not found: $CHANGE"; exit 1; }
+
+# --- front-matter reader: sole machine source, dependency-free (awk) ----------
+fm() {
+  # $1 = key. Prints the value from the YAML front-matter (between the first two
+  # '---' fences). Empty if absent or if the file has no front-matter.
+  [ -f "$REVIEW" ] || return 0
+  awk -v key="$1" '
+    NR==1 { if ($0 != "---") exit; infm=1; next }
+    infm && $0=="---" { exit }
+    infm {
+      line=$0; sub(/^[ \t]+/,"",line)
+      p=index(line,":"); if (p==0) next
+      k=substr(line,1,p-1); v=substr(line,p+1)
+      gsub(/^[ \t]+|[ \t]+$/,"",k); gsub(/^[ \t]+|[ \t]+$/,"",v)
+      gsub(/^["'\'']|["'\'']$/,"",v)
+      if (k==key) { print v; exit }
+    }' "$REVIEW"
+}
+
+# --- body field reader (e.g. "**Diff Base SHA:** abc123") ---------------------
+bodyfield() {
+  [ -f "$REVIEW" ] || return 0
+  grep -E "^\*\*$1:\*\*" "$REVIEW" 2>/dev/null \
+    | head -1 | sed -E "s/^\*\*$1:\*\*[[:space:]]*//; s/[[:space:]]+$//"
+}
+
+SCALE="$(fm scale)"
+WORKTREE_MODE="$(fm worktree_mode)"
+VERIFY_MODE="$(fm verification_mode)"
+CR_MODE="$(fm code_review_mode)"
+VSRC_MODE="$(fm validation_source_mode)"
+
+# ============================================================================
+# CHEAP CHECKS (structure / artifacts / tasks) — short-circuit before expensive
+# ============================================================================
+
+# review.md present + Scale parseable (Scale is read first; review ordered first)
+if [ ! -f "$REVIEW" ]; then
+  fail review "review.md absent (required to read Scale)"
+fi
+case "$SCALE" in
+  XS|S|M|L|XL) ;;
+  *) fail scale "Scale absent or unparseable in review.md front-matter" ; SCALE="" ;;
+esac
+
+# Required artifacts by Scale, emitted in lifecycle dependency order.
+case "$SCALE" in
+  XS)      req="proposal tasks" ;;
+  S)       req="proposal specs tasks plan" ;;
+  M|L|XL)  req="review intent proposal specs clarify design analyze tasks plan" ;;
+  *)       req="" ;;
+esac
+ORDER="review intent proposal specs clarify design analyze tasks plan"
+for a in $ORDER; do
+  case " $req " in *" $a "*) ;; *) continue ;; esac
+  if [ "$a" = "specs" ]; then
+    [ -d "$CDIR/specs" ] || fail "artifact-specs" "required artifact missing: specs/ ($SCALE)"
+  else
+    [ -f "$CDIR/$a.md" ] || fail "artifact-$a" "required artifact missing: $a.md ($SCALE)"
+  fi
+done
+
+# Structural validation (OpenSpec-tracked artifacts only)
+if command -v openspec >/dev/null 2>&1; then
+  openspec validate "$CHANGE" --strict --no-interactive >/dev/null 2>&1 \
+    || fail structure "openspec validate --strict failed"
+fi
+
+# Tasks complete
+if [ -f "$CDIR/tasks.md" ]; then
+  unchecked="$(grep -cE '^[[:space:]]*- \[ \]' "$CDIR/tasks.md" 2>/dev/null || true)"
+  [ "${unchecked:-0}" -eq 0 ] || fail tasks "$unchecked unchecked task(s) in tasks.md"
+fi
+
+# Short-circuit: do not run expensive validations while cheap checks are red.
+if [ "$rc" -ne 0 ]; then
+  echo "$PROG: cheap checks failed (change=$CHANGE scale=${SCALE:-?}); validations skipped" >&2
+  exit 1
+fi
+
+# ============================================================================
+# WORKTREE LOCATOR (for validations + verdict freshness)
+# ============================================================================
+DIFF_BASE="$(bodyfield 'Diff Base SHA')"
+WT_PATH="$WORKTREE_ARG"
+[ -n "$WT_PATH" ] || WT_PATH="$(bodyfield 'Worktree Path')"
+case "$WT_PATH" in *"<empty"*|"<"*) WT_PATH="" ;; esac
+
+impl_head() {
+  if [ -n "$WT_PATH" ] && [ -d "$WT_PATH" ]; then
+    git -C "$WT_PATH" rev-parse HEAD 2>/dev/null
+  else
+    git -C "$ROOT" rev-parse HEAD 2>/dev/null
+  fi
+}
+IMPL_HEAD="$(impl_head)"
+
+if [ "$WORKTREE_MODE" = "worktree-required" ] && [ -n "$WT_PATH" ]; then
+  if ! git -C "$WT_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    fail worktree "Worktree Path is not a git worktree: $WT_PATH"
+    exit 1
+  fi
+fi
+
+# ============================================================================
+# EXPENSIVE: agent-independent validation source + manifest/OPSX_VALIDATE
+# ============================================================================
+MANIFEST="$ROOT/openspec/opsx-gates.yaml"
+have_required_source=0
+
+run_in_impl() {
+  # Run a command with cwd = implementation worktree (or ROOT) + OPSX_* env.
+  local cwd="$ROOT"
+  [ -n "$WT_PATH" ] && [ -d "$WT_PATH" ] && cwd="$WT_PATH"
+  ( cd "$cwd" \
+    && OPSX_CHANGE="$CHANGE" OPSX_CHANGE_DIR="$CDIR" OPSX_WORKTREE="$cwd" \
+       OPSX_DIFF_BASE="$DIFF_BASE" OPSX_HEAD="$IMPL_HEAD" \
+       bash -c "$1" ) >/dev/null 2>&1
+}
+
+if [ -f "$MANIFEST" ] && command -v yq >/dev/null 2>&1; then
+  gates_n="$(yq '.gates | length' "$MANIFEST" 2>/dev/null || echo 0)"
+  i=0
+  while [ "$i" -lt "${gates_n:-0}" ]; do
+    gid="$(yq -r ".gates[$i].id" "$MANIFEST" 2>/dev/null)"
+    grun="$(yq -r ".gates[$i].run" "$MANIFEST" 2>/dev/null)"
+    # NOTE: avoid yq/jq `// true` here — jq treats boolean false as "empty",
+    # so `.required // true` wrongly yields true for `required: false`.
+    greq="$(yq -r ".gates[$i].required" "$MANIFEST" 2>/dev/null)"
+    [ "$greq" = "null" ] || [ -z "$greq" ] && greq=true
+    i=$((i+1))
+    [ -n "$grun" ] && [ "$grun" != "null" ] || continue
+    if [ "$greq" != "false" ]; then
+      have_required_source=1
+      run_in_impl "$grun" || fail "validation-$gid" "required gate failed: $grun"
+    else
+      run_in_impl "$grun" || warn "validation-$gid" "advisory gate failed: $grun"
+    fi
+  done
+fi
+
+# User-supplied gates (newline-separated)
+if [ -n "${OPSX_VALIDATE:-}" ]; then
+  have_required_source=1
+  while IFS= read -r ucmd; do
+    [ -n "$ucmd" ] || continue
+    run_in_impl "$ucmd" || fail "validation-user" "user gate failed: $ucmd"
+  done <<< "$OPSX_VALIDATE"
+fi
+
+# Scale >= M requires at least one agent-independent source unless waived.
+case "$SCALE" in
+  M|L|XL)
+    if [ "$have_required_source" -eq 0 ] && [ "$VSRC_MODE" != "waived" ]; then
+      fail validation-source "Scale $SCALE requires an agent-independent validation source (manifest required:true or OPSX_VALIDATE); none found and validation_source_mode != waived"
+    fi
+    ;;
+esac
+
+# ============================================================================
+# MODE-AWARE VERDICTS + FRESHNESS/PROVENANCE
+# ============================================================================
+verdict_field() { grep -iE "^[*_ ]*$2" "$1" 2>/dev/null | head -1; }
+
+# verify.md — enforced only when retained-required
+VERIFY="$CDIR/verify.md"
+if [ "$VERIFY_MODE" = "retained-required" ]; then
+  if [ ! -f "$VERIFY" ]; then
+    fail verify "verify.md absent (Verification Mode retained-required)"
+  elif ! grep -iqE '^\*\*Status:\*\*[[:space:]]*green' "$VERIFY"; then
+    fail verify "verify.md Completion Decision is not green"
+  fi
+fi
+
+# code-review.md — enforced only when gating-required
+CR="$CDIR/code-review.md"
+if [ "$CR_MODE" = "gating-required" ]; then
+  if [ ! -f "$CR" ]; then
+    fail code-review "code-review.md absent (Code Review Mode gating-required)"
+  else
+    grep -iqE 'Verdict[*_: ]+pass' "$CR" || fail code-review "code-review.md Verdict is not pass"
+    grep -iqE 'review_mode[*_: ]+degraded-single-model' "$CR" \
+      && fail code-review "code-review.md is degraded-single-model (does not satisfy gating/Constitution IX)"
+    grep -iqE '(provenance|reviewer)[*_: ]+' "$CR" \
+      || fail code-review "code-review.md lacks an adapter-stamped provenance field"
+  fi
+fi
+
+# Verdict freshness: recorded reviewed range must equal current Diff Base..HEAD
+freshness_check() {
+  local f="$1" cid="$2"
+  [ -f "$f" ] || return 0
+  local recorded
+  recorded="$(grep -iE 'Reviewed Range|Reviewed-Range' "$f" 2>/dev/null | head -1 | sed -E 's/.*: *//; s/ *$//')"
+  [ -n "$recorded" ] || return 0
+  local current="${DIFF_BASE}..${IMPL_HEAD}"
+  [ "$recorded" = "$current" ] || fail "$cid" "stale verdict: reviewed $recorded != current $current"
+}
+[ "$CR_MODE" = "gating-required" ] && freshness_check "$CR" code-review-stale
+[ "$VERIFY_MODE" = "retained-required" ] && freshness_check "$VERIFY" verify-stale
+
+# ============================================================================
+if [ "$rc" -eq 0 ]; then
+  echo "GATE-PASS: $CHANGE (${SCALE:-?})"
+  exit 0
+fi
+exit 1

@@ -41,8 +41,8 @@ the table below is the human-facing mirror.
 merge-base, immutable for the life of the branch. opsx-gate reads these to locate
 the worktree and recompute the verdict-freshness range. -->
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
+**Diff Base SHA:** a02d70c46f4d177a12c9a5a1ddbb6ae6ae3b0593
+**Worktree Path:** /Users/cartwmic/.local/share/.opsx-worktrees/add-opsx-loop-harness
 **Integration Branch:** main
 
 ## Manual Adjustments

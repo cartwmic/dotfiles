@@ -2,20 +2,20 @@
 
 ## 1. Harness-neutral core
 
-- [ ] 1.0 Install `yq` as a mise task (Constitution V) so opsx-gate can parse opsx-gates.yaml on its first self-run; document jq+JSON manifest fallback (review.md front-matter is sed/awk-parsed, no yq)
+- [x] 1.0 Install `yq` as a mise task (Constitution V) so opsx-gate can parse opsx-gates.yaml on its first self-run; document jq+JSON manifest fallback (review.md front-matter is sed/awk-parsed, no yq)
   - intent: infra
   - files_allowed:
       - dot_config/mise/config.toml
-- [ ] 1.1 Add `dot_local/bin/` gitignore allowlist so `executable_*` deploy (domain invariant 8)
+- [x] 1.1 Add `dot_local/bin/` gitignore allowlist so `executable_*` deploy (domain invariant 8)
   - intent: infra
   - files_allowed:
       - .gitignore
-- [ ] 1.2 Implement `opsx-gate` CLI: dependency-free sed/awk front-matter reader as the SOLE mode source (never parse the prose table), cheap→expensive short-circuit, required-artifact-by-Scale (incl. intent.md at M+) emitted in lifecycle dependency order, manifest(yq) execution with required:true=fail / required:false=warn + OPSX_VALIDATE, Scale≥M agent-independent-source = FAIL unless validation_source_mode:waived, mode-aware verify/code-review verdicts, verdict-freshness against immutable Diff Base SHA with deterministic worktree locator (Worktree Path / --worktree), adapter-stamped provenance + degraded-review-fails-IX, stable `GATE-FAIL <check_id> <blocking> <message>` report contract
+- [x] 1.2 Implement `opsx-gate` CLI: dependency-free sed/awk front-matter reader as the SOLE mode source (never parse the prose table), cheap→expensive short-circuit, required-artifact-by-Scale (incl. intent.md at M+) emitted in lifecycle dependency order, manifest(yq) execution with required:true=fail / required:false=warn + OPSX_VALIDATE, Scale≥M agent-independent-source = FAIL unless validation_source_mode:waived, mode-aware verify/code-review verdicts, verdict-freshness against immutable Diff Base SHA with deterministic worktree locator (Worktree Path / --worktree), adapter-stamped provenance + degraded-review-fails-IX, stable `GATE-FAIL <check_id> <blocking> <message>` report contract
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx-gate
       - "tests/opsx-gate/**"
-- [ ] 1.5 Author a live `openspec/opsx-gates.yaml` for this repo so the E2E dry-run exercises a real agent-independent gate (not just the template)
+- [x] 1.5 Author a live `openspec/opsx-gates.yaml` for this repo so the E2E dry-run exercises a real agent-independent gate (not just the template)
   - intent: infra
   - files_allowed:
       - openspec/opsx-gates.yaml
