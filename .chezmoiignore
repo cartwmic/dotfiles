@@ -12,4 +12,5 @@ docs/
 !.codex/AGENTS.md
 !.codex/config.toml
 openspec/
+tests/
 adr/
