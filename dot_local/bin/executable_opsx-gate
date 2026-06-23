@@ -261,8 +261,23 @@ freshness_check() {
   n_rhead="$(git -C "$GW" rev-parse "$r_head" 2>/dev/null)"
   n_base="$(git -C "$GW" rev-parse "$DIFF_BASE" 2>/dev/null)"
   n_head="$(git -C "$GW" rev-parse "$IMPL_HEAD" 2>/dev/null)"
-  if [ -z "$n_rbase" ] || [ -z "$n_rhead" ] || [ "$n_rbase" != "$n_base" ] || [ "$n_rhead" != "$n_head" ]; then
-    fail "$cid" "stale verdict: reviewed ${r_base}..${r_head} != current ${DIFF_BASE}..${IMPL_HEAD}"
+  if [ -z "$n_rbase" ] || [ -z "$n_rhead" ] || [ "$n_rbase" != "$n_base" ]; then
+    fail "$cid" "stale verdict: reviewed base ${r_base} != current ${DIFF_BASE}"; return
+  fi
+  if [ "$n_rhead" = "$n_head" ]; then return; fi
+  # The recorded head may TRAIL current HEAD only by verdict-sealing commits
+  # (committing verify.md/code-review.md must not self-stale the range). Accept
+  # iff recorded head is an ancestor of HEAD and the only files changed since are
+  # this change's verify.md / code-review.md.
+  if git -C "$GW" merge-base --is-ancestor "$n_rhead" "$n_head" 2>/dev/null; then
+    local changed nonverdict
+    changed="$(git -C "$GW" diff --name-only "$n_rhead" "$n_head" 2>/dev/null)"
+    nonverdict="$(printf '%s\n' "$changed" | grep -vE "openspec/changes/$CHANGE/(verify|code-review)\.md$" | grep -v '^$' || true)"
+    if [ -n "$nonverdict" ]; then
+      fail "$cid" "stale verdict: code changed since review (${r_head}..HEAD touches non-verdict files)"
+    fi
+  else
+    fail "$cid" "stale verdict: reviewed head ${r_head} is not an ancestor of current HEAD"
   fi
 }
 [ "$CR_MODE" = "gating-required" ] && freshness_check "$CR" code-review-stale

@@ -193,6 +193,27 @@ sed -i.bak 's/^worktree_mode: same-tree/worktree_mode: worktree-required/' \
 run wt-required; check "worktree-required + empty Worktree Path fails (required-artifact-by-scale)" 1 $?
 grep -q 'GATE-FAIL worktree' "$TMP/err" && ok "locate-failure is a hard fail" || nok "locate-failure is a hard fail"
 
+# --- freshness tolerates verdict-only sealing commits, rejects code drift ---
+mkchange cr-seal
+sed -i.bak 's/^code_review_mode: advisory/code_review_mode: gating-required/' \
+  "$TMP/openspec/changes/cr-seal/review.md"
+printf '\n**Diff Base SHA:** %s\n' "$HEAD_SHA" >>"$TMP/openspec/changes/cr-seal/review.md"
+git -C "$TMP" add -A; git -C "$TMP" commit -qm "cr-seal change"
+C1="$(git -C "$TMP" rev-parse HEAD)"
+cat >"$TMP/openspec/changes/cr-seal/code-review.md" <<EOF
+# Code Review
+**Verdict:** pass
+**review_mode:** adversarial-multimodel
+**reviewer-provenance:** subagent-x
+**Diff Base SHA:** $HEAD_SHA
+**Reviewed Range:** $HEAD_SHA..$C1
+EOF
+git -C "$TMP" add openspec/changes/cr-seal/code-review.md
+git -C "$TMP" commit -qm "seal verdict (verdict-only commit)"
+run cr-seal; check "freshness tolerates verdict-only sealing commit (verdict-freshness-and-provenance)" 0 $?
+printf x >"$TMP/codefile"; git -C "$TMP" add codefile; git -C "$TMP" commit -qm "code change after review"
+run cr-seal; check "freshness rejects non-verdict change after review (verdict-freshness-and-provenance)" 1 $?
+
 echo "----"
 echo "passed=$pass failed=$failc"
 [ "$failc" -eq 0 ]
