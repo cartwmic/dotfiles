@@ -5,7 +5,7 @@
 **review_mode:** adversarial-multimodel
 **reviewer-provenance:** subagent claude-bridge/claude-opus-4-8 + subagent openai-codex/gpt-5.5 (blind, dispatched via pi-subagents)
 **Diff Base SHA:** a02d70c46f4d177a12c9a5a1ddbb6ae6ae3b0593
-**Reviewed Range:** a02d70c46f4d177a12c9a5a1ddbb6ae6ae3b0593..78ac00e4507cbec3895a62664d92ffdc1b7d1e78
+**Reviewed Range:** a02d70c46f4d177a12c9a5a1ddbb6ae6ae3b0593..a52f4f3e5b13a2c5b19aad12509c8ce7df19a64f
 **Baseline:** intent.md + proposal + specs + design + plan + tasks status
 **Generated:** 2026-06-22
 
