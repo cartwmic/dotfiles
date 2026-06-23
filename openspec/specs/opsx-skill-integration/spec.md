@@ -3,7 +3,6 @@
 ## Purpose
 TBD - created by archiving change add-opsx-superpowers-schema. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: Schema-aware openspec-propose
 
 The `openspec-propose` skill at `dot_local/share/agent-harness/canonical/skills/openspec-propose/SKILL.md` SHALL detect when the active change uses `schema: opsx-superpowers` and SHALL adapt its workflow to drive the new artifact graph rather than the default `spec-driven` four-artifact sequence.
@@ -115,3 +114,34 @@ All four opsx-* skill edits SHALL preserve behavior for changes whose schema is 
 #### Scenario: Mid-change schema cannot be switched
 - **WHEN** a change is created under one schema and the user attempts to switch by editing `openspec/config.yaml` mid-change
 - **THEN** the skills SHALL detect the schema-name drift via `openspec status --change <name> --json` and SHALL refuse to proceed until the user either reverts the config or reissues the change under the new schema
+
+### Requirement: openspec-loop orchestrator skill exists
+
+A new skill SHALL be created at `dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md` implementing the single-orchestrator loop that advances an opsx-superpowers change until opsx-gate is green, delegating review steps to subagents per the opsx-loop-orchestration capability.
+
+#### Scenario: Skill metadata complete
+- **WHEN** the skill is loaded by a harness
+- **THEN** its frontmatter SHALL include `name: openspec-loop`, a one-line `description`, `license`, and `compatibility`, and the body SHALL describe the gate-driven cycle and the subagent-review-against-baseline rule
+
+#### Scenario: Skill deploys cross-harness
+- **WHEN** `chezmoi apply` runs followed by the harness-config apply step
+- **THEN** the skill SHALL be symlinked into every harness skills directory as `openspec-loop`, consistent with the canonical-skill deployment pattern
+
+#### Scenario: Kickoff adapter carries no workflow logic
+- **WHEN** a harness-specific kickoff (such as a pi extension command) invokes the loop
+- **THEN** that adapter SHALL only wire the worker to the openspec-loop skill and the judge to opsx-gate, and removing the adapter SHALL NOT remove any workflow logic
+
+### Requirement: openspec-explore freezes intent
+
+The `openspec-explore` skill SHALL, on conclusion of an explore session for an opsx-superpowers change, write the agreed intent, constraints, and invariants to `intent.md` in the change directory so the loop and review subagents can treat it as the baseline.
+
+#### Scenario: Intent written on explore conclusion
+- **WHEN** an explore session concludes with user-confirmed intent under schema opsx-superpowers
+- **THEN** `intent.md` SHALL be written to the change directory containing intent, constraints, and invariants
+
+#### Scenario: Spec-driven projects unaffected
+- **WHEN** explore concludes for a project whose schema is `spec-driven`
+- **THEN** no `intent.md` SHALL be required and the skill SHALL behave as before this change
+
+---
+
