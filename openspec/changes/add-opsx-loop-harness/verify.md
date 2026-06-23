@@ -3,7 +3,7 @@
 **Generated:** 2026-06-22 by openspec-apply-change (opsx-superpowers mode)
 **Change:** add-opsx-loop-harness
 **Diff Base SHA:** a02d70c46f4d177a12c9a5a1ddbb6ae6ae3b0593
-**Reviewed Range:** a02d70c46f4d177a12c9a5a1ddbb6ae6ae3b0593..78ac00e4507cbec3895a62664d92ffdc1b7d1e78
+**Reviewed Range:** a02d70c46f4d177a12c9a5a1ddbb6ae6ae3b0593..a52f4f3e5b13a2c5b19aad12509c8ce7df19a64f
 
 ## Completion Decision
 
