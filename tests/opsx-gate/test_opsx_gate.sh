@@ -29,7 +29,9 @@ export PATH="$FAKEBIN:$PATH"
 
 git -C "$TMP" init -q
 git -C "$TMP" config user.email t@t; git -C "$TMP" config user.name t
+printf seed > "$TMP/seed"; git -C "$TMP" add seed; git -C "$TMP" commit -qm seed
 export OPSX_ROOT="$TMP"
+HEAD_SHA="$(git -C "$TMP" rev-parse HEAD)"
 
 mkchange() { # mkchange <name> ; creates a complete Scale-S change by default
   local d="$TMP/openspec/changes/$1"; mkdir -p "$d/specs/cap"
@@ -139,6 +141,57 @@ Reviewed Range: base000..deadbeef
 EOF
 run fresh; check "stale reviewed range fails (verdict-freshness-and-provenance)" 1 $?
 grep -q 'GATE-FAIL code-review-stale' "$TMP/err" && ok "reports stale verdict" || nok "reports stale verdict"
+
+# --- P0-1: a template HTML comment must NOT satisfy verdict/provenance ---
+mkchange tmpl-comment
+sed -i.bak 's/^code_review_mode: advisory/code_review_mode: gating-required/' \
+  "$TMP/openspec/changes/tmpl-comment/review.md"
+cat >"$TMP/openspec/changes/tmpl-comment/code-review.md" <<'EOF'
+# Code Review
+<!--
+  - Verdict             pass | fail
+  - reviewer-provenance adapter-stamped reviewer identity
+-->
+**Verdict:** fail
+EOF
+run tmpl-comment; check "template comment does not satisfy verdict, fail review fails (mode-aware-verdict-reading)" 1 $?
+grep -q 'GATE-FAIL code-review' "$TMP/err" && ok "comment-only fail review is rejected" || nok "comment-only fail review is rejected"
+
+# --- verdict-freshness-and-provenance: correct bold-field review reaches PASS ---
+mkchange cr-pass
+sed -i.bak 's/^code_review_mode: advisory/code_review_mode: gating-required/' \
+  "$TMP/openspec/changes/cr-pass/review.md"
+printf '\n**Diff Base SHA:** %s\n**Worktree Path:**\n' "$HEAD_SHA" \
+  >>"$TMP/openspec/changes/cr-pass/review.md"
+cat >"$TMP/openspec/changes/cr-pass/code-review.md" <<EOF
+# Code Review
+**Verdict:** pass
+**review_mode:** adversarial-multimodel
+**reviewer-provenance:** subagent-x
+**Diff Base SHA:** $HEAD_SHA
+**Reviewed Range:** $HEAD_SHA..$HEAD_SHA
+EOF
+run cr-pass; check "correct bold-field passing review reaches GATE-PASS (verdict-freshness-and-provenance)" 0 $?
+
+# --- verdict-freshness-and-provenance: missing Reviewed Range is a failure, not a pass ---
+mkchange cr-norange
+sed -i.bak 's/^code_review_mode: advisory/code_review_mode: gating-required/' \
+  "$TMP/openspec/changes/cr-norange/review.md"
+printf '\n**Diff Base SHA:** %s\n' "$HEAD_SHA" >>"$TMP/openspec/changes/cr-norange/review.md"
+cat >"$TMP/openspec/changes/cr-norange/code-review.md" <<EOF
+# Code Review
+**Verdict:** pass
+**review_mode:** adversarial-multimodel
+**reviewer-provenance:** subagent-x
+EOF
+run cr-norange; check "missing Reviewed Range fails, not passes (verdict-freshness-and-provenance)" 1 $?
+
+# --- worktree-required with no Worktree Path must fail, not fall back to ROOT ---
+mkchange wt-required
+sed -i.bak 's/^worktree_mode: same-tree/worktree_mode: worktree-required/' \
+  "$TMP/openspec/changes/wt-required/review.md"
+run wt-required; check "worktree-required + empty Worktree Path fails (required-artifact-by-scale)" 1 $?
+grep -q 'GATE-FAIL worktree' "$TMP/err" && ok "locate-failure is a hard fail" || nok "locate-failure is a hard fail"
 
 echo "----"
 echo "passed=$pass failed=$failc"
