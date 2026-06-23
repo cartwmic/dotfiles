@@ -60,27 +60,27 @@
 
 ## 4. Skill edits (Constitution IX: covered by this change's adversarial review)
 
-- [ ] 4.1 openspec-apply-change opsx-mode: worktree create/reuse/abort lifecycle, base-SHA capture, produce code-review.md after verify green (mode-gated), run opsx-gate
+- [x] 4.1 openspec-apply-change opsx-mode: worktree create/reuse/abort lifecycle, base-SHA capture, produce code-review.md after verify green (mode-gated), run opsx-gate
   - intent: feature
   - files_allowed:
       - "dot_local/share/agent-harness/canonical/skills/openspec-apply-change/**"
-- [ ] 4.2 openspec-archive-change opsx-mode: hard-gate on code-review Verdict when gating-required, worktree merge + cleanup only after gate green, preserve on non-green
+- [x] 4.2 openspec-archive-change opsx-mode: hard-gate on code-review Verdict when gating-required, worktree merge + cleanup only after gate green, preserve on non-green
   - intent: feature
   - files_allowed:
       - "dot_local/share/agent-harness/canonical/skills/openspec-archive-change/**"
-- [ ] 4.3 openspec-explore: freeze `intent.md` (intent + constraints + invariants) on conclusion under opsx-superpowers; no-op for spec-driven
+- [x] 4.3 openspec-explore: freeze `intent.md` (intent + constraints + invariants) on conclusion under opsx-superpowers; no-op for spec-driven
   - intent: feature
   - files_allowed:
       - "dot_local/share/agent-harness/canonical/skills/openspec-explore/**"
 
 ## 5. Kickoff adapter + dependency
 
-- [ ] 5.1 Thin pi `/opsx-loop` kickoff (wires worker=openspec-loop, judge=opsx-gate, worktree); zero workflow logic (delete-the-extension litmus must still run via bash fallback)
+- [x] 5.1 Thin pi `/opsx-loop` kickoff (wires worker=openspec-loop, judge=opsx-gate, worktree); zero workflow logic (delete-the-extension litmus must still run via bash fallback)
   - intent: feature
   - files_allowed:
       - "dot_pi/agent/extensions/goal/**"
       - ".claude/commands/opsx/loop.md"
-- [ ] 5.2 (Adapter docs) document the `/opsx-loop` kickoff + AGENT_CMD bash fallback in README; yq install is handled at T1.0
+- [x] 5.2 (Adapter docs) document the `/opsx-loop` kickoff + AGENT_CMD bash fallback in README; yq install is handled at T1.0
   - intent: feature
   - files_allowed:
       - dot_local/share/openspec/schemas/opsx-superpowers/README.md

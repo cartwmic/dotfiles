@@ -291,6 +291,16 @@ But this summary is optional. Sometimes the thinking IS the value.
 
 ---
 
+## opsx-superpowers: freeze intent.md
+
+When the project's schema is `opsx-superpowers` and an explore session concludes with user-confirmed intent, write the agreed **intent, constraints, and invariants** to `openspec/changes/<change>/intent.md`. This is the FROZEN baseline:
+
+- The `openspec-loop` orchestrator and every review subagent treat `intent.md` as source-of-truth and judge work against it.
+- `opsx-gate` requires `intent.md` at Scale ≥ M; the loop and reviewers must NOT edit it without explicit human authorization.
+- Sections: Intent (1-2 paras), Constraints (bullets), Invariants honored (constitution/domain refs), Non-goals.
+
+Under the default `spec-driven` schema, no `intent.md` is required — behave as before.
+
 ## Guardrails
 
 - **Don't implement** - Never write code or implement features. Creating OpenSpec artifacts is fine, writing application code is not.

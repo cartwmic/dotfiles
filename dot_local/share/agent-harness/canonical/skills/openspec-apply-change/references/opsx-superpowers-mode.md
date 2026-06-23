@@ -33,23 +33,33 @@ git add openspec/changes/<name>/
 git commit -m "chore(opsx): pre-flight commit for apply of <name>"
 ```
 
-Then create the worktree per the pi-subagents convention.
+Then create the worktree on branch `opsx/<name>` per the pi-subagents convention.
 
-## Capture Worktree Base SHA
+## Worktree lifecycle + immutable Diff Base SHA
 
-Immediately after worktree creation:
+Worktree Mode defaults to `worktree-required` for ALL Scales (the loop's blast-radius sandbox); `same-tree` is an explicit override.
 
-```bash
-git -C <worktree-path> rev-parse HEAD
-```
-
-Write the SHA into `review.md`'s `Worktree Base SHA` field. ALL subsequent file-contract diffs use this SHA, NOT `HEAD`:
+**On first worktree creation** record the IMMUTABLE diff base = integration-branch merge-base (NOT apply-start HEAD), plus the locator fields, into `review.md`:
 
 ```bash
-git -C <worktree-path> diff --name-only <worktree-base-sha>..HEAD
+git worktree add -B opsx/<name> <worktree-path>            # create
+base=$(git merge-base <integration-branch> opsx/<name>)    # immutable base
+# write to review.md body:  **Diff Base SHA:** $base
+#                           **Worktree Path:** <worktree-path>
+#                           **Integration Branch:** <integration-branch>
 ```
 
-This stays stable across per-task commits.
+**On reuse** (branch `opsx/<name>` already exists from a prior aborted apply): PRESERVE the recorded `Diff Base SHA`. If it is absent or not an ancestor of `opsx/<name>`, HALT for human repair rather than re-recording a base that would exclude unverified commits.
+
+**On creation failure** (path conflict / detached HEAD / no space / permission): ABORT with an actionable error; do NOT proceed to any implementation task.
+
+**Same-tree override**: record `Diff Base SHA` = pre-apply HEAD before the first task; leave `Worktree Path` empty.
+
+ALL file-contract diffs use the immutable `Diff Base SHA`, NOT `HEAD`, so per-task commits stay in the diff:
+
+```bash
+git -C <worktree-path> diff --name-only <Diff Base SHA>..HEAD
+```
 
 ## Per-task workflow
 
@@ -166,6 +176,19 @@ Compute **Completion Decision**:
 - Any fail → `red`
 
 Write `verify.md`. If Completion Decision = red AND Verification Mode = retained-required, BLOCK archive (the archive skill will refuse to proceed).
+
+## Post-apply: produce code-review.md (Code Review Mode != none)
+
+WHEN the pre-review checks are green (tasks complete, structural checks pass, required validation commands pass, and any retained-required verify is green) — NOT keyed to verify specifically, so gating-required + advisory verify cannot deadlock — produce `code-review.md` from `templates/code-review.md`.
+
+- **Authored by a blind review SUBAGENT** (capability hook `subagent-dispatch` / `adversarial-review-postimpl`), NEVER self-authored by the orchestrator. The subagent reviews the diff `<Diff Base SHA>..<implementation HEAD>` against the baseline: `intent.md` + proposal + specs + design + plan + tasks status.
+- The subagent stamps: `Verdict` (pass|fail), `review_mode` (adversarial-multimodel | degraded-single-model), `reviewer-provenance`, `Diff Base SHA`, and `Reviewed Range`.
+- **Constitution IX**: when the change edits an existing skill, the review MUST be adversarial-multimodel; a `degraded-single-model` verdict does NOT satisfy the gate.
+- Code Review Mode `none` → skip production. `advisory` → produce, non-blocking. `gating-required` → archive blocks unless Verdict = pass.
+
+## Completion gate: opsx-gate
+
+The change is complete when `opsx-gate <name> --worktree <worktree-path>` exits 0. It is the single (primary) source of enforcement truth; archive re-checks the same fields as defense-in-depth. Leave `verify.md` / `code-review.md` UNCOMMITTED until the gate passes, then archive commits/merges (committing a verdict advances HEAD and would self-stale the recorded range).
 
 ## Schema-only fallback
 
