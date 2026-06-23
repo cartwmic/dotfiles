@@ -87,9 +87,9 @@
 
 ## 6. Verification + docs
 
-- [ ] 6.1 End-to-end dry-run: explore→loop on a throwaway change; confirm gate red→green progression and archive gate
+- [x] 6.1 End-to-end dry-run: explore→loop on a throwaway change; confirm gate red→green progression and archive gate
   - intent: feature
-- [ ] 6.2 Update the consolidated design doc reference + README "Driving a change" section
+- [x] 6.2 Update the consolidated design doc reference + README "Driving a change" section
   - intent: feature
   - files_allowed:
       - "docs/plans/**"

@@ -135,10 +135,17 @@ impl_head() {
 }
 IMPL_HEAD="$(impl_head)"
 
-if [ "$WORKTREE_MODE" = "worktree-required" ] && [ -n "$WT_PATH" ]; then
+if [ "$WORKTREE_MODE" = "worktree-required" ]; then
+  # Must locate a real worktree on branch opsx/<change>; never fall back to ROOT.
+  if [ -z "$WT_PATH" ]; then
+    fail worktree "worktree-required but no Worktree Path recorded and no --worktree given"; exit 1
+  fi
   if ! git -C "$WT_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    fail worktree "Worktree Path is not a git worktree: $WT_PATH"
-    exit 1
+    fail worktree "Worktree Path is not a git worktree: $WT_PATH"; exit 1
+  fi
+  WT_BRANCH="$(git -C "$WT_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  if [ "$WT_BRANCH" != "opsx/$CHANGE" ]; then
+    fail worktree "worktree not on branch opsx/$CHANGE (on ${WT_BRANCH:-?})"; exit 1
   fi
 fi
 
@@ -200,14 +207,23 @@ esac
 # ============================================================================
 # MODE-AWARE VERDICTS + FRESHNESS/PROVENANCE
 # ============================================================================
-verdict_field() { grep -iE "^[*_ ]*$2" "$1" 2>/dev/null | head -1; }
+# Read a markdown field value ("**Name:** value" or "Name: value"), with leading
+# HTML comments STRIPPED so a template's explanatory comment cannot satisfy a
+# check, anchored to the field-name at line start. Value only (markup trimmed).
+GW="$ROOT"; [ -n "$WT_PATH" ] && [ -d "$WT_PATH" ] && GW="$WT_PATH"
+cr_field() { # $1=file $2=field name
+  sed '/<!--/,/-->/d' "$1" 2>/dev/null \
+    | grep -iE "^[*_ ]*$2[*_ ]*:" | head -1 \
+    | sed -E "s/^[*_ ]*$2[*_ ]*:[*_ ]*//I; s/[*_[:space:]]+$//"
+}
+lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 # verify.md — enforced only when retained-required
 VERIFY="$CDIR/verify.md"
 if [ "$VERIFY_MODE" = "retained-required" ]; then
   if [ ! -f "$VERIFY" ]; then
     fail verify "verify.md absent (Verification Mode retained-required)"
-  elif ! grep -iqE '^\*\*Status:\*\*[[:space:]]*green' "$VERIFY"; then
+  elif [ "$(lc "$(cr_field "$VERIFY" 'Status')")" != "green" ]; then
     fail verify "verify.md Completion Decision is not green"
   fi
 fi
@@ -218,23 +234,36 @@ if [ "$CR_MODE" = "gating-required" ]; then
   if [ ! -f "$CR" ]; then
     fail code-review "code-review.md absent (Code Review Mode gating-required)"
   else
-    grep -iqE 'Verdict[*_: ]+pass' "$CR" || fail code-review "code-review.md Verdict is not pass"
-    grep -iqE 'review_mode[*_: ]+degraded-single-model' "$CR" \
+    [ "$(lc "$(cr_field "$CR" 'Verdict')")" = "pass" ] \
+      || fail code-review "code-review.md Verdict is not pass"
+    [ "$(lc "$(cr_field "$CR" 'review_mode')")" = "degraded-single-model" ] \
       && fail code-review "code-review.md is degraded-single-model (does not satisfy gating/Constitution IX)"
-    grep -iqE '(provenance|reviewer)[*_: ]+' "$CR" \
+    [ -n "$(cr_field "$CR" 'reviewer-provenance')" ] \
       || fail code-review "code-review.md lacks an adapter-stamped provenance field"
   fi
 fi
 
-# Verdict freshness: recorded reviewed range must equal current Diff Base..HEAD
+# Verdict freshness: the recorded base..head must (after normalization) equal the
+# current Diff Base..implementation HEAD. Under an ENFORCED mode the range and base
+# are REQUIRED (their absence is a failed check, not a pass).
 freshness_check() {
   local f="$1" cid="$2"
   [ -f "$f" ] || return 0
-  local recorded
-  recorded="$(grep -iE 'Reviewed Range|Reviewed-Range' "$f" 2>/dev/null | head -1 | sed -E 's/.*: *//; s/ *$//')"
-  [ -n "$recorded" ] || return 0
-  local current="${DIFF_BASE}..${IMPL_HEAD}"
-  [ "$recorded" = "$current" ] || fail "$cid" "stale verdict: reviewed $recorded != current $current"
+  local recorded base_rec
+  recorded="$(cr_field "$f" 'Reviewed Range')"
+  base_rec="$(cr_field "$f" 'Diff Base SHA')"
+  if [ -z "$recorded" ] || [ -z "$base_rec" ]; then
+    fail "$cid" "verdict missing Diff Base SHA / Reviewed Range (required when enforced)"; return
+  fi
+  local r_base="${recorded%%..*}" r_head="${recorded##*..}"
+  local n_rbase n_rhead n_base n_head
+  n_rbase="$(git -C "$GW" rev-parse "$r_base" 2>/dev/null)"
+  n_rhead="$(git -C "$GW" rev-parse "$r_head" 2>/dev/null)"
+  n_base="$(git -C "$GW" rev-parse "$DIFF_BASE" 2>/dev/null)"
+  n_head="$(git -C "$GW" rev-parse "$IMPL_HEAD" 2>/dev/null)"
+  if [ -z "$n_rbase" ] || [ -z "$n_rhead" ] || [ "$n_rbase" != "$n_base" ] || [ "$n_rhead" != "$n_head" ]; then
+    fail "$cid" "stale verdict: reviewed ${r_base}..${r_head} != current ${DIFF_BASE}..${IMPL_HEAD}"
+  fi
 }
 [ "$CR_MODE" = "gating-required" ] && freshness_check "$CR" code-review-stale
 [ "$VERIFY_MODE" = "retained-required" ] && freshness_check "$VERIFY" verify-stale

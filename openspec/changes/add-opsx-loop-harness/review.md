@@ -33,6 +33,7 @@ the table below is the human-facing mirror.
 | Worktree Mode | worktree-required | Default for all Scales; this change runs in an isolated worktree |
 | Code Review Mode | gating-required | Post-impl code-review.md must pass before archive |
 | Loop Max Iterations | 80 | Scale-L default budget |
+| Validation Source Mode | required | opsx-gates.yaml ships a live required gate |
 | Spec Level | spec-anchored | OpenSpec-natural mode |
 
 ## Diff Base + Worktree locator
