@@ -13,8 +13,12 @@
  *
  * Env:
  *   PI_GOAL_MAX_TURNS    hard turn budget (default 25)
- *   PI_GOAL_JUDGE_MODEL  "provider/model-id" override for the judge
+ *   PI_GOAL_JUDGE_MODEL  "provider/model-id" override for the model judge
+ *   PI_GOAL_JUDGE_CMD    shell command judge; exit 0 = met (overrides the model
+ *                        judge). The command may inspect filesystem/git state
+ *                        outside the transcript; GOAL_CONDITION is exported to it.
  */
+import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +30,7 @@ import {
 	GOAL_SUBCOMMANDS,
 	isInterruptedStop,
 	lastAssistantInfo,
+	commandVerdict,
 	normalizeGoalConfig,
 	parseGoalArg,
 	parseVerdict,
@@ -34,6 +39,33 @@ import {
 	type GoalConfig,
 	type Verdict,
 } from "./helpers.ts";
+
+/**
+ * Run a command judge: exit 0 = met, non-zero / spawn failure = not met with the
+ * command's combined output as the reason. The command may inspect filesystem and
+ * git state outside the transcript (goal-loop.pluggable-command-judge,
+ * goal-loop.judge-each-completed-turn). Never rejects.
+ */
+function runCommandJudge(command: string, condition: string, signal: AbortSignal): Promise<Verdict> {
+	return new Promise((resolve) => {
+		let out = "";
+		try {
+			const child = spawn(command, {
+				shell: true,
+				signal,
+				env: { ...process.env, GOAL_CONDITION: condition },
+			});
+			child.stdout?.on("data", (d) => { out += String(d); });
+			child.stderr?.on("data", (d) => { out += String(d); });
+			child.on("error", (e: any) =>
+				resolve({ met: false, reason: `judge command failed to execute: ${e?.message ?? "unknown"}` }),
+			);
+			child.on("close", (code) => resolve(commandVerdict(code, out)));
+		} catch (e: any) {
+			resolve({ met: false, reason: `judge command failed to execute: ${e?.message ?? "unknown"}` });
+		}
+	});
+}
 
 // Structured-output "capture" path: the judge calls this tool instead of
 // emitting free text. Reliable across providers incl. the claude-bridge CLI.
@@ -113,6 +145,17 @@ export default function (pi: ExtensionAPI) {
 		);
 	}
 
+	// env PI_GOAL_JUDGE_CMD > config.judgeCommand > none. When set, the command
+	// judge replaces the model judge (goal-loop.pluggable-command-judge).
+	function configuredJudgeCommand(): string | undefined {
+		return resolveSetting<string | undefined>(
+			process.env.PI_GOAL_JUDGE_CMD,
+			(s) => s,
+			config.judgeCommand,
+			undefined,
+		);
+	}
+
 	function renderStatus(ctx: ExtensionContext): void {
 		ctx.ui.setStatus(
 			"goal",
@@ -172,6 +215,10 @@ export default function (pi: ExtensionAPI) {
 		condition: string,
 		transcript: string,
 	): Promise<Verdict> {
+		// Command judge takes precedence: deterministic, evaluates external state.
+		const judgeCmd = configuredJudgeCommand();
+		if (judgeCmd) return runCommandJudge(judgeCmd, condition, ctx.signal);
+
 		const resolved = await resolveJudge(ctx);
 		if (!resolved) return { met: false, reason: "no judge model available/authenticated" };
 

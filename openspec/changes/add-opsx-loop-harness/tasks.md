@@ -19,23 +19,23 @@
   - intent: infra
   - files_allowed:
       - openspec/opsx-gates.yaml
-- [ ] 1.3 Implement `opsx-loop` Ralph fallback driver (AGENT_CMD-parameterized, worktree sandbox, gate as stop condition)
+- [x] 1.3 Implement `opsx-loop` Ralph fallback driver (AGENT_CMD-parameterized, worktree sandbox, gate as stop condition)
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx-loop
       - dot_local/share/openspec/schemas/opsx-superpowers/opsx-PROMPT.md
-- [ ] 1.4 Author `openspec-loop` orchestrator skill (gate-driven cycle, subagent-review-against-baseline, harness-neutral core + adapter hooks)
+- [x] 1.4 Author `openspec-loop` orchestrator skill (gate-driven cycle, subagent-review-against-baseline, harness-neutral core + adapter hooks)
   - intent: feature
   - files_allowed:
       - "dot_local/share/agent-harness/canonical/skills/openspec-loop/**"
 
 ## 2. Generic loop runtime (goal extension)
 
-- [ ] 2.1 Add pluggable command-judge to the goal extension (exit 0 = met; config precedence file→env→model default; non-fatal on exec failure); keep model-judge default; stay opsx-agnostic
+- [x] 2.1 Add pluggable command-judge to the goal extension (exit 0 = met; config precedence file→env→model default; non-fatal on exec failure); keep model-judge default; stay opsx-agnostic
   - intent: feature
   - files_allowed:
       - "dot_pi/agent/extensions/goal/**"
-- [ ] 2.2 Unit tests for command-judge met/not-met/exec-failure/model-default paths
+- [x] 2.2 Unit tests for command-judge met/not-met/exec-failure/model-default paths
   - intent: feature
   - files_allowed:
       - "dot_pi/agent/extensions/goal/**"

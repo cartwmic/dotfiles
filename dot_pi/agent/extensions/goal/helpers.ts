@@ -97,7 +97,22 @@ export function shouldStopForBudget(turns: number, maxTurns: number): boolean {
 
 export interface GoalConfig {
 	judgeModel?: string;
+	judgeCommand?: string;
 	maxTurns?: number;
+}
+
+/**
+ * Verdict from a command judge: exit 0 = met, any non-zero (or failure to
+ * execute) = not met, with the command's output surfaced as the reason.
+ * Pure; never throws. The goal-loop stays agnostic to what the command checks.
+ * (goal-loop.pluggable-command-judge)
+ */
+export function commandVerdict(code: number | null, output: string): Verdict {
+	const out = (output ?? "").trim();
+	if (code === 0) {
+		return { met: true, reason: out.slice(0, 2000) || "judge command exited 0" };
+	}
+	return { met: false, reason: out.slice(0, 2000) || `judge command exited ${code ?? "non-zero"}` };
 }
 
 /**
@@ -110,6 +125,9 @@ export function normalizeGoalConfig(raw: unknown): GoalConfig {
 	const obj = raw as Record<string, unknown>;
 	if (typeof obj.judgeModel === "string" && obj.judgeModel.trim().length > 0) {
 		out.judgeModel = obj.judgeModel.trim();
+	}
+	if (typeof obj.judgeCommand === "string" && obj.judgeCommand.trim().length > 0) {
+		out.judgeCommand = obj.judgeCommand.trim();
 	}
 	if (typeof obj.maxTurns === "number" && Number.isFinite(obj.maxTurns) && obj.maxTurns > 0) {
 		out.maxTurns = Math.floor(obj.maxTurns);
