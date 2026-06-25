@@ -2,17 +2,17 @@
 
 ## Step 1 — opsx-models resolver (TDD)
 - **Covers:** T1.1, T1.2, T1.3
-- **Action:** helpers (layered resolution + source tag + review-list parse + exact/alias compare) with failing tests; CLI wrapper (empty-when-unset, --json {value,source}, --with-default, --change, project-root discovery); opsx-models.yaml template. `tests/opsx-models` green.
-- **Verification:** unset→empty stdout; env>front-matter>project>user; --json source field; invalid role/root exit non-zero.
+- **Action:** helpers (layered resolution + source tag + review-list parse + provider resolution: explicit `<provider>/<id>` wins > role provider > default provider > bare) with failing tests; CLI wrapper (empty-when-unset, --json {value,source}, --with-default, --change, project-root discovery); opsx-models.yaml template (roles + provider keys). `tests/opsx-models` green.
+- **Verification:** unset→empty stdout; env>front-matter>project>user; provider-qualified output; explicit-provider-wins; bare-id-qualified-by-default; --json source field; invalid role/root exit non-zero.
 
-## Step 2 — Gate model-provenance check (TDD)
+## Step 2 — Gate author-marker check (TDD)
 - **Covers:** T2.1
-- **Action:** opsx-gate resolves each role via `opsx-models --json --change`; for configured roles, fail-closed on missing/unverifiable/mismatch; review required-set; author marker rule; resolver-absent fail-closed. Regression tests: configured+missing→fail, configured+mismatch→fail, configured+match→pass, unconfigured→skip, review subset→fail, delegated-stamp-on-author→fail.
+- **Action:** opsx-gate resolves `author` via `opsx-models author --json --change`; WHILE author configured AND `author_in_session` true/unset, fail an authoring artifact (proposal/intent/design/clarify/tasks/plan/specs) lacking the `authored: in-session` marker; skip when unconfigured or opt-out. NO run-history reading. Regression tests: configured+missing-marker→fail, configured+marker→pass, unconfigured→skip, opt-out→skip.
 - **Verification:** `tests/opsx-gate` extended suite green; existing 26 still green.
 
 ## Step 3 — Consumers (extension + skills + schema)
 - **Covers:** T3.1, T3.2, T3.3
-- **Action:** opsx-loop exports the four OPSX_* vars via opsx-models; skill edits (author-in-session default, delegated dispatch passes model + stamps provenance); template provenance fields; review.md front-matter + schema docs. Constitution IX satisfied by the post-impl adversarial code-review over the skill diffs.
+- **Action:** opsx-loop exports OPSX_*_MODEL (provider-qualified) + OPSX_AUTHOR_IN_SESSION via opsx-models (consumer only, no snapshot); skill edits (author-in-session default writes the marker; review/impl dispatch passes the resolved model+provider best-effort); review.md front-matter + provider keys + schema docs. Constitution IX satisfied by the post-impl adversarial code-review over the skill diffs.
 - **Verification:** opsx-loop bun tests green; goal untouched; spec-driven projects unaffected.
 
 ## Step 4 — Verify + close

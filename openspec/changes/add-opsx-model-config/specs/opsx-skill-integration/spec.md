@@ -14,6 +14,10 @@ The openspec-loop, openspec-propose, and openspec-apply-change skills SHALL cons
 - **WHEN** a skill dispatches an implementation subagent and an `impl` model is configured
 - **THEN** that subagent SHALL be dispatched with the configured impl model
 
+#### Scenario: Dispatch honors the resolved provider
+- **WHEN** a skill dispatches a review or impl subagent and the resolved value is provider-qualified (`<provider>/<id>`)
+- **THEN** the dispatch SHALL pass the provider-qualified value so the subagent runs on the configured provider
+
 #### Scenario: Authoring stays in-session regardless of author model
 - **WHILE** `author_in_session` is true or unset
 - **WHEN** a skill authors artifacts (even if an `author` model is configured)
