@@ -27,7 +27,7 @@
 
 ## 3. Consumers
 
-- [ ] 3.1 opsx-loop extension: resolve via `opsx-models --json --change` on loop start, export OPSX_AUTHOR_MODEL/REVIEW_MODELS/IMPL_MODEL (provider-qualified) + OPSX_AUTHOR_IN_SESSION into the worker turns; consumer only (no config parsing, no run-history snapshot); tests
+- [x] 3.1 opsx-loop extension: resolve via `opsx-models --json --change` on loop start, export OPSX_AUTHOR_MODEL/REVIEW_MODELS/IMPL_MODEL (provider-qualified) + OPSX_AUTHOR_IN_SESSION into the worker turns; consumer only (no config parsing, no run-history snapshot); tests
   - intent: feature
   - files_allowed:
       - "dot_pi/agent/extensions/opsx-loop/**"

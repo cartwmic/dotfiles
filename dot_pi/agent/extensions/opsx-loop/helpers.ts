@@ -8,6 +8,59 @@ export interface LoopVerdict {
 	reason: string;
 }
 
+export interface ResolvedModel {
+	value: string | string[] | boolean | null;
+	source: string; // env | change | project | user | default | unset
+}
+
+/** Parse one `opsx-models <role> --json` stdout line; null on malformed input. */
+export function parseModelsJson(stdout: string): ResolvedModel | null {
+	try {
+		const o = JSON.parse((stdout ?? "").trim());
+		if (o && typeof o === "object" && "value" in o && "source" in o) {
+			return o as ResolvedModel;
+		}
+	} catch {
+		/* ignore malformed resolver output */
+	}
+	return null;
+}
+
+/**
+ * Build the OPSX_* env map the extension exports into worker turns, from the
+ * parsed `opsx-models <role> --json` outputs. Roles export ONLY when CONFIGURED
+ * (source not unset/default) so unset roles fall back to the session model.
+ * `review` is newline-joined (the resolver/skills accept newline- or
+ * comma-delimited). author-in-session always exports its resolved boolean.
+ * Values are already provider-qualified by opsx-models and pass through.
+ * (opsx-loop-kickoff.loop-exports-resolved-role-models)
+ */
+export function buildModelEnv(resolved: {
+	author?: ResolvedModel | null;
+	review?: ResolvedModel | null;
+	impl?: ResolvedModel | null;
+	authorInSession?: ResolvedModel | null;
+}): Record<string, string> {
+	const env: Record<string, string> = {};
+	const configured = (r?: ResolvedModel | null): r is ResolvedModel =>
+		r != null && r.source !== "unset" && r.source !== "default" && r.value != null;
+	if (configured(resolved.author) && typeof resolved.author.value === "string") {
+		env.OPSX_AUTHOR_MODEL = resolved.author.value;
+	}
+	if (configured(resolved.impl) && typeof resolved.impl.value === "string") {
+		env.OPSX_IMPL_MODEL = resolved.impl.value;
+	}
+	if (configured(resolved.review)) {
+		const v = resolved.review.value;
+		const list = Array.isArray(v) ? v : typeof v === "string" ? [v] : [];
+		if (list.length > 0) env.OPSX_REVIEW_MODELS = list.join("\n");
+	}
+	if (resolved.authorInSession && typeof resolved.authorInSession.value === "boolean") {
+		env.OPSX_AUTHOR_IN_SESSION = resolved.authorInSession.value ? "true" : "false";
+	}
+	return env;
+}
+
 export const LOOP_SUBCOMMANDS: ReadonlyArray<{ value: string; label: string; description: string }> = [
 	{ value: "status", label: "status", description: "Show the active loop's change, turns, and budget" },
 	{ value: "clear", label: "clear", description: "Stop and clear the active loop (aliases: stop, off, reset, none, cancel)" },

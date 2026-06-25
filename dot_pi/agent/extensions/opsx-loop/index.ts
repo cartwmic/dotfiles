@@ -11,16 +11,19 @@
  * Reuses the validated agent_end + sendUserMessage(followUp) mechanism
  * (ADR-0001/0004). Independent of the goal extension.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
+	buildModelEnv,
 	LOOP_SUBCOMMANDS,
 	parseLoopArg,
 	parseLoopBudget,
+	parseModelsJson,
 	verdictFromExit,
 	type LoopVerdict,
+	type ResolvedModel,
 } from "./helpers.ts";
 
 const DEFAULT_BUDGET = 40;
@@ -33,6 +36,38 @@ interface LoopState {
 	active: boolean;
 	evaluating: boolean;
 	lastReason?: string;
+}
+
+/** Resolve one role via the harness-neutral `opsx-models` CLI (consumer, not owner). */
+function resolveModel(role: string, change: string): ResolvedModel | null {
+	try {
+		const r = spawnSync("opsx-models", [role, "--json", "--change", change], {
+			encoding: "utf-8",
+			timeout: 5000,
+		});
+		if (r.error || !r.stdout) return null;
+		return parseModelsJson(r.stdout);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Resolve the role models on loop start and EXPORT the OPSX_* vars into
+ * process.env so the worker turns' subagent dispatch + authoring pick them up.
+ * Consumer only: if `opsx-models` is absent the loop runs with vars unset
+ * (pre-change behavior). Returns the names of the vars that were set.
+ * (opsx-loop-kickoff.loop-exports-resolved-role-models)
+ */
+function exportModelEnv(change: string): string[] {
+	const env = buildModelEnv({
+		author: resolveModel("author", change),
+		review: resolveModel("review", change),
+		impl: resolveModel("impl", change),
+		authorInSession: resolveModel("author-in-session", change),
+	});
+	for (const [k, v] of Object.entries(env)) process.env[k] = v;
+	return Object.keys(env);
 }
 
 /** Read review.md for a change: returns its text or "" if absent. */
@@ -131,8 +166,10 @@ export default function (pi: ExtensionAPI) {
 				evaluating: false,
 			};
 			renderStatus(ctx);
+			const exported = exportModelEnv(parsed.change);
 			pi.sendUserMessage(workerDirective(parsed.change), { deliverAs: "followUp" });
-			return `⟳ opsx-loop started (budget ${loop.maxTurns}) for ${parsed.change}`;
+			const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
+			return `⟳ opsx-loop started (budget ${loop.maxTurns}) for ${parsed.change}${modelNote}`;
 		},
 	});
 

@@ -4,7 +4,7 @@
 //   opsx-loop-kickoff.budget-from-review-front-matter
 //   opsx-loop-kickoff.status-and-clear-subcommands
 import { describe, expect, test } from "bun:test";
-import { parseLoopArg, parseLoopBudget, verdictFromExit } from "./helpers.ts";
+import { buildModelEnv, parseLoopArg, parseLoopBudget, parseModelsJson, verdictFromExit } from "./helpers.ts";
 
 describe("verdictFromExit — opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge", () => {
 	test("exit 0 is met", () => {
@@ -66,5 +66,43 @@ describe("parseLoopArg — opsx-loop-kickoff.status-and-clear-subcommands", () =
 	});
 	test("change name containing a keyword is still a set", () => {
 		expect(parseLoopArg("stop-the-flaky-tests")).toEqual({ mode: "set", change: "stop-the-flaky-tests" });
+	});
+});
+
+describe("buildModelEnv — opsx-loop-kickoff.loop-exports-resolved-role-models", () => {
+	test("configured roles exported; unset roles omitted", () => {
+		const env = buildModelEnv({
+			author: { value: "claude-bridge/claude-opus-4-8", source: "project" },
+			review: { value: ["a/x", "b/y"], source: "change" },
+			impl: { value: null, source: "unset" },
+			authorInSession: { value: true, source: "default" },
+		});
+		expect(env.OPSX_AUTHOR_MODEL).toBe("claude-bridge/claude-opus-4-8");
+		expect(env.OPSX_REVIEW_MODELS).toBe("a/x\nb/y");
+		expect("OPSX_IMPL_MODEL" in env).toBe(false);
+		expect(env.OPSX_AUTHOR_IN_SESSION).toBe("true");
+	});
+	test("default-source roles are treated as unconfigured (omitted)", () => {
+		const env = buildModelEnv({ author: { value: "session", source: "default" } });
+		expect("OPSX_AUTHOR_MODEL" in env).toBe(false);
+	});
+	test("author_in_session false exported as string", () => {
+		const env = buildModelEnv({ authorInSession: { value: false, source: "change" } });
+		expect(env.OPSX_AUTHOR_IN_SESSION).toBe("false");
+	});
+	test("single-string review still exported", () => {
+		const env = buildModelEnv({ review: { value: "only/one", source: "user" } });
+		expect(env.OPSX_REVIEW_MODELS).toBe("only/one");
+	});
+});
+
+describe("parseModelsJson — opsx-loop-kickoff.loop-exports-resolved-role-models", () => {
+	test("parses well-formed source-aware json", () => {
+		expect(parseModelsJson('{"value":"x/y","source":"env"}')).toEqual({ value: "x/y", source: "env" });
+	});
+	test("null on malformed input", () => {
+		expect(parseModelsJson("not json")).toBeNull();
+		expect(parseModelsJson("")).toBeNull();
+		expect(parseModelsJson('{"value":"x"}')).toBeNull();
 	});
 });
