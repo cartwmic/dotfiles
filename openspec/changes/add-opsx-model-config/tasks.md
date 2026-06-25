@@ -44,5 +44,5 @@
 
 ## 4. Verify
 
-- [ ] 4.1 bun test (opsx-loop) + tests/opsx-models + tests/opsx-gate all green; transpile; opsx-gate self-run green
+- [x] 4.1 bun test (opsx-loop) + tests/opsx-models + tests/opsx-gate all green; transpile; opsx-gate self-run green
   - intent: feature
