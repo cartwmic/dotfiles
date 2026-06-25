@@ -1,0 +1,57 @@
+# opsx-models.yaml — default models (and providers) for opsx workflow roles.
+#
+# Resolved by the `opsx-models` CLI (sibling to `opsx-gate`), harness-neutral so
+# the workflow honors it from pi, Codex, Claude, or the bash driver alike.
+#
+# Place this file at EITHER:
+#   - openspec/opsx-models.yaml          (project scope — checked in)
+#   - ~/.config/opsx/models.yaml         (user scope — personal default)
+# A change may also override per-role in its review.md front-matter
+# (author_model / review_models / impl_model / provider / *_provider).
+#
+# Resolution order, highest wins:
+#   env > change review.md front-matter > project file > user file > built-in default
+# The built-in default is the sentinel `session` ("use the session model").
+# Unset roles degrade to the session model; nothing hard-fails.
+
+# ── Roles ──────────────────────────────────────────────────────────────────
+# author : the artifact-authoring model. NOTE authoring stays IN the parent
+#          session by default (author_in_session), so this only takes effect
+#          when author_in_session is false (opt-in delegation).
+# review : one model OR a list — one blind reviewer is dispatched per entry
+#          (multi-model adversarial review).
+# impl   : the implementation-subagent model.
+#
+# author: claude-bridge/claude-opus-4-8
+# review:
+#   - claude-bridge/claude-opus-4-8
+#   - openai-codex/gpt-5.5
+# impl: claude-bridge/claude-opus-4-8
+
+# ── Providers ──────────────────────────────────────────────────────────────
+# A model value CONTAINING "/" is a complete, provider-qualified pi model id and
+# is used VERBATIM (the provider keys below do NOT apply to it). This is the
+# primary way to pin a provider — copy the exact id from `pi --list-models`,
+# e.g. `claude-bridge/claude-opus-4-8` or the multi-segment `openrouter/openai/gpt-5.5`.
+#
+# For convenience, a BARE id (no "/") is qualified by a provider key: the
+# role-specific provider wins, else the top-level default `provider`.
+#
+#   provider: claude-bridge          # default provider for bare ids
+#   author_provider: claude-bridge   # per-role override (author/review/impl)
+#   review_provider: openrouter
+#   impl_provider: claude-bridge
+#
+# Example: `author: claude-opus-4-8` + `provider: claude-bridge`
+#          → resolves to `claude-bridge/claude-opus-4-8`.
+# WARNING: openrouter model ids are themselves multi-segment (`openai/gpt-5.5`),
+# so to target openrouter write the FULL value `openrouter/openai/gpt-5.5`; a
+# bare `gpt-5.5` + `provider: openrouter` yields `openrouter/gpt-5.5`, which is
+# NOT the openrouter id.
+
+# ── Author-in-session policy ───────────────────────────────────────────────
+# When true (the default), artifact authoring runs in the parent session and is
+# NOT delegated to a subagent. Set false to opt into delegated authoring on the
+# `author` model above.
+#
+# author_in_session: true

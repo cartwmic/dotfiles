@@ -2,17 +2,17 @@
 
 ## 1. opsx-models resolver
 
-- [ ] 1.1 Pure helpers: layered role resolution (env > front-matter > project > user > default), source tagging, review list parse (newline/comma), provider resolution (explicit `<provider>/<id>` wins > role provider > default provider > bare), per-review-entry provider
+- [x] 1.1 Pure helpers: layered role resolution (env > front-matter > project > user > default), source tagging, review list parse (newline/comma), provider resolution (explicit `<provider>/<id>` wins > role provider > default provider > bare), per-review-entry provider
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx-models
       - "tests/opsx-models/**"
-- [ ] 1.2 `opsx-models <role|author-in-session> [--change] [--json] [--with-default]` CLI: empty stdout when unset, JSON {value,source}, provider-qualified output (OPSX_<ROLE>_PROVIDER / OPSX_PROVIDER), `author-in-session` boolean surface (default true, OPSX_AUTHOR_IN_SESSION), project-root discovery, invalid-role/root exit non-zero
+- [x] 1.2 `opsx-models <role|author-in-session> [--change] [--json] [--with-default]` CLI: empty stdout when unset, JSON {value,source}, provider-qualified output (OPSX_<ROLE>_PROVIDER / OPSX_PROVIDER), `author-in-session` boolean surface (default true, OPSX_AUTHOR_IN_SESSION), project-root discovery, invalid-role/root exit non-zero
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx-models
       - "tests/opsx-models/**"
-- [ ] 1.3 `templates/opsx-models.yaml` (roles + provider default + per-role *_provider + author_in_session + aliases + resolution order)
+- [x] 1.3 `templates/opsx-models.yaml` (roles + provider default + per-role *_provider + author_in_session + aliases + resolution order)
   - intent: feature
   - files_allowed:
       - dot_local/share/openspec/schemas/opsx-superpowers/templates/opsx-models.yaml

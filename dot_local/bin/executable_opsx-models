@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+# opsx-models — harness-neutral role→model resolver for the opsx workflow.
+#
+# Usage: opsx-models <role> [--change <name>] [--json] [--with-default]
+#   role ∈ author | review | impl | author-in-session
+#
+# Layered resolution, highest wins:
+#   env > change review.md front-matter (with --change) >
+#   project openspec/opsx-models.yaml > user ~/.config/opsx/models.yaml > built-in default.
+#
+# Roles resolve to a model id. The built-in default is the sentinel `session`
+# ("use the session model"); unset roles print NOTHING (empty stdout) unless
+# --with-default is given. `review` is list-valued (newline-delimited output).
+# `author-in-session` is boolean (built-in default: true).
+#
+# Provider: a configured value CONTAINING `/` is a complete pi model id, used
+# VERBATIM (provider keys do NOT apply). A BARE id (no `/`) is qualified by the
+# role provider (OPSX_<ROLE>_PROVIDER > front-matter > project > user) else the
+# default provider (OPSX_PROVIDER > front-matter > project > user) else left bare.
+#
+# Spec: opsx-model-config.role-model-resolver, .layered-resolution-order,
+#       .config-conventions
+set -uo pipefail
+
+PROG=opsx-models
+err() { echo "$PROG: $*" >&2; }
+
+ROLE="${1:-}"; [ $# -gt 0 ] && shift
+CHANGE=""; JSON=0; WITH_DEFAULT=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--change) CHANGE="${2:-}"; shift 2 ;;
+		--change=*) CHANGE="${1#*=}"; shift ;;
+		--json) JSON=1; shift ;;
+		--with-default) WITH_DEFAULT=1; shift ;;
+		*) err "unknown argument: $1"; exit 2 ;;
+	esac
+done
+
+case "$ROLE" in
+	author|review|impl|author-in-session) ;;
+	"") err "missing role (author|review|impl|author-in-session)"; exit 2 ;;
+	*) err "unknown role: $ROLE (expected author|review|impl|author-in-session)"; exit 2 ;;
+esac
+
+# --- project root discovery -------------------------------------------------
+ROOT=""
+if [ -n "${OPSX_ROOT:-}" ]; then
+	[ -d "$OPSX_ROOT/openspec" ] || { err "OPSX_ROOT has no openspec/: $OPSX_ROOT"; exit 2; }
+	ROOT="$OPSX_ROOT"
+else
+	d="$(pwd)"
+	while [ "$d" != "/" ]; do
+		[ -d "$d/openspec" ] && { ROOT="$d"; break; }
+		d="$(dirname "$d")"
+	done
+fi
+USER_CFG="${OPSX_MODELS_USER_CONFIG:-$HOME/.config/opsx/models.yaml}"
+PROJECT_CFG=""
+[ -n "$ROOT" ] && PROJECT_CFG="$ROOT/openspec/opsx-models.yaml"
+
+HAVE_YQ=0; command -v yq >/dev/null 2>&1 && HAVE_YQ=1
+yq_warned=0
+need_yq() {
+	if [ "$HAVE_YQ" -eq 0 ]; then
+		[ "$yq_warned" -eq 0 ] && { err "yq not found; YAML file/front-matter layers skipped (env layer still honored)"; yq_warned=1; }
+		return 1
+	fi
+	return 0
+}
+
+# Extract the YAML front-matter block (between the first two --- fences).
+extract_fm() {
+	awk 'NR==1 && $0!="---"{exit} /^---[[:space:]]*$/{c++; if(c==1) next; if(c==2) exit} c==1{print}' "$1"
+}
+# Probe the node type so missing keys and boolean `false` are handled correctly
+# (a plain `// ""` alternative wrongly swallows `false`; mikefarah yq has no jq
+# `if/tag` form). Returns e.g. !!str / !!seq / !!null / !!bool.
+yq_type()   { yq -r ".${2} | type" "$1" 2>/dev/null; }
+yq_scalar() {
+	[ "$(yq_type "$1" "$2")" = "!!null" ] && return
+	yq -r ".${2}" "$1" 2>/dev/null
+}
+# Newline-delimited entries whether the node is a scalar or a sequence.
+yq_list() {
+	case "$(yq_type "$1" "$2")" in
+		"!!null") return ;;
+		"!!seq") yq -r ".${2}[]" "$1" 2>/dev/null ;;
+		*) yq -r ".${2}" "$1" 2>/dev/null ;;
+	esac
+}
+
+# env var + key names per role
+case "$ROLE" in
+	author) MODEL_ENV=OPSX_AUTHOR_MODEL;  PROV_ENV=OPSX_AUTHOR_PROVIDER; FM_MODEL=author_model;  FM_PROV=author_provider; Y_MODEL=author; Y_PROV=author_provider ;;
+	review) MODEL_ENV=OPSX_REVIEW_MODELS; PROV_ENV=OPSX_REVIEW_PROVIDER; FM_MODEL=review_models; FM_PROV=review_provider; Y_MODEL=review; Y_PROV=review_provider ;;
+	impl)   MODEL_ENV=OPSX_IMPL_MODEL;    PROV_ENV=OPSX_IMPL_PROVIDER;   FM_MODEL=impl_model;    FM_PROV=impl_provider;   Y_MODEL=impl;   Y_PROV=impl_provider ;;
+esac
+
+# Read a flat key across the file layers (change fm > project > user). Sets the
+# globals G_VAL + G_SRC directly (NOT via echo) so the source survives without a
+# command-substitution subshell. Env is handled by callers (it precedes files).
+G_VAL=""; G_SRC=unset
+read_files_key_g() { # $1 fm_key  $2 yaml_key
+	G_VAL=""; G_SRC=unset
+	if [ -n "$CHANGE" ] && [ -n "$ROOT" ]; then
+		rv="$ROOT/openspec/changes/$CHANGE/review.md"
+		if [ -f "$rv" ] && need_yq; then
+			fm="$(extract_fm "$rv")"
+			if [ -n "$fm" ]; then
+				tmp="$(mktemp)"; printf '%s\n' "$fm" >"$tmp"
+				v="$(yq_scalar "$tmp" "$1")"; rm -f "$tmp"
+				[ -n "$v" ] && { G_VAL="$v"; G_SRC=change; return; }
+			fi
+		fi
+	fi
+	if [ -n "$PROJECT_CFG" ] && [ -f "$PROJECT_CFG" ] && need_yq; then
+		v="$(yq_scalar "$PROJECT_CFG" "$2")"; [ -n "$v" ] && { G_VAL="$v"; G_SRC=project; return; }
+	fi
+	if [ -f "$USER_CFG" ] && need_yq; then
+		v="$(yq_scalar "$USER_CFG" "$2")"; [ -n "$v" ] && { G_VAL="$v"; G_SRC=user; return; }
+	fi
+}
+
+# Resolve the role model(s): sets RAW (newline list) + SRC.
+resolve_model() {
+	RAW=""; SRC=unset
+	ev="${!MODEL_ENV-}"
+	if [ -n "${ev:-}" ]; then
+		if [ "$ROLE" = review ]; then
+			RAW="$(printf '%s' "$ev" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' || true)"
+		else
+			RAW="$ev"
+		fi
+		[ -n "$RAW" ] && { SRC=env; return; }
+	fi
+	if [ -n "$CHANGE" ] && [ -n "$ROOT" ]; then
+		rv="$ROOT/openspec/changes/$CHANGE/review.md"
+		if [ -f "$rv" ] && need_yq; then
+			fm="$(extract_fm "$rv")"
+			if [ -n "$fm" ]; then
+				tmp="$(mktemp)"; printf '%s\n' "$fm" >"$tmp"
+				if [ "$ROLE" = review ]; then RAW="$(yq_list "$tmp" "$FM_MODEL")"; else RAW="$(yq_scalar "$tmp" "$FM_MODEL")"; fi
+				rm -f "$tmp"
+				[ -n "$RAW" ] && { SRC=change; return; }
+			fi
+		fi
+	fi
+	if [ -n "$PROJECT_CFG" ] && [ -f "$PROJECT_CFG" ] && need_yq; then
+		if [ "$ROLE" = review ]; then RAW="$(yq_list "$PROJECT_CFG" "$Y_MODEL")"; else RAW="$(yq_scalar "$PROJECT_CFG" "$Y_MODEL")"; fi
+		[ -n "$RAW" ] && { SRC=project; return; }
+	fi
+	if [ -f "$USER_CFG" ] && need_yq; then
+		if [ "$ROLE" = review ]; then RAW="$(yq_list "$USER_CFG" "$Y_MODEL")"; else RAW="$(yq_scalar "$USER_CFG" "$Y_MODEL")"; fi
+		[ -n "$RAW" ] && { SRC=user; return; }
+	fi
+}
+
+# Resolve the role provider (role-specific beats default, each layered).
+resolve_provider() {
+	PROVIDER=""
+	pe="${!PROV_ENV-}"; if [ -n "${pe:-}" ]; then PROVIDER="$pe"; return; fi
+	read_files_key_g "$FM_PROV" "$Y_PROV"; [ -n "$G_VAL" ] && { PROVIDER="$G_VAL"; return; }
+	if [ -n "${OPSX_PROVIDER:-}" ]; then PROVIDER="$OPSX_PROVIDER"; return; fi
+	read_files_key_g provider provider; [ -n "$G_VAL" ] && PROVIDER="$G_VAL"
+}
+
+qualify() { # $1 value
+	[ -z "$1" ] && return
+	case "$1" in
+		*/*) printf '%s' "$1" ;;
+		*) if [ -n "${PROVIDER:-}" ]; then printf '%s/%s' "$PROVIDER" "$1"; else printf '%s' "$1"; fi ;;
+	esac
+}
+
+# --- author-in-session (boolean) --------------------------------------------
+if [ "$ROLE" = author-in-session ]; then
+	AIS=""; ASRC=default
+	ev="${OPSX_AUTHOR_IN_SESSION-}"
+	if [ -n "${ev:-}" ]; then RAW_AIS="$ev"; ASRC=env
+	else read_files_key_g author_in_session author_in_session; RAW_AIS="$G_VAL"; [ -n "$RAW_AIS" ] && ASRC="$G_SRC"; fi
+	if [ -n "${RAW_AIS:-}" ]; then
+		case "$(printf '%s' "$RAW_AIS" | tr 'A-Z' 'a-z')" in
+			false|0|no) AIS=false ;;
+			*) AIS=true ;;
+		esac
+	else
+		AIS=true; ASRC=default
+	fi
+	if [ "$JSON" -eq 1 ]; then
+		jq -cn --argjson v "$AIS" --arg s "$ASRC" '{value:$v,source:$s}'
+	else
+		printf '%s\n' "$AIS"
+	fi
+	exit 0
+fi
+
+# --- roles ------------------------------------------------------------------
+resolve_model
+resolve_provider
+
+if [ "$SRC" = unset ]; then
+	if [ "$JSON" -eq 1 ]; then
+		if [ "$WITH_DEFAULT" -eq 1 ]; then jq -cn '{value:"session",source:"default"}'
+		else jq -cn '{value:null,source:"unset"}'; fi
+	else
+		[ "$WITH_DEFAULT" -eq 1 ] && printf 'session\n'
+	fi
+	exit 0
+fi
+
+# qualify each line
+QUAL=""
+while IFS= read -r line; do
+	[ -z "$line" ] && continue
+	QUAL+="$(qualify "$line")"$'\n'
+done <<EOF
+$RAW
+EOF
+QUAL="${QUAL%$'\n'}"
+
+if [ "$JSON" -eq 1 ]; then
+	if [ "$ROLE" = review ]; then
+		printf '%s\n' "$QUAL" | jq -R -s --arg s "$SRC" '{value:(split("\n")|map(select(length>0))),source:$s}'
+	else
+		jq -cn --arg v "$QUAL" --arg s "$SRC" '{value:$v,source:$s}'
+	fi
+else
+	printf '%s\n' "$QUAL"
+fi
