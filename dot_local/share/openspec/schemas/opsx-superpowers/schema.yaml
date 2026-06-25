@@ -319,6 +319,8 @@ artifacts:
       openspec/opsx-models.yaml and user ~/.config/opsx/models.yaml; unset roles
       fall back to the session model. opsx-gate enforces an in-session authoring
       marker only when the `author` role is configured.
+      (opsx-workflow-schema.review-front-matter-carries-role-models;
+       opsx-workflow-schema.author-in-session-front-matter-flag)
 
       Free-text sections:
         Diff Base SHA      — captured by apply at worktree creation: the
