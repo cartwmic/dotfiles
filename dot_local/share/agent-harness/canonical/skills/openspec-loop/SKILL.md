@@ -64,6 +64,18 @@ registered; if none, run inline, mark `review_mode: degraded-single-model`, and 
 the user it does not satisfy a gating-required review — recommend running
 `adversarial-review-cycle` manually.
 
+## Role models (opsx-models)
+
+The orchestrator CONSUMES harness-neutral model config (it does not own it). The
+opsx-loop pi extension exports `OPSX_AUTHOR_MODEL` / `OPSX_REVIEW_MODELS` /
+`OPSX_IMPL_MODEL` / `OPSX_AUTHOR_IN_SESSION` on loop start; from any harness, resolve
+directly with `opsx-models <role> --change <name>` (values are already
+provider-qualified). Dispatch one blind reviewer per configured `review` model and
+pass `impl` to implementation subagents, each verbatim as the subagent `model:`.
+Author artifacts in-session by default (write the `<!-- authored: in-session -->`
+marker); delegate authoring only when `OPSX_AUTHOR_IN_SESSION` is `false`. Unset roles
+fall back to the session/default model — never hard-fail.
+
 ## Stop conditions
 
 - `opsx-gate` exits 0 → ready to archive (the loop does not itself archive).
