@@ -75,6 +75,7 @@ pass `impl` to implementation subagents, each verbatim as the subagent `model:`.
 Author artifacts in-session by default (write the `<!-- authored: in-session -->`
 marker); delegate authoring only when `OPSX_AUTHOR_IN_SESSION` is `false`. Unset roles
 fall back to the session/default model — never hard-fail.
+(opsx-skill-integration.skills-honor-configured-role-models)
 
 ## Stop conditions
 
