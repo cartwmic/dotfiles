@@ -4,11 +4,15 @@
 
 ### Requirement: Review front-matter carries role models
 
-THE review.md front-matter SHALL optionally carry `author_model` (string), `review_models` (string or list), and `impl_model` (string), giving per-change overrides that the opsx-models resolver reads above the project and user config files.
+THE review.md front-matter SHALL optionally carry `author_model` (string), `review_models` (string or list), and `impl_model` (string), plus optional provider keys — a default `provider` (string) and per-role `author_provider` / `review_provider` / `impl_provider` (strings) — giving per-change overrides that the opsx-models resolver reads above the project and user config files. Model values MAY be provider-qualified (`<provider>/<id>`); the provider keys qualify bare ids.
 
 #### Scenario: Per-change model override recorded
 - **WHEN** review.md front-matter sets `author_model`, `review_models`, or `impl_model`
 - **THEN** `opsx-models <role> --change <name>` SHALL return those values above the project/user files
+
+#### Scenario: Per-change provider override recorded
+- **WHEN** review.md front-matter sets a `provider` default or a per-role `*_provider`
+- **THEN** `opsx-models <role> --change <name>` SHALL qualify the role's bare model id with that provider (an explicit provider in the value still wins)
 
 #### Scenario: Front-matter model fields are optional
 - **IF** the front-matter omits the model fields

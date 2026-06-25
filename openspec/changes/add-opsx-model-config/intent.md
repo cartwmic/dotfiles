@@ -2,8 +2,8 @@
 
 ## Intent
 
-Let the user configure default models for three workflow roles — artifact authoring,
-review subagents, implementation subagents — and expose that configuration
+Let the user configure default models — AND their providers — for three workflow roles:
+artifact authoring, review subagents, implementation subagents. Expose that configuration
 **uncoupled from pi**, so the same workflow honors it when driven from Codex, Claude,
 or the bash driver. The pi extension consumes the config; it does not own it.
 
@@ -15,13 +15,16 @@ or the bash driver. The pi extension consumes the config; it does not own it.
   `openspec/opsx-models.yaml` (project) > `~/.config/opsx/models.yaml` (user) > defaults.
 - **Three roles:** `author` (single model), `review` (one or more models, for multi-model
   adversarial review), `impl` (single model).
+- **Provider per model:** values are provider-qualified (`<provider>/<id>`, pi's native form,
+  since the same id can exist on multiple providers, e.g. `gpt-5.5` on openai-codex vs
+  openrouter); an optional `provider` (default + per-role) qualifies bare ids.
 - **Degrade gracefully:** when a role is unset at every layer, consumers fall back to the
   session/default model — never hard-fail.
 - **Consumer, not owner:** the `opsx-loop` extension resolves + exports `OPSX_*_MODEL` on
   loop start; deleting it must not remove the config (the resolver + files remain).
 - **Do not break existing behavior:** unset config ⇒ today's behavior unchanged.
-- **Author in the parent session by default:** artifact authoring is NOT delegated to a subagent unless `author_in_session: false`. Fixes the observed bug where authoring silently ran on a subagent's model.
-- **Force via the gate, not prose:** delegated review/impl work is stamped with the actual model by the dispatch adapter; `opsx-gate` blocks archive on a model mismatch vs the configured role model. Unconfigured roles are not enforced (degrade to session).
+- **Author in the parent session by default:** artifact authoring is NOT delegated to a subagent unless `author_in_session: false`. Fixes the observed bug AT THE SOURCE — authoring no longer runs on a subagent's model because it is not delegated.
+- **Self-attested author marker, not post-hoc model forcing:** in-session authoring writes an `authored: in-session` marker; `opsx-gate` fails an authoring artifact lacking it when the `author` role is configured — a cheap tripwire for recurrence. The change does NOT attempt to force the delegated review/impl model via a post-hoc gate: adversarial review showed a same-UID actor can write any file the gate reads, so run-history provenance enforcement was scoped out. Delegated dispatch passes the resolved model best-effort.
 
 ## Invariants honored
 
