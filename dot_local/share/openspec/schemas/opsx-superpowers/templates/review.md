@@ -12,6 +12,18 @@ code_review_mode: advisory
 loop_max_iterations: 20
 validation_source_mode: required
 spec_level: spec-anchored
+# ── Optional per-change model/provider overrides (resolved by `opsx-models`) ──
+# Pin models for THIS change above the project/user config files. A value
+# containing "/" is a complete pi model id used verbatim; a BARE id is qualified
+# by the provider keys. Roles left unset fall back to the session model.
+# author_model: claude-bridge/claude-opus-4-8
+# review_models: [claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5]
+# impl_model: claude-bridge/claude-opus-4-8
+# author_in_session: true
+# provider: claude-bridge          # default provider for bare ids
+# author_provider: claude-bridge   # per-role provider overrides
+# review_provider: openrouter
+# impl_provider: claude-bridge
 ---
 
 # Review
@@ -37,6 +49,7 @@ any mode by setting it (in BOTH the front-matter and this table).
 | Loop Max Iterations | 20 | iteration budget; mapped onto the loop runtime turn budget (S≈20, M≈40, L≈80) |
 | Validation Source Mode | required | required\|waived — waived (with rationale) lets Scale ≥ M pass with no agent-independent validation source |
 | Spec Level | spec-anchored | spec-anchored\|spec-first\|spec-as-source (warning if last) |
+| Model Config | (unset) | optional `author_model`/`review_models`/`impl_model`/`author_in_session` + `provider`/`*_provider` front-matter keys, resolved by `opsx-models`; unset ⇒ session model |
 
 ## Diff Base + Worktree locator
 

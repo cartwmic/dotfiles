@@ -63,6 +63,24 @@ Each mode has a controlled vocabulary. Default values shown in **bold**.
 | `Validation Source Mode` | **required** / waived | required: Scale ≥ M must declare an agent-independent validation source |
 | `Spec Level` | **spec-anchored** / spec-first / spec-as-source | spec-anchored = OpenSpec's natural mode; spec-as-source warns about MDD-era trade-offs |
 
+### Role models (optional, via `opsx-models`)
+
+review.md front-matter MAY pin per-change models/providers, resolved by the
+harness-neutral `opsx-models` CLI (sibling to `opsx-gate`):
+
+| Key | Meaning |
+|---|---|
+| `author_model` / `review_models` / `impl_model` | role model(s); `review_models` is a string or list (one blind reviewer per entry) |
+| `author_in_session` | boolean (default **true**) — when true, authoring stays in the parent session and is not delegated |
+| `provider` / `author_provider` / `review_provider` / `impl_provider` | qualify BARE model ids; a value containing `/` is used verbatim |
+
+Layering (highest wins): env > review.md front-matter > project
+`openspec/opsx-models.yaml` > user `~/.config/opsx/models.yaml` > session default.
+The `opsx-loop` extension exports `OPSX_AUTHOR_MODEL` / `OPSX_REVIEW_MODELS` /
+`OPSX_IMPL_MODEL` / `OPSX_AUTHOR_IN_SESSION` on loop start; unset roles fall back to
+the session model. `opsx-gate` fails an authoring artifact missing the
+`<!-- authored: in-session -->` marker only when the `author` role is configured.
+
 ## Schema-managed vs skill-managed artifacts
 
 **8 artifacts in the schema graph** (proposal, specs, clarify, design, analyze, review, tasks, plan): OpenSpec's CLI tracks these. `openspec status --json` reports completion. `openspec validate --strict` enforces structure.
@@ -113,6 +131,7 @@ opsx-superpowers/
 └── templates/
     ├── constitution-template.md       # filled into project's openspec/constitution.md
     ├── domain-template.md             # filled into project's openspec/domain.md
+    ├── opsx-models.yaml               # role model/provider config convention (opsx-models CLI)
     │
     ├── # Schema-managed (tracked by openspec status):
     ├── proposal.md
