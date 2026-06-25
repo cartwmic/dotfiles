@@ -112,6 +112,37 @@ if [ -f "$CDIR/tasks.md" ]; then
   [ "${unchecked:-0}" -eq 0 ] || fail tasks "$unchecked unchecked task(s) in tasks.md"
 fi
 
+# In-Session Authoring Marker Check
+# Spec: opsx-gate-enforcement.in-session-authoring-marker-check
+#       opsx-model-config.author-in-session-by-default
+# WHILE author_in_session is true/unset AND the `author` role is CONFIGURED
+# (resolved via opsx-models, source != unset/default), every authoring artifact
+# SHALL carry the literal marker `<!-- authored: in-session -->`. Resolver-absent,
+# author unconfigured, or author_in_session=false => skip (no enforcement).
+GATE_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
+MODELS_BIN=""
+if [ -n "${OPSX_MODELS_BIN:-}" ]; then MODELS_BIN="$OPSX_MODELS_BIN"
+elif [ -n "$GATE_DIR" ] && [ -x "$GATE_DIR/executable_opsx-models" ]; then MODELS_BIN="$GATE_DIR/executable_opsx-models"
+elif [ -n "$GATE_DIR" ] && [ -x "$GATE_DIR/opsx-models" ]; then MODELS_BIN="$GATE_DIR/opsx-models"
+elif command -v opsx-models >/dev/null 2>&1; then MODELS_BIN="opsx-models"
+fi
+if [ -n "$MODELS_BIN" ] && command -v jq >/dev/null 2>&1; then
+  author_src="$(OPSX_ROOT="$ROOT" "$MODELS_BIN" author --json --change "$CHANGE" 2>/dev/null | jq -r '.source' 2>/dev/null || true)"
+  ais="$(OPSX_ROOT="$ROOT" "$MODELS_BIN" author-in-session --json --change "$CHANGE" 2>/dev/null | jq -r '.value' 2>/dev/null || true)"
+  case "$author_src" in
+    env|change|project|user)
+      if [ "$ais" != "false" ]; then
+        MARKER='<!-- authored: in-session -->'
+        for f in "$CDIR/proposal.md" "$CDIR/intent.md" "$CDIR/design.md" "$CDIR/clarify.md" "$CDIR/tasks.md" "$CDIR/plan.md" "$CDIR"/specs/*/spec.md; do
+          [ -f "$f" ] || continue
+          grep -qF "$MARKER" "$f" \
+            || fail author-marker "authoring artifact ${f#"$CDIR/"} lacks '$MARKER' (author role configured, author_in_session true)"
+        done
+      fi
+      ;;
+  esac
+fi
+
 # Short-circuit: do not run expensive validations while cheap checks are red.
 if [ "$rc" -ne 0 ]; then
   echo "$PROG: cheap checks failed (change=$CHANGE scale=${SCALE:-?}); validations skipped" >&2

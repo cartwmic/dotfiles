@@ -19,7 +19,7 @@
 
 ## 2. Gate author-marker check
 
-- [ ] 2.1 opsx-gate: add the In-Session Authoring Marker check — WHILE `author_in_session` true/unset AND the `author` role is configured (resolved via `opsx-models author --json --change`), fail an authoring artifact (`proposal.md`/`intent.md`/`design.md`/`clarify.md`/`tasks.md`/`plan.md`/`specs/**/spec.md`) that carries no `authored: in-session` marker; skip when author unconfigured or `author_in_session` false; resolver-absent = no author enforcement (author treated as unconfigured). Regression tests: configured+missing-marker→fail, configured+marker→pass, unconfigured→skip, opt-out→skip
+- [x] 2.1 opsx-gate: add the In-Session Authoring Marker check — WHILE `author_in_session` true/unset AND the `author` role is configured (resolved via `opsx-models author --json --change`), fail an authoring artifact (`proposal.md`/`intent.md`/`design.md`/`clarify.md`/`tasks.md`/`plan.md`/`specs/**/spec.md`) that carries no `authored: in-session` marker; skip when author unconfigured or `author_in_session` false; resolver-absent = no author enforcement (author treated as unconfigured). Regression tests: configured+missing-marker→fail, configured+marker→pass, unconfigured→skip, opt-out→skip
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx-gate
