@@ -37,7 +37,7 @@
       - "dot_local/share/agent-harness/canonical/skills/openspec-loop/**"
       - "dot_local/share/agent-harness/canonical/skills/openspec-propose/**"
       - "dot_local/share/agent-harness/canonical/skills/openspec-apply-change/**"
-- [ ] 3.3 Schema: review.md front-matter model fields + provider keys (`provider`/`author_provider`/`review_provider`/`impl_provider`) + author_in_session; schema.yaml + README docs
+- [x] 3.3 Schema: review.md front-matter model fields + provider keys (`provider`/`author_provider`/`review_provider`/`impl_provider`) + author_in_session; schema.yaml + README docs
   - intent: feature
   - files_allowed:
       - "dot_local/share/openspec/schemas/opsx-superpowers/**"
