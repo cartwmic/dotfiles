@@ -31,7 +31,7 @@
   - intent: feature
   - files_allowed:
       - "dot_pi/agent/extensions/opsx-loop/**"
-- [ ] 3.2 Skill edits: openspec-loop/propose/apply read role env (`OPSX_*_MODEL`) for subagent dispatch (review/impl best-effort `model:` pass) and honor author-in-session default (the in-session authoring STEP writes the `authored: in-session` marker onto authoring artifacts proposal/intent/specs/design/clarify/tasks/plan; do NOT delegate authoring unless opted out)
+- [x] 3.2 Skill edits: openspec-loop/propose/apply read role env (`OPSX_*_MODEL`) for subagent dispatch (review/impl best-effort `model:` pass) and honor author-in-session default (the in-session authoring STEP writes the `authored: in-session` marker onto authoring artifacts proposal/intent/specs/design/clarify/tasks/plan; do NOT delegate authoring unless opted out)
   - intent: feature
   - files_allowed:
       - "dot_local/share/agent-harness/canonical/skills/openspec-loop/**"
