@@ -33,8 +33,8 @@ does not require an in-session marker on its own construction (source = unset). 
 
 ## Diff Base + Worktree locator
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
+**Diff Base SHA:** a7d19e5abcd9ec8787eab197adc3aeb8fe6e2e01
+**Worktree Path:** /Users/cartwmic/.local/share/.opsx-worktrees/add-opsx-model-config
 **Integration Branch:** main
 
 ## Manual Adjustments
