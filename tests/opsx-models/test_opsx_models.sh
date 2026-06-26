@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hermetic tests for opsx-models.
+# Hermetic tests for opsx models.
 # Cites acceptance criteria by canonical ID so the verify gate's forward
 # AC<->test mapping (check 5) finds literal matches:
 #   opsx-model-config.role-model-resolver
@@ -7,7 +7,7 @@
 #   opsx-model-config.config-conventions
 set -uo pipefail
 
-BIN="$(cd "$(dirname "$0")/../.." && pwd)/dot_local/bin/executable_opsx-models"
+OPSX="$(cd "$(dirname "$0")/../.." && pwd)/dot_local/bin/executable_opsx"
 pass=0; failc=0
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass+1)); }
 nok() { printf 'NOT OK - %s\n' "$1"; failc=$((failc+1)); }
@@ -21,7 +21,7 @@ export OPSX_ROOT="$ROOT" OPSX_MODELS_USER_CONFIG="$USERCFG"
 # Neutralize ambient env between cases.
 clear_env() { unset OPSX_AUTHOR_MODEL OPSX_REVIEW_MODELS OPSX_IMPL_MODEL \
 	OPSX_AUTHOR_PROVIDER OPSX_REVIEW_PROVIDER OPSX_IMPL_PROVIDER OPSX_PROVIDER OPSX_AUTHOR_IN_SESSION; }
-run() { ( cd "$ROOT"; "$BIN" "$@" ); }
+run() { ( cd "$ROOT"; "$OPSX" models "$@" ); }
 
 # --- opsx-model-config.role-model-resolver: unset -> empty -------------------
 clear_env; : >"$ROOT/openspec/opsx-models.yaml"
@@ -120,5 +120,5 @@ eq "role-model-resolver: author-in-session env false" "false" "$(OPSX_AUTHOR_IN_
 eq "role-model-resolver: author-in-session front-matter false" '{"value":false,"source":"change"}' "$(run author-in-session --change demo --json)"
 
 echo "-----"
-echo "opsx-models: $pass passed, $failc failed"
+echo "opsx models: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]

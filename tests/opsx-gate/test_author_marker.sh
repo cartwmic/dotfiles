@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# Hermetic tests for opsx-gate's In-Session Authoring Marker check.
+# Hermetic tests for opsx gate's In-Session Authoring Marker check.
 # Cites acceptance criteria by canonical ID for the verify gate's forward
 # AC<->test mapping (check 5):
 #   opsx-gate-enforcement.in-session-authoring-marker-check
 #   opsx-model-config.author-in-session-by-default
 set -uo pipefail
 
+# Hermetic: scrub inherited OPSX_* env so the env layer never shadows the
+# per-test project/front-matter config the resolver is meant to read.
+unset OPSX_AUTHOR_MODEL OPSX_REVIEW_MODELS OPSX_IMPL_MODEL OPSX_AUTHOR_IN_SESSION \
+      OPSX_PROVIDER OPSX_AUTHOR_PROVIDER OPSX_REVIEW_PROVIDER OPSX_IMPL_PROVIDER OPSX_ROOT
+
 ROOT_REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-GATE="$ROOT_REPO/dot_local/bin/executable_opsx-gate"
-MODELS="$ROOT_REPO/dot_local/bin/executable_opsx-models"
+OPSX="$ROOT_REPO/dot_local/bin/executable_opsx"
 pass=0; failc=0
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass+1)); }
 nok() { printf 'NOT OK - %s\n' "$1"; failc=$((failc+1)); }
@@ -36,7 +40,7 @@ build() {
 	echo "$P"
 }
 run_gate() { # cwd=proj
-	( cd "$1"; PATH="$FAKEBIN:$PATH" OPSX_MODELS_BIN="$MODELS" "$GATE" "$CH" 2>&1 ) || true
+	( cd "$1"; PATH="$FAKEBIN:$PATH" "$OPSX" gate "$CH" 2>&1 ) || true
 }
 
 # 1. author configured + missing marker => GATE-FAIL author-marker

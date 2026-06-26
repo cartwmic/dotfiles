@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hermetic tests for opsx-gate.
+# Hermetic tests for opsx gate.
 # Cites acceptance criteria by canonical ID so the verify gate's forward
 # AC<->test mapping (check 5) finds literal matches:
 #   opsx-gate-enforcement.gate-exit-code-contract
@@ -10,7 +10,7 @@
 #   opsx-gate-enforcement.verdict-freshness-and-provenance
 set -uo pipefail
 
-GATE="$(cd "$(dirname "$0")/../.." && pwd)/dot_local/bin/executable_opsx-gate"
+OPSX="$(cd "$(dirname "$0")/../.." && pwd)/dot_local/bin/executable_opsx"
 pass=0; failc=0
 ok()   { printf 'ok   - %s\n' "$1"; pass=$((pass+1)); }
 nok()  { printf 'NOT OK - %s\n' "$1"; failc=$((failc+1)); }
@@ -53,7 +53,7 @@ EOF
   printf '# tasks\n- [x] 1.1 done\n' >"$d/tasks.md"
 }
 
-run() { "$GATE" "$@" 2>"$TMP/err"; }
+run() { "$OPSX" gate "$@" 2>"$TMP/err"; }
 
 # --- opsx-gate-enforcement.gate-exit-code-contract ---
 mkchange green-s
