@@ -28,7 +28,7 @@
 - [x] 2.1 Add `set <role> <value>` / `get <role>` / `list` to the `models_*` body: settable
   roles `author|review|impl|author-in-session` (hyphen→`author_in_session` key, boolean
   coercion + reject non-boolean); reserved verbs shadow role-read first-arg; `--layer
-  user|project` (project root = `$OPSX_ROOT` → git toplevel w/ `openspec/` → error); atomic
+  user|project` (project root = `$OPSX_ROOT` → nearest ancestor with `openspec/` → error); atomic
   temp-in-target-dir + rename, create-if-absent, comment/order preserving via `yq -i`;
   failed write leaves original intact + cleans temp; `get --layer` raw read; `set review`
   warns on list replace; invalid role/layer → error no write.

@@ -77,8 +77,19 @@ out="$("$OPSX" models list 2>/dev/null)"
 printf '%s' "$out" | grep -q '^author:' && printf '%s' "$out" | grep -q '^author-in-session:' \
   && ok "list reports roles incl author-in-session" || nok "list"
 
-# failed write leaves original intact (yq failure on unwritable temp dir is hard to force;
-# instead assert atomicity invariant: a rejected set never alters the file — covered above).
+# failed write (forced yq failure via a PATH stub) leaves the target intact / absent
+FAKE="$TMP/fakebin"; mkdir -p "$FAKE"
+printf '#!/usr/bin/env bash\nexit 3\n' > "$FAKE/yq"; chmod +x "$FAKE/yq"
+UDIR="$(dirname "$OPSX_MODELS_USER_CONFIG")"
+printf 'author: keepme\n' > "$OPSX_MODELS_USER_CONFIG"
+cp "$OPSX_MODELS_USER_CONFIG" "$TMP/orig.yaml"
+PATH="$FAKE:$PATH" "$OPSX" models set author NEW >/dev/null 2>&1; rc=$?
+left=$(ls "$UDIR"/.opsx-models.* 2>/dev/null | wc -l | tr -d ' ')
+[ $rc -ne 0 ] && diff -q "$TMP/orig.yaml" "$OPSX_MODELS_USER_CONFIG" >/dev/null && [ "$left" = "0" ] \
+  && ok "failed write leaves existing target unchanged, no temp left" || nok "atomic existing"
+ABSENT="$TMP/absent-dir/models.yaml"
+OPSX_MODELS_USER_CONFIG="$ABSENT" PATH="$FAKE:$PATH" "$OPSX" models set author NEW >/dev/null 2>&1; rc=$?
+[ $rc -ne 0 ] && [ ! -f "$ABSENT" ] && ok "failed write to absent target creates no file" || nok "atomic absent"
 
 echo "opsx-cli: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]

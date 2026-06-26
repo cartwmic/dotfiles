@@ -76,6 +76,11 @@ describe("parseLoopArg — opsx-loop-kickoff.status-and-clear-subcommands", () =
 		});
 		expect(parseLoopArg("models")).toEqual({ mode: "models", args: [] });
 	});
+	test("status/clear are leading keywords even with trailing tokens (argument-parsing-preserves-full-input)", () => {
+		expect(parseLoopArg("status extra")).toEqual({ mode: "status" });
+		expect(parseLoopArg("clear now")).toEqual({ mode: "clear" });
+		expect(parseLoopArg("stop please")).toEqual({ mode: "clear" });
+	});
 });
 
 describe("gateFailKey — opsx-loop-kickoff.stall-detection-stops-the-loop", () => {

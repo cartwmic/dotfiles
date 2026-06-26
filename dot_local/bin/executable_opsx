@@ -193,10 +193,12 @@ opsx_models() (
 					fi
 				fi
 				mkdir -p "$(dirname "$f")" || { err "cannot create dir for $f"; exit 1; }
-				[ -f "$f" ] || printf '' > "$f"
 				k="$(yaml_key_for "$srole")"
+				# Operate ONLY on a temp in the target dir; the final path is created/
+				# replaced solely by the atomic mv AFTER yq succeeds. A failure (incl. an
+				# absent target) leaves the final path exactly as it was (absent stays absent).
 				tmp="$(mktemp "$(dirname "$f")/.opsx-models.XXXXXX")" || { err "mktemp failed"; exit 1; }
-				cp "$f" "$tmp" 2>/dev/null || true
+				if [ -f "$f" ]; then cp "$f" "$tmp" || { err "copy failed; $f unchanged"; rm -f "$tmp"; exit 1; }; fi
 				if [ "$srole" = author-in-session ]; then
 					VAL="$sval" yq -i ".${k} = (strenv(VAL) == \"true\")" "$tmp" 2>/dev/null
 				else
@@ -347,7 +349,7 @@ EOF
 # SUBCOMMAND: gate
 # ============================================================================
 opsx_gate() (
-# opsx-gate <change> [--worktree <path>]
+# opsx gate <change> [--worktree <path>]
 #
 # Single (primary) source of enforcement truth for opsx-superpowers changes.
 # Exit 0 = all required checks pass; the change is ready to archive.
@@ -669,10 +671,10 @@ exit 1
 # SUBCOMMAND: loop
 # ============================================================================
 opsx_loop() (
-# opsx-loop <change> [--worktree <path>]
+# opsx loop <change> [--worktree <path>]
 #
 # Harness-agnostic Ralph-style fallback driver for the opsx drive-to-completion
-# loop. Repeatedly invokes a headless agent until `opsx-gate <change>` exits 0.
+# loop. Repeatedly invokes a headless agent until `opsx gate <change>` exits 0.
 # This is the PORTABILITY fallback: the primary path is the in-harness
 # orchestrator (openspec-loop skill driven by the goal extension's command-judge).
 # Swap harness by changing AGENT_CMD only.
