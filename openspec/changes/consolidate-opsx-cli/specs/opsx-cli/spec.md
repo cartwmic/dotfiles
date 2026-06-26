@@ -58,7 +58,7 @@ roles SHALL be `author`, `review`, `impl`, and `author-in-session`; the hyphenat
 `author-in-session` token SHALL map to the YAML key `author_in_session` and its value SHALL
 be coerced/validated as a boolean (`true`/`false`). The default write target SHALL be the
 user layer (`~/.config/opsx/models.yaml`); `--layer user|project` selects the target file.
-The project layer SHALL be resolved by: `$OPSX_ROOT` if set, else the nearest git toplevel
+The project layer SHALL be resolved by: `$OPSX_ROOT` if set, else the nearest ancestor directory
 containing an `openspec/` directory, else an error (no write). `set` SHALL create the
 target file (and the user layer's parent directory) if absent. `set` writes a single value
 (replace semantics; it does NOT merge lists). Writes SHALL be atomic and SHALL preserve
@@ -85,7 +85,7 @@ files remain the sole source of truth; this surface is an editor, not a new owne
 - **THEN** the project `openspec/opsx-models.yaml` SHALL be updated and the user file SHALL be left unchanged
 
 #### Scenario: Project layer with no discoverable root is rejected
-- **IF** `opsx models set <role> <model> --layer project` is run where neither `$OPSX_ROOT` nor a git toplevel containing `openspec/` can be found
+- **IF** `opsx models set <role> <model> --layer project` is run where neither `$OPSX_ROOT` nor an ancestor directory containing `openspec/` can be found
 - **THEN** `opsx models` SHALL print an error and exit non-zero without writing any file
 
 #### Scenario: Setting the list-valued review role replaces the whole list

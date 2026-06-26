@@ -44,11 +44,12 @@ interface LoopState {
 }
 
 /** Resolve one role via the harness-neutral `opsx models` CLI (consumer, not owner). */
-function resolveModel(role: string, change: string): ResolvedModel | null {
+function resolveModel(role: string, change: string, cwd: string): ResolvedModel | null {
 	try {
 		const r = spawnSync("opsx", ["models", role, "--json", "--change", change], {
 			encoding: "utf-8",
 			timeout: 5000,
+			cwd,
 		});
 		if (r.error || !r.stdout) return null;
 		return parseModelsJson(r.stdout);
@@ -64,21 +65,21 @@ function resolveModel(role: string, change: string): ResolvedModel | null {
  * (pre-change behavior). Returns the names of the vars that were set.
  * (opsx-loop-kickoff.loop-exports-resolved-role-models)
  */
-function exportModelEnv(change: string): string[] {
+function exportModelEnv(change: string, cwd: string): string[] {
 	const env = buildModelEnv({
-		author: resolveModel("author", change),
-		review: resolveModel("review", change),
-		impl: resolveModel("impl", change),
-		authorInSession: resolveModel("author-in-session", change),
+		author: resolveModel("author", change, cwd),
+		review: resolveModel("review", change, cwd),
+		impl: resolveModel("impl", change, cwd),
+		authorInSession: resolveModel("author-in-session", change, cwd),
 	});
 	for (const [k, v] of Object.entries(env)) process.env[k] = v;
 	return Object.keys(env);
 }
 
 /** Read review.md for a change: returns its text or "" if absent. */
-function readReview(change: string): string {
+function readReview(change: string, cwd: string): string {
 	try {
-		const p = join(process.cwd(), "openspec", "changes", change, "review.md");
+		const p = join(cwd, "openspec", "changes", change, "review.md");
 		return existsSync(p) ? readFileSync(p, "utf-8") : "";
 	} catch {
 		return "";
@@ -93,13 +94,13 @@ function bodyField(reviewMd: string, name: string): string | undefined {
 }
 
 /** Run opsx gate as the judge. exit 0 = met. Never rejects (non-fatal on spawn error). */
-function runGate(change: string, worktree: string | undefined, signal: AbortSignal): Promise<LoopVerdict> {
+function runGate(change: string, worktree: string | undefined, signal: AbortSignal, cwd: string): Promise<LoopVerdict> {
 	const args = ["gate", change];
 	if (worktree) args.push("--worktree", worktree);
 	return new Promise((resolve) => {
 		let out = "";
 		try {
-			const child = spawn("opsx", args, { signal });
+			const child = spawn("opsx", args, { signal, cwd });
 			child.stdout?.on("data", (d) => { out += String(d); });
 			child.stderr?.on("data", (d) => { out += String(d); });
 			child.on("error", (e: any) =>
@@ -113,8 +114,8 @@ function runGate(change: string, worktree: string | undefined, signal: AbortSign
 }
 
 /** Re-resolve a usable worktree path from the change's review.md, or undefined. */
-function resolveWorktree(change: string): string | undefined {
-	const wt = bodyField(readReview(change), "Worktree Path");
+function resolveWorktree(change: string, cwd: string): string | undefined {
+	const wt = bodyField(readReview(change, cwd), "Worktree Path");
 	if (!wt) return undefined;
 	try {
 		const r = spawnSync("git", ["-C", wt, "rev-parse", "--is-inside-work-tree"], { encoding: "utf-8", timeout: 5000 });
@@ -130,21 +131,26 @@ function resolveWorktree(change: string): string | undefined {
  * (committed OR uncommitted in-place authoring counts as progress).
  * (opsx-loop-kickoff.stall-detection-stops-the-loop)
  */
-function progressToken(change: string, worktree: string | undefined): string {
-	const dir = worktree ?? process.cwd();
+function progressToken(change: string, worktree: string | undefined, cwd: string): string {
+	const dir = worktree ?? cwd;
+	const sub = `openspec/changes/${change}`;
 	try {
 		const head = spawnSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf-8", timeout: 5000 }).stdout?.trim() ?? "";
-		const dirty = spawnSync("git", ["-C", dir, "status", "--porcelain", "--", `openspec/changes/${change}`], { encoding: "utf-8", timeout: 5000 }).stdout ?? "";
-		return `${head}\n${dirty}`;
+		// CONTENT of tracked modifications under the change dir (not just status flags),
+		// so repeated in-place edits to an already-dirty artifact still register as progress.
+		const diff = spawnSync("git", ["-C", dir, "diff", "--no-ext-diff", "--", sub], { encoding: "utf-8", timeout: 10000, maxBuffer: 16 * 1024 * 1024 }).stdout ?? "";
+		// status also captures untracked/added files under the change dir.
+		const status = spawnSync("git", ["-C", dir, "status", "--porcelain", "--", sub], { encoding: "utf-8", timeout: 5000 }).stdout ?? "";
+		return `${head}\n${status}\n${diff}`;
 	} catch {
 		return "";
 	}
 }
 
 /** Run `opsx models <args>` synchronously with cwd = repo; returns combined output. */
-function runModels(args: string[]): { code: number; out: string } {
+function runModels(args: string[], cwd: string): { code: number; out: string } {
 	try {
-		const r = spawnSync("opsx", ["models", ...args], { encoding: "utf-8", timeout: 10000, cwd: process.cwd() });
+		const r = spawnSync("opsx", ["models", ...args], { encoding: "utf-8", timeout: 10000, cwd, env: { ...process.env, OPSX_ROOT: cwd } });
 		if (r.error) return { code: 1, out: `opsx models failed to execute: ${r.error.message}` };
 		return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() };
 	} catch (e: any) {
@@ -202,16 +208,17 @@ export default function (pi: ExtensionAPI) {
 
 			if (parsed.mode === "models") {
 				// Thin wrapper over the `opsx models` CLI (owner of the write); bare → list.
+				// Use the session cwd so `--layer project` targets the ACTIVE repo.
 				const margs = parsed.args.length > 0 ? parsed.args : ["list"];
-				const { out } = runModels(margs);
+				const { out } = runModels(margs, ctx.cwd);
 				return out || "(no output)";
 			}
 
 			// set — replaces any active loop, resolves worktree + budget, starts work.
-			const review = readReview(parsed.change);
+			const review = readReview(parsed.change, ctx.cwd);
 			loop = {
 				change: parsed.change,
-				worktree: resolveWorktree(parsed.change),
+				worktree: resolveWorktree(parsed.change, ctx.cwd),
 				turns: 0,
 				maxTurns: parseLoopBudget(review, DEFAULT_BUDGET),
 				active: true,
@@ -219,7 +226,7 @@ export default function (pi: ExtensionAPI) {
 				stallCount: 0,
 			};
 			renderStatus(ctx);
-			const exported = exportModelEnv(parsed.change);
+			const exported = exportModelEnv(parsed.change, ctx.cwd);
 			pi.sendUserMessage(workerDirective(parsed.change), { deliverAs: "followUp" });
 			const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
 			const ignoredNote = parsed.ignored ? ` (ignored extra input: "${parsed.ignored}")` : "";
@@ -250,10 +257,10 @@ export default function (pi: ExtensionAPI) {
 			// Re-resolve the worktree EACH turn: a from-scratch change may only gain a
 			// Worktree Path mid-loop. (opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge)
 			const prevWorktree = session.worktree;
-			session.worktree = resolveWorktree(session.change);
+			session.worktree = resolveWorktree(session.change, ctx.cwd);
 			renderStatus(ctx);
 
-			const verdict = await runGate(session.change, session.worktree, ctx.signal);
+			const verdict = await runGate(session.change, session.worktree, ctx.signal, ctx.cwd);
 			if (loop !== session || !session.active) return; // cleared during async gate run
 			session.lastReason = verdict.reason;
 
@@ -273,7 +280,7 @@ export default function (pi: ExtensionAPI) {
 			// Stall detection: same normalized failed-check set + no observable progress
 			// (HEAD/dirty unchanged) + same worktree, for STALL_LIMIT turns running.
 			const key = gateFailKey(verdict.reason);
-			const progress = progressToken(session.change, session.worktree);
+			const progress = progressToken(session.change, session.worktree, ctx.cwd);
 			const worktreeChanged = prevWorktree !== session.worktree;
 			if (!worktreeChanged && key !== "" && key === session.stallKey && progress === session.lastProgress) {
 				session.stallCount += 1;

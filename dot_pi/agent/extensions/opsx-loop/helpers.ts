@@ -89,8 +89,10 @@ export function parseLoopArg(raw: string): LoopArg {
 	if (arg.length === 0) return { mode: "status" };
 	const tokens = arg.split(/\s+/);
 	const lower = tokens[0].toLowerCase();
-	if (tokens.length === 1 && STATUS_KEYWORDS.has(lower)) return { mode: "status" };
-	if (tokens.length === 1 && CLEAR_ALIASES.has(lower)) return { mode: "clear" };
+	// Leading keywords route to their subcommand with remaining tokens; they win
+	// over change-name parsing so trailing tokens never reinterpret them as a change.
+	if (STATUS_KEYWORDS.has(lower)) return { mode: "status" };
+	if (CLEAR_ALIASES.has(lower)) return { mode: "clear" };
 	if (lower === "models") return { mode: "models", args: tokens.slice(1) };
 	const change = tokens[0];
 	const rest = tokens.slice(1).join(" ");
