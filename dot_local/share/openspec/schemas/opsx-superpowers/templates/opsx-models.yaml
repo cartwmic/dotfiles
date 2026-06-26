@@ -1,6 +1,6 @@
 # opsx-models.yaml — default models (and providers) for opsx workflow roles.
 #
-# Resolved by the `opsx-models` CLI (sibling to `opsx-gate`), harness-neutral so
+# Resolved by the `opsx models` CLI (sibling to `opsx gate`), harness-neutral so
 # the workflow honors it from pi, Codex, Claude, or the bash driver alike.
 #
 # Place this file at EITHER:

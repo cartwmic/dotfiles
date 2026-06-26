@@ -79,7 +79,7 @@ For each task `- [ ] X.Y <description>` in `tasks.md`:
      - Use the `pi-subagents` skill (capability hook: subagent-driven-implementation).
      - Pass: task description, contract fields, covering plan steps, intent.
      - **Model:** dispatch the impl subagent with the configured `impl` model
-       (`OPSX_IMPL_MODEL` / `opsx-models impl --change <name>`), passed verbatim
+       (`OPSX_IMPL_MODEL` / `opsx models impl --change <name>`), passed verbatim
        as the subagent `model:` (already provider-qualified). Unset → skill default.
      - Subagent returns a structured handoff; main agent does writeback.
 
@@ -185,14 +185,14 @@ Write `verify.md`. If Completion Decision = red AND Verification Mode = retained
 WHEN the pre-review checks are green (tasks complete, structural checks pass, required validation commands pass, and any retained-required verify is green) — NOT keyed to verify specifically, so gating-required + advisory verify cannot deadlock — produce `code-review.md` from `templates/code-review.md`.
 
 - **Authored by a blind review SUBAGENT** (capability hook `subagent-dispatch` / `adversarial-review-postimpl`), NEVER self-authored by the orchestrator. The subagent reviews the diff `<Diff Base SHA>..<implementation HEAD>` against the baseline: `intent.md` + proposal + specs + design + plan + tasks status.
-- **Reviewer models:** dispatch one blind reviewer per configured `review` model (`OPSX_REVIEW_MODELS` / `opsx-models review --change <name>`, newline/comma-delimited), each passed verbatim as the subagent `model:`. Adversarial-multimodel requires ≥ 2 distinct models; unset → the skill's default review set.
+- **Reviewer models:** dispatch one blind reviewer per configured `review` model (`OPSX_REVIEW_MODELS` / `opsx models review --change <name>`, newline/comma-delimited), each passed verbatim as the subagent `model:`. Adversarial-multimodel requires ≥ 2 distinct models; unset → the skill's default review set.
 - The subagent stamps: `Verdict` (pass|fail), `review_mode` (adversarial-multimodel | degraded-single-model), `reviewer-provenance`, `Diff Base SHA`, and `Reviewed Range`.
 - **Constitution IX**: when the change edits an existing skill, the review MUST be adversarial-multimodel; a `degraded-single-model` verdict does NOT satisfy the gate.
 - Code Review Mode `none` → skip production. `advisory` → produce, non-blocking. `gating-required` → archive blocks unless Verdict = pass.
 
-## Completion gate: opsx-gate
+## Completion gate: opsx gate
 
-The change is complete when `opsx-gate <name> --worktree <worktree-path>` exits 0. It is the single (primary) source of enforcement truth; archive re-checks the same fields as defense-in-depth. Leave `verify.md` / `code-review.md` UNCOMMITTED until the gate passes, then archive commits/merges (committing a verdict advances HEAD and would self-stale the recorded range).
+The change is complete when `opsx gate <name> --worktree <worktree-path>` exits 0. It is the single (primary) source of enforcement truth; archive re-checks the same fields as defense-in-depth. Leave `verify.md` / `code-review.md` UNCOMMITTED until the gate passes, then archive commits/merges (committing a verdict advances HEAD and would self-stale the recorded range).
 
 ## Schema-only fallback
 

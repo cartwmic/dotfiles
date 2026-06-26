@@ -1,10 +1,10 @@
 # openspec-archive-change under schema: opsx-superpowers
 
-Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds verify HARD-GATE, code-review HARD-GATE, opsx-gate confirmation, worktree merge/cleanup, AC↔test mapping check, ADR promotion, retrospective-driven mcp-memory ingestion.
+Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds verify HARD-GATE, code-review HARD-GATE, opsx gate confirmation, worktree merge/cleanup, AC↔test mapping check, ADR promotion, retrospective-driven mcp-memory ingestion.
 
-## HARD-GATE 0: opsx-gate green (primary)
+## HARD-GATE 0: opsx gate green (primary)
 
-Run `opsx-gate <name> --worktree <Worktree Path>` (read Worktree Path from review.md). If it exits non-zero, REFUSE archive and print the `GATE-FAIL` lines — this is the primary, deterministic check. The HARD-GATEs below re-assert specific fields as defense-in-depth (a human may archive without the gate).
+Run `opsx gate <name> --worktree <Worktree Path>` (read Worktree Path from review.md). If it exits non-zero, REFUSE archive and print the `GATE-FAIL` lines — this is the primary, deterministic check. The HARD-GATEs below re-assert specific fields as defense-in-depth (a human may archive without the gate).
 
 ## HARD-GATE 1: verify.md green
 

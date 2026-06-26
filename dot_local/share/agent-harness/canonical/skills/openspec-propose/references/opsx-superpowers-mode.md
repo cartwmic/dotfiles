@@ -62,20 +62,20 @@ When an artifact is SKIPPED, write a one-line placeholder `<artifact>.md` with c
 
 When an artifact is AUTHORED, follow its `instruction` from `openspec instructions <artifact> --change <name> --json` AND apply the additions below.
 
-### Model & provider configuration (opsx-models)
+### Model & provider configuration (opsx models)
 
 Role models/providers are configured harness-neutrally and resolved via the
-`opsx-models` CLI (env `OPSX_*_MODEL` exported by the opsx-loop extension, or
-`opsx-models <role> --change <name>` directly). All values are already
+`opsx models` CLI (env `OPSX_*_MODEL` exported by the opsx-loop extension, or
+`opsx models <role> --change <name>` directly). All values are already
 provider-qualified; pass them through verbatim. Unset roles fall back to the
 session/default model — never hard-fail.
 
 - **Author in-session by default.** Author the artifacts in THIS (parent) session.
   Do NOT delegate authoring to a subagent unless `OPSX_AUTHOR_IN_SESSION` (or
-  `opsx-models author-in-session --change <name>`) is `false`. As each authoring
+  `opsx models author-in-session --change <name>`) is `false`. As each authoring
   artifact (`proposal`/`intent`/`design`/`clarify`/`tasks`/`plan`/`specs/**`) is
   written in-session, include the literal marker line `<!-- authored: in-session -->`
-  in it (an inert HTML comment) — `opsx-gate` checks for it when an `author` model
+  in it (an inert HTML comment) — `opsx gate` checks for it when an `author` model
   is configured. On opt-out, dispatch the authoring subagent with the `author`
   model and omit the marker.
 - **Review dispatch.** When dispatching blind review subagents, dispatch one
@@ -133,7 +133,7 @@ Inputs:
   - specs/**/spec.md
   - clarify.md (resolved findings)
   - design.md
-Models: the configured `review` set (`OPSX_REVIEW_MODELS` / `opsx-models review
+Models: the configured `review` set (`OPSX_REVIEW_MODELS` / `opsx models review
         --change <name>`), one reviewer per entry; else the skill defaults
         (opus + gpt-5)
 Rounds: per skill defaults

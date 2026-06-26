@@ -1,5 +1,5 @@
 ---
-# Machine-readable mode block — the SOLE source opsx-gate reads (it never parses
+# Machine-readable mode block — the SOLE source opsx gate reads (it never parses
 # the prose table below). Keep the table in sync as the human-facing mirror.
 scale: S
 worktree_mode: worktree-required
@@ -12,7 +12,7 @@ code_review_mode: advisory
 loop_max_iterations: 20
 validation_source_mode: required
 spec_level: spec-anchored
-# ── Optional per-change model/provider overrides (resolved by `opsx-models`) ──
+# ── Optional per-change model/provider overrides (resolved by `opsx models`) ──
 # Pin models for THIS change above the project/user config files. A value
 # containing "/" is a complete pi model id used verbatim; a BARE id is qualified
 # by the provider keys. Roles left unset fall back to the session model.
@@ -30,7 +30,7 @@ spec_level: spec-anchored
 
 <!--
 Controlled-vocabulary mode switchboard. The apply instruction reads these modes
-and dispatches behavior; opsx-gate reads the YAML front-matter above. Override
+and dispatches behavior; opsx gate reads the YAML front-matter above. Override
 any mode by setting it (in BOTH the front-matter and this table).
 -->
 
@@ -38,7 +38,7 @@ any mode by setting it (in BOTH the front-matter and this table).
 
 | Mode | Value | Notes |
 |---|---|---|
-| Scale | S | XS\|S\|M\|L\|XL — skills author per Scale (graph is static; gating lives in the skills + opsx-gate) |
+| Scale | S | XS\|S\|M\|L\|XL — skills author per Scale (graph is static; gating lives in the skills + opsx gate) |
 | Execution Mode | standard | standard\|tdd-preferred\|tdd-required |
 | Verification Mode | retained-recommended | inline-only\|retained-recommended\|retained-required — retained-required forces verify.md green before archive |
 | Debug Mode | standard | standard\|systematic-debugging |
@@ -49,14 +49,14 @@ any mode by setting it (in BOTH the front-matter and this table).
 | Loop Max Iterations | 20 | iteration budget; mapped onto the loop runtime turn budget (S≈20, M≈40, L≈80) |
 | Validation Source Mode | required | required\|waived — waived (with rationale) lets Scale ≥ M pass with no agent-independent validation source |
 | Spec Level | spec-anchored | spec-anchored\|spec-first\|spec-as-source (warning if last) |
-| Model Config | (unset) | optional `author_model`/`review_models`/`impl_model`/`author_in_session` + `provider`/`*_provider` front-matter keys, resolved by `opsx-models`; unset ⇒ session model |
+| Model Config | (unset) | optional `author_model`/`review_models`/`impl_model`/`author_in_session` + `provider`/`*_provider` front-matter keys, resolved by `opsx models`; unset ⇒ session model |
 
 ## Diff Base + Worktree locator
 
 <!--
 Captured by apply at worktree creation. `Diff Base SHA` = integration-branch
 merge-base, IMMUTABLE for the life of the `opsx/<change>` branch; used by
-file-contract diffs, code-review diff base, and opsx-gate verdict freshness.
+file-contract diffs, code-review diff base, and opsx gate verdict freshness.
 In same-tree mode, Diff Base SHA = pre-apply HEAD and Worktree Path is empty.
 -->
 
