@@ -129,8 +129,8 @@ describe("commandVerdict — goal-loop.pluggable-command-judge", () => {
 
 describe("normalizeGoalConfig — goal-loop.pluggable-command-judge", () => {
 	test("accepts a judgeCommand string", () => {
-		expect(normalizeGoalConfig({ judgeCommand: "opsx-gate my-change" })).toEqual({
-			judgeCommand: "opsx-gate my-change",
+		expect(normalizeGoalConfig({ judgeCommand: "opsx gate my-change" })).toEqual({
+			judgeCommand: "opsx gate my-change",
 		});
 	});
 	test("drops blank judgeCommand", () => {

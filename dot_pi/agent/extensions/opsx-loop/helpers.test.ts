@@ -4,14 +4,14 @@
 //   opsx-loop-kickoff.budget-from-review-front-matter
 //   opsx-loop-kickoff.status-and-clear-subcommands
 import { describe, expect, test } from "bun:test";
-import { buildModelEnv, parseLoopArg, parseLoopBudget, parseModelsJson, verdictFromExit } from "./helpers.ts";
+import { buildModelEnv, gateFailKey, parseLoopArg, parseLoopBudget, parseModelsJson, verdictFromExit } from "./helpers.ts";
 
 describe("verdictFromExit — opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge", () => {
 	test("exit 0 is met", () => {
 		expect(verdictFromExit(0, "GATE-PASS: x (M)")).toEqual({ met: true, reason: "GATE-PASS: x (M)" });
 	});
 	test("exit 0 empty output still met", () => {
-		expect(verdictFromExit(0, "  ")).toEqual({ met: true, reason: "opsx-gate exited 0" });
+		expect(verdictFromExit(0, "  ")).toEqual({ met: true, reason: "opsx gate exited 0" });
 	});
 	test("non-zero is not met, report surfaced", () => {
 		expect(verdictFromExit(1, "GATE-FAIL tasks 1 3 unchecked")).toEqual({
@@ -20,7 +20,7 @@ describe("verdictFromExit — opsx-loop-kickoff.opsx-gate-is-the-deterministic-j
 		});
 	});
 	test("non-zero empty output reports code", () => {
-		expect(verdictFromExit(2, "")).toEqual({ met: false, reason: "opsx-gate exited 2" });
+		expect(verdictFromExit(2, "")).toEqual({ met: false, reason: "opsx gate exited 2" });
 	});
 	test("null code (spawn failure) is not met", () => {
 		expect(verdictFromExit(null, "").met).toBe(false);
@@ -62,10 +62,36 @@ describe("parseLoopArg — opsx-loop-kickoff.status-and-clear-subcommands", () =
 	});
 	test("a change name is a set (first token)", () => {
 		expect(parseLoopArg("add-clipboard-extension")).toEqual({ mode: "set", change: "add-clipboard-extension" });
-		expect(parseLoopArg("  my-change  extra ")).toEqual({ mode: "set", change: "my-change" });
 	});
 	test("change name containing a keyword is still a set", () => {
 		expect(parseLoopArg("stop-the-flaky-tests")).toEqual({ mode: "set", change: "stop-the-flaky-tests" });
+	});
+	test("trailing tokens after a change name are surfaced as ignored, not truncated (argument-parsing-preserves-full-input)", () => {
+		expect(parseLoopArg("  my-change  extra words ")).toEqual({ mode: "set", change: "my-change", ignored: "extra words" });
+	});
+	test("models routes with remaining tokens intact (model-config-subcommand)", () => {
+		expect(parseLoopArg("models set author claude-bridge/claude-opus-4-8")).toEqual({
+			mode: "models",
+			args: ["set", "author", "claude-bridge/claude-opus-4-8"],
+		});
+		expect(parseLoopArg("models")).toEqual({ mode: "models", args: [] });
+	});
+});
+
+describe("gateFailKey — opsx-loop-kickoff.stall-detection-stops-the-loop", () => {
+	test("extracts the sorted set of GATE-FAIL check ids, excluding volatile text", () => {
+		const report = [
+			"GATE-FAIL tasks 1 unchecked tasks remain at /some/path abc123",
+			"GATE-WARN advisory 0 ignored",
+			"GATE-FAIL structure 1 openspec validate failed 2026-06-25T00:00",
+		].join("\n");
+		expect(gateFailKey(report)).toBe("structure,tasks");
+	});
+	test("identical check sets in different order produce the same key", () => {
+		expect(gateFailKey("GATE-FAIL b 1 x\nGATE-FAIL a 1 y")).toBe(gateFailKey("GATE-FAIL a 1 z\nGATE-FAIL b 1 w"));
+	});
+	test("no GATE-FAIL lines yields empty key", () => {
+		expect(gateFailKey("GATE-PASS: foo (L)")).toBe("");
 	});
 });
 

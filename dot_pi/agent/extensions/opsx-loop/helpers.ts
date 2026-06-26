@@ -13,7 +13,7 @@ export interface ResolvedModel {
 	source: string; // env | change | project | user | default | unset
 }
 
-/** Parse one `opsx-models <role> --json` stdout line; null on malformed input. */
+/** Parse one `opsx models <role> --json` stdout line; null on malformed input. */
 export function parseModelsJson(stdout: string): ResolvedModel | null {
 	try {
 		const o = JSON.parse((stdout ?? "").trim());
@@ -28,11 +28,11 @@ export function parseModelsJson(stdout: string): ResolvedModel | null {
 
 /**
  * Build the OPSX_* env map the extension exports into worker turns, from the
- * parsed `opsx-models <role> --json` outputs. Roles export ONLY when CONFIGURED
+ * parsed `opsx models <role> --json` outputs. Roles export ONLY when CONFIGURED
  * (source not unset/default) so unset roles fall back to the session model.
  * `review` is newline-joined (the resolver/skills accept newline- or
  * comma-delimited). author-in-session always exports its resolved boolean.
- * Values are already provider-qualified by opsx-models and pass through.
+ * Values are already provider-qualified by opsx models and pass through.
  * (opsx-loop-kickoff.loop-exports-resolved-role-models)
  */
 export function buildModelEnv(resolved: {
@@ -64,6 +64,7 @@ export function buildModelEnv(resolved: {
 export const LOOP_SUBCOMMANDS: ReadonlyArray<{ value: string; label: string; description: string }> = [
 	{ value: "status", label: "status", description: "Show the active loop's change, turns, and budget" },
 	{ value: "clear", label: "clear", description: "Stop and clear the active loop (aliases: stop, off, reset, none, cancel)" },
+	{ value: "models", label: "models", description: "Read/write role models: models set|get <role> [..] | models list" },
 ];
 
 const CLEAR_ALIASES = new Set(["clear", "stop", "off", "reset", "none", "cancel"]);
@@ -72,32 +73,54 @@ const STATUS_KEYWORDS = new Set(["status", "?"]);
 export type LoopArg =
 	| { mode: "status" }
 	| { mode: "clear" }
-	| { mode: "set"; change: string };
+	| { mode: "models"; args: string[] }
+	| { mode: "set"; change: string; ignored?: string };
 
 /**
- * Classify the `/opsx-loop` argument. Matching for status/clear is exact
- * (case-insensitive, trimmed) so a change name that merely contains a keyword
- * is still a set. (opsx-loop-kickoff.status-and-clear-subcommands)
+ * Classify the `/opsx-loop` argument. Leading keywords (status/clear/models)
+ * route to their subcommand with the REMAINING tokens intact; otherwise the
+ * first token is the change name and any trailing tokens are surfaced as
+ * `ignored` (never silently truncated).
+ * (opsx-loop-kickoff.argument-parsing-preserves-full-input,
+ *  opsx-loop-kickoff.status-and-clear-subcommands, opsx-loop-kickoff.model-config-subcommand)
  */
 export function parseLoopArg(raw: string): LoopArg {
 	const arg = (raw ?? "").trim();
 	if (arg.length === 0) return { mode: "status" };
-	const lower = arg.toLowerCase();
-	if (STATUS_KEYWORDS.has(lower)) return { mode: "status" };
-	if (CLEAR_ALIASES.has(lower)) return { mode: "clear" };
-	// Take the first token as the change name (ignore trailing junk/flags).
-	return { mode: "set", change: arg.split(/\s+/)[0] };
+	const tokens = arg.split(/\s+/);
+	const lower = tokens[0].toLowerCase();
+	if (tokens.length === 1 && STATUS_KEYWORDS.has(lower)) return { mode: "status" };
+	if (tokens.length === 1 && CLEAR_ALIASES.has(lower)) return { mode: "clear" };
+	if (lower === "models") return { mode: "models", args: tokens.slice(1) };
+	const change = tokens[0];
+	const rest = tokens.slice(1).join(" ");
+	return rest.length > 0 ? { mode: "set", change, ignored: rest } : { mode: "set", change };
 }
 
 /**
- * Verdict from an opsx-gate run: exit 0 = met, any non-zero (or failure to
+ * Normalize an opsx gate report into a stable stall key: the SORTED set of
+ * `GATE-FAIL <check_id>` identifiers, excluding volatile content (paths, SHAs,
+ * timestamps, free-text messages). Used to detect a genuinely repeating failure.
+ * (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ */
+export function gateFailKey(report: string): string {
+	const ids: string[] = [];
+	for (const line of (report ?? "").split(/\r?\n/)) {
+		const m = line.match(/^\s*GATE-FAIL\s+(\S+)/);
+		if (m) ids.push(m[1]);
+	}
+	return Array.from(new Set(ids)).sort().join(",");
+}
+
+/**
+ * Verdict from an opsx gate run: exit 0 = met, any non-zero (or failure to
  * execute) = not met, with the gate's combined output as the reason.
  * Pure; never throws. (opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge)
  */
 export function verdictFromExit(code: number | null, output: string): LoopVerdict {
 	const out = (output ?? "").trim();
-	if (code === 0) return { met: true, reason: out.slice(0, 2000) || "opsx-gate exited 0" };
-	return { met: false, reason: out.slice(0, 2000) || `opsx-gate exited ${code ?? "non-zero"}` };
+	if (code === 0) return { met: true, reason: out.slice(0, 2000) || "opsx gate exited 0" };
+	return { met: false, reason: out.slice(0, 2000) || `opsx gate exited ${code ?? "non-zero"}` };
 }
 
 /**
