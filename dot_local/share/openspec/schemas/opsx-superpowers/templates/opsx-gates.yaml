@@ -1,6 +1,6 @@
 # opsx-gates.yaml — project validation manifest (copy to openspec/opsx-gates.yaml).
 #
-# opsx-gate runs each command BY EXIT CODE, with cwd = the located implementation
+# opsx gate runs each command BY EXIT CODE, with cwd = the located implementation
 # worktree and these vars exported: OPSX_CHANGE, OPSX_CHANGE_DIR, OPSX_WORKTREE,
 # OPSX_DIFF_BASE, OPSX_HEAD.
 #

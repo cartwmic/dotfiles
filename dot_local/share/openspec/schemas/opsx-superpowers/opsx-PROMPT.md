@@ -1,6 +1,6 @@
 # opsx loop worker
 
-You are advancing ONE OpenSpec change toward a green `opsx-gate`. The gate is the
+You are advancing ONE OpenSpec change toward a green `opsx gate`. The gate is the
 sole authority on "done" — your job each turn is to make its earliest blocking
 failure pass, nothing more.
 
@@ -21,4 +21,4 @@ failure pass, nothing more.
    fabricate a green verdict — the gate recomputes the diff range and will reject
    stale or unprovenanced verdicts.
 
-Stop when `opsx-gate "$CHANGE"` exits 0.
+Stop when `opsx gate "$CHANGE"` exits 0.

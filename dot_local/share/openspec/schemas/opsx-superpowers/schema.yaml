@@ -305,19 +305,19 @@ artifacts:
 
       review.md MUST carry a machine-readable YAML front-matter block
       mirroring scale, worktree_mode, verification_mode, code_review_mode,
-      loop_max_iterations, and validation_source_mode. opsx-gate reads modes
+      loop_max_iterations, and validation_source_mode. opsx gate reads modes
       ONLY from that front-matter (never the prose table); the table is the
       human-facing mirror the apply skill keeps in sync.
 
       review.md front-matter MAY also carry OPTIONAL per-change model/provider
-      overrides resolved by the `opsx-models` CLI:
+      overrides resolved by the `opsx models` CLI:
         author_model / review_models / impl_model — role models
         author_in_session                         — boolean (default true)
         provider / author_provider / review_provider / impl_provider
       A value containing "/" is a complete pi model id used verbatim; a bare id
       is qualified by the provider keys. These layer above project
       openspec/opsx-models.yaml and user ~/.config/opsx/models.yaml; unset roles
-      fall back to the session model. opsx-gate enforces an in-session authoring
+      fall back to the session model. opsx gate enforces an in-session authoring
       marker only when the `author` role is configured.
       (opsx-workflow-schema.review-front-matter-carries-role-models;
        opsx-workflow-schema.author-in-session-front-matter-flag)
@@ -327,7 +327,7 @@ artifacts:
                               integration-branch merge-base, IMMUTABLE for the
                               life of the opsx/<change> branch; used by file-
                               contract diffs, the code-review diff base, and
-                              opsx-gate verdict freshness. Same-tree: pre-apply
+                              opsx gate verdict freshness. Same-tree: pre-apply
                               HEAD. Plus Worktree Path + Integration Branch.
         Manual Adjustments — author overrides to defaults
         Execution Notes    — transient observations during apply

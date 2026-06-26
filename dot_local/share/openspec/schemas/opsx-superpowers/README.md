@@ -63,10 +63,10 @@ Each mode has a controlled vocabulary. Default values shown in **bold**.
 | `Validation Source Mode` | **required** / waived | required: Scale ≥ M must declare an agent-independent validation source |
 | `Spec Level` | **spec-anchored** / spec-first / spec-as-source | spec-anchored = OpenSpec's natural mode; spec-as-source warns about MDD-era trade-offs |
 
-### Role models (optional, via `opsx-models`)
+### Role models (optional, via `opsx models`)
 
 review.md front-matter MAY pin per-change models/providers, resolved by the
-harness-neutral `opsx-models` CLI (sibling to `opsx-gate`):
+harness-neutral `opsx models` CLI (sibling to `opsx gate`):
 
 | Key | Meaning |
 |---|---|
@@ -78,7 +78,7 @@ Layering (highest wins): env > review.md front-matter > project
 `openspec/opsx-models.yaml` > user `~/.config/opsx/models.yaml` > session default.
 The `opsx-loop` extension exports `OPSX_AUTHOR_MODEL` / `OPSX_REVIEW_MODELS` /
 `OPSX_IMPL_MODEL` / `OPSX_AUTHOR_IN_SESSION` on loop start; unset roles fall back to
-the session model. `opsx-gate` fails an authoring artifact missing the
+the session model. `opsx gate` fails an authoring artifact missing the
 `<!-- authored: in-session -->` marker only when the `author` role is configured.
 
 ## Schema-managed vs skill-managed artifacts
@@ -104,17 +104,17 @@ See `capability-hooks.md` for the current capability → skill mapping.
 After `openspec-explore` freezes `intent.md`, drive the change to completion behind
 the deterministic gate:
 
-- **`opsx-gate <change>`** — the single (primary) source of enforcement truth. Reads
+- **`opsx gate <change>`** — the single (primary) source of enforcement truth. Reads
   modes from `review.md` front-matter, runs required-artifacts-by-Scale, the
   `openspec/opsx-gates.yaml` validation manifest (+ `OPSX_VALIDATE`), and mode-aware
   verify/code-review verdicts (freshness-bound to an immutable `Diff Base SHA`). Exits
   0 when ready to archive; else prints `GATE-FAIL <check_id> <blocking> <message>`.
-- **`openspec-loop` skill** — single orchestrator agent: each turn runs `opsx-gate`,
+- **`openspec-loop` skill** — single orchestrator agent: each turn runs `opsx gate`,
   fixes the earliest blocking failure, delegates every review verdict to a blind
   subagent judged against the frozen baseline. Stops when the gate is green.
 - **Loop runtime** — the pi `goal` extension with a command-judge
-  (`PI_GOAL_JUDGE_CMD='opsx-gate <change>'`) continues turns until the gate passes.
-  Harness-agnostic fallback: the **`opsx-loop`** bash driver (`AGENT_CMD`-parameterized).
+  (`PI_GOAL_JUDGE_CMD='opsx gate <change>'`) continues turns until the gate passes.
+  Harness-agnostic fallback: the **`opsx loop`** bash driver (`AGENT_CMD`-parameterized).
 
 Enforcement lives below the harness (exit codes), so the same workflow runs on pi
 today or another harness tomorrow by swapping one adapter. The `opsx-gates.yaml`
@@ -131,7 +131,7 @@ opsx-superpowers/
 └── templates/
     ├── constitution-template.md       # filled into project's openspec/constitution.md
     ├── domain-template.md             # filled into project's openspec/domain.md
-    ├── opsx-models.yaml               # role model/provider config convention (opsx-models CLI)
+    ├── opsx-models.yaml               # role model/provider config convention (opsx models CLI)
     │
     ├── # Schema-managed (tracked by openspec status):
     ├── proposal.md

@@ -6,7 +6,7 @@ pre-implementation analyze review. Skill-managed (NOT in the schema artifact
 graph) — produced by openspec-apply-change after the pre-review checks are green,
 authored by the review SUBAGENT (never self-authored by the orchestrator).
 
-opsx-gate / archive read these fields verbatim:
+opsx gate / archive read these fields verbatim:
   - Verdict             pass | fail            (gating-required: fail/absent blocks archive)
   - review_mode         adversarial-multimodel | degraded-single-model
                         (degraded does NOT satisfy gating or Constitution IX)
