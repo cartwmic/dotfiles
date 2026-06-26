@@ -4,7 +4,10 @@
 //   opsx-loop-kickoff.budget-from-review-front-matter
 //   opsx-loop-kickoff.status-and-clear-subcommands
 import { describe, expect, test } from "bun:test";
-import { buildModelEnv, gateFailKey, parseLoopArg, parseLoopBudget, parseModelsJson, verdictFromExit } from "./helpers.ts";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildModelEnv, gateFailKey, hashDir, parseLoopArg, parseLoopBudget, parseModelsJson, verdictFromExit } from "./helpers.ts";
 
 describe("verdictFromExit — opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge", () => {
 	test("exit 0 is met", () => {
@@ -80,6 +83,30 @@ describe("parseLoopArg — opsx-loop-kickoff.status-and-clear-subcommands", () =
 		expect(parseLoopArg("status extra")).toEqual({ mode: "status" });
 		expect(parseLoopArg("clear now")).toEqual({ mode: "clear" });
 		expect(parseLoopArg("stop please")).toEqual({ mode: "clear" });
+	});
+});
+
+describe("hashDir — opsx-loop-kickoff.stall-detection-stops-the-loop", () => {
+	test("any file-content change under the dir changes the digest (incl. untracked)", () => {
+		const root = mkdtempSync(join(tmpdir(), "opsxhash-"));
+		const sub = join(root, "openspec", "changes", "c");
+		mkdirSync(sub, { recursive: true });
+		writeFileSync(join(sub, "tasks.md"), "- [ ] 1\n");
+		const a = hashDir(sub);
+		writeFileSync(join(sub, "tasks.md"), "- [x] 1\n"); // in-place edit (never git-added)
+		const b = hashDir(sub);
+		writeFileSync(join(sub, "new.md"), "fresh\n"); // brand-new untracked file
+		const c = hashDir(sub);
+		expect(a).not.toBe(b);
+		expect(b).not.toBe(c);
+	});
+	test("identical content yields identical digest; missing dir is empty-safe", () => {
+		const r1 = mkdtempSync(join(tmpdir(), "opsxhash-"));
+		const r2 = mkdtempSync(join(tmpdir(), "opsxhash-"));
+		writeFileSync(join(r1, "x.md"), "same\n");
+		writeFileSync(join(r2, "x.md"), "same\n");
+		expect(hashDir(r1)).toBe(hashDir(r2));
+		expect(hashDir(join(r1, "does-not-exist"))).toBe(hashDir(join(r2, "does-not-exist")));
 	});
 });
 

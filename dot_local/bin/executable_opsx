@@ -197,7 +197,7 @@ opsx_models() (
 				# Operate ONLY on a temp in the target dir; the final path is created/
 				# replaced solely by the atomic mv AFTER yq succeeds. A failure (incl. an
 				# absent target) leaves the final path exactly as it was (absent stays absent).
-				tmp="$(mktemp "$(dirname "$f")/.opsx-models.XXXXXX")" || { err "mktemp failed"; exit 1; }
+				tmp="$(mktemp "$(dirname "$f")/.opsx-cfg.XXXXXX")" || { err "mktemp failed"; exit 1; }
 				if [ -f "$f" ]; then cp "$f" "$tmp" || { err "copy failed; $f unchanged"; rm -f "$tmp"; exit 1; }; fi
 				if [ "$srole" = author-in-session ]; then
 					VAL="$sval" yq -i ".${k} = (strenv(VAL) == \"true\")" "$tmp" 2>/dev/null
