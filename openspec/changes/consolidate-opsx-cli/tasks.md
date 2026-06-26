@@ -44,7 +44,10 @@
   archive-change superpowers-mode refs) and schema (README, capability-hooks, opsx-PROMPT,
   schema.yaml, templates/*). Document the new `opsx models` write surface + `/opsx-loop
   models` where model config is described. Preserve capability names + filenames.
-  (opsx-cli.hard-cutover-no-legacy-entrypoints, opsx-skill-integration.skills-honor-configured-role-models)
+  (opsx-cli.hard-cutover-no-legacy-entrypoints, opsx-skill-integration.skills-honor-configured-role-models,
+   opsx-skill-integration.openspec-loop-orchestrator-skill-exists, opsx-loop-orchestration.single-orchestrator-loop,
+   opsx-loop-orchestration.harness-neutral-core-with-adapters, opsx-workflow-schema.mode-switchboard-in-review-md,
+   opsx-workflow-schema.worktree-lifecycle-ownership, opsx-workflow-schema.validation-gates-manifest-reference)
   - intent: feature
   - files_allowed:
       - dot_local/share/agent-harness/canonical/skills/**
@@ -59,7 +62,7 @@
   `Worktree Path` from review.md each `agent_end` (blank/stale→no-worktree gate); stall
   detection (normalized `check_id` set + HEAD-or-change-dir-edit progress, default 3,
   preserve+notify). Update goal extension test's spawn-name reference only.
-  (opsx-loop-kickoff.argument-parsing-preserves-full-input, opsx-loop-kickoff.stall-detection-stops-the-loop,
+  (opsx-loop-kickoff.single-command-guaranteed-loop, opsx-loop-kickoff.argument-parsing-preserves-full-input, opsx-loop-kickoff.stall-detection-stops-the-loop,
    opsx-loop-kickoff.model-config-subcommand, opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge)
   - intent: feature
   - files_allowed:
