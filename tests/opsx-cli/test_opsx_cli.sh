@@ -84,7 +84,7 @@ UDIR="$(dirname "$OPSX_MODELS_USER_CONFIG")"
 printf 'author: keepme\n' > "$OPSX_MODELS_USER_CONFIG"
 cp "$OPSX_MODELS_USER_CONFIG" "$TMP/orig.yaml"
 PATH="$FAKE:$PATH" "$OPSX" models set author NEW >/dev/null 2>&1; rc=$?
-left=$(ls "$UDIR"/.opsx-models.* 2>/dev/null | wc -l | tr -d ' ')
+left=$(ls "$UDIR"/.opsx-cfg.* 2>/dev/null | wc -l | tr -d ' ')
 [ $rc -ne 0 ] && diff -q "$TMP/orig.yaml" "$OPSX_MODELS_USER_CONFIG" >/dev/null && [ "$left" = "0" ] \
   && ok "failed write leaves existing target unchanged, no temp left" || nok "atomic existing"
 ABSENT="$TMP/absent-dir/models.yaml"

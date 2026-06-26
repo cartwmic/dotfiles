@@ -18,6 +18,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import {
 	buildModelEnv,
 	gateFailKey,
+	hashDir,
 	LOOP_SUBCOMMANDS,
 	parseLoopArg,
 	parseLoopBudget,
@@ -133,18 +134,16 @@ function resolveWorktree(change: string, cwd: string): string | undefined {
  */
 function progressToken(change: string, worktree: string | undefined, cwd: string): string {
 	const dir = worktree ?? cwd;
-	const sub = `openspec/changes/${change}`;
+	let head = "";
 	try {
-		const head = spawnSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf-8", timeout: 5000 }).stdout?.trim() ?? "";
-		// CONTENT of tracked modifications under the change dir (not just status flags),
-		// so repeated in-place edits to an already-dirty artifact still register as progress.
-		const diff = spawnSync("git", ["-C", dir, "diff", "--no-ext-diff", "--", sub], { encoding: "utf-8", timeout: 10000, maxBuffer: 16 * 1024 * 1024 }).stdout ?? "";
-		// status also captures untracked/added files under the change dir.
-		const status = spawnSync("git", ["-C", dir, "status", "--porcelain", "--", sub], { encoding: "utf-8", timeout: 5000 }).stdout ?? "";
-		return `${head}\n${status}\n${diff}`;
+		head = spawnSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf-8", timeout: 5000 }).stdout?.trim() ?? "";
 	} catch {
-		return "";
+		/* not a git tree / no HEAD: rely on the content digest alone */
 	}
+	// Content digest of ALL files under the change dir captures committed, staged,
+	// unstaged, AND untracked edits uniformly (git index state is irrelevant).
+	const content = hashDir(join(dir, "openspec", "changes", change));
+	return `${head}\n${content}`;
 }
 
 /** Run `opsx models <args>` synchronously with cwd = repo; returns combined output. */

@@ -2,6 +2,44 @@
 // Kept free of pi-runtime imports so they are unit-testable via `bun test`.
 // The loop mechanism mirrors the validated goal-loop pattern (ADR-0001/0004)
 // but this extension is independent — the goal extension is never modified.
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
+
+/**
+ * Deterministic content digest of every file under `dir` (recursive, path-sorted).
+ * Captures ANY working-tree content change — committed, staged, unstaged, or
+ * untracked — uniformly, so the stall guard's progress signal does not depend on
+ * git index state. Returns "" for a missing/unreadable dir.
+ * (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ */
+export function hashDir(dir: string): string {
+	const h = createHash("sha1");
+	const walk = (p: string): void => {
+		let entries: ReturnType<typeof readdirSync>;
+		try {
+			entries = readdirSync(p, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const e of [...entries].sort((a, b) => (a.name < b.name ? -1 : 1))) {
+			const fp = join(p, e.name);
+			if (e.isDirectory()) walk(fp);
+			else {
+				try {
+					// relative path keeps the digest location-independent (same change dir
+					// across turns hashes only by content + intra-dir layout).
+					h.update(`${relative(dir, fp)}\0`);
+					h.update(readFileSync(fp));
+				} catch {
+					/* unreadable file: skip */
+				}
+			}
+		}
+	};
+	walk(dir);
+	return h.digest("hex");
+}
 
 export interface LoopVerdict {
 	met: boolean;
