@@ -18,15 +18,15 @@ WHEN an explore session for a change concludes, THE openspec-explore skill SHALL
 
 ### Requirement: Single Orchestrator Loop
 
-THE openspec-loop skill SHALL drive a change through its lifecycle within a single orchestrator agent that, each cycle, consults opsx-gate to discover the next failing check and performs the next step toward making the gate pass.
+THE openspec-loop skill SHALL drive a change through its lifecycle within a single orchestrator agent that, each cycle, consults opsx gate to discover the next failing check and performs the next step toward making the gate pass.
 
 #### Scenario: Orchestrator advances on a red gate
-- **WHILE** opsx-gate reports the gate is red
+- **WHILE** opsx gate reports the gate is red
 - **WHEN** the orchestrator begins a cycle
 - **THEN** it SHALL read the gate's failed-check report and perform exactly the next step needed to address the highest-priority failed check
 
 #### Scenario: Loop stops on a green gate
-- **WHEN** opsx-gate exits 0 for the change
+- **WHEN** opsx gate exits 0 for the change
 - **THEN** the orchestration SHALL stop advancing and SHALL report the change as ready to archive
 
 #### Scenario: Loop is bounded
@@ -50,7 +50,7 @@ THE openspec-loop orchestration SHALL delegate every review and validation-judgm
 
 ### Requirement: Harness Neutral Core With Adapters
 
-THE openspec-loop workflow logic SHALL reside in harness-neutral artifacts (the skill body, opsx-gate, and the manifest), and subagent dispatch and loop continuation SHALL be resolved through capability hooks that degrade to inline execution when no harness adapter is available.
+THE openspec-loop workflow logic SHALL reside in harness-neutral artifacts (the skill body, opsx gate, and the manifest), and subagent dispatch and loop continuation SHALL be resolved through capability hooks that degrade to inline execution when no harness adapter is available.
 
 #### Scenario: Runs without a subagent adapter
 - **IF** no subagent-dispatch capability is registered on the host
@@ -58,7 +58,7 @@ THE openspec-loop workflow logic SHALL reside in harness-neutral artifacts (the 
 
 #### Scenario: Workflow substance survives adapter removal
 - **WHEN** the host's loop-continuation adapter is unavailable
-- **THEN** the workflow definition SHALL remain executable using the harness-neutral skill and opsx-gate, driven by a fallback continuation mechanism
+- **THEN** the workflow definition SHALL remain executable using the harness-neutral skill and opsx gate, driven by a fallback continuation mechanism
 
 #### Scenario: Single budget governs the loop
 - **WHEN** the kickoff adapter starts the loop on a host whose loop runtime already has a turn budget (such as the goal extension)

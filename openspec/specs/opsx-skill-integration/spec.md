@@ -117,7 +117,7 @@ All four opsx-* skill edits SHALL preserve behavior for changes whose schema is 
 
 ### Requirement: openspec-loop orchestrator skill exists
 
-A new skill SHALL be created at `dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md` implementing the single-orchestrator loop that advances an opsx-superpowers change until opsx-gate is green, delegating review steps to subagents per the opsx-loop-orchestration capability.
+A new skill SHALL be created at `dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md` implementing the single-orchestrator loop that advances an opsx-superpowers change until opsx gate is green, delegating review steps to subagents per the opsx-loop-orchestration capability.
 
 #### Scenario: Skill metadata complete
 - **WHEN** the skill is loaded by a harness
@@ -129,7 +129,7 @@ A new skill SHALL be created at `dot_local/share/agent-harness/canonical/skills/
 
 #### Scenario: Kickoff adapter carries no workflow logic
 - **WHEN** a harness-specific kickoff (such as a pi extension command) invokes the loop
-- **THEN** that adapter SHALL only wire the worker to the openspec-loop skill and the judge to opsx-gate, and removing the adapter SHALL NOT remove any workflow logic
+- **THEN** that adapter SHALL only wire the worker to the openspec-loop skill and the judge to opsx gate, and removing the adapter SHALL NOT remove any workflow logic
 
 ### Requirement: openspec-explore freezes intent
 
@@ -150,7 +150,7 @@ The `openspec-explore` skill SHALL, on conclusion of an explore session for an o
 The openspec-loop, openspec-propose, and openspec-apply-change skills SHALL consult the resolved role models when authoring artifacts (author role) and dispatching review subagents (review role) and implementation subagents (impl role), and SHALL fall back to the session model when a role is unset.
 
 #### Scenario: Review subagents use the review models
-- **WHEN** a skill dispatches blind review subagents and `review` models are configured (via opsx-models / `OPSX_REVIEW_MODELS`)
+- **WHEN** a skill dispatches blind review subagents and `review` models are configured (via opsx models / `OPSX_REVIEW_MODELS`)
 - **THEN** it SHALL dispatch one reviewer per configured review model
 
 #### Scenario: Implementation subagents use the impl model

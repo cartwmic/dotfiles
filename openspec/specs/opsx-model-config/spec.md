@@ -5,43 +5,47 @@ TBD - created by archiving change add-opsx-model-config. Update Purpose after ar
 ## Requirements
 ### Requirement: Role Model Resolver
 
-THE opsx-models command SHALL resolve the configured model(s) for a requested role — `author`, `review`, or `impl` — distinguishing CONFIGURED values from the unconfigured/built-in-default case so consumers and the gate can tell them apart. The built-in default for every role SHALL be the literal sentinel `session`, meaning "use the session/default model" (no real model id ships as a default). The resolver resolves strings UNCONDITIONALLY — it does NOT branch on `author_in_session` (that boolean is a separate surface consumed by the skills/gate).
+THE opsx models command SHALL resolve the configured model(s) for a requested role — `author`, `review`, or `impl` — distinguishing CONFIGURED values from the unconfigured/built-in-default case so consumers and the gate can tell them apart. The built-in default for every role SHALL be the literal sentinel `session`, meaning "use the session/default model" (no real model id ships as a default). The resolver resolves strings UNCONDITIONALLY — it does NOT branch on `author_in_session` (that boolean is a separate surface consumed by the skills/gate). The reserved verbs `set`, `get`, and `list` (the write surface, defined in the `opsx-cli` capability) SHALL take precedence in the first-argument position: `opsx models` SHALL test for a reserved verb BEFORE treating the first argument as a role, so the role-read shorthand (`opsx models author|review|impl|author-in-session`) and the verb forms do not collide. Legacy role-read invocations (`opsx models <role> [--json] [--change <c>] [--with-default]`) SHALL remain valid verbatim under the subcommand, so existing consumers (the loop export path, the gate) are unaffected.
 
 #### Scenario: Configured role prints its value
-- **WHEN** `opsx-models author` is run and the author role is set at some layer
+- **WHEN** `opsx models author` is run and the author role is set at some layer
 - **THEN** it SHALL print the resolved author model id on one line and exit 0
 
 #### Scenario: Unconfigured role prints nothing
-- **WHEN** `opsx-models author` is run and no layer configures the author role
+- **WHEN** `opsx models author` is run and no layer configures the author role
 - **THEN** it SHALL print NOTHING to standard output and exit 0 (empty stdout = unset); `--with-default` SHALL instead print the built-in default sentinel `session`
 
 #### Scenario: Source-aware JSON
-- **WHEN** `opsx-models <role> --json` is run
+- **WHEN** `opsx models <role> --json` is run
 - **THEN** it SHALL print `{"value": <string|list|null>, "source": "env|change|project|user|default|unset"}`, where `value` is the SAME provider-resolved string(s) the plain output prints, so consumers enforce only on a configured source
 
 #### Scenario: author-in-session boolean has a resolver surface
-- **WHEN** `opsx-models author-in-session --json [--change <c>]` is run
+- **WHEN** `opsx models author-in-session --json [--change <c>]` is run
 - **THEN** it SHALL print `{"value": <boolean|null>, "source": "env|change|project|user|default|unset"}` (env name `OPSX_AUTHOR_IN_SESSION`), with the same layering as roles and a built-in default of true, so the boolean is executable from any harness
 
 #### Scenario: Review role is a list
-- **WHEN** `opsx-models review` is run with the role configured
+- **WHEN** `opsx models review` is run with the role configured
 - **THEN** it SHALL print each resolved review model id on its own line (newline-delimited)
 
 #### Scenario: Any value containing a slash is returned verbatim
 - **WHEN** a role is configured to a value CONTAINING `/` (one or more segments, e.g. `claude-bridge/claude-opus-4-8` OR the multi-segment `openrouter/openai/gpt-5.5`)
-- **THEN** `opsx-models <role>` SHALL print it UNCHANGED — it is treated as a complete, already-qualified pi model id and the `provider` keys are NOT applied to it
+- **THEN** `opsx models <role>` SHALL print it UNCHANGED — it is treated as a complete, already-qualified pi model id and the `provider` keys are NOT applied to it
 
 #### Scenario: Bare id qualified by a configured provider
 - **WHILE** a role's value is BARE (no `/`, e.g. `claude-opus-4-8`) and a `provider` is configured for that role (or a top-level default `provider`, e.g. `claude-bridge`)
-- **THEN** `opsx-models <role>` SHALL print `<provider>/<id>` (e.g. `claude-bridge/claude-opus-4-8`); a bare id with NO provider configured SHALL be printed bare (the consumer resolves it)
+- **THEN** `opsx models <role>` SHALL print `<provider>/<id>` (e.g. `claude-bridge/claude-opus-4-8`); a bare id with NO provider configured SHALL be printed bare (the consumer resolves it)
 
-#### Scenario: Unknown role
-- **IF** opsx-models is invoked with a first argument other than `author`, `review`, `impl`, or `author-in-session`
+#### Scenario: First argument is neither a reserved verb nor a role
+- **IF** `opsx models` is invoked with a first argument that is neither a reserved verb (`set`, `get`, `list`) nor a role (`author`, `review`, `impl`, `author-in-session`)
 - **THEN** it SHALL print an error to standard error and exit non-zero
+
+#### Scenario: Reserved verb shadows the role position
+- **WHEN** `opsx models set …`, `opsx models get …`, or `opsx models list` is invoked
+- **THEN** it SHALL dispatch to the write-surface verb (per the `opsx-cli` Model Config Write Surface requirement), NOT attempt to resolve a role named `set`/`get`/`list`
 
 ### Requirement: Layered Resolution Order
 
-THE opsx-models resolver SHALL resolve each role by precedence, highest first: environment variable, then the change's review.md front-matter (when `--change` is given), then the project `openspec/opsx-models.yaml`, then the user `~/.config/opsx/models.yaml`, then a built-in default. For the list-valued `review` role, the highest layer that sets the role SHALL fully REPLACE lower layers (no union). An empty environment value SHALL be treated as unset. The model env vars SHALL be `OPSX_AUTHOR_MODEL`, `OPSX_REVIEW_MODELS` (note the plural — list-valued), and `OPSX_IMPL_MODEL`; `OPSX_REVIEW_MODELS` SHALL be newline- or comma-delimited (trimmed, order preserved). PROVIDER resolution SHALL key purely on the presence of a `/`: a value CONTAINING `/` is a complete pi model id used VERBATIM (its provider is its leading segment; the provider keys do NOT apply, so an openrouter-style multi-segment id MUST be written in full, e.g. `openrouter/openai/gpt-5.5`). A BARE value (no `/`) SHALL be qualified by the role's `provider` (env `OPSX_<ROLE>_PROVIDER` — i.e. `OPSX_AUTHOR_PROVIDER`/`OPSX_REVIEW_PROVIDER`/`OPSX_IMPL_PROVIDER` > front-matter > project > user), else the top-level default `provider` (env `OPSX_PROVIDER` > front-matter > project > user), else left bare for the consumer to resolve. Each `review` list entry SHALL be provider-resolved independently. The `author_in_session` boolean uses the same layering with env `OPSX_AUTHOR_IN_SESSION`.
+THE opsx models resolver SHALL resolve each role by precedence, highest first: environment variable, then the change's review.md front-matter (when `--change` is given), then the project `openspec/opsx-models.yaml`, then the user `~/.config/opsx/models.yaml`, then a built-in default. For the list-valued `review` role, the highest layer that sets the role SHALL fully REPLACE lower layers (no union). An empty environment value SHALL be treated as unset. The model env vars SHALL be `OPSX_AUTHOR_MODEL`, `OPSX_REVIEW_MODELS` (note the plural — list-valued), and `OPSX_IMPL_MODEL`; `OPSX_REVIEW_MODELS` SHALL be newline- or comma-delimited (trimmed, order preserved). PROVIDER resolution SHALL key purely on the presence of a `/`: a value CONTAINING `/` is a complete pi model id used VERBATIM (its provider is its leading segment; the provider keys do NOT apply, so an openrouter-style multi-segment id MUST be written in full, e.g. `openrouter/openai/gpt-5.5`). A BARE value (no `/`) SHALL be qualified by the role's `provider` (env `OPSX_<ROLE>_PROVIDER` — i.e. `OPSX_AUTHOR_PROVIDER`/`OPSX_REVIEW_PROVIDER`/`OPSX_IMPL_PROVIDER` > front-matter > project > user), else the top-level default `provider` (env `OPSX_PROVIDER` > front-matter > project > user), else left bare for the consumer to resolve. Each `review` list entry SHALL be provider-resolved independently. The `author_in_session` boolean uses the same layering with env `OPSX_AUTHOR_IN_SESSION`.
 
 #### Scenario: Environment overrides files
 - **WHILE** `OPSX_AUTHOR_MODEL` is set non-empty
@@ -81,11 +85,11 @@ THE schema SHALL define `openspec/opsx-models.yaml` (project) and `~/.config/ops
 
 #### Scenario: Review accepts string or list
 - **WHEN** `review` is a single string in a file
-- **THEN** opsx-models review SHALL print that one model; **WHEN** a list, it SHALL print each entry
+- **THEN** opsx models review SHALL print that one model; **WHEN** a list, it SHALL print each entry
 
 ### Requirement: Author In Session By Default
 
-THE workflow SHALL author artifacts in the parent session (its model) by default, and SHALL NOT delegate authoring unless `author_in_session` is explicitly false. The in-session authoring STEP SHALL write an `authored: in-session` marker on artifacts it authors, and `opsx-gate` SHALL fail an authoring artifact that carries no authoring marker while the `author` role specifically has a configured model and `author_in_session` is true/unset. The marker is a cheap SELF-ATTESTED tripwire for the observed bug (silent authoring delegation would not run the in-session marker step); it is NOT model provenance — this change does not attempt to enforce delegated model provenance via a post-hoc gate (a same-UID actor can write any file the gate reads). Delegated review/impl/opt-out-author dispatch passes the configured model best-effort; it is not gate-verified.
+THE workflow SHALL author artifacts in the parent session (its model) by default, and SHALL NOT delegate authoring unless `author_in_session` is explicitly false. The in-session authoring STEP SHALL write an `authored: in-session` marker on artifacts it authors, and `opsx gate` SHALL fail an authoring artifact that carries no authoring marker while the `author` role specifically has a configured model and `author_in_session` is true/unset. The marker is a cheap SELF-ATTESTED tripwire for the observed bug (silent authoring delegation would not run the in-session marker step); it is NOT model provenance — this change does not attempt to enforce delegated model provenance via a post-hoc gate (a same-UID actor can write any file the gate reads). Delegated review/impl/opt-out-author dispatch passes the configured model best-effort; it is not gate-verified.
 
 #### Scenario: Authoring is not delegated by default
 - **WHILE** `author_in_session` is unset or true
@@ -95,7 +99,7 @@ THE workflow SHALL author artifacts in the parent session (its model) by default
 #### Scenario: Missing in-session marker fails the gate
 - **WHILE** `author_in_session` is true/unset and the `author` role is configured
 - **IF** an authoring artifact carries no `authored: in-session` marker
-- **THEN** opsx-gate SHALL report a failed check and exit non-zero
+- **THEN** opsx gate SHALL report a failed check and exit non-zero
 
 #### Scenario: Opt-in delegation dispatches with the author model (best-effort, not gate-verified)
 - **WHILE** `author_in_session` is false and an `author` model is configured

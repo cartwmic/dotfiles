@@ -61,14 +61,14 @@ The schema SHALL declare a `Scale` mode in `review.md` with values `XS | S | M |
 
 ### Requirement: Mode switchboard in review.md
 
-The `review.md` artifact SHALL declare a controlled-vocabulary mode switchboard whose values gate apply-time behavior. The required modes SHALL be: `Scale`, `Execution Mode`, `Verification Mode`, `Debug Mode`, `Review Status`, `Delegation Mode`, `Worktree Mode`, `Code Review Mode`, `Loop Max Iterations`, and `Spec Level`. The default value of `Worktree Mode` SHALL be `worktree-required` for all Scales. THE review.md artifact SHALL additionally carry a machine-readable front-matter block (YAML) at the top of the file mirroring at least `scale`, `worktree_mode`, `verification_mode`, `code_review_mode`, `loop_max_iterations`, and `validation_source_mode`, so that opsx-gate reads these values from structured fields rather than scraping the prose mode table.
+The `review.md` artifact SHALL declare a controlled-vocabulary mode switchboard whose values gate apply-time behavior. The required modes SHALL be: `Scale`, `Execution Mode`, `Verification Mode`, `Debug Mode`, `Review Status`, `Delegation Mode`, `Worktree Mode`, `Code Review Mode`, `Loop Max Iterations`, and `Spec Level`. The default value of `Worktree Mode` SHALL be `worktree-required` for all Scales. THE review.md artifact SHALL additionally carry a machine-readable front-matter block (YAML) at the top of the file mirroring at least `scale`, `worktree_mode`, `verification_mode`, `code_review_mode`, `loop_max_iterations`, and `validation_source_mode`, so that opsx gate reads these values from structured fields rather than scraping the prose mode table.
 
 #### Scenario: Machine-readable front-matter present
 - **WHEN** review.md is authored
 - **THEN** its leading YAML front-matter SHALL contain `scale`, `worktree_mode`, `verification_mode`, `code_review_mode`, and `loop_max_iterations` fields whose values match the prose mode table
 
 #### Scenario: Front-matter is the sole machine source
-- **WHEN** opsx-gate reads review.md
+- **WHEN** opsx gate reads review.md
 - **THEN** it SHALL source every mode value from the YAML front-matter ONLY and SHALL NOT parse the prose mode table, which is a non-authoritative human-facing mirror; the schema templates and apply skill are responsible for keeping the table in sync with the front-matter
 
 #### Scenario: Loop Max Iterations defaults by Scale
@@ -188,14 +188,14 @@ THE schema's apply and archive instructions SHALL own the full worktree lifecycl
 #### Scenario: Same-tree records a Diff Base SHA too
 - **WHILE** Worktree Mode is the explicit same-tree override (no `opsx/<change>` worktree)
 - **WHEN** apply begins
-- **THEN** apply SHALL record `Diff Base SHA` as the current repo HEAD before the first implementation task, leave `Worktree Path` empty, and opsx-gate's freshness locator SHALL resolve the implementation HEAD as the current repo HEAD (no `opsx/<change>` branch required)
+- **THEN** apply SHALL record `Diff Base SHA` as the current repo HEAD before the first implementation task, leave `Worktree Path` empty, and opsx gate's freshness locator SHALL resolve the implementation HEAD as the current repo HEAD (no `opsx/<change>` branch required)
 
 #### Scenario: Worktree merged and removed at archive
 - **WHEN** archive proceeds for a change implemented in a worktree
-- **THEN** the `opsx/<change>` branch SHALL be landed onto the named integration branch using the configured strategy and the worktree SHALL be removed, and this SHALL occur only after opsx-gate reports green
+- **THEN** the `opsx/<change>` branch SHALL be landed onto the named integration branch using the configured strategy and the worktree SHALL be removed, and this SHALL occur only after opsx gate reports green
 
 #### Scenario: Post-green merge conflict aborts archive safely
-- **WHILE** opsx-gate is green
+- **WHILE** opsx gate is green
 - **IF** landing the branch fails because the integration branch advanced and the merge conflicts
 - **THEN** archive SHALL abort with an actionable error, the worktree and `opsx/<change>` branch SHALL be preserved, and the change SHALL NOT be moved to the archive directory
 
@@ -205,11 +205,11 @@ THE schema's apply and archive instructions SHALL own the full worktree lifecycl
 
 ### Requirement: Validation Gates Manifest Reference
 
-THE schema SHALL define `openspec/opsx-gates.yaml` as the manifest where a project declares validation commands, replacing the previously dangling `project.md` validator reference, and the schema documentation SHALL describe its structure and how opsx-gate consumes it. WHILE a change declares Scale M or above, THE gate SHALL require at least one agent-independent validation source (a manifest with one or more `required: true` commands, or a non-empty `OPSX_VALIDATE`); IF none is present THEN opsx-gate SHALL fail the gate, UNLESS review.md front-matter sets `validation_source_mode: waived` with a recorded human rationale.
+THE schema SHALL define `openspec/opsx-gates.yaml` as the manifest where a project declares validation commands, replacing the previously dangling `project.md` validator reference, and the schema documentation SHALL describe its structure and how opsx gate consumes it. WHILE a change declares Scale M or above, THE gate SHALL require at least one agent-independent validation source (a manifest with one or more `required: true` commands, or a non-empty `OPSX_VALIDATE`); IF none is present THEN opsx gate SHALL fail the gate, UNLESS review.md front-matter sets `validation_source_mode: waived` with a recorded human rationale.
 
 #### Scenario: Manifest documented in schema
 - **WHEN** the schema's README and apply instruction are read
-- **THEN** they SHALL describe `opsx-gates.yaml` with `gates` entries each having `id`, `run`, and `required`, and SHALL state that opsx-gate executes each command by exit code
+- **THEN** they SHALL describe `opsx-gates.yaml` with `gates` entries each having `id`, `run`, and `required`, and SHALL state that opsx gate executes each command by exit code
 
 #### Scenario: Template shipped with the schema
 - **WHEN** the schema is deployed
@@ -219,15 +219,15 @@ THE schema SHALL define `openspec/opsx-gates.yaml` as the manifest where a proje
 
 ### Requirement: Review front-matter carries role models
 
-THE review.md front-matter SHALL optionally carry `author_model` (string), `review_models` (string or list), and `impl_model` (string), plus optional provider keys — a default `provider` (string) and per-role `author_provider` / `review_provider` / `impl_provider` (strings) — giving per-change overrides that the opsx-models resolver reads above the project and user config files. Model values MAY be provider-qualified (`<provider>/<id>`); the provider keys qualify bare ids.
+THE review.md front-matter SHALL optionally carry `author_model` (string), `review_models` (string or list), and `impl_model` (string), plus optional provider keys — a default `provider` (string) and per-role `author_provider` / `review_provider` / `impl_provider` (strings) — giving per-change overrides that the opsx models resolver reads above the project and user config files. Model values MAY be provider-qualified (`<provider>/<id>`); the provider keys qualify bare ids.
 
 #### Scenario: Per-change model override recorded
 - **WHEN** review.md front-matter sets `author_model`, `review_models`, or `impl_model`
-- **THEN** `opsx-models <role> --change <name>` SHALL return those values above the project/user files
+- **THEN** `opsx models <role> --change <name>` SHALL return those values above the project/user files
 
 #### Scenario: Per-change provider override recorded
 - **WHEN** review.md front-matter sets a `provider` default or a per-role `*_provider`
-- **THEN** `opsx-models <role> --change <name>` SHALL qualify the role's bare model id with that provider (an explicit provider in the value still wins)
+- **THEN** `opsx models <role> --change <name>` SHALL qualify the role's bare model id with that provider (an explicit provider in the value still wins)
 
 #### Scenario: Front-matter model fields are optional
 - **IF** the front-matter omits the model fields
