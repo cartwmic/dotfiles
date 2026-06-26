@@ -35,8 +35,8 @@ spec_level: spec-anchored
 
 ## Diff Base + Worktree locator
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
+**Diff Base SHA:** 184e2556b47d1583a15ac32b1be64822fa913ace
+**Worktree Path:** /Users/cartwmic/.local/share/.opsx-worktrees/consolidate-opsx-cli
 **Integration Branch:** main
 
 ## Manual Adjustments
