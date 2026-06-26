@@ -1,0 +1,5 @@
+# Retired by consolidate-opsx-cli: the three standalone CLIs folded into `opsx`.
+# chezmoi removes these deployed targets on apply (source deletion alone does not).
+.local/bin/opsx-gate
+.local/bin/opsx-models
+.local/bin/opsx-loop
