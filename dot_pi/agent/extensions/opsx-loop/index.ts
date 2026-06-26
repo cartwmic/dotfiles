@@ -2,7 +2,7 @@
  * opsx-loop — a guaranteed in-pi kickoff for the opsx drive-to-completion loop.
  *
  * `/opsx-loop <change>` injects a worker turn directed at the openspec-loop skill,
- * then after each agent turn runs `opsx-gate <change>` as the DETERMINISTIC judge:
+ * then after each agent turn runs `opsx gate <change>` as the DETERMINISTIC judge:
  * exit 0 → done (ready to archive); non-zero → inject another turn carrying the
  * gate's failed-check report; bounded by a turn budget. This is the pi adapter for
  * the loop-continuation capability (ADR-0007); the generic `goal` extension is
@@ -17,6 +17,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
 	buildModelEnv,
+	gateFailKey,
 	LOOP_SUBCOMMANDS,
 	parseLoopArg,
 	parseLoopBudget,
@@ -27,6 +28,7 @@ import {
 } from "./helpers.ts";
 
 const DEFAULT_BUDGET = 40;
+const STALL_LIMIT = 3; // consecutive identical no-progress gate failures → stop
 
 interface LoopState {
 	change: string;
@@ -36,12 +38,15 @@ interface LoopState {
 	active: boolean;
 	evaluating: boolean;
 	lastReason?: string;
+	stallKey?: string;
+	stallCount: number;
+	lastProgress?: string;
 }
 
-/** Resolve one role via the harness-neutral `opsx-models` CLI (consumer, not owner). */
+/** Resolve one role via the harness-neutral `opsx models` CLI (consumer, not owner). */
 function resolveModel(role: string, change: string): ResolvedModel | null {
 	try {
-		const r = spawnSync("opsx-models", [role, "--json", "--change", change], {
+		const r = spawnSync("opsx", ["models", role, "--json", "--change", change], {
 			encoding: "utf-8",
 			timeout: 5000,
 		});
@@ -55,7 +60,7 @@ function resolveModel(role: string, change: string): ResolvedModel | null {
 /**
  * Resolve the role models on loop start and EXPORT the OPSX_* vars into
  * process.env so the worker turns' subagent dispatch + authoring pick them up.
- * Consumer only: if `opsx-models` is absent the loop runs with vars unset
+ * Consumer only: if `opsx models` is absent the loop runs with vars unset
  * (pre-change behavior). Returns the names of the vars that were set.
  * (opsx-loop-kickoff.loop-exports-resolved-role-models)
  */
@@ -87,24 +92,64 @@ function bodyField(reviewMd: string, name: string): string | undefined {
 	return v && !v.startsWith("<") ? v : undefined;
 }
 
-/** Run opsx-gate as the judge. exit 0 = met. Never rejects (non-fatal on spawn error). */
+/** Run opsx gate as the judge. exit 0 = met. Never rejects (non-fatal on spawn error). */
 function runGate(change: string, worktree: string | undefined, signal: AbortSignal): Promise<LoopVerdict> {
-	const args = [change];
+	const args = ["gate", change];
 	if (worktree) args.push("--worktree", worktree);
 	return new Promise((resolve) => {
 		let out = "";
 		try {
-			const child = spawn("opsx-gate", args, { signal });
+			const child = spawn("opsx", args, { signal });
 			child.stdout?.on("data", (d) => { out += String(d); });
 			child.stderr?.on("data", (d) => { out += String(d); });
 			child.on("error", (e: any) =>
-				resolve({ met: false, reason: `opsx-gate failed to execute: ${e?.message ?? "unknown"}` }),
+				resolve({ met: false, reason: `opsx gate failed to execute: ${e?.message ?? "unknown"}` }),
 			);
 			child.on("close", (code) => resolve(verdictFromExit(code, out)));
 		} catch (e: any) {
-			resolve({ met: false, reason: `opsx-gate failed to execute: ${e?.message ?? "unknown"}` });
+			resolve({ met: false, reason: `opsx gate failed to execute: ${e?.message ?? "unknown"}` });
 		}
 	});
+}
+
+/** Re-resolve a usable worktree path from the change's review.md, or undefined. */
+function resolveWorktree(change: string): string | undefined {
+	const wt = bodyField(readReview(change), "Worktree Path");
+	if (!wt) return undefined;
+	try {
+		const r = spawnSync("git", ["-C", wt, "rev-parse", "--is-inside-work-tree"], { encoding: "utf-8", timeout: 5000 });
+		return r.status === 0 ? wt : undefined; // blank/stale path → no --worktree
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * A token capturing observable progress: worktree HEAD + dirty status of the
+ * change dir. A change in either between evaluations resets the stall counter
+ * (committed OR uncommitted in-place authoring counts as progress).
+ * (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ */
+function progressToken(change: string, worktree: string | undefined): string {
+	const dir = worktree ?? process.cwd();
+	try {
+		const head = spawnSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf-8", timeout: 5000 }).stdout?.trim() ?? "";
+		const dirty = spawnSync("git", ["-C", dir, "status", "--porcelain", "--", `openspec/changes/${change}`], { encoding: "utf-8", timeout: 5000 }).stdout ?? "";
+		return `${head}\n${dirty}`;
+	} catch {
+		return "";
+	}
+}
+
+/** Run `opsx models <args>` synchronously with cwd = repo; returns combined output. */
+function runModels(args: string[]): { code: number; out: string } {
+	try {
+		const r = spawnSync("opsx", ["models", ...args], { encoding: "utf-8", timeout: 10000, cwd: process.cwd() });
+		if (r.error) return { code: 1, out: `opsx models failed to execute: ${r.error.message}` };
+		return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() };
+	} catch (e: any) {
+		return { code: 1, out: `opsx models failed to execute: ${e?.message ?? "unknown"}` };
+	}
 }
 
 export default function (pi: ExtensionAPI) {
@@ -123,10 +168,10 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	const workerDirective = (change: string, report?: string) =>
-		`Use the openspec-loop skill to advance OpenSpec change "${change}" toward a green opsx-gate.\n` +
-		`Run \`opsx-gate ${change}\` (with --worktree when applicable), fix the EARLIEST blocking ` +
+		`Use the openspec-loop skill to advance OpenSpec change "${change}" toward a green opsx gate.\n` +
+		`Run \`opsx gate ${change}\` (with --worktree when applicable), fix the EARLIEST blocking ` +
 		`GATE-FAIL line, delegate any review verdict to a blind subagent, and commit one unit of progress.` +
-		(report ? `\n\nCurrent opsx-gate report:\n${report}` : "");
+		(report ? `\n\nCurrent opsx gate report:\n${report}` : "");
 
 	pi.registerCommand("opsx-loop", {
 		description: "Guaranteed opsx loop: /opsx-loop <change> | /opsx-loop status | /opsx-loop clear",
@@ -155,21 +200,30 @@ export default function (pi: ExtensionAPI) {
 				return `Cleared opsx-loop: ${c}`;
 			}
 
+			if (parsed.mode === "models") {
+				// Thin wrapper over the `opsx models` CLI (owner of the write); bare → list.
+				const margs = parsed.args.length > 0 ? parsed.args : ["list"];
+				const { out } = runModels(margs);
+				return out || "(no output)";
+			}
+
 			// set — replaces any active loop, resolves worktree + budget, starts work.
 			const review = readReview(parsed.change);
 			loop = {
 				change: parsed.change,
-				worktree: bodyField(review, "Worktree Path"),
+				worktree: resolveWorktree(parsed.change),
 				turns: 0,
 				maxTurns: parseLoopBudget(review, DEFAULT_BUDGET),
 				active: true,
 				evaluating: false,
+				stallCount: 0,
 			};
 			renderStatus(ctx);
 			const exported = exportModelEnv(parsed.change);
 			pi.sendUserMessage(workerDirective(parsed.change), { deliverAs: "followUp" });
 			const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
-			return `⟳ opsx-loop started (budget ${loop.maxTurns}) for ${parsed.change}${modelNote}`;
+			const ignoredNote = parsed.ignored ? ` (ignored extra input: "${parsed.ignored}")` : "";
+			return `⟳ opsx-loop started (budget ${loop.maxTurns}) for ${parsed.change}${modelNote}${ignoredNote}`;
 		},
 	});
 
@@ -193,6 +247,10 @@ export default function (pi: ExtensionAPI) {
 		session.evaluating = true;
 		try {
 			session.turns += 1;
+			// Re-resolve the worktree EACH turn: a from-scratch change may only gain a
+			// Worktree Path mid-loop. (opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge)
+			const prevWorktree = session.worktree;
+			session.worktree = resolveWorktree(session.change);
 			renderStatus(ctx);
 
 			const verdict = await runGate(session.change, session.worktree, ctx.signal);
@@ -209,6 +267,25 @@ export default function (pi: ExtensionAPI) {
 				const c = session.change;
 				clearLoop(ctx);
 				ctx.ui.notify(`⟳ opsx-loop: budget ${session.maxTurns} exhausted for ${c}; worktree preserved.`, "warning");
+				return;
+			}
+
+			// Stall detection: same normalized failed-check set + no observable progress
+			// (HEAD/dirty unchanged) + same worktree, for STALL_LIMIT turns running.
+			const key = gateFailKey(verdict.reason);
+			const progress = progressToken(session.change, session.worktree);
+			const worktreeChanged = prevWorktree !== session.worktree;
+			if (!worktreeChanged && key !== "" && key === session.stallKey && progress === session.lastProgress) {
+				session.stallCount += 1;
+			} else {
+				session.stallCount = 1;
+			}
+			session.stallKey = key;
+			session.lastProgress = progress;
+			if (session.stallCount >= STALL_LIMIT) {
+				const c = session.change;
+				clearLoop(ctx);
+				ctx.ui.notify(`⟳ opsx-loop: ${c} stalled on a repeating failure (${STALL_LIMIT}× no progress); worktree preserved. Intervene manually.`, "warning");
 				return;
 			}
 			pi.sendUserMessage(workerDirective(session.change, verdict.reason), { deliverAs: "followUp" });
