@@ -3,7 +3,7 @@
 
 ## 1. `opsx` multitool dispatcher + cutover
 
-- [ ] 1.1 Create `dot_local/bin/executable_opsx`: a `case "$1"` dispatcher with subcommand
+- [x] 1.1 Create `dot_local/bin/executable_opsx`: a `case "$1"` dispatcher with subcommand
   bodies `gate_*`, `models_*`, `loop_*` ported near-verbatim from the three source scripts;
   top-level `exit`→`return`, prefixed/localized globals, subcommand-specific `usage`/`PROG`;
   unknown/missing subcommand → usage + non-zero. The gate's internal model resolution calls
@@ -13,7 +13,7 @@
   - files_allowed:
       - dot_local/bin/executable_opsx
   - allow_new_files: true
-- [ ] 1.2 `git rm` the three legacy source scripts and add `.chezmoiremove` listing the
+- [x] 1.2 `git rm` the three legacy source scripts and add `.chezmoiremove` listing the
   deployed targets so `chezmoi apply` deletes them.
   (opsx-cli.hard-cutover-no-legacy-entrypoints)
   - intent: infra
@@ -25,7 +25,7 @@
 
 ## 2. `opsx models` write surface
 
-- [ ] 2.1 Add `set <role> <value>` / `get <role>` / `list` to the `models_*` body: settable
+- [x] 2.1 Add `set <role> <value>` / `get <role>` / `list` to the `models_*` body: settable
   roles `author|review|impl|author-in-session` (hyphen→`author_in_session` key, boolean
   coercion + reject non-boolean); reserved verbs shadow role-read first-arg; `--layer
   user|project` (project root = `$OPSX_ROOT` → git toplevel w/ `openspec/` → error); atomic
@@ -39,7 +39,7 @@
 
 ## 3. Migrate canonical skills + schema/templates
 
-- [ ] 3.1 Migrate `opsx-gate`/`opsx-models`/`opsx-loop`-driver invocations to `opsx <sub>`
+- [x] 3.1 Migrate `opsx-gate`/`opsx-models`/`opsx-loop`-driver invocations to `opsx <sub>`
   across canonical skills (openspec-loop SKILL.md; openspec-propose/apply-change/explore/
   archive-change superpowers-mode refs) and schema (README, capability-hooks, opsx-PROMPT,
   schema.yaml, templates/*). Document the new `opsx models` write surface + `/opsx-loop
@@ -52,7 +52,7 @@
 
 ## 4. Migrate pi extensions + bug fixes
 
-- [ ] 4.1 opsx-loop extension: spawn `opsx gate`/`opsx models` (was `opsx-gate`/`opsx-models`);
+- [x] 4.1 opsx-loop extension: spawn `opsx gate`/`opsx models` (was `opsx-gate`/`opsx-models`);
   rework `parseLoopArg` to route leading keywords (`status`/`clear`/`models`) with full
   remaining tokens + surface ignored-trailing-token note (no truncation); add `/opsx-loop
   models` wrapper (bare→list; pass repo cwd/`OPSX_ROOT` for `--layer project`); re-resolve
@@ -70,7 +70,7 @@
 
 ## 5. Tests
 
-- [ ] 5.1 Retarget `tests/opsx-gate/*` and `tests/opsx-models/*` to invoke `opsx gate` /
+- [x] 5.1 Retarget `tests/opsx-gate/*` and `tests/opsx-models/*` to invoke `opsx gate` /
   `opsx models`; add `tests/opsx-cli/test_opsx_cli.sh` covering dispatch (known/unknown/
   missing subcommand, exit-code passthrough) + write surface (set/get/list, layers,
   atomicity+failure, comment preservation, author-in-session boolean, set-review warn,
@@ -84,7 +84,7 @@
 
 ## 6. Verify + gate
 
-- [ ] 6.1 Run all suites + `bash -n` + extension bun test/transpile + token-level legacy
+- [x] 6.1 Run all suites + `bash -n` + extension bun test/transpile + token-level legacy
   scan + `openspec validate --strict`; author verify.md (6 checks green). Then dispatch blind
   multi-model code-review (Constitution IX), author code-review.md, and run
   `opsx gate consolidate-opsx-cli --worktree <path>` to GATE-PASS.

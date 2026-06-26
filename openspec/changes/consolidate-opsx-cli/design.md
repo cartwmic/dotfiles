@@ -196,9 +196,10 @@ cd dot_pi/agent/extensions/opsx-loop && bun test helpers.test.ts && bun build in
 # drop exempt identifiers, so an exempt name co-located on a line cannot mask a real stale
 # invocation (per review). Covers opsx-gate, opsx-models AND the opsx-loop bash driver;
 # exempts capability names, config filenames, the pi-extension dir + /opsx-loop slash cmd.
-rg -oN 'opsx-(gate|models|loop)[A-Za-z0-9._-]*' dot_local/share dot_pi tests docs openspec/opsx-gates.yaml \
+rg -oN --no-filename 'opsx-(gate|models|loop)[A-Za-z0-9._-]*' dot_local/share dot_pi tests docs openspec/opsx-gates.yaml \
+  | sed 's/[.,:);]*$//' | sort -u \
   | rg -v 'opsx-gate-enforcement|opsx-model-config|opsx-gates\.yaml|opsx-models\.yaml|opsx-loop-(orchestration|kickoff)|opsx-skill-integration|opsx-workflow-schema|opsx-post-impl-review' \
-  | rg -v '^opsx-loop$'   # '/opsx-loop' slash + extension dir match as bare 'opsx-loop' and are exempt; expect: empty
+  | rg -v '^opsx-loop$'   # bare 'opsx-loop' = the pi extension dir + /opsx-loop slash command (not an executable); expect: empty
 openspec validate consolidate-opsx-cli --type change --strict
 chezmoi diff   # confirm old binaries removed, opsx added
 opsx gate consolidate-opsx-cli --worktree <path>
