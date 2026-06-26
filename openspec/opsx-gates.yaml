@@ -1,5 +1,5 @@
 # opsx-gates.yaml — validation gates for the cartwmic dotfiles repo.
-# opsx-gate runs each command by exit code: required:true non-zero = GATE-FAIL,
+# opsx gate runs each command by exit code: required:true non-zero = GATE-FAIL,
 # required:false non-zero = warning. Commands run with cwd = the located
 # implementation worktree and OPSX_CHANGE / OPSX_CHANGE_DIR / OPSX_WORKTREE /
 # OPSX_DIFF_BASE / OPSX_HEAD exported.
@@ -8,7 +8,7 @@ gates:
     run: openspec validate --changes --strict
     required: true
   - id: gate-self-syntax
-    run: bash -n dot_local/bin/executable_opsx-gate
+    run: bash -n dot_local/bin/executable_opsx
     required: true
   - id: shell-syntax
     run: 'for f in dot_local/bin/executable_*; do bash -n "$f" || exit 1; done'
