@@ -100,6 +100,7 @@ export function buildModelEnv(resolved: {
 }
 
 export const LOOP_SUBCOMMANDS: ReadonlyArray<{ value: string; label: string; description: string }> = [
+	{ value: "goal", label: "goal", description: "Start a loop from a goal (goal <text>) or the current conversation (goal, no text)" },
 	{ value: "status", label: "status", description: "Show the active loop's change, turns, and budget" },
 	{ value: "clear", label: "clear", description: "Stop and clear the active loop (aliases: stop, off, reset, none, cancel)" },
 	{ value: "models", label: "models", description: "Read/write role models: models set|get <role> [..] | models list" },
@@ -112,15 +113,21 @@ export type LoopArg =
 	| { mode: "status" }
 	| { mode: "clear" }
 	| { mode: "models"; args: string[] }
+	| { mode: "goal"; goal?: string }
 	| { mode: "set"; change: string; ignored?: string };
 
 /**
- * Classify the `/opsx-loop` argument. Leading keywords (status/clear/models)
+ * Classify the `/opsx-loop` argument. Leading keywords (goal/status/clear/models)
  * route to their subcommand with the REMAINING tokens intact; otherwise the
  * first token is the change name and any trailing tokens are surfaced as
  * `ignored` (never silently truncated).
+ *
+ * `goal` is the conversation/goal-driven entry: `goal <free text>` preserves the
+ * ENTIRE remaining input as the goal (multi-word, never truncated); `goal` with
+ * no following text starts from the current conversation contents (goal omitted).
  * (opsx-loop-kickoff.argument-parsing-preserves-full-input,
- *  opsx-loop-kickoff.status-and-clear-subcommands, opsx-loop-kickoff.model-config-subcommand)
+ *  opsx-loop-kickoff.status-and-clear-subcommands, opsx-loop-kickoff.model-config-subcommand,
+ *  opsx-loop-kickoff.goal-and-conversation-kickoff)
  */
 export function parseLoopArg(raw: string): LoopArg {
 	const arg = (raw ?? "").trim();
@@ -132,6 +139,10 @@ export function parseLoopArg(raw: string): LoopArg {
 	if (STATUS_KEYWORDS.has(lower)) return { mode: "status" };
 	if (CLEAR_ALIASES.has(lower)) return { mode: "clear" };
 	if (lower === "models") return { mode: "models", args: tokens.slice(1) };
+	if (lower === "goal") {
+		const goal = tokens.slice(1).join(" ").trim();
+		return goal.length > 0 ? { mode: "goal", goal } : { mode: "goal" };
+	}
 	const change = tokens[0];
 	const rest = tokens.slice(1).join(" ");
 	return rest.length > 0 ? { mode: "set", change, ignored: rest } : { mode: "set", change };
