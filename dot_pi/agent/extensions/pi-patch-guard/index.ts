@@ -9,16 +9,18 @@
  * is gone — non-bridge Claude models reappear in the picker/`--list-models`, and
  * fresh `pi` processes (subagents) read the unpatched file.
  *
- * This guard does NOT heal anything. It is a tripwire: on each user turn it
- * checks whether a patch that the state file says *should* be applied is still
- * present on disk. If not, it emits a single UI warning so you know to re-run
- * the patch (`chezmoi apply` or the patch.mjs directly) and reload.
+ * This guard does NOT heal anything. It is a tripwire: at session start and
+ * after each agent response it checks whether a patch that the state file says
+ * *should* be applied is still present on disk. If not, it emits a UI warning
+ * so you know to re-run the patch (`chezmoi apply` or the patch.mjs directly)
+ * and reload.
  *
  * Scope decisions (intentional, keep it minimal):
  *   - Warn only. No disk writes, no `node` spawns, no subagent protection.
  *   - Interactive only (`ctx.hasUI`) — headless/subagent runs stay silent.
- *   - Warns once per drift episode; re-arms automatically once the marker
- *     reappears on disk (so a later re-break warns again).
+ *   - Fires on `session_start` (before you type) and `agent_end` (after the
+ *     agent responds), and re-checks disk every time — so the reminder
+ *     persists on every turn until the marker reappears.
  *   - Never throws into a turn: every path is wrapped.
  *
  * Source of truth: the patch's own state file under
@@ -107,30 +109,27 @@ export function checkPatchDrift(
 
 export default function (pi: ExtensionAPI): void {
 	const cfg = loadConfig(extensionDir());
-	// Names currently in a warned (drift-detected) state, to warn once per episode.
-	const warned = new Set<string>();
 
-	pi.on("before_agent_start", async (_event: unknown, ctx: any) => {
+	/** Check every watched patch and warn (once per invocation) for any that drifted. */
+	const warnOnDrift = (ctx: any): void => {
 		try {
 			if (!cfg.enabled || !ctx?.hasUI) return;
 			for (const patch of WATCHED) {
 				const { drift } = checkPatchDrift(patch);
-				if (drift) {
-					if (!warned.has(patch.name)) {
-						warned.add(patch.name);
-						ctx.ui.notify(
-							`⚠ pi patch "${patch.name}" is missing on disk — likely wiped by a pi update. ` +
-								`Re-run it (chezmoi apply or the patch.mjs) and reload pi; fresh subagents read the unpatched file until then.`,
-							"warning",
-						);
-					}
-				} else {
-					// Marker back (or ambiguous) ⇒ re-arm so a later re-break warns again.
-					warned.delete(patch.name);
-				}
+				if (!drift) continue;
+				ctx.ui.notify(
+					`⚠ pi patch "${patch.name}" is missing on disk — likely wiped by a pi update. ` +
+						`Re-run it (chezmoi apply or the patch.mjs) and reload pi; fresh subagents read the unpatched file until then.`,
+					"warning",
+				);
 			}
 		} catch {
 			// Never let the guard break a turn.
 		}
-	});
+	};
+
+	// Session open/reload/resume — surface drift before the user types.
+	pi.on("session_start", async (_event: unknown, ctx: any) => warnOnDrift(ctx));
+	// After the agent finishes responding — re-check disk so the reminder persists each turn.
+	pi.on("agent_end", async (_event: unknown, ctx: any) => warnOnDrift(ctx));
 }
