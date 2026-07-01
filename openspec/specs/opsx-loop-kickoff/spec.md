@@ -120,9 +120,9 @@ extension SHALL remain a consumer — it SHALL NOT be the source of truth for th
 
 THE opsx-loop extension's `/opsx-loop` argument parser SHALL NOT silently discard input
 after the first whitespace token. WHEN the argument is a recognized leading keyword
-(`status`, `clear` or an alias, or `models`), it SHALL route to that subcommand passing the
-remaining tokens intact; otherwise the first token SHALL be the change name and any
-trailing tokens SHALL be ignored ONLY with a surfaced note that they were ignored (so a
+(`goal`, `status`, `clear` or an alias, or `models`), it SHALL route to that subcommand
+passing the remaining tokens intact; otherwise the first token SHALL be the change name and
+any trailing tokens SHALL be ignored ONLY with a surfaced note that they were ignored (so a
 mistyped multi-word goal is not silently truncated).
 
 #### Scenario: Multi-token subcommand keeps its arguments
@@ -132,6 +132,47 @@ mistyped multi-word goal is not silently truncated).
 #### Scenario: Trailing tokens after a change name are not silently dropped
 - **IF** the user issues `/opsx-loop my-change and then some extra words`
 - **THEN** the extension SHALL start the loop for `my-change` AND surface a note that the extra words were ignored, rather than silently discarding them
+
+### Requirement: Goal and conversation kickoff
+
+THE opsx-loop extension SHALL support starting a loop from a goal or from the current
+conversation via the `goal` leading keyword, for the case where no change exists yet. WHEN
+the user issues `/opsx-loop goal <text>`, the extension SHALL treat the ENTIRE remaining
+input as the goal (never truncated at the first token). WHEN the user issues `/opsx-loop
+goal` with no following text, the extension SHALL start from the current conversation
+contents. In either case the extension SHALL record an active loop with no change name yet
+(a distilling phase), snapshot the existing active change directories, and inject a worker
+turn directing the agent to establish a frozen `intent.md` — reusing an existing change
+that already captures the intent, or otherwise distilling the goal or conversation into a
+NEW change via openspec-explore/openspec-propose — and then drive that change to a green
+`opsx gate` via the openspec-loop skill. After each subsequent agent turn, WHILE still in
+the distilling phase, the extension SHALL detect a change directory created since the
+snapshot that carries a frozen `intent.md`; once detected it SHALL adopt that change
+(resolving its budget and exporting its role models) and thereafter act as the
+deterministic-judge loop. IF no such change appears before the turn budget is exhausted,
+THEN the extension SHALL stop the loop and notify the user.
+
+#### Scenario: Goal keyword preserves the full multi-word goal
+- **WHEN** the user issues `/opsx-loop goal build the clipboard sync with retries`
+- **THEN** the extension SHALL start a distilling loop whose goal is the full text `build the clipboard sync with retries`, NOT truncated to `build`
+
+#### Scenario: Bare goal keyword starts from the conversation
+- **WHEN** the user issues `/opsx-loop goal` with no following text
+- **THEN** the extension SHALL start a distilling loop directed at distilling the current conversation into a frozen intent, with no goal text
+
+#### Scenario: The new change is detected and adopted
+- **WHILE** a goal/conversation loop is in its distilling phase
+- **WHEN** a change directory not present at kickoff appears with a frozen `intent.md`
+- **THEN** the extension SHALL adopt that change as the active loop, resolve its budget and role models, and thereafter run `opsx gate <change>` as the deterministic judge each turn
+
+#### Scenario: No change created within budget stops the loop
+- **WHILE** a goal/conversation loop is in its distilling phase
+- **IF** no new change directory with a frozen `intent.md` appears before the turn budget is exhausted
+- **THEN** the extension SHALL stop the loop and notify the user that no change was created
+
+#### Scenario: Goal offered as completion
+- **WHEN** the user requests argument completions for `/opsx-loop`
+- **THEN** `goal` SHALL appear alongside `status`, `clear`, and `models`
 
 ### Requirement: Stall detection stops the loop
 
@@ -196,5 +237,5 @@ extension SHALL offer `models` as an argument completion.
 
 #### Scenario: Models offered as completion
 - **WHEN** the user requests argument completions for `/opsx-loop`
-- **THEN** `models` SHALL appear alongside `status` and `clear`
+- **THEN** `models` SHALL appear alongside `goal`, `status`, and `clear`
 

@@ -12,7 +12,7 @@
  * (ADR-0001/0004). Independent of the goal extension.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
@@ -32,7 +32,12 @@ const DEFAULT_BUDGET = 40;
 const STALL_LIMIT = 3; // consecutive identical no-progress gate failures → stop
 
 interface LoopState {
-	change: string;
+	// `change` is undefined while a goal/conversation loop is still distilling its
+	// intent into a new change dir; `awaitingChange` guards that pre-gate phase.
+	change?: string;
+	goal?: string; // goal text (undefined = conversation-driven); only set in goal mode
+	awaitingChange: boolean;
+	preChangeDirs?: string[]; // snapshot of change-dir names at kickoff (goal mode)
 	worktree?: string;
 	turns: number;
 	maxTurns: number;
@@ -42,6 +47,40 @@ interface LoopState {
 	stallKey?: string;
 	stallCount: number;
 	lastProgress?: string;
+}
+
+/** Active (non-archive) change-dir names under a repo's openspec/changes. */
+function listChangeDirs(cwd: string): string[] {
+	try {
+		const base = join(cwd, "openspec", "changes");
+		return readdirSync(base, { withFileTypes: true })
+			.filter((e) => e.isDirectory() && e.name !== "archive")
+			.map((e) => e.name);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * A change dir created since the kickoff snapshot that already carries a frozen
+ * intent.md (the openspec-loop precondition). If several qualify, the one whose
+ * intent.md was most recently written wins. undefined until one appears.
+ * (opsx-loop-kickoff.goal-and-conversation-kickoff)
+ */
+function detectNewChange(pre: string[], cwd: string): string | undefined {
+	const preSet = new Set(pre);
+	const base = join(cwd, "openspec", "changes");
+	const ready = listChangeDirs(cwd)
+		.filter((n) => !preSet.has(n) && existsSync(join(base, n, "intent.md")));
+	if (ready.length === 0) return undefined;
+	const mtime = (n: string): number => {
+		try {
+			return statSync(join(base, n, "intent.md")).mtimeMs;
+		} catch {
+			return 0;
+		}
+	};
+	return ready.sort((a, b) => mtime(b) - mtime(a))[0];
 }
 
 /** Resolve one role via the harness-neutral `opsx models` CLI (consumer, not owner). */
@@ -161,9 +200,10 @@ export default function (pi: ExtensionAPI) {
 	let loop: LoopState | undefined;
 
 	function renderStatus(ctx: ExtensionContext): void {
+		const label = loop?.change ?? (loop?.goal ? "(distilling goal)" : "(distilling)");
 		ctx.ui.setStatus(
 			"opsx-loop",
-			loop?.active ? `⟳ opsx-loop ${loop.change} · ${loop.turns}/${loop.maxTurns}` : undefined,
+			loop?.active ? `⟳ opsx-loop ${label} · ${loop.turns}/${loop.maxTurns}` : undefined,
 		);
 	}
 
@@ -178,8 +218,23 @@ export default function (pi: ExtensionAPI) {
 		`GATE-FAIL line, delegate any review verdict to a blind subagent, and commit one unit of progress.` +
 		(report ? `\n\nCurrent opsx gate report:\n${report}` : "");
 
+	// Goal/conversation kickoff: establish a frozen intent.md (reuse an existing one
+	// or distill goal/conversation into a NEW change), then hand off to the loop.
+	const distillDirective = (goal?: string) =>
+		`Start a new OpenSpec change and drive the FULL workflow to a green opsx gate using the openspec-loop skill.\n\n` +
+		`Step 1 — establish the frozen intent:\n` +
+		`- If an active change with a frozen intent.md already captures this work, use it as-is.\n` +
+		(goal
+			? `- Otherwise distill this goal into a new change: "${goal}".`
+			: `- Otherwise distill our current conversation — the intent we have converged on — into a new change.`) +
+		` Use openspec-explore / openspec-propose to create openspec/changes/<name>/ with a frozen intent.md.\n` +
+		`Step 2 — run the openspec-loop skill against that change: advance propose→apply behind ` +
+		"`opsx gate <name>`, fixing the EARLIEST blocking GATE-FAIL each turn, delegating review " +
+		`verdicts to blind subagents, and committing one unit of progress per turn.\n` +
+		`Announce the new change name as soon as its intent.md is frozen.`;
+
 	pi.registerCommand("opsx-loop", {
-		description: "Guaranteed opsx loop: /opsx-loop <change> | /opsx-loop status | /opsx-loop clear",
+		description: "Guaranteed opsx loop: /opsx-loop goal [text] | <change> | status | clear | models",
 		getArgumentCompletions: (prefix: string) => {
 			const p = prefix.trim().toLowerCase();
 			return LOOP_SUBCOMMANDS.filter((s) => s.value.startsWith(p));
@@ -188,10 +243,13 @@ export default function (pi: ExtensionAPI) {
 			const parsed = parseLoopArg(args ?? "");
 
 			if (parsed.mode === "status") {
-				if (!loop?.active) return "No active opsx-loop. Start one with: /opsx-loop <change>";
+				if (!loop?.active) return "No active opsx-loop. Start one with: /opsx-loop goal [text] | /opsx-loop <change>";
+				const changeLine = loop.change
+					? `change: ${loop.change}`
+					: `change: (distilling ${loop.goal ? `goal: ${loop.goal}` : "conversation"} → intent.md)`;
 				return [
 					`⟳ opsx-loop active — ${loop.turns}/${loop.maxTurns} turns`,
-					`change: ${loop.change}`,
+					changeLine,
 					`worktree: ${loop.worktree ?? "(same-tree)"}`,
 					`last gate: ${loop.lastReason ?? "(pending first turn)"}`,
 				].join("\n");
@@ -213,10 +271,30 @@ export default function (pi: ExtensionAPI) {
 				return out || "(no output)";
 			}
 
+			if (parsed.mode === "goal") {
+				// Goal/conversation kickoff: no change name yet. Snapshot existing change
+				// dirs, inject the distill directive, and detect the new change on agent_end.
+				loop = {
+					goal: parsed.goal,
+					awaitingChange: true,
+					preChangeDirs: listChangeDirs(ctx.cwd),
+					turns: 0,
+					maxTurns: DEFAULT_BUDGET,
+					active: true,
+					evaluating: false,
+					stallCount: 0,
+				};
+				renderStatus(ctx);
+				pi.sendUserMessage(distillDirective(parsed.goal), { deliverAs: "followUp" });
+				const src = parsed.goal ? `goal: "${parsed.goal}"` : "the current conversation";
+				return `⟳ opsx-loop started from ${src} — distilling intent → change (budget ${loop.maxTurns}).`;
+			}
+
 			// set — replaces any active loop, resolves worktree + budget, starts work.
 			const review = readReview(parsed.change, ctx.cwd);
 			loop = {
 				change: parsed.change,
+				awaitingChange: false,
 				worktree: resolveWorktree(parsed.change, ctx.cwd),
 				turns: 0,
 				maxTurns: parseLoopBudget(review, DEFAULT_BUDGET),
@@ -253,13 +331,40 @@ export default function (pi: ExtensionAPI) {
 		session.evaluating = true;
 		try {
 			session.turns += 1;
+
+			// Goal/conversation mode: the agent is distilling intent into a NEW change.
+			// Wait for its frozen intent.md, then adopt that change and arm the gate loop.
+			// Until then, keep nudging with the distill directive (bounded by the budget).
+			// (opsx-loop-kickoff.goal-and-conversation-kickoff)
+			if (session.awaitingChange) {
+				const detected = detectNewChange(session.preChangeDirs ?? [], ctx.cwd);
+				if (!detected) {
+					if (session.turns >= session.maxTurns) {
+						const src = session.goal ? `goal "${session.goal}"` : "the conversation";
+						clearLoop(ctx);
+						ctx.ui.notify(`⟳ opsx-loop: budget ${session.maxTurns} exhausted before a change was created from ${src}.`, "warning");
+						return;
+					}
+					renderStatus(ctx);
+					pi.sendUserMessage(distillDirective(session.goal), { deliverAs: "followUp" });
+					return;
+				}
+				session.change = detected;
+				session.awaitingChange = false;
+				session.maxTurns = parseLoopBudget(readReview(detected, ctx.cwd), DEFAULT_BUDGET);
+				const exported = exportModelEnv(detected, ctx.cwd);
+				const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
+				ctx.ui.notify(`⟳ opsx-loop: change "${detected}" created — gating it now.${modelNote}`, "info");
+			}
+			const change = session.change as string;
+
 			// Re-resolve the worktree EACH turn: a from-scratch change may only gain a
 			// Worktree Path mid-loop. (opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge)
 			const prevWorktree = session.worktree;
-			session.worktree = resolveWorktree(session.change, ctx.cwd);
+			session.worktree = resolveWorktree(change, ctx.cwd);
 			renderStatus(ctx);
 
-			const verdict = await runGate(session.change, session.worktree, ctx.signal, ctx.cwd);
+			const verdict = await runGate(change, session.worktree, ctx.signal, ctx.cwd);
 			if (loop !== session || !session.active) return; // cleared during async gate run
 			session.lastReason = verdict.reason;
 
@@ -279,7 +384,7 @@ export default function (pi: ExtensionAPI) {
 			// Stall detection: same normalized failed-check set + no observable progress
 			// (HEAD/dirty unchanged) + same worktree, for STALL_LIMIT turns running.
 			const key = gateFailKey(verdict.reason);
-			const progress = progressToken(session.change, session.worktree, ctx.cwd);
+			const progress = progressToken(change, session.worktree, ctx.cwd);
 			const worktreeChanged = prevWorktree !== session.worktree;
 			if (!worktreeChanged && key !== "" && key === session.stallKey && progress === session.lastProgress) {
 				session.stallCount += 1;
@@ -294,7 +399,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`⟳ opsx-loop: ${c} stalled on a repeating failure (${STALL_LIMIT}× no progress); worktree preserved. Intervene manually.`, "warning");
 				return;
 			}
-			pi.sendUserMessage(workerDirective(session.change, verdict.reason), { deliverAs: "followUp" });
+			pi.sendUserMessage(workerDirective(change, verdict.reason), { deliverAs: "followUp" });
 		} finally {
 			session.evaluating = false;
 		}

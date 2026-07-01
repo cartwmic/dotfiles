@@ -86,6 +86,25 @@ describe("parseLoopArg — opsx-loop-kickoff.status-and-clear-subcommands", () =
 	});
 });
 
+describe("parseLoopArg goal keyword — opsx-loop-kickoff.goal-and-conversation-kickoff", () => {
+	test("goal with multi-word text preserves the FULL goal (no truncation)", () => {
+		expect(parseLoopArg("goal build the clipboard sync with retries")).toEqual({
+			mode: "goal",
+			goal: "build the clipboard sync with retries",
+		});
+	});
+	test("goal with no following text starts from the conversation (goal omitted)", () => {
+		expect(parseLoopArg("goal")).toEqual({ mode: "goal" });
+		expect(parseLoopArg("  goal   ")).toEqual({ mode: "goal" });
+	});
+	test("goal is case-insensitive and collapses inner whitespace", () => {
+		expect(parseLoopArg("GOAL   fix   the   thing")).toEqual({ mode: "goal", goal: "fix the thing" });
+	});
+	test("a change name that merely contains 'goal' is still a set", () => {
+		expect(parseLoopArg("goal-tracker-extension")).toEqual({ mode: "set", change: "goal-tracker-extension" });
+	});
+});
+
 describe("hashDir — opsx-loop-kickoff.stall-detection-stops-the-loop", () => {
 	test("any file-content change under the dir changes the digest (incl. untracked)", () => {
 		const root = mkdtempSync(join(tmpdir(), "opsxhash-"));
