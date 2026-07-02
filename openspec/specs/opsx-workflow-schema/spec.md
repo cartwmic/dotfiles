@@ -21,7 +21,7 @@ The `opsx-superpowers` workflow schema SHALL be persisted canonically in the che
 
 ### Requirement: Artifact graph definition
 
-The `opsx-superpowers` schema SHALL declare an 8-artifact graph in dependency order: `proposal` → `specs` → `clarify` → `design` → `analyze` → `review` → `tasks` → `plan`, with an `apply` block that consumes `tasks` (the full graph reachable transitively). The schema SHALL NOT declare `verify`, `retrospective`, or `adr` as artifacts because OpenSpec's `isComplete` is existence-only and would perpetually report incompleteness for optional artifacts; instead the schema SHALL ship templates for these three so the opsx-* skills can author them at the appropriate lifecycle moment (apply end for verify, pre-archive for retrospective, archive prompt for ADR promotion).
+The `opsx-superpowers` schema SHALL declare an 8-artifact graph in dependency order: `proposal` → `specs` → `clarify` → `design` → `analyze` → `review` → `tasks` → `plan`, with an `apply` block that consumes `tasks` (the full graph reachable transitively). The schema SHALL NOT declare `verify`, `retrospective`, `adr`, or `doneness` as artifacts because OpenSpec's `isComplete` is existence-only and would perpetually report incompleteness for optional artifacts; instead the schema SHALL ship templates for these so the opsx-* skills can author them at the appropriate lifecycle moment (apply end for verify, pre-archive for retrospective, archive prompt for ADR promotion, and — when a doneness verdict is required — after the mechanical gate checks pass for doneness).
 
 #### Scenario: Validating the schema
 - **WHEN** the user runs `openspec schema validate opsx-superpowers`
@@ -31,9 +31,9 @@ The `opsx-superpowers` schema SHALL declare an 8-artifact graph in dependency or
 - **WHEN** the schema's `apply` block is inspected
 - **THEN** `apply.requires` SHALL be the array `[tasks]` (the full graph is reachable transitively via `tasks.requires → review → analyze → design → clarify → specs → proposal`); `apply.tracks` SHALL be the single string `tasks.md` (the OpenSpec `ApplyPhaseSchema` zod type requires `tracks: string | null`, never an array)
 
-#### Scenario: ADR + verify + retrospective templates exist for skill use
+#### Scenario: ADR + verify + retrospective + doneness templates exist for skill use
 - **WHEN** a project uses `schema: opsx-superpowers`
-- **THEN** the templates `adr.md`, `verify.md`, and `retrospective.md` SHALL be present in the deployed schema's `templates/` directory, AND the schema's `apply.instruction` SHALL document the skill contract for each (who produces them, when, and what enforcement they drive)
+- **THEN** the templates `adr.md`, `verify.md`, `retrospective.md`, and `doneness.md` SHALL be present in the deployed schema's `templates/` directory, AND the schema's `apply.instruction` SHALL document the skill contract for each (who produces them, when, and what enforcement they drive); the `doneness.md` template SHALL define the machine-read fields (`Doneness`, `Gaps`, reviewed range, adapter-stamped reviewer-provenance, frozen-intent hash, Diff Base SHA) that the gate and stall detector parse
 
 ### Requirement: Scale-adaptive gating (skill-enforced, not schema-enforced)
 
@@ -61,11 +61,11 @@ The schema SHALL declare a `Scale` mode in `review.md` with values `XS | S | M |
 
 ### Requirement: Mode switchboard in review.md
 
-The `review.md` artifact SHALL declare a controlled-vocabulary mode switchboard whose values gate apply-time behavior. The required modes SHALL be: `Scale`, `Execution Mode`, `Verification Mode`, `Debug Mode`, `Review Status`, `Delegation Mode`, `Worktree Mode`, `Code Review Mode`, `Loop Max Iterations`, and `Spec Level`. The default value of `Worktree Mode` SHALL be `worktree-required` for all Scales. THE review.md artifact SHALL additionally carry a machine-readable front-matter block (YAML) at the top of the file mirroring at least `scale`, `worktree_mode`, `verification_mode`, `code_review_mode`, `loop_max_iterations`, and `validation_source_mode`, so that opsx gate reads these values from structured fields rather than scraping the prose mode table.
+The `review.md` artifact SHALL declare a controlled-vocabulary mode switchboard whose values gate apply-time behavior. The required modes SHALL be: `Scale`, `Execution Mode`, `Verification Mode`, `Debug Mode`, `Review Status`, `Delegation Mode`, `Worktree Mode`, `Code Review Mode`, `Loop Max Iterations`, `Spec Level`, and `Doneness Mode`. The default value of `Worktree Mode` SHALL be `worktree-required` for all Scales. THE review.md artifact SHALL additionally carry a machine-readable front-matter block (YAML) at the top of the file mirroring at least `scale`, `worktree_mode`, `verification_mode`, `code_review_mode`, `loop_max_iterations`, `validation_source_mode`, and `doneness_mode`, so that opsx gate reads these values from structured fields rather than scraping the prose mode table. THE `doneness_mode` field SHALL take one of `required` or `waived`, defaulting to `required` for Scale M and above, and WHERE it is `waived` a non-empty `doneness_waiver_rationale` front-matter field SHALL be recorded, mirroring `validation_source_mode`.
 
 #### Scenario: Machine-readable front-matter present
 - **WHEN** review.md is authored
-- **THEN** its leading YAML front-matter SHALL contain `scale`, `worktree_mode`, `verification_mode`, `code_review_mode`, and `loop_max_iterations` fields whose values match the prose mode table
+- **THEN** its leading YAML front-matter SHALL contain `scale`, `worktree_mode`, `verification_mode`, `code_review_mode`, `loop_max_iterations`, `validation_source_mode`, and `doneness_mode` fields whose values match the prose mode table
 
 #### Scenario: Front-matter is the sole machine source
 - **WHEN** opsx gate reads review.md
@@ -74,6 +74,14 @@ The `review.md` artifact SHALL declare a controlled-vocabulary mode switchboard 
 #### Scenario: Loop Max Iterations defaults by Scale
 - **WHEN** review.md is authored without an explicit `Loop Max Iterations`
 - **THEN** it SHALL default to a Scale-keyed value (for example S=20, M=40, L=80) and SHALL be recorded in the front-matter as `loop_max_iterations`
+
+#### Scenario: Doneness Mode defaults to required at Scale M and above
+- **WHEN** review.md is authored for a change of Scale M or above without an explicit `doneness_mode`
+- **THEN** the effective `doneness_mode` SHALL be `required`, and it SHALL be recorded in the front-matter as `doneness_mode`
+
+#### Scenario: Doneness Mode waiver records a rationale
+- **WHEN** review.md declares `doneness_mode: waived`
+- **THEN** a non-empty `doneness_waiver_rationale` SHALL be recorded in review.md front-matter, and opsx gate SHALL NOT require a doneness verdict for the change ONLY WHILE that rationale is present and non-empty
 
 #### Scenario: Verification Mode gates verify.md retention
 - **WHEN** `review.md` declares `Verification Mode: retained-required`
