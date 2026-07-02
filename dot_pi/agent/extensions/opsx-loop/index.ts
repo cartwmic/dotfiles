@@ -243,24 +243,32 @@ export default function (pi: ExtensionAPI) {
 			const parsed = parseLoopArg(args ?? "");
 
 			if (parsed.mode === "status") {
-				if (!loop?.active) return "No active opsx-loop. Start one with: /opsx-loop goal [text] | /opsx-loop <change>";
+				if (!loop?.active) {
+					ctx.ui.notify("No active opsx-loop. Start one with: /opsx-loop goal [text] | /opsx-loop <change>", "info");
+					return;
+				}
 				const changeLine = loop.change
 					? `change: ${loop.change}`
 					: `change: (distilling ${loop.goal ? `goal: ${loop.goal}` : "conversation"} → intent.md)`;
-				return [
+				ctx.ui.notify([
 					`⟳ opsx-loop active — ${loop.turns}/${loop.maxTurns} turns`,
 					changeLine,
 					`worktree: ${loop.worktree ?? "(same-tree)"}`,
 					`last gate: ${loop.lastReason ?? "(pending first turn)"}`,
-				].join("\n");
+				].join("\n"), "info");
+				return;
 			}
 
 			if (parsed.mode === "clear") {
-				if (!loop?.active) return "No active opsx-loop to clear.";
-				const c = loop.change;
+				if (!loop?.active) {
+					ctx.ui.notify("No active opsx-loop to clear.", "info");
+					return;
+				}
+				const c = loop.change ?? (loop.goal ? `goal "${loop.goal}"` : "conversation");
 				clearLoop(ctx);
 				if (!ctx.isIdle()) ctx.abort();
-				return `Cleared opsx-loop: ${c}`;
+				ctx.ui.notify(`Cleared opsx-loop: ${c}`, "info");
+				return;
 			}
 
 			if (parsed.mode === "models") {
@@ -268,7 +276,8 @@ export default function (pi: ExtensionAPI) {
 				// Use the session cwd so `--layer project` targets the ACTIVE repo.
 				const margs = parsed.args.length > 0 ? parsed.args : ["list"];
 				const { out } = runModels(margs, ctx.cwd);
-				return out || "(no output)";
+				ctx.ui.notify(out || "(no output)", "info");
+				return;
 			}
 
 			if (parsed.mode === "goal") {
@@ -287,7 +296,8 @@ export default function (pi: ExtensionAPI) {
 				renderStatus(ctx);
 				pi.sendUserMessage(distillDirective(parsed.goal), { deliverAs: "followUp" });
 				const src = parsed.goal ? `goal: "${parsed.goal}"` : "the current conversation";
-				return `⟳ opsx-loop started from ${src} — distilling intent → change (budget ${loop.maxTurns}).`;
+				ctx.ui.notify(`⟳ opsx-loop started from ${src} — distilling intent → change (budget ${loop.maxTurns}).`, "info");
+				return;
 			}
 
 			// set — replaces any active loop, resolves worktree + budget, starts work.
@@ -307,7 +317,8 @@ export default function (pi: ExtensionAPI) {
 			pi.sendUserMessage(workerDirective(parsed.change), { deliverAs: "followUp" });
 			const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
 			const ignoredNote = parsed.ignored ? ` (ignored extra input: "${parsed.ignored}")` : "";
-			return `⟳ opsx-loop started (budget ${loop.maxTurns}) for ${parsed.change}${modelNote}${ignoredNote}`;
+			ctx.ui.notify(`⟳ opsx-loop started (budget ${loop.maxTurns}) for ${parsed.change}${modelNote}${ignoredNote}`, "info");
+			return;
 		},
 	});
 
@@ -321,7 +332,7 @@ export default function (pi: ExtensionAPI) {
 			.find((m: any) => m?.role === "assistant");
 		const stopReason: string | undefined = typeof last?.stopReason === "string" ? last.stopReason : undefined;
 		if (stopReason === "aborted" || stopReason === "error") {
-			const c = loop.change;
+			const c = loop.change ?? (loop.goal ? `goal "${loop.goal}"` : "conversation");
 			clearLoop(ctx);
 			ctx.ui.notify(`⟳ opsx-loop stopped (${stopReason}): ${c}`, "warning");
 			return;
