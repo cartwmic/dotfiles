@@ -32,6 +32,13 @@ opsx gate / archive read these fields verbatim:
 
 ## Convergent findings
 
+<!-- MANDATORY check: if the diff Diff Base SHA..HEAD touches
+     openspec/opsx-gates.yaml (or any gate/validation manifest), flag it
+     explicitly and verify the change WEAKENS nothing (removed gates,
+     required->false flips) without recorded human authorization — the gate
+     reads its manifest from the integration checkout, so a manifest edit is
+     the one remaining self-weakening vector diff review must catch. -->
+
 | # | Finding | Severity | Status |
 |---|---|---|---|
 | 1 | <description> | P0\|P1\|P2\|P3 | open\|fixed\|deferred |

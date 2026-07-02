@@ -257,22 +257,32 @@ EOF
 **Reviewed Range:** $HEAD_SHA..$HEAD_SHA
 EOF
 }
-donefile() { # <name> <verdict>
+donefile() { # <name> <verdict> [review_mode]
   local d="$TMP/openspec/changes/$1"; local ih; ih="$(ihash "$d/intent.md")"
   cat >"$d/doneness.md" <<EOF
 # Doneness
 **Doneness:** $2
 **Judge:** claude-bridge/claude-opus-4-8
-**review_mode:** adversarial-multimodel
+**review_mode:** ${3:-blind-single-judge}
 **Frozen-Intent SHA:** $ih
 **Diff Base SHA:** $HEAD_SHA
 **Reviewed Range:** $HEAD_SHA..$HEAD_SHA
 EOF
 }
 
-# satisfied + fresh + provenanced => PASS
+# satisfied + fresh + provenanced => PASS (blind-single-judge, the normal case)
 mkMdone d-ok; donefile d-ok satisfied
 run d-ok; check "satisfied fresh provenanced doneness passes (sealed-doneness-verdict-artifact / doneness-verdict-enforcement)" 0 $?
+
+# adversarial-multimodel is the stronger, equally-valid review_mode
+mkMdone d-multi; donefile d-multi satisfied adversarial-multimodel
+run d-multi; check "adversarial-multimodel doneness review_mode passes (anti-self-forge-provenance)" 0 $?
+
+# unknown review_mode fails CLOSED
+mkMdone d-unknownmode; donefile d-unknownmode satisfied something-else
+run d-unknownmode; rc=$?
+check "unknown doneness review_mode fails closed (anti-self-forge-provenance)" 1 $rc
+grep -q 'GATE-FAIL doneness' "$TMP/err" && ok "reports doneness fail for unknown review_mode" || nok "reports doneness fail for unknown review_mode"
 
 # absent doneness.md at Scale M required => FAIL
 mkMdone d-absent

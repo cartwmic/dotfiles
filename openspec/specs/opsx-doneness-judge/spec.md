@@ -85,8 +85,11 @@ mutated intent cannot pass.
 THE subagent-dispatch adapter SHALL stamp `doneness.md` with a reviewer-provenance field —
 recording the judging `review`-role model identity, the review mode, the frozen-intent
 content hash, and the Diff Base SHA it judged — rather than the orchestrator or the judge
-subagent writing that stamp in-band itself, and consumers SHALL treat a verdict whose
-provenance is absent, or whose review mode is `degraded-single-model`, as not established,
+subagent writing that stamp in-band itself. The review-mode vocabulary for doneness is
+`blind-single-judge` (the normal case: one independent blind subagent judge) or
+`adversarial-multimodel` (the optional stronger form, ≥2 distinct models); consumers SHALL
+treat a verdict whose provenance is absent, or whose review mode is
+`degraded-single-model` or any value outside that vocabulary, as not established,
 matching the adapter-stamped code-review provenance posture: it is a tripwire against
 accidental self-marking in normal flow, NOT a cryptographic guarantee — a same-UID actor
 that both bypasses dispatch AND forges the stamp is out of the threat model, exactly as the
@@ -102,7 +105,9 @@ against a same-UID actor).
 
 #### Scenario: Missing or degraded provenance is not established
 - **IF** `doneness.md` carries a `satisfied` verdict but lacks the adapter-stamped
-  reviewer-provenance field, or that field records review mode `degraded-single-model`
+  reviewer-provenance field, or that field records a review mode other than
+  `blind-single-judge` or `adversarial-multimodel` (including `degraded-single-model`
+  and unknown values)
 - **THEN** consumers SHALL treat the verdict as not established (equivalent to `not`)
 
 ### Requirement: Scale-Gated With Waiver

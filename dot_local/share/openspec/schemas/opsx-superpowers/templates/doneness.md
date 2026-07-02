@@ -30,7 +30,11 @@ beyond-scope / gold-plated work.
 **Doneness:** not
 
 **Judge:** <review-role model id / dispatch-adapter provenance>
-**review_mode:** adversarial-multimodel
+**review_mode:** blind-single-judge
+<!-- review_mode vocabulary: blind-single-judge (the normal case — ONE
+     independent blind subagent judge) | adversarial-multimodel (optional
+     stronger form, >= 2 distinct models). degraded-single-model (inline,
+     no dispatch adapter) and unknown values FAIL the gate. -->
 **Frozen-Intent SHA:** <sha256 of intent.md>
 **Diff Base SHA:** <immutable Diff Base SHA from review.md>
 **Reviewed Range:** <Diff Base SHA>..<implementation HEAD>

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # opsx — unified multitool for the opsx-superpowers workflow.
 #
-#   opsx gate   <change> [--worktree <path>]      deterministic exit-code gate
-#   opsx models <role|set|get|list> ...           role->model resolver + writer
-#   opsx loop   <change> [--worktree <path>]      Ralph-style fallback driver
+#   opsx gate     <change> [--worktree <path>]    deterministic exit-code gate
+#   opsx models   <role|set|get|list> ...         role->model resolver + writer
+#   opsx loop     <change> [--worktree <path>]    Ralph-style fallback driver
+#   opsx worktree ensure <change> [...]           deterministic worktree lifecycle
+#   opsx clean    <change> [--force]              remove an abandoned change's worktree+branch
 #
 # Hard cutover: replaces the standalone opsx-gate / opsx-models / opsx-loop
 # executables. Each subcommand body runs in a subshell function so `exit`,
@@ -15,12 +17,15 @@ set -uo pipefail
 opsx_usage() {
   cat >&2 <<'USAGE'
 usage: opsx <subcommand> [args]
-  gate    <change> [--worktree <path>]   run the deterministic gate
-  models  <role> [--json] [--change <c>] [--with-default]   resolve a role
-  models  set <role> <value> [--layer user|project]         write config
-  models  get <role> [--layer user|project]                 read config
-  models  list                                              list resolved roles
-  loop    <change> [--worktree <path>]   Ralph-style fallback driver
+  gate     <change> [--worktree <path>]   run the deterministic gate
+  models   <role> [--json] [--change <c>] [--with-default]   resolve a role
+  models   set <role> <value> [--layer user|project]         write config
+  models   get <role> [--layer user|project]                 read config
+  models   list                                              list resolved roles
+  loop     <change> [--worktree <path>]   Ralph-style fallback driver
+  worktree ensure <change> [--path <p>] [--integration-branch <b>]
+                                          create/reuse the opsx/<change> worktree
+  clean    <change> [--force]             remove an abandoned change's worktree+branch
 USAGE
 }
 
@@ -773,10 +778,15 @@ if [ "$rc" -eq 0 ]; then
         else
           [ -n "$(cr_field "$DONE" 'Judge')" ] \
             || fail doneness "doneness.md lacks an adapter-stamped Judge provenance field"
+          # Vocabulary (opsx-doneness-judge): blind-single-judge is the normal
+          # single independent blind judge; adversarial-multimodel is the
+          # stronger optional form. degraded-single-model (inline, no adapter)
+          # and any unknown value fail CLOSED.
           dmode="$(lc "$(cr_field "$DONE" 'review_mode')")"
-          if [ -z "$dmode" ] || [ "$dmode" = "degraded-single-model" ]; then
-            fail doneness "doneness.md provenance review_mode is missing or degraded-single-model (no independent blind judge)"
-          fi
+          case "$dmode" in
+            blind-single-judge|adversarial-multimodel) ;;
+            *) fail doneness "doneness.md provenance review_mode is '${dmode:-missing}' (need blind-single-judge or adversarial-multimodel; no independent blind judge established)" ;;
+          esac
           i_rec="$(cr_field "$DONE" 'Frozen-Intent SHA')"
           i_now="$(sha256_file "$CDIR/intent.md")"
           if [ -z "$i_rec" ] || [ "$i_rec" != "$i_now" ]; then
@@ -877,14 +887,159 @@ echo "✅ opsx loop: $CHANGE — gate green. Ready to archive."
 
 
 # ============================================================================
+# SUBCOMMAND: worktree — deterministic worktree lifecycle (runtime-owned).
+# `opsx worktree ensure <change>` creates or reuses the opsx/<change> worktree
+# with the spec's exact semantics (opsx-workflow-schema.worktree-lifecycle-
+# ownership): creation failure ABORTS (exit 1, actionable message); branch
+# reuse PRESERVES the recorded immutable Diff Base SHA and HALTS if it is
+# absent or not an ancestor of opsx/<change>. Prints the locator fields for
+# review.md in a stable machine-readable form. Skills call this instead of
+# hand-rolling git worktree commands, so lifecycle enforcement is
+# deterministic rather than prose-driven.
+# ============================================================================
+opsx_worktree() (
+set -uo pipefail
+PROG="opsx worktree"
+err() { echo "$PROG: $*" >&2; }
+VERB="${1:-}"; [ $# -gt 0 ] && shift || true
+case "$VERB" in
+  ensure) ;;
+  *) echo "usage: $PROG ensure <change> [--path <p>] [--integration-branch <b>]" >&2; exit 2 ;;
+esac
+CHANGE=""; WPATH=""; IBRANCH=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --path) { [ $# -ge 2 ] && [ -n "$2" ]; } || { err "--path requires a value"; exit 2; }; WPATH="$2"; shift 2 ;;
+    --integration-branch) { [ $# -ge 2 ] && [ -n "$2" ]; } || { err "--integration-branch requires a value"; exit 2; }; IBRANCH="$2"; shift 2 ;;
+    -*) err "unknown option: $1"; exit 2 ;;
+    *) CHANGE="$1"; shift ;;
+  esac
+done
+[ -n "$CHANGE" ] || { echo "usage: $PROG ensure <change> [--path <p>] [--integration-branch <b>]" >&2; exit 2; }
+
+ROOT="$(git -C "${OPSX_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" \
+  || { err "not inside a git repository"; exit 1; }
+[ -d "$ROOT/openspec/changes/$CHANGE" ] || { err "change not found: $CHANGE"; exit 1; }
+BRANCH="opsx/$CHANGE"
+REVIEW="$ROOT/openspec/changes/$CHANGE/review.md"
+
+if [ -z "$IBRANCH" ]; then
+  IBRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  if [ -z "$IBRANCH" ] || [ "$IBRANCH" = "HEAD" ]; then
+    err "repository is in detached HEAD state; pass --integration-branch explicitly"; exit 1
+  fi
+fi
+[ -n "$WPATH" ] || WPATH="$(dirname "$ROOT")/$(basename "$ROOT")--opsx-$CHANGE"
+
+recorded_base() {
+  [ -f "$REVIEW" ] || return 0
+  grep -E '^\*\*Diff Base SHA:\*\*' "$REVIEW" 2>/dev/null \
+    | head -1 | sed -E 's/^\*\*Diff Base SHA:\*\*[[:space:]]*//; s/[[:space:]]+$//'
+}
+
+existing_wt_for_branch() {
+  git -C "$ROOT" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/$BRANCH" '
+    /^worktree /{wt=substr($0,10)} /^branch /{if (substr($0,8)==b) {print wt; exit}}'
+}
+
+if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  # REUSE: preserve the recorded base; halt for human repair when unsafe.
+  BASE="$(recorded_base)"
+  case "$BASE" in "<"*) BASE="" ;; esac
+  if [ -z "$BASE" ]; then
+    err "branch $BRANCH exists but review.md has no recorded Diff Base SHA — HALT for human repair (re-recording a base would exclude unverified commits)"; exit 1
+  fi
+  if ! git -C "$ROOT" merge-base --is-ancestor "$BASE" "$BRANCH" 2>/dev/null; then
+    err "recorded Diff Base SHA ($BASE) is not an ancestor of $BRANCH — HALT for human repair"; exit 1
+  fi
+  EXISTING="$(existing_wt_for_branch)"
+  if [ -n "$EXISTING" ]; then
+    WPATH="$EXISTING"
+  else
+    if ! git -C "$ROOT" worktree add "$WPATH" "$BRANCH" >/dev/null 2>&1; then
+      err "worktree add failed for existing branch $BRANCH at $WPATH (path conflict / permissions / disk?) — ABORT, do not proceed to implementation"; exit 1
+    fi
+  fi
+  MODE=reused
+else
+  if ! git -C "$ROOT" worktree add -b "$BRANCH" "$WPATH" "$IBRANCH" >/dev/null 2>&1; then
+    err "worktree creation failed (branch $BRANCH at $WPATH from $IBRANCH: path conflict / permissions / disk / bad base?) — ABORT, do not proceed to implementation"; exit 1
+  fi
+  BASE="$(git -C "$ROOT" merge-base "$IBRANCH" "$BRANCH" 2>/dev/null)"
+  if [ -z "$BASE" ]; then
+    git -C "$ROOT" worktree remove --force "$WPATH" >/dev/null 2>&1
+    git -C "$ROOT" branch -D "$BRANCH" >/dev/null 2>&1
+    err "could not compute merge-base($IBRANCH, $BRANCH) — ABORT"; exit 1
+  fi
+  MODE=created
+fi
+
+# Stable machine-readable locator block (callers write these into review.md).
+echo "WORKTREE-OK $MODE"
+echo "Diff Base SHA: $BASE"
+echo "Worktree Path: $WPATH"
+echo "Integration Branch: $IBRANCH"
+exit 0
+)
+
+# ============================================================================
+# SUBCOMMAND: clean — remove an ABANDONED change's worktree + opsx/<change>
+# branch. The archive path removes worktrees on merge; nothing else ever did,
+# so abandoned changes leaked worktrees/branches (often holding uncommitted
+# verdict files). Refuses when the worktree is dirty unless --force.
+# ============================================================================
+opsx_clean() (
+set -uo pipefail
+PROG="opsx clean"
+err() { echo "$PROG: $*" >&2; }
+CHANGE=""; FORCE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --force) FORCE=1; shift ;;
+    -*) err "unknown option: $1"; exit 2 ;;
+    *) CHANGE="$1"; shift ;;
+  esac
+done
+[ -n "$CHANGE" ] || { echo "usage: $PROG <change> [--force]" >&2; exit 2; }
+ROOT="$(git -C "${OPSX_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" \
+  || { err "not inside a git repository"; exit 1; }
+BRANCH="opsx/$CHANGE"
+
+WT="$(git -C "$ROOT" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/$BRANCH" '
+  /^worktree /{wt=substr($0,10)} /^branch /{if (substr($0,8)==b) {print wt; exit}}')"
+
+did=0
+if [ -n "$WT" ] && [ -d "$WT" ]; then
+  dirty="$(git -C "$WT" status --porcelain 2>/dev/null | head -1)"
+  if [ -n "$dirty" ] && [ "$FORCE" -ne 1 ]; then
+    err "worktree $WT has uncommitted changes (possibly unsealed verify/code-review/doneness verdicts) — refusing; inspect it or re-run with --force"; exit 1
+  fi
+  if [ "$FORCE" -eq 1 ]; then
+    git -C "$ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || { err "worktree remove failed: $WT"; exit 1; }
+  else
+    git -C "$ROOT" worktree remove "$WT" >/dev/null 2>&1 || { err "worktree remove failed: $WT"; exit 1; }
+  fi
+  did=1
+fi
+if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  git -C "$ROOT" branch -D "$BRANCH" >/dev/null 2>&1 || { err "branch delete failed: $BRANCH"; exit 1; }
+  did=1
+fi
+if [ "$did" -eq 1 ]; then echo "CLEAN-OK $CHANGE"; else echo "CLEAN-OK $CHANGE (nothing to clean)"; fi
+exit 0
+)
+
+# ============================================================================
 # DISPATCH
 # ============================================================================
 sub="${1:-}"
 [ $# -gt 0 ] && shift || true
 case "$sub" in
-  gate)   opsx_gate "$@"; exit $? ;;
-  models) opsx_models "$@"; exit $? ;;
-  loop)   opsx_loop "$@"; exit $? ;;
+  gate)     opsx_gate "$@"; exit $? ;;
+  models)   opsx_models "$@"; exit $? ;;
+  loop)     opsx_loop "$@"; exit $? ;;
+  worktree) opsx_worktree "$@"; exit $? ;;
+  clean)    opsx_clean "$@"; exit $? ;;
   -h|--help|help) opsx_usage; exit 0 ;;
   "") echo "opsx: missing subcommand" >&2; opsx_usage; exit 2 ;;
   *) echo "opsx: unknown subcommand: $sub" >&2; opsx_usage; exit 2 ;;

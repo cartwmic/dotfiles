@@ -79,8 +79,10 @@ fresh `satisfied` verdict exists (i.e. `doneness` is the sole remaining `GATE-FA
   intent's stated outcomes are met — never demand beyond-scope / gold-plated work.
 - The subagent (not the orchestrator) authors `doneness.md` from `templates/doneness.md`:
   `Doneness: satisfied|not`, the unmet `## Gaps` when `not`, an adapter-stamped `Judge`
-  provenance field, `Frozen-Intent SHA` = `sha256(intent.md)`, the immutable `Diff Base
-  SHA`, and `Reviewed Range` = `Diff Base SHA..HEAD`.
+  provenance field with `review_mode: blind-single-judge` (one independent blind judge —
+  the normal case; `adversarial-multimodel` only when ≥2 distinct judge models were
+  actually dispatched), `Frozen-Intent SHA` = `sha256(intent.md)`, the immutable `Diff
+  Base SHA`, and `Reviewed Range` = `Diff Base SHA..HEAD`.
 - **Freshness:** a new commit invalidates a prior verdict — re-dispatch the judge against
   the current HEAD rather than reuse a stale `doneness.md`.
 - **No dispatch adapter:** do NOT seal a `degraded-single-model`-stamped `satisfied`

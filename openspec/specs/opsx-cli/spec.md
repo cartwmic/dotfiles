@@ -46,6 +46,26 @@ subcommand form (`opsx gate` / `opsx models` / `opsx loop`).
 - **WHEN** the legacy-token scan runs during verify
 - **THEN** it SHALL NOT scan `openspec/specs/**`, `openspec/changes/**`, or `adr/**` — the capability specs are migrated to the subcommand form by this change's MODIFIED deltas (applied at archive, not in the working tree during the gate), and `openspec/changes/**` + `adr/**` are spec/history records, not executable callers
 
+### Requirement: Worktree Lifecycle Commands
+
+THE `opsx` CLI SHALL provide `opsx worktree ensure <change> [--path <p>] [--integration-branch <b>]` and `opsx clean <change> [--force]` as the runtime-owned implementation of the worktree lifecycle (opsx-workflow-schema Worktree Lifecycle Ownership): `ensure` SHALL create the `opsx/<change>` branch + worktree recording the immutable integration-branch merge-base, SHALL reuse an existing branch only when the recorded `Diff Base SHA` is present and an ancestor of `opsx/<change>` (exiting 1 for human repair otherwise), SHALL exit 1 with an actionable message on any creation failure, and SHALL print the locator fields (`Diff Base SHA`, `Worktree Path`, `Integration Branch`) in a stable machine-readable form; `clean` SHALL remove an abandoned change's worktree and branch, refusing a dirty worktree unless `--force` is given, and SHALL be idempotent.
+
+#### Scenario: Ensure creates and records the merge-base
+- **WHEN** `opsx worktree ensure <change>` runs and branch `opsx/<change>` does not exist
+- **THEN** it SHALL create the branch + worktree from the integration branch, print `WORKTREE-OK created` and a `Diff Base SHA` equal to the integration-branch merge-base, and exit 0
+
+#### Scenario: Reuse halts without a valid recorded base
+- **IF** branch `opsx/<change>` exists but review.md has no recorded `Diff Base SHA`, or the recorded base is not an ancestor of `opsx/<change>`
+- **THEN** `opsx worktree ensure` SHALL exit 1 with a halt-for-human-repair message and SHALL NOT re-record a base
+
+#### Scenario: Creation failure aborts
+- **IF** worktree creation fails (path conflict, detached HEAD without `--integration-branch`, permissions, disk)
+- **THEN** `opsx worktree ensure` SHALL exit 1 with an actionable message so the caller does not proceed to implementation tasks
+
+#### Scenario: Clean refuses dirty without force and is idempotent
+- **IF** the change's worktree has uncommitted changes and `--force` is absent
+- **THEN** `opsx clean <change>` SHALL refuse with exit 1; WHEN `--force` is given it SHALL remove the worktree and delete branch `opsx/<change>`; WHEN nothing remains to clean it SHALL exit 0
+
 ### Requirement: Model Config Write Surface
 
 THE `opsx models` subcommand SHALL provide `set <role> <value>`, `get <role>`, and `list`
