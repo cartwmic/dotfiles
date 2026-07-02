@@ -12,12 +12,7 @@ loop_max_iterations: 80
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: waived
-doneness_waiver_rationale: >
-  Bootstrap. This change INTRODUCES the doneness judge and the gate's doneness
-  check. Requiring this change to self-gate on a doneness verdict produced by the
-  very machinery under construction (in this same worktree's opsx binary) is
-  circular. Doneness is waived for this bootstrapping change only; it becomes
-  required (default) for every subsequent Scale >= M change once this ships.
+doneness_waiver_rationale: "Bootstrap: this change introduces the doneness judge and the gate's own doneness check; self-gating on a verdict produced by the machinery under construction in this same worktree is circular. Waived for this bootstrapping change only; required (default) for every subsequent Scale>=M change once this ships."
 ---
 
 # Review

@@ -361,6 +361,51 @@ run d-bare; rc=$?
 check "bare waiver fails at Scale>=M (scale-gated-with-waiver)" 1 $rc
 grep -q 'GATE-FAIL doneness' "$TMP/err" && ok "reports bare-waiver doneness fail" || nok "reports bare-waiver doneness fail"
 
+# empty block-scalar rationale (doneness_waiver_rationale: > with no content) => FAIL
+mkMdone d-emptyblock
+cat >"$TMP/openspec/changes/d-emptyblock/review.md" <<EOF
+---
+scale: M
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: gating-required
+loop_max_iterations: 40
+validation_source_mode: waived
+spec_level: spec-anchored
+doneness_mode: waived
+doneness_waiver_rationale: >
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:**
+EOF
+run d-emptyblock; rc=$?
+check "empty block-scalar rationale fails, not passes (scale-gated-with-waiver)" 1 $rc
+grep -q 'GATE-FAIL doneness' "$TMP/err" && ok "content-less block-scalar rationale rejected" || nok "content-less block-scalar rationale rejected"
+
+# block-scalar rationale WITH indented content => PASS
+mkMdone d-blockok
+cat >"$TMP/openspec/changes/d-blockok/review.md" <<EOF
+---
+scale: M
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: gating-required
+loop_max_iterations: 40
+validation_source_mode: waived
+spec_level: spec-anchored
+doneness_mode: waived
+doneness_waiver_rationale: >
+  a real multi-line rationale explaining the waiver
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:**
+EOF
+run d-blockok; check "block-scalar rationale with content passes (scale-gated-with-waiver)" 0 $?
+
 # sub-M skip: Scale-S change with doneness_mode required must NOT evaluate doneness
 mkchange d-subm
 awk '1; /^spec_level:/{print "doneness_mode: required"}' "$TMP/openspec/changes/d-subm/review.md" >"$TMP/dsub.tmp" && mv "$TMP/dsub.tmp" "$TMP/openspec/changes/d-subm/review.md"
