@@ -46,6 +46,9 @@ interface LoopState {
 	stallKey?: string;
 	stallCount: number;
 	lastProgress?: string;
+	// Snapshot of change-dir names from the previous distilling turn; an unchanged
+	// set advances the distill stall counter (no new change is being created).
+	lastDirs?: string[];
 }
 
 /** Active (non-archive) change-dir names under a repo's openspec/changes. */
@@ -325,11 +328,21 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// set — replaces any active loop, resolves worktree + budget, starts work.
+			// Turn-0 short-circuit: if the change ALREADY passes opsx gate, do NOT arm or
+			// inject a worker turn — re-kicking a finished (green) change would loop it
+			// forever. Report it ready to archive instead.
+			const wt0 = resolveWorktree(parsed.change, ctx.cwd);
+			const pre = await runGate(parsed.change, wt0, ctx.signal, ctx.cwd);
+			if (pre.met) {
+				clearLoop(ctx);
+				ctx.ui.notify(`⟳ opsx-loop: ${parsed.change} already passes opsx gate — ready to archive. Not starting a loop.`, "info");
+				return;
+			}
 			const review = readReview(parsed.change, ctx.cwd);
 			loop = {
 				change: parsed.change,
 				awaitingChange: false,
-				worktree: resolveWorktree(parsed.change, ctx.cwd),
+				worktree: wt0,
 				turns: 0,
 				maxTurns: parseLoopBudget(review),
 				active: true,
@@ -374,11 +387,33 @@ export default function (pi: ExtensionAPI) {
 			if (session.awaitingChange) {
 				const detected = detectNewChange(session.preChangeDirs ?? [], ctx.cwd);
 				if (!detected) {
+					const src = session.goal ? `goal "${session.goal}"` : "the conversation";
 					if (session.maxTurns !== undefined && session.turns >= session.maxTurns) {
-						const src = session.goal ? `goal "${session.goal}"` : "the conversation";
 						clearLoop(ctx);
 						ctx.ui.notify(`⟳ opsx-loop: budget ${session.maxTurns} exhausted before a change was created from ${src}.`, "warning");
 						return;
+					}
+					// Distill stall guard: under an unbounded budget, a kickoff that never
+					// yields a new change with a frozen intent.md would re-inject the distill
+					// directive forever (e.g. when an existing change already captures the
+					// intent). Stop after STALL_LIMIT consecutive turns with NO change-dir
+					// progress (no new dir appeared since the prior turn).
+					const curDirs = listChangeDirs(ctx.cwd);
+					const prevDirs = session.lastDirs;
+					const dirsChanged =
+						prevDirs === undefined ||
+						curDirs.length !== prevDirs.length ||
+						curDirs.some((n) => !prevDirs.includes(n));
+					session.lastDirs = curDirs;
+					if (dirsChanged) {
+						session.stallCount = 0;
+					} else {
+						session.stallCount += 1;
+						if (session.stallCount >= STALL_LIMIT) {
+							clearLoop(ctx);
+							ctx.ui.notify(`⟳ opsx-loop: no new change with a frozen intent.md appeared after ${STALL_LIMIT} turns distilling ${src}; stopping. If an existing change already captures this, drive it with /opsx-loop <change> or archive it.`, "warning");
+							return;
+						}
 					}
 					renderStatus(ctx);
 					pi.sendUserMessage(distillDirective(session.goal), { deliverAs: "followUp" });
@@ -386,6 +421,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				session.change = detected;
 				session.awaitingChange = false;
+				session.stallCount = 0; // reset counter on change adoption
 				session.maxTurns = parseLoopBudget(readReview(detected, ctx.cwd));
 				const exported = exportModelEnv(detected, ctx.cwd);
 				const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
