@@ -12,6 +12,10 @@ code_review_mode: advisory
 loop_max_iterations: 20
 validation_source_mode: required
 spec_level: spec-anchored
+doneness_mode: required
+# doneness_mode: required | waived — default required at Scale >= M; a `waived`
+# value REQUIRES a non-empty `doneness_waiver_rationale` (a bare waiver fails the gate).
+# doneness_waiver_rationale: <why the semantic doneness judge is waived for this change>
 # ── Optional per-change model/provider overrides (resolved by `opsx models`) ──
 # Pin models for THIS change above the project/user config files. A value
 # containing "/" is a complete pi model id used verbatim; a BARE id is qualified
@@ -48,6 +52,7 @@ any mode by setting it (in BOTH the front-matter and this table).
 | Code Review Mode | advisory | none\|advisory\|gating-required — default gating-required at Scale ≥ M; gating-required blocks archive on code-review.md Verdict |
 | Loop Max Iterations | 20 | iteration budget; mapped onto the loop runtime turn budget (S≈20, M≈40, L≈80) |
 | Validation Source Mode | required | required\|waived — waived (with rationale) lets Scale ≥ M pass with no agent-independent validation source |
+| Doneness Mode | required | required\|waived — default required at Scale ≥ M; a `waived` value needs a non-empty `doneness_waiver_rationale` (bare waiver fails). Gate reads a sealed `doneness.md` verdict (see templates/doneness.md) |
 | Spec Level | spec-anchored | spec-anchored\|spec-first\|spec-as-source (warning if last) |
 | Model Config | (unset) | optional `author_model`/`review_models`/`impl_model`/`author_in_session` + `provider`/`*_provider` front-matter keys, resolved by `opsx models`; unset ⇒ session model |
 
