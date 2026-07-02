@@ -376,9 +376,11 @@ artifacts:
 
       Contract enforcement: at task wrap-up (or subagent completion
       when Delegation Mode is subagent-*), the diff is computed as
-      `git diff --name-only <worktree-base-sha>..HEAD` where
-      `<worktree-base-sha>` is captured at apply start (review.md
-      Worktree Base SHA field). Diff is checked against the globs.
+      `git diff --name-only <diff-base-sha>..HEAD` where
+      `<diff-base-sha>` is the IMMUTABLE `Diff Base SHA` recorded in
+      review.md at worktree creation (integration-branch merge-base,
+      NOT apply-start HEAD — there is no separate "Worktree Base
+      SHA"; see the apply instruction). Diff is checked against the globs.
       Violations → `scope_violation` findings that BLOCK task
       completion.
 
@@ -461,10 +463,16 @@ apply:
              into the main checkout's working dir but do NOT
              contaminate the worktree (independent checkout).
         Create worktree per the pi-subagents convention.
-        Capture base SHA:
-          `git -C <worktree-path> rev-parse HEAD` → write to
-          review.md "Worktree Base SHA" field. Used by all
-          subsequent file-contract diffs in this apply session.
+        Record the IMMUTABLE diff base (first creation only):
+          `git merge-base <integration-branch> opsx/<name>` → write
+          to review.md "Diff Base SHA" (+ "Worktree Path",
+          "Integration Branch"). NOT apply-start HEAD: on branch
+          reuse a rev-parse HEAD base would exclude commits made in
+          the prior apply session from every file-contract diff. On
+          reuse PRESERVE the recorded base (halt for human repair if
+          absent or not an ancestor of opsx/<name>). Same-tree
+          override: base = pre-apply HEAD. Used by all subsequent
+          file-contract diffs in this apply session.
 
       Delegation Mode subagent-eligible|subagent-required:
         CAPABILITY HOOK: subagent-driven-implementation. Dispatch each
@@ -498,8 +506,9 @@ apply:
          Append structured Issues list (file, line, error code,
          message). Re-run implementer.
 
-      6. Contract check (fixed base SHA):
-         `git diff --name-only <worktree-base-sha>..HEAD`
+      6. Contract check (immutable base SHA):
+         `git diff --name-only <diff-base-sha>..HEAD`  (review.md
+         "Diff Base SHA" — never HEAD, never re-captured)
          against files_allowed / files_forbidden / allow_new_files.
          Block on scope_violation findings.
          TDD exemption: tests/**/* permitted even when

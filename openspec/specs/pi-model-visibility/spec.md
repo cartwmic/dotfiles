@@ -1,7 +1,7 @@
 # pi-model-visibility Specification
 
 ## Purpose
-TBD - created by archiving change hide-nonbridge-claude-models. Update Purpose after archive.
+A personal-profile-only runtime patch that removes non-bridge Claude models from pi's available-model list, enforcing that all Claude traffic on this machine routes through claude-bridge.
 ## Requirements
 ### Requirement: Non-bridge Claude models are hidden on the personal profile
 

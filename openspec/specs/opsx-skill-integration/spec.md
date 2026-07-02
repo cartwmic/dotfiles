@@ -1,7 +1,7 @@
 # opsx-skill-integration Specification
 
 ## Purpose
-TBD - created by archiving change add-opsx-superpowers-schema. Update Purpose after archive.
+The contracts binding the openspec-* skills to the opsx-superpowers schema branch: schema detection at change creation, mode-flag dispatch during apply, archive hard-gates, and ADR/memory promotion flows.
 ## Requirements
 ### Requirement: Schema-aware openspec-propose
 
@@ -60,7 +60,7 @@ The `openspec-apply-change` skill at `dot_local/share/agent-harness/canonical/sk
 - **THEN** the subagent's final step SHALL run `git diff --name-only` against those globs and SHALL report any `scope_violation` finding to the main agent before the task is marked complete
 
 #### Scenario: Intent-aware repair prompt
-- **WHEN** validators fail during apply and the task declares `intent: fix`
+- **IF** validators fail during apply and the task declares `intent: fix`
 - **THEN** the repair prompt SHALL include a constraints block "CONSTRAINTS: Fix only failing validators. Do NOT refactor unrelated code. Do NOT add new features." and SHALL inject the structured `Issues[]` list
 
 #### Scenario: Refactor intent removes restrictive constraints
@@ -69,19 +69,19 @@ The `openspec-apply-change` skill at `dot_local/share/agent-harness/canonical/sk
 
 ### Requirement: Archive HARD-GATE on verify
 
-The `openspec-archive-change` skill at `dot_local/share/agent-harness/canonical/skills/openspec-archive-change/SKILL.md` SHALL refuse to archive a change whose schema is `opsx-superpowers` until `verify.md` exists and contains a Completion Decision marked green. The skill SHALL additionally check AC↔test mapping and offer to promote `retrospective.md` Promote-candidates into long-term memory via `mcp_memory_store_memory`.
+The `openspec-archive-change` skill at `dot_local/share/agent-harness/canonical/skills/openspec-archive-change/SKILL.md` SHALL refuse to archive a change whose schema is `opsx-superpowers` until `verify.md` exists and contains a Completion Decision marked green. The skill SHALL additionally check AC↔test mapping and offer to promote `retrospective.md` Promote-candidates into long-term memory via the hindsight `retain` tool.
 
 #### Scenario: Missing verify blocks archive
 - **WHEN** the user attempts to archive a change with `Verification Mode: retained-required` and `verify.md` is absent
 - **THEN** the skill SHALL refuse to archive and SHALL prompt the user to run the verify step
 
 #### Scenario: Red verify blocks archive
-- **WHEN** `verify.md` exists but its Completion Decision is `red` or `yellow`
+- **WHEN** `verify.md` exists but its Completion Decision is not `green` (the verdict vocabulary is binary green/red; no other value is valid)
 - **THEN** the skill SHALL refuse to archive and SHALL list the failing verify checks
 
 #### Scenario: Retrospective promote-candidates ingested
 - **WHEN** the change directory contains `retrospective.md` and it has a non-empty `Promote candidates` section
-- **THEN** the skill SHALL parse each candidate, classify it as a `decision | learning | convention | implementation | important | context` memory type per the user's memory-server contract, and SHALL prompt the user to confirm or skip each one before calling `mcp_memory_store_memory`
+- **THEN** the skill SHALL parse each candidate (content + `project:`/`topic:` tags; NO memory-type classification — the hindsight backend has no type taxonomy) and SHALL prompt the user to confirm or skip each one before calling the hindsight `retain` tool
 
 #### Scenario: ADR promotion before archive
 - **WHEN** `design.md` contains a Decisions section with ≥1 decision passing the 4-point test

@@ -34,7 +34,7 @@ Credentials, API keys, OAuth tokens, and personal-identifier data MUST NOT appea
 
 **Rationale:** dotfiles repos are commonly shared, leaked, or compromised. Secrets in source survive forever.
 
-**Enforcement:** pre-commit hook + secrets-scanner in CI; mcp-memory contract documents this in CLAUDE.md.
+**Enforcement:** pre-commit hook + secrets-scanner in CI; the memory contract (CLAUDE.md "Memory: hindsight MCP server") documents this.
 
 ### IV. Every install script is idempotent
 
@@ -86,9 +86,9 @@ Any change that modifies an existing skill at `.pi/skills/` (rather than adding 
 
 ### X. Memory promotion is opt-in, never automatic
 
-`openspec-archive-change` may parse `retrospective.md` Promote-candidates and offer to call `mcp_memory_store_memory`, but it MUST prompt the user per-row for confirm/skip. Memories MUST NOT be created without explicit human authorization.
+`openspec-archive-change` may parse `retrospective.md` Promote-candidates and offer to call the hindsight `retain` tool, but it MUST prompt the user per-row for confirm/skip. Memories MUST NOT be created without explicit human authorization.
 
-**Rationale:** mcp-memory is shared across every coding-agent harness the user runs. Polluting it with low-value or duplicate entries degrades retrieval relevance for the user AND for future-agent sessions.
+**Rationale:** the hindsight memory bank is shared across every coding-agent harness the user runs. Polluting it with low-value or duplicate entries degrades retrieval relevance for the user AND for future-agent sessions.
 
 **Enforcement:** `openspec-archive-change` skill code is the enforcement point; spec scenario in `opsx-skill-integration/spec.md` covers this.
 
@@ -108,4 +108,4 @@ Any change that modifies an existing skill at `.pi/skills/` (rather than adding 
 
 - Schema activation: `~/.local/share/openspec/schemas/opsx-superpowers/README.md`
 - Domain invariants: `openspec/domain.md`
-- Memory contract: `CLAUDE.md` "Memory: mcp-memory MCP server"
+- Memory contract: `CLAUDE.md` "Memory: hindsight MCP server"

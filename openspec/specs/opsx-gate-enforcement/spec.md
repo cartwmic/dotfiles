@@ -1,7 +1,7 @@
 # opsx-gate-enforcement Specification
 
 ## Purpose
-TBD - created by archiving change add-opsx-loop-harness. Update Purpose after archive.
+The deterministic exit-code gate (`opsx gate <change>`): the single source of enforcement truth for opsx-superpowers changes — required-artifacts-by-Scale, validation manifest execution, and mode-aware verdict/freshness/provenance checks, exit 0 = ready to archive.
 ## Requirements
 ### Requirement: Gate Exit Code Contract
 

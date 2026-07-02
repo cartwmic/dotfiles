@@ -1,7 +1,7 @@
 # opsx-post-impl-review Specification
 
 ## Purpose
-TBD - created by archiving change add-opsx-loop-harness. Update Purpose after archive.
+The post-implementation adversarial `code-review.md` artifact: a blind multi-model diff review whose pass verdict (with provenance and freshness fields) gates archive for changes with Code Review Mode gating-required.
 ## Requirements
 ### Requirement: Post Apply Code Review Artifact
 

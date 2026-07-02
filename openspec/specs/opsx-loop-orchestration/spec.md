@@ -1,7 +1,7 @@
 # opsx-loop-orchestration Specification
 
 ## Purpose
-TBD - created by archiving change add-opsx-loop-harness. Update Purpose after archive.
+The single-orchestrator drive-to-completion loop behind the deterministic gate: frozen intent baseline, earliest-blocking-failure repair each turn, blind delegated review verdicts, and a hard stop at gate-green — the loop never archives.
 ## Requirements
 ### Requirement: Frozen Intent Baseline
 

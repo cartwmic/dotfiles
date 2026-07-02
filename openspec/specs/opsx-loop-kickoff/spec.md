@@ -1,7 +1,7 @@
 # opsx-loop-kickoff Specification
 
 ## Purpose
-TBD - created by archiving change add-opsx-loop-kickoff. Update Purpose after archive.
+The `/opsx-loop` pi extension: guaranteed kickoff and continuation of the drive-to-green loop with `opsx gate` as the deterministic judge, turn budgets, stall detection (including the doneness gap-set ratchet), goal/conversation distillation, and role-model export.
 ## Requirements
 ### Requirement: Single-command guaranteed loop
 

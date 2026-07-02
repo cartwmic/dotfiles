@@ -1,7 +1,7 @@
 # opsx-model-config Specification
 
 ## Purpose
-TBD - created by archiving change add-opsx-model-config. Update Purpose after archive.
+Harness-neutral role-to-model resolution (author / review / impl / author-in-session) via the `opsx models` CLI: layered env > change > project > user config, provider qualification, and an atomic write surface.
 ## Requirements
 ### Requirement: Role Model Resolver
 
