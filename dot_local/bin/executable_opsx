@@ -51,7 +51,7 @@ opsx_models() (
 		ROLE="$1"; shift
 		while [ $# -gt 0 ]; do
 			case "$1" in
-				--change) CHANGE="${2:-}"; shift 2 ;;
+				--change) { [ $# -ge 2 ] && [ -n "$2" ]; } || { err "--change requires a value"; exit 2; }; CHANGE="$2"; shift 2 ;;
 				--change=*) CHANGE="${1#*=}"; shift ;;
 				--json) JSON=1; shift ;;
 				--with-default) WITH_DEFAULT=1; shift ;;
@@ -62,9 +62,9 @@ opsx_models() (
 		POS=()
 		while [ $# -gt 0 ]; do
 			case "$1" in
-				--layer) LAYER="${2:-}"; shift 2 ;;
+				--layer) { [ $# -ge 2 ] && [ -n "$2" ]; } || { err "--layer requires a value"; exit 2; }; LAYER="$2"; shift 2 ;;
 				--layer=*) LAYER="${1#*=}"; shift ;;
-				--change) CHANGE="${2:-}"; shift 2 ;;
+				--change) { [ $# -ge 2 ] && [ -n "$2" ]; } || { err "--change requires a value"; exit 2; }; CHANGE="$2"; shift 2 ;;
 				--json) JSON=1; shift ;;
 				--*) err "unknown option: $1"; exit 2 ;;
 				*) POS+=("$1"); shift ;;
@@ -370,7 +370,7 @@ CHANGE=""
 WORKTREE_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --worktree) WORKTREE_ARG="${2:-}"; shift 2 ;;
+    --worktree) { [ $# -ge 2 ] && [ -n "$2" ]; } || { echo "$PROG: --worktree requires a value" >&2; exit 2; }; WORKTREE_ARG="$2"; shift 2 ;;
     -h|--help) echo "usage: $PROG <change> [--worktree <path>]"; exit 0 ;;
     -*) echo "$PROG: unknown option $1" >&2; exit 2 ;;
     *) CHANGE="$1"; shift ;;
@@ -386,8 +386,6 @@ REVIEW="$CDIR/review.md"
 rc=0
 fail() { echo "GATE-FAIL $1 1 $2" >&2; rc=1; }
 warn() { echo "GATE-WARN $1 0 $2" >&2; }
-
-[ -d "$CDIR" ] || { fail change "change not found: $CHANGE"; exit 1; }
 
 # --- front-matter reader: sole machine source, dependency-free (awk) ----------
 fm() {
@@ -414,11 +412,50 @@ bodyfield() {
     | head -1 | sed -E "s/^\*\*$1:\*\*[[:space:]]*//; s/[[:space:]]+$//"
 }
 
+# ============================================================================
+# ARTIFACT SOURCE RESOLUTION (single source of truth)
+# When a usable worktree is located (via --worktree or the recorded Worktree
+# Path), ALL change artifacts — review.md modes, tasks.md, verify.md,
+# code-review.md, doneness.md — are read from the WORKTREE checkout, which is
+# where the apply workflow writes them (verdicts stay uncommitted there until
+# gate-green). Reading them from the integration checkout while validating the
+# worktree was the split-brain failure mode: a correct worktree could red-loop
+# forever against stale root copies.
+# ============================================================================
+WT_PATH="$WORKTREE_ARG"
+[ -n "$WT_PATH" ] || WT_PATH="$(bodyfield 'Worktree Path')"
+case "$WT_PATH" in *"<empty"*|"<"*) WT_PATH="" ;; esac
+ART_ROOT="$ROOT"
+if [ -n "$WT_PATH" ] \
+   && git -C "$WT_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+   && [ -d "$WT_PATH/openspec/changes/$CHANGE" ]; then
+  ART_ROOT="$WT_PATH"
+  CDIR="$ART_ROOT/openspec/changes/$CHANGE"
+  REVIEW="$CDIR/review.md"
+fi
+
+[ -d "$CDIR" ] || { fail change "change not found: $CHANGE"; exit 1; }
+
 SCALE="$(fm scale)"
 WORKTREE_MODE="$(fm worktree_mode)"
 VERIFY_MODE="$(fm verification_mode)"
 CR_MODE="$(fm code_review_mode)"
 VSRC_MODE="$(fm validation_source_mode)"
+DONE_MODE="$(fm doneness_mode)"
+
+# Fail CLOSED on unknown values of enforcement-relevant modes: a typo like
+# `worktree_requred`'s value must not silently disable enforcement. Empty is
+# allowed (defaults apply); unknown non-empty values are a hard failure.
+validate_mode() { # $1 = field name, $2 = value, $3 = allowed values (space-sep)
+  [ -z "$2" ] && return 0
+  case " $3 " in *" $2 "*) return 0 ;; esac
+  fail mode "unknown $1 value: '$2' (allowed: $3); failing closed"
+}
+validate_mode worktree_mode "$WORKTREE_MODE" "worktree-required worktree-eligible same-tree"
+validate_mode verification_mode "$VERIFY_MODE" "inline-only retained-recommended retained-required"
+validate_mode code_review_mode "$CR_MODE" "none advisory gating-required"
+validate_mode validation_source_mode "$VSRC_MODE" "required waived"
+validate_mode doneness_mode "$DONE_MODE" "required waived"
 
 # ============================================================================
 # CHEAP CHECKS (structure / artifacts / tasks) — short-circuit before expensive
@@ -450,9 +487,10 @@ for a in $ORDER; do
   fi
 done
 
-# Structural validation (OpenSpec-tracked artifacts only)
+# Structural validation (OpenSpec-tracked artifacts only) — run against the
+# resolved artifact source so worktree-side artifacts are what gets validated.
 if command -v openspec >/dev/null 2>&1; then
-  openspec validate "$CHANGE" --strict --no-interactive >/dev/null 2>&1 \
+  ( cd "$ART_ROOT" && openspec validate "$CHANGE" --strict --no-interactive ) >/dev/null 2>&1 \
     || fail structure "openspec validate --strict failed"
 fi
 
@@ -471,8 +509,8 @@ fi
 # author unconfigured, or author_in_session=false => skip (no enforcement).
 # In-process resolver (consolidated opsx): call the in-file `opsx_models`.
 if command -v jq >/dev/null 2>&1; then
-  author_src="$(OPSX_ROOT="$ROOT" opsx_models author --json --change "$CHANGE" 2>/dev/null | jq -r '.source' 2>/dev/null || true)"
-  ais="$(OPSX_ROOT="$ROOT" opsx_models author-in-session --json --change "$CHANGE" 2>/dev/null | jq -r '.value' 2>/dev/null || true)"
+  author_src="$(OPSX_ROOT="$ART_ROOT" opsx_models author --json --change "$CHANGE" 2>/dev/null | jq -r '.source' 2>/dev/null || true)"
+  ais="$(OPSX_ROOT="$ART_ROOT" opsx_models author-in-session --json --change "$CHANGE" 2>/dev/null | jq -r '.value' 2>/dev/null || true)"
   case "$author_src" in
     env|change|project|user)
       if [ "$ais" != "false" ]; then
@@ -494,12 +532,11 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 # ============================================================================
-# WORKTREE LOCATOR (for validations + verdict freshness)
+# WORKTREE ENFORCEMENT (for validations + verdict freshness)
+# WT_PATH/ART_ROOT were resolved up front (artifact source resolution); this
+# section enforces worktree-required and derives the implementation HEAD.
 # ============================================================================
 DIFF_BASE="$(bodyfield 'Diff Base SHA')"
-WT_PATH="$WORKTREE_ARG"
-[ -n "$WT_PATH" ] || WT_PATH="$(bodyfield 'Worktree Path')"
-case "$WT_PATH" in *"<empty"*|"<"*) WT_PATH="" ;; esac
 
 impl_head() {
   if [ -n "$WT_PATH" ] && [ -d "$WT_PATH" ]; then
@@ -531,13 +568,27 @@ MANIFEST="$ROOT/openspec/opsx-gates.yaml"
 have_required_source=0
 
 run_in_impl() {
-  # Run a command with cwd = implementation worktree (or ROOT) + OPSX_* env.
+  # Run a command with cwd = implementation worktree (or ROOT) + OPSX_* env,
+  # bounded by a per-command timeout (default 600s; override with
+  # OPSX_GATE_CMD_TIMEOUT). A hung validator must not wedge the loop: budget
+  # and stall guards only run after the gate returns. Uses the portable
+  # perl-alarm timeout (macOS has no coreutils `timeout`); if perl is absent
+  # the command runs unbounded as before.
   local cwd="$ROOT"
   [ -n "$WT_PATH" ] && [ -d "$WT_PATH" ] && cwd="$WT_PATH"
-  ( cd "$cwd" \
-    && OPSX_CHANGE="$CHANGE" OPSX_CHANGE_DIR="$CDIR" OPSX_WORKTREE="$cwd" \
-       OPSX_DIFF_BASE="$DIFF_BASE" OPSX_HEAD="$IMPL_HEAD" \
-       bash -c "$1" ) >/dev/null 2>&1
+  local tmo="${OPSX_GATE_CMD_TIMEOUT:-600}"
+  if command -v perl >/dev/null 2>&1; then
+    ( cd "$cwd" \
+      && OPSX_CHANGE="$CHANGE" OPSX_CHANGE_DIR="$CDIR" OPSX_WORKTREE="$cwd" \
+         OPSX_DIFF_BASE="$DIFF_BASE" OPSX_HEAD="$IMPL_HEAD" \
+         perl -e 'my $t=shift @ARGV; alarm $t; exec @ARGV or die "exec: $!"' \
+           "$tmo" bash -c "$1" ) >/dev/null 2>&1
+  else
+    ( cd "$cwd" \
+      && OPSX_CHANGE="$CHANGE" OPSX_CHANGE_DIR="$CDIR" OPSX_WORKTREE="$cwd" \
+         OPSX_DIFF_BASE="$DIFF_BASE" OPSX_HEAD="$IMPL_HEAD" \
+         bash -c "$1" ) >/dev/null 2>&1
+  fi
 }
 
 if [ -f "$MANIFEST" ] && command -v yq >/dev/null 2>&1; then
@@ -669,7 +720,7 @@ freshness_check() {
 # precondition the stall detector's gap-set signal depends on). No language-model call —
 # the gate reads sealed doneness.md fields only.
 # ============================================================================
-DONE_MODE="$(fm doneness_mode)"; [ -n "$DONE_MODE" ] || DONE_MODE=required
+[ -n "$DONE_MODE" ] || DONE_MODE=required
 DONE="$CDIR/doneness.md"
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" 2>/dev/null | awk '{print $1}';
@@ -780,11 +831,22 @@ CDIR="$ROOT/openspec/changes/$CHANGE"
 PROMPT="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../share/openspec/schemas/opsx-superpowers/opsx-PROMPT.md"
 [ -f "$PROMPT" ] || PROMPT="$HOME/.local/share/openspec/schemas/opsx-superpowers/opsx-PROMPT.md"
 
-# Budget: explicit MAX_ITERS, else review.md front-matter loop_max_iterations, else 40.
+# Budget: explicit MAX_ITERS, else review.md front-matter loop_max_iterations,
+# else 40. Parser is STRICT (whole value must be a positive integer; `80junk`,
+# `-1`, `abc80` are unparseable → default), matching the pi extension's parser.
+# DELIBERATE fallback exception: the extension treats an unparseable budget as
+# unbounded (it has stall detection to terminate); this headless driver has no
+# stall guard, so unbounded would risk an infinite agent loop — it defaults to
+# a bounded 40 instead.
 if [ -z "${MAX_ITERS:-}" ]; then
   MAX_ITERS="$(awk '
     NR==1{ if($0!="---") exit; next } $0=="---"{exit}
-    /^loop_max_iterations:/{ v=$2; gsub(/[^0-9]/,"",v); print v; exit }' \
+    /^[[:space:]]*loop_max_iterations[[:space:]]*:/{
+      if (match($0, /^[[:space:]]*loop_max_iterations[[:space:]]*:[[:space:]]*[1-9][0-9]*[[:space:]]*$/)) {
+        v=$0; sub(/^[^:]*:[[:space:]]*/,"",v); gsub(/[[:space:]]/,"",v); print v
+      }
+      exit
+    }' \
     "$CDIR/review.md" 2>/dev/null)"
   : "${MAX_ITERS:=40}"
 fi

@@ -56,8 +56,14 @@ Greps used (deterministic, no LLM judgment):
   Forward:
     For each Requirement R in specs:
       Compute id = <capability>.<slug-of-R-name>
-      Run: git diff --name-only <base-sha>..HEAD | xargs grep -l "$id"
-      Pass if any match.
+      Run: git diff --name-only <base-sha>..HEAD \
+             | grep -E '(^|/)tests?/|\.(test|spec)\.[^.]+$' \
+             | xargs grep -l "$id"
+      Pass if any match. The TEST-FILE filter is REQUIRED (same heuristic
+      as Reverse): the change's own artifacts (clarify.md, analyze.md,
+      verify.md itself) contain canonical AC IDs by construction and MUST
+      NOT satisfy forward coverage — only test files count.
+      (opsx-spec-quality: forward mapping requires a TEST file match.)
 
   Reverse:
     Get list of test files in diff (heuristic: paths matching

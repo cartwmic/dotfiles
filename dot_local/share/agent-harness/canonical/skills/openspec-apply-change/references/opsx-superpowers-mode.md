@@ -163,9 +163,11 @@ Run all 6 checks:
 5. **AC↔test mapping (canonical IDs):**
    - **Forward:** for each `### Requirement: <name>` in specs/**/spec.md, compute canonical AC ID `<capability>.<slug>`. Run:
      ```bash
-     git diff --name-only <base-sha>..HEAD | xargs grep -l "<canonical-id>"
+     git diff --name-only <base-sha>..HEAD \
+       | grep -E '(^|/)tests?/|\.(test|spec)\.[^.]+$' \
+       | xargs grep -l "<canonical-id>"
      ```
-     Pass if ≥1 match.
+     Pass if ≥1 match **in a TEST file** (the filter is mandatory — the change's own artifacts like clarify.md/analyze.md/verify.md carry AC IDs by construction and must not self-satisfy this check).
    - **Reverse:** list test files in diff (`/(^|/)tests?/` or `/\.(test|spec)\.[^.]+$/`). For each:
      ```bash
      grep -E '<capability>\.[a-z0-9-]+' <test-file>

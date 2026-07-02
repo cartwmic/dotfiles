@@ -464,6 +464,91 @@ check "upstream code-review failure present (doneness-verdict-enforcement)" 1 $r
 grep -q 'GATE-FAIL code-review' "$TMP/err" && ok "code-review fail emitted" || nok "code-review fail emitted"
 grep -q 'GATE-FAIL doneness' "$TMP/err" && nok "doneness suppressed while another check red" || ok "doneness suppressed while another check red"
 
+# ============================================================================
+# Audit-remediation (bundle A) tests
+# ============================================================================
+
+# --- option hygiene: a missing --worktree value exits 2 immediately ---------
+# (regression: `shift 2` with one arg left never shifts -> infinite parse loop)
+( perl -e 'alarm 5; exec @ARGV or die' "$OPSX" gate green-s --worktree ) >/dev/null 2>&1
+check "missing --worktree value exits 2, no hang (gate-exit-code-contract)" 2 $?
+
+# --- fail-closed mode validation (mode-aware-verdict-reading) ----------------
+mkchange badmode
+sed -i.bak 's/^worktree_mode: same-tree/worktree_mode: worktree_requred/' "$TMP/openspec/changes/badmode/review.md"
+run badmode; rc=$?
+check "malformed worktree_mode fails closed (mode-aware-verdict-reading)" 1 $rc
+grep -q 'GATE-FAIL mode' "$TMP/err" && ok "reports mode fail" || nok "reports mode fail"
+
+mkchange badmode2
+sed -i.bak 's/^code_review_mode: advisory/code_review_mode: gating-requred/' "$TMP/openspec/changes/badmode2/review.md"
+run badmode2; rc=$?
+check "malformed code_review_mode fails closed (mode-aware-verdict-reading)" 1 $rc
+grep -q 'GATE-FAIL mode' "$TMP/err" && ok "reports mode fail (code_review_mode)" || nok "reports mode fail (code_review_mode)"
+
+# --- hung required validator is bounded by OPSX_GATE_CMD_TIMEOUT ------------
+mkchange hangy
+cat >"$TMP/openspec/opsx-gates.yaml" <<'EOF'
+gates:
+  - id: hang
+    run: sleep 30
+    required: true
+EOF
+if command -v yq >/dev/null 2>&1 && command -v perl >/dev/null 2>&1; then
+  t0="$(date +%s)"
+  OPSX_GATE_CMD_TIMEOUT=1 run hangy; rc=$?
+  t1="$(date +%s)"
+  check "hung validator fails via timeout (manifest-validation-execution)" 1 $rc
+  grep -q 'GATE-FAIL validation-hang' "$TMP/err" && ok "reports validation-hang" || nok "reports validation-hang"
+  [ $((t1 - t0)) -lt 15 ] && ok "timeout bounded (<15s, not 30s sleep)" || nok "timeout bounded (took $((t1 - t0))s)"
+fi
+rm -f "$TMP/openspec/opsx-gates.yaml"
+
+# --- worktree artifact source: gate reads artifacts from the WORKTREE -------
+# (split-brain regression: validation cwd was the worktree but tasks/verdicts
+#  were read from the integration checkout)
+WTD="$TMP/openspec/changes/wt-div"; mkdir -p "$WTD/specs/cap"
+cat >"$WTD/review.md" <<EOF
+---
+scale: S
+worktree_mode: worktree-required
+verification_mode: retained-recommended
+code_review_mode: advisory
+loop_max_iterations: 20
+validation_source_mode: required
+spec_level: spec-anchored
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:** $TMP/wt-div
+EOF
+echo "# proposal" >"$WTD/proposal.md"
+echo "# spec" >"$WTD/specs/cap/spec.md"
+echo "# plan" >"$WTD/plan.md"
+printf '# tasks\n- [ ] 1.1 todo\n' >"$WTD/tasks.md"
+git -C "$TMP" add -A >/dev/null 2>&1
+git -C "$TMP" commit -qm "wt-div fixture" >/dev/null 2>&1
+git -C "$TMP" worktree add -q -b "opsx/wt-div" "$TMP/wt-div" >/dev/null 2>&1
+
+# Worktree copy: tasks complete. Root copy: still unchecked (stale).
+printf '# tasks\n- [x] 1.1 todo\n' >"$TMP/wt-div/openspec/changes/wt-div/tasks.md"
+run wt-div --worktree "$TMP/wt-div"
+check "worktree tasks.md is the artifact source, stale root ignored (mode-aware-verdict-reading)" 0 $?
+
+# Reverse: worktree copy unchecked must FAIL even when root copy is checked.
+printf '# tasks\n- [ ] 1.1 todo\n' >"$TMP/wt-div/openspec/changes/wt-div/tasks.md"
+printf '# tasks\n- [x] 1.1 todo\n' >"$WTD/tasks.md"
+run wt-div --worktree "$TMP/wt-div"; rc=$?
+check "unchecked worktree tasks.md fails despite checked root copy (mode-aware-verdict-reading)" 1 $rc
+grep -q 'GATE-FAIL tasks' "$TMP/err" && ok "reports tasks fail from worktree copy" || nok "reports tasks fail from worktree copy"
+
+# Recorded Worktree Path (no --worktree flag) resolves the same artifact source.
+printf '# tasks\n- [x] 1.1 todo\n' >"$TMP/wt-div/openspec/changes/wt-div/tasks.md"
+printf '# tasks\n- [ ] 1.1 todo\n' >"$WTD/tasks.md"
+run wt-div
+check "recorded Worktree Path resolves worktree artifact source without --worktree (mode-aware-verdict-reading)" 0 $?
+
 echo "----"
 echo "passed=$pass failed=$failc"
 [ "$failc" -eq 0 ]
