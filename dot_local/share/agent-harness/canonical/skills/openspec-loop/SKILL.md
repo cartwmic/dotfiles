@@ -37,6 +37,7 @@ Each turn:
    | unchecked tasks | implement the next task under its file contract; check it off |
    | failing validation command | fix the code; never weaken the gate |
    | missing/failing review (clarify/analyze/code-review/verify) | **dispatch a blind subagent** (below) |
+   | failing `doneness` (the sole remaining failure at Scale ≥ M) | **dispatch the blind doneness judge** (below); seal `doneness.md` |
 
 3. Loop. Bound by `loop_max_iterations` (review.md front-matter), mapped onto the
    runtime turn budget so a single budget governs the loop. On budget exhaustion,
@@ -53,6 +54,7 @@ the phase-appropriate baseline:
 | clarify | `intent.md` |
 | analyze | `intent.md` + proposal + specs + design + constitution + domain |
 | code-review (post-apply) | `intent.md` + proposal + specs + design + plan + tasks status, over the diff `Diff Base SHA..HEAD` |
+| doneness (intent-satisfaction) | frozen `intent.md` + the delta acceptance criteria, over the diff `Diff Base SHA..HEAD` |
 
 The subagent authors the verdict artifact (body, Verdict, Diff Base SHA, reviewed
 range, `review_mode`, provenance). For Constitution-IX changes (existing-skill edits)
@@ -63,6 +65,33 @@ Capability hook `subagent-dispatch`: use the host adapter (e.g. pi-subagents) wh
 registered; if none, run inline, mark `review_mode: degraded-single-model`, and tell
 the user it does not satisfy a gating-required review — recommend running
 `adversarial-review-cycle` manually.
+
+### Doneness judge (Scale ≥ M, `doneness_mode: required`)
+
+The deterministic gate proves only *mechanical* doneness. Intent-satisfaction is judged
+by a separate **blind doneness subagent**, sealed into `doneness.md`, and read by the
+gate (which runs no model). Dispatch it **after the mechanical gate checks pass** and no
+fresh `satisfied` verdict exists (i.e. `doneness` is the sole remaining `GATE-FAIL`):
+
+- Dispatch one blind subagent on the resolved **`review`** role model (`opsx models
+  review --change <name>`; no new role). Baseline = frozen `intent.md` + the delta ACs,
+  judged over `Diff Base SHA..HEAD`. Charter: rule `satisfied` **only** when the frozen
+  intent's stated outcomes are met — never demand beyond-scope / gold-plated work.
+- The subagent (not the orchestrator) authors `doneness.md` from `templates/doneness.md`:
+  `Doneness: satisfied|not`, the unmet `## Gaps` when `not`, an adapter-stamped `Judge`
+  provenance field, `Frozen-Intent SHA` = `sha256(intent.md)`, the immutable `Diff Base
+  SHA`, and `Reviewed Range` = `Diff Base SHA..HEAD`.
+- **Freshness:** a new commit invalidates a prior verdict — re-dispatch the judge against
+  the current HEAD rather than reuse a stale `doneness.md`.
+- **No dispatch adapter:** do NOT seal a `degraded-single-model`-stamped `satisfied`
+  verdict — leave `doneness.md` absent or seal `Doneness: not`, and tell the user a green
+  doneness verdict is reachable only via a dispatch-capable harness or an explicit
+  `doneness_mode: waived` with a non-empty `doneness_waiver_rationale`. (This keeps the
+  adapterless state mapped to the loop's bounded stall signal instead of spinning.)
+
+(opsx-loop-orchestration.doneness-judge-dispatch,
+ opsx-loop-orchestration.subagent-review-against-baseline,
+ opsx-doneness-judge.blind-scope-anchored-judge)
 
 ## Role models (opsx models)
 
