@@ -548,6 +548,8 @@ apply:
                     `doneness_mode: waived` (no non-empty
                     doneness_waiver_rationale) fails the gate at
                     Scale >= M.
+                    (opsx-workflow-schema.artifact-graph-definition;
+                     opsx-workflow-schema.mode-switchboard-in-review-md)
 
     These are intentionally OUT of the schema's `artifacts:`
     list because:
