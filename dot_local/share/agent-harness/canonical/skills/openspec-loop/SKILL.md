@@ -89,6 +89,10 @@ fresh `satisfied` verdict exists (i.e. `doneness` is the sole remaining `GATE-FA
   `doneness_mode: waived` with a non-empty `doneness_waiver_rationale`. (This keeps the
   adapterless state mapped to the loop's bounded stall signal instead of spinning.)
 
+(opsx-loop-orchestration.doneness-judge-dispatch,
+ opsx-loop-orchestration.subagent-review-against-baseline,
+ opsx-doneness-judge.blind-scope-anchored-judge)
+
 ## Role models (opsx models)
 
 The orchestrator CONSUMES harness-neutral model config (it does not own it). The
