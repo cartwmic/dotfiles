@@ -54,16 +54,16 @@ agent self-assessment.
 
 ### Requirement: Budget from review front-matter
 
-THE extension SHALL bound the loop with a maximum number of continuation turns read from `loop_max_iterations` in the change's `review.md` front-matter, falling back to a built-in default when absent or unparseable.
+THE extension SHALL bound the loop with a maximum number of continuation turns read from `loop_max_iterations` in the change's `review.md` front-matter. WHEN `loop_max_iterations` is absent or unparseable the budget SHALL be unset, meaning the loop is unbounded by turn count (it then stops only on a green gate, stall detection, user abort, or manual clear). No built-in numeric default SHALL be applied.
 
 #### Scenario: Budget exhausted stops and preserves
-- **WHILE** a loop is active and the gate is still red
-- **IF** the elapsed turn count reaches the budget
+- **WHILE** a loop is active, a budget is configured, and the gate is still red
+- **IF** the elapsed turn count reaches the configured budget
 - **THEN** the extension SHALL stop injecting turns, clear the active loop, inform the user the budget was exhausted, and NOT remove any worktree
 
-#### Scenario: Default budget when front-matter absent
+#### Scenario: Unset budget runs unbounded
 - **IF** the change's review.md has no parseable `loop_max_iterations`
-- **THEN** the extension SHALL apply a built-in default budget without error
+- **THEN** the extension SHALL treat the budget as unset and SHALL NOT stop the loop on any turn count, relying on the green gate, stall detection, abort, or manual clear to terminate
 
 ### Requirement: Status and clear subcommands
 
@@ -149,8 +149,9 @@ NEW change via openspec-explore/openspec-propose — and then drive that change 
 the distilling phase, the extension SHALL detect a change directory created since the
 snapshot that carries a frozen `intent.md`; once detected it SHALL adopt that change
 (resolving its budget and exporting its role models) and thereafter act as the
-deterministic-judge loop. IF no such change appears before the turn budget is exhausted,
-THEN the extension SHALL stop the loop and notify the user.
+deterministic-judge loop. IF a budget is configured AND no such change appears before it
+is exhausted, THEN the extension SHALL stop the loop and notify the user; while the budget
+is unset the distilling phase is unbounded (it stops only on user abort or manual clear).
 
 #### Scenario: Goal keyword preserves the full multi-word goal
 - **WHEN** the user issues `/opsx-loop goal build the clipboard sync with retries`
@@ -165,9 +166,9 @@ THEN the extension SHALL stop the loop and notify the user.
 - **WHEN** a change directory not present at kickoff appears with a frozen `intent.md`
 - **THEN** the extension SHALL adopt that change as the active loop, resolve its budget and role models, and thereafter run `opsx gate <change>` as the deterministic judge each turn
 
-#### Scenario: No change created within budget stops the loop
-- **WHILE** a goal/conversation loop is in its distilling phase
-- **IF** no new change directory with a frozen `intent.md` appears before the turn budget is exhausted
+#### Scenario: No change created within a configured budget stops the loop
+- **WHILE** a goal/conversation loop is in its distilling phase AND a budget is configured
+- **IF** no new change directory with a frozen `intent.md` appears before the configured budget is exhausted
 - **THEN** the extension SHALL stop the loop and notify the user that no change was created
 
 #### Scenario: Goal offered as completion

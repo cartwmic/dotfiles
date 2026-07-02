@@ -28,7 +28,6 @@ import {
 	type ResolvedModel,
 } from "./helpers.ts";
 
-const DEFAULT_BUDGET = 40;
 const STALL_LIMIT = 3; // consecutive identical no-progress gate failures → stop
 
 interface LoopState {
@@ -40,7 +39,7 @@ interface LoopState {
 	preChangeDirs?: string[]; // snapshot of change-dir names at kickoff (goal mode)
 	worktree?: string;
 	turns: number;
-	maxTurns: number;
+	maxTurns?: number; // undefined = unbounded (no budget) unless configured
 	active: boolean;
 	evaluating: boolean;
 	lastReason?: string;
@@ -203,7 +202,7 @@ export default function (pi: ExtensionAPI) {
 		const label = loop?.change ?? (loop?.goal ? "(distilling goal)" : "(distilling)");
 		ctx.ui.setStatus(
 			"opsx-loop",
-			loop?.active ? `⟳ opsx-loop ${label} · ${loop.turns}/${loop.maxTurns}` : undefined,
+			loop?.active ? `⟳ opsx-loop ${label} · ${loop.turns}/${loop.maxTurns ?? "∞"}` : undefined,
 		);
 	}
 
@@ -251,7 +250,7 @@ export default function (pi: ExtensionAPI) {
 					? `change: ${loop.change}`
 					: `change: (distilling ${loop.goal ? `goal: ${loop.goal}` : "conversation"} → intent.md)`;
 				ctx.ui.notify([
-					`⟳ opsx-loop active — ${loop.turns}/${loop.maxTurns} turns`,
+					`⟳ opsx-loop active — ${loop.turns}/${loop.maxTurns ?? "∞"} turns`,
 					changeLine,
 					`worktree: ${loop.worktree ?? "(same-tree)"}`,
 					`last gate: ${loop.lastReason ?? "(pending first turn)"}`,
@@ -288,7 +287,7 @@ export default function (pi: ExtensionAPI) {
 					awaitingChange: true,
 					preChangeDirs: listChangeDirs(ctx.cwd),
 					turns: 0,
-					maxTurns: DEFAULT_BUDGET,
+					maxTurns: undefined, // unbounded until a change with a configured budget is adopted
 					active: true,
 					evaluating: false,
 					stallCount: 0,
@@ -296,7 +295,7 @@ export default function (pi: ExtensionAPI) {
 				renderStatus(ctx);
 				pi.sendUserMessage(distillDirective(parsed.goal), { deliverAs: "followUp" });
 				const src = parsed.goal ? `goal: "${parsed.goal}"` : "the current conversation";
-				ctx.ui.notify(`⟳ opsx-loop started from ${src} — distilling intent → change (budget ${loop.maxTurns}).`, "info");
+				ctx.ui.notify(`⟳ opsx-loop started from ${src} — distilling intent → change (budget ${loop.maxTurns ?? "∞"}).`, "info");
 				return;
 			}
 
@@ -307,7 +306,7 @@ export default function (pi: ExtensionAPI) {
 				awaitingChange: false,
 				worktree: resolveWorktree(parsed.change, ctx.cwd),
 				turns: 0,
-				maxTurns: parseLoopBudget(review, DEFAULT_BUDGET),
+				maxTurns: parseLoopBudget(review),
 				active: true,
 				evaluating: false,
 				stallCount: 0,
@@ -317,7 +316,7 @@ export default function (pi: ExtensionAPI) {
 			pi.sendUserMessage(workerDirective(parsed.change), { deliverAs: "followUp" });
 			const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
 			const ignoredNote = parsed.ignored ? ` (ignored extra input: "${parsed.ignored}")` : "";
-			ctx.ui.notify(`⟳ opsx-loop started (budget ${loop.maxTurns}) for ${parsed.change}${modelNote}${ignoredNote}`, "info");
+			ctx.ui.notify(`⟳ opsx-loop started (budget ${loop.maxTurns ?? "∞"}) for ${parsed.change}${modelNote}${ignoredNote}`, "info");
 			return;
 		},
 	});
@@ -350,7 +349,7 @@ export default function (pi: ExtensionAPI) {
 			if (session.awaitingChange) {
 				const detected = detectNewChange(session.preChangeDirs ?? [], ctx.cwd);
 				if (!detected) {
-					if (session.turns >= session.maxTurns) {
+					if (session.maxTurns !== undefined && session.turns >= session.maxTurns) {
 						const src = session.goal ? `goal "${session.goal}"` : "the conversation";
 						clearLoop(ctx);
 						ctx.ui.notify(`⟳ opsx-loop: budget ${session.maxTurns} exhausted before a change was created from ${src}.`, "warning");
@@ -362,7 +361,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				session.change = detected;
 				session.awaitingChange = false;
-				session.maxTurns = parseLoopBudget(readReview(detected, ctx.cwd), DEFAULT_BUDGET);
+				session.maxTurns = parseLoopBudget(readReview(detected, ctx.cwd));
 				const exported = exportModelEnv(detected, ctx.cwd);
 				const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
 				ctx.ui.notify(`⟳ opsx-loop: change "${detected}" created — gating it now.${modelNote}`, "info");
@@ -385,7 +384,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`⟳ opsx-loop: ${c} — gate green. Ready to archive.`, "info");
 				return;
 			}
-			if (session.turns >= session.maxTurns) {
+			if (session.maxTurns !== undefined && session.turns >= session.maxTurns) {
 				const c = session.change;
 				clearLoop(ctx);
 				ctx.ui.notify(`⟳ opsx-loop: budget ${session.maxTurns} exhausted for ${c}; worktree preserved.`, "warning");

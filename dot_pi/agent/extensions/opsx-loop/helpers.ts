@@ -179,10 +179,16 @@ export function verdictFromExit(code: number | null, output: string): LoopVerdic
  * (between the first two '---' fences). Falls back to `def` when absent or
  * unparseable. (opsx-loop-kickoff.budget-from-review-front-matter)
  */
-export function parseLoopBudget(reviewMd: string, def = 40): number {
+/**
+ * The configured loop budget from review.md front-matter `loop_max_iterations`,
+ * or undefined when unconfigured. undefined means NO budget (unbounded) — the
+ * loop then stops only on gate-green, stall detection, abort, or manual clear.
+ * (opsx-loop-kickoff.budget-from-review-front-matter)
+ */
+export function parseLoopBudget(reviewMd: string): number | undefined {
 	const text = reviewMd ?? "";
 	const lines = text.split(/\r?\n/);
-	if (lines[0]?.trim() !== "---") return def;
+	if (lines[0]?.trim() !== "---") return undefined;
 	for (let i = 1; i < lines.length; i++) {
 		if (lines[i].trim() === "---") break;
 		const m = lines[i].match(/^\s*loop_max_iterations\s*:\s*(\d+)/);
@@ -191,5 +197,5 @@ export function parseLoopBudget(reviewMd: string, def = 40): number {
 			if (Number.isFinite(n) && n > 0) return n;
 		}
 	}
-	return def;
+	return undefined;
 }

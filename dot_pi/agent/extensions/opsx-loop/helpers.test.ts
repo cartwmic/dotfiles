@@ -35,18 +35,18 @@ describe("parseLoopBudget — opsx-loop-kickoff.budget-from-review-front-matter"
 	test("reads loop_max_iterations from front-matter", () => {
 		expect(parseLoopBudget(fm("80"))).toBe(80);
 	});
-	test("defaults when absent", () => {
-		expect(parseLoopBudget("---\nscale: M\n---\n")).toBe(40);
+	test("undefined (unbounded) when absent", () => {
+		expect(parseLoopBudget("---\nscale: M\n---\n")).toBeUndefined();
 	});
-	test("defaults when no front-matter", () => {
-		expect(parseLoopBudget("# Review\nloop_max_iterations: 99\n")).toBe(40);
+	test("undefined (unbounded) when no front-matter", () => {
+		expect(parseLoopBudget("# Review\nloop_max_iterations: 99\n")).toBeUndefined();
 	});
-	test("ignores non-positive / non-numeric", () => {
-		expect(parseLoopBudget(fm("0"))).toBe(40);
-		expect(parseLoopBudget("---\nloop_max_iterations: abc\n---")).toBe(40);
+	test("undefined (unbounded) on non-positive / non-numeric", () => {
+		expect(parseLoopBudget(fm("0"))).toBeUndefined();
+		expect(parseLoopBudget("---\nloop_max_iterations: abc\n---")).toBeUndefined();
 	});
-	test("custom default honored", () => {
-		expect(parseLoopBudget("", 25)).toBe(25);
+	test("undefined (unbounded) on empty input", () => {
+		expect(parseLoopBudget("")).toBeUndefined();
 	});
 });
 
