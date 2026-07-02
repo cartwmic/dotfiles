@@ -1,4 +1,3 @@
-<!-- authored: in-session -->
 ---
 scale: L
 worktree_mode: worktree-required
@@ -36,9 +35,9 @@ doneness_waiver_rationale: "Bootstrap: this change introduces the doneness judge
 
 ## Diff Base SHA
 
-- **Diff Base SHA:** 30d6d7917b5b342c7ab89d1138ccecae41a9c58d
-- **Worktree Path:** /Users/cartwmic/.local/share/.opsx-worktrees/add-opsx-doneness-judge
-- **Integration Branch:** main
+**Diff Base SHA:** 30d6d7917b5b342c7ab89d1138ccecae41a9c58d
+**Worktree Path:** /Users/cartwmic/.local/share/.opsx-worktrees/add-opsx-doneness-judge
+**Integration Branch:** main
 
 ## Manual Adjustments
 
