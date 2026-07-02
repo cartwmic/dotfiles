@@ -211,11 +211,25 @@ export default function (pi: ExtensionAPI) {
 		renderStatus(ctx);
 	}
 
+	// Appended to every injected loop directive. This is an AUTONOMOUS drive-to-green
+	// loop: pausing to ask the user defeats the purpose, so suppress clarifying
+	// questions except when genuinely blocked.
+	const AUTONOMY =
+		`\n\nThis is an autonomous drive-to-green loop. Do NOT pause to ask the user ` +
+		`questions (do not use the ask-user / clarifying-question tool) or wait for ` +
+		`confirmation. Make the most reasonable decision from the intent, specs, and ` +
+		`conversation, record any assumption in the change artifacts, and keep going. ` +
+		`ONLY stop to ask if you are truly blocked — genuinely ambiguous intent that ` +
+		`cannot be inferred, or an irreversible/destructive action outside this change ` +
+		`(e.g. deploy, force-push, data loss). The opsx gate is the arbiter of done, ` +
+		`not the user.`;
+
 	const workerDirective = (change: string, report?: string) =>
 		`Use the openspec-loop skill to advance OpenSpec change "${change}" toward a green opsx gate.\n` +
 		`Run \`opsx gate ${change}\` (with --worktree when applicable), fix the EARLIEST blocking ` +
 		`GATE-FAIL line, delegate any review verdict to a blind subagent, and commit one unit of progress.` +
-		(report ? `\n\nCurrent opsx gate report:\n${report}` : "");
+		(report ? `\n\nCurrent opsx gate report:\n${report}` : "") +
+		AUTONOMY;
 
 	// Goal/conversation kickoff: establish a frozen intent.md (reuse an existing one
 	// or distill goal/conversation into a NEW change), then hand off to the loop.
@@ -230,7 +244,8 @@ export default function (pi: ExtensionAPI) {
 		`Step 2 — run the openspec-loop skill against that change: advance propose→apply behind ` +
 		"`opsx gate <name>`, fixing the EARLIEST blocking GATE-FAIL each turn, delegating review " +
 		`verdicts to blind subagents, and committing one unit of progress per turn.\n` +
-		`Announce the new change name as soon as its intent.md is frozen.`;
+		`Announce the new change name as soon as its intent.md is frozen.` +
+		AUTONOMY;
 
 	pi.registerCommand("opsx-loop", {
 		description: "Guaranteed opsx loop: /opsx-loop goal [text] | <change> | status | clear | models",

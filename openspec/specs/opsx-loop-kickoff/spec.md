@@ -16,6 +16,10 @@ THE opsx-loop pi extension SHALL register an `/opsx-loop <change>` command that 
 - **WHEN** the user issues `/opsx-loop` with a new change
 - **THEN** the new change SHALL replace the active loop and the turn count SHALL reset to zero
 
+#### Scenario: Injected directives instruct autonomous operation
+- **WHEN** the extension injects any loop directive (worker or distill)
+- **THEN** the directive SHALL instruct the agent to run autonomously — not to pause for clarifying questions or user confirmation, to make the most reasonable decision from the intent/specs/conversation and record assumptions in the change artifacts, and to ask ONLY when truly blocked (genuinely un-inferable intent, or an irreversible/destructive action outside the change)
+
 ### Requirement: opsx-gate is the deterministic judge
 
 WHILE a loop is active, WHEN a worker turn completes, THE extension SHALL run `opsx gate
