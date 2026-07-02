@@ -406,6 +406,51 @@ doneness_waiver_rationale: >
 EOF
 run d-blockok; check "block-scalar rationale with content passes (scale-gated-with-waiver)" 0 $?
 
+# content-less rationale variants (comment-only, block+trailing-comment, quoted-whitespace) => FAIL
+for variant in 'doneness_waiver_rationale: # only a comment' 'doneness_waiver_rationale: > # comment, no content' 'doneness_waiver_rationale: "   "'; do
+  nm="d-empty-$(echo "$variant" | tr -cd 'a-z' | cut -c1-8)$RANDOM"
+  mkMdone "$nm"
+  cat >"$TMP/openspec/changes/$nm/review.md" <<EOF
+---
+scale: M
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: gating-required
+loop_max_iterations: 40
+validation_source_mode: waived
+spec_level: spec-anchored
+doneness_mode: waived
+$variant
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:**
+EOF
+  run "$nm"; check "content-less rationale variant fails: [$variant] (scale-gated-with-waiver)" 1 $?
+done
+
+# inline quoted rationale WITH content => PASS
+mkMdone d-inlineok
+cat >"$TMP/openspec/changes/d-inlineok/review.md" <<EOF
+---
+scale: M
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: gating-required
+loop_max_iterations: 40
+validation_source_mode: waived
+spec_level: spec-anchored
+doneness_mode: waived
+doneness_waiver_rationale: "a real inline rationale for the waiver"
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:**
+EOF
+run d-inlineok; check "inline quoted rationale with content passes (scale-gated-with-waiver)" 0 $?
+
 # sub-M skip: Scale-S change with doneness_mode required must NOT evaluate doneness
 mkchange d-subm
 awk '1; /^spec_level:/{print "doneness_mode: required"}' "$TMP/openspec/changes/d-subm/review.md" >"$TMP/dsub.tmp" && mv "$TMP/dsub.tmp" "$TMP/openspec/changes/d-subm/review.md"
