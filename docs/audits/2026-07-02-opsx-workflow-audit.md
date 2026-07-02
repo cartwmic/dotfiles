@@ -117,6 +117,20 @@ Suggested order: **D → A → B → C** (D is trivial and makes A's fixes self-
 
 ---
 
+## Remediation status (2026-07-02, same day)
+
+All bundles executed as direct commits, order D → A → B → C:
+
+| Bundle | Commit | Result |
+|---|---|---|
+| D — teeth | `9992036` | config.yaml → opsx-superpowers; propose passes `--schema`; live gate now runs all 4 test suites required (findings 15, L7) |
+| A — correctness | `0205935` | findings 1–5, 13, 16 + P2s closed; tests 52→64 gate / 25→28 models / 45→46 helper |
+| B — doc de-drift | `55da9eb` | findings 6–8, M3, M4, M6, L1–L5, L8-partial closed; prompts → thin skill wrappers; hindsight port; 12 spec Purposes filled |
+| C — policy | `342b35f` | ADR-0013 (same-session loop, documented), ADR-0014 (goal-mode intent confirm), ADR-0015 (runtime worktree lifecycle: `opsx worktree ensure` / `opsx clean`); finding 14 vocabulary (`blind-single-judge`); finding 17 manifest-tamper rubric check; gate 64→67, cli 25 |
+
+**Dropped by owner decision:** finding 11 (cost layer) — economics abstracted to the harness running the workflow.
+**Deferred (accepted):** capability-hooks indirection collapse (L8), stall-detector requirement prose restructure (L4 testability note), 5-property checklists on permanent specs.
+
 ## Appendices
 
 - `2026-07-02-opsx-appendices/code-audit.md` — full implementation findings with file:line evidence, reproduction commands, 9 prioritized test additions.
