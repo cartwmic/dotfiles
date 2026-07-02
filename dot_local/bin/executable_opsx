@@ -692,8 +692,10 @@ if [ "$rc" -eq 0 ]; then
         else
           [ -n "$(cr_field "$DONE" 'Judge')" ] \
             || fail doneness "doneness.md lacks an adapter-stamped Judge provenance field"
-          [ "$(lc "$(cr_field "$DONE" 'review_mode')")" = "degraded-single-model" ] \
-            && fail doneness "doneness.md is degraded-single-model (no independent blind judge)"
+          dmode="$(lc "$(cr_field "$DONE" 'review_mode')")"
+          if [ -z "$dmode" ] || [ "$dmode" = "degraded-single-model" ]; then
+            fail doneness "doneness.md provenance review_mode is missing or degraded-single-model (no independent blind judge)"
+          fi
           i_rec="$(cr_field "$DONE" 'Frozen-Intent SHA')"
           i_now="$(sha256_file "$CDIR/intent.md")"
           if [ -z "$i_rec" ] || [ "$i_rec" != "$i_now" ]; then
@@ -703,7 +705,7 @@ if [ "$rc" -eq 0 ]; then
           if [ -n "$DIFF_BASE" ] && [ "$db_rec" != "$DIFF_BASE" ]; then
             fail doneness "doneness.md recorded Diff Base != review.md Diff Base"
           fi
-          freshness_check "$DONE" doneness-stale
+          freshness_check "$DONE" doneness   # stale doneness fails under the 'doneness' check id-stale
         fi
       fi
       ;;
