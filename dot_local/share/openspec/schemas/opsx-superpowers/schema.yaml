@@ -297,6 +297,10 @@ artifacts:
         Validation Source Mode: required | waived (default: required) —
                            waived (with rationale) lets Scale >= M pass with
                            no agent-independent validation source
+        Doneness Mode:     required | waived (default: required at Scale >= M) —
+                           the gate enforces a sealed doneness.md verdict; a
+                           `waived` value REQUIRES a non-empty
+                           `doneness_waiver_rationale` (a bare waiver fails)
         Spec Level:        spec-anchored | spec-first | spec-as-source
                            (default: spec-anchored)
 
@@ -305,9 +309,10 @@ artifacts:
 
       review.md MUST carry a machine-readable YAML front-matter block
       mirroring scale, worktree_mode, verification_mode, code_review_mode,
-      loop_max_iterations, and validation_source_mode. opsx gate reads modes
-      ONLY from that front-matter (never the prose table); the table is the
-      human-facing mirror the apply skill keeps in sync.
+      loop_max_iterations, validation_source_mode, and doneness_mode (plus
+      doneness_waiver_rationale when doneness_mode is waived). opsx gate reads
+      modes ONLY from that front-matter (never the prose table); the table is
+      the human-facing mirror the apply skill keeps in sync.
 
       review.md front-matter MAY also carry OPTIONAL per-change model/provider
       overrides resolved by the `opsx models` CLI:
@@ -528,7 +533,25 @@ apply:
                     confirm/skip prompts for
                     mcp_memory_store_memory ingestion.
 
-    These three are intentionally OUT of the schema's `artifacts:`
+      doneness.md — WHILE a doneness verdict is required (Scale >= M
+                    and review.md `doneness_mode: required`), the
+                    openspec-loop orchestration dispatches an
+                    independent BLIND doneness subagent on the
+                    resolved `review` role AFTER the mechanical gate
+                    checks pass, and seals its verdict into
+                    doneness.md from templates/doneness.md (Doneness
+                    satisfied|not + Gaps + adapter-stamped Judge
+                    provenance + Frozen-Intent SHA + Diff Base SHA +
+                    Reviewed Range). opsx gate READS the sealed
+                    fields (no model in the gate) and enforces the
+                    verdict as the sole remaining failure. A bare
+                    `doneness_mode: waived` (no non-empty
+                    doneness_waiver_rationale) fails the gate at
+                    Scale >= M.
+                    (opsx-workflow-schema.artifact-graph-definition;
+                     opsx-workflow-schema.mode-switchboard-in-review-md)
+
+    These are intentionally OUT of the schema's `artifacts:`
     list because:
       - OpenSpec's artifact-completion check is existence-only
         (graph.js `isComplete`); declaring them as artifacts would

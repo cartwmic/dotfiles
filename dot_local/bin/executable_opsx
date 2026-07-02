@@ -647,7 +647,7 @@ freshness_check() {
   if git -C "$GW" merge-base --is-ancestor "$n_rhead" "$n_head" 2>/dev/null; then
     local changed nonverdict
     changed="$(git -C "$GW" diff --name-only "$n_rhead" "$n_head" 2>/dev/null)"
-    nonverdict="$(printf '%s\n' "$changed" | grep -vE "openspec/changes/$CHANGE/(verify|code-review)\.md$" | grep -v '^$' || true)"
+    nonverdict="$(printf '%s\n' "$changed" | grep -vE "openspec/changes/$CHANGE/(verify|code-review|doneness)\.md$" | grep -v '^$' || true)"
     if [ -n "$nonverdict" ]; then
       fail "$cid" "stale verdict: code changed since review (${r_head}..HEAD touches non-verdict files)"
     fi
@@ -657,6 +657,90 @@ freshness_check() {
 }
 [ "$CR_MODE" = "gating-required" ] && freshness_check "$CR" code-review-stale
 [ "$VERIFY_MODE" = "retained-required" ] && freshness_check "$VERIFY" verify-stale
+
+# ============================================================================
+# DONENESS VERDICT (intent-satisfaction) — mode-conditioned, parse-only.
+# Spec: opsx-gate-enforcement.doneness-verdict-enforcement
+#       opsx-gate-enforcement.mode-aware-verdict-reading
+#       opsx-doneness-judge.{sealed-doneness-verdict-artifact,freshness-bound-verdict,
+#                            anti-self-forge-provenance,scale-gated-with-waiver}
+# Emitted ONLY as the sole remaining failure: while any mechanical/verify/code-review
+# check is already red (rc != 0), the doneness line is suppressed (the load-bearing
+# precondition the stall detector's gap-set signal depends on). No language-model call —
+# the gate reads sealed doneness.md fields only.
+# ============================================================================
+DONE_MODE="$(fm doneness_mode)"; [ -n "$DONE_MODE" ] || DONE_MODE=required
+DONE="$CDIR/doneness.md"
+sha256_file() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" 2>/dev/null | awk '{print $1}';
+  else sha256sum "$1" 2>/dev/null | awk '{print $1}'; fi
+}
+# A doneness_waiver_rationale counts as present ONLY with real content: an inline
+# scalar that is not merely a YAML block-scalar marker (>, |, >-, ...), OR a block
+# scalar (`: >`/`: |`) followed by >=1 indented non-blank, non-comment line. This
+# stops a content-less `doneness_waiver_rationale: >` from passing as a rationale.
+waiver_has_rationale() {
+  [ -f "$REVIEW" ] || return 1
+  awk '
+    /^---[[:space:]]*$/ { infm++; next }
+    infm==1 {
+      # Under a block scalar, an indented NON-blank NON-comment line is real content.
+      if (inblock) {
+        if ($0 ~ /^[[:space:]]+[^[:space:]#]/) { found=1; exit }
+        if ($0 ~ /^[^[:space:]]/) inblock=0
+      }
+      if ($0 ~ /^doneness_waiver_rationale[[:space:]]*:/) {
+        v=$0; sub(/^[^:]*:[[:space:]]*/,"",v)
+        # Normalize the inline value: unwrap quotes, else strip an inline/whole-line
+        # YAML comment, then trim, so comment-only / whitespace-only / bare block
+        # markers do NOT count as a rationale.
+        if (v ~ /^"/)       { sub(/^"/,"",v); sub(/".*$/,"",v) }
+        else if (v ~ /^\x27/) { sub(/^\x27/,"",v); sub(/\x27.*$/,"",v) }
+        else               { sub(/[[:space:]]#.*$/,"",v); sub(/^#.*$/,"",v) }
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",v)
+        if (v ~ /^[>|][+-]?$/)   { inblock=1 }      # block scalar: content is on later lines
+        else if (v != "")        { found=1; exit }  # real inline scalar
+      }
+    }
+    END { exit(found?0:1) }
+  ' "$REVIEW"
+}
+if [ "$rc" -eq 0 ]; then
+  case "$SCALE" in
+    M|L|XL)
+      if [ "$DONE_MODE" = "waived" ]; then
+        # Bare waiver (no real rationale) cannot bypass the judge at Scale>=M.
+        if ! waiver_has_rationale; then
+          fail doneness "doneness_mode: waived without a non-empty doneness_waiver_rationale (Scale $SCALE)"
+        fi
+      else
+        # doneness_mode == required
+        if [ ! -f "$DONE" ]; then
+          fail doneness "doneness.md absent (doneness_mode required, Scale $SCALE)"
+        elif [ "$(lc "$(cr_field "$DONE" 'Doneness')")" != "satisfied" ]; then
+          fail doneness "doneness.md Doneness is not satisfied"
+        else
+          [ -n "$(cr_field "$DONE" 'Judge')" ] \
+            || fail doneness "doneness.md lacks an adapter-stamped Judge provenance field"
+          dmode="$(lc "$(cr_field "$DONE" 'review_mode')")"
+          if [ -z "$dmode" ] || [ "$dmode" = "degraded-single-model" ]; then
+            fail doneness "doneness.md provenance review_mode is missing or degraded-single-model (no independent blind judge)"
+          fi
+          i_rec="$(cr_field "$DONE" 'Frozen-Intent SHA')"
+          i_now="$(sha256_file "$CDIR/intent.md")"
+          if [ -z "$i_rec" ] || [ "$i_rec" != "$i_now" ]; then
+            fail doneness "doneness.md judged against a mismatched intent hash"
+          fi
+          db_rec="$(cr_field "$DONE" 'Diff Base SHA')"
+          if [ -n "$DIFF_BASE" ] && [ "$db_rec" != "$DIFF_BASE" ]; then
+            fail doneness "doneness.md recorded Diff Base != review.md Diff Base"
+          fi
+          freshness_check "$DONE" doneness   # stale doneness fails under the 'doneness' check id-stale
+        fi
+      fi
+      ;;
+  esac
+fi
 
 # ============================================================================
 if [ "$rc" -eq 0 ]; then

@@ -8,6 +8,11 @@
 #   opsx-gate-enforcement.manifest-validation-execution
 #   opsx-gate-enforcement.mode-aware-verdict-reading
 #   opsx-gate-enforcement.verdict-freshness-and-provenance
+#   opsx-gate-enforcement.doneness-verdict-enforcement
+#   opsx-doneness-judge.sealed-doneness-verdict-artifact
+#   opsx-doneness-judge.freshness-bound-verdict
+#   opsx-doneness-judge.anti-self-forge-provenance
+#   opsx-doneness-judge.scale-gated-with-waiver
 set -uo pipefail
 
 OPSX="$(cd "$(dirname "$0")/../.." && pwd)/dot_local/bin/executable_opsx"
@@ -213,6 +218,251 @@ git -C "$TMP" commit -qm "seal verdict (verdict-only commit)"
 run cr-seal; check "freshness tolerates verdict-only sealing commit (verdict-freshness-and-provenance)" 0 $?
 printf x >"$TMP/codefile"; git -C "$TMP" add codefile; git -C "$TMP" commit -qm "code change after review"
 run cr-seal; check "freshness rejects non-verdict change after review (verdict-freshness-and-provenance)" 1 $?
+
+# ============================================================================
+# opsx-gate-enforcement.doneness-verdict-enforcement
+# opsx-doneness-judge.{sealed-doneness-verdict-artifact,freshness-bound-verdict,
+#                      anti-self-forge-provenance,scale-gated-with-waiver}
+# ============================================================================
+HEAD_SHA="$(git -C "$TMP" rev-parse HEAD)"
+ihash() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi; }
+
+mkMdone() { # complete Scale-M change that PASSES every check UP TO doneness
+  local d="$TMP/openspec/changes/$1"; mkdir -p "$d/specs/cap"
+  cat >"$d/review.md" <<EOF
+---
+scale: M
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: gating-required
+loop_max_iterations: 40
+validation_source_mode: waived
+spec_level: spec-anchored
+doneness_mode: required
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:**
+EOF
+  for a in intent proposal clarify design analyze plan; do echo "# $a" >"$d/$a.md"; done
+  echo "# spec" >"$d/specs/cap/spec.md"
+  printf '# tasks\n- [x] 1.1 done\n' >"$d/tasks.md"
+  cat >"$d/code-review.md" <<EOF
+# Code Review
+**Verdict:** pass
+**review_mode:** adversarial-multimodel
+**reviewer-provenance:** subagent-x
+**Diff Base SHA:** $HEAD_SHA
+**Reviewed Range:** $HEAD_SHA..$HEAD_SHA
+EOF
+}
+donefile() { # <name> <verdict>
+  local d="$TMP/openspec/changes/$1"; local ih; ih="$(ihash "$d/intent.md")"
+  cat >"$d/doneness.md" <<EOF
+# Doneness
+**Doneness:** $2
+**Judge:** claude-bridge/claude-opus-4-8
+**review_mode:** adversarial-multimodel
+**Frozen-Intent SHA:** $ih
+**Diff Base SHA:** $HEAD_SHA
+**Reviewed Range:** $HEAD_SHA..$HEAD_SHA
+EOF
+}
+
+# satisfied + fresh + provenanced => PASS
+mkMdone d-ok; donefile d-ok satisfied
+run d-ok; check "satisfied fresh provenanced doneness passes (sealed-doneness-verdict-artifact / doneness-verdict-enforcement)" 0 $?
+
+# absent doneness.md at Scale M required => FAIL
+mkMdone d-absent
+run d-absent; rc=$?
+check "absent doneness.md fails at Scale>=M (doneness-verdict-enforcement)" 1 $rc
+grep -q 'GATE-FAIL doneness' "$TMP/err" && ok "reports doneness absent" || nok "reports doneness absent"
+
+# Doneness: not => FAIL
+mkMdone d-not; donefile d-not not
+run d-not; check "Doneness not fails (doneness-verdict-enforcement)" 1 $?
+
+# mismatched intent hash => FAIL
+mkMdone d-hash; donefile d-hash satisfied
+sed -i.bak 's/^\*\*Frozen-Intent SHA:\*\*.*/**Frozen-Intent SHA:** deadbeefhash/' "$TMP/openspec/changes/d-hash/doneness.md"
+run d-hash; check "mismatched intent hash fails (freshness-bound-verdict)" 1 $?
+
+# mismatched diff base => FAIL
+mkMdone d-base; donefile d-base satisfied
+sed -i.bak 's/^\*\*Diff Base SHA:\*\*.*/**Diff Base SHA:** base999/' "$TMP/openspec/changes/d-base/doneness.md"
+run d-base; check "mismatched diff base fails (freshness-bound-verdict)" 1 $?
+
+# unprovenanced (no Judge) => FAIL
+mkMdone d-prov; donefile d-prov satisfied
+sed -i.bak '/^\*\*Judge:\*\*/d' "$TMP/openspec/changes/d-prov/doneness.md"
+run d-prov; check "unprovenanced doneness fails (anti-self-forge-provenance)" 1 $?
+
+# degraded-single-model => FAIL
+mkMdone d-deg; donefile d-deg satisfied
+sed -i.bak 's/^\*\*review_mode:\*\*.*/**review_mode:** degraded-single-model/' "$TMP/openspec/changes/d-deg/doneness.md"
+run d-deg; check "degraded-single-model doneness fails (anti-self-forge-provenance)" 1 $?
+
+# missing review_mode provenance => FAIL (not just literal degraded)
+mkMdone d-nomode; donefile d-nomode satisfied
+sed -i.bak '/^\*\*review_mode:\*\*/d' "$TMP/openspec/changes/d-nomode/doneness.md"
+run d-nomode; rc=$?
+check "missing review_mode provenance fails (anti-self-forge-provenance)" 1 $rc
+grep -q 'GATE-FAIL doneness ' "$TMP/err" && ok "missing review_mode reported under doneness check" || nok "missing review_mode reported under doneness check"
+
+# stale reviewed range => FAIL, reported under the 'doneness' check id
+mkMdone d-stale; donefile d-stale satisfied
+sed -i.bak 's/^\*\*Reviewed Range:\*\*.*/**Reviewed Range:** '"$HEAD_SHA"'..deadbeef/' "$TMP/openspec/changes/d-stale/doneness.md"
+run d-stale; rc=$?
+check "stale doneness reviewed range fails (freshness-bound-verdict)" 1 $rc
+grep -q 'GATE-FAIL doneness ' "$TMP/err" && ok "stale doneness reported under doneness check id" || nok "stale doneness reported under doneness check id"
+
+# waiver WITH rationale => PASS (no doneness.md needed)
+mkMdone d-waive
+cat >"$TMP/openspec/changes/d-waive/review.md" <<EOF
+---
+scale: M
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: gating-required
+loop_max_iterations: 40
+validation_source_mode: waived
+spec_level: spec-anchored
+doneness_mode: waived
+doneness_waiver_rationale: bootstrap reason
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:**
+EOF
+run d-waive; check "waiver with rationale passes without doneness.md (scale-gated-with-waiver)" 0 $?
+
+# bare waiver (no rationale) => FAIL at Scale>=M
+mkMdone d-bare
+cat >"$TMP/openspec/changes/d-bare/review.md" <<EOF
+---
+scale: M
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: gating-required
+loop_max_iterations: 40
+validation_source_mode: waived
+spec_level: spec-anchored
+doneness_mode: waived
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:**
+EOF
+run d-bare; rc=$?
+check "bare waiver fails at Scale>=M (scale-gated-with-waiver)" 1 $rc
+grep -q 'GATE-FAIL doneness' "$TMP/err" && ok "reports bare-waiver doneness fail" || nok "reports bare-waiver doneness fail"
+
+# empty block-scalar rationale (doneness_waiver_rationale: > with no content) => FAIL
+mkMdone d-emptyblock
+cat >"$TMP/openspec/changes/d-emptyblock/review.md" <<EOF
+---
+scale: M
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: gating-required
+loop_max_iterations: 40
+validation_source_mode: waived
+spec_level: spec-anchored
+doneness_mode: waived
+doneness_waiver_rationale: >
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:**
+EOF
+run d-emptyblock; rc=$?
+check "empty block-scalar rationale fails, not passes (scale-gated-with-waiver)" 1 $rc
+grep -q 'GATE-FAIL doneness' "$TMP/err" && ok "content-less block-scalar rationale rejected" || nok "content-less block-scalar rationale rejected"
+
+# block-scalar rationale WITH indented content => PASS
+mkMdone d-blockok
+cat >"$TMP/openspec/changes/d-blockok/review.md" <<EOF
+---
+scale: M
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: gating-required
+loop_max_iterations: 40
+validation_source_mode: waived
+spec_level: spec-anchored
+doneness_mode: waived
+doneness_waiver_rationale: >
+  a real multi-line rationale explaining the waiver
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:**
+EOF
+run d-blockok; check "block-scalar rationale with content passes (scale-gated-with-waiver)" 0 $?
+
+# content-less rationale variants (comment-only, block+trailing-comment, quoted-whitespace) => FAIL
+for variant in 'doneness_waiver_rationale: # only a comment' 'doneness_waiver_rationale: > # comment, no content' 'doneness_waiver_rationale: "   "'; do
+  nm="d-empty-$(echo "$variant" | tr -cd 'a-z' | cut -c1-8)$RANDOM"
+  mkMdone "$nm"
+  cat >"$TMP/openspec/changes/$nm/review.md" <<EOF
+---
+scale: M
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: gating-required
+loop_max_iterations: 40
+validation_source_mode: waived
+spec_level: spec-anchored
+doneness_mode: waived
+$variant
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:**
+EOF
+  run "$nm"; check "content-less rationale variant fails: [$variant] (scale-gated-with-waiver)" 1 $?
+done
+
+# inline quoted rationale WITH content => PASS
+mkMdone d-inlineok
+cat >"$TMP/openspec/changes/d-inlineok/review.md" <<EOF
+---
+scale: M
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: gating-required
+loop_max_iterations: 40
+validation_source_mode: waived
+spec_level: spec-anchored
+doneness_mode: waived
+doneness_waiver_rationale: "a real inline rationale for the waiver"
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:**
+EOF
+run d-inlineok; check "inline quoted rationale with content passes (scale-gated-with-waiver)" 0 $?
+
+# sub-M skip: Scale-S change with doneness_mode required must NOT evaluate doneness
+mkchange d-subm
+awk '1; /^spec_level:/{print "doneness_mode: required"}' "$TMP/openspec/changes/d-subm/review.md" >"$TMP/dsub.tmp" && mv "$TMP/dsub.tmp" "$TMP/openspec/changes/d-subm/review.md"
+run d-subm; check "sub-M change skips doneness even when mode required (scale-gated-with-waiver)" 0 $?
+
+# sole-remaining suppression: an upstream (code-review) failure suppresses the doneness line
+mkMdone d-suppress; donefile d-suppress satisfied
+sed -i.bak 's/^\*\*Verdict:\*\* pass/**Verdict:** fail/' "$TMP/openspec/changes/d-suppress/code-review.md"
+run d-suppress; rc=$?
+check "upstream code-review failure present (doneness-verdict-enforcement)" 1 $rc
+grep -q 'GATE-FAIL code-review' "$TMP/err" && ok "code-review fail emitted" || nok "code-review fail emitted"
+grep -q 'GATE-FAIL doneness' "$TMP/err" && nok "doneness suppressed while another check red" || ok "doneness suppressed while another check red"
 
 echo "----"
 echo "passed=$pass failed=$failc"
