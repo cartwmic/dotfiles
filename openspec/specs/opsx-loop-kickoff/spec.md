@@ -5,11 +5,15 @@ TBD - created by archiving change add-opsx-loop-kickoff. Update Purpose after ar
 ## Requirements
 ### Requirement: Single-command guaranteed loop
 
-THE opsx-loop pi extension SHALL register an `/opsx-loop <change>` command that starts a guaranteed loop: it injects an initial worker turn directed at the openspec-loop skill for the change, and after each subsequent agent turn evaluates `opsx gate` and either continues or stops.
+THE opsx-loop pi extension SHALL register an `/opsx-loop <change>` command that starts a guaranteed loop: it FIRST evaluates `opsx gate <change>` and, IF the gate is already green, reports the change ready to archive WITHOUT arming a loop or injecting a worker turn; otherwise it injects an initial worker turn directed at the openspec-loop skill for the change, and after each subsequent agent turn evaluates `opsx gate` and either continues or stops.
 
 #### Scenario: Starting the loop injects a worker turn
-- **WHEN** the user issues `/opsx-loop add-clipboard-extension`
+- **WHEN** the user issues `/opsx-loop add-clipboard-extension` for a change whose gate is not yet green
 - **THEN** the extension SHALL record the change as the active loop with its turn count reset to zero and SHALL inject one worker turn directed at advancing that change toward a green opsx gate
+
+#### Scenario: Kickoff on an already-green change does not loop
+- **WHEN** the user issues `/opsx-loop <change>` for a change whose `opsx gate` already exits 0
+- **THEN** the extension SHALL NOT arm a loop or inject a worker turn, and SHALL notify the user that the change already passes the gate and is ready to archive, so re-issuing a kickoff on a finished change cannot spin it in an endless loop
 
 #### Scenario: Replacing an active loop
 - **WHILE** a loop is already active
@@ -154,8 +158,13 @@ the distilling phase, the extension SHALL detect a change directory created sinc
 snapshot that carries a frozen `intent.md`; once detected it SHALL adopt that change
 (resolving its budget and exporting its role models) and thereafter act as the
 deterministic-judge loop. IF a budget is configured AND no such change appears before it
-is exhausted, THEN the extension SHALL stop the loop and notify the user; while the budget
-is unset the distilling phase is unbounded (it stops only on user abort or manual clear).
+is exhausted, THEN the extension SHALL stop the loop and notify the user. INDEPENDENT of the
+budget, the extension SHALL bound the distilling phase with a stall guard: IF no change-directory
+progress occurs (no new change directory appears since the prior distilling turn) for a
+configured number of consecutive turns (default 3), THEN it SHALL stop the loop and notify
+the user, so a kickoff whose intent is already captured by an existing change (or that the
+agent otherwise never distills into a new change) cannot re-inject the distill directive
+forever under an unset (unbounded) budget.
 
 #### Scenario: Goal keyword preserves the full multi-word goal
 - **WHEN** the user issues `/opsx-loop goal build the clipboard sync with retries`
@@ -174,6 +183,11 @@ is unset the distilling phase is unbounded (it stops only on user abort or manua
 - **WHILE** a goal/conversation loop is in its distilling phase AND a budget is configured
 - **IF** no new change directory with a frozen `intent.md` appears before the configured budget is exhausted
 - **THEN** the extension SHALL stop the loop and notify the user that no change was created
+
+#### Scenario: A stalled distilling phase stops the loop under an unbounded budget
+- **WHILE** a goal/conversation loop is in its distilling phase AND the budget is unset (unbounded)
+- **IF** no new change directory appears for the configured number of consecutive turns (default 3) since the prior distilling turn
+- **THEN** the extension SHALL stop the loop and notify the user (rather than re-injecting the distill directive forever), advising that an already-captured intent be driven via `/opsx-loop <change>` or archived
 
 #### Scenario: Goal offered as completion
 - **WHEN** the user requests argument completions for `/opsx-loop`
