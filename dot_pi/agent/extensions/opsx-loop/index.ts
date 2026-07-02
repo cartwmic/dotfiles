@@ -224,18 +224,22 @@ export default function (pi: ExtensionAPI) {
 		`(e.g. deploy, force-push, data loss). The opsx gate is the arbiter of done, ` +
 		`not the user.`;
 
+	// Two forms, mirroring the goal extension's proven split: a rich KICKOFF sent
+	// once when a change is adopted (report omitted), and a terse CONTINUATION nudge
+	// on every subsequent turn (report present) that just says "keep going, fix this"
+	// — never re-issuing the task setup, which is what made re-injects read as a new
+	// request.
 	const workerDirective = (change: string, report?: string) =>
-		`CONTINUE the in-progress OpenSpec change "${change}" — work already underway from a ` +
-		`running opsx-loop, NOT a new request. Do NOT start a new loop, create another change, ` +
-		`re-run \`/opsx-loop\`, or restart the workflow from proposal; resume "${change}" exactly ` +
-		`where it left off and drive it toward a green opsx gate using the openspec-loop skill.\n` +
-		`Run \`opsx gate ${change}\` (with --worktree when applicable), fix the EARLIEST blocking ` +
-		`GATE-FAIL line, delegate any review verdict to a blind subagent, and commit one unit of progress.` +
-		(report
-			? `\n\n"${change}" is NOT done yet — the opsx gate still reports the blocking failures below. ` +
-				`Fix the earliest one; this is not a request to begin new work:\n${report}`
-			: "") +
-		AUTONOMY;
+		report === undefined
+			? // KICKOFF — first turn on this change.
+				`Use the openspec-loop skill to drive OpenSpec change "${change}" to a green opsx gate. ` +
+				`Run \`opsx gate ${change}\` (with --worktree when applicable), fix the EARLIEST blocking ` +
+				`GATE-FAIL line, delegate any review verdict to a blind subagent, and commit one unit of progress.` +
+				AUTONOMY
+			: // CONTINUATION — terse nudge; the change is already in progress.
+				`[opsx gate still red] "${change}" is not done yet. Keep advancing the SAME in-progress ` +
+				`change: fix the EARLIEST blocking GATE-FAIL below and commit one unit of progress.\n\n${report}` +
+				AUTONOMY;
 
 	// Goal/conversation kickoff: establish a frozen intent.md (reuse an existing one
 	// or distill goal/conversation into a NEW change), then hand off to the loop.
