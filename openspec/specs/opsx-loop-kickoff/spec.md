@@ -39,7 +39,7 @@ agent self-assessment.
 #### Scenario: Red gate continues the loop
 - **WHILE** a loop is active and the turn budget is not exhausted
 - **WHEN** a worker turn completes and `opsx gate` exits non-zero
-- **THEN** the extension SHALL inject another worker turn carrying the gate's failed-check report as guidance
+- **THEN** the extension SHALL inject another worker turn carrying the gate's failed-check report as guidance, framed as a CONTINUATION of the existing change (instructing the agent to resume that change and NOT to start a new loop, create another change, or restart the workflow from proposal)
 
 #### Scenario: Worktree created mid-loop is picked up
 - **WHILE** a loop started for a change that had no `review.md` (and thus no resolved worktree) at kickoff
