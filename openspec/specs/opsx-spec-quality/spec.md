@@ -1,7 +1,7 @@
 # opsx-spec-quality Specification
 
 ## Purpose
-TBD - created by archiving change add-opsx-superpowers-schema. Update Purpose after archive.
+Spec-quality machinery for opsx-superpowers changes: EARS-notation acceptance criteria with the 5 quality properties, the 3-pass clarify procedure, cross-artifact analyze checks, and the verify-time AC-to-test mapping.
 ## Requirements
 
 ### Requirement: EARS notation for acceptance criteria

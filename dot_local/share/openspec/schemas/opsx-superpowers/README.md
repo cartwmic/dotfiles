@@ -23,9 +23,9 @@ The default `spec-driven` schema is unaffected. Per-project opt-in. Reversible.
 | Clarify phase | no | yes — 3 passes (ambiguity / inconsistency / completeness) |
 | Analyze phase | no | yes — read-only cross-artifact lint with 7 checks |
 | ADR persistence past archive | no | yes — `openspec-archive-change` skill promotes qualifying decisions to `<repo>/adr/ADR-NNNN-<slug>.md` before archive using `templates/adr.md` (not a schema artifact — see schema.yaml D11 rationale) |
-| Mode switchboard | no | yes — `review.md` with 8 modes (Scale, Execution, Verification, Debug, Review-Status, Delegation, Worktree, Spec-Level) |
+| Mode switchboard | no | yes — `review.md` front-matter switchboard (Scale, Execution, Verification, Debug, Review-Status, Delegation, Worktree, Code-Review, Loop-Budget, Validation-Source, Doneness, Spec-Level, plus optional model keys — see Mode reference below) |
 | Scale-adaptive artifact gating | no | yes — XS skips heavy artifacts; M is the typical full graph; L/XL add ADR + adversarial review + retrospective |
-| Pre-flight commit before worktree | no | yes (apply step captures Worktree Base SHA for file-contract diffs) |
+| Pre-flight commit before worktree | no | yes (apply step records the immutable merge-base `Diff Base SHA` for file-contract diffs) |
 | Per-task file contracts | no | yes — `files_allowed` / `files_forbidden` / `allow_new_files` + `intent: fix\|feature\|refactor\|infra` |
 | AC↔test ID mapping as verify gate | no | yes — `verify.md` (skill-produced) blocks archive if mapping incomplete; canonical AC ID format `<capability>.<requirement-slug>` |
 | Retrospective with mcp-memory promotion | no | yes — pre-archive `retrospective.md` (skill-produced) with `Promote candidates` (all 9 mcp-memory types) parsed by `openspec-archive-change` |
@@ -38,7 +38,7 @@ Pick one in `review.md` (`Scale: <value>`). The schema's apply rules gate requir
 | Scale | Example | Required artifacts | Optional |
 |---|---|---|---|
 | **XS** | typo, comment fix, single-line config tweak | proposal, tasks | everything else |
-| **S** | single-file bug fix, small refactor | proposal, specs, tasks, plan | clarify, design, analyze, review, verify, adr, retrospective |
+| **S** | single-file bug fix, small refactor | proposal, specs, tasks, plan (clarify runs the ambiguity pass only; analyze runs checks 1, 2, 7 — reduced, not skipped) | design, review, verify, adr, retrospective |
 | **M** | typical feature, cross-file but single capability | proposal, specs, clarify, design, analyze, review, tasks, plan, verify | adr (unless decision passes 4-point test), retrospective |
 | **L** | cross-capability change, breaking change, new ADR-worthy decisions | + adr, + adversarial-review-cycle from analyze | retrospective |
 | **XL** | new capability, migration, multi-week project | full graph including retrospective | — |
@@ -61,6 +61,7 @@ Each mode has a controlled vocabulary. Default values shown in **bold**.
 | `Code Review Mode` | none / advisory / **gating-required (M+)** | gating-required: `code-review.md` adversarial diff review must pass before archive |
 | `Loop Max Iterations` | integer (**S~20 / M~40 / L~80**) | drive-loop budget; mapped onto the loop runtime turn budget |
 | `Validation Source Mode` | **required** / waived | required: Scale ≥ M must declare an agent-independent validation source |
+| `Doneness Mode` | **required (M+)** / waived | required: gate reads a sealed `doneness.md` verdict (blind judge, intent-satisfaction) as the sole-remaining-failure backstop; `waived` needs a non-empty `doneness_waiver_rationale` |
 | `Spec Level` | **spec-anchored** / spec-first / spec-as-source | spec-anchored = OpenSpec's natural mode; spec-as-source warns about MDD-era trade-offs |
 
 ### Role models (optional, via `opsx models`)
@@ -112,9 +113,14 @@ the deterministic gate:
 - **`openspec-loop` skill** — single orchestrator agent: each turn runs `opsx gate`,
   fixes the earliest blocking failure, delegates every review verdict to a blind
   subagent judged against the frozen baseline. Stops when the gate is green.
-- **Loop runtime** — the pi `goal` extension with a command-judge
-  (`PI_GOAL_JUDGE_CMD='opsx gate <change>'`) continues turns until the gate passes.
-  Harness-agnostic fallback: the **`opsx loop`** bash driver (`AGENT_CMD`-parameterized).
+- **Loop runtime (adapter ladder)** — primary: the dedicated **`opsx-loop` pi
+  extension** (`/opsx-loop <change>` or `/opsx-loop goal [text]`), which adds what the
+  generic paths lack: per-turn worktree re-resolution, stall detection with the
+  doneness gap-set ratchet, role-model env export, and goal/conversation kickoff.
+  Alternative: the pi `goal` extension with a command-judge
+  (`PI_GOAL_JUDGE_CMD='opsx gate <change>'`). Harness-agnostic fallback: the
+  **`opsx loop`** bash driver (`AGENT_CMD`-parameterized, no stall detection —
+  bounded 40-iteration default instead).
 
 Enforcement lives below the harness (exit codes), so the same workflow runs on pi
 today or another harness tomorrow by swapping one adapter. The `opsx-gates.yaml`
@@ -139,7 +145,7 @@ opsx-superpowers/
     ├── clarify.md                     # 3-pass findings tables
     ├── design.md                      # 4-point ADR-candidate test in Decisions block
     ├── analyze.md                     # 7 cross-artifact checks; EARS check is human-triage
-    ├── review.md                      # mode switchboard + Worktree Base SHA
+    ├── review.md                      # mode switchboard + Diff Base SHA
     ├── tasks.md                       # task contracts + TDD-aware allow_new_files
     ├── plan.md                        # execution driver
     │
@@ -153,13 +159,13 @@ opsx-superpowers/
 
 - **OpenSpec ≥ 1.3.0** (`openspec --version`)
 - **Per-project**: `openspec/constitution.md` and `openspec/domain.md` (created via the `openspec-propose` skill on first non-XS change; templates in this schema)
-- **Optional but recommended**: `~/.pi/agent/skills/clarify-spec/`, `adversarial-review-cycle`, `pi-subagents`, `mcp_memory_store_memory` (graceful degradation when absent)
+- **Optional but recommended**: `~/.pi/agent/skills/clarify-spec/`, `adversarial-review-cycle`, `pi-subagents`, the `hindsight` memory MCP server (graceful degradation when absent)
 
 ## Authoring notes
 
 - Markdown brevity is a feature, not a bug. Templates are kept under ~80 lines each. Fowler's "markdown review overload" critique applies — tables over prose, checklists over paragraphs, no duplication across artifacts.
 - The artifact graph is a DAG declared in `schema.yaml`. Editing it is supported; deleting required artifacts breaks `openspec validate --strict`.
-- `adr` artifact's `generates: ../../../adr/ADR-*.md` is intentional — ADRs escape the change directory so they survive `openspec archive`.
+- There is deliberately NO `adr` schema artifact: ADR promotion is skill-managed at archive time (`openspec-archive-change` writes `<repo>/adr/ADR-NNNN-<slug>.md` from `templates/adr.md`), because a schema-level `generates` glob escaping the change directory is a validation bug, not a feature (see schema.yaml D11 rationale).
 - The 5 EARS patterns are mandatory for new ACs; the analyze step blocks `WHEN`-on-error-conditions (must be `IF…THEN`).
 
 ## License

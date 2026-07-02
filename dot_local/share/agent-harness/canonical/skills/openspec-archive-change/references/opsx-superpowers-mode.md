@@ -1,6 +1,6 @@
 # openspec-archive-change under schema: opsx-superpowers
 
-Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds verify HARD-GATE, code-review HARD-GATE, opsx gate confirmation, worktree merge/cleanup, AC↔test mapping check, ADR promotion, retrospective-driven mcp-memory ingestion.
+Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds: HARD-GATE 0 (opsx gate green), HARD-GATE 1 (verify.md), HARD-GATE 2 (AC↔test mapping re-run), HARD-GATE 3 (code-review.md), HARD-GATE 4 (doneness re-check), worktree merge/cleanup, ADR promotion, retrospective-driven hindsight memory promotion.
 
 ## HARD-GATE 0: opsx gate green (primary)
 
@@ -79,7 +79,7 @@ If a decision passes ≥3 of 4, surface to user:
 Decision D<n>: <title>
 4-point score: <score>/4
 
-Promote to docs/adr/ADR-NNNN-<slug>.md before archive? (Y/n)
+Promote to <repo>/adr/ADR-NNNN-<slug>.md before archive? (Y/n)
 ```
 
 For each `Y`, find the next available `<repo>/adr/ADR-NNNN-` number (scan existing files), generate the file from `templates/adr.md` populated with:
@@ -99,24 +99,25 @@ If present, parse the `## Promote candidates` section. For each candidate row:
 
 ```
 Candidate <n>:
-  type:    <decision | bug | error | convention | learning | implementation | context | important | code>
   tags:    <comma-separated>
   content: <quoted block>
 
-Promote to mcp-memory? (Y/n/skip-all)
+Promote to memory? (Y/n/skip-all)
 ```
 
-Validate per type:
-- `code`: content ≥600 chars; reject otherwise.
-- All other types: content ≥300 chars; reject otherwise.
+Validate: content is self-contained prose (no conversation-context
+dependence); exact identifiers (SHAs, versions, paths, ADR/AC IDs)
+verbatim; no secrets/credential values. There is NO type taxonomy and
+NO minimum length — hindsight does its own extraction/consolidation.
 
-For each `Y`, call `mcp_memory_store_memory` with:
+For each `Y`, call the hindsight `retain` tool with:
 - `content`: as written
-- `tags`: parsed list (ensure type-name is included as a tag)
-- `memory_type`: the canonical type
-- `metadata`: { source_change: <name>, source_artifact: retrospective.md }
+- `tags`: parsed list — `project:<name>` always; optional `topic:<x>`
+  facets (short, lowercase; no memory_type tag, no harness tag)
 
-Per the mcp-memory contract, NEVER auto-store; ALWAYS prompt per candidate.
+Per the memory contract (CLAUDE.md "Memory: hindsight MCP server"),
+NEVER auto-store; ALWAYS prompt per candidate. `retain` is async: do
+not expect the fact to be recallable in the same turn.
 
 If `retrospective.md` is missing:
 - Scale = XL → REFUSE archive (retrospective is required at XL):
@@ -130,15 +131,27 @@ If `retrospective.md` is missing:
 - Scale = L → warn, allow:
   ```
   ⚠ Scale = L; retrospective.md missing. Recommended but not required.
-  Skipping mcp-memory promotion.
+  Skipping memory promotion.
   ```
 - Scale = M / S / XS → silent skip.
 
-## HARD-GATE 2: code-review.md pass (Code Review Mode = gating-required)
+## HARD-GATE 3: code-review.md pass (Code Review Mode = gating-required)
 
 Read `Code Review Mode` from review.md front-matter. If `gating-required`:
 1. `code-review.md` must exist with `Verdict: pass`. If absent or not pass, REFUSE archive.
 2. If `review_mode: degraded-single-model` AND the change edits an existing skill (Constitution IX), REFUSE archive — a degraded review does not satisfy the multi-model adversarial requirement.
+
+## HARD-GATE 4: doneness verdict (Scale ≥ M, doneness_mode != waived)
+
+Defense-in-depth mirror of the gate's doneness check (the newest enforcement
+axis must not be the only one without an archive-side backstop when a human
+archives without the gate). Read `Scale` and `doneness_mode` from review.md
+front-matter. If Scale is M/L/XL and `doneness_mode` is not `waived`:
+1. `doneness.md` must exist with `Doneness: satisfied`. If absent or not
+   satisfied, REFUSE archive.
+2. It must carry a `Judge` provenance field and a non-degraded `review_mode`.
+If `doneness_mode: waived`, require a non-empty `doneness_waiver_rationale`
+in review.md front-matter (a bare waiver does not pass the gate either).
 
 ## Worktree merge + cleanup (Worktree Mode != same-tree)
 

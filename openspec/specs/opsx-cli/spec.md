@@ -1,7 +1,7 @@
 # opsx-cli Specification
 
 ## Purpose
-TBD - created by archiving change consolidate-opsx-cli. Update Purpose after archive.
+A single `opsx` multitool (gate / models / loop subcommands) consolidating the formerly standalone opsx-* executables behind stable argument and exit-code contracts (ADR-0011), so harnesses and skills integrate against one binary.
 ## Requirements
 ### Requirement: Unified Subcommand Dispatch
 

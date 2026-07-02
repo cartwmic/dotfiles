@@ -1,7 +1,7 @@
 # goal-loop Specification
 
 ## Purpose
-TBD - created by archiving change add-pi-goal-extension. Update Purpose after archive.
+A pi extension that records a session goal, evaluates it on every `agent_end` via a separate judge (model or command), and injects continuation turns until the goal is met, bounded by budget and abort signals.
 ## Requirements
 ### Requirement: Set a Goal
 

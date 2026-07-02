@@ -1,7 +1,7 @@
 # opsx-workflow-schema Specification
 
 ## Purpose
-TBD - created by archiving change add-opsx-superpowers-schema. Update Purpose after archive.
+The opsx-superpowers OpenSpec schema itself: the artifact DAG and templates, the review.md mode switchboard, Scale tiers, worktree lifecycle ownership with the immutable Diff Base SHA, and per-task file contracts.
 ## Requirements
 ### Requirement: Schema persistence in chezmoi
 
@@ -162,9 +162,9 @@ Each task in `tasks.md` SHALL optionally declare `files_allowed`, `files_forbidd
 - **THEN** the wrap-up step SHALL NOT report a `scope_violation` for that file (TDD's first step requires writing a new failing test; this exemption resolves the otherwise-unsatisfiable combination)
 
 #### Scenario: Intent shapes the repair prompt
-- **WHEN** a task declares `intent: fix` and validators fail
+- **IF** a task declares `intent: fix` and validators fail
 - **THEN** the repair prompt SHALL include the constraints block "Fix only failing validators. Do NOT refactor unrelated code. Do NOT add new features. Tests MAY be added when TDD mode is on." along with a structured `Issues[]` list
-- **WHEN** a task declares `intent: refactor` and validators fail
+- **IF** a task declares `intent: refactor` and validators fail
 - **THEN** the repair prompt SHALL NOT include the fix-mode constraints and SHALL instead permit unrelated cleanup within the task's `files_allowed` scope
 
 ### Requirement: Worktree Lifecycle Ownership

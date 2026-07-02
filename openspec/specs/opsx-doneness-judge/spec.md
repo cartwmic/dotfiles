@@ -1,7 +1,7 @@
 # opsx-doneness-judge Specification
 
 ## Purpose
-TBD - created by archiving change add-opsx-doneness-judge. Update Purpose after archive.
+A sealed `doneness.md` verdict authored by an independent blind LLM judge against the frozen intent, read (never generated) by the gate as the semantic-doneness backstop that can only block, never pass, a change (ADR-0012).
 ## Requirements
 ### Requirement: Sealed Doneness Verdict Artifact
 

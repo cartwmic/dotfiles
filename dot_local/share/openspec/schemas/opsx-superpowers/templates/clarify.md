@@ -25,8 +25,11 @@ check consequents for conflict on a shared observable output. -->
 
 ## Pass 3 — Completeness (event/state combination enumeration)
 
-<!-- Enumerate cartesian product of declared events × states.
-Each uncovered combination → finding. -->
+<!-- Do NOT enumerate the full cartesian product of events × states.
+Select the highest-risk uncovered combinations (error paths, concurrent
+states, boundary events) and cap at 10 findings; each selected uncovered
+combination → finding. (Matches schema.yaml clarify instruction and the
+clarify-spec skill.) -->
 
 | # | Combination | Question | Option A (intentional silence) | Option B (add new AC) | Status | Resolution |
 |---|---|---|---|---|---|---|

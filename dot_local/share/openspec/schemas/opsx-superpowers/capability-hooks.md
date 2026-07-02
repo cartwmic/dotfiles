@@ -40,10 +40,10 @@ For each capability hook in an artifact's instruction:
 | `verification-before-completion` | verify | 1. `verification-before-completion` (Superpowers, if installed) 2. inline | Execute the 6 verify checks inline. The reverse-direction (manual fallback) is the canonical implementation; the Superpowers skill is a wrapper. |
 | `systematic-debugging` | apply (when Debug Mode = systematic-debugging) | 1. `systematic-debugging` (this repo) | Execute the 4-phase root-cause investigation inline per the skill's own SKILL.md reference. |
 | `finish-development-branch` | apply (final step, optional) | 1. `finishing-a-development-branch` (Superpowers, if installed) | Manual merge/PR procedure documented per-project. |
-| `memory-promotion` | archive (when retrospective.md present) | 1. `mcp_memory_store_memory` MCP tool | If MCP tool not available, write the candidates to a `retrospective-promote-pending.md` file in the change dir for later ingestion. |
+| `memory-promotion` | archive (when retrospective.md present) | 1. hindsight `retain` MCP tool | If the hindsight MCP server is not available, write the candidates to a `retrospective-promote-pending.md` file in the change dir for later ingestion. |
 | `adversarial-review-postimpl` | code-review (post-apply, when Code Review Mode != none) | 1. `adversarial-review-cycle` (this repo) over the diff `Diff Base SHA..HEAD` | Single-model self-review of the diff; mark `review_mode: degraded-single-model` in code-review.md. Degraded does NOT satisfy gating-required or Constitution IX. |
 | `subagent-dispatch` | apply (Delegation Mode subagent-*) + every review/validation-judgment step | 1. `pi-subagents` (pi adapter) 2. host-native subagent (Claude Task, etc.) | Run inline; the verdict is `degraded-single-model` (gate-failing for gating-required). The schema names NO specific harness — pi-subagents is just the pi adapter. |
-| `loop-continuation` | the opsx drive loop | 1. `goal` extension command-judge (`PI_GOAL_JUDGE_CMD=opsx gate <change>`) 2. `opsx loop` bash driver (`AGENT_CMD`-parameterized) | The bash `opsx loop` driver always works; deleting the extension loses only convenience. |
+| `loop-continuation` | the opsx drive loop | 1. `opsx-loop` pi extension (`/opsx-loop <change>` / `goal` — stall detection, doneness gap ratchet, worktree re-resolution, model-env export) 2. `goal` extension command-judge (`PI_GOAL_JUDGE_CMD=opsx gate <change>`) 3. `opsx loop` bash driver (`AGENT_CMD`-parameterized) | The bash `opsx loop` driver always works; the lower rungs lose the stall backstop ADR-0012 depends on under an unbounded budget. |
 
 ## Notes on each capability
 
@@ -97,12 +97,15 @@ includes it in review.md's Execution Notes or asks the apply skill.
 
 ### `memory-promotion`
 
-The mcp-memory MCP server (host: `mcp-memory.internal.cartwmic.com`) is
-the canonical destination. The fallback to a pending file is for hosts
-that don't have the MCP server configured.
+The hindsight MCP server (host: `hindsight-api.internal.cartwmic.com`,
+bank `cartwmic`) is the canonical destination, via its `retain` tool
+(supersedes the retired mcp-memory backend — no memory-type taxonomy,
+no per-type length rules; tags are `project:<name>` + optional
+`topic:<x>`). The fallback to a pending file is for hosts that don't
+have the MCP server configured.
 
 ## See also
 
 - Schema definition: `schema.yaml`
 - Activation + Scale tiers: `README.md`
-- mcp-memory contract: see CLAUDE.md "Memory: mcp-memory MCP server"
+- Memory contract: see CLAUDE.md "Memory: hindsight MCP server"

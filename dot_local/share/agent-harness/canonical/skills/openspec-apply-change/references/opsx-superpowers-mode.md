@@ -7,17 +7,25 @@ Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds mode dispa
 Parse `openspec/changes/<name>/review.md` to extract:
 
 ```
-Scale              = <XS | S | M | L | XL>
-Execution Mode     = <standard | tdd-preferred | tdd-required>
-Verification Mode  = <inline-only | retained-recommended | retained-required>
-Debug Mode         = <standard | systematic-debugging>
-Review Status      = <not-requested | requested | findings-received | resolved>
-Delegation Mode    = <single-agent | subagent-eligible | subagent-required>
-Worktree Mode      = <same-tree | worktree-eligible | worktree-required>
-Spec Level         = <spec-anchored | spec-first | spec-as-source>
+Scale                  = <XS | S | M | L | XL>
+Execution Mode         = <standard | tdd-preferred | tdd-required>
+Verification Mode      = <inline-only | retained-recommended | retained-required>
+Debug Mode             = <standard | systematic-debugging>
+Review Status          = <not-requested | requested | findings-received | resolved>
+Delegation Mode        = <single-agent | subagent-eligible | subagent-required>
+Worktree Mode          = <same-tree | worktree-eligible | worktree-required>
+Code Review Mode       = <none | advisory | gating-required>
+Loop Max Iterations    = <positive integer or unset>
+Validation Source Mode = <required | waived>
+Doneness Mode          = <required | waived>
+Spec Level             = <spec-anchored | spec-first | spec-as-source>
+Model keys (optional)  = author_model / review_models / impl_model /
+                         author_in_session / provider / *_provider
 ```
 
-If `review.md` is missing OR all defaults (Scale=XS likely), use the defaults from the schema README.
+If `review.md` is missing, STOP and author it first (the gate hard-fails on a
+missing/unparseable Scale — there is no implicit-XS fallback; the README
+default Scale for a new review.md is S).
 
 ## Pre-flight commit (when Worktree Mode != same-tree)
 
@@ -129,7 +137,7 @@ For each task `- [ ] X.Y <description>` in `tasks.md`:
 
 6. **Contract check.** Run:
    ```bash
-   git -C <worktree-path> diff --name-only <worktree-base-sha>..HEAD
+   git -C <worktree-path> diff --name-only <Diff Base SHA>..HEAD
    ```
 
    For each touched file, check against `files_allowed`, `files_forbidden`, `allow_new_files`.

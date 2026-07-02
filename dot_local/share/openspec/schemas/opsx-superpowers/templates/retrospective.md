@@ -3,8 +3,8 @@
 <!--
 Pre-archive learning capture. Required at Scale = XL; optional at L
 (recommended); skipped at XS/S/M. The Promote-candidates section drives
-mcp-memory promotion: openspec-archive-change parses each row and prompts
-confirm/skip per candidate before calling mcp_memory_store_memory.
+memory promotion: openspec-archive-change parses each row and prompts
+confirm/skip per candidate before calling the hindsight `retain` tool.
 
 This artifact is produced by openspec-archive-change as a pre-archive
 step (NOT declared in the schema's artifact graph — same rationale as
@@ -58,28 +58,23 @@ about the tools, about ourselves. These often become learnings. -->
 ## Promote candidates
 
 <!--
-Durable knowledge for mcp-memory. Each candidate becomes one
-mcp_memory_store_memory call after a per-row confirm/skip prompt from
-openspec-archive-change.
+Durable knowledge for long-term memory (hindsight MCP server). Each
+candidate becomes one `retain` call after a per-row confirm/skip prompt
+from openspec-archive-change.
 
-Required fields per row:
-  - type: one of the 9 canonical mcp-memory types
-        decision       — choices made: "we're going with X over Y"
-        bug            — a specific defect observed + root cause
-        error          — runtime/integration error that recurs + resolution
-        convention     — repeated pattern: naming, layout, idioms
-        learning       — non-obvious fact discovered
-        implementation — how it's built: schemas, configs, integration shapes
-        context        — project background, who's involved, goals
-        important      — flagged as critical by user
-        code           — code snippet/pattern (≥600 chars; smaller skip)
-
-  - content: ≥300 chars for all types EXCEPT `code` which requires ≥600 chars
-        (matches the upstream mcp-memory contract; smaller memories
-         degrade retrieval relevance)
-
-  - tags: type-name MUST be included as a tag; plus project:<name>;
-          plus any natural facets (short, lowercase, no prefixes)
+The hindsight contract (see CLAUDE.md "Memory: hindsight MCP server"):
+  - Do NOT classify: there is no memory-type taxonomy. Write the fact
+    plainly; hindsight does its own extraction and consolidation.
+  - content: self-contained prose. Future-you will not have this
+    conversation's context. Preserve exact identifiers VERBATIM —
+    commit SHAs, versions, file paths, config keys, ADR numbers, AC IDs.
+    Capture temporal markers ("supersedes X") so decision evolution
+    stays traceable.
+  - tags: `project:<name>` always; optional `topic:<x>` facet
+    (short, lowercase, no invented prefix schemes). No memory_type
+    tag, no harness tag.
+  - Never store secrets/credentials/tokens — record only that they
+    exist and where they live, never values.
 
 Scalability note: if you produce more than ~10 candidates, prefer
 consolidating related items into single multi-paragraph entries rather
@@ -89,22 +84,21 @@ prompts per-candidate; ≥20 candidates produces a fatiguing confirm loop.
 
 ### Candidate 1
 
-- **type:** <decision | bug | error | convention | learning | implementation | context | important | code>
-- **tags:** <type-name>, project:<name>, <facet>, <facet>
+- **tags:** project:<name>, topic:<facet>
 - **content:**
-  > <≥300 chars (≥600 for code) of durable knowledge. Self-contained —
-  > future-you will not have this conversation's context. Cite specific
-  > files, commit hashes, ADR numbers, AC IDs where relevant.>
+  > <durable knowledge. Self-contained — future-you will not have this
+  > conversation's context. Cite specific files, commit hashes, ADR
+  > numbers, AC IDs verbatim where relevant.>
 
 ### Candidate 2
 
-- **type:** <…>
 - **tags:** <…>
 - **content:** <…>
 
 ---
 
 <!--
-After archive, mcp-memory will contain these candidates. To audit:
-  search_by_tag --tags project:<name> --created-after YYYY-MM-DD
+After archive, hindsight will contain these candidates. To audit:
+  recall with the project name, or list_memories filtered by
+  tags project:<name>.
 -->

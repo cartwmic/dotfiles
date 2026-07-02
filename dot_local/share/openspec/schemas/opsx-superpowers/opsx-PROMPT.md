@@ -9,7 +9,10 @@ failure pass, nothing more.
    emits them in lifecycle dependency order).
 2. Address exactly that failure:
    - Missing artifact → author it with the matching opsx skill (`openspec-propose`)
-     or edit it directly, tracing to `intent.md`.
+     or edit it directly, tracing to `intent.md`. NOTE: the gate reports
+     review.md first (Scale must be readable), but ARTIFACTS are authored in the
+     schema's DAG order via `openspec-propose` (proposal → specs → …) — resolve
+     missing-artifact failures in DAG order, not gate-report order.
    - Unchecked tasks → implement the next task in `tasks.md` (respect its file
      contracts) and check it off.
    - Failing validation command → fix the code; do not weaken the gate.
