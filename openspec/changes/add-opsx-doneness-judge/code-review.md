@@ -5,7 +5,7 @@
 **review_mode:** adversarial-multimodel
 **reviewer-provenance:** blind subagents claude-bridge/claude-opus-4-8 + openai-codex/gpt-5.5 (4 rounds), dispatched via pi-subagents
 **Diff Base SHA:** 30d6d7917b5b342c7ab89d1138ccecae41a9c58d
-**Reviewed Range:** 30d6d7917b5b342c7ab89d1138ccecae41a9c58d..3b169f020e3c369ddb91f93e4e14a2e2d1948d96
+**Reviewed Range:** 30d6d7917b5b342c7ab89d1138ccecae41a9c58d..1e1e4f295ebea43dd76b224091ec4218bc55cbea
 
 ## Summary
 
