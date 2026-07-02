@@ -675,12 +675,35 @@ sha256_file() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" 2>/dev/null | awk '{print $1}';
   else sha256sum "$1" 2>/dev/null | awk '{print $1}'; fi
 }
+# A doneness_waiver_rationale counts as present ONLY with real content: an inline
+# scalar that is not merely a YAML block-scalar marker (>, |, >-, ...), OR a block
+# scalar (`: >`/`: |`) followed by >=1 indented non-blank, non-comment line. This
+# stops a content-less `doneness_waiver_rationale: >` from passing as a rationale.
+waiver_has_rationale() {
+  [ -f "$REVIEW" ] || return 1
+  awk '
+    /^---[[:space:]]*$/ { infm++; next }
+    infm==1 {
+      if (inblock) {
+        if ($0 ~ /^[[:space:]]+[^[:space:]#]/) { found=1; exit }
+        if ($0 ~ /^[^[:space:]]/) inblock=0
+      }
+      if ($0 ~ /^doneness_waiver_rationale[[:space:]]*:/) {
+        v=$0; sub(/^[^:]*:[[:space:]]*/,"",v); gsub(/[[:space:]]+$/,"",v)
+        gsub(/^["\x27]|["\x27]$/,"",v)
+        if (v!="" && v!~/^[>|][+-]?$/) { found=1; exit }
+        inblock=1
+      }
+    }
+    END { exit(found?0:1) }
+  ' "$REVIEW"
+}
 if [ "$rc" -eq 0 ]; then
   case "$SCALE" in
     M|L|XL)
       if [ "$DONE_MODE" = "waived" ]; then
-        # Bare waiver (no non-empty rationale) cannot bypass the judge at Scale>=M.
-        if [ -z "$(fm doneness_waiver_rationale)" ]; then
+        # Bare waiver (no real rationale) cannot bypass the judge at Scale>=M.
+        if ! waiver_has_rationale; then
           fail doneness "doneness_mode: waived without a non-empty doneness_waiver_rationale (Scale $SCALE)"
         fi
       else
