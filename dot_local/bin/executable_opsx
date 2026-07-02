@@ -647,7 +647,7 @@ freshness_check() {
   if git -C "$GW" merge-base --is-ancestor "$n_rhead" "$n_head" 2>/dev/null; then
     local changed nonverdict
     changed="$(git -C "$GW" diff --name-only "$n_rhead" "$n_head" 2>/dev/null)"
-    nonverdict="$(printf '%s\n' "$changed" | grep -vE "openspec/changes/$CHANGE/(verify|code-review)\.md$" | grep -v '^$' || true)"
+    nonverdict="$(printf '%s\n' "$changed" | grep -vE "openspec/changes/$CHANGE/(verify|code-review|doneness)\.md$" | grep -v '^$' || true)"
     if [ -n "$nonverdict" ]; then
       fail "$cid" "stale verdict: code changed since review (${r_head}..HEAD touches non-verdict files)"
     fi
@@ -657,6 +657,58 @@ freshness_check() {
 }
 [ "$CR_MODE" = "gating-required" ] && freshness_check "$CR" code-review-stale
 [ "$VERIFY_MODE" = "retained-required" ] && freshness_check "$VERIFY" verify-stale
+
+# ============================================================================
+# DONENESS VERDICT (intent-satisfaction) — mode-conditioned, parse-only.
+# Spec: opsx-gate-enforcement.doneness-verdict-enforcement
+#       opsx-gate-enforcement.mode-aware-verdict-reading
+#       opsx-doneness-judge.{sealed-doneness-verdict-artifact,freshness-bound-verdict,
+#                            anti-self-forge-provenance,scale-gated-with-waiver}
+# Emitted ONLY as the sole remaining failure: while any mechanical/verify/code-review
+# check is already red (rc != 0), the doneness line is suppressed (the load-bearing
+# precondition the stall detector's gap-set signal depends on). No language-model call —
+# the gate reads sealed doneness.md fields only.
+# ============================================================================
+DONE_MODE="$(fm doneness_mode)"; [ -n "$DONE_MODE" ] || DONE_MODE=required
+DONE="$CDIR/doneness.md"
+sha256_file() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" 2>/dev/null | awk '{print $1}';
+  else sha256sum "$1" 2>/dev/null | awk '{print $1}'; fi
+}
+if [ "$rc" -eq 0 ]; then
+  case "$SCALE" in
+    M|L|XL)
+      if [ "$DONE_MODE" = "waived" ]; then
+        # Bare waiver (no non-empty rationale) cannot bypass the judge at Scale>=M.
+        if [ -z "$(fm doneness_waiver_rationale)" ]; then
+          fail doneness "doneness_mode: waived without a non-empty doneness_waiver_rationale (Scale $SCALE)"
+        fi
+      else
+        # doneness_mode == required
+        if [ ! -f "$DONE" ]; then
+          fail doneness "doneness.md absent (doneness_mode required, Scale $SCALE)"
+        elif [ "$(lc "$(cr_field "$DONE" 'Doneness')")" != "satisfied" ]; then
+          fail doneness "doneness.md Doneness is not satisfied"
+        else
+          [ -n "$(cr_field "$DONE" 'Judge')" ] \
+            || fail doneness "doneness.md lacks an adapter-stamped Judge provenance field"
+          [ "$(lc "$(cr_field "$DONE" 'review_mode')")" = "degraded-single-model" ] \
+            && fail doneness "doneness.md is degraded-single-model (no independent blind judge)"
+          i_rec="$(cr_field "$DONE" 'Frozen-Intent SHA')"
+          i_now="$(sha256_file "$CDIR/intent.md")"
+          if [ -z "$i_rec" ] || [ "$i_rec" != "$i_now" ]; then
+            fail doneness "doneness.md judged against a mismatched intent hash"
+          fi
+          db_rec="$(cr_field "$DONE" 'Diff Base SHA')"
+          if [ -n "$DIFF_BASE" ] && [ "$db_rec" != "$DIFF_BASE" ]; then
+            fail doneness "doneness.md recorded Diff Base != review.md Diff Base"
+          fi
+          freshness_check "$DONE" doneness-stale
+        fi
+      fi
+      ;;
+  esac
+fi
 
 # ============================================================================
 if [ "$rc" -eq 0 ]; then

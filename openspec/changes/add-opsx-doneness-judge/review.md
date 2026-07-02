@@ -41,8 +41,8 @@ doneness_waiver_rationale: >
 
 ## Diff Base SHA
 
-- **Diff Base SHA:** _(captured at worktree creation during apply)_
-- **Worktree Path:** _(recorded at apply)_
+- **Diff Base SHA:** 30d6d7917b5b342c7ab89d1138ccecae41a9c58d
+- **Worktree Path:** /Users/cartwmic/.local/share/.opsx-worktrees/add-opsx-doneness-judge
 - **Integration Branch:** main
 
 ## Manual Adjustments
