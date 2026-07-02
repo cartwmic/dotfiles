@@ -51,6 +51,20 @@ export interface ResolvedModel {
 	source: string; // env | change | project | user | default | unset
 }
 
+/**
+ * Every OPSX_* role env var the loop may export. exportModelEnv() clears ALL of
+ * these from process.env before applying a change's resolved config, so a
+ * previous loop's exports can never leak into a later loop (or into the gate's
+ * author-marker resolution, which treats env as the highest-precedence layer).
+ * (opsx-loop-kickoff.loop-exports-resolved-role-models)
+ */
+export const OPSX_MODEL_ENV_KEYS = [
+	"OPSX_AUTHOR_MODEL",
+	"OPSX_REVIEW_MODELS",
+	"OPSX_IMPL_MODEL",
+	"OPSX_AUTHOR_IN_SESSION",
+] as const;
+
 /** Parse one `opsx models <role> --json` stdout line; null on malformed input. */
 export function parseModelsJson(stdout: string): ResolvedModel | null {
 	try {
@@ -258,11 +272,15 @@ export function parseLoopBudget(reviewMd: string): number | undefined {
 	if (lines[0]?.trim() !== "---") return undefined;
 	for (let i = 1; i < lines.length; i++) {
 		if (lines[i].trim() === "---") break;
-		const m = lines[i].match(/^\s*loop_max_iterations\s*:\s*(\d+)/);
+		// The WHOLE value must be a positive integer (anchored): `80junk`, `-1`,
+		// `abc80`, quoted values are unparseable and yield undefined (unbounded),
+		// per the spec's "absent or unparseable => budget unset" contract.
+		const m = lines[i].match(/^\s*loop_max_iterations\s*:\s*(\d+)\s*$/);
 		if (m) {
 			const n = Number.parseInt(m[1], 10);
 			if (Number.isFinite(n) && n > 0) return n;
 		}
+		if (/^\s*loop_max_iterations\s*:/.test(lines[i])) return undefined;
 	}
 	return undefined;
 }

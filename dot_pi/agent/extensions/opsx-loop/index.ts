@@ -22,6 +22,7 @@ import {
 	gateFailKey,
 	hashDir,
 	LOOP_SUBCOMMANDS,
+	OPSX_MODEL_ENV_KEYS,
 	parseDonenessGaps,
 	parseLoopArg,
 	parseLoopBudget,
@@ -121,6 +122,10 @@ function exportModelEnv(change: string, cwd: string): string[] {
 		impl: resolveModel("impl", change, cwd),
 		authorInSession: resolveModel("author-in-session", change, cwd),
 	});
+	// Clear ALL role keys first: a prior loop's exports must not leak into this
+	// change (stale env is the highest-precedence resolver layer and would both
+	// misroute models and force author-marker enforcement on unrelated changes).
+	for (const k of OPSX_MODEL_ENV_KEYS) delete process.env[k];
 	for (const [k, v] of Object.entries(env)) process.env[k] = v;
 	return Object.keys(env);
 }
@@ -142,20 +147,54 @@ function bodyField(reviewMd: string, name: string): string | undefined {
 	return v && !v.startsWith("<") ? v : undefined;
 }
 
-/** Run opsx gate as the judge. exit 0 = met. Never rejects (non-fatal on spawn error). */
+/**
+ * Hard ceiling on one `opsx gate` run. The gate itself bounds each validator
+ * (OPSX_GATE_CMD_TIMEOUT, default 600s); this is the outer belt-and-suspenders
+ * bound so a wedged gate process can never leave the loop stuck in
+ * `evaluating=true` forever (budget/stall guards only run AFTER the gate
+ * returns). Override with OPSX_GATE_TIMEOUT_MS.
+ */
+function gateTimeoutMs(): number {
+	const raw = process.env.OPSX_GATE_TIMEOUT_MS;
+	if (raw && /^\d+$/.test(raw)) {
+		const n = Number.parseInt(raw, 10);
+		if (n > 0) return n;
+	}
+	return 15 * 60 * 1000; // 15 min: > the gate's own 600s per-validator bound
+}
+
+/** Run opsx gate as the judge. exit 0 = met. Never rejects (non-fatal on spawn error/timeout). */
 function runGate(change: string, worktree: string | undefined, signal: AbortSignal, cwd: string): Promise<LoopVerdict> {
 	const args = ["gate", change];
 	if (worktree) args.push("--worktree", worktree);
 	return new Promise((resolve) => {
 		let out = "";
+		let timedOut = false;
 		try {
 			const child = spawn("opsx", args, { signal, cwd });
+			const ms = gateTimeoutMs();
+			const timer = setTimeout(() => {
+				timedOut = true;
+				try {
+					child.kill("SIGKILL");
+				} catch {
+					/* already gone */
+				}
+			}, ms);
 			child.stdout?.on("data", (d) => { out += String(d); });
 			child.stderr?.on("data", (d) => { out += String(d); });
-			child.on("error", (e: any) =>
-				resolve({ met: false, reason: `opsx gate failed to execute: ${e?.message ?? "unknown"}` }),
-			);
-			child.on("close", (code) => resolve(verdictFromExit(code, out)));
+			child.on("error", (e: any) => {
+				clearTimeout(timer);
+				resolve({ met: false, reason: `opsx gate failed to execute: ${e?.message ?? "unknown"}` });
+			});
+			child.on("close", (code) => {
+				clearTimeout(timer);
+				if (timedOut) {
+					resolve({ met: false, reason: `GATE-FAIL timeout 1 opsx gate exceeded ${ms}ms and was killed` });
+					return;
+				}
+				resolve(verdictFromExit(code, out));
+			});
 		} catch (e: any) {
 			resolve({ met: false, reason: `opsx gate failed to execute: ${e?.message ?? "unknown"}` });
 		}
@@ -217,10 +256,18 @@ function readDoneness(
 	return { state: classifyDoneness(md), gaps: md == null ? [] : parseDonenessGaps(md) };
 }
 
-/** Run `opsx models <args>` synchronously with cwd = repo; returns combined output. */
+/**
+ * Run `opsx models <args>` synchronously with cwd = the session dir; returns
+ * combined output. OPSX_ROOT is deliberately NOT forced: `opsx models` walks
+ * ancestors of cwd to find the repo's openspec/, which works from any
+ * subdirectory (forcing OPSX_ROOT=cwd broke `--layer project` when the pi
+ * session cwd was not the repo root).
+ */
 function runModels(args: string[], cwd: string): { code: number; out: string } {
 	try {
-		const r = spawnSync("opsx", ["models", ...args], { encoding: "utf-8", timeout: 10000, cwd, env: { ...process.env, OPSX_ROOT: cwd } });
+		const env = { ...process.env };
+		delete env.OPSX_ROOT;
+		const r = spawnSync("opsx", ["models", ...args], { encoding: "utf-8", timeout: 10000, cwd, env });
 		if (r.error) return { code: 1, out: `opsx models failed to execute: ${r.error.message}` };
 		return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() };
 	} catch (e: any) {
@@ -340,12 +387,20 @@ export default function (pi: ExtensionAPI) {
 			if (parsed.mode === "goal") {
 				// Goal/conversation kickoff: no change name yet. Snapshot existing change
 				// dirs, inject the distill directive, and detect the new change on agent_end.
+				// Pre-change (distilling) budget: configurable via OPSX_DISTILL_MAX_TURNS
+				// (positive integer). Unset = unbounded; the distill stall guard
+				// (lastDirs, STALL_LIMIT) is the backstop either way.
+				const distillRaw = process.env.OPSX_DISTILL_MAX_TURNS;
+				const distillBudget =
+					distillRaw && /^\d+$/.test(distillRaw) && Number.parseInt(distillRaw, 10) > 0
+						? Number.parseInt(distillRaw, 10)
+						: undefined;
 				loop = {
 					goal: parsed.goal,
 					awaitingChange: true,
 					preChangeDirs: listChangeDirs(ctx.cwd),
 					turns: 0,
-					maxTurns: undefined, // unbounded until a change with a configured budget is adopted
+					maxTurns: distillBudget, // replaced by the change's own budget on adoption
 					active: true,
 					evaluating: false,
 					stallCount: 0,

@@ -119,6 +119,16 @@ eq "role-model-resolver: author-in-session --json default" '{"value":true,"sourc
 eq "role-model-resolver: author-in-session env false" "false" "$(OPSX_AUTHOR_IN_SESSION=false run author-in-session)"
 eq "role-model-resolver: author-in-session front-matter false" '{"value":false,"source":"change"}' "$(run author-in-session --change demo --json)"
 
+# --- option hygiene: missing option values exit 2 immediately ----------------
+# (regression: `shift 2` with one arg left never shifts -> infinite parse loop)
+clear_env
+eq "role-model-resolver: missing --change value exits 2 (no hang)" "2" \
+	"$( ( perl -e 'alarm 5; exec @ARGV or die' "$OPSX" models author --change ) >/dev/null 2>&1; echo $? )"
+eq "config-conventions: missing --layer value exits 2 (no hang)" "2" \
+	"$( ( perl -e 'alarm 5; exec @ARGV or die' "$OPSX" models set author x --layer ) >/dev/null 2>&1; echo $? )"
+eq "config-conventions: verb-mode missing --change value exits 2 (no hang)" "2" \
+	"$( ( perl -e 'alarm 5; exec @ARGV or die' "$OPSX" models get author --change ) >/dev/null 2>&1; echo $? )"
+
 echo "-----"
 echo "opsx models: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]

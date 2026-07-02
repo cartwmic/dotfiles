@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildModelEnv, classifyDoneness, donenessRatchet, gateFailKey, hashDir, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseModelsJson, verdictFromExit } from "./helpers.ts";
+import { buildModelEnv, classifyDoneness, donenessRatchet, gateFailKey, hashDir, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseModelsJson, verdictFromExit } from "./helpers.ts";
 
 describe("doneness stall helpers — opsx-loop-kickoff.stall-detection-stops-the-loop", () => {
 	const DONE = (v: string, gaps: string[] = []) =>
@@ -99,6 +99,13 @@ describe("parseLoopBudget — opsx-loop-kickoff.budget-from-review-front-matter"
 	test("undefined (unbounded) on non-positive / non-numeric", () => {
 		expect(parseLoopBudget(fm("0"))).toBeUndefined();
 		expect(parseLoopBudget("---\nloop_max_iterations: abc\n---")).toBeUndefined();
+		// STRICT whole-value parse: garbage prefix/suffix, negatives, and quoted
+		// values are unparseable => unset, never a silently mangled number.
+		expect(parseLoopBudget(fm("80junk"))).toBeUndefined();
+		expect(parseLoopBudget(fm("abc80"))).toBeUndefined();
+		expect(parseLoopBudget(fm("-1"))).toBeUndefined();
+		expect(parseLoopBudget(fm('"80"'))).toBeUndefined();
+		expect(parseLoopBudget(fm("80 "))).toBe(80);
 	});
 	test("undefined (unbounded) on empty input", () => {
 		expect(parseLoopBudget("")).toBeUndefined();
@@ -221,6 +228,21 @@ describe("buildModelEnv — opsx-loop-kickoff.loop-exports-resolved-role-models"
 	test("author_in_session false exported as string", () => {
 		const env = buildModelEnv({ authorInSession: { value: false, source: "change" } });
 		expect(env.OPSX_AUTHOR_IN_SESSION).toBe("false");
+	});
+	test("every exportable key is covered by OPSX_MODEL_ENV_KEYS (leak-proof clear list)", () => {
+		// The extension deletes OPSX_MODEL_ENV_KEYS from process.env before each
+		// export; if buildModelEnv ever grows a key missing from that list, stale
+		// values would leak across sequential loops. Keep the two in lockstep.
+		const env = buildModelEnv({
+			author: { value: "a/m", source: "change" },
+			review: { value: ["a/m", "b/n"], source: "project" },
+			impl: { value: "c/o", source: "user" },
+			authorInSession: { value: false, source: "change" },
+		});
+		for (const k of Object.keys(env)) {
+			expect(OPSX_MODEL_ENV_KEYS as readonly string[]).toContain(k);
+		}
+		expect(Object.keys(env).length).toBe(OPSX_MODEL_ENV_KEYS.length);
 	});
 	test("single-string review still exported", () => {
 		const env = buildModelEnv({ review: { value: "only/one", source: "user" } });
