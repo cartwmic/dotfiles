@@ -34,10 +34,20 @@ When ready to implement, run /opsx-apply
    **IMPORTANT**: Do NOT proceed without understanding what the user wants to build.
 
 2. **Create the change directory**
+
+   First read the project's `openspec/config.yaml` `schema:` field. If it declares a
+   non-default schema (e.g. `opsx-superpowers`), pass it explicitly:
+   ```bash
+   openspec new change "<name>" --schema opsx-superpowers
+   ```
+   Otherwise:
    ```bash
    openspec new change "<name>"
    ```
    This creates a scaffolded change at `openspec/changes/<name>/` with `.openspec.yaml`.
+   Passing `--schema` explicitly is required (see `opsx-skill-integration` spec,
+   "Schema detection at change creation") so the per-change `.openspec.yaml` records the
+   schema even if project config changes later.
 
 2.5 **Detect schema and branch behavior**
 
