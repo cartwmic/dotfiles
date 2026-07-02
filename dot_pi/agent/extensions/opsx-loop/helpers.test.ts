@@ -7,7 +7,62 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildModelEnv, gateFailKey, hashDir, parseLoopArg, parseLoopBudget, parseModelsJson, verdictFromExit } from "./helpers.ts";
+import { buildModelEnv, classifyDoneness, donenessRatchet, gateFailKey, hashDir, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseModelsJson, verdictFromExit } from "./helpers.ts";
+
+describe("doneness stall helpers — opsx-loop-kickoff.stall-detection-stops-the-loop", () => {
+	const DONE = (v: string, gaps: string[] = []) =>
+		`# Doneness\n**Doneness:** ${v}\n**Judge:** m\n` +
+		(gaps.length ? `## Gaps\n${gaps.map((g) => `- ${g}`).join("\n")}\n` : "");
+
+	test("parseDonenessGaps extracts + normalizes + sorts the gap set", () => {
+		expect(parseDonenessGaps(DONE("not", ["B gap", "a gap", "A GAP"]))).toEqual(["a gap", "b gap"]);
+	});
+	test("parseDonenessGaps: absent Gaps section / satisfied file → empty set", () => {
+		expect(parseDonenessGaps(DONE("satisfied"))).toEqual([]);
+		expect(parseDonenessGaps("")).toEqual([]);
+	});
+	test("parseDonenessGaps ignores template placeholder bullets", () => {
+		expect(parseDonenessGaps("## Gaps\n- <unmet intent outcome>\n")).toEqual([]);
+	});
+	test("classifyDoneness: satisfied vs gap (not/absent/unparseable)", () => {
+		expect(classifyDoneness(DONE("satisfied"))).toBe("satisfied");
+		expect(classifyDoneness(DONE("not", ["a"]))).toBe("gap");
+		expect(classifyDoneness(null)).toBe("gap");
+		expect(classifyDoneness("garbage no verdict")).toBe("gap");
+	});
+	test("classifyDoneness: a template comment cannot satisfy the match", () => {
+		expect(classifyDoneness("<!-- **Doneness:** satisfied -->\n**Doneness:** not\n")).toBe("gap");
+	});
+
+	test("ratchet: non-empty strict subset shrinks → progress + updates min", () => {
+		expect(donenessRatchet(["a", "b"], ["a"])).toEqual({ progress: true, min: ["a"] });
+	});
+	test("ratchet: growth is not progress, min unchanged", () => {
+		expect(donenessRatchet(["a"], ["a", "b"])).toEqual({ progress: false, min: ["a"] });
+	});
+	test("ratchet: equal-cardinality swap is not progress", () => {
+		expect(donenessRatchet(["a", "b"], ["a", "c"])).toEqual({ progress: false, min: ["a", "b"] });
+	});
+	test("ratchet: asymmetric oscillation {a,b}→{a}→{a,b}→{a} cannot reset forever", () => {
+		let m: string[] | undefined = ["a", "b"];
+		let r = donenessRatchet(m, ["a"]); // shrink → progress
+		expect(r.progress).toBe(true); m = r.min;
+		r = donenessRatchet(m, ["a", "b"]); // up-swing → no progress
+		expect(r.progress).toBe(false); m = r.min;
+		r = donenessRatchet(m, ["a"]); // down-swing equals min, not a PROPER subset → no progress
+		expect(r.progress).toBe(false);
+		expect(r.min).toEqual(["a"]);
+	});
+	test("ratchet: empty-set sentinel is never progress and never overwrites min", () => {
+		expect(donenessRatchet(["a", "b"], [])).toEqual({ progress: false, min: ["a", "b"] });
+	});
+	test("ratchet: first non-empty observation establishes the baseline (no progress)", () => {
+		expect(donenessRatchet(undefined, ["a", "b"])).toEqual({ progress: false, min: ["a", "b"] });
+	});
+	test("ratchet: reword to same normalized membership is not progress", () => {
+		expect(donenessRatchet(["a", "b"], ["a", "b"])).toEqual({ progress: false, min: ["a", "b"] });
+	});
+});
 
 describe("verdictFromExit — opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge", () => {
 	test("exit 0 is met", () => {

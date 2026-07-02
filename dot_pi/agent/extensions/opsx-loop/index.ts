@@ -17,9 +17,12 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
 	buildModelEnv,
+	classifyDoneness,
+	donenessRatchet,
 	gateFailKey,
 	hashDir,
 	LOOP_SUBCOMMANDS,
+	parseDonenessGaps,
 	parseLoopArg,
 	parseLoopBudget,
 	parseModelsJson,
@@ -46,6 +49,10 @@ interface LoopState {
 	stallKey?: string;
 	stallCount: number;
 	lastProgress?: string;
+	// Running-minimum gap set for the current doneness-blocked streak (undefined
+	// outside that state). The doneness stall signal ratchets against this, not
+	// against change-dir content, so file churn without gap closure trips the stall.
+	minGaps?: string[];
 }
 
 /** Active (non-archive) change-dir names under a repo's openspec/changes. */
@@ -182,6 +189,29 @@ function progressToken(change: string, worktree: string | undefined, cwd: string
 	// unstaged, AND untracked edits uniformly (git index state is irrelevant).
 	const content = hashDir(join(dir, "openspec", "changes", change));
 	return `${head}\n${content}`;
+}
+
+/**
+ * Read the change's doneness.md (from the located worktree, else cwd) and classify
+ * it for stall routing: its state (`satisfied` → ordinary signal; `gap` → the
+ * bounded gap-set ratchet) and its normalized gap set. An absent/unreadable file
+ * is the empty-set `gap` sentinel. The extension parses doneness.md DIRECTLY (never
+ * the gate's free-text message). (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ */
+function readDoneness(
+	change: string,
+	worktree: string | undefined,
+	cwd: string,
+): { state: "satisfied" | "gap"; gaps: string[] } {
+	const dir = worktree ?? cwd;
+	const fp = join(dir, "openspec", "changes", change, "doneness.md");
+	let md: string | null = null;
+	try {
+		if (existsSync(fp)) md = readFileSync(fp, "utf-8");
+	} catch {
+		/* unreadable → treated as the empty-set gap sentinel */
+	}
+	return { state: classifyDoneness(md), gaps: md == null ? [] : parseDonenessGaps(md) };
 }
 
 /** Run `opsx models <args>` synchronously with cwd = repo; returns combined output. */
@@ -417,17 +447,40 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Stall detection: same normalized failed-check set + no observable progress
-			// (HEAD/dirty unchanged) + same worktree, for STALL_LIMIT turns running.
+			// + same worktree, for STALL_LIMIT turns running. WHILE the sole failing check
+			// is `doneness` with a not/absent/unparseable verdict, "progress" is the judge's
+			// gap set strictly shrinking against a running minimum (NOT change-dir content),
+			// so file churn that closes no judged gap trips the stall under an unbounded budget.
 			const key = gateFailKey(verdict.reason);
-			const progress = progressToken(change, session.worktree, ctx.cwd);
 			const worktreeChanged = prevWorktree !== session.worktree;
-			if (!worktreeChanged && key !== "" && key === session.stallKey && progress === session.lastProgress) {
+			const sameFailure = !worktreeChanged && key !== "" && key === session.stallKey;
+			const doneness = key === "doneness" ? readDoneness(change, session.worktree, ctx.cwd) : undefined;
+			let noProgress: boolean;
+			if (doneness && doneness.state === "gap") {
+				// Bounded gap-set ratchet signal.
+				if (!sameFailure) {
+					session.minGaps = doneness.gaps.length > 0 ? doneness.gaps.slice() : undefined;
+					noProgress = false; // streak (re)started this turn
+				} else {
+					const r = donenessRatchet(session.minGaps, doneness.gaps);
+					session.minGaps = r.min;
+					noProgress = !r.progress;
+				}
+				// content/HEAD lastProgress intentionally NOT consulted in gap mode
+			} else {
+				// Ordinary content/HEAD signal (also for a `satisfied` verdict failing on
+				// freshness/provenance, which is re-judged next turn).
+				const progress = progressToken(change, session.worktree, ctx.cwd);
+				noProgress = sameFailure && progress === session.lastProgress;
+				session.lastProgress = progress;
+				session.minGaps = undefined; // reset the ratchet outside the gap-blocked state
+			}
+			if (sameFailure && noProgress) {
 				session.stallCount += 1;
 			} else {
 				session.stallCount = 1;
 			}
 			session.stallKey = key;
-			session.lastProgress = progress;
 			if (session.stallCount >= STALL_LIMIT) {
 				const c = session.change;
 				clearLoop(ctx);

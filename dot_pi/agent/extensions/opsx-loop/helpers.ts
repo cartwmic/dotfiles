@@ -164,6 +164,73 @@ export function gateFailKey(report: string): string {
 }
 
 /**
+ * Parse the normalized doneness GAP SET from a `doneness.md` body: the bullets
+ * under the `## Gaps` heading, lowercased / markup-stripped / whitespace-collapsed
+ * and de-duplicated + sorted for stable set comparison. Template placeholder bullets
+ * (`- <...>`) and an absent/gap-less file yield the EMPTY set (the sentinel).
+ * (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ */
+export function parseDonenessGaps(md: string): string[] {
+	const lines = (md ?? "").split(/\r?\n/);
+	const gaps: string[] = [];
+	let inGaps = false;
+	for (const line of lines) {
+		if (/^#{1,6}\s+/.test(line)) {
+			inGaps = /^#{1,6}\s+gaps\b/i.test(line);
+			continue;
+		}
+		if (!inGaps) continue;
+		const m = line.match(/^\s*[-*]\s+(.*\S)\s*$/);
+		if (!m) continue;
+		const norm = m[1]
+			.replace(/<!--[\s\S]*?-->/g, "")
+			.replace(/[`*_]/g, "")
+			.toLowerCase()
+			.replace(/\s+/g, " ")
+			.trim();
+		if (norm.length > 0 && !norm.startsWith("<")) gaps.push(norm);
+	}
+	return Array.from(new Set(gaps)).sort();
+}
+
+/**
+ * Classify a doneness.md body for stall routing. `satisfied` (a sealed satisfied
+ * verdict that the gate nonetheless failed on freshness/provenance) routes to the
+ * ORDINARY content/HEAD progress signal (re-judged next turn); `gap` (a `not`
+ * verdict, or an absent/unparseable file) routes to the bounded gap-set ratchet.
+ * HTML comments are stripped so a template comment cannot satisfy the match.
+ * (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ */
+export function classifyDoneness(md: string | null): "satisfied" | "gap" {
+	if (md == null) return "gap";
+	const stripped = md.replace(/<!--[\s\S]*?-->/g, "");
+	const m = stripped.match(/^[*_ ]*Doneness[*_ ]*:[*_ ]*([A-Za-z]+)/im);
+	return m && m[1].toLowerCase() === "satisfied" ? "satisfied" : "gap";
+}
+
+/**
+ * Running-minimum gap-set ratchet. Progress is counted ONLY when `current` is a
+ * NON-EMPTY proper subset of the smallest gap set seen this streak (`min`) with
+ * strictly fewer members; such a reduction updates the running minimum. The
+ * empty-set sentinel (absent/unparseable doneness.md) is NEVER progress and NEVER
+ * overwrites `min`. Growth, equal-cardinality swaps, oscillation down-swings to a
+ * seen set, and rewords to the same normalized membership are all not-progress, so
+ * an agent that churns files without monotonically closing judged gaps trips the
+ * stall instead of looping forever under an unbounded budget.
+ * (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ */
+export function donenessRatchet(
+	min: string[] | undefined,
+	current: string[],
+): { progress: boolean; min: string[] | undefined } {
+	if (current.length === 0) return { progress: false, min }; // ∅ sentinel: no progress, no overwrite
+	if (min === undefined) return { progress: false, min: current.slice() }; // establish baseline
+	const minSet = new Set(min);
+	const properSubset = current.length < min.length && current.every((g) => minSet.has(g));
+	return properSubset ? { progress: true, min: current.slice() } : { progress: false, min };
+}
+
+/**
  * Verdict from an opsx gate run: exit 0 = met, any non-zero (or failure to
  * execute) = not met, with the gate's combined output as the reason.
  * Pure; never throws. (opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge)
