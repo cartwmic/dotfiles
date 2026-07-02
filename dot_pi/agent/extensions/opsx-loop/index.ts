@@ -225,10 +225,16 @@ export default function (pi: ExtensionAPI) {
 		`not the user.`;
 
 	const workerDirective = (change: string, report?: string) =>
-		`Use the openspec-loop skill to advance OpenSpec change "${change}" toward a green opsx gate.\n` +
+		`CONTINUE the in-progress OpenSpec change "${change}" — work already underway from a ` +
+		`running opsx-loop, NOT a new request. Do NOT start a new loop, create another change, ` +
+		`re-run \`/opsx-loop\`, or restart the workflow from proposal; resume "${change}" exactly ` +
+		`where it left off and drive it toward a green opsx gate using the openspec-loop skill.\n` +
 		`Run \`opsx gate ${change}\` (with --worktree when applicable), fix the EARLIEST blocking ` +
 		`GATE-FAIL line, delegate any review verdict to a blind subagent, and commit one unit of progress.` +
-		(report ? `\n\nCurrent opsx gate report:\n${report}` : "") +
+		(report
+			? `\n\n"${change}" is NOT done yet — the opsx gate still reports the blocking failures below. ` +
+				`Fix the earliest one; this is not a request to begin new work:\n${report}`
+			: "") +
 		AUTONOMY;
 
 	// Goal/conversation kickoff: establish a frozen intent.md (reuse an existing one
