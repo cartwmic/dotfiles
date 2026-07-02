@@ -12,4 +12,16 @@ gates:
     required: true
   - id: shell-syntax
     run: 'for f in dot_local/bin/executable_*; do bash -n "$f" || exit 1; done'
-    required: false
+    required: true
+  - id: opsx-loop-extension-tests
+    run: bun test dot_pi/agent/extensions/opsx-loop/
+    required: true
+  - id: opsx-cli-tests
+    run: bash tests/opsx-cli/test_opsx_cli.sh
+    required: true
+  - id: opsx-gate-tests
+    run: bash tests/opsx-gate/test_opsx_gate.sh
+    required: true
+  - id: opsx-models-tests
+    run: bash tests/opsx-models/test_opsx_models.sh
+    required: true
