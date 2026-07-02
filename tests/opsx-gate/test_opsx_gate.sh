@@ -304,10 +304,19 @@ mkMdone d-deg; donefile d-deg satisfied
 sed -i.bak 's/^\*\*review_mode:\*\*.*/**review_mode:** degraded-single-model/' "$TMP/openspec/changes/d-deg/doneness.md"
 run d-deg; check "degraded-single-model doneness fails (anti-self-forge-provenance)" 1 $?
 
-# stale reviewed range => FAIL
+# missing review_mode provenance => FAIL (not just literal degraded)
+mkMdone d-nomode; donefile d-nomode satisfied
+sed -i.bak '/^\*\*review_mode:\*\*/d' "$TMP/openspec/changes/d-nomode/doneness.md"
+run d-nomode; rc=$?
+check "missing review_mode provenance fails (anti-self-forge-provenance)" 1 $rc
+grep -q 'GATE-FAIL doneness ' "$TMP/err" && ok "missing review_mode reported under doneness check" || nok "missing review_mode reported under doneness check"
+
+# stale reviewed range => FAIL, reported under the 'doneness' check id
 mkMdone d-stale; donefile d-stale satisfied
 sed -i.bak 's/^\*\*Reviewed Range:\*\*.*/**Reviewed Range:** '"$HEAD_SHA"'..deadbeef/' "$TMP/openspec/changes/d-stale/doneness.md"
-run d-stale; check "stale doneness reviewed range fails (freshness-bound-verdict)" 1 $?
+run d-stale; rc=$?
+check "stale doneness reviewed range fails (freshness-bound-verdict)" 1 $rc
+grep -q 'GATE-FAIL doneness ' "$TMP/err" && ok "stale doneness reported under doneness check id" || nok "stale doneness reported under doneness check id"
 
 # waiver WITH rationale => PASS (no doneness.md needed)
 mkMdone d-waive
