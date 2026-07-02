@@ -150,14 +150,16 @@ input as the goal (never truncated at the first token). WHEN the user issues `/o
 goal` with no following text, the extension SHALL start from the current conversation
 contents. In either case the extension SHALL record an active loop with no change name yet
 (a distilling phase), snapshot the existing active change directories, and inject a worker
-turn directing the agent to establish a frozen `intent.md` — reusing an existing change
+turn directing the agent to DRAFT an `intent.md` baseline — reusing an existing change
 that already captures the intent, or otherwise distilling the goal or conversation into a
-NEW change via openspec-explore/openspec-propose — and then drive that change to a green
-`opsx gate` via the openspec-loop skill. After each subsequent agent turn, WHILE still in
-the distilling phase, the extension SHALL detect a change directory created since the
-snapshot that carries a frozen `intent.md`; once detected it SHALL adopt that change
-(resolving its budget and exporting its role models) and thereafter act as the
-deterministic-judge loop. IF a budget is configured AND no such change appears before it
+NEW change via openspec-explore/openspec-propose — WITHOUT proceeding to implementation.
+After each subsequent agent turn, WHILE still in the distilling phase, the extension SHALL
+detect a change directory created since the snapshot that carries an `intent.md`; once
+detected it SHALL NOT silently adopt the agent-authored baseline: it SHALL stop the
+distilling loop and notify the user that the change is PAUSED for intent confirmation
+(one-shot human confirm, ADR-0014) — the user reviews/edits `intent.md` and arms the
+deterministic-judge loop explicitly with `/opsx-loop <change>` (which resolves the budget
+and exports role models). IF a budget is configured AND no such change appears before it
 is exhausted, THEN the extension SHALL stop the loop and notify the user. INDEPENDENT of the
 budget, the extension SHALL bound the distilling phase with a stall guard: IF no change-directory
 progress occurs (no new change directory appears since the prior distilling turn) for a
@@ -174,10 +176,10 @@ forever under an unset (unbounded) budget.
 - **WHEN** the user issues `/opsx-loop goal` with no following text
 - **THEN** the extension SHALL start a distilling loop directed at distilling the current conversation into a frozen intent, with no goal text
 
-#### Scenario: The new change is detected and adopted
+#### Scenario: The new change is detected and paused for intent confirmation
 - **WHILE** a goal/conversation loop is in its distilling phase
-- **WHEN** a change directory not present at kickoff appears with a frozen `intent.md`
-- **THEN** the extension SHALL adopt that change as the active loop, resolve its budget and role models, and thereafter run `opsx gate <change>` as the deterministic judge each turn
+- **WHEN** a change directory not present at kickoff appears with an `intent.md`
+- **THEN** the extension SHALL stop the distilling loop, SHALL notify the user that the change awaits intent confirmation (naming the change and the intent.md path and instructing `/opsx-loop <change>` to arm), and SHALL NOT inject further turns or run the gate until the user arms the loop explicitly
 
 #### Scenario: No change created within a configured budget stops the loop
 - **WHILE** a goal/conversation loop is in its distilling phase AND a budget is configured

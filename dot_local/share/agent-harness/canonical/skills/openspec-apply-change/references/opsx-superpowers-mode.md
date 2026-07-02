@@ -47,19 +47,22 @@ Then create the worktree on branch `opsx/<name>` per the pi-subagents convention
 
 Worktree Mode defaults to `worktree-required` for ALL Scales (the loop's blast-radius sandbox); `same-tree` is an explicit override.
 
-**On first worktree creation** record the IMMUTABLE diff base = integration-branch merge-base (NOT apply-start HEAD), plus the locator fields, into `review.md`:
+**Creation/reuse is runtime-owned**: call the deterministic lifecycle command instead of hand-rolling git worktree commands — it implements the exact spec semantics (create with immutable merge-base, reuse with base-ancestry check, abort on failure):
 
 ```bash
-git worktree add -B opsx/<name> <worktree-path>            # create
-base=$(git merge-base <integration-branch> opsx/<name>)    # immutable base
-# write to review.md body:  **Diff Base SHA:** $base
-#                           **Worktree Path:** <worktree-path>
-#                           **Integration Branch:** <integration-branch>
+opsx worktree ensure <name> [--integration-branch <b>]
+# On success prints the locator fields to write into review.md body:
+#   WORKTREE-OK <created|reused>
+#   Diff Base SHA: <sha>          # immutable merge-base (NOT apply-start HEAD)
+#   Worktree Path: <path>
+#   Integration Branch: <branch>
 ```
 
-**On reuse** (branch `opsx/<name>` already exists from a prior aborted apply): PRESERVE the recorded `Diff Base SHA`. If it is absent or not an ancestor of `opsx/<name>`, HALT for human repair rather than re-recording a base that would exclude unverified commits.
+**On reuse** (branch `opsx/<name>` already exists from a prior aborted apply): the command PRESERVES the recorded `Diff Base SHA`; if it is absent or not an ancestor of `opsx/<name>`, it exits 1 — HALT for human repair rather than re-recording a base that would exclude unverified commits.
 
-**On creation failure** (path conflict / detached HEAD / no space / permission): ABORT with an actionable error; do NOT proceed to any implementation task.
+**On creation failure** (path conflict / detached HEAD / no space / permission): the command exits 1 with an actionable error — ABORT; do NOT proceed to any implementation task.
+
+**Abandoned change**: `opsx clean <name>` removes the worktree + `opsx/<name>` branch (refuses a dirty worktree without `--force` — unsealed verdict files live uncommitted there).
 
 **Same-tree override**: record `Diff Base SHA` = pre-apply HEAD before the first task; leave `Worktree Path` empty.
 

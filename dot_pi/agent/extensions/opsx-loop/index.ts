@@ -323,18 +323,21 @@ export default function (pi: ExtensionAPI) {
 
 	// Goal/conversation kickoff: establish a frozen intent.md (reuse an existing one
 	// or distill goal/conversation into a NEW change), then hand off to the loop.
+	// Distill phase ONLY drafts the intent baseline; it does NOT proceed to
+	// implementation. The extension pauses at intent detection for a one-shot
+	// human confirmation (ADR-0014): the frozen intent.md is the immutable
+	// baseline every blind reviewer and the doneness judge scores against, so
+	// the loop being scored must not silently author-and-adopt it.
 	const distillDirective = (goal?: string) =>
-		`Start a new OpenSpec change and drive the FULL workflow to a green opsx gate using the openspec-loop skill.\n\n` +
-		`Step 1 — establish the frozen intent:\n` +
-		`- If an active change with a frozen intent.md already captures this work, use it as-is.\n` +
+		`Distill an OpenSpec change with a frozen intent baseline (draft only — do NOT start implementing).\n\n` +
+		`- If an active change with a frozen intent.md already captures this work, say so and stop.\n` +
 		(goal
 			? `- Otherwise distill this goal into a new change: "${goal}".`
 			: `- Otherwise distill our current conversation — the intent we have converged on — into a new change.`) +
-		` Use openspec-explore / openspec-propose to create openspec/changes/<name>/ with a frozen intent.md.\n` +
-		`Step 2 — run the openspec-loop skill against that change: advance propose→apply behind ` +
-		"`opsx gate <name>`, fixing the EARLIEST blocking GATE-FAIL each turn, delegating review " +
-		`verdicts to blind subagents, and committing one unit of progress per turn.\n` +
-		`Announce the new change name as soon as its intent.md is frozen.` +
+		` Use openspec-explore / openspec-propose to create openspec/changes/<name>/ with intent.md.\n` +
+		`Announce the new change name as soon as its intent.md is written, then STOP: the loop ` +
+		`pauses for the user to review and confirm the intent baseline before the autonomous ` +
+		`drive-to-green phase is armed with /opsx-loop <name>.` +
 		AUTONOMY;
 
 	pi.registerCommand("opsx-loop", {
@@ -504,13 +507,17 @@ export default function (pi: ExtensionAPI) {
 					pi.sendUserMessage(distillDirective(session.goal), { deliverAs: "followUp" });
 					return;
 				}
-				session.change = detected;
-				session.awaitingChange = false;
-				session.stallCount = 0; // reset counter on change adoption
-				session.maxTurns = parseLoopBudget(readReview(detected, ctx.cwd));
-				const exported = exportModelEnv(detected, ctx.cwd);
-				const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
-				ctx.ui.notify(`⟳ opsx-loop: change "${detected}" created — gating it now.${modelNote}`, "info");
+				// ONE-SHOT HUMAN CONFIRM (ADR-0014): do NOT silently adopt the
+				// agent-authored intent as the frozen baseline. Stop here; the user
+				// reviews intent.md and arms the gate loop explicitly.
+				clearLoop(ctx);
+				ctx.ui.notify(
+					`⟳ opsx-loop: change "${detected}" distilled — PAUSED for intent confirmation. ` +
+						`Review openspec/changes/${detected}/intent.md (edit it now if the baseline is wrong — ` +
+						`it is frozen once the loop starts), then arm the loop with: /opsx-loop ${detected}`,
+					"info",
+				);
+				return;
 			}
 			const change = session.change as string;
 

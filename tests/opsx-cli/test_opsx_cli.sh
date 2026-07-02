@@ -91,5 +91,51 @@ ABSENT="$TMP/absent-dir/models.yaml"
 OPSX_MODELS_USER_CONFIG="$ABSENT" PATH="$FAKE:$PATH" "$OPSX" models set author NEW >/dev/null 2>&1; rc=$?
 [ $rc -ne 0 ] && [ ! -f "$ABSENT" ] && ok "failed write to absent target creates no file" || nok "atomic absent"
 
+# ---- opsx-cli.worktree-lifecycle-commands ----
+# Runtime-owned lifecycle: create / reuse-with-base-check / halt / clean.
+WTREPO="$TMP/wtrepo/repo"; mkdir -p "$WTREPO"
+git -C "$WTREPO" init -q
+git -C "$WTREPO" config user.email t@t; git -C "$WTREPO" config user.name t
+mkdir -p "$WTREPO/openspec/changes/demo"
+printf '# Review\n' >"$WTREPO/openspec/changes/demo/review.md"
+git -C "$WTREPO" add -A; git -C "$WTREPO" commit -qm seed
+WBASE="$(git -C "$WTREPO" rev-parse HEAD)"
+
+out="$(cd "$WTREPO" && "$OPSX" worktree ensure demo 2>&1)"; rc=$?
+[ $rc -eq 0 ] && printf '%s' "$out" | grep -q '^WORKTREE-OK created' \
+  && ok "worktree ensure creates branch+worktree, prints locator" || nok "worktree ensure create (rc=$rc)"
+printf '%s' "$out" | grep -q "Diff Base SHA: $WBASE" \
+  && ok "worktree ensure records merge-base as Diff Base SHA" || nok "worktree ensure base"
+
+# Reuse without a recorded base in review.md: HALT (exit 1)
+( cd "$WTREPO" && "$OPSX" worktree ensure demo ) >/dev/null 2>&1; rc=$?
+[ $rc -eq 1 ] && ok "reuse without recorded Diff Base SHA halts for human repair" || nok "reuse halt (rc=$rc)"
+
+# Record the base -> reuse succeeds and preserves it
+printf '\n**Diff Base SHA:** %s\n' "$WBASE" >>"$WTREPO/openspec/changes/demo/review.md"
+out="$(cd "$WTREPO" && "$OPSX" worktree ensure demo 2>&1)"; rc=$?
+[ $rc -eq 0 ] && printf '%s' "$out" | grep -q '^WORKTREE-OK reused' \
+  && printf '%s' "$out" | grep -q "Diff Base SHA: $WBASE" \
+  && ok "reuse preserves the recorded immutable base" || nok "reuse preserve (rc=$rc)"
+
+# Creation failure aborts: path conflict (file where the worktree would go)
+mkdir -p "$WTREPO/openspec/changes/demo2"; printf '# Review\n' >"$WTREPO/openspec/changes/demo2/review.md"
+git -C "$WTREPO" add -A; git -C "$WTREPO" commit -qm demo2
+touch "$TMP/wtrepo/repo--opsx-demo2"
+( cd "$WTREPO" && "$OPSX" worktree ensure demo2 ) >/dev/null 2>&1; rc=$?
+[ $rc -eq 1 ] && ok "worktree creation failure aborts with exit 1" || nok "creation failure abort (rc=$rc)"
+rm -f "$TMP/wtrepo/repo--opsx-demo2"
+
+# clean: dirty worktree refused without --force; --force removes worktree+branch
+touch "$TMP/wtrepo/repo--opsx-demo/dirty"
+( cd "$WTREPO" && "$OPSX" clean demo ) >/dev/null 2>&1; rc=$?
+[ $rc -eq 1 ] && ok "clean refuses a dirty worktree without --force" || nok "clean dirty refuse (rc=$rc)"
+( cd "$WTREPO" && "$OPSX" clean demo --force ) >/dev/null 2>&1; rc=$?
+[ $rc -eq 0 ] && [ ! -d "$TMP/wtrepo/repo--opsx-demo" ] \
+  && ! git -C "$WTREPO" show-ref --verify --quiet refs/heads/opsx/demo \
+  && ok "clean --force removes worktree and branch" || nok "clean force (rc=$rc)"
+( cd "$WTREPO" && "$OPSX" clean demo ) >/dev/null 2>&1; rc=$?
+[ $rc -eq 0 ] && ok "clean is idempotent (nothing to clean exits 0)" || nok "clean idempotent (rc=$rc)"
+
 echo "opsx-cli: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]
