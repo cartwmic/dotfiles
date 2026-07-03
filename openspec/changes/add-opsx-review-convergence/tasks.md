@@ -34,14 +34,14 @@
 
 ## 4. Consistency + validation
 
-- [ ] 4.1 Cross-check pass: grep the edited skill/templates for contradictions with the delta specs (stop-condition wording, default budget value, disclosure trigger, waiver field name) and reconcile; confirm no edit touches `opsx gate` decision logic or the opsx-loop extension
+- [x] 4.1 Cross-check pass: grep the edited skill/templates for contradictions with the delta specs (stop-condition wording, default budget value, disclosure trigger, waiver field name) and reconcile; confirm no edit touches `opsx gate` decision logic or the opsx-loop extension
   - intent: fix
   - files_allowed:
       - dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md
       - dot_local/share/agent-harness/canonical/skills/openspec-apply-change/references/opsx-superpowers-mode.md
       - dot_local/share/openspec/schemas/opsx-superpowers/templates/*.md
   - allow_new_files: false
-- [ ] 4.2 Run the full opsx-gates.yaml validator set (openspec validate --changes --strict, gate/CLI/models/extension tests, shell syntax) and confirm all required gates green with zero regressions
+- [x] 4.2 Run the full opsx-gates.yaml validator set (openspec validate --changes --strict, gate/CLI/models/extension tests, shell syntax) and confirm all required gates green with zero regressions
   - intent: infra
   - files_allowed:
       - openspec/changes/add-opsx-review-convergence/**
