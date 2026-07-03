@@ -697,6 +697,20 @@ run plain-m; check "plain-M passes WITHOUT clarify.md/analyze.md (required-artif
 [ ! -f "$TMP/openspec/changes/plain-m/clarify.md" ] && [ ! -f "$TMP/openspec/changes/plain-m/analyze.md" ] \
   && ok "plain-M fixture genuinely omits clarify/analyze" || nok "plain-M fixture omits clarify/analyze"
 
+# ---- R5-F1: ABSENT code_review_mode derives the fail-closed default ----
+# (opsx-gate-enforcement.mode-aware-verdict-reading): at Scale M an omitted
+# code_review_mode key derives gating-required — missing code-review.md FAILS.
+mkPlainM m-no-crmode
+sed -i.bak '/^code_review_mode: advisory$/d' "$TMP/openspec/changes/m-no-crmode/review.md" && rm -f "$TMP/openspec/changes/m-no-crmode/review.md.bak"
+run m-no-crmode; rc=$?
+[ $rc -ne 0 ] && grep -q 'code-review' "$TMP/err" \
+  && ok "absent code_review_mode at M derives gating-required (missing code-review.md fails)" || nok "absent code_review_mode at M fail-closed (rc=$rc)"
+# Below M: absent key derives advisory — missing code-review.md does NOT block.
+mkchange xs-no-crmode
+sed -i.bak -e 's/^scale: .*/scale: XS/' -e '/^code_review_mode:/d' "$TMP/openspec/changes/xs-no-crmode/review.md" && rm -f "$TMP/openspec/changes/xs-no-crmode/review.md.bak"
+run xs-no-crmode; rc=$?
+grep -q 'code-review' "$TMP/err" && nok "absent code_review_mode below M must stay advisory" || ok "absent code_review_mode below M derives advisory (no code-review block)"
+
 # plain-M does NOT require design.md (D3/D5: design is decision-gated at plain M) --
 mkPlainM plain-m-nodesign
 rm -f "$TMP/openspec/changes/plain-m-nodesign/design.md"

@@ -40,6 +40,44 @@ THE opsx gate command SHALL derive the set of required artifacts from the change
 - **WHEN** opsx gate validates an artifact
 - **THEN** it SHALL apply `openspec validate --strict` to OpenSpec-tracked artifacts and the artifact's own documented field checks to skill-managed artifacts (verify.md, code-review.md, doneness.md), and SHALL NOT apply `openspec validate --strict` to artifacts OpenSpec does not track
 
+### Requirement: Mode Aware Verdict Reading
+
+THE opsx gate command SHALL determine verify, code-review, and doneness outcomes solely by parsing the verdict fields of the respective artifact files (no language-model judgment), and SHALL apply those checks conditioned on the change's Verification Mode, Code Review Mode, and `doneness_mode` read from review.md front-matter, so that the gate never blocks on a check that the declared mode treats as advisory or waived. WHEN `code_review_mode` is ABSENT from the front-matter, the gate SHALL derive the documented fail-closed default before enforcement — `gating-required` at Scale M (with or without `full_rigor`), `advisory` below M — so an omitted key can never read as "not gating-required" and let a Scale-M change pass without a code-review verdict (fail-open by omission).
+
+#### Scenario: Verify enforced only when retained-required
+- **WHILE** Verification Mode is retained-required
+- **IF** verify.md is absent or its Completion Decision is not green
+- **THEN** opsx gate SHALL report verify as a failed check and exit non-zero
+
+#### Scenario: Verify advisory does not block
+- **WHILE** Verification Mode is retained-recommended or inline-only
+- **WHEN** opsx gate evaluates the verify check
+- **THEN** a missing or non-green verify.md SHALL NOT by itself cause a non-zero exit
+
+#### Scenario: Code review enforced only when gating-required
+- **WHILE** Code Review Mode is gating-required
+- **IF** code-review.md is absent or its Verdict is not pass
+- **THEN** opsx gate SHALL report code-review as a failed check and exit non-zero, keeping the gate consistent with the archive gate
+
+#### Scenario: Code review advisory or none does not block
+- **WHILE** Code Review Mode is advisory or none
+- **WHEN** opsx gate evaluates the code-review check
+- **THEN** the code-review verdict SHALL NOT cause a non-zero exit
+
+#### Scenario: Absent code_review_mode derives the fail-closed default at Scale M
+- **WHILE** a change declares Scale M and its review.md front-matter OMITS `code_review_mode`
+- **IF** code-review.md is absent or its Verdict is not pass
+- **THEN** opsx gate SHALL enforce the derived `gating-required` default and report code-review as a failed check with a non-zero exit, never treating the omitted key as non-gating
+
+#### Scenario: Absent code_review_mode below Scale M defaults to advisory
+- **WHILE** a change declares Scale XS or S and its review.md front-matter OMITS `code_review_mode`
+- **WHEN** opsx gate evaluates the code-review check
+- **THEN** the derived default SHALL be `advisory` and a missing code-review.md SHALL NOT by itself cause a non-zero exit
+
+#### Scenario: Doneness read by field and conditioned on mode
+- **WHEN** opsx gate evaluates the doneness check
+- **THEN** it SHALL determine the outcome solely by parsing `doneness.md` fields (no language-model judgment), and SHALL treat the check as required only WHILE the change is Scale M or above and `doneness_mode` is `required`, so a waived or sub-M doneness verdict never blocks — the concrete failure conditions are defined by the Doneness Verdict Enforcement requirement
+
 ## ADDED Requirements
 
 ### Requirement: Land Base Currency
