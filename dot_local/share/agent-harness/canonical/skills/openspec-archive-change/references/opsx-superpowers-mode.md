@@ -1,6 +1,31 @@
 # openspec-archive-change under schema: opsx-superpowers
 
-Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds: HARD-GATE 0 (opsx gate green), HARD-GATE 1 (verify.md), HARD-GATE 2 (AC↔test mapping re-run), HARD-GATE 3 (code-review.md), HARD-GATE 4 (doneness re-check), worktree merge/cleanup, ADR promotion, retrospective-driven hindsight memory promotion.
+Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds: HARD-GATE A (opsx archive-check), HARD-GATE 0 (opsx gate green), HARD-GATE 1 (verify.md), HARD-GATE 2 (AC↔test mapping re-run), HARD-GATE 3 (code-review.md), HARD-GATE 4 (doneness re-check), worktree merge/cleanup, ADR promotion, retrospective-driven hindsight memory promotion, post-archive consolidation cleanup.
+
+## HARD-GATE A: opsx archive-check (land-path currency)
+
+Before ANY archive action — immediately before `openspec archive` — run the
+deterministic land-path verb and QUOTE its output back to the user verbatim:
+
+```bash
+opsx archive-check <name>
+```
+
+It asserts land-base currency (`git merge-base opsx/<name> main` == `git rev-parse
+main`; branch-absent ⇒ satisfied same-tree exemption), an ADR duplicate-number scan,
+and an advisory multi-dir-commit detector (advisory only — it never affects the exit
+code). If `opsx archive-check` exits NON-ZERO, REFUSE archive and print the quoted
+output plus the remedy it names (typically rebase `opsx/<name>` onto `main`):
+
+```
+⛔ Archive refused.
+opsx archive-check <name> exited non-zero:
+  <quoted archive-check output>
+Resolve (e.g. rebase the change branch onto main) and re-run before archiving.
+```
+
+Do NOT proceed to HARD-GATE 0 until archive-check exits 0 (or a human records an
+explicit override via the Override path below).
 
 ## HARD-GATE 0: opsx gate green (primary)
 
@@ -170,6 +195,26 @@ After all HARD-GATEs pass (or are overridden) and the worktree is merged+removed
 - Assess delta spec sync
 - Perform the archive (`mv openspec/changes/<name> openspec/changes/archive/YYYY-MM-DD-<name>`)
 - Display summary
+
+## Post-archive: consolidation cleanup (D8)
+
+`openspec archive` applies this change's ADDED/REMOVED deltas into the spec-of-record;
+no spec content is hand-migrated (the deltas carry everything). A REMOVED delta can
+leave an empty `openspec/specs/<cap>/` directory behind. AFTER the archive move and
+BEFORE the archive commit:
+
+1. Delete any now-empty `openspec/specs/<cap>/` directories the archive left behind
+   (a capability whose spec was fully removed):
+   ```bash
+   find openspec/specs -type d -empty -delete
+   ```
+2. Re-run the spec validator and require it GREEN before committing:
+   ```bash
+   openspec validate --specs --strict
+   ```
+   If it is not green, do NOT commit the archive — investigate the dangling/removed
+   spec first. Only commit the archive (path-scoped to the moved change dir + the
+   touched `openspec/specs/**`) once `openspec validate --specs --strict` is green.
 
 Summary should additionally show:
 ```

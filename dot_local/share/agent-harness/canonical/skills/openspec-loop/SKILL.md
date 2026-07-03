@@ -21,6 +21,13 @@ budget) and subagent dispatch are adapters.
   immutable baseline; never edit it without explicit human authorization.
 - `opsx gate` is on PATH. The gate — not your judgment — defines "done".
 
+**Tier vocabulary.** Scale is `XS | S | M` plus an optional boolean `full_rigor`
+front-matter key (default false). `full_rigor: true` restores the former L/XL extras
+(standalone clarify + blind analyze dispatch + an independently dispatched blind
+doneness judge). Plain Scale M folds clarify into the proposal, runs analyze
+deterministic-only, and rides doneness on the code-review dispatch (below). The
+2-model blind adversarial code review is gating-required at every tier.
+
 ## The cycle
 
 Each turn:
@@ -29,7 +36,11 @@ Each turn:
    - Exit 0 → **stop**; report the change ready to archive.
    - Non-zero → read the report. Findings are emitted in lifecycle dependency
      order; take the **earliest blocking** `GATE-FAIL` line.
-2. Address exactly that failure (one unit of progress), then commit:
+2. Address exactly that failure (one unit of progress), then commit. Every commit
+   the loop drives on the INTEGRATION checkout SHALL be path-scoped to the change
+   directory — `git commit -- openspec/changes/<change> <other change-scoped paths>`
+   — never a bare `git commit -a`/`git add -A`, so an unrelated dirty file in the
+   integration tree can never ride along in a loop commit (A2).
 
    | Earliest failure | Action |
    |---|---|
@@ -37,7 +48,7 @@ Each turn:
    | unchecked tasks | implement the next task under its file contract; check it off |
    | failing validation command | fix the code; never weaken the gate |
    | missing/failing review (clarify/analyze/code-review/verify) | **dispatch a blind subagent** (below) |
-   | failing `doneness` (the sole remaining failure at Scale ≥ M) | **dispatch the blind doneness judge** (below); seal `doneness.md` |
+   | failing `doneness` (the sole remaining failure at Scale ≥ M) | seal `doneness.md`: at plain M via the code-review dispatch's final section (designated reviewer = first `review` model); at full_rigor via the **independent blind doneness judge** (below) |
 
 3. Loop. Bound by `loop_max_iterations` (review.md front-matter), mapped onto the
    runtime turn budget so a single budget governs the loop. On budget exhaustion,
@@ -163,11 +174,23 @@ the user it does not satisfy a gating-required review — recommend running
 ### Doneness judge (Scale ≥ M, `doneness_mode: required`)
 
 The deterministic gate proves only *mechanical* doneness. Intent-satisfaction is judged
-by a separate **blind doneness subagent**, sealed into `doneness.md`, and read by the
-gate (which runs no model). Dispatch it **after the mechanical gate checks pass** and no
-fresh `satisfied` verdict exists (i.e. `doneness` is the sole remaining `GATE-FAIL`):
+by a **blind reviewer/judge subagent**, sealed into a separate `doneness.md`, and read by
+the gate (which runs no model). Dispatch it **after the mechanical gate checks pass** and
+no fresh `satisfied` verdict exists (i.e. `doneness` is the sole remaining `GATE-FAIL`).
+The DISPATCH CHANNEL is tier-conditioned — the sealed artifact and its fields are
+identical either way:
 
-- Dispatch one blind subagent on the resolved **`review`** role model (`opsx models
+- **Plain Scale M (no `full_rigor`): COMBINED dispatch.** Do NOT open a separate
+  doneness dispatch. Instead the doneness question rides the blind code-review dispatch
+  as a dedicated, final required section, answered by ONE DESIGNATED reviewer. WHERE the
+  resolved `review` role has more than one model, the designated reviewer is the FIRST
+  model in that set, so exactly one verdict is sealed. That reviewer writes `doneness.md`
+  SEPARATELY from the code-review findings, stamped `review_mode: blind-single-judge`.
+  Co-locating the section never weakens the 2-model blind code review.
+- **Scale M + `full_rigor`: INDEPENDENT dispatch.** Dispatch a separate blind doneness
+  judge subagent (distinct from the code-review reviewers) — the current top-tier
+  behavior.
+- Either way, the judge runs on the resolved **`review`** role model (`opsx models
   review --change <name>`; no new role). Baseline = frozen `intent.md` + the delta ACs,
   judged over `Diff Base SHA..HEAD`. Charter: rule `satisfied` **only** when the frozen
   intent's stated outcomes are met — never demand beyond-scope / gold-plated work.
