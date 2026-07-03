@@ -12,7 +12,7 @@
 # executables. Each subcommand body runs in a subshell function so `exit`,
 # `set`, globals, and PROG stay isolated per subcommand.
 # Capabilities: opsx-cli, opsx-gate-enforcement, opsx-model-config,
-#               opsx-loop-orchestration, opsx-loop.
+#               opsx-loop, opsx-loop.
 set -uo pipefail
 
 opsx_usage() {
@@ -890,7 +890,7 @@ if [ "$rc" -eq 0 ]; then
         else
           [ -n "$(cr_field "$DONE" 'Judge')" ] \
             || fail doneness "doneness.md lacks an adapter-stamped Judge provenance field"
-          # Vocabulary (opsx-doneness-judge): blind-single-judge is the normal
+          # Vocabulary (opsx-adversarial-review): blind-single-judge is the normal
           # single independent blind judge; adversarial-multimodel is the
           # stronger optional form. degraded-single-model (inline, no adapter)
           # and any unknown value fail CLOSED.
@@ -945,7 +945,7 @@ opsx_loop() (
 #               e.g. 'claude -p --dangerously-skip-permissions' | 'codex exec'
 #   MAX_ITERS   iteration budget (default: review.md loop_max_iterations or 40)
 #
-# Capability: opsx-loop-orchestration (fallback continuation).
+# Capability: opsx-loop (fallback continuation).
 set -uo pipefail
 
 CHANGE="${1:?usage: opsx loop <change> [--worktree <path>]}"; shift || true

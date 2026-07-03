@@ -322,8 +322,9 @@ artifacts:
         author_in_session                         — boolean (default true)
         provider / author_provider / review_provider / impl_provider
       A value containing "/" is a complete pi model id used verbatim; a bare id
-      is qualified by the provider keys. These layer above project
-      openspec/opsx-models.yaml and user ~/.config/opsx/models.yaml; unset roles
+      is qualified by the provider keys. These layer above the user
+      ~/.config/opsx/models.yaml (the project openspec/opsx-models.yaml layer is
+      RETIRED and ignored with a warning); unset roles
       fall back to the session model. opsx gate enforces an in-session authoring
       marker only when the `author` role is configured.
       (opsx-workflow-schema.review-front-matter-carries-role-models;

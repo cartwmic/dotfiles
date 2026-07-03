@@ -124,7 +124,7 @@ never a bare `git commit`/`git add -A`, so an unrelated dirty file cannot ride
 along into the archive history:
 ```bash
 git add <repo>/adr/ADR-NNNN-<slug>.md
-git commit -- <repo>/adr/ADR-NNNN-<slug>.md -m "docs(adr): ADR-NNNN <title>"
+git commit -m "docs(adr): ADR-NNNN <title>" -- <repo>/adr/ADR-NNNN-<slug>.md
 ```
 
 ## HARD-GATE 4: retrospective Promote-candidates

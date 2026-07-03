@@ -38,7 +38,7 @@ Each turn:
      order; take the **earliest blocking** `GATE-FAIL` line.
 2. Address exactly that failure (one unit of progress), then commit. Every commit
    the loop drives on the INTEGRATION checkout SHALL be path-scoped to the change
-   directory — `git commit -- openspec/changes/<change> <other change-scoped paths>`
+   directory — `git commit -m "<msg>" -- openspec/changes/<change> <other change-scoped paths>` (message flag BEFORE the `--` pathspec terminator)
    — never a bare `git commit -a`/`git add -A`, so an unrelated dirty file in the
    integration tree can never ride along in a loop commit (A2).
 
@@ -82,8 +82,8 @@ Embed the severity rubric verbatim (single lens; cite the violated baseline elem
 P0 confirmed baseline violation / critical defect · P1 must-fix within the contract ·
 P2 should-fix advisory · P3 nit. **Verdict: pass ⇔ no open P0/P1**; open P2/P3 are
 recorded as warnings and never force another round.
-(opsx-review-convergence.baseline-bounded-verdict-contract,
- opsx-review-convergence.severity-rubric-and-floor)
+(opsx-adversarial-review.baseline-bounded-verdict-contract,
+ opsx-adversarial-review.severity-rubric-and-floor)
 
 ## Review convergence (mandatory)
 
@@ -99,8 +99,8 @@ BLINDNESS RED FLAGS — never include in a blind reviewer prompt: the ledger, pr
 round findings, another reviewer's output. Only the single marked disclosure round
 discloses. PROVENANCE RED FLAG — a sealed multi-round Verdict with no ledger row is
 a provenance defect: repair the ledger before archive.
-(opsx-review-convergence.orchestrator-round-ledger,
- opsx-review-convergence.prose-surface-fidelity)
+(opsx-adversarial-review.orchestrator-round-ledger,
+ opsx-adversarial-review.prose-surface-fidelity)
 
 **Stop conditions** — evaluate BEFORE dispatching the next blind round:
 
@@ -111,7 +111,7 @@ a provenance defect: repair the ledger before archive.
 | budget | completed rounds ≥ `review_max_rounds` (review.md front-matter; absent/invalid ⇒ 5) | disclosure/landing |
 
 A stop with open P0/P1 **never** seals pass and **never** silently continues.
-(opsx-review-convergence.trajectory-stop-and-round-budget)
+(opsx-adversarial-review.trajectory-stop-and-round-budget)
 
 **Disclosure round (max 1 per change).** WHEN verdicts split (≥1 pass + ≥1 fail on
 the same HEAD) for 2 consecutive rounds, or a stop fires while a split is present:
@@ -119,7 +119,7 @@ run ONE deliberately non-blind consensus round — same reviewers, each sees the
 others' findings, produce a joint findings set + verdict — sealed with
 `review_mode: disclosure-consensus` (satisfies multi-model gating only when ≥2
 distinct models participated). Never a second disclosure round.
-(opsx-review-convergence.disclosure-round)
+(opsx-adversarial-review.disclosure-round)
 
 **Decision-audit landing.** IF open P0/P1 remain after stops + any disclosure round:
 halt review cycling and present the user a tiered audit — 🔴 need-your-call /
@@ -133,14 +133,14 @@ it as part of the landing turn. NEVER clear a loop_hold yourself: clearing is
 reserved to the human named re-arm (`/opsx-loop <change>`). WHERE the host has no
 loop_hold support, stop committing so stall detection ends the loop — in both cases
 present the audit once, not every re-injected turn.
-(opsx-loop-orchestration.terminal-landings-set-the-loop-hold) User rulings: **fix** → grants a
+(opsx-loop.terminal-landings-set-the-loop-hold) User rulings: **fix** → grants a
 recorded round-budget extension (note in ledger), resume rounds (ledger continues,
 not reset); **waive** → record the finding user-waived in follow-ups.md AND re-seal
 `Verdict: pass` with the `waived_by_user` field (waived findings + rationale,
 reviewed range unchanged) — pass by explicit human authorization, never
 self-authored; **re-scope** → back to explore/propose.
-(opsx-review-convergence.decision-audit-landing,
- opsx-post-impl-review.waiver-sealed-pass)
+(opsx-adversarial-review.decision-audit-landing,
+ opsx-adversarial-review.waiver-sealed-pass)
 
 **Scope widening (evidence-gated).** intent.md states intended scope in prose. WHEN
 a finding falls outside it: required to meet the frozen intent's outcomes (cite
@@ -149,7 +149,7 @@ BEFORE committing the fix, treat as in-scope; not required → route to
 `follow-ups.md` (create from the template on first routing), advisory, never gates.
 Intent MEANING is never edited — if a fix would change it, halt and ask. Every
 widening surfaces at the landing or gate-green.
-(opsx-review-convergence.scope-widening-protocol)
+(opsx-adversarial-review.scope-widening-protocol)
 
 **Advisory surface audit (property-style intents).** WHERE the intent claims a
 codebase-wide property ("no X anywhere", "impossible via code") rather than an
@@ -157,14 +157,14 @@ enumerable diff: dispatch ONE advisory blind surface-enumeration audit before th
 first implementation task; feed its output into tasks.md and the intent's
 stated-scope prose. Advisory output routes to tasks/scope/follow-ups — it never
 triggers a fix-then-re-review cycle.
-(opsx-review-convergence.advisory-surface-audit)
+(opsx-adversarial-review.advisory-surface-audit)
 
 **Reviewer-model stability.** All blind rounds of a change use the `review` role
 set resolved at the first gating round. RED FLAG — "one more model to confirm" /
 mid-change reviewer additions: prohibited; the stop conditions and landing govern.
 Exception: the user explicitly reconfigures the `review` role (log it in the
 ledger; applies to subsequent rounds only).
-(opsx-review-convergence.reviewer-model-stability)
+(opsx-adversarial-review.reviewer-model-stability)
 
 Capability hook `subagent-dispatch`: use the host adapter (e.g. pi-subagents) when
 registered; if none, run inline, mark `review_mode: degraded-single-model`, and tell
@@ -208,9 +208,9 @@ identical either way:
   `doneness_mode: waived` with a non-empty `doneness_waiver_rationale`. (This keeps the
   adapterless state mapped to the loop's bounded stall signal instead of spinning.)
 
-(opsx-loop-orchestration.doneness-judge-dispatch,
- opsx-loop-orchestration.subagent-review-against-baseline,
- opsx-doneness-judge.blind-scope-anchored-judge)
+(opsx-loop.doneness-judge-dispatch,
+ opsx-loop.subagent-review-against-baseline,
+ opsx-adversarial-review.blind-scope-anchored-judge)
 
 ## Role models (opsx models)
 
@@ -236,7 +236,7 @@ fall back to the session/default model — never hard-fail.
   already presented, blocked state) → set `loop_hold` + reason on the
   integration-checkout review.md instead of relying on prose or stall burn;
   never clear it yourself.
-  (opsx-loop-orchestration.terminal-landings-set-the-loop-hold)
+  (opsx-loop.terminal-landings-set-the-loop-hold)
 
 ## Harness-agnostic fallback
 

@@ -33,7 +33,7 @@ doneness_mode: required
 # empty reason still holds (fail-safe).
 # loop_hold_reason: <why the loop landed — e.g. "decision audit in code-review.md round 4">
 # review_max_rounds: 5 — budget of BLIND gating review rounds per change
-# (opsx-review-convergence). Absent/invalid ⇒ consumers apply the default 5.
+# (opsx-adversarial-review). Absent/invalid ⇒ consumers apply the default 5.
 # Orchestrator-read (skills), not a gate field. A user resume ruling at the
 # decision-audit landing may extend it (recorded in the code-review.md ledger).
 # doneness_mode: required | waived — default required at Scale >= M; a `waived`
@@ -109,7 +109,7 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
 
 ## Scope Expansions
 
-<!-- Evidence-gated widenings (opsx-review-convergence). intent.md states the
+<!-- Evidence-gated widenings (opsx-adversarial-review). intent.md states the
 intended scope in PROSE; the loop may widen the scope of WORK only when
 evidence shows the widening is REQUIRED to meet the frozen intent's outcomes
 (intent MEANING is never edited). One entry per widening; every entry is
