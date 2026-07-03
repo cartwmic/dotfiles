@@ -65,13 +65,11 @@ warn="$("$OPSX" models set review c/m3 2>&1 >/dev/null)"
 [ "$(yq -r '.review' "$OPSX_MODELS_USER_CONFIG")" = "c/m3" ] && printf '%s' "$warn" | grep -qi 'replac' \
   && ok "set review replaces list and warns" || nok "set review warn"
 
-# project layer via OPSX_ROOT; reject when no root
+# project layer RETIRED (design D7): set --layer project rejected, no file written
 PROOT="$TMP/proj"; mkdir -p "$PROOT/openspec"
-OPSX_ROOT="$PROOT" "$OPSX" models set impl x/y --layer project >/dev/null 2>&1
-[ "$(yq -r '.impl' "$PROOT/openspec/opsx-models.yaml")" = "x/y" ] \
-  && ok "project layer targets openspec/opsx-models.yaml" || nok "project layer write"
-NOROOT="$(mktemp -d)"; ( cd "$NOROOT"; OPSX_ROOT="" "$OPSX" models set impl x --layer project >/dev/null 2>&1 ); [ $? -ne 0 ] \
-  && ok "project layer with no root rejected" || nok "project no-root"; rm -rf "$NOROOT"
+OPSX_ROOT="$PROOT" "$OPSX" models set impl x/y --layer project >/dev/null 2>&1; rc=$?
+[ $rc -ne 0 ] && [ ! -f "$PROOT/openspec/opsx-models.yaml" ] \
+  && ok "set --layer project rejected, no openspec/opsx-models.yaml written" || nok "project layer rejected (rc=$rc)"
 
 # list shows roles + sources
 out="$("$OPSX" models list 2>/dev/null)"

@@ -34,8 +34,10 @@ USAGE
 # ============================================================================
 # SUBCOMMAND: models — harness-neutral role->model resolver + write surface.
 # Roles: author | review | impl | author-in-session.  Verbs: set | get | list.
-# Layered resolution (read): env > change review.md front-matter > project
-# openspec/opsx-models.yaml > user ~/.config/opsx/models.yaml > built-in default.
+# Layered resolution (read): env > change review.md front-matter >
+# user ~/.config/opsx/models.yaml > built-in default. The project-layer
+# openspec/opsx-models.yaml is RETIRED (design D7): it is ignored with a
+# one-time stderr warning; pin per-project via change front-matter instead.
 # Spec: opsx-model-config.*, opsx-cli.model-config-write-surface
 # ============================================================================
 opsx_models() (
@@ -78,7 +80,11 @@ opsx_models() (
 			esac
 		done
 		if [ -n "$LAYER" ]; then
-			case "$LAYER" in user|project) ;; *) err "invalid layer: $LAYER (expected user|project)"; exit 2 ;; esac
+			case "$LAYER" in
+				user) ;;
+				project) err "project model layer removed; use review.md front-matter (per-change model pinning); no file written"; exit 2 ;;
+				*) err "invalid layer: $LAYER (expected user)"; exit 2 ;;
+			esac
 		fi
 	fi
 
@@ -97,6 +103,14 @@ opsx_models() (
 	USER_CFG="${OPSX_MODELS_USER_CONFIG:-$HOME/.config/opsx/models.yaml}"
 	PROJECT_CFG=""
 	[ -n "$ROOT" ] && PROJECT_CFG="$ROOT/openspec/opsx-models.yaml"
+	# Project-layer removal (design D7): a lingering project yaml no longer
+	# participates in resolution. Surface EXACTLY ONE stderr warning per
+	# top-level invocation (the sentinel dedupes nested/recursive calls and the
+	# subprocess fan-out in `list`); stdout contract + exit codes are unchanged.
+	if [ -n "$PROJECT_CFG" ] && [ -f "$PROJECT_CFG" ] && [ -z "${OPSX_MODELS_LAYER_WARNED:-}" ]; then
+		echo "$PROG: project model layer removed; use review.md front-matter (ignoring $PROJECT_CFG)" >&2
+		export OPSX_MODELS_LAYER_WARNED=1
+	fi
 
 	HAVE_YQ=0; command -v yq >/dev/null 2>&1 && HAVE_YQ=1
 	yq_warned=0
@@ -157,7 +171,7 @@ opsx_models() (
 				grole="${POS[0]:-}"
 				case "$grole" in
 					author|review|impl|author-in-session) ;;
-					"") err "usage: opsx models get <role> [--layer user|project]"; exit 2 ;;
+					"") err "usage: opsx models get <role> [--layer user]"; exit 2 ;;
 					*) err "unknown role: $grole"; exit 2 ;;
 				esac
 				if [ -z "$LAYER" ]; then
@@ -179,10 +193,10 @@ opsx_models() (
 				srole="${POS[0]:-}"; sval="${POS[1]:-}"
 				case "$srole" in
 					author|review|impl|author-in-session) ;;
-					"") err "usage: opsx models set <role> <value> [--layer user|project]"; exit 2 ;;
+					"") err "usage: opsx models set <role> <value> [--layer user]"; exit 2 ;;
 					*) err "unknown role: $srole (author|review|impl|author-in-session)"; exit 2 ;;
 				esac
-				[ -n "$sval" ] || { err "usage: opsx models set <role> <value> [--layer user|project]"; exit 2 ; }
+				[ -n "$sval" ] || { err "usage: opsx models set <role> <value> [--layer user]"; exit 2 ; }
 				if [ "$srole" = author-in-session ]; then
 					case "$(printf '%s' "$sval" | tr 'A-Z' 'a-z')" in
 						true|false) sval="$(printf '%s' "$sval" | tr 'A-Z' 'a-z')" ;;
@@ -241,9 +255,7 @@ opsx_models() (
 				fi
 			fi
 		fi
-		if [ -n "$PROJECT_CFG" ] && [ -f "$PROJECT_CFG" ] && need_yq; then
-			v="$(yq_scalar "$PROJECT_CFG" "$2")"; [ -n "$v" ] && { G_VAL="$v"; G_SRC=project; return; }
-		fi
+		# project layer retired (design D7): no longer consulted.
 		if [ -f "$USER_CFG" ] && need_yq; then
 			v="$(yq_scalar "$USER_CFG" "$2")"; [ -n "$v" ] && { G_VAL="$v"; G_SRC=user; return; }
 		fi
@@ -272,10 +284,7 @@ opsx_models() (
 				fi
 			fi
 		fi
-		if [ -n "$PROJECT_CFG" ] && [ -f "$PROJECT_CFG" ] && need_yq; then
-			if [ "$ROLE" = review ]; then RAW="$(yq_list "$PROJECT_CFG" "$Y_MODEL")"; else RAW="$(yq_scalar "$PROJECT_CFG" "$Y_MODEL")"; fi
-			[ -n "$RAW" ] && { SRC=project; return; }
-		fi
+		# project layer retired (design D7): no longer consulted.
 		if [ -f "$USER_CFG" ] && need_yq; then
 			if [ "$ROLE" = review ]; then RAW="$(yq_list "$USER_CFG" "$Y_MODEL")"; else RAW="$(yq_scalar "$USER_CFG" "$Y_MODEL")"; fi
 			[ -n "$RAW" ] && { SRC=user; return; }
@@ -566,7 +575,7 @@ if command -v jq >/dev/null 2>&1; then
   author_src="$(OPSX_ROOT="$ART_ROOT" opsx_models author --json --change "$CHANGE" 2>/dev/null | jq -r '.source' 2>/dev/null || true)"
   ais="$(OPSX_ROOT="$ART_ROOT" opsx_models author-in-session --json --change "$CHANGE" 2>/dev/null | jq -r '.value' 2>/dev/null || true)"
   case "$author_src" in
-    env|change|project|user)
+    env|change|user)
       if [ "$ais" != "false" ]; then
         MARKER='<!-- authored: in-session -->'
         for f in "$CDIR/proposal.md" "$CDIR/intent.md" "$CDIR/design.md" "$CDIR/clarify.md" "$CDIR/tasks.md" "$CDIR/plan.md" "$CDIR"/specs/*/spec.md; do
@@ -580,7 +589,9 @@ if command -v jq >/dev/null 2>&1; then
 fi
 
 # Short-circuit: do not run expensive validations while cheap checks are red.
-if [ "$rc" -ne 0 ]; then
+# In --cheap mode the short-circuit is DISABLED (validations are skipped anyway)
+# so verdict-state (verify/code-review/doneness) checks still run and report.
+if [ "$rc" -ne 0 ] && [ "$CHEAP" -eq 0 ]; then
   echo "$PROG: cheap checks failed (change=$CHANGE scale=${SCALE:-?}); validations skipped" >&2
   exit 1
 fi
