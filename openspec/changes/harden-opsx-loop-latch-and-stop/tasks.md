@@ -68,14 +68,14 @@
 
 ## 4. Validation
 
-- [ ] 4.1 Full validator sweep per openspec/opsx-gates.yaml; iterate until green. (AC: all)
+- [x] 4.1 Full validator sweep per openspec/opsx-gates.yaml; iterate until green. (AC: all)
   - intent: fix
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/**
       - dot_local/bin/executable_opsx
       - tests/**
   - allow_new_files: false
-- [ ] 4.2 AC↔test citation check: every canonical AC id above literally present in a test file touched by the diff. (AC: all)
+- [x] 4.2 AC↔test citation check: every canonical AC id above literally present in a test file touched by the diff. (AC: all)
   - intent: test
   - files_allowed:
       - tests/**
