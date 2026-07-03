@@ -412,14 +412,22 @@ set -uo pipefail
 PROG="opsx gate"
 CHANGE=""
 WORKTREE_ARG=""
+CHEAP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --worktree) { [ $# -ge 2 ] && [ -n "$2" ]; } || { echo "$PROG: --worktree requires a value" >&2; exit 2; }; WORKTREE_ARG="$2"; shift 2 ;;
-    -h|--help) echo "usage: $PROG <change> [--worktree <path>]"; exit 0 ;;
+    --cheap) CHEAP=1; shift ;;
+    -h|--help) echo "usage: $PROG <change> [--worktree <path>] [--cheap]"; exit 0 ;;
     -*) echo "$PROG: unknown option $1" >&2; exit 2 ;;
     *) CHANGE="$1"; shift ;;
   esac
 done
+# --cheap (opsx-cli.status-fleet-view consumer, design D1): run ALL deterministic
+# artifact/front-matter/verdict-state checks but SKIP validation-command execution
+# and the Scale>=M validation-source enforcement, and do NOT exit at the cheap-
+# checks short-circuit — so code-review/verify/doneness state still reports. The
+# run is label-visible as gate(cheap) so a green never overclaims validations ran.
+GLABEL="gate"; [ "$CHEAP" -eq 1 ] && GLABEL="gate(cheap)"
 [ -n "$CHANGE" ] || { echo "usage: $PROG <change> [--worktree <path>]" >&2; exit 2; }
 
 ROOT="$(git -C "${OPSX_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" \
@@ -500,6 +508,7 @@ fi
 [ -d "$CDIR" ] || { fail change "change not found: $CHANGE"; exit 1; }
 
 SCALE="$(fm scale)"
+FULL_RIGOR_RAW="$(fm full_rigor)"
 WORKTREE_MODE="$(fm worktree_mode)"
 VERIFY_MODE="$(fm verification_mode)"
 CR_MODE="$(fm code_review_mode)"
@@ -528,18 +537,49 @@ validate_mode doneness_mode "$DONE_MODE" "required waived"
 if [ ! -f "$REVIEW" ]; then
   fail review "review.md absent (required to read Scale)"
 fi
+# Tier collapse (opsx-workflow-schema.scale-adaptive-gating, design D3): the
+# vocabulary is XS|S|M. The retired L/XL labels fail CLOSED with the relabel
+# remedy (former L/XL == "scale: M" + "full_rigor: true").
 case "$SCALE" in
-  XS|S|M|L|XL) ;;
+  XS|S|M) ;;
+  L|XL) fail scale "Scale $SCALE retired; relabel to 'scale: M' + 'full_rigor: true' (former L/XL mapping)" ; SCALE="" ;;
   *) fail scale "Scale absent or unparseable in review.md front-matter" ; SCALE="" ;;
 esac
 
-# Required artifacts by Scale, emitted in lifecycle dependency order.
-case "$SCALE" in
-  XS)      req="proposal tasks" ;;
-  S)       req="proposal specs tasks plan" ;;
-  M|L|XL)  req="review intent proposal specs clarify design analyze tasks plan" ;;
-  *)       req="" ;;
+# full_rigor: optional boolean front-matter flag. Absent => false; any value
+# that is not a parseable boolean fails CLOSED (never silently defaulted).
+FULL_RIGOR=false
+case "$(printf '%s' "$FULL_RIGOR_RAW" | tr '[:upper:]' '[:lower:]')" in
+  ""|false) FULL_RIGOR=false ;;
+  true) FULL_RIGOR=true ;;
+  *) fail full_rigor "unparseable full_rigor value: '$FULL_RIGOR_RAW' (expected true or false); failing closed" ;;
 esac
+
+# Required artifacts by (Scale, full_rigor), emitted in lifecycle dependency order.
+# Plain M drops the standalone clarify.md/analyze.md (clarify open questions live
+# in proposal, analyze is deterministic-checks-only); M + full_rigor restores the
+# full former M/L/XL set. doneness is NOT a structural artifact here — it is a
+# mode-conditioned verdict governed by the Doneness Verdict Enforcement section.
+case "$SCALE" in
+  XS) req="proposal tasks" ;;
+  S)  req="proposal specs tasks plan" ;;
+  M)  if [ "$FULL_RIGOR" = true ]; then
+        req="review intent proposal specs clarify design analyze tasks plan"
+      else
+        req="review intent proposal specs design tasks plan"
+      fi ;;
+  *)  req="" ;;
+esac
+
+# Worktree-mode default derivation (design D6): when worktree_mode is ABSENT from
+# front-matter, derive it by tier — XS/S same-tree, M worktree-required. An
+# explicit value (already validated above) always wins.
+if [ -z "$WORKTREE_MODE" ]; then
+  case "$SCALE" in
+    XS|S) WORKTREE_MODE=same-tree ;;
+    M)    WORKTREE_MODE=worktree-required ;;
+  esac
+fi
 ORDER="review intent proposal specs clarify design analyze tasks plan"
 for a in $ORDER; do
   case " $req " in *" $a "*) ;; *) continue ;; esac
@@ -656,6 +696,10 @@ run_in_impl() {
   fi
 }
 
+# In --cheap mode, skip ALL validation-command execution and the Scale>=M
+# validation-source enforcement (design D1). Everything else (verdict-state,
+# freshness, doneness) still runs below.
+if [ "$CHEAP" -eq 0 ]; then
 if [ -f "$MANIFEST" ] && command -v yq >/dev/null 2>&1; then
   gates_n="$(yq '.gates | length' "$MANIFEST" 2>/dev/null || echo 0)"
   i=0
@@ -688,12 +732,13 @@ fi
 
 # Scale >= M requires at least one agent-independent source unless waived.
 case "$SCALE" in
-  M|L|XL)
+  M)
     if [ "$have_required_source" -eq 0 ] && [ "$VSRC_MODE" != "waived" ]; then
       fail validation-source "Scale $SCALE requires an agent-independent validation source (manifest required:true or OPSX_VALIDATE); none found and validation_source_mode != waived"
     fi
     ;;
 esac
+fi  # end --cheap guard (validation-command execution + validation-source)
 
 # ============================================================================
 # MODE-AWARE VERDICTS + FRESHNESS/PROVENANCE
@@ -823,7 +868,7 @@ waiver_has_rationale() {
 }
 if [ "$rc" -eq 0 ]; then
   case "$SCALE" in
-    M|L|XL)
+    M)
       if [ "$DONE_MODE" = "waived" ]; then
         # Bare waiver (no real rationale) cannot bypass the judge at Scale>=M.
         if ! waiver_has_rationale; then
@@ -865,9 +910,14 @@ fi
 
 # ============================================================================
 if [ "$rc" -eq 0 ]; then
-  echo "GATE-PASS: $CHANGE (${SCALE:-?})"
+  if [ "$CHEAP" -eq 1 ]; then
+    echo "GATE-PASS(cheap): $CHANGE (${SCALE:-?}) [validations not run]"
+  else
+    echo "GATE-PASS: $CHANGE (${SCALE:-?})"
+  fi
   exit 0
 fi
+[ "$CHEAP" -eq 1 ] && echo "$PROG: $GLABEL red (change=$CHANGE scale=${SCALE:-?})" >&2
 exit 1
 
 )
