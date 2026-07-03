@@ -547,19 +547,29 @@ apply:
 
       doneness.md — WHILE a doneness verdict is required (Scale >= M
                     and review.md `doneness_mode: required`), the
-                    openspec-loop orchestration dispatches an
-                    independent BLIND doneness subagent on the
-                    resolved `review` role AFTER the mechanical gate
-                    checks pass, and seals its verdict into
-                    doneness.md from templates/doneness.md (Doneness
-                    satisfied|not + Gaps + adapter-stamped Judge
-                    provenance + Frozen-Intent SHA + Diff Base SHA +
-                    Reviewed Range). opsx gate READS the sealed
-                    fields (no model in the gate) and enforces the
-                    verdict as the sole remaining failure. A bare
-                    `doneness_mode: waived` (no non-empty
-                    doneness_waiver_rationale) fails the gate at
-                    Scale >= M.
+                    openspec-loop orchestration produces a blind
+                    doneness verdict on the resolved `review` role
+                    AFTER the mechanical gate checks pass and seals
+                    it into doneness.md from templates/doneness.md
+                    (Doneness satisfied|not + Gaps + adapter-stamped
+                    Judge provenance + Frozen-Intent SHA + Diff Base
+                    SHA + Reviewed Range). The DISPATCH CHANNEL is
+                    tier-conditioned (design D4; intent B1): at Scale
+                    M WITHOUT full_rigor the doneness question RIDES
+                    the blind code-review dispatch — answered by the
+                    DESIGNATED reviewer (the FIRST model in the
+                    resolved `review` role) as a mandatory final
+                    required section, no separate dispatch — with the
+                    verdict STILL sealed to a SEPARATE doneness.md
+                    stamped `review_mode: blind-single-judge`; WITH
+                    full_rigor an INDEPENDENTLY dispatched blind
+                    doneness judge (a subagent separate from the
+                    code-review reviewers) produces it. In either
+                    case opsx gate READS the sealed fields (no model
+                    in the gate) and enforces the verdict as the sole
+                    remaining failure. A bare `doneness_mode: waived`
+                    (no non-empty doneness_waiver_rationale) fails
+                    the gate at Scale >= M.
                     (opsx-workflow-schema.artifact-graph-definition;
                      opsx-workflow-schema.mode-switchboard-in-review-md)
 
