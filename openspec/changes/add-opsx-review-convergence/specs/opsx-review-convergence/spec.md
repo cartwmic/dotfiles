@@ -49,7 +49,7 @@ Every review finding SHALL be routed to exactly one of: in-scope blocking (P0/P1
 
 ### Requirement: Orchestrator Round Ledger
 
-THE orchestrator SHALL maintain a per-review-type round ledger — round number, per-severity finding counts (P0/P1/P2/P3), per-reviewer verdicts, and the HEAD reviewed — sealed into the review artifact (code-review.md for diff reviews), and the ledger, prior-round findings, and other reviewers' output SHALL NOT appear in any blind reviewer prompt.
+THE orchestrator SHALL maintain a per-review-type round ledger — round number, per-severity finding counts (P0/P1/P2/P3), per-reviewer verdicts, and the HEAD reviewed — sealed into the review artifact (e.g., code-review.md for post-apply diff-review rounds; the pre-implementation analyze artifact for analyze-type gating rounds), and the ledger, prior-round findings, and other reviewers' output SHALL NOT appear in any blind reviewer prompt.
 
 #### Scenario: Ledger row per round
 - **WHEN** a gating review round completes
@@ -61,7 +61,7 @@ THE orchestrator SHALL maintain a per-review-type round ledger — round number,
 
 ### Requirement: Trajectory Stop And Round Budget
 
-THE orchestration SHALL stop dispatching further blind gating review rounds when any of the following holds: (a) the latest round's P0+P1 count is zero (converged); (b) the P0+P1 count has been flat or rising for 2 consecutive rounds (treadmill); or (c) the number of completed rounds has reached the `review_max_rounds` budget (review.md front-matter, default 5 when absent), and a stop under (b) or (c) SHALL route to the split-verdict and decision-audit handling rather than sealing a pass.
+THE orchestration SHALL stop dispatching further blind gating review rounds when any of the following holds: (a) the latest round's P0+P1 count is zero (converged); (b) the P0+P1 count of the two most recent consecutive rounds is flat or rising (treadmill); or (c) the number of completed rounds has reached the `review_max_rounds` budget (review.md front-matter, default 5 when absent), and a stop under (b) or (c) SHALL, WHILE open P0/P1 findings remain, route to the split-verdict and decision-audit handling rather than sealing a pass — WHEN the stopping round already carries zero open P0/P1, condition (a) governs and the verdict is sealed as pass.
 
 #### Scenario: Convergence stops the rounds
 - **WHEN** a round concludes with zero open P0/P1 findings
@@ -111,6 +111,10 @@ IF open P0/P1 findings remain after the stop conditions and any disclosure round
 - **WHEN** the user rules on the audit (fix, waive, or re-scope)
 - **THEN** the orchestration MAY resume review rounds with the ruling applied, and the round ledger SHALL continue (not reset)
 
+#### Scenario: A user waiver clears the blocking set without a forced green
+- **WHEN** the user waives an open P0/P1 finding at the audit
+- **THEN** the finding SHALL be recorded as user-waived (routed to follow-ups.md with the waiver noted) and removed from the open P0/P1 set, so the severity floor's `pass` condition is satisfied by explicit human authorization rather than by the loop forcing a green verdict over a still-open blocker
+
 ### Requirement: Scope Widening Protocol
 
 WHILE the loop is advancing a change, WHEN a finding falls outside the intent's stated scope, THE orchestration SHALL classify it: WHERE evidence shows the finding must be addressed for the frozen intent's outcomes to hold, the scope SHALL be widened — recording an entry in the review.md `Scope Expansions` section with what widened and the evidence — and the finding fixed in-change; otherwise it SHALL be routed to follow-ups.md, and intent.md's meaning SHALL never be edited by the loop.
@@ -149,7 +153,7 @@ All blind gating review rounds of a change SHALL use the reviewer model set reso
 
 #### Scenario: Same set every round
 - **WHEN** any blind gating round after the first is dispatched
-- **THEN** its reviewer model set SHALL equal the set used in the first gating round
+- **THEN** its reviewer model set SHALL equal the set used in the first gating round, UNLESS the user has explicitly reconfigured the resolved `review` role since that round (in which case the change of set is logged in the ledger and applies only to subsequent rounds)
 
 #### Scenario: Mid-change escalation prohibited
 - **IF** rounds are not converging and the orchestration considers additional reviewer models for confirmation
