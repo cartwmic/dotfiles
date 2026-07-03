@@ -48,8 +48,11 @@ review.md is required at EVERY tier (it is the Scale/mode source the gate reads 
 | **M** | typical feature, cross-file but single capability | review, intent, proposal, specs, tasks, plan (+ verify / code-review / **doneness** per modes) — clarify open questions fold into `proposal.md ## Open Questions` and analyze is deterministic-only (no standalone `clarify.md`/`analyze.md`); **design.md is NOT required at plain M — it is decision-gated (authored only when a decision warrants it, D5)** | design (decision-gated), adr (unless decision passes 4-point test), retrospective |
 | **M + `full_rigor: true`** | cross-capability change, breaking change, new capability, migration (the former **L**/**XL**) | all plain-M required + standalone `clarify.md`, + blind `analyze.md` dispatch, + **`design.md`** (the former L/XL full set always carried design), + independently dispatched blind doneness judge, + adr candidates, + adversarial-review-cycle from analyze, + retrospective before archive | — |
 
-The 2-model blind adversarial code review stays gating-required at EVERY tier — the
-tier table never weakens it.
+The 2-model blind adversarial code review discipline is never weakened by the tier
+table: `code_review_mode` DEFAULTS to `gating-required` at Scale M (with or without
+`full_rigor`) and to `advisory` below M when the key is absent — the gate derives
+that default fail-closed, so omitting the key at M can never skip the review. XS/S
+changes may raise it to `gating-required` explicitly.
 
 Heuristic: if you're unsure, pick S. If clarify produces blockers, the schema will tell you to upgrade.
 

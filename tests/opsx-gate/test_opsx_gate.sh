@@ -28,6 +28,9 @@ FAKEBIN="$TMP/fakebin"; mkdir -p "$FAKEBIN"
 # Deterministic stub: openspec validate always succeeds in fixtures.
 cat >"$FAKEBIN/openspec" <<'EOF'
 #!/usr/bin/env bash
+# Record invocations so tests can assert WHEN the gate runs structural
+# validation (R6-F1: skipped iff specs/ absent), then succeed.
+[ -n "$OPSX_TEST_OPENSPEC_LOG" ] && printf '%s\n' "$*" >>"$OPSX_TEST_OPENSPEC_LOG"
 exit 0
 EOF
 chmod +x "$FAKEBIN/openspec"
@@ -710,6 +713,23 @@ mkchange xs-no-crmode
 sed -i.bak -e 's/^scale: .*/scale: XS/' -e '/^code_review_mode:/d' "$TMP/openspec/changes/xs-no-crmode/review.md" && rm -f "$TMP/openspec/changes/xs-no-crmode/review.md.bak"
 run xs-no-crmode; rc=$?
 grep -q 'code-review' "$TMP/err" && nok "absent code_review_mode below M must stay advisory" || ok "absent code_review_mode below M derives advisory (no code-review block)"
+
+# ---- R6-F1: whole-change openspec validate conditioned on specs/ presence ----
+# The real openspec CLI demands >=1 spec delta; XS/S deliberately omit specs/.
+# Gate must SKIP whole-change validation when specs/ is absent (XS/S usable in
+# real workspaces) and RUN it whenever specs/ exists.
+mkchange xs-nospecs
+sed -i.bak 's/^scale: .*/scale: XS/' "$TMP/openspec/changes/xs-nospecs/review.md" && rm -f "$TMP/openspec/changes/xs-nospecs/review.md.bak"
+rm -rf "$TMP/openspec/changes/xs-nospecs/specs"
+export OPSX_TEST_OPENSPEC_LOG="$TMP/openspec-invocations"
+: >"$OPSX_TEST_OPENSPEC_LOG"
+run xs-nospecs; rc=$?
+[ $rc -eq 0 ] && ok "XS without specs/ passes the gate (structure validation skipped)" || nok "XS without specs/ gateable (rc=$rc)"
+grep -q 'validate xs-nospecs' "$OPSX_TEST_OPENSPEC_LOG" && nok "structure validation must be skipped when specs/ absent" || ok "whole-change openspec validate skipped when specs/ absent"
+: >"$OPSX_TEST_OPENSPEC_LOG"
+run green-s; rc=$?
+grep -q 'validate green-s' "$OPSX_TEST_OPENSPEC_LOG" && ok "whole-change openspec validate still runs when specs/ present" || nok "structure validation must run when specs/ present"
+unset OPSX_TEST_OPENSPEC_LOG
 
 # plain-M does NOT require design.md (D3/D5: design is decision-gated at plain M) --
 mkPlainM plain-m-nodesign
