@@ -4,7 +4,7 @@ worktree_mode: worktree-required
 execution_mode: standard
 verification_mode: retained-required
 debug_mode: standard
-review_status: not-requested
+review_status: resolved
 delegation_mode: single-agent
 code_review_mode: gating-required
 loop_max_iterations: 80
@@ -23,7 +23,7 @@ doneness_mode: required
 | Execution Mode | standard | Spec/skill/template prose edits; no strict TDD |
 | Verification Mode | retained-required | verify.md green is an archive HARD-GATE |
 | Debug Mode | standard | — |
-| Review Status | not-requested | Blind rounds pending |
+| Review Status | resolved | 2 blind rounds + 1 disclosure-consensus round converged (pass, 0 open P0/P1) |
 | Delegation Mode | single-agent | Authored in-session; reviews delegated to blind subagents |
 | Worktree Mode | worktree-required | ADR-0008 |
 | Code Review Mode | gating-required | Constitution IX (existing-skill edits) → multi-model adversarial |
