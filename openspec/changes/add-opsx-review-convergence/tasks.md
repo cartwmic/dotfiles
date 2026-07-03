@@ -26,7 +26,7 @@
 
 ## 3. Apply-mode reference (canonical source)
 
-- [ ] 3.1 Extend `openspec-apply-change/references/opsx-superpowers-mode.md`: code-review production runs under the convergence discipline — reviewer dispatch prompt embeds the verdict contract + rubric, verdict computed under the severity floor (pass ⟺ no open P0/P1), ledger sealed in code-review.md covering every round including disclosure, follow-ups.md authored on first out-of-scope routing
+- [x] 3.1 Extend `openspec-apply-change/references/opsx-superpowers-mode.md`: code-review production runs under the convergence discipline — reviewer dispatch prompt embeds the verdict contract + rubric, verdict computed under the severity floor (pass ⟺ no open P0/P1), ledger sealed in code-review.md covering every round including disclosure, follow-ups.md authored on first out-of-scope routing
   - intent: feature
   - files_allowed:
       - dot_local/share/agent-harness/canonical/skills/openspec-apply-change/references/opsx-superpowers-mode.md
