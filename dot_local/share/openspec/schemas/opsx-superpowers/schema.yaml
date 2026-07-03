@@ -340,7 +340,10 @@ artifacts:
         Manual Adjustments — author overrides to defaults
         Execution Notes    — transient observations during apply
 
-      Scale = XS: skip (defaults assumed).
+      review.md is NEVER skipped at ANY Scale (XS included): it is the
+      Scale/mode source the deterministic gate reads FIRST and fails closed
+      without — a change with no parseable Scale is ungateable. At XS the
+      switchboard may be minimal (Scale + derived defaults), but it exists.
 
   # 7. tasks — Per-task file contracts + intent fields
   - id: tasks

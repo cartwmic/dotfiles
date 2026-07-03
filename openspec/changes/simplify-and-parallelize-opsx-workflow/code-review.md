@@ -15,6 +15,7 @@
 | 3 | disclosure-consensus | d3db3f4 | 0 | 1 | 2 | 2 | pass | fail |
 | 4 | blind | 883cfc3 | 3 | 1 | 0 | 1 | fail | fail |
 | 5 | blind | da342a3 | 0 | 1 | 0 | 0 | pass | fail |
+| 6 | blind (budget 6 per user ruling) | 2adca79 | 0 | 1 | 1 | 1 | pass | fail |
 
 \*Round 1 reviewed 726d180..2131023; counts are max-across-reviewers per severity, no cross-reviewer matching.
 
@@ -24,27 +25,29 @@
 - R2 F1 (P0) schema/skill L/XL keying → fixed 78f7d87. F2 (P0) gate artifact table vs D3 → fixed 6eb6a68. F3 (P1) propose made XS/S ungateable → fixed 18f21b1 + 48ccbfc. F4 (P1) non-path-scoped commit prose → fixed 12e7682.
 - R3 (disclosure) DISC-F1 (P1) `git commit -- <path> -m` invalid ordering → fixed 5ca2992. DISC-F2 (P2) schema project-layer prose + D-1 (P2) retired-capability citations → fixed 5ca2992.
 - R4 R4-A (P1) explore skill recommended L/XL → fixed b6751c4. R4-B (P0) template explicit worktree_mode defeated derivation → fixed adfdaf9. R4-C (P0) schema doneness dispatch not tier-conditioned → fixed 61ec88e. R4-D (P0) design.md matrix inconsistencies → fixed 70623a0.
-- R5: opus — zero findings, pass. gpt — R5-F1 (P1): absent `code_review_mode` at Scale M is enforced as non-gating (no derived default), so an M change omitting the key passes without code-review.md.
+- R5: opus — zero findings, pass. gpt — R5-F1 (P1): absent `code_review_mode` at Scale M enforced as non-gating → FIXED 2bede8c per user ruling (derived fail-closed default + spec scenario + pins).
+- R6 (budget extended 5→6 by user ruling): opus — zero findings, pass (probed the R5-F1 fix adversarially: full_rigor interaction, --cheap, scale-emptying paths — all clean). gpt — R6-F1 (P1): unconditional whole-change `openspec validate` made XS/S ungateable in real workspaces (openspec demands ≥1 delta) → FIXED a66a39f- (validate conditioned on specs/ presence, invocation-logged pins); R6-F2 (P2): README overstated review mode as gating at every tier → reworded to the derived default.
 
 ## Decision audit (open — awaiting human ruling)
 
-**R5-F1 adjudication:** the defect is REAL (reproduced) but PRE-EXISTING and
-OUT-OF-DIFF — the identical `CR_MODE` logic ships on main today
-(integration executable_opsx:496/510/713; this diff did not touch the mode
-defaulting path). Under the scope/finding-routing protocol
-(opsx-adversarial-review.finding-routing-and-follow-ups), an out-of-scope
-finding routes to follow-ups rather than gating. However the round budget
-(review_max_rounds: 5) is exhausted with a split verdict (opus pass / gpt
-fail), and a stop with an open P0/P1 never seals pass — so this lands as a
-decision audit instead.
+**R5-F1:** ruled option 2 by the user 2026-07-03 (budget 5→6) — fixed and
+confirmed clean by opus round 6; gpt round 6 did not re-raise it.
+
+**R6-F1/F2 adjudication:** round 6 surfaced one NEW P1 (whole-change
+validate vs the XS/S tiers — an integration defect in this change's own
+matrix, reproduced against the real openspec CLI) and one P2 (README
+wording). Both are FIXED at a66a39f- with pins, but the extended budget (6)
+is now exhausted and the fixes are unconfirmed by a review round. A stop
+with a finding open-at-stop never self-seals pass.
 
 Options for the human ruling:
-1. **Route R5-F1 to follow-ups** (pre-existing, out-of-diff) and seal
-   `Verdict: pass` on re-arm — the four in-diff P0s + four in-diff P1s from
-   rounds 1–4 are all fixed and re-verified by both reviewers' own probes.
-2. **Extend review_max_rounds** (recorded here per the resume-ruling rule),
-   fix R5-F1 in-change (~3 lines: derive `code_review_mode: gating-required`
-   at Scale M when absent + regression test), and run one confirming round.
+1. **Extend review_max_rounds 6→7** and run one confirming blind round at
+   HEAD (recommended — trajectory: opus has passed 5 of 6 rounds incl. two
+   zero-finding rounds; every gpt finding has been fixed same-round; round-6
+   scope shrank to an integration bug + doc wording).
+2. Accept the round-6 fixes on the strength of the pins + validator sweep
+   and seal `Verdict: pass` without a confirming round (protocol-weakening;
+   not recommended).
 3. Waive with rationale (not recommended).
 
 ## Verdict

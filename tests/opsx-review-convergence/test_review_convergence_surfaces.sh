@@ -178,6 +178,11 @@ if grep -qE 'Scale = XL|Scale = L|optional at L' "$TPL/retrospective.md" 2>/dev/
 # --- F3: review.md is never skipped; skipped artifacts get no placeholder ---
 has "propose ref states review.md is NEVER skipped at any Scale" "$PROPOSE_REF" "review.md is NEVER skipped"
 has "propose ref writes NO placeholder for skipped artifacts" "$PROPOSE_REF" "write NO placeholder"
+# R7-F1: the schema.yaml review-artifact instruction and the propose Scale
+# prompt must not tell agents to skip review.md at XS (ungateable change).
+has "schema.yaml review instruction forbids skipping review.md at any Scale" "$SCHEMA" "review.md is NEVER skipped at ANY Scale"
+if grep -qF "Scale = XS: skip (defaults assumed)" "$SCHEMA" 2>/dev/null; then nok "schema.yaml review instruction still says XS skip"; else ok "schema.yaml review instruction no longer says XS skip"; fi
+has "propose Scale prompt includes review.md at XS" "$PROPOSE_REF" "review.md (switchboard) + proposal + tasks"
 
 # --- F4: integration-checkout commits are path-scoped (git commit -- <paths>) ---
 has "apply ref pre-flight commit is path-scoped, -m before --" "$APPLY_REF" "git commit -m \"chore(opsx): pre-flight commit for apply of <name>\" -- openspec/changes"
