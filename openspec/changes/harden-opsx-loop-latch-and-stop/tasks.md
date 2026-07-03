@@ -1,16 +1,16 @@
 ## 1. opsx CLI (single-source path + gate fallback)
 
-- [ ] 1.1 Add read-only `opsx worktree path <change>` subcommand emitting the convention path with no side effects; refactor `worktree ensure` to share the one derivation. (AC: opsx-cli.read-only-worktree-path-emit)
+- [x] 1.1 Add read-only `opsx worktree path <change>` subcommand emitting the convention path with no side effects; refactor `worktree ensure` to share the one derivation. (AC: opsx-cli.read-only-worktree-path-emit)
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx
   - allow_new_files: false
-- [ ] 1.2 Gate worktree resolution: probe the shared convention derivation when the recorded locator is absent/invalid; explicit `--worktree` failures stay loud. (AC: opsx-gate-enforcement.verdict-freshness-and-provenance)
+- [x] 1.2 Gate worktree resolution: probe the shared convention derivation when the recorded locator is absent/invalid; explicit `--worktree` failures stay loud. (AC: opsx-gate-enforcement.verdict-freshness-and-provenance)
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx
   - allow_new_files: false
-- [ ] 1.3 CLI/gate tests: path emit is side-effect-free, fallback resolves convention worktree, both-fail degrades to no-worktree. (AC: opsx-cli.read-only-worktree-path-emit, opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout)
+- [x] 1.3 CLI/gate tests: path emit is side-effect-free, fallback resolves convention worktree, both-fail degrades to no-worktree. (AC: opsx-cli.read-only-worktree-path-emit, opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout)
   - intent: test
   - files_allowed:
       - tests/opsx-cli/**

@@ -137,5 +137,23 @@ touch "$TMP/wtrepo/repo--opsx-demo/dirty"
 ( cd "$WTREPO" && "$OPSX" clean demo ) >/dev/null 2>&1; rc=$?
 [ $rc -eq 0 ] && ok "clean is idempotent (nothing to clean exits 0)" || nok "clean idempotent (rc=$rc)"
 
+# ---- opsx-cli.read-only-worktree-path-emit ----
+# Single-source convention-path derivation: read-only, no side effects.
+mkdir -p "$WTREPO/openspec/changes/demo3"; printf '# Review\n' >"$WTREPO/openspec/changes/demo3/review.md"
+git -C "$WTREPO" add -A; git -C "$WTREPO" commit -qm demo3
+out="$(cd "$WTREPO" && "$OPSX" worktree path demo3 2>&1)"; rc=$?
+case "$out" in */wtrepo/repo--opsx-demo3) [ $rc -eq 0 ] && ok "worktree path emits the convention path when nothing exists" || nok "path convention emit (rc=$rc)" ;; *) nok "path convention emit (rc=$rc out=$out)" ;; esac
+[ ! -e "$TMP/wtrepo/repo--opsx-demo3" ] \
+  && ! git -C "$WTREPO" show-ref --verify --quiet refs/heads/opsx/demo3 \
+  && ok "worktree path is read-only (no branch, no worktree, no file created)" || nok "path no side effects"
+# After ensure, path reports the ACTUAL worktree for the branch (custom paths included)
+( cd "$WTREPO" && "$OPSX" worktree ensure demo3 --path "$TMP/wtrepo/custom-demo3" ) >/dev/null 2>&1
+out="$(cd "$WTREPO" && "$OPSX" worktree path demo3 2>&1)"; rc=$?
+case "$out" in */wtrepo/custom-demo3) [ $rc -eq 0 ] && ok "worktree path prefers the existing branch worktree (the path ensure would reuse)" || nok "path existing emit (rc=$rc)" ;; *) nok "path existing emit (rc=$rc out=$out)" ;; esac
+( cd "$WTREPO" && "$OPSX" worktree path nope ) >/dev/null 2>&1; rc=$?
+[ $rc -eq 1 ] && ok "worktree path unknown change exits 1" || nok "path unknown change (rc=$rc)"
+( cd "$WTREPO" && "$OPSX" worktree path demo3 --path x ) >/dev/null 2>&1; rc=$?
+[ $rc -eq 2 ] && ok "worktree path rejects options" || nok "path rejects options (rc=$rc)"
+
 echo "opsx-cli: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]
