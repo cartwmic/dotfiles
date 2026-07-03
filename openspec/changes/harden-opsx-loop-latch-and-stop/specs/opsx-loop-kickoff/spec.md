@@ -106,10 +106,14 @@ absent or non-`true` `loop_hold` field SHALL leave behavior unchanged.
 - **WHEN** the agent turn ends with review.md front-matter carrying `loop_hold: true` and a non-empty `loop_hold_reason`
 - **THEN** the extension SHALL NOT inject a continuation turn, SHALL clear the loop preserving the worktree, and SHALL notify the user quoting the reason
 
+#### Scenario: Hold true with a missing reason still lands
+- **WHEN** the agent turn ends with review.md front-matter carrying `loop_hold: true` but an empty or absent `loop_hold_reason`
+- **THEN** the extension SHALL still treat the loop as held — it SHALL NOT inject a continuation turn and SHALL clear the loop preserving the worktree — and SHALL notify the user with a generic held-without-reason message, because holding is the fail-safe direction and requires no privilege
+
 #### Scenario: Named re-arm clears the hold and surfaces the reason
 - **WHILE** a change's review.md carries `loop_hold: true`
 - **WHEN** the user issues `/opsx-loop <that-change>`
-- **THEN** the extension SHALL clear the hold fields, SHALL include the prior reason in the arm notification, SHALL append an Execution Notes clearance line, and SHALL arm the loop normally
+- **THEN** the extension SHALL clear the hold fields, SHALL include the prior reason in the arm notification, SHALL append an Execution Notes clearance line, and SHALL then proceed with normal kickoff evaluation (arming a worker turn, or — per the turn-0 gate check — reporting the change ready to archive WITHOUT arming when its gate is already green)
 
 #### Scenario: Goal kickoff never clears a hold
 - **WHILE** any change's review.md carries `loop_hold: true`
