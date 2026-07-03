@@ -50,17 +50,17 @@
 
 ## 3. Skills + templates (Constitution IX surfaces)
 
-- [ ] 3.1 openspec-loop SKILL.md: landing prose sets `loop_hold` on the integration-checkout review.md (never clears it); stall-burn demoted to no-hold-support fallback. (AC: opsx-loop-orchestration.terminal-landings-set-the-loop-hold, opsx-loop-orchestration.review-dispatch-bound-by-convergence-discipline)
+- [x] 3.1 openspec-loop SKILL.md: landing prose sets `loop_hold` on the integration-checkout review.md (never clears it); stall-burn demoted to no-hold-support fallback. (AC: opsx-loop-orchestration.terminal-landings-set-the-loop-hold, opsx-loop-orchestration.review-dispatch-bound-by-convergence-discipline)
   - intent: feature
   - files_allowed:
       - dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md
   - allow_new_files: false
-- [ ] 3.2 apply-mode reference: locator publication step — commit `Worktree Path` + `Diff Base SHA` to the integration checkout at worktree creation. (AC: opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout)
+- [x] 3.2 apply-mode reference: locator publication step — commit `Worktree Path` + `Diff Base SHA` to the integration checkout at worktree creation. (AC: opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout)
   - intent: feature
   - files_allowed:
       - dot_local/share/agent-harness/canonical/skills/openspec-apply-change/references/opsx-superpowers-mode.md
   - allow_new_files: false
-- [ ] 3.3 review.md template: commented `loop_hold`/`loop_hold_reason` keys with set/clear contract; gate ignores them. (AC: opsx-workflow-schema.loop-hold-front-matter-keys)
+- [x] 3.3 review.md template: commented `loop_hold`/`loop_hold_reason` keys with set/clear contract; gate ignores them. (AC: opsx-workflow-schema.loop-hold-front-matter-keys)
   - intent: feature
   - files_allowed:
       - dot_local/share/openspec/schemas/opsx-superpowers/templates/review.md

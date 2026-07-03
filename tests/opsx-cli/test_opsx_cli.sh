@@ -3,6 +3,7 @@
 # Cites acceptance criteria by canonical ID for the verify gate's AC<->test map:
 #   opsx-cli.unified-subcommand-dispatch
 #   opsx-cli.model-config-write-surface
+#   opsx-loop-kickoff.worktree-resolution-convention-fallback
 set -uo pipefail
 
 unset OPSX_AUTHOR_MODEL OPSX_REVIEW_MODELS OPSX_IMPL_MODEL OPSX_AUTHOR_IN_SESSION \

@@ -114,9 +114,15 @@ distinct models participated). Never a second disclosure round.
 halt review cycling and present the user a tiered audit — 🔴 need-your-call /
 🟡 worth-a-glance / 🟢 trust-me — covering open findings, autonomous fix decisions,
 and every Scope Expansions entry. NEVER force green; NEVER dispatch reviewer models
-beyond the resolved `review` set to break a deadlock. Halt loop continuation (host
-loop-stop where available, else stop committing so stall detection ends the loop) —
-present the audit once, not every re-injected turn. User rulings: **fix** → grants a
+beyond the resolved `review` set to break a deadlock. Halt loop continuation by
+setting `loop_hold: true` + `loop_hold_reason` (pointing at the audit) in the
+review.md front-matter of the INTEGRATION checkout — the copy the loop host reads;
+writing only the worktree copy split-brains the hold into invisibility — and commit
+it as part of the landing turn. NEVER clear a loop_hold yourself: clearing is
+reserved to the human named re-arm (`/opsx-loop <change>`). WHERE the host has no
+loop_hold support, stop committing so stall detection ends the loop — in both cases
+present the audit once, not every re-injected turn.
+(opsx-loop-orchestration.terminal-landings-set-the-loop-hold) User rulings: **fix** → grants a
 recorded round-budget extension (note in ledger), resume rounds (ledger continues,
 not reset); **waive** → record the finding user-waived in follow-ups.md AND re-seal
 `Verdict: pass` with the `waived_by_user` field (waived findings + rationale,
@@ -203,6 +209,11 @@ fall back to the session/default model — never hard-fail.
 - A clarify blocker or adversarial 🔴-tier decision needing the owner → pause and ask.
 - Review convergence stop (treadmill/budget) with open P0/P1 → decision-audit
   landing (see Review convergence); the loop halts until the user rules.
+- ANY terminal landing that awaits a human ruling (decision audit, green report
+  already presented, blocked state) → set `loop_hold` + reason on the
+  integration-checkout review.md instead of relying on prose or stall burn;
+  never clear it yourself.
+  (opsx-loop-orchestration.terminal-landings-set-the-loop-hold)
 
 ## Harness-agnostic fallback
 
