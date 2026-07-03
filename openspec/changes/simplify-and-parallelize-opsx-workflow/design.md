@@ -12,8 +12,11 @@ and effectively unusable as a glance view. `opsx gate` already has a two-phase
 structure (cheap checks → validations). Decision: add an internal `--cheap`
 flag to `opsx gate` that runs ALL deterministic file/front-matter/verdict
 checks but SKIPS validation-command execution, and have `opsx status` consume
-it. Status labels the summary `gate(cheap)` so a green never overclaims
-("validations not run"). Full-gate truth stays `opsx gate <change>`.
+it. `--cheap` guards ONLY the validation-command execution + validation-source
+enforcement block — it must NOT exit at the existing cheap-checks short-circuit
+(executable_opsx:~582), so code-review/verify/doneness state still reports
+(analyze D1 nuance). Status labels the summary `gate(cheap)` so a green never
+overclaims ("validations not run"). Full-gate truth stays `opsx gate <change>`.
 Status output: one block per change — change name, Scale (+full_rigor), gate(cheap)
 summary + earliest failing check, worktree path + `valid|invalid|none` on
 branch `opsx/<change>`, `loop_hold` + reason (or `—`), `base: N behind main`
@@ -44,9 +47,14 @@ table becomes a function of (scale, full_rigor):
 - M: + specs/, intent.md, plan.md, verify/code-review per modes, **doneness.md**;
   clarify.md and analyze.md NOT required.
 - M + full_rigor: + clarify.md, analyze.md (the former M/L/XL full set).
-Budget defaults (when `loop_max_iterations` absent): XS=10, S=20, M=40,
-M+full_rigor=80. L/XL inputs fail closed with the relabel message
-("relabel to `scale: M` + `full_rigor: true`").
+Budget defaults are AUTHORING-TIME ONLY (analyze F3 resolution): the
+review.md-authoring skill/template writes `loop_max_iterations` keyed XS=10,
+S=20, M=40, M+full_rigor=80 (workflow-schema home). The pi extension is
+UNCHANGED (absent front-matter value = unbounded, per the opsx-loop capability
+AC); the bash `opsx loop` fallback reads `loop_max_iterations` from
+front-matter when present, keeping its flat 40 only as the absent-value
+fallback (F6). L/XL inputs fail closed with the relabel message ("relabel to
+`scale: M` + `full_rigor: true`").
 **Migration wrinkle (this change itself):** this change is gated by the
 DEPLOYED (old, 5-tier) gate throughout its life — the new gate only goes live
 at post-archive `chezmoi apply`. Its own `scale: XL` therefore stays valid for
@@ -56,9 +64,11 @@ from the worktree. No in-flight relabel needed.
 ## D4 — B1 doneness-combined dispatch at plain M
 
 - Gate: at M (no full_rigor), doneness.md remains REQUIRED (unchanged checks:
-  presence, verdict, freshness, intent-SHA binding) but its accepted provenance
-  set gains `review_mode: blind-single-judge` authored by the DESIGNATED
-  doneness reviewer = first entry of the resolved `review` role (clarify A-1).
+  presence, verdict, freshness, intent-SHA binding), authored by the DESIGNATED
+  doneness reviewer = first entry of the resolved `review` role (clarify A-1)
+  with `review_mode: blind-single-judge` — a value the gate's provenance
+  vocabulary already accepts (executable_opsx:835, analyze F4): no gate vocab
+  edit needed, only the artifact-requirement table changes (D3).
   At M+full_rigor the independent-judge provenance is required exactly as today.
 - Skill (openspec-loop): at plain M the code-review dispatch prompt for the
   designated reviewer carries a mandatory final section — the doneness question

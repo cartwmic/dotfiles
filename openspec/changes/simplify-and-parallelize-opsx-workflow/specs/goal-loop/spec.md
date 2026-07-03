@@ -17,4 +17,5 @@ THE goal-loop capability SHALL be documented as the GENERIC FALLBACK loop driver
 
 #### Scenario: Removal is out of scope
 - **WHILE** this change records the deprecation/fallback status
+- **WHEN** the change's deltas are applied to the spec-of-record
 - **THEN** goal-loop SHALL NOT be removed and no existing requirement or scenario SHALL be deleted or weakened by this change
