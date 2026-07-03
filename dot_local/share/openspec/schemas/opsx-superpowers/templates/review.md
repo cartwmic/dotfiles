@@ -13,6 +13,10 @@ loop_max_iterations: 20
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
+# review_max_rounds: 5 — budget of BLIND gating review rounds per change
+# (opsx-review-convergence). Absent/invalid ⇒ consumers apply the default 5.
+# Orchestrator-read (skills), not a gate field. A user resume ruling at the
+# decision-audit landing may extend it (recorded in the code-review.md ledger).
 # doneness_mode: required | waived — default required at Scale >= M; a `waived`
 # value REQUIRES a non-empty `doneness_waiver_rationale` (a bare waiver fails the gate).
 # doneness_waiver_rationale: <why the semantic doneness judge is waived for this change>
@@ -82,3 +86,15 @@ rationale. Keep the front-matter, the table, and these notes consistent. -->
 non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -->
 
 - YYYY-MM-DD HH:MM — <note>
+
+## Scope Expansions
+
+<!-- Evidence-gated widenings (opsx-review-convergence). intent.md states the
+intended scope in PROSE; the loop may widen the scope of WORK only when
+evidence shows the widening is REQUIRED to meet the frozen intent's outcomes
+(intent MEANING is never edited). One entry per widening; every entry is
+surfaced to the user at the decision-audit landing or gate-green. Out-of-scope
+findings NOT required for the intent route to follow-ups.md instead. -->
+
+- YYYY-MM-DD — <what widened> — evidence: <why the frozen intent's outcomes
+  cannot hold without it; cite the finding/file>
