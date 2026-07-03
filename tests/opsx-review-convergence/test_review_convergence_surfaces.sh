@@ -38,6 +38,7 @@ LOOP_SKILL="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-loop/S
 APPLY_REF="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-apply-change/references/opsx-superpowers-mode.md"
 PROPOSE_REF="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-propose/references/opsx-superpowers-mode.md"
 PROPOSE_SKILL="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-propose/SKILL.md"
+EXPLORE_SKILL="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-explore/SKILL.md"
 ARCHIVE_REF="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-archive-change/references/opsx-superpowers-mode.md"
 ARCHIVE_SKILL="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-archive-change/SKILL.md"
 README="$ROOT/dot_local/share/openspec/schemas/opsx-superpowers/README.md"
@@ -211,6 +212,24 @@ has "propose ref folds clarify into the proposal at plain M" "$PROPOSE_REF" "cla
 has "propose ref places open questions in the proposal" "$PROPOSE_REF" "## Open Questions"
 has "propose ref keeps the 2-option self-resolution discipline" "$PROPOSE_REF" "2-option self-resolution"
 has "propose ref runs analyze deterministic-only at plain M" "$PROPOSE_REF" "deterministic-only analyze"
+
+# --- R4-A: explore skill recommends XS|S|M + full_rigor, NO live L/XL recommendation ---
+has "explore skill recommends the XS | S | M Scale vocabulary" "$EXPLORE_SKILL" "RECOMMEND a Scale tier (\`XS | S | M\`)"
+has "explore skill recommends full_rigor for the former L/XL heuristics" "$EXPLORE_SKILL" "full_rigor"
+if grep -qE '\| S \| M \| L \| XL|new capability, migration, multi-week' "$EXPLORE_SKILL" 2>/dev/null; then nok "explore skill still live-recommends an L/XL Scale tier"; else ok "explore skill has no live L/XL Scale recommendation"; fi
+
+# --- R4-B: review.md template ships NO explicit worktree_mode (key commented out) ---
+if grep -qE '^worktree_mode:' "$TPL/review.md" 2>/dev/null; then nok "review.md template ships an explicit worktree_mode value (defeats D6 derivation)"; else ok "review.md template ships no explicit worktree_mode value"; fi
+has "review.md template comments out the worktree_mode key with the derivation note" "$TPL/review.md" "# worktree_mode: (derived when absent"
+
+# --- R4-C: schema.yaml doneness dispatch is tier-conditioned (plain-M rides code-review, full_rigor independent) ---
+has "schema.yaml plain-M doneness rides the code-review dispatch via the designated reviewer" "$SCHEMA" "DESIGNATED reviewer (the FIRST model"
+has "schema.yaml plain-M doneness sealed as blind-single-judge" "$SCHEMA" "review_mode: blind-single-judge"
+has "schema.yaml keeps the full_rigor INDEPENDENTLY dispatched blind doneness judge" "$SCHEMA" "INDEPENDENTLY dispatched blind"
+
+# --- R4-D2: README required-artifact table includes review.md at EVERY tier ---
+has "README states review.md is required at every tier" "$README" "review.md is required at EVERY tier"
+has "README plain-M row marks design.md as decision-gated (not required)" "$README" "design.md is NOT required at plain M"
 
 # --- models template without the project layer ---
 has "models template retires the project layer" "$TPL/opsx-models.yaml" "project model layer"

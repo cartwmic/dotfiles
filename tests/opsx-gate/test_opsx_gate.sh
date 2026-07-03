@@ -697,6 +697,12 @@ run plain-m; check "plain-M passes WITHOUT clarify.md/analyze.md (required-artif
 [ ! -f "$TMP/openspec/changes/plain-m/clarify.md" ] && [ ! -f "$TMP/openspec/changes/plain-m/analyze.md" ] \
   && ok "plain-M fixture genuinely omits clarify/analyze" || nok "plain-M fixture omits clarify/analyze"
 
+# plain-M does NOT require design.md (D3/D5: design is decision-gated at plain M) --
+mkPlainM plain-m-nodesign
+rm -f "$TMP/openspec/changes/plain-m-nodesign/design.md"
+run plain-m-nodesign; check "plain-M passes WITHOUT design.md (required-artifact-by-scale)" 0 $?
+grep -q 'GATE-FAIL artifact-design' "$TMP/err" && nok "plain-M wrongly demanded design.md" || ok "plain-M omits the design.md requirement"
+
 # M + full_rigor REQUIRES clarify.md + analyze.md ---------------------------
 mkPlainM fr-need
 awk '1; /^scale: M/{print "full_rigor: true"}' "$TMP/openspec/changes/fr-need/review.md" >"$TMP/frn.tmp" \
@@ -708,6 +714,17 @@ grep -q 'GATE-FAIL artifact-analyze' "$TMP/err" && ok "full_rigor demands analyz
 echo "# clarify" >"$TMP/openspec/changes/fr-need/clarify.md"
 echo "# analyze" >"$TMP/openspec/changes/fr-need/analyze.md"
 run fr-need; check "M+full_rigor passes once clarify.md+analyze.md exist (required-artifact-by-scale)" 0 $?
+
+# M + full_rigor REQUIRES design.md (the former L/XL full set always carried design)
+mkPlainM fr-nodesign
+awk '1; /^scale: M/{print "full_rigor: true"}' "$TMP/openspec/changes/fr-nodesign/review.md" >"$TMP/frnd.tmp" \
+  && mv "$TMP/frnd.tmp" "$TMP/openspec/changes/fr-nodesign/review.md"
+echo "# clarify" >"$TMP/openspec/changes/fr-nodesign/clarify.md"
+echo "# analyze" >"$TMP/openspec/changes/fr-nodesign/analyze.md"
+rm -f "$TMP/openspec/changes/fr-nodesign/design.md"
+run fr-nodesign; rc=$?
+check "M+full_rigor fails WITHOUT design.md (required-artifact-by-scale)" 1 $rc
+grep -q 'GATE-FAIL artifact-design' "$TMP/err" && ok "full_rigor demands design.md" || nok "full_rigor demands design.md"
 
 # worktree-mode DERIVATION by tier (design D6) ------------------------------
 # XS/S with ABSENT worktree_mode => same-tree (no worktree enforcement) => passes.
