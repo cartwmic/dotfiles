@@ -10,10 +10,10 @@
 #   opsx-gate-enforcement.verdict-freshness-and-provenance
 #   opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout
 #   opsx-gate-enforcement.doneness-verdict-enforcement
-#   opsx-doneness-judge.sealed-doneness-verdict-artifact
-#   opsx-doneness-judge.freshness-bound-verdict
-#   opsx-doneness-judge.anti-self-forge-provenance
-#   opsx-doneness-judge.scale-gated-with-waiver
+#   opsx-adversarial-review.sealed-doneness-verdict-artifact
+#   opsx-adversarial-review.freshness-bound-verdict
+#   opsx-adversarial-review.anti-self-forge-provenance
+#   opsx-adversarial-review.scale-gated-with-waiver
 set -uo pipefail
 
 OPSX="$(cd "$(dirname "$0")/../.." && pwd)/dot_local/bin/executable_opsx"
@@ -249,7 +249,7 @@ run cr-seal; check "freshness rejects non-verdict change after review (verdict-f
 
 # ============================================================================
 # opsx-gate-enforcement.doneness-verdict-enforcement
-# opsx-doneness-judge.{sealed-doneness-verdict-artifact,freshness-bound-verdict,
+# opsx-adversarial-review.{sealed-doneness-verdict-artifact,freshness-bound-verdict,
 #                      anti-self-forge-provenance,scale-gated-with-waiver}
 # ============================================================================
 HEAD_SHA="$(git -C "$TMP" rev-parse HEAD)"

@@ -12,7 +12,7 @@
 # executables. Each subcommand body runs in a subshell function so `exit`,
 # `set`, globals, and PROG stay isolated per subcommand.
 # Capabilities: opsx-cli, opsx-gate-enforcement, opsx-model-config,
-#               opsx-loop-orchestration, opsx-loop-kickoff.
+#               opsx-loop-orchestration, opsx-loop.
 set -uo pipefail
 
 opsx_usage() {
@@ -826,7 +826,7 @@ freshness_check() {
 # DONENESS VERDICT (intent-satisfaction) — mode-conditioned, parse-only.
 # Spec: opsx-gate-enforcement.doneness-verdict-enforcement
 #       opsx-gate-enforcement.mode-aware-verdict-reading
-#       opsx-doneness-judge.{sealed-doneness-verdict-artifact,freshness-bound-verdict,
+#       opsx-adversarial-review.{sealed-doneness-verdict-artifact,freshness-bound-verdict,
 #                            anti-self-forge-provenance,scale-gated-with-waiver}
 # Emitted ONLY as the sole remaining failure: while any mechanical/verify/code-review
 # check is already red (rc != 0), the doneness line is suppressed (the load-bearing
