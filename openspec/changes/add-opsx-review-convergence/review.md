@@ -34,8 +34,8 @@ doneness_mode: required
 
 ## Diff Base + Worktree locator
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
+**Diff Base SHA:** d45ce8446662429ae276d8ca86d2781cd45f4143
+**Worktree Path:** /Users/cartwmic/.local/share/.opsx-worktrees/add-opsx-review-convergence
 **Integration Branch:** main
 
 ## Manual Adjustments
