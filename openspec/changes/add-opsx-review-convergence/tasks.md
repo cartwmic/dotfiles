@@ -1,16 +1,16 @@
 ## 1. Templates (opsx-superpowers schema)
 
-- [ ] 1.1 Extend `templates/review.md`: add commented `review_max_rounds` front-matter key (default-5 semantics documented) and a `Scope Expansions` section with evidence-entry format
+- [x] 1.1 Extend `templates/review.md`: add commented `review_max_rounds` front-matter key (default-5 semantics documented) and a `Scope Expansions` section with evidence-entry format
   - intent: feature
   - files_allowed:
       - dot_local/share/openspec/schemas/opsx-superpowers/templates/review.md
   - allow_new_files: false
-- [ ] 1.2 Extend `templates/code-review.md`: verdict-contract + severity-rubric header (baseline-bounded contract, single lens, P0-P3 definitions), round-ledger fields on the existing Round tracker (per-reviewer verdicts + reviewed HEAD + consolidated max-across-reviewers counts), `review_mode` vocabulary gains `disclosure-consensus`, and a `waived_by_user` field slot
+- [x] 1.2 Extend `templates/code-review.md`: verdict-contract + severity-rubric header (baseline-bounded contract, single lens, P0-P3 definitions), round-ledger fields on the existing Round tracker (per-reviewer verdicts + reviewed HEAD + consolidated max-across-reviewers counts), `review_mode` vocabulary gains `disclosure-consensus`, and a `waived_by_user` field slot
   - intent: feature
   - files_allowed:
       - dot_local/share/openspec/schemas/opsx-superpowers/templates/code-review.md
   - allow_new_files: false
-- [ ] 1.3 Add new `templates/follow-ups.md`: out-of-scope finding queue (finding, severity, origin round/review-type, routing reason, user-waived marker), authored on first routing, surfaced at archive
+- [x] 1.3 Add new `templates/follow-ups.md`: out-of-scope finding queue (finding, severity, origin round/review-type, routing reason, user-waived marker), authored on first routing, surfaced at archive
   - intent: feature
   - files_allowed:
       - dot_local/share/openspec/schemas/opsx-superpowers/templates/follow-ups.md
