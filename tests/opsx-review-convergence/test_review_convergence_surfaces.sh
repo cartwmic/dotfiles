@@ -43,6 +43,7 @@ ARCHIVE_REF="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-archi
 ARCHIVE_SKILL="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-archive-change/SKILL.md"
 README="$ROOT/dot_local/share/openspec/schemas/opsx-superpowers/README.md"
 SCHEMA="$ROOT/dot_local/share/openspec/schemas/opsx-superpowers/schema.yaml"
+TEMPLATE_REVIEW="$ROOT/dot_local/share/openspec/schemas/opsx-superpowers/templates/review.md"
 
 pass=0; failc=0
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass+1)); }
@@ -183,6 +184,10 @@ has "propose ref writes NO placeholder for skipped artifacts" "$PROPOSE_REF" "wr
 has "schema.yaml review instruction forbids skipping review.md at any Scale" "$SCHEMA" "review.md is NEVER skipped at ANY Scale"
 if grep -qF "Scale = XS: skip (defaults assumed)" "$SCHEMA" 2>/dev/null; then nok "schema.yaml review instruction still says XS skip"; else ok "schema.yaml review instruction no longer says XS skip"; fi
 has "propose Scale prompt includes review.md at XS" "$PROPOSE_REF" "review.md (switchboard) + proposal + tasks"
+# R7-F2: template must not hard-code an advisory code_review_mode that survives
+# a scale: M edit — the key ships commented so the fail-closed derivation governs.
+if grep -qE "^code_review_mode: " "$TEMPLATE_REVIEW" 2>/dev/null; then nok "review.md template still hard-codes code_review_mode"; else ok "review.md template ships code_review_mode commented (derived default governs)"; fi
+has "review.md template documents the code_review_mode derivation" "$TEMPLATE_REVIEW" "derived when absent: M"
 
 # --- F4: integration-checkout commits are path-scoped (git commit -- <paths>) ---
 has "apply ref pre-flight commit is path-scoped, -m before --" "$APPLY_REF" "git commit -m \"chore(opsx): pre-flight commit for apply of <name>\" -- openspec/changes"
