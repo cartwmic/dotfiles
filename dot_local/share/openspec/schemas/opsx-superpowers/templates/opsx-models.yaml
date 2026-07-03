@@ -3,16 +3,21 @@
 # Resolved by the `opsx models` CLI (sibling to `opsx gate`), harness-neutral so
 # the workflow honors it from pi, Codex, Claude, or the bash driver alike.
 #
-# Place this file at EITHER:
-#   - openspec/opsx-models.yaml          (project scope — checked in)
+# Place this file at:
 #   - ~/.config/opsx/models.yaml         (user scope — personal default)
-# A change may also override per-role in its review.md front-matter
-# (author_model / review_models / impl_model / provider / *_provider).
+# A change overrides per-role in its review.md front-matter
+# (author_model / review_models / impl_model / provider / *_provider); that is
+# now the ONLY per-project pinning surface.
 #
 # Resolution order, highest wins:
-#   env > change review.md front-matter > project file > user file > built-in default
+#   env > change review.md front-matter > user file > built-in default
 # The built-in default is the sentinel `session` ("use the session model").
 # Unset roles degrade to the session model; nothing hard-fails.
+#
+# RETIRED: the project-layer `openspec/opsx-models.yaml` no longer participates
+# in resolution. If one exists the resolver IGNORES it and prints a one-time
+# warning that the project model layer has been removed — pin per-project via
+# review.md front-matter instead.
 
 # ── Roles ──────────────────────────────────────────────────────────────────
 # author : the artifact-authoring model. NOTE authoring stays IN the parent
