@@ -1,8 +1,8 @@
 # Retrospective
 
 <!--
-Pre-archive learning capture. Required at Scale = XL; optional at L
-(recommended); skipped at XS/S/M. The Promote-candidates section drives
+Pre-archive learning capture. Required when full_rigor is set (the former
+L/XL); skipped otherwise. The Promote-candidates section drives
 memory promotion: openspec-archive-change parses each row and prompts
 confirm/skip per candidate before calling the hindsight `retain` tool.
 
