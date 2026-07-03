@@ -8,7 +8,7 @@ verification_mode: retained-required
 debug_mode: standard
 review_status: in-review
 loop_hold: true
-loop_hold_reason: "review round budget (5) exhausted with split verdict; decision audit in worktree code-review.md — ruling needed on pre-existing out-of-diff P1 (R5-F1)"
+loop_hold_reason: "extended review budget (6) exhausted; R6-F1 (P1) + R6-F2 (P2) fixed at a66a39f- but unconfirmed — ruling needed: extend to 7 for one confirming round (recommended)"
 delegation_mode: single-agent
 code_review_mode: gating-required
 loop_max_iterations: 80
@@ -54,3 +54,4 @@ review_models: [claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5]
   `git commit -- openspec/changes/simplify-and-parallelize-opsx-workflow` scoping.
 - 2026-07-03: LANDED (loop_hold) — round budget exhausted, split verdict. All 4 in-diff P0s + 4 in-diff P1s fixed across rounds 1–4; round-5 split is on PRE-EXISTING out-of-diff P1 (gate applies no default for absent code_review_mode at M). Ruling options in code-review.md decision audit.
 - 2026-07-03: USER RULING (option 2) — review_max_rounds extended 5→6; R5-F1 (absent code_review_mode at M enforced fail-open) to be fixed in-change with regression test; one confirming blind round then seal.
+- 2026-07-03: LANDED again (loop_hold) — round 6 split; R5-F1 confirmed fixed; NEW R6-F1 (XS/S ungateable under real openspec, in-diff) + R6-F2 (README wording) fixed same-turn with pins; budget 6/6 spent; decision audit updated in worktree code-review.md.
