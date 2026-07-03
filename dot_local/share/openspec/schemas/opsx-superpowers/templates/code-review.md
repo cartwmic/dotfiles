@@ -37,8 +37,8 @@ opsx gate / archive read these fields verbatim:
 
 <!-- Baseline-bounded contract (opsx-review-convergence): a reviewer may FAIL
      this review ONLY for (a) a violation of the frozen baseline — intent.md,
-     delta ACs, design decisions, constitution/domain — or (b) an objective
-     correctness/security defect, even where the baseline is silent. Taste,
+     delta ACs, design decisions, constitution/domain — or (b) an
+     objective correctness/security defect, even where the baseline is silent. Taste,
      style, alternative-design preference, and beyond-scope demands are
      advisory (P2/P3) and cannot gate.
 
@@ -97,4 +97,6 @@ opsx gate / archive read these fields verbatim:
 ## Verdict rationale
 
 <!-- One paragraph: why pass or fail. pass requires P0+P1 = 0 against the baseline
-and an adversarial-multimodel review_mode for Constitution-IX (skill-editing) changes. -->
+and, for Constitution-IX (skill-editing) changes, a multi-model review_mode:
+adversarial-multimodel, or disclosure-consensus when it consolidated ≥2 distinct
+reviewer models. degraded-single-model never satisfies Constitution IX. -->
