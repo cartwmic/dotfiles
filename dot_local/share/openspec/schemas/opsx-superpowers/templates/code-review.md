@@ -35,7 +35,7 @@ opsx gate / archive read these fields verbatim:
 
 ## Verdict contract (embed in every reviewer dispatch prompt)
 
-<!-- Baseline-bounded contract (opsx-review-convergence): a reviewer may FAIL
+<!-- Baseline-bounded contract (opsx-adversarial-review): a reviewer may FAIL
      this review ONLY for (a) a violation of the frozen baseline — intent.md,
      delta ACs, design decisions, constitution/domain — or (b) an
      objective correctness/security defect, even where the baseline is silent. Taste,
@@ -52,7 +52,7 @@ opsx gate / archive read these fields verbatim:
 
 ## Round tracker
 
-<!-- Orchestrator-sealed round ledger (opsx-review-convergence). One row per
+<!-- Orchestrator-sealed round ledger (opsx-adversarial-review). One row per
      gating round, INCLUDING any disclosure round. Consolidated counts = MAX
      across reviewers per severity that round (no cross-reviewer finding
      matching). Reviewer verdicts column: e.g. "opus:fail gpt:pass".

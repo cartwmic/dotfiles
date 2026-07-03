@@ -179,8 +179,8 @@ has "propose ref states review.md is NEVER skipped at any Scale" "$PROPOSE_REF" 
 has "propose ref writes NO placeholder for skipped artifacts" "$PROPOSE_REF" "write NO placeholder"
 
 # --- F4: integration-checkout commits are path-scoped (git commit -- <paths>) ---
-has "apply ref pre-flight commit is path-scoped" "$APPLY_REF" "git commit -- openspec/changes"
-has "archive ref ADR commit is path-scoped to the ADR file" "$ARCHIVE_REF" "git commit -- <repo>/adr"
+has "apply ref pre-flight commit is path-scoped, -m before --" "$APPLY_REF" "git commit -m \"chore(opsx): pre-flight commit for apply of <name>\" -- openspec/changes"
+has "archive ref ADR commit is path-scoped, -m before --" "$ARCHIVE_REF" "git commit -m \"docs(adr): ADR-NNNN <title>\" -- <repo>/adr"
 has "archive ref gates ADR promotion on full_rigor" "$ARCHIVE_REF" "full_rigor only"
 has "archive ref gates retrospective refusal on full_rigor" "$ARCHIVE_REF" "requires retrospective.md before archive"
 
@@ -197,7 +197,7 @@ has "doneness template seals a separate blind-single-judge verdict" "$TPL/donene
 
 # --- A2 path-scoped commit rule (loop skill) ---
 has "loop skill mandates path-scoped integration commits" "$LOOP_SKILL" "path-scoped to the change"
-has "loop skill forbids bare git add -A in loop commits" "$LOOP_SKILL" "git commit -- openspec/changes"
+has "loop skill forbids bare git add -A in loop commits" "$LOOP_SKILL" "git commit -m \"<msg>\" -- openspec/changes"
 
 # --- archive-check invocation + refusal + D8 cleanup (archive surfaces) ---
 has "archive ref runs opsx archive-check pre-archive" "$ARCHIVE_REF" "opsx archive-check"
