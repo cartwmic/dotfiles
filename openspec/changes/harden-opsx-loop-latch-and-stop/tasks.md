@@ -19,7 +19,7 @@
 
 ## 2. opsx-loop extension
 
-- [ ] 2.1 Pure helpers: `loop_hold`/`loop_hold_reason` front-matter parse, active-change inventory builder (committed-intent filter + status), convention-path shell wrapper; unit tests. (AC: opsx-loop-kickoff.loop-hold-blocks-continuation, opsx-loop-kickoff.goal-and-conversation-kickoff)
+- [x] 2.1 Pure helpers: `loop_hold`/`loop_hold_reason` front-matter parse, active-change inventory builder (committed-intent filter + status), convention-path shell wrapper; unit tests. (AC: opsx-loop-kickoff.loop-hold-blocks-continuation, opsx-loop-kickoff.goal-and-conversation-kickoff)
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/helpers.ts
