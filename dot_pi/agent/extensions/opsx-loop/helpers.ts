@@ -312,6 +312,22 @@ export function stripLoopHold(reviewMd: string): string {
 }
 
 /**
+ * The full named-re-arm clearing transform: strip the hold fields and append
+ * the auditable clearance line under Execution Notes (created when absent).
+ * Pure text→text so the extension's file write is a dumb persist.
+ * (opsx-loop-kickoff.loop-hold-blocks-continuation)
+ */
+export function clearHoldText(reviewMd: string, change: string, dateStr: string): { next: string; reason: string } {
+	const hold = parseLoopHold(reviewMd);
+	let next = stripLoopHold(reviewMd);
+	const noteLine = `- ${dateStr} — loop_hold cleared by named re-arm (/opsx-loop ${change}); reason was: ${hold.reason || "(none recorded)"}`;
+	next = next.includes("## Execution Notes")
+		? next.replace("## Execution Notes", `## Execution Notes\n\n${noteLine}`)
+		: `${next}\n\n## Execution Notes\n\n${noteLine}\n`;
+	return { next, reason: hold.reason };
+}
+
+/**
  * Deterministic active-change inventory for the distill kickoff directive:
  * names of change dirs (non-archive) carrying a committed intent.md, with the
  * cheap front-matter scale as status. Directory listing + front-matter parse
