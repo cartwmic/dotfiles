@@ -16,6 +16,7 @@
 | 4 | blind | 883cfc3 | 3 | 1 | 0 | 1 | fail | fail |
 | 5 | blind | da342a3 | 0 | 1 | 0 | 0 | pass | fail |
 | 6 | blind (budget 6 per user ruling) | 2adca79 | 0 | 1 | 1 | 1 | pass | fail |
+| 7 | blind (budget 7 per user ruling) | a66a39f | 0 | 1 | 1 | 0 | pass | fail |
 
 \*Round 1 reviewed 726d180..2131023; counts are max-across-reviewers per severity, no cross-reviewer matching.
 
@@ -26,6 +27,7 @@
 - R3 (disclosure) DISC-F1 (P1) `git commit -- <path> -m` invalid ordering → fixed 5ca2992. DISC-F2 (P2) schema project-layer prose + D-1 (P2) retired-capability citations → fixed 5ca2992.
 - R4 R4-A (P1) explore skill recommended L/XL → fixed b6751c4. R4-B (P0) template explicit worktree_mode defeated derivation → fixed adfdaf9. R4-C (P0) schema doneness dispatch not tier-conditioned → fixed 61ec88e. R4-D (P0) design.md matrix inconsistencies → fixed 70623a0.
 - R5: opus — zero findings, pass. gpt — R5-F1 (P1): absent `code_review_mode` at Scale M enforced as non-gating → FIXED 2bede8c per user ruling (derived fail-closed default + spec scenario + pins).
+- R7 (budget extended 6→7 by user ruling): opus — zero findings, pass (real-CLI probes of the R6 validate-conditioning fix: XS/S pass, broken deltas still fail structure at every tier, no fail-open). gpt — R7-F1 (P1): schema.yaml review-artifact instruction still said 'Scale = XS: skip' and the propose Scale prompt said 'XS: proposal + tasks only' (agent steered into an ungateable change) → FIXED 329a018 with pins; R7-F2 (P2): template hard-coded code_review_mode: advisory survives a scale: M edit → FIXED 60fef27- (key ships commented; derivation governs).
 - R6 (budget extended 5→6 by user ruling): opus — zero findings, pass (probed the R5-F1 fix adversarially: full_rigor interaction, --cheap, scale-emptying paths — all clean). gpt — R6-F1 (P1): unconditional whole-change `openspec validate` made XS/S ungateable in real workspaces (openspec demands ≥1 delta) → FIXED a66a39f- (validate conditioned on specs/ presence, invocation-logged pins); R6-F2 (P2): README overstated review mode as gating at every tier → reworded to the derived default.
 
 ## Decision audit (open — awaiting human ruling)
