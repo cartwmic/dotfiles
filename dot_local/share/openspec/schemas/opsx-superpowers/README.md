@@ -24,26 +24,42 @@ The default `spec-driven` schema is unaffected. Per-project opt-in. Reversible.
 | Analyze phase | no | yes — read-only cross-artifact lint with 7 checks |
 | ADR persistence past archive | no | yes — `openspec-archive-change` skill promotes qualifying decisions to `<repo>/adr/ADR-NNNN-<slug>.md` before archive using `templates/adr.md` (not a schema artifact — see schema.yaml D11 rationale) |
 | Mode switchboard | no | yes — `review.md` front-matter switchboard (Scale, Execution, Verification, Debug, Review-Status, Delegation, Worktree, Code-Review, Loop-Budget, Validation-Source, Doneness, Spec-Level, plus optional model keys — see Mode reference below) |
-| Scale-adaptive artifact gating | no | yes — XS skips heavy artifacts; M is the typical full graph; L/XL add ADR + adversarial review + retrospective |
+| Scale-adaptive artifact gating | no | yes — XS skips heavy artifacts; M is the typical full graph; `full_rigor: true` adds ADR promotion + adversarial-on-analyze + retrospective (the former L/XL extras) |
 | Pre-flight commit before worktree | no | yes (apply step records the immutable merge-base `Diff Base SHA` for file-contract diffs) |
 | Per-task file contracts | no | yes — `files_allowed` / `files_forbidden` / `allow_new_files` + `intent: fix\|feature\|refactor\|infra` |
 | AC↔test ID mapping as verify gate | no | yes — `verify.md` (skill-produced) blocks archive if mapping incomplete; canonical AC ID format `<capability>.<requirement-slug>` |
 | Retrospective with mcp-memory promotion | no | yes — pre-archive `retrospective.md` (skill-produced) with `Promote candidates` (all 9 mcp-memory types) parsed by `openspec-archive-change` |
-| Adversarial review at high stakes | manual | invoked automatically by `analyze` artifact when `Scale ≥ L` |
+| Adversarial review at high stakes | manual | invoked automatically by the `analyze` artifact when `full_rigor: true` |
 
 ## Scale tiers
 
-Pick one in `review.md` (`Scale: <value>`). The schema's apply rules gate required artifacts on this choice.
+Pick one in `review.md` (`Scale: <value>`). The vocabulary is `XS | S | M` plus an
+optional boolean `full_rigor` front-matter key (default `false`). The schema's apply
+rules gate required artifacts on `(Scale, full_rigor)`. A Scale outside `XS|S|M`, or a
+non-boolean `full_rigor`, FAILS CLOSED (a loud gate/validation failure) — never a
+silent permissive default.
 
 | Scale | Example | Required artifacts | Optional |
 |---|---|---|---|
 | **XS** | typo, comment fix, single-line config tweak | proposal, tasks | everything else |
 | **S** | single-file bug fix, small refactor | proposal, specs, tasks, plan (clarify runs the ambiguity pass only; analyze runs checks 1, 2, 7 — reduced, not skipped) | design, review, verify, adr, retrospective |
-| **M** | typical feature, cross-file but single capability | proposal, specs, clarify, design, analyze, review, tasks, plan, verify | adr (unless decision passes 4-point test), retrospective |
-| **L** | cross-capability change, breaking change, new ADR-worthy decisions | + adr, + adversarial-review-cycle from analyze | retrospective |
-| **XL** | new capability, migration, multi-week project | full graph including retrospective | — |
+| **M** | typical feature, cross-file but single capability | proposal, specs, design, review, tasks, plan, verify, **doneness** — clarify open questions fold into `proposal.md ## Open Questions` and analyze is deterministic-only (no standalone `clarify.md`/`analyze.md`) | adr (unless decision passes 4-point test), retrospective |
+| **M + `full_rigor: true`** | cross-capability change, breaking change, new capability, migration (the former **L**/**XL**) | full independent stack: + standalone `clarify.md`, + blind `analyze.md` dispatch, + independently dispatched blind doneness judge, + adr candidates, + adversarial-review-cycle from analyze, + retrospective before archive | — |
+
+The 2-model blind adversarial code review stays gating-required at EVERY tier — the
+tier table never weakens it.
 
 Heuristic: if you're unsure, pick S. If clarify produces blockers, the schema will tell you to upgrade.
+
+### Migration note (5-tier → 3-tier)
+
+The former five-tier vocabulary (`XS S M L XL`) collapsed to `XS S M` + `full_rigor`.
+Mapping: **L** and **XL** both become **`Scale: M` with `full_rigor: true`**. For an
+in-flight (non-archived) change still labeled `Scale: L` or `Scale: XL`, the
+deterministic gate now FAILS CLOSED on the unknown Scale (a loud failure, never a
+silent pass) — relabel it to `Scale: M` + `full_rigor: true` to proceed. Already-archived
+changes and their historical review records are NEVER rewritten (their gate ran under the
+old deployed schema).
 
 ## Mode reference (in `review.md`)
 
@@ -51,17 +67,18 @@ Each mode has a controlled vocabulary. Default values shown in **bold**.
 
 | Mode | Values | Effect |
 |---|---|---|
-| `Scale` | XS / **S** / M / L / XL | Gates which artifacts are required for apply completion |
+| `Scale` | XS / **S** / M | Gates which artifacts are required for apply completion (vocabulary `XS\|S\|M`; out-of-range fails closed) |
+| `full_rigor` | **false** / true | Opts a Scale-M change into the ADR-promotion + adversarial-on-analyze + independent-clarify/analyze/doneness + retrospective extras formerly implied by `L`/`XL` |
 | `Execution Mode` | **standard** / tdd-preferred / tdd-required | tdd-required: each task starts with a failing test, then minimal impl |
 | `Verification Mode` | inline-only / **retained-recommended** / retained-required | retained-required: `verify.md` is mandatory before archive |
 | `Debug Mode` | **standard** / systematic-debugging | systematic-debugging: `plan.md` MUST contain `Observed Failure` and `Debugging Trail` before code changes |
 | `Review Status` | **not-requested** / requested / findings-received / resolved | State machine for `adversarial-review-cycle` invocation |
 | `Delegation Mode` | **single-agent** / subagent-eligible / subagent-required | subagent-*: `openspec-apply-change` dispatches tasks via `pi-subagents` |
-| `Worktree Mode` | **worktree-required** / worktree-eligible / same-tree | Default for ALL Scales; every task runs in a `git worktree` (the loop's blast-radius sandbox), main agent owns writeback; same-tree is an explicit override |
+| `Worktree Mode` | worktree-required / worktree-eligible / same-tree | Default DERIVED by tier when absent — XS/S ⇒ **same-tree**, M ⇒ **worktree-required**; an explicit value always wins. worktree-* runs every task in a `git worktree` (the loop's blast-radius sandbox), main agent owns writeback |
 | `Code Review Mode` | none / advisory / **gating-required (M+)** | gating-required: `code-review.md` adversarial diff review must pass before archive |
-| `Loop Max Iterations` | integer (**S~20 / M~40 / L~80**) | drive-loop budget; mapped onto the loop runtime turn budget |
+| `Loop Max Iterations` | integer (authoring-time default **XS=10 / S=20 / M=40 / full_rigor=80**) | drive-loop budget; mapped onto the loop runtime turn budget |
 | `Validation Source Mode` | **required** / waived | required: Scale ≥ M must declare an agent-independent validation source |
-| `Doneness Mode` | **required (M+)** / waived | required: gate reads a sealed `doneness.md` verdict (blind judge, intent-satisfaction) as the sole-remaining-failure backstop; `waived` needs a non-empty `doneness_waiver_rationale` |
+| `Doneness Mode` | **required (M+)** / waived | required: gate reads a sealed `doneness.md` verdict (blind judge, intent-satisfaction) as the sole-remaining-failure backstop. At plain M the verdict rides the code-review dispatch (designated reviewer = first `review` model, `review_mode: blind-single-judge`), still sealed to a separate `doneness.md`; `full_rigor` dispatches an independent judge. `waived` needs a non-empty `doneness_waiver_rationale` |
 | `Spec Level` | **spec-anchored** / spec-first / spec-as-source | spec-anchored = OpenSpec's natural mode; spec-as-source warns about MDD-era trade-offs |
 
 ### Role models (optional, via `opsx models`)
@@ -75,8 +92,10 @@ harness-neutral `opsx models` CLI (sibling to `opsx gate`):
 | `author_in_session` | boolean (default **true**) — when true, authoring stays in the parent session and is not delegated |
 | `provider` / `author_provider` / `review_provider` / `impl_provider` | qualify BARE model ids; a value containing `/` is used verbatim |
 
-Layering (highest wins): env > review.md front-matter > project
-`openspec/opsx-models.yaml` > user `~/.config/opsx/models.yaml` > session default.
+Layering (highest wins): env > review.md front-matter >
+user `~/.config/opsx/models.yaml` > session default. (The project-layer
+`openspec/opsx-models.yaml` is RETIRED — an existing one is ignored with a one-time
+warning; pin per-project via change front-matter instead.)
 The `opsx-loop` extension exports `OPSX_AUTHOR_MODEL` / `OPSX_REVIEW_MODELS` /
 `OPSX_IMPL_MODEL` / `OPSX_AUTHOR_IN_SESSION` on loop start; unset roles fall back to
 the session model. `opsx gate` fails an authoring artifact missing the

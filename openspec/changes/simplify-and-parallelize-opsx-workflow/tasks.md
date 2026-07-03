@@ -40,17 +40,17 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
 
 ## Phase 2 — Schema + templates, D3/D4/D6/D7
 
-- [ ] 2.1 README Scale table 5→3 + `full_rigor` extras + migration note
+- [x] 2.1 README Scale table 5→3 + `full_rigor` extras + migration note
       (in-flight relabel guidance; archived changes never rewritten).
       Files: `dot_local/share/openspec/schemas/opsx-superpowers/README.md`.
-- [ ] 2.2 review.md template: tier vocabulary, `full_rigor` key + comment,
+- [x] 2.2 review.md template: tier vocabulary, `full_rigor` key + comment,
       authoring-time budget defaults XS=10/S=20/M=40/full_rigor=80,
       worktree-mode derivation comment. Files:
       `dot_local/share/openspec/schemas/opsx-superpowers/templates/review.md`.
-- [ ] 2.3 opsx-models.yaml template: project layer removed from documented
+- [x] 2.3 opsx-models.yaml template: project layer removed from documented
       resolution order. Files:
       `dot_local/share/openspec/schemas/opsx-superpowers/templates/opsx-models.yaml`.
-- [ ] 2.4 doneness template/prose: designated-reviewer combined dispatch at
+- [x] 2.4 doneness template/prose: designated-reviewer combined dispatch at
       plain M (`review_mode: blind-single-judge`, first review model);
       independent judge at full_rigor. Files:
       `dot_local/share/openspec/schemas/opsx-superpowers/templates/doneness.md`
