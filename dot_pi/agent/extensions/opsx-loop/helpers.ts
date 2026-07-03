@@ -285,7 +285,7 @@ export function parseLoopHold(reviewMd: string): LoopHold {
 	let reason = "";
 	for (let i = 1; i < lines.length; i++) {
 		if (lines[i].trim() === "---") break;
-		if (/^\s*loop_hold\s*:\s*true\s*$/.test(lines[i])) held = true;
+		if (/^\s*loop_hold\s*:\s*true\s*$/i.test(lines[i])) held = true;
 		const m = lines[i].match(/^\s*loop_hold_reason\s*:\s*(.*?)\s*$/);
 		if (m) reason = m[1].replace(/^["']|["']$/g, "");
 	}
@@ -321,8 +321,12 @@ export function clearHoldText(reviewMd: string, change: string, dateStr: string)
 	const hold = parseLoopHold(reviewMd);
 	let next = stripLoopHold(reviewMd);
 	const noteLine = `- ${dateStr} — loop_hold cleared by named re-arm (/opsx-loop ${change}); reason was: ${hold.reason || "(none recorded)"}`;
-	next = next.includes("## Execution Notes")
-		? next.replace("## Execution Notes", `## Execution Notes\n\n${noteLine}`)
+	// Line-anchored heading + replacement FUNCTION: a reason containing `$&`-style
+	// patterns must not corrupt the note, and a longer heading ("## Execution Notes
+	// (archived)") must not be spliced into.
+	const heading = /^## Execution Notes\s*$/m;
+	next = heading.test(next)
+		? next.replace(heading, () => `## Execution Notes\n\n${noteLine}`)
 		: `${next}\n\n## Execution Notes\n\n${noteLine}\n`;
 	return { next, reason: hold.reason };
 }
@@ -338,11 +342,20 @@ export interface InventoryEntry {
 	name: string;
 	scale: string;
 }
-export function listIntentChanges(cwd: string): InventoryEntry[] {
+export function listIntentChanges(cwd: string, isCommitted?: (name: string) => boolean): InventoryEntry[] {
 	try {
 		const base = join(cwd, "openspec", "changes");
 		return readdirSync(base, { withFileTypes: true })
-			.filter((e) => e.isDirectory() && e.name !== "archive" && existsSync(join(base, e.name, "intent.md")))
+			.filter(
+				(e) =>
+					e.isDirectory() &&
+					e.name !== "archive" &&
+					existsSync(join(base, e.name, "intent.md")) &&
+					// Spec: inventory lists changes with a COMMITTED intent.md — a
+					// working-tree draft is not a resumable baseline. The predicate is
+					// injected (git ls-files in the extension) to keep this pure.
+					(isCommitted === undefined || isCommitted(e.name)),
+			)
 			.map((e) => {
 				let scale = "?";
 				try {

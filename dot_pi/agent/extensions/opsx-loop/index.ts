@@ -211,34 +211,58 @@ function runGate(change: string, worktree: string | undefined, signal: AbortSign
  * opsx/<change>. Never re-derives the path locally.
  * (opsx-loop-kickoff.worktree-resolution-convention-fallback)
  */
+/** True iff `p` is a git worktree checked out on branch opsx/<change>. */
+function isChangeWorktree(p: string, change: string): boolean {
+	try {
+		const b = spawnSync("git", ["-C", p, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf-8", timeout: 5000 });
+		return b.status === 0 && (b.stdout ?? "").trim() === `opsx/${change}`;
+	} catch {
+		return false;
+	}
+}
+
 function conventionWorktree(change: string, cwd: string): string | undefined {
 	try {
 		const r = spawnSync("opsx", ["worktree", "path", change], { encoding: "utf-8", cwd, timeout: 5000 });
 		const p = r.status === 0 ? (r.stdout ?? "").trim() : "";
 		if (!p) return undefined;
-		const b = spawnSync("git", ["-C", p, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf-8", timeout: 5000 });
-		return b.status === 0 && (b.stdout ?? "").trim() === `opsx/${change}` ? p : undefined;
+		return isChangeWorktree(p, change) ? p : undefined;
 	} catch {
 		return undefined;
 	}
 }
 
 /**
- * Re-resolve a usable worktree path: the review.md locator first; when that is
- * absent/invalid, the convention fallback; else undefined (no --worktree —
- * unchanged degraded behavior).
+ * Re-resolve a usable worktree path: the review.md locator first — validated as
+ * a git worktree ON BRANCH opsx/<change>, so a stale locator pointing at some
+ * other tree cannot suppress the fallback — then the convention fallback; else
+ * undefined (no --worktree, unchanged degraded behavior).
  */
 function resolveWorktree(change: string, cwd: string): string | undefined {
 	const wt = bodyField(readReview(change, cwd), "Worktree Path");
-	if (wt) {
-		try {
-			const r = spawnSync("git", ["-C", wt, "rev-parse", "--is-inside-work-tree"], { encoding: "utf-8", timeout: 5000 });
-			if (r.status === 0) return wt;
-		} catch {
-			/* fall through to convention probe */
-		}
-	}
+	if (wt && isChangeWorktree(wt, change)) return wt;
 	return conventionWorktree(change, cwd);
+}
+
+/** Change names whose intent.md is COMMITTED (tracked), via one git ls-files call. */
+function committedIntentNames(cwd: string): Set<string> {
+	try {
+		const r = spawnSync("git", ["-C", cwd, "ls-files", "--", "openspec/changes/*/intent.md"], {
+			encoding: "utf-8",
+			timeout: 5000,
+		});
+		if (r.status !== 0) return new Set();
+		return new Set(
+			(r.stdout ?? "")
+				.split("\n")
+				.map((l) => l.trim())
+				.filter(Boolean)
+				.map((p) => p.split("/")[2])
+				.filter(Boolean),
+		);
+	} catch {
+		return new Set();
+	}
 }
 
 /**
@@ -367,7 +391,8 @@ export default function (pi: ExtensionAPI) {
 		`and STOP after the announcement: the loop pauses for human intent confirmation.`;
 
 	const distillDirective = (goal: string | undefined, cwd: string) => {
-		const inventory = formatInventory(listIntentChanges(cwd));
+		const committed = committedIntentNames(cwd);
+		const inventory = formatInventory(listIntentChanges(cwd, (n) => committed.has(n)));
 		return (
 			`Distill an OpenSpec change with a frozen intent baseline (draft only — do NOT start implementing).\n\n` +
 			`Active changes with a committed intent.md (deterministic inventory):\n${inventory}\n\n` +
@@ -383,6 +408,19 @@ export default function (pi: ExtensionAPI) {
 			DISTILL_AUTONOMY
 		);
 	};
+
+	// Terse distill CONTINUATION nudge — mirrors the worker kickoff-vs-continuation
+	// split (load-bearing): the inventory and full setup prose ride the KICKOFF
+	// directive only, never this nudge.
+	const distillContinuation = (goal?: string) =>
+		`[still distilling] No new change with a committed intent.md has appeared yet. Continue the ` +
+		`SAME distill task from the kickoff instructions: ` +
+		(goal
+			? `draft the intent for goal "${goal}" into openspec/changes/<name>/intent.md and announce it`
+			: `draft the intent distilled from this conversation into openspec/changes/<name>/intent.md and announce it`) +
+		`, OR — if an active change from the kickoff inventory already covers it — announce that change ` +
+		`and advise /opsx-loop <name>, then stop.` +
+		DISTILL_AUTONOMY;
 
 	pi.registerCommand("opsx-loop", {
 		description: "Guaranteed opsx loop: /opsx-loop goal [text] | <change> | status | clear | models",
@@ -572,7 +610,7 @@ export default function (pi: ExtensionAPI) {
 						}
 					}
 					renderStatus(ctx);
-					pi.sendUserMessage(distillDirective(session.goal, ctx.cwd), { deliverAs: "followUp" });
+					pi.sendUserMessage(distillContinuation(session.goal), { deliverAs: "followUp" });
 					return;
 				}
 				// ONE-SHOT HUMAN CONFIRM (ADR-0014): do NOT silently adopt the

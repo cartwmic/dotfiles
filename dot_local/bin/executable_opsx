@@ -449,16 +449,25 @@ bodyfield() {
 # forever against stale root copies.
 # ============================================================================
 WT_PATH="$WORKTREE_ARG"
-if [ -z "$WT_PATH" ]; then
+if [ -n "$WT_PATH" ]; then
+  # An explicit --worktree is an operator assertion: validate it NOW and fail
+  # LOUD on mismatch (any worktree_mode) — never silently ignore it or
+  # substitute another tree (clarify C3).
+  if ! opsx_wt_valid_for_change "$WT_PATH" "$CHANGE"; then
+    fail worktree "explicit --worktree is not a git worktree on branch opsx/$CHANGE: $WT_PATH"
+    echo "opsx gate: explicit worktree invalid (change=$CHANGE)" >&2
+    exit 1
+  fi
+else
   WT_PATH="$(bodyfield 'Worktree Path')"
   case "$WT_PATH" in *"<empty"*|"<"*) WT_PATH="" ;; esac
   # Convention fallback (opsx-gate-enforcement.verdict-freshness-and-provenance):
-  # ONLY when the RECORDED locator is absent/invalid — an explicit --worktree that
-  # fails validation stays loud (handled below), never silently re-probed.
+  # ONLY when the RECORDED locator is absent/invalid, and ONLY the convention
+  # path from the single-source derivation — --path-override worktrees are
+  # covered by the committed locator, not the fallback (BY DESIGN).
   if ! opsx_wt_valid_for_change "$WT_PATH" "$CHANGE"; then
-    _CAND="$(opsx_wt_for_branch "$ROOT" "$CHANGE")"
-    [ -n "$_CAND" ] || _CAND="$(opsx_wt_convention_path "$ROOT" "$CHANGE")"
-    if opsx_wt_valid_for_change "$_CAND" "$CHANGE"; then WT_PATH="$_CAND"; fi
+    _CAND="$(opsx_wt_convention_path "$ROOT" "$CHANGE")"
+    if opsx_wt_valid_for_change "$_CAND" "$CHANGE"; then WT_PATH="$_CAND"; else WT_PATH=""; fi
   fi
 fi
 ART_ROOT="$ROOT"
@@ -955,13 +964,13 @@ BRANCH="opsx/$CHANGE"
 REVIEW="$ROOT/openspec/changes/$CHANGE/review.md"
 
 if [ "$VERB" = "path" ]; then
-  # READ-ONLY emit (opsx-cli.read-only-worktree-path-emit): the path `ensure`
-  # would use — an existing worktree already on opsx/<change>, else the
-  # convention derivation. NO side effects: nothing is created or validated
-  # into existence here.
+  # READ-ONLY emit (opsx-cli.read-only-worktree-path-emit): ONLY the canonical
+  # convention path — the path `ensure` would derive absent a --path override.
+  # Deliberately NOT the existing-branch-worktree lookup: --path-override
+  # worktrees are out of the fallback's reach BY DESIGN (the committed locator
+  # covers them). NO side effects.
   [ -z "$WPATH" ] && [ -z "$IBRANCH" ] || { err "path takes no options"; exit 2; }
-  EXISTING="$(opsx_wt_for_branch "$ROOT" "$CHANGE")"
-  if [ -n "$EXISTING" ]; then echo "$EXISTING"; else opsx_wt_convention_path "$ROOT" "$CHANGE"; fi
+  opsx_wt_convention_path "$ROOT" "$CHANGE"
   exit 0
 fi
 

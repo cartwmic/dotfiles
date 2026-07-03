@@ -51,6 +51,19 @@ describe("parseLoopHold / stripLoopHold — opsx-loop-kickoff.loop-hold-blocks-c
 		expect(next).toContain("## Execution Notes");
 		expect(next).toContain("reason was: (none recorded)");
 	});
+	test("clearHoldText survives $-replacement patterns in the reason", () => {
+		const md = FM("loop_hold: true\nloop_hold_reason: \"costs $& and $' extra\"") + "\n## Execution Notes\n";
+		const { next } = clearHoldText(md, "c", "2026-07-03");
+		expect(next).toContain("costs $& and $' extra");
+	});
+	test("clearHoldText anchors to the exact heading line, not a longer heading", () => {
+		const md = FM("loop_hold: true") + "\n## Execution Notes (archived)\n\n## Execution Notes\n";
+		const { next } = clearHoldText(md, "c", "2026-07-03");
+		expect(next.indexOf("loop_hold cleared")).toBeGreaterThan(next.indexOf("## Execution Notes (archived)"));
+	});
+	test("parseLoopHold accepts YAML-canonical True (case-insensitive boolean)", () => {
+		expect(parseLoopHold(FM("loop_hold: True")).held).toBe(true);
+	});
 });
 
 describe("active-change inventory — opsx-loop-kickoff.goal-and-conversation-kickoff", () => {
@@ -83,6 +96,12 @@ describe("active-change inventory — opsx-loop-kickoff.goal-and-conversation-ki
 	test("formatInventory renders directive lines; empty → (none)", () => {
 		expect(formatInventory([])).toBe("(none)");
 		expect(formatInventory([{ name: "a", scale: "M" }])).toBe("  - a (scale: M)");
+	});
+	test("committed predicate excludes working-tree-only intent drafts", () => {
+		const { d, ch } = mkRepo();
+		ch("tracked", { "intent.md": "# I" });
+		ch("draft-only", { "intent.md": "# I" });
+		expect(listIntentChanges(d, (n) => n === "tracked")).toEqual([{ name: "tracked", scale: "?" }]);
 	});
 });
 

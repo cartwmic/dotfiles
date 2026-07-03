@@ -147,10 +147,12 @@ case "$out" in */wtrepo/repo--opsx-demo3) [ $rc -eq 0 ] && ok "worktree path emi
 [ ! -e "$TMP/wtrepo/repo--opsx-demo3" ] \
   && ! git -C "$WTREPO" show-ref --verify --quiet refs/heads/opsx/demo3 \
   && ok "worktree path is read-only (no branch, no worktree, no file created)" || nok "path no side effects"
-# After ensure, path reports the ACTUAL worktree for the branch (custom paths included)
+# Convention-ONLY emit: even after ensure with a --path override, path still
+# prints the convention derivation — override worktrees are covered by the
+# committed locator, NOT the fallback (by design).
 ( cd "$WTREPO" && "$OPSX" worktree ensure demo3 --path "$TMP/wtrepo/custom-demo3" ) >/dev/null 2>&1
 out="$(cd "$WTREPO" && "$OPSX" worktree path demo3 2>&1)"; rc=$?
-case "$out" in */wtrepo/custom-demo3) [ $rc -eq 0 ] && ok "worktree path prefers the existing branch worktree (the path ensure would reuse)" || nok "path existing emit (rc=$rc)" ;; *) nok "path existing emit (rc=$rc out=$out)" ;; esac
+case "$out" in */wtrepo/repo--opsx-demo3) [ $rc -eq 0 ] && ok "worktree path stays convention-only despite a --path override worktree" || nok "path convention-only emit (rc=$rc)" ;; *) nok "path convention-only emit (rc=$rc out=$out)" ;; esac
 ( cd "$WTREPO" && "$OPSX" worktree path nope ) >/dev/null 2>&1; rc=$?
 [ $rc -eq 1 ] && ok "worktree path unknown change exits 1" || nok "path unknown change (rc=$rc)"
 ( cd "$WTREPO" && "$OPSX" worktree path demo3 --path x ) >/dev/null 2>&1; rc=$?
