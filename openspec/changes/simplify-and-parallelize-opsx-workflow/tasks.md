@@ -6,35 +6,35 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
 
 ## Phase 1 — CLI (gate + new verbs), D1/D2/D3/D6/D7
 
-- [ ] 1.1 `opsx gate --cheap` mode (D1): flag guards ONLY validation-command
+- [x] 1.1 `opsx gate --cheap` mode (D1): flag guards ONLY validation-command
       execution + validation-source enforcement; does NOT exit at the
       cheap-checks short-circuit; report labels the run `gate(cheap)`.
       Files: `dot_local/bin/executable_opsx`.
-- [ ] 1.2 `opsx status` fleet view (D1, opsx-cli.Status Fleet View): scan
+- [x] 1.2 `opsx status` fleet view (D1, opsx-cli.Status Fleet View): scan
       non-archive `openspec/changes/*`; per change print Scale(+full_rigor),
       gate(cheap) summary + earliest failing check, worktree path +
       valid|invalid|none on `opsx/<change>`, loop_hold + reason, Diff Base
       commits-behind-main; placeholders when review.md/branch absent; no side
       effects; exit 0 always. Files: `dot_local/bin/executable_opsx`.
-- [ ] 1.3 `opsx archive-check <change>` (D2, opsx-gate-enforcement.Land Base
+- [x] 1.3 `opsx archive-check <change>` (D2, opsx-gate-enforcement.Land Base
       Currency + Duplicate ADR Number Scan, opsx-cli.Multi-Dir Integration
       Commit Detector): land-base-currency (same-tree exemption), ADR-dup
       scan, advisory multi-dir detector over `<Diff Base>..main`; exit
       non-zero iff check 1 or 2 fails. Files: `dot_local/bin/executable_opsx`.
-- [ ] 1.4 Tier collapse in gate (D3, opsx-workflow-schema.Scale-adaptive
+- [x] 1.4 Tier collapse in gate (D3, opsx-workflow-schema.Scale-adaptive
       gating): scale vocabulary `XS S M`; `full_rigor` boolean parse
       (fail-closed); artifact table keyed (scale, full_rigor) — plain M drops
       clarify.md/analyze.md, keeps doneness.md; L/XL fail closed with relabel
       message. Files: `dot_local/bin/executable_opsx`.
-- [ ] 1.5 Worktree-mode default derivation (D6): absent `worktree_mode` ⇒
+- [x] 1.5 Worktree-mode default derivation (D6): absent `worktree_mode` ⇒
       XS/S same-tree, M worktree-required; explicit wins.
       Files: `dot_local/bin/executable_opsx`.
-- [ ] 1.6 Model-config project layer removal (D7, opsx-model-config.Layered
+- [x] 1.6 Model-config project layer removal (D7, opsx-model-config.Layered
       Resolution Order + opsx-cli.Model Config Write Surface): resolver skips
       project yaml + one-time stderr warning when file exists; JSON source
       enum drops `project`; `set/get --layer project` rejected with removal
       message. Files: `dot_local/bin/executable_opsx`.
-- [ ] 1.7 Bash `opsx loop` budget alignment (analyze F6): read
+- [x] 1.7 Bash `opsx loop` budget alignment (analyze F6): read
       `loop_max_iterations` from front-matter when present; flat 40 only as
       absent-value fallback. Files: `dot_local/bin/executable_opsx`.
 
@@ -76,16 +76,16 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
 
 ## Phase 4 — Tests (D10)
 
-- [ ] 4.1 `tests/opsx-gate/test_opsx_gate.sh`: 3-tier vocab; full_rigor
+- [x] 4.1 `tests/opsx-gate/test_opsx_gate.sh`: 3-tier vocab; full_rigor
       artifact matrix (plain-M drops clarify/analyze, keeps doneness);
       fail-closed L/XL + relabel message; non-boolean full_rigor; worktree-mode
       derivation; `--cheap` (skips validations, still reports verdict-state
       checks).
-- [ ] 4.2 `tests/opsx-cli/test_opsx_cli.sh`: `opsx status` (fleet block,
+- [x] 4.2 `tests/opsx-cli/test_opsx_cli.sh`: `opsx status` (fleet block,
       placeholders, exit 0, read-only); `opsx archive-check` (current base
       passes, stale base refuses + remedy text, same-tree exemption, ADR-dup
       fails with both paths, multi-dir advisory does not affect exit).
-- [ ] 4.3 `tests/opsx-models/test_opsx_models.sh`: project yaml ignored +
+- [x] 4.3 `tests/opsx-models/test_opsx_models.sh`: project yaml ignored +
       one-time warning; source enum without `project`; `--layer project`
       write rejected.
 - [ ] 4.4 `tests/opsx-review-convergence/test_review_convergence_surfaces.sh`:
