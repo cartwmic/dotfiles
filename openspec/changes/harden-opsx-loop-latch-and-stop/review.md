@@ -14,6 +14,8 @@ validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
 review_max_rounds: 5
+loop_hold: true
+loop_hold_reason: "gate green at 863192d; terminal landing — awaiting human archive ruling"
 review_models: [claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5]
 ---
 
