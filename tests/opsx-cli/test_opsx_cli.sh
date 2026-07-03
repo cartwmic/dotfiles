@@ -240,5 +240,28 @@ out="$(cd "$MDREPO" && "$OPSX" archive-check x 2>&1)"; rc=$?
 printf '%s' "$out" | grep -qi 'advisory' && ok "archive-check flags a multi-dir commit (advisory)" || nok "archive-check multi-dir advisory flag"
 [ $rc -eq 0 ] && ok "archive-check multi-dir advisory does NOT affect the exit code" || nok "archive-check advisory exit unaffected (rc=$rc)"
 
+# multi-dir advisory INCLUDES MERGE COMMITS: an "evil merge" whose net effect on
+# main touches TWO change dirs must be flagged (opsx-cli.multi-dir-integration-
+# commit-detector: ANY integration-checkout commit; R1 review SIMPAR-R1-001)
+EMREPO="$TMP/emrepo"; mkdir -p "$EMREPO/openspec/changes/x"
+git -C "$EMREPO" init -q; git -C "$EMREPO" config user.email t@t; git -C "$EMREPO" config user.name t
+printf '# x\n' >"$EMREPO/openspec/changes/x/review.md"
+git -C "$EMREPO" add -A; git -C "$EMREPO" commit -qm seed; git -C "$EMREPO" branch -m main 2>/dev/null || true
+EMBASE="$(git -C "$EMREPO" rev-parse main)"
+printf '\n**Diff Base SHA:** %s\n' "$EMBASE" >>"$EMREPO/openspec/changes/x/review.md"
+git -C "$EMREPO" add -A; git -C "$EMREPO" commit -qm "pin base"
+git -C "$EMREPO" checkout -qb side "$EMBASE"
+printf 'side\n' >"$EMREPO/sidefile"; git -C "$EMREPO" add -A; git -C "$EMREPO" commit -qm "side work"
+git -C "$EMREPO" checkout -q main
+git -C "$EMREPO" merge -q --no-ff --no-commit side >/dev/null 2>&1
+mkdir -p "$EMREPO/openspec/changes/y" "$EMREPO/openspec/changes/z"
+printf '# y\n' >"$EMREPO/openspec/changes/y/review.md"   # evil merge: lands y/ and z/
+printf '# z\n' >"$EMREPO/openspec/changes/z/review.md"
+git -C "$EMREPO" add -A; git -C "$EMREPO" commit -qm "evil merge" >/dev/null
+out="$(cd "$EMREPO" && "$OPSX" archive-check x 2>&1)"; rc=$?
+printf '%s' "$out" | grep -qi 'advisory' && printf '%s' "$out" | grep -q 'openspec/changes/y' \
+  && ok "archive-check flags an evil MERGE commit touching two change dirs" || nok "archive-check evil-merge advisory (rc=$rc)"
+[ $rc -eq 0 ] && ok "archive-check evil-merge advisory keeps exit 0" || nok "archive-check evil-merge exit (rc=$rc)"
+
 echo "opsx-cli: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]
