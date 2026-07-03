@@ -532,6 +532,18 @@ validate_mode code_review_mode "$CR_MODE" "none advisory gating-required"
 validate_mode validation_source_mode "$VSRC_MODE" "required waived"
 validate_mode doneness_mode "$DONE_MODE" "required waived"
 
+# Derived fail-CLOSED default for the load-bearing review mode (R5-F1): an
+# ABSENT code_review_mode must not read as "not gating-required" at Scale M —
+# the documented default is gating-required at M+ (schema.yaml), advisory
+# below. An omitted key at M previously let a change pass with no
+# code-review.md at all (fail-open by omission).
+if [ -z "$CR_MODE" ]; then
+  case "$SCALE" in
+    M) CR_MODE="gating-required" ;;
+    *) CR_MODE="advisory" ;;
+  esac
+fi
+
 # ============================================================================
 # CHEAP CHECKS (structure / artifacts / tasks) — short-circuit before expensive
 # ============================================================================
