@@ -206,14 +206,21 @@ mkchange wt-fallback
 sed -i.bak 's/^worktree_mode: same-tree/worktree_mode: worktree-required/' \
   "$TMP/openspec/changes/wt-fallback/review.md"
 git -C "$TMP" add -A; git -C "$TMP" commit -qm "wt-fallback change"
-git -C "$TMP" worktree add "$TMP/wtfb" -b opsx/wt-fallback >/dev/null 2>&1
-run wt-fallback; check "empty locator + existing opsx/<change> worktree resolves via fallback (verdict-freshness-and-provenance)" 0 $?
+# The fallback probes ONLY the convention path (dirname(ROOT)/basename(ROOT)--opsx-<change>).
+RROOT="$(git -C "$TMP" rev-parse --show-toplevel)"
+CONVWT="$(dirname "$RROOT")/$(basename "$RROOT")--opsx-wt-fallback"
+git -C "$TMP" worktree add "$CONVWT" -b opsx/wt-fallback >/dev/null 2>&1
+run wt-fallback; check "empty locator + convention-path opsx/<change> worktree resolves via fallback (verdict-freshness-and-provenance)" 0 $?
 grep -q 'GATE-FAIL worktree' "$TMP/err" && nok "fallback avoided the locate hard-fail" || ok "fallback avoided the locate hard-fail"
-# explicit --worktree that fails validation stays loud — never silently re-probed
+# explicit --worktree that fails validation stays loud (any mode) — never silently re-probed
 ( cd "$TMP" && "$OPSX" gate wt-fallback --worktree "$TMP/nonexistent" ) >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -ne 0 ] && grep -q 'GATE-FAIL worktree' "$TMP/err" \
   && ok "explicit invalid --worktree fails loud, no silent fallback" || nok "explicit invalid --worktree fails loud (rc=$rc)"
-git -C "$TMP" worktree remove --force "$TMP/wtfb" >/dev/null 2>&1; git -C "$TMP" branch -D opsx/wt-fallback >/dev/null 2>&1
+# a NON-convention (custom-path) worktree is out of the fallback's reach BY DESIGN
+git -C "$TMP" worktree remove --force "$CONVWT" >/dev/null 2>&1
+git -C "$TMP" worktree add "$TMP/wtfb-custom" opsx/wt-fallback >/dev/null 2>&1
+run wt-fallback; check "custom-path worktree NOT resolved by fallback (locator publication covers it)" 1 $?
+git -C "$TMP" worktree remove --force "$TMP/wtfb-custom" >/dev/null 2>&1; git -C "$TMP" branch -D opsx/wt-fallback >/dev/null 2>&1
 
 # --- freshness tolerates verdict-only sealing commits, rejects code drift ---
 mkchange cr-seal
