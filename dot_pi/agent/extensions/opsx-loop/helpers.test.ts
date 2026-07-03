@@ -1,15 +1,15 @@
 // Unit tests for opsx-loop pure helpers.
 // Acceptance criteria cited by canonical ID for the opsx verify gate:
-//   opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge
-//   opsx-loop-kickoff.budget-from-review-front-matter
-//   opsx-loop-kickoff.status-and-clear-subcommands
+//   opsx-loop.opsx-gate-is-the-deterministic-judge
+//   opsx-loop.budget-from-review-front-matter
+//   opsx-loop.status-and-clear-subcommands
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildModelEnv, classifyDoneness, clearHoldText, donenessRatchet, formatInventory, gateFailKey, hashDir, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, stripLoopHold, verdictFromExit } from "./helpers.ts";
 
-describe("parseLoopHold / stripLoopHold — opsx-loop-kickoff.loop-hold-blocks-continuation", () => {
+describe("parseLoopHold / stripLoopHold — opsx-loop.loop-hold-blocks-continuation", () => {
 	const FM = (body: string) => `---\n${body}\n---\n# Review\n`;
 	test("loop_hold: true with reason → held", () => {
 		const h = parseLoopHold(FM('scale: M\nloop_hold: true\nloop_hold_reason: "decision audit pending"'));
@@ -66,7 +66,7 @@ describe("parseLoopHold / stripLoopHold — opsx-loop-kickoff.loop-hold-blocks-c
 	});
 });
 
-describe("active-change inventory — opsx-loop-kickoff.goal-and-conversation-kickoff", () => {
+describe("active-change inventory — opsx-loop.goal-and-conversation-kickoff", () => {
 	const mkRepo = () => {
 		const d = mkdtempSync(join(tmpdir(), "opsx-inv-"));
 		const ch = (name: string, files: Record<string, string>) => {
@@ -105,7 +105,7 @@ describe("active-change inventory — opsx-loop-kickoff.goal-and-conversation-ki
 	});
 });
 
-describe("doneness stall helpers — opsx-loop-kickoff.stall-detection-stops-the-loop", () => {
+describe("doneness stall helpers — opsx-loop.stall-detection-stops-the-loop", () => {
 	const DONE = (v: string, gaps: string[] = []) =>
 		`# Doneness\n**Doneness:** ${v}\n**Judge:** m\n` +
 		(gaps.length ? `## Gaps\n${gaps.map((g) => `- ${g}`).join("\n")}\n` : "");
@@ -160,7 +160,7 @@ describe("doneness stall helpers — opsx-loop-kickoff.stall-detection-stops-the
 	});
 });
 
-describe("verdictFromExit — opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge", () => {
+describe("verdictFromExit — opsx-loop.opsx-gate-is-the-deterministic-judge", () => {
 	test("exit 0 is met", () => {
 		expect(verdictFromExit(0, "GATE-PASS: x (M)")).toEqual({ met: true, reason: "GATE-PASS: x (M)" });
 	});
@@ -181,7 +181,7 @@ describe("verdictFromExit — opsx-loop-kickoff.opsx-gate-is-the-deterministic-j
 	});
 });
 
-describe("parseLoopBudget — opsx-loop-kickoff.budget-from-review-front-matter", () => {
+describe("parseLoopBudget — opsx-loop.budget-from-review-front-matter", () => {
 	const fm = (n: string) => `---\nscale: M\nloop_max_iterations: ${n}\n---\n# Review\n`;
 	test("reads loop_max_iterations from front-matter", () => {
 		expect(parseLoopBudget(fm("80"))).toBe(80);
@@ -208,7 +208,7 @@ describe("parseLoopBudget — opsx-loop-kickoff.budget-from-review-front-matter"
 	});
 });
 
-describe("parseLoopArg — opsx-loop-kickoff.status-and-clear-subcommands", () => {
+describe("parseLoopArg — opsx-loop.status-and-clear-subcommands", () => {
 	test("empty → status", () => {
 		expect(parseLoopArg("")).toEqual({ mode: "status" });
 	});
@@ -244,7 +244,7 @@ describe("parseLoopArg — opsx-loop-kickoff.status-and-clear-subcommands", () =
 	});
 });
 
-describe("parseLoopArg goal keyword — opsx-loop-kickoff.goal-and-conversation-kickoff", () => {
+describe("parseLoopArg goal keyword — opsx-loop.goal-and-conversation-kickoff", () => {
 	test("goal with multi-word text preserves the FULL goal (no truncation)", () => {
 		expect(parseLoopArg("goal build the clipboard sync with retries")).toEqual({
 			mode: "goal",
@@ -263,7 +263,7 @@ describe("parseLoopArg goal keyword — opsx-loop-kickoff.goal-and-conversation-
 	});
 });
 
-describe("hashDir — opsx-loop-kickoff.stall-detection-stops-the-loop", () => {
+describe("hashDir — opsx-loop.stall-detection-stops-the-loop", () => {
 	test("any file-content change under the dir changes the digest (incl. untracked)", () => {
 		const root = mkdtempSync(join(tmpdir(), "opsxhash-"));
 		const sub = join(root, "openspec", "changes", "c");
@@ -287,7 +287,7 @@ describe("hashDir — opsx-loop-kickoff.stall-detection-stops-the-loop", () => {
 	});
 });
 
-describe("gateFailKey — opsx-loop-kickoff.stall-detection-stops-the-loop", () => {
+describe("gateFailKey — opsx-loop.stall-detection-stops-the-loop", () => {
 	test("extracts the sorted set of GATE-FAIL check ids, excluding volatile text", () => {
 		const report = [
 			"GATE-FAIL tasks 1 unchecked tasks remain at /some/path abc123",
@@ -304,7 +304,7 @@ describe("gateFailKey — opsx-loop-kickoff.stall-detection-stops-the-loop", () 
 	});
 });
 
-describe("buildModelEnv — opsx-loop-kickoff.loop-exports-resolved-role-models", () => {
+describe("buildModelEnv — opsx-loop.loop-exports-resolved-role-models", () => {
 	test("configured roles exported; unset roles omitted", () => {
 		const env = buildModelEnv({
 			author: { value: "claude-bridge/claude-opus-4-8", source: "project" },
@@ -346,7 +346,7 @@ describe("buildModelEnv — opsx-loop-kickoff.loop-exports-resolved-role-models"
 	});
 });
 
-describe("parseModelsJson — opsx-loop-kickoff.loop-exports-resolved-role-models", () => {
+describe("parseModelsJson — opsx-loop.loop-exports-resolved-role-models", () => {
 	test("parses well-formed source-aware json", () => {
 		expect(parseModelsJson('{"value":"x/y","source":"env"}')).toEqual({ value: "x/y", source: "env" });
 	});
