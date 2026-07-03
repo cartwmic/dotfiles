@@ -25,6 +25,9 @@
 #   opsx-post-impl-review.adversarial-review-with-degradation
 #   opsx-workflow-schema.review-max-rounds-front-matter
 #   opsx-workflow-schema.convergence-template-support
+# Intentional: no `set -e` — assertions drive explicit pass/fail counters and
+# the final exit is `[ "$failc" -eq 0 ]`; -e would abort on the first failed
+# grep instead of reporting every failed assertion.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -88,6 +91,12 @@ has "loop skill defines the advisory surface audit" "$LOOP_SKILL" "Advisory surf
 
 # --- opsx-review-convergence.reviewer-model-stability ---
 has "loop skill pins the reviewer model set" "$LOOP_SKILL" "Reviewer-model stability"
+
+# --- opsx-review-convergence.prose-surface-fidelity ---
+has "loop skill carries the ledger-repair red flag" "$LOOP_SKILL" "provenance defect: repair the ledger before archive"
+has "apply ref carries the ledger-repair red flag" "$APPLY_REF" "provenance defect — repair the ledger before archive"
+has "code-review template findings heading is neutral" "$TPL/code-review.md" "^## Findings"
+if grep -q "^## Convergent findings" "$TPL/code-review.md" 2>/dev/null; then nok "legacy Convergent findings heading reintroduced"; else ok "no convergence-implying findings heading"; fi
 
 # --- opsx-loop-orchestration.review-dispatch-bound-by-convergence-discipline ---
 has "loop skill evaluates stops before re-dispatch" "$LOOP_SKILL" "evaluate BEFORE dispatching"
