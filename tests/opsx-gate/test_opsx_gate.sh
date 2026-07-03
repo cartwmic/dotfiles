@@ -8,6 +8,7 @@
 #   opsx-gate-enforcement.manifest-validation-execution
 #   opsx-gate-enforcement.mode-aware-verdict-reading
 #   opsx-gate-enforcement.verdict-freshness-and-provenance
+#   opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout
 #   opsx-gate-enforcement.doneness-verdict-enforcement
 #   opsx-doneness-judge.sealed-doneness-verdict-artifact
 #   opsx-doneness-judge.freshness-bound-verdict
@@ -197,6 +198,33 @@ sed -i.bak 's/^worktree_mode: same-tree/worktree_mode: worktree-required/' \
   "$TMP/openspec/changes/wt-required/review.md"
 run wt-required; check "worktree-required + empty Worktree Path fails (required-artifact-by-scale)" 1 $?
 grep -q 'GATE-FAIL worktree' "$TMP/err" && ok "locate-failure is a hard fail" || nok "locate-failure is a hard fail"
+
+# --- convention fallback: empty locator + real branch worktree resolves, no split-brain
+# (opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout:
+#  pre-rule changes with an empty locator fall back instead of split-braining)
+mkchange wt-fallback
+sed -i.bak 's/^worktree_mode: same-tree/worktree_mode: worktree-required/' \
+  "$TMP/openspec/changes/wt-fallback/review.md"
+git -C "$TMP" add -A; git -C "$TMP" commit -qm "wt-fallback change"
+# The fallback probes ONLY the convention path (dirname(ROOT)/basename(ROOT)--opsx-<change>).
+RROOT="$(git -C "$TMP" rev-parse --show-toplevel)"
+CONVWT="$(dirname "$RROOT")/$(basename "$RROOT")--opsx-wt-fallback"
+git -C "$TMP" worktree add "$CONVWT" -b opsx/wt-fallback >/dev/null 2>&1
+run wt-fallback; check "empty locator + convention-path opsx/<change> worktree resolves via fallback (verdict-freshness-and-provenance)" 0 $?
+grep -q 'GATE-FAIL worktree' "$TMP/err" && nok "fallback avoided the locate hard-fail" || ok "fallback avoided the locate hard-fail"
+# Gate-view equality: the SAME command from INSIDE the convention worktree must
+# agree (convention derivation is normalized to the repo's main worktree root)
+( cd "$CONVWT" && OPSX_ROOT="$CONVWT" "$OPSX" gate wt-fallback ) >/dev/null 2>"$TMP/err"; rc=$?
+check "gate from inside the convention worktree agrees with the integration view" 0 $rc
+# explicit --worktree that fails validation stays loud (any mode) — never silently re-probed
+( cd "$TMP" && "$OPSX" gate wt-fallback --worktree "$TMP/nonexistent" ) >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -ne 0 ] && grep -q 'GATE-FAIL worktree' "$TMP/err" \
+  && ok "explicit invalid --worktree fails loud, no silent fallback" || nok "explicit invalid --worktree fails loud (rc=$rc)"
+# a NON-convention (custom-path) worktree is out of the fallback's reach BY DESIGN
+git -C "$TMP" worktree remove --force "$CONVWT" >/dev/null 2>&1
+git -C "$TMP" worktree add "$TMP/wtfb-custom" opsx/wt-fallback >/dev/null 2>&1
+run wt-fallback; check "custom-path worktree NOT resolved by fallback (locator publication covers it)" 1 $?
+git -C "$TMP" worktree remove --force "$TMP/wtfb-custom" >/dev/null 2>&1; git -C "$TMP" branch -D opsx/wt-fallback >/dev/null 2>&1
 
 # --- freshness tolerates verdict-only sealing commits, rejects code drift ---
 mkchange cr-seal

@@ -3,7 +3,7 @@
 // The loop mechanism mirrors the validated goal-loop pattern (ADR-0001/0004)
 // but this extension is independent — the goal extension is never modified.
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 /**
@@ -266,6 +266,128 @@ export function verdictFromExit(code: number | null, output: string): LoopVerdic
  * loop then stops only on gate-green, stall detection, abort, or manual clear.
  * (opsx-loop-kickoff.budget-from-review-front-matter)
  */
+/**
+ * Orchestrator-settable landing hold from review.md front-matter.
+ * `loop_hold: true` (anchored, unquoted) holds; anything else does not.
+ * The hold is honored even when the reason is empty — a malformed landing must
+ * still land (fail-safe direction; clarify C1).
+ * (opsx-loop-kickoff.loop-hold-blocks-continuation)
+ */
+export interface LoopHold {
+	held: boolean;
+	reason: string;
+}
+export function parseLoopHold(reviewMd: string): LoopHold {
+	const text = reviewMd ?? "";
+	const lines = text.split(/\r?\n/);
+	if (lines[0]?.trim() !== "---") return { held: false, reason: "" };
+	let held = false;
+	let reason = "";
+	for (let i = 1; i < lines.length; i++) {
+		if (lines[i].trim() === "---") break;
+		if (/^\s*loop_hold\s*:\s*true\s*$/i.test(lines[i])) held = true;
+		const m = lines[i].match(/^\s*loop_hold_reason\s*:\s*(.*?)\s*$/);
+		if (m) reason = m[1].replace(/^["']|["']$/g, "");
+	}
+	return { held, reason };
+}
+
+/**
+ * Strip the loop_hold fields from review.md front-matter (named re-arm clears
+ * the hold; goal kickoff never calls this). Returns the text unchanged when no
+ * hold fields are present. (opsx-loop-kickoff.loop-hold-blocks-continuation)
+ */
+export function stripLoopHold(reviewMd: string): string {
+	const text = reviewMd ?? "";
+	const lines = text.split(/\r?\n/);
+	if (lines[0]?.trim() !== "---") return text;
+	const out: string[] = [];
+	let inFm = true;
+	for (let i = 0; i < lines.length; i++) {
+		if (i > 0 && inFm && lines[i].trim() === "---") inFm = false;
+		if (i > 0 && inFm && /^\s*loop_hold(_reason)?\s*:/.test(lines[i])) continue;
+		out.push(lines[i]);
+	}
+	return out.join("\n");
+}
+
+/**
+ * The full named-re-arm clearing transform: strip the hold fields and append
+ * the auditable clearance line under Execution Notes (created when absent).
+ * Pure text→text so the extension's file write is a dumb persist.
+ * (opsx-loop-kickoff.loop-hold-blocks-continuation)
+ */
+export function clearHoldText(reviewMd: string, change: string, dateStr: string): { next: string; reason: string } {
+	const hold = parseLoopHold(reviewMd);
+	let next = stripLoopHold(reviewMd);
+	const noteLine = `- ${dateStr} — loop_hold cleared by named re-arm (/opsx-loop ${change}); reason was: ${hold.reason || "(none recorded)"}`;
+	// Line-anchored heading + replacement FUNCTION: a reason containing `$&`-style
+	// patterns must not corrupt the note, and a longer heading ("## Execution Notes
+	// (archived)") must not be spliced into.
+	const heading = /^## Execution Notes\s*$/m;
+	next = heading.test(next)
+		? next.replace(heading, () => `## Execution Notes\n\n${noteLine}`)
+		: `${next}\n\n## Execution Notes\n\n${noteLine}\n`;
+	return { next, reason: hold.reason };
+}
+
+/**
+ * Deterministic active-change inventory for the distill kickoff directive:
+ * names of change dirs (non-archive) carrying a committed intent.md, with the
+ * cheap front-matter scale as status. Directory listing + front-matter parse
+ * ONLY — no gate runs, no model calls.
+ * (opsx-loop-kickoff.goal-and-conversation-kickoff)
+ */
+export interface InventoryEntry {
+	name: string;
+	scale: string;
+}
+export function listIntentChanges(cwd: string, isCommitted?: (name: string) => boolean): InventoryEntry[] {
+	try {
+		const base = join(cwd, "openspec", "changes");
+		return readdirSync(base, { withFileTypes: true })
+			.filter(
+				(e) =>
+					e.isDirectory() &&
+					e.name !== "archive" &&
+					existsSync(join(base, e.name, "intent.md")) &&
+					// Spec: inventory lists changes with a COMMITTED intent.md — a
+					// working-tree draft is not a resumable baseline. The predicate is
+					// injected (git ls-files in the extension) to keep this pure.
+					(isCommitted === undefined || isCommitted(e.name)),
+			)
+			.map((e) => {
+				let scale = "?";
+				try {
+					const review = readFileSync(join(base, e.name, "review.md"), "utf-8");
+					const lines = review.split(/\r?\n/);
+					if (lines[0]?.trim() === "---") {
+						for (let i = 1; i < lines.length; i++) {
+							if (lines[i].trim() === "---") break;
+							const m = lines[i].match(/^\s*scale\s*:\s*(\S+)\s*$/);
+							if (m) {
+								scale = m[1];
+								break;
+							}
+						}
+					}
+				} catch {
+					/* no review.md yet — status stays "?" */
+				}
+				return { name: e.name, scale };
+			})
+			.sort((a, b) => a.name.localeCompare(b.name));
+	} catch {
+		return [];
+	}
+}
+
+/** Render the inventory block for the distill KICKOFF directive (never the continuation nudge). */
+export function formatInventory(entries: InventoryEntry[]): string {
+	if (entries.length === 0) return "(none)";
+	return entries.map((e) => `  - ${e.name} (scale: ${e.scale})`).join("\n");
+}
+
 export function parseLoopBudget(reviewMd: string): number | undefined {
 	const text = reviewMd ?? "";
 	const lines = text.split(/\r?\n/);

@@ -13,6 +13,14 @@ loop_max_iterations: 20
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
+# loop_hold: true — orchestrator-settable LANDING signal read by the loop host
+# (NOT by opsx gate — gate checks and exit code ignore it). Set it, with a
+# non-empty loop_hold_reason, when declaring a terminal landing that awaits a
+# human ruling (decision audit, presented green report, blocked state); write it
+# on the INTEGRATION-checkout copy of this file. Cleared ONLY by the human named
+# re-arm (/opsx-loop <change>) — agents never clear it. A true value with an
+# empty reason still holds (fail-safe).
+# loop_hold_reason: <why the loop landed — e.g. "decision audit in code-review.md round 4">
 # review_max_rounds: 5 — budget of BLIND gating review rounds per change
 # (opsx-review-convergence). Absent/invalid ⇒ consumers apply the default 5.
 # Orchestrator-read (skills), not a gate field. A user resume ruling at the

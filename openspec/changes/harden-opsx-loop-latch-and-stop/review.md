@@ -6,7 +6,7 @@ worktree_mode: worktree-required
 execution_mode: standard
 verification_mode: retained-required
 debug_mode: standard
-review_status: not-requested
+review_status: resolved
 delegation_mode: single-agent
 code_review_mode: gating-required
 loop_max_iterations: 40
@@ -30,7 +30,7 @@ review_models: [claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5]
 | Execution Mode | standard | Ordered steps; TS edits carry existing test suite, not TDD micro-tasks |
 | Verification Mode | retained-required | Code change at Scale M; AC↔test gate must be sealed |
 | Debug Mode | standard | — |
-| Review Status | not-requested | Set to resolved when gating review verdict seals |
+| Review Status | resolved | Disclosure-consensus pass sealed (3 rounds, 2 models) |
 | Delegation Mode | single-agent | Single orchestrator; blind subagents for review/doneness verdicts only |
 | Code Review Mode | gating-required | Constitution IX: edits existing skills (openspec-loop, openspec-apply-change reference) → adversarial multi-model review mandatory |
 | Loop Budget | 40 | M-scale code change; headroom over the S default without L's 80 |

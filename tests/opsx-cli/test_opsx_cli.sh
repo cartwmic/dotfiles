@@ -3,6 +3,7 @@
 # Cites acceptance criteria by canonical ID for the verify gate's AC<->test map:
 #   opsx-cli.unified-subcommand-dispatch
 #   opsx-cli.model-config-write-surface
+#   opsx-loop-kickoff.worktree-resolution-convention-fallback
 set -uo pipefail
 
 unset OPSX_AUTHOR_MODEL OPSX_REVIEW_MODELS OPSX_IMPL_MODEL OPSX_AUTHOR_IN_SESSION \
@@ -136,6 +137,29 @@ touch "$TMP/wtrepo/repo--opsx-demo/dirty"
   && ok "clean --force removes worktree and branch" || nok "clean force (rc=$rc)"
 ( cd "$WTREPO" && "$OPSX" clean demo ) >/dev/null 2>&1; rc=$?
 [ $rc -eq 0 ] && ok "clean is idempotent (nothing to clean exits 0)" || nok "clean idempotent (rc=$rc)"
+
+# ---- opsx-cli.read-only-worktree-path-emit ----
+# Single-source convention-path derivation: read-only, no side effects.
+mkdir -p "$WTREPO/openspec/changes/demo3"; printf '# Review\n' >"$WTREPO/openspec/changes/demo3/review.md"
+git -C "$WTREPO" add -A; git -C "$WTREPO" commit -qm demo3
+out="$(cd "$WTREPO" && "$OPSX" worktree path demo3 2>&1)"; rc=$?
+case "$out" in */wtrepo/repo--opsx-demo3) [ $rc -eq 0 ] && ok "worktree path emits the convention path when nothing exists" || nok "path convention emit (rc=$rc)" ;; *) nok "path convention emit (rc=$rc out=$out)" ;; esac
+[ ! -e "$TMP/wtrepo/repo--opsx-demo3" ] \
+  && ! git -C "$WTREPO" show-ref --verify --quiet refs/heads/opsx/demo3 \
+  && ok "worktree path is read-only (no branch, no worktree, no file created)" || nok "path no side effects"
+# Convention-ONLY emit: even after ensure with a --path override, path still
+# prints the convention derivation — override worktrees are covered by the
+# committed locator, NOT the fallback (by design).
+( cd "$WTREPO" && "$OPSX" worktree ensure demo3 --path "$TMP/wtrepo/custom-demo3" ) >/dev/null 2>&1
+out="$(cd "$WTREPO" && "$OPSX" worktree path demo3 2>&1)"; rc=$?
+case "$out" in */wtrepo/repo--opsx-demo3) [ $rc -eq 0 ] && ok "worktree path stays convention-only despite a --path override worktree" || nok "path convention-only emit (rc=$rc)" ;; *) nok "path convention-only emit (rc=$rc out=$out)" ;; esac
+# Main-root normalization: the emit is IDENTICAL from inside a linked worktree
+out="$(cd "$TMP/wtrepo/custom-demo3" && "$OPSX" worktree path demo3 2>&1)"; rc=$?
+case "$out" in */wtrepo/repo--opsx-demo3) [ $rc -eq 0 ] && ok "worktree path derivation identical from inside a linked worktree" || nok "path from-worktree emit (rc=$rc)" ;; *) nok "path from-worktree emit (rc=$rc out=$out)" ;; esac
+( cd "$WTREPO" && "$OPSX" worktree path nope ) >/dev/null 2>&1; rc=$?
+[ $rc -eq 1 ] && ok "worktree path unknown change exits 1" || nok "path unknown change (rc=$rc)"
+( cd "$WTREPO" && "$OPSX" worktree path demo3 --path x ) >/dev/null 2>&1; rc=$?
+[ $rc -eq 2 ] && ok "worktree path rejects options" || nok "path rejects options (rc=$rc)"
 
 echo "opsx-cli: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]

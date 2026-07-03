@@ -5,6 +5,7 @@
 #   opsx models   <role|set|get|list> ...         role->model resolver + writer
 #   opsx loop     <change> [--worktree <path>]    Ralph-style fallback driver
 #   opsx worktree ensure <change> [...]           deterministic worktree lifecycle
+#   opsx worktree path <change>                   read-only convention-path emit
 #   opsx clean    <change> [--force]              remove an abandoned change's worktree+branch
 #
 # Hard cutover: replaces the standalone opsx-gate / opsx-models / opsx-loop
@@ -25,6 +26,7 @@ usage: opsx <subcommand> [args]
   loop     <change> [--worktree <path>]   Ralph-style fallback driver
   worktree ensure <change> [--path <p>] [--integration-branch <b>]
                                           create/reuse the opsx/<change> worktree
+  worktree path <change>                  print the canonical worktree path (read-only)
   clean    <change> [--force]             remove an abandoned change's worktree+branch
 USAGE
 }
@@ -351,6 +353,34 @@ EOF
 )
 
 # ============================================================================
+# SHARED WORKTREE DERIVATION (single source — opsx-cli.read-only-worktree-path-emit)
+# The convention path and branch-lookup logic exist exactly once; `opsx worktree
+# ensure`, `opsx worktree path`, and the gate's locator fallback all consume
+# these helpers so no caller carries an independent copy of the derivation.
+# ============================================================================
+opsx_repo_main_root() { # $1=any-checkout root → the repo's MAIN (integration) worktree root
+  git -C "$1" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10); exit}'
+}
+opsx_wt_convention_path() { # $1=any-checkout root $2=change → the path `ensure` would derive absent --path
+  # Normalized to the MAIN worktree root so the derivation is IDENTICAL from the
+  # integration checkout and from inside any linked worktree — gate-view equality
+  # (intent invariant) breaks otherwise.
+  local main
+  main="$(opsx_repo_main_root "$1")"
+  [ -n "$main" ] || main="$1"
+  echo "$(dirname "$main")/$(basename "$main")--opsx-$2"
+}
+opsx_wt_for_branch() { # $1=repo-root $2=change → existing worktree checked out on opsx/<change>, if any
+  git -C "$1" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/opsx/$2" '
+    /^worktree /{wt=substr($0,10)} /^branch /{if (substr($0,8)==b) {print wt; exit}}'
+}
+opsx_wt_valid_for_change() { # $1=path $2=change → 0 iff a git worktree on branch opsx/<change>
+  [ -n "$1" ] || return 1
+  git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  [ "$(git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null)" = "opsx/$2" ]
+}
+
+# ============================================================================
 # SUBCOMMAND: gate
 # ============================================================================
 opsx_gate() (
@@ -428,8 +458,27 @@ bodyfield() {
 # forever against stale root copies.
 # ============================================================================
 WT_PATH="$WORKTREE_ARG"
-[ -n "$WT_PATH" ] || WT_PATH="$(bodyfield 'Worktree Path')"
-case "$WT_PATH" in *"<empty"*|"<"*) WT_PATH="" ;; esac
+if [ -n "$WT_PATH" ]; then
+  # An explicit --worktree is an operator assertion: validate it NOW and fail
+  # LOUD on mismatch (any worktree_mode) — never silently ignore it or
+  # substitute another tree (clarify C3).
+  if ! opsx_wt_valid_for_change "$WT_PATH" "$CHANGE"; then
+    fail worktree "explicit --worktree is not a git worktree on branch opsx/$CHANGE: $WT_PATH"
+    echo "opsx gate: explicit worktree invalid (change=$CHANGE)" >&2
+    exit 1
+  fi
+else
+  WT_PATH="$(bodyfield 'Worktree Path')"
+  case "$WT_PATH" in *"<empty"*|"<"*) WT_PATH="" ;; esac
+  # Convention fallback (opsx-gate-enforcement.verdict-freshness-and-provenance):
+  # ONLY when the RECORDED locator is absent/invalid, and ONLY the convention
+  # path from the single-source derivation — --path-override worktrees are
+  # covered by the committed locator, not the fallback (BY DESIGN).
+  if ! opsx_wt_valid_for_change "$WT_PATH" "$CHANGE"; then
+    _CAND="$(opsx_wt_convention_path "$ROOT" "$CHANGE")"
+    if opsx_wt_valid_for_change "$_CAND" "$CHANGE"; then WT_PATH="$_CAND"; else WT_PATH=""; fi
+  fi
+fi
 ART_ROOT="$ROOT"
 if [ -n "$WT_PATH" ] \
    && git -C "$WT_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
@@ -903,8 +952,8 @@ PROG="opsx worktree"
 err() { echo "$PROG: $*" >&2; }
 VERB="${1:-}"; [ $# -gt 0 ] && shift || true
 case "$VERB" in
-  ensure) ;;
-  *) echo "usage: $PROG ensure <change> [--path <p>] [--integration-branch <b>]" >&2; exit 2 ;;
+  ensure|path) ;;
+  *) echo "usage: $PROG ensure <change> [--path <p>] [--integration-branch <b>] | $PROG path <change>" >&2; exit 2 ;;
 esac
 CHANGE=""; WPATH=""; IBRANCH=""
 while [ $# -gt 0 ]; do
@@ -915,7 +964,7 @@ while [ $# -gt 0 ]; do
     *) CHANGE="$1"; shift ;;
   esac
 done
-[ -n "$CHANGE" ] || { echo "usage: $PROG ensure <change> [--path <p>] [--integration-branch <b>]" >&2; exit 2; }
+[ -n "$CHANGE" ] || { echo "usage: $PROG ensure <change> [--path <p>] [--integration-branch <b>] | $PROG path <change>" >&2; exit 2; }
 
 ROOT="$(git -C "${OPSX_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" \
   || { err "not inside a git repository"; exit 1; }
@@ -923,13 +972,24 @@ ROOT="$(git -C "${OPSX_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" \
 BRANCH="opsx/$CHANGE"
 REVIEW="$ROOT/openspec/changes/$CHANGE/review.md"
 
+if [ "$VERB" = "path" ]; then
+  # READ-ONLY emit (opsx-cli.read-only-worktree-path-emit): ONLY the canonical
+  # convention path — the path `ensure` would derive absent a --path override.
+  # Deliberately NOT the existing-branch-worktree lookup: --path-override
+  # worktrees are out of the fallback's reach BY DESIGN (the committed locator
+  # covers them). NO side effects.
+  [ -z "$WPATH" ] && [ -z "$IBRANCH" ] || { err "path takes no options"; exit 2; }
+  opsx_wt_convention_path "$ROOT" "$CHANGE"
+  exit 0
+fi
+
 if [ -z "$IBRANCH" ]; then
   IBRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)"
   if [ -z "$IBRANCH" ] || [ "$IBRANCH" = "HEAD" ]; then
     err "repository is in detached HEAD state; pass --integration-branch explicitly"; exit 1
   fi
 fi
-[ -n "$WPATH" ] || WPATH="$(dirname "$ROOT")/$(basename "$ROOT")--opsx-$CHANGE"
+[ -n "$WPATH" ] || WPATH="$(opsx_wt_convention_path "$ROOT" "$CHANGE")"
 
 recorded_base() {
   [ -f "$REVIEW" ] || return 0
@@ -937,10 +997,7 @@ recorded_base() {
     | head -1 | sed -E 's/^\*\*Diff Base SHA:\*\*[[:space:]]*//; s/[[:space:]]+$//'
 }
 
-existing_wt_for_branch() {
-  git -C "$ROOT" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/$BRANCH" '
-    /^worktree /{wt=substr($0,10)} /^branch /{if (substr($0,8)==b) {print wt; exit}}'
-}
+existing_wt_for_branch() { opsx_wt_for_branch "$ROOT" "$CHANGE"; }
 
 if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
   # REUSE: preserve the recorded base; halt for human repair when unsafe.

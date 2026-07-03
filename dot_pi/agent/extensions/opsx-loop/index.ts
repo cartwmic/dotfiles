@@ -12,20 +12,24 @@
  * (ADR-0001/0004). Independent of the goal extension.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
 	buildModelEnv,
 	classifyDoneness,
 	donenessRatchet,
+	formatInventory,
 	gateFailKey,
 	hashDir,
+	listIntentChanges,
 	LOOP_SUBCOMMANDS,
 	OPSX_MODEL_ENV_KEYS,
 	parseDonenessGaps,
 	parseLoopArg,
+	clearHoldText,
 	parseLoopBudget,
+	parseLoopHold,
 	parseModelsJson,
 	verdictFromExit,
 	type LoopVerdict,
@@ -201,15 +205,65 @@ function runGate(change: string, worktree: string | undefined, signal: AbortSign
 	});
 }
 
-/** Re-resolve a usable worktree path from the change's review.md, or undefined. */
-function resolveWorktree(change: string, cwd: string): string | undefined {
-	const wt = bodyField(readReview(change, cwd), "Worktree Path");
-	if (!wt) return undefined;
+/**
+ * Convention-path fallback: the canonical path from the single-source read-only
+ * `opsx worktree path` emit, used iff it is a valid git worktree on branch
+ * opsx/<change>. Never re-derives the path locally.
+ * (opsx-loop-kickoff.worktree-resolution-convention-fallback)
+ */
+/** True iff `p` is a git worktree checked out on branch opsx/<change>. */
+function isChangeWorktree(p: string, change: string): boolean {
 	try {
-		const r = spawnSync("git", ["-C", wt, "rev-parse", "--is-inside-work-tree"], { encoding: "utf-8", timeout: 5000 });
-		return r.status === 0 ? wt : undefined; // blank/stale path → no --worktree
+		const b = spawnSync("git", ["-C", p, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf-8", timeout: 5000 });
+		return b.status === 0 && (b.stdout ?? "").trim() === `opsx/${change}`;
+	} catch {
+		return false;
+	}
+}
+
+function conventionWorktree(change: string, cwd: string): string | undefined {
+	try {
+		const r = spawnSync("opsx", ["worktree", "path", change], { encoding: "utf-8", cwd, timeout: 5000 });
+		const p = r.status === 0 ? (r.stdout ?? "").trim() : "";
+		if (!p) return undefined;
+		return isChangeWorktree(p, change) ? p : undefined;
 	} catch {
 		return undefined;
+	}
+}
+
+/**
+ * Re-resolve a usable worktree path: the review.md locator first — validated as
+ * a git worktree ON BRANCH opsx/<change>, so a stale locator pointing at some
+ * other tree cannot suppress the fallback — then the convention fallback; else
+ * undefined (no --worktree, unchanged degraded behavior).
+ */
+function resolveWorktree(change: string, cwd: string): string | undefined {
+	const wt = bodyField(readReview(change, cwd), "Worktree Path");
+	if (wt && isChangeWorktree(wt, change)) return wt;
+	return conventionWorktree(change, cwd);
+}
+
+/**
+ * Change names whose intent.md is COMMITTED at HEAD — `git ls-tree HEAD`, not
+ * `ls-files`: a merely STAGED draft is not a committed/frozen baseline and must
+ * not be inventoried as resumable.
+ */
+function committedIntentNames(cwd: string): Set<string> {
+	try {
+		const r = spawnSync("git", ["-C", cwd, "ls-tree", "-r", "--name-only", "HEAD", "--", "openspec/changes"], {
+			encoding: "utf-8",
+			timeout: 5000,
+		});
+		if (r.status !== 0) return new Set();
+		const names = new Set<string>();
+		for (const line of (r.stdout ?? "").split("\n")) {
+			const m = line.trim().match(/^openspec\/changes\/([^/]+)\/intent\.md$/);
+			if (m && m[1] !== "archive") names.add(m[1]);
+		}
+		return names;
+	} catch {
+		return new Set();
 	}
 }
 
@@ -328,17 +382,46 @@ export default function (pi: ExtensionAPI) {
 	// human confirmation (ADR-0014): the frozen intent.md is the immutable
 	// baseline every blind reviewer and the doneness judge scores against, so
 	// the loop being scored must not silently author-and-adopt it.
-	const distillDirective = (goal?: string) =>
-		`Distill an OpenSpec change with a frozen intent baseline (draft only — do NOT start implementing).\n\n` +
-		`- If an active change with a frozen intent.md already captures this work, say so and stop.\n` +
+	// Distill-scoped autonomy (opsx-loop-kickoff.goal-and-conversation-kickoff):
+	// the drive-to-green AUTONOMY blurb must NEVER ride the distill directive —
+	// "keep going, the gate is the arbiter" contradicts the directive's own STOP
+	// and invites implementing during distill.
+	const DISTILL_AUTONOMY =
+		`\n\nDraft the intent AUTONOMOUSLY: do not ask the user questions while drafting — make ` +
+		`the most reasonable decision from the goal/conversation and record assumptions in the ` +
+		`draft. Do NOT implement anything, do NOT create worktrees or author further artifacts, ` +
+		`and STOP after the announcement: the loop pauses for human intent confirmation.`;
+
+	const distillDirective = (goal: string | undefined, cwd: string) => {
+		const committed = committedIntentNames(cwd);
+		const inventory = formatInventory(listIntentChanges(cwd, (n) => committed.has(n)));
+		return (
+			`Distill an OpenSpec change with a frozen intent baseline (draft only — do NOT start implementing).\n\n` +
+			`Active changes with a committed intent.md (deterministic inventory):\n${inventory}\n\n` +
+			`- If one of these already captures this work, do NOT create a new change: announce which ` +
+			`one, advise the user to arm it with /opsx-loop <name>, and stop.\n` +
+			(goal
+				? `- Otherwise distill this goal into a new change: "${goal}".`
+				: `- Otherwise distill our current conversation — the intent we have converged on — into a new change.`) +
+			` Use openspec-explore / openspec-propose to create openspec/changes/<name>/ with intent.md.\n` +
+			`Announce the new change name as soon as its intent.md is written, then STOP: the loop ` +
+			`pauses for the user to review and confirm the intent baseline before the autonomous ` +
+			`drive-to-green phase is armed with /opsx-loop <name>.` +
+			DISTILL_AUTONOMY
+		);
+	};
+
+	// Terse distill CONTINUATION nudge — mirrors the worker kickoff-vs-continuation
+	// split (load-bearing): the inventory and full setup prose ride the KICKOFF
+	// directive only, never this nudge.
+	const distillContinuation = (goal?: string) =>
+		`[still distilling] No new change with a committed intent.md has appeared yet. Continue the ` +
+		`SAME distill task from the kickoff instructions: ` +
 		(goal
-			? `- Otherwise distill this goal into a new change: "${goal}".`
-			: `- Otherwise distill our current conversation — the intent we have converged on — into a new change.`) +
-		` Use openspec-explore / openspec-propose to create openspec/changes/<name>/ with intent.md.\n` +
-		`Announce the new change name as soon as its intent.md is written, then STOP: the loop ` +
-		`pauses for the user to review and confirm the intent baseline before the autonomous ` +
-		`drive-to-green phase is armed with /opsx-loop <name>.` +
-		AUTONOMY;
+			? `draft the intent for goal "${goal}" into openspec/changes/<name>/intent.md and announce it`
+			: `draft the intent distilled from this conversation into openspec/changes/<name>/intent.md and announce it`) +
+		`, OR — if an active change from the kickoff inventory already covers it — announce that change ` +
+		`and advise /opsx-loop <name>, then stop. Do NOT implement; STOP after announcing.`;
 
 	pi.registerCommand("opsx-loop", {
 		description: "Guaranteed opsx loop: /opsx-loop goal [text] | <change> | status | clear | models",
@@ -398,24 +481,48 @@ export default function (pi: ExtensionAPI) {
 					distillRaw && /^\d+$/.test(distillRaw) && Number.parseInt(distillRaw, 10) > 0
 						? Number.parseInt(distillRaw, 10)
 						: undefined;
+				const preDirs = listChangeDirs(ctx.cwd);
 				loop = {
 					goal: parsed.goal,
 					awaitingChange: true,
-					preChangeDirs: listChangeDirs(ctx.cwd),
+					preChangeDirs: preDirs,
 					turns: 0,
 					maxTurns: distillBudget, // replaced by the change's own budget on adoption
 					active: true,
 					evaluating: false,
 					stallCount: 0,
+					// Seed the stall baseline at arm time so the FIRST distilling turn
+					// counts and STALL_LIMIT means exactly STALL_LIMIT turns (D7 — the
+					// undefined-baseline turn previously made 3 cost 4).
+					lastDirs: preDirs.slice(),
 				};
 				renderStatus(ctx);
-				pi.sendUserMessage(distillDirective(parsed.goal), { deliverAs: "followUp" });
+				pi.sendUserMessage(distillDirective(parsed.goal, ctx.cwd), { deliverAs: "followUp" });
 				const src = parsed.goal ? `goal: "${parsed.goal}"` : "the current conversation";
 				ctx.ui.notify(`⟳ opsx-loop started from ${src} — distilling intent → change (budget ${loop.maxTurns ?? "∞"}).`, "info");
 				return;
 			}
 
 			// set — replaces any active loop, resolves worktree + budget, starts work.
+			// Named re-arm clears any landing hold BEFORE the turn-0 gate evaluation and
+			// regardless of its outcome (a green short-circuit must not leave a stale
+			// hold behind). This explicit human-only spelling is the SOLE clear path —
+			// goal kickoff never touches holds, agents cannot invoke slash commands.
+			// (opsx-loop-kickoff.loop-hold-blocks-continuation)
+			let holdNote = "";
+			const reviewMd0 = readReview(parsed.change, ctx.cwd);
+			const hold0 = parseLoopHold(reviewMd0);
+			if (hold0.held) {
+				const reviewPath = join(ctx.cwd, "openspec", "changes", parsed.change, "review.md");
+				try {
+					const cleared = clearHoldText(reviewMd0, parsed.change, new Date().toISOString().slice(0, 10));
+					writeFileSync(reviewPath, cleared.next);
+					holdNote = ` · hold was set: "${cleared.reason || "(no reason recorded)"}" — cleared by re-arm`;
+				} catch (e: any) {
+					ctx.ui.notify(`⟳ opsx-loop: failed to clear loop_hold in ${reviewPath}: ${e?.message ?? "unknown"}`, "error");
+					return;
+				}
+			}
 			// Turn-0 short-circuit: if the change ALREADY passes opsx gate, do NOT arm or
 			// inject a worker turn — re-kicking a finished (green) change would loop it
 			// forever. Report it ready to archive instead.
@@ -423,7 +530,7 @@ export default function (pi: ExtensionAPI) {
 			const pre = await runGate(parsed.change, wt0, ctx.signal, ctx.cwd);
 			if (pre.met) {
 				clearLoop(ctx);
-				ctx.ui.notify(`⟳ opsx-loop: ${parsed.change} already passes opsx gate — ready to archive. Not starting a loop.`, "info");
+				ctx.ui.notify(`⟳ opsx-loop: ${parsed.change} already passes opsx gate — ready to archive. Not starting a loop.${holdNote}`, "info");
 				return;
 			}
 			const review = readReview(parsed.change, ctx.cwd);
@@ -442,7 +549,7 @@ export default function (pi: ExtensionAPI) {
 			pi.sendUserMessage(workerDirective(parsed.change), { deliverAs: "followUp" });
 			const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
 			const ignoredNote = parsed.ignored ? ` (ignored extra input: "${parsed.ignored}")` : "";
-			ctx.ui.notify(`⟳ opsx-loop started (budget ${loop.maxTurns ?? "∞"}) for ${parsed.change}${modelNote}${ignoredNote}`, "info");
+			ctx.ui.notify(`⟳ opsx-loop started (budget ${loop.maxTurns ?? "∞"}) for ${parsed.change}${modelNote}${ignoredNote}${holdNote}`, "info");
 			return;
 		},
 	});
@@ -504,7 +611,7 @@ export default function (pi: ExtensionAPI) {
 						}
 					}
 					renderStatus(ctx);
-					pi.sendUserMessage(distillDirective(session.goal), { deliverAs: "followUp" });
+					pi.sendUserMessage(distillContinuation(session.goal), { deliverAs: "followUp" });
 					return;
 				}
 				// ONE-SHOT HUMAN CONFIRM (ADR-0014): do NOT silently adopt the
@@ -520,6 +627,23 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			const change = session.change as string;
+
+			// loop_hold landing channel: checked FIRST, before any gate run or
+			// continuation injection. The hold lives in the INTEGRATION-checkout
+			// review.md (the copy this host resolves) and is honored even with an
+			// empty reason — a malformed landing must still land (fail-safe).
+			// Only the human named re-arm clears it.
+			// (opsx-loop-kickoff.loop-hold-blocks-continuation)
+			const hold = parseLoopHold(readReview(change, ctx.cwd));
+			if (hold.held) {
+				clearLoop(ctx);
+				ctx.ui.notify(
+					`⟳ opsx-loop: ${change} — loop landed (loop_hold${hold.reason ? `: ${hold.reason}` : " set without a reason"}). ` +
+						`Worktree preserved. Re-arm with /opsx-loop ${change} to clear the hold and continue.`,
+					"warning",
+				);
+				return;
+			}
 
 			// Re-resolve the worktree EACH turn: a from-scratch change may only gain a
 			// Worktree Path mid-loop. (opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge)
