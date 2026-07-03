@@ -16,7 +16,7 @@ validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
 review_max_rounds: 10
-review_models: [claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5]
+review_models: [claude-bridge/claude-opus-4-8, claude-bridge/claude-sonnet-5]
 ---
 
 # Review
@@ -58,3 +58,4 @@ review_models: [claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5]
 - 2026-07-03: USER RULING — review_max_rounds extended 6→7 for one confirming blind round over the R6 fixes at worktree HEAD a66a39f.
 - 2026-07-03: LANDED (3rd) — round 7 split again: opus pass (0 findings, real-CLI probes), gpt R7-F1 (schema/propose still steered XS into skipping review.md — fixed 329a018) + R7-F2 (template hard-coded advisory review mode — fixed 60fef27). Budget 7/7.
 - 2026-07-03: USER RULING (convergence cap) — review_max_rounds 7→10; loop authorized to fix-and-re-review autonomously until a round yields 0 new P0/P1 from both reviewers; cap-hit without convergence lands for ruling.
+- 2026-07-03: USER RULING (reviewer reconfiguration per opsx-adversarial-review.reviewer-model-stability): openai-codex/gpt-5.5 usage-limited mid-round-8; review_models second slot reconfigured to claude-bridge/claude-sonnet-5 by explicit user choice; applies to round 8 and subsequent rounds; logged in code-review.md ledger.
