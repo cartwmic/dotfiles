@@ -39,6 +39,38 @@ THE code-review.md `review_mode` vocabulary SHALL include `disclosure-consensus`
 - **IF** a round conducted blind is sealed with `review_mode: disclosure-consensus`
 - **THEN** the provenance is misstated; the orchestration SHALL correct the mode to the blind vocabulary value before the verdict is consumed
 
+### Requirement: Waiver Sealed Pass
+
+WHEN the user waives the remaining open P0/P1 findings at the decision-audit landing, THE orchestration SHALL re-seal the code-review.md `Verdict` as `pass` carrying a `waived_by_user` field that lists the waived findings and the waiver rationale, with the reviewed range unchanged (no new HEAD is required), so the gate and archive read a sealed pass reached by explicit human authorization rather than remaining blocked on a fail verdict no reviewer can refresh.
+
+#### Scenario: Waiver reaches a consumable pass
+- **WHEN** every open P0/P1 finding has been user-waived at the landing
+- **THEN** code-review.md SHALL record `Verdict: pass` with the `waived_by_user` field populated and the existing reviewed range retained, and the gate SHALL accept it wherever a pass verdict is required
+
+#### Scenario: Waiver never self-authored
+- **IF** a `waived_by_user` field would be written without a user ruling at the decision-audit landing
+- **THEN** the re-seal SHALL NOT occur; only an explicit user ruling authorizes a waiver-sealed pass
+
+## MODIFIED Requirements
+
+### Requirement: Adversarial Review With Degradation
+
+THE code-review production SHALL use the adversarial-review capability over the diff when that capability is available, and IF no adversarial-review capability is registered, THEN it SHALL fall back to a single-model review and SHALL mark code-review.md as degraded.
+
+#### Scenario: Adversarial path used when available
+- **WHERE** the adversarial-review capability resolves to a registered skill
+- **WHEN** code review runs
+- **THEN** the review SHALL be conducted blind over the diff — with the single opsx-review-convergence disclosure round as the sole sanctioned non-blind exception, marked `review_mode: disclosure-consensus` — and the converged findings SHALL be recorded in code-review.md
+
+#### Scenario: Degraded single-model fallback
+- **IF** no adversarial-review capability is registered
+- **THEN** code-review.md SHALL still be produced, SHALL set `review_mode: degraded-single-model`, and SHALL carry a degraded-mode notice in its header
+
+#### Scenario: Degraded review does not satisfy Constitution IX
+- **WHILE** the change modifies an existing skill (Constitution IX) or runs without a subagent-dispatch adapter
+- **IF** code-review.md `review_mode` is degraded-single-model
+- **THEN** opsx-gate and archive SHALL treat the code-review check as failed, since a self-authored or single-model review does not satisfy the multi-model adversarial requirement
+
 ---
 
 ## Acceptance criterion quality checklist
@@ -48,3 +80,5 @@ THE code-review.md `review_mode` vocabulary SHALL include `disclosure-consensus`
 | opsx-post-impl-review.verdict-under-the-severity-floor | [x] | [x] | [x] | [x] | [x] |
 | opsx-post-impl-review.round-ledger-sealed-in-code-review | [x] | [x] | [x] | [x] | [x] |
 | opsx-post-impl-review.disclosure-consensus-review-mode | [x] | [x] | [x] | [x] | [x] |
+| opsx-post-impl-review.waiver-sealed-pass | [x] | [x] | [x] | [x] | [x] |
+| opsx-post-impl-review.adversarial-review-with-degradation | [x] | [x] | [x] | [x] | [x] |

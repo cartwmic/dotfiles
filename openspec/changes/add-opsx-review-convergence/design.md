@@ -105,9 +105,12 @@ signal to resolve itself before a human is interrupted.
 
 **Choice:** Open P0/P1 after stops + disclosure → halt cycling, present a tiered
 🔴/🟡/🟢 audit (open findings, autonomous decisions, scope expansions). A user waiver
-records the finding as user-waived in follow-ups.md and removes it from the open set —
+records the finding as user-waived in follow-ups.md, removes it from the open set, and
+re-seals `Verdict: pass` with a `waived_by_user` field (reviewed range unchanged) —
 pass is then reached by explicit human authorization, never by the loop overriding a
-blocker.
+blocker. A resume ruling grants a recorded round-budget extension so resumed rounds are
+dispatchable; the landing halts loop continuation (host loop-stop, else stall detection)
+so the audit is presented once, not every re-injected turn.
 
 **Alternatives considered:**
 - **Plain fail-report** (budget-exhausted style). Cons: dumps synthesis on the user at

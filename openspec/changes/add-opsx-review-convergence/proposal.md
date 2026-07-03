@@ -82,9 +82,11 @@ structural cost on every such change.
   `openspec/specs/opsx-workflow-schema/spec.md` (delta specs in this change);
   new `openspec/specs/opsx-review-convergence/spec.md`.
 - **Skills (Constitution IX — existing-skill edits):**
-  `dot_pi/agent/skills/openspec-loop/SKILL.md` (stop conditions, ledger,
-  disclosure round, landing, widening protocol, surface audit, model
-  stability); apply-mode reference
+  `dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md`
+  (stop conditions, ledger, disclosure round, landing, widening protocol,
+  surface audit, model stability — canonical source; the deployed
+  `~/.pi/agent/skills/` copy propagates via chezmoi apply); apply-mode
+  reference
   `dot_local/share/agent-harness/canonical/skills/openspec-apply-change/references/opsx-superpowers-mode.md`
   (code-review production discipline).
 - **Templates:** `dot_local/share/openspec/schemas/opsx-superpowers/templates/`
