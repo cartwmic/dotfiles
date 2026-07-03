@@ -55,6 +55,8 @@ misread as human authorization.
   fallback; locator-field publication requirement (integration checkout).
 - `opsx-workflow-schema`: review.md template documents `loop_hold` +
   `loop_hold_reason` front-matter keys.
+- `opsx-cli`: read-only `opsx worktree path <change>` subcommand — single source
+  for the convention path consumed by the gate and extension fallbacks.
 
 ## Impact
 
