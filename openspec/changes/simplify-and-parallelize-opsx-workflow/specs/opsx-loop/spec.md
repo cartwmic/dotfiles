@@ -500,7 +500,7 @@ THE openspec-loop orchestration SHALL produce a blind doneness verdict on the re
 #### Scenario: Plain M rides the code-review dispatch
 - **WHILE** the doneness verdict is required AND the change is Scale M WITHOUT `full_rigor`
 - **WHEN** the orchestration produces the doneness verdict
-- **THEN** the doneness question SHALL be answered by the SAME blind reviewer as a dedicated final required section of the code-review dispatch (no separate doneness dispatch), and its verdict SHALL STILL be sealed to a separate `doneness.md` with adapter-stamped provenance and a fresh reviewed range, so the gate reads the sealed field exactly as before
+- **THEN** the doneness question SHALL be answered by ONE designated blind reviewer as a dedicated final required section of the code-review dispatch (no separate doneness dispatch) — WHERE the dispatch resolves more than one `review`-role model, the designated reviewer SHALL be the FIRST model in the resolved `review` role set so exactly one verdict is sealed — and its verdict SHALL STILL be sealed to a separate `doneness.md` with adapter-stamped `blind-single-judge` provenance and a fresh reviewed range, so the gate reads the sealed field exactly as before and the 2-model blind code review is not weakened by co-locating the doneness section
 
 #### Scenario: Orchestrator never self-authors the doneness verdict
 - **WHEN** a doneness verdict is produced

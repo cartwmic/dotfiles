@@ -44,7 +44,7 @@ THE opsx gate command SHALL derive the set of required artifacts from the change
 
 ### Requirement: Land Base Currency
 
-THE archive/land path SHALL require that `merge-base(opsx/<change>, main)` equals the current `main` HEAD before landing or archiving a change, computed with deterministic git plumbing (no language-model judgment), so a change built on a stale base cannot land over intervening main commits; WHEN the merge-base is not equal to `main` HEAD, the archive/land SHALL be refused with a failure message that names the rebase remedy (rebase `opsx/<change>` onto `main` HEAD, which staleness-fires a fresh review) rather than proceeding.
+THE archive/land path SHALL require that `merge-base(opsx/<change>, main)` equals the current `main` HEAD before landing or archiving a change, computed with deterministic git plumbing (no language-model judgment), so a change built on a stale base cannot land over intervening main commits; WHEN the merge-base is not equal to `main` HEAD, the archive/land SHALL be refused with a failure message that names the rebase remedy (rebase `opsx/<change>` onto `main` HEAD, which staleness-fires a fresh review) rather than proceeding. WHERE no `opsx/<change>` integration branch exists (a same-tree change — the XS/S auto-downgrade default under B4 — whose commits land directly on the integration checkout), the precondition SHALL be treated as satisfied (there is no divergent base to rebase, so the stale-base failure class does not apply), never refused as a missing-ref error.
 
 #### Scenario: Current base permits landing
 - **WHILE** `merge-base(opsx/<change>, main)` equals `main` HEAD
@@ -58,6 +58,11 @@ THE archive/land path SHALL require that `merge-base(opsx/<change>, main)` equal
 #### Scenario: Base check is deterministic git plumbing
 - **WHEN** the base-currency precondition is evaluated
 - **THEN** it SHALL be computed solely from git plumbing (merge-base vs. main HEAD) with no model call, matching the gate's deterministic, model-free posture
+
+#### Scenario: Same-tree change with no integration branch is not blocked
+- **WHILE** the change was authored same-tree (no `opsx/<change>` branch exists) so its commits landed directly on the integration checkout
+- **WHEN** the archive/land path evaluates the base-currency precondition
+- **THEN** the precondition SHALL be treated as satisfied (there is no divergent base) and archive MAY proceed subject to the other archive gates, rather than the missing `opsx/<change>` ref being reported as a stale/failed base
 
 ### Requirement: Duplicate ADR Number Scan
 

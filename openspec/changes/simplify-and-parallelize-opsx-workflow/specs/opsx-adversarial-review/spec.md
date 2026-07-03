@@ -377,10 +377,16 @@ acceptance criteria, and SHALL rule `satisfied` only when the intent's stated ou
 met and NOTHING beyond them is demanded. THE DISPATCH CHANNEL SHALL be tier-conditioned:
 WITH the `full_rigor` review.md front-matter flag it SHALL be an INDEPENDENT blind subagent
 dispatched separately from the code-review reviewers; at Scale M WITHOUT `full_rigor` it
-SHALL instead be answered by the SAME blind code-review reviewer as a dedicated final
-required section of that dispatch — in BOTH channels the judgment stays blind (fresh
+SHALL instead be answered by ONE designated blind code-review reviewer as a dedicated final
+required section of that dispatch. WHERE the code-review dispatch resolves more than one
+`review`-role model, the designated doneness reviewer SHALL be exactly ONE of them chosen
+deterministically (the FIRST model in the resolved `review` role set), so a single sealed
+`doneness.md` verdict and a single-model provenance stamp (`blind-single-judge`) result
+regardless of how many reviewers the code review uses, and the other reviewers SHALL NOT
+each emit a competing doneness verdict. In BOTH channels the judgment stays blind (fresh
 context, no orchestrator reasoning), on the `review` role model, scope-anchored to the
-frozen intent, and sealed to a separate `doneness.md`.
+frozen intent, and sealed to a separate `doneness.md`; the 2-model blind code review itself
+is NOT reduced by co-locating the doneness section in one reviewer's dispatch.
 
 #### Scenario: Judge runs blind on the review role
 - **WHEN** the doneness verdict is produced (either channel)
@@ -391,7 +397,12 @@ frozen intent, and sealed to a separate `doneness.md`.
 #### Scenario: Dispatch channel follows the full_rigor flag
 - **WHILE** the doneness verdict is required
 - **WHEN** the orchestration produces it
-- **THEN** WITH `full_rigor` set it SHALL dispatch an INDEPENDENT blind doneness judge (a subagent separate from the code-review reviewers); at plain Scale M it SHALL ride the blind code-review dispatch as a dedicated final section by the same blind reviewer, and in either case the verdict SHALL be sealed to a separate `doneness.md`
+- **THEN** WITH `full_rigor` set it SHALL dispatch an INDEPENDENT blind doneness judge (a subagent separate from the code-review reviewers); at plain Scale M it SHALL ride the blind code-review dispatch as a dedicated final section by one designated blind reviewer, and in either case the verdict SHALL be sealed to a separate `doneness.md`
+
+#### Scenario: One designated reviewer answers doneness on a multi-model code-review dispatch
+- **WHILE** the change is plain Scale M (no `full_rigor`) and the code-review dispatch resolves two or more distinct `review`-role models
+- **WHEN** the doneness section rides that dispatch
+- **THEN** exactly ONE reviewer (the FIRST model in the resolved `review` role set) SHALL author the doneness section, its provenance SHALL be stamped `blind-single-judge` with that model's identity, and a single `doneness.md` verdict SHALL be sealed — the remaining reviewers SHALL NOT each emit a separate competing doneness verdict, and the 2-model blind code review SHALL remain unweakened
 
 #### Scenario: Scope anchor forbids gold-plating
 - **WHILE** the judge is ruling on satisfaction

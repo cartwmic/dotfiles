@@ -37,6 +37,11 @@ The schema SHALL declare a `Scale` mode in `review.md` with the collapsed tier v
 - **IF** review.md declares a Scale value outside `XS|S|M`, or a `full_rigor` value that is not a parseable boolean
 - **THEN** the schema/gate SHALL treat it as a failure rather than defaulting to a permissive tier or silently ignoring the flag
 
+#### Scenario: In-flight change still labeled L or XL is relabeled at cutover
+- **WHILE** a non-archived change created under the prior 5-tier schema still declares `Scale: L` or `Scale: XL`
+- **WHEN** this change lands and the change is next gated
+- **THEN** the deterministic gate SHALL fail closed on the now-unknown Scale (a loud failure, never a silent permissive pass), and the schema README's migration note SHALL instruct the author to relabel the in-flight change to `Scale: M` with `full_rigor: true` (the former `L`/`XL` mapping); already-archived changes and their historical review records SHALL NOT be rewritten
+
 ### Requirement: Mode switchboard in review.md
 
 The `review.md` artifact SHALL declare a controlled-vocabulary mode switchboard whose values gate apply-time behavior. The required modes SHALL be: `Scale`, `Execution Mode`, `Verification Mode`, `Debug Mode`, `Review Status`, `Delegation Mode`, `Worktree Mode`, `Code Review Mode`, `Loop Max Iterations`, `Spec Level`, and `Doneness Mode`. The default value of `Worktree Mode` SHALL be DERIVED BY TIER: `same-tree` for Scale XS and S, and `worktree-required` for Scale M; an explicit `Worktree Mode` value recorded in review.md SHALL always win over the tier default. THE review.md artifact SHALL additionally carry a machine-readable front-matter block (YAML) at the top of the file mirroring at least `scale`, `full_rigor`, `worktree_mode`, `verification_mode`, `code_review_mode`, `loop_max_iterations`, `validation_source_mode`, and `doneness_mode`, so that opsx gate reads these values from structured fields rather than scraping the prose mode table. THE `doneness_mode` field SHALL take one of `required` or `waived`, defaulting to `required` for Scale M and above, and WHERE it is `waived` a non-empty `doneness_waiver_rationale` front-matter field SHALL be recorded, mirroring `validation_source_mode`.
