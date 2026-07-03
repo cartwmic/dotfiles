@@ -39,8 +39,8 @@ review_models: [claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5]
 
 ## Diff Base + Worktree locator
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
+**Diff Base SHA:** d84a2e4f9ed0aeef52529ab14c00db8fe4e7c15a
+**Worktree Path:** /Users/cartwmic/.local/share/.opsx-worktrees/harden-opsx-loop-latch-and-stop
 **Integration Branch:** main
 
 ## Manual Adjustments
