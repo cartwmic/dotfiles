@@ -25,6 +25,8 @@
 #   opsx-post-impl-review.adversarial-review-with-degradation
 #   opsx-workflow-schema.review-max-rounds-front-matter
 #   opsx-workflow-schema.convergence-template-support
+#   opsx-loop-orchestration.terminal-landings-set-the-loop-hold
+#   opsx-workflow-schema.loop-hold-front-matter-keys
 # Intentional: no `set -e` — assertions drive explicit pass/fail counters and
 # the final exit is `[ "$failc" -eq 0 ]`; -e would abort on the first failed
 # grep instead of reporting every failed assertion.
@@ -122,6 +124,22 @@ has "code-review template documents waived_by_user" "$TPL/code-review.md" "waive
 
 # --- opsx-post-impl-review.adversarial-review-with-degradation ---
 has "degraded-single-model still does not satisfy gating" "$APPLY_REF" "degraded-single-model"
+
+# --- opsx-loop-orchestration.terminal-landings-set-the-loop-hold ---
+has "loop skill lands via loop_hold, not stall burn" "$LOOP_SKILL" "loop_hold: true"
+has "loop skill pins the hold to the integration checkout" "$LOOP_SKILL" "INTEGRATION checkout"
+has "loop skill forbids self-clearing the hold" "$LOOP_SKILL" "NEVER clear a loop_hold"
+has "stall burn demoted to no-hold-support fallback" "$LOOP_SKILL" "loop_hold support, stop committing"
+
+# --- opsx-workflow-schema.loop-hold-front-matter-keys ---
+has "review template documents loop_hold" "$TPL/review.md" "loop_hold: true"
+has "review template documents loop_hold_reason" "$TPL/review.md" "loop_hold_reason"
+has "review template states the gate ignores hold state" "$TPL/review.md" "NOT by opsx gate"
+has "review template states cleared-by-named-re-arm-only" "$TPL/review.md" "named"
+
+# --- opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout ---
+has "apply ref mandates locator publication to the integration branch" "$APPLY_REF" "COMMIT that edit ON THE INTEGRATION BRANCH"
+has "apply ref frames the fallback as backstop, not substitute" "$APPLY_REF" "a backstop, not a substitute"
 
 echo "-----"
 echo "opsx-review-convergence surfaces: $pass passed, $failc failed"
