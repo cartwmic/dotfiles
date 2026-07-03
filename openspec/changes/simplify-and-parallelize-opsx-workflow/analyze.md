@@ -1,7 +1,9 @@
 <!-- authored: delegate blind analyze -->
 # Analyze: simplify-and-parallelize-opsx-workflow
 
-**Verdict: BLOCKED** — 1 blocker, 2 major, 3 minor. Round 1, blind.
+**Verdict: READY** (Round 2, blind) — 0 blocker, 0 major, 2 minor; round-1 F1–F6 independently re-verified as resolved at HEAD `f69356c` ("resolve analyze F1-F6"). Round-1 content below is retained as history.
+
+<!-- Round-1 verdict (history): BLOCKED — 1 blocker, 2 major, 3 minor. Round 1, blind. -->
 
 Blind cross-artifact analyze (no authoring context; review.md Execution Notes,
 code-review.md, /tmp, and archive contents NOT read). Baselines: frozen intent.md,
@@ -83,8 +85,97 @@ design D1–D10 + deltas. Blocked on: F1 (missing opsx-cli write-surface decisio
 gated by F3 (budget-default home decision) before the extension/propose/gate tasks can be
 written without ambiguity. F2 is a delta-edit before archive. F4–F6 are cleanups.
 
+## Round 2 (blind)
+
+**Verdict: READY** — 0 blocker, 0 major, 2 minor. Round 2, blind, HEAD `f69356c`.
+
+Fresh-context blind re-review (no authoring context; round-1 findings/ledger, review.md
+Execution Notes, code-review.md, /tmp, and archive contents NOT used as inputs — analysis
+locked before the file's prior rounds were read for the mechanical ledger/summary edits).
+Baselines: frozen intent.md, proposal.md, clarify.md, design.md, audit.md, all 13 delta
+specs, every touched live `openspec/specs/<cap>/spec.md` + untouched interplay specs
+(opsx-spec-quality), constitution.md, domain.md. Code grounding: `dot_local/bin/executable_opsx`,
+`dot_pi/agent/extensions/opsx-loop/{index.ts,helpers.ts}`, schema README/templates.
+
+**Independently re-derived and confirmed sound (matches the round-1 remediation at `f69356c`):**
+consolidation tiling name-sets are EXACT (opsx-loop ADDED 21 = kickoff 12 + orchestration 9
+REMOVED; opsx-adversarial-review ADDED 25 = review-convergence 11 + post-impl-review 8 +
+doneness-judge 5 REMOVED + 1 new). Every ADDED body is a verbatim carry-over except six
+intended edits, all verified by body-diff vs live spec-of-record: four cross-capability
+reference remaps (`opsx-review-convergence` → `opsx-adversarial-review` / "this capability's"
+in Scope-Widening, Review-Dispatch, Adversarial-Review-With-Degradation, Verdict-Under-Severity-Floor)
+and the two A-1 tier-thinning edits (Doneness Judge Dispatch, Blind Scope-Anchored Judge),
+which are mutually consistent (designated doneness reviewer = FIRST resolved `review` model,
+provenance `blind-single-judge`, independent judge retained at full_rigor). No surviving spec
+names a retired capability as a live dependency (grep-clean; only consolidation prose + the
+non-normative opsx-cli exemption substrings remain, per accepted clarify I-2). opsx-cli write
+surface ↔ opsx-model-config resolution are coherent (user-only writes, `--layer project`
+rejected with the removal message, `source` enum drops `project`). Constitution: II canonical
+skill paths cited; VIII migration wrinkle sound; **IX skill-edit adversarial requirement is
+satisfied at every tier incl. plain M by the retained gating 2-model code review** —
+opsx-adversarial-review "Degraded review does not satisfy Constitution IX" (spec.md:262) makes
+a degraded single-model review fail the gate for skill-modifying changes, tier-independently.
+Budget-default home reconciled (authoring-time only; extension AC "No built-in numeric default"
+intact). Gate already accepts `blind-single-judge` (executable_opsx:836) — no vocab edit needed.
+Both strict gates green.
+
+### Findings
+
+| ID | Sev | Check | File(s) | Finding | Failure scenario |
+|----|-----|-------|---------|---------|------------------|
+| R2-1 | MINOR | d | `specs/opsx-cli/spec.md:40` (Model Config Write Surface, MODIFIED) vs live `openspec/specs/opsx-cli/spec.md` | The new MODIFIED *Model Config Write Surface* (added to resolve round-1 F1) is a faithful superset for the B4 project-layer removal, but it also DROPS ~10 live scenarios beyond that mandate. Most are folded into requirement prose (atomic write, comment/order preservation, create-if-absent, empty-unset read, boolean coercion), but three lose their only coverage: **"Failed write leaves the original intact"** (temp-file cleanup / byte-for-byte rollback), **"Invalid role is rejected"** (the `set` write path), and **"List reports resolved roles with sources"** (the `list` verb is declared in the body but no scenario pins its output). Tension with domain invariant #14 ("MODIFIED MUST include the FULL updated content — partial content loses detail at archive time") and the change's own stated "full MODIFIED restatement discipline." | Post-archive, a task author writing `tests/opsx-cli` has no spec anchor for `opsx models set <badrole>` rejection, `opsx models list` output shape, or the failed-write rollback/temp-cleanup guarantee; those behaviors could regress undetected. No runtime/gate break; `openspec validate --strict` is green. Fix: restate the three dropped scenarios (or add explicit `**Reason**` retirement notes) in the MODIFIED requirement. |
+| R2-2 | MINOR | f | live `openspec/specs/opsx-spec-quality/spec.md:57,73` (untouched — no delta in the change) | The untouched opsx-spec-quality still frames clarify (*Three-pass clarify procedure* — "THE `clarify.md` artifact SHALL execute three passes … unanswered SHALL block progression to design") and analyze (*Constitution check in analyze*) in pre-thinning terms, while B1 plain-M thinning relocates clarify open-questions into proposal.md and runs analyze deterministic-only (no standalone clarify.md, no blind analyze/constitution pass). The B3 consolidation "shrinks the spec surface" but left this capability's clarify/analyze framing unreconciled — analogous to the clarify I-1/I-2 remap class it did fix for opsx-skill-integration. | INERT at the gate (both are WHEN-/artifact-conditioned and non-gating: at plain M no clarify.md exists so the 3-pass mandate is vacuous, and standalone clarify.md is not forbidden — just not required), so no gate failure or behavior break. But a plain-M author reading opsx-spec-quality as the canonical home would expect a standalone clarify.md + an analyze constitution-check pass the thinned workflow no longer produces. Optional: add a small opsx-spec-quality delta (or a cross-reference note) tier-conditioning the clarify/analyze procedures on `full_rigor`. |
+
+### Per-check notes (round 2)
+
+**(a) Contradictions.** None surviving. Round-1 F1 (model-config vs opsx-cli write surface) and
+F3 (budget-default home) are resolved: the opsx-cli MODIFIED delta now rejects `--layer project`
+coherently with opsx-model-config, and the budget default is authoring-time-only with the
+extension "no built-in default" AC intact. intent ↔ proposal ↔ clarify ↔ design ↔ deltas trace
+cleanly; former L/XL ⇒ "M + full_rigor" is consistent across gate-enforcement, workflow-schema,
+skill-integration, adversarial-review.
+
+**(b) Constitution/domain.** II canonical skill paths cited (skill-integration:15,53). VIII
+migration wrinkle correct (change stays `scale: XL` under the deployed 5-tier gate for its whole
+life; new gate live only at post-archive `chezmoi apply`). IX preserved at every tier via the
+gating 2-model code review (adversarial-review:262 "Degraded review does not satisfy Constitution
+IX") — the analyze-phase adversarial-review-cycle firing only at full_rigor does NOT weaken IX,
+since IX's substantive enforcement is code-review-side and tier-independent; Code Review Mode
+defaults gating-required at M. No violations. Domain #14 tension → R2-1 (advisory).
+
+**(c) EARS.** Delta ACs strong, SHALL-led, correctly WHEN/WHILE/IF/WHERE-shaped. Round-1 F5
+(triggerless goal-loop scenario) resolved — the *Removal is out of scope* scenario now carries a
+WHEN trigger. No new EARS defects.
+
+**(d) MODIFIED superset + tiling.** Tiling EXACT (header-by-header vs live). All six ADDED-body
+deviations from live are intended (4 ref-remaps + 2 A-1 edits), verified by diff. Round-1 F2
+(dangling `opsx-review-convergence` refs) resolved — all four now point at `opsx-adversarial-review`
+/ "this capability's". One residual faithfulness note: R2-1 (opsx-cli scenario drop).
+
+**(e) Achievability.** D1 `--cheap` grounded (cheap short-circuit at executable_opsx:582; verdict
+checks are separate cheap blocks after it, so `--cheap` guards only validation-command execution
++ validation-source enforcement and still reports code-review/verify/doneness state). D2
+archive-check verb, D3 tier `case` branching, D4 doneness provenance (gate accepts
+`blind-single-judge` at 836 — round-1 F4 wording resolved in design), D6–D8 all achievable. A4
+`opsx_wt_valid_for_change` (executable_opsx:377) exists.
+
+**(f) Interplay + guards.** hold/latch/stall/locator/verdict-freshness/ADR-0014 confirm provably
+untouched (carried verbatim in opsx-loop; readDoneness/classifyDoneness unchanged per design).
+The five retired specs become empty stubs via REMOVED deltas + D8 dir-deletion. Untouched
+opsx-spec-quality clarify/analyze framing → R2-2 (inert). Round-1 F6 (bash flat-40 budget)
+documented/accepted via design F6.
+
+**(g) Readiness.** Tasks are writable directly from design D1–D10 + deltas; no blocking decision
+outstanding. R2-1 and R2-2 are optional spec-quality cleanups that do not gate task authoring.
+
 ## Round Ledger
 
 | Round | Mode | Blocker | Major | Minor | Reviewed HEAD |
 |-------|------|---------|-------|-------|---------------|
 | 1 | blind | 1 (F1) | 2 (F2,F3) | 3 (F4,F5,F6) | c3eec37daa722687e42690405a2e35eecf218c22 |
+| 2 | blind | 0 | 0 | 2 (R2-1,R2-2) | f69356cf5b7121fdac75c09db743e97826c7621e |
+
+## Post-round-2 resolutions
+
+- R2-1 RESOLVED: write-surface MODIFIED delta now restates the full live scenario set (Failed write / List / Get-unset / boolean default / Non-boolean / Invalid role / Invalid layer) with only project-layer edits.
+- R2-2 ACCEPTED residual: opsx-spec-quality's clarify/analyze framing stays artifact-conditioned (inert at plain M where no clarify.md exists; still accurate at full_rigor). Documentation-topology follow-up candidate, non-gating.

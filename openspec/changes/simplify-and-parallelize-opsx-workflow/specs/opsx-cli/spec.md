@@ -77,6 +77,34 @@ file remains the sole source of truth; this surface is an editor, not a new owne
 - **WHEN** `opsx models set review <model>` is run
 - **THEN** the stored `review` value SHALL be exactly `<model>` (full replace; no merge with the prior list)
 
+#### Scenario: Failed write leaves the original intact
+- **IF** the temp write, the YAML update, or the rename fails
+- **THEN** `opsx models` SHALL exit non-zero, leave the prior target file byte-for-byte unchanged, and remove any temporary file it created
+
+#### Scenario: List reports resolved roles with sources
+- **WHEN** `opsx models list` is run
+- **THEN** it SHALL print each role (`author`, `review`, `impl`, `author-in-session`) with its resolved value and the layer that supplied it
+
+#### Scenario: Get of an unset scalar role is empty
+- **WHEN** `opsx models get <role>` is run for `author`, `review`, or `impl` and no layer configures the role
+- **THEN** it SHALL print nothing to standard output and exit 0
+
+#### Scenario: Get of author-in-session reflects its boolean default
+- **WHEN** `opsx models get author-in-session` is run and no layer configures it
+- **THEN** the effective read SHALL print the built-in boolean default `true` (matching the resolver's `author-in-session` default), WHILE `opsx models get author-in-session --layer user` SHALL print nothing when that specific layer does not set the key
+
+#### Scenario: Non-boolean author-in-session value is rejected
+- **IF** `opsx models set author-in-session <value>` is given a value that is not `true` or `false`
+- **THEN** `opsx models` SHALL print an error and exit non-zero without writing any file
+
+#### Scenario: Invalid role is rejected
+- **IF** `opsx models set <role> <model>` is given a role other than `author`, `review`, `impl`, or `author-in-session`
+- **THEN** `opsx models` SHALL print an error and exit non-zero without writing any file
+
+#### Scenario: Invalid layer is rejected
+- **IF** `opsx models set <role> <model> --layer <x>` is given a layer other than `user` (the retired `project` value carries its own rejection scenario above)
+- **THEN** `opsx models` SHALL print an error and exit non-zero without writing any file
+
 ## ADDED Requirements
 
 ### Requirement: Status Fleet View
