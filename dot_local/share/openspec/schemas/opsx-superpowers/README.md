@@ -39,12 +39,14 @@ rules gate required artifacts on `(Scale, full_rigor)`. A Scale outside `XS|S|M`
 non-boolean `full_rigor`, FAILS CLOSED (a loud gate/validation failure) — never a
 silent permissive default.
 
+review.md is required at EVERY tier (it is the Scale/mode source the gate reads first and fails closed without) — it is never in the Optional column.
+
 | Scale | Example | Required artifacts | Optional |
 |---|---|---|---|
-| **XS** | typo, comment fix, single-line config tweak | proposal, tasks | everything else |
-| **S** | single-file bug fix, small refactor | proposal, specs, tasks, plan (clarify runs the ambiguity pass only; analyze runs checks 1, 2, 7 — reduced, not skipped) | design, review, verify, adr, retrospective |
-| **M** | typical feature, cross-file but single capability | proposal, specs, design, review, tasks, plan, verify, **doneness** — clarify open questions fold into `proposal.md ## Open Questions` and analyze is deterministic-only (no standalone `clarify.md`/`analyze.md`) | adr (unless decision passes 4-point test), retrospective |
-| **M + `full_rigor: true`** | cross-capability change, breaking change, new capability, migration (the former **L**/**XL**) | full independent stack: + standalone `clarify.md`, + blind `analyze.md` dispatch, + independently dispatched blind doneness judge, + adr candidates, + adversarial-review-cycle from analyze, + retrospective before archive | — |
+| **XS** | typo, comment fix, single-line config tweak | review | everything else |
+| **S** | single-file bug fix, small refactor | review, proposal, tasks | specs, design, plan, verify, adr, retrospective (clarify runs the ambiguity pass only; analyze runs checks 1, 2, 7 — reduced, not skipped) |
+| **M** | typical feature, cross-file but single capability | review, intent, proposal, specs, tasks, plan (+ verify / code-review / **doneness** per modes) — clarify open questions fold into `proposal.md ## Open Questions` and analyze is deterministic-only (no standalone `clarify.md`/`analyze.md`); **design.md is NOT required at plain M — it is decision-gated (authored only when a decision warrants it, D5)** | design (decision-gated), adr (unless decision passes 4-point test), retrospective |
+| **M + `full_rigor: true`** | cross-capability change, breaking change, new capability, migration (the former **L**/**XL**) | all plain-M required + standalone `clarify.md`, + blind `analyze.md` dispatch, + **`design.md`** (the former L/XL full set always carried design), + independently dispatched blind doneness judge, + adr candidates, + adversarial-review-cycle from analyze, + retrospective before archive | — |
 
 The 2-model blind adversarial code review stays gating-required at EVERY tier — the
 tier table never weakens it.

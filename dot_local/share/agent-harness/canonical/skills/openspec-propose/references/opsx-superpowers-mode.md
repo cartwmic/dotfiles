@@ -61,7 +61,7 @@ Walk artifacts in dependency order returned by `openspec status --change <name> 
 |---|---|---|---|---|---|---|---|---|
 | XS | ✓ | skip | skip | skip | skip | ✓ | ✓ | skip |
 | S  | ✓ | ✓ | ambiguity-only | skip | checks 1,2,7 only | ✓ | ✓ | ✓ (simple list) |
-| M  | ✓ | ✓ | in-proposal ¹ | ✓ | deterministic-only ² | ✓ | ✓ | ✓ |
+| M  | ✓ | ✓ | in-proposal ¹ | decision-gated ³ | deterministic-only ² | ✓ | ✓ | ✓ |
 | M + full_rigor | ✓ | ✓ | ✓ standalone | ✓ | ✓ blind + adversarial-review | ✓ | ✓ | ✓ |
 
 ¹ **Plain-M clarify-in-proposal:** at Scale M WITHOUT full_rigor, do NOT author a
@@ -75,6 +75,11 @@ the deterministic checks only (tiling / traceability / EARS lint) run inline by 
 orchestrator and recorded in a short analyze section of `proposal.md` or `plan.md` —
 NO blind analyze dispatch and NO standalone `analyze.md`. `full_rigor: true` runs the
 full blind analyze dispatch (+ adversarial-review).
+³ **Plain-M decision-gated design:** at Scale M WITHOUT full_rigor, `design.md` is
+NOT a required artifact (D3/D5) — author it ONLY when a decision warrants it (a
+non-trivial trade-off / the ADR 4-point test), and it is decision-gated, not gate-
+required. `full_rigor: true` makes `design.md` required (the former L/XL full set
+always carried design). review.md is authored (✓) at EVERY tier.
 
 When an artifact is SKIPPED, write NO placeholder `<artifact>.md` — skipped artifacts simply do not exist. The gate derives its required set from Scale (the D3 required-artifact table), so an absent optional artifact is correct; `openspec status` will report the skipped artifact as not-done and that is expected (the schema's static artifact graph does not reflect Scale-driven skips). A placeholder review.md in particular would break Scale parsing and make the change ungateable, so review.md is authored for real at every Scale and never stubbed. Log the deliberate skip (e.g. `Scale=XS: skipping specs/clarify/design/analyze/plan`) so it is visible.
 
