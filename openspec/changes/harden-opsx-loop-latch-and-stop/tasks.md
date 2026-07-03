@@ -25,23 +25,23 @@
       - dot_pi/agent/extensions/opsx-loop/helpers.ts
       - dot_pi/agent/extensions/opsx-loop/helpers.test.ts
   - allow_new_files: false
-- [ ] 2.2 Distill directive: embed inventory + distill-scoped autonomy text (drive-to-green blurb stays on worker/continuation only). (AC: opsx-loop-kickoff.goal-and-conversation-kickoff)
+- [x] 2.2 Distill directive: embed inventory + distill-scoped autonomy text (drive-to-green blurb stays on worker/continuation only). (AC: opsx-loop-kickoff.goal-and-conversation-kickoff)
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/index.ts
   - allow_new_files: false
-- [ ] 2.3 Stall baseline seeded from `preChangeDirs` at arm; notify count stays truthful (3 turns = 3 turns). (AC: opsx-loop-kickoff.goal-and-conversation-kickoff)
+- [x] 2.3 Stall baseline seeded from `preChangeDirs` at arm; notify count stays truthful (3 turns = 3 turns). (AC: opsx-loop-kickoff.goal-and-conversation-kickoff)
   - intent: fix
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/index.ts
   - allow_new_files: false
-- [ ] 2.4 `loop_hold` check at agent_end before continuation injection (integration-checkout copy; honored even with empty reason); clear-on-named-re-arm BEFORE Guard-1 with reason surfacing + Execution Notes line; goal kickoff never clears; `resolveWorktree` convention fallback via `opsx worktree path`. (AC: opsx-loop-kickoff.loop-hold-blocks-continuation, opsx-loop-kickoff.worktree-resolution-convention-fallback, opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge)
+- [x] 2.4 `loop_hold` check at agent_end before continuation injection (integration-checkout copy; honored even with empty reason); clear-on-named-re-arm BEFORE Guard-1 with reason surfacing + Execution Notes line; goal kickoff never clears; `resolveWorktree` convention fallback via `opsx worktree path`. (AC: opsx-loop-kickoff.loop-hold-blocks-continuation, opsx-loop-kickoff.worktree-resolution-convention-fallback, opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge)
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/index.ts
       - dot_pi/agent/extensions/opsx-loop/helpers.ts
   - allow_new_files: false
-- [ ] 2.5 Extension behavior tests: hold lands/clears per contract, inventory in kickoff directive only, seeded stall count, fallback resolution, no-hold unchanged. (AC: opsx-loop-kickoff.loop-hold-blocks-continuation, opsx-loop-kickoff.goal-and-conversation-kickoff, opsx-loop-kickoff.worktree-resolution-convention-fallback)
+- [x] 2.5 Extension behavior tests: hold lands/clears per contract, inventory in kickoff directive only, seeded stall count, fallback resolution, no-hold unchanged. (AC: opsx-loop-kickoff.loop-hold-blocks-continuation, opsx-loop-kickoff.goal-and-conversation-kickoff, opsx-loop-kickoff.worktree-resolution-convention-fallback)
   - intent: test
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/helpers.test.ts

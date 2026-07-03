@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildModelEnv, classifyDoneness, donenessRatchet, formatInventory, gateFailKey, hashDir, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, stripLoopHold, verdictFromExit } from "./helpers.ts";
+import { buildModelEnv, classifyDoneness, clearHoldText, donenessRatchet, formatInventory, gateFailKey, hashDir, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, stripLoopHold, verdictFromExit } from "./helpers.ts";
 
 describe("parseLoopHold / stripLoopHold — opsx-loop-kickoff.loop-hold-blocks-continuation", () => {
 	const FM = (body: string) => `---\n${body}\n---\n# Review\n`;
@@ -37,6 +37,19 @@ describe("parseLoopHold / stripLoopHold — opsx-loop-kickoff.loop-hold-blocks-c
 	test("stripLoopHold is a no-op without hold fields (and never touches the body)", () => {
 		const md = FM("scale: M") + "body loop_hold: true mention\n";
 		expect(stripLoopHold(md)).toBe(md);
+	});
+	test("clearHoldText strips the hold AND appends the auditable Execution Notes line", () => {
+		const md = FM('scale: M\nloop_hold: true\nloop_hold_reason: "audit pending"') + "\n## Execution Notes\n\n- old note\n";
+		const { next, reason } = clearHoldText(md, "my-change", "2026-07-03");
+		expect(reason).toBe("audit pending");
+		expect(parseLoopHold(next).held).toBe(false);
+		expect(next).toContain("- 2026-07-03 — loop_hold cleared by named re-arm (/opsx-loop my-change); reason was: audit pending");
+		expect(next).toContain("- old note");
+	});
+	test("clearHoldText creates Execution Notes when absent; empty reason recorded as such", () => {
+		const { next } = clearHoldText(FM("loop_hold: true"), "c", "2026-07-03");
+		expect(next).toContain("## Execution Notes");
+		expect(next).toContain("reason was: (none recorded)");
 	});
 });
 
