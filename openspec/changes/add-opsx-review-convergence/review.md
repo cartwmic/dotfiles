@@ -54,4 +54,11 @@ doneness_mode: required
 widening". One bullet per widening: what widened + the evidence it is required to
 meet the frozen intent. Empty until/unless the loop widens scope. -->
 
-- None yet.
+- 2026-07-03 — added `tests/opsx-review-convergence/test_review_convergence_surfaces.sh`
+  (deterministic grep assertions that the discipline text exists in templates/skills)
+  plus a required `opsx-gates.yaml` entry — evidence: verify.md check 5 (forward
+  AC↔test mapping) requires ≥1 TEST file citing each canonical AC ID, and the frozen
+  intent's enforcement-layer decision (skill prose + structured fields) produced a
+  prose-only diff with zero test files; verify green is unreachable without it
+  (Verification Mode retained-required). Strengthens the gate (adds a required
+  validator; weakens nothing).

@@ -25,3 +25,6 @@ gates:
   - id: opsx-models-tests
     run: bash tests/opsx-models/test_opsx_models.sh
     required: true
+  - id: opsx-review-convergence-surface-tests
+    run: bash tests/opsx-review-convergence/test_review_convergence_surfaces.sh
+    required: true
