@@ -41,6 +41,7 @@ PROPOSE_SKILL="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-pro
 ARCHIVE_REF="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-archive-change/references/opsx-superpowers-mode.md"
 ARCHIVE_SKILL="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-archive-change/SKILL.md"
 README="$ROOT/dot_local/share/openspec/schemas/opsx-superpowers/README.md"
+SCHEMA="$ROOT/dot_local/share/openspec/schemas/opsx-superpowers/schema.yaml"
 
 pass=0; failc=0
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass+1)); }
@@ -162,6 +163,26 @@ has "propose skill drops Scale >= L for full_rigor" "$PROPOSE_SKILL" "full_rigor
 has "README maps former L/XL to M + full_rigor" "$README" "Migration note"
 # guard against reintroduced 5-tier vocabulary in the live surfaces
 if grep -q -- "Scale . L" "$PROPOSE_SKILL" 2>/dev/null; then nok "propose skill reintroduced a Scale>=L tier"; else ok "propose skill has no legacy L tier"; fi
+
+# --- schema.yaml + templates fully migrated off the L/XL scale vocabulary ---
+has "schema.yaml Scale enum is the 3-tier XS | S | M" "$SCHEMA" "XS | S | M  (default: S)"
+if grep -qE '\| L \| XL|Scale . L|Scale >= L|L~80|Scale = XL|Scale = L' "$SCHEMA" 2>/dev/null; then nok "schema.yaml still carries a live L/XL scale enumeration"; else ok "schema.yaml has no live L/XL scale enumeration"; fi
+has "schema.yaml keys adversarial-on-analyze on full_rigor" "$SCHEMA" "when full_rigor is set, invoke"
+has "schema.yaml keys the loop budget defaults on the 3 tiers + full_rigor" "$SCHEMA" "XS~10 / S~20 / M~40 /"
+has "design template keys ADR promotion on full_rigor" "$TPL/design.md" "mandatory at full_rigor"
+has "analyze template Check 4 keyed on full_rigor" "$TPL/analyze.md" "promotion candidates (full_rigor)"
+has "retrospective template keyed on full_rigor" "$TPL/retrospective.md" "Required when full_rigor is set"
+if grep -qE 'Scale = XL|Scale = L|optional at L' "$TPL/retrospective.md" 2>/dev/null; then nok "retrospective template still keys on a Scale=L/XL label"; else ok "retrospective template dropped L/XL keying"; fi
+
+# --- F3: review.md is never skipped; skipped artifacts get no placeholder ---
+has "propose ref states review.md is NEVER skipped at any Scale" "$PROPOSE_REF" "review.md is NEVER skipped"
+has "propose ref writes NO placeholder for skipped artifacts" "$PROPOSE_REF" "write NO placeholder"
+
+# --- F4: integration-checkout commits are path-scoped (git commit -- <paths>) ---
+has "apply ref pre-flight commit is path-scoped" "$APPLY_REF" "git commit -- openspec/changes"
+has "archive ref ADR commit is path-scoped to the ADR file" "$ARCHIVE_REF" "git commit -- <repo>/adr"
+has "archive ref gates ADR promotion on full_rigor" "$ARCHIVE_REF" "full_rigor only"
+has "archive ref gates retrospective refusal on full_rigor" "$ARCHIVE_REF" "requires retrospective.md before archive"
 
 # --- authoring-time budget defaults + worktree-mode derivation (template) ---
 has "review.md template carries the tier budget defaults" "$TPL/review.md" "XS=10, S=20, M=40, full_rigor=80"
