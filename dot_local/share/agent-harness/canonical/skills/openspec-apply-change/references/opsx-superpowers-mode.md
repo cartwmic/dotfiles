@@ -7,7 +7,8 @@ Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds mode dispa
 Parse `openspec/changes/<name>/review.md` to extract:
 
 ```
-Scale                  = <XS | S | M | L | XL>
+Scale                  = <XS | S | M>
+full_rigor             = <false | true>   (true = the former L/XL extras)
 Execution Mode         = <standard | tdd-preferred | tdd-required>
 Verification Mode      = <inline-only | retained-recommended | retained-required>
 Debug Mode             = <standard | systematic-debugging>
@@ -45,7 +46,7 @@ Then create the worktree on branch `opsx/<name>` per the pi-subagents convention
 
 ## Worktree lifecycle + immutable Diff Base SHA
 
-Worktree Mode defaults to `worktree-required` for ALL Scales (the loop's blast-radius sandbox); `same-tree` is an explicit override.
+Worktree Mode default is DERIVED by tier when absent from front-matter: XS/S ⇒ `same-tree`, M ⇒ `worktree-required` (the loop's blast-radius sandbox). An explicit `Worktree Mode` value always wins over the tier default.
 
 **Creation/reuse is runtime-owned**: call the deterministic lifecycle command instead of hand-rolling git worktree commands — it implements the exact spec semantics (create with immutable merge-base, reuse with base-ancestry check, abort on failure):
 

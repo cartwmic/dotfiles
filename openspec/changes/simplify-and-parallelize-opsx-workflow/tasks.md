@@ -58,17 +58,17 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
 
 ## Phase 3 — Skills (Constitution IX surfaces), D4/D5/D9
 
-- [ ] 3.1 openspec-loop SKILL.md: tier vocabulary; plain-M combined doneness
+- [x] 3.1 openspec-loop SKILL.md: tier vocabulary; plain-M combined doneness
       dispatch (designated reviewer = first review model, separate
       doneness.md); A2 path-scoped-commit rule for loop-driven integration
       commits. Files:
       `dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md`.
-- [ ] 3.2 openspec-archive-change: run + quote `opsx archive-check <change>`
+- [x] 3.2 openspec-archive-change: run + quote `opsx archive-check <change>`
       before `openspec archive`; refuse on non-zero; delete now-empty
       `openspec/specs/<cap>/` dirs post-archive and re-validate specs (D8).
       Files:
       `dot_local/share/agent-harness/canonical/skills/openspec-archive-change/SKILL.md`.
-- [ ] 3.3 openspec-propose + apply-mode reference: tier vocabulary; plain-M
+- [x] 3.3 openspec-propose + apply-mode reference: tier vocabulary; plain-M
       clarify-in-proposal (Open Questions inline, 2-option discipline) and
       deterministic-only analyze at plain M. Files:
       `dot_local/share/agent-harness/canonical/skills/openspec-propose/SKILL.md`,
