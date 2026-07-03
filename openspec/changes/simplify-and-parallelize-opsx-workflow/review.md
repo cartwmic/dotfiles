@@ -8,7 +8,7 @@ verification_mode: retained-required
 debug_mode: standard
 review_status: in-review
 loop_hold: true
-loop_hold_reason: "extended review budget (6) exhausted; R6-F1 (P1) + R6-F2 (P2) fixed at a66a39f- but unconfirmed — ruling needed: extend to 7 for one confirming round (recommended)"
+loop_hold_reason: "budget 7/7 spent; R7-F1/F2 fixed at 60fef27 but unconfirmed — ruling needed: convergence-cap extension recommended (fix-and-re-review until a round yields 0 new P0/P1, cap 10)"
 delegation_mode: single-agent
 code_review_mode: gating-required
 loop_max_iterations: 80
@@ -56,3 +56,4 @@ review_models: [claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5]
 - 2026-07-03: USER RULING (option 2) — review_max_rounds extended 5→6; R5-F1 (absent code_review_mode at M enforced fail-open) to be fixed in-change with regression test; one confirming blind round then seal.
 - 2026-07-03: LANDED again (loop_hold) — round 6 split; R5-F1 confirmed fixed; NEW R6-F1 (XS/S ungateable under real openspec, in-diff) + R6-F2 (README wording) fixed same-turn with pins; budget 6/6 spent; decision audit updated in worktree code-review.md.
 - 2026-07-03: USER RULING — review_max_rounds extended 6→7 for one confirming blind round over the R6 fixes at worktree HEAD a66a39f.
+- 2026-07-03: LANDED (3rd) — round 7 split again: opus pass (0 findings, real-CLI probes), gpt R7-F1 (schema/propose still steered XS into skipping review.md — fixed 329a018) + R7-F2 (template hard-coded advisory review mode — fixed 60fef27). Budget 7/7.
