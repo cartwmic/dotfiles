@@ -133,7 +133,7 @@ THE openspec-loop orchestration SHALL conduct gating review rounds under the ops
 
 #### Scenario: Landing halts loop continuation
 - **WHEN** the decision-audit landing is presented
-- **THEN** the orchestration SHALL stop the drive-to-green loop's continuation (via the host's loop-stop mechanism where available, otherwise by performing no further change-directory or commit activity so the host's stall detection stops the loop), presenting the audit exactly once rather than re-presenting it on every re-injected turn
+- **THEN** the orchestration SHALL stop the drive-to-green loop's continuation by setting `loop_hold: true` with a reason pointing at the audit (per the terminal-landing requirement); WHERE the loop host does not support `loop_hold`, performing no further change-directory or commit activity (so the host's stall detection stops the loop) remains the fallback — in both cases presenting the audit exactly once rather than re-presenting it on every re-injected turn
 
 ### Requirement: Pre Apply Surface Audit Dispatch
 
@@ -160,4 +160,31 @@ WHILE the loop is advancing a change, WHEN a gating reviewer or the doneness jud
 - **THEN** the routing SHALL be recorded with the finding's severity and origin so the archive step can surface it
 
 ---
+
+### Requirement: Terminal landings set the loop hold
+
+THE orchestrator SHALL, WHEN declaring a landing state that must not be re-driven by
+loop continuation — a decision-audit landing after review non-convergence, a terminal
+green-gate report already presented, or any stop that awaits a human ruling — set
+`loop_hold: true` with a non-empty `loop_hold_reason` in the change's review.md
+front-matter — the same copy the loop host resolves from the integration checkout, so
+the hold is observable to the host — committed as part of the landing turn, instead of
+relying on prose
+announcements or stall-guard exhaustion, so the host loop observes the landing
+deterministically. The orchestrator SHALL NEVER clear a `loop_hold` itself — clearing is
+reserved to the human named re-arm.
+
+#### Scenario: Decision-audit landing holds the loop
+- **WHEN** the orchestrator presents a decision audit after review stop conditions fire
+- **THEN** it SHALL set `loop_hold: true` with a reason pointing at the audit before ending the turn, and the loop SHALL NOT re-inject a continuation
+
+#### Scenario: Orchestrator never clears its own hold
+- **WHILE** review.md carries `loop_hold: true`
+- **WHEN** the orchestrator concludes further work is warranted
+- **THEN** it SHALL surface that recommendation to the user and SHALL NOT remove the hold fields itself
+
+#### Scenario: Hold is written to the copy the loop host reads
+- **WHILE** the change's verdict artifacts (verify.md, code-review.md, doneness.md) live in the apply worktree
+- **WHEN** the orchestrator sets a landing hold
+- **THEN** it SHALL write and commit the `loop_hold` fields in the review.md resolved from the INTEGRATION checkout (the copy the loop host and gate read), not solely the worktree copy, so the hold cannot be split-brained into invisibility
 
