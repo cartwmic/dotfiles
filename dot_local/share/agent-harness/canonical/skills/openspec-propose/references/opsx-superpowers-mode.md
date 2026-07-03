@@ -53,12 +53,14 @@ Record the choices; they'll be written into `review.md` when that artifact is au
 
 ## Artifact loop — Scale-aware
 
-Walk artifacts in dependency order returned by `openspec status --change <name> --json`. For each `ready` artifact, decide via Scale:
+Walk artifacts in dependency order returned by `openspec status --change <name> --json`. For each `ready` artifact, decide via Scale.
+
+**review.md is NEVER skipped at any Scale** — it is authored at every Scale (XS/S/M) because it is the Scale/mode source the gate reads first and fails CLOSED without. XS/S skip only the OTHER artifacts per the D3 required-artifact table (`opsx-gate-enforcement.required-artifact-by-scale`); a skipped review.md would make the change ungateable.
 
 | Scale | proposal | specs | clarify | design | analyze | review | tasks | plan |
 |---|---|---|---|---|---|---|---|---|
-| XS | ✓ | skip | skip | skip | skip | skip | ✓ | skip |
-| S  | ✓ | ✓ | ambiguity-only | skip | checks 1,2,7 only | skip | ✓ | ✓ (simple list) |
+| XS | ✓ | skip | skip | skip | skip | ✓ | ✓ | skip |
+| S  | ✓ | ✓ | ambiguity-only | skip | checks 1,2,7 only | ✓ | ✓ | ✓ (simple list) |
 | M  | ✓ | ✓ | in-proposal ¹ | ✓ | deterministic-only ² | ✓ | ✓ | ✓ |
 | M + full_rigor | ✓ | ✓ | ✓ standalone | ✓ | ✓ blind + adversarial-review | ✓ | ✓ | ✓ |
 
@@ -74,7 +76,7 @@ orchestrator and recorded in a short analyze section of `proposal.md` or `plan.m
 NO blind analyze dispatch and NO standalone `analyze.md`. `full_rigor: true` runs the
 full blind analyze dispatch (+ adversarial-review).
 
-When an artifact is SKIPPED, write a one-line placeholder `<artifact>.md` with content like `<!-- Skipped per Scale=XS. -->` so the file exists and `openspec status` reports it done. This is the most honest workaround for OpenSpec's existence-only completion check; the placeholder makes the skip visible.
+When an artifact is SKIPPED, write NO placeholder `<artifact>.md` — skipped artifacts simply do not exist. The gate derives its required set from Scale (the D3 required-artifact table), so an absent optional artifact is correct; `openspec status` will report the skipped artifact as not-done and that is expected (the schema's static artifact graph does not reflect Scale-driven skips). A placeholder review.md in particular would break Scale parsing and make the change ungateable, so review.md is authored for real at every Scale and never stubbed. Log the deliberate skip (e.g. `Scale=XS: skipping specs/clarify/design/analyze/plan`) so it is visible.
 
 When an artifact is AUTHORED, follow its `instruction` from `openspec instructions <artifact> --change <name> --json` AND apply the additions below.
 
