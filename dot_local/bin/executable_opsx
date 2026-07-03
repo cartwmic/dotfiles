@@ -563,9 +563,13 @@ esac
 # in proposal, analyze is deterministic-checks-only); M + full_rigor restores the
 # full former M/L/XL set. doneness is NOT a structural artifact here — it is a
 # mode-conditioned verdict governed by the Doneness Verdict Enforcement section.
+# D3 table (opsx-gate-enforcement.required-artifact-by-scale): review.md is
+# always required (checked above; Scale is read from it). XS adds nothing; S
+# adds proposal + tasks; M adds specs/intent/design/plan; M+full_rigor adds
+# clarify + analyze. specs/ and plan are NOT required below M.
 case "$SCALE" in
-  XS) req="proposal tasks" ;;
-  S)  req="proposal specs tasks plan" ;;
+  XS) req="review" ;;
+  S)  req="review proposal tasks" ;;
   M)  if [ "$FULL_RIGOR" = true ]; then
         req="review intent proposal specs clarify design analyze tasks plan"
       else

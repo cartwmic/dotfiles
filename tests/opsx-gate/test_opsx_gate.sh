@@ -67,10 +67,54 @@ run green-s; check "complete Scale-S change passes (gate-exit-code-contract)" 0 
 run nonexistent-change; check "unknown change fails (gate-exit-code-contract)" 1 $?
 
 # --- opsx-gate-enforcement.required-artifact-by-scale ---
-mkchange missing-plan; rm "$TMP/openspec/changes/missing-plan/plan.md"
-run missing-plan; rc=$?
-check "missing Scale-S artifact fails (required-artifact-by-scale)" 1 $rc
-grep -q 'GATE-FAIL artifact-plan' "$TMP/err" && ok "reports artifact-plan" || nok "reports artifact-plan"
+# D3: at S the required set is review+proposal+tasks (specs/plan are NOT required
+# below M). Removing a genuinely-required S artifact (tasks.md) must fail.
+mkchange missing-tasks; rm "$TMP/openspec/changes/missing-tasks/tasks.md"
+run missing-tasks; rc=$?
+check "missing Scale-S required artifact fails (required-artifact-by-scale)" 1 $rc
+grep -q 'GATE-FAIL artifact-tasks' "$TMP/err" && ok "reports artifact-tasks" || nok "reports artifact-tasks"
+
+# D3 matrix (reviewer probes): XS requires review.md ONLY; S requires
+# review+proposal+tasks and must NOT demand specs/ or plan.
+mkXSonly() { # XS change carrying ONLY review.md
+  local d="$TMP/openspec/changes/$1"; mkdir -p "$d"
+  cat >"$d/review.md" <<'EOF'
+---
+scale: XS
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: advisory
+loop_max_iterations: 10
+validation_source_mode: required
+spec_level: spec-anchored
+---
+# Review
+EOF
+}
+mkXSonly xs-only
+run xs-only; check "XS with only review.md passes artifact checks (required-artifact-by-scale)" 0 $?
+grep -q 'GATE-FAIL artifact-' "$TMP/err" && nok "XS demanded an artifact beyond review.md" || ok "XS demands no artifact beyond review.md"
+
+mkSminimal() { # S change carrying review + proposal + tasks ONLY (no specs/, no plan)
+  local d="$TMP/openspec/changes/$1"; mkdir -p "$d"
+  cat >"$d/review.md" <<'EOF'
+---
+scale: S
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: advisory
+loop_max_iterations: 20
+validation_source_mode: required
+spec_level: spec-anchored
+---
+# Review
+EOF
+  echo "# proposal" >"$d/proposal.md"
+  printf '# tasks\n- [x] 1.1 done\n' >"$d/tasks.md"
+}
+mkSminimal s-min
+run s-min; check "S with review+proposal+tasks passes, no specs/plan demanded (required-artifact-by-scale)" 0 $?
+grep -qE 'GATE-FAIL artifact-(specs|plan)' "$TMP/err" && nok "S wrongly demanded specs/ or plan" || ok "S demands no specs/ or plan"
 
 mkchange noscale
 # break the scale value
