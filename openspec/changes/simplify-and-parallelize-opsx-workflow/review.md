@@ -39,7 +39,7 @@ review_models: [claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5]
 
 ## Diff Base + Worktree locator
 
-**Diff Base SHA:** 30bccce13adb497feb0aeb4c70017fc6a64fd847
+**Diff Base SHA:** 726d18023c96f93378fd10b22f44613af4efec1c
 **Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-simplify-and-parallelize-opsx-workflow
 
 ## Execution Notes
