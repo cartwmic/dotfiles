@@ -114,7 +114,13 @@ For each `Y`, find the next available `<repo>/adr/ADR-NNNN-` number (scan existi
 - Source change: `openspec/changes/<name>/`
 - Decision Drivers + Considered Options + Decision Outcome + Consequences: extracted from D<n>'s text
 
-Commit each ADR with subject `docs(adr): ADR-NNNN <title>`.
+Commit each ADR path-scoped to the ADR file(s) on the integration checkout —
+never a bare `git commit`/`git add -A`, so an unrelated dirty file cannot ride
+along into the archive history:
+```bash
+git add <repo>/adr/ADR-NNNN-<slug>.md
+git commit -- <repo>/adr/ADR-NNNN-<slug>.md -m "docs(adr): ADR-NNNN <title>"
+```
 
 ## HARD-GATE 4: retrospective Promote-candidates
 

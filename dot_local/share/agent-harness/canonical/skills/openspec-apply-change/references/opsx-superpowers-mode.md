@@ -39,8 +39,10 @@ If any unstaged or uncommitted files under that subtree, stage + commit ONLY tha
 
 ```bash
 git add openspec/changes/<name>/
-git commit -m "chore(opsx): pre-flight commit for apply of <name>"
+git commit -- openspec/changes/<name>/ -m "chore(opsx): pre-flight commit for apply of <name>"
 ```
+
+The commit is path-scoped (`git commit -- <paths>`) — never a bare `git commit`/`git add -A` — so an unrelated dirty file in the integration checkout cannot ride along into workflow-driven history.
 
 Then create the worktree on branch `opsx/<name>` per the pi-subagents convention.
 
