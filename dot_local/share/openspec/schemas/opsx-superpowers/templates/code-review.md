@@ -73,7 +73,10 @@ opsx gate / archive read these fields verbatim:
 |---|---|---|---|---|---|---|---|
 | 1 | blind | 0 | 0 | 0 | 0 | <model:verdict …> | <sha> |
 
-## Convergent findings
+## Findings
+
+<!-- Neutral heading by design: consolidated counts use the max-across-reviewers
+     rule — there is NO cross-reviewer finding matching ("convergence") step. -->
 
 <!-- MANDATORY check: if the diff Diff Base SHA..HEAD touches
      openspec/opsx-gates.yaml (or any gate/validation manifest), flag it

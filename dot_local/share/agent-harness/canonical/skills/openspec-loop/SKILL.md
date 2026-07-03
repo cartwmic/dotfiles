@@ -86,7 +86,10 @@ consolidated severity counts — **max across reviewers per severity**, no cross
 reviewer finding matching — per-reviewer verdicts, reviewed HEAD.
 BLINDNESS RED FLAGS — never include in a blind reviewer prompt: the ledger, prior-
 round findings, another reviewer's output. Only the single marked disclosure round
-discloses. (opsx-review-convergence.orchestrator-round-ledger)
+discloses. PROVENANCE RED FLAG — a sealed multi-round Verdict with no ledger row is
+a provenance defect: repair the ledger before archive.
+(opsx-review-convergence.orchestrator-round-ledger,
+ opsx-review-convergence.prose-surface-fidelity)
 
 **Stop conditions** — evaluate BEFORE dispatching the next blind round:
 
