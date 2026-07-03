@@ -9,7 +9,9 @@ THE orchestrator SHALL, WHEN declaring a landing state that must not be re-drive
 loop continuation — a decision-audit landing after review non-convergence, a terminal
 green-gate report already presented, or any stop that awaits a human ruling — set
 `loop_hold: true` with a non-empty `loop_hold_reason` in the change's review.md
-front-matter (committed as part of the landing turn) instead of relying on prose
+front-matter — the same copy the loop host resolves from the integration checkout, so
+the hold is observable to the host — committed as part of the landing turn, instead of
+relying on prose
 announcements or stall-guard exhaustion, so the host loop observes the landing
 deterministically. The orchestrator SHALL NEVER clear a `loop_hold` itself — clearing is
 reserved to the human named re-arm.
