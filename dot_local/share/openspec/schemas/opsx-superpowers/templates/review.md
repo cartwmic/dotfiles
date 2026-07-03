@@ -16,7 +16,7 @@ verification_mode: retained-recommended
 debug_mode: standard
 review_status: not-requested
 delegation_mode: single-agent
-code_review_mode: advisory
+# code_review_mode: (derived when absent: M ⇒ gating-required, XS/S ⇒ advisory; uncomment to override — an explicit value always wins)
 # loop_max_iterations authoring-time defaults keyed by tier: XS=10, S=20, M=40,
 # full_rigor=80 (the former L budget). The value is written here at authoring
 # time; the loop runtime reads it verbatim.
