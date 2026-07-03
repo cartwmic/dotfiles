@@ -199,9 +199,14 @@ WHEN the pre-review checks are green (tasks complete, structural checks pass, re
 
 - **Authored by a blind review SUBAGENT** (capability hook `subagent-dispatch` / `adversarial-review-postimpl`), NEVER self-authored by the orchestrator. The subagent reviews the diff `<Diff Base SHA>..<implementation HEAD>` against the baseline: `intent.md` + proposal + specs + design + plan + tasks status.
 - **Reviewer models:** dispatch one blind reviewer per configured `review` model (`OPSX_REVIEW_MODELS` / `opsx models review --change <name>`, newline/comma-delimited), each passed verbatim as the subagent `model:`. Adversarial-multimodel requires ≥ 2 distinct models; unset → the skill's default review set.
-- The subagent stamps: `Verdict` (pass|fail), `review_mode` (adversarial-multimodel | degraded-single-model), `reviewer-provenance`, `Diff Base SHA`, and `Reviewed Range`.
+- The subagent stamps: `Verdict` (pass|fail), `review_mode` (adversarial-multimodel | disclosure-consensus | degraded-single-model), `reviewer-provenance`, `Diff Base SHA`, and `Reviewed Range`.
 - **Constitution IX**: when the change edits an existing skill, the review MUST be adversarial-multimodel; a `degraded-single-model` verdict does NOT satisfy the gate.
 - Code Review Mode `none` → skip production. `advisory` → produce, non-blocking. `gating-required` → archive blocks unless Verdict = pass.
+- **Convergence discipline (opsx-review-convergence)** — gating rounds converge or land:
+  - Every reviewer dispatch prompt embeds the template's **verdict contract + severity rubric** (fail only on frozen-baseline violation or objective correctness/security defect; taste/beyond-scope → advisory). `Verdict: pass ⇔ no open P0/P1`; open P2/P3 recorded as warnings, never another fix round.
+  - The ORCHESTRATOR seals the **Round tracker** ledger after every round (round #, mode, consolidated counts = max across reviewers per severity, per-reviewer verdicts, reviewed HEAD) — covering every round including any disclosure round. Never include the ledger or prior findings in a blind prompt.
+  - **Stop before re-dispatching**: converged (P0+P1 = 0 → seal pass) · treadmill (P0+P1 flat/rising across the two most recent rounds) · budget (rounds ≥ `review_max_rounds`, default 5). Persistent split (2 rounds, or a stop with a split) → ONE `disclosure-consensus` round (max 1/change; satisfies multi-model gating only with ≥2 distinct models). Still-open P0/P1 → decision-audit landing; a user **waive** ruling re-seals `Verdict: pass` with `waived_by_user` (reviewed range unchanged; never self-authored), a **fix** ruling grants a recorded budget extension.
+  - **Out-of-scope findings**: required to meet the frozen intent (evidence) → widen scope + log a review.md `Scope Expansions` entry before fixing; otherwise → route to `follow-ups.md` (create from `templates/follow-ups.md` on first routing; advisory, never gates; archive surfaces a non-empty queue as successor-change explore input).
 
 ## Completion gate: opsx gate
 
