@@ -19,7 +19,7 @@
   - files_allowed:
       - tests/opsx-review-convergence/test_review_convergence_surfaces.sh
   - allow_new_files: false
-- [ ] 2.2 Run the full opsx-gates.yaml validator set; all required gates green
+- [x] 2.2 Run the full opsx-gates.yaml validator set; all required gates green
   - intent: infra
   - files_allowed:
       - openspec/changes/polish-review-convergence-surfaces/**
