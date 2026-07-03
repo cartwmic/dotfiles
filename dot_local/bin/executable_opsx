@@ -1324,16 +1324,20 @@ if [ -d "$ROOT/adr" ]; then
 fi
 
 # (c) multi-dir integration-commit detector (ADVISORY — never affects rc):
-#     scan <Diff Base SHA>..main for any non-merge commit touching >=2 distinct
-#     openspec/changes/<dir>/ directories. Skipped when no Diff Base locator.
+#     scan <Diff Base SHA>..main (first-parent chain, MERGES INCLUDED — an
+#     "evil merge" landing >=2 change dirs must be flagged per
+#     opsx-cli.multi-dir-integration-commit-detector; a merge commit's touched
+#     set is its net effect on main, i.e. diff vs its FIRST parent) for any
+#     commit touching >=2 distinct openspec/changes/<dir>/ directories.
+#     Skipped when no Diff Base locator.
 DIFF_BASE=""
 [ -f "$REVIEW" ] && DIFF_BASE="$(grep -E '^\*\*Diff Base SHA:\*\*' "$REVIEW" 2>/dev/null | head -1 | sed -E 's/^\*\*Diff Base SHA:\*\*[[:space:]]*//; s/[[:space:]]+$//')"
 case "$DIFF_BASE" in ""|"<"*) DIFF_BASE="" ;; esac
 if [ -n "$DIFF_BASE" ] \
    && git -C "$ROOT" rev-parse --verify --quiet main >/dev/null 2>&1 \
    && git -C "$ROOT" rev-parse --verify --quiet "$DIFF_BASE" >/dev/null 2>&1; then
-  for c in $(git -C "$ROOT" rev-list --no-merges "$DIFF_BASE..main" 2>/dev/null); do
-    dirs="$(git -C "$ROOT" show --name-only --format= "$c" 2>/dev/null \
+  for c in $(git -C "$ROOT" rev-list --first-parent "$DIFF_BASE..main" 2>/dev/null); do
+    dirs="$(git -C "$ROOT" diff-tree --no-commit-id --name-only -r -m --first-parent "$c" 2>/dev/null \
       | sed -nE 's#^(openspec/changes/[^/]+)/.*#\1#p' | sort -u | grep -v '^$')"
     cnt="$(printf '%s\n' "$dirs" | grep -c . )"
     if [ "${cnt:-0}" -ge 2 ]; then
