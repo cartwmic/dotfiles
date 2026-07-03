@@ -1,0 +1,55 @@
+---
+scale: L
+worktree_mode: worktree-required
+execution_mode: standard
+verification_mode: retained-required
+debug_mode: standard
+review_status: not-requested
+delegation_mode: single-agent
+code_review_mode: gating-required
+loop_max_iterations: 80
+validation_source_mode: required
+spec_level: spec-anchored
+doneness_mode: required
+---
+
+# Review
+
+## Modes
+
+| Mode | Value | Notes |
+|---|---|---|
+| Scale | L | Cross-capability (loop-orchestration + post-impl-review + workflow-schema templates), edits existing skills (Constitution IX), ADR-worthy decisions (verdict contract, disclosure round, trajectory stop) |
+| Execution Mode | standard | Spec/skill/template prose edits; no strict TDD |
+| Verification Mode | retained-required | verify.md green is an archive HARD-GATE |
+| Debug Mode | standard | — |
+| Review Status | not-requested | Blind rounds pending |
+| Delegation Mode | single-agent | Authored in-session; reviews delegated to blind subagents |
+| Worktree Mode | worktree-required | ADR-0008 |
+| Code Review Mode | gating-required | Constitution IX (existing-skill edits) → multi-model adversarial |
+| Loop Max Iterations | 80 | Scale L |
+| Validation Source Mode | required | opsx-gates.yaml / repo validators |
+| Spec Level | spec-anchored | default |
+| Doneness Mode | required | Default at Scale ≥ M; judge machinery already shipped (add-opsx-doneness-judge) |
+
+## Diff Base + Worktree locator
+
+**Diff Base SHA:** <empty until apply captures it>
+**Worktree Path:** <empty until apply captures it>
+**Integration Branch:** main
+
+## Manual Adjustments
+
+- None; all defaults for Scale L retained (worktree-required, gating-required code review, retained-required verify, doneness required).
+
+## Execution Notes
+
+- 2026-07-03 — review.md authored; Scale L per frozen intent (cross-capability, Constitution IX).
+
+## Scope Expansions
+
+<!-- Evidence-gated widenings per intent.md decision "Prose scope + evidence-gated
+widening". One bullet per widening: what widened + the evidence it is required to
+meet the frozen intent. Empty until/unless the loop widens scope. -->
+
+- None yet.
