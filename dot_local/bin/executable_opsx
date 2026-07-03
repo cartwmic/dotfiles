@@ -613,7 +613,13 @@ done
 
 # Structural validation (OpenSpec-tracked artifacts only) — run against the
 # resolved artifact source so worktree-side artifacts are what gets validated.
-if command -v openspec >/dev/null 2>&1; then
+# Conditioned on specs/ (R6-F1): the real openspec CLI requires >=1 spec delta
+# per change, but the D3 matrix deliberately omits specs/ at XS and S — an
+# unconditional whole-change validate would make those tiers ungateable in a
+# real workspace. Run it whenever specs/ EXISTS (any tier — authored deltas
+# must always validate), skip it only when specs/ is both absent and not
+# required by the tier matrix.
+if command -v openspec >/dev/null 2>&1 && [ -d "$CDIR/specs" ]; then
   ( cd "$ART_ROOT" && openspec validate "$CHANGE" --strict --no-interactive ) >/dev/null 2>&1 \
     || fail structure "openspec validate --strict failed"
 fi
