@@ -25,8 +25,8 @@ Before the artifact loop, ask the user:
 
 ```
 What Scale tier? (XS / S / M) — plus optional full_rigor for the M tier
-  XS: typo/comment/single-line config — proposal + tasks only
-  S:  single-file bug/small refactor — + specs, plan
+  XS: typo/comment/single-line config — review.md (switchboard) + proposal + tasks
+  S:  single-file bug/small refactor — + specs, plan (when the change touches specs)
   M:  typical feature — full graph; clarify open questions fold into
       proposal.md ## Open Questions, analyze is deterministic-only, doneness
       rides the code-review dispatch; verify recommended
