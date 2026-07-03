@@ -565,15 +565,17 @@ esac
 # mode-conditioned verdict governed by the Doneness Verdict Enforcement section.
 # D3 table (opsx-gate-enforcement.required-artifact-by-scale): review.md is
 # always required (checked above; Scale is read from it). XS adds nothing; S
-# adds proposal + tasks; M adds specs/intent/design/plan; M+full_rigor adds
-# clarify + analyze. specs/ and plan are NOT required below M.
+# adds proposal + tasks; plain M adds specs/intent/plan (design.md is NOT
+# required at plain M — it is decision-gated authoring per D5); M+full_rigor
+# adds clarify + analyze + design (the former L/XL full set always carried
+# design). specs/ and plan are NOT required below M.
 case "$SCALE" in
   XS) req="review" ;;
   S)  req="review proposal tasks" ;;
   M)  if [ "$FULL_RIGOR" = true ]; then
         req="review intent proposal specs clarify design analyze tasks plan"
       else
-        req="review intent proposal specs design tasks plan"
+        req="review intent proposal specs tasks plan"
       fi ;;
   *)  req="" ;;
 esac

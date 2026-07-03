@@ -12,16 +12,16 @@ per the MODIFIED-delta rule.
 
 ### Requirement: Required Artifact By Scale
 
-THE opsx gate command SHALL derive the set of required artifacts from the change's declared Scale — one of the tier vocabulary `XS | S | M` read from the machine-readable front-matter of review.md, together with the optional boolean `full_rigor` flag — and SHALL fail if any artifact in that set is absent or fails the structural validation appropriate to its type. WHILE Scale is M (with or without `full_rigor`), the required set SHALL include intent.md (the loop's frozen baseline). At Scale M WITHOUT `full_rigor`, the required set SHALL NOT include a standalone clarify.md or a standalone blind analyze verdict (clarify open questions live in the proposal's `## Open Questions`; analyze is thinned to its deterministic checks). WHILE `full_rigor: true` is set, the required set SHALL include the full former M/L/XL artifact set — clarify.md, analyze.md carrying its blind verdict, and an independently dispatched doneness verdict — in addition to intent.md. The former L and XL labels map to "M + full_rigor"; a review.md declaring an unknown Scale value or an unparseable `full_rigor` value SHALL fail closed (reported as a failed check, never assumed permissive).
+THE opsx gate command SHALL derive the set of required artifacts from the change's declared Scale — one of the tier vocabulary `XS | S | M` read from the machine-readable front-matter of review.md, together with the optional boolean `full_rigor` flag — and SHALL fail if any artifact in that set is absent or fails the structural validation appropriate to its type. WHILE Scale is M (with or without `full_rigor`), the required set SHALL include intent.md (the loop's frozen baseline). At Scale M WITHOUT `full_rigor`, the required set SHALL NOT include a standalone clarify.md, a standalone blind analyze verdict, or design.md (clarify open questions live in the proposal's `## Open Questions`; analyze is thinned to its deterministic checks; design authoring is decision-gated — authored only when a decision warrants it — not gate-required). WHILE `full_rigor: true` is set, the required set SHALL include the full former M/L/XL artifact set — clarify.md, analyze.md carrying its blind verdict, design.md (the former L/XL full set always carried design), and an independently dispatched doneness verdict — in addition to intent.md. The former L and XL labels map to "M + full_rigor"; a review.md declaring an unknown Scale value or an unparseable `full_rigor` value SHALL fail closed (reported as a failed check, never assumed permissive).
 
 #### Scenario: Missing Scale-required artifact fails the gate at plain M
 - **WHILE** the change declares Scale M WITHOUT `full_rigor`
 - **IF** intent.md or review.md is absent
-- **THEN** opsx gate SHALL report the missing artifact as a failed check and exit non-zero, and it SHALL NOT require a standalone clarify.md or a standalone blind analyze verdict at this tier
+- **THEN** opsx gate SHALL report the missing artifact as a failed check and exit non-zero, and it SHALL NOT require a standalone clarify.md, a standalone blind analyze verdict, or design.md at this tier (design authoring is decision-gated, not gate-required)
 
 #### Scenario: Full-rigor requires the full former L/XL artifact set
 - **WHILE** the change declares Scale M with `full_rigor: true`
-- **IF** intent.md, clarify.md, analyze.md (with its blind verdict), or review.md is absent
+- **IF** intent.md, clarify.md, analyze.md (with its blind verdict), design.md, or review.md is absent
 - **THEN** opsx gate SHALL report the missing artifact as a failed check and exit non-zero
 
 #### Scenario: Absent or unparseable Scale fails the gate
