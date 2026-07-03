@@ -37,8 +37,8 @@ review_max_rounds: 5
 
 ## Diff Base + Worktree locator
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
+**Diff Base SHA:** 2c3b6c5469b1c7d55b019241bc0941c6befa278b
+**Worktree Path:** /Users/cartwmic/.local/share/.opsx-worktrees/polish-review-convergence-surfaces
 **Integration Branch:** main
 
 ## Manual Adjustments
