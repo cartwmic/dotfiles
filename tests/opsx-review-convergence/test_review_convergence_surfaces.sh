@@ -49,20 +49,22 @@ has "follow-ups template exists with queue" "$TPL/follow-ups.md" "## Queue"
 
 # --- opsx-review-convergence.baseline-bounded-verdict-contract ---
 has "code-review template embeds the verdict contract" "$TPL/code-review.md" "Verdict contract"
-has "contract restricts FAIL to baseline violation or objective defect" "$TPL/code-review.md" "objective"
+has "contract restricts FAIL to baseline violation or objective defect" "$TPL/code-review.md" "objective correctness/security defect"
 
 # --- opsx-review-convergence.severity-rubric-and-floor ---
 has "code-review template carries the P0-P3 rubric" "$TPL/code-review.md" "P3  nit"
 has "severity floor stated (pass iff no open P0/P1)" "$TPL/code-review.md" "no open P0/P1"
 
 # --- opsx-review-convergence.orchestrator-round-ledger ---
-has "ledger consolidation = MAX across reviewers" "$TPL/code-review.md" "MAX"
+has "ledger consolidation = MAX across reviewers" "$TPL/code-review.md" "Consolidated counts = MAX"
+has "IX pass accepts disclosure-consensus with >=2 models" "$TPL/code-review.md" "disclosure-consensus when it consolidated"
+has "apply ref IX accepts disclosure-consensus with >=2 models" "$APPLY_REF" "disclosure-consensus\` when the disclosure round consolidated"
 has "blind prompts never carry the ledger" "$TPL/code-review.md" "NEVER include this ledger"
 has "loop skill maintains the round ledger" "$LOOP_SKILL" "Round ledger"
 
 # --- opsx-review-convergence.trajectory-stop-and-round-budget ---
-has "loop skill has converged stop" "$LOOP_SKILL" "converged"
-has "loop skill has treadmill stop" "$LOOP_SKILL" "treadmill"
+has "loop skill has converged stop" "$LOOP_SKILL" "latest round P0+P1 = 0"
+has "loop skill has treadmill stop" "$LOOP_SKILL" "flat or rising across the two most recent rounds"
 has "loop skill has review_max_rounds budget stop" "$LOOP_SKILL" "review_max_rounds"
 
 # --- opsx-review-convergence.disclosure-round ---
@@ -91,7 +93,7 @@ has "loop skill pins the reviewer model set" "$LOOP_SKILL" "Reviewer-model stabi
 has "loop skill evaluates stops before re-dispatch" "$LOOP_SKILL" "evaluate BEFORE dispatching"
 
 # --- opsx-loop-orchestration.pre-apply-surface-audit-dispatch ---
-has "surface audit dispatched before first implementation task" "$LOOP_SKILL" "before the"
+has "surface audit dispatched before first implementation task" "$LOOP_SKILL" "advisory blind surface-enumeration audit before the"
 
 # --- opsx-loop-orchestration.scope-widening-handled-in-the-loop ---
 has "widening logged BEFORE committing the fix" "$LOOP_SKILL" "BEFORE committing the fix"
