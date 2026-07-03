@@ -4,7 +4,7 @@ worktree_mode: worktree-required
 execution_mode: standard
 verification_mode: retained-recommended
 debug_mode: standard
-review_status: not-requested
+review_status: resolved
 delegation_mode: single-agent
 code_review_mode: gating-required
 loop_max_iterations: 20
@@ -25,7 +25,7 @@ review_max_rounds: 5
 | Execution Mode | standard | Prose + one test assertion |
 | Verification Mode | retained-recommended | Scale S default; surface test is the durable check |
 | Debug Mode | standard | — |
-| Review Status | not-requested | Blind rounds pending |
+| Review Status | resolved | Round 1 blind converged: both models pass, 0 open P0/P1 |
 | Delegation Mode | single-agent | Reviews delegated to blind subagents |
 | Worktree Mode | worktree-required | ADR-0008 |
 | Code Review Mode | gating-required | **Manual override** (S default is advisory): skill edits keep Constitution IX's multi-model bar via mode, not Scale inflation |
