@@ -88,13 +88,17 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
 - [x] 4.3 `tests/opsx-models/test_opsx_models.sh`: project yaml ignored +
       one-time warning; source enum without `project`; `--layer project`
       write rejected.
-- [ ] 4.4 `tests/opsx-review-convergence/test_review_convergence_surfaces.sh`:
+- [x] 4.4 `tests/opsx-review-convergence/test_review_convergence_surfaces.sh`:
       prose pins for 3.1–3.3 surfaces (tier vocab, combined dispatch,
       archive-check invocation, path-scoped-commit rule).
-- [ ] 4.5 Extension bun tests: confirm NO behavior change required
+      +30 pins (80 total); extends existing pins, deletes none.
+- [x] 4.5 Extension bun tests: confirm NO behavior change required
       (budget=front-matter-only, absent=unbounded); add/adjust only if a pin
       references retired capability names.
       Files: `dot_pi/agent/extensions/opsx-loop/*.test.ts` (as needed).
+      Confirmed: no retired capability names / L-XL / project-layer pins; the
+      extension reads only `loop_max_iterations` front-matter (absent =>
+      unbounded, D3). 60 tests pass unchanged — no edit needed.
 
 ## Phase 5 — Verification
 

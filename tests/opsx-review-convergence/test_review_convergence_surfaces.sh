@@ -36,6 +36,11 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TPL="$ROOT/dot_local/share/openspec/schemas/opsx-superpowers/templates"
 LOOP_SKILL="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md"
 APPLY_REF="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-apply-change/references/opsx-superpowers-mode.md"
+PROPOSE_REF="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-propose/references/opsx-superpowers-mode.md"
+PROPOSE_SKILL="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-propose/SKILL.md"
+ARCHIVE_REF="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-archive-change/references/opsx-superpowers-mode.md"
+ARCHIVE_SKILL="$ROOT/dot_local/share/agent-harness/canonical/skills/openspec-archive-change/SKILL.md"
+README="$ROOT/dot_local/share/openspec/schemas/opsx-superpowers/README.md"
 
 pass=0; failc=0
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass+1)); }
@@ -140,6 +145,56 @@ has "review template states cleared-by-named-re-arm-only" "$TPL/review.md" "name
 # --- opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout ---
 has "apply ref mandates locator publication to the integration branch" "$APPLY_REF" "COMMIT that edit ON THE INTEGRATION BRANCH"
 has "apply ref frames the fallback as backstop, not substitute" "$APPLY_REF" "a backstop, not a substitute"
+
+# =====================================================================
+# simplify-and-parallelize-opsx-workflow: 3-tier + full_rigor surfaces
+# (Phase 3/2 prose rules; grep-level regression pins per task 4.4)
+# =====================================================================
+
+# --- tier vocabulary present (XS|S|M + full_rigor) ---
+has "review.md template Scale row uses the XS|S|M vocabulary" "$TPL/review.md" "skills author per Scale"
+has "review.md template documents the full_rigor key" "$TPL/review.md" "full_rigor"
+has "loop skill states the XS | S | M tier vocabulary" "$LOOP_SKILL" "XS | S | M"
+has "apply ref reads Scale as XS | S | M" "$APPLY_REF" "<XS | S | M>"
+has "apply ref reads the full_rigor front-matter key" "$APPLY_REF" "full_rigor"
+has "propose ref mode picker uses XS / S / M" "$PROPOSE_REF" "XS / S / M"
+has "propose skill drops Scale >= L for full_rigor" "$PROPOSE_SKILL" "full_rigor"
+has "README maps former L/XL to M + full_rigor" "$README" "Migration note"
+# guard against reintroduced 5-tier vocabulary in the live surfaces
+if grep -q -- "Scale . L" "$PROPOSE_SKILL" 2>/dev/null; then nok "propose skill reintroduced a Scale>=L tier"; else ok "propose skill has no legacy L tier"; fi
+
+# --- authoring-time budget defaults + worktree-mode derivation (template) ---
+has "review.md template carries the tier budget defaults" "$TPL/review.md" "XS=10, S=20, M=40, full_rigor=80"
+has "review.md template carries the worktree-mode derivation comment" "$TPL/review.md" "DERIVED by tier when ABSENT"
+
+# --- plain-M combined doneness dispatch (loop skill + doneness template) ---
+has "loop skill defines the plain-M combined doneness dispatch" "$LOOP_SKILL" "COMBINED dispatch"
+has "loop skill designates the first review model as doneness judge" "$LOOP_SKILL" "designated reviewer is the FIRST"
+has "loop skill keeps full_rigor independent doneness dispatch" "$LOOP_SKILL" "INDEPENDENT dispatch"
+has "doneness template documents the combined dispatch" "$TPL/doneness.md" "COMBINED dispatch"
+has "doneness template seals a separate blind-single-judge verdict" "$TPL/doneness.md" "blind-single-judge"
+
+# --- A2 path-scoped commit rule (loop skill) ---
+has "loop skill mandates path-scoped integration commits" "$LOOP_SKILL" "path-scoped to the change"
+has "loop skill forbids bare git add -A in loop commits" "$LOOP_SKILL" "git commit -- openspec/changes"
+
+# --- archive-check invocation + refusal + D8 cleanup (archive surfaces) ---
+has "archive ref runs opsx archive-check pre-archive" "$ARCHIVE_REF" "opsx archive-check"
+has "archive ref refuses archive on non-zero archive-check" "$ARCHIVE_REF" "exits NON-ZERO, REFUSE archive"
+has "archive ref deletes now-empty spec dirs post-archive (D8)" "$ARCHIVE_REF" "type d -empty -delete"
+has "archive ref re-validates specs before the archive commit" "$ARCHIVE_REF" "openspec validate --specs --strict"
+has "archive skill branch names the archive-check refusal" "$ARCHIVE_SKILL" "opsx archive-check"
+
+# --- clarify-in-proposal + deterministic analyze at plain M (propose ref) ---
+has "propose ref folds clarify into the proposal at plain M" "$PROPOSE_REF" "clarify-in-proposal"
+has "propose ref places open questions in the proposal" "$PROPOSE_REF" "## Open Questions"
+has "propose ref keeps the 2-option self-resolution discipline" "$PROPOSE_REF" "2-option self-resolution"
+has "propose ref runs analyze deterministic-only at plain M" "$PROPOSE_REF" "deterministic-only analyze"
+
+# --- models template without the project layer ---
+has "models template retires the project layer" "$TPL/opsx-models.yaml" "project model layer"
+has "models template resolution order omits the project file" "$TPL/opsx-models.yaml" "front-matter > user file > built-in default"
+if grep -q -- "project scope" "$TPL/opsx-models.yaml" 2>/dev/null; then nok "models template still presents a project-scope location"; else ok "models template drops the project-scope location"; fi
 
 echo "-----"
 echo "opsx-review-convergence surfaces: $pass passed, $failc failed"
