@@ -8,7 +8,7 @@ verification_mode: retained-required
 debug_mode: standard
 review_status: in-review
 loop_hold: true
-loop_hold_reason: "budget 7/7 spent; R7-F1/F2 fixed at 60fef27 but unconfirmed — ruling needed: convergence-cap extension recommended (fix-and-re-review until a round yields 0 new P0/P1, cap 10)"
+loop_hold_reason: "GATE GREEN at b52aec2 (both views) — round 8 converged (opus + sonnet-5 both pass, 0 P0/P1); terminal landing, awaiting human archive ruling"
 delegation_mode: single-agent
 code_review_mode: gating-required
 loop_max_iterations: 80
@@ -59,3 +59,4 @@ review_models: [claude-bridge/claude-opus-4-8, claude-bridge/claude-sonnet-5]
 - 2026-07-03: LANDED (3rd) — round 7 split again: opus pass (0 findings, real-CLI probes), gpt R7-F1 (schema/propose still steered XS into skipping review.md — fixed 329a018) + R7-F2 (template hard-coded advisory review mode — fixed 60fef27). Budget 7/7.
 - 2026-07-03: USER RULING (convergence cap) — review_max_rounds 7→10; loop authorized to fix-and-re-review autonomously until a round yields 0 new P0/P1 from both reviewers; cap-hit without convergence lands for ruling.
 - 2026-07-03: USER RULING (reviewer reconfiguration per opsx-adversarial-review.reviewer-model-stability): openai-codex/gpt-5.5 usage-limited mid-round-8; review_models second slot reconfigured to claude-bridge/claude-sonnet-5 by explicit user choice; applies to round 8 and subsequent rounds; logged in code-review.md ledger.
+- 2026-07-03: GATE GREEN both views at worktree HEAD b52aec2. Round 8 converged under the convergence-cap ruling (8/10 rounds used). Verdicts sealed in worktree (verify, code-review with 8-round ledger, doneness blind-single-judge). Awaiting archive ruling.
