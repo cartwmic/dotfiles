@@ -7,7 +7,103 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildModelEnv, classifyDoneness, donenessRatchet, gateFailKey, hashDir, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseModelsJson, verdictFromExit } from "./helpers.ts";
+import { buildModelEnv, classifyDoneness, clearHoldText, donenessRatchet, formatInventory, gateFailKey, hashDir, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, stripLoopHold, verdictFromExit } from "./helpers.ts";
+
+describe("parseLoopHold / stripLoopHold — opsx-loop-kickoff.loop-hold-blocks-continuation", () => {
+	const FM = (body: string) => `---\n${body}\n---\n# Review\n`;
+	test("loop_hold: true with reason → held", () => {
+		const h = parseLoopHold(FM('scale: M\nloop_hold: true\nloop_hold_reason: "decision audit pending"'));
+		expect(h.held).toBe(true);
+		expect(h.reason).toBe("decision audit pending");
+	});
+	test("hold honored even with empty reason (fail-safe, clarify C1)", () => {
+		expect(parseLoopHold(FM("loop_hold: true")).held).toBe(true);
+		expect(parseLoopHold(FM("loop_hold: true")).reason).toBe("");
+	});
+	test("absent / false / malformed / outside-front-matter → not held", () => {
+		expect(parseLoopHold(FM("scale: M")).held).toBe(false);
+		expect(parseLoopHold(FM("loop_hold: false")).held).toBe(false);
+		expect(parseLoopHold(FM('loop_hold: "true" junk')).held).toBe(false);
+		expect(parseLoopHold("# Review\nloop_hold: true\n").held).toBe(false);
+	});
+	test("stripLoopHold removes only the hold fields, keeps everything else", () => {
+		const md = FM('scale: M\nloop_hold: true\nloop_hold_reason: "why"\ndoneness_mode: required');
+		const out = stripLoopHold(md);
+		expect(out).toContain("scale: M");
+		expect(out).toContain("doneness_mode: required");
+		expect(out).not.toContain("loop_hold");
+		expect(parseLoopHold(out).held).toBe(false);
+	});
+	test("stripLoopHold is a no-op without hold fields (and never touches the body)", () => {
+		const md = FM("scale: M") + "body loop_hold: true mention\n";
+		expect(stripLoopHold(md)).toBe(md);
+	});
+	test("clearHoldText strips the hold AND appends the auditable Execution Notes line", () => {
+		const md = FM('scale: M\nloop_hold: true\nloop_hold_reason: "audit pending"') + "\n## Execution Notes\n\n- old note\n";
+		const { next, reason } = clearHoldText(md, "my-change", "2026-07-03");
+		expect(reason).toBe("audit pending");
+		expect(parseLoopHold(next).held).toBe(false);
+		expect(next).toContain("- 2026-07-03 — loop_hold cleared by named re-arm (/opsx-loop my-change); reason was: audit pending");
+		expect(next).toContain("- old note");
+	});
+	test("clearHoldText creates Execution Notes when absent; empty reason recorded as such", () => {
+		const { next } = clearHoldText(FM("loop_hold: true"), "c", "2026-07-03");
+		expect(next).toContain("## Execution Notes");
+		expect(next).toContain("reason was: (none recorded)");
+	});
+	test("clearHoldText survives $-replacement patterns in the reason", () => {
+		const md = FM("loop_hold: true\nloop_hold_reason: \"costs $& and $' extra\"") + "\n## Execution Notes\n";
+		const { next } = clearHoldText(md, "c", "2026-07-03");
+		expect(next).toContain("costs $& and $' extra");
+	});
+	test("clearHoldText anchors to the exact heading line, not a longer heading", () => {
+		const md = FM("loop_hold: true") + "\n## Execution Notes (archived)\n\n## Execution Notes\n";
+		const { next } = clearHoldText(md, "c", "2026-07-03");
+		expect(next.indexOf("loop_hold cleared")).toBeGreaterThan(next.indexOf("## Execution Notes (archived)"));
+	});
+	test("parseLoopHold accepts YAML-canonical True (case-insensitive boolean)", () => {
+		expect(parseLoopHold(FM("loop_hold: True")).held).toBe(true);
+	});
+});
+
+describe("active-change inventory — opsx-loop-kickoff.goal-and-conversation-kickoff", () => {
+	const mkRepo = () => {
+		const d = mkdtempSync(join(tmpdir(), "opsx-inv-"));
+		const ch = (name: string, files: Record<string, string>) => {
+			mkdirSync(join(d, "openspec", "changes", name), { recursive: true });
+			for (const [f, c] of Object.entries(files)) writeFileSync(join(d, "openspec", "changes", name, f), c);
+		};
+		return { d, ch };
+	};
+	test("lists only intent.md-bearing changes with cheap front-matter scale, sorted", () => {
+		const { d, ch } = mkRepo();
+		ch("zeta", { "intent.md": "# I", "review.md": "---\nscale: M\n---\n" });
+		ch("alpha", { "intent.md": "# I" }); // no review.md → scale "?"
+		ch("no-intent", { "review.md": "---\nscale: S\n---\n" });
+		expect(listIntentChanges(d)).toEqual([
+			{ name: "alpha", scale: "?" },
+			{ name: "zeta", scale: "M" },
+		]);
+	});
+	test("archive excluded; missing changes dir → empty; no gate runs or model calls by construction", () => {
+		const { d, ch } = mkRepo();
+		mkdirSync(join(d, "openspec", "changes", "archive", "old"), { recursive: true });
+		writeFileSync(join(d, "openspec", "changes", "archive", "intent.md"), "x");
+		expect(listIntentChanges(d)).toEqual([]);
+		expect(listIntentChanges(join(d, "nowhere"))).toEqual([]);
+		ch;
+	});
+	test("formatInventory renders directive lines; empty → (none)", () => {
+		expect(formatInventory([])).toBe("(none)");
+		expect(formatInventory([{ name: "a", scale: "M" }])).toBe("  - a (scale: M)");
+	});
+	test("committed predicate excludes working-tree-only intent drafts", () => {
+		const { d, ch } = mkRepo();
+		ch("tracked", { "intent.md": "# I" });
+		ch("draft-only", { "intent.md": "# I" });
+		expect(listIntentChanges(d, (n) => n === "tracked")).toEqual([{ name: "tracked", scale: "?" }]);
+	});
+});
 
 describe("doneness stall helpers — opsx-loop-kickoff.stall-detection-stops-the-loop", () => {
 	const DONE = (v: string, gaps: string[] = []) =>

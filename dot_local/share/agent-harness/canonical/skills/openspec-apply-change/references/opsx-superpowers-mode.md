@@ -58,6 +58,8 @@ opsx worktree ensure <name> [--integration-branch <b>]
 #   Integration Branch: <branch>
 ```
 
+**Locator publication (MANDATORY, at worktree creation)**: write the printed locator fields (`Diff Base SHA`, `Worktree Path`, `Integration Branch`) into review.md and COMMIT that edit ON THE INTEGRATION BRANCH (the integration checkout), not solely the change branch. The gate and the loop host resolve review.md from the integration checkout — a locator that exists only on `opsx/<name>` split-brains them into judging the wrong tree (observed red-loop). The resulting non-fast-forward archive merge is the accepted cost. The gate's convention-path fallback covers only pre-publication changes and default-path worktrees — it is a backstop, not a substitute. (opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout)
+
 **On reuse** (branch `opsx/<name>` already exists from a prior aborted apply): the command PRESERVES the recorded `Diff Base SHA`; if it is absent or not an ancestor of `opsx/<name>`, it exits 1 — HALT for human repair rather than re-recording a base that would exclude unverified commits.
 
 **On creation failure** (path conflict / detached HEAD / no space / permission): the command exits 1 with an actionable error — ABORT; do NOT proceed to any implementation task.
