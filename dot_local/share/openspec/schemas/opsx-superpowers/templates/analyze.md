@@ -43,7 +43,7 @@ positives only.
 |---|---|---|---|
 | <capability>.<slug> | <design §> or MISSING | covered\|missing\|partial | minor\|major |
 
-## Check 4 — design↔ADR promotion candidates (Scale ≥ L)
+## Check 4 — design↔ADR promotion candidates (full_rigor)
 
 <!--
 ADR promotion is a SKILL responsibility, not a schema artifact. This check

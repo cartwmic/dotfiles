@@ -90,7 +90,12 @@ Options:
      the rationale in retrospective.md)
 ```
 
-## HARD-GATE 3: ADR promotion candidates
+## HARD-GATE 3: ADR promotion candidates (full_rigor only)
+
+Read `full_rigor` from review.md front-matter. This gate runs ONLY when
+`full_rigor: true` (the former L/XL). At plain M, S, or XS, ADR promotion is
+optional — SKIP this gate (the user may still promote a decision by hand); it
+is never keyed on a Scale label. When `full_rigor: true`:
 
 Parse `openspec/changes/<name>/design.md` for `### D<n>:` Decision blocks. For each, apply the 4-point test using the schema's `templates/adr.md` rubric:
 
@@ -150,21 +155,19 @@ Per the memory contract (CLAUDE.md "Memory: hindsight MCP server"),
 NEVER auto-store; ALWAYS prompt per candidate. `retain` is async: do
 not expect the fact to be recallable in the same turn.
 
-If `retrospective.md` is missing:
-- Scale = XL → REFUSE archive (retrospective is required at XL):
+If `retrospective.md` is missing, key the decision on `full_rigor` (read from
+review.md front-matter), NOT on a Scale label:
+- `full_rigor: true` → REFUSE archive (retrospective is required at full_rigor,
+  the former L/XL):
   ```
   ⛔ Archive refused.
-  Scale = XL requires retrospective.md before archive.
+  full_rigor: true requires retrospective.md before archive.
   Run the schema's retrospective template to capture wins, misses,
   and Promote-candidates. Template:
     ~/.local/share/openspec/schemas/opsx-superpowers/templates/retrospective.md
   ```
-- Scale = L → warn, allow:
-  ```
-  ⚠ Scale = L; retrospective.md missing. Recommended but not required.
-  Skipping memory promotion.
-  ```
-- Scale = M / S / XS → silent skip.
+- full_rigor absent/false (plain M / S / XS) → silent skip (retrospective is
+  optional without full_rigor).
 
 ## HARD-GATE 3: code-review.md pass (Code Review Mode = gating-required)
 
@@ -177,7 +180,7 @@ Read `Code Review Mode` from review.md front-matter. If `gating-required`:
 Defense-in-depth mirror of the gate's doneness check (the newest enforcement
 axis must not be the only one without an archive-side backstop when a human
 archives without the gate). Read `Scale` and `doneness_mode` from review.md
-front-matter. If Scale is M/L/XL and `doneness_mode` is not `waived`:
+front-matter. If Scale is M and `doneness_mode` is not `waived`:
 1. `doneness.md` must exist with `Doneness: satisfied`. If absent or not
    satisfied, REFUSE archive.
 2. It must carry a `Judge` provenance field and a non-degraded `review_mode`.
