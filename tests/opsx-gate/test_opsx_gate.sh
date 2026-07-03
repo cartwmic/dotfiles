@@ -8,6 +8,7 @@
 #   opsx-gate-enforcement.manifest-validation-execution
 #   opsx-gate-enforcement.mode-aware-verdict-reading
 #   opsx-gate-enforcement.verdict-freshness-and-provenance
+#   opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout
 #   opsx-gate-enforcement.doneness-verdict-enforcement
 #   opsx-doneness-judge.sealed-doneness-verdict-artifact
 #   opsx-doneness-judge.freshness-bound-verdict
@@ -197,6 +198,22 @@ sed -i.bak 's/^worktree_mode: same-tree/worktree_mode: worktree-required/' \
   "$TMP/openspec/changes/wt-required/review.md"
 run wt-required; check "worktree-required + empty Worktree Path fails (required-artifact-by-scale)" 1 $?
 grep -q 'GATE-FAIL worktree' "$TMP/err" && ok "locate-failure is a hard fail" || nok "locate-failure is a hard fail"
+
+# --- convention fallback: empty locator + real branch worktree resolves, no split-brain
+# (opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout:
+#  pre-rule changes with an empty locator fall back instead of split-braining)
+mkchange wt-fallback
+sed -i.bak 's/^worktree_mode: same-tree/worktree_mode: worktree-required/' \
+  "$TMP/openspec/changes/wt-fallback/review.md"
+git -C "$TMP" add -A; git -C "$TMP" commit -qm "wt-fallback change"
+git -C "$TMP" worktree add "$TMP/wtfb" -b opsx/wt-fallback >/dev/null 2>&1
+run wt-fallback; check "empty locator + existing opsx/<change> worktree resolves via fallback (verdict-freshness-and-provenance)" 0 $?
+grep -q 'GATE-FAIL worktree' "$TMP/err" && nok "fallback avoided the locate hard-fail" || ok "fallback avoided the locate hard-fail"
+# explicit --worktree that fails validation stays loud — never silently re-probed
+( cd "$TMP" && "$OPSX" gate wt-fallback --worktree "$TMP/nonexistent" ) >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -ne 0 ] && grep -q 'GATE-FAIL worktree' "$TMP/err" \
+  && ok "explicit invalid --worktree fails loud, no silent fallback" || nok "explicit invalid --worktree fails loud (rc=$rc)"
+git -C "$TMP" worktree remove --force "$TMP/wtfb" >/dev/null 2>&1; git -C "$TMP" branch -D opsx/wt-fallback >/dev/null 2>&1
 
 # --- freshness tolerates verdict-only sealing commits, rejects code drift ---
 mkchange cr-seal
