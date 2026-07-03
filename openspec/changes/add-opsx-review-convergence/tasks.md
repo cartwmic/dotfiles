@@ -18,7 +18,7 @@
 
 ## 2. Orchestrator skill (canonical source)
 
-- [ ] 2.1 Extend `openspec-loop/SKILL.md` with the convergence discipline: round ledger maintenance (consolidated counts = max across reviewers), stop conditions (converged / flat-or-rising 2 rounds / `review_max_rounds` default 5), single disclosure round trigger + marking, decision-audit landing (tiered audit, waiver semantics incl. `waived_by_user` re-seal + budget extension on resume, halt loop continuation), scope-widening protocol (evidence-gated, `Scope Expansions` logging, follow-ups.md routing), advisory surface audit for property-style intents, reviewer-model stability rule, and red-flag list (no ledger/prior findings in blind prompts; no mid-change model additions; no second disclosure round)
+- [x] 2.1 Extend `openspec-loop/SKILL.md` with the convergence discipline: round ledger maintenance (consolidated counts = max across reviewers), stop conditions (converged / flat-or-rising 2 rounds / `review_max_rounds` default 5), single disclosure round trigger + marking, decision-audit landing (tiered audit, waiver semantics incl. `waived_by_user` re-seal + budget extension on resume, halt loop continuation), scope-widening protocol (evidence-gated, `Scope Expansions` logging, follow-ups.md routing), advisory surface audit for property-style intents, reviewer-model stability rule, and red-flag list (no ledger/prior findings in blind prompts; no mid-change model additions; no second disclosure round)
   - intent: feature
   - files_allowed:
       - dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md
