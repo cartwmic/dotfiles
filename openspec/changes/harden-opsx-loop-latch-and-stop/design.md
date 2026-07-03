@@ -87,6 +87,10 @@ locator only (clarify C3).
 **Rejected:** publication-only (pre-rule changes keep split-braining); fallback-only
 (locator field becomes decorative; convention path silently load-bearing).
 **Cost accepted:** archive merges become non-ff (proven survivable twice this session).
+**Single-sourcing (analyze M4):** the convention path is derived exactly once — a
+read-only `opsx worktree path <change>` emit; gate consumes the derivation internally,
+the extension shells the subcommand (it already shells `opsx gate`/`opsx models`).
+`--path`-override worktrees are covered by the publication rule, not the fallback.
 
 ### D7: Stall baseline seeded at arm
 

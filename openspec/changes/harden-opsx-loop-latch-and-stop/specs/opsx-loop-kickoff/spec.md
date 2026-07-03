@@ -3,6 +3,42 @@
 
 ## MODIFIED Requirements
 
+### Requirement: opsx-gate is the deterministic judge
+
+WHILE a loop is active, WHEN a worker turn completes, THE extension SHALL run `opsx gate
+<change>` (passing `--worktree <path>` when one is resolved) and treat exit 0 as met and
+any non-zero exit as not met, using the gate's report as the directive for the next turn.
+THE extension SHALL re-resolve the change's worktree from `review.md` (`Worktree Path`) on
+each evaluation rather than only at loop start, so a worktree created after the loop began
+(e.g. for a from-scratch change whose `review.md` did not yet exist at kickoff) is picked
+up and the gate judges the correct tree. The extension SHALL NOT decide completion from
+agent self-assessment.
+
+#### Scenario: Green gate stops the loop
+- **WHILE** a loop is active
+- **WHEN** a worker turn completes and `opsx gate` exits 0
+- **THEN** the extension SHALL clear the active loop, stop injecting turns, and notify the user the change is ready to archive
+
+#### Scenario: Red gate continues the loop
+- **WHILE** a loop is active and the turn budget is not exhausted
+- **WHEN** a worker turn completes and `opsx gate` exits non-zero
+- **THEN** the extension SHALL inject another worker turn carrying the gate's failed-check report as guidance, framed as a CONTINUATION of the existing change (instructing the agent to resume that change and NOT to start a new loop, create another change, or restart the workflow from proposal)
+
+#### Scenario: Worktree created mid-loop is picked up
+- **WHILE** a loop started for a change that had no `review.md` (and thus no resolved worktree) at kickoff
+- **WHEN** a later worker turn writes `Worktree Path` into the change's `review.md` and completes
+- **THEN** the next evaluation SHALL re-resolve the worktree from `review.md` and run `opsx gate --worktree <path>` against that tree
+
+#### Scenario: Blank or stale worktree path probes the convention fallback before degrading
+- **WHILE** a loop is active
+- **IF** the change's `review.md` has a blank `Worktree Path`, or the recorded path does not point at a valid git worktree
+- **THEN** the extension SHALL first probe the canonical convention path (per the worktree-resolution-fallback requirement) and use it when valid; only when that probe also fails SHALL it run `opsx gate <change>` WITHOUT `--worktree` (letting the gate locate or report) rather than crashing, treating the outcome as a normal not-met/met verdict
+
+#### Scenario: Judge command failure is non-fatal
+- **WHILE** a loop is active
+- **IF** the `opsx gate` command cannot be executed at all
+- **THEN** the extension SHALL treat the result as not met, surface an explanatory reason, and continue without crashing the session
+
 ### Requirement: Goal and conversation kickoff
 
 THE opsx-loop extension SHALL support starting a loop from a goal or from the current
@@ -113,7 +149,7 @@ absent or non-`true` `loop_hold` field SHALL leave behavior unchanged.
 #### Scenario: Named re-arm clears the hold and surfaces the reason
 - **WHILE** a change's review.md carries `loop_hold: true`
 - **WHEN** the user issues `/opsx-loop <that-change>`
-- **THEN** the extension SHALL clear the hold fields, SHALL include the prior reason in the arm notification, SHALL append an Execution Notes clearance line, and SHALL then proceed with normal kickoff evaluation (arming a worker turn, or — per the turn-0 gate check — reporting the change ready to archive WITHOUT arming when its gate is already green)
+- **THEN** the extension SHALL clear the hold fields BEFORE the turn-0 gate evaluation and regardless of its outcome (a green short-circuit must not leave a stale hold behind), SHALL include the prior reason in the arm notification, SHALL append an Execution Notes clearance line, and SHALL then proceed with normal kickoff evaluation (arming a worker turn, or — per the turn-0 gate check — reporting the change ready to archive WITHOUT arming when its gate is already green)
 
 #### Scenario: Goal kickoff never clears a hold
 - **WHILE** any change's review.md carries `loop_hold: true`
@@ -128,10 +164,11 @@ absent or non-`true` `loop_hold` field SHALL leave behavior unchanged.
 
 THE opsx-loop extension's worktree resolution SHALL fall back to the canonical
 convention path used by `opsx worktree` WHEN the `Worktree Path` locator in review.md is
-absent, empty, or fails validation, using the fallback iff the probed path is a valid git
-worktree for the change's branch (`opsx/<change>`); WHEN both the locator and the
-convention path fail, resolution SHALL yield no worktree (current behavior), never a
-guess.
+absent, empty, or fails validation, obtaining that path from the opsx CLI's read-only
+worktree-path interface (single-sourced — never re-derived independently in the
+extension) and using the fallback iff the probed path is a valid git worktree for the
+change's branch (`opsx/<change>`); WHEN both the locator and the convention path fail,
+resolution SHALL yield no worktree (current behavior), never a guess.
 
 #### Scenario: Empty locator resolves via convention path
 - **WHILE** review.md in the integration checkout carries no usable `Worktree Path`
