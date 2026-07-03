@@ -161,7 +161,7 @@ opsx-superpowers/
 └── templates/
     ├── constitution-template.md       # filled into project's openspec/constitution.md
     ├── domain-template.md             # filled into project's openspec/domain.md
-    ├── opsx-models.yaml               # role model/provider config convention (opsx models CLI)
+    ├── opsx-models.yaml               # USER-scope (~/.config/opsx/) model config template — project layer RETIRED
     │
     ├── # Schema-managed (tracked by openspec status):
     ├── proposal.md
