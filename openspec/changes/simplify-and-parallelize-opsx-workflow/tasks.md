@@ -102,5 +102,5 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
 
 ## Phase 5 — Verification
 
-- [ ] 5.1 Full validator sweep per `openspec/opsx-gates.yaml` + both openspec
+- [x] 5.1 Full validator sweep per `openspec/opsx-gates.yaml` + both openspec
       validations; author verify.md (retained-required) with AC↔test map.
