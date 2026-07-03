@@ -56,6 +56,11 @@ THE `opsx` CLI SHALL provide `opsx status` as a READ-ONLY, deterministic, model-
 - **WHEN** `opsx status` scans the fleet
 - **THEN** it SHALL scan only the non-archive change directories and SHALL NOT report archived changes
 
+#### Scenario: Change without review.md or branch prints placeholders, never crashes
+- **WHILE** a non-archive change directory has no `review.md` (e.g. a from-scratch change still in its distilling phase) so its Scale is undeclared and no `opsx/<change>` branch exists
+- **WHEN** `opsx status` reports that change
+- **THEN** it SHALL print a stable placeholder (for example `—`/`unknown`) for the undeclared Scale, worktree, `loop_hold`, and commits-behind fields rather than erroring, and SHALL still exit 0, since `opsx status` is a view that must never crash on an incomplete change
+
 ### Requirement: Multi-Dir Integration Commit Detector
 
 THE `opsx` CLI SHALL provide a deterministic detector that flags any integration-checkout commit touching more than one `openspec/changes/<change>/` directory, as an advisory detection surface backstopping the path-scoped-commit discipline (detection, not prevention), computed from git plumbing with no model judgment.
