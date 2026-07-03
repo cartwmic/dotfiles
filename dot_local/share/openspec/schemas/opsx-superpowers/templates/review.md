@@ -10,7 +10,7 @@ scale: S
 full_rigor: false
 # worktree_mode DERIVED by tier when ABSENT: XS/S ⇒ same-tree, M ⇒
 # worktree-required. An explicit value here ALWAYS wins over the tier default.
-worktree_mode: same-tree
+# worktree_mode: (derived when absent: XS/S ⇒ same-tree, M ⇒ worktree-required; uncomment to override)
 execution_mode: standard
 verification_mode: retained-recommended
 debug_mode: standard
@@ -72,7 +72,7 @@ any mode by setting it (in BOTH the front-matter and this table).
 | Debug Mode | standard | standard\|systematic-debugging |
 | Review Status | not-requested | not-requested\|requested\|findings-received\|resolved |
 | Delegation Mode | single-agent | single-agent\|subagent-eligible\|subagent-required — dispatch via the subagent-dispatch capability hook (pi-subagents is the pi adapter) |
-| Worktree Mode | same-tree | same-tree\|worktree-eligible\|worktree-required — default DERIVED by tier when absent (XS/S ⇒ same-tree, M ⇒ worktree-required); an explicit value always wins |
+| Worktree Mode | derived (absent) | same-tree\|worktree-eligible\|worktree-required — default DERIVED by tier when absent (XS/S ⇒ same-tree, M ⇒ worktree-required); the front-matter ships the key COMMENTED OUT so the tier default applies; an explicit value always wins |
 | Code Review Mode | advisory | none\|advisory\|gating-required — default gating-required at Scale ≥ M; gating-required blocks archive on code-review.md Verdict |
 | Loop Max Iterations | 20 | iteration budget; mapped onto the loop runtime turn budget. Authoring-time defaults XS=10, S=20, M=40, full_rigor=80 |
 | Validation Source Mode | required | required\|waived — waived (with rationale) lets Scale ≥ M pass with no agent-independent validation source |
