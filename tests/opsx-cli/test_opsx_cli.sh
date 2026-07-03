@@ -159,5 +159,86 @@ case "$out" in */wtrepo/repo--opsx-demo3) [ $rc -eq 0 ] && ok "worktree path der
 ( cd "$WTREPO" && "$OPSX" worktree path demo3 --path x ) >/dev/null 2>&1; rc=$?
 [ $rc -eq 2 ] && ok "worktree path rejects options" || nok "path rejects options (rc=$rc)"
 
+# ---- opsx-cli.status-fleet-view ----
+# Read-only, model-free fleet view: one block per non-archive change, placeholders
+# for a review.md-less change, exit 0 even with a red fleet, and NO side effects.
+SREPO="$TMP/srepo"; mkdir -p "$SREPO"
+git -C "$SREPO" init -q; git -C "$SREPO" config user.email t@t; git -C "$SREPO" config user.name t
+mkdir -p "$SREPO/openspec/changes/alpha" "$SREPO/openspec/changes/beta" "$SREPO/openspec/changes/archive/old"
+cat >"$SREPO/openspec/changes/alpha/review.md" <<EOF
+---
+scale: M
+full_rigor: true
+loop_hold: true
+loop_hold_reason: "audit pending"
+---
+# Review
+EOF
+echo "# proposal" >"$SREPO/openspec/changes/beta/proposal.md"   # beta has NO review.md
+echo "# archived" >"$SREPO/openspec/changes/archive/old/review.md"
+printf seed >"$SREPO/seed"; git -C "$SREPO" add -A; git -C "$SREPO" commit -qm seed
+git -C "$SREPO" branch -m main 2>/dev/null || true
+
+before="$(cd "$SREPO" && { git status --porcelain; git branch; git worktree list; find openspec -type f | sort; })"
+out="$(cd "$SREPO" && "$OPSX" status 2>/dev/null)"; rc=$?
+[ $rc -eq 0 ] && ok "status exits 0 with a red fleet (view, not a gate)" || nok "status exit 0 (rc=$rc)"
+printf '%s' "$out" | grep -q '^alpha$' && printf '%s' "$out" | grep -q '^beta$' \
+  && ok "status prints a block per non-archive change" || nok "status per-change block"
+printf '%s\n' "$out" | grep -q '^old$' && nok "status leaked an archived change" || ok "status excludes archive/"
+printf '%s' "$out" | grep -q 'Scale: M +full_rigor' && ok "status shows Scale + full_rigor marker" || nok "status full_rigor marker"
+printf '%s' "$out" | grep -q 'held — audit pending' && ok "status shows loop_hold + reason" || nok "status loop_hold reason"
+printf '%s' "$out" | grep -q 'gate(cheap):' && ok "status labels the gate summary gate(cheap)" || nok "status gate(cheap) label"
+betablock="$(printf '%s\n' "$out" | awk '/^beta$/{f=1;next} /^[^ ]/{f=0} f')"
+printf '%s' "$betablock" | grep -q 'Scale: —' && ok "status placeholder Scale for a review.md-less change" || nok "status placeholder Scale"
+printf '%s' "$betablock" | grep -q 'worktree: none' && ok "status placeholder worktree when no branch" || nok "status placeholder worktree"
+after="$(cd "$SREPO" && { git status --porcelain; git branch; git worktree list; find openspec -type f | sort; })"
+[ "$before" = "$after" ] && ok "status is read-only (no new files/branches/worktrees)" || nok "status read-only"
+
+# ---- opsx-cli.archive-check (land-base-currency + ADR-dup + multi-dir advisory) ----
+ACREPO="$TMP/acrepo"; mkdir -p "$ACREPO/openspec/changes/feat"
+git -C "$ACREPO" init -q; git -C "$ACREPO" config user.email t@t; git -C "$ACREPO" config user.name t
+printf '# Review\n' >"$ACREPO/openspec/changes/feat/review.md"
+printf seed >"$ACREPO/seed"; git -C "$ACREPO" add -A; git -C "$ACREPO" commit -qm seed
+git -C "$ACREPO" branch -m main 2>/dev/null || true
+
+# branch-absent => same-tree exemption passes (exit 0), never a missing-ref error
+( cd "$ACREPO" && "$OPSX" archive-check feat ) >/dev/null 2>&1; rc=$?
+[ $rc -eq 0 ] && ok "archive-check same-tree exemption passes when no opsx/<change> branch" || nok "archive-check same-tree (rc=$rc)"
+
+# opsx/feat forked at current main => base currency passes
+git -C "$ACREPO" worktree add -q -b opsx/feat "$TMP/acwt-feat" main >/dev/null 2>&1
+out="$(cd "$ACREPO" && "$OPSX" archive-check feat 2>&1)"; rc=$?
+[ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'base-currency OK' \
+  && ok "archive-check current base permits landing" || nok "archive-check current base (rc=$rc)"
+
+# advance main after the fork => stale base refuses + names the rebase remedy
+printf x >"$ACREPO/newfile"; git -C "$ACREPO" add newfile; git -C "$ACREPO" commit -qm "advance main"
+out="$(cd "$ACREPO" && "$OPSX" archive-check feat 2>&1)"; rc=$?
+[ $rc -ne 0 ] && printf '%s' "$out" | grep -qi 'rebase' \
+  && ok "archive-check stale base refuses + names rebase remedy" || nok "archive-check stale base (rc=$rc)"
+
+# ADR-dup: two files claim ADR-0007 => fail naming BOTH paths (branch absent => base exempt)
+ADREPO="$TMP/adrepo"; mkdir -p "$ADREPO/openspec/changes/c1" "$ADREPO/adr"
+git -C "$ADREPO" init -q; git -C "$ADREPO" config user.email t@t; git -C "$ADREPO" config user.name t
+printf '# Review\n' >"$ADREPO/openspec/changes/c1/review.md"
+printf '# a\n' >"$ADREPO/adr/ADR-0007-first.md"; printf '# b\n' >"$ADREPO/adr/ADR-0007-second.md"
+git -C "$ADREPO" add -A; git -C "$ADREPO" commit -qm seed; git -C "$ADREPO" branch -m main 2>/dev/null || true
+out="$(cd "$ADREPO" && "$OPSX" archive-check c1 2>&1)"; rc=$?
+[ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'ADR-0007-first.md' && printf '%s' "$out" | grep -q 'ADR-0007-second.md' \
+  && ok "archive-check ADR-dup fails naming both offending paths" || nok "archive-check ADR-dup (rc=$rc)"
+
+# multi-dir advisory: a commit touching TWO change dirs is flagged, exit UNAFFECTED
+MDREPO="$TMP/mdrepo"; mkdir -p "$MDREPO/openspec/changes/x" "$MDREPO/openspec/changes/y"
+git -C "$MDREPO" init -q; git -C "$MDREPO" config user.email t@t; git -C "$MDREPO" config user.name t
+printf '# x\n' >"$MDREPO/openspec/changes/x/review.md"
+git -C "$MDREPO" add -A; git -C "$MDREPO" commit -qm seed; git -C "$MDREPO" branch -m main 2>/dev/null || true
+MDBASE="$(git -C "$MDREPO" rev-parse main)"
+printf '\n**Diff Base SHA:** %s\n' "$MDBASE" >>"$MDREPO/openspec/changes/x/review.md"
+printf '# y\n' >"$MDREPO/openspec/changes/y/review.md"   # SAME commit touches x/ and y/
+git -C "$MDREPO" add -A; git -C "$MDREPO" commit -qm "cross-dir commit"
+out="$(cd "$MDREPO" && "$OPSX" archive-check x 2>&1)"; rc=$?
+printf '%s' "$out" | grep -qi 'advisory' && ok "archive-check flags a multi-dir commit (advisory)" || nok "archive-check multi-dir advisory flag"
+[ $rc -eq 0 ] && ok "archive-check multi-dir advisory does NOT affect the exit code" || nok "archive-check advisory exit unaffected (rc=$rc)"
+
 echo "opsx-cli: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]

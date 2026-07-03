@@ -20,9 +20,12 @@ opsx_usage() {
 usage: opsx <subcommand> [args]
   gate     <change> [--worktree <path>]   run the deterministic gate
   models   <role> [--json] [--change <c>] [--with-default]   resolve a role
-  models   set <role> <value> [--layer user|project]         write config
-  models   get <role> [--layer user|project]                 read config
+  models   set <role> <value> [--layer user]                 write config
+  models   get <role> [--layer user]                         read config
   models   list                                              list resolved roles
+  gate     <change> --cheap                deterministic checks only (no validations)
+  status                                  read-only fleet view (all changes)
+  archive-check <change>                  land-base + ADR-dup + multi-dir advisory
   loop     <change> [--worktree <path>]   Ralph-style fallback driver
   worktree ensure <change> [--path <p>] [--integration-branch <b>]
                                           create/reuse the opsx/<change> worktree
@@ -1148,16 +1151,213 @@ exit 0
 )
 
 # ============================================================================
+# SUBCOMMAND: status — READ-ONLY, model-free fleet view (opsx-cli.status-fleet-view).
+# Scans non-archive openspec/changes/*; per change prints Scale (+full_rigor),
+# the gate(cheap) red/green summary + earliest failing check (reusing opsx gate
+# --cheap), worktree path + valid|invalid|none on branch opsx/<change>, loop_hold
+# + reason, and Diff Base staleness (commits behind main). NO side effects, NO
+# model calls, exit 0 ALWAYS — a view, never a gate.
+# ============================================================================
+opsx_status() (
+set -uo pipefail
+PROG="opsx status"
+ROOT="$(git -C "${OPSX_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" \
+  || { echo "$PROG: not inside a git repository (nothing to view)" >&2; exit 0; }
+CHANGES_DIR="$ROOT/openspec/changes"
+[ -d "$CHANGES_DIR" ] || { echo "$PROG: no openspec/changes/ under $ROOT"; exit 0; }
+
+fm_of() { # $1=review.md $2=key — read a value from the YAML front-matter
+  [ -f "$1" ] || return 0
+  awk -v key="$2" '
+    NR==1 { if ($0 != "---") exit; infm=1; next }
+    infm && $0=="---" { exit }
+    infm {
+      line=$0; sub(/^[ \t]+/,"",line)
+      p=index(line,":"); if (p==0) next
+      k=substr(line,1,p-1); v=substr(line,p+1)
+      gsub(/^[ \t]+|[ \t]+$/,"",k); gsub(/^[ \t]+|[ \t]+$/,"",v)
+      gsub(/^["'\'']|["'\'']$/,"",v)
+      if (k==key) { print v; exit }
+    }' "$1"
+}
+body_of() { # $1=review.md $2=field — read a **Field:** value line
+  [ -f "$1" ] || return 0
+  grep -E "^\*\*$2:\*\*" "$1" 2>/dev/null | head -1 \
+    | sed -E "s/^\*\*$2:\*\*[[:space:]]*//; s/[[:space:]]+$//"
+}
+
+MAIN_EXISTS=0
+git -C "$ROOT" rev-parse --verify --quiet main >/dev/null 2>&1 && MAIN_EXISTS=1
+
+found=0
+for d in "$CHANGES_DIR"/*; do
+  [ -d "$d" ] || continue
+  name="$(basename "$d")"
+  [ "$name" = "archive" ] && continue
+  found=1
+  review="$d/review.md"
+
+  # Scale (+full_rigor marker); placeholder when review.md/Scale absent.
+  scale="$(fm_of "$review" scale)"
+  if [ -z "$scale" ]; then
+    scale_disp="—"
+  else
+    scale_disp="$scale"
+    case "$(printf '%s' "$(fm_of "$review" full_rigor)" | tr '[:upper:]' '[:lower:]')" in
+      true) scale_disp="$scale +full_rigor" ;;
+    esac
+  fi
+
+  # gate(cheap) red/green + earliest failing check (reuse opsx gate --cheap).
+  gout="$(OPSX_ROOT="$ROOT" opsx_gate "$name" --cheap 2>&1)"; grc=$?
+  if [ "$grc" -eq 0 ]; then
+    gate_disp="green"
+  else
+    earliest="$(printf '%s\n' "$gout" | grep -m1 '^GATE-FAIL ' | awk '{print $2}')"
+    gate_disp="red [${earliest:-unknown}]"
+  fi
+
+  # worktree path + valid|invalid|none on branch opsx/<change>.
+  if git -C "$ROOT" show-ref --verify --quiet "refs/heads/opsx/$name"; then
+    wt="$(opsx_wt_for_branch "$ROOT" "$name")"
+    if [ -n "$wt" ] && opsx_wt_valid_for_change "$wt" "$name"; then
+      wt_disp="valid $wt"
+    else
+      [ -n "$wt" ] || wt="$(opsx_wt_convention_path "$ROOT" "$name")"
+      wt_disp="invalid $wt"
+    fi
+  else
+    wt_disp="none —"
+  fi
+
+  # loop_hold + reason (or placeholder).
+  case "$(printf '%s' "$(fm_of "$review" loop_hold)" | tr '[:upper:]' '[:lower:]')" in
+    true) hr="$(fm_of "$review" loop_hold_reason)"; hold_disp="held — ${hr:-(none)}" ;;
+    *)    hold_disp="—" ;;
+  esac
+
+  # Diff Base staleness: N behind main (placeholder when locator/main absent).
+  base="$(body_of "$review" 'Diff Base SHA')"
+  case "$base" in ""|"<"*) base="" ;; esac
+  if [ -n "$base" ] && [ "$MAIN_EXISTS" -eq 1 ] \
+     && git -C "$ROOT" rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
+    n="$(git -C "$ROOT" rev-list --count "$base..main" 2>/dev/null)"
+    base_disp="${n:-?} behind main"
+  else
+    base_disp="—"
+  fi
+
+  printf '%s\n' "$name"
+  printf '  Scale: %s\n' "$scale_disp"
+  printf '  gate(cheap): %s\n' "$gate_disp"
+  printf '  worktree: %s\n' "$wt_disp"
+  printf '  loop_hold: %s\n' "$hold_disp"
+  printf '  base: %s\n' "$base_disp"
+done
+[ "$found" -eq 1 ] || echo "$PROG: no non-archive changes under $CHANGES_DIR"
+exit 0
+)
+
+# ============================================================================
+# SUBCOMMAND: archive-check — deterministic archive/land preconditions
+# (opsx-gate-enforcement.land-base-currency + .duplicate-adr-number-scan,
+#  opsx-cli.multi-dir-integration-commit-detector). Exit non-zero IFF the
+# land-base-currency (a) or duplicate-ADR (b) check fails; the multi-dir
+# detector (c) is ADVISORY and NEVER affects the exit code. Model-free.
+# ============================================================================
+opsx_archive_check() (
+set -uo pipefail
+PROG="opsx archive-check"
+err() { echo "$PROG: $*" >&2; }
+CHANGE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) echo "usage: $PROG <change>"; exit 0 ;;
+    -*) err "unknown option: $1"; exit 2 ;;
+    *) CHANGE="$1"; shift ;;
+  esac
+done
+[ -n "$CHANGE" ] || { echo "usage: $PROG <change>" >&2; exit 2; }
+ROOT="$(git -C "${OPSX_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" \
+  || { err "not inside a git repository"; exit 1; }
+CDIR="$ROOT/openspec/changes/$CHANGE"
+[ -d "$CDIR" ] || { err "change not found: $CHANGE"; exit 1; }
+REVIEW="$CDIR/review.md"
+BRANCH="opsx/$CHANGE"
+rc=0
+
+# (a) land-base-currency: merge-base(opsx/<change>, main) must equal main HEAD.
+#     No opsx/<change> branch => same-tree exemption (satisfied, never a
+#     missing-ref failure).
+if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  mh="$(git -C "$ROOT" rev-parse main 2>/dev/null)"
+  mb="$(git -C "$ROOT" merge-base "$BRANCH" main 2>/dev/null)"
+  if [ -z "$mh" ] || [ -z "$mb" ]; then
+    echo "ARCHIVE-CHECK-FAIL base-currency: cannot compute merge-base($BRANCH, main)" >&2
+    rc=1
+  elif [ "$mb" != "$mh" ]; then
+    echo "ARCHIVE-CHECK-FAIL base-currency: stale base merge-base($BRANCH, main)=$mb != main HEAD=$mh; REMEDY: rebase $BRANCH onto main HEAD, then re-run review (the rebase staleness-fires a fresh review)" >&2
+    rc=1
+  else
+    echo "archive-check: base-currency OK (merge-base($BRANCH, main) == main HEAD)"
+  fi
+else
+  echo "archive-check: base-currency satisfied — no $BRANCH branch (same-tree exemption; no divergent base to rebase)"
+fi
+
+# (b) duplicate-ADR scan: derive ADR-NNNN from filenames under adr/.
+if [ -d "$ROOT/adr" ]; then
+  tmpn="$(mktemp)"
+  for f in "$ROOT"/adr/*; do
+    [ -f "$f" ] || continue
+    b="$(basename "$f")"
+    case "$b" in
+      ADR-[0-9][0-9][0-9][0-9]*) n="$(printf '%s' "$b" | sed -E 's/^ADR-([0-9]{4}).*/\1/')"; printf '%s\t%s\n' "$n" "$f" >>"$tmpn" ;;
+    esac
+  done
+  for n in $(awk -F'\t' '{print $1}' "$tmpn" | sort | uniq -d); do
+    paths="$(awk -F'\t' -v k="$n" '$1==k{print $2}' "$tmpn" | paste -sd' ' -)"
+    echo "ARCHIVE-CHECK-FAIL adr-dup: ADR-$n claimed by >=2 files: $paths" >&2
+    rc=1
+  done
+  rm -f "$tmpn"
+fi
+
+# (c) multi-dir integration-commit detector (ADVISORY — never affects rc):
+#     scan <Diff Base SHA>..main for any non-merge commit touching >=2 distinct
+#     openspec/changes/<dir>/ directories. Skipped when no Diff Base locator.
+DIFF_BASE=""
+[ -f "$REVIEW" ] && DIFF_BASE="$(grep -E '^\*\*Diff Base SHA:\*\*' "$REVIEW" 2>/dev/null | head -1 | sed -E 's/^\*\*Diff Base SHA:\*\*[[:space:]]*//; s/[[:space:]]+$//')"
+case "$DIFF_BASE" in ""|"<"*) DIFF_BASE="" ;; esac
+if [ -n "$DIFF_BASE" ] \
+   && git -C "$ROOT" rev-parse --verify --quiet main >/dev/null 2>&1 \
+   && git -C "$ROOT" rev-parse --verify --quiet "$DIFF_BASE" >/dev/null 2>&1; then
+  for c in $(git -C "$ROOT" rev-list --no-merges "$DIFF_BASE..main" 2>/dev/null); do
+    dirs="$(git -C "$ROOT" show --name-only --format= "$c" 2>/dev/null \
+      | sed -nE 's#^(openspec/changes/[^/]+)/.*#\1#p' | sort -u | grep -v '^$')"
+    cnt="$(printf '%s\n' "$dirs" | grep -c . )"
+    if [ "${cnt:-0}" -ge 2 ]; then
+      echo "archive-check: ADVISORY multi-dir commit $c touches: $(printf '%s' "$dirs" | paste -sd' ' -) (path-scoped-commit backstop; advisory only, does NOT affect exit)"
+    fi
+  done
+fi
+
+exit $rc
+)
+
+# ============================================================================
 # DISPATCH
 # ============================================================================
 sub="${1:-}"
 [ $# -gt 0 ] && shift || true
 case "$sub" in
-  gate)     opsx_gate "$@"; exit $? ;;
-  models)   opsx_models "$@"; exit $? ;;
-  loop)     opsx_loop "$@"; exit $? ;;
-  worktree) opsx_worktree "$@"; exit $? ;;
-  clean)    opsx_clean "$@"; exit $? ;;
+  gate)          opsx_gate "$@"; exit $? ;;
+  models)        opsx_models "$@"; exit $? ;;
+  status)        opsx_status "$@"; exit $? ;;
+  archive-check) opsx_archive_check "$@"; exit $? ;;
+  loop)          opsx_loop "$@"; exit $? ;;
+  worktree)      opsx_worktree "$@"; exit $? ;;
+  clean)         opsx_clean "$@"; exit $? ;;
   -h|--help|help) opsx_usage; exit 0 ;;
   "") echo "opsx: missing subcommand" >&2; opsx_usage; exit 2 ;;
   *) echo "opsx: unknown subcommand: $sub" >&2; opsx_usage; exit 2 ;;
