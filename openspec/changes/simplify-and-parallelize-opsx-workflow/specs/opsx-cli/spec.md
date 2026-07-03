@@ -37,6 +37,46 @@ THE `opsx` CLI SHALL provide `opsx worktree ensure <change> [--path <p>] [--inte
 - **IF** the change's worktree has uncommitted changes and `--force` is absent
 - **THEN** `opsx clean <change>` SHALL refuse with exit 1; WHEN `--force` is given it SHALL remove the worktree and delete branch `opsx/<change>`; WHEN nothing remains to clean it SHALL exit 0
 
+### Requirement: Model Config Write Surface
+
+THE `opsx models` subcommand SHALL provide `set <role> <value>`, `get <role>`, and `list`
+operations that write and read role configuration in the user YAML file. The settable
+roles SHALL be `author`, `review`, `impl`, and `author-in-session`; the hyphenated
+`author-in-session` token SHALL map to the YAML key `author_in_session` and its value SHALL
+be coerced/validated as a boolean (`true`/`false`). The sole write target SHALL be the
+user layer (`~/.config/opsx/models.yaml`); `--layer user` remains accepted as an explicit
+spelling of the default, and `--layer project` SHALL be REJECTED with an error naming the
+project-layer removal and the front-matter alternative (per the opsx-model-config
+Layered Resolution Order), exiting non-zero without writing any file. `set` SHALL create the
+target file (and its parent directory) if absent. `set` writes a single value
+(replace semantics; it does NOT merge lists). Writes SHALL be atomic and SHALL preserve
+existing comments and key order. `get <role>` SHALL mirror the resolver's read semantics
+(layered resolution; empty stdout + exit 0 when unset), and SHALL accept an optional
+`--layer user` to read back the raw value stored in the user layer. The YAML
+file remains the sole source of truth; this surface is an editor, not a new owner.
+
+#### Scenario: Set writes the role to the default user layer
+- **WHEN** `opsx models set author claude-bridge/claude-opus-4-8` is run with no `--layer`
+- **THEN** `~/.config/opsx/models.yaml` SHALL be updated so its `author` key equals `claude-bridge/claude-opus-4-8`, and `opsx models get author --layer user` SHALL print that value
+
+#### Scenario: Effective resolution may still be shadowed by a higher layer
+- **WHILE** a higher-precedence layer (env or change front-matter) already sets the role
+- **WHEN** `opsx models set author <model>` writes the user layer
+- **THEN** the user-layer file SHALL contain `<model>`, but a subsequent `opsx models author` (full layered resolution) MAY still print the higher layer's value; only `get author --layer user` is guaranteed to return the just-written value
+
+#### Scenario: Author-in-session is settable
+- **WHEN** `opsx models set author-in-session false` is run
+- **THEN** the target file's `author_in_session` key SHALL be set to the boolean `false`, and `opsx models author-in-session --json` SHALL resolve `false`
+
+#### Scenario: Project layer write is rejected with the removal message
+- **IF** `opsx models set <role> <model> --layer project` is run
+- **THEN** `opsx models` SHALL print an error naming the project-layer removal and the review.md front-matter alternative, and SHALL exit non-zero without writing any file
+
+#### Scenario: Setting the list-valued review role replaces the whole list
+- **WHILE** the `review` role is currently configured with multiple models in the target layer
+- **WHEN** `opsx models set review <model>` is run
+- **THEN** the stored `review` value SHALL be exactly `<model>` (full replace; no merge with the prior list)
+
 ## ADDED Requirements
 
 ### Requirement: Status Fleet View

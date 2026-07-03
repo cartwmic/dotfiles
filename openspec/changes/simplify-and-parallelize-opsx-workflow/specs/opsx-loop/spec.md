@@ -539,7 +539,7 @@ THE openspec-loop orchestration SHALL produce a blind doneness verdict on the re
 
 ### Requirement: Review Dispatch Bound By Convergence Discipline
 
-THE openspec-loop orchestration SHALL conduct gating review rounds under the opsx-review-convergence discipline: full-diff blind re-review each round, an orchestrator-maintained round ledger, the trajectory/budget stop conditions, at most one disclosure round on persistent split, and the decision-audit landing when open P0/P1 findings survive the stops.
+THE openspec-loop orchestration SHALL conduct gating review rounds under the opsx-adversarial-review discipline: full-diff blind re-review each round, an orchestrator-maintained round ledger, the trajectory/budget stop conditions, at most one disclosure round on persistent split, and the decision-audit landing when open P0/P1 findings survive the stops.
 
 #### Scenario: Re-dispatch consults the stop conditions first
 - **WHEN** a gating review round returns a fail verdict and fixes have been committed
@@ -567,7 +567,7 @@ WHERE the frozen intent is property-style (a codebase-wide property claim rather
 
 ### Requirement: Scope Widening Handled In The Loop
 
-WHILE the loop is advancing a change, WHEN a gating reviewer or the doneness judge reports a finding outside the intent's stated scope, THE orchestration SHALL apply the opsx-review-convergence scope-widening protocol (as specified by that capability) rather than silently fixing, silently dropping, or halting on every out-of-scope finding.
+WHILE the loop is advancing a change, WHEN a gating reviewer or the doneness judge reports a finding outside the intent's stated scope, THE orchestration SHALL apply the opsx-adversarial-review scope-widening protocol (as specified by that capability) rather than silently fixing, silently dropping, or halting on every out-of-scope finding.
 
 #### Scenario: Widening logged before fixing
 - **WHEN** the orchestration decides an out-of-scope finding is required to meet the frozen intent

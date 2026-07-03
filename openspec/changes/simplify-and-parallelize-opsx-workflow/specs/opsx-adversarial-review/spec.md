@@ -253,7 +253,7 @@ THE code-review production SHALL use the adversarial-review capability over the 
 #### Scenario: Adversarial path used when available
 - **WHERE** the adversarial-review capability resolves to a registered skill
 - **WHEN** code review runs
-- **THEN** the review SHALL be conducted blind over the diff — with the single opsx-review-convergence disclosure round as the sole sanctioned non-blind exception, marked `review_mode: disclosure-consensus` — and the converged findings SHALL be recorded in code-review.md
+- **THEN** the review SHALL be conducted blind over the diff — with this capability's single disclosure round as the sole sanctioned non-blind exception, marked `review_mode: disclosure-consensus` — and the converged findings SHALL be recorded in code-review.md
 
 #### Scenario: Degraded single-model fallback
 - **IF** no adversarial-review capability is registered
@@ -297,7 +297,7 @@ WHILE Code Review Mode is gating-required, THE openspec-archive-change skill SHA
 
 ### Requirement: Verdict Under The Severity Floor
 
-THE code-review.md `Verdict` SHALL be `pass` if and only if no P0 or P1 finding remains open under the opsx-review-convergence baseline-bounded contract, and open P2/P3 findings SHALL be recorded in the artifact as warnings without blocking the verdict, the gate, or archive.
+THE code-review.md `Verdict` SHALL be `pass` if and only if no P0 or P1 finding remains open under this capability's baseline-bounded verdict contract, and open P2/P3 findings SHALL be recorded in the artifact as warnings without blocking the verdict, the gate, or archive.
 
 #### Scenario: Advisory-only residue passes
 - **WHEN** the final review round leaves only P2/P3 findings open
