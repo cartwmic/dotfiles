@@ -15,6 +15,10 @@ THE openspec-loop orchestration SHALL conduct gating review rounds under the ops
 - **IF** stop conditions fire with open P0/P1 findings (after any disclosure round)
 - **THEN** the orchestration SHALL present the decision-audit landing to the user instead of continuing review cycles or escalating to additional reviewer models
 
+#### Scenario: Landing halts loop continuation
+- **WHEN** the decision-audit landing is presented
+- **THEN** the orchestration SHALL stop the drive-to-green loop's continuation (via the host's loop-stop mechanism where available, otherwise by performing no further change-directory or commit activity so the host's stall detection stops the loop), presenting the audit exactly once rather than re-presenting it on every re-injected turn
+
 ### Requirement: Pre Apply Surface Audit Dispatch
 
 WHERE the frozen intent is property-style (a codebase-wide property claim rather than an enumerable diff), THE orchestration SHALL dispatch the advisory surface audit before the first implementation task, and SHALL feed its enumeration into tasks.md and the intent's stated-scope prose before gating reviews begin.
@@ -29,7 +33,7 @@ WHERE the frozen intent is property-style (a codebase-wide property claim rather
 
 ### Requirement: Scope Widening Handled In The Loop
 
-WHILE the loop is advancing a change, WHEN a gating reviewer or the doneness judge reports a finding outside the intent's stated scope, THE orchestration SHALL apply the opsx-review-convergence scope-widening protocol — widen with a logged evidence entry when the finding is required to meet the frozen intent, route to follow-ups.md otherwise — rather than silently fixing, silently dropping, or halting on every out-of-scope finding.
+WHILE the loop is advancing a change, WHEN a gating reviewer or the doneness judge reports a finding outside the intent's stated scope, THE orchestration SHALL apply the opsx-review-convergence scope-widening protocol (as specified by that capability) rather than silently fixing, silently dropping, or halting on every out-of-scope finding.
 
 #### Scenario: Widening logged before fixing
 - **WHEN** the orchestration decides an out-of-scope finding is required to meet the frozen intent

@@ -49,11 +49,11 @@ Every review finding SHALL be routed to exactly one of: in-scope blocking (P0/P1
 
 ### Requirement: Orchestrator Round Ledger
 
-THE orchestrator SHALL maintain a per-review-type round ledger — round number, per-severity finding counts (P0/P1/P2/P3), per-reviewer verdicts, and the HEAD reviewed — sealed into the review artifact (e.g., code-review.md for post-apply diff-review rounds; the pre-implementation analyze artifact for analyze-type gating rounds), and the ledger, prior-round findings, and other reviewers' output SHALL NOT appear in any blind reviewer prompt.
+THE orchestrator SHALL maintain a per-review-type round ledger — round number, per-severity finding counts (P0/P1/P2/P3), per-reviewer verdicts, and the HEAD reviewed — sealed into the review artifact for that review type (code-review.md for post-apply diff-review rounds; an appended `Round Ledger` section of analyze.md for analyze-type gating rounds), and the ledger, prior-round findings, and other reviewers' output SHALL NOT appear in any blind reviewer prompt. A round's consolidated per-severity count SHALL be the maximum count reported by any single reviewer in that round (no cross-reviewer finding matching), so counts are deterministic and comparable across rounds without normalizing free-text findings.
 
 #### Scenario: Ledger row per round
 - **WHEN** a gating review round completes
-- **THEN** the orchestrator SHALL append one ledger row recording the round number, severity counts, each reviewer's verdict, and the reviewed HEAD SHA
+- **THEN** the orchestrator SHALL append one ledger row recording the round number, the consolidated severity counts (max across reviewers per severity), each reviewer's verdict, and the reviewed HEAD SHA
 
 #### Scenario: Blindness preserved
 - **IF** a blind reviewer dispatch prompt would include the round ledger, prior-round findings, or another reviewer's output
@@ -110,6 +110,10 @@ IF open P0/P1 findings remain after the stop conditions and any disclosure round
 #### Scenario: User ruling resumes the loop
 - **WHEN** the user rules on the audit (fix, waive, or re-scope)
 - **THEN** the orchestration MAY resume review rounds with the ruling applied, and the round ledger SHALL continue (not reset)
+
+#### Scenario: A resume ruling extends the exhausted budget
+- **WHEN** the user's ruling directs further fixing and re-review after a trajectory or budget stop
+- **THEN** the ruling SHALL grant a recorded round-budget extension (a ledger entry noting the new effective budget), so resumed rounds are dispatchable rather than immediately re-landing on the same exhausted stop condition
 
 #### Scenario: A user waiver clears the blocking set without a forced green
 - **WHEN** the user waives an open P0/P1 finding at the audit

@@ -45,6 +45,8 @@ doneness_mode: required
 ## Execution Notes
 
 - 2026-07-03 — review.md authored; Scale L per frozen intent (cross-capability, Constitution IX).
+- 2026-07-03 — review role model unset (`opsx models` all unset); blind reviews dispatched on session model `claude-bridge/claude-opus-4-8`; recorded as the resolved review set for model-stability purposes.
+- 2026-07-03 — analyze returned BLOCKED (1 blocker, 4 major, 3 minor); all resolved in-session: F1 budget extension on resume ruling; F2 waiver-sealed pass (`waived_by_user`); F3 consolidated round count = max across reviewers; F4 landing halts loop continuation; F5 proposal skill path corrected to canonical `dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md`; F6 MODIFIED Adversarial Review With Degradation (disclosure round = sole sanctioned non-blind exception); F7 analyze ledger surface = appended `Round Ledger` section of analyze.md; F8 loop-orchestration widening binding thinned to reference the discipline.
 
 ## Scope Expansions
 
