@@ -244,22 +244,24 @@ function resolveWorktree(change: string, cwd: string): string | undefined {
 	return conventionWorktree(change, cwd);
 }
 
-/** Change names whose intent.md is COMMITTED (tracked), via one git ls-files call. */
+/**
+ * Change names whose intent.md is COMMITTED at HEAD — `git ls-tree HEAD`, not
+ * `ls-files`: a merely STAGED draft is not a committed/frozen baseline and must
+ * not be inventoried as resumable.
+ */
 function committedIntentNames(cwd: string): Set<string> {
 	try {
-		const r = spawnSync("git", ["-C", cwd, "ls-files", "--", "openspec/changes/*/intent.md"], {
+		const r = spawnSync("git", ["-C", cwd, "ls-tree", "-r", "--name-only", "HEAD", "--", "openspec/changes"], {
 			encoding: "utf-8",
 			timeout: 5000,
 		});
 		if (r.status !== 0) return new Set();
-		return new Set(
-			(r.stdout ?? "")
-				.split("\n")
-				.map((l) => l.trim())
-				.filter(Boolean)
-				.map((p) => p.split("/")[2])
-				.filter(Boolean),
-		);
+		const names = new Set<string>();
+		for (const line of (r.stdout ?? "").split("\n")) {
+			const m = line.trim().match(/^openspec\/changes\/([^/]+)\/intent\.md$/);
+			if (m && m[1] !== "archive") names.add(m[1]);
+		}
+		return names;
 	} catch {
 		return new Set();
 	}
@@ -419,8 +421,7 @@ export default function (pi: ExtensionAPI) {
 			? `draft the intent for goal "${goal}" into openspec/changes/<name>/intent.md and announce it`
 			: `draft the intent distilled from this conversation into openspec/changes/<name>/intent.md and announce it`) +
 		`, OR — if an active change from the kickoff inventory already covers it — announce that change ` +
-		`and advise /opsx-loop <name>, then stop.` +
-		DISTILL_AUTONOMY;
+		`and advise /opsx-loop <name>, then stop. Do NOT implement; STOP after announcing.`;
 
 	pi.registerCommand("opsx-loop", {
 		description: "Guaranteed opsx loop: /opsx-loop goal [text] | <change> | status | clear | models",

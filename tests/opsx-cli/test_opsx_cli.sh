@@ -153,6 +153,9 @@ case "$out" in */wtrepo/repo--opsx-demo3) [ $rc -eq 0 ] && ok "worktree path emi
 ( cd "$WTREPO" && "$OPSX" worktree ensure demo3 --path "$TMP/wtrepo/custom-demo3" ) >/dev/null 2>&1
 out="$(cd "$WTREPO" && "$OPSX" worktree path demo3 2>&1)"; rc=$?
 case "$out" in */wtrepo/repo--opsx-demo3) [ $rc -eq 0 ] && ok "worktree path stays convention-only despite a --path override worktree" || nok "path convention-only emit (rc=$rc)" ;; *) nok "path convention-only emit (rc=$rc out=$out)" ;; esac
+# Main-root normalization: the emit is IDENTICAL from inside a linked worktree
+out="$(cd "$TMP/wtrepo/custom-demo3" && "$OPSX" worktree path demo3 2>&1)"; rc=$?
+case "$out" in */wtrepo/repo--opsx-demo3) [ $rc -eq 0 ] && ok "worktree path derivation identical from inside a linked worktree" || nok "path from-worktree emit (rc=$rc)" ;; *) nok "path from-worktree emit (rc=$rc out=$out)" ;; esac
 ( cd "$WTREPO" && "$OPSX" worktree path nope ) >/dev/null 2>&1; rc=$?
 [ $rc -eq 1 ] && ok "worktree path unknown change exits 1" || nok "path unknown change (rc=$rc)"
 ( cd "$WTREPO" && "$OPSX" worktree path demo3 --path x ) >/dev/null 2>&1; rc=$?

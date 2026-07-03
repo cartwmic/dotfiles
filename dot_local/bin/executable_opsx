@@ -358,8 +358,17 @@ EOF
 # ensure`, `opsx worktree path`, and the gate's locator fallback all consume
 # these helpers so no caller carries an independent copy of the derivation.
 # ============================================================================
-opsx_wt_convention_path() { # $1=repo-root $2=change → the path `ensure` would use absent --path
-  echo "$(dirname "$1")/$(basename "$1")--opsx-$2"
+opsx_repo_main_root() { # $1=any-checkout root → the repo's MAIN (integration) worktree root
+  git -C "$1" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10); exit}'
+}
+opsx_wt_convention_path() { # $1=any-checkout root $2=change → the path `ensure` would derive absent --path
+  # Normalized to the MAIN worktree root so the derivation is IDENTICAL from the
+  # integration checkout and from inside any linked worktree — gate-view equality
+  # (intent invariant) breaks otherwise.
+  local main
+  main="$(opsx_repo_main_root "$1")"
+  [ -n "$main" ] || main="$1"
+  echo "$(dirname "$main")/$(basename "$main")--opsx-$2"
 }
 opsx_wt_for_branch() { # $1=repo-root $2=change → existing worktree checked out on opsx/<change>, if any
   git -C "$1" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/opsx/$2" '

@@ -212,6 +212,10 @@ CONVWT="$(dirname "$RROOT")/$(basename "$RROOT")--opsx-wt-fallback"
 git -C "$TMP" worktree add "$CONVWT" -b opsx/wt-fallback >/dev/null 2>&1
 run wt-fallback; check "empty locator + convention-path opsx/<change> worktree resolves via fallback (verdict-freshness-and-provenance)" 0 $?
 grep -q 'GATE-FAIL worktree' "$TMP/err" && nok "fallback avoided the locate hard-fail" || ok "fallback avoided the locate hard-fail"
+# Gate-view equality: the SAME command from INSIDE the convention worktree must
+# agree (convention derivation is normalized to the repo's main worktree root)
+( cd "$CONVWT" && OPSX_ROOT="$CONVWT" "$OPSX" gate wt-fallback ) >/dev/null 2>"$TMP/err"; rc=$?
+check "gate from inside the convention worktree agrees with the integration view" 0 $rc
 # explicit --worktree that fails validation stays loud (any mode) — never silently re-probed
 ( cd "$TMP" && "$OPSX" gate wt-fallback --worktree "$TMP/nonexistent" ) >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -ne 0 ] && grep -q 'GATE-FAIL worktree' "$TMP/err" \
