@@ -1,5 +1,31 @@
 # opsx-cli (delta)
 
+## MODIFIED Requirements
+
+### Requirement: Unified Subcommand Dispatch
+
+THE `opsx` command SHALL accept a first positional argument naming a subcommand — `gate`, `models`, `status`, `archive-check`, `loop`, `worktree`, `clean`, or `sweep` — and SHALL dispatch the remaining arguments to that subcommand's implementation unchanged, preserving its exit code verbatim. Invoking `opsx` with no subcommand SHALL print usage listing the available subcommands and exit non-zero.
+
+#### Scenario: Known subcommand dispatches with arguments intact
+- **WHEN** `opsx gate <change> --worktree <path>` is run
+- **THEN** the gate implementation SHALL receive `<change> --worktree <path>` exactly as if the legacy `opsx-gate <change> --worktree <path>` had been invoked, and `opsx` SHALL exit with the gate's exit code unchanged
+
+#### Scenario: Subcommand exit code is propagated
+- **WHEN** a dispatched subcommand exits with code N
+- **THEN** `opsx` SHALL exit with code N (no remapping)
+
+#### Scenario: Unknown subcommand is rejected
+- **IF** `opsx` is invoked with a first argument that is not one of the enumerated subcommands
+- **THEN** `opsx` SHALL print a usage message naming the valid subcommands to standard error and exit non-zero
+
+#### Scenario: Missing subcommand prints usage
+- **IF** `opsx` is invoked with no arguments
+- **THEN** `opsx` SHALL print usage and exit non-zero
+
+#### Scenario: Sweep dispatches
+- **WHEN** `opsx sweep <change>` is run
+- **THEN** the sweep implementation SHALL receive `<change>` and `opsx` SHALL exit with the sweep's exit code unchanged
+
 ## ADDED Requirements
 
 ### Requirement: Migration Completeness Sweep Command
