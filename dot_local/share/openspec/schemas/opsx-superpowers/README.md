@@ -85,6 +85,23 @@ Each mode has a controlled vocabulary. Default values shown in **bold**.
 | `Validation Source Mode` | **required** / waived | required: Scale ≥ M must declare an agent-independent validation source |
 | `Doneness Mode` | **required (M+)** / waived | required: gate reads a sealed `doneness.md` verdict (blind judge, intent-satisfaction) as the sole-remaining-failure backstop. At plain M the verdict rides the code-review dispatch (designated reviewer = first `review` model, `review_mode: blind-single-judge`), still sealed to a separate `doneness.md`; `full_rigor` dispatches an independent judge. `waived` needs a non-empty `doneness_waiver_rationale` |
 | `Spec Level` | **spec-anchored** / spec-first / spec-as-source | spec-anchored = OpenSpec's natural mode; spec-as-source warns about MDD-era trade-offs |
+| `review_budget_mode` | **quiet-round** / land-on-stop | Review-round continuation semantics (front-matter key, orchestrator-read). quiet-round: converging rounds (fixes landing) continue autonomously, a quiet round (0 P0/P1) seals pass, thrash or the `review_max_rounds` hard cap lands for a human ruling. land-on-stop: a ruling at every stop (pre-quiet-round behavior). Unknown values read as land-on-stop (stricter). A stop with open P0/P1 never seals pass under either mode |
+
+### Migration sweep (optional `sweep.txt`)
+
+A rename/retire/migration-class change MAY declare retired tokens in
+`openspec/changes/<change>/sweep.txt` — one extended regex per line, `#`
+comments and blank lines ignored, zero effective patterns = clean pass.
+`opsx sweep <change>` (and, conditionally, `opsx gate`) greps every
+git-tracked file of the change's RESOLVED implementation checkout — worktree
+when worktree-required — excluding the non-deployed OpenSpec workspace
+(`openspec/**`) and ADR history (`adr/**`), which legitimately record retired
+vocabulary. Hits print `SWEEP-HIT <pattern> <file>:<line>` and fail (exit 1 /
+`GATE-FAIL sweep`); malformed patterns print `SWEEP-ERROR <pattern>` and fail
+loudly (never a silent pass). Changes without sweep.txt get NO new gate
+obligations. The openspec-loop skill runs the sweep BEFORE review round 1 so
+the whole stale-prose defect class dies in one deterministic pass instead of
+one instance per blind round.
 
 ### Role models (optional, via `opsx models`)
 

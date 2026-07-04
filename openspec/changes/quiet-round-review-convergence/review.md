@@ -7,7 +7,7 @@ full_rigor: true
 execution_mode: standard
 verification_mode: retained-required
 debug_mode: standard
-review_status: not-requested
+review_status: resolved
 delegation_mode: subagent-required
 # code_review_mode: (derived when absent: M ⇒ gating-required, XS/S ⇒ advisory; uncomment to override — an explicit value always wins)
 loop_max_iterations: 80
@@ -36,7 +36,7 @@ any mode by setting it (in BOTH the front-matter and this table).
 | Execution Mode | standard | standard\|tdd-preferred\|tdd-required |
 | Verification Mode | retained-required | verify.md must be green before archive (review-discipline change; keep the evidence trail) |
 | Debug Mode | standard | standard\|systematic-debugging |
-| Review Status | not-requested | not-requested\|requested\|findings-received\|resolved |
+| Review Status | resolved | not-requested\|requested\|findings-received\|resolved |
 | Delegation Mode | subagent-required | all review/validation-judgment steps dispatched to blind subagents (openspec-loop mandate) |
 | Worktree Mode | derived (absent) | front-matter key COMMENTED OUT ⇒ tier default applies: M ⇒ worktree-required |
 | Code Review Mode | derived (gating-required) | front-matter key COMMENTED OUT ⇒ derived fail-closed default: M ⇒ gating-required. Constitution IX also applies (existing-skill edits) |

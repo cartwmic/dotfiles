@@ -813,6 +813,64 @@ grep -q 'GATE-PASS(cheap)' "$TMP/outg" && ok "cheap green labeled GATE-PASS(chea
 grep -qi 'validations not run' "$TMP/outg" && ok "cheap green does not overclaim validations ran" || nok "cheap green caveat present"
 rm -f "$TMP/openspec/opsx-gates.yaml"
 
+# --- opsx-gate-enforcement.migration-sweep-gate-check ---
+# Tracked shipped surface carrying a retired token, outside openspec/**+adr/**.
+printf 'clean line\nRETIRED_SWEEP_TOKEN lives here\n' > "$TMP/shipped_surface"
+git -C "$TMP" add shipped_surface; git -C "$TMP" commit -qm shipped-surface
+
+mkchange sweep-hit
+printf '# declared retired tokens\nRETIRED_SWEEP_TOKEN\n' > "$TMP/openspec/changes/sweep-hit/sweep.txt"
+run sweep-hit; rc=$?
+check "declared pattern hit on shipped surface fails the gate (migration-sweep-gate-check)" 1 $rc
+grep -q 'GATE-FAIL sweep' "$TMP/err" && ok "sweep failure emits GATE-FAIL sweep line" || nok "GATE-FAIL sweep line"
+grep -q 'SWEEP-HIT RETIRED_SWEEP_TOKEN shipped_surface:2' "$TMP/err" \
+  && ok "SWEEP-HIT names pattern + file:line" || nok "SWEEP-HIT detail line"
+
+mkchange sweep-none   # NO sweep.txt: check absent, exit unaffected
+run sweep-none; rc=$?
+check "undeclared change unaffected by sweep (conditional check)" 0 $rc
+grep -q 'sweep' "$TMP/err" && nok "no sweep output for undeclared change" || ok "no sweep output for undeclared change"
+
+mkchange sweep-clean
+printf 'TOKEN_THAT_MATCHES_NOTHING_ANYWHERE_ZZZ\n' > "$TMP/openspec/changes/sweep-clean/sweep.txt"
+run sweep-clean; rc=$?
+check "clean declared sweep passes the gate" 0 $rc
+
+mkchange sweep-empty  # declaration with only comments/blanks = clean pass
+printf '# only comments\n\n' > "$TMP/openspec/changes/sweep-empty/sweep.txt"
+run sweep-empty; rc=$?
+check "empty declaration (comments only) is a clean pass" 0 $rc
+
+mkchange sweep-badre  # malformed ERE: loud SWEEP-ERROR failure, never silent pass
+printf '*invalid(\n' > "$TMP/openspec/changes/sweep-badre/sweep.txt"
+run sweep-badre; rc=$?
+check "malformed ERE fails the gate loudly" 1 $rc
+grep -q 'SWEEP-ERROR' "$TMP/err" && ok "malformed ERE emits SWEEP-ERROR" || nok "SWEEP-ERROR line"
+
+# Worktree resolution: stale token on integration, FIXED in the worktree — the
+# gate sweep greps the resolved ART_ROOT (worktree), so the fix counts.
+mkchange sweep-wt
+sed -i '' 's/^scale: S/scale: M/; s/^worktree_mode: same-tree/worktree_mode: worktree-required/' \
+  "$TMP/openspec/changes/sweep-wt/review.md"
+printf '# design\n' > "$TMP/openspec/changes/sweep-wt/design.md"
+printf '# clarify\n' > "$TMP/openspec/changes/sweep-wt/clarify.md"
+printf '# analyze\n' > "$TMP/openspec/changes/sweep-wt/analyze.md"
+printf 'RETIRED_SWEEP_TOKEN\n' > "$TMP/openspec/changes/sweep-wt/sweep.txt"
+git -C "$TMP" add -A openspec; git -C "$TMP" commit -qm sweep-wt-change
+SWWT="$TMP/wt-sweep"
+git -C "$TMP" worktree add -q -b opsx/sweep-wt "$SWWT" >/dev/null 2>&1
+( cd "$SWWT" && sed -i '' 's/RETIRED_SWEEP_TOKEN/cleaned/' shipped_surface \
+  && git add shipped_surface && git commit -qm fix-token )
+run sweep-wt --worktree "$SWWT"; rc=$?
+grep -q 'GATE-FAIL sweep' "$TMP/err" && nok "worktree-fixed token does not sweep-fail" || ok "worktree-fixed token does not sweep-fail"
+# and WITHOUT the worktree view the stale integration copy still fails:
+git -C "$TMP" worktree remove --force "$SWWT" >/dev/null 2>&1
+git -C "$TMP" branch -qD opsx/sweep-wt >/dev/null 2>&1
+run sweep-wt; rc=$?
+grep -q 'GATE-FAIL sweep' "$TMP/err" && ok "integration-stale token still sweep-fails without worktree" || nok "integration-stale sweep-fail"
+# cleanup the planted surface so later suites/fixtures are unaffected
+git -C "$TMP" rm -q shipped_surface; git -C "$TMP" commit -qm rm-shipped-surface
+
 echo "----"
 echo "passed=$pass failed=$failc"
 [ "$failc" -eq 0 ]
