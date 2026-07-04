@@ -6,7 +6,7 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
 
 ## Phase 1 — CLI + gate (Q2 sweep, Q4 riders)
 
-- [ ] 1.1 `opsx sweep <change>` subcommand (D3, opsx-cli.Migration Completeness
+- [x] 1.1 `opsx sweep <change>` subcommand (D3, opsx-cli.Migration Completeness
       Sweep Command): read `openspec/changes/<change>/sweep.txt` (one ERE per
       line, `#` comments + blanks ignored; zero effective patterns = clean
       pass); resolve the implementation checkout exactly as the gate does
@@ -18,12 +18,12 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
       non-zero; missing sweep.txt → one-line notice → exit 0.
       - files_allowed:
         - dot_local/bin/executable_opsx
-- [ ] 1.2 Dispatch + usage wiring (opsx-cli.Unified Subcommand Dispatch): add
+- [x] 1.2 Dispatch + usage wiring (opsx-cli.Unified Subcommand Dispatch): add
       `sweep` case arm; add usage line; MERGE the two `gate` usage lines into
       an adjacent consolidated entry preserving both option forms (R3-A2).
       - files_allowed:
         - dot_local/bin/executable_opsx
-- [ ] 1.3 Gate conditional sweep check (opsx-gate-enforcement.Migration Sweep
+- [x] 1.3 Gate conditional sweep check (opsx-gate-enforcement.Migration Sweep
       Gate Check): WHEN sweep.txt exists in the change dir, run the sweep as a
       cheap deterministic check against the SAME resolved ART_ROOT the gate
       uses; hits → `GATE-FAIL sweep`; no sweep.txt → check absent, exit code
