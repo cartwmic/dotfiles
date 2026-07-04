@@ -19,12 +19,13 @@ opsx_usage() {
   cat >&2 <<'USAGE'
 usage: opsx <subcommand> [args]
   gate     <change> [--worktree <path>]   run the deterministic gate
+  gate     <change> --cheap                deterministic checks only (no validations)
   models   <role> [--json] [--change <c>] [--with-default]   resolve a role
   models   set <role> <value> [--layer user]                 write config
   models   get <role> [--layer user]                         read config
   models   list                                              list resolved roles
-  gate     <change> --cheap                deterministic checks only (no validations)
   status                                  read-only fleet view (all changes)
+  sweep    <change> [--worktree <path>]   migration-completeness sweep (sweep.txt)
   archive-check <change>                  land-base + ADR-dup + multi-dir advisory
   loop     <change> [--worktree <path>]   Ralph-style fallback driver
   worktree ensure <change> [--path <p>] [--integration-branch <b>]
@@ -393,6 +394,86 @@ opsx_wt_valid_for_change() { # $1=path $2=change → 0 iff a git worktree on bra
 }
 
 # ============================================================================
+# MIGRATION SWEEP CORE (opsx-cli.migration-completeness-sweep-command,
+# opsx-gate-enforcement.migration-sweep-gate-check). Shared by `opsx sweep`
+# and the gate's conditional cheap check so both grep the SAME resolved
+# checkout with the SAME semantics. Deterministic, model-free.
+#   $1=checkout-root  $2=sweep.txt path
+#   prints SWEEP-HIT <pattern> <file>:<line> / SWEEP-ERROR <pattern> lines
+#   returns 0 clean · 1 hits · 2 pattern error (loud, never a silent pass)
+# Swept surface: git-tracked files of the resolved checkout MINUS the
+# non-deployed OpenSpec workspace (openspec/**) and ADR history (adr/**),
+# which legitimately record retired vocabulary until/after archive.
+# ============================================================================
+opsx_sweep_run() {
+  local root="$1" decl="$2" rc=0 pat out st
+  while IFS= read -r pat || [ -n "$pat" ]; do
+    case "$pat" in ''|'#'*) continue ;; esac
+    out="$(git -C "$root" grep -nE -e "$pat" -- ':(exclude)openspec/**' ':(exclude)adr/**' 2>/dev/null)"; st=$?
+    if [ "$st" -eq 0 ]; then
+      printf '%s\n' "$out" | awk -F: -v p="$pat" '{print "SWEEP-HIT " p " " $1 ":" $2}'
+      rc=1
+    elif [ "$st" -ne 1 ]; then
+      # grep/git error (malformed ERE, etc): loud tri-state, distinct from hit
+      # and clean — never a silent exit 0 (analyze F6).
+      echo "SWEEP-ERROR $pat"
+      return 2
+    fi
+  done < "$decl"
+  return "$rc"
+}
+
+# ============================================================================
+# SUBCOMMAND: sweep — migration-completeness sweep for one change.
+#   opsx sweep <change> [--worktree <path>]
+# Resolves the implementation checkout EXACTLY as the gate does: explicit
+# --worktree validated loudly; else the recorded Worktree Path locator; else
+# the convention path when valid; else the integration checkout.
+# ============================================================================
+opsx_sweep() (
+  set -u
+  CHANGE="${1:-}"
+  [ -n "$CHANGE" ] || { echo "opsx sweep: usage: opsx sweep <change> [--worktree <path>]" >&2; exit 2; }
+  shift
+  WT_ARG=""
+  [ "${1:-}" = "--worktree" ] && { WT_ARG="${2:?opsx sweep: --worktree needs a path}"; shift 2; }
+  ROOT="${OPSX_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  [ -n "$ROOT" ] || { echo "opsx sweep: not inside a git repository" >&2; exit 2; }
+  MAIN="$(opsx_repo_main_root "$ROOT")"; [ -n "$MAIN" ] || MAIN="$ROOT"
+  ROOT="$MAIN"
+  SWEEP_ROOT="$ROOT"
+  if [ -n "$WT_ARG" ]; then
+    # Operator assertion: validate NOW, fail LOUD — never a silent fallback.
+    if ! opsx_wt_valid_for_change "$WT_ARG" "$CHANGE"; then
+      echo "opsx sweep: explicit --worktree is not a git worktree on branch opsx/$CHANGE: $WT_ARG" >&2
+      exit 2
+    fi
+    SWEEP_ROOT="$WT_ARG"
+  else
+    _REVIEW="$ROOT/openspec/changes/$CHANGE/review.md"
+    WP=""
+    if [ -f "$_REVIEW" ]; then
+      WP="$(grep -E '^\*\*Worktree Path:\*\*' "$_REVIEW" 2>/dev/null | head -1 \
+            | sed -E 's/^\*\*Worktree Path:\*\*[[:space:]]*//; s/[[:space:]]+$//')"
+      case "$WP" in *"<empty"*|"<"*) WP="" ;; esac
+    fi
+    if opsx_wt_valid_for_change "$WP" "$CHANGE"; then
+      SWEEP_ROOT="$WP"
+    else
+      _CAND="$(opsx_wt_convention_path "$ROOT" "$CHANGE")"
+      if opsx_wt_valid_for_change "$_CAND" "$CHANGE"; then SWEEP_ROOT="$_CAND"; fi
+    fi
+  fi
+  DECL="$SWEEP_ROOT/openspec/changes/$CHANGE/sweep.txt"
+  if [ ! -f "$DECL" ]; then
+    echo "opsx sweep: no sweep.txt declared for $CHANGE (clean pass)"
+    exit 0
+  fi
+  opsx_sweep_run "$SWEEP_ROOT" "$DECL"
+  exit $?
+)
+
+# ============================================================================
 # SUBCOMMAND: gate
 # ============================================================================
 opsx_gate() (
@@ -622,6 +703,21 @@ done
 if command -v openspec >/dev/null 2>&1 && [ -d "$CDIR/specs" ]; then
   ( cd "$ART_ROOT" && openspec validate "$CHANGE" --strict --no-interactive ) >/dev/null 2>&1 \
     || fail structure "openspec validate --strict failed"
+fi
+
+# Migration sweep (opsx-gate-enforcement.migration-sweep-gate-check): runs ONLY
+# when the change declares sweep.txt; greps the SAME resolved ART_ROOT the
+# other artifact checks read (the validated worktree when resolved), so
+# worktree-side fixes count and integration-side stale copies never false-fail.
+# Undeclared changes: no check, exit code unaffected.
+if [ -f "$CDIR/sweep.txt" ]; then
+  sweep_out="$(opsx_sweep_run "$ART_ROOT" "$CDIR/sweep.txt")"; sweep_rc=$?
+  [ -n "$sweep_out" ] && printf '%s\n' "$sweep_out" >&2
+  if [ "$sweep_rc" -eq 1 ]; then
+    fail sweep "declared pattern(s) hit shipped surfaces ($(printf '%s\n' "$sweep_out" | grep -c '^SWEEP-HIT' || true) hit(s))"
+  elif [ "$sweep_rc" -ge 2 ]; then
+    fail sweep "sweep declaration error: $(printf '%s\n' "$sweep_out" | grep '^SWEEP-ERROR' | head -1)"
+  fi
 fi
 
 # Tasks complete
@@ -1382,6 +1478,7 @@ case "$sub" in
   gate)          opsx_gate "$@"; exit $? ;;
   models)        opsx_models "$@"; exit $? ;;
   status)        opsx_status "$@"; exit $? ;;
+  sweep)         opsx_sweep "$@"; exit $? ;;
   archive-check) opsx_archive_check "$@"; exit $? ;;
   loop)          opsx_loop "$@"; exit $? ;;
   worktree)      opsx_worktree "$@"; exit $? ;;
