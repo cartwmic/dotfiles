@@ -592,6 +592,32 @@ apply:
     ~/.local/share/openspec/schemas/opsx-superpowers/templates/
     for the skills to use directly.
 
+    sweep.txt (optional, change-dir): migration-completeness
+    declaration — one extended regex per line (# comments and blank
+    lines ignored; zero effective patterns = clean pass) naming the
+    change's retired tokens / forbidden patterns. `opsx sweep
+    <change>` greps every git-tracked file of the RESOLVED
+    implementation checkout minus openspec/** and adr/** (history
+    surfaces); `opsx gate` runs the same sweep as a cheap check ONLY
+    when the file exists (GATE-FAIL sweep on hits; SWEEP-ERROR on
+    malformed patterns fails loudly). Deliberately NOT an artifact:
+    it is per-change opt-in, existence-only completion semantics
+    would misreport it, and undeclared changes must carry zero new
+    obligations.
+    (opsx-workflow-schema.migration-sweep-declaration;
+     opsx-cli.migration-completeness-sweep-command;
+     opsx-gate-enforcement.migration-sweep-gate-check)
+
+    review_budget_mode (optional front-matter key, orchestrator-read):
+    quiet-round (default when absent) | land-on-stop. Continuation
+    semantics for gating review rounds — quiet-round continues
+    autonomously while change-scoped fixes land, seals pass only on a
+    0-P0/P1 round, lands for a human ruling on thrash or the
+    review_max_rounds hard cap; land-on-stop restores a ruling at
+    every stop. Unknown values read as land-on-stop (stricter). The
+    gate does not read this key.
+    (opsx-workflow-schema.review-budget-mode-front-matter)
+
     HARD GATES (apply refuses to mark complete unless):
       - All required tasks (per declared Scale) are checked
       - No scope_violation findings remain unresolved

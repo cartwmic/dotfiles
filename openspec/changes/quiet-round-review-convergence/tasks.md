@@ -55,7 +55,7 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
 
 ## Phase 2 — Schema + templates (Q1 key, Q2 declaration, Q4 row)
 
-- [ ] 2.1 review.md template (opsx-workflow-schema.Review Budget Mode Front
+- [x] 2.1 review.md template (opsx-workflow-schema.Review Budget Mode Front
       Matter + Template Mode Table Mirrors Derived Defaults): document
       `review_budget_mode` (commented) alongside `review_max_rounds` with the
       quiet-round default + land-on-stop opt-in + unknown-fails-strict note;
@@ -63,14 +63,14 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
       M, advisory below)" (Q4).
       - files_allowed:
         - dot_local/share/openspec/schemas/opsx-superpowers/templates/review.md
-- [ ] 2.2 schema.yaml + README (opsx-workflow-schema.Migration Sweep
+- [x] 2.2 schema.yaml + README (opsx-workflow-schema.Migration Sweep
       Declaration): document sweep.txt format (ERE per line, comments/blanks,
       empty = clean), the swept-surface exclusion (`openspec/**`, `adr/**`),
       the conditional gate check, and the review_budget_mode key.
       - files_allowed:
         - dot_local/share/openspec/schemas/opsx-superpowers/schema.yaml
         - dot_local/share/openspec/schemas/opsx-superpowers/README.md
-- [ ] 2.3 Surfaces-test pins for 2.1–2.2: template carries commented
+- [x] 2.3 Surfaces-test pins for 2.1–2.2: template carries commented
       review_budget_mode key; Code Review Mode row shows derived semantics
       (never literal `advisory`); README/schema document sweep.txt; stray
       `.tmp` absence pin (1.4).
