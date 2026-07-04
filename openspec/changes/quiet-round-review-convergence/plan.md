@@ -52,4 +52,4 @@
 - `bash tests/opsx-gate/test_opsx_gate.sh`
 - `bash tests/opsx-models/test_opsx_models.sh`
 - `bash tests/opsx-review-convergence/test_review_convergence_surfaces.sh`
-- `bash tests/opsx-author-marker/test_author_marker.sh`
+- `bash tests/opsx-gate/test_author_marker.sh`

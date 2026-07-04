@@ -285,6 +285,9 @@ if grep -q 'authors the verdict artifact (body, Verdict' "$LOOP_SKILL" 2>/dev/nu
   nok "loop skill: free-write verdict instruction removed"
 else ok "loop skill: free-write verdict instruction removed"; fi
 
+# --- opsx-adversarial-review.m-tier-review-stack-thinning (rigor uniform across tiers) ---
+has "loop skill keeps 2-model code review gating at every tier" "$LOOP_SKILL" "gating-required at every tier"
+
 # --- Q4 rider: stray .tmp removed and stays removed ---
 if [ -e "$ROOT/tests/opsx-review-convergence/test_review_convergence_surfaces.sh.tmp" ]; then
   nok "stray surfaces .tmp stays deleted"

@@ -104,7 +104,7 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
 
 ## Phase 4 — Verification
 
-- [ ] 4.1 Full validator sweep + verify.md: run all suites (opsx-cli, opsx-gate,
+- [x] 4.1 Full validator sweep + verify.md: run all suites (opsx-cli, opsx-gate,
       opsx-models, opsx-review-convergence surfaces, author-marker, bun loop
       tests, both openspec stricts); record fail-open audit table (1.4) and
       the replay evidence pointer (design Replay validation); seal verify.md
