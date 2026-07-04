@@ -285,6 +285,20 @@ if grep -q 'authors the verdict artifact (body, Verdict' "$LOOP_SKILL" 2>/dev/nu
   nok "loop skill: free-write verdict instruction removed"
 else ok "loop skill: free-write verdict instruction removed"; fi
 
+# --- CR R1: sibling prose homes track the quiet-round default (opsx-adversarial-review.trajectory-stop-and-round-budget) ---
+has "code-review template ledger comment states quiet-round order" "$TPL/code-review.md" "a quiet round"
+has "code-review template converging row continues without ruling" "$TPL/code-review.md" "NO human ruling"
+has "code-review template names land-on-stop opt-in" "$TPL/code-review.md" "review_budget_mode: land-on-stop"
+if grep -q 'treadmill  — P0+P1 flat or rising' "$TPL/code-review.md" 2>/dev/null; then
+  nok "code-review template treadmill-as-default removed"
+else ok "code-review template treadmill-as-default removed"; fi
+has "apply ref states fix-first quiet-round evaluation" "$APPLY_REF" "land the fixes FIRST, then evaluate IN ORDER"
+has "apply ref names the thrash guard" "$APPLY_REF" "thrash guard"
+has "apply ref names land-on-stop opt-in" "$APPLY_REF" "review_budget_mode: land-on-stop"
+if grep -q 'treadmill (P0+P1 flat/rising' "$APPLY_REF" 2>/dev/null; then
+  nok "apply ref treadmill-as-default removed"
+else ok "apply ref treadmill-as-default removed"; fi
+
 # --- opsx-adversarial-review.m-tier-review-stack-thinning (rigor uniform across tiers) ---
 has "loop skill keeps 2-model code review gating at every tier" "$LOOP_SKILL" "gating-required at every tier"
 

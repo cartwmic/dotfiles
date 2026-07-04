@@ -300,6 +300,11 @@ printf '# nothing declared\n\n' > "$SWREPO/openspec/changes/swc/sweep.txt"
 ( cd "$SWREPO" && "$OPSX" sweep swc ) >/dev/null 2>&1; [ $? -eq 0 ] \
   && ok "sweep: empty declaration is a clean pass" || nok "sweep empty decl"
 
+# whitespace-only lines are blank (CR R1: a lone space must NOT become an ERE)
+printf ' \n\t\n  # indented comment after trim\n' > "$SWREPO/openspec/changes/swc/sweep.txt"
+( cd "$SWREPO" && "$OPSX" sweep swc ) >/dev/null 2>&1; [ $? -eq 0 ] \
+  && ok "sweep: whitespace-only lines ignored (no false-positive flood)" || nok "sweep whitespace lines"
+
 # malformed ERE → SWEEP-ERROR + non-zero (loud, never silent)
 printf '*bad(regex\n' > "$SWREPO/openspec/changes/swc/sweep.txt"
 out="$(cd "$SWREPO" && "$OPSX" sweep swc 2>&1)"; rc=$?

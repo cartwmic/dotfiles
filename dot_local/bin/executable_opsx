@@ -408,6 +408,11 @@ opsx_wt_valid_for_change() { # $1=path $2=change → 0 iff a git worktree on bra
 opsx_sweep_run() {
   local root="$1" decl="$2" rc=0 pat out st
   while IFS= read -r pat || [ -n "$pat" ]; do
+    # Trim surrounding whitespace so whitespace-only lines are blank (a lone
+    # " " would otherwise become an ERE matching nearly every tracked line —
+    # false-positive flood; opsx-workflow-schema "blank lines ignored").
+    pat="${pat#"${pat%%[![:space:]]*}"}"
+    pat="${pat%"${pat##*[![:space:]]}"}"
     case "$pat" in ''|'#'*) continue ;; esac
     out="$(git -C "$root" grep -nE -e "$pat" -- ':(exclude)openspec/**' ':(exclude)adr/**' 2>/dev/null)"; st=$?
     if [ "$st" -eq 0 ]; then
