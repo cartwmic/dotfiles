@@ -67,10 +67,17 @@ the phase-appropriate baseline:
 | code-review (post-apply) | `intent.md` + proposal + specs + design + plan + tasks status, over the diff `Diff Base SHA..HEAD` |
 | doneness (intent-satisfaction) | frozen `intent.md` + the delta acceptance criteria, over the diff `Diff Base SHA..HEAD` |
 
-The subagent authors the verdict artifact (body, Verdict, Diff Base SHA, reviewed
-range, `review_mode`, provenance). For Constitution-IX changes (existing-skill edits)
-the code-review must be multi-model adversarial; a `degraded-single-model` verdict does
-**not** satisfy the gate — `opsx gate` and archive treat it as failed.
+The subagent authors the verdict artifact by FILLING the schema's shipped
+template — `templates/verify.md`, `templates/code-review.md`,
+`templates/doneness.md` under
+`~/.local/share/openspec/schemas/opsx-superpowers/` — never by free-writing
+the gate-parsed fields (the templates already carry the exact field formats
+the gate reads: `**Verdict:**`, `**Doneness:**`, `reviewer-provenance:`, Diff
+Base SHA, reviewed range, `review_mode`). For Constitution-IX changes
+(existing-skill edits) the code-review must be multi-model adversarial; a
+`degraded-single-model` verdict does **not** satisfy the gate — `opsx gate`
+and archive treat it as failed.
+(opsx-skill-integration.openspec-loop-orchestrator-skill-exists)
 
 ### Verdict contract (embed in every gating reviewer prompt)
 
@@ -102,16 +109,47 @@ a provenance defect: repair the ledger before archive.
 (opsx-adversarial-review.orchestrator-round-ledger,
  opsx-adversarial-review.prose-surface-fidelity)
 
-**Stop conditions** — evaluate BEFORE dispatching the next blind round:
+**Migration sweep before round 1.** WHERE the change declares
+`openspec/changes/<change>/sweep.txt` (retired tokens / forbidden patterns,
+one ERE per line), run `opsx sweep <change>` and resolve ALL hits BEFORE
+dispatching the first gating review round — the whole stale-prose defect
+class dies in one deterministic pass instead of one instance per blind round.
+The gate enforces the same sweep conditionally, but pre-round-1 resolution is
+what saves review rounds.
+(opsx-cli.migration-completeness-sweep-command)
 
-| Condition | Rule | Then |
-|---|---|---|
-| converged | latest round P0+P1 = 0 | seal `Verdict: pass`; stop rounds |
-| treadmill | P0+P1 flat or rising across the two most recent rounds | disclosure/landing |
-| budget | completed rounds ≥ `review_max_rounds` (review.md front-matter; absent/invalid ⇒ 5) | disclosure/landing |
+**Continuation/stop conditions (quiet-round default).** After each completed
+gating round: FIRST attempt and land the fixes for that round's findings,
+THEN evaluate IN ORDER — evaluating before fixing makes (b) unreachable and
+kills autonomous convergence:
 
-A stop with open P0/P1 **never** seals pass and **never** silently continues.
-(opsx-adversarial-review.trajectory-stop-and-round-budget)
+| # | Condition | Rule | Then |
+|---|---|---|---|
+| a | quiet round | latest round P0+P1 = 0 (max across reviewers) | seal `Verdict: pass`; stop rounds |
+| b | converging | findings open AND change-scoped fixes landed since the round AND completed rounds < `review_max_rounds` | dispatch next round autonomously — NO human ruling |
+| c | thrash guard | findings open AND no fix landed (progress signal absent) | disclosure/landing |
+| d | hard cap | completed rounds ≥ `review_max_rounds` (absent/invalid ⇒ 5) | disclosure/landing — regardless of trajectory |
+
+The **progress signal is change-scoped**, per round type: post-apply rounds —
+the reviewed worktree branch HEAD moved (bookkeeping artifacts — verdicts,
+ledger, follow-ups.md, review.md, clarify.md — are NEVER committed on the
+reviewed branch; they land on the integration checkout, so only
+implementation fixes move it); analyze-type rounds (pre-apply, no worktree) —
+a commit since the round's reviewed HEAD touching the change's AUTHORED fix
+surfaces (proposal.md, design.md, specs/**, tasks.md, plan.md); ledger seals,
+follow-ups routing, note-logging, and sibling-change commits never count.
+Under (b), the round TYPE still follows the disclosure trigger below —
+converging decides WHETHER to continue, never whether the round is blind.
+
+WHERE review.md front-matter sets `review_budget_mode: land-on-stop` (opt-in,
+and the reading of any unknown value), the pre-quiet-round behavior governs:
+stop on a flat-or-rising P0+P1 across the two most recent rounds, or on
+budget exhaustion, and land for a ruling at every stop.
+
+A stop with open P0/P1 **never** seals pass and **never** silently continues
+— under either mode; quiet-round only automates CONTINUE, never SEAL.
+(opsx-adversarial-review.trajectory-stop-and-round-budget,
+ opsx-workflow-schema.review-budget-mode-front-matter)
 
 **Disclosure round (max 1 per change).** WHEN verdicts split (≥1 pass + ≥1 fail on
 the same HEAD) for 2 consecutive rounds, or a stop fires while a split is present:
@@ -230,8 +268,10 @@ fall back to the session/default model — never hard-fail.
 - `opsx gate` exits 0 → ready to archive (the loop does not itself archive).
 - Budget exhausted → stop, preserve worktree, report remaining failures.
 - A clarify blocker or adversarial 🔴-tier decision needing the owner → pause and ask.
-- Review convergence stop (treadmill/budget) with open P0/P1 → decision-audit
-  landing (see Review convergence); the loop halts until the user rules.
+- Review convergence stop (thrash guard / hard cap — or treadmill/budget under
+  `land-on-stop`) with open P0/P1 → decision-audit landing (see Review
+  convergence); the loop halts until the user rules. Converging rounds with
+  fixes landing are NOT a stop — they continue autonomously.
 - ANY terminal landing that awaits a human ruling (decision audit, green report
   already presented, blocked state) → set `loop_hold` + reason on the
   integration-checkout review.md instead of relying on prose or stall burn;
