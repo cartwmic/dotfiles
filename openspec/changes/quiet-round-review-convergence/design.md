@@ -11,16 +11,29 @@ Decisions for Q1–Q4, traced to the frozen intent and the clarify resolutions
 analyze-type rounds), the orchestrator evaluates IN ORDER, from four
 deterministic inputs only — the round ledger's per-round consolidated P0+P1
 counts (max across reviewers), the ledger's per-round reviewed HEADs, the
-current HEAD of the **reviewed checkout** (worktree HEAD for post-apply
-rounds; integration-checkout HEAD for analyze-type rounds, which run
-pre-apply with no worktree — analyze F3), and `review_max_rounds`
-(+ `review_budget_mode`):
+**change-scoped progress signal**, and `review_max_rounds`
+(+ `review_budget_mode`). The progress signal is per round type (analyze F3,
+R2-B2):
+
+- **Post-apply rounds:** reviewed worktree branch HEAD moved past the
+  round's reviewed HEAD. Honest because verdict/ledger seals land on the
+  INTEGRATION checkout (Verdict Freshness already forbids staling the sealed
+  range) — only implementation fix commits move the worktree branch. That
+  invariant is now spec'd ("Post-apply seals stay off the reviewed branch").
+- **Analyze-type rounds (pre-apply, no worktree):** ≥1 commit in
+  `reviewedHEAD..HEAD` touching `openspec/changes/<change>/**` through paths
+  OTHER than the round-ledger artifact. Raw integration HEAD is dishonest
+  here — ledger-seal commits and sibling-change commits on the shared main
+  branch move it without any finding being fixed, which would make analyze
+  rounds always-converging and disable the thrash guard (R2-B2). Git
+  plumbing: `git log --name-only` over the range, filtered to the change
+  dir minus the ledger file — deterministic, model-free.
 
 | # | Condition | Predicate | Action |
 |---|---|---|---|
 | a | quiet round | latest round P0+P1 == 0 | seal `Verdict: pass`, stop |
-| b | converging | P0+P1 > 0 AND current HEAD ≠ latest reviewed HEAD AND completed rounds < cap | fix, dispatch next round, NO ruling |
-| c | thrash guard | P0+P1 > 0 AND current HEAD == latest reviewed HEAD | disclosure/landing |
+| b | converging | P0+P1 > 0 AND progress signal holds AND completed rounds < cap | dispatch next round, NO ruling |
+| c | thrash guard | P0+P1 > 0 AND progress signal does NOT hold | disclosure/landing |
 | d | hard cap | completed rounds ≥ cap | disclosure/landing |
 
 The (b) guard `rounds < cap` is load-bearing (clarify I1): without it,

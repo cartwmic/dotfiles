@@ -94,4 +94,4 @@ evidence shows the widening is REQUIRED to meet the frozen intent's outcomes
 surfaced to the user at the decision-audit landing or gate-green. Out-of-scope
 findings NOT required for the intent route to follow-ups.md instead. -->
 
-- (none yet)
+- 2026-07-03 — opsx-cli `Unified Subcommand Dispatch` enumeration widened from adding only `sweep` to restating the full deployed set (`gate models status archive-check loop worktree clean sweep`) — evidence: analyze R2-B1 — the live enumeration (`gate|models|loop`) already contradicts sibling live requirements (Worktree Lifecycle Commands, Status Fleet View) and the deployed dispatcher (executable_opsx case arms); adding `sweep` to a stale enumeration would ship a delta that mandates rejecting subcommands other live requirements mandate accepting. Frozen intent Q2 requires the sweep subcommand; a coherent dispatch requirement is a precondition of that outcome.

@@ -207,6 +207,7 @@ BLOCKED (1 blocker)
 | Round | Mode | P0+P1 (consolidated) | Verdict | Reviewed HEAD |
 |---|---|---|---|---|
 | 1 | blind | 4 (F1 blocker + F2/F3/F4 majors) | BLOCKED | 03bc118 |
+| 2 | blind | 2 (R2-B1, R2-B2 blockers) | BLOCKED | f45dabf |
 
 ## Resolution Log (orchestrator, post-round-1)
 
@@ -232,3 +233,32 @@ BLOCKED (1 blocker)
   intentional autonomy default in D2 + D5 audit table (audit must not flag).
 
 Round 2 (blind confirmation) required before tasks generation.
+
+## Resolution Log (orchestrator, post-round-2)
+
+Round 2 report: /tmp/qrrc-analyze-r2.md (blind, fresh reviewer; verified all
+round-1 resolutions hold as non-findings). 2 NEW blockers, 0 majors:
+
+- **R2-B1 (blocker):** ADDED `opsx sweep` contradicted the untouched live
+  `Unified Subcommand Dispatch` enumeration (`gate|models|loop` + reject-others
+  scenario). Resolved: MODIFIED delta restating the requirement with the full
+  deployed dispatch set + `sweep`; unknown-subcommand scenario made
+  enumeration-relative; `Sweep dispatches` scenario added. The widening beyond
+  `sweep` (stale enumeration vs deployed `status`/`worktree`/`clean`/
+  `archive-check` arms) is logged in review.md Scope Expansions with evidence.
+  Proposal Impact row updated.
+- **R2-B2 (blocker):** analyze-round progress signal (raw integration HEAD)
+  was always-converging — ledger-seal + sibling-change commits on shared main
+  move HEAD without fixes, disabling the thrash guard for analyze rounds
+  (violates the frozen-intent crypt-log constraint). Resolved: progress signal
+  redefined change-scoped — analyze rounds require a commit in
+  reviewedHEAD..HEAD touching the change dir through paths OTHER than the
+  round-ledger artifact; scenarios "Ledger seals never count as progress" +
+  "Analyze-type rounds measure change-scoped fix commits" added. Post-apply
+  invariant spec'd: verdict/ledger seals land on the integration checkout,
+  never the reviewed worktree branch ("Post-apply seals stay off the reviewed
+  branch"). Design D1 rewritten to match.
+- **R2 minor (unnumbered, report §2 tail):** seals-off-reviewed-branch
+  invariant "nowhere stated" — same fix as R2-B2 third scenario; recorded.
+
+Round 3 (blind confirmation) required before tasks generation.

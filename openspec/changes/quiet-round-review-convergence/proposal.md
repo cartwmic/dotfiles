@@ -117,7 +117,7 @@ free-writing verdict artifacts.
 |---|---|
 | `openspec/specs/opsx-adversarial-review/spec.md` | Q1 stop-condition requirement rewritten (delta) |
 | `openspec/specs/opsx-workflow-schema/spec.md` | Q1 mode key; Q2 declaration format; Q4 template row (delta) |
-| `openspec/specs/opsx-cli/spec.md` | Q2 sweep subcommand; Q4 usage dedup (delta) |
+| `openspec/specs/opsx-cli/spec.md` | Q2 sweep subcommand + Unified Subcommand Dispatch enumeration extended (reconciled with deployed set); Q4 usage dedup (delta) |
 | `openspec/specs/opsx-gate-enforcement/spec.md` | Q2/Q4 gate-side checks as needed (delta) |
 | `openspec/specs/opsx-skill-integration/spec.md` | Q1 cycle prose, Q2 trigger, Q3 templates directive (delta) |
 | `dot_local/bin/executable_opsx` | Q2 validator; Q4 usage dedup + fail-open audit |

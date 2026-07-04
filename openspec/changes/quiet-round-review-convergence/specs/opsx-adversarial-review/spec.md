@@ -4,14 +4,14 @@
 
 ### Requirement: Trajectory Stop And Round Budget
 
-THE orchestration SHALL evaluate the following conditions IN ORDER after each completed gating review round (post-apply code-review rounds AND analyze-type gating rounds), before dispatching another, WHERE the progress signal is the HEAD of the checkout the round reviewed — the worktree HEAD for post-apply code-review rounds, the integration-checkout HEAD for analyze-type gating rounds: (a) **quiet round** — the latest round's consolidated P0+P1 count (max across reviewers) is zero → seal `Verdict: pass` and stop dispatching rounds (converged); (b) **converging** — open P0/P1 findings remain AND the reviewed checkout's HEAD has moved past the latest round's reviewed HEAD (fix commits landed in response) AND the completed round count is below `review_max_rounds` → dispatch the next round autonomously, with NO human ruling required; (c) **thrash guard** — open P0/P1 findings remain AND the reviewed checkout's HEAD equals the latest round's reviewed HEAD (no fix commits landed) → stop dispatching and route to the split-verdict and decision-audit handling; (d) **hard cap** — the number of completed rounds has reached the `review_max_rounds` budget (review.md front-matter, default 5 when absent) → stop dispatching and route to the split-verdict and decision-audit handling regardless of trajectory. After a round concludes with open P0/P1 findings the orchestration SHALL attempt and land the fix commits for those findings BEFORE evaluating conditions (b)/(c) — a thrash-guard stop therefore signifies that no fix commit could be landed in response to the round, never merely that findings exist immediately after it concluded. All conditions SHALL be computed from per-round severity counts and the round ledger's reviewed-HEAD entries only — NO cross-round finding-identity matching of any kind. A converging continuation under (b) selects the next round's TYPE through the unchanged Disclosure Round requirement — WHEN that requirement's disclosure trigger has fired the autonomously dispatched round SHALL be the single disclosure round, otherwise a blind round; the quiet-round evaluation governs only WHETHER the loop continues, never whether a dispatched round is blind. WHERE review.md front-matter sets `review_budget_mode: land-on-stop`, the pre-existing behavior governs instead: a flat-or-rising P0+P1 count across the two most recent consecutive rounds, or budget exhaustion, stops the rounds and routes to disclosure/landing. Under either mode a stop SHALL, WHILE open P0/P1 findings remain, route to the split-verdict and decision-audit handling rather than sealing a pass — WHEN the stopping round already carries zero open P0/P1, condition (a) governs and the verdict is sealed as pass.
+THE orchestration SHALL evaluate the following conditions IN ORDER after each completed gating review round (post-apply code-review rounds AND analyze-type gating rounds), before dispatching another, WHERE the progress signal is change-scoped: for post-apply code-review rounds, the reviewed worktree branch's HEAD having moved past the round's reviewed HEAD (verdict and ledger seals SHALL land on the integration checkout, never on the reviewed worktree branch, so only implementation fix commits move it); for analyze-type gating rounds (pre-apply, no worktree), the existence of at least one commit since the round's reviewed HEAD that touches the change directory through paths OTHER than the round-ledger artifact itself — so ledger-seal-only commits and sibling-change commits on the shared integration branch never register as progress: (a) **quiet round** — the latest round's consolidated P0+P1 count (max across reviewers) is zero → seal `Verdict: pass` and stop dispatching rounds (converged); (b) **converging** — open P0/P1 findings remain AND the change-scoped progress signal holds (fix commits landed in response) AND the completed round count is below `review_max_rounds` → dispatch the next round autonomously, with NO human ruling required; (c) **thrash guard** — open P0/P1 findings remain AND the change-scoped progress signal does not hold (no fix commits landed) → stop dispatching and route to the split-verdict and decision-audit handling; (d) **hard cap** — the number of completed rounds has reached the `review_max_rounds` budget (review.md front-matter, default 5 when absent) → stop dispatching and route to the split-verdict and decision-audit handling regardless of trajectory. After a round concludes with open P0/P1 findings the orchestration SHALL attempt and land the fix commits for those findings BEFORE evaluating conditions (b)/(c) — a thrash-guard stop therefore signifies that no fix commit could be landed in response to the round, never merely that findings exist immediately after it concluded. All conditions SHALL be computed from per-round severity counts and the round ledger's reviewed-HEAD entries only — NO cross-round finding-identity matching of any kind. A converging continuation under (b) selects the next round's TYPE through the unchanged Disclosure Round requirement — WHEN that requirement's disclosure trigger has fired the autonomously dispatched round SHALL be the single disclosure round, otherwise a blind round; the quiet-round evaluation governs only WHETHER the loop continues, never whether a dispatched round is blind. WHERE review.md front-matter sets `review_budget_mode: land-on-stop`, the pre-existing behavior governs instead: a flat-or-rising P0+P1 count across the two most recent consecutive rounds, or budget exhaustion, stops the rounds and routes to disclosure/landing. Under either mode a stop SHALL, WHILE open P0/P1 findings remain, route to the split-verdict and decision-audit handling rather than sealing a pass — WHEN the stopping round already carries zero open P0/P1, condition (a) governs and the verdict is sealed as pass.
 
 #### Scenario: Quiet round stops the rounds
 - **WHEN** a round concludes with zero open P0/P1 findings across all reviewers
 - **THEN** no further blind rounds SHALL be dispatched and the verdict SHALL be sealed as pass
 
 #### Scenario: Converging rounds continue autonomously
-- **WHEN** a round concludes with open P0/P1 findings and fix commits have subsequently landed (the reviewed checkout's HEAD moved past that round's reviewed HEAD)
+- **WHEN** a round concludes with open P0/P1 findings and fix commits have subsequently landed (the change-scoped progress signal holds)
 - **WHILE** the completed round count is below review_max_rounds
 - **THEN** the orchestration SHALL dispatch the next blind round without landing for a human ruling
 
@@ -20,13 +20,21 @@ THE orchestration SHALL evaluate the following conditions IN ORDER after each co
 - **THEN** the orchestration SHALL attempt and commit the fixes for those findings BEFORE evaluating the converging/thrash conditions, so the thrash guard measures a failure to land fixes rather than the mere presence of findings
 
 #### Scenario: Thrash guard lands for a ruling
-- **IF** a round concluded with open P0/P1 findings and the reviewed checkout's HEAD still equals that round's reviewed HEAD when the next dispatch is evaluated (the fix attempt landed nothing)
+- **IF** a round concluded with open P0/P1 findings and the change-scoped progress signal does not hold when the next dispatch is evaluated (the fix attempt landed nothing)
 - **THEN** the orchestration SHALL stop dispatching blind rounds and proceed to disclosure/landing handling
 
-#### Scenario: Analyze-type rounds use the integration HEAD
+#### Scenario: Analyze-type rounds measure change-scoped fix commits
 - **WHILE** the gating rounds are analyze-type (pre-apply, no worktree exists)
 - **WHEN** the continuation/stop conditions are evaluated
-- **THEN** the progress signal SHALL be the integration-checkout HEAD, so analyze rounds converge under the same quiet-round semantics rather than degenerating to an always-thrash stop
+- **THEN** the progress signal SHALL be the existence of a commit since the round's reviewed HEAD touching the change directory through paths other than the round-ledger artifact, so analyze rounds converge under quiet-round semantics without ledger-seal or sibling-change commits on the shared integration branch masquerading as progress
+
+#### Scenario: Ledger seals never count as progress
+- **IF** the only commits since an analyze round's reviewed HEAD are round-ledger seals or commits from other changes
+- **THEN** the progress signal SHALL NOT hold and the thrash guard SHALL land the round for a human ruling
+
+#### Scenario: Post-apply seals stay off the reviewed branch
+- **WHEN** a post-apply round's verdict or ledger row is sealed
+- **THEN** the seal commit SHALL land on the integration checkout, not the reviewed worktree branch, preserving the worktree HEAD as an honest fix-only progress signal
 
 #### Scenario: Hard cap lands regardless of trajectory
 - **WHEN** the completed round count reaches review_max_rounds
@@ -38,7 +46,7 @@ THE orchestration SHALL evaluate the following conditions IN ORDER after each co
 
 #### Scenario: Determinism preserved
 - **WHEN** any continuation/stop condition is evaluated
-- **THEN** the inputs SHALL be limited to per-round consolidated severity counts, ledger reviewed-HEAD values, the current HEAD of the reviewed checkout, and review_max_rounds — never semantic matching of findings across rounds
+- **THEN** the inputs SHALL be limited to per-round consolidated severity counts, ledger reviewed-HEAD values, the change-scoped progress signal (git plumbing over commit ranges and touched paths), and review_max_rounds — never semantic matching of findings across rounds
 
 #### Scenario: Opt-in legacy mode restores land-on-stop
 - **WHERE** review.md front-matter sets `review_budget_mode: land-on-stop`
