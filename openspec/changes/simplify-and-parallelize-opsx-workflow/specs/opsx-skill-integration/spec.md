@@ -26,7 +26,7 @@ The `openspec-propose` skill at `dot_local/share/agent-harness/canonical/skills/
 
 #### Scenario: Scale-driven skipping
 - **WHEN** Scale is declared `XS` and the user invokes openspec-propose
-- **THEN** the skill SHALL skip authoring `specs`, `clarify`, `design`, `adr`, `analyze`, `review`, `plan`, `verify`, and `retrospective`, producing only `proposal.md` and `tasks.md`
+- **THEN** the skill SHALL skip authoring `specs`, `clarify`, `design`, `adr`, `analyze`, `plan`, `verify`, and `retrospective`, producing `review.md` (the mode switchboard — never skipped at any Scale) plus `proposal.md` and `tasks.md`
 
 #### Scenario: Schema-only fallback when Superpowers absent
 - **WHEN** the skill cannot resolve a referenced Superpowers-style capability skill (e.g., `verification-before-completion`)

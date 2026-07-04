@@ -6,7 +6,7 @@ worktree_mode: worktree-required
 execution_mode: standard
 verification_mode: retained-required
 debug_mode: standard
-review_status: in-review
+review_status: resolved
 loop_hold: true
 loop_hold_reason: "GATE GREEN at b52aec2 (both views) — round 8 converged (opus + sonnet-5 both pass, 0 P0/P1); terminal landing, awaiting human archive ruling"
 delegation_mode: single-agent
@@ -30,7 +30,7 @@ review_models: [claude-bridge/claude-opus-4-8, claude-bridge/claude-sonnet-5]
 | Execution Mode | standard | Ordered migration steps carrying existing test suites; not TDD micro-tasks |
 | Verification Mode | retained-required | Code change at Scale XL; AC↔test gate must be sealed |
 | Debug Mode | standard | — |
-| Review Status | in-review | 5 rounds complete; decision-audit landing (see worktree code-review.md) |
+| Review Status | resolved | Round 8 converged (opus + sonnet-5 pass, 0 P0/P1); 8-round ledger sealed in code-review.md |
 | Delegation Mode | single-agent | Single orchestrator; blind subagents for review/doneness verdicts only |
 | Code Review Mode | gating-required | Constitution IX: edits existing skills (openspec-loop, openspec-propose, openspec-apply-change references, openspec-archive-change) → adversarial multi-model review mandatory |
 | Loop Budget | 80 | XL-scale schema surgery; L/XL budget tier |

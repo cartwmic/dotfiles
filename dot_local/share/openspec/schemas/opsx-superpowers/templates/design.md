@@ -17,7 +17,7 @@ Cite specific constitution principles and domain invariants the design respects.
 Each Decision is an ADR CANDIDATE. Apply the 4-point test:
   1. Multiple viable approaches?  2. Lasting consequences?
   3. Reasonable engineers disagree?  4. Constrains future options?
-Decisions passing ≥3 of 4 SHOULD become ADRs (Scale ≥ L: mandatory).
+Decisions passing ≥3 of 4 SHOULD become ADRs (mandatory at full_rigor).
 -->
 
 ### D1: <decision title>

@@ -57,7 +57,7 @@ When ready to implement, run /opsx-apply
    ```
    Parse `schemaName`. Log clearly which path will execute:
 
-   - If `schemaName == "opsx-superpowers"`: follow the alternate procedure documented at `~/.pi/agent/skills/openspec-propose/references/opsx-superpowers-mode.md` (loaded as needed). This adds: up-front Scale + Spec Level prompt, EARS-pattern picker for specs, clarify-spec invocation before design, analyze cross-check before tasks, adversarial-review-cycle invocation at Scale ≥ L. Then the artifact loop below proceeds with the schema's declared graph.
+   - If `schemaName == "opsx-superpowers"`: follow the alternate procedure documented at `~/.pi/agent/skills/openspec-propose/references/opsx-superpowers-mode.md` (loaded as needed). This adds: up-front Scale (`XS\|S\|M` + optional `full_rigor`) + Spec Level prompt, EARS-pattern picker for specs, clarify-spec invocation before design (at plain M the clarify open questions fold into `proposal.md ## Open Questions` and analyze is deterministic-only), analyze cross-check before tasks, adversarial-review-cycle invocation when `full_rigor: true`. Then the artifact loop below proceeds with the schema's declared graph.
 
    - If `schemaName == "spec-driven"` (default) or anything else: log "[feature off] running default flow" and proceed with the existing steps unchanged below.
 

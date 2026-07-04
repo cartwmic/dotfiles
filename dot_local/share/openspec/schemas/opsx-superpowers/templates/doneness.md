@@ -2,9 +2,21 @@
 Doneness verdict — the SEALED intent-satisfaction judgment opsx gate reads.
 
 Skill-managed (NOT in the schema artifact graph) — produced by the openspec-loop
-orchestration AFTER the mechanical gate checks pass, authored by an independent BLIND
-doneness SUBAGENT on the resolved `review` role model (never self-authored by the
-orchestrator). The gate reads these fields verbatim; it runs NO language model.
+orchestration AFTER the mechanical gate checks pass, authored by a BLIND reviewer/judge
+SUBAGENT on the resolved `review` role model (never self-authored by the orchestrator).
+The gate reads these fields verbatim; it runs NO language model.
+
+DISPATCH CHANNEL is tier-conditioned (the doneness ARTIFACT and its fields are identical
+either way — only who produces it differs):
+  - plain Scale M (no full_rigor): COMBINED dispatch. The doneness question rides the
+    blind code-review dispatch as a dedicated final required section, answered by the
+    DESIGNATED reviewer = the FIRST model in the resolved `review` role set (so exactly
+    one verdict is sealed even with multiple reviewers). No separate doneness dispatch.
+    The verdict is STILL sealed to THIS separate `doneness.md` with `review_mode:
+    blind-single-judge`.
+  - Scale M + full_rigor: INDEPENDENT dispatch. A separate blind doneness judge subagent
+    (distinct from the code-review reviewers) on the `review` role model produces the
+    verdict — the current top-tier behavior.
 
 opsx gate reads (required WHILE Scale >= M and review.md `doneness_mode: required`):
   - Doneness            satisfied | not      (gating: not/absent => failed check)

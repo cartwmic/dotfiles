@@ -165,7 +165,7 @@ artifacts:
       Read openspec/constitution.md and openspec/domain.md; cite
       principles and invariants the design respects.
 
-      Sections (~150 lines for M; more for L/XL):
+      Sections (~150 lines for M):
         - Context
         - Goals / Non-Goals
         - Decisions (numbered D1, D2, …; Choice + Alternatives +
@@ -183,8 +183,8 @@ artifacts:
       Decisions passing ≥3 of 4 SHOULD become ADRs.
 
       ADR PROMOTION IS A SKILL RESPONSIBILITY, NOT A SCHEMA ARTIFACT.
-      At Scale ≥ L, the openspec-archive-change skill checks each
-      design Decision against the 4-point test and offers to promote
+      When full_rigor is set, the openspec-archive-change skill checks
+      each design Decision against the 4-point test and offers to promote
       qualifying decisions to <repo>/adr/ADR-NNNN-<slug>.md before
       archive. The schema templates/adr.md provides the MADR 4.0
       short form the skill uses.
@@ -250,7 +250,7 @@ artifacts:
       7. Unresolved clarify findings — clarify.md findings with
          status != answered (deferred or unanswered).
 
-      CAPABILITY HOOK: when Scale ≥ L, invoke `adversarial-review`
+      CAPABILITY HOOK: when full_rigor is set, invoke `adversarial-review`
       capability instead of single-model self-review. Record
       round-by-round findings as appendices.
 
@@ -270,7 +270,7 @@ artifacts:
 
       Required modes (default in parentheses):
 
-        Scale:             XS | S | M | L | XL  (default: S)
+        Scale:             XS | S | M  (default: S)
         Execution Mode:    standard | tdd-preferred | tdd-required
                            (default: standard)
         Verification Mode: inline-only | retained-recommended |
@@ -286,14 +286,16 @@ artifacts:
                            — dispatch via the subagent-dispatch capability
                            hook (pi-subagents is the pi adapter)
         Worktree Mode:     worktree-required | worktree-eligible |
-                           same-tree (default: worktree-required, ALL Scales;
-                           same-tree is an explicit override)
+                           same-tree (default DERIVED by tier when absent:
+                           XS/S ⇒ same-tree, M ⇒ worktree-required; an
+                           explicit value always wins — design D6)
         Code Review Mode:  none | advisory | gating-required
                            (default: gating-required at Scale >= M, else
                            advisory) — gating-required blocks archive on
                            code-review.md Verdict
-        Loop Max Iterations: integer budget (S~20 / M~40 / L~80); mapped
-                           onto the loop runtime turn budget
+        Loop Max Iterations: integer budget (XS~10 / S~20 / M~40 /
+                           M+full_rigor~80); mapped onto the loop runtime
+                           turn budget
         Validation Source Mode: required | waived (default: required) —
                            waived (with rationale) lets Scale >= M pass with
                            no agent-independent validation source
@@ -320,8 +322,9 @@ artifacts:
         author_in_session                         — boolean (default true)
         provider / author_provider / review_provider / impl_provider
       A value containing "/" is a complete pi model id used verbatim; a bare id
-      is qualified by the provider keys. These layer above project
-      openspec/opsx-models.yaml and user ~/.config/opsx/models.yaml; unset roles
+      is qualified by the provider keys. These layer above the user
+      ~/.config/opsx/models.yaml (the project openspec/opsx-models.yaml layer is
+      RETIRED and ignored with a warning); unset roles
       fall back to the session model. opsx gate enforces an in-session authoring
       marker only when the `author` role is configured.
       (opsx-workflow-schema.review-front-matter-carries-role-models;
@@ -337,7 +340,10 @@ artifacts:
         Manual Adjustments — author overrides to defaults
         Execution Notes    — transient observations during apply
 
-      Scale = XS: skip (defaults assumed).
+      review.md is NEVER skipped at ANY Scale (XS included): it is the
+      Scale/mode source the deterministic gate reads FIRST and fails closed
+      without — a change with no parseable Scale is ungateable. At XS the
+      switchboard may be minimal (Scale + derived defaults), but it exists.
 
   # 7. tasks — Per-task file contracts + intent fields
   - id: tasks
@@ -534,8 +540,8 @@ apply:
                     decisions to <repo>/adr/ADR-NNNN-<slug>.md
                     using templates/adr.md.
 
-      retrospective.md — at Scale = XL (required) or L (optional),
-                    openspec-archive-change prompts the user to
+      retrospective.md — when full_rigor is set (required; the former
+                    L/XL), openspec-archive-change prompts the user to
                     author retrospective.md from
                     templates/retrospective.md. Parses
                     Promote-candidates and offers per-row
@@ -544,19 +550,29 @@ apply:
 
       doneness.md — WHILE a doneness verdict is required (Scale >= M
                     and review.md `doneness_mode: required`), the
-                    openspec-loop orchestration dispatches an
-                    independent BLIND doneness subagent on the
-                    resolved `review` role AFTER the mechanical gate
-                    checks pass, and seals its verdict into
-                    doneness.md from templates/doneness.md (Doneness
-                    satisfied|not + Gaps + adapter-stamped Judge
-                    provenance + Frozen-Intent SHA + Diff Base SHA +
-                    Reviewed Range). opsx gate READS the sealed
-                    fields (no model in the gate) and enforces the
-                    verdict as the sole remaining failure. A bare
-                    `doneness_mode: waived` (no non-empty
-                    doneness_waiver_rationale) fails the gate at
-                    Scale >= M.
+                    openspec-loop orchestration produces a blind
+                    doneness verdict on the resolved `review` role
+                    AFTER the mechanical gate checks pass and seals
+                    it into doneness.md from templates/doneness.md
+                    (Doneness satisfied|not + Gaps + adapter-stamped
+                    Judge provenance + Frozen-Intent SHA + Diff Base
+                    SHA + Reviewed Range). The DISPATCH CHANNEL is
+                    tier-conditioned (design D4; intent B1): at Scale
+                    M WITHOUT full_rigor the doneness question RIDES
+                    the blind code-review dispatch — answered by the
+                    DESIGNATED reviewer (the FIRST model in the
+                    resolved `review` role) as a mandatory final
+                    required section, no separate dispatch — with the
+                    verdict STILL sealed to a SEPARATE doneness.md
+                    stamped `review_mode: blind-single-judge`; WITH
+                    full_rigor an INDEPENDENTLY dispatched blind
+                    doneness judge (a subagent separate from the
+                    code-review reviewers) produces it. In either
+                    case opsx gate READS the sealed fields (no model
+                    in the gate) and enforces the verdict as the sole
+                    remaining failure. A bare `doneness_mode: waived`
+                    (no non-empty doneness_waiver_rationale) fails
+                    the gate at Scale >= M.
                     (opsx-workflow-schema.artifact-graph-definition;
                      opsx-workflow-schema.mode-switchboard-in-review-md)
 

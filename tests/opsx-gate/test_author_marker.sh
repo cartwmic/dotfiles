@@ -30,8 +30,11 @@ build() {
 	rm -rf "$TMP/proj"; local P="$TMP/proj"
 	mkdir -p "$P/openspec/changes/$CH/specs/cap"
 	( cd "$P"; git init -q; git config user.email t@t; git config user.name t )
-	printf '%s\n' "$1" >"$P/openspec/opsx-models.yaml"
-	{ echo '---'; echo 'scale: L'; echo 'worktree_mode: same-tree'; [ -n "${3:-}" ] && echo "$3"; echo '---'; echo '# Review'; } >"$P/openspec/changes/$CH/review.md"
+	# Author role is pinned in review.md front-matter (change layer). The former
+	# project layer openspec/opsx-models.yaml is RETIRED (design D7) and ignored
+	# by the resolver, so fixtures must pin per-change front-matter instead.
+	# scale: M — valid post-collapse tier (was scale: L, now retired vocabulary).
+	{ echo '---'; echo 'scale: M'; echo 'worktree_mode: same-tree'; echo 'validation_source_mode: waived'; echo 'doneness_mode: waived'; echo 'doneness_waiver_rationale: "test fixture"'; printf '%s\n' "$1"; [ -n "${3:-}" ] && echo "$3"; echo '---'; echo '# Review'; } >"$P/openspec/changes/$CH/review.md"
 	local marker=""; [ "$2" = marked ] && marker='<!-- authored: in-session -->'
 	for a in proposal intent design clarify tasks plan; do
 		printf '# %s\n%s\n' "$a" "$marker" >"$P/openspec/changes/$CH/$a.md"
@@ -44,19 +47,19 @@ run_gate() { # cwd=proj
 }
 
 # 1. author configured + missing marker => GATE-FAIL author-marker
-P="$(build 'author: claude-bridge/claude-opus-4-8' unmarked)"
+P="$(build 'author_model: claude-bridge/claude-opus-4-8' unmarked)"
 if run_gate "$P" | grep -q 'GATE-FAIL author-marker'; then ok "configured author + missing marker fails (in-session-authoring-marker-check)"; else nok "configured+missing should fail"; fi
 
 # 2. author configured + marker present in all artifacts => no author-marker failure
-P="$(build 'author: claude-bridge/claude-opus-4-8' marked)"
+P="$(build 'author_model: claude-bridge/claude-opus-4-8' marked)"
 if run_gate "$P" | grep -q 'author-marker'; then nok "configured+marked should not fail marker"; else ok "configured author + marker present passes marker check (author-in-session-by-default)"; fi
 
 # 3. author UNCONFIGURED => marker check skipped
-P="$(build '# no roles configured' unmarked)"
+P="$(build '# author_model: (none configured)' unmarked)"
 if run_gate "$P" | grep -q 'author-marker'; then nok "unconfigured author should skip"; else ok "unconfigured author skips marker check (in-session-authoring-marker-check)"; fi
 
 # 4. author configured but author_in_session=false => skipped
-P="$(build 'author: claude-bridge/claude-opus-4-8' unmarked 'author_in_session: false')"
+P="$(build 'author_model: claude-bridge/claude-opus-4-8' unmarked 'author_in_session: false')"
 if run_gate "$P" | grep -q 'author-marker'; then nok "author_in_session:false should skip"; else ok "author_in_session false skips marker check (author-in-session-by-default)"; fi
 
 echo "-----"
