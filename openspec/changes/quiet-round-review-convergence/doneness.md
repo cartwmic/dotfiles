@@ -6,7 +6,7 @@
 **review_mode:** blind-single-judge
 **Frozen-Intent SHA:** 7c740251b43f480beeaa4a635071f8d37878d1250e2a649c8bac191b38943944
 **Diff Base SHA:** 3e3acf965eb7e9bbdfc62f51163583fad07c508e
-**Reviewed Range:** 3e3acf9..660e734
+**Reviewed Range:** 3e3acf9..616973c
 
 <!-- Generated 2026-07-04. Frozen intent SHA recomputed on intent.md in the
      worktree = 7c740251...3944 (matches; intent.md absent from the diff).
