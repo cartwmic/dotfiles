@@ -5,7 +5,7 @@ TBD - created by archiving change simplify-and-parallelize-opsx-workflow. Update
 ## Requirements
 ### Requirement: M-Tier Review Stack Thinning
 
-THE adversarial-review stack SHALL be tier-conditioned by the `full_rigor` review.md front-matter flag WITHOUT weakening the 2-model blind adversarial code review at any tier: at Scale M WITHOUT `full_rigor`, clarify SHALL NOT be a standalone gating artifact (its open questions live in the proposal's `## Open Questions` section), analyze SHALL run only its deterministic checks (NO separate blind analyze dispatch), and the doneness verdict SHALL be produced within the blind code-review dispatch (the same blind reviewer, as a dedicated final required section) yet STILL sealed to a separate `doneness.md`; WITH `full_rigor` the full independent stack SHALL be required (a standalone blind clarify, a blind analyze dispatch, and an independently dispatched blind doneness judge). At every tier the code-review verdict contract, severity rubric, round ledger, trajectory/budget stop, disclosure round, `review_max_rounds`, and freshness/provenance binding SHALL be unchanged.
+THE adversarial-review stack SHALL be tier-conditioned by the `full_rigor` review.md front-matter flag WITHOUT weakening the 2-model blind adversarial code review at any tier: at Scale M WITHOUT `full_rigor`, clarify SHALL NOT be a standalone gating artifact (its open questions live in the proposal's `## Open Questions` section), analyze SHALL run only its deterministic checks (NO separate blind analyze dispatch), and the doneness verdict SHALL be produced within the blind code-review dispatch (the same blind reviewer, as a dedicated final required section) yet STILL sealed to a separate `doneness.md`; WITH `full_rigor` the full independent stack SHALL be required (a standalone blind clarify, a blind analyze dispatch, and an independently dispatched blind doneness judge). At every tier the code-review verdict contract, severity rubric, round ledger, review-convergence stop discipline (quiet-round default with the `review_budget_mode: land-on-stop` opt-in), disclosure round, `review_max_rounds`, and freshness/provenance binding SHALL be unchanged.
 
 #### Scenario: Plain M folds clarify, analyze, and doneness
 - **WHILE** a change is Scale M and its review.md front-matter does NOT set `full_rigor: true`
@@ -19,7 +19,7 @@ THE adversarial-review stack SHALL be tier-conditioned by the `full_rigor` revie
 
 #### Scenario: Code-review rigor is never reduced by thinning
 - **WHEN** the stack thins at plain Scale M
-- **THEN** the 2-model blind adversarial code review SHALL remain gating-required with its verdict contract, severity rubric, round ledger, trajectory/budget stop, disclosure round, and freshness/provenance binding all unchanged
+- **THEN** the 2-model blind adversarial code review SHALL remain gating-required with its verdict contract, severity rubric, round ledger, review-convergence stop discipline, disclosure round, and freshness/provenance binding all unchanged
 
 ### Requirement: Baseline Bounded Verdict Contract
 
@@ -79,27 +79,41 @@ THE orchestrator SHALL maintain a per-review-type round ledger — round number,
 
 ### Requirement: Trajectory Stop And Round Budget
 
-THE orchestration SHALL stop dispatching further blind gating review rounds when any of the following holds: (a) the latest round's P0+P1 count is zero (converged); (b) the P0+P1 count of the two most recent consecutive rounds is flat or rising (treadmill); or (c) the number of completed rounds has reached the `review_max_rounds` budget (review.md front-matter, default 5 when absent), and a stop under (b) or (c) SHALL, WHILE open P0/P1 findings remain, route to the split-verdict and decision-audit handling rather than sealing a pass — WHEN the stopping round already carries zero open P0/P1, condition (a) governs and the verdict is sealed as pass.
+THE orchestration SHALL evaluate the following conditions IN ORDER after each completed gating review round (post-apply code-review rounds AND analyze-type gating rounds), before dispatching another, WHERE the progress signal is change-scoped: for post-apply code-review rounds, the reviewed worktree branch's HEAD having moved past the round's reviewed HEAD (NO change-directory bookkeeping artifact — verdict artifacts, the round ledger, follow-ups.md, review.md, clarify.md — SHALL be committed on the reviewed worktree branch; they land on the integration checkout per the writeback-owner and path-scoped-commit disciplines, so only implementation fix commits move the reviewed branch); for analyze-type gating rounds (pre-apply, no worktree), the existence of at least one commit since the round's reviewed HEAD that touches the change's AUTHORED fix surfaces — `proposal.md`, `design.md`, `specs/**`, `tasks.md`, or `plan.md` under the change directory — WHERE orchestrator bookkeeping artifacts (the round-ledger artifact, `clarify.md`, `review.md`, `follow-ups.md`, and verdict artifacts) NEVER count as progress even when committed alongside a ledger seal, so ledger seals, finding-routing, note-logging, and sibling-change commits on the shared integration branch never register as progress: (a) **quiet round** — the latest round's consolidated P0+P1 count (max across reviewers) is zero → seal `Verdict: pass` and stop dispatching rounds (converged); (b) **converging** — open P0/P1 findings remain AND the change-scoped progress signal holds (fix commits landed in response) AND the completed round count is below `review_max_rounds` → dispatch the next round autonomously, with NO human ruling required; (c) **thrash guard** — open P0/P1 findings remain AND the change-scoped progress signal does not hold (no fix commits landed) → stop dispatching and route to the split-verdict and decision-audit handling; (d) **hard cap** — the number of completed rounds has reached the `review_max_rounds` budget (review.md front-matter, default 5 when absent) → stop dispatching and route to the split-verdict and decision-audit handling regardless of trajectory. After a round concludes with open P0/P1 findings the orchestration SHALL attempt and land the fix commits for those findings BEFORE evaluating conditions (b)/(c) — a thrash-guard stop therefore signifies that no fix commit could be landed in response to the round, never merely that findings exist immediately after it concluded. All conditions SHALL be computed from per-round severity counts and the round ledger's reviewed-HEAD entries only — NO cross-round finding-identity matching of any kind. A converging continuation under (b) selects the next round's TYPE through the unchanged Disclosure Round requirement — WHEN that requirement's disclosure trigger has fired the autonomously dispatched round SHALL be the single disclosure round, otherwise a blind round; the quiet-round evaluation governs only WHETHER the loop continues, never whether a dispatched round is blind. WHERE review.md front-matter sets `review_budget_mode: land-on-stop`, the pre-existing behavior governs instead: a flat-or-rising P0+P1 count across the two most recent consecutive rounds, or budget exhaustion, stops the rounds and routes to disclosure/landing. Under either mode a stop SHALL, WHILE open P0/P1 findings remain, route to the split-verdict and decision-audit handling rather than sealing a pass — WHEN the stopping round already carries zero open P0/P1, condition (a) governs and the verdict is sealed as pass.
 
-#### Scenario: Convergence stops the rounds
-- **WHEN** a round concludes with zero open P0/P1 findings
+#### Scenario: Quiet round stops the rounds
+- **WHEN** a round concludes with zero open P0/P1 findings across all reviewers
 - **THEN** no further blind rounds SHALL be dispatched and the verdict SHALL be sealed as pass
 
-#### Scenario: Flat trajectory trips the treadmill stop
-- **WHILE** the P0+P1 count of the two most recent consecutive rounds is flat or rising
+#### Scenario: Converging rounds continue autonomously
+- **WHEN** a round concludes with open P0/P1 findings and fix commits have subsequently landed (the change-scoped progress signal holds)
+- **WHILE** the completed round count is below review_max_rounds
+- **THEN** the orchestration SHALL dispatch the next blind round without landing for a human ruling
+
+#### Scenario: Fix lands before evaluation
+- **WHEN** a round concludes with open P0/P1 findings
+- **THEN** the orchestration SHALL attempt and commit the fixes for those findings BEFORE evaluating the converging/thrash conditions, so the thrash guard measures a failure to land fixes rather than the mere presence of findings
+
+#### Scenario: Thrash guard lands for a ruling
+- **IF** a round concluded with open P0/P1 findings and the change-scoped progress signal does not hold when the next dispatch is evaluated (the fix attempt landed nothing)
 - **THEN** the orchestration SHALL stop dispatching blind rounds and proceed to disclosure/landing handling
 
-#### Scenario: Budget exhaustion stops the rounds
-- **WHEN** the completed round count reaches review_max_rounds
-- **THEN** the orchestration SHALL stop dispatching blind rounds and proceed to disclosure/landing handling
+#### Scenario: Analyze-type rounds measure fix-surface commits
+- **WHILE** the gating rounds are analyze-type (pre-apply, no worktree exists)
+- **WHEN** the continuation/stop conditions are evaluated
+- **THEN** the progress signal SHALL be the existence of a commit since the round's reviewed HEAD touching the change's authored fix surfaces (proposal.md, design.md, specs/**, tasks.md, plan.md), so analyze rounds converge under quiet-round semantics without non-fix commits masquerading as progress
 
-#### Scenario: A stop never forges a green
-- **IF** a stop fires while P0/P1 findings remain open
-- **THEN** the verdict SHALL NOT be sealed as pass; the open findings SHALL flow to the decision-audit landing
+#### Scenario: Bookkeeping never counts as progress
+- **IF** the only commits since an analyze round's reviewed HEAD touch bookkeeping artifacts (the round ledger, clarify.md, review.md, follow-ups.md, verdict artifacts) or come from other changes
+- **THEN** the progress signal SHALL NOT hold and the thrash guard SHALL land the round for a human ruling — routing an out-of-scope finding to follow-ups.md or logging an Execution Note is not a fix
+
+#### Scenario: Post-apply bookkeeping stays off the reviewed branch
+- **WHEN** a post-apply round's verdict or ledger row is sealed, or any change-directory bookkeeping artifact (follow-ups.md, review.md, clarify.md) is written during a post-apply round
+- **THEN** the commit SHALL land on the integration checkout, not the reviewed worktree branch, preserving the worktree HEAD as an honest fix-only progress signal for the thrash guard
 
 ### Requirement: Disclosure Round
 
-WHEN reviewer verdicts on the same HEAD have split (at least one pass and one fail) for 2 consecutive rounds, or a trajectory/budget stop fires while a split is present, THE orchestration SHALL run exactly one non-blind disclosure round in which the same reviewers receive each other's findings and produce a joint findings set and verdict, marked `review_mode: disclosure-consensus`, and no more than one disclosure round SHALL run per change.
+WHEN reviewer verdicts on the same HEAD have split (at least one pass and one fail) for 2 consecutive rounds, or a stop under the thrash guard or hard cap — or, WHERE `review_budget_mode: land-on-stop` is set, a trajectory/budget stop — fires while a split is present, THE orchestration SHALL run exactly one non-blind disclosure round in which the same reviewers receive each other's findings and produce a joint findings set and verdict, marked `review_mode: disclosure-consensus`, and no more than one disclosure round SHALL run per change.
 
 #### Scenario: Persistent split triggers disclosure
 - **WHEN** the second consecutive split round completes
@@ -130,12 +144,32 @@ IF open P0/P1 findings remain after the stop conditions and any disclosure round
 - **THEN** the orchestration MAY resume review rounds with the ruling applied, and the round ledger SHALL continue (not reset)
 
 #### Scenario: A resume ruling extends the exhausted budget
-- **WHEN** the user's ruling directs further fixing and re-review after a trajectory or budget stop
+- **WHEN** the user's ruling directs further fixing and re-review after a hard-cap/budget stop (or, WHERE `review_budget_mode: land-on-stop` is set, a trajectory stop)
 - **THEN** the ruling SHALL grant a recorded round-budget extension (a ledger entry noting the new effective budget), so resumed rounds are dispatchable rather than immediately re-landing on the same exhausted stop condition
 
 #### Scenario: A user waiver clears the blocking set without a forced green
 - **WHEN** the user waives an open P0/P1 finding at the audit
 - **THEN** the finding SHALL be recorded as user-waived (routed to follow-ups.md with the waiver noted) and removed from the open P0/P1 set, so the severity floor's `pass` condition is satisfied by explicit human authorization rather than by the loop forcing a green verdict over a still-open blocker
+
+#### Scenario: Hard cap lands regardless of trajectory
+- **WHEN** the completed round count reaches review_max_rounds
+- **THEN** the orchestration SHALL stop dispatching blind rounds and proceed to disclosure/landing handling, even if fixes have been landing every round
+
+#### Scenario: Converging continuation respects the disclosure trigger
+- **WHEN** the converging condition holds and the Disclosure Round requirement's trigger (two consecutive split rounds) has fired
+- **THEN** the autonomously dispatched next round SHALL be the single disclosure round rather than a blind round, leaving the disclosure-round limit unchanged
+
+#### Scenario: Determinism preserved
+- **WHEN** any continuation/stop condition is evaluated
+- **THEN** the inputs SHALL be limited to per-round consolidated severity counts, ledger reviewed-HEAD values, the change-scoped progress signal (git plumbing over commit ranges and touched paths), and review_max_rounds — never semantic matching of findings across rounds
+
+#### Scenario: Opt-in legacy mode restores land-on-stop
+- **WHERE** review.md front-matter sets `review_budget_mode: land-on-stop`
+- **THEN** the orchestration SHALL stop on a flat-or-rising P0+P1 count across the two most recent rounds or on budget exhaustion, routing to disclosure/landing as before
+
+#### Scenario: A stop never forges a green
+- **IF** a stop fires while P0/P1 findings remain open
+- **THEN** the verdict SHALL NOT be sealed as pass; the open findings SHALL flow to the decision-audit landing
 
 ### Requirement: Scope Widening Protocol
 
