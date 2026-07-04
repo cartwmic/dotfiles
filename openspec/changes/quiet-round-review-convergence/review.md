@@ -15,6 +15,8 @@ validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
 review_max_rounds: 5
+loop_hold: true
+loop_hold_reason: "gate green (GATE-PASS M, both views) at worktree HEAD 34ee58b; round 2 quiet (opus+sonnet pass); doneness satisfied (blind judge); awaiting human archive ruling — loop never archives" 
 # ── Per-change model pins (resolved by `opsx models`) ──
 review_models: [claude-bridge/claude-opus-4-8, claude-bridge/claude-sonnet-5]
 ---
@@ -72,7 +74,9 @@ In same-tree mode, Diff Base SHA = pre-apply HEAD and Worktree Path is empty.
   must be retained and green.
 - `delegation_mode: subagent-required` — openspec-loop mandates blind subagent
   verdicts for every review/judgment step.
-- `review_max_rounds: 5` — explicit default; this change itself specs the
+- `review_max_rounds: 5
+loop_hold: true
+loop_hold_reason: "gate green (GATE-PASS M, both views) at worktree HEAD 34ee58b; round 2 quiet (opus+sonnet pass); doneness satisfied (blind judge); awaiting human archive ruling — loop never archives" ` — explicit default; this change itself specs the
   quiet-round semantics (Q1) but is reviewed under the CURRENT deployed
   protocol.
 
