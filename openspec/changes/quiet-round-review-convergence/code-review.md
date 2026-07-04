@@ -7,9 +7,9 @@ dispatched via pi-subagents). Verdict stays fail until a quiet round.
 -->
 
 **Change:** quiet-round-review-convergence
-**Verdict:** fail
+**Verdict:** pass
 **review_mode:** adversarial-multimodel
-**reviewer-provenance:** pi-subagents delegate dispatch — claude-bridge/claude-opus-4-8 + claude-bridge/claude-sonnet-5 (blind, parallel), reports /tmp/qrrc-cr-r1-{opus,sonnet}.md
+**reviewer-provenance:** pi-subagents delegate dispatch — claude-bridge/claude-opus-4-8 + claude-bridge/claude-sonnet-5 (blind, parallel), reports /tmp/qrrc-cr-r{1,2}-{opus,sonnet}.md
 **Diff Base SHA:** 3e3acf965eb7e9bbdfc62f51163583fad07c508e
 **Reviewed Range:** 3e3acf9..b1280c0
 **Baseline:** intent.md + proposal + specs + design + plan + tasks status
@@ -44,6 +44,7 @@ dispatched via pi-subagents). Verdict stays fail until a quiet round.
 | Round | Mode | P0 | P1 | P2 | P3 | Reviewer verdicts | Reviewed HEAD |
 |---|---|---|---|---|---|---|---|
 | 1 | blind | 0 | 2 | 1 | 2 | opus:fail sonnet:fail | b1280c0 |
+| 2 | blind | 0 | 0 | 1 | 3 | opus:pass sonnet:pass | 71c66c0 |
 
 ## Round 1 findings + resolutions (orchestrator log)
 
@@ -67,6 +68,24 @@ dispatched via pi-subagents). Verdict stays fail until a quiet round.
 - **R1-O3 (P3, opus):** ARC skill's own "treadmill" wording — independent
   skill, intentionally out of scope; no action.
 
+## Round 2 (quiet round — converged)
+
+Round 2 blind full-diff re-review at 71c66c0: BOTH reviewers pass, 0 P0/P1.
+All R1 fixes independently verified (whitespace-trim pinned, both prose homes
+quiet-round-consistent, cross-surface stale-prose grep clean). Verdict sealed
+pass per quiet-round condition (a). Advisories recorded below, never force a
+round; applying them post-seal would re-stale the reviewed range — routed to
+follow-ups.md instead.
+
 ## Warnings (open P2/P3, never force a round)
 
-- R1-S2 root-resolution refactor (follow-ups.md).
+- R1-S2 (P2) root-resolution refactor (follow-ups.md #1).
+- R2-S1 (P2) SWEEP-HIT line malformed for binary-file hits (`Binary file X
+  matches`); exit code still correct, no false pass. Suggested `git grep -I`
+  (follow-ups.md #2).
+- R2-O1 (P3) sweep worktree adoption lacks the gate's change-dir existence
+  guard (gate backstops; follow-ups.md #3).
+- R2-O2 (P3) awk -v escape-mangles backslash patterns in SWEEP-HIT display
+  (match itself verbatim; follow-ups.md #4).
+- R2-S2 (P3) SKILL.md sweep directive lacks the `--worktree` parenthetical its
+  gate counterpart carries (follow-ups.md #5).
