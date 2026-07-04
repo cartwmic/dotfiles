@@ -7,11 +7,14 @@ Decisions for Q1–Q4, traced to the frozen intent and the clarify resolutions
 
 ## D1 — Quiet-round evaluation algorithm (Q1)
 
-**Decision.** After each completed blind gating round, the orchestrator
-evaluates IN ORDER, from four deterministic inputs only — the round ledger's
-per-round consolidated P0+P1 counts (max across reviewers), the ledger's
-per-round reviewed HEADs, the current worktree HEAD, and
-`review_max_rounds` (+ `review_budget_mode`):
+**Decision.** After each completed gating round (post-apply code-review AND
+analyze-type rounds), the orchestrator evaluates IN ORDER, from four
+deterministic inputs only — the round ledger's per-round consolidated P0+P1
+counts (max across reviewers), the ledger's per-round reviewed HEADs, the
+current HEAD of the **reviewed checkout** (worktree HEAD for post-apply
+rounds; integration-checkout HEAD for analyze-type rounds, which run
+pre-apply with no worktree — analyze F3), and `review_max_rounds`
+(+ `review_budget_mode`):
 
 | # | Condition | Predicate | Action |
 |---|---|---|---|
@@ -22,6 +25,14 @@ per-round reviewed HEADs, the current worktree HEAD, and
 
 The (b) guard `rounds < cap` is load-bearing (clarify I1): without it,
 converging-at-the-cap dispatches forever and (d) never fires.
+
+**Fix-before-evaluate ordering is load-bearing (analyze F4).** After a round
+concludes with findings, the orchestrator attempts and COMMITS the fixes
+FIRST, then evaluates (b)/(c). Evaluating immediately at round end would
+find HEAD == reviewed HEAD on every first-findings round, making (b)
+unreachable and (c) fire always — the feature would be dead on arrival.
+Thrash therefore means "the fix attempt landed nothing", and the skill's
+cycle prose states this ordering explicitly.
 
 **Round type under (b) is not always blind** (clarify I3): (b) decides
 WHETHER to continue; the untouched Disclosure Round requirement decides the
@@ -58,6 +69,13 @@ extend it (ledger-recorded), unchanged.
 The intent names quiet-round "the new default"; land-on-stop survives as the
 paranoid opt-in.
 
+**Not a fail-open divergence (analyze F7).** Absent ⇒ `quiet-round` is the
+LESS human-in-the-loop posture by deliberate intent ("the new default") — it
+automates CONTINUE only, never SEAL ("a stop never forges a green" holds
+under both modes). The Q4 fail-open audit (D5) SHALL NOT flag this key: its
+documented promise IS the autonomy default, and the unknown-value parse
+already fails toward the stricter mode.
+
 ## D3 — Migration sweep (Q2)
 
 **Declaration.** `sweep.txt` in the change dir: one extended-regex pattern
@@ -67,13 +85,26 @@ clean pass (clarify C1). No YAML — grep-native, zero parsing machinery.
 **Swept surface.** `git ls-files` minus `openspec/**` and `adr/**`
 (clarify I2/A1): the OpenSpec workspace is non-deployed (Constitution VIII,
 domain #3) and live specs legitimately carry retired tokens until archive —
-sweeping them would make pre-round-1 resolution unsatisfiable. Same exemption
-set as the Hard Cutover legacy-token scan. The target class (stale shipped
-prose under `dot_local/**`, `dot_pi/**`, `tests/**`) is fully covered.
+sweeping them would make pre-round-1 resolution unsatisfiable. (Rationale
+stands on Constitution VIII / domain #3 alone; analyze F5 removed a false
+precedent citation.) The target class (stale shipped prose under
+`dot_local/**`, `dot_pi/**`, `tests/**`) is fully covered.
+
+**Tree resolution (analyze F2).** The sweep greps the change's RESOLVED
+implementation checkout, exactly as the gate resolves it: recorded worktree
+locator / convention path when worktree-required, integration checkout
+otherwise; explicit `--worktree` validated loudly. Without this, stale-token
+fixes landing on the worktree branch would false-fail (or false-pass) a
+sweep run against the integration root — the same split-brain the gate's
+ART_ROOT resolution exists to prevent. The gate's conditional sweep check
+greps ART_ROOT.
 
 **CLI.** `opsx sweep <change>`: `SWEEP-HIT <pattern> <file>:<line>` per hit,
 exit 1 on any hit, exit 0 clean; missing sweep.txt ⇒ notice + exit 0.
-Implemented with `git ls-files -z` + `grep -nE` — deterministic, model-free.
+Malformed-pattern grep error (exit ≥ 2) ⇒ `SWEEP-ERROR <pattern>` + exit
+non-zero — loud, distinct from hit and pass, never silent (analyze F6).
+Implemented with `git ls-files -z` + `grep -nE` in the resolved checkout —
+deterministic, model-free.
 
 **Gate integration.** Cheap-check tier, CONDITIONAL: runs only when
 sweep.txt exists; emits `GATE-FAIL sweep`. Undeclared changes: zero new
@@ -106,7 +137,7 @@ at the source.
 | review.md template Code Review Mode row shows literal `advisory` | fix row to "derived (gating-required at M, advisory below)" — spec'd (Template Mode Table Mirrors Derived Defaults) |
 | duplicate `gate` line in `opsx_usage()` | delete one line; pin with a uniqueness grep test |
 | stray empty `tests/opsx-review-convergence/test_review_convergence_surfaces.sh.tmp` | `git rm`; pin absence in the surfaces test |
-| fail-open-by-omission audit of remaining mode keys | enumerate every derived/defaulted key read by executable_opsx + skills (worktree_mode, code_review_mode, doneness_mode, validation_source_mode, review_budget_mode, review_max_rounds, loop_hold, full_rigor, scale); assert each absent-key default matches documented promise; fix + pin any fail-open divergence found. Findings recorded in verify.md; spec deltas added only if a divergence exists |
+| fail-open-by-omission audit of remaining mode keys | enumerate every derived/defaulted key read by executable_opsx + skills (worktree_mode, code_review_mode, doneness_mode, validation_source_mode, review_budget_mode, review_max_rounds, loop_hold, full_rigor, scale); assert each absent-key default matches documented promise; fix + pin any fail-open divergence found. Findings recorded in verify.md; spec deltas added only if a divergence exists. `review_budget_mode` absent⇒quiet-round is pre-cleared as an INTENTIONAL autonomy default (analyze F7), not a divergence |
 
 ## Replay validation (success criterion 1)
 
