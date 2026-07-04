@@ -60,14 +60,23 @@ opsx gate / archive read these fields verbatim:
      output in a BLIND reviewer prompt — only the single marked disclosure
      round may disclose.
 
-     Stop conditions (stop dispatching blind rounds when any holds):
-       converged  — latest round P0+P1 = 0 → seal pass
-       treadmill  — P0+P1 flat or rising across the two most recent rounds
-       budget     — rounds ≥ review_max_rounds (review.md front-matter, default 5)
-     Treadmill/budget stops with open P0/P1 route to the disclosure round
-     (persistent split) and then the decision-audit landing — never a forced
-     green, never additional ad-hoc reviewer models. A user resume ruling at
-     the landing grants a recorded budget extension (note it in this table). -->
+     Continuation/stop conditions (quiet-round default — after each round,
+     land the fixes FIRST, then evaluate IN ORDER):
+       a quiet round — latest round P0+P1 = 0 → seal pass, stop
+       b converging  — findings open AND change-scoped fixes landed since the
+                       round AND rounds < review_max_rounds → next round
+                       autonomously, NO human ruling
+       c thrash      — findings open AND no fix landed → disclosure/landing
+       d hard cap    — rounds ≥ review_max_rounds (default 5) →
+                       disclosure/landing regardless of trajectory
+     WHERE review.md sets review_budget_mode: land-on-stop (opt-in, and the
+     reading of any unknown value): stop instead on flat-or-rising P0+P1
+     across the two most recent rounds, or on budget exhaustion.
+     Stops with open P0/P1 route to the disclosure round (persistent split)
+     and then the decision-audit landing — never a forced green, never
+     additional ad-hoc reviewer models; quiet-round automates CONTINUE only,
+     never SEAL. A user resume ruling at the landing grants a recorded budget
+     extension (note it in this table). -->
 
 | Round | Mode | P0 | P1 | P2 | P3 | Reviewer verdicts | Reviewed HEAD |
 |---|---|---|---|---|---|---|---|

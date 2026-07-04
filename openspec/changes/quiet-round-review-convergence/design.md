@@ -128,8 +128,11 @@ greps ART_ROOT.
 exit 1 on any hit, exit 0 clean; missing sweep.txt ⇒ notice + exit 0.
 Malformed-pattern grep error (exit ≥ 2) ⇒ `SWEEP-ERROR <pattern>` + exit
 non-zero — loud, distinct from hit and pass, never silent (analyze F6).
-Implemented with `git ls-files -z` + `grep -nE` in the resolved checkout —
-deterministic, model-free.
+Implemented with `git grep -nE` over the resolved checkout's tracked files
+using `:(exclude)` pathspecs (behaviorally equivalent to `git ls-files` +
+`grep`; git-grep's exit codes give the clean hit/none/error tri-state) —
+deterministic, model-free. Whitespace-only declaration lines are trimmed to
+blank (CR R1).
 
 **Gate integration.** Cheap-check tier, CONDITIONAL: runs only when
 sweep.txt exists; emits `GATE-FAIL sweep`. Undeclared changes: zero new
