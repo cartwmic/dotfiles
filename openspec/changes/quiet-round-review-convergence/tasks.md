@@ -30,7 +30,7 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
       unaffected.
       - files_allowed:
         - dot_local/bin/executable_opsx
-- [ ] 1.4 Q4 hygiene riders (D5): `git rm`
+- [x] 1.4 Q4 hygiene riders (D5): `git rm`
       `tests/opsx-review-convergence/test_review_convergence_surfaces.sh.tmp`
       (stray empty file); fail-open-by-omission audit over derived/defaulted
       mode keys read by executable_opsx + skills (worktree_mode,
@@ -42,7 +42,7 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
       - files_allowed:
         - dot_local/bin/executable_opsx
         - tests/opsx-review-convergence/test_review_convergence_surfaces.sh.tmp
-- [ ] 1.5 Shell-test pins for 1.1–1.4 (proposal success criteria 2, 4):
+- [x] 1.5 Shell-test pins for 1.1–1.4 (proposal success criteria 2, 4):
       cli tests — sweep dispatch, SWEEP-HIT exit 1 on planted stale surface,
       clean pass after cleanup, empty/missing declaration soft passes,
       SWEEP-ERROR on malformed ERE, history-surface non-hit, usage gate-forms

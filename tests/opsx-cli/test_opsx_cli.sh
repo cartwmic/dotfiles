@@ -263,5 +263,73 @@ printf '%s' "$out" | grep -qi 'advisory' && printf '%s' "$out" | grep -q 'opensp
   && ok "archive-check flags an evil MERGE commit touching two change dirs" || nok "archive-check evil-merge advisory (rc=$rc)"
 [ $rc -eq 0 ] && ok "archive-check evil-merge advisory keeps exit 0" || nok "archive-check evil-merge exit (rc=$rc)"
 
+# ---- opsx-cli.migration-completeness-sweep-command ----
+SWREPO="$TMP/sweeprepo"; mkdir -p "$SWREPO"
+git -C "$SWREPO" init -q
+git -C "$SWREPO" config user.email t@t; git -C "$SWREPO" config user.name t
+mkdir -p "$SWREPO/openspec/changes/swc" "$SWREPO/adr" "$SWREPO/lib"
+printf 'RETIRED_CLI_TOKEN in shipped lib\n' > "$SWREPO/lib/mod.sh"
+printf 'RETIRED_CLI_TOKEN in adr history\n' > "$SWREPO/adr/ADR-0001.md"
+printf 'RETIRED_CLI_TOKEN in openspec workspace\n' > "$SWREPO/openspec/changes/swc/proposal.md"
+git -C "$SWREPO" add -A; git -C "$SWREPO" commit -qm seed
+
+# missing declaration: soft pass with notice
+out="$(cd "$SWREPO" && "$OPSX" sweep swc 2>&1)"; rc=$?
+[ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'no sweep.txt' \
+  && ok "sweep: missing declaration is a soft pass with notice" || nok "sweep missing-decl (rc=$rc)"
+
+# usage: no change arg
+( cd "$SWREPO" && "$OPSX" sweep ) >/dev/null 2>&1; [ $? -eq 2 ] \
+  && ok "sweep: missing change arg exits 2" || nok "sweep usage exit"
+
+# hit on shipped surface → SWEEP-HIT + exit 1; history surfaces excluded
+printf '# retired vocabulary\nRETIRED_CLI_TOKEN\n' > "$SWREPO/openspec/changes/swc/sweep.txt"
+out="$(cd "$SWREPO" && "$OPSX" sweep swc 2>&1)"; rc=$?
+[ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'SWEEP-HIT RETIRED_CLI_TOKEN lib/mod.sh:1' \
+  && ok "sweep: shipped-surface hit → SWEEP-HIT + exit 1" || nok "sweep hit (rc=$rc)"
+printf '%s' "$out" | grep -qE 'SWEEP-HIT.*(adr/|openspec/)' \
+  && nok "sweep: history surfaces excluded" || ok "sweep: history surfaces excluded (adr/**, openspec/**)"
+
+# clean after fix
+printf 'cleaned\n' > "$SWREPO/lib/mod.sh"; git -C "$SWREPO" add -A; git -C "$SWREPO" commit -qm fix
+( cd "$SWREPO" && "$OPSX" sweep swc ) >/dev/null 2>&1; [ $? -eq 0 ] \
+  && ok "sweep: clean pass after cleanup" || nok "sweep clean pass"
+
+# empty declaration (comments/blanks only) = clean pass
+printf '# nothing declared\n\n' > "$SWREPO/openspec/changes/swc/sweep.txt"
+( cd "$SWREPO" && "$OPSX" sweep swc ) >/dev/null 2>&1; [ $? -eq 0 ] \
+  && ok "sweep: empty declaration is a clean pass" || nok "sweep empty decl"
+
+# malformed ERE → SWEEP-ERROR + non-zero (loud, never silent)
+printf '*bad(regex\n' > "$SWREPO/openspec/changes/swc/sweep.txt"
+out="$(cd "$SWREPO" && "$OPSX" sweep swc 2>&1)"; rc=$?
+[ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'SWEEP-ERROR' \
+  && ok "sweep: malformed ERE → SWEEP-ERROR + non-zero" || nok "sweep bad regex (rc=$rc)"
+
+# explicit --worktree validated loudly (invalid path → hard fail, no fallback)
+( cd "$SWREPO" && "$OPSX" sweep swc --worktree /nonexistent ) >/dev/null 2>&1; [ $? -eq 2 ] \
+  && ok "sweep: invalid explicit --worktree fails loudly" || nok "sweep --worktree loud"
+
+# worktree resolution: fix landed only in the worktree is seen via --worktree
+printf 'RETIRED_CLI_TOKEN back\n' > "$SWREPO/lib/mod.sh"
+printf 'RETIRED_CLI_TOKEN\n' > "$SWREPO/openspec/changes/swc/sweep.txt"
+git -C "$SWREPO" add -A; git -C "$SWREPO" commit -qm replant
+SWWT="$TMP/swc-wt"
+git -C "$SWREPO" worktree add -q -b opsx/swc "$SWWT" >/dev/null 2>&1
+( cd "$SWWT" && printf 'cleaned\n' > lib/mod.sh && git add lib/mod.sh && git commit -qm fix )
+( cd "$SWREPO" && "$OPSX" sweep swc --worktree "$SWWT" ) >/dev/null 2>&1; [ $? -eq 0 ] \
+  && ok "sweep: worktree-side fix passes via --worktree (resolved checkout)" || nok "sweep worktree resolution"
+( cd "$SWREPO" && "$OPSX" sweep swc ) >/dev/null 2>&1; [ $? -eq 1 ] \
+  && ok "sweep: integration copy still hits without worktree resolution" || nok "sweep integration stale hit"
+
+# ---- opsx-cli.unified-subcommand-dispatch: usage carries consolidated gate forms + sweep ----
+usage_out="$("$OPSX" --help 2>&1)"
+printf '%s' "$usage_out" | grep -q 'sweep    <change>' \
+  && ok "usage lists sweep subcommand" || nok "usage sweep line"
+g1="$(printf '%s\n' "$usage_out" | grep -n 'gate     <change> \[--worktree' | head -1 | cut -d: -f1)"
+g2="$(printf '%s\n' "$usage_out" | grep -n 'gate     <change> --cheap' | head -1 | cut -d: -f1)"
+[ -n "$g1" ] && [ -n "$g2" ] && [ "$g2" -eq $((g1+1)) ] \
+  && ok "usage gate forms consolidated adjacent (both preserved, R3-A2)" || nok "usage gate forms adjacency (g1=$g1 g2=$g2)"
+
 echo "opsx-cli: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]
