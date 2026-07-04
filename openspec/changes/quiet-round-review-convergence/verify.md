@@ -1,6 +1,10 @@
 # Verify
 
-<!-- Filled from templates/verify.md (Q3 discipline: templates, not free-writing). -->
+<!--
+Filled from templates/verify.md (Q3 discipline: templates, not free-writing).
+Note: single-line HTML comments break the gate's cr_field comment-stripper
+(sed range never closes) — keep comments multi-line in verdict artifacts.
+-->
 
 **Generated:** 2026-07-03 by claude (openspec-loop orchestrator, in-session)
 **Change:** quiet-round-review-convergence
@@ -9,7 +13,8 @@
 
 **Status:** green
 
-**Reviewed Range:** 3e3acf9..46eee59 (Diff Base 3e3acf965eb7e9bbdfc62f51163583fad07c508e; verify/tasks bookkeeping commit follows the range)
+**Diff Base SHA:** 3e3acf965eb7e9bbdfc62f51163583fad07c508e
+**Reviewed Range:** 3e3acf9..4b37e7d
 
 ## Checks
 
