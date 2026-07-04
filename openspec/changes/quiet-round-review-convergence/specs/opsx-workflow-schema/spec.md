@@ -24,7 +24,7 @@ THE review.md front-matter MAY carry a `review_budget_mode` field with controlle
 
 ### Requirement: Migration Sweep Declaration
 
-A change MAY declare retired tokens and forbidden patterns in a machine-readable `sweep.txt` file in its change directory — one extended-regex pattern per line, `#`-prefixed comment lines and blank lines ignored — and THE declared patterns SHALL define the migration-completeness sweep for that change over all git-tracked shipped surfaces, WHERE change-artifact directories (`openspec/changes/**`, including the archive) and ADR history (`adr/**`) are excluded from the swept surface because they legitimately record retired vocabulary.
+A change MAY declare retired tokens and forbidden patterns in a machine-readable `sweep.txt` file in its change directory — one extended-regex pattern per line, `#`-prefixed comment lines and blank lines ignored — and THE declared patterns SHALL define the migration-completeness sweep for that change over all git-tracked shipped surfaces, WHERE the entire OpenSpec workspace (`openspec/**` — the capability specs plus in-flight and archived change artifacts) and ADR history (`adr/**`) are excluded from the swept surface because none of it is a deployed surface (Constitution VIII) and it legitimately records retired vocabulary (the live capability specs still carry the outgoing tokens until this change archives its deltas into them).
 
 #### Scenario: Declaration format parsed
 - **WHEN** a sweep.txt containing patterns, comments, and blank lines is read
@@ -32,7 +32,7 @@ A change MAY declare retired tokens and forbidden patterns in a machine-readable
 
 #### Scenario: History surfaces excluded
 - **WHEN** the sweep runs
-- **THEN** hits inside openspec/changes/** and adr/** SHALL NOT be reported
+- **THEN** hits inside openspec/** (capability specs plus change artifacts) and adr/** SHALL NOT be reported
 
 #### Scenario: No declaration means no sweep obligation
 - **IF** a change directory contains no sweep.txt
