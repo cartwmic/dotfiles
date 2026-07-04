@@ -14,7 +14,7 @@ Note: single-line HTML comments break the gate's cr_field comment-stripper
 **Status:** green
 
 **Diff Base SHA:** 3e3acf965eb7e9bbdfc62f51163583fad07c508e
-**Reviewed Range:** 3e3acf9..5c59f23
+**Reviewed Range:** 3e3acf9..71c66c0
 
 ## Checks
 
@@ -48,10 +48,10 @@ Note: single-line HTML comments break the gate's cr_field comment-stripper
 | Suite | Result |
 |---|---|
 | `bash -n dot_local/bin/executable_opsx` | ok |
-| tests/opsx-cli | 59 passed, 0 failed |
+| tests/opsx-cli | 60 passed, 0 failed |
 | tests/opsx-gate | 124 passed, 0 failed |
 | tests/opsx-models | 34 passed, 0 failed |
-| tests/opsx-review-convergence (surfaces) | 137 passed, 0 failed |
+| tests/opsx-review-convergence (surfaces) | 145 passed, 0 failed |
 | tests/opsx-gate/test_author_marker.sh | 4 passed, 0 failed |
 | `bun test dot_pi/agent/extensions/opsx-loop/` | 60 tests, 108 expects, 0 fail |
 | `openspec validate quiet-round-review-convergence --strict` | valid |
