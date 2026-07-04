@@ -246,6 +246,32 @@ has "models template retires the project layer" "$TPL/opsx-models.yaml" "project
 has "models template resolution order omits the project file" "$TPL/opsx-models.yaml" "front-matter > user file > built-in default"
 if grep -q -- "project scope" "$TPL/opsx-models.yaml" 2>/dev/null; then nok "models template still presents a project-scope location"; else ok "models template drops the project-scope location"; fi
 
+# --- opsx-workflow-schema.review-budget-mode-front-matter ---
+SCHEMA_DIR="$ROOT/dot_local/share/openspec/schemas/opsx-superpowers"
+has "review.md template documents review_budget_mode" "$TPL/review.md" "review_budget_mode: quiet-round | land-on-stop"
+has "review.md template states quiet-round is the absent default" "$TPL/review.md" "ABSENT ⇒ quiet-round"
+has "review.md template states unknown values fail stricter" "$TPL/review.md" "stricter human-in-the-loop"
+has "review.md template keeps the never-seal invariant beside the key" "$TPL/review.md" "NEVER"
+has "README mode table carries review_budget_mode" "$SCHEMA_DIR/README.md" "review_budget_mode"
+has "schema.yaml documents review_budget_mode" "$SCHEMA_DIR/schema.yaml" "review_budget_mode (optional front-matter key"
+
+# --- opsx-workflow-schema.template-mode-table-mirrors-derived-defaults ---
+has "Code Review Mode row presents derived value" "$TPL/review.md" "| Code Review Mode | derived (absent) |"
+if grep -q '^| Code Review Mode | advisory |' "$TPL/review.md" 2>/dev/null; then
+  nok "Code Review Mode row no longer hard-codes literal advisory"
+else ok "Code Review Mode row no longer hard-codes literal advisory"; fi
+
+# --- opsx-workflow-schema.migration-sweep-declaration ---
+has "README documents sweep.txt declaration" "$SCHEMA_DIR/README.md" "sweep.txt"
+has "README states the swept-surface exclusions" "$SCHEMA_DIR/README.md" "openspec/\*\*"
+has "schema.yaml documents sweep.txt (non-artifact rationale)" "$SCHEMA_DIR/schema.yaml" "sweep.txt (optional, change-dir)"
+has "schema.yaml states empty declaration is clean" "$SCHEMA_DIR/schema.yaml" "zero effective patterns = clean pass"
+
+# --- Q4 rider: stray .tmp removed and stays removed ---
+if [ -e "$ROOT/tests/opsx-review-convergence/test_review_convergence_surfaces.sh.tmp" ]; then
+  nok "stray surfaces .tmp stays deleted"
+else ok "stray surfaces .tmp stays deleted"; fi
+
 echo "-----"
 echo "opsx-review-convergence surfaces: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]

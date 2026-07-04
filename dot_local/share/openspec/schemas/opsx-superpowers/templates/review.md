@@ -36,6 +36,16 @@ doneness_mode: required
 # (opsx-adversarial-review). Absent/invalid ⇒ consumers apply the default 5.
 # Orchestrator-read (skills), not a gate field. A user resume ruling at the
 # decision-audit landing may extend it (recorded in the code-review.md ledger).
+# review_budget_mode: quiet-round | land-on-stop — continuation semantics for
+# gating review rounds (opsx-adversarial-review). ABSENT ⇒ quiet-round (the
+# default): rounds continue autonomously while fixes land (change-scoped
+# progress signal), stop themselves at a quiet round (0 P0/P1), and land for a
+# human ruling only on thrash (no fix landed) or the review_max_rounds hard
+# cap. `land-on-stop` restores the paranoid pre-quiet-round behavior (a human
+# ruling at every trajectory/budget stop). Any OTHER value is read as
+# land-on-stop (fails toward the stricter human-in-the-loop mode).
+# Orchestrator-read (skills), not a gate field. A stop with open P0/P1 NEVER
+# seals pass under either mode.
 # doneness_mode: required | waived — default required at Scale >= M; a `waived`
 # value REQUIRES a non-empty `doneness_waiver_rationale` (a bare waiver fails the gate).
 # doneness_waiver_rationale: <why the semantic doneness judge is waived for this change>
@@ -73,7 +83,7 @@ any mode by setting it (in BOTH the front-matter and this table).
 | Review Status | not-requested | not-requested\|requested\|findings-received\|resolved |
 | Delegation Mode | single-agent | single-agent\|subagent-eligible\|subagent-required — dispatch via the subagent-dispatch capability hook (pi-subagents is the pi adapter) |
 | Worktree Mode | derived (absent) | same-tree\|worktree-eligible\|worktree-required — default DERIVED by tier when absent (XS/S ⇒ same-tree, M ⇒ worktree-required); the front-matter ships the key COMMENTED OUT so the tier default applies; an explicit value always wins |
-| Code Review Mode | advisory | none\|advisory\|gating-required — default gating-required at Scale ≥ M; gating-required blocks archive on code-review.md Verdict |
+| Code Review Mode | derived (absent) | none\|advisory\|gating-required — default DERIVED when absent: M ⇒ gating-required, XS/S ⇒ advisory (fail-closed); an explicit value always wins; gating-required blocks archive on code-review.md Verdict |
 | Loop Max Iterations | 20 | iteration budget; mapped onto the loop runtime turn budget. Authoring-time defaults XS=10, S=20, M=40, full_rigor=80 |
 | Validation Source Mode | required | required\|waived — waived (with rationale) lets Scale ≥ M pass with no agent-independent validation source |
 | Doneness Mode | required | required\|waived — default required at Scale ≥ M; a `waived` value needs a non-empty `doneness_waiver_rationale` (bare waiver fails). Gate reads a sealed `doneness.md` verdict (see templates/doneness.md) |
