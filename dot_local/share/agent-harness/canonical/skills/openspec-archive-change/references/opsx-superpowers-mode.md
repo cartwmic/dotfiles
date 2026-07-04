@@ -1,6 +1,31 @@
 # openspec-archive-change under schema: opsx-superpowers
 
-Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds: HARD-GATE 0 (opsx gate green), HARD-GATE 1 (verify.md), HARD-GATE 2 (AC↔test mapping re-run), HARD-GATE 3 (code-review.md), HARD-GATE 4 (doneness re-check), worktree merge/cleanup, ADR promotion, retrospective-driven hindsight memory promotion.
+Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds: HARD-GATE A (opsx archive-check), HARD-GATE 0 (opsx gate green), HARD-GATE 1 (verify.md), HARD-GATE 2 (AC↔test mapping re-run), HARD-GATE 3 (code-review.md), HARD-GATE 4 (doneness re-check), worktree merge/cleanup, ADR promotion, retrospective-driven hindsight memory promotion, post-archive consolidation cleanup.
+
+## HARD-GATE A: opsx archive-check (land-path currency)
+
+Before ANY archive action — immediately before `openspec archive` — run the
+deterministic land-path verb and QUOTE its output back to the user verbatim:
+
+```bash
+opsx archive-check <name>
+```
+
+It asserts land-base currency (`git merge-base opsx/<name> main` == `git rev-parse
+main`; branch-absent ⇒ satisfied same-tree exemption), an ADR duplicate-number scan,
+and an advisory multi-dir-commit detector (advisory only — it never affects the exit
+code). If `opsx archive-check` exits NON-ZERO, REFUSE archive and print the quoted
+output plus the remedy it names (typically rebase `opsx/<name>` onto `main`):
+
+```
+⛔ Archive refused.
+opsx archive-check <name> exited non-zero:
+  <quoted archive-check output>
+Resolve (e.g. rebase the change branch onto main) and re-run before archiving.
+```
+
+Do NOT proceed to HARD-GATE 0 until archive-check exits 0 (or a human records an
+explicit override via the Override path below).
 
 ## HARD-GATE 0: opsx gate green (primary)
 
@@ -65,7 +90,12 @@ Options:
      the rationale in retrospective.md)
 ```
 
-## HARD-GATE 3: ADR promotion candidates
+## HARD-GATE 3: ADR promotion candidates (full_rigor only)
+
+Read `full_rigor` from review.md front-matter. This gate runs ONLY when
+`full_rigor: true` (the former L/XL). At plain M, S, or XS, ADR promotion is
+optional — SKIP this gate (the user may still promote a decision by hand); it
+is never keyed on a Scale label. When `full_rigor: true`:
 
 Parse `openspec/changes/<name>/design.md` for `### D<n>:` Decision blocks. For each, apply the 4-point test using the schema's `templates/adr.md` rubric:
 
@@ -89,7 +119,13 @@ For each `Y`, find the next available `<repo>/adr/ADR-NNNN-` number (scan existi
 - Source change: `openspec/changes/<name>/`
 - Decision Drivers + Considered Options + Decision Outcome + Consequences: extracted from D<n>'s text
 
-Commit each ADR with subject `docs(adr): ADR-NNNN <title>`.
+Commit each ADR path-scoped to the ADR file(s) on the integration checkout —
+never a bare `git commit`/`git add -A`, so an unrelated dirty file cannot ride
+along into the archive history:
+```bash
+git add <repo>/adr/ADR-NNNN-<slug>.md
+git commit -m "docs(adr): ADR-NNNN <title>" -- <repo>/adr/ADR-NNNN-<slug>.md
+```
 
 ## HARD-GATE 4: retrospective Promote-candidates
 
@@ -119,21 +155,19 @@ Per the memory contract (CLAUDE.md "Memory: hindsight MCP server"),
 NEVER auto-store; ALWAYS prompt per candidate. `retain` is async: do
 not expect the fact to be recallable in the same turn.
 
-If `retrospective.md` is missing:
-- Scale = XL → REFUSE archive (retrospective is required at XL):
+If `retrospective.md` is missing, key the decision on `full_rigor` (read from
+review.md front-matter), NOT on a Scale label:
+- `full_rigor: true` → REFUSE archive (retrospective is required at full_rigor,
+  the former L/XL):
   ```
   ⛔ Archive refused.
-  Scale = XL requires retrospective.md before archive.
+  full_rigor: true requires retrospective.md before archive.
   Run the schema's retrospective template to capture wins, misses,
   and Promote-candidates. Template:
     ~/.local/share/openspec/schemas/opsx-superpowers/templates/retrospective.md
   ```
-- Scale = L → warn, allow:
-  ```
-  ⚠ Scale = L; retrospective.md missing. Recommended but not required.
-  Skipping memory promotion.
-  ```
-- Scale = M / S / XS → silent skip.
+- full_rigor absent/false (plain M / S / XS) → silent skip (retrospective is
+  optional without full_rigor).
 
 ## HARD-GATE 3: code-review.md pass (Code Review Mode = gating-required)
 
@@ -146,7 +180,7 @@ Read `Code Review Mode` from review.md front-matter. If `gating-required`:
 Defense-in-depth mirror of the gate's doneness check (the newest enforcement
 axis must not be the only one without an archive-side backstop when a human
 archives without the gate). Read `Scale` and `doneness_mode` from review.md
-front-matter. If Scale is M/L/XL and `doneness_mode` is not `waived`:
+front-matter. If Scale is M and `doneness_mode` is not `waived`:
 1. `doneness.md` must exist with `Doneness: satisfied`. If absent or not
    satisfied, REFUSE archive.
 2. It must carry a `Judge` provenance field and a non-degraded `review_mode`.
@@ -170,6 +204,26 @@ After all HARD-GATEs pass (or are overridden) and the worktree is merged+removed
 - Assess delta spec sync
 - Perform the archive (`mv openspec/changes/<name> openspec/changes/archive/YYYY-MM-DD-<name>`)
 - Display summary
+
+## Post-archive: consolidation cleanup (D8)
+
+`openspec archive` applies this change's ADDED/REMOVED deltas into the spec-of-record;
+no spec content is hand-migrated (the deltas carry everything). A REMOVED delta can
+leave an empty `openspec/specs/<cap>/` directory behind. AFTER the archive move and
+BEFORE the archive commit:
+
+1. Delete any now-empty `openspec/specs/<cap>/` directories the archive left behind
+   (a capability whose spec was fully removed):
+   ```bash
+   find openspec/specs -type d -empty -delete
+   ```
+2. Re-run the spec validator and require it GREEN before committing:
+   ```bash
+   openspec validate --specs --strict
+   ```
+   If it is not green, do NOT commit the archive — investigate the dangling/removed
+   spec first. Only commit the archive (path-scoped to the moved change dir + the
+   touched `openspec/specs/**`) once `openspec validate --specs --strict` is green.
 
 Summary should additionally show:
 ```

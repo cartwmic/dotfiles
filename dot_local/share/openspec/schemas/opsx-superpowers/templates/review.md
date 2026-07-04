@@ -2,13 +2,24 @@
 # Machine-readable mode block — the SOLE source opsx gate reads (it never parses
 # the prose table below). Keep the table in sync as the human-facing mirror.
 scale: S
-worktree_mode: worktree-required
+# full_rigor: false — boolean (default false). true opts a Scale-M change into the
+# former L/XL extras: standalone clarify.md, blind analyze.md dispatch, an
+# independently dispatched blind doneness judge, ADR promotion, adversarial-on-
+# analyze, and a pre-archive retrospective. A Scale outside XS|S|M, or a
+# non-boolean full_rigor, FAILS CLOSED (never a silent permissive default).
+full_rigor: false
+# worktree_mode DERIVED by tier when ABSENT: XS/S ⇒ same-tree, M ⇒
+# worktree-required. An explicit value here ALWAYS wins over the tier default.
+# worktree_mode: (derived when absent: XS/S ⇒ same-tree, M ⇒ worktree-required; uncomment to override)
 execution_mode: standard
 verification_mode: retained-recommended
 debug_mode: standard
 review_status: not-requested
 delegation_mode: single-agent
-code_review_mode: advisory
+# code_review_mode: (derived when absent: M ⇒ gating-required, XS/S ⇒ advisory; uncomment to override — an explicit value always wins)
+# loop_max_iterations authoring-time defaults keyed by tier: XS=10, S=20, M=40,
+# full_rigor=80 (the former L budget). The value is written here at authoring
+# time; the loop runtime reads it verbatim.
 loop_max_iterations: 20
 validation_source_mode: required
 spec_level: spec-anchored
@@ -22,7 +33,7 @@ doneness_mode: required
 # empty reason still holds (fail-safe).
 # loop_hold_reason: <why the loop landed — e.g. "decision audit in code-review.md round 4">
 # review_max_rounds: 5 — budget of BLIND gating review rounds per change
-# (opsx-review-convergence). Absent/invalid ⇒ consumers apply the default 5.
+# (opsx-adversarial-review). Absent/invalid ⇒ consumers apply the default 5.
 # Orchestrator-read (skills), not a gate field. A user resume ruling at the
 # decision-audit landing may extend it (recorded in the code-review.md ledger).
 # doneness_mode: required | waived — default required at Scale >= M; a `waived`
@@ -54,15 +65,16 @@ any mode by setting it (in BOTH the front-matter and this table).
 
 | Mode | Value | Notes |
 |---|---|---|
-| Scale | S | XS\|S\|M\|L\|XL — skills author per Scale (graph is static; gating lives in the skills + opsx gate) |
+| Scale | S | XS\|S\|M — skills author per Scale (graph is static; gating lives in the skills + opsx gate). Out-of-range fails closed |
+| full_rigor | false | false\|true — true opts Scale-M into the former L/XL extras (standalone clarify+analyze, independent doneness judge, ADR promotion, adversarial-on-analyze, retrospective) |
 | Execution Mode | standard | standard\|tdd-preferred\|tdd-required |
 | Verification Mode | retained-recommended | inline-only\|retained-recommended\|retained-required — retained-required forces verify.md green before archive |
 | Debug Mode | standard | standard\|systematic-debugging |
 | Review Status | not-requested | not-requested\|requested\|findings-received\|resolved |
 | Delegation Mode | single-agent | single-agent\|subagent-eligible\|subagent-required — dispatch via the subagent-dispatch capability hook (pi-subagents is the pi adapter) |
-| Worktree Mode | worktree-required | worktree-required (default, all Scales)\|worktree-eligible\|same-tree (explicit override) |
+| Worktree Mode | derived (absent) | same-tree\|worktree-eligible\|worktree-required — default DERIVED by tier when absent (XS/S ⇒ same-tree, M ⇒ worktree-required); the front-matter ships the key COMMENTED OUT so the tier default applies; an explicit value always wins |
 | Code Review Mode | advisory | none\|advisory\|gating-required — default gating-required at Scale ≥ M; gating-required blocks archive on code-review.md Verdict |
-| Loop Max Iterations | 20 | iteration budget; mapped onto the loop runtime turn budget (S≈20, M≈40, L≈80) |
+| Loop Max Iterations | 20 | iteration budget; mapped onto the loop runtime turn budget. Authoring-time defaults XS=10, S=20, M=40, full_rigor=80 |
 | Validation Source Mode | required | required\|waived — waived (with rationale) lets Scale ≥ M pass with no agent-independent validation source |
 | Doneness Mode | required | required\|waived — default required at Scale ≥ M; a `waived` value needs a non-empty `doneness_waiver_rationale` (bare waiver fails). Gate reads a sealed `doneness.md` verdict (see templates/doneness.md) |
 | Spec Level | spec-anchored | spec-anchored\|spec-first\|spec-as-source (warning if last) |
@@ -97,7 +109,7 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
 
 ## Scope Expansions
 
-<!-- Evidence-gated widenings (opsx-review-convergence). intent.md states the
+<!-- Evidence-gated widenings (opsx-adversarial-review). intent.md states the
 intended scope in PROSE; the loop may widen the scope of WORK only when
 evidence shows the widening is REQUIRED to meet the frozen intent's outcomes
 (intent MEANING is never edited). One entry per widening; every entry is

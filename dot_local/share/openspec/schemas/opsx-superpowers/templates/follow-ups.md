@@ -1,7 +1,7 @@
 # Follow-ups
 
 <!--
-Out-of-scope finding queue (opsx-review-convergence). Skill-managed, NOT in the
+Out-of-scope finding queue (opsx-adversarial-review). Skill-managed, NOT in the
 schema artifact graph — authored from this template at the lifecycle moment the
 FIRST out-of-scope finding is routed (matching the verify/retrospective/doneness
 pattern); its absence never fails schema completeness or the gate.

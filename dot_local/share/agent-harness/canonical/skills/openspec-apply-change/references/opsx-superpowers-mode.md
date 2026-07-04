@@ -7,7 +7,8 @@ Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Adds mode dispa
 Parse `openspec/changes/<name>/review.md` to extract:
 
 ```
-Scale                  = <XS | S | M | L | XL>
+Scale                  = <XS | S | M>
+full_rigor             = <false | true>   (true = the former L/XL extras)
 Execution Mode         = <standard | tdd-preferred | tdd-required>
 Verification Mode      = <inline-only | retained-recommended | retained-required>
 Debug Mode             = <standard | systematic-debugging>
@@ -38,14 +39,16 @@ If any unstaged or uncommitted files under that subtree, stage + commit ONLY tha
 
 ```bash
 git add openspec/changes/<name>/
-git commit -m "chore(opsx): pre-flight commit for apply of <name>"
+git commit -m "chore(opsx): pre-flight commit for apply of <name>" -- openspec/changes/<name>/
 ```
+
+The commit is path-scoped (`git commit -m "<msg>" -- <paths>` — message flag BEFORE the `--` pathspec terminator) — never a bare `git commit`/`git add -A` — so an unrelated dirty file in the integration checkout cannot ride along into workflow-driven history.
 
 Then create the worktree on branch `opsx/<name>` per the pi-subagents convention.
 
 ## Worktree lifecycle + immutable Diff Base SHA
 
-Worktree Mode defaults to `worktree-required` for ALL Scales (the loop's blast-radius sandbox); `same-tree` is an explicit override.
+Worktree Mode default is DERIVED by tier when absent from front-matter: XS/S ⇒ `same-tree`, M ⇒ `worktree-required` (the loop's blast-radius sandbox). An explicit `Worktree Mode` value always wins over the tier default.
 
 **Creation/reuse is runtime-owned**: call the deterministic lifecycle command instead of hand-rolling git worktree commands — it implements the exact spec semantics (create with immutable merge-base, reuse with base-ancestry check, abort on failure):
 
@@ -204,7 +207,7 @@ WHEN the pre-review checks are green (tasks complete, structural checks pass, re
 - The subagent stamps: `Verdict` (pass|fail), `review_mode` (adversarial-multimodel | disclosure-consensus | degraded-single-model), `reviewer-provenance`, `Diff Base SHA`, and `Reviewed Range`.
 - **Constitution IX**: when the change edits an existing skill, the review MUST be multi-model — `adversarial-multimodel`, or `disclosure-consensus` when the disclosure round consolidated ≥2 distinct reviewer models; a `degraded-single-model` verdict does NOT satisfy the gate.
 - Code Review Mode `none` → skip production. `advisory` → produce, non-blocking. `gating-required` → archive blocks unless Verdict = pass.
-- **Convergence discipline (opsx-review-convergence)** — gating rounds converge or land:
+- **Convergence discipline (opsx-adversarial-review)** — gating rounds converge or land:
   - Every reviewer dispatch prompt embeds the template's **verdict contract + severity rubric** (fail only on frozen-baseline violation or objective correctness/security defect; taste/beyond-scope → advisory). `Verdict: pass ⇔ no open P0/P1`; open P2/P3 recorded as warnings, never another fix round.
   - The ORCHESTRATOR seals the **Round tracker** ledger after every round (round #, mode, consolidated counts = max across reviewers per severity, per-reviewer verdicts, reviewed HEAD) — covering every round including any disclosure round. Never include the ledger or prior findings in a blind prompt. A sealed multi-round Verdict with no ledger row is a provenance defect — repair the ledger before archive.
   - **Stop before re-dispatching**: converged (P0+P1 = 0 → seal pass) · treadmill (P0+P1 flat/rising across the two most recent rounds) · budget (rounds ≥ `review_max_rounds`, default 5). Persistent split (2 rounds, or a stop with a split) → ONE `disclosure-consensus` round (max 1/change; satisfies multi-model gating only with ≥2 distinct models). Still-open P0/P1 → decision-audit landing; a user **waive** ruling re-seals `Verdict: pass` with `waived_by_user` (reviewed range unchanged; never self-authored), a **fix** ruling grants a recorded budget extension.

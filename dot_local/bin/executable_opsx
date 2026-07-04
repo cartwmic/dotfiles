@@ -12,7 +12,7 @@
 # executables. Each subcommand body runs in a subshell function so `exit`,
 # `set`, globals, and PROG stay isolated per subcommand.
 # Capabilities: opsx-cli, opsx-gate-enforcement, opsx-model-config,
-#               opsx-loop-orchestration, opsx-loop-kickoff.
+#               opsx-loop, opsx-loop.
 set -uo pipefail
 
 opsx_usage() {
@@ -20,9 +20,12 @@ opsx_usage() {
 usage: opsx <subcommand> [args]
   gate     <change> [--worktree <path>]   run the deterministic gate
   models   <role> [--json] [--change <c>] [--with-default]   resolve a role
-  models   set <role> <value> [--layer user|project]         write config
-  models   get <role> [--layer user|project]                 read config
+  models   set <role> <value> [--layer user]                 write config
+  models   get <role> [--layer user]                         read config
   models   list                                              list resolved roles
+  gate     <change> --cheap                deterministic checks only (no validations)
+  status                                  read-only fleet view (all changes)
+  archive-check <change>                  land-base + ADR-dup + multi-dir advisory
   loop     <change> [--worktree <path>]   Ralph-style fallback driver
   worktree ensure <change> [--path <p>] [--integration-branch <b>]
                                           create/reuse the opsx/<change> worktree
@@ -34,8 +37,10 @@ USAGE
 # ============================================================================
 # SUBCOMMAND: models — harness-neutral role->model resolver + write surface.
 # Roles: author | review | impl | author-in-session.  Verbs: set | get | list.
-# Layered resolution (read): env > change review.md front-matter > project
-# openspec/opsx-models.yaml > user ~/.config/opsx/models.yaml > built-in default.
+# Layered resolution (read): env > change review.md front-matter >
+# user ~/.config/opsx/models.yaml > built-in default. The project-layer
+# openspec/opsx-models.yaml is RETIRED (design D7): it is ignored with a
+# one-time stderr warning; pin per-project via change front-matter instead.
 # Spec: opsx-model-config.*, opsx-cli.model-config-write-surface
 # ============================================================================
 opsx_models() (
@@ -78,7 +83,11 @@ opsx_models() (
 			esac
 		done
 		if [ -n "$LAYER" ]; then
-			case "$LAYER" in user|project) ;; *) err "invalid layer: $LAYER (expected user|project)"; exit 2 ;; esac
+			case "$LAYER" in
+				user) ;;
+				project) err "project model layer removed; use review.md front-matter (per-change model pinning); no file written"; exit 2 ;;
+				*) err "invalid layer: $LAYER (expected user)"; exit 2 ;;
+			esac
 		fi
 	fi
 
@@ -97,6 +106,14 @@ opsx_models() (
 	USER_CFG="${OPSX_MODELS_USER_CONFIG:-$HOME/.config/opsx/models.yaml}"
 	PROJECT_CFG=""
 	[ -n "$ROOT" ] && PROJECT_CFG="$ROOT/openspec/opsx-models.yaml"
+	# Project-layer removal (design D7): a lingering project yaml no longer
+	# participates in resolution. Surface EXACTLY ONE stderr warning per
+	# top-level invocation (the sentinel dedupes nested/recursive calls and the
+	# subprocess fan-out in `list`); stdout contract + exit codes are unchanged.
+	if [ -n "$PROJECT_CFG" ] && [ -f "$PROJECT_CFG" ] && [ -z "${OPSX_MODELS_LAYER_WARNED:-}" ]; then
+		echo "$PROG: project model layer removed; use review.md front-matter (ignoring $PROJECT_CFG)" >&2
+		export OPSX_MODELS_LAYER_WARNED=1
+	fi
 
 	HAVE_YQ=0; command -v yq >/dev/null 2>&1 && HAVE_YQ=1
 	yq_warned=0
@@ -157,7 +174,7 @@ opsx_models() (
 				grole="${POS[0]:-}"
 				case "$grole" in
 					author|review|impl|author-in-session) ;;
-					"") err "usage: opsx models get <role> [--layer user|project]"; exit 2 ;;
+					"") err "usage: opsx models get <role> [--layer user]"; exit 2 ;;
 					*) err "unknown role: $grole"; exit 2 ;;
 				esac
 				if [ -z "$LAYER" ]; then
@@ -179,10 +196,10 @@ opsx_models() (
 				srole="${POS[0]:-}"; sval="${POS[1]:-}"
 				case "$srole" in
 					author|review|impl|author-in-session) ;;
-					"") err "usage: opsx models set <role> <value> [--layer user|project]"; exit 2 ;;
+					"") err "usage: opsx models set <role> <value> [--layer user]"; exit 2 ;;
 					*) err "unknown role: $srole (author|review|impl|author-in-session)"; exit 2 ;;
 				esac
-				[ -n "$sval" ] || { err "usage: opsx models set <role> <value> [--layer user|project]"; exit 2 ; }
+				[ -n "$sval" ] || { err "usage: opsx models set <role> <value> [--layer user]"; exit 2 ; }
 				if [ "$srole" = author-in-session ]; then
 					case "$(printf '%s' "$sval" | tr 'A-Z' 'a-z')" in
 						true|false) sval="$(printf '%s' "$sval" | tr 'A-Z' 'a-z')" ;;
@@ -241,9 +258,7 @@ opsx_models() (
 				fi
 			fi
 		fi
-		if [ -n "$PROJECT_CFG" ] && [ -f "$PROJECT_CFG" ] && need_yq; then
-			v="$(yq_scalar "$PROJECT_CFG" "$2")"; [ -n "$v" ] && { G_VAL="$v"; G_SRC=project; return; }
-		fi
+		# project layer retired (design D7): no longer consulted.
 		if [ -f "$USER_CFG" ] && need_yq; then
 			v="$(yq_scalar "$USER_CFG" "$2")"; [ -n "$v" ] && { G_VAL="$v"; G_SRC=user; return; }
 		fi
@@ -272,10 +287,7 @@ opsx_models() (
 				fi
 			fi
 		fi
-		if [ -n "$PROJECT_CFG" ] && [ -f "$PROJECT_CFG" ] && need_yq; then
-			if [ "$ROLE" = review ]; then RAW="$(yq_list "$PROJECT_CFG" "$Y_MODEL")"; else RAW="$(yq_scalar "$PROJECT_CFG" "$Y_MODEL")"; fi
-			[ -n "$RAW" ] && { SRC=project; return; }
-		fi
+		# project layer retired (design D7): no longer consulted.
 		if [ -f "$USER_CFG" ] && need_yq; then
 			if [ "$ROLE" = review ]; then RAW="$(yq_list "$USER_CFG" "$Y_MODEL")"; else RAW="$(yq_scalar "$USER_CFG" "$Y_MODEL")"; fi
 			[ -n "$RAW" ] && { SRC=user; return; }
@@ -403,14 +415,22 @@ set -uo pipefail
 PROG="opsx gate"
 CHANGE=""
 WORKTREE_ARG=""
+CHEAP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --worktree) { [ $# -ge 2 ] && [ -n "$2" ]; } || { echo "$PROG: --worktree requires a value" >&2; exit 2; }; WORKTREE_ARG="$2"; shift 2 ;;
-    -h|--help) echo "usage: $PROG <change> [--worktree <path>]"; exit 0 ;;
+    --cheap) CHEAP=1; shift ;;
+    -h|--help) echo "usage: $PROG <change> [--worktree <path>] [--cheap]"; exit 0 ;;
     -*) echo "$PROG: unknown option $1" >&2; exit 2 ;;
     *) CHANGE="$1"; shift ;;
   esac
 done
+# --cheap (opsx-cli.status-fleet-view consumer, design D1): run ALL deterministic
+# artifact/front-matter/verdict-state checks but SKIP validation-command execution
+# and the Scale>=M validation-source enforcement, and do NOT exit at the cheap-
+# checks short-circuit — so code-review/verify/doneness state still reports. The
+# run is label-visible as gate(cheap) so a green never overclaims validations ran.
+GLABEL="gate"; [ "$CHEAP" -eq 1 ] && GLABEL="gate(cheap)"
 [ -n "$CHANGE" ] || { echo "usage: $PROG <change> [--worktree <path>]" >&2; exit 2; }
 
 ROOT="$(git -C "${OPSX_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" \
@@ -491,6 +511,7 @@ fi
 [ -d "$CDIR" ] || { fail change "change not found: $CHANGE"; exit 1; }
 
 SCALE="$(fm scale)"
+FULL_RIGOR_RAW="$(fm full_rigor)"
 WORKTREE_MODE="$(fm worktree_mode)"
 VERIFY_MODE="$(fm verification_mode)"
 CR_MODE="$(fm code_review_mode)"
@@ -511,6 +532,18 @@ validate_mode code_review_mode "$CR_MODE" "none advisory gating-required"
 validate_mode validation_source_mode "$VSRC_MODE" "required waived"
 validate_mode doneness_mode "$DONE_MODE" "required waived"
 
+# Derived fail-CLOSED default for the load-bearing review mode (R5-F1): an
+# ABSENT code_review_mode must not read as "not gating-required" at Scale M —
+# the documented default is gating-required at M+ (schema.yaml), advisory
+# below. An omitted key at M previously let a change pass with no
+# code-review.md at all (fail-open by omission).
+if [ -z "$CR_MODE" ]; then
+  case "$SCALE" in
+    M) CR_MODE="gating-required" ;;
+    *) CR_MODE="advisory" ;;
+  esac
+fi
+
 # ============================================================================
 # CHEAP CHECKS (structure / artifacts / tasks) — short-circuit before expensive
 # ============================================================================
@@ -519,18 +552,55 @@ validate_mode doneness_mode "$DONE_MODE" "required waived"
 if [ ! -f "$REVIEW" ]; then
   fail review "review.md absent (required to read Scale)"
 fi
+# Tier collapse (opsx-workflow-schema.scale-adaptive-gating, design D3): the
+# vocabulary is XS|S|M. The retired L/XL labels fail CLOSED with the relabel
+# remedy (former L/XL == "scale: M" + "full_rigor: true").
 case "$SCALE" in
-  XS|S|M|L|XL) ;;
+  XS|S|M) ;;
+  L|XL) fail scale "Scale $SCALE retired; relabel to 'scale: M' + 'full_rigor: true' (former L/XL mapping)" ; SCALE="" ;;
   *) fail scale "Scale absent or unparseable in review.md front-matter" ; SCALE="" ;;
 esac
 
-# Required artifacts by Scale, emitted in lifecycle dependency order.
-case "$SCALE" in
-  XS)      req="proposal tasks" ;;
-  S)       req="proposal specs tasks plan" ;;
-  M|L|XL)  req="review intent proposal specs clarify design analyze tasks plan" ;;
-  *)       req="" ;;
+# full_rigor: optional boolean front-matter flag. Absent => false; any value
+# that is not a parseable boolean fails CLOSED (never silently defaulted).
+FULL_RIGOR=false
+case "$(printf '%s' "$FULL_RIGOR_RAW" | tr '[:upper:]' '[:lower:]')" in
+  ""|false) FULL_RIGOR=false ;;
+  true) FULL_RIGOR=true ;;
+  *) fail full_rigor "unparseable full_rigor value: '$FULL_RIGOR_RAW' (expected true or false); failing closed" ;;
 esac
+
+# Required artifacts by (Scale, full_rigor), emitted in lifecycle dependency order.
+# Plain M drops the standalone clarify.md/analyze.md (clarify open questions live
+# in proposal, analyze is deterministic-checks-only); M + full_rigor restores the
+# full former M/L/XL set. doneness is NOT a structural artifact here — it is a
+# mode-conditioned verdict governed by the Doneness Verdict Enforcement section.
+# D3 table (opsx-gate-enforcement.required-artifact-by-scale): review.md is
+# always required (checked above; Scale is read from it). XS adds nothing; S
+# adds proposal + tasks; plain M adds specs/intent/plan (design.md is NOT
+# required at plain M — it is decision-gated authoring per D5); M+full_rigor
+# adds clarify + analyze + design (the former L/XL full set always carried
+# design). specs/ and plan are NOT required below M.
+case "$SCALE" in
+  XS) req="review" ;;
+  S)  req="review proposal tasks" ;;
+  M)  if [ "$FULL_RIGOR" = true ]; then
+        req="review intent proposal specs clarify design analyze tasks plan"
+      else
+        req="review intent proposal specs tasks plan"
+      fi ;;
+  *)  req="" ;;
+esac
+
+# Worktree-mode default derivation (design D6): when worktree_mode is ABSENT from
+# front-matter, derive it by tier — XS/S same-tree, M worktree-required. An
+# explicit value (already validated above) always wins.
+if [ -z "$WORKTREE_MODE" ]; then
+  case "$SCALE" in
+    XS|S) WORKTREE_MODE=same-tree ;;
+    M)    WORKTREE_MODE=worktree-required ;;
+  esac
+fi
 ORDER="review intent proposal specs clarify design analyze tasks plan"
 for a in $ORDER; do
   case " $req " in *" $a "*) ;; *) continue ;; esac
@@ -543,7 +613,13 @@ done
 
 # Structural validation (OpenSpec-tracked artifacts only) — run against the
 # resolved artifact source so worktree-side artifacts are what gets validated.
-if command -v openspec >/dev/null 2>&1; then
+# Conditioned on specs/ (R6-F1): the real openspec CLI requires >=1 spec delta
+# per change, but the D3 matrix deliberately omits specs/ at XS and S — an
+# unconditional whole-change validate would make those tiers ungateable in a
+# real workspace. Run it whenever specs/ EXISTS (any tier — authored deltas
+# must always validate), skip it only when specs/ is both absent and not
+# required by the tier matrix.
+if command -v openspec >/dev/null 2>&1 && [ -d "$CDIR/specs" ]; then
   ( cd "$ART_ROOT" && openspec validate "$CHANGE" --strict --no-interactive ) >/dev/null 2>&1 \
     || fail structure "openspec validate --strict failed"
 fi
@@ -566,7 +642,7 @@ if command -v jq >/dev/null 2>&1; then
   author_src="$(OPSX_ROOT="$ART_ROOT" opsx_models author --json --change "$CHANGE" 2>/dev/null | jq -r '.source' 2>/dev/null || true)"
   ais="$(OPSX_ROOT="$ART_ROOT" opsx_models author-in-session --json --change "$CHANGE" 2>/dev/null | jq -r '.value' 2>/dev/null || true)"
   case "$author_src" in
-    env|change|project|user)
+    env|change|user)
       if [ "$ais" != "false" ]; then
         MARKER='<!-- authored: in-session -->'
         for f in "$CDIR/proposal.md" "$CDIR/intent.md" "$CDIR/design.md" "$CDIR/clarify.md" "$CDIR/tasks.md" "$CDIR/plan.md" "$CDIR"/specs/*/spec.md; do
@@ -580,7 +656,9 @@ if command -v jq >/dev/null 2>&1; then
 fi
 
 # Short-circuit: do not run expensive validations while cheap checks are red.
-if [ "$rc" -ne 0 ]; then
+# In --cheap mode the short-circuit is DISABLED (validations are skipped anyway)
+# so verdict-state (verify/code-review/doneness) checks still run and report.
+if [ "$rc" -ne 0 ] && [ "$CHEAP" -eq 0 ]; then
   echo "$PROG: cheap checks failed (change=$CHANGE scale=${SCALE:-?}); validations skipped" >&2
   exit 1
 fi
@@ -645,6 +723,10 @@ run_in_impl() {
   fi
 }
 
+# In --cheap mode, skip ALL validation-command execution and the Scale>=M
+# validation-source enforcement (design D1). Everything else (verdict-state,
+# freshness, doneness) still runs below.
+if [ "$CHEAP" -eq 0 ]; then
 if [ -f "$MANIFEST" ] && command -v yq >/dev/null 2>&1; then
   gates_n="$(yq '.gates | length' "$MANIFEST" 2>/dev/null || echo 0)"
   i=0
@@ -677,12 +759,13 @@ fi
 
 # Scale >= M requires at least one agent-independent source unless waived.
 case "$SCALE" in
-  M|L|XL)
+  M)
     if [ "$have_required_source" -eq 0 ] && [ "$VSRC_MODE" != "waived" ]; then
       fail validation-source "Scale $SCALE requires an agent-independent validation source (manifest required:true or OPSX_VALIDATE); none found and validation_source_mode != waived"
     fi
     ;;
 esac
+fi  # end --cheap guard (validation-command execution + validation-source)
 
 # ============================================================================
 # MODE-AWARE VERDICTS + FRESHNESS/PROVENANCE
@@ -767,7 +850,7 @@ freshness_check() {
 # DONENESS VERDICT (intent-satisfaction) — mode-conditioned, parse-only.
 # Spec: opsx-gate-enforcement.doneness-verdict-enforcement
 #       opsx-gate-enforcement.mode-aware-verdict-reading
-#       opsx-doneness-judge.{sealed-doneness-verdict-artifact,freshness-bound-verdict,
+#       opsx-adversarial-review.{sealed-doneness-verdict-artifact,freshness-bound-verdict,
 #                            anti-self-forge-provenance,scale-gated-with-waiver}
 # Emitted ONLY as the sole remaining failure: while any mechanical/verify/code-review
 # check is already red (rc != 0), the doneness line is suppressed (the load-bearing
@@ -812,7 +895,7 @@ waiver_has_rationale() {
 }
 if [ "$rc" -eq 0 ]; then
   case "$SCALE" in
-    M|L|XL)
+    M)
       if [ "$DONE_MODE" = "waived" ]; then
         # Bare waiver (no real rationale) cannot bypass the judge at Scale>=M.
         if ! waiver_has_rationale; then
@@ -827,7 +910,7 @@ if [ "$rc" -eq 0 ]; then
         else
           [ -n "$(cr_field "$DONE" 'Judge')" ] \
             || fail doneness "doneness.md lacks an adapter-stamped Judge provenance field"
-          # Vocabulary (opsx-doneness-judge): blind-single-judge is the normal
+          # Vocabulary (opsx-adversarial-review): blind-single-judge is the normal
           # single independent blind judge; adversarial-multimodel is the
           # stronger optional form. degraded-single-model (inline, no adapter)
           # and any unknown value fail CLOSED.
@@ -854,9 +937,14 @@ fi
 
 # ============================================================================
 if [ "$rc" -eq 0 ]; then
-  echo "GATE-PASS: $CHANGE (${SCALE:-?})"
+  if [ "$CHEAP" -eq 1 ]; then
+    echo "GATE-PASS(cheap): $CHANGE (${SCALE:-?}) [validations not run]"
+  else
+    echo "GATE-PASS: $CHANGE (${SCALE:-?})"
+  fi
   exit 0
 fi
+[ "$CHEAP" -eq 1 ] && echo "$PROG: $GLABEL red (change=$CHANGE scale=${SCALE:-?})" >&2
 exit 1
 
 )
@@ -877,7 +965,7 @@ opsx_loop() (
 #               e.g. 'claude -p --dangerously-skip-permissions' | 'codex exec'
 #   MAX_ITERS   iteration budget (default: review.md loop_max_iterations or 40)
 #
-# Capability: opsx-loop-orchestration (fallback continuation).
+# Capability: opsx-loop (fallback continuation).
 set -uo pipefail
 
 CHANGE="${1:?usage: opsx loop <change> [--worktree <path>]}"; shift || true
@@ -1087,16 +1175,217 @@ exit 0
 )
 
 # ============================================================================
+# SUBCOMMAND: status — READ-ONLY, model-free fleet view (opsx-cli.status-fleet-view).
+# Scans non-archive openspec/changes/*; per change prints Scale (+full_rigor),
+# the gate(cheap) red/green summary + earliest failing check (reusing opsx gate
+# --cheap), worktree path + valid|invalid|none on branch opsx/<change>, loop_hold
+# + reason, and Diff Base staleness (commits behind main). NO side effects, NO
+# model calls, exit 0 ALWAYS — a view, never a gate.
+# ============================================================================
+opsx_status() (
+set -uo pipefail
+PROG="opsx status"
+ROOT="$(git -C "${OPSX_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" \
+  || { echo "$PROG: not inside a git repository (nothing to view)" >&2; exit 0; }
+CHANGES_DIR="$ROOT/openspec/changes"
+[ -d "$CHANGES_DIR" ] || { echo "$PROG: no openspec/changes/ under $ROOT"; exit 0; }
+
+fm_of() { # $1=review.md $2=key — read a value from the YAML front-matter
+  [ -f "$1" ] || return 0
+  awk -v key="$2" '
+    NR==1 { if ($0 != "---") exit; infm=1; next }
+    infm && $0=="---" { exit }
+    infm {
+      line=$0; sub(/^[ \t]+/,"",line)
+      p=index(line,":"); if (p==0) next
+      k=substr(line,1,p-1); v=substr(line,p+1)
+      gsub(/^[ \t]+|[ \t]+$/,"",k); gsub(/^[ \t]+|[ \t]+$/,"",v)
+      gsub(/^["'\'']|["'\'']$/,"",v)
+      if (k==key) { print v; exit }
+    }' "$1"
+}
+body_of() { # $1=review.md $2=field — read a **Field:** value line
+  [ -f "$1" ] || return 0
+  grep -E "^\*\*$2:\*\*" "$1" 2>/dev/null | head -1 \
+    | sed -E "s/^\*\*$2:\*\*[[:space:]]*//; s/[[:space:]]+$//"
+}
+
+MAIN_EXISTS=0
+git -C "$ROOT" rev-parse --verify --quiet main >/dev/null 2>&1 && MAIN_EXISTS=1
+
+found=0
+for d in "$CHANGES_DIR"/*; do
+  [ -d "$d" ] || continue
+  name="$(basename "$d")"
+  [ "$name" = "archive" ] && continue
+  found=1
+  review="$d/review.md"
+
+  # Scale (+full_rigor marker); placeholder when review.md/Scale absent.
+  scale="$(fm_of "$review" scale)"
+  if [ -z "$scale" ]; then
+    scale_disp="—"
+  else
+    scale_disp="$scale"
+    case "$(printf '%s' "$(fm_of "$review" full_rigor)" | tr '[:upper:]' '[:lower:]')" in
+      true) scale_disp="$scale +full_rigor" ;;
+    esac
+  fi
+
+  # gate(cheap) red/green + earliest failing check (reuse opsx gate --cheap).
+  gout="$(OPSX_ROOT="$ROOT" opsx_gate "$name" --cheap 2>&1)"; grc=$?
+  if [ "$grc" -eq 0 ]; then
+    gate_disp="green"
+  else
+    earliest="$(printf '%s\n' "$gout" | grep -m1 '^GATE-FAIL ' | awk '{print $2}')"
+    gate_disp="red [${earliest:-unknown}]"
+  fi
+
+  # worktree path + valid|invalid|none on branch opsx/<change>.
+  if git -C "$ROOT" show-ref --verify --quiet "refs/heads/opsx/$name"; then
+    wt="$(opsx_wt_for_branch "$ROOT" "$name")"
+    if [ -n "$wt" ] && opsx_wt_valid_for_change "$wt" "$name"; then
+      wt_disp="valid $wt"
+    else
+      [ -n "$wt" ] || wt="$(opsx_wt_convention_path "$ROOT" "$name")"
+      wt_disp="invalid $wt"
+    fi
+  else
+    wt_disp="none —"
+  fi
+
+  # loop_hold + reason (or placeholder).
+  case "$(printf '%s' "$(fm_of "$review" loop_hold)" | tr '[:upper:]' '[:lower:]')" in
+    true) hr="$(fm_of "$review" loop_hold_reason)"; hold_disp="held — ${hr:-(none)}" ;;
+    *)    hold_disp="—" ;;
+  esac
+
+  # Diff Base staleness: N behind main (placeholder when locator/main absent).
+  base="$(body_of "$review" 'Diff Base SHA')"
+  case "$base" in ""|"<"*) base="" ;; esac
+  if [ -n "$base" ] && [ "$MAIN_EXISTS" -eq 1 ] \
+     && git -C "$ROOT" rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
+    n="$(git -C "$ROOT" rev-list --count "$base..main" 2>/dev/null)"
+    base_disp="${n:-?} behind main"
+  else
+    base_disp="—"
+  fi
+
+  printf '%s\n' "$name"
+  printf '  Scale: %s\n' "$scale_disp"
+  printf '  gate(cheap): %s\n' "$gate_disp"
+  printf '  worktree: %s\n' "$wt_disp"
+  printf '  loop_hold: %s\n' "$hold_disp"
+  printf '  base: %s\n' "$base_disp"
+done
+[ "$found" -eq 1 ] || echo "$PROG: no non-archive changes under $CHANGES_DIR"
+exit 0
+)
+
+# ============================================================================
+# SUBCOMMAND: archive-check — deterministic archive/land preconditions
+# (opsx-gate-enforcement.land-base-currency + .duplicate-adr-number-scan,
+#  opsx-cli.multi-dir-integration-commit-detector). Exit non-zero IFF the
+# land-base-currency (a) or duplicate-ADR (b) check fails; the multi-dir
+# detector (c) is ADVISORY and NEVER affects the exit code. Model-free.
+# ============================================================================
+opsx_archive_check() (
+set -uo pipefail
+PROG="opsx archive-check"
+err() { echo "$PROG: $*" >&2; }
+CHANGE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) echo "usage: $PROG <change>"; exit 0 ;;
+    -*) err "unknown option: $1"; exit 2 ;;
+    *) CHANGE="$1"; shift ;;
+  esac
+done
+[ -n "$CHANGE" ] || { echo "usage: $PROG <change>" >&2; exit 2; }
+ROOT="$(git -C "${OPSX_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" \
+  || { err "not inside a git repository"; exit 1; }
+CDIR="$ROOT/openspec/changes/$CHANGE"
+[ -d "$CDIR" ] || { err "change not found: $CHANGE"; exit 1; }
+REVIEW="$CDIR/review.md"
+BRANCH="opsx/$CHANGE"
+rc=0
+
+# (a) land-base-currency: merge-base(opsx/<change>, main) must equal main HEAD.
+#     No opsx/<change> branch => same-tree exemption (satisfied, never a
+#     missing-ref failure).
+if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  mh="$(git -C "$ROOT" rev-parse main 2>/dev/null)"
+  mb="$(git -C "$ROOT" merge-base "$BRANCH" main 2>/dev/null)"
+  if [ -z "$mh" ] || [ -z "$mb" ]; then
+    echo "ARCHIVE-CHECK-FAIL base-currency: cannot compute merge-base($BRANCH, main)" >&2
+    rc=1
+  elif [ "$mb" != "$mh" ]; then
+    echo "ARCHIVE-CHECK-FAIL base-currency: stale base merge-base($BRANCH, main)=$mb != main HEAD=$mh; REMEDY: rebase $BRANCH onto main HEAD, then re-run review (the rebase staleness-fires a fresh review)" >&2
+    rc=1
+  else
+    echo "archive-check: base-currency OK (merge-base($BRANCH, main) == main HEAD)"
+  fi
+else
+  echo "archive-check: base-currency satisfied — no $BRANCH branch (same-tree exemption; no divergent base to rebase)"
+fi
+
+# (b) duplicate-ADR scan: derive ADR-NNNN from filenames under adr/.
+if [ -d "$ROOT/adr" ]; then
+  tmpn="$(mktemp)"
+  for f in "$ROOT"/adr/*; do
+    [ -f "$f" ] || continue
+    b="$(basename "$f")"
+    case "$b" in
+      ADR-[0-9][0-9][0-9][0-9]*) n="$(printf '%s' "$b" | sed -E 's/^ADR-([0-9]{4}).*/\1/')"; printf '%s\t%s\n' "$n" "$f" >>"$tmpn" ;;
+    esac
+  done
+  for n in $(awk -F'\t' '{print $1}' "$tmpn" | sort | uniq -d); do
+    paths="$(awk -F'\t' -v k="$n" '$1==k{print $2}' "$tmpn" | paste -sd' ' -)"
+    echo "ARCHIVE-CHECK-FAIL adr-dup: ADR-$n claimed by >=2 files: $paths" >&2
+    rc=1
+  done
+  rm -f "$tmpn"
+fi
+
+# (c) multi-dir integration-commit detector (ADVISORY — never affects rc):
+#     scan <Diff Base SHA>..main (first-parent chain, MERGES INCLUDED — an
+#     "evil merge" landing >=2 change dirs must be flagged per
+#     opsx-cli.multi-dir-integration-commit-detector; a merge commit's touched
+#     set is its net effect on main, i.e. diff vs its FIRST parent) for any
+#     commit touching >=2 distinct openspec/changes/<dir>/ directories.
+#     Skipped when no Diff Base locator.
+DIFF_BASE=""
+[ -f "$REVIEW" ] && DIFF_BASE="$(grep -E '^\*\*Diff Base SHA:\*\*' "$REVIEW" 2>/dev/null | head -1 | sed -E 's/^\*\*Diff Base SHA:\*\*[[:space:]]*//; s/[[:space:]]+$//')"
+case "$DIFF_BASE" in ""|"<"*) DIFF_BASE="" ;; esac
+if [ -n "$DIFF_BASE" ] \
+   && git -C "$ROOT" rev-parse --verify --quiet main >/dev/null 2>&1 \
+   && git -C "$ROOT" rev-parse --verify --quiet "$DIFF_BASE" >/dev/null 2>&1; then
+  for c in $(git -C "$ROOT" rev-list --first-parent "$DIFF_BASE..main" 2>/dev/null); do
+    dirs="$(git -C "$ROOT" diff-tree --no-commit-id --name-only -r -m --first-parent "$c" 2>/dev/null \
+      | sed -nE 's#^(openspec/changes/[^/]+)/.*#\1#p' | sort -u | grep -v '^$')"
+    cnt="$(printf '%s\n' "$dirs" | grep -c . )"
+    if [ "${cnt:-0}" -ge 2 ]; then
+      echo "archive-check: ADVISORY multi-dir commit $c touches: $(printf '%s' "$dirs" | paste -sd' ' -) (path-scoped-commit backstop; advisory only, does NOT affect exit)"
+    fi
+  done
+fi
+
+exit $rc
+)
+
+# ============================================================================
 # DISPATCH
 # ============================================================================
 sub="${1:-}"
 [ $# -gt 0 ] && shift || true
 case "$sub" in
-  gate)     opsx_gate "$@"; exit $? ;;
-  models)   opsx_models "$@"; exit $? ;;
-  loop)     opsx_loop "$@"; exit $? ;;
-  worktree) opsx_worktree "$@"; exit $? ;;
-  clean)    opsx_clean "$@"; exit $? ;;
+  gate)          opsx_gate "$@"; exit $? ;;
+  models)        opsx_models "$@"; exit $? ;;
+  status)        opsx_status "$@"; exit $? ;;
+  archive-check) opsx_archive_check "$@"; exit $? ;;
+  loop)          opsx_loop "$@"; exit $? ;;
+  worktree)      opsx_worktree "$@"; exit $? ;;
+  clean)         opsx_clean "$@"; exit $? ;;
   -h|--help|help) opsx_usage; exit 0 ;;
   "") echo "opsx: missing subcommand" >&2; opsx_usage; exit 2 ;;
   *) echo "opsx: unknown subcommand: $sub" >&2; opsx_usage; exit 2 ;;

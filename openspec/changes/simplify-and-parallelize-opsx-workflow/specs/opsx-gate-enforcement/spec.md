@@ -12,16 +12,16 @@ per the MODIFIED-delta rule.
 
 ### Requirement: Required Artifact By Scale
 
-THE opsx gate command SHALL derive the set of required artifacts from the change's declared Scale — one of the tier vocabulary `XS | S | M` read from the machine-readable front-matter of review.md, together with the optional boolean `full_rigor` flag — and SHALL fail if any artifact in that set is absent or fails the structural validation appropriate to its type. WHILE Scale is M (with or without `full_rigor`), the required set SHALL include intent.md (the loop's frozen baseline). At Scale M WITHOUT `full_rigor`, the required set SHALL NOT include a standalone clarify.md or a standalone blind analyze verdict (clarify open questions live in the proposal's `## Open Questions`; analyze is thinned to its deterministic checks). WHILE `full_rigor: true` is set, the required set SHALL include the full former M/L/XL artifact set — clarify.md, analyze.md carrying its blind verdict, and an independently dispatched doneness verdict — in addition to intent.md. The former L and XL labels map to "M + full_rigor"; a review.md declaring an unknown Scale value or an unparseable `full_rigor` value SHALL fail closed (reported as a failed check, never assumed permissive).
+THE opsx gate command SHALL derive the set of required artifacts from the change's declared Scale — one of the tier vocabulary `XS | S | M` read from the machine-readable front-matter of review.md, together with the optional boolean `full_rigor` flag — and SHALL fail if any artifact in that set is absent or fails the structural validation appropriate to its type. WHILE Scale is M (with or without `full_rigor`), the required set SHALL include intent.md (the loop's frozen baseline). At Scale M WITHOUT `full_rigor`, the required set SHALL NOT include a standalone clarify.md, a standalone blind analyze verdict, or design.md (clarify open questions live in the proposal's `## Open Questions`; analyze is thinned to its deterministic checks; design authoring is decision-gated — authored only when a decision warrants it — not gate-required). WHILE `full_rigor: true` is set, the required set SHALL include the full former M/L/XL artifact set — clarify.md, analyze.md carrying its blind verdict, design.md (the former L/XL full set always carried design), and an independently dispatched doneness verdict — in addition to intent.md. The former L and XL labels map to "M + full_rigor"; a review.md declaring an unknown Scale value or an unparseable `full_rigor` value SHALL fail closed (reported as a failed check, never assumed permissive).
 
 #### Scenario: Missing Scale-required artifact fails the gate at plain M
 - **WHILE** the change declares Scale M WITHOUT `full_rigor`
 - **IF** intent.md or review.md is absent
-- **THEN** opsx gate SHALL report the missing artifact as a failed check and exit non-zero, and it SHALL NOT require a standalone clarify.md or a standalone blind analyze verdict at this tier
+- **THEN** opsx gate SHALL report the missing artifact as a failed check and exit non-zero, and it SHALL NOT require a standalone clarify.md, a standalone blind analyze verdict, or design.md at this tier (design authoring is decision-gated, not gate-required)
 
 #### Scenario: Full-rigor requires the full former L/XL artifact set
 - **WHILE** the change declares Scale M with `full_rigor: true`
-- **IF** intent.md, clarify.md, analyze.md (with its blind verdict), or review.md is absent
+- **IF** intent.md, clarify.md, analyze.md (with its blind verdict), design.md, or review.md is absent
 - **THEN** opsx gate SHALL report the missing artifact as a failed check and exit non-zero
 
 #### Scenario: Absent or unparseable Scale fails the gate
@@ -39,6 +39,44 @@ THE opsx gate command SHALL derive the set of required artifacts from the change
 #### Scenario: Structural validation is per artifact type
 - **WHEN** opsx gate validates an artifact
 - **THEN** it SHALL apply `openspec validate --strict` to OpenSpec-tracked artifacts and the artifact's own documented field checks to skill-managed artifacts (verify.md, code-review.md, doneness.md), and SHALL NOT apply `openspec validate --strict` to artifacts OpenSpec does not track
+
+### Requirement: Mode Aware Verdict Reading
+
+THE opsx gate command SHALL determine verify, code-review, and doneness outcomes solely by parsing the verdict fields of the respective artifact files (no language-model judgment), and SHALL apply those checks conditioned on the change's Verification Mode, Code Review Mode, and `doneness_mode` read from review.md front-matter, so that the gate never blocks on a check that the declared mode treats as advisory or waived. WHEN `code_review_mode` is ABSENT from the front-matter, the gate SHALL derive the documented fail-closed default before enforcement — `gating-required` at Scale M (with or without `full_rigor`), `advisory` below M — so an omitted key can never read as "not gating-required" and let a Scale-M change pass without a code-review verdict (fail-open by omission).
+
+#### Scenario: Verify enforced only when retained-required
+- **WHILE** Verification Mode is retained-required
+- **IF** verify.md is absent or its Completion Decision is not green
+- **THEN** opsx gate SHALL report verify as a failed check and exit non-zero
+
+#### Scenario: Verify advisory does not block
+- **WHILE** Verification Mode is retained-recommended or inline-only
+- **WHEN** opsx gate evaluates the verify check
+- **THEN** a missing or non-green verify.md SHALL NOT by itself cause a non-zero exit
+
+#### Scenario: Code review enforced only when gating-required
+- **WHILE** Code Review Mode is gating-required
+- **IF** code-review.md is absent or its Verdict is not pass
+- **THEN** opsx gate SHALL report code-review as a failed check and exit non-zero, keeping the gate consistent with the archive gate
+
+#### Scenario: Code review advisory or none does not block
+- **WHILE** Code Review Mode is advisory or none
+- **WHEN** opsx gate evaluates the code-review check
+- **THEN** the code-review verdict SHALL NOT cause a non-zero exit
+
+#### Scenario: Absent code_review_mode derives the fail-closed default at Scale M
+- **WHILE** a change declares Scale M and its review.md front-matter OMITS `code_review_mode`
+- **IF** code-review.md is absent or its Verdict is not pass
+- **THEN** opsx gate SHALL enforce the derived `gating-required` default and report code-review as a failed check with a non-zero exit, never treating the omitted key as non-gating
+
+#### Scenario: Absent code_review_mode below Scale M defaults to advisory
+- **WHILE** a change declares Scale XS or S and its review.md front-matter OMITS `code_review_mode`
+- **WHEN** opsx gate evaluates the code-review check
+- **THEN** the derived default SHALL be `advisory` and a missing code-review.md SHALL NOT by itself cause a non-zero exit
+
+#### Scenario: Doneness read by field and conditioned on mode
+- **WHEN** opsx gate evaluates the doneness check
+- **THEN** it SHALL determine the outcome solely by parsing `doneness.md` fields (no language-model judgment), and SHALL treat the check as required only WHILE the change is Scale M or above and `doneness_mode` is `required`, so a waived or sub-M doneness verdict never blocks — the concrete failure conditions are defined by the Doneness Verdict Enforcement requirement
 
 ## ADDED Requirements
 

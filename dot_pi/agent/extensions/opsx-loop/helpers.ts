@@ -11,7 +11,7 @@ import { join, relative } from "node:path";
  * Captures ANY working-tree content change — committed, staged, unstaged, or
  * untracked — uniformly, so the stall guard's progress signal does not depend on
  * git index state. Returns "" for a missing/unreadable dir.
- * (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ * (opsx-loop.stall-detection-stops-the-loop)
  */
 export function hashDir(dir: string): string {
 	const h = createHash("sha1");
@@ -56,7 +56,7 @@ export interface ResolvedModel {
  * these from process.env before applying a change's resolved config, so a
  * previous loop's exports can never leak into a later loop (or into the gate's
  * author-marker resolution, which treats env as the highest-precedence layer).
- * (opsx-loop-kickoff.loop-exports-resolved-role-models)
+ * (opsx-loop.loop-exports-resolved-role-models)
  */
 export const OPSX_MODEL_ENV_KEYS = [
 	"OPSX_AUTHOR_MODEL",
@@ -85,7 +85,7 @@ export function parseModelsJson(stdout: string): ResolvedModel | null {
  * `review` is newline-joined (the resolver/skills accept newline- or
  * comma-delimited). author-in-session always exports its resolved boolean.
  * Values are already provider-qualified by opsx models and pass through.
- * (opsx-loop-kickoff.loop-exports-resolved-role-models)
+ * (opsx-loop.loop-exports-resolved-role-models)
  */
 export function buildModelEnv(resolved: {
 	author?: ResolvedModel | null;
@@ -139,9 +139,9 @@ export type LoopArg =
  * `goal` is the conversation/goal-driven entry: `goal <free text>` preserves the
  * ENTIRE remaining input as the goal (multi-word, never truncated); `goal` with
  * no following text starts from the current conversation contents (goal omitted).
- * (opsx-loop-kickoff.argument-parsing-preserves-full-input,
- *  opsx-loop-kickoff.status-and-clear-subcommands, opsx-loop-kickoff.model-config-subcommand,
- *  opsx-loop-kickoff.goal-and-conversation-kickoff)
+ * (opsx-loop.argument-parsing-preserves-full-input,
+ *  opsx-loop.status-and-clear-subcommands, opsx-loop.model-config-subcommand,
+ *  opsx-loop.goal-and-conversation-kickoff)
  */
 export function parseLoopArg(raw: string): LoopArg {
 	const arg = (raw ?? "").trim();
@@ -166,7 +166,7 @@ export function parseLoopArg(raw: string): LoopArg {
  * Normalize an opsx gate report into a stable stall key: the SORTED set of
  * `GATE-FAIL <check_id>` identifiers, excluding volatile content (paths, SHAs,
  * timestamps, free-text messages). Used to detect a genuinely repeating failure.
- * (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ * (opsx-loop.stall-detection-stops-the-loop)
  */
 export function gateFailKey(report: string): string {
 	const ids: string[] = [];
@@ -182,7 +182,7 @@ export function gateFailKey(report: string): string {
  * under the `## Gaps` heading, lowercased / markup-stripped / whitespace-collapsed
  * and de-duplicated + sorted for stable set comparison. Template placeholder bullets
  * (`- <...>`) and an absent/gap-less file yield the EMPTY set (the sentinel).
- * (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ * (opsx-loop.stall-detection-stops-the-loop)
  */
 export function parseDonenessGaps(md: string): string[] {
 	const lines = (md ?? "").split(/\r?\n/);
@@ -213,7 +213,7 @@ export function parseDonenessGaps(md: string): string[] {
  * ORDINARY content/HEAD progress signal (re-judged next turn); `gap` (a `not`
  * verdict, or an absent/unparseable file) routes to the bounded gap-set ratchet.
  * HTML comments are stripped so a template comment cannot satisfy the match.
- * (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ * (opsx-loop.stall-detection-stops-the-loop)
  */
 export function classifyDoneness(md: string | null): "satisfied" | "gap" {
 	if (md == null) return "gap";
@@ -231,7 +231,7 @@ export function classifyDoneness(md: string | null): "satisfied" | "gap" {
  * seen set, and rewords to the same normalized membership are all not-progress, so
  * an agent that churns files without monotonically closing judged gaps trips the
  * stall instead of looping forever under an unbounded budget.
- * (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ * (opsx-loop.stall-detection-stops-the-loop)
  */
 export function donenessRatchet(
 	min: string[] | undefined,
@@ -247,7 +247,7 @@ export function donenessRatchet(
 /**
  * Verdict from an opsx gate run: exit 0 = met, any non-zero (or failure to
  * execute) = not met, with the gate's combined output as the reason.
- * Pure; never throws. (opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge)
+ * Pure; never throws. (opsx-loop.opsx-gate-is-the-deterministic-judge)
  */
 export function verdictFromExit(code: number | null, output: string): LoopVerdict {
 	const out = (output ?? "").trim();
@@ -258,20 +258,20 @@ export function verdictFromExit(code: number | null, output: string): LoopVerdic
 /**
  * Parse `loop_max_iterations` from a change's review.md YAML front-matter
  * (between the first two '---' fences). Falls back to `def` when absent or
- * unparseable. (opsx-loop-kickoff.budget-from-review-front-matter)
+ * unparseable. (opsx-loop.budget-from-review-front-matter)
  */
 /**
  * The configured loop budget from review.md front-matter `loop_max_iterations`,
  * or undefined when unconfigured. undefined means NO budget (unbounded) — the
  * loop then stops only on gate-green, stall detection, abort, or manual clear.
- * (opsx-loop-kickoff.budget-from-review-front-matter)
+ * (opsx-loop.budget-from-review-front-matter)
  */
 /**
  * Orchestrator-settable landing hold from review.md front-matter.
  * `loop_hold: true` (anchored, unquoted) holds; anything else does not.
  * The hold is honored even when the reason is empty — a malformed landing must
  * still land (fail-safe direction; clarify C1).
- * (opsx-loop-kickoff.loop-hold-blocks-continuation)
+ * (opsx-loop.loop-hold-blocks-continuation)
  */
 export interface LoopHold {
 	held: boolean;
@@ -295,7 +295,7 @@ export function parseLoopHold(reviewMd: string): LoopHold {
 /**
  * Strip the loop_hold fields from review.md front-matter (named re-arm clears
  * the hold; goal kickoff never calls this). Returns the text unchanged when no
- * hold fields are present. (opsx-loop-kickoff.loop-hold-blocks-continuation)
+ * hold fields are present. (opsx-loop.loop-hold-blocks-continuation)
  */
 export function stripLoopHold(reviewMd: string): string {
 	const text = reviewMd ?? "";
@@ -315,7 +315,7 @@ export function stripLoopHold(reviewMd: string): string {
  * The full named-re-arm clearing transform: strip the hold fields and append
  * the auditable clearance line under Execution Notes (created when absent).
  * Pure text→text so the extension's file write is a dumb persist.
- * (opsx-loop-kickoff.loop-hold-blocks-continuation)
+ * (opsx-loop.loop-hold-blocks-continuation)
  */
 export function clearHoldText(reviewMd: string, change: string, dateStr: string): { next: string; reason: string } {
 	const hold = parseLoopHold(reviewMd);
@@ -336,7 +336,7 @@ export function clearHoldText(reviewMd: string, change: string, dateStr: string)
  * names of change dirs (non-archive) carrying a committed intent.md, with the
  * cheap front-matter scale as status. Directory listing + front-matter parse
  * ONLY — no gate runs, no model calls.
- * (opsx-loop-kickoff.goal-and-conversation-kickoff)
+ * (opsx-loop.goal-and-conversation-kickoff)
  */
 export interface InventoryEntry {
 	name: string;

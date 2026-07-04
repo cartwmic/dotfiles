@@ -19,7 +19,7 @@ The schema SHALL declare a `Scale` mode in `review.md` with the collapsed tier v
 
 #### Scenario: XS skill behavior
 - **WHEN** the user invokes openspec-propose against a project using `schema: opsx-superpowers` and declares `Scale: XS` (typo / comment / single-line config change)
-- **THEN** the openspec-propose skill SHALL author only `proposal.md` and `tasks.md`, AND SHALL log "Scale=XS: skipping specs/clarify/design/analyze/review/plan" so the user understands the deliberate skip
+- **THEN** the openspec-propose skill SHALL author `review.md` (the mode switchboard — NEVER skipped at any Scale, since the gate fails closed without a parseable Scale) plus `proposal.md` and `tasks.md`, AND SHALL log "Scale=XS: skipping specs/clarify/design/analyze/plan" so the user understands the deliberate skip
 
 #### Scenario: M skill behavior
 - **WHEN** the user declares `Scale: M` (typical feature)

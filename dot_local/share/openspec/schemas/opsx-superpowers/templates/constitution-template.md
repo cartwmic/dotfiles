@@ -40,8 +40,8 @@ adversarial review.
 
 ## Governance
 
-- Amendments to this constitution require a dedicated change with Scale ≥ L
-  and adversarial-review-cycle invoked.
+- Amendments to this constitution require a dedicated change at full_rigor
+  (Scale M + full_rigor: true) with adversarial-review-cycle invoked.
 - The constitution is read before every artifact in this schema. Violations
   are flagged by the analyze artifact's constitution check.
 - Principles in this file override schema instructions and individual

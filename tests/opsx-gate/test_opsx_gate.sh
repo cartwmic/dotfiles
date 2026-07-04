@@ -10,10 +10,10 @@
 #   opsx-gate-enforcement.verdict-freshness-and-provenance
 #   opsx-gate-enforcement.worktree-locator-published-to-the-integration-checkout
 #   opsx-gate-enforcement.doneness-verdict-enforcement
-#   opsx-doneness-judge.sealed-doneness-verdict-artifact
-#   opsx-doneness-judge.freshness-bound-verdict
-#   opsx-doneness-judge.anti-self-forge-provenance
-#   opsx-doneness-judge.scale-gated-with-waiver
+#   opsx-adversarial-review.sealed-doneness-verdict-artifact
+#   opsx-adversarial-review.freshness-bound-verdict
+#   opsx-adversarial-review.anti-self-forge-provenance
+#   opsx-adversarial-review.scale-gated-with-waiver
 set -uo pipefail
 
 OPSX="$(cd "$(dirname "$0")/../.." && pwd)/dot_local/bin/executable_opsx"
@@ -28,6 +28,9 @@ FAKEBIN="$TMP/fakebin"; mkdir -p "$FAKEBIN"
 # Deterministic stub: openspec validate always succeeds in fixtures.
 cat >"$FAKEBIN/openspec" <<'EOF'
 #!/usr/bin/env bash
+# Record invocations so tests can assert WHEN the gate runs structural
+# validation (R6-F1: skipped iff specs/ absent), then succeed.
+[ -n "$OPSX_TEST_OPENSPEC_LOG" ] && printf '%s\n' "$*" >>"$OPSX_TEST_OPENSPEC_LOG"
 exit 0
 EOF
 chmod +x "$FAKEBIN/openspec"
@@ -67,10 +70,54 @@ run green-s; check "complete Scale-S change passes (gate-exit-code-contract)" 0 
 run nonexistent-change; check "unknown change fails (gate-exit-code-contract)" 1 $?
 
 # --- opsx-gate-enforcement.required-artifact-by-scale ---
-mkchange missing-plan; rm "$TMP/openspec/changes/missing-plan/plan.md"
-run missing-plan; rc=$?
-check "missing Scale-S artifact fails (required-artifact-by-scale)" 1 $rc
-grep -q 'GATE-FAIL artifact-plan' "$TMP/err" && ok "reports artifact-plan" || nok "reports artifact-plan"
+# D3: at S the required set is review+proposal+tasks (specs/plan are NOT required
+# below M). Removing a genuinely-required S artifact (tasks.md) must fail.
+mkchange missing-tasks; rm "$TMP/openspec/changes/missing-tasks/tasks.md"
+run missing-tasks; rc=$?
+check "missing Scale-S required artifact fails (required-artifact-by-scale)" 1 $rc
+grep -q 'GATE-FAIL artifact-tasks' "$TMP/err" && ok "reports artifact-tasks" || nok "reports artifact-tasks"
+
+# D3 matrix (reviewer probes): XS requires review.md ONLY; S requires
+# review+proposal+tasks and must NOT demand specs/ or plan.
+mkXSonly() { # XS change carrying ONLY review.md
+  local d="$TMP/openspec/changes/$1"; mkdir -p "$d"
+  cat >"$d/review.md" <<'EOF'
+---
+scale: XS
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: advisory
+loop_max_iterations: 10
+validation_source_mode: required
+spec_level: spec-anchored
+---
+# Review
+EOF
+}
+mkXSonly xs-only
+run xs-only; check "XS with only review.md passes artifact checks (required-artifact-by-scale)" 0 $?
+grep -q 'GATE-FAIL artifact-' "$TMP/err" && nok "XS demanded an artifact beyond review.md" || ok "XS demands no artifact beyond review.md"
+
+mkSminimal() { # S change carrying review + proposal + tasks ONLY (no specs/, no plan)
+  local d="$TMP/openspec/changes/$1"; mkdir -p "$d"
+  cat >"$d/review.md" <<'EOF'
+---
+scale: S
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: advisory
+loop_max_iterations: 20
+validation_source_mode: required
+spec_level: spec-anchored
+---
+# Review
+EOF
+  echo "# proposal" >"$d/proposal.md"
+  printf '# tasks\n- [x] 1.1 done\n' >"$d/tasks.md"
+}
+mkSminimal s-min
+run s-min; check "S with review+proposal+tasks passes, no specs/plan demanded (required-artifact-by-scale)" 0 $?
+grep -qE 'GATE-FAIL artifact-(specs|plan)' "$TMP/err" && nok "S wrongly demanded specs/ or plan" || ok "S demands no specs/ or plan"
 
 mkchange noscale
 # break the scale value
@@ -249,7 +296,7 @@ run cr-seal; check "freshness rejects non-verdict change after review (verdict-f
 
 # ============================================================================
 # opsx-gate-enforcement.doneness-verdict-enforcement
-# opsx-doneness-judge.{sealed-doneness-verdict-artifact,freshness-bound-verdict,
+# opsx-adversarial-review.{sealed-doneness-verdict-artifact,freshness-bound-verdict,
 #                      anti-self-forge-provenance,scale-gated-with-waiver}
 # ============================================================================
 HEAD_SHA="$(git -C "$TMP" rev-parse HEAD)"
@@ -586,6 +633,185 @@ printf '# tasks\n- [x] 1.1 todo\n' >"$TMP/wt-div/openspec/changes/wt-div/tasks.m
 printf '# tasks\n- [ ] 1.1 todo\n' >"$WTD/tasks.md"
 run wt-div
 check "recorded Worktree Path resolves worktree artifact source without --worktree (mode-aware-verdict-reading)" 0 $?
+
+# ============================================================================
+# Tier collapse (opsx-workflow-schema.scale-adaptive-gating,
+# opsx-gate-enforcement.required-artifact-by-scale): XS|S|M vocabulary +
+# full_rigor flag; L/XL fail closed with the relabel remedy; plain-M drops
+# clarify.md/analyze.md; M+full_rigor restores them; worktree-mode derives by
+# tier; and --cheap skips validation-command execution while verdict-state
+# checks still report.
+# ============================================================================
+HEAD_SHA="$(git -C "$TMP" rev-parse HEAD)"
+
+# 3-tier vocabulary ACCEPTED: XS resolves without a scale failure ------------
+mkchange xs-ok
+sed -i.bak 's/^scale: S/scale: XS/' "$TMP/openspec/changes/xs-ok/review.md"
+run xs-ok; check "Scale XS accepted (scale-adaptive-gating)" 0 $?
+grep -q 'GATE-FAIL scale' "$TMP/err" && nok "XS wrongly scale-failed" || ok "XS is a known Scale"
+
+# L and XL FAIL CLOSED with the relabel remedy ------------------------------
+mkchange lscale
+sed -i.bak 's/^scale: S/scale: L/' "$TMP/openspec/changes/lscale/review.md"
+run lscale; rc=$?
+check "Scale L fails closed (scale-adaptive-gating)" 1 $rc
+grep -q 'GATE-FAIL scale' "$TMP/err" && grep -qi 'relabel' "$TMP/err" && grep -q "full_rigor: true" "$TMP/err" \
+  && ok "L names the relabel-to-M+full_rigor remedy" || nok "L relabel remedy text"
+mkchange xlscale
+sed -i.bak 's/^scale: S/scale: XL/' "$TMP/openspec/changes/xlscale/review.md"
+run xlscale; rc=$?
+check "Scale XL fails closed (scale-adaptive-gating)" 1 $rc
+grep -q 'GATE-FAIL scale' "$TMP/err" && grep -qi 'relabel' "$TMP/err" && ok "XL names the relabel remedy" || nok "XL relabel remedy text"
+
+# non-boolean full_rigor FAILS CLOSED --------------------------------------
+mkchange badfr
+awk '1; /^scale: S/{print "full_rigor: maybe"}' "$TMP/openspec/changes/badfr/review.md" >"$TMP/badfr.tmp" \
+  && mv "$TMP/badfr.tmp" "$TMP/openspec/changes/badfr/review.md"
+run badfr; rc=$?
+check "non-boolean full_rigor fails closed (scale-adaptive-gating)" 1 $rc
+grep -q 'GATE-FAIL full_rigor' "$TMP/err" && ok "reports full_rigor fail" || nok "reports full_rigor fail"
+
+# plain-M change PASSES artifact checks WITHOUT clarify.md / analyze.md ------
+mkPlainM() { # complete plain-M (no full_rigor) fixture: NO clarify.md, NO analyze.md
+  local d="$TMP/openspec/changes/$1"; mkdir -p "$d/specs/cap"
+  cat >"$d/review.md" <<EOF
+---
+scale: M
+worktree_mode: same-tree
+verification_mode: retained-recommended
+code_review_mode: advisory
+loop_max_iterations: 40
+validation_source_mode: waived
+spec_level: spec-anchored
+doneness_mode: waived
+doneness_waiver_rationale: "test fixture waiver"
+---
+# Review
+
+**Diff Base SHA:** $HEAD_SHA
+**Worktree Path:**
+EOF
+  for a in intent proposal design plan; do echo "# $a" >"$d/$a.md"; done
+  echo "# spec" >"$d/specs/cap/spec.md"
+  printf '# tasks\n- [x] 1.1 done\n' >"$d/tasks.md"
+}
+mkPlainM plain-m
+run plain-m; check "plain-M passes WITHOUT clarify.md/analyze.md (required-artifact-by-scale)" 0 $?
+[ ! -f "$TMP/openspec/changes/plain-m/clarify.md" ] && [ ! -f "$TMP/openspec/changes/plain-m/analyze.md" ] \
+  && ok "plain-M fixture genuinely omits clarify/analyze" || nok "plain-M fixture omits clarify/analyze"
+
+# ---- R5-F1: ABSENT code_review_mode derives the fail-closed default ----
+# (opsx-gate-enforcement.mode-aware-verdict-reading): at Scale M an omitted
+# code_review_mode key derives gating-required — missing code-review.md FAILS.
+mkPlainM m-no-crmode
+sed -i.bak '/^code_review_mode: advisory$/d' "$TMP/openspec/changes/m-no-crmode/review.md" && rm -f "$TMP/openspec/changes/m-no-crmode/review.md.bak"
+run m-no-crmode; rc=$?
+[ $rc -ne 0 ] && grep -q 'code-review' "$TMP/err" \
+  && ok "absent code_review_mode at M derives gating-required (missing code-review.md fails)" || nok "absent code_review_mode at M fail-closed (rc=$rc)"
+# Below M: absent key derives advisory — missing code-review.md does NOT block.
+mkchange xs-no-crmode
+sed -i.bak -e 's/^scale: .*/scale: XS/' -e '/^code_review_mode:/d' "$TMP/openspec/changes/xs-no-crmode/review.md" && rm -f "$TMP/openspec/changes/xs-no-crmode/review.md.bak"
+run xs-no-crmode; rc=$?
+grep -q 'code-review' "$TMP/err" && nok "absent code_review_mode below M must stay advisory" || ok "absent code_review_mode below M derives advisory (no code-review block)"
+
+# ---- R6-F1: whole-change openspec validate conditioned on specs/ presence ----
+# The real openspec CLI demands >=1 spec delta; XS/S deliberately omit specs/.
+# Gate must SKIP whole-change validation when specs/ is absent (XS/S usable in
+# real workspaces) and RUN it whenever specs/ exists.
+mkchange xs-nospecs
+sed -i.bak 's/^scale: .*/scale: XS/' "$TMP/openspec/changes/xs-nospecs/review.md" && rm -f "$TMP/openspec/changes/xs-nospecs/review.md.bak"
+rm -rf "$TMP/openspec/changes/xs-nospecs/specs"
+export OPSX_TEST_OPENSPEC_LOG="$TMP/openspec-invocations"
+: >"$OPSX_TEST_OPENSPEC_LOG"
+run xs-nospecs; rc=$?
+[ $rc -eq 0 ] && ok "XS without specs/ passes the gate (structure validation skipped)" || nok "XS without specs/ gateable (rc=$rc)"
+grep -q 'validate xs-nospecs' "$OPSX_TEST_OPENSPEC_LOG" && nok "structure validation must be skipped when specs/ absent" || ok "whole-change openspec validate skipped when specs/ absent"
+: >"$OPSX_TEST_OPENSPEC_LOG"
+run green-s; rc=$?
+grep -q 'validate green-s' "$OPSX_TEST_OPENSPEC_LOG" && ok "whole-change openspec validate still runs when specs/ present" || nok "structure validation must run when specs/ present"
+unset OPSX_TEST_OPENSPEC_LOG
+
+# plain-M does NOT require design.md (D3/D5: design is decision-gated at plain M) --
+mkPlainM plain-m-nodesign
+rm -f "$TMP/openspec/changes/plain-m-nodesign/design.md"
+run plain-m-nodesign; check "plain-M passes WITHOUT design.md (required-artifact-by-scale)" 0 $?
+grep -q 'GATE-FAIL artifact-design' "$TMP/err" && nok "plain-M wrongly demanded design.md" || ok "plain-M omits the design.md requirement"
+
+# M + full_rigor REQUIRES clarify.md + analyze.md ---------------------------
+mkPlainM fr-need
+awk '1; /^scale: M/{print "full_rigor: true"}' "$TMP/openspec/changes/fr-need/review.md" >"$TMP/frn.tmp" \
+  && mv "$TMP/frn.tmp" "$TMP/openspec/changes/fr-need/review.md"
+run fr-need; rc=$?
+check "M+full_rigor requires clarify.md/analyze.md (required-artifact-by-scale)" 1 $rc
+grep -q 'GATE-FAIL artifact-clarify' "$TMP/err" && ok "full_rigor demands clarify.md" || nok "full_rigor demands clarify.md"
+grep -q 'GATE-FAIL artifact-analyze' "$TMP/err" && ok "full_rigor demands analyze.md" || nok "full_rigor demands analyze.md"
+echo "# clarify" >"$TMP/openspec/changes/fr-need/clarify.md"
+echo "# analyze" >"$TMP/openspec/changes/fr-need/analyze.md"
+run fr-need; check "M+full_rigor passes once clarify.md+analyze.md exist (required-artifact-by-scale)" 0 $?
+
+# M + full_rigor REQUIRES design.md (the former L/XL full set always carried design)
+mkPlainM fr-nodesign
+awk '1; /^scale: M/{print "full_rigor: true"}' "$TMP/openspec/changes/fr-nodesign/review.md" >"$TMP/frnd.tmp" \
+  && mv "$TMP/frnd.tmp" "$TMP/openspec/changes/fr-nodesign/review.md"
+echo "# clarify" >"$TMP/openspec/changes/fr-nodesign/clarify.md"
+echo "# analyze" >"$TMP/openspec/changes/fr-nodesign/analyze.md"
+rm -f "$TMP/openspec/changes/fr-nodesign/design.md"
+run fr-nodesign; rc=$?
+check "M+full_rigor fails WITHOUT design.md (required-artifact-by-scale)" 1 $rc
+grep -q 'GATE-FAIL artifact-design' "$TMP/err" && ok "full_rigor demands design.md" || nok "full_rigor demands design.md"
+
+# worktree-mode DERIVATION by tier (design D6) ------------------------------
+# XS/S with ABSENT worktree_mode => same-tree (no worktree enforcement) => passes.
+mkchange wtd-s
+sed -i.bak '/^worktree_mode:/d' "$TMP/openspec/changes/wtd-s/review.md"
+run wtd-s; check "S + absent worktree_mode derives same-tree, passes (worktree-mode derivation)" 0 $?
+grep -q 'GATE-FAIL worktree' "$TMP/err" && nok "S derivation wrongly enforced a worktree" || ok "S derivation is same-tree"
+# M with ABSENT worktree_mode => worktree-required => enforcement fails w/o a worktree.
+mkPlainM wtd-m
+sed -i.bak '/^worktree_mode:/d' "$TMP/openspec/changes/wtd-m/review.md"
+run wtd-m; rc=$?
+check "M + absent worktree_mode derives worktree-required, enforced (worktree-mode derivation)" 1 $rc
+grep -q 'GATE-FAIL worktree' "$TMP/err" && ok "M derivation enforces worktree-required" || nok "M derivation enforces worktree-required"
+
+# --cheap: skips validation-command execution + validation-source; verdict-state
+# checks STILL report; a full gate STILL runs validations (regression pin).
+mkchange cheapv
+sed -i.bak 's/^code_review_mode: advisory/code_review_mode: gating-required/' "$TMP/openspec/changes/cheapv/review.md"
+printf '\n**Diff Base SHA:** base000\n**Worktree Path:**\n' >>"$TMP/openspec/changes/cheapv/review.md"
+cat >"$TMP/openspec/changes/cheapv/code-review.md" <<EOF
+# Code Review
+**Verdict:** pass
+**review_mode:** adversarial-multimodel
+**reviewer-provenance:** subagent-x
+**Diff Base SHA:** base000
+**Reviewed Range:** base000..deadbeef
+EOF
+cat >"$TMP/openspec/opsx-gates.yaml" <<'EOF'
+gates:
+  - id: mustrun
+    run: 'exit 5'
+    required: true
+EOF
+# full gate: executes the (failing) validation AND reports the stale verdict.
+run cheapv; rc=$?
+check "full gate executes validation commands (regression pin)" 1 $rc
+grep -q 'GATE-FAIL validation-mustrun' "$TMP/err" && ok "full gate ran the validation command" || nok "full gate ran the validation command"
+# --cheap: the validation command is NOT executed, the stale verdict STILL reports.
+"$OPSX" gate cheapv --cheap >"$TMP/outc" 2>"$TMP/errc"; rcc=$?
+check "cheap gate is red on the verdict-state check (opsx gate --cheap)" 1 $rcc
+grep -q 'GATE-FAIL validation-mustrun' "$TMP/errc" && nok "cheap wrongly executed the validation command" || ok "cheap skipped the validation command"
+grep -q 'GATE-FAIL code-review-stale' "$TMP/errc" && ok "cheap still reports the verdict-state (freshness) check" || nok "cheap still reports the verdict-state check"
+grep -qi 'gate(cheap)' "$TMP/errc" "$TMP/outc" && ok "cheap run is label-visible as gate(cheap)" || nok "cheap label visible"
+
+# --cheap GREEN never overclaims: a would-fail validation is skipped, a clean
+# change reaches GATE-PASS(cheap) with the 'validations not run' caveat.
+mkchange cheapg
+run cheapg; check "full gate red when its required validation fails (manifest-validation-execution)" 1 $?
+"$OPSX" gate cheapg --cheap >"$TMP/outg" 2>"$TMP/errg"; rcg=$?
+check "cheap gate green despite a failing validation (validation not executed)" 0 $rcg
+grep -q 'GATE-PASS(cheap)' "$TMP/outg" && ok "cheap green labeled GATE-PASS(cheap)" || nok "cheap green labeled GATE-PASS(cheap)"
+grep -qi 'validations not run' "$TMP/outg" && ok "cheap green does not overclaim validations ran" || nok "cheap green caveat present"
+rm -f "$TMP/openspec/opsx-gates.yaml"
 
 echo "----"
 echo "passed=$pass failed=$failc"

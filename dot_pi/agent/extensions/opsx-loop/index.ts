@@ -79,7 +79,7 @@ function listChangeDirs(cwd: string): string[] {
  * A change dir created since the kickoff snapshot that already carries a frozen
  * intent.md (the openspec-loop precondition). If several qualify, the one whose
  * intent.md was most recently written wins. undefined until one appears.
- * (opsx-loop-kickoff.goal-and-conversation-kickoff)
+ * (opsx-loop.goal-and-conversation-kickoff)
  */
 function detectNewChange(pre: string[], cwd: string): string | undefined {
 	const preSet = new Set(pre);
@@ -117,7 +117,7 @@ function resolveModel(role: string, change: string, cwd: string): ResolvedModel 
  * process.env so the worker turns' subagent dispatch + authoring pick them up.
  * Consumer only: if `opsx models` is absent the loop runs with vars unset
  * (pre-change behavior). Returns the names of the vars that were set.
- * (opsx-loop-kickoff.loop-exports-resolved-role-models)
+ * (opsx-loop.loop-exports-resolved-role-models)
  */
 function exportModelEnv(change: string, cwd: string): string[] {
 	const env = buildModelEnv({
@@ -209,7 +209,7 @@ function runGate(change: string, worktree: string | undefined, signal: AbortSign
  * Convention-path fallback: the canonical path from the single-source read-only
  * `opsx worktree path` emit, used iff it is a valid git worktree on branch
  * opsx/<change>. Never re-derives the path locally.
- * (opsx-loop-kickoff.worktree-resolution-convention-fallback)
+ * (opsx-loop.worktree-resolution-convention-fallback)
  */
 /** True iff `p` is a git worktree checked out on branch opsx/<change>. */
 function isChangeWorktree(p: string, change: string): boolean {
@@ -271,7 +271,7 @@ function committedIntentNames(cwd: string): Set<string> {
  * A token capturing observable progress: worktree HEAD + dirty status of the
  * change dir. A change in either between evaluations resets the stall counter
  * (committed OR uncommitted in-place authoring counts as progress).
- * (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ * (opsx-loop.stall-detection-stops-the-loop)
  */
 function progressToken(change: string, worktree: string | undefined, cwd: string): string {
 	const dir = worktree ?? cwd;
@@ -292,7 +292,7 @@ function progressToken(change: string, worktree: string | undefined, cwd: string
  * it for stall routing: its state (`satisfied` → ordinary signal; `gap` → the
  * bounded gap-set ratchet) and its normalized gap set. An absent/unreadable file
  * is the empty-set `gap` sentinel. The extension parses doneness.md DIRECTLY (never
- * the gate's free-text message). (opsx-loop-kickoff.stall-detection-stops-the-loop)
+ * the gate's free-text message). (opsx-loop.stall-detection-stops-the-loop)
  */
 function readDoneness(
 	change: string,
@@ -382,7 +382,7 @@ export default function (pi: ExtensionAPI) {
 	// human confirmation (ADR-0014): the frozen intent.md is the immutable
 	// baseline every blind reviewer and the doneness judge scores against, so
 	// the loop being scored must not silently author-and-adopt it.
-	// Distill-scoped autonomy (opsx-loop-kickoff.goal-and-conversation-kickoff):
+	// Distill-scoped autonomy (opsx-loop.goal-and-conversation-kickoff):
 	// the drive-to-green AUTONOMY blurb must NEVER ride the distill directive —
 	// "keep going, the gate is the arbiter" contradicts the directive's own STOP
 	// and invites implementing during distill.
@@ -508,7 +508,7 @@ export default function (pi: ExtensionAPI) {
 			// regardless of its outcome (a green short-circuit must not leave a stale
 			// hold behind). This explicit human-only spelling is the SOLE clear path —
 			// goal kickoff never touches holds, agents cannot invoke slash commands.
-			// (opsx-loop-kickoff.loop-hold-blocks-continuation)
+			// (opsx-loop.loop-hold-blocks-continuation)
 			let holdNote = "";
 			const reviewMd0 = readReview(parsed.change, ctx.cwd);
 			const hold0 = parseLoopHold(reviewMd0);
@@ -578,7 +578,7 @@ export default function (pi: ExtensionAPI) {
 			// Goal/conversation mode: the agent is distilling intent into a NEW change.
 			// Wait for its frozen intent.md, then adopt that change and arm the gate loop.
 			// Until then, keep nudging with the distill directive (bounded by the budget).
-			// (opsx-loop-kickoff.goal-and-conversation-kickoff)
+			// (opsx-loop.goal-and-conversation-kickoff)
 			if (session.awaitingChange) {
 				const detected = detectNewChange(session.preChangeDirs ?? [], ctx.cwd);
 				if (!detected) {
@@ -633,7 +633,7 @@ export default function (pi: ExtensionAPI) {
 			// review.md (the copy this host resolves) and is honored even with an
 			// empty reason — a malformed landing must still land (fail-safe).
 			// Only the human named re-arm clears it.
-			// (opsx-loop-kickoff.loop-hold-blocks-continuation)
+			// (opsx-loop.loop-hold-blocks-continuation)
 			const hold = parseLoopHold(readReview(change, ctx.cwd));
 			if (hold.held) {
 				clearLoop(ctx);
@@ -646,7 +646,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Re-resolve the worktree EACH turn: a from-scratch change may only gain a
-			// Worktree Path mid-loop. (opsx-loop-kickoff.opsx-gate-is-the-deterministic-judge)
+			// Worktree Path mid-loop. (opsx-loop.opsx-gate-is-the-deterministic-judge)
 			const prevWorktree = session.worktree;
 			session.worktree = resolveWorktree(change, ctx.cwd);
 			renderStatus(ctx);
