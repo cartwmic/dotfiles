@@ -209,6 +209,7 @@ BLOCKED (1 blocker)
 | 1 | blind | 4 (F1 blocker + F2/F3/F4 majors) | BLOCKED | 03bc118 |
 | 2 | blind | 2 (R2-B1, R2-B2 blockers) | BLOCKED | f45dabf |
 | 3 | blind | 1 (R3-B1 blocker) | BLOCKED | eee716c |
+| 4 | blind | 0 | READY | 259f200 |
 
 ## Resolution Log (orchestrator, post-round-1)
 
@@ -290,3 +291,29 @@ non-findings, incl. dispatch-enumeration grounding against deployed case arms).
   D5 to MERGE/consolidate (both forms preserved) instead of deleting a line.
 
 Round 4 (blind confirmation) required before tasks generation.
+
+## Resolution Log (orchestrator, post-round-4)
+
+Round 4 report: /tmp/qrrc-analyze-r4.md (blind, fresh reviewer). VERDICT:
+READY — 0 blockers, 0 majors. QUIET ROUND: analyze converged (4→2→1→0).
+Deterministic table all-PASS; every frozen-intent constraint verified in the
+non-findings list (determinism, rigor-untouched, stop-never-seals,
+thrash-catches-bookkeeping-only-rounds, guards untouched, evaluation total).
+2 non-gating minors, both applied same-turn (minors never force a round):
+
+- **R4-M1 (applied):** post-apply progress invariant broadened from
+  "verdict/ledger seals" to ALL change-directory bookkeeping artifacts
+  (follow-ups.md, review.md, clarify.md included), citing the
+  writeback-owner + path-scoped-commit backstops; scenario renamed
+  "Post-apply bookkeeping stays off the reviewed branch".
+- **R4-M2 (applied):** MODIFIED delta added for Decision Audit Landing —
+  resume-extends-budget scenario rewords "trajectory or budget stop" to
+  "hard-cap/budget stop (or, under land-on-stop, a trajectory stop)"; all
+  other prose/scenarios restated verbatim.
+
+Analyze SEALED at round 4 (quiet). Tasks generation unblocked.
+
+## Verdict
+
+**READY** (round 4 quiet: 0 blockers, 0 majors across the analyze round set;
+sealed by blind reviewer verdict /tmp/qrrc-analyze-r4.md)
