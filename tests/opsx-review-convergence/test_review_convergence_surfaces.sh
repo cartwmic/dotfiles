@@ -77,7 +77,7 @@ has "loop skill maintains the round ledger" "$LOOP_SKILL" "Round ledger"
 
 # --- opsx-adversarial-review.trajectory-stop-and-round-budget ---
 has "loop skill has converged stop" "$LOOP_SKILL" "latest round P0+P1 = 0"
-has "loop skill has treadmill stop" "$LOOP_SKILL" "flat or rising across the two most recent rounds"
+has "loop skill has treadmill stop" "$LOOP_SKILL" "flat-or-rising P0+P1 across the two most recent rounds"
 has "loop skill has review_max_rounds budget stop" "$LOOP_SKILL" "review_max_rounds"
 
 # --- opsx-adversarial-review.disclosure-round ---
@@ -109,7 +109,7 @@ has "code-review template findings heading is neutral" "$TPL/code-review.md" "^#
 if grep -q "^## Convergent findings" "$TPL/code-review.md" 2>/dev/null; then nok "legacy Convergent findings heading reintroduced"; else ok "no convergence-implying findings heading"; fi
 
 # --- opsx-loop.review-dispatch-bound-by-convergence-discipline ---
-has "loop skill evaluates stops before re-dispatch" "$LOOP_SKILL" "evaluate BEFORE dispatching"
+has "loop skill evaluates stops before re-dispatch" "$LOOP_SKILL" "THEN evaluate IN ORDER"
 
 # --- opsx-loop.pre-apply-surface-audit-dispatch ---
 has "surface audit dispatched before first implementation task" "$LOOP_SKILL" "advisory blind surface-enumeration audit before the"
@@ -266,6 +266,24 @@ has "README documents sweep.txt declaration" "$SCHEMA_DIR/README.md" "sweep.txt"
 has "README states the swept-surface exclusions" "$SCHEMA_DIR/README.md" "openspec/\*\*"
 has "schema.yaml documents sweep.txt (non-artifact rationale)" "$SCHEMA_DIR/schema.yaml" "sweep.txt (optional, change-dir)"
 has "schema.yaml states empty declaration is clean" "$SCHEMA_DIR/schema.yaml" "zero effective patterns = clean pass"
+
+# --- opsx-skill-integration.openspec-loop-orchestrator-skill-exists (Q1/Q2/Q3 prose) ---
+has "loop skill: quiet-round ordered table present" "$LOOP_SKILL" "| a | quiet round |"
+has "loop skill: converging row continues without ruling" "$LOOP_SKILL" "NO human ruling"
+has "loop skill: thrash guard row present" "$LOOP_SKILL" "| c | thrash guard |"
+has "loop skill: hard cap regardless of trajectory" "$LOOP_SKILL" "regardless of trajectory"
+has "loop skill: fix-before-evaluate ordering stated" "$LOOP_SKILL" "FIRST attempt and land the fixes"
+has "loop skill: post-apply bookkeeping-off-branch invariant" "$LOOP_SKILL" "NEVER committed on the"
+has "loop skill: analyze fix-surface progress signal" "$LOOP_SKILL" "AUTHORED fix"
+has "loop skill: land-on-stop opt-in documented" "$LOOP_SKILL" "review_budget_mode: land-on-stop"
+has "loop skill: continue-not-seal invariant" "$LOOP_SKILL" "only automates CONTINUE, never SEAL"
+has "loop skill: sweep-before-round-1 directive" "$LOOP_SKILL" "resolve ALL hits BEFORE"
+has "loop skill: sweep command named" "$LOOP_SKILL" "opsx sweep <change>"
+has "loop skill: verdicts are filled templates" "$LOOP_SKILL" "FILLING the schema's shipped"
+has "loop skill: template paths named" "$LOOP_SKILL" "templates/code-review.md"
+if grep -q 'authors the verdict artifact (body, Verdict' "$LOOP_SKILL" 2>/dev/null; then
+  nok "loop skill: free-write verdict instruction removed"
+else ok "loop skill: free-write verdict instruction removed"; fi
 
 # --- Q4 rider: stray .tmp removed and stays removed ---
 if [ -e "$ROOT/tests/opsx-review-convergence/test_review_convergence_surfaces.sh.tmp" ]; then
