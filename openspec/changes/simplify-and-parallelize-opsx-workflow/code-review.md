@@ -2,9 +2,11 @@
 
 **Change:** simplify-and-parallelize-opsx-workflow
 **Diff Base SHA:** 726d18023c96f93378fd10b22f44613af4efec1c
-**Reviewed Range:** 726d180..da342a3
-**Review models:** claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5 (pinned, review.md front-matter)
-**review_mode:** blind (rounds 1,2,4,5) + disclosure-consensus (round 3)
+**Reviewed Range:** 726d180..b52aec2
+**Review models:** claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5 (rounds 1-7), claude-bridge/claude-sonnet-5 (round 8, user reconfiguration)
+**reviewer-provenance:** pi-subagents dispatch — claude-bridge/claude-opus-4-8 + openai-codex/gpt-5.5 (rounds 1-7) / + claude-bridge/claude-sonnet-5 (round 8; second slot reconfigured by explicit user ruling at b1403c7 per reviewer-model-stability)
+**review_mode:** blind (rounds 1,2,4,5,6,7,8) + disclosure-consensus (round 3)
+**Reviewer reconfiguration:** round 8 second slot openai-codex/gpt-5.5 → claude-bridge/claude-sonnet-5 by explicit user ruling (usage limit; opsx-adversarial-review.reviewer-model-stability user-reconfiguration clause; integration commit b1403c7)
 
 ## Round Ledger
 
@@ -17,6 +19,7 @@
 | 5 | blind | da342a3 | 0 | 1 | 0 | 0 | pass | fail |
 | 6 | blind (budget 6 per user ruling) | 2adca79 | 0 | 1 | 1 | 1 | pass | fail |
 | 7 | blind (budget 7 per user ruling) | a66a39f | 0 | 1 | 1 | 0 | pass | fail |
+| 8 | blind (convergence-cap ruling; 2nd reviewer reconfigured to sonnet-5 by user — gpt-5.5 usage-limited) | b52aec2 | 0 | 0 | 1 | 3 | pass | pass |
 
 \*Round 1 reviewed 726d180..2131023; counts are max-across-reviewers per severity, no cross-reviewer matching.
 
@@ -35,28 +38,30 @@
 **R5-F1:** ruled option 2 by the user 2026-07-03 (budget 5→6) — fixed and
 confirmed clean by opus round 6; gpt round 6 did not re-raise it.
 
-**R6-F1/F2 adjudication:** round 6 surfaced one NEW P1 (whole-change
-validate vs the XS/S tiers — an integration defect in this change's own
-matrix, reproduced against the real openspec CLI) and one P2 (README
-wording). Both are FIXED at a66a39f- with pins, but the extended budget (6)
-is now exhausted and the fixes are unconfirmed by a review round. A stop
-with a finding open-at-stop never self-seals pass.
+**Resolution history:** R5-F1 fixed 2bede8c (ruling: budget 5→6). R6-F1/F2
+fixed a66a39f- (ruling: budget 6→7). R7-F1/F2 fixed 329a018/60fef27
+(ruling: convergence cap, budget→10). Round 8 CONVERGED: 0 new P0/P1 from
+both reviewers at b52aec2.
 
-Options for the human ruling:
-1. **Extend review_max_rounds 6→7** and run one confirming blind round at
-   HEAD (recommended — trajectory: opus has passed 5 of 6 rounds incl. two
-   zero-finding rounds; every gpt finding has been fixed same-round; round-6
-   scope shrank to an integration bug + doc wording).
-2. Accept the round-6 fixes on the strength of the pins + validator sweep
-   and seal `Verdict: pass` without a confirming round (protocol-weakening;
-   not recommended).
-3. Waive with rationale (not recommended).
+**Open advisisories recorded as warnings (never gate; follow-up seeds):**
+- R8-sonnet F1 (P2): review.md template prose Modes table Code Review Mode
+  row still reads literal "advisory" while the front-matter key is commented
+  (derivation governs) — mirror-table asymmetry vs the Worktree Mode row.
+- R8-sonnet F2 (P3): duplicate `gate` line in opsx_usage() output.
+- R8-sonnet F3 (P3): stray empty test_review_convergence_surfaces.sh.tmp
+  committed at 329a018.
+- R8-opus A1 (P3): schema.yaml artifact `requires` chain not thinned for
+  plain M (authoring-order metadata only; skills override).
+- R6-opus D-2/D-3 (P3): --cheap worktree-required hard-exit ordering;
+  env-prefix style nit.
 
 ## Verdict
 
-**Verdict: fail** (open P1 at round-budget stop — see decision audit; not
-sealable as pass without a human ruling per
-opsx-adversarial-review.trajectory-stop-and-round-budget)
+**Verdict:** pass
+
+(round 8 converged: latest round P0+P1 = 0 across both
+reviewers; all eight in-diff P0/P1 findings from rounds 1–7 fixed and
+re-verified; open P2/P3 recorded above as non-gating warnings)
 
 **Provenance:** rounds dispatched by openspec-loop orchestration to the two
 pinned models via blind fresh-context subagents; raw outputs
