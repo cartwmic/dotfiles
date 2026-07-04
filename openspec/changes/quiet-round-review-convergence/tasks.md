@@ -79,7 +79,7 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
 
 ## Phase 3 — Skill prose (Q1 cycle, Q2 trigger, Q3 templates)
 
-- [ ] 3.1 openspec-loop SKILL.md (opsx-skill-integration.openspec-loop
+- [x] 3.1 openspec-loop SKILL.md (opsx-skill-integration.openspec-loop
       orchestrator skill exists): replace the Stop-conditions table with the
       ordered quiet-round evaluation — (a) quiet → seal pass; (b) converging
       (findings + change-scoped progress + rounds<cap) → continue autonomously,
@@ -95,7 +95,7 @@ File contracts per task. All implementation in the `opsx/<change>` worktree
       (Q3).
       - files_allowed:
         - dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md
-- [ ] 3.2 Surfaces-test pins for 3.1: skill contains quiet-round ordered
+- [x] 3.2 Surfaces-test pins for 3.1: skill contains quiet-round ordered
       table, land-on-stop opt-in mention, sweep-before-round-1 directive,
       template-path fill directives; no free-write verdict instruction
       remains (success criterion 3).
