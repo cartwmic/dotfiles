@@ -15,8 +15,6 @@ validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
 review_max_rounds: 5
-loop_hold: true
-loop_hold_reason: "gate green (GATE-PASS M, both views) at worktree HEAD 34ee58b; round 2 quiet (opus+sonnet pass); doneness satisfied (blind judge); awaiting human archive ruling — loop never archives" 
 # ── Per-change model pins (resolved by `opsx models`) ──
 review_models: [claude-bridge/claude-opus-4-8, claude-bridge/claude-sonnet-5]
 ---
@@ -82,6 +80,7 @@ loop_hold_reason: "gate green (GATE-PASS M, both views) at worktree HEAD 34ee58b
 
 ## Execution Notes
 
+- 2026-07-04 — loop_hold cleared by named re-arm (/opsx-loop quiet-round-review-convergence); reason was: gate green (GATE-PASS M, both views) at worktree HEAD 34ee58b; round 2 quiet (opus+sonnet pass); doneness satisfied (blind judge); awaiting human archive ruling — loop never archives
 <!-- Transient observations appended during apply. One-line entries when a
 non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -->
 
