@@ -11,7 +11,7 @@ dispatched via pi-subagents). Verdict stays fail until a quiet round.
 **review_mode:** adversarial-multimodel
 **reviewer-provenance:** pi-subagents delegate dispatch — claude-bridge/claude-opus-4-8 + claude-bridge/claude-sonnet-5 (blind, parallel), reports /tmp/qrrc-cr-r{1,2}-{opus,sonnet}.md
 **Diff Base SHA:** 3e3acf965eb7e9bbdfc62f51163583fad07c508e
-**Reviewed Range:** 3e3acf9..c6f06d3
+**Reviewed Range:** 3e3acf9..616973c
 **Baseline:** intent.md + proposal + specs + design + plan + tasks status
 **Generated:** 2026-07-03
 
