@@ -17,11 +17,11 @@ THE opsx models command SHALL resolve the configured model(s) for a requested ro
 
 #### Scenario: Source-aware JSON
 - **WHEN** `opsx models <role> --json` is run
-- **THEN** it SHALL print `{"value": <string|list|null>, "source": "env|change|project|user|default|unset"}`, where `value` is the SAME provider-resolved string(s) the plain output prints, so consumers enforce only on a configured source
+- **THEN** it SHALL print `{"value": <string|list|null>, "source": "env|change|user|default|unset"}`, where `value` is the SAME provider-resolved string(s) the plain output prints, so consumers enforce only on a configured source (the retired `project` source never appears)
 
 #### Scenario: author-in-session boolean has a resolver surface
 - **WHEN** `opsx models author-in-session --json [--change <c>]` is run
-- **THEN** it SHALL print `{"value": <boolean|null>, "source": "env|change|project|user|default|unset"}` (env name `OPSX_AUTHOR_IN_SESSION`), with the same layering as roles and a built-in default of true, so the boolean is executable from any harness
+- **THEN** it SHALL print `{"value": <boolean|null>, "source": "env|change|user|default|unset"}` (env name `OPSX_AUTHOR_IN_SESSION`), with the same layering as roles and a built-in default of true, so the boolean is executable from any harness
 
 #### Scenario: Review role is a list
 - **WHEN** `opsx models review` is run with the role configured
@@ -45,23 +45,28 @@ THE opsx models command SHALL resolve the configured model(s) for a requested ro
 
 ### Requirement: Layered Resolution Order
 
-THE opsx models resolver SHALL resolve each role by precedence, highest first: environment variable, then the change's review.md front-matter (when `--change` is given), then the project `openspec/opsx-models.yaml`, then the user `~/.config/opsx/models.yaml`, then a built-in default. For the list-valued `review` role, the highest layer that sets the role SHALL fully REPLACE lower layers (no union). An empty environment value SHALL be treated as unset. The model env vars SHALL be `OPSX_AUTHOR_MODEL`, `OPSX_REVIEW_MODELS` (note the plural — list-valued), and `OPSX_IMPL_MODEL`; `OPSX_REVIEW_MODELS` SHALL be newline- or comma-delimited (trimmed, order preserved). PROVIDER resolution SHALL key purely on the presence of a `/`: a value CONTAINING `/` is a complete pi model id used VERBATIM (its provider is its leading segment; the provider keys do NOT apply, so an openrouter-style multi-segment id MUST be written in full, e.g. `openrouter/openai/gpt-5.5`). A BARE value (no `/`) SHALL be qualified by the role's `provider` (env `OPSX_<ROLE>_PROVIDER` — i.e. `OPSX_AUTHOR_PROVIDER`/`OPSX_REVIEW_PROVIDER`/`OPSX_IMPL_PROVIDER` > front-matter > project > user), else the top-level default `provider` (env `OPSX_PROVIDER` > front-matter > project > user), else left bare for the consumer to resolve. Each `review` list entry SHALL be provider-resolved independently. The `author_in_session` boolean uses the same layering with env `OPSX_AUTHOR_IN_SESSION`.
+THE opsx models resolver SHALL resolve each role by precedence, highest first: environment variable, then the change's review.md front-matter (when `--change` is given), then the user `~/.config/opsx/models.yaml`, then a built-in default. The project-layer `openspec/opsx-models.yaml` SHALL NOT participate in resolution; WHERE a project yaml exists, the resolver SHALL ignore it and SHALL surface a one-time warning that the project model layer has been removed. For the list-valued `review` role, the highest participating layer that sets the role SHALL fully REPLACE lower layers (no union). An empty environment value SHALL be treated as unset. The model env vars SHALL be `OPSX_AUTHOR_MODEL`, `OPSX_REVIEW_MODELS` (note the plural — list-valued), and `OPSX_IMPL_MODEL`; `OPSX_REVIEW_MODELS` SHALL be newline- or comma-delimited (trimmed, order preserved). PROVIDER resolution SHALL key purely on the presence of a `/`: a value CONTAINING `/` is a complete pi model id used VERBATIM (its provider is its leading segment; the provider keys do NOT apply, so an openrouter-style multi-segment id MUST be written in full, e.g. `openrouter/openai/gpt-5.5`). A BARE value (no `/`) SHALL be qualified by the role's `provider` (env `OPSX_<ROLE>_PROVIDER` — i.e. `OPSX_AUTHOR_PROVIDER`/`OPSX_REVIEW_PROVIDER`/`OPSX_IMPL_PROVIDER` > front-matter > user), else the top-level default `provider` (env `OPSX_PROVIDER` > front-matter > user), else left bare for the consumer to resolve. Each `review` list entry SHALL be provider-resolved independently. The `author_in_session` boolean uses the same layering with env `OPSX_AUTHOR_IN_SESSION`.
 
 #### Scenario: Environment overrides files
 - **WHILE** `OPSX_AUTHOR_MODEL` is set non-empty
 - **THEN** it SHALL win over any file-configured author model
 
-#### Scenario: Per-change front-matter overrides project and user files
+#### Scenario: Per-change front-matter overrides the user file
 - **WHILE** no env override is set and `--change <c>` is given and that change's review.md front-matter sets a role
-- **THEN** the front-matter value SHALL win over the project and user files
+- **THEN** the front-matter value SHALL win over the user file
+
+#### Scenario: Project yaml is ignored with a warning
+- **WHILE** a project `openspec/opsx-models.yaml` exists and configures a role
+- **WHEN** the resolver resolves that role
+- **THEN** the project file SHALL NOT contribute a value; resolution SHALL fall to the user file (or default), and the resolver SHALL surface a one-time warning that the project model layer has been removed
 
 #### Scenario: Highest layer replaces the review list
-- **WHILE** front-matter sets `review_models: [A]` and the project file sets `review: [A, B]`
+- **WHILE** front-matter sets `review_models: [A]` and the user file sets `review: [A, B]`
 - **THEN** the resolved review set SHALL be exactly `[A]` (full replace, not `[A, B]`)
 
 #### Scenario: Missing change or review.md falls through
 - **IF** `--change <c>` is given but the change or its review.md does not exist
-- **THEN** the resolver SHALL fall through to the project/user/default layers without error; an invalid project root SHALL exit non-zero
+- **THEN** the resolver SHALL fall through to the user/default layers without error
 
 #### Scenario: A slash-containing value ignores a configured provider
 - **WHILE** a role's model value is `claude-bridge/claude-opus-4-8` (contains `/`) AND a different `provider` is configured for that role
@@ -77,11 +82,11 @@ THE opsx models resolver SHALL resolve each role by precedence, highest first: e
 
 ### Requirement: Config Conventions
 
-THE schema SHALL define `openspec/opsx-models.yaml` (project) and `~/.config/opsx/models.yaml` (user), each mapping `author` (string), `review` (string or list), `impl` (string), `author_in_session` (boolean), an optional top-level default `provider` (string), and optional per-role provider keys (`author_provider`, `review_provider`, `impl_provider`); and the matching `review.md` front-matter keys `author_model`, `review_models`, `impl_model`, `author_in_session`, `provider`, `author_provider`, `review_provider`, `impl_provider`. Model values MAY be provider-qualified (`<provider>/<id>`) — that is the primary way to pin a provider — and the provider keys qualify bare ids. A template SHALL ship with the schema.
+THE schema SHALL define `~/.config/opsx/models.yaml` (user) mapping `author` (string), `review` (string or list), `impl` (string), `author_in_session` (boolean), an optional top-level default `provider` (string), and optional per-role provider keys (`author_provider`, `review_provider`, `impl_provider`); and the matching `review.md` front-matter keys `author_model`, `review_models`, `impl_model`, `author_in_session`, `provider`, `author_provider`, `review_provider`, `impl_provider`. The project-layer `openspec/opsx-models.yaml` is RETIRED: the schema SHALL NOT define it, and per-project pinning is expressed via change front-matter instead. Model values MAY be provider-qualified (`<provider>/<id>`) — that is the primary way to pin a provider — and the provider keys qualify bare ids. A template SHALL ship with the schema.
 
 #### Scenario: Template shipped
 - **WHEN** the schema is deployed
-- **THEN** `templates/opsx-models.yaml` SHALL document the roles, providers (inline + the `provider` keys), `author_in_session`, and the resolution order
+- **THEN** `templates/opsx-models.yaml` SHALL document the roles, providers (inline + the `provider` keys), `author_in_session`, and the resolution order (env > front-matter > user > default), and SHALL NOT present a project-layer file as a supported location
 
 #### Scenario: Review accepts string or list
 - **WHEN** `review` is a single string in a file

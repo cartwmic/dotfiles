@@ -13,11 +13,11 @@ The `openspec-propose` skill at `dot_local/share/agent-harness/canonical/skills/
 
 #### Scenario: Up-front Scale prompt
 - **WHEN** the skill begins propose flow under `opsx-superpowers`
-- **THEN** the skill SHALL ask the user to declare a Scale class (`XS | S | M | L | XL`) before authoring any artifact, and SHALL record the choice in `review.md` once that artifact is reached
+- **THEN** the skill SHALL ask the user to declare a Scale class from the collapsed vocabulary (`XS | S | M`) — and, for a former-`L`/`XL` change, whether to set the boolean `full_rigor` flag (which maps the former `L`/`XL` extras onto `M`) — before authoring any artifact, and SHALL record the choice in `review.md` once that artifact is reached; it SHALL NOT offer `L` or `XL` as declarable Scale values, since the deterministic gate fails closed on any Scale outside `XS | S | M`
 
 #### Scenario: Scale-driven skipping
 - **WHEN** Scale is declared `XS` and the user invokes openspec-propose
-- **THEN** the skill SHALL skip authoring `specs`, `clarify`, `design`, `adr`, `analyze`, `review`, `plan`, `verify`, and `retrospective`, producing only `proposal.md` and `tasks.md`
+- **THEN** the skill SHALL skip authoring `specs`, `clarify`, `design`, `adr`, `analyze`, `plan`, `verify`, and `retrospective`, producing `review.md` (the mode switchboard — never skipped at any Scale) plus `proposal.md` and `tasks.md`
 
 #### Scenario: Schema-only fallback when Superpowers absent
 - **WHEN** the skill cannot resolve a referenced Superpowers-style capability skill (e.g., `verification-before-completion`)
@@ -37,15 +37,19 @@ When the active schema is `opsx-superpowers` and Scale ≥ S, the `openspec-prop
 
 ### Requirement: Analyze gates tasks generation
 
-The `openspec-propose` skill SHALL run the analyze pass before generating `tasks.md`, and SHALL refuse to produce tasks if any analyze finding is marked `blocker`. For changes with Scale ≥ L, the analyze pass SHALL invoke the `adversarial-review-cycle` skill rather than relying on a single-model self-review.
+The `openspec-propose` skill SHALL run the analyze pass before generating `tasks.md`, and SHALL refuse to produce tasks if any analyze finding is marked `blocker`. For changes carrying `full_rigor: true` (the former Scale ≥ `L` behavior), the analyze pass SHALL invoke the `adversarial-review-cycle` skill rather than relying on a single-model self-review; at plain Scale `M` without `full_rigor` the analyze pass is thinned to its deterministic checks (no separate blind analyze dispatch), per the opsx-adversarial-review M-Tier Review Stack Thinning requirement.
 
 #### Scenario: Blocker prevents task generation
 - **WHEN** `analyze.md` contains at least one finding with severity `blocker`
 - **THEN** the skill SHALL halt and SHALL summarize the blockers to the user with proposed remediations
 
-#### Scenario: Scale-L invokes adversarial-review-cycle
-- **WHEN** Scale is `L` or `XL`
+#### Scenario: Full-rigor invokes adversarial-review-cycle
+- **WHEN** review.md front-matter sets `full_rigor: true` (a former `L`/`XL` change)
 - **THEN** the analyze step SHALL dispatch through `adversarial-review-cycle` with multiple models per the existing skill's defaults, and SHALL record the round-by-round findings as appendices in `analyze.md`
+
+#### Scenario: Plain M thins analyze to deterministic checks
+- **WHEN** the change is Scale `M` and review.md front-matter does NOT set `full_rigor: true`
+- **THEN** the analyze pass SHALL run only its deterministic checks with NO separate blind analyze dispatch, matching the opsx-adversarial-review thinning, and the 2-model blind adversarial code review SHALL remain gating-required and unweakened
 
 ### Requirement: Mode-driven openspec-apply-change
 
@@ -117,7 +121,7 @@ All four opsx-* skill edits SHALL preserve behavior for changes whose schema is 
 
 ### Requirement: openspec-loop orchestrator skill exists
 
-A new skill SHALL be created at `dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md` implementing the single-orchestrator loop that advances an opsx-superpowers change until opsx gate is green, delegating review steps to subagents per the opsx-loop-orchestration capability.
+A new skill SHALL be created at `dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md` implementing the single-orchestrator loop that advances an opsx-superpowers change until opsx gate is green, delegating review steps to subagents per the consolidated `opsx-loop` capability (which absorbs the retired `opsx-loop-orchestration` capability under B3).
 
 #### Scenario: Skill metadata complete
 - **WHEN** the skill is loaded by a harness
