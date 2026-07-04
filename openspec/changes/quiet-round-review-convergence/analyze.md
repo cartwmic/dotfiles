@@ -208,6 +208,7 @@ BLOCKED (1 blocker)
 |---|---|---|---|---|
 | 1 | blind | 4 (F1 blocker + F2/F3/F4 majors) | BLOCKED | 03bc118 |
 | 2 | blind | 2 (R2-B1, R2-B2 blockers) | BLOCKED | f45dabf |
+| 3 | blind | 1 (R3-B1 blocker) | BLOCKED | eee716c |
 
 ## Resolution Log (orchestrator, post-round-1)
 
@@ -262,3 +263,30 @@ round-1 resolutions hold as non-findings). 2 NEW blockers, 0 majors:
   invariant "nowhere stated" — same fix as R2-B2 third scenario; recorded.
 
 Round 3 (blind confirmation) required before tasks generation.
+
+## Resolution Log (orchestrator, post-round-3)
+
+Round 3 report: /tmp/qrrc-analyze-r3.md (blind, fresh reviewer; deterministic
+table all-PASS except post-archive coherence; R2 resolutions verified clean as
+non-findings, incl. dispatch-enumeration grounding against deployed case arms).
+1 NEW blocker, 0 majors, 2 advisories:
+
+- **R3-B1 (blocker):** analyze-round progress predicate ("any change-dir path
+  except the ledger") counted orchestrator BOOKKEEPING as progress —
+  follow-ups.md routing, review.md Scope Expansions/Execution Notes,
+  clarify.md — so a crypt-log-class round that only routed an out-of-scope
+  finding would false-converge past the thrash guard (frozen-intent
+  violation). Resolved: predicate narrowed to a POSITIVE enumeration of
+  authored fix surfaces (proposal.md, design.md, specs/**, tasks.md,
+  plan.md); bookkeeping artifacts never count even when committed alongside
+  a seal; scenarios rewritten ("Analyze-type rounds measure fix-surface
+  commits", "Bookkeeping never counts as progress"); design D1 updated.
+- **R3-A1 (advisory, accepted):** post-apply documentary fix (change-dir-only
+  edit) leaves worktree HEAD unmoved → false thrash-land. Fails SAFE; rare;
+  alternative reopens the bookkeeping hole. Documented in design D1, not
+  spec'd.
+- **R3-A2 (advisory, applied):** the two `opsx_usage()` gate lines are
+  distinct option forms, not exact duplicates — Q4 rider adjusted in design
+  D5 to MERGE/consolidate (both forms preserved) instead of deleting a line.
+
+Round 4 (blind confirmation) required before tasks generation.

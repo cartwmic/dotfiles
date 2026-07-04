@@ -21,13 +21,17 @@ R2-B2):
   range) — only implementation fix commits move the worktree branch. That
   invariant is now spec'd ("Post-apply seals stay off the reviewed branch").
 - **Analyze-type rounds (pre-apply, no worktree):** ≥1 commit in
-  `reviewedHEAD..HEAD` touching `openspec/changes/<change>/**` through paths
-  OTHER than the round-ledger artifact. Raw integration HEAD is dishonest
-  here — ledger-seal commits and sibling-change commits on the shared main
-  branch move it without any finding being fixed, which would make analyze
-  rounds always-converging and disable the thrash guard (R2-B2). Git
-  plumbing: `git log --name-only` over the range, filtered to the change
-  dir minus the ledger file — deterministic, model-free.
+  `reviewedHEAD..HEAD` touching the change's AUTHORED fix surfaces —
+  `proposal.md`, `design.md`, `specs/**`, `tasks.md`, `plan.md` (positive
+  enumeration, R3-B1). Raw integration HEAD is dishonest (ledger-seal and
+  sibling-change commits, R2-B2); "everything except the ledger" is STILL
+  dishonest because orchestrator bookkeeping (follow-ups.md routing,
+  review.md Scope Expansions / Execution Notes, clarify.md) lands in the
+  change dir without fixing anything — a crypt-log-class round that only
+  routed a finding to follow-ups.md would false-converge (R3-B1). Bookkeeping
+  artifacts never count, even committed alongside a seal. Git plumbing:
+  `git log --name-only` over the range filtered to the fix-surface paths —
+  deterministic, model-free.
 
 | # | Condition | Predicate | Action |
 |---|---|---|---|
@@ -46,6 +50,14 @@ find HEAD == reviewed HEAD on every first-findings round, making (b)
 unreachable and (c) fire always — the feature would be dead on arrival.
 Thrash therefore means "the fix attempt landed nothing", and the skill's
 cycle prose states this ordering explicitly.
+
+**Accepted fail-safe asymmetry (analyze R3-A1).** A post-apply finding fixed
+purely by editing change-dir documents (committed to integration, not the
+worktree branch) leaves the worktree HEAD unmoved → thrash-lands despite a
+real fix. Accepted: it fails SAFE (lands for a human; re-arm resumes), is
+rare (post-apply findings are overwhelmingly code), and the alternative —
+counting integration change-dir commits post-apply — reopens the R3-B1
+bookkeeping hole. Documented, not spec'd.
 
 **Round type under (b) is not always blind** (clarify I3): (b) decides
 WHETHER to continue; the untouched Disclosure Round requirement decides the
@@ -148,7 +160,7 @@ at the source.
 | Rider | Treatment |
 |---|---|
 | review.md template Code Review Mode row shows literal `advisory` | fix row to "derived (gating-required at M, advisory below)" — spec'd (Template Mode Table Mirrors Derived Defaults) |
-| duplicate `gate` line in `opsx_usage()` | delete one line; pin with a uniqueness grep test |
+| duplicate `gate` line in `opsx_usage()` | analyze R3-A2: the two lines are distinct option forms (`[--worktree]` vs `--cheap`), not exact duplicates — MERGE into adjacent/consolidated gate entry (both usages preserved), pin with a grep test that the forms remain documented |
 | stray empty `tests/opsx-review-convergence/test_review_convergence_surfaces.sh.tmp` | `git rm`; pin absence in the surfaces test |
 | fail-open-by-omission audit of remaining mode keys | enumerate every derived/defaulted key read by executable_opsx + skills (worktree_mode, code_review_mode, doneness_mode, validation_source_mode, review_budget_mode, review_max_rounds, loop_hold, full_rigor, scale); assert each absent-key default matches documented promise; fix + pin any fail-open divergence found. Findings recorded in verify.md; spec deltas added only if a divergence exists. `review_budget_mode` absent⇒quiet-round is pre-cleared as an INTENTIONAL autonomy default (analyze F7), not a divergence |
 
