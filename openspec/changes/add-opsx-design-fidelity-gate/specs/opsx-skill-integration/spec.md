@@ -16,6 +16,26 @@ THE opsx-superpowers skill surfaces (openspec-loop, openspec-propose, openspec-a
 
 ## MODIFIED Requirements
 
+### Requirement: Mode-driven openspec-apply-change
+
+The `openspec-apply-change` skill at `dot_local/share/agent-harness/canonical/skills/openspec-apply-change/SKILL.md` SHALL read the mode flags from `review.md` at the start of apply and SHALL dispatch its workflow accordingly: file-contract enforcement per task, intent-aware repair-prompt suffixes when validators fail, and worktree-based execution unconditionally — worktree is the only execution model, so no mode value enables or disables it.
+
+#### Scenario: Pre-flight commit before worktree
+- **WHEN** the skill begins apply for any change
+- **THEN** the skill SHALL run `git status --porcelain openspec/changes/<name>/`, and if any artifact file under that subtree is unstaged or uncommitted, SHALL stage and commit only that subtree on the integration branch before creating the worktree
+
+#### Scenario: File contracts enforced via subagent wrap-up
+- **WHEN** a task declares `files_allowed` or `files_forbidden` and the task executes in a subagent
+- **THEN** the subagent's final step SHALL run `git diff --name-only` against those globs and SHALL report any `scope_violation` finding to the main agent before the task is marked complete
+
+#### Scenario: Intent-aware repair prompt
+- **IF** validators fail during apply and the task declares `intent: fix`
+- **THEN** the repair prompt SHALL include a constraints block "CONSTRAINTS: Fix only failing validators. Do NOT refactor unrelated code. Do NOT add new features." and SHALL inject the structured `Issues[]` list
+
+#### Scenario: Refactor intent removes restrictive constraints
+- **WHEN** the failing task declares `intent: refactor`
+- **THEN** the repair prompt SHALL NOT inject the fix-mode constraints, and SHALL instead include language permitting unrelated cleanup within the task's `files_allowed` scope
+
 ### Requirement: Analyze gates tasks generation
 
 The `openspec-propose` skill SHALL run the analyze pass before generating `tasks.md`, and SHALL refuse to produce tasks if any analyze finding is marked `blocker`. For changes carrying `full_rigor: true` (the former Scale ≥ `L` behavior), the analyze pass SHALL invoke the `adversarial-review-cycle` skill rather than relying on a single-model self-review; at plain Scale `M` without `full_rigor` the analyze pass is thinned to its deterministic checks (no separate blind analyze dispatch), per the opsx-adversarial-review M-Tier Review Stack Thinning requirement. WHERE the change carries a `design.md`, tasks generation SHALL additionally be gated on a sealed `design-fidelity.md` verdict of `delivered` (or a human waiver recorded at the decision-audit landing): a `violated`, stale, or absent fidelity verdict SHALL halt tasks generation with the fidelity findings summarized, applying the same halt semantics as an analyze blocker.

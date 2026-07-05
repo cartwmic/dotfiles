@@ -4,7 +4,7 @@
 
 ### Requirement: Design Fidelity Judge
 
-WHERE a change carries a `design.md`, THE workflow SHALL obtain a blind design-fidelity judgment BEFORE tasks generation: for EVERY delta acceptance criterion of the change, the judge SHALL answer whether the design mechanism cited (or discoverable) for that AC semantically entails the AC's guarantee AS WRITTEN, recording one verdict row per AC — `entailed | not-entailed | not-covered` — with evidence; an AC whose only design coverage is a nominal citation to a section that does not address the guarantee SHALL be `not-covered`. THE judge SHALL apply a bounded contract mirroring the baseline-bounded reviewer contract: a `not-entailed`/`not-covered` row blocks ONLY on clear non-entailment of the AC as written; WHERE the AC's guarantee is ambiguous, the judge SHALL route an advisory clarify-class finding instead of blocking. Intent-mandate violations (a design decision rejecting or weakening something the frozen intent mandates) and rationale↔mechanism contradictions within a design decision ARE in scope and fall out of the per-AC sweep as evidence. Dispatch channel: WHILE `full_rigor: true`, the fidelity judgment SHALL ride the existing blind analyze dispatch as a REQUIRED section of that dispatch, with the verdict STILL sealed to the separate `design-fidelity.md`; at plain Scale M or a design-bearing Scale S/XS, one narrow post-design blind mini-dispatch SHALL produce the same sealed artifact. Re-judgments SHALL be full sweeps (never delta-scoped, no cross-round finding matching). The fidelity dispatch SHALL follow the reviewer tree-identity attestation and read-only dispatch window protocols. WHEN two consecutive `violated` verdicts land against the same failing rows (design fixes landed between judgments but the rows keep failing, or no fix can be landed), THE orchestrator SHALL route to the decision-audit landing for a human ruling rather than looping unbounded; a human waiver SHALL be recorded in the artifact by the ruling, never self-authored.
+WHERE a change carries a `design.md`, THE workflow SHALL obtain a blind design-fidelity judgment BEFORE tasks generation: for EVERY delta acceptance criterion of the change, the judge SHALL answer whether the design mechanism cited (or discoverable) for that AC semantically entails the AC's guarantee AS WRITTEN, recording one verdict row per AC — `entailed | not-entailed | not-covered` — with evidence; an AC whose only design coverage is a nominal citation to a section that does not address the guarantee SHALL be `not-covered`. THE judge SHALL apply a bounded contract mirroring the baseline-bounded reviewer contract: a `not-entailed`/`not-covered` row blocks ONLY on clear non-entailment of the AC as written; WHERE the AC's guarantee is ambiguous, the judge SHALL route an advisory clarify-class finding instead of blocking. Intent-mandate violations (a design decision rejecting or weakening something the frozen intent mandates) and rationale↔mechanism contradictions within a design decision ARE in scope and fall out of the per-AC sweep as evidence. Dispatch channel: WHILE `full_rigor: true`, the fidelity judgment SHALL ride the existing blind analyze dispatch as a REQUIRED section of that dispatch, with the verdict STILL sealed to the separate `design-fidelity.md`; at plain Scale M or a design-bearing Scale S/XS, one narrow post-design blind mini-dispatch SHALL produce the same sealed artifact. Re-judgments SHALL be full sweeps (never delta-scoped, no cross-round finding matching). The fidelity dispatch SHALL follow the reviewer tree-identity attestation and read-only dispatch window protocols under the pre-worktree carve-out: fidelity is judged before worktree creation, so the dispatched tree IS the integration checkout and the judge attests its HEAD and root (Reviewer Tree Identity Attestation, pre-worktree dispatches). Each sealed fidelity verdict SHALL be recorded as a round-ledger entry (the ledger is orchestrator-sealed and freshness-protected per dispatch-integrity), and THE escalation valve SHALL count consecutive `violated` entries from that ledger — persisting across sessions — not from any state inside the re-sealed artifact. WHEN two consecutive sealed `violated` verdicts land — regardless of which rows failed; no per-row cross-round comparison is performed, consistent with the full-sweep rule — THE orchestrator SHALL route to the decision-audit landing for a human ruling rather than looping unbounded; a human waiver SHALL be recorded in the artifact by the ruling, never self-authored.
 
 #### Scenario: Oxide D3 shape judged not-entailed
 - **WHILE** a delta AC guarantees a structural property ("safe by construction") and the design's cited mechanism is manual per-site handling
@@ -32,8 +32,13 @@ WHERE a change carries a `design.md`, THE workflow SHALL obtain a blind design-f
 - **THEN** a narrow blind fidelity mini-dispatch SHALL produce the sealed `design-fidelity.md` before tasks generation
 
 #### Scenario: Escalation valve after two consecutive violated verdicts
-- **IF** two consecutive sealed `violated` verdicts fail on the same rows despite design fixes landing between them (or with no landable fix)
-- **THEN** the orchestrator SHALL route to the decision-audit landing with the fidelity history rather than dispatching a third judgment automatically
+- **IF** the round ledger records two consecutive sealed `violated` fidelity verdicts, regardless of which rows failed in each
+- **THEN** the orchestrator SHALL route to the decision-audit landing with the fidelity history rather than dispatching a third judgment automatically, and SHALL NOT attempt per-row matching across the two sealed verdicts
+
+#### Scenario: Valve count persists across sessions
+- **WHILE** one sealed `violated` fidelity verdict is recorded in the round ledger
+- **WHEN** a fresh orchestrator session seals a second consecutive `violated`
+- **THEN** the valve SHALL fire from the ledger's record — the count never resets merely because the artifact was re-sealed or the session restarted
 
 ### Requirement: Findings File Sole Verdict Source
 
@@ -56,7 +61,7 @@ FOR every reviewer/judge dispatch (code review, doneness, design fidelity, and j
 
 ### Requirement: Reviewer Tree Identity Attestation
 
-THE blind reviewer/judge dispatch prompt SHALL require the subagent, BEFORE reviewing, to attest the tree it is actually executing in — record the verbatim output of `git rev-parse HEAD` (a full 40-hex SHA; any other form is a missing attestation) and of `git rev-parse --show-toplevel`, as machine-readable own-line fields at the top of its findings output (`Attested HEAD: <40-hex sha>` and `Attested Path: <toplevel path>`) — and THE orchestrator SHALL count a reviewer verdict toward gating ONLY WHEN the attested HEAD literal equals the full SHA of the dispatched range head AND the attested path, canonicalized (realpath), equals the canonicalized root of the dispatched worktree (worktree execution is the only model — the path check always discriminates the reviewed worktree from the integration checkout and every other tree). A verdict with a missing or mismatched attestation SHALL be treated as INVALID — distinct from fail: it SHALL NOT satisfy multi-model gating, SHALL NOT enter the round ledger as a reviewer verdict, and SHALL NOT count toward the `review_max_rounds` trajectory — and the orchestrator SHALL record the incident and re-dispatch the reviewer (or repair the reviewer set) rather than sealing. WHEN two consecutive dispatch attempts of the same round yield NO countable verdict (all reviewers INVALID), THE orchestrator SHALL stop re-dispatching and route to the decision-audit landing with a dispatch-integrity error rather than retrying unbounded. WHEN sealing `code-review.md` (and `doneness.md` or `design-fidelity.md` when an independently dispatched judge produced them), THE orchestrator SHALL record the single `**Attested HEAD:**` value only when every counted reviewer's attestation matches it.
+THE blind reviewer/judge dispatch prompt SHALL require the subagent, BEFORE reviewing, to attest the tree it is actually executing in — record the verbatim output of `git rev-parse HEAD` (a full 40-hex SHA; any other form is a missing attestation) and of `git rev-parse --show-toplevel`, as machine-readable own-line fields at the top of its findings output (`Attested HEAD: <40-hex sha>` and `Attested Path: <toplevel path>`) — and THE orchestrator SHALL count a reviewer verdict toward gating ONLY WHEN the attested HEAD literal equals the full SHA of the dispatched range head AND the attested path, canonicalized (realpath), equals the canonicalized root of the dispatched tree. FOR post-implementation dispatches (code review, doneness) the dispatched tree is the change's `opsx/<change>` worktree — worktree execution is the only implementation model, so the path check always discriminates the reviewed worktree from the integration checkout and every other tree. FOR judgments dispatched before worktree creation (clarify, analyze, design fidelity — pre-worktree by definition), the dispatched tree IS the integration checkout: the attested path SHALL equal the canonicalized integration-checkout root and the attested HEAD SHALL equal the integration-checkout HEAD at dispatch — the HEAD check carries discrimination for those dispatches; this carve-out is scoped strictly to pre-worktree judgments and never applies once an `opsx/<change>` worktree exists for the dispatched purpose. A verdict with a missing or mismatched attestation SHALL be treated as INVALID — distinct from fail: it SHALL NOT satisfy multi-model gating, SHALL NOT enter the round ledger as a reviewer verdict, and SHALL NOT count toward the `review_max_rounds` trajectory — and the orchestrator SHALL record the incident and re-dispatch the reviewer (or repair the reviewer set) rather than sealing. WHEN two consecutive dispatch attempts of the same round yield NO countable verdict (all reviewers INVALID), THE orchestrator SHALL stop re-dispatching and route to the decision-audit landing with a dispatch-integrity error rather than retrying unbounded. WHEN sealing `code-review.md` (and `doneness.md` or `design-fidelity.md` when an independently dispatched judge produced them), THE orchestrator SHALL record the single `**Attested HEAD:**` value only when every counted reviewer's attestation matches it.
 
 #### Scenario: Attestation preamble required in every dispatch
 - **WHEN** a blind reviewer or judge subagent is dispatched
@@ -67,8 +72,13 @@ THE blind reviewer/judge dispatch prompt SHALL require the subagent, BEFORE revi
 - **THEN** the orchestrator SHALL treat the verdict as INVALID — excluded from multi-model gating, absent from the round ledger's reviewer verdicts, and not counted toward `review_max_rounds` — record the incident, and re-dispatch
 
 #### Scenario: Integration-checkout path fails the attestation
-- **IF** a reviewer dispatched against a change worktree attests the integration checkout's toplevel path
-- **THEN** the verdict SHALL be INVALID — the path check discriminates unconditionally now that no same-tree mode exists
+- **IF** a reviewer dispatched against a change worktree (any post-implementation dispatch) attests the integration checkout's toplevel path
+- **THEN** the verdict SHALL be INVALID — the path check discriminates unconditionally for post-implementation dispatches now that no same-tree mode exists
+
+#### Scenario: Pre-worktree judgment attests the integration checkout
+- **WHILE** a clarify, analyze, or design-fidelity judgment is dispatched before any `opsx/<change>` worktree exists
+- **WHEN** the judge attests the integration checkout's HEAD and canonicalized root
+- **THEN** the attestation SHALL be countable — the integration checkout is the dispatched tree for pre-worktree judgments, and the HEAD equality check carries the discrimination
 
 #### Scenario: Missing attestation is invalid
 - **IF** a returned findings output carries no attestation fields, or an `Attested HEAD` that is not a full 40-hex SHA literal
@@ -103,3 +113,30 @@ THE orchestrator SHALL capture a deterministic snapshot immediately before dispa
 - **WHILE** the pre- and post-window snapshots are identical in every covered tree
 - **WHEN** a verdict's attestation also matches
 - **THEN** the verdict SHALL be counted normally toward gating and the ledger
+
+### Requirement: Post Apply Code Review Artifact
+
+WHILE Code Review Mode is advisory or gating-required, WHEN the implementation checks required before diff review are green (tasks complete, structural checks pass, required validation commands pass, and any retained-required verify is green), THE openspec-apply-change skill SHALL cause a `code-review.md` artifact to be produced by the review subagent (not self-authored by the orchestrator), reviewing the implemented diff against the change's intent and plan, distinct from the pre-implementation analyze review.
+
+#### Scenario: Code review produced when pre-review checks are green
+- **WHILE** Code Review Mode is advisory or gating-required
+- **WHEN** tasks are complete, structural + required validation checks pass, and any retained-required verify is green
+- **THEN** the review subagent SHALL author code-review.md (its body, Verdict, `Diff Base SHA`, reviewed range, `review_mode`, and adapter-stamped provenance field), and the orchestrator skill SHALL only trigger and collect it
+
+#### Scenario: Gating-required does not deadlock under advisory verify
+- **WHILE** Code Review Mode is gating-required and Verification Mode is retained-recommended or inline-only
+- **WHEN** the pre-review checks (excluding the advisory verify) are green
+- **THEN** code-review production SHALL still trigger, so the gate's code-review requirement cannot deadlock waiting on a verify state that the mode does not require
+
+#### Scenario: None mode suppresses production
+- **WHILE** Code Review Mode is none
+- **WHEN** apply reaches a green verify state
+- **THEN** the skill SHALL NOT produce code-review.md
+
+#### Scenario: Diff base resolves from the worktree
+- **WHEN** the code review computes its diff
+- **THEN** the base SHALL be the immutable `Diff Base SHA` recorded in review.md, which apply sets at `opsx/<change>` worktree creation before the first implementation task — worktree execution is the only model, so no other diff-base source exists
+
+#### Scenario: Review baseline is intent plus the full plan
+- **WHEN** the code review is performed
+- **THEN** the diff SHALL be judged against intent.md together with the proposal, specs, design, plan, and tasks status, so the reviewer can check the implementation followed the approved execution and verification path

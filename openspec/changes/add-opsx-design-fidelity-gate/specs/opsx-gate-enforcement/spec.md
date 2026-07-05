@@ -4,7 +4,7 @@
 
 ### Requirement: Design Fidelity Verdict Enforcement
 
-WHERE a change carries a `design.md`, THE opsx gate command SHALL require a sealed `design-fidelity.md` verdict artifact — at every Scale, with no waiver key — carrying an own-line `**Fidelity:**` field (`delivered | violated`), a judge-provenance field stamped by the subagent-dispatch adapter, an `**Attested HEAD:**` field per the attestation binding, and digest-binding fields recording the sha256 of intent.md, design.md, and EVERY delta spec file under `specs/`; THE gate SHALL recompute each recorded digest from the located tree and SHALL treat the check as failed WHEN the artifact is absent, any recorded digest does not equal the recomputed digest (stale — edit means re-judge), the `Fidelity` value is `violated`, or any required field is absent or unparseable (fail-closed, never a permissive default). The check SHALL be deterministic and model-free: field parsing plus sha256 recomputation only. WHERE the change has no `design.md`, the check SHALL NOT be required. A human waiver recorded in the artifact after the escalation-valve procedure (opsx-adversarial-review Design Fidelity Judge) SHALL be readable as a distinct own-line field naming the human ruling — never a self-authored `delivered`.
+WHERE a change carries a `design.md`, THE opsx gate command SHALL require a sealed `design-fidelity.md` verdict artifact — at every Scale, with no waiver key — carrying an own-line `**Fidelity:**` field (`delivered | violated`), a judge-provenance field stamped by the subagent-dispatch adapter, an `**Attested HEAD:**` field per the attestation binding, and digest-binding fields recording the sha256 of intent.md, design.md, and EVERY delta spec file under `specs/`; THE gate SHALL recompute each recorded digest from the change directory `openspec/changes/<change>/` in the integration checkout (the tree opsx gate is invoked from) — never from the worktree the range-freshness locator resolves — SHALL enumerate the actual set of `specs/**/spec.md` files under the change directory and treat the check as failed WHEN that set differs from the set of recorded digest fields (a delta spec file added or removed after sealing), and SHALL treat the check as failed WHEN the artifact is absent, any recorded digest does not equal the recomputed digest (stale — edit means re-judge), the `Fidelity` value is `violated` with no human-waiver field, or any required field is absent or unparseable (fail-closed, never a permissive default). WHILE the `Fidelity` value is `violated` AND a non-empty human-waiver field naming the human ruling is present (written only at the decision-audit landing, per the escalation valve), THE gate SHALL treat the fidelity check as satisfied (waived) — the deterministic analogue of `doneness_mode: waived` plus rationale — with the digest bindings still enforced, so a waiver does not survive post-waiver edits. The check SHALL be deterministic and model-free: field parsing plus sha256 recomputation only. WHERE the change has no `design.md`, the check SHALL NOT be required. A human waiver recorded in the artifact after the escalation-valve procedure (opsx-adversarial-review Design Fidelity Judge) SHALL be readable as a distinct own-line field naming the human ruling — never a self-authored `delivered`.
 
 #### Scenario: Design-bearing change without fidelity verdict fails
 - **WHILE** the change contains design.md
@@ -21,8 +21,22 @@ WHERE a change carries a `design.md`, THE opsx gate command SHALL require a seal
 - **THEN** opsx gate SHALL report the design-fidelity verdict as stale and exit non-zero until a fresh full-sweep re-judgment is sealed
 
 #### Scenario: Violated verdict fails the gate
-- **WHILE** design-fidelity.md records `Fidelity: violated`
+- **WHILE** design-fidelity.md records `Fidelity: violated` with no human-waiver field
 - **THEN** opsx gate SHALL report the design-fidelity check as failed and exit non-zero
+
+#### Scenario: Human waiver satisfies the check deterministically
+- **WHILE** design-fidelity.md records `Fidelity: violated` AND a non-empty human-waiver field naming the ruling recorded at the decision-audit landing
+- **WHEN** opsx gate evaluates the design-fidelity check with all recorded digests matching their recomputation
+- **THEN** the check SHALL be treated as satisfied (waived), and a subsequent edit to intent.md, design.md, or any delta spec file SHALL stale the waived verdict like any other seal
+
+#### Scenario: New delta spec file after seal stales the verdict
+- **WHILE** design-fidelity.md is sealed with digest fields for the then-present delta spec files
+- **IF** a new `specs/**/spec.md` file is added under the change directory (or a recorded one is removed) after sealing
+- **THEN** opsx gate SHALL report the fidelity check as failed because the enumerated file set differs from the recorded digest-field set — an AC set change always forces a fresh full-sweep re-judgment
+
+#### Scenario: Digests recomputed from the integration checkout
+- **WHEN** opsx gate recomputes the fidelity digest bindings
+- **THEN** it SHALL hash intent.md, design.md, and the delta spec files from `openspec/changes/<change>/` in the integration checkout it is invoked from, independent of the worktree locator used for range freshness (change-dir artifacts are committed on the integration checkout; the worktree may hold stale or absent copies)
 
 #### Scenario: No design.md means no fidelity requirement
 - **WHILE** the change contains no design.md
@@ -46,6 +60,11 @@ THE opsx gate command SHALL treat worktree execution as the only execution model
 - **IF** neither the recorded Worktree Path nor the convention path validates as a git worktree on branch `opsx/<change>`
 - **THEN** the gate SHALL fail the verdict-freshness evaluation naming the missing worktree, never falling back to the integration checkout HEAD
 
+#### Scenario: Key-less tier-default same-tree change fails with the re-home remedy
+- **WHILE** a change authored before this deployment recorded a same-tree-shaped locator by tier default — a `Diff Base SHA` present, `Worktree Path` empty, and no `opsx/<change>` branch — without ever declaring a `worktree_mode` key
+- **WHEN** opsx gate evaluates its verdict checks
+- **THEN** the gate SHALL fail those checks naming the missing worktree and the re-home remedy (`opsx worktree ensure <change>`, re-review), never silently resolving the implementation HEAD to the integration checkout HEAD
+
 ### Requirement: Post Seal Bookkeeping Non Staling
 
 THE workflow SHALL permit orchestrator bookkeeping after a verdict artifact is sealed at the final reviewed head — setting/clearing the loop landing signal (`loop_hold`) on the integration-checkout review.md, routing findings to `follow-ups.md`, and appending Execution-Notes-class entries — WITHOUT staling any sealed verdict, BECAUSE sealed verdicts are bound to the `opsx/<change>` worktree branch HEAD which bookkeeping commits on the integration checkout never move; AND any file content the gate reads for verdict or mode decisions SHALL remain protected — the gate SHALL NOT allowlist review.md wholesale, and a post-seal edit to gate-read decision inputs that feed an already-sealed verdict evaluation SHALL still fail closed or stale per the existing freshness rules.
@@ -64,7 +83,7 @@ THE workflow SHALL permit orchestrator bookkeeping after a verdict artifact is s
 
 ### Requirement: Verdict Freshness And Provenance
 
-THE opsx gate command SHALL require verify.md and code-review.md to record the immutable `Diff Base SHA` and the implementation HEAD they were produced against, plus a reviewer-provenance field, and SHALL treat a verdict as failed if the recorded range does not equal `Diff Base SHA..<implementation-HEAD>` recomputed from the worktree opsx gate locates, so an agent cannot mark a verdict pass and then continue mutating the diff. WHEN Code Review Mode is gating-required, code-review.md SHALL additionally carry an own-line `**Attested HEAD:**` field — the reviewer-attested tree HEAD — whose value SHALL be a full 40-hex SHA literal (any other form, including a short SHA or a symbolic ref such as `HEAD`, is unparseable) equal to the full SHA the gate computes for the recorded Reviewed Range head; an absent or unparseable `Attested HEAD` SHALL be a failed check, never a pass (fail-closed). The same attestation binding SHALL apply to doneness.md WHEN the doneness verdict is required and was produced by the independently dispatched full_rigor judge, and to design-fidelity.md WHEN required. Attestation SHALL be enforced only where a verdict artifact is evaluated by the gate (active changes) — archived changes are never re-gated. WHEN the recorded Worktree Path locator is absent, empty, or fails validation, THE gate SHALL probe the canonical convention path and use it iff valid; WHEN locator and convention path both fail for a change past Diff Base capture, THE gate SHALL fail the verdict evaluation loudly (Worktree Mandatory Gate Enforcement) rather than proceeding without a worktree.
+THE opsx gate command SHALL require verify.md and code-review.md to record the immutable `Diff Base SHA` and the implementation HEAD they were produced against, plus a reviewer-provenance field, and SHALL treat a verdict as failed if the recorded range does not equal `Diff Base SHA..<implementation-HEAD>` recomputed from the worktree opsx gate locates, so an agent cannot mark a verdict pass and then continue mutating the diff. WHEN Code Review Mode is gating-required, code-review.md SHALL additionally carry an own-line `**Attested HEAD:**` field — the reviewer-attested tree HEAD — whose value SHALL be a full 40-hex SHA literal (any other form, including a short SHA or a symbolic ref such as `HEAD`, is unparseable) equal to the full SHA the gate computes for the recorded Reviewed Range head; an absent or unparseable `Attested HEAD` SHALL be a failed check, never a pass (fail-closed). The same attestation binding SHALL apply to doneness.md WHEN the doneness verdict is required and was produced by the independently dispatched full_rigor judge. FOR design-fidelity.md WHEN required, the `Attested HEAD` binding SHALL be the integration-checkout HEAD the judgment was dispatched against (fidelity is judged before worktree creation, so there is no Reviewed Range or implementation HEAD to bind); fidelity's freshness mechanism is its digest bindings, not a range recompute. Attestation SHALL be enforced only where a verdict artifact is evaluated by the gate (active changes) — archived changes are never re-gated. WHEN the recorded Worktree Path locator is absent, empty, or fails validation, THE gate SHALL probe the canonical convention path and use it iff valid; WHEN locator and convention path both fail for a change past Diff Base capture, THE gate SHALL fail the verdict evaluation loudly (Worktree Mandatory Gate Enforcement) rather than proceeding without a worktree.
 
 #### Scenario: Worktree located deterministically with convention fallback
 - **WHEN** opsx gate needs the implementation HEAD
@@ -103,6 +122,11 @@ THE opsx gate command SHALL require verify.md and code-review.md to record the i
 - **WHILE** doneness is required and `full_rigor` is true (independently dispatched judge)
 - **IF** doneness.md omits `**Attested HEAD:**` or its value is not a full 40-hex literal equal to the recorded Diff Base–bound implementation HEAD it judged
 - **THEN** opsx gate SHALL report the doneness check as failed and exit non-zero
+
+#### Scenario: Fidelity attestation binds to the integration-checkout HEAD, not a range
+- **WHILE** a design-bearing change requires design-fidelity.md
+- **WHEN** opsx gate evaluates the fidelity artifact's `Attested HEAD`
+- **THEN** the gate SHALL require a full 40-hex literal (unparseable otherwise, fail-closed) recording the integration-checkout HEAD at judgment, SHALL NOT demand equality with any Reviewed Range head (no worktree or implementation HEAD exists at fidelity-seal time), and staleness SHALL be carried by the digest bindings alone
 
 ### Requirement: Land Base Currency
 
