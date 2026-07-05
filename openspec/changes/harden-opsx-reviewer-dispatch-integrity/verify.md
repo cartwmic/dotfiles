@@ -10,8 +10,8 @@ so the gate enforces Status green + freshness fields.
 **Generated:** 2026-07-05 by claude-opus-4-8 / openspec-loop (orchestrator)
 **Change:** harden-opsx-reviewer-dispatch-integrity
 **Status:** green
-**Diff Base SHA:** ff5a86069232caf16be1a48f21e8ec06739cbfad
-**Reviewed Range:** ff5a86069232caf16be1a48f21e8ec06739cbfad..3464621e80f7c1255595859429af7b3eb1cbfbfc
+**Diff Base SHA:** ff5a8606923247f37f0af87c691cc90b989aa25a
+**Reviewed Range:** ff5a8606923247f37f0af87c691cc90b989aa25a..fb17778ced21cb47ab1afb51adf2bb99d3240f9d
 
 ## Checks
 
