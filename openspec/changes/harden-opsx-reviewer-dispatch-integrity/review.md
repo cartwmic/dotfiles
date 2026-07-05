@@ -78,9 +78,9 @@ main > master) — never assume a hardcoded literal (opsx-workflow-schema.
 integration-branch-locator-default-detected).
 -->
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
-**Integration Branch:** <detected-at-capture>
+**Diff Base SHA:** ff5a8606923247f37f0af87c691cc90b989aa25a
+**Worktree Path:**
+**Integration Branch:** main
 
 ## Manual Adjustments
 
