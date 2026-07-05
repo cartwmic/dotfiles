@@ -52,8 +52,8 @@ file-contract diffs, code-review diff base, and opsx gate verdict freshness.
 In same-tree mode, Diff Base SHA = pre-apply HEAD and Worktree Path is empty.
 -->
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
+**Diff Base SHA:** 25f6f22906c0d7fa58f4f863be99f6630bf7a04a
+**Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-ntfy-harpoon-jump
 **Integration Branch:** main
 
 ## Manual Adjustments
@@ -74,6 +74,7 @@ rationale. Keep the front-matter, the table, and these notes consistent. -->
 non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -->
 
 - 2026-07-04 — review.md authored in-session to satisfy earliest GATE-FAIL (Scale source).
+- 2026-07-04 — worktree ensured (opsx/ntfy-harpoon-jump); Diff Base SHA 25f6f22 captured.
 
 ## Scope Expansions
 
