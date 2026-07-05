@@ -26,6 +26,13 @@ opsx gate reads (required WHILE Scale >= M and review.md `doneness_mode: require
   - Frozen-Intent SHA   sha256 of the change's intent.md the judge read; the gate
                         recomputes and compares (mutated intent => failed check).
   - Diff Base SHA       must equal review.md's immutable Diff Base SHA.
+  - Attested HEAD       independent-judge tree identity (REQUIRED only under
+                        full_rigor — the independently dispatched judge records
+                        its verbatim full 40-hex `git rev-parse HEAD`; must equal
+                        the implementation HEAD; fail-closed). At plain Scale M
+                        the doneness verdict rides the combined code-review
+                        dispatch and the reviewer's attestation is bound via
+                        code-review.md — nothing is demanded here.
   - Reviewed Range      <Diff Base SHA>..<implementation HEAD>; must equal the range
                         the gate recomputes from the located worktree HEAD (a new
                         commit invalidates a prior verdict => re-judge).
@@ -48,6 +55,7 @@ beyond-scope / gold-plated work.
      stronger form, >= 2 distinct models). degraded-single-model (inline,
      no dispatch adapter) and unknown values FAIL the gate. -->
 **Frozen-Intent SHA:** <sha256 of intent.md>
+**Attested HEAD:** <full_rigor independent judge: verbatim full 40-hex `git rev-parse HEAD`; plain-M combined dispatch: leave as-is — not gate-read>
 **Diff Base SHA:** <immutable Diff Base SHA from review.md>
 **Reviewed Range:** <Diff Base SHA>..<implementation HEAD>
 

@@ -941,6 +941,21 @@ if [ "$CR_MODE" = "gating-required" ]; then
       && fail code-review "code-review.md is degraded-single-model (does not satisfy gating/Constitution IX)"
     [ -n "$(cr_field "$CR" 'reviewer-provenance')" ] \
       || fail code-review "code-review.md lacks an adapter-stamped provenance field"
+    # Attested HEAD (opsx-gate-enforcement.verdict-freshness-and-provenance):
+    # reviewer-attested tree identity. MUST be a full 40-hex literal (verbatim
+    # `git rev-parse HEAD` output) equal to the Reviewed Range head's full SHA.
+    # Symbolic refs / short SHAs are UNPARSEABLE by design — never resolved in
+    # the located worktree (a literal `HEAD` would trivially self-match there,
+    # which is the exact wrong-tree bypass this field exists to close).
+    att="$(cr_field "$CR" 'Attested HEAD')"
+    if ! printf '%s' "$att" | grep -qE '^[0-9a-f]{40}$'; then
+      fail code-review "code-review.md Attested HEAD absent or not a full 40-hex SHA literal (reviewer records verbatim 'git rev-parse HEAD'; symbolic/short forms fail closed)"
+    else
+      rr_att="$(cr_field "$CR" 'Reviewed Range')"
+      rr_att_head="$(git -C "$GW" rev-parse "${rr_att##*..}" 2>/dev/null)"
+      [ "$att" = "$rr_att_head" ] \
+        || fail code-review "code-review.md Attested HEAD ($att) does not equal the Reviewed Range head (${rr_att##*..}) — wrong-tree verdict"
+    fi
   fi
 fi
 
@@ -1065,6 +1080,21 @@ if [ "$rc" -eq 0 ]; then
           db_rec="$(cr_field "$DONE" 'Diff Base SHA')"
           if [ -n "$DIFF_BASE" ] && [ "$db_rec" != "$DIFF_BASE" ]; then
             fail doneness "doneness.md recorded Diff Base != review.md Diff Base"
+          fi
+          # Attested HEAD binding — ONLY for the independently dispatched
+          # full_rigor judge (opsx-gate-enforcement.verdict-freshness-and-
+          # provenance). Plain-M rides the combined CR dispatch: its reviewer's
+          # attestation is already bound via code-review.md, so nothing is
+          # demanded of doneness.md there (clarify C2 → Option A).
+          if [ "$FULL_RIGOR" = true ]; then
+            datt="$(cr_field "$DONE" 'Attested HEAD')"
+            if ! printf '%s' "$datt" | grep -qE '^[0-9a-f]{40}$'; then
+              fail doneness "doneness.md Attested HEAD absent or not a full 40-hex SHA literal (independent full_rigor judge must attest verbatim 'git rev-parse HEAD')"
+            else
+              d_head="$(git -C "$GW" rev-parse "$IMPL_HEAD" 2>/dev/null)"
+              [ "$datt" = "$d_head" ] \
+                || fail doneness "doneness.md Attested HEAD ($datt) does not equal the implementation HEAD — wrong-tree judge verdict"
+            fi
           fi
           freshness_check "$DONE" doneness   # stale doneness fails under the 'doneness' check id-stale
         fi

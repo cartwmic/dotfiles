@@ -228,6 +228,7 @@ cat >"$TMP/openspec/changes/cr-pass/code-review.md" <<EOF
 **reviewer-provenance:** subagent-x
 **Diff Base SHA:** $HEAD_SHA
 **Reviewed Range:** $HEAD_SHA..$HEAD_SHA
+**Attested HEAD:** $HEAD_SHA
 EOF
 run cr-pass; check "correct bold-field passing review reaches GATE-PASS (verdict-freshness-and-provenance)" 0 $?
 
@@ -292,12 +293,67 @@ cat >"$TMP/openspec/changes/cr-seal/code-review.md" <<EOF
 **reviewer-provenance:** subagent-x
 **Diff Base SHA:** $HEAD_SHA
 **Reviewed Range:** $HEAD_SHA..$C1
+**Attested HEAD:** $C1
 EOF
 git -C "$TMP" add openspec/changes/cr-seal/code-review.md
 git -C "$TMP" commit -qm "seal verdict (verdict-only commit)"
 run cr-seal; check "freshness tolerates verdict-only sealing commit (verdict-freshness-and-provenance)" 0 $?
 printf x >"$TMP/codefile"; git -C "$TMP" add codefile; git -C "$TMP" commit -qm "code change after review"
 run cr-seal; check "freshness rejects non-verdict change after review (verdict-freshness-and-provenance)" 1 $?
+
+# ============================================================================
+# opsx-gate-enforcement.verdict-freshness-and-provenance — Attested HEAD binding
+# ============================================================================
+HEAD_SHA="$(git -C "$TMP" rev-parse HEAD)"
+mkatt() { # <name> <attested-line-or-empty>
+  mkchange "$1"
+  sed -i.bak 's/^code_review_mode: advisory/code_review_mode: gating-required/' \
+    "$TMP/openspec/changes/$1/review.md"
+  printf '\n**Diff Base SHA:** %s\n**Worktree Path:**\n' "$HEAD_SHA" \
+    >>"$TMP/openspec/changes/$1/review.md"
+  { cat <<EOF
+# Code Review
+**Verdict:** pass
+**review_mode:** adversarial-multimodel
+**reviewer-provenance:** subagent-x
+**Diff Base SHA:** $HEAD_SHA
+**Reviewed Range:** $HEAD_SHA..$HEAD_SHA
+EOF
+    [ -n "$2" ] && printf '%s\n' "$2"; } >"$TMP/openspec/changes/$1/code-review.md"
+}
+
+# absent Attested HEAD under gating-required => FAIL (fail-closed)
+mkatt att-absent ""
+run att-absent; check "absent Attested HEAD fails under gating-required (verdict-freshness-and-provenance)" 1 $?
+grep -q 'Attested HEAD' "$TMP/err" && ok "names the Attested HEAD remedy" || nok "names the Attested HEAD remedy"
+
+# matching full 40-hex => PASS
+mkatt att-match "**Attested HEAD:** $HEAD_SHA"
+run att-match; check "matching 40-hex Attested HEAD passes (verdict-freshness-and-provenance)" 0 $?
+
+# symbolic ref is UNPARSEABLE — never resolved in the located worktree
+mkatt att-symbolic "**Attested HEAD:** HEAD"
+run att-symbolic; check "symbolic Attested HEAD fails closed, never resolved (verdict-freshness-and-provenance)" 1 $?
+grep -q 'Attested HEAD' "$TMP/err" && ok "symbolic form reported as attestation failure" || nok "symbolic form reported as attestation failure"
+
+# short SHA is UNPARSEABLE
+mkatt att-short "**Attested HEAD:** $(printf '%.12s' "$HEAD_SHA")"
+run att-short; check "short-SHA Attested HEAD fails closed (verdict-freshness-and-provenance)" 1 $?
+
+# mismatched full 40-hex (valid form, wrong tree) => FAIL
+mkatt att-mismatch "**Attested HEAD:** $(printf '%040d' 1)"
+run att-mismatch; check "mismatched 40-hex Attested HEAD fails — wrong-tree verdict (verdict-freshness-and-provenance)" 1 $?
+grep -q 'wrong-tree' "$TMP/err" && ok "mismatch names wrong-tree" || nok "mismatch names wrong-tree"
+
+# advisory (derived, Scale S) => Attested HEAD never demanded, even with a CR file present
+mkchange att-advisory
+cat >"$TMP/openspec/changes/att-advisory/code-review.md" <<EOF
+# Code Review
+**Verdict:** pass
+**review_mode:** adversarial-multimodel
+**reviewer-provenance:** subagent-x
+EOF
+run att-advisory; check "advisory code review never demands Attested HEAD (verdict-freshness-and-provenance)" 0 $?
 
 # ============================================================================
 # opsx-gate-enforcement.doneness-verdict-enforcement
@@ -335,6 +391,7 @@ EOF
 **reviewer-provenance:** subagent-x
 **Diff Base SHA:** $HEAD_SHA
 **Reviewed Range:** $HEAD_SHA..$HEAD_SHA
+**Attested HEAD:** $HEAD_SHA
 EOF
 }
 donefile() { # <name> <verdict> [review_mode]
@@ -347,6 +404,7 @@ donefile() { # <name> <verdict> [review_mode]
 **Frozen-Intent SHA:** $ih
 **Diff Base SHA:** $HEAD_SHA
 **Reviewed Range:** $HEAD_SHA..$HEAD_SHA
+${4:+**Attested HEAD:** $4}
 EOF
 }
 
@@ -357,6 +415,22 @@ run d-ok; check "satisfied fresh provenanced doneness passes (sealed-doneness-ve
 # adversarial-multimodel is the stronger, equally-valid review_mode
 mkMdone d-multi; donefile d-multi satisfied adversarial-multimodel
 run d-multi; check "adversarial-multimodel doneness review_mode passes (anti-self-forge-provenance)" 0 $?
+
+# --- Attested HEAD on doneness: full_rigor-only binding (verdict-freshness-and-provenance) ---
+# plain-M combined dispatch: NO Attested HEAD demanded on doneness.md (d-ok above already green).
+# full_rigor independent judge WITHOUT attestation => FAIL under the doneness check
+mkMdone d-fr-noatt
+sed -i.bak 's/^scale: M/scale: M\nfull_rigor: true/' "$TMP/openspec/changes/d-fr-noatt/review.md"
+donefile d-fr-noatt satisfied
+run d-fr-noatt; rc=$?
+check "full_rigor judge without Attested HEAD fails (verdict-freshness-and-provenance)" 1 $rc
+grep -q 'GATE-FAIL doneness' "$TMP/err" && grep -q 'Attested HEAD' "$TMP/err" \
+  && ok "full_rigor doneness attestation named" || nok "full_rigor doneness attestation named"
+# full_rigor judge WITH matching attestation => PASS
+mkMdone d-fr-att
+sed -i.bak 's/^scale: M/scale: M\nfull_rigor: true/' "$TMP/openspec/changes/d-fr-att/review.md"
+donefile d-fr-att satisfied blind-single-judge "$HEAD_SHA"
+run d-fr-att; check "full_rigor judge with matching Attested HEAD passes (verdict-freshness-and-provenance)" 0 $?
 
 # unknown review_mode fails CLOSED
 mkMdone d-unknownmode; donefile d-unknownmode satisfied something-else

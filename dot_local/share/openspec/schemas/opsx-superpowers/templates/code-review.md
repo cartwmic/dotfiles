@@ -16,6 +16,13 @@ opsx gate / archive read these fields verbatim:
   - reviewer-provenance adapter-stamped reviewer identity (absence = failed check)
   - Diff Base SHA       the immutable base the review was computed against
   - Reviewed Range      <Diff Base SHA>..<implementation HEAD>  (must equal current → freshness)
+  - Attested HEAD       reviewer-attested tree identity: the verbatim full 40-hex
+                        `git rev-parse HEAD` output recorded by the counted
+                        reviewer(s). Gate-bound under gating-required: must equal
+                        the Reviewed Range head's full SHA; symbolic refs (`HEAD`)
+                        and short SHAs are UNPARSEABLE → failed check (fail-closed).
+                        Sealed only when every counted reviewer attested the same
+                        value (wrong-tree verdicts are INVALID, never counted).
   - waived_by_user      OPTIONAL; present only when the user waived remaining open
                         P0/P1 findings at the decision-audit landing. Lists waived
                         finding #s + rationale; authorizes a re-sealed pass with the
@@ -28,12 +35,23 @@ opsx gate / archive read these fields verbatim:
 **reviewer-provenance:** <subagent id(s) stamped by the subagent-dispatch adapter>
 **Diff Base SHA:** <immutable base from review.md>
 **Reviewed Range:** <Diff Base SHA>..<implementation HEAD>
+**Attested HEAD:** <full 40-hex sha every counted reviewer attested>
 **Baseline:** intent.md + proposal + specs + design + plan + tasks status
 **Generated:** YYYY-MM-DD
 <!-- **waived_by_user:** <finding #s + user rationale> — only after an explicit user
      waiver at the decision-audit landing; reviewed range stays unchanged -->
 
 ## Verdict contract (embed in every reviewer dispatch prompt)
+
+<!-- Attestation preamble (opsx-adversarial-review.reviewer-tree-identity-
+     attestation): BEFORE reviewing, every blind reviewer records as its FIRST
+     findings-output lines:
+       Attested HEAD: <verbatim `git rev-parse HEAD` output — full 40-hex>
+       Attested Path: <verbatim `git rev-parse --show-toplevel` output>
+     run in the reviewer's own execution context. A verdict whose attestation
+     is missing, non-40-hex, or does not match the dispatched range head /
+     tree root (realpath-compared) is INVALID — excluded from gating, the
+     ledger, and the round budget — and the round is re-dispatched. -->
 
 <!-- Baseline-bounded contract (opsx-adversarial-review): a reviewer may FAIL
      this review ONLY for (a) a violation of the frozen baseline — intent.md,

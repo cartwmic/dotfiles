@@ -97,6 +97,7 @@ rationale. Keep the front-matter, the table, and these notes consistent. -->
 non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -->
 
 - 2026-07-05 — review.md authored from shipped template; Scale S, same-tree derived.
+- 2026-07-05 — impl: gate attestation checks (CR + full_rigor doneness), template fields + preamble, skill prose (loop + apply ref), 12 new gate cases + 16 surface pins. Suites: gate 140, convergence 168, cli 67, models 34, marker 4, bun 60 — all green.
 
 ## Scope Expansions
 
