@@ -307,6 +307,25 @@ if [ -e "$ROOT/tests/opsx-review-convergence/test_review_convergence_surfaces.sh
   nok "stray surfaces .tmp stays deleted"
 else ok "stray surfaces .tmp stays deleted"; fi
 
+# --- opsx-workflow-schema.integration-branch-locator-default-detected ---
+has "review.md template ships the <detected-at-capture> locator sentinel, not a branch literal" "$TEMPLATE_REVIEW" "\*\*Integration Branch:\*\* <detected-at-capture>"
+has "review.md template documents capture-time detection via the resolver" "$TEMPLATE_REVIEW" "integration-branch-locator-default-detected"
+if grep -q '^\*\*Integration Branch:\*\* main$' "$TEMPLATE_REVIEW" 2>/dev/null; then
+  nok "review.md template no longer hardcodes Integration Branch: main"
+else ok "review.md template no longer hardcodes Integration Branch: main"; fi
+
+# --- opsx-gate-enforcement.land-base-currency (resolved-branch prose) ---
+has "archive ref describes base-currency against the RESOLVED integration branch" "$ARCHIVE_REF" "integration-branch-resolution"
+if grep -q 'merge-base opsx/<name> main' "$ARCHIVE_REF" 2>/dev/null; then
+  nok "archive ref dropped the literal-main merge-base assertion"
+else ok "archive ref dropped the literal-main merge-base assertion"; fi
+
+# --- opsx-gate-enforcement.project-artifact-preflight (propose ref mirrors gate) ---
+has "propose ref option B warns the gate fails closed at EVERY Scale" "$PROPOSE_REF" "project-artifact preflight"
+if grep -q 'only safe for Scale=XS' "$PROPOSE_REF" 2>/dev/null; then
+  nok "propose ref dropped the stale XS-safe skip claim"
+else ok "propose ref dropped the stale XS-safe skip claim"; fi
+
 echo "-----"
 echo "opsx-review-convergence surfaces: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]

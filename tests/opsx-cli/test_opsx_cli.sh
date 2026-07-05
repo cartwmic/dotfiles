@@ -194,7 +194,7 @@ printf '%s' "$betablock" | grep -q 'worktree: none' && ok "status placeholder wo
 after="$(cd "$SREPO" && { git status --porcelain; git branch; git worktree list; find openspec -type f | sort; })"
 [ "$before" = "$after" ] && ok "status is read-only (no new files/branches/worktrees)" || nok "status read-only"
 
-# ---- opsx-cli.archive-check (land-base-currency + ADR-dup + multi-dir advisory) ----
+# ---- opsx-cli.archive-check (opsx-gate-enforcement.land-base-currency + ADR-dup + multi-dir advisory) ----
 ACREPO="$TMP/acrepo"; mkdir -p "$ACREPO/openspec/changes/feat"
 git -C "$ACREPO" init -q; git -C "$ACREPO" config user.email t@t; git -C "$ACREPO" config user.name t
 printf '# Review\n' >"$ACREPO/openspec/changes/feat/review.md"
@@ -241,8 +241,9 @@ printf '%s' "$out" | grep -qi 'advisory' && ok "archive-check flags a multi-dir 
 [ $rc -eq 0 ] && ok "archive-check multi-dir advisory does NOT affect the exit code" || nok "archive-check advisory exit unaffected (rc=$rc)"
 
 # multi-dir advisory INCLUDES MERGE COMMITS: an "evil merge" whose net effect on
-# main touches TWO change dirs must be flagged (opsx-cli.multi-dir-integration-
-# commit-detector: ANY integration-checkout commit; R1 review SIMPAR-R1-001)
+# main touches TWO change dirs must be flagged
+# (opsx-cli.multi-dir-integration-commit-detector: ANY integration-checkout
+# commit; R1 review SIMPAR-R1-001)
 EMREPO="$TMP/emrepo"; mkdir -p "$EMREPO/openspec/changes/x"
 git -C "$EMREPO" init -q; git -C "$EMREPO" config user.email t@t; git -C "$EMREPO" config user.name t
 printf '# x\n' >"$EMREPO/openspec/changes/x/review.md"
