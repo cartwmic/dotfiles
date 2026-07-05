@@ -54,7 +54,7 @@ file-contract diffs, code-review diff base, and opsx gate verdict freshness.
 In same-tree mode, Diff Base SHA = pre-apply HEAD and Worktree Path is empty.
 -->
 
-**Diff Base SHA:** 25f6f22906c0d7fa58f4f863be99f6630bf7a04a
+**Diff Base SHA:** 07ac55b7f19b304602d63e3a01105135878a599f
 **Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-ntfy-harpoon-jump
 **Integration Branch:** main
 
@@ -81,6 +81,11 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
   and fixed at HEAD 6afcd61: jump payload moved from non-propagated custom X-*
   headers onto the ntfy `Click` deep link; wrapper now reads the env-sourced
   remote host (`JUMP_SSH_HOST`) the spec requires.
+- 2026-07-05 — archive-check land-base-currency failed: main advanced with a
+  concurrent change (harden-opsx-repo-portability) + this change's own bookkeeping.
+  Merged main into opsx/ntfy-harpoon-jump (clean) and re-based the review Diff Base
+  to current main HEAD 07ac55b7f19b304602d63e3a01105135878a599f for a clean
+  impl-only diff; a fresh blind review round follows per the rebase-staleness rule.
 - 2026-07-04 — rounds 2-4 (gpt) chased pre-existing-ControlMaster detection; each
   heuristic spawned a new edge. Resolved at HEAD 741371b by simplifying to a
   sentinel-only idempotence guard and NARROWING the spec's second idempotence
