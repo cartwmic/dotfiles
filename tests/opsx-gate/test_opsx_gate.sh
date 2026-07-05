@@ -463,6 +463,8 @@ EOF
 git -C "$TMP" add openspec/changes/d-fr-seal/code-review.md openspec/changes/d-fr-seal/doneness.md
 git -C "$TMP" commit -qm "seal verdicts (verdict-only trailing commit)"
 run d-fr-seal; check "full_rigor Attested HEAD survives doneness-only sealing commit (verdict-freshness-and-provenance)" 0 $?
+# the seal commits above advanced HEAD — re-anchor for downstream fixtures
+HEAD_SHA="$(git -C "$TMP" rev-parse HEAD)"
 
 # unknown review_mode fails CLOSED
 mkMdone d-unknownmode; donefile d-unknownmode satisfied something-else
