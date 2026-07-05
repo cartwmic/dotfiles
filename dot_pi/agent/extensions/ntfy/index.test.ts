@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import {
+	buildJumpClickUrl,
 	buildNotification,
 	extractExcerpt,
 	extractQuestionExcerpt,
@@ -20,6 +21,43 @@ import {
 	parseZellijTabName,
 	saveEnabled,
 } from "./index.ts";
+
+// --- jump Click deep-link (tap-to-jump) ---
+
+test("buildJumpClickUrl: terminal_N pane id rides the URL path", () => {
+	assert.equal(buildJumpClickUrl("terminal_25"), "termux://zellij-jump/terminal_25");
+});
+
+test("buildJumpClickUrl: bare integer pane id accepted", () => {
+	assert.equal(buildJumpClickUrl("25"), "termux://zellij-jump/25");
+});
+
+test("buildJumpClickUrl: honors custom base and strips trailing slash", () => {
+	assert.equal(buildJumpClickUrl("terminal_7", "termux://zellij-jump/"), "termux://zellij-jump/terminal_7");
+});
+
+test("buildJumpClickUrl: undefined for absent / non-terminal / malformed pane id", () => {
+	assert.equal(buildJumpClickUrl(undefined), undefined, "absent");
+	assert.equal(buildJumpClickUrl(""), undefined, "empty");
+	assert.equal(buildJumpClickUrl("plugin_3"), undefined, "plugin pane not jumpable");
+	assert.equal(buildJumpClickUrl("terminal_"), undefined, "empty tail");
+	assert.equal(buildJumpClickUrl("garbage"), undefined, "non-numeric");
+});
+
+test("loadConfig: jumpDeepLinkBase defaults, honors explicit override", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-jump-"));
+	try {
+		fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ url: "http://x/t" }));
+		assert.equal(loadConfig(dir).jumpDeepLinkBase, "termux://zellij-jump", "absent -> default");
+		fs.writeFileSync(
+			path.join(dir, "config.json"),
+			JSON.stringify({ url: "http://x/t", jumpDeepLinkBase: "myscheme://jump" }),
+		);
+		assert.equal(loadConfig(dir).jumpDeepLinkBase, "myscheme://jump", "explicit override");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 // --- ask_user_question excerpt ---
 

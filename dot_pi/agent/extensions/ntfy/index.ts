@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 const DEFAULT_MAX_EXCERPT = 200;
+const DEFAULT_JUMP_DEEPLINK_BASE = "termux://zellij-jump";
 const STATE_FILE = "state.json";
 
 export interface NtfyConfig {
@@ -35,6 +36,12 @@ export interface NtfyConfig {
 	maxExcerptChars: number;
 	/** Default on/off, from config.json. Overridden at runtime by state.json. */
 	enabled: boolean;
+	/**
+	 * Deep-link scheme+host the termux-app fork registers for the notification
+	 * tap-to-jump. The pane id rides the URL PATH (`<base>/<pane-id>`), which is
+	 * what the fork's ZellijJumpHandler parses. Default: termux://zellij-jump.
+	 */
+	jumpDeepLinkBase: string;
 }
 
 /** Read config.json beside this module. Missing/unreadable -> disabled config. */
@@ -49,9 +56,18 @@ export function loadConfig(dir: string): NtfyConfig {
 				: DEFAULT_MAX_EXCERPT;
 		// enabled defaults to true unless explicitly set to false.
 		const enabled = parsed.enabled !== false;
-		return { url, maxExcerptChars, enabled };
+		const jumpDeepLinkBase =
+			typeof parsed.jumpDeepLinkBase === "string" && parsed.jumpDeepLinkBase.trim()
+				? parsed.jumpDeepLinkBase.trim()
+				: DEFAULT_JUMP_DEEPLINK_BASE;
+		return { url, maxExcerptChars, enabled, jumpDeepLinkBase };
 	} catch {
-		return { url: "", maxExcerptChars: DEFAULT_MAX_EXCERPT, enabled: true };
+		return {
+			url: "",
+			maxExcerptChars: DEFAULT_MAX_EXCERPT,
+			enabled: true,
+			jumpDeepLinkBase: DEFAULT_JUMP_DEEPLINK_BASE,
+		};
 	}
 }
 
@@ -191,16 +207,43 @@ export function buildNotification(opts: {
 	return { title: titleParts.join(" / "), body: opts.excerpt };
 }
 
+/**
+ * Build the ntfy `Click` deep-link that makes tapping the notification jump the
+ * remote zellij session to the pi process's OWN pane. Returns undefined when no
+ * usable pane id is available (not running under zellij, or a non-terminal pane
+ * such as `plugin_N`). The pane id ($ZELLIJ_PANE_ID, form `terminal_N` or bare
+ * `N`) rides the URL PATH — the termux-app fork's ZellijJumpHandler parses it
+ * there and invokes ~/bin/zellij-jump, which side-channels
+ * `ssh remote 'zellij pipe --name jump_pane <pane>'` to harpoon. Slot numbers
+ * are intentionally NOT used (reassignable between send and tap); the pane id is
+ * stable.
+ */
+export function buildJumpClickUrl(
+	paneId: string | undefined,
+	base: string = DEFAULT_JUMP_DEEPLINK_BASE,
+): string | undefined {
+	const id = (paneId ?? "").trim();
+	// Only terminal panes are jumpable; harpoon's parse_pane_id rejects other
+	// underscore-tagged kinds (e.g. `plugin_3`) and non-numeric tails.
+	if (!/^(terminal_)?\d+$/.test(id)) return undefined;
+	return `${base.replace(/\/+$/, "")}/${encodeURIComponent(id)}`;
+}
+
 /** POST a notification to ntfy. Fire-and-forget; caller swallows errors. */
 export async function sendNotification(
 	url: string,
 	title: string,
 	body: string,
 	tags = "robot",
+	clickUrl?: string,
 ): Promise<void> {
+	const headers: Record<string, string> = { Title: title, Priority: "high", Tags: tags };
+	// ntfy does NOT propagate custom X-* headers to the client, so the jump target
+	// MUST ride the `Click` header (the tap action URL), never a custom header.
+	if (clickUrl) headers.Click = clickUrl;
 	await fetch(url, {
 		method: "POST",
-		headers: { Title: title, Priority: "high", Tags: tags },
+		headers,
 		body,
 		signal: AbortSignal.timeout(5000),
 	});
@@ -258,8 +301,9 @@ export default function (pi: ExtensionAPI): void {
 			tabName: resolveZellijTabName(sm.getCwd()),
 			excerpt,
 		});
+		const clickUrl = buildJumpClickUrl(process.env.ZELLIJ_PANE_ID, config.jumpDeepLinkBase);
 
-		void sendNotification(config.url, title, body).catch(() => {});
+		void sendNotification(config.url, title, body, "robot", clickUrl).catch(() => {});
 	});
 
 	// The agent pauses mid-turn while an `ask_user_question` dialog is open, so
@@ -282,7 +326,8 @@ export default function (pi: ExtensionAPI): void {
 			tabName: resolveZellijTabName(sm.getCwd()),
 			excerpt,
 		});
+		const clickUrl = buildJumpClickUrl(process.env.ZELLIJ_PANE_ID, config.jumpDeepLinkBase);
 
-		void sendNotification(config.url, title, body, "question").catch(() => {});
+		void sendNotification(config.url, title, body, "question", clickUrl).catch(() => {});
 	});
 }
