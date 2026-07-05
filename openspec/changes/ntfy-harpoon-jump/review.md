@@ -12,6 +12,8 @@ loop_max_iterations: 40
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
+loop_hold: true
+loop_hold_reason: "GATE-PASS (M) at worktree HEAD 741371b; ready to archive via openspec-archive-change. Loop halted at the green landing awaiting human go for archive+spec-sync+merge."
 ---
 
 <!-- authored: in-session -->
@@ -52,8 +54,8 @@ file-contract diffs, code-review diff base, and opsx gate verdict freshness.
 In same-tree mode, Diff Base SHA = pre-apply HEAD and Worktree Path is empty.
 -->
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
+**Diff Base SHA:** 25f6f22906c0d7fa58f4f863be99f6630bf7a04a
+**Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-ntfy-harpoon-jump
 **Integration Branch:** main
 
 ## Manual Adjustments
@@ -74,6 +76,21 @@ rationale. Keep the front-matter, the table, and these notes consistent. -->
 non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -->
 
 - 2026-07-04 — review.md authored in-session to satisfy earliest GATE-FAIL (Scale source).
+- 2026-07-04 — worktree ensured (opsx/ntfy-harpoon-jump); Diff Base SHA 25f6f22 captured.
+- 2026-07-04 — round-1 blind review (opus pass, gpt fail: 2 P1). Both P1 confirmed
+  and fixed at HEAD 6afcd61: jump payload moved from non-propagated custom X-*
+  headers onto the ntfy `Click` deep link; wrapper now reads the env-sourced
+  remote host (`JUMP_SSH_HOST`) the spec requires.
+- 2026-07-04 — rounds 2-4 (gpt) chased pre-existing-ControlMaster detection; each
+  heuristic spawned a new edge. Resolved at HEAD 741371b by simplifying to a
+  sentinel-only idempotence guard and NARROWING the spec's second idempotence
+  scenario to the managed block (intent scope = Constitution IV "no-op when
+  already applied by this script"). Unmanaged-config detection routed to
+  follow-ups.md (P3, out of scope). opus rated it P2/P3 every round.
+- 2026-07-04 — Cross-slice contract (assumption): the tap deep-link scheme is
+  `termux-harpoon-jump://jump` by default, overridable via `JUMP_DEEPLINK_BASE`,
+  and MUST match the already-shipped termux-app fork's registered handler. Left
+  configurable rather than hard-coding a guess at the fork's exact scheme.
 
 ## Scope Expansions
 
