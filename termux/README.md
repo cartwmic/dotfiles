@@ -12,6 +12,14 @@ not this machine), so the workflow is **edit-here, push-via-adb**.
 - `font.ttf` — terminal font. Currently **FiraCode Nerd Font Regular v3.4.0**
   (provides Nerd Font glyphs for the extra-keys row and the prompt). Replace
   this file with another `.ttf` to switch fonts, then re-run `sync.sh`.
+- `ssh-controlmaster.config` — phone `~/.ssh/config` snippet enabling SSH
+  connection multiplexing for the `ntfy-harpoon-jump` feature. `sync.sh`
+  marker-guards its append into the phone config (idempotent). It makes the
+  persistent interactive `ssh -> remote zellij` session the ControlMaster, so a
+  tap-time side-channel `ssh remote 'zellij pipe --name jump_pane ...'` reuses
+  the LIVE connection instead of a fresh login. NOT chezmoi-deployed
+  (Constitution VII); host alias/user reference the phone's own `~/.ssh/config`
+  (no secrets here).
 
 ## SSH private key (pull from 1Password)
 
