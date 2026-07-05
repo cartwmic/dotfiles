@@ -69,3 +69,64 @@ The `review.md` artifact SHALL declare a controlled-vocabulary mode switchboard 
 #### Scenario: Spec Level pinned to spec-anchored
 - **WHEN** the schema is consumed in any new change
 - **THEN** the default `Spec Level` in `review.md` SHALL be `spec-anchored`, and selecting `spec-as-source` SHALL produce a warning prompt citing the MDD-era trade-offs documented in the schema's README
+
+### Requirement: Worktree Lifecycle Ownership
+
+THE schema's apply and archive instructions SHALL own the full worktree lifecycle for EVERY change at every Scale — worktree execution is the only execution model: creating an isolated worktree on a branch named `opsx/<change>` before implementation, capturing the base SHA, and merging then removing the worktree at archive only after the gate is green.
+
+#### Scenario: Worktree created before implementation
+- **WHEN** apply begins for any change at any Scale
+- **THEN** a worktree on branch `opsx/<change>` SHALL exist before any implementation task runs, and its base SHA SHALL be recorded in review.md
+
+#### Scenario: Diff base is immutable per implementation branch
+- **WHEN** the `opsx/<change>` worktree is first created
+- **THEN** apply SHALL record `Diff Base SHA` as the integration-branch merge-base (not apply-start HEAD), plus `Worktree Path` and `Integration Branch`, into review.md, and these SHALL NOT change for the life of the branch
+
+#### Scenario: Existing branch from a prior aborted apply is reused
+- **WHILE** a branch `opsx/<change>` already exists from a prior run
+- **WHEN** apply begins
+- **THEN** apply SHALL reuse the existing worktree/branch and SHALL preserve the previously recorded `Diff Base SHA`; IF that base is absent or is not an ancestor of `opsx/<change>`, apply SHALL halt for human repair rather than re-recording a base that would exclude unverified commits
+
+#### Scenario: Worktree creation failure aborts apply
+- **IF** `git worktree add` fails for any reason (path conflict, detached HEAD, insufficient space, permission)
+- **THEN** apply SHALL abort with an actionable error and SHALL NOT proceed to any implementation task — there is no same-tree fallback
+
+#### Scenario: Budget exhaustion preserves the worktree
+- **WHILE** a worktree exists
+- **IF** the loop stops because its iteration budget is exhausted
+- **THEN** the worktree and its `opsx/<change>` branch SHALL be preserved for inspection and SHALL NOT be removed
+
+#### Scenario: Worktree merged and removed at archive
+- **WHEN** archive proceeds for a change
+- **THEN** the `opsx/<change>` branch SHALL be landed onto the named integration branch using the configured strategy and the worktree SHALL be removed, and this SHALL occur only after opsx gate reports green
+
+#### Scenario: Post-green merge conflict aborts archive safely
+- **WHILE** opsx gate is green
+- **IF** landing the branch fails because the integration branch advanced and the merge conflicts
+- **THEN** archive SHALL abort with an actionable error, the worktree and `opsx/<change>` branch SHALL be preserved, and the change SHALL NOT be moved to the archive directory
+
+### Requirement: Per-task file contracts
+
+Each task in `tasks.md` SHALL optionally declare `files_allowed`, `files_forbidden`, `allow_new_files`, and `intent` scope contracts. The contract field format SHALL be strict (sub-bullets under the task checkbox at fixed indent; minimatch globs one per line under list-type fields). When a task is implemented in the worktree or by a subagent, the wrap-up step SHALL diff against these contracts using the immutable `Diff Base SHA` recorded at worktree creation and report violations.
+
+#### Scenario: Allowed-glob enforcement with stable diff base
+- **WHEN** a task declares `files_allowed: [src/foo/**.ts, tests/foo/**.ts]` and the diff `git diff --name-only <Diff Base SHA>..HEAD` shows a touched file at `src/bar/baz.ts`
+- **THEN** the wrap-up step SHALL report a `scope_violation` finding citing the offending path and the contract, AND the task SHALL NOT be marked complete until resolved or the contract is amended; the diff base SHALL remain the immutable `Diff Base SHA` (not `HEAD`) so commits made earlier in the apply session still appear in the diff
+
+#### Scenario: Forbidden-glob enforcement
+- **WHEN** a task declares `files_forbidden: ["**/*.bak", "**/secrets/**"]` and the diff touches any file matching either glob
+- **THEN** the wrap-up step SHALL report a `scope_violation` finding and block task completion
+
+#### Scenario: New-file gating
+- **WHEN** a task declares `allow_new_files: false` and the diff contains any newly-created file
+- **THEN** the wrap-up step SHALL report a `scope_violation` finding and block task completion
+
+#### Scenario: TDD exemption for test files
+- **WHEN** a task declares `allow_new_files: false` AND the apply session's `Execution Mode` is `tdd-required` AND the diff contains a newly-created file matching `tests/**/*`
+- **THEN** the wrap-up step SHALL NOT report a `scope_violation` for that file (TDD's first step requires writing a new failing test; this exemption resolves the otherwise-unsatisfiable combination)
+
+#### Scenario: Intent shapes the repair prompt
+- **IF** a task declares `intent: fix` and validators fail
+- **THEN** the repair prompt SHALL include the constraints block "Fix only failing validators. Do NOT refactor unrelated code. Do NOT add new features. Tests MAY be added when TDD mode is on." along with a structured `Issues[]` list
+- **IF** a task declares `intent: refactor` and validators fail
+- **THEN** the repair prompt SHALL NOT include the fix-mode constraints and SHALL instead permit unrelated cleanup within the task's `files_allowed` scope
