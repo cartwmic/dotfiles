@@ -78,7 +78,14 @@ SHALL produce no diff and SHALL exit success without duplicating configuration
 - **WHEN** the sync/install runs a second time with the target already applied
 - **THEN** it SHALL make no change and SHALL exit success
 
-#### Scenario: ControlMaster block already present in phone config
-- **IF** the `ControlMaster` block for the remote host already exists in the
-  phone `~/.ssh/config`
+#### Scenario: Managed block already present in phone config
+- **IF** the sync's managed, sentinel-fenced `ControlMaster` block is already
+  present in the phone `~/.ssh/config` from a prior run of this script
 - **THEN** the sync SHALL NOT append a duplicate block
+
+<!-- Scope note: idempotence is bounded to THIS script's own prior application
+(Constitution IV: "no-op when already applied"). Detecting and reconciling an
+UNMANAGED, hand-written pre-existing ControlMaster stanza for the host is a
+non-goal here — robustly parsing arbitrary ssh config from an adb run-as toybox
+shell is disproportionate and defect-prone; routed to follow-ups.md, surfaced to
+the user via termux/README.md. -->

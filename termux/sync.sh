@@ -32,21 +32,19 @@ sync_controlmaster() {
 
     echo "→ syncing ssh ControlMaster snippet → files/home/.ssh/config"
     adb push "$src" "$tmp" >/dev/null
-    # Idempotence guard (toybox grep+sed only — no awk on the run-as PATH):
-    #  1. managed sentinel present → our prior run applied it → skip.
-    #  2. the `Host …remote` stanza ITSELF already carries a ControlMaster
-    #     directive → skip to satisfy the spec AC "SHALL NOT append a duplicate
-    #     block"; warn so the user can merge by hand. The sed range extracts only
-    #     the remote stanza (Host…remote line up to the next Host line), so a
-    #     ControlMaster in an UNRELATED stanza no longer false-skips the append.
+    # Idempotence guard: the appended block is fenced by the sentinel marker, so a
+    # re-run that finds the marker is a no-op (Constitution IV: no-op when already
+    # applied by this script). This is the robust, unambiguous mechanism; parsing
+    # arbitrary hand-written ssh stanzas from an adb run-as toybox shell is
+    # intentionally out of scope (see follow-ups.md). ControlPath parent (~/.ssh)
+    # is created if absent so the master socket can bind. A pre-existing MANUAL
+    # `Host remote` ControlMaster block is the user's to reconcile (see README).
     adb shell "run-as com.termux sh -c '
         cfg=files/home/.ssh/config
         mkdir -p files/home/.ssh && chmod 700 files/home/.ssh
         touch \"\$cfg\" && chmod 600 \"\$cfg\"
         if grep -qF \"$marker\" \"\$cfg\"; then
             echo \"  (managed block present — no change)\"
-        elif sed -n \"/^[[:space:]]*[Hh]ost[[:space:]].*remote/,/^[[:space:]]*[Hh]ost[[:space:]]/p\" \"\$cfg\" | grep -qi controlmaster; then
-            echo \"  (existing Host remote ControlMaster block — skipping to avoid a duplicate; merge manually if desired)\"
         else
             printf \"\n\" >> \"\$cfg\"
             cat \"$tmp\" >> \"\$cfg\"
