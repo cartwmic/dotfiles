@@ -1,6 +1,6 @@
 # Intent: add-opsx-design-fidelity-gate
 
-**Status:** FROZEN — confirmed by owner 2026-07-05; do not edit without explicit human authorization
+**Status:** FROZEN — confirmed by owner 2026-07-05; re-frozen same day with owner-authorized scope additions (post-seal bookkeeping fix + residual session-019f2d9f dispatch-integrity completions); do not edit without explicit human authorization
 **Date:** 2026-07-05
 **Owner:** cartwmic
 
@@ -25,6 +25,29 @@ rationale ("we redact manually at known sites") and no explicit intent
 rejection still fails the AC's guarantee — no contradiction-hunting catches
 it. Only per-AC entailment ("does the chosen mechanism deliver this
 guarantee?") closes the class.
+
+Three residual process defects remain unfixed from the same evidence base:
+
+1. **Misleading reviewer self-report** (session 019f2d9f): a reviewer's chat
+   reply claimed "no implementation changed" while its findings FILE cited
+   real worktree defects — an orchestrator trusting the reply would have
+   consolidated a wrong verdict. Nothing today states the findings file is
+   the sole verdict source.
+2. **Off-tree reviewer writes** (session 019f2d9f): a reviewer repeatedly
+   wrote to the INTEGRATION checkout's `progress.md` while reviewing a
+   worktree — the shipped read-only window snapshots only the reviewed tree,
+   so integration-checkout mutations by a dispatched reviewer go undetected
+   in worktree mode.
+3. **Post-seal bookkeeping stales sealed verdicts** (discovered on the
+   `harden-opsx-reviewer-dispatch-integrity` run, 2026-07-05): in same-tree +
+   gating-required mode, ANY post-seal non-verdict commit — `loop_hold`
+   signaling in review.md, `follow-ups.md` routing, Execution Notes — stales
+   the sealed code-review verdict via the freshness non-verdict-drift rule,
+   and the (correct) attestation binding forbids advancing the recorded range
+   past the attested head. Consequence: `loop_hold` is structurally
+   unsettable post-seal in that mode, and all bookkeeping must race to land
+   before the final reviewed head — an ordering discipline enforced only by
+   prose.
 
 ## Goal
 
@@ -85,16 +108,56 @@ implementation begins.
   tree-identity attestation and read-only window protocol shipped by
   `harden-opsx-reviewer-dispatch-integrity`.
 
+### Dispatch-integrity completions (residual session-019f2d9f fixes)
+
+- **Findings file is the sole verdict source.** For every reviewer/judge
+  dispatch (code review, doneness, fidelity, clarify/analyze where judged),
+  the orchestrator SHALL derive the verdict, findings, and attestation
+  exclusively from the subagent's findings output file; the subagent's
+  conversational reply is never a verdict input. A findings file absent or
+  lacking the required verdict line is INVALID (per the shipped
+  invalid-not-fail semantics), regardless of what the reply claims.
+- **Read-only window covers the integration checkout too.** WHEN the reviewed
+  tree and the integration checkout differ (worktree mode), the pre/post
+  dispatch snapshot SHALL cover BOTH trees (integration checkout compared with
+  the same change-dir exclusion discipline); a delta in either voids the
+  round's verdicts with the same surgical-restore + incident-recording
+  procedure. Same-tree mode is unchanged (one tree, already covered).
+
+### Post-seal bookkeeping without verdict staling
+
+- **Outcome required**: after a verdict artifact is sealed at the final
+  reviewed head, the orchestrator MUST be able to (a) set/clear the loop
+  landing signal (`loop_hold` semantics), (b) route findings to
+  `follow-ups.md`, and (c) append Execution-Notes-class bookkeeping — without
+  staling any sealed verdict and without weakening the gate, in BOTH worktree
+  and same-tree modes.
+- **Hard invariant preserved**: any file the gate reads for verdict or mode
+  decisions (review.md front-matter modes/Scale, verdict artifacts' gate-read
+  fields) MUST remain freshness-protected — a post-seal edit to gate-read
+  decision inputs must still stale or fail closed. The fix must NOT simply
+  allowlist review.md wholesale (that would let an agent flip modes after the
+  review).
+- Mechanism is a design decision (this change's own fidelity judge will vet
+  it): candidate directions include a narrowly-scoped, never-gate-read
+  bookkeeping surface added to the freshness trailing allowlist, or relocating
+  loop-host-read signals out of freshness-protected files. The chosen
+  mechanism SHALL be deterministic, model-free, and BSD-compatible.
+
 ## Non-goals
 
 - No change to clarify, code-review, doneness, quiet-round convergence,
   disclosure, or verdict-freshness semantics beyond adding the new artifact.
 - No delta-scoped re-judging, no cross-judgment finding matching.
 - No model in the gate; no new opsx keyword grammar.
-- The same-tree post-seal bookkeeping/staling interaction discovered on
-  2026-07-05 is explicitly OUT OF SCOPE — queued as its own micro-change.
 - Not a replacement for post-impl code review — fidelity judges the design's
   promise, code review judges the diff's delivery.
+- No sandboxing/containment of reviewer subagents (detection + voiding stays
+  the model, per the shipped protocol).
+- No relitigation of the shipped attestation/read-only semantics — this
+  change completes them (verdict-source rule, second-tree coverage) and fixes
+  the post-seal bookkeeping interaction; the shipped fail-closed bindings
+  stay as-is.
 
 ## Constraints
 
@@ -122,6 +185,16 @@ implementation begins.
   manual per-site mechanism — reproduces as `not-entailed` in a fixture-level
   test of the artifact/gate contract (deterministic parts) and as explicit
   dispatch-prompt instruction (judged parts).
+- The documented dispatch procedure derives verdicts only from findings
+  files; a dispatch whose reply says "pass" but whose file is absent or
+  verdict-less consolidates as INVALID (skill-prose + surface-pin tested).
+- In worktree mode the round window snapshots both trees; a fixture-level or
+  procedure-level test demonstrates an integration-checkout mutation voids
+  the round.
+- After sealing a gating-required code-review verdict, the orchestrator can
+  set the landing signal and route a follow-up WITHOUT any gate check going
+  red, in both tree modes — covered by gate tests; and a post-seal edit to
+  review.md front-matter modes still fails closed.
 - All existing suites stay green; new gate tests cover absent / stale-digest /
   violated / delivered artifact states at each dispatch channel.
 
