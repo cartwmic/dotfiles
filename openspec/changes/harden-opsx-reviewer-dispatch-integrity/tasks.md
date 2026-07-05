@@ -61,6 +61,6 @@
 
 ## 5. Verify
 
-- [ ] 5.1 Full validation sweep (plan.md list) green; author verify.md from
+- [x] 5.1 Full validation sweep (plan.md list) green; author verify.md from
       the shipped template with Diff Base SHA + Reviewed Range freshness
       fields.
