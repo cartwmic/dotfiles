@@ -14,7 +14,7 @@ full_rigor: false
 execution_mode: standard
 verification_mode: retained-recommended
 debug_mode: standard
-review_status: not-requested
+review_status: resolved
 delegation_mode: single-agent
 # code_review_mode: (derived when absent: M ⇒ gating-required, XS/S ⇒ advisory; uncomment to override — an explicit value always wins)
 # loop_max_iterations authoring-time defaults keyed by tier: XS=10, S=20, M=40,
@@ -24,8 +24,6 @@ loop_max_iterations: 20
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
-loop_hold: true
-loop_hold_reason: gate green (S) — harden-opsx-repo-portability awaiting archive ruling
 # loop_hold: true — orchestrator-settable LANDING signal read by the loop host
 # (NOT by opsx gate — gate checks and exit code ignore it). Set it, with a
 # non-empty loop_hold_reason, when declaring a terminal landing that awaits a
@@ -82,7 +80,7 @@ any mode by setting it (in BOTH the front-matter and this table).
 | Execution Mode | standard | standard\|tdd-preferred\|tdd-required |
 | Verification Mode | retained-recommended | inline-only\|retained-recommended\|retained-required — retained-required forces verify.md green before archive |
 | Debug Mode | standard | standard\|systematic-debugging |
-| Review Status | not-requested | not-requested\|requested\|findings-received\|resolved |
+| Review Status | resolved | not-requested\|requested\|findings-received\|resolved |
 | Delegation Mode | single-agent | single-agent\|subagent-eligible\|subagent-required — dispatch via the subagent-dispatch capability hook (pi-subagents is the pi adapter) |
 | Worktree Mode | derived (absent) | same-tree\|worktree-eligible\|worktree-required — default DERIVED by tier when absent (XS/S ⇒ same-tree, M ⇒ worktree-required); the front-matter ships the key COMMENTED OUT so the tier default applies; an explicit value always wins |
 | Code Review Mode | derived (absent) | none\|advisory\|gating-required — default DERIVED when absent: M ⇒ gating-required, XS/S ⇒ advisory (fail-closed); an explicit value always wins; gating-required blocks archive on code-review.md Verdict |
@@ -119,6 +117,7 @@ rationale. Keep the front-matter, the table, and these notes consistent. -->
 
 ## Execution Notes
 
+- 2026-07-05 — loop_hold cleared by named re-arm (/opsx-loop harden-opsx-repo-portability); reason was: gate green (S) — harden-opsx-repo-portability awaiting archive ruling
 <!-- Transient observations appended during apply. One-line entries when a
 non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -->
 
