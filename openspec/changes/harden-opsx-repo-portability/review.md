@@ -99,8 +99,8 @@ file-contract diffs, code-review diff base, and opsx gate verdict freshness.
 In same-tree mode, Diff Base SHA = pre-apply HEAD and Worktree Path is empty.
 -->
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
+**Diff Base SHA:** a8c52af74a7ec8c81ce8367e2a124b433164bd3d
+**Worktree Path:**
 **Integration Branch:** main
 
 ## Manual Adjustments
