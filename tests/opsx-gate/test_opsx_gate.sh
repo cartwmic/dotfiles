@@ -432,6 +432,38 @@ sed -i.bak 's/^scale: M/scale: M\nfull_rigor: true/' "$TMP/openspec/changes/d-fr
 donefile d-fr-att satisfied blind-single-judge "$HEAD_SHA"
 run d-fr-att; check "full_rigor judge with matching Attested HEAD passes (verdict-freshness-and-provenance)" 0 $?
 
+# --- attestation survives the doneness-only verdict-sealing trailing commit ---
+# (CR R1 P0/P1: binding must target the RECORDED Reviewed Range head so the
+#  freshness trailing allowlist keeps owning recorded-head -> current-HEAD)
+mkMdone d-fr-seal
+sed -i.bak 's/^scale: M/scale: M\nfull_rigor: true/' "$TMP/openspec/changes/d-fr-seal/review.md"
+rm -f "$TMP/openspec/changes/d-fr-seal/review.md.bak"
+git -C "$TMP" add -A; git -C "$TMP" commit -qm "d-fr-seal change"
+C1S="$(git -C "$TMP" rev-parse HEAD)"
+cat >"$TMP/openspec/changes/d-fr-seal/code-review.md" <<EOF
+# Code Review
+**Verdict:** pass
+**review_mode:** adversarial-multimodel
+**reviewer-provenance:** subagent-x
+**Diff Base SHA:** $HEAD_SHA
+**Reviewed Range:** $HEAD_SHA..$C1S
+**Attested HEAD:** $C1S
+EOF
+ihs="$(ihash "$TMP/openspec/changes/d-fr-seal/intent.md")"
+cat >"$TMP/openspec/changes/d-fr-seal/doneness.md" <<EOF
+# Doneness
+**Doneness:** satisfied
+**Judge:** claude-bridge/claude-opus-4-8
+**review_mode:** blind-single-judge
+**Frozen-Intent SHA:** $ihs
+**Diff Base SHA:** $HEAD_SHA
+**Reviewed Range:** $HEAD_SHA..$C1S
+**Attested HEAD:** $C1S
+EOF
+git -C "$TMP" add openspec/changes/d-fr-seal/code-review.md openspec/changes/d-fr-seal/doneness.md
+git -C "$TMP" commit -qm "seal verdicts (verdict-only trailing commit)"
+run d-fr-seal; check "full_rigor Attested HEAD survives doneness-only sealing commit (verdict-freshness-and-provenance)" 0 $?
+
 # unknown review_mode fails CLOSED
 mkMdone d-unknownmode; donefile d-unknownmode satisfied something-else
 run d-unknownmode; rc=$?

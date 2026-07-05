@@ -243,7 +243,10 @@ the user it does not satisfy a gating-required review — recommend running
 
 The deterministic gate proves only *mechanical* doneness. Intent-satisfaction is judged
 by a **blind reviewer/judge subagent**, sealed into a separate `doneness.md`, and read by
-the gate (which runs no model). Dispatch it **after the mechanical gate checks pass** and
+the gate (which runs no model). The tree-identity attestation preamble and read-only
+round window (above) apply to this dispatch too — the full_rigor independent judge's
+attested HEAD is sealed into doneness.md and gate-bound to its recorded Reviewed Range
+head. Dispatch it **after the mechanical gate checks pass** and
 no fresh `satisfied` verdict exists (i.e. `doneness` is the sole remaining `GATE-FAIL`).
 The DISPATCH CHANNEL is tier-conditioned — the sealed artifact and its fields are
 identical either way:

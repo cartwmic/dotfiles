@@ -1091,9 +1091,15 @@ if [ "$rc" -eq 0 ]; then
             if ! printf '%s' "$datt" | grep -qE '^[0-9a-f]{40}$'; then
               fail doneness "doneness.md Attested HEAD absent or not a full 40-hex SHA literal (independent full_rigor judge must attest verbatim 'git rev-parse HEAD')"
             else
-              d_head="$(git -C "$GW" rev-parse "$IMPL_HEAD" 2>/dev/null)"
+              # Bind to the artifact's own RECORDED Reviewed Range head (like the
+              # code-review binding) — NEVER live IMPL_HEAD: freshness_check on
+              # the next line owns recorded-head→current-HEAD binding WITH the
+              # verdict-sealing trailing allowlist, so a doneness-only sealing
+              # commit must not self-stale the attestation (CR R1 P0/P1).
+              d_rr="$(cr_field "$DONE" 'Reviewed Range')"
+              d_head="$(git -C "$GW" rev-parse "${d_rr##*..}" 2>/dev/null)"
               [ "$datt" = "$d_head" ] \
-                || fail doneness "doneness.md Attested HEAD ($datt) does not equal the implementation HEAD — wrong-tree judge verdict"
+                || fail doneness "doneness.md Attested HEAD ($datt) does not equal the recorded Reviewed Range head — wrong-tree judge verdict"
             fi
           fi
           freshness_check "$DONE" doneness   # stale doneness fails under the 'doneness' check id-stale
