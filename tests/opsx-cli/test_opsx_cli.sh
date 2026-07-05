@@ -263,6 +263,79 @@ printf '%s' "$out" | grep -qi 'advisory' && printf '%s' "$out" | grep -q 'opensp
   && ok "archive-check flags an evil MERGE commit touching two change dirs" || nok "archive-check evil-merge advisory (rc=$rc)"
 [ $rc -eq 0 ] && ok "archive-check evil-merge advisory keeps exit 0" || nok "archive-check evil-merge exit (rc=$rc)"
 
+# ---- opsx-cli.integration-branch-resolution ----
+# Deterministic resolver order: review.md **Integration Branch:** field (trimmed,
+# `<detected-at-capture>` sentinel skipped) > origin/HEAD short name > local main
+# > local master > loud named failure in blocking checks; opsx status degrades.
+
+# (1) locator field wins + non-main repo (trunk) base-currency pass AND stale fail
+IBREPO="$TMP/ibrepo"; mkdir -p "$IBREPO/openspec/changes/feat"
+git -C "$IBREPO" init -q; git -C "$IBREPO" config user.email t@t; git -C "$IBREPO" config user.name t
+printf '# Review\n\n**Integration Branch:** trunk\n' >"$IBREPO/openspec/changes/feat/review.md"
+printf seed >"$IBREPO/seed"; git -C "$IBREPO" add -A; git -C "$IBREPO" commit -qm seed
+git -C "$IBREPO" branch -m trunk 2>/dev/null || true
+git -C "$IBREPO" worktree add -q -b opsx/feat "$TMP/ibwt-feat" trunk >/dev/null 2>&1
+out="$(cd "$IBREPO" && "$OPSX" archive-check feat 2>&1)"; rc=$?
+[ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'merge-base(opsx/feat, trunk)' \
+  && ok "resolver: locator field wins — trunk repo base-currency passes when current (integration-branch-resolution)" \
+  || nok "resolver trunk current (rc=$rc)"
+printf x >"$IBREPO/newfile"; git -C "$IBREPO" add newfile; git -C "$IBREPO" commit -qm "advance trunk"
+out="$(cd "$IBREPO" && "$OPSX" archive-check feat 2>&1)"; rc=$?
+[ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'rebase opsx/feat onto trunk HEAD' \
+  && ok "resolver: trunk stale base refuses naming the RESOLVED branch in the remedy" \
+  || nok "resolver trunk stale (rc=$rc)"
+
+# (2) sentinel is skipped; master-only repo falls through to master
+MSREPO="$TMP/msrepo"; mkdir -p "$MSREPO/openspec/changes/feat"
+git -C "$MSREPO" init -q; git -C "$MSREPO" config user.email t@t; git -C "$MSREPO" config user.name t
+printf '# Review\n\n**Integration Branch:** <detected-at-capture>\n' >"$MSREPO/openspec/changes/feat/review.md"
+printf seed >"$MSREPO/seed"; git -C "$MSREPO" add -A; git -C "$MSREPO" commit -qm seed
+git -C "$MSREPO" branch -m master 2>/dev/null || true
+git -C "$MSREPO" worktree add -q -b opsx/feat "$TMP/mswt-feat" master >/dev/null 2>&1
+out="$(cd "$MSREPO" && "$OPSX" archive-check feat 2>&1)"; rc=$?
+[ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'merge-base(opsx/feat, master)' \
+  && ok "resolver: <detected-at-capture> sentinel skipped, master-only repo resolves master" \
+  || nok "resolver sentinel/master (rc=$rc)"
+
+# (3) origin/HEAD symbolic-ref outranks local main
+OHREPO="$TMP/ohrepo"; mkdir -p "$OHREPO/openspec/changes/feat"
+git -C "$OHREPO" init -q; git -C "$OHREPO" config user.email t@t; git -C "$OHREPO" config user.name t
+printf '# Review\n' >"$OHREPO/openspec/changes/feat/review.md"
+printf seed >"$OHREPO/seed"; git -C "$OHREPO" add -A; git -C "$OHREPO" commit -qm seed
+git -C "$OHREPO" branch -m main 2>/dev/null || true
+git -C "$OHREPO" branch dev main
+git -C "$OHREPO" update-ref refs/remotes/origin/dev "$(git -C "$OHREPO" rev-parse main)"
+git -C "$OHREPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/dev
+git -C "$OHREPO" worktree add -q -b opsx/feat "$TMP/ohwt-feat" main >/dev/null 2>&1
+out="$(cd "$OHREPO" && "$OPSX" archive-check feat 2>&1)"; rc=$?
+printf '%s' "$out" | grep -q 'merge-base(opsx/feat, dev)' \
+  && ok "resolver: origin/HEAD short name outranks local main" \
+  || nok "resolver origin/HEAD (rc=$rc out=$out)"
+
+# (4) unresolvable branch: blocking check fails LOUD with a named error
+UNREPO="$TMP/unrepo"; mkdir -p "$UNREPO/openspec/changes/feat"
+git -C "$UNREPO" init -q; git -C "$UNREPO" config user.email t@t; git -C "$UNREPO" config user.name t
+printf '# Review\n' >"$UNREPO/openspec/changes/feat/review.md"
+printf seed >"$UNREPO/seed"; git -C "$UNREPO" add -A; git -C "$UNREPO" commit -qm seed
+git -C "$UNREPO" branch -m trunk 2>/dev/null || true   # not main/master, no locator, no origin
+git -C "$UNREPO" worktree add -q -b opsx/feat "$TMP/unwt-feat" trunk >/dev/null 2>&1
+out="$(cd "$UNREPO" && "$OPSX" archive-check feat 2>&1)"; rc=$?
+[ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'integration branch unresolvable' \
+  && ok "resolver: unresolvable branch fails loud in blocking archive-check" \
+  || nok "resolver unresolvable loud (rc=$rc)"
+
+# (5) opsx status: trunk staleness counted against resolved branch; unresolvable degrades
+printf '\n**Diff Base SHA:** %s\n' "$(git -C "$IBREPO" rev-parse trunk~1)" >>"$IBREPO/openspec/changes/feat/review.md"
+out="$(cd "$IBREPO" && "$OPSX" status 2>&1)"; rc=$?
+[ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'behind trunk' \
+  && ok "status: staleness counted behind the RESOLVED branch (trunk), exit 0 (status-fleet-view)" \
+  || nok "status behind trunk (rc=$rc)"
+printf '\n**Diff Base SHA:** %s\n' "$(git -C "$UNREPO" rev-parse trunk)" >>"$UNREPO/openspec/changes/feat/review.md"
+out="$(cd "$UNREPO" && "$OPSX" status 2>&1)"; rc=$?
+[ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'base: —' \
+  && ok "status: unresolvable branch degrades to placeholder and still exits 0 (clarify C3)" \
+  || nok "status unresolvable degrade (rc=$rc)"
+
 # ---- opsx-cli.migration-completeness-sweep-command ----
 SWREPO="$TMP/sweeprepo"; mkdir -p "$SWREPO"
 git -C "$SWREPO" init -q

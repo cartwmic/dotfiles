@@ -97,11 +97,15 @@ Captured by apply at worktree creation. `Diff Base SHA` = integration-branch
 merge-base, IMMUTABLE for the life of the `opsx/<change>` branch; used by
 file-contract diffs, code-review diff base, and opsx gate verdict freshness.
 In same-tree mode, Diff Base SHA = pre-apply HEAD and Worktree Path is empty.
+`Integration Branch` ships as the `<detected-at-capture>` sentinel and is FILLED
+by apply via the deterministic resolver (committed locator > origin/HEAD >
+main > master) — never assume a hardcoded literal (opsx-workflow-schema.
+integration-branch-locator-default-detected).
 -->
 
 **Diff Base SHA:** <empty until apply captures it>
 **Worktree Path:** <empty until apply captures it>
-**Integration Branch:** main
+**Integration Branch:** <detected-at-capture>
 
 ## Manual Adjustments
 

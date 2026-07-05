@@ -383,6 +383,31 @@ opsx_wt_convention_path() { # $1=any-checkout root $2=change → the path `ensur
   [ -n "$main" ] || main="$1"
   echo "$(dirname "$main")/$(basename "$main")--opsx-$2"
 }
+opsx_integration_branch() { # $1=repo-root [$2=change] → resolved integration branch on stdout; rc=1 when unresolvable
+  # Deterministic resolver (opsx-cli.integration-branch-resolution), first hit wins:
+  #   1. the change's review.md **Integration Branch:** field — trimmed, non-empty,
+  #      and not a template placeholder (the shipped `<detected-at-capture>`
+  #      sentinel; any `<...>` value is placeholder-shaped, never a real branch)
+  #   2. `git symbolic-ref refs/remotes/origin/HEAD` short name
+  #   3. local branch `main`      4. local branch `master`
+  #   5. unresolvable → rc=1, NO output. The NAMED loud error is the blocking
+  #      call sites' job (gate / archive-check); `opsx status` degrades to its
+  #      stable placeholder instead (clarify C3). Pure git plumbing + file read;
+  #      no model call, no config-override key (intent D1).
+  local r="" b=""
+  if [ -n "${2:-}" ] && [ -f "$1/openspec/changes/$2/review.md" ]; then
+    r="$(grep -E '^\*\*Integration Branch:\*\*' "$1/openspec/changes/$2/review.md" 2>/dev/null | head -1 \
+      | sed -E 's/^\*\*Integration Branch:\*\*[[:space:]]*//; s/[[:space:]]+$//')"
+    case "$r" in "<"*) r="" ;; esac
+    if [ -n "$r" ]; then echo "$r"; return 0; fi
+  fi
+  b="$(git -C "$1" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)"
+  b="${b#origin/}"
+  if [ -n "$b" ]; then echo "$b"; return 0; fi
+  if git -C "$1" show-ref --verify --quiet refs/heads/main; then echo main; return 0; fi
+  if git -C "$1" show-ref --verify --quiet refs/heads/master; then echo master; return 0; fi
+  return 1
+}
 opsx_wt_for_branch() { # $1=repo-root $2=change → existing worktree checked out on opsx/<change>, if any
   git -C "$1" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/opsx/$2" '
     /^worktree /{wt=substr($0,10)} /^branch /{if (substr($0,8)==b) {print wt; exit}}'
@@ -633,6 +658,18 @@ fi
 # ============================================================================
 # CHEAP CHECKS (structure / artifacts / tasks) — short-circuit before expensive
 # ============================================================================
+
+# Project-artifact preflight (opsx-gate-enforcement.project-artifact-preflight):
+# constitution.md + domain.md must exist NON-EMPTY (size > 0, `test -s` — C2) at
+# EVERY Scale. Fail-closed: no waiver key, no auto-scaffold; the remedy names the
+# shipped templates. Ordered before review.md so a bare repo reds here first.
+TPLDIR="~/.local/share/openspec/schemas/opsx-superpowers/templates"
+if [ ! -s "$ROOT/openspec/constitution.md" ]; then
+  fail project-artifacts "openspec/constitution.md absent or empty — scaffold from constitution-template.md under $TPLDIR (no waiver; required at every Scale)"
+fi
+if [ ! -s "$ROOT/openspec/domain.md" ]; then
+  fail project-artifacts "openspec/domain.md absent or empty — scaffold from domain-template.md under $TPLDIR (no waiver; required at every Scale)"
+fi
 
 # review.md present + Scale parseable (Scale is read first; review ordered first)
 if [ ! -f "$REVIEW" ]; then
@@ -1311,9 +1348,6 @@ body_of() { # $1=review.md $2=field — read a **Field:** value line
     | sed -E "s/^\*\*$2:\*\*[[:space:]]*//; s/[[:space:]]+$//"
 }
 
-MAIN_EXISTS=0
-git -C "$ROOT" rev-parse --verify --quiet main >/dev/null 2>&1 && MAIN_EXISTS=1
-
 found=0
 for d in "$CHANGES_DIR"/*; do
   [ -d "$d" ] || continue
@@ -1361,13 +1395,17 @@ for d in "$CHANGES_DIR"/*; do
     *)    hold_disp="—" ;;
   esac
 
-  # Diff Base staleness: N behind main (placeholder when locator/main absent).
+  # Diff Base staleness: N behind the RESOLVED integration branch (per-change;
+  # opsx-cli.integration-branch-resolution). Placeholder when locator absent or
+  # the branch is unresolvable — status is a view, never a loud failure (C3).
   base="$(body_of "$review" 'Diff Base SHA')"
   case "$base" in ""|"<"*) base="" ;; esac
-  if [ -n "$base" ] && [ "$MAIN_EXISTS" -eq 1 ] \
+  ib="$(opsx_integration_branch "$ROOT" "$name")" || ib=""
+  if [ -n "$base" ] && [ -n "$ib" ] \
+     && git -C "$ROOT" rev-parse --verify --quiet "refs/heads/$ib" >/dev/null 2>&1 \
      && git -C "$ROOT" rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
-    n="$(git -C "$ROOT" rev-list --count "$base..main" 2>/dev/null)"
-    base_disp="${n:-?} behind main"
+    n="$(git -C "$ROOT" rev-list --count "$base..$ib" 2>/dev/null)"
+    base_disp="${n:-?} behind $ib"
   else
     base_disp="—"
   fi
@@ -1411,20 +1449,27 @@ REVIEW="$CDIR/review.md"
 BRANCH="opsx/$CHANGE"
 rc=0
 
-# (a) land-base-currency: merge-base(opsx/<change>, main) must equal main HEAD.
-#     No opsx/<change> branch => same-tree exemption (satisfied, never a
-#     missing-ref failure).
+# (a) land-base-currency: merge-base(opsx/<change>, <integration branch>) must
+#     equal the resolved integration branch's HEAD (opsx-cli.integration-branch-
+#     resolution — never a hardcoded literal). No opsx/<change> branch =>
+#     same-tree exemption (satisfied, never a missing-ref failure).
+IB="$(opsx_integration_branch "$ROOT" "$CHANGE")" || IB=""
 if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
-  mh="$(git -C "$ROOT" rev-parse main 2>/dev/null)"
-  mb="$(git -C "$ROOT" merge-base "$BRANCH" main 2>/dev/null)"
-  if [ -z "$mh" ] || [ -z "$mb" ]; then
-    echo "ARCHIVE-CHECK-FAIL base-currency: cannot compute merge-base($BRANCH, main)" >&2
-    rc=1
-  elif [ "$mb" != "$mh" ]; then
-    echo "ARCHIVE-CHECK-FAIL base-currency: stale base merge-base($BRANCH, main)=$mb != main HEAD=$mh; REMEDY: rebase $BRANCH onto main HEAD, then re-run review (the rebase staleness-fires a fresh review)" >&2
+  if [ -z "$IB" ]; then
+    echo "ARCHIVE-CHECK-FAIL base-currency: integration branch unresolvable (no committed review.md Integration Branch field, no origin/HEAD, no main, no master)" >&2
     rc=1
   else
-    echo "archive-check: base-currency OK (merge-base($BRANCH, main) == main HEAD)"
+    mh="$(git -C "$ROOT" rev-parse "refs/heads/$IB" 2>/dev/null)"
+    mb="$(git -C "$ROOT" merge-base "$BRANCH" "$IB" 2>/dev/null)"
+    if [ -z "$mh" ] || [ -z "$mb" ]; then
+      echo "ARCHIVE-CHECK-FAIL base-currency: cannot compute merge-base($BRANCH, $IB)" >&2
+      rc=1
+    elif [ "$mb" != "$mh" ]; then
+      echo "ARCHIVE-CHECK-FAIL base-currency: stale base merge-base($BRANCH, $IB)=$mb != $IB HEAD=$mh; REMEDY: rebase $BRANCH onto $IB HEAD, then re-run review (the rebase staleness-fires a fresh review)" >&2
+      rc=1
+    else
+      echo "archive-check: base-currency OK (merge-base($BRANCH, $IB) == $IB HEAD)"
+    fi
   fi
 else
   echo "archive-check: base-currency satisfied — no $BRANCH branch (same-tree exemption; no divergent base to rebase)"
@@ -1458,10 +1503,10 @@ fi
 DIFF_BASE=""
 [ -f "$REVIEW" ] && DIFF_BASE="$(grep -E '^\*\*Diff Base SHA:\*\*' "$REVIEW" 2>/dev/null | head -1 | sed -E 's/^\*\*Diff Base SHA:\*\*[[:space:]]*//; s/[[:space:]]+$//')"
 case "$DIFF_BASE" in ""|"<"*) DIFF_BASE="" ;; esac
-if [ -n "$DIFF_BASE" ] \
-   && git -C "$ROOT" rev-parse --verify --quiet main >/dev/null 2>&1 \
+if [ -n "$DIFF_BASE" ] && [ -n "$IB" ] \
+   && git -C "$ROOT" rev-parse --verify --quiet "refs/heads/$IB" >/dev/null 2>&1 \
    && git -C "$ROOT" rev-parse --verify --quiet "$DIFF_BASE" >/dev/null 2>&1; then
-  for c in $(git -C "$ROOT" rev-list --first-parent "$DIFF_BASE..main" 2>/dev/null); do
+  for c in $(git -C "$ROOT" rev-list --first-parent "$DIFF_BASE..$IB" 2>/dev/null); do
     dirs="$(git -C "$ROOT" diff-tree --no-commit-id --name-only -r -m --first-parent "$c" 2>/dev/null \
       | sed -nE 's#^(openspec/changes/[^/]+)/.*#\1#p' | sort -u | grep -v '^$')"
     cnt="$(printf '%s\n' "$dirs" | grep -c . )"

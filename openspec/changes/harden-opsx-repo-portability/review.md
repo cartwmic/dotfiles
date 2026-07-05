@@ -128,6 +128,13 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
   functional `main` hardcode ... uses it" — is what the specs implement: the
   three sites are status staleness, archive-check base-currency, and the
   multi-dir detector scan range.
+- 2026-07-04 — impl: resolver skips ANY `<...>`-prefixed locator value (not only
+  the exact sentinel) — every template placeholder is `<...>`-shaped and `<` never
+  begins a real branch here; exact-sentinel remains the spec'd contract (C1),
+  the broader guard is fail-safe against legacy `<empty until ...>` placeholders.
+- 2026-07-04 — gate preflight ordered BEFORE the review.md/Scale check: a bare
+  repo reds on project-artifacts first (project precondition precedes change
+  structure). Tests: gate 128 (4 new), cli 67 (7 new); all suites green.
 
 ## Scope Expansions
 
@@ -138,5 +145,10 @@ evidence shows the widening is REQUIRED to meet the frozen intent's outcomes
 surfaced to the user at the decision-audit landing or gate-green. Out-of-scope
 findings NOT required for the intent route to follow-ups.md instead. -->
 
-- YYYY-MM-DD — <what widened> — evidence: <why the frozen intent's outcomes
-  cannot hold without it; cite the finding/file>
+- 2026-07-04 — openspec-propose reference preflight option B reworded (one
+  bullet; prompt structure unchanged) — evidence: old text claimed skipping
+  constitution.md is "only safe for Scale=XS", which the new every-Scale
+  fail-closed gate check (intent Q2/D3) makes false; leaving it would ship a
+  prose surface contradicting the change's own matrix (the exact defect class
+  quiet-round-review-convergence identified). Interactive A/B/C flow itself
+  stays, per intent out-of-scope.
