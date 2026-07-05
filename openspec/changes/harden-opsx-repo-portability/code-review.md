@@ -14,7 +14,7 @@ adversarial review even though Scale S derives Code Review Mode advisory.
 **review_mode:** adversarial-multimodel
 **reviewer-provenance:** pi-subagents delegate dispatch — claude-bridge/claude-opus-4-8 (/tmp/hrp-cr-r1-opus.md) + claude-bridge/claude-sonnet-5 (/tmp/hrp-cr-r1-sonnet.md), blind fresh-context, round 1
 **Diff Base SHA:** a8c52af74a7ec8c81ce8367e2a124b433164bd3d
-**Reviewed Range:** a8c52af..3c3f666
+**Reviewed Range:** a8c52af..4b5064f
 **Baseline:** intent.md (frozen) + proposal + specs delta ACs + clarify + plan + tasks status
 **Generated:** 2026-07-05
 
