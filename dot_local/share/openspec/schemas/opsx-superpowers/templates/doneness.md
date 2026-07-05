@@ -29,7 +29,9 @@ opsx gate reads (required WHILE Scale >= M and review.md `doneness_mode: require
   - Attested HEAD       independent-judge tree identity (REQUIRED only under
                         full_rigor — the independently dispatched judge records
                         its verbatim full 40-hex `git rev-parse HEAD`; must equal
-                        the implementation HEAD; fail-closed). At plain Scale M
+                        the recorded Reviewed Range head — freshness binds that
+                        head to the implementation HEAD with the verdict-sealing
+                        trailing allowlist; fail-closed). At plain Scale M
                         the doneness verdict rides the combined code-review
                         dispatch and the reviewer's attestation is bound via
                         code-review.md — nothing is demanded here.

@@ -97,7 +97,10 @@ rationale. Keep the front-matter, the table, and these notes consistent. -->
 non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -->
 
 - 2026-07-05 — review.md authored from shipped template; Scale S, same-tree derived.
-- 2026-07-05 — impl: gate attestation checks (CR + full_rigor doneness), template fields + preamble, skill prose (loop + apply ref), 12 new gate cases + 16 surface pins. Suites: gate 140, convergence 168, cli 67, models 34, marker 4, bun 60 — all green.
+- 2026-07-05 — impl: gate attestation checks (CR + full_rigor doneness), template fields + preamble, skill prose (loop + apply ref), 13 new gate cases + 16 surface pins. Suites: gate 141, convergence 168, cli 67, models 34, marker 4, bun 60 — all green.
+- 2026-07-05 — CR R1 (blind opus-4-8 + sonnet-5, range ff5a860..1194f0c): consolidated P0=1 P1=1 P3=2, both fail — one root defect (doneness attestation bound live IMPL_HEAD, self-staled on the sealing commit); fixed same-turn (bind recorded Reviewed Range head + d-fr-seal regression + skill doneness-section pointer). Both reviewers attested correctly; pre/post round snapshots clean.
+- 2026-07-05 — CR R2 (blind, both models, range ff5a860..7d2330b): QUIET — both pass, 0 P0/P1, 2 P3 doc advisories (doneness template wording; stale count in this note) — both fixed pre-seal. Snapshots clean, attestations exact.
+- 2026-07-05 — Process discovery: same-tree + gating-required means post-seal non-verdict commits stale the sealed verdict, and the new attestation binding (correctly) forbids advancing the recorded range past the attested head. Consequence: all bookkeeping lands BEFORE the final reviewed head; code-review.md seal is the sole trailing commit; loop_hold is NOT set post-seal (gate-green latch is the terminal signal). Successor-change seed for the workflow docs.
 
 ## Scope Expansions
 
