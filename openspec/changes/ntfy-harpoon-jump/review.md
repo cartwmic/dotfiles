@@ -12,6 +12,8 @@ loop_max_iterations: 40
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
+loop_hold: true
+loop_hold_reason: "GATE-PASS (M) at worktree HEAD 741371b; ready to archive via openspec-archive-change. Loop halted at the green landing awaiting human go for archive+spec-sync+merge."
 ---
 
 <!-- authored: in-session -->
