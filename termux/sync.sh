@@ -21,6 +21,26 @@ push_file() {
     adb shell "run-as com.termux cp '$tmp' '$dest' && rm '$tmp'"
 }
 
+# Push an executable helper into the phone Termux home, creating its parent dir
+# and marking it 0700. Used for the ntfy-harpoon-jump deep-link handler script
+# (`zellij-jump`) that the termux-app fork invokes on notification tap.
+push_exec() {
+    local src="$1"
+    local dest="$2"
+    local tmp="/data/local/tmp/$(basename "$src").new"
+
+    echo "→ pushing exec $src → $dest"
+    adb push "$src" "$tmp" >/dev/null
+    # dirname is relative to the run-as cwd (the com.termux data dir), matching
+    # push_file's relative dests. tmp is removed OUTSIDE run-as (shell-uid owned).
+    adb shell "run-as com.termux sh -c '
+        mkdir -p \"\$(dirname $dest)\"
+        cp \"$tmp\" \"$dest\"
+        chmod 700 \"$dest\"
+    '"
+    adb shell "rm -f '$tmp'"
+}
+
 # Idempotently install the ntfy-harpoon-jump ControlMaster snippet into the phone
 # ~/.ssh/config. Marker-guarded: a second run finds the sentinel and makes no
 # change (Constitution IV). ControlPath parent (~/.ssh) is created if absent so
@@ -60,6 +80,7 @@ sync_controlmaster() {
 
 push_file "termux.properties" "files/home/.termux/termux.properties"
 push_file "font.ttf"          "files/home/.termux/font.ttf"
+push_exec "zellij-jump"       "files/home/bin/zellij-jump"
 sync_controlmaster
 
 echo "→ reloading Termux style"

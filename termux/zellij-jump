@@ -1,0 +1,9 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# zellij-jump <pane-id> — invoked by the termux-app fork deep-link handler
+# (termux://zellij-jump/<pane-id>). Side-channel-focus the remote zellij pane
+# over the live SSH ControlMaster connection, no fresh login, no new session.
+# PATH prepends mise shims because `zellij` is mise-managed and absent from the
+# default non-interactive ssh PATH (would otherwise fail "command not found").
+pane="$1"
+[ -n "$pane" ] || exit 0
+exec ssh remote "PATH=\$HOME/.local/share/mise/shims:\$PATH zellij pipe --name jump_pane --plugin file:\$HOME/.config/zellij/plugins/harpoon.wasm '$pane'"
