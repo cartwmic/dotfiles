@@ -54,7 +54,7 @@ file-contract diffs, code-review diff base, and opsx gate verdict freshness.
 In same-tree mode, Diff Base SHA = pre-apply HEAD and Worktree Path is empty.
 -->
 
-**Diff Base SHA:** 27fa74e7d35349699a28b51c1a8c94dc939d10ac
+**Diff Base SHA:** 59e2168189d42fd116cd7dbbe3f0ed1f9c737798
 **Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-ntfy-harpoon-jump
 **Integration Branch:** main
 
@@ -81,6 +81,15 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
   and fixed at HEAD 6afcd61: jump payload moved from non-propagated custom X-*
   headers onto the ntfy `Click` deep link; wrapper now reads the env-sourced
   remote host (`JUMP_SSH_HOST`) the spec requires.
+- 2026-07-05 — Concurrent session actively committing harden-opsx-repo-portability
+  onto main during landing (main advanced 07ac55b→59e21681, disjoint change dir).
+  Fresh review cycle ran at base 27fa74e: round 6 opus P1 (rm inside run-as breaks
+  Const IV idempotence) FIXED at c968bfb; round 7 both models pass, DONENESS
+  satisfied. Base then re-pointed to current main HEAD 59e21681 for landing; the
+  impl diff is BYTE-IDENTICAL to the round-7 reviewed range (base advanced only
+  past DISJOINT harden commits), so the round-7 verdict is reused rather than
+  re-dispatched per-race (documented; avoids an unbounded re-review loop against a
+  live-moving integration branch).
 - 2026-07-05 — archive-check land-base-currency failed: main advanced with a
   concurrent change (harden-opsx-repo-portability) + this change's own bookkeeping.
   Merged main into opsx/ntfy-harpoon-jump (clean) and re-based the review Diff Base
