@@ -90,7 +90,7 @@ WHERE an `openspec/opsx-gates.yaml` manifest exists, THE opsx gate command SHALL
 
 ### Requirement: Verdict Freshness And Provenance
 
-THE opsx gate command SHALL require verify.md and code-review.md to record the immutable `Diff Base SHA` and the implementation HEAD they were produced against, plus a reviewer-provenance field, and SHALL treat a verdict as failed if the recorded range does not equal `Diff Base SHA..<implementation-HEAD>` recomputed from the worktree opsx gate locates, so an agent cannot mark a verdict pass and then continue mutating the diff.
+THE opsx gate command SHALL require verify.md and code-review.md to record the immutable `Diff Base SHA` and the implementation HEAD they were produced against, plus a reviewer-provenance field, and SHALL treat a verdict as failed if the recorded range does not equal `Diff Base SHA..<implementation-HEAD>` recomputed from the worktree opsx gate locates, so an agent cannot mark a verdict pass and then continue mutating the diff. WHEN Code Review Mode is gating-required, code-review.md SHALL additionally carry an own-line `**Attested HEAD:**` field — the reviewer-attested tree HEAD — whose value SHALL be a full 40-hex SHA literal (any other form, including a short SHA or a symbolic ref such as `HEAD`, is unparseable) equal to the full SHA the gate computes for the recorded Reviewed Range head; an absent or unparseable `Attested HEAD` SHALL be a failed check, never a pass (fail-closed). The same attestation binding SHALL apply to doneness.md WHEN the doneness verdict is required and was produced by the independently dispatched full_rigor judge. Attestation SHALL be enforced only where a verdict artifact is evaluated by the gate (active changes) — archived changes are never re-gated.
 
 #### Scenario: Worktree located deterministically with convention fallback
 - **WHEN** opsx gate needs the implementation HEAD
@@ -104,6 +104,31 @@ THE opsx gate command SHALL require verify.md and code-review.md to record the i
 #### Scenario: Provenance is adapter-stamped, not agent-written
 - **WHEN** opsx gate reads a code-review.md verdict under gating-required
 - **THEN** the file SHALL carry a reviewer-provenance field stamped by the subagent-dispatch adapter (identifying the review subagent and `review_mode`), and a verdict lacking that field, or whose `review_mode` is `degraded-single-model` on a change that triggers Constitution IX, SHALL be treated as a failed check
+
+#### Scenario: Attested HEAD required and bound under gating-required
+- **WHILE** Code Review Mode is gating-required
+- **IF** code-review.md omits `**Attested HEAD:**`, or its value is not a full 40-hex SHA literal, or that literal does not equal the full SHA of the recorded Reviewed Range head
+- **THEN** opsx gate SHALL report the code-review check as failed and exit non-zero
+
+#### Scenario: Symbolic or short attestation is unparseable
+- **WHILE** Code Review Mode is gating-required
+- **IF** code-review.md records `Attested HEAD` as a symbolic ref (e.g. `HEAD`) or a short SHA
+- **THEN** opsx gate SHALL treat the field as unparseable and fail the check, never resolving the symbol in the located worktree
+
+#### Scenario: Matching attestation passes
+- **WHILE** Code Review Mode is gating-required
+- **WHEN** code-review.md carries `**Attested HEAD:**` as a full 40-hex literal equal to the Reviewed Range head's full SHA (alongside the existing freshness and provenance requirements)
+- **THEN** the attestation binding SHALL NOT fail the code-review check
+
+#### Scenario: Attestation not demanded where code review is advisory
+- **WHILE** Code Review Mode is advisory or none
+- **WHEN** opsx gate evaluates the code-review check
+- **THEN** a missing `Attested HEAD` SHALL NOT by itself cause a non-zero exit
+
+#### Scenario: Independent-judge doneness carries the binding
+- **WHILE** doneness is required and `full_rigor` is true (independently dispatched judge)
+- **IF** doneness.md omits `**Attested HEAD:**` or its value is not a full 40-hex literal equal to the recorded Diff Base–bound implementation HEAD it judged
+- **THEN** opsx gate SHALL report the doneness check as failed and exit non-zero
 
 ### Requirement: Mode Aware Verdict Reading
 
