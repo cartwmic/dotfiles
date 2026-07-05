@@ -21,8 +21,34 @@ push_file() {
     adb shell "run-as com.termux cp '$tmp' '$dest' && rm '$tmp'"
 }
 
+# Idempotently install the ntfy-harpoon-jump ControlMaster snippet into the phone
+# ~/.ssh/config. Marker-guarded: a second run finds the sentinel and makes no
+# change (Constitution IV). ControlPath parent (~/.ssh) is created if absent so
+# the master socket can bind.
+sync_controlmaster() {
+    local src="ssh-controlmaster.config"
+    local marker="# >>> ntfy-harpoon-jump controlmaster >>>"
+    local tmp="/data/local/tmp/$src.new"
+
+    echo "→ syncing ssh ControlMaster snippet → files/home/.ssh/config"
+    adb push "$src" "$tmp" >/dev/null
+    adb shell "run-as com.termux sh -c '
+        mkdir -p files/home/.ssh && chmod 700 files/home/.ssh
+        touch files/home/.ssh/config && chmod 600 files/home/.ssh/config
+        if grep -qF \"$marker\" files/home/.ssh/config; then
+            echo \"  (already present — no change)\"
+        else
+            printf \"\n\" >> files/home/.ssh/config
+            cat \"$tmp\" >> files/home/.ssh/config
+            echo \"  (appended ControlMaster block)\"
+        fi
+        rm -f \"$tmp\"
+    '"
+}
+
 push_file "termux.properties" "files/home/.termux/termux.properties"
 push_file "font.ttf"          "files/home/.termux/font.ttf"
+sync_controlmaster
 
 echo "→ reloading Termux style"
 adb shell 'am broadcast --user 0 -a com.termux.app.reload_style com.termux' \
