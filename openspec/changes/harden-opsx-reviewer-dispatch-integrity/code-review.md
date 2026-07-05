@@ -13,8 +13,8 @@ Orchestrator-sealed from blind reviewer findings files
 **review_mode:** adversarial-multimodel
 **reviewer-provenance:** pi-subagents delegate — claude-bridge/claude-opus-4-8 + claude-bridge/claude-sonnet-5 (blind, per-round fresh context)
 **Diff Base SHA:** ff5a8606923247f37f0af87c691cc90b989aa25a
-**Reviewed Range:** ff5a8606923247f37f0af87c691cc90b989aa25a..90f7383d16709754e7e92235c3e20d4c8e10d5e7
-**Attested HEAD:** 90f7383d16709754e7e92235c3e20d4c8e10d5e7
+**Reviewed Range:** ff5a8606923247f37f0af87c691cc90b989aa25a..555da54cb309c716b29a6f0fd7c529a42f247061
+**Attested HEAD:** 555da54cb309c716b29a6f0fd7c529a42f247061
 **Baseline:** intent.md (frozen, sha256 1137f1ec02e548020688a6e14ade7b470ad033660a00560e5a0c0e4244e97410) + proposal + clarify + 3 delta specs + plan + tasks status
 **Generated:** 2026-07-05
 
@@ -25,6 +25,7 @@ Orchestrator-sealed from blind reviewer findings files
 | 1 | blind | 1 | 1 | 0 | 2 | opus:fail sonnet:fail | 1194f0c1be25d510f4f891fbb7bacf2c8138e3dd |
 | 2 | blind | 0 | 0 | 0 | 2 | opus:pass sonnet:pass | 7d2330b129109a68986aa0b60f3e648be2b24225 |
 | 3 | blind | 0 | 0 | 0 | 2 | opus:pass sonnet:pass | 90f7383d16709754e7e92235c3e20d4c8e10d5e7 |
+| 4 | blind (confirm; range re-attested after sibling-intent commits staled the 90f7383 seal) | 0 | 0 | 0 | 3 | opus:pass sonnet:pass | 555da54cb309c716b29a6f0fd7c529a42f247061 |
 
 Attestations: all six reviewer dispatches attested the exact dispatched HEAD +
 toplevel; zero INVALID verdicts; pre/post round snapshots identical every round
@@ -54,7 +55,7 @@ toplevel; zero INVALID verdicts; pre/post round snapshots identical every round
   only, so verbatim attestations always match — fail-closed direction correct.
   (R3 opus)
 
-## Validators (round 3 head)
+## Validators (round 4 head)
 
 bash -n clean; opsx-gate 141/0; review-convergence 168/0; opsx-cli 67/0;
 opsx-models 34/0; author-marker 4/0; bun opsx-loop 60/0;
