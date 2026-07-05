@@ -1,6 +1,6 @@
 # Intent: add-opsx-design-fidelity-gate
 
-**Status:** FROZEN — confirmed by owner 2026-07-05; re-frozen same day with owner-authorized scope additions (post-seal bookkeeping fix + residual session-019f2d9f dispatch-integrity completions); do not edit without explicit human authorization
+**Status:** FROZEN — confirmed by owner 2026-07-05; re-frozen twice same day with owner-authorized scope additions (post-seal bookkeeping fix + residual session-019f2d9f dispatch-integrity completions; then worktree-mandatory execution); do not edit without explicit human authorization
 **Date:** 2026-07-05
 **Owner:** cartwmic
 
@@ -48,6 +48,15 @@ Three residual process defects remain unfixed from the same evidence base:
    unsettable post-seal in that mode, and all bookkeeping must race to land
    before the final reviewed head — an ordering discipline enforced only by
    prose.
+
+Finally, `worktree_mode` itself is the root enabler of an entire defect
+family: same-tree execution puts the reviewed HEAD, the integration branch,
+the orchestrator's bookkeeping, and the reviewer's working directory in ONE
+tree — producing the post-seal staling trap (above), weakening the attestation
+path check ("satisfied by construction" in same-tree), and blocking parallel
+development (two same-tree changes contend for one checkout). The owner's
+direction: worktree execution is not a mode to derive or choose — it is the
+only way this workflow works.
 
 ## Goal
 
@@ -124,25 +133,47 @@ implementation begins.
   round's verdicts with the same surgical-restore + incident-recording
   procedure. Same-tree mode is unchanged (one tree, already covered).
 
+### Worktree-mandatory execution (mode abolished)
+
+- **Worktree execution is the ONLY execution model, at every Scale including
+  XS.** The `worktree_mode` front-matter key, its tier derivation (XS/S ⇒
+  same-tree, M ⇒ worktree-required), and every same-tree code path are
+  REMOVED: same-tree Diff Base capture, the archive-check same-tree
+  exemption, same-tree freshness handling, the attestation path check's
+  same-tree carve-out, and same-tree branches in skills/templates/tests.
+  Rationale: parallel development — N active changes = N isolated worktrees,
+  zero tree contention; and the same-tree defect family (post-seal staling,
+  weakened path attestation) dies at the root.
+- Every change records a populated worktree locator (Diff Base SHA + Worktree
+  Path + Integration Branch) per the existing locator-publication discipline;
+  a change without a valid worktree fails the gate loudly (fail-closed), it
+  is never silently executed in the integration checkout.
+- A declared `worktree_mode` key in review.md front-matter is a fail-closed
+  error naming the removal (no silent tolerance of stale schema keys);
+  in-flight changes authored same-tree before deployment must be re-homed or
+  archived first — the gate names the remedy.
+- The review.md template, schema.yaml, README Scale table, and all skill
+  prose drop the mode; `opsx worktree ensure` remains the single creation
+  path (reuse-iff-valid-on-branch unchanged).
+
 ### Post-seal bookkeeping without verdict staling
 
-- **Outcome required**: after a verdict artifact is sealed at the final
-  reviewed head, the orchestrator MUST be able to (a) set/clear the loop
-  landing signal (`loop_hold` semantics), (b) route findings to
-  `follow-ups.md`, and (c) append Execution-Notes-class bookkeeping — without
-  staling any sealed verdict and without weakening the gate, in BOTH worktree
-  and same-tree modes.
+- **Primarily subsumed by worktree-mandatory**: with same-tree abolished,
+  orchestrator bookkeeping (loop_hold, follow-ups.md, Execution Notes)
+  lands on the integration checkout per the existing writeback-owner
+  discipline, the reviewed worktree branch HEAD never moves, and sealed
+  verdicts stay fresh by construction.
+- **Outcome still required and test-pinned**: after a verdict artifact is
+  sealed at the final reviewed head, the orchestrator can (a) set/clear the
+  loop landing signal, (b) route findings to `follow-ups.md`, and (c) append
+  Execution-Notes-class bookkeeping — without staling any sealed verdict and
+  without weakening the gate. Any residual staling path that survives the
+  same-tree removal must be closed deterministically.
 - **Hard invariant preserved**: any file the gate reads for verdict or mode
   decisions (review.md front-matter modes/Scale, verdict artifacts' gate-read
   fields) MUST remain freshness-protected — a post-seal edit to gate-read
-  decision inputs must still stale or fail closed. The fix must NOT simply
-  allowlist review.md wholesale (that would let an agent flip modes after the
-  review).
-- Mechanism is a design decision (this change's own fidelity judge will vet
-  it): candidate directions include a narrowly-scoped, never-gate-read
-  bookkeeping surface added to the freshness trailing allowlist, or relocating
-  loop-host-read signals out of freshness-protected files. The chosen
-  mechanism SHALL be deterministic, model-free, and BSD-compatible.
+  decision inputs must still stale or fail closed. Never allowlist review.md
+  wholesale.
 
 ## Non-goals
 
@@ -157,7 +188,13 @@ implementation begins.
 - No relitigation of the shipped attestation/read-only semantics — this
   change completes them (verdict-source rule, second-tree coverage) and fixes
   the post-seal bookkeeping interaction; the shipped fail-closed bindings
-  stay as-is.
+  stay as-is (the same-tree carve-outs they contained are removed, not
+  weakened).
+- No new worktree tooling — `opsx worktree ensure/path`, the locator
+  publication rule, and the convention-path fallback are reused as-is; only
+  the mode and its same-tree branches are removed.
+- No opt-out, no escape hatch, no config key reintroducing same-tree at any
+  Scale.
 
 ## Constraints
 
@@ -193,8 +230,14 @@ implementation begins.
   the round.
 - After sealing a gating-required code-review verdict, the orchestrator can
   set the landing signal and route a follow-up WITHOUT any gate check going
-  red, in both tree modes — covered by gate tests; and a post-seal edit to
-  review.md front-matter modes still fails closed.
+  red — covered by gate tests; and a post-seal edit to review.md front-matter
+  modes still fails closed.
+- An XS change runs the full worktree lifecycle (ensure → locator → apply →
+  review → merge → cleanup); a change declaring `worktree_mode` or lacking a
+  valid worktree fails the gate with the removal/remedy named; no gate,
+  skill, template, or test surface retains a reachable same-tree path.
+- Two changes can run their loops concurrently in separate worktrees with
+  disjoint reviewed HEADs (parallel-development smoke, procedure-level).
 - All existing suites stay green; new gate tests cover absent / stale-digest /
   violated / delivered artifact states at each dispatch channel.
 
@@ -213,3 +256,9 @@ implementation begins.
 - M-tier thinning (no blind analyze at plain M): opsx-adversarial-review spec
   "M-Tier Review Stack Thinning" — the plain-M mini-dispatch deliberately adds
   back a single narrow judged step, conditioned on design.md existence.
+- Worktree machinery already single-sourced: `opsx_wt_convention_path`,
+  `opsx worktree ensure` (reuse-iff-valid-on-branch), locator publication to
+  the integration checkout, convention-path fallback — all reused unchanged;
+  the removal surface is the mode key, its derivation, and same-tree branches
+  (Diff Base same-tree capture, archive-check exemption, attestation
+  carve-out, gate/test fixtures).
