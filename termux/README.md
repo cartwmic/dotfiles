@@ -12,6 +12,15 @@ not this machine), so the workflow is **edit-here, push-via-adb**.
 - `font.ttf` — terminal font. Currently **FiraCode Nerd Font Regular v3.4.0**
   (provides Nerd Font glyphs for the extra-keys row and the prompt). Replace
   this file with another `.ttf` to switch fonts, then re-run `sync.sh`.
+- `zellij-jump` — phone-side deep-link handler script for `ntfy-harpoon-jump`.
+  The termux-app fork invokes it on a `termux://zellij-jump/<pane-id>` tap; it
+  runs `ssh remote 'zellij pipe --name jump_pane ...'` over the live
+  ControlMaster socket to focus the alerting pane via harpoon. `sync.sh` pushes
+  it to `~/bin/zellij-jump` (0700), creating `~/bin` if absent. It prepends the
+  mise shims dir to PATH because `zellij` is mise-managed and otherwise absent
+  from the non-interactive `ssh remote` PATH. Requires a working `remote` alias
+  in the phone `~/.ssh/config` (see `ssh-controlmaster.config` below) and
+  harpoon built with the `jump_pane` pipe handler on the remote.
 - `ssh-controlmaster.config` — phone `~/.ssh/config` snippet enabling SSH
   connection multiplexing for the `ntfy-harpoon-jump` feature. `sync.sh`
   marker-guards its append into the phone config (idempotent). It makes the
