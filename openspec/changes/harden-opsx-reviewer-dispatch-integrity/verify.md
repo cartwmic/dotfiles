@@ -11,7 +11,7 @@ so the gate enforces Status green + freshness fields.
 **Change:** harden-opsx-reviewer-dispatch-integrity
 **Status:** green
 **Diff Base SHA:** ff5a8606923247f37f0af87c691cc90b989aa25a
-**Reviewed Range:** ff5a8606923247f37f0af87c691cc90b989aa25a..59ea8e1d5aaf81e3b8ef3e6bbe7fd680831db763
+**Reviewed Range:** ff5a8606923247f37f0af87c691cc90b989aa25a..e70c49bf0c2311986493a7d729c4337adfeb2d35
 
 ## Checks
 
