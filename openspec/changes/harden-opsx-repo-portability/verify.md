@@ -10,7 +10,7 @@ discipline). Six hard-gate checks; Verification Mode = retained-recommended.
 **Change:** harden-opsx-repo-portability
 
 **Diff Base SHA:** a8c52af74a7ec8c81ce8367e2a124b433164bd3d
-**Reviewed Range:** a8c52af..4b5064f
+**Reviewed Range:** a8c52af..6455ada
 
 <!--
 Same-tree change; range includes 3 change commits (59e2168 locator capture,
