@@ -32,14 +32,22 @@ sync_controlmaster() {
 
     echo "→ syncing ssh ControlMaster snippet → files/home/.ssh/config"
     adb push "$src" "$tmp" >/dev/null
+    # Idempotence guard (toybox grep only — no awk on the run-as PATH):
+    #  1. managed sentinel present → our prior run applied it → skip.
+    #  2. a pre-existing `Host remote` stanza already carries a ControlMaster
+    #     directive (manual or otherwise) → skip to satisfy the spec AC "SHALL
+    #     NOT append a duplicate block"; warn so the user can merge by hand.
     adb shell "run-as com.termux sh -c '
+        cfg=files/home/.ssh/config
         mkdir -p files/home/.ssh && chmod 700 files/home/.ssh
-        touch files/home/.ssh/config && chmod 600 files/home/.ssh/config
-        if grep -qF \"$marker\" files/home/.ssh/config; then
-            echo \"  (already present — no change)\"
+        touch \"\$cfg\" && chmod 600 \"\$cfg\"
+        if grep -qF \"$marker\" \"\$cfg\"; then
+            echo \"  (managed block present — no change)\"
+        elif grep -qiE \"^[[:space:]]*Host[[:space:]].*remote\" \"\$cfg\" && grep -qiE \"^[[:space:]]*ControlMaster\" \"\$cfg\"; then
+            echo \"  (existing Host remote ControlMaster block — skipping to avoid a duplicate; merge manually if desired)\"
         else
-            printf \"\n\" >> files/home/.ssh/config
-            cat \"$tmp\" >> files/home/.ssh/config
+            printf \"\n\" >> \"\$cfg\"
+            cat \"$tmp\" >> \"\$cfg\"
             echo \"  (appended ControlMaster block)\"
         fi
         rm -f \"$tmp\"
