@@ -99,8 +99,8 @@ file-contract diffs, code-review diff base, and opsx gate verdict freshness.
 In same-tree mode, Diff Base SHA = pre-apply HEAD and Worktree Path is empty.
 -->
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
+**Diff Base SHA:** a8c52af74a7ec8c81ce8367e2a124b433164bd3d
+**Worktree Path:**
 **Integration Branch:** main
 
 ## Manual Adjustments
@@ -121,6 +121,13 @@ rationale. Keep the front-matter, the table, and these notes consistent. -->
 non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -->
 
 - 2026-07-04 — review.md authored from shipped template at loop turn 1 (gate: review.md absent).
+- 2026-07-04 — ASSUMPTION (recorded, intent frozen): intent.md Grounding labels
+  executable_opsx ~1452-1464 as the "duplicate-ADR first-parent scan"; that
+  range actually holds the MULTI-DIR INTEGRATION-COMMIT DETECTOR (the ADR-dup
+  scan is filename-based, no branch reference). Q1's governing clause — "every
+  functional `main` hardcode ... uses it" — is what the specs implement: the
+  three sites are status staleness, archive-check base-currency, and the
+  multi-dir detector scan range.
 
 ## Scope Expansions
 
