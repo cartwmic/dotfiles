@@ -109,6 +109,36 @@ a provenance defect: repair the ledger before archive.
 (opsx-adversarial-review.orchestrator-round-ledger,
  opsx-adversarial-review.prose-surface-fidelity)
 
+**Tree-identity attestation (every blind dispatch).** Every reviewer/judge prompt
+requires the subagent to record, as its FIRST findings-output lines, `Attested
+HEAD: <verbatim git rev-parse HEAD — full 40-hex>` and `Attested Path: <verbatim
+git rev-parse --show-toplevel>` from its own execution context (always pin the
+dispatch `cwd` to the reviewed tree). Count a verdict ONLY when the attested HEAD
+literal equals the dispatched range head's full SHA AND the attested path
+realpath-equals the dispatched tree root (same-tree: the integration checkout —
+the HEAD check carries the discrimination). Missing/non-40-hex/mismatched ⇒ the
+verdict is **INVALID — not fail**: it never satisfies multi-model gating, never
+enters the ledger as a reviewer verdict, never counts toward `review_max_rounds`;
+record the incident and re-dispatch. TWO consecutive all-invalid attempts of the
+same round ⇒ stop and route to the decision-audit landing with a
+dispatch-integrity error (never retry unbounded). Seal `**Attested HEAD:**` into
+code-review.md (and doneness.md for the full_rigor independent judge) only when
+every counted reviewer attested the same value.
+(opsx-adversarial-review.reviewer-tree-identity-attestation)
+
+**Read-only round window (snapshot/void/restore).** Immediately before
+dispatching a round's reviewers, capture the reviewed tree's `git rev-parse HEAD`
++ `git status --porcelain=v1`; capture identically after the last reviewer
+returns. Compare with the change's own `openspec/changes/<change>/` paths
+excluded (orchestrator-sealed bookkeeping — the ONLY in-window writes you may
+make; write nothing else to the reviewed tree while the window is open). Any
+other delta ⇒ mutation is unattributable among concurrent reviewers: ALL the
+round's verdicts are INVALID; restore surgically — `git restore` only tracked
+paths whose status changed, delete only untracked paths introduced in-window,
+NEVER blanket `git clean`, never pre-existing untracked/ignored state — and
+record the incident in the ledger/Execution Notes.
+(opsx-adversarial-review.read-only-reviewer-dispatch)
+
 **Migration sweep before round 1.** WHERE the change declares
 `openspec/changes/<change>/sweep.txt` (retired tokens / forbidden patterns,
 one ERE per line), run `opsx sweep <change>` and resolve ALL hits BEFORE

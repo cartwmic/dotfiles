@@ -326,6 +326,26 @@ if grep -q 'only safe for Scale=XS' "$PROPOSE_REF" 2>/dev/null; then
   nok "propose ref dropped the stale XS-safe skip claim"
 else ok "propose ref dropped the stale XS-safe skip claim"; fi
 
+# --- opsx-adversarial-review.reviewer-tree-identity-attestation +
+#     opsx-adversarial-review.read-only-reviewer-dispatch +
+#     opsx-workflow-schema.convergence-template-support (Attested HEAD surfaces) ---
+has "code-review template carries the Attested HEAD field" "$TPL/code-review.md" '^\*\*Attested HEAD:\*\*'
+has "code-review template documents the 40-hex fail-closed contract" "$TPL/code-review.md" "full 40-hex"
+has "code-review template dispatch contract carries the attestation preamble" "$TPL/code-review.md" "git rev-parse --show-toplevel"
+has "code-review template names INVALID (not fail) semantics" "$TPL/code-review.md" "INVALID"
+has "doneness template carries the Attested HEAD field" "$TPL/doneness.md" '^\*\*Attested HEAD:\*\*'
+has "doneness template scopes attestation to the full_rigor judge" "$TPL/doneness.md" "full_rigor"
+has "loop skill requires the attestation preamble" "$LOOP_SKILL" "Attested Path"
+has "loop skill pins dispatch cwd to the reviewed tree" "$LOOP_SKILL" "pin the"
+has "loop skill defines INVALID as excluded from gating/ledger/budget" "$LOOP_SKILL" "INVALID — not fail"
+has "loop skill bounds all-invalid re-dispatch at two attempts" "$LOOP_SKILL" "dispatch-integrity"
+has "loop skill defines the read-only round window snapshot" "$LOOP_SKILL" "porcelain=v1"
+has "loop skill forbids blanket git clean on restore" "$LOOP_SKILL" "NEVER blanket"
+has "apply ref requires the attestation preamble" "$APPLY_REF" "Attested Path"
+has "apply ref defines INVALID verdict semantics" "$APPLY_REF" "INVALID, not fail"
+has "apply ref defines the read-only round window" "$APPLY_REF" "read-only-reviewer-dispatch"
+has "apply ref keeps restore surgical" "$APPLY_REF" "never blanket"
+
 echo "-----"
 echo "opsx-review-convergence surfaces: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]
