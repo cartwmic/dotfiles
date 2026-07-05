@@ -1210,9 +1210,17 @@ if [ "$VERB" = "path" ]; then
 fi
 
 if [ -z "$IBRANCH" ]; then
-  IBRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)"
-  if [ -z "$IBRANCH" ] || [ "$IBRANCH" = "HEAD" ]; then
-    err "repository is in detached HEAD state; pass --integration-branch explicitly"; exit 1
+  # Capture-time detection (opsx-workflow-schema.integration-branch-locator-
+  # default-detected): fill the locator via the deterministic resolver steps 2-4
+  # (no change arg — the locator field is what THIS capture writes, so step 1
+  # cannot apply). Fallback: current branch (pre-resolver behavior) with the
+  # detached-HEAD guard; explicit --integration-branch always wins.
+  IBRANCH="$(opsx_integration_branch "$ROOT")" || IBRANCH=""
+  if [ -z "$IBRANCH" ]; then
+    IBRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    if [ -z "$IBRANCH" ] || [ "$IBRANCH" = "HEAD" ]; then
+      err "repository is in detached HEAD state; pass --integration-branch explicitly"; exit 1
+    fi
   fi
 fi
 [ -n "$WPATH" ] || WPATH="$(opsx_wt_convention_path "$ROOT" "$CHANGE")"
@@ -1317,7 +1325,8 @@ exit 0
 # Scans non-archive openspec/changes/*; per change prints Scale (+full_rigor),
 # the gate(cheap) red/green summary + earliest failing check (reusing opsx gate
 # --cheap), worktree path + valid|invalid|none on branch opsx/<change>, loop_hold
-# + reason, and Diff Base staleness (commits behind main). NO side effects, NO
+# + reason, and Diff Base staleness (commits behind the RESOLVED integration
+# branch — opsx-cli.integration-branch-resolution). NO side effects, NO
 # model calls, exit 0 ALWAYS — a view, never a gate.
 # ============================================================================
 opsx_status() (
@@ -1494,10 +1503,12 @@ if [ -d "$ROOT/adr" ]; then
 fi
 
 # (c) multi-dir integration-commit detector (ADVISORY — never affects rc):
-#     scan <Diff Base SHA>..main (first-parent chain, MERGES INCLUDED — an
+#     scan <Diff Base SHA>..<resolved integration branch> (first-parent chain,
+#     MERGES INCLUDED — an
 #     "evil merge" landing >=2 change dirs must be flagged per
 #     opsx-cli.multi-dir-integration-commit-detector; a merge commit's touched
-#     set is its net effect on main, i.e. diff vs its FIRST parent) for any
+#     set is its net effect on the integration branch, i.e. diff vs its FIRST
+#     parent) for any
 #     commit touching >=2 distinct openspec/changes/<dir>/ directories.
 #     Skipped when no Diff Base locator.
 DIFF_BASE=""
