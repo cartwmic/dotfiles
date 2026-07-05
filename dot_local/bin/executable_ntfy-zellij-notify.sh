@@ -11,16 +11,17 @@
 # (Constitution III):
 #   NTFY_SERVER       required  base URL of the (self-hosted) ntfy server
 #   NTFY_TOPIC        required  topic to publish to
-#   JUMP_SSH_HOST     required  when inside a zellij pane: the ssh host ALIAS the
-#                              phone side-channels to on tap (`ssh $JUMP_SSH_HOST
-#                              'zellij pipe --name jump_pane <pane>'`). Reference
-#                              storage location only (a ~/.ssh/config alias); no
-#                              secrets here (Constitution III).
 #   NTFY_TOKEN_FILE   optional  path to a file holding a bearer token
 #   NTFY_TOKEN        optional  bearer token value (prefer NTFY_TOKEN_FILE)
-#   JUMP_DEEPLINK_BASE optional deep-link scheme+path the phone registers; MUST
+#   JUMP_DEEPLINK_BASE optional deep-link scheme+host the phone registers; MUST
 #                              match the termux-app fork's registered handler.
-#                              Default: termux-harpoon-jump://jump
+#                              The pane id is appended as the URL PATH segment
+#                              (`<base>/<pane-id>`), which is what the fork's
+#                              ZellijJumpHandler parses. The ssh host + the
+#                              `zellij pipe --name jump_pane <pane>` invocation
+#                              live in the phone-side ~/bin/zellij-jump script,
+#                              NOT in this URL (this fork carries no host).
+#                              Default: termux://zellij-jump
 #
 # Usage: ntfy-zellij-notify.sh <message> [title]
 #
@@ -95,11 +96,20 @@ headers=(-H "Title: $title")
 # ControlMaster connection. Outside zellij (no pane id) the notification is
 # delivered keyless — no Click, no jump.
 if [ -n "$pane_id" ]; then
-	: "${JUMP_SSH_HOST:?ntfy-zellij-notify: JUMP_SSH_HOST is not set (required to build the jump tap target)}"
-	click="${JUMP_DEEPLINK_BASE:-termux-harpoon-jump://jump}"
-	click+="?host=$(urlencode "$JUMP_SSH_HOST")&pane=$(urlencode "$pane_id")"
-	[ -n "$session" ] && click+="&session=$(urlencode "$session")"
-	[ -n "$slot" ] && click+="&slot=$(urlencode "$slot")"
+	# APK contract (termux-app fork ZellijJumpHandler): the tap target is
+	#   termux://zellij-jump/<pane-id>
+	# with the STABLE pane id as the URL PATH segment. The handler extracts the
+	# pane id from the path (cutting at the first '/', '?' or '#'), then invokes
+	# the phone-side ~/bin/zellij-jump with it; that script owns the ssh host and
+	# the `zellij pipe --name jump_pane <pane>` side-channel over the live
+	# ControlMaster. Host is therefore NOT carried in the URL. session/slot ride
+	# as trailing query hints (human display only — the handler ignores them, and
+	# they sit after the pane-id path segment so parsing is unaffected).
+	click="${JUMP_DEEPLINK_BASE:-termux://zellij-jump}"
+	click+="/$(urlencode "$pane_id")"
+	sep="?"
+	[ -n "$session" ] && { click+="${sep}session=$(urlencode "$session")"; sep="&"; }
+	[ -n "$slot" ] && { click+="${sep}slot=$(urlencode "$slot")"; sep="&"; }
 	headers+=(-H "Click: $click")
 fi
 
