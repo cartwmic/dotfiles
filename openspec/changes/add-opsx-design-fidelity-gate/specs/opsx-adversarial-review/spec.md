@@ -4,7 +4,7 @@
 
 ### Requirement: Design Fidelity Judge
 
-WHERE a change carries a `design.md`, THE workflow SHALL obtain a blind design-fidelity judgment BEFORE tasks generation: for EVERY delta acceptance criterion of the change, the judge SHALL answer whether the design mechanism cited (or discoverable) for that AC semantically entails the AC's guarantee AS WRITTEN, recording one verdict row per AC — `entailed | not-entailed | not-covered` — with evidence; an AC whose only design coverage is a nominal citation to a section that does not address the guarantee SHALL be `not-covered`. THE judge SHALL apply a bounded contract mirroring the baseline-bounded reviewer contract: a `not-entailed`/`not-covered` row blocks ONLY on clear non-entailment of the AC as written; WHERE the AC's guarantee is ambiguous, the judge SHALL route an advisory clarify-class finding instead of blocking. Intent-mandate violations (a design decision rejecting or weakening something the frozen intent mandates) and rationale↔mechanism contradictions within a design decision ARE in scope and fall out of the per-AC sweep as evidence. Dispatch channel: WHILE `full_rigor: true`, the fidelity judgment SHALL ride the existing blind analyze dispatch as a REQUIRED section of that dispatch, with the verdict STILL sealed to the separate `design-fidelity.md`; at plain Scale M or a design-bearing Scale S/XS, one narrow post-design blind mini-dispatch SHALL produce the same sealed artifact. Re-judgments SHALL be full sweeps (never delta-scoped, no cross-round finding matching). The fidelity dispatch SHALL follow the reviewer tree-identity attestation and read-only dispatch window protocols under the pre-worktree carve-out: fidelity is judged before worktree creation, so the dispatched tree IS the integration checkout and the judge attests its HEAD and root (Reviewer Tree Identity Attestation, pre-worktree dispatches). Each sealed fidelity verdict SHALL be recorded as a round-ledger entry (the ledger is orchestrator-sealed and freshness-protected per dispatch-integrity), and THE escalation valve SHALL count consecutive `violated` entries from that ledger — persisting across sessions — not from any state inside the re-sealed artifact. WHEN two consecutive sealed `violated` verdicts land — regardless of which rows failed; no per-row cross-round comparison is performed, consistent with the full-sweep rule — THE orchestrator SHALL route to the decision-audit landing for a human ruling rather than looping unbounded; a human waiver SHALL be recorded in the artifact by the ruling, never self-authored.
+WHERE a change carries a `design.md`, THE workflow SHALL obtain a blind design-fidelity judgment BEFORE tasks generation: for EVERY delta acceptance criterion of the change, the judge SHALL answer whether the design mechanism cited (or discoverable) for that AC semantically entails the AC's guarantee AS WRITTEN, recording one verdict row per AC — `entailed | not-entailed | not-covered` — with evidence; an AC whose only design coverage is a nominal citation to a section that does not address the guarantee SHALL be `not-covered`. THE judge SHALL apply a bounded contract mirroring the baseline-bounded reviewer contract: a `not-entailed`/`not-covered` row blocks ONLY on clear non-entailment of the AC as written; WHERE the AC's guarantee is ambiguous, the judge SHALL route an advisory clarify-class finding instead of blocking. Intent-mandate violations (a design decision rejecting or weakening something the frozen intent mandates) and rationale↔mechanism contradictions within a design decision ARE in scope and fall out of the per-AC sweep as evidence. Dispatch channel: WHILE `full_rigor: true`, the fidelity judgment SHALL ride the existing blind analyze dispatch as a REQUIRED section of that dispatch, with the verdict STILL sealed to the separate `design-fidelity.md`; at plain Scale M or a design-bearing Scale S/XS, one narrow post-design blind mini-dispatch SHALL produce the same sealed artifact. Re-judgments SHALL be full sweeps (never delta-scoped, no cross-round finding matching). The fidelity dispatch SHALL follow the reviewer tree-identity attestation and read-only dispatch window protocols under the pre-worktree carve-out: fidelity is judged before worktree creation, so the dispatched tree IS the integration checkout and the judge attests its HEAD and root (Reviewer Tree Identity Attestation, pre-worktree dispatches). Each sealed fidelity verdict SHALL be recorded as a round-ledger entry in the `Fidelity Round Ledger` section of review.md (the fidelity-type host defined by Orchestrator Round Ledger — append-only, present at every Scale, available pre-worktree, orchestrator-sealed), and THE escalation valve SHALL count consecutive `violated` entries from that ledger — persisting across sessions and across design-fidelity.md re-seals — not from any state inside the re-sealed artifact. WHEN two consecutive sealed `violated` verdicts land — regardless of which rows failed; no per-row cross-round comparison is performed, consistent with the full-sweep rule — THE orchestrator SHALL route to the decision-audit landing for a human ruling rather than looping unbounded; a human waiver SHALL be recorded in the artifact by the ruling, never self-authored.
 
 #### Scenario: Oxide D3 shape judged not-entailed
 - **WHILE** a delta AC guarantees a structural property ("safe by construction") and the design's cited mechanism is manual per-site handling
@@ -36,9 +36,9 @@ WHERE a change carries a `design.md`, THE workflow SHALL obtain a blind design-f
 - **THEN** the orchestrator SHALL route to the decision-audit landing with the fidelity history rather than dispatching a third judgment automatically, and SHALL NOT attempt per-row matching across the two sealed verdicts
 
 #### Scenario: Valve count persists across sessions
-- **WHILE** one sealed `violated` fidelity verdict is recorded in the round ledger
+- **WHILE** one sealed `violated` fidelity verdict is recorded in review.md's `Fidelity Round Ledger` section
 - **WHEN** a fresh orchestrator session seals a second consecutive `violated`
-- **THEN** the valve SHALL fire from the ledger's record — the count never resets merely because the artifact was re-sealed or the session restarted
+- **THEN** the valve SHALL fire from the ledger's record — the count never resets merely because design-fidelity.md was re-sealed (a full-sweep re-seal overwrites the artifact, never the ledger) or the session restarted
 
 ### Requirement: Findings File Sole Verdict Source
 
@@ -80,6 +80,11 @@ THE blind reviewer/judge dispatch prompt SHALL require the subagent, BEFORE revi
 - **WHEN** the judge attests the integration checkout's HEAD and canonicalized root
 - **THEN** the attestation SHALL be countable — the integration checkout is the dispatched tree for pre-worktree judgments, and the HEAD equality check carries the discrimination
 
+#### Scenario: Pre-worktree judgment attesting the wrong tree is invalid
+- **WHILE** a pre-worktree judgment is dispatched against the integration checkout at a recorded HEAD
+- **IF** the returned attestation's HEAD does not equal the integration-checkout HEAD at dispatch, or its canonicalized path does not equal the integration-checkout root
+- **THEN** the verdict SHALL be INVALID with the standard exclusions — the carve-out changes which tree is attested, never whether the equality checks discriminate
+
 #### Scenario: Missing attestation is invalid
 - **IF** a returned findings output carries no attestation fields, or an `Attested HEAD` that is not a full 40-hex SHA literal
 - **THEN** the verdict SHALL be treated as INVALID with the same exclusions
@@ -113,6 +118,22 @@ THE orchestrator SHALL capture a deterministic snapshot immediately before dispa
 - **WHILE** the pre- and post-window snapshots are identical in every covered tree
 - **WHEN** a verdict's attestation also matches
 - **THEN** the verdict SHALL be counted normally toward gating and the ledger
+
+### Requirement: Orchestrator Round Ledger
+
+THE orchestrator SHALL maintain a per-review-type round ledger — round number, per-severity finding counts (P0/P1/P2/P3), per-reviewer verdicts, and the HEAD reviewed — sealed into the review artifact for that review type (code-review.md for post-apply diff-review rounds; an appended `Round Ledger` section of analyze.md for analyze-type gating rounds; an appended `Fidelity Round Ledger` section of review.md for design-fidelity judgment rounds — review.md exists at every Scale and before worktree creation, and a design-fidelity.md full-sweep re-seal overwrites that artifact so it can never host its own history), and the ledger, prior-round findings, and other reviewers' output SHALL NOT appear in any blind reviewer prompt. The `Fidelity Round Ledger` section SHALL be append-only orchestrator bookkeeping: sealing or re-sealing design-fidelity.md SHALL never remove or rewrite prior rows. A round's consolidated per-severity count SHALL be the maximum count reported by any single reviewer in that round (no cross-reviewer finding matching), so counts are deterministic and comparable across rounds without normalizing free-text findings.
+
+#### Scenario: Ledger row per round
+- **WHEN** a gating review round completes
+- **THEN** the orchestrator SHALL append one ledger row recording the round number, the consolidated severity counts (max across reviewers per severity), each reviewer's verdict, and the reviewed HEAD SHA
+
+#### Scenario: Blindness preserved
+- **IF** a blind reviewer dispatch prompt would include the round ledger, prior-round findings, or another reviewer's output
+- **THEN** the dispatch SHALL NOT proceed as a blind round; only the explicitly marked disclosure round may disclose findings
+
+#### Scenario: Fidelity rounds ledger into review.md
+- **WHEN** a design-fidelity judgment round seals (any overall verdict)
+- **THEN** the orchestrator SHALL append one row to review.md's `Fidelity Round Ledger` section recording the round number, the sealed `Fidelity` value, each judge's verdict, and the attested integration-checkout HEAD — and a later design-fidelity.md re-seal SHALL NOT remove that row
 
 ### Requirement: Post Apply Code Review Artifact
 
