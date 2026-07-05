@@ -6,7 +6,7 @@
 
 ### Requirement: Project Artifact Preflight
 
-THE `opsx gate` SHALL require that `openspec/constitution.md` and `openspec/domain.md` both exist and are non-empty in the integration checkout, at EVERY Scale (XS, S, and M, with or without `full_rigor`), and IF either file is absent or empty, THEN the gate SHALL fail closed with a directive naming the shipped scaffolding templates (`constitution-template.md` and `domain-template.md` under the opsx-superpowers schema templates directory) as the remedy; the gate SHALL NOT auto-scaffold either file and SHALL offer NO waiver key for this check. The check SHALL be a deterministic file-existence/size test with no model call.
+THE `opsx gate` SHALL require that `openspec/constitution.md` and `openspec/domain.md` both exist and are non-empty — size greater than zero bytes, `test -s` semantics (clarify C2) — in the integration checkout, at EVERY Scale (XS, S, and M, with or without `full_rigor`), and IF either file is absent or empty, THEN the gate SHALL fail closed with a directive naming the shipped scaffolding templates (`constitution-template.md` and `domain-template.md` under the opsx-superpowers schema templates directory) as the remedy; the gate SHALL NOT auto-scaffold either file and SHALL offer NO waiver key for this check. The check SHALL be a deterministic file-existence/size test with no model call.
 
 #### Scenario: Missing constitution fails the gate with the template remedy
 - **IF** `openspec/constitution.md` is absent or empty in the integration checkout

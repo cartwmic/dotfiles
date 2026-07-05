@@ -6,10 +6,10 @@
 
 ### Requirement: Integration Branch Resolution
 
-THE `opsx` CLI SHALL resolve the integration branch through a single deterministic helper wherever a check compares against the integration branch, with resolution order (first hit wins): (1) the change's committed review.md `**Integration Branch:**` locator field when a change context exists and the field is non-empty and non-placeholder; (2) the short name of `git symbolic-ref refs/remotes/origin/HEAD`; (3) a local branch named `main`; (4) a local branch named `master`; and IF no step resolves, THEN the CLI SHALL fail loudly with a named error identifying the unresolvable integration branch rather than silently assuming any default. The resolver SHALL be pure git plumbing plus file reads — no model call, no configuration-file override key.
+THE `opsx` CLI SHALL resolve the integration branch through a single deterministic helper wherever a check compares against the integration branch, with resolution order (first hit wins): (1) the change's committed review.md `**Integration Branch:**` locator field when a change context exists and the field, after trimming surrounding whitespace, is non-empty and is not the shipped placeholder sentinel `<detected-at-capture>` (the single token the template ships and the resolver recognizes — clarify C1); (2) the short name of `git symbolic-ref refs/remotes/origin/HEAD`; (3) a local branch named `main`; (4) a local branch named `master`; and IF no step resolves, THEN blocking invokers (gate and archive/land checks) SHALL fail loudly with a named error identifying the unresolvable integration branch rather than silently assuming any default, WHILE the read-only `opsx status` view SHALL instead degrade to its stable placeholder fields and still exit 0 (clarify C3). The resolver SHALL be pure git plumbing plus file reads — no model call, no configuration-file override key.
 
 #### Scenario: Locator field wins when present
-- **WHILE** the change's committed review.md carries a non-empty, non-placeholder `**Integration Branch:**` value
+- **WHILE** the change's committed review.md carries an `**Integration Branch:**` value that, after whitespace trim, is non-empty and is not the `<detected-at-capture>` sentinel
 - **WHEN** an integration-branch-dependent check resolves the branch for that change
 - **THEN** the resolver SHALL return the locator field's value without consulting later steps
 
@@ -23,9 +23,14 @@ THE `opsx` CLI SHALL resolve the integration branch through a single determinist
 - **WHEN** the resolver runs
 - **THEN** it SHALL return `master`
 
-#### Scenario: Unresolvable branch fails loudly
+#### Scenario: Unresolvable branch fails loudly in blocking checks
 - **IF** no resolution step yields a branch
-- **THEN** the invoking check SHALL fail with a named error stating the integration branch could not be resolved, and SHALL NOT proceed against a guessed branch
+- **THEN** a blocking invoker (gate or archive/land check) SHALL fail with a named error stating the integration branch could not be resolved, and SHALL NOT proceed against a guessed branch
+
+#### Scenario: Unresolvable branch degrades to placeholder in the status view
+- **IF** no resolution step yields a branch
+- **WHEN** `opsx status` computes its commits-behind staleness field
+- **THEN** it SHALL print its stable placeholder for that field and still exit 0, per the view-never-crashes posture (clarify C3)
 
 #### Scenario: Resolution is deterministic and model-free
 - **WHEN** the resolver runs
