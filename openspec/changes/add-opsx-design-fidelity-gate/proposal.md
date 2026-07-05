@@ -69,7 +69,9 @@ model-free gate; doneness-judge precedent for sealed judged verdicts).
   `tests/opsx-review-convergence/test_review_convergence_surfaces.sh`
   (surface pins).
 - Specs — deltas on `opsx-gate-enforcement`, `opsx-adversarial-review`,
-  `opsx-workflow-schema`, `opsx-cli`, `opsx-skill-integration`.
+  `opsx-workflow-schema`, `opsx-skill-integration` (opsx-cli untouched: worktree
+  lifecycle commands, locator emit, and resolver are reused as-is; the removal
+  surface is mode/derivation/exemptions, which live in the other four).
 - **BREAKING**: in-flight same-tree changes must be re-homed to worktrees or
   archived before deployment; none active besides this change (verified:
   `openspec list` shows only add-opsx-design-fidelity-gate).
