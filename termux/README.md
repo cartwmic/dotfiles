@@ -19,7 +19,11 @@ not this machine), so the workflow is **edit-here, push-via-adb**.
   tap-time side-channel `ssh remote 'zellij pipe --name jump_pane ...'` reuses
   the LIVE connection instead of a fresh login. NOT chezmoi-deployed
   (Constitution VII); host alias/user reference the phone's own `~/.ssh/config`
-  (no secrets here).
+  (no secrets here). Idempotence is sentinel-fenced: a re-run that finds the
+  managed marker is a no-op. **Caveat:** if you already keep your OWN hand-written
+  `Host remote` ControlMaster block in the phone `~/.ssh/config`, `sync.sh` does
+  not detect it and will append the managed block too (ssh first-match-wins keeps
+  behavior correct); delete one of the two stanzas if you want a single copy.
 
 ## SSH private key (pull from 1Password)
 
