@@ -36,5 +36,5 @@ intent per task; files_allowed globs; allow_new_files true only where noted. -->
 
 ## 4. Verify
 
-- [ ] 4.1 Full validator sweep green (`bash -n`, opsx-cli, opsx-gate, opsx-models, opsx-review-convergence, author-marker, bun opsx-loop, both `openspec validate --strict`); fill verify.md from the shipped template with AC↔test map for the 6 delta ACs.
+- [x] 4.1 Full validator sweep green (`bash -n`, opsx-cli, opsx-gate, opsx-models, opsx-review-convergence, author-marker, bun opsx-loop, both `openspec validate --strict`); fill verify.md from the shipped template with AC↔test map for the 6 delta ACs.
       <!-- contract: intent=infra; files_allowed=openspec/changes/harden-opsx-repo-portability/verify.md; allow_new_files=true -->
