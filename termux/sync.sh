@@ -50,8 +50,12 @@ sync_controlmaster() {
             cat \"$tmp\" >> \"\$cfg\"
             echo \"  (appended ControlMaster block)\"
         fi
-        rm -f \"$tmp\"
     '"
+    # Remove the pushed tmp OUTSIDE run-as: /data/local/tmp/$tmp is owned by the
+    # adb `shell` uid, so the Termux app uid inside run-as cannot delete it (the
+    # cp/cat READ works, but rm would EACCES and — with set -euo pipefail — abort
+    # the sync on every run, breaking Const IV). Mirror push_file's shell-uid rm.
+    adb shell "rm -f '$tmp'"
 }
 
 push_file "termux.properties" "files/home/.termux/termux.properties"
