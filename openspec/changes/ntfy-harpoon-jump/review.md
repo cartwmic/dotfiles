@@ -54,7 +54,7 @@ file-contract diffs, code-review diff base, and opsx gate verdict freshness.
 In same-tree mode, Diff Base SHA = pre-apply HEAD and Worktree Path is empty.
 -->
 
-**Diff Base SHA:** 07ac55b7f19b304602d63e3a01105135878a599f
+**Diff Base SHA:** 27fa74e7d35349699a28b51c1a8c94dc939d10ac
 **Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-ntfy-harpoon-jump
 **Integration Branch:** main
 
