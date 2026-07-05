@@ -24,6 +24,8 @@ loop_max_iterations: 20
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
+loop_hold: true
+loop_hold_reason: gate green (S) — harden-opsx-repo-portability awaiting archive ruling
 # loop_hold: true — orchestrator-settable LANDING signal read by the loop host
 # (NOT by opsx gate — gate checks and exit code ignore it). Set it, with a
 # non-empty loop_hold_reason, when declaring a terminal landing that awaits a
