@@ -67,7 +67,15 @@ set difference vs recorded digest fields (C6); recompute each digest from the
 integration-checkout change dir (C3 — change-dir artifacts are committed there;
 the worktree may hold stale copies); fail closed on absence, mismatch,
 unparseable fields, or `violated` without waiver. `WHERE` no design.md exists,
-the check is not required.
+the check is not required. Digest-root resolution is explicit: the gate
+resolves the repository's MAIN worktree root via git plumbing (first entry of
+`git worktree list --porcelain`, the pattern `opsx sweep` uses via
+`opsx_repo_main_root`) and hashes `<main-root>/openspec/changes/<change>/` —
+NEVER `$CDIR` after the gate's worktree reassignment (`executable_opsx`
+reassigns `CDIR` to the worktree once located, and the shipped doneness digest
+hashes that reassigned path — the one existing precedent that must NOT be
+mirrored here), and never the invocation cwd, which may itself be a change
+worktree.
 
 **Alternatives considered:**
 - **Fidelity section inside analyze.md**: couples freshness to analyze's
@@ -137,17 +145,34 @@ other.
 **Rationale:** Only enumerable deterministic green path that keeps human
 authority explicit and auditable in the artifact.
 
+**Accepted risk (analyze R1, O-A2):** the gate can only verify the waiver
+field is present and names a ruling + landing entry — it cannot verify a human
+wrote it. This matches the `doneness_mode: waived` + rationale precedent
+exactly; the enforcement surface for authorship is the decision-audit landing
+record plus retrospective audit, not the model-free gate. A self-authored
+waiver is a deliberate integrity breach of the same class as a self-authored
+landing entry — out of scope per the no-sandboxing non-goal (detection +
+audit, not prevention).
+
 **4-point test:** → ADR candidate **Y**.
 
 ### D4: Escalation valve counts consecutive `violated` from the round ledger
 
 **Choice:** Every sealed fidelity verdict is recorded as a round-ledger entry
-(the ledger is orchestrator-sealed and freshness-protected per
-dispatch-integrity). The valve fires on two consecutive `violated` ledger
-entries — regardless of which rows failed, no per-row cross-round comparison
-(C5, C7) — routing to the decision-audit landing with the fidelity history
-instead of a third automatic dispatch. Ledger persistence makes the count
-survive session restarts and re-seals.
+in a new append-only `Fidelity Round Ledger` section of review.md — the
+fidelity-type host added to the Orchestrator Round Ledger requirement
+(analyze.md does not exist at design-bearing S/XS, code-review.md does not
+exist pre-tasks, and design-fidelity.md is overwritten by every full-sweep
+re-seal, so none of the existing hosts can carry the count; review.md exists
+at every Scale and before worktree creation). Rows record round number,
+sealed `Fidelity` value, per-judge verdicts, attested integration-checkout
+HEAD; re-sealing design-fidelity.md never touches prior rows. The valve fires
+on two consecutive `violated` ledger entries — regardless of which rows
+failed, no per-row cross-round comparison (C5, C7) — routing to the
+decision-audit landing with the fidelity history instead of a third automatic
+dispatch. Ledger rows are prose bookkeeping (Execution-Notes-class, permitted
+by Post Seal Bookkeeping Non Staling); the gate reads review.md front-matter
+only, so ledger appends stale nothing.
 
 **Alternatives considered:**
 - **"Same failing rows" trigger**: is cross-round finding matching, forbidden
@@ -156,9 +181,13 @@ survive session restarts and re-seals.
 - **History structure inside design-fidelity.md**: duplicates the ledger;
   a second freshness-protected store to maintain. Rejected.
 
-**Rationale:** The ledger already exists, already persists, already protected.
+**Rationale:** Extends the existing per-review-type ledger mechanism with the
+one host that exists at fidelity time; a history structure inside the
+re-sealed artifact was rejected by clarify C7, and analyze R1 (O-A1/S-A2)
+confirmed no existing host works for the S/XS mini-dispatch channel.
 
-**4-point test:** borderline (mechanism reuse) — ADR candidate **N**.
+**4-point test:** host choice contested, lasting artifact contract — ADR
+candidate **Y** (upgraded after analyze R1).
 
 ### D5: Findings file is the sole verdict source
 
@@ -270,6 +299,7 @@ candidate **N** (documented as D7 corollary).
 | R4 | Pre-worktree carve-out weakens attestation if misapplied to post-impl dispatches | Low | High | Carve-out scoped by dispatch class in spec text; post-impl path check unconditional; scenario pins integration-checkout attestation as INVALID for worktree dispatches |
 | R5 | In-flight pre-deployment same-tree changes brick on the new gate | Low | Medium | C8 migration scenario names the re-home remedy; verified only this change is active |
 | R6 | Dual-tree restore deletes wanted untracked files | Low | Medium | Surgical restore: only window-introduced untracked paths; never blanket clean; incident recorded before restore |
+| R7 | Human-waiver field self-authored by an autonomous agent (gate cannot verify authorship) | Low | High | Waiver must name ruling + landing entry; landing record + retrospective audit are the enforcement surface (doneness-waiver parity); deliberate forgery is an integrity breach outside the no-sandboxing scope |
 
 ## Migration Plan
 

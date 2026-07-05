@@ -50,7 +50,6 @@ any mode by setting it (in BOTH the front-matter and this table).
 | Debug Mode | standard | standard\|systematic-debugging |
 | Review Status | not-requested | not-requested\|requested\|findings-received\|resolved |
 | Delegation Mode | subagent-required | every review/judgment verdict from a blind subagent (loop directive + Constitution IX) |
-| Worktree Mode | derived (absent) | M ⇒ worktree-required; key left absent BY DESIGN — this change abolishes the mode entirely |
 | Code Review Mode | derived (absent) | M ⇒ gating-required (fail-closed derived default) |
 | Loop Max Iterations | 80 | full_rigor budget (former L) |
 | Validation Source Mode | required | agent-independent validation sources required |

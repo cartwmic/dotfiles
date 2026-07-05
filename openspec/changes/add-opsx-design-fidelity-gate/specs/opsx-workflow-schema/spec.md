@@ -130,3 +130,19 @@ Each task in `tasks.md` SHALL optionally declare `files_allowed`, `files_forbidd
 - **THEN** the repair prompt SHALL include the constraints block "Fix only failing validators. Do NOT refactor unrelated code. Do NOT add new features. Tests MAY be added when TDD mode is on." along with a structured `Issues[]` list
 - **IF** a task declares `intent: refactor` and validators fail
 - **THEN** the repair prompt SHALL NOT include the fix-mode constraints and SHALL instead permit unrelated cleanup within the task's `files_allowed` scope
+
+### Requirement: Apply-time writeback and workspace discipline
+
+The `apply.instruction` SHALL enforce three disciplines: pre-flight commit of the change directory before the worktree is created; main-agent-as-writeback-owner for all delegated work; output-redirection that forbids writes to scattered or parallel doc trees (in particular `docs/superpowers/`).
+
+#### Scenario: Pre-flight commit before worktree
+- **WHEN** apply begins for any change
+- **THEN** the apply step SHALL run `git status --porcelain openspec/changes/<name>/`, and if any artifact files are unstaged or uncommitted, SHALL stage and commit only that subtree on the integration branch before creating the worktree
+
+#### Scenario: Subagent does not own artifact writes
+- **WHEN** a task is dispatched to a subagent
+- **THEN** the subagent SHALL produce its findings as a structured handoff to the main agent, and SHALL NOT directly edit `tasks.md`, `plan.md`, `verify.md`, or any other artifact under `openspec/changes/<name>/`
+
+#### Scenario: Output redirection prevents parallel doc trees
+- **WHEN** apply invokes any Superpowers-style capability hook (brainstorming, writing-plans, etc.)
+- **THEN** the invocation SHALL include explicit instructions to write output into the current change's `<artifact>.md`, and SHALL forbid creation of files under `docs/superpowers/specs/` or any other parallel tree
