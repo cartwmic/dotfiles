@@ -11,17 +11,20 @@ deterministic land-path verb and QUOTE its output back to the user verbatim:
 opsx archive-check <name>
 ```
 
-It asserts land-base currency (`git merge-base opsx/<name> main` == `git rev-parse
-main`; branch-absent ⇒ satisfied same-tree exemption), an ADR duplicate-number scan,
-and an advisory multi-dir-commit detector (advisory only — it never affects the exit
-code). If `opsx archive-check` exits NON-ZERO, REFUSE archive and print the quoted
-output plus the remedy it names (typically rebase `opsx/<name>` onto `main`):
+It asserts land-base currency (`git merge-base opsx/<name> <integration branch>` ==
+that branch's HEAD, where the integration branch is RESOLVED deterministically —
+committed review.md `Integration Branch` locator > `origin/HEAD` > `main` > `master`,
+never a hardcoded literal (opsx-cli.integration-branch-resolution); branch-absent ⇒
+satisfied same-tree exemption), an ADR duplicate-number scan, and an advisory
+multi-dir-commit detector (advisory only — it never affects the exit code). If
+`opsx archive-check` exits NON-ZERO, REFUSE archive and print the quoted output plus
+the remedy it names (typically rebase `opsx/<name>` onto the resolved branch's HEAD):
 
 ```
 ⛔ Archive refused.
 opsx archive-check <name> exited non-zero:
   <quoted archive-check output>
-Resolve (e.g. rebase the change branch onto main) and re-run before archiving.
+Resolve (e.g. rebase the change branch onto the resolved integration branch) and re-run before archiving.
 ```
 
 Do NOT proceed to HARD-GATE 0 until archive-check exits 0 (or a human records an

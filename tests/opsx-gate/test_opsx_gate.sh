@@ -41,6 +41,11 @@ git -C "$TMP" config user.email t@t; git -C "$TMP" config user.name t
 printf seed > "$TMP/seed"; git -C "$TMP" add seed; git -C "$TMP" commit -qm seed
 export OPSX_ROOT="$TMP"
 HEAD_SHA="$(git -C "$TMP" rev-parse HEAD)"
+# Project-artifact preflight fixtures (opsx-gate-enforcement.project-artifact-preflight):
+# every gate run requires non-empty constitution.md + domain.md at every Scale.
+mkdir -p "$TMP/openspec"
+printf '# Constitution\n' >"$TMP/openspec/constitution.md"
+printf '# Domain\n' >"$TMP/openspec/domain.md"
 
 mkchange() { # mkchange <name> ; creates a complete Scale-S change by default
   local d="$TMP/openspec/changes/$1"; mkdir -p "$d/specs/cap"
@@ -870,6 +875,35 @@ run sweep-wt; rc=$?
 grep -q 'GATE-FAIL sweep' "$TMP/err" && ok "integration-stale token still sweep-fails without worktree" || nok "integration-stale sweep-fail"
 # cleanup the planted surface so later suites/fixtures are unaffected
 git -C "$TMP" rm -q shipped_surface; git -C "$TMP" commit -qm rm-shipped-surface
+
+# --- opsx-gate-enforcement.project-artifact-preflight ---
+# constitution.md + domain.md must exist NON-EMPTY at EVERY Scale; fail-closed,
+# remedy names the shipped templates; no waiver key, no auto-scaffold.
+mkchange preflight-s
+mv "$TMP/openspec/constitution.md" "$TMP/openspec/constitution.md.bak"
+run preflight-s; rc=$?
+[ $rc -ne 0 ] && grep -q 'GATE-FAIL project-artifacts 1 openspec/constitution.md' "$TMP/err" \
+  && grep -q 'constitution-template.md' "$TMP/err" \
+  && ok "preflight: missing constitution reds naming the template remedy (project-artifact-preflight)" \
+  || nok "preflight missing constitution (rc=$rc)"
+mv "$TMP/openspec/constitution.md.bak" "$TMP/openspec/constitution.md"
+: >"$TMP/openspec/domain.md"   # empty file counts as missing (test -s, clarify C2)
+run preflight-s; rc=$?
+[ $rc -ne 0 ] && grep -q 'GATE-FAIL project-artifacts 1 openspec/domain.md' "$TMP/err" \
+  && grep -q 'domain-template.md' "$TMP/err" \
+  && ok "preflight: EMPTY domain reds naming the template remedy (test -s semantics)" \
+  || nok "preflight empty domain (rc=$rc)"
+printf '# Domain\n' >"$TMP/openspec/domain.md"
+run preflight-s; check "preflight: both artifacts present turn the check green" 0 $?
+# fires at XS too (no Scale skips it)
+mkchange preflight-xs; mkxs preflight-xs 2>/dev/null || {
+  d="$TMP/openspec/changes/preflight-xs"; rm -rf "$d/specs" "$d/plan.md" 2>/dev/null
+  sed -i.bak 's/^scale: S/scale: XS/' "$d/review.md" && rm -f "$d/review.md.bak"; }
+mv "$TMP/openspec/constitution.md" "$TMP/openspec/constitution.md.bak"
+run preflight-xs; rc=$?
+[ $rc -ne 0 ] && grep -q 'GATE-FAIL project-artifacts' "$TMP/err" \
+  && ok "preflight fires at Scale XS alike (no Scale skips it)" || nok "preflight at XS (rc=$rc)"
+mv "$TMP/openspec/constitution.md.bak" "$TMP/openspec/constitution.md"
 
 echo "----"
 echo "passed=$pass failed=$failc"

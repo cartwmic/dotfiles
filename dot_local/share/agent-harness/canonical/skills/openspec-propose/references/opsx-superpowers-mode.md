@@ -11,8 +11,9 @@ Loaded when step 2.5 detects `schemaName == "opsx-superpowers"`. Replaces the de
      A) Use the template at
         ~/.local/share/openspec/schemas/opsx-superpowers/templates/constitution-template.md
         and let me draft an initial version for review.
-     B) Skip (only safe for Scale=XS changes; the analyze artifact's
-        Check 1 will report "no constitution to check").
+     B) Skip for now — NOTE: `opsx gate` fails closed on a missing/empty
+        constitution.md at EVERY Scale (project-artifact preflight), so the
+        gate stays red until the file exists non-empty.
      C) Cancel — I'll fill in constitution.md first.
    ```
    For B, proceed with a console warning. For C, exit.
