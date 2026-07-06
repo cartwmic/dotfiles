@@ -2,12 +2,12 @@
 
 ## 1. Gate: design-fidelity check
 
-- [ ] 1.1 Add the `design-fidelity` cheap-phase check to `opsx gate` in `dot_local/bin/executable_opsx`: WHERE the change carries design.md (committed main-root content), require a sealed `design-fidelity.md`; parse own-line fields (`Fidelity`, judge provenance, `Attested HEAD`, per-file digest fields, optional `Human Waiver`) from COMMITTED integration-checkout content (`git -C <main-root> show HEAD:…`, reuse `opsx_repo_main_root`); fail closed on absent artifact, missing/unparseable fields, `violated` without non-empty waiver, present-but-empty waiver, provenance `review_mode` outside `blind-single-judge|adversarial-multimodel`. Emit unconditionally in the guidance order between analyze and tasks (plain sequential fail emission — NOT the doneness `rc == 0`-gated block); never join the missing-required-artifact short-circuit.
+- [x] 1.1 Add the `design-fidelity` cheap-phase check to `opsx gate` in `dot_local/bin/executable_opsx`: WHERE the change carries design.md (committed main-root content), require a sealed `design-fidelity.md`; parse own-line fields (`Fidelity`, judge provenance, `Attested HEAD`, per-file digest fields, optional `Human Waiver`) from COMMITTED integration-checkout content (`git -C <main-root> show HEAD:…`, reuse `opsx_repo_main_root`); fail closed on absent artifact, missing/unparseable fields, `violated` without non-empty waiver, present-but-empty waiver, provenance `review_mode` outside `blind-single-judge|adversarial-multimodel`. Emit unconditionally in the guidance order between analyze and tasks (plain sequential fail emission — NOT the doneness `rc == 0`-gated block); never join the missing-required-artifact short-circuit.
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx
   - allow_new_files: false
-- [ ] 1.2 Digest bindings: recompute sha256 (reuse `sha256_file` on `git show` output or hash blob content) of intent.md, design.md, and EVERY `specs/**/spec.md` from committed main-root change-dir content; locate digest lines by LITERAL string comparison against lines built from the enumerated spec-file set (never interpolate paths into regex); fail closed on any mismatch AND on set difference between enumerated files and recorded digest fields (added or removed delta spec file stales the seal, waived seals included).
+- [x] 1.2 Digest bindings: recompute sha256 (reuse `sha256_file` on `git show` output or hash blob content) of intent.md, design.md, and EVERY `specs/**/spec.md` from committed main-root change-dir content; locate digest lines by LITERAL string comparison against lines built from the enumerated spec-file set (never interpolate paths into regex); fail closed on any mismatch AND on set difference between enumerated files and recorded digest fields (added or removed delta spec file stales the seal, waived seals included).
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx
