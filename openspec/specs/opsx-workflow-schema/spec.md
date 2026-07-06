@@ -70,11 +70,11 @@ The schema SHALL declare a `Scale` mode in `review.md` with the collapsed tier v
 
 ### Requirement: Mode switchboard in review.md
 
-The `review.md` artifact SHALL declare a controlled-vocabulary mode switchboard whose values gate apply-time behavior. The required modes SHALL be: `Scale`, `Execution Mode`, `Verification Mode`, `Debug Mode`, `Review Status`, `Delegation Mode`, `Worktree Mode`, `Code Review Mode`, `Loop Max Iterations`, `Spec Level`, and `Doneness Mode`. The default value of `Worktree Mode` SHALL be DERIVED BY TIER: `same-tree` for Scale XS and S, and `worktree-required` for Scale M; an explicit `Worktree Mode` value recorded in review.md SHALL always win over the tier default. THE review.md artifact SHALL additionally carry a machine-readable front-matter block (YAML) at the top of the file mirroring at least `scale`, `full_rigor`, `worktree_mode`, `verification_mode`, `code_review_mode`, `loop_max_iterations`, `validation_source_mode`, and `doneness_mode`, so that opsx gate reads these values from structured fields rather than scraping the prose mode table. THE `doneness_mode` field SHALL take one of `required` or `waived`, defaulting to `required` for Scale M and above, and WHERE it is `waived` a non-empty `doneness_waiver_rationale` front-matter field SHALL be recorded, mirroring `validation_source_mode`.
+The `review.md` artifact SHALL declare a controlled-vocabulary mode switchboard whose values gate apply-time behavior. The required modes SHALL be: `Scale`, `Execution Mode`, `Verification Mode`, `Debug Mode`, `Review Status`, `Delegation Mode`, `Code Review Mode`, `Loop Max Iterations`, `Spec Level`, and `Doneness Mode`. There SHALL be NO `Worktree Mode`: worktree execution is the only execution model at every Scale — the schema, template, and prose table SHALL NOT present a worktree mode, and a review.md front-matter declaring a `worktree_mode` key SHALL be rejected fail-closed by the gate (opsx-gate-enforcement Worktree Mandatory Gate Enforcement). THE review.md artifact SHALL additionally carry a machine-readable front-matter block (YAML) at the top of the file mirroring at least `scale`, `full_rigor`, `verification_mode`, `code_review_mode`, `loop_max_iterations`, `validation_source_mode`, and `doneness_mode`, so that opsx gate reads these values from structured fields rather than scraping the prose mode table. THE `doneness_mode` field SHALL take one of `required` or `waived`, defaulting to `required` for Scale M and above, and WHERE it is `waived` a non-empty `doneness_waiver_rationale` front-matter field SHALL be recorded, mirroring `validation_source_mode`.
 
 #### Scenario: Machine-readable front-matter present
 - **WHEN** review.md is authored
-- **THEN** its leading YAML front-matter SHALL contain `scale`, `full_rigor`, `worktree_mode`, `verification_mode`, `code_review_mode`, `loop_max_iterations`, `validation_source_mode`, and `doneness_mode` fields whose values match the prose mode table
+- **THEN** its leading YAML front-matter SHALL contain `scale`, `full_rigor`, `verification_mode`, `code_review_mode`, `loop_max_iterations`, `validation_source_mode`, and `doneness_mode` fields whose values match the prose mode table, and SHALL NOT contain a `worktree_mode` key
 
 #### Scenario: Front-matter is the sole machine source
 - **WHEN** opsx gate reads review.md
@@ -106,13 +106,13 @@ The `review.md` artifact SHALL declare a controlled-vocabulary mode switchboard 
 - **WHEN** `review.md` declares `Delegation Mode: subagent-required`
 - **THEN** the skill SHALL fail with an actionable error if no subagent-dispatch adapter is registered, rather than silently executing inline
 
-#### Scenario: Worktree Mode default derives by tier
-- **WHEN** `review.md` is authored without an explicit `Worktree Mode` value
-- **THEN** the effective `Worktree Mode` SHALL be `same-tree` for Scale XS and S and `worktree-required` for Scale M, AND an explicit `Worktree Mode` value SHALL always override the tier default
+#### Scenario: Worktree isolation is unconditional
+- **WHEN** apply begins for ANY change at ANY Scale
+- **THEN** every implementation task SHALL execute inside an isolated `git worktree` on branch `opsx/<change>` (created via `opsx worktree ensure`), the main agent (not the subagent) SHALL own writeback of artifact files to the change directory, AND file-contract diffs SHALL use the single immutable `Diff Base SHA` (`git diff --name-only <Diff Base SHA>..HEAD`) recorded by the Worktree Lifecycle Ownership requirement
 
-#### Scenario: Worktree Mode forces isolation
-- **WHEN** `review.md` declares `Worktree Mode: worktree-required`
-- **THEN** every implementation task SHALL execute inside an isolated `git worktree`, AND the main agent (not the subagent) SHALL own writeback of artifact files to the change directory, AND file-contract diffs SHALL use the single immutable `Diff Base SHA` (`git diff --name-only <Diff Base SHA>..HEAD`) recorded by the Worktree Lifecycle Ownership requirement, so per-task commits stay in the diff; there is no separate apply-start `Worktree Base SHA`
+#### Scenario: Declared worktree_mode key is rejected
+- **IF** review.md front-matter declares a `worktree_mode` key with any value
+- **THEN** the gate SHALL fail closed naming the key's removal and the delete-the-key remedy, never honoring or silently ignoring the key
 
 #### Scenario: Code Review Mode declared
 - **WHEN** `review.md` is authored
@@ -124,10 +124,10 @@ The `review.md` artifact SHALL declare a controlled-vocabulary mode switchboard 
 
 ### Requirement: Apply-time writeback and workspace discipline
 
-The `apply.instruction` SHALL enforce three disciplines: pre-flight commit of the change directory before any worktree is created; main-agent-as-writeback-owner for all delegated work; output-redirection that forbids writes to scattered or parallel doc trees (in particular `docs/superpowers/`).
+The `apply.instruction` SHALL enforce three disciplines: pre-flight commit of the change directory before the worktree is created; main-agent-as-writeback-owner for all delegated work; output-redirection that forbids writes to scattered or parallel doc trees (in particular `docs/superpowers/`).
 
 #### Scenario: Pre-flight commit before worktree
-- **WHEN** apply begins and `Worktree Mode` is `worktree-eligible` or `worktree-required`
+- **WHEN** apply begins for any change
 - **THEN** the apply step SHALL run `git status --porcelain openspec/changes/<name>/`, and if any artifact files are unstaged or uncommitted, SHALL stage and commit only that subtree on the integration branch before creating the worktree
 
 #### Scenario: Subagent does not own artifact writes
@@ -152,7 +152,7 @@ The schema's artifacts and apply rules SHALL remain valid and executable when Su
 
 ### Requirement: Per-task file contracts
 
-Each task in `tasks.md` SHALL optionally declare `files_allowed`, `files_forbidden`, `allow_new_files`, and `intent` scope contracts. The contract field format SHALL be strict (sub-bullets under the task checkbox at fixed indent; minimatch globs one per line under list-type fields). When a task is implemented in a worktree or by a subagent, the wrap-up step SHALL diff against these contracts using the immutable `Diff Base SHA` recorded at worktree creation (or, in same-tree mode, the same-tree `Diff Base SHA`) and report violations.
+Each task in `tasks.md` SHALL optionally declare `files_allowed`, `files_forbidden`, `allow_new_files`, and `intent` scope contracts. The contract field format SHALL be strict (sub-bullets under the task checkbox at fixed indent; minimatch globs one per line under list-type fields). When a task is implemented in the worktree or by a subagent, the wrap-up step SHALL diff against these contracts using the immutable `Diff Base SHA` recorded at worktree creation and report violations.
 
 #### Scenario: Allowed-glob enforcement with stable diff base
 - **WHEN** a task declares `files_allowed: [src/foo/**.ts, tests/foo/**.ts]` and the diff `git diff --name-only <Diff Base SHA>..HEAD` shows a touched file at `src/bar/baz.ts`
@@ -178,10 +178,10 @@ Each task in `tasks.md` SHALL optionally declare `files_allowed`, `files_forbidd
 
 ### Requirement: Worktree Lifecycle Ownership
 
-THE schema's apply and archive instructions SHALL own the full worktree lifecycle for a change: creating an isolated worktree on a branch named `opsx/<change>` before implementation, capturing the base SHA, and merging then removing the worktree at archive only after the gate is green.
+THE schema's apply and archive instructions SHALL own the full worktree lifecycle for EVERY change at every Scale — worktree execution is the only execution model: creating an isolated worktree on a branch named `opsx/<change>` before implementation, capturing the base SHA, and merging then removing the worktree at archive only after the gate is green.
 
 #### Scenario: Worktree created before implementation
-- **WHEN** apply begins for a change whose effective Worktree Mode is worktree-required
+- **WHEN** apply begins for any change at any Scale
 - **THEN** a worktree on branch `opsx/<change>` SHALL exist before any implementation task runs, and its base SHA SHALL be recorded in review.md
 
 #### Scenario: Diff base is immutable per implementation branch
@@ -195,30 +195,21 @@ THE schema's apply and archive instructions SHALL own the full worktree lifecycl
 
 #### Scenario: Worktree creation failure aborts apply
 - **IF** `git worktree add` fails for any reason (path conflict, detached HEAD, insufficient space, permission)
-- **THEN** apply SHALL abort with an actionable error and SHALL NOT proceed to any implementation task
+- **THEN** apply SHALL abort with an actionable error and SHALL NOT proceed to any implementation task — there is no same-tree fallback
 
 #### Scenario: Budget exhaustion preserves the worktree
 - **WHILE** a worktree exists
 - **IF** the loop stops because its iteration budget is exhausted
 - **THEN** the worktree and its `opsx/<change>` branch SHALL be preserved for inspection and SHALL NOT be removed
 
-#### Scenario: Same-tree records a Diff Base SHA too
-- **WHILE** Worktree Mode is the explicit same-tree override (no `opsx/<change>` worktree)
-- **WHEN** apply begins
-- **THEN** apply SHALL record `Diff Base SHA` as the current repo HEAD before the first implementation task, leave `Worktree Path` empty, and opsx gate's freshness locator SHALL resolve the implementation HEAD as the current repo HEAD (no `opsx/<change>` branch required)
-
 #### Scenario: Worktree merged and removed at archive
-- **WHEN** archive proceeds for a change implemented in a worktree
+- **WHEN** archive proceeds for a change
 - **THEN** the `opsx/<change>` branch SHALL be landed onto the named integration branch using the configured strategy and the worktree SHALL be removed, and this SHALL occur only after opsx gate reports green
 
 #### Scenario: Post-green merge conflict aborts archive safely
 - **WHILE** opsx gate is green
 - **IF** landing the branch fails because the integration branch advanced and the merge conflicts
 - **THEN** archive SHALL abort with an actionable error, the worktree and `opsx/<change>` branch SHALL be preserved, and the change SHALL NOT be moved to the archive directory
-
-#### Scenario: Cleanup is safe when no worktree exists
-- **IF** archive runs for a change that was implemented same-tree by explicit override
-- **THEN** the merge-and-remove step SHALL be skipped without error
 
 ### Requirement: Validation Gates Manifest Reference
 
@@ -403,4 +394,16 @@ THE review.md template's `**Integration Branch:**` locator field SHALL ship the 
 - **WHILE** apply captures the Diff Base + Worktree locator in a repository whose integration branch resolves to `trunk`
 - **WHEN** the `**Integration Branch:**` field is written
 - **THEN** it SHALL record `trunk` (the resolver's result), and downstream integration-branch-dependent checks SHALL read that committed value first
+
+### Requirement: Design Fidelity Artifact Template
+
+THE schema SHALL ship a `templates/design-fidelity.md` template for the sealed fidelity verdict: a per-AC verdict table (AC reference, `entailed | not-entailed | not-covered`, evidence), an own-line `**Fidelity:**` overall field (`delivered | violated`), judge-provenance and `**Attested HEAD:**` fields, digest-binding fields for intent.md, design.md, and every delta spec file — sha256 each, one own-line field per file in the exact grammar `**Digest sha256 (<change-dir-relative path>):** <64-hex>` (e.g. `**Digest sha256 (specs/opsx-gate-enforcement/spec.md):** <64-hex>`), so the deterministic gate parser and the template never diverge on field naming, an optional human-waiver field written only by a human ruling at the decision-audit landing, an `Advisory Findings` section recording ambiguity-routed clarify-class findings per AC (advisory outcomes never occupy the three-value verdict column and never affect the gate-read `Fidelity` field), and template comments documenting the bounded judge contract and the full-sweep re-judge rule. Gate-read fields SHALL be own-line `**Field:** value` form with multi-line-only HTML comments (single-line comments break the comment-stripper).
+
+#### Scenario: Template ships the sealed-verdict contract
+- **WHEN** the shipped design-fidelity.md template is inspected
+- **THEN** it SHALL carry the per-AC verdict table, the `Fidelity` field, judge provenance, `Attested HEAD`, per-file digest-binding fields, the `Advisory Findings` section, and the documented bounded contract + full-sweep re-judge rule
+
+#### Scenario: Judges fill the shipped template
+- **WHEN** a fidelity judgment is sealed
+- **THEN** the artifact SHALL be produced by filling the shipped template (never free-written), mirroring the verdict-template discipline of code-review.md and doneness.md
 
