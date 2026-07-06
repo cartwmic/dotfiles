@@ -87,3 +87,26 @@ main > master).
 ## Scope Expansions
 
 <!-- Evidence-gated widenings (opsx-adversarial-review). -->
+
+## Fidelity Round Ledger
+
+<!-- Append-only; orchestrator-sealed. A design-fidelity.md re-seal never
+removes rows. Valve counts consecutive `violated` rows not separated by a
+`waived` or `delivered` row. -->
+
+| Round | Fidelity | Per-judge verdicts | Attested HEAD |
+|---|---|---|---|
+| 1 | violated | opus: violated; sonnet: violated | 116c611f0e6e860ed7e0afe92023db377587c1ed |
+| 2 | delivered | opus: delivered; sonnet: delivered | 6947eca6d2c6581e09aa6f8f9989ad370c65843f |
+| 3 | violated | opus: delivered; sonnet: violated (worst-of) | 4367c4771a884307317aa4acb750ccca02d187d4 |
+| 4 | delivered | opus: delivered; sonnet: delivered | 00e50f7ed48fcf29d99fbefd053c6825003cd25b |
+| 5 | violated | opus: delivered; sonnet: violated (worst-of) | 548e735aa63f0f831b7051a517a79a97e9cd2047 |
+| 6 | delivered | opus: delivered; sonnet: delivered | 3ed7909c3f15d862c6c260b92f73f91c21da6be1 |
+| 7 | violated | opus: delivered; sonnet: violated (worst-of) | 185b613be2c932d00996350ddcba017b4da601b8 |
+| 8 | violated | opus: delivered; sonnet: violated (worst-of) | 90e207f073f374f3b653425da4c8b38bf46e67f5 |
+| 9 | delivered | opus: delivered; sonnet: delivered | 2ba9951b0808320e34797bf108e2ef1d43408e69 |
+
+Note (dogfood): rows 7–8 are two consecutive `violated` — the valve threshold.
+The valve mechanism ships WITH this change (not yet live); the R8 design/delta
+fixes plus the R9 full-sweep `delivered` resolved the streak before any
+landing routing. Recorded for honesty, not as a waiver.
