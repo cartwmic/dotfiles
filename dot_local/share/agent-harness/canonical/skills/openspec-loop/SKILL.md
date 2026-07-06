@@ -28,11 +28,42 @@ doneness judge). Plain Scale M folds clarify into the proposal, runs analyze
 deterministic-only, and rides doneness on the code-review dispatch (below). The
 2-model blind adversarial code review is gating-required at every tier.
 
+## Worktree-always execution & writeback discipline
+
+Worktree execution is the ONLY execution model at EVERY Scale, XS included. Apply
+runs ensure → locator capture → implement → review → merge → cleanup in an isolated
+`opsx/<change>` worktree; there is no same-tree execution path, no tier that opts out,
+and no `worktree_mode` switchboard key (a `worktree_mode` key in review.md
+front-matter is a fail-closed gate red naming the delete-the-key remedy). Implement in
+the worktree; gate with `--worktree <path>`.
+
+**Writeback owner split (keeps sealed verdicts fresh).** Sealed verdicts bind to the
+`opsx/<change>` worktree branch HEAD, so land each artifact on the tree that owns it:
+- **Worktree branch:** task checkboxes in `tasks.md` (the gate reads tasks.md
+  worktree-side) and the implementation diff.
+- **Integration checkout:** `loop_hold`/`loop_hold_reason`, follow-ups.md routing,
+  Execution Notes, and every ledger (Round Ledger, `Fidelity Round Ledger`) —
+  orchestrator bookkeeping per the writeback-owner discipline, so it never moves the
+  verdict-bound worktree HEAD.
+- **Backstop:** a bookkeeping commit MISPLACED onto the `opsx/<change>` worktree
+  branch moves the verdict-bound HEAD and therefore STALES the sealed verdicts via the
+  existing range-freshness check — a loud fail-closed gate red whose remedy is
+  re-review. Misplacement is always detected, never silently green.
+
+**Judged inputs committed before any fidelity dispatch.** intent.md, design.md, and
+`specs/**` edits land COMMITTED on the integration checkout BEFORE any design-fidelity
+dispatch — the fidelity digests bind committed integration-checkout content, so an
+uncommitted judged input is invisible to digest and judge accountability. Editing a
+judged input on the worktree branch is a writeback-owner-discipline violation.
+
 ## The cycle
 
 Each turn:
 
-1. Run `opsx gate <change>` (with `--worktree <path>` when worktree-required).
+1. Run `opsx gate <change> --worktree <path>` (worktree execution is the ONLY model
+   at every Scale including XS — apply always ran ensure → locator capture → implement
+   → review → merge → cleanup in the `opsx/<change>` worktree, so a worktree path
+   always exists).
    - Exit 0 → **stop**; report the change ready to archive.
    - Non-zero → read the report. Findings are emitted in lifecycle dependency
      order; take the **earliest blocking** `GATE-FAIL` line.
@@ -79,6 +110,17 @@ Base SHA, reviewed range, `review_mode`). For Constitution-IX changes
 and archive treat it as failed.
 (opsx-skill-integration.openspec-loop-orchestrator-skill-exists)
 
+**Findings file is the sole verdict source.** For EVERY reviewer/judge dispatch (code
+review, doneness, design fidelity, judged clarify/analyze), derive the verdict, the
+findings, AND the attestation EXCLUSIVELY from the subagent's findings OUTPUT FILE
+(the dispatch's `output:` file). The conversational reply is NEVER a verdict input —
+no matter how confidently it claims a pass. A findings file that is ABSENT, or that
+lacks the required verdict line/attestation fields, consolidates as INVALID (not
+fail): excluded from gating, the round ledger, and the round budget; incident
+recorded; re-dispatch or repair the reviewer set. Never infer a verdict from a
+partial file or from the reply.
+(opsx-adversarial-review.findings-file-sole-verdict-source)
+
 ### Verdict contract (embed in every gating reviewer prompt)
 
 A gating reviewer may FAIL only for (a) a **frozen-baseline violation** — intent.md,
@@ -115,8 +157,17 @@ HEAD: <verbatim git rev-parse HEAD — full 40-hex>` and `Attested Path: <verbat
 git rev-parse --show-toplevel>` from its own execution context (always pin the
 dispatch `cwd` to the reviewed tree). Count a verdict ONLY when the attested HEAD
 literal equals the dispatched range head's full SHA AND the attested path
-realpath-equals the dispatched tree root (same-tree: the integration checkout —
-the HEAD check carries the discrimination). Missing/non-40-hex/mismatched ⇒ the
+realpath-equals the dispatched tree root. The dispatched tree is PURPOSE-KEYED, never
+keyed to whether an implementation worktree happens to exist: post-implementation
+dispatches (code review, doneness) attest the `opsx/<change>` WORKTREE — the path
+check discriminates it from the integration checkout, and an integration-checkout
+attestation is INVALID for them; proposal-phase judgments (clarify, analyze, design
+fidelity) attest the INTEGRATION CHECKOUT ALWAYS — including a fidelity re-judge
+dispatched AFTER the implementation worktree exists (these judgments never receive
+their own worktree; their judged inputs live in the integration checkout), the
+attested path equals the canonicalized integration-checkout root and the attested
+HEAD equals the integration-checkout HEAD at dispatch (HEAD carries the
+discrimination). Missing/non-40-hex/mismatched ⇒ the
 verdict is **INVALID — not fail**: it never satisfies multi-model gating, never
 enters the ledger as a reviewer verdict, never counts toward `review_max_rounds`;
 record the incident and re-dispatch. TWO consecutive all-invalid attempts of the
@@ -126,17 +177,27 @@ code-review.md (and doneness.md for the full_rigor independent judge) only when
 every counted reviewer attested the same value.
 (opsx-adversarial-review.reviewer-tree-identity-attestation)
 
-**Read-only round window (snapshot/void/restore).** Immediately before
-dispatching a round's reviewers, capture the reviewed tree's `git rev-parse HEAD`
-+ `git status --porcelain=v1`; capture identically after the last reviewer
-returns. Compare with the change's own `openspec/changes/<change>/` paths
-excluded (orchestrator-sealed bookkeeping — the ONLY in-window writes you may
-make; write nothing else to the reviewed tree while the window is open). Any
-other delta ⇒ mutation is unattributable among concurrent reviewers: ALL the
-round's verdicts are INVALID; restore surgically — `git restore` only tracked
-paths whose status changed, delete only untracked paths introduced in-window,
-NEVER blanket `git clean`, never pre-existing untracked/ignored state — and
-record the incident in the ledger/Execution Notes.
+**Read-only round window (dual-tree snapshot/void/restore).** Immediately before
+dispatching a round's reviewers/judges and identically after the last returns,
+capture `git rev-parse HEAD` + `git status --porcelain=v1` of the REVIEWED WORKTREE
+AND (when it is a different tree — the worktree-always norm) ALSO the INTEGRATION
+CHECKOUT. The ONLY excluded paths are the dispatched change's own bookkeeping files —
+`openspec/changes/<change>/review.md` and `openspec/changes/<change>/follow-ups.md`
+(the only in-window writes permitted); the change's JUDGED INPUTS and remaining
+artifacts (intent.md, design.md, `specs/**`, proposal.md, clarify.md, tasks.md,
+plan.md, verdict artifacts) are NEVER excluded, so a judge mutating the very files it
+judges voids the round. For the integration checkout, an intervening commit or
+porcelain delta does NOT void WHEN it exclusively touches OTHER changes'
+`openspec/changes/<other-change>/` paths (sibling concurrent authoring — committed OR
+uncommitted) OR the dispatched change's own bookkeeping files (review.md,
+follow-ups.md — committed OR uncommitted); anything else (code, specs, templates, the
+dispatched change's judged inputs) VOIDS. A voided round ⇒ ALL its verdicts INVALID;
+restore surgically and SYMMETRICALLY — `git restore` only tracked paths whose status
+changed across the window, delete only untracked paths introduced in-window, with the
+restore AND delete sets EXCLUDING other changes' `openspec/changes/<other-change>/`
+paths (a sibling's concurrent authoring is never restored or deleted) and the
+dispatched change's own excluded paths; NEVER blanket `git clean`, never pre-existing
+untracked/ignored state — and record the incident in the ledger/Execution Notes.
 (opsx-adversarial-review.read-only-reviewer-dispatch)
 
 **Migration sweep before round 1.** WHERE the change declares

@@ -14,7 +14,6 @@ Verification Mode      = <inline-only | retained-recommended | retained-required
 Debug Mode             = <standard | systematic-debugging>
 Review Status          = <not-requested | requested | findings-received | resolved>
 Delegation Mode        = <single-agent | subagent-eligible | subagent-required>
-Worktree Mode          = <same-tree | worktree-eligible | worktree-required>
 Code Review Mode       = <none | advisory | gating-required>
 Loop Max Iterations    = <positive integer or unset>
 Validation Source Mode = <required | waived>
@@ -28,7 +27,7 @@ If `review.md` is missing, STOP and author it first (the gate hard-fails on a
 missing/unparseable Scale — there is no implicit-XS fallback; the README
 default Scale for a new review.md is S).
 
-## Pre-flight commit (when Worktree Mode != same-tree)
+## Pre-flight commit (unconditional — worktree is the only model)
 
 ```bash
 cd <project root>
@@ -48,7 +47,7 @@ Then create the worktree on branch `opsx/<name>` per the pi-subagents convention
 
 ## Worktree lifecycle + immutable Diff Base SHA
 
-Worktree Mode default is DERIVED by tier when absent from front-matter: XS/S ⇒ `same-tree`, M ⇒ `worktree-required` (the loop's blast-radius sandbox). An explicit `Worktree Mode` value always wins over the tier default.
+Worktree execution is the ONLY model at EVERY Scale including XS — apply ALWAYS creates/reuses the `opsx/<name>` worktree via `opsx worktree ensure` before any implementation task, runs ensure → locator capture → implement → review → merge → cleanup, and there is no same-tree path, no tier derivation, and no `worktree_mode` switchboard key (a `worktree_mode` key in review.md front-matter is a fail-closed gate red naming the delete-the-key remedy).
 
 **Creation/reuse is runtime-owned**: call the deterministic lifecycle command instead of hand-rolling git worktree commands — it implements the exact spec semantics (create with immutable merge-base, reuse with base-ancestry check, abort on failure):
 
@@ -68,8 +67,6 @@ opsx worktree ensure <name> [--integration-branch <b>]
 **On creation failure** (path conflict / detached HEAD / no space / permission): the command exits 1 with an actionable error — ABORT; do NOT proceed to any implementation task.
 
 **Abandoned change**: `opsx clean <name>` removes the worktree + `opsx/<name>` branch (refuses a dirty worktree without `--force` — unsealed verdict files live uncommitted there).
-
-**Same-tree override**: record `Diff Base SHA` = pre-apply HEAD before the first task; leave `Worktree Path` empty.
 
 ALL file-contract diffs use the immutable `Diff Base SHA`, NOT `HEAD`, so per-task commits stay in the diff:
 
@@ -154,9 +151,26 @@ For each task `- [ ] X.Y <description>` in `tasks.md`:
 
    Report any `scope_violation` findings. Block task completion until resolved (or user amends the contract).
 
-7. **Mark task complete** in `tasks.md`: change `- [ ]` to `- [x]`.
+7. **Mark task complete** in `tasks.md`: change `- [ ]` to `- [x]`. Task checkboxes
+   land on the `opsx/<name>` WORKTREE branch (the gate reads tasks.md worktree-side),
+   alongside the implementation diff.
 
-8. **Optional: append Execution Notes** to `review.md` if a non-trivial decision was made during the task.
+8. **Optional: append Execution Notes** to `review.md` if a non-trivial decision was
+   made during the task.
+
+**Writeback-owner discipline (keeps sealed verdicts fresh).** Sealed verdicts bind to
+the worktree branch HEAD, so split writeback by owner:
+- **Worktree branch:** tasks.md checkboxes and the implementation diff.
+- **Integration checkout:** `loop_hold`/`loop_hold_reason`, follow-ups.md routing,
+  Execution Notes, and every ledger (Round Ledger, `Fidelity Round Ledger`) —
+  orchestrator bookkeeping, so it never moves the verdict-bound worktree HEAD.
+- **Backstop:** a bookkeeping commit MISPLACED onto the `opsx/<name>` worktree branch
+  moves the verdict-bound HEAD and STALES sealed verdicts via range-freshness — a loud
+  fail-closed gate red, remedy re-review; never silently green.
+- **Judged inputs committed first:** intent.md/design.md/`specs/**` edits land COMMITTED
+  on the integration checkout BEFORE any fidelity dispatch (digests bind committed
+  integration-checkout content); editing a judged input on the worktree branch is a
+  writeback-owner-discipline violation.
 
 ## Post-apply: produce verify.md (Verification Mode = retained-required or retained-recommended)
 
@@ -202,11 +216,12 @@ Write `verify.md`. If Completion Decision = red AND Verification Mode = retained
 
 WHEN the pre-review checks are green (tasks complete, structural checks pass, required validation commands pass, and any retained-required verify is green) — NOT keyed to verify specifically, so gating-required + advisory verify cannot deadlock — produce `code-review.md` from `templates/code-review.md`.
 
+- **Findings file is the sole verdict source (opsx-adversarial-review.findings-file-sole-verdict-source)**: derive the verdict, findings, AND attestation EXCLUSIVELY from the subagent's findings OUTPUT FILE; the conversational reply is NEVER a verdict input. An absent findings file, or one lacking the verdict line/attestation fields, consolidates as INVALID (not fail) — excluded from gating, the ledger, and the round budget; record the incident and re-dispatch. Never infer a verdict from a partial file or the reply.
 - **Authored by a blind review SUBAGENT** (capability hook `subagent-dispatch` / `adversarial-review-postimpl`), NEVER self-authored by the orchestrator. The subagent reviews the diff `<Diff Base SHA>..<implementation HEAD>` against the baseline: `intent.md` + proposal + specs + design + plan + tasks status.
 - **Reviewer models:** dispatch one blind reviewer per configured `review` model (`OPSX_REVIEW_MODELS` / `opsx models review --change <name>`, newline/comma-delimited), each passed verbatim as the subagent `model:`. Adversarial-multimodel requires ≥ 2 distinct models; unset → the skill's default review set.
 - The subagent stamps: `Verdict` (pass|fail), `review_mode` (adversarial-multimodel | disclosure-consensus | degraded-single-model), `reviewer-provenance`, `Diff Base SHA`, and `Reviewed Range`.
-- **Tree-identity attestation (opsx-adversarial-review.reviewer-tree-identity-attestation)**: pin every dispatch `cwd` to the reviewed tree; the prompt requires the reviewer's FIRST findings-output lines to be `Attested HEAD: <verbatim git rev-parse HEAD — full 40-hex>` and `Attested Path: <verbatim git rev-parse --show-toplevel>`. Count a verdict only when the attested HEAD literal equals the dispatched range head's full SHA and the attested path realpath-equals the dispatched tree root (same-tree: the integration checkout; the HEAD check discriminates). Missing/non-40-hex/mismatched ⇒ verdict **INVALID, not fail** — excluded from gating, the ledger, and `review_max_rounds`; record + re-dispatch; TWO consecutive all-invalid attempts of a round ⇒ decision-audit landing with a dispatch-integrity error. Seal `**Attested HEAD:**` (gate-read, fail-closed under gating-required) only when every counted reviewer attested the same value; under full_rigor the independent doneness judge attests likewise into doneness.md.
-- **Read-only round window (opsx-adversarial-review.read-only-reviewer-dispatch)**: snapshot the reviewed tree (`git rev-parse HEAD` + `git status --porcelain=v1`) immediately before the round's first dispatch and after the last return; compare with `openspec/changes/<change>/` paths excluded (orchestrator-sealed bookkeeping — the only permitted in-window writes). Any other delta ⇒ ALL round verdicts INVALID; restore surgically (`git restore` only status-changed tracked paths; delete only untracked paths introduced in-window; never blanket `git clean`, never pre-existing untracked/ignored state); record the incident.
+- **Tree-identity attestation (opsx-adversarial-review.reviewer-tree-identity-attestation)**: pin every dispatch `cwd` to the reviewed tree; the prompt requires the reviewer's FIRST findings-output lines to be `Attested HEAD: <verbatim git rev-parse HEAD — full 40-hex>` and `Attested Path: <verbatim git rev-parse --show-toplevel>`. Count a verdict only when the attested HEAD literal equals the dispatched range head's full SHA and the attested path realpath-equals the dispatched tree root. Code review and doneness are POST-IMPLEMENTATION dispatches: the dispatched tree is the `opsx/<name>` WORKTREE (worktree execution is the only implementation model, so the path check always discriminates it from the integration checkout) — an integration-checkout attestation is INVALID for them. (Proposal-phase judgments — clarify, analyze, design fidelity — use the purpose-keyed carve-out and attest the integration checkout always; those never dispatch from here.) Missing/non-40-hex/mismatched ⇒ verdict **INVALID, not fail** — excluded from gating, the ledger, and `review_max_rounds`; record + re-dispatch; TWO consecutive all-invalid attempts of a round ⇒ decision-audit landing with a dispatch-integrity error. Seal `**Attested HEAD:**` (gate-read, fail-closed under gating-required) only when every counted reviewer attested the same value; under full_rigor the independent doneness judge attests likewise into doneness.md.
+- **Read-only round window — DUAL-TREE (opsx-adversarial-review.read-only-reviewer-dispatch)**: snapshot (`git rev-parse HEAD` + `git status --porcelain=v1`) the REVIEWED WORKTREE AND (worktree-always norm — a different tree) the INTEGRATION CHECKOUT, immediately before the round's first dispatch and after the last return. The ONLY excluded paths are the dispatched change's own bookkeeping files — `openspec/changes/<change>/review.md` and `openspec/changes/<change>/follow-ups.md` (the only permitted in-window writes); the change's judged inputs and other artifacts are NEVER excluded. For the integration checkout, an intervening commit or porcelain delta does NOT void WHEN it exclusively touches OTHER changes' `openspec/changes/<other-change>/` paths (sibling authoring — committed OR uncommitted) OR the dispatched change's own bookkeeping files (committed OR uncommitted); anything else voids. Any voiding delta ⇒ ALL round verdicts INVALID; restore surgically and SYMMETRICALLY (`git restore` only status-changed tracked paths; delete only untracked paths introduced in-window; restore/delete sets EXCLUDE other changes' `openspec/changes/<other-change>/` paths and the dispatched change's excluded paths; never blanket `git clean`, never pre-existing untracked/ignored state); record the incident.
 - **Constitution IX**: when the change edits an existing skill, the review MUST be multi-model — `adversarial-multimodel`, or `disclosure-consensus` when the disclosure round consolidated ≥2 distinct reviewer models; a `degraded-single-model` verdict does NOT satisfy the gate.
 - Code Review Mode `none` → skip production. `advisory` → produce, non-blocking. `gating-required` → archive blocks unless Verdict = pass.
 - **Convergence discipline (opsx-adversarial-review)** — gating rounds converge or land:
