@@ -40,6 +40,19 @@ fail-closed default stands until a change takes this up.
 Task 1.3 left the live-disk readers defined (documentation value, low risk).
 A cleanup change may remove or fold them once nothing else references them.
 
+## F6 — Forward digest grep lacks comment-strip symmetry (code-review R1, opus F3, P3)
+
+The forward `grep -F "**Digest sha256 (…)"` match reads raw committed content
+while the reverse set-equality scan strips `<!-- -->` fences. A commented
+digest line with a correct hash satisfies the forward leg only. Loosens only
+(cannot forge without the true hash — inside the sealer trust boundary);
+align both scans on comment stripping for symmetry.
+
+## F7 — `tests/opsx-gate/test_author_marker.sh` legacy fixture writes the abolished key (code-review R1, sonnet method note, P3)
+
+Still passes (assertions grep the author-marker check id, not exit code), but
+the fixture should drop `worktree_mode: same-tree` at next touch.
+
 ## F5 — `sha256_stdin` / `sha256_file` helper duplication
 
 Task 1.1 added a stdin variant local to the cheap phase; the shipped
