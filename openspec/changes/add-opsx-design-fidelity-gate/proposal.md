@@ -10,8 +10,10 @@ an owner escalation to root-cause. Three residual dispatch-integrity defects
 from the same evidence base remain unfixed (reply-trusted verdicts, integration-
 checkout reviewer writes, post-seal bookkeeping staling), and `worktree_mode`
 same-tree execution is the root enabler of the staling family while blocking
-parallel development. Constitution: fail-closed gate lineage (ADR-0007
-model-free gate; doneness-judge precedent for sealed judged verdicts).
+parallel development. Constitution: fail-closed gate lineage (ADR-0005
+model-free gate-exit-code spine; doneness-judge precedent for sealed judged
+verdicts; intent.md's ADR-0007 citation is a frozen-document miscite — noted,
+not edited).
 
 ## What Changes
 
