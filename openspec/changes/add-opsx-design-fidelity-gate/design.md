@@ -79,7 +79,15 @@ worktree. The same main-root tree of record applies to READING
 design-fidelity.md and its recorded fields (analyze R2, O-F1): fields and hash
 inputs come from one tree, so a post-worktree re-seal on the integration
 checkout is evaluated against itself — a stale worktree copy can neither pass
-nor permanently redden the check.
+nor permanently redden the check. Named invariant (analyze R3 advisory): the
+integration branch is checked out in the git MAIN worktree — `opsx_repo_main_root`
+already encodes this, and "integration checkout" and "main-worktree root" are
+synonyms under it. Digest field grammar is the literal pinned by the template
+requirement: `**Digest sha256 (<change-dir-relative path>):** <64-hex>`.
+Trust boundary (analyze R3, S-A4, accepted): the gate trusts the sealed
+`Fidelity` summary field and does not re-scan the per-AC table — identical to
+the doneness.md summary-field precedent; correctness of consolidation is
+vested in the orchestrator sealing procedure (D5), not the model-free gate.
 
 **Alternatives considered:**
 - **Fidelity section inside analyze.md**: couples freshness to analyze's
@@ -105,7 +113,15 @@ sealed to the separate design-fidelity.md. Plain M (and design-bearing S/XS) —
 one narrow post-design blind mini-dispatch produces the same sealed artifact.
 Judge contract mirrors the baseline-bounded reviewer contract: block only on
 clear non-entailment of the AC as written; ambiguity routes an advisory
-clarify-class finding. Attestation: fidelity (like clarify/analyze) is
+clarify-class finding. Judge model resolution follows the existing role-model machinery via the
+`review` role (`opsx models review`) — no dedicated `fidelity` role: the
+fidelity judge is review-class blind judgment, the review-role pool is exactly
+the blind-judge pool, and a new role would add an opsx-cli surface + config
+key for zero benefit (rejected alternative; intent left this as an explicit
+design decision). Ambiguity-routed advisory clarify-class findings are
+recorded in the sealed artifact's `Advisory Findings` section — never in the
+three-value verdict column, never affecting the gate-read `Fidelity` field.
+Attestation: fidelity (like clarify/analyze) is
 dispatched **before worktree creation**, so the judge attests the integration
 checkout — path check satisfied by equality with the canonicalized
 integration-checkout root, `Attested HEAD` = integration-checkout HEAD at
@@ -229,8 +245,13 @@ intervening commit exclusively touches other changes'
 path-scoped bookkeeping commits on the shared integration branch, and voiding
 on them would reintroduce review-layer tree contention and unboundedly stall
 parallel loops; the check is deterministic (`git diff --name-only pre..post`
-+ path-prefix test). Any other committed path, or any porcelain delta outside
-the dispatched change's own paths, voids. Voided round ⇒ all round verdicts
++ path-prefix test). The same class covers uncommitted sibling authoring
+(analyze R3, O-A2): porcelain deltas confined to OTHER changes'
+`openspec/changes/<other>/` paths never void — the pre-worktree phase shares
+one working tree across all changes, and a concurrent change mid-authoring its
+own artifacts is legitimate concurrency, not reviewer mutation. Any other
+committed path, or any porcelain delta outside every change directory (or
+inside the dispatched change's inputs), voids. Voided round ⇒ all round verdicts
 INVALID, surgical restore of working-tree deltas only (committed history never
 rewritten) (`git restore` only status-changed tracked paths;
 delete only window-introduced untracked paths; never blanket `git clean`),

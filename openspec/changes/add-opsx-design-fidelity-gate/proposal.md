@@ -69,9 +69,11 @@ model-free gate; doneness-judge precedent for sealed judged verdicts).
   `tests/opsx-review-convergence/test_review_convergence_surfaces.sh`
   (surface pins).
 - Specs — deltas on `opsx-gate-enforcement`, `opsx-adversarial-review`,
-  `opsx-workflow-schema`, `opsx-skill-integration` (opsx-cli untouched: worktree
-  lifecycle commands, locator emit, and resolver are reused as-is; the removal
-  surface is mode/derivation/exemptions, which live in the other four).
+  `opsx-workflow-schema`, `opsx-skill-integration`, `opsx-loop`, and `opsx-cli`
+  (worktree lifecycle commands, locator emit, and resolver are reused as-is;
+  opsx-cli's sweep-command spec carried an "integration checkout otherwise"
+  same-tree branch — analyze R3 — so its Migration Completeness Sweep Command
+  is MODIFIED to worktree-only resolution).
   Touched requirements (clarify C1 + analyze R1/R2 — every surviving same-tree
   surface is in the delta set): gate-enforcement ADDED Design Fidelity Verdict
   Enforcement / Worktree Mandatory Gate Enforcement / Post Seal Bookkeeping
@@ -84,7 +86,9 @@ model-free gate; doneness-judge precedent for sealed judged verdicts).
   Ownership / Per-task file contracts / Apply-time writeback and workspace
   discipline; skill-integration ADDED Worktree Always Skill Discipline,
   MODIFIED Mode-driven openspec-apply-change / Analyze gates tasks generation;
-  opsx-loop MODIFIED Worktree resolution convention fallback.
+  opsx-loop MODIFIED Worktree resolution convention fallback; opsx-cli MODIFIED
+  Migration Completeness Sweep Command; gate-enforcement additionally MODIFIED
+  Manifest Validation Execution (analyze R3 survivor).
 - **BREAKING**: in-flight same-tree changes must be re-homed to worktrees or
   archived before deployment; none active besides this change (verified:
   `openspec list` shows only add-opsx-design-fidelity-gate).
