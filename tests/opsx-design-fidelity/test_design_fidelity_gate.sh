@@ -259,6 +259,59 @@ gate c14; rc=$?
 check "14: a change without design.md passes with no fidelity requirement" 0 $rc
 grep -q 'GATE-FAIL design-fidelity' "$TMP/err" && nok "14: fidelity wrongly demanded without design.md" || ok "14: no design-fidelity line without design.md"
 
+# ---------------------------------------------------------------------------
+# 15. Shipped-surface assertions (convergence-suite idiom): prose-contract
+#     requirements are covered by asserting the shipped surface text.
+#     Canonical AC IDs:
+#       opsx-adversarial-review.design-fidelity-judge
+#       opsx-adversarial-review.findings-file-sole-verdict-source
+#       opsx-adversarial-review.post-apply-code-review-artifact
+#       opsx-gate-enforcement.post-seal-bookkeeping-non-staling
+#       opsx-skill-integration.worktree-always-skill-discipline
+#       opsx-skill-integration.mode-driven-openspec-apply-change
+#       opsx-skill-integration.analyze-gates-tasks-generation
+#       opsx-workflow-schema.design-fidelity-artifact-template
+#       opsx-workflow-schema.mode-switchboard-in-review-md
+#       opsx-workflow-schema.worktree-lifecycle-ownership
+#       opsx-workflow-schema.per-task-file-contracts
+#       opsx-workflow-schema.apply-time-writeback-and-workspace-discipline
+# ---------------------------------------------------------------------------
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+SK="$REPO_ROOT/dot_local/share/agent-harness/canonical/skills"
+SCH="$REPO_ROOT/dot_local/share/openspec/schemas/opsx-superpowers"
+surf() { # surf <label> <file> <fixed-string>
+  if command grep -qF "$3" "$2" 2>/dev/null; then ok "15: $1"; else nok "15: $1 (pattern [$3] missing in $2)"; fi
+}
+# opsx-adversarial-review.design-fidelity-judge
+surf "propose ref hands every judge the canonical AC enumeration" "$SK/openspec-propose/references/opsx-superpowers-mode.md" "canonical AC enumeration"
+surf "propose ref consolidates fail-closed (any-block-wins)" "$SK/openspec-propose/references/opsx-superpowers-mode.md" "any-block"
+# opsx-adversarial-review.findings-file-sole-verdict-source
+surf "loop skill derives verdicts exclusively from findings files" "$SK/openspec-loop/SKILL.md" "sole verdict source"
+# opsx-adversarial-review.post-apply-code-review-artifact
+surf "apply ref sources the code-review diff base from the worktree locator" "$SK/openspec-apply-change/references/opsx-superpowers-mode.md" "Diff Base SHA"
+# opsx-gate-enforcement.post-seal-bookkeeping-non-staling
+surf "gate documents the committed-read orchestration-field split" "$REPO_ROOT/dot_local/bin/executable_opsx" "ARTIFACT SOURCE RESOLUTION"
+# opsx-skill-integration.worktree-always-skill-discipline
+surf "loop skill states worktree-always execution discipline" "$SK/openspec-loop/SKILL.md" "Worktree-always"
+# opsx-skill-integration.mode-driven-openspec-apply-change
+surf "apply ref makes worktree execution unconditional" "$SK/openspec-apply-change/references/opsx-superpowers-mode.md" "unconditional"
+# opsx-skill-integration.analyze-gates-tasks-generation
+surf "propose ref gates tasks generation on the sealed fidelity verdict" "$SK/openspec-propose/references/opsx-superpowers-mode.md" "Fidelity gate"
+# opsx-workflow-schema.design-fidelity-artifact-template
+surf "design-fidelity template ships the Fidelity field" "$SCH/templates/design-fidelity.md" "**Fidelity:**"
+surf "design-fidelity template pins the digest grammar" "$SCH/templates/design-fidelity.md" "Digest sha256 ("
+surf "design-fidelity template carries Advisory Findings" "$SCH/templates/design-fidelity.md" "Advisory Findings"
+# opsx-workflow-schema.mode-switchboard-in-review-md
+surf "review.md template front-matter carries scale" "$SCH/templates/review.md" "scale:"
+if command grep -qiE 'worktree_mode|Worktree Mode' "$SCH/templates/review.md"; then nok "15: review.md template still names the abolished mode"; else ok "15: review.md template is worktree-mode-free"; fi
+# opsx-workflow-schema.worktree-lifecycle-ownership
+surf "schema.yaml states the unconditional worktree lifecycle" "$SCH/schema.yaml" "UNCONDITIONAL"
+# opsx-workflow-schema.per-task-file-contracts
+surf "schema/apply surface keeps per-task file contracts on the immutable base" "$SK/openspec-apply-change/references/opsx-superpowers-mode.md" "files_allowed"
+# opsx-workflow-schema.apply-time-writeback-and-workspace-discipline
+surf "apply ref keeps the unconditional pre-flight commit" "$SK/openspec-apply-change/references/opsx-superpowers-mode.md" "pre-flight"
+surf "apply ref states the writeback-owner discipline" "$SK/openspec-apply-change/references/opsx-superpowers-mode.md" "Writeback-owner"
+
 echo "----"
 echo "passed=$pass failed=$failc"
 [ "$failc" -eq 0 ]
