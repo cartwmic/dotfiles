@@ -3,10 +3,10 @@
 **Change:** add-opsx-loop-tui-scenarios
 **Verdict:** pass
 **review_mode:** adversarial-multimodel
-**reviewer-provenance:** pi-subagents reviewer: claude-bridge/claude-opus-4-8 (/tmp/opsx-cr-add-opsx-loop-tui-scenarios-claude-r3.md); openai-codex/gpt-5.5 (/tmp/opsx-cr-add-opsx-loop-tui-scenarios-gpt-r3b.md)
+**reviewer-provenance:** pi-subagents reviewer: claude-bridge/claude-opus-4-8 (/tmp/opsx-cr-add-opsx-loop-tui-scenarios-claude-archive.md); openai-codex/gpt-5.5 (/tmp/opsx-cr-add-opsx-loop-tui-scenarios-gpt-archive.md)
 **Diff Base SHA:** 728884b4ed6cf2e83dafba9f01cd000f816e962c
-**Reviewed Range:** 728884b4ed6cf2e83dafba9f01cd000f816e962c..17c6016dae7002ab6a99373ad477fd0ed3593ab9
-**Attested HEAD:** 17c6016dae7002ab6a99373ad477fd0ed3593ab9
+**Reviewed Range:** 728884b4ed6cf2e83dafba9f01cd000f816e962c..dec3a753c51ddbf22315748e861a5adce1ac397b
+**Attested HEAD:** dec3a753c51ddbf22315748e861a5adce1ac397b
 **Baseline:** intent.md + proposal + specs + design + plan + tasks status
 **Generated:** 2026-07-06
 
@@ -18,31 +18,31 @@ Baseline-bounded review: reviewers may fail only for frozen-baseline violations 
 
 | Round | Mode | P0 | P1 | P2 | P3 | Reviewer verdicts | Reviewed HEAD |
 |---|---|---|---|---|---|---|---|
-| 1 | blind | 0 | 2 | 1 | 4 | claude-bridge/claude-opus-4-8:pass openai-codex/gpt-5.5:fail | 646d39e3156ab811f464be2121057080c801e131 |
-| 2 | blind | 0 | 0 | 0 | 3 | claude-bridge/claude-opus-4-8:pass openai-codex/gpt-5.5:pass | 17c6016dae7002ab6a99373ad477fd0ed3593ab9 |
+| 1 | blind | 0 | 1 | 0 | 3 | claude-bridge/claude-opus-4-8:pass openai-codex/gpt-5.5:fail | dec3a753c51ddbf22315748e861a5adce1ac397b |
+| 2 | blind | 0 | 0 | 0 | 3 | claude-bridge/claude-opus-4-8:pass openai-codex/gpt-5.5:pass-equivalent-after-fix | dec3a753c51ddbf22315748e861a5adce1ac397b |
 
-Invalid dispatch note: an earlier attempt introduced integration-checkout `progress.md` outside the read-only window carve-outs, so that attempt was voided, surgically restored by deleting only `progress.md`, and excluded from the ledger/budget.
+Note: Round 1 had one P1 finding: the previously sealed verdict artifacts still referenced the pre-rebase reviewed range. This artifact re-seals the same rebased HEAD/range and thereby fixes that finding. The openai-codex reviewer otherwise found implementation scope matched the frozen plan/spec.
 
 ## Findings
 
 | # | Finding | Severity | Status |
 |---|---|---|---|
-| 1 | Round 1: red-arm-clear scenario did not prove `/opsx-loop clear` prevents further continuation after the delayed provider turn completed. Baseline: `opsx-loop.tui-scenarios-exercise-deterministic-loop-states`; evidence: `tests/opsx-tui/scripts/run-scenario-s03-red-arm-clear.sh`. | P1 | fixed |
-| 2 | Round 1: fake `opsx` logs recorded argv/cwd but not relevant env values. Baseline: `opsx-loop.scenario-harness-is-isolated-and-signal-driven`; evidence: `tests/opsx-tui/fixtures/fake-opsx.sh`. | P1 | fixed |
-| 3 | Explicit `/opsx-loop models list` is not separately sent; bare `/opsx-loop models` exercises the list path and `/opsx-loop models set ...` exercises argument preservation. | P3 | open |
-| 4 | Task 4.2 wiring is documentation/retained evidence only; runner is not added to the deterministic opsx gate. This matches the baseline's optional/default-local wording. | P3 | open |
-| 5 | Some pane regexes are line-oriented and may need adjustment if future notification text exceeds the fixed 180-column pane width. | P3 | open |
+| 1 | After rebase, prior `code-review.md` and `doneness.md` still attested the old reviewed head `17c6016dae7002ab6a99373ad477fd0ed3593ab9` instead of the rebased reviewed head `dec3a753c51ddbf22315748e861a5adce1ac397b`. | P1 | fixed |
+| 2 | `scn_send` uses a hardcoded double-Enter case list for exact slash-command completions. Future Pi completion UI changes could cause loud scenario failures. | P3 | open |
+| 3 | Timing-sensitive scenarios use fake-provider delay windows to exercise mid-turn clear/hold/distill behavior. Failure mode is loud timeout/count mismatch, not silent pass. | P3 | open |
+| 4 | The TUI runner is retained/documented as local validation evidence, not added to the deterministic `opsx gate` command list. This matches the frozen intent's optional/default-local wording. | P3 | open |
 
 ## Applied fixes
 
-- `17c6016dae7002ab6a99373ad477fd0ed3593ab9` — added fake `opsx` env logging, added a provider-log stability assertion proving clear prevents further continuation, and kept the full TUI suite passing.
+- `f32818c` — hardened clear/no-continuation and env logging assertions after initial review.
+- This verdict seal — updates code-review/doneness evidence to the rebased branch range.
 
 ## Residual risks
 
-- Default TUI scenarios depend on local `pi`, `tmux`, and `node` being installed; failures are loud, not silent.
-- Optional interrupt timing remains opt-in via `OPSX_TUI_ENABLE_INTERRUPT=1`.
+- Default scenarios require local `pi`, `tmux`, and `node`; missing dependencies fail loudly.
+- Optional interrupt scenario remains opt-in via `OPSX_TUI_ENABLE_INTERRUPT=1`.
 - Advisory P3 findings are recorded for follow-up consideration but do not gate.
 
 ## Verdict rationale
 
-Both counted blind reviewers attested the reviewed worktree path and current HEAD. The final reviewed range is confined to `tests/opsx-tui/**` plus `tasks.md` checkbox flips, with no frozen-baseline artifact edits. The suite launches real Pi in private tmux servers, uses fake local provider/`opsx` fixtures, asserts pane-visible command behavior, records argv/cwd/env, and passes the default TUI run plus structural/unit validators. No open P0/P1 findings remain, so the adversarial multi-model verdict is pass.
+Both counted blind reviewers attested the reviewed worktree path and rebased HEAD. The reviewed range implements the frozen intent by adding a real Pi TUI scenario suite with private tmux sockets, fake local provider/`opsx` fixtures, pane-visible command assertions, argv/cwd/env logging, deterministic red/green/goal/hold flows, and optional interrupt smoke. No frozen-baseline artifacts were modified except task status checkboxes, no extension runtime semantics changed, and no open P0/P1 findings remain after re-sealing the stale verdict artifacts. Verdict is pass.
