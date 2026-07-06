@@ -75,7 +75,11 @@ NEVER `$CDIR` after the gate's worktree reassignment (`executable_opsx`
 reassigns `CDIR` to the worktree once located, and the shipped doneness digest
 hashes that reassigned path — the one existing precedent that must NOT be
 mirrored here), and never the invocation cwd, which may itself be a change
-worktree.
+worktree. The same main-root tree of record applies to READING
+design-fidelity.md and its recorded fields (analyze R2, O-F1): fields and hash
+inputs come from one tree, so a post-worktree re-seal on the integration
+checkout is evaluated against itself — a stale worktree copy can neither pass
+nor permanently redden the check.
 
 **Alternatives considered:**
 - **Fidelity section inside analyze.md**: couples freshness to analyze's
@@ -218,8 +222,17 @@ repair).
 a different tree — the worktree-always norm) the integration checkout: per tree
 `git rev-parse HEAD` + `git status --porcelain=v1`, with the change's own
 `openspec/changes/<change>/` paths excluded (orchestrator-sealed bookkeeping,
-the only permitted in-window writes). Delta in either tree ⇒ all round verdicts
-INVALID, surgical restore (`git restore` only status-changed tracked paths;
+the only permitted in-window writes). Concurrency carve-out (analyze R2,
+S-F1): an integration-checkout HEAD advance does NOT void the round when every
+intervening commit exclusively touches other changes'
+`openspec/changes/<other>/` paths — concurrent orchestrators legitimately land
+path-scoped bookkeeping commits on the shared integration branch, and voiding
+on them would reintroduce review-layer tree contention and unboundedly stall
+parallel loops; the check is deterministic (`git diff --name-only pre..post`
++ path-prefix test). Any other committed path, or any porcelain delta outside
+the dispatched change's own paths, voids. Voided round ⇒ all round verdicts
+INVALID, surgical restore of working-tree deltas only (committed history never
+rewritten) (`git restore` only status-changed tracked paths;
 delete only window-introduced untracked paths; never blanket `git clean`),
 incident recorded. Plain git commands only.
 
