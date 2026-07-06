@@ -4,8 +4,8 @@
 **Change:** add-opsx-design-fidelity-gate
 
 **Diff Base SHA:** 40d6ff09a3169584bf03ce20567306031d4c2e7c
-**Implementation HEAD:** f6fd7720b714c08e8260fe1b5bcee8ce93839187
-**Reviewed Range:** 40d6ff09a3169584bf03ce20567306031d4c2e7c..f6fd7720b714c08e8260fe1b5bcee8ce93839187
+**Implementation HEAD:** b2a04b2afc4d5dde89acfa690bacc9a8217e57d6
+**Reviewed Range:** 40d6ff09a3169584bf03ce20567306031d4c2e7c..b2a04b2afc4d5dde89acfa690bacc9a8217e57d6
 
 ## Completion Decision
 
