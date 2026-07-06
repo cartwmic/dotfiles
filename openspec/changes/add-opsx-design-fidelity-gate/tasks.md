@@ -53,18 +53,18 @@
 
 ## 4. Skills: dispatch + discipline surfaces
 
-- [ ] 4.1 openspec-propose reference: fidelity dispatch wiring — full_rigor rides the blind analyze dispatch as a REQUIRED section of every judge's prompt; plain-M / design-bearing S/XS gets the narrow post-design blind mini-dispatch; judge model resolution via the `review` role; canonical AC enumeration handed to every judge (absent AC ⇒ `not-covered`); key-indexed worst-of consolidation, any-block-wins; seal to design-fidelity.md; fidelity `delivered`-or-waiver gates tasks generation; Fidelity Round Ledger append (pinned columns, `waived` rows break the valve streak); escalation valve routes two consecutive `violated` ledger rows to the decision-audit landing.
+- [x] 4.1 openspec-propose reference: fidelity dispatch wiring — full_rigor rides the blind analyze dispatch as a REQUIRED section of every judge's prompt; plain-M / design-bearing S/XS gets the narrow post-design blind mini-dispatch; judge model resolution via the `review` role; canonical AC enumeration handed to every judge (absent AC ⇒ `not-covered`); key-indexed worst-of consolidation, any-block-wins; seal to design-fidelity.md; fidelity `delivered`-or-waiver gates tasks generation; Fidelity Round Ledger append (pinned columns, `waived` rows break the valve streak); escalation valve routes two consecutive `violated` ledger rows to the decision-audit landing.
   - intent: feature
   - files_allowed:
       - dot_local/share/agent-harness/canonical/skills/openspec-propose/references/opsx-superpowers-mode.md
   - allow_new_files: false
-- [ ] 4.2 openspec-loop SKILL.md + openspec-apply-change reference: worktree-always (ensure → locator → apply → review → merge → cleanup at every Scale, XS included; no same-tree guidance survives); findings-file-sole-verdict-source consolidation; dual-tree read-only window with the narrow bookkeeping exclusion (review.md + follow-ups.md only), concurrency carve-outs (sibling path-scoped commits, sibling uncommitted authoring, own bookkeeping committed-or-not) and symmetric surgical restore (sibling dirs never touched); purpose-keyed integration-checkout attestation carve-out for proposal-phase judgments (post-worktree fidelity re-judge included); judged-inputs-committed-before-fidelity-dispatch pin (analyze residual 1); bookkeeping lands on the integration checkout (misplacement = staling backstop, fail-closed).
+- [x] 4.2 openspec-loop SKILL.md + openspec-apply-change reference: worktree-always (ensure → locator → apply → review → merge → cleanup at every Scale, XS included; no same-tree guidance survives); findings-file-sole-verdict-source consolidation; dual-tree read-only window with the narrow bookkeeping exclusion (review.md + follow-ups.md only), concurrency carve-outs (sibling path-scoped commits, sibling uncommitted authoring, own bookkeeping committed-or-not) and symmetric surgical restore (sibling dirs never touched); purpose-keyed integration-checkout attestation carve-out for proposal-phase judgments (post-worktree fidelity re-judge included); judged-inputs-committed-before-fidelity-dispatch pin (analyze residual 1); bookkeeping lands on the integration checkout (misplacement = staling backstop, fail-closed).
   - intent: feature
   - files_allowed:
       - dot_local/share/agent-harness/canonical/skills/openspec-loop/SKILL.md
       - dot_local/share/agent-harness/canonical/skills/openspec-apply-change/references/opsx-superpowers-mode.md
   - allow_new_files: false
-- [ ] 4.3 openspec-archive-change reference: worktree-mandatory landing (no `opsx/<change>` branch ⇒ refuse with re-home remedy); ADR promotion for D7 fills `Supersedes: ADR-0008` and annotates ADR-0008 `Superseded by:` (analyze residual 3 — extend HARD-GATE 3 promotion procedure to search prior ADRs for superseded decisions).
+- [x] 4.3 openspec-archive-change reference: worktree-mandatory landing (no `opsx/<change>` branch ⇒ refuse with re-home remedy); ADR promotion for D7 fills `Supersedes: ADR-0008` and annotates ADR-0008 `Superseded by:` (analyze residual 3 — extend HARD-GATE 3 promotion procedure to search prior ADRs for superseded decisions).
   - intent: feature
   - files_allowed:
       - dot_local/share/agent-harness/canonical/skills/openspec-archive-change/references/opsx-superpowers-mode.md
