@@ -201,9 +201,12 @@ printf '# Review\n' >"$ACREPO/openspec/changes/feat/review.md"
 printf seed >"$ACREPO/seed"; git -C "$ACREPO" add -A; git -C "$ACREPO" commit -qm seed
 git -C "$ACREPO" branch -m main 2>/dev/null || true
 
-# branch-absent => same-tree exemption passes (exit 0), never a missing-ref error
-( cd "$ACREPO" && "$OPSX" archive-check feat ) >/dev/null 2>&1; rc=$?
-[ $rc -eq 0 ] && ok "archive-check same-tree exemption passes when no opsx/<change> branch" || nok "archive-check same-tree (rc=$rc)"
+# branch-absent => worktree-mandatory model REFUSES (no same-tree exemption): the
+# base-currency check fails loudly naming the `opsx worktree ensure` remedy.
+out="$(cd "$ACREPO" && "$OPSX" archive-check feat 2>&1)"; rc=$?
+[ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'no opsx/feat branch' \
+  && printf '%s' "$out" | grep -q 'opsx worktree ensure feat' \
+  && ok "branchless archive-check REFUSES naming the ensure remedy (worktree-mandatory)" || nok "archive-check branchless refuse (rc=$rc)"
 
 # opsx/feat forked at current main => base currency passes
 git -C "$ACREPO" worktree add -q -b opsx/feat "$TMP/acwt-feat" main >/dev/null 2>&1
@@ -236,6 +239,9 @@ MDBASE="$(git -C "$MDREPO" rev-parse main)"
 printf '\n**Diff Base SHA:** %s\n' "$MDBASE" >>"$MDREPO/openspec/changes/x/review.md"
 printf '# y\n' >"$MDREPO/openspec/changes/y/review.md"   # SAME commit touches x/ and y/
 git -C "$MDREPO" add -A; git -C "$MDREPO" commit -qm "cross-dir commit"
+# worktree-mandatory: opsx/x must exist + be base-current for a clean exit; fork it
+# at the current main HEAD so base-currency passes and the advisory alone drives output.
+git -C "$MDREPO" worktree add -q -b opsx/x "$TMP/mdwt" main >/dev/null 2>&1
 out="$(cd "$MDREPO" && "$OPSX" archive-check x 2>&1)"; rc=$?
 printf '%s' "$out" | grep -qi 'advisory' && ok "archive-check flags a multi-dir commit (advisory)" || nok "archive-check multi-dir advisory flag"
 [ $rc -eq 0 ] && ok "archive-check multi-dir advisory does NOT affect the exit code" || nok "archive-check advisory exit unaffected (rc=$rc)"
@@ -259,6 +265,9 @@ mkdir -p "$EMREPO/openspec/changes/y" "$EMREPO/openspec/changes/z"
 printf '# y\n' >"$EMREPO/openspec/changes/y/review.md"   # evil merge: lands y/ and z/
 printf '# z\n' >"$EMREPO/openspec/changes/z/review.md"
 git -C "$EMREPO" add -A; git -C "$EMREPO" commit -qm "evil merge" >/dev/null
+# worktree-mandatory: fork opsx/x at the current main HEAD (post evil-merge) so
+# base-currency passes and the multi-dir advisory alone drives output.
+git -C "$EMREPO" worktree add -q -b opsx/x "$TMP/emwt" main >/dev/null 2>&1
 out="$(cd "$EMREPO" && "$OPSX" archive-check x 2>&1)"; rc=$?
 printf '%s' "$out" | grep -qi 'advisory' && printf '%s' "$out" | grep -q 'openspec/changes/y' \
   && ok "archive-check flags an evil MERGE commit touching two change dirs" || nok "archive-check evil-merge advisory (rc=$rc)"

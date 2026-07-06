@@ -17,13 +17,13 @@ The default `spec-driven` schema is unaffected. Per-project opt-in. Reversible.
 
 | Capability | spec-driven | opsx-superpowers |
 |---|---|---|
-| Artifact graph | proposal → specs → design → tasks (4) | proposal → specs → clarify → design → analyze → review → tasks → plan (8 schema artifacts) + skill-managed verify.md + skill-managed retrospective.md + skill-managed ADR promotion |
+| Artifact graph | proposal → specs → design → tasks (4) | proposal → specs → clarify → design → analyze → review → tasks → plan (8 schema artifacts) + skill-managed verify.md + skill-managed retrospective.md + skill-managed ADR promotion + design-conditioned skill-managed `design-fidelity.md` (blind per-AC entailment verdict, sealed whenever design.md is present) |
 | Acceptance criteria format | bullet-list WHEN/THEN | EARS notation (5 patterns) with 5 quality properties |
 | Constitution / domain referenced | no | yes — every artifact reads `openspec/constitution.md` + `openspec/domain.md` |
 | Clarify phase | no | yes — 3 passes (ambiguity / inconsistency / completeness) |
 | Analyze phase | no | yes — read-only cross-artifact lint with 7 checks |
 | ADR persistence past archive | no | yes — `openspec-archive-change` skill promotes qualifying decisions to `<repo>/adr/ADR-NNNN-<slug>.md` before archive using `templates/adr.md` (not a schema artifact — see schema.yaml D11 rationale) |
-| Mode switchboard | no | yes — `review.md` front-matter switchboard (Scale, Execution, Verification, Debug, Review-Status, Delegation, Worktree, Code-Review, Loop-Budget, Validation-Source, Doneness, Spec-Level, plus optional model keys — see Mode reference below) |
+| Mode switchboard | no | yes — `review.md` front-matter switchboard (Scale, Execution, Verification, Debug, Review-Status, Delegation, Code-Review, Loop-Budget, Validation-Source, Doneness, Spec-Level, plus optional model keys — see Mode reference below). Worktree execution is unconditional at every Scale (no mode) |
 | Scale-adaptive artifact gating | no | yes — XS skips heavy artifacts; M is the typical full graph; `full_rigor: true` adds ADR promotion + adversarial-on-analyze + retrospective (the former L/XL extras) |
 | Pre-flight commit before worktree | no | yes (apply step records the immutable merge-base `Diff Base SHA` for file-contract diffs) |
 | Per-task file contracts | no | yes — `files_allowed` / `files_forbidden` / `allow_new_files` + `intent: fix\|feature\|refactor\|infra` |
@@ -45,8 +45,8 @@ review.md is required at EVERY tier (it is the Scale/mode source the gate reads 
 |---|---|---|---|
 | **XS** | typo, comment fix, single-line config tweak | review | everything else |
 | **S** | single-file bug fix, small refactor | review, proposal, tasks | specs, design, plan, verify, adr, retrospective (clarify runs the ambiguity pass only; analyze runs checks 1, 2, 7 — reduced, not skipped) |
-| **M** | typical feature, cross-file but single capability | review, intent, proposal, specs, tasks, plan (+ verify / code-review / **doneness** per modes) — clarify open questions fold into `proposal.md ## Open Questions` and analyze is deterministic-only (no standalone `clarify.md`/`analyze.md`); **design.md is NOT required at plain M — it is decision-gated (authored only when a decision warrants it, D5)** | design (decision-gated), adr (unless decision passes 4-point test), retrospective |
-| **M + `full_rigor: true`** | cross-capability change, breaking change, new capability, migration (the former **L**/**XL**) | all plain-M required + standalone `clarify.md`, + blind `analyze.md` dispatch, + **`design.md`** (the former L/XL full set always carried design), + independently dispatched blind doneness judge, + adr candidates, + adversarial-review-cycle from analyze, + retrospective before archive | — |
+| **M** | typical feature, cross-file but single capability | review, intent, proposal, specs, tasks, plan (+ verify / code-review / **doneness** per modes) — clarify open questions fold into `proposal.md ## Open Questions` and analyze is deterministic-only (no standalone `clarify.md`/`analyze.md`); **design.md is NOT required at plain M — it is decision-gated (authored only when a decision warrants it, D5)**. WHEN design.md IS present, a blind **design-fidelity** judgment (sealed `design-fidelity.md`) is required before tasks generation — a narrow post-design mini-dispatch on the `review` role | design (decision-gated), adr (unless decision passes 4-point test), retrospective |
+| **M + `full_rigor: true`** | cross-capability change, breaking change, new capability, migration (the former **L**/**XL**) | all plain-M required + standalone `clarify.md`, + blind `analyze.md` dispatch, + **`design.md`** (the former L/XL full set always carried design) + its required **design-fidelity** sweep riding the blind analyze dispatch as a required section (sealed to `design-fidelity.md`), + independently dispatched blind doneness judge, + adr candidates, + adversarial-review-cycle from analyze, + retrospective before archive | — |
 
 The 2-model blind adversarial code review discipline is never weakened by the tier
 table: `code_review_mode` DEFAULTS to `gating-required` at Scale M (with or without
@@ -79,7 +79,6 @@ Each mode has a controlled vocabulary. Default values shown in **bold**.
 | `Debug Mode` | **standard** / systematic-debugging | systematic-debugging: `plan.md` MUST contain `Observed Failure` and `Debugging Trail` before code changes |
 | `Review Status` | **not-requested** / requested / findings-received / resolved | State machine for `adversarial-review-cycle` invocation |
 | `Delegation Mode` | **single-agent** / subagent-eligible / subagent-required | subagent-*: `openspec-apply-change` dispatches tasks via `pi-subagents` |
-| `Worktree Mode` | worktree-required / worktree-eligible / same-tree | Default DERIVED by tier when absent — XS/S ⇒ **same-tree**, M ⇒ **worktree-required**; an explicit value always wins. worktree-* runs every task in a `git worktree` (the loop's blast-radius sandbox), main agent owns writeback |
 | `Code Review Mode` | none / advisory / **gating-required (M+)** | gating-required: `code-review.md` adversarial diff review must pass before archive |
 | `Loop Max Iterations` | integer (authoring-time default **XS=10 / S=20 / M=40 / full_rigor=80**) | drive-loop budget; mapped onto the loop runtime turn budget |
 | `Validation Source Mode` | **required** / waived | required: Scale ≥ M must declare an agent-independent validation source |
@@ -93,8 +92,8 @@ A rename/retire/migration-class change MAY declare retired tokens in
 `openspec/changes/<change>/sweep.txt` — one extended regex per line, `#`
 comments and blank lines ignored, zero effective patterns = clean pass.
 `opsx sweep <change>` (and, conditionally, `opsx gate`) greps every
-git-tracked file of the change's RESOLVED implementation checkout — worktree
-when worktree-required — excluding the non-deployed OpenSpec workspace
+git-tracked file of the change's RESOLVED implementation checkout — the
+`opsx/<change>` worktree (worktree execution is unconditional) — excluding the non-deployed OpenSpec workspace
 (`openspec/**`) and ADR history (`adr/**`), which legitimately record retired
 vocabulary. Hits print `SWEEP-HIT <pattern> <file>:<line>` and fail (exit 1 /
 `GATE-FAIL sweep`); malformed patterns print `SWEEP-ERROR <pattern>` and fail
@@ -193,6 +192,7 @@ opsx-superpowers/
     ├── # Skill-managed (post-apply / pre-archive):
     ├── adr.md                         # MADR 4.0 short form (used by openspec-archive-change)
     ├── verify.md                      # 6 hard checks + canonical AC↔test grep + binary green/red
+    ├── design-fidelity.md             # sealed per-AC entailment verdict (blind judge; gate-read when design.md present)
     └── retrospective.md               # 6 sections; promote-candidates use all 9 mcp-memory types
 ```
 

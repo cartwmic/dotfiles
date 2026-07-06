@@ -197,7 +197,8 @@ has "archive ref gates retrospective refusal on full_rigor" "$ARCHIVE_REF" "requ
 
 # --- authoring-time budget defaults + worktree-mode derivation (template) ---
 has "review.md template carries the tier budget defaults" "$TPL/review.md" "XS=10, S=20, M=40, full_rigor=80"
-has "review.md template carries the worktree-mode derivation comment" "$TPL/review.md" "DERIVED by tier when ABSENT"
+# worktree-mode derivation ABOLISHED (add-opsx-design-fidelity-gate D7): template must be token-free
+if grep -qiE 'worktree_mode|Worktree Mode|same-tree' "$TPL/review.md" 2>/dev/null; then nok "review.md template still mentions the abolished worktree mode vocabulary"; else ok "review.md template is free of worktree-mode vocabulary (worktree-always)"; fi
 
 # --- plain-M combined doneness dispatch (loop skill + doneness template) ---
 has "loop skill defines the plain-M combined doneness dispatch" "$LOOP_SKILL" "COMBINED dispatch"
@@ -228,9 +229,8 @@ has "explore skill recommends the XS | S | M Scale vocabulary" "$EXPLORE_SKILL" 
 has "explore skill recommends full_rigor for the former L/XL heuristics" "$EXPLORE_SKILL" "full_rigor"
 if grep -qE '\| S \| M \| L \| XL|new capability, migration, multi-week' "$EXPLORE_SKILL" 2>/dev/null; then nok "explore skill still live-recommends an L/XL Scale tier"; else ok "explore skill has no live L/XL Scale recommendation"; fi
 
-# --- R4-B: review.md template ships NO explicit worktree_mode (key commented out) ---
-if grep -qE '^worktree_mode:' "$TPL/review.md" 2>/dev/null; then nok "review.md template ships an explicit worktree_mode value (defeats D6 derivation)"; else ok "review.md template ships no explicit worktree_mode value"; fi
-has "review.md template comments out the worktree_mode key with the derivation note" "$TPL/review.md" "# worktree_mode: (derived when absent"
+# --- R4-B (superseded by worktree-always): review.md template ships NO worktree_mode key at all ---
+if grep -qE '^worktree_mode:' "$TPL/review.md" 2>/dev/null; then nok "review.md template ships an explicit worktree_mode key (abolished — gate rejects it fail-closed)"; else ok "review.md template ships no worktree_mode key"; fi
 
 # --- R4-C: schema.yaml doneness dispatch is tier-conditioned (plain-M rides code-review, full_rigor independent) ---
 has "schema.yaml plain-M doneness rides the code-review dispatch via the designated reviewer" "$SCHEMA" "DESIGNATED reviewer (the FIRST model"
