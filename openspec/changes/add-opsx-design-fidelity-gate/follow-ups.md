@@ -66,3 +66,10 @@ was exercised live at this change's own landing (Diff Base repoint committed
 on the worktree branch → loud stale). No suite fixture covers "review.md
 committed on the worktree branch"; add one so a future freshness_check
 refactor cannot silently allowlist review.md.
+
+## F9 — Mirror-commit subject discipline (code-review R3, sonnet P2)
+
+Loop orchestration commits (task mirrors, follow-ups routing, locator
+repairs) routinely exceed the ≤72 subject convention (max 222 this change).
+Add subject-length discipline to the loop's bookkeeping-commit style: short
+subject + body, same as implementation commits.
