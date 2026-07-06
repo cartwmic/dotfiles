@@ -5,8 +5,8 @@
 **review_mode:** blind-single-judge
 **Frozen-Intent SHA:** e217a707d75b6a39368fd5b7977f63b0f72dc3d88afef791c049939208d94f57
 **Diff Base SHA:** 40d6ff09a3169584bf03ce20567306031d4c2e7c
-**Reviewed Range:** 40d6ff09a3169584bf03ce20567306031d4c2e7c..314c5dee512474717dd4f3d5f8ea261cdd6a07f9
-**Attested HEAD:** 314c5dee512474717dd4f3d5f8ea261cdd6a07f9
+**Reviewed Range:** 40d6ff09a3169584bf03ce20567306031d4c2e7c..c36b22d4640657305fd69dc68b56c939eb2b62cd
+**Attested HEAD:** c36b22d4640657305fd69dc68b56c939eb2b62cd
 **Attested Path:** /Users/cartwmic/.local/share/chezmoi--opsx-add-opsx-design-fidelity-gate
 
 ## Judgment
