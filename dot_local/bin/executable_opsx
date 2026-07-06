@@ -374,6 +374,19 @@ EOF
 opsx_repo_main_root() { # $1=any-checkout root → the repo's MAIN (integration) worktree root
   git -C "$1" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10); exit}'
 }
+opsx_main_show() { # $1=change-dir-relative-or-repo-relative path → its COMMITTED content at the integration (main-worktree) checkout HEAD on stdout; EMPTY (not error text) when the path is absent from HEAD
+  # ALWAYS the integration checkout tree of record, NEVER cwd-relative. Orchestration
+  # inputs — review.md front-matter switchboard fields, the Worktree Path / Diff Base
+  # locator bodyfields, and the Fidelity Round Ledger — are authored + committed on the
+  # integration branch by the writeback owner; an uncommitted edit in EITHER tree must
+  # never flip a gate decision (design D8). Absent-from-HEAD paths print nothing so the
+  # caller's absent/unparseable handling fires identically to a missing file.
+  local main
+  main="$(opsx_repo_main_root "${OPSX_ROOT:-$PWD}")"
+  [ -n "$main" ] || return 0
+  git -C "$main" show "HEAD:$1" 2>/dev/null
+  return 0
+}
 opsx_wt_convention_path() { # $1=any-checkout root $2=change → the path `ensure` would derive absent --path
   # Normalized to the MAIN worktree root so the derivation is IDENTICAL from the
   # integration checkout and from inside any linked worktree — gate-view equality
@@ -578,15 +591,62 @@ bodyfield() {
     | head -1 | sed -E "s/^\*\*$1:\*\*[[:space:]]*//; s/[[:space:]]+$//"
 }
 
+# --- COMMITTED integration-checkout review.md readers (orchestration source) --
+# The SOLE source for orchestration-class inputs: front-matter switchboard fields
+# (scale, full_rigor, *_mode, doneness_waiver_rationale) and the Worktree Path /
+# Diff Base locator bodyfields. Read from the integration (main-worktree) HEAD via
+# opsx_main_show, evaluated BEFORE and INDEPENDENT of the worktree ART_ROOT/REVIEW
+# reassignment below, so an uncommitted or stale worktree-branch review.md can never
+# flip a gate decision (design D8; opsx-gate-enforcement Post Seal Bookkeeping Non
+# Staling + Worktree Mandatory). Absent-from-HEAD content parses to empty — identical
+# to the current absent/unparseable handling (missing review, missing scale checks).
+REVIEW_COMMITTED="$(opsx_main_show "openspec/changes/$CHANGE/review.md")"
+fm_committed() { # $1=key → value from the COMMITTED review.md YAML front-matter (empty if absent/none); mirrors fm() parsing verbatim
+  [ -n "$REVIEW_COMMITTED" ] || return 0
+  printf '%s\n' "$REVIEW_COMMITTED" | awk -v key="$1" '
+    NR==1 { if ($0 != "---") exit; infm=1; next }
+    infm && $0=="---" { exit }
+    infm {
+      line=$0; sub(/^[ \t]+/,"",line)
+      p=index(line,":"); if (p==0) next
+      k=substr(line,1,p-1); v=substr(line,p+1)
+      gsub(/^[ \t]+|[ \t]+$/,"",k); gsub(/^[ \t]+|[ \t]+$/,"",v)
+      gsub(/^["'\'']|["'\'']$/,"",v)
+      if (k==key) { print v; exit }
+    }'
+}
+bodyfield_committed() { # $1=label → committed review.md body field (Worktree Path / Diff Base SHA); mirrors bodyfield() matching verbatim
+  [ -n "$REVIEW_COMMITTED" ] || return 0
+  printf '%s\n' "$REVIEW_COMMITTED" | grep -E "^\*\*$1:\*\*" 2>/dev/null \
+    | head -1 | sed -E "s/^\*\*$1:\*\*[[:space:]]*//; s/[[:space:]]+$//"
+}
+
 # ============================================================================
-# ARTIFACT SOURCE RESOLUTION (single source of truth)
-# When a usable worktree is located (via --worktree or the recorded Worktree
-# Path), ALL change artifacts — review.md modes, tasks.md, verify.md,
-# code-review.md, doneness.md — are read from the WORKTREE checkout, which is
-# where the apply workflow writes them (verdicts stay uncommitted there until
-# gate-green). Reading them from the integration checkout while validating the
-# worktree was the split-brain failure mode: a correct worktree could red-loop
-# forever against stale root copies.
+# ARTIFACT SOURCE RESOLUTION (deliberate split — design D8)
+# Two artifact classes, two trees of record; the split is intentional, not an
+# oversight, and applying committed-read to the verdict class is explicitly NOT
+# done (it would reintroduce the red-loop the comment below warns about).
+#
+#   IMPLEMENTATION-COUPLED artifacts — tasks.md, verify.md, code-review.md,
+#   doneness.md — are read from the WORKTREE checkout ($CDIR after reassignment),
+#   where the apply workflow writes them (verdicts stay uncommitted there until
+#   gate-green). Reading these from the integration checkout while validating the
+#   worktree is the split-brain failure mode: a correct worktree red-loops forever
+#   against stale root copies. The stale-root-copy hazard is REAL for this class.
+#
+#   ORCHESTRATION fields — review.md front-matter switchboard modes (incl. scale &
+#   full_rigor), the Worktree Path / Diff Base locator bodyfields, and the Fidelity
+#   Round Ledger — are read from the COMMITTED integration-checkout content
+#   (opsx_main_show / fm_committed / bodyfield_committed above), resolved BEFORE the
+#   reassignment below. The writeback owner authors and commits them there; an
+#   uncommitted or stale worktree-branch edit must NEVER flip a gate decision. This
+#   is the whole point of Post Seal Bookkeeping Non Staling: the gate does not
+#   allowlist review.md wholesale, it reads every mode/locator input from one
+#   committed tree of record.
+#
+# The reassignment below therefore governs ONLY the implementation-coupled class:
+# review.md's *file* is relocated for the structural presence check, but every
+# gate-read review.md FIELD was already sourced from committed content above.
 # ============================================================================
 WT_PATH="$WORKTREE_ARG"
 if [ -n "$WT_PATH" ]; then
@@ -599,7 +659,7 @@ if [ -n "$WT_PATH" ]; then
     exit 1
   fi
 else
-  WT_PATH="$(bodyfield 'Worktree Path')"
+  WT_PATH="$(bodyfield_committed 'Worktree Path')"
   case "$WT_PATH" in *"<empty"*|"<"*) WT_PATH="" ;; esac
   # Convention fallback (opsx-gate-enforcement.verdict-freshness-and-provenance):
   # ONLY when the RECORDED locator is absent/invalid, and ONLY the convention
@@ -621,13 +681,16 @@ fi
 
 [ -d "$CDIR" ] || { fail change "change not found: $CHANGE"; exit 1; }
 
-SCALE="$(fm scale)"
-FULL_RIGOR_RAW="$(fm full_rigor)"
-WORKTREE_MODE="$(fm worktree_mode)"
-VERIFY_MODE="$(fm verification_mode)"
-CR_MODE="$(fm code_review_mode)"
-VSRC_MODE="$(fm validation_source_mode)"
-DONE_MODE="$(fm doneness_mode)"
+# Orchestration switchboard: EVERY gate-read front-matter field is sourced from the
+# COMMITTED integration-checkout review.md (fm_committed), never the worktree-reassigned
+# live file — an uncommitted mode edit must never flip a gate decision (D8).
+SCALE="$(fm_committed scale)"
+FULL_RIGOR_RAW="$(fm_committed full_rigor)"
+WORKTREE_MODE="$(fm_committed worktree_mode)"
+VERIFY_MODE="$(fm_committed verification_mode)"
+CR_MODE="$(fm_committed code_review_mode)"
+VSRC_MODE="$(fm_committed validation_source_mode)"
+DONE_MODE="$(fm_committed doneness_mode)"
 
 # Fail CLOSED on unknown values of enforcement-relevant modes: a typo like
 # `worktree_requred`'s value must not silently disable enforcement. Empty is
@@ -806,7 +869,7 @@ fi
 # WT_PATH/ART_ROOT were resolved up front (artifact source resolution); this
 # section enforces worktree-required and derives the implementation HEAD.
 # ============================================================================
-DIFF_BASE="$(bodyfield 'Diff Base SHA')"
+DIFF_BASE="$(bodyfield_committed 'Diff Base SHA')"   # orchestration locator: committed integration-checkout content only (D8)
 
 impl_head() {
   if [ -n "$WT_PATH" ] && [ -d "$WT_PATH" ]; then
@@ -1021,8 +1084,12 @@ sha256_file() {
 # scalar (`: >`/`: |`) followed by >=1 indented non-blank, non-comment line. This
 # stops a content-less `doneness_waiver_rationale: >` from passing as a rationale.
 waiver_has_rationale() {
-  [ -f "$REVIEW" ] || return 1
-  awk '
+  # doneness_waiver_rationale is a gate-read switchboard field — sourced from the
+  # COMMITTED integration-checkout review.md (D8), never the live worktree file, so an
+  # uncommitted waiver rationale can never satisfy the waiver. Absent committed content
+  # returns 1 (no rationale), identical to the prior missing-file handling.
+  [ -n "$REVIEW_COMMITTED" ] || return 1
+  printf '%s\n' "$REVIEW_COMMITTED" | awk '
     /^---[[:space:]]*$/ { infm++; next }
     infm==1 {
       # Under a block scalar, an indented NON-blank NON-comment line is real content.
@@ -1044,7 +1111,7 @@ waiver_has_rationale() {
       }
     }
     END { exit(found?0:1) }
-  ' "$REVIEW"
+  '
 }
 if [ "$rc" -eq 0 ]; then
   case "$SCALE" in
