@@ -4,7 +4,15 @@ set -euo pipefail
 log_dir="${FAKE_OPSX_LOG_DIR:-}"
 if [[ -n "$log_dir" ]]; then
   mkdir -p "$log_dir"
-  printf '%s\tcwd=%s\targs=%q' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(pwd)" "$0" >> "$log_dir/opsx.log"
+  printf '%s\tcwd=%s\tenv_FAKE_OPSX_WORKTREE_PATH=%s\tenv_OPSX_AUTHOR_MODEL=%s\tenv_OPSX_REVIEW_MODELS=%s\tenv_OPSX_IMPL_MODEL=%s\tenv_OPSX_AUTHOR_IN_SESSION=%s\targs=%q' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$(pwd)" \
+    "${FAKE_OPSX_WORKTREE_PATH:-}" \
+    "${OPSX_AUTHOR_MODEL:-}" \
+    "${OPSX_REVIEW_MODELS:-}" \
+    "${OPSX_IMPL_MODEL:-}" \
+    "${OPSX_AUTHOR_IN_SESSION:-}" \
+    "$0" >> "$log_dir/opsx.log"
   for arg in "$@"; do printf '\t%q' "$arg" >> "$log_dir/opsx.log"; done
   printf '\n' >> "$log_dir/opsx.log"
 fi

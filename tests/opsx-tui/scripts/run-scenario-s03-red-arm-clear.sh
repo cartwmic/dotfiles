@@ -5,7 +5,7 @@ set -euo pipefail
 source "$(dirname "$0")/scenario-lib.sh"
 
 export FAKE_OPSX_GATE_MODE=red
-export FAKE_OPENAI_DELAY_MS=10000
+export FAKE_OPENAI_DELAY_MS=1000
 scn_setup "s03-red-arm-clear"
 scn_make_change "red-change"
 scn_pi_start
@@ -19,5 +19,7 @@ scn_assert_pane "opsx-loop active|change: red-change" "status names active red c
 
 scn_send "/opsx-loop clear"
 scn_assert_pane "Cleared opsx-loop: red-change" "clear stops active loop"
+scn_assert_log_count_stays "$PROVIDER_LOG" "/chat/completions" 1 3 "clear prevents further provider continuation"
+scn_assert_file "$FAKE_LOG_DIR/opsx.log" "env_FAKE_OPSX_WORKTREE_PATH=" "fake opsx logs relevant env values"
 
 scn_finish
