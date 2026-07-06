@@ -85,7 +85,16 @@ checkout is evaluated against itself — a stale worktree copy can neither pass
 nor permanently redden the check. Named invariant (analyze R3 advisory): the
 integration branch is checked out in the git MAIN worktree — `opsx_repo_main_root`
 already encodes this, and "integration checkout" and "main-worktree root" are
-synonyms under it. Digest field grammar is the literal pinned by the template
+synonyms under it. Guidance-order slot (analyze R8, S-F2): the fidelity check
+emits as an UNCONDITIONAL cheap-phase check ordered between analyze and tasks
+in the gate's report — the pattern of the existing sweep/tasks-complete checks
+(plain sequential `fail` emission), explicitly NOT doneness's `rc == 0`-gated
+sole-remaining-failure block — so a first-red-wins consumer always sees
+design-fidelity before tasks and the check never participates in the
+missing-required-artifact short-circuit. worktree_mode key detection is a
+front-matter KEY parse (`fm()`-style first-colon split), never a substring
+grep — a YAML comment mentioning `worktree_mode` (this change's own review.md
+is the fixture) never trips it (analyze R8, O-F1). Digest field grammar is the literal pinned by the template
 requirement: `**Digest sha256 (<change-dir-relative path>):** <64-hex>`; the
 gate locates digest lines by literal string comparison against lines built
 from the enumerated spec-file set — never by interpolating paths into an
@@ -232,7 +241,12 @@ HEAD; re-sealing design-fidelity.md never touches prior rows. The valve fires
 on two consecutive `violated` ledger entries — regardless of which rows
 failed, no per-row cross-round comparison (C5, C7) — routing to the
 decision-audit landing with the fidelity history instead of a third automatic
-dispatch. Ledger rows are prose bookkeeping (Execution-Notes-class, permitted
+dispatch. Waiver interaction (analyze R8, S-F1): a human waiver ruling at the
+landing appends its own ledger row (`Fidelity` column value `waived`), and the
+valve counts only consecutive `violated` rows NOT separated by a `waived` (or
+`delivered`) row — a waiver resolves the streak, so a post-waiver fresh
+`violated` starts a new count of one and cannot immediately re-fire the valve
+against a round a human already ruled on. Ledger rows are prose bookkeeping (Execution-Notes-class, permitted
 by Post Seal Bookkeeping Non Staling); the gate reads review.md front-matter
 only, so ledger appends stale nothing.
 
@@ -303,7 +317,11 @@ INVALID, surgical restore of working-tree deltas only (committed history never
 rewritten), with the restore/delete sets scoped symmetrically to the void
 carve-outs (analyze R4, O-A1): other changes' `openspec/changes/<other>/`
 paths are never restored or deleted — a sibling's concurrent authoring
-survives this change's incident handling (`git restore` only status-changed tracked paths;
+survives this change's incident handling. Accepted residual (analyze R8,
+O-F2): a sibling change's archive/land MERGE during an open proposal-phase
+window touches non-change-dir paths and voids the round — correct
+(the judged tree materially changed), rare (one merge per change lifetime),
+fail-closed, and bounded by the all-invalid landing valve; not carved out (`git restore` only status-changed tracked paths;
 delete only window-introduced untracked paths; never blanket `git clean`),
 incident recorded. Plain git commands only.
 
