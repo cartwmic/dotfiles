@@ -12,7 +12,7 @@
   - files_allowed:
       - dot_local/bin/executable_opsx
   - allow_new_files: false
-- [ ] 1.3 Mode-field committed-read split: source ALL review.md front-matter switchboard fields the gate reads (`scale`, `full_rigor`, `doneness_mode`, `code_review_mode`, `verification_mode`, `validation_source_mode`, …) from committed integration-checkout content, never live disk and never the worktree-reassigned `$REVIEW`; keep verify.md/code-review.md/doneness.md/tasks.md worktree-read; update the `ARTIFACT SOURCE RESOLUTION` comment block (~582–596) to document the deliberate field-source split (D8).
+- [x] 1.3 Mode-field committed-read split: source ALL review.md front-matter switchboard fields the gate reads (`scale`, `full_rigor`, `doneness_mode`, `code_review_mode`, `verification_mode`, `validation_source_mode`, …) from committed integration-checkout content, never live disk and never the worktree-reassigned `$REVIEW`; keep verify.md/code-review.md/doneness.md/tasks.md worktree-read; update the `ARTIFACT SOURCE RESOLUTION` comment block (~582–596) to document the deliberate field-source split (D8).
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx
