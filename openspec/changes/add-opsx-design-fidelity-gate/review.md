@@ -68,7 +68,7 @@ by apply via the deterministic resolver (committed locator > origin/HEAD >
 main > master).
 -->
 
-**Diff Base SHA:** 40d6ff09a3169584bf03ce20567306031d4c2e7c
+**Diff Base SHA:** 768f2244ff6b947b2a8656360f74b75272af4b05
 **Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-add-opsx-design-fidelity-gate
 **Integration Branch:** main
 
