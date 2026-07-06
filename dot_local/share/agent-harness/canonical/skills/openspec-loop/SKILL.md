@@ -40,11 +40,16 @@ the worktree; gate with `--worktree <path>`.
 **Writeback owner split (keeps sealed verdicts fresh).** Sealed verdicts bind to the
 `opsx/<change>` worktree branch HEAD, so land each artifact on the tree that owns it:
 - **Worktree branch:** task checkboxes in `tasks.md` (the gate reads tasks.md
-  worktree-side) and the implementation diff.
+  worktree-side), the implementation diff, and the verdict artifacts the gate
+  reads worktree-side (verify.md, code-review.md — including its embedded Round
+  Ledger section — doneness.md; verdict-file-only commits are exempt from the
+  range-staleness check by design).
 - **Integration checkout:** `loop_hold`/`loop_hold_reason`, follow-ups.md routing,
-  Execution Notes, and every ledger (Round Ledger, `Fidelity Round Ledger`) —
-  orchestrator bookkeeping per the writeback-owner discipline, so it never moves the
-  verdict-bound worktree HEAD.
+  Execution Notes, and the review.md-hosted `Fidelity Round Ledger` — orchestrator
+  bookkeeping per the writeback-owner discipline (a ledger rides its HOST artifact's
+  tree: code-review.md's Round Ledger is worktree-side with its host, review.md's
+  Fidelity Round Ledger is integration-side with its host), so bookkeeping never
+  moves the verdict-bound worktree HEAD.
 - **Backstop:** a bookkeeping commit MISPLACED onto the `opsx/<change>` worktree
   branch moves the verdict-bound HEAD and therefore STALES the sealed verdicts via the
   existing range-freshness check — a loud fail-closed gate red whose remedy is
