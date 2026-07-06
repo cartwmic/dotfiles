@@ -1,6 +1,7 @@
 # ADR-0008: Worktree-required is the default for all Scales
 
-**Status:** Accepted
+**Status:** Superseded
+**Superseded by:** ADR-0035 (worktree-mandatory execution — the same-tree explicit override this ADR retained is abolished)
 **Date:** 2026-06-22
 **Source change:** `openspec/changes/archive/2026-06-22-add-opsx-loop-harness/`
 
