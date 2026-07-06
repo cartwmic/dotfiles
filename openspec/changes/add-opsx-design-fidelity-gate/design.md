@@ -15,7 +15,10 @@ additionally mandated abolishing same-tree execution entirely — worktree is th
 only model — for parallel development.
 
 Constitution/domain constraints respected: gate checks stay deterministic and
-model-free (field parsing + git plumbing + sha256 only); model judgment lives
+model-free (field parsing + git plumbing + sha256 only — ADR-0005 lineage,
+the gate-exit-code enforcement spine; intent.md's "ADR-0007" citation for
+this constraint is a frozen-document miscite, corrected here and in the
+proposal, analyze R7 S-A3); model judgment lives
 in dispatched subagents; verdict artifacts are sealed by the orchestrator, never
 self-authored; MODIFIED deltas carry full requirement content (domain
 invariant 14); freshness protection on every gate-read decision input is a hard
@@ -92,6 +95,19 @@ Trust boundary (analyze R3, S-A4, accepted): the gate trusts the sealed
 `Fidelity` summary field and does not re-scan the per-AC table — identical to
 the doneness.md summary-field precedent; correctness of consolidation is
 vested in the orchestrator sealing procedure (D5), not the model-free gate.
+Provenance vocabulary check (analyze R7, S-A1): the gate validates the
+fidelity judge-provenance `review_mode` against the enumerated blind-dispatch
+vocabulary — `case "$mode" in blind-single-judge|adversarial-multimodel) ;; *)
+fail …` — replicating the shipped doneness case-statement
+(`executable_opsx` ~1069–1073) verbatim for the fidelity check: an inline,
+degraded, or absent-mode self-judgment never seals, fail-closed. Judged-input
+locus (analyze R7, O-A1): intent.md, design.md, and `specs/**` are authored
+and edited ONLY on the integration checkout — the worktree is the
+implementation tree; a worktree-branch edit to a judged input is a
+writeback-owner-discipline violation (file contracts keep tasks out of these
+paths, and the divergence surfaces in the archive-merge diff), not a
+supported authoring locus — so "edit ⇒ re-judge" is anchored to the one tree
+the digests hash.
 
 **Alternatives considered:**
 - **Fidelity section inside analyze.md**: couples freshness to analyze's
@@ -182,6 +198,14 @@ other.
 
 **Rationale:** Only enumerable deterministic green path that keeps human
 authority explicit and auditable in the artifact.
+
+**Accepted risk (analyze R7, O-A2 — design.md deletion):** at plain M,
+deleting a previously-present design.md after a sealed `violated` verdict
+flips the design-conditioned checks off and is NOT a clean opt-out: the
+deletion is visible in the diff, the `Fidelity Round Ledger` rows persist in
+review.md, and the act is the same audited integrity-breach class as a
+self-authored waiver — surfaced by history/retrospective audit, out of the
+no-sandboxing scope.
 
 **Accepted risk (analyze R1, O-A2):** the gate can only verify the waiver
 field is present and names a ruling + landing entry — it cannot verify a human
@@ -344,7 +368,21 @@ the COMMITTED integration-checkout content — addressed explicitly as
 `git -C <main-root> show HEAD:…`, never cwd-relative (a bare `git show` from
 inside a worktree would read the wrong branch tip), never live disk — so an
 uncommitted `doneness_mode: waived` edit or an uncommitted
-`Fidelity: violated → delivered` flip cannot move any gate decision. Committed downgrades remain possible — they are
+`Fidelity: violated → delivered` flip cannot move any gate decision.
+Reconciliation with the shipped single-source-of-truth comment (analyze R7,
+S-A2): `executable_opsx` ~582–596 reads ALL change artifacts — review.md
+modes included — from the located WORKTREE, precisely to avoid red-looping a
+correct worktree against stale root copies. This change SPLITS the field
+sources deliberately and updates that comment: implementation-coupled
+artifacts (tasks.md, verify.md, code-review.md, doneness.md) stay
+worktree-read — their content is produced on the worktree branch and the
+stale-root-copy hazard is real; orchestration fields (review.md front-matter
+modes, the Fidelity Round Ledger) and fidelity inputs/fields move to
+committed integration-checkout read — they are authored on the integration
+checkout by the writeback-owner discipline, so the worktree copy is the stale
+one for exactly these files. The split kills both split-brain directions;
+applying committed-read to verdict artifacts would reintroduce the original
+red-loop and is explicitly NOT done. Committed downgrades remain possible — they are
 auditable history of the same integrity-breach class as a self-authored
 waiver (R7), surfaced by audit, out of the no-sandboxing scope. review.md is
 never allowlisted wholesale.
