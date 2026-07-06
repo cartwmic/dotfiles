@@ -4,7 +4,8 @@
 **Diff Base SHA:** 40d6ff09a3169584bf03ce20567306031d4c2e7c
 **Reviewed Range:** 40d6ff09a3169584bf03ce20567306031d4c2e7c..b9ad99708050c9cae1556540a6968d87562a7321
 **Attested HEAD:** b9ad99708050c9cae1556540a6968d87562a7321
-**Reviewer Provenance:** pi-subagents delegate adapter; review_mode: adversarial-multimodel (claude-bridge/claude-opus-4-8 + claude-bridge/claude-sonnet-5, blind, review role)
+**review_mode:** adversarial-multimodel
+**reviewer-provenance:** pi-subagents delegate — claude-bridge/claude-opus-4-8 + claude-bridge/claude-sonnet-5 (blind, fresh context, review role)
 
 ## Round Ledger
 
