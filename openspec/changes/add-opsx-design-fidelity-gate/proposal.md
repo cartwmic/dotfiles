@@ -72,17 +72,19 @@ model-free gate; doneness-judge precedent for sealed judged verdicts).
   `opsx-workflow-schema`, `opsx-skill-integration` (opsx-cli untouched: worktree
   lifecycle commands, locator emit, and resolver are reused as-is; the removal
   surface is mode/derivation/exemptions, which live in the other four).
-  Touched requirements (clarify C1 — every surviving same-tree surface is in
-  the delta set): gate-enforcement ADDED Design Fidelity Verdict Enforcement /
-  Worktree Mandatory Gate Enforcement / Post Seal Bookkeeping Non Staling,
-  MODIFIED Verdict Freshness And Provenance / Land Base Currency;
-  adversarial-review ADDED Design Fidelity Judge / Findings File Sole Verdict
-  Source, MODIFIED Reviewer Tree Identity Attestation / Read Only Reviewer
-  Dispatch / Post Apply Code Review Artifact; workflow-schema ADDED Design
-  Fidelity Artifact Template, MODIFIED Mode switchboard in review.md /
-  Worktree Lifecycle Ownership / Per-task file contracts; skill-integration
-  ADDED Worktree Always Skill Discipline, MODIFIED Mode-driven
-  openspec-apply-change / Analyze gates tasks generation.
+  Touched requirements (clarify C1 + analyze R1/R2 — every surviving same-tree
+  surface is in the delta set): gate-enforcement ADDED Design Fidelity Verdict
+  Enforcement / Worktree Mandatory Gate Enforcement / Post Seal Bookkeeping
+  Non Staling, MODIFIED Verdict Freshness And Provenance / Land Base Currency /
+  Migration Sweep Gate Check; adversarial-review ADDED Design Fidelity Judge /
+  Findings File Sole Verdict Source, MODIFIED Reviewer Tree Identity
+  Attestation / Read Only Reviewer Dispatch / Orchestrator Round Ledger / Post
+  Apply Code Review Artifact; workflow-schema ADDED Design Fidelity Artifact
+  Template, MODIFIED Mode switchboard in review.md / Worktree Lifecycle
+  Ownership / Per-task file contracts / Apply-time writeback and workspace
+  discipline; skill-integration ADDED Worktree Always Skill Discipline,
+  MODIFIED Mode-driven openspec-apply-change / Analyze gates tasks generation;
+  opsx-loop MODIFIED Worktree resolution convention fallback.
 - **BREAKING**: in-flight same-tree changes must be re-homed to worktrees or
   archived before deployment; none active besides this change (verified:
   `openspec list` shows only add-opsx-design-fidelity-gate).
