@@ -20,17 +20,17 @@
 
 ## 2. Gate + CLI: worktree-mandatory enforcement
 
-- [ ] 2.1 `worktree_mode` key rejection: fail closed when the COMMITTED integration-checkout review.md front-matter declares a `worktree_mode` KEY with any value (including empty) — key-PRESENCE detection via front-matter key parse (first-colon split flag on key match), never substring grep (a YAML comment mentioning `worktree_mode` must not trip it; this change's own review.md is the fixture). Message names the delete-the-key remedy.
+- [x] 2.1 `worktree_mode` key rejection: fail closed when the COMMITTED integration-checkout review.md front-matter declares a `worktree_mode` KEY with any value (including empty) — key-PRESENCE detection via front-matter key parse (first-colon split flag on key match), never substring grep (a YAML comment mentioning `worktree_mode` must not trip it; this change's own review.md is the fixture). Message names the delete-the-key remedy.
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx
   - allow_new_files: false
-- [ ] 2.2 Remove every same-tree gate path: for a change past Diff Base capture with no valid locator/convention worktree, fail verdict evaluation loudly naming the missing worktree and the `opsx worktree ensure <change>` re-home remedy (covers the key-less tier-default migration shape: Diff Base present, empty Worktree Path, no branch); Manifest Validation and Migration Sweep gain the same past-capture-guarded loud fail (never silent integration fallback, wrong-reason pre-capture messages avoided); Land Base Currency refuses landing when no `opsx/<change>` branch exists; delete the tier-derivation of worktree mode and all same-tree freshness/exemption branches.
+- [x] 2.2 Remove every same-tree gate path: for a change past Diff Base capture with no valid locator/convention worktree, fail verdict evaluation loudly naming the missing worktree and the `opsx worktree ensure <change>` re-home remedy (covers the key-less tier-default migration shape: Diff Base present, empty Worktree Path, no branch); Manifest Validation and Migration Sweep gain the same past-capture-guarded loud fail (never silent integration fallback, wrong-reason pre-capture messages avoided); Land Base Currency refuses landing when no `opsx/<change>` branch exists; delete the tier-derivation of worktree mode and all same-tree freshness/exemption branches.
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx
   - allow_new_files: false
-- [ ] 2.3 `opsx sweep <change>`: resolve the grep root worktree-only (as the gate resolves it); past Diff Base capture with no valid worktree → loud fail naming the missing worktree, never silently grepping the integration checkout; keep `--worktree` loud validation and SWEEP-ERROR semantics.
+- [x] 2.3 `opsx sweep <change>`: resolve the grep root worktree-only (as the gate resolves it); past Diff Base capture with no valid worktree → loud fail naming the missing worktree, never silently grepping the integration checkout; keep `--worktree` loud validation and SWEEP-ERROR semantics.
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx
