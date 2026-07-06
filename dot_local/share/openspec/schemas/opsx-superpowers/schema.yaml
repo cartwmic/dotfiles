@@ -285,10 +285,11 @@ artifacts:
                            subagent-required (default: single-agent)
                            — dispatch via the subagent-dispatch capability
                            hook (pi-subagents is the pi adapter)
-        Worktree Mode:     worktree-required | worktree-eligible |
-                           same-tree (default DERIVED by tier when absent:
-                           XS/S ⇒ same-tree, M ⇒ worktree-required; an
-                           explicit value always wins — design D6)
+        (There is NO Worktree Mode: worktree execution is the ONLY
+         execution model at EVERY Scale, XS included. There is no key
+         to set — a review.md front-matter declaring a worktree_mode
+         key is rejected FAIL-CLOSED by opsx gate, remedy delete-the-
+         key. See the apply Worktree lifecycle.)
         Code Review Mode:  none | advisory | gating-required
                            (default: gating-required at Scale >= M, else
                            advisory) — gating-required blocks archive on
@@ -310,11 +311,13 @@ artifacts:
       trade-offs documented in README.md; intended for experimentation.
 
       review.md MUST carry a machine-readable YAML front-matter block
-      mirroring scale, worktree_mode, verification_mode, code_review_mode,
+      mirroring scale, verification_mode, code_review_mode,
       loop_max_iterations, validation_source_mode, and doneness_mode (plus
-      doneness_waiver_rationale when doneness_mode is waived). opsx gate reads
-      modes ONLY from that front-matter (never the prose table); the table is
-      the human-facing mirror the apply skill keeps in sync.
+      doneness_waiver_rationale when doneness_mode is waived). It SHALL NOT
+      carry a worktree_mode key — worktree execution is unconditional and a
+      declared worktree_mode key is rejected fail-closed by opsx gate. opsx
+      gate reads modes ONLY from that front-matter (never the prose table);
+      the table is the human-facing mirror the apply skill keeps in sync.
 
       review.md front-matter MAY also carry OPTIONAL per-change model/provider
       overrides resolved by the `opsx models` CLI:
@@ -335,8 +338,9 @@ artifacts:
                               integration-branch merge-base, IMMUTABLE for the
                               life of the opsx/<change> branch; used by file-
                               contract diffs, the code-review diff base, and
-                              opsx gate verdict freshness. Same-tree: pre-apply
-                              HEAD. Plus Worktree Path + Integration Branch.
+                              opsx gate verdict freshness. Worktree execution
+                              is unconditional, so Worktree Path is always
+                              filled. Plus Worktree Path + Integration Branch.
         Manual Adjustments — author overrides to defaults
         Execution Notes    — transient observations during apply
 
@@ -355,6 +359,12 @@ artifacts:
     instruction: |
       Break implementation work into trackable tasks. Apply phase
       parses `- [ ]` checkboxes.
+
+      Gating precondition (design-CONDITIONED): WHILE the change carries a
+      design.md, tasks generation SHALL NOT proceed until a sealed
+      design-fidelity.md records `Fidelity: delivered` (or a non-empty human
+      Human Waiver) — opsx gate enforces this before tasks. See the apply
+      skill contract's design-fidelity.md entry for the dispatch.
 
       Group tasks under ## numbered headings:
         - [ ] X.Y <description>
@@ -458,7 +468,8 @@ apply:
 
     Mode dispatch (read from review.md):
 
-      Worktree Mode worktree-eligible|worktree-required:
+      Worktree lifecycle (UNCONDITIONAL — worktree execution is the ONLY
+      model at EVERY Scale; there is no mode to select and no in-tree path):
         Pre-flight commit:
           1. Run `git status --porcelain openspec/changes/<name>/`
           2. If anything unstaged/uncommitted under that subtree,
@@ -476,8 +487,7 @@ apply:
           reuse a rev-parse HEAD base would exclude commits made in
           the prior apply session from every file-contract diff. On
           reuse PRESERVE the recorded base (halt for human repair if
-          absent or not an ancestor of opsx/<name>). Same-tree
-          override: base = pre-apply HEAD. Used by all subsequent
+          absent or not an ancestor of opsx/<name>). Used by all subsequent
           file-contract diffs in this apply session.
 
       Delegation Mode subagent-eligible|subagent-required:
@@ -547,6 +557,36 @@ apply:
                     Promote-candidates and offers per-row
                     confirm/skip prompts for
                     mcp_memory_store_memory ingestion.
+
+      design-fidelity.md — WHILE the change carries a design.md, the
+                    openspec-loop orchestration obtains a BLIND per-AC
+                    entailment judgment BEFORE tasks generation and seals it
+                    into design-fidelity.md from templates/design-fidelity.md
+                    (per-AC verdict rows entailed|not-entailed|not-covered +
+                    Fidelity delivered|violated + adapter-stamped Judge
+                    Provenance carrying review_mode + Attested HEAD + one
+                    sha256 Digest field per bound file: intent.md, design.md,
+                    every specs/**/spec.md). The DISPATCH CHANNEL is design-
+                    CONDITIONED, not tier-conditioned: WITH full_rigor the
+                    fidelity sweep RIDES the blind analyze dispatch as a
+                    required section of EVERY judge's prompt (verdict STILL
+                    sealed to the separate design-fidelity.md); at plain Scale
+                    M or a design-bearing S/XS a narrow post-design blind
+                    mini-dispatch produces it. Judge models resolve via the
+                    `review` role (no dedicated fidelity role). Multi-judge
+                    consolidation is key-indexed worst-of per AC (any-block-
+                    wins; a canonical AC absent from a judge consolidates
+                    not-covered, fail-closed). opsx gate READS the sealed
+                    fields (no model in the gate), enforces Digest set-
+                    equality both directions + recompute against the
+                    integration checkout, and gates tasks generation on
+                    Fidelity: delivered OR a non-empty Human Waiver. Every
+                    sealed verdict (and any human-waiver ruling) appends one
+                    row to review.md's Fidelity Round Ledger; two consecutive
+                    `violated` rows route to the decision-audit landing
+                    (design D1/D2/D4).
+                    (opsx-adversarial-review.design-fidelity-judge;
+                     opsx-workflow-schema.design-fidelity-artifact-template)
 
       doneness.md — WHILE a doneness verdict is required (Scale >= M
                     and review.md `doneness_mode: required`), the
