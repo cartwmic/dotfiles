@@ -825,6 +825,102 @@ if [ -f "$CDIR/sweep.txt" ]; then
   fi
 fi
 
+# ============================================================================
+# DESIGN FIDELITY VERDICT (opsx-gate-enforcement.design-fidelity-verdict-enforcement;
+# design D1 + D3). UNCONDITIONAL cheap-phase check ordered between the analyze
+# artifact check (required-artifact loop above) and the tasks-complete check
+# below — plain sequential `fail` emission like the sweep/tasks checks, NEVER
+# inside the missing-required-artifact short-circuit and NEVER rc-gated (unlike
+# doneness's sole-remaining-failure block), so a first-red-wins consumer always
+# sees design-fidelity before tasks. Deterministic + model-free: fields and
+# digest inputs are read from the COMMITTED integration-checkout (main-worktree)
+# change dir — never the worktree-reassigned $CDIR, never live disk — so a stale
+# worktree copy can neither pass nor permanently redden the check (D1).
+# WHERE the committed change carries no design.md, fidelity is NOT required: the
+# check emits nothing and is skipped entirely.
+DF_MAIN="$(opsx_repo_main_root "${OPSX_ROOT:-$PWD}")"; [ -n "$DF_MAIN" ] || DF_MAIN="$ROOT"
+DESIGN_COMMITTED="$(opsx_main_show "openspec/changes/$CHANGE/design.md")"
+if [ -n "$DESIGN_COMMITTED" ]; then
+  # design-bearing change ⇒ a sealed fidelity verdict is mandatory.
+  DF_COMMITTED="$(opsx_main_show "openspec/changes/$CHANGE/design-fidelity.md")"
+  # sha256 of stdin — BSD `shasum -a 256` / GNU `sha256sum` dual-path, the stdin
+  # sibling of sha256_file (defined later in the doneness block); needed here to
+  # hash `opsx_main_show` output (committed blobs) without a temp file.
+  sha256_stdin() {
+    if command -v shasum >/dev/null 2>&1; then shasum -a 256 2>/dev/null | awk '{print $1}';
+    else sha256sum 2>/dev/null | awk '{print $1}'; fi
+  }
+  # Committed-content field reader — mirrors cr_field's comment-stripped
+  # "**Field:** value" idiom, operating on the DF_COMMITTED string (not a file).
+  df_field() { # $1=field name
+    printf '%s\n' "$DF_COMMITTED" | sed '/<!--/,/-->/d' 2>/dev/null \
+      | grep -iE "^[*_ ]*$1[*_ ]*:" | head -1 \
+      | sed -E "s/^[*_ ]*$1[*_ ]*:[*_ ]*//I; s/[*_[:space:]]+$//"
+  }
+  if [ -z "$DF_COMMITTED" ]; then
+    fail design-fidelity "design-fidelity.md absent (design-bearing change requires a sealed fidelity verdict; seal artifact)"
+  else
+    # --- provenance: review_mode must be a blind-dispatch mode (doneness parity
+    #     ~1069). Extracted from the Judge Provenance line (embedded token, not an
+    #     own-line field): everything after the first colon of `review_mode:`.
+    df_mode="$(printf '%s\n' "$DF_COMMITTED" | sed '/<!--/,/-->/d' \
+      | grep -oiE 'review_mode:[[:space:]]*[a-z-]+' | head -1 | sed -E 's/^[^:]*:[[:space:]]*//')"
+    df_mode="$(printf '%s' "$df_mode" | tr '[:upper:]' '[:lower:]')"
+    case "$df_mode" in
+      blind-single-judge|adversarial-multimodel) ;;
+      *) fail design-fidelity "design-fidelity.md provenance review_mode is '${df_mode:-missing}' (need blind-single-judge or adversarial-multimodel; an inline self-judgment never seals; fix provenance)" ;;
+    esac
+    # --- Attested HEAD: full 40-hex literal (provenance only, NEVER range-compared)
+    df_att="$(df_field 'Attested HEAD')"
+    if ! printf '%s' "$df_att" | grep -qE '^[0-9a-f]{40}$'; then
+      fail design-fidelity "design-fidelity.md Attested HEAD absent or not a full 40-hex SHA literal (unparseable provenance; fix provenance / re-seal artifact)"
+    fi
+    # --- Fidelity verdict + human-waiver (D3): delivered ⇒ digests; violated ⇒
+    #     satisfied only with a non-empty Human Waiver (whitespace-only = empty,
+    #     trimmed to empty by df_field ⇒ fail); any other/absent value fails.
+    df_verdict="$(df_field 'Fidelity' | tr '[:upper:]' '[:lower:]')"
+    df_waiver="$(df_field 'Human Waiver')"
+    case "$df_verdict" in
+      delivered) ;;
+      violated)
+        if [ -z "$df_waiver" ]; then
+          fail design-fidelity "design-fidelity.md Fidelity: violated without a non-empty Human Waiver (re-judge full sweep or record a human waiver)"
+        fi ;;
+      *)
+        fail design-fidelity "design-fidelity.md Fidelity is '${df_verdict:-missing}' (need delivered, or violated + Human Waiver; re-judge full sweep)" ;;
+    esac
+    # --- Digest bindings + set equality (task 1.2). Enumerate the COMMITTED
+    #     bound-file set at the main root: intent.md, design.md, + every committed
+    #     specs/**/spec.md. Build each change-dir-relative key, LITERAL-match its
+    #     digest line (grep -F — paths carry `(`,`)`,`.`,`/`; never a path-built
+    #     regex), recompute sha256 over the committed blob, compare.
+    df_keys="intent.md design.md"
+    for _f in $(git -C "$DF_MAIN" ls-tree -r --name-only HEAD "openspec/changes/$CHANGE/specs/" 2>/dev/null | grep '/spec\.md$'); do
+      df_keys="$df_keys ${_f#openspec/changes/$CHANGE/}"
+    done
+    for _k in $df_keys; do
+      _line="$(printf '%s\n' "$DF_COMMITTED" | grep -F "**Digest sha256 ($_k):** " | head -1)"
+      if [ -z "$_line" ]; then
+        fail design-fidelity "design-fidelity.md missing digest field for '$_k' (bound-file set changed; re-judge full sweep)"; continue
+      fi
+      _rec="$(printf '%s' "$_line" | sed -E 's/^.*\*\* //; s/[[:space:]]+$//')"
+      _now="$(opsx_main_show "openspec/changes/$CHANGE/$_k" | sha256_stdin)"
+      if [ "$_rec" != "$_now" ]; then
+        fail design-fidelity "design-fidelity.md digest for '$_k' is stale (recorded $_rec != recomputed $_now; edit means re-judge full sweep)"
+      fi
+    done
+    # Set equality, other direction: a recorded digest key NOT in the enumerated
+    # set = a removed bound file ⇒ stale (an AC-set change forces a fresh sweep).
+    for _rk in $(printf '%s\n' "$DF_COMMITTED" | sed '/<!--/,/-->/d' | grep -F '**Digest sha256 (' \
+      | sed -E 's/^\*\*Digest sha256 \((.*)\):\*\* .*/\1/'); do
+      case " $df_keys " in
+        *" $_rk "*) ;;
+        *) fail design-fidelity "design-fidelity.md records a digest for '$_rk' absent from the bound-file set (removed file; re-judge full sweep)" ;;
+      esac
+    done
+  fi
+fi
+
 # Tasks complete
 if [ -f "$CDIR/tasks.md" ]; then
   unchecked="$(grep -cE '^[[:space:]]*- \[ \]' "$CDIR/tasks.md" 2>/dev/null || true)"
