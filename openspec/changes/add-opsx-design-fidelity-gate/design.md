@@ -248,9 +248,14 @@ repair).
 
 **Choice:** The pre/post round snapshots cover the reviewed worktree AND (when
 a different tree — the worktree-always norm) the integration checkout: per tree
-`git rev-parse HEAD` + `git status --porcelain=v1`, with the change's own
-`openspec/changes/<change>/` paths excluded (orchestrator-sealed bookkeeping,
-the only permitted in-window writes). Concurrency carve-out (analyze R2,
+`git rev-parse HEAD` + `git status --porcelain=v1`, with ONLY the change's
+orchestrator-bookkeeping files excluded (review.md, follow-ups.md — the only
+permitted in-window writes). The judged inputs (intent.md, design.md,
+`specs/**`) and all other artifacts are NEVER excluded (analyze R5, S-F1/O-F2):
+a fidelity judge's subject matter lives in the change dir, and a whole-dir
+exclusion would blind the window to a judge rewriting the very material it
+judges before digests seal over it — the narrow exclusion makes that mutation
+void the round. Concurrency carve-out (analyze R2,
 S-F1): an integration-checkout HEAD advance does NOT void the round when every
 intervening commit exclusively touches other changes'
 `openspec/changes/<other>/` paths — concurrent orchestrators legitimately land
@@ -316,15 +321,24 @@ skills deletes.
 
 **4-point test:** → ADR candidate **Y** (BREAKING).
 
-### D8: Post-seal bookkeeping non-staling — structural, not allowlisted
+### D8: Post-seal bookkeeping non-staling — structural, plus committed-read for mode fields
 
-**Choice:** No mechanism is added. Under worktree-always, sealed verdicts bind
-to the `opsx/<change>` worktree branch HEAD; orchestrator bookkeeping
-(loop_hold, follow-ups.md routing, Execution Notes) commits on the integration
-checkout per the writeback-owner discipline and therefore never moves the
-verdict-bound HEAD. The hard invariant holds untouched: gate-read decision
-inputs stay freshness-protected, review.md is never allowlisted wholesale —
-a post-seal edit to gate-read decision inputs still fails closed/stales.
+**Choice:** Two small mechanisms, no allowlist. (1) Structure: under
+worktree-always, sealed verdicts bind to the `opsx/<change>` worktree branch
+HEAD; orchestrator bookkeeping (loop_hold, follow-ups.md routing, Execution
+Notes) commits on the integration checkout per the writeback-owner discipline
+and therefore never moves the verdict-bound HEAD. Placement is backstopped
+deterministically (analyze R5, S-F3): a bookkeeping commit misplaced onto the
+worktree branch moves the verdict-bound HEAD and stales the seal via the
+existing range-freshness check — loud fail-closed red, remedy re-review;
+misplacement is always detected, never silently green. (2) Committed-read
+(analyze R5, S-F2): the gate sources review.md front-matter mode fields from
+the COMMITTED integration-checkout content (`git show HEAD:…`), never live
+disk, so an uncommitted `doneness_mode: waived` edit cannot silently switch
+off a required verdict. Committed downgrades remain possible — they are
+auditable history of the same integrity-breach class as a self-authored
+waiver (R7), surfaced by audit, out of the no-sandboxing scope. review.md is
+never allowlisted wholesale.
 
 **Alternatives considered:**
 - **Verdict-file allowlist in the freshness check**: allowlists are exactly the
@@ -349,6 +363,16 @@ candidate **N** (documented as D7 corollary).
 | R5 | In-flight pre-deployment same-tree changes brick on the new gate | Low | Medium | C8 migration scenario names the re-home remedy; verified only this change is active |
 | R6 | Dual-tree restore deletes wanted untracked files | Low | Medium | Surgical restore: only window-introduced untracked paths; never blanket clean; incident recorded before restore |
 | R7 | Human-waiver field self-authored by an autonomous agent (gate cannot verify authorship) | Low | High | Waiver must name ruling + landing entry; landing record + retrospective audit are the enforcement surface (doneness-waiver parity); deliberate forgery is an integrity breach outside the no-sandboxing scope |
+
+## Documentation deferral (analyze R5, O-F4 — advisory)
+
+The live `opsx-workflow-schema` doc-class requirements "Artifact graph
+definition" (template inventory) and "Per-Tier Review Stack" do not yet name
+the design-fidelity template/dispatch. Not a contradiction (fidelity is
+design-conditioned, not tier-conditioned); deferred to apply-time follow-ups
+rather than two more MODIFIED deltas — the README/template surfaces are
+touched at implementation anyway and the entry lands in follow-ups.md when it
+is created.
 
 ## Migration Plan
 

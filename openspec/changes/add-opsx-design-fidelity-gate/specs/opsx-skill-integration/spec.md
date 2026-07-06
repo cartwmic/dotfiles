@@ -4,7 +4,12 @@
 
 ### Requirement: Worktree Always Skill Discipline
 
-THE opsx-superpowers skill surfaces (openspec-loop, openspec-propose, openspec-apply-change, openspec-archive-change references, openspec-explore) SHALL present worktree execution as the only execution model at every Scale: no skill prose SHALL offer, derive, or describe a same-tree execution path for opsx-superpowers changes; apply SHALL create/reuse the worktree via `opsx worktree ensure` before any implementation task at every Scale including XS; and orchestrator bookkeeping (loop_hold, follow-ups.md routing, Execution Notes) SHALL land on the integration checkout per the writeback-owner discipline so sealed worktree-bound verdicts stay fresh.
+THE opsx-superpowers skill surfaces (openspec-loop, openspec-propose, openspec-apply-change, openspec-archive-change references, openspec-explore) SHALL present worktree execution as the only execution model at every Scale: no skill prose SHALL offer, derive, or describe a same-tree execution path for opsx-superpowers changes; apply SHALL create/reuse the worktree via `opsx worktree ensure` before any implementation task at every Scale including XS; and orchestrator bookkeeping (loop_hold, follow-ups.md routing, Execution Notes) SHALL land on the integration checkout per the writeback-owner discipline so sealed worktree-bound verdicts stay fresh. Placement is not enforced by prose alone: a bookkeeping commit misplaced onto the `opsx/<change>` worktree branch moves the verdict-bound HEAD and therefore STALES the sealed verdicts via the existing range-freshness check — a loud fail-closed gate red whose remedy is re-review — so a placement violation is always detected, never silently green.
+
+#### Scenario: Misplaced bookkeeping commit is detected fail-closed
+- **WHILE** code-review.md is sealed at the worktree branch HEAD
+- **IF** an orchestrator mistakenly commits a follow-ups.md entry on the worktree branch instead of the integration checkout
+- **THEN** the recorded reviewed range no longer matches the recomputed range, the gate SHALL report the verdict stale (fail-closed), and the remedy is re-review — the misplacement cannot produce a silently green gate
 
 #### Scenario: XS change runs the full worktree lifecycle
 - **WHEN** an XS change is applied
