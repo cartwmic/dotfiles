@@ -4,8 +4,8 @@
 **Change:** add-opsx-design-fidelity-gate
 
 **Diff Base SHA:** 40d6ff09a3169584bf03ce20567306031d4c2e7c
-**Implementation HEAD:** b2a04b2afc4d5dde89acfa690bacc9a8217e57d6
-**Reviewed Range:** 40d6ff09a3169584bf03ce20567306031d4c2e7c..b2a04b2afc4d5dde89acfa690bacc9a8217e57d6
+**Implementation HEAD:** c36b22d4640657305fd69dc68b56c939eb2b62cd
+**Reviewed Range:** 40d6ff09a3169584bf03ce20567306031d4c2e7c..c36b22d4640657305fd69dc68b56c939eb2b62cd
 
 ## Completion Decision
 
@@ -18,7 +18,7 @@
 | 1 | Structural validation (`openspec validate --strict`) | pass | `Change 'add-opsx-design-fidelity-gate' is valid` (6 delta capabilities) |
 | 2 | Task completion (zero `- [ ]` in tasks.md) | pass | 15/15 checked (worktree copy — gate-read side) |
 | 3 | Delta vs current spec coherence | pass | 6 capabilities: gate-enforcement (3 ADDED + 5 MODIFIED), adversarial-review (2 ADDED + 5 MODIFIED), workflow-schema (1 ADDED + 5 MODIFIED), skill-integration (1 ADDED + 2 MODIFIED), opsx-loop (1 MODIFIED), opsx-cli (1 MODIFIED); every MODIFIED carries full baseline content minus stated same-tree removals — re-verified across 9 blind analyze rounds (R6/R8/R9 survivor + drop sweeps clean) |
-| 4 | Commit hygiene (subject ≤72; body explains why) | pass | max subject 67 across the range after msg-filter reword of 9 implementation commits (originals preserved as bodies); post-verify verdict-seal/bookkeeping commits (verify repoint, locator sync) carry subject-only messages by convention — hygiene's body criterion applies to implementation commits; corrected per code-review R1 (S-P2, O-F1) |
+| 4 | Commit hygiene (subject ≤72; body explains why) | pass (documented exception — owner override at archive) | Implementation commits: all ≤72 (max 67) with bodies, after msg-filter reword. EXCEPTION (code-review R3, sonnet P2): 11 orchestrator bookkeeping commits authored on the integration branch during the autonomous loop (task-mirror checkboxes, follow-ups routing, locator repairs; max 222 chars) entered the range via the landing rebase and exceed the subject limit; rewriting unpushed main + re-rebasing + a third staleness round judged disproportionate for subject cosmetics. Follow-up F9 adds mirror-commit subject discipline. Exception requires explicit owner authorization at archive per this template's override mechanism. |
 | 5 | AC↔test mapping (canonical IDs) | pass | Forward 24/24 requirements → test-file AC-ID hits (12 behavioral suites + 12 shipped-surface assertions in tests/opsx-design-fidelity); Reverse 4/4 diff test files carry ≥1 canonical AC ID |
 | 6 | Constitution compliance audit (sampling) | pass | gate additions are deterministic/model-free (field parse + git plumbing + sha256, ADR-0005 lineage), fail-closed throughout (15-case negative matrix + 49-assert suite), BSD/macOS-safe (shasum dual-path, no GNU-only flags); judged-verdict authorship stays in dispatched subagents (D5) |
 
