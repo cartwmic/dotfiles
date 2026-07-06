@@ -470,8 +470,12 @@ opsx_sweep_run() {
 # SUBCOMMAND: sweep — migration-completeness sweep for one change.
 #   opsx sweep <change> [--worktree <path>]
 # Resolves the implementation checkout EXACTLY as the gate does: explicit
-# --worktree validated loudly; else the recorded Worktree Path locator; else
-# the convention path when valid; else the integration checkout.
+# --worktree validated loudly; else the COMMITTED Worktree Path locator; else
+# the convention path when valid. Worktree-always (design D7): PAST Diff Base
+# capture with neither validating is a LOUD hard failure naming the missing
+# worktree + re-home remedy — never a silent integration-checkout sweep. PRE-
+# capture (no committed Diff Base) there is no worktree yet, so the integration
+# checkout remains the only tree to sweep.
 # ============================================================================
 opsx_sweep() (
   set -u
@@ -484,7 +488,7 @@ opsx_sweep() (
   [ -n "$ROOT" ] || { echo "opsx sweep: not inside a git repository" >&2; exit 2; }
   MAIN="$(opsx_repo_main_root "$ROOT")"; [ -n "$MAIN" ] || MAIN="$ROOT"
   ROOT="$MAIN"
-  SWEEP_ROOT="$ROOT"
+  SWEEP_ROOT=""
   if [ -n "$WT_ARG" ]; then
     # Operator assertion: validate NOW, fail LOUD — never a silent fallback.
     if ! opsx_wt_valid_for_change "$WT_ARG" "$CHANGE"; then
@@ -493,18 +497,31 @@ opsx_sweep() (
     fi
     SWEEP_ROOT="$WT_ARG"
   else
-    _REVIEW="$ROOT/openspec/changes/$CHANGE/review.md"
-    WP=""
-    if [ -f "$_REVIEW" ]; then
-      WP="$(grep -E '^\*\*Worktree Path:\*\*' "$_REVIEW" 2>/dev/null | head -1 \
-            | sed -E 's/^\*\*Worktree Path:\*\*[[:space:]]*//; s/[[:space:]]+$//')"
-      case "$WP" in *"<empty"*|"<"*) WP="" ;; esac
-    fi
+    # COMMITTED integration-checkout review.md (gate parity, D8): read BOTH the
+    # Worktree Path locator AND the Diff Base capture marker from committed content.
+    _RC="$(git -C "$MAIN" show "HEAD:openspec/changes/$CHANGE/review.md" 2>/dev/null)"
+    WP="$(printf '%s\n' "$_RC" | grep -E '^\*\*Worktree Path:\*\*' | head -1 \
+          | sed -E 's/^\*\*Worktree Path:\*\*[[:space:]]*//; s/[[:space:]]+$//')"
+    case "$WP" in *"<empty"*|"<"*) WP="" ;; esac
+    DB="$(printf '%s\n' "$_RC" | grep -E '^\*\*Diff Base SHA:\*\*' | head -1 \
+          | sed -E 's/^\*\*Diff Base SHA:\*\*[[:space:]]*//; s/[[:space:]]+$//')"
+    case "$DB" in *"<empty"*|"<"*) DB="" ;; esac
     if opsx_wt_valid_for_change "$WP" "$CHANGE"; then
       SWEEP_ROOT="$WP"
     else
       _CAND="$(opsx_wt_convention_path "$ROOT" "$CHANGE")"
       if opsx_wt_valid_for_change "$_CAND" "$CHANGE"; then SWEEP_ROOT="$_CAND"; fi
+    fi
+    if [ -z "$SWEEP_ROOT" ]; then
+      if [ -n "$DB" ]; then
+        # Worktree-always past capture (D7): neither locator nor convention path
+        # validates — LOUD hard failure, never a silent integration-checkout sweep.
+        echo "opsx sweep: no valid git worktree on branch opsx/$CHANGE for a change past Diff Base capture; re-home before sweeping — REMEDY: opsx worktree ensure $CHANGE" >&2
+        exit 2
+      fi
+      # PRE-capture: no worktree exists yet; the integration checkout is the only
+      # tree, and there is nothing to sweep against a not-yet-created worktree.
+      SWEEP_ROOT="$ROOT"
     fi
   fi
   DECL="$SWEEP_ROOT/openspec/changes/$CHANGE/sweep.txt"
@@ -620,6 +637,25 @@ bodyfield_committed() { # $1=label → committed review.md body field (Worktree 
   printf '%s\n' "$REVIEW_COMMITTED" | grep -E "^\*\*$1:\*\*" 2>/dev/null \
     | head -1 | sed -E "s/^\*\*$1:\*\*[[:space:]]*//; s/[[:space:]]+$//"
 }
+fm_has_key_committed() { # $1=key → prints "1" iff the COMMITTED review.md front-matter DECLARES that KEY (any value, empty included); nothing otherwise
+  # KEY-PRESENCE detection (design D1/D7): iterate the front-matter fence block,
+  # SKIP comment lines (optional leading whitespace then `#`), extract the key as
+  # the text before the FIRST colon, and match the trimmed key literally — so a
+  # YAML COMMENT merely mentioning the key (this change's live review.md fixture)
+  # never trips it, and an empty-valued `worktree_mode:` still does. Never a
+  # substring grep. Mirrors fm_committed's fence/skip parsing.
+  [ -n "$REVIEW_COMMITTED" ] || return 0
+  printf '%s\n' "$REVIEW_COMMITTED" | awk -v key="$1" '
+    NR==1 { if ($0 != "---") exit; infm=1; next }
+    infm && $0=="---" { exit }
+    infm {
+      line=$0; sub(/^[ \t]+/,"",line)
+      if (line ~ /^#/) next
+      p=index(line,":"); if (p==0) next
+      k=substr(line,1,p-1); gsub(/^[ \t]+|[ \t]+$/,"",k)
+      if (k==key) { print "1"; exit }
+    }'
+}
 
 # ============================================================================
 # ARTIFACT SOURCE RESOLUTION (deliberate split — design D8)
@@ -681,12 +717,18 @@ fi
 
 [ -d "$CDIR" ] || { fail change "change not found: $CHANGE"; exit 1; }
 
+# Diff Base capture locator (orchestration class — committed integration-checkout
+# content only, D8). Read UP FRONT: worktree-always enforcement (D7) is gated on
+# "past capture" (a recorded Diff Base) and that gate is consulted by the cheap-
+# phase sweep check below as well as the verdict/validation stages later.
+DIFF_BASE="$(bodyfield_committed 'Diff Base SHA')"
+case "$DIFF_BASE" in *"<empty"*|"<"*) DIFF_BASE="" ;; esac
+
 # Orchestration switchboard: EVERY gate-read front-matter field is sourced from the
 # COMMITTED integration-checkout review.md (fm_committed), never the worktree-reassigned
 # live file — an uncommitted mode edit must never flip a gate decision (D8).
 SCALE="$(fm_committed scale)"
 FULL_RIGOR_RAW="$(fm_committed full_rigor)"
-WORKTREE_MODE="$(fm_committed worktree_mode)"
 VERIFY_MODE="$(fm_committed verification_mode)"
 CR_MODE="$(fm_committed code_review_mode)"
 VSRC_MODE="$(fm_committed validation_source_mode)"
@@ -700,7 +742,6 @@ validate_mode() { # $1 = field name, $2 = value, $3 = allowed values (space-sep)
   case " $3 " in *" $2 "*) return 0 ;; esac
   fail mode "unknown $1 value: '$2' (allowed: $3); failing closed"
 }
-validate_mode worktree_mode "$WORKTREE_MODE" "worktree-required worktree-eligible same-tree"
 validate_mode verification_mode "$VERIFY_MODE" "inline-only retained-recommended retained-required"
 validate_mode code_review_mode "$CR_MODE" "none advisory gating-required"
 validate_mode validation_source_mode "$VSRC_MODE" "required waived"
@@ -737,6 +778,17 @@ fi
 # review.md present + Scale parseable (Scale is read first; review ordered first)
 if [ ! -f "$REVIEW" ]; then
   fail review "review.md absent (required to read Scale)"
+fi
+
+# Worktree-mode key rejection (opsx-gate-enforcement.worktree-mandatory-gate-
+# enforcement, design D7): worktree execution is the ONLY model — the mode was
+# abolished. A `worktree_mode` KEY declared in the COMMITTED review.md front-
+# matter (any value, empty included) is a failed check naming the delete-the-key
+# remedy. KEY-PRESENCE detection (fm_has_key_committed): a YAML comment merely
+# mentioning worktree_mode does NOT trip it — this change's own live review.md
+# carries exactly such a comment and is the fixture.
+if [ -n "$(fm_has_key_committed worktree_mode)" ]; then
+  fail worktree-mode "review.md declares worktree_mode; delete the key — the workflow is worktree-always"
 fi
 # Tier collapse (opsx-workflow-schema.scale-adaptive-gating, design D3): the
 # vocabulary is XS|S|M. The retired L/XL labels fail CLOSED with the relabel
@@ -778,15 +830,10 @@ case "$SCALE" in
   *)  req="" ;;
 esac
 
-# Worktree-mode default derivation (design D6): when worktree_mode is ABSENT from
-# front-matter, derive it by tier — XS/S same-tree, M worktree-required. An
-# explicit value (already validated above) always wins.
-if [ -z "$WORKTREE_MODE" ]; then
-  case "$SCALE" in
-    XS|S) WORKTREE_MODE=same-tree ;;
-    M)    WORKTREE_MODE=worktree-required ;;
-  esac
-fi
+# Worktree-always (design D7): the XS/S⇒same-tree and M⇒worktree-required tier
+# derivation is DELETED along with the Worktree Mode vocabulary. Worktree
+# execution is the only model; enforcement is gated on Diff Base capture below
+# (past capture with no valid worktree fails loudly), not on a derived mode.
 ORDER="review intent proposal specs clarify design analyze tasks plan"
 for a in $ORDER; do
   case " $req " in *" $a "*) ;; *) continue ;; esac
@@ -816,12 +863,19 @@ fi
 # worktree-side fixes count and integration-side stale copies never false-fail.
 # Undeclared changes: no check, exit code unaffected.
 if [ -f "$CDIR/sweep.txt" ]; then
+  if [ -n "$DIFF_BASE" ] && [ -z "$WT_PATH" ]; then
+    # Worktree-always past capture (D7): with no validated opsx/<change> worktree
+    # the sweep has no implementation tree to grep — GATE-FAIL loudly naming the
+    # missing worktree, NEVER grep the integration root as the impl tree.
+    fail sweep "no valid opsx/$CHANGE worktree for a change past Diff Base capture; the migration sweep runs only in the implementation worktree — REMEDY: opsx worktree ensure $CHANGE"
+  else
   sweep_out="$(opsx_sweep_run "$ART_ROOT" "$CDIR/sweep.txt")"; sweep_rc=$?
   [ -n "$sweep_out" ] && printf '%s\n' "$sweep_out" >&2
   if [ "$sweep_rc" -eq 1 ]; then
     fail sweep "declared pattern(s) hit shipped surfaces ($(printf '%s\n' "$sweep_out" | grep -c '^SWEEP-HIT' || true) hit(s))"
   elif [ "$sweep_rc" -ge 2 ]; then
     fail sweep "sweep declaration error: $(printf '%s\n' "$sweep_out" | grep '^SWEEP-ERROR' | head -1)"
+  fi
   fi
 fi
 
@@ -963,9 +1017,9 @@ fi
 # ============================================================================
 # WORKTREE ENFORCEMENT (for validations + verdict freshness)
 # WT_PATH/ART_ROOT were resolved up front (artifact source resolution); this
-# section enforces worktree-required and derives the implementation HEAD.
+# section enforces worktree-always and derives the implementation HEAD.
+# (DIFF_BASE was read up front — it gates the past-capture enforcement below.)
 # ============================================================================
-DIFF_BASE="$(bodyfield_committed 'Diff Base SHA')"   # orchestration locator: committed integration-checkout content only (D8)
 
 impl_head() {
   if [ -n "$WT_PATH" ] && [ -d "$WT_PATH" ]; then
@@ -976,18 +1030,21 @@ impl_head() {
 }
 IMPL_HEAD="$(impl_head)"
 
-if [ "$WORKTREE_MODE" = "worktree-required" ]; then
-  # Must locate a real worktree on branch opsx/<change>; never fall back to ROOT.
-  if [ -z "$WT_PATH" ]; then
-    fail worktree "worktree-required but no Worktree Path recorded and no --worktree given"; exit 1
-  fi
-  if ! git -C "$WT_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    fail worktree "Worktree Path is not a git worktree: $WT_PATH"; exit 1
-  fi
-  WT_BRANCH="$(git -C "$WT_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null)"
-  if [ "$WT_BRANCH" != "opsx/$CHANGE" ]; then
-    fail worktree "worktree not on branch opsx/$CHANGE (on ${WT_BRANCH:-?})"; exit 1
-  fi
+# Worktree-always enforcement (opsx-gate-enforcement.worktree-mandatory-gate-
+# enforcement, design D7). PAST Diff Base capture (a recorded Diff Base) a change
+# MUST resolve a valid opsx/<change> worktree. WT_PATH is non-empty IFF the
+# recorded locator OR the convention path validated as a git worktree on branch
+# opsx/<change> (opsx_wt_valid_for_change already checks the branch), so an empty
+# WT_PATH here means neither validated. Fail the verdict evaluation LOUDLY naming
+# the missing worktree + the re-home remedy, and exit BEFORE the validation stage
+# (Manifest Validation must not run a command against the integration checkout) —
+# NEVER silently evaluate the integration checkout as the implementation tree.
+# Covers the key-less migration shape (Diff Base present, empty Worktree Path, no
+# opsx/<change> branch). PRE-capture (no Diff Base) there is no implementation
+# tree to bind yet: the missing-artifact guidance governs — no no-worktree error.
+if [ -n "$DIFF_BASE" ] && [ -z "$WT_PATH" ]; then
+  fail worktree "no valid opsx/$CHANGE worktree for a change past Diff Base capture (recorded Worktree Path and convention path both invalid); the workflow is worktree-always — REMEDY: opsx worktree ensure $CHANGE, then re-review"
+  exit 1
 fi
 
 # ============================================================================
@@ -1659,8 +1716,10 @@ rc=0
 
 # (a) land-base-currency: merge-base(opsx/<change>, <integration branch>) must
 #     equal the resolved integration branch's HEAD (opsx-cli.integration-branch-
-#     resolution — never a hardcoded literal). No opsx/<change> branch =>
-#     same-tree exemption (satisfied, never a missing-ref failure).
+#     resolution — never a hardcoded literal). Worktree-always (design D7): NO
+#     opsx/<change> branch => the precondition FAILS naming the worktree-mandatory
+#     model + the ensure remedy (the same-tree exemption is deleted — a change is
+#     never landed from integration-checkout commits).
 IB="$(opsx_integration_branch "$ROOT" "$CHANGE")" || IB=""
 if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
   if [ -z "$IB" ]; then
@@ -1680,7 +1739,8 @@ if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
     fi
   fi
 else
-  echo "archive-check: base-currency satisfied — no $BRANCH branch (same-tree exemption; no divergent base to rebase)"
+  echo "ARCHIVE-CHECK-FAIL base-currency: no $BRANCH branch — worktree-mandatory execution is the only model; a change is never landed from integration-checkout commits; REMEDY: opsx worktree ensure $CHANGE, then re-review" >&2
+  rc=1
 fi
 
 # (b) duplicate-ADR scan: derive ADR-NNNN from filenames under adr/.
