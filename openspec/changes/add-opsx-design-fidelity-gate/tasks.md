@@ -72,13 +72,13 @@
 
 ## 5. Tests
 
-- [ ] 5.1 Gate fidelity fixtures (`tests/opsx-gate/test_opsx_gate.sh`, new `tests/opsx-design-fidelity/` if cleaner): design-bearing change without design-fidelity.md fails; delivered + matching digests passes; digest mismatch stales; violated without waiver fails; violated + non-empty waiver + matching digests + set-equality passes; empty waiver fails; new/removed delta spec file stales (waived seal included); provenance `review_mode: degraded-single-model` fails; uncommitted `Fidelity` flip and uncommitted mode-field edit are invisible (committed-read); guidance order reports design-fidelity ahead of tasks; no design.md ⇒ no fidelity requirement.
+- [x] 5.1 Gate fidelity fixtures (`tests/opsx-gate/test_opsx_gate.sh`, new `tests/opsx-design-fidelity/` if cleaner): design-bearing change without design-fidelity.md fails; delivered + matching digests passes; digest mismatch stales; violated without waiver fails; violated + non-empty waiver + matching digests + set-equality passes; empty waiver fails; new/removed delta spec file stales (waived seal included); provenance `review_mode: degraded-single-model` fails; uncommitted `Fidelity` flip and uncommitted mode-field edit are invisible (committed-read); guidance order reports design-fidelity ahead of tasks; no design.md ⇒ no fidelity requirement.
   - intent: feature
   - files_allowed:
       - tests/opsx-gate/**
       - tests/opsx-design-fidelity/**
   - allow_new_files: true
-- [ ] 5.2 Worktree-mandatory fixtures: migrate/delete same-tree fixtures in `tests/opsx-gate/test_opsx_gate.sh` + `tests/opsx-cli/test_opsx_cli.sh`; add: `worktree_mode` key (any value, and empty value) fails closed; comment-bearing review.md (this change's own) does NOT trip the key check; key-less tier-default same-tree locator shape fails with re-home remedy; sweep loud-fails on missing worktree past capture; Land Base Currency refuses landing without the branch.
+- [x] 5.2 Worktree-mandatory fixtures: migrate/delete same-tree fixtures in `tests/opsx-gate/test_opsx_gate.sh` + `tests/opsx-cli/test_opsx_cli.sh`; add: `worktree_mode` key (any value, and empty value) fails closed; comment-bearing review.md (this change's own) does NOT trip the key check; key-less tier-default same-tree locator shape fails with re-home remedy; sweep loud-fails on missing worktree past capture; Land Base Currency refuses landing without the branch.
   - intent: feature
   - files_allowed:
       - tests/opsx-gate/**
