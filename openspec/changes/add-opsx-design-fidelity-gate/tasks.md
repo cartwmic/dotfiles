@@ -38,12 +38,12 @@
 
 ## 3. Schema: templates + docs
 
-- [ ] 3.1 Ship `templates/design-fidelity.md`: per-AC verdict table (`entailed | not-entailed | not-covered`), own-line `**Fidelity:**`, judge-provenance + `**Attested HEAD:**` fields, per-file digest fields in the pinned grammar `**Digest sha256 (<change-dir-relative path>):** <64-hex>`, optional `**Human Waiver:**`, `Advisory Findings` section, template comments documenting the bounded judge contract + full-sweep re-judge rule; multi-line-only HTML comments.
+- [x] 3.1 Ship `templates/design-fidelity.md`: per-AC verdict table (`entailed | not-entailed | not-covered`), own-line `**Fidelity:**`, judge-provenance + `**Attested HEAD:**` fields, per-file digest fields in the pinned grammar `**Digest sha256 (<change-dir-relative path>):** <64-hex>`, optional `**Human Waiver:**`, `Advisory Findings` section, template comments documenting the bounded judge contract + full-sweep re-judge rule; multi-line-only HTML comments.
   - intent: feature
   - files_allowed:
       - dot_local/share/openspec/schemas/opsx-superpowers/templates/design-fidelity.md
   - allow_new_files: true
-- [ ] 3.2 Purge Worktree Mode from `templates/review.md` (front-matter comment lines 11/13 and prose table row 85 — no worktree mode presented anywhere) and sync `README.md` + `schema.yaml`: worktree-always at every Scale, `worktree_mode` key rejected fail-closed, design-fidelity artifact + dispatch documented (Artifact graph + Per-Tier Review Stack doc deferral lands here), Fidelity Round Ledger described.
+- [x] 3.2 Purge Worktree Mode from `templates/review.md` (front-matter comment lines 11/13 and prose table row 85 — no worktree mode presented anywhere) and sync `README.md` + `schema.yaml`: worktree-always at every Scale, `worktree_mode` key rejected fail-closed, design-fidelity artifact + dispatch documented (Artifact graph + Per-Tier Review Stack doc deferral lands here), Fidelity Round Ledger described.
   - intent: feature
   - files_allowed:
       - dot_local/share/openspec/schemas/opsx-superpowers/templates/review.md
