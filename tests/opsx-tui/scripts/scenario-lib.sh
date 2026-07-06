@@ -170,6 +170,27 @@ scn_assert_file() {
   fi
 }
 
+scn_assert_log_count_stays() {
+  local file="$1"
+  local pat="$2"
+  local want="$3"
+  local seconds="$4"
+  local msg="$5"
+  local deadline=$((SECONDS + seconds))
+  while (( SECONDS < deadline )); do
+    local got=0
+    [[ -f "$file" ]] && got=$(grep -cE "$pat" "$file" 2>/dev/null || true)
+    if (( got != want )); then
+      echo "FAIL: $msg — expected $want matches, got $got" >&2
+      [[ -f "$file" ]] && cat "$file" >&2 || true
+      SCN_FAILED=1
+      return
+    fi
+    sleep 0.25
+  done
+  echo "PASS: $msg"
+}
+
 scn_make_change() {
   local change="$1"
   mkdir -p "$SCENARIO_CWD/openspec/changes/$change"
