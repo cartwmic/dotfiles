@@ -83,7 +83,11 @@ nor permanently redden the check. Named invariant (analyze R3 advisory): the
 integration branch is checked out in the git MAIN worktree — `opsx_repo_main_root`
 already encodes this, and "integration checkout" and "main-worktree root" are
 synonyms under it. Digest field grammar is the literal pinned by the template
-requirement: `**Digest sha256 (<change-dir-relative path>):** <64-hex>`.
+requirement: `**Digest sha256 (<change-dir-relative path>):** <64-hex>`; the
+gate locates digest lines by literal string comparison against lines built
+from the enumerated spec-file set — never by interpolating paths into an
+unescaped regex (paths carry `(`, `)`, `.`, `/`; `bodyfield()`-style `grep -E`
+interpolation would corrupt the match).
 Trust boundary (analyze R3, S-A4, accepted): the gate trusts the sealed
 `Fidelity` summary field and does not re-scan the per-AC table — identical to
 the doneness.md summary-field precedent; correctness of consolidation is
@@ -113,7 +117,15 @@ sealed to the separate design-fidelity.md. Plain M (and design-bearing S/XS) —
 one narrow post-design blind mini-dispatch produces the same sealed artifact.
 Judge contract mirrors the baseline-bounded reviewer contract: block only on
 clear non-entailment of the AC as written; ambiguity routes an advisory
-clarify-class finding. Judge model resolution follows the existing role-model machinery via the
+clarify-class finding. Multi-judge consolidation (analyze R4, S-F1/O-A2) is deterministic and
+fail-closed: at full_rigor the fidelity sweep is a required section of EVERY
+dispatched judge's prompt; the orchestrator consolidates per AC by key-indexed
+worst-of (AC references are enumerable keys — `not-entailed`/`not-covered`
+outrank `entailed`; no free-text finding matching) and seals
+`Fidelity: violated` iff any counted judge's overall is `violated` or any
+consolidated row blocks — any-block-wins, mirroring the severity-floor
+posture; a permissive pick is exactly the forgery class this change kills.
+Judge model resolution follows the existing role-model machinery via the
 `review` role (`opsx models review`) — no dedicated `fidelity` role: the
 fidelity judge is review-class blind judgment, the review-role pool is exactly
 the blind-judge pool, and a new role would add an opsx-cli surface + config
@@ -253,7 +265,10 @@ own artifacts is legitimate concurrency, not reviewer mutation. Any other
 committed path, or any porcelain delta outside every change directory (or
 inside the dispatched change's inputs), voids. Voided round ⇒ all round verdicts
 INVALID, surgical restore of working-tree deltas only (committed history never
-rewritten) (`git restore` only status-changed tracked paths;
+rewritten), with the restore/delete sets scoped symmetrically to the void
+carve-outs (analyze R4, O-A1): other changes' `openspec/changes/<other>/`
+paths are never restored or deleted — a sibling's concurrent authoring
+survives this change's incident handling (`git restore` only status-changed tracked paths;
 delete only window-introduced untracked paths; never blanket `git clean`),
 incident recorded. Plain git commands only.
 

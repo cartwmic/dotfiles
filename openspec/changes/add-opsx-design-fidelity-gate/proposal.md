@@ -88,7 +88,9 @@ model-free gate; doneness-judge precedent for sealed judged verdicts).
   MODIFIED Mode-driven openspec-apply-change / Analyze gates tasks generation;
   opsx-loop MODIFIED Worktree resolution convention fallback; opsx-cli MODIFIED
   Migration Completeness Sweep Command; gate-enforcement additionally MODIFIED
-  Manifest Validation Execution (analyze R3 survivor).
+  Manifest Validation Execution (analyze R3 survivor) and Required Artifact By
+  Scale (analyze R4 — design-fidelity slotted into the lifecycle dependency
+  order between analyze and tasks, design-conditioned like doneness).
 - **BREAKING**: in-flight same-tree changes must be re-homed to worktrees or
   archived before deployment; none active besides this change (verified:
   `openspec list` shows only add-opsx-design-fidelity-gate).
