@@ -8,9 +8,10 @@ scale: S
 # analyze, and a pre-archive retrospective. A Scale outside XS|S|M, or a
 # non-boolean full_rigor, FAILS CLOSED (never a silent permissive default).
 full_rigor: false
-# worktree_mode DERIVED by tier when ABSENT: XS/S ⇒ same-tree, M ⇒
-# worktree-required. An explicit value here ALWAYS wins over the tier default.
-# worktree_mode: (derived when absent: XS/S ⇒ same-tree, M ⇒ worktree-required; uncomment to override)
+# Worktree execution is the ONLY model at every Scale (XS included) — there is
+# no worktree-selection mode and no key to set: apply always creates an isolated
+# `git worktree` on `opsx/<change>`. A worktree-selection key here is rejected
+# fail-closed by the gate (delete the key remedy).
 execution_mode: standard
 verification_mode: retained-recommended
 debug_mode: standard
@@ -82,7 +83,6 @@ any mode by setting it (in BOTH the front-matter and this table).
 | Debug Mode | standard | standard\|systematic-debugging |
 | Review Status | not-requested | not-requested\|requested\|findings-received\|resolved |
 | Delegation Mode | single-agent | single-agent\|subagent-eligible\|subagent-required — dispatch via the subagent-dispatch capability hook (pi-subagents is the pi adapter) |
-| Worktree Mode | derived (absent) | same-tree\|worktree-eligible\|worktree-required — default DERIVED by tier when absent (XS/S ⇒ same-tree, M ⇒ worktree-required); the front-matter ships the key COMMENTED OUT so the tier default applies; an explicit value always wins |
 | Code Review Mode | derived (absent) | none\|advisory\|gating-required — default DERIVED when absent: M ⇒ gating-required, XS/S ⇒ advisory (fail-closed); an explicit value always wins; gating-required blocks archive on code-review.md Verdict |
 | Loop Max Iterations | 20 | iteration budget; mapped onto the loop runtime turn budget. Authoring-time defaults XS=10, S=20, M=40, full_rigor=80 |
 | Validation Source Mode | required | required\|waived — waived (with rationale) lets Scale ≥ M pass with no agent-independent validation source |
@@ -96,7 +96,8 @@ any mode by setting it (in BOTH the front-matter and this table).
 Captured by apply at worktree creation. `Diff Base SHA` = integration-branch
 merge-base, IMMUTABLE for the life of the `opsx/<change>` branch; used by
 file-contract diffs, code-review diff base, and opsx gate verdict freshness.
-In same-tree mode, Diff Base SHA = pre-apply HEAD and Worktree Path is empty.
+Worktree execution is the only model at every Scale, so `Worktree Path` is
+always filled by apply (never empty) — there is no alternate diff-base source.
 `Integration Branch` ships as the `<detected-at-capture>` sentinel and is FILLED
 by apply via the deterministic resolver (committed locator > origin/HEAD >
 main > master) — never assume a hardcoded literal (opsx-workflow-schema.
@@ -132,3 +133,25 @@ findings NOT required for the intent route to follow-ups.md instead. -->
 
 - YYYY-MM-DD — <what widened> — evidence: <why the frozen intent's outcomes
   cannot hold without it; cite the finding/file>
+
+## Fidelity Round Ledger
+
+<!--
+Append-only orchestrator bookkeeping (opsx-adversarial-review Orchestrator Round
+Ledger — the design-fidelity host). Present at EVERY Scale and available BEFORE
+worktree creation. One row per sealed design-fidelity judgment round (any overall
+verdict) AND per human-waiver ruling (`Fidelity` = `waived`, Per-judge verdicts =
+the ruling reference). Sealing or re-sealing design-fidelity.md NEVER removes or
+rewrites a prior row — a full-sweep re-seal overwrites the artifact, never this
+ledger, so the escalation valve's count survives re-seals and fresh sessions.
+The valve counts CONSECUTIVE `violated` rows NOT separated by a `waived` or
+`delivered` row: two consecutive `violated` rows route to the decision-audit
+landing for a human ruling (no per-row cross-round matching, consistent with the
+full-sweep rule); a `waived`/`delivered` row breaks the streak so a resolved
+streak never re-fires against a superseded round. `Attested HEAD` is the
+attested integration-checkout HEAD of that round.
+-->
+
+| Round | Fidelity | Per-judge verdicts | Attested HEAD |
+|---|---|---|---|
+| 1 | <delivered \| violated \| waived> | <judge:verdict … \| ruling ref> | <40-hex integration-checkout HEAD> |
