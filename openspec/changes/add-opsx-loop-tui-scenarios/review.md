@@ -34,9 +34,9 @@ doneness_mode: required
 
 ## Diff Base + Worktree locator
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
-**Integration Branch:** <detected-at-capture>
+**Diff Base SHA:** 728884b4ed6cf2e83dafba9f01cd000f816e962c
+**Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-add-opsx-loop-tui-scenarios
+**Integration Branch:** main
 
 ## Manual Adjustments
 
@@ -45,6 +45,7 @@ doneness_mode: required
 ## Execution Notes
 
 - 2026-07-06 14:08 — Seeded review switchboard from frozen intent; assume deterministic fake provider plus fake `opsx` default suite, optional real-model smoke skipped by default.
+- 2026-07-06 14:12 — Published worktree locator from `opsx worktree ensure add-opsx-loop-tui-scenarios`.
 
 ## Scope Expansions
 
