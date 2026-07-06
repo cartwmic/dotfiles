@@ -58,3 +58,11 @@ the fixture should drop `worktree_mode: same-tree` at next touch.
 Task 1.1 added a stdin variant local to the cheap phase; the shipped
 `sha256_file` lives later in the file. A cleanup may hoist one shared helper
 above both consumers.
+
+## F8 — Regression fixture: review.md orchestration field committed on the wrong tree (CR round-2 sonnet P2)
+
+The misplaced-bookkeeping staling backstop is documented, load-bearing, and
+was exercised live at this change's own landing (Diff Base repoint committed
+on the worktree branch → loud stale). No suite fixture covers "review.md
+committed on the worktree branch"; add one so a future freshness_check
+refactor cannot silently allowlist review.md.
