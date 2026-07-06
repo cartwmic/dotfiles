@@ -171,7 +171,76 @@ Rounds: per skill defaults
 
 Record round-by-round findings as appendices in analyze.md. Treat any blocker finding as halt-and-fix before continuing to tasks.
 
+WHERE the change carries `design.md`, the fidelity sweep (below) RIDES this same
+full_rigor dispatch as a REQUIRED section of EVERY dispatched judge's prompt — the
+fidelity verdict is STILL sealed separately to `design-fidelity.md` (never merged
+into analyze.md).
+
+### design-fidelity: blind fidelity dispatch (design-bearing changes)
+
+WHERE the change carries `design.md`, obtain a blind design-fidelity judgment BEFORE
+generating tasks. This gates tasks generation exactly like an analyze blocker: tasks
+are produced ONLY when `design-fidelity.md` is sealed `Fidelity: delivered` (or
+`Fidelity: violated` carrying a non-empty `**Human Waiver:**` recorded by a
+decision-audit landing ruling — never self-authored). An absent, stale, or
+`violated`-without-waiver fidelity verdict HALTS tasks generation with the failing
+fidelity rows summarized.
+
+**Judged inputs committed FIRST.** Before dispatching, intent.md, design.md, and
+every `specs/**/spec.md` MUST be committed on the integration checkout — the digests
+bind COMMITTED main-root content, so an uncommitted edit is invisible to both the
+digest and judge accountability. Never dispatch fidelity against an uncommitted
+judged input.
+
+**Dispatch channel (tier-conditioned; identical sealed artifact either way):**
+- **`full_rigor: true`:** the fidelity sweep rides the existing blind analyze
+  dispatch as a REQUIRED section of EVERY dispatched judge's prompt (above).
+- **plain Scale M, or design-bearing S/XS:** run ONE narrow post-design blind
+  fidelity mini-dispatch (no separate fidelity role — judge models resolve via the
+  `review` role, `opsx models review --change <name>`, one judge per configured
+  model).
+
+**Canonical AC enumeration (the consolidation key set).** The dispatch prompt hands
+EVERY judge the SAME canonical AC enumeration — `requirement name + scenario title`
+enumerated from the change's delta `specs/**/spec.md` files. Each judge records one
+verdict row per AC: `entailed | not-entailed | not-covered` with evidence (a nominal
+citation to a section that does not address the guarantee is `not-covered`; an
+ambiguous guarantee routes an advisory clarify-class finding to the artifact's
+`Advisory Findings` section, never a blocking row). An AC present in the canonical
+enumeration but ABSENT from a judge's table consolidates `not-covered` (fail-closed) —
+key drift can never surface a permissive row.
+
+**Consolidation (deterministic, fail-closed).** Per AC, the consolidated row is the
+key-indexed WORST across counted judges (`not-entailed`/`not-covered` outrank
+`entailed`; no free-text finding matching). Seal `Fidelity: violated` iff any counted
+judge's overall is `violated` OR any consolidated row blocks (any-block-wins).
+
+**Seal** by filling `~/.local/share/openspec/schemas/opsx-superpowers/templates/design-fidelity.md`:
+the consolidated per-AC table; digest lines over COMMITTED main-root content for
+intent.md, design.md, and every `specs/**/spec.md` (pinned digest grammar,
+`git -C <main-root> show HEAD:<path>` addressed); attestation = the
+integration-checkout HEAD (purpose-keyed carve-out — fidelity/clarify/analyze ALWAYS
+attest the integration checkout, even for a post-worktree re-judge). Verdicts,
+findings, and attestation derive EXCLUSIVELY from each judge's findings output file
+(never its conversational reply).
+
+**After each seal — Fidelity Round Ledger + escalation valve.** Append one row to
+review.md's `Fidelity Round Ledger` section (pinned columns
+`| Round | Fidelity | Per-judge verdicts | Attested HEAD |`; append-only — a
+design-fidelity.md re-seal never rewrites prior rows). A human waiver ruling appends
+its own `waived` row. The escalation valve counts CONSECUTIVE `violated` rows NOT
+separated by a `waived` or `delivered` row: two consecutive `violated` → route to the
+decision-audit landing for a human ruling, NEVER a third automatic dispatch.
+Re-judges are ALWAYS full sweeps (never delta-scoped; no cross-round finding
+matching).
+
 ### tasks artifact: contract field prompts
+
+**Fidelity gate (design-bearing changes).** Do NOT author tasks.md WHILE the change
+carries design.md unless `design-fidelity.md` is sealed `Fidelity: delivered` (or
+`violated` + non-empty `**Human Waiver:**`). A `violated`, stale, or absent fidelity
+verdict halts tasks generation — same halt semantics as an analyze blocker — with the
+failing fidelity rows and proposed design remediations summarized to the user.
 
 When authoring tasks.md, for each task that touches code (not pure documentation tasks), ASK the user whether to declare a file contract:
 ```
@@ -202,7 +271,8 @@ Artifacts authored:
   ✓ clarify.md                     (N findings, 0 unanswered)
   ✓ design.md                      (N Decisions; M ADR candidates)
   ✓ analyze.md                     (N findings; 0 blockers)
-  ✓ review.md                      (modes recorded)
+  ✓ design-fidelity.md             (design-bearing: Fidelity delivered)
+  ✓ review.md                      (modes recorded; Fidelity Round Ledger)
   ✓ tasks.md                       (N tasks with K contracts)
   ✓ plan.md                        (N plan steps)
 

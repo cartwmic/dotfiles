@@ -14,8 +14,11 @@ opsx archive-check <name>
 It asserts land-base currency (`git merge-base opsx/<name> <integration branch>` ==
 that branch's HEAD, where the integration branch is RESOLVED deterministically —
 committed review.md `Integration Branch` locator > `origin/HEAD` > `main` > `master`,
-never a hardcoded literal (opsx-cli.integration-branch-resolution); branch-absent ⇒
-satisfied same-tree exemption), an ADR duplicate-number scan, and an advisory
+never a hardcoded literal (opsx-cli.integration-branch-resolution); landing REQUIRES
+the `opsx/<name>` branch — branch-absent ⇒ archive-check REFUSES (worktree-mandatory: a
+change is never landed from integration-checkout commits; remedy
+`opsx worktree ensure <name>`, then complete apply on the worktree branch)), an ADR
+duplicate-number scan, and an advisory
 multi-dir-commit detector (advisory only — it never affects the exit code). If
 `opsx archive-check` exits NON-ZERO, REFUSE archive and print the quoted output plus
 the remedy it names (typically rebase `opsx/<name>` onto the resolved branch's HEAD):
@@ -121,6 +124,21 @@ For each `Y`, find the next available `<repo>/adr/ADR-NNNN-` number (scan existi
 - Date: today
 - Source change: `openspec/changes/<name>/`
 - Decision Drivers + Considered Options + Decision Outcome + Consequences: extracted from D<n>'s text
+- `Supersedes:` — filled by the supersession scan below
+
+**Supersession scan (MANDATORY per promoted decision).** Before writing the new ADR,
+SEARCH the existing `<repo>/adr/*.md` for any prior decision the new one SUPERSEDES or
+COMPLETES (grep titles/decision text for the same subject; read candidates). For each
+hit: fill the new ADR's `Supersedes:` with the superseded ADR id(s), AND annotate the
+superseded ADR file — add `Superseded by: ADR-NNNN` and update its `Status:` to
+`Superseded` (commit the annotation path-scoped alongside the new ADR). A promotion
+that silently duplicates or contradicts a live ADR without recording the lineage is a
+traceability defect.
+
+Concrete instance for THIS change: **D7 (worktree-mandatory) supersedes ADR-0008**
+(worktree-required-default-all-scales) — D7 abolishes ADR-0008's Option-A
+same-tree-override clause, so the D7 ADR promotion MUST fill `Supersedes: ADR-0008` and
+annotate ADR-0008 `Superseded by:` + `Status: Superseded`.
 
 Commit each ADR path-scoped to the ADR file(s) on the integration checkout —
 never a bare `git commit`/`git add -A`, so an unrelated dirty file cannot ride
@@ -190,13 +208,12 @@ front-matter. If Scale is M and `doneness_mode` is not `waived`:
 If `doneness_mode: waived`, require a non-empty `doneness_waiver_rationale`
 in review.md front-matter (a bare waiver does not pass the gate either).
 
-## Worktree merge + cleanup (Worktree Mode != same-tree)
+## Worktree merge + cleanup (unconditional — worktree is the only model)
 
-After all HARD-GATEs pass and ONLY then:
+After all HARD-GATEs pass and ONLY then (worktree execution is the only model at every Scale including XS, so this always runs):
 1. Land `opsx/<name>` onto the Integration Branch (read from review.md) using the configured strategy.
 2. **If the merge conflicts** (integration branch advanced): ABORT archive with an actionable error; PRESERVE the worktree + `opsx/<name>` branch; do NOT move the change to archive.
 3. On clean merge: `git worktree remove <Worktree Path>` and delete the branch.
-4. Same-tree override: skip merge/remove.
 
 **chezmoi guard:** never run `chezmoi apply` against real `$HOME` from the loop worktree; deploy-affecting verification runs post-merge or with `CHEZMOI_SOURCE_DIR`/`--source`.
 
