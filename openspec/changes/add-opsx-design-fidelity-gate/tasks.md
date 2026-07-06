@@ -87,12 +87,12 @@
 
 ## 6. Wrap-up
 
-- [ ] 6.1 Create `follow-ups.md` routing the analyze residuals not consumed by tasks 4.2/4.3/3.2: pre-worktree `.git/index.lock` contention retry note (residual 4); Manifest-Validation-cwd mechanism naming (residual 6); R9 window incident carve-out candidate (operator commits disjoint from every change's blast radius).
+- [x] 6.1 Create `follow-ups.md` routing the analyze residuals not consumed by tasks 4.2/4.3/3.2: pre-worktree `.git/index.lock` contention retry note (residual 4); Manifest-Validation-cwd mechanism naming (residual 6); R9 window incident carve-out candidate (operator commits disjoint from every change's blast radius).
   - intent: feature
   - files_allowed:
       - openspec/changes/add-opsx-design-fidelity-gate/follow-ups.md
   - allow_new_files: true
-- [ ] 6.2 Full validation: `openspec validate add-opsx-design-fidelity-gate --strict` green; `bash tests/opsx-gate/test_opsx_gate.sh`, `bash tests/opsx-cli/test_opsx_cli.sh`, and new fidelity suite green; grep-sweep shipped surfaces for `worktree_mode`/same-tree remnants (mirrors the acceptance sketch: no gate, skill, template, or test surface retains a reachable same-tree path).
+- [x] 6.2 Full validation: `openspec validate add-opsx-design-fidelity-gate --strict` green; `bash tests/opsx-gate/test_opsx_gate.sh`, `bash tests/opsx-cli/test_opsx_cli.sh`, and new fidelity suite green; grep-sweep shipped surfaces for `worktree_mode`/same-tree remnants (mirrors the acceptance sketch: no gate, skill, template, or test surface retains a reachable same-tree path).
   - intent: fix
   - files_allowed:
       - tests/**
