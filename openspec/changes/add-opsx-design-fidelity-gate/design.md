@@ -133,15 +133,21 @@ key for zero benefit (rejected alternative; intent left this as an explicit
 design decision). Ambiguity-routed advisory clarify-class findings are
 recorded in the sealed artifact's `Advisory Findings` section — never in the
 three-value verdict column, never affecting the gate-read `Fidelity` field.
-Attestation: fidelity (like clarify/analyze) is
-dispatched **before worktree creation**, so the judge attests the integration
-checkout — path check satisfied by equality with the canonicalized
-integration-checkout root, `Attested HEAD` = integration-checkout HEAD at
-dispatch (C2). The gate binds fidelity's attestation as a 40-hex literal but
-never demands Reviewed-Range equality (no range exists); freshness is carried
-by the digests alone. The carve-out is scoped strictly to pre-worktree
-judgments; every post-implementation dispatch keeps the unconditional worktree
-path check.
+Attestation: fidelity (like clarify/analyze) is a proposal-phase judgment
+class — the carve-out is PURPOSE-KEYED (analyze R6, O-A1), not temporal: these
+judgments never receive their own worktree, so they attest the integration
+checkout ALWAYS, including a re-judge dispatched after the implementation
+worktree exists (post-worktree design edit → digest stales → re-judge must
+remain producible, never stranded INVALID). Path check satisfied by equality
+with the canonicalized integration-checkout root, `Attested HEAD` =
+integration-checkout HEAD at dispatch (C2). The gate binds fidelity's
+attestation as a 40-hex literal but never demands Reviewed-Range equality (no
+range exists); freshness is carried by the digests alone. Every
+post-implementation dispatch class (code review, doneness) keeps the
+unconditional worktree path check. Consolidation keys are canonical: the
+dispatch prompt hands every judge the same AC enumeration (requirement name +
+scenario title from the delta spec files); an enumerated AC absent from a
+judge's table consolidates `not-covered`, fail-closed.
 
 **Alternatives considered:**
 - **Re-time fidelity post-worktree**: contradicts the frozen intent's
@@ -332,10 +338,13 @@ deterministically (analyze R5, S-F3): a bookkeeping commit misplaced onto the
 worktree branch moves the verdict-bound HEAD and stales the seal via the
 existing range-freshness check — loud fail-closed red, remedy re-review;
 misplacement is always detected, never silently green. (2) Committed-read
-(analyze R5, S-F2): the gate sources review.md front-matter mode fields from
-the COMMITTED integration-checkout content (`git show HEAD:…`), never live
-disk, so an uncommitted `doneness_mode: waived` edit cannot silently switch
-off a required verdict. Committed downgrades remain possible — they are
+(analyze R5, S-F2; extended R6): the gate sources review.md front-matter mode
+fields AND design-fidelity.md's gate-read fields and digest hash inputs from
+the COMMITTED integration-checkout content — addressed explicitly as
+`git -C <main-root> show HEAD:…`, never cwd-relative (a bare `git show` from
+inside a worktree would read the wrong branch tip), never live disk — so an
+uncommitted `doneness_mode: waived` edit or an uncommitted
+`Fidelity: violated → delivered` flip cannot move any gate decision. Committed downgrades remain possible — they are
 auditable history of the same integrity-breach class as a self-authored
 waiver (R7), surfaced by audit, out of the no-sandboxing scope. review.md is
 never allowlisted wholesale.
