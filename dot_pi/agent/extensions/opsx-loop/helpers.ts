@@ -406,3 +406,76 @@ export function parseLoopBudget(reviewMd: string): number | undefined {
 	}
 	return undefined;
 }
+
+// ── Proactive between-turns compaction threshold (Lever A) ──────────────────
+// The loop is the operator's SOLE compaction path (pi auto-compaction is off), so
+// this is DEFAULT-ON. The trigger, in absolute tokens, is the HIGHER of a percent
+// of the context window and an absolute floor: max(33% * window, 100_000). Either
+// term is independently configurable via env and can be turned off; with BOTH off
+// the feature is disabled.
+
+const OFF_TOKENS = new Set(["off", "none", "false", "0"]);
+
+/**
+ * Resolve the PERCENT term of the compaction trigger from `OPSX_COMPACT_AT_PERCENT`.
+ * Returns an integer 1..100, or null when the term is explicitly OFF
+ * (`off`/`none`/`false`/`0`). Unset or garbage falls back to the default 33 — the
+ * feature is default-on, so an unparseable value must NOT silently disable it.
+ */
+export function resolveCompactPercent(raw: string | undefined): number | null {
+	if (raw == null || raw.trim() === "") return 33;
+	const t = raw.trim().toLowerCase();
+	if (OFF_TOKENS.has(t)) return null;
+	if (!/^\d+$/.test(t)) return 33;
+	const n = Number.parseInt(t, 10);
+	if (n < 1 || n > 100) return 33;
+	return n;
+}
+
+/**
+ * Resolve the ABSOLUTE-TOKEN floor term from `OPSX_COMPACT_AT_TOKENS`.
+ * Returns a positive integer, or null when explicitly OFF. Unset or garbage falls
+ * back to the default 100_000.
+ */
+export function resolveCompactTokens(raw: string | undefined): number | null {
+	if (raw == null || raw.trim() === "") return 100_000;
+	const t = raw.trim().toLowerCase();
+	if (OFF_TOKENS.has(t)) return null;
+	if (!/^\d+$/.test(t)) return 100_000;
+	const n = Number.parseInt(t, 10);
+	if (n < 1) return 100_000;
+	return n;
+}
+
+/**
+ * Resolve the absolute token count at/above which the loop compacts BEFORE the
+ * next worker turn: max(percentTerm * window, tokenFloor). Either term may be OFF;
+ * with BOTH off (or a non-positive window and the floor off) the feature is
+ * disabled and this returns undefined. Default (both unset): max(33% window, 100k).
+ */
+export function resolveCompactThresholdTokens(
+	contextWindow: number,
+	pctRaw: string | undefined,
+	tokRaw: string | undefined,
+): number | undefined {
+	const pct = resolveCompactPercent(pctRaw);
+	const tok = resolveCompactTokens(tokRaw);
+	const terms: number[] = [];
+	if (pct != null && Number.isFinite(contextWindow) && contextWindow > 0) {
+		terms.push(Math.ceil((pct / 100) * contextWindow));
+	}
+	if (tok != null) terms.push(tok);
+	if (terms.length === 0) return undefined;
+	return Math.max(...terms);
+}
+
+/** One-line human description of the active policy for the loop-arm notify. */
+export function describeCompactPolicy(pctRaw: string | undefined, tokRaw: string | undefined): string {
+	const pct = resolveCompactPercent(pctRaw);
+	const tok = resolveCompactTokens(tokRaw);
+	if (pct == null && tok == null) return "compaction guard: off";
+	const parts: string[] = [];
+	if (pct != null) parts.push(`${pct}% window`);
+	if (tok != null) parts.push(`${tok.toLocaleString("en-US")} tokens`);
+	return `compaction guard: compact at ≥ ${parts.join(" or ")} (whichever higher)`;
+}
