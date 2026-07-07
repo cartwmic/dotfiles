@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildModelEnv, classifyDoneness, clearHoldText, donenessRatchet, formatInventory, gateFailKey, hashDir, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, stripLoopHold, verdictFromExit } from "./helpers.ts";
+import { buildModelEnv, classifyDoneness, clearHoldText, describeCompactPolicy, donenessRatchet, formatInventory, gateFailKey, hashDir, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, resolveCompactPercent, resolveCompactThresholdTokens, resolveCompactTokens, stripLoopHold, verdictFromExit } from "./helpers.ts";
 
 describe("parseLoopHold / stripLoopHold — opsx-loop.loop-hold-blocks-continuation", () => {
 	const FM = (body: string) => `---\n${body}\n---\n# Review\n`;
@@ -205,6 +205,46 @@ describe("parseLoopBudget — opsx-loop.budget-from-review-front-matter", () => 
 	});
 	test("undefined (unbounded) on empty input", () => {
 		expect(parseLoopBudget("")).toBeUndefined();
+	});
+});
+
+describe("compaction threshold resolution — opsx-loop proactive compaction (Lever A, default-on)", () => {
+	test("percent term: default 33 when unset/garbage; explicit value; OFF -> null", () => {
+		expect(resolveCompactPercent(undefined)).toBe(33);
+		expect(resolveCompactPercent("")).toBe(33);
+		expect(resolveCompactPercent("abc")).toBe(33); // garbage falls back to default, never disables
+		expect(resolveCompactPercent("150")).toBe(33); // out of range -> default
+		expect(resolveCompactPercent("50")).toBe(50);
+		expect(resolveCompactPercent(" 40 ")).toBe(40);
+		for (const off of ["off", "none", "false", "0", "OFF"]) expect(resolveCompactPercent(off)).toBeNull();
+	});
+	test("token term: default 100000 when unset/garbage; explicit value; OFF -> null", () => {
+		expect(resolveCompactTokens(undefined)).toBe(100_000);
+		expect(resolveCompactTokens("garbage")).toBe(100_000);
+		expect(resolveCompactTokens("250000")).toBe(250_000);
+		for (const off of ["off", "none", "0"]) expect(resolveCompactTokens(off)).toBeNull();
+	});
+	test("threshold = max(pct*window, tokenFloor) — 'whichever higher'", () => {
+		// 200k window, defaults: max(33% * 200k = 66k, 100k) = 100k
+		expect(resolveCompactThresholdTokens(200_000, undefined, undefined)).toBe(100_000);
+		// 1M window, defaults: max(330k, 100k) = 330k
+		expect(resolveCompactThresholdTokens(1_000_000, undefined, undefined)).toBe(330_000);
+		// explicit percent dominates when higher
+		expect(resolveCompactThresholdTokens(1_000_000, "50", "100000")).toBe(500_000);
+	});
+	test("either term OFF uses the other; BOTH off => disabled (undefined)", () => {
+		expect(resolveCompactThresholdTokens(200_000, "off", undefined)).toBe(100_000); // floor only
+		expect(resolveCompactThresholdTokens(200_000, undefined, "off")).toBe(66_000); // ceil(33% * 200k)
+		expect(resolveCompactThresholdTokens(200_000, "off", "off")).toBeUndefined();
+	});
+	test("non-positive window drops the percent term", () => {
+		expect(resolveCompactThresholdTokens(0, undefined, undefined)).toBe(100_000); // floor survives
+		expect(resolveCompactThresholdTokens(0, undefined, "off")).toBeUndefined(); // nothing left
+	});
+	test("describeCompactPolicy reflects on/off state", () => {
+		expect(describeCompactPolicy(undefined, undefined)).toMatch(/33% window or 100,000 tokens/);
+		expect(describeCompactPolicy("off", "off")).toBe("compaction guard: off");
+		expect(describeCompactPolicy("off", undefined)).toMatch(/100,000 tokens/);
 	});
 });
 

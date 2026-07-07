@@ -25,6 +25,8 @@ import {
 	listIntentChanges,
 	LOOP_SUBCOMMANDS,
 	OPSX_MODEL_ENV_KEYS,
+	resolveCompactThresholdTokens,
+	describeCompactPolicy,
 	parseDonenessGaps,
 	parseLoopArg,
 	clearHoldText,
@@ -38,6 +40,22 @@ import {
 
 const STALL_LIMIT = 3; // consecutive identical no-progress gate failures → stop
 
+// Custom compaction instructions for the proactive between-turns pass (Lever A).
+// The opsx-loop is fully resumable from disk: every turn re-derives its state from
+// `opsx gate <change> --worktree <path>` and openspec/changes/<change>/, and the
+// writeback discipline commits all verdicts/ledger/holds BEFORE a turn ends. So the
+// summary need only preserve the pointers to that on-disk state; the reasoning and
+// tool-output bodies are re-derivable and safe to drop. Keeping this tight is the
+// whole point on small context windows.
+const OPSX_COMPACT_INSTRUCTIONS =
+	"This is an autonomous opsx-loop drive-to-green run. ALL loop state is recoverable " +
+	"from `opsx gate <change> --worktree <path>` and the openspec/changes/<change>/ files " +
+	"(intent.md, proposal, specs, tasks.md, review.md, code-review.md, doneness.md). " +
+	"Preserve ONLY: the change name, the worktree path, the resolved role models, the last " +
+	"gate verdict and its earliest failing check, and any decision made this turn that is " +
+	"NOT yet written to disk. DROP tool-output bodies, file contents, and prior reasoning " +
+	"— the next turn re-reads them from the gate and the change directory.";
+
 interface LoopState {
 	// `change` is undefined while a goal/conversation loop is still distilling its
 	// intent into a new change dir; `awaitingChange` guards that pre-gate phase.
@@ -50,6 +68,10 @@ interface LoopState {
 	maxTurns?: number; // undefined = unbounded (no budget) unless configured
 	active: boolean;
 	evaluating: boolean;
+	// True while a proactive between-turns compaction (Lever A) is in flight: the
+	// worker directive is injected in the compaction callback, so a stray agent_end
+	// in that window must NOT re-run the gate or double-inject.
+	compacting?: boolean;
 	lastReason?: string;
 	stallKey?: string;
 	stallCount: number;
@@ -334,15 +356,90 @@ export default function (pi: ExtensionAPI) {
 
 	function renderStatus(ctx: ExtensionContext): void {
 		const label = loop?.change ?? (loop?.goal ? "(distilling goal)" : "(distilling)");
+		const suffix = loop?.compacting ? " · compacting" : "";
 		ctx.ui.setStatus(
 			"opsx-loop",
-			loop?.active ? `⟳ opsx-loop ${label} · ${loop.turns}/${loop.maxTurns ?? "∞"}` : undefined,
+			loop?.active ? `⟳ opsx-loop ${label} · ${loop.turns}/${loop.maxTurns ?? "∞"}${suffix}` : undefined,
 		);
 	}
 
 	function clearLoop(ctx: ExtensionContext): void {
 		loop = undefined;
 		renderStatus(ctx);
+	}
+
+	// Inject the next worker continuation turn, optionally preceded by a proactive
+	// context compaction (Lever A). When OPSX_COMPACT_AT_PERCENT is set and the
+	// current context usage is at/above it, compact FIRST and inject in the
+	// completion callback so the next turn starts on a compacted context; otherwise
+	// inject directly (current behavior). Degrades safely: if the running pi lacks
+	// getContextUsage/compact, or usage is unknown (null right after a compaction),
+	// we inject directly.
+	function continueWorker(
+		session: LoopState,
+		ctx: ExtensionContext,
+		change: string,
+		reason: string,
+	): void {
+		const directive = workerDirective(change, reason);
+		const inject = () => {
+			// Guard: the loop may have been cleared/replaced during compaction.
+			if (loop === session && session.active) {
+				pi.sendUserMessage(directive, { deliverAs: "followUp" });
+			}
+		};
+
+		const canMeasure = typeof ctx.getContextUsage === "function";
+		const canCompact = typeof ctx.compact === "function";
+		if (!canMeasure || !canCompact) {
+			inject();
+			return;
+		}
+
+		const usage = ctx.getContextUsage();
+		const tokens = usage?.tokens;
+		const window = usage?.contextWindow;
+		// tokens is null right after a compaction (before the next LLM response) —
+		// can't measure, so inject directly and let the next turn re-evaluate.
+		if (tokens == null || window == null) {
+			inject();
+			return;
+		}
+		const threshold = resolveCompactThresholdTokens(
+			window,
+			process.env.OPSX_COMPACT_AT_PERCENT,
+			process.env.OPSX_COMPACT_AT_TOKENS,
+		);
+		if (threshold === undefined || tokens < threshold) {
+			inject();
+			return;
+		}
+
+		// Over threshold: compact, then inject in the callback. `compacting` gates a
+		// stray agent_end out of the compaction window; both callbacks clear it and
+		// inject so a compaction error never drops the turn.
+		session.compacting = true;
+		renderStatus(ctx);
+		ctx.ui.notify(
+			`⟳ opsx-loop: context ${tokens.toLocaleString("en-US")}/${window.toLocaleString("en-US")} tokens ≥ ${threshold.toLocaleString("en-US")} — compacting before next turn.`,
+			"info",
+		);
+		const done = () => {
+			session.compacting = false;
+			renderStatus(ctx);
+			inject();
+		};
+		try {
+			ctx.compact({
+				customInstructions: OPSX_COMPACT_INSTRUCTIONS,
+				onComplete: done,
+				onError: done,
+			});
+		} catch {
+			// Synchronous throw (e.g. compaction already running): fail safe to a
+			// direct inject so the loop never stalls.
+			done();
+		}
 	}
 
 	// Appended to every injected loop directive. This is an AUTONOMOUS drive-to-green
@@ -550,12 +647,21 @@ export default function (pi: ExtensionAPI) {
 			const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
 			const ignoredNote = parsed.ignored ? ` (ignored extra input: "${parsed.ignored}")` : "";
 			ctx.ui.notify(`⟳ opsx-loop started (budget ${loop.maxTurns ?? "∞"}) for ${parsed.change}${modelNote}${ignoredNote}${holdNote}`, "info");
+			// Surface the compaction policy at arm: this loop is the operator's SOLE
+			// compaction path (pi auto-compaction off), so make the guard visible —
+			// including when it has been explicitly turned off.
+			ctx.ui.notify(
+				`⟳ ${describeCompactPolicy(process.env.OPSX_COMPACT_AT_PERCENT, process.env.OPSX_COMPACT_AT_TOKENS)}`,
+				"info",
+			);
 			return;
 		},
 	});
 
 	pi.on("agent_end", async (event: any, ctx: ExtensionContext) => {
-		if (!loop?.active || loop.evaluating) return; // inactive or re-entrant (clarify C1)
+		// inactive, re-entrant (clarify C1), or a between-turns compaction is in flight
+		// (Lever A: the worker directive is injected in the compaction callback).
+		if (!loop?.active || loop.evaluating || loop.compacting) return;
 
 		// User interrupted / turn errored → stop instead of re-injecting.
 		const last = (Array.isArray(event?.messages) ? event.messages : [])
@@ -709,7 +815,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`⟳ opsx-loop: ${c} stalled on a repeating failure (${STALL_LIMIT}× no progress); worktree preserved. Intervene manually.`, "warning");
 				return;
 			}
-			pi.sendUserMessage(workerDirective(change, verdict.reason), { deliverAs: "followUp" });
+			continueWorker(session, ctx, change, verdict.reason);
 		} finally {
 			session.evaluating = false;
 		}
