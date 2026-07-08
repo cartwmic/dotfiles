@@ -36,8 +36,8 @@ doneness_mode: required
 
 <!-- Populated at apply time by `opsx worktree ensure refine-opsx-elision-token-budget`. -->
 
-**Diff Base SHA:** (pending worktree ensure)
-**Worktree Path:** (pending worktree ensure)
+**Diff Base SHA:** 3b3fc2a768690b653ddad3875608d25a6d2ad5aa
+**Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-refine-opsx-elision-token-budget
 **Integration Branch:** main
 
 ## Manual Adjustments
