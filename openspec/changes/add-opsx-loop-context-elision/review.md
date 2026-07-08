@@ -34,9 +34,9 @@ doneness_mode: required
 
 ## Diff Base + Worktree locator
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
-**Integration Branch:** <detected-at-capture>
+**Diff Base SHA:** b0dd6bf96af3899767c613a9f317295dc3446722
+**Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-add-opsx-loop-context-elision
+**Integration Branch:** main
 
 ## Manual Adjustments
 
