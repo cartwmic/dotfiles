@@ -5,30 +5,32 @@ TBD - created by archiving change add-opsx-loop-context-elision. Update Purpose 
 ## Requirements
 ### Requirement: Active Loop Scoped Elision
 
-THE extension SHALL apply the context-elision transform ONLY while an opsx loop is
-armed, and SHALL pass every message through unchanged otherwise.
+THE extension SHALL apply the context-elision transform ONLY while an opsx loop is armed, and SHALL pass every message through unchanged otherwise.
 
 #### Scenario: no loop armed
 - **WHEN** the context event fires and no opsx loop is armed
 - **THEN** THE extension SHALL return the messages unchanged (byte-identical view)
 
-#### Scenario: loop armed and over the elision band
-- **WHILE** an opsx loop is armed and context usage is at or above the elision band
+#### Scenario: loop armed and over the token budget
+- **WHILE** an opsx loop is armed and total context usage exceeds `maxKeep` plus the band
 - **WHEN** the context event fires
 - **THEN** THE extension SHALL return a pruned view with stale tool-result bodies elided
 
+#### Scenario: loop armed but within budget
+- **WHILE** an opsx loop is armed and total context usage is at or below `maxKeep` plus the band
+- **WHEN** the context event fires
+- **THEN** THE extension SHALL return the messages unchanged
+
 ### Requirement: Stale Tool Result Body Elision
 
-WHILE eliding, THE extension SHALL replace the text body of each tool-result message
-older than the recent-K window with a fixed stub, and SHALL leave the recent-K
-tool results, all tool calls, and all assistant/user text in full.
+WHILE eliding, THE extension SHALL replace the text body of each tool-result message older than the token-budget recent window with a fixed stub, and SHALL leave the kept-full recent tool results, all tool calls, and all assistant/user text in full.
 
 #### Scenario: old tool result elided to stub
-- **WHEN** a tool-result message is older than the recent-K window
+- **WHEN** a tool-result message is older than the token-budget recent window
 - **THEN** THE extension SHALL replace its text body with the stub `[output elided to conserve context — re-run to view]`
 
 #### Scenario: recent tool results preserved
-- **WHEN** a tool-result message is within the recent-K window
+- **WHEN** a tool-result message is within the token-budget recent window
 - **THEN** THE extension SHALL leave its text body unchanged
 
 #### Scenario: non-tool-result content preserved
@@ -53,22 +55,6 @@ never remove or alter the system prompt.
 - **IF** the transform cannot produce a paired, structurally valid view
 - **THEN** THE extension SHALL return the original messages unchanged (fail-closed no-op)
 
-### Requirement: Threshold Band Gating
-
-WHILE context usage is below the resolved elision threshold, THE extension SHALL NOT
-elide, and WHILE at or above it THE extension SHALL elide against a band-quantized
-boundary so the slim prefix stays stable across consecutive requests.
-
-#### Scenario: below the band
-- **WHILE** context usage is below the elision threshold
-- **WHEN** the context event fires
-- **THEN** THE extension SHALL return the messages unchanged
-
-#### Scenario: band-quantized boundary stable across requests
-- **WHILE** context usage stays within one band across consecutive requests
-- **WHEN** the context event fires on each request
-- **THEN** THE elision boundary SHALL be identical across those requests
-
 ### Requirement: No History Mutation
 
 THE extension SHALL never mutate stored session history; the elided view SHALL exist
@@ -80,15 +66,18 @@ only as the transform's return value for that single provider request.
 
 ### Requirement: Elision To Compaction Coupling
 
-WHEN elision has fired at least once during a worker run, THE extension SHALL treat
-that run's `agent_end` as an additional between-turns compaction trigger.
+WHEN elision has fired at least once during a worker run, THE extension SHALL treat that run's end — on every continuation path, including the worker `agent_end` path and the distill (`awaitingChange`) continuation path — as an additional between-turns compaction trigger, consuming the elided flag exactly once per run.
 
-#### Scenario: elided run compacts at end
+#### Scenario: elided worker run compacts at end
 - **WHEN** a worker run in which elision fired reaches `agent_end`
 - **THEN** THE extension SHALL request a between-turns compaction before injecting the next worker directive
 
+#### Scenario: elided run on the distill path compacts
+- **WHEN** a run in which elision fired reaches the distill (`awaitingChange`) continuation
+- **THEN** THE extension SHALL consume the elided flag and request a between-turns compaction on that path as well
+
 #### Scenario: non-elided run unaffected
-- **WHEN** a worker run in which elision never fired reaches `agent_end`
+- **WHEN** a worker run in which elision never fired reaches its end
 - **THEN** THE extension SHALL apply only the existing L1 threshold decision (no elision-driven compaction)
 
 ### Requirement: Safe Degradation
@@ -111,4 +100,51 @@ performing any network/LLM call.
 #### Scenario: no model call in transform
 - **WHEN** the transform runs for a request
 - **THEN** THE extension SHALL produce the elided view using only in-process pure computation
+
+### Requirement: Token Budget Boundary
+
+WHILE eliding, THE extension SHALL keep the most-recent turns whose cumulative estimated tokens fit a budget `maxKeep` (default 40% of the live context window) and SHALL elide stale tool-result bodies before a boundary snapped to a turn edge at or below that budget, never splitting a turn.
+
+#### Scenario: boundary snaps to a turn edge under budget
+- **WHEN** the transform elides at a token budget `maxKeep`
+- **THEN** THE elision boundary SHALL fall on a turn edge such that the kept-full recent turns' cumulative estimated tokens are at or below `maxKeep` plus the band
+
+#### Scenario: kept-full window is capped at the ceiling
+- **WHILE** eliding against `maxKeep` and a band
+- **WHEN** the transform runs
+- **THEN** THE cumulative estimated tokens of the kept-full recent window SHALL be at or below `maxKeep + band`, except a single newest turn that alone exceeds that ceiling
+
+#### Scenario: over-budget always elides at least one turn
+- **WHILE** an opsx loop is armed and there is more than one turn and total estimated context exceeds `maxKeep + band`
+- **WHEN** the transform runs
+- **THEN** THE extension SHALL elide the body of at least the oldest turn (never firing yet producing an unchanged over-budget view)
+
+#### Scenario: newest turn always kept
+- **WHEN** the newest (in-flight) turn's estimated tokens alone exceed `maxKeep`
+- **THEN** THE extension SHALL still emit that newest turn in full and elide only turns before it
+
+#### Scenario: budget resolves against the live window
+- **WHEN** the context event fires with a context window of size `W`
+- **THEN** THE extension SHALL compute `maxKeep` as the configured percent of `W` (default 40%) with no absolute token floor
+
+### Requirement: Token Band Hysteresis
+
+WHILE eliding, THE extension SHALL advance the elision boundary only per token-band of growth (default 5% of the live context window) so the slim prefix stays stable across consecutive requests within one band.
+
+#### Scenario: boundary stable within a band
+- **WHILE** context usage stays within one token-band across consecutive requests
+- **WHEN** the context event fires on each request
+- **THEN** THE elision boundary SHALL be identical across those requests
+
+#### Scenario: boundary advances across a band
+- **WHEN** context usage grows past the next token-band edge between requests
+- **THEN** THE elision boundary MAY advance to a newer turn edge
+
+### Requirement: Elision Suppressed During Compaction
+
+IF a between-turns compaction is in progress when the context event fires, THEN THE extension SHALL return the messages unchanged so the compaction summarizer's own request is never elided.
+
+#### Scenario: compaction in progress
+- **IF** the extension is running a between-turns compaction when the context event fires
+- **THEN** THE extension SHALL return the messages unchanged (no elision)
 
