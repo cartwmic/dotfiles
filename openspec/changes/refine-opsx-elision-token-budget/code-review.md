@@ -2,11 +2,11 @@
 
 **Change:** refine-opsx-elision-token-budget
 **Verdict:** pass
-**review_mode:** disclosure-consensus
-**reviewer-provenance:** pi-subagents delegate — claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5 (2 distinct models; disclosure-consensus consolidated both)
+**review_mode:** adversarial-multimodel
+**reviewer-provenance:** pi-subagents delegate — claude-bridge/claude-opus-4-8, openai-codex/gpt-5.5 (2 distinct models)
 **Diff Base SHA:** 3b3fc2a768690b653ddad3875608d25a6d2ad5aa
-**Reviewed Range:** 3b3fc2a768690b653ddad3875608d25a6d2ad5aa..31386a1023c124e088495cb91ea64776a7a7aba5
-**Attested HEAD:** 31386a1023c124e088495cb91ea64776a7a7aba5
+**Reviewed Range:** 3b3fc2a768690b653ddad3875608d25a6d2ad5aa..0d1bf1ab4ce2ef3c4aee92657dc49a5d5ea9bb1f
+**Attested HEAD:** 0d1bf1ab4ce2ef3c4aee92657dc49a5d5ea9bb1f
 **Baseline:** intent.md + proposal + specs + plan + tasks status (no design.md — decision-gated, skipped at plain M)
 **Generated:** 2026-07-08
 
@@ -19,9 +19,16 @@
 | 3 | blind | 0 | 1 | 0 | 1 | opus:fail gpt:fail | 3b93eb7cfc3d383d989172498af6dacad66975f4 |
 | 4 | blind | 0 | 1 | 0 | 0 | opus:pass gpt:fail | 31386a1023c124e088495cb91ea64776a7a7aba5 |
 | 5 | disclosure-consensus | 0 | 0 | 0 | 1 | opus:pass gpt:pass | 31386a1023c124e088495cb91ea64776a7a7aba5 |
+| 6 | blind (re-attest @ rebased HEAD) | 0 | 0 | 0 | 2 | opus:pass gpt:pass | 0d1bf1ab4ce2ef3c4aee92657dc49a5d5ea9bb1f |
 
 <!-- Round 4's gpt dispatch first returned an infra crash (WebSocket closed, no
-findings file) → INVALID, not counted; re-dispatched to a valid fail verdict. -->
+findings file) → INVALID, not counted; re-dispatched to a valid fail verdict.
+Round 6: at archive time the branch was rebased onto main HEAD 8b869c0 to absorb
+this change's own integration bookkeeping (locator/follow-ups/loop_hold) and make
+the land-base current; the elision CODE is byte-identical across the rebase (empty
+diff 31386a1..0d1bf1a for the extension files). The rebase moved the verdict-sealed
+HEAD, so a fresh blind 2-model round re-attested at 0d1bf1a — both pass, only P3
+advisories. Verdict re-sealed adversarial-multimodel at the rebased HEAD. -->
 
 ## Findings
 
@@ -59,7 +66,8 @@ findings file) → INVALID, not counted; re-dispatched to a valid fail verdict. 
 
 ## Verdict rationale
 
-Five rounds (four blind + one disclosure-consensus). Rounds 1–3 surfaced genuine
+Six rounds (four blind + one disclosure-consensus + one blind re-attestation at the
+rebased land-base HEAD). Rounds 1–3 surfaced genuine
 correctness P1s (fire-but-noop, lost hysteresis, kept-window-over-ceiling), each fixed
 with a landing commit and re-reviewed full-diff. Round 4's remaining P1 was not a code
 defect but a dispute over an internally-contradictory frozen invariant; the single
