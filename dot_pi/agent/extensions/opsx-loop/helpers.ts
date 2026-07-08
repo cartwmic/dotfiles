@@ -550,8 +550,9 @@ export function describeCompactPolicy(pctRaw: string | undefined, tokRaw: string
 // worker in its low-context / high-accuracy regime by eliding STALE tool-result
 // BODIES from the view sent to the model — WITHOUT aborting the turn and WITHOUT
 // mutating stored history. The 71%-of-context bloat measured on real runs is spent
-// tool-output text the model already consumed; recent-K turns stay full (working
-// memory) and every tool-result MESSAGE is kept (pairing intact → no provider 400).
+// tool-output text the model already consumed; the most-recent turns that fit the
+// token budget (maxKeep) stay full (working memory) and every tool-result MESSAGE
+// is kept (pairing intact → no provider 400).
 // Deterministic, no LLM call. All types are structurally matched to pi-ai's
 // AgentMessage/ToolResultMessage so helpers.ts stays free of pi-runtime imports.
 
@@ -572,99 +573,153 @@ export interface ElideMessage {
 }
 
 /**
- * Resolve the PERCENT-of-window term for the elision band from
- * `OPSX_ELIDE_AT_PERCENT`. Default 25 (deliberately below L1's 33 so the mid-run
- * view slims BEFORE the between-turns compaction bar). `off/none/false/0` → null
- * (term dropped); garbage or out-of-range → default.
+ * Resolve the KEEP-RECENT percent-of-window budget from
+ * `OPSX_ELIDE_KEEP_RECENT_PERCENT`. Default 40 (hold the model's working context
+ * near 40% of the window — below the context-rot-heavy zone — on any window size).
+ * Garbage or out-of-range → default; there is NO absolute token floor.
  */
-export function resolveElidePercent(raw: string | undefined): number | null {
-	if (raw == null || raw.trim() === "") return 25;
-	const t = raw.trim().toLowerCase();
-	if (OFF_TOKENS.has(t)) return null;
-	if (!/^\d+$/.test(t)) return 25;
-	const n = Number.parseInt(t, 10);
-	if (n < 1 || n > 100) return 25;
-	return n;
-}
-
-/**
- * Resolve the ABSOLUTE-TOKEN term for the elision band from
- * `OPSX_ELIDE_AT_TOKENS`. Default 60_000 (below L1's 100k floor). `off/none/false/0`
- * → null; garbage → default.
- */
-export function resolveElideTokens(raw: string | undefined): number | null {
-	if (raw == null || raw.trim() === "") return 60_000;
-	const t = raw.trim().toLowerCase();
-	if (OFF_TOKENS.has(t)) return null;
-	if (!/^\d+$/.test(t)) return 60_000;
-	const n = Number.parseInt(t, 10);
-	if (n < 1) return 60_000;
-	return n;
-}
-
-/**
- * Token count at/above which mid-run elision fires: max(percentTerm * window,
- * tokenFloor) — the SAME shape as the L1 compaction threshold but with defaults
- * (25% / 60k) that sit at/below L1's (33% / 100k) for every window size, so
- * elision always engages before the between-turns compaction bar. Either term may
- * be OFF; both off (or non-positive window with the floor off) disables elision and
- * returns undefined.
- */
-export function resolveElideThresholdTokens(
-	contextWindow: number,
-	pctRaw: string | undefined,
-	tokRaw: string | undefined,
-): number | undefined {
-	const pct = resolveElidePercent(pctRaw);
-	const tok = resolveElideTokens(tokRaw);
-	const terms: number[] = [];
-	if (pct != null && Number.isFinite(contextWindow) && contextWindow > 0) {
-		terms.push(Math.ceil((pct / 100) * contextWindow));
-	}
-	if (tok != null) terms.push(tok);
-	if (terms.length === 0) return undefined;
-	return Math.max(...terms);
-}
-
-/** Resolve how many most-recent turns to keep in FULL (`OPSX_ELIDE_KEEP_RECENT_TURNS`,
- *  default 3, minimum 1 so the newest turn is always full). Garbage → default. */
-export function resolveElideKeepRecent(raw: string | undefined): number {
-	if (raw == null || raw.trim() === "") return 3;
+export function resolveElideKeepPercent(raw: string | undefined): number {
+	if (raw == null || raw.trim() === "") return 40;
 	const t = raw.trim();
-	if (!/^\d+$/.test(t)) return 3;
+	if (!/^\d+$/.test(t)) return 40;
 	const n = Number.parseInt(t, 10);
-	return n < 1 ? 1 : n;
+	if (n < 1 || n > 100) return 40;
+	return n;
 }
 
-/** Resolve the boundary-quantization band in turns (`OPSX_ELIDE_BAND_TURNS`,
- *  default 5, minimum 1). Garbage → default. */
-export function resolveElideBand(raw: string | undefined): number {
+/**
+ * Resolve the token-band percent-of-window hysteresis from `OPSX_ELIDE_BAND_PERCENT`.
+ * Default 5 (advance the elision boundary only every 5%-of-window of growth so the
+ * slim prefix stays prompt-cache-stable across requests). Garbage/out-of-range →
+ * default.
+ */
+export function resolveElideBandPercent(raw: string | undefined): number {
 	if (raw == null || raw.trim() === "") return 5;
 	const t = raw.trim();
 	if (!/^\d+$/.test(t)) return 5;
 	const n = Number.parseInt(t, 10);
-	return n < 1 ? 1 : n;
+	if (n < 1 || n > 100) return 5;
+	return n;
 }
 
 /**
- * Band-quantized elision boundary (turn index): tool results in turns BEFORE this
- * index are eligible for body elision. cutoff = totalTurns - keepRecent, snapped
- * DOWN to a multiple of `band` so the slim prefix stays byte-stable across
- * consecutive requests within one band (prompt-cache friendly) and only advances at
- * band edges. Never elides into the recent-K window (banding only lowers cutoff), so
- * the newest keepRecent turns — including the in-flight turn — are always full.
- * Returns 0 when nothing qualifies (no elision).
+ * The KEEP-RECENT token budget `maxKeep` = keepPercent% × window (no absolute floor).
+ * Dynamic per model. Returns undefined for a non-positive/unknown window (caller
+ * degrades to pass-through).
  */
-export function elideBoundary(totalTurns: number, keepRecent: number, band: number): number {
-	const b = band >= 1 ? Math.floor(band) : 1;
-	const cutoff = totalTurns - Math.max(1, keepRecent);
-	if (cutoff <= 0) return 0;
-	return Math.floor(cutoff / b) * b;
+export function resolveElideMaxKeepTokens(
+	contextWindow: number,
+	pctRaw: string | undefined,
+): number | undefined {
+	if (!Number.isFinite(contextWindow) || contextWindow <= 0) return undefined;
+	const pct = resolveElideKeepPercent(pctRaw);
+	return Math.ceil((pct / 100) * contextWindow);
+}
+
+/**
+ * The token-band width = bandPercent% × window (minimum 1). Returns undefined for a
+ * non-positive/unknown window.
+ */
+export function resolveElideBandTokens(
+	contextWindow: number,
+	pctRaw: string | undefined,
+): number | undefined {
+	if (!Number.isFinite(contextWindow) || contextWindow <= 0) return undefined;
+	const pct = resolveElideBandPercent(pctRaw);
+	return Math.max(1, Math.ceil((pct / 100) * contextWindow));
+}
+
+/**
+ * Deterministic per-message token estimate: textual content characters ÷ 4. No
+ * tokenizer or model call. Counts `text`/`thinking` block strings, a string
+ * `content`, and a tool-call `name` + JSON-serialized `arguments`, so a large
+ * tool-call or tool-result body is sized realistically. Non-textual blocks
+ * contribute 0.
+ */
+export function estimateMessageTokens(m: ElideMessage): number {
+	const content = m?.content;
+	let chars = 0;
+	if (typeof content === "string") {
+		chars = content.length;
+	} else if (Array.isArray(content)) {
+		for (const c of content as unknown[]) {
+			const b = c as { text?: unknown; thinking?: unknown; name?: unknown; arguments?: unknown };
+			if (typeof b?.text === "string") chars += b.text.length;
+			if (typeof b?.thinking === "string") chars += b.thinking.length;
+			if (typeof b?.name === "string") chars += b.name.length;
+			if (b?.arguments != null) {
+				try {
+					chars += JSON.stringify(b.arguments).length;
+				} catch {
+					/* non-serializable → skip */
+				}
+			}
+		}
+	}
+	return Math.ceil(chars / 4);
+}
+
+/**
+ * Token-budget elision boundary (turn index): tool results in turns BEFORE this
+ * index are eligible for body elision; turns at/after it (the kept-full recent
+ * window) are sent whole. Walks turns oldest→newest shedding the oldest whose
+ * cumulative estimate fits the BANDED elide allowance, so the kept-full window's
+ * estimated tokens stay AT OR ABOVE `maxKeepTokens` (never eliding below budget) and
+ * the boundary snaps to a TURN edge (never splits a turn). The allowance is quantized
+ * to `bandTokens` multiples — the hysteresis that keeps the slim prefix byte-stable
+ * within a band (prompt-cache friendly) and only advances at band edges. The newest
+ * (in-flight) turn is ALWAYS kept, even if it alone exceeds the budget. Returns 0 (no
+ * elision) when total ≤ maxKeep, when the over-budget amount is within one band
+ * (hysteresis hold), or when there is only one turn.
+ */
+export function tokenBudgetBoundary(
+	messages: ElideMessage[],
+	maxKeepTokens: number,
+	bandTokens: number,
+): number {
+	if (!Array.isArray(messages) || messages.length === 0) return 0;
+	// Per-turn token totals (turn index increments at each assistant message; leading
+	// non-assistant messages and the first assistant share turn 0 — identical indexing
+	// to elideToolResultBodies so the boundary lines up with its turnOf map).
+	const perTurn: number[] = [];
+	let turn = 0;
+	let sawAssistant = false;
+	for (let i = 0; i < messages.length; i++) {
+		if (messages[i]?.role === "assistant") {
+			if (sawAssistant) turn++;
+			sawAssistant = true;
+		}
+		perTurn[turn] = (perTurn[turn] ?? 0) + estimateMessageTokens(messages[i]);
+	}
+	const totalTurns = perTurn.length;
+	if (totalTurns <= 1) return 0; // never elide the only/newest turn
+	const maxKeep = Number.isFinite(maxKeepTokens) && maxKeepTokens > 0 ? maxKeepTokens : 0;
+	if (maxKeep <= 0) return 0;
+	let total = 0;
+	for (const t of perTurn) total += t;
+	const overBudget = total - maxKeep;
+	if (overBudget <= 0) return 0;
+	const band = Number.isFinite(bandTokens) && bandTokens >= 1 ? bandTokens : 1;
+	const allowedElide = Math.floor(overBudget / band) * band;
+	if (allowedElide <= 0) return 0; // within one band of budget → hysteresis hold
+	// Shed oldest turns while their cumulative estimate fits the banded allowance,
+	// never crossing into the newest turn (loop stops before totalTurns-1).
+	let cum = 0;
+	let boundary = 0;
+	for (let t = 0; t < totalTurns - 1; t++) {
+		if (cum + perTurn[t] <= allowedElide) {
+			cum += perTurn[t];
+			boundary = t + 1;
+		} else {
+			break;
+		}
+	}
+	return boundary;
 }
 
 export interface ElideOptions {
-	keepRecent?: number;
-	band?: number;
+	maxKeepTokens?: number;
+	bandTokens?: number;
 }
 
 export interface ElideResult {
@@ -674,11 +729,11 @@ export interface ElideResult {
 
 /**
  * Produce a NEW view of `messages` with the text bodies of tool-result messages in
- * turns before the band-quantized boundary replaced by `ELIDE_STUB`. Turn index
+ * turns before the token-budget boundary replaced by `ELIDE_STUB`. Turn index
  * increments at every `assistant` message (its tool results belong to that turn).
  * KEEPS every message (never drops one → `tool_call ↔ tool_result` pairing intact),
- * keeps tool calls, assistant/user text, thinking blocks, and the recent-K tool
- * results in full. NEVER mutates the input array or its message objects. Fail-closed:
+ * keeps tool calls, assistant/user text, thinking blocks, and the kept-full recent
+ * tool results in full. NEVER mutates the input array or its message objects. Fail-closed:
  * any unexpected shape/throw returns the ORIGINAL array with `elided:false`.
  */
 export function elideToolResultBodies(
@@ -689,8 +744,6 @@ export function elideToolResultBodies(
 		if (!Array.isArray(messages) || messages.length === 0) {
 			return { messages, elided: false };
 		}
-		const keepRecent = Math.max(1, opts.keepRecent ?? 3);
-		const band = Math.max(1, opts.band ?? 5);
 
 		// Assign a turn index to each message (increment when an assistant message
 		// starts a new turn). Leading non-assistant messages are turn 0.
@@ -717,8 +770,11 @@ export function elideToolResultBodies(
 			}
 			turnOf[i] = turn;
 		}
-		const totalTurns = turn + 1;
-		const boundary = elideBoundary(totalTurns, keepRecent, band);
+		const boundary = tokenBudgetBoundary(
+			messages,
+			opts.maxKeepTokens ?? 0,
+			opts.bandTokens ?? 1,
+		);
 		if (boundary <= 0) return { messages, elided: false };
 
 		// Pairing integrity (fail-closed): every tool-result MUST reference a tool-call
