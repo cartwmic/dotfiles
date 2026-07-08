@@ -733,6 +733,13 @@ export function elideToolResultBodies(
 				if (typeof id !== "string" || !callIds.has(id)) {
 					return { messages, elided: false };
 				}
+				// A tool_result whose content is not a well-formed block array is
+				// structurally malformed; rather than elide valid siblings around it and
+				// emit a partially-transformed view, fail closed on the WHOLE pass (spec:
+				// "structural guard trips" → original unchanged).
+				if (!Array.isArray(m.content)) {
+					return { messages, elided: false };
+				}
 			}
 		}
 
