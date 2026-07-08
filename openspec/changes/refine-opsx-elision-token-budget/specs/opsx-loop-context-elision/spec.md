@@ -17,10 +17,15 @@ WHILE eliding, THE extension SHALL keep the most-recent turns whose cumulative e
 - **WHEN** the transform elides at a token budget `maxKeep`
 - **THEN** THE elision boundary SHALL fall on a turn edge such that the kept-full recent turns' cumulative estimated tokens are at or below `maxKeep` plus the band
 
-#### Scenario: kept-full window is bounded
+#### Scenario: kept-full window is capped at the ceiling
 - **WHILE** eliding against `maxKeep` and a band
 - **WHEN** the transform runs
-- **THEN** THE cumulative estimated tokens of the kept-full recent window SHALL be within `[maxKeep, maxKeep + band]`
+- **THEN** THE cumulative estimated tokens of the kept-full recent window SHALL be at or below `maxKeep + band`, except a single newest turn that alone exceeds that ceiling
+
+#### Scenario: over-budget always elides at least one turn
+- **WHILE** an opsx loop is armed and there is more than one turn and total estimated context exceeds `maxKeep + band`
+- **WHEN** the transform runs
+- **THEN** THE extension SHALL elide the body of at least the oldest turn (never firing yet producing an unchanged over-budget view)
 
 #### Scenario: newest turn always kept
 - **WHEN** the newest (in-flight) turn's estimated tokens alone exceed `maxKeep`

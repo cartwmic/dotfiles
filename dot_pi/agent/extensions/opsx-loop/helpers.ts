@@ -662,15 +662,20 @@ export function estimateMessageTokens(m: ElideMessage): number {
 /**
  * Token-budget elision boundary (turn index): tool results in turns BEFORE this
  * index are eligible for body elision; turns at/after it (the kept-full recent
- * window) are sent whole. Walks turns oldest→newest shedding the oldest whose
- * cumulative estimate fits the BANDED elide allowance, so the kept-full window's
- * estimated tokens stay AT OR ABOVE `maxKeepTokens` (never eliding below budget) and
- * the boundary snaps to a TURN edge (never splits a turn). The allowance is quantized
- * to `bandTokens` multiples — the hysteresis that keeps the slim prefix byte-stable
- * within a band (prompt-cache friendly) and only advances at band edges. The newest
- * (in-flight) turn is ALWAYS kept, even if it alone exceeds the budget. Returns 0 (no
- * elision) when total ≤ maxKeep, when the over-budget amount is within one band
- * (hysteresis hold), or when there is only one turn.
+ * window) are sent whole. Keeps the MOST-RECENT turns whose cumulative estimate fits
+ * a ceiling of `maxKeepTokens + bandTokens`, walking newest→oldest and stopping at
+ * the first older turn that would overflow the ceiling — so the boundary snaps to a
+ * TURN edge (never splits a turn) and the kept-full window's estimated tokens stay
+ * AT OR BELOW `maxKeep + band`. The `band` is hysteresis headroom: the boundary is
+ * byte-stable while the kept window grows within it (prompt-cache friendly) and only
+ * advances a turn edge once growth crosses the ceiling — roughly once per band of new
+ * tokens. The newest (in-flight) turn is ALWAYS kept, even if it alone exceeds the
+ * ceiling. Returns 0 (no elision) when total ≤ ceiling (hysteresis hold / within
+ * budget) or when there is only one turn. NOTE: because the boundary snaps to a turn
+ * edge and never splits a turn (frozen decision 1 / non-goal), the kept window can dip
+ * below `maxKeep` when a near-newest turn is itself large — the safe, effective
+ * direction (that large recent tool dump is exactly the stale mass worth shedding),
+ * never breaking pairing or the newest-turn guarantee.
  */
 export function tokenBudgetBoundary(
 	messages: ElideMessage[],
@@ -695,21 +700,20 @@ export function tokenBudgetBoundary(
 	if (totalTurns <= 1) return 0; // never elide the only/newest turn
 	const maxKeep = Number.isFinite(maxKeepTokens) && maxKeepTokens > 0 ? maxKeepTokens : 0;
 	if (maxKeep <= 0) return 0;
+	const band = Number.isFinite(bandTokens) && bandTokens >= 1 ? bandTokens : 1;
+	const ceiling = maxKeep + band;
 	let total = 0;
 	for (const t of perTurn) total += t;
-	const overBudget = total - maxKeep;
-	if (overBudget <= 0) return 0;
-	const band = Number.isFinite(bandTokens) && bandTokens >= 1 ? bandTokens : 1;
-	const allowedElide = Math.floor(overBudget / band) * band;
-	if (allowedElide <= 0) return 0; // within one band of budget → hysteresis hold
-	// Shed oldest turns while their cumulative estimate fits the banded allowance,
-	// never crossing into the newest turn (loop stops before totalTurns-1).
-	let cum = 0;
-	let boundary = 0;
-	for (let t = 0; t < totalTurns - 1; t++) {
-		if (cum + perTurn[t] <= allowedElide) {
+	if (total <= ceiling) return 0; // within budget + band → hysteresis hold
+	// Keep the most-recent turns that fit the ceiling; `boundary` is the OLDEST kept
+	// turn index. Always keep the newest turn (index totalTurns-1) even if it alone
+	// exceeds the ceiling; then extend the kept window older while it still fits.
+	let cum = perTurn[totalTurns - 1];
+	let boundary = totalTurns - 1;
+	for (let t = totalTurns - 2; t >= 0; t--) {
+		if (cum + perTurn[t] <= ceiling) {
 			cum += perTurn[t];
-			boundary = t + 1;
+			boundary = t;
 		} else {
 			break;
 		}
