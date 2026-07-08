@@ -662,20 +662,23 @@ export function estimateMessageTokens(m: ElideMessage): number {
 /**
  * Token-budget elision boundary (turn index): tool results in turns BEFORE this
  * index are eligible for body elision; turns at/after it (the kept-full recent
- * window) are sent whole. Keeps the MOST-RECENT turns whose cumulative estimate fits
- * a ceiling of `maxKeepTokens + bandTokens`, walking newest→oldest and stopping at
- * the first older turn that would overflow the ceiling — so the boundary snaps to a
- * TURN edge (never splits a turn) and the kept-full window's estimated tokens stay
- * AT OR BELOW `maxKeep + band`. The `band` is hysteresis headroom: the boundary is
- * byte-stable while the kept window grows within it (prompt-cache friendly) and only
- * advances a turn edge once growth crosses the ceiling — roughly once per band of new
- * tokens. The newest (in-flight) turn is ALWAYS kept, even if it alone exceeds the
- * ceiling. Returns 0 (no elision) when total ≤ ceiling (hysteresis hold / within
- * budget) or when there is only one turn. NOTE: because the boundary snaps to a turn
- * edge and never splits a turn (frozen decision 1 / non-goal), the kept window can dip
- * below `maxKeep` when a near-newest turn is itself large — the safe, effective
- * direction (that large recent tool dump is exactly the stale mass worth shedding),
- * never breaking pairing or the newest-turn guarantee.
+ * window) are sent whole. Sheds the OLDEST turns, oldest→newest, up to a BANDED shed
+ * target = `floor(overBudget / band) * band` where `overBudget = total - maxKeep`.
+ * Because the target is quantized to `band` multiples, the boundary is byte-stable
+ * while total grows within one band and only advances a turn edge when growth crosses
+ * a band multiple (prompt-cache friendly — the hysteresis of frozen decision 3). In
+ * the normal case the kept-full window's estimate lands in `[maxKeep, maxKeep + band]`.
+ * TWO guarantees hold unconditionally: (1) the newest (in-flight) turn is ALWAYS kept
+ * (the shed loop never reaches it); (2) whenever elision fires (total > maxKeep + band,
+ * so `overBudget > band` and the banded target ≥ band ≥ 1) at least the OLDEST turn's
+ * body is shed — the loop force-takes the first turn so a large oldest turn that alone
+ * exceeds the banded target can never collapse the boundary to a fire-but-noop. NOTE:
+ * because the boundary snaps to a turn edge and never splits a turn (frozen decision 1
+ * / non-goal), the kept window can dip below `maxKeep` only in the extreme where a
+ * single oldest turn exceeds `overBudget` — the safe, effective direction (that large
+ * stale tool dump is exactly the mass worth shedding), never breaking pairing or the
+ * newest-turn guarantee. Returns 0 (no elision) when total ≤ maxKeep + band (hysteresis
+ * hold / within budget) or when there is only one turn.
  */
 export function tokenBudgetBoundary(
 	messages: ElideMessage[],
@@ -701,19 +704,20 @@ export function tokenBudgetBoundary(
 	const maxKeep = Number.isFinite(maxKeepTokens) && maxKeepTokens > 0 ? maxKeepTokens : 0;
 	if (maxKeep <= 0) return 0;
 	const band = Number.isFinite(bandTokens) && bandTokens >= 1 ? bandTokens : 1;
-	const ceiling = maxKeep + band;
 	let total = 0;
 	for (const t of perTurn) total += t;
-	if (total <= ceiling) return 0; // within budget + band → hysteresis hold
-	// Keep the most-recent turns that fit the ceiling; `boundary` is the OLDEST kept
-	// turn index. Always keep the newest turn (index totalTurns-1) even if it alone
-	// exceeds the ceiling; then extend the kept window older while it still fits.
-	let cum = perTurn[totalTurns - 1];
-	let boundary = totalTurns - 1;
-	for (let t = totalTurns - 2; t >= 0; t--) {
-		if (cum + perTurn[t] <= ceiling) {
+	if (total <= maxKeep + band) return 0; // within budget + band → hysteresis hold
+	const overBudget = total - maxKeep; // > band here, so bandedTarget ≥ band ≥ 1
+	const bandedTarget = Math.floor(overBudget / band) * band;
+	// Shed oldest turns up to the banded target, but ALWAYS take at least the oldest
+	// turn (progress guarantee — a lone oldest turn larger than the banded target must
+	// still be shed, never a fire-but-noop). Never cross into the newest turn.
+	let cum = 0;
+	let boundary = 0;
+	for (let t = 0; t < totalTurns - 1; t++) {
+		if (boundary === 0 || cum + perTurn[t] <= bandedTarget) {
 			cum += perTurn[t];
-			boundary = t;
+			boundary = t + 1;
 		} else {
 			break;
 		}
