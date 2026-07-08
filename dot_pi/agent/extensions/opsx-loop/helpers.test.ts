@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildModelEnv, classifyDoneness, clearHoldText, describeCompactPolicy, donenessRatchet, formatInventory, gateFailKey, hashDir, isContextOverflowError, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, resolveCompactPercent, resolveCompactThresholdTokens, resolveCompactTokens, stripLoopHold, verdictFromExit, ELIDE_STUB, resolveElidePercent, resolveElideTokens, resolveElideThresholdTokens, resolveElideKeepRecent, resolveElideBand, elideBoundary, elideToolResultBodies } from "./helpers.ts";
+import { buildModelEnv, classifyDoneness, clearHoldText, describeCompactPolicy, donenessRatchet, formatInventory, gateFailKey, hashDir, isContextOverflowError, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, resolveCompactPercent, resolveCompactThresholdTokens, resolveCompactTokens, stripLoopHold, verdictFromExit, ELIDE_STUB, resolveElideKeepPercent, resolveElideBandPercent, resolveElideMaxKeepTokens, resolveElideBandTokens, estimateMessageTokens, tokenBudgetBoundary, elideToolResultBodies } from "./helpers.ts";
 
 type TR = { role: string; content: unknown; toolCallId?: string; toolName?: string };
 const asst = (id: string) => ({ role: "assistant", content: [{ type: "text", text: "call" }, { type: "toolCall", id, name: "bash", arguments: {} }] });
@@ -443,98 +443,132 @@ describe("parseModelsJson — opsx-loop.loop-exports-resolved-role-models", () =
 });
 
 // AC opsx-loop-context-elision.threshold-band-gating
-describe("elision threshold resolution", () => {
-	test("percent/token defaults", () => {
-		expect(resolveElidePercent(undefined)).toBe(25);
-		expect(resolveElideTokens(undefined)).toBe(60_000);
-		expect(resolveElideKeepRecent(undefined)).toBe(3);
-		expect(resolveElideBand(undefined)).toBe(5);
+
+// AC opsx-loop-context-elision.token-budget-boundary,
+//    opsx-loop-context-elision.token-band-hysteresis
+describe("token-budget elision resolvers", () => {
+	test("keep/band percent defaults", () => {
+		expect(resolveElideKeepPercent(undefined)).toBe(40);
+		expect(resolveElideBandPercent(undefined)).toBe(5);
 	});
-	test("off terms drop", () => {
-		expect(resolveElidePercent("off")).toBeNull();
-		expect(resolveElideTokens("none")).toBeNull();
-		expect(resolveElidePercent("0")).toBeNull();
+	test("garbage / out-of-range → default", () => {
+		expect(resolveElideKeepPercent("abc")).toBe(40);
+		expect(resolveElideKeepPercent("0")).toBe(40);
+		expect(resolveElideKeepPercent("150")).toBe(40);
+		expect(resolveElideBandPercent("xx")).toBe(5);
+		expect(resolveElideBandPercent("0")).toBe(5);
 	});
-	test("garbage → default", () => {
-		expect(resolveElidePercent("abc")).toBe(25);
-		expect(resolveElidePercent("999")).toBe(25);
-		expect(resolveElideTokens("xx")).toBe(60_000);
-		expect(resolveElideKeepRecent("x")).toBe(3);
-		expect(resolveElideKeepRecent("0")).toBe(1);
+	test("explicit overrides honored", () => {
+		expect(resolveElideKeepPercent("50")).toBe(50);
+		expect(resolveElideBandPercent("10")).toBe(10);
 	});
-	test("threshold = max(pct*window, tokens)", () => {
-		expect(resolveElideThresholdTokens(200_000, undefined, undefined)).toBe(60_000);
-		expect(resolveElideThresholdTokens(1_000_000, undefined, undefined)).toBe(250_000);
-		expect(resolveElideThresholdTokens(0, undefined, "off")).toBeUndefined();
-		expect(resolveElideThresholdTokens(200_000, "off", "off")).toBeUndefined();
+	test("maxKeep / band tokens = percent-of-window, no absolute floor", () => {
+		expect(resolveElideMaxKeepTokens(272_000, undefined)).toBe(108_800); // 40% × 272k
+		expect(resolveElideMaxKeepTokens(200_000, "50")).toBe(100_000);
+		expect(resolveElideBandTokens(272_000, undefined)).toBe(13_600); // 5% × 272k
 	});
-	test("elision band sits at/below L1 across window sizes", () => {
+	test("unknown/non-positive window → undefined (caller degrades)", () => {
+		expect(resolveElideMaxKeepTokens(0, undefined)).toBeUndefined();
+		expect(resolveElideMaxKeepTokens(Number.NaN, undefined)).toBeUndefined();
+		expect(resolveElideBandTokens(0, undefined)).toBeUndefined();
+	});
+	test("budget scales with window on any size (dynamic, no floor)", () => {
 		for (const w of [128_000, 200_000, 400_000, 1_000_000]) {
-			const e = resolveElideThresholdTokens(w, undefined, undefined)!;
-			const l1 = resolveCompactThresholdTokens(w, undefined, undefined)!;
-			expect(e).toBeLessThanOrEqual(l1);
+			expect(resolveElideMaxKeepTokens(w, undefined)).toBe(Math.ceil(0.4 * w));
+			expect(resolveElideBandTokens(w, undefined)).toBe(Math.ceil(0.05 * w));
 		}
 	});
 });
 
-// AC opsx-loop-context-elision.threshold-band-gating
-describe("elideBoundary band quantization", () => {
-	test("snaps cutoff down to a band multiple", () => {
-		// totalTurns=20, keepRecent=3 → cutoff=17 → floor(17/5)*5 = 15
-		expect(elideBoundary(20, 3, 5)).toBe(15);
-		// stable across a band: 21..22 turns keep boundary at 15 until cutoff hits 20
-		expect(elideBoundary(21, 3, 5)).toBe(15);
-		expect(elideBoundary(22, 3, 5)).toBe(15);
-		expect(elideBoundary(23, 3, 5)).toBe(20);
+// AC opsx-loop-context-elision.deterministic-no-model-call (char/4 estimate)
+describe("estimateMessageTokens — deterministic char/4", () => {
+	test("string content, text blocks, tool-call name+args, thinking", () => {
+		expect(estimateMessageTokens({ role: "user", content: "go" })).toBe(1); // 2 chars
+		expect(estimateMessageTokens(tr("c0", "OUTPUT-0"))).toBe(2); // "OUTPUT-0" = 8 chars
+		expect(estimateMessageTokens(asst("c0"))).toBe(3); // "call"+"bash"+"{}" = 10 chars
+		expect(
+			estimateMessageTokens({ role: "assistant", content: [{ type: "thinking", thinking: "xxxxxxxx" }] }),
+		).toBe(2); // 8 chars
+		expect(estimateMessageTokens({ role: "assistant", content: [{ type: "image" }] })).toBe(0);
 	});
-	test("nothing to elide when cutoff <= 0", () => {
-		expect(elideBoundary(3, 3, 5)).toBe(0);
-		expect(elideBoundary(2, 3, 5)).toBe(0);
+});
+
+// AC opsx-loop-context-elision.token-budget-boundary,
+//    opsx-loop-context-elision.token-band-hysteresis
+describe("tokenBudgetBoundary", () => {
+	// convo(20): perTurn = [6, 5×9, 6×10] (turn0 carries the leading user msg;
+	// OUTPUT-10..19 are 9 chars → 3 tok each), total = 111.
+	test("snaps boundary to a turn edge keeping the recent window ≥ maxKeep", () => {
+		// maxKeep=25, band=5 → overBudget=86 → allowedElide=85 → shed turns 0..14 → boundary 15.
+		expect(tokenBudgetBoundary(convo(20), 25, 5)).toBe(15);
+		// kept turns 15..19 = 5 turns × 6 = 30 tokens ≥ 25 (never below budget).
+	});
+	test("band hysteresis — boundary stable within a band, advances across it", () => {
+		// overBudget 86 and 89 both floor to allowedElide 85 → same boundary (cache-stable).
+		expect(tokenBudgetBoundary(convo(20), 25, 5)).toBe(15);
+		expect(tokenBudgetBoundary(convo(20), 22, 5)).toBe(15);
+		// overBudget 90 → allowedElide 90 → boundary advances to 16.
+		expect(tokenBudgetBoundary(convo(20), 21, 5)).toBe(16);
+	});
+	test("within one band of budget → hysteresis hold (no elision)", () => {
+		// total=111; maxKeep=107, band=5 → overBudget=4 < band → allowedElide 0 → boundary 0.
+		expect(tokenBudgetBoundary(convo(20), 107, 5)).toBe(0);
+		// at/under budget → 0.
+		expect(tokenBudgetBoundary(convo(20), 1_000_000, 5)).toBe(0);
+	});
+	test("newest turn always kept even when it alone exceeds the budget", () => {
+		const b = tokenBudgetBoundary(convo(20), 1, 1); // tiny budget
+		expect(b).toBeLessThan(20); // boundary never reaches totalTurns → newest turn survives
+		expect(b).toBe(19); // everything before the newest turn sheds
+	});
+	test("single turn / empty → no elision", () => {
+		expect(tokenBudgetBoundary(convo(1), 1, 1)).toBe(0);
+		expect(tokenBudgetBoundary([] as any, 25, 5)).toBe(0);
 	});
 });
 
 // ACs opsx-loop-context-elision.stale-tool-result-body-elision,
 //     opsx-loop-context-elision.structural-integrity-fail-closed,
 //     opsx-loop-context-elision.no-history-mutation,
-//     opsx-loop-context-elision.deterministic-no-model-call
-describe("elideToolResultBodies", () => {
-	test("old tool-result bodies → stub, recent-K preserved", () => {
-		const msgs = convo(20); // 20 turns; boundary=15 with keepRecent=3,band=5
+//     opsx-loop-context-elision.token-budget-boundary
+describe("elideToolResultBodies (token-budget boundary)", () => {
+	test("old tool-result bodies → stub, kept-full recent window preserved", () => {
+		const msgs = convo(20); // boundary=15 with maxKeep=25, band=5
 		const before = JSON.parse(JSON.stringify(msgs));
-		const { messages: out, elided } = elideToolResultBodies(msgs, { keepRecent: 3, band: 5 });
+		const { messages: out, elided } = elideToolResultBodies(msgs, { maxKeepTokens: 25, bandTokens: 5 });
 		expect(elided).toBe(true);
-		// same length, pairing preserved (every toolResult still present with its id)
 		expect(out.length).toBe(msgs.length);
 		const trOut = out.filter((m: any) => m.role === "toolResult");
-		expect(trOut.length).toBe(20);
+		expect(trOut.length).toBe(20); // pairing preserved (every toolResult still present)
 		// turn 0 (old) elided
 		const t0 = trOut[0] as any;
 		expect(t0.toolCallId).toBe("c0");
 		expect(t0.content[0].text).toBe(ELIDE_STUB);
-		// last turn (19, within recent-3) preserved
-		const t19 = trOut[19] as any;
-		expect(t19.content[0].text).toBe("OUTPUT-19");
+		// turn 14 (last elided) → stub; turn 15 (first kept) → full
+		expect((trOut[14] as any).content[0].text).toBe(ELIDE_STUB);
+		expect((trOut[15] as any).content[0].text).toBe("OUTPUT-15");
+		// newest turn (19) preserved
+		expect((trOut[19] as any).content[0].text).toBe("OUTPUT-19");
 		// INPUT NOT MUTATED
 		expect(msgs).toEqual(before);
 	});
 	test("non-tool-result content untouched", () => {
 		const msgs = convo(20);
-		const { messages: out } = elideToolResultBodies(msgs, { keepRecent: 3, band: 5 });
-		// assistant text + tool calls preserved verbatim
+		const { messages: out } = elideToolResultBodies(msgs, { maxKeepTokens: 25, bandTokens: 5 });
 		const a0 = out.find((m: any) => m.role === "assistant") as any;
 		expect(a0.content[1].id).toBe("c0");
 		expect((out[0] as any).role).toBe("user");
 	});
-	test("below-boundary short convo → no elision (pass-through)", () => {
-		const msgs = convo(3);
-		const { messages: out, elided } = elideToolResultBodies(msgs, { keepRecent: 3, band: 5 });
+	test("within budget → no elision (pass-through)", () => {
+		const msgs = convo(20);
+		const { messages: out, elided } = elideToolResultBodies(msgs, { maxKeepTokens: 1_000_000, bandTokens: 5 });
 		expect(elided).toBe(false);
 		expect(out).toBe(msgs);
 	});
 	test("idempotent — already-stubbed results do not re-fire elided flag", () => {
 		const msgs = convo(20);
-		const first = elideToolResultBodies(msgs, { keepRecent: 3, band: 5 });
-		const second = elideToolResultBodies(first.messages, { keepRecent: 3, band: 5 });
+		const first = elideToolResultBodies(msgs, { maxKeepTokens: 25, bandTokens: 5 });
+		const second = elideToolResultBodies(first.messages, { maxKeepTokens: 25, bandTokens: 5 });
 		expect(second.elided).toBe(false);
 	});
 	test("fail-closed on malformed input", () => {
@@ -545,22 +579,19 @@ describe("elideToolResultBodies", () => {
 	});
 	test("fail-closed when an OLD tool-result has malformed (non-array) content amid valid siblings", () => {
 		const msgs = convo(20) as any[];
-		// Valid matching toolCallId but malformed content on an old-turn result.
 		const firstTr = msgs.findIndex((m) => m.role === "toolResult");
 		msgs[firstTr] = { ...msgs[firstTr], content: "not-an-array" };
 		const before = JSON.parse(JSON.stringify(msgs));
-		const { messages: out, elided } = elideToolResultBodies(msgs, { keepRecent: 3, band: 5 });
+		const { messages: out, elided } = elideToolResultBodies(msgs, { maxKeepTokens: 25, bandTokens: 5 });
 		expect(elided).toBe(false);
 		expect(out).toBe(msgs);
 		expect(msgs).toEqual(before);
 	});
 	test("fail-closed when an OLD tool-result is orphaned (no matching tool_call)", () => {
 		const msgs = convo(20) as any[];
-		// Corrupt an old-turn tool result so its toolCallId references no tool_call.
 		const firstTr = msgs.findIndex((m) => m.role === "toolResult");
 		msgs[firstTr] = { ...msgs[firstTr], toolCallId: "ORPHAN-does-not-exist" };
-		const { messages: out, elided } = elideToolResultBodies(msgs, { keepRecent: 3, band: 5 });
-		// structural guard trips → original returned unchanged, nothing elided
+		const { messages: out, elided } = elideToolResultBodies(msgs, { maxKeepTokens: 25, bandTokens: 5 });
 		expect(elided).toBe(false);
 		expect(out).toBe(msgs);
 	});

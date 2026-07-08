@@ -26,9 +26,8 @@ import {
 	LOOP_SUBCOMMANDS,
 	OPSX_MODEL_ENV_KEYS,
 	resolveCompactThresholdTokens,
-	resolveElideThresholdTokens,
-	resolveElideKeepRecent,
-	resolveElideBand,
+	resolveElideMaxKeepTokens,
+	resolveElideBandTokens,
 	elideToolResultBodies,
 	describeCompactPolicy,
 	isContextOverflowError,
@@ -390,13 +389,16 @@ export default function (pi: ExtensionAPI) {
 	// inject directly (current behavior). Degrades safely: if the running pi lacks
 	// getContextUsage/compact, or usage is unknown (null right after a compaction),
 	// we inject directly.
-	function continueWorker(
+	// Inject an arbitrary continuation `directive`, optionally preceded by a proactive
+	// compaction. Shared by the worker path (workerDirective) and the goal/conversation
+	// distill path (distillContinuation) so the elision→compaction coupling and the L1
+	// threshold decision are honored UNIFORMLY at every run boundary. Consumes the
+	// per-run `elided` latch exactly once here.
+	function injectWithOptionalCompact(
 		session: LoopState,
 		ctx: ExtensionContext,
-		change: string,
-		reason: string,
+		directive: string,
 	): void {
-		const directive = workerDirective(change, reason);
 		const inject = () => {
 			// Guard: the loop may have been cleared/replaced during compaction.
 			if (loop === session && session.active) {
@@ -464,6 +466,17 @@ export default function (pi: ExtensionAPI) {
 			// direct inject so the loop never stalls.
 			done();
 		}
+	}
+
+	// Worker continuation: build the worker directive and inject it through the shared
+	// compaction-aware path.
+	function continueWorker(
+		session: LoopState,
+		ctx: ExtensionContext,
+		change: string,
+		reason: string,
+	): void {
+		injectWithOptionalCompact(session, ctx, workerDirective(change, reason));
 	}
 
 	// Appended to every injected loop directive. This is an AUTONOMOUS drive-to-green
@@ -685,14 +698,19 @@ export default function (pi: ExtensionAPI) {
 	// Mid-run context elision (Lever L3). The pi `context` event fires before EVERY
 	// provider request within a run; the handler returns a slimmer per-request VIEW
 	// (stale tool-result bodies stubbed) WITHOUT mutating stored history and WITHOUT
-	// aborting the turn. Strict no-op unless a loop is armed and context usage is at/
-	// above the elision band; degrades to pass-through when the host lacks the usage
-	// API. Returning undefined leaves the messages unchanged.
-	// (opsx-loop-context-elision.active-loop-scoped-elision, .threshold-band-gating,
+	// aborting the turn. Strict no-op unless a loop is armed and total context usage
+	// exceeds the token budget (maxKeep + band); degrades to pass-through when the host
+	// lacks the usage API. Returning undefined leaves the messages unchanged.
+	// (opsx-loop-context-elision.active-loop-scoped-elision, .token-budget-boundary,
+	//  .token-band-hysteresis, .elision-suppressed-during-compaction,
 	//  .stale-tool-result-body-elision, .safe-degradation, .no-history-mutation)
 	pi.on("context", (event: any, ctx: ExtensionContext) => {
 		const session = loop;
 		if (!session?.active) return undefined; // active-loop-only scope
+		// Never elide the compaction summarizer's OWN request: a between-turns compaction
+		// issues provider requests that also fire this event, and slimming them would feed
+		// the summarizer a stubbed view of the very history it is consolidating.
+		if (session.compacting) return undefined;
 		if (typeof ctx.getContextUsage !== "function") return undefined; // safe-degrade
 		const messages = event?.messages;
 		if (!Array.isArray(messages) || messages.length === 0) return undefined;
@@ -700,18 +718,16 @@ export default function (pi: ExtensionAPI) {
 		const tokens = usage?.tokens;
 		const window = usage?.contextWindow;
 		if (tokens == null || window == null) return undefined; // unmeasurable → pass-through
-		const threshold = resolveElideThresholdTokens(
-			window,
-			process.env.OPSX_ELIDE_AT_PERCENT,
-			process.env.OPSX_ELIDE_AT_TOKENS,
-		);
-		if (threshold === undefined || tokens < threshold) return undefined; // below band
+		const maxKeep = resolveElideMaxKeepTokens(window, process.env.OPSX_ELIDE_KEEP_RECENT_PERCENT);
+		const band = resolveElideBandTokens(window, process.env.OPSX_ELIDE_BAND_PERCENT);
+		if (maxKeep === undefined || band === undefined) return undefined; // unknown window
+		if (tokens <= maxKeep + band) return undefined; // within budget + band → hold
 		const { messages: view, elided } = elideToolResultBodies(messages, {
-			keepRecent: resolveElideKeepRecent(process.env.OPSX_ELIDE_KEEP_RECENT_TURNS),
-			band: resolveElideBand(process.env.OPSX_ELIDE_BAND_TURNS),
+			maxKeepTokens: maxKeep,
+			bandTokens: band,
 		});
 		if (!elided) return undefined;
-		session.elided = true; // couple to between-turns compaction at agent_end
+		session.elided = true; // couple to between-turns compaction at the run boundary
 		return { messages: view };
 	});
 
@@ -829,7 +845,11 @@ export default function (pi: ExtensionAPI) {
 						}
 					}
 					renderStatus(ctx);
-					pi.sendUserMessage(distillContinuation(session.goal), { deliverAs: "followUp" });
+					// Distill continuation rides the SAME compaction-aware inject as the worker
+					// path so a distill run in which mid-run elision fired still consumes the
+					// `elided` latch and compacts to consolidate durably (coupling honored on
+					// every run boundary, not just the worker path).
+					injectWithOptionalCompact(session, ctx, distillContinuation(session.goal));
 					return;
 				}
 				// ONE-SHOT HUMAN CONFIRM (ADR-0014): do NOT silently adopt the
