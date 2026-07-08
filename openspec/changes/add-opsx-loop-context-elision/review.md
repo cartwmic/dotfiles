@@ -10,6 +10,8 @@ loop_max_iterations: 40
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
+loop_hold: true
+loop_hold_reason: "opsx gate GREEN (M) at worktree HEAD d9b5624 — ready to archive; awaiting human /opsx-loop re-arm or archive. Sealed adversarial-multimodel pass + doneness satisfied."
 ---
 
 # Review
