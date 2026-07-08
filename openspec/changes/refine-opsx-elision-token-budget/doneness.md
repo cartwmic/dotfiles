@@ -5,9 +5,9 @@
 **Judge:** pi-subagents delegate — claude-bridge/claude-opus-4-8 (designated reviewer = first `review` role model; combined code-review dispatch)
 **review_mode:** blind-single-judge
 **Frozen-Intent SHA:** 35c7b5c52708c9234dbca1f1629c5ce325b70432f5bf6f79687dedd4859cd161
-**Attested HEAD:** 31386a1023c124e088495cb91ea64776a7a7aba5
+**Attested HEAD:** 0d1bf1ab4ce2ef3c4aee92657dc49a5d5ea9bb1f
 **Diff Base SHA:** 3b3fc2a768690b653ddad3875608d25a6d2ad5aa
-**Reviewed Range:** 3b3fc2a768690b653ddad3875608d25a6d2ad5aa..31386a1023c124e088495cb91ea64776a7a7aba5
+**Reviewed Range:** 3b3fc2a768690b653ddad3875608d25a6d2ad5aa..0d1bf1ab4ce2ef3c4aee92657dc49a5d5ea9bb1f
 
 ## Verdict rationale
 
