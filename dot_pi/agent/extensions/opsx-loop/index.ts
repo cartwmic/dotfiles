@@ -26,6 +26,10 @@ import {
 	LOOP_SUBCOMMANDS,
 	OPSX_MODEL_ENV_KEYS,
 	resolveCompactThresholdTokens,
+	resolveElideThresholdTokens,
+	resolveElideKeepRecent,
+	resolveElideBand,
+	elideToolResultBodies,
 	describeCompactPolicy,
 	isContextOverflowError,
 	parseDonenessGaps,
@@ -73,6 +77,12 @@ interface LoopState {
 	// worker directive is injected in the compaction callback, so a stray agent_end
 	// in that window must NOT re-run the gate or double-inject.
 	compacting?: boolean;
+	// Set by the mid-run `context`-event elision transform (Lever L3) when it elides
+	// at least one stale tool-result body during THIS run. Read once at agent_end to
+	// couple elision → between-turns compaction (force the L1 compact path so the
+	// ephemeral trim is durably consolidated), then reset. Self-rate-limited: a
+	// compacted run starts slim, so elision does not re-fire until history regrows.
+	elided?: boolean;
 	// Bounded latch for overflow-only recovery: set when a worker turn ends with a
 	// context-overflow error and we compact-and-retry once; reset on the next clean
 	// turn. A second consecutive overflow (recovery already attempted) stops the loop.
@@ -396,39 +406,48 @@ export default function (pi: ExtensionAPI) {
 
 		const canMeasure = typeof ctx.getContextUsage === "function";
 		const canCompact = typeof ctx.compact === "function";
-		if (!canMeasure || !canCompact) {
+		// Elision → compaction coupling (L3): if the mid-run elision transform fired
+		// this run, force the L1 compact path so the ephemeral trim is durably
+		// consolidated. Consume the flag here at the run boundary; the next run starts
+		// slim and re-evaluates. Threshold measurement is still preferred for the
+		// notify wording, but a forced compaction does not require a measurable usage.
+		const forceCompact = session.elided === true;
+		session.elided = false;
+		if (!canCompact) {
 			inject();
 			return;
 		}
 
-		const usage = ctx.getContextUsage();
+		const usage = canMeasure ? ctx.getContextUsage() : undefined;
 		const tokens = usage?.tokens;
 		const window = usage?.contextWindow;
-		// tokens is null right after a compaction (before the next LLM response) —
-		// can't measure, so inject directly and let the next turn re-evaluate.
-		if (tokens == null || window == null) {
-			inject();
-			return;
+		let overThreshold = false;
+		if (tokens != null && window != null) {
+			const threshold = resolveCompactThresholdTokens(
+				window,
+				process.env.OPSX_COMPACT_AT_PERCENT,
+				process.env.OPSX_COMPACT_AT_TOKENS,
+			);
+			overThreshold = threshold !== undefined && tokens >= threshold;
 		}
-		const threshold = resolveCompactThresholdTokens(
-			window,
-			process.env.OPSX_COMPACT_AT_PERCENT,
-			process.env.OPSX_COMPACT_AT_TOKENS,
-		);
-		if (threshold === undefined || tokens < threshold) {
+		// Neither the L1 threshold nor an eliding run asks for a compaction (or usage is
+		// unmeasurable and elision did not fire): inject directly and let the next turn
+		// re-evaluate.
+		if (!forceCompact && !overThreshold) {
 			inject();
 			return;
 		}
 
-		// Over threshold: compact, then inject in the callback. `compacting` gates a
-		// stray agent_end out of the compaction window; both callbacks clear it and
-		// inject so a compaction error never drops the turn.
+		// Compact, then inject in the callback. `compacting` gates a stray agent_end out
+		// of the compaction window; both callbacks clear it and inject so a compaction
+		// error never drops the turn.
 		session.compacting = true;
 		renderStatus(ctx);
-		ctx.ui.notify(
-			`⟳ opsx-loop: context ${tokens.toLocaleString("en-US")}/${window.toLocaleString("en-US")} tokens ≥ ${threshold.toLocaleString("en-US")} — compacting before next turn.`,
-			"info",
-		);
+		const notifyMsg =
+			overThreshold && tokens != null && window != null
+				? `⟳ opsx-loop: context ${tokens.toLocaleString("en-US")}/${window.toLocaleString("en-US")} tokens ≥ threshold — compacting before next turn.`
+				: `⟳ opsx-loop: mid-run elision fired — compacting before next turn to consolidate durably.`;
+		ctx.ui.notify(notifyMsg, "info");
 		const done = () => {
 			session.compacting = false;
 			renderStatus(ctx);
@@ -661,6 +680,39 @@ export default function (pi: ExtensionAPI) {
 			);
 			return;
 		},
+	});
+
+	// Mid-run context elision (Lever L3). The pi `context` event fires before EVERY
+	// provider request within a run; the handler returns a slimmer per-request VIEW
+	// (stale tool-result bodies stubbed) WITHOUT mutating stored history and WITHOUT
+	// aborting the turn. Strict no-op unless a loop is armed and context usage is at/
+	// above the elision band; degrades to pass-through when the host lacks the usage
+	// API. Returning undefined leaves the messages unchanged.
+	// (opsx-loop-context-elision.active-loop-scoped-elision, .threshold-band-gating,
+	//  .stale-tool-result-body-elision, .safe-degradation, .no-history-mutation)
+	pi.on("context", (event: any, ctx: ExtensionContext) => {
+		const session = loop;
+		if (!session?.active) return undefined; // active-loop-only scope
+		if (typeof ctx.getContextUsage !== "function") return undefined; // safe-degrade
+		const messages = event?.messages;
+		if (!Array.isArray(messages) || messages.length === 0) return undefined;
+		const usage = ctx.getContextUsage();
+		const tokens = usage?.tokens;
+		const window = usage?.contextWindow;
+		if (tokens == null || window == null) return undefined; // unmeasurable → pass-through
+		const threshold = resolveElideThresholdTokens(
+			window,
+			process.env.OPSX_ELIDE_AT_PERCENT,
+			process.env.OPSX_ELIDE_AT_TOKENS,
+		);
+		if (threshold === undefined || tokens < threshold) return undefined; // below band
+		const { messages: view, elided } = elideToolResultBodies(messages, {
+			keepRecent: resolveElideKeepRecent(process.env.OPSX_ELIDE_KEEP_RECENT_TURNS),
+			band: resolveElideBand(process.env.OPSX_ELIDE_BAND_TURNS),
+		});
+		if (!elided) return undefined;
+		session.elided = true; // couple to between-turns compaction at agent_end
+		return { messages: view };
 	});
 
 	pi.on("agent_end", async (event: any, ctx: ExtensionContext) => {

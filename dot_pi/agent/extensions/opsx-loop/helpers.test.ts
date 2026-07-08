@@ -7,7 +7,20 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildModelEnv, classifyDoneness, clearHoldText, describeCompactPolicy, donenessRatchet, formatInventory, gateFailKey, hashDir, isContextOverflowError, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, resolveCompactPercent, resolveCompactThresholdTokens, resolveCompactTokens, stripLoopHold, verdictFromExit } from "./helpers.ts";
+import { buildModelEnv, classifyDoneness, clearHoldText, describeCompactPolicy, donenessRatchet, formatInventory, gateFailKey, hashDir, isContextOverflowError, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, resolveCompactPercent, resolveCompactThresholdTokens, resolveCompactTokens, stripLoopHold, verdictFromExit, ELIDE_STUB, resolveElidePercent, resolveElideTokens, resolveElideThresholdTokens, resolveElideKeepRecent, resolveElideBand, elideBoundary, elideToolResultBodies } from "./helpers.ts";
+
+type TR = { role: string; content: unknown; toolCallId?: string; toolName?: string };
+const asst = (id: string) => ({ role: "assistant", content: [{ type: "text", text: "call" }, { type: "toolCall", id, name: "bash", arguments: {} }] });
+const tr = (id: string, text: string) => ({ role: "toolResult", toolCallId: id, toolName: "bash", isError: false, content: [{ type: "text", text }] });
+// Build a conversation of N assistant+toolResult turns (turn k => assistant#k, tr#k).
+function convo(n: number) {
+	const msgs: any[] = [{ role: "user", content: "go" }];
+	for (let k = 0; k < n; k++) {
+		msgs.push(asst(`c${k}`));
+		msgs.push(tr(`c${k}`, `OUTPUT-${k}`));
+	}
+	return msgs;
+}
 
 describe("parseLoopHold / stripLoopHold — opsx-loop.loop-hold-blocks-continuation", () => {
 	const FM = (body: string) => `---\n${body}\n---\n# Review\n`;
@@ -426,5 +439,108 @@ describe("parseModelsJson — opsx-loop.loop-exports-resolved-role-models", () =
 		expect(parseModelsJson("not json")).toBeNull();
 		expect(parseModelsJson("")).toBeNull();
 		expect(parseModelsJson('{"value":"x"}')).toBeNull();
+	});
+});
+
+// AC opsx-loop-context-elision.threshold-band-gating
+describe("elision threshold resolution", () => {
+	test("percent/token defaults", () => {
+		expect(resolveElidePercent(undefined)).toBe(25);
+		expect(resolveElideTokens(undefined)).toBe(60_000);
+		expect(resolveElideKeepRecent(undefined)).toBe(3);
+		expect(resolveElideBand(undefined)).toBe(5);
+	});
+	test("off terms drop", () => {
+		expect(resolveElidePercent("off")).toBeNull();
+		expect(resolveElideTokens("none")).toBeNull();
+		expect(resolveElidePercent("0")).toBeNull();
+	});
+	test("garbage → default", () => {
+		expect(resolveElidePercent("abc")).toBe(25);
+		expect(resolveElidePercent("999")).toBe(25);
+		expect(resolveElideTokens("xx")).toBe(60_000);
+		expect(resolveElideKeepRecent("x")).toBe(3);
+		expect(resolveElideKeepRecent("0")).toBe(1);
+	});
+	test("threshold = max(pct*window, tokens)", () => {
+		expect(resolveElideThresholdTokens(200_000, undefined, undefined)).toBe(60_000);
+		expect(resolveElideThresholdTokens(1_000_000, undefined, undefined)).toBe(250_000);
+		expect(resolveElideThresholdTokens(0, undefined, "off")).toBeUndefined();
+		expect(resolveElideThresholdTokens(200_000, "off", "off")).toBeUndefined();
+	});
+	test("elision band sits at/below L1 across window sizes", () => {
+		for (const w of [128_000, 200_000, 400_000, 1_000_000]) {
+			const e = resolveElideThresholdTokens(w, undefined, undefined)!;
+			const l1 = resolveCompactThresholdTokens(w, undefined, undefined)!;
+			expect(e).toBeLessThanOrEqual(l1);
+		}
+	});
+});
+
+// AC opsx-loop-context-elision.threshold-band-gating
+describe("elideBoundary band quantization", () => {
+	test("snaps cutoff down to a band multiple", () => {
+		// totalTurns=20, keepRecent=3 → cutoff=17 → floor(17/5)*5 = 15
+		expect(elideBoundary(20, 3, 5)).toBe(15);
+		// stable across a band: 21..22 turns keep boundary at 15 until cutoff hits 20
+		expect(elideBoundary(21, 3, 5)).toBe(15);
+		expect(elideBoundary(22, 3, 5)).toBe(15);
+		expect(elideBoundary(23, 3, 5)).toBe(20);
+	});
+	test("nothing to elide when cutoff <= 0", () => {
+		expect(elideBoundary(3, 3, 5)).toBe(0);
+		expect(elideBoundary(2, 3, 5)).toBe(0);
+	});
+});
+
+// ACs opsx-loop-context-elision.stale-tool-result-body-elision,
+//     opsx-loop-context-elision.structural-integrity-fail-closed,
+//     opsx-loop-context-elision.no-history-mutation,
+//     opsx-loop-context-elision.deterministic-no-model-call
+describe("elideToolResultBodies", () => {
+	test("old tool-result bodies → stub, recent-K preserved", () => {
+		const msgs = convo(20); // 20 turns; boundary=15 with keepRecent=3,band=5
+		const before = JSON.parse(JSON.stringify(msgs));
+		const { messages: out, elided } = elideToolResultBodies(msgs, { keepRecent: 3, band: 5 });
+		expect(elided).toBe(true);
+		// same length, pairing preserved (every toolResult still present with its id)
+		expect(out.length).toBe(msgs.length);
+		const trOut = out.filter((m: any) => m.role === "toolResult");
+		expect(trOut.length).toBe(20);
+		// turn 0 (old) elided
+		const t0 = trOut[0] as any;
+		expect(t0.toolCallId).toBe("c0");
+		expect(t0.content[0].text).toBe(ELIDE_STUB);
+		// last turn (19, within recent-3) preserved
+		const t19 = trOut[19] as any;
+		expect(t19.content[0].text).toBe("OUTPUT-19");
+		// INPUT NOT MUTATED
+		expect(msgs).toEqual(before);
+	});
+	test("non-tool-result content untouched", () => {
+		const msgs = convo(20);
+		const { messages: out } = elideToolResultBodies(msgs, { keepRecent: 3, band: 5 });
+		// assistant text + tool calls preserved verbatim
+		const a0 = out.find((m: any) => m.role === "assistant") as any;
+		expect(a0.content[1].id).toBe("c0");
+		expect((out[0] as any).role).toBe("user");
+	});
+	test("below-boundary short convo → no elision (pass-through)", () => {
+		const msgs = convo(3);
+		const { messages: out, elided } = elideToolResultBodies(msgs, { keepRecent: 3, band: 5 });
+		expect(elided).toBe(false);
+		expect(out).toBe(msgs);
+	});
+	test("idempotent — already-stubbed results do not re-fire elided flag", () => {
+		const msgs = convo(20);
+		const first = elideToolResultBodies(msgs, { keepRecent: 3, band: 5 });
+		const second = elideToolResultBodies(first.messages, { keepRecent: 3, band: 5 });
+		expect(second.elided).toBe(false);
+	});
+	test("fail-closed on malformed input", () => {
+		expect(elideToolResultBodies(null as any).elided).toBe(false);
+		expect(elideToolResultBodies([] as any).elided).toBe(false);
+		const weird = [{ role: "toolResult", content: "not-an-array" }] as any;
+		expect(elideToolResultBodies(weird).elided).toBe(false);
 	});
 });

@@ -544,3 +544,207 @@ export function describeCompactPolicy(pctRaw: string | undefined, tokRaw: string
 	if (tok != null) parts.push(`${tok.toLocaleString("en-US")} tokens`);
 	return `compaction guard: compact at ≥ ${parts.join(" or ")} (whichever higher)`;
 }
+
+// ── Mid-run context elision (Lever L3) ──────────────────────────────────────
+// A per-request, ephemeral `context`-event transform that keeps an ACTIVE loop
+// worker in its low-context / high-accuracy regime by eliding STALE tool-result
+// BODIES from the view sent to the model — WITHOUT aborting the turn and WITHOUT
+// mutating stored history. The 71%-of-context bloat measured on real runs is spent
+// tool-output text the model already consumed; recent-K turns stay full (working
+// memory) and every tool-result MESSAGE is kept (pairing intact → no provider 400).
+// Deterministic, no LLM call. All types are structurally matched to pi-ai's
+// AgentMessage/ToolResultMessage so helpers.ts stays free of pi-runtime imports.
+
+/** The stub body an elided tool result is replaced with. The "re-run to view"
+ *  phrasing is a real recovery valve inside a resumable loop. */
+export const ELIDE_STUB = "[output elided to conserve context — re-run to view]";
+
+/** Structural subset of pi-ai `TextContent`/`ToolResultMessage`/`AgentMessage`
+ *  needed by the pure elision pass (kept local to avoid a pi-runtime import). */
+export interface ElideMessage {
+	role?: string;
+	content?: unknown;
+	toolCallId?: string;
+	toolName?: string;
+	isError?: boolean;
+	timestamp?: number;
+	[k: string]: unknown;
+}
+
+/**
+ * Resolve the PERCENT-of-window term for the elision band from
+ * `OPSX_ELIDE_AT_PERCENT`. Default 25 (deliberately below L1's 33 so the mid-run
+ * view slims BEFORE the between-turns compaction bar). `off/none/false/0` → null
+ * (term dropped); garbage or out-of-range → default.
+ */
+export function resolveElidePercent(raw: string | undefined): number | null {
+	if (raw == null || raw.trim() === "") return 25;
+	const t = raw.trim().toLowerCase();
+	if (OFF_TOKENS.has(t)) return null;
+	if (!/^\d+$/.test(t)) return 25;
+	const n = Number.parseInt(t, 10);
+	if (n < 1 || n > 100) return 25;
+	return n;
+}
+
+/**
+ * Resolve the ABSOLUTE-TOKEN term for the elision band from
+ * `OPSX_ELIDE_AT_TOKENS`. Default 60_000 (below L1's 100k floor). `off/none/false/0`
+ * → null; garbage → default.
+ */
+export function resolveElideTokens(raw: string | undefined): number | null {
+	if (raw == null || raw.trim() === "") return 60_000;
+	const t = raw.trim().toLowerCase();
+	if (OFF_TOKENS.has(t)) return null;
+	if (!/^\d+$/.test(t)) return 60_000;
+	const n = Number.parseInt(t, 10);
+	if (n < 1) return 60_000;
+	return n;
+}
+
+/**
+ * Token count at/above which mid-run elision fires: max(percentTerm * window,
+ * tokenFloor) — the SAME shape as the L1 compaction threshold but with defaults
+ * (25% / 60k) that sit at/below L1's (33% / 100k) for every window size, so
+ * elision always engages before the between-turns compaction bar. Either term may
+ * be OFF; both off (or non-positive window with the floor off) disables elision and
+ * returns undefined.
+ */
+export function resolveElideThresholdTokens(
+	contextWindow: number,
+	pctRaw: string | undefined,
+	tokRaw: string | undefined,
+): number | undefined {
+	const pct = resolveElidePercent(pctRaw);
+	const tok = resolveElideTokens(tokRaw);
+	const terms: number[] = [];
+	if (pct != null && Number.isFinite(contextWindow) && contextWindow > 0) {
+		terms.push(Math.ceil((pct / 100) * contextWindow));
+	}
+	if (tok != null) terms.push(tok);
+	if (terms.length === 0) return undefined;
+	return Math.max(...terms);
+}
+
+/** Resolve how many most-recent turns to keep in FULL (`OPSX_ELIDE_KEEP_RECENT_TURNS`,
+ *  default 3, minimum 1 so the newest turn is always full). Garbage → default. */
+export function resolveElideKeepRecent(raw: string | undefined): number {
+	if (raw == null || raw.trim() === "") return 3;
+	const t = raw.trim();
+	if (!/^\d+$/.test(t)) return 3;
+	const n = Number.parseInt(t, 10);
+	return n < 1 ? 1 : n;
+}
+
+/** Resolve the boundary-quantization band in turns (`OPSX_ELIDE_BAND_TURNS`,
+ *  default 5, minimum 1). Garbage → default. */
+export function resolveElideBand(raw: string | undefined): number {
+	if (raw == null || raw.trim() === "") return 5;
+	const t = raw.trim();
+	if (!/^\d+$/.test(t)) return 5;
+	const n = Number.parseInt(t, 10);
+	return n < 1 ? 1 : n;
+}
+
+/**
+ * Band-quantized elision boundary (turn index): tool results in turns BEFORE this
+ * index are eligible for body elision. cutoff = totalTurns - keepRecent, snapped
+ * DOWN to a multiple of `band` so the slim prefix stays byte-stable across
+ * consecutive requests within one band (prompt-cache friendly) and only advances at
+ * band edges. Never elides into the recent-K window (banding only lowers cutoff), so
+ * the newest keepRecent turns — including the in-flight turn — are always full.
+ * Returns 0 when nothing qualifies (no elision).
+ */
+export function elideBoundary(totalTurns: number, keepRecent: number, band: number): number {
+	const b = band >= 1 ? Math.floor(band) : 1;
+	const cutoff = totalTurns - Math.max(1, keepRecent);
+	if (cutoff <= 0) return 0;
+	return Math.floor(cutoff / b) * b;
+}
+
+export interface ElideOptions {
+	keepRecent?: number;
+	band?: number;
+}
+
+export interface ElideResult {
+	messages: ElideMessage[];
+	elided: boolean;
+}
+
+/**
+ * Produce a NEW view of `messages` with the text bodies of tool-result messages in
+ * turns before the band-quantized boundary replaced by `ELIDE_STUB`. Turn index
+ * increments at every `assistant` message (its tool results belong to that turn).
+ * KEEPS every message (never drops one → `tool_call ↔ tool_result` pairing intact),
+ * keeps tool calls, assistant/user text, thinking blocks, and the recent-K tool
+ * results in full. NEVER mutates the input array or its message objects. Fail-closed:
+ * any unexpected shape/throw returns the ORIGINAL array with `elided:false`.
+ */
+export function elideToolResultBodies(
+	messages: ElideMessage[],
+	opts: ElideOptions = {},
+): ElideResult {
+	try {
+		if (!Array.isArray(messages) || messages.length === 0) {
+			return { messages, elided: false };
+		}
+		const keepRecent = Math.max(1, opts.keepRecent ?? 3);
+		const band = Math.max(1, opts.band ?? 5);
+
+		// Assign a turn index to each message (increment when an assistant message
+		// starts a new turn). Leading non-assistant messages are turn 0.
+		const turnOf = new Array<number>(messages.length);
+		let turn = 0;
+		let sawAssistant = false;
+		for (let i = 0; i < messages.length; i++) {
+			const role = messages[i]?.role;
+			if (role === "assistant") {
+				if (sawAssistant) turn++;
+				sawAssistant = true;
+			}
+			turnOf[i] = turn;
+		}
+		const totalTurns = turn + 1;
+		const boundary = elideBoundary(totalTurns, keepRecent, band);
+		if (boundary <= 0) return { messages, elided: false };
+
+		let elided = false;
+		const out = messages.slice();
+		for (let i = 0; i < messages.length; i++) {
+			const m = messages[i];
+			if (
+				m &&
+				m.role === "toolResult" &&
+				turnOf[i] < boundary &&
+				Array.isArray(m.content)
+			) {
+				const hasText = (m.content as unknown[]).some(
+					(c) => (c as { type?: string })?.type === "text",
+				);
+				const alreadyStub =
+					(m.content as unknown[]).length === 1 &&
+					(m.content[0] as { type?: string; text?: string })?.type === "text" &&
+					(m.content[0] as { text?: string })?.text === ELIDE_STUB;
+				if (hasText && !alreadyStub) {
+					out[i] = { ...m, content: [{ type: "text", text: ELIDE_STUB }] };
+					elided = true;
+				} else {
+					out[i] = m;
+				}
+			} else {
+				out[i] = m;
+			}
+		}
+
+		if (!elided) return { messages, elided: false };
+		// Structural guard: same length, every original message still present (elided
+		// entries are the same object or a shallow clone with only content swapped) —
+		// pairing and the system prompt (not in this array) are preserved by
+		// construction. Fail closed if the invariant somehow broke.
+		if (out.length !== messages.length) return { messages, elided: false };
+		return { messages: out, elided: true };
+	} catch {
+		return { messages, elided: false };
+	}
+}
