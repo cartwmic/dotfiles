@@ -543,4 +543,14 @@ describe("elideToolResultBodies", () => {
 		const weird = [{ role: "toolResult", content: "not-an-array" }] as any;
 		expect(elideToolResultBodies(weird).elided).toBe(false);
 	});
+	test("fail-closed when an OLD tool-result is orphaned (no matching tool_call)", () => {
+		const msgs = convo(20) as any[];
+		// Corrupt an old-turn tool result so its toolCallId references no tool_call.
+		const firstTr = msgs.findIndex((m) => m.role === "toolResult");
+		msgs[firstTr] = { ...msgs[firstTr], toolCallId: "ORPHAN-does-not-exist" };
+		const { messages: out, elided } = elideToolResultBodies(msgs, { keepRecent: 3, band: 5 });
+		// structural guard trips → original returned unchanged, nothing elided
+		expect(elided).toBe(false);
+		expect(out).toBe(msgs);
+	});
 });
