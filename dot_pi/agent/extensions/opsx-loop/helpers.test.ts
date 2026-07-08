@@ -495,31 +495,37 @@ describe("estimateMessageTokens — deterministic char/4", () => {
 
 // AC opsx-loop-context-elision.token-budget-boundary,
 //    opsx-loop-context-elision.token-band-hysteresis
+// Uniform 1-token turns (each a minimal assistant msg, estimate = ceil(1/4) = 1),
+// used to exercise band-quantized hysteresis deterministically.
+const uni = (n: number) => Array.from({ length: n }, () => ({ role: "assistant", content: [{ type: "text", text: "x" }] }));
 describe("tokenBudgetBoundary", () => {
 	// convo(20): perTurn = [6, 5×9, 6×10] (turn0 carries the leading user msg;
-	// OUTPUT-10..19 are 9 chars → 3 tok each), total = 111. Boundary keeps the newest
-	// turns whose cumulative fits the ceiling = maxKeep + band, snapped to a turn edge.
-	test("snaps boundary to a turn edge, kept window ≤ maxKeep + band", () => {
-		// ceiling = 30; keep turns 15..19 (6×5 = 30 = ceiling) → boundary 15.
+	// OUTPUT-10..19 are 9 chars → 3 tok each), total = 111. Sheds oldest turns up to
+	// the banded target floor(overBudget/band)*band, always at least the oldest.
+	test("snaps boundary to a turn edge (banded shed of the oldest turns)", () => {
+		// maxKeep=25, band=5 → overBudget=86 → bandedTarget=85 → shed turns 0..14 → boundary 15.
 		expect(tokenBudgetBoundary(convo(20), 25, 5)).toBe(15);
+		// kept turns 15..19 = 30 tokens ∈ [maxKeep, maxKeep+band] = [25,30].
 	});
-	test("band is hysteresis headroom — boundary depends on the ceiling", () => {
-		// Same ceiling (30) → same boundary regardless of the maxKeep/band split.
-		expect(tokenBudgetBoundary(convo(20), 25, 5)).toBe(15);
-		expect(tokenBudgetBoundary(convo(20), 24, 6)).toBe(15);
-		// Lower ceiling (27) keeps fewer turns → boundary advances to 16.
-		expect(tokenBudgetBoundary(convo(20), 22, 5)).toBe(16);
+	test("band hysteresis — boundary STABLE within a band, advances across it", () => {
+		// 1-tok turns, maxKeep=10, band=5. total 20..24 all share bandedTarget=10 → the
+		// boundary is byte-stable at 10 (prompt-cache friendly); at total=25 the band
+		// edge is crossed (bandedTarget=15) and the boundary advances to 15.
+		expect(tokenBudgetBoundary(uni(20), 10, 5)).toBe(10);
+		expect(tokenBudgetBoundary(uni(21), 10, 5)).toBe(10);
+		expect(tokenBudgetBoundary(uni(24), 10, 5)).toBe(10);
+		expect(tokenBudgetBoundary(uni(25), 10, 5)).toBe(15);
 	});
 	test("fires and elides a large OLD turn (regression: no fire-but-noop)", () => {
 		// Two turns: an old turn ~54 tok (big tool result) and a newest ~39 tok.
-		// maxKeep=40, band=10 → ceiling=50; total=93 > 50 so elision MUST fire. The old
-		// turn (54) exceeds the over-budget delta (53) yet eliding it keeps only the
-		// newest — the correct, effective result. Boundary 1 (turn 0 sheds).
+		// maxKeep=40, band=10 → total=93 > 50 so elision MUST fire. bandedTarget=50 and
+		// the old turn (54) exceeds it, yet the progress guarantee still sheds it —
+		// boundary 1, keeping only the newest turn. Never a fire-but-noop.
 		const g: any[] = [asst("a0"), tr("a0", "X".repeat(204)), asst("a1"), tr("a1", "X".repeat(144))];
 		expect(tokenBudgetBoundary(g, 40, 10)).toBe(1);
 	});
 	test("within budget + band → hysteresis hold (no elision)", () => {
-		// total=111; ceiling = 107 + 5 = 112 > 111 → hold → boundary 0.
+		// total=111; maxKeep+band = 107+5 = 112 > 111 → hold → boundary 0.
 		expect(tokenBudgetBoundary(convo(20), 107, 5)).toBe(0);
 		// far under budget → 0.
 		expect(tokenBudgetBoundary(convo(20), 1_000_000, 5)).toBe(0);

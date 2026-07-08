@@ -714,14 +714,20 @@ export default function (pi: ExtensionAPI) {
 		if (typeof ctx.getContextUsage !== "function") return undefined; // safe-degrade
 		const messages = event?.messages;
 		if (!Array.isArray(messages) || messages.length === 0) return undefined;
-		const usage = ctx.getContextUsage();
-		const tokens = usage?.tokens;
-		const window = usage?.contextWindow;
-		if (tokens == null || window == null) return undefined; // unmeasurable → pass-through
+		// Only the WINDOW size is read from usage — the activation/boundary decision runs
+		// on the deterministic per-turn ESTIMATE of the messages ABOUT TO BE SENT (the same
+		// total tokenBudgetBoundary uses), so the gate and the boundary can never disagree:
+		// elision fires IFF the estimate exceeds maxKeep + band, and when it fires the
+		// progress guarantee sheds at least the oldest turn (no fire-but-noop). Reading real
+		// usage.tokens for a separate gate would let the handler "fire" while the estimate
+		// finds nothing to elide (benign, but a needless dual-total).
+		const window = ctx.getContextUsage()?.contextWindow;
+		if (window == null) return undefined; // unknown window → pass-through (safe-degrade)
 		const maxKeep = resolveElideMaxKeepTokens(window, process.env.OPSX_ELIDE_KEEP_RECENT_PERCENT);
 		const band = resolveElideBandTokens(window, process.env.OPSX_ELIDE_BAND_PERCENT);
 		if (maxKeep === undefined || band === undefined) return undefined; // unknown window
-		if (tokens <= maxKeep + band) return undefined; // within budget + band → hold
+		// elideToolResultBodies self-gates on the estimate (returns elided:false when total
+		// ≤ maxKeep + band), so no separate real-tokens threshold is needed here.
 		const { messages: view, elided } = elideToolResultBodies(messages, {
 			maxKeepTokens: maxKeep,
 			bandTokens: band,
