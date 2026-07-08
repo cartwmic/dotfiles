@@ -697,17 +697,44 @@ export function elideToolResultBodies(
 		const turnOf = new Array<number>(messages.length);
 		let turn = 0;
 		let sawAssistant = false;
+		// Collect every tool-call id advertised by an assistant message so we can verify
+		// pairing before emitting an elided view (fail-closed on an orphan tool result).
+		const callIds = new Set<string>();
 		for (let i = 0; i < messages.length; i++) {
-			const role = messages[i]?.role;
+			const mm = messages[i];
+			const role = mm?.role;
 			if (role === "assistant") {
 				if (sawAssistant) turn++;
 				sawAssistant = true;
+				if (Array.isArray(mm?.content)) {
+					for (const c of mm!.content as unknown[]) {
+						const block = c as { type?: string; id?: unknown };
+						if (block?.type === "toolCall" && typeof block.id === "string") {
+							callIds.add(block.id);
+						}
+					}
+				}
 			}
 			turnOf[i] = turn;
 		}
 		const totalTurns = turn + 1;
 		const boundary = elideBoundary(totalTurns, keepRecent, band);
 		if (boundary <= 0) return { messages, elided: false };
+
+		// Pairing integrity (fail-closed): every tool-result MUST reference a tool-call
+		// present in the transcript. An orphan tool_result means the input is malformed;
+		// eliding it anyway would emit a structurally-broken view (spec: "structural
+		// guard trips" → return the original unchanged). This makes the guard reachable
+		// rather than cosmetic.
+		for (let i = 0; i < messages.length; i++) {
+			const m = messages[i];
+			if (m && m.role === "toolResult") {
+				const id = m.toolCallId;
+				if (typeof id !== "string" || !callIds.has(id)) {
+					return { messages, elided: false };
+				}
+			}
+		}
 
 		let elided = false;
 		const out = messages.slice();
@@ -738,10 +765,10 @@ export function elideToolResultBodies(
 		}
 
 		if (!elided) return { messages, elided: false };
-		// Structural guard: same length, every original message still present (elided
-		// entries are the same object or a shallow clone with only content swapped) —
-		// pairing and the system prompt (not in this array) are preserved by
-		// construction. Fail closed if the invariant somehow broke.
+		// Structural guard: same length (elided entries are the same object or a shallow
+		// clone with only content swapped) — combined with the pairing check above, every
+		// tool_result stays paired and the system prompt (not in this array) is preserved
+		// by construction. Fail closed if the length invariant somehow broke.
 		if (out.length !== messages.length) return { messages, elided: false };
 		return { messages: out, elided: true };
 	} catch {
