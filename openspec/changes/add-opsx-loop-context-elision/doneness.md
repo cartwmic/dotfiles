@@ -5,9 +5,9 @@
 **Judge:** claude-bridge/claude-opus-4-8 (pi-subagents `delegate`, designated reviewer = first `review` model)
 **review_mode:** blind-single-judge
 **Frozen-Intent SHA:** 81c5da77958c72bd082de893f56a13570a20cd7742056a713a3fe082cfa93468
-**Attested HEAD:** d9b5624f441bd322b98dbb08ca0eba719906f9aa
+**Attested HEAD:** 4bbdf21e220ef2c460fb46be905237089baa8500
 **Diff Base SHA:** b0dd6bf96af3899767c613a9f317295dc3446722
-**Reviewed Range:** b0dd6bf96af3899767c613a9f317295dc3446722..d9b5624f441bd322b98dbb08ca0eba719906f9aa
+**Reviewed Range:** b0dd6bf96af3899767c613a9f317295dc3446722..4bbdf21e220ef2c460fb46be905237089baa8500
 
 ## Verdict rationale
 
