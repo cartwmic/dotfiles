@@ -498,34 +498,47 @@ describe("estimateMessageTokens — deterministic char/4", () => {
 // Uniform 1-token turns (each a minimal assistant msg, estimate = ceil(1/4) = 1),
 // used to exercise band-quantized hysteresis deterministically.
 const uni = (n: number) => Array.from({ length: n }, () => ({ role: "assistant", content: [{ type: "text", text: "x" }] }));
+// Turns of EXACT token estimates: one assistant msg per entry, text length = tok*4 so
+// estimateMessageTokens = ceil(tok*4/4) = tok. Lets tests place a chunky NON-oldest turn.
+const sizedTurns = (toks: number[]) =>
+	toks.map((tk) => ({ role: "assistant", content: [{ type: "text", text: "y".repeat(Math.max(1, tk) * 4) }] }));
+const keptSum = (toks: number[], boundary: number) => toks.slice(boundary).reduce((a, x) => a + x, 0);
 describe("tokenBudgetBoundary", () => {
 	// convo(20): perTurn = [6, 5×9, 6×10] (turn0 carries the leading user msg;
-	// OUTPUT-10..19 are 9 chars → 3 tok each), total = 111. Sheds oldest turns up to
-	// the banded target floor(overBudget/band)*band, always at least the oldest.
-	test("snaps boundary to a turn edge (banded shed of the oldest turns)", () => {
-		// maxKeep=25, band=5 → overBudget=86 → bandedTarget=85 → shed turns 0..14 → boundary 15.
-		expect(tokenBudgetBoundary(convo(20), 25, 5)).toBe(15);
-		// kept turns 15..19 = 30 tokens ∈ [maxKeep, maxKeep+band] = [25,30].
+	// OUTPUT-10..19 are 9 chars → 3 tok each), total = 111. Sheds oldest turns until the
+	// shed prefix reaches the band-quantized shed floor ceil((total-ceiling)/band)*band.
+	test("snaps boundary to a turn edge (banded shed floor of the oldest turns)", () => {
+		// maxKeep=25, band=5 → ceiling=30 → shedFloor=81 → bandedShedFloor=85 → boundary 16.
+		expect(tokenBudgetBoundary(convo(20), 25, 5)).toBe(16);
 	});
 	test("band hysteresis — boundary STABLE within a band, advances across it", () => {
-		// 1-tok turns, maxKeep=10, band=5. total 20..24 all share bandedTarget=10 → the
-		// boundary is byte-stable at 10 (prompt-cache friendly); at total=25 the band
-		// edge is crossed (bandedTarget=15) and the boundary advances to 15.
-		expect(tokenBudgetBoundary(uni(20), 10, 5)).toBe(10);
+		// 1-tok turns, maxKeep=10, band=5 → ceiling=15. total 21..25 share bandedShedFloor=10
+		// → boundary byte-stable at 10 (prompt-cache friendly); at total=26 the band edge is
+		// crossed (bandedShedFloor=15) and the boundary advances to 15.
 		expect(tokenBudgetBoundary(uni(21), 10, 5)).toBe(10);
 		expect(tokenBudgetBoundary(uni(24), 10, 5)).toBe(10);
-		expect(tokenBudgetBoundary(uni(25), 10, 5)).toBe(15);
+		expect(tokenBudgetBoundary(uni(25), 10, 5)).toBe(10);
+		expect(tokenBudgetBoundary(uni(26), 10, 5)).toBe(15);
+	});
+	test("kept-full window ≤ ceiling with a chunky NON-oldest turn (non-tautological)", () => {
+		// A big stale turn (110) sits AFTER a small oldest turn (3). ceiling = 100+10 = 110.
+		// The boundary MUST shed the 110 turn so the kept window stays ≤ ceiling.
+		const b = tokenBudgetBoundary(sizedTurns([3, 110, 3]), 100, 10);
+		expect(b).toBe(2); // turns 0 (3) and 1 (110) shed; kept = newest turn (3)
+		expect(keptSum([3, 110, 3], b)).toBeLessThanOrEqual(110);
+		// A chunky middle turn among several: ceiling = 100+5 = 105.
+		const c = tokenBudgetBoundary(sizedTurns([40, 40, 40, 40, 10]), 100, 5);
+		expect(keptSum([40, 40, 40, 40, 10], c)).toBeLessThanOrEqual(105);
 	});
 	test("fires and elides a large OLD turn (regression: no fire-but-noop)", () => {
 		// Two turns: an old turn ~54 tok (big tool result) and a newest ~39 tok.
-		// maxKeep=40, band=10 → total=93 > 50 so elision MUST fire. bandedTarget=50 and
-		// the old turn (54) exceeds it, yet the progress guarantee still sheds it —
-		// boundary 1, keeping only the newest turn. Never a fire-but-noop.
+		// maxKeep=40, band=10 → ceiling=50; total=93 > 50 so elision MUST fire and shed the
+		// old turn even though it exceeds the shed floor — boundary 1, keeping the newest.
 		const g: any[] = [asst("a0"), tr("a0", "X".repeat(204)), asst("a1"), tr("a1", "X".repeat(144))];
 		expect(tokenBudgetBoundary(g, 40, 10)).toBe(1);
 	});
 	test("within budget + band → hysteresis hold (no elision)", () => {
-		// total=111; maxKeep+band = 107+5 = 112 > 111 → hold → boundary 0.
+		// total=111; ceiling = 107+5 = 112 > 111 → hold → boundary 0.
 		expect(tokenBudgetBoundary(convo(20), 107, 5)).toBe(0);
 		// far under budget → 0.
 		expect(tokenBudgetBoundary(convo(20), 1_000_000, 5)).toBe(0);
@@ -547,7 +560,7 @@ describe("tokenBudgetBoundary", () => {
 //     opsx-loop-context-elision.token-budget-boundary
 describe("elideToolResultBodies (token-budget boundary)", () => {
 	test("old tool-result bodies → stub, kept-full recent window preserved", () => {
-		const msgs = convo(20); // boundary=15 with maxKeep=25, band=5
+		const msgs = convo(20); // boundary=16 with maxKeep=25, band=5
 		const before = JSON.parse(JSON.stringify(msgs));
 		const { messages: out, elided } = elideToolResultBodies(msgs, { maxKeepTokens: 25, bandTokens: 5 });
 		expect(elided).toBe(true);
@@ -558,9 +571,9 @@ describe("elideToolResultBodies (token-budget boundary)", () => {
 		const t0 = trOut[0] as any;
 		expect(t0.toolCallId).toBe("c0");
 		expect(t0.content[0].text).toBe(ELIDE_STUB);
-		// turn 14 (last elided) → stub; turn 15 (first kept) → full
-		expect((trOut[14] as any).content[0].text).toBe(ELIDE_STUB);
-		expect((trOut[15] as any).content[0].text).toBe("OUTPUT-15");
+		// turn 15 (last elided) → stub; turn 16 (first kept) → full
+		expect((trOut[15] as any).content[0].text).toBe(ELIDE_STUB);
+		expect((trOut[16] as any).content[0].text).toBe("OUTPUT-16");
 		// newest turn (19) preserved
 		expect((trOut[19] as any).content[0].text).toBe("OUTPUT-19");
 		// INPUT NOT MUTATED

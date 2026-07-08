@@ -662,23 +662,25 @@ export function estimateMessageTokens(m: ElideMessage): number {
 /**
  * Token-budget elision boundary (turn index): tool results in turns BEFORE this
  * index are eligible for body elision; turns at/after it (the kept-full recent
- * window) are sent whole. Sheds the OLDEST turns, oldest→newest, up to a BANDED shed
- * target = `floor(overBudget / band) * band` where `overBudget = total - maxKeep`.
- * Because the target is quantized to `band` multiples, the boundary is byte-stable
- * while total grows within one band and only advances a turn edge when growth crosses
- * a band multiple (prompt-cache friendly — the hysteresis of frozen decision 3). In
- * the normal case the kept-full window's estimate lands in `[maxKeep, maxKeep + band]`.
- * TWO guarantees hold unconditionally: (1) the newest (in-flight) turn is ALWAYS kept
- * (the shed loop never reaches it); (2) whenever elision fires (total > maxKeep + band,
- * so `overBudget > band` and the banded target ≥ band ≥ 1) at least the OLDEST turn's
- * body is shed — the loop force-takes the first turn so a large oldest turn that alone
- * exceeds the banded target can never collapse the boundary to a fire-but-noop. NOTE:
- * because the boundary snaps to a turn edge and never splits a turn (frozen decision 1
- * / non-goal), the kept window can dip below `maxKeep` only in the extreme where a
- * single oldest turn exceeds `overBudget` — the safe, effective direction (that large
- * stale tool dump is exactly the mass worth shedding), never breaking pairing or the
- * newest-turn guarantee. Returns 0 (no elision) when total ≤ maxKeep + band (hysteresis
- * hold / within budget) or when there is only one turn.
+ * window) are sent whole. Sheds the OLDEST turns, oldest→newest, until the shed
+ * prefix reaches a band-quantized shed FLOOR = `ceil((total - ceiling) / band) * band`
+ * where `ceiling = maxKeep + band`. Two properties fall out simultaneously:
+ *  - CORRECTNESS (frozen decision 1 / invariant): the shed floor is at least
+ *    `total - ceiling`, so the kept-full window's estimate is ALWAYS at or below
+ *    `ceiling` (the large stale tool dump gets shed even when it sits AFTER a small
+ *    oldest turn) — the kept window is genuinely bytes-bounded regardless of turn
+ *    sizes. The only carve-out is a single newest turn that alone exceeds the ceiling
+ *    (never shed — the loop caps the boundary before the newest turn).
+ *  - HYSTERESIS (frozen decision 3): the shed floor is quantized to `band` multiples,
+ *    so it only advances when total crosses a band multiple; between crossings the
+ *    boundary is byte-stable across requests (prompt-cache friendly), advancing a turn
+ *    edge roughly once per band of new tokens.
+ * In the normal case the kept-full window's estimate lands in `[maxKeep, maxKeep + band]`;
+ * it can dip below `maxKeep` only in the extreme where the boundary turn is itself
+ * large — the safe over-shed direction, never breaking pairing or the newest-turn
+ * guarantee. Whenever elision fires (total > ceiling) at least the oldest turn is shed
+ * (boundary ≥ 1) — never a fire-but-noop. Returns 0 (no elision) when total ≤ ceiling
+ * (hysteresis hold / within budget) or when there is only one turn.
  */
 export function tokenBudgetBoundary(
 	messages: ElideMessage[],
@@ -704,23 +706,23 @@ export function tokenBudgetBoundary(
 	const maxKeep = Number.isFinite(maxKeepTokens) && maxKeepTokens > 0 ? maxKeepTokens : 0;
 	if (maxKeep <= 0) return 0;
 	const band = Number.isFinite(bandTokens) && bandTokens >= 1 ? bandTokens : 1;
+	const ceiling = maxKeep + band;
 	let total = 0;
 	for (const t of perTurn) total += t;
-	if (total <= maxKeep + band) return 0; // within budget + band → hysteresis hold
-	const overBudget = total - maxKeep; // > band here, so bandedTarget ≥ band ≥ 1
-	const bandedTarget = Math.floor(overBudget / band) * band;
-	// Shed oldest turns up to the banded target, but ALWAYS take at least the oldest
-	// turn (progress guarantee — a lone oldest turn larger than the banded target must
-	// still be shed, never a fire-but-noop). Never cross into the newest turn.
+	if (total <= ceiling) return 0; // within budget + band → hysteresis hold
+	// Minimum shed to bring the kept window at/below the ceiling, quantized UP to a band
+	// multiple for cache-stable hysteresis (≥ the raw floor, so the bound always holds).
+	const shedFloor = total - ceiling; // > 0
+	const bandedShedFloor = Math.ceil(shedFloor / band) * band; // ≥ shedFloor, ≥ band
+	// Shed oldest turns until the shed prefix reaches the banded floor; `boundary` is the
+	// OLDEST kept turn index. Cap before the newest turn: if even all older turns cannot
+	// reach the floor, the newest turn alone exceeds the ceiling — keep just it.
 	let cum = 0;
 	let boundary = 0;
 	for (let t = 0; t < totalTurns - 1; t++) {
-		if (boundary === 0 || cum + perTurn[t] <= bandedTarget) {
-			cum += perTurn[t];
-			boundary = t + 1;
-		} else {
-			break;
-		}
+		cum += perTurn[t];
+		boundary = t + 1;
+		if (cum >= bandedShedFloor) break;
 	}
 	return boundary;
 }
