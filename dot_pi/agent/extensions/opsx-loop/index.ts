@@ -27,6 +27,7 @@ import {
 	OPSX_MODEL_ENV_KEYS,
 	resolveCompactThresholdTokens,
 	describeCompactPolicy,
+	isContextOverflowError,
 	parseDonenessGaps,
 	parseLoopArg,
 	clearHoldText,
@@ -72,6 +73,10 @@ interface LoopState {
 	// worker directive is injected in the compaction callback, so a stray agent_end
 	// in that window must NOT re-run the gate or double-inject.
 	compacting?: boolean;
+	// Bounded latch for overflow-only recovery: set when a worker turn ends with a
+	// context-overflow error and we compact-and-retry once; reset on the next clean
+	// turn. A second consecutive overflow (recovery already attempted) stops the loop.
+	overflowRecoveryAttempted?: boolean;
 	lastReason?: string;
 	stallKey?: string;
 	stallCount: number;
@@ -670,15 +675,64 @@ export default function (pi: ExtensionAPI) {
 			.find((m: any) => m?.role === "assistant");
 		const stopReason: string | undefined = typeof last?.stopReason === "string" ? last.stopReason : undefined;
 		if (stopReason === "aborted" || stopReason === "error") {
-			const c = loop.change ?? (loop.goal ? `goal "${loop.goal}"` : "conversation");
+			const session = loop;
+			// Overflow-ONLY recovery (general auto-compaction stays off): a worker turn
+			// that ends with a CONTEXT-OVERFLOW error gets ONE compact-and-retry instead
+			// of stopping — mirroring pi's built-in recovery that the operator's
+			// compaction.enabled=false disables. Bounded by overflowRecoveryAttempted;
+			// a second consecutive overflow stops the loop.
+			const window =
+				(typeof ctx.getContextUsage === "function" ? ctx.getContextUsage()?.contextWindow : undefined) ??
+				(ctx.model as any)?.contextWindow;
+			const isOverflow =
+				stopReason === "error" &&
+				!session.awaitingChange &&
+				!!session.change &&
+				typeof ctx.compact === "function" &&
+				isContextOverflowError(last, window);
+			if (isOverflow && !session.overflowRecoveryAttempted) {
+				session.overflowRecoveryAttempted = true;
+				const change = session.change as string;
+				// Continuation directive (kickoff form if no gate report yet); after
+				// compaction the retried turn re-reads the gate and resumes — the loop is
+				// resumable from disk, so re-running the same unit of work is safe.
+				const directive = workerDirective(change, session.lastReason);
+				ctx.ui.notify(
+					`⟳ opsx-loop: ${change} — context overflow; compacting and retrying once (auto-compaction stays off).`,
+					"warning",
+				);
+				session.compacting = true;
+				renderStatus(ctx);
+				const done = () => {
+					session.compacting = false;
+					renderStatus(ctx);
+					if (loop === session && session.active) {
+						pi.sendUserMessage(directive, { deliverAs: "followUp" });
+					}
+				};
+				try {
+					ctx.compact({ customInstructions: OPSX_COMPACT_INSTRUCTIONS, onComplete: done, onError: done });
+				} catch {
+					done();
+				}
+				return;
+			}
+			const c = session.change ?? (session.goal ? `goal "${session.goal}"` : "conversation");
 			clearLoop(ctx);
-			ctx.ui.notify(`⟳ opsx-loop stopped (${stopReason}): ${c}`, "warning");
+			ctx.ui.notify(
+				isOverflow
+					? `⟳ opsx-loop stopped: ${c} — context overflow persisted after a compact-and-retry; worktree preserved. Reduce scope or use a larger-context model, then re-arm with /opsx-loop ${session.change ?? ""}.`
+					: `⟳ opsx-loop stopped (${stopReason}): ${c}`,
+				"warning",
+			);
 			return;
 		}
 
 		const session = loop;
 		session.evaluating = true;
 		try {
+			// A clean (non-error) turn re-arms one future overflow recovery.
+			session.overflowRecoveryAttempted = false;
 			session.turns += 1;
 
 			// Goal/conversation mode: the agent is distilling intent into a NEW change.

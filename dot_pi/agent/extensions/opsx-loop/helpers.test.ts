@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildModelEnv, classifyDoneness, clearHoldText, describeCompactPolicy, donenessRatchet, formatInventory, gateFailKey, hashDir, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, resolveCompactPercent, resolveCompactThresholdTokens, resolveCompactTokens, stripLoopHold, verdictFromExit } from "./helpers.ts";
+import { buildModelEnv, classifyDoneness, clearHoldText, describeCompactPolicy, donenessRatchet, formatInventory, gateFailKey, hashDir, isContextOverflowError, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, resolveCompactPercent, resolveCompactThresholdTokens, resolveCompactTokens, stripLoopHold, verdictFromExit } from "./helpers.ts";
 
 describe("parseLoopHold / stripLoopHold — opsx-loop.loop-hold-blocks-continuation", () => {
 	const FM = (body: string) => `---\n${body}\n---\n# Review\n`;
@@ -245,6 +245,38 @@ describe("compaction threshold resolution — opsx-loop proactive compaction (Le
 		expect(describeCompactPolicy(undefined, undefined)).toMatch(/33% window or 100,000 tokens/);
 		expect(describeCompactPolicy("off", "off")).toBe("compaction guard: off");
 		expect(describeCompactPolicy("off", undefined)).toMatch(/100,000 tokens/);
+	});
+});
+
+describe("isContextOverflowError — opsx-loop overflow-only recovery", () => {
+	test("error-message overflow patterns across providers", () => {
+		const m = (errorMessage: string) => ({ stopReason: "error", errorMessage });
+		expect(isContextOverflowError(m("prompt is too long: 213462 tokens > 200000 maximum"))).toBe(true);
+		expect(isContextOverflowError(m("Your input exceeds the context window of this model"))).toBe(true);
+		expect(isContextOverflowError(m("Requested token count exceeds the model's maximum context length of 131072 tokens"))).toBe(true);
+		expect(isContextOverflowError(m("This model's maximum prompt length is 131072 but the request contains 537812 tokens"))).toBe(true);
+		expect(isContextOverflowError(m("context_length_exceeded"))).toBe(true);
+	});
+	test("rate-limit / throttle errors are NOT overflow (non-overflow guard wins)", () => {
+		// pi reformats Bedrock throttles to a "Throttling error:" prefix before this check
+		expect(isContextOverflowError({ stopReason: "error", errorMessage: "Throttling error: Too many tokens, please wait" })).toBe(false);
+		expect(isContextOverflowError({ stopReason: "error", errorMessage: "429 rate limit exceeded" })).toBe(false);
+	});
+	test("non-overflow errors and clean stops are false", () => {
+		expect(isContextOverflowError({ stopReason: "error", errorMessage: "connection reset by peer" })).toBe(false);
+		expect(isContextOverflowError({ stopReason: "error" })).toBe(false); // no errorMessage
+		expect(isContextOverflowError({ stopReason: "stop", usage: { input: 10, cacheRead: 0, output: 5 } }, 200000)).toBe(false);
+		expect(isContextOverflowError(undefined)).toBe(false);
+	});
+	test("silent overflow: stop with input+cacheRead over the window", () => {
+		expect(isContextOverflowError({ stopReason: "stop", usage: { input: 190000, cacheRead: 20000, output: 100 } }, 200000)).toBe(true);
+		expect(isContextOverflowError({ stopReason: "stop", usage: { input: 150000, cacheRead: 20000, output: 100 } }, 200000)).toBe(false);
+		// without a window, silent overflow cannot be detected
+		expect(isContextOverflowError({ stopReason: "stop", usage: { input: 300000, cacheRead: 0, output: 1 } })).toBe(false);
+	});
+	test("length-stop overflow: zero output + input filling >=99% of window", () => {
+		expect(isContextOverflowError({ stopReason: "length", usage: { input: 199000, cacheRead: 500, output: 0 } }, 200000)).toBe(true);
+		expect(isContextOverflowError({ stopReason: "length", usage: { input: 199000, cacheRead: 500, output: 42 } }, 200000)).toBe(false);
 	});
 });
 
