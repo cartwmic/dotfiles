@@ -469,6 +469,71 @@ export function resolveCompactThresholdTokens(
 	return Math.max(...terms);
 }
 
+// ── Context-overflow detection (loop-local overflow-recovery) ───────────────
+// The operator keeps pi auto-compaction OFF, which also disables pi's built-in
+// compact-and-retry overflow recovery (agent-session `_checkCompaction` returns
+// early when `!settings.enabled`). So the loop mirrors pi's overflow DETECTION
+// (utils/overflow.ts) to drive a bounded, overflow-ONLY compact-and-retry — without
+// re-enabling general auto-compaction. Patterns copied verbatim from pi-ai so the
+// two detectors stay in agreement.
+const OVERFLOW_PATTERNS: RegExp[] = [
+	/prompt is too long/i,
+	/request_too_large/i,
+	/input is too long for requested model/i,
+	/exceeds the context window/i,
+	/exceeds (?:the )?(?:model'?s )?maximum context length(?: of [\d,]+ tokens?|\s*\([\d,]+\))/i,
+	/input token count.*exceeds the maximum/i,
+	/maximum prompt length is \d+/i,
+	/reduce the length of the messages/i,
+	/maximum context length is \d+ tokens/i,
+	/exceeds (?:the )?maximum allowed input length of [\d,]+ tokens?/i,
+	/input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i,
+	/exceeds the limit of \d+/i,
+	/exceeds the available context size/i,
+	/greater than the context length/i,
+	/context window exceeds limit/i,
+	/exceeded model token limit/i,
+	/too large for model with \d+ maximum context length/i,
+	/model_context_window_exceeded/i,
+	/prompt too long; exceeded (?:max )?context length/i,
+	/context[_ ]length[_ ]exceeded/i,
+	/too many tokens/i,
+	/token limit exceeded/i,
+	/^4(?:00|13)\s*(?:status code)?\s*\(no body\)/i,
+];
+const NON_OVERFLOW_PATTERNS: RegExp[] = [
+	/^(Throttling error|Service unavailable):/i,
+	/rate limit/i,
+	/too many requests/i,
+];
+
+/**
+ * True when an assistant message represents a CONTEXT-OVERFLOW error/condition,
+ * mirroring pi-ai `isContextOverflow`. Three cases: (1) `stopReason: "error"` whose
+ * `errorMessage` matches an overflow pattern and no non-overflow (rate-limit) pattern;
+ * (2) silent overflow — `stopReason: "stop"` but input+cacheRead exceeds the window;
+ * (3) length-stop overflow — `stopReason: "length"` with zero output and input filling
+ * ≥99% of the window. Defensive on shape: a message without errorMessage/usage simply
+ * fails the relevant case, degrading to "not overflow" (→ normal stop handling).
+ */
+export function isContextOverflowError(message: any, contextWindow?: number): boolean {
+	if (!message) return false;
+	const stop = message.stopReason;
+	const err = typeof message.errorMessage === "string" ? message.errorMessage : "";
+	if (stop === "error" && err) {
+		if (!NON_OVERFLOW_PATTERNS.some((p) => p.test(err)) && OVERFLOW_PATTERNS.some((p) => p.test(err))) {
+			return true;
+		}
+	}
+	const u = message.usage;
+	if (contextWindow && contextWindow > 0 && u) {
+		const input = (u.input ?? 0) + (u.cacheRead ?? 0);
+		if (stop === "stop" && input > contextWindow) return true;
+		if (stop === "length" && (u.output ?? 0) === 0 && input >= contextWindow * 0.99) return true;
+	}
+	return false;
+}
+
 /** One-line human description of the active policy for the loop-arm notify. */
 export function describeCompactPolicy(pctRaw: string | undefined, tokRaw: string | undefined): string {
 	const pct = resolveCompactPercent(pctRaw);
