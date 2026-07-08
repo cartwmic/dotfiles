@@ -728,6 +728,12 @@ export default function (pi: ExtensionAPI) {
 		const stopReason: string | undefined = typeof last?.stopReason === "string" ? last.stopReason : undefined;
 		if (stopReason === "aborted" || stopReason === "error") {
 			const session = loop;
+			// Consume the elision latch at this run boundary too: the overflow-recovery
+			// branch below compacts (consolidating any elided content) and the stop paths
+			// end the loop, so a run's `elided` must never leak into a later retried run
+			// (which could otherwise force an elision-driven compaction on a non-elided
+			// run — the coupling is strictly per-run).
+			session.elided = false;
 			// Overflow-ONLY recovery (general auto-compaction stays off): a worker turn
 			// that ends with a CONTEXT-OVERFLOW error gets ONE compact-and-retry instead
 			// of stopping — mirroring pi's built-in recovery that the operator's
