@@ -28,22 +28,19 @@
   "defaultThinkingLevel": "high",
   "enabledModels": [
 {{- if eq .profile "axon-work-computer" }}
-    "openai-codex/gpt-5.5",
-    "anthropic/claude-sonnet-4-6",
-    "anthropic/claude-opus-4-6",
-    "anthropic/claude-opus-4-7",
+    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-5.6-terra",
+    "anthropic/claude-fable-5",
     "anthropic/claude-opus-4-8",
-    "amazon-bedrock/us.anthropic.claude-sonnet-4-6",
-    "amazon-bedrock/us.anthropic.claude-opus-4-6-v1",
-    "amazon-bedrock/us.anthropic.claude-opus-4-7"
+    "anthropic/claude-sonnet-5"
 {{- else }}
-    "openai-codex/gpt-5.5",
-    "claude-bridge/claude-sonnet-4-6",
-    "claude-bridge/claude-sonnet-5",
+    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-5.6-terra",
+    "claude-bridge/claude-fable-5",
     "claude-bridge/claude-opus-4-8",
-    "claude-bridge/claude-opus-4-7",
-    "claude-bridge/claude-opus-4-6",
-    "claude-bridge/claude-fable-5"
+    "claude-bridge/claude-sonnet-5"
 {{- end }}
   ],
   "packages": [
