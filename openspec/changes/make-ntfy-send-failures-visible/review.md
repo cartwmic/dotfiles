@@ -22,6 +22,8 @@ delegation_mode: single-agent
 # full_rigor=80 (the former L budget). The value is written here at authoring
 # time; the loop runtime reads it verbatim.
 loop_max_iterations: 20
+loop_hold: true
+loop_hold_reason: "gate green at worktree HEAD ad370f4 — ready to archive; awaiting human archive authorization (loop never archives)"
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
@@ -124,6 +126,16 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
 
 - 2026-07-10 — review.md authored from schema template at loop start
   (openspec-loop cycle 1); no overrides.
+- 2026-07-10 — implementation decisions (recorded assumptions): log files
+  named send.log / send.log.old beside the module (sidecar pattern matches
+  state.json, NOT chezmoi-managed); rotation = rename-to-.old at 200KB
+  (bounded worst case ~400KB total); failure reason bounded to 200 chars,
+  whitespace-collapsed (Constitution III — metadata only, no bodies or auth
+  values by construction); warn callback wrapped so a throwing UI surface
+  can never propagate out of the outcome handler.
+- 2026-07-10 — gate green at worktree HEAD ad370f4 (tasks 1.1–3.1 complete;
+  validation: node --test 31/31). Scale S: code review derives advisory,
+  doneness not required — no gating review dispatch demanded by the gate.
 
 ## Scope Expansions
 
