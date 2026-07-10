@@ -13,6 +13,8 @@ loop_max_iterations: 40
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
+loop_hold: true
+loop_hold_reason: "gate green — GATE-PASS (M) at worktree HEAD 179ddae7dace3d89dffb5ad5377f7568f73d419c; ready to archive, awaiting explicit human sign-off (the loop never auto-archives). Re-arm with /opsx-loop merge-opsx-compact-percent-only after ruling."
 ---
 
 # Review
@@ -53,6 +55,11 @@ doneness_mode: required
 - 2026-07-09 — worktree created on `opsx/merge-opsx-compact-percent-only`; Diff Base
   = merge-base(main, HEAD) at creation; integration branch resolved to `main`
   (repo-local, no divergent origin/HEAD).
+- 2026-07-09 — code review: round 1 blind (2 models) → 1 P1 (under-constrained
+  surface-test assertion), fixed at 179ddae; round 2 blind full-diff re-review →
+  quiet round (0 P0/P1), sealed pass (adversarial-multimodel). Doneness satisfied
+  via plain-M combined dispatch (designated judge gpt-5.6-sol). GATE-PASS (M).
+  P2/P3 advisories routed to follow-ups.md.
 
 ## Scope Expansions
 
