@@ -4,6 +4,23 @@
 # over the live SSH ControlMaster connection, no fresh login, no new session.
 # PATH prepends mise shims because `zellij` is mise-managed and absent from the
 # default non-interactive ssh PATH (would otherwise fail "command not found").
+#
+# Transport bounds (ntfy-jump-wiring "Bounded side-channel session hold"):
+# the jump completes at pipe payload delivery; a zellij-pipe client that hangs
+# afterwards must never hold a ControlMaster session slot forever (sshd
+# MaxSessions exhaustion killed all taps 2026-07-08..10). `timeout 15` is a
+# generous backstop that only ever reaps a post-delivery hang;
+# ConnectTimeout/ServerAlive* bound stalled handshakes the same way.
+#
+# Warm-instance targeting (ntfy-jump-wiring "Warm-instance pipe targeting"):
+# the plugin URL matches the LaunchOrFocusPlugin keybind ground truth in
+# dot_config/zellij/config.kdl.tmpl, whose plugin configuration is EMPTY
+# (floating/move_to_focused_tab are launch attributes, not configuration), so
+# no --plugin-configuration flag is passed — an empty pipe configuration
+# matches the warm keybind instance. Explicit --plugin target always; never a
+# broadcast pipe (harpoon pane-pipe-api "Targeted Pipe Delivery").
 pane="$1"
 [ -n "$pane" ] || exit 0
-exec ssh remote "PATH=\$HOME/.local/share/mise/shims:\$PATH zellij pipe --name jump_pane --plugin file:\$HOME/.config/zellij/plugins/harpoon.wasm '$pane'"
+exec timeout 15 ssh \
+  -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
+  remote "PATH=\$HOME/.local/share/mise/shims:\$PATH zellij pipe --name jump_pane --plugin file:\$HOME/.config/zellij/plugins/harpoon.wasm '$pane'"

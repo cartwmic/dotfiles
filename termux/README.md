@@ -21,6 +21,16 @@ not this machine), so the workflow is **edit-here, push-via-adb**.
   from the non-interactive `ssh remote` PATH. Requires a working `remote` alias
   in the phone `~/.ssh/config` (see `ssh-controlmaster.config` below) and
   harpoon built with the `jump_pane` pipe handler on the remote.
+  **Transport bounds:** the invocation is wrapped in `timeout 15` (needs
+  Termux `coreutils`, present in the base install) with
+  `ConnectTimeout`/`ServerAliveInterval`/`ServerAliveCountMax` ssh options, so
+  a remote `zellij pipe` client that hangs after delivering the jump can hold
+  a ControlMaster session slot for at most ~15s — hung clients can no longer
+  accumulate and exhaust sshd `MaxSessions` (the 2026-07-08..10 dead-taps
+  incident). The pipe keeps an explicit `--plugin` target (never broadcast)
+  and passes no `--plugin-configuration`, matching the keybind-launched warm
+  harpoon instance's empty plugin configuration. After editing, re-run
+  `./termux/sync.sh` to deliver the updated script to the phone.
 - `ssh-controlmaster.config` — phone `~/.ssh/config` snippet enabling SSH
   connection multiplexing for the `ntfy-harpoon-jump` feature. `sync.sh`
   marker-guards its append into the phone config (idempotent). It makes the
