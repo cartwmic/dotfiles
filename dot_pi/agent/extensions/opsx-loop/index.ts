@@ -383,8 +383,9 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	// Inject the next worker continuation turn, optionally preceded by a proactive
-	// context compaction (Lever A). When OPSX_COMPACT_AT_PERCENT is set and the
-	// current context usage is at/above it, compact FIRST and inject in the
+	// context compaction (Lever A). DEFAULT-ON: when current context usage is at/above
+	// the percent-only threshold (OPSX_COMPACT_AT_PERCENT, default 50% of the window),
+	// compact FIRST and inject in the
 	// completion callback so the next turn starts on a compacted context; otherwise
 	// inject directly (current behavior). Degrades safely: if the running pi lacks
 	// getContextUsage/compact, or usage is unknown (null right after a compaction),
