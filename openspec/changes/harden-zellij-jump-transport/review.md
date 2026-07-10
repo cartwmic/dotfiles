@@ -124,6 +124,16 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
 
 - 2026-07-10 — review.md authored from schema template at loop start
   (openspec-loop cycle 1); no overrides.
+- 2026-07-10 — task 2.2 ground truth: the harpoon `LaunchOrFocusPlugin`
+  keybind block (dot_config/zellij/config.kdl.tmpl) carries only launch
+  attributes (`floating`, `move_to_focused_tab`) — its plugin configuration
+  is EMPTY. Minimal warm-instance targeting implemented as: explicit
+  `--plugin` target, NO `--plugin-configuration` flag (empty matches empty).
+  Live phone verification of warm-instance reuse is operational, outside the
+  gate.
+- 2026-07-10 — gate green at worktree HEAD 02fdb34 (tasks 1.1–3.1 complete;
+  validation: sh -n + shellcheck). Scale S: code review derives advisory,
+  doneness not required — no gating review dispatch was demanded by the gate.
 
 ## Scope Expansions
 
