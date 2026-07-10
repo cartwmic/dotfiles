@@ -37,9 +37,9 @@ doneness_mode: required
 
 ## Diff Base + Worktree locator
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
-**Integration Branch:** <detected-at-capture>
+**Diff Base SHA:** 2d0bcd1355f5b5e7bd37939013dd88f0f4437b71
+**Worktree Path:** /Users/cartwmic/.local/share/chezmoi-opsx-merge-compact
+**Integration Branch:** main
 
 ## Manual Adjustments
 
@@ -50,6 +50,9 @@ doneness_mode: required
 
 - 2026-07-09 — review.md authored in-session (loop turn 1); Scale/full_rigor taken
   verbatim from frozen intent.md constraints.
+- 2026-07-09 — worktree created on `opsx/merge-opsx-compact-percent-only`; Diff Base
+  = merge-base(main, HEAD) at creation; integration branch resolved to `main`
+  (repo-local, no divergent origin/HEAD).
 
 ## Scope Expansions
 
