@@ -72,6 +72,7 @@ yq = "latest" # YAML processor
 # AI & Productivity Tools
 # =============================================================================
 "github:rtk-ai/rtk" = "latest" # RTK - Rust Token Killer (AI coding agent proxy)
+shellcheck = "latest"
 # mermaid-cli and claude-code-acp installed via tasks to ensure node is available first
 
 # =============================================================================
