@@ -409,65 +409,51 @@ export function parseLoopBudget(reviewMd: string): number | undefined {
 
 // ── Proactive between-turns compaction threshold (Lever A) ──────────────────
 // The loop is the operator's SOLE compaction path (pi auto-compaction is off), so
-// this is DEFAULT-ON. The trigger, in absolute tokens, is the HIGHER of a percent
-// of the context window and an absolute floor: max(33% * window, 100_000). Either
-// term is independently configurable via env and can be turned off; with BOTH off
-// the feature is disabled.
+// this is DEFAULT-ON. The trigger is PERCENT-ONLY: a single percent of the live
+// context window (default 50%), configured via `OPSX_COMPACT_AT_PERCENT`. Only the
+// exact tokens off/none/false/0 disable the guard; garbage or out-of-range values
+// fall back to the default — misconfiguration never silently disables compaction.
+// The default 50 stays above the elision keep-recent budget (40%) so the levers
+// layer: elide first, compact when elision can no longer hold total context down.
+// (opsx-loop-compaction-guard)
 
 const OFF_TOKENS = new Set(["off", "none", "false", "0"]);
 
 /**
- * Resolve the PERCENT term of the compaction trigger from `OPSX_COMPACT_AT_PERCENT`.
- * Returns an integer 1..100, or null when the term is explicitly OFF
- * (`off`/`none`/`false`/`0`). Unset or garbage falls back to the default 33 — the
+ * Resolve the compaction-trigger percent from `OPSX_COMPACT_AT_PERCENT`.
+ * Returns an integer 1..100, or null when explicitly OFF
+ * (`off`/`none`/`false`/`0`). Unset or garbage falls back to the default 50 — the
  * feature is default-on, so an unparseable value must NOT silently disable it.
+ * (opsx-loop-compaction-guard.default-on-with-explicit-off-only,
+ *  opsx-loop-compaction-guard.garbage-falls-back-to-default)
  */
 export function resolveCompactPercent(raw: string | undefined): number | null {
-	if (raw == null || raw.trim() === "") return 33;
+	if (raw == null || raw.trim() === "") return 50;
 	const t = raw.trim().toLowerCase();
 	if (OFF_TOKENS.has(t)) return null;
-	if (!/^\d+$/.test(t)) return 33;
+	if (!/^\d+$/.test(t)) return 50;
 	const n = Number.parseInt(t, 10);
-	if (n < 1 || n > 100) return 33;
-	return n;
-}
-
-/**
- * Resolve the ABSOLUTE-TOKEN floor term from `OPSX_COMPACT_AT_TOKENS`.
- * Returns a positive integer, or null when explicitly OFF. Unset or garbage falls
- * back to the default 100_000.
- */
-export function resolveCompactTokens(raw: string | undefined): number | null {
-	if (raw == null || raw.trim() === "") return 100_000;
-	const t = raw.trim().toLowerCase();
-	if (OFF_TOKENS.has(t)) return null;
-	if (!/^\d+$/.test(t)) return 100_000;
-	const n = Number.parseInt(t, 10);
-	if (n < 1) return 100_000;
+	if (n < 1 || n > 100) return 50;
 	return n;
 }
 
 /**
  * Resolve the absolute token count at/above which the loop compacts BEFORE the
- * next worker turn: max(percentTerm * window, tokenFloor). Either term may be OFF;
- * with BOTH off (or a non-positive window and the floor off) the feature is
- * disabled and this returns undefined. Default (both unset): max(33% window, 100k).
+ * next worker turn: ceil(percent/100 * window). Percent-only — there is no
+ * absolute-token term. Returns undefined when the guard is explicitly OFF or the
+ * context window is non-positive/unknown (caller skips the threshold decision).
+ * (opsx-loop-compaction-guard.percent-only-compaction-trigger)
  */
 export function resolveCompactThresholdTokens(
 	contextWindow: number,
 	pctRaw: string | undefined,
-	tokRaw: string | undefined,
 ): number | undefined {
 	const pct = resolveCompactPercent(pctRaw);
-	const tok = resolveCompactTokens(tokRaw);
-	const terms: number[] = [];
-	if (pct != null && Number.isFinite(contextWindow) && contextWindow > 0) {
-		terms.push(Math.ceil((pct / 100) * contextWindow));
-	}
-	if (tok != null) terms.push(tok);
-	if (terms.length === 0) return undefined;
-	return Math.max(...terms);
+	if (pct == null) return undefined;
+	if (!Number.isFinite(contextWindow) || contextWindow <= 0) return undefined;
+	return Math.ceil((pct / 100) * contextWindow);
 }
+
 
 // ── Context-overflow detection (loop-local overflow-recovery) ───────────────
 // The operator keeps pi auto-compaction OFF, which also disables pi's built-in
@@ -534,15 +520,12 @@ export function isContextOverflowError(message: any, contextWindow?: number): bo
 	return false;
 }
 
-/** One-line human description of the active policy for the loop-arm notify. */
-export function describeCompactPolicy(pctRaw: string | undefined, tokRaw: string | undefined): string {
+/** One-line human description of the active policy for the loop-arm notify.
+ *  (opsx-loop-compaction-guard.policy-notify-describes-single-term) */
+export function describeCompactPolicy(pctRaw: string | undefined): string {
 	const pct = resolveCompactPercent(pctRaw);
-	const tok = resolveCompactTokens(tokRaw);
-	if (pct == null && tok == null) return "compaction guard: off";
-	const parts: string[] = [];
-	if (pct != null) parts.push(`${pct}% window`);
-	if (tok != null) parts.push(`${tok.toLocaleString("en-US")} tokens`);
-	return `compaction guard: compact at ≥ ${parts.join(" or ")} (whichever higher)`;
+	if (pct == null) return "compaction guard: off";
+	return `compaction guard: compact at ≥ ${pct}% window`;
 }
 
 // ── Mid-run context elision (Lever L3) ──────────────────────────────────────
