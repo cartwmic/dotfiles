@@ -22,6 +22,8 @@ delegation_mode: single-agent
 # full_rigor=80 (the former L budget). The value is written here at authoring
 # time; the loop runtime reads it verbatim.
 loop_max_iterations: 20
+loop_hold: true
+loop_hold_reason: "gate green at worktree HEAD 02fdb34 — ready to archive; awaiting human archive authorization (loop never archives)"
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
