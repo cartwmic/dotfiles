@@ -59,6 +59,18 @@ doneness_mode: required
 <!-- Evidence-gated widenings. One entry per widening; surfaced at the
 decision-audit landing or gate-green. -->
 
+- 2026-07-09 — updated stale assertion in
+  `tests/opsx-review-convergence/test_review_convergence_surfaces.sh` (retired
+  literal "gating-required at every tier" → current 3-tier doctrine
+  "`gating-required` at Scale M" + fail-closed-derivation check) — evidence: gate
+  check `validation-opsx-review-convergence-surface-tests` fails on unmodified
+  main (pre-existing red introduced by 3928abb, which reworded the loop skill
+  without updating this surface test); the frozen intent's gate-green outcome is
+  unreachable while a required repo validator is red, and the replacement
+  assertion matches spec-of-record `opsx-adversarial-review` switchboard-default
+  (M ⇒ gating-required derived fail-closed, advisory below M) rather than
+  weakening coverage.
+
 ## Fidelity Round Ledger
 
 | Round | Fidelity | Per-judge verdicts | Attested HEAD |
