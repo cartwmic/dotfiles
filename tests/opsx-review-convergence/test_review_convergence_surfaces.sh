@@ -300,7 +300,11 @@ if grep -q 'treadmill (P0+P1 flat/rising' "$APPLY_REF" 2>/dev/null; then
 else ok "apply ref treadmill-as-default removed"; fi
 
 # --- opsx-adversarial-review.m-tier-review-stack-thinning (rigor uniform across tiers) ---
-has "loop skill keeps 2-model code review gating at every tier" "$LOOP_SKILL" "gating-required at every tier"
+# 3928abb aligned the skill to the 3-tier vocabulary: code_review_mode DEFAULTS to
+# gating-required at Scale M (derived fail-closed; spec opsx-adversarial-review
+# switchboard-default) — the old literal "at every tier" phrasing is retired.
+has "loop skill keeps 2-model code review gating fail-closed at Scale M" "$LOOP_SKILL" "\`gating-required\` at Scale M"
+has "loop skill derives the M default fail-closed (omission cannot skip review)" "$LOOP_SKILL" "omitting the key"
 
 # --- Q4 rider: stray .tmp removed and stays removed ---
 if [ -e "$ROOT/tests/opsx-review-convergence/test_review_convergence_surfaces.sh.tmp" ]; then
