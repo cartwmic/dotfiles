@@ -136,6 +136,12 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
 - 2026-07-10 — gate green at worktree HEAD 02fdb34 (tasks 1.1–3.1 complete;
   validation: sh -n + shellcheck). Scale S: code review derives advisory,
   doneness not required — no gating review dispatch was demanded by the gate.
+- 2026-07-10 — archive-time AC↔test note (HARD-GATE 2, option B): the two
+  delta ACs (bounded session hold, warm-instance targeting) carry no test
+  references — shell-transport behavior; agent-independent validation is
+  sh -n + shellcheck (task 3.1), and end-to-end verification is operational
+  on the phone (tap → jump → slot freed ≤15s), outside the gate. Archive
+  authorized by user 2026-07-10.
 
 ## Scope Expansions
 
