@@ -238,3 +238,126 @@ test("loadEnabled: state.json override wins over config default", () => {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+// ── Send-failure visibility (make-ntfy-send-failures-visible) ────────────────
+// Covers acceptance criteria:
+//   pi-ntfy-notify.delivery-failures-are-non-fatal (non-2xx is a failure)
+//   pi-ntfy-notify.send-failures-are-warned-in-the-ui
+//   pi-ntfy-notify.status-reports-send-outcomes
+//   pi-ntfy-notify.capped-send-log
+import {
+	appendSendLog,
+	buildLogLine,
+	describeSendError,
+	formatSendStatus,
+	newSendState,
+	reactToSendOutcome,
+	recordOutcome,
+	sendNotification,
+} from "./index.ts";
+
+test("sendNotification resolves on 2xx and rejects on non-2xx (non-2xx is a failure)", async () => {
+	const realFetch = globalThis.fetch;
+	try {
+		globalThis.fetch = (async () => ({ ok: true, status: 200 })) as unknown as typeof fetch;
+		await sendNotification("https://example.invalid/topic", "t", "b");
+
+		globalThis.fetch = (async () => ({ ok: false, status: 500 })) as unknown as typeof fetch;
+		await assert.rejects(
+			() => sendNotification("https://example.invalid/topic", "t", "b"),
+			/HTTP 500/,
+			"non-2xx must reject with the HTTP status",
+		);
+	} finally {
+		globalThis.fetch = realFetch;
+	}
+});
+
+test("recordOutcome + formatSendStatus report counts and last outcomes", () => {
+	const state = newSendState();
+	assert.equal(formatSendStatus(state), "no sends this session");
+	const t1 = new Date("2026-07-10T22:00:00Z");
+	const t2 = new Date("2026-07-10T22:05:00Z");
+	recordOutcome(state, true, undefined, t1);
+	recordOutcome(state, false, "HTTP 500", t2);
+	const s = formatSendStatus(state);
+	assert.match(s, /sends: 1 ok \/ 1 failed/);
+	assert.match(s, /last ok 2026-07-10T22:00:00/);
+	assert.match(s, /last fail 2026-07-10T22:05:00.*HTTP 500/);
+});
+
+test("describeSendError is bounded and whitespace-collapsed", () => {
+	assert.equal(describeSendError(new Error("HTTP 503")), "Error: HTTP 503");
+	const long = describeSendError(new Error(`x${" y".repeat(500)}`));
+	assert.ok(long.length <= 200, "reason is hard-bounded");
+	assert.ok(!long.includes("\n"), "no newlines in reason");
+	assert.equal(describeSendError(""), "unknown error");
+});
+
+test("buildLogLine records timestamp + outcome metadata only", () => {
+	const at = new Date("2026-07-10T22:00:00Z");
+	assert.equal(buildLogLine(true, undefined, at), "2026-07-10T22:00:00.000Z ok");
+	assert.equal(buildLogLine(false, "HTTP 500", at), "2026-07-10T22:00:00.000Z fail HTTP 500");
+});
+
+test("appendSendLog appends and rotates past the cap", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-log-"));
+	try {
+		appendSendLog(dir, "line-1", 64);
+		appendSendLog(dir, "line-2", 64);
+		const log = path.join(dir, "send.log");
+		assert.equal(fs.readFileSync(log, "utf8"), "line-1\nline-2\n");
+
+		// Exceed the cap: next append rotates first, then writes fresh.
+		appendSendLog(dir, "x".repeat(80), 64);
+		appendSendLog(dir, "after-rotate", 64);
+		assert.ok(fs.existsSync(path.join(dir, "send.log.old")), "rotated file exists");
+		assert.equal(fs.readFileSync(log, "utf8"), "after-rotate\n", "fresh log after rotation");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("reactToSendOutcome: failure warns with reason, records state, appends log", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-react-"));
+	try {
+		const state = newSendState();
+		const warnings: string[] = [];
+		reactToSendOutcome(Promise.reject(new Error("HTTP 500")), state, dir, (m) => warnings.push(m));
+		await new Promise((r) => setTimeout(r, 10));
+		assert.deepEqual(warnings, ["ntfy send failed: Error: HTTP 500"]);
+		assert.equal(state.failCount, 1);
+		assert.match(fs.readFileSync(path.join(dir, "send.log"), "utf8"), /fail Error: HTTP 500/);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("reactToSendOutcome: success is silent in the UI but recorded", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-react-ok-"));
+	try {
+		const state = newSendState();
+		const warnings: string[] = [];
+		reactToSendOutcome(Promise.resolve(), state, dir, (m) => warnings.push(m));
+		await new Promise((r) => setTimeout(r, 10));
+		assert.deepEqual(warnings, [], "no warning on success");
+		assert.equal(state.okCount, 1);
+		assert.match(fs.readFileSync(path.join(dir, "send.log"), "utf8"), /ok\n$/);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("reactToSendOutcome: a throwing warn surface never propagates", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-react-warnthrow-"));
+	try {
+		const state = newSendState();
+		reactToSendOutcome(Promise.reject(new Error("HTTP 503")), state, dir, () => {
+			throw new Error("UI gone");
+		});
+		await new Promise((r) => setTimeout(r, 10));
+		assert.equal(state.failCount, 1, "state recorded despite warn throw");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});

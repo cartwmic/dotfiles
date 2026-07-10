@@ -19,7 +19,10 @@
  *     to a sidecar `state.json` (NOT chezmoi-managed) that overrides the config
  *     default, so live toggling never drifts the chezmoi source.
  *   - Delivery is fire-and-forget with a 5s timeout; failures never block or
- *     crash the turn.
+ *     crash the turn, but every failure IS surfaced: a TUI warning per failed
+ *     send, `/ntfy status` outcome counters, and a capped send.log beside this
+ *     module (metadata only — never bodies or credentials). Non-2xx responses
+ *     count as failures.
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -229,7 +232,12 @@ export function buildJumpClickUrl(
 	return `${base.replace(/\/+$/, "")}/${encodeURIComponent(id)}`;
 }
 
-/** POST a notification to ntfy. Fire-and-forget; caller swallows errors. */
+/**
+ * POST a notification to ntfy. Rejects on network error/timeout AND on any
+ * non-2xx response (pi-ntfy-notify "Non-2xx response is a failure"). Callers
+ * dispatch fire-and-forget and route the settled outcome through
+ * `reactToSendOutcome` — failures are surfaced, never silently swallowed.
+ */
 export async function sendNotification(
 	url: string,
 	title: string,
@@ -241,12 +249,120 @@ export async function sendNotification(
 	// ntfy does NOT propagate custom X-* headers to the client, so the jump target
 	// MUST ride the `Click` header (the tap action URL), never a custom header.
 	if (clickUrl) headers.Click = clickUrl;
-	await fetch(url, {
+	const res = await fetch(url, {
 		method: "POST",
 		headers,
 		body,
 		signal: AbortSignal.timeout(5000),
 	});
+	if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+// ── Send-outcome visibility (pi-ntfy-notify failure-visibility surfaces) ─────
+
+const SEND_LOG_FILE = "send.log";
+const SEND_LOG_ROTATED_FILE = "send.log.old";
+const SEND_LOG_MAX_BYTES = 200 * 1024;
+
+export interface SendState {
+	okCount: number;
+	failCount: number;
+	lastOkAt?: Date;
+	lastFailAt?: Date;
+	lastFailReason?: string;
+}
+
+export function newSendState(): SendState {
+	return { okCount: 0, failCount: 0 };
+}
+
+/** Bounded, secret-free failure reason from a rejected send. */
+export function describeSendError(err: unknown): string {
+	const raw = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+	// Metadata only — collapse whitespace, hard-bound length. Never includes
+	// headers or body content by construction (Error messages here are either
+	// `HTTP <status>` or runtime fetch/abort errors).
+	return raw.replace(/\s+/g, " ").trim().slice(0, 200) || "unknown error";
+}
+
+/** Update in-memory session state with a settled send outcome. */
+export function recordOutcome(state: SendState, ok: boolean, reason?: string, at: Date = new Date()): void {
+	if (ok) {
+		state.okCount++;
+		state.lastOkAt = at;
+	} else {
+		state.failCount++;
+		state.lastFailAt = at;
+		state.lastFailReason = reason ?? "unknown error";
+	}
+}
+
+/** One send-log line: timestamp, outcome, bounded reason. Metadata only. */
+export function buildLogLine(ok: boolean, reason?: string, at: Date = new Date()): string {
+	return ok ? `${at.toISOString()} ok` : `${at.toISOString()} fail ${reason ?? "unknown error"}`;
+}
+
+/**
+ * Append a line to the capped send log in `dir`. When the log exceeds the cap
+ * it is rotated to `send.log.old` (previous rotation overwritten) so growth is
+ * bounded (pi-ntfy-notify "Capped Send Log"). Never throws — logging must not
+ * become a new failure mode.
+ */
+export function appendSendLog(dir: string, line: string, maxBytes: number = SEND_LOG_MAX_BYTES): void {
+	try {
+		const file = path.join(dir, SEND_LOG_FILE);
+		try {
+			if (fs.statSync(file).size >= maxBytes) {
+				fs.renameSync(file, path.join(dir, SEND_LOG_ROTATED_FILE));
+			}
+		} catch {
+			/* no existing log — nothing to rotate */
+		}
+		fs.appendFileSync(file, `${line}\n`);
+	} catch {
+		/* swallow: the log is best-effort; state + warning remain */
+	}
+}
+
+/** Human-readable status line for `/ntfy status`. */
+export function formatSendStatus(state: SendState): string {
+	if (state.okCount === 0 && state.failCount === 0) return "no sends this session";
+	const parts = [`sends: ${state.okCount} ok / ${state.failCount} failed`];
+	if (state.lastOkAt) parts.push(`last ok ${state.lastOkAt.toISOString()}`);
+	if (state.lastFailAt) {
+		parts.push(`last fail ${state.lastFailAt.toISOString()} (${state.lastFailReason ?? "unknown error"})`);
+	}
+	return parts.join("; ");
+}
+
+/**
+ * Route a dispatched send's settled outcome to the visibility surfaces:
+ * in-memory state, the capped send log, and (on failure, when a UI exists) a
+ * TUI warning for EVERY failure (owner-settled policy). The turn path never
+ * awaits this — dispatch stays fire-and-forget.
+ */
+export function reactToSendOutcome(
+	promise: Promise<void>,
+	state: SendState,
+	dir: string,
+	warn: (message: string) => void,
+): void {
+	promise.then(
+		() => {
+			recordOutcome(state, true);
+			appendSendLog(dir, buildLogLine(true));
+		},
+		(err: unknown) => {
+			const reason = describeSendError(err);
+			recordOutcome(state, false, reason);
+			appendSendLog(dir, buildLogLine(false, reason));
+			try {
+				warn(`ntfy send failed: ${reason}`);
+			} catch {
+				/* warning surface unavailable — state + log already recorded */
+			}
+		},
+	);
 }
 
 function extensionDir(): string {
@@ -258,6 +374,8 @@ export default function (pi: ExtensionAPI): void {
 	const config = loadConfig(dir);
 	// Effective on/off: runtime override (state.json) wins over config default.
 	let enabled = loadEnabled(dir, config.enabled);
+	// Per-session send outcomes (pi-ntfy-notify "Status Reports Send Outcomes").
+	const sendState = newSendState();
 
 	pi.registerCommand("ntfy", {
 		description: "Toggle ntfy notifications on/off (on | off | toggle | status)",
@@ -282,7 +400,8 @@ export default function (pi: ExtensionAPI): void {
 				}
 			}
 			const detail = config.url ? "" : " (no url configured — still inactive)";
-			ctx.ui.notify(`ntfy notifications ${enabled ? "ON" : "OFF"}${detail}`, "info");
+			const suffix = action === "status" ? ` — ${formatSendStatus(sendState)}` : "";
+			ctx.ui.notify(`ntfy notifications ${enabled ? "ON" : "OFF"}${detail}${suffix}`, "info");
 		},
 	});
 
@@ -303,7 +422,14 @@ export default function (pi: ExtensionAPI): void {
 		});
 		const clickUrl = buildJumpClickUrl(process.env.ZELLIJ_PANE_ID, config.jumpDeepLinkBase);
 
-		void sendNotification(config.url, title, body, "robot", clickUrl).catch(() => {});
+		// Fire-and-forget on the turn path; outcome routed to the visibility
+		// surfaces (state + capped log + every-failure TUI warning).
+		reactToSendOutcome(
+			sendNotification(config.url, title, body, "robot", clickUrl),
+			sendState,
+			dir,
+			(message) => ctx.ui.notify(message, "warning"),
+		);
 	});
 
 	// The agent pauses mid-turn while an `ask_user_question` dialog is open, so
@@ -328,6 +454,11 @@ export default function (pi: ExtensionAPI): void {
 		});
 		const clickUrl = buildJumpClickUrl(process.env.ZELLIJ_PANE_ID, config.jumpDeepLinkBase);
 
-		void sendNotification(config.url, title, body, "question", clickUrl).catch(() => {});
+		reactToSendOutcome(
+			sendNotification(config.url, title, body, "question", clickUrl),
+			sendState,
+			dir,
+			(message) => ctx.ui.notify(message, "warning"),
+		);
 	});
 }
