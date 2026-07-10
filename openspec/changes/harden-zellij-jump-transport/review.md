@@ -104,9 +104,9 @@ main > master) — never assume a hardcoded literal (opsx-workflow-schema.
 integration-branch-locator-default-detected).
 -->
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
-**Integration Branch:** <detected-at-capture>
+**Diff Base SHA:** 42f08f693b64dfc3b8ceb8016918c7fc1a1858eb
+**Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-harden-zellij-jump-transport
+**Integration Branch:** main
 
 ## Manual Adjustments
 
