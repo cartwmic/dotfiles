@@ -104,9 +104,9 @@ main > master) — never assume a hardcoded literal (opsx-workflow-schema.
 integration-branch-locator-default-detected).
 -->
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
-**Integration Branch:** <detected-at-capture>
+**Diff Base SHA:** 96ddb29301b9cdf57f9a411efe11fb1bcca65fdf
+**Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-make-ntfy-send-failures-visible
+**Integration Branch:** main
 
 ## Manual Adjustments
 
