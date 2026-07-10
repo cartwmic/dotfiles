@@ -26,7 +26,10 @@ front-matter key (default false). `full_rigor: true` restores the former L/XL ex
 (standalone clarify + blind analyze dispatch + an independently dispatched blind
 doneness judge). Plain Scale M folds clarify into the proposal, runs analyze
 deterministic-only, and rides doneness on the code-review dispatch (below). The
-2-model blind adversarial code review is gating-required at every tier.
+2-model blind adversarial code review's `code_review_mode` DEFAULTS to
+`gating-required` at Scale M (with or without `full_rigor`) and to `advisory` below M
+when the key is absent; the gate derives that default fail-closed, so omitting the key
+at M can never skip the review. XS/S may raise it to `gating-required` explicitly.
 
 ## Worktree-always execution & writeback discipline
 
