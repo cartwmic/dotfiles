@@ -303,8 +303,10 @@ else ok "apply ref treadmill-as-default removed"; fi
 # 3928abb aligned the skill to the 3-tier vocabulary: code_review_mode DEFAULTS to
 # gating-required at Scale M (derived fail-closed; spec opsx-adversarial-review
 # switchboard-default) — the old literal "at every tier" phrasing is retired.
-has "loop skill keeps 2-model code review gating fail-closed at Scale M" "$LOOP_SKILL" "\`gating-required\` at Scale M"
-has "loop skill derives the M default fail-closed (omission cannot skip review)" "$LOOP_SKILL" "omitting the key"
+has "loop skill keeps 2-model code review gating fail-closed at Scale M" "$LOOP_SKILL" "DEFAULTS to"
+has "loop skill states the gating-required Scale-M default" "$LOOP_SKILL" "\`gating-required\` at Scale M (with or without \`full_rigor\`)"
+has "loop skill derives the M default fail-closed" "$LOOP_SKILL" "derives that default fail-closed, so omitting the key"
+has "loop skill states omission can never skip the M review" "$LOOP_SKILL" "at M can never skip the review"
 
 # --- Q4 rider: stray .tmp removed and stays removed ---
 if [ -e "$ROOT/tests/opsx-review-convergence/test_review_convergence_surfaces.sh.tmp" ]; then
