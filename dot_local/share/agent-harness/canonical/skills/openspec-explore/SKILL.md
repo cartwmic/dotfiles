@@ -93,7 +93,7 @@ This tells you:
 
 ### Schema awareness (opsx-superpowers)
 
-If the active change uses `schema: opsx-superpowers` (visible from `openspec list --json` per-change `schemaName` field), you have extra responsibility:
+Determine the target schema first. Read `openspec/config.yaml` (the `schema:` key) for the PROJECT default — this governs pre-change exploration, which is the common opsx case and where `openspec list --json` reports no changes yet. When a change already exists, `openspec list --json` shows its per-change `schemaName`. If EITHER resolves to `opsx-superpowers`, you have extra responsibility:
 
 - When the exploration crystallizes into a concrete proposal candidate, RECOMMEND a Scale tier (`XS | S | M`) based on the conversation, AND whether to set `full_rigor: true`. Cite the heuristic from the schema README's Scale-tier table (which now carries the XS/S/M rows plus the `full_rigor` row):
   - XS: typo, comment fix, single-line config tweak
@@ -282,7 +282,7 @@ When it feels like things are crystallizing, you might summarize:
 **Open questions**: [if any remain]
 
 **Next steps** (if ready):
-- Create a change proposal
+- Create a change proposal (or, under `opsx-superpowers`, freeze `intent.md` — then arm the loop with `/opsx-loop <change>`, or drive it manually via `openspec-propose`/`openspec-apply-change`/`openspec-archive-change`)
 - Keep exploring: just keep talking
 ```
 
@@ -292,13 +292,29 @@ But this summary is optional. Sometimes the thinking IS the value.
 
 ## opsx-superpowers: freeze intent.md
 
-When the project's schema is `opsx-superpowers` and an explore session concludes with user-confirmed intent, write the agreed **intent, constraints, and invariants** to `openspec/changes/<change>/intent.md`. This is the FROZEN baseline:
+When the project's schema is `opsx-superpowers` and an explore session concludes with user-confirmed intent, write the agreed **intent, constraints, and invariants** to `openspec/changes/<change>/intent.md`. This is the FROZEN baseline — a schema-level artifact, NOT a loop-only one:
 
-- The `openspec-loop` orchestrator and every review subagent treat `intent.md` as source-of-truth and judge work against it.
-- `opsx gate` requires `intent.md` at Scale ≥ M; the loop and reviewers must NOT edit it without explicit human authorization.
+- `intent.md` is the source-of-truth baseline that every downstream reviewer/judge (and `opsx gate`) measures work against, no matter HOW the change is driven.
+- `opsx gate` requires `intent.md` at Scale ≥ M; whoever advances the change must NOT edit it without explicit human authorization.
 - Sections: Intent (1-2 paras), Constraints (bullets), Invariants honored (constitution/domain refs), Non-goals.
 
-Under the default `spec-driven` schema, no `intent.md` is required — behave as before.
+Once frozen, hand off. The **recommended** next step is the autonomous loop — arm it with:
+
+```
+/opsx-loop <change>
+```
+
+The loop drives propose→apply→archive to gate-green behind blind review, then holds at ready-to-archive for your explicit sign-off (it never auto-archives or deploys).
+
+But the loop is a convenience, not a requirement. The same frozen `intent.md` is consumed identically if you'd rather drive it by hand:
+
+1. `openspec-propose` — author proposal + specs + design/analyze per Scale.
+2. `openspec-apply-change` — implement tasks in the worktree.
+3. `openspec-archive-change` — after `opsx gate` is green and you authorize it.
+
+Run `opsx gate <change>` as the checkpoint between phases either way. So: offer the loop snippet, and remind the user the manual route above is always available.
+
+Under the default `spec-driven` schema, no `intent.md` is required — behave as before, and the manual propose/apply/archive skills remain the path.
 
 ## Guardrails
 
