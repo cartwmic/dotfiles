@@ -428,7 +428,6 @@ export default function (pi: ExtensionAPI) {
 			const threshold = resolveCompactThresholdTokens(
 				window,
 				process.env.OPSX_COMPACT_AT_PERCENT,
-				process.env.OPSX_COMPACT_AT_TOKENS,
 			);
 			overThreshold = threshold !== undefined && tokens >= threshold;
 		}
@@ -688,7 +687,7 @@ export default function (pi: ExtensionAPI) {
 			// compaction path (pi auto-compaction off), so make the guard visible —
 			// including when it has been explicitly turned off.
 			ctx.ui.notify(
-				`⟳ ${describeCompactPolicy(process.env.OPSX_COMPACT_AT_PERCENT, process.env.OPSX_COMPACT_AT_TOKENS)}`,
+				`⟳ ${describeCompactPolicy(process.env.OPSX_COMPACT_AT_PERCENT)}`,
 				"info",
 			);
 			return;
