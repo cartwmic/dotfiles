@@ -35,7 +35,7 @@ import { Type } from "@sinclair/typebox";
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
 // Real Anthropic model ID (alias — resolves to current dated build). Override via ANTHROPIC_SEARCH_MODEL.
-const DEFAULT_MODEL = "claude-sonnet-4-5";
+const DEFAULT_MODEL = "claude-opus-4-8";
 const TOOL_NAME_SEARCH = "web_search";
 const TOOL_NAME_FETCH = "web_fetch";
 
