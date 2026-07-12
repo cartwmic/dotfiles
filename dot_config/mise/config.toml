@@ -582,7 +582,7 @@ ZJSTATUS_HINTS_VERSION="v0.1.4"
 # jump; plus the filter/jump-modes rewrite (cargo workspace: harpoon-core lib +
 # harpoon-plugin wasm crate). Upstream issues: not yet filed.
 HARPOON_REPO="https://github.com/cartwmic/harpoon"
-HARPOON_VERSION="7aa6a15b64bb4fa79eb72268502a53d8d9967b99"
+HARPOON_VERSION="a34396b4c40e2b574cd82925327803e6a9165abd"
 
 # --- room: prebuilt wasm from GitHub release ---
 ROOM_STAMP="$PLUGIN_DIR/.room.version"
