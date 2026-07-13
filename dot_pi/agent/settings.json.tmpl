@@ -35,11 +35,11 @@
     "claude-bridge/claude-opus-4-8",
     "claude-bridge/claude-sonnet-5"
 {{- else }}
-    "cursor/cursor-grok-4.5",
-    "cursor/gpt-5.6-luna",
-    "cursor/gpt-5.6-sol",
-    "cursor/gpt-5.6-terra",
     "cursor/composer-2.5",
+    "cursor/grok-4.5",
+    "cursor/gpt-5.6-luna@1m",
+    "cursor/gpt-5.6-terra@1m",
+    "cursor/gpt-5.6-sol@1m",
     "anthropic/claude-fable-5",
     "anthropic/claude-opus-4-8",
     "anthropic/claude-sonnet-5"
@@ -52,7 +52,7 @@
     "https://github.com/cartwmic/pi-mcp-adapter",
     "https://github.com/cartwmic/pi-subagents",
     "https://github.com/hk-vk/pi-connect",
-    "https://github.com/ndraiman/pi-cursor-provider",
+    "npm:pi-cursor-sdk",
     "https://github.com/olixis/pi-openrouter-plus",
 {{- if eq .profile "personal" }}
     "https://github.com/cartwmic/pi-claude-bridge",
