@@ -17,6 +17,8 @@ LABEL="com.cartwmic.sync-claude-pi-auth"
 PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 DOMAIN="gui/$(id -u)"
 
+{{- if eq .profile "personal" }}
+
 mkdir -p "${HOME}/.local/state"
 
 if [ ! -f "$PLIST" ]; then
@@ -31,6 +33,17 @@ launchctl enable "${DOMAIN}/${LABEL}"
 launchctl kickstart -k "${DOMAIN}/${LABEL}"
 
 echo "reloaded launchd agent: $LABEL"
+
+{{- else }}
+
+# Credential sync is personal-only. Remove stale artifacts from machines that
+# previously received them before profile gating existed.
+SCRIPT="${HOME}/.local/bin/sync-claude-pi-auth.sh"
+launchctl bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
+rm -f "$PLIST" "$SCRIPT"
+echo "profile {{ .profile }}: removed personal-only Claude/pi auth sync agent"
+
+{{- end }}
 
 {{- else }}
 

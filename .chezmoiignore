@@ -14,3 +14,7 @@ docs/
 openspec/
 tests/
 adr/
+{{- if ne .profile "personal" }}
+Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
+.local/bin/sync-claude-pi-auth.sh
+{{- end }}

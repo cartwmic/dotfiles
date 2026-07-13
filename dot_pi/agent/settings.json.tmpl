@@ -18,29 +18,29 @@
 {{-   end -}}
 {{- end -}}
 {
-{{- if eq .profile "axon-work-computer" }}
-  "defaultProvider": "anthropic",
-  "defaultModel": "claude-opus-4-8",
-{{- else }}
+{{- if eq .profile "personal" }}
   "defaultProvider": "claude-bridge",
   "defaultModel": "claude-fable-5",
+{{- else }}
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-opus-4-8",
 {{- end }}
   "defaultThinkingLevel": "high",
   "enabledModels": [
-{{- if eq .profile "axon-work-computer" }}
-    "openai-codex/gpt-5.6-luna",
-    "openai-codex/gpt-5.6-sol",
-    "openai-codex/gpt-5.6-terra",
-    "anthropic/claude-fable-5",
-    "anthropic/claude-opus-4-8",
-    "anthropic/claude-sonnet-5"
-{{- else }}
+{{- if eq .profile "personal" }}
     "openai-codex/gpt-5.6-luna",
     "openai-codex/gpt-5.6-sol",
     "openai-codex/gpt-5.6-terra",
     "claude-bridge/claude-fable-5",
     "claude-bridge/claude-opus-4-8",
     "claude-bridge/claude-sonnet-5"
+{{- else }}
+    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-5.6-terra",
+    "anthropic/claude-fable-5",
+    "anthropic/claude-opus-4-8",
+    "anthropic/claude-sonnet-5"
 {{- end }}
   ],
   "packages": [
@@ -52,7 +52,9 @@
     "https://github.com/hk-vk/pi-connect",
     "https://github.com/ndraiman/pi-cursor-provider",
     "https://github.com/olixis/pi-openrouter-plus",
+{{- if eq .profile "personal" }}
     "https://github.com/cartwmic/pi-claude-bridge",
+{{- end }}
     "https://github.com/cartwmic/pi-session-search",
     "npm:@juicesharp/rpiv-ask-user-question"
   ],
