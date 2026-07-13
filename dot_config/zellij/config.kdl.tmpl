@@ -202,9 +202,9 @@ keybinds clear-defaults=true {
     // Plugin launchers — bound in all modes (incl. locked) so they're one-press accessible
     shared_except "renametab" "renamepane" "entersearch" {
         bind "Ctrl y" {
-            LaunchOrFocusPlugin "file:~/.config/zellij/plugins/harpoon.wasm" {
-                floating true
-                move_to_focused_tab true
+            MessagePlugin "file:~/.config/zellij/plugins/harpoon.wasm" {
+                name "toggle"
+                floating true // REQUIRED: cold spawn without it lands tiled
             }
         }
         bind "Ctrl t" {
