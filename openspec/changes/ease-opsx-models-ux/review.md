@@ -27,6 +27,9 @@ spec_level: spec-anchored
 doneness_mode: required
 # review_max_rounds: 5
 # review_budget_mode: quiet-round
+review_models:
+  - anthropic/claude-sonnet-5
+  - anthropic/claude-opus-4-8
 ---
 
 # Review
@@ -55,7 +58,7 @@ any mode by setting it (in BOTH the front-matter and this table).
 | Validation Source Mode | required | required\|waived — waived (with rationale) lets Scale ≥ M pass with no agent-independent validation source |
 | Doneness Mode | required | required\|waived — default required at Scale ≥ M; a `waived` value needs a non-empty `doneness_waiver_rationale` (bare waiver fails). Gate reads a sealed `doneness.md` verdict (see templates/doneness.md) |
 | Spec Level | spec-anchored | spec-anchored\|spec-first\|spec-as-source (warning if last) |
-| Model Config | (unset) | optional `author_model`/`review_models`/`impl_model`/`author_in_session` + `provider`/`*_provider` front-matter keys, resolved by `opsx models`; unset ⇒ session model |
+| Model Config | review_models pinned | optional `author_model`/`review_models`/`impl_model`/`author_in_session` + `provider`/`*_provider` front-matter keys, resolved by `opsx models`; unset ⇒ session model |
 
 ## Diff Base + Worktree locator
 
