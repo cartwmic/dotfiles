@@ -28,6 +28,10 @@ No default scenario needs hosted model credentials.
 | `s06-interrupt-optional` | Optional interrupt smoke; skipped unless `OPSX_TUI_ENABLE_INTERRUPT=1` |
 | `s07-native-retry` | `opsx-loop.interrupt-or-error-stops-the-loop`: scripted HTTP 500 then success proves Pi-native retry remains under the active loop and reaches exactly one post-success gate evaluation |
 | `s08-retry-exhausted` | `opsx-loop.interrupt-or-error-stops-the-loop`: four scripted HTTP 500 responses exhaust Pi's native budget, produce one settled opsx stop, and trigger no opsx-owned retry |
+| `s09-overflow-recovery` | `opsx-loop.interrupt-or-error-stops-the-loop`: settled context overflow consumes one compact-and-retry allowance and returns to normal gate flow |
+| `s10-overflow-persistent` | `opsx-loop.interrupt-or-error-stops-the-loop`: second settled context overflow lands visibly without a third retry |
+| `s11-clear-during-retry` | `opsx-loop.interrupt-or-error-stops-the-loop`: clear during native retry invalidates pending ownership; stale settlement cannot stop or continue the cleared loop |
+| `s12-rearm-during-retry` | `opsx-loop.interrupt-or-error-stops-the-loop`: named re-arm during native retry transfers ownership only when the replacement user directive starts; old retry cannot gate the replacement |
 
 ## Running
 

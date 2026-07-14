@@ -371,6 +371,11 @@ function runModels(args: string[], cwd: string): { code: number; out: string } {
 
 export default function (pi: ExtensionAPI) {
 	let loop: LoopState | undefined;
+	// Owner of the current top-level Pi run. Native retries have no new user
+	// message and therefore retain this owner; a queued replacement directive does
+	// emit a user message and transfers ownership before its assistant response.
+	let agentOwner: LoopState | undefined;
+	let agentOwnerCaptured = false;
 
 	function renderStatus(ctx: ExtensionContext): void {
 		const label = loop?.change ?? (loop?.goal ? "(distilling goal)" : "(distilling)");
@@ -741,17 +746,33 @@ export default function (pi: ExtensionAPI) {
 		return { messages: view };
 	});
 
+	pi.on("agent_start", async () => {
+		if (!agentOwnerCaptured) {
+			agentOwner = loop;
+			agentOwnerCaptured = true;
+		}
+	});
+
+	pi.on("message_start", async (event: any) => {
+		// A replacement/re-arm directive queued during a prior run starts with a new
+		// user message. Transfer ownership there; native retries emit no user message.
+		if (event?.message?.role === "user" && agentOwnerCaptured && agentOwner !== loop) {
+			agentOwner = loop;
+		}
+	});
+
 	pi.on("agent_end", async (event: any, ctx: ExtensionContext) => {
-		// inactive, re-entrant (clarify C1), or a between-turns compaction is in flight
-		// (Lever A: the worker directive is injected in the compaction callback).
-		if (!loop?.active || loop.evaluating || loop.compacting) return;
+		const session = agentOwnerCaptured ? agentOwner : loop;
+		// Ignore a stale run after clear/replacement/re-arm. Its eventual settlement
+		// cannot mutate the current loop, and a queued replacement user message will
+		// transfer ownership before that loop's assistant response.
+		if (!session?.active || loop !== session || session.evaluating || session.compacting) return;
 
 		const last = (Array.isArray(event?.messages) ? event.messages : [])
 			.slice()
 			.reverse()
 			.find((m: any) => m?.role === "assistant");
 		const stopReason: string | undefined = typeof last?.stopReason === "string" ? last.stopReason : undefined;
-		const session = loop;
 
 		// Explicit user abort remains immediately terminal. It must never wait for or
 		// be undone by a later settlement signal.
@@ -927,9 +948,11 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_settled", async (_event: any, ctx: ExtensionContext) => {
-		const session = loop;
+		const session = agentOwnerCaptured ? agentOwner : loop;
+		agentOwner = undefined;
+		agentOwnerCaptured = false;
 		const last = session?.pendingError;
-		if (!session?.active || !last || session.evaluating || session.compacting) return;
+		if (!session?.active || loop !== session || !last || session.evaluating || session.compacting) return;
 		// Another extension may start a new run from an earlier agent_settled handler.
 		// In that case preserve the pending outcome; its eventual clean/error boundary
 		// will supersede or settle it without racing that continuation.

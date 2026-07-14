@@ -37,6 +37,18 @@
       - tests/opsx-tui/scripts/run-scenario-s06-interrupt-optional.sh
   - allow_new_files: true
 
+- [x] 2.4 Close blind-verification lifecycle gaps with deterministic scenarios for one-shot and persistent overflow, clear during retry, and named re-arm/replacement during retry; prevent a clean continuation owned by the replaced run from gating the replacement loop. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
+  - intent: fix
+  - files_allowed:
+      - dot_pi/agent/extensions/opsx-loop/index.ts
+      - tests/opsx-tui/SCENARIOS.md
+      - tests/opsx-tui/fixtures/fake-openai-server.mjs
+      - tests/opsx-tui/scripts/run-scenario-s09-overflow-recovery.sh
+      - tests/opsx-tui/scripts/run-scenario-s10-overflow-persistent.sh
+      - tests/opsx-tui/scripts/run-scenario-s11-clear-during-retry.sh
+      - tests/opsx-tui/scripts/run-scenario-s12-rearm-during-retry.sh
+  - allow_new_files: true
+
 ## 3. Validation and spec traceability
 
 - [x] 3.1 Run focused opsx-loop unit tests and all deterministic default TUI scenarios; record AC-to-test evidence and commands in `verify.md` without weakening existing gates. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
