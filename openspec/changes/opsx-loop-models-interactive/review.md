@@ -104,6 +104,10 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
   **per model** (prompt after each pick) for both CLI `opsx models set` and
   `/opsx-loop models set`; author/impl stay one thinking prompt; change scope
   widens to `executable_opsx` interactive path + hermetic tests.
+- 2026-07-14 — propose authored in-session (loop drive-to-green): skipped
+  AskUserQuestion per autonomous loop; assumed EARS mix event/state/unwanted;
+  skipped standalone design.md (plain-M decision-gated; forks in intent);
+  skipped opsx-model-config delta (per-entry suffixes already required).
 
 ## Scope Expansions
 
