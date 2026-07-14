@@ -116,6 +116,8 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
   parse — fix after plan or as next structure unit.
 - 2026-07-14 — plan.md authored (3 steps: mute+register, dispatch bind,
   skill prose).
+- 2026-07-14 — fix opsx-loop ADDED req first-line SHALL (openspec parses
+  only line 1 of requirement body for MUST/SHALL check).
 
 ## Scope Expansions
 

@@ -5,8 +5,8 @@
 
 ### Requirement: Armed Loop Mutes Generic Subagent Tool
 
-WHILE an `/opsx-loop` session is armed for a change, THE opsx-loop extension
-SHALL remove the generic `subagent` tool from the active tool set and SHALL
+THE opsx-loop extension SHALL, WHILE an `/opsx-loop` session is armed for a
+change, remove the generic `subagent` tool from the active tool set and
 expose an `opsx_dispatch` tool for role-bound dispatch. WHEN the loop is
 cleared or stopped, THE extension SHALL restore the prior active tool set so
 `subagent` is available again and `opsx_dispatch` is not required outside an
@@ -30,13 +30,13 @@ armed loop.
 
 ### Requirement: Opsx Dispatch Forces Resolved Role Model
 
-WHILE a loop is armed, WHEN a worker invokes `opsx_dispatch` with a role of
-`review`, `impl`, or (when authoring is delegated) `author`, THE extension
-SHALL resolve that role via the same `opsx models` / exported `OPSX_*`
-contract already used on loop start, SHALL force the resolved model id into
-the subagent spawn path, and SHALL ignore any caller-supplied model id for
-that spawn. THE role value SHALL be the sole source of the model id for the
-spawn.
+THE opsx-loop extension SHALL, WHILE a loop is armed and WHEN a worker
+invokes `opsx_dispatch` with a role of `review`, `impl`, or (when authoring
+is delegated) `author`, resolve that role via the same `opsx models` /
+exported `OPSX_*` contract already used on loop start, force the resolved
+model id into the subagent spawn path, and ignore any caller-supplied model
+id for that spawn. THE role value SHALL be the sole source of the model id
+for the spawn.
 
 #### Scenario: Configured impl role forces model
 - **WHILE** the loop is armed and `impl` resolves to a configured model id
@@ -71,10 +71,10 @@ spawn.
 
 ### Requirement: Review Role Auto Fan-Out
 
-WHILE a loop is armed and the `review` role resolves to a multi-value list,
-WHEN `opsx_dispatch` is invoked with `role: "review"`, THE extension SHALL
-dispatch one blind subagent spawn per list entry in list order, each forced
-to that entry's model id.
+THE opsx-loop extension SHALL, WHILE a loop is armed and the `review` role
+resolves to a multi-value list and WHEN `opsx_dispatch` is invoked with
+`role: "review"`, dispatch one blind subagent spawn per list entry in list
+order, each forced to that entry's model id.
 
 #### Scenario: Multi-review list fans out
 - **WHILE** `OPSX_REVIEW_MODELS` (or the resolved review list) contains two
