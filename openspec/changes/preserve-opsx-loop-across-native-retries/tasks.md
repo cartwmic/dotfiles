@@ -39,7 +39,7 @@
 
 ## 3. Validation and spec traceability
 
-- [ ] 3.1 Run focused opsx-loop unit tests and all deterministic default TUI scenarios; record AC-to-test evidence and commands in `verify.md` without weakening existing gates. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
+- [x] 3.1 Run focused opsx-loop unit tests and all deterministic default TUI scenarios; record AC-to-test evidence and commands in `verify.md` without weakening existing gates. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
   - intent: fix
   - files_allowed:
       - openspec/changes/preserve-opsx-loop-across-native-retries/verify.md
