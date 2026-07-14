@@ -87,11 +87,71 @@ auto-inject.
 
 **4-point test:** Y/N/N/N → ADR candidate N.
 
+### D5: In-memory session bind + unbound guards
+
+**Choice:** `boundKey: string | null` in extension closure memory. `/jira bind`
+sets it; `/jira clear` and process exit clear it (no disk). `/jira sync`,
+`/jira transition`, and `/jira context` refuse with TUI warning and skip MCP
+writes/inject when `boundKey` is null. `/jira show` fetches `get_jira_issue`
+for the bound key (or warns if unbound).
+
+**Alternatives considered:** cwd sidecar / change-artifact — rejected (intent:
+session-only).
+
+**4-point test:** Y/Y/N/Y → ADR candidate N.
+
+### D6: Command surface + search→bind selection
+
+**Choice:** Single `/jira` command with subcommands:
+`on|off|toggle|status|bind|clear|show|search|create|sync|transition|context`.
+`/jira search` calls `search_jira_issues` (text wrapped as JQL
+`summary ~ "…" OR description ~ "…"` when not already JQL-like); presents
+results via `ui` select; selection sets `boundKey`. `/jira create` prompts
+project (from `get_jira_projects`) + issue type (from `get_single_project`) +
+summary, confirms, calls `create_jira_issue`, then binds the new key.
+`/jira status` reports: enabled, boundKey|unbound, lastSyncAt age|never,
+nudgeEveryNTurns, pendingContextInject latch bool.
+
+**Alternatives considered:** separate slash commands per verb — rejected
+(matches `/hindsight` / `/ntfy` single-command pattern).
+
+**4-point test:** Y/N/N/N → ADR candidate N.
+
+### D7: Nudge on agent_end cadence gated by enabled
+
+**Choice:** While `enabled===true`, count `agent_end` events; every
+`nudgeEveryNTurns` (default 5) emit `ui.notify` only — unbound reminder or
+"bound KEY, last sync … — /jira sync | /jira context". Never call MCP write
+tools and never set `pendingContextInject` from the nudge path. While
+`enabled===false`, skip nudge entirely (commands that mutate Jira still work
+so the user can manage manually when nudges are off — status reflects both).
+
+**Clarification:** Master off disables nudges only, not the command surface
+(matches hindsight/ntfy: toggle controls the automatic hook behavior).
+
+**Alternatives considered:** Off disables all `/jira` verbs — rejected
+(manual manage-as-fit requires commands always available when extension
+loaded).
+
+**4-point test:** Y/Y/N/N → ADR candidate N.
+
+### D8: Transport error boundary + secret-safe messages
+
+**Choice:** Every MCP connect/callTool path wrapped try/catch. On failure:
+`ui.notify(..., "warning")` with sanitized message (strip bearer tokens,
+`access_token`/`refresh_token` substrings, Authorization headers); never
+rethrow into the agent turn; never log raw tokens. OAuth expiry is one case
+of this general boundary (user re-auths via existing mcp-remote flow).
+
+**Alternatives considered:** Fail closed / crash extension — rejected.
+
+**4-point test:** Y/Y/N/Y → ADR candidate N.
+
 ## Risks / Trade-offs
 
 | # | Risk | Likelihood | Severity | Mitigation |
 |---|---|---|---|---|
-| R1 | OAuth token expiry mid-session | Medium | Medium | Surface warning; user re-auth via existing mcp-remote flow; never crash |
+| R1 | OAuth/connect/tool failure mid-session | Medium | Medium | D8: warn + sanitize; never crash; never block unrelated turns |
 | R2 | Second mcp-remote process cost | Low | Low | Lazy connect; single shared client |
 | R3 | Tool schema drift vs MCP server | Medium | Medium | Thin wrappers; tests mock shapes; README notes raw names |
 | R4 | One-shot before_agent_start latch misread as auto-inject | Low | High | Spec + code comments; latch cleared after one consume; no inject when latch false |

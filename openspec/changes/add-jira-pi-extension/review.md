@@ -125,3 +125,5 @@ attested integration-checkout HEAD of that round.
 
 | Round | Fidelity | Per-judge verdicts | Attested HEAD |
 |---|---|---|---|
+| 1 | violated | anthropic/claude-sonnet-5:violated | d8bb77eb9b428488ae633058a965897888846c44 |
+| 2 | <pending re-seal after D5–D8> | — | — |
