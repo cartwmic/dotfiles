@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// AC: opsx-loop.interrupt-or-error-stops-the-loop
 import http from "node:http";
 import fs from "node:fs";
 
@@ -6,6 +7,11 @@ const readyPath = process.argv[2];
 const logPath = process.argv[3];
 const delayMs = Number.parseInt(process.env.FAKE_OPENAI_DELAY_MS || "0", 10) || 0;
 const responseText = process.env.FAKE_OPENAI_RESPONSE || "fake opsx tui response";
+const statusSequence = (process.env.FAKE_OPENAI_STATUS_SEQUENCE || "")
+  .split(",")
+  .map((value) => Number.parseInt(value.trim(), 10))
+  .filter((value) => Number.isInteger(value) && value >= 100 && value <= 599);
+let completionRequestIndex = 0;
 
 if (!readyPath || !logPath) {
   console.error("usage: fake-openai-server.mjs <ready-path> <log-path>");
@@ -33,6 +39,20 @@ const server = http.createServer(async (req, res) => {
       try { parsed = JSON.parse(body); } catch {}
       const model = parsed.model || "smoke";
       const stream = parsed.stream !== false;
+      const status = statusSequence[completionRequestIndex] ?? 200;
+      completionRequestIndex += 1;
+
+      if (status < 200 || status >= 300) {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          error: {
+            message: `fake provider HTTP ${status}`,
+            type: "server_error",
+            code: "fake_status_sequence",
+          },
+        }));
+        return;
+      }
 
       if (stream) {
         res.writeHead(200, {
