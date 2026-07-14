@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# AC: opsx-loop.interrupt-or-error-stops-the-loop
 set -euo pipefail
 
 log_dir="${FAKE_OPSX_LOG_DIR:-}"
