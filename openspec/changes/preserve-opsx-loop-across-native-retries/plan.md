@@ -40,7 +40,20 @@ Execution Mode = standard. Apply creates the mandatory `opsx/preserve-opsx-loop-
 - **Verification:** Native-retry success reaches one gate-green landing; exhausted retries stop once; `bun test dot_pi/agent/extensions/opsx-loop/helpers.test.ts` passes; existing s03 and s06 semantics remain.
 - **Rollback:** Revert the step commit, retaining failing scenarios as defect evidence.
 
-## Plan step 4: Validate and retain evidence
+## Plan step 4: Close blind-verification lifecycle gaps
+
+- **Covers:** T2.4
+- **Pre-conditions:** Initial blind verification identifies missing overflow and stale-ownership lifecycle coverage.
+- **Action:**
+  1. Make fake provider error text configurable so deterministic HTTP 400 responses can model provider-neutral context overflow.
+  2. Add one-shot and persistent-overflow scenarios proving settled recovery is bounded.
+  3. Add clear-during-retry and named-re-arm-during-retry scenarios proving stale error/clean outcomes cannot affect a cleared or replacement loop.
+  4. Track top-level run ownership across low-level retries and transfer it only when a queued replacement user directive starts.
+  5. Run all added scenarios and commit `test(opsx-loop): close settled lifecycle gaps`.
+- **Verification:** s09–s12 pass; old retry gate count remains one; replacement gate count advances only after its own directive.
+- **Rollback:** Revert the step commit and retain the initial red verification finding.
+
+## Plan step 5: Validate and retain evidence
 
 - **Covers:** T3.1
 - **Pre-conditions:** Steps 1–3 committed; every implementation task checkbox reflects worktree state.
