@@ -1,6 +1,6 @@
 {
   "apiUrl": "https://hindsight-api.internal.cartwmic.com",
-  "bankId": "cartwmic",
+  "bankId": "{{ if eq .profile "axon-work-computer" }}work{{ else }}cartwmic{{ end }}",
   "apiToken": "",
   "autoRecall": true,
   "autoRetain": true,
