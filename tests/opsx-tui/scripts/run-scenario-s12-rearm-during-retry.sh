@@ -7,6 +7,9 @@ source "$(dirname "$0")/scenario-lib.sh"
 export FAKE_OPSX_GATE_MODE=sequence
 export FAKE_OPSX_GATE_SEQUENCE=1,0
 export FAKE_OPENAI_STATUS_SEQUENCE=500,200,200
+# Replacement turn-0 gate outlasts Pi's first retry delay, forcing the old
+# retry to finish inside the async invalidation window this scenario guards.
+export FAKE_OPSX_GATE_DELAY_SECONDS=3
 scn_setup "s12-rearm-during-retry"
 scn_make_change "old-retry-change"
 scn_make_change "replacement-change"

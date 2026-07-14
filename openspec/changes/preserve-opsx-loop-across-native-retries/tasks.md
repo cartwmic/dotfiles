@@ -43,6 +43,7 @@
       - dot_pi/agent/extensions/opsx-loop/index.ts
       - tests/opsx-tui/SCENARIOS.md
       - tests/opsx-tui/fixtures/fake-openai-server.mjs
+      - tests/opsx-tui/fixtures/fake-opsx.sh
       - tests/opsx-tui/scripts/run-scenario-s09-overflow-recovery.sh
       - tests/opsx-tui/scripts/run-scenario-s10-overflow-persistent.sh
       - tests/opsx-tui/scripts/run-scenario-s11-clear-during-retry.sh
