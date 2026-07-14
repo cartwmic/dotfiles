@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildModelEnv, classifyDoneness, clearHoldText, describeCompactPolicy, donenessRatchet, formatInventory, gateFailKey, hashDir, isContextOverflowError, listIntentChanges, OPSX_MODEL_ENV_KEYS, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, resolveCompactPercent, resolveCompactThresholdTokens, stripLoopHold, verdictFromExit, ELIDE_STUB, resolveElideKeepPercent, resolveElideBandPercent, resolveElideMaxKeepTokens, resolveElideBandTokens, estimateMessageTokens, tokenBudgetBoundary, elideToolResultBodies } from "./helpers.ts";
+import { buildModelEnv, classifyDoneness, clearHoldText, describeCompactPolicy, donenessRatchet, formatInventory, gateFailKey, hashDir, isContextOverflowError, listIntentChanges, OPSX_MODEL_ENV_KEYS, OPSX_DISPATCH_TOOL_NAME, SUBAGENT_TOOL_NAME, applyArmedToolSet, restoreToolSetAfterClear, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, resolveCompactPercent, resolveCompactThresholdTokens, stripLoopHold, verdictFromExit, ELIDE_STUB, resolveElideKeepPercent, resolveElideBandPercent, resolveElideMaxKeepTokens, resolveElideBandTokens, estimateMessageTokens, tokenBudgetBoundary, elideToolResultBodies } from "./helpers.ts";
 
 type TR = { role: string; content: unknown; toolCallId?: string; toolName?: string };
 const asst = (id: string) => ({ role: "assistant", content: [{ type: "text", text: "call" }, { type: "toolCall", id, name: "bash", arguments: {} }] });
@@ -21,6 +21,32 @@ function convo(n: number) {
 	}
 	return msgs;
 }
+
+describe("armed tool mute — opsx-loop.armed-loop-mutes-generic-subagent-tool", () => {
+	test("arm drops subagent and exposes opsx_dispatch", () => {
+		const armed = applyArmedToolSet(["read", "bash", SUBAGENT_TOOL_NAME, "edit"]);
+		expect(armed).not.toContain(SUBAGENT_TOOL_NAME);
+		expect(armed).toContain(OPSX_DISPATCH_TOOL_NAME);
+		expect(armed).toContain("read");
+		expect(armed).toContain("bash");
+		expect(armed).toContain("edit");
+	});
+	test("arm is idempotent if opsx_dispatch already in snapshot", () => {
+		const armed = applyArmedToolSet(["read", OPSX_DISPATCH_TOOL_NAME, SUBAGENT_TOOL_NAME]);
+		expect(armed.filter((n) => n === OPSX_DISPATCH_TOOL_NAME)).toHaveLength(1);
+		expect(armed).not.toContain(SUBAGENT_TOOL_NAME);
+	});
+	test("clear restores prior snapshot exactly", () => {
+		const snap = ["read", "bash", SUBAGENT_TOOL_NAME];
+		expect(restoreToolSetAfterClear(snap, ["read", OPSX_DISPATCH_TOOL_NAME])).toEqual(snap);
+	});
+	test("clear without snapshot drops opsx_dispatch only", () => {
+		expect(restoreToolSetAfterClear(undefined, ["read", OPSX_DISPATCH_TOOL_NAME, "bash"])).toEqual([
+			"read",
+			"bash",
+		]);
+	});
+});
 
 describe("parseLoopHold / stripLoopHold — opsx-loop.loop-hold-blocks-continuation", () => {
 	const FM = (body: string) => `---\n${body}\n---\n# Review\n`;

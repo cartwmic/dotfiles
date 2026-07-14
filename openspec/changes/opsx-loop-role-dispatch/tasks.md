@@ -3,7 +3,7 @@
 
 ## 1. Armed-loop tool mute + opsx_dispatch surface
 
-- [ ] 1.1 Register `opsx_dispatch` tool on the opsx-loop extension; on arm snapshot active tools, drop `subagent`, activate `opsx_dispatch`; on clear/stop restore snapshot exactly
+- [x] 1.1 Register `opsx_dispatch` tool on the opsx-loop extension; on arm snapshot active tools, drop `subagent`, activate `opsx_dispatch`; on clear/stop restore snapshot exactly
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/**
@@ -31,7 +31,7 @@
 
 ## 3. Agent-independent tests
 
-- [ ] 3.1 Add hermetic tests for arm/clear tool-set swap citing `opsx-loop.armed-loop-mutes-generic-subagent-tool`
+- [x] 3.1 Add hermetic tests for arm/clear tool-set swap citing `opsx-loop.armed-loop-mutes-generic-subagent-tool`
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/**

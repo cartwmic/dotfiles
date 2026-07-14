@@ -65,6 +65,45 @@ export const OPSX_MODEL_ENV_KEYS = [
 	"OPSX_AUTHOR_IN_SESSION",
 ] as const;
 
+/** Generic subagent tool name muted while an opsx-loop is armed. */
+export const SUBAGENT_TOOL_NAME = "subagent";
+
+/** Loop-scoped role-dispatch tool activated while an opsx-loop is armed. */
+export const OPSX_DISPATCH_TOOL_NAME = "opsx_dispatch";
+
+/**
+ * Build the active tool set for an armed loop: drop `subagent`, ensure
+ * `opsx_dispatch` is present, preserve other tools from the pre-arm snapshot.
+ * (opsx-loop.armed-loop-mutes-generic-subagent-tool)
+ */
+export function applyArmedToolSet(toolsBeforeArm: string[]): string[] {
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const name of toolsBeforeArm) {
+		if (name === SUBAGENT_TOOL_NAME || name === OPSX_DISPATCH_TOOL_NAME) continue;
+		if (seen.has(name)) continue;
+		seen.add(name);
+		out.push(name);
+	}
+	if (!seen.has(OPSX_DISPATCH_TOOL_NAME)) {
+		out.push(OPSX_DISPATCH_TOOL_NAME);
+	}
+	return out;
+}
+
+/**
+ * Restore tools after clear/stop. Prefer the exact pre-arm snapshot; if absent,
+ * drop `opsx_dispatch` from the current set (fail-safe disarmed state).
+ * (opsx-loop.armed-loop-mutes-generic-subagent-tool)
+ */
+export function restoreToolSetAfterClear(
+	toolsBeforeArm: string[] | undefined,
+	currentActive: string[],
+): string[] {
+	if (toolsBeforeArm !== undefined) return [...toolsBeforeArm];
+	return currentActive.filter((n) => n !== OPSX_DISPATCH_TOOL_NAME);
+}
+
 /** Parse one `opsx models <role> --json` stdout line; null on malformed input. */
 export function parseModelsJson(stdout: string): ResolvedModel | null {
 	try {
