@@ -94,6 +94,7 @@ rationale. Keep the front-matter, the table, and these notes consistent. -->
 
 <!-- Transient observations appended during apply. One-line entries when a
 non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -->
+- 2026-07-14 — R1 code-review: sonnet=fail (P1 fzf multi order), opus=pass; fixed sequential fzf picks + hermetic order test; re-dispatch R2
 
 - 2026-07-14 — review.md authored from schema template at loop start
   (openspec-loop); Scale/modes from frozen intent.md.
