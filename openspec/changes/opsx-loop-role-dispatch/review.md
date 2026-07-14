@@ -108,6 +108,9 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
   change's product, not to loop orchestrator consumption of review.md pins.
 - 2026-07-14 — proposal.md authored (plain-M: Open Questions + deterministic
   analyze inline; design/clarify/analyze.md skipped per Scale).
+- 2026-07-14 — delta specs: opsx-loop (ADDED mute/dispatch/fan-out/library),
+  opsx-skill-integration (MODIFIED honor-role-models for armed path),
+  opsx-model-config (MODIFIED author-in-session best-effort narrow).
 
 ## Scope Expansions
 
