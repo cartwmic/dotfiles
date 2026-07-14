@@ -14,7 +14,7 @@
 
 ## 2. Native-retry lifecycle regression coverage
 
-- [ ] 2.1 Extend the deterministic fake OpenAI server with an opt-in per-request HTTP status sequence while retaining existing all-success behavior for every current scenario. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
+- [x] 2.1 Extend the deterministic fake OpenAI server with an opt-in per-request HTTP status sequence while retaining existing all-success behavior for every current scenario. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
   - intent: feature
   - files_allowed:
       - tests/opsx-tui/fixtures/fake-openai-server.mjs
