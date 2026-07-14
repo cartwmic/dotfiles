@@ -27,6 +27,7 @@ No default scenario needs hosted model credentials.
 | `s05-hold-rearm` | `opsx-loop.tui-scenarios-exercise-deterministic-loop-states`: `loop_hold` stops continuation and named re-arm clears it |
 | `s06-interrupt-optional` | Optional interrupt smoke; skipped unless `OPSX_TUI_ENABLE_INTERRUPT=1` |
 | `s07-native-retry` | `opsx-loop.interrupt-or-error-stops-the-loop`: scripted HTTP 500 then success proves Pi-native retry remains under the active loop and reaches exactly one post-success gate evaluation |
+| `s08-retry-exhausted` | `opsx-loop.interrupt-or-error-stops-the-loop`: four scripted HTTP 500 responses exhaust Pi's native budget, produce one settled opsx stop, and trigger no opsx-owned retry |
 
 ## Running
 

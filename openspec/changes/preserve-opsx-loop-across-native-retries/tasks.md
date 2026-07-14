@@ -28,7 +28,7 @@
       - tests/opsx-tui/scripts/run-scenario-s07-native-retry.sh
   - allow_new_files: true
 
-- [ ] 2.3 Add a final-error TUI scenario or equivalent deterministic lifecycle assertion proving exhausted native retries produce one visible stop and no opsx-owned provider retry, and retain regression coverage for explicit clear/interrupt behavior. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
+- [x] 2.3 Add a final-error TUI scenario or equivalent deterministic lifecycle assertion proving exhausted native retries produce one visible stop and no opsx-owned provider retry, and retain regression coverage for explicit clear/interrupt behavior. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
   - intent: feature
   - files_allowed:
       - tests/opsx-tui/SCENARIOS.md
