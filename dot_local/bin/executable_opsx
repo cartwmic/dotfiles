@@ -256,13 +256,24 @@ EOF
 		fi
 	}
 	# Pick models from catalog. $1=multi(0|1). Uses fzf if present (unless OPSX_MODELS_NO_FZF=1).
+	# Multi + fzf: sequential single-select (esc/cancel ends). fzf -m emits catalog
+	# order, which would violate "selection order = list order"; sequential picks
+	# preserve the order the user chose.
 	pick_models() {
-		local multi="$1" catalog fzf_cmd="${OPSX_MODELS_FZF_CMD:-fzf}" picked
+		local multi="$1" catalog fzf_cmd="${OPSX_MODELS_FZF_CMD:-fzf}" picked remaining pick
 		catalog="$(models_catalog)" || return 1
 		[ -n "$catalog" ] || { err "pi --list-models produced no parseable models"; return 1; }
 		if [ -z "${OPSX_MODELS_NO_FZF:-}" ] && command -v "$fzf_cmd" >/dev/null 2>&1; then
 			if [ "$multi" -eq 1 ]; then
-				picked="$(printf '%s\n' "$catalog" | "$fzf_cmd" -m --prompt 'review models> ')" || true
+				remaining="$catalog"
+				picked=""
+				while [ -n "$remaining" ]; do
+					pick="$(printf '%s\n' "$remaining" | "$fzf_cmd" --prompt 'review model (esc when done)> ')" || break
+					[ -z "$pick" ] && break
+					picked+="$pick"$'\n'
+					remaining="$(printf '%s\n' "$remaining" | grep -vxF -- "$pick" || true)"
+				done
+				picked="${picked%$'\n'}"
 			else
 				picked="$(printf '%s\n' "$catalog" | "$fzf_cmd" --prompt 'model> ')" || true
 			fi
