@@ -1,13 +1,13 @@
 <!-- authored: in-session -->
 ## 1. CLI per-model review thinking
 
-- [ ] 1.1 Change interactive review thinking so each sequential pick gets its own `pick_thinking_level` before the next pick; keep author/impl as one shared prompt after the single pick
+- [x] 1.1 Change interactive review thinking so each sequential pick gets its own `pick_thinking_level` before the next pick; keep author/impl as one shared prompt after the single pick
   - intent: feature
   - files_allowed:
       - dot_local/bin/executable_opsx
   - allow_new_files: false
 
-- [ ] 1.2 Add hermetic test(s) that interactive review with mixed thinking levels stores distinct per-entry suffixes (cite `opsx-cli.interactive-models-set`)
+- [x] 1.2 Add hermetic test(s) that interactive review with mixed thinking levels stores distinct per-entry suffixes (cite `opsx-cli.interactive-models-set`)
   - intent: feature
   - files_allowed:
       - tests/opsx-models/**
