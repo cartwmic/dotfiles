@@ -5,6 +5,9 @@
 #   opsx-model-config.role-model-resolver
 #   opsx-model-config.layered-resolution-order
 #   opsx-model-config.config-conventions
+#   opsx-model-config.thinking-suffix-passthrough
+#   opsx-cli.interactive-models-set
+#   opsx-cli.model-config-write-surface
 set -uo pipefail
 
 OPSX="$(cd "$(dirname "$0")/../.." && pwd)/dot_local/bin/executable_opsx"
@@ -222,6 +225,40 @@ printf '1\nskip\n' >"$TMP/answers-miss"
 irc=$?
 eq "interactive-models-set: missing pi exits non-zero" "1" "$irc"
 rm -f "$FAKE_PI"
+
+# fzf multi path: sequential picks preserve selection order (not catalog order)
+# opsx-cli.interactive-models-set
+clear_env; : >"$USERCFG"
+FAKE_PI="$(mktemp)"; chmod +x "$FAKE_PI"
+cat >"$FAKE_PI" <<'PI'
+#!/bin/sh
+cat <<'OUT'
+provider      model                                                          context  max-out  thinking  images
+cursor        composer-2.5                                                   200K     16.4K    no        yes
+anthropic     claude-sonnet-5                                                1M       128K     yes       yes
+OUT
+PI
+FAKE_FZF="$(mktemp)"; chmod +x "$FAKE_FZF"
+FZF_SEQ="$(mktemp)"
+# selection order opposite catalog: sonnet first, then composer, then cancel
+printf '%s\n' 'anthropic/claude-sonnet-5' 'cursor/composer-2.5' >"$FZF_SEQ"
+cat >"$FAKE_FZF" <<'FZF'
+#!/bin/sh
+# Pop one line from OPSX_MODELS_FZF_SEQ_FILE per invocation; empty/fail ends multi loop.
+seqf="${OPSX_MODELS_FZF_SEQ_FILE:-}"
+[ -n "$seqf" ] && [ -f "$seqf" ] || exit 1
+line="$(head -n1 "$seqf" 2>/dev/null || true)"
+if [ -z "$line" ]; then exit 1; fi
+tail -n +2 "$seqf" >"$seqf.tmp" && mv "$seqf.tmp" "$seqf"
+printf '%s\n' "$line"
+FZF
+printf 'skip\n' >"$TMP/answers-fzf-order"
+( cd "$ROOT"; OPSX_MODELS_FORCE_INTERACTIVE=1 OPSX_MODELS_PI_CMD="$FAKE_PI" \
+	OPSX_MODELS_FZF_CMD="$FAKE_FZF" OPSX_MODELS_FZF_SEQ_FILE="$FZF_SEQ" \
+	"$OPSX" models set review <"$TMP/answers-fzf-order" ) >/dev/null 2>&1
+eq "interactive-models-set: fzf sequential picks keep selection order" "anthropic/claude-sonnet-5
+cursor/composer-2.5" "$(run review)"
+rm -f "$FAKE_PI" "$FAKE_FZF" "$FZF_SEQ"
 
 echo "-----"
 echo "opsx models: $pass passed, $failc failed"
