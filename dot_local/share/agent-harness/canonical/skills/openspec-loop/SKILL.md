@@ -303,7 +303,9 @@ Exception: the user explicitly reconfigures the `review` role (log it in the
 ledger; applies to subsequent rounds only).
 (opsx-adversarial-review.reviewer-model-stability)
 
-Capability hook `subagent-dispatch`: use the host adapter (e.g. pi-subagents) when
+Capability hook `subagent-dispatch`: WHILE `/opsx-loop` is armed, route role-bound
+review/impl/(opt-in author) work through `opsx_dispatch` (generic `subagent` is
+muted). WHILE disarmed, use the host adapter (e.g. pi-subagents / `subagent`) when
 registered; if none, run inline, mark `review_mode: degraded-single-model`, and tell
 the user it does not satisfy a gating-required review — recommend running
 `adversarial-review-cycle` manually.
@@ -358,11 +360,33 @@ The orchestrator CONSUMES harness-neutral model config (it does not own it). The
 opsx-loop pi extension exports `OPSX_AUTHOR_MODEL` / `OPSX_REVIEW_MODELS` /
 `OPSX_IMPL_MODEL` / `OPSX_AUTHOR_IN_SESSION` on loop start; from any harness, resolve
 directly with `opsx models <role> --change <name>` (values are already
-provider-qualified). Dispatch one blind reviewer per configured `review` model and
-pass `impl` to implementation subagents, each verbatim as the subagent `model:`.
-Author artifacts in-session by default (write the `<!-- authored: in-session -->`
-marker); delegate authoring only when `OPSX_AUTHOR_IN_SESSION` is `false`. Unset roles
-fall back to the session/default model — never hard-fail.
+provider-qualified).
+
+### Armed loop (`/opsx-loop` active)
+
+WHILE the loop is armed, role-bound review / impl / (opt-in author) dispatch MUST
+go through `opsx_dispatch` — NOT the generic `subagent` tool with a soft-honored
+`model:` argument (`subagent` is muted for the armed session).
+
+- Call `opsx_dispatch({ role: "review"|"impl"|"author", task, agent? })`.
+- Role is the sole model source: any caller `model` is ignored.
+- `role: "review"` — ONE call; the tool auto fan-outs one spawn per configured
+  review model in list order. Do NOT loop callerside over review models.
+- `role: "impl"` — ONE call; tool forces the resolved impl model.
+- `role: "author"` — only when `OPSX_AUTHOR_IN_SESSION` is `false` (opt-in
+  delegated authoring); otherwise author in-session with the
+  `<!-- authored: in-session -->` marker.
+- Unset role → `opsx_dispatch` refuses with an actionable `opsx models set`
+  hint. Treat that refusal as correct — do NOT fall back to the session model
+  and do NOT retry via generic `subagent`.
+
+### Disarmed sessions (no loop)
+
+WHILE no loop is armed, skills MAY use the generic `subagent` tool. Pass each
+configured review/impl model verbatim as `model:` when known. Unset roles fall
+back to the session/default model — never hard-fail on the disarmed path.
+`opsx_dispatch` is armed-loop-only; do not require it when disarmed.
+
 (opsx-skill-integration.skills-honor-configured-role-models)
 
 ## Stop conditions

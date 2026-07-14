@@ -21,7 +21,7 @@
 
 ## 2. Skill routing (armed vs disarmed)
 
-- [ ] 2.1 Update `openspec-loop` skill (+ related refs that dispatch role-bound subagents) to require `opsx_dispatch` for review/impl/(opt-in author) while loop armed; document disarmed generic `subagent` path and unset-role refuse on armed path
+- [x] 2.1 Update `openspec-loop` skill (+ related refs that dispatch role-bound subagents) to require `opsx_dispatch` for review/impl/(opt-in author) while loop armed; document disarmed generic `subagent` path and unset-role refuse on armed path
   - intent: feature
   - files_allowed:
       - dot_local/share/agent-harness/canonical/skills/openspec-loop/**
