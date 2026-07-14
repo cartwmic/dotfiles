@@ -376,6 +376,8 @@ export default function (pi: ExtensionAPI) {
 	// emit a user message and transfers ownership before its assistant response.
 	let agentOwner: LoopState | undefined;
 	let agentOwnerCaptured = false;
+	let armGeneration = 0;
+	let pendingArm: { generation: number; label: string } | undefined;
 	// Exact queued directive that may transfer an in-flight top-level run to a
 	// replacement loop. Unrelated steering/follow-up user messages remain owned by
 	// the prior run and can never settle or gate the replacement.
@@ -392,9 +394,14 @@ export default function (pi: ExtensionAPI) {
 
 	function clearLoop(ctx: ExtensionContext): void {
 		loop = undefined;
+		armGeneration += 1;
+		pendingArm = undefined;
 		pendingOwnerTransfer = undefined;
 		renderStatus(ctx);
 	}
+
+	const armDirective = (directive: string, generation: number) =>
+		`${directive}\n\n[opsx-loop arm generation: ${generation}]`;
 
 	function userMessageText(message: any): string {
 		if (message?.role !== "user") return "";
@@ -404,6 +411,21 @@ export default function (pi: ExtensionAPI) {
 			.filter((part: any) => part?.type === "text" && typeof part.text === "string")
 			.map((part: any) => part.text)
 			.join("\n");
+	}
+
+	function compactionWasAborted(error: any, ctx: ExtensionContext): boolean {
+		if (ctx.signal?.aborted || error?.name === "AbortError") return true;
+		const text = `${error?.name ?? ""} ${error?.message ?? error ?? ""}`.toLowerCase();
+		return /\babort(?:ed)?\b|\bcancell?ed\b/.test(text);
+	}
+
+	function landCompactionAbort(session: LoopState, ctx: ExtensionContext): void {
+		session.compacting = false;
+		renderStatus(ctx);
+		if (loop !== session || !session.active) return;
+		const c = session.change ?? (session.goal ? `goal "${session.goal}"` : "conversation");
+		clearLoop(ctx);
+		ctx.ui.notify(`⟳ opsx-loop stopped (aborted): ${c}`, "warning");
 	}
 
 	// Inject the next worker continuation turn, optionally preceded by a proactive
@@ -465,8 +487,8 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		// Compact, then inject in the callback. `compacting` gates a stray agent_end out
-		// of the compaction window; both callbacks clear it and inject so a compaction
-		// error never drops the turn.
+		// of the compaction window. Ordinary compaction failure degrades to direct
+		// inject; explicit abort/cancel lands without resurrecting the loop.
 		session.compacting = true;
 		renderStatus(ctx);
 		const notifyMsg =
@@ -479,16 +501,23 @@ export default function (pi: ExtensionAPI) {
 			renderStatus(ctx);
 			inject();
 		};
+		const failed = (error: any) => {
+			if (compactionWasAborted(error, ctx)) {
+				landCompactionAbort(session, ctx);
+				return;
+			}
+			done();
+		};
 		try {
 			ctx.compact({
 				customInstructions: OPSX_COMPACT_INSTRUCTIONS,
 				onComplete: done,
-				onError: done,
+				onError: failed,
 			});
-		} catch {
-			// Synchronous throw (e.g. compaction already running): fail safe to a
-			// direct inject so the loop never stalls.
-			done();
+		} catch (error) {
+			// Synchronous non-abort throw (e.g. compaction already running) degrades
+			// to direct inject; abort always wins.
+			failed(error);
 		}
 	}
 
@@ -608,11 +637,11 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (parsed.mode === "clear") {
-				if (!loop?.active) {
+				if (!loop?.active && !pendingArm) {
 					ctx.ui.notify("No active opsx-loop to clear.", "info");
 					return;
 				}
-				const c = loop.change ?? (loop.goal ? `goal "${loop.goal}"` : "conversation");
+				const c = loop?.change ?? (loop?.goal ? `goal "${loop.goal}"` : pendingArm?.label ?? "conversation");
 				clearLoop(ctx);
 				if (!ctx.isIdle()) ctx.abort();
 				ctx.ui.notify(`Cleared opsx-loop: ${c}`, "info");
@@ -631,6 +660,9 @@ export default function (pi: ExtensionAPI) {
 			if (parsed.mode === "goal") {
 				// Goal/conversation kickoff: no change name yet. Snapshot existing change
 				// dirs, inject the distill directive, and detect the new change on agent_end.
+				const generation = ++armGeneration;
+				pendingArm = undefined;
+				pendingOwnerTransfer = undefined;
 				// Pre-change (distilling) budget: configurable via OPSX_DISTILL_MAX_TURNS
 				// (positive integer). Unset = unbounded; the distill stall guard
 				// (lastDirs, STALL_LIMIT) is the backstop either way.
@@ -655,7 +687,7 @@ export default function (pi: ExtensionAPI) {
 					lastDirs: preDirs.slice(),
 				};
 				renderStatus(ctx);
-				const directive = distillDirective(parsed.goal, ctx.cwd);
+				const directive = armDirective(distillDirective(parsed.goal, ctx.cwd), generation);
 				if (agentOwnerCaptured && agentOwner !== loop) {
 					pendingOwnerTransfer = { session: loop, directive };
 				}
@@ -666,6 +698,9 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// set — replaces any active loop, resolves worktree + budget, starts work.
+			const generation = ++armGeneration;
+			pendingArm = { generation, label: parsed.change };
+			pendingOwnerTransfer = undefined;
 			// Invalidate the old object BEFORE the async turn-0 gate: a native retry can
 			// finish while that subprocess is running, and must not gate or continue the
 			// loop being replaced. Do not abort the old top-level run; its queued retry
@@ -673,7 +708,6 @@ export default function (pi: ExtensionAPI) {
 			// directive transfers ownership on its user message.
 			if (loop?.active) {
 				loop = undefined;
-				pendingOwnerTransfer = undefined;
 				renderStatus(ctx);
 			}
 			// Named re-arm clears any landing hold BEFORE the turn-0 gate evaluation and
@@ -700,6 +734,13 @@ export default function (pi: ExtensionAPI) {
 			// forever. Report it ready to archive instead.
 			const wt0 = resolveWorktree(parsed.change, ctx.cwd);
 			const pre = await runGate(parsed.change, wt0, ctx.signal, ctx.cwd);
+			// A clear or later arm invalidates this async transaction. Never let stale
+			// gate completion resurrect/overwrite a newer loop.
+			if (generation !== armGeneration || ctx.signal?.aborted) {
+				if (pendingArm?.generation === generation) pendingArm = undefined;
+				return;
+			}
+			pendingArm = undefined;
 			if (pre.met) {
 				clearLoop(ctx);
 				ctx.ui.notify(`⟳ opsx-loop: ${parsed.change} already passes opsx gate — ready to archive. Not starting a loop.${holdNote}`, "info");
@@ -718,7 +759,7 @@ export default function (pi: ExtensionAPI) {
 			};
 			renderStatus(ctx);
 			const exported = exportModelEnv(parsed.change, ctx.cwd);
-			const directive = workerDirective(parsed.change);
+			const directive = armDirective(workerDirective(parsed.change), generation);
 			if (agentOwnerCaptured && agentOwner !== loop) {
 				pendingOwnerTransfer = { session: loop, directive };
 			}
@@ -1031,10 +1072,17 @@ export default function (pi: ExtensionAPI) {
 					pi.sendUserMessage(directive, { deliverAs: "followUp" });
 				}
 			};
-			try {
-				ctx.compact({ customInstructions: OPSX_COMPACT_INSTRUCTIONS, onComplete: done, onError: done });
-			} catch {
+			const failed = (error: any) => {
+				if (compactionWasAborted(error, ctx)) {
+					landCompactionAbort(session, ctx);
+					return;
+				}
 				done();
+			};
+			try {
+				ctx.compact({ customInstructions: OPSX_COMPACT_INSTRUCTIONS, onComplete: done, onError: failed });
+			} catch (error) {
+				failed(error);
 			}
 			return;
 		}

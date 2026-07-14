@@ -49,6 +49,9 @@
       - tests/opsx-tui/scripts/run-scenario-s11-clear-during-retry.sh
       - tests/opsx-tui/scripts/run-scenario-s12-rearm-during-retry.sh
       - tests/opsx-tui/scripts/run-scenario-s13-prequeued-rearm.sh
+      - tests/opsx-tui/scripts/run-scenario-s14-clear-pending-arm.sh
+      - tests/opsx-tui/scripts/run-scenario-s15-duplicate-rearm.sh
+      - tests/opsx-tui/scripts/run-scenario-s16-overflow-compact-abort.sh
   - allow_new_files: true
 
 ## 3. Validation and spec traceability
