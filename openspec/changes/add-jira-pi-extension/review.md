@@ -22,8 +22,6 @@ delegation_mode: subagent-required
 # full_rigor=80 (the former L budget). The value is written here at authoring
 # time; the loop runtime reads it verbatim.
 loop_max_iterations: 40
-loop_hold: true
-loop_hold_reason: "design-fidelity escalation valve — two consecutive violated (rounds 1–2); fixes for AC15 (D9) + AC9 latch wording landed unjudged; awaiting human re-arm (/opsx-loop add-jira-pi-extension) to authorize fidelity round 3"
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
@@ -89,6 +87,7 @@ rationale. Keep the front-matter, the table, and these notes consistent. -->
 
 ## Execution Notes
 
+- 2026-07-14 — loop_hold cleared by named re-arm (/opsx-loop add-jira-pi-extension); reason was: design-fidelity escalation valve — two consecutive violated (rounds 1–2); fixes for AC15 (D9) + AC9 latch wording landed unjudged; awaiting human re-arm (/opsx-loop add-jira-pi-extension) to authorize fidelity round 3
 <!-- Transient observations appended during apply. One-line entries when a
 non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -->
 
