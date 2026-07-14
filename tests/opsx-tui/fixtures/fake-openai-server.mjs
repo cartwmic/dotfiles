@@ -7,6 +7,9 @@ const readyPath = process.argv[2];
 const logPath = process.argv[3];
 const delayMs = Number.parseInt(process.env.FAKE_OPENAI_DELAY_MS || "0", 10) || 0;
 const responseText = process.env.FAKE_OPENAI_RESPONSE || "fake opsx tui response";
+const responseSequence = (process.env.FAKE_OPENAI_RESPONSE_SEQUENCE || "").split("|");
+const matchText = process.env.FAKE_OPENAI_MATCH_TEXT || "";
+const matchResponse = process.env.FAKE_OPENAI_MATCH_RESPONSE || "";
 const errorText = process.env.FAKE_OPENAI_ERROR_MESSAGE || "fake provider HTTP {status}";
 const statusSequence = (process.env.FAKE_OPENAI_STATUS_SEQUENCE || "")
   .split(",")
@@ -40,7 +43,12 @@ const server = http.createServer(async (req, res) => {
       try { parsed = JSON.parse(body); } catch {}
       const model = parsed.model || "smoke";
       const stream = parsed.stream !== false;
-      const status = statusSequence[completionRequestIndex] ?? 200;
+      const requestIndex = completionRequestIndex;
+      const status = statusSequence[requestIndex] ?? 200;
+      const requestResponseText =
+        matchText && matchResponse && body.includes(matchText)
+          ? matchResponse
+          : responseSequence[requestIndex] || responseText;
       completionRequestIndex += 1;
 
       if (status < 200 || status >= 300) {
@@ -69,7 +77,7 @@ const server = http.createServer(async (req, res) => {
           choices: [{ index: 0, delta, finish_reason }],
         });
         res.write(`data: ${JSON.stringify(chunk({ role: "assistant" }))}\n\n`);
-        res.write(`data: ${JSON.stringify(chunk({ content: responseText }))}\n\n`);
+        res.write(`data: ${JSON.stringify(chunk({ content: requestResponseText }))}\n\n`);
         res.write(`data: ${JSON.stringify(chunk({}, "stop"))}\n\n`);
         res.write("data: [DONE]\n\n");
         res.end();
@@ -82,7 +90,7 @@ const server = http.createServer(async (req, res) => {
         object: "chat.completion",
         created: Math.floor(Date.now() / 1000),
         model,
-        choices: [{ index: 0, message: { role: "assistant", content: responseText }, finish_reason: "stop" }],
+        choices: [{ index: 0, message: { role: "assistant", content: requestResponseText }, finish_reason: "stop" }],
         usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
       }));
       return;
