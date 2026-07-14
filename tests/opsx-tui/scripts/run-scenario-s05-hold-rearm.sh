@@ -31,19 +31,36 @@ scn_assert_pane "loop_hold.*decision audit in code-review.md round 1|decision au
 
 scn_send "/opsx-loop held-change"
 
-if grep -q "loop_hold: true" "$SCENARIO_CWD/openspec/changes/held-change/review.md"; then
+# Named re-arm performs async turn-0 gate work before clearing the hold. Wait on
+# durable review.md state instead of racing the slash-command handler.
+review_file="$SCENARIO_CWD/openspec/changes/held-change/review.md"
+expected_note="loop_hold cleared by named re-arm (/opsx-loop held-change); reason was: decision audit in code-review.md round 1"
+deadline=$((SECONDS + 20))
+while (( SECONDS < deadline )); do
+  if ! grep -q "loop_hold: true" "$review_file" && grep -qF "$expected_note" "$review_file"; then
+    break
+  fi
+  sleep 0.1
+done
+
+if grep -q "loop_hold: true" "$review_file"; then
   echo "FAIL: loop_hold still present after re-arm" >&2
   SCN_FAILED=1
 else
   echo "PASS: loop_hold cleared from review.md"
 fi
 
-if grep -q "loop_hold cleared by named re-arm (/opsx-loop held-change); reason was: decision audit in code-review.md round 1" "$SCENARIO_CWD/openspec/changes/held-change/review.md"; then
+if grep -qF "$expected_note" "$review_file"; then
   echo "PASS: named re-arm preserved previous hold reason in Execution Notes"
 else
   echo "FAIL: named re-arm did not preserve previous hold reason in Execution Notes" >&2
-  cat "$SCENARIO_CWD/openspec/changes/held-change/review.md" >&2
+  cat "$review_file" >&2
   SCN_FAILED=1
 fi
+
+# Re-arm queued a delayed worker request. Clear it before teardown so no child
+# process can recreate temp-tree log paths while cleanup removes the tree.
+scn_send "/opsx-loop clear"
+scn_assert_pane "Cleared opsx-loop: held-change" "hold scenario drains active re-arm before cleanup" 20
 
 scn_finish
