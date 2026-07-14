@@ -28,6 +28,9 @@ import {
 	OPSX_DISPATCH_TOOL_NAME,
 	applyArmedToolSet,
 	restoreToolSetAfterClear,
+	planOpsxDispatch,
+	runOpsxDispatchSpawns,
+	type OpsxDispatchRole,
 	resolveCompactThresholdTokens,
 	resolveElideMaxKeepTokens,
 	resolveElideBandTokens,
@@ -45,6 +48,7 @@ import {
 	type ResolvedModel,
 } from "./helpers.ts";
 import { Type } from "typebox";
+import { spawnViaRunSync } from "./spawn.ts";
 
 const STALL_LIMIT = 3; // consecutive identical no-progress gate failures → stop
 
@@ -395,27 +399,44 @@ export default function (pi: ExtensionAPI) {
 					}),
 				),
 			}),
-			async execute(_toolCallId, _params) {
-				// Full resolve/spawn lands in T1.2/T1.3; T1.1 registers + arm-gates the surface.
-				if (!loop?.active) {
+			async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+				const role = params.role as OpsxDispatchRole;
+				const authorInSession = resolveModel("author-in-session", loop?.change ?? "", ctx.cwd);
+				const ais =
+					authorInSession && typeof authorInSession.value === "boolean"
+						? authorInSession.value
+						: true;
+				const resolved = loop?.change
+					? resolveModel(role === "author" ? "author" : role, loop.change, ctx.cwd)
+					: null;
+				const plan = planOpsxDispatch({
+					armed: Boolean(loop?.active && loop.change && !loop.awaitingChange),
+					role,
+					task: params.task,
+					agent: params.agent,
+					callerModel: params.model,
+					resolved,
+					authorInSession: ais,
+				});
+				if (!plan.ok) {
 					return {
-						content: [
-							{
-								type: "text",
-								text: "opsx_dispatch refused: no opsx-loop is armed. Use /opsx-loop <change> first, or the generic subagent tool when disarmed.",
-							},
-						],
-						details: { refused: true, reason: "not-armed" },
+						content: [{ type: "text", text: plan.message }],
+						details: { refused: true, reason: plan.reason },
 					};
 				}
+				const results = await runOpsxDispatchSpawns(plan.spawns, (spec) =>
+					spawnViaRunSync(spec, { cwd: ctx.cwd, signal }),
+				);
+				const text = results.map((r) => r.text).join("\n");
+				const allOk = results.every((r) => r.ok);
 				return {
-					content: [
-						{
-							type: "text",
-							text: "opsx_dispatch: role resolve + spawn not yet wired (apply in progress).",
-						},
-					],
-					details: { refused: true, reason: "not-implemented" },
+					content: [{ type: "text", text }],
+					details: {
+						refused: false,
+						models: results.map((r) => r.model),
+						ok: allOk,
+						count: results.length,
+					},
 				};
 			},
 		});

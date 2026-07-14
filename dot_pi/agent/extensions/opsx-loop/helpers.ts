@@ -104,6 +104,108 @@ export function restoreToolSetAfterClear(
 	return currentActive.filter((n) => n !== OPSX_DISPATCH_TOOL_NAME);
 }
 
+export type OpsxDispatchRole = "review" | "impl" | "author";
+
+export interface OpsxDispatchSpawnSpec {
+	model: string;
+	task: string;
+	agent: string;
+}
+
+export type OpsxDispatchPlan =
+	| { ok: false; reason: "not-armed" | "unset" | "author-in-session"; message: string }
+	| { ok: true; spawns: OpsxDispatchSpawnSpec[] };
+
+function roleConfigured(r: ResolvedModel | null | undefined): r is ResolvedModel {
+	return r != null && r.source !== "unset" && r.source !== "default" && r.value != null;
+}
+
+function modelListFromResolved(r: ResolvedModel): string[] {
+	const v = r.value;
+	if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string" && x.length > 0);
+	if (typeof v === "string" && v.length > 0) return [v];
+	return [];
+}
+
+/**
+ * Pure planner for opsx_dispatch: armed-only, unset=refuse, role sole model
+ * source (caller model ignored), review auto fan-out.
+ * (opsx-loop.opsx-dispatch-forces-resolved-role-model,
+ *  opsx-loop.review-role-auto-fan-out)
+ */
+export function planOpsxDispatch(input: {
+	armed: boolean;
+	role: OpsxDispatchRole;
+	task: string;
+	agent?: string;
+	/** Ignored when role is configured — documented for callers. */
+	callerModel?: string;
+	resolved: ResolvedModel | null;
+	/** When role=author and this is true/undefined, refuse (in-session default). */
+	authorInSession?: boolean | null;
+}): OpsxDispatchPlan {
+	if (!input.armed) {
+		return {
+			ok: false,
+			reason: "not-armed",
+			message:
+				"opsx_dispatch refused: no opsx-loop is armed. Use /opsx-loop <change> first, or the generic subagent tool when disarmed.",
+		};
+	}
+	if (input.role === "author" && input.authorInSession !== false) {
+		return {
+			ok: false,
+			reason: "author-in-session",
+			message:
+				'opsx_dispatch refused: author role is in-session by default. Set author-in-session false (opsx models / review.md) before delegating author via opsx_dispatch.',
+		};
+	}
+	if (!roleConfigured(input.resolved)) {
+		return {
+			ok: false,
+			reason: "unset",
+			message: `opsx_dispatch refused: role "${input.role}" is unset. Configure it with \`opsx models set ${input.role}\` (or change/user/env layers). No session-model fallback on this path.`,
+		};
+	}
+	const models = modelListFromResolved(input.resolved);
+	if (models.length === 0) {
+		return {
+			ok: false,
+			reason: "unset",
+			message: `opsx_dispatch refused: role "${input.role}" resolved empty. Configure it with \`opsx models set ${input.role}\`.`,
+		};
+	}
+	const agent = (input.agent && input.agent.trim()) || "worker";
+	// callerModel intentionally unused — role is sole source
+	void input.callerModel;
+	return {
+		ok: true,
+		spawns: models.map((model) => ({ model, task: input.task, agent })),
+	};
+}
+
+export interface OpsxDispatchSpawnResult {
+	model: string;
+	agent: string;
+	ok: boolean;
+	text: string;
+}
+
+/**
+ * Run planned spawns via an injectable spawn fn (tests stub; production uses
+ * pi-subagents runSync library). (opsx-loop.dispatch-spawns-via-subagent-library)
+ */
+export async function runOpsxDispatchSpawns(
+	spawns: OpsxDispatchSpawnSpec[],
+	spawnFn: (spec: OpsxDispatchSpawnSpec) => Promise<OpsxDispatchSpawnResult>,
+): Promise<OpsxDispatchSpawnResult[]> {
+	const out: OpsxDispatchSpawnResult[] = [];
+	for (const spec of spawns) {
+		out.push(await spawnFn(spec));
+	}
+	return out;
+}
+
 /** Parse one `opsx models <role> --json` stdout line; null on malformed input. */
 export function parseModelsJson(stdout: string): ResolvedModel | null {
 	try {
