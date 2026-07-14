@@ -111,6 +111,9 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
 - 2026-07-14 — delta specs: opsx-loop (ADDED mute/dispatch/fan-out/library),
   opsx-skill-integration (MODIFIED honor-role-models for armed path),
   opsx-model-config (MODIFIED author-in-session best-effort narrow).
+- 2026-07-14 — tasks.md authored (extension mute/dispatch, skill routing,
+  hermetic tests). Structure validate --strict still red on ADDED SHALL
+  parse — fix after plan or as next structure unit.
 
 ## Scope Expansions
 
