@@ -25,6 +25,9 @@ import {
 	listIntentChanges,
 	LOOP_SUBCOMMANDS,
 	OPSX_MODEL_ENV_KEYS,
+	OPSX_DISPATCH_TOOL_NAME,
+	applyArmedToolSet,
+	restoreToolSetAfterClear,
 	resolveCompactThresholdTokens,
 	resolveElideMaxKeepTokens,
 	resolveElideBandTokens,
@@ -41,6 +44,7 @@ import {
 	type LoopVerdict,
 	type ResolvedModel,
 } from "./helpers.ts";
+import { Type } from "typebox";
 
 const STALL_LIMIT = 3; // consecutive identical no-progress gate failures → stop
 
@@ -367,6 +371,69 @@ function runModels(args: string[], cwd: string): { code: number; out: string } {
 
 export default function (pi: ExtensionAPI) {
 	let loop: LoopState | undefined;
+	/** Pre-arm active tool snapshot; restored on clear/stop. */
+	let toolsBeforeArm: string[] | undefined;
+	let opsxDispatchRegistered = false;
+
+	function ensureOpsxDispatchTool(): void {
+		if (opsxDispatchRegistered) return;
+		opsxDispatchRegistered = true;
+		pi.registerTool({
+			name: OPSX_DISPATCH_TOOL_NAME,
+			label: "opsx_dispatch",
+			description:
+				"Armed-loop-only: dispatch role-bound subagent work (review/impl/author) with the resolved opsx role model forced. Refuses when no loop is armed or the role is unset.",
+			parameters: Type.Object({
+				role: Type.Union([Type.Literal("review"), Type.Literal("impl"), Type.Literal("author")], {
+					description: "opsx role whose configured model is forced for the spawn",
+				}),
+				task: Type.String({ description: "Task prompt for the spawned subagent" }),
+				agent: Type.Optional(Type.String({ description: "Optional subagent agent name" })),
+				model: Type.Optional(
+					Type.String({
+						description: "Ignored when role is configured — role is sole model source",
+					}),
+				),
+			}),
+			async execute(_toolCallId, _params) {
+				// Full resolve/spawn lands in T1.2/T1.3; T1.1 registers + arm-gates the surface.
+				if (!loop?.active) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: "opsx_dispatch refused: no opsx-loop is armed. Use /opsx-loop <change> first, or the generic subagent tool when disarmed.",
+							},
+						],
+						details: { refused: true, reason: "not-armed" },
+					};
+				}
+				return {
+					content: [
+						{
+							type: "text",
+							text: "opsx_dispatch: role resolve + spawn not yet wired (apply in progress).",
+						},
+					],
+					details: { refused: true, reason: "not-implemented" },
+				};
+			},
+		});
+	}
+
+	function armRoleDispatchTools(): void {
+		ensureOpsxDispatchTool();
+		if (toolsBeforeArm === undefined) {
+			toolsBeforeArm = pi.getActiveTools();
+		}
+		pi.setActiveTools(applyArmedToolSet(toolsBeforeArm));
+	}
+
+	function restoreRoleDispatchTools(): void {
+		const next = restoreToolSetAfterClear(toolsBeforeArm, pi.getActiveTools());
+		pi.setActiveTools(next);
+		toolsBeforeArm = undefined;
+	}
 
 	function renderStatus(ctx: ExtensionContext): void {
 		const label = loop?.change ?? (loop?.goal ? "(distilling goal)" : "(distilling)");
@@ -378,6 +445,13 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function clearLoop(ctx: ExtensionContext): void {
+		if (toolsBeforeArm !== undefined || pi.getActiveTools().includes(OPSX_DISPATCH_TOOL_NAME)) {
+			try {
+				restoreRoleDispatchTools();
+			} catch {
+				/* best-effort restore; never block clear */
+			}
+		}
 		loop = undefined;
 		renderStatus(ctx);
 	}
@@ -680,6 +754,7 @@ export default function (pi: ExtensionAPI) {
 			};
 			renderStatus(ctx);
 			const exported = exportModelEnv(parsed.change, ctx.cwd);
+			armRoleDispatchTools();
 			pi.sendUserMessage(workerDirective(parsed.change), { deliverAs: "followUp" });
 			const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
 			const ignoredNote = parsed.ignored ? ` (ignored extra input: "${parsed.ignored}")` : "";
