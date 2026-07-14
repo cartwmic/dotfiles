@@ -36,9 +36,9 @@ doneness_mode: required
 
 ## Diff Base + Worktree locator
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
-**Integration Branch:** <detected-at-capture>
+**Diff Base SHA:** a5cc8de5040107e121a199caf845358a395b98d0
+**Worktree Path:** /Users/cartwmic/.local/share/chezmoi--opsx-preserve-opsx-loop-across-native-retries
+**Integration Branch:** main
 
 ## Manual Adjustments
 
