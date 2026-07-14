@@ -47,8 +47,8 @@ Execution Mode = standard. Apply creates the mandatory `opsx/preserve-opsx-loop-
 - **Action:**
   1. Make fake provider error text configurable so deterministic HTTP 400 responses can model provider-neutral context overflow.
   2. Add one-shot and persistent-overflow scenarios proving settled recovery is bounded.
-  3. Add clear-during-retry and named-re-arm-during-retry scenarios proving stale error/clean outcomes cannot affect a cleared or replacement loop.
-  4. Track top-level run ownership across low-level retries and transfer it only when a queued replacement user directive starts.
+  3. Add clear-during-retry, named-re-arm-during-retry, and prequeued-user-work scenarios proving stale error/clean outcomes cannot affect a cleared or replacement loop.
+  4. Track top-level run ownership across low-level retries and transfer it only when the exact queued replacement user directive starts; unrelated steering/follow-up messages retain prior ownership.
   5. Run all added scenarios and commit `test(opsx-loop): close settled lifecycle gaps`.
 - **Verification:** s09–s12 pass; old retry gate count remains one; replacement gate count advances only after its own directive.
 - **Rollback:** Revert the step commit and retain the initial red verification finding.

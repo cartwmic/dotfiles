@@ -376,6 +376,10 @@ export default function (pi: ExtensionAPI) {
 	// emit a user message and transfers ownership before its assistant response.
 	let agentOwner: LoopState | undefined;
 	let agentOwnerCaptured = false;
+	// Exact queued directive that may transfer an in-flight top-level run to a
+	// replacement loop. Unrelated steering/follow-up user messages remain owned by
+	// the prior run and can never settle or gate the replacement.
+	let pendingOwnerTransfer: { session: LoopState; directive: string } | undefined;
 
 	function renderStatus(ctx: ExtensionContext): void {
 		const label = loop?.change ?? (loop?.goal ? "(distilling goal)" : "(distilling)");
@@ -388,7 +392,18 @@ export default function (pi: ExtensionAPI) {
 
 	function clearLoop(ctx: ExtensionContext): void {
 		loop = undefined;
+		pendingOwnerTransfer = undefined;
 		renderStatus(ctx);
+	}
+
+	function userMessageText(message: any): string {
+		if (message?.role !== "user") return "";
+		if (typeof message.content === "string") return message.content;
+		if (!Array.isArray(message.content)) return "";
+		return message.content
+			.filter((part: any) => part?.type === "text" && typeof part.text === "string")
+			.map((part: any) => part.text)
+			.join("\n");
 	}
 
 	// Inject the next worker continuation turn, optionally preceded by a proactive
@@ -640,7 +655,11 @@ export default function (pi: ExtensionAPI) {
 					lastDirs: preDirs.slice(),
 				};
 				renderStatus(ctx);
-				pi.sendUserMessage(distillDirective(parsed.goal, ctx.cwd), { deliverAs: "followUp" });
+				const directive = distillDirective(parsed.goal, ctx.cwd);
+				if (agentOwnerCaptured && agentOwner !== loop) {
+					pendingOwnerTransfer = { session: loop, directive };
+				}
+				pi.sendUserMessage(directive, { deliverAs: "followUp" });
 				const src = parsed.goal ? `goal: "${parsed.goal}"` : "the current conversation";
 				ctx.ui.notify(`⟳ opsx-loop started from ${src} — distilling intent → change (budget ${loop.maxTurns ?? "∞"}).`, "info");
 				return;
@@ -654,6 +673,7 @@ export default function (pi: ExtensionAPI) {
 			// directive transfers ownership on its user message.
 			if (loop?.active) {
 				loop = undefined;
+				pendingOwnerTransfer = undefined;
 				renderStatus(ctx);
 			}
 			// Named re-arm clears any landing hold BEFORE the turn-0 gate evaluation and
@@ -698,7 +718,11 @@ export default function (pi: ExtensionAPI) {
 			};
 			renderStatus(ctx);
 			const exported = exportModelEnv(parsed.change, ctx.cwd);
-			pi.sendUserMessage(workerDirective(parsed.change), { deliverAs: "followUp" });
+			const directive = workerDirective(parsed.change);
+			if (agentOwnerCaptured && agentOwner !== loop) {
+				pendingOwnerTransfer = { session: loop, directive };
+			}
+			pi.sendUserMessage(directive, { deliverAs: "followUp" });
 			const modelNote = exported.length > 0 ? ` · models: ${exported.join(", ")}` : "";
 			const ignoredNote = parsed.ignored ? ` (ignored extra input: "${parsed.ignored}")` : "";
 			ctx.ui.notify(`⟳ opsx-loop started (budget ${loop.maxTurns ?? "∞"}) for ${parsed.change}${modelNote}${ignoredNote}${holdNote}`, "info");
@@ -763,10 +787,18 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("message_start", async (event: any) => {
-		// A replacement/re-arm directive queued during a prior run starts with a new
-		// user message. Transfer ownership there; native retries emit no user message.
-		if (event?.message?.role === "user" && agentOwnerCaptured && agentOwner !== loop) {
-			agentOwner = loop;
+		// Transfer only on the exact generated replacement directive. Native retries
+		// emit no user message, while unrelated queued steering/follow-ups must stay
+		// owned by the prior run even after a replacement loop has been installed.
+		const transfer = pendingOwnerTransfer;
+		if (
+			transfer &&
+			loop === transfer.session &&
+			userMessageText(event?.message) === transfer.directive
+		) {
+			agentOwner = transfer.session;
+			agentOwnerCaptured = true;
+			pendingOwnerTransfer = undefined;
 		}
 	});
 

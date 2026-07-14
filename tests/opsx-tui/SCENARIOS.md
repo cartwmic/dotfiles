@@ -32,6 +32,7 @@ No default scenario needs hosted model credentials.
 | `s10-overflow-persistent` | `opsx-loop.interrupt-or-error-stops-the-loop`: second settled context overflow lands visibly without a third retry |
 | `s11-clear-during-retry` | `opsx-loop.interrupt-or-error-stops-the-loop`: clear during native retry invalidates pending ownership; stale settlement cannot stop or continue the cleared loop |
 | `s12-rearm-during-retry` | `opsx-loop.interrupt-or-error-stops-the-loop`: named re-arm during native retry transfers ownership only when the replacement user directive starts; old retry cannot gate the replacement |
+| `s13-prequeued-rearm` | `opsx-loop.interrupt-or-error-stops-the-loop`: unrelated queued user work ahead of a re-arm stays old-owned; only the exact generated replacement directive transfers ownership and may gate the replacement |
 
 ## Running
 
