@@ -132,3 +132,4 @@ attested integration-checkout HEAD of that round.
 |---|---|---|---|
 | 1 | violated | anthropic/claude-sonnet-5:violated | d8bb77eb9b428488ae633058a965897888846c44 |
 | 2 | violated | anthropic/claude-sonnet-5:violated | c3d7bb2d73957aa97e4be3222beefbfeb0740a55 |
+| 3 | delivered | anthropic/claude-sonnet-5:delivered | b1096102456e6e133f084b6a27ad17ed325707c2 |
