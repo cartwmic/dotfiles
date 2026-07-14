@@ -114,6 +114,8 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
 - 2026-07-14 — tasks.md authored (extension mute/dispatch, skill routing,
   hermetic tests). Structure validate --strict still red on ADDED SHALL
   parse — fix after plan or as next structure unit.
+- 2026-07-14 — plan.md authored (3 steps: mute+register, dispatch bind,
+  skill prose).
 
 ## Scope Expansions
 
