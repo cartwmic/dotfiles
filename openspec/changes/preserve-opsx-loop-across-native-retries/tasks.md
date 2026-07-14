@@ -52,6 +52,8 @@
       - tests/opsx-tui/scripts/run-scenario-s14-clear-pending-arm.sh
       - tests/opsx-tui/scripts/run-scenario-s15-duplicate-rearm.sh
       - tests/opsx-tui/scripts/run-scenario-s16-overflow-compact-abort.sh
+      - tests/opsx-tui/scripts/run-scenario-s17-auto-compact-abort.sh
+      - tests/opsx-tui/scripts/scenario-lib.sh
   - allow_new_files: true
 
 ## 3. Validation and spec traceability
