@@ -1,12 +1,12 @@
 ## 1. Retry-aware loop lifecycle
 
-- [ ] 1.1 Record an errored low-level attempt on the active `LoopState` and return without clearing, gating, incrementing loop/stall budgets, or injecting an extension-owned retry; keep explicit abort immediately terminal and clear a pending error on the next clean attempt. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
+- [x] 1.1 Record an errored low-level attempt on the active `LoopState` and return without clearing, gating, incrementing loop/stall budgets, or injecting an extension-owned retry; keep explicit abort immediately terminal and clear a pending error on the next clean attempt. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
   - intent: fix
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/index.ts
   - allow_new_files: false
 
-- [ ] 1.2 Handle `agent_settled` only when the same active loop still owns an unresolved pending error: preserve the existing one-shot context-overflow compact-and-retry path, otherwise stop visibly with the worktree preserved; make stale settlement after clear/replacement/re-arm a no-op by construction. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
+- [x] 1.2 Handle `agent_settled` only when the same active loop still owns an unresolved pending error: preserve the existing one-shot context-overflow compact-and-retry path, otherwise stop visibly with the worktree preserved; make stale settlement after clear/replacement/re-arm a no-op by construction. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
   - intent: fix
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/index.ts

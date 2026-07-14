@@ -82,8 +82,12 @@ interface LoopState {
 	// ephemeral trim is durably consolidated), then reset. Self-rate-limited: a
 	// compacted run starts slim, so elision does not re-fire until history regrows.
 	elided?: boolean;
-	// Bounded latch for overflow-only recovery: set when a worker turn ends with a
-	// context-overflow error and we compact-and-retry once; reset on the next clean
+	// Latest errored low-level attempt awaiting Pi's final agent_settled signal.
+	// Stored on this exact LoopState so clear/replacement/re-arm invalidates stale
+	// settlement by construction. A later clean attempt clears it before gating.
+	pendingError?: any;
+	// Bounded latch for overflow-only recovery: set when a worker turn settles with
+	// a context-overflow error and we compact-and-retry once; reset on the next clean
 	// turn. A second consecutive overflow (recovery already attempted) stops the loop.
 	overflowRecoveryAttempted?: boolean;
 	lastReason?: string;
@@ -742,73 +746,36 @@ export default function (pi: ExtensionAPI) {
 		// (Lever A: the worker directive is injected in the compaction callback).
 		if (!loop?.active || loop.evaluating || loop.compacting) return;
 
-		// User interrupted / turn errored → stop instead of re-injecting.
 		const last = (Array.isArray(event?.messages) ? event.messages : [])
 			.slice()
 			.reverse()
 			.find((m: any) => m?.role === "assistant");
 		const stopReason: string | undefined = typeof last?.stopReason === "string" ? last.stopReason : undefined;
-		if (stopReason === "aborted" || stopReason === "error") {
-			const session = loop;
-			// Consume the elision latch at this run boundary too: the overflow-recovery
-			// branch below compacts (consolidating any elided content) and the stop paths
-			// end the loop, so a run's `elided` must never leak into a later retried run
-			// (which could otherwise force an elision-driven compaction on a non-elided
-			// run — the coupling is strictly per-run).
+		const session = loop;
+
+		// Explicit user abort remains immediately terminal. It must never wait for or
+		// be undone by a later settlement signal.
+		if (stopReason === "aborted") {
 			session.elided = false;
-			// Overflow-ONLY recovery (general auto-compaction stays off): a worker turn
-			// that ends with a CONTEXT-OVERFLOW error gets ONE compact-and-retry instead
-			// of stopping — mirroring pi's built-in recovery that the operator's
-			// compaction.enabled=false disables. Bounded by overflowRecoveryAttempted;
-			// a second consecutive overflow stops the loop.
-			const window =
-				(typeof ctx.getContextUsage === "function" ? ctx.getContextUsage()?.contextWindow : undefined) ??
-				(ctx.model as any)?.contextWindow;
-			const isOverflow =
-				stopReason === "error" &&
-				!session.awaitingChange &&
-				!!session.change &&
-				typeof ctx.compact === "function" &&
-				isContextOverflowError(last, window);
-			if (isOverflow && !session.overflowRecoveryAttempted) {
-				session.overflowRecoveryAttempted = true;
-				const change = session.change as string;
-				// Continuation directive (kickoff form if no gate report yet); after
-				// compaction the retried turn re-reads the gate and resumes — the loop is
-				// resumable from disk, so re-running the same unit of work is safe.
-				const directive = workerDirective(change, session.lastReason);
-				ctx.ui.notify(
-					`⟳ opsx-loop: ${change} — context overflow; compacting and retrying once (auto-compaction stays off).`,
-					"warning",
-				);
-				session.compacting = true;
-				renderStatus(ctx);
-				const done = () => {
-					session.compacting = false;
-					renderStatus(ctx);
-					if (loop === session && session.active) {
-						pi.sendUserMessage(directive, { deliverAs: "followUp" });
-					}
-				};
-				try {
-					ctx.compact({ customInstructions: OPSX_COMPACT_INSTRUCTIONS, onComplete: done, onError: done });
-				} catch {
-					done();
-				}
-				return;
-			}
+			session.pendingError = undefined;
 			const c = session.change ?? (session.goal ? `goal "${session.goal}"` : "conversation");
 			clearLoop(ctx);
-			ctx.ui.notify(
-				isOverflow
-					? `⟳ opsx-loop stopped: ${c} — context overflow persisted after a compact-and-retry; worktree preserved. Reduce scope or use a larger-context model, then re-arm with /opsx-loop ${session.change ?? ""}.`
-					: `⟳ opsx-loop stopped (${stopReason}): ${c}`,
-				"warning",
-			);
+			ctx.ui.notify(`⟳ opsx-loop stopped (aborted): ${c}`, "warning");
 			return;
 		}
 
-		const session = loop;
+		// agent_end is a low-level attempt boundary: Pi decides native retry,
+		// compaction/retry, and queued continuation only after extension handlers run.
+		// Preserve the exact loop object and defer terminal policy to agent_settled.
+		if (stopReason === "error") {
+			session.elided = false;
+			session.pendingError = last;
+			return;
+		}
+
+		// A clean native continuation supersedes any prior errored attempt and follows
+		// the existing same-run gate/continuation topology exactly once.
+		session.pendingError = undefined;
 		session.evaluating = true;
 		try {
 			// A clean (non-error) turn re-arms one future overflow recovery.
@@ -957,5 +924,64 @@ export default function (pi: ExtensionAPI) {
 		} finally {
 			session.evaluating = false;
 		}
+	});
+
+	pi.on("agent_settled", async (_event: any, ctx: ExtensionContext) => {
+		const session = loop;
+		const last = session?.pendingError;
+		if (!session?.active || !last || session.evaluating || session.compacting) return;
+		// Another extension may start a new run from an earlier agent_settled handler.
+		// In that case preserve the pending outcome; its eventual clean/error boundary
+		// will supersede or settle it without racing that continuation.
+		if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
+
+		// Consume before any async recovery. Because the outcome lives on this exact
+		// LoopState, clear/replacement/re-arm makes a stale settled event a no-op.
+		session.pendingError = undefined;
+		session.elided = false;
+		const window =
+			(typeof ctx.getContextUsage === "function" ? ctx.getContextUsage()?.contextWindow : undefined) ??
+			(ctx.model as any)?.contextWindow;
+		const isOverflow =
+			!session.awaitingChange &&
+			!!session.change &&
+			typeof ctx.compact === "function" &&
+			isContextOverflowError(last, window);
+
+		// Preserve the existing overflow-only recovery: after Pi has exhausted its own
+		// continuation policy, compact and retry once under the same loop.
+		if (isOverflow && !session.overflowRecoveryAttempted) {
+			session.overflowRecoveryAttempted = true;
+			const change = session.change as string;
+			const directive = workerDirective(change, session.lastReason);
+			ctx.ui.notify(
+				`⟳ opsx-loop: ${change} — context overflow; compacting and retrying once (auto-compaction stays off).`,
+				"warning",
+			);
+			session.compacting = true;
+			renderStatus(ctx);
+			const done = () => {
+				session.compacting = false;
+				renderStatus(ctx);
+				if (loop === session && session.active) {
+					pi.sendUserMessage(directive, { deliverAs: "followUp" });
+				}
+			};
+			try {
+				ctx.compact({ customInstructions: OPSX_COMPACT_INSTRUCTIONS, onComplete: done, onError: done });
+			} catch {
+				done();
+			}
+			return;
+		}
+
+		const c = session.change ?? (session.goal ? `goal "${session.goal}"` : "conversation");
+		clearLoop(ctx);
+		ctx.ui.notify(
+			isOverflow
+				? `⟳ opsx-loop stopped: ${c} — context overflow persisted after a compact-and-retry; worktree preserved. Reduce scope or use a larger-context model, then re-arm with /opsx-loop ${session.change ?? ""}.`
+				: `⟳ opsx-loop stopped (error): ${c}`,
+			"warning",
+		);
 	});
 }
