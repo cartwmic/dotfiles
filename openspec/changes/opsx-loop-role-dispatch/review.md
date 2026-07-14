@@ -77,9 +77,9 @@ main > master) — never assume a hardcoded literal (opsx-workflow-schema.
 integration-branch-locator-default-detected).
 -->
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
-**Integration Branch:** <detected-at-capture>
+**Diff Base SHA:** c4bb34cc5a94eb7c657a7758434bb43fb115ac50
+**Worktree Path:** /Users/mcartwright/.local/share/chezmoi--opsx-opsx-loop-role-dispatch
+**Integration Branch:** main
 
 ## Manual Adjustments
 
@@ -118,6 +118,11 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
   skill prose).
 - 2026-07-14 — fix opsx-loop ADDED req first-line SHALL (openspec parses
   only line 1 of requirement body for MUST/SHALL check).
+- 2026-07-14 — worktree locator published (Diff Base
+  c4bb34cc5a94eb7c657a7758434bb43fb115ac50 →
+  /Users/mcartwright/.local/share/chezmoi--opsx-opsx-loop-role-dispatch).
+  Apply step 1 (T1.1+T3.1) implemented orchestrator-inline in worktree
+  (building opsx_dispatch itself; impl pin cursor/composer-2.5 noted).
 
 ## Scope Expansions
 
