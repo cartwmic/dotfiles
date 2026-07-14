@@ -1,14 +1,14 @@
 # Verify
 
-**Generated:** 2026-07-14 by fresh blind review-and-fix verifier
-**Change:** preserve-opsx-loop-across-native-retries
-**Diff base:** a5cc8de5040107e121a199caf845358a395b98d0
-**Verified range:** `a5cc8de5040107e121a199caf845358a395b98d0..a36f9752769c9815c13425df325c0432550711b0` (10 commits)
-**Tree state:** clean before and after validation
+**Generated:** 2026-07-14 by fresh blind read-only verifier
+**Change:** `preserve-opsx-loop-across-native-retries`
+**Diff base:** `a5cc8de5040107e121a199caf845358a395b98d0`
+**Verified range:** `a5cc8de5040107e121a199caf845358a395b98d0..b4dd9763710176710e1c6f4b9850e0c969dd8893`
+**Range ancestry:** base exists as commit; `git merge-base` equals base; 12 commits in range
+**Acceptance criterion:** `opsx-loop.interrupt-or-error-stops-the-loop`
+**Tree state:** clean; `git diff --check` passed
 
-## Input availability
-
-Requested root files `/Users/cartwmic/.local/share/chezmoi--opsx-preserve-opsx-loop-across-native-retries/plan.md` and `/Users/cartwmic/.local/share/chezmoi--opsx-preserve-opsx-loop-across-native-retries/progress.md` were absent. Review used checked-in `openspec/changes/preserve-opsx-loop-across-native-retries/plan.md` and `tasks.md`. Prior verification findings/ledgers were not read.
+Input note: requested root-level `plan.md` and `progress.md` do not exist at attested path. Verification used authoritative `openspec/changes/preserve-opsx-loop-across-native-retries/plan.md`; no progress file was available. Existing retained `verify.md` finding prose was not read. Its path and machine-only credential scan remain included in changed-file audit.
 
 ## Completion Decision
 
@@ -16,55 +16,61 @@ Requested root files `/Users/cartwmic/.local/share/chezmoi--opsx-preserve-opsx-l
 
 ## Checks
 
-| # | Check | Status | Details |
+| # | Check | Status | Exact evidence |
 |---|---|---|---|
-| 1 | Structural validation (`openspec validate --strict --json`) | pass | `openspec validate preserve-opsx-loop-across-native-retries --strict --json` exited 0: 1 item, 1 passed, 0 failed; change `valid: true`, `issues: []`. |
-| 2 | Task completion (zero `- [ ]` in tasks.md) | pass | Exact fixed-string search found 0 unchecked tasks. All 7 tasks are checked. |
-| 3 | Delta vs current spec coherence | pass | Delta fully replaces current `Interrupt or error stops the loop` requirement: abort remains immediate; errored attempts defer; clean native continuation gates once; unresolved settled errors stop; overflow recovery remains one-shot; stale outcomes are identity-guarded. Runtime and TUI coverage implement each changed scenario. Goal extension diff is empty. |
-| 4 | Commit hygiene (subject ≤72; body explains why) | pass | All 10 commits have subjects 40–52 characters and non-empty `Why:` bodies. No offender. Full evidence below. |
-| 5 | AC↔test mapping (canonical IDs) | pass | One delta AC has forward test coverage. All 10 changed files selected by test-path heuristic contain literal `opsx-loop.interrupt-or-error-stops-the-loop`; 0 orphans, 0 exemptions. |
-| 6 | Constitution compliance audit (sampling) | pass | Audited all 14 changed files. Correct chezmoi source path, OpenSpec workspace exclusion preserved, no secret material, executable modes retained, no goal/skill/install/mise/launchd/Termux changes. |
+| 1 | Structural validation (`openspec validate --strict --json`) | pass | `openspec validate preserve-opsx-loop-across-native-retries --strict --json` exited 0; 1 item, 1 passed, 0 failed, `valid: true`, issues `[]`. |
+| 2 | Task completion | pass | Deterministic count over `tasks.md`: 0 unchecked boxes; 7 checked boxes. |
+| 3 | Delta vs current spec coherence | pass | Current capability has requirement `Interrupt or error stops the loop`; delta uses `## MODIFIED Requirements` and supplies full replacement requirement. It retains explicit-interrupt and goal-extension scenarios, changes only errored-attempt/final-settlement semantics, and adds clean-retry, settled-error, bounded-overflow, persistent-overflow, and stale-replacement scenarios. Strict validator reports no issue. |
+| 4 | Commit hygiene | pass | 12/12 subjects are ≤72 characters (maximum 52); 12/12 have non-empty bodies beginning with `Why:`. No offender. |
+| 5 | AC↔test mapping | pass | Forward: canonical AC appears literally in 13 changed test files. Reverse: all 13 changed test files contain canonical AC reference; 0 orphan, 0 exemption. Details below. |
+| 6 | Constitution compliance audit | pass | All 17 changed files audited. `dot_pi/.../index.ts` uses proper chezmoi source path (I); OpenSpec files remain under ignored `openspec/` workspace (VIII); no skill, installer, mise, launchd, or Termux surface changed; goal extension unchanged; machine scan found 0 credential-pattern hits (III). Details below. |
 
-## Check 3 detail — Delta vs current spec coherence
+## Check 3 detail — spec and implementation coherence
 
-- Current capability requirement at `openspec/specs/opsx-loop/spec.md:90-101` says every worker error clears immediately.
-- Delta uses full `## MODIFIED Requirements` content at `openspec/changes/preserve-opsx-loop-across-native-retries/specs/opsx-loop/spec.md:5-47`, replacing that rule with attempt-versus-settlement semantics and preserving existing interrupt and goal-independence scenarios.
-- `dot_pi/agent/extensions/opsx-loop/index.ts:820-827` keeps explicit abort immediately terminal.
-- `index.ts:832-836` records errored attempt and returns before turn count, gate, or injection.
-- `index.ts:840-845,927` clears pending error, counts clean boundary once, and runs gate once.
-- `index.ts:991-1049` handles unresolved pending error only at `agent_settled`, with same-loop identity checks, one overflow recovery, and visible terminal landing.
-- `index.ts:382,660,676,723,793-801,810,996` binds ownership to exact loop object and exact generated replacement directive; unrelated queued user work cannot transfer lifecycle effects.
-- `git diff --name-only <base>..HEAD -- dot_pi/agent/extensions/goal` returned empty, satisfying goal-extension independence.
-- Deterministic TUI scenarios cover retry success (s07), exhaustion (s08), overflow recovery/persistence (s09/s10), clear/replacement stale ownership (s11/s12), and unrelated prequeued work (s13). Optional real interrupt scenario s06 also passed when enabled.
+- Existing spec baseline says interruption or worker error clears loop immediately.
+- Delta fully replaces requirement with attempt-versus-settlement contract: explicit abort remains immediate; `agent_end(error)` preserves exact loop; clean continuation gates once; unresolved `agent_settled` stops; overflow recovery remains one-shot; stale outcomes cannot affect replacement.
+- Runtime evidence:
+  - `LoopState.pendingError`: `dot_pi/agent/extensions/opsx-loop/index.ts:88`.
+  - generation invalidation and pending arm: lines 397, 663, 701-702, 739.
+  - top-level ownership capture/transfer: lines 823 and 830.
+  - `agent_end` attempt handling: line 846; error recorded at 875; clean path clears pending outcome at 881.
+  - final settlement handling: line 1032; one-shot overflow branch at 1058.
+  - compaction abort classification/landing: lines 416 and 422.
+- Scope remains provider-neutral: fake provider controls deterministic status/error fixtures; runtime adds no status-code table, provider fallback, timer, backoff, or extension-owned transport retry.
+- `git diff --name-only` contains no goal-extension path (`GOAL_CHANGED=False`).
 
-## Check 4 detail — Every commit subject/body
+## Check 4 detail — commit hygiene
 
-| Commit | Subject (length) | Exact body | Status |
-|---|---|---|---|
-| `572b3911e4ec44145b37e0ce17ad7d311035e20d` | `fix(opsx-loop): preserve loop through native retries` (52) | `Why: agent_end precedes Pi retry decisions, so terminal loop policy must wait for agent_settled while clean continuation keeps its existing topology.` | pass |
-| `7c0ac3caf640a87b2044c0eb9f4948c30de3a093` | `test(opsx-loop): script provider status sequence` (48) | `Why: deterministic HTTP status sequencing reproduces transient provider failures without hosted credentials or provider-specific runtime logic.` | pass |
-| `bc150192936fad6f8d9784f740b014b8a47a957e` | `test(opsx-loop): cover native retry continuity` (46) | `Why: a real Pi TUI regression must prove retry success remains attached to the loop and reaches one gate evaluation.` | pass |
-| `6e5113af42dee8c884f0435ea9e1c8765494efca` | `test(opsx-loop): cover exhausted native retries` (47) | `Why: bounded native-retry exhaustion must produce one visible settled stop and no extension-owned retry.` | pass |
-| `fd0cfa480d308c2db1e40e8fda0ed8eb0126b7ad` | `test(opsx-loop): complete retry lifecycle validation` (52) | `Why: task completion records the validated lifecycle implementation before independent verification and review.` | pass |
-| `cee8d37b3805d1ee04a73afebcf581750daa94d8` | `test(opsx-loop): close settled lifecycle gaps` (45) | `Why: blind verification found missing overflow and stale-owner coverage. These scenarios prove bounded recovery and prevent replaced runs from gating newer loops.` | pass |
-| `0f1aa648b64f713b74ef285b2f51c3c5100f543a` | `fix(opsx-loop): invalidate before re-arm gate` (45) | `Why: native retry can finish while the asynchronous turn-zero gate runs, so replacement must detach old ownership before awaiting it.` | pass |
-| `443676f2c26fca3697b1460091ed3941f2eddf87` | `test(opsx-loop): trace delayed gate fixture` (43) | `Why: reverse AC mapping requires every changed test fixture to identify the lifecycle contract it supports.` | pass |
-| `81a49b653e79004520c2ca43792b27f4e44de0ff` | `test(opsx-loop): seal green verification` (40) | `Why: blind verification confirms all six structural, traceability, hygiene, and Constitution checks pass at implementation HEAD 443676f.` | pass |
-| `a36f9752769c9815c13425df325c0432550711b0` | `fix(opsx-loop): bind exact replacement directive` (48) | `Why: unrelated queued user messages must retain old-run ownership; only the generated replacement directive may transfer lifecycle effects.` | pass |
+| Commit | Subject chars | Body | Subject |
+|---|---:|---|---|
+| `572b3911e4ec` | 52 | `Why:` present | `fix(opsx-loop): preserve loop through native retries` |
+| `7c0ac3caf640` | 48 | `Why:` present | `test(opsx-loop): script provider status sequence` |
+| `bc150192936f` | 46 | `Why:` present | `test(opsx-loop): cover native retry continuity` |
+| `6e5113af42de` | 47 | `Why:` present | `test(opsx-loop): cover exhausted native retries` |
+| `fd0cfa480d30` | 52 | `Why:` present | `test(opsx-loop): complete retry lifecycle validation` |
+| `cee8d37b3805` | 45 | `Why:` present | `test(opsx-loop): close settled lifecycle gaps` |
+| `0f1aa648b64f` | 45 | `Why:` present | `fix(opsx-loop): invalidate before re-arm gate` |
+| `443676f2c26f` | 43 | `Why:` present | `test(opsx-loop): trace delayed gate fixture` |
+| `81a49b653e79` | 40 | `Why:` present | `test(opsx-loop): seal green verification` |
+| `a36f9752769c` | 48 | `Why:` present | `fix(opsx-loop): bind exact replacement directive` |
+| `40f0972cedf6` | 43 | `Why:` present | `test(opsx-loop): refresh green verification` |
+| `b4dd97637101` | 46 | `Why:` present | `fix(opsx-loop): harden arm and abort ownership` |
 
-## Check 5 detail — AC↔test mapping (canonical ID format)
+## Check 5 detail — AC↔test mapping (test files only)
 
-### Forward coverage (each AC has ≥1 test)
+Changed-test heuristic: path matches `(^|/)tests?/` or `\.(test|spec)\.[^.]+$`. This yields 13 files. OpenSpec artifacts, including retained `verify.md`, cannot satisfy forward coverage.
 
-| AC ID | Test references | Status |
+### Forward coverage
+
+| AC ID | Literal changed-test references | Status |
 |---|---|---|
-| `opsx-loop.interrupt-or-error-stops-the-loop` | `tests/opsx-tui/SCENARIOS.md:29-35`; `tests/opsx-tui/fixtures/fake-openai-server.mjs:2`; `tests/opsx-tui/fixtures/fake-opsx.sh:2`; `tests/opsx-tui/scripts/run-scenario-s07-native-retry.sh:2`; `run-scenario-s08-retry-exhausted.sh:2`; `run-scenario-s09-overflow-recovery.sh:2`; `run-scenario-s10-overflow-persistent.sh:2`; `run-scenario-s11-clear-during-retry.sh:2`; `run-scenario-s12-rearm-during-retry.sh:2`; `run-scenario-s13-prequeued-rearm.sh:2` | covered |
+| `opsx-loop.interrupt-or-error-stops-the-loop` | `tests/opsx-tui/SCENARIOS.md:29-38`; `tests/opsx-tui/fixtures/fake-openai-server.mjs:2`; `tests/opsx-tui/fixtures/fake-opsx.sh:2`; every scenario script `run-scenario-s07-native-retry.sh` through `run-scenario-s16-overflow-compact-abort.sh` at line 2 | covered |
 
-### Reverse coverage (each changed test references ≥1 AC)
+### Reverse coverage
 
-| Test file | AC references | Status |
+| Changed test file | AC reference | Status |
 |---|---|---|
-| `tests/opsx-tui/SCENARIOS.md` | `opsx-loop.interrupt-or-error-stops-the-loop` at lines 29-35 | referenced |
+| `tests/opsx-tui/SCENARIOS.md` | `opsx-loop.interrupt-or-error-stops-the-loop` at lines 29-38 | referenced |
 | `tests/opsx-tui/fixtures/fake-openai-server.mjs` | `opsx-loop.interrupt-or-error-stops-the-loop` at line 2 | referenced |
 | `tests/opsx-tui/fixtures/fake-opsx.sh` | `opsx-loop.interrupt-or-error-stops-the-loop` at line 2 | referenced |
 | `tests/opsx-tui/scripts/run-scenario-s07-native-retry.sh` | `opsx-loop.interrupt-or-error-stops-the-loop` at line 2 | referenced |
@@ -74,51 +80,83 @@ Requested root files `/Users/cartwmic/.local/share/chezmoi--opsx-preserve-opsx-l
 | `tests/opsx-tui/scripts/run-scenario-s11-clear-during-retry.sh` | `opsx-loop.interrupt-or-error-stops-the-loop` at line 2 | referenced |
 | `tests/opsx-tui/scripts/run-scenario-s12-rearm-during-retry.sh` | `opsx-loop.interrupt-or-error-stops-the-loop` at line 2 | referenced |
 | `tests/opsx-tui/scripts/run-scenario-s13-prequeued-rearm.sh` | `opsx-loop.interrupt-or-error-stops-the-loop` at line 2 | referenced |
+| `tests/opsx-tui/scripts/run-scenario-s14-clear-pending-arm.sh` | `opsx-loop.interrupt-or-error-stops-the-loop` at line 2 | referenced |
+| `tests/opsx-tui/scripts/run-scenario-s15-duplicate-rearm.sh` | `opsx-loop.interrupt-or-error-stops-the-loop` at line 2 | referenced |
+| `tests/opsx-tui/scripts/run-scenario-s16-overflow-compact-abort.sh` | `opsx-loop.interrupt-or-error-stops-the-loop` at line 2 | referenced |
 
-## Check 6 detail — Constitution sampling
+**Reverse result:** 13 referenced, 0 orphan, 0 exempt.
 
-| Sampled file | Principles checked | Status | Notes |
+## Check 6 detail — Constitution audit of all changed files
+
+| Changed file | Principles checked | Status | Notes |
 |---|---|---|---|
-| `dot_pi/agent/extensions/opsx-loop/index.ts` | I, III | compliant | Runtime config remains in proper chezmoi source path; no credential material. |
-| `openspec/changes/preserve-opsx-loop-across-native-retries/plan.md` | III, VIII | compliant | Repo-local OpenSpec artifact; `openspec/` remains excluded by `.chezmoiignore:14`. |
-| `openspec/changes/preserve-opsx-loop-across-native-retries/tasks.md` | III, VIII | compliant | Repo-local OpenSpec artifact; no secrets. |
-| `openspec/changes/preserve-opsx-loop-across-native-retries/verify.md` | III, VIII | compliant | Repo-local verification artifact; path/exclusion and credential-pattern audit clean. Prior findings content was not used by this blind verification. |
-| `tests/opsx-tui/SCENARIOS.md` | III | compliant | Test documentation only; no credentials. |
-| `tests/opsx-tui/fixtures/fake-openai-server.mjs` | III | compliant | Loopback deterministic fake; no hosted credentials; executable mode `100755`. |
-| `tests/opsx-tui/fixtures/fake-opsx.sh` | III | compliant | Deterministic fake CLI; no secrets; executable mode `100755`. |
-| `tests/opsx-tui/scripts/run-scenario-s07-native-retry.sh` | III | compliant | Isolated temp-repo test; executable mode `100755`. |
-| `tests/opsx-tui/scripts/run-scenario-s08-retry-exhausted.sh` | III | compliant | Isolated temp-repo test; executable mode `100755`. |
-| `tests/opsx-tui/scripts/run-scenario-s09-overflow-recovery.sh` | III | compliant | Isolated temp-repo test; executable mode `100755`. |
-| `tests/opsx-tui/scripts/run-scenario-s10-overflow-persistent.sh` | III | compliant | Isolated temp-repo test; executable mode `100755`. |
-| `tests/opsx-tui/scripts/run-scenario-s11-clear-during-retry.sh` | III | compliant | Isolated temp-repo test; executable mode `100755`. |
-| `tests/opsx-tui/scripts/run-scenario-s12-rearm-during-retry.sh` | III | compliant | Isolated temp-repo test; executable mode `100755`. |
-| `tests/opsx-tui/scripts/run-scenario-s13-prequeued-rearm.sh` | III | compliant | Isolated temp-repo test; executable mode `100755`. |
+| `dot_pi/agent/extensions/opsx-loop/index.ts` | I, III | compliant | Deployed Pi extension remains in chezmoi `dot_pi/` source; no credential; no goal-extension modification. |
+| `openspec/changes/preserve-opsx-loop-across-native-retries/plan.md` | III, VIII | compliant | Repo-local change artifact under ignored OpenSpec workspace. |
+| `openspec/changes/preserve-opsx-loop-across-native-retries/tasks.md` | III, VIII | compliant | Repo-local task artifact; file contracts match implementation/test paths. |
+| `openspec/changes/preserve-opsx-loop-across-native-retries/verify.md` | III, VIII | compliant | Repo-local retained evidence path; prior finding prose intentionally not consumed; machine-only credential scan returned 0. |
+| `tests/opsx-tui/SCENARIOS.md` | III | compliant | Test documentation only; no deployment or secret. |
+| `tests/opsx-tui/fixtures/fake-openai-server.mjs` | III | compliant | Loopback fake provider; no hosted credential; opt-in fixture behavior. |
+| `tests/opsx-tui/fixtures/fake-opsx.sh` | III, IV | compliant | Test fixture only; writes inside scenario temp/log roots; no install-script surface. |
+| `tests/opsx-tui/scripts/run-scenario-s07-native-retry.sh` | III, IV | compliant | Disposable deterministic scenario; cleanup supplied by shared trap. |
+| `tests/opsx-tui/scripts/run-scenario-s08-retry-exhausted.sh` | III, IV | compliant | Disposable deterministic scenario; bounded provider count assertion. |
+| `tests/opsx-tui/scripts/run-scenario-s09-overflow-recovery.sh` | III, IV | compliant | Disposable deterministic scenario; bounded recovery assertion. |
+| `tests/opsx-tui/scripts/run-scenario-s10-overflow-persistent.sh` | III, IV | compliant | Disposable deterministic scenario; no third retry assertion. |
+| `tests/opsx-tui/scripts/run-scenario-s11-clear-during-retry.sh` | III, IV | compliant | Disposable deterministic stale-settlement scenario. |
+| `tests/opsx-tui/scripts/run-scenario-s12-rearm-during-retry.sh` | III, IV | compliant | Disposable deterministic replacement-ownership scenario. |
+| `tests/opsx-tui/scripts/run-scenario-s13-prequeued-rearm.sh` | III, IV | compliant | Disposable deterministic exact-directive ownership scenario. |
+| `tests/opsx-tui/scripts/run-scenario-s14-clear-pending-arm.sh` | III, IV | compliant | Disposable deterministic pending-arm cancellation scenario. |
+| `tests/opsx-tui/scripts/run-scenario-s15-duplicate-rearm.sh` | III, IV | compliant | Disposable deterministic generation-identity scenario. |
+| `tests/opsx-tui/scripts/run-scenario-s16-overflow-compact-abort.sh` | III, IV | compliant | Disposable deterministic compaction-abort scenario. |
 
-**Sampling coverage:** 14 audited of 14 changed = 100%. Principles II and IV-X are unaffected except VIII as noted; no skill, install, mise, launchd, Termux, memory-promotion, or Constitution changes occur in range.
+**Audit coverage:** 17 of 17 changed files = 100%. Because 10 < N ≤ 50, every changed file was audited and this coverage note is emitted. `.chezmoiignore:14` still contains `openspec/`. Principles II, V, VI, VII, IX, and X are not activated by this diff.
 
-## Runtime validation evidence
+## Validation evidence
 
-All runtime tests used fresh disposable `git archive HEAD` trees under `/tmp`; source and worktree stayed clean.
+### Focused tests
 
-| Command | Result |
-|---|---|
-| `tests/opsx-tui/scripts/run-all-scenarios.sh` | exit 0; s00-s13 reported PASS; `Passed: 14  Failed: 0  Timeout: 0`. Default s06 path is an intentional skip. |
-| `OPSX_TUI_ENABLE_INTERRUPT=1 OPSX_TUI_SCENARIO_FILTER='^s06-interrupt-optional$' tests/opsx-tui/scripts/run-all-scenarios.sh` | exit 0; live interrupt scenario passed; `Passed: 1  Failed: 0  Timeout: 0`. |
-| `bun test dot_pi/agent/extensions/opsx-loop/helpers.test.ts` | exit 0; 94 pass, 0 fail, 221 assertions. |
-| `git diff --check a5cc8de5040107e121a199caf845358a395b98d0..HEAD` | exit 0; no whitespace errors. |
+- `bun test dot_pi/agent/extensions/opsx-loop/helpers.test.ts` — exit 0: **94 pass, 0 fail, 221 expect() calls**, 1 file.
+- Shell/fixture syntax — exit 0: `bash -n` for s07-s16 plus `fake-opsx.sh`; `node --check fake-openai-server.mjs`; **12 files passed**.
+
+### Full real-Pi TUI from disposable HEAD archive
+
+Archive command used `git archive --format=tar HEAD` and extracted into:
+
+`/tmp/preserve-opsx-loop-round5.HOLjHT`
+
+Runner used archive-contained extension and tests, not working-tree files:
+
+`bash /tmp/preserve-opsx-loop-round5.HOLjHT/tests/opsx-tui/scripts/run-all-scenarios.sh`
+
+Result: exit 0, **17 passed, 0 failed, 0 timeout** (`s00` through `s16`). Default s06 skip path was followed by explicit opt-in execution from same archive:
+
+`OPSX_TUI_ENABLE_INTERRUPT=1 OPSX_TUI_SCENARIO_FILTER='^s06-interrupt-optional$' .../run-all-scenarios.sh`
+
+Result: exit 0, **1 passed, 0 failed, 0 timeout**; log: `PASS: escape interrupt stops loop`.
+
+Focused lifecycle signals from archive logs:
+
+- s07: native retry reaches gate; gate count kickoff + one clean completion; no extra provider turn.
+- s08: exhausted native retries produce one final stop; failed attempts do not gate; no opsx retry.
+- s09-s10: one overflow recovery succeeds; persistent second overflow stops without third request.
+- s11-s15: clear/re-arm/prequeued/duplicate/pending-arm stale ownership cannot mutate or gate replacement.
+- s16: Escape during overflow compaction stops loop and injects no recovery turn.
+
+### Aggregate opsx gate note
+
+`opsx gate preserve-opsx-loop-across-native-retries --worktree /Users/cartwmic/.local/share/chezmoi--opsx-preserve-opsx-loop-across-native-retries` exited 1 with:
+
+`GATE-FAIL code-review 1 code-review.md absent (Code Review Mode gating-required)`
+
+This does not fail any of verify template's six checks and is expected for this read-only blind-review stage: this report does not create `code-review.md`. Aggregate archive workflow remains blocked until reviewer evidence is consumed into required artifact.
 
 ## Summary
 
-- Pass count: 6/6
-- Decision: green
-- **Archive gate:** READY
+- Pass count: **6/6**
+- Decision: **green**
+- Verify hard-gate: **READY**
+- Aggregate opsx archive gate: **BLOCKED pending required `code-review.md`**
+- Implementation findings: none
 
-## Override (if archiving despite red)
+## Verification Verdict
 
-Not applicable; status is green.
-
-Verification Verdict: pass
-P0 Findings: none.
-P1 Findings: none.
-P2 Findings: none.
-P3 Findings: checked-in plan records fixture/tests before runtime modification and says tests precede runtime, but range history starts with runtime commit `572b3911e4ec4415` before fixture commit `7c0ac3caf640a87b2` and scenario commits `bc150192936fad6f`/`6e5113af42dee8c8`. Documentation/provenance mismatch has no effect on six hard checks or validated runtime behavior; correct plan execution note before archive if historical accuracy is required.
+**Verification Verdict: pass — P0: 0, P1: 0, P2: 0, P3: 0.**
