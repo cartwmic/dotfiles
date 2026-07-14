@@ -21,7 +21,7 @@ usage: opsx <subcommand> [args]
   gate     <change> [--worktree <path>]   run the deterministic gate
   gate     <change> --cheap                deterministic checks only (no validations)
   models   <role> [--json] [--change <c>] [--with-default]   resolve a role
-  models   set <role> <value> [--layer user]                 write config
+  models   set [<role> [<value…>]] [--layer user]            write config (interactive if bare/role-only on TTY)
   models   get <role> [--layer user]                         read config
   models   list                                              list resolved roles
   status                                  read-only fleet view (all changes)
@@ -156,6 +156,171 @@ opsx_models() (
 		esac
 	}
 
+	# --- write helpers (shared by interactive + non-interactive set) -------
+	# Split comma/space tokens into a newline-delimited list (trimmed, empty dropped).
+	parse_model_tokens() {
+		local raw part
+		for raw in "$@"; do
+			while IFS= read -r part; do
+				part="${part#"${part%%[![:space:]]*}"}"
+				part="${part%"${part##*[![:space:]]}"}"
+				[ -n "$part" ] && printf '%s\n' "$part"
+			done <<EOF
+$(printf '%s' "$raw" | tr ',' '\n')
+EOF
+		done
+	}
+	# Atomic write of role key. For review: newline-delimited models → YAML seq.
+	# For author-in-session: boolean. Else: scalar string (suffixes preserved).
+	atomic_write_role() { # $1=role $2=file $3=value-or-newline-list
+		local wrole="$1" wf="$2" wval="$3" wk wtmp arr_json line
+		wk="$(yaml_key_for "$wrole")"
+		mkdir -p "$(dirname "$wf")" || { err "cannot create dir for $wf"; return 1; }
+		wtmp="$(mktemp "$(dirname "$wf")/.opsx-cfg.XXXXXX")" || { err "mktemp failed"; return 1; }
+		if [ -f "$wf" ]; then cp "$wf" "$wtmp" || { err "copy failed; $wf unchanged"; rm -f "$wtmp"; return 1; }; fi
+		if [ "$wrole" = author-in-session ]; then
+			VAL="$wval" yq -i ".${wk} = (strenv(VAL) == \"true\")" "$wtmp" 2>/dev/null
+		elif [ "$wrole" = review ]; then
+			arr_json="$(printf '%s\n' "$wval" | grep -v '^$' | jq -R . | jq -s -c .)"
+			# yq v4: env() of a JSON-array string materializes as !!seq
+			VAL="$arr_json" yq -i ".${wk} = env(VAL)" "$wtmp" 2>/dev/null
+		else
+			VAL="$wval" yq -i ".${wk} = strenv(VAL)" "$wtmp" 2>/dev/null
+		fi
+		if [ $? -ne 0 ]; then err "yq update failed; $wf unchanged"; rm -f "$wtmp"; return 1; fi
+		mv "$wtmp" "$wf" || { err "rename failed; $wf unchanged"; rm -f "$wtmp"; return 1; }
+		return 0
+	}
+	# Catalog from `pi --list-models` → provider/id lines. Overridable via OPSX_MODELS_PI_CMD.
+	models_catalog() {
+		local pi_cmd="${OPSX_MODELS_PI_CMD:-pi}" out
+		out="$($pi_cmd --list-models 2>/dev/null)" || { err "failed to run: $pi_cmd --list-models"; return 1; }
+		# Skip header; take first two columns as provider + model id.
+		printf '%s\n' "$out" | awk 'NR>1 && NF>=2 {print $1 "/" $2}' | grep -v '^$' || true
+	}
+	THINK_LEVELS="off minimal low medium high xhigh max"
+	append_thinking_suffix() { # stdin models → stdout models with optional :level ($1)
+		local level="$1" line
+		[ -z "$level" ] || [ "$level" = "off" ] || [ "$level" = "none" ] || [ "$level" = "skip" ] && { cat; return; }
+		while IFS= read -r line; do
+			[ -z "$line" ] && continue
+			case "$line" in
+				*:*) printf '%s\n' "$line" ;; # already has a suffix — leave alone
+				*) printf '%s:%s\n' "$line" "$level" ;;
+			esac
+		done
+	}
+	pick_thinking_level() {
+		local choice
+		if [ -n "${OPSX_MODELS_THINKING:-}" ]; then
+			printf '%s\n' "$OPSX_MODELS_THINKING"
+			return 0
+		fi
+		err "thinking level? ($THINK_LEVELS | skip) [skip]: "
+		IFS= read -r choice || choice=skip
+		choice="${choice:-skip}"
+		case " $THINK_LEVELS skip none " in
+			*" $choice "*) printf '%s\n' "$choice" ;;
+			*) err "invalid thinking level: $choice"; return 1 ;;
+		esac
+	}
+	# Numbered multi/single select. $1=multi(0|1) $2=newline-separated catalog.
+	# User answers come from stdin (so tests can redirect a answers file).
+	numbered_select() {
+		local multi="$1" catalog="$2" lines=() i n sel out=()
+		while IFS= read -r line; do [ -n "$line" ] && lines+=("$line"); done <<EOF
+$catalog
+EOF
+		n=${#lines[@]}
+		[ "$n" -gt 0 ] || { err "no models to select"; return 1; }
+		for i in "${!lines[@]}"; do printf '%5d  %s\n' "$((i+1))" "${lines[$i]}" >&2; done
+		if [ "$multi" -eq 1 ]; then
+			err "select numbers (space/comma-separated), then Enter: "
+			IFS= read -r sel || return 1
+			for i in $(printf '%s' "$sel" | tr ', ' ' '); do
+				case "$i" in
+					''|*[!0-9]*) continue ;;
+				esac
+				[ "$i" -ge 1 ] && [ "$i" -le "$n" ] && out+=("${lines[$((i-1))]}")
+			done
+			[ ${#out[@]} -gt 0 ] || { err "no valid selections"; return 1; }
+			printf '%s\n' "${out[@]}"
+		else
+			err "select number: "
+			IFS= read -r sel || return 1
+			case "$sel" in
+				''|*[!0-9]*) err "invalid selection"; return 1 ;;
+			esac
+			[ "$sel" -ge 1 ] && [ "$sel" -le "$n" ] || { err "selection out of range"; return 1; }
+			printf '%s\n' "${lines[$((sel-1))]}"
+		fi
+	}
+	# Pick models from catalog. $1=multi(0|1). Uses fzf if present (unless OPSX_MODELS_NO_FZF=1).
+	pick_models() {
+		local multi="$1" catalog fzf_cmd="${OPSX_MODELS_FZF_CMD:-fzf}" picked
+		catalog="$(models_catalog)" || return 1
+		[ -n "$catalog" ] || { err "pi --list-models produced no parseable models"; return 1; }
+		if [ -z "${OPSX_MODELS_NO_FZF:-}" ] && command -v "$fzf_cmd" >/dev/null 2>&1; then
+			if [ "$multi" -eq 1 ]; then
+				picked="$(printf '%s\n' "$catalog" | "$fzf_cmd" -m --prompt 'review models> ')" || true
+			else
+				picked="$(printf '%s\n' "$catalog" | "$fzf_cmd" --prompt 'model> ')" || true
+			fi
+			[ -n "$picked" ] || { err "selection cancelled"; return 1; }
+			printf '%s\n' "$picked"
+		else
+			numbered_select "$multi" "$catalog"
+		fi
+	}
+	interactive_set() { # optional $1=preselected role
+		local irole="${1:-}" models level tgt f
+		tgt_layer="${LAYER:-user}"
+		f="$(layer_file "$tgt_layer")"
+		[ -n "$f" ] || { err "project layer: no openspec/ root found (set \$OPSX_ROOT or run inside a repo with openspec/)"; return 1; }
+		if [ -z "$irole" ]; then
+			if [ -n "${OPSX_MODELS_ROLE:-}" ]; then
+				irole="$OPSX_MODELS_ROLE"
+			else
+				err "role? (author|review|impl|author-in-session): "
+				IFS= read -r irole || return 1
+			fi
+		fi
+		case "$irole" in
+			author|review|impl|author-in-session) ;;
+			*) err "unknown role: $irole"; return 1 ;;
+		esac
+		if [ "$irole" = author-in-session ]; then
+			local bval
+			if [ -n "${OPSX_MODELS_AIS:-}" ]; then
+				bval="$OPSX_MODELS_AIS"
+			else
+				err "author-in-session? (true|false): "
+				IFS= read -r bval || return 1
+			fi
+			case "$(printf '%s' "$bval" | tr 'A-Z' 'a-z')" in
+				true|false) bval="$(printf '%s' "$bval" | tr 'A-Z' 'a-z')" ;;
+				*) err "author-in-session must be true or false (got: $bval)"; return 1 ;;
+			esac
+			atomic_write_role "$irole" "$f" "$bval" || return 1
+			return 0
+		fi
+		if [ "$irole" = review ]; then
+			models="$(pick_models 1)" || return 1
+		else
+			models="$(pick_models 0)" || return 1
+		fi
+		level="$(pick_thinking_level)" || return 1
+		models="$(printf '%s\n' "$models" | append_thinking_suffix "$level")"
+		if [ "$irole" = review ]; then
+			atomic_write_role review "$f" "$models" || return 1
+		else
+			# single line
+			models="$(printf '%s\n' "$models" | head -n1)"
+			atomic_write_role "$irole" "$f" "$models" || return 1
+		fi
+		return 0
+	}
+
 	# ======================================================================
 	# WRITE SURFACE: set / get / list
 	# ======================================================================
@@ -194,43 +359,52 @@ opsx_models() (
 				exit 0
 				;;
 			set)
-				srole="${POS[0]:-}"; sval="${POS[1]:-}"
+				srole="${POS[0]:-}"
+				# Interactive when bare or role-only on a TTY (or OPSX_MODELS_FORCE_INTERACTIVE=1 for tests).
+				if { [ -z "$srole" ] || [ ${#POS[@]} -lt 2 ]; } && { [ -n "${OPSX_MODELS_FORCE_INTERACTIVE:-}" ] || { [ -t 0 ] && [ -t 1 ]; }; }; then
+					case "$srole" in
+						""|author|review|impl|author-in-session) ;;
+						*) err "unknown role: $srole (author|review|impl|author-in-session)"; exit 2 ;;
+					esac
+					interactive_set "$srole" || exit $?
+					exit 0
+				fi
 				case "$srole" in
 					author|review|impl|author-in-session) ;;
 					"") err "usage: opsx models set <role> <value> [--layer user]"; exit 2 ;;
 					*) err "unknown role: $srole (author|review|impl|author-in-session)"; exit 2 ;;
 				esac
-				[ -n "$sval" ] || { err "usage: opsx models set <role> <value> [--layer user]"; exit 2 ; }
+				[ ${#POS[@]} -ge 2 ] || { err "usage: opsx models set <role> <value> [--layer user]"; exit 2; }
+				tgt_layer="${LAYER:-user}"
+				f="$(layer_file "$tgt_layer")"
+				[ -n "$f" ] || { err "project layer: no openspec/ root found (set \$OPSX_ROOT or run inside a repo with openspec/)"; exit 2; }
 				if [ "$srole" = author-in-session ]; then
+					sval="${POS[1]}"
 					case "$(printf '%s' "$sval" | tr 'A-Z' 'a-z')" in
 						true|false) sval="$(printf '%s' "$sval" | tr 'A-Z' 'a-z')" ;;
 						*) err "author-in-session must be true or false (got: $sval)"; exit 2 ;;
 					esac
+					atomic_write_role "$srole" "$f" "$sval" || exit 1
+					exit 0
 				fi
-				tgt_layer="${LAYER:-user}"
-				f="$(layer_file "$tgt_layer")"
-				[ -n "$f" ] || { err "project layer: no openspec/ root found (set \$OPSX_ROOT or run inside a repo with openspec/)"; exit 2; }
-				# warn on review list replacement
-				if [ "$srole" = review ] && [ -f "$f" ]; then
-					prior="$(yq_list "$f" review 2>/dev/null | paste -sd, - 2>/dev/null)"
-					if [ -n "$prior" ] && printf '%s' "$prior" | grep -q ','; then
-						err "warning: replacing the entire review list (was: $prior) with a single model; edit YAML directly for a multi-model list"
+				# Collect POS[1..] with comma-splitting into newline list.
+				set -- "${POS[@]:1}"
+				sval="$(parse_model_tokens "$@")"
+				[ -n "$sval" ] || { err "usage: opsx models set <role> <value> [--layer user]"; exit 2; }
+				if [ "$srole" = review ]; then
+					if [ -f "$f" ]; then
+						prior="$(yq_list "$f" review 2>/dev/null | paste -sd, - 2>/dev/null)"
+						if [ -n "$prior" ] && printf '%s' "$prior" | grep -q ','; then
+							err "warning: replacing the entire review list (was: $prior)"
+						fi
 					fi
-				fi
-				mkdir -p "$(dirname "$f")" || { err "cannot create dir for $f"; exit 1; }
-				k="$(yaml_key_for "$srole")"
-				# Operate ONLY on a temp in the target dir; the final path is created/
-				# replaced solely by the atomic mv AFTER yq succeeds. A failure (incl. an
-				# absent target) leaves the final path exactly as it was (absent stays absent).
-				tmp="$(mktemp "$(dirname "$f")/.opsx-cfg.XXXXXX")" || { err "mktemp failed"; exit 1; }
-				if [ -f "$f" ]; then cp "$f" "$tmp" || { err "copy failed; $f unchanged"; rm -f "$tmp"; exit 1; }; fi
-				if [ "$srole" = author-in-session ]; then
-					VAL="$sval" yq -i ".${k} = (strenv(VAL) == \"true\")" "$tmp" 2>/dev/null
+					atomic_write_role review "$f" "$sval" || exit 1
 				else
-					VAL="$sval" yq -i ".${k} = strenv(VAL)" "$tmp" 2>/dev/null
+					# Scalar roles: if multiple tokens were given, join is rejected — take first only if one line.
+					nlines="$(printf '%s\n' "$sval" | grep -c .)"
+					[ "$nlines" -eq 1 ] || { err "$srole takes a single model id (got $nlines tokens)"; exit 2; }
+					atomic_write_role "$srole" "$f" "$(printf '%s\n' "$sval" | head -n1)" || exit 1
 				fi
-				if [ $? -ne 0 ]; then err "yq update failed; $f unchanged"; rm -f "$tmp"; exit 1; fi
-				mv "$tmp" "$f" || { err "rename failed; $f unchanged"; rm -f "$tmp"; exit 1; }
 				exit 0
 				;;
 		esac

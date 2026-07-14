@@ -155,6 +155,74 @@ eq "config-conventions: missing --layer value exits 2 (no hang)" "2" \
 eq "config-conventions: verb-mode missing --change value exits 2 (no hang)" "2" \
 	"$( ( perl -e 'alarm 5; exec @ARGV or die' "$OPSX" models get author --change ) >/dev/null 2>&1; echo $? )"
 
+# --- opsx-cli.model-config-write-surface: multi-review list write ------------
+# opsx-cli.model-config-write-surface
+clear_env; : >"$USERCFG"
+( cd "$ROOT"; "$OPSX" models set review 'claude-bridge/a,openai-codex/b' ) >/dev/null 2>&1
+eq "model-config-write-surface: comma-separated review → list" "claude-bridge/a
+openai-codex/b" "$(run review)"
+clear_env; : >"$USERCFG"
+( cd "$ROOT"; "$OPSX" models set review claude-bridge/a openai-codex/b ) >/dev/null 2>&1
+eq "model-config-write-surface: multi-arg review → list" "claude-bridge/a
+openai-codex/b" "$(run review)"
+clear_env; : >"$USERCFG"
+( cd "$ROOT"; "$OPSX" models set review only/one ) >/dev/null 2>&1
+eq "model-config-write-surface: single review → one-element list" "only/one" "$(run review)"
+eq "model-config-write-surface: review stored as YAML seq" "!!seq" "$(yq -r '.review | type' "$USERCFG")"
+
+# --- opsx-model-config.thinking-suffix-passthrough ---------------------------
+# opsx-model-config.thinking-suffix-passthrough
+clear_env; : >"$USERCFG"
+( cd "$ROOT"; "$OPSX" models set impl 'cursor/composer-2.5:high' ) >/dev/null 2>&1
+eq "thinking-suffix-passthrough: slash id keeps :high" "cursor/composer-2.5:high" "$(run impl)"
+eq "thinking-suffix-passthrough: get --layer user keeps suffix" "cursor/composer-2.5:high" "$(run get impl --layer user)"
+clear_env; : >"$USERCFG"
+cat >"$USERCFG" <<EOF
+provider: claude-bridge
+author: claude-opus-4-8:xhigh
+EOF
+eq "thinking-suffix-passthrough: bare id + suffix qualifies" "claude-bridge/claude-opus-4-8:xhigh" "$(run author)"
+clear_env; : >"$USERCFG"
+( cd "$ROOT"; "$OPSX" models set review 'anthropic/claude-sonnet-5:high' 'cursor/composer-2.5:low' ) >/dev/null 2>&1
+eq "thinking-suffix-passthrough: review list keeps per-entry suffixes" "anthropic/claude-sonnet-5:high
+cursor/composer-2.5:low" "$(run review)"
+
+# --- opsx-cli.interactive-models-set (stubbed catalog / no fzf) --------------
+# opsx-cli.interactive-models-set
+clear_env; : >"$USERCFG"
+FAKE_PI="$(mktemp)"; chmod +x "$FAKE_PI"
+cat >"$FAKE_PI" <<'PI'
+#!/bin/sh
+cat <<'OUT'
+provider      model                                                          context  max-out  thinking  images
+cursor        composer-2.5                                                   200K     16.4K    no        yes
+anthropic     claude-sonnet-5                                                1M       128K     yes       yes
+OUT
+PI
+run_interactive() {
+	# Usage: run_interactive <stdin-answers> <role>
+	local answers="$1" role="$2"
+	printf '%s' "$answers" | env OPSX_MODELS_FORCE_INTERACTIVE=1 OPSX_MODELS_NO_FZF=1 \
+		OPSX_MODELS_PI_CMD="$FAKE_PI" "$OPSX" models set "$role" >/dev/null 2>&1
+}
+printf '1\nhigh\n' >"$TMP/answers-impl"
+( cd "$ROOT"; OPSX_MODELS_FORCE_INTERACTIVE=1 OPSX_MODELS_NO_FZF=1 OPSX_MODELS_PI_CMD="$FAKE_PI" \
+	"$OPSX" models set impl <"$TMP/answers-impl" ) >/dev/null 2>&1
+eq "interactive-models-set: role-only stub picks + suffix" "cursor/composer-2.5:high" "$(run impl)"
+: >"$USERCFG"
+printf '1 2\nskip\n' >"$TMP/answers-review"
+( cd "$ROOT"; OPSX_MODELS_FORCE_INTERACTIVE=1 OPSX_MODELS_NO_FZF=1 OPSX_MODELS_PI_CMD="$FAKE_PI" \
+	"$OPSX" models set review <"$TMP/answers-review" ) >/dev/null 2>&1
+eq "interactive-models-set: review multi-select list" "cursor/composer-2.5
+anthropic/claude-sonnet-5" "$(run review)"
+: >"$USERCFG"
+printf '1\nskip\n' >"$TMP/answers-miss"
+( cd "$ROOT"; OPSX_MODELS_FORCE_INTERACTIVE=1 OPSX_MODELS_NO_FZF=1 OPSX_MODELS_PI_CMD=/nonexistent/pi-binary \
+	"$OPSX" models set impl <"$TMP/answers-miss" ) >/dev/null 2>&1
+irc=$?
+eq "interactive-models-set: missing pi exits non-zero" "1" "$irc"
+rm -f "$FAKE_PI"
+
 echo "-----"
 echo "opsx models: $pass passed, $failc failed"
 [ "$failc" -eq 0 ]

@@ -9,6 +9,17 @@
 # (author_model / review_models / impl_model / provider / *_provider); that is
 # now the ONLY per-project pinning surface.
 #
+# Interactive editor (preferred for humans):
+#   opsx models set                  # role → catalog → optional :thinking
+#   opsx models set review           # multi-select from `pi --list-models`
+# Catalog comes from `pi --list-models` (fzf if present, else numbered select).
+# Non-interactive escape hatch still works:
+#   opsx models set impl cursor/composer-2.5:high
+#   opsx models set review anthropic/claude-sonnet-5,cursor/composer-2.5
+#
+# Thinking / effort is the pi model-id suffix (`provider/id:high`), not a
+# separate YAML key. Vocabulary: off|minimal|low|medium|high|xhigh|max.
+#
 # Resolution order, highest wins:
 #   env > change review.md front-matter > user file > built-in default
 # The built-in default is the sentinel `session` ("use the session model").
@@ -24,7 +35,11 @@
 #          session by default (author_in_session), so this only takes effect
 #          when author_in_session is false (opt-in delegation).
 # review : one model OR a list — one blind reviewer is dispatched per entry
-#          (multi-model adversarial review).
+#          (multi-model adversarial review). Prefer YAML list form:
+#            review:
+#              - anthropic/claude-sonnet-5:high
+#              - cursor/composer-2.5
+#          CLI: `opsx models set review a/x,b/y` writes that list.
 # impl   : the implementation-subagent model.
 #
 # author: claude-bridge/claude-opus-4-8
@@ -32,15 +47,19 @@
 #   - claude-bridge/claude-opus-4-8
 #   - openai-codex/gpt-5.5
 # impl: claude-bridge/claude-opus-4-8
+# impl: cursor/composer-2.5:high   # thinking suffix example
 
 # ── Providers ──────────────────────────────────────────────────────────────
 # A model value CONTAINING "/" is a complete, provider-qualified pi model id and
 # is used VERBATIM (the provider keys below do NOT apply to it). This is the
 # primary way to pin a provider — copy the exact id from `pi --list-models`,
 # e.g. `claude-bridge/claude-opus-4-8` or the multi-segment `openrouter/openai/gpt-5.5`.
+# A trailing `:<thinking>` suffix (e.g. `:high`) is part of the id and is kept.
 #
 # For convenience, a BARE id (no "/") is qualified by a provider key: the
 # role-specific provider wins, else the top-level default `provider`.
+# Bare + suffix: `author: claude-opus-4-8:xhigh` + `provider: claude-bridge`
+#   → `claude-bridge/claude-opus-4-8:xhigh`.
 #
 #   provider: claude-bridge          # default provider for bare ids
 #   author_provider: claude-bridge   # per-role override (author/review/impl)
