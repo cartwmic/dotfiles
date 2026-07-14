@@ -100,6 +100,8 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
 
 ## Scope Expansions
 
+- 2026-07-14 — `tests/opsx-cli/test_opsx_cli.sh` "set review warn" assertion — evidence: gate validation-opsx-cli-tests failed because the suite still expected scalar `review` after replace; intent requires YAML list writes, so the sibling CLI suite must assert `!!seq` or validations stay red forever.
+
 <!-- Evidence-gated widenings (opsx-adversarial-review). intent.md states the
 intended scope in PROSE; the loop may widen the scope of WORK only when
 evidence shows the widening is REQUIRED to meet the frozen intent's outcomes
