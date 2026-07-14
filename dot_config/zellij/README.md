@@ -91,7 +91,8 @@ the harpoon list) only ever adds one pane per tab. Two compounding causes:
    — not the pane the user is actually on.
 
 The fork [cartwmic/harpoon](https://github.com/cartwmic/harpoon) at commit
-`da678cb` fixes both:
+`62d33eeb6e13db6597ba75aa4bb73c662e198d57` fixes both and carries the current
+pipe/respawn state-handoff implementation:
 
 - `get_focused_pane` now returns `None` when the floating layer holds focus,
   and `update_panes` keeps `focused_pane` sticky to the most recent real
@@ -99,6 +100,9 @@ The fork [cartwmic/harpoon](https://github.com/cartwmic/harpoon) at commit
 - Among `is_focused && !is_plugin` panes it picks the highest pane id (zellij
   assigns ids monotonically, so this tracks the most recently created/operated
   pane and matches the user's actual focus in stacked/split layouts).
+- `Ctrl-y` uses the `toggle` pipe; cross-tab respawn hands live bookmark state
+  directly to the targeted successor, reconciles disk asynchronously, and
+  guards first render and destructive pruning against startup races.
 
 The fork is pinned by commit SHA in `dot_config/mise/config.toml` via
 `HARPOON_REPO` and `HARPOON_VERSION`. Bump both together when re-syncing with
