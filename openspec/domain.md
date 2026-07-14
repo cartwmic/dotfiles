@@ -70,7 +70,8 @@ Sourced from mcp-memory entries on chezmoi gotchas (memory hash 4ecb27b6,
 
 ## Out-of-scope domains
 
-- **Stakeholder management** — this is a single-user dotfiles repo. Stakeholder-facing artifacts (tracker integrations, status pages, comms templates) are not modeled.
+- **Stakeholder management** — this is a single-user dotfiles repo. Stakeholder-facing artifacts (status pages, comms templates, org-wide tracker process) are not modeled. **Exception:** a work-profile (`axon-work-computer`) developer-workstation Jira *session helper* (pi extension: bind/search/sync/nudge for the local coding agent) is in-scope as personal tooling — it is not a stakeholder status surface and does not gate opsx workflows.
+
 - **Multi-tenant workspaces** — the user runs as a single identity across all hosts. No tenant isolation concerns.
 - **Production deployment** — chezmoi targets developer workstations, not servers. Production server config is owned by separate org infra repos.
 - **Mobile dev environments other than Termux** — iOS dev configuration is not modeled; iPad dev surfaces are not modeled.
