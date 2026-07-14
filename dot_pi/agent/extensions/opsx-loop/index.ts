@@ -647,6 +647,15 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// set — replaces any active loop, resolves worktree + budget, starts work.
+			// Invalidate the old object BEFORE the async turn-0 gate: a native retry can
+			// finish while that subprocess is running, and must not gate or continue the
+			// loop being replaced. Do not abort the old top-level run; its queued retry
+			// drains harmlessly under the owner/identity guards, then the replacement
+			// directive transfers ownership on its user message.
+			if (loop?.active) {
+				loop = undefined;
+				renderStatus(ctx);
+			}
 			// Named re-arm clears any landing hold BEFORE the turn-0 gate evaluation and
 			// regardless of its outcome (a green short-circuit must not leave a stale
 			// hold behind). This explicit human-only spelling is the SOLE clear path —

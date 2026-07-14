@@ -48,6 +48,9 @@ case "$cmd" in
     ;;
   gate)
     change="${1:-unknown}"
+    if [[ -n "${FAKE_OPSX_GATE_DELAY_SECONDS:-}" ]]; then
+      sleep "$FAKE_OPSX_GATE_DELAY_SECONDS"
+    fi
     safe_change="$(printf '%s' "$change" | tr '/[:space:]' '___')"
     count_file="${log_dir:-/tmp}/gate-count-${safe_change}"
     count=0
