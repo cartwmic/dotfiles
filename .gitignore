@@ -2,9 +2,11 @@ uservariables.yaml
 __pycache__
 bin/
 lib/
-# but allow chezmoi-managed scripts in dot_local/bin/
+# but allow chezmoi-managed script directories
 !dot_local/bin/
 !dot_local/bin/**
+!dot_config/zellij/bin/
+!dot_config/zellij/bin/**
 *.diff
 
 # pi session artifacts
