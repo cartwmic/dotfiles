@@ -47,8 +47,8 @@ Execution Mode = standard. Apply creates the mandatory `opsx/preserve-opsx-loop-
 - **Action:**
   1. Make fake provider error text configurable so deterministic HTTP 400 responses can model provider-neutral context overflow.
   2. Add one-shot and persistent-overflow scenarios proving settled recovery is bounded.
-  3. Add clear-during-retry, named-re-arm-during-retry, prequeued-user-work, duplicate-re-arm, pending-arm clear, and overflow-compaction abort scenarios.
-  4. Track top-level run ownership across low-level retries; transfer only on a generation-tagged exact replacement directive, invalidate stale async arm transactions, and treat compaction abort/cancel as terminal without retry injection.
+  3. Add clear-during-retry, named-re-arm-during-retry, prequeued-user-work, duplicate-re-arm, pending-arm clear, extension-compaction abort, and Pi auto-compaction abort scenarios.
+  4. Track top-level run ownership across low-level retries; transfer only on a generation-tagged exact replacement directive, invalidate stale async arm transactions, and bind both extension-owned and Pi-owned overflow compaction cancellation to the exact loop so settlement cannot restart aborted work.
   5. Run all added scenarios and commit focused lifecycle fixes with explanatory bodies.
 - **Verification:** s09–s12 pass; old retry gate count remains one; replacement gate count advances only after its own directive.
 - **Rollback:** Revert the step commit and retain the initial red verification finding.

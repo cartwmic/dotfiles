@@ -86,6 +86,9 @@ interface LoopState {
 	// Stored on this exact LoopState so clear/replacement/re-arm invalidates stale
 	// settlement by construction. A later clean attempt clears it before gating.
 	pendingError?: any;
+	// Set when Pi's own overflow compaction signal is explicitly aborted. The
+	// following agent_settled must land instead of restarting compaction itself.
+	hostOverflowCompactionAborted?: boolean;
 	// Bounded latch for overflow-only recovery: set when a worker turn settles with
 	// a context-overflow error and we compact-and-retry once; reset on the next clean
 	// turn. A second consecutive overflow (recovery already attempted) stops the loop.
@@ -415,8 +418,8 @@ export default function (pi: ExtensionAPI) {
 
 	function compactionWasAborted(error: any, ctx: ExtensionContext): boolean {
 		if (ctx.signal?.aborted || error?.name === "AbortError") return true;
-		const text = `${error?.name ?? ""} ${error?.message ?? error ?? ""}`.toLowerCase();
-		return /\babort(?:ed)?\b|\bcancell?ed\b/.test(text);
+		const message = String(error?.message ?? error ?? "").trim().toLowerCase();
+		return message === "compaction cancelled" || message === "compaction canceled";
 	}
 
 	function landCompactionAbort(session: LoopState, ctx: ExtensionContext): void {
@@ -725,6 +728,10 @@ export default function (pi: ExtensionAPI) {
 					writeFileSync(reviewPath, cleared.next);
 					holdNote = ` · hold was set: "${cleared.reason || "(no reason recorded)"}" — cleared by re-arm`;
 				} catch (e: any) {
+					if (pendingArm?.generation === generation) {
+						armGeneration += 1;
+						pendingArm = undefined;
+					}
 					ctx.ui.notify(`⟳ opsx-loop: failed to clear loop_hold in ${reviewPath}: ${e?.message ?? "unknown"}`, "error");
 					return;
 				}
@@ -776,6 +783,28 @@ export default function (pi: ExtensionAPI) {
 			);
 			return;
 		},
+	});
+
+	// Observe Pi-owned overflow compaction cancellation. Pi emits no fresh
+	// agent_end(aborted) when Escape cancels auto-compaction; its original overflow
+	// error remains pending until agent_settled. Bind the compaction signal to the
+	// exact loop so settlement cannot restart an operation the user cancelled.
+	pi.on("session_before_compact", async (event: any) => {
+		const session = loop;
+		if (!session?.active || event?.reason !== "overflow" || event?.willRetry !== true) return;
+		const signal: AbortSignal | undefined = event?.signal;
+		if (!signal) return;
+		const markAborted = () => {
+			if (loop === session && session.active) session.hostOverflowCompactionAborted = true;
+		};
+		if (signal.aborted) markAborted();
+		else signal.addEventListener("abort", markAborted, { once: true });
+	});
+
+	pi.on("session_compact", async (event: any) => {
+		if (event?.reason === "overflow" && event?.willRetry === true && loop?.active) {
+			loop.hostOverflowCompactionAborted = false;
+		}
 	});
 
 	// Mid-run context elision (Lever L3). The pi `context` event fires before EVERY
@@ -879,6 +908,7 @@ export default function (pi: ExtensionAPI) {
 		// A clean native continuation supersedes any prior errored attempt and follows
 		// the existing same-run gate/continuation topology exactly once.
 		session.pendingError = undefined;
+		session.hostOverflowCompactionAborted = false;
 		session.evaluating = true;
 		try {
 			// A clean (non-error) turn re-arms one future overflow recovery.
@@ -1039,6 +1069,16 @@ export default function (pi: ExtensionAPI) {
 		// In that case preserve the pending outcome; its eventual clean/error boundary
 		// will supersede or settle it without racing that continuation.
 		if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
+
+		if (session.hostOverflowCompactionAborted) {
+			session.hostOverflowCompactionAborted = false;
+			session.pendingError = undefined;
+			session.elided = false;
+			const c = session.change ?? (session.goal ? `goal "${session.goal}"` : "conversation");
+			clearLoop(ctx);
+			ctx.ui.notify(`⟳ opsx-loop stopped (aborted): ${c}`, "warning");
+			return;
+		}
 
 		// Consume before any async recovery. Because the outcome lives on this exact
 		// LoopState, clear/replacement/re-arm makes a stale settled event a no-op.

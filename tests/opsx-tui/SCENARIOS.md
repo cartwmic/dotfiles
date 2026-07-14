@@ -35,7 +35,8 @@ No default scenario needs hosted model credentials.
 | `s13-prequeued-rearm` | `opsx-loop.interrupt-or-error-stops-the-loop`: unrelated queued user work ahead of a re-arm stays old-owned; only the exact generated replacement directive transfers ownership and may gate the replacement |
 | `s14-clear-pending-arm` | `opsx-loop.interrupt-or-error-stops-the-loop`: clear after a delayed turn-zero gate prevents the queued arm directive from reaching the provider |
 | `s15-duplicate-rearm` | `opsx-loop.interrupt-or-error-stops-the-loop`: two same-change re-arms carry unique generations; stale identical prose cannot claim latest-loop ownership |
-| `s16-overflow-compact-abort` | `opsx-loop.interrupt-or-error-stops-the-loop`: Escape during delayed settled-overflow compaction lands as abort and injects no recovery turn |
+| `s16-overflow-compact-abort` | `opsx-loop.interrupt-or-error-stops-the-loop`: Escape during delayed extension-owned settled-overflow compaction lands as abort and injects no recovery turn |
+| `s17-auto-compact-abort` | `opsx-loop.interrupt-or-error-stops-the-loop`: with project auto-compaction enabled, Escape during Pi-owned overflow compaction marks the pending attempt aborted so settlement cannot restart compaction |
 
 ## Running
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shared helpers for opsx-loop TUI scenarios.
 # AC: opsx-loop.scenario-harness-is-isolated-and-signal-driven
+# AC: opsx-loop.interrupt-or-error-stops-the-loop
 
 set -euo pipefail
 
@@ -70,6 +71,8 @@ scn_start_fake_provider() {
 scn_pi_start() {
   scn_start_fake_provider
   local pi_cmd
+  local approve_arg=""
+  [[ "${SCN_PI_APPROVE:-0}" == "1" ]] && approve_arg="--approve"
   printf -v pi_cmd '%q ' \
     env \
     "PATH=$TMP_DIR/bin:$PATH" \
@@ -78,7 +81,7 @@ scn_pi_start() {
     "FAKE_OPSX_GATE_SEQUENCE=${FAKE_OPSX_GATE_SEQUENCE:-1,0}" \
     "FAKE_OPSX_WORKTREE_PATH=$SCENARIO_CWD" \
     "OPSX_TUI_FAKE_BASE_URL=$OPSX_TUI_FAKE_BASE_URL" \
-    pi --no-session -ne \
+    pi --no-session -ne ${approve_arg:+$approve_arg} \
     -e "$REPO_DIR/dot_pi/agent/extensions/opsx-loop" \
     -e "$FIXTURE_DIR/fake-provider.ts" \
     --provider opsx-tui-fake --model smoke
