@@ -94,6 +94,9 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
 
 - 2026-07-14 — review.md authored from schema template at loop start
   (openspec-loop); Scale/modes from frozen intent.md.
+- 2026-07-14 — Plain-M propose: proposal + specs (opsx-cli, opsx-model-config)
+  + tasks + plan; clarify/design/analyze skipped (open questions in proposal;
+  design decision-gated skipped — UX locked in intent).
 
 ## Scope Expansions
 
