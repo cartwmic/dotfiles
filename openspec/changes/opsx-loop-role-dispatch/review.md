@@ -106,6 +106,8 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
   review_models for gating even though user-layer review is unset — matches
   sibling change pattern; unset=refuse applies to opsx_dispatch under THIS
   change's product, not to loop orchestrator consumption of review.md pins.
+- 2026-07-14 — proposal.md authored (plain-M: Open Questions + deterministic
+  analyze inline; design/clarify/analyze.md skipped per Scale).
 
 ## Scope Expansions
 
