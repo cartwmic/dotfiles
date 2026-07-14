@@ -74,8 +74,11 @@ ticket (or creating/binding as specified), using raw MCP tool names
 
 THE extension SHALL inject Jira ticket context into the agent only when the
 user runs `/jira context`, as a hidden `role:"custom"` message with
-`customType` identifying jira context, and SHALL NOT register a
-`before_agent_start` handler that auto-injects Jira context.
+`customType` identifying jira context. THE extension SHALL NOT auto-inject
+Jira context on ordinary `before_agent_start` events. A one-shot
+`pendingContextInject` latch set by `/jira context` MAY be consumed exactly
+once on the next `before_agent_start` solely to deliver that command-requested
+message, then cleared.
 
 #### Scenario: Explicit context inject
 - **WHEN** a ticket is bound and the user runs `/jira context`
@@ -86,6 +89,9 @@ user runs `/jira context`, as a hidden `role:"custom"` message with
 - **IF** `/jira context` is invoked with no bound key
 - **THEN** THE extension SHALL warn and SHALL NOT inject
 
+#### Scenario: No auto-inject without latch
+- **WHEN** `before_agent_start` fires and `pendingContextInject` is unset
+- **THEN** THE extension SHALL NOT inject Jira context
 ### Requirement: Configurable Ui Nudge Only
 
 WHILE the extension is enabled, THE extension SHALL on every N `agent_end`

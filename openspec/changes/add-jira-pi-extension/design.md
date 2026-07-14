@@ -147,6 +147,21 @@ of this general boundary (user re-auths via existing mcp-remote flow).
 
 **4-point test:** Y/Y/N/Y → ADR candidate N.
 
+### D9: Offline unit tests with mock MCP
+
+**Choice:** Colocate `*.test.ts` under `dot_pi/agent/extensions/jira/` run via
+`bun test` (same pattern as opsx-loop / ntfy). Tests cover: command arg
+parsing, bind/clear state machine, nudge cadence + enabled gate, MCP client
+call shaping (tool name + args) against an in-memory mock transport. Suite
+MUST NOT open network sockets to the Jira MCP URL (mock only). Wire a
+required gate entry `jira-extension-tests` running
+`bun test dot_pi/agent/extensions/jira/`.
+
+**Alternatives considered:** Live smoke as required gate — rejected (flake;
+intent: manual/spike only).
+
+**4-point test:** Y/N/N/N → ADR candidate N.
+
 ## Risks / Trade-offs
 
 | # | Risk | Likelihood | Severity | Mitigation |

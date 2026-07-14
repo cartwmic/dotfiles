@@ -22,6 +22,8 @@ delegation_mode: subagent-required
 # full_rigor=80 (the former L budget). The value is written here at authoring
 # time; the loop runtime reads it verbatim.
 loop_max_iterations: 40
+loop_hold: true
+loop_hold_reason: "design-fidelity escalation valve — two consecutive violated (rounds 1–2); fixes for AC15 (D9) + AC9 latch wording landed unjudged; awaiting human re-arm (/opsx-loop add-jira-pi-extension) to authorize fidelity round 3"
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
@@ -95,6 +97,10 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
 - 2026-07-14 — Plain-M: clarify open questions fold into proposal.md; no
   standalone clarify.md / analyze.md; design.md authored (transport + deploy
   decisions warrant ADR-candidate decisions).
+- 2026-07-14 — Fidelity round 1 violated (missing bind/nudge/error mechanisms).
+  Expanded D5–D8; round 2 violated on AC15 (tests) + advisory AC9 latch tension.
+  Added D9 + spec latch wording. Escalation valve → loop_hold; no round 3
+  without human re-arm.
 
 ## Scope Expansions
 
@@ -126,4 +132,4 @@ attested integration-checkout HEAD of that round.
 | Round | Fidelity | Per-judge verdicts | Attested HEAD |
 |---|---|---|---|
 | 1 | violated | anthropic/claude-sonnet-5:violated | d8bb77eb9b428488ae633058a965897888846c44 |
-| 2 | <pending re-seal after D5–D8> | — | — |
+| 2 | violated | anthropic/claude-sonnet-5:violated | c3d7bb2d73957aa97e4be3222beefbfeb0740a55 |
