@@ -10,6 +10,7 @@ loop_max_iterations: 40
 validation_source_mode: required
 spec_level: spec-anchored
 doneness_mode: required
+review_models: [openai-codex/gpt-5.6-sol, claude-bridge/claude-opus-4-8]
 ---
 
 # Review
@@ -32,7 +33,7 @@ doneness_mode: required
 | Validation Source Mode | required | Extension test suite and deterministic fake lifecycle events provide agent-independent validation |
 | Doneness Mode | required | Plain-M doneness rides the designated blind code reviewer dispatch |
 | Spec Level | spec-anchored | Existing `opsx-loop` capability spec is updated with the lifecycle contract |
-| Model Config | (unset) | Resolve project/user role models through `opsx models` |
+| Model Config | review override | `openai-codex/gpt-5.6-sol` + `claude-bridge/claude-opus-4-8` after configured Fable reviewer exhausted provider quota before producing any valid judgment |
 
 ## Diff Base + Worktree locator
 
@@ -43,10 +44,12 @@ doneness_mode: required
 ## Manual Adjustments
 
 - Scale set to M rather than S because the correction spans runtime lifecycle handling, capability specification, focused tests, and likely TUI scenario coverage while remaining one capability.
+- Review model set repaired before the first gating code-review round: configured `claude-bridge/claude-fable-5` returned only a provider quota-limit message and no valid attestation/verdict; substituted available same-provider `claude-bridge/claude-opus-4-8` alongside configured `openai-codex/gpt-5.6-sol` so blind multi-model gating remains reachable.
 
 ## Execution Notes
 
 - 2026-07-14 — Frozen intent selects hybrid lifecycle handling: clean `agent_end` retains existing continuation topology; only unresolved errors defer to `agent_settled`.
+- 2026-07-14 — Validation dispatch incident: `claude-bridge/claude-fable-5` exhausted provider quota before reading the tree; output lacked attestation/verdict and was excluded as INVALID. Blind retry used `openai-codex/gpt-5.6-sol`, which returned red findings; lifecycle gaps and commit-body hygiene were fixed before gating review.
 
 ## Scope Expansions
 
