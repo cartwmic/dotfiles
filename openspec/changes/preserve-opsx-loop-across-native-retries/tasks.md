@@ -20,7 +20,7 @@
       - tests/opsx-tui/fixtures/fake-openai-server.mjs
   - allow_new_files: false
 
-- [ ] 2.2 Add and register a real-Pi TUI scenario where the provider fails transiently, Pi retries successfully, the loop stays armed, and the successful boundary reaches exactly one normal gate-green landing; document the scenario and deterministic signals. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
+- [x] 2.2 Add and register a real-Pi TUI scenario where the provider fails transiently, Pi retries successfully, the loop stays armed, and the successful boundary reaches exactly one normal gate-green landing; document the scenario and deterministic signals. (AC `opsx-loop.interrupt-or-error-stops-the-loop`)
   - intent: feature
   - files_allowed:
       - tests/opsx-tui/SCENARIOS.md
