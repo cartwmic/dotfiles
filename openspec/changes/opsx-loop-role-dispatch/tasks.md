@@ -8,12 +8,12 @@
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/**
   - allow_new_files: true
-- [ ] 1.2 Implement `opsx_dispatch` execute: refuse when loop not armed; resolve role via `opsx models` / `OPSX_*`; unset = actionable refuse (no session fallback); configured role forces model (ignore caller `model`); `review` auto fan-out one spawn per list entry in order
+- [x] 1.2 Implement `opsx_dispatch` execute: refuse when loop not armed; resolve role via `opsx models` / `OPSX_*`; unset = actionable refuse (no session fallback); configured role forces model (ignore caller `model`); `review` auto fan-out one spawn per list entry in order
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/**
   - allow_new_files: true
-- [ ] 1.3 Wire spawn through pi-subagents programmatic library API (`runSync` or equivalent export) with forced model; keep one-way dep (no OPSX knowledge in pi-subagents)
+- [x] 1.3 Wire spawn through pi-subagents programmatic library API (`runSync` or equivalent export) with forced model; keep one-way dep (no OPSX knowledge in pi-subagents)
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/**
@@ -36,7 +36,7 @@
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/**
   - allow_new_files: true
-- [ ] 3.2 Add hermetic tests for refuse-when-unset, role-forced model into spawn stub, and review fan-out count citing `opsx-loop.opsx-dispatch-forces-resolved-role-model`, `opsx-loop.review-role-auto-fan-out`, `opsx-loop.dispatch-spawns-via-subagent-library` (stub spawn; no live network)
+- [x] 3.2 Add hermetic tests for refuse-when-unset, role-forced model into spawn stub, and review fan-out count citing `opsx-loop.opsx-dispatch-forces-resolved-role-model`, `opsx-loop.review-role-auto-fan-out`, `opsx-loop.dispatch-spawns-via-subagent-library` (stub spawn; no live network)
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/**

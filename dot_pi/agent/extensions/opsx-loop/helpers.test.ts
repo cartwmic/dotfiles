@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildModelEnv, classifyDoneness, clearHoldText, describeCompactPolicy, donenessRatchet, formatInventory, gateFailKey, hashDir, isContextOverflowError, listIntentChanges, OPSX_MODEL_ENV_KEYS, OPSX_DISPATCH_TOOL_NAME, SUBAGENT_TOOL_NAME, applyArmedToolSet, restoreToolSetAfterClear, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, resolveCompactPercent, resolveCompactThresholdTokens, stripLoopHold, verdictFromExit, ELIDE_STUB, resolveElideKeepPercent, resolveElideBandPercent, resolveElideMaxKeepTokens, resolveElideBandTokens, estimateMessageTokens, tokenBudgetBoundary, elideToolResultBodies } from "./helpers.ts";
+import { buildModelEnv, classifyDoneness, clearHoldText, describeCompactPolicy, donenessRatchet, formatInventory, gateFailKey, hashDir, isContextOverflowError, listIntentChanges, OPSX_MODEL_ENV_KEYS, OPSX_DISPATCH_TOOL_NAME, SUBAGENT_TOOL_NAME, applyArmedToolSet, restoreToolSetAfterClear, planOpsxDispatch, runOpsxDispatchSpawns, parseDonenessGaps, parseLoopArg, parseLoopBudget, parseLoopHold, parseModelsJson, resolveCompactPercent, resolveCompactThresholdTokens, stripLoopHold, verdictFromExit, ELIDE_STUB, resolveElideKeepPercent, resolveElideBandPercent, resolveElideMaxKeepTokens, resolveElideBandTokens, estimateMessageTokens, tokenBudgetBoundary, elideToolResultBodies } from "./helpers.ts";
 
 type TR = { role: string; content: unknown; toolCallId?: string; toolName?: string };
 const asst = (id: string) => ({ role: "assistant", content: [{ type: "text", text: "call" }, { type: "toolCall", id, name: "bash", arguments: {} }] });
@@ -45,6 +45,108 @@ describe("armed tool mute — opsx-loop.armed-loop-mutes-generic-subagent-tool",
 			"read",
 			"bash",
 		]);
+	});
+});
+
+describe("planOpsxDispatch — opsx-loop.opsx-dispatch-forces-resolved-role-model", () => {
+	test("refuse when not armed", () => {
+		const p = planOpsxDispatch({
+			armed: false,
+			role: "impl",
+			task: "t",
+			resolved: { value: "cursor/composer-2.5", source: "user" },
+		});
+		expect(p.ok).toBe(false);
+		if (!p.ok) expect(p.reason).toBe("not-armed");
+	});
+	test("refuse when role unset — no session fallback", () => {
+		const p = planOpsxDispatch({
+			armed: true,
+			role: "impl",
+			task: "t",
+			resolved: { value: null, source: "unset" },
+			callerModel: "session/should-not-use",
+		});
+		expect(p.ok).toBe(false);
+		if (!p.ok) {
+			expect(p.reason).toBe("unset");
+			expect(p.message).toContain("opsx models set impl");
+		}
+	});
+	test("configured impl forces model; caller model ignored", () => {
+		const p = planOpsxDispatch({
+			armed: true,
+			role: "impl",
+			task: "do work",
+			callerModel: "anthropic/claude-sonnet-5",
+			resolved: { value: "cursor/composer-2.5", source: "env" },
+		});
+		expect(p.ok).toBe(true);
+		if (p.ok) {
+			expect(p.spawns).toEqual([{ model: "cursor/composer-2.5", task: "do work", agent: "worker" }]);
+		}
+	});
+	test("author refuses while author-in-session default/true", () => {
+		const p = planOpsxDispatch({
+			armed: true,
+			role: "author",
+			task: "write",
+			resolved: { value: "anthropic/claude-opus-4-8", source: "user" },
+			authorInSession: true,
+		});
+		expect(p.ok).toBe(false);
+		if (!p.ok) expect(p.reason).toBe("author-in-session");
+	});
+});
+
+describe("planOpsxDispatch review fan-out — opsx-loop.review-role-auto-fan-out", () => {
+	test("multi-review list fans out in order", () => {
+		const p = planOpsxDispatch({
+			armed: true,
+			role: "review",
+			task: "judge",
+			resolved: {
+				value: ["anthropic/claude-sonnet-5", "anthropic/claude-opus-4-8"],
+				source: "change",
+			},
+		});
+		expect(p.ok).toBe(true);
+		if (p.ok) {
+			expect(p.spawns.map((s) => s.model)).toEqual([
+				"anthropic/claude-sonnet-5",
+				"anthropic/claude-opus-4-8",
+			]);
+			expect(p.spawns).toHaveLength(2);
+		}
+	});
+	test("single review entry spawns once", () => {
+		const p = planOpsxDispatch({
+			armed: true,
+			role: "review",
+			task: "judge",
+			resolved: { value: "anthropic/claude-sonnet-5", source: "user" },
+		});
+		expect(p.ok).toBe(true);
+		if (p.ok) expect(p.spawns).toHaveLength(1);
+	});
+});
+
+describe("runOpsxDispatchSpawns — opsx-loop.dispatch-spawns-via-subagent-library", () => {
+	test("calls spawn stub once per planned model with forced model", async () => {
+		const seen: string[] = [];
+		const results = await runOpsxDispatchSpawns(
+			[
+				{ model: "a/x", task: "t", agent: "worker" },
+				{ model: "b/y", task: "t", agent: "worker" },
+			],
+			async (spec) => {
+				seen.push(spec.model);
+				return { model: spec.model, agent: spec.agent, ok: true, text: `ok:${spec.model}` };
+			},
+		);
+		expect(seen).toEqual(["a/x", "b/y"]);
+		expect(results).toHaveLength(2);
+		expect(results.every((r) => r.ok)).toBe(true);
 	});
 });
 
