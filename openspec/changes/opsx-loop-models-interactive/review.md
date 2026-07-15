@@ -109,6 +109,8 @@ non-trivial decision is made mid-task. Durable knowledge → retrospective.md. -
   skipped standalone design.md (plain-M decision-gated; forks in intent);
   skipped opsx-model-config delta (per-entry suffixes already required).
 
+- 2026-07-14 — R1 blind adversarial code-review quiet pass (sonnet+opus); sealed Verdict pass + doneness satisfied at Attested HEAD 3b1d59479c8fb0ece8fe76b4dc8aa2e94ef76147.
+
 ## Scope Expansions
 
 <!-- Evidence-gated widenings (opsx-adversarial-review). intent.md states the
