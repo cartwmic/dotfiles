@@ -42,7 +42,7 @@
 
 ## 3. Validation wrap-up
 
-- [ ] 3.1 Run `tests/opsx-models` (+ opsx-cli if touched) and extension unit tests; fix failures without weakening ACs
+- [x] 3.1 Run `tests/opsx-models` (+ opsx-cli if touched) and extension unit tests; fix failures without weakening ACs
   - intent: infra
   - files_allowed:
       - tests/opsx-models/**
