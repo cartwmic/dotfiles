@@ -52,24 +52,38 @@ type RunSyncFn = (
 type DiscoverFn = (cwd: string, scope: "user" | "project" | "both") => { agents: AgentLike[] };
 type GetArtifactsDirFn = (parentSessionFile: string | null) => string;
 
-async function loadSubagentsApi(): Promise<{
+type SubagentsApi = {
 	runSync: RunSyncFn;
 	discoverAgents: DiscoverFn;
 	getArtifactsDir: GetArtifactsDirFn;
-}> {
-	const executionUrl = pathToFileURL(join(SUBAGENTS_DIR, "execution.ts")).href;
-	const agentsUrl = pathToFileURL(join(SUBAGENTS_DIR, "agents.ts")).href;
-	const artifactsUrl = pathToFileURL(join(SUBAGENTS_DIR, "artifacts.ts")).href;
-	const [execution, agents, artifacts] = await Promise.all([
-		import(executionUrl),
-		import(agentsUrl),
-		import(artifactsUrl),
-	]);
-	return {
-		runSync: execution.runSync as RunSyncFn,
-		discoverAgents: agents.discoverAgents as DiscoverFn,
-		getArtifactsDir: artifacts.getArtifactsDir as GetArtifactsDirFn,
-	};
+};
+
+/** Process-singleton: parallel fan-out must share one dynamic import (avoids jiti race). */
+let apiPromise: Promise<SubagentsApi> | undefined;
+
+async function loadSubagentsApi(): Promise<SubagentsApi> {
+	if (!apiPromise) {
+		apiPromise = (async (): Promise<SubagentsApi> => {
+			const executionUrl = pathToFileURL(join(SUBAGENTS_DIR, "execution.ts")).href;
+			const agentsUrl = pathToFileURL(join(SUBAGENTS_DIR, "agents.ts")).href;
+			const artifactsUrl = pathToFileURL(join(SUBAGENTS_DIR, "artifacts.ts")).href;
+			const [execution, agents, artifacts] = await Promise.all([
+				import(executionUrl),
+				import(agentsUrl),
+				import(artifactsUrl),
+			]);
+			return {
+				runSync: execution.runSync as RunSyncFn,
+				discoverAgents: agents.discoverAgents as DiscoverFn,
+				getArtifactsDir: artifacts.getArtifactsDir as GetArtifactsDirFn,
+			};
+		})();
+		// Failed load must not poison later spawns — allow retry.
+		apiPromise.catch(() => {
+			apiPromise = undefined;
+		});
+	}
+	return apiPromise;
 }
 
 /** Role sole-source: clear fallbackModels so runSync cannot retry off-role models. */
