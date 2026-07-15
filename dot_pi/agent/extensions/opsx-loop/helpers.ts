@@ -156,7 +156,7 @@ export interface OpsxDispatchSingleResult {
 		error?: string;
 		model?: string;
 	};
-	artifactPaths?: Record<string, string>;
+	artifactPaths?: Record<string, string> & { dir?: string };
 }
 
 export type OpsxDispatchPlan =
@@ -394,6 +394,7 @@ export async function runOpsxDispatchSpawns(
 		() => undefined,
 	);
 
+	const artifactDirs: Array<string | undefined> = plan.spawns.map(() => undefined);
 	const emitAggregate = () => {
 		if (!opts?.onUpdate) return;
 		const partialResults = slots.map((r, i) => {
@@ -422,9 +423,15 @@ export async function runOpsxDispatchSpawns(
 		const progress = partialResults.map((r) => r.progress).filter(Boolean) as NonNullable<
 			OpsxDispatchSingleResult["progress"]
 		>[];
+		const liveArt = artifactDirs.find((d): d is string => typeof d === "string" && d.length > 0);
 		opts.onUpdate({
 			content: [{ type: "text", text: `opsx_dispatch ${plan.mode} (${plan.spawns.length})…` }],
-			details: { mode: plan.mode, results: partialResults, progress },
+			details: {
+				mode: plan.mode,
+				results: partialResults,
+				progress,
+				...(liveArt ? { artifacts: { dir: liveArt } } : {}),
+			},
 		});
 	};
 
@@ -433,6 +440,10 @@ export async function runOpsxDispatchSpawns(
 			? (u) => {
 					const r0 = u.details.results[0];
 					if (r0?.progress) progressSlots[index] = { ...r0.progress, index };
+					if (u.details.artifacts?.dir) artifactDirs[index] = u.details.artifacts.dir;
+					else if ((r0?.artifactPaths as { dir?: string } | undefined)?.dir) {
+						artifactDirs[index] = (r0!.artifactPaths as { dir: string }).dir;
+					}
 					emitAggregate();
 				}
 			: undefined;
@@ -441,6 +452,8 @@ export async function runOpsxDispatchSpawns(
 		if (result.singleResult?.progress) {
 			progressSlots[index] = { ...result.singleResult.progress, index };
 		}
+		const ad = (result.singleResult?.artifactPaths as { dir?: string } | undefined)?.dir;
+		if (ad) artifactDirs[index] = ad;
 		emitAggregate();
 		return result;
 	};
@@ -483,14 +496,16 @@ export async function runOpsxDispatchSpawns(
 		OpsxDispatchSingleResult["progress"]
 	>[];
 	const text = results.map((r) => r.text).join("\n");
-	const artifactDirs = detailsResults
-		.map((r) => (r.artifactPaths as { dir?: string } | undefined)?.dir)
-		.filter((d): d is string => typeof d === "string" && d.length > 0);
+	const resolvedArtifactDir =
+		artifactDirs.find((d): d is string => typeof d === "string" && d.length > 0) ??
+		detailsResults
+			.map((r) => (r.artifactPaths as { dir?: string } | undefined)?.dir)
+			.find((d): d is string => typeof d === "string" && d.length > 0);
 	const details = {
 		mode: plan.mode,
 		results: detailsResults,
 		progress,
-		...(artifactDirs[0] ? { artifacts: { dir: artifactDirs[0] } } : {}),
+		...(resolvedArtifactDir ? { artifacts: { dir: resolvedArtifactDir } } : {}),
 	};
 	if (opts?.onUpdate) {
 		opts.onUpdate({ content: [{ type: "text", text }], details });

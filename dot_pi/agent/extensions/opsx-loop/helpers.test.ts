@@ -1097,6 +1097,39 @@ describe("toSingleResult + thin-wrap renderers — transparency", () => {
 	});
 });
 
+
+describe("runOpsxDispatchSpawns artifacts Details — transparency", () => {
+	test("final details.artifacts.dir comes from singleResult.artifactPaths.dir", async () => {
+		const { details } = await runOpsxDispatchSpawns(
+			{ mode: "single", spawns: [{ model: "a/x", task: "t", agent: "worker" }] },
+			async (spec) => ({
+				model: spec.model,
+				agent: spec.agent,
+				ok: true,
+				text: "ok",
+				singleResult: {
+					agent: spec.agent,
+					task: spec.task,
+					exitCode: 0,
+					finalOutput: "done",
+					model: spec.model,
+					sessionFile: "/tmp/s.jsonl",
+					artifactPaths: {
+						inputPath: "/tmp/arts/in.md",
+						outputPath: "/tmp/arts/out.md",
+						jsonlPath: "/tmp/arts/log.jsonl",
+						metadataPath: "/tmp/arts/meta.json",
+						dir: "/tmp/arts",
+					},
+				},
+			}),
+		);
+		expect(details.artifacts?.dir).toBe("/tmp/arts");
+		expect(details.results[0]?.sessionFile).toBe("/tmp/s.jsonl");
+		expect(details.results[0]?.artifactPaths?.outputPath).toBe("/tmp/arts/out.md");
+	});
+});
+
 describe("runOpsxDispatchSpawns pending slots — progress honesty", () => {
 	test("unstarted slots report pending not running under concurrency=1", async () => {
 		const seen: string[] = [];

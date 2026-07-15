@@ -422,7 +422,7 @@ export default function (pi: ExtensionAPI) {
 			}),
 			async execute(_toolCallId, params, signal, onUpdate, ctx) {
 				const role = params.role as OpsxDispatchRole;
-				const authorInSession = [redacted]"author-in-session", loop?.change ?? "", ctx.cwd);
+				const authorInSession = resolveModel("author-in-session", loop?.change ?? "", ctx.cwd);
 				const ais =
 					authorInSession && typeof authorInSession.value === "boolean"
 						? authorInSession.value
@@ -441,7 +441,7 @@ export default function (pi: ExtensionAPI) {
 					concurrency: params.concurrency,
 					callerModel: params.model,
 					resolved,
-					authorInSession: [redacted],
+					authorInSession: ais,
 				});
 				if (!plan.ok) {
 					return {
