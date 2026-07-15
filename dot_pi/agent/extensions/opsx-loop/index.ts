@@ -48,11 +48,14 @@ import {
 	type ResolvedModel,
 } from "./helpers.ts";
 import { Type } from "typebox";
+<<<<<<< HEAD
 import {
 	classifyModelsCommand,
 	shouldRunInteractiveModelsSet,
 } from "./model-config.ts";
 import { runInteractiveModelsSet } from "./model-config-ui.ts";
+=======
+>>>>>>> f1ddd2d (fix: honor concurrency, presence XOR, sole-model, renderer preload)
 import { spawnViaRunSync, loadSubagentRenderers, type SubagentRenderers } from "./spawn.ts";
 import { Text } from "@mariozechner/pi-tui";
 
@@ -505,6 +508,10 @@ export default function (pi: ExtensionAPI) {
 			},
 			renderResult(result, options, theme, context) {
 				if (cachedRenderers === undefined) {
+<<<<<<< HEAD
+=======
+					// Still warming — invalidate when ready so TUI re-renders with real renderer.
+>>>>>>> f1ddd2d (fix: honor concurrency, presence XOR, sole-model, renderer preload)
 					void renderersPromise.then(() => {
 						try {
 							context?.invalidate?.();
