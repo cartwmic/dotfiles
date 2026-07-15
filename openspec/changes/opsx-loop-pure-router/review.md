@@ -81,6 +81,9 @@ merge-base, IMMUTABLE for the life of the `opsx/<change>` branch.
 - 2026-07-15 — authored review.md switchboard from frozen intent (Scale M,
   full_rigor: true, core envelope: mute edit/write + opsx_bookkeep + armed author
   override; shell residual accepted as Non-goal).
+- 2026-07-15 — design-fidelity R1 violated (worktree carry-forward + empty
+  set-hold / multi-review / provider gaps); design patched (`e684ae4` D7 + D2/D4);
+  R2 full-sweep both judges delivered at HEAD `e684ae4361d1132f05fa3b1dbafcd1b0ef7030e9`.
 
 ## Scope Expansions
 
@@ -94,4 +97,5 @@ Append-only orchestrator bookkeeping for design-fidelity rounds.
 
 | Round | Fidelity | Per-judge verdicts | Attested HEAD |
 |---|---|---|---|
-| — | — | — | — |
+| R1 | violated | Task×2: violated (not-covered worktree + gaps) | e63443f73e481741c0a5a79e69ca12824e102d3a |
+| R2 | delivered | Task×2: delivered (28/28 entailed) | e684ae4361d1132f05fa3b1dbafcd1b0ef7030e9 |
