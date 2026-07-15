@@ -77,6 +77,8 @@ merge-base, IMMUTABLE for the life of the `opsx/<change>` branch.
 
 ## Execution Notes
 
+- 2026-07-14 — R1 voided: integration HEAD moved mid-window with sibling `opsx-loop-models-interactive` archive (touched `dot_pi/agent/extensions/opsx-loop/` + `openspec/specs/opsx-loop/`). Worktree HEAD unchanged; verdicts INVALID per read-only-round-window. Landing P1 fixes then rebase + R2 freshness.
+
 - Plain-M: no standalone clarify/design/analyze; decisions in intent +
   proposal Open Questions.
 - Supersedes sequential review fan-out from archived
