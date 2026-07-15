@@ -190,7 +190,15 @@ export async function spawnViaRunSync(
 				: undefined,
 		});
 		const ok = result.exitCode === 0 && !result.error;
-		const singleResult = toSingleResult(spec, result, index);
+		const singleResult: OpsxDispatchSingleResult = {
+			...toSingleResult(spec, result, index),
+			// Surface the provisioned artifacts root for Details.artifacts aggregation
+			// (ArtifactPaths itself has input/output/jsonl/metadata paths, not dir).
+			artifactPaths: {
+				...(result.artifactPaths ?? {}),
+				dir: artifactsDir,
+			} as OpsxDispatchSingleResult["artifactPaths"] & { dir: string },
+		};
 		// Prefer child finalOutput; never collapse to the old one-liner when output exists.
 		const text =
 			result.finalOutput?.trim() ||
@@ -310,7 +318,7 @@ export function formatOpsxDispatchResult(
 			prog ? `${prog.toolCount} tools` : null,
 			prog ? `${prog.tokens} tok` : null,
 			prog ? `${Math.round(prog.durationMs)}ms` : null,
-			r.sessionFile ? `session=[redacted]}` : null,
+			r.sessionFile ? `session=${r.sessionFile}` : null,
 		]
 			.filter(Boolean)
 			.join(" · ");
