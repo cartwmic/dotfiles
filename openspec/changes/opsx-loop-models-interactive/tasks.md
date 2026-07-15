@@ -16,25 +16,25 @@
 
 ## 2. Extension Path B interactive set
 
-- [ ] 2.1 Parse `pi --list-models` into `provider/id` catalog helper; actionable error on empty/fail; allow longer timeout than the 10s `runModels` default for catalog fetch
+- [x] 2.1 Parse `pi --list-models` into `provider/id` catalog helper; actionable error on empty/fail; allow longer timeout than the 10s `runModels` default for catalog fetch
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/**
   - allow_new_files: true
 
-- [ ] 2.2 Implement substring/contains-filtered model picker via `ctx.ui.custom` (not startsWith-only stock SelectList)
+- [x] 2.2 Implement substring/contains-filtered model picker via `ctx.ui.custom` (not startsWith-only stock SelectList)
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/**
   - allow_new_files: true
 
-- [ ] 2.3 Wire bare `/opsx-loop models set` and role-only `set <role>` when `hasUI`: role → pick(s) → per-model thinking for review / one thinking for author|impl → `opsx models set …` write; value-bearing set stays thin passthrough; no-UI does not hang
+- [x] 2.3 Wire bare `/opsx-loop models set` and role-only `set <role>` when `hasUI`: role → pick(s) → per-model thinking for review / one thinking for author|impl → `opsx models set …` write; value-bearing set stays thin passthrough; no-UI does not hang
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/**
   - allow_new_files: true
 
-- [ ] 2.4 Extension unit tests for catalog parse, interactive arg routing, and CLI write args with mixed review suffixes (cite `opsx-loop.model-config-subcommand`)
+- [x] 2.4 Extension unit tests for catalog parse, interactive arg routing, and CLI write args with mixed review suffixes (cite `opsx-loop.model-config-subcommand`)
   - intent: feature
   - files_allowed:
       - dot_pi/agent/extensions/opsx-loop/**

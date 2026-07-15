@@ -48,6 +48,11 @@ import {
 	type ResolvedModel,
 } from "./helpers.ts";
 import { Type } from "typebox";
+import {
+	classifyModelsCommand,
+	shouldRunInteractiveModelsSet,
+} from "./model-config.ts";
+import { runInteractiveModelsSet } from "./model-config-ui.ts";
 import { spawnViaRunSync } from "./spawn.ts";
 
 const STALL_LIMIT = 3; // consecutive identical no-progress gate failures → stop
@@ -691,11 +696,28 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (parsed.mode === "models") {
-				// Thin wrapper over the `opsx models` CLI (owner of the write); bare → list.
-				// Use the session cwd so `--layer project` targets the ACTIVE repo.
-				const margs = parsed.args.length > 0 ? parsed.args : ["list"];
-				const { out } = runModels(margs, ctx.cwd);
-				ctx.ui.notify(out || "(no output)", "info");
+				// Thin wrapper over `opsx models` (CLI owns writes). Bare → list.
+				// Bare/role-only `set` with UI runs in-TUI pickers then shells out to
+				// `opsx models set …` — extension never writes YAML. (Path B)
+				const route = classifyModelsCommand(parsed.args);
+				if (
+					shouldRunInteractiveModelsSet(route, Boolean(ctx.hasUI), typeof ctx.ui?.custom === "function")
+				) {
+					const plan = await runInteractiveModelsSet(
+						ctx,
+						route.kind === "interactive-set" ? route.role : undefined,
+					);
+					if (!plan.ok) {
+						ctx.ui.notify(plan.error, "error");
+						return;
+					}
+					const { code, out } = runModels(plan.cliArgs, ctx.cwd);
+					ctx.ui.notify(out || "(no output)", code === 0 ? "info" : "error");
+					return;
+				}
+				const margs = route.kind === "list" ? ["list"] : parsed.args;
+				const { code, out } = runModels(margs, ctx.cwd);
+				ctx.ui.notify(out || "(no output)", code === 0 ? "info" : "error");
 				return;
 			}
 
