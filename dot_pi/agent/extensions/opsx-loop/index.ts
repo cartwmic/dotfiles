@@ -48,12 +48,17 @@ import {
 	type ResolvedModel,
 } from "./helpers.ts";
 import { Type } from "typebox";
+<<<<<<< HEAD
 import {
 	classifyModelsCommand,
 	shouldRunInteractiveModelsSet,
 } from "./model-config.ts";
 import { runInteractiveModelsSet } from "./model-config-ui.ts";
 import { spawnViaRunSync } from "./spawn.ts";
+=======
+import { spawnViaRunSync, loadSubagentRenderResult } from "./spawn.ts";
+import { Text } from "@mariozechner/pi-tui";
+>>>>>>> 6deb65e (feat: transparent opsx_dispatch with native parallel review fan-out)
 
 const STALL_LIMIT = 3; // consecutive identical no-progress gate failures → stop
 
@@ -387,24 +392,38 @@ export default function (pi: ExtensionAPI) {
 	function ensureOpsxDispatchTool(): void {
 		if (opsxDispatchRegistered) return;
 		opsxDispatchRegistered = true;
+		let cachedRenderResult: Awaited<ReturnType<typeof loadSubagentRenderResult>> | undefined;
 		pi.registerTool({
 			name: OPSX_DISPATCH_TOOL_NAME,
 			label: "opsx_dispatch",
 			description:
-				"Armed-loop-only: dispatch role-bound subagent work (review/impl/author) with the resolved opsx role model forced. Refuses when no loop is armed or the role is unset.",
+				"Armed-loop-only: dispatch role-bound subagent work (review/impl/author) with the resolved opsx role model forced. Accepts `task` or parallel `tasks[]`. Review multi-list + single task expands to native parallel. Refuses when no loop is armed or the role is unset.",
 			parameters: Type.Object({
 				role: Type.Union([Type.Literal("review"), Type.Literal("impl"), Type.Literal("author")], {
 					description: "opsx role whose configured model is forced for the spawn",
 				}),
-				task: Type.String({ description: "Task prompt for the spawned subagent" }),
-				agent: Type.Optional(Type.String({ description: "Optional subagent agent name" })),
+				task: Type.Optional(Type.String({ description: "Single task prompt (mutually exclusive with tasks)" })),
+				tasks: Type.Optional(
+					Type.Array(
+						Type.Object({
+							task: Type.String(),
+							agent: Type.Optional(Type.String()),
+							model: Type.Optional(
+								Type.String({ description: "Ignored — role is sole model source" }),
+							),
+						}),
+						{ description: "PARALLEL tasks (mutually exclusive with task)" },
+					),
+				),
+				agent: Type.Optional(Type.String({ description: "Optional default subagent agent name" })),
+				concurrency: Type.Optional(Type.Number({ description: "Optional parallel concurrency hint" })),
 				model: Type.Optional(
 					Type.String({
 						description: "Ignored when role is configured — role is sole model source",
 					}),
 				),
 			}),
-			async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			async execute(_toolCallId, params, signal, onUpdate, ctx) {
 				const role = params.role as OpsxDispatchRole;
 				const authorInSession = resolveModel("author-in-session", loop?.change ?? "", ctx.cwd);
 				const ais =
@@ -418,7 +437,9 @@ export default function (pi: ExtensionAPI) {
 					armed: Boolean(loop?.active && loop.change && !loop.awaitingChange),
 					role,
 					task: params.task,
+					tasks: params.tasks,
 					agent: params.agent,
+					concurrency: params.concurrency,
 					callerModel: params.model,
 					resolved,
 					authorInSession: ais,
@@ -426,23 +447,65 @@ export default function (pi: ExtensionAPI) {
 				if (!plan.ok) {
 					return {
 						content: [{ type: "text", text: plan.message }],
-						details: { refused: true, reason: plan.reason },
+						details: { refused: true, reason: plan.reason, mode: "management", results: [] },
 					};
 				}
-				const results = await runOpsxDispatchSpawns(plan.spawns, (spec) =>
-					spawnViaRunSync(spec, { cwd: ctx.cwd, signal }),
+				const { results, details, text } = await runOpsxDispatchSpawns(
+					plan,
+					(spec, meta) =>
+						spawnViaRunSync(spec, {
+							cwd: ctx.cwd,
+							signal,
+							index: meta.index,
+							onUpdate: meta.onUpdate,
+						}),
+					{
+						onUpdate: onUpdate
+							? (u) => {
+									onUpdate({
+										content: u.content,
+										details: u.details,
+									});
+								}
+							: undefined,
+					},
 				);
-				const text = results.map((r) => r.text).join("\n");
 				const allOk = results.every((r) => r.ok);
 				return {
 					content: [{ type: "text", text }],
 					details: {
+						...details,
 						refused: false,
 						models: results.map((r) => r.model),
 						ok: allOk,
 						count: results.length,
 					},
 				};
+			},
+			renderCall(args) {
+				const role = typeof args.role === "string" ? args.role : "?";
+				const n = Array.isArray(args.tasks) ? args.tasks.length : args.task ? 1 : 0;
+				const shape = Array.isArray(args.tasks) && args.tasks.length > 1 ? `parallel (${n})` : "single";
+				return new Text(`opsx_dispatch ${role} ${shape}`, 0, 0);
+			},
+			renderResult(result, options, theme) {
+				if (cachedRenderResult === undefined) {
+					// fire-and-forget warm; first render may fall back
+					void loadSubagentRenderResult().then((fn) => {
+						cachedRenderResult = fn;
+					});
+					cachedRenderResult = null;
+				}
+				if (cachedRenderResult) {
+					try {
+						return cachedRenderResult(result as never, options, theme) as never;
+					} catch {
+						/* fall through */
+					}
+				}
+				const t = result.content?.[0];
+				const text = t && typeof t === "object" && "text" in t ? String((t as { text: string }).text) : "(no output)";
+				return new Text(text.slice(0, 200), 0, 0);
 			},
 		});
 	}
