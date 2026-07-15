@@ -179,6 +179,13 @@ export function planOpsxDispatch(input: {
 	task?: string;
 	/** Parallel tasks shape (mutually exclusive with task). */
 	tasks?: OpsxDispatchTaskItem[];
+	/**
+	 * Field-presence flags (from the tool call object). When set, both keys
+	 * being present refuses even if one value is empty — schema XOR is on
+	 * presence, not non-emptiness.
+	 */
+	taskProvided?: boolean;
+	tasksProvided?: boolean;
 	agent?: string;
 	concurrency?: number;
 	/** Ignored when role is configured — documented for callers. */
@@ -195,9 +202,10 @@ export function planOpsxDispatch(input: {
 				"opsx_dispatch refused: no opsx-loop is armed. Use /opsx-loop <change> first, or the generic subagent tool when disarmed.",
 		};
 	}
-	const hasTask = typeof input.task === "string" && input.task.length > 0;
-	const hasTasks = Array.isArray(input.tasks) && input.tasks.length > 0;
-	if (hasTask && hasTasks) {
+	// Presence XOR: key present on the call (or inferred from value !== undefined).
+	const taskProvided = input.taskProvided ?? input.task !== undefined;
+	const tasksProvided = input.tasksProvided ?? input.tasks !== undefined;
+	if (taskProvided && tasksProvided) {
 		return {
 			ok: false,
 			reason: "schema",
@@ -205,12 +213,28 @@ export function planOpsxDispatch(input: {
 				"opsx_dispatch refused: pass either `task` or `tasks[]`, not both.",
 		};
 	}
-	if (!hasTask && !hasTasks) {
+	if (!taskProvided && !tasksProvided) {
 		return {
 			ok: false,
 			reason: "schema",
 			message:
 				"opsx_dispatch refused: provide `task` (single) or `tasks[]` (parallel).",
+		};
+	}
+	const hasTask = typeof input.task === "string" && input.task.length > 0;
+	const hasTasks = Array.isArray(input.tasks) && input.tasks.length > 0;
+	if (taskProvided && !hasTask) {
+		return {
+			ok: false,
+			reason: "schema",
+			message: "opsx_dispatch refused: `task` must be a non-empty string.",
+		};
+	}
+	if (tasksProvided && !hasTasks) {
+		return {
+			ok: false,
+			reason: "schema",
+			message: "opsx_dispatch refused: `tasks[]` must be a non-empty array.",
 		};
 	}
 	if (input.role === "author" && input.authorInSession !== false) {
@@ -299,15 +323,41 @@ export type OpsxDispatchOnUpdate = (update: {
 }) => void;
 
 /**
+ * Bounded concurrency pool — mirrors pi-subagents `parallel-utils.mapConcurrent`
+ * (same primitive `runParallelPath` uses). Kept local so hermetic tests need no
+ * pi-subagents import.
+ */
+export async function mapConcurrent<T, R>(
+	items: T[],
+	limit: number,
+	fn: (item: T, i: number) => Promise<R>,
+): Promise<R[]> {
+	const safeLimit = Math.max(1, Math.floor(limit) || 1);
+	const results: R[] = new Array(items.length);
+	let next = 0;
+	async function worker(): Promise<void> {
+		while (next < items.length) {
+			const i = next++;
+			results[i] = await fn(items[i]!, i);
+		}
+	}
+	await Promise.all(
+		Array.from({ length: Math.min(safeLimit, items.length) }, () => worker()),
+	);
+	return results;
+}
+
+/**
  * Run planned spawns via an injectable spawn fn (tests stub; production uses
- * pi-subagents runSync library with onUpdate). Parallel mode uses Promise.all
- * (native concurrent fan-out); single mode one spawn.
+ * pi-subagents runSync library with onUpdate). Parallel mode uses mapConcurrent
+ * (pi-subagents parallel-utils primitive) with plan.concurrency (default 4);
+ * single mode one spawn.
  * (opsx-loop.dispatch-spawns-via-subagent-library,
  *  opsx-loop.opsx-dispatch-transparent-progress-and-details,
  *  opsx-loop.review-role-auto-fan-out)
  */
 export async function runOpsxDispatchSpawns(
-	plan: { mode: "single" | "parallel"; spawns: OpsxDispatchSpawnSpec[] },
+	plan: { mode: "single" | "parallel"; spawns: OpsxDispatchSpawnSpec[]; concurrency?: number },
 	spawnFn: (
 		spec: OpsxDispatchSpawnSpec,
 		meta: { index: number; onUpdate?: OpsxDispatchOnUpdate },
@@ -377,10 +427,8 @@ export async function runOpsxDispatchSpawns(
 		return result;
 	};
 
-	const results =
-		plan.mode === "parallel"
-			? await Promise.all(plan.spawns.map((spec, i) => runOne(spec, i)))
-			: [await runOne(plan.spawns[0]!, 0)];
+	const limit = plan.mode === "parallel" ? (plan.concurrency ?? 4) : 1;
+	const results = await mapConcurrent(plan.spawns, limit, (spec, i) => runOne(spec, i));
 
 	const detailsResults: OpsxDispatchSingleResult[] = results.map((r, i) => {
 		if (r.singleResult) return { ...r.singleResult, ...(r.singleResult.progress ? { progress: { ...r.singleResult.progress, index: i } } : {}) };

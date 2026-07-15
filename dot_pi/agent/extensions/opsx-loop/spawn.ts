@@ -1,6 +1,7 @@
 /**
  * Library spawn adapter: opsx-loop → pi-subagents runSync (one-way; OPSX-blind).
  * Forwards onUpdate and returns SingleResult-shaped payload for Details.
+ * Strips agent.fallbackModels so role modelOverride is the sole candidate.
  * (opsx-loop.dispatch-spawns-via-subagent-library,
  *  opsx-loop.opsx-dispatch-transparent-progress-and-details)
  */
@@ -25,9 +26,11 @@ type AgentToolResult = {
 	};
 };
 
+type AgentLike = { name: string; fallbackModels?: string[]; [k: string]: unknown };
+
 type RunSyncFn = (
 	runtimeCwd: string,
-	agents: Array<{ name: string }>,
+	agents: AgentLike[],
 	agentName: string,
 	task: string,
 	options: {
@@ -40,7 +43,7 @@ type RunSyncFn = (
 	},
 ) => Promise<OpsxDispatchSingleResult & { exitCode: number; error?: string; finalOutput?: string }>;
 
-type DiscoverFn = (cwd: string, scope: "user" | "project" | "both") => { agents: Array<{ name: string }> };
+type DiscoverFn = (cwd: string, scope: "user" | "project" | "both") => { agents: AgentLike[] };
 
 async function loadSubagentsApi(): Promise<{ runSync: RunSyncFn; discoverAgents: DiscoverFn }> {
 	const executionUrl = pathToFileURL(join(SUBAGENTS_DIR, "execution.ts")).href;
@@ -50,6 +53,15 @@ async function loadSubagentsApi(): Promise<{ runSync: RunSyncFn; discoverAgents:
 		runSync: execution.runSync as RunSyncFn,
 		discoverAgents: agents.discoverAgents as DiscoverFn,
 	};
+}
+
+/** Role sole-source: clear fallbackModels so runSync cannot retry off-role models. */
+export function agentsWithoutFallbacks(agents: AgentLike[], agentName: string): AgentLike[] {
+	return agents.map((a) => {
+		if (a.name !== agentName) return a;
+		const { fallbackModels: _drop, ...rest } = a;
+		return { ...rest, name: a.name };
+	});
 }
 
 function toSingleResult(
@@ -98,7 +110,8 @@ export async function spawnViaRunSync(
 	const index = opts.index ?? 0;
 	try {
 		const { runSync, discoverAgents } = await loadSubagentsApi();
-		const { agents } = discoverAgents(opts.cwd, "both");
+		const { agents: discovered } = discoverAgents(opts.cwd, "both");
+		const agents = agentsWithoutFallbacks(discovered, spec.agent);
 		const runId = opts.runId ?? `opsx-dispatch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 		const result = await runSync(opts.cwd, agents, spec.agent, spec.task, {
 			runId,
@@ -174,20 +187,38 @@ export async function spawnViaRunSync(
 	}
 }
 
-/** Load pi-subagents renderSubagentResult for opsx_dispatch.renderResult. */
-export async function loadSubagentRenderResult(): Promise<
-	| ((
-			result: { content: unknown; details?: unknown },
-			options: { expanded: boolean },
-			theme: unknown,
-	  ) => unknown)
-	| null
-> {
+export type SubagentRenderers = {
+	renderSubagentResult: (
+		result: { content: unknown; details?: unknown },
+		options: { expanded: boolean },
+		theme: unknown,
+	) => unknown;
+	syncResultAnimation: (
+		result: { content: unknown; details?: unknown },
+		context: { state: Record<string, unknown>; invalidate: () => void },
+	) => void;
+};
+
+/** Load pi-subagents renderers (result + animation) for opsx_dispatch TUI parity. */
+export async function loadSubagentRenderers(): Promise<SubagentRenderers | null> {
 	try {
 		const renderUrl = pathToFileURL(join(SUBAGENTS_DIR, "render.ts")).href;
 		const mod = await import(renderUrl);
-		return typeof mod.renderSubagentResult === "function" ? mod.renderSubagentResult : null;
+		if (typeof mod.renderSubagentResult !== "function") return null;
+		return {
+			renderSubagentResult: mod.renderSubagentResult,
+			syncResultAnimation:
+				typeof mod.syncResultAnimation === "function"
+					? mod.syncResultAnimation
+					: () => {},
+		};
 	} catch {
 		return null;
 	}
+}
+
+/** @deprecated use loadSubagentRenderers */
+export async function loadSubagentRenderResult(): Promise<SubagentRenderers["renderSubagentResult"] | null> {
+	const r = await loadSubagentRenderers();
+	return r?.renderSubagentResult ?? null;
 }

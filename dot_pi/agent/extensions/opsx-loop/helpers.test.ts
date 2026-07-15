@@ -148,6 +148,30 @@ describe("planOpsxDispatch schema + caller tasks — opsx-loop.opsx-dispatch-nar
 		expect(p.ok).toBe(false);
 		if (!p.ok) expect(p.reason).toBe("schema");
 	});
+	test("refuse both keys present even when one value empty (presence XOR)", () => {
+		const a = planOpsxDispatch({
+			armed: true,
+			role: "impl",
+			task: "x",
+			tasks: [],
+			taskProvided: true,
+			tasksProvided: true,
+			resolved: { value: "cursor/composer-2.5", source: "user" },
+		});
+		expect(a.ok).toBe(false);
+		if (!a.ok) expect(a.reason).toBe("schema");
+		const b = planOpsxDispatch({
+			armed: true,
+			role: "impl",
+			task: "",
+			tasks: [{ task: "y" }],
+			taskProvided: true,
+			tasksProvided: true,
+			resolved: { value: "cursor/composer-2.5", source: "user" },
+		});
+		expect(b.ok).toBe(false);
+		if (!b.ok) expect(b.reason).toBe("schema");
+	});
 	test("refuse neither task nor tasks", () => {
 		const p = planOpsxDispatch({
 			armed: true,
@@ -209,6 +233,30 @@ describe("planOpsxDispatch schema + caller tasks — opsx-loop.opsx-dispatch-nar
 });
 
 describe("runOpsxDispatchSpawns — opsx-loop.dispatch-spawns-via-subagent-library / transparent", () => {
+	test("parallel concurrency=1 runs sequentially (mapConcurrent limit)", async () => {
+		let running = 0;
+		let maxRunning = 0;
+		const { results } = await runOpsxDispatchSpawns(
+			{
+				mode: "parallel",
+				concurrency: 1,
+				spawns: [
+					{ model: "a/x", task: "t", agent: "worker" },
+					{ model: "b/y", task: "t", agent: "worker" },
+				],
+			},
+			async (spec) => {
+				running++;
+				maxRunning = Math.max(maxRunning, running);
+				await new Promise((r) => setTimeout(r, 20));
+				running--;
+				return { model: spec.model, agent: spec.agent, ok: true, text: "ok" };
+			},
+		);
+		expect(results).toHaveLength(2);
+		expect(maxRunning).toBe(1);
+	});
+
 	test("parallel mode spawns concurrently with forced models; forwards onUpdate", async () => {
 		const seen: string[] = [];
 		const updates: number[] = [];
@@ -938,3 +986,17 @@ describe("elideToolResultBodies (token-budget boundary)", () => {
 		expect(out).toBe(msgs);
 	});
 });
+
+describe("agentsWithoutFallbacks — role sole-source", () => {
+	test("strips fallbackModels for selected agent only", async () => {
+		const { agentsWithoutFallbacks } = await import("./spawn.ts");
+		const agents = [
+			{ name: "worker", fallbackModels: ["other/m"], model: "x" },
+			{ name: "reviewer", fallbackModels: ["keep/m"] },
+		];
+		const out = agentsWithoutFallbacks(agents, "worker");
+		expect(out.find((a) => a.name === "worker")?.fallbackModels).toBeUndefined();
+		expect(out.find((a) => a.name === "reviewer")?.fallbackModels).toEqual(["keep/m"]);
+	});
+});
+
