@@ -95,9 +95,9 @@ tool owns native-parallel fan-out — skills SHALL NOT issue N sequential
 
 ### Requirement: Worktree Always Skill Discipline
 
-THE opsx-superpowers skill surfaces (openspec-loop, openspec-propose,
-openspec-apply-change, openspec-archive-change references, openspec-explore)
-SHALL present worktree execution as the only execution model at every Scale:
+THE opsx-superpowers skill surfaces SHALL present worktree execution as the
+only execution model at every Scale (openspec-loop, openspec-propose,
+openspec-apply-change, openspec-archive-change references, openspec-explore):
 no skill prose SHALL offer, derive, or describe a same-tree execution path for
 opsx-superpowers changes; apply SHALL create/reuse the worktree via
 `opsx worktree ensure` before any implementation task at every Scale including
