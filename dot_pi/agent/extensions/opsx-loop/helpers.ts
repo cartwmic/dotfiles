@@ -119,7 +119,11 @@ export interface OpsxDispatchSpawnSpec {
 	agent: string;
 }
 
-/** Minimal SingleResult-shaped payload carried for Details aggregation. */
+/**
+ * Subagent SingleResult-shaped payload for Details aggregation.
+ * Passes through metadata fields returned by pi-subagents runSync
+ * (session/skills/truncation/paths) — not a minimal subset.
+ */
 export interface OpsxDispatchSingleResult {
 	agent: string;
 	task: string;
@@ -128,10 +132,21 @@ export interface OpsxDispatchSingleResult {
 	finalOutput?: string;
 	messages?: unknown[];
 	usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
+	model?: string;
+	attemptedModels?: string[];
+	modelAttempts?: unknown[];
+	sessionFile?: string;
+	skills?: string[];
+	skillsWarning?: string;
+	progressSummary?: Record<string, unknown>;
+	toolCalls?: unknown[];
+	truncation?: Record<string, unknown>;
+	savedOutputPath?: string;
+	outputSaveError?: string;
 	progress?: {
 		index: number;
 		agent: string;
-		status: "running" | "completed" | "failed";
+		status: "pending" | "running" | "completed" | "failed";
 		task: string;
 		recentTools: unknown[];
 		recentOutput: string[];
@@ -319,6 +334,7 @@ export type OpsxDispatchOnUpdate = (update: {
 		mode: "single" | "parallel";
 		results: OpsxDispatchSingleResult[];
 		progress?: OpsxDispatchSingleResult["progress"][];
+		artifacts?: { dir: string; files?: unknown[] };
 	};
 }) => void;
 
@@ -369,6 +385,7 @@ export async function runOpsxDispatchSpawns(
 		mode: "single" | "parallel";
 		results: OpsxDispatchSingleResult[];
 		progress?: OpsxDispatchSingleResult["progress"][];
+		artifacts?: { dir: string; files?: unknown[] };
 	};
 	text: string;
 }> {
@@ -387,10 +404,11 @@ export async function runOpsxDispatchSpawns(
 				task: spec.task,
 				exitCode: -1,
 				finalOutput: "",
+				model: spec.model,
 				progress: progressSlots[i] ?? {
 					index: i,
 					agent: spec.agent,
-					status: "running" as const,
+					status: "pending" as const,
 					task: spec.task,
 					recentTools: [],
 					recentOutput: [],
@@ -431,13 +449,21 @@ export async function runOpsxDispatchSpawns(
 	const results = await mapConcurrent(plan.spawns, limit, (spec, i) => runOne(spec, i));
 
 	const detailsResults: OpsxDispatchSingleResult[] = results.map((r, i) => {
-		if (r.singleResult) return { ...r.singleResult, ...(r.singleResult.progress ? { progress: { ...r.singleResult.progress, index: i } } : {}) };
+		if (r.singleResult) {
+			return {
+				...r.singleResult,
+				...(r.singleResult.progress
+					? { progress: { ...r.singleResult.progress, index: i } }
+					: {}),
+			};
+		}
 		return {
 			agent: r.agent,
 			task: plan.spawns[i]!.task,
 			exitCode: r.ok ? 0 : 1,
 			error: r.ok ? undefined : r.text,
 			finalOutput: r.text,
+			model: r.model,
 			progress: {
 				index: i,
 				agent: r.agent,
@@ -457,7 +483,15 @@ export async function runOpsxDispatchSpawns(
 		OpsxDispatchSingleResult["progress"]
 	>[];
 	const text = results.map((r) => r.text).join("\n");
-	const details = { mode: plan.mode, results: detailsResults, progress };
+	const artifactDirs = detailsResults
+		.map((r) => (r.artifactPaths as { dir?: string } | undefined)?.dir)
+		.filter((d): d is string => typeof d === "string" && d.length > 0);
+	const details = {
+		mode: plan.mode,
+		results: detailsResults,
+		progress,
+		...(artifactDirs[0] ? { artifacts: { dir: artifactDirs[0] } } : {}),
+	};
 	if (opts?.onUpdate) {
 		opts.onUpdate({ content: [{ type: "text", text }], details });
 	}
