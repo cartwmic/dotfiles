@@ -60,9 +60,9 @@ merge-base, IMMUTABLE for the life of the `opsx/<change>` branch.
 `Integration Branch` filled by apply via deterministic resolver.
 -->
 
-**Diff Base SHA:** `<captured-at-apply>`
-**Worktree Path:** `<captured-at-apply>`
-**Integration Branch:** `<detected-at-capture>`
+**Diff Base SHA:** bd976b5774628621a38a28c347ac41910ca3dd0b
+**Worktree Path:** /Users/mcartwright/.local/share/chezmoi--opsx-opsx-dispatch-transparent
+**Integration Branch:** main
 
 ## Manual Adjustments
 
