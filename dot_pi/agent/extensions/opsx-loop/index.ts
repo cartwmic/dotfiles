@@ -48,17 +48,13 @@ import {
 	type ResolvedModel,
 } from "./helpers.ts";
 import { Type } from "typebox";
-<<<<<<< HEAD
 import {
 	classifyModelsCommand,
 	shouldRunInteractiveModelsSet,
 } from "./model-config.ts";
 import { runInteractiveModelsSet } from "./model-config-ui.ts";
-import { spawnViaRunSync } from "./spawn.ts";
-=======
-import { spawnViaRunSync, loadSubagentRenderResult } from "./spawn.ts";
+import { spawnViaRunSync, loadSubagentRenderers, type SubagentRenderers } from "./spawn.ts";
 import { Text } from "@mariozechner/pi-tui";
->>>>>>> 6deb65e (feat: transparent opsx_dispatch with native parallel review fan-out)
 
 const STALL_LIMIT = 3; // consecutive identical no-progress gate failures → stop
 
@@ -392,7 +388,13 @@ export default function (pi: ExtensionAPI) {
 	function ensureOpsxDispatchTool(): void {
 		if (opsxDispatchRegistered) return;
 		opsxDispatchRegistered = true;
-		let cachedRenderResult: Awaited<ReturnType<typeof loadSubagentRenderResult>> | undefined;
+		let cachedRenderers: SubagentRenderers | null | undefined;
+		const renderersPromise = loadSubagentRenderers().then((r) => {
+			cachedRenderers = r;
+			return r;
+		});
+		// Warm immediately so first renderResult rarely hits fallback.
+		void renderersPromise;
 		pi.registerTool({
 			name: OPSX_DISPATCH_TOOL_NAME,
 			label: "opsx_dispatch",
@@ -416,7 +418,9 @@ export default function (pi: ExtensionAPI) {
 					),
 				),
 				agent: Type.Optional(Type.String({ description: "Optional default subagent agent name" })),
-				concurrency: Type.Optional(Type.Number({ description: "Optional parallel concurrency hint" })),
+				concurrency: Type.Optional(
+					Type.Number({ description: "Max concurrent parallel spawns (default 4; mirrors pi-subagents)" }),
+				),
 				model: Type.Optional(
 					Type.String({
 						description: "Ignored when role is configured — role is sole model source",
@@ -438,6 +442,8 @@ export default function (pi: ExtensionAPI) {
 					role,
 					task: params.task,
 					tasks: params.tasks,
+					taskProvided: Object.prototype.hasOwnProperty.call(params, "task"),
+					tasksProvided: Object.prototype.hasOwnProperty.call(params, "tasks"),
 					agent: params.agent,
 					concurrency: params.concurrency,
 					callerModel: params.model,
@@ -482,29 +488,44 @@ export default function (pi: ExtensionAPI) {
 					},
 				};
 			},
-			renderCall(args) {
+			// Mirror pi-subagents renderCall structure (not exported from the package).
+			renderCall(args, theme) {
 				const role = typeof args.role === "string" ? args.role : "?";
-				const n = Array.isArray(args.tasks) ? args.tasks.length : args.task ? 1 : 0;
-				const shape = Array.isArray(args.tasks) && args.tasks.length > 1 ? `parallel (${n})` : "single";
-				return new Text(`opsx_dispatch ${role} ${shape}`, 0, 0);
-			},
-			renderResult(result, options, theme) {
-				if (cachedRenderResult === undefined) {
-					// fire-and-forget warm; first render may fall back
-					void loadSubagentRenderResult().then((fn) => {
-						cachedRenderResult = fn;
-					});
-					cachedRenderResult = null;
+				const isParallel = Array.isArray(args.tasks) && args.tasks.length > 0;
+				const parallelCount = isParallel ? args.tasks.length : 0;
+				const title = theme.fg("toolTitle", theme.bold("opsx_dispatch "));
+				if (isParallel) {
+					return new Text(
+						`${title}${theme.fg("accent", role)} parallel (${parallelCount})`,
+						0,
+						0,
+					);
 				}
-				if (cachedRenderResult) {
+				return new Text(`${title}${theme.fg("accent", role)}`, 0, 0);
+			},
+			renderResult(result, options, theme, context) {
+				if (cachedRenderers === undefined) {
+					void renderersPromise.then(() => {
+						try {
+							context?.invalidate?.();
+						} catch {
+							/* ignore */
+						}
+					});
+				}
+				if (cachedRenderers) {
 					try {
-						return cachedRenderResult(result as never, options, theme) as never;
+						cachedRenderers.syncResultAnimation(result as never, context as never);
+						return cachedRenderers.renderSubagentResult(result as never, options, theme) as never;
 					} catch {
 						/* fall through */
 					}
 				}
 				const t = result.content?.[0];
-				const text = t && typeof t === "object" && "text" in t ? String((t as { text: string }).text) : "(no output)";
+				const text =
+					t && typeof t === "object" && "text" in t
+						? String((t as { text: string }).text)
+						: "(no output)";
 				return new Text(text.slice(0, 200), 0, 0);
 			},
 		});
