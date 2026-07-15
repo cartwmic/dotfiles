@@ -10,10 +10,13 @@ change, expose an `opsx_bookkeep` tool that mutates ONLY the armed change's
 INTEGRATION copies of `openspec/changes/<change>/review.md` and
 `openspec/changes/<change>/follow-ups.md` (and any sibling meta paths the
 design explicitly allowlists). THE tool SHALL accept a structured operation
-enum (not a free filesystem path). IF the operation is unknown, targets a
-different change, targets a worktree-only path, or requests agent-initiated
-hold clear, THEN THE extension SHALL refuse. Human named `/opsx-loop` re-arm
-remains the sole hold-clear path.
+enum (not a free filesystem path). THE enum SHALL include at least:
+`append_ledger`, `set_hold`, `append_followup`, and `append_execution_note`
+(names exact in design). IF the operation is unknown, targets a different
+change, targets a worktree-only path, or requests agent-initiated hold clear,
+THEN THE extension SHALL refuse. A `clear_hold` (or equivalent) operation MAY
+appear in the enum but MUST always refuse when invoked by an agent. Human
+named `/opsx-loop` re-arm remains the sole hold-clear path.
 
 #### Scenario: Append ledger row on integration review.md
 - **WHILE** a loop is armed for change `C`
@@ -29,6 +32,20 @@ remains the sole hold-clear path.
   non-empty reason
 - **THEN** THE extension SHALL set `loop_hold: true` and `loop_hold_reason` on
   INTEGRATION `openspec/changes/C/review.md`
+
+#### Scenario: Empty set-hold reason refused
+- **WHILE** a loop is armed for change `C`
+- **IF** `opsx_bookkeep` is invoked with a set-hold operation and an empty or
+  missing reason
+- **THEN** THE extension SHALL refuse and SHALL leave the hold unchanged
+
+#### Scenario: Append follow-ups on integration follow-ups.md
+- **WHILE** a loop is armed for change `C`
+- **WHEN** `opsx_bookkeep` is invoked with an allowed append-followup operation
+  for `C`
+- **THEN** THE extension SHALL mutate only the INTEGRATION
+  `openspec/changes/C/follow-ups.md` and SHALL NOT mutate product, spec, or
+  task files
 
 #### Scenario: Agent hold clear refused
 - **WHILE** a loop is armed
@@ -52,10 +69,10 @@ THE opsx-loop extension SHALL, WHILE a loop is armed and WHEN
 `author_in_session` / `author-in-session` flag for gating that call: IF an
 author role model is configured, THEN THE extension SHALL accept the dispatch
 and force the resolved author model; IF the author role is unset, THEN THE
-extension SHALL refuse with the existing unset/no-session-fallback semantics
-and SHALL NOT silently author in the parent. WHEN the loop is cleared or no
-loop is armed, THE prior `author_in_session` meaning for manual/disarmed
-propose SHALL remain unchanged.
+extension SHALL refuse with an actionable unset error and SHALL NOT fall back
+to the session model and SHALL NOT silently author in the parent. WHEN the
+loop is cleared or no loop is armed, THE prior `author_in_session` meaning for
+manual/disarmed propose SHALL remain unchanged.
 
 #### Scenario: Armed author dispatch allowed regardless of author_in_session
 - **WHILE** a loop is armed, an author model is configured, and
@@ -87,8 +104,9 @@ tools from the active tool set, and SHALL expose `opsx_dispatch` and
 Exact host tool name strings for edit/write SHALL match the names pi exposes
 in the pre-arm active tool snapshot. WHEN the loop is cleared or stopped, THE
 extension SHALL restore the prior active tool set so `subagent`, `edit`, and
-`write` are available again per the snapshot, and `opsx_dispatch` /
-`opsx_bookkeep` are not required outside an armed loop. Bash and read tools
+`write` are available again per the snapshot. THE restored set SHALL NOT
+include `opsx_dispatch` or `opsx_bookkeep` unless those tools were already
+present in the pre-arm snapshot (armed-only surfaces). Bash and read tools
 MAY remain active while armed; muting edit/write does not by itself prevent
 bash from rewriting files (accepted residual for this change).
 
@@ -102,6 +120,8 @@ bash from rewriting files (accepted residual for this change).
 - **WHEN** the user issues `/opsx-loop clear` (or an accepted stop alias)
 - **THEN** the active tool set SHALL be restored to the pre-arm snapshot
   (including `subagent` / `edit` / `write` if they were active before arm)
+  and SHALL exclude `opsx_dispatch` and `opsx_bookkeep` unless they were in
+  the pre-arm snapshot
 
 #### Scenario: Disarmed sessions keep generic subagent
 - **WHILE** no loop is armed
