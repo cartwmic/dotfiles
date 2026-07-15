@@ -59,9 +59,9 @@ merge-base, IMMUTABLE for the life of the `opsx/<change>` branch.
 `Integration Branch` filled by apply via deterministic resolver.
 -->
 
-**Diff Base SHA:** <empty until apply captures it>
-**Worktree Path:** <empty until apply captures it>
-**Integration Branch:** <detected-at-capture>
+**Diff Base SHA:** 318b6d8d7635cec79240a497f6857346e2103310
+**Worktree Path:** /Users/mcartwright/.local/share/chezmoi--opsx-opsx-loop-pure-router
+**Integration Branch:** main
 
 ## Manual Adjustments
 
