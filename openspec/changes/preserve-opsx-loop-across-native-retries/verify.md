@@ -1,5 +1,7 @@
 # Verify
 
+**Status:** green
+
 **Attested HEAD:** 7a29ffbbe2c77ca4b07667c6f41f17ac8cea5284
 **Attested Path:** /Users/cartwmic/.local/share/chezmoi--opsx-preserve-opsx-loop-across-native-retries
 **Verification Verdict:** pass
