@@ -2,17 +2,17 @@
 
 <!--
 Sealed by openspec-archive orchestrator from blind reviewer findings files
-(/tmp/opsx-cr-opsx-loop-models-interactive/r{1,2}-{sonnet,opus}-findings.md).
-R1 quiet → rebase onto main → R2 freshness quiet → seal pass.
+(/tmp/opsx-cr-opsx-loop-models-interactive/r{1,2,3}-{sonnet,opus}-findings.md).
+R1 quiet → rebase → R2 freshness quiet → rebase (dispatch-transparent) → R3 freshness quiet → seal pass.
 -->
 
 **Change:** opsx-loop-models-interactive
 **Verdict:** pass
 **review_mode:** adversarial-multimodel
-**reviewer-provenance:** pi-subagents worker — anthropic/claude-sonnet-5 + anthropic/claude-opus-4-8 (blind R1 via opsx_dispatch; blind R2 freshness via pi__subagent; findings sole source)
+**reviewer-provenance:** pi-subagents worker — anthropic/claude-sonnet-5 + anthropic/claude-opus-4-8 (blind R1 via opsx_dispatch; blind R2/R3 freshness via pi__subagent; findings sole source)
 **Diff Base SHA:** 71f89d1447e60fc94d4249590380ddf41b2b4cfc
-**Reviewed Range:** 71f89d1447e60fc94d4249590380ddf41b2b4cfc..840270410b93b9b72c5ec806ae085bea3c8ad5ad
-**Attested HEAD:** 840270410b93b9b72c5ec806ae085bea3c8ad5ad
+**Reviewed Range:** 71f89d1447e60fc94d4249590380ddf41b2b4cfc..eadb3e1c74ef33a276e58d3e481ae294efc8134e
+**Attested HEAD:** eadb3e1c74ef33a276e58d3e481ae294efc8134e
 **Baseline:** intent.md + proposal + specs + plan + tasks status
 **Generated:** 2026-07-14
 
@@ -29,11 +29,12 @@ Verdict pass ⇔ no open P0/P1.
 |---|---|---|---|---|---|---|---|
 | 1 | blind | 0 | 0 | 1 | 3 | sonnet:pass opus:pass | 3b1d59479c8fb0ece8fe76b4dc8aa2e94ef76147 |
 | 2 | blind (freshness; post-rebase onto main c7780fe) | 0 | 0 | 0 | 3 | sonnet:pass opus:pass | 840270410b93b9b72c5ec806ae085bea3c8ad5ad |
+| 3 | blind (freshness; post-rebase onto main 82691bf) | 0 | 0 | 0 | 1 | sonnet:pass opus:pass | eadb3e1c74ef33a276e58d3e481ae294efc8134e |
 
-Attestations: R2 both reviewers recorded Attested HEAD
-`840270410b93b9b72c5ec806ae085bea3c8ad5ad` and Attested Path
+Attestations: R3 both reviewers recorded Attested HEAD
+`eadb3e1c74ef33a276e58d3e481ae294efc8134e` and Attested Path
 `/Users/mcartwright/.local/share/chezmoi--opsx-opsx-loop-models-interactive`
-(realpath match). Zero INVALID verdicts. Quiet R1 + quiet freshness R2 → seal pass.
+(realpath match). Zero INVALID verdicts. Quiet R1 + quiet R2/R3 freshness → seal pass.
 
 Gate-manifest check: diff does **not** touch `openspec/opsx-gates.yaml` or any
 gate/validation manifest.
@@ -49,14 +50,14 @@ matching). Open P2/P3 recorded as warnings; do not force another round.
 | 2 | Extension: `filterCatalogBySubstring` tested but unused; live filter is `ContainsSelectList.setFilter` duplicate (opus R1+R2) | P2 | deferred |
 | 3 | Numbered fallback: invalid selection ends review pick loop without retry (sonnet R1) | P3 | deferred |
 | 4 | `ModelPickerComponent` bypasses `Input.render()` / cursor marker (sonnet R1) | P3 | deferred |
-| 5 | `ContainsSelectList` casts into pi-tui private fields (sonnet + opus) | P3 | deferred |
+| 5 | `ContainsSelectList` casts into pi-tui private fields (sonnet + opus; R3 informational) | P3 | deferred |
 | 6 | `setFilter` may skip base viewport/scroll bookkeeping (opus R1) | P3 | deferred |
 | 7 | Review UI discards prior picks if thinking prompt cancelled (opus R2) | P3 | deferred |
 
 ## Applied fixes
 
-- None required (quiet R1 + quiet R2 freshness; no open P0/P1).
-- Rebase onto main (`c7780fe` execution-note only) introduced zero code drift.
+- None required (quiet R1 + quiet R2/R3 freshness; no open P0/P1).
+- Rebases onto main introduced zero code drift to this change's surfaces.
 
 ## Residual risks
 
@@ -67,7 +68,7 @@ matching). Open P2/P3 recorded as warnings; do not force another round.
 
 ## Verdict rationale
 
-Both blind reviewers (sonnet + opus) passed R1 and R2 freshness with zero
+Both blind reviewers (sonnet + opus) passed R1 and R2/R3 freshness with zero
 P0/P1 against the frozen baseline and the Diff Base..HEAD diff. CLI per-model
 review thinking and Path B `/opsx-loop models set` match delta ACs; suites
 green at attested HEAD (opsx-models 47/47, extension 131/131); extension never
