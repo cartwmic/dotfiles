@@ -20,7 +20,8 @@ deployed; kebab change name; ADDED/MODIFIED full bodies.
 **Goals:**
 - Armed mute: drop `subagent`, `edit`, `write`; expose `opsx_dispatch` + `opsx_bookkeep`.
 - `opsx_bookkeep` enum floor: `append_ledger`, `set_hold`, `append_followup`,
-  `append_execution_note`; refuse clear-hold / wrong change / not-armed.
+  `append_execution_note`; refuse clear-hold / wrong change / not-armed /
+  empty set-hold reason.
 - Armed: ignore `author_in_session` for `role: author` (configured → accept;
   unset → refuse, no session fallback).
 - Skill tables: MUST-dispatch + MUST-bookkeep while armed (routing; tools enforce).
@@ -54,10 +55,12 @@ restore (already drops armed-only tools unless they were pre-arm).
 
 **Choice:** Single registered tool `opsx_bookkeep` with
 `op: append_ledger | set_hold | append_followup | append_execution_note | clear_hold`.
-`clear_hold` always refuses for agents. Writes only INTEGRATION
-`openspec/changes/<armedChange>/{review,follow-ups}.md` (resolve integration
-cwd the same way hold-clear / review.md writes already do in `index.ts`).
-Optional sibling allowlist = constant array (empty at v1; design can grow).
+`clear_hold` always refuses for agents. Refuse also: not-armed, wrong change,
+worktree-only path, unknown op, and **empty/missing `set_hold` reason**.
+Writes only INTEGRATION `openspec/changes/<armedChange>/{review,follow-ups}.md`
+(resolve integration cwd the same way hold-clear / review.md writes already do
+in `index.ts`). Optional sibling allowlist = constant array (empty at v1;
+design can grow).
 
 **Alternatives considered:**
 - **Split tools** (`opsx_set_hold`, …): more surface, same trust.
@@ -87,12 +90,17 @@ Optional sibling allowlist = constant array (empty at v1; design can grow).
 **Choice:** Rewrite `openspec-{loop,propose,apply-change}` armed sections:
 author/impl/review → `opsx_dispatch`; meta → `opsx_bookkeep`; remove
 "implement the next task" / in-session author while armed. No skill-only path
-allowlist.
+allowlist. Armed multi-model review remains **one** `opsx_dispatch` call
+(tool-owned native parallel from `opsx-dispatch-transparent` — skills MUST NOT
+N-loop). Provider-qualified `<provider>/<id>` values stay forced by
+`opsx_dispatch` role resolve (prior role-sole-source; skills pass through on
+disarmed `subagent` path).
 
 **Alternatives considered:**
 - **Skill-only bookkeeping paths:** rejected at explore (weak models).
 
-**Rationale:** Constitution II + clarify A5 narrow judged scope.
+**Rationale:** Constitution II + clarify A5/A6; retain transparent fan-out +
+provider bind contracts.
 
 **4-point test:** Y/Y/N/Y → ADR candidate **N**.
 
@@ -124,6 +132,28 @@ bytes for bookkeep ops only (product/spec/code still never written by ext).
 **Rationale:** Keep testable pure core; one write owner for meta ops.
 
 **4-point test:** Y/Y/N/Y → ADR candidate **N**.
+
+### D7: Retain worktree-always skill discipline (carry-forward)
+
+**Choice:** This change does **not** reopen worktree execution. Skills keep
+prior worktree-always prose intact: worktree is the only execution model at
+every Scale (XS included — ensure → locator → apply → review → merge →
+cleanup); no same-tree guidance on skill surfaces. Misplaced bookkeeping onto
+the `opsx/<change>` worktree branch remains fail-closed via the existing
+verdict range-freshness gate (not a new mechanism). The pure-router delta only
+adds: WHILE armed, integration bookkeeping (`loop_hold`, ledger, follow-ups,
+Execution Notes) MUST go through `opsx_bookkeep` (D2/D4) instead of parent
+edit/write.
+
+**Alternatives considered:**
+- **Re-specify full worktree lifecycle in this design:** redundant with archived
+  worktree-always change; risk of drift.
+
+**Rationale:** MODIFIED `Worktree Always Skill Discipline` carries prior ACs
+plus armed-bookkeep; D7 names the retained substrate so fidelity can entail
+carry-forward scenarios without inventing new gate logic.
+
+**4-point test:** N/Y/N/Y → ADR candidate **N**.
 
 ## Risks / Trade-offs
 
