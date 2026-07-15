@@ -53,8 +53,8 @@ metadata rather than a one-liner-only summary), and attach `renderCall` /
 
 ### Requirement: Caller Tasks Length Must Match Review List
 
-WHILE a loop is armed and `role: "review"` resolves to a multi-value list,
-WHEN the caller passes `tasks[]`, THE opsx-loop extension SHALL require
+THE opsx-loop extension SHALL, WHILE a loop is armed and `role: "review"`
+resolves to a multi-value list and WHEN the caller passes `tasks[]`, require
 `tasks.length` to equal the resolved review list length, force each entry's
 model from the list by index (ignoring caller per-task `model`), and IF the
 lengths differ THEN refuse with an actionable error. For single-model roles,
