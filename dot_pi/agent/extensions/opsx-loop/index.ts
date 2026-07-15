@@ -53,7 +53,7 @@ import {
 	shouldRunInteractiveModelsSet,
 } from "./model-config.ts";
 import { runInteractiveModelsSet } from "./model-config-ui.ts";
-import { spawnViaRunSync, loadSubagentRenderers, type SubagentRenderers } from "./spawn.ts";
+import { spawnViaRunSync, formatOpsxDispatchCall, formatOpsxDispatchResult } from "./spawn.ts";
 import { Text } from "@mariozechner/pi-tui";
 
 const STALL_LIMIT = 3; // consecutive identical no-progress gate failures → stop
@@ -388,13 +388,6 @@ export default function (pi: ExtensionAPI) {
 	function ensureOpsxDispatchTool(): void {
 		if (opsxDispatchRegistered) return;
 		opsxDispatchRegistered = true;
-		let cachedRenderers: SubagentRenderers | null | undefined;
-		const renderersPromise = loadSubagentRenderers().then((r) => {
-			cachedRenderers = r;
-			return r;
-		});
-		// Warm immediately so first renderResult rarely hits fallback.
-		void renderersPromise;
 		pi.registerTool({
 			name: OPSX_DISPATCH_TOOL_NAME,
 			label: "opsx_dispatch",
@@ -429,7 +422,7 @@ export default function (pi: ExtensionAPI) {
 			}),
 			async execute(_toolCallId, params, signal, onUpdate, ctx) {
 				const role = params.role as OpsxDispatchRole;
-				const authorInSession = resolveModel("author-in-session", loop?.change ?? "", ctx.cwd);
+				const authorInSession = [redacted]"author-in-session", loop?.change ?? "", ctx.cwd);
 				const ais =
 					authorInSession && typeof authorInSession.value === "boolean"
 						? authorInSession.value
@@ -448,13 +441,19 @@ export default function (pi: ExtensionAPI) {
 					concurrency: params.concurrency,
 					callerModel: params.model,
 					resolved,
-					authorInSession: ais,
+					authorInSession: [redacted],
 				});
 				if (!plan.ok) {
 					return {
 						content: [{ type: "text", text: plan.message }],
 						details: { refused: true, reason: plan.reason, mode: "management", results: [] },
 					};
+				}
+				let parentSessionFile: string | null = null;
+				try {
+					parentSessionFile = ctx.sessionManager?.getSessionFile?.() ?? null;
+				} catch {
+					parentSessionFile = null;
 				}
 				const { results, details, text } = await runOpsxDispatchSpawns(
 					plan,
@@ -464,6 +463,7 @@ export default function (pi: ExtensionAPI) {
 							signal,
 							index: meta.index,
 							onUpdate: meta.onUpdate,
+							parentSessionFile,
 						}),
 					{
 						onUpdate: onUpdate
@@ -488,46 +488,13 @@ export default function (pi: ExtensionAPI) {
 					},
 				};
 			},
-			// Mirror pi-subagents renderCall structure (not exported from the package).
+			// Thin-wrap renderers (intent: import or thin wrap). Dynamic import of
+			// pi-subagents render.ts fails outside pi's jiti virtual-module aliases.
 			renderCall(args, theme) {
-				const role = typeof args.role === "string" ? args.role : "?";
-				const isParallel = Array.isArray(args.tasks) && args.tasks.length > 0;
-				const parallelCount = isParallel ? args.tasks.length : 0;
-				const title = theme.fg("toolTitle", theme.bold("opsx_dispatch "));
-				if (isParallel) {
-					return new Text(
-						`${title}${theme.fg("accent", role)} parallel (${parallelCount})`,
-						0,
-						0,
-					);
-				}
-				return new Text(`${title}${theme.fg("accent", role)}`, 0, 0);
+				return new Text(formatOpsxDispatchCall(args as { role?: string; tasks?: unknown[] }, theme), 0, 0);
 			},
-			renderResult(result, options, theme, context) {
-				if (cachedRenderers === undefined) {
-					// Still warming — invalidate when ready so TUI re-renders with real renderer.
-					void renderersPromise.then(() => {
-						try {
-							context?.invalidate?.();
-						} catch {
-							/* ignore */
-						}
-					});
-				}
-				if (cachedRenderers) {
-					try {
-						cachedRenderers.syncResultAnimation(result as never, context as never);
-						return cachedRenderers.renderSubagentResult(result as never, options, theme) as never;
-					} catch {
-						/* fall through */
-					}
-				}
-				const t = result.content?.[0];
-				const text =
-					t && typeof t === "object" && "text" in t
-						? String((t as { text: string }).text)
-						: "(no output)";
-				return new Text(text.slice(0, 200), 0, 0);
+			renderResult(result, options, theme, _context) {
+				return new Text(formatOpsxDispatchResult(result as never, options, theme), 0, 0);
 			},
 		});
 	}

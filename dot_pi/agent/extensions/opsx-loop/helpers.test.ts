@@ -1000,3 +1000,129 @@ describe("agentsWithoutFallbacks — role sole-source", () => {
 	});
 });
 
+
+describe("toSingleResult + thin-wrap renderers — transparency", () => {
+	test("toSingleResult passes through session/skills/truncation/model metadata", async () => {
+		const { toSingleResult } = await import("./spawn.ts");
+		const spec = { model: "forced/m", task: "t", agent: "worker" };
+		const out = toSingleResult(
+			spec,
+			{
+				agent: "worker",
+				task: "t",
+				exitCode: 0,
+				finalOutput: "hello world",
+				model: "forced/m",
+				attemptedModels: ["forced/m"],
+				sessionFile: "/tmp/sess.jsonl",
+				skills: ["openspec-loop"],
+				progressSummary: { toolCount: 3 },
+				truncation: { truncated: false },
+				savedOutputPath: "/tmp/out.md",
+				artifactPaths: { dir: "/tmp/arts", output: "/tmp/arts/out.md" },
+				usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
+				progress: {
+					index: 0,
+					agent: "worker",
+					status: "completed",
+					task: "t",
+					recentTools: [],
+					recentOutput: [],
+					toolCount: 3,
+					tokens: 9,
+					durationMs: 12,
+					model: "forced/m",
+				},
+			},
+			0,
+		);
+		expect(out.sessionFile).toBe("/tmp/sess.jsonl");
+		expect(out.skills).toEqual(["openspec-loop"]);
+		expect(out.truncation).toEqual({ truncated: false });
+		expect(out.savedOutputPath).toBe("/tmp/out.md");
+		expect(out.artifactPaths).toEqual({ dir: "/tmp/arts", output: "/tmp/arts/out.md" });
+		expect(out.attemptedModels).toEqual(["forced/m"]);
+		expect(out.model).toBe("forced/m");
+		expect(out.finalOutput).toBe("hello world");
+	});
+
+	test("thin-wrap renderResult shows Details not one-liner", async () => {
+		const { formatOpsxDispatchResult, formatOpsxDispatchCall } = await import("./spawn.ts");
+		const theme = {
+			fg: (_n: string, t: string) => t,
+			bold: (t: string) => t,
+		};
+		const callText = formatOpsxDispatchCall({ role: "review", tasks: [{ task: "a" }, { task: "b" }] }, theme);
+		expect(callText).toContain("parallel");
+		expect(callText).toContain("review");
+
+		const text = formatOpsxDispatchResult(
+			{
+				content: [{ type: "text", text: "spawn complete model=x exit=0" }],
+				details: {
+					mode: "parallel",
+					results: [
+						{
+							agent: "worker",
+							task: "judge",
+							exitCode: 0,
+							finalOutput: "verdict pass",
+							model: "anthropic/claude-opus-4-8",
+							sessionFile: "/tmp/a.jsonl",
+							progress: {
+								index: 0,
+								agent: "worker",
+								status: "completed",
+								task: "judge",
+								recentTools: [],
+								recentOutput: [],
+								toolCount: 2,
+								tokens: 100,
+								durationMs: 50,
+								model: "anthropic/claude-opus-4-8",
+							},
+						},
+					],
+					artifacts: { dir: "/tmp/arts" },
+				},
+			},
+			{ expanded: false },
+			theme,
+		);
+		expect(text).toContain("parallel");
+		expect(text).toContain("verdict pass");
+		expect(text).toContain("session=");
+		expect(text).toContain("artifacts:");
+		expect(text).not.toMatch(/^spawn complete model=/);
+	});
+});
+
+describe("runOpsxDispatchSpawns pending slots — progress honesty", () => {
+	test("unstarted slots report pending not running under concurrency=1", async () => {
+		const seen: string[] = [];
+		await runOpsxDispatchSpawns(
+			{
+				mode: "parallel",
+				concurrency: 1,
+				spawns: [
+					{ model: "a/x", task: "t", agent: "worker" },
+					{ model: "b/y", task: "t", agent: "worker" },
+				],
+			},
+			async (spec) => {
+				await new Promise((r) => setTimeout(r, 15));
+				return { model: spec.model, agent: spec.agent, ok: true, text: "ok" };
+			},
+			{
+				onUpdate: (u) => {
+					for (const r of u.details.results) {
+						if (r.progress) seen.push(`${r.progress.model}:${r.progress.status}`);
+					}
+				},
+			},
+		);
+		// At least one update should have shown the second slot as pending while first runs
+		expect(seen.some((s) => s.startsWith("b/y:pending"))).toBe(true);
+	});
+});
+
