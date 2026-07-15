@@ -368,11 +368,13 @@ WHILE the loop is armed, role-bound review / impl / (opt-in author) dispatch MUS
 go through `opsx_dispatch` — NOT the generic `subagent` tool with a soft-honored
 `model:` argument (`subagent` is muted for the armed session).
 
-- Call `opsx_dispatch({ role: "review"|"impl"|"author", task, agent? })`.
+- Call `opsx_dispatch({ role: "review"|"impl"|"author", task | tasks[], agent? })`.
 - Role is the sole model source: any caller `model` is ignored.
-- `role: "review"` — ONE call; the tool auto fan-outs one spawn per configured
-  review model in list order. Do NOT loop callerside over review models.
-- `role: "impl"` — ONE call; tool forces the resolved impl model.
+- `role: "review"` — ONE call with a single `task` (or length-matched `tasks[]`);
+  the tool expands multi-model review into **native parallel** `tasks[]` (not N
+  sequential calls / sequential `runSync` loops). Do NOT loop callerside.
+- `role: "impl"` — ONE call; tool forces the resolved impl model (caller
+  `tasks[]` stamps every entry with that model).
 - `role: "author"` — only when `OPSX_AUTHOR_IN_SESSION` is `false` (opt-in
   delegated authoring); otherwise author in-session with the
   `<!-- authored: in-session -->` marker.

@@ -97,9 +97,10 @@ provider-qualified.
 (opsx-skill-integration.skills-honor-configured-role-models):
 
 - **WHILE `/opsx-loop` is armed:** role-bound review / impl / (opt-in author)
-  MUST use `opsx_dispatch({ role, task, agent? })`. Do NOT call generic
+  MUST use `opsx_dispatch({ role, task | tasks[], agent? })`. Do NOT call generic
   `subagent` with soft-honored `model:` (tool is muted). Role is sole model
-  source; `review` fan-out is owned by the tool (one call). Unset role →
+  source; `review` multi-list fan-out is **native parallel** owned by the tool
+  (one call — never N sequential `opsx_dispatch`/`subagent` calls). Unset role →
   `opsx_dispatch` refuses — treat refusal as correct; no session-model
   fallback on this path.
 - **WHILE no loop is armed:** MAY use generic `subagent` with configured
@@ -115,9 +116,9 @@ provider-qualified.
   is configured. On opt-out: WHILE armed → `opsx_dispatch({ role: "author", task })`;
   WHILE disarmed → generic `subagent` with the `author` model; omit the marker.
 - **Review dispatch.** WHILE armed → one `opsx_dispatch({ role: "review", task })`
-  (tool fan-outs). WHILE disarmed → one `subagent` call per configured `review`
-  model (`OPSX_REVIEW_MODELS`), each as `model:`. Unset → skill defaults
-  (disarmed only).
+  (tool expands multi-review to native parallel). WHILE disarmed → one `subagent`
+  call per configured `review` model (`OPSX_REVIEW_MODELS`), each as `model:`.
+  Unset → skill defaults (disarmed only).
 
 ### specs artifact: EARS-pattern picker
 
