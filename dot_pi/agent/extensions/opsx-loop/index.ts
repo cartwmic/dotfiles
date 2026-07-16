@@ -25,6 +25,12 @@ import {
 	listIntentChanges,
 	LOOP_SUBCOMMANDS,
 	OPSX_MODEL_ENV_KEYS,
+	OPSX_DISPATCH_TOOL_NAME,
+	applyArmedToolSet,
+	restoreToolSetAfterClear,
+	planOpsxDispatch,
+	runOpsxDispatchSpawns,
+	type OpsxDispatchRole,
 	resolveCompactThresholdTokens,
 	resolveElideMaxKeepTokens,
 	resolveElideBandTokens,
@@ -41,6 +47,8 @@ import {
 	type LoopVerdict,
 	type ResolvedModel,
 } from "./helpers.ts";
+import { Type } from "typebox";
+import { spawnViaRunSync } from "./spawn.ts";
 
 const STALL_LIMIT = 3; // consecutive identical no-progress gate failures → stop
 
@@ -385,6 +393,105 @@ export default function (pi: ExtensionAPI) {
 	// replacement loop. Unrelated steering/follow-up user messages remain owned by
 	// the prior run and can never settle or gate the replacement.
 	let pendingOwnerTransfer: { session: LoopState; directive: string } | undefined;
+	/** Pre-arm active tool snapshot; restored on clear/stop. */
+	let toolsBeforeArm: string[] | undefined;
+	let opsxDispatchRegistered = false;
+
+	function ensureOpsxDispatchTool(): void {
+		if (opsxDispatchRegistered) return;
+		opsxDispatchRegistered = true;
+		pi.registerTool({
+			name: OPSX_DISPATCH_TOOL_NAME,
+			label: "opsx_dispatch",
+			description:
+				"Armed-loop-only: dispatch role-bound subagent work (review/impl/author) with the resolved opsx role model forced. Refuses when no loop is armed or the role is unset.",
+			parameters: Type.Object({
+				role: Type.Union([Type.Literal("review"), Type.Literal("impl"), Type.Literal("author")], {
+					description: "opsx role whose configured model is forced for the spawn",
+				}),
+				task: Type.String({ description: "Task prompt for the spawned subagent" }),
+				agent: Type.Optional(Type.String({ description: "Optional subagent agent name" })),
+				model: Type.Optional(
+					Type.String({
+						description: "Ignored when role is configured — role is sole model source",
+					}),
+				),
+			}),
+			async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+				const role = params.role as OpsxDispatchRole;
+				const authorInSession = resolveModel("author-in-session", loop?.change ?? "", ctx.cwd);
+				const ais =
+					authorInSession && typeof authorInSession.value === "boolean"
+						? authorInSession.value
+						: true;
+				const resolved = loop?.change
+					? resolveModel(role === "author" ? "author" : role, loop.change, ctx.cwd)
+					: null;
+				const plan = planOpsxDispatch({
+					// Tool visibility can outlive an old request during named re-arm. Only
+					// the exact run owner may dispatch against the current loop object.
+					armed: Boolean(
+						loop?.active &&
+						loop.change &&
+						!loop.awaitingChange &&
+						agentOwnerCaptured &&
+						agentOwner === loop,
+					),
+					role,
+					task: params.task,
+					agent: params.agent,
+					callerModel: params.model,
+					resolved,
+					authorInSession: ais,
+				});
+				if (!plan.ok) {
+					return {
+						content: [{ type: "text", text: plan.message }],
+						details: { refused: true, reason: plan.reason },
+					};
+				}
+				const results = await runOpsxDispatchSpawns(plan.spawns, (spec) =>
+					spawnViaRunSync(spec, { cwd: ctx.cwd, signal }),
+				);
+				const text = results.map((r) => r.text).join("\n");
+				const allOk = results.every((r) => r.ok);
+				return {
+					content: [{ type: "text", text }],
+					details: {
+						refused: false,
+						models: results.map((r) => r.model),
+						ok: allOk,
+						count: results.length,
+					},
+				};
+			},
+		});
+	}
+
+	function armRoleDispatchTools(): void {
+		// Dynamic registerTool activates a newly registered tool immediately. Capture
+		// the true pre-arm set first so clear/replacement does not retain opsx_dispatch.
+		if (toolsBeforeArm === undefined) {
+			toolsBeforeArm = pi.getActiveTools();
+		}
+		ensureOpsxDispatchTool();
+		pi.setActiveTools(applyArmedToolSet(toolsBeforeArm));
+	}
+
+	function restoreRoleDispatchTools(): void {
+		const next = restoreToolSetAfterClear(toolsBeforeArm, pi.getActiveTools());
+		pi.setActiveTools(next);
+		toolsBeforeArm = undefined;
+	}
+
+	function disarmRoleDispatchTools(): void {
+		if (toolsBeforeArm === undefined && !pi.getActiveTools().includes(OPSX_DISPATCH_TOOL_NAME)) return;
+		try {
+			restoreRoleDispatchTools();
+		} catch {
+			/* best-effort restore; never block clear/replacement */
+		}
+	}
 
 	function renderStatus(ctx: ExtensionContext): void {
 		const label = loop?.change ?? (loop?.goal ? "(distilling goal)" : "(distilling)");
@@ -396,6 +503,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function clearLoop(ctx: ExtensionContext): void {
+		disarmRoleDispatchTools();
 		loop = undefined;
 		armGeneration += 1;
 		pendingArm = undefined;
@@ -666,6 +774,9 @@ export default function (pi: ExtensionAPI) {
 				const generation = ++armGeneration;
 				pendingArm = undefined;
 				pendingOwnerTransfer = undefined;
+				// Replacing a named loop ends its role-bound tool lifetime. Distillation has
+				// no change-scoped role model yet and must regain the pre-arm tool set.
+				disarmRoleDispatchTools();
 				// Pre-change (distilling) budget: configurable via OPSX_DISTILL_MAX_TURNS
 				// (positive integer). Unset = unbounded; the distill stall guard
 				// (lastDirs, STALL_LIMIT) is the backstop either way.
@@ -694,6 +805,10 @@ export default function (pi: ExtensionAPI) {
 				if (agentOwnerCaptured && agentOwner !== loop) {
 					pendingOwnerTransfer = { session: loop, directive };
 				}
+				// Active tool definitions are snapshotted per top-level run. Abort a
+				// superseded named worker before queueing distillation so restored generic
+				// tools take effect on the goal request, not only on a later run.
+				if (!ctx.isIdle()) ctx.abort();
 				pi.sendUserMessage(directive, { deliverAs: "followUp" });
 				const src = parsed.goal ? `goal: "${parsed.goal}"` : "the current conversation";
 				ctx.ui.notify(`⟳ opsx-loop started from ${src} — distilling intent → change (budget ${loop.maxTurns ?? "∞"}).`, "info");
@@ -728,10 +843,7 @@ export default function (pi: ExtensionAPI) {
 					writeFileSync(reviewPath, cleared.next);
 					holdNote = ` · hold was set: "${cleared.reason || "(no reason recorded)"}" — cleared by re-arm`;
 				} catch (e: any) {
-					if (pendingArm?.generation === generation) {
-						armGeneration += 1;
-						pendingArm = undefined;
-					}
+					if (pendingArm?.generation === generation) clearLoop(ctx);
 					ctx.ui.notify(`⟳ opsx-loop: failed to clear loop_hold in ${reviewPath}: ${e?.message ?? "unknown"}`, "error");
 					return;
 				}
@@ -743,8 +855,12 @@ export default function (pi: ExtensionAPI) {
 			const pre = await runGate(parsed.change, wt0, ctx.signal, ctx.cwd);
 			// A clear or later arm invalidates this async transaction. Never let stale
 			// gate completion resurrect/overwrite a newer loop.
-			if (generation !== armGeneration || ctx.signal?.aborted) {
+			if (generation !== armGeneration) {
 				if (pendingArm?.generation === generation) pendingArm = undefined;
+				return;
+			}
+			if (ctx.signal?.aborted) {
+				clearLoop(ctx);
 				return;
 			}
 			pendingArm = undefined;
@@ -766,6 +882,7 @@ export default function (pi: ExtensionAPI) {
 			};
 			renderStatus(ctx);
 			const exported = exportModelEnv(parsed.change, ctx.cwd);
+			armRoleDispatchTools();
 			const directive = armDirective(workerDirective(parsed.change), generation);
 			if (agentOwnerCaptured && agentOwner !== loop) {
 				pendingOwnerTransfer = { session: loop, directive };

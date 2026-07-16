@@ -28,3 +28,6 @@ gates:
   - id: opsx-review-convergence-surface-tests
     run: bash tests/opsx-review-convergence/test_review_convergence_surfaces.sh
     required: true
+  - id: jira-extension-tests
+    run: bun test dot_pi/agent/extensions/jira/
+    required: true

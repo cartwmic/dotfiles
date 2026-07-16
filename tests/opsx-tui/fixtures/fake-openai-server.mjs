@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // AC: opsx-loop.interrupt-or-error-stops-the-loop
+// AC: opsx-loop.opsx-dispatch-forces-resolved-role-model
 import http from "node:http";
 import fs from "node:fs";
 
@@ -15,7 +16,14 @@ const statusSequence = (process.env.FAKE_OPENAI_STATUS_SEQUENCE || "")
   .split(",")
   .map((value) => Number.parseInt(value.trim(), 10))
   .filter((value) => Number.isInteger(value) && value >= 100 && value <= 599);
+const toolCallMatchSequence = (process.env.FAKE_OPENAI_TOOL_CALL_MATCH_SEQUENCE || "")
+  .split("|")
+  .filter(Boolean);
+const toolCallName = process.env.FAKE_OPENAI_TOOL_CALL_NAME || "opsx_dispatch";
+const toolCallArguments = process.env.FAKE_OPENAI_TOOL_CALL_ARGUMENTS ||
+  JSON.stringify({ role: "review", task: "verify dispatch ownership" });
 let completionRequestIndex = 0;
+let toolCallMatchIndex = 0;
 
 if (!readyPath || !logPath) {
   console.error("usage: fake-openai-server.mjs <ready-path> <log-path>");
@@ -49,6 +57,17 @@ const server = http.createServer(async (req, res) => {
         matchText && matchResponse && body.includes(matchText)
           ? matchResponse
           : responseSequence[requestIndex] || responseText;
+      const latestUser = [...(Array.isArray(parsed.messages) ? parsed.messages : [])]
+        .reverse()
+        .find((message) => message?.role === "user");
+      const latestUserText = typeof latestUser?.content === "string"
+        ? latestUser.content
+        : Array.isArray(latestUser?.content)
+          ? latestUser.content.map((part) => part?.text || "").join("\n")
+          : "";
+      const toolMatch = toolCallMatchSequence[toolCallMatchIndex];
+      const shouldCallTool = Boolean(toolMatch && latestUserText.includes(toolMatch));
+      if (shouldCallTool) toolCallMatchIndex += 1;
       completionRequestIndex += 1;
 
       if (status < 200 || status >= 300) {
@@ -77,8 +96,20 @@ const server = http.createServer(async (req, res) => {
           choices: [{ index: 0, delta, finish_reason }],
         });
         res.write(`data: ${JSON.stringify(chunk({ role: "assistant" }))}\n\n`);
-        res.write(`data: ${JSON.stringify(chunk({ content: requestResponseText }))}\n\n`);
-        res.write(`data: ${JSON.stringify(chunk({}, "stop"))}\n\n`);
+        if (shouldCallTool) {
+          res.write(`data: ${JSON.stringify(chunk({
+            tool_calls: [{
+              index: 0,
+              id: `call-opsx-${requestIndex}`,
+              type: "function",
+              function: { name: toolCallName, arguments: toolCallArguments },
+            }],
+          }))}\n\n`);
+          res.write(`data: ${JSON.stringify(chunk({}, "tool_calls"))}\n\n`);
+        } else {
+          res.write(`data: ${JSON.stringify(chunk({ content: requestResponseText }))}\n\n`);
+          res.write(`data: ${JSON.stringify(chunk({}, "stop"))}\n\n`);
+        }
         res.write("data: [DONE]\n\n");
         res.end();
         return;
@@ -90,7 +121,21 @@ const server = http.createServer(async (req, res) => {
         object: "chat.completion",
         created: Math.floor(Date.now() / 1000),
         model,
-        choices: [{ index: 0, message: { role: "assistant", content: requestResponseText }, finish_reason: "stop" }],
+        choices: [{
+          index: 0,
+          message: shouldCallTool
+            ? {
+                role: "assistant",
+                content: null,
+                tool_calls: [{
+                  id: `call-opsx-${requestIndex}`,
+                  type: "function",
+                  function: { name: toolCallName, arguments: toolCallArguments },
+                }],
+              }
+            : { role: "assistant", content: requestResponseText },
+          finish_reason: shouldCallTool ? "tool_calls" : "stop",
+        }],
         usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
       }));
       return;

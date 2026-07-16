@@ -91,8 +91,20 @@ When an artifact is AUTHORED, follow its `instruction` from `openspec instructio
 Role models/providers are configured harness-neutrally and resolved via the
 `opsx models` CLI (env `OPSX_*_MODEL` exported by the opsx-loop extension, or
 `opsx models <role> --change <name>` directly). All values are already
-provider-qualified; pass them through verbatim. Unset roles fall back to the
-session/default model — never hard-fail.
+provider-qualified.
+
+**Armed vs disarmed dispatch surface**
+(opsx-skill-integration.skills-honor-configured-role-models):
+
+- **WHILE `/opsx-loop` is armed:** role-bound review / impl / (opt-in author)
+  MUST use `opsx_dispatch({ role, task, agent? })`. Do NOT call generic
+  `subagent` with soft-honored `model:` (tool is muted). Role is sole model
+  source; `review` fan-out is owned by the tool (one call). Unset role →
+  `opsx_dispatch` refuses — treat refusal as correct; no session-model
+  fallback on this path.
+- **WHILE no loop is armed:** MAY use generic `subagent` with configured
+  models passed as `model:`. Unset roles fall back to the session/default
+  model — never hard-fail on the disarmed path.
 
 - **Author in-session by default.** Author the artifacts in THIS (parent) session.
   Do NOT delegate authoring to a subagent unless `OPSX_AUTHOR_IN_SESSION` (or
@@ -100,12 +112,12 @@ session/default model — never hard-fail.
   artifact (`proposal`/`intent`/`design`/`clarify`/`tasks`/`plan`/`specs/**`) is
   written in-session, include the literal marker line `<!-- authored: in-session -->`
   in it (an inert HTML comment) — `opsx gate` checks for it when an `author` model
-  is configured. On opt-out, dispatch the authoring subagent with the `author`
-  model and omit the marker.
-- **Review dispatch.** When dispatching blind review subagents, dispatch one
-  reviewer per configured `review` model (newline/comma-delimited
-  `OPSX_REVIEW_MODELS`), passing each as the subagent `model:`. Unset → use the
-  skill's defaults.
+  is configured. On opt-out: WHILE armed → `opsx_dispatch({ role: "author", task })`;
+  WHILE disarmed → generic `subagent` with the `author` model; omit the marker.
+- **Review dispatch.** WHILE armed → one `opsx_dispatch({ role: "review", task })`
+  (tool fan-outs). WHILE disarmed → one `subagent` call per configured `review`
+  model (`OPSX_REVIEW_MODELS`), each as `model:`. Unset → skill defaults
+  (disarmed only).
 
 ### specs artifact: EARS-pattern picker
 
