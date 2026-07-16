@@ -4,10 +4,11 @@ You have access to a centralized long-term memory backend via the
 `hindsight` MCP server ([Hindsight](https://hindsight.vectorize.io),
 served from `hindsight-api.internal.cartwmic.com`). It is **shared
 across every agent harness** the user runs (pi, Claude Code, Codex,
-future tools) and pinned to a single memory **bank** (`cartwmic`) via
-the endpoint path, so any durable knowledge you record there is
-available to your next session *and* to other harnesses. Tools never
-take a `bank_id` argument — the bank is fixed by the connection.
+future tools). The memory **bank** is selected by chezmoi profile via
+the endpoint path (`axon-work-computer` → `work`, otherwise →
+`cartwmic`), so durable knowledge stays available to your next session
+*and* to other harnesses on the same profile. Tools never take a
+`bank_id` argument — the bank is fixed by the connection.
 
 This document is the contract: when to recall, when to retain, how to
 scope, and what markers to honor. Stay aligned with it even in long

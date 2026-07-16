@@ -59,10 +59,13 @@ cp "$OPSX_MODELS_USER_CONFIG" "$TMP/before.yaml"
 [ $r1 -ne 0 ] && [ $r2 -ne 0 ] && diff -q "$TMP/before.yaml" "$OPSX_MODELS_USER_CONFIG" >/dev/null \
   && ok "invalid role/layer rejected, file untouched" || nok "invalid role/layer"
 
-# set review replaces list with a warning
+# set review replaces list with a warning (stores YAML seq — multi-review write)
 printf 'review:\n  - a/m1\n  - b/m2\n' > "$OPSX_MODELS_USER_CONFIG"
 warn="$("$OPSX" models set review c/m3 2>&1 >/dev/null)"
-[ "$(yq -r '.review' "$OPSX_MODELS_USER_CONFIG")" = "c/m3" ] && printf '%s' "$warn" | grep -qi 'replac' \
+[ "$(yq -r '.review | type' "$OPSX_MODELS_USER_CONFIG")" = "!!seq" ] \
+  && [ "$(yq -r '.review | length' "$OPSX_MODELS_USER_CONFIG")" = "1" ] \
+  && [ "$(yq -r '.review[0]' "$OPSX_MODELS_USER_CONFIG")" = "c/m3" ] \
+  && printf '%s' "$warn" | grep -qi 'replac' \
   && ok "set review replaces list and warns" || nok "set review warn"
 
 # project layer RETIRED (design D7): set --layer project rejected, no file written

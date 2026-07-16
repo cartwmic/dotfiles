@@ -37,6 +37,8 @@ No default scenario needs hosted model credentials.
 | `s15-duplicate-rearm` | `opsx-loop.interrupt-or-error-stops-the-loop`: two same-change re-arms carry unique generations; stale identical prose cannot claim latest-loop ownership |
 | `s16-overflow-compact-abort` | `opsx-loop.interrupt-or-error-stops-the-loop`: Escape during delayed extension-owned settled-overflow compaction lands as abort and injects no recovery turn |
 | `s17-auto-compact-abort` | `opsx-loop.interrupt-or-error-stops-the-loop`: with project auto-compaction enabled, Escape during Pi-owned overflow compaction marks the pending attempt aborted so settlement cannot restart compaction |
+| `s18-role-tool-lifetime` | `opsx-loop.armed-loop-mutes-generic-subagent-tool` + `opsx-loop.goal-and-conversation-kickoff`: named-to-goal replacement and failed named re-arm both restore the pre-arm tool set instead of stranding `opsx_dispatch` |
+| `s19-stale-dispatch-owner` | `opsx-loop.opsx-dispatch-forces-resolved-role-model` + `opsx-loop.interrupt-or-error-stops-the-loop`: stale old request is refused before dispatch after named re-arm, while exact replacement-owned directive reaches dispatch spawn path |
 
 ## Running
 

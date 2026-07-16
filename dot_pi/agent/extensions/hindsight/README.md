@@ -2,7 +2,8 @@
 
 Automatic long-term memory for pi backed by a self-hosted
 [Hindsight](https://hindsight.vectorize.io) server
-(`hindsight-api.internal.cartwmic.com`, bank `cartwmic`).
+(`hindsight-api.internal.cartwmic.com`). Bank is profile-gated:
+`axon-work-computer` → `work`, otherwise → `cartwmic`.
 
 This is the **reliable** path Hindsight recommends — hooks, not relying on the
 model to call MCP tools. The `hindsight` MCP server (registered in
@@ -18,7 +19,7 @@ automatic, mirroring the official Claude Code plugin's hook design.
 | Auto-retain | `agent_end` (per response cycle) | Every `retainEveryNTurns` cycles, ship a full-session transcript (fire-and-forget) |
 | Final flush | `session_shutdown` | One awaited retain so the last cycles are captured |
 
-- **Transport:** Hindsight REST directly (`POST …/banks/cartwmic/memories/recall`,
+- **Transport:** Hindsight REST directly (`POST …/banks/<bankId>/memories/recall`,
   `…/memories`). No per-turn MCP handshake.
 - **Feedback-loop guard:** injected `<hindsight_memories>` blocks are stripped
   from both the recall query and the retained transcript.
@@ -35,7 +36,7 @@ automatic, mirroring the official Claude Code plugin's hook design.
 
 ## Config
 
-`config.json` (chezmoi-managed). Every value also overridable via env:
+`config.json.tmpl` (chezmoi-managed). Every value also overridable via env:
 `HINDSIGHT_API_URL`, `HINDSIGHT_API_TOKEN`, `HINDSIGHT_BANK_ID`,
 `HINDSIGHT_AUTO_RECALL=false`, `HINDSIGHT_AUTO_RETAIN=false`,
 `HINDSIGHT_DEBUG=true`.
@@ -43,7 +44,7 @@ automatic, mirroring the official Claude Code plugin's hook design.
 | Key | Default | Notes |
 |-----|---------|-------|
 | `apiUrl` | `https://hindsight-api.internal.cartwmic.com` | Base REST URL |
-| `bankId` | `cartwmic` | Path-pinned bank |
+| `bankId` | profile-gated | `work` when `.profile == axon-work-computer`, else `cartwmic` |
 | `apiToken` | `""` | Bearer; empty = no auth (current state). Set when server auth lands. |
 | `autoRecall` / `autoRetain` | `true` | Master switches |
 | `recallBudget` | `mid` | `low`/`mid`/`high` — search effort vs latency |
