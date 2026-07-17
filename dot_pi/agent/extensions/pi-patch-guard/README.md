@@ -20,12 +20,18 @@ nothing re-applied it until noticed by hand.
 
 ## What it does
 
-On each user turn (`before_agent_start`), for every watched patch it reads the
-patch's own state file
-(`~/.local/state/chezmoi-pi-patches/<patch>.json`) and, if that file says the
-patch should be applied (`status` is `patched` / `already-patched`), checks the
-recorded `target` file still contains the patch marker. If the marker is gone it
-fires a single UI warning.
+On session start and after each agent response, it **auto-discovers** every
+chezmoi-pi-patch by enumerating the state dir
+(`~/.local/state/chezmoi-pi-patches/*.json`) — no hardcoded list. For each, if
+the state file says the patch should be applied (`status` is `patched` /
+`already-patched`), it checks the recorded `target` file still contains the
+patch marker. If the marker is gone it fires a single UI warning.
+
+**Profile-aware for free.** A patch gated off for the active chezmoi profile
+(e.g. `hide-nonbridge-claude-models` on a non-`personal` profile) writes
+`status: "unpatched"`, which is not intended-on ⇒ no drift, no warning. Patches
+that have never run (no state file) are simply not watched. The guard reads no
+`PI_CHEZMOI_PROFILE` itself — the state files already encode the decision.
 
 **It only warns. It does not heal.** Re-apply yourself with `chezmoi apply`
 (re-runs `run_onchange_apply_pi_patches`) or run the patch directly:
@@ -49,9 +55,12 @@ reload; a fresh process reads the re-patched file).
 
 ## Watched patches
 
-Edit the `WATCHED` array in `index.ts` to add patches. Each entry needs the
-patch `name` (matches its state-file basename) and the literal `marker` string
-the patch injects.
+Nothing to configure — patches are discovered automatically from their state
+files. The marker is derived by convention as `chezmoi-pi-patch:<name>` (where
+`<name>` is the state file's `patchName`, falling back to its basename). A patch
+may override this by writing an explicit `marker` field into its state file.
+A new patch under `~/.local/share/pi-patches/` is watched as soon as it has run
+once and written its state file.
 
 ## Config
 
