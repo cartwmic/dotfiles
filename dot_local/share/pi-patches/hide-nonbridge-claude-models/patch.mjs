@@ -34,7 +34,7 @@ import { homedir } from "node:os";
 
 // Bump when the EDITS strings change. The embedded marker uses this; a stale
 // marker (different revision) triggers restore-from-backup before re-apply.
-const PATCH_REVISION = 1;
+const PATCH_REVISION = 2;
 
 const PATCH_NAME = "hide-nonbridge-claude-models";
 const MARKER = `chezmoi-pi-patch:${PATCH_NAME} v${PATCH_REVISION}`;
@@ -60,19 +60,32 @@ const wantPatched = profile === "personal";
 // unpatched file. `replace` carries the MARKER so we can detect "already
 // patched" and reverse the edit. Any change here requires a PATCH_REVISION bump.
 
+// v0.80.x moved availability computation from ModelRegistry.getAvailable()
+// (model-registry.js) into ModelRuntime (model-runtime.js). ModelRegistry is
+// now a facade over runtime.getAvailableSnapshot(). We filter every site that
+// produces/returns the available list: the two snapshot builders plus the
+// provider-specific bypass in getAvailable(providerId).
 const EDITS = [
 	{
-		name: "getAvailable — hide non-claude-bridge Claude models",
-		find: `    getAvailable() {
-        return this.models.filter((m) => this.hasConfiguredAuth(m));
-    }`,
-		replace: `    getAvailable() {
-        // ${MARKER} — hide Claude models from every provider except
-        // claude-bridge; auth (hasConfiguredAuth) is intentionally preserved
-        // so the anthropic token still powers web_search/web_fetch + sub-bar.
-        return this.models.filter((m) => this.hasConfiguredAuth(m)
-            && !(/claude/i.test(m.id) && m.provider !== "claude-bridge"));
-    }`,
+		name: "updateModelSnapshot — hide non-claude-bridge Claude models",
+		find: `            available: all.filter((model) => this.snapshot.configuredProviders.has(model.provider)),`,
+		replace: `            // ${MARKER} — hide Claude models from every provider except
+            // claude-bridge; auth is intentionally preserved so the anthropic
+            // token still powers web_search/web_fetch + sub-bar.
+            available: all.filter((model) => this.snapshot.configuredProviders.has(model.provider)
+                && !(/claude/i.test(model.id) && model.provider !== "claude-bridge")),`,
+	},
+	{
+		name: "runAvailabilityRefresh — hide non-claude-bridge Claude models",
+		find: `            available: [...available],`,
+		replace: `            // ${MARKER} — hide Claude models from every provider except claude-bridge.
+            available: available.filter((model) => !(/claude/i.test(model.id) && model.provider !== "claude-bridge")),`,
+	},
+	{
+		name: "getAvailable(providerId) bypass — hide non-claude-bridge Claude models",
+		find: `                return await this.models.getAvailable(providerId);`,
+		replace: `                // ${MARKER} — hide Claude models from every provider except claude-bridge.
+                return (await this.models.getAvailable(providerId)).filter((model) => !(/claude/i.test(model.id) && model.provider !== "claude-bridge"));`,
 	},
 ];
 
@@ -82,7 +95,7 @@ function locateTarget() {
 	const requireFromHome = createRequire(join(homedir(), "package.json"));
 	let resolved;
 	try {
-		resolved = requireFromHome.resolve("@earendil-works/pi-coding-agent/dist/core/model-registry.js");
+		resolved = requireFromHome.resolve("@earendil-works/pi-coding-agent/dist/core/model-runtime.js");
 	} catch {
 		try {
 			const npmRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
@@ -92,7 +105,7 @@ function locateTarget() {
 				"pi-coding-agent",
 				"dist",
 				"core",
-				"model-registry.js",
+				"model-runtime.js",
 			);
 			if (existsSync(candidate)) resolved = candidate;
 		} catch {
