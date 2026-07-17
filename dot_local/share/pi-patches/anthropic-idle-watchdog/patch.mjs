@@ -120,68 +120,103 @@ const EDITS = [
 ];
 
 // ─── Locate target ─────────────────────────────────────────────────────────
+//
+// pi-ai was historically published under the @mariozechner scope with the SSE
+// provider at dist/providers/anthropic.js. Newer builds (0.80.x) publish under
+// @earendil-works, nest pi-ai inside pi-coding-agent's node_modules, and moved
+// the streaming code to dist/api/anthropic-messages.js. Probe every known
+// layout so the patch survives scope renames and internal refactors.
+const SCOPES = ["@earendil-works", "@mariozechner"];
+const PI_AI_SUBPATHS = [
+	"dist/api/anthropic-messages.js", // 0.80.x+
+	"dist/providers/anthropic.js", // legacy
+];
+
+function firstExisting(paths) {
+	for (const p of paths) {
+		if (p && existsSync(p)) return p;
+	}
+	return null;
+}
 
 function locateTarget() {
-	// Try via the user's nominal node (the one that runs pi). We're already
-	// running under it because chezmoi invokes `node patch.mjs`.
+	// We run under the same node that runs pi (chezmoi invokes `node patch.mjs`).
 	const requireFromHome = createRequire(join(homedir(), "package.json"));
-	let resolved;
-	try {
-		resolved = requireFromHome.resolve("@mariozechner/pi-ai/dist/providers/anthropic.js");
-	} catch {
-		// Fall back to npm's global root.
-		try {
-			const npmRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
-			const candidate = join(
-				npmRoot,
-				"@mariozechner",
-				"pi-coding-agent",
-				"node_modules",
-				"@mariozechner",
-				"pi-ai",
-				"dist",
-				"providers",
-				"anthropic.js",
-			);
-			if (existsSync(candidate)) {
-				resolved = candidate;
+	const candidates = [];
+	for (const scope of SCOPES) {
+		for (const sub of PI_AI_SUBPATHS) {
+			// 1. pi-ai resolvable directly (hoisted to a top-level node_modules).
+			try {
+				candidates.push(requireFromHome.resolve(`${scope}/pi-ai/${sub}`));
+			} catch {
+				/* not hoisted under this scope */
 			}
-		} catch {
-			/* npm not on PATH */
+			// 2. pi-ai nested under pi-coding-agent — resolve the parent, walk in.
+			try {
+				const pcaPkg = requireFromHome.resolve(`${scope}/pi-coding-agent/package.json`);
+				candidates.push(join(dirname(pcaPkg), "node_modules", scope, "pi-ai", sub));
+			} catch {
+				/* pi-coding-agent not under this scope */
+			}
 		}
 	}
-	if (!resolved || !existsSync(resolved)) {
-		return null;
+	// 3. npm global root fallback, both nesting shapes.
+	try {
+		const npmRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
+		for (const scope of SCOPES) {
+			for (const sub of PI_AI_SUBPATHS) {
+				candidates.push(join(npmRoot, scope, "pi-coding-agent", "node_modules", scope, "pi-ai", sub));
+				candidates.push(join(npmRoot, scope, "pi-ai", sub));
+			}
+		}
+	} catch {
+		/* npm not on PATH */
 	}
-	return resolved;
+	return firstExisting(candidates);
 }
 
 function getInstalledVersions() {
-	const versions = { piCodingAgent: null, piAi: null };
+	const versions = { piCodingAgent: null, piAi: null, scope: null };
+	const requireFromHome = createRequire(join(homedir(), "package.json"));
 	let npmRoot;
 	try {
 		npmRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
 	} catch {
-		return versions;
+		/* npm not on PATH — home-resolve may still work */
 	}
-	try {
-		const pkg = JSON.parse(
-			readFileSync(join(npmRoot, "@mariozechner", "pi-coding-agent", "package.json"), "utf8"),
-		);
-		versions.piCodingAgent = pkg.version;
-	} catch {
-		/* ignore */
-	}
-	try {
-		const pkg = JSON.parse(
-			readFileSync(
-				join(npmRoot, "@mariozechner", "pi-coding-agent", "node_modules", "@mariozechner", "pi-ai", "package.json"),
-				"utf8",
-			),
-		);
-		versions.piAi = pkg.version;
-	} catch {
-		/* ignore */
+	for (const scope of SCOPES) {
+		let pcaPkgPath;
+		try {
+			pcaPkgPath = requireFromHome.resolve(`${scope}/pi-coding-agent/package.json`);
+		} catch {
+			if (npmRoot) {
+				const c = join(npmRoot, scope, "pi-coding-agent", "package.json");
+				if (existsSync(c)) pcaPkgPath = c;
+			}
+		}
+		if (!pcaPkgPath) continue;
+		try {
+			versions.piCodingAgent = JSON.parse(readFileSync(pcaPkgPath, "utf8")).version;
+		} catch {
+			/* ignore */
+		}
+		versions.scope = scope;
+		const pcaDir = dirname(pcaPkgPath);
+		const piAiPkgCandidates = [
+			join(pcaDir, "node_modules", scope, "pi-ai", "package.json"), // nested
+			join(pcaDir, "..", "pi-ai", "package.json"), // hoisted sibling
+		];
+		for (const c of piAiPkgCandidates) {
+			try {
+				if (existsSync(c)) {
+					versions.piAi = JSON.parse(readFileSync(c, "utf8")).version;
+					break;
+				}
+			} catch {
+				/* ignore */
+			}
+		}
+		break;
 	}
 	return versions;
 }
