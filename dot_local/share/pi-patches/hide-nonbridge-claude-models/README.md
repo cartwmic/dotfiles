@@ -6,11 +6,12 @@ removing any provider auth.
 
 ## Why
 
-pi has no per-model or per-provider "disable" setting. A model is selectable
-iff its provider has configured auth: `ModelRegistry.getAvailable()` returns
-`this.models.filter((m) => this.hasConfiguredAuth(m))`. Both the interactive
-model picker (`model-selector.js`) and `cli/list-models.js` (`pi --list-models`)
-call `getAvailable()`.
+pi has no per-model or per-provider "disable" setting. `enabledModels` in
+settings.json only scopes sessions and preselects the picker checkboxes — it
+does **not** filter `pi --list-models` or the available-models list. A model is
+available iff its provider has configured auth. Both the interactive model
+picker and `cli/list-models.js` (`pi --list-models`) read the runtime's
+available list.
 
 On the `personal` profile, `~/.pi/agent/auth.json` carries auth for `anthropic`
 and `openrouter`, which makes ~25 `anthropic` Claude models and all `openrouter`
@@ -26,19 +27,22 @@ returned list.
 
 ## What it changes
 
-Target: `@earendil-works/pi-coding-agent/dist/core/model-registry.js`
+Target: `@earendil-works/pi-coding-agent/dist/core/model-runtime.js`
+(revision 2; up to 0.80.6 the target was `model-registry.js#getAvailable()`,
+which 0.80.10 refactored into a facade over `ModelRuntime`).
 
-```js
-// before
-getAvailable() {
-    return this.models.filter((m) => this.hasConfiguredAuth(m));
-}
-// after
-getAvailable() {
-    return this.models.filter((m) => this.hasConfiguredAuth(m)
-        && !(/claude/i.test(m.id) && m.provider !== "claude-bridge"));
-}
-```
+Three edits, all applying the same exclusion
+`!(/claude/i.test(model.id) && model.provider !== "claude-bridge")`:
+
+1. `updateModelSnapshot()` — `snapshot.available` built from configured
+   providers.
+2. `runAvailabilityRefresh()` — `snapshot.available` rebuilt from
+   `models.getAvailable()`.
+3. `getAvailable(providerId)` — the provider-specific path that bypasses the
+   snapshot when no refresh is in flight.
+
+`ModelRegistry.getAvailable()`/`getAvailableSnapshot()` both read
+`snapshot.available`, so the facade is covered transitively.
 
 "Claude model" = model id matches `/claude/i`. That covers `anthropic`
 (`claude-opus-4-8`, `claude-fable-5`), `openrouter` (`anthropic/claude-*`,
