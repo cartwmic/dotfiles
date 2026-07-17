@@ -1,8 +1,17 @@
 # pi-ai patch: anthropic-idle-watchdog
 
-A chezmoi-managed runtime patch for `@mariozechner/pi-ai`'s native Anthropic
-provider. Wraps the SSE response-body reader in an idle watchdog, and forwards
-Anthropic's keep-alive `ping` events through pi-ai's event stream.
+A chezmoi-managed runtime patch for pi-ai's native Anthropic provider. Wraps
+the SSE response-body reader in an idle watchdog, and forwards Anthropic's
+keep-alive `ping` events through pi-ai's event stream.
+
+> **Package scope / path note (2026-07-17):** pi-ai was renamed from the
+> `@mariozechner` scope to `@earendil-works`, is now nested inside
+> pi-coding-agent's `node_modules`, and the streaming code moved from
+> `dist/providers/anthropic.js` to **`dist/api/anthropic-messages.js`**. The
+> patch's `locateTarget` / `getInstalledVersions` probe both scopes and both
+> subpaths, so it survives the rename. The three code anchors are byte-identical
+> across the move, so `PATCH_REVISION` stays at 1. Historic references to
+> `@mariozechner` below are retained for context.
 
 ## Why this exists
 
@@ -24,7 +33,8 @@ Claude Opus 4.7 (1M context, adaptive thinking, xhigh effort).
 
 ### Root cause
 
-`pi-ai/dist/providers/anthropic.js`:
+`pi-ai`'s Anthropic SSE code (historically `dist/providers/anthropic.js`, now
+`dist/api/anthropic-messages.js`):
 
 - `iterateSseMessages` awaits `reader.read()` with no `Promise.race`,
   no `setTimeout`, no `AbortSignal.timeout`. If TCP stays open but no bytes
@@ -38,7 +48,8 @@ Claude Opus 4.7 (1M context, adaptive thinking, xhigh effort).
 
 ## What the patch does
 
-Three surgical edits to `pi-ai/dist/providers/anthropic.js`:
+Three surgical edits to pi-ai's Anthropic SSE module
+(`dist/api/anthropic-messages.js`; formerly `dist/providers/anthropic.js`):
 
 1. **Add `"ping"` to `ANTHROPIC_MESSAGE_EVENTS`** so iterateAnthropicEvents
    yields ping events instead of dropping them.
@@ -157,8 +168,9 @@ manager to reinstall, or just restore from `<file>.orig.chezmoi-pi-patch`).
 ## Verifying the patch is active
 
 ```sh
+# Target path is scope/version-dependent; read it from the state file.
 grep -c 'chezmoi-pi-patch:anthropic-idle-watchdog' \
-  "$(node -e "console.log(require.resolve('@mariozechner/pi-ai/dist/providers/anthropic.js'))")"
+  "$(node -e "console.log(JSON.parse(require('fs').readFileSync(require('os').homedir()+'/.local/state/chezmoi-pi-patches/anthropic-idle-watchdog.json')).target)")"
 # Should print: 3
 ```
 
