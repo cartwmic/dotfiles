@@ -255,6 +255,48 @@ EOF
 			printf '%s\n' "${lines[$((sel-1))]}"
 		fi
 	}
+	# Single pick from a catalog subset. Empty pick = done (review sequential loop).
+	pick_one_model_from_catalog() {
+		local catalog="$1" fzf_cmd="${OPSX_MODELS_FZF_CMD:-fzf}" pick lines=() i n sel
+		[ -n "$catalog" ] || return 1
+		if [ -z "${OPSX_MODELS_NO_FZF:-}" ] && command -v "$fzf_cmd" >/dev/null 2>&1; then
+			pick="$(printf '%s\n' "$catalog" | "$fzf_cmd" --prompt 'review model (esc when done)> ' 2>/dev/null)" || true
+			[ -n "$pick" ] && printf '%s\n' "$pick"
+			return 0
+		fi
+		while IFS= read -r line; do [ -n "$line" ] && lines+=("$line"); done <<EOF
+$catalog
+EOF
+		n=${#lines[@]}
+		[ "$n" -gt 0 ] || { err "no models to select"; return 1; }
+		for i in "${!lines[@]}"; do printf '%5d  %s\n' "$((i+1))" "${lines[$i]}" >&2; done
+		err "select number (Enter when done): "
+		IFS= read -r sel || return 1
+		[ -z "$sel" ] && return 0
+		case "$sel" in
+			''|*[!0-9]*) err "invalid selection"; return 1 ;;
+		esac
+		[ "$sel" -ge 1 ] && [ "$sel" -le "$n" ] || { err "selection out of range"; return 1; }
+		printf '%s\n' "${lines[$((sel-1))]}"
+	}
+	# Review: sequential pick → thinking per pick → remove from remaining; esc/empty ends.
+	pick_review_models_interactive() {
+		local catalog remaining pick level line result=""
+		catalog="$(models_catalog)" || return 1
+		[ -n "$catalog" ] || { err "pi --list-models produced no parseable models"; return 1; }
+		remaining="$catalog"
+		while [ -n "$remaining" ]; do
+			pick="$(pick_one_model_from_catalog "$remaining")" || break
+			[ -z "$pick" ] && break
+			level="$(pick_thinking_level)" || return 1
+			line="$(printf '%s\n' "$pick" | append_thinking_suffix "$level")"
+			result+="$line"$'\n'
+			remaining="$(printf '%s\n' "$remaining" | grep -vxF -- "$pick" || true)"
+		done
+		result="${result%$'\n'}"
+		[ -n "$result" ] || { err "selection cancelled"; return 1; }
+		printf '%s\n' "$result"
+	}
 	# Pick models from catalog. $1=multi(0|1). Uses fzf if present (unless OPSX_MODELS_NO_FZF=1).
 	# Multi + fzf: sequential single-select (esc/cancel ends). fzf -m emits catalog
 	# order, which would violate "selection order = list order"; sequential picks
@@ -316,17 +358,12 @@ EOF
 			return 0
 		fi
 		if [ "$irole" = review ]; then
-			models="$(pick_models 1)" || return 1
-		else
-			models="$(pick_models 0)" || return 1
-		fi
-		level="$(pick_thinking_level)" || return 1
-		models="$(printf '%s\n' "$models" | append_thinking_suffix "$level")"
-		if [ "$irole" = review ]; then
+			models="$(pick_review_models_interactive)" || return 1
 			atomic_write_role review "$f" "$models" || return 1
 		else
-			# single line
-			models="$(printf '%s\n' "$models" | head -n1)"
+			models="$(pick_models 0)" || return 1
+			level="$(pick_thinking_level)" || return 1
+			models="$(printf '%s\n' "$models" | append_thinking_suffix "$level" | head -n1)"
 			atomic_write_role "$irole" "$f" "$models" || return 1
 		fi
 		return 0
