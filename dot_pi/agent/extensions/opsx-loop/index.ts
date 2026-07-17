@@ -48,7 +48,13 @@ import {
 	type ResolvedModel,
 } from "./helpers.ts";
 import { Type } from "typebox";
-import { spawnViaRunSync } from "./spawn.ts";
+import {
+	classifyModelsCommand,
+	shouldRunInteractiveModelsSet,
+} from "./model-config.ts";
+import { runInteractiveModelsSet } from "./model-config-ui.ts";
+import { spawnViaRunSync, formatOpsxDispatchCall, formatOpsxDispatchResult } from "./spawn.ts";
+import { Text } from "@mariozechner/pi-tui";
 
 const STALL_LIMIT = 3; // consecutive identical no-progress gate failures → stop
 
@@ -404,20 +410,35 @@ export default function (pi: ExtensionAPI) {
 			name: OPSX_DISPATCH_TOOL_NAME,
 			label: "opsx_dispatch",
 			description:
-				"Armed-loop-only: dispatch role-bound subagent work (review/impl/author) with the resolved opsx role model forced. Refuses when no loop is armed or the role is unset.",
+				"Armed-loop-only: dispatch role-bound subagent work (review/impl/author) with the resolved opsx role model forced. Accepts `task` or parallel `tasks[]`. Review multi-list + single task expands to native parallel. Refuses when no loop is armed or the role is unset.",
 			parameters: Type.Object({
 				role: Type.Union([Type.Literal("review"), Type.Literal("impl"), Type.Literal("author")], {
 					description: "opsx role whose configured model is forced for the spawn",
 				}),
-				task: Type.String({ description: "Task prompt for the spawned subagent" }),
-				agent: Type.Optional(Type.String({ description: "Optional subagent agent name" })),
+				task: Type.Optional(Type.String({ description: "Single task prompt (mutually exclusive with tasks)" })),
+				tasks: Type.Optional(
+					Type.Array(
+						Type.Object({
+							task: Type.String(),
+							agent: Type.Optional(Type.String()),
+							model: Type.Optional(
+								Type.String({ description: "Ignored — role is sole model source" }),
+							),
+						}),
+						{ description: "PARALLEL tasks (mutually exclusive with task)" },
+					),
+				),
+				agent: Type.Optional(Type.String({ description: "Optional default subagent agent name" })),
+				concurrency: Type.Optional(
+					Type.Number({ description: "Max concurrent parallel spawns (default 4; mirrors pi-subagents)" }),
+				),
 				model: Type.Optional(
 					Type.String({
 						description: "Ignored when role is configured — role is sole model source",
 					}),
 				),
 			}),
-			async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			async execute(_toolCallId, params, signal, onUpdate, ctx) {
 				const role = params.role as OpsxDispatchRole;
 				const authorInSession = resolveModel("author-in-session", loop?.change ?? "", ctx.cwd);
 				const ais =
@@ -439,7 +460,11 @@ export default function (pi: ExtensionAPI) {
 					),
 					role,
 					task: params.task,
+					tasks: params.tasks,
+					taskProvided: Object.prototype.hasOwnProperty.call(params, "task"),
+					tasksProvided: Object.prototype.hasOwnProperty.call(params, "tasks"),
 					agent: params.agent,
+					concurrency: params.concurrency,
 					callerModel: params.model,
 					resolved,
 					authorInSession: ais,
@@ -447,23 +472,55 @@ export default function (pi: ExtensionAPI) {
 				if (!plan.ok) {
 					return {
 						content: [{ type: "text", text: plan.message }],
-						details: { refused: true, reason: plan.reason },
+						details: { refused: true, reason: plan.reason, mode: "management", results: [] },
 					};
 				}
-				const results = await runOpsxDispatchSpawns(plan.spawns, (spec) =>
-					spawnViaRunSync(spec, { cwd: ctx.cwd, signal }),
+				let parentSessionFile: string | null = null;
+				try {
+					parentSessionFile = ctx.sessionManager?.getSessionFile?.() ?? null;
+				} catch {
+					parentSessionFile = null;
+				}
+				const { results, details, text } = await runOpsxDispatchSpawns(
+					plan,
+					(spec, meta) =>
+						spawnViaRunSync(spec, {
+							cwd: ctx.cwd,
+							signal,
+							index: meta.index,
+							onUpdate: meta.onUpdate,
+							parentSessionFile,
+						}),
+					{
+						onUpdate: onUpdate
+							? (u) => {
+									onUpdate({
+										content: u.content,
+										details: u.details,
+									});
+								}
+							: undefined,
+					},
 				);
-				const text = results.map((r) => r.text).join("\n");
 				const allOk = results.every((r) => r.ok);
 				return {
 					content: [{ type: "text", text }],
 					details: {
+						...details,
 						refused: false,
 						models: results.map((r) => r.model),
 						ok: allOk,
 						count: results.length,
 					},
 				};
+			},
+			// Thin-wrap renderers (intent: import or thin wrap). Dynamic import of
+			// pi-subagents render.ts fails outside pi's jiti virtual-module aliases.
+			renderCall(args, theme) {
+				return new Text(formatOpsxDispatchCall(args as { role?: string; tasks?: unknown[] }, theme), 0, 0);
+			},
+			renderResult(result, options, theme, _context) {
+				return new Text(formatOpsxDispatchResult(result as never, options, theme), 0, 0);
 			},
 		});
 	}
@@ -760,11 +817,28 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (parsed.mode === "models") {
-				// Thin wrapper over the `opsx models` CLI (owner of the write); bare → list.
-				// Use the session cwd so `--layer project` targets the ACTIVE repo.
-				const margs = parsed.args.length > 0 ? parsed.args : ["list"];
-				const { out } = runModels(margs, ctx.cwd);
-				ctx.ui.notify(out || "(no output)", "info");
+				// Thin wrapper over `opsx models` (CLI owns writes). Bare → list.
+				// Bare/role-only `set` with UI runs in-TUI pickers then shells out to
+				// `opsx models set …` — extension never writes YAML. (Path B)
+				const route = classifyModelsCommand(parsed.args);
+				if (
+					shouldRunInteractiveModelsSet(route, Boolean(ctx.hasUI), typeof ctx.ui?.custom === "function")
+				) {
+					const plan = await runInteractiveModelsSet(
+						ctx,
+						route.kind === "interactive-set" ? route.role : undefined,
+					);
+					if (!plan.ok) {
+						ctx.ui.notify(plan.error, "error");
+						return;
+					}
+					const { code, out } = runModels(plan.cliArgs, ctx.cwd);
+					ctx.ui.notify(out || "(no output)", code === 0 ? "info" : "error");
+					return;
+				}
+				const margs = route.kind === "list" ? ["list"] : parsed.args;
+				const { code, out } = runModels(margs, ctx.cwd);
+				ctx.ui.notify(out || "(no output)", code === 0 ? "info" : "error");
 				return;
 			}
 

@@ -213,11 +213,17 @@ printf '1\nhigh\n' >"$TMP/answers-impl"
 	"$OPSX" models set impl <"$TMP/answers-impl" ) >/dev/null 2>&1
 eq "interactive-models-set: role-only stub picks + suffix" "cursor/composer-2.5:high" "$(run impl)"
 : >"$USERCFG"
-printf '1 2\nskip\n' >"$TMP/answers-review"
+printf '1\nskip\n1\nskip\n' >"$TMP/answers-review"
 ( cd "$ROOT"; OPSX_MODELS_FORCE_INTERACTIVE=1 OPSX_MODELS_NO_FZF=1 OPSX_MODELS_PI_CMD="$FAKE_PI" \
 	"$OPSX" models set review <"$TMP/answers-review" ) >/dev/null 2>&1
-eq "interactive-models-set: review multi-select list" "cursor/composer-2.5
+eq "interactive-models-set: review sequential picks list" "cursor/composer-2.5
 anthropic/claude-sonnet-5" "$(run review)"
+: >"$USERCFG"
+printf '1\nhigh\n1\nxhigh\n' >"$TMP/answers-review-mixed"
+( cd "$ROOT"; OPSX_MODELS_FORCE_INTERACTIVE=1 OPSX_MODELS_NO_FZF=1 OPSX_MODELS_PI_CMD="$FAKE_PI" \
+	"$OPSX" models set review <"$TMP/answers-review-mixed" ) >/dev/null 2>&1
+eq "interactive-models-set: review per-model mixed suffixes" "cursor/composer-2.5:high
+anthropic/claude-sonnet-5:xhigh" "$(run review)"
 : >"$USERCFG"
 printf '1\nskip\n' >"$TMP/answers-miss"
 ( cd "$ROOT"; OPSX_MODELS_FORCE_INTERACTIVE=1 OPSX_MODELS_NO_FZF=1 OPSX_MODELS_PI_CMD=/nonexistent/pi-binary \
@@ -252,7 +258,7 @@ if [ -z "$line" ]; then exit 1; fi
 tail -n +2 "$seqf" >"$seqf.tmp" && mv "$seqf.tmp" "$seqf"
 printf '%s\n' "$line"
 FZF
-printf 'skip\n' >"$TMP/answers-fzf-order"
+printf 'skip\nskip\n' >"$TMP/answers-fzf-order"
 ( cd "$ROOT"; OPSX_MODELS_FORCE_INTERACTIVE=1 OPSX_MODELS_PI_CMD="$FAKE_PI" \
 	OPSX_MODELS_FZF_CMD="$FAKE_FZF" OPSX_MODELS_FZF_SEQ_FILE="$FZF_SEQ" \
 	"$OPSX" models set review <"$TMP/answers-fzf-order" ) >/dev/null 2>&1

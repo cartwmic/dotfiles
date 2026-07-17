@@ -9,6 +9,7 @@
 #
 # patch.mjs (anthropic-idle-watchdog):      {{ include "dot_local/share/pi-patches/anthropic-idle-watchdog/patch.mjs" | sha256sum }}
 # patch.mjs (hide-nonbridge-claude-models): {{ include "dot_local/share/pi-patches/hide-nonbridge-claude-models/patch.mjs" | sha256sum }}
+# patch.mjs (custom-message-marker):        {{ include "dot_local/share/pi-patches/custom-message-marker/patch.mjs" | sha256sum }}
 # apply script:                             {{ include "dot_local/user_scripts/executable_apply_pi_patches.sh" | sha256sum }}
 # pi-coding-agent installed version:        {{ output "node" "-e" "const f=require('fs'),p=require('path'),c=require('child_process');try{const r=c.execFileSync('npm',['root','-g'],{encoding:'utf8'}).trim();console.log(JSON.parse(f.readFileSync(p.join(r,'@earendil-works/pi-coding-agent/package.json'),'utf8')).version)}catch(e){console.log('not-installed')}" | trim }}
 # pi-ai installed version:                  {{ output "node" "-e" "const f=require('fs'),p=require('path'),c=require('child_process');try{const r=c.execFileSync('npm',['root','-g'],{encoding:'utf8'}).trim();console.log(JSON.parse(f.readFileSync(p.join(r,'@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/package.json'),'utf8')).version)}catch(e){console.log('not-installed')}" | trim }}

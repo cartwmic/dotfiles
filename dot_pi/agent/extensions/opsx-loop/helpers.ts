@@ -106,15 +106,66 @@ export function restoreToolSetAfterClear(
 
 export type OpsxDispatchRole = "review" | "impl" | "author";
 
+export interface OpsxDispatchTaskItem {
+	task: string;
+	agent?: string;
+	/** Ignored — role is sole model source. */
+	model?: string;
+}
+
 export interface OpsxDispatchSpawnSpec {
 	model: string;
 	task: string;
 	agent: string;
 }
 
+/**
+ * Subagent SingleResult-shaped payload for Details aggregation.
+ * Passes through metadata fields returned by pi-subagents runSync
+ * (session/skills/truncation/paths) — not a minimal subset.
+ */
+export interface OpsxDispatchSingleResult {
+	agent: string;
+	task: string;
+	exitCode: number;
+	error?: string;
+	finalOutput?: string;
+	messages?: unknown[];
+	usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
+	model?: string;
+	attemptedModels?: string[];
+	modelAttempts?: unknown[];
+	sessionFile?: string;
+	skills?: string[];
+	skillsWarning?: string;
+	progressSummary?: Record<string, unknown>;
+	toolCalls?: unknown[];
+	truncation?: Record<string, unknown>;
+	savedOutputPath?: string;
+	outputSaveError?: string;
+	progress?: {
+		index: number;
+		agent: string;
+		status: "pending" | "running" | "completed" | "failed";
+		task: string;
+		recentTools: unknown[];
+		recentOutput: string[];
+		toolCount: number;
+		tokens: number;
+		durationMs: number;
+		error?: string;
+		model?: string;
+	};
+	artifactPaths?: Record<string, string> & { dir?: string };
+}
+
 export type OpsxDispatchPlan =
-	| { ok: false; reason: "not-armed" | "unset" | "author-in-session"; message: string }
-	| { ok: true; spawns: OpsxDispatchSpawnSpec[] };
+	| {
+			ok: false;
+			reason: "not-armed" | "unset" | "author-in-session" | "schema" | "tasks-length";
+			message: string;
+	  }
+	| { ok: true; mode: "single" | "parallel"; spawns: OpsxDispatchSpawnSpec[]; concurrency?: number };
 
 function roleConfigured(r: ResolvedModel | null | undefined): r is ResolvedModel {
 	return r != null && r.source !== "unset" && r.source !== "default" && r.value != null;
@@ -129,15 +180,29 @@ function modelListFromResolved(r: ResolvedModel): string[] {
 
 /**
  * Pure planner for opsx_dispatch: armed-only, unset=refuse, role sole model
- * source (caller model ignored), review auto fan-out.
+ * source (caller model ignored), review → native parallel tasks[] expansion,
+ * caller tasks[] length-match for multi-review.
  * (opsx-loop.opsx-dispatch-forces-resolved-role-model,
- *  opsx-loop.review-role-auto-fan-out)
+ *  opsx-loop.review-role-auto-fan-out,
+ *  opsx-loop.opsx-dispatch-narrow-schema,
+ *  opsx-loop.caller-tasks-length-must-match-review-list)
  */
 export function planOpsxDispatch(input: {
 	armed: boolean;
 	role: OpsxDispatchRole;
-	task: string;
+	/** Single-task shape (mutually exclusive with tasks). */
+	task?: string;
+	/** Parallel tasks shape (mutually exclusive with task). */
+	tasks?: OpsxDispatchTaskItem[];
+	/**
+	 * Field-presence flags (from the tool call object). When set, both keys
+	 * being present refuses even if one value is empty — schema XOR is on
+	 * presence, not non-emptiness.
+	 */
+	taskProvided?: boolean;
+	tasksProvided?: boolean;
 	agent?: string;
+	concurrency?: number;
 	/** Ignored when role is configured — documented for callers. */
 	callerModel?: string;
 	resolved: ResolvedModel | null;
@@ -150,6 +215,41 @@ export function planOpsxDispatch(input: {
 			reason: "not-armed",
 			message:
 				"opsx_dispatch refused: no opsx-loop is armed. Use /opsx-loop <change> first, or the generic subagent tool when disarmed.",
+		};
+	}
+	// Presence XOR: key present on the call (or inferred from value !== undefined).
+	const taskProvided = input.taskProvided ?? input.task !== undefined;
+	const tasksProvided = input.tasksProvided ?? input.tasks !== undefined;
+	if (taskProvided && tasksProvided) {
+		return {
+			ok: false,
+			reason: "schema",
+			message:
+				"opsx_dispatch refused: pass either `task` or `tasks[]`, not both.",
+		};
+	}
+	if (!taskProvided && !tasksProvided) {
+		return {
+			ok: false,
+			reason: "schema",
+			message:
+				"opsx_dispatch refused: provide `task` (single) or `tasks[]` (parallel).",
+		};
+	}
+	const hasTask = typeof input.task === "string" && input.task.length > 0;
+	const hasTasks = Array.isArray(input.tasks) && input.tasks.length > 0;
+	if (taskProvided && !hasTask) {
+		return {
+			ok: false,
+			reason: "schema",
+			message: "opsx_dispatch refused: `task` must be a non-empty string.",
+		};
+	}
+	if (tasksProvided && !hasTasks) {
+		return {
+			ok: false,
+			reason: "schema",
+			message: "opsx_dispatch refused: `tasks[]` must be a non-empty array.",
 		};
 	}
 	if (input.role === "author" && input.authorInSession !== false) {
@@ -175,12 +275,47 @@ export function planOpsxDispatch(input: {
 			message: `opsx_dispatch refused: role "${input.role}" resolved empty. Configure it with \`opsx models set ${input.role}\`.`,
 		};
 	}
-	const agent = (input.agent && input.agent.trim()) || "worker";
+	const defaultAgent = (input.agent && input.agent.trim()) || "worker";
 	// callerModel intentionally unused — role is sole source
 	void input.callerModel;
+
+	let spawns: OpsxDispatchSpawnSpec[];
+	if (hasTasks) {
+		const tasks = input.tasks!;
+		if (input.role === "review" && models.length > 1 && tasks.length !== models.length) {
+			return {
+				ok: false,
+				reason: "tasks-length",
+				message: `opsx_dispatch refused: role "review" has ${models.length} models but tasks[] length is ${tasks.length}. Pass exactly ${models.length} tasks (or a single task for auto parallel fan-out).`,
+			};
+		}
+		spawns = tasks.map((t, i) => {
+			const model =
+				input.role === "review" && models.length > 1
+					? models[i]!
+					: models[0]!;
+			void t.model; // stripped — role sole source
+			return {
+				model,
+				task: t.task,
+				agent: (t.agent && t.agent.trim()) || defaultAgent,
+			};
+		});
+	} else {
+		// Single task: review multi → expand to native parallel tasks[] (one per model)
+		spawns = models.map((model) => ({
+			model,
+			task: input.task!,
+			agent: defaultAgent,
+		}));
+	}
+
+	const mode: "single" | "parallel" = spawns.length > 1 ? "parallel" : "single";
 	return {
 		ok: true,
-		spawns: models.map((model) => ({ model, task: input.task, agent })),
+		mode,
+		spawns,
+		...(typeof input.concurrency === "number" ? { concurrency: input.concurrency } : {}),
 	};
 }
 
@@ -189,21 +324,193 @@ export interface OpsxDispatchSpawnResult {
 	agent: string;
 	ok: boolean;
 	text: string;
+	/** Subagent-shaped single result for Details aggregation (optional for stubs). */
+	singleResult?: OpsxDispatchSingleResult;
+}
+
+export type OpsxDispatchOnUpdate = (update: {
+	content: Array<{ type: "text"; text: string }>;
+	details: {
+		mode: "single" | "parallel";
+		results: OpsxDispatchSingleResult[];
+		progress?: OpsxDispatchSingleResult["progress"][];
+		artifacts?: { dir: string; files?: unknown[] };
+	};
+}) => void;
+
+/**
+ * Bounded concurrency pool — mirrors pi-subagents `parallel-utils.mapConcurrent`
+ * (same primitive `runParallelPath` uses). Kept local so hermetic tests need no
+ * pi-subagents import.
+ */
+export async function mapConcurrent<T, R>(
+	items: T[],
+	limit: number,
+	fn: (item: T, i: number) => Promise<R>,
+): Promise<R[]> {
+	const safeLimit = Math.max(1, Math.floor(limit) || 1);
+	const results: R[] = new Array(items.length);
+	let next = 0;
+	async function worker(): Promise<void> {
+		while (next < items.length) {
+			const i = next++;
+			results[i] = await fn(items[i]!, i);
+		}
+	}
+	await Promise.all(
+		Array.from({ length: Math.min(safeLimit, items.length) }, () => worker()),
+	);
+	return results;
 }
 
 /**
  * Run planned spawns via an injectable spawn fn (tests stub; production uses
- * pi-subagents runSync library). (opsx-loop.dispatch-spawns-via-subagent-library)
+ * pi-subagents runSync library with onUpdate). Parallel mode uses mapConcurrent
+ * (pi-subagents parallel-utils primitive) with plan.concurrency (default 4);
+ * single mode one spawn.
+ * (opsx-loop.dispatch-spawns-via-subagent-library,
+ *  opsx-loop.opsx-dispatch-transparent-progress-and-details,
+ *  opsx-loop.review-role-auto-fan-out)
  */
 export async function runOpsxDispatchSpawns(
-	spawns: OpsxDispatchSpawnSpec[],
-	spawnFn: (spec: OpsxDispatchSpawnSpec) => Promise<OpsxDispatchSpawnResult>,
-): Promise<OpsxDispatchSpawnResult[]> {
-	const out: OpsxDispatchSpawnResult[] = [];
-	for (const spec of spawns) {
-		out.push(await spawnFn(spec));
+	plan: { mode: "single" | "parallel"; spawns: OpsxDispatchSpawnSpec[]; concurrency?: number },
+	spawnFn: (
+		spec: OpsxDispatchSpawnSpec,
+		meta: { index: number; onUpdate?: OpsxDispatchOnUpdate },
+	) => Promise<OpsxDispatchSpawnResult>,
+	opts?: { onUpdate?: OpsxDispatchOnUpdate },
+): Promise<{
+	results: OpsxDispatchSpawnResult[];
+	details: {
+		mode: "single" | "parallel";
+		results: OpsxDispatchSingleResult[];
+		progress?: OpsxDispatchSingleResult["progress"][];
+		artifacts?: { dir: string; files?: unknown[] };
+	};
+	text: string;
+}> {
+	const slots: Array<OpsxDispatchSpawnResult | undefined> = plan.spawns.map(() => undefined);
+	const progressSlots: Array<OpsxDispatchSingleResult["progress"] | undefined> = plan.spawns.map(
+		() => undefined,
+	);
+
+	const artifactDirs: Array<string | undefined> = plan.spawns.map(() => undefined);
+	const emitAggregate = () => {
+		if (!opts?.onUpdate) return;
+		const partialResults = slots.map((r, i) => {
+			if (r?.singleResult) return r.singleResult;
+			const spec = plan.spawns[i]!;
+			return {
+				agent: spec.agent,
+				task: spec.task,
+				exitCode: -1,
+				finalOutput: "",
+				model: spec.model,
+				progress: progressSlots[i] ?? {
+					index: i,
+					agent: spec.agent,
+					status: "pending" as const,
+					task: spec.task,
+					recentTools: [],
+					recentOutput: [],
+					toolCount: 0,
+					tokens: 0,
+					durationMs: 0,
+					model: spec.model,
+				},
+			};
+		});
+		const progress = partialResults.map((r) => r.progress).filter(Boolean) as NonNullable<
+			OpsxDispatchSingleResult["progress"]
+		>[];
+		const liveArt = artifactDirs.find((d): d is string => typeof d === "string" && d.length > 0);
+		opts.onUpdate({
+			content: [{ type: "text", text: `opsx_dispatch ${plan.mode} (${plan.spawns.length})…` }],
+			details: {
+				mode: plan.mode,
+				results: partialResults,
+				progress,
+				...(liveArt ? { artifacts: { dir: liveArt } } : {}),
+			},
+		});
+	};
+
+	const runOne = async (spec: OpsxDispatchSpawnSpec, index: number) => {
+		const childOnUpdate: OpsxDispatchOnUpdate | undefined = opts?.onUpdate
+			? (u) => {
+					const r0 = u.details.results[0];
+					if (r0?.progress) progressSlots[index] = { ...r0.progress, index };
+					if (u.details.artifacts?.dir) artifactDirs[index] = u.details.artifacts.dir;
+					else if ((r0?.artifactPaths as { dir?: string } | undefined)?.dir) {
+						artifactDirs[index] = (r0!.artifactPaths as { dir: string }).dir;
+					}
+					emitAggregate();
+				}
+			: undefined;
+		const result = await spawnFn(spec, { index, onUpdate: childOnUpdate });
+		slots[index] = result;
+		if (result.singleResult?.progress) {
+			progressSlots[index] = { ...result.singleResult.progress, index };
+		}
+		const ad = (result.singleResult?.artifactPaths as { dir?: string } | undefined)?.dir;
+		if (ad) artifactDirs[index] = ad;
+		emitAggregate();
+		return result;
+	};
+
+	const limit = plan.mode === "parallel" ? (plan.concurrency ?? 4) : 1;
+	const results = await mapConcurrent(plan.spawns, limit, (spec, i) => runOne(spec, i));
+
+	const detailsResults: OpsxDispatchSingleResult[] = results.map((r, i) => {
+		if (r.singleResult) {
+			return {
+				...r.singleResult,
+				...(r.singleResult.progress
+					? { progress: { ...r.singleResult.progress, index: i } }
+					: {}),
+			};
+		}
+		return {
+			agent: r.agent,
+			task: plan.spawns[i]!.task,
+			exitCode: r.ok ? 0 : 1,
+			error: r.ok ? undefined : r.text,
+			finalOutput: r.text,
+			model: r.model,
+			progress: {
+				index: i,
+				agent: r.agent,
+				status: r.ok ? ("completed" as const) : ("failed" as const),
+				task: plan.spawns[i]!.task,
+				recentTools: [],
+				recentOutput: [],
+				toolCount: 0,
+				tokens: 0,
+				durationMs: 0,
+				model: r.model,
+				error: r.ok ? undefined : r.text,
+			},
+		};
+	});
+	const progress = detailsResults.map((r) => r.progress).filter(Boolean) as NonNullable<
+		OpsxDispatchSingleResult["progress"]
+	>[];
+	const text = results.map((r) => r.text).join("\n");
+	const resolvedArtifactDir =
+		artifactDirs.find((d): d is string => typeof d === "string" && d.length > 0) ??
+		detailsResults
+			.map((r) => (r.artifactPaths as { dir?: string } | undefined)?.dir)
+			.find((d): d is string => typeof d === "string" && d.length > 0);
+	const details = {
+		mode: plan.mode,
+		results: detailsResults,
+		progress,
+		...(resolvedArtifactDir ? { artifacts: { dir: resolvedArtifactDir } } : {}),
+	};
+	if (opts?.onUpdate) {
+		opts.onUpdate({ content: [{ type: "text", text }], details });
 	}
-	return out;
+	return { results, details, text };
 }
 
 /** Parse one `opsx models <role> --json` stdout line; null on malformed input. */

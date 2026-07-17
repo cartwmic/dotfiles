@@ -337,17 +337,72 @@ green.
 
 ### Requirement: Model config subcommand
 
-THE extension SHALL provide a `/opsx-loop models` subcommand: WHEN the user issues
-`/opsx-loop models` with a `set`, `get`, or `list` directive, it SHALL shell out to `opsx
-models` with the corresponding arguments and report its result, acting purely as a thin
-wrapper so the `opsx models` CLI remains the owner of the write. The wrapper SHALL invoke
-`opsx models` with the active repository as the working directory (or pass `OPSX_ROOT`) so a
-`--layer project` write targets the active repo even when pi's process cwd differs. The
-extension SHALL offer `models` as an argument completion.
+THE extension SHALL provide a `/opsx-loop models` subcommand: WHEN the user
+issues `/opsx-loop models` with a `get` or `list` directive, OR a value-bearing
+`set` (`set <role> <value…>`), it SHALL shell out to `opsx models` with the
+corresponding arguments and report its result, acting purely as a thin wrapper
+so the `opsx models` CLI remains the owner of the write. WHEN the user issues
+bare `/opsx-loop models set` or role-only `/opsx-loop models set <role>` AND
+the extension has an interactive UI (`hasUI`), it SHALL run an in-TUI
+interactive configuration flow that: (1) selects a role among `author`,
+`review`, `impl`, and `author-in-session` when the role was not supplied;
+(2) for model roles, obtains a catalog by running `pi --list-models` and
+presents a filterable picker whose filter matches substring/contains on the
+`provider/id` string; (3) for `review`, uses sequential single picks ending on
+Done/Esc so selection order becomes the list order, and AFTER EACH model pick
+prompts thinking for THAT model only (vocabulary
+`off|minimal|low|medium|high|xhigh|max|skip`) appending `:<level>` when
+applicable BEFORE the next pick — SHALL NOT apply one shared thinking level to
+the whole review list; (4) for `author`/`impl`, single model pick then one
+thinking prompt; (5) for `author-in-session`, boolean only; THEN SHALL invoke
+`opsx models set <role> <id[:suffix]…>` with the chosen values and SHALL NOT
+write any models config file itself. WHILE no interactive UI is available,
+bare or role-only `set` SHALL fall back to the thin-wrapper / actionable-error
+path and SHALL NOT hang awaiting TUI input. The wrapper SHALL invoke
+`opsx models` with the active repository as the working directory (or pass
+`OPSX_ROOT`) so a `--layer project` write targets the active repo even when
+pi's process cwd differs. The extension SHALL offer `models` as an argument
+completion. Bare `/opsx-loop models` with no further directive SHALL still
+invoke `opsx models list`.
 
 #### Scenario: Set wrapper delegates to the CLI
 - **WHEN** the user issues `/opsx-loop models set author <model>`
-- **THEN** the extension SHALL invoke `opsx models set author <model>` and report success or the CLI's error, without writing any config file itself
+- **THEN** the extension SHALL invoke `opsx models set author <model>` and
+  report success or the CLI's error, without writing any config file itself
+
+#### Scenario: Interactive bare set with UI
+- **WHILE** the extension has an interactive UI
+- **WHEN** the user issues `/opsx-loop models set` with no further arguments
+- **THEN** the extension SHALL run the in-TUI role → model → thinking flow and
+  SHALL finish by invoking `opsx models set <role> <value…>` without writing
+  any models config file itself
+
+#### Scenario: Interactive role-only set with UI
+- **WHILE** the extension has an interactive UI
+- **WHEN** the user issues `/opsx-loop models set review` with no value
+- **THEN** the extension SHALL skip the role prompt, run sequential model picks
+  with per-model thinking, and SHALL invoke
+  `opsx models set review <id[:suffix]…>` with selection order preserved
+
+#### Scenario: Review interactive thinking is per model
+- **WHILE** the extension has an interactive UI
+- **WHEN** the user picks two review models and chooses distinct thinking
+  levels for each
+- **THEN** the CLI invocation SHALL pass distinct per-id suffixes (or none)
+  matching those choices, not one shared suffix applied to every id
+
+#### Scenario: Catalog filter matches substring
+- **WHILE** the interactive model picker is showing catalog ids
+- **WHEN** the user types a substring that appears mid-id (e.g. `claude` in
+  `anthropic/claude-sonnet-5`)
+- **THEN** that id SHALL remain a matching candidate (filter SHALL NOT be
+  startsWith-only on the full `provider/id`)
+
+#### Scenario: No-UI bare set does not hang
+- **WHILE** the extension has no interactive UI
+- **WHEN** the user issues `/opsx-loop models set` with no further arguments
+- **THEN** the extension SHALL NOT block awaiting TUI input; it SHALL fall
+  back to thin-wrapper / actionable error behavior
 
 #### Scenario: List wrapper shows resolved roles
 - **WHEN** the user issues `/opsx-loop models list`
@@ -355,7 +410,9 @@ extension SHALL offer `models` as an argument completion.
 
 #### Scenario: Project-layer write targets the active repo
 - **WHEN** the user issues `/opsx-loop models set <role> <model> --layer project`
-- **THEN** the wrapper SHALL invoke `opsx models` with the active repo cwd (or `OPSX_ROOT`) so the project file resolved is the active repo's `openspec/opsx-models.yaml`, not a directory derived from pi's process cwd
+- **THEN** the wrapper SHALL invoke `opsx models` with the active repo cwd (or
+  `OPSX_ROOT`) so the project file resolved is the active repo's
+  `openspec/opsx-models.yaml`, not a directory derived from pi's process cwd
 
 #### Scenario: Bare models lists the resolved roles
 - **WHEN** the user issues `/opsx-loop models` with no further directive
@@ -364,6 +421,14 @@ extension SHALL offer `models` as an argument completion.
 #### Scenario: Models offered as completion
 - **WHEN** the user requests argument completions for `/opsx-loop`
 - **THEN** `models` SHALL appear alongside `goal`, `status`, and `clear`
+
+#### Scenario: Missing catalog fails actionable
+- **IF** `pi --list-models` fails or yields no parseable models during an
+  interactive `/opsx-loop models set` pick
+- **THEN** the extension SHALL surface an actionable error and SHALL NOT write
+  any models config file
+
+---
 
 ### Requirement: Loop hold blocks continuation
 
@@ -750,19 +815,26 @@ for the spawn.
 
 THE opsx-loop extension SHALL, WHILE a loop is armed and the `review` role
 resolves to a multi-value list and WHEN `opsx_dispatch` is invoked with
-`role: "review"`, dispatch one blind subagent spawn per list entry in list
-order, each forced to that entry's model id.
+`role: "review"` and a single `task` (no caller `tasks`), expand the dispatch
+into a native pi-subagents parallel `tasks[]` spawn — one entry per list
+model in list order, same task body, each entry's model forced — and SHALL
+NOT perform a sequential custom `runSync` loop for that fan-out. WHEN review
+resolves to exactly one model id and a single `task` is supplied, THE
+extension SHALL spawn exactly one subagent with that model id.
 
-#### Scenario: Multi-review list fans out
-- **WHILE** `OPSX_REVIEW_MODELS` (or the resolved review list) contains two
-  or more model ids
-- **WHEN** `opsx_dispatch` is invoked with `role: "review"` and a task
-- **THEN** THE extension SHALL spawn exactly one subagent per list entry,
-  preserving order, each with that entry's model id
+#### Scenario: Multi-review list expands to native parallel tasks
+- **WHILE** the resolved review list contains two or more model ids
+- **WHEN** `opsx_dispatch` is invoked with `role: "review"` and a single
+  `task`
+- **THEN** THE extension SHALL expand to a native parallel `tasks[]` spawn
+  with exactly one entry per list model, preserving order, each forced to
+  that entry's model id, and SHALL NOT run those entries as a sequential
+  custom loop
 
 #### Scenario: Single review entry spawns once
 - **WHILE** review resolves to exactly one model id
-- **WHEN** `opsx_dispatch` is invoked with `role: "review"`
+- **WHEN** `opsx_dispatch` is invoked with `role: "review"` and a single
+  `task`
 - **THEN** THE extension SHALL spawn exactly one subagent with that model id
 
 ### Requirement: Dispatch Spawns Via Subagent Library
@@ -782,4 +854,81 @@ remain OPSX-blind.
 - **WHEN** the pi-subagents package is inspected for this change
 - **THEN** it SHALL NOT gain requirements to read `OPSX_*`, `models.yaml`,
   or opsx role names
+
+### Requirement: Opsx Dispatch Narrow Schema
+
+THE opsx-loop extension SHALL expose `opsx_dispatch` with a narrow schema of
+`role` plus either a single `task` or a parallel `tasks[]` array, and MAY
+accept `agent` and optional `concurrency` companions for those modes. THE
+extension SHALL NOT require chain, async, worktree, or management `action`
+parameters for v1 of this surface.
+
+#### Scenario: Single task accepted
+- **WHILE** a loop is armed and a role is configured
+- **WHEN** `opsx_dispatch` is invoked with `role` and `task` (no `tasks`)
+- **THEN** THE extension SHALL accept the call (subject to role resolve rules)
+
+#### Scenario: Parallel tasks array accepted
+- **WHILE** a loop is armed and a role is configured
+- **WHEN** `opsx_dispatch` is invoked with `role` and `tasks` (non-empty)
+- **THEN** THE extension SHALL accept the call as a parallel dispatch shape
+
+#### Scenario: Both task and tasks refused
+- **WHILE** a loop is armed
+- **IF** `opsx_dispatch` is invoked with both `task` and `tasks` set
+- **THEN** THE extension SHALL refuse with an actionable error
+
+### Requirement: Opsx Dispatch Transparent Progress And Details
+
+WHEN `opsx_dispatch` performs a spawn, THE opsx-loop extension SHALL forward
+the tool `onUpdate` callback into the pi-subagents programmatic spawn path,
+return a subagent-shaped `Details` payload (including progress and results
+metadata rather than a one-liner-only summary), and attach `renderCall` /
+`renderResult` that reuse pi-subagents renderers (import or thin wrap).
+
+#### Scenario: onUpdate forwarded during spawn
+- **WHILE** a loop is armed and a configured role is dispatched
+- **WHEN** the underlying spawn emits progress updates
+- **THEN** THE extension SHALL invoke the parent tool `onUpdate` with
+  subagent-shaped progress/details rather than suppressing them
+
+#### Scenario: Result carries Details not one-liner-only
+- **WHEN** `opsx_dispatch` completes a successful spawn
+- **THEN** THE tool result SHALL include subagent-shaped `Details` (mode,
+  results, and progress metadata) and SHALL NOT regress to a sole
+  `spawn complete model=… exit=…` text body with empty details
+
+#### Scenario: Renderers reuse subagent visuals
+- **WHEN** the `opsx_dispatch` tool is registered
+- **THEN** it SHALL provide `renderCall` and `renderResult` that reuse
+  pi-subagents renderer exports (or a thin wrap of them)
+
+### Requirement: Caller Tasks Length Must Match Review List
+
+THE opsx-loop extension SHALL, WHILE a loop is armed and `role: "review"`
+resolves to a multi-value list and WHEN the caller passes `tasks[]`, require
+`tasks.length` to equal the resolved review list length, force each entry's
+model from the list by index (ignoring caller per-task `model`), and IF the
+lengths differ THEN refuse with an actionable error. For single-model roles,
+WHEN the caller passes `tasks[]`, THE extension SHALL stamp every entry with
+that role's resolved model id.
+
+#### Scenario: Review tasks length mismatch refuses
+- **WHILE** review resolves to N model ids (N > 1)
+- **IF** `opsx_dispatch` is invoked with `role: "review"` and `tasks` whose
+  length is not N
+- **THEN** THE extension SHALL refuse and SHALL NOT spawn
+
+#### Scenario: Review tasks length match forces models by index
+- **WHILE** review resolves to N model ids in order
+- **WHEN** `opsx_dispatch` is invoked with `role: "review"` and `tasks` of
+  length N
+- **THEN** THE extension SHALL spawn in parallel with entry i forced to
+  review model i, ignoring any caller-supplied per-task `model`
+
+#### Scenario: Single-model role stamps all tasks entries
+- **WHILE** `impl` resolves to one configured model id
+- **WHEN** `opsx_dispatch` is invoked with `role: "impl"` and `tasks` of
+  length K ≥ 1
+- **THEN** every spawned entry SHALL use that impl model id
 
