@@ -247,6 +247,7 @@ test("loadEnabled: state.json override wins over config default", () => {
 //   pi-ntfy-notify.capped-send-log
 import {
 	appendSendLog,
+	buildJsonPublishRequest,
 	buildLogLine,
 	describeSendError,
 	formatSendStatus,
@@ -256,17 +257,88 @@ import {
 	sendNotification,
 } from "./index.ts";
 
-test("sendNotification resolves on 2xx and rejects on non-2xx (non-2xx is a failure)", async () => {
+test("buildJsonPublishRequest moves topic and Unicode metadata into UTF-8 JSON", () => {
+	const request = buildJsonPublishRequest(
+		"https://example.invalid/topic?auth=opaque",
+		"workspace / plan – verify → apply",
+		"body 😀",
+		"robot, tada",
+		"termux://zellij-jump/terminal_7",
+	);
+	assert.equal(request.url, "https://example.invalid/?auth=opaque");
+	assert.deepEqual(JSON.parse(request.body), {
+		topic: "topic",
+		message: "body 😀",
+		title: "workspace / plan – verify → apply",
+		tags: ["robot", "tada"],
+		priority: 4,
+		click: "termux://zellij-jump/terminal_7",
+	});
+});
+
+test("buildJsonPublishRequest rejects malformed or topic-less URLs", () => {
+	assert.throws(() => buildJsonPublishRequest("not a URL", "t", "b"), /invalid ntfy publish URL/);
+	assert.throws(
+		() => buildJsonPublishRequest("https://example.invalid/", "t", "b"),
+		/one topic path segment/,
+	);
+	assert.throws(
+		() => buildJsonPublishRequest("https://example.invalid/a/b", "t", "b"),
+		/one topic path segment/,
+	);
+});
+
+test("sendNotification publishes JSON to the server root and rejects on non-2xx", async () => {
 	const realFetch = globalThis.fetch;
 	try {
-		globalThis.fetch = (async () => ({ ok: true, status: 200 })) as unknown as typeof fetch;
-		await sendNotification("https://example.invalid/topic", "t", "b");
+		let capturedUrl: string | undefined;
+		let capturedInit: RequestInit | undefined;
+		globalThis.fetch = (async (input, init) => {
+			capturedUrl = String(input);
+			capturedInit = init;
+			return { ok: true, status: 200 } as Response;
+		}) as typeof fetch;
+		await sendNotification("https://example.invalid/topic", "unicode → title", "body", "robot");
+		assert.equal(capturedUrl, "https://example.invalid/");
+		assert.deepEqual(capturedInit?.headers, { "Content-Type": "application/json" });
+		assert.deepEqual(JSON.parse(String(capturedInit?.body)), {
+			topic: "topic",
+			message: "body",
+			title: "unicode → title",
+			tags: ["robot"],
+			priority: 4,
+		});
 
-		globalThis.fetch = (async () => ({ ok: false, status: 500 })) as unknown as typeof fetch;
+		globalThis.fetch = (async () => ({ ok: false, status: 500 }) as Response) as typeof fetch;
 		await assert.rejects(
 			() => sendNotification("https://example.invalid/topic", "t", "b"),
 			/HTTP 500/,
 			"non-2xx must reject with the HTTP status",
+		);
+	} finally {
+		globalThis.fetch = realFetch;
+	}
+});
+
+test("sendNotification failure exposes phase, elapsed time, and nested transport cause", async () => {
+	const realFetch = globalThis.fetch;
+	try {
+		const cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
+		const fetchError = new TypeError("fetch failed", { cause });
+		globalThis.fetch = (async () => {
+			throw fetchError;
+		}) as typeof fetch;
+		await assert.rejects(
+			() => sendNotification("https://example.invalid/topic", "t", "b"),
+			(err: unknown) => {
+				const reason = describeSendError(err);
+				assert.match(reason, /^phase=fetch elapsed_ms=\d+ error=TypeError/);
+				assert.match(reason, /message=fetch failed/);
+				assert.match(reason, /cause=Error/);
+				assert.match(reason, /cause_code=ECONNRESET/);
+				assert.ok(!reason.includes("example.invalid"), "diagnostic excludes publish URL");
+				return true;
+			},
 		);
 	} finally {
 		globalThis.fetch = realFetch;
@@ -286,11 +358,16 @@ test("recordOutcome + formatSendStatus report counts and last outcomes", () => {
 	assert.match(s, /last fail 2026-07-10T22:05:00.*HTTP 500/);
 });
 
-test("describeSendError is bounded and whitespace-collapsed", () => {
+test("describeSendError is bounded, collapsed, and redacts URLs", () => {
 	assert.equal(describeSendError(new Error("HTTP 503")), "Error: HTTP 503");
 	const long = describeSendError(new Error(`x${" y".repeat(500)}`));
 	assert.ok(long.length <= 200, "reason is hard-bounded");
 	assert.ok(!long.includes("\n"), "no newlines in reason");
+	const withCredential = describeSendError(
+		new Error("failed https://user:secret@example.invalid/topic?auth=secret"),
+	);
+	assert.equal(withCredential, "Error: failed <url>");
+	assert.ok(!withCredential.includes("secret"), "credential is redacted");
 	assert.equal(describeSendError(""), "unknown error");
 });
 

@@ -188,10 +188,8 @@ export function resolveZellijTabName(cwd: string): string | undefined {
  * Build the ntfy title + body.
  * Title: `<zellij session> / <zellij tab> / <pi session name>` (each segment
  * omitted when unavailable; the pi session name always present, falling back to
- * a short session id). The separator is ASCII because the title is sent as an
- * HTTP header (ntfy `Title:`), which is not UTF-8 safe — non-ASCII renders as
- * the replacement char. Body: the excerpt only (sent as the UTF-8 request
- * body, so Unicode there is fine).
+ * a short session id). Title and body are both sent in a UTF-8 JSON payload, so
+ * Unicode in session and tab names is preserved.
  */
 export function buildNotification(opts: {
 	sessionName?: string;
@@ -232,11 +230,94 @@ export function buildJumpClickUrl(
 	return `${base.replace(/\/+$/, "")}/${encodeURIComponent(id)}`;
 }
 
+export interface NtfyJsonRequest {
+	url: string;
+	body: string;
+}
+
 /**
- * POST a notification to ntfy. Rejects on network error/timeout AND on any
- * non-2xx response (pi-ntfy-notify "Non-2xx response is a failure"). Callers
- * dispatch fire-and-forget and route the settled outcome through
- * `reactToSendOutcome` — failures are surfaced, never silently swallowed.
+ * Convert the configured `<server>/<topic>` URL and notification fields into
+ * ntfy's UTF-8 JSON publish format. JSON publishing must target the server root;
+ * the topic moves into the payload. Query parameters (for example `auth`) are
+ * retained, but URL credentials and notification content are never logged.
+ */
+export function buildJsonPublishRequest(
+	url: string,
+	title: string,
+	message: string,
+	tags = "robot",
+	clickUrl?: string,
+): NtfyJsonRequest {
+	let target: URL;
+	try {
+		target = new URL(url);
+	} catch {
+		throw new Error("invalid ntfy publish URL");
+	}
+	const segments = target.pathname.split("/").filter(Boolean);
+	if (segments.length !== 1) {
+		throw new Error("ntfy publish URL must contain one topic path segment");
+	}
+	let topic: string;
+	try {
+		topic = decodeURIComponent(segments[0]);
+	} catch {
+		throw new Error("ntfy publish URL contains an invalid topic encoding");
+	}
+	if (!/^[-_A-Za-z0-9]{1,64}$/.test(topic)) {
+		throw new Error("ntfy publish URL contains an invalid topic");
+	}
+
+	target.pathname = "/";
+	target.hash = "";
+	const payload: {
+		topic: string;
+		message: string;
+		title: string;
+		tags: string[];
+		priority: number;
+		click?: string;
+	} = {
+		topic,
+		message,
+		title,
+		tags: tags
+			.split(",")
+			.map((tag) => tag.trim())
+			.filter(Boolean),
+		priority: 4,
+	};
+	if (clickUrl) payload.click = clickUrl;
+	return { url: target.toString(), body: JSON.stringify(payload) };
+}
+
+export type SendPhase = "prepare" | "fetch" | "response";
+
+/** Failure wrapper carrying bounded transport diagnostics without request data. */
+export class NotificationSendError extends Error {
+	readonly phase: SendPhase;
+	readonly elapsedMs: number;
+	readonly originalError: unknown;
+
+	constructor(phase: SendPhase, elapsedMs: number, originalError: unknown) {
+		const message = originalError instanceof Error ? originalError.message : String(originalError);
+		super(message || "unknown error");
+		this.name = "NotificationSendError";
+		this.phase = phase;
+		this.elapsedMs = elapsedMs;
+		this.originalError = originalError;
+	}
+}
+
+function elapsedSince(startedAt: number): number {
+	return Math.max(0, Date.now() - startedAt);
+}
+
+/**
+ * POST a notification to ntfy using its UTF-8 JSON API. Rejects on request
+ * preparation errors, network error/timeout, and non-2xx responses. Wrapped
+ * failures identify phase and elapsed time for the send log without exposing
+ * the publish URL, title, message, or credentials.
  */
 export async function sendNotification(
 	url: string,
@@ -245,17 +326,32 @@ export async function sendNotification(
 	tags = "robot",
 	clickUrl?: string,
 ): Promise<void> {
-	const headers: Record<string, string> = { Title: title, Priority: "high", Tags: tags };
-	// ntfy does NOT propagate custom X-* headers to the client, so the jump target
-	// MUST ride the `Click` header (the tap action URL), never a custom header.
-	if (clickUrl) headers.Click = clickUrl;
-	const res = await fetch(url, {
-		method: "POST",
-		headers,
-		body,
-		signal: AbortSignal.timeout(5000),
-	});
-	if (!res.ok) throw new Error(`HTTP ${res.status}`);
+	const startedAt = Date.now();
+	let request: NtfyJsonRequest;
+	try {
+		request = buildJsonPublishRequest(url, title, body, tags, clickUrl);
+	} catch (err: unknown) {
+		throw new NotificationSendError("prepare", elapsedSince(startedAt), err);
+	}
+
+	let res: Response;
+	try {
+		res = await fetch(request.url, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: request.body,
+			signal: AbortSignal.timeout(5000),
+		});
+	} catch (err: unknown) {
+		throw new NotificationSendError("fetch", elapsedSince(startedAt), err);
+	}
+	if (!res.ok) {
+		throw new NotificationSendError(
+			"response",
+			elapsedSince(startedAt),
+			new Error(`HTTP ${res.status}`),
+		);
+	}
 }
 
 // ── Send-outcome visibility (pi-ntfy-notify failure-visibility surfaces) ─────
@@ -276,13 +372,46 @@ export function newSendState(): SendState {
 	return { okCount: 0, failCount: 0 };
 }
 
+function errorCode(err: unknown): string | undefined {
+	if (!err || typeof err !== "object" || !("code" in err)) return undefined;
+	const code = (err as { code?: unknown }).code;
+	return typeof code === "string" || typeof code === "number" ? String(code) : undefined;
+}
+
+function sanitizeDiagnosticText(text: string): string {
+	// Runtime transport errors can occasionally echo the request URL. Redact any
+	// URI before logging so embedded credentials or auth query values cannot leak.
+	return text.replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<url>");
+}
+
 /** Bounded, secret-free failure reason from a rejected send. */
 export function describeSendError(err: unknown): string {
-	const raw = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-	// Metadata only — collapse whitespace, hard-bound length. Never includes
-	// headers or body content by construction (Error messages here are either
-	// `HTTP <status>` or runtime fetch/abort errors).
-	return raw.replace(/\s+/g, " ").trim().slice(0, 200) || "unknown error";
+	let raw: string;
+	if (err instanceof NotificationSendError) {
+		const original = err.originalError;
+		const name = original instanceof Error ? original.name : typeof original;
+		const message = original instanceof Error ? original.message : String(original);
+		const code = errorCode(original);
+		const cause = original && typeof original === "object" && "cause" in original
+			? (original as { cause?: unknown }).cause
+			: undefined;
+		const causeName = cause instanceof Error ? cause.name : cause === undefined ? undefined : typeof cause;
+		const causeCode = errorCode(cause);
+		raw = [
+			`phase=${err.phase}`,
+			`elapsed_ms=${err.elapsedMs}`,
+			`error=${name}`,
+			code ? `error_code=${code}` : undefined,
+			causeName ? `cause=${causeName}` : undefined,
+			causeCode ? `cause_code=${causeCode}` : undefined,
+			message ? `message=${message}` : undefined,
+		].filter(Boolean).join(" ");
+	} else {
+		raw = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+	}
+	// Metadata only — collapse whitespace, hard-bound length. Wrapped send
+	// failures deliberately exclude URL, headers, title, and message content.
+	return sanitizeDiagnosticText(raw).replace(/\s+/g, " ").trim().slice(0, 200) || "unknown error";
 }
 
 /** Update in-memory session state with a settled send outcome. */

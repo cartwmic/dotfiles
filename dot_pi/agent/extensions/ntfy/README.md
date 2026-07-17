@@ -43,7 +43,7 @@ config default, delete `state.json`.
 ## Behavior
 
 - Notifies on every `agent_end` (the awaiting-input boundary), not per internal turn.
-- Title: `<zellij session> · <zellij tab> · <pi session name>`.
+- Title: `<zellij session> / <zellij tab> / <pi session name>`.
   - **zellij session** = `ZELLIJ_SESSION_NAME`; omitted when not under zellij.
   - **zellij tab** resolved via `zellij action dump-layout`, matching this
     session's `cwd` to its enclosing tab (focus-independent); omitted when not
@@ -52,8 +52,18 @@ config default, delete `state.json`.
     id; always present. Name sessions with `pi -n <name>` for readable titles.
 - Body: the **excerpt** only (last assistant response text, truncated).
 - Excerpt: last assistant response text only (reasoning/thinking excluded), truncated.
-- Skips non-interactive sessions (via `ctx.hasUI`); failures are swallowed.
+- Publishes title, body, priority, tags, and click target through ntfy's UTF-8
+  JSON API. Unicode session/tab names therefore remain valid.
+- Skips non-interactive sessions (via `ctx.hasUI`).
 - Honors the on/off toggle (`/ntfy` command / `enabled` config); no delivery while off.
+- Delivery remains fire-and-forget with a 5-second timeout. Failures do not
+  block turns; each failure produces a TUI warning and a `send.log` entry.
+- Failure diagnostics include request phase, elapsed milliseconds, error
+  name/code, and nested transport cause name/code. URLs, credentials, titles,
+  and message bodies are excluded.
+- `/ntfy status` shows current-session success/failure counts and latest outcomes.
+- `send.log` lives beside `index.ts`, rotates to `send.log.old` at 200 KiB,
+  and can be watched with `tail -f ~/.pi/agent/extensions/ntfy/send.log`.
 
 ## Tests
 
