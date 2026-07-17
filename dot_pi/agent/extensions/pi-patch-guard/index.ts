@@ -23,10 +23,15 @@
  *     persists on every turn until the marker reappears.
  *   - Never throws into a turn: every path is wrapped.
  *
- * Source of truth: the patch's own state file under
+ * Source of truth: each patch's own state file under
  *   ~/.local/state/chezmoi-pi-patches/<patch>.json
  * which records `status` ("patched"/"already-patched" ⇒ intended-on) and the
  * resolved `target` file. We assert the target still contains the patch marker.
+ *
+ * Patches are auto-discovered by enumerating that state dir (no hardcoded list)
+ * and deriving the marker from the convention `chezmoi-pi-patch:<name>`. This is
+ * profile-aware for free: a patch gated off for the active chezmoi profile
+ * writes `status:"unpatched"`, which is not intended-on ⇒ no drift.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -40,14 +45,53 @@ interface WatchedPatch {
 	marker: string;
 }
 
-const WATCHED: WatchedPatch[] = [
-	{
-		name: "hide-nonbridge-claude-models",
-		marker: "chezmoi-pi-patch:hide-nonbridge-claude-models",
-	},
-];
-
 const STATE_DIR = path.join(os.homedir(), ".local", "state", "chezmoi-pi-patches");
+
+/**
+ * Auto-discover every chezmoi-pi-patch from its state file, instead of a
+ * hardcoded list. Each patch writes `<stateDir>/<name>.json` on apply; the
+ * marker it injects is the universal convention `chezmoi-pi-patch:<name>`
+ * (overridable by a `marker` field in the state file). Discovery is
+ * profile-aware for free: `checkPatchDrift` treats any non-intended-on `status`
+ * (e.g. `unpatched` for a profile-gated patch that's off on this profile) as
+ * no-drift, so patches inactive for the active profile self-exclude.
+ *
+ * Returns [] on any error (missing dir, unreadable) so the guard stays quiet.
+ */
+export function discoverWatchedPatches(
+	deps: {
+		readDir?: (p: string) => string[];
+		readFile?: (p: string) => string;
+		stateDir?: string;
+	} = {},
+): WatchedPatch[] {
+	const readDir = deps.readDir ?? ((p) => fs.readdirSync(p));
+	const readFile = deps.readFile ?? ((p) => fs.readFileSync(p, "utf-8"));
+	const stateDir = deps.stateDir ?? STATE_DIR;
+	try {
+		return readDir(stateDir)
+			.filter((f) => f.endsWith(".json"))
+			.map((f) => {
+				const fallbackName = f.slice(0, -".json".length);
+				let name = fallbackName;
+				let marker: string | undefined;
+				try {
+					const state = JSON.parse(readFile(path.join(stateDir, f))) as {
+						patchName?: string;
+						marker?: string;
+					};
+					if (state.patchName) name = state.patchName;
+					if (state.marker) marker = state.marker;
+				} catch {
+					// Malformed json: keep filename-derived name; checkPatchDrift will
+					// re-read and bail to no-drift anyway.
+				}
+				return { name, marker: marker ?? `chezmoi-pi-patch:${name}` };
+			});
+	} catch {
+		return [];
+	}
+}
 
 interface GuardConfig {
 	enabled: boolean;
@@ -114,7 +158,7 @@ export default function (pi: ExtensionAPI): void {
 	const warnOnDrift = (ctx: any): void => {
 		try {
 			if (!cfg.enabled || !ctx?.hasUI) return;
-			for (const patch of WATCHED) {
+			for (const patch of discoverWatchedPatches()) {
 				const { drift } = checkPatchDrift(patch);
 				if (!drift) continue;
 				ctx.ui.notify(

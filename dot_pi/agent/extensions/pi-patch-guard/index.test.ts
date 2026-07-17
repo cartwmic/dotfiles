@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import { checkPatchDrift, loadConfig } from "./index.ts";
+import { checkPatchDrift, discoverWatchedPatches, loadConfig } from "./index.ts";
 
 const PATCH = {
 	name: "hide-nonbridge-claude-models",
@@ -77,6 +77,38 @@ test("malformed state json ⇒ no drift", () => {
 	fs.writeFileSync(path.join(dir, `${PATCH.name}.json`), "{ not json");
 	const r = checkPatchDrift(PATCH, { stateDir: dir });
 	assert.equal(r.drift, false);
+});
+
+test("discover: derives name + marker from each state file", () => {
+	const dir = tmp();
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(path.join(dir, "custom-message-marker.json"), JSON.stringify({ status: "patched", patchName: "custom-message-marker" }));
+	fs.writeFileSync(path.join(dir, "hide-nonbridge-claude-models.json"), JSON.stringify({ status: "unpatched" }));
+	const found = discoverWatchedPatches({ stateDir: dir }).sort((a, b) => a.name.localeCompare(b.name));
+	assert.deepEqual(found, [
+		{ name: "custom-message-marker", marker: "chezmoi-pi-patch:custom-message-marker" },
+		{ name: "hide-nonbridge-claude-models", marker: "chezmoi-pi-patch:hide-nonbridge-claude-models" },
+	]);
+});
+
+test("discover: honors explicit marker override in state file", () => {
+	const dir = tmp();
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(path.join(dir, "custom.json"), JSON.stringify({ status: "patched", patchName: "custom", marker: "custom-sentinel" }));
+	assert.deepEqual(discoverWatchedPatches({ stateDir: dir }), [{ name: "custom", marker: "custom-sentinel" }]);
+});
+
+test("discover: name falls back to filename when patchName absent; ignores non-json", () => {
+	const dir = tmp();
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(path.join(dir, "foo.json"), JSON.stringify({ status: "patched" }));
+	fs.writeFileSync(path.join(dir, "README.md"), "not a state file");
+	assert.deepEqual(discoverWatchedPatches({ stateDir: dir }), [{ name: "foo", marker: "chezmoi-pi-patch:foo" }]);
+});
+
+test("discover: missing state dir ⇒ [] (quiet)", () => {
+	const dir = tmp();
+	assert.deepEqual(discoverWatchedPatches({ stateDir: path.join(dir, "nope") }), []);
 });
 
 test("loadConfig: missing ⇒ enabled; enabled:false ⇒ disabled", () => {
