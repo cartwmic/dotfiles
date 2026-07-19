@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "thresholdPercent": 40,
+  "checkAt": [
+    "turn_end",
+    "agent_end"
+  ]
+}
