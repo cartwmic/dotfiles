@@ -8,8 +8,11 @@ import type {
 import {
 	type AutoCompactConfig,
 	type CheckPoint,
+	DEFAULT_CONTINUATION,
 	describeConfig,
+	describeContinuation,
 	loadConfig,
+	resumeAfterCompact,
 	saveConfig,
 	shouldTrigger,
 	thresholdTokens,
@@ -44,6 +47,7 @@ async function configure(
 			`Enabled: ${draft.enabled ? "ON" : "OFF"}`,
 			`Threshold: ${draft.thresholdPercent}%`,
 			`Check at: ${checkPointSelection(draft)}`,
+			`Continuation: ${describeContinuation(draft.continuation)}`,
 			"Save and close",
 			"Cancel",
 		]);
@@ -76,6 +80,28 @@ async function configure(
 				draft = { ...draft, checkAt: ["turn_end"] };
 			} else if (selected === "Agent end only") {
 				draft = { ...draft, checkAt: ["agent_end"] };
+			}
+			continue;
+		}
+		if (choice.startsWith("Continuation:")) {
+			const selected = await ctx.ui.select("After mid-turn compaction (turn_end)", [
+				"Resume with default message",
+				"Resume with custom message",
+				"Do not resume",
+			]);
+			if (selected === "Resume with default message") {
+				draft = { ...draft, continuation: DEFAULT_CONTINUATION };
+			} else if (selected === "Resume with custom message") {
+				const currentText = draft.continuation === false ? DEFAULT_CONTINUATION : draft.continuation;
+				const entered = await ctx.ui.input(
+					"Continuation follow-up text (empty disables)",
+					currentText,
+				);
+				if (entered === undefined) continue;
+				const trimmed = entered.trim();
+				draft = { ...draft, continuation: trimmed.length > 0 ? trimmed : false };
+			} else if (selected === "Do not resume") {
+				draft = { ...draft, continuation: false };
 			}
 			continue;
 		}
@@ -125,22 +151,35 @@ export default function (pi: ExtensionAPI): void {
 			);
 		}
 
-		const finish = () => {
+		const resume = resumeAfterCompact(config, checkPoint);
+		const finish = (didCompact: boolean) => {
 			compacting = false;
+			// ctx.compact() aborts the active agent first. After mid-turn compaction,
+			// re-inject so the interrupted run can continue. Skip agent_end: the run
+			// already finished and a follow-up would spuriously start new work.
+			if (didCompact && resume) {
+				pi.sendUserMessage(resume, { deliverAs: "followUp" });
+			}
 		};
 		try {
 			ctx.compact({
 				onComplete: () => {
-					finish();
-					if (ctx.hasUI) ctx.ui.notify("Auto-compaction completed", "info");
+					finish(true);
+					if (ctx.hasUI) {
+						ctx.ui.notify(
+							resume ? "Auto-compaction completed; continuing" : "Auto-compaction completed",
+							"info",
+						);
+					}
 				},
 				onError: (error) => {
-					finish();
+					// Compact failed, but the agent was already aborted — still resume.
+					finish(true);
 					if (ctx.hasUI) ctx.ui.notify(`Auto-compaction failed: ${formatError(error)}`, "warning");
 				},
 			});
 		} catch (error) {
-			finish();
+			finish(false);
 			if (ctx.hasUI) ctx.ui.notify(`Auto-compaction failed: ${formatError(error)}`, "warning");
 		}
 	};
