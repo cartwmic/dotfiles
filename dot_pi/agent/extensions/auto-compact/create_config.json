@@ -4,5 +4,6 @@
   "checkAt": [
     "turn_end",
     "agent_end"
-  ]
+  ],
+  "continuation": "Continue from where you left off."
 }

@@ -3,10 +3,19 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 export const CHECK_POINTS = ["turn_end", "agent_end"] as const;
 export type CheckPoint = (typeof CHECK_POINTS)[number];
 
+/** Default follow-up sent after mid-turn compaction aborts the active agent run. */
+export const DEFAULT_CONTINUATION = "Continue from where you left off.";
+
 export interface AutoCompactConfig {
 	enabled: boolean;
 	thresholdPercent: number;
 	checkAt: CheckPoint[];
+	/**
+	 * Follow-up injected after mid-turn (`turn_end`) compaction.
+	 * `false` disables resume. Agent-end compaction never auto-continues
+	 * (the run already finished).
+	 */
+	continuation: string | false;
 }
 
 export interface ContextUsage {
@@ -18,10 +27,18 @@ export const DEFAULT_CONFIG: AutoCompactConfig = {
 	enabled: true,
 	thresholdPercent: 40,
 	checkAt: ["turn_end", "agent_end"],
+	continuation: DEFAULT_CONTINUATION,
 };
 
 function isCheckPoint(value: unknown): value is CheckPoint {
 	return typeof value === "string" && CHECK_POINTS.includes(value as CheckPoint);
+}
+
+export function normalizeContinuation(value: unknown): string | false {
+	if (value === false) return false;
+	if (typeof value !== "string") return DEFAULT_CONTINUATION;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : false;
 }
 
 export function normalizeConfig(value: unknown): AutoCompactConfig {
@@ -38,6 +55,7 @@ export function normalizeConfig(value: unknown): AutoCompactConfig {
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_CONFIG.enabled,
 		thresholdPercent,
 		checkAt: checkAt.length > 0 ? checkAt : [...DEFAULT_CONFIG.checkAt],
+		continuation: "continuation" in raw ? normalizeContinuation(raw.continuation) : DEFAULT_CONTINUATION,
 	};
 }
 
@@ -74,7 +92,20 @@ export function shouldTrigger(
 	return lastAttemptTokens === undefined || usage.tokens > lastAttemptTokens;
 }
 
+/** Resume text for mid-turn compaction, or undefined when resume is off / not applicable. */
+export function resumeAfterCompact(config: AutoCompactConfig, checkPoint: CheckPoint): string | undefined {
+	if (checkPoint !== "turn_end") return undefined;
+	if (config.continuation === false) return undefined;
+	return config.continuation;
+}
+
+export function describeContinuation(continuation: string | false): string {
+	if (continuation === false) return "OFF";
+	const preview = continuation.length > 48 ? `${continuation.slice(0, 45)}...` : continuation;
+	return `"${preview}"`;
+}
+
 export function describeConfig(config: AutoCompactConfig): string {
 	const points = config.checkAt.join(" + ");
-	return `auto-compaction ${config.enabled ? "ON" : "OFF"}; threshold ${config.thresholdPercent}%; check at ${points}`;
+	return `auto-compaction ${config.enabled ? "ON" : "OFF"}; threshold ${config.thresholdPercent}%; check at ${points}; continuation ${describeContinuation(config.continuation)}`;
 }
