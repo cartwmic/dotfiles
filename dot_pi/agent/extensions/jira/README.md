@@ -21,9 +21,11 @@ Chezmoi deploys this directory only when `.profile == axon-work-computer`
 
 ## Transport
 
-Own `npx mcp-remote` stdio client to the configured Jira MCP URL. Reuses
-`~/.mcp-auth` OAuth cache. Raw tool names (`get_jira_issue`, …) — not
-`jira_*` aliases. Never injects an agent turn solely for Jira I/O.
+Own stdio MCP client using the resolved `jira` command and arguments from
+`~/.pi/agent/mcp.json`. Run `apply_harness_config` after changing MCP settings.
+The client reuses `~/.mcp-auth` OAuth cache. Raw tool names
+(`get_jira_issue`, …) — not `jira_*` aliases. Never injects an agent turn
+solely for Jira I/O.
 
 ## Nudges
 
@@ -33,7 +35,9 @@ only. Never mutates Jira; never auto-injects context.
 ## Secrets
 
 Errors are sanitized (Bearer / access_token / refresh_token / Authorization).
-Tokens stay in `~/.mcp-auth` only.
+Tokens stay in `~/.mcp-auth` only. The Jira MCP URL is resolved from
+1Password into the generated `~/.pi/agent/mcp.json`; it is not stored in this
+extension's chezmoi source.
 
 ## Tests
 

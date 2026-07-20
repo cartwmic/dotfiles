@@ -50,13 +50,17 @@ function wrapLive(handles: RealHandles): JiraMcpClient {
 }
 
 async function connectLive(cfg: JiraConfig): Promise<RealHandles> {
+	if (!cfg.mcpTransport) {
+		throw new Error(cfg.mcpConfigError ?? "Jira MCP server is unavailable");
+	}
+
 	const sdkRoot = resolveSdkRoot();
 	const { Client } = await import(`${sdkRoot}/dist/esm/client/index.js`);
 	const { StdioClientTransport } = await import(`${sdkRoot}/dist/esm/client/stdio.js`);
 
 	const transport = new StdioClientTransport({
-		command: cfg.mcpRemoteCommand,
-		args: [...cfg.mcpRemoteArgs, cfg.jiraMcpUrl],
+		command: cfg.mcpTransport.command,
+		args: [...cfg.mcpTransport.args],
 		env: process.env as Record<string, string>,
 		stderr: "ignore",
 	});

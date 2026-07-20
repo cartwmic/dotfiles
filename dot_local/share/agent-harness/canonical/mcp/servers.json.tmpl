@@ -23,6 +23,22 @@
       "type": "http",
       "url": "https://hindsight-api.internal.cartwmic.com/mcp/{{ if eq .profile "axon-work-computer" }}work{{ else }}cartwmic{{ end }}/",
       "lifecycle": "keep-alive"
-    }
+    }{{ if eq .profile "axon-work-computer" }},
+    "jira": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "${JIRA_MCP_URL}"
+      ]
+    },
+    "slack": {
+      "type": "http",
+      "url": "${SLACK_MCP_URL}"
+    },
+    "google-workspace": {
+      "type": "http",
+      "url": "${GOOGLE_WORKSPACE_MCP_URL}"
+    }{{ end }}
   }
 }

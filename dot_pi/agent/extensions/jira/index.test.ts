@@ -22,7 +22,6 @@ import {
 	toolResultText,
 } from "./index.ts";
 import { getClient } from "./client.ts";
-import { DEFAULT_JIRA_MCP_URL } from "./config.ts";
 
 describe("parseCommand", () => {
 	test("empty → status", () => {
@@ -109,17 +108,45 @@ describe("formatStatus / nudge", () => {
 });
 
 describe("loadConfig", () => {
-	test("defaults and overrides", () => {
+	test("loads behavior and the generated Jira MCP transport", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "jira-cfg-"));
+		const mcpConfigPath = path.join(dir, "mcp.json");
 		try {
-			expect(loadConfig(dir).jiraMcpUrl).toBe(DEFAULT_JIRA_MCP_URL);
+			fs.writeFileSync(
+				mcpConfigPath,
+				JSON.stringify({
+					mcpServers: {
+						jira: {
+							command: "npx",
+							args: ["-y", "mcp-remote", "https://jira.example.test/mcp"],
+						},
+					},
+				}),
+			);
 			fs.writeFileSync(
 				path.join(dir, "config.json"),
 				JSON.stringify({ enabled: false, nudgeEveryNTurns: 10 }),
 			);
-			const c = loadConfig(dir);
+
+			const c = loadConfig(dir, mcpConfigPath);
 			expect(c.enabled).toBe(false);
 			expect(c.nudgeEveryNTurns).toBe(10);
+			expect(c.mcpTransport).toEqual({
+				command: "npx",
+				args: ["-y", "mcp-remote", "https://jira.example.test/mcp"],
+			});
+			expect(c.mcpConfigError).toBeNull();
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("fails closed when the generated Jira MCP transport is unavailable", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "jira-cfg-"));
+		try {
+			const c = loadConfig(dir, path.join(dir, "missing-mcp.json"));
+			expect(c.mcpTransport).toBeNull();
+			expect(c.mcpConfigError).toContain("apply_harness_config");
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -127,6 +154,12 @@ describe("loadConfig", () => {
 });
 
 describe("mock MCP client call shaping", () => {
+	test("getClient refuses an unavailable generated transport", async () => {
+		await expect(getClient(loadConfig("/tmp", "/missing-mcp.json"))).rejects.toThrow(
+			/apply_harness_config/,
+		);
+	});
+
 	test("getClient routes to mock; toolResultText parses", async () => {
 		const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
 		setClientForTests({
@@ -139,7 +172,7 @@ describe("mock MCP client call shaping", () => {
 			async close() {},
 		});
 		try {
-			const client = await getClient(loadConfig("/tmp"));
+			const client = await getClient(loadConfig("/tmp", "/missing-mcp.json"));
 			const raw = await client.callTool("search_jira_issues", { jql: "a", max_results: 3 });
 			const text = toolResultText(raw);
 			expect(JSON.parse(text).name).toBe("search_jira_issues");

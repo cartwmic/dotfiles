@@ -30,10 +30,10 @@ successfully in ~2.6s with no browser prompt and no agent turn.
 - **Code home:** `dot_pi/agent/extensions/jira/` (+ tests + README). Profile
   deploy gate (`.chezmoiignore` and/or settings/extension load) so
   non-`axon-work-computer` profiles do not receive the extension.
-- **Transport:** extension spawns/reuses its own mcp-remote stdio client to
-  `https://app-mcp-jira-prod-j6a1bj7j.azurewebsites.net/mcp`, calling raw MCP
-  tool names (`get_jira_issue`, `search_jira_issues`, … — not the pi-prefixed
-  `jira_*` aliases). Reuse existing `~/.mcp-auth` tokens; no second OAuth
+- **Transport:** extension spawns/reuses its own stdio client using the
+  1Password-resolved `jira` transport in `~/.pi/agent/mcp.json`, calling raw
+  MCP tool names (`get_jira_issue`, `search_jira_issues`, … — not the
+  pi-prefixed `jira_*` aliases). Reuse existing `~/.mcp-auth` tokens; no second OAuth
   secret store; no Atlassian REST dual-stack in v1; never inject a turn solely
   to drive Jira MCP.
 - **No `before_agent_start` hook.** Context enters the agent only via an

@@ -77,45 +77,14 @@ import pathlib
 import sys
 
 mcp_file = pathlib.Path(sys.argv[1])
-secrets_arg = sys.argv[2]
 out_file = pathlib.Path(sys.argv[3])
 
 canonical = json.loads(mcp_file.read_text())
-resolved = canonical
-
-if secrets_arg:
-    secrets = json.loads(pathlib.Path(secrets_arg).read_text())
-    for server_name, secret_cfg in secrets.get("mcpServers", {}).items():
-        target = resolved.get("mcpServers", {}).get(server_name)
-        if not target:
-            continue
-
-        for section_name in ("headers", "env"):
-            section = secret_cfg.get(section_name, {})
-            if not section:
-                continue
-            target.setdefault(section_name, {})
-            for key, cfg in section.items():
-                if not isinstance(cfg, dict):
-                    continue
-                fmt = cfg.get("format")
-                env_name = cfg.get("env")
-                if fmt:
-                    # Explicit format string wins; lets us inject prefixes
-                    # like "Bearer ${MCP_MEMORY_API_KEY}" into a header
-                    # value that the env-substitution pass then resolves.
-                    target[section_name][key] = fmt
-                elif env_name and key not in target[section_name]:
-                    # Only synthesize a placeholder if the canonical didn't
-                    # already provide one. Avoids clobbering canonical values
-                    # like "Bearer ${VAR}" with a bare "${VAR}".
-                    target[section_name][key] = "${" + env_name + "}"
-
-out_file.write_text(json.dumps(resolved, indent=2) + "\n")
+out_file.write_text(json.dumps(canonical, indent=2) + "\n")
 PY
 
   if [ -n "$secrets_file" ]; then
-    # Extract (env_name, op_ref) pairs into a variable so the while loop
+    # Extract (placeholder, op_ref) pairs into a variable so the while loop
     # below runs in the *current* shell (a `py | while` pipeline runs the
     # loop in a subshell, which would discard `export` calls before our
     # substitution pass below could see them).
@@ -125,33 +94,29 @@ import pathlib
 import sys
 
 data = json.loads(pathlib.Path(sys.argv[1]).read_text())
-for _, cfg in data.get("mcpServers", {}).items():
-    for section_name in ("headers", "env"):
-        for _, mapping in cfg.get(section_name, {}).items():
-            if isinstance(mapping, dict) and mapping.get("env") and mapping.get("op"):
-                print(f"{mapping['env']}\t{mapping['op']}")
+for placeholder, mapping in data.get("substitutions", {}).items():
+    if isinstance(mapping, dict) and mapping.get("op"):
+        print(f"{placeholder}\t{mapping['op']}")
 PY
 )
-    while IFS='	' read -r env_name secret_ref; do
-      [ -z "$env_name" ] && continue
+    while IFS='	' read -r placeholder secret_ref; do
+      [ -z "$placeholder" ] && continue
       if value=$(resolve_secret "$secret_ref"); then
-        export "$env_name=$value"
+        export "$placeholder=$value"
       else
-        log "1Password secret unavailable for $env_name from $secret_ref"
+        log "1Password secret unavailable for $placeholder from $secret_ref"
       fi
     done <<HEREDOC_END
 $secrets_pairs
 HEREDOC_END
   fi
 
-  # Inline pass: substitute ${VAR} references in the resolved JSON with the
-  # actual env values that op resolution just exported. Result: each harness
-  # config ends up with the literal credential persisted on disk, so harnesses
-  # don't depend on env vars being set at session start. If a referenced env
-  # is unset we leave the placeholder intact (skip-server semantics already
-  # handle that downstream).
+  # Inline pass: substitute ${VAR} references anywhere in the resolved JSON
+  # with values that op resolution just exported. Harnesses therefore do not
+  # depend on env vars being set at session start. If a managed substitution
+  # remains unresolved, omit only the affected server.
   if [ "${AGENT_HARNESS_INLINE_SECRETS:-1}" = "1" ]; then
-    python3 - "$out_file" <<'PY'
+    python3 - "$out_file" "$secrets_file" <<'PY'
 import json
 import os
 import pathlib
@@ -160,6 +125,11 @@ import sys
 
 out = pathlib.Path(sys.argv[1])
 data = json.loads(out.read_text())
+secrets_arg = sys.argv[2]
+managed = set()
+if secrets_arg:
+    secrets = json.loads(pathlib.Path(secrets_arg).read_text())
+    managed = set(secrets.get("substitutions", {}))
 env_re = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 
 def substitute(obj):
@@ -174,7 +144,23 @@ def substitute(obj):
         return [substitute(v) for v in obj]
     return obj
 
-out.write_text(json.dumps(substitute(data), indent=2) + "\n")
+def has_unresolved_managed_placeholder(obj):
+    if isinstance(obj, str):
+        return any(match.group(1) in managed for match in env_re.finditer(obj))
+    if isinstance(obj, dict):
+        return any(has_unresolved_managed_placeholder(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(has_unresolved_managed_placeholder(v) for v in obj)
+    return False
+
+resolved = substitute(data)
+servers = resolved.get("mcpServers", {})
+for name in list(servers):
+    if has_unresolved_managed_placeholder(servers[name]):
+        print(f"[apply_harness_config] Skipping {name}: required substitution unavailable")
+        del servers[name]
+
+out.write_text(json.dumps(resolved, indent=2) + "\n")
 PY
   fi
 }

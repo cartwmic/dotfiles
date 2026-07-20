@@ -16,6 +16,8 @@ dot_local/share/agent-harness/
       mcp-secrets.json.tmpl
     codex/
       mcp-secrets.json.tmpl
+    pi/
+      mcp-secrets.json.tmpl
 ```
 
 Rules:
@@ -121,33 +123,14 @@ After adding a skill:
 
 ## Add Harness-Specific MCP Secrets
 
-Keep secret-resolution details out of canonical MCP.
-
-Instead, add them in:
+Keep secret-resolution details out of canonical MCP. Put a `${VAR}` placeholder
+anywhere in the canonical server definition, including headers, URLs, command
+arguments, or environment values. Map that placeholder to 1Password in each
+harness adapter that needs it:
 
 - [`adapters/claude/mcp-secrets.json.tmpl`](./adapters/claude/mcp-secrets.json.tmpl)
 - [`adapters/codex/mcp-secrets.json.tmpl`](./adapters/codex/mcp-secrets.json.tmpl)
-
-Shape:
-
-```json
-{
-  "mcpServers": {
-    "context7": {
-      "headers": {
-        "CONTEXT7_API_KEY": {
-          "env": "CONTEXT7_API_KEY",
-          "op": "op://developer/context7 - api key/credential"
-        }
-      }
-    }
-  }
-}
-```
-
-Headers that need a prefix (e.g. `Authorization: Bearer <token>`) belong in
-the canonical file with a `${VAR}` placeholder; the adapter only declares
-the env-to-`op://` mapping:
+- [`adapters/pi/mcp-secrets.json.tmpl`](./adapters/pi/mcp-secrets.json.tmpl)
 
 Canonical:
 ```json
@@ -155,7 +138,7 @@ Canonical:
   "mcpServers": {
     "my-http-server": {
       "type": "http",
-      "url": "https://my-http-server.example.com/mcp",
+      "url": "${MY_SERVER_URL}",
       "headers": {
         "Authorization": "Bearer ${MY_SERVER_API_KEY}"
       }
@@ -167,14 +150,12 @@ Canonical:
 Adapter:
 ```json
 {
-  "mcpServers": {
-    "my-http-server": {
-      "headers": {
-        "Authorization": {
-          "env": "MY_SERVER_API_KEY",
-          "op": "op://developer/my-http-server - api key/credential"
-        }
-      }
+  "substitutions": {
+    "MY_SERVER_URL": {
+      "op": "op://developer/my-http-server - url/credential"
+    },
+    "MY_SERVER_API_KEY": {
+      "op": "op://developer/my-http-server - api key/credential"
     }
   }
 }
@@ -182,23 +163,22 @@ Adapter:
 
 The apply script:
 
-1. Reads canonical, preserving any value the canonical declares for a header.
-2. Reads each adapter's secrets file; for every `{env, op}` pair it `op read`s
-   the secret and exports it into the apply step's environment.
-3. Substitutes every `${VAR}` reference in the resolved JSON with the actual
-   exported value, so the credential is **persisted as a literal string**
-   into each harness's MCP config on disk. This is intentional: harnesses
-   don't need the env var set at runtime.
-
-Advanced: `format` field. If you ever need the adapter to *override* the
-canonical value (rare — prefer fixing the canonical), pass an explicit
-`format` string and it will be used verbatim before env substitution.
+1. Reads the canonical server definitions without changing their shape.
+2. Reads each adapter's `substitutions`; for every placeholder-to-`op` mapping,
+   it resolves the value and exports it for the render step.
+3. Recursively substitutes `${VAR}` references anywhere in the resolved JSON.
+   The value is **persisted as a literal string** in each harness config so
+   harnesses do not need the variable at runtime.
+4. If a managed placeholder cannot be resolved from 1Password or the existing
+   environment, it omits only the affected server from that render.
 
 Guidelines:
 
-- Keep adapter mappings minimal (`env` + `op`). Put header shape in canonical.
-- Match the server name and env/header keys used by the harness projection.
-- If secret resolution fails during apply, the adapter should skip only the affected server configuration.
+- Keep adapter mappings minimal (`placeholder` + `op`). Keep server shape and
+  formatting such as `Bearer ${VAR}` in canonical.
+- Use the same placeholder name in canonical and under `substitutions`.
+- Gate work-only substitutions with the same chezmoi profile condition as the
+  corresponding canonical servers.
 - To disable inlining (keep `${VAR}` placeholders in harness configs), set
   `AGENT_HARNESS_INLINE_SECRETS=0` before running the apply script.
 

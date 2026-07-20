@@ -40,8 +40,8 @@ work-profile workstation helper only).
 **Dependencies:** `@modelcontextprotocol/sdk` (stdio client; resolve via
 pi-mcp-adapter or explicit dep), `npx mcp-remote`, existing `~/.mcp-auth`.
 
-**Systems:** Atlassian Jira MCP at
-`https://app-mcp-jira-prod-j6a1bj7j.azurewebsites.net/mcp` — consume only.
+**Systems:** Atlassian Jira MCP transport resolved from 1Password into the
+generated Pi MCP configuration — consume only.
 
 ## Open Questions (plain-M clarify-in-proposal)
 
