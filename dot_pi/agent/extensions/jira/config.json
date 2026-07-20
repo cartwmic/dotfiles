@@ -1,7 +1,4 @@
 {
   "enabled": true,
-  "nudgeEveryNTurns": 5,
-  "jiraMcpUrl": "https://jira-mcp.example.invalid/mcp",
-  "mcpRemoteCommand": "npx",
-  "mcpRemoteArgs": ["-y", "mcp-remote"]
+  "nudgeEveryNTurns": 5
 }
