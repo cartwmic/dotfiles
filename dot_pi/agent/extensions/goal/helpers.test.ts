@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	commandVerdict,
 	decideAfterEvaluation,
+	decideAgentEndBoundary,
 	isInterruptedStop,
 	lastAssistantInfo,
 	normalizeGoalConfig,
@@ -172,7 +173,7 @@ describe("normalizeGoalConfig / resolveSetting — goal-loop.configurable-judge-
 	});
 });
 
-describe("lastAssistantInfo / isInterruptedStop — goal-loop.interrupt-stops-the-loop", () => {
+describe("lastAssistantInfo / isInterruptedStop / decideAgentEndBoundary — goal-loop.interrupt-stops-the-loop / preserve-across-native-retries", () => {
 	const mk = (role: string, text: string, stopReason?: string) => ({
 		role,
 		content: [{ type: "text", text }],
@@ -190,12 +191,20 @@ describe("lastAssistantInfo / isInterruptedStop — goal-loop.interrupt-stops-th
 		expect(lastAssistantInfo([])).toEqual({ text: "" });
 	});
 
-	test("aborted and error count as interrupted; stop/toolUse do not", () => {
+	test("only aborted counts as interrupted; error defers to settled", () => {
 		expect(isInterruptedStop("aborted")).toBe(true);
-		expect(isInterruptedStop("error")).toBe(true);
+		expect(isInterruptedStop("error")).toBe(false);
 		expect(isInterruptedStop("stop")).toBe(false);
 		expect(isInterruptedStop("toolUse")).toBe(false);
 		expect(isInterruptedStop(undefined)).toBe(false);
+	});
+
+	test("agent_end boundary: abort stops, error defers, clean evaluates", () => {
+		expect(decideAgentEndBoundary("aborted")).toBe("stop");
+		expect(decideAgentEndBoundary("error")).toBe("defer");
+		expect(decideAgentEndBoundary("stop")).toBe("evaluate");
+		expect(decideAgentEndBoundary("toolUse")).toBe("evaluate");
+		expect(decideAgentEndBoundary(undefined)).toBe("evaluate");
 	});
 });
 

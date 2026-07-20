@@ -181,9 +181,27 @@ export function lastAssistantInfo(messages: unknown): AssistantInfo {
 	return { text: "" };
 }
 
-/** A turn the user interrupted or that errored should not auto-continue. */
+/** User Escape/abort — immediately terminal for the loop. */
 export function isInterruptedStop(stopReason: string | undefined): boolean {
-	return stopReason === "aborted" || stopReason === "error";
+	return stopReason === "aborted";
+}
+
+export type AgentEndBoundaryAction = "stop" | "defer" | "evaluate";
+
+/**
+ * Classify a low-level agent_end for loop lifecycle.
+ * - aborted: user interrupt → stop immediately
+ * - error: Pi may still retry/compact/continue → defer terminal policy to agent_settled
+ * - otherwise: evaluate the completed turn
+ *
+ * Pi owns native retry; the extension must not treat a failed attempt as final
+ * while Pi can still continue the same user-visible turn.
+ * (goal-loop.preserve-across-native-retries)
+ */
+export function decideAgentEndBoundary(stopReason: string | undefined): AgentEndBoundaryAction {
+	if (stopReason === "aborted") return "stop";
+	if (stopReason === "error") return "defer";
+	return "evaluate";
 }
 
 export type LoopAction = "achieved" | "exhausted" | "continue";
