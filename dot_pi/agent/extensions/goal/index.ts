@@ -7,7 +7,8 @@
  * turn budget guarantees termination.
  *
  * Mechanism validated against the live pi runtime (see the change's design.md):
- *   - agent_end fires once per full agent run (correct evaluation point)
+ *   - agent_end is a low-level attempt boundary: clean ends evaluate; error defers
+ *   - agent_settled stops only when an error remains unresolved after Pi settles
  *   - sendUserMessage(..., {deliverAs:"followUp"}) drives the next turn
  *   - a separate model resolves via modelRegistry + complete()
  *
@@ -27,8 +28,8 @@ import { complete, type Tool } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import {
 	decideAfterEvaluation,
+	decideAgentEndBoundary,
 	GOAL_SUBCOMMANDS,
-	isInterruptedStop,
 	lastAssistantInfo,
 	commandVerdict,
 	normalizeGoalConfig,
@@ -97,6 +98,8 @@ interface GoalState {
 	active: boolean;
 	lastReason?: string;
 	evaluating: boolean;
+	/** Errored low-level attempt awaiting Pi's final agent_settled signal. */
+	pendingError?: boolean;
 }
 
 const DEFAULT_MAX_TURNS = 25;
@@ -308,15 +311,30 @@ export default function (pi: ExtensionAPI) {
 		if (!goal?.active || goal.evaluating) return; // inactive (clarify C3) or re-entrant (D4)
 
 		const info = lastAssistantInfo(event?.messages);
-		// User interrupted (or the turn errored): stop the loop instead of
-		// re-injecting, otherwise the cancel fights an immediate new turn.
-		if (isInterruptedStop(info.stopReason)) {
+		const boundary = decideAgentEndBoundary(info.stopReason);
+
+		// Explicit user abort remains immediately terminal. It must never wait for or
+		// be undone by a later settlement signal.
+		if (boundary === "stop") {
 			const cond = goal.condition;
 			clearGoal(ctx);
 			dbg(`interrupted stopReason=${info.stopReason} — loop stopped`);
 			ctx.ui.notify(`◎ Goal stopped (${info.stopReason}): ${cond}`, "warning");
 			return;
 		}
+
+		// agent_end is a low-level attempt boundary: Pi decides native retry,
+		// compaction/retry, and queued continuation only after extension handlers run.
+		// Preserve the exact goal object and defer terminal policy to agent_settled.
+		if (boundary === "defer") {
+			goal.pendingError = true;
+			dbg("error stopReason — deferring to agent_settled (preserving goal)");
+			return;
+		}
+
+		// A clean native continuation supersedes any prior errored attempt and follows
+		// the existing judge/continuation path exactly once.
+		goal.pendingError = undefined;
 
 		const session = goal;
 		session.evaluating = true;
@@ -358,5 +376,21 @@ export default function (pi: ExtensionAPI) {
 		} finally {
 			session.evaluating = false;
 		}
+	});
+
+	pi.on("agent_settled", async (_event: any, ctx: ExtensionContext) => {
+		const session = goal;
+		if (!session?.active || !session.pendingError || session.evaluating) return;
+		// Another extension may start a new run from an earlier agent_settled handler.
+		// In that case preserve the pending outcome; its eventual clean/error boundary
+		// will supersede or settle it without racing that continuation.
+		if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
+
+		// Consume before any further work so clear/replacement makes a stale settled a no-op.
+		session.pendingError = undefined;
+		const cond = session.condition;
+		clearGoal(ctx);
+		dbg("settled with unresolved error — loop stopped");
+		ctx.ui.notify(`◎ Goal stopped (error): ${cond}`, "warning");
 	});
 }
