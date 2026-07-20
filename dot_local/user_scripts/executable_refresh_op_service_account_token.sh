@@ -12,7 +12,7 @@
 # Run this once per machine after creating/rotating the service account.
 # Override the source location with the env vars below, e.g.:
 #   AGENT_HARNESS_OP_VAULT=personal \
-#   AGENT_HARNESS_OP_ITEM='Service Account Auth Token: dotfiles' \
+#   AGENT_HARNESS_OP_ITEM='Service Account Auth Token: developer-sa' \
 #   AGENT_HARNESS_OP_FIELD=credential \
 #     refresh_op_service_account_token.sh
 #
@@ -25,7 +25,7 @@ set -eu
 SCRIPT_NAME="refresh_op_service_account_token"
 TOKEN_FILE="${AGENT_HARNESS_OP_TOKEN_FILE:-$HOME/.config/agent-harness/op-service-token}"
 OP_VAULT="${AGENT_HARNESS_OP_VAULT:-personal}"
-OP_ITEM="${AGENT_HARNESS_OP_ITEM:-Service Account Auth Token: dotfiles}"
+OP_ITEM="${AGENT_HARNESS_OP_ITEM:-Service Account Auth Token: developer-sa}"
 OP_FIELD="${AGENT_HARNESS_OP_FIELD:-credential}"
 
 log() {
