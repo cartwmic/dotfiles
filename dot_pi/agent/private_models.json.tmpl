@@ -1,3 +1,7 @@
+{{- $privateProvider := dict -}}
+{{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiProviderRef") -}}
+{{-   $privateProvider = output "op" "read" .privatePiProviderRef | fromJson -}}
+{{- end -}}
 {
   "providers": {
     "deepseek": {
@@ -54,5 +58,8 @@
         }
       ]
     }
+{{- if $privateProvider }},
+    "private-anthropic": {{ $privateProvider | toPrettyJson }}
+{{- end }}
   }
 }

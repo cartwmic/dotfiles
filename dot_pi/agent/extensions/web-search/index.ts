@@ -37,7 +37,16 @@ const DEFAULT_BASE_URL = "https://api.anthropic.com";
 // Real Anthropic model ID (alias — resolves to current dated build). Override via ANTHROPIC_SEARCH_MODEL.
 const DEFAULT_MODEL = "claude-opus-4-8";
 const TOOL_NAME_SEARCH = "web_search";
+// The private Anthropic-compatible gateway reserves web_search by name. Keep the
+// public name everywhere else and expose this transport-safe alias only there.
+const TOOL_NAME_SEARCH_PRIVATE = "claude_web_search";
 const TOOL_NAME_FETCH = "web_fetch";
+const PRIVATE_SEARCH_PROVIDER = "private-anthropic";
+const SEARCH_TOOL_NAMES = [TOOL_NAME_SEARCH, TOOL_NAME_SEARCH_PRIVATE] as const;
+
+function searchToolNameForProvider(provider: string | undefined): string {
+  return provider === PRIVATE_SEARCH_PROVIDER ? TOOL_NAME_SEARCH_PRIVATE : TOOL_NAME_SEARCH;
+}
 
 // ---------------------------------------------------------------------------
 // Auth resolution
@@ -573,16 +582,51 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
   const initialAuth = resolveAuth();
   const model = process.env.ANTHROPIC_SEARCH_MODEL ?? DEFAULT_MODEL;
 
+  const selectSearchToolAlias = (
+    nextProvider: string | undefined,
+    previousProvider?: string
+  ): void => {
+    const activeTools = pi.getActiveTools();
+    // At startup, web_search is the canonical user-facing tool. On later model
+    // changes, preserve whether the alias used by the previous provider was active.
+    const previousName = previousProvider
+      ? searchToolNameForProvider(previousProvider)
+      : TOOL_NAME_SEARCH;
+    const searchEnabled = activeTools.includes(previousName);
+    const nextName = searchToolNameForProvider(nextProvider);
+    const nextTools = activeTools.filter(
+      (name) => !SEARCH_TOOL_NAMES.includes(name as (typeof SEARCH_TOOL_NAMES)[number])
+    );
+    if (searchEnabled) nextTools.push(nextName);
+    if (
+      nextTools.length !== activeTools.length ||
+      nextTools.some((name, index) => name !== activeTools[index])
+    ) {
+      pi.setActiveTools(nextTools);
+    }
+  };
+
+  pi.on("session_start", (_event, ctx) => {
+    selectSearchToolAlias(ctx.model?.provider);
+  });
+  pi.on("model_select", (event) => {
+    selectSearchToolAlias(event.model.provider, event.previousModel?.provider);
+  });
+
   if (!initialAuth) {
     const errMsg =
       "web_search/web_fetch unconfigured. Run `claude login` (writes to macOS Keychain), " +
       "set ANTHROPIC_SEARCH_API_KEY, or run `pi login` to populate ~/.pi/agent/auth.json.";
-    for (const name of [TOOL_NAME_SEARCH, TOOL_NAME_FETCH]) {
+    for (const name of [...SEARCH_TOOL_NAMES, TOOL_NAME_FETCH]) {
       pi.registerTool({
         name,
         label: `${name} (unconfigured)`,
         description: `Anthropic-backed ${name} — currently unavailable: no auth source found.`,
-        parameters: name === TOOL_NAME_SEARCH ? SearchSchema : FetchSchema,
+        parameters: SEARCH_TOOL_NAMES.includes(
+          name as (typeof SEARCH_TOOL_NAMES)[number]
+        )
+          ? SearchSchema
+          : FetchSchema,
         async execute() {
           return {
             content: [{ type: "text" as const, text: errMsg }],
@@ -596,10 +640,11 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
   }
 
   // -------------------------------------------------------------------------
-  // web_search
+  // web_search / claude_web_search
   // -------------------------------------------------------------------------
-  pi.registerTool({
-    name: TOOL_NAME_SEARCH,
+  const registerSearchTool = (toolName: string): void => {
+    pi.registerTool({
+      name: toolName,
     label: "Web Search",
     description:
       `Search the web via Claude (${model}, Anthropic web_search_20250305). ` +
@@ -613,7 +658,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       const auth = resolveAuth();
       if (!auth) {
         return {
-          content: [{ type: "text" as const, text: "web_search failed: no auth source found." }],
+          content: [{ type: "text" as const, text: `${toolName} failed: no auth source found.` }],
           isError: true,
           details: { error: "no auth config" },
         };
@@ -648,7 +693,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {
-          content: [{ type: "text" as const, text: `web_search failed: ${message}` }],
+          content: [{ type: "text" as const, text: `${toolName} failed: ${message}` }],
           isError: true,
           details: { error: message, authSource: auth.source },
         };
@@ -658,7 +703,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       const details = (result.details ?? {}) as Partial<SearchDetails>;
       const expanded = options.expanded;
       if (details.error) {
-        return new Text(theme.fg("error", `✗ web_search: ${details.error}`), 0, 0);
+        return new Text(theme.fg("error", `✗ ${toolName}: ${details.error}`), 0, 0);
       }
       const sources = details.sources ?? [];
       const queries = details.searchQueries ?? [];
@@ -705,7 +750,11 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       }
       return new Text(text, 0, 0);
     },
-  });
+    });
+  };
+
+  registerSearchTool(TOOL_NAME_SEARCH);
+  registerSearchTool(TOOL_NAME_SEARCH_PRIVATE);
 
   // -------------------------------------------------------------------------
   // web_fetch

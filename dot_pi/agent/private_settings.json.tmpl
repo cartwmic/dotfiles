@@ -6,6 +6,10 @@
 */ -}}
 {{- $version := "0.70.2" -}}
 {{- $theme := "dark" -}}
+{{- $privateProvider := dict -}}
+{{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiProviderRef") -}}
+{{-   $privateProvider = output "op" "read" .privatePiProviderRef | fromJson -}}
+{{- end -}}
 {{- $settingsPath := joinPath .chezmoi.homeDir ".pi/agent/settings.json" -}}
 {{- if stat $settingsPath -}}
 {{-   $found := output "jq" "-r" ".lastChangelogVersion // empty" $settingsPath | trim -}}
@@ -45,6 +49,9 @@
     "anthropic/claude-fable-5",
     "anthropic/claude-opus-4-8",
     "anthropic/claude-sonnet-5"
+{{- end }}
+{{- range $model := $privateProvider.models }},
+    {{ printf "private-anthropic/%s" $model.id | quote }}
 {{- end }}
   ],
   "packages": [
