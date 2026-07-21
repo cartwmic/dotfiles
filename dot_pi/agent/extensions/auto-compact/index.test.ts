@@ -113,10 +113,12 @@ describe("auto-compact threshold", () => {
 			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
 			// Mirror real pi: successful compaction fires onComplete and then the
 			// session_compact event; the extension resumes from the event handler.
+			// fromExtension is false because pi only sets it when a
+			// session_before_compact handler supplied the compaction content.
 			compact: ({ onComplete }: { onComplete: () => void }) => {
 				compactCalls += 1;
 				onComplete();
-				handlers.get("session_compact")?.({ fromExtension: true, willRetry: false }, ctx);
+				handlers.get("session_compact")?.({ fromExtension: false, willRetry: false }, ctx);
 			},
 		};
 		handlers.get("turn_end")?.({}, ctx);
@@ -143,7 +145,7 @@ describe("auto-compact threshold", () => {
 			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
 			compact: ({ onComplete }: { onComplete: () => void }) => {
 				onComplete();
-				handlers.get("session_compact")?.({ fromExtension: true, willRetry: true }, ctx);
+				handlers.get("session_compact")?.({ fromExtension: false, willRetry: true }, ctx);
 			},
 		};
 		handlers.get("turn_end")?.({}, ctx);
