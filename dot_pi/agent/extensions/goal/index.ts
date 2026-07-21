@@ -18,9 +18,12 @@
  *   PI_GOAL_JUDGE_CMD    shell command judge; exit 0 = met (overrides the model
  *                        judge). The command may inspect filesystem/git state
  *                        outside the transcript; GOAL_CONDITION is exported to it.
+ *   PI_GOAL_DEBUG        debug trace path (default ~/.pi/goal-debug.log; "0"/"off"
+ *                        disables). Rotates at 5MB keeping one .1 generation.
  */
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, renameSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -79,12 +82,24 @@ const SUBMIT_VERDICT: Tool = {
 	}),
 };
 
-// Optional debug trace (set PI_GOAL_DEBUG=/path/to/log). No-op otherwise.
-const DEBUG = process.env.PI_GOAL_DEBUG;
+// Debug trace — on by default at ~/.pi/goal-debug.log.
+// PI_GOAL_DEBUG=/path/to/log overrides the path; PI_GOAL_DEBUG=0|off disables.
+// Rotates at 5MB by renaming to <path>.1 (one generation kept, ~10MB worst case).
+const DEBUG = resolveDebugPath(process.env.PI_GOAL_DEBUG);
+const DEBUG_MAX_BYTES = 5 * 1024 * 1024;
+function resolveDebugPath(env: string | undefined): string | undefined {
+	const v = (env ?? "").trim();
+	if (v === "0" || v.toLowerCase() === "off" || v.toLowerCase() === "false") return undefined;
+	if (v.length > 0) return v;
+	return join(homedir(), ".pi", "goal-debug.log");
+}
 function dbg(line: string): void {
 	if (DEBUG) {
 		try {
-			appendFileSync(DEBUG, `${Date.now()} ${line}\n`);
+			if (existsSync(DEBUG) && statSync(DEBUG).size >= DEBUG_MAX_BYTES) {
+				renameSync(DEBUG, `${DEBUG}.1`); // overwrites previous generation
+			}
+			appendFileSync(DEBUG, `${new Date().toISOString()} ${line}\n`);
 		} catch {
 			/* ignore */
 		}
