@@ -123,10 +123,12 @@ export default function (pi: ExtensionAPI): void {
 	let config = loadConfig(configPath);
 	let compacting = false;
 	let lastAttemptTokens: number | undefined;
+	let pendingResume: string | undefined;
 
 	const resetAttemptState = () => {
 		compacting = false;
 		lastAttemptTokens = undefined;
+		pendingResume = undefined;
 	};
 
 	const maybeCompact = (checkPoint: CheckPoint, ctx: ExtensionContext): void => {
@@ -151,40 +153,71 @@ export default function (pi: ExtensionAPI): void {
 			);
 		}
 
-		const resume = resumeAfterCompact(config, checkPoint);
-		const finish = (didCompact: boolean) => {
-			compacting = false;
-			// ctx.compact() aborts the active agent first. After mid-turn compaction,
-			// re-inject so the interrupted run can continue. Skip agent_end: the run
-			// already finished and a follow-up would spuriously start new work.
-			if (didCompact && resume) {
-				pi.sendUserMessage(resume, { deliverAs: "followUp" });
-			}
-		};
+		// ctx.compact() aborts the active agent first. After mid-turn compaction,
+		// re-inject so the interrupted run can continue. Skip agent_end (resume is
+		// undefined there): the run already finished and a follow-up would
+		// spuriously start new work.
+		//
+		// The success-path resume is delivered from the session_compact event
+		// handler below, never from the onComplete/onError callbacks: those are
+		// detached continuations that can fire after session dispose() has
+		// invalidated the extension runtime (dispose -> abortCompaction -> the
+		// pending compact promise rejects -> onError runs against a stale ctx).
+		// Any pi/ctx call inside them must be stale-guarded.
+		pendingResume = resumeAfterCompact(config, checkPoint);
 		try {
 			ctx.compact({
 				onComplete: () => {
-					finish(true);
-					if (ctx.hasUI) {
-						ctx.ui.notify(
-							resume ? "Auto-compaction completed; continuing" : "Auto-compaction completed",
-							"info",
-						);
+					// Resume is sent by the session_compact handler.
+					try {
+						if (ctx.hasUI) {
+							ctx.ui.notify(
+								pendingResume
+									? "Auto-compaction completed; continuing"
+									: "Auto-compaction completed",
+								"info",
+							);
+						}
+					} catch {
+						// Stale ctx after session teardown; nothing left to notify.
 					}
 				},
 				onError: (error) => {
-					// Compact failed, but the agent was already aborted — still resume.
-					finish(true);
-					if (ctx.hasUI) ctx.ui.notify(`Auto-compaction failed: ${formatError(error)}`, "warning");
+					// Compact failed, but the agent was already aborted — still try to
+					// resume so the interrupted run is not silently lost. No
+					// session_compact event fires on failure, so send here, guarded:
+					// if the session was disposed mid-compact the runtime is stale and
+					// there is nothing to resume into.
+					compacting = false;
+					const resume = pendingResume;
+					pendingResume = undefined;
+					try {
+						if (resume) pi.sendUserMessage(resume, { deliverAs: "followUp" });
+						if (ctx.hasUI) ctx.ui.notify(`Auto-compaction failed: ${formatError(error)}`, "warning");
+					} catch {
+						// Stale ctx after session teardown; drop the resume.
+					}
 				},
 			});
 		} catch (error) {
-			finish(false);
+			compacting = false;
+			pendingResume = undefined;
 			if (ctx.hasUI) ctx.ui.notify(`Auto-compaction failed: ${formatError(error)}`, "warning");
 		}
 	};
 
 	pi.on("session_start", resetAttemptState);
+	pi.on("session_shutdown", resetAttemptState);
+	pi.on("session_compact", (event) => {
+		compacting = false;
+		// Only consume the pending resume for compactions this extension
+		// triggered. willRetry means core overflow recovery already retries the
+		// aborted turn; injecting a follow-up as well would double-resume.
+		if (!event.fromExtension || event.willRetry) return;
+		const resume = pendingResume;
+		pendingResume = undefined;
+		if (resume) pi.sendUserMessage(resume, { deliverAs: "followUp" });
+	});
 	pi.on("turn_end", (_event, ctx) => maybeCompact("turn_end", ctx));
 	pi.on("agent_end", (_event, ctx) => maybeCompact("agent_end", ctx));
 
