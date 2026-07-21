@@ -19,6 +19,6 @@ Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 .local/bin/sync-claude-pi-auth.sh
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
-.pi/agent/extensions/jira
-.pi/agent/extensions/jira/**
+.pi/agent/extensions/issue
+.pi/agent/extensions/issue/**
 {{- end }}
