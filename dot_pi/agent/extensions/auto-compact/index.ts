@@ -209,11 +209,17 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("session_start", resetAttemptState);
 	pi.on("session_shutdown", resetAttemptState);
 	pi.on("session_compact", (event) => {
-		compacting = false;
 		// Only consume the pending resume for compactions this extension
-		// triggered. willRetry means core overflow recovery already retries the
-		// aborted turn; injecting a follow-up as well would double-resume.
-		if (!event.fromExtension || event.willRetry) return;
+		// triggered. event.fromExtension does NOT mean "triggered via
+		// ctx.compact()" — pi sets it only when a session_before_compact
+		// handler supplied the compaction content, so it is false here (this
+		// extension uses pi's built-in summarizer). Gate on our own in-flight
+		// state instead. willRetry means core overflow recovery already
+		// retries the aborted turn; injecting a follow-up as well would
+		// double-resume.
+		const triggeredHere = compacting;
+		compacting = false;
+		if (!triggeredHere || event.willRetry) return;
 		const resume = pendingResume;
 		pendingResume = undefined;
 		if (resume) pi.sendUserMessage(resume, { deliverAs: "followUp" });
