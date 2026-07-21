@@ -228,6 +228,29 @@ export default function (pi: ExtensionAPI) {
 		return "";
 	}
 
+	/**
+	 * Complete a judge request against a model, routing extension-registered
+	 * custom-api providers (e.g. claude-bridge) through their own streamSimple.
+	 * Bare pi-ai complete() only knows pi-ai's api registry; custom providers
+	 * registered via pi.registerProvider live in pi's provider-composer layer,
+	 * so calling complete() on them throws "No API provider registered for
+	 * api: <api>". Mirrors provider-composer's dispatch:
+	 * extension.streamSimple wins when model.api === extension.api.
+	 */
+	async function completeViaProvider(
+		ctx: ExtensionContext,
+		model: any,
+		context: any,
+		options: any,
+	): Promise<any> {
+		const cfg: any = (ctx.modelRegistry as any).getRegisteredProviderConfig?.(model.provider);
+		if (cfg?.streamSimple && cfg.api === model.api) {
+			dbg(`judge via custom provider streamSimple: ${model.provider}/${model.id}`);
+			return await cfg.streamSimple(model, context, options).result();
+		}
+		return await complete(model, context, options);
+	}
+
 	async function judge(
 		ctx: ExtensionContext,
 		condition: string,
@@ -248,7 +271,8 @@ export default function (pi: ExtensionAPI) {
 			"satisfied, then call submit_verdict exactly once. Set met=true only if the transcript " +
 			`demonstrably satisfies the goal.\n\nGOAL:\n${condition}\n\nTRANSCRIPT:\n${transcript || "(no worker output captured)"}`;
 		try {
-			const res: any = await complete(
+			const res: any = await completeViaProvider(
+				ctx,
 				resolved.model,
 				{
 					messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
@@ -268,6 +292,7 @@ export default function (pi: ExtensionAPI) {
 				.join("");
 			return parseVerdict(text);
 		} catch (e: any) {
+			dbg(`judge error model=${resolved.model?.provider}/${resolved.model?.id}: ${e?.message ?? "unknown"}`);
 			return { met: false, reason: `evaluator error: ${e?.message ?? "unknown"}` };
 		}
 	}
