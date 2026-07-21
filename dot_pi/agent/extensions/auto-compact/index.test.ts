@@ -111,9 +111,12 @@ describe("auto-compact threshold", () => {
 		const ctx = {
 			hasUI: false,
 			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
+			// Mirror real pi: successful compaction fires onComplete and then the
+			// session_compact event; the extension resumes from the event handler.
 			compact: ({ onComplete }: { onComplete: () => void }) => {
 				compactCalls += 1;
 				onComplete();
+				handlers.get("session_compact")?.({ fromExtension: true, willRetry: false }, ctx);
 			},
 		};
 		handlers.get("turn_end")?.({}, ctx);
@@ -122,6 +125,67 @@ describe("auto-compact threshold", () => {
 		expect(compactCalls).toBe(1);
 		expect(commands).toContain("auto-compact");
 		expect(followUps).toEqual([{ text: DEFAULT_CONTINUATION, options: { deliverAs: "followUp" } }]);
+	});
+
+	test("does not resume when core overflow recovery already retries (willRetry)", () => {
+		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+		const followUps: string[] = [];
+		extension({
+			on: (name: string, handler: (event: unknown, ctx: any) => void) => handlers.set(name, handler),
+			registerCommand: () => {},
+			sendUserMessage: (text: string) => {
+				followUps.push(text);
+			},
+		} as any);
+
+		const ctx = {
+			hasUI: false,
+			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
+			compact: ({ onComplete }: { onComplete: () => void }) => {
+				onComplete();
+				handlers.get("session_compact")?.({ fromExtension: true, willRetry: true }, ctx);
+			},
+		};
+		handlers.get("turn_end")?.({}, ctx);
+		expect(followUps).toEqual([]);
+	});
+
+	test("does not consume the pending resume for compactions it did not trigger", () => {
+		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+		const followUps: string[] = [];
+		extension({
+			on: (name: string, handler: (event: unknown, ctx: any) => void) => handlers.set(name, handler),
+			registerCommand: () => {},
+			sendUserMessage: (text: string) => {
+				followUps.push(text);
+			},
+		} as any);
+
+		handlers.get("session_compact")?.({ fromExtension: false, willRetry: false }, { hasUI: false });
+		expect(followUps).toEqual([]);
+	});
+
+	test("survives a stale runtime when compact settles after session dispose", () => {
+		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+		extension({
+			on: (name: string, handler: (event: unknown, ctx: any) => void) => handlers.set(name, handler),
+			registerCommand: () => {},
+			// Mirror real pi: after dispose() the runtime is invalidated and every
+			// action method throws the stale-ctx error.
+			sendUserMessage: () => {
+				throw new Error("This extension ctx is stale after session replacement or reload.");
+			},
+		} as any);
+
+		const ctx = {
+			hasUI: false,
+			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
+			// dispose() -> abortCompaction() -> pending compact promise rejects.
+			compact: ({ onError }: { onError: (error: Error) => void }) => {
+				onError(new Error("Compaction aborted"));
+			},
+		};
+		expect(() => handlers.get("turn_end")?.({}, ctx)).not.toThrow();
 	});
 
 	test("does not resume after agent_end compaction", () => {
