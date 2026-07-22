@@ -16,14 +16,8 @@ import {
 	parseIssueDraft,
 	validateIssueBodyAgainstTemplate,
 } from "./creation.ts";
-import { effectiveEnabled, effectiveSummaryModel, saveRuntimeState } from "./state.ts";
-import {
-	buildSummaryPrompt,
-	extractTranscriptAfter,
-	fetchModelsCatalog,
-	lastEntryId,
-	runPiSummary,
-} from "./summary.ts";
+import { effectiveEnabled, saveRuntimeState } from "./state.ts";
+import { buildSummaryPrompt, extractTranscriptAfter, lastEntryId } from "./summary.ts";
 import { closeJiraClient, JiraProvider } from "./providers/jira.ts";
 import { GitHubProvider } from "./providers/github.ts";
 import type { Issue, IssueProvider } from "./providers/types.ts";
@@ -59,6 +53,68 @@ async function confirm(ctx: ExtensionCommandContext, message: string): Promise<b
 		return Boolean(await ctx.ui.confirm("Issue", message));
 	} catch {
 		return false;
+	}
+}
+
+type ModelRunResult = { ok: true; text: string } | { ok: false; error: string };
+
+/**
+ * Complete a prompt against the CURRENT session model, in-process. Routes
+ * extension-registered custom-api providers (e.g. the cursor / claude bridges)
+ * through their own streamSimple, since bare pi-ai complete() only knows pi-ai's
+ * api registry. This is why the summary/draft model must be the live session
+ * model and NOT a child `pi -p` (a child with extensions disabled can't resolve
+ * bridge-provided models like cursor/*).
+ */
+async function runModel(ctx: ExtensionCommandContext, prompt: string): Promise<ModelRunResult> {
+	const model = ctx.model as
+		| { provider: string; id: string; api: string }
+		| undefined;
+	if (!model) return { ok: false, error: "no active session model" };
+	let apiKey: string | undefined;
+	let headers: Record<string, string> | undefined;
+	try {
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model as never);
+		if (auth.ok) {
+			apiKey = auth.apiKey;
+			headers = auth.headers;
+		}
+	} catch {
+		/* proceed; bridge providers may authenticate internally */
+	}
+	const context = {
+		messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+	};
+	const options = { apiKey, headers, maxTokens: 4096, signal: ctx.signal };
+	try {
+		const cfg = (
+			ctx.modelRegistry as unknown as {
+				getRegisteredProviderConfig?: (p: string) => { streamSimple?: unknown; api?: string } | undefined;
+			}
+		).getRegisteredProviderConfig?.(model.provider);
+		let res: unknown;
+		if (cfg?.streamSimple && cfg.api === model.api) {
+			res = await (
+				cfg.streamSimple as (m: unknown, c: unknown, o: unknown) => { result: () => Promise<unknown> }
+			)(model, context, options).result();
+		} else {
+			// Dynamic import keeps @mariozechner/pi-ai (runtime-resolved by pi, not on
+			// disk) out of the offline test import graph.
+			const { complete } = (await import("@mariozechner/pi-ai")) as {
+				complete: (m: unknown, c: unknown, o: unknown) => Promise<unknown>;
+			};
+			res = await complete(model, context, options);
+		}
+		const content = (res as { content?: unknown[] })?.content ?? [];
+		const text = content
+			.filter((c: unknown) => (c as { type?: string })?.type === "text")
+			.map((c: unknown) => (c as { text?: string }).text ?? "")
+			.join("")
+			.trim();
+		if (!text) return { ok: false, error: "model returned no text" };
+		return { ok: true, text };
+	} catch (e: unknown) {
+		return { ok: false, error: e instanceof Error ? e.message : String(e) };
 	}
 }
 
@@ -121,7 +177,7 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.registerCommand("issue", {
 		description:
-			"Issue tracking helper (on|off|toggle|status|bind|clear|show|search|create|sync|transition|context|config)",
+			"Issue tracking helper (on|off|toggle|status|bind|clear|show|search|create|sync|transition|context)",
 		getArgumentCompletions: (prefix: string) =>
 			[
 				"on",
@@ -136,7 +192,6 @@ export default function (pi: ExtensionAPI): void {
 				"sync",
 				"transition",
 				"context",
-				"config",
 			]
 				.filter((v) => v.startsWith(prefix.toLowerCase()))
 				.map((v) => ({ value: v, label: v })),
@@ -159,7 +214,7 @@ export default function (pi: ExtensionAPI): void {
 			if (verb === "invalid") {
 				warn(
 					ctx,
-					"Usage: /issue on|off|toggle|status|bind|clear|show|search|create|sync|transition|context|config",
+					"Usage: /issue on|off|toggle|status|bind|clear|show|search|create|sync|transition|context",
 				);
 				return;
 			}
@@ -311,9 +366,8 @@ export default function (pi: ExtensionAPI): void {
 					warn(ctx, "Issue creation needs interactive UI to review the generated draft.");
 					return;
 				}
-				const model = effectiveSummaryModel(dir, cfg.behavior.summaryModel);
-				if (!model) {
-					warn(ctx, "No issue model configured. Run /issue config model first.");
+				if (!ctx.model) {
+					warn(ctx, "No active session model to draft with.");
 					return;
 				}
 
@@ -375,9 +429,9 @@ export default function (pi: ExtensionAPI): void {
 						return;
 					}
 
-					info(ctx, `Drafting ${name} issue with ${model}\u2026`);
-					const generated = await runPiSummary(
-						model,
+					info(ctx, `Drafting ${name} issue with ${ctx.model.provider}/${ctx.model.id}\u2026`);
+					const generated = await runModel(
+						ctx,
 						buildIssueCreationPrompt({ provider: name, template, transcript, userInput }),
 					);
 					if (!generated.ok) {
@@ -434,7 +488,6 @@ export default function (pi: ExtensionAPI): void {
 			// With args -> post the given text verbatim (original behavior).
 			if (verb === "sync") {
 				const checkpoint = rawRest.trim() === "";
-				let summaryModel: string | undefined;
 				if (checkpoint) {
 					// Fail closed: a checkpoint posts unvetted model output, so it
 					// REQUIRES both an interactive editor (review) AND confirm (final
@@ -452,12 +505,8 @@ export default function (pi: ExtensionAPI): void {
 						);
 						return;
 					}
-					summaryModel = effectiveSummaryModel(dir, cfg.behavior.summaryModel);
-					if (!summaryModel) {
-						warn(
-							ctx,
-							"No summary model configured. Run /issue config model, or pass a note: /issue sync <note>",
-						);
+					if (!ctx.model) {
+						warn(ctx, "No active session model to summarize with. Use /issue sync <note> instead.");
 						return;
 					}
 				}
@@ -485,8 +534,8 @@ export default function (pi: ExtensionAPI): void {
 					const entries = ctx.sessionManager.getEntries() as unknown[];
 					const anchorEntryId = lastEntryId(entries);
 					const transcript = extractTranscriptAfter(entries, sinceEntryId);
-					info(ctx, `Summarizing ${name} ${boundKey} with ${summaryModel}\u2026`);
-					const res = await runPiSummary(summaryModel!, buildSummaryPrompt(issue, transcript));
+					info(ctx, `Summarizing ${name} ${boundKey} with ${ctx.model?.provider}/${ctx.model?.id}\u2026`);
+					const res = await runModel(ctx, buildSummaryPrompt(issue, transcript));
 					if (!res.ok) {
 						warn(ctx, `Summary failed (${name}): ${sanitizeErrorMessage(res.error)}`);
 						return null;
@@ -669,38 +718,6 @@ export default function (pi: ExtensionAPI): void {
 				return;
 			}
 
-			// --- Config ---
-			// /issue config model -> pick the shared draft/checkpoint model, persist it.
-			if (verb === "config") {
-				if (rest.trim().toLowerCase() !== "model") {
-					warn(ctx, "Usage: /issue config model");
-					return;
-				}
-				if (!ctx.hasUI) {
-					warn(ctx, "config requires interactive UI");
-					return;
-				}
-				const catalog = await fetchModelsCatalog();
-				if (!catalog.ok) {
-					warn(ctx, `Cannot list models: ${sanitizeErrorMessage(catalog.error)}`);
-					return;
-				}
-				// Dynamic import keeps @mariozechner/pi-tui out of the offline test graph.
-				const { pickModel } = await import("./model-picker.ts");
-				const picked = await pickModel(ctx, catalog.catalog);
-				if (!picked) {
-					info(ctx, "Model selection cancelled");
-					return;
-				}
-				try {
-					saveRuntimeState(dir, { summaryModel: picked });
-				} catch (err) {
-					warn(ctx, `Could not save model: ${sanitizeErrorMessage(err)}`);
-					return;
-				}
-				info(ctx, `Issue model set: ${picked}`);
-				return;
-			}
 		},
 	});
 
@@ -769,20 +786,6 @@ export {
 	parseIssueDraft,
 	validateIssueBodyAgainstTemplate,
 } from "./creation.ts";
-export {
-	buildSummaryPrompt,
-	defaultAsyncSpawn,
-	extractTranscriptAfter,
-	fetchModelsCatalog,
-	filterCatalog,
-	lastEntryId,
-	parseListModelsOutput,
-	runPiSummary,
-} from "./summary.ts";
-export {
-	effectiveEnabled,
-	effectiveSummaryModel,
-	loadRuntimeState,
-	saveRuntimeState,
-} from "./state.ts";
+export { buildSummaryPrompt, extractTranscriptAfter, lastEntryId } from "./summary.ts";
+export { effectiveEnabled, loadRuntimeState, saveRuntimeState } from "./state.ts";
 export { setJiraClientForTests } from "./providers/jira.ts";

@@ -34,20 +34,19 @@ Chezmoi deploys this directory only when `.profile == axon-work-computer`
 | `/issue transition [name\|id]` | Transition bound Jira issue |
 | `/issue context` | Queue context inject for all bound issues |
 | `/issue context jira` | Queue context inject for Jira |
-| `/issue config model` | Pick the model used for issue drafts and checkpoint summaries → saved to `state.json` |
 
 ## Issue creation
 
 `/issue create` sends the current session transcript, the managed
-`issue-template.md`, and any command input to the configured model. The model
-generates both the title and a body containing **Summary**, **Context**, and
+`issue-template.md`, and any command input to the **current session model**. The
+model generates both the title and a concise body containing **Summary** and
 **Acceptance Criteria**. User input is optional and takes priority over older
 session context.
 
-Creation is fail-closed: it requires interactive UI, opens the generated title
-and body in an editor, and asks for final confirmation before calling Jira or
-GitHub. Cancelling, an invalid draft, a missing model, or an unavailable template
-creates nothing. Configure the model first with `/issue config model`.
+Creation is fail-closed: it requires interactive UI and an active session model,
+opens the generated title and body in an editor, and asks for final confirmation
+before calling Jira or GitHub. Cancelling, an invalid draft, no active model, or
+an unavailable template creates nothing.
 
 For unbound Jira creation, the first input token remains the project key, for
 example `/issue create jira PROJ focus on timeout handling`. When a Jira issue is
@@ -82,7 +81,7 @@ on both). Commands with an explicit provider target only that provider
 
 Running `/issue sync` with no note generates a **checkpoint comment**: it reads
 the bound issue's intent (title + description via `getIssue`) and the session
-transcript since the last checkpoint, then asks a configurable model to
+transcript since the last checkpoint, then asks the **current session model** to
 summarize progress against that intent.
 
 The span is anchored on a **session-entry cursor** (`ps.lastSyncEntryId`, the id
@@ -93,39 +92,31 @@ evidences progress: user + assistant text, assistant **tool calls**, and **tool
 results** (marked on error). Thinking blocks are excluded. There is no size
 bound — the whole span is sent.
 
-- **Model**: configured via `/issue config model` (persisted to `state.json`) or
-  a `summaryModel` default in `config.json`. If none is set, `sync` (no note)
-  warns and aborts.
-- **Isolation**: the summary runs in a child `pi -p -ne -np -ns -nc -nt
-  --no-session --model <id>` with the prompt piped on stdin. Extensions,
-  prompt-templates, skills, context-files, and tools are all disabled so the
-  child never re-loads this extension or recurses. The child is spawned
-  **asynchronously** with an abortable deadline (SIGTERM→SIGKILL), so the pi TUI
-  is never blocked while the summary is produced.
+- **Model**: the current session model (`ctx.model`) is used **in-process** via
+  the model registry — routing bridge/custom providers (cursor, claude-bridge,
+  …) through their own `streamSimple`. There is no child `pi` process and no
+  model to configure; if there is no active session model, `sync` (no note)
+  warns and aborts. (A child `pi -p` was rejected: with extensions disabled it
+  can't resolve bridge-provided models like `cursor/*`.)
 - **Approval (required, fail-closed)**: the generated summary opens in an
   editable multi-line editor; edit and submit (or cancel) before it is posted,
   then a final confirm gate. Checkpoint **requires interactive UI** — in a
   headless/no-UI run (`pi -p`) it warns and posts nothing, so unvetted model
   output can never auto-post. Use `/issue sync <note>` for a headless comment.
-- **Privacy**: the whole since-last-checkpoint transcript is sent to the
-  configured model, which may be a different provider than the session model.
-  Issue creation similarly sends the whole current session. Choose a model you
-  trust with session content.
+- **Privacy**: the whole since-last-checkpoint transcript is sent to the session
+  model's provider. Issue creation similarly sends the whole current session.
 - Passing a note (`/issue sync <note>`) posts it verbatim (whitespace preserved).
 
 ## Config + runtime state
 
 Layered, later wins: **defaults → `config.json` → `state.json`**.
 
-- `config.json` — chezmoi-managed defaults (`enabled`, `nudgeEveryNTurns`,
-  optional `summaryModel`, shared by drafts and checkpoints).
+- `config.json` — chezmoi-managed defaults (`enabled`, `nudgeEveryNTurns`).
 - `state.json` — a sidecar beside `config.json` that is **not** chezmoi-managed
-  and is created at runtime. Holds runtime overrides (`summaryModel` from
-  `/issue config model`, shared by drafts and checkpoints, and the
-  `on`/`off`/`toggle` state). It is never a
-  chezmoi source file and the deployed dir is not `exact_`, so `chezmoi apply`
-  never creates, tracks, or removes it — runtime edits survive `apply`. Mirrors
-  the ntfy / hindsight sidecar idiom.
+  and is created at runtime. Holds the runtime `on`/`off`/`toggle` state. It is
+  never a chezmoi source file and the deployed dir is not `exact_`, so
+  `chezmoi apply` never creates, tracks, or removes it — runtime edits survive
+  `apply`. Mirrors the ntfy / hindsight sidecar idiom.
 
 ## Nudges
 

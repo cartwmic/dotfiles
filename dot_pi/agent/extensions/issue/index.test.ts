@@ -11,15 +11,11 @@ import {
 	buildIssueCreationPrompt,
 	buildSummaryPrompt,
 	clearBind,
-	defaultAsyncSpawn,
 	createSessionState,
 	detectProviderFromKey,
 	effectiveEnabled,
-	effectiveSummaryModel,
 	extractTranscriptAfter,
 	lastEntryId,
-	fetchModelsCatalog,
-	filterCatalog,
 	formatIssueDraft,
 	formatNudgeMessage,
 	formatStatus,
@@ -29,8 +25,6 @@ import {
 	parseCommand,
 	parseGeneratedIssue,
 	parseIssueDraft,
-	parseListModelsOutput,
-	runPiSummary,
 	sanitizeErrorMessage,
 	saveRuntimeState,
 	setJiraClientForTests,
@@ -451,67 +445,6 @@ describe("mock Jira provider", () => {
 // Checkpoint-summary feature
 // ---------------------------------------------------------------------------
 
-describe("parseListModelsOutput", () => {
-	test("skips header, joins provider/id", () => {
-		const out = [
-			"provider  model         context",
-			"anthropic claude-opus-4 200K",
-			"openai    gpt-4o        128K",
-			"",
-		].join("\n");
-		expect(parseListModelsOutput(out)).toEqual([
-			"anthropic/claude-opus-4",
-			"openai/gpt-4o",
-		]);
-	});
-	test("empty -> []", () => {
-		expect(parseListModelsOutput("")).toEqual([]);
-	});
-});
-
-describe("filterCatalog", () => {
-	const cat = ["anthropic/claude-opus-4", "openai/gpt-4o", "anthropic/claude-haiku"];
-	test("substring, case-insensitive", () => {
-		expect(filterCatalog(cat, "CLAUDE")).toEqual([
-			"anthropic/claude-opus-4",
-			"anthropic/claude-haiku",
-		]);
-		expect(filterCatalog(cat, "gpt")).toEqual(["openai/gpt-4o"]);
-	});
-	test("empty filter returns all (copy)", () => {
-		const r = filterCatalog(cat, "  ");
-		expect(r).toEqual(cat);
-		expect(r).not.toBe(cat);
-	});
-});
-
-describe("fetchModelsCatalog (async)", () => {
-	const aspawn = (r: object) => async () => r as never;
-	test("ok path parses stdout", async () => {
-		const spawn = aspawn({ status: 0, stdout: "provider model\nanthropic claude-opus-4\n", stderr: "" });
-		expect(await fetchModelsCatalog(spawn as never)).toEqual({
-			ok: true,
-			catalog: ["anthropic/claude-opus-4"],
-		});
-	});
-	test("non-zero exit -> error", async () => {
-		const r = await fetchModelsCatalog(aspawn({ status: 2, stdout: "", stderr: "boom" }) as never);
-		expect(r.ok).toBe(false);
-		if (!r.ok) expect(r.error).toContain("boom");
-	});
-	test("empty catalog -> error", async () => {
-		const r = await fetchModelsCatalog(aspawn({ status: 0, stdout: "provider model\n", stderr: "" }) as never);
-		expect(r.ok).toBe(false);
-	});
-	test("spawn error -> error", async () => {
-		const r = await fetchModelsCatalog(
-			aspawn({ status: null, stdout: "", stderr: "", error: new Error("ENOENT") }) as never,
-		);
-		expect(r.ok).toBe(false);
-		if (!r.ok) expect(r.error).toContain("ENOENT");
-	});
-});
-
 describe("lastEntryId", () => {
 	test("returns id of last entry", () => {
 		expect(lastEntryId([{ id: "a" }, { id: "b" }])).toBe("b");
@@ -704,40 +637,6 @@ describe("buildSummaryPrompt", () => {
 	});
 });
 
-describe("runPiSummary (async)", () => {
-	test("pipes prompt on stdin, isolated flags, returns trimmed stdout", async () => {
-		let captured: { cmd: string; args: string[]; input?: string } | null = null;
-		const spawn = async (cmd: string, args: string[], opts: { input?: string }) => {
-			captured = { cmd, args, input: opts.input };
-			return { status: 0, stdout: "  summary text  \n", stderr: "" };
-		};
-		const r = await runPiSummary("anthropic/claude-opus-4", "PROMPT", spawn as never);
-		expect(r).toEqual({ ok: true, text: "summary text" });
-		expect(captured!.input).toBe("PROMPT");
-		expect(captured!.args).toContain("-p");
-		expect(captured!.args).toContain("-ne");
-		expect(captured!.args).toContain("--no-session");
-		expect(captured!.args).toContain("--model");
-		expect(captured!.args).toContain("anthropic/claude-opus-4");
-	});
-	test("non-zero exit -> error", async () => {
-		const spawn = async () => ({ status: 1, stdout: "", stderr: "404 model not found" });
-		const r = await runPiSummary("x/y", "P", spawn as never);
-		expect(r.ok).toBe(false);
-		if (!r.ok) expect(r.error).toContain("404");
-	});
-	test("empty stdout -> error", async () => {
-		const spawn = async () => ({ status: 0, stdout: "   ", stderr: "" });
-		expect((await runPiSummary("x/y", "P", spawn as never)).ok).toBe(false);
-	});
-	test("timeout/error surfaced", async () => {
-		const spawn = async () => ({ status: null, stdout: "", stderr: "", error: new Error("timed out after 180000ms") });
-		const r = await runPiSummary("x/y", "P", spawn as never);
-		expect(r.ok).toBe(false);
-		if (!r.ok) expect(r.error).toContain("timed out");
-	});
-});
-
 describe("runtime state sidecar", () => {
 	const mkDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "issue-state-"));
 
@@ -746,44 +645,22 @@ describe("runtime state sidecar", () => {
 		expect(loadRuntimeState(dir)).toEqual({});
 		expect(effectiveEnabled(dir, true)).toBe(true);
 		expect(effectiveEnabled(dir, false)).toBe(false);
-		expect(effectiveSummaryModel(dir, "cfg/model")).toBe("cfg/model");
-		expect(effectiveSummaryModel(dir, undefined)).toBeUndefined();
 	});
 	test("save merges + overrides config default", () => {
 		const dir = mkDir();
 		saveRuntimeState(dir, { enabled: false });
 		expect(effectiveEnabled(dir, true)).toBe(false);
-		saveRuntimeState(dir, { summaryModel: "anthropic/opus" });
-		// merge preserves enabled
-		expect(loadRuntimeState(dir)).toEqual({ enabled: false, summaryModel: "anthropic/opus" });
-		expect(effectiveSummaryModel(dir, "cfg/model")).toBe("anthropic/opus");
+		expect(loadRuntimeState(dir)).toEqual({ enabled: false });
 	});
 	test("invalid json -> empty", () => {
 		const dir = mkDir();
 		fs.writeFileSync(path.join(dir, "state.json"), "{ not json");
 		expect(loadRuntimeState(dir)).toEqual({});
 	});
-	test("ignores wrong types + trims model", () => {
+	test("ignores wrong types", () => {
 		const dir = mkDir();
-		fs.writeFileSync(
-			path.join(dir, "state.json"),
-			JSON.stringify({ enabled: "yes", summaryModel: "  a/b  " }),
-		);
-		expect(loadRuntimeState(dir)).toEqual({ summaryModel: "a/b" });
-	});
-});
-
-describe("parseCommand config verb", () => {
-	test("config model", () => {
-		expect(parseCommand("config model")).toEqual({
-			verb: "config",
-			provider: null,
-			rest: "model",
-			rawRest: "model",
-		});
-	});
-	test("bare config", () => {
-		expect(parseCommand("config")).toEqual({ verb: "config", provider: null, rest: "", rawRest: "" });
+		fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ enabled: "yes" }));
+		expect(loadRuntimeState(dir)).toEqual({});
 	});
 });
 
@@ -863,11 +740,12 @@ describe("create handler guards (fake ctx)", () => {
 		expect(getEntriesCalled).toBe(false);
 	});
 
-	test("creation without a configured model warns and aborts", async () => {
+	test("creation with no active session model warns and aborts", async () => {
 		const handler = registerAndGetHandler();
 		const notes: Array<{ msg: string; type: string }> = [];
 		const ctx = {
 			hasUI: true,
+			model: undefined,
 			ui: {
 				notify: (msg: string, type = "info") => notes.push({ msg, type }),
 				editor: async () => undefined,
@@ -876,7 +754,7 @@ describe("create handler guards (fake ctx)", () => {
 			sessionManager: { getEntries: () => [] },
 		};
 		await handler("create github add retries", ctx);
-		expect(notes.some((n) => n.type === "warning" && /issue model/i.test(n.msg))).toBe(true);
+		expect(notes.some((n) => n.type === "warning" && /session model/i.test(n.msg))).toBe(true);
 	});
 });
 
@@ -900,13 +778,13 @@ describe("sync handler guards (fake ctx)", () => {
 		expect(getEntriesCalled).toBe(false);
 	});
 
-	test("UI checkpoint without configured model warns and aborts", async () => {
+	test("UI checkpoint with no active session model warns and aborts", async () => {
 		const handler = registerAndGetHandler();
-		// hasUI + editor present, but no summary model configured in the install dir
-		// (source config.json has no summaryModel default; no state.json sidecar).
+		// hasUI + editor + confirm present, but no session model on ctx.
 		const notes: Array<{ msg: string; type: string }> = [];
 		const ctx = {
 			hasUI: true,
+			model: undefined,
 			ui: {
 				notify: (msg: string, type = "info") => notes.push({ msg, type }),
 				editor: async () => undefined,
@@ -915,7 +793,7 @@ describe("sync handler guards (fake ctx)", () => {
 			sessionManager: { getEntries: () => [] },
 		};
 		await handler("sync", ctx);
-		expect(notes.some((n) => n.type === "warning" && /summary model/i.test(n.msg))).toBe(true);
+		expect(notes.some((n) => n.type === "warning" && /session model/i.test(n.msg))).toBe(true);
 	});
 });
 
@@ -1001,28 +879,3 @@ describe("bindKey — R2 anchor reset on rebind", () => {
 	});
 });
 
-describe("defaultAsyncSpawn — real child lifecycle (offline)", () => {
-	test("pipes stdin to stdout and settles once", async () => {
-		const r = await defaultAsyncSpawn("sh", ["-c", "cat"], { timeoutMs: 5000, input: "héllo-🌍" });
-		expect(r.status).toBe(0);
-		expect(r.stdout).toBe("héllo-🌍"); // multibyte survives chunk boundaries
-		expect(r.error).toBeUndefined();
-	});
-	test("timeout kills the child and surfaces error", async () => {
-		const start = Date.now();
-		const r = await defaultAsyncSpawn("sh", ["-c", "sleep 5"], { timeoutMs: 100 });
-		expect(r.error).toBeTruthy();
-		expect(r.error?.message).toContain("timed out");
-		expect(Date.now() - start).toBeLessThan(4000); // did not wait the full sleep
-	});
-	test("nonexistent command surfaces error branch", async () => {
-		const r = await defaultAsyncSpawn("this-cmd-does-not-exist-xyz", [], { timeoutMs: 3000 });
-		expect(r.error).toBeTruthy();
-		expect(r.status).toBeNull();
-	});
-	test("nonzero exit status captured", async () => {
-		const r = await defaultAsyncSpawn("sh", ["-c", "echo oops >&2; exit 3"], { timeoutMs: 5000 });
-		expect(r.status).toBe(3);
-		expect(r.stderr).toContain("oops");
-	});
-});
