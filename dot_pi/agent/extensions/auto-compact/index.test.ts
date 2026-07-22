@@ -42,9 +42,18 @@ describe("auto-compact config", () => {
 
 	test("describes effective configuration", () => {
 		expect(describeConfig(DEFAULT_CONFIG)).toBe(
-			`auto-compaction ON; threshold 40%; check at turn_end + agent_end; continuation "${DEFAULT_CONTINUATION}"`,
+			`auto-compaction ON; threshold 40%; check at turn_end + agent_end; continuation "${DEFAULT_CONTINUATION}"; breaker 2`,
 		);
 		expect(describeConfig({ ...DEFAULT_CONFIG, continuation: false })).toContain("continuation OFF");
+	});
+
+	test("normalizes the circuit-breaker limit (default, floor, invalid)", () => {
+		expect(normalizeConfig(undefined).maxIneffectiveCompactions).toBe(2);
+		expect(normalizeConfig({ maxIneffectiveCompactions: 5 }).maxIneffectiveCompactions).toBe(5);
+		expect(normalizeConfig({ maxIneffectiveCompactions: 3.7 }).maxIneffectiveCompactions).toBe(3);
+		expect(normalizeConfig({ maxIneffectiveCompactions: 0 }).maxIneffectiveCompactions).toBe(2);
+		expect(normalizeConfig({ maxIneffectiveCompactions: -4 }).maxIneffectiveCompactions).toBe(2);
+		expect(normalizeConfig({ maxIneffectiveCompactions: "x" }).maxIneffectiveCompactions).toBe(2);
 	});
 
 	test("resumes only after mid-turn compaction when continuation is enabled", () => {
@@ -210,6 +219,74 @@ describe("auto-compact threshold", () => {
 		};
 		handlers.get("agent_end")?.({}, ctx);
 		expect(followUps).toEqual([]);
+	});
+
+	test("circuit breaker pauses auto-compaction after N ineffective (rising-token) compactions", () => {
+		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+		extension({
+			on: (name: string, handler: (event: unknown, ctx: any) => void) => handlers.set(name, handler),
+			registerCommand: () => {},
+			sendUserMessage: () => {},
+		} as any);
+
+		// Compaction never reduces context; tokens keep climbing above threshold,
+		// so each agent_end re-triggers (rising tokens defeat the same-count guard).
+		let tokens = 148_800;
+		let compactCalls = 0;
+		const ctx = {
+			hasUI: false,
+			getContextUsage: () => ({ tokens, contextWindow: 372_000 }),
+			compact: ({ onComplete }: { onComplete: () => void }) => {
+				compactCalls += 1;
+				onComplete();
+				handlers.get("session_compact")?.({ fromExtension: true, willRetry: false }, ctx);
+				tokens += 1_000; // ineffective: context grows, never drops below threshold
+			},
+		};
+
+		// Default breaker limit is 2: attempt #1 triggers, attempt #2 is the first
+		// re-trigger (count 1), attempt #3 would be count 2 -> breaker trips first.
+		for (let i = 0; i < 6; i++) handlers.get("agent_end")?.({}, ctx);
+		expect(compactCalls).toBe(2);
+
+		// session_start resets the breaker.
+		handlers.get("session_start")?.({}, ctx);
+		for (let i = 0; i < 6; i++) handlers.get("agent_end")?.({}, ctx);
+		expect(compactCalls).toBe(4);
+	});
+
+	test("tokens:null after compaction does not reset the breaker or re-trigger", () => {
+		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+		extension({
+			on: (name: string, handler: (event: unknown, ctx: any) => void) => handlers.set(name, handler),
+			registerCommand: () => {},
+			sendUserMessage: () => {},
+		} as any);
+
+		// After each compaction the reading is null (no post-compaction assistant
+		// usage yet); then a real rising reading arrives. null must neither trigger
+		// nor clear the breaker counter.
+		const readings: Array<{ tokens: number | null; contextWindow: number }> = [
+			{ tokens: 148_800, contextWindow: 372_000 }, // trigger #1
+			{ tokens: null, contextWindow: 372_000 }, // post-compaction, no-op
+			{ tokens: 150_000, contextWindow: 372_000 }, // re-trigger (count 1)
+			{ tokens: null, contextWindow: 372_000 }, // post-compaction, no-op
+			{ tokens: 151_000, contextWindow: 372_000 }, // re-trigger -> breaker trips (count 2)
+			{ tokens: 152_000, contextWindow: 372_000 }, // paused, no compaction
+		];
+		let idx = 0;
+		let compactCalls = 0;
+		const ctx = {
+			hasUI: false,
+			getContextUsage: () => readings[Math.min(idx, readings.length - 1)],
+			compact: ({ onComplete }: { onComplete: () => void }) => {
+				compactCalls += 1;
+				onComplete();
+				handlers.get("session_compact")?.({ fromExtension: true, willRetry: false }, ctx);
+			},
+		};
+		for (idx = 0; idx < readings.length; idx++) handlers.get("agent_end")?.({}, ctx);
+		expect(compactCalls).toBe(2);
 	});
 
 	test("resumes on compact error after mid-turn abort", () => {
