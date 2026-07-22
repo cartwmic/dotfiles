@@ -15,7 +15,6 @@ export type IssueVerb =
 	| "sync"
 	| "transition"
 	| "context"
-	| "config"
 	| "invalid";
 
 export type ProviderName = "jira" | "github";
@@ -42,7 +41,6 @@ const VERBS = new Set<string>([
 	"sync",
 	"transition",
 	"context",
-	"config",
 ]);
 
 const PROVIDERS = new Set<string>(["jira", "github"]);

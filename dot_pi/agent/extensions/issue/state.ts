@@ -17,8 +17,6 @@ const STATE_FILE = "state.json";
 export interface RuntimeState {
 	/** Runtime on/off override. Wins over config.json `enabled`. */
 	enabled?: boolean;
-	/** provider/id used for issue drafts and checkpoint summaries. */
-	summaryModel?: string;
 }
 
 /** Read + validate the sidecar. Missing/unreadable/invalid -> empty. Pure-ish. */
@@ -35,9 +33,6 @@ export function loadRuntimeState(dir: string): RuntimeState {
 	const p = parsed as Record<string, unknown>;
 	const out: RuntimeState = {};
 	if (typeof p.enabled === "boolean") out.enabled = p.enabled;
-	if (typeof p.summaryModel === "string" && p.summaryModel.trim()) {
-		out.summaryModel = p.summaryModel.trim();
-	}
 	return out;
 }
 
@@ -70,9 +65,4 @@ export function saveRuntimeState(dir: string, patch: RuntimeState): RuntimeState
 export function effectiveEnabled(dir: string, configDefault: boolean): boolean {
 	const s = loadRuntimeState(dir);
 	return typeof s.enabled === "boolean" ? s.enabled : configDefault;
-}
-
-/** Effective issue LLM model: sidecar wins over the config.json default. */
-export function effectiveSummaryModel(dir: string, configDefault?: string): string | undefined {
-	return loadRuntimeState(dir).summaryModel ?? configDefault;
 }
