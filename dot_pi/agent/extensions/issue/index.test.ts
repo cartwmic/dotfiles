@@ -35,12 +35,32 @@ import { parseGitHubIssueRef } from "./providers/github.ts";
 
 describe("parseCommand", () => {
 	test("empty → status", () => {
-		expect(parseCommand("")).toEqual({ verb: "status", provider: null, rest: "", rawRest: "" });
-		expect(parseCommand(undefined)).toEqual({ verb: "status", provider: null, rest: "", rawRest: "" });
+    expect(parseCommand("")).toEqual({
+      verb: "status",
+      provider: null,
+      rest: "",
+      rawRest: "",
+    });
+    expect(parseCommand(undefined)).toEqual({
+      verb: "status",
+      provider: null,
+      rest: "",
+      rawRest: "",
+    });
 	});
 	test("verb only", () => {
-		expect(parseCommand("bind")).toEqual({ verb: "bind", provider: null, rest: "", rawRest: "" });
-		expect(parseCommand("STATUS")).toEqual({ verb: "status", provider: null, rest: "", rawRest: "" });
+    expect(parseCommand("bind")).toEqual({
+      verb: "bind",
+      provider: null,
+      rest: "",
+      rawRest: "",
+    });
+    expect(parseCommand("STATUS")).toEqual({
+      verb: "status",
+      provider: null,
+      rest: "",
+      rawRest: "",
+    });
 	});
 	test("verb + provider + rest", () => {
 		expect(parseCommand("bind jira PROJ-1")).toEqual({
@@ -71,7 +91,12 @@ describe("parseCommand", () => {
 		});
 	});
 	test("invalid verb", () => {
-		expect(parseCommand("nope")).toEqual({ verb: "invalid", provider: null, rest: "nope", rawRest: "nope" });
+    expect(parseCommand("nope")).toEqual({
+      verb: "invalid",
+      provider: null,
+      rest: "nope",
+      rawRest: "nope",
+    });
 	});
 });
 
@@ -96,7 +121,10 @@ describe("parseGitHubIssueRef", () => {
 		expect(parseGitHubIssueRef("123")).toEqual({ number: 123 });
 	});
 	test("full ref", () => {
-		expect(parseGitHubIssueRef("owner/repo#42")).toEqual({ repo: "owner/repo", number: 42 });
+    expect(parseGitHubIssueRef("owner/repo#42")).toEqual({
+      repo: "owner/repo",
+      number: 42,
+    });
 	});
 	test("invalid", () => {
 		expect(parseGitHubIssueRef("random")).toBeNull();
@@ -183,7 +211,9 @@ describe("formatNudgeMessage", () => {
 describe("sanitizeErrorMessage", () => {
 	test("redacts secrets", () => {
 		const out = sanitizeErrorMessage(
-			new Error('Authorization: Bearer abc.def refresh_token=sekrit access_token:"tok"'),
+      new Error(
+        'Authorization: Bearer abc.def refresh_token=sekrit access_token:"tok"',
+      ),
 		);
 		expect(out).not.toContain("sekrit");
 		expect(out).not.toContain("abc.def");
@@ -245,7 +275,9 @@ describe("mock Jira provider", () => {
 			async callTool(name, args = {}) {
 				calls.push({ name, args });
 				return {
-					content: [{ type: "text", text: JSON.stringify({ ok: true, name, args }) }],
+          content: [
+            { type: "text", text: JSON.stringify({ ok: true, name, args }) },
+          ],
 				};
 			},
 			async close() {},
@@ -322,7 +354,9 @@ describe("mock Jira provider", () => {
 				mcpTransport: { command: "npx", args: ["test"] },
 				mcpConfigError: null,
 			});
-			await expect(p.createIssue({ title: "Test" })).rejects.toThrow("project key is required");
+      await expect(p.createIssue({ title: "Test" })).rejects.toThrow(
+        "project key is required",
+      );
 		} finally {
 			setJiraClientForTests(null);
 		}
@@ -357,7 +391,9 @@ describe("mock Jira provider", () => {
 			async callTool(name, args = {}) {
 				calls.push({ name, args });
 				return {
-					content: [{ type: "text", text: JSON.stringify({ issues: [], total: 0 }) }],
+          content: [
+            { type: "text", text: JSON.stringify({ issues: [], total: 0 }) },
+          ],
 				};
 			},
 			async close() {},
@@ -369,10 +405,20 @@ describe("mock Jira provider", () => {
 			});
 			await p.searchIssues("project = ABC");
 			expect(calls[0].args.jql).toBe("project = ABC");
-			await p.searchIssues("summary ~ \"login\"");
-			expect(calls[1].args.jql).toBe("summary ~ \"login\"");
+      await p.searchIssues('summary ~ "login"');
+      expect(calls[1].args.jql).toBe('summary ~ "login"');
 			await p.searchIssues("status != Done");
 			expect(calls[2].args.jql).toBe("status != Done");
+      await p.searchIssues("status IN (Open, Reopened)");
+      expect(calls[3].args.jql).toBe("status IN (Open, Reopened)");
+      await p.searchIssues("jql: status WAS Done ORDER BY updated DESC");
+      expect(calls[4].args.jql).toBe("status WAS Done ORDER BY updated DESC");
+      await p.searchIssues("project=ABC");
+      expect(calls[5].args.jql).toBe("project=ABC");
+      await p.searchIssues("research and development or design");
+      expect(calls[6].args.jql).toContain(
+        'summary ~ "research and development or design"',
+      );
 		} finally {
 			setJiraClientForTests(null);
 		}
@@ -383,11 +429,16 @@ describe("mock Jira provider", () => {
 		setJiraClientForTests({
 			async callTool() {
 				return {
-					content: [{ type: "text", text: JSON.stringify({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
 						key: "PROJ-1",
 						self: "https://jira.example.com/rest/api/2/issue/12345",
-						fields: { summary: "Test", status: { name: "Open" } }
-					}) }],
+                fields: { summary: "Test", status: { name: "Open" } },
+              }),
+            },
+          ],
 				};
 			},
 			async close() {},
@@ -409,7 +460,10 @@ describe("mock Jira provider", () => {
 		setJiraClientForTests({
 			async callTool() {
 				return {
-					content: [{ type: "text", text: JSON.stringify({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
 						key: "PROJ-1",
 						self: "",
 						fields: {
@@ -418,12 +472,81 @@ describe("mock Jira provider", () => {
 							description: {
 								type: "doc",
 								content: [
-									{ type: "paragraph", content: [{ type: "text", text: "Hello " }] },
-									{ type: "paragraph", content: [{ type: "text", text: "world" }] }
-								]
-							}
+                      {
+                        type: "paragraph",
+                        content: [{ type: "text", text: "Hello " }],
+                      },
+                      {
+                        type: "paragraph",
+                        content: [{ type: "text", text: "world" }],
+                      },
+                    ],
+                  },
+                },
+              }),
+            },
+          ],
+        };
+      },
+      async close() {},
+    });
+    try {
+      const p = new JiraProvider({
+        mcpTransport: { command: "npx", args: ["test"] },
+        mcpConfigError: null,
+      });
+      const issue = await p.getIssue("PROJ-1");
+      expect(issue.body).toBe("Hello\n\nworld");
+    } finally {
+      setJiraClientForTests(null);
 						}
-					}) }],
+  });
+
+  test("getIssue preserves ADF list structure", async () => {
+    const { JiraProvider } = await import("./providers/jira.ts");
+    setJiraClientForTests({
+      async callTool() {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                key: "PROJ-1",
+                fields: {
+                  summary: "Test",
+                  status: { name: "Open" },
+                  description: {
+                    type: "doc",
+                    content: [
+                      {
+                        type: "bulletList",
+                        content: [
+                          {
+                            type: "listItem",
+                            content: [
+                              {
+                                type: "paragraph",
+                                content: [{ type: "text", text: "First" }],
+                              },
+                            ],
+                          },
+                          {
+                            type: "listItem",
+                            content: [
+                              {
+                                type: "paragraph",
+                                content: [{ type: "text", text: "Second" }],
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                },
+              }),
+            },
+          ],
 				};
 			},
 			async close() {},
@@ -434,7 +557,7 @@ describe("mock Jira provider", () => {
 				mcpConfigError: null,
 			});
 			const issue = await p.getIssue("PROJ-1");
-			expect(issue.body).toBe("Hello world");
+      expect(issue.body).toBe("- First\n- Second");
 		} finally {
 			setJiraClientForTests(null);
 		}
@@ -464,7 +587,9 @@ describe("extractTranscriptAfter", () => {
 	});
 	test("collects user+assistant text in order (afterId null)", () => {
 		const entries = [mk("1", "user", "do X"), mk("2", "assistant", "did X")];
-		expect(extractTranscriptAfter(entries, null)).toBe("USER: do X\n\nASSISTANT: did X");
+    expect(extractTranscriptAfter(entries, null)).toBe(
+      "USER: do X\n\nASSISTANT: did X",
+    );
 	});
 	test("slices strictly AFTER the cursor id", () => {
 		const entries = [mk("1", "assistant", "old"), mk("2", "assistant", "new")];
@@ -473,20 +598,45 @@ describe("extractTranscriptAfter", () => {
 	});
 	test("unknown cursor id -> fail open (include all, never skip)", () => {
 		const entries = [mk("1", "assistant", "a"), mk("2", "assistant", "b")];
-		expect(extractTranscriptAfter(entries, "gone")).toBe("ASSISTANT: a\n\nASSISTANT: b");
+    expect(extractTranscriptAfter(entries, "gone")).toBe(
+      "ASSISTANT: a\n\nASSISTANT: b",
+    );
 	});
 	test("no equal-timestamp double count (position-based)", () => {
 		// two entries with the SAME wall-clock but distinct ids
 		const entries = [
-			{ type: "message", id: "1", timestamp: "2026-07-22T10:00:00Z", message: { role: "assistant", content: [{ type: "text", text: "first" }] } },
-			{ type: "message", id: "2", timestamp: "2026-07-22T10:00:00Z", message: { role: "assistant", content: [{ type: "text", text: "second" }] } },
+      {
+        type: "message",
+        id: "1",
+        timestamp: "2026-07-22T10:00:00Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "first" }],
+        },
+      },
+      {
+        type: "message",
+        id: "2",
+        timestamp: "2026-07-22T10:00:00Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "second" }],
+        },
+      },
 		];
 		expect(extractTranscriptAfter(entries, "1")).toBe("ASSISTANT: second");
 	});
 	test("skips non-message + thinking, keeps text", () => {
 		const entries = [
 			{ type: "model_change", id: "m" },
-			{ type: "message", id: "th", message: { role: "assistant", content: [{ type: "thinking", text: "secret reasoning" }] } },
+      {
+        type: "message",
+        id: "th",
+        message: {
+          role: "assistant",
+          content: [{ type: "thinking", text: "secret reasoning" }],
+        },
+      },
 			mk("k", "assistant", "kept"),
 		];
 		const out = extractTranscriptAfter(entries, null);
@@ -495,7 +645,11 @@ describe("extractTranscriptAfter", () => {
 	});
 	test("includes tool calls and tool results in order", () => {
 		const entries = [
-			{ type: "message", id: "1", message: { role: "user", content: "add a test" } },
+      {
+        type: "message",
+        id: "1",
+        message: { role: "user", content: "add a test" },
+      },
 			{
 				type: "message",
 				id: "2",
@@ -535,8 +689,12 @@ describe("extractTranscriptAfter", () => {
 		expect(out).toContain("TOOL RESULT edit: 1 file changed");
 		expect(out).toContain("TOOL RESULT bash (error): exit 1");
 		// order preserved
-		expect(out.indexOf("USER:")).toBeLessThan(out.indexOf("ASSISTANT: editing"));
-		expect(out.indexOf("tool call: edit")).toBeLessThan(out.indexOf("TOOL RESULT edit"));
+    expect(out.indexOf("USER:")).toBeLessThan(
+      out.indexOf("ASSISTANT: editing"),
+    );
+    expect(out.indexOf("tool call: edit")).toBeLessThan(
+      out.indexOf("TOOL RESULT edit"),
+    );
 	});
 	test("interleaves text and tool calls in encountered order within one message", () => {
 		const entries = [
@@ -560,9 +718,20 @@ describe("extractTranscriptAfter", () => {
 	});
 	test("tool result with no text notes the run", () => {
 		const entries = [
-			{ type: "message", id: "1", message: { role: "toolResult", toolName: "read", isError: false, content: [{ type: "image", data: "x" }] } },
+      {
+        type: "message",
+        id: "1",
+        message: {
+          role: "toolResult",
+          toolName: "read",
+          isError: false,
+          content: [{ type: "image", data: "x" }],
+        },
+      },
 		];
-		expect(extractTranscriptAfter(entries, null)).toBe("TOOL RESULT read: (no text output)");
+    expect(extractTranscriptAfter(entries, null)).toBe(
+      "TOOL RESULT read: (no text output)",
+    );
 	});
 	test("non-array -> empty", () => {
 		expect(extractTranscriptAfter(undefined as never, null)).toBe("");
@@ -580,20 +749,36 @@ describe("issue creation draft", () => {
 		expect(prompt).toContain("## Acceptance Criteria");
 		expect(prompt).toContain("USER: add retries");
 		expect(prompt).toContain("Focus on timeout handling");
-		expect(prompt).toContain("untrusted content");
+    expect(prompt).toContain("TRUSTED drafting");
+    expect(prompt).toContain("UNTRUSTED evidence");
+    expect(prompt).toContain("<trusted_managed_template>");
 		expect(prompt).toContain("valid JSON");
 	});
 
 	test("parses strict or fenced model JSON", () => {
-		const expected = { title: "Add retries", body: "## Summary\nRetry requests." };
+    const expected = {
+      title: "Add retries",
+      body: "## Summary\nRetry requests.",
+    };
 		expect(parseGeneratedIssue(JSON.stringify(expected))).toEqual(expected);
-		expect(parseGeneratedIssue(`\`\`\`json\n${JSON.stringify(expected)}\n\`\`\``)).toEqual(expected);
+    expect(
+      parseGeneratedIssue(`\`\`\`json\n${JSON.stringify(expected)}\n\`\`\``),
+    ).toEqual(expected);
 	});
 
 	test("rejects malformed or incomplete model output", () => {
 		expect(() => parseGeneratedIssue("not json")).toThrow("valid issue JSON");
-		expect(() => parseGeneratedIssue('{"title":"","body":"x"}')).toThrow("title is empty");
-		expect(() => parseGeneratedIssue('{"title":"x","body":""}')).toThrow("body is empty");
+    expect(() => parseGeneratedIssue('{"title":"","body":"x"}')).toThrow(
+      "title is empty",
+    );
+    expect(() => parseGeneratedIssue('{"title":"x","body":""}')).toThrow(
+      "body is empty",
+    );
+    expect(() =>
+      parseGeneratedIssue(
+        JSON.stringify({ title: "x".repeat(121), body: "Body" }),
+      ),
+    ).toThrow("120 characters");
 	});
 
 	test("editable draft round-trips title and body", () => {
@@ -605,30 +790,50 @@ describe("issue creation draft", () => {
 		expect(() => parseIssueDraft("# Add retries")).toThrow("body is empty");
 	});
 
-	test("requires all managed template headings", () => {
+  test("enforces the complete managed template contract", () => {
 		const template = "## Summary\n<!-- help -->\n\n## Acceptance Criteria";
+    const valid =
+      "## Summary\nDetails\n\n## Acceptance Criteria\n- [ ] Works\n- [ ] Tested";
+    expect(() =>
+      validateIssueBodyAgainstTemplate(valid, template),
+    ).not.toThrow();
 		expect(() =>
 			validateIssueBodyAgainstTemplate(
-				"## Summary\nDetails\n\n## Acceptance Criteria\n- [ ] Works",
+        "## Acceptance Criteria\n- [ ] Works\n- [ ] Tested\n\n## Summary\nDetails",
 				template,
 			),
-		).not.toThrow();
-		expect(() => validateIssueBodyAgainstTemplate("## Summary\nDetails", template)).toThrow(
-			"## Acceptance Criteria",
-		);
+    ).toThrow("template order");
+    expect(() =>
+      validateIssueBodyAgainstTemplate(`${valid}\n\n## Extra\nNope`, template),
+    ).toThrow("template order");
+    expect(() =>
+      validateIssueBodyAgainstTemplate(`${valid}\n<!-- leftover -->`, template),
+    ).toThrow("comments");
+    expect(() =>
+      validateIssueBodyAgainstTemplate(
+        "## Summary\nDetails\n\n## Acceptance Criteria\n- [ ] Only one",
+        template,
+      ),
+    ).toThrow("2–6");
 	});
 });
 
 describe("buildSummaryPrompt", () => {
 	test("includes intent + transcript", () => {
 		const p = buildSummaryPrompt(
-			{ displayKey: "PROJ-1", title: "Add sync", body: "Users want checkpoints" },
+      {
+        displayKey: "PROJ-1",
+        title: "Add sync",
+        body: "Users want checkpoints",
+      },
 			"ASSISTANT: built it",
 		);
 		expect(p).toContain("[PROJ-1] Add sync");
 		expect(p).toContain("Users want checkpoints");
 		expect(p).toContain("ASSISTANT: built it");
 		expect(p).toContain("do NOT invent");
+    expect(p).toContain("UNTRUSTED");
+    expect(p).toContain("<untrusted_issue_intent>");
 	});
 	test("handles missing body + empty transcript", () => {
 		const p = buildSummaryPrompt({ displayKey: "PROJ-2", title: "T" }, "");
@@ -659,7 +864,10 @@ describe("runtime state sidecar", () => {
 	});
 	test("ignores wrong types", () => {
 		const dir = mkDir();
-		fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ enabled: "yes" }));
+    fs.writeFileSync(
+      path.join(dir, "state.json"),
+      JSON.stringify({ enabled: "yes" }),
+    );
 		expect(loadRuntimeState(dir)).toEqual({});
 	});
 });
@@ -667,17 +875,33 @@ describe("runtime state sidecar", () => {
 describe("extractTranscriptAfter — fidelity", () => {
 	test("normalizes bare string user content", () => {
 		const entries = [
-			{ type: "message", id: "1", message: { role: "user", content: "plain string prompt" } },
+      {
+        type: "message",
+        id: "1",
+        message: { role: "user", content: "plain string prompt" },
+      },
 		];
-		expect(extractTranscriptAfter(entries, null)).toBe("USER: plain string prompt");
+    expect(extractTranscriptAfter(entries, null)).toBe(
+      "USER: plain string prompt",
+    );
 	});
 	test("missing-timestamp entries are NOT dropped (position-based, not time-based)", () => {
 		// Every one of these lacks a timestamp; position anchoring keeps them all.
 		const entries = [
-			{ type: "message", id: "1", message: { role: "assistant", content: [{ type: "text", text: "a" }] } },
-			{ type: "message", id: "2", message: { role: "assistant", content: [{ type: "text", text: "b" }] } },
+      {
+        type: "message",
+        id: "1",
+        message: { role: "assistant", content: [{ type: "text", text: "a" }] },
+      },
+      {
+        type: "message",
+        id: "2",
+        message: { role: "assistant", content: [{ type: "text", text: "b" }] },
+      },
 		];
-		expect(extractTranscriptAfter(entries, null)).toBe("ASSISTANT: a\n\nASSISTANT: b");
+    expect(extractTranscriptAfter(entries, null)).toBe(
+      "ASSISTANT: a\n\nASSISTANT: b",
+    );
 		expect(extractTranscriptAfter(entries, "1")).toBe("ASSISTANT: b");
 	});
 });
@@ -708,19 +932,121 @@ describe("parseCommand — rawRest verbatim fidelity", () => {
 import installIssue from "./index.ts";
 
 type IssueCmd = { handler: (args: string, ctx: unknown) => Promise<void> };
+type EventHandler = (...args: unknown[]) => unknown;
 
-function registerAndGetHandler(): (args: string, ctx: unknown) => Promise<void> {
+function registerAndGetHandler(
+  events?: Map<string, EventHandler>,
+): (args: string, ctx: unknown) => Promise<void> {
 	let cmd: IssueCmd | undefined;
 	const pi = {
 		registerCommand: (_name: string, def: IssueCmd) => {
 			cmd = def;
 		},
-		on: () => {},
+    on: (name: string, handler: EventHandler) => events?.set(name, handler),
 	} as never;
 	(installIssue as (p: never) => void)(pi);
 	if (!cmd) throw new Error("command not registered");
 	return cmd.handler;
 }
+
+describe("binding race guards (fake ctx)", () => {
+  test("transition never follows a concurrent rebind", async () => {
+    let startList!: () => void;
+    let resolveList!: (value: unknown) => void;
+    const listStarted = new Promise<void>((resolve) => (startList = resolve));
+    const listResult = new Promise<unknown>(
+      (resolve) => (resolveList = resolve),
+    );
+    const transitionCalls: Array<Record<string, unknown>> = [];
+    setJiraClientForTests({
+      async callTool(name, args = {}) {
+        if (name === "get_jira_transitions") {
+          startList();
+          return await listResult;
+        }
+        if (name === "transition_jira_issue") transitionCalls.push(args);
+        return { content: [{ type: "text", text: JSON.stringify({}) }] };
+      },
+      async close() {},
+    });
+    try {
+      const handler = registerAndGetHandler();
+      const notes: string[] = [];
+      const ctx = {
+        hasUI: true,
+        ui: {
+          notify: (msg: string) => notes.push(msg),
+          confirm: async () => true,
+        },
+      };
+      await handler("bind jira PROJ-1", ctx);
+      const pending = handler("transition jira Done", ctx);
+      await listStarted;
+      await handler("bind jira PROJ-2", ctx);
+      resolveList({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ transitions: [{ id: "21", name: "Done" }] }),
+          },
+        ],
+      });
+      await pending;
+      expect(transitionCalls).toHaveLength(0);
+      expect(notes.some((msg) => /binding changed/i.test(msg))).toBe(true);
+    } finally {
+      setJiraClientForTests(null);
+    }
+  });
+
+  test("context never queues an issue fetched before a concurrent rebind", async () => {
+    let startGet!: () => void;
+    let resolveGet!: (value: unknown) => void;
+    const getStarted = new Promise<void>((resolve) => (startGet = resolve));
+    const getResult = new Promise<unknown>((resolve) => (resolveGet = resolve));
+    setJiraClientForTests({
+      async callTool(name) {
+        if (name === "get_jira_issue") {
+          startGet();
+          return await getResult;
+        }
+        return { content: [{ type: "text", text: JSON.stringify({}) }] };
+      },
+      async close() {},
+    });
+    try {
+      const events = new Map<string, EventHandler>();
+      const handler = registerAndGetHandler(events);
+      const notes: string[] = [];
+      const ctx = {
+        hasUI: true,
+        ui: { notify: (msg: string) => notes.push(msg) },
+      };
+      await handler("bind jira PROJ-1", ctx);
+      const pending = handler("context jira", ctx);
+      await getStarted;
+      await handler("bind jira PROJ-2", ctx);
+      resolveGet({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              key: "PROJ-1",
+              fields: { summary: "Old issue", status: { name: "Open" } },
+            }),
+          },
+        ],
+      });
+      await pending;
+      expect(notes.some((msg) => /binding changed/i.test(msg))).toBe(true);
+      const beforeAgentStart = events.get("before_agent_start");
+      expect(beforeAgentStart).toBeDefined();
+      expect(await beforeAgentStart!()).toBeUndefined();
+    } finally {
+      setJiraClientForTests(null);
+    }
+  });
+});
 
 describe("create handler guards (fake ctx)", () => {
 	test("headless creation fails closed before reading the transcript", async () => {
@@ -754,7 +1080,9 @@ describe("create handler guards (fake ctx)", () => {
 			sessionManager: { getEntries: () => [] },
 		};
 		await handler("create github add retries", ctx);
-		expect(notes.some((n) => n.type === "warning" && /session model/i.test(n.msg))).toBe(true);
+    expect(
+      notes.some((n) => n.type === "warning" && /session model/i.test(n.msg)),
+    ).toBe(true);
 	});
 });
 
@@ -793,7 +1121,9 @@ describe("sync handler guards (fake ctx)", () => {
 			sessionManager: { getEntries: () => [] },
 		};
 		await handler("sync", ctx);
-		expect(notes.some((n) => n.type === "warning" && /session model/i.test(n.msg))).toBe(true);
+    expect(
+      notes.some((n) => n.type === "warning" && /session model/i.test(n.msg)),
+    ).toBe(true);
 	});
 });
 
@@ -808,7 +1138,10 @@ describe("sanitizeErrorMessage — R2 credential forms", () => {
 		["Authorization = Basic c2VjcmV0", /c2VjcmV0/],
 		["Authorization: Bearer xyz", /Bearer xyz/],
 		// structured Authorization value must not leak ANY component (R3 bypass)
-		['Authorization: Digest username="alice", response="sekrit"', /alice|sekrit/],
+    [
+      'Authorization: Digest username="alice", response="sekrit"',
+      /alice|sekrit/,
+    ],
 		["access_token=deadbeef", /deadbeef/],
 		['"refresh_token": "r0tten"', /r0tten/],
 		// quoted value with internal comma must be redacted whole (R3 bypass)
@@ -825,7 +1158,9 @@ describe("sanitizeErrorMessage — R2 credential forms", () => {
 		});
 	}
 	test("keeps benign text", () => {
-		expect(sanitizeErrorMessage(new Error("model not found: x/y"))).toContain("model not found");
+    expect(sanitizeErrorMessage(new Error("model not found: x/y"))).toContain(
+      "model not found",
+    );
 	});
 });
 
@@ -878,4 +1213,3 @@ describe("bindKey — R2 anchor reset on rebind", () => {
 		expect(ps.lastSyncEntryId).toBeNull(); // reset survived
 	});
 });
-
