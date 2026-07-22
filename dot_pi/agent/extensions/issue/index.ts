@@ -8,6 +8,14 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { loadConfig } from "./config.ts";
+import { effectiveEnabled, effectiveSummaryModel, saveRuntimeState } from "./state.ts";
+import {
+	buildSummaryPrompt,
+	extractTranscriptAfter,
+	fetchModelsCatalog,
+	lastEntryId,
+	runPiSummary,
+} from "./summary.ts";
 import { closeJiraClient, JiraProvider } from "./providers/jira.ts";
 import { GitHubProvider } from "./providers/github.ts";
 import type { Issue, IssueProvider } from "./providers/types.ts";
@@ -22,7 +30,6 @@ import {
 	parseCommand,
 	sanitizeErrorMessage,
 	shouldNudge,
-	type ProviderBindState,
 	type SessionState,
 } from "./helpers.ts";
 
@@ -72,7 +79,11 @@ function buildContextPayload(issue: Issue): string {
 export default function (pi: ExtensionAPI): void {
 	const dir = extensionDir();
 	const cfg = loadConfig(dir);
-	const state = createSessionState(cfg.behavior.enabled, cfg.behavior.nudgeEveryNTurns);
+	// Effective on/off: sidecar state.json (runtime, non-chezmoi) wins over config.json.
+	const state = createSessionState(
+		effectiveEnabled(dir, cfg.behavior.enabled),
+		cfg.behavior.nudgeEveryNTurns,
+	);
 
 	// Provider registry
 	const providers = new Map<string, IssueProvider>();
@@ -102,7 +113,7 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.registerCommand("issue", {
 		description:
-			"Issue tracking helper (on|off|toggle|status|bind|clear|show|search|create|sync|transition|context)",
+			"Issue tracking helper (on|off|toggle|status|bind|clear|show|search|create|sync|transition|context|config)",
 		getArgumentCompletions: (prefix: string) =>
 			[
 				"on",
@@ -117,34 +128,45 @@ export default function (pi: ExtensionAPI): void {
 				"sync",
 				"transition",
 				"context",
+				"config",
 			]
 				.filter((v) => v.startsWith(prefix.toLowerCase()))
 				.map((v) => ({ value: v, label: v })),
 		handler: async (args, ctx) => {
-			const { verb, provider: explicitProvider, rest } = parseCommand(args);
+			const { verb, provider: explicitProvider, rest, rawRest } = parseCommand(args);
+
+			// Persist the on/off state to state.json, then update memory only on
+			// success so memory and disk never diverge. Returns false on I/O failure.
+			const persistEnabled = (value: boolean): boolean => {
+				try {
+					saveRuntimeState(dir, { enabled: value });
+					state.enabled = value;
+					return true;
+				} catch (err) {
+					warn(ctx, `Could not persist toggle: ${sanitizeErrorMessage(err)}`);
+					return false;
+				}
+			};
 
 			if (verb === "invalid") {
 				warn(
 					ctx,
-					"Usage: /issue on|off|toggle|status|bind|clear|show|search|create|sync|transition|context",
+					"Usage: /issue on|off|toggle|status|bind|clear|show|search|create|sync|transition|context|config",
 				);
 				return;
 			}
 
 			// --- Global toggles ---
 			if (verb === "on") {
-				state.enabled = true;
-				info(ctx, "Issue helper ON");
+				if (persistEnabled(true)) info(ctx, "Issue helper ON");
 				return;
 			}
 			if (verb === "off") {
-				state.enabled = false;
-				info(ctx, "Issue helper OFF (nudges disabled; commands still work)");
+				if (persistEnabled(false)) info(ctx, "Issue helper OFF (nudges disabled; commands still work)");
 				return;
 			}
 			if (verb === "toggle") {
-				state.enabled = !state.enabled;
-				info(ctx, `Issue helper ${state.enabled ? "ON" : "OFF"}`);
+				if (persistEnabled(!state.enabled)) info(ctx, `Issue helper ${state.enabled ? "ON" : "OFF"}`);
 				return;
 			}
 
@@ -321,33 +343,145 @@ export default function (pi: ExtensionAPI): void {
 			}
 
 			// --- Sync ---
+			// No args -> auto-summarize session progress since last checkpoint.
+			// With args -> post the given text verbatim (original behavior).
 			if (verb === "sync") {
-				const note = rest || "Sync from pi session";
+				const checkpoint = rawRest.trim() === "";
+				let summaryModel: string | undefined;
+				if (checkpoint) {
+					// Fail closed: a checkpoint posts unvetted model output, so it
+					// REQUIRES both an interactive editor (review) AND confirm (final
+					// gate) before posting. Never auto-post in headless/no-UI mode, and
+					// never fall through to the auto-true confirm (Decision 7 +
+					// no-auto-mutate).
+					if (
+						!ctx.hasUI ||
+						typeof ctx.ui.editor !== "function" ||
+						typeof ctx.ui.confirm !== "function"
+					) {
+						warn(
+							ctx,
+							"Checkpoint summary needs interactive UI to review before posting. Use /issue sync <note> for a headless comment.",
+						);
+						return;
+					}
+					summaryModel = effectiveSummaryModel(dir, cfg.behavior.summaryModel);
+					if (!summaryModel) {
+						warn(
+							ctx,
+							"No summary model configured. Run /issue config model, or pass a note: /issue sync <note>",
+						);
+						return;
+					}
+				}
+
+				// Resolve the comment body + the anchor to advance to on success. null
+				// => skip/cancel. The checkpoint anchor is the moment the transcript is
+				// snapshotted (NOT post-completion time), so entries appended during the
+				// multi-minute summary/editor/confirm window are covered by the NEXT
+				// checkpoint instead of being skipped (Decision 2, no lost entries).
+				// The bound key + entry cursor are captured BEFORE any await and used
+				// throughout, so a concurrent /issue bind|clear during an in-flight
+				// (async, multi-minute) checkpoint can't cause issue A's summary to be
+				// posted to issue B, and can't move the anchor backward.
+				const resolveBody = async (
+					name: string,
+					boundKey: string,
+					sinceEntryId: string | null,
+				): Promise<{ body: string; anchorEntryId: string | null } | null> => {
+					if (!checkpoint) {
+						const anchorEntryId = lastEntryId(ctx.sessionManager.getEntries() as unknown[]);
+						return { body: rawRest, anchorEntryId };
+					}
+					const issue = await withProvider(ctx, name, (p) => p.getIssue(boundKey));
+					if (!issue) return null;
+					const entries = ctx.sessionManager.getEntries() as unknown[];
+					const anchorEntryId = lastEntryId(entries);
+					const transcript = extractTranscriptAfter(entries, sinceEntryId);
+					info(ctx, `Summarizing ${name} ${boundKey} with ${summaryModel}\u2026`);
+					const res = await runPiSummary(summaryModel!, buildSummaryPrompt(issue, transcript));
+					if (!res.ok) {
+						warn(ctx, `Summary failed (${name}): ${sanitizeErrorMessage(res.error)}`);
+						return null;
+					}
+					// Editor guaranteed present (fail-closed guard above). Wrap so an
+					// editor rejection fails closed (no post) rather than throwing.
+					let edited: string | undefined;
+					try {
+						edited = await ctx.ui.editor(
+							`Checkpoint comment for ${name} ${boundKey} (edit, then submit)`,
+							res.text,
+						);
+					} catch {
+						return null;
+					}
+					if (edited === undefined) return null; // cancelled
+					const body = edited.trim();
+					return body ? { body, anchorEntryId } : null;
+				};
+
 				const doSync = async (name: string) => {
 					const ps = getProviderState(state, name);
-					if (!ps.boundKey) return false;
-					const ok = await withProvider(ctx, name, async (p) => {
-						if (!(await confirm(ctx, `Comment on ${name} ${ps.boundKey}: "${note}"?`)))
-							return false;
-						await p.addComment(ps.boundKey!, note);
-						return true;
-					});
-					if (ok) {
-						ps.lastSyncAt = Date.now();
-						ps.pendingContextInject = false;
-						info(ctx, `Synced to ${name}: ${ps.boundKey}`);
+					const boundKey = ps.boundKey;
+					if (!boundKey) return false;
+					// Refuse overlapping syncs for the same provider (avoids double-post
+					// and cursor races between two concurrent /issue sync invocations).
+					if (ps.syncing) {
+						warn(ctx, `Sync already in progress for ${name}`);
+						return false;
 					}
-					return ok;
+					// Capture the binding generation + cursor before any await; a
+					// concurrent bind/clear (even to the same key) bumps the generation
+					// and invalidates this in-flight checkpoint.
+					const gen = ps.bindGeneration;
+					const sinceEntryId = ps.lastSyncEntryId;
+					ps.syncing = true;
+					try {
+						const resolved = await resolveBody(name, boundKey, sinceEntryId);
+						if (resolved == null) return false;
+						if (ps.bindGeneration !== gen) {
+							warn(ctx, `Skipped ${name}: binding changed during sync`);
+							return false;
+						}
+						const { body, anchorEntryId } = resolved;
+						const preview = body.length > 120 ? `${body.slice(0, 117)}...` : body;
+						const ok = await withProvider(ctx, name, async (p) => {
+							if (!(await confirm(ctx, `Comment on ${name} ${boundKey}: "${preview}"?`)))
+								return false;
+							if (ps.bindGeneration !== gen) {
+								warn(ctx, `Skipped ${name}: binding changed during sync`);
+								return false; // re-check post-confirm
+							}
+							await p.addComment(boundKey, body);
+							return true;
+						});
+						// Advance the cursor ONLY if the binding is still the one we posted
+						// to. A rebind during the addComment round-trip resets the cursor;
+						// the comment still posted to the correct captured boundKey, but we
+						// must not stamp the now-foreign binding with this issue's cursor.
+						if (ok && ps.bindGeneration === gen) {
+							ps.lastSyncAt = Date.now();
+							ps.lastSyncEntryId = anchorEntryId;
+							ps.pendingContextInject = false;
+							info(ctx, `Synced to ${name}: ${boundKey}`);
+						}
+						return ok;
+					} finally {
+						ps.syncing = false;
+					}
 				};
 
 				if (explicitProvider) {
 					await doSync(explicitProvider);
 				} else {
-					let any = false;
-					for (const name of providerNames) {
-						if (await doSync(name)) any = true;
+					// Warn about unbound only when NOTHING is bound — not when syncs were
+					// cancelled/declined/failed (those already surface their own message).
+					const bound = providerNames.filter((n) => getProviderState(state, n).boundKey);
+					if (bound.length === 0) {
+						warn(ctx, "No issues bound. /issue bind <key>");
+					} else {
+						for (const name of bound) await doSync(name);
 					}
-					if (!any) warn(ctx, "No issues bound. /issue bind <key>");
 				}
 				return;
 			}
@@ -447,6 +581,39 @@ export default function (pi: ExtensionAPI): void {
 				}
 				return;
 			}
+
+			// --- Config ---
+			// /issue config model -> pick the summary model, persist to state.json.
+			if (verb === "config") {
+				if (rest.trim().toLowerCase() !== "model") {
+					warn(ctx, "Usage: /issue config model");
+					return;
+				}
+				if (!ctx.hasUI) {
+					warn(ctx, "config requires interactive UI");
+					return;
+				}
+				const catalog = await fetchModelsCatalog();
+				if (!catalog.ok) {
+					warn(ctx, `Cannot list models: ${sanitizeErrorMessage(catalog.error)}`);
+					return;
+				}
+				// Dynamic import keeps @mariozechner/pi-tui out of the offline test graph.
+				const { pickModel } = await import("./model-picker.ts");
+				const picked = await pickModel(ctx, catalog.catalog);
+				if (!picked) {
+					info(ctx, "Model selection cancelled");
+					return;
+				}
+				try {
+					saveRuntimeState(dir, { summaryModel: picked });
+				} catch (err) {
+					warn(ctx, `Could not save model: ${sanitizeErrorMessage(err)}`);
+					return;
+				}
+				info(ctx, `Summary model set: ${picked}`);
+				return;
+			}
 		},
 	});
 
@@ -507,4 +674,20 @@ export {
 	shouldNudge,
 } from "./helpers.ts";
 export { loadConfig } from "./config.ts";
+export {
+	buildSummaryPrompt,
+	defaultAsyncSpawn,
+	extractTranscriptAfter,
+	fetchModelsCatalog,
+	filterCatalog,
+	lastEntryId,
+	parseListModelsOutput,
+	runPiSummary,
+} from "./summary.ts";
+export {
+	effectiveEnabled,
+	effectiveSummaryModel,
+	loadRuntimeState,
+	saveRuntimeState,
+} from "./state.ts";
 export { setJiraClientForTests } from "./providers/jira.ts";

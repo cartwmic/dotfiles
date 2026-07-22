@@ -27,12 +27,14 @@ Chezmoi deploys this directory only when `.profile == axon-work-computer`
 | `/issue create [summary]` | Create issue (prompts if multi-provider) |
 | `/issue create jira [summary]` | Create Jira issue (project from bound key, or specify `PROJ` prefix) |
 | `/issue create github [summary]` | Create GitHub issue (current repo) |
-| `/issue sync [note]` | Comment on all bound issues |
-| `/issue sync jira [note]` | Comment on bound Jira issue |
-| `/issue sync github [note]` | Comment on bound GitHub issue |
+| `/issue sync` | **Checkpoint**: auto-summarize session progress since last sync → comment on all bound issues |
+| `/issue sync <note>` | Comment `<note>` verbatim on all bound issues |
+| `/issue sync jira [note]` | Sync bound Jira issue (checkpoint if no note) |
+| `/issue sync github [note]` | Sync bound GitHub issue (checkpoint if no note) |
 | `/issue transition [name\|id]` | Transition bound Jira issue |
 | `/issue context` | Queue context inject for all bound issues |
 | `/issue context jira` | Queue context inject for Jira |
+| `/issue config model` | Pick the summary model (filterable picker) → saved to `state.json` |
 
 ## Providers
 
@@ -58,6 +60,53 @@ You can bind to one Jira issue and one GitHub issue simultaneously. Commands
 without an explicit provider target all bound issues (e.g., `/issue sync` comments
 on both). Commands with an explicit provider target only that provider
 (e.g., `/issue sync jira note`).
+
+## Checkpoint summaries (`/issue sync` with no note)
+
+Running `/issue sync` with no note generates a **checkpoint comment**: it reads
+the bound issue's intent (title + description via `getIssue`) and the session
+transcript since the last checkpoint, then asks a configurable model to
+summarize progress against that intent.
+
+The span is anchored on a **session-entry cursor** (`ps.lastSyncEntryId`, the id
+of the last entry the previous checkpoint covered) rather than a wall-clock
+timestamp — this avoids equal-millisecond double-counting, clock-skew skips, and
+missing-timestamp drops. The transcript includes everything in context that
+evidences progress: user + assistant text, assistant **tool calls**, and **tool
+results** (marked on error). Thinking blocks are excluded. There is no size
+bound — the whole span is sent.
+
+- **Model**: configured via `/issue config model` (persisted to `state.json`) or
+  a `summaryModel` default in `config.json`. If none is set, `sync` (no note)
+  warns and aborts.
+- **Isolation**: the summary runs in a child `pi -p -ne -np -ns -nc -nt
+  --no-session --model <id>` with the prompt piped on stdin. Extensions,
+  prompt-templates, skills, context-files, and tools are all disabled so the
+  child never re-loads this extension or recurses. The child is spawned
+  **asynchronously** with an abortable deadline (SIGTERM→SIGKILL), so the pi TUI
+  is never blocked while the summary is produced.
+- **Approval (required, fail-closed)**: the generated summary opens in an
+  editable multi-line editor; edit and submit (or cancel) before it is posted,
+  then a final confirm gate. Checkpoint **requires interactive UI** — in a
+  headless/no-UI run (`pi -p`) it warns and posts nothing, so unvetted model
+  output can never auto-post. Use `/issue sync <note>` for a headless comment.
+- **Privacy**: the whole since-last-checkpoint transcript is sent to the
+  configured summary model, which may be a different provider than the session
+  model. Choose a `summaryModel` you trust with session content.
+- Passing a note (`/issue sync <note>`) posts it verbatim (whitespace preserved).
+
+## Config + runtime state
+
+Layered, later wins: **defaults → `config.json` → `state.json`**.
+
+- `config.json` — chezmoi-managed defaults (`enabled`, `nudgeEveryNTurns`,
+  optional `summaryModel`).
+- `state.json` — a sidecar beside `config.json` that is **not** chezmoi-managed
+  and is created at runtime. Holds runtime overrides (`summaryModel` from
+  `/issue config model`, and the `on`/`off`/`toggle` state). It is never a
+  chezmoi source file and the deployed dir is not `exact_`, so `chezmoi apply`
+  never creates, tracks, or removes it — runtime edits survive `apply`. Mirrors
+  the ntfy / hindsight sidecar idiom.
 
 ## Nudges
 

@@ -9,6 +9,8 @@ import type { JiraConfig, JiraMcpTransportConfig } from "./providers/jira.ts";
 export interface IssueBehaviorConfig {
 	enabled: boolean;
 	nudgeEveryNTurns: number;
+	/** Default provider/id for `/issue sync` checkpoint summaries. Overridden by state.json. */
+	summaryModel?: string;
 }
 
 export interface IssueExtensionConfig {
@@ -19,6 +21,7 @@ export interface IssueExtensionConfig {
 type RawBehaviorConfig = {
 	enabled?: boolean;
 	nudgeEveryNTurns?: number;
+	summaryModel?: unknown;
 };
 
 type PiMcpConfig = {
@@ -53,6 +56,10 @@ function loadBehaviorConfig(dir: string): IssueBehaviorConfig {
 			typeof raw.nudgeEveryNTurns === "number" && raw.nudgeEveryNTurns >= 0
 				? Math.floor(raw.nudgeEveryNTurns)
 				: 5,
+		summaryModel:
+			typeof raw.summaryModel === "string" && raw.summaryModel.trim()
+				? raw.summaryModel.trim()
+				: undefined,
 	};
 }
 
