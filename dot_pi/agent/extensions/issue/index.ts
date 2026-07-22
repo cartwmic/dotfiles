@@ -6,7 +6,10 @@
  */
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+} from "@mariozechner/pi-coding-agent";
 import { loadConfig } from "./config.ts";
 import {
 	buildIssueCreationPrompt,
@@ -17,7 +20,11 @@ import {
 	validateIssueBodyAgainstTemplate,
 } from "./creation.ts";
 import { effectiveEnabled, saveRuntimeState } from "./state.ts";
-import { buildSummaryPrompt, extractTranscriptAfter, lastEntryId } from "./summary.ts";
+import {
+  buildSummaryPrompt,
+  extractTranscriptAfter,
+  lastEntryId,
+} from "./summary.ts";
 import { closeJiraClient, JiraProvider } from "./providers/jira.ts";
 import { GitHubProvider } from "./providers/github.ts";
 import type { Issue, IssueProvider } from "./providers/types.ts";
@@ -47,7 +54,10 @@ function info(ctx: ExtensionCommandContext, msg: string): void {
 	if (ctx.hasUI) ctx.ui.notify(msg, "info");
 }
 
-async function confirm(ctx: ExtensionCommandContext, message: string): Promise<boolean> {
+async function confirm(
+  ctx: ExtensionCommandContext,
+  message: string,
+): Promise<boolean> {
 	if (!ctx.hasUI || typeof ctx.ui.confirm !== "function") return true;
 	try {
 		return Boolean(await ctx.ui.confirm("Issue", message));
@@ -66,7 +76,10 @@ type ModelRunResult = { ok: true; text: string } | { ok: false; error: string };
  * model and NOT a child `pi -p` (a child with extensions disabled can't resolve
  * bridge-provided models like cursor/*).
  */
-async function runModel(ctx: ExtensionCommandContext, prompt: string): Promise<ModelRunResult> {
+async function runModel(
+  ctx: ExtensionCommandContext,
+  prompt: string,
+): Promise<ModelRunResult> {
 	const model = ctx.model as
 		| { provider: string; id: string; api: string }
 		| undefined;
@@ -83,19 +96,31 @@ async function runModel(ctx: ExtensionCommandContext, prompt: string): Promise<M
 		/* proceed; bridge providers may authenticate internally */
 	}
 	const context = {
-		messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: prompt }],
+        timestamp: Date.now(),
+      },
+    ],
 	};
 	const options = { apiKey, headers, maxTokens: 4096, signal: ctx.signal };
 	try {
 		const cfg = (
 			ctx.modelRegistry as unknown as {
-				getRegisteredProviderConfig?: (p: string) => { streamSimple?: unknown; api?: string } | undefined;
+        getRegisteredProviderConfig?: (
+          p: string,
+        ) => { streamSimple?: unknown; api?: string } | undefined;
 			}
 		).getRegisteredProviderConfig?.(model.provider);
 		let res: unknown;
 		if (cfg?.streamSimple && cfg.api === model.api) {
 			res = await (
-				cfg.streamSimple as (m: unknown, c: unknown, o: unknown) => { result: () => Promise<unknown> }
+        cfg.streamSimple as (
+          m: unknown,
+          c: unknown,
+          o: unknown,
+        ) => { result: () => Promise<unknown> }
 			)(model, context, options).result();
 		} else {
 			// Dynamic import keeps @mariozechner/pi-ai (runtime-resolved by pi, not on
@@ -133,7 +158,9 @@ function buildContextPayload(issue: Issue): string {
 		`  <status>${escapeXml(issue.status)}</status>`,
 		`  <url>${escapeXml(issue.url)}</url>`,
 		`  <title>${escapeXml(issue.title)}</title>`,
-		issue.body ? `  <body>${escapeXml(issue.body.slice(0, 4000))}</body>` : null,
+    issue.body
+      ? `  <body>${escapeXml(issue.body.slice(0, 4000))}</body>`
+      : null,
 		`</issue_context>`,
 	]
 		.filter(Boolean)
@@ -196,7 +223,12 @@ export default function (pi: ExtensionAPI): void {
 				.filter((v) => v.startsWith(prefix.toLowerCase()))
 				.map((v) => ({ value: v, label: v })),
 		handler: async (args, ctx) => {
-			const { verb, provider: explicitProvider, rest, rawRest } = parseCommand(args);
+      const {
+        verb,
+        provider: explicitProvider,
+        rest,
+        rawRest,
+      } = parseCommand(args);
 
 			// Persist the on/off state to state.json, then update memory only on
 			// success so memory and disk never diverge. Returns false on I/O failure.
@@ -225,11 +257,13 @@ export default function (pi: ExtensionAPI): void {
 				return;
 			}
 			if (verb === "off") {
-				if (persistEnabled(false)) info(ctx, "Issue helper OFF (nudges disabled; commands still work)");
+        if (persistEnabled(false))
+          info(ctx, "Issue helper OFF (nudges disabled; commands still work)");
 				return;
 			}
 			if (verb === "toggle") {
-				if (persistEnabled(!state.enabled)) info(ctx, `Issue helper ${state.enabled ? "ON" : "OFF"}`);
+        if (persistEnabled(!state.enabled))
+          info(ctx, `Issue helper ${state.enabled ? "ON" : "OFF"}`);
 				return;
 			}
 
@@ -280,7 +314,8 @@ export default function (pi: ExtensionAPI): void {
 					clearBind(getProviderState(state, explicitProvider));
 					info(ctx, `Cleared ${explicitProvider} bind`);
 				} else {
-					for (const name of providerNames) clearBind(getProviderState(state, name));
+          for (const name of providerNames)
+            clearBind(getProviderState(state, name));
 					info(ctx, "Cleared all binds");
 				}
 				return;
@@ -298,15 +333,23 @@ export default function (pi: ExtensionAPI): void {
 						p.getIssue(ps.boundKey!),
 					);
 					if (issue) {
-						info(ctx, `${issue.displayKey}: ${issue.title} [${issue.status}] ${issue.url}`);
+            info(
+              ctx,
+              `${issue.displayKey}: ${issue.title} [${issue.status}] ${issue.url}`,
+            );
 					}
 				} else {
 					for (const name of providerNames) {
 						const ps = getProviderState(state, name);
 						if (!ps.boundKey) continue;
-						const issue = await withProvider(ctx, name, (p) => p.getIssue(ps.boundKey!));
+            const issue = await withProvider(ctx, name, (p) =>
+              p.getIssue(ps.boundKey!),
+            );
 						if (issue) {
-							info(ctx, `${issue.displayKey}: ${issue.title} [${issue.status}] ${issue.url}`);
+              info(
+                ctx,
+                `${issue.displayKey}: ${issue.title} [${issue.status}] ${issue.url}`,
+              );
 						}
 					}
 				}
@@ -320,7 +363,9 @@ export default function (pi: ExtensionAPI): void {
 					return;
 				}
 				const searchOne = async (name: string) => {
-					const result = await withProvider(ctx, name, (p) => p.searchIssues(rest));
+          const result = await withProvider(ctx, name, (p) =>
+            p.searchIssues(rest),
+          );
 					if (!result) return;
 					const lines = result.issues.map(
 						(i, idx) => `${idx + 1}. ${i.displayKey}: ${i.title} [${i.status}]`,
@@ -334,8 +379,12 @@ export default function (pi: ExtensionAPI): void {
 						ctx.hasUI &&
 						typeof ctx.ui.select === "function"
 					) {
-						const labels = result.issues.map((i) => `${i.displayKey}: ${i.title}`);
-						const pick = (await ctx.ui.select("Bind issue?", labels)) as string | undefined;
+            const labels = result.issues.map(
+              (i) => `${i.displayKey}: ${i.title}`,
+            );
+            const pick = (await ctx.ui.select("Bind issue?", labels)) as
+              | string
+              | undefined;
 						if (pick) {
 							const idx = labels.indexOf(pick);
 							if (idx >= 0) {
@@ -363,7 +412,10 @@ export default function (pi: ExtensionAPI): void {
 					typeof ctx.ui.editor !== "function" ||
 					typeof ctx.ui.confirm !== "function"
 				) {
-					warn(ctx, "Issue creation needs interactive UI to review the generated draft.");
+          warn(
+            ctx,
+            "Issue creation needs interactive UI to review the generated draft.",
+          );
 					return;
 				}
 				if (!ctx.model) {
@@ -382,14 +434,22 @@ export default function (pi: ExtensionAPI): void {
 				let target = explicitProvider;
 				if (!target && providerNames.length === 1) {
 					target = providerNames[0];
-				} else if (!target && providerNames.length > 1 && typeof ctx.ui.select === "function") {
-					target = (await ctx.ui.select("Create issue with which provider?", providerNames)) as
-						| string
-						| undefined;
+        } else if (
+          !target &&
+          providerNames.length > 1 &&
+          typeof ctx.ui.select === "function"
+        ) {
+          target = (await ctx.ui.select(
+            "Create issue with which provider?",
+            providerNames,
+          )) as string | undefined;
 					if (!target) return;
 				}
 				if (!target) {
-					warn(ctx, "No issue provider available. Specify jira or github after /issue create.");
+          warn(
+            ctx,
+            "No issue provider available. Specify jira or github after /issue create.",
+          );
 					return;
 				}
 				if (!providers.has(target)) {
@@ -425,17 +485,31 @@ export default function (pi: ExtensionAPI): void {
 						null,
 					);
 					if (!userInput && !transcript) {
-						warn(ctx, "Nothing to draft from. Add input after /issue create or start from a session.");
+            warn(
+              ctx,
+              "Nothing to draft from. Add input after /issue create or start from a session.",
+            );
 						return;
 					}
 
-					info(ctx, `Drafting ${name} issue with ${ctx.model.provider}/${ctx.model.id}\u2026`);
+          info(
+            ctx,
+            `Drafting ${name} issue with ${ctx.model.provider}/${ctx.model.id}\u2026`,
+          );
 					const generated = await runModel(
 						ctx,
-						buildIssueCreationPrompt({ provider: name, template, transcript, userInput }),
+            buildIssueCreationPrompt({
+              provider: name,
+              template,
+              transcript,
+              userInput,
+            }),
 					);
 					if (!generated.ok) {
-						warn(ctx, `Issue draft failed: ${sanitizeErrorMessage(generated.error)}`);
+            warn(
+              ctx,
+              `Issue draft failed: ${sanitizeErrorMessage(generated.error)}`,
+            );
 						return;
 					}
 
@@ -466,12 +540,22 @@ export default function (pi: ExtensionAPI): void {
 						return;
 					}
 
-					const location = name === "jira" && extra.project ? ` in ${extra.project}` : "";
+          const location =
+            name === "jira" && extra.project ? ` in ${extra.project}` : "";
 					const issue = await withProvider(ctx, name, async (p) => {
-						if (!(await confirm(ctx, `Create ${name} issue${location}: "${draft.title}"?`))) {
+            if (
+              !(await confirm(
+                ctx,
+                `Create ${name} issue${location}: "${draft.title}"?`,
+              ))
+            ) {
 							return null;
 						}
-						return await p.createIssue({ title: draft.title, body: draft.body, ...extra });
+            return await p.createIssue({
+              title: draft.title,
+              body: draft.body,
+              ...extra,
+            });
 					});
 					if (issue) {
 						bindKey(getProviderState(state, name), issue.key);
@@ -506,7 +590,10 @@ export default function (pi: ExtensionAPI): void {
 						return;
 					}
 					if (!ctx.model) {
-						warn(ctx, "No active session model to summarize with. Use /issue sync <note> instead.");
+            warn(
+              ctx,
+              "No active session model to summarize with. Use /issue sync <note> instead.",
+            );
 						return;
 					}
 				}
@@ -526,18 +613,31 @@ export default function (pi: ExtensionAPI): void {
 					sinceEntryId: string | null,
 				): Promise<{ body: string; anchorEntryId: string | null } | null> => {
 					if (!checkpoint) {
-						const anchorEntryId = lastEntryId(ctx.sessionManager.getEntries() as unknown[]);
+            const anchorEntryId = lastEntryId(
+              ctx.sessionManager.getEntries() as unknown[],
+            );
 						return { body: rawRest, anchorEntryId };
 					}
-					const issue = await withProvider(ctx, name, (p) => p.getIssue(boundKey));
+          const issue = await withProvider(ctx, name, (p) =>
+            p.getIssue(boundKey),
+          );
 					if (!issue) return null;
 					const entries = ctx.sessionManager.getEntries() as unknown[];
 					const anchorEntryId = lastEntryId(entries);
 					const transcript = extractTranscriptAfter(entries, sinceEntryId);
-					info(ctx, `Summarizing ${name} ${boundKey} with ${ctx.model?.provider}/${ctx.model?.id}\u2026`);
-					const res = await runModel(ctx, buildSummaryPrompt(issue, transcript));
+          info(
+            ctx,
+            `Summarizing ${name} ${boundKey} with ${ctx.model?.provider}/${ctx.model?.id}\u2026`,
+          );
+          const res = await runModel(
+            ctx,
+            buildSummaryPrompt(issue, transcript),
+          );
 					if (!res.ok) {
-						warn(ctx, `Summary failed (${name}): ${sanitizeErrorMessage(res.error)}`);
+            warn(
+              ctx,
+              `Summary failed (${name}): ${sanitizeErrorMessage(res.error)}`,
+            );
 						return null;
 					}
 					// Editor guaranteed present (fail-closed guard above). Wrap so an
@@ -580,9 +680,15 @@ export default function (pi: ExtensionAPI): void {
 							return false;
 						}
 						const { body, anchorEntryId } = resolved;
-						const preview = body.length > 120 ? `${body.slice(0, 117)}...` : body;
+            const preview =
+              body.length > 120 ? `${body.slice(0, 117)}...` : body;
 						const ok = await withProvider(ctx, name, async (p) => {
-							if (!(await confirm(ctx, `Comment on ${name} ${boundKey}: "${preview}"?`)))
+              if (
+                !(await confirm(
+                  ctx,
+                  `Comment on ${name} ${boundKey}: "${preview}"?`,
+                ))
+              )
 								return false;
 							if (ps.bindGeneration !== gen) {
 								warn(ctx, `Skipped ${name}: binding changed during sync`);
@@ -612,7 +718,9 @@ export default function (pi: ExtensionAPI): void {
 				} else {
 					// Warn about unbound only when NOTHING is bound — not when syncs were
 					// cancelled/declined/failed (those already surface their own message).
-					const bound = providerNames.filter((n) => getProviderState(state, n).boundKey);
+          const bound = providerNames.filter(
+            (n) => getProviderState(state, n).boundKey,
+          );
 					if (bound.length === 0) {
 						warn(ctx, "No issues bound. /issue bind <key>");
 					} else {
@@ -641,10 +749,21 @@ export default function (pi: ExtensionAPI): void {
 					warn(ctx, "No Jira issue bound. /issue bind jira <key>");
 					return;
 				}
+        const boundKey = ps.boundKey;
+        const bindGeneration = ps.bindGeneration;
+        const bindingChanged = () =>
+          ps.bindGeneration !== bindGeneration || ps.boundKey !== boundKey;
 				const transitions = await withProvider(ctx, "jira", (p) =>
-					p.listTransitions!(ps.boundKey!),
+          p.listTransitions!(boundKey),
 				);
 				if (!transitions) return;
+        if (bindingChanged()) {
+          warn(
+            ctx,
+            "Skipped Jira transition: binding changed while loading transitions",
+          );
+          return;
+        }
 				if (transitions.length === 0) {
 					info(ctx, "No transitions available");
 					return;
@@ -653,7 +772,9 @@ export default function (pi: ExtensionAPI): void {
 				let pick = rest || undefined;
 				if (!pick && ctx.hasUI && typeof ctx.ui.select === "function") {
 					const labels = transitions.map((t) => `${t.name} (${t.id})`);
-					pick = (await ctx.ui.select("Transition?", labels)) as string | undefined;
+          pick = (await ctx.ui.select("Transition?", labels)) as
+            | string
+            | undefined;
 				}
 				if (!pick && transitions.length === 1) pick = transitions[0].name;
 				if (!pick) {
@@ -669,7 +790,9 @@ export default function (pi: ExtensionAPI): void {
 							t.name.toLowerCase() === pick!.toLowerCase() ||
 							`${t.name} (${t.id})` === pick,
 					) ??
-					transitions.find((t) => pick!.toLowerCase().includes(t.name.toLowerCase()));
+          transitions.find((t) =>
+            pick!.toLowerCase().includes(t.name.toLowerCase()),
+          );
 				if (!match) {
 					warn(
 						ctx,
@@ -678,22 +801,50 @@ export default function (pi: ExtensionAPI): void {
 					return;
 				}
 
+        if (bindingChanged()) {
+          warn(
+            ctx,
+            "Skipped Jira transition: binding changed during selection",
+          );
+          return;
+        }
 				const ok = await withProvider(ctx, "jira", async (p) => {
-					if (!(await confirm(ctx, `Transition ${ps.boundKey} → ${match.name}?`)))
+          if (!(await confirm(ctx, `Transition ${boundKey} → ${match.name}?`)))
+            return false;
+          if (bindingChanged()) {
+            warn(
+              ctx,
+              "Skipped Jira transition: binding changed during confirmation",
+            );
 						return false;
-					await p.transitionIssue!(ps.boundKey!, match.id);
+          }
+          await p.transitionIssue!(boundKey, match.id);
 					return true;
 				});
-				if (ok) info(ctx, `Transitioned ${ps.boundKey} → ${match.name}`);
+        if (ok) info(ctx, `Transitioned ${boundKey} → ${match.name}`);
 				return;
 			}
 
 			// --- Context ---
 			if (verb === "context") {
-				const queueOne = async (name: string) => {
+        const queueOne = async (name: string): Promise<boolean | null> => {
 					const ps = getProviderState(state, name);
 					if (!ps.boundKey) return false;
-					const issue = await withProvider(ctx, name, (p) => p.getIssue(ps.boundKey!));
+          const boundKey = ps.boundKey;
+          const bindGeneration = ps.bindGeneration;
+          const issue = await withProvider(ctx, name, (p) =>
+            p.getIssue(boundKey),
+          );
+          if (
+            ps.bindGeneration !== bindGeneration ||
+            ps.boundKey !== boundKey
+          ) {
+            warn(
+              ctx,
+              `Skipped ${name} context: binding changed while loading issue`,
+            );
+            return null;
+          }
 					if (issue) {
 						ps.pendingPayload = buildContextPayload(issue);
 						ps.pendingContextInject = true;
@@ -702,22 +853,25 @@ export default function (pi: ExtensionAPI): void {
 				};
 
 				if (explicitProvider) {
-					if (await queueOne(explicitProvider)) {
+          const queued = await queueOne(explicitProvider);
+          if (queued === true) {
 						info(ctx, `Context queued for ${explicitProvider}`);
-					} else {
+          } else if (queued === false) {
 						warn(ctx, `No ${explicitProvider} issue bound`);
 					}
 				} else {
 					let any = false;
+          let changed = false;
 					for (const name of providerNames) {
-						if (await queueOne(name)) any = true;
+            const queued = await queueOne(name);
+            if (queued === true) any = true;
+            if (queued === null) changed = true;
 					}
-					if (any) info(ctx, "Context queued for all bound issues");
-					else warn(ctx, "No issues bound");
+          if (any) info(ctx, "Context queued for all stable bound issues");
+          else if (!changed) warn(ctx, "No issues bound");
 				}
 				return;
 			}
-
 		},
 	});
 
@@ -745,7 +899,10 @@ export default function (pi: ExtensionAPI): void {
 	// Nudges on agent_end
 	pi.on("agent_end", (_event, ctx) => {
 		state.agentEndCount++;
-		if (!shouldNudge(state.enabled, state.nudgeEveryNTurns, state.agentEndCount)) return;
+    if (
+      !shouldNudge(state.enabled, state.nudgeEveryNTurns, state.agentEndCount)
+    )
+      return;
 		if (!ctx.hasUI) return;
 		try {
 			ctx.ui.notify(formatNudgeMessage(state, providerNames), "info");
@@ -786,6 +943,14 @@ export {
 	parseIssueDraft,
 	validateIssueBodyAgainstTemplate,
 } from "./creation.ts";
-export { buildSummaryPrompt, extractTranscriptAfter, lastEntryId } from "./summary.ts";
-export { effectiveEnabled, loadRuntimeState, saveRuntimeState } from "./state.ts";
+export {
+  buildSummaryPrompt,
+  extractTranscriptAfter,
+  lastEntryId,
+} from "./summary.ts";
+export {
+  effectiveEnabled,
+  loadRuntimeState,
+  saveRuntimeState,
+} from "./state.ts";
 export { setJiraClientForTests } from "./providers/jira.ts";

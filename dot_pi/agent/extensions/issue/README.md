@@ -11,7 +11,7 @@ Chezmoi deploys this directory only when `.profile == axon-work-computer`
 ## Commands
 
 | Command | Effect |
-|---------|--------|
+| ----------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `/issue on\|off\|toggle\|status` | Master toggle (nudges) + state |
 | `/issue bind <key>` | Auto-detect provider from key format, bind |
 | `/issue bind jira PROJ-123` | Explicit Jira bind |
@@ -22,7 +22,7 @@ Chezmoi deploys this directory only when `.profile == axon-work-computer`
 | `/issue show` | Show all bound issues |
 | `/issue show jira` | Show Jira bound issue |
 | `/issue search <query>` | Search all available providers |
-| `/issue search jira <jql-or-text>` | Search Jira |
+| `/issue search jira <jql-or-text>`  | Search Jira (`jql:` prefix forces JQL mode)                                                       |
 | `/issue search github <query>` | Search GitHub |
 | `/issue create [input]` | Generate a templated issue draft from the session plus optional input (prompts if multi-provider) |
 | `/issue create jira [input]` | Generate a Jira issue (project from bound key, or specify `PROJ` prefix) |
@@ -41,7 +41,9 @@ Chezmoi deploys this directory only when `.profile == axon-work-computer`
 `issue-template.md`, and any command input to the **current session model**. The
 model generates both the title and a concise body containing **Summary** and
 **Acceptance Criteria**. User input is optional and takes priority over older
-session context.
+session context. Drafts must preserve the template headings in order, remove
+its comments, contain 2–6 acceptance-criteria checkboxes, and keep titles to
+120 characters or fewer.
 
 Creation is fail-closed: it requires interactive UI and an active session model,
 opens the generated title and body in an editor, and asks for final confirmation
@@ -59,7 +61,8 @@ already bound, its project is reused and the full input is drafting guidance.
 Backed by an MCP-remote stdio client using the resolved `jira` command and
 arguments from `~/.pi/agent/mcp.json`. Run `apply_harness_config` after
 changing MCP settings. Raw tool names (`get_jira_issue`, `search_jira_issues`,
-etc.) — not `jira_*` aliases.
+etc.) — not `jira_*` aliases. Search auto-detects common JQL operators; prefix
+with `jql:` to force an ambiguous expression to be passed through unchanged.
 
 ### GitHub
 
@@ -67,6 +70,7 @@ Backed by the `gh` CLI. No MCP config needed. Auth is handled by
 `gh auth login`. Supports account switching via `gh auth switch`.
 
 Issue references:
+
 - `123` — issue in current git repository
 - `owner/repo#123` — issue in any repository
 
