@@ -124,26 +124,63 @@ export default function (pi: ExtensionAPI): void {
 	let compacting = false;
 	let lastAttemptTokens: number | undefined;
 	let pendingResume: string | undefined;
+	// Circuit breaker: consecutive compactions that did not bring context below
+	// threshold. When it reaches config.maxIneffectiveCompactions we pause
+	// auto-compaction for the rest of the session to prevent a loop. Reset on a
+	// real below-threshold reading and on session start/shutdown.
+	let consecutiveIneffective = 0;
+	let autoDisabledForSession = false;
 
 	const resetAttemptState = () => {
 		compacting = false;
 		lastAttemptTokens = undefined;
 		pendingResume = undefined;
+		consecutiveIneffective = 0;
+		autoDisabledForSession = false;
 	};
 
 	const maybeCompact = (checkPoint: CheckPoint, ctx: ExtensionContext): void => {
-		if (compacting) return;
+		if (compacting || autoDisabledForSession) return;
 		if (typeof ctx.getContextUsage !== "function" || typeof ctx.compact !== "function") return;
 
 		const usage = ctx.getContextUsage();
 		const threshold = usage ? thresholdTokens(usage.contextWindow, config.thresholdPercent) : undefined;
-		if (usage && threshold !== undefined && usage.tokens < threshold) {
+		// Only a real, finite below-threshold reading clears the attempt guard and
+		// the breaker. Do NOT treat `tokens: null` (returned right after
+		// compaction, before the next assistant response) as below-threshold: that
+		// would reset the breaker every round and defeat it.
+		if (
+			usage &&
+			threshold !== undefined &&
+			typeof usage.tokens === "number" &&
+			Number.isFinite(usage.tokens) &&
+			usage.tokens < threshold
+		) {
 			lastAttemptTokens = undefined;
+			consecutiveIneffective = 0;
 		}
 		if (!shouldTrigger(config, checkPoint, usage, lastAttemptTokens)) return;
 
 		const tokens = usage!.tokens;
 		const contextWindow = usage!.contextWindow;
+
+		// A re-trigger (lastAttemptTokens still set) means the previous compaction
+		// did not drop context below threshold. Count it; trip the breaker once we
+		// hit the configured limit.
+		if (lastAttemptTokens !== undefined) {
+			consecutiveIneffective += 1;
+			if (consecutiveIneffective >= config.maxIneffectiveCompactions) {
+				autoDisabledForSession = true;
+				if (ctx.hasUI) {
+					ctx.ui.notify(
+						`Auto-compaction paused for this session: ${consecutiveIneffective} consecutive compactions did not reduce context below ${config.thresholdPercent}%. Use /auto-compact reload to re-enable.`,
+						"warning",
+					);
+				}
+				return;
+			}
+		}
+
 		lastAttemptTokens = tokens;
 		compacting = true;
 		if (ctx.hasUI) {
@@ -210,13 +247,15 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("session_shutdown", resetAttemptState);
 	pi.on("session_compact", (event) => {
 		// Only consume the pending resume for compactions this extension
-		// triggered. event.fromExtension does NOT mean "triggered via
-		// ctx.compact()" — pi sets it only when a session_before_compact
-		// handler supplied the compaction content, so it is false here (this
-		// extension uses pi's built-in summarizer). Gate on our own in-flight
-		// state instead. willRetry means core overflow recovery already
-		// retries the aborted turn; injecting a follow-up as well would
-		// double-resume.
+		// triggered. Gate on our own in-flight `compacting` flag, NOT on
+		// event.fromExtension: fromExtension is true when a
+		// session_before_compact handler supplied the compaction content (e.g.
+		// the Cursor provider's native summarizeAction) and false when pi's
+		// built-in summarizer ran — either way this extension may have triggered
+		// the compaction, so fromExtension is not a reliable signal here. Resume
+		// still fires exactly once regardless of which summarizer produced the
+		// content. willRetry means core overflow recovery already retries the
+		// aborted turn; injecting a follow-up as well would double-resume.
 		const triggeredHere = compacting;
 		compacting = false;
 		if (!triggeredHere || event.willRetry) return;

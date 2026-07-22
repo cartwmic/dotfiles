@@ -16,6 +16,14 @@ export interface AutoCompactConfig {
 	 * (the run already finished).
 	 */
 	continuation: string | false;
+	/**
+	 * Circuit breaker: after this many consecutive compactions that fail to
+	 * bring context back below threshold, auto-compaction pauses for the rest of
+	 * the session (prevents compaction loops when a provider's compaction does
+	 * not reduce context). Provider-agnostic; well-behaved providers reduce
+	 * reliably so the breaker never trips. Minimum 1.
+	 */
+	maxIneffectiveCompactions: number;
 }
 
 export interface ContextUsage {
@@ -28,6 +36,7 @@ export const DEFAULT_CONFIG: AutoCompactConfig = {
 	thresholdPercent: 40,
 	checkAt: ["turn_end", "agent_end"],
 	continuation: DEFAULT_CONTINUATION,
+	maxIneffectiveCompactions: 2,
 };
 
 function isCheckPoint(value: unknown): value is CheckPoint {
@@ -50,12 +59,18 @@ export function normalizeConfig(value: unknown): AutoCompactConfig {
 			: DEFAULT_CONFIG.thresholdPercent;
 	const configuredPoints = Array.isArray(raw.checkAt) ? raw.checkAt.filter(isCheckPoint) : [];
 	const checkAt = CHECK_POINTS.filter((point) => configuredPoints.includes(point));
+	const rawMax = raw.maxIneffectiveCompactions;
+	const maxIneffectiveCompactions =
+		typeof rawMax === "number" && Number.isFinite(rawMax) && rawMax >= 1
+			? Math.floor(rawMax)
+			: DEFAULT_CONFIG.maxIneffectiveCompactions;
 
 	return {
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_CONFIG.enabled,
 		thresholdPercent,
 		checkAt: checkAt.length > 0 ? checkAt : [...DEFAULT_CONFIG.checkAt],
 		continuation: "continuation" in raw ? normalizeContinuation(raw.continuation) : DEFAULT_CONTINUATION,
+		maxIneffectiveCompactions,
 	};
 }
 
@@ -107,5 +122,5 @@ export function describeContinuation(continuation: string | false): string {
 
 export function describeConfig(config: AutoCompactConfig): string {
 	const points = config.checkAt.join(" + ");
-	return `auto-compaction ${config.enabled ? "ON" : "OFF"}; threshold ${config.thresholdPercent}%; check at ${points}; continuation ${describeContinuation(config.continuation)}`;
+	return `auto-compaction ${config.enabled ? "ON" : "OFF"}; threshold ${config.thresholdPercent}%; check at ${points}; continuation ${describeContinuation(config.continuation)}; breaker ${config.maxIneffectiveCompactions}`;
 }
