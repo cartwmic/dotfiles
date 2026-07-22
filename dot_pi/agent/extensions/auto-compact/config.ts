@@ -11,9 +11,9 @@ export interface AutoCompactConfig {
 	thresholdPercent: number;
 	checkAt: CheckPoint[];
 	/**
-	 * Follow-up injected after mid-turn (`turn_end`) compaction.
-	 * `false` disables resume. Agent-end compaction never auto-continues
-	 * (the run already finished).
+	 * Follow-up injected after inter-turn (`turn_end`) compaction.
+	 * `false` disables resume. Final-turn and agent-end compactions never
+	 * auto-continue (the run already finished).
 	 */
 	continuation: string | false;
 	/**
@@ -107,9 +107,13 @@ export function shouldTrigger(
 	return lastAttemptTokens === undefined || usage.tokens > lastAttemptTokens;
 }
 
-/** Resume text for mid-turn compaction, or undefined when resume is off / not applicable. */
-export function resumeAfterCompact(config: AutoCompactConfig, checkPoint: CheckPoint): string | undefined {
-	if (checkPoint !== "turn_end") return undefined;
+/** Resume text when compaction interrupts an agent between turns. */
+export function resumeAfterCompact(
+	config: AutoCompactConfig,
+	checkPoint: CheckPoint,
+	agentWillContinue: boolean,
+): string | undefined {
+	if (checkPoint !== "turn_end" || !agentWillContinue) return undefined;
 	if (config.continuation === false) return undefined;
 	return config.continuation;
 }

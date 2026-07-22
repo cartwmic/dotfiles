@@ -84,7 +84,7 @@ async function configure(
 			continue;
 		}
 		if (choice.startsWith("Continuation:")) {
-			const selected = await ctx.ui.select("After mid-turn compaction (turn_end)", [
+			const selected = await ctx.ui.select("After inter-turn compaction (turn_end)", [
 				"Resume with default message",
 				"Resume with custom message",
 				"Do not resume",
@@ -124,6 +124,7 @@ export default function (pi: ExtensionAPI): void {
 	let compacting = false;
 	let lastAttemptTokens: number | undefined;
 	let pendingResume: string | undefined;
+	let pendingTurnEndCheck = false;
 	// Circuit breaker: consecutive compactions that did not bring context below
 	// threshold. When it reaches config.maxIneffectiveCompactions we pause
 	// auto-compaction for the rest of the session to prevent a loop. Reset on a
@@ -135,11 +136,16 @@ export default function (pi: ExtensionAPI): void {
 		compacting = false;
 		lastAttemptTokens = undefined;
 		pendingResume = undefined;
+		pendingTurnEndCheck = false;
 		consecutiveIneffective = 0;
 		autoDisabledForSession = false;
 	};
 
-	const maybeCompact = (checkPoint: CheckPoint, ctx: ExtensionContext): void => {
+	const maybeCompact = (
+		checkPoint: CheckPoint,
+		ctx: ExtensionContext,
+		agentWillContinue: boolean,
+	): void => {
 		if (compacting || autoDisabledForSession) return;
 		if (typeof ctx.getContextUsage !== "function" || typeof ctx.compact !== "function") return;
 
@@ -190,9 +196,9 @@ export default function (pi: ExtensionAPI): void {
 			);
 		}
 
-		// ctx.compact() aborts the active agent first. After mid-turn compaction,
-		// re-inject so the interrupted run can continue. Skip agent_end (resume is
-		// undefined there): the run already finished and a follow-up would
+		// ctx.compact() aborts the active agent first. After inter-turn compaction,
+		// re-inject so the interrupted run can continue. Skip final-turn and
+		// agent_end compactions: the run already finished and a follow-up would
 		// spuriously start new work.
 		//
 		// The success-path resume is delivered from the session_compact event
@@ -201,7 +207,7 @@ export default function (pi: ExtensionAPI): void {
 		// invalidated the extension runtime (dispose -> abortCompaction -> the
 		// pending compact promise rejects -> onError runs against a stale ctx).
 		// Any pi/ctx call inside them must be stale-guarded.
-		pendingResume = resumeAfterCompact(config, checkPoint);
+		pendingResume = resumeAfterCompact(config, checkPoint, agentWillContinue);
 		try {
 			ctx.compact({
 				onComplete: () => {
@@ -263,8 +269,26 @@ export default function (pi: ExtensionAPI): void {
 		pendingResume = undefined;
 		if (resume) pi.sendUserMessage(resume, { deliverAs: "followUp" });
 	});
-	pi.on("turn_end", (_event, ctx) => maybeCompact("turn_end", ctx));
-	pi.on("agent_end", (_event, ctx) => maybeCompact("agent_end", ctx));
+	// A final turn_end is immediately followed by agent_end, while an inter-turn
+	// turn_end is followed by turn_start. Defer the turn-end check until that
+	// next turn actually starts so only an agent run that still has work is
+	// aborted and resumed. Checking directly in turn_end cannot distinguish the
+	// final response and would spuriously start a new run after compaction.
+	pi.on("turn_end", () => {
+		pendingTurnEndCheck = true;
+	});
+	pi.on("turn_start", (_event, ctx) => {
+		if (!pendingTurnEndCheck) return;
+		pendingTurnEndCheck = false;
+		maybeCompact("turn_end", ctx, true);
+	});
+	pi.on("agent_end", (_event, ctx) => {
+		if (pendingTurnEndCheck) {
+			pendingTurnEndCheck = false;
+			maybeCompact("turn_end", ctx, false);
+		}
+		maybeCompact("agent_end", ctx, false);
+	});
 
 	pi.registerCommand("auto-compact", {
 		description: "Configure percent-based auto-compaction (config | status | reload)",
