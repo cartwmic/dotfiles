@@ -56,13 +56,16 @@ describe("auto-compact config", () => {
 		expect(normalizeConfig({ maxIneffectiveCompactions: "x" }).maxIneffectiveCompactions).toBe(2);
 	});
 
-	test("resumes only after mid-turn compaction when continuation is enabled", () => {
-		expect(resumeAfterCompact(DEFAULT_CONFIG, "turn_end")).toBe(DEFAULT_CONTINUATION);
-		expect(resumeAfterCompact(DEFAULT_CONFIG, "agent_end")).toBeUndefined();
-		expect(resumeAfterCompact({ ...DEFAULT_CONFIG, continuation: false }, "turn_end")).toBeUndefined();
-		expect(resumeAfterCompact({ ...DEFAULT_CONFIG, continuation: "Keep going." }, "turn_end")).toBe(
-			"Keep going.",
-		);
+	test("resumes only after inter-turn compaction when continuation is enabled", () => {
+		expect(resumeAfterCompact(DEFAULT_CONFIG, "turn_end", true)).toBe(DEFAULT_CONTINUATION);
+		expect(resumeAfterCompact(DEFAULT_CONFIG, "turn_end", false)).toBeUndefined();
+		expect(resumeAfterCompact(DEFAULT_CONFIG, "agent_end", false)).toBeUndefined();
+		expect(
+			resumeAfterCompact({ ...DEFAULT_CONFIG, continuation: false }, "turn_end", true),
+		).toBeUndefined();
+		expect(
+			resumeAfterCompact({ ...DEFAULT_CONFIG, continuation: "Keep going." }, "turn_end", true),
+		).toBe("Keep going.");
 	});
 });
 
@@ -131,6 +134,8 @@ describe("auto-compact threshold", () => {
 			},
 		};
 		handlers.get("turn_end")?.({}, ctx);
+		expect(compactCalls).toBe(0);
+		handlers.get("turn_start")?.({}, ctx);
 		handlers.get("agent_end")?.({}, ctx);
 
 		expect(compactCalls).toBe(1);
@@ -158,6 +163,7 @@ describe("auto-compact threshold", () => {
 			},
 		};
 		handlers.get("turn_end")?.({}, ctx);
+		handlers.get("turn_start")?.({}, ctx);
 		expect(followUps).toEqual([]);
 	});
 
@@ -196,10 +202,11 @@ describe("auto-compact threshold", () => {
 				onError(new Error("Compaction aborted"));
 			},
 		};
-		expect(() => handlers.get("turn_end")?.({}, ctx)).not.toThrow();
+		handlers.get("turn_end")?.({}, ctx);
+		expect(() => handlers.get("turn_start")?.({}, ctx)).not.toThrow();
 	});
 
-	test("does not resume after agent_end compaction", () => {
+	test("does not resume when the final turn is followed by agent_end", () => {
 		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
 		const followUps: string[] = [];
 		extension({
@@ -210,14 +217,20 @@ describe("auto-compact threshold", () => {
 			},
 		} as any);
 
+		let compactCalls = 0;
 		const ctx = {
 			hasUI: false,
 			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
 			compact: ({ onComplete }: { onComplete: () => void }) => {
+				compactCalls += 1;
 				onComplete();
+				handlers.get("session_compact")?.({ fromExtension: false, willRetry: false }, ctx);
 			},
 		};
+		handlers.get("turn_end")?.({}, ctx);
+		expect(compactCalls).toBe(0);
 		handlers.get("agent_end")?.({}, ctx);
+		expect(compactCalls).toBe(1);
 		expect(followUps).toEqual([]);
 	});
 
@@ -289,7 +302,7 @@ describe("auto-compact threshold", () => {
 		expect(compactCalls).toBe(2);
 	});
 
-	test("resumes on compact error after mid-turn abort", () => {
+	test("resumes on compact error after inter-turn abort", () => {
 		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
 		const followUps: string[] = [];
 		extension({
@@ -308,6 +321,7 @@ describe("auto-compact threshold", () => {
 			},
 		};
 		handlers.get("turn_end")?.({}, ctx);
+		handlers.get("turn_start")?.({}, ctx);
 		expect(followUps).toEqual([DEFAULT_CONTINUATION]);
 	});
 });
