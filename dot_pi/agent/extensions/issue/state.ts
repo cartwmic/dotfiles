@@ -17,7 +17,7 @@ const STATE_FILE = "state.json";
 export interface RuntimeState {
 	/** Runtime on/off override. Wins over config.json `enabled`. */
 	enabled?: boolean;
-	/** provider/id used for `/issue sync` checkpoint summaries. */
+	/** provider/id used for issue drafts and checkpoint summaries. */
 	summaryModel?: string;
 }
 
@@ -72,7 +72,7 @@ export function effectiveEnabled(dir: string, configDefault: boolean): boolean {
 	return typeof s.enabled === "boolean" ? s.enabled : configDefault;
 }
 
-/** Effective summary model: sidecar wins over the config.json default. */
+/** Effective issue LLM model: sidecar wins over the config.json default. */
 export function effectiveSummaryModel(dir: string, configDefault?: string): string | undefined {
 	return loadRuntimeState(dir).summaryModel ?? configDefault;
 }

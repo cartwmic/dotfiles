@@ -102,7 +102,7 @@ class ModelPickerComponent implements Component, Focusable {
 export async function pickModel(
 	ctx: ExtensionCommandContext,
 	catalog: string[],
-	prompt = "summary model (type to filter, esc to cancel)",
+	prompt = "issue model (type to filter, esc to cancel)",
 ): Promise<string | undefined> {
 	if (typeof ctx.ui?.custom !== "function") return undefined;
 	return ctx.ui.custom<string | undefined>(

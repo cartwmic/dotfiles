@@ -9,7 +9,7 @@ import type { JiraConfig, JiraMcpTransportConfig } from "./providers/jira.ts";
 export interface IssueBehaviorConfig {
 	enabled: boolean;
 	nudgeEveryNTurns: number;
-	/** Default provider/id for `/issue sync` checkpoint summaries. Overridden by state.json. */
+	/** Default provider/id for issue drafts and checkpoint summaries. Overridden by state.json. */
 	summaryModel?: string;
 }
 
