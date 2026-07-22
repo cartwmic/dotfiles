@@ -49,9 +49,9 @@
     "anthropic/claude-fable-5",
     "anthropic/claude-opus-4-8",
     "anthropic/claude-sonnet-5"
-{{- end }}
 {{- range $model := $privateProvider.models }},
     {{ printf "private-anthropic/%s" $model.id | quote }}
+{{- end }}
 {{- end }}
   ],
   "packages": [
