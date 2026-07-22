@@ -8,6 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	bindKey,
+	buildIssueCreationPrompt,
 	buildSummaryPrompt,
 	clearBind,
 	defaultAsyncSpawn,
@@ -19,18 +20,22 @@ import {
 	lastEntryId,
 	fetchModelsCatalog,
 	filterCatalog,
+	formatIssueDraft,
 	formatNudgeMessage,
 	formatStatus,
 	getProviderState,
 	loadConfig,
 	loadRuntimeState,
 	parseCommand,
+	parseGeneratedIssue,
+	parseIssueDraft,
 	parseListModelsOutput,
 	runPiSummary,
 	sanitizeErrorMessage,
 	saveRuntimeState,
 	setJiraClientForTests,
 	shouldNudge,
+	validateIssueBodyAgainstTemplate,
 } from "./index.ts";
 import { parseGitHubIssueRef } from "./providers/github.ts";
 
@@ -631,6 +636,56 @@ describe("extractTranscriptAfter", () => {
 	});
 });
 
+describe("issue creation draft", () => {
+	test("prompt includes template, transcript, and optional user input", () => {
+		const prompt = buildIssueCreationPrompt({
+			provider: "jira",
+			template: "## Summary\n## Acceptance Criteria",
+			transcript: "USER: add retries",
+			userInput: "Focus on timeout handling",
+		});
+		expect(prompt).toContain("## Acceptance Criteria");
+		expect(prompt).toContain("USER: add retries");
+		expect(prompt).toContain("Focus on timeout handling");
+		expect(prompt).toContain("untrusted content");
+		expect(prompt).toContain("valid JSON");
+	});
+
+	test("parses strict or fenced model JSON", () => {
+		const expected = { title: "Add retries", body: "## Summary\nRetry requests." };
+		expect(parseGeneratedIssue(JSON.stringify(expected))).toEqual(expected);
+		expect(parseGeneratedIssue(`\`\`\`json\n${JSON.stringify(expected)}\n\`\`\``)).toEqual(expected);
+	});
+
+	test("rejects malformed or incomplete model output", () => {
+		expect(() => parseGeneratedIssue("not json")).toThrow("valid issue JSON");
+		expect(() => parseGeneratedIssue('{"title":"","body":"x"}')).toThrow("title is empty");
+		expect(() => parseGeneratedIssue('{"title":"x","body":""}')).toThrow("body is empty");
+	});
+
+	test("editable draft round-trips title and body", () => {
+		const draft = { title: "Add retries", body: "## Summary\nRetry requests." };
+		const editable = formatIssueDraft(draft);
+		expect(editable).toStartWith("# Add retries\n\n");
+		expect(parseIssueDraft(editable)).toEqual(draft);
+		expect(() => parseIssueDraft("Add retries\n\nBody")).toThrow("must start");
+		expect(() => parseIssueDraft("# Add retries")).toThrow("body is empty");
+	});
+
+	test("requires all managed template headings", () => {
+		const template = "## Summary\n<!-- help -->\n\n## Acceptance Criteria";
+		expect(() =>
+			validateIssueBodyAgainstTemplate(
+				"## Summary\nDetails\n\n## Acceptance Criteria\n- [ ] Works",
+				template,
+			),
+		).not.toThrow();
+		expect(() => validateIssueBodyAgainstTemplate("## Summary\nDetails", template)).toThrow(
+			"## Acceptance Criteria",
+		);
+	});
+});
+
 describe("buildSummaryPrompt", () => {
 	test("includes intent + transcript", () => {
 		const p = buildSummaryPrompt(
@@ -789,6 +844,41 @@ function registerAndGetHandler(): (args: string, ctx: unknown) => Promise<void> 
 	if (!cmd) throw new Error("command not registered");
 	return cmd.handler;
 }
+
+describe("create handler guards (fake ctx)", () => {
+	test("headless creation fails closed before reading the transcript", async () => {
+		const handler = registerAndGetHandler();
+		let getEntriesCalled = false;
+		const ctx = {
+			hasUI: false,
+			ui: { notify: () => {} },
+			sessionManager: {
+				getEntries: () => {
+					getEntriesCalled = true;
+					return [];
+				},
+			},
+		};
+		await handler("create github add retries", ctx);
+		expect(getEntriesCalled).toBe(false);
+	});
+
+	test("creation without a configured model warns and aborts", async () => {
+		const handler = registerAndGetHandler();
+		const notes: Array<{ msg: string; type: string }> = [];
+		const ctx = {
+			hasUI: true,
+			ui: {
+				notify: (msg: string, type = "info") => notes.push({ msg, type }),
+				editor: async () => undefined,
+				confirm: async () => true,
+			},
+			sessionManager: { getEntries: () => [] },
+		};
+		await handler("create github add retries", ctx);
+		expect(notes.some((n) => n.type === "warning" && /issue model/i.test(n.msg))).toBe(true);
+	});
+});
 
 describe("sync handler guards (fake ctx)", () => {
 	test("headless checkpoint fails closed — never reaches transcript/summary", async () => {

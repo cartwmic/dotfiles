@@ -8,6 +8,14 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { loadConfig } from "./config.ts";
+import {
+	buildIssueCreationPrompt,
+	formatIssueDraft,
+	loadIssueTemplate,
+	parseGeneratedIssue,
+	parseIssueDraft,
+	validateIssueBodyAgainstTemplate,
+} from "./creation.ts";
 import { effectiveEnabled, effectiveSummaryModel, saveRuntimeState } from "./state.ts";
 import {
 	buildSummaryPrompt,
@@ -294,34 +302,122 @@ export default function (pi: ExtensionAPI): void {
 
 			// --- Create ---
 			if (verb === "create") {
-				const summary = rest || "New issue";
+				// Generated content must be reviewed before it can mutate an issue tracker.
+				if (
+					!ctx.hasUI ||
+					typeof ctx.ui.editor !== "function" ||
+					typeof ctx.ui.confirm !== "function"
+				) {
+					warn(ctx, "Issue creation needs interactive UI to review the generated draft.");
+					return;
+				}
+				const model = effectiveSummaryModel(dir, cfg.behavior.summaryModel);
+				if (!model) {
+					warn(ctx, "No issue model configured. Run /issue config model first.");
+					return;
+				}
+
+				let template: string;
+				try {
+					template = loadIssueTemplate(dir);
+				} catch (err) {
+					warn(ctx, `Cannot load issue template: ${sanitizeErrorMessage(err)}`);
+					return;
+				}
+
+				let target = explicitProvider;
+				if (!target && providerNames.length === 1) {
+					target = providerNames[0];
+				} else if (!target && providerNames.length > 1 && typeof ctx.ui.select === "function") {
+					target = (await ctx.ui.select("Create issue with which provider?", providerNames)) as
+						| string
+						| undefined;
+					if (!target) return;
+				}
+				if (!target) {
+					warn(ctx, "No issue provider available. Specify jira or github after /issue create.");
+					return;
+				}
+				if (!providers.has(target)) {
+					warn(ctx, `Issue: ${target} provider is not available`);
+					return;
+				}
+
 				const doCreate = async (name: string) => {
-					let createSummary = summary;
+					let userInput = rawRest.trim();
 					const extra: Record<string, unknown> = {};
 					if (name === "jira") {
 						const jiraPs = getProviderState(state, "jira");
 						if (jiraPs.boundKey) {
-							// Bound: use bound key's project, don't strip prefix from summary
 							const project = jiraPs.boundKey.split("-")[0];
 							if (project) extra.project = project;
 						} else {
-							// Unbound: parse project prefix from summary
-							const firstWord = summary.split(/\s+/)[0];
-							const looksLikeProject = /^[A-Z][A-Z0-9]{1,9}$/.test(firstWord);
-							if (looksLikeProject) {
-								extra.project = firstWord;
-								const restWords = summary.split(/\s+/).slice(1);
-								createSummary = restWords.join(" ") || "New issue";
+							const words = userInput.split(/\s+/).filter(Boolean);
+							const project = words[0];
+							if (!project || !/^[A-Z][A-Z0-9]{1,9}$/.test(project)) {
+								warn(
+									ctx,
+									"Jira project required. Bind a Jira issue or use /issue create jira PROJ [input].",
+								);
+								return;
 							}
+							extra.project = project;
+							userInput = words.slice(1).join(" ");
 						}
 					}
+
+					const transcript = extractTranscriptAfter(
+						ctx.sessionManager.getEntries() as unknown[],
+						null,
+					);
+					if (!userInput && !transcript) {
+						warn(ctx, "Nothing to draft from. Add input after /issue create or start from a session.");
+						return;
+					}
+
+					info(ctx, `Drafting ${name} issue with ${model}\u2026`);
+					const generated = await runPiSummary(
+						model,
+						buildIssueCreationPrompt({ provider: name, template, transcript, userInput }),
+					);
+					if (!generated.ok) {
+						warn(ctx, `Issue draft failed: ${sanitizeErrorMessage(generated.error)}`);
+						return;
+					}
+
+					let draft: ReturnType<typeof parseGeneratedIssue>;
+					try {
+						draft = parseGeneratedIssue(generated.text);
+						validateIssueBodyAgainstTemplate(draft.body, template);
+					} catch (err) {
+						warn(ctx, `Issue draft failed: ${sanitizeErrorMessage(err)}`);
+						return;
+					}
+
+					let edited: string | undefined;
+					try {
+						edited = await ctx.ui.editor(
+							`Review ${name} issue draft (# title, then template body)`,
+							formatIssueDraft(draft),
+						);
+					} catch {
+						return;
+					}
+					if (edited === undefined) return;
+					try {
+						draft = parseIssueDraft(edited);
+						validateIssueBodyAgainstTemplate(draft.body, template);
+					} catch (err) {
+						warn(ctx, `Invalid issue draft: ${sanitizeErrorMessage(err)}`);
+						return;
+					}
+
+					const location = name === "jira" && extra.project ? ` in ${extra.project}` : "";
 					const issue = await withProvider(ctx, name, async (p) => {
-						const confirmMsg =
-							name === "jira" && extra.project
-								? `Create ${name} issue in ${extra.project}: "${createSummary}"?`
-								: `Create ${name} issue: "${createSummary}"?`;
-						if (!(await confirm(ctx, confirmMsg))) return null;
-						return await p.createIssue({ title: createSummary, ...extra });
+						if (!(await confirm(ctx, `Create ${name} issue${location}: "${draft.title}"?`))) {
+							return null;
+						}
+						return await p.createIssue({ title: draft.title, body: draft.body, ...extra });
 					});
 					if (issue) {
 						bindKey(getProviderState(state, name), issue.key);
@@ -329,16 +425,7 @@ export default function (pi: ExtensionAPI): void {
 					}
 				};
 
-				if (explicitProvider) {
-					await doCreate(explicitProvider);
-				} else if (providerNames.length === 1) {
-					await doCreate(providerNames[0]);
-				} else {
-					warn(
-						ctx,
-						"Multiple providers. Specify: /issue create jira <summary> or /issue create github <summary>",
-					);
-				}
+				await doCreate(target);
 				return;
 			}
 
@@ -583,7 +670,7 @@ export default function (pi: ExtensionAPI): void {
 			}
 
 			// --- Config ---
-			// /issue config model -> pick the summary model, persist to state.json.
+			// /issue config model -> pick the shared draft/checkpoint model, persist it.
 			if (verb === "config") {
 				if (rest.trim().toLowerCase() !== "model") {
 					warn(ctx, "Usage: /issue config model");
@@ -611,7 +698,7 @@ export default function (pi: ExtensionAPI): void {
 					warn(ctx, `Could not save model: ${sanitizeErrorMessage(err)}`);
 					return;
 				}
-				info(ctx, `Summary model set: ${picked}`);
+				info(ctx, `Issue model set: ${picked}`);
 				return;
 			}
 		},
@@ -674,6 +761,14 @@ export {
 	shouldNudge,
 } from "./helpers.ts";
 export { loadConfig } from "./config.ts";
+export {
+	buildIssueCreationPrompt,
+	formatIssueDraft,
+	loadIssueTemplate,
+	parseGeneratedIssue,
+	parseIssueDraft,
+	validateIssueBodyAgainstTemplate,
+} from "./creation.ts";
 export {
 	buildSummaryPrompt,
 	defaultAsyncSpawn,
