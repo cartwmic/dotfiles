@@ -194,14 +194,60 @@ async function runModel(
 }
 
 /**
+ * Max concurrent model calls in a map (or reduce-merge) fan-out. The calls are
+ * independent, so running them concurrently makes wall-time ≈ the slowest call
+ * rather than the sum. Bounded to stay friendly to provider rate limits.
+ */
+const FANOUT_CONCURRENCY = 4;
+
+/**
+ * Run `prompts` through runModel with bounded concurrency, preserving output
+ * order. Short-circuits logically on the first failure (by lowest index, for a
+ * deterministic error message matching the old sequential behavior); in-flight
+ * calls are allowed to settle, but no new calls start once a failure is seen.
+ */
+async function runModelFanout(
+	ctx: ExtensionCommandContext,
+	prompts: string[],
+	tag: string,
+): Promise<{ ok: true; texts: string[] } | { ok: false; error: string }> {
+	const texts = new Array<string>(prompts.length);
+	let next = 0;
+	let failure: { index: number; error: string } | null = null;
+	const worker = async (): Promise<void> => {
+		while (true) {
+			if (failure) return;
+			const i = next++;
+			if (i >= prompts.length) return;
+			const r = await runModel(ctx, prompts[i]);
+			if (!r.ok) {
+				if (!failure || i < failure.index) failure = { index: i, error: r.error };
+				return;
+			}
+			texts[i] = r.text;
+		}
+	};
+	const n = Math.max(1, Math.min(FANOUT_CONCURRENCY, prompts.length));
+	await Promise.all(Array.from({ length: n }, () => worker()));
+	if (failure) {
+		return {
+			ok: false,
+			error: `${tag} ${failure.index + 1}/${prompts.length}: ${failure.error}`,
+		};
+	}
+	return { ok: true, texts };
+}
+
+/**
  * Produce the checkpoint comment from a transcript, staying within the model's
  * context window. When the transcript fits one request's budget it is a single
  * pass (buildSummaryPrompt). Otherwise it is a map/reduce: the ordered segments
  * are packed into budget-sized groups, each group is condensed to a digest
- * (buildMapPrompt), and the digests are combined into the final comment
- * (buildReducePrompt) — recursively collapsing digests that themselves exceed
- * the budget, so arbitrarily large sessions never re-trigger a context-length
- * error. Any failed sub-call short-circuits with a part-tagged error.
+ * (buildMapPrompt) — the map calls run concurrently (independent) — and the
+ * digests are combined into the final comment (buildReducePrompt), recursively
+ * collapsing digests that themselves exceed the budget, so arbitrarily large
+ * sessions never re-trigger a context-length error. Any failed sub-call
+ * short-circuits with a part-tagged error.
  */
 async function summarizeTranscript(
 	ctx: ExtensionCommandContext,
@@ -216,21 +262,17 @@ async function summarizeTranscript(
 	const groups = packChunks(chunks, budgetChars);
 	info(
 		ctx,
-		`Transcript too large for one pass; summarizing ${chunks.length} segments in ${groups.length} parts, then combining\u2026`,
+		`Transcript too large for one pass; summarizing ${chunks.length} segments in ${groups.length} parts (up to ${FANOUT_CONCURRENCY} at once), then combining\u2026`,
 	);
-	const digests: string[] = [];
-	for (let i = 0; i < groups.length; i++) {
-		const portion = groups[i].join(TRANSCRIPT_SEP);
-		const r = await runModel(
-			ctx,
-			buildMapPrompt(issue, portion, i + 1, groups.length),
-		);
-		if (!r.ok) {
-			return { ok: false, error: `part ${i + 1}/${groups.length}: ${r.error}` };
-		}
-		digests.push(r.text);
-	}
-	return reduceDigests(ctx, issue, digests, budgetChars);
+	const mapped = await runModelFanout(
+		ctx,
+		groups.map((g, i) =>
+			buildMapPrompt(issue, g.join(TRANSCRIPT_SEP), i + 1, groups.length),
+		),
+		"part",
+	);
+	if (!mapped.ok) return mapped;
+	return reduceDigests(ctx, issue, mapped.texts, budgetChars);
 }
 
 /**
@@ -257,15 +299,13 @@ async function reduceDigests(
 	if (groups.length >= digests.length) {
 		return runModel(ctx, buildReducePrompt(issue, digests));
 	}
-	const merged: string[] = [];
-	for (let i = 0; i < groups.length; i++) {
-		const r = await runModel(ctx, buildReducePrompt(issue, groups[i]));
-		if (!r.ok) {
-			return { ok: false, error: `merge ${i + 1}/${groups.length}: ${r.error}` };
-		}
-		merged.push(r.text);
-	}
-	return reduceDigests(ctx, issue, merged, budgetChars);
+	const merged = await runModelFanout(
+		ctx,
+		groups.map((g) => buildReducePrompt(issue, g)),
+		"merge",
+	);
+	if (!merged.ok) return merged;
+	return reduceDigests(ctx, issue, merged.texts, budgetChars);
 }
 
 function escapeXml(str: string): string {

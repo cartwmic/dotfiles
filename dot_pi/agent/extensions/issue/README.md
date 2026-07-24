@@ -103,8 +103,10 @@ scaffolding + completion, and the conservative 3 chars/token keeps even dense
 JSON/code within the window). If the span fits, it is summarized in a single
 pass. If it does not, the ordered per-message segments are packed into
 budget-sized groups (`packChunks`), each group is condensed to an intermediate
-progress **digest** (map, `buildMapPrompt`), and the digests are combined into
-the final comment (reduce, `buildReducePrompt`) — recursively collapsing digests
+progress **digest** (map, `buildMapPrompt`; the independent map calls run
+concurrently, up to `FANOUT_CONCURRENCY`=4 at once, so wall-time tracks the
+slowest call rather than the sum), and the digests are combined into the final
+comment (reduce, `buildReducePrompt`) — recursively collapsing digests
 that themselves exceed the budget, so an arbitrarily large session never trips
 the provider's context-length limit. This replaced an earlier unbounded send
 that 400'd on large sessions (e.g. `prompt is too long: 1060173 tokens >
