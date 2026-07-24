@@ -93,8 +93,23 @@ of the last entry the previous checkpoint covered) rather than a wall-clock
 timestamp — this avoids equal-millisecond double-counting, clock-skew skips, and
 missing-timestamp drops. The transcript includes everything in context that
 evidences progress: user + assistant text, assistant **tool calls**, and **tool
-results** (marked on error). Thinking blocks are excluded. There is no size
-bound — the whole span is sent.
+results** (marked on error). Thinking blocks are excluded.
+
+**Context-window budgeting (map/reduce).** The transcript payload for any one
+model request is bounded to a character budget derived from the session model's
+context window — `contextWindow × 0.5 × 3 chars/token` (see
+`transcriptCharBudget`; the 50% payload fraction leaves room for prompt
+scaffolding + completion, and the conservative 3 chars/token keeps even dense
+JSON/code within the window). If the span fits, it is summarized in a single
+pass. If it does not, the ordered per-message segments are packed into
+budget-sized groups (`packChunks`), each group is condensed to an intermediate
+progress **digest** (map, `buildMapPrompt`), and the digests are combined into
+the final comment (reduce, `buildReducePrompt`) — recursively collapsing digests
+that themselves exceed the budget, so an arbitrarily large session never trips
+the provider's context-length limit. This replaced an earlier unbounded send
+that 400'd on large sessions (e.g. `prompt is too long: 1060173 tokens >
+1000000 maximum` on `claude-opus-4-8`). A failed map/reduce sub-call
+short-circuits with a part-tagged error rather than posting a partial summary.
 
 - **Model**: the current session model (`ctx.model`) is used **in-process** via
   the model registry — routing bridge/custom providers (cursor, claude-bridge,
