@@ -17,6 +17,8 @@ adr/
 {{- if ne .profile "personal" }}
 Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 .local/bin/sync-claude-pi-auth.sh
+.pi/agent/extensions/openrouter-gate
+.pi/agent/extensions/openrouter-gate/**
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 .pi/agent/extensions/issue
