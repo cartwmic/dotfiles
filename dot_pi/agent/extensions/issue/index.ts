@@ -104,7 +104,19 @@ async function runModel(
       },
     ],
 	};
-	const options = { apiKey, headers, maxTokens: 4096, signal: ctx.signal };
+	// thinkingEnabled:false forces a plain-text completion. Reasoning models
+	// (e.g. claude-opus-4-8) are adaptive-thinking and default thinking ON when
+	// no thinking param is sent; with our modest maxTokens the model can spend
+	// the whole budget on reasoning and return zero answer text. Summaries and
+	// drafts never want reasoning output, so disable it explicitly. Non-reasoning
+	// models and bridge providers ignore this option.
+	const options = {
+		apiKey,
+		headers,
+		maxTokens: 4096,
+		thinkingEnabled: false,
+		signal: ctx.signal,
+	};
 	try {
 		const cfg = (
 			ctx.modelRegistry as unknown as {
@@ -130,14 +142,46 @@ async function runModel(
 			};
 			res = await complete(model, context, options);
 		}
-		const content = (res as { content?: unknown[] })?.content ?? [];
+		const result = res as {
+			content?: unknown[];
+			stopReason?: string;
+			errorMessage?: string;
+		};
+		const content = result?.content ?? [];
 		const text = content
 			.filter((c: unknown) => (c as { type?: string })?.type === "text")
 			.map((c: unknown) => (c as { text?: string }).text ?? "")
 			.join("")
 			.trim();
-		if (!text) return { ok: false, error: "model returned no text" };
-		return { ok: true, text };
+		if (text) return { ok: true, text };
+		// No answer text. A completion can end without text for several reasons;
+		// the provider records the real cause on the returned assistant message
+		// (stopReason "error"/"aborted" carries errorMessage; "length" means the
+		// output-token budget was exhausted — often entirely on reasoning for a
+		// thinking model like claude-opus-*). Surface that instead of collapsing
+		// every outcome into a generic "no text", which is undiagnosable.
+		const hadThinking = content.some(
+			(c: unknown) => (c as { type?: string })?.type === "thinking",
+		);
+		if (result?.errorMessage) return { ok: false, error: result.errorMessage };
+		const reason = result?.stopReason;
+		if (reason === "length") {
+			return {
+				ok: false,
+				error: hadThinking
+					? "model exhausted its output-token budget on reasoning before producing any answer text (raise maxTokens or disable thinking for the summary call)"
+					: "model hit the output-token limit before producing text",
+			};
+		}
+		if (hadThinking) {
+			return { ok: false, error: "model returned only reasoning, no answer text" };
+		}
+		return {
+			ok: false,
+			error: reason
+				? `model returned no text (stopReason: ${reason})`
+				: "model returned no text",
+		};
 	} catch (e: unknown) {
 		return { ok: false, error: e instanceof Error ? e.message : String(e) };
 	}
