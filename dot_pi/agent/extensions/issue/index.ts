@@ -21,9 +21,15 @@ import {
 } from "./creation.ts";
 import { effectiveEnabled, saveRuntimeState } from "./state.ts";
 import {
+  buildMapPrompt,
+  buildReducePrompt,
   buildSummaryPrompt,
   extractTranscriptAfter,
+  extractTranscriptChunks,
   lastEntryId,
+  packChunks,
+  TRANSCRIPT_SEP,
+  transcriptCharBudget,
 } from "./summary.ts";
 import { closeJiraClient, JiraProvider } from "./providers/jira.ts";
 import { GitHubProvider } from "./providers/github.ts";
@@ -185,6 +191,81 @@ async function runModel(
 	} catch (e: unknown) {
 		return { ok: false, error: e instanceof Error ? e.message : String(e) };
 	}
+}
+
+/**
+ * Produce the checkpoint comment from a transcript, staying within the model's
+ * context window. When the transcript fits one request's budget it is a single
+ * pass (buildSummaryPrompt). Otherwise it is a map/reduce: the ordered segments
+ * are packed into budget-sized groups, each group is condensed to a digest
+ * (buildMapPrompt), and the digests are combined into the final comment
+ * (buildReducePrompt) — recursively collapsing digests that themselves exceed
+ * the budget, so arbitrarily large sessions never re-trigger a context-length
+ * error. Any failed sub-call short-circuits with a part-tagged error.
+ */
+async function summarizeTranscript(
+	ctx: ExtensionCommandContext,
+	issue: { displayKey: string; title: string; body?: string },
+	chunks: string[],
+	budgetChars: number,
+): Promise<ModelRunResult> {
+	const joined = chunks.join(TRANSCRIPT_SEP).trim();
+	if (joined.length <= budgetChars) {
+		return runModel(ctx, buildSummaryPrompt(issue, joined));
+	}
+	const groups = packChunks(chunks, budgetChars);
+	info(
+		ctx,
+		`Transcript too large for one pass; summarizing ${chunks.length} segments in ${groups.length} parts, then combining\u2026`,
+	);
+	const digests: string[] = [];
+	for (let i = 0; i < groups.length; i++) {
+		const portion = groups[i].join(TRANSCRIPT_SEP);
+		const r = await runModel(
+			ctx,
+			buildMapPrompt(issue, portion, i + 1, groups.length),
+		);
+		if (!r.ok) {
+			return { ok: false, error: `part ${i + 1}/${groups.length}: ${r.error}` };
+		}
+		digests.push(r.text);
+	}
+	return reduceDigests(ctx, issue, digests, budgetChars);
+}
+
+/**
+ * Combine ordered progress digests into the final comment. If the digests do
+ * not fit one request, pack them into budget-sized groups, reduce each group to
+ * a merged digest, and recurse until a single reduce call fits. buildReducePrompt
+ * is reused at every level; its output contract is always "a checkpoint comment",
+ * so an intermediate merge of a subset is still well-formed.
+ */
+async function reduceDigests(
+	ctx: ExtensionCommandContext,
+	issue: { displayKey: string; title: string; body?: string },
+	digests: string[],
+	budgetChars: number,
+): Promise<ModelRunResult> {
+	const joined = digests.join(TRANSCRIPT_SEP).trim();
+	if (digests.length <= 1 || joined.length <= budgetChars) {
+		return runModel(ctx, buildReducePrompt(issue, digests));
+	}
+	const groups = packChunks(digests, budgetChars);
+	// Guard against a non-converging recursion: if packing cannot reduce the
+	// count (single oversized digest already capped by packChunks), fall through
+	// to a final reduce rather than looping forever.
+	if (groups.length >= digests.length) {
+		return runModel(ctx, buildReducePrompt(issue, digests));
+	}
+	const merged: string[] = [];
+	for (let i = 0; i < groups.length; i++) {
+		const r = await runModel(ctx, buildReducePrompt(issue, groups[i]));
+		if (!r.ok) {
+			return { ok: false, error: `merge ${i + 1}/${groups.length}: ${r.error}` };
+		}
+		merged.push(r.text);
+	}
+	return reduceDigests(ctx, issue, merged, budgetChars);
 }
 
 function escapeXml(str: string): string {
@@ -668,14 +749,17 @@ export default function (pi: ExtensionAPI): void {
 					if (!issue) return null;
 					const entries = ctx.sessionManager.getEntries() as unknown[];
 					const anchorEntryId = lastEntryId(entries);
-					const transcript = extractTranscriptAfter(entries, sinceEntryId);
+					const chunks = extractTranscriptChunks(entries, sinceEntryId);
+					const budgetChars = transcriptCharBudget(ctx.model?.contextWindow);
           info(
             ctx,
             `Summarizing ${name} ${boundKey} with ${ctx.model?.provider}/${ctx.model?.id}\u2026`,
           );
-          const res = await runModel(
+          const res = await summarizeTranscript(
             ctx,
-            buildSummaryPrompt(issue, transcript),
+            issue,
+            chunks,
+            budgetChars,
           );
 					if (!res.ok) {
             warn(
@@ -988,9 +1072,17 @@ export {
 	validateIssueBodyAgainstTemplate,
 } from "./creation.ts";
 export {
+  buildMapPrompt,
+  buildReducePrompt,
   buildSummaryPrompt,
+  CHARS_PER_TOKEN,
   extractTranscriptAfter,
+  extractTranscriptChunks,
   lastEntryId,
+  packChunks,
+  TRANSCRIPT_BUDGET_FRACTION,
+  TRANSCRIPT_SEP,
+  transcriptCharBudget,
 } from "./summary.ts";
 export {
   effectiveEnabled,

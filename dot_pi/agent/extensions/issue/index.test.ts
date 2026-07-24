@@ -9,13 +9,21 @@ import * as path from "node:path";
 import {
 	bindKey,
 	buildIssueCreationPrompt,
+	buildMapPrompt,
+	buildReducePrompt,
 	buildSummaryPrompt,
+	CHARS_PER_TOKEN,
 	clearBind,
 	createSessionState,
 	detectProviderFromKey,
 	effectiveEnabled,
 	extractTranscriptAfter,
+	extractTranscriptChunks,
 	lastEntryId,
+	packChunks,
+	TRANSCRIPT_BUDGET_FRACTION,
+	TRANSCRIPT_SEP,
+	transcriptCharBudget,
 	formatIssueDraft,
 	formatNudgeMessage,
 	formatStatus,
@@ -903,6 +911,99 @@ describe("extractTranscriptAfter — fidelity", () => {
       "ASSISTANT: a\n\nASSISTANT: b",
     );
 		expect(extractTranscriptAfter(entries, "1")).toBe("ASSISTANT: b");
+	});
+});
+
+describe("transcriptCharBudget", () => {
+	test("is contextWindow * fraction * chars-per-token", () => {
+		expect(transcriptCharBudget(1_000_000)).toBe(
+			Math.floor(1_000_000 * TRANSCRIPT_BUDGET_FRACTION * CHARS_PER_TOKEN),
+		);
+		expect(transcriptCharBudget(200_000)).toBe(
+			Math.floor(200_000 * TRANSCRIPT_BUDGET_FRACTION * CHARS_PER_TOKEN),
+		);
+	});
+	test("falls back to 200k window for missing / nonsensical values", () => {
+		const fallback = Math.floor(
+			200_000 * TRANSCRIPT_BUDGET_FRACTION * CHARS_PER_TOKEN,
+		);
+		expect(transcriptCharBudget(undefined)).toBe(fallback);
+		expect(transcriptCharBudget(0)).toBe(fallback);
+		expect(transcriptCharBudget(-5)).toBe(fallback);
+		expect(transcriptCharBudget(Number.NaN)).toBe(fallback);
+	});
+});
+
+describe("extractTranscriptChunks / extractTranscriptAfter parity", () => {
+	const entries = [
+		{ type: "message", id: "1", message: { role: "user", content: "first" } },
+		{
+			type: "message",
+			id: "2",
+			message: { role: "assistant", content: [{ type: "text", text: "second" }] },
+		},
+	];
+	test("chunks are per-message segments; join equals extractTranscriptAfter", () => {
+		const chunks = extractTranscriptChunks(entries, null);
+		expect(chunks).toEqual(["USER: first", "ASSISTANT: second"]);
+		expect(chunks.join(TRANSCRIPT_SEP).trim()).toBe(
+			extractTranscriptAfter(entries, null),
+		);
+	});
+	test("anchoring parity with extractTranscriptAfter", () => {
+		expect(extractTranscriptChunks(entries, "1")).toEqual(["ASSISTANT: second"]);
+	});
+});
+
+describe("packChunks", () => {
+	test("packs consecutive segments greedily within budget, preserving order", () => {
+		// Each item length 10; SEP length 2. Budget 22 fits two per group.
+		const items = ["aaaaaaaaaa", "bbbbbbbbbb", "cccccccccc", "dddddddddd"];
+		const groups = packChunks(items, 22);
+		expect(groups).toEqual([
+			["aaaaaaaaaa", "bbbbbbbbbb"],
+			["cccccccccc", "dddddddddd"],
+		]);
+		for (const g of groups) {
+			expect(g.join(TRANSCRIPT_SEP).length).toBeLessThanOrEqual(22);
+		}
+	});
+	test("a single oversized segment is head-truncated into its own group", () => {
+		const big = "x".repeat(500);
+		const groups = packChunks(["short", big], 100);
+		expect(groups.length).toBe(2);
+		expect(groups[0]).toEqual(["short"]);
+		const capped = groups[1][0];
+		expect(capped.length).toBeLessThanOrEqual(100);
+		expect(capped).toContain("truncated to fit context window");
+	});
+	test("empty input -> no groups", () => {
+		expect(packChunks([], 100)).toEqual([]);
+	});
+});
+
+describe("buildMapPrompt / buildReducePrompt", () => {
+	const issue = { displayKey: "PROJ-9", title: "Big feature", body: "why" };
+	test("map prompt marks the part, is intermediate, and carries evidence rules", () => {
+		const p = buildMapPrompt(issue, "ASSISTANT: did a thing", 2, 5);
+		expect(p).toContain("part 2 of 5");
+		expect(p).toContain("INTERMEDIATE");
+		expect(p).toContain("[PROJ-9] Big feature");
+		expect(p).toContain("ASSISTANT: did a thing");
+		expect(p).toContain("UNTRUSTED");
+		expect(p).toContain('part="2" of="5"');
+	});
+	test("reduce prompt wraps each digest and keeps the comment contract", () => {
+		const p = buildReducePrompt(issue, ["digest one", "digest two"]);
+		expect(p).toContain('<digest part="1" of="2">');
+		expect(p).toContain('<digest part="2" of="2">');
+		expect(p).toContain("digest one");
+		expect(p).toContain("digest two");
+		expect(p).toContain("do NOT invent");
+		expect(p).toContain("checkpoint comment");
+	});
+	test("reduce prompt handles empty digest list", () => {
+		expect(buildReducePrompt(issue, [])).toContain("(no digests captured)");
 	});
 });
 
