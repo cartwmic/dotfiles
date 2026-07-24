@@ -91,9 +91,17 @@ summarize progress against that intent.
 The span is anchored on a **session-entry cursor** (`ps.lastSyncEntryId`, the id
 of the last entry the previous checkpoint covered) rather than a wall-clock
 timestamp — this avoids equal-millisecond double-counting, clock-skew skips, and
-missing-timestamp drops. The transcript includes everything in context that
-evidences progress: user + assistant text, assistant **tool calls**, and **tool
-results** (marked on error). Thinking blocks are excluded.
+missing-timestamp drops. The transcript is read from the **active,
+compaction-aware context** (`sessionManager.buildContextEntries()`) — the same
+entries pi actually holds — **not** the full append-only log
+(`getEntries()`). The full log spans every branch (including abandoned forks
+and entries compacted out of the live context, with untruncated tool output)
+and can be several times the live context; reading it once sent ~1.06M tokens
+for a session whose live context was only ~34% of 1M, tripping the provider's
+context-length limit. The transcript includes everything in the active context
+that evidences progress: user + assistant text, assistant **tool calls**, **tool
+results** (marked on error), and **compaction/branch summaries** (so work that
+was compacted away is still represented). Thinking blocks are excluded.
 
 **Context-window budgeting (map/reduce).** The transcript payload for any one
 model request is bounded to a character budget derived from the session model's

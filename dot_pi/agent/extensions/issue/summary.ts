@@ -95,9 +95,11 @@ function renderArgs(args: unknown): string {
  *
  * Includes everything in the session context that evidences progress — user
  * and assistant text, assistant tool calls, and tool results (marked on error),
- * interleaved in encountered order. Thinking blocks are excluded (internal
- * reasoning, not work product). No size bound here; bounding for the model
- * context window is applied downstream via packChunks + map/reduce.
+ * and compaction/branch summaries (the condensed record of work that was
+ * compacted out of the live context), interleaved in encountered order.
+ * Thinking blocks are excluded (internal reasoning, not work product). No size
+ * bound here; bounding for the model context window is applied downstream via
+ * packChunks + map/reduce.
  */
 export function extractTranscriptChunks(
   entries: unknown[],
@@ -158,6 +160,16 @@ export function extractTranscriptChunks(
       chunks.push(
         `TOOL RESULT ${tr.toolName ?? "?"}${tag}: ${text || "(no text output)"}`,
       );
+		} else if (
+			msg.role === "compactionSummary" ||
+			msg.role === "branchSummary"
+		) {
+			// When reading the active (compaction-aware) context, older work that was
+			// compacted away is present only as a summary entry. Include it so that
+			// condensed progress is not silently dropped from the checkpoint.
+			const summary = (msg as { summary?: unknown }).summary;
+			const text = typeof summary === "string" ? summary.trim() : "";
+			if (text) chunks.push(`EARLIER PROGRESS SUMMARY: ${text}`);
 		}
 	}
 	return chunks;
