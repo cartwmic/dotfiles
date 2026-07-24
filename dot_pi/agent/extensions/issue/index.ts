@@ -778,8 +778,10 @@ export default function (pi: ExtensionAPI): void {
 					sinceEntryId: string | null,
 				): Promise<{ body: string; anchorEntryId: string | null } | null> => {
 					if (!checkpoint) {
+						// Anchor over the ACTIVE (compaction-aware) context so the sync
+						// cursor is coherent with the checkpoint path below.
             const anchorEntryId = lastEntryId(
-              ctx.sessionManager.getEntries() as unknown[],
+              ctx.sessionManager.buildContextEntries() as unknown[],
             );
 						return { body: rawRest, anchorEntryId };
 					}
@@ -787,7 +789,13 @@ export default function (pi: ExtensionAPI): void {
             p.getIssue(boundKey),
           );
 					if (!issue) return null;
-					const entries = ctx.sessionManager.getEntries() as unknown[];
+					// Summarize from the ACTIVE, compaction-aware context
+					// (buildContextEntries) — what pi actually holds — NOT getEntries()
+					// (the full append-only log across ALL branches, including entries
+					// compacted out of context and abandoned forks). getEntries() could be
+					// several times the live context and blew past the model's window
+					// (e.g. 1.06M > 1M) even when the live context was ~34% full.
+					const entries = ctx.sessionManager.buildContextEntries() as unknown[];
 					const anchorEntryId = lastEntryId(entries);
 					const chunks = extractTranscriptChunks(entries, sinceEntryId);
 					const budgetChars = transcriptCharBudget(ctx.model?.contextWindow);

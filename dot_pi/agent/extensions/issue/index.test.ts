@@ -953,6 +953,30 @@ describe("extractTranscriptChunks / extractTranscriptAfter parity", () => {
 	test("anchoring parity with extractTranscriptAfter", () => {
 		expect(extractTranscriptChunks(entries, "1")).toEqual(["ASSISTANT: second"]);
 	});
+	test("includes compaction / branch summaries (active-context work)", () => {
+		const withSummaries = [
+			{
+				type: "message",
+				id: "c",
+				message: { role: "compactionSummary", summary: "did early setup" },
+			},
+			{
+				type: "message",
+				id: "b",
+				message: { role: "branchSummary", summary: "explored an alt path" },
+			},
+			{
+				type: "message",
+				id: "a",
+				message: { role: "assistant", content: [{ type: "text", text: "then this" }] },
+			},
+		];
+		expect(extractTranscriptChunks(withSummaries, null)).toEqual([
+			"EARLIER PROGRESS SUMMARY: did early setup",
+			"EARLIER PROGRESS SUMMARY: explored an alt path",
+			"ASSISTANT: then this",
+		]);
+	});
 });
 
 describe("packChunks", () => {
