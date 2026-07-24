@@ -35,7 +35,7 @@ import { Type } from "@sinclair/typebox";
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
 // Real Anthropic model ID (alias — resolves to current dated build). Override via ANTHROPIC_SEARCH_MODEL.
-const DEFAULT_MODEL = "claude-opus-4-8";
+const DEFAULT_MODEL = "claude-opus-5";
 const TOOL_NAME_SEARCH = "web_search";
 // The private Anthropic-compatible gateway reserves web_search by name. Keep the
 // public name everywhere else and expose this transport-safe alias only there.
