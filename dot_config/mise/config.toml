@@ -17,7 +17,13 @@
 # Core Language Runtimes
 # =============================================================================
 [tools]
-rust = "latest"   # Replaces rustup, provides cargo
+# NOTE: rust is deliberately NOT managed by mise.
+# mise's rust backend is a thin wrapper over rustup and unconditionally exports
+# RUSTUP_TOOLCHAIN=<resolved version> into the environment. rustup's resolution
+# order puts that env var ABOVE a repo's rust-toolchain.toml, so a global mise
+# rust pin silently shadows every project toolchain pin (see `mise env`).
+# Instead, rustup is installed by the install-rust task and owns toolchain
+# resolution, so rust-toolchain.toml works everywhere. See docs/lang/rust.html.
 python = "latest" # System Python
 node = "lts"      # Replaces nvm
 zig = "0.15.2"    # Pinned: builds the cartwmic/claude-p fork (pi-claude-bridge build-on-install)
@@ -349,13 +355,36 @@ if [ ! -d "$HOME/.antidote" ]; then
 fi
 '''
 
+[tasks."install-rust"]
+description = "Install rustup + stable toolchain (rustup owns toolchain resolution)"
+run = '''
+set -euo pipefail
+
+# rustup, not mise, manages Rust here. mise's rust backend exports
+# RUSTUP_TOOLCHAIN, which overrides any repo-level rust-toolchain.toml.
+if ! command -v rustup >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
+  echo "Installing rustup..."
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --default-toolchain stable --profile default
+fi
+
+# dot_zshenv sources this for interactive shells; needed here for the task itself
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+
+rustup default stable
+# wasm32-wasip1 is required to build the harpoon Zellij plugin from source
+rustup target add wasm32-wasip1
+
+echo "✅ rustup $(rustup --version 2>/dev/null | head -1)"
+'''
+
 [tasks."install-cargo-tools"]
 description = "Install cargo-based tools (rage)"
-depends = ["setup-ubuntu-essentials"]
+depends = ["setup-ubuntu-essentials", "install-rust"]
 run = '''
-# Ensure cargo is available (mise should have installed rust by now)
+# Ensure cargo is available (install-rust should have installed rustup by now)
 if ! command -v cargo >/dev/null 2>&1; then
-  echo "ERROR: cargo not found. Rust must be installed first."
+  echo "ERROR: cargo not found. Run: mise run install-rust"
   exit 1
 fi
 
@@ -565,6 +594,7 @@ echo "✅ Wrapper at $WRAPPER (uses Rosetta)"
 
 [tasks."install-zellij-plugins"]
 description = "Install/build Zellij plugins (room from release, harpoon from source)"
+depends = ["install-rust"]
 run = '''
 set -euo pipefail
 
@@ -621,7 +651,7 @@ fi
 HARPOON_STAMP="$PLUGIN_DIR/.harpoon.version"
 if [ ! -f "$PLUGIN_DIR/harpoon.wasm" ] || [ "$(cat "$HARPOON_STAMP" 2>/dev/null)" != "$HARPOON_VERSION" ]; then
   echo "Building Nacho114/harpoon $HARPOON_VERSION..."
-  rustup target add wasm32-wasip1 >/dev/null 2>&1 || true
+  # wasm32-wasip1 target is added by the install-rust task (a dependency)
 
   HARPOON_SRC="$HOME/.local/share/harpoon-zellij/src"
   mkdir -p "$(dirname "$HARPOON_SRC")"
@@ -653,6 +683,7 @@ echo "✅ Zellij plugins installed in $PLUGIN_DIR"
 description = "Complete system bootstrap"
 depends = [
   "setup-ubuntu-essentials",
+  "install-rust",
   "install-cargo-tools",
   "install-uv",
   "install-uv-tools",
@@ -714,7 +745,9 @@ verbose = false
 #     * Reads .nvmrc and .node-version files automatically
 #     * Commands: mise install node@X, mise use node@X, mise ls node
 #     * Drop-in replacement for nvm functionality
-#   - rustup: mise replaces rustup CLI entirely
+#   - rustup: NOT managed by mise. Installed by the install-rust task and left
+#     authoritative, because mise's rust backend exports RUSTUP_TOOLCHAIN and
+#     that shadows every repo-level rust-toolchain.toml pin.
 #   - gvm: NOT managed by mise, must install manually (same as bootstrap)
 #   - SDKMAN: Installed via task, SDK CLI remains available
 #   - uv: Installed via task, uv CLI remains available
@@ -732,11 +765,11 @@ verbose = false
 #
 # ✅ Prerequisites:
 #   - uv → task (curl installer)
-#   - cargo/rust → rust in [tools]
+#   - cargo/rust → install-rust task (rustup)
 #
 # ✅ Language runtimes:
 #   - nvm → node in [tools]
-#   - rustup → rust in [tools]
+#   - rustup → install-rust task (rustup owns toolchain resolution)
 #   - python → python in [tools]
 #   - gvm → MANUAL (as in bootstrap)
 #   - sdkman → task (as in bootstrap)
