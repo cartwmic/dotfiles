@@ -45,8 +45,8 @@ exec zsh
 
 - Editor: Neovim (LazyVim)
 - Git: lazygit TUI
-- Languages: Node.js, Python, Rust (managed by mise)
-- Version Management: mise (replaces nvm/rustup), SDKMAN, gvm
+- Languages: Node.js, Python (managed by mise); Rust (managed by rustup)
+- Version Management: mise (replaces nvm), rustup (Rust), SDKMAN, gvm
 
 **DevOps/Cloud:**
 

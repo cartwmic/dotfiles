@@ -38,14 +38,17 @@ This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.
 
 - **Editor**: Neovim (LazyVim distribution)
 - **Git UI**: Lazygit
-- **Tool Management**: mise (manages Node.js, Python, Rust, and 40+ dev tools)
+- **Tool Management**: mise (manages Node.js, Python, and 40+ dev tools)
 - **Version Managers**:
-  - mise (Node.js, Python, Rust - replaces nvm/rustup)
+  - mise (Node.js, Python - replaces nvm)
+  - rustup (Rust - installed by the `install-rust` mise task, NOT managed as a
+    mise tool: mise's rust backend exports `RUSTUP_TOOLCHAIN`, which overrides
+    every repo-level `rust-toolchain.toml`)
   - SDKMAN (Java/JVM)
   - gvm (Go - manual install)
 - **Package Managers**:
   - uv (Python)
-  - cargo (Rust, via mise)
+  - cargo (Rust, via rustup)
   - npm (Node.js, via mise)
 
 ### DevOps/Cloud Tools
