@@ -1,0 +1,36 @@
+{
+  "revision": "1",
+  "intent_revision": "1",
+  "approach": "Partial failure becomes visible at the run boundary. Failure visibility, count reporting and compatibility together give the caller what the intent asks for, while successful runs keep their present contract.",
+  "elements": [
+    "failure visibility -- responsible for making a run with any failed record distinguishable from a clean one",
+    "count reporting -- responsible for making the failed count available to the caller",
+    "compatibility -- responsible for keeping fully successful runs reporting exactly as they do today"
+  ],
+  "decisions": [
+    {
+      "decision": "Expose a count of failed records rather than the failed records themselves.",
+      "rationale": "Carrying the records would make the record shape a public contract we would then be obliged to keep stable. Revisit if a caller must act on individual failures.",
+      "rejected": [
+        "Return the failed records -- makes the record shape a public contract"
+      ]
+    }
+  ],
+  "coverage": [
+    {
+      "acceptance": "A run where every record succeeded is distinguishable from one where any record failed",
+      "delivered_by": "failure visibility"
+    },
+    {
+      "acceptance": "When any record fails, the number of failed records is reported to the caller",
+      "delivered_by": "count reporting"
+    },
+    {
+      "acceptance": "A fully successful run reports success exactly as it does today",
+      "delivered_by": "compatibility"
+    }
+  ],
+  "risks": [
+    "Automation tuned to the old clean-run reading will start seeing failures at cutover; this design does not stage that."
+  ]
+}

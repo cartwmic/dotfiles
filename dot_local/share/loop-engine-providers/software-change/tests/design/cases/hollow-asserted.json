@@ -1,0 +1,36 @@
+{
+  "revision": "1",
+  "intent_revision": "1",
+  "approach": "Partial failure becomes a first-class property of the run boundary. One observation point tells the caller whether any record failed and how many, while successful runs keep today's contract.",
+  "elements": [
+    "run boundary -- exposes success vs partial-failure outcomes to the caller",
+    "failure accounting -- knows how many records failed in a run",
+    "success path -- reports success exactly as today when nothing failed"
+  ],
+  "decisions": [
+    {
+      "decision": "Expose the failure count on the run boundary, not via logs or a side report.",
+      "rationale": "Acceptance requires the number be available to the caller of the run; a side channel makes them go looking. Revisit if a dedicated observation API becomes required.",
+      "rejected": [
+        "Logs only -- caller of the run does not see the number"
+      ]
+    }
+  ],
+  "coverage": [
+    {
+      "acceptance": "A run where every record succeeded is distinguishable from one where any record failed",
+      "delivered_by": "run boundary -- distinct success and partial-failure outcomes"
+    },
+    {
+      "acceptance": "When any record fails, the number of failed records is reported to the caller",
+      "delivered_by": "failure accounting -- surfaced through the run boundary"
+    },
+    {
+      "acceptance": "A fully successful run reports success exactly as it does today",
+      "delivered_by": "success path -- today's success reporting unchanged"
+    }
+  ],
+  "risks": [
+    "Callers that treated partial failure as clean will observe failures at cutover; this design does not stage that."
+  ]
+}
