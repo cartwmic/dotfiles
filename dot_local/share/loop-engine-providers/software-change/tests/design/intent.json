@@ -1,0 +1,14 @@
+{
+  "revision": "1",
+  "problem": "The batch command exits zero even when some records fail, so downstream automation treats a partial failure as a clean run and never retries.",
+  "outcome": "Downstream automation can tell a partially failed batch run from a fully successful one without inspecting per-record output.",
+  "acceptance": [
+    "A run where every record succeeded is distinguishable from one where any record failed",
+    "When any record fails, the number of failed records is reported to the caller",
+    "A fully successful run reports success exactly as it does today"
+  ],
+  "non_goals": [
+    "Changing how individual records are processed",
+    "Adding retry behaviour"
+  ]
+}

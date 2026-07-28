@@ -1,0 +1,32 @@
+#!/bin/sh
+#
+# chezmoi run_onchange — rebuilds and re-registers loop-engine workflow providers
+# when provider source or the build script changes.
+#
+# The hash comments below give chezmoi a content-derived trigger. They are
+# GLOBBED, not enumerated, and that is the whole point: an enumerated list has to
+# be edited every time a module is added, nobody remembers, and the failure is
+# silent — the file that was forgotten is exactly the file whose edits stop
+# triggering a rebuild. This trigger went stale that way once, missing eight of
+# seventeen modules including the one carrying every judge rubric.
+#
+# Adding a provider or a module now needs no edit here.
+#
+{{ range (glob (joinPath .chezmoi.sourceDir "dot_local/share/loop-engine-providers/**/*.rs")) -}}
+# {{ . | replace $.chezmoi.sourceDir "" | trimPrefix "/" }}: {{ include . | sha256sum }}
+{{ end -}}
+{{ range (glob (joinPath .chezmoi.sourceDir "dot_local/share/loop-engine-providers/*/Cargo.toml")) -}}
+# {{ . | replace $.chezmoi.sourceDir "" | trimPrefix "/" }}: {{ include . | sha256sum }}
+{{ end -}}
+# dot_local/user_scripts/executable_build_loop_engine_providers.sh: {{ include "dot_local/user_scripts/executable_build_loop_engine_providers.sh" | sha256sum }}
+
+set -eu
+
+SCRIPT="$HOME/.local/user_scripts/build_loop_engine_providers.sh"
+
+if [ ! -x "$SCRIPT" ]; then
+  echo "[build_loop_engine_providers] INFO: build script not found at $SCRIPT, skipping"
+  exit 0
+fi
+
+exec "$SCRIPT"

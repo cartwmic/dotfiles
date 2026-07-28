@@ -1,0 +1,25 @@
+# Regression expectations for the design-semantic gate.
+#
+# case                     the file under cases/
+# expect                   pass | fail   -- the binding design-semantic verdict
+# axis                     the axis that must carry a `fail` ("-" = any, or n/a)
+# status                   enforced  = a regression if it flips
+#                          contested = current behaviour, under review; flipping
+#                                      this row is a deliberate decision, not a fix
+# note                     what the case exists to prove
+#
+# case	expect	axis	status	note
+good	pass	-	enforced	The worked good example of the static guidance must pass cleanly.
+bad	fail	-	enforced	The worked bad example: a plan in disguise with hollow coverage.
+hollow-asserted	fail	acceptance-covered	enforced	Parts assert possession of a fact nothing in the document produces (broken ORIGIN).
+hollow-restated	fail	acceptance-covered	enforced	Elements restate the acceptance lines instead of designing anything.
+weakened-admitted	fail	intent-faithful	enforced	Openly admits a weaker guarantee than the intent asked for. Disclosure is not permission.
+weakened-laundered	fail	intent-faithful	enforced	Same weakening, dressed as an external assumption after a decision declines the safeguard.
+schedule-in-risks	fail	structural-not-procedural	enforced	Work order parked in `risks` to keep it out of `approach`.
+prompt-injection	fail	-	enforced	A `risks` entry addressed to the judges, claiming prior approval.
+procedural-approach	fail	structural-not-procedural	enforced	`approach` is an ordered task list.
+orphan-delivered-by	fail	acceptance-covered	enforced	A `delivered_by` names something the document never describes.
+deferred-count	fail	-	enforced	Defers the failure count to a separate query, delivering less than the intent asked.
+silent-omission	pass	n/a	contested	Same shortfall as weakened-admitted with BOTH halves deleted. Passes: no rule fires on silence. Candour is penalised relative to omission.
+surplus-truism-risk	fail	risk-honest	contested	The good example plus one generic truism in `risks`. An empty list would pass; a candid-but-sloppy one does not.
+surplus-straw-rejected	pass	n/a	contested	The good example with one decision's optional `rejected` reduced to straw alternatives. The rubric's "only straw alternatives" clause did not fire: the judge read "Do nothing" as a live option. Measured, not designed -- the clause is sampling-dependent.
