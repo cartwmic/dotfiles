@@ -1,7 +1,7 @@
 # issue — pi extension (work profile)
 
 Multi-provider issue tracking helper for pi. Supports **Jira** (via MCP client)
-and **GitHub** (via `gh` CLI). **Not** coupled to opsx-loop / opsx gate.
+and **GitHub** (via `gh` CLI). Standalone — no workflow-engine coupling.
 
 ## Deploy
 

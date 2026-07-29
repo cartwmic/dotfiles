@@ -1,5 +1,23 @@
-# Retired by consolidate-opsx-cli: the three standalone CLIs folded into `opsx`.
-# chezmoi removes these deployed targets on apply (source deletion alone does not).
+# Retired 2026-07-28: the OpenSpec / opsx workflow was removed wholesale
+# (CLI, workflow schema, opsx-loop pi extension, openspec-* + clarify-spec
+# skills, setup script). chezmoi removes these deployed targets on apply;
+# source deletion alone does not. The agent-skill symlinks that point at the
+# canonical dirs below are pruned by apply_harness_config.sh once the targets
+# are gone. Prune this list once every machine has applied.
+.local/bin/opsx
 .local/bin/opsx-gate
 .local/bin/opsx-models
 .local/bin/opsx-loop
+.local/user_scripts/setup_openspec.sh
+.local/share/openspec
+.pi/agent/extensions/opsx-loop
+.local/share/agent-harness/canonical/skills/openspec-explore
+.local/share/agent-harness/canonical/skills/openspec-propose
+.local/share/agent-harness/canonical/skills/openspec-apply-change
+.local/share/agent-harness/canonical/skills/openspec-archive-change
+.local/share/agent-harness/canonical/skills/openspec-loop
+.local/share/agent-harness/canonical/skills/clarify-spec
+.codex/prompts/opsx-apply.md
+.codex/prompts/opsx-archive.md
+.codex/prompts/opsx-explore.md
+.codex/prompts/opsx-propose.md

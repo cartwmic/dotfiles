@@ -1,7 +1,4 @@
 // Unit tests for goal-loop pure helpers.
-// Acceptance criteria cited by canonical ID for the opsx verify gate:
-//   goal-loop.handle-evaluation-failure
-//   goal-loop.clear-a-goal
 //   goal-loop.bound-the-loop-with-a-turn-budget
 //   goal-loop.evaluate-each-turn-once
 //   goal-loop.pluggable-command-judge
@@ -130,8 +127,8 @@ describe("commandVerdict — goal-loop.pluggable-command-judge", () => {
 
 describe("normalizeGoalConfig — goal-loop.pluggable-command-judge", () => {
 	test("accepts a judgeCommand string", () => {
-		expect(normalizeGoalConfig({ judgeCommand: "opsx gate my-change" })).toEqual({
-			judgeCommand: "opsx gate my-change",
+		expect(normalizeGoalConfig({ judgeCommand: "make verify" })).toEqual({
+			judgeCommand: "make verify",
 		});
 	});
 	test("drops blank judgeCommand", () => {
