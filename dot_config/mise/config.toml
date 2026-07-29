@@ -424,18 +424,6 @@ if ! command -v claude-code-acp >/dev/null 2>&1; then
 fi
 '''
 
-[tasks."install-openspec"]
-description = "Install OpenSpec CLI"
-run = '''
-if ! command -v openspec >/dev/null 2>&1; then
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "ERROR: npm not found. Node.js must be installed first."
-    exit 1
-  fi
-  npm install -g @fission-ai/openspec@latest
-fi
-'''
-
 [tasks."install-mermaid-cli"]
 description = "Install mermaid-cli (mmdc)"
 run = '''
@@ -693,7 +681,6 @@ depends = [
   "install-claude",
   "install-furi",
   "install-claude-code-acp",
-  "install-openspec",
   "install-antidote",
   "install-fzf-tab",
   "install-kubectl",
