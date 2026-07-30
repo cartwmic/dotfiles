@@ -65,10 +65,23 @@ consensus_model = "openai-codex/gpt-5.6-sol"
 # max_parallel_axes = 3
 
 # Wall-clock budget for the whole judgment: axis judges run concurrently, then
-# the deciding judge runs. Capped by the provider registration timeout, which
-# defaults to 60s and is far too small for this. Raise it:
-#   loop-engine provider update software-change --exec <PATH> --timeout 900
-timeout_seconds = 300
+# the deciding judge runs.
+#
+# This is CAPPED by the provider registration timeout, which bounds the entire
+# invocation -- and on a `phase-complete` request the checkpoint commands run
+# inside that same budget, BEFORE the judgment does. A slow test suite and a
+# judgment compete for one clock. Size the registration timeout as
+#
+#   slowest checkpoint suite  +  this value  +  headroom
+#
+# and give the commands their own ceiling with `checkpoint.timeout_seconds` in
+# plan.json so an infinite loop cannot eat the judge's share.
+#
+# The registration default is 60s and is far too small for any judgment at all;
+# a run registered at the default fails its first `intent-semantic` with an
+# evaluation error, which reads like a broken provider and is not. Raise it:
+#   loop-engine provider update software-change --exec <PATH> --timeout 1800
+timeout_seconds = 600
 
 # Optional. Omit to run every axis this provider build implements.
 # There are three axis vocabularies, one per judged document, and they are

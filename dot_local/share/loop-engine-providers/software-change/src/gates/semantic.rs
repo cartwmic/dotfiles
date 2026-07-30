@@ -643,9 +643,11 @@ yourself out of.
      specified\", \"nothing guarantees Y\" are NOT findings here: a design is not
      required to enumerate the safeguards it keeps, and demanding proof that no
      shortfall exists is an unbounded hunt with no stopping point. A document
-     that stays silent is claiming full delivery, and is judged on that claim. If
-     the claim is implausible to a reader who knows the domain, that is the
-     design reviewer's call in the next state, not yours.
+     that stays silent is claiming full delivery, and is judged on that claim.
+     Whether that claim is PLAUSIBLE to a reader who knows the domain is not
+     judged by you -- and it is not judged anywhere else in this workflow
+     either. No later state picks it up. Do not stretch this axis to cover it;
+     the unbounded hunt is the reason the stop exists.
 
 DISCLOSURE DOES NOT CURE A VIOLATION. A weaker guarantee fails whether or not
 the design admits it under `decisions` or `risks`. Saying \"this deliberately
@@ -853,9 +855,10 @@ change for that decision to be revisited, and neither (a) nor (b) fires.
 `rejected` may be absent where a choice genuinely had no live alternative; an
 empty `decisions` list passes only when the document surfaces no fork at all.
 
-Do NOT rule on whether the decisions are the RIGHT ones -- that is the design
-reviewer's job in the next state, not yours. Judge only whether the reasoning is
-present and load-bearing. Do not rule on coverage, fidelity or structure.",
+Do NOT rule on whether the decisions are the RIGHT ones. That question is not
+judged by you, and it is not judged anywhere else in this workflow either -- no
+later state picks it up. Judge only whether the reasoning is present and
+load-bearing. Do not rule on coverage, fidelity or structure.",
     },
     Axis {
         id: "risk-honest",
@@ -986,8 +989,9 @@ relax what it does say.
     hazard and passes. Concurrency, load, ordinary timing and a declined
     safeguard are inside the design, not outside it.
   - Silence is not a weakening. Neither the axes nor you may infer a shortfall
-    the document does not state; that judgment belongs to the design reviewer in
-    the next state.
+    the document does not state. Whether a silent full-delivery claim is
+    plausible is not judged here and is not judged anywhere else in this
+    workflow; do not treat it as an open question a later state will close.
 
 OVERTURNING A FAIL is permitted ONLY when the axis judge MISREAD the documents.
 Quote the text it misread, say what that text actually says, and -- if the
@@ -1570,6 +1574,13 @@ Volume is the signal, not presence.
 PASS earlier phases' work appearing again in this diff when the material states
 that no per-phase boundary was recorded. The diff then necessarily accumulates,
 which is a property of how it was taken and not of the author's discipline.
+
+PASS files marked `[untracked]` that are working scratch rather than delivered
+work -- notes, a debug script, a scratch reproduction, a captured log. They are
+shown in full, so they carry volume out of proportion to their weight, and
+volume is this axis's signal. Untracked files that are plainly part of the
+delivered work -- a new module, a new test, a new fixture the tasks called for --
+are judged exactly like tracked files.
 
 DO NOT RULE ON: whether this phase's own tasks were completed --
 `tasks-actually-done` covers it; whether the change serves the design; code

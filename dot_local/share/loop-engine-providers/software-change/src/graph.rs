@@ -352,8 +352,12 @@ a string, may be left to whoever builds it, and the gate will not ask.
             and is still a rejection, and rephrasing it as an assumption changes
             nothing: the gate judges what gets built, not how the sentence is
             worded. If the intent asks for more than this change should deliver,
-            the INTENT is what has to change -- go back, revise it, and return
-            here. Candour is not permission.
+            the INTENT is what has to change: request `revise-intent`, which
+            moves the run to `explore`. Narrow it there, raise its `revision`,
+            pass `intent-ready` and `intent-semantic` again, and return -- your
+            coverage citations will have to be re-pointed at the new acceptance
+            lines before `design-ready` will accept this document.
+            Candour is not permission.
 
 intent = what must become true, and why
 design = how, structurally
@@ -1197,8 +1201,11 @@ refusal leaves the run here with the reasons attached and nothing to unwind.
 Raise `revision` when you make a substantive change and keep `subject_revision`
 pointing at the design you are planning against. If a refusal points at something
 the DESIGN does not support, that is a design problem and not a task to write
-around: revise `design.json`, request `design-ready` again from `design`, and
-come back. Smuggling the fix into a task hides a design change inside a plan.
+around: request `revise-design`, which moves the run to `design`. Revise it
+there, raise its `revision`, pass both design gates again, and come back --
+`plan-ready` will refuse this document until `subject_revision` names the new
+design revision. Smuggling the fix into a task hides a design change inside a
+plan.
 
 Passing sends you straight to `implement`. There is no `plan-review` state, for
 the same reason there is no `design-review` one.
@@ -1275,6 +1282,27 @@ It is APPENDED TO, never revised. Unlike intent, design and plan, this document
 is not authored prose and is never reviewed. Nothing reads `revision` except the
 gate that requires it to be non-empty.
 
+That holds WITHIN A PLAN REVISION. There is one case where the cursor changes
+rather than grows: you took `revise-plan`, revised the plan, and came back. The
+plan's `revision` moved, so `plan_revision` here no longer matches it and every
+gate in this state refuses until they agree. Re-point it -- raise this document's
+`revision` and set `plan_revision` to the new plan's -- and DO NOT rewrite
+`phases`.
+
+The phase list still has to be a prefix of the new plan's phases, and that is
+what decides whether the revision was legitimate. A plan revised only in the
+phases you have not reached yet still lines up, and work continues where it left
+off. A revision that reorders, renames or drops a phase you already claimed does
+not, and the gate says so: a phase that has been verified cannot be changed
+underneath its verification. If that is genuinely what the change needs, it needs
+a new run.
+
+One thing this does not catch, and you should know it. The prefix check compares
+phase IDENTIFIERS. A revised plan that keeps the id `P1` and rewrites what P1's
+tasks say passes it, and P1 keeps a verification earned against tasks that no
+longer exist. Nothing in this build detects that. If you revise a claimed
+phase's tasks, its verification is worthless and you are the only one who knows.
+
 --- THE LOOP ---
 
   1. `run guidance`            -> which phase, its tasks, its checkpoint
@@ -1290,6 +1318,20 @@ this phase" -- and the gate is what verifies it, exactly as design.json claims t
 deliver the intent and a gate decides whether it does. Claiming first means a
 rejection leaves nothing to unwind: the claim simply stays unverified, you fix
 the work, and you request again.
+
+ONE PHASE PER REQUEST. This is the part of the loop most easily got wrong, and
+getting it wrong is silent. `phase-complete` verifies the LAST phase listed in
+`phases` and only that one. If you append P1 and P2 and then request once, P2 is
+verified and P1 never is -- its checkpoint commands do not run and its diff is
+never reviewed. The cursor is append-only, so there is no way to go back and
+verify P1 afterwards: appending P3 later only moves the pointer further past it.
+Nothing warns you, and `implementation-ready` will not catch it either, because
+it checks that the list is COMPLETE, not that its entries were verified.
+
+Finish a phase, append it, request `phase-complete`, and wait for the verdict
+before starting the next one. Batching several phases and recording them
+together is the natural way to work and it is exactly what loses the
+verification.
 
 --- WHY COMMIT PER PHASE ---
 
@@ -1506,6 +1548,40 @@ const TRANSITIONS: &[(&str, &str, &str, &[&str])] = &[
         "implement",
         &["implementation-review-changes-requested"],
     ),
+    // --- REVISION EDGES -------------------------------------------------
+    //
+    // Every state that authors a document can be re-entered from every state
+    // below it. Without these the guidance was ordering moves the graph could
+    // not make: a plan refused because the DESIGN does not support it has its
+    // fix one state up, and there was no way to get there.
+    //
+    // They carry NO GATES, and cannot launder anything. Reaching `end` still
+    // means traversing every forward edge, and every forward edge still carries
+    // its full gate pair. Going back is not a way around a refusal, it is a way
+    // to pay for a second one: the document you return to must pass its own
+    // gates again, and so must every document below it.
+    //
+    // Nor do they unstick a rejection. Return, change nothing, come forward:
+    // content and rubrics are identical, so the cache key is identical and the
+    // stored FAIL replays. Bouncing costs wall clock and buys no verdict.
+    //
+    // They skip states going BACK and skip nothing coming FORWARD. From
+    // `explore` the only exit is `intent-ready`; from `design` the only exit is
+    // `design-ready`. So `implement --revise-intent--> explore` re-runs
+    // `intent-semantic`, then `design-semantic`, then `plan-semantic`, in that
+    // order, before the run can be back where it started.
+    //
+    // Invalidation is already built. `design.json` carries `intent_revision`
+    // and `plan.json` carries `subject_revision`, each checked equal to the
+    // CURRENT revision of the document above it. Revise an upstream document
+    // and bump its `revision`, and every document below is refused until it is
+    // re-pointed -- which means re-read, and re-judged.
+    ("design", "revise-intent", "explore", &[]),
+    ("plan", "revise-intent", "explore", &[]),
+    ("plan", "revise-design", "design", &[]),
+    ("implement", "revise-intent", "explore", &[]),
+    ("implement", "revise-design", "design", &[]),
+    ("implement", "revise-plan", "plan", &[]),
 ];
 
 /// Static guidance for one state: the authored prose, plus the verbatim judge
@@ -1522,9 +1598,65 @@ const TRANSITIONS: &[(&str, &str, &str, &[&str])] = &[
 /// and still fail on a rule the author was never shown.
 fn state_guidance(state_id: &str, authored: &str) -> String {
     let mut out = authored.to_string();
+    out.push_str(&revision_edges_for(state_id));
     for subject in crate::gates::semantic::subjects_for_state(state_id) {
         out.push_str(&crate::gates::semantic::published_rubrics(subject));
     }
+    out
+}
+
+/// The gate-less edges out of `state`, described from the transition table.
+///
+/// Derived rather than written, for the same reason the rubrics are: a
+/// hand-maintained list of available moves is a second source of truth, and the
+/// author is the one who pays when it disagrees with the graph. Guidance that
+/// names a move the engine will refuse is the defect this whole section exists
+/// to remove.
+fn revision_edges_for(state_id: &str) -> String {
+    let edges: Vec<&(&str, &str, &str, &[&str])> = TRANSITIONS
+        .iter()
+        .filter(|(source, _, _, gates)| *source == state_id && gates.is_empty())
+        .collect();
+    if edges.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::from("\n\n--- GOING BACK TO REVISE SOMETHING UPSTREAM ---\n\n");
+    out.push_str(
+        "A refusal here does not always point at THIS document. When the reason is that the \
+         document above it does not support what you are being asked to write, writing around \
+         the gap is the wrong repair: it hides a decision in a place no gate reads for it. The \
+         fix belongs upstream, and these events go there.\n\n",
+    );
+    for (_, event, target, _) in &edges {
+        out.push_str(&format!("  {event:<16} moves the run to `{target}`\n"));
+    }
+    out.push_str(
+        "\nThey carry no gates, so the move itself is always allowed and never judged. What is \
+         judged is the way back. Nothing is skipped coming forward: from `explore` the only \
+         exit is `intent-ready`, and from `design` the only exit is `design-ready`, so returning \
+         to the top means passing every gate between there and here, in order, again.\n\n\
+         Going back is therefore never a way around a refusal -- it is a way to pay for another \
+         one. It also cannot launder a rejection: return, change nothing, come forward, and the \
+         judgment is replayed from cache unchanged, because the content and the rubrics are \
+         what identify it.\n\n\
+         WHAT MAKES THE REVISION STICK. Each document names the revision of the one above it -- \
+         `design.json` carries `intent_revision`, `plan.json` carries `subject_revision`, \
+         `implementation.json` carries `plan_revision` -- and its deterministic gate checks that \
+         value against what the parent currently says. So raise `revision` on the document you \
+         revise. That is what refuses everything below it until each is re-pointed, and \
+         re-pointing is what forces them to be re-read and re-judged. Editing an upstream \
+         document WITHOUT raising its revision leaves every document below it carrying a \
+         judgment made against text that no longer exists, and no gate will notice.\n\n\
+         `run guidance` reports which documents currently exist below this state and whether \
+         their links still hold, before you decide whether the edit is worth its cascade.\n\n\
+         THE ONE USE THESE EDGES ARE NOT FOR. Revising an upstream document so that it matches \
+         what already exists below it is not a repair, it is moving the target. An intent \
+         narrowed until the code satisfies it, or a design rewritten around a decision already \
+         taken in a task, passes every gate and certifies a change nobody asked for. These \
+         edges exist because a genuine upstream mistake had no legal repair. They do not exist \
+         to make a refusal go away.\n",
+    );
     out
 }
 
@@ -1694,6 +1826,150 @@ mod guidance_tests {
                     cited.contains(&element.as_str().unwrap()),
                     "{name} does not cite {element}"
                 );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod topology_tests {
+    use super::*;
+    use std::collections::{BTreeSet, VecDeque};
+
+    fn state_ids() -> BTreeSet<&'static str> {
+        STATES.iter().map(|(id, _, _)| *id).collect()
+    }
+
+    /// The engine rejects a graph with two transitions sharing a
+    /// `(source_state, event)` pair. Reusing `revise-intent` from three states
+    /// is legal precisely because the pairs stay distinct; this pins that.
+    #[test]
+    fn every_source_and_event_pair_is_unique() {
+        let mut seen = BTreeSet::new();
+        for (source, event, _, _) in TRANSITIONS {
+            assert!(
+                seen.insert((*source, *event)),
+                "duplicate transition for ({source}, {event})"
+            );
+        }
+    }
+
+    #[test]
+    fn every_transition_names_declared_states() {
+        let states = state_ids();
+        for (source, event, target, _) in TRANSITIONS {
+            assert!(states.contains(source), "{event} leaves undeclared state {source}");
+            assert!(states.contains(target), "{event} enters undeclared state {target}");
+        }
+    }
+
+    /// A final state with an outgoing transition is `provider.graph.invalid`.
+    #[test]
+    fn no_final_state_has_an_exit() {
+        for (id, final_state, _) in STATES {
+            if *final_state {
+                assert!(
+                    !TRANSITIONS.iter().any(|(source, _, _, _)| source == id),
+                    "final state {id} declares an exit"
+                );
+            }
+        }
+    }
+
+    /// Every authoring state below the top can reach the one that owns the
+    /// document above it. This is the hole the revision edges were added to
+    /// close: guidance told authors to repair upstream, and no edge went there.
+    #[test]
+    fn every_authoring_state_can_reach_every_state_above_it() {
+        for (from, to) in [
+            ("design", "explore"),
+            ("plan", "explore"),
+            ("plan", "design"),
+            ("implement", "explore"),
+            ("implement", "design"),
+            ("implement", "plan"),
+        ] {
+            assert!(
+                TRANSITIONS
+                    .iter()
+                    .any(|(source, _, target, _)| *source == from && *target == to),
+                "no edge from {from} back to {to}"
+            );
+        }
+    }
+
+    /// Revision edges carry no gates deliberately: the move is always allowed
+    /// and never judged, because everything they can reach must be re-judged on
+    /// the way forward anyway. A gate here would be ceremony.
+    #[test]
+    fn revision_edges_carry_no_gates() {
+        for (source, event, _, gates) in TRANSITIONS {
+            if event.starts_with("revise-") {
+                assert!(gates.is_empty(), "{source} --{event}--> declares gates {gates:?}");
+            }
+        }
+    }
+
+    /// Going back may skip states. Coming forward may not: each authoring state
+    /// has exactly one gated exit, so returning to the top means passing every
+    /// gate between there and here, in order.
+    #[test]
+    fn the_forward_path_cannot_be_skipped() {
+        for state in ["explore", "design", "plan"] {
+            let forward: Vec<&str> = TRANSITIONS
+                .iter()
+                .filter(|(source, _, _, gates)| *source == state && !gates.is_empty())
+                .map(|(_, event, _, _)| *event)
+                .collect();
+            assert_eq!(forward.len(), 1, "{state} has forward exits {forward:?}");
+        }
+    }
+
+    /// Every state must be reachable from the initial one, or its guidance is
+    /// text nobody can ever be shown.
+    #[test]
+    fn every_state_is_reachable_from_explore() {
+        let mut seen = BTreeSet::from(["explore"]);
+        let mut queue = VecDeque::from(["explore"]);
+        while let Some(state) = queue.pop_front() {
+            for (source, _, target, _) in TRANSITIONS {
+                if *source == state && seen.insert(*target) {
+                    queue.push_back(*target);
+                }
+            }
+        }
+        assert_eq!(seen, state_ids(), "unreachable states");
+    }
+
+    /// The published list of revision edges is derived from the table, so it
+    /// cannot name a move the engine will refuse.
+    #[test]
+    fn published_revision_edges_match_the_table() {
+        let text = revision_edges_for("implement");
+        for event in ["revise-intent", "revise-design", "revise-plan"] {
+            assert!(text.contains(event), "implement guidance omits {event}");
+        }
+        assert!(
+            revision_edges_for("explore").is_empty(),
+            "explore has nothing above it to revise"
+        );
+        assert!(revision_edges_for("end").is_empty());
+    }
+
+    /// Guidance must not describe a transition the graph does not have. This is
+    /// the exact defect the revision edges were added to repair, and the check
+    /// that stops it coming back.
+    #[test]
+    fn no_guidance_names_an_event_the_graph_does_not_declare() {
+        let declared: BTreeSet<&str> = TRANSITIONS.iter().map(|(_, event, _, _)| *event).collect();
+        for (state, _, authored) in STATES {
+            for candidate in ["revise-intent", "revise-design", "revise-plan", "design-ready"] {
+                if authored.contains(candidate) {
+                    assert!(
+                        declared.contains(candidate),
+                        "{state} guidance names undeclared event {candidate}"
+                    );
+                }
             }
         }
     }

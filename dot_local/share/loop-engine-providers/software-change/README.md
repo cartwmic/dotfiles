@@ -20,6 +20,10 @@ evidence supports the transition.
 
 ```text
 explore ──intent-ready──▶ design ──design-ready──▶ plan ──plan-ready──▶ implement ⟲ phase-complete
+   ▲                        ▲                       ▲                       │
+   └────────────────────────┴───────────────────────┴───────────────────────┤ revise-intent
+                            ◀────────────────────────────────────────────────┤ revise-design
+                                                    ◀────────────────────────┤ revise-plan
                                                                             │
                                                                             │ implementation-ready
                                                                             ▼
@@ -35,6 +39,9 @@ the plan's order. The run stays there however many phases there are, which is
 what lets the graph be frozen at run creation — before any plan exists — while
 still gating every phase.
 
+The `revise-*` edges go **backward**, from any authoring state to any state
+above it. See **Going back to revise something upstream** below.
+
 ### Gates on each transition
 
 | Transition | Gates |
@@ -46,9 +53,23 @@ still gating every phase.
 | `implement → implementation-review` | `implementation-ready` |
 | `implementation-review → end` | `implementation-review-approved`, `implementation-semantic` |
 | `implementation-review → implement` | `implementation-review-changes-requested` |
+| `design → explore` | *(none — `revise-intent`)* |
+| `plan → explore` | *(none — `revise-intent`)* |
+| `plan → design` | *(none — `revise-design`)* |
+| `implement → explore` | *(none — `revise-intent`)* |
+| `implement → design` | *(none — `revise-design`)* |
+| `implement → plan` | *(none — `revise-plan`)* |
 
-Six of the seven transitions carry **two** gates: one deterministic, one judged.
-Both must pass, and neither substitutes for the other.
+Thirteen transitions. Five carry **two** gates — one deterministic, one judged;
+both must pass and neither substitutes for the other. Six carry none at all, and
+those are the revision edges. Two carry one.
+
+The two that do not are worth naming, because a single-gate exit is a weaker
+door than the table makes it look. `implement → implementation-review` carries
+only `implementation-ready`, which checks that the cursor lists every plan phase
+in order — it cannot check that those phases were ever *verified* (see **The
+phase loop** below). `implementation-review → implement` carries only the
+document check, because a rejection needs no judgment to be legitimate.
 
 The pairing on `implementation-review → end` is the one worth explaining.
 Without it the last thing between a change and `end` would be an agent writing
@@ -80,6 +101,101 @@ was a claim about itself.
 `implementation-review` is kept because it is not the same shape: it reviews
 **code**, which no earlier gate has looked at, and its approving transition
 carries a judge.
+
+**What was lost with them, stated plainly.** Removing those states removed two
+questions from the workflow, and nothing picked them up:
+
+- **Whether a design decision is the *right* one.** `decisions-justified` rules
+  on whether the reasoning behind each decision is present and load-bearing. It
+  does not rule on whether the call was correct, and no other axis does either.
+- **Whether a silent full-delivery claim is *plausible*.** `intent-faithful`
+  treats a design that admits no shortfall as claiming full delivery, and judges
+  it on that claim. Whether a domain expert would believe the claim is not
+  judged anywhere.
+
+Both stops are deliberate: the alternative is an unbounded hunt for shortfalls a
+document does not state, which is what made two axes contradict each other during
+calibration. But they are stops, not delegations. If you need a human to weigh a
+design decision, this workflow will not do it for you and will not tell you it
+didn't.
+
+### Going back to revise something upstream
+
+A refusal does not always point at the document the state authors. A plan can be
+unwritable because the *design* does not support what it has to deliver; a design
+can be unbuildable because the *intent* asks for more than the change should
+carry. Guidance said so from the beginning — and until now the graph had no edge
+that went there, so the instruction was unexecutable and the only thing an author
+could actually do was edit the upstream file in place and hope.
+
+Six edges close that. Every authoring state can re-enter every state above it:
+
+| From | Event | To |
+|---|---|---|
+| `design` | `revise-intent` | `explore` |
+| `plan` | `revise-intent` | `explore` |
+| `plan` | `revise-design` | `design` |
+| `implement` | `revise-intent` | `explore` |
+| `implement` | `revise-design` | `design` |
+| `implement` | `revise-plan` | `plan` |
+
+**They carry no gates, and cannot launder anything.** Reaching `end` still means
+traversing every forward edge, and every forward edge still carries its full gate
+pair. Going back is not a way around a refusal — it is a way to pay for another
+one.
+
+**They skip states going back and skip nothing coming forward.** Each authoring
+state has exactly one gated exit, so `implement --revise-intent--> explore`
+re-runs `intent-semantic`, then `design-semantic`, then `plan-semantic`, in that
+order, before the run is back where it started.
+
+**They cannot unstick a rejection.** Return, change nothing, come forward: the
+content and the rubrics are identical, so the cache key is identical and the
+stored failure replays. Bouncing costs wall clock and buys no verdict.
+
+#### What makes a revision stick
+
+Nothing new. The linkage checks that were already there do the whole job.
+`design.json` carries `intent_revision`, `plan.json` carries `subject_revision`,
+`implementation.json` carries `plan_revision` — each checked equal to the
+*current* revision of the document above it. Raise `revision` on the document you
+revise and every document below it is refused until it is re-pointed, which means
+re-read, and passing its gate again means judged again. Descendant invalidation,
+already built.
+
+**The hole this leaves.** Edit an upstream document *without* raising its
+`revision` and the linkage still matches. Every document below it keeps a
+judgment made against text that no longer exists, and no gate notices. Closing
+that needs accepted-content digests recorded outside the author's reach; the
+revision string is an author-authored claim, not a content identity.
+
+#### What it does to the phase cursor
+
+`implementation.json` is described elsewhere here as append-only and never
+revised. That now holds **within a plan revision**. Take `revise-plan`, revise
+the plan, come back, and `plan_revision` no longer matches — every gate in
+`implement` refuses until they agree. The cursor may be re-pointed: raise its
+`revision`, set `plan_revision` to the new plan's, and leave `phases` alone.
+
+The existing prefix rule then decides whether the revision was legitimate. A plan
+revised only in phases not yet reached still lines up and work resumes. A
+revision that reorders, renames or drops an already-claimed phase does not, and
+the gate says so — a phase that has been verified cannot be changed underneath
+its verification.
+
+**Known limit.** The prefix rule compares phase *identifiers*. A revised plan
+that keeps the id `P1` and rewrites P1's tasks passes it, leaving a completed
+phase verified against tasks that no longer exist. Nothing detects that. It
+closes with a per-phase verification marker keyed on the phase's task content.
+
+#### What these edges are not for
+
+Revising an upstream document so it matches what already exists below it is not a
+repair. An intent narrowed until the code satisfies it, or a design rewritten
+around a decision already taken in a task, passes every gate and certifies a
+change nobody asked for. These edges exist because a genuine upstream mistake had
+no legal repair. The graph cannot tell the two apart; the guidance says so, and
+so does this.
 
 ### Judgment is withheld, never bought, on a failing transition
 
@@ -264,10 +380,9 @@ Judgment is delegated to language models, in two stages:
 |---|---|
 | `solution-agnostic` | Does intent encode a chosen solution — libraries, files, types, "refactor X to use Y"? |
 | `outside-verifiable` | Could every acceptance line be checked by someone who cannot see the code? |
-| `scope-fenced` | Do `non_goals` and `outcome` actually constrain what happens next? An empty `non_goals` fails on that alone. |
+| `scope-fenced` | Do `non_goals` and `outcome` actually constrain what happens next? An empty `non_goals` is not a failure by itself — the axis fails scope that is demonstrably open. |
 | `constraints-are-limits` | Are `constraints` real external limits, or solution preferences in disguise? A property-shaped limit needs no citation; one naming a mechanism must say what imposes it. Absent or empty passes without a model call. |
-| `problem-grounded` | Does `problem` name who is hurt, doing what, at what cost — and does it stay clear of the solution? It is the one field no other axis reads, so it is checked for carrying the plan. |
-| `problem-grounded` | Does `problem` state consequence, or merely restate the solution in negative form? |
+| `problem-grounded` | Does `problem` name who is hurt, doing what, at what cost — does it state a consequence rather than restate the solution in negative form? It is the one field no other axis reads, so it is checked on its own. |
 
 #### `design-semantic` axes
 
@@ -405,8 +520,9 @@ an author can hash what they read and compare it to the `rubrics` value in every
 evidence record — *the rules I was shown are provably the rules that judged me* —
 and a mis-marked span would vanish from the author's copy while still deciding
 their document. A framing note carries the cost instead, telling the reader the
-text speaks to the judge. Guidance roughly doubles: explore 31 KB, design 50 KB,
-plan 43 KB, against a 256 KiB bound.
+text speaks to the judge. Guidance roughly doubles: explore 31 KB, design 54 KB,
+plan 56 KB, implement 21 KB, implementation-review 8 KB — 169 KB total against a
+256 KiB bound.
 
 **Configuration** is the `[judge]` table in `.loop-workflow.toml`; see
 `example.loop-workflow.toml`. `model` is the only required key. Axis subsets are
@@ -539,13 +655,22 @@ Trim with `[judge].axes`.
 Minimal review document:
 
 ```json
-{ "revision": "2", "subject_revision": "2", "verdict": "approved" }
+{
+  "revision": "2",
+  "subject_revision": "2",
+  "subject_commit": "9f2c1ab",
+  "verdict": "approved"
+}
 ```
+
+`subject_commit` is required; see **Reviewing code, not a revision**.
 
 ### The phase loop
 
-`implementation.json` is a **cursor**, not a report. It is append-only, never
-revised, and never reviewed — unlike the three authored documents above it.
+`implementation.json` is a **cursor**, not a report. It is append-only within a
+plan revision, and never reviewed — unlike the three authored documents above it.
+The one case where it changes rather than grows is a plan revised through
+`revise-plan`; see **What it does to the phase cursor**.
 
 ```json
 { "revision": "1", "plan_revision": "1", "base_commit": "abc123",
@@ -661,6 +786,40 @@ entirely on its declared review, or be pure preparation.
 Each command's captured output is hashed into an evidence record with its argv,
 exit code, duration, and a bounded output snippet.
 
+## Static guidance and live guidance
+
+Each state ships **static guidance**: the authored contract plus every judge
+rubric verbatim. It is frozen into the stored graph at run creation, so it is the
+same text on the first visit and the tenth, and it is enough to know what to
+produce without any provider call. That is deliberate and does not change.
+
+What it cannot be is *situational*. It is written before any document exists, so
+it can describe the phase loop but never name a phase, and it cannot tell a first
+visit from a return on a `revise-*` edge. `run guidance` — the engine's
+`live_guidance` role — covers exactly that gap, and `run show` renders it beside
+the static text.
+
+Two things get appended there:
+
+- **Which phase is current**, in `implement`: the plan's phases, what the cursor
+  claims, which one `phase-complete` would verify, and a warning when the cursor
+  descends from a superseded plan revision.
+- **Where the run stands**, in every authoring state: whether documents exist
+  *below* the one this state authors, each one's revision, whether its link to
+  its parent still holds, and how many phases are already claimed. On a state
+  with nothing beneath it, that it is a first pass.
+
+The engine does not report which state a run came from, and the provider never
+sees the journal — so "where did I come from" is not answerable. It is also the
+wrong question. What matters is the condition the path left behind, and that is
+readable from `artifact_root` alone: deterministic, path-independent, and correct
+on a return taken twice.
+
+The practical effect is that the cost of an upstream edit is priced at the moment
+of the decision. Standing in `explore` with a design and a plan beneath you, the
+live text names them, names which links are already stale, and says what raising
+`revision` will refuse.
+
 ## Timeouts
 
 The whole invocation is bounded by the registration timeout (default 60s). The
@@ -677,17 +836,38 @@ SIGTERM landed first, and a provider killed before it can write its envelope
 reads as broken rather than as slow. A stage starting late now inherits what is
 left, not a fresh copy of its configured budget.
 
-**The 60s default is too small for the semantic gate** — a four-axis judgment
-plus decider needs several minutes of headroom on a slow link. Since a slow suite
-and a judgment now genuinely compete for one budget, give the commands their own
-ceiling with `checkpoint.timeout_seconds` in the plan and raise the registration
-timeout enough for both.
+**The 60s default cannot complete a single semantic gate.** A run registered at
+the default fails its first `intent-semantic` with an `evaluation_error` — which
+is the fail-closed path working correctly, but reads like a broken provider.
+Raise the timeout before creating a run, not after the first confusing failure.
+
+Size it deliberately. One registration timeout has to cover the slowest thing
+the provider ever does in one invocation, and on `phase-complete` that is two
+unrelated waits back to back:
+
+```
+registration timeout  >=  slowest checkpoint suite
+                       +  [judge].timeout_seconds
+                       +  headroom
+```
+
+The two halves are not comparable. Judgment cost is bounded and measurable —
+21–50s per gate at `max_parallel_axes = 3` against a direct API, worst observed
+1m38s for a plan judgment, considerably worse through a bridge. Checkpoint cost
+is whatever your repository's test suite costs, which is unbounded and not the
+provider's to predict. Give the commands their own ceiling with
+`checkpoint.timeout_seconds` in `plan.json` so a hung command cannot consume the
+judge's share, and size the registration timeout for both.
 
 ```sh
 loop-engine provider update software-change \
   --exec ~/.local/share/loop-engine-providers/bin/software-change \
-  --timeout 900
+  --timeout 1800
 ```
+
+1800s is a starting point, not a measurement: it is generous headroom over the
+judgment numbers above plus room for a suite of a few minutes. If your suite is
+longer than that, the registration timeout is the number that has to move.
 
 ## Changing the workflow
 

@@ -458,20 +458,33 @@ fn live_guidance(payload: &Value) -> Value {
         ));
     };
 
-    // `implement` is the one state whose guidance cannot be written in advance.
-    // Static guidance is frozen at run creation, before any plan exists, so it
-    // can describe the loop but never name a phase. This is the only surface
-    // that can.
-    if snapshot.current_state == "implement" {
-        if let Some(artifact_root) = snapshot.inputs.get("artifact_root").and_then(Value::as_str) {
-            return guidance(format!(
-                "{text}{}",
-                crate::gates::implementation::live_cursor(std::path::Path::new(artifact_root))
-            ));
-        }
-    }
+    // Static guidance is frozen at run creation, before any document exists, so
+    // it states the contract and nothing situational. Two things it can never
+    // say get appended here.
+    //
+    // 1. Which phase is current. `implement` runs a self-loop over a phase list
+    //    that did not exist when the graph was stored.
+    //
+    // 2. Whether this state is being visited or REVISITED. The revision edges
+    //    mean any authoring state can be re-entered from below, and an author
+    //    revising a document with judged work beneath it is in a materially
+    //    different position from one writing it for the first time. The engine
+    //    does not report the previous state, but the documents on disk answer
+    //    the question that actually matters.
+    let Some(artifact_root) = snapshot.inputs.get("artifact_root").and_then(Value::as_str) else {
+        return guidance(text);
+    };
+    let artifact_root = std::path::Path::new(artifact_root);
 
-    guidance(text)
+    let mut out = text.to_string();
+    out.push_str(&crate::situation::live_situation(
+        &snapshot.current_state,
+        artifact_root,
+    ));
+    if snapshot.current_state == "implement" {
+        out.push_str(&crate::gates::implementation::live_cursor(artifact_root));
+    }
+    guidance(out)
 }
 
 // --------------------------------------------------------- check_compatibility

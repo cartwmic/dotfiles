@@ -11,6 +11,7 @@ mod gates;
 mod graph;
 mod protocol;
 mod roles;
+mod situation;
 mod util;
 
 use std::io::{Read, Write};
