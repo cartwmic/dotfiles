@@ -68,6 +68,14 @@ mouse_capture = true
 show_agent_labels_on_pane_borders = true
 agent_panel_sort = "spaces"
 
+# Pi publishes its generated session name through the terminal title. Show it in
+# the Agents sidebar instead of the generic workspace/tab-only default.
+[ui.sidebar.agents.rows_by_agent]
+pi = [
+  ["state_icon", "terminal_title_stripped"],
+  ["agent"],
+]
+
 [ui.toast]
 # Show agent completion/attention inside attached clients. The existing Pi ntfy
 # extension continues to handle Android notifications while Termux is detached.
