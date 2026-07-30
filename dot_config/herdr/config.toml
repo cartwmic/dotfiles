@@ -2,12 +2,77 @@
 # Runtime state and logs beside this file remain machine-local.
 onboarding = false
 
+# Vim-shaped keymap. Ctrl+b remains the sole leader; direct Ctrl+Alt+hjkl
+# provides fast pane focus without colliding with Kitty, Neovim, or Zellij.
+[keys]
+prefix = "ctrl+b"
+help = "prefix+?"
+settings = "prefix+shift+s"
+detach = "prefix+q"
+reload_config = "prefix+shift+r"
+open_notification_target = "prefix+o"
+goto = "prefix+g"
+workspace_picker = "prefix+w"
+new_workspace = "prefix+shift+n"
+new_worktree = "prefix+shift+g"
+rename_workspace = "prefix+shift+w"
+close_workspace = "prefix+shift+d"
+previous_agent = "prefix+alt+k"
+next_agent = "prefix+alt+j"
+focus_agent = "prefix+alt+1..9"
+
+# Tabs: t creates; p/n and shifted brackets move; numbers jump directly.
+new_tab = "prefix+t"
+rename_tab = "prefix+shift+t"
+previous_tab = ["prefix+p", "prefix+shift+["]
+next_tab = ["prefix+n", "prefix+shift+]"]
+switch_tab = "prefix+1..9"
+switch_workspace = "prefix+shift+1..9"
+close_tab = "prefix+shift+x"
+
+# Panes: lowercase focuses, uppercase swaps, v/s mirrors :vsplit/:split.
+rename_pane = "prefix+shift+p"
+edit_scrollback = "prefix+e"
+copy_mode = "prefix+["
+focus_pane_left = ["prefix+h", "ctrl+alt+h"]
+focus_pane_down = ["prefix+j", "ctrl+alt+j"]
+focus_pane_up = ["prefix+k", "ctrl+alt+k"]
+focus_pane_right = ["prefix+l", "ctrl+alt+l"]
+swap_pane_left = "prefix+shift+h"
+swap_pane_down = "prefix+shift+j"
+swap_pane_up = "prefix+shift+k"
+swap_pane_right = "prefix+shift+l"
+cycle_pane_next = "prefix+tab"
+cycle_pane_previous = "prefix+shift+tab"
+last_pane = "prefix+backtick"
+split_vertical = "prefix+v"
+split_horizontal = "prefix+s"
+close_pane = "prefix+x"
+zoom = "prefix+z"
+resize_mode = "prefix+r"
+toggle_sidebar = "prefix+b"
+
+# Workspace picker: lowercase moves among panes; uppercase J/K or arrows move
+# among workspaces.
+navigate_workspace_up = ["up", "shift+k"]
+navigate_workspace_down = ["down", "shift+j"]
+navigate_pane_left = "h"
+navigate_pane_down = "j"
+navigate_pane_up = "k"
+navigate_pane_right = "l"
+
 [ui]
 # Keep Herdr's phone-focused single-column interface at its upstream threshold.
 mobile_width_threshold = 64
 mouse_capture = true
+show_agent_labels_on_pane_borders = true
+agent_panel_sort = "spaces"
 
 [ui.toast]
 # Show agent completion/attention inside attached clients. The existing Pi ntfy
 # extension continues to handle Android notifications while Termux is detached.
 delivery = "herdr"
+
+[theme]
+name = "tokyo-night"
+auto_switch = false
