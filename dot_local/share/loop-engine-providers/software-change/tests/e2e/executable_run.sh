@@ -243,6 +243,24 @@ seed_plan() {
 JSON
 }
 
+# A revised intent may carry acceptance lines the seeded design does not cite,
+# and coverage is checked for exact set equality. This re-points the design at
+# whatever the intent currently says -- the mechanical part of a re-point, so a
+# scenario can spend its assertions on the part that is not mechanical.
+cover_all_acceptance() {
+    python3 - "$1" <<'PY'
+import json, sys
+root = sys.argv[1]
+intent = json.load(open(f"{root}/intent.json"))
+design = json.load(open(f"{root}/design.json"))
+covered = {entry["acceptance"] for entry in design["coverage"]}
+for line in intent["acceptance"]:
+    if line not in covered:
+        design["coverage"].append({"acceptance": line, "delivered_by": design["elements"][0]})
+json.dump(design, open(f"{root}/design.json", "w"), indent=2)
+PY
+}
+
 seed_cursor() {
     local root=$1 revision=${2:-1} plan_revision=${3:-1} phases=${4:-[]}
     cat > "$root/implementation.json" <<JSON
@@ -476,23 +494,108 @@ scenario_cascade() {
     engine run request "$RUN" design-ready
     expect_refused || return 1
 
-    python3 - "$ART" <<'PY'
-import json, sys
-root = sys.argv[1]
-intent = json.load(open(f"{root}/intent.json"))
-design = json.load(open(f"{root}/design.json"))
-covered = {entry["acceptance"] for entry in design["coverage"]}
-for line in intent["acceptance"]:
-    if line not in covered:
-        design["coverage"].append({"acceptance": line, "delivered_by": design["elements"][0]})
-json.dump(design, open(f"{root}/design.json", "w"), indent=2)
-PY
+    cover_all_acceptance "$ART"
     engine run request "$RUN" design-ready
     expect_ok && expect_state plan || return 1
 
     # The plan is now stale in turn.
     engine run request "$RUN" plan-ready
     expect_refused && expect_state "plan (unchanged)"
+}
+
+# `happy_path` proves the workflow works once, with every document at revision
+# one. That is not the case the revision edges exist for. This is: a run that
+# churns -- intent revised from `plan`, design revised from `implement`, plan
+# revised mid-phase-loop, and the implementation sent back by its own review --
+# and still converges on `end`. Each round must re-point every document below
+# it, and every intermediate refusal is the workflow refusing to carry a
+# judgment forward onto a document it was never made against.
+#
+# It is also the only scenario that traverses
+# `implementation-review --changes-requested--> implement`. Every other edge is
+# taken somewhere above; without this one, the graph declares a move no test
+# ever makes.
+scenario_revised_lifecycle() {
+    new_run revised || return 1
+    advance_to plan || return 1
+
+    # Round one: the intent gains an acceptance line, from `plan`.
+    engine run request "$RUN" revise-intent
+    expect_ok && expect_state explore || return 1
+    seed_intent "$ART" 2 ', "A partially failed run names the failing records on stderr"'
+    engine run request "$RUN" intent-ready
+    expect_ok && expect_state design || return 1
+
+    seed_design "$ART" 2 2
+    cover_all_acceptance "$ART"
+    engine run request "$RUN" design-ready
+    expect_ok && expect_state plan || return 1
+
+    # The plan still descends from design revision 1.
+    engine run request "$RUN" plan-ready
+    expect_refused && expect_state "plan (unchanged)" || return 1
+    seed_plan "$ART" 2 2
+    engine run request "$RUN" plan-ready
+    expect_ok && expect_state implement || return 1
+
+    # Round two: a second hop, from deeper. `revise-design` out of `implement`
+    # skips a state going back, and the plan below it goes stale again -- a
+    # cascade that has already cascaded once.
+    engine run request "$RUN" revise-design
+    expect_ok && expect_state design || return 1
+    seed_design "$ART" 3 2
+    cover_all_acceptance "$ART"
+    engine run request "$RUN" design-ready
+    expect_ok && expect_state plan || return 1
+
+    engine run request "$RUN" plan-ready
+    expect_refused && expect_state "plan (unchanged)" || return 1
+    seed_plan "$ART" 3 3
+    engine run request "$RUN" plan-ready
+    expect_ok && expect_state implement || return 1
+
+    # The phase loop, against plan revision 3.
+    seed_cursor "$ART" 1 3 '[{"id":"P1"}]'
+    engine run request "$RUN" phase-complete
+    expect_ok && expect_state implement || return 1
+
+    # Round three: revise the plan mid-loop, in the phase not yet claimed.
+    engine run request "$RUN" revise-plan
+    expect_ok && expect_state plan || return 1
+    seed_plan "$ART" 4 3 P1 "Derive the exit status from the tally, once, at process end"
+    engine run request "$RUN" plan-ready
+    expect_ok && expect_state implement || return 1
+
+    # The cursor descends from plan revision 3 and must be re-pointed too.
+    engine run request "$RUN" phase-complete
+    expect_refused && expect_state "implement (unchanged)" || return 1
+    seed_cursor "$ART" 2 4 '[{"id":"P1"},{"id":"P2"}]'
+    engine run request "$RUN" phase-complete
+    expect_ok && expect_state implement || return 1
+
+    engine run request "$RUN" implementation-ready
+    expect_ok && expect_state implementation-review || return 1
+
+    # The review sends it back. This is the only place that edge is taken.
+    seed_review "$ART" 1 2 changes_requested
+    engine run request "$RUN" changes-requested
+    expect_ok && expect_state implement || return 1
+
+    # More work lands, under a new cursor revision.
+    seed_cursor "$ART" 3 4 '[{"id":"P1"},{"id":"P2"}]'
+    engine run request "$RUN" phase-complete
+    expect_ok && expect_state implement || return 1
+    engine run request "$RUN" implementation-ready
+    expect_ok && expect_state implementation-review || return 1
+
+    # The approving review must be written against the implementation that came
+    # back, not the one that was sent away. The old one names revision 2.
+    engine run request "$RUN" approved
+    expect_refused && expect_state "implementation-review (unchanged)" || return 1
+
+    seed_review "$ART" 2 3 approved
+    engine run request "$RUN" approved
+    expect_ok && expect_state end
 }
 
 # Judgment is withheld, never bought, on a transition that has already failed
@@ -670,6 +773,7 @@ scenario_batching_skips_a_phase() {
 SCENARIOS=(
     graph
     happy_path
+    revised_lifecycle
     rejection_preserves_state
     illegal_events
     final_state_is_terminal

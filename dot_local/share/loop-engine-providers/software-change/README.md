@@ -894,7 +894,7 @@ Edit under the chezmoi source tree, not the deployed copy, then `chezmoi apply`.
 | Layer | Decides | Cost |
 |---|---|---|
 | `cargo test` | Gate logic in process — schema, linkage, the prefix rule, cache identity, deadlines, diff assembly | seconds |
-| `tests/e2e/run.sh` | The run itself, through the production CLI — every edge, every refusal path, the cascade, withheld judgment. The judge is a script | ~26s |
+| `tests/e2e/run.sh` | The run itself, through the production CLI — every edge, every refusal path, repeated revision to convergence, withheld judgment. The judge is a script | ~40s |
 | `tests/design/run.sh` | Judgment, against real models — whether a rubric edit broke a verdict that used to hold | ~1h, per rubric change |
 
 They are not substitutes for each other, and the boundaries are load-bearing.
