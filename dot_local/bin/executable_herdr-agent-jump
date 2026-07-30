@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# herdr-agent-jump <terminal-id> — resolve a stable Herdr terminal identity to
+# its current pane, then focus that agent. Called over SSH by the phone-side
+# ~/bin/herdr-jump helper after a termux://herdr-jump/<terminal-id> tap.
+#
+# terminal_id survives pane moves; pane_id does not. Resolve immediately before
+# focus and retry once to close the small list-to-focus move race.
+
+set -euo pipefail
+
+terminal_id="${1:-}"
+if [[ ! "$terminal_id" =~ ^term_[0-9a-f]+$ ]]; then
+    printf 'herdr-agent-jump: invalid terminal id\n' >&2
+    exit 2
+fi
+
+resolve_pane_id() {
+    herdr agent list | python3 -c '
+import json
+import sys
+
+target = sys.argv[1]
+agents = json.load(sys.stdin).get("result", {}).get("agents", [])
+matches = [agent for agent in agents if agent.get("terminal_id") == target]
+if len(matches) != 1:
+    raise SystemExit(1)
+pane_id = matches[0].get("pane_id")
+if not isinstance(pane_id, str) or not pane_id:
+    raise SystemExit(1)
+print(pane_id)
+' "$terminal_id"
+}
+
+for _attempt in 1 2; do
+    if pane_id="$(resolve_pane_id)" && herdr agent focus "$pane_id" >/dev/null; then
+        exit 0
+    fi
+done
+
+printf 'herdr-agent-jump: live agent not found for terminal %s\n' "$terminal_id" >&2
+exit 1

@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import {
+	buildHerdrJumpClickUrl,
 	buildJumpClickUrl,
 	buildNotification,
 	extractExcerpt,
@@ -17,8 +18,13 @@ import {
 	lastAssistantText,
 	loadConfig,
 	loadEnabled,
+	parseHerdrLabel,
+	parseHerdrPaneCurrent,
 	parseToggle,
 	parseZellijTabName,
+	resolveHerdrLocation,
+	resolveNotificationLocation,
+	registerNtfyExtension,
 	saveEnabled,
 } from "./index.ts";
 
@@ -44,19 +50,136 @@ test("buildJumpClickUrl: undefined for absent / non-terminal / malformed pane id
 	assert.equal(buildJumpClickUrl("garbage"), undefined, "non-numeric");
 });
 
-test("loadConfig: jumpDeepLinkBase defaults, honors explicit override", () => {
+test("loadConfig: jump deep-link bases default and honor explicit overrides", () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-jump-"));
 	try {
 		fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ url: "http://x/t" }));
-		assert.equal(loadConfig(dir).jumpDeepLinkBase, "termux://zellij-jump", "absent -> default");
+		assert.equal(loadConfig(dir).jumpDeepLinkBase, "termux://zellij-jump", "zellij default");
+		assert.equal(loadConfig(dir).herdrJumpDeepLinkBase, "termux://herdr-jump", "herdr default");
 		fs.writeFileSync(
 			path.join(dir, "config.json"),
-			JSON.stringify({ url: "http://x/t", jumpDeepLinkBase: "myscheme://jump" }),
+			JSON.stringify({
+				url: "http://x/t",
+				jumpDeepLinkBase: "myscheme://zellij",
+				herdrJumpDeepLinkBase: "myscheme://herdr",
+			}),
 		);
-		assert.equal(loadConfig(dir).jumpDeepLinkBase, "myscheme://jump", "explicit override");
+		assert.equal(loadConfig(dir).jumpDeepLinkBase, "myscheme://zellij", "zellij override");
+		assert.equal(loadConfig(dir).herdrJumpDeepLinkBase, "myscheme://herdr", "herdr override");
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+// --- Herdr metadata + tap-to-jump ---
+
+const herdrPaneJson = JSON.stringify({
+	result: {
+		pane: {
+			workspace_id: "w1",
+			tab_id: "w1:t7",
+			pane_id: "w1:p7",
+			terminal_id: "term_657d8e8364b748",
+		},
+	},
+});
+
+const herdrWorkspaceJson = JSON.stringify({ result: { workspace: { label: "chezmoi" } } });
+const herdrTabJson = JSON.stringify({ result: { tab: { label: "ntfy herdr" } } });
+
+test("buildHerdrJumpClickUrl: stable terminal id rides separate URL path", () => {
+	assert.equal(
+		buildHerdrJumpClickUrl("term_657d8e8364b748"),
+		"termux://herdr-jump/term_657d8e8364b748",
+	);
+	assert.equal(
+		buildHerdrJumpClickUrl("term_abcd", "termux://custom-herdr/"),
+		"termux://custom-herdr/term_abcd",
+	);
+	assert.equal(buildHerdrJumpClickUrl("w1:p7"), undefined, "movable pane id rejected");
+	assert.equal(buildHerdrJumpClickUrl("term_deadbeef;rm"), undefined, "unsafe id rejected");
+});
+
+test("Herdr JSON parsers extract canonical ids and labels", () => {
+	assert.deepEqual(parseHerdrPaneCurrent(herdrPaneJson), {
+		workspaceId: "w1",
+		tabId: "w1:t7",
+		paneId: "w1:p7",
+		terminalId: "term_657d8e8364b748",
+	});
+	assert.equal(parseHerdrLabel(herdrWorkspaceJson, "workspace"), "chezmoi");
+	assert.equal(parseHerdrLabel(herdrTabJson, "tab"), "ntfy herdr");
+	assert.equal(parseHerdrPaneCurrent("not json"), undefined);
+});
+
+test("resolveHerdrLocation uses current pane then resolves workspace and tab labels", async () => {
+	const calls: string[][] = [];
+	const run = async (args: readonly string[]) => {
+		calls.push([...args]);
+		if (args[0] === "pane") return herdrPaneJson;
+		if (args[0] === "workspace") return herdrWorkspaceJson;
+		if (args[0] === "tab") return herdrTabJson;
+		throw new Error("unexpected command");
+	};
+	assert.deepEqual(await resolveHerdrLocation(run), {
+		workspaceId: "w1",
+		tabId: "w1:t7",
+		paneId: "w1:p7",
+		terminalId: "term_657d8e8364b748",
+		workspaceName: "chezmoi",
+		tabName: "ntfy herdr",
+	});
+	assert.deepEqual(calls[0], ["pane", "current"]);
+	assert.ok(calls.some((call) => call.join(" ") === "workspace get w1"));
+	assert.ok(calls.some((call) => call.join(" ") === "tab get w1:t7"));
+});
+
+test("resolveNotificationLocation prefers Herdr and builds Herdr Click", async () => {
+	const run = async (args: readonly string[]) => {
+		if (args[0] === "pane") return herdrPaneJson;
+		if (args[0] === "workspace") return herdrWorkspaceJson;
+		return herdrTabJson;
+	};
+	const location = await resolveNotificationLocation({
+		cwd: "/tmp",
+		config: {
+			jumpDeepLinkBase: "termux://zellij-jump",
+			herdrJumpDeepLinkBase: "termux://herdr-jump",
+		},
+		env: {
+			HERDR_ENV: "1",
+			HERDR_PANE_ID: "w1:p7",
+			HERDR_WORKSPACE_ID: "w1",
+			HERDR_TAB_ID: "w1:t7",
+			ZELLIJ: "1",
+			ZELLIJ_PANE_ID: "terminal_99",
+		},
+		runHerdr: run,
+	});
+	assert.deepEqual(location, {
+		workspaceName: "chezmoi",
+		tabName: "ntfy herdr",
+		clickUrl: "termux://herdr-jump/term_657d8e8364b748",
+	});
+});
+
+test("resolveNotificationLocation fails closed to Herdr ids without a Click", async () => {
+	const location = await resolveNotificationLocation({
+		cwd: "/tmp",
+		config: {
+			jumpDeepLinkBase: "termux://zellij-jump",
+			herdrJumpDeepLinkBase: "termux://herdr-jump",
+		},
+		env: {
+			HERDR_ENV: "1",
+			HERDR_PANE_ID: "w1:p7",
+			HERDR_WORKSPACE_ID: "w1",
+			HERDR_TAB_ID: "w1:t7",
+			ZELLIJ_PANE_ID: "terminal_99",
+		},
+		runHerdr: async () => { throw new Error("socket unavailable"); },
+	});
+	assert.deepEqual(location, { workspaceName: "w1", tabName: "w1:t7" });
 });
 
 // --- ask_user_question excerpt ---
@@ -139,11 +262,11 @@ test("lastAssistantText: empty when no assistant message", () => {
 
 // --- pi-ntfy-notify.notification-identifies-session ---
 
-test("buildNotification: title = zellij session + tab + pi name; body = excerpt", () => {
+test("buildNotification: title = workspace/session + tab + pi name; body = excerpt", () => {
 	const n = buildNotification({
 		sessionName: "bug123",
 		sessionId: "a3f9c2010000",
-		zellijSession: "workspace",
+		workspaceName: "workspace",
 		tabName: "chezmoi",
 		excerpt: "what next?",
 	});
@@ -154,14 +277,14 @@ test("buildNotification: title = zellij session + tab + pi name; body = excerpt"
 test("buildNotification: falls back to short session id when unnamed", () => {
 	const n = buildNotification({
 		sessionId: "a3f9c2010000",
-		zellijSession: "workspace",
+		workspaceName: "workspace",
 		tabName: "chezmoi",
 		excerpt: "x",
 	});
 	assert.equal(n.title, "workspace / chezmoi / a3f9c201");
 });
 
-test("buildNotification: omits zellij/tab segments when unavailable (pi name only)", () => {
+test("buildNotification: omits workspace/tab segments when unavailable (pi name only)", () => {
 	const n = buildNotification({
 		sessionName: "solo",
 		sessionId: "id",
@@ -169,6 +292,86 @@ test("buildNotification: omits zellij/tab segments when unavailable (pi name onl
 	});
 	assert.equal(n.title, "solo");
 	assert.equal(n.body, "x");
+});
+
+async function flushAsyncDispatch(): Promise<void> {
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+test("lifecycle wiring: end caches, settled+idle sends, question sends immediately", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-lifecycle-"));
+	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+	const sends: unknown[][] = [];
+	let idle = false;
+	const pi = {
+		registerCommand: () => {},
+		on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => {
+			handlers.set(name, handler);
+		},
+	};
+	const ctx = {
+		hasUI: true,
+		isIdle: () => idle,
+		sessionManager: {
+			getCwd: () => "/tmp/project",
+			getSessionName: () => "named",
+			getSessionId: () => "abcdef123456",
+		},
+		ui: { notify: () => {} },
+	};
+	try {
+		registerNtfyExtension(pi as any, {
+			dir,
+			config: {
+				url: "https://ntfy.invalid/topic",
+				maxExcerptChars: 200,
+				enabled: true,
+				jumpDeepLinkBase: "termux://zellij-jump",
+				herdrJumpDeepLinkBase: "termux://herdr-jump",
+			},
+			resolveLocation: async () => ({
+				workspaceName: "workspace",
+				tabName: "tab",
+				clickUrl: "termux://herdr-jump/term_deadbeef",
+			}),
+			send: async (...args: unknown[]) => { sends.push(args); },
+		});
+
+		await handlers.get("agent_start")?.({}, ctx);
+		await handlers.get("agent_end")?.({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "final answer" }] }],
+		}, ctx);
+		await flushAsyncDispatch();
+		assert.equal(sends.length, 0, "agent_end only caches final response");
+
+		await handlers.get("agent_settled")?.({}, ctx);
+		await flushAsyncDispatch();
+		assert.equal(sends.length, 0, "non-idle settled event does not notify");
+
+		idle = true;
+		await handlers.get("agent_settled")?.({}, ctx);
+		await flushAsyncDispatch();
+		assert.equal(sends.length, 1);
+		assert.deepEqual(sends[0], [
+			"https://ntfy.invalid/topic",
+			"workspace / tab / named",
+			"final answer",
+			"robot",
+			"termux://herdr-jump/term_deadbeef",
+		]);
+
+		await handlers.get("tool_execution_start")?.({
+			toolName: "ask_user_question",
+			args: { questions: [{ question: "Choose target?" }] },
+		}, ctx);
+		await flushAsyncDispatch();
+		assert.equal(sends.length, 2);
+		assert.equal(sends[1][2], "❓ Choose target?");
+		assert.equal(sends[1][3], "question");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("parseZellijTabName: finds tab whose pane matches cwd (leading slash stripped)", () => {

@@ -1,11 +1,12 @@
 # ntfy notify (pi extension)
 
-Pushes an [ntfy](https://ntfy.sh) notification on every `agent_end` so you know
-when a remote pi session is awaiting input — and which session.
+Pushes an [ntfy](https://ntfy.sh) notification on every `agent_settled` so you
+know when a remote pi session is truly awaiting input — and which session.
 
-Topology: `phone → Termux → SSH → remote PC → zellij → pi`. The extension runs
-on the remote PC (where pi runs) and pushes to a self-hosted ntfy server; the
-phone receives it via the ntfy app, decoupled from SSH/zellij liveness.
+Topology: `phone → Termux → SSH → remote PC → Herdr or Zellij → pi`. The
+extension runs on the remote PC and pushes to a self-hosted ntfy server; the
+phone receives it independently of SSH or multiplexer liveness. Tapping routes
+to the correct Herdr agent or Zellij pane.
 
 ## Prerequisites
 
@@ -16,12 +17,21 @@ phone receives it via the ntfy app, decoupled from SSH/zellij liveness.
 ## Config (`config.json`)
 
 ```json
-{ "url": "https://ntfy.internal.cartwmic.com/pi", "maxExcerptChars": 200 }
+{
+  "url": "https://ntfy.internal.cartwmic.com/pi",
+  "maxExcerptChars": 200,
+  "enabled": true,
+  "herdrJumpDeepLinkBase": "termux://herdr-jump"
+}
 ```
 
 - `url` — full ntfy publish URL (base + topic). Empty/missing → extension no-ops.
 - `maxExcerptChars` — max length of the assistant-message excerpt in the body.
 - `enabled` — default on/off (default `true`). Set `false` to ship disabled.
+- `jumpDeepLinkBase` — optional Zellij route; defaults to
+  `termux://zellij-jump`.
+- `herdrJumpDeepLinkBase` — optional Herdr route; defaults to
+  `termux://herdr-jump`.
 
 ## Toggle on/off
 
@@ -42,14 +52,20 @@ config default, delete `state.json`.
 
 ## Behavior
 
-- Notifies on every `agent_end` (the awaiting-input boundary), not per internal turn.
-- Title: `<zellij session> / <zellij tab> / <pi session name>`.
-  - **zellij session** = `ZELLIJ_SESSION_NAME`; omitted when not under zellij.
-  - **zellij tab** resolved via `zellij action dump-layout`, matching this
-    session's `cwd` to its enclosing tab (focus-independent); omitted when not
-    under zellij or no match. Costs one subprocess per turn (1.5s timeout).
-  - **pi session name** = `getSessionName()`, falling back to a short session
-    id; always present. Name sessions with `pi -n <name>` for readable titles.
+- Notifies on `agent_settled`, after retries, compaction, and queued continuations
+  are exhausted. `agent_end` only captures the final assistant text.
+- Title: `<workspace/session> / <tab> / <pi session name>`.
+  - **Herdr:** `herdr pane current` supplies canonical current ids and stable
+    `terminal_id`; `herdr workspace get` and `herdr tab get` supply labels.
+    Labels fall back to ids if lookup fails. Herdr takes precedence when both
+    Herdr and Zellij environment variables exist.
+  - **Zellij:** session comes from `ZELLIJ_SESSION_NAME`; tab comes from
+    `zellij action dump-layout`, cwd-matched and focus-independent.
+  - **pi session name:** `getSessionName()`, falling back to short session id.
+- Herdr Click URLs carry `terminal_id`, not movable `pane_id`. Phone and remote
+  helpers resolve that stable terminal to its current pane at tap time, then run
+  `herdr agent focus <pane-id>`. Failed Herdr resolution produces no Click rather
+  than accidentally targeting nested Zellij.
 - Body: the **excerpt** only (last assistant response text, truncated).
 - Excerpt: last assistant response text only (reasoning/thinking excluded), truncated.
 - Publishes title, body, priority, tags, and click target through ntfy's UTF-8

@@ -31,6 +31,15 @@ not this machine), so the workflow is **edit-here, push-via-adb**.
   and passes no `--plugin-configuration`, matching the keybind-launched warm
   harpoon instance's empty plugin configuration. After editing, re-run
   `./termux/sync.sh` to deliver the updated script to the phone.
+- `herdr-jump` — phone-side handler script for
+  `termux://herdr-jump/<terminal-id>`. The termux-app fork invokes it after an
+  ntfy tap. It reuses the same bounded SSH ControlMaster side channel and calls
+  remote `~/.local/bin/herdr-agent-jump`, which resolves the stable terminal id
+  through `herdr agent list` and focuses the agent's current pane with
+  `herdr agent focus`. `sync.sh` deploys it to `~/bin/herdr-jump` (0700).
+  The remote helper is chezmoi-managed from
+  `dot_local/bin/executable_herdr-agent-jump`; run `chezmoi apply` on the remote
+  before testing taps. Herdr must be running on its default socket.
 - `ssh-controlmaster.config` — phone `~/.ssh/config` snippet enabling SSH
   connection multiplexing for the `ntfy-harpoon-jump` feature. `sync.sh`
   marker-guards its append into the phone config (idempotent). It makes the

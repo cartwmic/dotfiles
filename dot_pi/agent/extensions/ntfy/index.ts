@@ -1,9 +1,9 @@
 /**
  * ntfy notify — pi extension
  *
- * On every `agent_end` (the agent returning to awaiting-input), pushes an
- * ntfy notification so a remote user (phone -> Termux -> SSH -> zellij -> pi)
- * knows which pi session is waiting and what it last said.
+ * On every `agent_settled` (no retry, compaction, or queued continuation left),
+ * pushes an ntfy notification so a remote user knows which pi session is
+ * waiting and what it last said. Supports both Herdr and Zellij jump routes.
  *
  * Prerequisites:
  *   - ntfy server reachable at the URL in config.json
@@ -24,14 +24,16 @@
  *     module (metadata only — never bodies or credentials). Non-2xx responses
  *     count as failures.
  */
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 const DEFAULT_MAX_EXCERPT = 200;
 const DEFAULT_JUMP_DEEPLINK_BASE = "termux://zellij-jump";
+const DEFAULT_HERDR_JUMP_DEEPLINK_BASE = "termux://herdr-jump";
+const HERDR_COMMAND_TIMEOUT_MS = 1500;
 const STATE_FILE = "state.json";
 
 export interface NtfyConfig {
@@ -45,6 +47,8 @@ export interface NtfyConfig {
 	 * what the fork's ZellijJumpHandler parses. Default: termux://zellij-jump.
 	 */
 	jumpDeepLinkBase: string;
+	/** Deep-link base registered by the Termux fork for Herdr agent jumps. */
+	herdrJumpDeepLinkBase: string;
 }
 
 /** Read config.json beside this module. Missing/unreadable -> disabled config. */
@@ -63,13 +67,18 @@ export function loadConfig(dir: string): NtfyConfig {
 			typeof parsed.jumpDeepLinkBase === "string" && parsed.jumpDeepLinkBase.trim()
 				? parsed.jumpDeepLinkBase.trim()
 				: DEFAULT_JUMP_DEEPLINK_BASE;
-		return { url, maxExcerptChars, enabled, jumpDeepLinkBase };
+		const herdrJumpDeepLinkBase =
+			typeof parsed.herdrJumpDeepLinkBase === "string" && parsed.herdrJumpDeepLinkBase.trim()
+				? parsed.herdrJumpDeepLinkBase.trim()
+				: DEFAULT_HERDR_JUMP_DEEPLINK_BASE;
+		return { url, maxExcerptChars, enabled, jumpDeepLinkBase, herdrJumpDeepLinkBase };
 	} catch {
 		return {
 			url: "",
 			maxExcerptChars: DEFAULT_MAX_EXCERPT,
 			enabled: true,
 			jumpDeepLinkBase: DEFAULT_JUMP_DEEPLINK_BASE,
+			herdrJumpDeepLinkBase: DEFAULT_HERDR_JUMP_DEEPLINK_BASE,
 		};
 	}
 }
@@ -171,8 +180,11 @@ export function parseZellijTabName(layout: string, cwd: string): string | undefi
  * under zellij or the lookup fails (caller falls back to cwd). cwd-matched, so
  * it identifies THIS session's tab regardless of which tab is focused.
  */
-export function resolveZellijTabName(cwd: string): string | undefined {
-	if (!process.env.ZELLIJ) return undefined;
+export function resolveZellijTabName(
+	cwd: string,
+	env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+	if (!env.ZELLIJ) return undefined;
 	try {
 		const out = execFileSync("zellij", ["action", "dump-layout"], {
 			encoding: "utf8",
@@ -184,17 +196,113 @@ export function resolveZellijTabName(cwd: string): string | undefined {
 	}
 }
 
+export interface HerdrPaneIdentity {
+	workspaceId: string;
+	tabId: string;
+	paneId: string;
+	terminalId: string;
+}
+
+export interface HerdrLocation extends HerdrPaneIdentity {
+	workspaceName: string;
+	tabName: string;
+}
+
+export type HerdrCommandRunner = (args: readonly string[]) => Promise<string>;
+
+function parseJson(raw: string): unknown {
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return undefined;
+	}
+}
+
+function nestedObject(value: unknown, ...keys: string[]): Record<string, unknown> | undefined {
+	let current = value;
+	for (const key of keys) {
+		if (!current || typeof current !== "object" || Array.isArray(current)) return undefined;
+		current = (current as Record<string, unknown>)[key];
+	}
+	return current && typeof current === "object" && !Array.isArray(current)
+		? (current as Record<string, unknown>)
+		: undefined;
+}
+
+/** Parse `herdr pane current` JSON into canonical, move-aware identifiers. */
+export function parseHerdrPaneCurrent(raw: string): HerdrPaneIdentity | undefined {
+	const pane = nestedObject(parseJson(raw), "result", "pane");
+	if (!pane) return undefined;
+	const workspaceId = pane.workspace_id;
+	const tabId = pane.tab_id;
+	const paneId = pane.pane_id;
+	const terminalId = pane.terminal_id;
+	if (
+		typeof workspaceId !== "string" || !workspaceId ||
+		typeof tabId !== "string" || !tabId ||
+		typeof paneId !== "string" || !paneId ||
+		typeof terminalId !== "string" || !/^term_[0-9a-f]+$/.test(terminalId)
+	) return undefined;
+	return { workspaceId, tabId, paneId, terminalId };
+}
+
+/** Parse a Herdr workspace/tab label, falling back at the caller when absent. */
+export function parseHerdrLabel(raw: string, kind: "workspace" | "tab"): string | undefined {
+	const info = nestedObject(parseJson(raw), "result", kind);
+	const label = info?.label;
+	return typeof label === "string" && label.trim() ? label.trim() : undefined;
+}
+
+function runHerdrCommand(args: readonly string[]): Promise<string> {
+	return new Promise((resolve, reject) => {
+		execFile(
+			"herdr",
+			[...args],
+			{ encoding: "utf8", timeout: HERDR_COMMAND_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+			(error, stdout) => error ? reject(error) : resolve(stdout),
+		);
+	});
+}
+
+/** Resolve current Herdr labels and stable terminal identity through public CLI. */
+export async function resolveHerdrLocation(
+	run: HerdrCommandRunner = runHerdrCommand,
+): Promise<HerdrLocation | undefined> {
+	let pane: HerdrPaneIdentity | undefined;
+	try {
+		pane = parseHerdrPaneCurrent(await run(["pane", "current"]));
+	} catch {
+		return undefined;
+	}
+	if (!pane) return undefined;
+
+	const [workspaceResult, tabResult] = await Promise.allSettled([
+		run(["workspace", "get", pane.workspaceId]),
+		run(["tab", "get", pane.tabId]),
+	]);
+	const workspaceName = workspaceResult.status === "fulfilled"
+		? parseHerdrLabel(workspaceResult.value, "workspace")
+		: undefined;
+	const tabName = tabResult.status === "fulfilled"
+		? parseHerdrLabel(tabResult.value, "tab")
+		: undefined;
+	return {
+		...pane,
+		workspaceName: workspaceName ?? pane.workspaceId,
+		tabName: tabName ?? pane.tabId,
+	};
+}
+
 /**
  * Build the ntfy title + body.
- * Title: `<zellij session> / <zellij tab> / <pi session name>` (each segment
- * omitted when unavailable; the pi session name always present, falling back to
- * a short session id). Title and body are both sent in a UTF-8 JSON payload, so
- * Unicode in session and tab names is preserved.
+ * Title: `<workspace/session> / <tab> / <pi session name>` (each location
+ * segment omitted when unavailable; the pi session name always present,
+ * falling back to a short session id). Unicode survives the UTF-8 JSON payload.
  */
 export function buildNotification(opts: {
 	sessionName?: string;
 	sessionId: string;
-	zellijSession?: string;
+	workspaceName?: string;
 	tabName?: string;
 	excerpt: string;
 }): { title: string; body: string } {
@@ -202,7 +310,7 @@ export function buildNotification(opts: {
 		opts.sessionName && opts.sessionName.trim()
 			? opts.sessionName.trim()
 			: opts.sessionId.slice(0, 8);
-	const titleParts = [opts.zellijSession?.trim(), opts.tabName?.trim(), piName].filter(
+	const titleParts = [opts.workspaceName?.trim(), opts.tabName?.trim(), piName].filter(
 		(p): p is string => !!p && p.length > 0,
 	);
 	return { title: titleParts.join(" / "), body: opts.excerpt };
@@ -228,6 +336,56 @@ export function buildJumpClickUrl(
 	// underscore-tagged kinds (e.g. `plugin_3`) and non-numeric tails.
 	if (!/^(terminal_)?\d+$/.test(id)) return undefined;
 	return `${base.replace(/\/+$/, "")}/${encodeURIComponent(id)}`;
+}
+
+/** Build a Herdr jump URL carrying a stable terminal id, never a movable pane id. */
+export function buildHerdrJumpClickUrl(
+	terminalId: string | undefined,
+	base: string = DEFAULT_HERDR_JUMP_DEEPLINK_BASE,
+): string | undefined {
+	const id = (terminalId ?? "").trim();
+	if (!/^term_[0-9a-f]+$/.test(id)) return undefined;
+	return `${base.replace(/\/+$/, "")}/${encodeURIComponent(id)}`;
+}
+
+export interface NotificationLocation {
+	workspaceName?: string;
+	tabName?: string;
+	clickUrl?: string;
+}
+
+/**
+ * Resolve display metadata and jump route. Herdr takes precedence over Zellij;
+ * a failed Herdr lookup degrades to inherited ids and no Click rather than
+ * targeting an unrelated nested multiplexer.
+ */
+export async function resolveNotificationLocation(opts: {
+	cwd: string;
+	config: Pick<NtfyConfig, "jumpDeepLinkBase" | "herdrJumpDeepLinkBase">;
+	env?: NodeJS.ProcessEnv;
+	runHerdr?: HerdrCommandRunner;
+}): Promise<NotificationLocation> {
+	const env = opts.env ?? process.env;
+	if (env.HERDR_ENV === "1" && env.HERDR_PANE_ID) {
+		const location = await resolveHerdrLocation(opts.runHerdr ?? runHerdrCommand);
+		if (!location) {
+			return {
+				workspaceName: env.HERDR_WORKSPACE_ID,
+				tabName: env.HERDR_TAB_ID,
+			};
+		}
+		return {
+			workspaceName: location.workspaceName,
+			tabName: location.tabName,
+			clickUrl: buildHerdrJumpClickUrl(location.terminalId, opts.config.herdrJumpDeepLinkBase),
+		};
+	}
+
+	return {
+		workspaceName: env.ZELLIJ_SESSION_NAME,
+		tabName: resolveZellijTabName(opts.cwd, env),
+		clickUrl: buildJumpClickUrl(env.ZELLIJ_PANE_ID, opts.config.jumpDeepLinkBase),
+	};
 }
 
 export interface NtfyJsonRequest {
@@ -498,13 +656,52 @@ function extensionDir(): string {
 	return path.dirname(fileURLToPath(import.meta.url));
 }
 
-export default function (pi: ExtensionAPI): void {
-	const dir = extensionDir();
-	const config = loadConfig(dir);
+export interface NtfyExtensionOptions {
+	/** Test/deployment override; defaults to this module's directory. */
+	dir?: string;
+	config?: NtfyConfig;
+	send?: typeof sendNotification;
+	resolveLocation?: typeof resolveNotificationLocation;
+}
+
+/** Register runtime handlers. Optional dependencies keep lifecycle wiring testable. */
+export function registerNtfyExtension(
+	pi: ExtensionAPI,
+	options: NtfyExtensionOptions = {},
+): void {
+	const dir = options.dir ?? extensionDir();
+	const config = options.config ?? loadConfig(dir);
+	const sendFn = options.send ?? sendNotification;
+	const resolveLocation = options.resolveLocation ?? resolveNotificationLocation;
 	// Effective on/off: runtime override (state.json) wins over config default.
 	let enabled = loadEnabled(dir, config.enabled);
 	// Per-session send outcomes (pi-ntfy-notify "Status Reports Send Outcomes").
 	const sendState = newSendState();
+	let finalRunMessages: readonly unknown[] = [];
+
+	function dispatchNotification(excerpt: string, tags: string, ctx: ExtensionContext): void {
+		const sm = ctx.sessionManager;
+		const send = (async () => {
+			const location = await resolveLocation({ cwd: sm.getCwd(), config });
+			const { title, body } = buildNotification({
+				sessionName: sm.getSessionName(),
+				sessionId: sm.getSessionId(),
+				workspaceName: location.workspaceName,
+				tabName: location.tabName,
+				excerpt,
+			});
+			await sendFn(config.url, title, body, tags, location.clickUrl);
+		})();
+
+		// Metadata lookup and delivery both stay off the turn path. Outcomes still
+		// reach state, capped log, and the every-failure TUI warning.
+		reactToSendOutcome(
+			send,
+			sendState,
+			dir,
+			(message) => ctx.ui.notify(message, "warning"),
+		);
+	}
 
 	pi.registerCommand("ntfy", {
 		description: "Toggle ntfy notifications on/off (on | off | toggle | status)",
@@ -534,31 +731,27 @@ export default function (pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.on("agent_end", async (event, ctx) => {
+	pi.on("agent_start", async () => {
+		finalRunMessages = [];
+	});
+
+	// Preserve the final low-level run's response. Notification waits for
+	// agent_settled because agent_end may still be followed by automatic work.
+	pi.on("agent_end", async (event) => {
+		finalRunMessages = event.messages ?? [];
+	});
+
+	pi.on("agent_settled", async (_event, ctx) => {
 		// hasUI is true in TUI and RPC modes, false in print (-p) / json modes.
-		if (!ctx.hasUI) return;
+		if (!ctx.hasUI || !ctx.isIdle()) return;
 		if (!enabled) return;
 		if (!config.url) return;
 
-		const sm = ctx.sessionManager;
-		const excerpt = extractExcerpt(lastAssistantText(event.messages ?? []), config.maxExcerptChars);
-		const { title, body } = buildNotification({
-			sessionName: sm.getSessionName(),
-			sessionId: sm.getSessionId(),
-			zellijSession: process.env.ZELLIJ_SESSION_NAME,
-			tabName: resolveZellijTabName(sm.getCwd()),
-			excerpt,
-		});
-		const clickUrl = buildJumpClickUrl(process.env.ZELLIJ_PANE_ID, config.jumpDeepLinkBase);
-
-		// Fire-and-forget on the turn path; outcome routed to the visibility
-		// surfaces (state + capped log + every-failure TUI warning).
-		reactToSendOutcome(
-			sendNotification(config.url, title, body, "robot", clickUrl),
-			sendState,
-			dir,
-			(message) => ctx.ui.notify(message, "warning"),
+		const excerpt = extractExcerpt(
+			lastAssistantText(finalRunMessages),
+			config.maxExcerptChars,
 		);
+		dispatchNotification(excerpt, "robot", ctx);
 	});
 
 	// The agent pauses mid-turn while an `ask_user_question` dialog is open, so
@@ -572,22 +765,11 @@ export default function (pi: ExtensionAPI): void {
 		if (!enabled) return;
 		if (!config.url) return;
 
-		const sm = ctx.sessionManager;
 		const excerpt = extractQuestionExcerpt(event.args, config.maxExcerptChars);
-		const { title, body } = buildNotification({
-			sessionName: sm.getSessionName(),
-			sessionId: sm.getSessionId(),
-			zellijSession: process.env.ZELLIJ_SESSION_NAME,
-			tabName: resolveZellijTabName(sm.getCwd()),
-			excerpt,
-		});
-		const clickUrl = buildJumpClickUrl(process.env.ZELLIJ_PANE_ID, config.jumpDeepLinkBase);
-
-		reactToSendOutcome(
-			sendNotification(config.url, title, body, "question", clickUrl),
-			sendState,
-			dir,
-			(message) => ctx.ui.notify(message, "warning"),
-		);
+		dispatchNotification(excerpt, "question", ctx);
 	});
+}
+
+export default function (pi: ExtensionAPI): void {
+	registerNtfyExtension(pi);
 }
