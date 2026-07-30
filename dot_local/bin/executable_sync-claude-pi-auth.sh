@@ -3,8 +3,8 @@
 # sync-claude-pi-auth.sh
 #
 # Sync Claude Code's OAuth credentials (macOS Keychain item
-# "Claude Code-credentials", falling back to ~/.claude/.credentials.json)
-# into pi's auth file (~/.pi/agent/auth.json) so that:
+# "Claude Code-credentials" and ~/.claude/.credentials.json) into pi's auth
+# file (~/.pi/agent/auth.json) so that:
 #
 #   - pi-sub-bar's anthropic provider (pi-sub-core/loadClaudeToken) finds
 #     a non-stale token at ~/.pi/agent/auth.json -> .anthropic.access
@@ -20,13 +20,14 @@
 #   across releases (file-only around 2026-05; back to Keychain as of
 #   2026-07-19, leaving the file as a stub with accessToken: "" and
 #   expiresAt: 0). Tokens rotate ~every 8h, so a stale auth.json silently
-#   breaks the sub-bar widget AND the web tools until re-synced. Reading
-#   Keychain first with a file fallback survives either regime.
+#   breaks the sub-bar widget AND the web tools until re-synced. Reading both
+#   stores and choosing the latest expiration survives either regime.
 #
 # Behavior:
-#   - Reads accessToken + expiresAt from the Keychain item
-#     "Claude Code-credentials" first; falls back to
-#     ~/.claude/.credentials.json if the Keychain yields no usable token
+#   - Reads accessToken + expiresAt from both the Keychain item
+#     "Claude Code-credentials" and ~/.claude/.credentials.json
+#   - Selects the usable credential with the latest expiration, preventing a
+#     stale copy in either store from overriding a freshly rotated token
 #   - No-op (exit 0) if the destination already matches the source
 #   - Writes atomically via tmp + mv; preserves a single .bak rolling backup
 #   - --check  : only verify, do not write (exit 0 in-sync, exit 1 stale)
@@ -88,10 +89,13 @@ extract_creds() {
 }
 
 NEW_TOKEN=""
-NEW_EXPIRES=""
+NEW_EXPIRES="0"
 SOURCE_DESC=""
 
-# 1) macOS Keychain (current Claude Code storage)
+# Claude Code has moved OAuth storage between Keychain and the credentials file
+# across releases. Read both stores and choose the token with the furthest
+# expiration. Fixed preference order is unsafe when one store contains a stale
+# but otherwise valid credential. Keychain wins ties.
 KC_JSON=$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || true)
 if [ -n "$KC_JSON" ]; then
   CREDS=$(printf '%s' "$KC_JSON" | extract_creds)
@@ -102,13 +106,16 @@ if [ -n "$KC_JSON" ]; then
   fi
 fi
 
-# 2) Fallback: credentials file (older Claude Code storage)
-if [ -z "$NEW_TOKEN" ] && [ -r "$SOURCE_FILE" ]; then
+if [ -r "$SOURCE_FILE" ]; then
   CREDS=$(extract_creds < "$SOURCE_FILE")
   if [ -n "$CREDS" ]; then
-    NEW_TOKEN=${CREDS%%$'\t'*}
-    NEW_EXPIRES=${CREDS##*$'\t'}
-    SOURCE_DESC="$SOURCE_FILE"
+    FILE_TOKEN=${CREDS%%$'\t'*}
+    FILE_EXPIRES=${CREDS##*$'\t'}
+    if [ "$FILE_EXPIRES" -gt "$NEW_EXPIRES" ]; then
+      NEW_TOKEN=$FILE_TOKEN
+      NEW_EXPIRES=$FILE_EXPIRES
+      SOURCE_DESC="$SOURCE_FILE"
+    fi
   fi
 fi
 
