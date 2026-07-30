@@ -6,6 +6,20 @@
 //! answer three questions and nothing else — which phase is current, whether
 //! every phase is done, and what commit a phase's diff should be measured from.
 //!
+//! Append-only holds WITHIN A PLAN REVISION. The `revise-plan` edge means a run
+//! can return to `plan`, revise it, and come forward to a cursor whose
+//! `plan_revision` no longer matches. That cursor may be re-pointed: bump its
+//! own `revision` and set `plan_revision` to the new plan. The phase list is
+//! NOT rewritten, and the prefix rule below is what makes that safe — a revised
+//! plan that reorders, renames or drops an already-claimed phase fails the
+//! prefix check, so only the part of the plan that has not been done yet can
+//! actually be revised. Retroactively changing a verified phase is refused.
+//!
+//! Known limit: the prefix rule compares phase IDENTIFIERS. A revised plan that
+//! keeps an id and rewrites that phase's tasks passes it, leaving a completed
+//! phase verified against tasks that no longer exist. Closing that needs a
+//! per-phase verification marker keyed on the phase's task content.
+//!
 //! Two kinds of check live here, both mechanical:
 //!
 //! 1. **Shape.** Presence and type, closed field set, non-empty identifiers.
@@ -175,7 +189,10 @@ fn check_against_plan(
             reasons.push(format!(
                 "implementation.json claims {id:?} at position {index}, but the plan declares \
                  {:?} there; phases are verified in the plan's order and may not be skipped or \
-                 reordered",
+                 reordered. If the plan was revised through `revise-plan`, this means the \
+                 revision changed a phase that was already claimed -- a phase that has been \
+                 verified cannot be changed under it. Revise only the phases still outstanding, \
+                 or start a new run",
                 expected[index]
             ));
             return;

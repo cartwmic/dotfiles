@@ -15,3 +15,6 @@ lib/
 
 # pi subagent run artifacts
 .pi-subagents/
+
+# Rust build artifacts for the loop-engine workflow providers
+dot_local/share/loop-engine-providers/*/target/
