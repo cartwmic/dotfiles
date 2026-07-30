@@ -22,8 +22,8 @@ push_file() {
 }
 
 # Push an executable helper into the phone Termux home, creating its parent dir
-# and marking it 0700. Used for the ntfy-harpoon-jump deep-link handler script
-# (`zellij-jump`) that the termux-app fork invokes on notification tap.
+# and marking it 0700. Used for the Zellij and Herdr ntfy jump handlers that the
+# termux-app fork invokes on notification tap.
 push_exec() {
     local src="$1"
     local dest="$2"
@@ -81,6 +81,7 @@ sync_controlmaster() {
 push_file "termux.properties" "files/home/.termux/termux.properties"
 push_file "font.ttf"          "files/home/.termux/font.ttf"
 push_exec "zellij-jump"       "files/home/bin/zellij-jump"
+push_exec "herdr-jump"        "files/home/bin/herdr-jump"
 sync_controlmaster
 
 echo "→ reloading Termux style"
