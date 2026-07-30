@@ -31,9 +31,10 @@ zig = "0.15.2"    # Pinned: builds the cartwmic/claude-p fork (pi-claude-bridge 
 # =============================================================================
 # Shell & Terminal Tools
 # =============================================================================
-starship = "latest" # Shell prompt
-zellij = "latest"   # Terminal multiplexer
-zoxide = "latest"   # Smart cd replacement
+starship = "latest"                       # Shell prompt
+zellij = "latest"                         # General-purpose terminal multiplexer
+"github:herdrdev/herdr" = "0.7.5"         # Agent-aware workspace manager; pin client/server protocol
+zoxide = "latest"                         # Smart cd replacement
 
 # Zsh tools
 "github:junegunn/fzf" = "latest" # Fuzzy finder (has binary releases)

@@ -1,0 +1,13 @@
+# Herdr workspace manager configuration.
+# Runtime state and logs beside this file remain machine-local.
+onboarding = false
+
+[ui]
+# Keep Herdr's phone-focused single-column interface at its upstream threshold.
+mobile_width_threshold = 64
+mouse_capture = true
+
+[ui.toast]
+# Show agent completion/attention inside attached clients. The existing Pi ntfy
+# extension continues to handle Android notifications while Termux is detached.
+delivery = "herdr"
