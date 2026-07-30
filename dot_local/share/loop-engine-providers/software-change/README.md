@@ -889,5 +889,24 @@ CARGO_TARGET_DIR=/tmp/sc-target cargo build --release
 
 Edit under the chezmoi source tree, not the deployed copy, then `chezmoi apply`.
 
+### Three layers of test, and what each one can decide
+
+| Layer | Decides | Cost |
+|---|---|---|
+| `cargo test` | Gate logic in process — schema, linkage, the prefix rule, cache identity, deadlines, diff assembly | seconds |
+| `tests/e2e/run.sh` | The run itself, through the production CLI — every edge, every refusal path, the cascade, withheld judgment. The judge is a script | ~26s |
+| `tests/design/run.sh` | Judgment, against real models — whether a rubric edit broke a verdict that used to hold | ~1h, per rubric change |
+
+They are not substitutes for each other, and the boundaries are load-bearing.
+A unit test reads the Rust transition table and cannot tell you whether the
+engine accepts the graph it describes; the e2e suite proves the engine accepts
+it but replaces the judge, so it can assert nothing about a verdict; the design
+matrix measures verdicts but never runs the engine at all.
+
+The e2e suite skips when `loop-engine` is not on PATH, and takes `SC_BIN` to
+measure a build other than the deployed one — which is how its own mutants are
+checked. Only `design-semantic` has a judgment matrix today; the other four
+semantic gates have none.
+
 Protocol reference: `docs/provider-protocol-v1.md` and `docs/graph-projection.md`
 in <https://github.com/cartwmic/loop-engine>.
