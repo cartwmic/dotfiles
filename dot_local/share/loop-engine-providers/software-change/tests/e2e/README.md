@@ -3,7 +3,7 @@
 Black-box coverage of the workflow's **deterministic surface**, driven through
 the production `loop-engine` CLI against the installed provider binary.
 
-    ./run.sh                  every scenario  (~26s)
+    ./run.sh                  every scenario  (~40s)
     ./run.sh back_edge graph  named scenarios only
     ./run.sh --list           scenario names
 
@@ -60,7 +60,8 @@ hole.
 | Scenario | What it pins |
 |---|---|
 | `graph` | The engine accepts the stored projection: 13 transitions, 6 gate-free, every revision edge present, forward path still double-gated |
-| `happy_path` | `explore` → `end` with every gate passing |
+| `happy_path` | `explore` → `end` with every gate passing and every document at revision one |
+| `revised_lifecycle` | `explore` → `end` through three rounds of revision — intent from `plan`, design from `implement`, plan mid-phase-loop — plus `changes-requested` out of the review. The only scenario that takes that edge |
 | `rejection_preserves_state` | A refusal leaves the run in place with the same event still requestable |
 | `illegal_events` | Unknown events, and events declared elsewhere but not here, are refused |
 | `final_state_is_terminal` | `end` offers no exit |
@@ -99,3 +100,5 @@ should catch them and no others:
 |---|---|
 | `plan --revise-design--> design` deleted from the transition table | `graph`, `back_edge` |
 | Cursor phase-order comparison short-circuited to always agree | `cursor_prefix_violation` |
+| Parent-revision linkage check short-circuited to always agree | `cursor_repoint`, `revised_lifecycle` |
+| `changes-requested` gate made to expect the `approved` verdict | `revised_lifecycle` |
