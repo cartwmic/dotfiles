@@ -230,6 +230,89 @@ Both are fixed by moving the commands into `plan.json`, one list per phase
 `checkpoint`, and running them at each phase boundary. The plan is reviewed and
 approved, so the commands are reviewed with it, and a failure names the phase.
 
+## Starting a run
+
+The provider is built and registered by chezmoi; `loop-engine provider list`
+should already show it. Everything below is per change.
+
+**1. Choose the two roots.** `work_root` is the repository being changed.
+`artifact_root` holds this change's documents and is deliberately separate, so
+the workflow's own paperwork is not part of the diff any checkpoint judges.
+
+```sh
+WORK=/absolute/path/to/repo
+ART=~/.local/state/software-change/my-change
+mkdir -p "$ART"
+```
+
+**2. Configure the judges** in `$WORK/.loop-workflow.toml`. Copy
+`example.loop-workflow.toml` and read it; the minimum is:
+
+```toml
+schema_version = 1
+
+[judge]
+model = "openai-codex/gpt-5.6-sol"
+consensus_model = "openai-codex/gpt-5.6-sol"
+timeout_seconds = 700
+max_parallel_axes = 3
+```
+
+Prefer a direct-API model over a bridged one; the cost difference is a factor of
+ten, not a percentage. This file is read fresh by every gate, so correcting it
+mid-run is legitimate.
+
+**3. Create the run.**
+
+```sh
+printf '{"artifact_root":"%s","work_root":"%s","change_id":"my-change"}' \
+  "$ART" "$WORK" > /tmp/inputs.json
+loop-engine run create software-change --inputs /tmp/inputs.json --label my-change
+```
+
+It lands in `explore` and prints the run id. Keep it: every later command takes
+it.
+
+**4. Ask the run what to write.**
+
+```sh
+loop-engine run guidance "$RUN"
+```
+
+That is the whole instruction set for the current state — the document's schema,
+worked examples, and the verbatim text of every rubric that will judge it. It is
+written to be handed to a coding agent, and it is long on purpose: `explore` is
+31 KB. Do not summarise it for the agent doing the work; a summary is how the
+document ends up written against rules nobody read.
+
+**5. Write the document, then ask for the transition.**
+
+```sh
+# write $ART/intent.json, then
+loop-engine run request "$RUN" intent-ready
+```
+
+A refusal leaves the run exactly where it was and records why. Read the reason,
+fix the document, ask again. Repeat for `design-ready` and `plan-ready`.
+
+**6. In `implement`, one request per phase.** Do the phase's work in `$WORK`,
+commit it, append the phase to `$ART/implementation.json`, then
+`loop-engine run request "$RUN" phase-complete`. The phase's checkpoint commands
+run and its diff is judged. When every phase is claimed, `implementation-ready`
+moves to review, and an approving `reviews/implementation-review.json` plus
+`approved` ends the run.
+
+If something upstream turns out to be wrong at any point, use the `revise-*`
+edges rather than editing around the problem; see **Going back to revise
+something upstream**.
+
+**What to expect the first time.** A gate that calls judges takes tens of
+seconds. Judges are not deterministic: an identical document has been measured
+passing one sample and failing the next, roughly two rejections in seven. A
+rejection you disagree with is answered by making the document say the thing
+explicitly, not by re-requesting until it passes — the verdict is cached, so
+re-requesting an unchanged document returns the same answer anyway.
+
 ## Run inputs
 
 Immutable after `run create`.
