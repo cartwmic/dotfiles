@@ -59,15 +59,24 @@ for manifest in "$PROVIDER_ROOT"/*/Cargo.toml; do
     continue
   fi
 
+  # The registration timeout bounds ONE provider invocation, and a gate that
+  # calls LLM judges spends most of that budget waiting on models rather than
+  # computing. The default of 60s kills such a gate mid-judgment and reports it
+  # as a provider failure, so registration is made generous here; providers that
+  # need less simply finish sooner.
+  timeout_seconds=900
+
   # `provider add` is create-only and rejects an existing handle, so fall back to
   # `provider update` to re-point the registration at the freshly built binary.
   # Registration carries an absolute path; without this a rebuild would leave the
   # catalog pointing at the previous executable.
   if loop-engine --format json provider add "$name" \
-      --exec "$BIN_DIR/$name" --working-directory "$BIN_DIR" >/dev/null 2>&1; then
+      --exec "$BIN_DIR/$name" --working-directory "$BIN_DIR" \
+      --timeout "$timeout_seconds" >/dev/null 2>&1; then
     log INFO "registered $name"
   elif loop-engine --format json provider update "$name" \
-      --exec "$BIN_DIR/$name" --working-directory "$BIN_DIR" >/dev/null 2>&1; then
+      --exec "$BIN_DIR/$name" --working-directory "$BIN_DIR" \
+      --timeout "$timeout_seconds" >/dev/null 2>&1; then
     log INFO "updated registration $name"
   else
     log WARN "could not register $name; run 'loop-engine provider check $name' to diagnose"
