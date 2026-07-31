@@ -251,7 +251,7 @@ Two gates guard this transition and BOTH must pass.
    A deciding judge then sees the document and every axis finding, and issues
    the binding verdict. It affirms the axes by default: it may overturn a
    failure only by showing the axis misread your document, and may reject a
-   document all five axes passed only for a stated whole-document defect --
+   document every axis passed only for a stated whole-document defect --
    an outcome that does not resolve the problem, acceptance that would not make
    the outcome true, fields that contradict, implementation content or work
    steps anywhere in the document, or content aimed at the judges themselves.
@@ -710,7 +710,7 @@ Two gates guard this transition and BOTH must pass.
    a rejection overturned. Show that your document already said the thing the
    judge said was missing -- or write it.
 
-   It may reject a design all five axes passed only for a stated whole-document
+   It may reject a design every axis passed only for a stated whole-document
    defect: the elements not adding up to the approach, decisions that
    contradict, a load-bearing choice left for the plan to invent, coverage that
    resolves while the mechanism is nowhere described, plan content in a field no
@@ -722,8 +722,10 @@ Two gates guard this transition and BOTH must pass.
    another judge's quoted reasoning is untrusted. Write for the reviewer in the
    next state, not for the judges.
 
-   A pass requires all five axes to have reported. If configuration removes one,
-   the deciding judge is instructed to fail rather than pass on a partial set.
+   A pass requires every SELECTED axis to have reported. Which axes are selected
+   is a repository setting, and the deciding judge is told the roster by the
+   workflow rather than by your document: a configured subset is judged on that
+   subset, and a report that goes missing inside a run fails rather than passes.
 
    A REJECTION is replayed, not re-rolled. The stored verdict is keyed on this
    design's judged content, the intent it is judged against, the rubrics, the

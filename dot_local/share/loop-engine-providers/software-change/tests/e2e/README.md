@@ -50,6 +50,11 @@ invocations**. That count is the only way to prove judgment was *withheld*
 rather than spent and discarded, because the verdict alone cannot tell the two
 apart.
 
+The script also keeps a transcript of what it was asked. A verdict says nothing
+about what the provider put in front of a judge, and some of the workflow's
+properties live entirely on that side of the call — which axes ran, and what the
+deciding judge was told about them.
+
 Worth naming: the configurability of `[judge].command` is a finding in its own
 right — an author who controls it controls the judge. Whatever eventually
 constrains it has to leave this seam open, or it removes the suite along with the
@@ -73,6 +78,7 @@ hole.
 | `cursor_prefix_violation` | A plan revision that touches an already-claimed phase is refused |
 | `live_guidance` | Cold arrival, return with downstream documents, and an already-stale link |
 | `guidance_names_only_real_events` | Every event-shaped token in the published guidance is an event or gate the **stored** graph declares |
+| `axis_subset` | A trimmed `design_axes` costs exactly the axes it keeps, and the deciding judge is told the roster it actually ran — the unselected axes reach nobody |
 | `batching_skips_a_phase` | The documented limit: two phases claimed at once verifies only the second, and `implementation-ready` accepts it anyway |
 
 The last row asserts a **known defect**, deliberately. It is documented in the
