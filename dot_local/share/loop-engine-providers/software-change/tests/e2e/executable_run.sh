@@ -55,16 +55,20 @@ JUDGE_DIR="$OUT/judge"
 mkdir -p "$JUDGE_DIR"
 JUDGE_CALLS="$JUDGE_DIR/calls"
 JUDGE_VERDICT="$JUDGE_DIR/verdict"
+JUDGE_PROMPTS="$JUDGE_DIR/prompts"
 echo pass > "$JUDGE_VERDICT"
 : > "$JUDGE_CALLS"
+: > "$JUDGE_PROMPTS"
 
-# A judge that ignores every flag, records that it was called, and answers with
-# whatever the control file currently says. The provider passes the material as
-# the final argument; nothing here reads it, because reading it would be
-# pretending to judge.
+# A judge that ignores every flag, records that it was called, keeps a copy of
+# what it was asked, and answers with whatever the control file currently says.
+# Nothing here reads the material to decide anything, because reading it would be
+# pretending to judge. The transcript exists only so a scenario can assert what
+# the provider PUT IN FRONT OF a judge -- which is not observable from a verdict.
 cat > "$JUDGE_DIR/judge.sh" <<JUDGE
 #!/bin/sh
 echo call >> "$JUDGE_CALLS"
+printf '%s\n----- end of prompt -----\n' "\$*" >> "$JUDGE_PROMPTS"
 verdict=\$(cat "$JUDGE_VERDICT")
 if [ "\$verdict" = "fail" ]; then
     printf '%s\n' '{"verdict":"fail","reason":"scripted refusal from the e2e judge"}'
@@ -130,7 +134,22 @@ stored_graph() {
     GRAPH_JSON="$dir/state.json"
 }
 
-judge_reset() { : > "$JUDGE_CALLS"; }
+judge_reset() { : > "$JUDGE_CALLS"; : > "$JUDGE_PROMPTS"; }
+
+expect_prompt_contains() {
+    if grep -qF -- "$1" "$JUDGE_PROMPTS"; then
+        return 0
+    fi
+    fail "no judge was asked anything containing: $1"
+}
+
+expect_prompt_missing() {
+    if grep -qF -- "$1" "$JUDGE_PROMPTS"; then
+        fail "a judge prompt carried text it should not have: $1"
+        return 1
+    fi
+    return 0
+}
 judge_count() { wc -l < "$JUDGE_CALLS" | tr -d ' '; }
 judge_says()  { echo "$1" > "$JUDGE_VERDICT"; }
 
@@ -768,6 +787,43 @@ scenario_batching_skips_a_phase() {
     note "known limit: P1 was never verified and implementation-ready accepted the run anyway"
 }
 
+# Trimming the axis list is the one configuration change made to save money, and
+# for a while it was a trapdoor: the deciding rubric named its five axes inline,
+# so a four-axis run was reported to the decider as an evaluation missing a
+# report, and the document was rejected forever. The roster now travels with the
+# briefing. What must hold is both halves -- the removed axis costs nothing, and
+# the decider is told the truth about which axes ran.
+scenario_axis_subset() {
+    new_run subset || return 1
+
+    cat > "$WORK/.loop-workflow.toml" <<TOML
+[judge]
+model = "e2e/scripted"
+command = ["$JUDGE_DIR/judge.sh"]
+timeout_seconds = 60
+max_parallel_axes = 3
+design_axes = ["intent-faithful", "acceptance-covered"]
+TOML
+
+    advance_to design || return 1
+
+    seed_design "$ART"
+    judge_reset
+    engine run request "$RUN" design-ready
+    expect_ok && expect_state plan || return 1
+
+    # Two axes and one decider. A subset that still paid for five would be a
+    # setting that does nothing.
+    expect_judge_calls 3 || return 1
+
+    expect_prompt_contains \
+        "SELECTED AXES FOR THIS JUDGMENT: intent-faithful, acceptance-covered" || return 1
+    # The axes that were not selected are not mentioned to anyone -- neither as
+    # a report nor as an expectation the decider could fail on.
+    expect_prompt_missing "axis risk-honest" || return 1
+    expect_prompt_missing "axis decisions-justified"
+}
+
 # --------------------------------------------------------------- runner
 
 SCENARIOS=(
@@ -785,6 +841,7 @@ SCENARIOS=(
     cursor_prefix_violation
     live_guidance
     guidance_names_only_real_events
+    axis_subset
     batching_skips_a_phase
 )
 

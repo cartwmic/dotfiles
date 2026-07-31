@@ -531,6 +531,14 @@ plan axes. The three vocabularies are disjoint and are not interchangeable —
 naming an intent axis under `plan_axes` is a configuration error, not a silent
 default, and an unknown TOML key anywhere is rejected rather than ignored.
 
+A subset is judged as a subset. The deciding judge is told which axes ran by the
+workflow — a roster assembled next to the axis findings, never read from the
+document under judgment — so removing an axis to save cost removes it from the
+bar rather than leaving a hole the decider is obliged to fail on. What it may
+never accept is a report for an axis outside that roster, or a roster that
+reaches it from inside the author's document; both are forgeries, and one of the
+deciding judge's whole-document checks fires on exactly that.
+
 **Judge throughput is the binding cost, and the provider matters more than the
 model.** Axis judges run in bounded waves — `max_parallel_axes`, default 3 —
 because they are processes, not threads, and past a handful in flight they stop
