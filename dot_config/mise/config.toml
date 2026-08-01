@@ -300,6 +300,9 @@ fi
 [tasks."install-furi"]
 description = "Install furi and register automation-mcp"
 run = '''
+# Keep prior partial installs usable when this task resumes in a fresh shell.
+export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
+
 if ! command -v furi >/dev/null 2>&1; then
   if ! command -v bun >/dev/null 2>&1; then
     curl -fsSL https://bun.sh/install | bash
@@ -324,10 +327,6 @@ if ! command -v furi >/dev/null 2>&1; then
   bun add -d effect @valibot/to-json-schema
   bun run compile
   cp "$FURI_SRC_DIR/dist/furi" "$HOME/.local/bin/furi"
-fi
-
-if ! command -v furi >/dev/null 2>&1; then
-  export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
 fi
 
 if ! command -v furi >/dev/null 2>&1; then
