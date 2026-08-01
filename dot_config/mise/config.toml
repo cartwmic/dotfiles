@@ -148,6 +148,10 @@ VENV="$HOME/.local/share/nvim-python"
 if [ ! -x "$VENV/bin/python3" ]; then
   python3 -m venv "$VENV"
 fi
+# Repair partial venvs left without pip instead of treating python3 alone as complete.
+if ! "$VENV/bin/python3" -m pip --version >/dev/null 2>&1; then
+  "$VENV/bin/python3" -m ensurepip --upgrade
+fi
 "$VENV/bin/python3" -m pip install --quiet --upgrade pip pynvim
 '''
 
@@ -155,7 +159,22 @@ fi
 description = "Install SDKMAN (Java/JVM tools)"
 run = '''
 if [ ! -d "$HOME/.sdkman" ]; then
-  curl -s "https://get.sdkman.io" | bash
+  BASH_BIN="$(command -v bash)"
+  # Expansion intentionally occurs inside the selected Bash process.
+  # shellcheck disable=SC2016
+  if ! "$BASH_BIN" -c 'test "${BASH_VERSINFO[0]}" -ge 4'; then
+    case "$(uname -s)" in
+      Darwin)
+        brew install bash
+        BASH_BIN="$(brew --prefix bash)/bin/bash"
+        ;;
+      *)
+        echo "ERROR: SDKMAN requires Bash 4 or newer; found $($BASH_BIN --version | head -n 1)" >&2
+        exit 1
+        ;;
+    esac
+  fi
+  curl -fsSL "https://get.sdkman.io" | "$BASH_BIN"
 fi
 '''
 
