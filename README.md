@@ -56,7 +56,7 @@ exec zsh
 
 **AI Tools:**
 
-- claude, claude-code-acp, vectorcode, mistral-vibe, mermaid-cli
+- Pi coding agent, claude, claude-code-acp, vectorcode, mistral-vibe, mermaid-cli
 
 **Remote access:**
 

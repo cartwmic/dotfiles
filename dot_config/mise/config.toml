@@ -537,6 +537,18 @@ if ! command -v claude-code-acp >/dev/null 2>&1; then
 fi
 '''
 
+[tasks."install-pi"]
+description = "Install Pi coding agent"
+run = '''
+if ! command -v pi >/dev/null 2>&1; then
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: npm not found. Node.js must be installed first."
+    exit 1
+  fi
+  npm install -g @earendil-works/pi-coding-agent
+fi
+'''
+
 [tasks."install-mermaid-cli"]
 description = "Install mermaid-cli (mmdc)"
 run = '''
@@ -795,6 +807,7 @@ depends = [
   "install-claude",
   "install-furi",
   "install-claude-code-acp",
+  "install-pi",
   "install-antidote",
   "install-fzf-tab",
   "install-kubectl",
