@@ -305,7 +305,8 @@ export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
 
 if ! command -v furi >/dev/null 2>&1; then
   if ! command -v bun >/dev/null 2>&1; then
-    curl -fsSL https://bun.sh/install | bash
+    # Chezmoi already manages Bun's PATH block; prevent installer from appending it again.
+    curl -fsSL https://bun.sh/install | SHELL=/bin/false bash
     export PATH="$HOME/.bun/bin:$PATH"
   fi
 
