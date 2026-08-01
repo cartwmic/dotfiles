@@ -13,11 +13,20 @@
 
 set -eu
 
+# Bootstrap installs Claude under ~/.local/bin and Python through mise. Chezmoi
+# runs each script in a fresh process, so expose both without requiring a shell
+# restart between bootstrap and this post-bootstrap step.
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
 SCRIPT="$HOME/.local/user_scripts/apply_harness_config.sh"
 
 if [ ! -x "$SCRIPT" ]; then
   echo "[apply_harness_config] INFO: Harness config adapter not found at $SCRIPT, skipping"
   exit 0
+fi
+
+if command -v mise >/dev/null 2>&1; then
+  exec mise exec -- "$SCRIPT"
 fi
 
 exec "$SCRIPT"

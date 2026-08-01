@@ -4,7 +4,7 @@ A loop-engine protocol v1 workflow provider for driving a software change from
 intent through delivery. Standalone Rust binary; imports no loop-engine crates.
 
 Deployed by chezmoi to `~/.local/share/loop-engine-providers/software-change/`,
-built and registered by `run_onchange_build_loop_engine_providers.sh.tmpl`.
+built and registered by `run_onchange_after_50_build_loop_engine_providers.sh.tmpl`.
 
 ## What this owns, and what it does not
 

@@ -53,7 +53,7 @@ guard. No non-Claude model id contains `claude`.
 ## Profile gate
 
 This patch applies **only** when `PI_CHEZMOI_PROFILE=personal`. That variable is
-exported by the templated wrapper `run_onchange_apply_pi_patches.sh.tmpl`
+exported by the templated wrapper `run_onchange_after_30_apply_pi_patches.sh.tmpl`
 (`export PI_CHEZMOI_PROFILE="{{ .profile }}"`) before it runs the apply loop.
 
 - `PI_CHEZMOI_PROFILE=personal` → apply.

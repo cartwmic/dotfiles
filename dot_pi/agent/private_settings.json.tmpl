@@ -12,11 +12,12 @@
 {{- end -}}
 {{- $settingsPath := joinPath .chezmoi.homeDir ".pi/agent/settings.json" -}}
 {{- if stat $settingsPath -}}
-{{-   $found := output "jq" "-r" ".lastChangelogVersion // empty" $settingsPath | trim -}}
+{{-   $existingSettings := output "cat" $settingsPath | fromJson -}}
+{{-   $found := get $existingSettings "lastChangelogVersion" -}}
 {{-   if $found -}}
 {{-     $version = $found -}}
 {{-   end -}}
-{{-   $themeFound := output "jq" "-r" ".theme // empty" $settingsPath | trim -}}
+{{-   $themeFound := get $existingSettings "theme" -}}
 {{-   if $themeFound -}}
 {{-     $theme = $themeFound -}}
 {{-   end -}}

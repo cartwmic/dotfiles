@@ -22,6 +22,10 @@
 
 set -eu
 
+# rustup installs Cargo under ~/.cargo/bin. Bootstrap cannot update chezmoi's
+# parent process PATH, so expose it explicitly for this same-apply build.
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+
 SCRIPT="$HOME/.local/user_scripts/build_loop_engine_providers.sh"
 
 if [ ! -x "$SCRIPT" ]; then
