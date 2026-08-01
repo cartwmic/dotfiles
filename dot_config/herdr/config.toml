@@ -68,12 +68,12 @@ mouse_capture = true
 show_agent_labels_on_pane_borders = true
 agent_panel_sort = "spaces"
 
-# Pi publishes its generated session name through the terminal title. Show it in
-# the Agents sidebar instead of the generic workspace/tab-only default.
+# Pi publishes its generated session name through the terminal title. Show its
+# state and workspace first, then the session title without the redundant agent type.
 [ui.sidebar.agents.rows_by_agent]
 pi = [
-  ["state_icon", "terminal_title_stripped"],
-  ["agent"],
+  ["state_icon", "workspace"],
+  [{ token = "terminal_title_stripped", fg = "#A9B1D6", dim = false }],
 ]
 
 [ui.toast]
@@ -84,3 +84,8 @@ delivery = "herdr"
 [theme]
 name = "tokyo-night"
 auto_switch = false
+
+[theme.custom]
+# Preserve Tokyo Night while giving active and selected rows distinct contrast.
+surface_dim = "#24283B"
+surface0 = "#3B4261"
