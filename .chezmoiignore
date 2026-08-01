@@ -15,6 +15,7 @@ adr/
 {{- if ne .profile "personal" }}
 Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 .local/bin/sync-claude-pi-auth.sh
+.local/user_scripts/configure_rustdesk.sh
 .pi/agent/extensions/openrouter-gate
 .pi/agent/extensions/openrouter-gate/**
 {{- end }}

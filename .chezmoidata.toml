@@ -1,0 +1,5 @@
+[rustdesk]
+server = "10.19.1.1"
+port = 21116
+publicKey = "RCVcc2g81tREfvN6ifSx0KSSFgGuG2yhN2OpThmfYqI="
+passwordReference = "op://developer/RustDesk/password"

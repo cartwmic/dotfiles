@@ -58,6 +58,32 @@ exec zsh
 
 - claude, claude-code-acp, vectorcode, mistral-vibe, mermaid-cli
 
+**Remote access:**
+
+- RustDesk client on macOS and native Ubuntu/Debian
+- Self-hosted rendezvous and relay configuration
+- Shared unattended-access password loaded from `op://developer/RustDesk/password`
+
+## RustDesk Provisioning
+
+On `personal` profile hosts, `mise run bootstrap` installs RustDesk when missing. Other chezmoi profiles skip RustDesk. A chezmoi onchange script then applies only portable settings from `.chezmoidata.toml`: rendezvous server, relay server, public server key, password approval mode, and permanent-password verification. It preserves device identity, trusted-device data, local IP state, UI state, and hardware-codec state.
+
+The permanent password lives only in 1Password. Rotate it there, then apply it again with:
+
+```bash
+~/.local/user_scripts/configure_rustdesk.sh
+```
+
+The helper updates these platform paths:
+
+- macOS user: `~/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml`
+- Linux user: `~/.config/rustdesk/RustDesk2.toml`
+- Linux service: `/root/.config/rustdesk/RustDesk2.toml`
+
+On macOS, quit RustDesk before applying changed portable settings. Password-only reapplication can run while RustDesk is open. On Linux, configuration briefly restarts `rustdesk.service`. Do not run it through the RustDesk session being reconfigured.
+
+Shared passwords increase blast radius: compromise of one machine or this 1Password item affects every managed RustDesk host.
+
 ## Harness Config Adapters
 
 Canonical harness-agnostic configuration lives under:
@@ -185,5 +211,6 @@ After `chezmoi apply`, only these require manual setup:
 - Install gvm: `bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')`
 - Set default Go version: `gvm use go1.21 --default`
 - [macOS] Add XQuartz as login item
+- [macOS] Grant RustDesk Accessibility, Screen Recording, and, if needed, Input Monitoring permissions
 
 See [CLAUDE.md](./CLAUDE.md) for project-specific documentation.

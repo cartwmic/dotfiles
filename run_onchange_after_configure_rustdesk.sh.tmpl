@@ -1,0 +1,25 @@
+#!/bin/sh
+# Configure RustDesk after mise bootstrap has installed the application.
+# Helper hash: {{ include "dot_local/user_scripts/executable_configure_rustdesk.sh.tmpl" | sha256sum }}
+# Server: {{ .rustdesk.server }}:{{ .rustdesk.port }}
+# Public key hash: {{ .rustdesk.publicKey | sha256sum }}
+# Password reference: {{ .rustdesk.passwordReference }}
+
+set -eu
+
+SCRIPT_NAME="$(basename "$0")"
+LOG_PREFIX="[${SCRIPT_NAME}]"
+PROFILE={{ .profile | quote }}
+HELPER="$HOME/.local/user_scripts/configure_rustdesk.sh"
+
+if [ "$PROFILE" != "personal" ]; then
+  echo "${LOG_PREFIX} INFO: skipping RustDesk for chezmoi profile $PROFILE" >&2
+  exit 0
+fi
+
+if [ ! -x "$HELPER" ]; then
+  echo "${LOG_PREFIX} ERROR: RustDesk configuration helper not found: $HELPER" >&2
+  exit 1
+fi
+
+"$HELPER"

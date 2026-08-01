@@ -66,6 +66,18 @@ This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.
 - imagemagick, mermaid-cli (Image/diagram processing)
 - vectorcode (AI code tool)
 - claude, claude-code-acp (AI assistants)
+- RustDesk (remote desktop; installed through mise, portable settings applied by chezmoi)
+
+## RustDesk Provisioning
+
+- Shared portable settings live in `.chezmoidata.toml`.
+- `install-rustdesk` installs the application on `personal` profile macOS and native Ubuntu/Debian hosts; other profiles and WSL are skipped.
+- `run_onchange_after_configure_rustdesk.sh.tmpl` invokes the deployed `~/.local/user_scripts/configure_rustdesk.sh` helper after installation.
+- The helper preserves device identity and machine-local state while managing rendezvous/relay settings and password policy in `RustDesk2.toml`.
+- The unattended-access password is read from `op://developer/RustDesk/password`; never commit its value.
+- Linux user and root service configurations are both managed. Linux service configuration requires `sudo` and restarts `rustdesk.service` when settings change.
+- macOS RustDesk must be quit before portable settings change. Accessibility, Screen Recording, and sometimes Input Monitoring still require manual approval.
+- Never sync `RustDesk.toml`, `RustDesk_local.toml`, or `RustDesk_hwcodec.toml` because they contain identity or generated machine-local state.
 
 ## Important Conventions
 
@@ -91,7 +103,7 @@ This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.
 - **Cross-platform**: mise handles platform differences
 - Tool categories:
   - **mise-managed**: Node.js, Python, Rust, kubectl, terraform, etc. (installed to `~/.local/share/mise/installs/`)
-  - **Custom tasks**: uv, SDKMAN, kitty, claude, fonts, imagemagick
+  - **Custom tasks**: uv, SDKMAN, kitty, RustDesk, claude, fonts, imagemagick
   - **Manual**: gvm (Go version manager)
 
 ## Working with This Repository
@@ -147,6 +159,7 @@ After `chezmoi apply`, these require manual setup:
 - Install gvm: `bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')`
 - Set default Go version: `gvm use go1.21 --default`
 - [macOS only] Add XQuartz as a login item (for imagemagick)
+- [macOS only] Grant RustDesk Accessibility, Screen Recording, and, if needed, Input Monitoring permissions
 
 ## Platform-Specific Notes
 
