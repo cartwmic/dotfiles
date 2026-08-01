@@ -70,13 +70,13 @@ Override via env: `PI_STREAM_IDLE_TIMEOUT_MS=120000 pi`.
 ## How it's deployed
 
 Patch is applied by `~/.local/user_scripts/apply_pi_patches.sh`, triggered by
-chezmoi's `run_onchange_apply_pi_patches.sh.tmpl`. The onchange template
+chezmoi's `run_onchange_after_30_apply_pi_patches.sh.tmpl`. The onchange template
 embeds:
 
 - sha256 of `patch.mjs`
 - sha256 of the apply script
 - the currently installed `@mariozechner/pi-coding-agent` version
-  (captured via `{{ output "node" "-e" "..." }}`)
+  (captured by a guarded shell probe that reports `not-installed` before Node exists)
 
 So the patch re-applies whenever you (a) bump pi-coding-agent, (b) edit the
 patch logic, or (c) edit the apply script. **User-facing rule: after
@@ -103,7 +103,7 @@ dump.
   ```sh
   rm -rf ~/.local/share/chezmoi/dot_local/share/pi-patches/anthropic-idle-watchdog
   rm  ~/.local/share/chezmoi/dot_local/user_scripts/executable_apply_pi_patches.sh
-  rm  ~/.local/share/chezmoi/run_onchange_apply_pi_patches.sh.tmpl
+  rm  ~/.local/share/chezmoi/run_onchange_after_30_apply_pi_patches.sh.tmpl
   rm -rf ~/.local/state/chezmoi-pi-patches
   ```
   Then `chezmoi apply` to commit the removal.

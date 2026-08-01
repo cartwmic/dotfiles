@@ -34,7 +34,7 @@ that have never run (no state file) are simply not watched. The guard reads no
 `PI_CHEZMOI_PROFILE` itself — the state files already encode the decision.
 
 **It only warns. It does not heal.** Re-apply yourself with `chezmoi apply`
-(re-runs `run_onchange_apply_pi_patches`) or run the patch directly:
+(re-runs `run_onchange_after_30_apply_pi_patches`) or run the patch directly:
 
 ```sh
 PI_CHEZMOI_PROFILE=personal node \

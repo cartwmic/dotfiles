@@ -11,7 +11,7 @@
 // Anthropic web_search/web_fetch tools and pi-sub-bar keep working.
 //
 // PROFILE GATE: this patch only applies on the chezmoi `personal` profile.
-// The templated wrapper run_onchange_apply_pi_patches.sh.tmpl exports
+// The templated wrapper run_onchange_after_30_apply_pi_patches.sh.tmpl exports
 // PI_CHEZMOI_PROFILE={{ .profile }} before running the apply loop. When that
 // value is not "personal" (including unset, e.g. a manual run), this patch
 // does nothing — and if a previous run applied it, it restores the original

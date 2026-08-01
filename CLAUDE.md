@@ -16,8 +16,8 @@ This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.
 │   ├── zellij/              # Zellij terminal multiplexer config (see dot_config/zellij/README.md for plugin/fork notes)
 │   ├── mcphub/              # MCP Hub configuration
 │   └── zsh-completions/     # Custom zsh completion scripts
-├── run_once_install_mise.sh      # Installs mise once
-├── run_onchange_mise_bootstrap.sh.tmpl  # Runs when mise config changes
+├── run_once_after_00_install_mise.sh          # Installs mise first in post-apply phase
+├── run_onchange_after_10_mise_bootstrap.sh.tmpl  # Installs tools after mise is available
 ├── private_dot_zshrc        # Main zsh configuration
 ├── dot_zsh_plugins.txt      # Antidote plugin list
 ├── dot_zshenv               # Zsh environment variables
@@ -72,7 +72,7 @@ This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.
 
 - Shared portable settings live in `.chezmoidata.toml`.
 - `install-rustdesk` installs the application on `personal` profile macOS and native Ubuntu/Debian hosts; other profiles and WSL are skipped.
-- `run_onchange_after_configure_rustdesk.sh.tmpl` invokes the deployed `~/.local/user_scripts/configure_rustdesk.sh` helper after installation.
+- `run_onchange_after_60_configure_rustdesk.sh.tmpl` invokes the deployed `~/.local/user_scripts/configure_rustdesk.sh` helper after installation.
 - The helper preserves device identity and machine-local state while managing rendezvous/relay settings and password policy in `RustDesk2.toml`.
 - The unattended-access password is read from `op://developer/RustDesk/password`; never commit its value.
 - Linux user and root service configurations are both managed. Linux service configuration requires `sudo` and restarts `rustdesk.service` when settings change.
@@ -198,7 +198,7 @@ This repository includes configurations for:
 Not every fix lands upstream on our timeline. The `dot_local/share/pi-patches/` tree holds idempotent runtime patches against the user's installed `@mariozechner/pi-coding-agent` / `@mariozechner/pi-ai` files.
 
 - **Apply script**: `dot_local/user_scripts/executable_apply_pi_patches.sh` (auto-runs on `chezmoi apply` via the onchange template below)
-- **Onchange trigger**: `run_onchange_apply_pi_patches.sh.tmpl` — embeds sha256 of each `patch.mjs`, the apply script, and the currently installed pi-coding-agent / pi-ai versions. Re-runs on any change.
+- **Onchange trigger**: `run_onchange_after_30_apply_pi_patches.sh.tmpl` — embeds sha256 of each `patch.mjs`, the apply script, and the currently installed pi-coding-agent / pi-ai versions. Re-runs on any change.
 - **State**: `~/.local/state/chezmoi-pi-patches/<patch-name>.json` (last-applied revision, fingerprints, backup path)
 - **Backup**: each patched file is backed up alongside as `<file>.orig.chezmoi-pi-patch` on first patch.
 

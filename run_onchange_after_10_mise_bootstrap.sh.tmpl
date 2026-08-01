@@ -19,7 +19,7 @@ log_error() {
 }
 
 # Ensure mise is in PATH
-if ! command -v mise &> /dev/null; then
+if ! command -v mise >/dev/null 2>&1; then
   # Try to find mise in common locations
   if [ -f "$HOME/.local/bin/mise" ]; then
     export PATH="$HOME/.local/bin:$PATH"
@@ -29,7 +29,7 @@ if ! command -v mise &> /dev/null; then
     export PATH="/usr/local/bin:$PATH"
   else
     log_error "mise not found in PATH. Please ensure mise is installed first."
-    log_error "Run: chezmoi apply to trigger run_once_install_mise.sh"
+    log_error "Run: chezmoi apply to trigger run_once_after_00_install_mise.sh"
     exit 1
   fi
 fi

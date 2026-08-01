@@ -180,8 +180,8 @@ dot_config/
   ├── kitty/                     # Kitty terminal
   ├── lazygit/                   # Lazygit TUI
   └── zellij/                    # Zellij multiplexer (see dot_config/zellij/README.md for plugin/fork notes)
-run_once_install_mise.sh         # Installs mise once
-run_onchange_mise_bootstrap.sh   # Runs when mise config changes
+run_once_after_00_install_mise.sh          # Installs mise first in post-apply phase
+run_onchange_after_10_mise_bootstrap.sh    # Installs tools after mise is available
 private_dot_zshrc                # Zsh configuration
 dot_zsh_plugins.txt              # Antidote plugin list
 ```
