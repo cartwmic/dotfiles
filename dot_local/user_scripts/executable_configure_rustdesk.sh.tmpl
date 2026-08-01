@@ -1,0 +1,319 @@
+#!/bin/sh
+# Apply portable RustDesk settings without copying device identity or local state.
+
+set -eu
+
+SCRIPT_NAME="$(basename "$0")"
+LOG_PREFIX="[${SCRIPT_NAME}]"
+SERVER={{ .rustdesk.server | quote }}
+PORT={{ printf "%v" .rustdesk.port | quote }}
+PUBLIC_KEY={{ .rustdesk.publicKey | quote }}
+PASSWORD_REFERENCE={{ .rustdesk.passwordReference | quote }}
+OS="${RUSTDESK_OS:-$(uname -s)}"
+OP_BIN="${OP_BIN:-op}"
+
+log_info() {
+  echo "${LOG_PREFIX} INFO: $*" >&2
+}
+
+log_error() {
+  echo "${LOG_PREFIX} ERROR: $*" >&2
+}
+
+die() {
+  log_error "$*"
+  exit 1
+}
+
+# WSL has no supported RustDesk desktop target. Skip before dependency checks so
+# a WSL bootstrap does not require Python or 1Password solely for this helper.
+if [ "$OS" = "Linux" ] && grep -qi microsoft /proc/version 2>/dev/null; then
+  log_info "skipping RustDesk configuration inside WSL"
+  exit 0
+fi
+
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1 || ! "$PYTHON_BIN" -c 'import tomllib' >/dev/null 2>&1; then
+  if command -v mise >/dev/null 2>&1; then
+    MISE_PYTHON="$(mise which python 2>/dev/null || true)"
+    if [ -n "$MISE_PYTHON" ] && "$MISE_PYTHON" -c 'import tomllib' >/dev/null 2>&1; then
+      PYTHON_BIN="$MISE_PYTHON"
+    fi
+  fi
+fi
+"$PYTHON_BIN" -c 'import tomllib' >/dev/null 2>&1 || die "Python 3.11 or newer is required"
+command -v "$OP_BIN" >/dev/null 2>&1 || die "1Password CLI not found: $OP_BIN"
+
+# Prefer non-interactive service-account auth when provisioned. Desktop-app
+# integration remains available when no token file exists.
+if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+  OP_TOKEN_FILE="${AGENT_HARNESS_OP_TOKEN_FILE:-$HOME/.config/agent-harness/op-service-token}"
+  if [ -r "$OP_TOKEN_FILE" ]; then
+    OP_SERVICE_ACCOUNT_TOKEN="$(cat "$OP_TOKEN_FILE")"
+    export OP_SERVICE_ACCOUNT_TOKEN
+  fi
+fi
+
+case "$OS" in
+  Darwin)
+    CONFIG_DIR="${RUSTDESK_CONFIG_DIR:-$HOME/Library/Preferences/com.carriez.RustDesk}"
+    RUSTDESK_BIN="${RUSTDESK_BIN:-/Applications/RustDesk.app/Contents/MacOS/RustDesk}"
+    ;;
+  Linux)
+    CONFIG_DIR="${RUSTDESK_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/rustdesk}"
+    RUSTDESK_BIN="${RUSTDESK_BIN:-$(command -v rustdesk 2>/dev/null || true)}"
+    ;;
+  *)
+    die "unsupported operating system: $OS"
+    ;;
+esac
+
+[ -n "$RUSTDESK_BIN" ] && [ -x "$RUSTDESK_BIN" ] || die "RustDesk executable not found: $RUSTDESK_BIN"
+
+TEMP_DIR="$(mktemp -d)"
+LINUX_SERVICE_STOPPED=0
+cleanup() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  rm -rf "$TEMP_DIR"
+  if [ "$LINUX_SERVICE_STOPPED" -eq 1 ]; then
+    sudo systemctl start rustdesk.service >/dev/null 2>&1 || true
+  fi
+  exit "$status"
+}
+trap cleanup EXIT HUP INT TERM
+
+# Render managed keys into a staged copy. Unknown keys, trusted devices, and
+# machine-local values remain untouched.
+stage_config() {
+  source_file=$1
+  staged_file=$2
+
+  if [ -f "$source_file" ]; then
+    cp "$source_file" "$staged_file"
+  else
+    : > "$staged_file"
+  fi
+
+  RUSTDESK_SERVER="$SERVER" \
+  RUSTDESK_PORT="$PORT" \
+  RUSTDESK_PUBLIC_KEY="$PUBLIC_KEY" \
+    "$PYTHON_BIN" - "$staged_file" <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import tomllib
+from typing import Optional, Tuple
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+# Reject malformed existing configuration rather than replacing it.
+parsed = tomllib.loads(text)
+lines = text.splitlines()
+mutated = [False]
+
+
+def value(value: str) -> str:
+    # JSON strings are valid TOML basic strings.
+    return json.dumps(value)
+
+
+def table_bounds(table: Optional[str]) -> Optional[Tuple[int, int]]:
+    headers = []
+    for index, line in enumerate(lines):
+        match = re.match(r"^\s*\[([^\]]+)\]\s*(?:#.*)?$", line)
+        if match:
+            headers.append((index, match.group(1).strip()))
+
+    if table is None:
+        return 0, headers[0][0] if headers else len(lines)
+
+    for position, (start, name) in enumerate(headers):
+        if name == table:
+            end = headers[position + 1][0] if position + 1 < len(headers) else len(lines)
+            return start + 1, end
+    return None
+
+
+def set_key(table: Optional[str], key: str, desired: str) -> None:
+    current = parsed if table is None else parsed.get(table, {})
+    if current.get(key) == desired:
+        return
+
+    mutated[0] = True
+    raw_value = value(desired)
+    bounds = table_bounds(table)
+    if bounds is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend((f"[{table}]", f"{key} = {raw_value}"))
+        return
+
+    start, end = bounds
+    assignment = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    for index in range(start, end):
+        if assignment.match(lines[index]):
+            prefix = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+            lines[index] = f"{prefix}{key} = {raw_value}"
+            return
+
+    insert_at = end
+    while insert_at > start and not lines[insert_at - 1].strip():
+        insert_at -= 1
+    lines.insert(insert_at, f"{key} = {raw_value}")
+
+
+server = os.environ["RUSTDESK_SERVER"]
+port = os.environ["RUSTDESK_PORT"]
+public_key = os.environ["RUSTDESK_PUBLIC_KEY"]
+
+set_key(None, "rendezvous_server", f"{server}:{port}")
+set_key("options", "custom-rendezvous-server", server)
+set_key("options", "relay-server", server)
+set_key("options", "key", public_key)
+set_key("options", "approve-mode", "password")
+set_key("options", "verification-method", "use-permanent-password")
+
+if mutated[0]:
+    updated = "\n".join(lines).rstrip() + "\n"
+    tomllib.loads(updated)
+    path.write_text(updated)
+PY
+  chmod 600 "$staged_file"
+}
+
+CONFIG_FILE="$CONFIG_DIR/RustDesk2.toml"
+USER_ORIGINAL="$TEMP_DIR/user-original.toml"
+USER_STAGED="$TEMP_DIR/user-staged.toml"
+mkdir -p "$CONFIG_DIR"
+chmod 700 "$CONFIG_DIR"
+if [ -f "$CONFIG_FILE" ]; then
+  cp "$CONFIG_FILE" "$USER_ORIGINAL"
+else
+  : > "$USER_ORIGINAL"
+fi
+stage_config "$USER_ORIGINAL" "$USER_STAGED"
+
+USER_CHANGED=0
+if ! cmp -s "$USER_ORIGINAL" "$USER_STAGED"; then
+  USER_CHANGED=1
+fi
+
+ROOT_CHANGED=0
+ROOT_CONFIG="/root/.config/rustdesk/RustDesk2.toml"
+ROOT_ORIGINAL="$TEMP_DIR/root-original.toml"
+ROOT_STAGED="$TEMP_DIR/root-staged.toml"
+if [ "$OS" = "Linux" ] && [ "${RUSTDESK_SKIP_ROOT_CONFIG:-0}" != "1" ]; then
+  if sudo test -f "$ROOT_CONFIG"; then
+    # Destination is user-owned staging storage; sudo is needed only for read.
+    # shellcheck disable=SC2024
+    sudo cat "$ROOT_CONFIG" > "$ROOT_ORIGINAL"
+  else
+    : > "$ROOT_ORIGINAL"
+  fi
+  stage_config "$ROOT_ORIGINAL" "$ROOT_STAGED"
+  if ! cmp -s "$ROOT_ORIGINAL" "$ROOT_STAGED"; then
+    ROOT_CHANGED=1
+  fi
+fi
+
+if [ "$OS" = "Darwin" ] && [ "$USER_CHANGED" -eq 1 ] && [ "${RUSTDESK_IGNORE_RUNNING:-0}" != "1" ]; then
+  if pgrep -x RustDesk >/dev/null 2>&1; then
+    die "portable settings changed while RustDesk is running; quit RustDesk and rerun this script"
+  fi
+fi
+
+LINUX_SERVICE_AVAILABLE=0
+if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
+  if sudo systemctl cat rustdesk.service >/dev/null 2>&1; then
+    LINUX_SERVICE_AVAILABLE=1
+  fi
+fi
+
+if [ "$OS" = "Linux" ] && { [ "$USER_CHANGED" -eq 1 ] || [ "$ROOT_CHANGED" -eq 1 ]; }; then
+  if pgrep -u "$(id -u)" -x rustdesk >/dev/null 2>&1; then
+    die "portable settings changed while RustDesk GUI is running; quit RustDesk and rerun this script"
+  fi
+  if [ "$LINUX_SERVICE_AVAILABLE" -eq 1 ] && sudo systemctl is-active --quiet rustdesk.service; then
+    log_info "stopping RustDesk service while configuration changes"
+    sudo systemctl stop rustdesk.service
+    LINUX_SERVICE_STOPPED=1
+  fi
+fi
+
+if [ "$USER_CHANGED" -eq 1 ]; then
+  if [ -f "$CONFIG_FILE" ] && [ ! -f "$CONFIG_FILE.chezmoi-backup" ]; then
+    cp -p "$CONFIG_FILE" "$CONFIG_FILE.chezmoi-backup"
+  fi
+  install -m 600 "$USER_STAGED" "$CONFIG_FILE"
+  log_info "updated portable settings in $CONFIG_FILE"
+else
+  log_info "portable user settings already current"
+fi
+
+if [ "$ROOT_CHANGED" -eq 1 ]; then
+  sudo install -d -m 700 /root/.config/rustdesk
+  if sudo test -f "$ROOT_CONFIG" && ! sudo test -f "$ROOT_CONFIG.chezmoi-backup"; then
+    sudo cp -p "$ROOT_CONFIG" "$ROOT_CONFIG.chezmoi-backup"
+  fi
+  sudo install -m 600 "$ROOT_STAGED" "$ROOT_CONFIG"
+  log_info "updated portable service settings in $ROOT_CONFIG"
+fi
+
+# RustDesk exposes password setting, but not password retrieval, through its CLI.
+# Installed desktop builds require administrative privileges. Pass secret to a
+# root wrapper over stdin so sudo logs never contain it, then require RustDesk's
+# explicit success message because the CLI returns zero even when it rejects the
+# request.
+if ! PASSWORD="$($OP_BIN read "$PASSWORD_REFERENCE" --no-newline 2>/dev/null)"; then
+  die "unable to read RustDesk password from $PASSWORD_REFERENCE"
+fi
+[ -n "$PASSWORD" ] || die "1Password returned an empty RustDesk password"
+
+# The administrative CLI sends the password to the running desktop server over
+# IPC. A fresh macOS cask has no server until the application launches.
+if [ "$OS" = "Darwin" ] && ! pgrep -x RustDesk >/dev/null 2>&1; then
+  command -v open >/dev/null 2>&1 || die "macOS open command not found"
+  open -gj -a RustDesk
+  attempts=0
+  while ! pgrep -x RustDesk >/dev/null 2>&1 && [ "$attempts" -lt 40 ]; do
+    sleep 0.25
+    attempts=$((attempts + 1))
+  done
+  pgrep -x RustDesk >/dev/null 2>&1 || die "RustDesk did not start for password configuration"
+  log_info "started RustDesk for password configuration"
+fi
+
+PASSWORD_OUTPUT="$TEMP_DIR/password-output"
+# Output file intentionally belongs to invoking user; only RustDesk needs root.
+# shellcheck disable=SC2024
+if ! printf '%s\n' "$PASSWORD" | sudo -- sh -c '
+  IFS= read -r password
+  exec "$1" --password "$password"
+' sh "$RUSTDESK_BIN" > "$PASSWORD_OUTPUT" 2>&1; then
+  unset PASSWORD
+  die "RustDesk password command failed"
+fi
+unset PASSWORD
+if ! grep -Fxq 'Done!' "$PASSWORD_OUTPUT"; then
+  die "RustDesk did not confirm permanent-password update"
+fi
+log_info "applied permanent password from $PASSWORD_REFERENCE"
+
+if [ "$OS" = "Linux" ]; then
+  if [ "$LINUX_SERVICE_AVAILABLE" -eq 1 ]; then
+    sudo systemctl enable rustdesk.service >/dev/null 2>&1 || true
+    sudo systemctl restart rustdesk.service
+    LINUX_SERVICE_STOPPED=0
+    log_info "enabled and restarted RustDesk service"
+  else
+    log_info "RustDesk systemd service not found; unattended background access may be unavailable"
+  fi
+fi
+
+if [ "$OS" = "Darwin" ]; then
+  log_info "macOS still requires manual Accessibility, Screen Recording, and possibly Input Monitoring approval"
+fi

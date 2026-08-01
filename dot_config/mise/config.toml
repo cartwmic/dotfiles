@@ -177,6 +177,99 @@ case "$OS" in
 esac
 '''
 
+[tasks."install-rustdesk"]
+description = "Install RustDesk remote desktop on personal macOS or native Ubuntu/Debian hosts"
+depends = ["setup-ubuntu-essentials"]
+run = '''
+PROFILE="$(chezmoi data --format json 2>/dev/null | jq -r '.profile // empty' || true)"
+if [ "$PROFILE" != "personal" ]; then
+  echo "Skipping RustDesk for chezmoi profile ${PROFILE:-unknown}"
+  exit 0
+fi
+
+OS="$(uname -s)"
+case "$OS" in
+  Darwin)
+    if [ -d "/Applications/RustDesk.app" ]; then
+      echo "RustDesk already installed"
+    else
+      brew install --cask rustdesk
+    fi
+    ;;
+  Linux)
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+      echo "Skipping RustDesk inside WSL"
+      exit 0
+    fi
+
+    if dpkg-query -W -f='${Status}' rustdesk 2>/dev/null | grep -q 'install ok installed'; then
+      echo "RustDesk Debian package already installed"
+      exit 0
+    fi
+
+    if [ ! -r /etc/os-release ]; then
+      echo "ERROR: RustDesk installer requires Ubuntu or Debian"
+      exit 1
+    fi
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    case "${ID:-} ${ID_LIKE:-}" in
+      *ubuntu*|*debian*) ;;
+      *)
+        echo "ERROR: RustDesk installer supports Ubuntu or Debian, found ${ID:-unknown}"
+        exit 1
+        ;;
+    esac
+
+    case "$(dpkg --print-architecture)" in
+      amd64) RUSTDESK_ARCH="x86_64" ;;
+      arm64) RUSTDESK_ARCH="aarch64" ;;
+      *)
+        echo "ERROR: unsupported RustDesk architecture: $(dpkg --print-architecture)"
+        exit 1
+        ;;
+    esac
+
+    RELEASE_JSON="$(curl -fsSL https://api.github.com/repos/rustdesk/rustdesk/releases/latest)"
+    ASSET_SUFFIX="-${RUSTDESK_ARCH}.deb"
+    ASSET_URL="$(printf '%s' "$RELEASE_JSON" | jq -r --arg suffix "$ASSET_SUFFIX" '.assets[] | select(.name | endswith($suffix)) | .browser_download_url' | head -n 1)"
+    ASSET_DIGEST="$(printf '%s' "$RELEASE_JSON" | jq -r --arg suffix "$ASSET_SUFFIX" '.assets[] | select(.name | endswith($suffix)) | .digest' | head -n 1)"
+    unset RELEASE_JSON
+
+    if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+      echo "ERROR: latest RustDesk release has no ${RUSTDESK_ARCH} Debian package"
+      exit 1
+    fi
+
+    TEMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "$TEMP_DIR"' EXIT HUP INT TERM
+    PACKAGE="$TEMP_DIR/rustdesk.deb"
+    curl -fL "$ASSET_URL" -o "$PACKAGE"
+
+    case "$ASSET_DIGEST" in
+      sha256:*)
+        EXPECTED_SHA256="${ASSET_DIGEST#sha256:}"
+        ACTUAL_SHA256="$(sha256sum "$PACKAGE" | awk '{print $1}')"
+        if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+          echo "ERROR: RustDesk package checksum mismatch"
+          exit 1
+        fi
+        ;;
+      *)
+        echo "ERROR: latest RustDesk release does not publish a SHA-256 digest"
+        exit 1
+        ;;
+    esac
+
+    sudo apt-get install -y "$PACKAGE"
+    ;;
+  *)
+    echo "ERROR: RustDesk installer supports macOS and Linux only"
+    exit 1
+    ;;
+esac
+'''
+
 [tasks."install-claude"]
 description = "Install Claude CLI"
 run = '''
@@ -679,6 +772,7 @@ depends = [
   "install-nvim-python-host",
   "install-sdkman",
   "install-kitty",
+  "install-rustdesk",
   "install-claude",
   "install-furi",
   "install-claude-code-acp",
