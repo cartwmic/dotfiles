@@ -282,7 +282,14 @@ export default function (pi: ExtensionAPI): void {
 		pendingTurnEndCheck = false;
 		maybeCompact("turn_end", ctx, true);
 	});
-	pi.on("agent_end", (_event, ctx) => {
+	// The "agent_end" checkpoint is evaluated at agent_settled, not agent_end.
+	// agent_end is a low-level attempt boundary: Pi may still run a native retry,
+	// overflow recovery, or a continuation queued by another extension's agent_end
+	// handler (e.g. the goal loop's follow-up). ctx.compact() disconnects agent
+	// events and aborts, so compacting at agent_end can swallow that continuation
+	// and silently strand the run. agent_settled fires only once nothing further
+	// will run, so the abort inside compact() has nothing left to cancel.
+	pi.on("agent_settled", (_event, ctx) => {
 		if (pendingTurnEndCheck) {
 			pendingTurnEndCheck = false;
 			maybeCompact("turn_end", ctx, false);
