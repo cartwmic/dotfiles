@@ -27,7 +27,7 @@ data:
 EOF
 
 # Install chezmoi and apply dotfiles (automatically installs mise + all tools)
-sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply cartwmic
+sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" init --apply cartwmic
 
 # That's it! Restart your shell
 exec zsh
