@@ -39,6 +39,7 @@ import {
 	parseGoalArg,
 	parseVerdict,
 	resolveSetting,
+	resolvesPendingErrorOnTurnStart,
 	verdictFromToolArgs,
 	type GoalConfig,
 	type Verdict,
@@ -345,6 +346,19 @@ export default function (pi: ExtensionAPI) {
 			dbg(`set condition="${parsed.condition}" maxTurns=${goal.maxTurns}`);
 			return `◎ Goal set (budget ${goal.maxTurns} turns): ${parsed.condition}`;
 		},
+	});
+
+	// A turn that starts after a deferred error proves Pi continued the same
+	// user-visible turn (native retry / overflow recovery / queued continuation).
+	// Disarm the latch here: it is only cleared on a clean agent_end otherwise, and
+	// an auto-compaction's ctx.compact() disconnects agent events before aborting,
+	// so it emits agent_settled with NO agent_end in between — a stale latch would
+	// then stop a perfectly healthy loop mid-run.
+	pi.on("turn_start", () => {
+		const session = goal;
+		if (!session || !resolvesPendingErrorOnTurnStart(session)) return;
+		session.pendingError = undefined;
+		dbg("turn_start after errored attempt — Pi continued the run, clearing pending error");
 	});
 
 	pi.on("agent_end", async (event: any, ctx: ExtensionContext) => {

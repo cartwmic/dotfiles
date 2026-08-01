@@ -107,6 +107,22 @@ describe("auto-compact threshold", () => {
 		).toBe(false);
 	});
 
+	test("never compacts at agent_end — a queued continuation may still run", () => {
+		// agent_end is a low-level attempt boundary: Pi can still run a native
+		// retry or a continuation queued by another extension's agent_end handler
+		// (e.g. the goal loop's follow-up). ctx.compact() disconnects agent events
+		// and aborts, so compacting there strands that continuation.
+		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+		extension({
+			on: (name: string, handler: (event: unknown, ctx: any) => void) => handlers.set(name, handler),
+			registerCommand: () => {},
+			sendUserMessage: () => {},
+		} as any);
+
+		expect(handlers.has("agent_end")).toBe(false);
+		expect(handlers.has("agent_settled")).toBe(true);
+	});
+
 	test("checks both event levels but compacts once at the same usage", () => {
 		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
 		const commands: string[] = [];
@@ -136,7 +152,7 @@ describe("auto-compact threshold", () => {
 		handlers.get("turn_end")?.({}, ctx);
 		expect(compactCalls).toBe(0);
 		handlers.get("turn_start")?.({}, ctx);
-		handlers.get("agent_end")?.({}, ctx);
+		handlers.get("agent_settled")?.({}, ctx);
 
 		expect(compactCalls).toBe(1);
 		expect(commands).toContain("auto-compact");
@@ -206,7 +222,7 @@ describe("auto-compact threshold", () => {
 		expect(() => handlers.get("turn_start")?.({}, ctx)).not.toThrow();
 	});
 
-	test("does not resume when the final turn is followed by agent_end", () => {
+	test("does not resume when the final turn is followed by agent_settled", () => {
 		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
 		const followUps: string[] = [];
 		extension({
@@ -229,7 +245,7 @@ describe("auto-compact threshold", () => {
 		};
 		handlers.get("turn_end")?.({}, ctx);
 		expect(compactCalls).toBe(0);
-		handlers.get("agent_end")?.({}, ctx);
+		handlers.get("agent_settled")?.({}, ctx);
 		expect(compactCalls).toBe(1);
 		expect(followUps).toEqual([]);
 	});
@@ -243,7 +259,7 @@ describe("auto-compact threshold", () => {
 		} as any);
 
 		// Compaction never reduces context; tokens keep climbing above threshold,
-		// so each agent_end re-triggers (rising tokens defeat the same-count guard).
+		// so each agent_settled re-triggers (rising tokens defeat the same-count guard).
 		let tokens = 148_800;
 		let compactCalls = 0;
 		const ctx = {
@@ -259,12 +275,12 @@ describe("auto-compact threshold", () => {
 
 		// Default breaker limit is 2: attempt #1 triggers, attempt #2 is the first
 		// re-trigger (count 1), attempt #3 would be count 2 -> breaker trips first.
-		for (let i = 0; i < 6; i++) handlers.get("agent_end")?.({}, ctx);
+		for (let i = 0; i < 6; i++) handlers.get("agent_settled")?.({}, ctx);
 		expect(compactCalls).toBe(2);
 
 		// session_start resets the breaker.
 		handlers.get("session_start")?.({}, ctx);
-		for (let i = 0; i < 6; i++) handlers.get("agent_end")?.({}, ctx);
+		for (let i = 0; i < 6; i++) handlers.get("agent_settled")?.({}, ctx);
 		expect(compactCalls).toBe(4);
 	});
 
@@ -298,7 +314,7 @@ describe("auto-compact threshold", () => {
 				handlers.get("session_compact")?.({ fromExtension: true, willRetry: false }, ctx);
 			},
 		};
-		for (idx = 0; idx < readings.length; idx++) handlers.get("agent_end")?.({}, ctx);
+		for (idx = 0; idx < readings.length; idx++) handlers.get("agent_settled")?.({}, ctx);
 		expect(compactCalls).toBe(2);
 	});
 

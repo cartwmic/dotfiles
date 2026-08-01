@@ -13,6 +13,7 @@ import {
 	parseGoalArg,
 	parseVerdict,
 	resolveSetting,
+	resolvesPendingErrorOnTurnStart,
 	shouldStopForBudget,
 	verdictFromToolArgs,
 } from "./helpers.ts";
@@ -202,6 +203,22 @@ describe("lastAssistantInfo / isInterruptedStop / decideAgentEndBoundary — goa
 		expect(decideAgentEndBoundary("stop")).toBe("evaluate");
 		expect(decideAgentEndBoundary("toolUse")).toBe("evaluate");
 		expect(decideAgentEndBoundary(undefined)).toBe("evaluate");
+	});
+});
+
+describe("resolvesPendingErrorOnTurnStart — goal-loop.preserve-across-native-retries", () => {
+	test("a turn starting after a deferred error supersedes it", () => {
+		expect(resolvesPendingErrorOnTurnStart({ active: true, pendingError: true })).toBe(true);
+	});
+
+	test("no pending error → nothing to resolve", () => {
+		expect(resolvesPendingErrorOnTurnStart({ active: true })).toBe(false);
+		expect(resolvesPendingErrorOnTurnStart({ active: true, pendingError: false })).toBe(false);
+	});
+
+	test("an inactive or absent goal is never touched", () => {
+		expect(resolvesPendingErrorOnTurnStart({ active: false, pendingError: true })).toBe(false);
+		expect(resolvesPendingErrorOnTurnStart(undefined)).toBe(false);
 	});
 });
 

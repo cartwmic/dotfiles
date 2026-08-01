@@ -204,6 +204,25 @@ export function decideAgentEndBoundary(stopReason: string | undefined): AgentEnd
 	return "evaluate";
 }
 
+/**
+ * Whether a starting turn resolves an earlier errored attempt.
+ *
+ * A `turn_start` after a deferred error proves Pi continued the same
+ * user-visible turn (native retry, overflow recovery, queued continuation), so
+ * the pending error is superseded and must not stop the loop later.
+ *
+ * Without this, a transient provider error arms a latch that survives until the
+ * next `agent_settled` — and `AgentSession.compact()` disconnects agent events
+ * before aborting, so an auto-compaction emits `agent_settled` with no
+ * intervening clean `agent_end` and the stale latch kills a healthy loop.
+ * (goal-loop.preserve-across-native-retries)
+ */
+export function resolvesPendingErrorOnTurnStart(
+	state: { active: boolean; pendingError?: boolean } | undefined,
+): boolean {
+	return state?.active === true && state.pendingError === true;
+}
+
 export type LoopAction = "achieved" | "exhausted" | "continue";
 
 /**
