@@ -1,5 +1,6 @@
 ./example.chezmoi.yaml
 ./bootstrap_chezmoi.sh
+**/target/*
 *.diff
 CLAUDE.md
 docs/
