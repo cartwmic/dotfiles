@@ -282,6 +282,22 @@ fn prepare_document(
         };
         let artifact_root = std::path::Path::new(artifact_root);
 
+        // Guidance for the current state exactly as frozen at run creation.
+        // Intent rubric identity is an availability precondition, so validate
+        // it before deterministic failures can withhold semantic evaluation.
+        let stored_guidance = snapshot
+            .stored_graph
+            .states
+            .iter()
+            .find(|state| state.id == snapshot.current_state)
+            .map(|state| state.static_guidance.text.as_str())
+            .unwrap_or("");
+        if let Err(semantic::EvaluationFailure(diagnostics)) =
+            semantic::ensure_frozen_rubric_compatible(subject, stored_guidance)
+        {
+            return evaluation_error(diagnostics);
+        }
+
         if !blocking.is_empty() {
             verdicts_out.push(GateVerdict { gate_id: gate_id.clone(), passed: false });
             reasons.push(format!(
@@ -292,17 +308,6 @@ fn prepare_document(
             ));
             continue;
         }
-
-        // Guidance for the current state exactly as frozen at run creation.
-        // Empty when the stored graph predates rubric publication, which reads
-        // as "nothing to compare" rather than as drift.
-        let stored_guidance = snapshot
-            .stored_graph
-            .states
-            .iter()
-            .find(|state| state.id == snapshot.current_state)
-            .map(|state| state.static_guidance.text.as_str())
-            .unwrap_or("");
 
         // Two material kinds, assembled differently and judged identically.
         let (prepared, violations) = match subject.material {

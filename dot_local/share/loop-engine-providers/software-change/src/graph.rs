@@ -34,256 +34,25 @@ pub fn is_supported_gate(gate_id: &str) -> bool {
 /// snapshot is self-sufficient: an operator resuming a cold run learns exactly
 /// what to produce from `run show`, with no provider invocation. Live guidance
 /// stays strictly additive.
-const EXPLORE_GUIDANCE: &str = r#"Capture the INTENT of this change: what must become true, and why. Do not describe how.
+const EXPLORE_GUIDANCE: &str = r#"Write `intent.json` at the root of `artifact_root`, then request
+`intent-ready`.
 
-Write `intent.json` at the root of artifact_root, then request `intent-ready`.
-
---- TEMPLATE ---
+--- DOCUMENT SHAPE ---
 {
   "revision":    "1",
-  "problem":     "What is wrong or missing today, and why it matters now.",
-  "outcome":     "One sentence: what is true when this is done.",
-  "acceptance":  ["Observable, solution-agnostic, verifiable statements."],
-  "non_goals":   ["Explicit scope fence: what this change is NOT."],
-  "constraints": ["Optional. Real external limits, not preferences."]
+  "problem":     "",
+  "outcome":     "",
+  "acceptance":  [],
+  "non_goals":   [],
+  "constraints": []
 }
 
---- TWO TESTS TO APPLY TO EVERY LINE ---
-1. SUBSTITUTION. If someone shipped a COMPLETELY DIFFERENT implementation that
-   made this statement true, would you be satisfied?
-     yes -> it is intent.
-     no  -> you have encoded a HOW. Either:
-            (a) something outside this change genuinely forces that choice --
-                rewrite it as the PROPERTY that is forced, and put THAT under
-                `constraints`; or
-            (b) it is only your preference -- delete it here and argue for it in
-                the design document.
-            A preference does not become a constraint by being moved.
-            EXCEPTION: if the interface itself is what the change is for -- an
-            exit-status mapping, a wire shape, a published format that outside
-            parties will depend on -- then the exact values ARE the intent. Say
-            plainly in `problem` who depends on that contract and why the
-            current one fails them, and state the mapping in `acceptance`. Do
-            not launder a real contract decision into a fabricated constraint.
+The generated identifier index and exact executable rubric sections below are
+the complete semantic classification authority for this document. Branch labels
+are stable evidence identities; no separate prose summary adds conditions,
+verdicts, or exceptions.
+"#;
 
-2. OUTSIDE VERIFICATION. Could this be checked by someone who cannot see the
-   code and did not do the work?
-     yes -> it is an outcome.
-     no  -> it is a task. Tasks belong in the plan.
-   Observable is not enough on its own. A reader must be able to tell from this
-   document what situation to create and what result counts as success. Words
-   like "acceptable", "supported", "appropriate" or "reliable" fail unless you
-   say here what they mean.
-
-WHICH TEST APPLIES WHERE. These two tests are yours to apply while writing. The
-gates enforce them AND the further field rules below -- this table is not the
-whole standard.
-  problem      neither test. Name who is affected and in what situation, and
-               what it costs them. Do not put the solution or the work here:
-               `problem` is the one field the other checks do not read, so it is
-               where a plan hides most easily. It is checked for exactly that.
-  outcome      both tests.
-  acceptance   both tests, per entry.
-  non_goals    neither test -- a non-goal is not something that becomes true, so
-               substitution does not apply. Exclude a CAPABILITY, never a
-               mechanism: excluding "replacing the serializer" forecloses the
-               design, while excluding "adding retry behaviour" fences the scope.
-               An EMPTY list is fine when there is nothing plausible left to
-               fence -- if `outcome` and `acceptance` already close every
-               adjacent reading, do not invent a temptation to disclaim. The
-               gate asks whether scope is open, not whether a list is long.
-  constraints  neither test. Each entry must be a limit imposed from OUTSIDE
-               this change. An entry that states a PROPERTY the world requires --
-               "the on-disk format must stay readable by the previous release" --
-               stands on its own; you do not have to cite a source for it. An
-               entry that names a MECHANISM, tool, vendor or existing component
-               must say what imposes it: an existing interface, a published
-               format, a policy, a regulation, a contract, a cost or operating
-               limit. "We must use X because it is required", with no
-               identifiable source, is a preference in a disguise the gate is
-               built to see through.
-
-intent = what must become true, and why
-design = how, structurally
-plan   = what steps, in what order
-
-The examples below are ILLUSTRATIVE ONLY. Do not mirror their subject matter.
-Write about your actual change.
-
---- GOOD EXAMPLE A: a small change ---
-{
-  "revision": "1",
-  "problem": "The batch command exits zero even when some records fail, so downstream automation treats a partial failure as a clean run and never retries.",
-  "outcome": "Downstream automation can tell a partially failed batch run from a fully successful one without inspecting per-record output.",
-  "acceptance": [
-    "A run where every record succeeded is distinguishable from one where any record failed",
-    "The number of failed records is available to the caller of the run",
-    "A fully successful run reports success exactly as it does today"
-  ],
-  "non_goals": [
-    "Changing whether any individual record succeeds or fails",
-    "Adding retry behaviour"
-  ]
-}
-
---- THE SAME CHANGE, WRITTEN BADLY ---
-{
-  "revision": "1",
-  "problem": "batch.rs returns Ok(()) at the end",
-  "outcome": "Change the return type to Result<Summary, BatchError> and propagate failures",
-  "acceptance": [
-    "Add a BatchError enum",
-    "Change run_batch to return Result<Summary, BatchError>",
-    "Update the three call sites",
-    "Add a test for the error path"
-  ],
-  "non_goals": []
-}
-
-Why it fails: every acceptance entry is a TASK, so it is a plan wearing an
-intent filename. It fixes the mechanism (a return type) instead of the outcome,
-so a better solution would score as failure. `problem` states a code fact rather
-than an impact on anyone. And nothing anywhere fences the scope -- neither the
-empty `non_goals` nor the task list, which is bounded only by construction --
-so downstream work can grow without ever contradicting this document.
-
---- GOOD EXAMPLE B: a larger change ---
-{
-  "revision": "1",
-  "problem": "Work in progress is lost when a session expires, and expiry is silent, so people discover it only when they try to submit. Support receives repeated reports of lost work.",
-  "outcome": "Someone who steps away and comes back does not lose work they had already entered.",
-  "acceptance": [
-    "Entered work survives the session expiring while the page is still open",
-    "A person is told their session expired before they attempt to submit",
-    "Recovering earlier work needs no support intervention",
-    "A session that never expires still requires no recovery step at submit time"
-  ],
-  "non_goals": [
-    "Changing how long a session lasts",
-    "Preserving work across different devices"
-  ],
-  "constraints": [
-    "Recovered work must never be readable by another account",
-    "Entered work must not leave our data-residency boundary"
-  ]
-}
-
-Note the last acceptance line in both examples: a regression fence, naming one
-existing behaviour this change must not disturb. Name it. "Everything else
-behaves exactly as today" quantifies over behaviour you have not stated and
-cannot be checked by anyone, so it is rejected rather than credited.
-
---- BORDERLINE 1: a real constraint vs a smuggled preference ---
-CONSTRAINT (belongs here):
-    "The on-disk format must stay readable by the previous release."
-PREFERENCE (does not):
-    "Use the existing serializer."
-
-The second names a mechanism. Ask: if a different serializer preserved the
-format, would you object? If not, the thing you actually care about is the
-format. Strip the mechanism and write what is left.
-
---- BORDERLINE 2: an outcome vs a task ---
-TASK (belongs in the plan):
-    "Add a resume endpoint."
-OUTCOME (belongs here):
-    "An interrupted upload can be continued without starting over."
-
-The task names one solution. The outcome admits several -- a resumable
-endpoint, chunked retry, a client-side buffer -- and is still verifiable by
-someone who cannot see the code.
-
---- BORDERLINE 3: a fence vs a mechanism ban ---
-FENCE (belongs in non_goals):
-    "Adding retry behaviour"
-MECHANISM BAN (does not):
-    "Replacing the existing serializer"
-
-The first excludes a capability someone might have thought was included. The
-second forbids an implementation option, which quietly decides the design. If
-you need the format preserved, say so under constraints as a property.
-
---- THE PASTE TEST FOR `problem` ---
-Could your problem sentence be pasted, unchanged, into an unrelated change? If
-yes, it is not a problem statement. "People who depend on this hit avoidable
-friction" fits every change ever proposed and is rejected on sight. Name who,
-what they were doing, and what it cost them.
-
---- BORDERLINE 4: specific vs fog ---
-FOG (rejected):
-    "problem":    "People who depend on this hit avoidable friction, wasting
-                   time and generating support load."
-    "outcome":    "The friction that motivated this change is gone."
-    "acceptance": ["The motivating friction no longer occurs"]
-    "non_goals":  ["Rewriting unrelated subsystems"]
-
-Every sentence is well formed, solution-agnostic, and empty. Nothing names who,
-what situation, or what result. The non_goal excludes something nobody proposed.
-A plan derived from this could do almost anything and still claim conformance.
-
-Write the specific friction, for the specific person, in the specific situation.
-If you cannot, you are not ready to leave this state.
-
---- WHAT THE GATES CHECK ---
-Two gates guard this transition and BOTH must pass.
-
-1. `intent-ready` -- deterministic. Presence and shape only:
-     revision     required, non-empty string
-     problem      required string
-     outcome      required string
-     acceptance   required array of strings
-     non_goals    required array of strings
-     constraints  optional array of strings
-   The field set is CLOSED: an unknown field is rejected, so a plan cannot ride
-   along beside the intent in a field no judge looks at. Blank strings and blank
-   entries are rejected as emptiness.
-   No length minimums and no entry counts: length is not a proxy for substance.
-   All violations are reported together, not one per attempt.
-
-2. `intent-semantic` -- non-deterministic. Language models judge the document
-   against the two tests above. Independent judges each examine one axis.
-
-   The exact instructions each judge receives are printed in full under
-   HOW EACH JUDGE IS INSTRUCTED, below. Read them: they are the specification
-   your document is measured against, and they are the only complete statement
-   of it.
-
-   A deciding judge then sees the document and every axis finding, and issues
-   the binding verdict. It affirms the axes by default: it may overturn a
-   failure only by showing the axis misread your document, and may reject a
-   document every axis passed only for a stated whole-document defect --
-   an outcome that does not resolve the problem, acceptance that would not make
-   the outcome true, fields that contradict, implementation content or work
-   steps anywhere in the document, or content aimed at the judges themselves.
-   Its reasoning is returned to you on rejection and is recorded as run evidence
-   either way.
-
-   This gate is skipped -- reported as failed without spending model calls --
-   while the document still violates the schema. Fix the schema first.
-
-   If a judge cannot be reached at all, the attempt is an ERROR (exit 1), not a
-   rejection. A judgment that did not happen is never reported as a verdict on
-   your document. Configure judges under [judge] in .loop-workflow.toml.
-
-   The rubrics printed below were frozen into this run when it was created,
-   along with an identifier covering them. Every judgment records that same
-   identifier, so you can confirm the rules you read are the rules that judged
-   you. A provider upgrade can change what judges look for; when that happens
-   after your run was created, the gate records the change as evidence rather
-   than moving the bar silently. The reasons returned with a verdict remain
-   authoritative over any prose summary.
-
-   ON EXIT 1, DO NOT EDIT intent.json. No binding verdict was reached -- some
-   axes may have answered, but the attempt as a whole produced no judgment on
-   your document, and nothing about the document caused that. Read the diagnostics: a transient fault has already been
-   retried once and may be requested again, while a missing judge command, a
-   missing [judge] section or an unknown axis will reproduce forever until the
-   configuration is fixed. Editing the document cannot clear an evaluation error.
-
-   A rejection (exit 2) is the opposite: your document was judged and found
-   wanting. Read the reasons, fix the document, request again."#;
-
-/// Static guidance for `design`.
 const DESIGN_GUIDANCE: &str = r#"Describe the DESIGN of this change: the SHAPE of the solution -- what parts
 exist, what each is responsible for, and which choices were made and why. Do not
 describe an order of work.
@@ -358,10 +127,6 @@ a string, may be left to whoever builds it, and the gate will not ask.
             coverage citations will have to be re-pointed at the new acceptance
             lines before `design-ready` will accept this document.
             Candour is not permission.
-
-intent = what must become true, and why
-design = how, structurally
-plan   = what steps, in what order
 
 `coverage` is the join between intent and design. Every acceptance line of the
 intent must appear there exactly once, copied character for character, paired
@@ -1479,7 +1244,11 @@ const STATES: &[(&str, bool, &str)] = &[
     ("design", false, DESIGN_GUIDANCE),
     ("plan", false, PLAN_GUIDANCE),
     ("implement", false, IMPLEMENT_GUIDANCE),
-    ("implementation-review", false, IMPLEMENTATION_REVIEW_GUIDANCE),
+    (
+        "implementation-review",
+        false,
+        IMPLEMENTATION_REVIEW_GUIDANCE,
+    ),
     ("end", true, "Change complete. No further work remains."),
 ];
 
@@ -1517,22 +1286,47 @@ const TRANSITIONS: &[(&str, &str, &str, &[&str])] = &[
     // check, and a non-deterministic judgment of whether the document is really
     // intent rather than a plan in disguise. They are complementary layers and
     // neither can substitute for the other.
-    ("explore", "intent-ready", "design", &["intent-ready", "intent-semantic"]),
+    (
+        "explore",
+        "intent-ready",
+        "design",
+        &["intent-ready", "intent-semantic"],
+    ),
     // Same two-layer shape as `explore`: schema and acceptance-citation are
     // decidable without a model; whether the design actually delivers the
     // intent is not.
-    ("design", "design-ready", "plan", &["design-ready", "design-semantic"]),
+    (
+        "design",
+        "design-ready",
+        "plan",
+        &["design-ready", "design-semantic"],
+    ),
     // Third document to carry the two-layer shape. The schema settles shape,
     // identifier integrity and design-element coverage; whether the tasks are
     // sized for a fresh worker, carry enough context, and checkpoint anywhere
     // useful is not decidable without a model.
-    ("plan", "plan-ready", "implement", &["plan-ready", "plan-semantic"]),
+    (
+        "plan",
+        "plan-ready",
+        "implement",
+        &["plan-ready", "plan-semantic"],
+    ),
     // The phase loop. Each request verifies ONE phase: the last one
     // implementation.json claims complete. The run stays in `implement` however
     // many phases the plan has, so the graph does not depend on plan content --
     // which it cannot, being frozen before any plan exists.
-    ("implement", "phase-complete", "implement", &["phase-complete", "phase-review"]),
-    ("implement", "implementation-ready", "implementation-review", &["implementation-ready"]),
+    (
+        "implement",
+        "phase-complete",
+        "implement",
+        &["phase-complete", "phase-review"],
+    ),
+    (
+        "implement",
+        "implementation-ready",
+        "implementation-review",
+        &["implementation-ready"],
+    ),
     // The judge rides on the APPROVING transition, not on entry to the review
     // state. Without it the last thing between a change and `end` is an agent
     // writing `{"verdict": "approved"}` into its own review file, and the
@@ -1600,6 +1394,9 @@ const TRANSITIONS: &[(&str, &str, &str, &[&str])] = &[
 /// and still fail on a rule the author was never shown.
 fn state_guidance(state_id: &str, authored: &str) -> String {
     let mut out = authored.to_string();
+    if state_id == "explore" {
+        out.push_str(&crate::gates::semantic::intent_classification_index());
+    }
     out.push_str(&revision_edges_for(state_id));
     for subject in crate::gates::semantic::subjects_for_state(state_id) {
         out.push_str(&crate::gates::semantic::published_rubrics(subject));
@@ -1781,10 +1578,8 @@ mod guidance_tests {
     /// thing and is worse than no example.
     #[test]
     fn the_good_example_satisfies_the_plan_schema() {
-        let reasons = crate::gates::plan::check(
-            &example("--- GOOD EXAMPLE ---"),
-            Some(&taught_design()),
-        );
+        let reasons =
+            crate::gates::plan::check(&example("--- GOOD EXAMPLE ---"), Some(&taught_design()));
         assert_eq!(reasons, Vec::<String>::new());
     }
 
@@ -1814,7 +1609,10 @@ mod guidance_tests {
         let design = taught_design();
         let elements = design["elements"].as_array().unwrap();
         assert_eq!(elements.len(), 3);
-        for name in ["--- GOOD EXAMPLE ---", "--- THE SAME CHANGE, WRITTEN BADLY ---"] {
+        for name in [
+            "--- GOOD EXAMPLE ---",
+            "--- THE SAME CHANGE, WRITTEN BADLY ---",
+        ] {
             let plan = example(name);
             let cited: Vec<&str> = plan["phases"]
                 .as_array()
@@ -1860,8 +1658,14 @@ mod topology_tests {
     fn every_transition_names_declared_states() {
         let states = state_ids();
         for (source, event, target, _) in TRANSITIONS {
-            assert!(states.contains(source), "{event} leaves undeclared state {source}");
-            assert!(states.contains(target), "{event} enters undeclared state {target}");
+            assert!(
+                states.contains(source),
+                "{event} leaves undeclared state {source}"
+            );
+            assert!(
+                states.contains(target),
+                "{event} enters undeclared state {target}"
+            );
         }
     }
 
@@ -1907,7 +1711,10 @@ mod topology_tests {
     fn revision_edges_carry_no_gates() {
         for (source, event, _, gates) in TRANSITIONS {
             if event.starts_with("revise-") {
-                assert!(gates.is_empty(), "{source} --{event}--> declares gates {gates:?}");
+                assert!(
+                    gates.is_empty(),
+                    "{source} --{event}--> declares gates {gates:?}"
+                );
             }
         }
     }
@@ -1965,7 +1772,12 @@ mod topology_tests {
     fn no_guidance_names_an_event_the_graph_does_not_declare() {
         let declared: BTreeSet<&str> = TRANSITIONS.iter().map(|(_, event, _, _)| *event).collect();
         for (state, _, authored) in STATES {
-            for candidate in ["revise-intent", "revise-design", "revise-plan", "design-ready"] {
+            for candidate in [
+                "revise-intent",
+                "revise-design",
+                "revise-plan",
+                "design-ready",
+            ] {
                 if authored.contains(candidate) {
                     assert!(
                         declared.contains(candidate),
