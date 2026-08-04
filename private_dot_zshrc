@@ -190,6 +190,13 @@ zvm_after_init_commands+=("[ -f \"$FZF_TAB_PLUGIN\" ] && source \"$FZF_TAB_PLUGI
 # already in the env only when the file is absent.
 if [[ -r "$HOME/.config/agent-harness/op-service-token" ]]; then
   export OP_SERVICE_ACCOUNT_TOKEN="$(<"$HOME/.config/agent-harness/op-service-token")"
+elif [[ -z "$OP_SERVICE_ACCOUNT_TOKEN" && -o interactive ]]; then
+  # Fresh machine / missing token: without this, `op read` falls back to
+  # desktop-app integration and hangs ~60s in headless contexts (e.g. every
+  # pi boot). Refresh requires a GUI session + biometric approval, so we can
+  # only warn — the user must run it themselves.
+  print -P "%F{red}WARNING:%f 1Password SA token missing — agent tools will hang."
+  print -P "Run: %F{yellow}refresh_op_service_account_token.sh%f (needs GUI + biometric approval)"
 fi
 
 # # Load ANTHROPIC_API_KEY from 1Password if not already set
