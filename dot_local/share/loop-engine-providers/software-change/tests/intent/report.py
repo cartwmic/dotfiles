@@ -194,6 +194,8 @@ def classify(args):
             errors.append(f"expected exactly one {gate} verdict, found {len(rows)}")
         elif not isinstance(rows[0].get("passed"), bool):
             errors.append(f"{gate} verdict is not boolean")
+        elif gate == "intent-ready" and rows[0].get("passed") is not True:
+            errors.append("intent-ready verdict did not pass")
     for axis, rows in axis_records.items():
         if len(rows) != 1:
             errors.append(f"expected exactly one {axis} evidence record, found {len(rows)}")
@@ -404,6 +406,8 @@ def derive_release_classification(manifest, case, row):
     if any(not isinstance(items[0].get("passed"), bool) for items in verdict_groups.values()):
         return "indeterminate", None, None
     verdicts = {gate: items[0].get("passed") for gate, items in verdict_groups.items()}
+    if verdicts["intent-ready"] is not True:
+        return "indeterminate", None, verdicts.get("intent-semantic")
 
     evidence = result.get("evidence", []) if isinstance(result.get("evidence"), list) else []
     axis_records = {}
