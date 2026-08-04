@@ -192,11 +192,17 @@ def classify(args):
     for gate, rows in verdict_groups.items():
         if len(rows) != 1:
             errors.append(f"expected exactly one {gate} verdict, found {len(rows)}")
+        elif not isinstance(rows[0].get("passed"), bool):
+            errors.append(f"{gate} verdict is not boolean")
     for axis, rows in axis_records.items():
         if len(rows) != 1:
             errors.append(f"expected exactly one {axis} evidence record, found {len(rows)}")
+        elif not isinstance(rows[0].get("passed"), bool):
+            errors.append(f"{axis} evidence verdict is not boolean")
     if len(consensus_records) != 1:
         errors.append(f"expected exactly one consensus evidence record, found {len(consensus_records)}")
+    elif not isinstance(consensus_records[0].get("passed"), bool):
+        errors.append("consensus evidence verdict is not boolean")
     if len(rubric_records) != 1:
         errors.append(f"expected exactly one intent rubric evidence record, found {len(rubric_records)}")
     if set(axes) != set(expected_roster):
@@ -240,6 +246,7 @@ def classify(args):
                 if (
                     not row
                     or set(row) != {"axis", "passed", "reason"}
+                    or not isinstance(row.get("passed"), bool)
                     or row.get("passed") != metadata.get("passed")
                     or row.get("reason") != metadata.get("reason")
                 ):
@@ -394,6 +401,8 @@ def derive_release_classification(manifest, case, row):
     }
     if any(len(items) != 1 for items in verdict_groups.values()):
         return "indeterminate", None, None
+    if any(not isinstance(items[0].get("passed"), bool) for items in verdict_groups.values()):
+        return "indeterminate", None, None
     verdicts = {gate: items[0].get("passed") for gate, items in verdict_groups.items()}
 
     evidence = result.get("evidence", []) if isinstance(result.get("evidence"), list) else []
@@ -423,7 +432,9 @@ def derive_release_classification(manifest, case, row):
     consensus = consensus_records[0]
     rubric = rubric_records[0]
     if (
-        selected.get("replayed")
+        not isinstance(selected.get("passed"), bool)
+        or not isinstance(consensus.get("passed"), bool)
+        or selected.get("replayed")
         or selected.get("model") != row.get("requested_axis_model")
         or selected.get("rubrics") != row.get("rubric_set")
         or consensus.get("replayed")
@@ -442,6 +453,7 @@ def derive_release_classification(manifest, case, row):
     if (
         not isinstance(embedded_selected, dict)
         or set(embedded_selected) != {"axis", "passed", "reason"}
+        or not isinstance(embedded_selected.get("passed"), bool)
         or embedded_selected.get("axis") != selected_axis
         or embedded_selected.get("passed") != selected.get("passed")
         or embedded_selected.get("reason") != selected.get("reason")
