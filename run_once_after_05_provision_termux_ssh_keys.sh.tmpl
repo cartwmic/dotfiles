@@ -1,8 +1,8 @@
-{{- if ne .profile "termux" }}
+{{- if ne .profile "termux" -}}
 #!/bin/sh
 # Non-termux profiles: no-op (script is also .chezmoiignore-gated).
 exit 0
-{{- else }}
+{{- else -}}
 #!/data/data/com.termux/files/usr/bin/bash
 #
 # Always fetch Termux SSH private keys from 1Password into ~/.ssh:
