@@ -253,10 +253,6 @@ class HarnessTests(unittest.TestCase):
         sibling = "[rule=SC-INT-SA-005 condition=SC-INT-SA-005-CAPABILITY-FENCE]"
         response["evidence"][0]["metadata"]["reason"] = f"{sibling} product capability fence."
         response["evidence"][1]["metadata"]["axes"][0]["reason"] = response["evidence"][0]["metadata"]["reason"]
-        response["evidence"][1]["metadata"]["reason"] = (
-            f"{sibling} [rule=SC-INT-DC-001 "
-            "condition=SC-INT-DC-001-CORRECTLY-APPLIED-FINDING] finding stands."
-        )
         completed, observation = self.observe(response)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(observation["classification"], "classification_variance")
