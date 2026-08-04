@@ -59,7 +59,7 @@ Release-core accepts no case arguments. It produces exactly three targeted obser
 
 All 36 observations stay in one evidence set. One disagreement or indeterminate result remains visible and cannot be replaced by a case-only rerun. Two disagreements fail that case. Missing attempts, duplicate records, mixed candidate or rubric identities, cross-run evidence, or partial cohorts fail the report.
 
-Release qualification also requires a machine-readable independent fidelity attestation. Its six ordered mappings must exactly cover the fixed cohort, every mapping and source review must be supported, and provenance must be independent of rubric, manifest, checker, and live-observation authorship. The attestation is embedded in the report and protected by a canonical digest. `evidence/release-evidence.json` records the qualified report locator, digest, identities, counts, and independent review provenance without duplicating the large raw observation artifact.
+Release qualification also requires a machine-readable independent fidelity attestation. Its six ordered mappings must exactly cover the fixed cohort, every mapping and source review must be supported, and provenance must be independent of rubric, manifest, checker, and live-observation authorship. The attestation is embedded in the report and protected by a canonical digest. `evidence/release-core-report.json` retains the complete reviewable 36-observation release evidence, including raw provider responses. `evidence/release-evidence.json` records its digest, identities, counts, and independent review provenance.
 
 Verify a saved report without judge access:
 

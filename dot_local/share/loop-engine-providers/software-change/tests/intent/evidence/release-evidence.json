@@ -3,8 +3,8 @@
   "qualification": "qualified",
   "collection": "single bounded live cohort; deterministic attestation re-aggregation performed without additional live observations",
   "report": {
-    "ref": "file:///Users/cartwmic/.local/state/software-change/intent-calibration-proportionality/release-core-attested/run.json",
-    "sha256": "sha256:ae91401e9452dbb97ad0acdf2eb25e01d37d3171b54f1f51bbd4bc53037a7804",
+    "ref": "tests/intent/evidence/release-core-report.json",
+    "sha256": "sha256:846b7fe357b068660543afe793dab1844ab2efb42b489589f2e25ff45c05ff3c",
     "source_observations_ref": "file:///Users/cartwmic/.local/state/software-change/intent-calibration-proportionality/release-core-evidence/observations",
     "evidence_set_id": "d9707427-41b4-406c-af83-288c315ee187",
     "candidate_id": "sha256:4c4e5e102b1de49e8a649966496199b377cf8d0e5d71bca18e0ff7efa595f4e1",
