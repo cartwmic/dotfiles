@@ -45,6 +45,7 @@ zoxide = "latest"                         # Smart cd replacement
 # =============================================================================
 neovim = "latest"  # Editor
 lazygit = "latest" # Git TUI
+gh = "latest"      # GitHub CLI; also git credential helper (gh auth login is a manual post-provision step)
 ripgrep = "latest" # Fast grep alternative
 
 # Build tools & task runners
