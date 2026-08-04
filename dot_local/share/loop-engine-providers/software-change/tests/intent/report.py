@@ -376,7 +376,6 @@ def classify(args):
         and expected_final_pass
         and selected_identity in pass_identities
         and identity_tuple(expected_final) in consensus_identities
-        and selected_identity in consensus_identities
     )
     if equivalent_pass:
         notes.append(
@@ -515,7 +514,6 @@ def derive_release_classification(manifest, case, row):
         and expected_final_pass
         and selected_identity in declared_pass_identities(manifest, selected_axis)
         and identity_tuple(case["expected_final"]) in consensus_identities
-        and selected_identity in consensus_identities
     )
     if equivalent_pass:
         return "classification_variance", observed_axis, observed_final
