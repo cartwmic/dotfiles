@@ -72,6 +72,20 @@ def verdict_stage(
     return "identity", None
 
 
+def object_records(value, label, errors):
+    """Return object records while preserving malformed-container evidence as errors."""
+    if not isinstance(value, list):
+        errors.append(f"{label} is not an array")
+        return []
+    records = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            errors.append(f"{label}[{index}] is not an object")
+        else:
+            records.append(item)
+    return records
+
+
 def write_observation(args, case, category, errors, notes, raw, expected_final, expected_final_axis):
     observed_axis = (raw.get("axes", {}).get(case["selected_axis"]) or {}).get("passed")
     observed_final = raw.get("verdicts", {}).get("intent-semantic")
@@ -152,8 +166,11 @@ def classify(args):
             expected_final, expected_final_axis,
         )
 
-    result = reply.get("result", {}) if isinstance(reply, dict) else {}
-    diagnostics = result.get("diagnostics") or []
+    result = reply.get("result") if isinstance(reply, dict) else None
+    if not isinstance(result, dict):
+        errors.append("provider result is not an object")
+        result = {}
+    diagnostics = object_records(result.get("diagnostics", []), "diagnostics", errors)
     raw["diagnostics"] = diagnostics
     if args.provider_exit != 0:
         errors.append(f"provider exited {args.provider_exit}")
@@ -173,7 +190,7 @@ def classify(args):
             expected_final, expected_final_axis,
         )
 
-    verdict_records = [row for row in result.get("verdicts", []) if isinstance(row, dict)]
+    verdict_records = object_records(result.get("verdicts"), "verdicts", errors)
     verdict_groups = {
         gate: [row for row in verdict_records if row.get("gate_id") == gate]
         for gate in ("intent-ready", "intent-semantic")
@@ -183,14 +200,18 @@ def classify(args):
         for gate, rows in verdict_groups.items()
         if len(rows) == 1
     }
-    evidence = result.get("evidence", []) if isinstance(result, dict) else []
+    evidence = object_records(result.get("evidence"), "evidence", errors)
     axis_records = {}
     consensus_records = []
     rubric_records = []
-    for item in evidence:
-        metadata = item.get("metadata") or {}
-        if item.get("kind") == "intent-judgment" and metadata.get("axis"):
-            axis_records.setdefault(metadata["axis"], []).append(metadata)
+    for index, item in enumerate(evidence):
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            errors.append(f"evidence[{index}].metadata is not an object")
+            continue
+        axis = metadata.get("axis")
+        if item.get("kind") == "intent-judgment" and isinstance(axis, str) and axis:
+            axis_records.setdefault(axis, []).append(metadata)
         elif item.get("kind") == "intent-judgment-consensus":
             consensus_records.append(metadata)
         elif item.get("kind") == "judge-rubrics" and metadata.get("gate_id") == "intent-semantic":
@@ -233,6 +254,8 @@ def classify(args):
             errors.append("axis evidence replayed from cache")
         if selected.get("model") != args.axis_model:
             errors.append(f"axis model {selected.get('model')!r} != {args.axis_model!r}")
+        if not isinstance(selected.get("reason"), str):
+            errors.append("selected axis reason is not a string")
     if args.mode == "all_axes":
         for axis in AXES:
             if axis != case["selected_axis"] and not axes.get(axis, {}).get("passed"):
@@ -247,6 +270,8 @@ def classify(args):
             errors.append(
                 f"consensus model {consensus.get('model')!r} != {args.consensus_model!r}"
             )
+        if not isinstance(consensus.get("reason"), str):
+            errors.append("consensus reason is not a string")
         embedded = consensus.get("axes")
         if not isinstance(embedded, list):
             errors.append("consensus embedded axis roster missing")
@@ -254,7 +279,9 @@ def classify(args):
             embedded_by_axis = {
                 row.get("axis"): row
                 for row in embedded
-                if isinstance(row, dict) and row.get("axis")
+                if isinstance(row, dict)
+                and isinstance(row.get("axis"), str)
+                and row.get("axis")
             }
             if len(embedded) != len(embedded_by_axis) or set(embedded_by_axis) != set(expected_roster):
                 errors.append("consensus embedded axis roster is duplicate, missing, or unexpected")
@@ -287,7 +314,11 @@ def classify(args):
     if args.route_log and Path(args.route_log).exists():
         for line in Path(args.route_log).read_text().splitlines():
             try:
-                routes.append(json.loads(line))
+                route = json.loads(line)
+                if isinstance(route, dict):
+                    routes.append(route)
+                else:
+                    errors.append("route log record is not an object")
             except json.JSONDecodeError:
                 errors.append("route log contains malformed JSON")
     if case["lane"] == "challenge":
@@ -313,7 +344,9 @@ def classify(args):
                 if not (axis == "constraints-are-limits" and "constraints" not in fixture)
             }
         )
-        got_intercepts = {row.get("axis") for row in intercepted}
+        got_intercepts = {
+            row.get("axis") for row in intercepted if isinstance(row.get("axis"), str)
+        }
         if got_intercepts != expected_intercepts:
             errors.append(
                 f"intercepted axes {sorted(got_intercepts)} != {sorted(expected_intercepts)}"
@@ -435,9 +468,12 @@ def derive_release_classification(manifest, case, row):
     for item in evidence:
         if not isinstance(item, dict):
             continue
-        metadata = item.get("metadata") or {}
-        if item.get("kind") == "intent-judgment" and metadata.get("axis"):
-            axis_records.setdefault(metadata["axis"], []).append(metadata)
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        axis = metadata.get("axis")
+        if item.get("kind") == "intent-judgment" and isinstance(axis, str) and axis:
+            axis_records.setdefault(axis, []).append(metadata)
         elif item.get("kind") == "intent-judgment-consensus":
             consensus_records.append(metadata)
         elif item.get("kind") == "judge-rubrics" and metadata.get("gate_id") == "intent-semantic":
@@ -456,7 +492,9 @@ def derive_release_classification(manifest, case, row):
     rubric = rubric_records[0]
     if (
         not isinstance(selected.get("passed"), bool)
+        or not isinstance(selected.get("reason"), str)
         or not isinstance(consensus.get("passed"), bool)
+        or not isinstance(consensus.get("reason"), str)
         or selected.get("replayed")
         or selected.get("model") != row.get("requested_axis_model")
         or selected.get("rubrics") != row.get("rubric_set")
