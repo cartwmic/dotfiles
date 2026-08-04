@@ -4,8 +4,16 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { checkPatchDrift, discoverWatchedPatches, loadConfig } from "./index.ts";
+import {
+	checkAssumption,
+	checkPatchDrift,
+	discoverWatchedPatches,
+	loadAssumptions,
+	loadConfig,
+	resolvePiDistDir,
+} from "./index.ts";
 
 const PATCH = {
 	name: "hide-nonbridge-claude-models",
@@ -116,4 +124,97 @@ test("loadConfig: missing ⇒ enabled; enabled:false ⇒ disabled", () => {
 	assert.equal(loadConfig(dir).enabled, true);
 	fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ enabled: false }));
 	assert.equal(loadConfig(dir).enabled, false);
+});
+
+// --- source assumptions (sentinels) ------------------------------------------
+
+const ASSUMPTION = {
+	name: "compact-disconnects-before-abort",
+	file: "core/agent-session.js",
+	pattern: "async compact\\([^)]*\\)\\s*\\{\\s*this\\._disconnectFromAgent\\(\\);\\s*await this\\.abort\\(\\);",
+	message: "recheck ntfy guard",
+};
+
+function writeDist(body: string): string {
+	const dist = path.join(tmp(), "dist");
+	fs.mkdirSync(path.join(dist, "core"), { recursive: true });
+	fs.writeFileSync(path.join(dist, "core", "agent-session.js"), body);
+	return dist;
+}
+
+test("assumption holds when compact() disconnects before abort", () => {
+	const dist = writeDist(
+		"    async compact(customInstructions) {\n        this._disconnectFromAgent();\n        await this.abort();\n    }\n",
+	);
+	assert.equal(checkAssumption(ASSUMPTION, { distDir: dist }).broken, false);
+});
+
+test("assumption BREAKS when pi reorders abort before disconnect", () => {
+	const dist = writeDist(
+		"    async compact(customInstructions) {\n        await this.abort();\n        this._disconnectFromAgent();\n    }\n",
+	);
+	const r = checkAssumption(ASSUMPTION, { distDir: dist });
+	assert.equal(r.broken, true);
+	assert.equal(r.name, ASSUMPTION.name);
+});
+
+test("assumption BREAKS when compact() drops the disconnect entirely", () => {
+	const dist = writeDist("    async compact(customInstructions) {\n        await this.abort();\n    }\n");
+	assert.equal(checkAssumption(ASSUMPTION, { distDir: dist }).broken, true);
+});
+
+test("assumption: missing file or unresolvable dist ⇒ quiet (not broken)", () => {
+	const dist = path.join(tmp(), "dist");
+	assert.equal(checkAssumption(ASSUMPTION, { distDir: dist }).broken, false);
+	assert.equal(checkAssumption(ASSUMPTION, { distDir: undefined, exists: () => false }).broken, false);
+});
+
+test("assumption: invalid regex ⇒ quiet", () => {
+	const dist = writeDist("whatever");
+	assert.equal(checkAssumption({ ...ASSUMPTION, pattern: "([" }, { distDir: dist }).broken, false);
+});
+
+test("loadAssumptions: reads assumptions.json, drops malformed entries", () => {
+	const dir = tmp();
+	fs.writeFileSync(
+		path.join(dir, "assumptions.json"),
+		JSON.stringify({ assumptions: [ASSUMPTION, { name: "bad" }, { file: "x", pattern: "y" }] }),
+	);
+	const found = loadAssumptions(dir);
+	assert.equal(found.length, 1);
+	assert.equal(found[0]?.name, ASSUMPTION.name);
+});
+
+test("loadAssumptions: missing/malformed file ⇒ []", () => {
+	const dir = tmp();
+	assert.deepEqual(loadAssumptions(dir), []);
+	fs.writeFileSync(path.join(dir, "assumptions.json"), "{ not json");
+	assert.deepEqual(loadAssumptions(dir), []);
+});
+
+test("shipped assumptions.json entries all parse and are well-formed", () => {
+	const shipped = loadAssumptions(path.dirname(fileURLToPath(import.meta.url)));
+	assert.ok(shipped.length >= 1);
+	for (const a of shipped) {
+		assert.doesNotThrow(() => new RegExp(a.pattern, a.flags ?? ""));
+		assert.ok(a.message.length > 0);
+	}
+});
+
+test("resolvePiDistDir: finds the running pi cli in argv", () => {
+	const cli = path.join("/opt", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+	const dist = path.dirname(cli);
+	assert.equal(
+		resolvePiDistDir({ argv: ["/bin/node", cli], execPath: "/bin/node", exists: (p) => p === dist }),
+		dist,
+	);
+});
+
+test("resolvePiDistDir: falls back to the global npm root beside node", () => {
+	const dist = path.join("/n", "lib", "node_modules", "@earendil-works", "pi-coding-agent", "dist");
+	assert.equal(resolvePiDistDir({ argv: ["/n/bin/node"], execPath: "/n/bin/node", exists: (p) => p === dist }), dist);
+});
+
+test("resolvePiDistDir: nothing resolvable ⇒ undefined (quiet)", () => {
+	assert.equal(resolvePiDistDir({ argv: ["/n/bin/node"], execPath: "/n/bin/node", exists: () => false }), undefined);
 });

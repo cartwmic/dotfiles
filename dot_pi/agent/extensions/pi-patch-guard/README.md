@@ -62,9 +62,39 @@ may override this by writing an explicit `marker` field into its state file.
 A new patch under `~/.local/share/pi-patches/` is watched as soon as it has run
 once and written its state file.
 
+## Source assumptions (sentinels)
+
+Second job, unrelated to patches: some extensions depend on *unpatched* pi
+internals whose behavior is load-bearing but undocumented. Nothing is edited, so
+patch-drift detection can't see them — they just silently rot on a pi upgrade.
+
+`assumptions.json` declares each one as a regex over a file in the installed pi
+`dist/`. At `session_start` (only — full-file reads are too costly per turn) any
+non-matching pattern emits a warning naming the assumption and what to re-derive.
+Ambiguity (dist dir unresolvable, file missing, bad regex) ⇒ quiet.
+
+```jsonc
+{
+  "assumptions": [{
+    "name": "compact-disconnects-before-abort",
+    "file": "core/agent-session.js",   // relative to pi's dist/
+    "verifiedVersion": "0.83.0",       // documentation only
+    "pattern": "async compact\\(...",   // must match, else warn
+    "message": "what breaks and what to fix"
+  }]
+}
+```
+
+Currently watched:
+
+| Assumption | Depended on by | Why |
+| --- | --- | --- |
+| `compact-disconnects-before-abort` | `ntfy` | `AgentSession.compact()` disconnects extension handlers *before* `await this.abort()`, so a compaction-aborted run emits `agent_settled` with no preceding `agent_end`. ntfy uses exactly that shape to suppress spurious compaction notifications. Reorder the two lines upstream and the guard silently misfires. |
+
 ## Config
 
 `config.json`: `{ "enabled": true }` — set `enabled: false` to silence.
+Disabling silences both patch drift and assumption warnings.
 
 ## Tests
 

@@ -32,6 +32,15 @@
  * and deriving the marker from the convention `chezmoi-pi-patch:<name>`. This is
  * profile-aware for free: a patch gated off for the active chezmoi profile
  * writes `status:"unpatched"`, which is not intended-on ⇒ no drift.
+ *
+ * SECOND JOB — source assumptions (sentinels). Some extensions are written
+ * against *unpatched* pi internals whose behavior is load-bearing but undocumented
+ * (e.g. ntfy suppresses compaction notifications by relying on
+ * `AgentSession.compact()` disconnecting extension handlers before aborting).
+ * Those are not patches — nothing is edited — but they silently rot on a pi
+ * upgrade. `assumptions.json` beside this module declares each one as a regex
+ * over a file in the installed pi `dist/`; a non-match warns at session start.
+ * Checked only on `session_start` (full-file reads are too costly per turn).
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -151,6 +160,99 @@ export function checkPatchDrift(
 	}
 }
 
+/** One declared assumption about installed pi source. */
+export interface SourceAssumption {
+	name: string;
+	/** Path relative to the pi package's `dist/` dir. */
+	file: string;
+	/** Regex source; must match the file for the assumption to hold. */
+	pattern: string;
+	flags?: string;
+	message: string;
+	/** pi version the pattern was last verified against (documentation only). */
+	verifiedVersion?: string;
+}
+
+/** Read assumptions.json beside this module. Missing/malformed ⇒ [] (quiet). */
+export function loadAssumptions(
+	dir: string,
+	deps: { readFile?: (p: string) => string } = {},
+): SourceAssumption[] {
+	const readFile = deps.readFile ?? ((p) => fs.readFileSync(p, "utf-8"));
+	try {
+		const parsed = JSON.parse(readFile(path.join(dir, "assumptions.json"))) as {
+			assumptions?: SourceAssumption[];
+		};
+		return (parsed.assumptions ?? []).filter(
+			(a) => typeof a?.name === "string" && typeof a?.file === "string" && typeof a?.pattern === "string",
+		);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Locate the installed pi package's `dist/` dir without importing it.
+ * 1. any argv entry inside a `pi-coding-agent` package (the running cli.js);
+ * 2. `<node>/../../lib/node_modules/@earendil-works/pi-coding-agent/dist`.
+ * Returns undefined if neither resolves ⇒ assumption checks are skipped.
+ */
+export function resolvePiDistDir(
+	deps: { argv?: string[]; execPath?: string; exists?: (p: string) => boolean } = {},
+): string | undefined {
+	const argv = deps.argv ?? process.argv;
+	const execPath = deps.execPath ?? process.execPath;
+	const exists = deps.exists ?? fs.existsSync;
+	try {
+		for (const arg of argv) {
+			if (typeof arg !== "string") continue;
+			const idx = arg.indexOf(`${path.sep}dist${path.sep}`);
+			if (idx === -1 || !arg.includes("pi-coding-agent")) continue;
+			const dist = arg.slice(0, idx + `${path.sep}dist`.length);
+			if (exists(dist)) return dist;
+		}
+		const guess = path.join(
+			path.dirname(path.dirname(execPath)),
+			"lib",
+			"node_modules",
+			"@earendil-works",
+			"pi-coding-agent",
+			"dist",
+		);
+		return exists(guess) ? guess : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export interface AssumptionResult {
+	name: string;
+	/** true ⇒ the pattern no longer matches installed pi source. */
+	broken: boolean;
+}
+
+/**
+ * Pure assumption check. Returns broken=false on any ambiguity (no dist dir,
+ * missing/unreadable file, bad regex) so the guard never false-alarms.
+ */
+export function checkAssumption(
+	a: SourceAssumption,
+	deps: { distDir?: string; readFile?: (p: string) => string; exists?: (p: string) => boolean } = {},
+): AssumptionResult {
+	const readFile = deps.readFile ?? ((p) => fs.readFileSync(p, "utf-8"));
+	const exists = deps.exists ?? fs.existsSync;
+	try {
+		const distDir = deps.distDir ?? resolvePiDistDir();
+		if (!distDir) return { name: a.name, broken: false };
+		const target = path.join(distDir, a.file);
+		if (!exists(target)) return { name: a.name, broken: false };
+		const re = new RegExp(a.pattern, a.flags ?? "");
+		return { name: a.name, broken: !re.test(readFile(target)) };
+	} catch {
+		return { name: a.name, broken: false };
+	}
+}
+
 export default function (pi: ExtensionAPI): void {
 	const cfg = loadConfig(extensionDir());
 
@@ -172,8 +274,29 @@ export default function (pi: ExtensionAPI): void {
 		}
 	};
 
+	/** Check declared source assumptions against installed pi dist; warn on breaks. */
+	const warnOnBrokenAssumptions = (ctx: any): void => {
+		try {
+			if (!cfg.enabled || !ctx?.hasUI) return;
+			for (const a of loadAssumptions(extensionDir())) {
+				if (!checkAssumption(a).broken) continue;
+				ctx.ui.notify(
+					`⚠ pi source assumption "${a.name}" no longer holds in ${a.file}` +
+						(a.verifiedVersion ? ` (last verified on pi ${a.verifiedVersion})` : "") +
+						`. ${a.message}`,
+					"warning",
+				);
+			}
+		} catch {
+			// Never let the guard break a turn.
+		}
+	};
+
 	// Session open/reload/resume — surface drift before the user types.
-	pi.on("session_start", async (_event: unknown, ctx: any) => warnOnDrift(ctx));
+	pi.on("session_start", async (_event: unknown, ctx: any) => {
+		warnOnDrift(ctx);
+		warnOnBrokenAssumptions(ctx);
+	});
 	// After the agent finishes responding — re-check disk so the reminder persists each turn.
 	pi.on("agent_end", async (_event: unknown, ctx: any) => warnOnDrift(ctx));
 }
