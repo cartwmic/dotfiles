@@ -1,0 +1,13 @@
+{
+  "revision": "1",
+  "problem": "After partial-failure reporting changed, an all-success CSV import no longer emits the completion result consumed by warehouse operators, so successful imports remain queued.",
+  "outcome": "An all-success CSV import again emits the same completion result that warehouse operators received before partial-failure reporting changed.",
+  "acceptance": [
+    "The named all-success CSV-import behavior is observable before and after the change",
+    "Warehouse operators receive the previous completion result for an all-success CSV import"
+  ],
+  "non_goals": [
+    "Changing partial-failure reporting",
+    "Changing warehouse queue policy"
+  ]
+}

@@ -376,6 +376,12 @@ when deciding whether an exact externally consumed contract is grounded in an
 affected outside party. Read `constraints` only when deciding whether an exact
 mechanism or channel is imposed by an outside obligation. Do not rule on task
 wording, scope completeness, or problem quality; other axes own those questions.
+When the product target is the solution-agnostic classifier and outcome directly
+requires classifying a `non_goals` entry as a product-capability fence versus an
+implementation-mechanism ban, SC-INT-SA-005 controls over the generic
+observable-behavior branch. Merely naming other scenario classes that the
+product must evaluate does not make their subject matter this document's
+required implementation choice.
 
 RULE SC-INT-SA-001 / CONDITION SC-INT-SA-001-PRODUCT-TARGET / VERDICT PASS / REASON product subjects remain valid across implementations. / FIELDS outcome, acceptance, non_goals, and problem or constraints only for outside-contract grounding.
 PASS a concrete product target, including a named existing document or command,
@@ -405,7 +411,10 @@ PASS an exact exit-status mapping, wire shape, interchange format, published
 column, endpoint, or protocol value when `problem` identifies the outside party
 or automation that consumes that exact contract and how the current contract
 fails it. A `constraints` entry may instead identify a pre-existing outside
-obligation that requires the exact channel.
+obligation that requires the exact channel. Merely saying automation consumes a
+command result or reacts to success versus failure does not prove dependency on
+exact wording or representation; when exact wording is mandated without that
+specific dependency, INCIDENTAL-CHANNEL controls.
 
 RULE SC-INT-SA-003 / CONDITION SC-INT-SA-003-INCIDENTAL-CHANNEL / VERDICT FAIL / REASON nobody outside depends on this exact channel choice. / FIELDS outcome, acceptance, non_goals, and problem or constraints only for outside-contract grounding.
 FAIL exact log wording, a file format, a column, an endpoint, or another delivery
@@ -426,7 +435,12 @@ FAIL a `non_goals` entry that forbids changing or choosing a library, framework,
 module, file, type, internal structure, or other implementation mechanism.
 
 A concrete `constraints` entry is not failed by this axis; the constraints axis
-owns whether it is a real outside limit.
+owns whether it is a real outside limit. Do not classify an instruction to a
+judge as an internal mechanism; give it no credit here because the holistic
+judge-manipulation branch owns that defect. Human review, repeated validation,
+and release-process steps are work instructions owned by outside-verifiable;
+do not fail them here unless they also dictate product implementation topology,
+algorithm, technology, internal structure, or a concrete delivery mechanism.
 
 REASON IDENTITY: Begin the reason with `[rule=<RULE> condition=<CONDITION>]`
 using the exact identifiers from the one controlling branch above. On PASS use
@@ -451,9 +465,11 @@ defined classification scenarios consistently produce declared verdicts and
 controlling reasons.
 
 RULE SC-INT-OV-001 / CONDITION SC-INT-OV-001-WORK-INSTRUCTION / VERDICT FAIL / REASON the statement prescribes repeated or one-time work rather than a finished result. / FIELDS outcome and acceptance.
-FAIL tasks or work items such as add, create, implement, update, refactor, write
-tests, repeatedly run tests, or update fixtures, and fail internal structure no
-outside observer can inspect.
+FAIL when the central obligation is completing tasks or work items such as add,
+create, implement, update, refactor, write tests, repeatedly run tests, or update
+fixtures. Do not fail an independently checkable finished-release property merely
+because the same document also prescribes a technology, internal structure, or
+implementation location; the solution-agnostic axis owns those classifications.
 
 RULE SC-INT-OV-002 / CONDITION SC-INT-OV-002-DEFINED-RESULT / VERDICT PASS / REASON the document defines both the situation and success result. / FIELDS outcome and acceptance.
 PASS when the document itself makes an apparently qualitative term decidable by
@@ -474,6 +490,9 @@ carry the change's central obligation.
 RULE SC-INT-OV-003 / CONDITION SC-INT-OV-003-UNIVERSAL-RELIED / VERDICT FAIL / REASON an unstated universe cannot verify the central obligation. / FIELDS outcome and acceptance.
 FAIL when the document relies on a universal regression claim and removing that
 claim leaves the outcome or central obligation unsupported by checkable text.
+When a universal claim is present, SC-INT-OV-003 controls over the generic
+release-property branch: use UNIVERSAL-NOT-RELIED when independent obligations
+remain complete, otherwise use UNIVERSAL-RELIED.
 
 REASON IDENTITY: Begin the reason with `[rule=<RULE> condition=<CONDITION>]`
 using the exact identifiers from the one controlling branch above. On PASS use
@@ -488,7 +507,16 @@ violates it."#,
 
 Judge only whether the document constrains what happens next well enough that a
 plan cannot credibly wander beyond the intended change. Do not judge technology
-naming or outside verifiability.
+naming or outside verifiability. When `non_goals` is empty or absent,
+SC-INT-SF-001 alone controls; acceptance exclusions do not become non-goals for
+SC-INT-SF-002. When task entries are offered as fences and capability scope
+remains open after ignoring them, SC-INT-SF-004-TASK-LIST controls instead of
+SC-INT-SF-002-VACUOUS-FENCE. When a fence is ineffective because its actor,
+situation, or bounded noun has no identifiable referent, SC-INT-SF-003-
+UNGROUNDED-REFERENT controls; VACUOUS-FENCE assumes identifiable words that
+exclude no plausible adjacent capability. When the product target is a scope classifier and
+its outcome directly requires the identifiable-referent or capability-versus-task
+classification defined below, that required classification is controlling.
 
 RULE SC-INT-SF-001 / CONDITION SC-INT-SF-001-CLOSED-EMPTY-SCOPE / VERDICT PASS / REASON no same-context adjacent capability remains addable without contradiction. / FIELDS outcome, acceptance, and non_goals.
 When `non_goals` is empty or absent, identify the actor, operation, and failure
@@ -578,7 +606,17 @@ violates it."#,
         rubric: r#"AXIS: problem-grounded.
 
 Judge only `problem`. Do not judge acceptance, non_goals, constraints, or
-technology naming outside problem.
+technology naming outside problem. On PASS use SC-INT-PG-001 only when the
+problem explicitly states why the wrong observation matters beyond the wrong
+observation itself. Without that downstream consequence, use SC-INT-PG-002 only
+when `problem` itself states an outside-observable defect and an implementation
+name merely locates it; `outcome` or `acceptance` cannot supply that missing
+present observation. SC-INT-PG-002 is unavailable when `problem` contains no
+implementation identifier: with no such identifier, use SC-INT-PG-003 when the
+party, activity, and encountered failure are concrete, unless the downstream
+consequence required by SC-INT-PG-001 is also present. An internal return value,
+branch, type, or source-location fact with no affected party or
+outside-observable failure in `problem` is SC-INT-PG-001-CODE-FACT.
 
 RULE SC-INT-PG-001 / CONDITION SC-INT-PG-001-GROUNDED-CONSEQUENCE / VERDICT PASS / REASON the current failure and its consequence are recognizable to an affected party. / FIELDS problem, with outcome and acceptance only to identify the affected party and situation.
 PASS when problem identifies what is wrong today, who encounters it, the
@@ -1102,7 +1140,9 @@ rubric, or correct a finding merely because you disagree with its severity.
 RULE SC-INT-DC-003 / CONDITION SC-INT-DC-003-DEFECT-WAIVER / VERDICT FORBIDDEN / REASON a correctly identified defect cannot be traded against document strength. / FIELDS document, selected-axis reports, and exact selected-axis rubrics.
 If the document text satisfies the failing condition named by the selected axis,
 a pass would be an impermissible waiver. Keep the failure regardless of stronger
-text elsewhere.
+text elsewhere. When a selected report explicitly proposes passing overall
+because its correctly identified defect is minor or narrow or because stronger
+text appears elsewhere, this non-waiver policy controls instead of SC-INT-DC-001.
 
 Apply the exact supplied branch text consistently during final judgment. The
 relevant classification families are indexed by SC-INT-SA-001 through
@@ -1137,8 +1177,12 @@ REASON IDENTITY: Begin the final reason with the controlling exact
 for an affirmed or corrected finding, or the deciding-policy identity for an
 independent holistic failure. In every case also name one exact classification
 identity from a selected axis and the exact deciding-policy identity. Then quote
-the document condition and explain why both branches apply. The final reason may
-vary in wording but must retain both identities."#;
+the document condition and explain why both branches apply. For a holistic
+failure use this exact identity order: `[rule=SC-INT-HO-... condition=...] ...
+[rule=<SELECTED-AXIS-RULE> condition=<SELECTED-AXIS-CONDITION>] ...`; the leading
+holistic identity is the deciding-policy identity and never replaces the required
+selected-axis identity, including with the full roster. The final reason may vary
+in wording but must retain both identities."#;
 
 /// Axes for `plan.json`. Every plan judge is given the accepted design as
 /// context: a plan is judged as an execution of something already agreed, and

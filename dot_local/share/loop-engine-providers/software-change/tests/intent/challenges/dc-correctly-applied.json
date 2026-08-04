@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "axis_model": "intent-calibration/controlled-axis-v1",
+  "targeted": {
+    "solution-agnostic": {
+      "verdict": "fail",
+      "reason": "[rule=SC-INT-SA-002 condition=SC-INT-SA-002-INTERNAL-MECHANISM] The outcome prescribes a SQLite-backed state graph; this is a correctly applied internal-mechanism failure."
+    }
+  },
+  "all_axes": {
+    "solution-agnostic": {
+      "verdict": "fail",
+      "reason": "[rule=SC-INT-SA-002 condition=SC-INT-SA-002-INTERNAL-MECHANISM] The outcome prescribes a SQLite-backed state graph; this is a correctly applied internal-mechanism failure."
+    },
+    "outside-verifiable": {
+      "verdict": "pass",
+      "reason": "[rule=SC-INT-OV-001 condition=SC-INT-OV-001-RELEASE-PROPERTY] The stated result is observable from the finished release."
+    },
+    "scope-fenced": {
+      "verdict": "pass",
+      "reason": "[rule=SC-INT-SF-002 condition=SC-INT-SF-002-EFFECTIVE-FENCE] The non-goals exclude plausible adjacent capabilities."
+    },
+    "constraints-are-limits": {
+      "verdict": "pass",
+      "reason": "[rule=SC-INT-CL-001 condition=SC-INT-CL-001-NO-CONSTRAINTS] The document declares no outside constraints."
+    },
+    "problem-grounded": {
+      "verdict": "pass",
+      "reason": "[rule=SC-INT-PG-001 condition=SC-INT-PG-001-GROUNDED-CONSEQUENCE] The problem names the operator, failed batch situation, and missed retry consequence."
+    }
+  }
+}

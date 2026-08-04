@@ -1,0 +1,13 @@
+{
+  "revision": "1",
+  "problem": "Intent authors receive inconsistent semantic-gate results for the same documented product-target and implementation-location scenarios, so they cannot know whether an unchanged intent will pass release qualification.",
+  "outcome": "The released intent classifier consistently returns the declared verdict and controlling reason for each documented product-target and implementation-location scenario.",
+  "acceptance": [
+    "Each documented product-target scenario returns its declared pass verdict and product-target reason",
+    "Each documented implementation-location scenario returns its declared fail verdict and implementation-location reason"
+  ],
+  "non_goals": [
+    "Adding new intent fields",
+    "Changing design-document classification"
+  ]
+}

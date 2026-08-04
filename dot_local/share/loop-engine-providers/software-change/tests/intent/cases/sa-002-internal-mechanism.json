@@ -1,0 +1,14 @@
+{
+  "revision": "1",
+  "problem": "A batch operator runs the export command after records are processed. When any record fails, the command still reports a clean run, so the operator automation does not retry the failed batch.",
+  "outcome": "A SQLite-backed state graph records whether the batch operator encountered any failed record so the operator can distinguish failed and successful runs.",
+  "acceptance": [
+    "A run where every record succeeds reports success.",
+    "A run where any record fails reports failure to the batch operator.",
+    "The operator can identify the affected batch from either result."
+  ],
+  "non_goals": [
+    "Changing how individual records are processed",
+    "Adding automatic retry behavior"
+  ]
+}

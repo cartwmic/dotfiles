@@ -1,0 +1,14 @@
+{
+  "revision": "1",
+  "problem": "A batch operator runs the export command after records are processed. When any record fails, the command still reports a clean run, so the operator automation does not retry the failed batch.",
+  "outcome": "The batch operator receives a reliable batch result, meaning exactly one result names every completed batch and reports failure whenever that batch contains a failed record.",
+  "acceptance": [
+    "Every completed batch produces exactly one result.",
+    "Each result carries the completed batch identifier.",
+    "A completed batch containing any failed record reports failure."
+  ],
+  "non_goals": [
+    "Changing how individual records are processed",
+    "Adding automatic retry behavior"
+  ]
+}
