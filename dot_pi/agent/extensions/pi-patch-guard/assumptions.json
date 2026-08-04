@@ -1,0 +1,11 @@
+{
+  "assumptions": [
+    {
+      "name": "compact-disconnects-before-abort",
+      "file": "core/agent-session.js",
+      "verifiedVersion": "0.83.0",
+      "pattern": "async compact\\([^)]*\\)\\s*\\{\\s*this\\._disconnectFromAgent\\(\\);\\s*await this\\.abort\\(\\);",
+      "message": "ntfy's compaction guard assumes AgentSession.compact() calls _disconnectFromAgent() BEFORE await this.abort(), so a compaction-aborted run emits agent_settled with no preceding agent_end. That ordering is gone in the installed pi — the ntfy `runEnded` guard (dot_pi/agent/extensions/ntfy/index.ts) may now suppress real notifications or stop suppressing compaction ones. Re-derive the guard."
+    }
+  ]
+}
