@@ -12,9 +12,9 @@
 #   data:
 #     profile: "termux"
 #   EOF
-#   # Private repo: HTTPS + read-only PAT from 1Password (no GitHub SSH yet).
+#   # Repo is public — no GitHub auth required for init.
 #   chezmoi init --apply https://github.com/cartwmic/dotfiles.git
-#   See termux/README.md for PAT + ops_... clipboard key provision.
+#   See termux/README.md for ops_... clipboard SSH key provision.
 data:
   profile: "personal"
 
