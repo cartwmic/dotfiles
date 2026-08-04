@@ -273,6 +273,14 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(observation["classification"], "verdict_mismatch")
         self.assertFalse(observation["verdict_matches"])
 
+    def test_unavailable_verdict_value_is_indeterminate(self):
+        response = copy.deepcopy(self.response)
+        response["evidence"][0]["metadata"]["passed"] = None
+        response["evidence"][1]["metadata"]["axes"][0]["passed"] = None
+        completed, observation = self.observe(response)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertEqual(observation["classification"], "indeterminate")
+
     def test_unknown_or_malformed_identity_is_indeterminate(self):
         response = copy.deepcopy(self.response)
         response["evidence"][0]["metadata"]["reason"] = "missing identity"
