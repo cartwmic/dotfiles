@@ -9,12 +9,20 @@ exit 0
 #   ~/.ssh/homelab       — cartwmic-homelab
 #   ~/.ssh/whonix-homelab — Whonix Gateway/Workstation
 #
-# Requires ~/.config/agent-harness/op-service-token (ops_...). If missing,
-# the script reads the Android clipboard via termux-clipboard-get (copy the
-# credential from the 1Password Android app, switch back to Termux, apply).
-# There is no native op on Termux, so we run op inside a proot-distro Debian
-# guest. Non-fatal: missing token / fetch failure warns and exits 0 so the
-# rest of chezmoi apply still lands.
+# Runs on every chezmoi apply (not run_once). Fast-exits when both keys
+# already match the expected fingerprints. Missing SA token is a soft
+# skip (exit 0 + warning) so first-boot apply can land before the user
+# pastes ops_...; once a token is present, proot/op/fetch failures exit
+# non-zero so the next apply retries and surfaces the error.
+#
+# Token sources (in order):
+#   1. ~/.config/agent-harness/op-service-token
+#   2. Android clipboard via termux-clipboard-get (1Password app → copy
+#      credential → switch to Termux → chezmoi apply)
+#   3. Interactive tty prompt when stdin is a terminal
+#
+# There is no native op on Termux; we run op inside a proot-distro Debian
+# guest.
 #
 # Expected fingerprints (ed25519):
 #   homelab  SHA256:s1NF+DDqZKlvvy/wDQXBACMs3jb/cjkvy/UpOYbypOQ
@@ -44,9 +52,29 @@ fingerprint_of() {
   ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2}'
 }
 
+key_ok() {
+  local path="$1"
+  local want_fp="$2"
+  [ -r "$path" ] || return 1
+  [ "$(fingerprint_of "$path")" = "$want_fp" ]
+}
+
+keys_already_provisioned() {
+  key_ok "$HOMELAB_PATH" "$HOMELAB_FP" && key_ok "$WHONIX_PATH" "$WHONIX_FP"
+}
+
 ensure_ssh_dir() {
   mkdir -p "$HOME/.ssh"
   chmod 700 "$HOME/.ssh"
+}
+
+write_token_file() {
+  local token="$1"
+  mkdir -p "$(dirname "$OP_TOKEN_FILE")"
+  chmod 700 "$(dirname "$OP_TOKEN_FILE")"
+  umask 077
+  printf '%s\n' "$token" >"$OP_TOKEN_FILE"
+  chmod 600 "$OP_TOKEN_FILE"
 }
 
 write_key_from_stdin() {
@@ -73,51 +101,88 @@ have_op_token() {
   esac
 }
 
-# If the token file is absent, accept an ops_... value from the Android
-# clipboard (1Password app → copy credential → switch to Termux → apply).
+read_clipboard_ops_token() {
+  if ! command -v termux-clipboard-get >/dev/null 2>&1; then
+    return 1
+  fi
+  local clip
+  if command -v timeout >/dev/null 2>&1; then
+    clip="$(timeout 5 termux-clipboard-get 2>/dev/null | tr -d '\n\r' || true)"
+  else
+    clip="$(termux-clipboard-get 2>/dev/null | tr -d '\n\r' || true)"
+  fi
+  case "$clip" in
+    ops_*) printf '%s' "$clip"; return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Prefer existing token file; else clipboard; else interactive tty prompt.
 ensure_op_token() {
   if have_op_token; then
     return 0
   fi
 
-  if ! command -v termux-clipboard-get >/dev/null 2>&1; then
-    warn "termux-clipboard-get missing; pkg install termux-api (and install Termux:API app)"
-    return 1
+  local token=""
+  if token="$(read_clipboard_ops_token)"; then
+    write_token_file "$token"
+    log "wrote op service-account token from clipboard -> $OP_TOKEN_FILE"
+    if command -v termux-clipboard-set >/dev/null 2>&1; then
+      termux-clipboard-set '' >/dev/null 2>&1 || true
+    fi
+    return 0
   fi
 
-  local clip
-  clip="$(termux-clipboard-get 2>/dev/null | tr -d '\n\r' || true)"
-  case "$clip" in
-    ops_*)
-      mkdir -p "$(dirname "$OP_TOKEN_FILE")"
-      chmod 700 "$(dirname "$OP_TOKEN_FILE")"
-      umask 077
-      printf '%s\n' "$clip" >"$OP_TOKEN_FILE"
-      chmod 600 "$OP_TOKEN_FILE"
-      log "wrote op service-account token from clipboard -> $OP_TOKEN_FILE"
-      # Best-effort clear so the ops_... token does not linger on the clipboard.
-      if command -v termux-clipboard-set >/dev/null 2>&1; then
-        termux-clipboard-set '' >/dev/null 2>&1 || true
-      fi
+  if [ -t 0 ]; then
+    warn "no token file/clipboard ops_... value; paste credential from 1Password item 'Service Account Auth Token: developer-sa'"
+    # shellcheck disable=SC2162
+    read -r -s -p "op service-account token (ops_...): " token
+    printf '\n' >&2
+    token="$(printf '%s' "$token" | tr -d '\n\r')"
+    case "$token" in
+      ops_*)
+        write_token_file "$token"
+        log "wrote op service-account token from tty -> $OP_TOKEN_FILE"
+        return 0
+        ;;
+      *)
+        warn "typed value was not an ops_... token"
+        return 1
+        ;;
+    esac
+  fi
+
+  if ! command -v termux-clipboard-get >/dev/null 2>&1; then
+    warn "termux-clipboard-get missing; pkg install termux-api (and install Termux:API app)"
+  fi
+  warn "no op-service-token at $OP_TOKEN_FILE and clipboard is not an ops_... token"
+  warn "copy credential from 1Password item 'Service Account Auth Token: developer-sa', then re-run chezmoi apply"
+  return 1
+}
+
+distro_installed() {
+  # proot-distro 5.x: `list -q` prints installed container names (verified).
+  # Also accept either historical rootfs layout if list is unavailable.
+  if command -v proot-distro >/dev/null 2>&1; then
+    if proot-distro list -q 2>/dev/null | grep -qx "$DISTRO"; then
       return 0
-      ;;
-    *)
-      warn "no op-service-token at $OP_TOKEN_FILE and clipboard is not an ops_... token"
-      warn "copy credential from 1Password item 'Service Account Auth Token: developer-sa', then re-run chezmoi apply"
-      return 1
-      ;;
-  esac
+    fi
+  fi
+  local prefix="${PREFIX:-/data/data/com.termux/files/usr}"
+  [ -d "$prefix/var/lib/proot-distro/containers/$DISTRO" ] \
+    || [ -d "$prefix/var/lib/proot-distro/installed-rootfs/$DISTRO" ]
 }
 
 ensure_proot_op() {
   if ! command -v proot-distro >/dev/null 2>&1; then
     log "installing proot-distro"
+    pkg update -y >/dev/null 2>&1 || true
     pkg install -y proot-distro || {
       warn "failed to install proot-distro"
       return 1
     }
   fi
-  if ! proot-distro list --installed 2>/dev/null | grep -qw "$DISTRO"; then
+  if ! distro_installed; then
     log "installing proot-distro guest: $DISTRO"
     proot-distro install "$DISTRO" || {
       warn "failed to install proot-distro guest $DISTRO"
@@ -150,9 +215,9 @@ fetch_key() {
 
   log "fetching $label from 1Password"
   local material
+  # proot-distro --bind is SRC:DEST only (no :ro mode suffix).
   if ! material=$(
-    proot-distro login "$DISTRO" --bind "$OP_TOKEN_FILE:/tmp/op-token:ro" -- env \
-      OP_SERVICE_ACCOUNT_TOKEN_FILE=/tmp/op-token \
+    proot-distro login "$DISTRO" --bind "$OP_TOKEN_FILE:/tmp/op-token" -- env \
       REF="$ref" \
       bash -lc 'set -eu; export OP_SERVICE_ACCOUNT_TOKEN="$(cat /tmp/op-token)"; op read "$REF"'
   ); then
@@ -172,6 +237,10 @@ fetch_key() {
   return 0
 }
 
+if keys_already_provisioned; then
+  exit 0
+fi
+
 ensure_ssh_dir
 
 if ! command -v ssh-keygen >/dev/null 2>&1; then
@@ -179,18 +248,24 @@ if ! command -v ssh-keygen >/dev/null 2>&1; then
   exit 0
 fi
 
+# Soft-skip until the user provides an ops_... token (clipboard / tty / file).
 if ! ensure_op_token; then
   exit 0
 fi
 
+# Token is present: infra / fetch failures must fail the apply so they retry.
 if ! ensure_proot_op; then
-  exit 0
+  exit 1
 fi
 
-fetch_key "$HOMELAB_REF" "$HOMELAB_PATH" "$HOMELAB_FP" "homelab" \
-  || warn "homelab key not provisioned"
-fetch_key "$WHONIX_REF" "$WHONIX_PATH" "$WHONIX_FP" "whonix-homelab" \
-  || warn "whonix key not provisioned"
+failed=0
+fetch_key "$HOMELAB_REF" "$HOMELAB_PATH" "$HOMELAB_FP" "homelab" || failed=1
+fetch_key "$WHONIX_REF" "$WHONIX_PATH" "$WHONIX_FP" "whonix-homelab" || failed=1
+
+if [ "$failed" -ne 0 ]; then
+  warn "one or more SSH keys were not provisioned"
+  exit 1
+fi
 
 exit 0
 {{- end }}

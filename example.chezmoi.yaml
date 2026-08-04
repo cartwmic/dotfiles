@@ -5,14 +5,16 @@
 #   axon-work-computer — work laptop (subset of personal)
 #   termux             — Android Termux (SSH jump host + .termux + jump scripts)
 #
-# Termux bootstrap:
-#   pkg install chezmoi git openssh
+# Termux bootstrap (phone-only; needs Termux:API app):
+#   pkg install -y chezmoi git openssh coreutils termux-api
 #   mkdir -p ~/.config/chezmoi
 #   cat > ~/.config/chezmoi/chezmoi.yaml <<'EOF'
 #   data:
 #     profile: "termux"
 #   EOF
-#   chezmoi init --apply <git-remote>
+#   # Private repo: HTTPS + read-only PAT from 1Password (no GitHub SSH yet).
+#   chezmoi init --apply https://github.com/cartwmic/dotfiles.git
+#   See termux/README.md for PAT + ops_... clipboard key provision.
 data:
   profile: "personal"
 
