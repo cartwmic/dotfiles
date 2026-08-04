@@ -374,6 +374,61 @@ test("lifecycle wiring: end caches, settled+idle sends, question sends immediate
 	}
 });
 
+test("lifecycle wiring: settled without agent_end (compaction abort) does not notify", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-compact-"));
+	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+	const sends: unknown[][] = [];
+	const pi = {
+		registerCommand: () => {},
+		on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => {
+			handlers.set(name, handler);
+		},
+	};
+	const ctx = {
+		hasUI: true,
+		isIdle: () => true,
+		sessionManager: {
+			getCwd: () => "/tmp/project",
+			getSessionName: () => "named",
+			getSessionId: () => "abcdef123456",
+		},
+		ui: { notify: () => {} },
+	};
+	try {
+		registerNtfyExtension(pi as any, {
+			dir,
+			config: {
+				url: "https://ntfy.invalid/topic",
+				maxExcerptChars: 200,
+				enabled: true,
+				jumpDeepLinkBase: "termux://zellij-jump",
+				herdrJumpDeepLinkBase: "termux://herdr-jump",
+			},
+			resolveLocation: async () => ({}),
+			send: async (...args: unknown[]) => { sends.push(args); },
+		});
+
+		// AgentSession.compact() disconnects extension handlers before aborting,
+		// so a compaction-aborted run settles with NO preceding agent_end.
+		await handlers.get("agent_start")?.({}, ctx);
+		await handlers.get("agent_settled")?.({}, ctx);
+		await flushAsyncDispatch();
+		assert.equal(sends.length, 0, "compaction-aborted settle must not notify");
+
+		// The resumed run settles normally (agent_end seen) and notifies once.
+		await handlers.get("agent_start")?.({}, ctx);
+		await handlers.get("agent_end")?.({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+		}, ctx);
+		await handlers.get("agent_settled")?.({}, ctx);
+		await flushAsyncDispatch();
+		assert.equal(sends.length, 1);
+		assert.equal(sends[0][2], "done");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("parseZellijTabName: finds tab whose pane matches cwd (leading slash stripped)", () => {
 	const layout = [
 		'    tab name="chezmoi" focus=true {',
