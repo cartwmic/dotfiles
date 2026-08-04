@@ -1,0 +1,14 @@
+{
+  "revision": "1",
+  "problem": "While the batch operator checks a completed export containing a failed record, `BatchResult.status` says success; the type name only identifies where that operator-visible defect appears.",
+  "outcome": "The batch operator can distinguish a completed export in which any record failed from one in which every record succeeded.",
+  "acceptance": [
+    "A completed export with every record successful reports success",
+    "A completed export with any failed record reports failure",
+    "Either result identifies the affected batch"
+  ],
+  "non_goals": [
+    "Changing record processing",
+    "Adding automatic retry behavior"
+  ]
+}

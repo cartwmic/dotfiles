@@ -1,0 +1,13 @@
+{
+  "revision": "1",
+  "problem": "A batch operator receives a clean status after failed records, so deployment automation does not retry the affected batch.",
+  "outcome": "The batch operator can see how many records were processed in a successful batch.",
+  "acceptance": [
+    "A successful batch result reports its processed-record count.",
+    "The result identifies the successful batch."
+  ],
+  "non_goals": [
+    "Changing record processing",
+    "Adding retry behavior"
+  ]
+}

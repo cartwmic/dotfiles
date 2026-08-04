@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "axis_model": "intent-calibration/controlled-axis-v1",
+  "targeted": {
+    "solution-agnostic": {
+      "verdict": "fail",
+      "reason": "[rule=SC-INT-SA-001 condition=SC-INT-SA-001-IMPLEMENTATION-LOCATION] The outcome names intent.json, so this report wrongly treats the named product document as a required internal change location."
+    }
+  },
+  "all_axes": {
+    "solution-agnostic": {
+      "verdict": "fail",
+      "reason": "[rule=SC-INT-SA-001 condition=SC-INT-SA-001-IMPLEMENTATION-LOCATION] The outcome names intent.json, so this report wrongly treats the named product document as a required internal change location."
+    },
+    "outside-verifiable": {
+      "verdict": "pass",
+      "reason": "[rule=SC-INT-OV-001 condition=SC-INT-OV-001-RELEASE-PROPERTY] The stated result is observable from the finished release."
+    },
+    "scope-fenced": {
+      "verdict": "pass",
+      "reason": "[rule=SC-INT-SF-002 condition=SC-INT-SF-002-EFFECTIVE-FENCE] The non-goals exclude plausible adjacent capabilities."
+    },
+    "constraints-are-limits": {
+      "verdict": "pass",
+      "reason": "[rule=SC-INT-CL-001 condition=SC-INT-CL-001-NO-CONSTRAINTS] The document declares no outside constraints."
+    },
+    "problem-grounded": {
+      "verdict": "pass",
+      "reason": "[rule=SC-INT-PG-001 condition=SC-INT-PG-001-GROUNDED-CONSEQUENCE] The problem names the change owner, semantic-gate rejection situation, and blocked-proposal consequence."
+    }
+  }
+}

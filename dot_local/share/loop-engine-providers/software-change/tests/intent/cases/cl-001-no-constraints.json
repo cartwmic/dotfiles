@@ -1,0 +1,13 @@
+{
+  "revision": "1",
+  "problem": "A nightly reconciliation operator sees success after a ledger batch contains a rejected record, so the rejected batch is omitted from the retry queue.",
+  "outcome": "The nightly operator receives failure for a ledger batch containing any rejected record, and the existing retry queue includes that rejected batch.",
+  "acceptance": [
+    "A ledger batch with a rejected record reports failure and appears in the existing retry queue.",
+    "An all-accepted ledger batch reports success."
+  ],
+  "non_goals": [
+    "Changing ledger validation",
+    "Adding retry behavior"
+  ]
+}

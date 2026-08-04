@@ -1,0 +1,16 @@
+{
+  "revision": "1",
+  "problem": "A compliance auditor checks completed-batch history during monthly review, but entries disappear after seven days, so the auditor cannot inspect the required thirty-day history.",
+  "outcome": "The compliance auditor can retrieve each completed batch history entry for thirty days after batch completion.",
+  "acceptance": [
+    "A history entry remains retrievable by the compliance auditor throughout the thirty days after completion",
+    "Each retrieved entry identifies its completed batch"
+  ],
+  "non_goals": [
+    "Changing history-entry contents",
+    "Changing auditor access policy"
+  ],
+  "constraints": [
+    "Compliance policy CP-7 requires every completed-batch history entry to be deleted seven days after batch completion."
+  ]
+}

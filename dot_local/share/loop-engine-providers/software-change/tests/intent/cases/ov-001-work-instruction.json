@@ -1,0 +1,14 @@
+{
+  "revision": "1",
+  "problem": "Intent authors receive inconsistent semantic-gate results for documented product-target and implementation-location scenarios, so an unchanged intent can alternate between pass and fail.",
+  "outcome": "Each unchanged documented scenario returns the same verdict across repeated evaluations: product-target scenarios return pass and implementation-location scenarios return fail. Before each release, the release manager must personally execute every calibration scenario three times.",
+  "acceptance": [
+    "Each documented product-target scenario returns pass in repeated evaluations",
+    "Each documented implementation-location scenario returns fail in repeated evaluations",
+    "Before each release, the release manager personally executes every calibration scenario three times"
+  ],
+  "non_goals": [
+    "Adding new intent fields",
+    "Changing design-document classification"
+  ]
+}

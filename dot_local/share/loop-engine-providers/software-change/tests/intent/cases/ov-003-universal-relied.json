@@ -1,0 +1,9 @@
+{
+  "revision": "1",
+  "problem": "A batch operator runs the export command after records are processed. When any record fails, the command still reports a clean run, so the operator automation does not retry the failed batch.",
+  "outcome": "The batch command continues to behave exactly as today.",
+  "acceptance": [
+    "Everything about batch results behaves exactly as it does today."
+  ],
+  "non_goals": []
+}

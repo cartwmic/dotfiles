@@ -1,0 +1,13 @@
+{
+  "revision": "1",
+  "problem": "When an operations engineer runs the nightly customer export, one rejected customer still leaves the batch result successful, so the deployment scheduler never retries that customer export.",
+  "outcome": "The operations engineer receives a failed batch result when any customer export record is rejected.",
+  "acceptance": [
+    "Any rejected customer record makes the nightly export result failure.",
+    "An export with no rejected records reports success."
+  ],
+  "non_goals": [
+    "Changing customer validation",
+    "Adding scheduler retry behavior"
+  ]
+}
