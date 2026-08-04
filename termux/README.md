@@ -31,10 +31,9 @@ Prerequisites:
 pkg install -y chezmoi git openssh coreutils termux-api
 ```
 
-3. Create a **read-only fine-grained GitHub PAT** scoped to `cartwmic/dotfiles`
-   contents:read, store it in 1Password (e.g. item `dotfiles-readonly-pat`).
-   Fresh Termux has no GitHub SSH key yet, and the homelab key is provisioned
-   *by* this apply — do not use `git@github.com:...` for first bootstrap.
+`cartwmic/dotfiles` is **public**, so first bootstrap needs no GitHub auth.
+(Optional later: `pkg install gh && gh auth login` if you want `gh` / push from
+the phone.)
 
 ```bash
 mkdir -p ~/.config/chezmoi
@@ -43,11 +42,7 @@ data:
   profile: "termux"
 EOF
 
-# Copy the PAT from the 1Password Android app, then:
 chezmoi init --apply https://github.com/cartwmic/dotfiles.git
-# git will prompt for credentials: username = anything, password = PAT
-# Optional persistence:
-#   git config --global credential.helper store
 ```
 
 After apply (and SSH key provision below):
