@@ -15,6 +15,7 @@ TIMEOUT=${SC_TIMEOUT:-1200}
 PARALLEL=${SC_MAX_PARALLEL_AXES:-1}
 PROFILE=${SC_PROFILE:-characterization}
 CASE_JOBS=${SC_CASE_JOBS:-1}
+ATTESTATION=${SC_FIDELITY_ATTESTATION:-}
 REAL_COMMAND_JSON=${SC_JUDGE_COMMAND_JSON:-'["pi"]'}
 EXTENSIONS_JSON=${SC_JUDGE_EXTENSIONS_JSON:-}
 
@@ -43,6 +44,12 @@ esac
   exit 2
 }
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required" >&2; exit 2; }
+if [ "$PROFILE" = release-core ]; then
+  [ -n "$ATTESTATION" ] && [ -f "$ATTESTATION" ] || {
+    echo "release-core requires SC_FIDELITY_ATTESTATION naming a readable file" >&2
+    exit 2
+  }
+fi
 
 if [ "${SC_BIN+x}" = x ]; then
   BIN=$SC_BIN
@@ -277,7 +284,7 @@ if [ "$PROFILE" = release-core ]; then
     --profile "$PROFILE" --manifest "$MANIFEST" --observations "$OUT/observations" \
     --output "$OUT/run.json" --axis-model "$JUDGE" --consensus-model "$DECIDER" \
     --rubric-set "$RUBRIC_SET" --evidence-set-id "$EVIDENCE_SET_ID" \
-    --candidate-id "$CANDIDATE_ID"
+    --candidate-id "$CANDIDATE_ID" --attestation "$ATTESTATION"
 else
   python3 "$HERE/report.py" aggregate \
     --profile "$PROFILE" --manifest "$MANIFEST" --observations "$OUT/observations" \
