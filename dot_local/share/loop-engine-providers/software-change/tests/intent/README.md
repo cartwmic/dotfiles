@@ -49,6 +49,7 @@ Run one complete qualification into a new artifact root:
 ```sh
 SC_PROFILE=release-core \
 SC_OUT=/tmp/sc-intent-release-core-1 \
+SC_FIDELITY_ATTESTATION=tests/intent/evidence/fidelity-attestation.json \
 SC_CASE_JOBS=3 \
 SC_GAP=0 \
 sh tests/intent/executable_run.sh
@@ -57,6 +58,8 @@ sh tests/intent/executable_run.sh
 Release-core accepts no case arguments. It produces exactly three targeted observations for each fixed case and no full-roster observations. Each case qualifies when at least two observations return the expected selected-axis and final verdicts.
 
 All 36 observations stay in one evidence set. One disagreement or indeterminate result remains visible and cannot be replaced by a case-only rerun. Two disagreements fail that case. Missing attempts, duplicate records, mixed candidate or rubric identities, cross-run evidence, or partial cohorts fail the report.
+
+Release qualification also requires a machine-readable independent fidelity attestation. Its six ordered mappings must exactly cover the fixed cohort, every mapping and source review must be supported, and provenance must be independent of rubric, manifest, checker, and live-observation authorship. The attestation is embedded in the report and protected by a canonical digest. `evidence/release-evidence.json` records the qualified report locator, digest, identities, counts, and independent review provenance without duplicating the large raw observation artifact.
 
 Verify a saved report without judge access:
 
@@ -107,6 +110,7 @@ A release report cannot combine observations with another evidence-set, candidat
 
 - `SC_PROFILE` — `characterization` (default) or `release-core`.
 - `SC_OUT` — absent destination directory. Default: `$TMPDIR/sc-intent-characterization`.
+- `SC_FIDELITY_ATTESTATION` — required readable JSON attestation for `release-core`; unused by characterization.
 - `SC_BIN` — candidate provider binary; unset rebuilds `target/debug/software-change`.
 - `SC_JUDGE_MODEL` — live axis model; default `openai-codex/gpt-5.6-sol`.
 - `SC_DECIDER_MODEL` — consensus model; default `openai-codex/gpt-5.6-sol`.

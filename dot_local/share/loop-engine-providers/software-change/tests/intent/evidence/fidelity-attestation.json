@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "disposition": "supported",
+  "provenance": {
+    "independent": true,
+    "independent_of": [
+      "intent-rubric-authorship",
+      "manifest-authorship",
+      "checker-authorship",
+      "live-observation-authorship"
+    ],
+    "method": "Fresh-context read-only reviews mapped the fixed cohort to the original accepted intent; a separate targeted closure review checked the raw-evidence verifier repair."
+  },
+  "original_request": {
+    "ref": "file:///Users/cartwmic/.local/state/software-change/intent-gate-corrections/intent.json#revision=4",
+    "summary": "Reject genuine design and work leakage without rejecting concrete product scope, observable behavior, public contracts, finished-release properties, externally imposed mechanisms, or closed scope."
+  },
+  "pairs": [
+    {
+      "boundary": "product target versus implementation location",
+      "pass_case": "sa-001-product-target",
+      "fail_case": "sa-001-implementation-location",
+      "disposition": "supported",
+      "evidence": "Product document scope remains acceptable; unsourced internal file placement remains implementation leakage."
+    },
+    {
+      "boundary": "observable behavior versus internal mechanism",
+      "pass_case": "sa-002-observable-behavior",
+      "fail_case": "sa-002-internal-mechanism",
+      "disposition": "supported",
+      "evidence": "Operator-visible outcomes remain acceptable; an author-selected state mechanism remains design leakage."
+    },
+    {
+      "boundary": "public contract versus incidental channel",
+      "pass_case": "sa-003-public-contract",
+      "fail_case": "sa-003-incidental-channel",
+      "disposition": "supported",
+      "evidence": "Externally consumed exit behavior remains acceptable; unconsumed exact log wording remains incidental implementation detail."
+    },
+    {
+      "boundary": "finished release property versus work instruction",
+      "pass_case": "ov-001-release-property",
+      "fail_case": "ov-001-work-instruction",
+      "disposition": "supported",
+      "evidence": "Released behavior remains an outcome; repeated release-manager execution remains work content."
+    },
+    {
+      "boundary": "externally imposed mechanism versus unsourced preference",
+      "pass_case": "sa-002-externally-imposed-mechanism",
+      "fail_case": "cl-002-solution-preference",
+      "disposition": "supported",
+      "evidence": "Identifiable regulatory mechanism remains admissible; author-selected simplicity preference remains inadmissible."
+    },
+    {
+      "boundary": "closed versus open empty scope",
+      "pass_case": "sf-001-closed-empty-scope",
+      "fail_case": "sf-001-open-empty-scope",
+      "disposition": "supported",
+      "evidence": "Contradiction-closed empty non-goals remain sufficient; open addable scope remains insufficiently fenced."
+    }
+  ],
+  "source_reviews": [
+    {
+      "reviewer": "claude-bridge/claude-fable-5",
+      "disposition": "supported",
+      "ref": "file:///Users/cartwmic/.local/state/software-change/intent-calibration-proportionality/reviews/fidelity-fable.md",
+      "sha256": "73f1868050a6ae0d93360fda7a61bb55c90cc12a196dd3d974379367bcc278e0"
+    },
+    {
+      "reviewer": "openai-codex/gpt-5.6-sol",
+      "disposition": "supported",
+      "ref": "file:///Users/cartwmic/.local/state/software-change/intent-calibration-proportionality/reviews/fidelity-sol-closure.md",
+      "sha256": "c5f7f25fe94c70600a6c546594cc6ddfb18febf861fce355ee608c49d1460914"
+    }
+  ]
+}

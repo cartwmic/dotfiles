@@ -18,6 +18,7 @@ WRAPPER = HERE / "judge_wrapper.py"
 RUNNER = HERE / "executable_run.sh"
 MANIFEST = HERE / "manifest.json"
 CHECK_MANIFEST = HERE / "check_manifest.py"
+ATTESTATION = HERE / "evidence" / "fidelity-attestation.json"
 RUBRICS = "test-rubric-set"
 AXIS_MODEL = "test/live-axis"
 CONSENSUS_MODEL = "test/consensus"
@@ -218,7 +219,10 @@ class HarnessTests(unittest.TestCase):
                 (case_dir / f"targeted-{attempt}.json").write_text(json.dumps(record))
         return observations
 
-    def aggregate(self, profile, observations, *cases, evidence_set=EVIDENCE_SET):
+    def aggregate(
+        self, profile, observations, *cases,
+        evidence_set=EVIDENCE_SET, attestation=ATTESTATION,
+    ):
         report = self.root / "run.json"
         command = [
             "python3", str(REPORT), "aggregate",
@@ -231,8 +235,10 @@ class HarnessTests(unittest.TestCase):
             "--rubric-set", RUBRICS,
             "--evidence-set-id", evidence_set,
             "--candidate-id", CANDIDATE,
-            *cases,
         ]
+        if profile == "release-core" and attestation is not None:
+            command.extend(["--attestation", str(attestation)])
+        command.extend(cases)
         completed = subprocess.run(command, text=True, capture_output=True)
         return completed, json.loads(report.read_text())
 
@@ -353,6 +359,16 @@ class HarnessTests(unittest.TestCase):
         completed, report = self.aggregate("release-core", observations)
         self.assertNotEqual(completed.returncode, 0)
         self.assertEqual(report["qualification"], "nonqualifying")
+
+    def test_release_requires_supported_fidelity_attestation(self):
+        completed, report = self.aggregate(
+            "release-core", self.write_release_records(), attestation=None
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn(
+            "release-core requires a fidelity attestation",
+            report["global_errors"],
+        )
 
     def test_verify_release_recomputes_majority(self):
         completed, report = self.aggregate("release-core", self.write_release_records())

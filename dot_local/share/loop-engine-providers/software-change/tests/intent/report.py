@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -506,6 +507,72 @@ def release_observation_errors(manifest, case, row, expected_sequence):
     return errors
 
 
+def fidelity_attestation_errors(attestation, manifest):
+    errors = []
+    if not isinstance(attestation, dict):
+        return ["fidelity attestation must be an object"]
+    if attestation.get("schema_version") != 1:
+        errors.append("fidelity attestation schema_version must be 1")
+    if attestation.get("disposition") != "supported":
+        errors.append("fidelity attestation disposition must be supported")
+    provenance = attestation.get("provenance")
+    required_independence = {
+        "intent-rubric-authorship",
+        "manifest-authorship",
+        "checker-authorship",
+        "live-observation-authorship",
+    }
+    if not isinstance(provenance, dict) or provenance.get("independent") is not True:
+        errors.append("fidelity attestation must declare independent provenance")
+    elif set(provenance.get("independent_of", [])) != required_independence:
+        errors.append("fidelity attestation independence boundary is incomplete")
+
+    pairs = attestation.get("pairs")
+    flattened = []
+    if not isinstance(pairs, list) or len(pairs) != 6:
+        errors.append("fidelity attestation must contain six boundary pairs")
+        pairs = []
+    for index, pair in enumerate(pairs, 1):
+        if not isinstance(pair, dict):
+            errors.append(f"fidelity attestation pair {index} is malformed")
+            continue
+        pass_case = pair.get("pass_case")
+        fail_case = pair.get("fail_case")
+        flattened.extend([pass_case, fail_case])
+        if pair.get("disposition") != "supported":
+            errors.append(f"fidelity attestation pair {index} is unsupported")
+        if not isinstance(pair.get("boundary"), str) or not pair["boundary"].strip():
+            errors.append(f"fidelity attestation pair {index} lacks boundary evidence")
+        if not isinstance(pair.get("evidence"), str) or not pair["evidence"].strip():
+            errors.append(f"fidelity attestation pair {index} lacks mapping evidence")
+    if flattened != manifest["release_core_cases"]:
+        errors.append("fidelity attestation pairs differ from fixed release cohort")
+
+    reviews = attestation.get("source_reviews")
+    if not isinstance(reviews, list) or not reviews:
+        errors.append("fidelity attestation requires an independent source review")
+        reviews = []
+    for index, review in enumerate(reviews, 1):
+        if not isinstance(review, dict):
+            errors.append(f"fidelity source review {index} is malformed")
+            continue
+        if review.get("disposition") != "supported":
+            errors.append(f"fidelity source review {index} is not supported")
+        if not isinstance(review.get("reviewer"), str) or not review["reviewer"].strip():
+            errors.append(f"fidelity source review {index} lacks reviewer provenance")
+        if not isinstance(review.get("ref"), str) or not review["ref"].strip():
+            errors.append(f"fidelity source review {index} lacks evidence reference")
+        digest = review.get("sha256")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            errors.append(f"fidelity source review {index} digest is malformed")
+    return errors
+
+
+def attestation_digest(attestation):
+    canonical = json.dumps(attestation, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
+
+
 def aggregate(args):
     manifest = load(args.manifest)
     all_ids = [case["id"] for case in manifest["cases"]]
@@ -513,6 +580,17 @@ def aggregate(args):
     release = args.profile == "release-core"
     selected = core_ids if release else (args.cases or all_ids)
     global_errors = []
+    attestation = None
+    if release:
+        if not args.attestation:
+            global_errors.append("release-core requires a fidelity attestation")
+        else:
+            try:
+                attestation = load(args.attestation)
+            except Exception as error:
+                global_errors.append(f"cannot load fidelity attestation: {error}")
+            else:
+                global_errors.extend(fidelity_attestation_errors(attestation, manifest))
     if release and args.cases:
         global_errors.append("release-core does not accept a case subset")
     if len(selected) != len(set(selected)):
@@ -625,6 +703,10 @@ def aggregate(args):
         "challenge_axis_model": "intent-calibration/controlled-axis-v1",
         "consensus_model": args.consensus_model,
         "rubric_set": args.rubric_set,
+        "fidelity_attestation": attestation if release else None,
+        "fidelity_attestation_digest": (
+            attestation_digest(attestation) if release and attestation is not None else None
+        ),
         "targeted_attempts_required": 3 if release else 1,
         "all_axis_attempts_required": 0,
         "selected_cases": selected,
@@ -654,6 +736,12 @@ def release_report_errors(report, manifest):
         errors.append("release report is not qualified")
     if report.get("global_errors"):
         errors.append("release report carries global errors")
+    attestation = report.get("fidelity_attestation")
+    errors.extend(fidelity_attestation_errors(attestation, manifest))
+    if isinstance(attestation, dict):
+        expected_digest = attestation_digest(attestation)
+        if report.get("fidelity_attestation_digest") != expected_digest:
+            errors.append("release report fidelity attestation digest mismatch")
     summaries = report.get("cases")
     if not isinstance(summaries, list) or [case.get("id") for case in summaries] != core_ids:
         errors.append("release report case summaries differ from fixed cohort")
@@ -798,6 +886,7 @@ def parser():
         "--profile", choices=("release-core", "characterization"),
         default="characterization",
     )
+    aggregate_parser.add_argument("--attestation")
     aggregate_parser.add_argument("cases", nargs="*")
     aggregate_parser.set_defaults(func=aggregate)
 
