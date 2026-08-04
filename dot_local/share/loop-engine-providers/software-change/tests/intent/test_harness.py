@@ -317,6 +317,43 @@ class HarnessTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertEqual(observation["classification"], "indeterminate")
 
+    def test_malformed_provider_containers_are_retained_as_indeterminate(self):
+        null_verdicts = copy.deepcopy(self.response)
+        null_verdicts["verdicts"] = None
+        null_evidence = copy.deepcopy(self.response)
+        null_evidence["evidence"] = None
+        scalar_evidence_item = copy.deepcopy(self.response)
+        scalar_evidence_item["evidence"] = ["bad"]
+        scalar_metadata = copy.deepcopy(self.response)
+        scalar_metadata["evidence"][0]["metadata"] = "bad"
+        malformed_diagnostic = {"kind": "evaluation_error", "diagnostics": ["bad"]}
+        list_axis_id = copy.deepcopy(self.response)
+        list_axis_id["evidence"][1]["metadata"]["axes"][0]["axis"] = ["bad"]
+        list_axis_reason = copy.deepcopy(self.response)
+        list_axis_reason["evidence"][0]["metadata"]["reason"] = ["bad"]
+        list_axis_reason["evidence"][1]["metadata"]["axes"][0]["reason"] = ["bad"]
+        list_consensus_reason = copy.deepcopy(self.response)
+        list_consensus_reason["evidence"][1]["metadata"]["reason"] = ["bad"]
+        rows = [
+            ("null result", None),
+            ("list result", []),
+            ("null verdicts", null_verdicts),
+            ("null evidence", null_evidence),
+            ("scalar evidence item", scalar_evidence_item),
+            ("scalar metadata", scalar_metadata),
+            ("scalar diagnostic", malformed_diagnostic),
+            ("list embedded axis id", list_axis_id),
+            ("list axis reason", list_axis_reason),
+            ("list consensus reason", list_consensus_reason),
+        ]
+        for name, response in rows:
+            with self.subTest(name=name):
+                (self.root / "observation.json").unlink(missing_ok=True)
+                completed, observation = self.observe(response)
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertEqual(observation["classification"], "indeterminate")
+                self.assertIn("provider_response_text", observation["raw"])
+
     def test_declared_failing_sibling_gets_no_variance_credit(self):
         case_id = "sa-001-implementation-location"
         record = self.synthetic_record(case_id, 1)
