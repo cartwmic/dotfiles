@@ -33,6 +33,19 @@ sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" init --apply cartw
 exec zsh
 ```
 
+### Termux (Android)
+
+Termux is a first-class profile (`profile: "termux"`) — thin SSH jump host,
+`.termux` UI config, and ntfy jump handlers. It does **not** install the full
+desktop/agent stack. See `termux/README.md`.
+
+```bash
+pkg install -y chezmoi git openssh coreutils
+mkdir -p ~/.config/chezmoi
+printf 'data:\n  profile: "termux"\n' > ~/.config/chezmoi/chezmoi.yaml
+chezmoi init --apply git@github.com:cartwmic/dotfiles.git
+```
+
 ## What's Included
 
 **Shell & Terminal:**

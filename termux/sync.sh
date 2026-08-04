@@ -1,91 +1,34 @@
 #!/usr/bin/env bash
-# Push canonical Termux config from this repo to the connected Android device.
-# Requires: adb, device with Termux installed and reachable.
+# DEPRECATED 2026-08-04.
+#
+# Termux is a first-class chezmoi profile. Do not ADB-push config from this
+# staging directory anymore — set profile: "termux" on the phone and run
+# `chezmoi apply`. See termux/README.md.
 
 set -euo pipefail
 
-cd "$(dirname "$0")"
+cat >&2 <<'EOF'
+error: termux/sync.sh is retired.
 
-if ! adb get-state >/dev/null 2>&1; then
-    echo "error: no adb device connected" >&2
-    exit 1
-fi
+Termux config is managed by chezmoi with:
 
-push_file() {
-    local src="$1"
-    local dest="$2"
-    local tmp="/data/local/tmp/$(basename "$src").new"
+  data:
+    profile: "termux"
 
-    echo "→ pushing $src → $dest"
-    adb push "$src" "$tmp" >/dev/null
-    adb shell "run-as com.termux cp '$tmp' '$dest' && rm '$tmp'"
-}
+On the phone:
+  pkg install -y chezmoi git openssh
+  mkdir -p ~/.config/chezmoi
+  printf 'data:\n  profile: "termux"\n' > ~/.config/chezmoi/chezmoi.yaml
+  chezmoi init --apply <dotfiles-git-remote>
 
-# Push an executable helper into the phone Termux home, creating its parent dir
-# and marking it 0700. Used for the Zellij and Herdr ntfy jump handlers that the
-# termux-app fork invokes on notification tap.
-push_exec() {
-    local src="$1"
-    local dest="$2"
-    local tmp="/data/local/tmp/$(basename "$src").new"
+Canonical sources:
+  dot_termux/termux.properties   -> ~/.termux/termux.properties
+  dot_termux/font.ttf            -> ~/.termux/font.ttf
+  bin/executable_zellij-jump     -> ~/bin/zellij-jump
+  bin/executable_herdr-jump      -> ~/bin/herdr-jump
+  private_dot_ssh/modify_config.tmpl (termux block)
+  run_once_after_05_provision_termux_ssh_keys.sh.tmpl
 
-    echo "→ pushing exec $src → $dest"
-    adb push "$src" "$tmp" >/dev/null
-    # dirname is relative to the run-as cwd (the com.termux data dir), matching
-    # push_file's relative dests. tmp is removed OUTSIDE run-as (shell-uid owned).
-    adb shell "run-as com.termux sh -c '
-        mkdir -p \"\$(dirname $dest)\"
-        cp \"$tmp\" \"$dest\"
-        chmod 700 \"$dest\"
-    '"
-    adb shell "rm -f '$tmp'"
-}
-
-# Idempotently install the ntfy-harpoon-jump ControlMaster snippet into the phone
-# ~/.ssh/config. Marker-guarded: a second run finds the sentinel and makes no
-# change (Constitution IV). ControlPath parent (~/.ssh) is created if absent so
-# the master socket can bind.
-sync_controlmaster() {
-    local src="ssh-controlmaster.config"
-    local marker="# >>> ntfy-harpoon-jump controlmaster >>>"
-    local tmp="/data/local/tmp/$src.new"
-
-    echo "→ syncing ssh ControlMaster snippet → files/home/.ssh/config"
-    adb push "$src" "$tmp" >/dev/null
-    # Idempotence guard: the appended block is fenced by the sentinel marker, so a
-    # re-run that finds the marker is a no-op (Constitution IV: no-op when already
-    # applied by this script). This is the robust, unambiguous mechanism; parsing
-    # arbitrary hand-written ssh stanzas from an adb run-as toybox shell is
-    # intentionally out of scope (see follow-ups.md). ControlPath parent (~/.ssh)
-    # is created if absent so the master socket can bind. A pre-existing MANUAL
-    # `Host remote` ControlMaster block is the user's to reconcile (see README).
-    adb shell "run-as com.termux sh -c '
-        cfg=files/home/.ssh/config
-        mkdir -p files/home/.ssh && chmod 700 files/home/.ssh
-        touch \"\$cfg\" && chmod 600 \"\$cfg\"
-        if grep -qF \"$marker\" \"\$cfg\"; then
-            echo \"  (managed block present — no change)\"
-        else
-            printf \"\n\" >> \"\$cfg\"
-            cat \"$tmp\" >> \"\$cfg\"
-            echo \"  (appended ControlMaster block)\"
-        fi
-    '"
-    # Remove the pushed tmp OUTSIDE run-as: /data/local/tmp/$tmp is owned by the
-    # adb `shell` uid, so the Termux app uid inside run-as cannot delete it (the
-    # cp/cat READ works, but rm would EACCES and — with set -euo pipefail — abort
-    # the sync on every run, breaking Const IV). Mirror push_file's shell-uid rm.
-    adb shell "rm -f '$tmp'"
-}
-
-push_file "termux.properties" "files/home/.termux/termux.properties"
-push_file "font.ttf"          "files/home/.termux/font.ttf"
-push_exec "zellij-jump"       "files/home/bin/zellij-jump"
-push_exec "herdr-jump"        "files/home/bin/herdr-jump"
-sync_controlmaster
-
-echo "→ reloading Termux style"
-adb shell 'am broadcast --user 0 -a com.termux.app.reload_style com.termux' \
-    >/dev/null
-
-echo "done."
+See termux/README.md.
+EOF
+exit 1

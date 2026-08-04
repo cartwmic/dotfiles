@@ -3,6 +3,8 @@ __pycache__
 bin/
 lib/
 # but allow chezmoi-managed script directories
+!bin/
+!bin/**
 !dot_local/bin/
 !dot_local/bin/**
 !dot_config/zellij/bin/

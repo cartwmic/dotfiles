@@ -6,36 +6,71 @@
 # stdout as the new content. We pass through whatever is already there
 # (work hosts, other people's hosts, manual edits) untouched.
 #
-# Our managed block is delimited by the markers below. On every apply we
-# strip any prior copy of that block and (on the personal profile only)
-# re-append the current version. This makes it idempotent AND update-safe:
-# editing the block here replaces the old one instead of duplicating it.
+# Managed blocks are delimited by markers below. On every apply we strip any
+# prior copy of those blocks (plus known legacy Termux sentinels) and, when
+# the active profile owns a block, re-append the current version. Idempotent
+# and update-safe: editing the block here replaces the old one instead of
+# duplicating it.
 #
-# Profile gating: the append is emitted by chezmoi's template engine only
-# when .profile == "personal". On the work profile the append code is
-# absent, so the file is passed through verbatim and the phone host is
-# never added.
+# Profiles:
+#   personal — inbound Mac→phone Host block
+#   termux   — outbound phone→homelab Host blocks (cartwmic-server/remote,
+#              macbook, whonix ProxyJump) including ControlMaster for jumps
 
 set -eu
 
-BEGIN='# >>> chezmoi-managed: phone ssh >>>'
-END='# <<< chezmoi-managed: phone ssh <<<'
+PHONE_BEGIN='# >>> chezmoi-managed: phone ssh >>>'
+PHONE_END='# <<< chezmoi-managed: phone ssh <<<'
+TERMUX_BEGIN='# >>> chezmoi-managed: termux ssh >>>'
+TERMUX_END='# <<< chezmoi-managed: termux ssh <<<'
 
 # Read stdin, preserving trailing newlines via a sentinel.
 existing=$(cat; printf x)
 existing=${existing%x}
 
-# Emit the existing file with any previously-managed block removed.
-cleaned=$(printf '%s' "$existing" | awk -v b="$BEGIN" -v e="$END" '
-	$0 == b { skip = 1; next }
-	skip && $0 == e { skip = 0; next }
+# Strip every managed / legacy marker-pair block we own.
+cleaned=$(printf '%s' "$existing" | awk '
+	function is_begin(line) {
+		return line == "# >>> chezmoi-managed: phone ssh >>>" \
+			|| line == "# >>> chezmoi-managed: termux ssh >>>" \
+			|| line == "# >>> ntfy-harpoon-jump remote target >>>" \
+			|| line == "# >>> ntfy-harpoon-jump controlmaster >>>" \
+			|| line == "# >>> whonix-workstation proxyjump >>>"
+	}
+	function is_end(line) {
+		return line == "# <<< chezmoi-managed: phone ssh <<<" \
+			|| line == "# <<< chezmoi-managed: termux ssh <<<" \
+			|| line == "# <<< ntfy-harpoon-jump remote target <<<" \
+			|| line == "# <<< ntfy-harpoon-jump controlmaster <<<" \
+			|| line == "# <<< whonix-workstation proxyjump <<<"
+	}
+	is_begin($0) { skip = 1; next }
+	skip && is_end($0) { skip = 0; next }
 	!skip { print }
 ')
+
+# Drop a trailing run of blank lines so re-append stays tidy.
+cleaned=$(printf '%s' "$cleaned" | awk '
+	{ lines[NR] = $0 }
+	END {
+		end = NR
+		while (end > 0 && lines[end] ~ /^[[:space:]]*$/) end--
+		for (i = 1; i <= end; i++) print lines[i]
+	}
+')
+
+# Termux migration: the old adb-pushed controlmaster file left comment headers
+# OUTSIDE its sentinel markers. If nothing but comments/blank lines remain after
+# stripping managed/legacy blocks, start fresh so we do not keep that noise.
+{{- if eq .profile "termux" }}
+if ! printf '%s' "$cleaned" | grep -qEv '^[[:space:]]*(#.*)?$'; then
+	cleaned=""
+fi
+{{- end }}
 
 printf '%s' "$cleaned"
 {{ if eq .profile "personal" -}}
 
-# Ensure the managed block starts on its own line.
 case "$cleaned" in
 	"") : ;;
 	*'
@@ -44,7 +79,7 @@ case "$cleaned" in
 esac
 
 cat <<EOF
-$BEGIN
+$PHONE_BEGIN
 # phone (Termux sshd on :8022). Auto-pick the reachable path:
 #   - 10.21.1.6   = phone's WireGuard IP (wg1 peer on OPNsense). Works whenever
 #                   the tunnel is up, home or remote, routed via the gateway.
@@ -62,6 +97,56 @@ Host phone
     User u0_a540
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
-$END
+$PHONE_END
+EOF
+{{- else if eq .profile "termux" }}
+
+case "$cleaned" in
+	"") : ;;
+	*'
+') : ;;
+	*) printf '\n' ;;
+esac
+
+cat <<EOF
+$TERMUX_BEGIN
+# Homelab targets from Termux. IdentityFile is the shared cartwmic-homelab key
+# provisioned to ~/.ssh/homelab (see 05_provision_termux_ssh_keys).
+# \`remote\` is retained as an alias of cartwmic-server so zellij-jump / herdr-jump
+# keep working over the ControlMaster side channel.
+Host cartwmic-server remote
+    HostName 10.19.1.221
+    User cartwmic
+    IdentityFile ~/.ssh/homelab
+    IdentitiesOnly yes
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 10m
+
+Host macbook
+    HostName 10.19.1.200
+    User cartwmic
+    IdentityFile ~/.ssh/homelab
+    IdentitiesOnly yes
+
+# Whonix Workstation via Gateway ProxyJump.
+# Path: phone -> user@10.19.1.210 (gw) -> user@10.152.152.11 (ws).
+# Key: ~/.ssh/whonix-homelab (also provisioned by 05_provision_termux_ssh_keys).
+# NOTE: /home/user on the workstation is root-owned (Kicksecure) -> write to /tmp only.
+Host whonix-gw
+    StrictHostKeyChecking accept-new
+    HostName 10.19.1.210
+    User user
+    IdentityFile ~/.ssh/whonix-homelab
+    IdentitiesOnly yes
+
+Host whonix-ws
+    StrictHostKeyChecking accept-new
+    HostName 10.152.152.11
+    User user
+    ProxyJump whonix-gw
+    IdentityFile ~/.ssh/whonix-homelab
+    IdentitiesOnly yes
+$TERMUX_END
 EOF
 {{- end }}

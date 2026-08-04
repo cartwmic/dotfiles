@@ -3,6 +3,13 @@
 
 . "$HOME"/.local/share/chezmoi/utils.sh
 
+# Termux/Android: op has no native bionic build. Key bootstrap is handled by
+# run_once_after_05_provision_termux_ssh_keys.sh (proot + service-account token
+# or migrate-from-existing). Never fail chezmoi apply here.
+if [ -n "${TERMUX_VERSION:-}" ] || [ "$(uname -o 2>/dev/null || true)" = "Android" ]; then
+  exit 0
+fi
+
 # Check if 'op' command already exists. Silent on the happy path so chezmoi
 # diff/apply doesn't print noise on every run.
 if command -v op >/dev/null 2>&1; then

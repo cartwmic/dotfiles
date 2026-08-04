@@ -1,0 +1,198 @@
+{{- if ne .profile "termux" }}
+#!/bin/sh
+# Non-termux profiles: no-op (script is also .chezmoiignore-gated).
+exit 0
+{{- else }}
+#!/data/data/com.termux/files/usr/bin/bash
+#
+# Provision Termux SSH private keys into ~/.ssh:
+#   ~/.ssh/homelab       — cartwmic-homelab (shared with personal machines)
+#   ~/.ssh/whonix-homelab — Whonix Gateway/Workstation access
+#
+# Strategy (non-fatal — never blocks chezmoi apply):
+#   1. If the destination already has the expected fingerprint, leave it.
+#   2. For homelab: if ~/.ssh/id_ed25519 matches, copy/migrate it.
+#   3. Otherwise try 1Password via proot-distro (op has no native Termux build),
+#      using the agent-harness service-account token when present.
+#   4. On any missing dependency / auth failure, warn and exit 0.
+#
+# Expected fingerprints (ed25519):
+#   homelab  SHA256:s1NF+DDqZKlvvy/wDQXBACMs3jb/cjkvy/UpOYbypOQ
+#   whonix   SHA256:oNPHkrMebH0d0dq6B+gexDeimXdUbDHh38dHf3EGpEE
+
+set -euo pipefail
+
+SCRIPT_NAME="$(basename "$0")"
+LOG_PREFIX="[${SCRIPT_NAME}]"
+
+HOMELAB_PATH="${HOMELAB_PATH:-$HOME/.ssh/homelab}"
+WHONIX_PATH="${WHONIX_PATH:-$HOME/.ssh/whonix-homelab}"
+LEGACY_HOMELAB_PATH="${LEGACY_HOMELAB_PATH:-$HOME/.ssh/id_ed25519}"
+OP_TOKEN_FILE="${OP_TOKEN_FILE:-$HOME/.config/agent-harness/op-service-token}"
+DISTRO="${DISTRO:-debian}"
+OP_VERSION="${OP_VERSION:-2.31.1}"
+OP_ARCH="${OP_ARCH:-arm64}"
+
+HOMELAB_FP='SHA256:s1NF+DDqZKlvvy/wDQXBACMs3jb/cjkvy/UpOYbypOQ'
+WHONIX_FP='SHA256:oNPHkrMebH0d0dq6B+gexDeimXdUbDHh38dHf3EGpEE'
+HOMELAB_REF="${HOMELAB_REF:-op://developer/cartwmic-homelab ssh key/private key?ssh-format=openssh}"
+WHONIX_REF="${WHONIX_REF:-op://developer/whonix-homelab/private key?ssh-format=openssh}"
+
+log()  { printf '%s %s\n' "$LOG_PREFIX" "$1" >&2; }
+warn() { printf '%s WARN: %s\n' "$LOG_PREFIX" "$1" >&2; }
+
+fingerprint_of() {
+  local path="$1"
+  ssh-keygen -lf "$path" 2>/dev/null | awk '{print $2}'
+}
+
+ensure_ssh_dir() {
+  mkdir -p "$HOME/.ssh"
+  chmod 700 "$HOME/.ssh"
+}
+
+key_ok() {
+  local path="$1"
+  local want="$2"
+  [ -f "$path" ] || return 1
+  [ "$(fingerprint_of "$path")" = "$want" ]
+}
+
+write_key_from_stdin() {
+  local path="$1"
+  local tmp
+  tmp="$(mktemp "$HOME/.ssh/.key.XXXXXX")"
+  umask 077
+  cat >"$tmp"
+  if ! head -n1 "$tmp" | grep -q 'BEGIN OPENSSH PRIVATE KEY'; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$path"
+  chmod 600 "$path"
+  ssh-keygen -y -f "$path" >"${path}.pub"
+  chmod 644 "${path}.pub"
+}
+
+migrate_or_keep_homelab() {
+  if key_ok "$HOMELAB_PATH" "$HOMELAB_FP"; then
+    log "homelab key already present with expected fingerprint"
+    return 0
+  fi
+  if key_ok "$LEGACY_HOMELAB_PATH" "$HOMELAB_FP"; then
+    log "migrating $LEGACY_HOMELAB_PATH -> $HOMELAB_PATH"
+    cp "$LEGACY_HOMELAB_PATH" "$HOMELAB_PATH"
+    chmod 600 "$HOMELAB_PATH"
+    if [ -f "${LEGACY_HOMELAB_PATH}.pub" ]; then
+      cp "${LEGACY_HOMELAB_PATH}.pub" "${HOMELAB_PATH}.pub"
+      chmod 644 "${HOMELAB_PATH}.pub"
+    else
+      ssh-keygen -y -f "$HOMELAB_PATH" >"${HOMELAB_PATH}.pub"
+      chmod 644 "${HOMELAB_PATH}.pub"
+    fi
+    return 0
+  fi
+  return 1
+}
+
+keep_whonix() {
+  if key_ok "$WHONIX_PATH" "$WHONIX_FP"; then
+    log "whonix key already present with expected fingerprint"
+    return 0
+  fi
+  return 1
+}
+
+have_op_token() {
+  [ -r "$OP_TOKEN_FILE" ] || return 1
+  case "$(cat "$OP_TOKEN_FILE")" in
+    ops_*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ensure_proot_op() {
+  command -v proot-distro >/dev/null 2>&1 || {
+    warn "proot-distro not installed; cannot fetch keys from 1Password"
+    return 1
+  }
+  if ! proot-distro list --installed 2>/dev/null | grep -qw "$DISTRO"; then
+    log "installing proot-distro guest: $DISTRO"
+    proot-distro install "$DISTRO" || {
+      warn "failed to install proot-distro guest $DISTRO"
+      return 1
+    }
+  fi
+  if ! proot-distro login "$DISTRO" -- bash -lc 'command -v op >/dev/null 2>&1'; then
+    log "installing 1Password CLI v$OP_VERSION ($OP_ARCH) inside $DISTRO"
+    proot-distro login "$DISTRO" -- env OP_VERSION="$OP_VERSION" OP_ARCH="$OP_ARCH" bash -lc '
+      set -eu
+      apt-get update -qq
+      apt-get install -y -qq curl unzip >/dev/null
+      curl -fsSL "https://cache.agilebits.com/dist/1P/op2/pkg/v${OP_VERSION}/op_linux_${OP_ARCH}_v${OP_VERSION}.zip" -o /tmp/op.zip
+      unzip -o /tmp/op.zip -d /usr/local/bin op >/dev/null
+      chmod 755 /usr/local/bin/op
+      rm -f /tmp/op.zip
+    ' || {
+      warn "failed to install op inside $DISTRO"
+      return 1
+    }
+  fi
+  return 0
+}
+
+fetch_key() {
+  local ref="$1"
+  local path="$2"
+  local want_fp="$3"
+  local label="$4"
+
+  have_op_token || {
+    warn "no op service-account token at $OP_TOKEN_FILE; cannot fetch $label"
+    return 1
+  }
+  ensure_proot_op || return 1
+
+  log "fetching $label from 1Password"
+  local material
+  if ! material=$(
+    proot-distro login "$DISTRO" --bind "$OP_TOKEN_FILE:/tmp/op-token:ro" -- env \
+      OP_SERVICE_ACCOUNT_TOKEN_FILE=/tmp/op-token \
+      REF="$ref" \
+      bash -lc 'set -eu; export OP_SERVICE_ACCOUNT_TOKEN="$(cat /tmp/op-token)"; op read "$REF"'
+  ); then
+    warn "op read failed for $label"
+    return 1
+  fi
+
+  if ! printf '%s\n' "$material" | write_key_from_stdin "$path"; then
+    warn "fetched $label was not an OpenSSH private key"
+    return 1
+  fi
+  if ! key_ok "$path" "$want_fp"; then
+    warn "$label fingerprint mismatch (got $(fingerprint_of "$path"); want $want_fp)"
+    return 1
+  fi
+  log "wrote $path"
+  return 0
+}
+
+ensure_ssh_dir
+
+if ! command -v ssh-keygen >/dev/null 2>&1; then
+  warn "ssh-keygen missing; install openssh and re-run chezmoi apply"
+  exit 0
+fi
+
+if ! migrate_or_keep_homelab; then
+  fetch_key "$HOMELAB_REF" "$HOMELAB_PATH" "$HOMELAB_FP" "homelab" \
+    || warn "homelab key not provisioned — ssh cartwmic-server/macbook will fail until fixed"
+fi
+
+if ! keep_whonix; then
+  fetch_key "$WHONIX_REF" "$WHONIX_PATH" "$WHONIX_FP" "whonix-homelab" \
+    || warn "whonix key not provisioned — ssh whonix-gw/ws will fail until fixed"
+fi
+
+exit 0
+{{- end }}

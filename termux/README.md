@@ -1,115 +1,73 @@
 # Termux
 
-Canonical source for Termux configuration on the Android phone.
+First-class chezmoi profile: **`termux`**.
 
-Chezmoi cannot deploy these files directly (the destination lives on the phone,
-not this machine), so the workflow is **edit-here, push-via-adb**.
+Phone config is no longer ADB/`scp`-pushed from this staging directory. On the
+phone, set `profile: "termux"` and `chezmoi apply` owns:
 
-## Files
+| Destination | Source |
+|---|---|
+| `~/.termux/termux.properties` | `dot_termux/termux.properties` |
+| `~/.termux/font.ttf` | `dot_termux/font.ttf` |
+| `~/bin/zellij-jump` | `bin/executable_zellij-jump` |
+| `~/bin/herdr-jump` | `bin/executable_herdr-jump` |
+| `~/.ssh/config` (managed block) | `private_dot_ssh/modify_config.tmpl` |
+| `~/.ssh/homelab`, `~/.ssh/whonix-homelab` | `run_once_after_05_provision_termux_ssh_keys.sh.tmpl` |
 
-- `termux.properties` — extra-keys home row (long-press popups bound to zellij
-  shortcuts: `CTRL T` → room, `CTRL Y` → harpoon, etc.).
-- `font.ttf` — terminal font. Currently **FiraCode Nerd Font Regular v3.4.0**
-  (provides Nerd Font glyphs for the extra-keys row and the prompt). Replace
-  this file with another `.ttf` to switch fonts, then re-run `sync.sh`.
-- `zellij-jump` — phone-side deep-link handler script for `ntfy-harpoon-jump`.
-  The termux-app fork invokes it on a `termux://zellij-jump/<pane-id>` tap; it
-  runs `ssh remote 'zellij pipe --name jump_pane ...'` over the live
-  ControlMaster socket to focus the alerting pane via harpoon. `sync.sh` pushes
-  it to `~/bin/zellij-jump` (0700), creating `~/bin` if absent. It prepends the
-  mise shims dir to PATH because `zellij` is mise-managed and otherwise absent
-  from the non-interactive `ssh remote` PATH. Requires a working `remote` alias
-  in the phone `~/.ssh/config` (see `ssh-controlmaster.config` below) and
-  harpoon built with the `jump_pane` pipe handler on the remote.
-  **Transport bounds:** the invocation is wrapped in `timeout 15` (needs
-  Termux `coreutils`, present in the base install) with
-  `ConnectTimeout`/`ServerAliveInterval`/`ServerAliveCountMax` ssh options, so
-  a remote `zellij pipe` client that hangs after delivering the jump can hold
-  a ControlMaster session slot for at most ~15s — hung clients can no longer
-  accumulate and exhaust sshd `MaxSessions` (the 2026-07-08..10 dead-taps
-  incident). The pipe keeps an explicit `--plugin` target (never broadcast)
-  and passes no `--plugin-configuration`, matching the keybind-launched warm
-  harpoon instance's empty plugin configuration. After editing, re-run
-  `./termux/sync.sh` to deliver the updated script to the phone.
-- `herdr-jump` — phone-side handler script for
-  `termux://herdr-jump/<terminal-id>`. The termux-app fork invokes it after an
-  ntfy tap. It reuses the same bounded SSH ControlMaster side channel and calls
-  remote `~/.local/bin/herdr-agent-jump`, which resolves the stable terminal id
-  through `herdr agent list` and focuses the agent's current pane with
-  `herdr agent focus`. `sync.sh` deploys it to `~/bin/herdr-jump` (0700).
-  The remote helper is chezmoi-managed from
-  `dot_local/bin/executable_herdr-agent-jump`; run `chezmoi apply` on the remote
-  before testing taps. Herdr must be running on its default socket.
-- `ssh-controlmaster.config` — phone `~/.ssh/config` snippet enabling SSH
-  connection multiplexing for the `ntfy-harpoon-jump` feature. `sync.sh`
-  marker-guards its append into the phone config (idempotent). It makes the
-  persistent interactive `ssh -> remote zellij` session the ControlMaster, so a
-  tap-time side-channel `ssh remote 'zellij pipe --name jump_pane ...'` reuses
-  the LIVE connection instead of a fresh login. NOT chezmoi-deployed
-  (Constitution VII); host alias/user reference the phone's own `~/.ssh/config`
-  (no secrets here). Idempotence is sentinel-fenced: a re-run that finds the
-  managed marker is a no-op. **Caveat:** if you already keep your OWN hand-written
-  `Host remote` ControlMaster block in the phone `~/.ssh/config`, `sync.sh` does
-  not detect it and will append the managed block too (ssh first-match-wins keeps
-  behavior correct); delete one of the two stanzas if you want a single copy.
+Files in this `termux/` directory are **docs + deprecated helpers only** —
+chezmoi ignores them on every profile (no more `~/termux` staging deploy).
 
-## SSH private key (pull from 1Password)
-
-`setup-ssh-key.sh` runs **on the phone** (not pushed via ADB) to fetch a shared
-SSH private key from 1Password into Termux `~/.ssh`, so you can ssh out with
-native openssh.
-
-Why a helper: `op` has no native Termux build (glibc vs Android bionic), so the
-script runs `op` inside a `proot-distro` Debian guest *only to fetch the key*,
-authenticated headlessly by the same service-account token file the harness
-uses (`~/.config/agent-harness/op-service-token`). The key is bind-mounted
-straight into Termux `~/.ssh`; you ssh from bare Termux.
-
-We accept a single shared key across machines (low stakes) rather than a
-per-device key.
-
-One-time, on the phone:
+## Bootstrap on the phone
 
 ```bash
-# 1. ensure the ops_... service-account token file exists
-mkdir -p ~/.config/agent-harness && chmod 700 ~/.config/agent-harness
-printf '%s' 'ops_...' > ~/.config/agent-harness/op-service-token
-chmod 600 ~/.config/agent-harness/op-service-token
+pkg install -y chezmoi git openssh coreutils
 
-# 2. run the bootstrap (default ref points at the homelab SSH key)
-bash setup-ssh-key.sh
+mkdir -p ~/.config/chezmoi
+cat > ~/.config/chezmoi/chezmoi.yaml <<'EOF'
+data:
+  profile: "termux"
+EOF
+
+# Private repo: use the already-authorized homelab key (or HTTPS + token).
+chezmoi init --apply git@github.com:cartwmic/dotfiles.git
+# If the source is already cloned elsewhere:
+#   chezmoi init --source ~/path/to/dotfiles --apply
 ```
 
-The key is the `cartwmic-homelab ssh key` SSH_KEY item in the `developer`
-vault (its public key is the `...Np5uH` blob distributed via
-`modify_authorized_keys`). The default `OP_SSH_KEY_REF` includes
-`?ssh-format=openssh` so `op` returns native OpenSSH format rather than the
-flaky default PKCS#8. Override `OP_SSH_KEY_REF` for a different key. Bump
-`OP_VERSION` in the script as the 1Password CLI releases.
+After apply:
 
-## Sync to device
+- `ssh cartwmic-server` / `ssh remote` → `cartwmic@10.19.1.221` via `~/.ssh/homelab`
+- `ssh macbook` → `cartwmic@10.19.1.200` via `~/.ssh/homelab`
+- `ssh whonix-gw` / `ssh whonix-ws` → Whonix via `~/.ssh/whonix-homelab`
+- Jump handlers live in `~/bin/{zellij,herdr}-jump` (ControlMaster over `remote`)
 
-Phone must be reachable over ADB (`adb devices` shows it).
+## SSH key provision
+
+`05_provision_termux_ssh_keys` is non-fatal:
+
+1. Keeps keys that already match the expected fingerprints
+2. Migrates `~/.ssh/id_ed25519` → `~/.ssh/homelab` when fingerprints match
+3. Otherwise fetches from 1Password inside `proot-distro` using
+   `~/.config/agent-harness/op-service-token` (same pattern as the old
+   `setup-ssh-key.sh`)
+
+References:
+
+- Homelab: `op://developer/cartwmic-homelab ssh key/private key?ssh-format=openssh`
+  (fingerprint `SHA256:s1NF+DDqZKlvvy/wDQXBACMs3jb/cjkvy/UpOYbypOQ`)
+- Whonix: `op://developer/whonix-homelab/private key?ssh-format=openssh`
+  (fingerprint `SHA256:oNPHkrMebH0d0dq6B+gexDeimXdUbDHh38dHf3EGpEE`)
+
+## Deprecated: `sync.sh` / ADB push
+
+`./termux/sync.sh` now refuses to push and prints the chezmoi bootstrap
+reminder. Do not use ADB to overwrite phone config — edit sources under
+`dot_termux/`, `bin/`, `private_dot_ssh/` and apply on the phone.
+
+## Pulling live phone drift back into the repo
 
 ```bash
-./termux/sync.sh
-```
-
-Or manually:
-
-```bash
-adb push termux/termux.properties /data/local/tmp/termux.properties.new
-adb shell 'run-as com.termux cp /data/local/tmp/termux.properties.new \
-    files/home/.termux/termux.properties && \
-    rm /data/local/tmp/termux.properties.new'
-adb shell 'am broadcast --user 0 -a com.termux.app.reload_style com.termux'
-```
-
-## Pull from device (when editing on phone)
-
-```bash
-adb shell 'run-as com.termux cat files/home/.termux/termux.properties' \
-    > termux/termux.properties
-adb shell 'run-as com.termux cat files/home/.termux/font.ttf' \
-    > termux/font.ttf
+scp phone:.termux/termux.properties dot_termux/termux.properties
+scp phone:bin/zellij-jump bin/executable_zellij-jump
+scp phone:bin/herdr-jump bin/executable_herdr-jump
 ```

@@ -1,7 +1,8 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
-# setup-ssh-key.sh — fetch a shared SSH private key from 1Password into
-# Termux's ~/.ssh so you can ssh out from the phone with native openssh.
+# DEPRECATED entrypoint: prefer chezmoi profile "termux" +
+# run_once_after_05_provision_termux_ssh_keys.sh.tmpl.
+# This script remains as a manual/proot fallback that writes ~/.ssh/homelab.
 #
 # Design (matches the Mac/agent-harness setup):
 #   - `op` does not run natively on Termux (glibc vs Android bionic), so we
@@ -29,7 +30,7 @@ set -euo pipefail
 # OpenSSH format (the default PKCS#8 'BEGIN PRIVATE KEY' is flaky for ed25519).
 OP_SSH_KEY_REF="${OP_SSH_KEY_REF:-op://developer/cartwmic-homelab ssh key/private key?ssh-format=openssh}"
 OP_TOKEN_FILE="${OP_TOKEN_FILE:-$HOME/.config/agent-harness/op-service-token}"
-KEY_PATH="${KEY_PATH:-$HOME/.ssh/id_ed25519}"
+KEY_PATH="${KEY_PATH:-$HOME/.ssh/homelab}"
 DISTRO="${DISTRO:-debian}"
 OP_VERSION="${OP_VERSION:-2.31.1}"   # bump as needed; https://app-updates.agilebits.com/product_history/CLI2
 OP_ARCH="${OP_ARCH:-arm64}"
