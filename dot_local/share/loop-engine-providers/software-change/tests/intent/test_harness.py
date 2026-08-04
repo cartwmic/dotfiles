@@ -288,6 +288,31 @@ class HarnessTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertEqual(observation["classification"], "indeterminate")
 
+    def test_binding_consensus_contradiction_is_indeterminate(self):
+        response = copy.deepcopy(self.response)
+        response["evidence"][1]["metadata"]["passed"] = False
+        completed, observation = self.observe(response)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertEqual(observation["classification"], "indeterminate")
+
+    def test_verdict_precedence_truth_table(self):
+        spec = importlib.util.spec_from_file_location("intent_report_truth_table", REPORT)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        rows = [
+            (None, True, True, True, True, True, "indeterminate"),
+            (False, True, True, True, True, True, "indeterminate"),
+            (True, True, True, False, True, True, "indeterminate"),
+            (True, False, True, True, True, True, "verdict_mismatch"),
+            (True, True, False, False, True, True, "verdict_mismatch"),
+            (True, True, True, True, True, True, "identity"),
+            (True, False, True, True, False, True, "identity"),
+        ]
+        for row in rows:
+            with self.subTest(row=row):
+                self.assertEqual(module.verdict_stage(*row[:6])[0], row[6])
+
     def test_unknown_or_malformed_identity_is_indeterminate(self):
         response = copy.deepcopy(self.response)
         response["evidence"][0]["metadata"]["reason"] = "missing identity"
