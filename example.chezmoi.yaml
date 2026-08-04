@@ -1,4 +1,18 @@
 # Place this file in ~/.config/chezmoi
+#
+# Profiles:
+#   personal           — full Mac/Linux desktop + agent harness
+#   axon-work-computer — work laptop (subset of personal)
+#   termux             — Android Termux (SSH jump host + .termux + jump scripts)
+#
+# Termux bootstrap:
+#   pkg install chezmoi git openssh
+#   mkdir -p ~/.config/chezmoi
+#   cat > ~/.config/chezmoi/chezmoi.yaml <<'EOF'
+#   data:
+#     profile: "termux"
+#   EOF
+#   chezmoi init --apply <git-remote>
 data:
   profile: "personal"
 

@@ -21,3 +21,8 @@
 .codex/prompts/opsx-archive.md
 .codex/prompts/opsx-explore.md
 .codex/prompts/opsx-propose.md
+
+# Retired 2026-08-04: Termux config is first-class via profile "termux"
+# (dot_termux / bin/*-jump / SSH modify). Remove the old ~/termux staging tree
+# that sync.sh previously pushed from.
+termux

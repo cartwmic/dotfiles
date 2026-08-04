@@ -13,6 +13,52 @@ docs/
 !.codex/AGENTS.md
 !.codex/config.toml
 adr/
+# Retired staging tree: Termux is first-class via profile "termux"
+# (.termux/, bin/*-jump, .ssh). Keep the git `termux/` docs/helpers, but do
+# not deploy them to ~/termux on any profile.
+termux
+termux/**
+
+{{- if eq .profile "termux" }}
+# Termux is a thin outbound/jump host — skip the desktop/agent surface area.
+.zshrc
+.zshenv
+.zsh_plugins.txt
+.claude
+.claude/**
+.codex
+.codex/**
+.config
+.config/**
+.local
+.local/**
+.pi
+.pi/**
+.vibe
+.vibe/**
+Library
+Library/**
+README.md
+utils.sh
+00_install_mise.sh
+10_mise_bootstrap.sh
+20_apply_harness_config.sh
+30_apply_pi_patches.sh
+40_apply_zellij_permissions.sh
+50_build_loop_engine_providers.sh
+60_configure_rustdesk.sh
+70_load_sync_claude_pi_auth_agent.sh
+{{- end }}
+
+{{- if ne .profile "termux" }}
+# Phone-only destinations — never apply onto personal/work machines.
+.termux
+.termux/**
+bin
+bin/**
+05_provision_termux_ssh_keys.sh
+{{- end }}
+
 {{- if ne .profile "personal" }}
 Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 .local/bin/sync-claude-pi-auth.sh

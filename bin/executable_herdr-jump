@@ -1,0 +1,18 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# herdr-jump <terminal-id> — invoked by the termux-app fork deep-link handler
+# (termux://herdr-jump/<terminal-id>). Reuse the live SSH ControlMaster and ask
+# the remote helper to resolve the stable terminal id to its current Herdr pane.
+
+terminal_id="${1:-}"
+case "$terminal_id" in
+  term_*) ;;
+  *) exit 0 ;;
+esac
+hex="${terminal_id#term_}"
+case "$hex" in
+  ""|*[!0-9a-f]*) exit 0 ;;
+esac
+
+exec timeout 15 ssh \
+  -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
+  remote "PATH=\$HOME/.local/share/mise/shims:\$PATH \$HOME/.local/bin/herdr-agent-jump '$terminal_id'"
