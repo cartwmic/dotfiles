@@ -55,6 +55,23 @@ def declared_pass_identities(manifest, axis):
     }
 
 
+def verdict_stage(
+    intent_ready, selected_axis, binding_final, consensus_final,
+    expected_axis, expected_final,
+):
+    """Apply verdict precedence before any natural-language identity handling."""
+    values = (intent_ready, selected_axis, binding_final, consensus_final)
+    if any(not isinstance(value, bool) for value in values):
+        return "indeterminate", "verdict evidence is unavailable or non-boolean"
+    if intent_ready is not True:
+        return "indeterminate", "intent-ready verdict did not pass"
+    if binding_final != consensus_final:
+        return "indeterminate", "binding intent-semantic and consensus verdicts contradict"
+    if selected_axis != expected_axis or binding_final != expected_final:
+        return "verdict_mismatch", None
+    return "identity", None
+
+
 def write_observation(args, case, category, errors, notes, raw, expected_final, expected_final_axis):
     observed_axis = (raw.get("axes", {}).get(case["selected_axis"]) or {}).get("passed")
     observed_final = raw.get("verdicts", {}).get("intent-semantic")
@@ -194,8 +211,6 @@ def classify(args):
             errors.append(f"expected exactly one {gate} verdict, found {len(rows)}")
         elif not isinstance(rows[0].get("passed"), bool):
             errors.append(f"{gate} verdict is not boolean")
-        elif gate == "intent-ready" and rows[0].get("passed") is not True:
-            errors.append("intent-ready verdict did not pass")
     for axis, rows in axis_records.items():
         if len(rows) != 1:
             errors.append(f"expected exactly one {axis} evidence record, found {len(rows)}")
@@ -313,22 +328,31 @@ def classify(args):
         if any(row.get("route") not in {"delegated", "intercepted"} for row in routes):
             errors.append("route log contains unknown route")
 
+    expected_axis_pass = case["expected_axis"]["verdict"] == "pass"
+    expected_final_pass = expected_final["verdict"] == "pass"
+    stage, stage_error = verdict_stage(
+        verdicts.get("intent-ready"),
+        selected.get("passed") if selected else None,
+        verdicts.get("intent-semantic"),
+        consensus.get("passed") if consensus else None,
+        expected_axis_pass,
+        expected_final_pass,
+    )
+    if stage == "indeterminate" and stage_error not in errors:
+        errors.append(stage_error)
     if errors:
         return write_observation(
             args, case, "indeterminate", errors, notes, raw,
             expected_final, expected_final_axis,
         )
 
-    expected_axis_pass = case["expected_axis"]["verdict"] == "pass"
-    expected_final_pass = expected_final["verdict"] == "pass"
-    verdict_mismatches = []
-    if selected.get("passed") != expected_axis_pass:
-        verdict_mismatches.append("selected axis verdict mismatch")
-    if verdicts.get("intent-semantic") != expected_final_pass:
-        verdict_mismatches.append("binding intent-semantic verdict mismatch")
-    if consensus.get("passed") != expected_final_pass:
-        verdict_mismatches.append("consensus verdict mismatch")
-    if verdict_mismatches:
+    if stage == "verdict_mismatch":
+        verdict_mismatches = []
+        if selected.get("passed") != expected_axis_pass:
+            verdict_mismatches.append("selected axis verdict mismatch")
+        if verdicts.get("intent-semantic") != expected_final_pass:
+            verdict_mismatches.append("binding intent-semantic verdict mismatch")
+            verdict_mismatches.append("consensus verdict mismatch")
         return write_observation(
             args, case, "verdict_mismatch", verdict_mismatches, notes, raw,
             expected_final, expected_final_axis,
@@ -403,11 +427,7 @@ def derive_release_classification(manifest, case, row):
     }
     if any(len(items) != 1 for items in verdict_groups.values()):
         return "indeterminate", None, None
-    if any(not isinstance(items[0].get("passed"), bool) for items in verdict_groups.values()):
-        return "indeterminate", None, None
     verdicts = {gate: items[0].get("passed") for gate, items in verdict_groups.items()}
-    if verdicts["intent-ready"] is not True:
-        return "indeterminate", None, verdicts.get("intent-semantic")
 
     evidence = result.get("evidence", []) if isinstance(result.get("evidence"), list) else []
     axis_records = {}
@@ -468,11 +488,17 @@ def derive_release_classification(manifest, case, row):
     expected_final_pass = case["expected_final"]["verdict"] == "pass"
     observed_axis = selected.get("passed")
     observed_final = verdicts.get("intent-semantic")
-    if (
-        observed_axis != expected_axis_pass
-        or observed_final != expected_final_pass
-        or consensus.get("passed") != expected_final_pass
-    ):
+    stage, _ = verdict_stage(
+        verdicts.get("intent-ready"),
+        observed_axis,
+        observed_final,
+        consensus.get("passed"),
+        expected_axis_pass,
+        expected_final_pass,
+    )
+    if stage == "indeterminate":
+        return "indeterminate", observed_axis, observed_final
+    if stage == "verdict_mismatch":
         return "verdict_mismatch", observed_axis, observed_final
 
     selected_identity = leading_identity(selected.get("reason"))
