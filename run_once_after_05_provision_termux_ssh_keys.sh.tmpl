@@ -5,16 +5,16 @@ exit 0
 {{- else }}
 #!/data/data/com.termux/files/usr/bin/bash
 #
-# Provision Termux SSH private keys into ~/.ssh:
-#   ~/.ssh/homelab       — cartwmic-homelab (shared with personal machines)
-#   ~/.ssh/whonix-homelab — Whonix Gateway/Workstation access
+# Always fetch Termux SSH private keys from 1Password into ~/.ssh:
+#   ~/.ssh/homelab       — cartwmic-homelab
+#   ~/.ssh/whonix-homelab — Whonix Gateway/Workstation
 #
-# Strategy (non-fatal — never blocks chezmoi apply):
-#   1. If the destination already has the expected fingerprint, leave it.
-#   2. For homelab: if ~/.ssh/id_ed25519 matches, copy/migrate it.
-#   3. Otherwise try 1Password via proot-distro (op has no native Termux build),
-#      using the agent-harness service-account token when present.
-#   4. On any missing dependency / auth failure, warn and exit 0.
+# Requires ~/.config/agent-harness/op-service-token (ops_...). If missing,
+# the script reads the Android clipboard via termux-clipboard-get (copy the
+# credential from the 1Password Android app, switch back to Termux, apply).
+# There is no native op on Termux, so we run op inside a proot-distro Debian
+# guest. Non-fatal: missing token / fetch failure warns and exits 0 so the
+# rest of chezmoi apply still lands.
 #
 # Expected fingerprints (ed25519):
 #   homelab  SHA256:s1NF+DDqZKlvvy/wDQXBACMs3jb/cjkvy/UpOYbypOQ
@@ -27,7 +27,6 @@ LOG_PREFIX="[${SCRIPT_NAME}]"
 
 HOMELAB_PATH="${HOMELAB_PATH:-$HOME/.ssh/homelab}"
 WHONIX_PATH="${WHONIX_PATH:-$HOME/.ssh/whonix-homelab}"
-LEGACY_HOMELAB_PATH="${LEGACY_HOMELAB_PATH:-$HOME/.ssh/id_ed25519}"
 OP_TOKEN_FILE="${OP_TOKEN_FILE:-$HOME/.config/agent-harness/op-service-token}"
 DISTRO="${DISTRO:-debian}"
 OP_VERSION="${OP_VERSION:-2.31.1}"
@@ -42,20 +41,12 @@ log()  { printf '%s %s\n' "$LOG_PREFIX" "$1" >&2; }
 warn() { printf '%s WARN: %s\n' "$LOG_PREFIX" "$1" >&2; }
 
 fingerprint_of() {
-  local path="$1"
-  ssh-keygen -lf "$path" 2>/dev/null | awk '{print $2}'
+  ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2}'
 }
 
 ensure_ssh_dir() {
   mkdir -p "$HOME/.ssh"
   chmod 700 "$HOME/.ssh"
-}
-
-key_ok() {
-  local path="$1"
-  local want="$2"
-  [ -f "$path" ] || return 1
-  [ "$(fingerprint_of "$path")" = "$want" ]
 }
 
 write_key_from_stdin() {
@@ -74,48 +65,58 @@ write_key_from_stdin() {
   chmod 644 "${path}.pub"
 }
 
-migrate_or_keep_homelab() {
-  if key_ok "$HOMELAB_PATH" "$HOMELAB_FP"; then
-    log "homelab key already present with expected fingerprint"
-    return 0
-  fi
-  if key_ok "$LEGACY_HOMELAB_PATH" "$HOMELAB_FP"; then
-    log "migrating $LEGACY_HOMELAB_PATH -> $HOMELAB_PATH"
-    cp "$LEGACY_HOMELAB_PATH" "$HOMELAB_PATH"
-    chmod 600 "$HOMELAB_PATH"
-    if [ -f "${LEGACY_HOMELAB_PATH}.pub" ]; then
-      cp "${LEGACY_HOMELAB_PATH}.pub" "${HOMELAB_PATH}.pub"
-      chmod 644 "${HOMELAB_PATH}.pub"
-    else
-      ssh-keygen -y -f "$HOMELAB_PATH" >"${HOMELAB_PATH}.pub"
-      chmod 644 "${HOMELAB_PATH}.pub"
-    fi
-    return 0
-  fi
-  return 1
-}
-
-keep_whonix() {
-  if key_ok "$WHONIX_PATH" "$WHONIX_FP"; then
-    log "whonix key already present with expected fingerprint"
-    return 0
-  fi
-  return 1
-}
-
 have_op_token() {
   [ -r "$OP_TOKEN_FILE" ] || return 1
-  case "$(cat "$OP_TOKEN_FILE")" in
+  case "$(tr -d '\n\r' < "$OP_TOKEN_FILE")" in
     ops_*) return 0 ;;
     *) return 1 ;;
   esac
 }
 
-ensure_proot_op() {
-  command -v proot-distro >/dev/null 2>&1 || {
-    warn "proot-distro not installed; cannot fetch keys from 1Password"
+# If the token file is absent, accept an ops_... value from the Android
+# clipboard (1Password app → copy credential → switch to Termux → apply).
+ensure_op_token() {
+  if have_op_token; then
+    return 0
+  fi
+
+  if ! command -v termux-clipboard-get >/dev/null 2>&1; then
+    warn "termux-clipboard-get missing; pkg install termux-api (and install Termux:API app)"
     return 1
-  }
+  fi
+
+  local clip
+  clip="$(termux-clipboard-get 2>/dev/null | tr -d '\n\r' || true)"
+  case "$clip" in
+    ops_*)
+      mkdir -p "$(dirname "$OP_TOKEN_FILE")"
+      chmod 700 "$(dirname "$OP_TOKEN_FILE")"
+      umask 077
+      printf '%s\n' "$clip" >"$OP_TOKEN_FILE"
+      chmod 600 "$OP_TOKEN_FILE"
+      log "wrote op service-account token from clipboard -> $OP_TOKEN_FILE"
+      # Best-effort clear so the ops_... token does not linger on the clipboard.
+      if command -v termux-clipboard-set >/dev/null 2>&1; then
+        termux-clipboard-set '' >/dev/null 2>&1 || true
+      fi
+      return 0
+      ;;
+    *)
+      warn "no op-service-token at $OP_TOKEN_FILE and clipboard is not an ops_... token"
+      warn "copy credential from 1Password item 'Service Account Auth Token: developer-sa', then re-run chezmoi apply"
+      return 1
+      ;;
+  esac
+}
+
+ensure_proot_op() {
+  if ! command -v proot-distro >/dev/null 2>&1; then
+    log "installing proot-distro"
+    pkg install -y proot-distro || {
+      warn "failed to install proot-distro"
+      return 1
+    }
+  fi
   if ! proot-distro list --installed 2>/dev/null | grep -qw "$DISTRO"; then
     log "installing proot-distro guest: $DISTRO"
     proot-distro install "$DISTRO" || {
@@ -147,12 +148,6 @@ fetch_key() {
   local want_fp="$3"
   local label="$4"
 
-  have_op_token || {
-    warn "no op service-account token at $OP_TOKEN_FILE; cannot fetch $label"
-    return 1
-  }
-  ensure_proot_op || return 1
-
   log "fetching $label from 1Password"
   local material
   if ! material=$(
@@ -169,7 +164,7 @@ fetch_key() {
     warn "fetched $label was not an OpenSSH private key"
     return 1
   fi
-  if ! key_ok "$path" "$want_fp"; then
+  if [ "$(fingerprint_of "$path")" != "$want_fp" ]; then
     warn "$label fingerprint mismatch (got $(fingerprint_of "$path"); want $want_fp)"
     return 1
   fi
@@ -184,15 +179,18 @@ if ! command -v ssh-keygen >/dev/null 2>&1; then
   exit 0
 fi
 
-if ! migrate_or_keep_homelab; then
-  fetch_key "$HOMELAB_REF" "$HOMELAB_PATH" "$HOMELAB_FP" "homelab" \
-    || warn "homelab key not provisioned — ssh cartwmic-server/macbook will fail until fixed"
+if ! ensure_op_token; then
+  exit 0
 fi
 
-if ! keep_whonix; then
-  fetch_key "$WHONIX_REF" "$WHONIX_PATH" "$WHONIX_FP" "whonix-homelab" \
-    || warn "whonix key not provisioned — ssh whonix-gw/ws will fail until fixed"
+if ! ensure_proot_op; then
+  exit 0
 fi
+
+fetch_key "$HOMELAB_REF" "$HOMELAB_PATH" "$HOMELAB_FP" "homelab" \
+  || warn "homelab key not provisioned"
+fetch_key "$WHONIX_REF" "$WHONIX_PATH" "$WHONIX_FP" "whonix-homelab" \
+  || warn "whonix key not provisioned"
 
 exit 0
 {{- end }}

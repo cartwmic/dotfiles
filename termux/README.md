@@ -43,13 +43,21 @@ After apply:
 
 ## SSH key provision
 
-`05_provision_termux_ssh_keys` is non-fatal:
+`05_provision_termux_ssh_keys` **always** fetches both keys from 1Password
+(via `proot-distro` + `op`; there is no native Termux `op` build). It does
+not migrate or reuse existing key files.
 
-1. Keeps keys that already match the expected fingerprints
-2. Migrates `~/.ssh/id_ed25519` → `~/.ssh/homelab` when fingerprints match
-3. Otherwise fetches from 1Password inside `proot-distro` using
-   `~/.config/agent-harness/op-service-token` (same pattern as the old
-   `setup-ssh-key.sh`)
+Prerequisite — service-account token at
+`~/.config/agent-harness/op-service-token`:
+
+1. In the 1Password Android app, open
+   `Service Account Auth Token: developer-sa` → copy the `credential` (`ops_...`).
+2. Switch back to Termux and run `chezmoi apply`.
+3. The script reads the clipboard via `termux-clipboard-get`, writes the token
+   file (mode 600), clears the clipboard, then fetches the SSH keys.
+
+Requires the Termux:API Android app + `pkg install termux-api` (already on this
+phone). Re-copy from 1Password only when rotating the SA token.
 
 References:
 
