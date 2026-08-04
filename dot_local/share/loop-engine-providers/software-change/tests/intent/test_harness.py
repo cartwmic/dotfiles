@@ -72,6 +72,14 @@ class HarnessTests(unittest.TestCase):
                         "consensus_model": CONSENSUS_MODEL,
                     },
                 },
+                {
+                    "kind": "intent-document",
+                    "metadata": {
+                        "gate_id": "intent-ready",
+                        "artifact_path": "intent.json",
+                        "revision": "1",
+                    },
+                },
             ],
             "diagnostics": [],
         }
@@ -165,9 +173,22 @@ class HarnessTests(unittest.TestCase):
                     "axis_model": AXIS_MODEL,
                     "consensus_model": CONSENSUS_MODEL,
                 }},
+                {"kind": "intent-document", "metadata": {
+                    "gate_id": "intent-ready",
+                    "artifact_path": "intent.json",
+                    "revision": "1",
+                }},
             ],
             "diagnostics": [],
         }
+        if final_passed is False:
+            result["evidence"].append({
+                "kind": "gate-diagnosis",
+                "metadata": {
+                    "gate_ids": ["intent-ready", "intent-semantic"],
+                    "reasons": ["synthetic diagnosis"],
+                },
+            })
         agreement = classification in {"match", "classification_variance"}
         return {
             "case": case_id,
@@ -264,6 +285,13 @@ class HarnessTests(unittest.TestCase):
         response["evidence"][0]["metadata"]["passed"] = False
         response["evidence"][1]["metadata"]["passed"] = False
         response["evidence"][1]["metadata"]["axes"][0]["passed"] = False
+        response["evidence"].append({
+            "kind": "gate-diagnosis",
+            "metadata": {
+                "gate_ids": ["intent-ready", "intent-semantic"],
+                "reasons": ["synthetic wrong-verdict diagnosis"],
+            },
+        })
         completed, observation = self.observe(response)
         self.assertNotEqual(completed.returncode, 0)
         self.assertEqual(observation["classification"], "verdict_mismatch")
@@ -327,6 +355,17 @@ class HarnessTests(unittest.TestCase):
         scalar_metadata = copy.deepcopy(self.response)
         scalar_metadata["evidence"][0]["metadata"] = "bad"
         malformed_diagnostic = {"kind": "evaluation_error", "diagnostics": ["bad"]}
+        extra_verdict_object = copy.deepcopy(self.response)
+        extra_verdict_object["verdicts"].append({})
+        malformed_diagnostic_object = copy.deepcopy(self.response)
+        malformed_diagnostic_object["diagnostics"] = [{}]
+        duplicate_document = copy.deepcopy(self.response)
+        duplicate_document["evidence"].append(copy.deepcopy(self.response["evidence"][3]))
+        malformed_positive_diagnosis = copy.deepcopy(self.response)
+        malformed_positive_diagnosis["evidence"].append({
+            "kind": "gate-diagnosis",
+            "metadata": {"gate_ids": ["intent-ready", "intent-semantic"]},
+        })
         list_axis_id = copy.deepcopy(self.response)
         list_axis_id["evidence"][1]["metadata"]["axes"][0]["axis"] = ["bad"]
         list_axis_reason = copy.deepcopy(self.response)
@@ -342,6 +381,10 @@ class HarnessTests(unittest.TestCase):
             ("scalar evidence item", scalar_evidence_item),
             ("scalar metadata", scalar_metadata),
             ("scalar diagnostic", malformed_diagnostic),
+            ("extra verdict object", extra_verdict_object),
+            ("malformed diagnostic object", malformed_diagnostic_object),
+            ("duplicate intent document", duplicate_document),
+            ("malformed positive diagnosis", malformed_positive_diagnosis),
             ("list embedded axis id", list_axis_id),
             ("list axis reason", list_axis_reason),
             ("list consensus reason", list_consensus_reason),
@@ -353,6 +396,55 @@ class HarnessTests(unittest.TestCase):
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertEqual(observation["classification"], "indeterminate")
                 self.assertIn("provider_response_text", observation["raw"])
+
+    def test_retained_raw_malformed_containers_are_indeterminate(self):
+        spec = importlib.util.spec_from_file_location("intent_report_raw_parser", REPORT)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        case = next(item for item in self.manifest["cases"] if item["id"] == "sa-001-product-target")
+        null_verdicts = copy.deepcopy(self.response)
+        null_verdicts["verdicts"] = None
+        null_evidence = copy.deepcopy(self.response)
+        null_evidence["evidence"] = None
+        extra_scalar_verdict = copy.deepcopy(self.response)
+        extra_scalar_verdict["verdicts"].append("bad")
+        extra_object_verdict = copy.deepcopy(self.response)
+        extra_object_verdict["verdicts"].append({})
+        extra_scalar_evidence = copy.deepcopy(self.response)
+        extra_scalar_evidence["evidence"].append("bad")
+        null_diagnostics = copy.deepcopy(self.response)
+        null_diagnostics["diagnostics"] = None
+        malformed_diagnostic_object = copy.deepcopy(self.response)
+        malformed_diagnostic_object["diagnostics"] = [{}]
+        duplicate_document = copy.deepcopy(self.response)
+        duplicate_document["evidence"].append(copy.deepcopy(self.response["evidence"][3]))
+        malformed_positive_diagnosis = copy.deepcopy(self.response)
+        malformed_positive_diagnosis["evidence"].append({
+            "kind": "gate-diagnosis",
+            "metadata": {"gate_ids": ["intent-ready", "intent-semantic"]},
+        })
+        rows = [
+            ("null result", None),
+            ("list result", []),
+            ("null verdicts", null_verdicts),
+            ("null evidence", null_evidence),
+            ("extra scalar verdict", extra_scalar_verdict),
+            ("extra object verdict", extra_object_verdict),
+            ("extra scalar evidence", extra_scalar_evidence),
+            ("null diagnostics", null_diagnostics),
+            ("malformed diagnostic object", malformed_diagnostic_object),
+            ("duplicate intent document", duplicate_document),
+            ("malformed positive diagnosis", malformed_positive_diagnosis),
+        ]
+        for name, result in rows:
+            with self.subTest(name=name):
+                record = self.synthetic_record(case["id"], 1)
+                record["raw"]["provider_response_text"] = json.dumps({"result": result})
+                classification, _, _ = module.derive_release_classification(
+                    self.manifest, case, record
+                )
+                self.assertEqual(classification, "indeterminate")
 
     def test_declared_failing_sibling_gets_no_variance_credit(self):
         case_id = "sa-001-implementation-location"

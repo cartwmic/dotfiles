@@ -86,6 +86,28 @@ def object_records(value, label, errors):
     return records
 
 
+def valid_diagnostic(record):
+    return (
+        isinstance(record.get("code"), str)
+        and isinstance(record.get("message"), str)
+        and ("path" not in record or isinstance(record.get("path"), str))
+    )
+
+
+def valid_gate_diagnosis(metadata):
+    gate_ids = metadata.get("gate_ids")
+    reasons = metadata.get("reasons")
+    return (
+        isinstance(gate_ids, list)
+        and all(isinstance(gate, str) for gate in gate_ids)
+        and len(gate_ids) == len(set(gate_ids)) == 2
+        and set(gate_ids) == {"intent-ready", "intent-semantic"}
+        and isinstance(reasons, list)
+        and bool(reasons)
+        and all(isinstance(reason, str) and reason for reason in reasons)
+    )
+
+
 def write_observation(args, case, category, errors, notes, raw, expected_final, expected_final_axis):
     observed_axis = (raw.get("axes", {}).get(case["selected_axis"]) or {}).get("passed")
     observed_final = raw.get("verdicts", {}).get("intent-semantic")
@@ -171,6 +193,9 @@ def classify(args):
         errors.append("provider result is not an object")
         result = {}
     diagnostics = object_records(result.get("diagnostics", []), "diagnostics", errors)
+    for index, diagnostic in enumerate(diagnostics):
+        if not valid_diagnostic(diagnostic):
+            errors.append(f"diagnostics[{index}] has malformed code, message, or path")
     raw["diagnostics"] = diagnostics
     if args.provider_exit != 0:
         errors.append(f"provider exited {args.provider_exit}")
@@ -191,9 +216,13 @@ def classify(args):
         )
 
     verdict_records = object_records(result.get("verdicts"), "verdicts", errors)
+    expected_gates = ("intent-ready", "intent-semantic")
+    for index, row in enumerate(verdict_records):
+        if row.get("gate_id") not in expected_gates:
+            errors.append(f"verdicts[{index}] has unexpected or missing gate_id")
     verdict_groups = {
         gate: [row for row in verdict_records if row.get("gate_id") == gate]
-        for gate in ("intent-ready", "intent-semantic")
+        for gate in expected_gates
     }
     verdicts = {
         gate: rows[0].get("passed")
@@ -201,21 +230,39 @@ def classify(args):
         if len(rows) == 1
     }
     evidence = object_records(result.get("evidence"), "evidence", errors)
+    document_records = []
     axis_records = {}
     consensus_records = []
     rubric_records = []
+    diagnosis_records = []
     for index, item in enumerate(evidence):
         metadata = item.get("metadata")
         if not isinstance(metadata, dict):
             errors.append(f"evidence[{index}].metadata is not an object")
             continue
         axis = metadata.get("axis")
-        if item.get("kind") == "intent-judgment" and isinstance(axis, str) and axis:
+        kind = item.get("kind")
+        if kind == "intent-document" and metadata.get("gate_id") == "intent-ready":
+            document_records.append(metadata)
+            continue
+        if kind == "gate-diagnosis" and valid_gate_diagnosis(metadata):
+            diagnosis_records.append(metadata)
+            continue
+        if kind == "intent-judgment" and isinstance(axis, str) and axis:
             axis_records.setdefault(axis, []).append(metadata)
-        elif item.get("kind") == "intent-judgment-consensus":
+        elif kind == "intent-judgment-consensus":
             consensus_records.append(metadata)
-        elif item.get("kind") == "judge-rubrics" and metadata.get("gate_id") == "intent-semantic":
+        elif kind == "judge-rubrics" and metadata.get("gate_id") == "intent-semantic":
             rubric_records.append(metadata)
+        else:
+            errors.append(f"evidence[{index}] has unexpected kind or malformed identity")
+    if len(document_records) != 1:
+        errors.append(f"expected exactly one intent-document evidence record, found {len(document_records)}")
+    expected_diagnoses = 1 if verdicts.get("intent-semantic") is False else 0
+    if len(diagnosis_records) != expected_diagnoses:
+        errors.append(
+            "gate-diagnosis evidence cardinality does not match binding intent-semantic verdict"
+        )
     axes = {axis: rows[0] for axis, rows in axis_records.items() if len(rows) == 1}
     consensus = consensus_records[0] if len(consensus_records) == 1 else None
     rubric_record = rubric_records[0] if len(rubric_records) == 1 else None
@@ -448,39 +495,71 @@ def derive_release_classification(manifest, case, row):
         reply = json.loads(response_text)
     except Exception:
         return "indeterminate", None, None
-    result = reply.get("result", {}) if isinstance(reply, dict) else {}
-    if row.get("provider_exit") != 0 or result.get("kind") != "verdicts":
+    result = reply.get("result") if isinstance(reply, dict) else None
+    if (
+        not isinstance(result, dict)
+        or row.get("provider_exit") != 0
+        or result.get("kind") != "verdicts"
+    ):
         return "indeterminate", None, None
 
-    verdict_records = [item for item in result.get("verdicts", []) if isinstance(item, dict)]
+    diagnostics = result.get("diagnostics", [])
+    if not isinstance(diagnostics, list) or any(
+        not isinstance(item, dict) or not valid_diagnostic(item)
+        for item in diagnostics
+    ):
+        return "indeterminate", None, None
+    verdict_container = result.get("verdicts")
+    expected_gates = ("intent-ready", "intent-semantic")
+    if (
+        not isinstance(verdict_container, list)
+        or any(not isinstance(item, dict) for item in verdict_container)
+        or any(item.get("gate_id") not in expected_gates for item in verdict_container)
+    ):
+        return "indeterminate", None, None
+    verdict_records = verdict_container
     verdict_groups = {
         gate: [item for item in verdict_records if item.get("gate_id") == gate]
-        for gate in ("intent-ready", "intent-semantic")
+        for gate in expected_gates
     }
     if any(len(items) != 1 for items in verdict_groups.values()):
         return "indeterminate", None, None
     verdicts = {gate: items[0].get("passed") for gate, items in verdict_groups.items()}
 
-    evidence = result.get("evidence", []) if isinstance(result.get("evidence"), list) else []
+    evidence = result.get("evidence")
+    if not isinstance(evidence, list) or any(not isinstance(item, dict) for item in evidence):
+        return "indeterminate", None, verdicts.get("intent-semantic")
+    document_records = []
     axis_records = {}
     consensus_records = []
     rubric_records = []
+    diagnosis_records = []
     for item in evidence:
-        if not isinstance(item, dict):
-            continue
         metadata = item.get("metadata")
         if not isinstance(metadata, dict):
-            continue
+            return "indeterminate", None, verdicts.get("intent-semantic")
         axis = metadata.get("axis")
-        if item.get("kind") == "intent-judgment" and isinstance(axis, str) and axis:
+        kind = item.get("kind")
+        if kind == "intent-document" and metadata.get("gate_id") == "intent-ready":
+            document_records.append(metadata)
+            continue
+        if kind == "gate-diagnosis" and valid_gate_diagnosis(metadata):
+            diagnosis_records.append(metadata)
+            continue
+        if kind == "intent-judgment" and isinstance(axis, str) and axis:
             axis_records.setdefault(axis, []).append(metadata)
-        elif item.get("kind") == "intent-judgment-consensus":
+        elif kind == "intent-judgment-consensus":
             consensus_records.append(metadata)
-        elif item.get("kind") == "judge-rubrics" and metadata.get("gate_id") == "intent-semantic":
+        elif kind == "judge-rubrics" and metadata.get("gate_id") == "intent-semantic":
             rubric_records.append(metadata)
+        else:
+            return "indeterminate", None, verdicts.get("intent-semantic")
     selected_axis = case["selected_axis"]
+    expected_diagnoses = 1 if verdicts.get("intent-semantic") is False else 0
     if (
-        set(axis_records) != {selected_axis}
+        len(document_records) != 1
+        or len(diagnosis_records) != expected_diagnoses
+        or set(axis_records) != {selected_axis}
         or len(axis_records.get(selected_axis, [])) != 1
         or len(consensus_records) != 1
         or len(rubric_records) != 1
