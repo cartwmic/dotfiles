@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "targeted_attempts": 3,
   "axes": [
     "solution-agnostic",
@@ -7,6 +7,20 @@
     "scope-fenced",
     "constraints-are-limits",
     "problem-grounded"
+  ],
+  "release_core_cases": [
+    "sa-001-product-target",
+    "sa-001-implementation-location",
+    "sa-002-observable-behavior",
+    "sa-002-internal-mechanism",
+    "sa-003-public-contract",
+    "sa-003-incidental-channel",
+    "ov-001-release-property",
+    "ov-001-work-instruction",
+    "sa-002-externally-imposed-mechanism",
+    "cl-002-solution-preference",
+    "sf-001-closed-empty-scope",
+    "sf-001-open-empty-scope"
   ],
   "cases": [
     {

@@ -1,96 +1,127 @@
-# Intent classification release qualification
+# Intent classification conformance and calibration
 
-This directory binds released intent behavior to the exact classification authority published in frozen Explore guidance. It covers all 45 current rule/condition branches: 37 selected-axis branches, three deciding-policy branches, and five holistic branches.
+This directory preserves the complete 45-branch intent corpus while separating reproducible phase checks from bounded live-model evidence.
 
-`manifest.json` is the release corpus. Every row names a standalone intent fixture or a controlled decider challenge, selected axis, expected axis verdict and controlling identity, expected final verdict and policy identity, expected selected-axis identity for targeted consensus, and driver-visible or retained-regression status. Full-roster consensus may cite any supplied axis finding or an exact corrected identity. A challenge may declare separate full-roster final expectations when selecting the omitted owning axis changes the deciding policy.
+## Three evidence surfaces
 
-## Deterministic conformance
+1. **Deterministic conformance** validates executable branches, frozen Explore publication, manifest identities, fixtures, challenges, and the fixed release cohort. It makes no judge calls.
+2. **Release-core qualification** observes the twelve user-visible pass/fail contrasts three times each. Two expected verdicts qualify a case; all three observations remain evidence.
+3. **Extended characterization** observes any selected cases, or all 45 cases, once. It reports behavior but never claims release qualification.
+
+Production intent rubrics, consensus behavior, frozen-rubric enforcement, and non-intent semantic subjects are outside this harness change.
+
+## Deterministic phase checks
 
 ```sh
 python3 tests/intent/check_manifest.py
+python3 tests/intent/test_harness.py
+python3 -m py_compile tests/intent/*.py
+sh -n tests/intent/executable_run.sh
 ```
 
-This command makes no model calls. When `SC_BIN` is unset it first rebuilds the candidate provider, then invokes its `describe` role and rejects:
+`check_manifest.py` rebuilds the candidate provider when `SC_BIN` is unset, invokes `describe`, and rejects before live dispatch:
 
-- missing, duplicate, or orphaned executable, guide-index, or manifest identities;
-- changes to the accepted 45-branch release anchor;
-- authored Explore overview drift or verdict-bearing text in the identifier-only index;
-- malformed or path-escaping fixtures, rows, challenge responses, and pairings;
-- fixture or challenge content that differs from the independently anchored reviewed corpus digests;
-- axis identities owned by another axis or carrying the wrong verdict;
-- challenge rosters without exactly one declared response per selected axis.
+- missing, duplicate, malformed, or orphaned executable, guide-index, or manifest identities;
+- changes to the accepted 45-branch inventory;
+- authored Explore overview drift or verdict-bearing index prose;
+- malformed or path-escaping fixtures, challenges, responses, and pairings;
+- fixture or challenge bytes outside the reviewed digest anchors;
+- cross-axis identity ownership or verdict disagreement;
+- any change to the fixed six ordered release-core pass/fail pairs.
 
-Distinct paths and hashes preserve reviewed fixture identity; they do not by themselves prove semantic isolation. Full-roster real-model observations prove that every non-controlling axis passes for each live case.
+These checks belong in phase checkpoints. They require no network judge access.
+
+## Fixed release-core cohort
+
+`manifest.json.release_core_cases` contains twelve live fixtures:
+
+| Boundary | Pass | Fail |
+|---|---|---|
+| Product target / implementation location | `sa-001-product-target` | `sa-001-implementation-location` |
+| Observable behavior / internal mechanism | `sa-002-observable-behavior` | `sa-002-internal-mechanism` |
+| Public contract / incidental channel | `sa-003-public-contract` | `sa-003-incidental-channel` |
+| Finished release property / work instruction | `ov-001-release-property` | `ov-001-work-instruction` |
+| Externally imposed mechanism / unsourced preference | `sa-002-externally-imposed-mechanism` | `cl-002-solution-preference` |
+| Closed / open empty scope | `sf-001-closed-empty-scope` | `sf-001-open-empty-scope` |
+
+Run one complete qualification into a new artifact root:
 
 ```sh
-python3 -m unittest tests/intent/test_harness.py
+SC_PROFILE=release-core \
+SC_OUT=/tmp/sc-intent-release-core-1 \
+SC_CASE_JOBS=3 \
+SC_GAP=0 \
+sh tests/intent/executable_run.sh
 ```
 
-Harness regressions reject duplicate binding records, contradictory embedded consensus evidence, and unsafe controlled-model routing.
+Release-core accepts no case arguments. It produces exactly three targeted observations for each fixed case and no full-roster observations. Each case qualifies when at least two observations return the expected selected-axis and final verdicts.
 
-`SC_BIN` selects another provider binary. Default is `target/debug/software-change`.
+All 36 observations stay in one evidence set. One disagreement or indeterminate result remains visible and cannot be replaced by a case-only rerun. Two disagreements fail that case. Missing attempts, duplicate records, mixed candidate or rubric identities, cross-run evidence, or partial cohorts fail the report.
 
-## Live calibration and qualification
-
-Use smoke diagnostics while tuning one or more cases:
+Verify a saved report without judge access:
 
 ```sh
-SC_PROFILE=smoke SC_CASE_JOBS=3 SC_GAP=0 \
-  sh tests/intent/executable_run.sh pg-001-code-fact pg-002-problem-only
+python3 tests/intent/report.py verify-release \
+  /tmp/sc-intent-release-core-1/run.json
 ```
 
-Smoke mode makes one targeted observation per selected row, performs no full-roster observation, and reports `diagnostic-pass` or `diagnostic-fail`. It is not release evidence.
+## Observation classifications
 
-Run release qualification once candidate behavior is stable:
+Every normalized observation has one classification:
+
+- `match` — expected verdicts and exact expected identities;
+- `classification_variance` — expected passing verdict, but another declared passing condition owned by the selected axis; counts toward the verdict majority and remains separately reported;
+- `verdict_mismatch` — selected-axis or final verdict differs from the protected expectation;
+- `indeterminate` — malformed, missing, unknown, contradictory, replayed, misrouted, or unavailable evidence prevents a trustworthy classification.
+
+Only `match` and `classification_variance` count as expected verdicts. Alternate failing identities never receive equivalence credit. Controlled decider challenges retain exact identity and route checks because category correction and defect non-waiver depend on those policies.
+
+## Extended characterization
+
+Observe selected cases once:
 
 ```sh
-SC_PROFILE=release SC_CASE_JOBS=3 SC_GAP=0 sh tests/intent/executable_run.sh
+SC_PROFILE=characterization \
+SC_OUT=/tmp/sc-intent-characterization-pg \
+SC_CASE_JOBS=3 \
+SC_GAP=0 \
+sh tests/intent/executable_run.sh \
+  pg-001-code-fact pg-002-problem-only
 ```
 
-The runner obtains the full graph from the candidate provider and supplies its exact frozen Explore guidance to every ordinary `evaluate_gates` request. Release profile gives each manifest row three fresh targeted observations and one fresh complete-roster observation. Artifact roots are never reused, so a cached failure cannot masquerade as repeated evidence.
+Observe all 45 branches once by omitting case arguments. Characterization reports `characterization-complete` when every requested observation is retained, even when it contains verdict alerts. Its report always has `release_qualified: false`.
 
-Live rows use real configured axis and consensus models. Challenge rows route a reserved synthetic axis model through `judge_wrapper.py`; the wrapper returns only the response declared for that axis and mode, while every consensus-model call is delegated unchanged to the configured real judge command. Routing is based on exact model identity plus prompt shape, never call order. No provider request field or production finding-injection API exists.
+## Immutable artifact ownership
 
-Environment:
+`SC_OUT` must not exist. The runner rejects an existing path instead of deleting or reusing it. Every invocation creates:
 
-- `SC_BIN` — candidate provider binary.
-- `SC_JUDGE_MODEL` — real live axis model. Default `openai-codex/gpt-5.6-sol`.
-- `SC_DECIDER_MODEL` — real consensus model. Default `openai-codex/gpt-5.6-sol`.
-- `SC_JUDGE_COMMAND_JSON` — real Pi-compatible command argv as JSON. Default `["pi"]`.
+- a random `evidence_set_id`;
+- a SHA-256 candidate-binary identity;
+- one frozen rubric-set identity;
+- normalized observations carrying all three identities;
+- raw provider responses, stderr, requests, and challenge routes.
+
+A release report cannot combine observations with another evidence-set, candidate, or rubric identity. Do not merge later passing samples into an earlier report. A new run is new evidence, not a correction of old evidence.
+
+## Environment
+
+- `SC_PROFILE` — `characterization` (default) or `release-core`.
+- `SC_OUT` — absent destination directory. Default: `$TMPDIR/sc-intent-characterization`.
+- `SC_BIN` — candidate provider binary; unset rebuilds `target/debug/software-change`.
+- `SC_JUDGE_MODEL` — live axis model; default `openai-codex/gpt-5.6-sol`.
+- `SC_DECIDER_MODEL` — consensus model; default `openai-codex/gpt-5.6-sol`.
+- `SC_JUDGE_COMMAND_JSON` — Pi-compatible judge command argv; default `["pi"]`.
 - `SC_JUDGE_EXTENSIONS_JSON` — explicit extension paths as JSON array.
-- `SC_JUDGE_EXT` — compatibility shorthand for one extension; empty means none.
-- `SC_OUT` — artifact root. Default `$TMPDIR/sc-intent-qualification`.
-- `SC_GAP` — seconds between observations. Default `5`.
-- `SC_TIMEOUT` — provider and judge budget in seconds. Default `1200`.
-- `SC_PROFILE` — `release` for three targeted plus one full-roster observation, or `smoke` for one targeted observation only. Default `release`.
-- `SC_CASE_JOBS` — bounded number of cases evaluated concurrently. Default `1`; use `3` with native providers after confirming account rate limits. Bridge providers should normally remain at `1`.
-- `SC_MAX_PARALLEL_AXES` — full-roster axis concurrency within each case. Default `1`; serial axis calls avoid bridge timeouts. Peak judge concurrency can reach `SC_CASE_JOBS × SC_MAX_PARALLEL_AXES`.
+- `SC_JUDGE_EXT` — compatibility shorthand for one extension.
+- `SC_CASE_JOBS` — bounded concurrent cases; default `1`. Native providers may use `3`; bridge providers should normally use `1`.
+- `SC_MAX_PARALLEL_AXES` — selected-axis concurrency inside a case; default `1`.
+- `SC_GAP` — seconds between observations; default `5`.
+- `SC_TIMEOUT` — provider and judge budget; default `1200` seconds.
 
-Named rows may be passed for diagnosis:
-
-```sh
-sh tests/intent/executable_run.sh sa-001-product-target dc-category-error
-```
-
-A release-profile subset is always reported as `partial` and exits nonzero. Smoke diagnostics may pass, but never count as qualification. Targeted evidence never substitutes for full-roster evidence, and a release challenge cannot qualify unless its paired organic live row also qualifies.
-
-## Results and reasons
-
-Qualification exits zero only when every driver-visible and regression row has three consecutive targeted matches and one determinate all-axis match, with no mismatch or indeterminate observation. Model or bridge indeterminacy is recorded separately from semantic mismatch; both disqualify.
-
-Default artifacts:
-
-- `$SC_OUT/run.json` — release qualification report.
-- `$SC_OUT/provider-graph.json` — candidate `describe` reply and frozen guidance.
-- `$SC_OUT/raw/<case>/<mode>-<attempt>/response.json` — raw provider evidence.
-- `$SC_OUT/raw/<case>/<mode>-<attempt>/stderr.txt` — provider and bridge diagnostics.
-- `$SC_OUT/raw/<case>/<mode>-<attempt>/routes.jsonl` — challenge interception/delegation proof.
-- `$SC_OUT/observations/...` — normalized verdicts, identities, models, rubric set, reasons, and classification.
-
-Inspect all raw reasons:
+Inspect evidence:
 
 ```sh
 python3 tests/intent/report.py show --reasons "$SC_OUT/run.json"
 ```
 
-Exact executable branches remain the semantic contract. This matrix measures whether candidate models and bridge behavior adhere to that contract; finite calibration evidence does not replace it.
+Report schema version 2 replaces old `semantic_mismatch`, `diagnostic-pass`, `partial`, and perfect-streak release statuses. Consumers must use `classification`, `release_qualified`, and `qualification` from schema v2.

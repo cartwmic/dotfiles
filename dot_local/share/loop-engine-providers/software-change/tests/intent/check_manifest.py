@@ -78,6 +78,18 @@ ACCEPTED_CHALLENGE_DIGESTS = {'challenges/dc-correctly-applied.json': 'b6495b75e
  'challenges/dc-defect-waiver.json': '6b510d28794eb34a890df863e2eb32c670a149bf6d014b2b106cf9c14c8ed754',
  'challenges/ho-004-hidden-work.json': 'e656d2f7650082425447c767ed16aba2d1f9132bb8b424e623a2ea51e504c6e8'}
 
+RELEASE_CORE_PAIRS = {
+    "product-target": ("sa-001-product-target", "sa-001-implementation-location"),
+    "observable-behavior": ("sa-002-observable-behavior", "sa-002-internal-mechanism"),
+    "public-contract": ("sa-003-public-contract", "sa-003-incidental-channel"),
+    "release-property": ("ov-001-release-property", "ov-001-work-instruction"),
+    "externally-imposed-mechanism": (
+        "sa-002-externally-imposed-mechanism", "cl-002-solution-preference"
+    ),
+    "closed-scope": ("sf-001-closed-empty-scope", "sf-001-open-empty-scope"),
+}
+RELEASE_CORE_CASES = [case_id for pair in RELEASE_CORE_PAIRS.values() for case_id in pair]
+
 # Independent accepted-release anchor. Removing executable authority and its
 # manifest row together must still fail this checker.
 REQUIRED_CONDITIONS = {
@@ -263,8 +275,8 @@ def main():
     inventory,_=guide_inventory(graph,problems) if graph else ({},"")
     manifest=load_json(MANIFEST,problems)
     if not isinstance(manifest,dict): return problems.finish()
-    problems.require(set(manifest)=={"schema_version","targeted_attempts","axes","cases"}, "manifest has missing or unknown top-level keys")
-    problems.require(manifest.get("schema_version")==1,"manifest.schema_version must be 1")
+    problems.require(set(manifest)=={"schema_version","targeted_attempts","axes","release_core_cases","cases"}, "manifest has missing or unknown top-level keys")
+    problems.require(manifest.get("schema_version")==2,"manifest.schema_version must be 2")
     problems.require(manifest.get("targeted_attempts")==3,"manifest.targeted_attempts must be 3")
     problems.require(manifest.get("axes")==AXES,"manifest.axes must be exact five-axis roster in provider order")
     cases=manifest.get("cases")
@@ -272,6 +284,24 @@ def main():
     ids=[c.get("id") for c in cases if isinstance(c,dict)]
     problems.require(len(ids)==len(set(ids)),"manifest case IDs must be unique")
     by_id={c.get("id"):c for c in cases if isinstance(c,dict) and isinstance(c.get("id"),str)}
+    core=manifest.get("release_core_cases")
+    problems.require(core == RELEASE_CORE_CASES,
+                     "manifest.release_core_cases must be the fixed six ordered pass/fail pairs")
+    if isinstance(core,list):
+        problems.require(len(core)==len(set(core))==12,
+                         "manifest.release_core_cases must contain twelve unique IDs")
+        for contrast,(passing,failing) in RELEASE_CORE_PAIRS.items():
+            pass_case=by_id.get(passing); fail_case=by_id.get(failing)
+            problems.require(pass_case is not None and pass_case.get("lane")=="live",
+                             f"release core {contrast} pass case must name a live manifest row")
+            problems.require(fail_case is not None and fail_case.get("lane")=="live",
+                             f"release core {contrast} fail case must name a live manifest row")
+            if pass_case:
+                problems.require(pass_case.get("expected_final",{}).get("verdict")=="pass",
+                                 f"release core {contrast} pass case must expect pass")
+            if fail_case:
+                problems.require(fail_case.get("expected_final",{}).get("verdict")=="fail",
+                                 f"release core {contrast} fail case must expect fail")
     coverage=[]; live_fixtures=[]; live_fixture_digests=[]
     observed_fixture_digests={}; observed_challenge_digests={}
     common={"id","fixture","lane","selected_axis","expected_axis","expected_final","expected_final_axis","coverage_branch","status"}
