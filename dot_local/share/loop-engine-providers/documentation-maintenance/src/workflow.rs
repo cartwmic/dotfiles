@@ -601,7 +601,12 @@ fn project_revision_authority(
                 }
                 _ => return execution("revision-request subject_kind is unsupported"),
             }
-            Ok(format!("Target document: {target}. Accepted entries: {}; invalidated entries: {}. Request subject: {subject_kind} at {subject_digest}. Blockers: authority-order violation, any presented/pending/request ambiguity, unsupported replacement fact, missing material-intent attestation, or unrepresented downstream invalidation. Advancement: document-accepted only for exact selected {target} draft/request pair. Recovery: revise exact target; persistent unverifiable/evaluation failure uses gated restart.", accepted.len(), invalidated.len()))
+            let accepted_change = if accepted.is_empty() {
+                "no accepted-document change target exists"
+            } else {
+                "accepted-document-changes-requested may target one exact accepted path and digest, invalidating it plus dependent lower-authority accepted or presented entries"
+            };
+            Ok(format!("Target document: {target}. Accepted entries: {}; invalidated entries: {}. Request subject: {subject_kind} at {subject_digest}. Blockers: authority-order violation, any presented/pending/request ambiguity, unsupported replacement fact, missing material-intent attestation, or unrepresented downstream invalidation. Advancement: document-accepted may accept the exact selected {target} draft; draft-changes-requested may bind an owner request to that exact presented draft digest without acceptance; {accepted_change}. Recovery: revise exact target; persistent unverifiable/evaluation failure uses gated restart.", accepted.len(), invalidated.len()))
         }
         Some(Value::Null) => {
             if slots.contains_key("revision-record") || slots.contains_key("revision-request") {
@@ -610,7 +615,7 @@ fn project_revision_authority(
             if accepted_paths != AUTHORITY_PATHS || !invalidated_paths.is_empty() {
                 return execution("zero-pending revision ledger requires all three accepted documents in exact authority order and no invalidated paths");
             }
-            Ok("Target: complete staged overlay with docs/intent.md, AGENTS.md, and README.md accepted in authority order. Blockers: any pending/presented/request candidate, missing or reordered accepted document, or invalidated path. Advancement: staged-audit-complete only. Recovery: gated restart for stale or invalid staged authority.".into())
+            Ok("Target: complete staged overlay with docs/intent.md, AGENTS.md, and README.md accepted in authority order. Blockers: any pending/presented/request candidate, missing or reordered accepted document, or invalidated path. Advancement: staged-audit-complete may submit the zero-pending overlay; accepted-document-changes-requested may bind one exact accepted path and digest, removing it plus dependent lower-authority entries before alternating revision state. Recovery: gated restart for stale or invalid staged authority.".into())
         }
         _ => execution(
             "revision-ledger pending_document must be a supported non-empty target string or null",
@@ -1413,11 +1418,25 @@ mod tests {
                 json!({"schema":"revision-request-v1","target_document":"AGENTS.md","subject_kind":"presented-draft","subject_digest":predecessor_digest}),
             ),
         ]);
-        assert!(
-            project_authority_state("revise-a", &pending_manifest, &pending_slots)
-                .unwrap()
-                .contains("Advancement: document-accepted only")
-        );
+        let pending_guidance =
+            project_authority_state("revise-a", &pending_manifest, &pending_slots).unwrap();
+        assert!(pending_guidance.contains("document-accepted may accept"));
+        assert!(pending_guidance.contains("draft-changes-requested may bind"));
+        assert!(pending_guidance.contains("accepted-document-changes-requested may target"));
+        assert!(!pending_guidance.contains("staged-audit-complete"));
+        let mut first_document = pending_slots.clone();
+        first_document.get_mut("revision-ledger").unwrap()["pending_document"] =
+            json!("docs/intent.md");
+        first_document.get_mut("revision-ledger").unwrap()["accepted"] = json!([]);
+        first_document.get_mut("revision-record").unwrap()["target_document"] =
+            json!("docs/intent.md");
+        first_document.get_mut("revision-request").unwrap()["target_document"] =
+            json!("docs/intent.md");
+        let first_guidance =
+            project_authority_state("revise-a", &pending_manifest, &first_document).unwrap();
+        assert!(first_guidance.contains("no accepted-document change target exists"));
+        assert!(!first_guidance.contains("accepted-document-changes-requested may target"));
+        assert!(!first_guidance.contains("staged-audit-complete"));
         for missing in ["revision-record", "revision-request"] {
             let mut partial = pending_slots.clone();
             partial.remove(missing);
@@ -1440,11 +1459,12 @@ mod tests {
                 {"path":"docs/intent.md"},{"path":"AGENTS.md"},{"path":"README.md"}
             ],"invalidated":[]}),
         )]);
-        assert!(
-            project_authority_state("revise-b", &complete_manifest, &complete_slots)
-                .unwrap()
-                .contains("Advancement: staged-audit-complete only")
-        );
+        let complete_guidance =
+            project_authority_state("revise-b", &complete_manifest, &complete_slots).unwrap();
+        assert!(complete_guidance.contains("staged-audit-complete may submit"));
+        assert!(complete_guidance.contains("accepted-document-changes-requested may bind"));
+        assert!(!complete_guidance.contains("document-accepted may accept"));
+        assert!(!complete_guidance.contains("draft-changes-requested"));
         let mut partial = complete_slots.clone();
         partial.get_mut("revision-ledger").unwrap()["accepted"] =
             json!([{"path":"docs/intent.md"},{"path":"AGENTS.md"}]);
