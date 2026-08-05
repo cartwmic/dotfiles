@@ -300,6 +300,7 @@ fn evaluate_gates(payload: &Value) -> Value {
         graph_revision: &snapshot.graph_revision,
         current_state: &snapshot.current_state,
         workflow_state_version: snapshot.workflow_state_version,
+        stored_graph: snapshot.stored_graph.clone(),
     };
     if let Err(error) = authority::validate_selected_authority(&store, &current, &selected) {
         return evaluation_error(vec![Diagnostic::at(
