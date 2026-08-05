@@ -368,10 +368,9 @@ fn coordinate(
         );
         push_vote(&mut claim_votes, &mut role_votes, subject, &first, 1);
         push_vote(&mut claim_votes, &mut role_votes, subject, &second, 2);
-        let outcome = if !first.valid || !second.valid {
-            evaluation_error(subject, &evidence)
-        } else if subject.kind == SubjectKind::Claim
-            && (first.verdict == "breached" || second.verdict == "breached")
+        let outcome = if subject.kind == SubjectKind::Claim
+            && ((first.valid && first.verdict == "breached")
+                || (second.valid && second.verdict == "breached"))
         {
             let breach_ids = [first.clone(), second.clone()]
                 .into_iter()
@@ -394,7 +393,10 @@ fn coordinate(
                 0,
             );
             adjudications.push(adjudication_value(subject, &focused));
-            if !focused.valid {
+            if !first.valid || !second.valid || !focused.valid {
+                // Every valid breach vote still receives focused adjudication,
+                // but any invalid required vote keeps final subject outcome at
+                // evaluation_error; valid peers cannot launder it.
                 evaluation_error(subject, &evidence)
             } else if focused.verdict == "breach_confirmed" {
                 resolved_from_vote_as(subject, &focused, "breached", "claim.breached")
@@ -420,6 +422,8 @@ fn coordinate(
             } else {
                 evaluation_error(subject, &evidence)
             }
+        } else if !first.valid || !second.valid {
+            evaluation_error(subject, &evidence)
         } else {
             let ordinary = ordinary(
                 subject,
@@ -835,6 +839,57 @@ mod tests {
             true
         ));
     }
+    #[test]
+    fn valid_breach_peer_is_focused_even_when_other_initial_vote_is_invalid() {
+        let manifest = crate::codec::encode_record(
+            &json!({"schema":"repository-manifest-v1","run_id":"run","manifest_kind":"baseline","work_root":"/repo","git_common_dir":"/repo/.git","entries":[],"repository_fingerprint":format!("sha256:{}", "0".repeat(64)),"baseline_digest":null,"overlay_paths":[]}),
+            RecordKind::RepositoryManifest,
+            "run",
+        )
+        .unwrap();
+        let catalog = EvidenceCatalog::from_manifest(&manifest).unwrap();
+        let evidence_id = catalog.facts_for_path("docs/intent.md")[0].id.clone();
+        let subject = JudgmentSubject {
+            kind: SubjectKind::Claim,
+            id: "c".into(),
+            document: "docs/intent.md".into(),
+            start_line: 1,
+            end_line: 1,
+            binding_rule_semantic_digest: Some(format!("sha256:{}", "a".repeat(64))),
+            claim_digest: Some(format!("sha256:{}", "b".repeat(64))),
+            force: Some("binding-invariant".into()),
+            scope: Some("repository".into()),
+            role_reasons: None,
+        };
+        let transport = Scripted {
+            outputs: RefCell::new(vec![
+                json!({}),
+                json!({"verdict":"breached","controlling_reason":"claim.breached","evidence_fact_ids":[evidence_id.clone()]}),
+                json!({"verdict":"breach_confirmed","controlling_reason":"breach.binding-rule.confirmed","evidence_fact_ids":[evidence_id]}),
+            ]),
+            requests: RefCell::new(vec![]),
+        };
+        let bundle = crate::bundle::build_bundle().unwrap();
+        let result = coordinate(
+            "run",
+            &manifest.digest,
+            &bundle,
+            &[subject],
+            &catalog,
+            &transport,
+        )
+        .unwrap();
+        assert_eq!(
+            result.value["focused_breach_adjudications"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(result.value["resolved"][0]["verdict"], "evaluation_error");
+        assert_eq!(transport.requests.borrow().len(), 3);
+    }
+
     #[test]
     fn closed_transport_sees_no_peer_or_ambient_data() {
         let s = JudgmentSubject {

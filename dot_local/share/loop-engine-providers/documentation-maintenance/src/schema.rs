@@ -356,7 +356,7 @@ fn validate_semantics(kind: RecordKind, value: &Value) -> Result<(), String> {
                     .map(|vote| vote["judge_ordinal"].as_u64().unwrap())
                     .collect::<Vec<_>>();
                 let valid_initial_failure = votes.len() == 2
-                    && focus.is_none()
+                    && focus.is_some() == initial_has_breach
                     && invalid_ordinals.iter().all(|ordinal| *ordinal <= 2);
                 let first = votes
                     .iter()
@@ -605,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_initial_vote_fails_closed_without_third_or_focused_adjudication() {
+    fn invalid_initial_vote_fails_closed_but_valid_breach_peer_is_focused() {
         let path = format!(
             "{}/fixtures/records/valid/judgment-bundle-v1.json",
             env!("CARGO_MANIFEST_DIR")
@@ -627,6 +627,20 @@ mod tests {
             value["resolved"][0]["verdict"] = serde_json::json!("evaluation_error");
             value["resolved"][0]["controlling_reason"] =
                 serde_json::json!("claim.evaluation-error");
+            if peer_verdict == "breached" {
+                assert!(validate(RecordKind::JudgmentBundle, &value).is_err());
+                value["focused_breach_adjudications"] = serde_json::json!([{
+                    "adjudication_id":"c1:focused","subject_kind":"claim","subject_id":"c1",
+                    "verdict":"breach_confirmed","controlling_reason":"breach.binding-rule.confirmed",
+                    "evidence_digests":[],"evidence_fact_ids":[],
+                    "invocation_id":format!("sha256:{}", "a".repeat(64)),
+                    "request_digest":format!("sha256:{}", "b".repeat(64)),
+                    "evaluation_diagnostic":null,
+                    "binding_rule_semantic_digest":format!("sha256:{}", "c".repeat(64)),
+                    "binding_force":"binding-invariant","binding_scope":"repository",
+                    "claim_digest":format!("sha256:{}", "d".repeat(64))
+                }]);
+            }
             validate(RecordKind::JudgmentBundle, &value).unwrap();
         }
     }
