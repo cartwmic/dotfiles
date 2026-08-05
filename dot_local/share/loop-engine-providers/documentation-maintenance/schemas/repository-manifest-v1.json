@@ -1,0 +1,260 @@
+{
+  "$id": "urn:documentation-maintenance:repository-manifest-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "baseline_digest": {
+      "oneOf": [
+        {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "entries": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "core_document": {
+            "type": "boolean"
+          },
+          "git_status": {
+            "maxLength": 32,
+            "minLength": 1,
+            "type": "string"
+          },
+          "identity": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "absent"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "content_base64": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "regular"
+                  },
+                  "mode": {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "sha256": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "size": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mode",
+                  "size",
+                  "sha256",
+                  "content_base64"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "symlink"
+                  },
+                  "mode": {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "target_base64": {
+                    "type": "string"
+                  },
+                  "target_sha256": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mode",
+                  "target_sha256",
+                  "target_base64"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "gitlink"
+                  },
+                  "object_id": {
+                    "pattern": "^[0-9a-f]{40,64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "object_id"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "fifo",
+                      "socket"
+                    ]
+                  },
+                  "mode": {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "device_major": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "device_minor": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "enum": [
+                      "character-device",
+                      "block-device"
+                    ]
+                  },
+                  "mode": {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mode",
+                  "device_major",
+                  "device_minor"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "kind": {
+            "enum": [
+              "absent",
+              "regular",
+              "symlink",
+              "gitlink",
+              "fifo",
+              "socket",
+              "character-device",
+              "block-device"
+            ]
+          },
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "tracked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "tracked",
+          "git_status",
+          "core_document",
+          "identity"
+        ],
+        "type": "object"
+      },
+      "maxItems": 100000,
+      "minItems": 0,
+      "type": "array"
+    },
+    "git_common_dir": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+    },
+    "manifest_kind": {
+      "enum": [
+        "baseline",
+        "staged"
+      ]
+    },
+    "overlay_paths": {
+      "items": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 3,
+      "minItems": 0,
+      "type": "array"
+    },
+    "repository_fingerprint": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "run_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "repository-manifest-v1"
+    },
+    "work_root": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "run_id",
+    "manifest_kind",
+    "work_root",
+    "git_common_dir",
+    "entries",
+    "repository_fingerprint",
+    "baseline_digest",
+    "overlay_paths"
+  ],
+  "title": "repository-manifest-v1",
+  "type": "object"
+}

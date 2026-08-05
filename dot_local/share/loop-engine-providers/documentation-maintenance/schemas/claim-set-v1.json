@@ -1,0 +1,115 @@
+{
+  "$id": "urn:documentation-maintenance:claim-set-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "claims": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "claim_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "document": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "evidence_digests": {
+            "items": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "maxItems": 128,
+            "minItems": 0,
+            "type": "array"
+          },
+          "force": {
+            "enum": [
+              "purpose",
+              "tenet",
+              "binding-invariant",
+              "binding-boundary",
+              "binding-non-goal",
+              "aspiration",
+              "descriptive"
+            ]
+          },
+          "location": {
+            "additionalProperties": false,
+            "properties": {
+              "end_line": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "path": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "start_line": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "path",
+              "start_line",
+              "end_line"
+            ],
+            "type": "object"
+          },
+          "ordinal": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proposition": {
+            "maxLength": 65536,
+            "type": "string"
+          },
+          "reason_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_id",
+          "document",
+          "location",
+          "ordinal",
+          "proposition",
+          "force",
+          "evidence_digests",
+          "reason_id"
+        ],
+        "type": "object"
+      },
+      "maxItems": 10000,
+      "minItems": 0,
+      "type": "array"
+    },
+    "manifest_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "run_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "claim-set-v1"
+    }
+  },
+  "required": [
+    "schema",
+    "run_id",
+    "manifest_digest",
+    "claims"
+  ],
+  "title": "claim-set-v1",
+  "type": "object"
+}

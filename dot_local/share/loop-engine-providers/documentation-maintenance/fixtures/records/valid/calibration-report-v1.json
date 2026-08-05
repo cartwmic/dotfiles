@@ -1,0 +1,37 @@
+{
+  "bundle_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "cases": [
+    {
+      "affected_identity": "README.md",
+      "case_id": "case-1",
+      "controlling_reason": "claim.supported",
+      "expected_verdict": "adhered",
+      "fixture_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "observations": [
+        {
+          "affected_identity": "README.md",
+          "controlling_reason": "claim.supported",
+          "ordinal": 1,
+          "verdict": "adhered"
+        },
+        {
+          "affected_identity": "README.md",
+          "controlling_reason": "claim.supported",
+          "ordinal": 2,
+          "verdict": "adhered"
+        },
+        {
+          "affected_identity": "README.md",
+          "controlling_reason": "claim.supported",
+          "ordinal": 3,
+          "verdict": "adhered"
+        }
+      ]
+    }
+  ],
+  "decoding_parameters_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "model_identity_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "qualified": true,
+  "run_id": "run-1",
+  "schema": "calibration-report-v1"
+}

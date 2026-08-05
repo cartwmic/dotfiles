@@ -1,0 +1,102 @@
+{
+  "$id": "urn:documentation-maintenance:revision-ledger-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accepted": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "draft_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "mode": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "enum": [
+              "docs/intent.md",
+              "AGENTS.md",
+              "README.md"
+            ]
+          },
+          "revision_record_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "revision_record_digest",
+          "draft_digest",
+          "mode"
+        ],
+        "type": "object"
+      },
+      "maxItems": 3,
+      "minItems": 0,
+      "type": "array"
+    },
+    "baseline_manifest_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "invalidated": {
+      "items": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 3,
+      "minItems": 0,
+      "type": "array"
+    },
+    "pending_document": {
+      "oneOf": [
+        {
+          "enum": [
+            "docs/intent.md",
+            "AGENTS.md",
+            "README.md"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "predecessor_digest": {
+      "oneOf": [
+        {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "run_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "revision-ledger-v1"
+    }
+  },
+  "required": [
+    "schema",
+    "run_id",
+    "baseline_manifest_digest",
+    "predecessor_digest",
+    "accepted",
+    "pending_document",
+    "invalidated"
+  ],
+  "title": "revision-ledger-v1",
+  "type": "object"
+}

@@ -1,0 +1,92 @@
+{
+  "$id": "urn:documentation-maintenance:application-verification-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "approved_bundle_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "exact": {
+      "type": "boolean"
+    },
+    "mismatches": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "actual_digest": {
+            "oneOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_digest": {
+            "oneOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "enum": [
+              "added",
+              "removed",
+              "type-changed",
+              "mode-changed",
+              "bytes-changed",
+              "target-changed",
+              "device-changed",
+              "status-changed"
+            ]
+          },
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "expected_digest",
+          "actual_digest"
+        ],
+        "type": "object"
+      },
+      "maxItems": 100000,
+      "minItems": 0,
+      "type": "array"
+    },
+    "observed_manifest_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "run_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "application-verification-v1"
+    }
+  },
+  "required": [
+    "schema",
+    "run_id",
+    "approved_bundle_digest",
+    "observed_manifest_digest",
+    "exact",
+    "mismatches"
+  ],
+  "title": "application-verification-v1",
+  "type": "object"
+}

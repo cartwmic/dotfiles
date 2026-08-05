@@ -1,0 +1,7 @@
+{
+  "claims": [],
+  "manifest_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "run_id": "run-1",
+  "schema": "claim-set-v1",
+  "unexpected": true
+}
