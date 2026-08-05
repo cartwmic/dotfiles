@@ -189,7 +189,7 @@ pub fn graph() -> Result<Value, String> {
      "initial_state":"audit","states":states,"transitions":transitions,
      "input_declarations":[{"id":"work_root","kind":"path","required":true},{"id":"artifact_root","kind":"path","required":true}],
      "live_guidance_supported":true,
-     "metadata":{"workflow":"documentation-maintenance","workflow_version":"1","provider_phase":"P2","documentation_audit_bundle_v1":bundle.value,"documentation_audit_bundle_digest":bundle.digest,"encoded_budgets":{"canonical_graph":bundle::GRAPH_MAX_BYTES,"snapshot_envelope":bundle::SNAPSHOT_ENVELOPE_MAX_BYTES}}
+     "metadata":{"workflow":"documentation-maintenance","workflow_version":"1","provider_phase":"P3","documentation_audit_bundle_v1":bundle.value,"documentation_audit_bundle_digest":bundle.digest,"encoded_budgets":{"canonical_graph":bundle::GRAPH_MAX_BYTES,"snapshot_envelope":bundle::SNAPSHOT_ENVELOPE_MAX_BYTES}}
     });
     enforce_metadata_depth(&graph["metadata"])?;
     let bytes = codec::canonicalize(&graph)?;

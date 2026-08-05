@@ -16,6 +16,18 @@
             "minLength": 1,
             "type": "string"
           },
+          "evaluation_diagnostic": {
+            "oneOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "evidence_digests": {
             "items": {
               "pattern": "^sha256:[0-9a-f]{64}$",
@@ -25,10 +37,27 @@
             "minItems": 0,
             "type": "array"
           },
+          "evidence_fact_ids": {
+            "items": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "maxItems": 128,
+            "minItems": 0,
+            "type": "array"
+          },
+          "invocation_id": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
           "judge_ordinal": {
             "maximum": 3,
             "minimum": 1,
             "type": "integer"
+          },
+          "request_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
           },
           "subject_id": {
             "maxLength": 128,
@@ -60,13 +89,21 @@
           "judge_ordinal",
           "verdict",
           "controlling_reason",
-          "evidence_digests"
+          "evidence_digests",
+          "evidence_fact_ids",
+          "invocation_id",
+          "request_digest",
+          "evaluation_diagnostic"
         ],
         "type": "object"
       },
       "maxItems": 30000,
       "minItems": 0,
       "type": "array"
+    },
+    "decoding_parameter_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
     },
     "focused_breach_adjudications": {
       "items": {
@@ -77,10 +114,39 @@
             "minLength": 1,
             "type": "string"
           },
+          "binding_force": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "binding_rule_semantic_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "binding_scope": {
+            "maxLength": 65536,
+            "type": "string"
+          },
+          "claim_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
           "controlling_reason": {
             "maxLength": 128,
             "minLength": 1,
             "type": "string"
+          },
+          "evaluation_diagnostic": {
+            "oneOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "evidence_digests": {
             "items": {
@@ -90,6 +156,23 @@
             "maxItems": 128,
             "minItems": 0,
             "type": "array"
+          },
+          "evidence_fact_ids": {
+            "items": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "maxItems": 128,
+            "minItems": 0,
+            "type": "array"
+          },
+          "invocation_id": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "request_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
           },
           "subject_id": {
             "maxLength": 128,
@@ -114,7 +197,15 @@
           "subject_id",
           "verdict",
           "controlling_reason",
-          "evidence_digests"
+          "evidence_digests",
+          "evidence_fact_ids",
+          "invocation_id",
+          "request_digest",
+          "evaluation_diagnostic",
+          "binding_rule_semantic_digest",
+          "binding_force",
+          "binding_scope",
+          "claim_digest"
         ],
         "type": "object"
       },
@@ -123,6 +214,10 @@
       "type": "array"
     },
     "manifest_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "model_identity_digest": {
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
@@ -136,6 +231,24 @@
                 "maxLength": 128,
                 "minLength": 1,
                 "type": "string"
+              },
+              "evidence_digests": {
+                "items": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "maxItems": 128,
+                "minItems": 0,
+                "type": "array"
+              },
+              "evidence_fact_ids": {
+                "items": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "maxItems": 128,
+                "minItems": 0,
+                "type": "array"
               },
               "subject_id": {
                 "maxLength": 128,
@@ -159,7 +272,9 @@
               "subject_kind",
               "subject_id",
               "verdict",
-              "controlling_reason"
+              "controlling_reason",
+              "evidence_fact_ids",
+              "evidence_digests"
             ],
             "type": "object"
           },
@@ -170,6 +285,24 @@
                 "maxLength": 128,
                 "minLength": 1,
                 "type": "string"
+              },
+              "evidence_digests": {
+                "items": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "maxItems": 128,
+                "minItems": 0,
+                "type": "array"
+              },
+              "evidence_fact_ids": {
+                "items": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "maxItems": 128,
+                "minItems": 0,
+                "type": "array"
               },
               "subject_id": {
                 "maxLength": 128,
@@ -192,7 +325,9 @@
               "subject_kind",
               "subject_id",
               "verdict",
-              "controlling_reason"
+              "controlling_reason",
+              "evidence_fact_ids",
+              "evidence_digests"
             ],
             "type": "object"
           }
@@ -211,6 +346,18 @@
             "minLength": 1,
             "type": "string"
           },
+          "evaluation_diagnostic": {
+            "oneOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "evidence_digests": {
             "items": {
               "pattern": "^sha256:[0-9a-f]{64}$",
@@ -220,10 +367,27 @@
             "minItems": 0,
             "type": "array"
           },
+          "evidence_fact_ids": {
+            "items": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "maxItems": 128,
+            "minItems": 0,
+            "type": "array"
+          },
+          "invocation_id": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
           "judge_ordinal": {
             "maximum": 3,
             "minimum": 1,
             "type": "integer"
+          },
+          "request_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
           },
           "subject_id": {
             "maxLength": 128,
@@ -254,7 +418,11 @@
           "judge_ordinal",
           "verdict",
           "controlling_reason",
-          "evidence_digests"
+          "evidence_digests",
+          "evidence_fact_ids",
+          "invocation_id",
+          "request_digest",
+          "evaluation_diagnostic"
         ],
         "type": "object"
       },
@@ -276,6 +444,8 @@
     "run_id",
     "manifest_digest",
     "bundle_digest",
+    "model_identity_digest",
+    "decoding_parameter_digest",
     "claim_votes",
     "role_votes",
     "focused_breach_adjudications",

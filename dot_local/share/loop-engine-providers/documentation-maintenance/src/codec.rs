@@ -8,10 +8,10 @@ pub const MAX_RECORD_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct DecodedRecord {
-    pub kind: RecordKind,
-    pub value: Value,
-    pub canonical: Vec<u8>,
-    pub digest: String,
+    pub(crate) kind: RecordKind,
+    pub(crate) value: Value,
+    pub(crate) canonical: Vec<u8>,
+    pub(crate) digest: String,
 }
 
 pub fn decode_record(
@@ -87,15 +87,17 @@ pub fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
-pub fn verify_digest(bytes: &[u8], claimed: &str) -> Result<(), String> {
+#[cfg(test)]
+fn verify_digest(bytes: &[u8], claimed: &str) -> Result<(), String> {
     validate_digest(claimed)?;
     let actual = sha256(bytes);
-    if actual != claimed {
-        return Err(format!(
+    if actual == claimed {
+        Ok(())
+    } else {
+        Err(format!(
             "sha256 mismatch: expected {claimed}, computed {actual}"
-        ));
+        ))
     }
-    Ok(())
 }
 
 pub fn validate_digest(value: &str) -> Result<(), String> {

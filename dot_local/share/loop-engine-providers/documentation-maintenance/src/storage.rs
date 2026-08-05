@@ -198,6 +198,22 @@ impl ArtifactStore {
         self.load_with_links(relative_path, kind, expected_digest, &mut verification)
     }
 
+    pub(crate) fn load_digest(
+        &self,
+        kind: RecordKind,
+        expected_digest: &str,
+    ) -> Result<Option<StoredRecord>, String> {
+        codec::validate_digest(expected_digest)?;
+        let mut verification = LinkVerification::default();
+        let (_, matching) =
+            self.matching_candidate_paths(kind, expected_digest, &mut verification)?;
+        let Some(path) = matching.first() else {
+            return Ok(None);
+        };
+        self.load_with_links(path, kind, expected_digest, &mut verification)
+            .map(Some)
+    }
+
     fn load_with_links(
         &self,
         relative_path: &str,
@@ -1326,9 +1342,9 @@ mod tests {
             .unwrap();
         let mut tampered = claim("run-1", &manifest.digest);
         tampered["claims"] = json!([{
-            "claim_id":"tampered", "document":"README.md",
+            "claim_id":"tampered", "source_unit_id":"unit", "semantic_digest":codec::sha256(&codec::canonicalize(&json!({"proposition":"tampered","force":"descriptive","scope":"document"})).unwrap()), "document":"README.md",
             "location":{"path":"README.md","start_line":1,"end_line":1},
-            "ordinal":0, "proposition":"tampered", "force":"descriptive",
+            "ordinal":0, "proposition":"tampered", "force":"descriptive", "scope":"document",
             "evidence_digests":[], "reason_id":"tampered"
         }]);
         let bytes = codec::encode_record(&tampered, RecordKind::ClaimSet, "run-1")
