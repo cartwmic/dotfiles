@@ -144,13 +144,6 @@ pub fn decode_stored_bundle(stored_graph: &Value) -> Result<FrozenBundle, Bundle
         ));
     }
     validate_bundle_contract(&value).map_err(BundleDecodeError::Execution)?;
-    let expected_bundle = build_bundle().map_err(BundleDecodeError::Execution)?;
-    if value != expected_bundle.value {
-        return Err(BundleDecodeError::Execution(
-            "supported stored bundle differs from closed documentation-audit-bundle-v1 contract"
-                .into(),
-        ));
-    }
     Ok(FrozenBundle {
         value,
         canonical_bytes,
@@ -244,13 +237,42 @@ fn validate_bundle_contract(value: &Value) -> Result<(), String> {
     if actual_keys != expected_keys {
         return Err("supported bundle has missing or unknown top-level fields".into());
     }
-    let contracts = value
-        .pointer("/profile/contracts")
+    let profile = value
+        .get("profile")
+        .and_then(Value::as_object)
+        .ok_or("supported bundle profile is invalid")?;
+    if profile.keys().map(String::as_str).collect::<BTreeSet<_>>()
+        != ["id", "contracts"].into_iter().collect()
+        || profile.get("id").and_then(Value::as_str) != Some("repository-core")
+    {
+        return Err("supported bundle profile is not closed repository-core-v1".into());
+    }
+    let contracts = profile
+        .get("contracts")
         .and_then(Value::as_array)
         .ok_or("supported bundle contracts are invalid")?;
     if contracts.len() != 3 {
         return Err("supported bundle must carry exactly repository-core contracts".into());
     }
+    let mut contract_paths = BTreeSet::new();
+    for contract in contracts {
+        let decoded: crate::policy::DocumentContract = serde_json::from_value(contract.clone())
+            .map_err(|error| format!("closed document contract violation: {error}"))?;
+        contract_paths.insert((decoded.id, decoded.path));
+    }
+    if contract_paths
+        != [
+            ("repository-intent-v1".into(), "docs/intent.md".into()),
+            ("agent-instructions-v1".into(), "AGENTS.md".into()),
+            ("root-readme-v1".into(), "README.md".into()),
+        ]
+        .into_iter()
+        .collect()
+    {
+        return Err("supported bundle repository-core contract identities are invalid".into());
+    }
+    validate_supported_section_shapes(value)?;
+    validate_doctrine_shapes(value)?;
     let carried = value
         .get("section_digests")
         .ok_or("supported bundle has no section digests")?;
@@ -265,6 +287,428 @@ fn validate_bundle_contract(value: &Value) -> Result<(), String> {
     )?;
     validate_reason_registry(value)?;
     validate_policy_case_shapes(value)?;
+    Ok(())
+}
+
+fn validate_supported_section_shapes(value: &Value) -> Result<(), String> {
+    fn object<'a>(
+        value: &'a Value,
+        path: &str,
+        keys: &[&str],
+    ) -> Result<&'a Map<String, Value>, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("{path} must be an object"))?;
+        if object.keys().map(String::as_str).collect::<BTreeSet<_>>()
+            != keys.iter().copied().collect()
+        {
+            return Err(format!("{path} has missing or unknown fields"));
+        }
+        Ok(object)
+    }
+    fn strings(value: &Value, path: &str, nonempty: bool) -> Result<(), String> {
+        let values = value
+            .as_array()
+            .ok_or_else(|| format!("{path} must be an array"))?;
+        if nonempty && values.is_empty() {
+            return Err(format!("{path} must not be empty"));
+        }
+        if values
+            .iter()
+            .any(|value| value.as_str().is_none_or(str::is_empty))
+        {
+            return Err(format!("{path} entries must be non-empty strings"));
+        }
+        Ok(())
+    }
+    fn string_fields(
+        object: &Map<String, Value>,
+        path: &str,
+        fields: &[&str],
+    ) -> Result<(), String> {
+        for field in fields {
+            if object[*field].as_str().is_none_or(str::is_empty) {
+                return Err(format!("{path}.{field} must be a non-empty string"));
+            }
+        }
+        Ok(())
+    }
+    fn validate_schema_closure(value: &Value, name: &str, path: &str) -> Result<(), String> {
+        match value {
+            Value::Object(object) => {
+                let admits_object = object.get("type").is_some_and(|kind| {
+                    kind.as_str() == Some("object")
+                        || kind.as_array().is_some_and(|kinds| {
+                            kinds.iter().any(|kind| kind.as_str() == Some("object"))
+                        })
+                });
+                if admits_object
+                    && (object.get("additionalProperties") != Some(&Value::Bool(false))
+                        || !object.get("properties").is_some_and(Value::is_object))
+                {
+                    return Err(format!(
+                        "stored record schema {name} has open object schema at {path}"
+                    ));
+                }
+                for (key, child) in object {
+                    validate_schema_closure(child, name, &format!("{path}/{key}"))?;
+                }
+            }
+            Value::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    validate_schema_closure(child, name, &format!("{path}/{index}"))?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    let claim = object(
+        &value["claim_policy"],
+        "claim_policy",
+        &[
+            "schema",
+            "claim_kinds",
+            "source_units",
+            "claim_verdicts",
+            "role_verdicts",
+            "force_defaults",
+            "force_rule",
+            "material_change",
+            "non_material_change",
+            "authority_order",
+            "authority_rule",
+            "anti_laundering",
+            "revision_order",
+            "primary_reason",
+            "application_policy",
+        ],
+    )?;
+    let force_defaults = object(
+        &claim["force_defaults"],
+        "claim_policy.force_defaults",
+        &[
+            "purpose",
+            "tenet",
+            "invariant",
+            "boundary",
+            "non-goal",
+            "aspiration",
+        ],
+    )?;
+    let primary_reason = object(
+        &claim["primary_reason"],
+        "claim_policy.primary_reason",
+        &["rule", "reason", "linked_reason"],
+    )?;
+    let application_policy = object(
+        &claim["application_policy"],
+        "claim_policy.application_policy",
+        &[
+            "approval_criteria",
+            "identity_criteria",
+            "application_criteria",
+            "recovery_criteria",
+        ],
+    )?;
+    if claim["schema"] != "claim-authority-policy-v1" {
+        return Err("unsupported claim policy schema".into());
+    }
+    string_fields(
+        claim,
+        "claim_policy",
+        &[
+            "source_units",
+            "force_rule",
+            "authority_rule",
+            "revision_order",
+        ],
+    )?;
+    string_fields(
+        force_defaults,
+        "claim_policy.force_defaults",
+        &[
+            "purpose",
+            "tenet",
+            "invariant",
+            "boundary",
+            "non-goal",
+            "aspiration",
+        ],
+    )?;
+    string_fields(
+        primary_reason,
+        "claim_policy.primary_reason",
+        &["rule", "reason", "linked_reason"],
+    )?;
+    string_fields(
+        application_policy,
+        "claim_policy.application_policy",
+        &[
+            "approval_criteria",
+            "identity_criteria",
+            "application_criteria",
+            "recovery_criteria",
+        ],
+    )?;
+    for field in [
+        "claim_kinds",
+        "claim_verdicts",
+        "role_verdicts",
+        "material_change",
+        "non_material_change",
+        "authority_order",
+        "anti_laundering",
+    ] {
+        strings(&claim[field], &format!("claim_policy.{field}"), true)?;
+    }
+
+    let judgment = object(
+        &value["judgment_policy"],
+        "judgment_policy",
+        &[
+            "schema",
+            "claim_outputs",
+            "role_outputs",
+            "focused_breach_outputs",
+            "blindness",
+            "direct_agreement",
+            "ordinary_disagreement",
+            "breach_rule",
+            "breach_return",
+            "invalid_output",
+            "role_mapping",
+            "disposition_priority",
+            "stable_reasons",
+        ],
+    )?;
+    let role_mapping = object(
+        &judgment["role_mapping"],
+        "judgment_policy.role_mapping",
+        &["deficient", "unverifiable", "evaluation_error", "satisfied"],
+    )?;
+    if judgment["schema"] != "judgment-policy-v1" {
+        return Err("unsupported judgment policy schema".into());
+    }
+    string_fields(
+        judgment,
+        "judgment_policy",
+        &[
+            "blindness",
+            "direct_agreement",
+            "ordinary_disagreement",
+            "breach_rule",
+            "breach_return",
+            "invalid_output",
+        ],
+    )?;
+    string_fields(
+        role_mapping,
+        "judgment_policy.role_mapping",
+        &["deficient", "unverifiable", "evaluation_error", "satisfied"],
+    )?;
+    for field in [
+        "claim_outputs",
+        "role_outputs",
+        "focused_breach_outputs",
+        "disposition_priority",
+        "stable_reasons",
+    ] {
+        strings(&judgment[field], &format!("judgment_policy.{field}"), true)?;
+    }
+
+    let recovery = object(
+        &value["recovery_policy"],
+        "recovery_policy",
+        &["schema", "evaluation_recovery", "breach_remediation"],
+    )?;
+    if recovery["schema"] != "recovery-policy-v1" {
+        return Err("unsupported recovery policy schema".into());
+    }
+    for (field, schema) in [
+        ("evaluation_recovery", "evaluation-recovery-v1"),
+        ("breach_remediation", "breach-remediation-v1"),
+    ] {
+        let contract = object(
+            &recovery[field],
+            &format!("recovery_policy.{field}"),
+            &["schema", "requires", "semantics", "reasons", "examples"],
+        )?;
+        if contract["schema"] != schema {
+            return Err(format!("unsupported recovery_policy.{field} schema"));
+        }
+        string_fields(
+            contract,
+            &format!("recovery_policy.{field}"),
+            &["semantics"],
+        )?;
+        strings(
+            &contract["requires"],
+            &format!("recovery_policy.{field}.requires"),
+            true,
+        )?;
+        strings(
+            &contract["reasons"],
+            &format!("recovery_policy.{field}.reasons"),
+            true,
+        )?;
+        let examples = contract["examples"]
+            .as_array()
+            .ok_or_else(|| format!("recovery_policy.{field}.examples must be an array"))?;
+        if examples.is_empty() {
+            return Err(format!(
+                "recovery_policy.{field}.examples must not be empty"
+            ));
+        }
+        for example in examples {
+            serde_json::from_value::<crate::policy::PolicyCase>(example.clone())
+                .map_err(|error| format!("closed recovery case violation: {error}"))?;
+        }
+    }
+
+    let budgets = object(
+        &value["budgets"],
+        "budgets",
+        &[
+            "machine_bundle_bytes",
+            "audit_static_guidance_bytes",
+            "other_static_guidance_total_bytes",
+            "metadata_depth",
+            "canonical_graph_bytes",
+            "individual_guidance_bytes",
+            "snapshot_envelope_bytes",
+        ],
+    )?;
+    if budgets.values().any(|value| value.as_u64().is_none()) {
+        return Err("budget values must be unsigned integers".into());
+    }
+    let compatibility = object(
+        &value["compatibility"],
+        "compatibility",
+        &[
+            "unsupported_stored_bundle",
+            "supported_bundle_execution_failure",
+            "criteria_source",
+        ],
+    )?;
+    if compatibility
+        .values()
+        .any(|value| value.as_str().is_none_or(str::is_empty))
+    {
+        return Err("compatibility values must be non-empty strings".into());
+    }
+
+    let schemas = value["record_schemas"]
+        .as_object()
+        .ok_or("record_schemas must be an object")?;
+    let expected = RecordKind::ALL
+        .into_iter()
+        .map(RecordKind::name)
+        .collect::<BTreeSet<_>>();
+    if schemas.keys().map(String::as_str).collect::<BTreeSet<_>>() != expected {
+        return Err("record_schemas inventory differs from supported 17-record contract".into());
+    }
+    for (name, schema) in schemas {
+        let schema_object = schema
+            .as_object()
+            .ok_or_else(|| format!("stored record schema {name} must be an object"))?;
+        for required in [
+            "$schema",
+            "$id",
+            "title",
+            "type",
+            "additionalProperties",
+            "properties",
+            "required",
+        ] {
+            if !schema_object.contains_key(required) {
+                return Err(format!(
+                    "stored record schema {name} lacks required keyword {required}"
+                ));
+            }
+        }
+        if schema_object["$schema"] != "https://json-schema.org/draft/2020-12/schema"
+            || schema_object["$id"] != format!("urn:documentation-maintenance:{name}")
+            || schema_object["title"] != name.as_str()
+            || schema_object["additionalProperties"] != false
+            || schema_object["type"] != "object"
+            || jsonschema::validator_for(schema).is_err()
+        {
+            return Err(format!(
+                "stored record schema {name} is not a closed valid Draft 2020-12 JSON Schema"
+            ));
+        }
+        validate_schema_closure(schema, name, "$")?;
+    }
+    Ok(())
+}
+
+fn validate_doctrine_shapes(value: &Value) -> Result<(), String> {
+    let doctrine = value["doctrine"]
+        .as_object()
+        .ok_or("doctrine contract must be an object")?;
+    if doctrine.keys().map(String::as_str).collect::<BTreeSet<_>>()
+        != ["packs", "case_tuple_fields", "clauses"]
+            .into_iter()
+            .collect()
+    {
+        return Err("doctrine contract has missing or unknown fields".into());
+    }
+    let packs = doctrine["packs"]
+        .as_array()
+        .ok_or("doctrine packs must be an array")?;
+    if packs.is_empty() {
+        return Err("doctrine packs must not be empty".into());
+    }
+    for pack in packs {
+        serde_json::from_value::<crate::doctrine::DoctrinePack>(pack.clone())
+            .map_err(|error| format!("closed doctrine pack violation: {error}"))?;
+    }
+    let clauses = doctrine["clauses"]
+        .as_array()
+        .ok_or("doctrine clauses must be an array")?;
+    if clauses.is_empty() {
+        return Err("doctrine clauses must not be empty".into());
+    }
+    for clause in clauses {
+        let mut expanded = clause.clone();
+        let examples = expanded["examples"]
+            .as_array_mut()
+            .ok_or("doctrine examples must be an array")?;
+        let mut classes = BTreeSet::new();
+        for example in examples {
+            if let Some(class) = example
+                .as_array()
+                .and_then(|tuple| tuple.first())
+                .and_then(Value::as_str)
+            {
+                classes.insert(class.to_string());
+            }
+            let tuple = example
+                .as_array()
+                .filter(|tuple| tuple.len() == 7)
+                .ok_or("doctrine case must follow exact seven-field tuple encoding")?;
+            *example = json!({
+                "class":tuple[0],"input":tuple[1],"expected_outcome":tuple[2],
+                "normalized_verdict":tuple[3],"affected_subject":tuple[4],
+                "deciding_evidence":tuple[5],"controlling_reason":tuple[6]
+            });
+        }
+        if classes
+            != ["good", "bad", "borderline", "out-of-scope"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        {
+            return Err(
+                "every doctrine clause requires good, bad, borderline, and out-of-scope cases"
+                    .into(),
+            );
+        }
+        serde_json::from_value::<crate::doctrine::DoctrineClause>(expanded)
+            .map_err(|error| format!("closed doctrine clause violation: {error}"))?;
+    }
     Ok(())
 }
 
@@ -821,6 +1265,24 @@ mod tests {
         ));
     }
     #[test]
+    fn supported_run_frozen_criteria_do_not_depend_on_current_compiled_values() {
+        let mut value = build_bundle().unwrap().value;
+        value["profile"]["contracts"][0]["clauses"][0]["obligation"] =
+            json!("Earlier supported run-frozen RI1 obligation bytes.");
+        value["section_digests"] = section_digests(&value).unwrap();
+        let digest = codec::sha256(&codec::canonicalize(&value).unwrap());
+        let stored = json!({"metadata":{
+            "documentation_audit_bundle_v1":value,
+            "documentation_audit_bundle_digest":digest
+        }});
+        let decoded = decode_stored_bundle(&stored).unwrap();
+        assert_eq!(
+            decoded.value["profile"]["contracts"][0]["clauses"][0]["obligation"],
+            "Earlier supported run-frozen RI1 obligation bytes."
+        );
+    }
+
+    #[test]
     fn supported_bundle_is_closed_at_every_nested_contract_surface() {
         fn resign(mut value: Value) -> Value {
             value["section_digests"] = section_digests(&value).unwrap();
@@ -848,10 +1310,47 @@ mod tests {
                     .insert("unknown".into(), json!(true));
             }),
             Box::new(|v| {
-                v["record_schemas"]["audit-report-v1"]
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("unknown".into(), json!(true));
+                v["record_schemas"]["audit-report-v1"] = json!(true);
+            }),
+            Box::new(|v| {
+                v["record_schemas"]["audit-report-v1"] = json!({});
+            }),
+            Box::new(|v| {
+                v["doctrine"]["packs"] = json!([]);
+            }),
+            Box::new(|v| {
+                v["doctrine"]["clauses"] = json!([]);
+            }),
+            Box::new(|v| {
+                v["recovery_policy"]["evaluation_recovery"]["examples"] = json!([]);
+            }),
+            Box::new(|v| {
+                v["recovery_policy"]["breach_remediation"]["examples"] = json!([]);
+            }),
+            Box::new(|v| {
+                v["claim_policy"]["schema"] = json!(false);
+            }),
+            Box::new(|v| {
+                v["claim_policy"]["force_defaults"]["tenet"] = json!(false);
+            }),
+            Box::new(|v| {
+                v["judgment_policy"]["blindness"] = Value::Null;
+            }),
+            Box::new(|v| {
+                v["judgment_policy"]["role_mapping"]["deficient"] = json!(false);
+            }),
+            Box::new(|v| {
+                v["recovery_policy"]["evaluation_recovery"]["schema"] = json!("other-v1");
+            }),
+            Box::new(|v| {
+                v["record_schemas"]["audit-report-v1"]["properties"]["findings"]["items"]
+                    ["additionalProperties"] = json!(true);
+            }),
+            Box::new(|v| {
+                v["record_schemas"]["audit-report-v1"]["properties"]["findings"]["items"]["type"] =
+                    json!(["object"]);
+                v["record_schemas"]["audit-report-v1"]["properties"]["findings"]["items"]
+                    ["additionalProperties"] = json!(true);
             }),
             Box::new(|v| {
                 v["evaluator_identity"]["production_judge"]
@@ -882,13 +1381,16 @@ mod tests {
                     .pop();
             }),
         ];
-        for mutate in mutations {
+        for (index, mutate) in mutations.into_iter().enumerate() {
             let mut value = base.clone();
             mutate(&mut value);
-            assert!(matches!(
-                decode_stored_bundle(&resign(value)),
-                Err(BundleDecodeError::Execution(_))
-            ));
+            assert!(
+                matches!(
+                    decode_stored_bundle(&resign(value)),
+                    Err(BundleDecodeError::Execution(_))
+                ),
+                "mutation {index} was accepted"
+            );
         }
         let mut subordinate = base;
         subordinate["section_digests"]["profile"] = json!(format!("sha256:{}", "0".repeat(64)));
