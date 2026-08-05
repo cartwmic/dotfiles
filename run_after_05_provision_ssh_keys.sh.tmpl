@@ -1,8 +1,13 @@
-{{- if ne .profile "termux" -}}
-#!/bin/sh
-# Non-termux profiles: no-op (script is also .chezmoiignore-gated).
-exit 0
-{{- else -}}
+{{/*
+  Single source of truth for the SSH credentials this repo provisions.
+  Both the termux and personal branches below interpolate these, so a key
+  rotation is a one-line change instead of a grep-and-pray across files.
+*/ -}}
+{{- $homelabRef := "op://developer/cartwmic-homelab ssh key/private key?ssh-format=openssh" -}}
+{{- $homelabFp := "SHA256:s1NF+DDqZKlvvy/wDQXBACMs3jb/cjkvy/UpOYbypOQ" -}}
+{{- $whonixRef := "op://developer/whonix-homelab/private key?ssh-format=openssh" -}}
+{{- $whonixFp := "SHA256:oNPHkrMebH0d0dq6B+gexDeimXdUbDHh38dHf3EGpEE" -}}
+{{- if eq .profile "termux" -}}
 #!/data/data/com.termux/files/usr/bin/bash
 #
 # Always fetch Termux SSH private keys from 1Password into ~/.ssh:
@@ -25,8 +30,8 @@ exit 0
 # guest.
 #
 # Expected fingerprints (ed25519):
-#   homelab  SHA256:s1NF+DDqZKlvvy/wDQXBACMs3jb/cjkvy/UpOYbypOQ
-#   whonix   SHA256:oNPHkrMebH0d0dq6B+gexDeimXdUbDHh38dHf3EGpEE
+#   homelab  {{ $homelabFp }}
+#   whonix   {{ $whonixFp }}
 
 set -euo pipefail
 
@@ -40,10 +45,10 @@ DISTRO="${DISTRO:-debian}"
 OP_VERSION="${OP_VERSION:-2.31.1}"
 OP_ARCH="${OP_ARCH:-arm64}"
 
-HOMELAB_FP='SHA256:s1NF+DDqZKlvvy/wDQXBACMs3jb/cjkvy/UpOYbypOQ'
-WHONIX_FP='SHA256:oNPHkrMebH0d0dq6B+gexDeimXdUbDHh38dHf3EGpEE'
-HOMELAB_REF="${HOMELAB_REF:-op://developer/cartwmic-homelab ssh key/private key?ssh-format=openssh}"
-WHONIX_REF="${WHONIX_REF:-op://developer/whonix-homelab/private key?ssh-format=openssh}"
+HOMELAB_FP='{{ $homelabFp }}'
+WHONIX_FP='{{ $whonixFp }}'
+HOMELAB_REF="${HOMELAB_REF:-{{ $homelabRef }}}"
+WHONIX_REF="${WHONIX_REF:-{{ $whonixRef }}}"
 
 log()  { printf '%s %s\n' "$LOG_PREFIX" "$1" >&2; }
 warn() { printf '%s WARN: %s\n' "$LOG_PREFIX" "$1" >&2; }
@@ -267,5 +272,122 @@ if [ "$failed" -ne 0 ]; then
   exit 1
 fi
 
+exit 0
+{{- else if eq .profile "personal" -}}
+#!/bin/sh
+#
+# Provision the shared homelab SSH credential into ~/.ssh/homelab on personal
+# Mac/Linux machines, using the native 1Password CLI.
+#
+# WHY THIS EXISTS
+# ---------------
+# chezmoi does not manage private key material, so a freshly provisioned
+# machine gets ~/.ssh/config with `IdentityFile ~/.ssh/homelab` but no key, and
+# every homelab SSH attempt dies with "Permission denied (publickey)". Same
+# provisioning-gap class as the missing ~/.config/agent-harness/op-service-token.
+#
+# The 1Password SSH agent is NOT a substitute. Without an agent.toml allowlist
+# the agent exposes Private-vault keys only, and this credential lives in the
+# 'developer' vault, so it is never offered. Homelab auth is key-file based.
+#
+# Mirrors the termux branch above: runs on every apply, fast-exits on a
+# fingerprint match, soft-skips (exit 0) when op is unavailable or
+# unauthenticated so an apply is never blocked on secret availability, and
+# fails hard (exit 1) once op IS usable but the fetch or validation breaks.
+#
+# Expected fingerprint (ed25519): {{ $homelabFp }}
+
+set -eu
+
+SCRIPT_NAME="$(basename "$0")"
+LOG_PREFIX="[${SCRIPT_NAME}]"
+
+HOMELAB_PATH="${HOMELAB_PATH:-$HOME/.ssh/homelab}"
+OP_TOKEN_FILE="${OP_TOKEN_FILE:-$HOME/.config/agent-harness/op-service-token}"
+HOMELAB_FP='{{ $homelabFp }}'
+HOMELAB_REF="${HOMELAB_REF:-{{ $homelabRef }}}"
+
+log()  { printf '%s %s\n' "$LOG_PREFIX" "$1" >&2; }
+warn() { printf '%s WARN: %s\n' "$LOG_PREFIX" "$1" >&2; }
+
+fingerprint_of() {
+  ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2}'
+}
+
+# Already correct? Nothing to do. This is what makes the script safe to run on
+# every apply, and what lets it self-heal a deleted or rotated key.
+if [ -r "$HOMELAB_PATH" ] && [ "$(fingerprint_of "$HOMELAB_PATH")" = "$HOMELAB_FP" ]; then
+  exit 0
+fi
+
+if [ -e "$HOMELAB_PATH" ]; then
+  warn "$HOMELAB_PATH exists but does not match $HOMELAB_FP; refusing to overwrite"
+  warn "move it aside and re-run chezmoi apply if you want it replaced"
+  exit 0
+fi
+
+if ! command -v ssh-keygen >/dev/null 2>&1; then
+  warn "ssh-keygen missing; install openssh and re-run chezmoi apply"
+  exit 0
+fi
+
+if ! command -v op >/dev/null 2>&1; then
+  warn "1Password CLI (op) not found; skipping"
+  warn "install it, then: chezmoi apply"
+  exit 0
+fi
+
+# Prefer an already-exported service-account token, else the token file, else
+# whatever desktop-app integration op can negotiate on its own.
+if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && [ -r "$OP_TOKEN_FILE" ]; then
+  OP_SERVICE_ACCOUNT_TOKEN="$(tr -d '\n\r' < "$OP_TOKEN_FILE")"
+  export OP_SERVICE_ACCOUNT_TOKEN
+fi
+
+if ! op whoami >/dev/null 2>&1; then
+  warn "op is not authenticated (no service-account token, no desktop integration)"
+  warn "run refresh_op_service_account_token.sh or sign in, then: chezmoi apply"
+  exit 0
+fi
+
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+
+# umask before any write so the key is never briefly group/world readable.
+umask 077
+tmp="$(mktemp "$HOME/.ssh/.key.XXXXXX")"
+
+if ! op read "$HOMELAB_REF" > "$tmp" 2>/dev/null; then
+  rm -f "$tmp"
+  warn "op read failed for $HOMELAB_REF"
+  exit 1
+fi
+
+# The ?ssh-format=openssh suffix on the reference is load-bearing: without it
+# op returns PKCS#8 ("BEGIN PRIVATE KEY"), which is flaky for ed25519.
+if ! head -n 1 "$tmp" | grep -q 'BEGIN OPENSSH PRIVATE KEY'; then
+  rm -f "$tmp"
+  warn "fetched material is not an OpenSSH private key"
+  warn "check that HOMELAB_REF keeps its ?ssh-format=openssh suffix"
+  exit 1
+fi
+
+mv "$tmp" "$HOMELAB_PATH"
+chmod 600 "$HOMELAB_PATH"
+ssh-keygen -y -f "$HOMELAB_PATH" > "${HOMELAB_PATH}.pub"
+chmod 644 "${HOMELAB_PATH}.pub"
+
+got_fp="$(fingerprint_of "$HOMELAB_PATH")"
+if [ "$got_fp" != "$HOMELAB_FP" ]; then
+  warn "homelab fingerprint mismatch (got $got_fp; want $HOMELAB_FP)"
+  exit 1
+fi
+
+log "wrote $HOMELAB_PATH"
+exit 0
+{{- else -}}
+#!/bin/sh
+# Other profiles (e.g. axon-work-computer): no-op. The homelab credential is
+# personal infrastructure and has no business on a work machine.
 exit 0
 {{- end }}

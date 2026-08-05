@@ -13,7 +13,7 @@
 # duplicating it.
 #
 # Profiles:
-#   personal — inbound Mac→phone Host block
+#   personal — inbound Mac→phone Host block, plus outbound Mac→homelab hosts
 #   termux   — outbound phone→homelab Host blocks (cartwmic-server/remote,
 #              macbook, whonix ProxyJump) including ControlMaster for jumps
 
@@ -21,6 +21,8 @@ set -eu
 
 PHONE_BEGIN='# >>> chezmoi-managed: phone ssh >>>'
 PHONE_END='# <<< chezmoi-managed: phone ssh <<<'
+HOMELAB_BEGIN='# >>> chezmoi-managed: homelab ssh >>>'
+HOMELAB_END='# <<< chezmoi-managed: homelab ssh <<<'
 TERMUX_BEGIN='# >>> chezmoi-managed: termux ssh >>>'
 TERMUX_END='# <<< chezmoi-managed: termux ssh <<<'
 
@@ -32,6 +34,7 @@ existing=${existing%x}
 cleaned=$(printf '%s' "$existing" | awk '
 	function is_begin(line) {
 		return line == "# >>> chezmoi-managed: phone ssh >>>" \
+			|| line == "# >>> chezmoi-managed: homelab ssh >>>" \
 			|| line == "# >>> chezmoi-managed: termux ssh >>>" \
 			|| line == "# >>> ntfy-harpoon-jump remote target >>>" \
 			|| line == "# >>> ntfy-harpoon-jump controlmaster >>>" \
@@ -39,6 +42,7 @@ cleaned=$(printf '%s' "$existing" | awk '
 	}
 	function is_end(line) {
 		return line == "# <<< chezmoi-managed: phone ssh <<<" \
+			|| line == "# <<< chezmoi-managed: homelab ssh <<<" \
 			|| line == "# <<< chezmoi-managed: termux ssh <<<" \
 			|| line == "# <<< ntfy-harpoon-jump remote target <<<" \
 			|| line == "# <<< ntfy-harpoon-jump controlmaster <<<" \
@@ -98,6 +102,30 @@ Host phone
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
 $PHONE_END
+
+$HOMELAB_BEGIN
+# Outbound homelab targets from a personal Mac/Linux machine. Same shared
+# cartwmic-homelab key the phone uses, provisioned to ~/.ssh/homelab by
+# 05_provision_ssh_keys. Host names deliberately match the termux block so
+# muscle memory and jump scripts behave identically from either end.
+#
+# IdentitiesOnly is load-bearing: ~/.ssh/config sets IdentityAgent to the
+# 1Password agent for Host *, and that agent carries unrelated keys (including
+# a stale 'cartwmic-homelab - user1' that no homelab host authorizes). Without
+# this pin those get offered first and can exhaust MaxAuthTries before the
+# right key is ever tried.
+Host cartwmic-server remote
+    HostName 10.19.1.221
+    User cartwmic
+    IdentityFile ~/.ssh/homelab
+    IdentitiesOnly yes
+
+Host laptop
+    HostName 10.19.1.112
+    User michael
+    IdentityFile ~/.ssh/homelab
+    IdentitiesOnly yes
+$HOMELAB_END
 EOF
 {{- else if eq .profile "termux" }}
 
