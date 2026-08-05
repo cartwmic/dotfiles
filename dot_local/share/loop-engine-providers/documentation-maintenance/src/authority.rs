@@ -45,6 +45,7 @@ pub struct CurrentSnapshot<'a> {
     pub graph_revision: &'a str,
     pub current_state: &'a str,
     pub workflow_state_version: u64,
+    pub stored_graph: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +57,7 @@ pub struct ValidatedAuthority {
     graph_revision: String,
     state: String,
     workflow_state_version: u64,
+    stored_graph: Value,
 }
 
 impl ValidatedAuthority {
@@ -124,6 +126,7 @@ pub fn validate_selected_authority(
                 graph_revision: snapshot.graph_revision.to_string(),
                 state: snapshot.current_state.to_string(),
                 workflow_state_version: snapshot.workflow_state_version,
+                stored_graph: snapshot.stored_graph.clone(),
             });
         }
         return Err("exactly one selected transition certificate is required outside initial audit version 0".to_string());
@@ -199,6 +202,23 @@ pub fn validate_selected_authority(
             "authority-changing transition certificate must target a distinct state".to_string(),
         );
     }
+    let certificate_gates = cert["required_gate_ids"]
+        .as_array()
+        .expect("validated required gate IDs")
+        .iter()
+        .map(|gate| gate.as_str().expect("validated gate ID").to_string())
+        .collect::<Vec<_>>();
+    validate_frozen_transition(
+        &snapshot.stored_graph,
+        cert["source_state"]
+            .as_str()
+            .expect("validated source state"),
+        cert["event"].as_str().expect("validated event"),
+        cert["target_state"]
+            .as_str()
+            .expect("validated target state"),
+        &certificate_gates,
+    )?;
 
     let manifest = store.load(
         &metadata.authority_manifest_relative_path,
@@ -248,6 +268,7 @@ pub fn validate_selected_authority(
         graph_revision: snapshot.graph_revision.to_string(),
         state: snapshot.current_state.to_string(),
         workflow_state_version: snapshot.workflow_state_version,
+        stored_graph: snapshot.stored_graph.clone(),
     })
 }
 
@@ -489,6 +510,58 @@ fn load_and_validate_predecessor(
     }
 }
 
+fn validate_frozen_transition(
+    stored_graph: &Value,
+    source_state: &str,
+    event: &str,
+    target_state: &str,
+    required_gate_ids: &[String],
+) -> Result<(), String> {
+    let transitions = stored_graph
+        .get("transitions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "stored graph has no canonical transitions array".to_string())?;
+    let mut requested_gates = required_gate_ids.to_vec();
+    requested_gates.sort();
+    requested_gates.dedup();
+    if requested_gates.len() != required_gate_ids.len() {
+        return Err("required gate IDs must be unique".to_string());
+    }
+    let matching = transitions.iter().filter(|transition| {
+        transition.get("source_state_id").and_then(Value::as_str) == Some(source_state)
+            && transition.get("event_id").and_then(Value::as_str) == Some(event)
+            && transition.get("target_state_id").and_then(Value::as_str) == Some(target_state)
+    });
+    let mut count = 0usize;
+    for transition in matching {
+        count += 1;
+        let mut graph_gates = transition
+            .get("gate_ids")
+            .and_then(Value::as_array)
+            .ok_or(())
+            .and_then(|gates| {
+                gates
+                    .iter()
+                    .map(|gate| gate.as_str().map(str::to_string).ok_or(()))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|()| "stored graph transition has invalid gate IDs".to_string())?;
+        graph_gates.sort();
+        if graph_gates == requested_gates {
+            return Ok(());
+        }
+    }
+    if count == 0 {
+        Err(format!(
+            "certificate transition {source_state} --{event}--> {target_state} is absent from stored graph"
+        ))
+    } else {
+        Err(format!(
+            "certificate gate set does not match frozen transition {source_state} --{event}--> {target_state}"
+        ))
+    }
+}
+
 fn validate_transition_attempt(
     run_id: &str,
     predecessor: &ValidatedAuthority,
@@ -518,6 +591,13 @@ fn validate_transition_attempt(
     if context.required_gate_ids.is_empty() {
         return Err("authority succession requires at least one gate".to_string());
     }
+    validate_frozen_transition(
+        &predecessor.stored_graph,
+        &context.source_state,
+        &context.event,
+        &context.target_state,
+        &context.required_gate_ids,
+    )?;
     let required: BTreeSet<&str> = context
         .required_gate_ids
         .iter()
@@ -678,6 +758,25 @@ mod tests {
         format!("sha256:{}", "9".repeat(64))
     }
 
+    fn test_stored_graph() -> Value {
+        json!({
+            "transitions": [
+                {
+                    "source_state_id": "audit",
+                    "event_id": "audit-complete",
+                    "target_state_id": "triage",
+                    "gate_ids": ["audit-ready"]
+                },
+                {
+                    "source_state_id": "triage",
+                    "event_id": "baseline-clean",
+                    "target_state_id": "end",
+                    "gate_ids": ["audit-clean"]
+                }
+            ]
+        })
+    }
+
     #[test]
     fn all_pass_successor_is_selected_only_at_matching_successor_snapshot() {
         let temp = tempdir().unwrap();
@@ -689,6 +788,7 @@ mod tests {
             graph_revision: &graph_revision,
             current_state: "audit",
             workflow_state_version: 0,
+            stored_graph: test_stored_graph(),
         };
         let predecessor = validate_selected_authority(&store, &initial, &[]).unwrap();
         let context = TransitionContext {
@@ -697,25 +797,52 @@ mod tests {
             source_workflow_state_version: 0,
             event: "audit-complete".into(),
             target_state: "triage".into(),
-            required_gate_ids: vec!["audit-ready".into(), "audit-semantic".into()],
+            required_gate_ids: vec!["audit-ready".into()],
             reset: false,
         };
+        let mut forged_event = context.clone();
+        forged_event.event = "forged-event".into();
+        assert!(create_successor(
+            &store,
+            RecordCategory::Audits,
+            "forged-event",
+            &predecessor,
+            &forged_event,
+            &[GateOutcome {
+                gate_id: "audit-ready".into(),
+                passed: true,
+            }],
+            &AuthorityDelta::default(),
+        )
+        .unwrap_err()
+        .contains("absent from stored graph"));
+        let mut forged_gates = context.clone();
+        forged_gates.required_gate_ids = vec!["forged-gate".into()];
+        assert!(create_successor(
+            &store,
+            RecordCategory::Audits,
+            "forged-gates",
+            &predecessor,
+            &forged_gates,
+            &[GateOutcome {
+                gate_id: "forged-gate".into(),
+                passed: true,
+            }],
+            &AuthorityDelta::default(),
+        )
+        .unwrap_err()
+        .contains("gate set does not match"));
+
         let evidence = create_successor(
             &store,
             RecordCategory::Audits,
             "inv-1",
             &predecessor,
             &context,
-            &[
-                GateOutcome {
-                    gate_id: "audit-ready".into(),
-                    passed: true,
-                },
-                GateOutcome {
-                    gate_id: "audit-semantic".into(),
-                    passed: true,
-                },
-            ],
+            &[GateOutcome {
+                gate_id: "audit-ready".into(),
+                passed: true,
+            }],
             &AuthorityDelta::default(),
         )
         .unwrap();
@@ -724,6 +851,7 @@ mod tests {
             graph_revision: &graph_revision,
             current_state: "triage",
             workflow_state_version: 1,
+            stored_graph: test_stored_graph(),
         };
         let mut noncanonical_id = evidence.clone();
         noncanonical_id.id = "caller-chosen-id".to_string();
@@ -800,6 +928,7 @@ mod tests {
             graph_revision: &graph_revision,
             current_state: "end",
             workflow_state_version: 2,
+            stored_graph: test_stored_graph(),
         };
         validate_selected_authority(&store, &end, &[next_evidence]).unwrap();
 
@@ -827,6 +956,7 @@ mod tests {
             graph_revision: &graph_revision,
             current_state: "audit",
             workflow_state_version: 0,
+            stored_graph: test_stored_graph(),
         };
         let predecessor = validate_selected_authority(&store, &initial, &[]).unwrap();
         let claim = store
@@ -878,6 +1008,7 @@ mod tests {
             graph_revision: &graph_revision,
             current_state: "triage",
             workflow_state_version: 1,
+            stored_graph: test_stored_graph(),
         };
         let predecessor = validate_selected_authority(&store, &triage, &[first]).unwrap();
         let invalidation = AuthorityDelta {
@@ -910,6 +1041,7 @@ mod tests {
             graph_revision: &graph_revision,
             current_state: "end",
             workflow_state_version: 2,
+            stored_graph: test_stored_graph(),
         };
         let selected = validate_selected_authority(&store, &end, &[second]).unwrap();
         assert!(selected.manifest.value["slots"]
@@ -929,6 +1061,7 @@ mod tests {
             graph_revision: &graph_revision,
             current_state: "audit",
             workflow_state_version: 0,
+            stored_graph: test_stored_graph(),
         };
         let predecessor = validate_selected_authority(&store, &initial, &[]).unwrap();
         let context = TransitionContext {
@@ -985,6 +1118,7 @@ mod tests {
             graph_revision: &graph_revision,
             current_state: "audit",
             workflow_state_version: 0,
+            stored_graph: test_stored_graph(),
         };
         let predecessor = validate_selected_authority(&store, &initial, &[]).unwrap();
         let context = TransitionContext {
