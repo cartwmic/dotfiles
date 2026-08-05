@@ -238,15 +238,26 @@ mod tests {
                 .iter()
                 .map(|clause| clause.examples.len())
                 .collect::<Vec<_>>(),
-            [4, 4, 4, 4, 4, 4, 5, 6, 6, 6, 6, 7, 7, 6, 7, 7]
+            [5, 5, 6, 5, 5, 6, 6, 8, 7, 6, 7, 8, 9, 7, 8, 8]
         );
         assert_eq!(
             clauses
                 .iter()
                 .map(|clause| clause.examples.len())
                 .sum::<usize>(),
-            87
+            106
         );
+        for clause in &clauses {
+            let classes = clause
+                .examples
+                .iter()
+                .map(|example| example.class.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(
+                classes,
+                ["bad", "borderline", "good", "out-of-scope"].into()
+            );
+        }
         assert!(clauses
             .into_iter()
             .flat_map(|clause| clause.examples)
