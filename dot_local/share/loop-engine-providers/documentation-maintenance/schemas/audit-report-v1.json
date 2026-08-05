@@ -2,6 +2,42 @@
   "$id": "urn:documentation-maintenance:audit-report-v1",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "oneOf": [
+    {
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "recovery_record_schema"
+            ]
+          },
+          {
+            "required": [
+              "recovery_record_digest"
+            ]
+          },
+          {
+            "required": [
+              "recovery_validation"
+            ]
+          },
+          {
+            "required": [
+              "recovery_diagnostic"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "required": [
+        "recovery_record_schema",
+        "recovery_record_digest",
+        "recovery_validation",
+        "recovery_diagnostic"
+      ]
+    }
+  ],
   "properties": {
     "claim_set_digest": {
       "pattern": "^sha256:[0-9a-f]{64}$",
@@ -99,6 +135,34 @@
     "manifest_digest": {
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
+    },
+    "recovery_diagnostic": {
+      "oneOf": [
+        {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recovery_record_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "recovery_record_schema": {
+      "enum": [
+        "evaluation-recovery-v1",
+        "breach-remediation-v1"
+      ]
+    },
+    "recovery_validation": {
+      "enum": [
+        "passed",
+        "failed"
+      ]
     },
     "run_id": {
       "maxLength": 128,

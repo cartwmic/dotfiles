@@ -750,6 +750,11 @@ mod tests {
         empty_cause["diagnosed_cause"] = Value::String(String::new());
         assert!(validate(RecordKind::EvaluationRecovery, &empty_cause).is_err());
 
+        let mut partial_report = load("audit-report-v1");
+        partial_report["recovery_record_digest"] =
+            Value::String(format!("sha256:{}", "8".repeat(64)));
+        assert!(validate(RecordKind::AuditReport, &partial_report).is_err());
+
         let remediation = load("breach-remediation-v1");
         validate(RecordKind::BreachRemediation, &remediation).unwrap();
         let mut wrong_scope = remediation.clone();

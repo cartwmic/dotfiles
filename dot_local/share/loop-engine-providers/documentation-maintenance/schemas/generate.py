@@ -87,7 +87,12 @@ schemas["judgment-bundle-v1"] = record("judgment-bundle-v1", {"manifest_digest":
 valid["judgment-bundle-v1"]={"schema":"judgment-bundle-v1","run_id":"run-1","manifest_digest":"sha256:"+"0"*64,"bundle_digest":"sha256:"+"1"*64,"model_identity_digest":"sha256:"+"2"*64,"decoding_parameter_digest":"sha256:"+"3"*64,"claim_votes":[{"vote_id":"v1","subject_kind":"claim","subject_id":"c1","judge_ordinal":1,"verdict":"adhered","controlling_reason":"claim.adhered","evidence_digests":[],"evidence_fact_ids":[],"invocation_id":"sha256:"+"4"*64,"request_digest":"sha256:"+"5"*64,"evaluation_diagnostic":None},{"vote_id":"v2","subject_kind":"claim","subject_id":"c1","judge_ordinal":2,"verdict":"adhered","controlling_reason":"claim.adhered","evidence_digests":[],"evidence_fact_ids":[],"invocation_id":"sha256:"+"6"*64,"request_digest":"sha256:"+"7"*64,"evaluation_diagnostic":None}],"role_votes":[],"focused_breach_adjudications":[],"resolved":[{"subject_kind":"claim","subject_id":"c1","verdict":"adhered","controlling_reason":"claim.adhered","evidence_fact_ids":[],"evidence_digests":[]}]}
 
 finding=obj({"finding_id":ID,"primary_reason":ID,"document":PATH,"location":location,"evidence_digests":arr(DIGEST,128),"secondary_consequences":arr(ID,128)})
-schemas["audit-report-v1"] = record("audit-report-v1", {"manifest_digest":DIGEST,"claim_set_digest":DIGEST,"judgment_bundle_digest":DIGEST,"disposition":{"enum":["clean","revision_required","breach_confirmed","evaluation_error"]},"findings":arr(finding,10000)})
+schemas["audit-report-v1"] = record("audit-report-v1", {"manifest_digest":DIGEST,"claim_set_digest":DIGEST,"judgment_bundle_digest":DIGEST,"disposition":{"enum":["clean","revision_required","breach_confirmed","evaluation_error"]},"findings":arr(finding,10000),"recovery_record_schema":{"enum":["evaluation-recovery-v1","breach-remediation-v1"]},"recovery_record_digest":DIGEST,"recovery_validation":{"enum":["passed","failed"]},"recovery_diagnostic":{"oneOf":[NONEMPTY_TEXT,{"type":"null"}]}}, required=["manifest_digest","claim_set_digest","judgment_bundle_digest","disposition","findings"])
+_recovery_fields = ["recovery_record_schema","recovery_record_digest","recovery_validation","recovery_diagnostic"]
+schemas["audit-report-v1"]["oneOf"] = [
+    {"not":{"anyOf":[{"required":[field]} for field in _recovery_fields]}},
+    {"required":_recovery_fields},
+]
 valid["audit-report-v1"]={"schema":"audit-report-v1","run_id":"run-1","manifest_digest":"sha256:"+"0"*64,"claim_set_digest":"sha256:"+"1"*64,"judgment_bundle_digest":"sha256:"+"2"*64,"disposition":"clean","findings":[]}
 
 schemas["revision-request-v1"] = record("revision-request-v1", {

@@ -198,6 +198,28 @@ impl ArtifactStore {
         self.load_with_links(relative_path, kind, expected_digest, &mut verification)
     }
 
+    pub(crate) fn load_invocation(
+        &self,
+        category: RecordCategory,
+        invocation_id: &str,
+        kind: RecordKind,
+    ) -> Result<Option<StoredRecord>, String> {
+        validate_component(invocation_id, "invocation_id")?;
+        let relative_path = format!(
+            "provider/{}/{invocation_id}/{}.json",
+            category.directory(),
+            kind.name()
+        );
+        let stored = match self.read_record(&relative_path, kind) {
+            Ok(stored) => stored,
+            Err(error) if error.contains("No such file") || error.contains("not found") => {
+                return Ok(None)
+            }
+            Err(error) => return Err(error),
+        };
+        self.load(&relative_path, kind, &stored.digest).map(Some)
+    }
+
     pub(crate) fn load_digest(
         &self,
         kind: RecordKind,
@@ -358,6 +380,14 @@ impl ArtifactStore {
                     RecordKind::JudgmentBundle,
                     verification,
                 )?;
+                if let Some(schema) = value.get("recovery_record_schema").and_then(Value::as_str) {
+                    let kind = match schema {
+                        "evaluation-recovery-v1" => RecordKind::EvaluationRecovery,
+                        "breach-remediation-v1" => RecordKind::BreachRemediation,
+                        _ => return Err("audit report recovery schema is unsupported".into()),
+                    };
+                    self.verify_link(value, "recovery_record_digest", kind, verification)?;
+                }
             }
             RecordKind::RevisionRequest => {
                 self.verify_link(
