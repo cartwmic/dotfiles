@@ -7,36 +7,44 @@ pub(super) fn approved_cases(id: &str) -> Vec<PolicyCase> {
             ("bad", "Domain service imports ORM repository class because it is convenient", "breached via I1/I2", "Concrete outer mechanism enters inner source"),
             ("good", "Small inner module uses language standard-library collections", "adhered", "Standard language mechanism is not outer project adapter"),
             ("out-of-scope", "Technical library exposes its own framework-native type", "out-of-scope unless shape override", "Technical role may itself be domain"),
+            ("borderline", "Shared module imports framework utility, but approved inner/outer subsystem mapping is absent", "unverifiable", "Ownership mapping is required before dependency direction can be judged"),
         ],
         "T2" => &[
             ("good", "`Money` prevents currency mismatch and invalid arithmetic", "adhered", "Type carries real domain rule"),
             ("bad", "Five string parameters represent tenant, user, account, source, destination", "drifted", "Primitive ambiguity obscures distinct domain concepts"),
             ("borderline", "Two strings in tiny pass-through CRUD record", "adhered or shape-gate omission", "Newtypes add no demonstrated protection"),
             ("bad", "Wrapper type adds no constraint, behavior, or distinction", "drifted under T5", "Ceremony, not domain meaning"),
+            ("out-of-scope", "Wire codec uses integer and byte primitives for protocol framing outside mapped policy", "out-of-scope", "Technical representation with no repository policy meaning is outside domain-model richness"),
         ],
         "T3" => &[
             ("good", "HTTP handler parses request, invokes use case, maps result to response", "adhered", "Translation only"),
             ("bad", "Flutter widget calculates eligibility and selects retry policy", "breached via I5", "Business decision moved to delivery"),
             ("good", "UI contains substantial rendering and animation state", "adhered", "Outer size is not policy ownership"),
             ("good", "Controller performs shape validation before translation", "adhered", "Transport-shape validation belongs at boundary"),
+            ("borderline", "UI ranks available actions, but evidence does not establish whether ordering is product policy or presentation", "unverifiable", "Policy ownership depends on whether ranking changes a business decision"),
+            ("out-of-scope", "UI owns animation timing and pixel layout", "out-of-scope", "Pure rendering state does not own business policy"),
         ],
         "T4" => &[
             ("good", "Use case tested with in-memory implementation of inner-defined repository port", "adhered", "Fake respects inward-owned seam"),
             ("good", "Contract suite runs against real database adapter and in-memory fake", "adhered", "Strong seam evidence"),
             ("borderline", "Controller test mocks use case and asserts one method call", "borderline", "Valid adapter translation check; does not prove business behavior"),
             ("bad", "Core test mocks core collaborators and asserts internal call sequence", "drifted", "Freezes implementation rather than behavior"),
+            ("out-of-scope", "Adapter translation test mocks inner use case only to verify request and response mapping", "out-of-scope", "Humble adapter interaction check does not claim to prove inner policy behavior"),
         ],
         "T5" => &[
             ("good", "One production implementation plus inner-defined test fake", "adhered", "Testability earns port"),
             ("good", "One implementation with approved migration to second vendor in progress", "adhered", "Credible replacement earns port"),
             ("bad", "Interface mirrors concrete class one-for-one and has no other use", "drifted", "Ceremonial abstraction"),
             ("borderline", "Application-service split in small domain", "borderline", "Judge ceremony against actual orchestration complexity"),
+            ("out-of-scope", "Outer framework callback implements framework-required interface at delivery edge", "out-of-scope", "Mechanism-owned callback seam is not a speculative inner abstraction"),
         ],
         "T6" => &[
             ("good", "Inner policy defines offline mode, stale-age limit, and visible stale marker", "adhered", "Fallback is explicit product behavior"),
             ("bad", "Adapter catches lookup error and returns empty collection", "drifted", "Failure silently becomes valid result"),
             ("good", "Retry same operation under bounded inner policy", "adhered", "Retry is explicit recovery, not alternate meaning"),
             ("good", "Security classifier defaults to protected state on uncertainty", "adhered", "Fail-closed result preserves guarantee rather than hiding failure"),
+            ("borderline", "Adapter serves cached data after failure, but evidence does not establish inner stale-age or visibility policy", "unverifiable", "Fallback meaning cannot be judged without inward-owned recovery semantics"),
+            ("out-of-scope", "Development formatter falls back to plain text when color support is unavailable", "out-of-scope", "Tool presentation fallback does not alter repository product policy"),
         ],
         "T7" => &[
             ("good", "Core classifier decides sensitivity; UI consumes decision", "adhered", "One authority"),
@@ -44,6 +52,7 @@ pub(super) fn approved_cases(id: &str) -> Vec<PolicyCase> {
             ("bad", "UI and API each calculate eligibility independently", "drifted", "Two policy authorities"),
             ("borderline", "Old and new parsers run in parallel during bounded migration with divergence telemetry and removal gate", "borderline but acceptable", "Temporary duality has explicit ownership, horizon, and retirement proof"),
             ("bad", "Two equivalent guards kept permanently “for defense in depth”", "drifted", "Redundant co-authorities are not distinct controls"),
+            ("out-of-scope", "Generated compatibility parser duplicates syntax recognition but delegates every semantic decision to one core authority", "out-of-scope", "Mechanism duplication without duplicate policy authority is outside decision-authority drift"),
         ],
         "I1" => &[
             ("good", "SQL adapter imports inner repository port", "adhered", "Direction points inward"),
@@ -52,6 +61,8 @@ pub(super) fn approved_cases(id: &str) -> Vec<PolicyCase> {
             ("good", "Inner uses language standard library", "adhered", "Standard runtime is not project outer mechanism"),
             ("bad", "Two outbound adapters depend on each other cyclically", "breached", "Acyclicity applies across production module graph"),
             ("good", "Test package imports both inner and outer to run integration test", "adhered", "Test composition does not create production edge"),
+            ("borderline", "Shared production package has mixed helpers and its approved boundary role is not mapped", "unverifiable", "Dependency direction requires owner-approved inner/outer classification"),
+            ("out-of-scope", "Build-time documentation generator imports rendering plugin outside production module graph", "out-of-scope", "Non-production tooling graph is outside mapped runtime dependency invariant"),
         ],
         "I2" => &[
             ("good", "Inner defines `Clock`; system-clock adapter implements it", "adhered", "Consumer owns needed capability"),
@@ -60,6 +71,7 @@ pub(super) fn approved_cases(id: &str) -> Vec<PolicyCase> {
             ("bad", "Inner calls global container to resolve database client", "breached", "Hidden construction still couples inward to concrete mechanism"),
             ("good", "Domain has no external dependency and therefore no port", "adhered", "Ports are created for boundaries, not ceremony"),
             ("borderline", "Single port implementation plus no fake or replacement rationale", "I2 adhered; T5 drifted", "Ownership correct; abstraction may still be unjustified"),
+            ("out-of-scope", "Protocol SDK defines standardized wire capability that is itself the library domain", "out-of-scope", "Technical library may own protocol abstraction under shape mapping"),
         ],
         "I3" => &[
             ("good", "Provider deserializes JSON DTO, then constructs inner value object", "adhered", "Mechanism terminates at boundary"),
@@ -76,6 +88,7 @@ pub(super) fn approved_cases(id: &str) -> Vec<PolicyCase> {
             ("bad", "Adapter renames fields but copies vendor lifecycle assumptions unchanged", "breached", "Cosmetic mapping is not anti-corruption"),
             ("borderline", "External and inner model are proven semantically identical and project explicitly adopts contract", "borderline", "Needs owner-approved rationale and compatibility consequence; convenience is insufficient"),
             ("borderline", "Standard numeric/string encoding crosses boundary before conversion", "adhered only at adapter edge", "Primitive transport form cannot continue as ambiguous domain authority"),
+            ("out-of-scope", "Repository is an SDK whose approved domain is the external protocol model itself", "out-of-scope", "Owner-approved technical domain can adopt external contract explicitly"),
         ],
         "I5" => &[
             ("good", "Use case decides insufficient funds; HTTP adapter maps result to 409", "adhered", "Policy inward, representation outward"),
@@ -85,6 +98,7 @@ pub(super) fn approved_cases(id: &str) -> Vec<PolicyCase> {
             ("bad", "UI recomputes capability from raw fields", "breached", "Duplicate policy authority"),
             ("good", "Adapter retries transient network failure under budget supplied by inner policy", "adhered", "Mechanism executes inward-owned rule"),
             ("borderline", "Adapter chooses retry count itself", "breached when retry is product policy; otherwise unverifiable", "Judge must establish whether value affects policy or only mechanism tuning"),
+            ("out-of-scope", "Renderer chooses font fallback without changing available actions or policy result", "out-of-scope", "Pure presentation choice is outside business-decision ownership"),
         ],
         "I6" => &[
             ("good", "API `main` selects adapters and injects them into use cases", "adhered", "Outermost executable edge owns wiring"),
@@ -94,6 +108,8 @@ pub(super) fn approved_cases(id: &str) -> Vec<PolicyCase> {
             ("good", "Framework DI container configured in outer bootstrap", "adhered", "Container remains outer implementation detail"),
             ("bad", "Service locator passed into inner core", "breached", "Construction hidden behind lookup still leaks mechanism selection"),
             ("bad", "Two roots for same runtime wire same port differently without declared mode boundary", "breached", "Competing composition authority"),
+            ("borderline", "Plugin host performs wiring, but evidence does not establish whether host or library owns runtime composition", "unverifiable", "Composition ownership must be mapped for independently launched runtime"),
+            ("out-of-scope", "Pure library exports constructors but has no executable runtime or adapter selection", "out-of-scope", "Library without composition responsibility has no application composition root"),
         ],
         "I7" => &[
             ("good", "SQLite→Postgres changes adapter, migration, and wiring only", "adhered", "Mechanism replacement leaves policy intact"),
@@ -102,6 +118,7 @@ pub(super) fn approved_cases(id: &str) -> Vec<PolicyCase> {
             ("bad", "Equivalent vendor swap requires rewriting domain enum named after old vendor", "breached", "External model became inner authority"),
             ("borderline", "Storage migration requires temporary inner-visible migration state", "borderline", "Accept only when migration state is genuine business state; mechanism progress alone stays outward"),
             ("borderline", "Tiny project has no meaningful replacement axis after owner shape override", "unverifiable or evidence against override", "Judge cannot invent hypothetical mechanisms solely to satisfy doctrine"),
+            ("out-of-scope", "One-off migration executable is approved for one mechanism and owns no stable policy boundary", "out-of-scope", "No behaviorally equivalent replacement axis exists in approved scope"),
         ],
         "I8" => &[
             ("good", "Package visibility makes inner→outer import impossible at compile time", "adhered", "Compiler is mandatory enforcement"),
@@ -111,6 +128,7 @@ pub(super) fn approved_cases(id: &str) -> Vec<PolicyCase> {
             ("borderline", "Framework leakage requires semantic review unavailable to tooling", "adhered if repeatable evidence named", "Only mechanically expressible portion must automate"),
             ("borderline", "Repository declares check but audit cannot establish config coverage", "unverifiable", "Judge cannot assume pass or failure"),
             ("good", "No third-party analyzer, but manifest boundaries enforce direction", "adhered", "Vendor tool not required"),
+            ("out-of-scope", "Defeasible naming tenet remains review-only because it is not a mapped binding invariant", "out-of-scope", "I8 automation obligation applies to mechanically expressible binding invariants"),
         ],
         "I9" => &[
             ("good", "Provider maps SDK timeout to inner `DependencyUnavailable`", "adhered", "Mechanism translated into inner vocabulary"),
@@ -120,6 +138,7 @@ pub(super) fn approved_cases(id: &str) -> Vec<PolicyCase> {
             ("borderline", "FFI returns terminal human-readable message with no caller branching", "adhered when distinction is truly irrelevant", "String alone is not automatically violation"),
             ("bad", "FFI collapses retryable and permanent failures while UI must choose action", "breached", "Required semantics lost"),
             ("good", "Adapter maps unknown vendor state to explicit inner `UnknownExternalState` error", "adhered", "Uncertainty preserved, not silently defaulted"),
+            ("out-of-scope", "Internal diagnostic logger formats mechanism error for operators without crossing mapped boundary or driving action", "out-of-scope", "Non-authoritative internal diagnostics are outside boundary error translation"),
         ],
         _ => panic!("approved doctrine clause {id} lacks calibration table"),
     };
@@ -178,24 +197,24 @@ mod tests {
     #[test]
     fn exact_approved_inventory_and_representative_rows_are_frozen() {
         let counts = [
-            ("T1", 4),
-            ("T2", 4),
-            ("T3", 4),
-            ("T4", 4),
-            ("T5", 4),
-            ("T6", 4),
-            ("T7", 5),
-            ("I1", 6),
-            ("I2", 6),
+            ("T1", 5),
+            ("T2", 5),
+            ("T3", 6),
+            ("T4", 5),
+            ("T5", 5),
+            ("T6", 6),
+            ("T7", 6),
+            ("I1", 8),
+            ("I2", 7),
             ("I3", 6),
-            ("I4", 6),
-            ("I5", 7),
-            ("I6", 7),
-            ("I7", 6),
-            ("I8", 7),
-            ("I9", 7),
+            ("I4", 7),
+            ("I5", 8),
+            ("I6", 9),
+            ("I7", 7),
+            ("I8", 8),
+            ("I9", 8),
         ];
-        assert_eq!(counts.iter().map(|(_, count)| count).sum::<usize>(), 87);
+        assert_eq!(counts.iter().map(|(_, count)| count).sum::<usize>(), 106);
         for (id, expected) in counts {
             assert_eq!(approved_cases(id).len(), expected, "{id}");
         }

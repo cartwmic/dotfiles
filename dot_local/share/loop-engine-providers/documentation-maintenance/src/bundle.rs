@@ -57,7 +57,8 @@ pub fn build_bundle() -> Result<FrozenBundle, String> {
         "reason_registry":reason_registry(),
         "claim_policy":claim_policy(),
         "judgment_policy":judgment_policy(),
-        "doctrine":{"packs":doctrine::doctrine_packs(),"clauses":doctrine::doctrine_clauses()},
+        "doctrine":compact_doctrine_contract()?,
+
         "recovery_policy":recovery_policy(),
         "evaluator_identity":evaluator_identity(),
         "record_schemas":schemas,
@@ -170,6 +171,41 @@ const DIGESTED_SECTIONS: [&str; 10] = [
     "compatibility",
 ];
 
+fn compact_doctrine_contract() -> Result<Value, String> {
+    let mut clauses = serde_json::to_value(doctrine::doctrine_clauses())
+        .map_err(|error| format!("encode doctrine clauses: {error}"))?;
+    for clause in clauses
+        .as_array_mut()
+        .ok_or("encoded doctrine clauses are not an array")?
+    {
+        let examples = clause["examples"]
+            .as_array_mut()
+            .ok_or("encoded doctrine examples are not an array")?;
+        for example in examples {
+            let object = example
+                .as_object()
+                .ok_or("encoded doctrine case is not an object")?;
+            *example = json!([
+                object["class"],
+                object["input"],
+                object["expected_outcome"],
+                object
+                    .get("normalized_verdict")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                object["affected_subject"],
+                object["deciding_evidence"],
+                object["controlling_reason"]
+            ]);
+        }
+    }
+    Ok(json!({
+        "packs": doctrine::doctrine_packs(),
+        "case_tuple_fields": ["class","input","accepted_mapping","normalized_verdict","affected_subject","deciding_evidence","controlling_reason"],
+        "clauses": clauses
+    }))
+}
+
 fn section_digests(value: &Value) -> Result<Value, String> {
     let mut digests = Map::new();
     for key in DIGESTED_SECTIONS {
@@ -257,6 +293,27 @@ fn validate_policy_case_shapes(value: &Value) -> Result<(), String> {
             decode_cases(&clause["examples"], "role")?;
         }
     }
+    let tuple_fields = value["doctrine"]["case_tuple_fields"]
+        .as_array()
+        .ok_or("doctrine case tuple fields must be an array")?;
+    let expected_tuple_fields = [
+        "class",
+        "input",
+        "accepted_mapping",
+        "normalized_verdict",
+        "affected_subject",
+        "deciding_evidence",
+        "controlling_reason",
+    ];
+    if tuple_fields
+        .iter()
+        .map(Value::as_str)
+        .collect::<Option<Vec<_>>>()
+        .as_deref()
+        != Some(expected_tuple_fields.as_slice())
+    {
+        return Err("doctrine case tuple field contract is unsupported".into());
+    }
     for clause in value["doctrine"]["clauses"]
         .as_array()
         .ok_or("doctrine clauses must be an array")?
@@ -264,15 +321,26 @@ fn validate_policy_case_shapes(value: &Value) -> Result<(), String> {
         let id = clause["id"]
             .as_str()
             .ok_or("doctrine clause requires an id")?;
-        for case in decode_cases(&clause["examples"], "doctrine")? {
-            let expected_reason = format!(
-                "doctrine.{}.{}",
-                id.to_ascii_lowercase(),
-                case.normalized_verdict
-                    .as_deref()
-                    .ok_or("doctrine case requires normalized_verdict")?
-            );
-            if case.controlling_reason != expected_reason {
+        for case in clause["examples"]
+            .as_array()
+            .ok_or("doctrine examples must be an array")?
+        {
+            let tuple = case
+                .as_array()
+                .filter(|tuple| tuple.len() == 7)
+                .ok_or("doctrine case must follow exact seven-field tuple encoding")?;
+            for (index, field) in tuple.iter().enumerate() {
+                if index == 3 {
+                    if !field.is_string() {
+                        return Err("doctrine normalized verdict must be a string".into());
+                    }
+                } else if field.as_str().is_none_or(str::is_empty) {
+                    return Err("doctrine case tuple strings must be non-empty".into());
+                }
+            }
+            let normalized = tuple[3].as_str().expect("checked normalized verdict");
+            let expected_reason = format!("doctrine.{}.{normalized}", id.to_ascii_lowercase());
+            if tuple[6] != expected_reason {
                 return Err(format!(
                     "doctrine case normalized verdict and reason disagree for {id}"
                 ));
@@ -392,6 +460,24 @@ fn validate_reason_registry(value: &Value) -> Result<(), String> {
         .collect::<Result<BTreeSet<_>, _>>()?;
     if registered.len() != registry.len() {
         return Err("reason registry entries must be unique".into());
+    }
+    for clause in value["doctrine"]["clauses"]
+        .as_array()
+        .ok_or("doctrine clauses must be an array")?
+    {
+        for case in clause["examples"]
+            .as_array()
+            .ok_or("doctrine examples must be an array")?
+        {
+            let reason = case
+                .as_array()
+                .and_then(|tuple| tuple.get(6))
+                .and_then(Value::as_str)
+                .ok_or("doctrine tuple controlling reason must be a string")?;
+            if !registered.contains(reason) {
+                return Err(format!("unknown doctrine case reason {reason}"));
+            }
+        }
     }
     fn inspect(value: &Value, registered: &BTreeSet<&str>) -> Result<(), String> {
         match value {
@@ -666,7 +752,7 @@ mod tests {
         assert_eq!(a.digest, b.digest);
         assert_eq!(
             a.digest,
-            "sha256:1e2d82405c3ae1b508b82c35cfc8215ee943a17245d87cec60cda220fcc3277f"
+            "sha256:b98a6aa976edefde1a08b5904eecd060b32c191e873e4981c8269a609eae07f6"
         );
         assert!(a.canonical_bytes.len() <= MACHINE_BUNDLE_MAX_BYTES);
         assert!(metadata_depth(&a.value) <= METADATA_MAX_DEPTH);
@@ -787,13 +873,13 @@ mod tests {
                     json!("unknown.reason");
             }),
             Box::new(|v| {
-                v["doctrine"]["clauses"][0]["examples"][1]["normalized_verdict"] = json!("adhered");
+                v["doctrine"]["clauses"][0]["examples"][1][3] = json!("adhered");
             }),
             Box::new(|v| {
                 v["doctrine"]["clauses"][0]["examples"][0]
-                    .as_object_mut()
+                    .as_array_mut()
                     .unwrap()
-                    .remove("normalized_verdict");
+                    .pop();
             }),
         ];
         for mutate in mutations {
