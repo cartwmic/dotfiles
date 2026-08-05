@@ -6,5 +6,7 @@
   ],
   "run_id": "run-1",
   "schema": "revision-request-v1",
+  "subject_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "subject_kind": "presented-draft",
   "target_document": "README.md"
 }

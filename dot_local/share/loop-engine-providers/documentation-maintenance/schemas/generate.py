@@ -87,8 +87,15 @@ finding=obj({"finding_id":ID,"primary_reason":ID,"document":PATH,"location":loca
 schemas["audit-report-v1"] = record("audit-report-v1", {"manifest_digest":DIGEST,"claim_set_digest":DIGEST,"judgment_bundle_digest":DIGEST,"disposition":{"enum":["clean","revision_required","breach_confirmed","evaluation_error"]},"findings":arr(finding,10000)})
 valid["audit-report-v1"]={"schema":"audit-report-v1","run_id":"run-1","manifest_digest":"sha256:"+"0"*64,"claim_set_digest":"sha256:"+"1"*64,"judgment_bundle_digest":"sha256:"+"2"*64,"disposition":"clean","findings":[]}
 
-schemas["revision-request-v1"] = record("revision-request-v1", {"audit_report_digest":DIGEST,"target_document":{"enum":["docs/intent.md","AGENTS.md","README.md"]},"reason":TEXT,"requested_changes":arr(TEXT,256,1)})
-valid["revision-request-v1"]={"schema":"revision-request-v1","run_id":"run-1","audit_report_digest":"sha256:"+"0"*64,"target_document":"README.md","reason":"Correct stale command.","requested_changes":["Use supported command."]}
+schemas["revision-request-v1"] = record("revision-request-v1", {
+    "audit_report_digest":DIGEST,
+    "subject_kind":{"enum":["presented-draft","accepted-draft","clean-staged-bundle"]},
+    "subject_digest":DIGEST,
+    "target_document":{"enum":["docs/intent.md","AGENTS.md","README.md"]},
+    "reason":TEXT,
+    "requested_changes":arr(TEXT,256,1),
+})
+valid["revision-request-v1"]={"schema":"revision-request-v1","run_id":"run-1","audit_report_digest":"sha256:"+"0"*64,"subject_kind":"presented-draft","subject_digest":"sha256:"+"1"*64,"target_document":"README.md","reason":"Correct stale command.","requested_changes":["Use supported command."]}
 
 change=obj({"claim_id":ID,"change_kind":{"enum":["created","meaning","force","scope","rationale","operational-effect","breach-evidence","governance","classification","removed","weakened","neutral"]},"prior_digest":{"oneOf":[DIGEST,{"type":"null"}]},"proposed_digest":{"oneOf":[DIGEST,{"type":"null"}]},"material":{"type":"boolean"}})
 schemas["intent-semantic-diff-v1"] = record("intent-semantic-diff-v1", {"prior_intent_digest":{"oneOf":[DIGEST,{"type":"null"}]},"proposed_intent_digest":DIGEST,"changes":arr(change,10000),"material":{"type":"boolean"}})
