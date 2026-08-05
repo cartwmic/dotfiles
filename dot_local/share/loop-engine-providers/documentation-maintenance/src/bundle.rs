@@ -1128,7 +1128,7 @@ fn recovery_policy() -> Value {
         "evaluation_recovery":{
             "schema":"evaluation-recovery-v1",
             "requires":["failed invocation or audit-report identity","unchanged evaluation key","inspected journal or report evidence identity","diagnosed cause","exactly one of non-empty changed retry condition or non-empty explicit transient-failure rationale","caller retry authorization"],
-            "semantics":"Exactly one retry alternative is present: changed_retry_condition XOR transient_failure_rationale. Caller-attested procedural evidence is not proof inspection occurred. Unchanged semantic key replays existing result and cannot be resampled. Protocol evaluate_gates evaluation_error commits no transition or provider evidence and retry requires inline recovery record.",
+            "semantics":"Exactly one retry alternative is present: changed_retry_condition XOR transient_failure_rationale. Caller-attested procedural evidence is not proof inspection occurred. Unchanged semantic key replays existing result and cannot be resampled. A protocol response whose kind is evaluation_error commits no transition or provider evidence and retry requires inline recovery; by contrast, schema-valid evaluator failures retained in a successfully assembled audit-report-v1 are durable disposition evaluation_error evidence routed by failed gate verdicts.",
             "reasons":["recovery.evaluation.accepted","recovery.evaluation.identity-mismatch","recovery.evaluation.key-changed","recovery.evaluation.inspection-missing","recovery.evaluation.cause-missing","recovery.evaluation.retry-condition-missing","recovery.evaluation.authorization-missing","recovery.evaluation.resampling-refused"],
             "examples":[
                 recovery_case("good","Recovery binds failed identity and unchanged key, cites inspected report, diagnoses schema timeout, records corrected service condition, and carries caller authorization.","accepted","recovery.evaluation.accepted","all required identities and changed retry condition are present"),
@@ -1215,7 +1215,7 @@ mod tests {
         assert_eq!(a.digest, b.digest);
         assert_eq!(
             a.digest,
-            "sha256:f303acba7c284a997b36c2973434ca4468dd2708064e870ff6ccda96d63a68be"
+            "sha256:23ebcbfadfbeb71d0c1d640d8a5d256aa6409fc7081be889eaa16934b0507a78"
         );
         assert!(a.canonical_bytes.len() <= MACHINE_BUNDLE_MAX_BYTES);
         assert!(metadata_depth(&a.value) <= METADATA_MAX_DEPTH);

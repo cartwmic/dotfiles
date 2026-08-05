@@ -9,6 +9,34 @@ pub enum EvaluationRecoveryDecision {
     RetryAuthorized,
 }
 
+/// Semantic identity for one frozen assessment. Recovery may retry transport
+/// under this exact key, but cannot resample an existing durable result.
+pub fn evaluation_key_digest(
+    bundle: &crate::bundle::FrozenBundle,
+    manifest: &crate::codec::DecodedRecord,
+    claims: &crate::codec::DecodedRecord,
+) -> Result<String, String> {
+    evaluation_key_digest_from_parts(&bundle.digest, manifest, claims)
+}
+
+pub fn evaluation_key_digest_from_parts(
+    bundle_digest: &str,
+    manifest: &crate::codec::DecodedRecord,
+    claims: &crate::codec::DecodedRecord,
+) -> Result<String, String> {
+    codec::validate_digest(bundle_digest)?;
+    if manifest.kind != RecordKind::RepositoryManifest || claims.kind != RecordKind::ClaimSet {
+        return Err("recovery.evaluation.key-carrier-invalid".into());
+    }
+    let value = serde_json::json!({
+        "schema":"evaluation-key-v1",
+        "bundle_digest":bundle_digest,
+        "manifest_digest":manifest.digest,
+        "claim_set_digest":claims.digest,
+    });
+    Ok(codec::sha256(&codec::canonicalize(&value)?))
+}
+
 /// Bind replay to verified canonical result; authorize retry only for a
 /// inspected protocol failure with no durable result.
 pub fn validate_evaluation_recovery(
@@ -39,10 +67,12 @@ pub fn validate_evaluation_recovery(
                 .ok_or("recovery.evaluation.inspection-missing")
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
+    let failed_is_digest = codec::validate_digest(failed_identity).is_ok();
     if inspected.is_empty()
         || !inspected.is_subset(inspected_identities)
-        || !inspected.contains(failed_identity)
-        || !inspected_identities.contains(failed_identity)
+        || (failed_is_digest
+            && (!inspected.contains(failed_identity)
+                || !inspected_identities.contains(failed_identity)))
     {
         return Err("recovery.evaluation.inspection-missing".into());
     }
@@ -58,7 +88,22 @@ pub fn validate_evaluation_recovery(
     if artifact_store.run_id() != run_id {
         return Err("recovery.evaluation.identity-mismatch".into());
     }
-    match artifact_store.load_digest(RecordKind::AuditReport, failed_identity)? {
+    let durable = if codec::validate_digest(failed_identity).is_ok() {
+        artifact_store.load_digest(RecordKind::AuditReport, failed_identity)?
+    } else {
+        artifact_store.load_invocation(
+            crate::storage::RecordCategory::Audits,
+            failed_identity,
+            RecordKind::AuditReport,
+        )?
+    };
+    if durable
+        .as_ref()
+        .is_some_and(|stored| !inspected.contains(&stored.digest))
+    {
+        return Err("recovery.evaluation.inspection-missing".into());
+    }
+    match durable {
         Some(stored) => {
             let result = &stored.decoded;
             if result.value["disposition"] != "evaluation_error"
@@ -398,6 +443,15 @@ mod tests {
             "recovery.evaluation.key-changed"
         );
     }
+    #[test]
+    fn evaluation_key_binds_frozen_bundle_identity() {
+        let manifest = crate::codec::encode_record(&json!({"schema":"repository-manifest-v1","run_id":"run","manifest_kind":"baseline","work_root":"/repo","git_common_dir":"/repo/.git","entries":[],"repository_fingerprint":digest('a'),"baseline_digest":null,"overlay_paths":[]}), RecordKind::RepositoryManifest, "run").unwrap();
+        let claims = crate::codec::encode_record(&json!({"schema":"claim-set-v1","run_id":"run","manifest_digest":manifest.digest.clone(),"claims":[]}), RecordKind::ClaimSet, "run").unwrap();
+        let first = evaluation_key_digest_from_parts(&digest('b'), &manifest, &claims).unwrap();
+        let second = evaluation_key_digest_from_parts(&digest('c'), &manifest, &claims).unwrap();
+        assert_ne!(first, second);
+    }
+
     #[test]
     fn retry_requires_inspected_failed_identity() {
         let recovery = json!({"schema":"evaluation-recovery-v1","run_id":"run","failed_identity":digest('a'),"evaluation_key_digest":digest('b'),"inspected_evidence_digests":[digest('c')],"diagnosed_cause":"transport","changed_retry_condition":"configured","transient_failure_rationale":null,"caller_retry_authorized":true});

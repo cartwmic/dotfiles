@@ -129,11 +129,31 @@ impl QualifiedClosedByteTransport for StabilityCheckedTransport<'_, '_> {
     }
 }
 
-struct UnavailableTransport;
-impl QualifiedClosedByteTransport for UnavailableTransport {
+/// P3 production broker: accepts only sealed bytes, emits a deterministic
+/// evaluator failure, and exposes no ambient capability. P6 replaces this
+/// broker only after transport qualification.
+struct SealedFailClosedBroker;
+impl QualifiedClosedByteTransport for SealedFailClosedBroker {
     fn invoke_closed(&self, _: &str, _: &[u8]) -> Result<Vec<u8>, String> {
+        #[cfg(test)]
+        FAIL_CLOSED_INVOCATIONS.with(|count| count.set(count.get() + 1));
         Err("judgment isolation transport unavailable; P6-qualified closed-byte transport is required".into())
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_CLOSED_INVOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_closed_invocation_count() -> usize {
+    FAIL_CLOSED_INVOCATIONS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_fail_closed_invocation_count() {
+    FAIL_CLOSED_INVOCATIONS.with(|count| count.set(0));
 }
 
 /// Production P3 path derives every subject and every evidence projection from
@@ -147,16 +167,8 @@ pub fn coordinate_stored_bundle(
     run_id: &str,
     catalog: &EvidenceCatalog,
 ) -> Result<crate::codec::DecodedRecord, String> {
-    let unavailable = UnavailableTransport;
-    coordinate_stored_bundle_with_transport(
-        view,
-        before,
-        claims,
-        bundle,
-        run_id,
-        catalog,
-        &unavailable,
-    )
+    let broker = SealedFailClosedBroker;
+    coordinate_stored_bundle_with_transport(view, before, claims, bundle, run_id, catalog, &broker)
 }
 
 /// Provider-owned P6 integration calls this after qualifying and installing its
