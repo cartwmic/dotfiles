@@ -231,7 +231,7 @@ fn evaluate_gates(payload: &Value) -> Value {
             "/snapshot",
         )]);
     }
-    let _frozen_bundle = match bundle::decode_stored_bundle(&snapshot.stored_graph) {
+    let frozen_bundle = match bundle::decode_stored_bundle(&snapshot.stored_graph) {
         Ok(bundle) => bundle,
         Err(BundleDecodeError::Unsupported(error)) => {
             return incompatible(vec![Diagnostic::new(
@@ -257,18 +257,62 @@ fn evaluate_gates(payload: &Value) -> Value {
             "/snapshot/inputs/artifact_root",
         )]);
     };
-    let _roots = match boundary::validate_roots(Path::new(work), Path::new(artifact)) {
+    let roots = match boundary::validate_roots(Path::new(work), Path::new(artifact)) {
         Ok(roots) => roots,
         Err(error) => {
             return evaluation_error(vec![Diagnostic::at(error.code, error.message, error.path)])
         }
     };
-    // P3 cannot evaluate without P6's qualified closed-byte transport. Return
-    // before ArtifactStore::open: opening claims artifact-root ownership and
-    // can create its marker. This path stays read-only for both roots.
+    // Execute complete P3 read-only assessment pipeline. Missing P6 transport
+    // becomes retained evaluator-error votes and a verified in-memory audit;
+    // protocol operation still commits no provider record or transition.
+    let view = crate::repository::RepositoryView::new(&roots, &snapshot.run_id);
+    let manifest = match view.capture_stable() {
+        Ok(record) => record,
+        Err(error) => return evaluation_error(vec![Diagnostic::new("repository.capture", error)]),
+    };
+    let catalog = match crate::evidence::EvidenceCatalog::from_manifest(&manifest) {
+        Ok(catalog) => catalog,
+        Err(error) => return evaluation_error(vec![Diagnostic::new("evidence.catalog", error)]),
+    };
+    let claims = match crate::claims::extract_core_claims(&snapshot.run_id, &catalog) {
+        Ok(record) => record,
+        Err(error) => return evaluation_error(vec![Diagnostic::new("claims.extract", error)]),
+    };
+    let judgment = match crate::judgment::coordinate_stored_bundle(
+        &view,
+        &manifest,
+        &claims,
+        &frozen_bundle,
+        &snapshot.run_id,
+        &catalog,
+    ) {
+        Ok(record) => record,
+        Err(error) => return evaluation_error(vec![Diagnostic::new("judgment.coordinate", error)]),
+    };
+    let report = match crate::audit::assemble_verified(
+        &snapshot.run_id,
+        &manifest,
+        &claims,
+        &judgment,
+        &frozen_bundle,
+        &catalog,
+    ) {
+        Ok(record) => record,
+        Err(error) => {
+            return evaluation_error(vec![Diagnostic::new(
+                "audit.assemble",
+                format!("{error:?}"),
+            )])
+        }
+    };
     evaluation_error(vec![Diagnostic::new(
         "judgment.transport-unavailable",
-        "P6-qualified closed-byte judgment transport is not installed; no provider record, transition evidence, or content verdict was committed",
+        format!(
+            "P6-qualified closed-byte transport is not installed; verified in-memory audit {} has disposition {}; no provider record, transition evidence, or content verdict was committed",
+            report.digest,
+            report.value["disposition"].as_str().unwrap_or("evaluation_error")
+        ),
     )])
 }
 
