@@ -2,7 +2,7 @@
   "bundle_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "claim_votes": [
     {
-      "controlling_reason": "claim.supported",
+      "controlling_reason": "claim.accurate.supported",
       "evidence_digests": [],
       "judge_ordinal": 1,
       "subject_id": "c1",
@@ -11,7 +11,7 @@
       "vote_id": "v1"
     },
     {
-      "controlling_reason": "claim.supported",
+      "controlling_reason": "claim.accurate.supported",
       "evidence_digests": [],
       "judge_ordinal": 2,
       "subject_id": "c1",
@@ -24,7 +24,7 @@
   "manifest_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "resolved": [
     {
-      "controlling_reason": "claim.supported",
+      "controlling_reason": "claim.accurate.supported",
       "subject_id": "c1",
       "subject_kind": "claim",
       "verdict": "adhered"

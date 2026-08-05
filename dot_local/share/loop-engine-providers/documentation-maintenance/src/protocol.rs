@@ -1,6 +1,8 @@
 use crate::authority::{self, CurrentSnapshot};
 use crate::boundary;
+use crate::bundle::{self, BundleDecodeError};
 use crate::storage::ArtifactStore;
+use crate::workflow;
 use crate::PROVIDER_VERSION;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -105,13 +107,10 @@ pub fn handle(request: RequestEnvelope) -> Result<ResultEnvelope, String> {
     }
     validate_registration(&request.registration)?;
     let result = match request.role.as_str() {
-        "describe" => description(),
+        "describe" => description()?,
         "validate_inputs" => validate_inputs(&request.payload),
         "evaluate_gates" => evaluate_gates(&request.payload),
-        "live_guidance" => incompatible(vec![Diagnostic::new(
-            "compatibility.phase-unavailable",
-            "live guidance policy is outside implemented phase P1",
-        )]),
+        "live_guidance" => live_guidance(&request.payload),
         "check_compatibility" => check_compatibility(&request.payload),
         other => return Err(format!("unsupported role {other:?}")),
     };
@@ -139,28 +138,10 @@ fn validate_registration(registration: &Registration) -> Result<(), String> {
     Ok(())
 }
 
-fn description() -> Value {
-    json!({
-        "kind":"description",
-        "graph":{
-            "initial_state":"audit",
-            "states":[{
-                "id":"audit",
-                "final":false,
-                "static_guidance":{
-                    "kind":"text",
-                    "text":"Protocol/run-boundary phase is active. Assessment gates and frozen policy are intentionally unavailable in phase P1."
-                }
-            }],
-            "transitions":[],
-            "input_declarations":[
-                {"id":"work_root","kind":"path","required":true},
-                {"id":"artifact_root","kind":"path","required":true}
-            ],
-            "live_guidance_supported":false,
-            "metadata":{"documentation_maintenance_provider_phase":"P1"}
-        }
-    })
+fn description() -> Result<Value, String> {
+    workflow::graph()
+        .map(|graph| json!({"kind":"description","graph":graph}))
+        .map_err(|error| format!("fatal provider construction failure: {error}"))
 }
 
 fn validate_inputs(payload: &Value) -> Value {
@@ -250,6 +231,9 @@ fn evaluate_gates(payload: &Value) -> Value {
             "/snapshot",
         )]);
     }
+    if let Err(response) = require_supported_bundle(&snapshot.stored_graph) {
+        return response;
+    }
     let Some(work) = snapshot.inputs.get("work_root").and_then(Value::as_str) else {
         return evaluation_error(vec![Diagnostic::at(
             "input.required",
@@ -311,8 +295,132 @@ fn evaluate_gates(payload: &Value) -> Value {
     }
     incompatible(vec![Diagnostic::new(
         "compatibility.phase-unavailable",
-        "assessment gate policy is outside implemented phase P1; no gate verdict was produced",
+        "phase P2 freezes gate policy and topology but does not implement phase P3 evaluator operations; no gate verdict was produced",
     )])
+}
+
+fn require_supported_bundle(stored_graph: &Value) -> Result<(), Value> {
+    match bundle::decode_stored_bundle(stored_graph) {
+        Ok(_) => Ok(()),
+        Err(BundleDecodeError::Unsupported(error)) => Err(incompatible(vec![Diagnostic::new(
+            "compatibility.unsupported-bundle",
+            error,
+        )])),
+        Err(BundleDecodeError::Execution(error)) => Err(evaluation_error(vec![Diagnostic::new(
+            "bundle.supported-execution",
+            error,
+        )])),
+    }
+}
+
+fn live_guidance(payload: &Value) -> Value {
+    let snapshot: RunSnapshot = match payload.get("snapshot").cloned().map(serde_json::from_value) {
+        Some(Ok(snapshot)) => snapshot,
+        Some(Err(error)) => {
+            return evaluation_error(vec![Diagnostic::at(
+                "snapshot.invalid",
+                error.to_string(),
+                "/snapshot",
+            )])
+        }
+        None => {
+            return evaluation_error(vec![Diagnostic::at(
+                "snapshot.missing",
+                "snapshot is required",
+                "/snapshot",
+            )])
+        }
+    };
+    if let Err(response) = require_supported_bundle(&snapshot.stored_graph) {
+        return response;
+    }
+    let Some(work) = snapshot.inputs.get("work_root").and_then(Value::as_str) else {
+        return evaluation_error(vec![Diagnostic::at(
+            "input.required",
+            "work_root is required",
+            "/snapshot/inputs/work_root",
+        )]);
+    };
+    let Some(artifact) = snapshot.inputs.get("artifact_root").and_then(Value::as_str) else {
+        return evaluation_error(vec![Diagnostic::at(
+            "input.required",
+            "artifact_root is required",
+            "/snapshot/inputs/artifact_root",
+        )]);
+    };
+    let roots = match boundary::validate_roots(Path::new(work), Path::new(artifact)) {
+        Ok(roots) => roots,
+        Err(error) => {
+            return evaluation_error(vec![Diagnostic::at(error.code, error.message, error.path)])
+        }
+    };
+    let store = match ArtifactStore::open(&roots.artifact_root, &snapshot.run_id) {
+        Ok(store) => store,
+        Err(error) => {
+            return evaluation_error(vec![Diagnostic::at(
+                "artifact-root.ownership",
+                error,
+                roots.artifact_root.display().to_string(),
+            )])
+        }
+    };
+    let selected: Vec<Evidence> = match serde_json::from_value(
+        payload
+            .get("selected_evidence")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    ) {
+        Ok(selected) => selected,
+        Err(error) => {
+            return evaluation_error(vec![Diagnostic::at(
+                "evidence.invalid",
+                error.to_string(),
+                "/selected_evidence",
+            )])
+        }
+    };
+    let current = CurrentSnapshot {
+        run_id: &snapshot.run_id,
+        graph_revision: &snapshot.graph_revision,
+        current_state: &snapshot.current_state,
+        workflow_state_version: snapshot.workflow_state_version,
+        stored_graph: snapshot.stored_graph.clone(),
+    };
+    let authority = match authority::validate_selected_authority(&store, &current, &selected) {
+        Ok(authority) => authority,
+        Err(error) => {
+            return evaluation_error(vec![Diagnostic::at(
+                "authority.invalid",
+                error,
+                "/selected_evidence",
+            )])
+        }
+    };
+    let authority_slots = match authority.load_slots(&store) {
+        Ok(slots) => slots,
+        Err(error) => {
+            return evaluation_error(vec![Diagnostic::at(
+                "authority.slot-load",
+                error,
+                "/selected_evidence",
+            )])
+        }
+    };
+    match workflow::project_live(
+        &snapshot.stored_graph,
+        &snapshot.current_state,
+        &authority.manifest().value,
+        &authority_slots,
+    ) {
+        Ok(text) => json!({"kind":"guidance","text":text}),
+        Err(BundleDecodeError::Unsupported(error)) => incompatible(vec![Diagnostic::new(
+            "compatibility.unsupported-bundle",
+            error,
+        )]),
+        Err(BundleDecodeError::Execution(error)) => {
+            evaluation_error(vec![Diagnostic::new("guidance.supported-execution", error)])
+        }
+    }
 }
 
 fn check_compatibility(payload: &Value) -> Value {
@@ -328,13 +436,23 @@ fn check_compatibility(payload: &Value) -> Value {
                 "live_guidance",
             ]
         });
+    let stored = payload.get("stored_graph").unwrap_or(&Value::Null);
+    let bundle_status = bundle::decode_stored_bundle(stored);
+    if let Err(BundleDecodeError::Execution(error)) = &bundle_status {
+        return evaluation_error(vec![Diagnostic::new("bundle.supported-execution", error)]);
+    }
     let capabilities: Vec<Value> = requested
         .into_iter()
         .map(|capability| match capability {
             "protocol-v1" | "run-boundary" => json!({"capability":capability,"status":"compatible","diagnostics":[]}),
-            "evaluate_gates" | "live_guidance" => json!({
+            "frozen-policy" | "state-graph" | "live_guidance" => match &bundle_status {
+                Ok(_) => json!({"capability":capability,"status":"compatible","diagnostics":[]}),
+                Err(BundleDecodeError::Unsupported(error)) => json!({"capability":capability,"status":"incompatible","diagnostics":[{"code":"compatibility.unsupported-bundle","message":error}]}),
+                Err(BundleDecodeError::Execution(_)) => unreachable!("returned above"),
+            },
+            "evaluate_gates" => json!({
                 "capability":capability,"status":"incompatible",
-                "diagnostics":[{"code":"compatibility.phase-unavailable","message":"capability is outside implemented phase P1"}]
+                "diagnostics":[{"code":"compatibility.phase-unavailable","message":"phase P3 evaluator operations are not implemented"}]
             }),
             _ => json!({
                 "capability":capability,"status":"unknown",
@@ -358,6 +476,7 @@ fn evaluation_error(diagnostics: Vec<Diagnostic>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec;
     use std::fs;
     use std::process::Command;
     use tempfile::tempdir;
@@ -374,7 +493,47 @@ mod tests {
     }
 
     #[test]
-    fn describe_is_p1_only_and_input_validation_reaches_dispatch() {
+    fn bundle_compatibility_precedes_roots_and_authority() {
+        let snapshot = |stored_graph: Value| {
+            json!({
+                "run_id":"run-1","registration_id":"reg-1","graph_revision":format!("sha256:{}", "1".repeat(64)),
+                "lifecycle":"running","current_state":"triage","workflow_state_version":1,"lifecycle_version":1,
+                "inputs":{"work_root":"/does/not/exist","artifact_root":"/also/missing"},"stored_graph":stored_graph
+            })
+        };
+        let unsupported = json!({"metadata":{"documentation_audit_bundle_v1":{"schema":"documentation-audit-bundle-v2"}}});
+        let evaluated = evaluate_gates(
+            &json!({"snapshot":snapshot(unsupported.clone()),"selected_evidence":[]}),
+        );
+        assert_eq!(evaluated["kind"], "incompatible");
+        assert_eq!(
+            evaluated["diagnostics"][0]["code"],
+            "compatibility.unsupported-bundle"
+        );
+        let guidance =
+            live_guidance(&json!({"snapshot":snapshot(unsupported),"selected_evidence":[]}));
+        assert_eq!(guidance["kind"], "incompatible");
+
+        let mut malformed = workflow::graph().unwrap();
+        malformed["metadata"]["documentation_audit_bundle_v1"]["profile"]["unknown"] = json!(true);
+        let bytes =
+            codec::canonicalize(&malformed["metadata"]["documentation_audit_bundle_v1"]).unwrap();
+        malformed["metadata"]["documentation_audit_bundle_digest"] = json!(codec::sha256(&bytes));
+        let evaluated =
+            evaluate_gates(&json!({"snapshot":snapshot(malformed.clone()),"selected_evidence":[]}));
+        assert_eq!(evaluated["kind"], "evaluation_error");
+        assert_eq!(
+            evaluated["diagnostics"][0]["code"],
+            "bundle.supported-execution"
+        );
+        let compatibility = check_compatibility(
+            &json!({"stored_graph":malformed,"capabilities":["frozen-policy"]}),
+        );
+        assert_eq!(compatibility["kind"], "evaluation_error");
+    }
+
+    #[test]
+    fn describe_emits_p2_graph_and_input_validation_reaches_dispatch() {
         let request = RequestEnvelope {
             protocol_major: 1,
             role: "describe".into(),
@@ -384,10 +543,14 @@ mod tests {
         };
         let response = handle(request).unwrap();
         assert_eq!(response.result["kind"], "description");
-        assert!(response.result["graph"]["transitions"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            response.result["graph"]["transitions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            22
+        );
+        assert_eq!(response.result["graph"]["metadata"]["provider_phase"], "P2");
 
         let work = tempdir().unwrap();
         let artifacts = tempdir().unwrap();
