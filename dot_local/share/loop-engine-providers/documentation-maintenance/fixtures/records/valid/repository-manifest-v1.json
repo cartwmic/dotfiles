@@ -1,0 +1,11 @@
+{
+  "baseline_digest": null,
+  "entries": [],
+  "git_common_dir": "/repo/.git",
+  "manifest_kind": "baseline",
+  "overlay_paths": [],
+  "repository_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "run_id": "run-1",
+  "schema": "repository-manifest-v1",
+  "work_root": "/repo"
+}

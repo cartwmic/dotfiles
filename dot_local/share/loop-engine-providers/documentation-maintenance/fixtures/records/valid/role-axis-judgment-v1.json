@@ -1,0 +1,18 @@
+{
+  "bundle_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "judgments": [
+    {
+      "clause_id": "R1",
+      "controlling_reason": "role.satisfied",
+      "decoding_parameters_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "document": "README.md",
+      "evidence_digests": [],
+      "judge_identity_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "judgment_id": "j1",
+      "verdict": "satisfied"
+    }
+  ],
+  "manifest_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "run_id": "run-1",
+  "schema": "role-axis-judgment-v1"
+}

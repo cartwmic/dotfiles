@@ -1,0 +1,49 @@
+{
+  "$id": "urn:documentation-maintenance:revision-request-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "audit_report_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "reason": {
+      "maxLength": 65536,
+      "type": "string"
+    },
+    "requested_changes": {
+      "items": {
+        "maxLength": 65536,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "run_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "revision-request-v1"
+    },
+    "target_document": {
+      "enum": [
+        "docs/intent.md",
+        "AGENTS.md",
+        "README.md"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "run_id",
+    "audit_report_digest",
+    "target_document",
+    "reason",
+    "requested_changes"
+  ],
+  "title": "revision-request-v1",
+  "type": "object"
+}

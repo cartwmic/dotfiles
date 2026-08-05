@@ -1,0 +1,19 @@
+{
+  "doctrine_pack_digests": [],
+  "manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "owner_id": "owner",
+  "prior_digest": null,
+  "proposed_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "revoked": false,
+  "run_id": "run-1",
+  "schema": "owner-attestation-v1",
+  "statement_version": 1,
+  "subject_kind": "final-staged-bundle",
+  "targets": [
+    {
+      "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "mode": 420,
+      "path": "README.md"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+[package]
+name = "documentation-maintenance-provider"
+version = "0.1.0"
+edition = "2021"
+description = "loop-engine protocol v1 documentation-maintenance provider"
+publish = false
+
+[lib]
+name = "documentation_maintenance"
+path = "src/lib.rs"
+
+[[bin]]
+name = "documentation-maintenance"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+hex = "0.4"
+jsonschema = { version = "0.49", default-features = false }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_json_canonicalizer = "0.3"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+strip = true

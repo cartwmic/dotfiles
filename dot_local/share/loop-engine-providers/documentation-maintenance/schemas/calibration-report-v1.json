@@ -1,0 +1,121 @@
+{
+  "$id": "urn:documentation-maintenance:calibration-report-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bundle_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "cases": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "affected_identity": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "case_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "controlling_reason": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expected_verdict": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "fixture_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "observations": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "affected_identity": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "controlling_reason": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "ordinal": {
+                  "maximum": 3,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "verdict": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ordinal",
+                "verdict",
+                "affected_identity",
+                "controlling_reason"
+              ],
+              "type": "object"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          }
+        },
+        "required": [
+          "case_id",
+          "fixture_digest",
+          "expected_verdict",
+          "affected_identity",
+          "controlling_reason",
+          "observations"
+        ],
+        "type": "object"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "type": "array"
+    },
+    "decoding_parameters_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "model_identity_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "qualified": {
+      "type": "boolean"
+    },
+    "run_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "calibration-report-v1"
+    }
+  },
+  "required": [
+    "schema",
+    "run_id",
+    "bundle_digest",
+    "model_identity_digest",
+    "decoding_parameters_digest",
+    "cases",
+    "qualified"
+  ],
+  "title": "calibration-report-v1",
+  "type": "object"
+}

@@ -1,0 +1,72 @@
+{
+  "$id": "urn:documentation-maintenance:breach-remediation-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "binding_force": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "binding_rule_semantic_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "changed_non_core_paths": {
+      "items": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "type": "array"
+    },
+    "cited_evidence_digests": {
+      "items": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
+    "new_manifest_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "old_manifest_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "prior_breach_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "rule_unweakened": {
+      "const": true
+    },
+    "run_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "breach-remediation-v1"
+    }
+  },
+  "required": [
+    "schema",
+    "run_id",
+    "prior_breach_digest",
+    "binding_rule_semantic_digest",
+    "binding_force",
+    "old_manifest_digest",
+    "new_manifest_digest",
+    "changed_non_core_paths",
+    "cited_evidence_digests",
+    "rule_unweakened"
+  ],
+  "title": "breach-remediation-v1",
+  "type": "object"
+}

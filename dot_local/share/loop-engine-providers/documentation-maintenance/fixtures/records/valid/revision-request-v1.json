@@ -1,0 +1,10 @@
+{
+  "audit_report_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "reason": "Correct stale command.",
+  "requested_changes": [
+    "Use supported command."
+  ],
+  "run_id": "run-1",
+  "schema": "revision-request-v1",
+  "target_document": "README.md"
+}
