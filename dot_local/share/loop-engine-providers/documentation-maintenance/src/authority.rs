@@ -959,6 +959,24 @@ mod tests {
             stored_graph: test_stored_graph(),
         };
         let predecessor = validate_selected_authority(&store, &initial, &[]).unwrap();
+        let repository_manifest = store
+            .store(
+                RecordCategory::Audits,
+                "repository-manifest",
+                RecordKind::RepositoryManifest,
+                &json!({
+                    "schema":"repository-manifest-v1",
+                    "run_id":"run-1",
+                    "manifest_kind":"baseline",
+                    "work_root":"/repo",
+                    "git_common_dir":"/repo/.git",
+                    "entries":[],
+                    "repository_fingerprint":format!("sha256:{}", "0".repeat(64)),
+                    "baseline_digest":null,
+                    "overlay_paths":[]
+                }),
+            )
+            .unwrap();
         let claim = store
             .store(
                 RecordCategory::Audits,
@@ -967,7 +985,7 @@ mod tests {
                 &json!({
                     "schema":"claim-set-v1",
                     "run_id":"run-1",
-                    "manifest_digest":format!("sha256:{}", "1".repeat(64)),
+                    "manifest_digest":repository_manifest.digest,
                     "claims":[]
                 }),
             )
