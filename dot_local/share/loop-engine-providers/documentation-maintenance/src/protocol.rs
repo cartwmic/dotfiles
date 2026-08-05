@@ -231,9 +231,18 @@ fn evaluate_gates(payload: &Value) -> Value {
             "/snapshot",
         )]);
     }
-    if let Err(response) = require_supported_bundle(&snapshot.stored_graph) {
-        return response;
-    }
+    let _frozen_bundle = match bundle::decode_stored_bundle(&snapshot.stored_graph) {
+        Ok(bundle) => bundle,
+        Err(BundleDecodeError::Unsupported(error)) => {
+            return incompatible(vec![Diagnostic::new(
+                "compatibility.unsupported-bundle",
+                error,
+            )])
+        }
+        Err(BundleDecodeError::Execution(error)) => {
+            return evaluation_error(vec![Diagnostic::new("bundle.supported-execution", error)])
+        }
+    };
     let Some(work) = snapshot.inputs.get("work_root").and_then(Value::as_str) else {
         return evaluation_error(vec![Diagnostic::at(
             "input.required",
@@ -248,55 +257,49 @@ fn evaluate_gates(payload: &Value) -> Value {
             "/snapshot/inputs/artifact_root",
         )]);
     };
-    let roots = match boundary::validate_roots(Path::new(work), Path::new(artifact)) {
+    let _roots = match boundary::validate_roots(Path::new(work), Path::new(artifact)) {
         Ok(roots) => roots,
         Err(error) => {
             return evaluation_error(vec![Diagnostic::at(error.code, error.message, error.path)])
         }
     };
-    let store = match ArtifactStore::open(&roots.artifact_root, &snapshot.run_id) {
-        Ok(store) => store,
-        Err(error) => {
-            return evaluation_error(vec![Diagnostic::at(
-                "artifact-root.ownership",
-                error,
-                roots.artifact_root.display().to_string(),
-            )])
-        }
-    };
-    let selected: Vec<Evidence> = match serde_json::from_value(
-        payload
-            .get("selected_evidence")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
-    ) {
-        Ok(selected) => selected,
-        Err(error) => {
-            return evaluation_error(vec![Diagnostic::at(
-                "evidence.invalid",
-                error.to_string(),
-                "/selected_evidence",
-            )])
-        }
-    };
-    let current = CurrentSnapshot {
-        run_id: &snapshot.run_id,
-        graph_revision: &snapshot.graph_revision,
-        current_state: &snapshot.current_state,
-        workflow_state_version: snapshot.workflow_state_version,
-        stored_graph: snapshot.stored_graph.clone(),
-    };
-    if let Err(error) = authority::validate_selected_authority(&store, &current, &selected) {
-        return evaluation_error(vec![Diagnostic::at(
-            "authority.invalid",
-            error,
-            "/selected_evidence",
-        )]);
-    }
-    incompatible(vec![Diagnostic::new(
-        "compatibility.phase-unavailable",
-        "phase P2 freezes gate policy and topology but does not implement phase P3 evaluator operations; no gate verdict was produced",
+    // P3 cannot evaluate without P6's qualified closed-byte transport. Return
+    // before ArtifactStore::open: opening claims artifact-root ownership and
+    // can create its marker. This path stays read-only for both roots.
+    evaluation_error(vec![Diagnostic::new(
+        "judgment.transport-unavailable",
+        "P6-qualified closed-byte judgment transport is not installed; no provider record, transition evidence, or content verdict was committed",
     )])
+}
+
+/// Staged/audit integration boundary for anti-laundering. It accepts only
+/// decoded claim-set records and delegates canonical inventory comparison.
+pub fn validate_staged_claim_authority(
+    run_id: &str,
+    baseline_catalog: &crate::evidence::EvidenceCatalog,
+    proposed_catalog: &crate::evidence::EvidenceCatalog,
+    baseline: &crate::codec::DecodedRecord,
+    proposed: &crate::codec::DecodedRecord,
+) -> Result<(), String> {
+    let findings = crate::claims::verify_anti_laundering_records(
+        run_id,
+        baseline_catalog,
+        proposed_catalog,
+        baseline,
+        proposed,
+    )?;
+    if findings.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "authority anti-laundering refused: {}",
+            findings
+                .iter()
+                .map(|f| f.reason_id.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        ))
+    }
 }
 
 fn require_supported_bundle(stored_graph: &Value) -> Result<(), Value> {
@@ -450,10 +453,11 @@ fn check_compatibility(payload: &Value) -> Value {
                 Err(BundleDecodeError::Unsupported(error)) => json!({"capability":capability,"status":"incompatible","diagnostics":[{"code":"compatibility.unsupported-bundle","message":error}]}),
                 Err(BundleDecodeError::Execution(_)) => unreachable!("returned above"),
             },
-            "evaluate_gates" => json!({
-                "capability":capability,"status":"incompatible",
-                "diagnostics":[{"code":"compatibility.phase-unavailable","message":"phase P3 evaluator operations are not implemented"}]
-            }),
+            "evaluate_gates" => match &bundle_status {
+                Ok(_) => json!({"capability":capability,"status":"compatible","diagnostics":[{"code":"judgment.transport-required","message":"P3 audit path is available; without P6-qualified closed-byte transport it returns evaluation_error, never a content verdict."}]}),
+                Err(BundleDecodeError::Unsupported(error)) => json!({"capability":capability,"status":"incompatible","diagnostics":[{"code":"compatibility.unsupported-bundle","message":error}]}),
+                Err(BundleDecodeError::Execution(_)) => unreachable!("returned above"),
+            },
             _ => json!({
                 "capability":capability,"status":"unknown",
                 "diagnostics":[{"code":"compatibility.unknown","message":format!("capability {capability} is not recognized") }]
@@ -533,7 +537,30 @@ mod tests {
     }
 
     #[test]
-    fn describe_emits_p2_graph_and_input_validation_reaches_dispatch() {
+    fn no_p6_transport_does_not_claim_artifact_root() {
+        let work = tempdir().unwrap();
+        let artifacts = tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(work.path())
+            .status()
+            .unwrap();
+        let result = evaluate_gates(&json!({"snapshot":{
+            "run_id":"run-1","registration_id":"reg-1","graph_revision":format!("sha256:{}", "1".repeat(64)),
+            "lifecycle":"running","current_state":"triage","workflow_state_version":1,"lifecycle_version":1,
+            "inputs":{"work_root":fs::canonicalize(work.path()).unwrap(),"artifact_root":fs::canonicalize(artifacts.path()).unwrap()},
+            "stored_graph":workflow::graph().unwrap()
+        }}));
+        assert_eq!(result["kind"], "evaluation_error");
+        assert_eq!(
+            result["diagnostics"][0]["code"],
+            "judgment.transport-unavailable"
+        );
+        assert!(fs::read_dir(artifacts.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn describe_emits_p3_graph_and_input_validation_reaches_dispatch() {
         let request = RequestEnvelope {
             protocol_major: 1,
             role: "describe".into(),
@@ -550,7 +577,15 @@ mod tests {
                 .len(),
             22
         );
-        assert_eq!(response.result["graph"]["metadata"]["provider_phase"], "P2");
+        assert_eq!(response.result["graph"]["metadata"]["provider_phase"], "P3");
+        let compatibility = check_compatibility(
+            &json!({"stored_graph":response.result["graph"].clone(),"capabilities":["evaluate_gates"]}),
+        );
+        assert_eq!(compatibility["capabilities"][0]["status"], "compatible");
+        assert_eq!(
+            compatibility["capabilities"][0]["diagnostics"][0]["code"],
+            "judgment.transport-required"
+        );
 
         let work = tempdir().unwrap();
         let artifacts = tempdir().unwrap();

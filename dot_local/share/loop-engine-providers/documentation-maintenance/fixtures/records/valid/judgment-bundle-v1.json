@@ -2,29 +2,41 @@
   "bundle_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "claim_votes": [
     {
-      "controlling_reason": "claim.accurate.supported",
+      "controlling_reason": "claim.adhered",
+      "evaluation_diagnostic": null,
       "evidence_digests": [],
+      "evidence_fact_ids": [],
+      "invocation_id": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
       "judge_ordinal": 1,
+      "request_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
       "subject_id": "c1",
       "subject_kind": "claim",
       "verdict": "adhered",
       "vote_id": "v1"
     },
     {
-      "controlling_reason": "claim.accurate.supported",
+      "controlling_reason": "claim.adhered",
+      "evaluation_diagnostic": null,
       "evidence_digests": [],
+      "evidence_fact_ids": [],
+      "invocation_id": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
       "judge_ordinal": 2,
+      "request_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
       "subject_id": "c1",
       "subject_kind": "claim",
       "verdict": "adhered",
       "vote_id": "v2"
     }
   ],
+  "decoding_parameter_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
   "focused_breach_adjudications": [],
   "manifest_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "model_identity_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
   "resolved": [
     {
-      "controlling_reason": "claim.accurate.supported",
+      "controlling_reason": "claim.adhered",
+      "evidence_digests": [],
+      "evidence_fact_ids": [],
       "subject_id": "c1",
       "subject_kind": "claim",
       "verdict": "adhered"

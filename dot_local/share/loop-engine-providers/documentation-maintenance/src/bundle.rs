@@ -20,9 +20,9 @@ pub const METADATA_MAX_DEPTH: usize = 12;
 
 #[derive(Debug, Clone)]
 pub struct FrozenBundle {
-    pub value: Value,
-    pub canonical_bytes: Vec<u8>,
-    pub digest: String,
+    pub(crate) value: Value,
+    pub(crate) canonical_bytes: Vec<u8>,
+    pub(crate) digest: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +92,20 @@ pub fn build_bundle() -> Result<FrozenBundle, String> {
         canonical_bytes,
         digest,
     })
+}
+
+pub fn validate_frozen_bundle(bundle: &FrozenBundle) -> Result<(), String> {
+    validate_bundle_contract(&bundle.value)?;
+    let canonical = codec::canonicalize(&bundle.value)?;
+    if canonical.len() > MACHINE_BUNDLE_MAX_BYTES
+        || canonical != bundle.canonical_bytes
+        || codec::sha256(&canonical) != bundle.digest
+    {
+        return Err(
+            "frozen bundle carrier does not match validated canonical contract bytes".into(),
+        );
+    }
+    Ok(())
 }
 
 pub fn decode_stored_bundle(stored_graph: &Value) -> Result<FrozenBundle, BundleDecodeError> {
@@ -997,6 +1011,11 @@ fn reason_registry() -> Vec<String> {
         reasons.extend(clause.reasons);
     }
     for reason in [
+        "claim.extracted.action-changing",
+        "authority.binding-rule.weakened",
+        "authority.binding-rule.deleted-or-relabelled",
+        "authority.lower-source-cannot-establish-binding",
+        "authority.aspiration-guarantee-laundering",
         "claim.adhered",
         "claim.drifted",
         "claim.breached",
@@ -1196,7 +1215,7 @@ mod tests {
         assert_eq!(a.digest, b.digest);
         assert_eq!(
             a.digest,
-            "sha256:b98a6aa976edefde1a08b5904eecd060b32c191e873e4981c8269a609eae07f6"
+            "sha256:f303acba7c284a997b36c2973434ca4468dd2708064e870ff6ccda96d63a68be"
         );
         assert!(a.canonical_bytes.len() <= MACHINE_BUNDLE_MAX_BYTES);
         assert!(metadata_depth(&a.value) <= METADATA_MAX_DEPTH);

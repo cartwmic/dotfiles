@@ -64,7 +64,7 @@ schemas["repository-manifest-v1"] = record("repository-manifest-v1", {
 })
 valid["repository-manifest-v1"] = {"schema":"repository-manifest-v1","run_id":"run-1","manifest_kind":"baseline","work_root":"/repo","git_common_dir":"/repo/.git","entries":[],"repository_fingerprint":"sha256:"+"0"*64,"baseline_digest":None,"overlay_paths":[]}
 
-claim = obj({"claim_id": ID, "document": PATH, "location": location, "ordinal": {"type":"integer","minimum":0}, "proposition": TEXT, "force": {"enum":["purpose","tenet","binding-invariant","binding-boundary","binding-non-goal","aspiration","descriptive"]}, "evidence_digests": arr(DIGEST, 128), "reason_id": ID})
+claim = obj({"claim_id": ID, "source_unit_id": ID, "semantic_digest": DIGEST, "document": PATH, "location": location, "ordinal": {"type":"integer","minimum":0}, "proposition": TEXT, "force": {"enum":["purpose","tenet","binding-invariant","binding-boundary","binding-non-goal","aspiration","descriptive"]}, "scope": TEXT, "evidence_digests": arr(DIGEST, 128), "reason_id": ID})
 schemas["claim-set-v1"] = record("claim-set-v1", {"manifest_digest":DIGEST,"claims":arr(claim,10000)})
 valid["claim-set-v1"]={"schema":"claim-set-v1","run_id":"run-1","manifest_digest":"sha256:"+"0"*64,"claims":[]}
 
@@ -74,15 +74,17 @@ valid["role-axis-judgment-v1"]={"schema":"role-axis-judgment-v1","run_id":"run-1
 
 claim_verdict = {"enum":["adhered","drifted","breached","unverifiable","evaluation_error"]}
 role_verdict = {"enum":["satisfied","deficient","unverifiable","evaluation_error"]}
-claim_vote = obj({"vote_id":ID,"subject_kind":{"const":"claim"},"subject_id":ID,"judge_ordinal":{"type":"integer","minimum":1,"maximum":3},"verdict":claim_verdict,"controlling_reason":ID,"evidence_digests":arr(DIGEST,128)})
-role_bundle_vote = obj({"vote_id":ID,"subject_kind":{"const":"role"},"subject_id":ID,"judge_ordinal":{"type":"integer","minimum":1,"maximum":3},"verdict":role_verdict,"controlling_reason":ID,"evidence_digests":arr(DIGEST,128)})
-breach_adjudication = obj({"adjudication_id":ID,"subject_kind":{"const":"claim"},"subject_id":ID,"verdict":{"enum":["breach_confirmed","breach_not_confirmed","unverifiable","evaluation_error"]},"controlling_reason":ID,"evidence_digests":arr(DIGEST,128)})
+vote_identity={"evidence_fact_ids":arr(DIGEST,128),"invocation_id":DIGEST,"request_digest":DIGEST,"evaluation_diagnostic":{"oneOf":[{"type":"string","minLength":1,"maxLength":4096},{"type":"null"}]}}
+claim_vote = obj({"vote_id":ID,"subject_kind":{"const":"claim"},"subject_id":ID,"judge_ordinal":{"type":"integer","minimum":1,"maximum":3},"verdict":claim_verdict,"controlling_reason":ID,"evidence_digests":arr(DIGEST,128),**vote_identity})
+role_bundle_vote = obj({"vote_id":ID,"subject_kind":{"const":"role"},"subject_id":ID,"judge_ordinal":{"type":"integer","minimum":1,"maximum":3},"verdict":role_verdict,"controlling_reason":ID,"evidence_digests":arr(DIGEST,128),**vote_identity})
+breach_adjudication = obj({"adjudication_id":ID,"subject_kind":{"const":"claim"},"subject_id":ID,"verdict":{"enum":["breach_confirmed","breach_not_confirmed","unverifiable","evaluation_error"]},"controlling_reason":ID,"evidence_digests":arr(DIGEST,128),**vote_identity,"binding_rule_semantic_digest":DIGEST,"binding_force":ID,"binding_scope":TEXT,"claim_digest":DIGEST})
+resolved_identity={"evidence_fact_ids":arr(DIGEST,128),"evidence_digests":arr(DIGEST,128)}
 resolved = {"oneOf":[
-    obj({"subject_kind":{"const":"claim"},"subject_id":ID,"verdict":claim_verdict,"controlling_reason":ID}),
-    obj({"subject_kind":{"const":"role"},"subject_id":ID,"verdict":role_verdict,"controlling_reason":ID}),
+    obj({"subject_kind":{"const":"claim"},"subject_id":ID,"verdict":claim_verdict,"controlling_reason":ID,**resolved_identity}),
+    obj({"subject_kind":{"const":"role"},"subject_id":ID,"verdict":role_verdict,"controlling_reason":ID,**resolved_identity}),
 ]}
-schemas["judgment-bundle-v1"] = record("judgment-bundle-v1", {"manifest_digest":DIGEST,"bundle_digest":DIGEST,"claim_votes":arr(claim_vote,30000),"role_votes":arr(role_bundle_vote,30000),"focused_breach_adjudications":arr(breach_adjudication,10000),"resolved":arr(resolved,10000)})
-valid["judgment-bundle-v1"]={"schema":"judgment-bundle-v1","run_id":"run-1","manifest_digest":"sha256:"+"0"*64,"bundle_digest":"sha256:"+"1"*64,"claim_votes":[{"vote_id":"v1","subject_kind":"claim","subject_id":"c1","judge_ordinal":1,"verdict":"adhered","controlling_reason":"claim.accurate.supported","evidence_digests":[]},{"vote_id":"v2","subject_kind":"claim","subject_id":"c1","judge_ordinal":2,"verdict":"adhered","controlling_reason":"claim.accurate.supported","evidence_digests":[]}],"role_votes":[],"focused_breach_adjudications":[],"resolved":[{"subject_kind":"claim","subject_id":"c1","verdict":"adhered","controlling_reason":"claim.accurate.supported"}]}
+schemas["judgment-bundle-v1"] = record("judgment-bundle-v1", {"manifest_digest":DIGEST,"bundle_digest":DIGEST,"model_identity_digest":DIGEST,"decoding_parameter_digest":DIGEST,"claim_votes":arr(claim_vote,30000),"role_votes":arr(role_bundle_vote,30000),"focused_breach_adjudications":arr(breach_adjudication,10000),"resolved":arr(resolved,10000)})
+valid["judgment-bundle-v1"]={"schema":"judgment-bundle-v1","run_id":"run-1","manifest_digest":"sha256:"+"0"*64,"bundle_digest":"sha256:"+"1"*64,"model_identity_digest":"sha256:"+"2"*64,"decoding_parameter_digest":"sha256:"+"3"*64,"claim_votes":[{"vote_id":"v1","subject_kind":"claim","subject_id":"c1","judge_ordinal":1,"verdict":"adhered","controlling_reason":"claim.adhered","evidence_digests":[],"evidence_fact_ids":[],"invocation_id":"sha256:"+"4"*64,"request_digest":"sha256:"+"5"*64,"evaluation_diagnostic":None},{"vote_id":"v2","subject_kind":"claim","subject_id":"c1","judge_ordinal":2,"verdict":"adhered","controlling_reason":"claim.adhered","evidence_digests":[],"evidence_fact_ids":[],"invocation_id":"sha256:"+"6"*64,"request_digest":"sha256:"+"7"*64,"evaluation_diagnostic":None}],"role_votes":[],"focused_breach_adjudications":[],"resolved":[{"subject_kind":"claim","subject_id":"c1","verdict":"adhered","controlling_reason":"claim.adhered","evidence_fact_ids":[],"evidence_digests":[]}]}
 
 finding=obj({"finding_id":ID,"primary_reason":ID,"document":PATH,"location":location,"evidence_digests":arr(DIGEST,128),"secondary_consequences":arr(ID,128)})
 schemas["audit-report-v1"] = record("audit-report-v1", {"manifest_digest":DIGEST,"claim_set_digest":DIGEST,"judgment_bundle_digest":DIGEST,"disposition":{"enum":["clean","revision_required","breach_confirmed","evaluation_error"]},"findings":arr(finding,10000)})
