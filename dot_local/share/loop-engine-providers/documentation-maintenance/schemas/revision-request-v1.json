@@ -28,6 +28,17 @@
     "schema": {
       "const": "revision-request-v1"
     },
+    "subject_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "subject_kind": {
+      "enum": [
+        "presented-draft",
+        "accepted-draft",
+        "clean-staged-bundle"
+      ]
+    },
     "target_document": {
       "enum": [
         "docs/intent.md",
@@ -40,6 +51,8 @@
     "schema",
     "run_id",
     "audit_report_digest",
+    "subject_kind",
+    "subject_digest",
     "target_document",
     "reason",
     "requested_changes"
