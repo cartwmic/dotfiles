@@ -146,6 +146,15 @@ eval "$(zoxide init zsh)"
 . $HOME/utils.sh
 command -v magick >/dev/null 2>&1 && is_macos && export DISPLAY=:0
 
+# 1Password SSH agent socket. ~/.ssh/config sets IdentityAgent for Host *, but
+# that only covers ssh/scp/sftp — ssh-add, git's own agent probing, and any
+# script that shells out without ssh_config all need SSH_AUTH_SOCK set.
+if is_macos; then
+  _op_agent_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+  [ -S "$_op_agent_sock" ] && export SSH_AUTH_SOCK="$_op_agent_sock"
+  unset _op_agent_sock
+fi
+
 
 export ANTHROPIC_DEFAULT_MODEL=haiku # model selection by env var or claude settings.json is not currently respected by claude-code-acp: https://github.com/zed-industries/claude-code-acp/issues/225
 export CLAUDE_CODE_ENABLE_TELEMETRY=1

@@ -56,7 +56,12 @@ utils.sh
 .termux/**
 bin
 bin/**
-05_provision_termux_ssh_keys.sh
+{{- end }}
+
+{{- if and (ne .profile "termux") (ne .profile "personal") }}
+# SSH key provision is termux + personal only; the homelab credential is
+# personal infrastructure and must not land on a work machine.
+05_provision_ssh_keys.sh
 {{- end }}
 
 {{- if ne .profile "personal" }}
