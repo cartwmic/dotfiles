@@ -526,7 +526,15 @@ fn inspect_path(
     };
     let file_type = metadata.file_type();
     let mode = unix_mode(&metadata);
-    let (kind, identity) = if file_type.is_file() {
+    let (kind, identity) = if file_type.is_dir() {
+        // Git tracks files, symlinks, and gitlinks, never directories. A path
+        // retained from HEAD or the index can therefore become a directory in
+        // the worktree when its tracked entry is removed and descendants are
+        // added beneath the same name. Keep the old tracked path as explicit
+        // absence; complete_paths records each non-ignored descendant
+        // separately. Directories themselves remain outside the manifest.
+        ("absent", json!({"kind":"absent"}))
+    } else if file_type.is_file() {
         let bytes = read_regular_stable(&path, &metadata)?;
         (
             "regular",
@@ -863,6 +871,26 @@ mod tests {
         assert_eq!(entries["renamed.txt"]["kind"], "regular");
         assert_eq!(entries["docs/intent.md"]["kind"], "absent");
         assert_eq!(entries["docs/intent.md"]["tracked"], true);
+    }
+
+    #[test]
+    fn tracked_file_replaced_by_directory_is_absent_while_descendants_remain() {
+        let (_work, _artifacts, roots) = fixture();
+        commit_all(&roots.work_root);
+        fs::remove_file(roots.work_root.join("tracked.txt")).unwrap();
+        fs::create_dir(roots.work_root.join("tracked.txt")).unwrap();
+        fs::write(
+            roots.work_root.join("tracked.txt/descendant.txt"),
+            b"replacement",
+        )
+        .unwrap();
+
+        let manifest = RepositoryView::new(&roots, "run-1").capture().unwrap();
+        let entries = entries_by_path(&manifest.value).unwrap();
+        assert_eq!(entries["tracked.txt"]["kind"], "absent");
+        assert_eq!(entries["tracked.txt"]["tracked"], true);
+        assert_eq!(entries["tracked.txt/descendant.txt"]["kind"], "regular");
+        assert_eq!(entries["tracked.txt/descendant.txt"]["tracked"], false);
     }
 
     #[test]
