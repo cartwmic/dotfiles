@@ -2,6 +2,28 @@
   "$id": "urn:documentation-maintenance:evaluation-recovery-v1",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "oneOf": [
+    {
+      "properties": {
+        "changed_retry_condition": {
+          "type": "string"
+        },
+        "transient_failure_rationale": {
+          "type": "null"
+        }
+      }
+    },
+    {
+      "properties": {
+        "changed_retry_condition": {
+          "type": "null"
+        },
+        "transient_failure_rationale": {
+          "type": "string"
+        }
+      }
+    }
+  ],
   "properties": {
     "caller_retry_authorized": {
       "const": true
@@ -10,6 +32,7 @@
       "oneOf": [
         {
           "maxLength": 65536,
+          "minLength": 1,
           "type": "string"
         },
         {
@@ -19,6 +42,7 @@
     },
     "diagnosed_cause": {
       "maxLength": 65536,
+      "minLength": 1,
       "type": "string"
     },
     "evaluation_key_digest": {
@@ -51,6 +75,7 @@
       "oneOf": [
         {
           "maxLength": 65536,
+          "minLength": 1,
           "type": "string"
         },
         {

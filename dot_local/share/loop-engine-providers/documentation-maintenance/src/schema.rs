@@ -170,6 +170,32 @@ fn validate_semantics(kind: RecordKind, value: &Value) -> Result<(), String> {
             );
         }
     }
+    if kind == RecordKind::EvaluationRecovery {
+        let changed = value["changed_retry_condition"].as_str();
+        let transient = value["transient_failure_rationale"].as_str();
+        if changed.is_some() == transient.is_some() {
+            return Err("evaluation recovery requires exactly one retry alternative".to_string());
+        }
+    }
+    if kind == RecordKind::BreachRemediation {
+        if value["old_manifest_digest"] == value["new_manifest_digest"] {
+            return Err("breach remediation refuses identical repository fingerprints".to_string());
+        }
+        if value["new_manifest_digest"] != value["reassessment_manifest_digest"]
+            || value["binding_rule_semantic_digest"] != value["reassessment_rule_semantic_digest"]
+        {
+            return Err("breach remediation reassessment binding does not match new manifest and exact prior rule".to_string());
+        }
+        let core = ["README.md", "AGENTS.md", "docs/intent.md"];
+        if value["changed_non_core_paths"]
+            .as_array()
+            .expect("schema checked changed paths")
+            .iter()
+            .all(|path| path.as_str().is_some_and(|path| core.contains(&path)))
+        {
+            return Err("breach remediation requires a changed non-core path".to_string());
+        }
+    }
     if kind == RecordKind::AuthorityManifest {
         let slots = value["slots"].as_object().expect("schema checked slots");
         for (slot, artifact) in slots {
@@ -246,7 +272,7 @@ mod tests {
             "subject_id":"README.md:R1",
             "judge_ordinal":1,
             "verdict":"satisfied",
-            "controlling_reason":"role.satisfied",
+            "controlling_reason":"role.r1.satisfied",
             "evidence_digests":[]
         }]);
         value["resolved"]
@@ -256,7 +282,7 @@ mod tests {
                 "subject_kind":"role",
                 "subject_id":"README.md:R1",
                 "verdict":"satisfied",
-                "controlling_reason":"role.satisfied"
+                "controlling_reason":"role.r1.satisfied"
             }));
         validate(RecordKind::JudgmentBundle, &value).unwrap();
 
@@ -279,6 +305,42 @@ mod tests {
         validate(RecordKind::JudgmentBundle, &value).unwrap();
         value["focused_breach_adjudications"][0]["verdict"] = Value::String("breached".to_string());
         assert!(validate(RecordKind::JudgmentBundle, &value).is_err());
+    }
+
+    #[test]
+    fn recovery_alternatives_and_reassessment_bindings_are_exact() {
+        let load = |name: &str| -> Value {
+            serde_json::from_slice(
+                &fs::read(format!(
+                    "{}/fixtures/records/valid/{name}.json",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        let evaluation = load("evaluation-recovery-v1");
+        validate(RecordKind::EvaluationRecovery, &evaluation).unwrap();
+        let mut both = evaluation.clone();
+        both["changed_retry_condition"] = Value::String("service configuration corrected".into());
+        assert!(validate(RecordKind::EvaluationRecovery, &both).is_err());
+        let mut neither = evaluation.clone();
+        neither["changed_retry_condition"] = Value::Null;
+        neither["transient_failure_rationale"] = Value::Null;
+        assert!(validate(RecordKind::EvaluationRecovery, &neither).is_err());
+        let mut empty_cause = evaluation;
+        empty_cause["diagnosed_cause"] = Value::String(String::new());
+        assert!(validate(RecordKind::EvaluationRecovery, &empty_cause).is_err());
+
+        let remediation = load("breach-remediation-v1");
+        validate(RecordKind::BreachRemediation, &remediation).unwrap();
+        let mut wrong_scope = remediation.clone();
+        wrong_scope["reassessment_scope"] = Value::String("changed-paths-only".into());
+        assert!(validate(RecordKind::BreachRemediation, &wrong_scope).is_err());
+        let mut wrong_rule = remediation;
+        wrong_rule["reassessment_rule_semantic_digest"] =
+            Value::String(format!("sha256:{}", "9".repeat(64)));
+        assert!(validate(RecordKind::BreachRemediation, &wrong_rule).is_err());
     }
 
     #[test]

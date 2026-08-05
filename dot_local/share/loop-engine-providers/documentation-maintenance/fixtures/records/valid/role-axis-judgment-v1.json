@@ -3,7 +3,7 @@
   "judgments": [
     {
       "clause_id": "R1",
-      "controlling_reason": "role.satisfied",
+      "controlling_reason": "role.r1.satisfied",
       "decoding_parameters_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
       "document": "README.md",
       "evidence_digests": [],

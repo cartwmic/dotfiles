@@ -12,6 +12,11 @@
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
+    "binding_scope": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+    },
     "changed_non_core_paths": {
       "items": {
         "maxLength": 4096,
@@ -43,6 +48,17 @@
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
+    "reassessment_manifest_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "reassessment_rule_semantic_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "reassessment_scope": {
+      "const": "whole-repository"
+    },
     "rule_unweakened": {
       "const": true
     },
@@ -61,11 +77,15 @@
     "prior_breach_digest",
     "binding_rule_semantic_digest",
     "binding_force",
+    "binding_scope",
     "old_manifest_digest",
     "new_manifest_digest",
     "changed_non_core_paths",
     "cited_evidence_digests",
-    "rule_unweakened"
+    "rule_unweakened",
+    "reassessment_scope",
+    "reassessment_manifest_digest",
+    "reassessment_rule_semantic_digest"
   ],
   "title": "breach-remediation-v1",
   "type": "object"

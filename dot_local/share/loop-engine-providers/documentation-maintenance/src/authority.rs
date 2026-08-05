@@ -70,6 +70,23 @@ impl ValidatedAuthority {
             .as_ref()
             .map(|record| record.digest.as_str())
     }
+
+    /// Load every selected authority slot through its closed schema and digest.
+    /// Callers receive selected values only; filesystem candidates remain inert.
+    pub fn load_slots(&self, store: &ArtifactStore) -> Result<BTreeMap<String, Value>, String> {
+        let mut loaded = BTreeMap::new();
+        let slots = self.manifest.value["slots"]
+            .as_object()
+            .ok_or_else(|| "selected authority manifest has no slots object".to_string())?;
+        for (slot, reference) in slots {
+            let reference: ArtifactReference = serde_json::from_value(reference.clone())
+                .map_err(|error| format!("decode selected authority slot {slot}: {error}"))?;
+            let kind = RecordKind::from_str(&reference.schema)?;
+            let record = store.load(&reference.relative_path, kind, &reference.digest)?;
+            loaded.insert(slot.clone(), record.decoded.value);
+        }
+        Ok(loaded)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
