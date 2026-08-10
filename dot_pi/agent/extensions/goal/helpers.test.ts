@@ -197,10 +197,11 @@ describe("lastAssistantInfo / isInterruptedStop / decideAgentEndBoundary — goa
 		expect(isInterruptedStop(undefined)).toBe(false);
 	});
 
-	test("agent_end boundary: abort stops, error defers, clean evaluates", () => {
+	test("agent_end boundary: user abort stops, resumed auto-compact preserves", () => {
 		expect(decideAgentEndBoundary("aborted")).toBe("stop");
-		expect(decideAgentEndBoundary("error")).toBe("defer");
-		expect(decideAgentEndBoundary("stop")).toBe("evaluate");
+		expect(decideAgentEndBoundary("aborted", true)).toBe("preserve");
+		expect(decideAgentEndBoundary("error", true)).toBe("defer");
+		expect(decideAgentEndBoundary("stop", true)).toBe("evaluate");
 		expect(decideAgentEndBoundary("toolUse")).toBe("evaluate");
 		expect(decideAgentEndBoundary(undefined)).toBe("evaluate");
 	});

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import extension from "./index.ts";
+import { registerAutoCompactExtension } from "./index.ts";
+import { AUTO_COMPACT_WILL_RESUME_EVENT } from "./events.ts";
 import {
 	DEFAULT_CONFIG,
 	DEFAULT_CONTINUATION,
@@ -10,6 +11,10 @@ import {
 	shouldTrigger,
 	thresholdTokens,
 } from "./config.ts";
+
+const extension = (pi: any): void => {
+	registerAutoCompactExtension(pi, { config: DEFAULT_CONFIG });
+};
 
 describe("auto-compact config", () => {
 	test("defaults to enabled, 40%, both check points, and continuation on", () => {
@@ -110,8 +115,8 @@ describe("auto-compact threshold", () => {
 	test("never compacts at agent_end — a queued continuation may still run", () => {
 		// agent_end is a low-level attempt boundary: Pi can still run a native
 		// retry or a continuation queued by another extension's agent_end handler
-		// (e.g. the goal loop's follow-up). ctx.compact() disconnects agent events
-		// and aborts, so compacting there strands that continuation.
+		// (e.g. the goal loop's follow-up). Compacting there can preempt work Pi
+		// has not yet surfaced through its final agent_settled boundary.
 		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
 		extension({
 			on: (name: string, handler: (event: unknown, ctx: any) => void) => handlers.set(name, handler),
@@ -126,6 +131,7 @@ describe("auto-compact threshold", () => {
 	test("checks both event levels but compacts once at the same usage", () => {
 		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
 		const commands: string[] = [];
+		const emitted: string[] = [];
 		const followUps: Array<{ text: string; options?: { deliverAs?: string } }> = [];
 		extension({
 			on: (name: string, handler: (event: unknown, ctx: any) => void) => handlers.set(name, handler),
@@ -133,6 +139,7 @@ describe("auto-compact threshold", () => {
 			sendUserMessage: (text: string, options?: { deliverAs?: string }) => {
 				followUps.push({ text, options });
 			},
+			events: { emit: (name: string) => emitted.push(name) },
 		} as any);
 
 		let compactCalls = 0;
@@ -156,6 +163,7 @@ describe("auto-compact threshold", () => {
 
 		expect(compactCalls).toBe(1);
 		expect(commands).toContain("auto-compact");
+		expect(emitted).toEqual([AUTO_COMPACT_WILL_RESUME_EVENT]);
 		expect(followUps).toEqual([{ text: DEFAULT_CONTINUATION, options: { deliverAs: "followUp" } }]);
 	});
 
@@ -222,8 +230,9 @@ describe("auto-compact threshold", () => {
 		expect(() => handlers.get("turn_start")?.({}, ctx)).not.toThrow();
 	});
 
-	test("does not resume when the final turn is followed by agent_settled", () => {
+	test("does not resume or signal when the final turn is followed by agent_settled", () => {
 		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+		const emitted: string[] = [];
 		const followUps: string[] = [];
 		extension({
 			on: (name: string, handler: (event: unknown, ctx: any) => void) => handlers.set(name, handler),
@@ -231,6 +240,7 @@ describe("auto-compact threshold", () => {
 			sendUserMessage: (text: string) => {
 				followUps.push(text);
 			},
+			events: { emit: (name: string) => emitted.push(name) },
 		} as any);
 
 		let compactCalls = 0;
@@ -247,6 +257,7 @@ describe("auto-compact threshold", () => {
 		expect(compactCalls).toBe(0);
 		handlers.get("agent_settled")?.({}, ctx);
 		expect(compactCalls).toBe(1);
+		expect(emitted).toEqual([]);
 		expect(followUps).toEqual([]);
 	});
 

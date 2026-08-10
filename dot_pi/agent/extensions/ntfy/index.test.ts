@@ -27,6 +27,7 @@ import {
 	registerNtfyExtension,
 	saveEnabled,
 } from "./index.ts";
+import { AUTO_COMPACT_WILL_RESUME_EVENT } from "../auto-compact/events.ts";
 
 // --- jump Click deep-link (tap-to-jump) ---
 
@@ -302,12 +303,19 @@ async function flushAsyncDispatch(): Promise<void> {
 test("lifecycle wiring: end caches, settled+idle sends, question sends immediately", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-lifecycle-"));
 	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+	const busHandlers = new Map<string, (data: unknown) => void>();
 	const sends: unknown[][] = [];
 	let idle = false;
 	const pi = {
 		registerCommand: () => {},
 		on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => {
 			handlers.set(name, handler);
+		},
+		events: {
+			on: (name: string, handler: (data: unknown) => void) => {
+				busHandlers.set(name, handler);
+				return () => {};
+			},
 		},
 	};
 	const ctx = {
@@ -374,14 +382,21 @@ test("lifecycle wiring: end caches, settled+idle sends, question sends immediate
 	}
 });
 
-test("lifecycle wiring: settled without agent_end (compaction abort) does not notify", async () => {
+test("lifecycle wiring: resumed auto-compact suppresses only its internal abort", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-compact-"));
 	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+	const busHandlers = new Map<string, (data: unknown) => void>();
 	const sends: unknown[][] = [];
 	const pi = {
 		registerCommand: () => {},
 		on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => {
 			handlers.set(name, handler);
+		},
+		events: {
+			on: (name: string, handler: (data: unknown) => void) => {
+				busHandlers.set(name, handler);
+				return () => {};
+			},
 		},
 	};
 	const ctx = {
@@ -408,14 +423,18 @@ test("lifecycle wiring: settled without agent_end (compaction abort) does not no
 			send: async (...args: unknown[]) => { sends.push(args); },
 		});
 
-		// AgentSession.compact() disconnects extension handlers before aborting,
-		// so a compaction-aborted run settles with NO preceding agent_end.
+		// Pi 0.84+ preserves agent_end and agent_settled while compact() aborts.
+		// Auto-compact signals first because it will resume this interrupted run.
 		await handlers.get("agent_start")?.({}, ctx);
+		busHandlers.get(AUTO_COMPACT_WILL_RESUME_EVENT)?.(undefined);
+		await handlers.get("agent_end")?.({
+			messages: [{ role: "assistant", stopReason: "aborted", content: [] }],
+		}, ctx);
 		await handlers.get("agent_settled")?.({}, ctx);
 		await flushAsyncDispatch();
-		assert.equal(sends.length, 0, "compaction-aborted settle must not notify");
+		assert.equal(sends.length, 0, "resumed auto-compact boundary must not notify");
 
-		// The resumed run settles normally (agent_end seen) and notifies once.
+		// Resumed run settles normally and notifies once.
 		await handlers.get("agent_start")?.({}, ctx);
 		await handlers.get("agent_end")?.({
 			messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
@@ -424,6 +443,20 @@ test("lifecycle wiring: settled without agent_end (compaction abort) does not no
 		await flushAsyncDispatch();
 		assert.equal(sends.length, 1);
 		assert.equal(sends[0][2], "done");
+
+		// User abort has no auto-compact signal and remains a real idle boundary.
+		await handlers.get("agent_start")?.({}, ctx);
+		await handlers.get("agent_end")?.({
+			messages: [{
+				role: "assistant",
+				stopReason: "aborted",
+				content: [{ type: "text", text: "stopped by user" }],
+			}],
+		}, ctx);
+		await handlers.get("agent_settled")?.({}, ctx);
+		await flushAsyncDispatch();
+		assert.equal(sends.length, 2);
+		assert.equal(sends[1][2], "stopped by user");
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}

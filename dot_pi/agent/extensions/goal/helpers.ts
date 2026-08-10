@@ -160,7 +160,8 @@ export interface AssistantInfo {
 
 /**
  * Extract the latest assistant message's text + stopReason from a run's
- * message list. stopReason "aborted" means the user interrupted the turn;
+ * message list. stopReason "aborted" means the run was interrupted; callers
+ * use the auto-compact resume signal to distinguish internal from user aborts.
  * "error" means the turn failed. Pure / never throws.
  */
 export function lastAssistantInfo(messages: unknown): AssistantInfo {
@@ -181,16 +182,17 @@ export function lastAssistantInfo(messages: unknown): AssistantInfo {
 	return { text: "" };
 }
 
-/** User Escape/abort — immediately terminal for the loop. */
+/** Whether the stop reason represents an interrupted run. */
 export function isInterruptedStop(stopReason: string | undefined): boolean {
 	return stopReason === "aborted";
 }
 
-export type AgentEndBoundaryAction = "stop" | "defer" | "evaluate";
+export type AgentEndBoundaryAction = "stop" | "preserve" | "defer" | "evaluate";
 
 /**
  * Classify a low-level agent_end for loop lifecycle.
- * - aborted: user interrupt → stop immediately
+ * - aborted + auto-compact resume armed: preserve; continuation is imminent
+ * - other aborted: user interrupt → stop immediately
  * - error: Pi may still retry/compact/continue → defer terminal policy to agent_settled
  * - otherwise: evaluate the completed turn
  *
@@ -198,8 +200,11 @@ export type AgentEndBoundaryAction = "stop" | "defer" | "evaluate";
  * while Pi can still continue the same user-visible turn.
  * (goal-loop.preserve-across-native-retries)
  */
-export function decideAgentEndBoundary(stopReason: string | undefined): AgentEndBoundaryAction {
-	if (stopReason === "aborted") return "stop";
+export function decideAgentEndBoundary(
+	stopReason: string | undefined,
+	autoCompactWillResume = false,
+): AgentEndBoundaryAction {
+	if (stopReason === "aborted") return autoCompactWillResume ? "preserve" : "stop";
 	if (stopReason === "error") return "defer";
 	return "evaluate";
 }
@@ -211,10 +216,9 @@ export function decideAgentEndBoundary(stopReason: string | undefined): AgentEnd
  * user-visible turn (native retry, overflow recovery, queued continuation), so
  * the pending error is superseded and must not stop the loop later.
  *
- * Without this, a transient provider error arms a latch that survives until the
- * next `agent_settled` — and `AgentSession.compact()` disconnects agent events
- * before aborting, so an auto-compaction emits `agent_settled` with no
- * intervening clean `agent_end` and the stale latch kills a healthy loop.
+ * Without this, a transient provider error arms a latch that survives across a
+ * native continuation until the final `agent_settled`, where it would kill a
+ * healthy loop despite the intervening successful work.
  * (goal-loop.preserve-across-native-retries)
  */
 export function resolvesPendingErrorOnTurnStart(

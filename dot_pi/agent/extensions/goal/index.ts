@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { complete, type Tool } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
+import { AUTO_COMPACT_WILL_RESUME_EVENT } from "../auto-compact/events.ts";
 import {
 	decideAfterEvaluation,
 	decideAgentEndBoundary,
@@ -147,7 +148,15 @@ export default function (pi: ExtensionAPI) {
 	// Long-lived closure state. NEVER capture `ctx` here (it goes stale across
 	// session switch/fork/reload — design D5); use the per-call ctx instead.
 	let goal: GoalState | undefined;
+	let autoCompactWillResume = false;
 	const config = loadConfig();
+
+	pi.events.on(AUTO_COMPACT_WILL_RESUME_EVENT, () => {
+		autoCompactWillResume = true;
+	});
+	pi.on("agent_start", () => {
+		autoCompactWillResume = false;
+	});
 
 	// env PI_GOAL_MAX_TURNS > config.maxTurns > built-in default (goal-loop.configurable-judge-and-budget)
 	function resolveMaxTurns(): number {
@@ -350,10 +359,7 @@ export default function (pi: ExtensionAPI) {
 
 	// A turn that starts after a deferred error proves Pi continued the same
 	// user-visible turn (native retry / overflow recovery / queued continuation).
-	// Disarm the latch here: it is only cleared on a clean agent_end otherwise, and
-	// an auto-compaction's ctx.compact() disconnects agent events before aborting,
-	// so it emits agent_settled with NO agent_end in between — a stale latch would
-	// then stop a perfectly healthy loop mid-run.
+	// Disarm the stale error latch before final settlement can misclassify the run.
 	pi.on("turn_start", () => {
 		const session = goal;
 		if (!session || !resolvesPendingErrorOnTurnStart(session)) return;
@@ -365,7 +371,16 @@ export default function (pi: ExtensionAPI) {
 		if (!goal?.active || goal.evaluating) return; // inactive (clarify C3) or re-entrant (D4)
 
 		const info = lastAssistantInfo(event?.messages);
-		const boundary = decideAgentEndBoundary(info.stopReason);
+		const resumesAfterAutoCompact = autoCompactWillResume;
+		autoCompactWillResume = false;
+		const boundary = decideAgentEndBoundary(info.stopReason, resumesAfterAutoCompact);
+
+		// Auto-compact announced that this internal abort will be resumed. Preserve
+		// the goal; the follow-up starts a new run after compaction completes.
+		if (boundary === "preserve") {
+			dbg("auto-compaction aborted run with resume pending — preserving goal");
+			return;
+		}
 
 		// Explicit user abort remains immediately terminal. It must never wait for or
 		// be undone by a later settlement signal.

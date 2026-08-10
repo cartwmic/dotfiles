@@ -18,9 +18,13 @@ Edit `~/.pi/agent/extensions/auto-compact/config.json` or run `/auto-compact` in
 - `thresholdPercent`: context-window percentage in `(0, 100]`. Trigger comparison is inclusive.
 - `checkAt`: one or both of `turn_end` and `agent_end`.
   - `turn_end` checks are deferred until the next lifecycle event: another `turn_start` resumes after compaction; a final `agent_end` compacts without resuming.
-  - `agent_end` checks once when the low-level agent run ends.
+  - `agent_end` is the configured final-run checkpoint; its check runs at
+    `agent_settled`, after Pi exhausts retries and queued continuations.
 - `continuation`: follow-up text injected after **inter-turn** (`turn_end`) compaction.
   - Pi's `ctx.compact()` aborts the active agent first, so without a follow-up the run would stop.
+  - Before a resumed abort, auto-compact emits
+    `auto-compact:will-resume-interrupted-run` on Pi's extension event bus. ntfy
+    suppresses that internal settlement; goal preserves its active loop.
   - Default: `"Continue from where you left off."`
   - Set to `false` (or an empty string) to disable resume.
   - Final-turn and `agent_end` compactions never auto-continue — the run already finished.
