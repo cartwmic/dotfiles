@@ -128,16 +128,21 @@ describe("auto-compact threshold", () => {
 		expect(handlers.has("agent_settled")).toBe(true);
 	});
 
-	test("checks both event levels but compacts once at the same usage", () => {
+	test("resumes only after successful compaction fully completes", () => {
 		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
 		const commands: string[] = [];
 		const emitted: string[] = [];
-		const followUps: Array<{ text: string; options?: { deliverAs?: string } }> = [];
+		const followUps: Array<{
+			text: string;
+			options?: { deliverAs?: string };
+			duringCompaction: boolean;
+		}> = [];
+		let compactionInProgress = false;
 		extension({
 			on: (name: string, handler: (event: unknown, ctx: any) => void) => handlers.set(name, handler),
 			registerCommand: (name: string) => commands.push(name),
 			sendUserMessage: (text: string, options?: { deliverAs?: string }) => {
-				followUps.push({ text, options });
+				followUps.push({ text, options, duringCompaction: compactionInProgress });
 			},
 			events: { emit: (name: string) => emitted.push(name) },
 		} as any);
@@ -146,25 +151,32 @@ describe("auto-compact threshold", () => {
 		const ctx = {
 			hasUI: false,
 			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
-			// Mirror real pi: successful compaction fires onComplete and then the
-			// session_compact event; the extension resumes from the event handler.
-			// fromExtension is false because pi only sets it when a
-			// session_before_compact handler supplied the compaction content.
 			compact: ({ onComplete }: { onComplete: () => void }) => {
 				compactCalls += 1;
-				onComplete();
+				compactionInProgress = true;
+				// Real Pi ordering: compact() aborts the active run, emits
+				// agent_settled and session_compact while its compaction controller is
+				// still active, then clears the controller before invoking onComplete.
+				handlers.get("agent_settled")?.({}, ctx);
 				handlers.get("session_compact")?.({ fromExtension: false, willRetry: false }, ctx);
+				compactionInProgress = false;
+				onComplete();
 			},
 		};
 		handlers.get("turn_end")?.({}, ctx);
 		expect(compactCalls).toBe(0);
 		handlers.get("turn_start")?.({}, ctx);
-		handlers.get("agent_settled")?.({}, ctx);
 
 		expect(compactCalls).toBe(1);
 		expect(commands).toContain("auto-compact");
 		expect(emitted).toEqual([AUTO_COMPACT_WILL_RESUME_EVENT]);
-		expect(followUps).toEqual([{ text: DEFAULT_CONTINUATION, options: { deliverAs: "followUp" } }]);
+		expect(followUps).toEqual([
+			{
+				text: DEFAULT_CONTINUATION,
+				options: { deliverAs: "followUp" },
+				duringCompaction: false,
+			},
+		]);
 	});
 
 	test("does not resume when core overflow recovery already retries (willRetry)", () => {
@@ -182,8 +194,8 @@ describe("auto-compact threshold", () => {
 			hasUI: false,
 			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
 			compact: ({ onComplete }: { onComplete: () => void }) => {
-				onComplete();
 				handlers.get("session_compact")?.({ fromExtension: false, willRetry: true }, ctx);
+				onComplete();
 			},
 		};
 		handlers.get("turn_end")?.({}, ctx);
@@ -249,8 +261,8 @@ describe("auto-compact threshold", () => {
 			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
 			compact: ({ onComplete }: { onComplete: () => void }) => {
 				compactCalls += 1;
-				onComplete();
 				handlers.get("session_compact")?.({ fromExtension: false, willRetry: false }, ctx);
+				onComplete();
 			},
 		};
 		handlers.get("turn_end")?.({}, ctx);
@@ -278,8 +290,8 @@ describe("auto-compact threshold", () => {
 			getContextUsage: () => ({ tokens, contextWindow: 372_000 }),
 			compact: ({ onComplete }: { onComplete: () => void }) => {
 				compactCalls += 1;
-				onComplete();
 				handlers.get("session_compact")?.({ fromExtension: true, willRetry: false }, ctx);
+				onComplete();
 				tokens += 1_000; // ineffective: context grows, never drops below threshold
 			},
 		};
@@ -321,8 +333,8 @@ describe("auto-compact threshold", () => {
 			getContextUsage: () => readings[Math.min(idx, readings.length - 1)],
 			compact: ({ onComplete }: { onComplete: () => void }) => {
 				compactCalls += 1;
-				onComplete();
 				handlers.get("session_compact")?.({ fromExtension: true, willRetry: false }, ctx);
+				onComplete();
 			},
 		};
 		for (idx = 0; idx < readings.length; idx++) handlers.get("agent_settled")?.({}, ctx);

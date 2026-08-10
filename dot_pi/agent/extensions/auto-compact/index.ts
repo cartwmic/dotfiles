@@ -211,12 +211,11 @@ export function registerAutoCompactExtension(
 		// agent_end compactions: the run already finished and a follow-up would
 		// spuriously start new work.
 		//
-		// The success-path resume is delivered from the session_compact event
-		// handler below, never from the onComplete/onError callbacks: those are
-		// detached continuations that can fire after session dispose() has
-		// invalidated the extension runtime (dispose -> abortCompaction -> the
-		// pending compact promise rejects -> onError runs against a stale ctx).
-		// Any pi/ctx call inside them must be stale-guarded.
+		// Resume only from onComplete. Pi emits session_compact while its
+		// compaction controller is still active, so sendUserMessage there is rejected
+		// with "Cannot submit a prompt while compaction is in progress." onComplete
+		// runs after compact() returns and clears that controller. Callbacks can also
+		// fire after session disposal, so every pi/ctx action remains stale-guarded.
 		pendingResume = resumeAfterCompact(config, checkPoint, agentWillContinue);
 		if (pendingResume) {
 			// Pi 0.84+ preserves agent_end/agent_settled while compact() aborts the
@@ -227,18 +226,19 @@ export function registerAutoCompactExtension(
 		try {
 			ctx.compact({
 				onComplete: () => {
-					// Resume is sent by the session_compact handler.
+					compacting = false;
+					const resume = pendingResume;
+					pendingResume = undefined;
 					try {
+						if (resume) pi.sendUserMessage(resume, { deliverAs: "followUp" });
 						if (ctx.hasUI) {
 							ctx.ui.notify(
-								pendingResume
-									? "Auto-compaction completed; continuing"
-									: "Auto-compaction completed",
+								resume ? "Auto-compaction completed; continuing" : "Auto-compaction completed",
 								"info",
 							);
 						}
 					} catch {
-						// Stale ctx after session teardown; nothing left to notify.
+						// Stale ctx after session teardown; nothing left to resume or notify.
 					}
 				},
 				onError: (error) => {
@@ -268,22 +268,10 @@ export function registerAutoCompactExtension(
 	pi.on("session_start", resetAttemptState);
 	pi.on("session_shutdown", resetAttemptState);
 	pi.on("session_compact", (event) => {
-		// Only consume the pending resume for compactions this extension
-		// triggered. Gate on our own in-flight `compacting` flag, NOT on
-		// event.fromExtension: fromExtension is true when a
-		// session_before_compact handler supplied the compaction content (e.g.
-		// the Cursor provider's native summarizeAction) and false when pi's
-		// built-in summarizer ran — either way this extension may have triggered
-		// the compaction, so fromExtension is not a reliable signal here. Resume
-		// still fires exactly once regardless of which summarizer produced the
-		// content. willRetry means core overflow recovery already retries the
-		// aborted turn; injecting a follow-up as well would double-resume.
-		const triggeredHere = compacting;
-		compacting = false;
-		if (!triggeredHere || event.willRetry) return;
-		const resume = pendingResume;
-		pendingResume = undefined;
-		if (resume) pi.sendUserMessage(resume, { deliverAs: "followUp" });
+		// session_compact precedes onComplete. Never submit from here: Pi still
+		// rejects prompts while its compaction controller is active. Only cancel a
+		// pending follow-up if core says it will retry the interrupted run itself.
+		if (compacting && event.willRetry) pendingResume = undefined;
 	});
 	// A final turn_end is immediately followed by agent_end, while an inter-turn
 	// turn_end is followed by turn_start. Defer the turn-end check until that
