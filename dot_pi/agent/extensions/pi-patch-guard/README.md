@@ -76,20 +76,18 @@ Ambiguity (dist dir unresolvable, file missing, bad regex) ⇒ quiet.
 ```jsonc
 {
   "assumptions": [{
-    "name": "compact-disconnects-before-abort",
-    "file": "core/agent-session.js",   // relative to pi's dist/
-    "verifiedVersion": "0.83.0",       // documentation only
-    "pattern": "async compact\\(...",   // must match, else warn
+    "name": "example-invariant",
+    "file": "core/example.js",         // relative to pi's dist/
+    "verifiedVersion": "0.84.1",       // documentation only
+    "pattern": "loadBearingCall\\(",    // must match, else warn
     "message": "what breaks and what to fix"
   }]
 }
 ```
 
-Currently watched:
-
-| Assumption | Depended on by | Why |
-| --- | --- | --- |
-| `compact-disconnects-before-abort` | `ntfy` | `AgentSession.compact()` disconnects extension handlers *before* `await this.abort()`, so a compaction-aborted run emits `agent_settled` with no preceding `agent_end`. ntfy uses exactly that shape to suppress spurious compaction notifications. Reorder the two lines upstream and the guard silently misfires. |
+Currently watched: none. ntfy and auto-compact now coordinate through a public
+extension event-bus contract rather than depending on pi's internal compaction
+abort ordering.
 
 ## Config
 

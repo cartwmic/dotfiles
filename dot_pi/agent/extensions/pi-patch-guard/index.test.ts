@@ -129,37 +129,37 @@ test("loadConfig: missing ⇒ enabled; enabled:false ⇒ disabled", () => {
 // --- source assumptions (sentinels) ------------------------------------------
 
 const ASSUMPTION = {
-	name: "compact-disconnects-before-abort",
-	file: "core/agent-session.js",
-	pattern: "async compact\\([^)]*\\)\\s*\\{\\s*this\\._disconnectFromAgent\\(\\);\\s*await this\\.abort\\(\\);",
-	message: "recheck ntfy guard",
+	name: "example-call-order",
+	file: "core/example.js",
+	pattern: "async run\\(\\)\\s*\\{\\s*this\\.prepare\\(\\);\\s*await this\\.execute\\(\\);",
+	message: "recheck dependent extension",
 };
 
 function writeDist(body: string): string {
 	const dist = path.join(tmp(), "dist");
 	fs.mkdirSync(path.join(dist, "core"), { recursive: true });
-	fs.writeFileSync(path.join(dist, "core", "agent-session.js"), body);
+	fs.writeFileSync(path.join(dist, "core", "example.js"), body);
 	return dist;
 }
 
-test("assumption holds when compact() disconnects before abort", () => {
+test("assumption holds when calls retain expected order", () => {
 	const dist = writeDist(
-		"    async compact(customInstructions) {\n        this._disconnectFromAgent();\n        await this.abort();\n    }\n",
+		"    async run() {\n        this.prepare();\n        await this.execute();\n    }\n",
 	);
 	assert.equal(checkAssumption(ASSUMPTION, { distDir: dist }).broken, false);
 });
 
-test("assumption BREAKS when pi reorders abort before disconnect", () => {
+test("assumption BREAKS when pi reorders calls", () => {
 	const dist = writeDist(
-		"    async compact(customInstructions) {\n        await this.abort();\n        this._disconnectFromAgent();\n    }\n",
+		"    async run() {\n        await this.execute();\n        this.prepare();\n    }\n",
 	);
 	const r = checkAssumption(ASSUMPTION, { distDir: dist });
 	assert.equal(r.broken, true);
 	assert.equal(r.name, ASSUMPTION.name);
 });
 
-test("assumption BREAKS when compact() drops the disconnect entirely", () => {
-	const dist = writeDist("    async compact(customInstructions) {\n        await this.abort();\n    }\n");
+test("assumption BREAKS when pi drops a required call", () => {
+	const dist = writeDist("    async run() {\n        await this.execute();\n    }\n");
 	assert.equal(checkAssumption(ASSUMPTION, { distDir: dist }).broken, true);
 });
 
@@ -192,13 +192,9 @@ test("loadAssumptions: missing/malformed file ⇒ []", () => {
 	assert.deepEqual(loadAssumptions(dir), []);
 });
 
-test("shipped assumptions.json entries all parse and are well-formed", () => {
+test("shipped assumptions.json has no obsolete source sentinels", () => {
 	const shipped = loadAssumptions(path.dirname(fileURLToPath(import.meta.url)));
-	assert.ok(shipped.length >= 1);
-	for (const a of shipped) {
-		assert.doesNotThrow(() => new RegExp(a.pattern, a.flags ?? ""));
-		assert.ok(a.message.length > 0);
-	}
+	assert.deepEqual(shipped, []);
 });
 
 test("resolvePiDistDir: finds the running pi cli in argv", () => {

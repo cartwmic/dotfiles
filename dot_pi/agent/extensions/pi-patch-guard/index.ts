@@ -33,10 +33,8 @@
  * profile-aware for free: a patch gated off for the active chezmoi profile
  * writes `status:"unpatched"`, which is not intended-on ⇒ no drift.
  *
- * SECOND JOB — source assumptions (sentinels). Some extensions are written
- * against *unpatched* pi internals whose behavior is load-bearing but undocumented
- * (e.g. ntfy suppresses compaction notifications by relying on
- * `AgentSession.compact()` disconnecting extension handlers before aborting).
+ * SECOND JOB — source assumptions (sentinels). Extensions may depend on
+ * *unpatched* pi internals whose behavior is load-bearing but undocumented.
  * Those are not patches — nothing is edited — but they silently rot on a pi
  * upgrade. `assumptions.json` beside this module declares each one as a regex
  * over a file in the installed pi `dist/`; a non-match warns at session start.

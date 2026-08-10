@@ -17,6 +17,7 @@ import {
 	shouldTrigger,
 	thresholdTokens,
 } from "./config.ts";
+import { AUTO_COMPACT_WILL_RESUME_EVENT } from "./events.ts";
 
 function extensionDir(): string {
 	return dirname(fileURLToPath(import.meta.url));
@@ -118,9 +119,18 @@ async function configure(
 	}
 }
 
-export default function (pi: ExtensionAPI): void {
-	const configPath = join(extensionDir(), "config.json");
-	let config = loadConfig(configPath);
+export interface AutoCompactExtensionOptions {
+	/** Test/deployment override; runtime reload still reads configPath. */
+	config?: AutoCompactConfig;
+	configPath?: string;
+}
+
+export function registerAutoCompactExtension(
+	pi: ExtensionAPI,
+	options: AutoCompactExtensionOptions = {},
+): void {
+	const configPath = options.configPath ?? join(extensionDir(), "config.json");
+	let config = options.config ?? loadConfig(configPath);
 	let compacting = false;
 	let lastAttemptTokens: number | undefined;
 	let pendingResume: string | undefined;
@@ -208,6 +218,12 @@ export default function (pi: ExtensionAPI): void {
 		// pending compact promise rejects -> onError runs against a stale ctx).
 		// Any pi/ctx call inside them must be stale-guarded.
 		pendingResume = resumeAfterCompact(config, checkPoint, agentWillContinue);
+		if (pendingResume) {
+			// Pi 0.84+ preserves agent_end/agent_settled while compact() aborts the
+			// active run. Tell cooperating extensions this abort is internal and a
+			// follow-up will resume it, so they do not treat it as a user interrupt.
+			pi.events?.emit(AUTO_COMPACT_WILL_RESUME_EVENT, undefined);
+		}
 		try {
 			ctx.compact({
 				onComplete: () => {
@@ -285,10 +301,8 @@ export default function (pi: ExtensionAPI): void {
 	// The "agent_end" checkpoint is evaluated at agent_settled, not agent_end.
 	// agent_end is a low-level attempt boundary: Pi may still run a native retry,
 	// overflow recovery, or a continuation queued by another extension's agent_end
-	// handler (e.g. the goal loop's follow-up). ctx.compact() disconnects agent
-	// events and aborts, so compacting at agent_end can swallow that continuation
-	// and silently strand the run. agent_settled fires only once nothing further
-	// will run, so the abort inside compact() has nothing left to cancel.
+	// handler (e.g. the goal loop's follow-up). agent_settled fires only once that
+	// automatic work is exhausted, so final-run compaction cannot preempt it.
 	pi.on("agent_settled", (_event, ctx) => {
 		if (pendingTurnEndCheck) {
 			pendingTurnEndCheck = false;
@@ -326,4 +340,8 @@ export default function (pi: ExtensionAPI): void {
 			}
 		},
 	});
+}
+
+export default function (pi: ExtensionAPI): void {
+	registerAutoCompactExtension(pi);
 }

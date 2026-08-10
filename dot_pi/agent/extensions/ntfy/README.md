@@ -1,7 +1,8 @@
 # ntfy notify (pi extension)
 
-Pushes an [ntfy](https://ntfy.sh) notification on every `agent_settled` so you
-know when a remote pi session is truly awaiting input — and which session.
+Pushes an [ntfy](https://ntfy.sh) notification on terminal `agent_settled`
+boundaries so you know when a remote pi session is truly awaiting input — and
+which session. Resumed auto-compaction abort boundaries are excluded.
 
 Topology: `phone → Termux → SSH → remote PC → Herdr or Zellij → pi`. The
 extension runs on the remote PC and pushes to a self-hosted ntfy server; the
@@ -54,6 +55,8 @@ config default, delete `state.json`.
 
 - Notifies on `agent_settled`, after retries, compaction, and queued continuations
   are exhausted. `agent_end` only captures the final assistant text.
+- Suppresses the internal aborted settlement when `auto-compact` announces that
+  it will resume the interrupted run. Explicit user aborts still notify.
 - Title: `<workspace/session> / <tab> / <pi session name>`.
   - **Herdr:** `herdr pane current` supplies canonical current ids and stable
     `terminal_id`; `herdr workspace get` and `herdr tab get` supply labels.

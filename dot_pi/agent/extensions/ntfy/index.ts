@@ -1,9 +1,10 @@
 /**
  * ntfy notify — pi extension
  *
- * On every `agent_settled` (no retry, compaction, or queued continuation left),
- * pushes an ntfy notification so a remote user knows which pi session is
- * waiting and what it last said. Supports both Herdr and Zellij jump routes.
+ * On terminal `agent_settled` (no retry, compaction, or queued continuation
+ * left), pushes an ntfy notification so a remote user knows which pi session is
+ * waiting and what it last said. Skips auto-compaction's resumed abort boundary.
+ * Supports both Herdr and Zellij jump routes.
  *
  * Prerequisites:
  *   - ntfy server reachable at the URL in config.json
@@ -29,6 +30,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { AUTO_COMPACT_WILL_RESUME_EVENT } from "../auto-compact/events.ts";
 
 const DEFAULT_MAX_EXCERPT = 200;
 const DEFAULT_JUMP_DEEPLINK_BASE = "termux://zellij-jump";
@@ -678,12 +680,13 @@ export function registerNtfyExtension(
 	// Per-session send outcomes (pi-ntfy-notify "Status Reports Send Outcomes").
 	const sendState = newSendState();
 	let finalRunMessages: readonly unknown[] = [];
-	// True once agent_end has fired for the current run. AgentSession.compact()
-	// disconnects extension handlers BEFORE aborting the active run, so a
-	// compaction-aborted run settles WITHOUT a preceding agent_end. Such settles
-	// must not notify: the run is being compacted and (normally) resumed, not
-	// finished. Normal aborts and finishes always emit agent_end first.
-	let runEnded = false;
+	// Pi 0.84+ preserves agent_end/agent_settled when compact() aborts a run.
+	// Auto-compact signals when that abort will be resumed; suppress only that
+	// internal boundary. User aborts still notify normally.
+	let suppressNextSettled = false;
+	pi.events.on(AUTO_COMPACT_WILL_RESUME_EVENT, () => {
+		suppressNextSettled = true;
+	});
 
 	function dispatchNotification(excerpt: string, tags: string, ctx: ExtensionContext): void {
 		const sm = ctx.sessionManager;
@@ -739,21 +742,19 @@ export function registerNtfyExtension(
 
 	pi.on("agent_start", async () => {
 		finalRunMessages = [];
-		runEnded = false;
+		suppressNextSettled = false;
 	});
 
 	// Preserve the final low-level run's response. Notification waits for
 	// agent_settled because agent_end may still be followed by automatic work.
 	pi.on("agent_end", async (event) => {
 		finalRunMessages = event.messages ?? [];
-		runEnded = true;
 	});
 
 	pi.on("agent_settled", async (_event, ctx) => {
-		// agent_settled without an agent_end means the run was aborted by
-		// compaction (handlers were disconnected before the abort) — skip, the
-		// resumed run will settle normally and notify then.
-		if (!runEnded) return;
+		const suppress = suppressNextSettled;
+		suppressNextSettled = false;
+		if (suppress) return;
 		// hasUI is true in TUI and RPC modes, false in print (-p) / json modes.
 		if (!ctx.hasUI || !ctx.isIdle()) return;
 		if (!enabled) return;
