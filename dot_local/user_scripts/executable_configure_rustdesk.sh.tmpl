@@ -72,13 +72,25 @@ esac
 
 TEMP_DIR="$(mktemp -d)"
 LINUX_SERVICE_STOPPED=0
+MACOS_DAEMON_STOPPED=0
+MACOS_AGENT_STOPPED=0
+MACOS_AGENT_DOMAIN=""
+MACOS_AGENT_PLIST="${RUSTDESK_AGENT_PLIST:-/Library/LaunchAgents/com.carriez.RustDesk_server.plist}"
+MACOS_DAEMON_PLIST="${RUSTDESK_DAEMON_PLIST:-/Library/LaunchDaemons/com.carriez.RustDesk_service.plist}"
+MACOS_SERVICE_ENABLED=0
 cleanup() {
   status=$?
   trap - EXIT HUP INT TERM
-  rm -rf "$TEMP_DIR"
   if [ "$LINUX_SERVICE_STOPPED" -eq 1 ]; then
     sudo systemctl start rustdesk.service >/dev/null 2>&1 || true
   fi
+  if [ "$MACOS_DAEMON_STOPPED" -eq 1 ] && [ -f "$MACOS_DAEMON_PLIST" ]; then
+    sudo launchctl bootstrap system "$MACOS_DAEMON_PLIST" >/dev/null 2>&1 || true
+  fi
+  if [ "$MACOS_AGENT_STOPPED" -eq 1 ] && [ -n "$MACOS_AGENT_DOMAIN" ] && [ -f "$MACOS_AGENT_PLIST" ]; then
+    launchctl bootstrap "$MACOS_AGENT_DOMAIN" "$MACOS_AGENT_PLIST" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$TEMP_DIR"
   exit "$status"
 }
 trap cleanup EXIT HUP INT TERM
@@ -147,9 +159,17 @@ def set_key(table: Optional[str], key: str, desired: str) -> None:
     raw_value = value(desired)
     bounds = table_bounds(table)
     if bounds is None:
+        dotted = re.compile(rf"^\s*{re.escape(table)}\s*\.\s*{re.escape(key)}\s*=")
+        for index, line in enumerate(lines):
+            if dotted.match(line):
+                lines[index] = f"{table}.{key} = {raw_value}"
+                return
         if lines and lines[-1].strip():
             lines.append("")
-        lines.extend((f"[{table}]", f"{key} = {raw_value}"))
+        if isinstance(parsed.get(table), dict):
+            lines.append(f"{table}.{key} = {raw_value}")
+        else:
+            lines.extend((f"[{table}]", f"{key} = {raw_value}"))
         return
 
     start, end = bounds
@@ -166,6 +186,25 @@ def set_key(table: Optional[str], key: str, desired: str) -> None:
     lines.insert(insert_at, f"{key} = {raw_value}")
 
 
+def delete_key(table: str, key: str) -> None:
+    global lines
+    before = len(lines)
+    # RustDesk has emitted both a normal [options] key and a top-level dotted
+    # options.stop-service key. These two common forms are enough here.
+    dotted = re.compile(rf'^\s*options\s*\.\s*{re.escape(key)}\s*=')
+    lines = [line for line in lines if not dotted.match(line)]
+    bounds = table_bounds(table)
+    if bounds is not None:
+        start, end = bounds
+        assignment = re.compile(rf'^\s*{re.escape(key)}\s*=')
+        lines = [
+            line for index, line in enumerate(lines)
+            if not (start <= index < end and assignment.match(line))
+        ]
+    if len(lines) != before:
+        mutated[0] = True
+
+
 server = os.environ["RUSTDESK_SERVER"]
 port = os.environ["RUSTDESK_PORT"]
 public_key = os.environ["RUSTDESK_PUBLIC_KEY"]
@@ -176,6 +215,7 @@ set_key("options", "relay-server", server)
 set_key("options", "key", public_key)
 set_key("options", "approve-mode", "password")
 set_key("options", "verification-method", "use-permanent-password")
+delete_key("options", "stop-service")
 
 if mutated[0]:
     updated = "\n".join(lines).rstrip() + "\n"
@@ -203,12 +243,20 @@ if ! cmp -s "$USER_ORIGINAL" "$USER_STAGED"; then
 fi
 
 ROOT_CHANGED=0
-ROOT_CONFIG="/root/.config/rustdesk/RustDesk2.toml"
 ROOT_ORIGINAL="$TEMP_DIR/root-original.toml"
 ROOT_STAGED="$TEMP_DIR/root-staged.toml"
-if [ "$OS" = "Linux" ] && [ "${RUSTDESK_SKIP_ROOT_CONFIG:-0}" != "1" ]; then
+case "$OS" in
+  Darwin)
+    ROOT_CONFIG_DIR="${RUSTDESK_ROOT_CONFIG_DIR:-/var/root/Library/Preferences/com.carriez.RustDesk}"
+    ROOT_CONFIG="$ROOT_CONFIG_DIR/RustDesk2.toml"
+    ;;
+  Linux)
+    ROOT_CONFIG_DIR="${RUSTDESK_ROOT_CONFIG_DIR:-/root/.config/rustdesk}"
+    ROOT_CONFIG="$ROOT_CONFIG_DIR/RustDesk2.toml"
+    ;;
+esac
+if [ "${RUSTDESK_SKIP_ROOT_CONFIG:-0}" != "1" ]; then
   if sudo test -f "$ROOT_CONFIG"; then
-    # Destination is user-owned staging storage; sudo is needed only for read.
     # shellcheck disable=SC2024
     sudo cat "$ROOT_CONFIG" > "$ROOT_ORIGINAL"
   else
@@ -220,9 +268,10 @@ if [ "$OS" = "Linux" ] && [ "${RUSTDESK_SKIP_ROOT_CONFIG:-0}" != "1" ]; then
   fi
 fi
 
-if [ "$OS" = "Darwin" ] && [ "$USER_CHANGED" -eq 1 ] && [ "${RUSTDESK_IGNORE_RUNNING:-0}" != "1" ]; then
-  if pgrep -x RustDesk >/dev/null 2>&1; then
-    die "portable settings changed while RustDesk is running; quit RustDesk and rerun this script"
+if [ "$OS" = "Darwin" ] && { [ "$USER_CHANGED" -eq 1 ] || [ "$ROOT_CHANGED" -eq 1 ]; }; then
+  if pgrep -x RustDesk >/dev/null 2>&1 || \
+      sudo launchctl print system/com.carriez.RustDesk_service >/dev/null 2>&1; then
+    die "portable settings changed while RustDesk is running; stop its launchd jobs and rerun"
   fi
 fi
 
@@ -255,7 +304,7 @@ else
 fi
 
 if [ "$ROOT_CHANGED" -eq 1 ]; then
-  sudo install -d -m 700 /root/.config/rustdesk
+  sudo install -d -m 700 "$ROOT_CONFIG_DIR"
   if sudo test -f "$ROOT_CONFIG" && ! sudo test -f "$ROOT_CONFIG.chezmoi-backup"; then
     sudo cp -p "$ROOT_CONFIG" "$ROOT_CONFIG.chezmoi-backup"
   fi
@@ -263,45 +312,270 @@ if [ "$ROOT_CHANGED" -eq 1 ]; then
   log_info "updated portable service settings in $ROOT_CONFIG"
 fi
 
+install_macos_service() {
+  [ "$OS" = "Darwin" ] || return 0
+  if [ "${RUSTDESK_SKIP_ROOT_CONFIG:-0}" = "1" ]; then
+    log_info "skipping macOS service because root configuration is disabled"
+    return 0
+  fi
+
+  user_identity="$CONFIG_DIR/RustDesk.toml"
+  root_identity="$ROOT_CONFIG_DIR/RustDesk.toml"
+  staged_agent="$TEMP_DIR/RustDesk_server.plist"
+  staged_daemon="$TEMP_DIR/RustDesk_service.plist"
+  service_bin="${RUSTDESK_SERVICE_BIN:-/Applications/RustDesk.app/Contents/MacOS/service}"
+  log_dir="${RUSTDESK_LOG_DIR:-/Library/Logs/RustDesk}"
+
+  [ -s "$user_identity" ] || \
+    die "RustDesk identity missing; log in, launch RustDesk once, and rerun"
+  [ -x "$service_bin" ] || die "RustDesk service executable not found: $service_bin"
+
+  # Seed machine identity once. Never overwrite root identity afterward.
+  if ! sudo test -s "$root_identity"; then
+    sudo install -d -m 700 "$ROOT_CONFIG_DIR"
+    sudo install -m 600 "$user_identity" "$root_identity"
+    log_info "seeded LoginWindow identity from existing machine identity"
+  fi
+
+  # Pinned from RustDesk 1.4.9. Daemon logs move from /tmp to /Library/Logs.
+  cat > "$staged_agent" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.carriez.RustDesk_server</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <string>com.carriez.rustdesk</string>
+  <key>LimitLoadToSessionType</key>
+  <array>
+    <string>LoginWindow</string>
+    <string>Aqua</string>
+  </array>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+    <key>AfterInitialDemand</key><false/>
+  </dict>
+  <key>ThrottleInterval</key><integer>1</integer>
+  <key>RunAtLoad</key><true/>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/RustDesk.app/Contents/MacOS/RustDesk</string>
+    <string>--server</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Applications/RustDesk.app/Contents/MacOS/</string>
+  <key>ProcessType</key><string>Interactive</string>
+</dict>
+</plist>
+PLIST
+
+  cat > "$staged_daemon" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.carriez.RustDesk_service</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <string>com.carriez.rustdesk</string>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>1</integer>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>/Applications/RustDesk.app/Contents/MacOS/service</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>WorkingDirectory</key>
+  <string>/Applications/RustDesk.app/Contents/MacOS/</string>
+  <key>StandardErrorPath</key><string>$log_dir/service.err</string>
+  <key>StandardOutPath</key><string>$log_dir/service.out</string>
+</dict>
+</plist>
+PLIST
+
+  plutil -lint "$staged_agent" "$staged_daemon" >/dev/null
+  sudo install -d -o root -g wheel -m 755 "$log_dir"
+
+  agent_changed=0
+  daemon_changed=0
+  if ! sudo cmp -s "$staged_agent" "$MACOS_AGENT_PLIST"; then
+    sudo install -o root -g wheel -m 644 "$staged_agent" "$MACOS_AGENT_PLIST"
+    agent_changed=1
+  fi
+  if ! sudo cmp -s "$staged_daemon" "$MACOS_DAEMON_PLIST"; then
+    sudo install -o root -g wheel -m 644 "$staged_daemon" "$MACOS_DAEMON_PLIST"
+    daemon_changed=1
+  fi
+
+  daemon_label="system/com.carriez.RustDesk_service"
+  daemon_loaded=0
+  if sudo launchctl print "$daemon_label" >/dev/null 2>&1; then
+    daemon_loaded=1
+  fi
+  if [ "$daemon_changed" -eq 1 ] && [ "$daemon_loaded" -eq 1 ]; then
+    sudo launchctl bootout "$daemon_label" >/dev/null 2>&1 || true
+    MACOS_DAEMON_STOPPED=1
+    daemon_loaded=0
+  fi
+  sudo launchctl enable "$daemon_label"
+  if [ "$daemon_loaded" -eq 0 ]; then
+    sudo launchctl bootstrap system "$MACOS_DAEMON_PLIST"
+    MACOS_DAEMON_STOPPED=0
+  fi
+
+  console_user="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+  if [ "$console_user" = "$(id -un)" ]; then
+    MACOS_AGENT_DOMAIN="gui/$(id -u)"
+    agent_label="$MACOS_AGENT_DOMAIN/com.carriez.RustDesk_server"
+    agent_loaded=0
+    if launchctl print "$agent_label" >/dev/null 2>&1; then
+      agent_loaded=1
+    fi
+    if [ "$agent_changed" -eq 1 ] && [ "$agent_loaded" -eq 1 ]; then
+      launchctl bootout "$agent_label" >/dev/null 2>&1 || true
+      MACOS_AGENT_STOPPED=1
+      agent_loaded=0
+    fi
+    launchctl enable "$agent_label"
+    if [ "$agent_loaded" -eq 0 ]; then
+      launchctl bootstrap "$MACOS_AGENT_DOMAIN" "$MACOS_AGENT_PLIST"
+      MACOS_AGENT_STOPPED=0
+    fi
+    if ! launchctl print "$agent_label" 2>/dev/null | grep -q 'state = running'; then
+      launchctl kickstart "$agent_label"
+    fi
+    log_info "RustDesk service enabled for Aqua and next LoginWindow session"
+  elif pgrep -x RustDesk >/dev/null 2>&1; then
+    log_info "RustDesk service active at LoginWindow"
+  else
+    log_info "RustDesk service installed; reboot required to start LoginWindow agent"
+  fi
+  MACOS_SERVICE_ENABLED=1
+}
+
+install_macos_service
+
 # RustDesk exposes password setting, but not password retrieval, through its CLI.
 # Installed desktop builds require administrative privileges. Pass secret to a
 # root wrapper over stdin so sudo logs never contain it, then require RustDesk's
 # explicit success message because the CLI returns zero even when it rejects the
 # request.
-if ! PASSWORD="$($OP_BIN read "$PASSWORD_REFERENCE" --no-newline 2>/dev/null)"; then
-  die "unable to read RustDesk password from $PASSWORD_REFERENCE"
-fi
-[ -n "$PASSWORD" ] || die "1Password returned an empty RustDesk password"
+sync_identity_password() {
+  source_file=$1
+  source_sudo=$2
+  destination_file=$3
+  destination_sudo=$4
+  source_copy="$TEMP_DIR/password-source.toml"
+  destination_copy="$TEMP_DIR/password-destination.toml"
+  updated_copy="$TEMP_DIR/password-updated.toml"
 
-# The administrative CLI sends the password to the running desktop server over
-# IPC. A fresh macOS cask has no server until the application launches.
-if [ "$OS" = "Darwin" ] && ! pgrep -x RustDesk >/dev/null 2>&1; then
-  command -v open >/dev/null 2>&1 || die "macOS open command not found"
-  open -gj -a RustDesk
-  attempts=0
-  while ! pgrep -x RustDesk >/dev/null 2>&1 && [ "$attempts" -lt 40 ]; do
-    sleep 0.25
-    attempts=$((attempts + 1))
-  done
-  pgrep -x RustDesk >/dev/null 2>&1 || die "RustDesk did not start for password configuration"
-  log_info "started RustDesk for password configuration"
-fi
+  if [ "$source_sudo" -eq 1 ]; then
+    # shellcheck disable=SC2024
+    sudo cat "$source_file" > "$source_copy"
+  else
+    cp "$source_file" "$source_copy"
+  fi
+  if [ "$destination_sudo" -eq 1 ]; then
+    # shellcheck disable=SC2024
+    sudo cat "$destination_file" > "$destination_copy"
+  else
+    cp "$destination_file" "$destination_copy"
+  fi
 
-PASSWORD_OUTPUT="$TEMP_DIR/password-output"
-# Output file intentionally belongs to invoking user; only RustDesk needs root.
-# shellcheck disable=SC2024
-if ! printf '%s\n' "$PASSWORD" | sudo -- sh -c '
-  IFS= read -r password
-  exec "$1" --password "$password"
-' sh "$RUSTDESK_BIN" > "$PASSWORD_OUTPUT" 2>&1; then
+  "$PYTHON_BIN" - "$source_copy" "$destination_copy" "$updated_copy" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+import tomllib
+
+source_path, destination_path, output_path = map(Path, sys.argv[1:])
+source = tomllib.loads(source_path.read_text())
+lines = destination_path.read_text().splitlines()
+for key in ("password", "salt"):
+    desired = source.get(key)
+    if not isinstance(desired, str) or not desired:
+        raise RuntimeError(f"RustDesk did not persist {key}")
+    assignment = re.compile(rf'^\s*{key}\s*=')
+    for index, line in enumerate(lines):
+        if assignment.match(line):
+            lines[index] = f"{key} = {json.dumps(desired)}"
+            break
+    else:
+        lines.insert(0, f"{key} = {json.dumps(desired)}")
+updated = "\n".join(lines).rstrip() + "\n"
+tomllib.loads(updated)
+output_path.write_text(updated)
+PY
+  chmod 600 "$updated_copy"
+  if [ "$destination_sudo" -eq 1 ]; then
+    sudo install -m 600 "$updated_copy" "$destination_file"
+  else
+    install -m 600 "$updated_copy" "$destination_file"
+  fi
+}
+
+apply_password() {
+  PASSWORD_PROFILE=""
+  if [ "$OS" = "Darwin" ]; then
+    console_user="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+    invoking_user="$(id -un)"
+    if ! pgrep -x RustDesk >/dev/null 2>&1; then
+      if [ "$console_user" != "$invoking_user" ]; then
+        log_info "password update deferred until reboot starts LoginWindow agent"
+        return 0
+      fi
+      open -gj -a RustDesk
+      attempts=0
+      while ! pgrep -x RustDesk >/dev/null 2>&1 && [ "$attempts" -lt 40 ]; do
+        sleep 0.25
+        attempts=$((attempts + 1))
+      done
+      pgrep -x RustDesk >/dev/null 2>&1 || die "RustDesk did not start for password update"
+    fi
+    if [ "$console_user" = "$invoking_user" ]; then
+      PASSWORD_PROFILE="user"
+    else
+      PASSWORD_PROFILE="root"
+    fi
+  fi
+
+  if ! PASSWORD="$($OP_BIN read "$PASSWORD_REFERENCE" --no-newline 2>/dev/null)"; then
+    die "unable to read RustDesk password from $PASSWORD_REFERENCE"
+  fi
+  [ -n "$PASSWORD" ] || die "1Password returned an empty RustDesk password"
+
+  PASSWORD_OUTPUT="$TEMP_DIR/password-output"
+  # Force root HOME so elevated RustDesk never rewrites user config as root.
+  # shellcheck disable=SC2024
+  if ! printf '%s\n' "$PASSWORD" | sudo -H -- sh -c '
+    IFS= read -r password
+    exec "$1" --password "$password"
+  ' sh "$RUSTDESK_BIN" > "$PASSWORD_OUTPUT" 2>&1; then
+    unset PASSWORD
+    die "RustDesk password command failed"
+  fi
   unset PASSWORD
-  die "RustDesk password command failed"
-fi
-unset PASSWORD
-if ! grep -Fxq 'Done!' "$PASSWORD_OUTPUT"; then
-  die "RustDesk did not confirm permanent-password update"
-fi
-log_info "applied permanent password from $PASSWORD_REFERENCE"
+  grep -Fxq 'Done!' "$PASSWORD_OUTPUT" || \
+    die "RustDesk did not confirm permanent-password update"
+
+  if [ "$OS" = "Darwin" ] && [ "$MACOS_SERVICE_ENABLED" -eq 1 ]; then
+    if [ "$PASSWORD_PROFILE" = "user" ]; then
+      sync_identity_password \
+        "$CONFIG_DIR/RustDesk.toml" 0 "$ROOT_CONFIG_DIR/RustDesk.toml" 1
+    else
+      sync_identity_password \
+        "$ROOT_CONFIG_DIR/RustDesk.toml" 1 "$CONFIG_DIR/RustDesk.toml" 0
+    fi
+  fi
+  log_info "applied permanent password from $PASSWORD_REFERENCE"
+}
+
+apply_password
 
 if [ "$OS" = "Linux" ]; then
   if [ "$LINUX_SERVICE_AVAILABLE" -eq 1 ]; then
