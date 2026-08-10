@@ -79,7 +79,9 @@ chezmoi init --apply git@github.com:cartwmic/dotfiles.git
 
 ## RustDesk Provisioning
 
-On `personal` profile hosts, `mise run bootstrap` installs RustDesk when missing. Other chezmoi profiles skip RustDesk. A chezmoi onchange script then applies only portable settings from `.chezmoidata.toml`: rendezvous server, relay server, public server key, password approval mode, and permanent-password verification. It preserves device identity, trusted-device data, local IP state, UI state, and hardware-codec state.
+On `personal` profile hosts, `mise run bootstrap` installs RustDesk when missing. Other chezmoi profiles skip RustDesk. A chezmoi onchange script then applies portable settings from `.chezmoidata.toml`: rendezvous server, relay server, public server key, password approval mode, permanent-password verification, and service-enabled state. It removes RustDesk's `stop-service` option. Device identity, trusted-device data, proxy credentials, local IP state, UI state, and hardware-codec state remain machine-local.
+
+On macOS, the same helper installs pinned RustDesk 1.4.9 launchd definitions, hardened to write daemon logs under `/Library/Logs/RustDesk` instead of `/tmp`: a root LaunchDaemon for the machine service and a LoginWindow/Aqua LaunchAgent for screen capture and input. Root service identity is seeded once from existing user identity, never from chezmoi source. After password rotation, only encrypted password storage and its salt are synchronized between Aqua and LoginWindow identity profiles. This lets RustDesk start at macOS login window after FileVault has been unlocked; nothing can start before FileVault unlock. A service first installed while machine is already at login window becomes available after next reboot. Fresh machines must first log in and launch RustDesk once to initialize identity.
 
 The permanent password lives only in 1Password. Rotate it there, then apply it again with:
 
@@ -90,10 +92,11 @@ The permanent password lives only in 1Password. Rotate it there, then apply it a
 The helper updates these platform paths:
 
 - macOS user: `~/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml`
+- macOS service: `/var/root/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml`
 - Linux user: `~/.config/rustdesk/RustDesk2.toml`
 - Linux service: `/root/.config/rustdesk/RustDesk2.toml`
 
-On macOS, quit RustDesk before applying changed portable settings. Password-only reapplication can run while RustDesk is open. On Linux, configuration briefly restarts `rustdesk.service`. Do not run it through the RustDesk session being reconfigured.
+On macOS, portable-setting changes require RustDesk to be fully stopped. If LoginWindow server is active, log in graphically before changing those settings; password-only reapplication may run while RustDesk is open. Helper installs and enables `/Library/LaunchDaemons/com.carriez.RustDesk_service.plist` and `/Library/LaunchAgents/com.carriez.RustDesk_server.plist` using `sudo`. First installation from an existing LoginWindow session defers password verification until reboot starts the new agent. On Linux, configuration briefly restarts `rustdesk.service`. Do not run helper through the RustDesk session being reconfigured.
 
 Shared passwords increase blast radius: compromise of one machine or this 1Password item affects every managed RustDesk host.
 

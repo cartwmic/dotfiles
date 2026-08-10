@@ -73,10 +73,11 @@ This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.
 - Shared portable settings live in `.chezmoidata.toml`.
 - `install-rustdesk` installs the application on `personal` profile macOS and native Ubuntu/Debian hosts; other profiles and WSL are skipped.
 - `run_onchange_after_60_configure_rustdesk.sh.tmpl` invokes the deployed `~/.local/user_scripts/configure_rustdesk.sh` helper after installation.
-- The helper preserves device identity and machine-local state while managing rendezvous/relay settings and password policy in `RustDesk2.toml`.
+- The helper preserves device identity and machine-local state while managing rendezvous/relay settings, password policy, and service-enabled state in `RustDesk2.toml`; `stop-service` is removed intentionally.
 - The unattended-access password is read from `op://developer/RustDesk/password`; never commit its value.
 - Linux user and root service configurations are both managed. Linux service configuration requires `sudo` and restarts `rustdesk.service` when settings change.
-- macOS RustDesk must be quit before portable settings change. Accessibility, Screen Recording, and sometimes Input Monitoring still require manual approval.
+- On macOS, the helper manages `/var/root/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml`, seeds `RustDesk.toml` identity once from existing user identity, synchronizes only encrypted password storage plus salt after rotation, and installs pinned RustDesk 1.4.9 LaunchDaemon/LoginWindow+Aqua LaunchAgent definitions with daemon logs hardened under `/Library/Logs/RustDesk`.
+- Portable-setting changes on macOS require RustDesk fully stopped. If LoginWindow server is active, log in graphically first. Service installation requires `sudo`; first install from existing LoginWindow session starts its agent after reboot and defers password verification until then. Fresh machines require one interactive RustDesk launch to initialize identity. Accessibility, Screen Recording, and sometimes Input Monitoring still require manual approval.
 - Never sync `RustDesk.toml`, `RustDesk_local.toml`, or `RustDesk_hwcodec.toml` because they contain identity or generated machine-local state.
 
 ## Important Conventions
