@@ -64,6 +64,7 @@ chezmoi init --apply git@github.com:cartwmic/dotfiles.git
 **DevOps/Cloud:**
 
 - Kubernetes: kubectl, k9s, helm, kustomize, kubeseal
+- Containers: Docker Desktop on macOS; Docker Engine, Compose, and Buildx on Ubuntu
 - Infrastructure: terraform
 - Utilities: ripgrep, jq, yq, task
 
@@ -76,6 +77,12 @@ chezmoi init --apply git@github.com:cartwmic/dotfiles.git
 - RustDesk client on macOS and native Ubuntu/Debian
 - Self-hosted rendezvous and relay configuration
 - Shared unattended-access password loaded from `op://developer/RustDesk/password`
+
+## Docker Provisioning
+
+On `personal` profile hosts, `mise run bootstrap` installs Docker Desktop on macOS or Docker Engine from Docker's official apt repository on native Ubuntu. Work profiles, Termux, WSL, and unsupported Linux distributions are skipped. On macOS, provisioning repairs inaccessible legacy `/usr/local/bin` permissions when needed and verifies the Docker and Compose CLIs after installation. Docker Desktop requires one interactive launch to accept its license and finish setup.
+
+On Ubuntu, provisioning refuses to remove conflicting distribution packages automatically. After those are removed explicitly, it installs Docker CE, containerd, Compose, and Buildx, then adds the current user to the `docker` group. Group membership takes effect after logout/login and grants root-equivalent access through the Docker daemon. Docker-published ports can bypass `ufw`; enforce host policy through Docker's `DOCKER-USER` chain where needed.
 
 ## RustDesk Provisioning
 

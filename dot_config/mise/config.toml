@@ -290,6 +290,121 @@ case "$OS" in
 esac
 '''
 
+[tasks."install-docker"]
+description = "Install Docker Desktop on personal macOS or Docker Engine on personal Ubuntu hosts"
+depends = ["setup-ubuntu-essentials"]
+# Homebrew and apt may invoke sudo. Give this task exclusive, direct terminal
+# access so password prompts do not receive SIGTTIN inside mise's worker pool.
+interactive = true
+run = '''
+PROFILE="$(chezmoi data --format json 2>/dev/null | jq -r '.profile // empty' || true)"
+if [ "$PROFILE" != "personal" ]; then
+  echo "Skipping Docker for chezmoi profile ${PROFILE:-unknown}"
+  exit 0
+fi
+
+verify_docker_cli() {
+  hash -r 2>/dev/null || true
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "ERROR: Docker CLI is not available on PATH after installation" >&2
+    return 1
+  fi
+  docker --version
+  docker compose version
+}
+
+OS="$(uname -s)"
+case "$OS" in
+  Darwin)
+    # Docker Desktop links its CLI into this conventional system path. Repair
+    # legacy permissions that prevent non-root users from traversing it.
+    ensure_docker_cli_path() {
+      if [ -d /usr/local/bin ] && { [ ! -r /usr/local/bin ] || [ ! -x /usr/local/bin ]; }; then
+        echo "Repairing inaccessible /usr/local/bin permissions"
+        sudo chmod 0755 /usr/local/bin
+      fi
+    }
+    ensure_docker_cli_path
+
+    if [ -d "/Applications/Docker.app" ] && command -v docker >/dev/null 2>&1; then
+      echo "Docker Desktop already installed"
+    elif brew list --cask docker-desktop >/dev/null 2>&1; then
+      echo "Repairing incomplete Docker Desktop installation"
+      brew reinstall --cask docker-desktop
+      echo "Docker Desktop repaired; open it once to accept the license and finish setup"
+    else
+      brew install --cask docker-desktop
+      echo "Docker Desktop installed; open it once to accept the license and finish setup"
+    fi
+    ensure_docker_cli_path
+    verify_docker_cli
+    ;;
+  Linux)
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+      echo "Skipping Docker Engine inside WSL; use Docker Desktop integration from Windows"
+      exit 0
+    fi
+
+    if [ ! -r /etc/os-release ]; then
+      echo "Skipping Docker Engine: /etc/os-release is unavailable"
+      exit 0
+    fi
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    if [ "${ID:-}" != "ubuntu" ]; then
+      echo "Skipping Docker Engine on unsupported Linux distribution ${ID:-unknown}"
+      exit 0
+    fi
+
+    CONFLICTS=""
+    for PACKAGE in docker.io docker-compose docker-compose-v2 docker-doc docker-buildx podman-docker containerd runc; do
+      if dpkg-query -W -f='${Status}' "$PACKAGE" 2>/dev/null | grep -q 'install ok installed'; then
+        CONFLICTS="$CONFLICTS $PACKAGE"
+      fi
+    done
+    if [ -n "$CONFLICTS" ]; then
+      echo "ERROR: conflicting Docker packages installed:$CONFLICTS" >&2
+      echo "Remove them explicitly before installing Docker CE from Docker's official repository" >&2
+      exit 1
+    fi
+
+    sudo apt-get update
+    sudo apt-get install -y ca-certificates curl
+    sudo install -m 0755 -d /etc/apt/keyrings
+    sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+    CODENAME="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+    if [ -z "$CODENAME" ]; then
+      echo "ERROR: unable to determine Ubuntu codename" >&2
+      exit 1
+    fi
+    ARCH="$(dpkg --print-architecture)"
+    printf '%s\n' \
+      'Types: deb' \
+      'URIs: https://download.docker.com/linux/ubuntu' \
+      "Suites: $CODENAME" \
+      'Components: stable' \
+      "Architectures: $ARCH" \
+      'Signed-By: /etc/apt/keyrings/docker.asc' \
+      | sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null
+
+    sudo apt-get update
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+    CURRENT_USER="$(id -un)"
+    if ! id -nG "$CURRENT_USER" | tr ' ' '\n' | grep -qx docker; then
+      sudo usermod -aG docker "$CURRENT_USER"
+      echo "Added $CURRENT_USER to docker group; log out and back in before running Docker without sudo"
+    fi
+    verify_docker_cli
+    ;;
+  *)
+    echo "Skipping Docker on unsupported operating system $OS"
+    ;;
+esac
+'''
+
 [tasks."install-claude"]
 description = "Install Claude CLI"
 run = '''
@@ -805,6 +920,7 @@ depends = [
   "install-sdkman",
   "install-kitty",
   "install-rustdesk",
+  "install-docker",
   "install-claude",
   "install-furi",
   "install-claude-code-acp",
