@@ -28,21 +28,32 @@ returned list.
 ## What it changes
 
 Target: `@earendil-works/pi-coding-agent/dist/core/model-runtime.js`
-(revision 2; up to 0.80.6 the target was `model-registry.js#getAvailable()`,
-which 0.80.10 refactored into a facade over `ModelRuntime`).
+(revision 3, verified against 0.84.0; up to 0.80.6 the target was
+`model-registry.js#getAvailable()`, which 0.80.10 refactored into a facade over
+`ModelRuntime`).
 
-Three edits, all applying the same exclusion
+**Revision 3 filters the snapshot *readers*, not the writers.** Revision 2
+filtered the three sites that *built* `snapshot.available`; 0.84.0 reshaped
+`getAvailable(providerId)` (it now assigns `const available = await
+this.models.getAvailable(providerId, options)` and does error-seq bookkeeping
+before returning) and added two more snapshot-write sites
+(`refreshProviderAvailability()`, `registerProvider()`), so that approach both
+broke and under-covered. Every external consumer — model picker, `pi
+--list-models`, RPC mode, `model-resolver`, `agent-session`, and
+`ModelRegistry.getAvailable()` — reaches the list through exactly two
+`ModelRuntime` methods, so two anchors now cover all of them and future internal
+writers cannot bypass the filter.
+
+Two edits, both applying the exclusion
 `!(/claude/i.test(model.id) && model.provider !== "claude-bridge")`:
 
-1. `updateModelSnapshot()` — `snapshot.available` built from configured
-   providers.
-2. `runAvailabilityRefresh()` — `snapshot.available` rebuilt from
-   `models.getAvailable()`.
-3. `getAvailable(providerId)` — the provider-specific path that bypasses the
-   snapshot when no refresh is in flight.
-
-`ModelRegistry.getAvailable()`/`getAvailableSnapshot()` both read
-`snapshot.available`, so the facade is covered transitively.
+1. `getAvailableSnapshot()` — filters `snapshot.available` on read, memoized on
+   the source array identity (`__chezmoiPatchAvailableSource` /
+   `__chezmoiPatchAvailableFiltered`) so repeated calls return a stable array
+   reference and TUI re-render behavior is unchanged. The no-provider branch of
+   `getAvailable()` is rewired to return `this.getAvailableSnapshot()`.
+2. `getAvailable(providerId)` — the provider-specific path that bypasses the
+   snapshot; the awaited result is filtered at its assignment.
 
 "Claude model" = model id matches `/claude/i`. That covers `anthropic`
 (`claude-opus-4-8`, `claude-fable-5`), `openrouter` (`anthropic/claude-*`,
@@ -88,7 +99,7 @@ State is written to `~/.local/state/chezmoi-pi-patches/hide-nonbridge-claude-mod
 PI_CHEZMOI_PROFILE=personal node patch.mjs           # apply
 PI_CHEZMOI_PROFILE=personal node patch.mjs --check    # exit 0 when patched
 pi --list-models | awk 'NR>1 && $1!="claude-bridge" && tolower($2) ~ /claude/'  # must be empty
-pi --list-models | awk '$1=="claude-bridge"'          # 5 rows
+pi --list-models | awk '$1=="claude-bridge"'          # bridge rows only (8 on 0.84.0)
 jq '.anthropic | {has_access:(.access!=null),type}' ~/.pi/agent/auth.json  # auth intact
 ```
 
