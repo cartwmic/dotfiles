@@ -34,7 +34,7 @@ import { homedir } from "node:os";
 
 // Bump when the EDITS strings change. The embedded marker uses this; a stale
 // marker (different revision) triggers restore-from-backup before re-apply.
-const PATCH_REVISION = 2;
+const PATCH_REVISION = 3;
 
 const PATCH_NAME = "hide-nonbridge-claude-models";
 const MARKER = `chezmoi-pi-patch:${PATCH_NAME} v${PATCH_REVISION}`;
@@ -61,31 +61,46 @@ const wantPatched = profile === "personal";
 // patched" and reverse the edit. Any change here requires a PATCH_REVISION bump.
 
 // v0.80.x moved availability computation from ModelRegistry.getAvailable()
-// (model-registry.js) into ModelRuntime (model-runtime.js). ModelRegistry is
-// now a facade over runtime.getAvailableSnapshot(). We filter every site that
-// produces/returns the available list: the two snapshot builders plus the
-// provider-specific bypass in getAvailable(providerId).
+// (model-registry.js) into ModelRuntime (model-runtime.js); ModelRegistry is a
+// facade over runtime.getAvailableSnapshot(). Revision 2 filtered the snapshot
+// WRITE sites, which broke on 0.84.0 (getAvailable(providerId) was reshaped and
+// two more write sites appeared). Revision 3 filters the READ chokepoints
+// instead — every external consumer (model picker, pi --list-models, RPC,
+// model-resolver, agent-session) goes through ModelRuntime.getAvailable() or
+// ModelRuntime.getAvailableSnapshot(), so two anchors cover all of them and
+// new internal snapshot writers cannot bypass the filter.
+const KEEP = `(model) => !(/claude/i.test(model.id) && model.provider !== "claude-bridge")`;
+
 const EDITS = [
 	{
-		name: "updateModelSnapshot — hide non-claude-bridge Claude models",
-		find: `            available: all.filter((model) => this.snapshot.configuredProviders.has(model.provider)),`,
-		replace: `            // ${MARKER} — hide Claude models from every provider except
-            // claude-bridge; auth is intentionally preserved so the anthropic
-            // token still powers web_search/web_fetch + sub-bar.
-            available: all.filter((model) => this.snapshot.configuredProviders.has(model.provider)
-                && !(/claude/i.test(model.id) && model.provider !== "claude-bridge")),`,
-	},
-	{
-		name: "runAvailabilityRefresh — hide non-claude-bridge Claude models",
-		find: `            available: [...available],`,
-		replace: `            // ${MARKER} — hide Claude models from every provider except claude-bridge.
-            available: available.filter((model) => !(/claude/i.test(model.id) && model.provider !== "claude-bridge")),`,
+		name: "getAvailableSnapshot + getAvailable() snapshot return — hide non-claude-bridge Claude models",
+		find: `        await this.queueAvailabilityRefresh(options?.signal);
+        return this.snapshot.available;
+    }
+    getAvailableSnapshot() {
+        return this.snapshot.available;
+    }`,
+		replace: `        await this.queueAvailabilityRefresh(options?.signal);
+        return this.getAvailableSnapshot();
+    }
+    getAvailableSnapshot() {
+        // ${MARKER} — hide Claude models from every provider except claude-bridge;
+        // auth is intentionally preserved so the anthropic token still powers
+        // web_search/web_fetch + the pi-sub-bar token widget. Result is memoized on
+        // the source array so repeated calls keep a stable identity (TUI re-render).
+        const source = this.snapshot.available;
+        if (this.__chezmoiPatchAvailableSource !== source) {
+            this.__chezmoiPatchAvailableSource = source;
+            this.__chezmoiPatchAvailableFiltered = source.filter(${KEEP});
+        }
+        return this.__chezmoiPatchAvailableFiltered;
+    }`,
 	},
 	{
 		name: "getAvailable(providerId) bypass — hide non-claude-bridge Claude models",
-		find: `                return await this.models.getAvailable(providerId);`,
+		find: `                const available = await this.models.getAvailable(providerId, options);`,
 		replace: `                // ${MARKER} — hide Claude models from every provider except claude-bridge.
-                return (await this.models.getAvailable(providerId)).filter((model) => !(/claude/i.test(model.id) && model.provider !== "claude-bridge"));`,
+                const available = (await this.models.getAvailable(providerId, options)).filter(${KEEP});`,
 	},
 ];
 
