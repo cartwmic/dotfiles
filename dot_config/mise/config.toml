@@ -14,6 +14,15 @@
 #   eval "$(mise activate zsh)"
 
 # =============================================================================
+# Tool Aliases
+# =============================================================================
+# Loop Engine publishes independent CLI and provider archives from one release.
+# Separate aliases give each binary its own mise install directory.
+[tool_alias]
+loop-engine = "github:cartwmic/loop-engine"
+software-change = "github:cartwmic/loop-engine"
+
+# =============================================================================
 # Core Language Runtimes
 # =============================================================================
 [tools]
@@ -47,6 +56,10 @@ neovim = "latest"  # Editor
 lazygit = "latest" # Git TUI
 gh = "latest"      # GitHub CLI; also git credential helper (gh auth login is a manual post-provision step)
 ripgrep = "latest" # Fast grep alternative
+
+# Durable workflow engine and matching reference provider. Keep versions paired.
+loop-engine = { version = "0.2.2", matching_regex = "^loop-cli-", rename_exe = "loop-engine" }
+software-change = { version = "0.2.2", matching_regex = "^software-change-provider-", rename_exe = "software-change" }
 
 # Build tools & task runners
 "github:go-task/task" = "latest" # Go-based task runner
