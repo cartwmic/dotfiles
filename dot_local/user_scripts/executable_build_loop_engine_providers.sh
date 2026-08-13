@@ -17,6 +17,21 @@ CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/loop-engine-providers"
 
 log() { echo "$LOG_PREFIX $1: $2"; }
 
+# Removed source directories become unmanaged targets in chezmoi and can survive
+# an apply. Purge retired providers before discovery so stale source cannot be
+# rebuilt or left callable from the generated bin directory.
+for obsolete_name in software-change; do
+  if [ -e "$PROVIDER_ROOT/$obsolete_name" ] || \
+      [ -e "$BIN_DIR/$obsolete_name" ] || \
+      [ -e "$CACHE_DIR/$obsolete_name" ]; then
+    rm -rf -- \
+      "$PROVIDER_ROOT/$obsolete_name" \
+      "$BIN_DIR/$obsolete_name" \
+      "$CACHE_DIR/$obsolete_name"
+    log INFO "removed obsolete provider $obsolete_name"
+  fi
+done
+
 if [ ! -d "$PROVIDER_ROOT" ]; then
   log INFO "no provider root at $PROVIDER_ROOT, skipping"
   exit 0
