@@ -1,3 +1,9 @@
+# Retired 2026-08-13: caveman response-style instruction. Source deletion
+# alone does not remove already-deployed copies; chezmoi removes these on
+# apply. Prune once every machine has applied.
+.claude/output-styles/caveman.md
+.local/share/agent-harness/canonical/instructions/caveman-style.md
+
 # Retired 2026-07-28: the OpenSpec / opsx workflow was removed wholesale
 # (CLI, workflow schema, opsx-loop pi extension, openspec-* + clarify-spec
 # skills, setup script). chezmoi removes these deployed targets on apply;

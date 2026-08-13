@@ -2,14 +2,15 @@
 ./bootstrap_chezmoi.sh
 **/target/*
 *.diff
-CLAUDE.md
+# Repo-only docs: never deploy to $HOME (would collide with ~/AGENTS.md
+# and duplicate the product README at ~/README.md).
+AGENTS.md
+README.md
 docs/
 .playwright-mcp/
 .claude/*
 .codex/*
 !.claude/CLAUDE.md
-!.claude/output-styles
-!.claude/output-styles/**
 !.codex/AGENTS.md
 !.codex/config.toml
 adr/
