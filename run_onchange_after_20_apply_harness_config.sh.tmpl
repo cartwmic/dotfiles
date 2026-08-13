@@ -10,6 +10,12 @@
 # adapters/claude/secrets: {{ include "dot_local/share/agent-harness/adapters/claude/mcp-secrets.json.tmpl" | sha256sum }}
 # adapters/codex/secrets:  {{ include "dot_local/share/agent-harness/adapters/codex/mcp-secrets.json.tmpl" | sha256sum }}
 # apply-script:            {{ include "dot_local/user_scripts/executable_apply_harness_config.sh" | sha256sum }}
+{{ $skillsRoot := joinPath .chezmoi.sourceDir "dot_local/share/agent-harness/canonical/skills" -}}
+{{ $skills := list -}}
+{{ range (glob (joinPath $skillsRoot "*/SKILL.md") | sortAlpha) -}}
+{{   $skills = append $skills (trimPrefix $skillsRoot .) -}}
+{{ end -}}
+# canonical/skills:        {{ $skills | join "\n" | sha256sum }}
 
 set -eu
 
