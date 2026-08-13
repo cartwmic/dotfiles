@@ -1,4 +1,3 @@
-{{ include "dot_local/share/agent-harness/canonical/instructions/caveman-style.md" }}
 ## Bash tool usage
 
 Do not prefix bash tool calls with `cd <project_dir> &&` or similar directory changes unless the user explicitly asks to cd. The bash tool already executes in the correct working directory (the project root). Adding unnecessary `cd` commands clutters output and wastes tokens.
