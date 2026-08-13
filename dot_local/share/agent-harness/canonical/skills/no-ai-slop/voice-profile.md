@@ -82,8 +82,27 @@ do not sand every sentence to the same finish either.
 **V11. In incident writing, accountability lands on roles and systems, never people.**
 Wrong calls get the benefit of what was known at the time. No moral vocabulary.
 
-**V12. Slash compression instead of spelling out a distinction.** "users/customers",
-"who/when/how", "low risk/priority".
+**V12. Slash compression instead of spelling out a distinction** *(measured)*.
+"users/customers", "who/when/how", "low risk/priority".
+
+**V13. Enumerations go in tables, so the prose stays clean** *(measured)*. This is the
+structural reason his prose scores low on comma-separated triples: the lists live in tables
+with one row per item, and the surrounding sentences carry argument instead of inventory.
+When a draft's prose is dense with three-part lists, the first question is whether those
+items want to be a table, not whether the sentence wants rewording.
+
+**V14. Long sentences are built by subordination, then answered by a short one**
+*(measured: 6.5% of prose sentences exceed 40 words)*. The joins are ordinary — `so`,
+`while`, `whereas`, `which`, `since`, and semicolons — and a long clause-chain is often
+followed immediately by a blunt short sentence. Uniformly medium-length sentences are the
+flattest tell in generated prose, and the cure is combining adjacent sentences that already
+share a subject, never padding one out.
+
+**Do not apply V14 to requirements.** A requirement that states one obligation per sentence
+is testable, and merging obligations to lengthen a sentence makes it ambiguous and can
+silently drop one. Specification sections legitimately run flatter than prose — measured at
+0% of sentences over 40 words in one requirements document, against 3.3% in that same
+document's prose — and that is correct, not a defect to edit away.
 
 ## 2. Anti-patterns
 
@@ -119,12 +138,18 @@ Run these against a draft before calling it done. Each is countable.
 Measured rates come from the specification's prose. Treat them as direction, not quota, and
 never damage meaning to hit one.
 
+Measure prose sections and specification sections separately. Applying prose targets to a
+requirements list is how a stylistic pass starts damaging obligations.
+
 | Check | Author measurement | Target |
 |---|---|---|
-| Rhetorical parallel triples / 1k words | 4.5 | within about 2x; enumerations exempt |
+| Comma-separated triples / 1k words | 4.5 | within about 2x, counting rhetorical parallelism only; a genuine enumeration is content and exempt. Where the rate is high, consider a table (V13) before rewording |
 | Paragraphs opening with a bold phrase | 0 | zero; use plain micro-heads |
-| Median sentence length | 15 words | 13–17 |
-| Sentences over 40 words | 6.5% | do not flatten below ~3% |
+| Median sentence length | 15 words | 13–17, in prose and specification alike |
+| Sentences over 40 words, prose | 6.5% | at least ~3%; combine adjacent sentences, never pad |
+| Sentences over 40 words, requirements | — | no target; one obligation per sentence wins |
+| Sentences under 8 words | 14.7% | 12–18%; keep the short punches |
+| Sentence-length spread (stdev) | 12.8 | above ~10 |
 | Colons / 1k words | 30.3 | well above typical generated prose |
 | Parentheses / 1k words | 20.9 | qualification only, never content |
 | Em dashes / 1k words | 13.8 in specifications, 0 in opinion and incident writing | register-dependent; ask before adding |
