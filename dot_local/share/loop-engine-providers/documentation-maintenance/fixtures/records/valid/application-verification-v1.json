@@ -1,8 +1,0 @@
-{
-  "approved_bundle_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "exact": true,
-  "mismatches": [],
-  "observed_manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-  "run_id": "run-1",
-  "schema": "application-verification-v1"
-}

@@ -45,7 +45,6 @@ utils.sh
 20_apply_harness_config.sh
 30_apply_pi_patches.sh
 40_apply_zellij_permissions.sh
-50_build_loop_engine_providers.sh
 60_configure_rustdesk.sh
 70_load_sync_claude_pi_auth_agent.sh
 {{- end }}
