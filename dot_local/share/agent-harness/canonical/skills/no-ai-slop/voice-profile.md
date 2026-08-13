@@ -13,11 +13,19 @@ Internal service names, regions, and product terms in the excerpts are genericis
 Sentence shape is preserved verbatim, because shape is what carries voice.
 
 **Evidence status.** Traits below were reported independently across six documents, but only
-one has been counted in full: the specification (4,924 words of prose, excluding tables and
-prompt templates). Rules marked *(measured)* have numbers behind them. Rules marked
-*(reported)* rest on convergent qualitative reporting and are tendencies, not laws. An
-earlier revision of this file stated several tendencies as universals and was wrong about
-parallel triples; a blind review against the primary sample caught it.
+one has been counted in full: a specification, 4,237 words of prose after excluding tables,
+prompt templates, the referenced-document inventory, and a 636-word appendix of sample
+queries written by someone else. That appendix was included in an earlier revision's counts,
+which contaminated roughly 13% of the measured text with a third party's writing and shifted
+several published numbers. Rules marked *(measured)* have numbers behind them. Rules marked
+*(reported)* rest on convergent qualitative reporting and are tendencies, not laws.
+
+**Measurement caveats.** Sentence-splitting and word-counting choices move these numbers, so
+treat them as direction and not as a gate. Two are known to be unstable: sentence-length
+standard deviation swings widely with tokenizer choice, and the triple rate depends entirely
+on whether a specification enumeration is counted, which no rubric here fully settles.
+Two blind reviews against the primary sample have corrected this file, once for stating
+tendencies as universals and once for structural rules that did not survive counting.
 
 **Genre fitness overrides every rule here.** Where a rule would make a requirement vaguer,
 a heading less navigable, or push a substantive claim into an aside, the document's job
@@ -64,7 +72,8 @@ freshness date.
 **V6. Endings narrow, they do not swell** *(reported)*. Documents end by reducing their own
 claim or simply stopping. No recap, no call to action, no closing flourish.
 
-**V7. Parentheses carry the candid part** *(measured: 20.9 per 1,000 words)*. The
+**V7. Parentheses carry the candid part** *(measured: 22.9 per 1,000 words, though many also
+carry plain schema mechanics rather than candour)*. The
 qualification that would not survive in the main clause goes in brackets. Do not use this to
 hide a substantive claim or a requirement — an aside is for qualification, not content.
 
@@ -85,18 +94,29 @@ Wrong calls get the benefit of what was known at the time. No moral vocabulary.
 **V12. Slash compression instead of spelling out a distinction** *(measured)*.
 "users/customers", "who/when/how", "low risk/priority".
 
-**V13. Enumerations go in tables, so the prose stays clean** *(measured)*. This is the
-structural reason his prose scores low on comma-separated triples: the lists live in tables
-with one row per item, and the surrounding sentences carry argument instead of inventory.
-When a draft's prose is dense with three-part lists, the first question is whether those
-items want to be a table, not whether the sentence wants rewording.
+**V13. Tables carry repeated comparable records; prose keeps its enumerations** *(measured,
+revised)*. Catalogs with one row per item live in tables. Prose enumerations coexist with
+them freely — 29 comma-coordinated inventories appear in the sample's prose, including
+"product safety, quality, and effectiveness" — so tables do not displace enumeration and a
+prose list is not evidence of a defect. A stronger claim in an earlier revision, that
+enumerations go in tables and thereby keep the prose clean, was contradicted by counting.
+When a list is a set of comparable records with shared fields, a table is usually better;
+otherwise leave it in the sentence.
 
-**V14. Long sentences are built by subordination, then answered by a short one**
-*(measured: 6.5% of prose sentences exceed 40 words)*. The joins are ordinary — `so`,
-`while`, `whereas`, `which`, `since`, and semicolons — and a long clause-chain is often
-followed immediately by a blunt short sentence. Uniformly medium-length sentences are the
-flattest tell in generated prose, and the cure is combining adjacent sentences that already
-share a subject, never padding one out.
+**V14. Long sentences appear and are built by subordination** *(measured: 7.6% of prose
+sentences exceed 40 words; median 16)*. Joins are ordinary — `so`, `while`, `whereas`,
+`which`, `since`, and semicolons. Uniformly medium-length sentences are a flat, generated
+rhythm, and the fix is combining adjacent sentences that already share a subject, never
+padding one out.
+
+An earlier revision claimed long sentences are characteristically answered by a short one.
+Counting found that shape in 2 of 14 cases, so it is occasional rather than a pattern, and it
+is not a target. **Do not treat any long-sentence rate as a quota.** Merging carries specific
+risk: joining two independent statements with `so`, `since`, `which`, or `where` can invent
+causality or leave a pronoun without a stable antecedent. Both happened in the first document
+edited under this rule — one merge asserted that following the rules caused the failure the
+rules were meant to limit, and another made an approval step's actor ambiguous. Merge only
+where the sentence reads better on its own terms.
 
 **Do not apply V14 to requirements.** A requirement that states one obligation per sentence
 is testable, and merging obligations to lengthen a sentence makes it ambiguous and can
@@ -109,7 +129,7 @@ document's prose — and that is correct, not a defect to edit away.
 Each item below was independently reported as absent by at least two of the six analyses.
 Treat any of these appearing in a draft as a defect to fix.
 
-- **Excess parallel triples.** Measured at roughly 4.5 per 1,000 words of prose, so they
+- **Excess parallel triples.** Measured at roughly 5.2 per 1,000 words of prose, so they
   are present and normal — the defect is overuse. Generated prose runs two to three times
   that rate. Count only rhetorical parallelism: a specification enumeration such as
   `satisfied, unmet, not evaluated, or downstream` is content and must not be broken. An
@@ -119,7 +139,11 @@ Treat any of these appearing in a draft as a defect to fix.
 - **Bold sentence lead-ins.** Zero of 314 units in the specification. The owner's
   substitute is a plain micro-head: a short fragment acting as a label, followed by
   full-sentence explanation. Use that instead.
-- **Rhetorical questions.** Questions appear only inside mechanical five-whys chains.
+- **Rhetorical questions**, as a register-sensitive tendency rather than an absence. The
+  sample opens a section with "can investigators trust the answers, are responses grounded in
+  evidence, and does the system know when to stay silent?", so framing questions do occur in
+  specifications. Genuine open questions in a requirements document are not a defect at all.
+  What to avoid is the decorative question-then-answer beat.
 - **Importance puffery.** No "critical to understand", "key takeaway", "worth noting".
   Where something matters, say what breaks.
 - **Dramatic colon reveals.** Colons introduce lists and contracts only.
@@ -143,16 +167,16 @@ requirements list is how a stylistic pass starts damaging obligations.
 
 | Check | Author measurement | Target |
 |---|---|---|
-| Comma-separated triples / 1k words | 4.5 | within about 2x, counting rhetorical parallelism only; a genuine enumeration is content and exempt. Where the rate is high, consider a table (V13) before rewording |
+| Comma-separated triples / 1k words | 5.2 | direction only; the count depends on whether enumerations are included, and a genuine enumeration is content. Never break one to lower the number |
 | Paragraphs opening with a bold phrase | 0 | zero; use plain micro-heads |
-| Median sentence length | 15 words | 13–17, in prose and specification alike |
-| Sentences over 40 words, prose | 6.5% | at least ~3%; combine adjacent sentences, never pad |
+| Median sentence length | 16 words | 13–17 in prose; requirements may sit lower |
+| Sentences over 40 words, prose | 7.6% | some should exist; no quota, and never at the cost of a clean relation between clauses |
 | Sentences over 40 words, requirements | — | no target; one obligation per sentence wins |
-| Sentences under 8 words | 14.7% | 12–18%; keep the short punches |
-| Sentence-length spread (stdev) | 12.8 | above ~10 |
-| Colons / 1k words | 30.3 | well above typical generated prose |
-| Parentheses / 1k words | 20.9 | qualification only, never content |
-| Em dashes / 1k words | 13.8 in specifications, 0 in opinion and incident writing | register-dependent; ask before adding |
+| Sentences under 8 words | 19.0% | keep the short punches; do not merge them away |
+| Colons / 1k words | 34.5 | well above typical generated prose |
+| Parentheses / 1k words | 22.9 | qualification only, never content |
+| Em dashes / 1k words | 15.6 in this specification, 0 in opinion and incident writing | register-dependent; ask before adding |
+| Sentence-length spread (stdev) | 13.9 | unstable across tokenizers; inspect, do not gate |
 | First-person `I` | 0 in specifications | only at a contestable judgment, and not in an accepted requirements document |
 | Final paragraph | — | narrows the claim or stops; no kicker |
 | Concessions | — | one clause, not a mirrored paragraph |
