@@ -136,9 +136,17 @@ Treat any of these appearing in a draft as a defect to fix.
   earlier version of this file claimed a zero rate, which the primary sample contradicts.
   Breaking a genuine enumeration to lower a count has already cost one document a
   prohibition, so treat that as the greater risk.
-- **Bold sentence lead-ins.** Zero of 314 units in the specification. The owner's
-  substitute is a plain micro-head: a short fragment acting as a label, followed by
-  full-sentence explanation. Use that instead.
+- **Bold lead-ins on running prose paragraphs.** Zero of 314 units in the specification. In
+  flowing prose the owner's substitute is a plain micro-head: a short fragment acting as a
+  label, followed by full-sentence explanation.
+
+  **Owner override, and it beats this measurement.** In labelled lists the owner wants bold
+  lead-ins and bullets — identifier items (`G1`, `J3`, `R12`) and named items (`Timeliness.`,
+  `Executor routing.`) alike. He asked for them back explicitly after a pass removed them, so
+  a bulleted list whose items open in bold is house style, not slop. The distinction is
+  structural: bold opening a paragraph of argument is decoration, bold opening a list item is
+  a label doing navigational work in a document people scan for a specific requirement.
+  Never strip bold from a labelled list to satisfy this file.
 - **Rhetorical questions**, as a register-sensitive tendency rather than an absence. The
   sample opens a section with "can investigators trust the answers, are responses grounded in
   evidence, and does the system know when to stay silent?", so framing questions do occur in
@@ -168,7 +176,8 @@ requirements list is how a stylistic pass starts damaging obligations.
 | Check | Author measurement | Target |
 |---|---|---|
 | Comma-separated triples / 1k words | 5.2 | direction only; the count depends on whether enumerations are included, and a genuine enumeration is content. Never break one to lower the number |
-| Paragraphs opening with a bold phrase | 0 | zero; use plain micro-heads |
+| Prose paragraphs opening with a bold phrase | 0 | zero; use plain micro-heads |
+| Labelled list items opening with bold | — | expected; owner override, leave alone |
 | Median sentence length | 16 words | 13–17 in prose; requirements may sit lower |
 | Sentences over 40 words, prose | 7.6% | some should exist; no quota, and never at the cost of a clean relation between clauses |
 | Sentences over 40 words, requirements | — | no target; one obligation per sentence wins |
