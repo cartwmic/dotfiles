@@ -85,7 +85,7 @@ This is a personal dotfiles repository managed by [chezmoi](https://www.chezmoi.
 ### File Naming (chezmoi)
 
 - `dot_*` → becomes `.filename` in home directory
-- `private_*` → not included in git (for secrets)
+- `private_*` → applied with mode 0600. **This does not exclude the file from git.** `private_*` files are committed like any other, and this repository is public. Never put a secret value in one.
 - `run_onchange_*` → executes when file changes
 - `.tmpl` suffix → template file processed by chezmoi
 
@@ -149,7 +149,9 @@ condition = '! command -v mytool &> /dev/null'
 ## Security Notes
 
 - Never commit API keys or secrets to version control
-- Use `private_*` prefix for files containing sensitive data
+- Use `private_*` for files that must land with restrictive permissions, such as anything under `~/.ssh`. It controls permissions only, not version control — the file is still committed to this public repository.
+- Never commit a secret value. Read secrets at runtime instead: `private_dot_zshrc` pulls everything through 1Password (`op read`, plus a service-account token kept at `~/.config/agent-harness/op-service-token`, mode 0600, outside the repo). Follow that pattern.
+- To keep a file out of git entirely, use `.chezmoiignore` in a way that excludes it from the source directory, or keep it outside chezmoi altogether.
 - 1Password CLI integration available but currently commented out in zshrc
 - Use rage/age for encrypting sensitive files if needed
 

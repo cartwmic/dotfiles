@@ -34,6 +34,8 @@ Before editing, identify the document's purpose and up to 3–5 evidence-support
 
 Use up to 3–5 short, relevant examples when the user provides them or project instructions identify accepted documents. Do not search broadly for examples. If none are available, infer voice from the draft itself. Prefer observed traits over labels such as “human,” “engaging,” or “professional.” Do not copy example content or force imitation where genres differ.
 
+When the draft is the repository owner's own writing, or when asked to make a draft read as authored rather than generated, read [voice-profile.md](voice-profile.md) for the evidence-derived house voice and [voice-excerpts.md](voice-excerpts.md) for exemplars. Match the register first — opinion, specification, design, and incident writing differ measurably in that profile — then apply its rules and countable checks. Do not infer voice from the draft alone when the draft is suspected of being generated: the draft's voice is the thing under repair.
+
 Keep this analysis internal unless the user asks for it.
 
 ## Protect Meaning
