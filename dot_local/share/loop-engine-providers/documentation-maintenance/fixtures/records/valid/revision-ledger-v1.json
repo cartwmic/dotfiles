@@ -1,9 +1,0 @@
-{
-  "accepted": [],
-  "baseline_manifest_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "invalidated": [],
-  "pending_document": null,
-  "predecessor_digest": null,
-  "run_id": "run-1",
-  "schema": "revision-ledger-v1"
-}

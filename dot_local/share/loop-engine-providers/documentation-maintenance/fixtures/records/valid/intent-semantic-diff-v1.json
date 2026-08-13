@@ -1,8 +1,0 @@
-{
-  "changes": [],
-  "material": false,
-  "prior_intent_digest": null,
-  "proposed_intent_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "run_id": "run-1",
-  "schema": "intent-semantic-diff-v1"
-}
