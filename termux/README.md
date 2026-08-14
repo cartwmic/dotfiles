@@ -60,6 +60,18 @@ After apply (and SSH key provision below):
   exactly the stamped SSH alias for focus. A miss still foregrounds Termux and
   still jumps over SSH.
 
+Phone `chezmoi apply` owns the jump scripts and the SSH ControlMaster block. It
+does not:
+
+- build, sign, or sideload the Termux APK (fork in `termux-app`; session focus on
+  `?host=` requires that build)
+- set Termux session names — name each visible session exactly the SSH alias
+  (`macbook`, `remote`, …)
+- set producer identity — each pi machine needs `data.jumpSshHost` in *its*
+  `~/.config/chezmoi/chezmoi.yaml`, then apply *there*
+
+Do not scp jump scripts from a Mac as a substitute for phone apply.
+
 ## SSH key provision
 
 `05_provision_termux_ssh_keys` runs on **every** `chezmoi apply`. It fast-exits
