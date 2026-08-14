@@ -1,0 +1,9 @@
+{
+  "provider": "claude-bridge",
+  "model": "claude-haiku-4-5",
+  "debounceSeconds": 60,
+  "resummarizeTokenThreshold": 10000,
+  "maxTokens": 1500,
+  "showWidget": false,
+  "verbose": false
+}

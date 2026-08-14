@@ -70,6 +70,9 @@ Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 .local/user_scripts/configure_rustdesk.sh
 .pi/agent/extensions/openrouter-gate
 .pi/agent/extensions/openrouter-gate/**
+# Homelab session-digest: claude-bridge + ollama.internal. Work stays fts-raw.
+.pi/session-search
+.pi/session-search/**
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 .pi/agent/extensions/issue
