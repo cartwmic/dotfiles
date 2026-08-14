@@ -7,7 +7,7 @@
 # a bare AGENTS.md pattern would also drop nested files (for example
 # .codex/AGENTS.md) and any other source whose target is AGENTS.md.
 # /AGENTS.md stays in git for Pi/Codex in this repo; it is not deployed.
-# Pi-global instructions are dot_pi/agent/literal_AGENTS.md -> ~/.pi/agent/AGENTS.md.
+# Pi-global instructions are dot_pi/agent/literal_AGENTS.md.tmpl -> ~/.pi/agent/AGENTS.md.
 # Do not add a source that deploys to ~/AGENTS.md: same target as this file,
 # chezmoi reports inconsistent state.
 # /README.md is the product README; do not also land it at ~/README.md.

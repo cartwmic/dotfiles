@@ -15,9 +15,9 @@ Two agent-instruction files exist on purpose and must stay different:
   in `.chezmoiignore`; never deployed. Chezmoi matches ignore rules against
   **destination** names, so this file cannot coexist with a source that deploys
   to `~/AGENTS.md` (same target; `inconsistent state`).
-- [dot_pi/agent/literal_AGENTS.md](./dot_pi/agent/literal_AGENTS.md) — deploys to
+- [dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl) — deploys to
   `~/.pi/agent/AGENTS.md`. Pi loads that agent-directory file first on every
-  session, then walks ancestors from the cwd. Source is `literal_AGENTS.md` so
+  session, then walks ancestors from the cwd. Source is `literal_AGENTS.md.tmpl` so
   a session whose cwd is under `dot_pi/agent/` does not also load the source
   (same text, two paths). Do not also create `~/AGENTS.md`.
 
@@ -25,7 +25,7 @@ Humans start at [Quick Start](#quick-start). Agents working in this repo start
 at [AGENTS.md](./AGENTS.md). Phone setup is in [termux/README.md](./termux/README.md).
 Harness internals are in [dot_local/share/agent-harness/README.md](./dot_local/share/agent-harness/README.md).
 Zellij plugin/fork notes are in [dot_config/zellij/README.md](./dot_config/zellij/README.md).
-Pi-global agent instructions are in [dot_pi/agent/literal_AGENTS.md](./dot_pi/agent/literal_AGENTS.md).
+Pi-global agent instructions are in [dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl).
 
 ## Quick Start
 
@@ -188,7 +188,7 @@ Notes:
 
 - Harness-specific MCP secrets can be mapped in adapter metadata under `~/.local/share/agent-harness/adapters/<harness>/mcp-secrets.json`.
 - Secret-backed adapter metadata is resolved through the 1Password CLI via `op read`.
-- Harness instruction files are hand-maintained and split: repo [AGENTS.md](./AGENTS.md) (chezmoi source, not deployed), Pi-global [dot_pi/agent/literal_AGENTS.md](./dot_pi/agent/literal_AGENTS.md) (`~/.pi/agent/AGENTS.md`). Claude still uses `~/.claude/CLAUDE.md`; Codex still uses `~/.codex/AGENTS.md`.
+- Harness instruction files are hand-maintained and split: repo [AGENTS.md](./AGENTS.md) (chezmoi source, not deployed), Pi-global [dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl) (`~/.pi/agent/AGENTS.md`). Claude still uses `~/.claude/CLAUDE.md`; Codex still uses `~/.codex/AGENTS.md`.
 - `furi` is installed by the `mise` bootstrap task, and bootstrap registers and starts `ashwwwin/automation-mcp` so the canonical `furi` MCP entry works for both Claude and Codex after apply.
 - On macOS, `automation-mcp` also needs Accessibility and Screen Recording permissions in System Settings > Privacy & Security before its tools can fully control the machine.
 
@@ -272,23 +272,33 @@ Pi auto-loads `AGENTS.md` / `AGENTS.override.md` / `CLAUDE.md` from
 stacks on [AGENTS.md](./AGENTS.md) and the Pi-global file whenever cwd is in
 that subtree. Use README for subtree procedure. Do not add `~/AGENTS.md`. Do
 not add a second Pi-global copy besides
-[dot_pi/agent/literal_AGENTS.md](./dot_pi/agent/literal_AGENTS.md).
+[dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl).
 
 ### Instruction files (exactly these)
 
 | File | Audience | Deployed |
 | --- | --- | --- |
 | [AGENTS.md](./AGENTS.md) | Chezmoi source operations | No |
-| [dot_pi/agent/literal_AGENTS.md](./dot_pi/agent/literal_AGENTS.md) | Every Pi session | `~/.pi/agent/AGENTS.md` |
+| [dot_local/share/agent-harness/canonical/instructions/AGENTS.md](./dot_local/share/agent-harness/canonical/instructions/AGENTS.md) | Every harness (included) | Pi / Codex `AGENTS.md`; Claude `CLAUDE.md` |
+| [dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl) | Every Pi session | `~/.pi/agent/AGENTS.md` |
 | [dot_claude/CLAUDE.md.tmpl](./dot_claude/CLAUDE.md.tmpl) | Every Claude Code session | `~/.claude/CLAUDE.md` |
-| [dot_codex/modify_AGENTS.md.tmpl](./dot_codex/modify_AGENTS.md.tmpl) | Codex (managed Hindsight block only) | `~/.codex/AGENTS.md` |
+| [dot_codex/modify_AGENTS.md.tmpl](./dot_codex/modify_AGENTS.md.tmpl) | Codex (managed canonical-instruction block) | `~/.codex/AGENTS.md` |
+
+Shared standing rules live in
+[dot_local/share/agent-harness/canonical/instructions/AGENTS.md](./dot_local/share/agent-harness/canonical/instructions/AGENTS.md)
+and are included into each harness `AGENTS.md`: Pi
+[dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl),
+Codex `~/.codex/AGENTS.md`, and Claude `~/.claude/CLAUDE.md` (Claude's
+user-global filename is `CLAUDE.md`). Do not create `~/AGENTS.md`. Hindsight
+guidance is a second include in those same files (Pi: `APPEND_SYSTEM.md`).
 
 Harness-agnostic skill/MCP procedure stays in
 [dot_local/share/agent-harness/README.md](./dot_local/share/agent-harness/README.md).
 Skills use `SKILL.md`, not `AGENTS.md`.
 
-Do not add nested `AGENTS.md`. The only agent-instruction files are the four
-in the table above.
+Do not add nested `AGENTS.md`. The auto-loaded agent-instruction files are the
+repo, Pi, Claude, and Codex rows in the table. The canonical `AGENTS.md` is
+included into those; it is not a fifth home-directory file.
 
 ### Already present (keep)
 
@@ -338,4 +348,4 @@ After `chezmoi apply`, only these require manual setup:
 - [macOS] Grant RustDesk Accessibility, Screen Recording, and, if needed, Input Monitoring permissions
 
 See [AGENTS.md](./AGENTS.md) for repository agent instructions (not deployed).
-See [dot_pi/agent/literal_AGENTS.md](./dot_pi/agent/literal_AGENTS.md) for Pi-global agent instructions.
+See [dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl) for Pi-global agent instructions.

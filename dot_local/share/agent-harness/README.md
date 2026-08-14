@@ -7,6 +7,9 @@ This directory contains the canonical, harness-agnostic configuration sources an
 ```text
 dot_local/share/agent-harness/
   canonical/
+    instructions/
+      AGENTS.md
+      hindsight-guidance.md
     mcp/
       servers.json.tmpl
     skills/
@@ -26,6 +29,23 @@ Rules:
 - Canonical sources should stay standards-based.
 - `adapters/` may contain harness-specific metadata needed to project canonical sources into a given harness.
 - Do not put harness-specific semantics into canonical files unless the open standard itself requires them.
+
+## Add A Canonical Instruction
+
+Edit a file under [`canonical/instructions/`](./canonical/instructions/). These
+fragments are included into every harness, not copied by hand:
+
+- Pi: [`dot_pi/agent/literal_AGENTS.md.tmpl`](../../../dot_pi/agent/literal_AGENTS.md.tmpl) (`~/.pi/agent/AGENTS.md`)
+- Claude: [`dot_claude/CLAUDE.md.tmpl`](../../../dot_claude/CLAUDE.md.tmpl) (Claude's user-global filename is `CLAUDE.md`)
+- Codex: [`dot_codex/modify_AGENTS.md.tmpl`](../../../dot_codex/modify_AGENTS.md.tmpl) (`~/.codex/AGENTS.md` managed block)
+
+Guidelines:
+
+- One concern per file. Keep fragments includable (a section heading is fine; do not add a document H1).
+- Shared standing rules live in [`canonical/instructions/AGENTS.md`](./canonical/instructions/AGENTS.md). Include that file into each harness's `AGENTS.md` (Claude: `CLAUDE.md`). Do not create `~/AGENTS.md`. Do not put shared rules in Pi `APPEND_SYSTEM.md`.
+- Apply with `chezmoi apply --force` and check the live dest files.
+
+Current files: [AGENTS.md](./canonical/instructions/AGENTS.md) (YAGNI, KISS, scripts vs skills, voice) and [hindsight-guidance.md](./canonical/instructions/hindsight-guidance.md).
 
 ## Add A Canonical MCP Server
 

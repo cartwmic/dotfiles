@@ -1,11 +1,13 @@
 # Home agent instructions (Pi global)
 
+{{ include "dot_local/share/agent-harness/canonical/instructions/AGENTS.md" }}
+
 ## Scope
 
 These instructions apply on this machine for **every** Pi session. They live
-at `~/.pi/agent/AGENTS.md` (chezmoi source `dot_pi/agent/literal_AGENTS.md`).
+at `~/.pi/agent/AGENTS.md` (chezmoi source `dot_pi/agent/literal_AGENTS.md.tmpl`).
 Pi loads this file from its agent directory first, then walks ancestors from
-the cwd. The source is named `literal_AGENTS.md` so Pi’s ancestor walk does
+the cwd. The source is named `literal_AGENTS.md.tmpl` so Pi’s ancestor walk does
 **not** also pick it up when the cwd is under `dot_pi/agent/` in this repo
 (that would be the same text twice: live dest + source).
 
@@ -39,8 +41,8 @@ naming, apply, profiles, and other repo operations.
   `~/.config/agent-harness/op-service-token` (mode 0600, not in git).
 
 Harness-specific always-on notes (Pi `APPEND_SYSTEM.md`, Claude output
-styles, Codex `~/.codex/AGENTS.md` managed block) remain in those files.
-Do not duplicate them here.
+styles) remain in those files. Shared standing rules come from canonical
+`AGENTS.md` (included above). Do not paste that file into `APPEND_SYSTEM.md`.
 
 ## Workflow
 
