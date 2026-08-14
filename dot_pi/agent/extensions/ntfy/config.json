@@ -1,6 +1,0 @@
-{
-  "url": "https://ntfy.internal.cartwmic.com/pi",
-  "maxExcerptChars": 200,
-  "enabled": true,
-  "herdrJumpDeepLinkBase": "termux://herdr-jump"
-}

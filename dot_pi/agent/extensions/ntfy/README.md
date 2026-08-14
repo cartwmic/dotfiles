@@ -17,12 +17,18 @@ to the correct Herdr agent or Zellij pane.
 
 ## Config (`config.json`)
 
+Per-machine identity is `jumpSshHost` in chezmoi data (this host's Termux SSH
+alias: `remote`, `cartwmic-server`, `macbook`, or `laptop`). The rendered
+`config.json` includes it when set. The zellij notify wrapper uses the same
+alias via `JUMP_SSH_HOST`.
+
 ```json
 {
   "url": "https://ntfy.internal.cartwmic.com/pi",
   "maxExcerptChars": 200,
   "enabled": true,
-  "herdrJumpDeepLinkBase": "termux://herdr-jump"
+  "herdrJumpDeepLinkBase": "termux://herdr-jump",
+  "jumpSshHost": "macbook"
 }
 ```
 
@@ -33,6 +39,11 @@ to the correct Herdr agent or Zellij pane.
   `termux://zellij-jump`.
 - `herdrJumpDeepLinkBase` — optional Herdr route; defaults to
   `termux://herdr-jump`.
+- `jumpSshHost` — Termux SSH alias of **this** pi host. Grammar:
+  `^[A-Za-z][A-Za-z0-9_-]{0,63}$`. A valid alias is the Click `?host=` value and
+  the title's first segment. Unset or invalid omits the host query (phone jump
+  scripts keep the default `remote` SSH path) and still titles as `remote`.
+  Set it in `~/.config/chezmoi/chezmoi.yaml` as `data.jumpSshHost`.
 
 ## Toggle on/off
 
@@ -57,7 +68,8 @@ config default, delete `state.json`.
   are exhausted. `agent_end` only captures the final assistant text.
 - Suppresses the internal aborted settlement when `auto-compact` announces that
   it will resume the interrupted run. Explicit user aborts still notify.
-- Title: `<workspace/session> / <tab> / <pi session name>`.
+- Title: `<host> / <workspace/session> / <tab> / <pi session name>`.
+  - **host:** `jumpSshHost` / `JUMP_SSH_HOST` when grammar-valid, otherwise `remote`.
   - **Herdr:** `herdr pane current` supplies canonical current ids and stable
     `terminal_id`; `herdr workspace get` and `herdr tab get` supply labels.
     Labels fall back to ids if lookup fails. Herdr takes precedence when both

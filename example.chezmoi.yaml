@@ -17,6 +17,10 @@
 #   See termux/README.md for ops_... clipboard SSH key provision.
 data:
   profile: "personal"
+  # Termux SSH alias of THIS machine. ntfy stamps it on Click `?host=` and the
+  # notification title so a phone tap can focus the matching Termux session and
+  # ssh the right ControlMaster. Examples: remote, cartwmic-server, macbook, laptop.
+  # jumpSshHost: "macbook"
 
 hooks:
   read-source-state:
