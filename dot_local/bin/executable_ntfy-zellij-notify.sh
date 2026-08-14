@@ -17,11 +17,12 @@
 #                              match the termux-app fork's registered handler.
 #                              The pane id is appended as the URL PATH segment
 #                              (`<base>/<pane-id>`), which is what the fork's
-#                              ZellijJumpHandler parses. The ssh host + the
-#                              `zellij pipe --name jump_pane <pane>` invocation
-#                              live in the phone-side ~/bin/zellij-jump script,
-#                              NOT in this URL (this fork carries no host).
-#                              Default: termux://zellij-jump
+#                              ZellijJumpHandler parses. Default: termux://zellij-jump
+#   JUMP_SSH_HOST     optional Termux SSH alias of THIS machine (the Click `host`
+#                              query and the title's first segment). Must match
+#                              ^[A-Za-z][A-Za-z0-9_-]{0,63}$. Invalid/unset omits
+#                              the host query (phone scripts default to remote)
+#                              and still titles as remote.
 #
 # Usage: ntfy-zellij-notify.sh <message> [title]
 #
@@ -86,28 +87,39 @@ if [ -n "$pane_id" ] && command -v zellij >/dev/null 2>&1; then
 fi
 
 # --- assemble + publish ------------------------------------------------------
+# JUMP_SSH_HOST is this machine's Termux SSH alias. Grammar-valid values ride
+# the Click `host` query and the title first segment. Unset/invalid identity
+# still titles as `remote` but omits the host query so phone scripts keep the
+# default-remote SSH path.
+jump_host_grammar='^[A-Za-z][A-Za-z0-9_-]{0,63}$'
+jump_host=""
+if [[ "${JUMP_SSH_HOST:-}" =~ $jump_host_grammar ]]; then
+	jump_host="$JUMP_SSH_HOST"
+fi
+host_label="${jump_host:-remote}"
+title="${host_label} / ${title}"
+
 headers=(-H "Title: $title")
 [ -n "$token" ] && headers+=(-H "Authorization: Bearer $token")
 
 # Build the phone tap target. Inside a zellij pane, emit an ntfy `Click` deep
-# link carrying the STABLE pane id (+ session + slot hint + host) so tapping the
-# notification drives the termux-app fork's jump handler, which side-channels
-# `ssh $JUMP_SSH_HOST 'zellij pipe --name jump_pane <pane_id>'` over the live
-# ControlMaster connection. Outside zellij (no pane id) the notification is
-# delivered keyless — no Click, no jump.
+# link carrying the STABLE pane id (+ optional host + session + slot hint) so
+# tapping the notification drives the termux-app fork's jump handler, which
+# side-channels `ssh <host> 'zellij pipe --name jump_pane <pane_id>'` over the
+# live ControlMaster connection. Outside zellij (no pane id) the notification
+# is delivered keyless — no Click, no jump.
 if [ -n "$pane_id" ]; then
 	# APK contract (termux-app fork ZellijJumpHandler): the tap target is
-	#   termux://zellij-jump/<pane-id>
+	#   termux://zellij-jump/<pane-id>[?host=<alias>]
 	# with the STABLE pane id as the URL PATH segment. The handler extracts the
-	# pane id from the path (cutting at the first '/', '?' or '#'), then invokes
-	# the phone-side ~/bin/zellij-jump with it; that script owns the ssh host and
-	# the `zellij pipe --name jump_pane <pane>` side-channel over the live
-	# ControlMaster. Host is therefore NOT carried in the URL. session/slot ride
-	# as trailing query hints (human display only — the handler ignores them, and
-	# they sit after the pane-id path segment so parsing is unaffected).
+	# pane id from the path (cutting at the first '/', '?' or '#'), then a
+	# grammar-valid `host` query as the optional second argument to
+	# ~/bin/zellij-jump. session/slot ride as trailing query hints (human
+	# display only — the handler ignores them).
 	click="${JUMP_DEEPLINK_BASE:-termux://zellij-jump}"
 	click+="/$(urlencode "$pane_id")"
 	sep="?"
+	[ -n "$jump_host" ] && { click+="${sep}host=$(urlencode "$jump_host")"; sep="&"; }
 	[ -n "$session" ] && { click+="${sep}session=$(urlencode "$session")"; sep="&"; }
 	[ -n "$slot" ] && { click+="${sep}slot=$(urlencode "$slot")"; sep="&"; }
 	headers+=(-H "Click: $click")

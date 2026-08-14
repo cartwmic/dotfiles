@@ -47,10 +47,18 @@ chezmoi init --apply https://github.com/cartwmic/dotfiles.git
 
 After apply (and SSH key provision below):
 
-- `ssh cartwmic-server` / `ssh remote` → `cartwmic@10.19.1.221` via `~/.ssh/homelab`
-- `ssh macbook` → `cartwmic@10.19.1.200` via `~/.ssh/homelab`
+- `ssh cartwmic-server` / `ssh remote` → `cartwmic@10.19.1.221` via `~/.ssh/homelab` (ControlMaster)
+- `ssh macbook` → `cartwmic@10.19.1.200` via `~/.ssh/homelab` (ControlMaster)
+- `ssh laptop` → `michael@10.19.1.112` via `~/.ssh/homelab` (ControlMaster)
 - `ssh whonix-gw` / `ssh whonix-ws` → Whonix via `~/.ssh/whonix-homelab`
-- Jump handlers live in `~/bin/{zellij,herdr}-jump` (ControlMaster over `remote`)
+- Jump handlers live in `~/bin/{zellij,herdr}-jump`. Usage: `<id> [host]`.
+  Unset identity (missing host) defaults to `remote`. A present host must be a
+  grammar-valid Termux SSH alias in `{remote, cartwmic-server, macbook, laptop}`
+  or the script exits without ssh.
+- ntfy Click URLs carry a host query (`?host=<alias>`) when the producer stamps
+  that alias. Termux session name equals alias: the visible session must be named
+  exactly the stamped SSH alias for focus. A miss still foregrounds Termux and
+  still jumps over SSH.
 
 ## SSH key provision
 

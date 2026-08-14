@@ -15,7 +15,7 @@
 # Profiles:
 #   personal — inbound Mac→phone Host block, plus outbound Mac→homelab hosts
 #   termux   — outbound phone→homelab Host blocks (cartwmic-server/remote,
-#              macbook, whonix ProxyJump) including ControlMaster for jumps
+#              macbook, laptop, whonix ProxyJump) including ControlMaster for jumps
 
 set -eu
 
@@ -140,8 +140,9 @@ cat <<EOF
 $TERMUX_BEGIN
 # Homelab targets from Termux. IdentityFile is the shared cartwmic-homelab key
 # provisioned to ~/.ssh/homelab (see 05_provision_termux_ssh_keys).
-# \`remote\` is retained as an alias of cartwmic-server so zellij-jump / herdr-jump
-# keep working over the ControlMaster side channel.
+# \`remote\` is retained as an alias of cartwmic-server so a missing jump host
+# still sshs over that ControlMaster. Jumpable aliases (remote, cartwmic-server,
+# macbook, laptop) all share ControlMaster/ControlPath/ControlPersist.
 Host cartwmic-server remote
     HostName 10.19.1.221
     User cartwmic
@@ -156,6 +157,18 @@ Host macbook
     User cartwmic
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 10m
+
+Host laptop
+    HostName 10.19.1.112
+    User michael
+    IdentityFile ~/.ssh/homelab
+    IdentitiesOnly yes
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 10m
 
 # Whonix Workstation via Gateway ProxyJump.
 # Path: phone -> user@10.19.1.210 (gw) -> user@10.152.152.11 (ws).

@@ -1,7 +1,11 @@
 #!/data/data/com.termux/files/usr/bin/sh
-# zellij-jump <pane-id> — invoked by the termux-app fork deep-link handler
-# (termux://zellij-jump/<pane-id>). Side-channel-focus the remote zellij pane
-# over the live SSH ControlMaster connection, no fresh login, no new session.
+# zellij-jump <pane-id> [host] — invoked by the termux-app fork deep-link
+# handler (termux://zellij-jump/<pane-id>[?host=<alias>]). Side-channel-focus
+# the remote zellij pane over the live SSH ControlMaster connection, no fresh
+# login, no new session. Missing host -> ssh remote. Present host is used only
+# when it matches ^[A-Za-z][A-Za-z0-9_-]{0,63}$ and is one of remote,
+# cartwmic-server, macbook, laptop; otherwise exit without ssh (no remote
+# fallback).
 # PATH prepends mise shims because `zellij` is mise-managed and absent from the
 # default non-interactive ssh PATH (would otherwise fail "command not found").
 #
@@ -21,6 +25,25 @@
 # broadcast pipe (harpoon pane-pipe-api "Targeted Pipe Delivery").
 pane="$1"
 [ -n "$pane" ] || exit 0
+
+if [ $# -lt 2 ]; then
+  ssh_host=remote
+else
+  ssh_host="$2"
+  case "$ssh_host" in
+    [A-Za-z]|[A-Za-z][A-Za-z0-9_-]*)
+      [ "${#ssh_host}" -le 64 ] || exit 0
+      ;;
+    *)
+      exit 0
+      ;;
+  esac
+  case "$ssh_host" in
+    remote|cartwmic-server|macbook|laptop) ;;
+    *) exit 0 ;;
+  esac
+fi
+
 exec timeout 15 ssh \
   -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
-  remote "PATH=\$HOME/.local/share/mise/shims:\$PATH zellij pipe --name jump_pane --plugin file:\$HOME/.config/zellij/plugins/harpoon.wasm '$pane'"
+  "$ssh_host" "PATH=\$HOME/.local/share/mise/shims:\$PATH zellij pipe --name jump_pane --plugin file:\$HOME/.config/zellij/plugins/harpoon.wasm '$pane'"

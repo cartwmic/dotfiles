@@ -1,7 +1,12 @@
 #!/data/data/com.termux/files/usr/bin/sh
-# herdr-jump <terminal-id> — invoked by the termux-app fork deep-link handler
-# (termux://herdr-jump/<terminal-id>). Reuse the live SSH ControlMaster and ask
-# the remote helper to resolve the stable terminal id to its current Herdr pane.
+# herdr-jump <terminal-id> [host] — invoked by the termux-app fork deep-link
+# handler (termux://herdr-jump/<terminal-id>[?host=<alias>]). Reuse the live
+# SSH ControlMaster and ask the remote helper to resolve the stable terminal
+# id to its current Herdr pane.
+#
+# Missing host -> ssh remote. Present host is used only when it matches
+# ^[A-Za-z][A-Za-z0-9_-]{0,63}$ and is one of remote, cartwmic-server,
+# macbook, laptop; otherwise exit without ssh (no remote fallback).
 
 terminal_id="${1:-}"
 case "$terminal_id" in
@@ -13,6 +18,24 @@ case "$hex" in
   ""|*[!0-9a-f]*) exit 0 ;;
 esac
 
+if [ $# -lt 2 ]; then
+  ssh_host=remote
+else
+  ssh_host="$2"
+  case "$ssh_host" in
+    [A-Za-z]|[A-Za-z][A-Za-z0-9_-]*)
+      [ "${#ssh_host}" -le 64 ] || exit 0
+      ;;
+    *)
+      exit 0
+      ;;
+  esac
+  case "$ssh_host" in
+    remote|cartwmic-server|macbook|laptop) ;;
+    *) exit 0 ;;
+  esac
+fi
+
 exec timeout 15 ssh \
   -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
-  remote "PATH=\$HOME/.local/share/mise/shims:\$PATH \$HOME/.local/bin/herdr-agent-jump '$terminal_id'"
+  "$ssh_host" "PATH=\$HOME/.local/share/mise/shims:\$PATH \$HOME/.local/bin/herdr-agent-jump '$terminal_id'"

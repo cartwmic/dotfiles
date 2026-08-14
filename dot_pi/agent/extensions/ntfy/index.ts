@@ -38,6 +38,27 @@ const DEFAULT_HERDR_JUMP_DEEPLINK_BASE = "termux://herdr-jump";
 const HERDR_COMMAND_TIMEOUT_MS = 1500;
 const STATE_FILE = "state.json";
 
+/** Termux SSH alias used as title label and ssh target when identity is unset. */
+export const DEFAULT_JUMP_SSH_HOST = "remote";
+/** Click query key carrying the jump host identity. */
+export const JUMP_HOST_QUERY_KEY = "host";
+/** Conservative Termux SSH alias grammar. Invalid values are treated as unset. */
+export const JUMP_HOST_GRAMMAR = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+
+/** Grammar-valid Termux SSH alias, or undefined when unset/empty/unsafe. */
+export function parseJumpSshHost(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const host = value.trim();
+	return JUMP_HOST_GRAMMAR.test(host) ? host : undefined;
+}
+
+function appendHostQuery(url: string, host: string | undefined): string {
+	const identity = parseJumpSshHost(host);
+	if (!identity) return url;
+	const sep = url.includes("?") ? "&" : "?";
+	return `${url}${sep}${JUMP_HOST_QUERY_KEY}=${encodeURIComponent(identity)}`;
+}
+
 export interface NtfyConfig {
 	url: string;
 	maxExcerptChars: number;
@@ -51,6 +72,11 @@ export interface NtfyConfig {
 	jumpDeepLinkBase: string;
 	/** Deep-link base registered by the Termux fork for Herdr agent jumps. */
 	herdrJumpDeepLinkBase: string;
+	/**
+	 * Termux SSH alias of THIS pi host (Click `host` query + title first segment).
+	 * Absent or grammar-invalid values are treated as unset.
+	 */
+	jumpSshHost?: string;
 }
 
 /** Read config.json beside this module. Missing/unreadable -> disabled config. */
@@ -73,7 +99,8 @@ export function loadConfig(dir: string): NtfyConfig {
 			typeof parsed.herdrJumpDeepLinkBase === "string" && parsed.herdrJumpDeepLinkBase.trim()
 				? parsed.herdrJumpDeepLinkBase.trim()
 				: DEFAULT_HERDR_JUMP_DEEPLINK_BASE;
-		return { url, maxExcerptChars, enabled, jumpDeepLinkBase, herdrJumpDeepLinkBase };
+		const jumpSshHost = parseJumpSshHost(parsed.jumpSshHost);
+		return { url, maxExcerptChars, enabled, jumpDeepLinkBase, herdrJumpDeepLinkBase, jumpSshHost };
 	} catch {
 		return {
 			url: "",
@@ -297,9 +324,11 @@ export async function resolveHerdrLocation(
 
 /**
  * Build the ntfy title + body.
- * Title: `<workspace/session> / <tab> / <pi session name>` (each location
- * segment omitted when unavailable; the pi session name always present,
- * falling back to a short session id). Unicode survives the UTF-8 JSON payload.
+ * Title: `<host> / <workspace/session> / <tab> / <pi session name>` (host is
+ * always present: the grammar-valid jump alias, otherwise `remote`; other
+ * location segments omitted when unavailable; the pi session name always
+ * present, falling back to a short session id). Unicode survives the UTF-8
+ * JSON payload.
  */
 export function buildNotification(opts: {
 	sessionName?: string;
@@ -307,12 +336,14 @@ export function buildNotification(opts: {
 	workspaceName?: string;
 	tabName?: string;
 	excerpt: string;
+	jumpSshHost?: string;
 }): { title: string; body: string } {
 	const piName =
 		opts.sessionName && opts.sessionName.trim()
 			? opts.sessionName.trim()
 			: opts.sessionId.slice(0, 8);
-	const titleParts = [opts.workspaceName?.trim(), opts.tabName?.trim(), piName].filter(
+	const hostLabel = parseJumpSshHost(opts.jumpSshHost) ?? DEFAULT_JUMP_SSH_HOST;
+	const titleParts = [hostLabel, opts.workspaceName?.trim(), opts.tabName?.trim(), piName].filter(
 		(p): p is string => !!p && p.length > 0,
 	);
 	return { title: titleParts.join(" / "), body: opts.excerpt };
@@ -325,29 +356,33 @@ export function buildNotification(opts: {
  * such as `plugin_N`). The pane id ($ZELLIJ_PANE_ID, form `terminal_N` or bare
  * `N`) rides the URL PATH — the termux-app fork's ZellijJumpHandler parses it
  * there and invokes ~/bin/zellij-jump, which side-channels
- * `ssh remote 'zellij pipe --name jump_pane <pane>'` to harpoon. Slot numbers
+ * `ssh <host> 'zellij pipe --name jump_pane <pane>'` to harpoon. A grammar-valid
+ * Termux SSH alias rides `?host=` after that path; unset/invalid identity omits
+ * the query so the phone script keeps today's default-remote path. Slot numbers
  * are intentionally NOT used (reassignable between send and tap); the pane id is
  * stable.
  */
 export function buildJumpClickUrl(
 	paneId: string | undefined,
 	base: string = DEFAULT_JUMP_DEEPLINK_BASE,
+	jumpSshHost?: string,
 ): string | undefined {
 	const id = (paneId ?? "").trim();
 	// Only terminal panes are jumpable; harpoon's parse_pane_id rejects other
 	// underscore-tagged kinds (e.g. `plugin_3`) and non-numeric tails.
 	if (!/^(terminal_)?\d+$/.test(id)) return undefined;
-	return `${base.replace(/\/+$/, "")}/${encodeURIComponent(id)}`;
+	return appendHostQuery(`${base.replace(/\/+$/, "")}/${encodeURIComponent(id)}`, jumpSshHost);
 }
 
 /** Build a Herdr jump URL carrying a stable terminal id, never a movable pane id. */
 export function buildHerdrJumpClickUrl(
 	terminalId: string | undefined,
 	base: string = DEFAULT_HERDR_JUMP_DEEPLINK_BASE,
+	jumpSshHost?: string,
 ): string | undefined {
 	const id = (terminalId ?? "").trim();
 	if (!/^term_[0-9a-f]+$/.test(id)) return undefined;
-	return `${base.replace(/\/+$/, "")}/${encodeURIComponent(id)}`;
+	return appendHostQuery(`${base.replace(/\/+$/, "")}/${encodeURIComponent(id)}`, jumpSshHost);
 }
 
 export interface NotificationLocation {
@@ -363,7 +398,7 @@ export interface NotificationLocation {
  */
 export async function resolveNotificationLocation(opts: {
 	cwd: string;
-	config: Pick<NtfyConfig, "jumpDeepLinkBase" | "herdrJumpDeepLinkBase">;
+	config: Pick<NtfyConfig, "jumpDeepLinkBase" | "herdrJumpDeepLinkBase" | "jumpSshHost">;
 	env?: NodeJS.ProcessEnv;
 	runHerdr?: HerdrCommandRunner;
 }): Promise<NotificationLocation> {
@@ -379,14 +414,22 @@ export async function resolveNotificationLocation(opts: {
 		return {
 			workspaceName: location.workspaceName,
 			tabName: location.tabName,
-			clickUrl: buildHerdrJumpClickUrl(location.terminalId, opts.config.herdrJumpDeepLinkBase),
+			clickUrl: buildHerdrJumpClickUrl(
+				location.terminalId,
+				opts.config.herdrJumpDeepLinkBase,
+				opts.config.jumpSshHost,
+			),
 		};
 	}
 
 	return {
 		workspaceName: env.ZELLIJ_SESSION_NAME,
 		tabName: resolveZellijTabName(opts.cwd, env),
-		clickUrl: buildJumpClickUrl(env.ZELLIJ_PANE_ID, opts.config.jumpDeepLinkBase),
+		clickUrl: buildJumpClickUrl(
+			env.ZELLIJ_PANE_ID,
+			opts.config.jumpDeepLinkBase,
+			opts.config.jumpSshHost,
+		),
 	};
 }
 
@@ -698,6 +741,7 @@ export function registerNtfyExtension(
 				workspaceName: location.workspaceName,
 				tabName: location.tabName,
 				excerpt,
+				jumpSshHost: config.jumpSshHost,
 			});
 			await sendFn(config.url, title, body, tags, location.clickUrl);
 		})();

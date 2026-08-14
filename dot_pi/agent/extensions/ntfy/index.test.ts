@@ -57,6 +57,7 @@ test("loadConfig: jump deep-link bases default and honor explicit overrides", ()
 		fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ url: "http://x/t" }));
 		assert.equal(loadConfig(dir).jumpDeepLinkBase, "termux://zellij-jump", "zellij default");
 		assert.equal(loadConfig(dir).herdrJumpDeepLinkBase, "termux://herdr-jump", "herdr default");
+		assert.equal(loadConfig(dir).jumpSshHost, undefined, "jumpSshHost unset by default");
 		fs.writeFileSync(
 			path.join(dir, "config.json"),
 			JSON.stringify({
@@ -67,6 +68,24 @@ test("loadConfig: jump deep-link bases default and honor explicit overrides", ()
 		);
 		assert.equal(loadConfig(dir).jumpDeepLinkBase, "myscheme://zellij", "zellij override");
 		assert.equal(loadConfig(dir).herdrJumpDeepLinkBase, "myscheme://herdr", "herdr override");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("loadConfig: jumpSshHost kept only when grammar-valid; empty/invalid treated as unset", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-host-"));
+	try {
+		fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ url: "http://x/t", jumpSshHost: "macbook" }));
+		assert.equal(loadConfig(dir).jumpSshHost, "macbook");
+		fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ url: "http://x/t", jumpSshHost: "  laptop  " }));
+		assert.equal(loadConfig(dir).jumpSshHost, "laptop", "trimmed");
+		fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ url: "http://x/t", jumpSshHost: "" }));
+		assert.equal(loadConfig(dir).jumpSshHost, undefined, "empty");
+		fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ url: "http://x/t", jumpSshHost: "-oProxyCommand" }));
+		assert.equal(loadConfig(dir).jumpSshHost, undefined, "invalid grammar");
+		fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ url: "http://x/t", jumpSshHost: "user@host" }));
+		assert.equal(loadConfig(dir).jumpSshHost, undefined, "user@host");
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
@@ -99,6 +118,83 @@ test("buildHerdrJumpClickUrl: stable terminal id rides separate URL path", () =>
 	);
 	assert.equal(buildHerdrJumpClickUrl("w1:p7"), undefined, "movable pane id rejected");
 	assert.equal(buildHerdrJumpClickUrl("term_deadbeef;rm"), undefined, "unsafe id rejected");
+});
+
+// Frozen multi-host jump wire contract (plan T1). Query key, default alias,
+// allowlist, and argv shape are the shared interface T2–T5 implement against.
+const JUMP_HOST_QUERY_KEY = "host";
+const DEFAULT_JUMP_SSH_HOST = "remote";
+const JUMPABLE_SSH_HOSTS = ["remote", "cartwmic-server", "macbook", "laptop"] as const;
+const JUMP_HOST_GRAMMAR = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const JUMP_ARGV_SHAPE = "script <id> [host]";
+
+test("frozen jump wire constants: query key, default alias, allowlist, argv shape", () => {
+	assert.equal(JUMP_HOST_QUERY_KEY, "host");
+	assert.equal(DEFAULT_JUMP_SSH_HOST, "remote");
+	assert.deepEqual([...JUMPABLE_SSH_HOSTS], ["remote", "cartwmic-server", "macbook", "laptop"]);
+	assert.equal(JUMP_ARGV_SHAPE, "script <id> [host]");
+	for (const alias of JUMPABLE_SSH_HOSTS) {
+		assert.match(alias, JUMP_HOST_GRAMMAR, alias);
+	}
+	assert.doesNotMatch("", JUMP_HOST_GRAMMAR);
+	assert.doesNotMatch("user@host", JUMP_HOST_GRAMMAR);
+	assert.doesNotMatch("-oProxyCommand", JUMP_HOST_GRAMMAR);
+	assert.doesNotMatch("evil.example", JUMP_HOST_GRAMMAR);
+});
+
+test("buildJumpClickUrl: grammar-valid host rides ?host= after unchanged path id", () => {
+	assert.equal(
+		buildJumpClickUrl("terminal_25", "termux://zellij-jump", "macbook"),
+		"termux://zellij-jump/terminal_25?host=macbook",
+	);
+	assert.equal(
+		buildJumpClickUrl("7", "termux://zellij-jump", "laptop"),
+		"termux://zellij-jump/7?host=laptop",
+	);
+	assert.ok(
+		buildJumpClickUrl("terminal_25", "termux://zellij-jump", "macbook")?.includes(`${JUMP_HOST_QUERY_KEY}=macbook`),
+	);
+});
+
+test("buildJumpClickUrl: omits host query when identity is unset or fails grammar", () => {
+	assert.equal(
+		buildJumpClickUrl("terminal_25", "termux://zellij-jump", undefined),
+		"termux://zellij-jump/terminal_25",
+	);
+	assert.equal(
+		buildJumpClickUrl("terminal_25", "termux://zellij-jump", ""),
+		"termux://zellij-jump/terminal_25",
+	);
+	assert.equal(
+		buildJumpClickUrl("terminal_25", "termux://zellij-jump", "-oProxyCommand"),
+		"termux://zellij-jump/terminal_25",
+	);
+	assert.equal(
+		buildJumpClickUrl("terminal_25", "termux://zellij-jump", "user@host"),
+		"termux://zellij-jump/terminal_25",
+	);
+});
+
+test("buildHerdrJumpClickUrl: grammar-valid host rides ?host= after unchanged path id", () => {
+	assert.equal(
+		buildHerdrJumpClickUrl("term_657d8e8364b748", "termux://herdr-jump", "cartwmic-server"),
+		"termux://herdr-jump/term_657d8e8364b748?host=cartwmic-server",
+	);
+	assert.equal(
+		buildHerdrJumpClickUrl("term_abcd", "termux://custom-herdr/", "remote"),
+		"termux://custom-herdr/term_abcd?host=remote",
+	);
+});
+
+test("buildHerdrJumpClickUrl: omits host query when identity is unset or fails grammar", () => {
+	assert.equal(
+		buildHerdrJumpClickUrl("term_deadbeef", "termux://herdr-jump", undefined),
+		"termux://herdr-jump/term_deadbeef",
+	);
+	assert.equal(
+		buildHerdrJumpClickUrl("term_deadbeef", "termux://herdr-jump", "evil.example"),
+		"termux://herdr-jump/term_deadbeef",
+	);
 });
 
 test("Herdr JSON parsers extract canonical ids and labels", () => {
@@ -162,6 +258,45 @@ test("resolveNotificationLocation prefers Herdr and builds Herdr Click", async (
 		tabName: "ntfy herdr",
 		clickUrl: "termux://herdr-jump/term_657d8e8364b748",
 	});
+});
+
+test("resolveNotificationLocation stamps grammar-valid jumpSshHost onto Herdr Click", async () => {
+	const run = async (args: readonly string[]) => {
+		if (args[0] === "pane") return herdrPaneJson;
+		if (args[0] === "workspace") return herdrWorkspaceJson;
+		return herdrTabJson;
+	};
+	const location = await resolveNotificationLocation({
+		cwd: "/tmp",
+		config: {
+			jumpDeepLinkBase: "termux://zellij-jump",
+			herdrJumpDeepLinkBase: "termux://herdr-jump",
+			jumpSshHost: "macbook",
+		},
+		env: {
+			HERDR_ENV: "1",
+			HERDR_PANE_ID: "w1:p7",
+		},
+		runHerdr: run,
+	});
+	assert.equal(location.clickUrl, "termux://herdr-jump/term_657d8e8364b748?host=macbook");
+});
+
+test("resolveNotificationLocation stamps grammar-valid jumpSshHost onto Zellij Click", async () => {
+	const location = await resolveNotificationLocation({
+		cwd: "/tmp",
+		config: {
+			jumpDeepLinkBase: "termux://zellij-jump",
+			herdrJumpDeepLinkBase: "termux://herdr-jump",
+			jumpSshHost: "laptop",
+		},
+		env: {
+			ZELLIJ_SESSION_NAME: "main",
+			ZELLIJ_PANE_ID: "terminal_7",
+		},
+	});
+	assert.equal(location.clickUrl, "termux://zellij-jump/terminal_7?host=laptop");
+	assert.equal(location.workspaceName, "main");
 });
 
 test("resolveNotificationLocation fails closed to Herdr ids without a Click", async () => {
@@ -263,7 +398,7 @@ test("lastAssistantText: empty when no assistant message", () => {
 
 // --- pi-ntfy-notify.notification-identifies-session ---
 
-test("buildNotification: title = workspace/session + tab + pi name; body = excerpt", () => {
+test("buildNotification: title = host + workspace/session + tab + pi name; body = excerpt", () => {
 	const n = buildNotification({
 		sessionName: "bug123",
 		sessionId: "a3f9c2010000",
@@ -271,7 +406,7 @@ test("buildNotification: title = workspace/session + tab + pi name; body = excer
 		tabName: "chezmoi",
 		excerpt: "what next?",
 	});
-	assert.equal(n.title, "workspace / chezmoi / bug123");
+	assert.equal(n.title, "remote / workspace / chezmoi / bug123");
 	assert.equal(n.body, "what next?");
 });
 
@@ -282,17 +417,48 @@ test("buildNotification: falls back to short session id when unnamed", () => {
 		tabName: "chezmoi",
 		excerpt: "x",
 	});
-	assert.equal(n.title, "workspace / chezmoi / a3f9c201");
+	assert.equal(n.title, "remote / workspace / chezmoi / a3f9c201");
 });
 
-test("buildNotification: omits workspace/tab segments when unavailable (pi name only)", () => {
+test("buildNotification: omits workspace/tab segments when unavailable (host + pi name)", () => {
 	const n = buildNotification({
 		sessionName: "solo",
 		sessionId: "id",
 		excerpt: "x",
 	});
-	assert.equal(n.title, "solo");
+	assert.equal(n.title, "remote / solo");
 	assert.equal(n.body, "x");
+});
+
+test("buildNotification: grammar-valid host is the title first segment; remaining segments stay workspace / tab / pi name", () => {
+	const n = buildNotification({
+		sessionName: "bug123",
+		sessionId: "a3f9c2010000",
+		workspaceName: "workspace",
+		tabName: "chezmoi",
+		excerpt: "what next?",
+		jumpSshHost: "macbook",
+	});
+	assert.equal(n.title, "macbook / workspace / chezmoi / bug123");
+	assert.equal(n.body, "what next?");
+});
+
+test("buildNotification: unset or invalid identity titles as remote; remaining segments unchanged", () => {
+	const unset = buildNotification({
+		sessionName: "bug123",
+		sessionId: "a3f9c2010000",
+		workspaceName: "workspace",
+		tabName: "chezmoi",
+		excerpt: "x",
+	});
+	assert.equal(unset.title, `${DEFAULT_JUMP_SSH_HOST} / workspace / chezmoi / bug123`);
+	const invalid = buildNotification({
+		sessionName: "solo",
+		sessionId: "id",
+		excerpt: "x",
+		jumpSshHost: "-oProxyCommand",
+	});
+	assert.equal(invalid.title, `${DEFAULT_JUMP_SSH_HOST} / solo`);
 });
 
 async function flushAsyncDispatch(): Promise<void> {
@@ -363,7 +529,7 @@ test("lifecycle wiring: end caches, settled+idle sends, question sends immediate
 		assert.equal(sends.length, 1);
 		assert.deepEqual(sends[0], [
 			"https://ntfy.invalid/topic",
-			"workspace / tab / named",
+			"remote / workspace / tab / named",
 			"final answer",
 			"robot",
 			"termux://herdr-jump/term_deadbeef",
@@ -377,6 +543,59 @@ test("lifecycle wiring: end caches, settled+idle sends, question sends immediate
 		assert.equal(sends.length, 2);
 		assert.equal(sends[1][2], "❓ Choose target?");
 		assert.equal(sends[1][3], "question");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("lifecycle wiring: configured jumpSshHost is the title first segment", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-host-send-"));
+	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+	const sends: unknown[][] = [];
+	const pi = {
+		registerCommand: () => {},
+		on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => {
+			handlers.set(name, handler);
+		},
+		events: { on: () => () => {} },
+	};
+	const ctx = {
+		hasUI: true,
+		isIdle: () => true,
+		sessionManager: {
+			getCwd: () => "/tmp/project",
+			getSessionName: () => "named",
+			getSessionId: () => "abcdef123456",
+		},
+		ui: { notify: () => {} },
+	};
+	try {
+		registerNtfyExtension(pi as any, {
+			dir,
+			config: {
+				url: "https://ntfy.invalid/topic",
+				maxExcerptChars: 200,
+				enabled: true,
+				jumpDeepLinkBase: "termux://zellij-jump",
+				herdrJumpDeepLinkBase: "termux://herdr-jump",
+				jumpSshHost: "macbook",
+			},
+			resolveLocation: async () => ({
+				workspaceName: "workspace",
+				tabName: "tab",
+				clickUrl: "termux://herdr-jump/term_deadbeef?host=macbook",
+			}),
+			send: async (...args: unknown[]) => { sends.push(args); },
+		});
+
+		await handlers.get("agent_start")?.({}, ctx);
+		await handlers.get("agent_end")?.({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "final answer" }] }],
+		}, ctx);
+		await handlers.get("agent_settled")?.({}, ctx);
+		await flushAsyncDispatch();
+		assert.equal(sends[0][1], "macbook / workspace / tab / named");
+		assert.equal(sends[0][4], "termux://herdr-jump/term_deadbeef?host=macbook");
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
