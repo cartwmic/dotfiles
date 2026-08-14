@@ -8,8 +8,8 @@ This file is **only** for work in this repository: the chezmoi source tree at
 or `~/.pi/agent/AGENTS.md`.
 
 User-global Pi instructions are a **different file with different contents**:
-source `dot_pi/agent/literal_AGENTS.md` deploys to `~/.pi/agent/AGENTS.md`.
-The source filename is `literal_AGENTS.md` on purpose: Pi only auto-loads
+source `dot_pi/agent/literal_AGENTS.md.tmpl` deploys to `~/.pi/agent/AGENTS.md`.
+The source filename is `literal_AGENTS.md.tmpl` on purpose: Pi only auto-loads
 `AGENTS.md` / `AGENTS.override.md` / `CLAUDE.md`. If the source were named
 `AGENTS.md` under `dot_pi/agent/`, working in an extension directory would
 load the live dest **and** the source (same text, two paths).
@@ -156,7 +156,7 @@ Done means all of the following that apply:
 - No commit or push unless the user asked.
 - Secrets, 1Password references, and `private_*` files were not given
   committed secret values.
-- `~/.pi/agent/AGENTS.md` / `dot_pi/agent/literal_AGENTS.md` was not overwritten with
+- `~/.pi/agent/AGENTS.md` / `dot_pi/agent/literal_AGENTS.md.tmpl` was not overwritten with
   this file’s contents, and no `~/AGENTS.md` source was added.
 
 Handoff must name:
