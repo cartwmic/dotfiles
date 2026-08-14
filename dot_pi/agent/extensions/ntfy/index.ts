@@ -3,8 +3,9 @@
  *
  * On terminal `agent_settled` (no retry, compaction, or queued continuation
  * left), pushes an ntfy notification so a remote user knows which pi session is
- * waiting and what it last said. Skips auto-compaction's resumed abort boundary.
- * Supports both Herdr and Zellij jump routes.
+ * waiting and what it last said. Skips aborted runs (user ESC / "Operation
+ * aborted") and auto-compaction's resumed abort boundary. Supports both Herdr
+ * and Zellij jump routes.
  *
  * Prerequisites:
  *   - ntfy server reachable at the URL in config.json
@@ -160,6 +161,17 @@ export function lastAssistantText(messages: readonly unknown[]): string {
 		}
 	}
 	return "";
+}
+
+/** Last assistant message's stopReason, if present. */
+export function lastAssistantStopReason(messages: readonly unknown[]): string | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i] as { role?: string; stopReason?: unknown } | null;
+		if (m && m.role === "assistant") {
+			return typeof m.stopReason === "string" ? m.stopReason : undefined;
+		}
+	}
+	return undefined;
 }
 
 /** Collapse whitespace and truncate to maxChars with a `…` indicator. */
@@ -724,8 +736,9 @@ export function registerNtfyExtension(
 	const sendState = newSendState();
 	let finalRunMessages: readonly unknown[] = [];
 	// Pi 0.84+ preserves agent_end/agent_settled when compact() aborts a run.
-	// Auto-compact signals when that abort will be resumed; suppress only that
-	// internal boundary. User aborts still notify normally.
+	// Auto-compact signals when that abort will be resumed; suppress that
+	// internal boundary. User/operation aborts are skipped separately via
+	// stopReason === "aborted" at settle time.
 	let suppressNextSettled = false;
 	pi.events.on(AUTO_COMPACT_WILL_RESUME_EVENT, () => {
 		suppressNextSettled = true;
@@ -803,6 +816,10 @@ export function registerNtfyExtension(
 		if (!ctx.hasUI || !ctx.isIdle()) return;
 		if (!enabled) return;
 		if (!config.url) return;
+		// User ESC and other interrupted runs surface in the TUI as
+		// "Operation aborted" (stopReason "aborted"). The operator already
+		// knows; do not push a remote notification for that idle boundary.
+		if (lastAssistantStopReason(finalRunMessages) === "aborted") return;
 
 		const excerpt = extractExcerpt(
 			lastAssistantText(finalRunMessages),

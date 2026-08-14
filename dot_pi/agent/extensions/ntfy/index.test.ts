@@ -16,6 +16,7 @@ import {
 	extractExcerpt,
 	extractQuestionExcerpt,
 	lastAssistantText,
+	lastAssistantStopReason,
 	loadConfig,
 	loadEnabled,
 	parseHerdrLabel,
@@ -396,6 +397,22 @@ test("lastAssistantText: empty when no assistant message", () => {
 	assert.equal(lastAssistantText([{ role: "user", content: [{ type: "text", text: "hi" }] }]), "");
 });
 
+test("lastAssistantStopReason: reads last assistant stopReason", () => {
+	assert.equal(lastAssistantStopReason([]), undefined);
+	assert.equal(lastAssistantStopReason([{ role: "user", content: [] }]), undefined);
+	assert.equal(
+		lastAssistantStopReason([
+			{ role: "assistant", stopReason: "end_turn", content: [] },
+			{ role: "assistant", stopReason: "aborted", content: [] },
+		]),
+		"aborted",
+	);
+	assert.equal(
+		lastAssistantStopReason([{ role: "assistant", content: [{ type: "text", text: "ok" }] }]),
+		undefined,
+	);
+});
+
 // --- pi-ntfy-notify.notification-identifies-session ---
 
 test("buildNotification: title = host + workspace/session + tab + pi name; body = excerpt", () => {
@@ -601,7 +618,7 @@ test("lifecycle wiring: configured jumpSshHost is the title first segment", asyn
 	}
 });
 
-test("lifecycle wiring: resumed auto-compact suppresses only its internal abort", async () => {
+test("lifecycle wiring: resumed auto-compact and user abort do not notify", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-compact-"));
 	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
 	const busHandlers = new Map<string, (data: unknown) => void>();
@@ -663,7 +680,7 @@ test("lifecycle wiring: resumed auto-compact suppresses only its internal abort"
 		assert.equal(sends.length, 1);
 		assert.equal(sends[0][2], "done");
 
-		// User abort has no auto-compact signal and remains a real idle boundary.
+		// User abort (TUI: "Operation aborted") is not a completion.
 		await handlers.get("agent_start")?.({}, ctx);
 		await handlers.get("agent_end")?.({
 			messages: [{
@@ -674,8 +691,17 @@ test("lifecycle wiring: resumed auto-compact suppresses only its internal abort"
 		}, ctx);
 		await handlers.get("agent_settled")?.({}, ctx);
 		await flushAsyncDispatch();
+		assert.equal(sends.length, 1, "user abort must not notify");
+
+		// A later completed run still notifies.
+		await handlers.get("agent_start")?.({}, ctx);
+		await handlers.get("agent_end")?.({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "finished" }] }],
+		}, ctx);
+		await handlers.get("agent_settled")?.({}, ctx);
+		await flushAsyncDispatch();
 		assert.equal(sends.length, 2);
-		assert.equal(sends[1][2], "stopped by user");
+		assert.equal(sends[1][2], "finished");
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
