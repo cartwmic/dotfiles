@@ -45,7 +45,7 @@ Guidelines:
 - Shared standing rules live in [`canonical/instructions/AGENTS.md`](./canonical/instructions/AGENTS.md). Include that file into each harness's `AGENTS.md` (Claude: `CLAUDE.md`). Do not create `~/AGENTS.md`. Do not put shared rules in Pi `APPEND_SYSTEM.md`.
 - Apply with `chezmoi apply --force` and check the live dest files.
 
-Current files: [AGENTS.md](./canonical/instructions/AGENTS.md) (YAGNI, KISS, scripts vs skills, voice) and [hindsight-guidance.md](./canonical/instructions/hindsight-guidance.md).
+Current files: [AGENTS.md](./canonical/instructions/AGENTS.md) (YAGNI, KISS, scripts vs skills, voice, black-box validation) and [hindsight-guidance.md](./canonical/instructions/hindsight-guidance.md).
 
 ## Add A Canonical MCP Server
 
