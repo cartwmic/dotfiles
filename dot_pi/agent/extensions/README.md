@@ -129,6 +129,7 @@ READMEs already in this tree:
 - [pi-patch-guard](./pi-patch-guard/README.md)
 - [catalog-overlay-nudge](./catalog-overlay-nudge/README.md)
 - [goal](./goal/README.md)
+- [inspect-prompt](./inspect-prompt/README.md)
 - [subagent](./subagent/README.md)
 - [web-search](./web-search/README.md)
 
@@ -146,8 +147,8 @@ cd ./pi-patch-guard && node --test
 ```
 
 Other in-tree suites today: `auto-compact/index.test.ts`,
-`goal/helpers.test.ts`, `hindsight/index.test.ts`, `issue/index.test.ts`,
-`ntfy/index.test.ts`, `openrouter-gate/index.test.ts`.
+`goal/helpers.test.ts`, `hindsight/index.test.ts`, `inspect-prompt/index.test.ts`,
+`issue/index.test.ts`, `ntfy/index.test.ts`, `openrouter-gate/index.test.ts`.
 `catalog-overlay-nudge`, `subagent`, and `web-search` do not have tests yet.
 
 Chezmoi apply and secret handling are not validated here; use repo-root
