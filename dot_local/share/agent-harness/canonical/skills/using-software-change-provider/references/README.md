@@ -1,5 +1,7 @@
 # Software-change provider
 
+## Overview
+
 `software-change` is Loop Engine's reference provider for the software-change workflow, distributed as a standalone binary with its shipped data embedded. A repository checkout remains the development path. It implements the provider subprocess contract:
 
 - `describe` returns the fixed workflow topology and static authoring guidance.
@@ -7,10 +9,13 @@
 
 The frozen requirement record this crate's acceptance suite traces to (R1–R27, A1–A15, including amendments) lives at [`docs/prd.md`](docs/prd.md).
 - Semantic review is external. The provider does not generate prompts, invoke a model, or decide whether review findings are true.
+- Reviewer convergence contract lives in [`data/reviewer-protocol.md`](data/reviewer-protocol.md): binary evidence stays unchanged; candidate output is triaged before append or mutation; material in-scope findings require consequence proof, focused external reconsideration handles disputed candidates, and no waiver is granted by round count.
 
 Per-run obligations live in immutable initial input. The provider is called by Loop Engine; it does not discover or load a config profile by itself.
 
-## Distribution and registration
+Drive a run with [SKILL.md](../SKILL.md).
+
+## Setup
 
 Standalone releases are published for macOS arm64 and Linux x86_64. Each provider archive contains the `software-change` executable and both project license texts; verify its `.sha256` checksum before installation.
 
@@ -39,7 +44,40 @@ cargo build -p software-change-provider
 
 This produces `target/debug/software-change`; the checkout's `crates/software-change-provider/data/` tree supplies the development copies of shipped data.
 
-## Production-boundary proof
+## Usage
+
+Build the engine binary too, or replace `target/debug/loop-engine` below with an installed `loop-engine` executable:
+
+```sh
+cargo build -p loop-cli -p software-change-provider
+ENGINE=target/debug/loop-engine
+DB="$PWD/.loop-engine/loop.db"
+ARTIFACT_ROOT="$PWD/change-artifacts"
+PROVIDER_CONFIG="/absolute/path/to/your/providers.toml"
+mkdir -p "$ARTIFACT_ROOT"
+```
+
+Copy each selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. Before starting, replace `/abs/path/to/change/artifacts` in that copy with `$ARTIFACT_ROOT` (or another absolute artifact directory), then run the matching command:
+
+```sh
+DATA_ROOT="$HOME/.local/share/software-change-provider"
+
+cp "$DATA_ROOT/crates/software-change-provider/data/configs/minimal.json" /tmp/software-change-minimal.json
+"$ENGINE" --database "$DB" --config "$PROVIDER_CONFIG" --json \
+  start software-change "@/tmp/software-change-minimal.json" "software change (minimal)"
+
+cp "$DATA_ROOT/crates/software-change-provider/data/configs/standard.json" /tmp/software-change-standard.json
+"$ENGINE" --database "$DB" --config "$PROVIDER_CONFIG" --json \
+  start software-change "@/tmp/software-change-standard.json" "software change (standard)"
+
+cp "$DATA_ROOT/crates/software-change-provider/data/configs/high-rigor.json" /tmp/software-change-high-rigor.json
+"$ENGINE" --database "$DB" --config "$PROVIDER_CONFIG" --json \
+  start software-change "@/tmp/software-change-high-rigor.json" "software change (high-rigor)"
+```
+
+`start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. The artifact directory contains the fixed subject filenames expected by the selected schema: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, and `validation-report.json`.
+
+## Validation
 
 The repository-owned journey runner has one contract with two adapters:
 
@@ -110,38 +148,11 @@ Calibration fixtures:
 - [`crates/software-change-provider/data/calibration/fixtures/validation-report-defective.json`](data/calibration/fixtures/validation-report-defective.json)
 - [`crates/software-change-provider/data/calibration/fixtures/example-evidence.json`](data/calibration/fixtures/example-evidence.json)
 
-## Start a run
+## Convergence and owning-phase routes
 
-Build the engine binary too, or replace `target/debug/loop-engine` below with an installed `loop-engine` executable:
+At each review state, first perform a comprehensive review of all visible material findings. Triage candidate reviewer output before append or mutation against mandatory failure burden, independent scope/materiality, consequence, and current evidence. Append accepted in-scope material failures; use focused external reconsideration for disputed candidates. After a fix, confirmation review checks accepted fixes, affected scope, downstream consistency, and regressions. A late finding must supply current evidence, violated in-scope obligation, concrete consequence, validation gap, and provenance classifying it as newly exposed, fix-introduced, or previously overlooked; previous visibility or reviewer overlook does not waive a known material defect. Comprehensive-first review still bars drip-feeding, and unrelated reopening must meet independent scope/materiality burden. A default three-round circuit breaker changes review method only and never waives a known defect.
 
-```sh
-cargo build -p loop-cli -p software-change-provider
-ENGINE=target/debug/loop-engine
-DB="$PWD/.loop-engine/loop.db"
-ARTIFACT_ROOT="$PWD/change-artifacts"
-PROVIDER_CONFIG="/absolute/path/to/your/providers.toml"
-mkdir -p "$ARTIFACT_ROOT"
-```
-
-Copy each selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. Before starting, replace `/abs/path/to/change/artifacts` in that copy with `$ARTIFACT_ROOT` (or another absolute artifact directory), then run the matching command:
-
-```sh
-DATA_ROOT="$HOME/.local/share/software-change-provider"
-
-cp "$DATA_ROOT/crates/software-change-provider/data/configs/minimal.json" /tmp/software-change-minimal.json
-"$ENGINE" --database "$DB" --config "$PROVIDER_CONFIG" --json \
-  start software-change "@/tmp/software-change-minimal.json" "software change (minimal)"
-
-cp "$DATA_ROOT/crates/software-change-provider/data/configs/standard.json" /tmp/software-change-standard.json
-"$ENGINE" --database "$DB" --config "$PROVIDER_CONFIG" --json \
-  start software-change "@/tmp/software-change-standard.json" "software change (standard)"
-
-cp "$DATA_ROOT/crates/software-change-provider/data/configs/high-rigor.json" /tmp/software-change-high-rigor.json
-"$ENGINE" --database "$DB" --config "$PROVIDER_CONFIG" --json \
-  start software-change "@/tmp/software-change-high-rigor.json" "software change (high-rigor)"
-```
-
-`start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. The artifact directory contains the fixed subject filenames expected by the selected schema: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, and `validation-report.json`.
+Validation-report-local defects stay in validation: edit and recheck `validation-report.json`, then retry checked `passed`; do not use `revise` for report-local corrections. From validation, nearest check-free `revise` is only for implementation-owned defects. Select phase-named owning routes for earlier defects: `revise-intent` (`design-review → explore`), `revise-design` (`plan-review → design` or later review states), and `revise-plan` (`implementation-review`/`validation → plan`). Zero advisory comments is not required for completion.
 
 ## Read obligations and continue
 
@@ -156,3 +167,11 @@ Inspect `initial_input.review_policies` and `initial_input.artifact_schemas` the
 For checked transitions, evaluation performs deterministic schema and link checks before consulting review evidence. Missing or unparseable expected artifacts produce a schema denial; invalid or inaccessible artifact roots produce an evaluation error. Evidence denials identify unsatisfied policy axes. Check-free `revise` transitions do not require provider evaluation.
 
 See [`docs/agent-usage.md`](../../using-loop-engine/references/agent-usage.md) for the complete Loop Engine command surface and JSON outcome handling.
+
+## Candidate identity and supplied calibration data
+
+Binaries built from this source revision accept `software-change --help` (or `-h`) and `software-change --version` (or `-V`) without stdin. Help names `describe`, `evaluate`, and `data-dump`; version comes from the packaged Cargo version. The public v0.2.2 release predates these flags. No-argument stdin protocol and `data-dump DIR` behavior remain unchanged.
+
+`data-dump` includes `data/calibration/reviewer-instruction.txt` and stable fictional companions under `data/calibration/companions/fictional-repo/`. Calibration fixtures use `fictional-repo/` labels only; reviewers receive mapped companion bytes and never resolve labels against a live checkout. `data/calibration/PROCEDURE.md` defines one fresh exact-byte external review per row: fixed instruction, prompt, protocol, template, recursively sorted schema, subject, required good predecessors, sorted companions, and canonical request JSON. A11 hashes those ordered source records with big-endian length framing; framing identifies exact supplied records and is not model-call transport. Digest is mechanical test identity, not semantic review proof; changing supplied bytes requires fresh owner review before changing attestation metadata. No shipped harness invokes reviewers or rewrites manifest attestations.
+
+Evidence denial details separate current blockers (`details.diagnostics`) from stale or stale-config recovery context (`details.informational`). Prior denials and inert records remain separate fields. Stale evidence never satisfies current obligations.

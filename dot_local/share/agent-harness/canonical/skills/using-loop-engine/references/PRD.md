@@ -562,7 +562,7 @@ Only semantically durable evaluations enter the lineage:
 - provider/process/protocol failures are not included;
 - stale `allow` or `deny` results and otherwise uncommitted evaluations are not included.
 
-The provider decides whether and how to use prior evaluation lineage. Independent or "blind" review is provider policy: a provider may deliberately ignore previous evaluations without requiring a different engine semantic.
+The provider decides whether and how to use prior evaluation lineage for validation diagnostics or evidence aggregation. A provider may deliberately ignore previous evaluations when validating current evidence without requiring a different engine semantic; lineage never performs semantic review, which remains external.
 
 ### 8.4 Evaluation Results
 
@@ -661,32 +661,45 @@ design
 
 design-review
   ├─ approved [checked] → plan
-  └─ revise [check-free] → design
+  ├─ revise [check-free] → design
+  └─ revise-intent [check-free] → explore
 
 plan
   └─ plan-ready [checked] → plan-review
 
 plan-review
   ├─ approved [checked] → implement
-  └─ revise [check-free] → plan
+  ├─ revise [check-free] → plan
+  ├─ revise-design [check-free] → design
+  └─ revise-intent [check-free] → explore
 
 implement
   └─ implementation-ready [checked] → implementation-review
 
 implementation-review
   ├─ approved [checked] → validation
-  └─ revise [check-free] → implement
+  ├─ revise [check-free] → implement
+  ├─ revise-plan [check-free] → plan
+  ├─ revise-design [check-free] → design
+  └─ revise-intent [check-free] → explore
 
 validation
   ├─ passed [checked] → end
-  └─ revise [check-free] → implement
+  ├─ revise [check-free] → implement
+  ├─ revise-plan [check-free] → plan
+  ├─ revise-design [check-free] → design
+  └─ revise-intent [check-free] → explore
 
 end [final]
 ```
 
 The provider may inspect repository state, documents, tests, reviews, or other software-specific information. Core understands none of those concepts.
 
+Review-state routing is explicit in this reference graph: external review operators select the phase owning an accepted material defect through `revise-intent`, `revise-design`, or `revise-plan`; validation-report-local defects stay in validation: edit and recheck `validation-report.json`, then retry checked `passed`; from validation, nearest `revise` is only for implementation-owned defects. Candidate reviewer output is triaged before append or artifact mutation, and disputed candidates use focused external reconsideration. A late finding requires current evidence, violated in-scope obligation, concrete consequence, validation gap, and provenance as newly exposed, fix-introduced, or previously overlooked; prior visibility or reviewer overlook does not waive known materiality. Comprehensive-first review still bars drip-feeding, and unrelated reopening must meet independent scope/materiality burden. A default three-round circuit breaker changes review method only and never waives a known defect. These are provider/operator conventions, not Loop Engine core policy or a review subsystem.
+
 ### 10.1 Run-Configured Semantic Review Policies
+
+The software-change provider's shipped review contract remains external and deterministic at its boundary. Binaries built from this candidate source expose identity through `--help`/`-h` and `--version`/`-V` before stdin; public v0.2.2 binaries predate those flags. Direct pushes to `main` reuse read-only production preflight at the pushed SHA. Calibration fixtures are supplied-material-only and use stable fictional path labels with shipped companions, so review does not resolve labels against a live checkout. Stale evidence is recovery context under `details.informational`; current unsatisfied obligations remain under blocking `details.diagnostics`.
 
 At run creation, the software-change workflow may receive semantic review policies in immutable initial input. These policies configure what must be reviewed at the review/validation gates without changing workflow topology.
 
@@ -806,11 +819,11 @@ instructions are precise and non-contradictory
 content is appropriately scoped and concise
 ```
 
-Semantic evaluation may use an LLM or another provider-owned evaluator.
+Semantic judgment stays external to provider evaluation. A reviewer or model may produce ordinary `review-evidence` context records; provider validates strict shape, configured policy identity, target identity, profile version, and SHA-256 of exact bytes.
 
 The final `semantic-review → end` evaluation must establish the target's **complete current conformance**, including re-establishing deterministic policies as necessary. This prevents edits made after an earlier deterministic pass from allowing finalization with newly introduced deterministic violations.
 
-Previous durable `allow`/`deny` results for the exact semantic transition are supplied to subsequent evaluations. The provider may use them for iterative review or deliberately ignore them for an independent review strategy.
+Previous durable `allow`/`deny` results for the exact semantic transition are supplied to subsequent evaluations. The provider may use them to inform validation diagnostics or evidence aggregation, or deliberately ignore them when validating current evidence. Lineage never performs semantic review; semantic judgment remains external.
 
 Failed checks deny progression and return actionable feedback. Revision is represented by the caller taking a check-free `revise` edge and then progressing through review again.
 
@@ -818,15 +831,51 @@ The workflow must demonstrate:
 
 - both draft and audit modes;
 - deterministic and semantic policies supplied as initial input;
-- deterministic and semantic provider-owned evaluation;
+- provider-owned deterministic evaluation plus provider validation and aggregation of externally produced semantic evidence, with semantic judgment remaining external;
 - repeated edit/revalidate cycles;
 - deterministic conformance re-established before finalization after revisions;
 - use of prior evaluation findings;
-- provider-controlled independent review when desired;
+- provider-controlled workflow progression and deterministic/evidence validation while semantic review remains external;
 - durable actor handoff;
 - no document-specific core semantics.
 
-## 12. Harness and Handoff Usability
+## 12. Reference Workflow C — Research
+
+The third reference workflow validates a durable research process: scope a question, gather sources, adversarially verify claims, and synthesize a cited conclusion.
+
+Required topology:
+
+```text
+scope
+  └─ scoped [checked] → gather
+
+gather
+  ├─ gathered [checked] → verify
+  └─ revise [check-free] → scope
+
+verify
+  ├─ verified [checked] → synthesize
+  ├─ revise [check-free] → gather
+  └─ revise-brief [check-free] → scope
+
+synthesize
+  ├─ completed [checked] → end
+  ├─ revise [check-free] → verify
+  ├─ revise-sources [check-free] → gather
+  └─ revise-brief [check-free] → scope
+
+end [final]
+```
+
+Provider evaluation validates artifact schemas and revision links for `brief.json`, `sources.json`, `verification.json`, and `report.json`, then aggregates external `review-evidence` at verify and synthesize. It does not fetch the web, invoke models, or judge semantic truth. Search, fetch, and writing stay with callers.
+
+In the shipped standard profile, checked `verified` requires independent evidence for `claim-grounded` and `adversarial`; checked `completed` requires independent evidence for `cited-conclusion` and `scope-faithful`. Checked `scoped` and `gathered` are schema and revision-link only.
+
+Owning-phase `revise`, `revise-brief`, and `revise-sources` edges are check-free as in the topology.
+
+Operator procedure lives in `crates/research-provider/README.md`.
+
+## 13. Harness and Handoff Usability
 
 A generic agent integration should normally require only:
 
@@ -856,11 +905,11 @@ A harness may retain additional private conversational context, but correct work
 
 No workflow-specific harness extension is required to enforce workflow progression.
 
-## 13. Acceptance Criteria
+## 14. Acceptance Criteria
 
 v0.1 is complete when the following are demonstrated end to end.
 
-### 13.1 Workflow Authority
+### 14.1 Workflow Authority
 
 - A caller cannot directly set current state.
 - A structurally uninterpretable workflow definition cannot create a run, while structurally valid unusual topology such as cycles, unreachable states, non-final sinks, or absence of a final state is permitted.
@@ -878,7 +927,7 @@ v0.1 is complete when the following are demonstrated end to end.
 - An initially-final run is created final.
 - Terminal runs expose no requestable events and reject `append`, `event`, and `terminate` without semantic history.
 
-### 13.2 Durable Context and Handoff
+### 14.2 Durable Context and Handoff
 
 - Initial input is immutable after creation and survives restart.
 - Context records survive restart in stable append order.
@@ -890,7 +939,7 @@ v0.1 is complete when the following are demonstrated end to end.
 - `show` preserves review feedback across revision edges by exposing the chronologically latest durable evaluation per checked-transition lineage.
 - Later durable evaluations supersede earlier ones in either direction: `allow` can supersede `deny`, and `deny` can supersede `allow`.
 
-### 13.3 Run History and Evaluation Lineage
+### 14.3 Run History and Evaluation Lineage
 
 - Run history contains only the semantic actions defined in Section 4.4.
 - Reads, unavailable events, unsupported evaluations, and operational failures do not pollute semantic history.
@@ -904,13 +953,13 @@ v0.1 is complete when the following are demonstrated end to end.
 - `allow` requires no durable feedback payload; `deny` carries durable actionable feedback.
 - Raw run history is not implicitly supplied as evaluation context.
 
-### 13.4 Concurrency
+### 14.4 Concurrency
 
 - Overlapping event attempts competing against the same pre-mutation run state cannot both produce conflicting commits.
 - An in-flight checked evaluation made stale by a state or lifecycle change produces no transition, semantic history, or evaluation lineage regardless of whether the provider returned `allow` or `deny`.
 - Concurrent context appends alone are explicitly outside v0.1 evaluation-staleness guarantees.
 
-### 13.5 Software-Change Workflow
+### 14.5 Software-Change Workflow
 
 - A minimal idea can be driven to completion.
 - Substantial already-known intent/design/planning context can use the same workflow.
@@ -929,26 +978,36 @@ v0.1 is complete when the following are demonstrated end to end.
 - A run can move between distinct actor sessions or harnesses.
 - A check-free revision edge remains usable when provider evaluation is unavailable.
 
-### 13.6 Policy-Document Workflow
+### 14.6 Policy-Document Workflow
 
 - Draft and audit modes both work.
 - Deterministic policy failure blocks progression with actionable findings.
 - Semantic policy failure blocks progression with actionable findings.
 - Successive semantic reviews may use previous findings.
-- The provider can perform independent review by ignoring prior lineage without an engine-level blindness mode.
+- Successive external semantic reviews may use previous findings; provider may use prior lineage only to inform validation diagnostics or evidence aggregation, or ignore it when validating current evidence.
 - The actor can revise and request evaluation repeatedly until policies pass.
 - After deterministic review passes, a later document revision that violates a deterministic policy cannot finalize until deterministic conformance is re-established according to the external state observed by provider evaluation.
 - The workflow does not rely on Loop Engine atomically locking, versioning, or committing the external document together with workflow state.
 - README-like and `AGENTS.md`-like policy sets require no core changes.
 
-### 13.7 Operational Simplicity
+### 14.7 Research Workflow
+
+- An operator can start a research run through Loop Engine using `start` / `show` / `append` / `event`.
+- Topology covers scope, gather, adversarial verify, and synthesize.
+- Checked transitions refuse until artifacts satisfy declared structure and independent evidence satisfies declared review obligations at verify and synthesize.
+- Local blackbox tests exercise at least one checked denial and a successful completion.
+- CI preflight builds the research binary and runs a source journey; archive-smoke runs a packaged journey after materializing embedded data.
+- cargo-dist plan and release-gate assertions include the research binary.
+- The provider does not fetch, invoke models, or judge semantic truth.
+
+### 14.8 Operational Simplicity
 
 - Local operation requires no daemon or external infrastructure beyond Loop Engine's local durable state and configured provider integration.
 - The primary caller surface remains seven or fewer operations.
 - The semantic provider interface remains `describe` + `evaluate`.
 - Provider correctness does not depend on retained in-memory state from earlier invocations.
 
-## 14. Complexity Guardrails
+## 15. Complexity Guardrails
 
 v0.1 deliberately targets:
 
@@ -972,7 +1031,7 @@ A new core concept or subsystem must solve a demonstrated limitation of a refere
 
 Early `0.x` interfaces remain evolvable rather than formally frozen.
 
-## 15. Explicitly Deferred to Technical Design
+## 16. Explicitly Deferred to Technical Design
 
 The PRD intentionally does not decide:
 
@@ -992,7 +1051,7 @@ The PRD intentionally does not decide:
 
 The technical design should select the simplest implementation that satisfies the product semantics above.
 
-## 16. Deferred Product Capabilities
+## 17. Deferred Product Capabilities
 
 The design should leave room for, but v0.1 should not implement without demonstrated need:
 
@@ -1018,7 +1077,7 @@ generalized context-revision concurrency
 
 These should extend or layer around the durable workflow kernel rather than move workflow authority into an agent harness.
 
-## 17. Product Test
+## 18. Product Test
 
 When considering additional complexity:
 
