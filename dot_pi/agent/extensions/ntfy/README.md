@@ -45,6 +45,19 @@ alias via `JUMP_SSH_HOST`.
   scripts keep the default `remote` SSH path) and still titles as `remote`.
   Set it in `~/.config/chezmoi/chezmoi.yaml` as `data.jumpSshHost`.
 
+## Apply scope
+
+`chezmoi apply` on a pi host only renders this extension, including `jumpSshHost`
+from that machine's `~/.config/chezmoi/chezmoi.yaml`. It does not:
+
+- install or update the Termux APK (separate `termux-app` repo; `?host=` session
+  focus requires that build)
+- name Termux sessions (the visible session must match the alias exactly for focus)
+- update phone jump scripts or SSH ControlMaster (`bin/**` is ignored on the
+  personal profile — apply on the phone; see `termux/README.md`)
+- export `JUMP_SSH_HOST` for the zellij notify wrapper; set that in the remote
+  environment if you use Zellij notify
+
 ## Toggle on/off
 
 Use the `/ntfy` command at runtime:
