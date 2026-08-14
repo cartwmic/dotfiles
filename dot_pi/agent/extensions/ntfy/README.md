@@ -2,7 +2,8 @@
 
 Pushes an [ntfy](https://ntfy.sh) notification on terminal `agent_settled`
 boundaries so you know when a remote pi session is truly awaiting input — and
-which session. Resumed auto-compaction abort boundaries are excluded.
+which session. Aborted runs (user ESC / "Operation aborted") and resumed
+auto-compaction abort boundaries are excluded.
 
 Topology: `phone → Termux → SSH → remote PC → Herdr or Zellij → pi`. The
 extension runs on the remote PC and pushes to a self-hosted ntfy server; the
@@ -80,7 +81,8 @@ config default, delete `state.json`.
 - Notifies on `agent_settled`, after retries, compaction, and queued continuations
   are exhausted. `agent_end` only captures the final assistant text.
 - Suppresses the internal aborted settlement when `auto-compact` announces that
-  it will resume the interrupted run. Explicit user aborts still notify.
+  it will resume the interrupted run. User/operation aborts (`stopReason`
+  `aborted`, shown in the TUI as "Operation aborted") also do not notify.
 - Title: `<host> / <workspace/session> / <tab> / <pi session name>`.
   - **host:** `jumpSshHost` / `JUMP_SSH_HOST` when grammar-valid, otherwise `remote`.
   - **Herdr:** `herdr pane current` supplies canonical current ids and stable
