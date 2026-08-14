@@ -2,10 +2,17 @@
 ./bootstrap_chezmoi.sh
 **/target/*
 *.diff
-# Repo-only docs: never deploy to $HOME (would collide with ~/AGENTS.md
-# and duplicate the product README at ~/README.md).
-AGENTS.md
-README.md
+# Repo-only docs at source root. Patterns match DESTINATION names.
+# Leading slash keeps these to $HOME/AGENTS.md and $HOME/README.md;
+# a bare AGENTS.md pattern would also drop nested files (for example
+# .codex/AGENTS.md) and any other source whose target is AGENTS.md.
+# /AGENTS.md stays in git for Pi/Codex in this repo; it is not deployed.
+# Pi-global instructions are dot_pi/agent/literal_AGENTS.md -> ~/.pi/agent/AGENTS.md.
+# Do not add a source that deploys to ~/AGENTS.md: same target as this file,
+# chezmoi reports inconsistent state.
+# /README.md is the product README; do not also land it at ~/README.md.
+/AGENTS.md
+/README.md
 docs/
 .playwright-mcp/
 .claude/*
@@ -13,7 +20,6 @@ docs/
 !.claude/CLAUDE.md
 !.codex/AGENTS.md
 !.codex/config.toml
-adr/
 # Retired staging tree: Termux is first-class via profile "termux"
 # (.termux/, bin/*-jump, .ssh). Keep the git `termux/` docs/helpers, but do
 # not deploy them to ~/termux on any profile.

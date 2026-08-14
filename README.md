@@ -2,6 +2,31 @@
 
 Personal dotfiles managed with [chezmoi](https://www.chezmoi.io/) and [mise](https://mise.jdx.dev/).
 
+## Overview
+
+This repository is the **chezmoi source** for one person's machines (macOS,
+Ubuntu/WSL, and Termux). Chezmoi maps these files onto `$HOME`; mise installs
+and versions the tools. Profiles (`personal`, `axon-work-computer`, `termux`)
+select what gets deployed.
+
+Two agent-instruction files exist on purpose and must stay different:
+
+- [AGENTS.md](./AGENTS.md) — repo-only guide for work **in this tree**. Listed
+  in `.chezmoiignore`; never deployed. Chezmoi matches ignore rules against
+  **destination** names, so this file cannot coexist with a source that deploys
+  to `~/AGENTS.md` (same target; `inconsistent state`).
+- [dot_pi/agent/literal_AGENTS.md](./dot_pi/agent/literal_AGENTS.md) — deploys to
+  `~/.pi/agent/AGENTS.md`. Pi loads that agent-directory file first on every
+  session, then walks ancestors from the cwd. Source is `literal_AGENTS.md` so
+  a session whose cwd is under `dot_pi/agent/` does not also load the source
+  (same text, two paths). Do not also create `~/AGENTS.md`.
+
+Humans start at [Quick Start](#quick-start). Agents working in this repo start
+at [AGENTS.md](./AGENTS.md). Phone setup is in [termux/README.md](./termux/README.md).
+Harness internals are in [dot_local/share/agent-harness/README.md](./dot_local/share/agent-harness/README.md).
+Zellij plugin/fork notes are in [dot_config/zellij/README.md](./dot_config/zellij/README.md).
+Pi-global agent instructions are in [dot_pi/agent/literal_AGENTS.md](./dot_pi/agent/literal_AGENTS.md).
+
 ## Quick Start
 
 ```bash
@@ -163,7 +188,7 @@ Notes:
 
 - Harness-specific MCP secrets can be mapped in adapter metadata under `~/.local/share/agent-harness/adapters/<harness>/mcp-secrets.json`.
 - Secret-backed adapter metadata is resolved through the 1Password CLI via `op read`.
-- Top-level harness instruction files such as `AGENTS.md` and `CLAUDE.md` remain hand-maintained.
+- Harness instruction files are hand-maintained and split: repo [AGENTS.md](./AGENTS.md) (chezmoi source, not deployed), Pi-global [dot_pi/agent/literal_AGENTS.md](./dot_pi/agent/literal_AGENTS.md) (`~/.pi/agent/AGENTS.md`). Claude still uses `~/.claude/CLAUDE.md`; Codex still uses `~/.codex/AGENTS.md`.
 - `furi` is installed by the `mise` bootstrap task, and bootstrap registers and starts `ashwwwin/automation-mcp` so the canonical `furi` MCP entry works for both Claude and Codex after apply.
 - On macOS, `automation-mcp` also needs Accessibility and Screen Recording permissions in System Settings > Privacy & Security before its tools can fully control the machine.
 
@@ -216,16 +241,92 @@ dot_zsh_plugins.txt              # Antidote plugin list
 
 All tools install automatically via `chezmoi apply`.
 
-## Making Changes
+## Usage
+
+Edit **source** in this repository (or via `chezmoi edit` on a destination
+path). Apply to materialize `$HOME`. Onchange scripts re-run when their
+inputs change (mise bootstrap, harness apply, Pi patches, RustDesk, and so on).
 
 ```bash
 # Edit config files
 chezmoi edit ~/.zshrc
 chezmoi edit ~/.config/mise/config.toml
 
-# Apply changes (auto-runs mise bootstrap if config changed)
+# Preview, then apply (auto-runs mise bootstrap if config changed)
+chezmoi apply --dry-run --verbose
 chezmoi apply
 ```
+
+`chezmoi re-add` is a silent no-op on templated source files — change the
+`.tmpl` in this tree instead. `chezmoi diff` shows live destination on the
+**a/** side and source on **b/** (inverted from a usual source→target diff).
+
+## Docs map
+
+Root [README.md](./README.md) is the product doc (ignored from `$HOME`). Nested
+docs belong only where the subtree has its own audience or procedure.
+
+Pi auto-loads `AGENTS.md` / `AGENTS.override.md` / `CLAUDE.md` from
+`~/.pi/agent/` first, then every ancestor of the cwd (path-deduped). It does
+**not** auto-load `README.md`. Nested `AGENTS.md` in a source dir therefore
+stacks on [AGENTS.md](./AGENTS.md) and the Pi-global file whenever cwd is in
+that subtree. Use README for subtree procedure. Do not add `~/AGENTS.md`. Do
+not add a second Pi-global copy besides
+[dot_pi/agent/literal_AGENTS.md](./dot_pi/agent/literal_AGENTS.md).
+
+### Instruction files (exactly these)
+
+| File | Audience | Deployed |
+| --- | --- | --- |
+| [AGENTS.md](./AGENTS.md) | Chezmoi source operations | No |
+| [dot_pi/agent/literal_AGENTS.md](./dot_pi/agent/literal_AGENTS.md) | Every Pi session | `~/.pi/agent/AGENTS.md` |
+| [dot_claude/CLAUDE.md.tmpl](./dot_claude/CLAUDE.md.tmpl) | Every Claude Code session | `~/.claude/CLAUDE.md` |
+| [dot_codex/modify_AGENTS.md.tmpl](./dot_codex/modify_AGENTS.md.tmpl) | Codex (managed Hindsight block only) | `~/.codex/AGENTS.md` |
+
+Harness-agnostic skill/MCP procedure stays in
+[dot_local/share/agent-harness/README.md](./dot_local/share/agent-harness/README.md).
+Skills use `SKILL.md`, not `AGENTS.md`.
+
+Do not add nested `AGENTS.md`. The only agent-instruction files are the four
+in the table above.
+
+### Already present (keep)
+
+- [termux/README.md](./termux/README.md) — Termux profile / phone jump host
+- [dot_config/zellij/README.md](./dot_config/zellij/README.md) — plugins/forks
+- [dot_local/share/agent-harness/README.md](./dot_local/share/agent-harness/README.md) — skills/MCP adapters
+- [dot_local/share/pi-patches/README.md](./dot_local/share/pi-patches/README.md) — add a `patch.mjs`, `PI_CHEZMOI_PROFILE=personal` gate, state/backup paths, re-apply after `npm update -g` / mise reinstall
+- Per-patch READMEs under `dot_local/share/pi-patches/` (failure modes)
+- [dot_pi/agent/extensions/README.md](./dot_pi/agent/extensions/README.md) — authoring: tests, never capture `ctx`, `create_` vs managed files, profile gates in `.chezmoiignore`. Deploys to `~/.pi/agent/extensions/README.md` (safe: Pi ignores README).
+- Per-extension READMEs: [auto-compact](./dot_pi/agent/extensions/auto-compact/README.md), [hindsight](./dot_pi/agent/extensions/hindsight/README.md), [issue](./dot_pi/agent/extensions/issue/README.md), [ntfy](./dot_pi/agent/extensions/ntfy/README.md), [openrouter-gate](./dot_pi/agent/extensions/openrouter-gate/README.md), [pi-patch-guard](./dot_pi/agent/extensions/pi-patch-guard/README.md), [catalog-overlay-nudge](./dot_pi/agent/extensions/catalog-overlay-nudge/README.md), [goal](./dot_pi/agent/extensions/goal/README.md), [subagent](./dot_pi/agent/extensions/subagent/README.md), [web-search](./dot_pi/agent/extensions/web-search/README.md)
+- [dot_config/nvim/README.md](./dot_config/nvim/README.md) — local LazyVim overlay, not the stock starter: plugins in `lua/plugins/`, do not vendor LazyVim, refresh `lazy-lock.json` via [prompts/git-commit-chezmoi-lazylock.md](./dot_config/nvim/prompts/git-commit-chezmoi-lazylock.md)
+- [dot_pi/session-search/README.md](./dot_pi/session-search/README.md) — personal/homelab only (`ollama.internal` + claude-bridge digest). Ignored on work/termux. Do not copy onto `axon-work-computer`.
+
+### Leave without their own doc
+
+`dot_config/mise` (comments in `config.toml`), `dot_config/kitty`,
+`dot_config/lazygit`, `dot_config/herdr`, `dot_config/mcphub` (nvim MCPHub
+plugin, not agent-harness MCP), `private_dot_ssh`, `dot_local/user_scripts`,
+`Library/`, `docs/plans/` (historical), `bin/` (covered by
+[termux/README.md](./termux/README.md)), `dot_vibe/` (not a first-class
+harness), `dot_local/share/loop-engine-providers/` (untracked / incomplete).
+
+
+## Validation
+
+After editing source, confirm mapping and that apply would not surprise you:
+
+```bash
+chezmoi doctor
+chezmoi verify
+chezmoi apply --dry-run --verbose
+```
+
+`chezmoi doctor` should stay `ok` for source-dir and dest-dir. Treat a dirty
+working tree warning as informational while you still have uncommitted edits.
+`chezmoi verify` reports destinations that drifted from source. Dry-run before
+any real apply; from a non-TTY agent shell, apply needs `--force` if chezmoi
+refuses `/dev/tty`.
 
 ## Manual Steps
 
@@ -236,4 +337,5 @@ After `chezmoi apply`, only these require manual setup:
 - [macOS] Add XQuartz as login item
 - [macOS] Grant RustDesk Accessibility, Screen Recording, and, if needed, Input Monitoring permissions
 
-See [CLAUDE.md](./CLAUDE.md) for project-specific documentation.
+See [AGENTS.md](./AGENTS.md) for repository agent instructions (not deployed).
+See [dot_pi/agent/literal_AGENTS.md](./dot_pi/agent/literal_AGENTS.md) for Pi-global agent instructions.
