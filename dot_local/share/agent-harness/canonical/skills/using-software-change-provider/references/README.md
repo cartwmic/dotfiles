@@ -13,7 +13,7 @@ The frozen requirement record this crate's acceptance suite traces to (R1–R27,
 
 Per-run obligations live in immutable initial input. The provider is called by Loop Engine; it does not discover or load a config profile by itself.
 
-Drive a run with [SKILL.md](../SKILL.md).
+Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a run with [skills/using-software-change-provider/SKILL.md](skills/using-software-change-provider/SKILL.md).
 
 ## Setup
 
@@ -54,7 +54,7 @@ ENGINE=target/debug/loop-engine
 PROVIDER_CONFIG="/absolute/path/to/your/providers.toml"
 ```
 
-Copy each selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. Omit `artifact_root` from that copy in the usual case so the engine allocates the durable directory, then run the matching command:
+Copy each selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. Omit `artifact_root` from that copy in the usual case so the engine allocates the durable directory. Shipped profiles contain `work_slot_bindings`; confirm that map with the user and run `loop-engine preview-bindings` before `start`. Then run the matching command:
 
 ```sh
 DATA_ROOT="$HOME/.local/share/software-change-provider"
@@ -118,6 +118,8 @@ These are the shipped files consumed by provider tests, guidance, and review pro
 
 The profiles configure the same five policy gates: `intent` (`explore → design`), `design-review`, `plan-review`, `implementation-review`, and `validation`. `minimal` keeps only `validation`/`intent-delivered`; `standard` supplies the standard intent, design-review, and validation axes; `high-rigor` supplies all shipped axes and requires two distinct reviewers for design-review and validation axes.
 
+Shipped profiles freeze `implement` to `software-change` args `[run-plan-graph]` (inner worker defaults to `pi --print --no-skills --no-extensions`; that default must not pass `--no-context-files` and does not pass `--tools`). They omit `design-review`, `plan-review`, and `implementation-review` from `work_slot_bindings` (those rooms stay driver-performed). A usable review binding is caller-supplied `--worker` objects frozen at `start` after `loop-engine preview-bindings` and lock-in. Copying a profile is not model lock-in.
+
 ### Artifact templates
 
 - [`crates/software-change-provider/data/templates/intent.md`](data/templates/intent.md)
@@ -163,7 +165,7 @@ Inspect `initial_input.review_policies` and `initial_input.artifact_schemas` the
 
 For checked transitions, evaluation performs deterministic schema and link checks before consulting review evidence. Missing or unparseable expected artifacts produce a schema denial; invalid or inaccessible artifact roots produce an evaluation error. Evidence denials identify unsatisfied policy axes. Check-free `revise` transitions do not require provider evaluation.
 
-See [`docs/agent-usage.md`](../../using-loop-engine/references/agent-usage.md) for the complete Loop Engine command surface and JSON outcome handling.
+See the repository file `docs/agent-usage.md` for the complete Loop Engine command surface and JSON outcome handling.
 
 ## Candidate identity and supplied calibration data
 

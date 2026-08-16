@@ -14,7 +14,7 @@ The provider does not invoke models, fetch the web, or judge semantic truth. Cal
 
 Per-run obligations live in immutable initial input. The provider is called by Loop Engine; it does not discover or load a config profile by itself.
 
-Drive a run with [SKILL.md](../SKILL.md).
+Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a run with [skills/using-research-provider/SKILL.md](skills/using-research-provider/SKILL.md).
 
 ## Setup
 
