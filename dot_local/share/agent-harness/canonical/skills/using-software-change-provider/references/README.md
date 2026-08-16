@@ -79,12 +79,12 @@ cp "$DATA_ROOT/crates/software-change-provider/data/configs/high-rigor.json" /tm
 The repository-owned journey runner has one contract with two adapters:
 
 ```sh
-python3 scripts/production-journey.py \
+python3 scripts/software-change-journey.py \
   --mode source \
   --engine target/debug/loop-engine \
   --provider target/debug/software-change \
   --data-root "$PWD" \
-  --work-root "${TMPDIR:-/tmp}/loop-engine-production-journey" \
+  --work-root "${TMPDIR:-/tmp}/loop-engine-software-change-journey" \
   --profile crates/software-change-provider/data/configs/high-rigor.json \
   --traversal-depth full
 ```
@@ -94,7 +94,7 @@ Source full mode uses separate engine processes for every operation, explicit pr
 Packaged smoke accepts extracted `loop-engine` and `software-change` paths, calls `software-change data-dump` into an empty root, and uses only the dumped high-rigor profile and fixtures:
 
 ```sh
-python3 scripts/production-journey.py \
+python3 scripts/software-change-journey.py \
   --mode packaged \
   --engine /path/to/extracted/loop-engine \
   --provider /path/to/extracted/software-change \
@@ -159,11 +159,7 @@ Use the engine's provider-free `show` operation after `start` and before each ev
 "$ENGINE" --json show RUN_ID
 ```
 
-Inspect `initial_input.review_policies` and `initial_input.artifact_schemas` there. `show` is the durable handoff for run-frozen obligations; changing a source profile does not change an existing run. Follow state guidance, append external review records with `append` using [`crates/software-change-provider/data/reviewer-protocol.md`](data/reviewer-protocol.md), and request events with `event` rather than targeting states directly. Usual-case `append` omits `--database`:
-
-```sh
-"$ENGINE" --json append RUN_ID review-evidence @verdict.json
-```
+Inspect `initial_input.review_policies` and `initial_input.artifact_schemas` there. `show` is the durable handoff for run-frozen obligations; changing a source profile does not change an existing run. Follow state guidance, append external review records with `append` using [`crates/software-change-provider/data/reviewer-protocol.md`](data/reviewer-protocol.md), and request events with `event` rather than targeting states directly.
 
 For checked transitions, evaluation performs deterministic schema and link checks before consulting review evidence. Missing or unparseable expected artifacts produce a schema denial; invalid or inaccessible artifact roots produce an evaluation error. Evidence denials identify unsatisfied policy axes. Check-free `revise` transitions do not require provider evaluation.
 

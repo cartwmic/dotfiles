@@ -65,11 +65,7 @@ cp "$DATA_ROOT/crates/research-provider/data/configs/standard.json" /tmp/researc
   start research "@/tmp/research-standard.json" "research (standard)"
 ```
 
-`start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. Once the run exists, `show` reveals the allocated (or caller) `artifact_root` inside object `initial_input`. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Subject files use the fixed filenames expected by the selected schema: `brief.json`, `sources.json`, `verification.json`, and `report.json`. Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`. Pass a nonempty `artifact_root` only to isolate files to a caller-chosen absolute existing directory. Usual-case `append` omits `--database`:
-
-```sh
-"$ENGINE" --json append RUN_ID review-evidence @verdict.json
-```
+`start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. Once the run exists, `show` reveals the allocated (or caller) `artifact_root` inside object `initial_input`. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Subject files use the fixed filenames expected by the selected schema: `brief.json`, `sources.json`, `verification.json`, and `report.json`. Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`. Pass a nonempty `artifact_root` only to isolate files to a caller-chosen absolute existing directory.
 
 ## Validation
 
