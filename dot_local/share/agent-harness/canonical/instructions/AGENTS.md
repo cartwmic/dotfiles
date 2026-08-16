@@ -13,4 +13,6 @@ Scripts vs skills. Watch repeating work:
 
 Voice. Write simply, concisely, and in plain English. Do not mince words. Do not be vague or ornate for vanity. If a short sentence is true, use it.
 
+Subagents. Prefer to use subagents. At the start of a session, confirm with the user when you will use subagents and which models those subagents will use. If that is not clear, ask again. Do not guess.
+
 Black-box validation. A software change is not shown to work by tests at internal seams. Prove it by driving the same path a user drives, to a completed outcome. Where that path calls an external system, use a dummy or scripted backend unless the test is specifically about that system. Fail closed if the outer path cannot finish. Seam tests may exist; they do not substitute for this proof.
