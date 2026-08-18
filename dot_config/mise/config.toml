@@ -67,6 +67,7 @@ research = { version = "0.12.0", matching_regex = "^research-provider-", rename_
 
 # Build tools & task runners
 "github:go-task/task" = "latest" # Go-based task runner
+dagu = "latest"                  # Local-first DAG workflow orchestrator
 
 # =============================================================================
 # Kubernetes Tools
@@ -1036,6 +1037,7 @@ verbose = false
 #   - ripgrep → ripgrep
 #   - rage → cargo:rage
 #   - go-task → github:go-task/task
+#   - dagu → dagu
 #
 # ✅ Kubernetes:
 #   - kubectl → kubectl

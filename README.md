@@ -91,7 +91,7 @@ chezmoi init --apply git@github.com:cartwmic/dotfiles.git
 - Kubernetes: kubectl, k9s, helm, kustomize, kubeseal
 - Containers: Docker Desktop on macOS; Docker Engine, Compose, and Buildx on Ubuntu
 - Infrastructure: terraform
-- Utilities: ripgrep, jq, yq, task
+- Utilities: ripgrep, jq, yq, task, dagu
 
 **AI Tools:**
 
