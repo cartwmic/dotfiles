@@ -1,13 +1,14 @@
 # House voice excerpts
 
-Verbatim passages from documents the repository owner wrote, grouped by register. Use as
-exemplars under the Establish Voice step in [SKILL.md](SKILL.md); the derived rules are in
-[voice-profile.md](voice-profile.md).
+Verbatim passages from documents and team-channel posts the repository owner wrote,
+grouped by register. Use as exemplars under the Establish Voice step in
+[SKILL.md](SKILL.md); the derived rules are in [voice-profile.md](voice-profile.md).
 
-Internal service names, regions, tables, and product terms are genericised — `ServiceA`,
-`ServiceB`, `R1`, `the tracker`. Sentence structure, punctuation, hedging, and typos are
-unchanged, because those carry the voice and the proper nouns do not. Where an excerpt's
-value was its shape rather than its content, only the shape is given.
+Internal service names, regions, tables, product terms, colleague names, and company
+names are genericised — `ServiceA`, `ServiceB`, `R1`, `the tracker`, `[stakeholder]`,
+`[the company]`. Sentence structure, punctuation, hedging, and typos are unchanged,
+because those carry the voice and the proper nouns do not. Where an excerpt's value was
+its shape rather than its content, only the shape is given.
 
 Do not copy these sentences into a document. Match their construction.
 
@@ -59,9 +60,9 @@ Anticipates the obvious objection and answers it with a reusable-core argument.
 
 Endorses the weaker behaviour openly by tying it to an already accepted tolerance.
 
-> We have ~9 weeks until [deadline]. The lowest estimate solution is 24 (16 backend) weeks. The simpler the better even with multiple engineers working on it.
+> We have [time remaining] until [deadline]. The lowest estimate solution is [total estimate] ([backend estimate]) weeks. The simpler the better even with multiple engineers working on it.
 
-Rough numbers and a compressed maxim, letting schedule pressure override architectural purity.
+Rough numbered estimates and a compressed maxim, letting schedule pressure override architectural purity. Values placeholdered; keep the construction.
 
 > Answer - likely doesn't matter but will need to troubleshoot come implementation
 
@@ -151,7 +152,7 @@ Exact endpoints, a parenthetical duration, then impact bounded on both sides wit
 
 States the uncomfortable finding plainly, substantiates recurrence before assigning follow-through failure, and names no individual. The `his` for `this` typo is his.
 
-> The above abbreviated history illustrates the inconsistent ownership of the service which, in large part, motivated the creation of the current team.
+> The above abbreviated history illustrates the inconsistent ownership of the service which, in large part, motivated [a later ownership change].
 
 Blunt organisational criticism, cushioned by "abbreviated" and "in large part".
 
@@ -163,7 +164,7 @@ Gives a wrong call the benefit of what was known at the time. Rule V11.
 
 Admits a capability gap without euphemism, then elevates it from a team deficiency to a system-design mismatch.
 
-> The context around [the deprioritised project] is important to understand because it clarifies where engineering effort has been spent in the last 2 years
+> The context around [the deprioritised project] is important to understand because it clarifies where engineering effort has been spent over [a multi-year period]
 
 Justifies a digression before taking it, rather than apologising for it.
 
@@ -183,3 +184,65 @@ Closing of a review — a short deficit inventory, no synthesis:
 > - [The service] may not be following best practices given it's age
 
 The most critical item is hedged with "may", and the list simply stops.
+
+---
+
+## Casual status and alignment
+
+Team-channel updates, not documents. Same weight as the registers above for voice.
+Different register: do not carry emoji, word-level italics, or thank-you closers into
+specifications, designs, or incident reviews.
+
+Shape of a status update — reuse the shape, not the work items:
+
+> Update for those curious:
+> • Met with [stakeholder] last week to go over the PRD draft I had for the [review] automation I've named `ProjectA`
+> • [stakeholder] had a lot of good feedback on improvements I could make, things I could naildown/explore, people and prior art I could reach out to and investigate.
+> • So far this week I've been working on that feedback and integrating it into a new draft of the PRD that I will post when it's ready.
+> • In the meantime, [stakeholder] and I have mutually agreed that some general purpose "[Review] Draft" evaluation framework/harness is merited on its own regardless of how `ProjectA` eventually is implemented. I will start on this harness tomorrow
+> • The goal after the harness is in place is to begin evaluating existing [review] drafting solutions at [the company], then prototype a basic version of `ProjectA`, then compare the results.
+
+Opens by selecting a voluntary audience. Bullets are a sequence of done / feedback /
+in progress / decision / next, not a labelled list. First person is how owned work is
+reported. No recap after the last bullet.
+
+> things I could naildown/explore, people and prior art I could reach out to and investigate.
+
+Slash-fused informal compound, including a spelling that is not "nail down". Leave it.
+The tail is a longer coordinated phrase, not a matching triple.
+
+> I will start on this harness tomorrow
+
+Dated commitment in ordinary language, attached to the decision bullet with no period
+between them. Do not promote it to a timeline heading.
+
+> Summary of my alignment with [colleague] from the misunderstanding at the sync meeting:
+
+Names the miss in the opener. No apology, no recast as a "key takeaway".
+
+> Think of the situation "`ProjectA` drafts good [reviews], I just used it to draft my [review] and passed through the workflow's quality gates with flying colors, let me just jump straight in to review meetings!". The author then gets destroyed in their review meetings because they can't defend the claims/narrative/RCA in the [review] that was drafted.
+
+Invented situation in the speaker's voice, then a blunt consequence. "in to" and
+"gets destroyed" are his. This is not a dramatic colon reveal, and it is not
+incident-review language — do not import "gets destroyed" into that register.
+
+> [colleague] is suggesting adding explicit tooling/support in `ProjectA` to help substitute the implicit understanding an author gets from drafting their own [review]. E.g. a guided "understand the [review] to be able to defend it and explain it yourself" step of the `ProjectA` workflow
+> I agree with this take and will incorporate it as such in the PRD soon here. Thank you [colleague] :)
+
+Attributes the point, then agrees in first person. "E.g." not "For example". The
+thank-you plus small emoji is a real closer, not a polished flourish — do not strip
+it from casual writing, and do not add it to a document.
+
+> `ProjectA` isn't pretending to help manage follow through of action items, that's a separate issue, but there _should_ be tooling and gates in place to help guide authors through how to help ensure good active ownership of action items that come from the [reviews] drafted via `ProjectA`.
+
+Scope said as "isn't pretending to", then the obligation. Italics on the one contested
+word. In documents the same job is scare quotes or a defining clause.
+
+> More specifically, the _active_ ownership of those action items.
+
+Italics pick the adjective under dispute, not the whole phrase.
+
+> I will also add this into the prd going as well. Thank you [colleague] :)
+
+Lowercase "prd", and "going as well" is slightly broken. Leave both. The thank-you
+repeats; it is not a recap paragraph.
