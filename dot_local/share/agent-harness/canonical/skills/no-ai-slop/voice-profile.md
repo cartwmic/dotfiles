@@ -7,7 +7,13 @@ rather than generated. Pair with [voice-excerpts.md](voice-excerpts.md).
 Derived from six documents the owner wrote himself: an opinionated tooling comparison, an
 evaluation-metrics specification, a system design produced under deadline, a cross-service
 systems explainer, and two post-incident reviews. Each document was analysed independently
-with no access to the others. Only traits that converged across analyses appear here.
+with no access to the others. Only traits that converged across those analyses appear as
+general rules.
+
+A fifth register, casual / status, comes from two team-channel posts the owner supplied
+as equal-weight voice evidence. Those posts were not part of the original six-way analysis
+and have not been counted. Traits unique to them are scoped to that register and must not
+be imported into the document registers.
 
 Internal service names, regions, and product terms in the excerpts are genericised.
 Sentence shape is preserved verbatim, because shape is what carries voice.
@@ -31,7 +37,7 @@ tendencies as universals and once for structural rules that did not survive coun
 a heading less navigable, or push a substantive claim into an aside, the document's job
 wins and the rule loses. This profile is evidence about one writer, not a style authority.
 
-## 0. Three registers, not one
+## 0. Registers, not one voice
 
 Treating this as a single style produces the wrong output. The measured split:
 
@@ -41,16 +47,47 @@ Treating this as a single style produces the wrong output. The measured split:
 | Specification | almost none, 1:15.8 | frequent em dash and colon | 15 w |
 | Design / decision | 81% impersonal, `we` common, `I` rare | rare | 14.5 w |
 | Incident review | zero `I`, `we` only subordinated | none | 14–19 w |
+| Casual / status | heavy `I` for owned work and commitments | none observed | bullets; short-to-medium |
 
 Match the register before matching anything else. A PRD or design doc sits between design
 and specification: impersonal by default, `we` for commitments, `I` only for a judgment
 being personally staked.
 
+Casual / status is for team-channel updates, alignment notes, and similarly informal
+owned-work writing. It is not a document style. Do not import its emoji, word-level
+italics, thank-you closers, or phrasing like "gets destroyed" into specifications,
+designs, or incident reviews. Do not rewrite a status update into the impersonal
+document register to satisfy the document rules.
+
+Traits unique to casual / status, from the two owner-supplied posts:
+
+- Opens with a one-line purpose fragment (`Update for those curious:`, `Summary of my
+  alignment with [colleague] from the misunderstanding at the sync meeting:`) rather than
+  a heading that recasts the miss.
+- Others' points are attributed, then agreed with. He does not absorb them as his insight.
+- Italics mark the one word under dispute (`_understandings_`, `_active_`, `_should_`).
+  In documents the same job is scare quotes or a defining clause.
+- A quoted invented situation makes a failure mode concrete, then a blunt consequence
+  follows.
+- Slash-fused informal compounds (`naildown/explore`, `framework/harness`,
+  `claims/narrative/RCA`) — V12, rougher, including spellings that are not the dictionary
+  form.
+- Scope said as "isn't pretending to X, that's a separate issue, but there _should_ be Y".
+- Ends with a real thank-you and a small emoji, not a recap. This is not a polished
+  closing flourish and must not be stripped as one.
+- Commitments are dated in ordinary language ("I will start on this harness tomorrow",
+  "in the PRD soon here").
+
 ## 1. Rules
 
-**V1. `I` appears only where a claim is contestable and he is owning it.** Not for
-narration, not for softening. Everywhere else the subject is the system, the team, or the
-work.
+**V1. In document registers, `I` appears only where a claim is contestable and he is
+owning it.** Not for narration, not for softening. Everywhere else the subject is the
+system, the team, or the work.
+
+**In casual / status writing, `I` is the default for owned work, commitments, and
+alignment.** "I've been working on that feedback", "I will start on this harness
+tomorrow", "I agree with this take". Do not strip first person from a status update to
+satisfy the document rule.
 
 **V2. Absolutes are rare and usually earned** *(measured)*. In the specification, `always`
 appears 0 times, `never` twice, `must` twice — and one `never` is a genuine contract
@@ -70,7 +107,9 @@ a confidence score. Not present in every document: the specification carries no 
 freshness date.
 
 **V6. Endings narrow, they do not swell** *(reported)*. Documents end by reducing their own
-claim or simply stopping. No recap, no call to action, no closing flourish.
+claim or simply stopping. No recap, no call to action, no closing flourish. Casual /
+status writing may end in a genuine thank-you plus a small emoji; that is not a recap or
+a kicker, and it must be left alone.
 
 **V7. Parentheses carry the candid part** *(measured: 22.9 per 1,000 words, though many also
 carry plain schema mechanics rather than candour)*. The
@@ -85,14 +124,17 @@ plan-following execution`). In specifications they are plain labels (`Design Pri
 `Metrics`). Match the register, and never trade a navigable heading for a rhetorical one.
 
 **V10. Rough edges survive.** Occasional `it's` for `its`, run-on sentences, subjectless
-fragments. Working prose, not copy-edited prose. Do not introduce errors deliberately, but
-do not sand every sentence to the same finish either.
+fragments, fused spellings (`naildown/explore`), lowercase mid-stream (`prd`), slightly
+broken closers (`into the prd going as well`). Working prose, not copy-edited prose. Do
+not introduce errors deliberately, but do not sand every sentence to the same finish
+either.
 
 **V11. In incident writing, accountability lands on roles and systems, never people.**
 Wrong calls get the benefit of what was known at the time. No moral vocabulary.
 
 **V12. Slash compression instead of spelling out a distinction** *(measured)*.
-"users/customers", "who/when/how", "low risk/priority".
+"users/customers", "who/when/how", "low risk/priority". Casual writing runs this
+rougher: "naildown/explore", "framework/harness", "claims/narrative/RCA".
 
 **V13. Tables carry repeated comparable records; prose keeps its enumerations** *(measured,
 revised)*. Catalogs with one row per item live in tables. Prose enumerations coexist with
@@ -156,12 +198,15 @@ Treat any of these appearing in a draft as a defect to fix.
   Where something matters, say what breaks.
 - **Dramatic colon reveals.** Colons introduce lists and contracts only.
 - **Symmetrical concession blocks.**
-- **Polished closing flourish, recap, or call to action.**
+- **Polished closing flourish, recap, or call to action.** Casual / status writing may
+  end with a genuine thank-you plus a small emoji; leave that. Do not add it to a
+  document, and do not treat it as this anti-pattern.
 - **External citations or appeals to authority.** Support is internal: tickets, prior art,
   stakeholder acceptance, measured estimates.
 - **Probabilistic confidence language.** Ranges, buffers, `~`, and invented 1–5 scales are
   in character; confidence percentages are not.
-- **Emotional or apologetic register in incident writing.**
+- **Emotional or apologetic register in incident writing.** Casual warmth (a thank-you,
+  "gets destroyed") is register-bound and must not migrate here.
 
 ## 3. Checks
 
@@ -186,6 +231,6 @@ requirements list is how a stylistic pass starts damaging obligations.
 | Parentheses / 1k words | 22.9 | qualification only, never content |
 | Em dashes / 1k words | 15.6 in this specification, 0 in opinion and incident writing | register-dependent; ask before adding |
 | Sentence-length spread (stdev) | 13.9 | unstable across tokenizers; inspect, do not gate |
-| First-person `I` | 0 in specifications | only at a contestable judgment, and not in an accepted requirements document |
-| Final paragraph | — | narrows the claim or stops; no kicker |
+| First-person `I` | 0 in specifications | only at a contestable judgment, and not in an accepted requirements document. Casual / status: expected for owned work; do not strip |
+| Final paragraph | — | narrows the claim or stops; no kicker. Casual / status: a thank-you plus small emoji is allowed |
 | Concessions | — | one clause, not a mirrored paragraph |
