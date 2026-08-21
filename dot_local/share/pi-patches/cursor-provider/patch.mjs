@@ -1,25 +1,20 @@
 #!/usr/bin/env node
 // chezmoi-pi-patch:cursor-provider
 //
-// Idempotently customizes the pi-loaded @marckrenn/pi-sub-{shared,core,bar}
-// tree so the usage widget can render a Cursor billing-cycle row. Drops
-// payload/cursor.ts into pi-sub-core and splices the closed provider unions
-// plus a monthly-cap control that writes core providers.cursor.monthlyCapDollars
-// (the same field the fetcher reads; not a second store).
+// RETIRED. Both chezmoi profiles load https://github.com/cartwmic/pi-sub, which
+// has an in-tree Cursor provider. Desired state is unpatched on every profile,
+// including axon-work-computer: restore leftover splices from backups / reverse
+// the closed-union edits, and remove dropped cursor.ts. Do not apply the splice.
 //
-// PROFILE GATE: desired patched state only when PI_CHEZMOI_PROFILE is
-// axon-work-computer. On any other value including unset, restores spliced
-// files from backups and removes the dropped cursor.ts.
-//
-// Targets are the agent-npm copies under ~/.pi/agent/npm/node_modules/@marckrenn
-// (the tree pi actually loads). Never a disconnected global npm copy and never
-// pi-coding-agent dist/.
+// EDITS_BY_FILE and payload/cursor.ts remain so restore can reverse a leftover
+// work-machine splice. Targets are leftover agent-npm copies under
+// ~/.pi/agent/npm/node_modules/@marckrenn if that tree still exists.
 //
 // Usage:
 //   node patch.mjs [--check]
 //
-//   --check   Verify state without making changes; exit non-zero if the
-//             install is not in the desired state for the active profile.
+//   --check   Verify without writes; exit non-zero if splices or dropped
+//             cursor.ts are still present.
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -58,7 +53,8 @@ const fail = (msg) => {
 
 const checkOnly = process.argv.includes("--check");
 const profile = process.env.PI_CHEZMOI_PROFILE ?? "";
-const wantPatched = profile === "axon-work-computer";
+// Retired: never splice. Restore leftovers on every profile, including work.
+const wantPatched = false;
 
 const T = (n) => "\t".repeat(n);
 
@@ -648,20 +644,20 @@ log(`drop target: ${dropPath}`);
 
 const versions = getInstalledVersions();
 
-// ─── Gate: profile is NOT axon-work-computer → desired state is UNPATCHED ──
+// ─── Desired state is UNPATCHED on every profile (patch retired) ──────
 
 if (!wantPatched) {
 	const spliceHasMarker = files.some((file) => readFileSync(file.path, "utf8").includes(MARKER_PREFIX));
 	const dropExists = existsSync(dropPath);
 	if (checkOnly) {
-		if (spliceHasMarker) fail(`profile '${profile || "(unset)"}' ≠ axon-work-computer but spliced files are patched`);
-		if (dropExists) fail(`profile '${profile || "(unset)"}' ≠ axon-work-computer but ${dropPath} exists`);
-		log("profile ≠ axon-work-computer; targets unpatched as expected");
+		if (spliceHasMarker) fail(`desired state is unpatched but spliced files are patched (profile=${profile || "(unset)"})`);
+		if (dropExists) fail(`desired state is unpatched but ${dropPath} exists (profile=${profile || "(unset)"})`);
+		log("retired: targets unpatched as expected on every profile");
 		process.exit(0);
 	}
 	if (!spliceHasMarker && !dropExists) {
-		log("profile ≠ axon-work-computer; nothing to do");
-		writeStateFile({ status: "unpatched", target: dropPath, reason: `profile=${profile || "(unset)"}` });
+		log("retired: nothing to restore; already unpatched");
+		writeStateFile({ status: "unpatched", target: dropPath, reason: `retired profile=${profile || "(unset)"}` });
 		process.exit(0);
 	}
 	for (const file of files) {
@@ -669,15 +665,18 @@ if (!wantPatched) {
 		if (!original.includes(MARKER_PREFIX)) continue;
 		const restored = restoreFromBackupOrReverse(file.path, original, file.edits);
 		if (restored !== original) writeValidated(file.path, restored);
-		log(`profile ≠ axon-work-computer; restored ${file.path}`);
+		log(`retired: restored ${file.path}`);
 	}
 	if (existsSync(dropPath)) {
 		unlinkSync(dropPath);
-		log(`profile ≠ axon-work-computer; removed dropped ${dropPath}`);
+		log(`retired: removed dropped ${dropPath}`);
 	}
-	writeStateFile({ status: "unpatched", target: dropPath, reason: `profile=${profile || "(unset)"}` });
+	writeStateFile({ status: "unpatched", target: dropPath, reason: `retired profile=${profile || "(unset)"}` });
 	process.exit(0);
 }
+
+// Unreachable: wantPatched is always false. Left in place so EDITS_BY_FILE can
+// still reverse a leftover splice; do not set wantPatched back to a profile gate.
 
 // ─── Gate: profile IS axon-work-computer → desired state is PATCHED ────────
 
