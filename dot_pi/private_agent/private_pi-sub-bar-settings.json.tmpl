@@ -4,24 +4,14 @@
 
   Read the live file (the widget writes the rest of the document) so chezmoi
   apply does not clobber other keys — same pattern as lastChangelogVersion in
-  private_settings.json.tmpl. Caps and membership come only from chezmoi data
-  and this template; they are never compiled into pi-sub TypeScript.
+  private_settings.json.tmpl. Membership, remaining-versus-spend, and percent-
+  versus-dollars live only here. Cursor dollar caps come from the Cursor API
+  (capAmount), never from chezmoi data or compiled pi-sub constants.
 */ -}}
-{{- if not (hasKey . "cursorSubscriptionCapDollars") -}}
-{{-   fail "data.cursorSubscriptionCapDollars is required: a positive Cursor included-cap in dollars. Set it in ~/.config/chezmoi/chezmoi.yaml" -}}
-{{- end -}}
-{{- $cap := .cursorSubscriptionCapDollars -}}
-{{- if not (or (kindIs "int" $cap) (kindIs "int64" $cap) (kindIs "int32" $cap) (kindIs "uint" $cap) (kindIs "uint64" $cap) (kindIs "float64" $cap) (kindIs "float32" $cap)) -}}
-{{-   fail "data.cursorSubscriptionCapDollars must be a positive number of dollars" -}}
-{{- end -}}
-{{- if le (float64 $cap) 0.0 -}}
-{{-   fail "data.cursorSubscriptionCapDollars must be a positive number of dollars" -}}
-{{- end -}}
-{{- $cursorDisplay := "remaining" -}}
+{{- $cursorItem := dict "provider" "cursor" "display" "remaining" "unit" "percent" -}}
 {{- if eq .profile "axon-work-computer" -}}
-{{-   $cursorDisplay = "spend" -}}
+{{-   $cursorItem = dict "provider" "cursor" "display" "remaining" "unit" "dollars" -}}
 {{- end -}}
-{{- $cursorItem := dict "provider" "cursor" "display" $cursorDisplay "cap" $cap -}}
 {{- $metricSet := list $cursorItem -}}
 {{- if eq .profile "personal" -}}
 {{-   $metricSet = list $cursorItem (dict "provider" "anthropic" "display" "remaining") (dict "provider" "codex" "display" "remaining") -}}

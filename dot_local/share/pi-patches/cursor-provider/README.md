@@ -29,9 +29,10 @@ to be a runtime customization of the upstream widget: drop `payload/cursor.ts`
 and splice closed provider unions. Widget upgrades wiped that tree, and the
 splice could not be the shared vehicle for personal remaining plus work spend.
 
-The fork replaces that path. Caps live in chezmoi data
-(`cursorSubscriptionCapDollars`) interpolated into each profile's `metricSet`,
-not in this patch and not as compiled pi-sub constants.
+The fork replaces that path. Cursor remaining percent and spend dollars come
+from Cursor dashboard APIs (`/api/usage-summary`, team/hard-limit, aggregated
+events). Profile `metricSet` chooses remaining percent vs remaining dollars;
+there is no chezmoi dollar cap and no compiled pi-sub constant.
 
 ## What the leftover payload still contains
 
