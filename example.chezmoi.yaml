@@ -21,14 +21,6 @@ data:
   # notification title so a phone tap can focus the matching Termux session and
   # ssh the right ControlMaster. Examples: remote, cartwmic-server, macbook, laptop.
   # jumpSshHost: "macbook"
-  #
-  # Required on personal and axon-work-computer: this machine's included
-  # Cursor subscription cap in dollars. Must be a positive number. Chezmoi
-  # interpolates it as the Cursor metricSet cap (remaining on personal,
-  # spend on work). There is no compiled default; omitting the key fails
-  # template render so Cursor is not silently dropped from the usage line.
-  # Set cursorSubscriptionCapDollars in the machine-local
-  # ~/.config/chezmoi/chezmoi.yaml — do not copy a numeric value here.
 
 hooks:
   read-source-state:
