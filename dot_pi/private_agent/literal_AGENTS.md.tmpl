@@ -32,6 +32,13 @@ naming, apply, profiles, and other repo operations.
 - This home is a personal machine with a public dotfiles repo. Treat every
   working tree as potentially publishable unless that repo’s own docs say
   otherwise.
+{{- if eq .profile "personal" }}
+- Risk tolerance is high. This is personal, one-person software: good enough
+  is the bar. It does not need to be perfect, large-scale, production-grade
+  secure, or resilient. Nobody else is going to try to break or misuse it.
+  Theoretical attack, hostile operators, and enterprise hardening are out of
+  scope unless they already fail in ordinary single-user use.
+{{- end }}
 - Hindsight (MCP `hindsight`) is shared across Pi, Claude Code, and Codex.
   Honor recall/retain/reflect rules from that server’s contract. In Pi,
   auto-recall may inject `<hindsight_memories>` — use it; do not re-recall
