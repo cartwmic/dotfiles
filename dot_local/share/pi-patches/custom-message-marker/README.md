@@ -26,14 +26,15 @@ payload for a turn is:
 ```
 
 For **stateless** providers (anthropic, openai) this is harmless — they receive
-the whole array each turn. But **stateful** adapters whose upstream requires
-strict `user → assistant` alternation cannot cope. The
-[`pi-cursor-provider`](https://github.com/cartwmic/pi-cursor-provider) proxy
-translates the OpenAI request into Cursor's protobuf/turn protocol; its
-`parseMessages` treats the **last** user message as the current prompt and
-demotes everything before it into history. Result: the injected context block
-is sent as the prompt and the **real user message is silently lost** — every
-first turn and every post-compaction turn.
+the whole array each turn. But **turn-oriented** adapters that translate the
+message array into Cursor's protobuf/turn protocol cannot cope. The
+[`cartwmic/pi-cursor`](https://github.com/cartwmic/pi-cursor) fork (of
+[Rahularya01/pi-cursor](https://github.com/Rahularya01/pi-cursor)) parses the
+**last** user message as the current prompt and demotes everything before it
+into history. Result without the marker: the injected context block is sent as
+the prompt and the **real user message is silently lost** — every first turn
+and every post-compaction turn. (The retired
+`cartwmic/pi-cursor-provider` proxy had the same last-user-wins parsing.)
 
 The discriminator that would fix this — `customType` — is exactly what
 `convertToLlm` throws away.
@@ -52,15 +53,17 @@ const content = [
 ```
 
 Adapters can then detect injected context by a stable marker instead of
-guessing per-extension header strings. The cursor fork's `parseMessages`
-coalesces any `<injected-context>`-wrapped trailing user message into the
-preceding real turn, while genuine consecutive user messages (e.g. an
-interrupt: "interrupt me" then "continue") are **not** wrapped and keep the
-normal last-turn-wins behavior. Stateless providers just see the bracketed
-text — cosmetically clarifying, functionally inert.
+guessing per-extension header strings. The cursor fork's context
+normalization treats any `<injected-context>`-marked user message as
+side-channel context and folds it into the system prompt, while genuine
+consecutive user messages (e.g. an interrupt: "interrupt me" then "continue")
+are **not** wrapped and keep the normal last-turn-wins behavior. Stateless
+providers just see the bracketed text — cosmetically clarifying, functionally
+inert.
 
 This is the pi-core half of the fix; the companion half lives in the cursor
-fork (`INJECTED_CONTEXT_OPEN_TAG` in `proxy.ts`). **Keep the open tag
+fork (`SIDE_CHANNEL_BLOCK_START` / `isContextModeSideChannelText` in
+`src/stream/context-normalize.ts`, commit `832f434`). **Keep the open tag
 (`<injected-context>`) in sync between the two.**
 
 ## Scope
@@ -81,8 +84,10 @@ fork (`INJECTED_CONTEXT_OPEN_TAG` in `proxy.ts`). **Keep the open tag
 
 ## Related
 
-- Fork: <https://github.com/cartwmic/pi-cursor-provider> (companion coalesce +
-  native `summarizeAction` compaction).
+- Fork: <https://github.com/cartwmic/pi-cursor> (companion side-channel fold;
+  fork of <https://github.com/Rahularya01/pi-cursor>).
+- Retired: <https://github.com/cartwmic/pi-cursor-provider> (previous proxy
+  provider; carried the original coalesce companion in `proxy.ts`).
 - Upstream candidate: preserve `customType` (or a marker) through
   `convertToLlm` so stateful adapters don't need this — would obsolete both
   halves.
