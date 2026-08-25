@@ -4,13 +4,14 @@
 // Wraps extension-injected `custom` messages (hindsight memories, goals, etc.)
 // in <injected-context> ... </injected-context> tags inside pi-core's
 // convertToLlm(). pi flattens custom messages to role:"user" and drops the
-// customType, so a stateful provider adapter (e.g. pi-cursor-provider, whose
-// upstream requires strict user->assistant alternation) cannot tell injected
-// context apart from a real user turn — it mistakes the trailing injected block
-// for the current prompt and demotes the real prompt into history. This marker
-// restores that lost signal structurally: the cursor fork coalesces any
-// <injected-context>-wrapped trailing user message into the preceding real
-// turn, while genuine consecutive user messages (interrupts) stay untouched.
+// customType, so a turn-oriented provider adapter (e.g. the cursor provider,
+// whose upstream is user-turn oriented) cannot tell injected context apart
+// from a real user turn — it mistakes the trailing injected block for the
+// current prompt and demotes the real prompt into history. This marker
+// restores that lost signal structurally: the cursor fork
+// (cartwmic/pi-cursor, context-normalize.ts) treats <injected-context>
+// blocks as side-channel context and folds them into the system prompt,
+// while genuine consecutive user messages (interrupts) stay untouched.
 // Stateless providers simply see the bracketed text.
 //
 // Applied on ALL profiles (no profile gate). See README.md.
@@ -40,8 +41,9 @@ const fail = (msg) => {
 
 const checkOnly = process.argv.includes("--check");
 
-// Keep the open tag in sync with INJECTED_CONTEXT_OPEN_TAG in the
-// pi-cursor-provider fork's proxy.ts.
+// Keep the open tag in sync with the <injected-context> marker in
+// SIDE_CHANNEL_BLOCK_START / isContextModeSideChannelText in the
+// cartwmic/pi-cursor fork's src/stream/context-normalize.ts.
 const EDITS = [
 	{
 		name: "convertToLlm — wrap custom-injected content in <injected-context> tags",
