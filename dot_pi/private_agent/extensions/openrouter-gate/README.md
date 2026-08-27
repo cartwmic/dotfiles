@@ -68,7 +68,7 @@ Allowlist is a chezmoi `create_` target. After the first apply, edit
 |---|---|
 | `/openrouter on` | Persist `enabled: true`. If the allowlist is non-empty and the stash has a key, inject the runtime credential + `OPENROUTER_API_KEY` (subagent children inherit it) and register only allowlisted models. |
 | `/openrouter off` | Persist `enabled: false`, drop the runtime key/env, register zero OpenRouter models. |
-| `/openrouter status` | Toggle, allowlist, stash health, config path. |
+| `/openrouter status` | Toggle, allowlist, stash health, config path (TUI notify; Pi drops command return values). |
 | `/openrouter reload` | Re-read `config.json` (after a hand-edit) and re-apply. |
 | `/openrouter allow` | Searchable overlay of the live OpenRouter catalog (public `/models`, no key). Completions work after `/openrouter allow `. Tab-complete or pick an id; globs (`z-ai/*`) can be typed. Writes `config.json`. |
 | `/openrouter deny` | Same overlay, but only the current allowlist. Removing the last entry fail-closes. |

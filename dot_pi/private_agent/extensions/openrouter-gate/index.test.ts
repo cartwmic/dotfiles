@@ -18,7 +18,7 @@ import {
 	normalizeConfig,
 	saveConfig,
 } from "./config.ts";
-import { parseSubcommand, readStash, writeStash, catalogSignature, getOpenRouterModels } from "./index.ts";
+import { parseSubcommand, readStash, writeStash, catalogSignature, getOpenRouterModels, formatStatus, reply } from "./index.ts";
 import {
 	addAllowedModel,
 	commandCompletions,
@@ -462,4 +462,42 @@ test("getOpenRouterModels: missing registry or throwing getAll never throws", ()
 			}),
 		[],
 	);
+});
+
+test("formatStatus: reports toggle, stash, catalog", () => {
+	const hidden = formatStatus({
+		config: normalizeConfig({ enabled: false, allowedModels: ["z-ai/glm-5.3-flash"] }),
+		configPath: "/tmp/config.json",
+		keyInjected: false,
+		stash: { stashPresent: false, liveEntryPresent: false },
+		catalogCount: 0,
+	});
+	assert.match(hidden, /OpenRouter OFF/);
+	assert.match(hidden, /stash: MISSING/);
+	assert.match(hidden, /catalog: hidden/);
+	assert.match(hidden, /config: \/tmp\/config.json/);
+
+	const open = formatStatus({
+		config: normalizeConfig({ enabled: true, allowedModels: ["z-ai/glm-5.3-flash"] }),
+		configPath: "/tmp/config.json",
+		keyInjected: true,
+		stash: { stashPresent: true, liveEntryPresent: true, key: "sk" },
+		catalogCount: 1,
+	});
+	assert.match(open, /OpenRouter ON/);
+	assert.match(open, /runtime key: injected/);
+	assert.match(open, /catalog: 1 OpenRouter/);
+	assert.match(open, /live "openrouter" entry/);
+});
+
+test("reply: notifies TUI; ignores empty and missing notify", () => {
+	const calls: Array<[string, string | undefined]> = [];
+	reply({ ui: { notify: (message, type) => calls.push([message, type]) } }, "hello");
+	reply({ ui: { notify: (message, type) => calls.push([message, type]) } }, "⚠ bad");
+	reply({ ui: {} }, "nope");
+	reply({ ui: { notify: (message, type) => calls.push([message, type]) } }, undefined);
+	assert.deepEqual(calls, [
+		["hello", "info"],
+		["⚠ bad", "warning"],
+	]);
 });

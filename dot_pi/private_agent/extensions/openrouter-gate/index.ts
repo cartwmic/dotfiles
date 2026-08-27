@@ -217,6 +217,42 @@ const LIVE_ENTRY_WARNING =
 const EMPTY_ALLOWLIST_WARNING =
 	"⚠ OpenRouter allowlist is empty — fail-closed. Add model ids to this extension's config.json.";
 
+/** Pi drops command-handler return values; this is the documented print path. */
+export function reply(
+	ctx: { ui?: { notify?: (message: string, type?: "info" | "warning" | "error") => void } },
+	message: string | undefined,
+): void {
+	if (!message) return;
+	if (typeof ctx.ui?.notify !== "function") return;
+	ctx.ui.notify(message, message.includes("⚠") ? "warning" : "info");
+}
+
+export function formatStatus(opts: {
+	config: OpenRouterGateConfig;
+	configPath: string;
+	keyInjected: boolean;
+	stash: StashState;
+	catalogCount: number;
+}): string {
+	const lines = [
+		describeConfig(opts.config),
+		opts.keyInjected
+			? `runtime key: injected (subagents inherit ${ENV_VAR})`
+			: "runtime key: not injected",
+		opts.stash.stashPresent
+			? `stash: "${STASH_ID}" present in auth.json${opts.stash.key ? "" : " but has no usable key"}`
+			: `stash: MISSING — ${MISSING_STASH_WARNING}`,
+		`config: ${opts.configPath}`,
+		isProviderOpen(opts.config)
+			? `catalog: ${opts.catalogCount} OpenRouter model(s) currently registered`
+			: "catalog: hidden (provider closed or allowlist empty)",
+	];
+	if (opts.stash.liveEntryPresent) lines.push(LIVE_ENTRY_WARNING);
+	if (opts.stash.error) lines.push(`auth.json read error: ${opts.stash.error}`);
+	if (opts.config.enabled && opts.config.allowedModels.length === 0) lines.push(EMPTY_ALLOWLIST_WARNING);
+	return lines.join("\n");
+}
+
 export default function (pi: ExtensionAPI): void {
 	const configPath = defaultConfigPath();
 	let config = loadConfig(configPath);
@@ -365,166 +401,205 @@ export default function (pi: ExtensionAPI): void {
 		getArgumentCompletions: (prefix: string) =>
 			commandCompletions(prefix, getCachedPickerModels(), config.allowedModels),
 		handler: async (args: string, ctx: any) => {
-			const cmd = parseCommand(args);
-			const stash = readStash();
-			const usage = "Usage: /openrouter on | off | status | reload | allow [id|glob] | deny [id] | stash";
+			try {
+				const cmd = parseCommand(args);
+				const stash = readStash();
+				const usage = "Usage: /openrouter on | off | status | reload | allow [id|glob] | deny [id] | stash";
 
-			if (cmd.kind === "help") {
-				return usage;
-			}
-
-			if (cmd.kind === "status") {
-				config = loadConfig(configPath);
-				const catalogCount = getOpenRouterModels(ctx).length;
-				const lines = [
-					describeConfig(config),
-					keyInjected
-						? `runtime key: injected (subagents inherit ${ENV_VAR})`
-						: "runtime key: not injected",
-					stash.stashPresent
-						? `stash: "${STASH_ID}" present in auth.json${stash.key ? "" : " but has no usable key"}`
-						: `stash: MISSING — ${MISSING_STASH_WARNING}`,
-					`config: ${configPath}`,
-					isProviderOpen(config)
-						? `catalog: ${catalogCount} OpenRouter model(s) currently registered`
-						: "catalog: hidden (provider closed or allowlist empty)",
-				];
-				if (stash.liveEntryPresent) lines.push(LIVE_ENTRY_WARNING);
-				if (stash.error) lines.push(`auth.json read error: ${stash.error}`);
-				if (config.enabled && config.allowedModels.length === 0) lines.push(EMPTY_ALLOWLIST_WARNING);
-				return lines.join("\n");
-			}
-
-			if (cmd.kind === "reload") {
-				config = loadConfig(configPath);
-				lastCatalogSignature = "";
-				const keyError = await applyGate(ctx);
-				if (keyError) return `${describeConfig(config)}\n${keyError}`;
-				return `${describeConfig(config)}; reloaded from ${configPath}`;
-			}
-
-			if (cmd.kind === "allow") {
-				let id = cmd.id;
-				if (!id) {
-					const catalog = await ensurePickerCatalog(ctx);
-					const choices = pickerItemsExcluding(catalog, config.allowedModels);
-					id = await pickModel(ctx, "Allow OpenRouter model", choices);
-					if (!id && ctx.hasUI && typeof ctx.ui?.input === "function" && choices.length === 0) {
-						id = (await ctx.ui.input("OpenRouter model id or glob", "z-ai/glm-5.3-flash"))?.trim();
-					}
+				if (cmd.kind === "help") {
+					reply(ctx, usage);
+					return;
 				}
-				if (!id) {
-					return ctx.hasUI ? undefined : `${usage}\nPass a model id, or run this in the TUI to pick one.`;
-				}
-				const result = addAllowedModel(config.allowedModels, id);
-				if (!result.added) return `${id} is already on the allowlist.\n${describeConfig(config)}`;
-				persist({ ...config, allowedModels: result.allowed });
-				const keyError = await applyGate(ctx);
-				const extra = keyError ? `\n${keyError}` : "";
-				return `+ allowed ${id}. ${describeConfig(config)}${extra}`;
-			}
 
-			if (cmd.kind === "deny") {
-				let id = cmd.id;
-				if (!id) {
-					if (config.allowedModels.length === 0) {
-						return `Allowlist already empty.\n${describeConfig(config)}`;
-					}
-					id = await pickModel(
+				if (cmd.kind === "status") {
+					config = loadConfig(configPath);
+					reply(
 						ctx,
-						"Remove from OpenRouter allowlist",
-						config.allowedModels.map((entry) => ({ id: entry, name: entry })),
+						formatStatus({
+							config,
+							configPath,
+							keyInjected,
+							stash,
+							catalogCount: getOpenRouterModels(ctx).length,
+						}),
 					);
+					return;
 				}
-				if (!id) {
-					return ctx.hasUI ? undefined : `${usage}\nPass an allowlist entry, or run this in the TUI to pick one.`;
-				}
-				const result = removeAllowedModel(config.allowedModels, id);
-				if (!result.removed) return `${id} is not on the allowlist.\n${describeConfig(config)}`;
-				persist({ ...config, allowedModels: result.allowed });
-				const keyError = await applyGate(ctx);
-				const extra = [
-					config.enabled && config.allowedModels.length === 0 ? EMPTY_ALLOWLIST_WARNING : "",
-					keyError ?? "",
-				].filter(Boolean);
-				return `- removed ${id}. ${describeConfig(config)}${extra.length ? `\n${extra.join("\n")}` : ""}`;
-			}
 
-			if (cmd.kind === "stash") {
-				let key = usableApiKey(cmd.key);
-				let adoptedLive = false;
-				if (!key && stash.liveKey) {
-					key = stash.liveKey;
-					adoptedLive = true;
-				}
-				if (!key && ctx.hasUI && typeof ctx.ui?.input === "function") {
-					key = usableApiKey(
-						await ctx.ui.input(
-							"OpenRouter API key (saved as openrouter-stashed)",
-							"sk-or-v1-...",
-						),
+				if (cmd.kind === "reload") {
+					config = loadConfig(configPath);
+					lastCatalogSignature = "";
+					const keyError = await applyGate(ctx);
+					reply(
+						ctx,
+						keyError
+							? `${describeConfig(config)}\n${keyError}`
+							: `${describeConfig(config)}; reloaded from ${configPath}`,
 					);
+					return;
 				}
-				if (!key) {
-					return ctx.hasUI
-						? undefined
-						: `${usage}\nIn the TUI this prompts for a key. A live "openrouter" entry is adopted automatically.`;
+
+				if (cmd.kind === "allow") {
+					let id = cmd.id;
+					if (!id) {
+						const catalog = await ensurePickerCatalog(ctx);
+						const choices = pickerItemsExcluding(catalog, config.allowedModels);
+						id = await pickModel(ctx, "Allow OpenRouter model", choices);
+						if (!id && ctx.hasUI && typeof ctx.ui?.input === "function" && choices.length === 0) {
+							id = (await ctx.ui.input("OpenRouter model id or glob", "z-ai/glm-5.3-flash"))?.trim();
+						}
+					}
+					if (!id) {
+						if (!ctx.hasUI) reply(ctx, `${usage}\nPass a model id, or run this in the TUI to pick one.`);
+						return;
+					}
+					const result = addAllowedModel(config.allowedModels, id);
+					if (!result.added) {
+						reply(ctx, `${id} is already on the allowlist.\n${describeConfig(config)}`);
+						return;
+					}
+					persist({ ...config, allowedModels: result.allowed });
+					const keyError = await applyGate(ctx);
+					const extra = keyError ? `\n${keyError}` : "";
+					reply(ctx, `+ allowed ${id}. ${describeConfig(config)}${extra}`);
+					return;
 				}
-				const written = writeStash(key);
-				if (!written.ok) return `⚠ Could not write auth.json: ${written.error}`;
+
+				if (cmd.kind === "deny") {
+					let id = cmd.id;
+					if (!id) {
+						if (config.allowedModels.length === 0) {
+							reply(ctx, `Allowlist already empty.\n${describeConfig(config)}`);
+							return;
+						}
+						id = await pickModel(
+							ctx,
+							"Remove from OpenRouter allowlist",
+							config.allowedModels.map((entry) => ({ id: entry, name: entry })),
+						);
+					}
+					if (!id) {
+						if (!ctx.hasUI) reply(ctx, `${usage}\nPass an allowlist entry, or run this in the TUI to pick one.`);
+						return;
+					}
+					const result = removeAllowedModel(config.allowedModels, id);
+					if (!result.removed) {
+						reply(ctx, `${id} is not on the allowlist.\n${describeConfig(config)}`);
+						return;
+					}
+					persist({ ...config, allowedModels: result.allowed });
+					const keyError = await applyGate(ctx);
+					const extra = [
+						config.enabled && config.allowedModels.length === 0 ? EMPTY_ALLOWLIST_WARNING : "",
+						keyError ?? "",
+					].filter(Boolean);
+					reply(
+						ctx,
+						`- removed ${id}. ${describeConfig(config)}${extra.length ? `\n${extra.join("\n")}` : ""}`,
+					);
+					return;
+				}
+
+				if (cmd.kind === "stash") {
+					let key = usableApiKey(cmd.key);
+					let adoptedLive = false;
+					if (!key && stash.liveKey) {
+						key = stash.liveKey;
+						adoptedLive = true;
+					}
+					if (!key && ctx.hasUI && typeof ctx.ui?.input === "function") {
+						key = usableApiKey(
+							await ctx.ui.input(
+								"OpenRouter API key (saved as openrouter-stashed)",
+								"sk-or-v1-...",
+							),
+						);
+					}
+					if (!key) {
+						if (!ctx.hasUI) {
+							reply(
+								ctx,
+								`${usage}\nIn the TUI this prompts for a key. A live "openrouter" entry is adopted automatically.`,
+							);
+						}
+						return;
+					}
+					const written = writeStash(key);
+					if (!written.ok) {
+						reply(ctx, `⚠ Could not write auth.json: ${written.error}`);
+						return;
+					}
+					const keyError = await applyGate(ctx);
+					const summary = adoptedLive
+						? `Stashed the live "${PROVIDER}" key as "${STASH_ID}" and removed the live entry.`
+						: `Stashed OpenRouter key as "${STASH_ID}".`;
+					const next =
+						keyError ??
+						(config.enabled
+							? isProviderOpen(config)
+								? "Runtime key re-applied."
+								: EMPTY_ALLOWLIST_WARNING
+							: "Run /openrouter on to enable.");
+					reply(ctx, `${summary} ${describeConfig(config)} ${next}`);
+					return;
+				}
+
+				const runtimeErrorProbe = getRuntime(ctx);
+				if (!runtimeErrorProbe) {
+					reply(
+						ctx,
+						"⚠ pi internals changed: ctx.modelRegistry.runtime.setRuntimeApiKey/removeRuntimeApiKey " +
+							"not found. openrouter-gate needs updating for this pi version.",
+					);
+					return;
+				}
+
+				if (cmd.kind === "on") {
+					persist({ ...config, enabled: true });
+					if (config.allowedModels.length === 0) {
+						await applyGate(ctx);
+						reply(ctx, `${describeConfig(config)}\n${EMPTY_ALLOWLIST_WARNING}`);
+						return;
+					}
+					if (!stash.key) {
+						await applyGate(ctx);
+						reply(ctx, MISSING_STASH_WARNING);
+						return;
+					}
+					const keyError = await applyGate(ctx);
+					if (keyError) {
+						reply(ctx, keyError);
+						return;
+					}
+					const extra = stash.liveEntryPresent ? `\n${LIVE_ENTRY_WARNING}` : "";
+					reply(
+						ctx,
+						`◉ OpenRouter enabled (persisted). ${describeConfig(config)}. ` +
+							`Subagents spawned from here inherit ${ENV_VAR}.` +
+							extra,
+					);
+					return;
+				}
+
+				if (!config.enabled && !keyInjected && !stash.liveEntryPresent) {
+					reply(ctx, `${describeConfig(config)}\nOpenRouter already disabled.`);
+					return;
+				}
+				persist({ ...config, enabled: false });
 				const keyError = await applyGate(ctx);
-				const summary = adoptedLive
-					? `Stashed the live "${PROVIDER}" key as "${STASH_ID}" and removed the live entry.`
-					: `Stashed OpenRouter key as "${STASH_ID}".`;
-				const next =
-					keyError ??
-					(config.enabled
-						? isProviderOpen(config)
-							? "Runtime key re-applied."
-							: EMPTY_ALLOWLIST_WARNING
-						: "Run /openrouter on to enable.");
-				return `${summary} ${describeConfig(config)} ${next}`;
-			}
-
-			const runtimeErrorProbe = getRuntime(ctx);
-			if (!runtimeErrorProbe) {
-				return (
-					"⚠ pi internals changed: ctx.modelRegistry.runtime.setRuntimeApiKey/removeRuntimeApiKey " +
-					"not found. openrouter-gate needs updating for this pi version."
-				);
-			}
-
-			if (cmd.kind === "on") {
-				persist({ ...config, enabled: true });
-				if (config.allowedModels.length === 0) {
-					await applyGate(ctx);
-					ctx.ui?.notify?.(EMPTY_ALLOWLIST_WARNING, "warning");
-					return `${describeConfig(config)}\n${EMPTY_ALLOWLIST_WARNING}`;
+				if (keyError) {
+					reply(ctx, keyError);
+					return;
 				}
-				if (!stash.key) {
-					await applyGate(ctx);
-					ctx.ui?.notify?.(MISSING_STASH_WARNING, "warning");
-					return MISSING_STASH_WARNING;
-				}
-				const keyError = await applyGate(ctx);
-				if (keyError) return keyError;
-				const extra = stash.liveEntryPresent ? `\n${LIVE_ENTRY_WARNING}` : "";
-				return (
-					`◉ OpenRouter enabled (persisted). ${describeConfig(config)}. ` +
-					`Subagents spawned from here inherit ${ENV_VAR}.` +
-					extra
+				reply(
+					ctx,
+					stash.liveEntryPresent
+						? `○ OpenRouter disabled (persisted). Catalog hidden — but ${LIVE_ENTRY_WARNING}`
+						: `○ OpenRouter disabled (persisted). ${describeConfig(config)}`,
 				);
+			} catch (e) {
+				reply(ctx, `⚠ /openrouter failed: ${e instanceof Error ? e.message : String(e)}`);
 			}
-
-			if (!config.enabled && !keyInjected && !stash.liveEntryPresent) {
-				return `${describeConfig(config)}\nOpenRouter already disabled.`;
-			}
-			persist({ ...config, enabled: false });
-			const keyError = await applyGate(ctx);
-			if (keyError) return keyError;
-			return stash.liveEntryPresent
-				? `○ OpenRouter disabled (persisted). Catalog hidden — but ${LIVE_ENTRY_WARNING}`
-				: `○ OpenRouter disabled (persisted). ${describeConfig(config)}`;
 		},
 	});
 }
