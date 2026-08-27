@@ -2,8 +2,9 @@
  * openrouter-gate — pi extension: OpenRouter default-OFF, with a persistent
  * on/off toggle and a fail-closed per-model allowlist.
  *
- * Auth still uses absence: the API key lives in auth.json as
- * "openrouter-stashed" (invisible to the registry). `/openrouter on` injects
+ * Auth still uses absence: `/openrouter stash` writes the API key to auth.json
+ * as "openrouter-stashed" (invisible to the registry), adopting a live
+ * "openrouter" entry if one exists. `/openrouter on` injects it as a runtime
  * it as a runtime credential + OPENROUTER_API_KEY for subagents. The enabled
  * flag is persisted in this extension's config.json so new sessions stay on
  * until `/openrouter off`.
@@ -67,6 +68,8 @@ export interface StashState {
 	stashPresent: boolean;
 	/** true ⇒ a LIVE "openrouter" entry exists ⇒ gate is bypassed. */
 	liveEntryPresent: boolean;
+	/** API key from a live "openrouter" entry, when present and well-formed. */
+	liveKey?: string;
 	/** Read/parse failure detail, if any. */
 	error?: string;
 }
@@ -80,10 +83,12 @@ export function readStash(
 	try {
 		const json = JSON.parse(readFile(authPath)) as Record<string, unknown>;
 		const liveEntryPresent = Object.hasOwn(json, PROVIDER);
+		const live = json[PROVIDER] as { key?: unknown } | undefined;
+		const liveKey = typeof live?.key === "string" && live.key.length > 0 ? live.key : undefined;
 		const entry = json[STASH_ID] as { key?: unknown } | undefined;
 		const stashPresent = entry !== undefined;
 		const key = typeof entry?.key === "string" && entry.key.length > 0 ? entry.key : undefined;
-		return { key, stashPresent, liveEntryPresent };
+		return { key, stashPresent, liveEntryPresent, liveKey };
 	} catch (e) {
 		return {
 			stashPresent: false,
@@ -93,7 +98,56 @@ export function readStash(
 	}
 }
 
-export type Subcommand = "on" | "off" | "status" | "reload" | "help" | "allow" | "deny";
+export type Subcommand = "on" | "off" | "status" | "reload" | "help" | "allow" | "deny" | "stash";
+
+function usableApiKey(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+/** Merge `openrouter-stashed` into auth.json and drop a live `openrouter` entry. Never throws. */
+export function writeStash(
+	key: string,
+	deps: {
+		readFile?: (p: string) => string;
+		writeFile?: (p: string, data: string, opts?: { mode?: number }) => void;
+		rename?: (from: string, to: string) => void;
+		chmod?: (p: string, mode: number) => void;
+		authPath?: string;
+	} = {},
+): { ok: true } | { ok: false; error: string } {
+	const trimmed = usableApiKey(key);
+	if (!trimmed) return { ok: false, error: "API key is empty." };
+	const authPath = deps.authPath ?? defaultAuthPath();
+	const readFile = deps.readFile ?? ((p) => fs.readFileSync(p, "utf-8"));
+	const writeFile =
+		deps.writeFile ?? ((p, data, opts) => fs.writeFileSync(p, data, { encoding: "utf-8", ...opts }));
+	const rename = deps.rename ?? ((from, to) => fs.renameSync(from, to));
+	const chmod = deps.chmod ?? ((p, mode) => fs.chmodSync(p, mode));
+	let json: Record<string, unknown> = {};
+	try {
+		const parsed = JSON.parse(readFile(authPath)) as unknown;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return { ok: false, error: "auth.json is not a JSON object; refusing to overwrite." };
+		}
+		json = { ...(parsed as Record<string, unknown>) };
+	} catch (e) {
+		const code = (e as NodeJS.ErrnoException).code;
+		if (code !== "ENOENT") {
+			return { ok: false, error: e instanceof Error ? e.message : String(e) };
+		}
+	}
+	json[STASH_ID] = { type: "api_key", key: trimmed };
+	delete json[PROVIDER];
+	const temporaryPath = `${authPath}.${process.pid}.tmp`;
+	try {
+		writeFile(temporaryPath, `${JSON.stringify(json, null, 2)}\n`, { mode: 0o600 });
+		rename(temporaryPath, authPath);
+		chmod(authPath, 0o600);
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, error: e instanceof Error ? e.message : String(e) };
+	}
+}
 
 /** Parse the /openrouter argument string. Unknown/empty ⇒ help/status. */
 export function parseSubcommand(args: string): Subcommand {
@@ -149,8 +203,8 @@ export function catalogSignature(
 
 const MISSING_STASH_WARNING =
 	`⚠ No "${STASH_ID}" entry in auth.json — cannot enable OpenRouter. ` +
-	`If it was there before, pi may have rewritten auth.json (login/logout) and dropped the ` +
-	`unknown key. Re-stash the API key as {"${STASH_ID}": {"type": "api_key", "key": "sk-or-..."}}.`;
+	`Run /openrouter stash to prompt for a key (or adopt a live "openrouter" entry). ` +
+	`If a stash was there before, pi may have rewritten auth.json (login/logout) and dropped the unknown key.`;
 
 const LIVE_ENTRY_WARNING =
 	`⚠ A live "${PROVIDER}" entry exists in auth.json — auth is always-on for every session ` +
@@ -303,13 +357,13 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("openrouter", {
-		description: "OpenRouter gate: /openrouter on | off | status | reload | allow | deny",
+		description: "OpenRouter gate: /openrouter on | off | status | reload | allow | deny | stash",
 		getArgumentCompletions: (prefix: string) =>
 			commandCompletions(prefix, getCachedPickerModels(), config.allowedModels),
 		handler: async (args: string, ctx: any) => {
 			const cmd = parseCommand(args);
 			const stash = readStash();
-			const usage = "Usage: /openrouter on | off | status | reload | allow [id|glob] | deny [id]";
+			const usage = "Usage: /openrouter on | off | status | reload | allow [id|glob] | deny [id] | stash";
 
 			if (cmd.kind === "help") {
 				return usage;
@@ -390,6 +444,42 @@ export default function (pi: ExtensionAPI): void {
 					keyError ?? "",
 				].filter(Boolean);
 				return `- removed ${id}. ${describeConfig(config)}${extra.length ? `\n${extra.join("\n")}` : ""}`;
+			}
+
+			if (cmd.kind === "stash") {
+				let key = usableApiKey(cmd.key);
+				let adoptedLive = false;
+				if (!key && stash.liveKey) {
+					key = stash.liveKey;
+					adoptedLive = true;
+				}
+				if (!key && ctx.hasUI && typeof ctx.ui?.input === "function") {
+					key = usableApiKey(
+						await ctx.ui.input(
+							"OpenRouter API key (saved as openrouter-stashed)",
+							"sk-or-v1-...",
+						),
+					);
+				}
+				if (!key) {
+					return ctx.hasUI
+						? undefined
+						: `${usage}\nIn the TUI this prompts for a key. A live "openrouter" entry is adopted automatically.`;
+				}
+				const written = writeStash(key);
+				if (!written.ok) return `⚠ Could not write auth.json: ${written.error}`;
+				const keyError = await applyGate(ctx);
+				const summary = adoptedLive
+					? `Stashed the live "${PROVIDER}" key as "${STASH_ID}" and removed the live entry.`
+					: `Stashed OpenRouter key as "${STASH_ID}".`;
+				const next =
+					keyError ??
+					(config.enabled
+						? isProviderOpen(config)
+							? "Runtime key re-applied."
+							: EMPTY_ALLOWLIST_WARNING
+						: "Run /openrouter on to enable.");
+				return `${summary} ${describeConfig(config)} ${next}`;
 			}
 
 			const runtimeErrorProbe = getRuntime(ctx);
