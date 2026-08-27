@@ -1,7 +1,7 @@
 // Tests for the openrouter-gate pure helpers.
 // Run from this directory: node --test
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -18,7 +18,7 @@ import {
 	normalizeConfig,
 	saveConfig,
 } from "./config.ts";
-import { parseSubcommand, readStash, catalogSignature } from "./index.ts";
+import { parseSubcommand, readStash, writeStash, catalogSignature } from "./index.ts";
 import {
 	addAllowedModel,
 	commandCompletions,
@@ -84,6 +84,7 @@ test("readStash: empty-string key is unusable", () => {
 test("readStash: live openrouter entry detected (gate bypassed)", () => {
 	const s = readStash(reader({ openrouter: { type: "api_key", key: "sk-or-v1-live" } }));
 	assert.equal(s.liveEntryPresent, true);
+	assert.equal(s.liveKey, "sk-or-v1-live");
 	assert.equal(s.stashPresent, false);
 	assert.equal(s.key, undefined);
 });
@@ -96,6 +97,7 @@ test("readStash: both live and stash present", () => {
 		}),
 	);
 	assert.equal(s.liveEntryPresent, true);
+	assert.equal(s.liveKey, "live");
 	assert.equal(s.stashPresent, true);
 	assert.equal(s.key, "stashed");
 });
@@ -125,6 +127,7 @@ test("parseSubcommand: canonical values", () => {
 	assert.equal(parseSubcommand("reload"), "reload");
 	assert.equal(parseSubcommand("allow"), "allow");
 	assert.equal(parseSubcommand("deny z-ai/glm-5.3-flash"), "deny");
+	assert.equal(parseSubcommand("stash"), "stash");
 	assert.equal(parseSubcommand(""), "status");
 	assert.equal(parseSubcommand("bogus"), "help");
 });
@@ -257,6 +260,8 @@ test("parseCommand: allow/deny ids, globs, openrouter/ prefix", () => {
 		id: "z-ai/glm-5.3-flash",
 	});
 	assert.deepEqual(parseCommand("deny z-ai/*"), { kind: "deny", id: "z-ai/*" });
+	assert.deepEqual(parseCommand("stash"), { kind: "stash", key: undefined });
+	assert.deepEqual(parseCommand("stash  sk-or-v1-abc"), { kind: "stash", key: "sk-or-v1-abc" });
 	assert.equal(normalizeAllowId("openrouter/z-ai/glm-5.3-flash"), "z-ai/glm-5.3-flash");
 });
 
@@ -325,6 +330,10 @@ test("commandCompletions: subcommands, allow catalog, typed glob, deny allowlist
 		commandCompletions("deny ", catalog, ["z-ai/glm-5.3-flash", "openai/gpt-5"]).map((item) => item.label),
 		["openai/gpt-5", "z-ai/glm-5.3-flash"],
 	);
+	assert.deepEqual(
+		commandCompletions("stas", catalog, []).map((item) => item.value),
+		["stash"],
+	);
 });
 
 test("rankPickerModels: empty query sorts; tokens match id fragments", () => {
@@ -381,4 +390,45 @@ test("fetchOpenRouterModels: caches, skips plus variants, throws on HTTP error",
 	resetPickerCache();
 	const fetchFail = (async () => ({ ok: false, status: 502, statusText: "Bad Gateway" })) as typeof fetch;
 	await assert.rejects(() => fetchOpenRouterModels({ fetch: fetchFail, now: () => 1 }), /502/);
+});
+
+test("writeStash: creates file, preserves other keys, drops live openrouter, mode 0600", () => {
+	const dir = mkdtempSync(join(tmpdir(), "openrouter-stash-"));
+	try {
+		const authPath = join(dir, "auth.json");
+		assert.equal(writeStash("sk-or-v1-new", { authPath }).ok, true);
+		assert.deepEqual(JSON.parse(readFileSync(authPath, "utf8")), {
+			"openrouter-stashed": { type: "api_key", key: "sk-or-v1-new" },
+		});
+
+		writeFileSync(
+			authPath,
+			JSON.stringify({
+				anthropic: { type: "oauth", access: "a", refresh: "r", expires: 1 },
+				openrouter: { type: "api_key", key: "sk-or-v1-live" },
+			}),
+		);
+		assert.equal(writeStash("sk-or-v1-stashed", { authPath }).ok, true);
+		const json = JSON.parse(readFileSync(authPath, "utf8"));
+		assert.equal(json.openrouter, undefined);
+		assert.deepEqual(json["openrouter-stashed"], { type: "api_key", key: "sk-or-v1-stashed" });
+		assert.deepEqual(json.anthropic, { type: "oauth", access: "a", refresh: "r", expires: 1 });
+		assert.equal(statSync(authPath).mode & 0o777, 0o600);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("writeStash: empty key and malformed json refuse to write", () => {
+	const dir = mkdtempSync(join(tmpdir(), "openrouter-stash-"));
+	try {
+		const authPath = join(dir, "auth.json");
+		assert.equal(writeStash("   ", { authPath }).ok, false);
+		writeFileSync(authPath, "{not json");
+		const result = writeStash("sk-or-v1-x", { authPath });
+		assert.equal(result.ok, false);
+		assert.equal(readFileSync(authPath, "utf8"), "{not json");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

@@ -9,11 +9,12 @@ export interface PickerModel {
 	name: string;
 }
 
-export const SUBCOMMANDS = ["on", "off", "status", "reload", "allow", "deny", "help"] as const;
+export const SUBCOMMANDS = ["on", "off", "status", "reload", "allow", "deny", "stash", "help"] as const;
 
 export type GateCommand =
 	| { kind: "on" | "off" | "status" | "reload" | "help" }
-	| { kind: "allow" | "deny"; id?: string };
+	| { kind: "allow" | "deny"; id?: string }
+	| { kind: "stash"; key?: string };
 
 let cachedModels: PickerModel[] = [];
 let cacheTimestamp = 0;
@@ -32,12 +33,16 @@ export function normalizeAllowId(id: string): string {
 export function parseCommand(args: string): GateCommand {
 	const trimmed = (args ?? "").trim();
 	if (!trimmed || /^status$/i.test(trimmed)) return { kind: "status" };
-	const match = /^(on|off|reload|help|allow|deny)(?:\s+([\s\S]+))?$/i.exec(trimmed);
+	const match = /^(on|off|reload|help|allow|deny|stash)(?:\s+([\s\S]+))?$/i.exec(trimmed);
 	if (!match) return { kind: "help" };
 	const kind = match[1]!.toLowerCase();
 	if (kind === "allow" || kind === "deny") {
 		const id = match[2]?.trim();
 		return { kind, id: id ? normalizeAllowId(id) : undefined };
+	}
+	if (kind === "stash") {
+		const key = match[2]?.trim();
+		return { kind: "stash", key: key || undefined };
 	}
 	return { kind: kind as "on" | "off" | "reload" | "help" };
 }
