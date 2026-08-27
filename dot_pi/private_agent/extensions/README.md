@@ -101,7 +101,8 @@ workflow.
 
 Chezmoi `create_` sources write the destination only when it does not already
 exist. Examples: [auto-compact/create_config.json](./auto-compact/create_config.json),
-[goal/create_config.json](./goal/create_config.json). After the first apply,
+[goal/create_config.json](./goal/create_config.json),
+[openrouter-gate/create_config.json](./openrouter-gate/create_config.json). After the first apply,
 interactive edits to that dest file stay machine-local. Do not expect
 `chezmoi apply` to reset them.
 
