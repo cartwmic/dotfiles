@@ -18,7 +18,7 @@ import {
 	normalizeConfig,
 	saveConfig,
 } from "./config.ts";
-import { parseSubcommand, readStash, writeStash, catalogSignature } from "./index.ts";
+import { parseSubcommand, readStash, writeStash, catalogSignature, getOpenRouterModels } from "./index.ts";
 import {
 	addAllowedModel,
 	commandCompletions,
@@ -431,4 +431,35 @@ test("writeStash: empty key and malformed json refuse to write", () => {
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("getOpenRouterModels: calls getAll bound so this.runtime exists", () => {
+	const ctx = {
+		modelRegistry: {
+			runtime: {
+				getModels: () => [{ id: "z-ai/glm-5.3-flash", provider: "openrouter", name: "flash" }],
+			},
+			getAll() {
+				return [...this.runtime.getModels()];
+			},
+		},
+	};
+	const models = getOpenRouterModels(ctx);
+	assert.equal(models.length, 1);
+	assert.equal(models[0]?.id, "z-ai/glm-5.3-flash");
+});
+
+test("getOpenRouterModels: missing registry or throwing getAll never throws", () => {
+	assert.deepEqual(getOpenRouterModels({}), []);
+	assert.deepEqual(getOpenRouterModels(undefined), []);
+	assert.deepEqual(
+		getOpenRouterModels({
+			modelRegistry: {
+				getAll() {
+					throw new Error("boom");
+				},
+			},
+			}),
+		[],
+	);
 });

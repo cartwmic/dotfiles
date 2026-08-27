@@ -178,19 +178,23 @@ function getRuntime(ctx: unknown): RuntimeLike | undefined {
 	return undefined;
 }
 
-function getOpenRouterModels(ctx: unknown): CatalogModel[] {
-	const getAll = (ctx as { modelRegistry?: { getAll?: () => unknown } })?.modelRegistry?.getAll;
-	if (typeof getAll !== "function") return [];
-	const all = getAll();
-	if (!Array.isArray(all)) return [];
-	const models: CatalogModel[] = [];
-	for (const entry of all) {
-		if (!entry || typeof entry !== "object") continue;
-		const model = entry as Partial<CatalogModel> & { provider?: unknown };
-		if (model.provider !== PROVIDER || typeof model.id !== "string" || model.id.length === 0) continue;
-		models.push(model as CatalogModel);
+export function getOpenRouterModels(ctx: unknown): CatalogModel[] {
+	const registry = (ctx as { modelRegistry?: { getAll?: () => unknown } })?.modelRegistry;
+	if (typeof registry?.getAll !== "function") return [];
+	try {
+		const all = registry.getAll();
+		if (!Array.isArray(all)) return [];
+		const models: CatalogModel[] = [];
+		for (const entry of all) {
+			if (!entry || typeof entry !== "object") continue;
+			const model = entry as Partial<CatalogModel> & { provider?: unknown };
+			if (model.provider !== PROVIDER || typeof model.id !== "string" || model.id.length === 0) continue;
+			models.push(model as CatalogModel);
+		}
+		return models;
+	} catch {
+		return [];
 	}
-	return models;
 }
 
 export function catalogSignature(
