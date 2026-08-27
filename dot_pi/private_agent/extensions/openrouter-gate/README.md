@@ -1,9 +1,13 @@
 # openrouter-gate
 
-Pi extension: OpenRouter provider **default-OFF**, with an in-session opt-in
-toggle. Keeps OpenRouter out of every pi session and subagent unless explicitly
-enabled — without breaking Hindsight recall (its OpenRouter key lives
+Pi extension: OpenRouter provider **default-OFF**, with a persistent on/off
+toggle and a fail-closed per-model allowlist. Keeps the live OpenRouter catalog
+(from pi-openrouter-plus or the builtin provider) down to ids you list in
+`config.json` — without breaking Hindsight recall (its OpenRouter key lives
 server-side on hindsight-api, not in pi's auth.json).
+
+Do **not** add `openrouter/*` to Pi `enabledModels`. The allowlist lives only
+in this extension's machine-local `config.json`.
 
 ## Why this shape
 
@@ -13,7 +17,12 @@ env API key (`OPENROUTER_API_KEY`) is set. There is no per-provider disable
 switch, extensions cannot unregister builtin providers
 (`unregisterProvider` only clears extension-registered ones), and availability
 filtering alone would leave `--model openrouter/x` working (model resolution
-bypasses availability). Missing auth blocks the actual API call — airtight.
+bypasses availability). Missing auth blocks the actual API call.
+
+pi-openrouter-plus then **replaces** the OpenRouter catalog with the full live
+list whenever it syncs. This extension re-registers a subset via
+`pi.registerProvider("openrouter", { models })` (merge: plus stream/headers
+stay). Empty allowlist or `enabled: false` registers zero models.
 
 ## Setup (one-time)
 
@@ -27,15 +36,43 @@ Rename the live entry in `~/.pi/agent/auth.json`:
 `openrouter-stashed` matches no provider id → registry blind to it → provider
 unconfigured everywhere by default. Key bytes stay in the same 600-perm file.
 
+Allowlist is a chezmoi `create_` target. After the first apply, edit
+`~/.pi/agent/extensions/openrouter-gate/config.json` (machine-local; later
+`chezmoi apply` will not overwrite it):
+
+```json
+{
+  "enabled": false,
+  "allowedModels": ["z-ai/glm-5.3-flash"]
+}
+```
+
+- `enabled`: persisted by `/openrouter on|off`. Default off.
+- `allowedModels`: exact ids or globs (`*`, `?`). Case-insensitive. Plus
+  `@or:provider:quant:id` variants match if the base id is allowed.
+  Prefer `/openrouter allow` / `/openrouter deny` (searchable picker) over
+  hand-editing. `/openrouter reload` still works after a JSON edit.
+- Empty `allowedModels` is fail-closed: no models, no runtime key.
+
 ## Usage
 
 | Command | Effect |
 |---|---|
-| `/openrouter on` | Read stash → `setRuntimeApiKey("openrouter", key)` (in-memory overlay, same primitive as pi's `--api-key` flag; never persisted) + set `OPENROUTER_API_KEY` in `process.env` so subagent children inherit access. Models appear immediately. |
-| `/openrouter off` | `removeRuntimeApiKey` + unset env var. |
-| `/openrouter status` | Gate state + stash health. |
+| `/openrouter on` | Persist `enabled: true`. If the allowlist is non-empty and the stash has a key, inject the runtime credential + `OPENROUTER_API_KEY` (subagent children inherit it) and register only allowlisted models. |
+| `/openrouter off` | Persist `enabled: false`, drop the runtime key/env, register zero OpenRouter models. |
+| `/openrouter status` | Toggle, allowlist, stash health, config path. |
+| `/openrouter reload` | Re-read `config.json` (after a hand-edit) and re-apply. |
+| `/openrouter allow` | Searchable overlay of the live OpenRouter catalog (public `/models`, no key). Completions work after `/openrouter allow `. Tab-complete or pick an id; globs (`z-ai/*`) can be typed. Writes `config.json`. |
+| `/openrouter deny` | Same overlay, but only the current allowlist. Removing the last entry fail-closes. |
+| `/openrouter allow <id>` / `deny <id>` | Skip the picker and edit that entry directly. |
 
-Session exit discards the overlay and env — every new session starts locked.
+New sessions honor the persisted `enabled` flag. Session exit still drops the
+in-memory runtime overlay; `session_start` re-injects when enabled.
+
+Plus loads after this extension and re-syncs on `session_start`. The catalog
+is re-filtered on `resources_discover`, `before_agent_start`, and
+`model_select`. `/openrouter-sync` can briefly re-expand the picker until the
+next one of those events.
 
 ## Known weak point
 
@@ -44,8 +81,8 @@ If pi ever rewrites auth.json wholesale (login/logout flows), the unknown
 would be lost. Mitigations:
 
 - `/openrouter on` and `/openrouter status` warn loudly when the stash is missing.
-- `session_start` warns if a *live* `openrouter` entry reappears (gate bypassed,
-  e.g. after `/login openrouter`).
+- `session_start` warns if a *live* `openrouter` entry reappears (auth always-on,
+  e.g. after `/login openrouter`). The allowlist still applies.
 - Fallback if this ever bites: move the key to a sibling 600-perm file
   (`~/.pi/agent/openrouter.key`) and point `readStash` at it.
 
@@ -58,5 +95,5 @@ if a pi upgrade removes it, `/openrouter on` reports it instead of throwing.
 ## Tests
 
 ```sh
-node --test dot_pi/agent/extensions/openrouter-gate/index.test.ts
+cd ~/.local/share/chezmoi/dot_pi/private_agent/extensions/openrouter-gate && node --test
 ```
