@@ -7,14 +7,16 @@
   private_settings.json.tmpl. Membership, remaining-versus-spend, and percent-
   versus-dollars live only here. Cursor dollar caps come from the Cursor API
   (capAmount), never from chezmoi data or compiled pi-sub constants.
+  OpenRouter remaining credits are personal-profile only.
 */ -}}
 {{- $cursorItem := dict "provider" "cursor" "display" "remaining" "unit" "percent" -}}
 {{- if eq .profile "axon-work-computer" -}}
 {{-   $cursorItem = dict "provider" "cursor" "display" "remaining" "unit" "dollars" -}}
 {{- end -}}
+{{- $openrouterItem := dict "provider" "openrouter" "display" "remaining" "unit" "dollars" -}}
 {{- $metricSet := list $cursorItem -}}
 {{- if eq .profile "personal" -}}
-{{-   $metricSet = list $cursorItem (dict "provider" "anthropic" "display" "remaining") (dict "provider" "codex" "display" "remaining") -}}
+{{-   $metricSet = list $cursorItem $openrouterItem (dict "provider" "anthropic" "display" "remaining") (dict "provider" "codex" "display" "remaining") -}}
 {{- else if eq .profile "axon-work-computer" -}}
 {{-   $metricSet = list $cursorItem (dict "provider" "anthropic" "display" "remaining") -}}
 {{- end -}}
