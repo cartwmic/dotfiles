@@ -6,8 +6,10 @@
   apply does not clobber other keys — same pattern as lastChangelogVersion in
   private_settings.json.tmpl. Membership, remaining-versus-spend, and percent-
   versus-dollars live only here. Cursor dollar caps come from the Cursor API
-  (capAmount), never from chezmoi data or compiled pi-sub constants.
-  OpenRouter remaining credits are personal-profile only.
+  (capAmount), never from chezmoi data or compiled pi-sub constants. Claude
+  remaining dollars on the work profile use Anthropic extra-usage credits
+  (used_credits / monthly_limit). OpenRouter remaining credits are
+  personal-profile only.
 */ -}}
 {{- $cursorItem := dict "provider" "cursor" "display" "remaining" "unit" "percent" -}}
 {{- if eq .profile "axon-work-computer" -}}
@@ -18,7 +20,7 @@
 {{- if eq .profile "personal" -}}
 {{-   $metricSet = list $cursorItem $openrouterItem (dict "provider" "anthropic" "display" "remaining") (dict "provider" "codex" "display" "remaining") -}}
 {{- else if eq .profile "axon-work-computer" -}}
-{{-   $metricSet = list $cursorItem (dict "provider" "anthropic" "display" "remaining") -}}
+{{-   $metricSet = list $cursorItem (dict "provider" "anthropic" "display" "remaining" "unit" "dollars") -}}
 {{- end -}}
 {{- $display := dict "barStyle" "percentage" -}}
 {{- $out := dict "display" $display "metricSet" $metricSet -}}
