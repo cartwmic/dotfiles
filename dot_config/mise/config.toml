@@ -37,6 +37,10 @@ research = "github:cartwmic/loop-engine"
 # resolution, so rust-toolchain.toml works everywhere. See docs/lang/rust.html.
 python = "latest" # System Python
 node = "lts"      # Replaces nvm
+# pnpm 11+: some work repos declare packageManager = "pnpm@11.x" and
+# engines.pnpm = ">=11.0.0". The pnpm bundled with the mise node install is
+# 8.x, which fails those engine checks.
+pnpm = "11"
 zig = "0.15.2"    # Pinned: builds the cartwmic/claude-p fork (pi-claude-bridge build-on-install)
 
 # =============================================================================
