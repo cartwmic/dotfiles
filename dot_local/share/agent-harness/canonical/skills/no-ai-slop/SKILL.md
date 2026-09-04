@@ -5,7 +5,7 @@ description: Detect or remove formulaic LLM-writing patterns while preserving fa
 
 # No AI Slop
 
-Edit prose without replacing one generic model voice with another. Treat patterns as revision signals, not proof that AI wrote the text.
+Edit prose without replacing one generic model voice with another. Patterns are revision signals. They do not prove AI wrote the text.
 
 ## Modes
 
@@ -34,7 +34,7 @@ Before editing, identify the document's purpose and up to 3–5 evidence-support
 
 Use up to 3–5 short, relevant examples when the user provides them or project instructions identify accepted documents. Do not search broadly for examples. If none are available, infer voice from the draft itself. Prefer observed traits over labels such as “human,” “engaging,” or “professional.” Do not copy example content or force imitation where genres differ.
 
-When the draft is the repository owner's own writing, or when asked to make a draft read as authored rather than generated, read [voice-profile.md](voice-profile.md) for the evidence-derived house voice and [voice-excerpts.md](voice-excerpts.md) for exemplars. Match the register first — opinion, specification, design, incident, and casual/status writing differ in that profile — then apply its rules and countable checks. Casual/status is owner-supplied Slack, not part of the original measured set; do not import its emoji, italics-for-emphasis, or thank-you closers into the document registers. Do not infer voice from the draft alone when the draft is suspected of being generated: the draft's voice is the thing under repair.
+When the draft is the repository owner's own writing, or when asked to repair a draft that reads as generated, read [voice-profile.md](voice-profile.md) for the evidence-derived house voice and [voice-excerpts.md](voice-excerpts.md) for exemplars. Match the register first — opinion, specification, design, incident, and casual/status writing differ in that profile — then apply its rules and countable checks. Casual/status is owner-supplied Slack. The original measured set excludes it; do not import its emoji, italics-for-emphasis, or thank-you closers into the document registers. Do not infer voice from the draft alone when the draft is suspected of being generated: the draft's voice is the thing under repair.
 
 Keep this analysis internal unless the user asks for it.
 
@@ -50,13 +50,14 @@ Treat these spans as protected unless the user explicitly requests changes:
 - product terms, glossary terms, and domain-specific vocabulary; and
 - uncertainty or limitation language.
 
-Repeat a precise term rather than cycling through synonyms. If meaning is unclear, ask instead of guessing.
+Repeat a precise term. Do not cycle through synonyms. If meaning is unclear, ask; do not guess.
 
 ## Editing Principles
 
 - Preserve distinctive vocabulary, cadence, bluntness, humor, uncertainty, and useful imperfection.
 - Leave strong sentences alone. Do not normalize every paragraph into the same polished shape.
 - Cut empty framing before rewriting wording.
+- Assert the claim you mean. Never build it by rejecting an alternative first.
 - Prefer concrete facts, mechanisms, consequences, and judgments over abstract importance claims.
 - Keep useful setup, digressions, and longer sentences when they add context or character.
 - Use direct verbs when clearer, but do not ban passive voice or forms of “be.”
@@ -65,13 +66,13 @@ Repeat a precise term rather than cycling through synonyms. If meaning is unclea
 
 ## Patterns to Inspect
 
-A single word or construction is not enough. Edit when a pattern is empty, repeated, misleading, or mismatched to the voice.
+A single word or construction is not enough. Edit when a pattern is empty, repeated, misleading, or mismatched to the voice. One entry below is an unconditional ban and takes no such judgment: **binary contrast templates**.
 
 - **Throat clearing:** “Here's the thing,” “It's worth noting,” “In today's world.” Remove setup that delays the point.
-- **Binary contrast templates:** “It's not X. It's Y.” State the useful claim directly unless contrast carries real meaning.
+- **Binary contrast templates — banned, no exceptions.** Any construction that reaches its point by first rejecting an alternative: “It's not X. It's Y.”, “not X, but Y”, “X, not Y”, “X rather than Y”, “less about X, more about Y”, “instead of X, Y”, and negative lists such as “Not for A, not for B.” Delete the rejected half and assert the claim. If the rejection is load-bearing, split it out as its own standalone prohibition sentence (“Do not do X.”) placed after the claim. Three things survive the ban: a negation with no replacement attached to it, `not` used as a data value inside an enumeration, and protected spans. Never satisfy this ban by weakening the claim.
 - **Faux-insight setups:** “What everyone misses,” “The uncomfortable truth.” Remove borrowed authority and support the claim.
 - **Importance puffery:** “pivotal,” “transformative,” “a testament to.” Replace labels with the fact that makes the point matter.
-- **Superficial analysis:** trailing clauses beginning with “highlighting,” “underscoring,” or “showcasing” that restate significance instead of explaining consequence.
+- **Superficial analysis:** trailing clauses beginning with “highlighting,” “underscoring,” or “showcasing.” They restate significance. Name the consequence.
 - **Weasel attribution:** “experts agree,” “studies show,” “many argue.” Name a source or remove the unsupported attribution.
 - **Generic promotional language:** words such as “robust,” “streamline,” “unlock,” “leverage,” or “cutting-edge” when they hide a specific mechanism.
 - **Interpretive metadiscourse:** “The key point is,” “This distinction matters,” “As you can see.” Let evidence carry emphasis when it already does.
@@ -117,8 +118,8 @@ Edit returned in chat:
 - Short description of material edits, or “No material edit needed.”
 ```
 
-For in-place file edits, report changed paths instead of repeating full files.
+For in-place file edits, report changed paths. Do not repeat full files.
 
 ## Attribution
 
-Adapted from Peter Yang's [`no-ai-slop`](https://github.com/petergyang/no-ai-slop) under the bundled [MIT License](LICENSE). This version adds exemplar-grounded house voice, protected factual spans, contextual rather than blanket word rules, detector-gaming rejection, and a bounded editing loop.
+Adapted from Peter Yang's [`no-ai-slop`](https://github.com/petergyang/no-ai-slop) under the bundled [MIT License](LICENSE). This version adds exemplar-grounded house voice, protected factual spans, word rules that depend on context, a hard ban on binary contrast templates, detector-gaming rejection, and a bounded editing loop.
