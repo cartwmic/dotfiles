@@ -102,7 +102,8 @@ workflow.
 Chezmoi `create_` sources write the destination only when it does not already
 exist. Examples: [auto-compact/create_config.json](./auto-compact/create_config.json),
 [goal/create_config.json](./goal/create_config.json),
-[openrouter-gate/create_config.json](./openrouter-gate/create_config.json). After the first apply,
+[openrouter-gate/create_config.json](./openrouter-gate/create_config.json),
+[web-search/create_config.json](./web-search/create_config.json). After the first apply,
 interactive edits to that dest file stay machine-local. Do not expect
 `chezmoi apply` to reset them.
 
@@ -151,8 +152,8 @@ cd ./pi-patch-guard && node --test
 Other in-tree suites today: `auto-compact/index.test.ts`,
 `goal/helpers.test.ts`, `hindsight/index.test.ts`, `inspect-prompt/index.test.ts`,
 `issue/index.test.ts`, `ntfy/index.test.ts`, `openrouter-gate/index.test.ts`,
-`codex-fast-luna/index.test.ts`.
-`catalog-overlay-nudge`, `subagent`, and `web-search` do not have tests yet.
+`codex-fast-luna/index.test.ts`, `web-search/config.test.ts`.
+`catalog-overlay-nudge` and `subagent` do not have tests yet.
 
 Chezmoi apply and secret handling are not validated here; use repo-root
 `AGENTS.md`.

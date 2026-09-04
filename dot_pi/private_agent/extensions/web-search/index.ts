@@ -1,52 +1,54 @@
 /**
- * Web Search + Web Fetch — pi extension (Anthropic-backed)
+ * Web Search + Web Fetch — pi extension
  *
- * Two tools registered against the same Anthropic auth context:
+ *   web_search  → configurable backend via /web-search or config.json:
+ *                 Anthropic web_search_20250305 (default) or Codex Responses
+ *                 `web_search`. Session model is independent of the search
+ *                 backend. Codex has no named fetch twin.
  *
- *   web_search  → Anthropic web_search_20250305 server tool. Claude does the
- *                 searches server-side and returns a synthesized answer with
- *                 cited sources. Best for "give me the answer" lookups.
- *                 Server-side max_uses defaults to 5 (raise via max_searches
- *                 up to 20). This is what Anthropic enforces hard, unlike the
- *                 fragile client-side budget in pi-codex-web-search.
- *
- *   web_fetch   → Anthropic web_fetch_20250910 server tool. Pulls a single URL
- *                 and returns the extracted page content with minimal LLM
- *                 commentary. Best for "I have a URL, give me its contents."
- *                 Use this after web_search returns a source you want to read
- *                 in full.
+ *   web_fetch   → Anthropic web_fetch_20250910. Listed only when Anthropic is
+ *                 the configured search provider; omitted for Codex because
+ *                 Codex has no named fetch twin.
  *
  * Adapted from @oh-my-pi/anthropic-websearch (MIT, github.com/can1357/oh-my-pi).
  *
- * Auth resolution (first match wins):
+ * Search backend is configurable (Anthropic Messages or Codex Responses).
+ * The Anthropic-only `web_fetch` tool is hidden while Codex is selected.
+ *
+ * Anthropic auth resolution (first match wins):
  *   1. ANTHROPIC_SEARCH_API_KEY / ANTHROPIC_SEARCH_BASE_URL env vars
  *   2. macOS Keychain `Claude Code-credentials` (your `claude login` token)
  *   3. OAuth credentials in ~/.pi/agent/auth.json
  *   4. ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL fallback
+ *
+ * Codex auth: `openai-codex` OAuth in ~/.pi/agent/auth.json (`/login openai-codex`).
  */
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
+import {
+  describeConfig,
+  loadConfig,
+  nextActiveWebSearchTools,
+  parseWebSearchCommand,
+  resolveEffectiveConfig,
+  saveConfig,
+  TOOL_NAME_FETCH,
+  TOOL_NAME_SEARCH,
+  TOOL_NAME_SEARCH_PRIVATE,
+  WEB_SEARCH_COMMANDS,
+  type SearchProvider,
+  type WebSearchConfig,
+} from "./config.ts";
+import { callCodexSearch, describeCodexAuth } from "./codex.ts";
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
-// Real Anthropic model ID (alias — resolves to current dated build). Override via ANTHROPIC_SEARCH_MODEL.
-const DEFAULT_MODEL = "claude-opus-5";
-const TOOL_NAME_SEARCH = "web_search";
-// The private Anthropic-compatible gateway reserves web_search by name. Keep the
-// public name everywhere else and expose this transport-safe alias only there.
-const TOOL_NAME_SEARCH_PRIVATE = "claude_web_search";
-const TOOL_NAME_FETCH = "web_fetch";
-const PRIVATE_SEARCH_PROVIDER = "private-anthropic";
-const SEARCH_TOOL_NAMES = [TOOL_NAME_SEARCH, TOOL_NAME_SEARCH_PRIVATE] as const;
-
-function searchToolNameForProvider(provider: string | undefined): string {
-  return provider === PRIVATE_SEARCH_PROVIDER ? TOOL_NAME_SEARCH_PRIVATE : TOOL_NAME_SEARCH;
-}
 
 // ---------------------------------------------------------------------------
 // Auth resolution
@@ -527,7 +529,7 @@ const SearchSchema = Type.Object({
       minimum: 1,
       maximum: 20,
       description:
-        "Hard ceiling on web_search tool calls (default: 5). Anthropic enforces server-side.",
+        "Hard ceiling on Anthropic web_search tool calls (default: 5). Ignored on the Codex backend.",
     })
   ),
 });
@@ -578,26 +580,30 @@ function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 
-export default function webSearchExtension(pi: ExtensionAPI): void {
-  const initialAuth = resolveAuth();
-  const model = process.env.ANTHROPIC_SEARCH_MODEL ?? DEFAULT_MODEL;
+function describeAnthropicAuth(): string {
+  const auth = resolveAuth();
+  return auth ? auth.source : "MISSING (claude login / ANTHROPIC_SEARCH_API_KEY / pi login)";
+}
 
-  const selectSearchToolAlias = (
-    nextProvider: string | undefined,
-    previousProvider?: string
+function extensionDir(): string {
+  return path.dirname(fileURLToPath(import.meta.url));
+}
+
+export default function webSearchExtension(pi: ExtensionAPI): void {
+  const configPath = path.join(extensionDir(), "config.json");
+  let config: WebSearchConfig = loadConfig(configPath);
+
+  const syncActiveTools = (
+    nextModelProvider: string | undefined,
+    previousModelProvider?: string
   ): void => {
     const activeTools = pi.getActiveTools();
-    // At startup, web_search is the canonical user-facing tool. On later model
-    // changes, preserve whether the alias used by the previous provider was active.
-    const previousName = previousProvider
-      ? searchToolNameForProvider(previousProvider)
-      : TOOL_NAME_SEARCH;
-    const searchEnabled = activeTools.includes(previousName);
-    const nextName = searchToolNameForProvider(nextProvider);
-    const nextTools = activeTools.filter(
-      (name) => !SEARCH_TOOL_NAMES.includes(name as (typeof SEARCH_TOOL_NAMES)[number])
+    const nextTools = nextActiveWebSearchTools(
+      activeTools,
+      nextModelProvider,
+      previousModelProvider,
+      resolveEffectiveConfig(config).searchProvider
     );
-    if (searchEnabled) nextTools.push(nextName);
     if (
       nextTools.length !== activeTools.length ||
       nextTools.some((name, index) => name !== activeTools[index])
@@ -607,37 +613,70 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
   };
 
   pi.on("session_start", (_event, ctx) => {
-    selectSearchToolAlias(ctx.model?.provider);
+    syncActiveTools(ctx.model?.provider);
   });
   pi.on("model_select", (event) => {
-    selectSearchToolAlias(event.model.provider, event.previousModel?.provider);
+    syncActiveTools(event.model.provider, event.previousModel?.provider);
   });
 
-  if (!initialAuth) {
-    const errMsg =
-      "web_search/web_fetch unconfigured. Run `claude login` (writes to macOS Keychain), " +
-      "set ANTHROPIC_SEARCH_API_KEY, or run `pi login` to populate ~/.pi/agent/auth.json.";
-    for (const name of [...SEARCH_TOOL_NAMES, TOOL_NAME_FETCH]) {
-      pi.registerTool({
-        name,
-        label: `${name} (unconfigured)`,
-        description: `Anthropic-backed ${name} — currently unavailable: no auth source found.`,
-        parameters: SEARCH_TOOL_NAMES.includes(
-          name as (typeof SEARCH_TOOL_NAMES)[number]
-        )
-          ? SearchSchema
-          : FetchSchema,
-        async execute() {
-          return {
-            content: [{ type: "text" as const, text: errMsg }],
-            isError: true,
-            details: { error: "no auth config" },
-          };
-        },
-      });
-    }
-    return;
-  }
+  pi.registerCommand("web-search", {
+    description: "View or set the web_search backend (status | config | provider | reload)",
+    getArgumentCompletions: (prefix) =>
+      WEB_SEARCH_COMMANDS.filter((value) => value.startsWith(prefix.toLowerCase())).map(
+        (value) => ({ value, label: value })
+      ),
+    handler: async (args, ctx) => {
+      const command = parseWebSearchCommand(args);
+      const envOverride =
+        resolveEffectiveConfig(config).providerSource === "env"
+          ? " WEB_SEARCH_PROVIDER is set and overrides the saved provider until unset."
+          : "";
+
+      if (command.kind === "usage") {
+        ctx.ui.notify(command.message, "warning");
+        return;
+      }
+
+      if (command.kind === "reload") {
+        config = loadConfig(configPath);
+        syncActiveTools(ctx.model?.provider, ctx.model?.provider);
+        ctx.ui.notify(`${describeConfig(config)}; reloaded from ${configPath}.${envOverride}`, "info");
+        return;
+      }
+
+      if (command.kind === "provider") {
+        config = { ...config, searchProvider: command.provider };
+        saveConfig(configPath, config);
+        syncActiveTools(ctx.model?.provider, ctx.model?.provider);
+        ctx.ui.notify(`${describeConfig(config)}; saved ${configPath}.${envOverride}`, "info");
+        return;
+      }
+
+      if (command.kind === "config") {
+        if (!ctx.hasUI) {
+          ctx.ui.notify(`Edit ${configPath} then /web-search reload`, "warning");
+          return;
+        }
+        const selected = await ctx.ui.select("web_search provider (fetch listed for Anthropic only)", [
+          "anthropic",
+          "codex",
+          "Cancel",
+        ]);
+        if (!selected || selected === "Cancel") return;
+        config = { ...config, searchProvider: selected as SearchProvider };
+        saveConfig(configPath, config);
+        syncActiveTools(ctx.model?.provider, ctx.model?.provider);
+        ctx.ui.notify(`${describeConfig(config)}; saved ${configPath}.${envOverride}`, "info");
+        return;
+      }
+
+      ctx.ui.notify(
+        `${describeConfig(config)}; anthropic auth ${describeAnthropicAuth()}; ` +
+          `codex auth ${describeCodexAuth()}; ${configPath}.${envOverride}`,
+        "info"
+      );
+    },
+  });
 
   // -------------------------------------------------------------------------
   // web_search / claude_web_search
@@ -645,20 +684,41 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
   const registerSearchTool = (toolName: string): void => {
     pi.registerTool({
       name: toolName,
-    label: "Web Search",
+      label: "Web Search",
     description:
-      `Search the web via Claude (${model}, Anthropic web_search_20250305). ` +
-      "Returns a synthesized natural-language answer with cited sources and the queries Claude " +
-      "issued. Server-side max_uses defaults to 5; raise via max_searches up to 20. " +
-      "For just-the-page-contents, use web_fetch instead. " +
-      `Auth: ${initialAuth.source}.`,
+      "Search the web and return a synthesized answer with cited sources. " +
+      "Backend is configurable via /web-search (Anthropic web_search_20250305 or Codex Responses web_search). " +
+      "For page contents, use web_fetch when it is listed (Anthropic provider only).",
     parameters: SearchSchema,
     async execute(_toolCallId, params, signal) {
       const p = params as SearchParams;
+      const current = resolveEffectiveConfig(config);
+      if (current.searchProvider === "codex") {
+        try {
+          const { text, details } = await callCodexSearch({
+            query: p.query,
+            model: current.codexModel,
+            systemPrompt: p.system_prompt,
+            signal,
+          });
+          return {
+            content: [{ type: "text" as const, text }],
+            details,
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            content: [{ type: "text" as const, text: `${toolName} failed: ${message}` }],
+            isError: true,
+            details: { error: message },
+          };
+        }
+      }
+      const model = current.anthropicModel;
       const auth = resolveAuth();
       if (!auth) {
         return {
-          content: [{ type: "text" as const, text: `${toolName} failed: no auth source found.` }],
+          content: [{ type: "text" as const, text: `${toolName} failed: no Anthropic auth source found.` }],
           isError: true,
           details: { error: "no auth config" },
         };
@@ -699,12 +759,16 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
         };
       }
     },
+
     renderResult(result, options, theme) {
       const details = (result.details ?? {}) as Partial<SearchDetails>;
       const expanded = options.expanded;
       if (details.error) {
         return new Text(theme.fg("error", `✗ ${toolName}: ${details.error}`), 0, 0);
       }
+      const current = resolveEffectiveConfig(config);
+      const fallbackModel =
+        current.searchProvider === "codex" ? current.codexModel : current.anthropicModel;
       const sources = details.sources ?? [];
       const queries = details.searchQueries ?? [];
       const wsReqs =
@@ -712,7 +776,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       const icon = sources.length > 0 ? theme.fg("success", "●") : theme.fg("warning", "●");
       const meta = theme.fg(
         "dim",
-        `(${details.model ?? model}) · ${sources.length} source${sources.length === 1 ? "" : "s"}` +
+        `(${details.model ?? fallbackModel}) · ${sources.length} source${sources.length === 1 ? "" : "s"}` +
           ` · ${wsReqs} search${wsReqs === 1 ? "" : "es"}`
       );
       const answer = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -757,32 +821,32 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
   registerSearchTool(TOOL_NAME_SEARCH_PRIVATE);
 
   // -------------------------------------------------------------------------
-  // web_fetch
+  // web_fetch (Anthropic only; syncActiveTools hides it for Codex)
   // -------------------------------------------------------------------------
   pi.registerTool({
     name: TOOL_NAME_FETCH,
     label: "Web Fetch",
     description:
-      `Fetch a single URL via Claude (${model}, Anthropic web_fetch_20250910) and return the ` +
-      "extracted page content. Use this when you have a specific URL (often from web_search) and " +
-      "want to read the full page rather than a synthesized summary. Returns the page as markdown " +
-      "with title and final-URL metadata. Truncates past max_bytes (default 200000). " +
-      `Auth: ${initialAuth.source}.`,
+      "Fetch a single URL via Anthropic web_fetch_20250910 and return the extracted page content. " +
+      "Use this when you have a specific " +
+      "URL (often from web_search) and want the full page rather than a synthesized summary. " +
+      "Returns the page as markdown with title and final-URL metadata. Truncates past max_bytes " +
+      "(default 200000).",
     parameters: FetchSchema,
     async execute(_toolCallId, params, signal) {
       const p = params as FetchParams;
       const maxBytes = p.max_bytes ?? 200_000;
+      const model = resolveEffectiveConfig(config).anthropicModel;
       const auth = resolveAuth();
       if (!auth) {
         return {
-          content: [{ type: "text" as const, text: "web_fetch failed: no auth source found." }],
+          content: [{ type: "text" as const, text: "web_fetch failed: no Anthropic auth source found." }],
           isError: true,
           details: { error: "no auth config", url: p.url },
         };
       }
       try {
         const tool = { type: "web_fetch_20250910", name: "web_fetch", max_uses: 1 };
-        // System prompt constrains Claude to fetch-and-return rather than analyze.
         const body: Record<string, unknown> = {
           model,
           max_tokens: p.max_tokens ?? 8192,
@@ -835,7 +899,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       const url = details.url ?? "(no url)";
       const meta = theme.fg(
         "dim",
-        `(${details.model ?? model}) · ${len.toLocaleString()} bytes${trunc}`
+        `(${details.model ?? resolveEffectiveConfig(config).anthropicModel}) · ${len.toLocaleString()} bytes${trunc}`
       );
       const body = result.content[0]?.type === "text" ? result.content[0].text : "";
       let text = `${icon} ${theme.fg("toolTitle", "Web Fetch")} ${theme.fg("link", url)} ${meta}`;
