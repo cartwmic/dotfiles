@@ -1,0 +1,4 @@
+{
+  "searchProvider": "anthropic",
+  "codexModel": "gpt-5.6-luna"
+}
