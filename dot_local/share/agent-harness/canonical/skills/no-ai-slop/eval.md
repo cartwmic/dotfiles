@@ -18,8 +18,9 @@ Run after one editing pass. Inspect changed passages against original draft. Thi
 
 ## Quality
 
+- Zero binary contrast templates survive or were introduced. Search changed passages for `not … but`, `, not `, `rather than`, `instead of`, `less about … more about`, and `It's not X. It's Y.` Every hit is a failure unless it is a negation with no replacement attached, `not` as a data value in an enumeration, or a protected span.
 - Material formulaic patterns were removed or grounded in specific content.
 - Cuts and rewrites are proportional to actual problems.
-- New wording is clearer or more specific, not synonym churn.
+- New wording is clearer or more specific. No synonym churn.
 - Structure and formatting changed only where they impeded the document's job.
 - No decision relied on an AI-detector score or tried to mimic detector heuristics.
