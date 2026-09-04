@@ -10,10 +10,11 @@ systems explainer, and two post-incident reviews. Each document was analysed ind
 with no access to the others. Only traits that converged across those analyses appear as
 general rules.
 
-A fifth register, casual / status, comes from two team-channel posts the owner supplied
-as equal-weight voice evidence. Those posts were not part of the original six-way analysis
-and have not been counted. Traits unique to them are scoped to that register and must not
-be imported into the document registers.
+A fifth register, casual / status, comes from seven supplied Slack sources: team-channel
+posts, direct outreach, and short conversational exchanges. These sources were not part of
+the original six-way analysis and have not been counted. Private exchanges are not persisted
+or quoted; they contribute only non-identifying aggregate traits. Traits unique to this
+register must not be imported into the document registers.
 
 Internal service names, regions, and product terms in the excerpts are genericised.
 Sentence shape is preserved verbatim, because shape is what carries voice.
@@ -47,7 +48,7 @@ Treating this as a single style produces the wrong output. The measured split:
 | Specification | almost none, 1:15.8 | frequent em dash and colon | 15 w |
 | Design / decision | 81% impersonal, `we` common, `I` rare | rare | 14.5 w |
 | Incident review | zero `I`, `we` only subordinated | none | 14–19 w |
-| Casual / status | heavy `I` for owned work and commitments | none observed | bullets; short-to-medium |
+| Casual / status | heavy `I` for owned work and commitments | none observed | highly variable; bullets, long additive paragraphs, and rapid short turns |
 
 Match the register before matching anything else. A PRD or design doc sits between design
 and specification: impersonal by default, `we` for commitments, `I` only for a judgment
@@ -59,7 +60,7 @@ italics, thank-you closers, or phrasing like "gets destroyed" into specification
 designs, or incident reviews. Do not rewrite a status update into the impersonal
 document register to satisfy the document rules.
 
-Traits unique to casual / status, from the two owner-supplied posts:
+Traits unique to casual / status, from the supplied Slack sources:
 
 - Opens with a one-line purpose fragment (`Update for those curious:`, `Summary of my
   alignment with [colleague] from the misunderstanding at the sync meeting:`) rather than
@@ -73,10 +74,24 @@ Traits unique to casual / status, from the two owner-supplied posts:
   `claims/narrative/RCA`) — V12, rougher, including spellings that are not the dictionary
   form.
 - Scope said as "isn't pretending to X, that's a separate issue, but there _should_ be Y".
-- Ends with a real thank-you and a small emoji, not a recap. This is not a polished
-  closing flourish and must not be stripped as one.
+- May end with a real thank-you and a small emoji, a small hopeful aside after a stated
+  digression, an explicit `Summary -` that reports schedule or status, or simply stop.
+  None should be normalized into a document-style conclusion.
 - Commitments are dated in ordinary language ("I will start on this harness tomorrow",
   "in the PRD soon here").
+- Firsthand technical comparisons can be strongly opinionated, but their boundary stays
+  visible: personal use, limited experience, current cost, or uncertainty about another
+  team's implementation constraints.
+- Optimism is often paired with the evidence still needed before committing long term.
+  Enthusiasm does not erase the validation condition.
+- Delays and limitations are reported candidly with their cause, current distance from the
+  intended timeline, recovery plan, and the point at which the slippage will be reassessed.
+- Offers to help are concrete and low-ceremony: ask who owns the work, request the relevant
+  repository or access, state willingness to spend time, and make room for the owner to be
+  candid about boundaries.
+- Live conversation can collapse to lowercase fragments, one-line agreement, jokes, and
+  immediate follow-up questions. Do not expand these into polished paragraphs or preserve
+  an exchange sequence merely to reproduce that rhythm.
 
 ## 1. Rules
 
@@ -108,8 +123,10 @@ freshness date.
 
 **V6. Endings narrow, they do not swell** *(reported)*. Documents end by reducing their own
 claim or simply stopping. No recap, no call to action, no closing flourish. Casual /
-status writing may end in a genuine thank-you plus a small emoji; that is not a recap or
-a kicker, and it must be left alone.
+status writing has more than one observed ending: a genuine thank-you plus a small emoji,
+a hopeful aside after `Anyways, I digress`, or an explicit `Summary -` that states schedule
+or status without inflating it. Leave the observed ending alone rather than forcing the
+document rule onto it.
 
 **V7. Parentheses carry the candid part** *(measured: 22.9 per 1,000 words, though many also
 carry plain schema mechanics rather than candour)*. The
@@ -199,8 +216,9 @@ Treat any of these appearing in a draft as a defect to fix.
 - **Dramatic colon reveals.** Colons introduce lists and contracts only.
 - **Symmetrical concession blocks.**
 - **Polished closing flourish, recap, or call to action.** Casual / status writing may
-  end with a genuine thank-you plus a small emoji; leave that. Do not add it to a
-  document, and do not treat it as this anti-pattern.
+  end with a genuine thank-you plus a small emoji, a hopeful aside after a digression,
+  or a factual `Summary -`; leave that. Do not add those endings to a document, and do
+  not treat them as this anti-pattern.
 - **External citations or appeals to authority.** Support is internal: tickets, prior art,
   stakeholder acceptance, measured estimates.
 - **Probabilistic confidence language.** Ranges, buffers, `~`, and invented 1–5 scales are
@@ -232,5 +250,5 @@ requirements list is how a stylistic pass starts damaging obligations.
 | Em dashes / 1k words | 15.6 in this specification, 0 in opinion and incident writing | register-dependent; ask before adding |
 | Sentence-length spread (stdev) | 13.9 | unstable across tokenizers; inspect, do not gate |
 | First-person `I` | 0 in specifications | only at a contestable judgment, and not in an accepted requirements document. Casual / status: expected for owned work; do not strip |
-| Final paragraph | — | narrows the claim or stops; no kicker. Casual / status: a thank-you plus small emoji is allowed |
+| Final paragraph | — | narrows the claim or stops; no kicker. Casual / status: preserve an observed thank-you, digression aside, factual `Summary -`, or abrupt stop |
 | Concessions | — | one clause, not a mirrored paragraph |
