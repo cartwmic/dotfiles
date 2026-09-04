@@ -51,6 +51,7 @@ test("status patched + marker MISSING ⇒ drift", () => {
 	writeState(dir, { status: "patched", target });
 	const r = checkPatchDrift(PATCH, { stateDir: dir });
 	assert.equal(r.drift, true);
+	assert.equal(r.upstream, false);
 	assert.equal(r.name, PATCH.name);
 });
 
@@ -213,4 +214,69 @@ test("resolvePiDistDir: falls back to the global npm root beside node", () => {
 
 test("resolvePiDistDir: nothing resolvable ⇒ undefined (quiet)", () => {
 	assert.equal(resolvePiDistDir({ argv: ["/n/bin/node"], execPath: "/n/bin/node", exists: () => false }), undefined);
+});
+
+const ASTRA = {
+	name: "openai-codex-gpt-6-astra",
+	marker: "chezmoi-pi-patch:openai-codex-gpt-6-astra v2",
+};
+
+test("catalogStopgap: marker gone + id still in target ⇒ upstream, not wipe", () => {
+	const dir = tmp();
+	const target = path.join(dir, "chunk.js");
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(target, `var openai_codex_default={"gpt-6-astra":{id:"gpt-6-astra"}};`);
+	fs.writeFileSync(
+		path.join(dir, `${ASTRA.name}.json`),
+		JSON.stringify({
+			status: "patched",
+			target,
+			catalogStopgap: { provider: "openai-codex", id: "gpt-6-astra" },
+			chezmoiSource: "dot_local/share/pi-patches/openai-codex-gpt-6-astra",
+		}),
+	);
+	const r = checkPatchDrift(ASTRA, { stateDir: dir });
+	assert.equal(r.drift, false);
+	assert.equal(r.upstream, true);
+	assert.equal(r.catalogId, "gpt-6-astra");
+	assert.equal(r.chezmoiSource, "dot_local/share/pi-patches/openai-codex-gpt-6-astra");
+});
+
+test("catalogStopgap: marker gone + id missing ⇒ wipe (re-apply)", () => {
+	const dir = tmp();
+	const target = path.join(dir, "chunk.js");
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(target, `var openai_codex_default={"gpt-5.5":{id:"gpt-5.5"}};`);
+	fs.writeFileSync(
+		path.join(dir, `${ASTRA.name}.json`),
+		JSON.stringify({
+			status: "patched",
+			target,
+			catalogStopgap: { provider: "openai-codex", id: "gpt-6-astra" },
+		}),
+	);
+	const r = checkPatchDrift(ASTRA, { stateDir: dir });
+	assert.equal(r.drift, true);
+	assert.equal(r.upstream, false);
+});
+
+test("catalogStopgap: marker present + id present ⇒ keep (our insert)", () => {
+	const dir = tmp();
+	const target = path.join(dir, "chunk.js");
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(
+		target,
+		`/*${ASTRA.marker}*/var openai_codex_default={"gpt-6-astra":{id:"gpt-6-astra"}};`,
+	);
+	fs.writeFileSync(
+		path.join(dir, `${ASTRA.name}.json`),
+		JSON.stringify({
+			status: "patched",
+			target,
+			catalogStopgap: { provider: "openai-codex", id: "gpt-6-astra" },
+		}),
+	);
+	const r = checkPatchDrift(ASTRA, { stateDir: dir });
+	assert.equal(r.drift, false);
+	assert.equal(r.upstream, false);
 });

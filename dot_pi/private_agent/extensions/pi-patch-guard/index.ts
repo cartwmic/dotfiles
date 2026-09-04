@@ -122,8 +122,15 @@ export function loadConfig(dir: string): GuardConfig {
 export interface DriftResult {
 	/** true ⇒ patch is intended-on but its marker is absent from the target. */
 	drift: boolean;
+	/**
+	 * true ⇒ intended-on, marker gone, but `catalogStopgap.id` is already in
+	 * the unpatched target. Upstream caught up; this is not a wipe.
+	 */
+	upstream: boolean;
 	/** Human-readable patch name (for the warning). */
 	name: string;
+	chezmoiSource?: string;
+	catalogId?: string;
 }
 
 /**
@@ -144,17 +151,34 @@ export function checkPatchDrift(
 	const stateDir = deps.stateDir ?? STATE_DIR;
 
 	try {
+		const quiet = { drift: false, upstream: false, name: patch.name };
 		const stateFile = path.join(stateDir, `${patch.name}.json`);
-		if (!exists(stateFile)) return { drift: false, name: patch.name };
-		const state = JSON.parse(readFile(stateFile)) as { status?: string; target?: string };
+		if (!exists(stateFile)) return quiet;
+		const state = JSON.parse(readFile(stateFile)) as {
+			status?: string;
+			target?: string;
+			catalogStopgap?: { provider?: string; id?: string };
+			chezmoiSource?: string;
+		};
 		const intendedOn = state.status === "patched" || state.status === "already-patched";
-		if (!intendedOn) return { drift: false, name: patch.name };
+		if (!intendedOn) return quiet;
 		const target = state.target;
-		if (!target || !exists(target)) return { drift: false, name: patch.name };
+		if (!target || !exists(target)) return quiet;
 		const content = readFile(target);
-		return { drift: !content.includes(patch.marker), name: patch.name };
+		if (content.includes(patch.marker)) return quiet;
+		const catalogId = state.catalogStopgap?.id;
+		if (typeof catalogId === "string" && catalogId.length > 0 && content.includes(catalogId)) {
+			return {
+				drift: false,
+				upstream: true,
+				name: patch.name,
+				chezmoiSource: typeof state.chezmoiSource === "string" ? state.chezmoiSource : undefined,
+				catalogId,
+			};
+		}
+		return { drift: true, upstream: false, name: patch.name };
 	} catch {
-		return { drift: false, name: patch.name };
+		return { drift: false, upstream: false, name: patch.name };
 	}
 }
 
@@ -255,14 +279,24 @@ export default function (pi: ExtensionAPI): void {
 	const cfg = loadConfig(extensionDir());
 
 	/** Check every watched patch and warn (once per invocation) for any that drifted. */
-	const warnOnDrift = (ctx: any): void => {
+	const warnOnDrift = (ctx: any, opts: { includeUpstream?: boolean } = {}): void => {
 		try {
 			if (!cfg.enabled || !ctx?.hasUI) return;
 			for (const patch of discoverWatchedPatches()) {
-				const { drift } = checkPatchDrift(patch);
-				if (!drift) continue;
+				const r = checkPatchDrift(patch);
+				if (r.upstream && opts.includeUpstream) {
+					const where = r.chezmoiSource ?? `dot_local/share/pi-patches/${r.name}`;
+					const id = r.catalogId ? ` (${r.catalogId})` : "";
+					ctx.ui.notify(
+						`⚠ pi patch "${r.name}" is obsolete${id} — the unpatched catalog already ships this id. ` +
+							`Delete ${where} (and its hash-include) so official metadata applies.`,
+						"warning",
+					);
+					continue;
+				}
+				if (!r.drift) continue;
 				ctx.ui.notify(
-					`⚠ pi patch "${patch.name}" is missing on disk — likely wiped by a pi update. ` +
+					`⚠ pi patch "${r.name}" is missing on disk — likely wiped by a pi update. ` +
 						`Re-run it (chezmoi apply or the patch.mjs) and reload pi; fresh subagents read the unpatched file until then.`,
 					"warning",
 				);
@@ -292,7 +326,7 @@ export default function (pi: ExtensionAPI): void {
 
 	// Session open/reload/resume — surface drift before the user types.
 	pi.on("session_start", async (_event: unknown, ctx: any) => {
-		warnOnDrift(ctx);
+		warnOnDrift(ctx, { includeUpstream: true });
 		warnOnBrokenAssumptions(ctx);
 	});
 	// After the agent finishes responding — re-check disk so the reminder persists each turn.
