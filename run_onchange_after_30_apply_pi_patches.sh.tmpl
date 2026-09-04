@@ -11,6 +11,7 @@
 # patch.mjs (hide-nonbridge-claude-models): {{ include "dot_local/share/pi-patches/hide-nonbridge-claude-models/patch.mjs" | sha256sum }}
 # patch.mjs (custom-message-marker):        {{ include "dot_local/share/pi-patches/custom-message-marker/patch.mjs" | sha256sum }}
 # patch.mjs (cursor-provider):              {{ include "dot_local/share/pi-patches/cursor-provider/patch.mjs" | sha256sum }}
+# patch.mjs (openai-codex-gpt-6-astra):     {{ include "dot_local/share/pi-patches/openai-codex-gpt-6-astra/patch.mjs" | sha256sum }}
 # apply script:                             {{ include "dot_local/user_scripts/executable_apply_pi_patches.sh" | sha256sum }}
 # Source-state rendering happens before any scripts run. Guard these probes so a
 # fresh machine can render this template before mise has installed Node.

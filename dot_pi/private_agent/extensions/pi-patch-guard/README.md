@@ -27,6 +27,17 @@ the state file says the patch should be applied (`status` is `patched` /
 `already-patched`), it checks the recorded `target` file still contains the
 patch marker. If the marker is gone it fires a single UI warning.
 
+Catalog-insert patches may also write a `catalogStopgap` `{ provider, id }`
+plus `chezmoiSource` into that state file. A missing marker then splits:
+
+- id also gone → wipe (re-apply)
+- id still in the unpatched target → upstream shipped (delete the patch)
+
+The obsolete-patch warning runs at **session start** only. Same idea as
+`catalog-overlay-nudge`, but based on the patched file rather than
+overlay-vs-`getModels()` — after an insert, `getModels()` already contains the
+id, so that comparison cannot tell overlay from upstream.
+
 **Profile-aware for free.** A patch gated off for the active chezmoi profile
 (e.g. `hide-nonbridge-claude-models` on a non-`personal` profile) writes
 `status: "unpatched"`, which is not intended-on ⇒ no drift, no warning. Patches
