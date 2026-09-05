@@ -62,6 +62,13 @@
         }
       ]
     }
+{{- if eq .profile "personal" }},
+    "openai-codex": {
+      "modelOverrides": {
+        "gpt-6-astra": { "contextWindow": 872000 }
+      }
+    }
+{{- end }}
 {{- if ne .profile "personal" }},
     "anthropic": {
       "models": [
