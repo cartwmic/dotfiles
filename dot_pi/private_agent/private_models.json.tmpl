@@ -2,6 +2,10 @@
 {{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiProviderRef") -}}
 {{-   $privateProvider = output "op" "read" .privatePiProviderRef | fromJson -}}
 {{- end -}}
+{{- $privateGlmProvider := dict -}}
+{{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiGlmProviderRef") -}}
+{{-   $privateGlmProvider = output "op" "read" .privatePiGlmProviderRef | fromJson -}}
+{{- end -}}
 {
   "providers": {
     "deepseek": {
@@ -79,6 +83,9 @@
 {{- end }}
 {{- if $privateProvider }},
     "private-anthropic": {{ $privateProvider | toPrettyJson }}
+{{- end }}
+{{- if $privateGlmProvider }},
+    "private-glm": {{ $privateGlmProvider | toPrettyJson }}
 {{- end }}
   }
 }

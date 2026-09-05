@@ -10,6 +10,10 @@
 {{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiProviderRef") -}}
 {{-   $privateProvider = output "op" "read" .privatePiProviderRef | fromJson -}}
 {{- end -}}
+{{- $privateGlmProvider := dict -}}
+{{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiGlmProviderRef") -}}
+{{-   $privateGlmProvider = output "op" "read" .privatePiGlmProviderRef | fromJson -}}
+{{- end -}}
 {{- $settingsPath := joinPath .chezmoi.homeDir ".pi/agent/settings.json" -}}
 {{- if stat $settingsPath -}}
 {{-   $existingSettings := output "cat" $settingsPath | fromJson -}}
@@ -54,6 +58,9 @@
     "anthropic/claude-sonnet-5"
 {{- range $model := $privateProvider.models }},
     {{ printf "private-anthropic/%s" $model.id | quote }}
+{{- end }}
+{{- range $model := $privateGlmProvider.models }},
+    {{ printf "private-glm/%s" $model.id | quote }}
 {{- end }}
 {{- end }}
   ],
