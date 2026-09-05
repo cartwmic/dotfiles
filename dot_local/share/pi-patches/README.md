@@ -24,7 +24,6 @@ Per-patch rationale and failure modes stay in the sibling READMEs:
 - [anthropic-idle-watchdog](anthropic-idle-watchdog/README.md) — SSE idle watchdog (all profiles)
 - [custom-message-marker](custom-message-marker/README.md) — wrap injected `custom` messages (all profiles)
 - [hide-nonbridge-claude-models](hide-nonbridge-claude-models/README.md) — personal-only model-list filter
-- [openai-codex-gpt-6-astra](openai-codex-gpt-6-astra/README.md) — personal-only insert of `gpt-6-astra` into the openai-codex catalog
 - [cursor-provider](cursor-provider/README.md) — retired leftover-splice restore (not desired-state delivery; widget comes from the fork)
 
 ## Setup
@@ -37,7 +36,7 @@ ls
 ```
 
 You should see one subdirectory per patch (`anthropic-idle-watchdog`,
-`custom-message-marker`, `hide-nonbridge-claude-models`, `openai-codex-gpt-6-astra`,
+`custom-message-marker`, `hide-nonbridge-claude-models`,
 `cursor-provider`) plus this README.
 
 Layout of each patch:
@@ -150,15 +149,13 @@ desired state for the active profile.
 ls */patch.mjs
 node anthropic-idle-watchdog/patch.mjs --check
 node custom-message-marker/patch.mjs --check
-PI_CHEZMOI_PROFILE=personal node openai-codex-gpt-6-astra/patch.mjs --check
 PI_CHEZMOI_PROFILE=personal node hide-nonbridge-claude-models/patch.mjs --check
 PI_CHEZMOI_PROFILE=axon-work-computer node cursor-provider/patch.mjs --check
 PI_CHEZMOI_PROFILE=personal node cursor-provider/patch.mjs --check
 ```
 
 On a non-personal profile, omit `=personal` (or set the real profile) so
-the hide-nonbridge and openai-codex-gpt-6-astra checks expect the un-patched
-files. `cursor-provider --check`
+the hide-nonbridge check expects the un-patched files. `cursor-provider --check`
 expects unspliced leftover `@marckrenn/pi-sub-*` files (or an absent npm tree)
 on every profile, including work.
 
