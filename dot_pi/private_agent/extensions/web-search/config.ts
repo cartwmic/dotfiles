@@ -8,11 +8,25 @@ export const DEFAULT_CODEX_MODEL = "gpt-5.6-luna";
 export const TOOL_NAME_SEARCH = "web_search";
 export const TOOL_NAME_SEARCH_PRIVATE = "claude_web_search";
 export const TOOL_NAME_FETCH = "web_fetch";
-export const PRIVATE_SEARCH_PROVIDER = "private-anthropic";
+// NOTE: these are *model* providers (keys in ~/.pi/agent/models.json), not search
+// backends. Do not confuse with SEARCH_PROVIDERS above, which selects who performs
+// the search. This list answers a different question: is the current chat model
+// served by the Axon Open Road gateway (litellm.boost-llm.dev)?
+//
+// It matters because that gateway intercepts any tool literally named `web_search`
+// as a server-side tool and answers via its OpenAI-completions shim, which emits SSE
+// `data:` frames with no `event:` field lines. pi's Anthropic parser dispatches on
+// `event:`, so it never sees `message_delta`, never gets a stop_reason, and throws
+// "Anthropic stream ended without a stop reason" — then retries forever. Aliasing the
+// tool name keeps the request on the gateway's native Anthropic path.
+export const WEB_SEARCH_ALIAS_PROVIDERS = ["private-anthropic", "private-glm"] as const;
 export const SEARCH_TOOL_NAMES = [TOOL_NAME_SEARCH, TOOL_NAME_SEARCH_PRIVATE] as const;
 
-export function searchToolNameForProvider(provider: string | undefined): string {
-  return provider === PRIVATE_SEARCH_PROVIDER ? TOOL_NAME_SEARCH_PRIVATE : TOOL_NAME_SEARCH;
+export function searchToolNameForProvider(modelProvider: string | undefined): string {
+  return modelProvider !== undefined &&
+    (WEB_SEARCH_ALIAS_PROVIDERS as readonly string[]).includes(modelProvider)
+    ? TOOL_NAME_SEARCH_PRIVATE
+    : TOOL_NAME_SEARCH;
 }
 
 export function nextActiveWebSearchTools(

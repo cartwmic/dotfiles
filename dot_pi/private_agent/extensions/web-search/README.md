@@ -23,7 +23,8 @@ Responses path follows the ChatGPT Codex `web_search` tool used by community
 extensions such as Leechael `pi-codex-search`.
 
 The session model (`PI_PROVIDER`) is independent of the search backend.
-`private-anthropic` only aliases the search tool name to `claude_web_search`.
+The Open Road gateway providers (`private-anthropic`, `private-glm`) only alias
+the search tool name to `claude_web_search`.
 
 Do not put tokens in this file or in chezmoi source.
 
@@ -151,11 +152,30 @@ the page body. Claude is prompted to return content, not commentary.
 ### Private-gateway alias
 
 Both search aliases and `web_fetch` are registered, but the active set omits
-`web_fetch` while Codex is configured. When the active model provider is
-`private-anthropic`, the search tool name in the active set is
-`claude_web_search` instead of `web_search` (that gateway reserves
-`web_search`). Session start and model changes keep the alias in sync. Callers
-still want search-vs-fetch behavior; only the search tool **name** changes.
+`web_fetch` while Codex is configured. When the active model provider is one of
+`WEB_SEARCH_ALIAS_PROVIDERS` (`private-anthropic`, `private-glm` — both served by
+`litellm.boost-llm.dev`), the search tool name in the active set is
+`claude_web_search` instead of `web_search`. Session start and model changes keep
+the alias in sync. Callers still want search-vs-fetch behavior; only the search
+tool **name** changes.
+
+This alias is not cosmetic. The gateway intercepts any tool literally named
+`web_search` as a server-side tool and answers via its OpenAI-completions shim,
+which emits SSE `data:` frames with **no `event:` field lines**. pi's Anthropic
+parser dispatches on `event:`, so it never observes `message_delta`, never
+receives a `stop_reason`, and fails with `Anthropic stream ended without a stop
+reason` — then retries the identical request indefinitely. Verified 2026-09-05:
+sending only `web_search` routes to the shim (`chatcmpl-*` id, 0 `event:` lines);
+renaming that one tool to `claude_web_search` restores the native Anthropic path
+(`msg_*` id, full `event:` lines). Tool count and payload size are irrelevant —
+16 tiny tools and a 50 KB payload both stay native.
+
+Any new provider added against that gateway must be added to
+`WEB_SEARCH_ALIAS_PROVIDERS` in `config.ts`.
+
+That constant holds **model** providers (keys in `~/.pi/agent/models.json`), not
+search backends. `SEARCH_PROVIDERS` (`anthropic`, `codex`) is the unrelated list
+that selects who performs the search.
 
 ## Validation
 
