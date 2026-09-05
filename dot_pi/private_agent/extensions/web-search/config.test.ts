@@ -92,6 +92,24 @@ test("active tool listing omits fetch for Codex and restores it for Anthropic", 
     "codex"
   );
   assert.deepEqual(privateTools, ["read", "claude_web_search"]);
+
+  // work-glm shares the work gateway, so it needs the same alias.
+  const privateGlmTools = nextActiveWebSearchTools(
+    ["read", "web_search", "web_fetch"],
+    "work-glm",
+    "openrouter",
+    "codex"
+  );
+  assert.deepEqual(privateGlmTools, ["read", "claude_web_search"]);
+
+  // Switching back off the gateway restores the public name.
+  const backToPublic = nextActiveWebSearchTools(
+    ["read", "claude_web_search"],
+    "anthropic",
+    "work-glm",
+    "codex"
+  );
+  assert.deepEqual(backToPublic, ["read", "web_search"]);
 });
 
 test("loadConfig falls back on missing or invalid files", () => {
