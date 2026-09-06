@@ -117,14 +117,25 @@ try {
 		readFileSync(join(chunks, file), "utf8").includes("async function runPrintMode(runtimeHost,options)"));
 	if (matches.length !== 1) throw new Error(`Expected one print-mode bundle, found ${matches.length}`);
 	const sessionEdits = edits["dist/core/agent-session.js"];
-	edits[`dist/bundle/chunks/${matches[0]}`] = [
+	const bundleFile = `dist/bundle/chunks/${matches[0]}`;
+	const bundleSource = readFileSync(join(root, bundleFile), "utf8");
+	// Upstream renamed the print prompt-loop variable between 0.85.0 (message2)
+	// and 0.85.1 (message). Detect the variant, including an already-patched
+	// bundle, so re-runs skip instead of failing on the renamed anchor.
+	const loopVar = bundleSource.includes("for(let message of messages)await session.prompt(message);") ? "message"
+		: bundleSource.includes("for(let message2 of messages)await session.prompt(message2);") ? "message2"
+		: bundleSource.includes("for(let message2 of messages){await session.prompt(message2);await session.waitForExtensionTasks();}") ? "message2"
+		: bundleSource.includes("for(let message of messages){await session.prompt(message);await session.waitForExtensionTasks();}") ? "message"
+		: undefined;
+	if (!loopVar) throw new Error(`Changed upstream anchor in ${bundleFile}; update this patch, do not guess`);
+	edits[bundleFile] = [
 		["async _runAgentPrompt(messages){", sessionEdits[0][1].replace("    async _runAgentPrompt(messages) {", "async _runAgentPrompt(messages){")],
 		['sendUserMessage:(content,options)=>{this.sendUserMessage(content,options).catch(err2=>{runner.emitError({extensionPath:"<runtime>",event:"send_user_message",error:err2 instanceof Error?err2.message:String(err2)})})}',
 		 `sendUserMessage:(content,options)=>{/* ${marker} */this._trackExtensionTask(this.sendUserMessage(content,options).catch(err2=>{runner.emitError({extensionPath:"<runtime>",event:"send_user_message",error:err2 instanceof Error?err2.message:String(err2)});throw err2;}))}`],
 		['compact:options=>{(async()=>{try{let result=await this.compact(options?.customInstructions);options?.onComplete?.(result)}catch(error){let err2=error instanceof Error?error:new Error(String(error));options?.onError?.(err2)}})()}',
 		 `compact:options=>{/* ${marker} */this._trackExtensionTask((async()=>{try{let result=await this.compact(options?.customInstructions);options?.onComplete?.(result)}catch(error){let err2=error instanceof Error?error:new Error(String(error));if(!options?.onError)throw err2;options.onError(err2)}})())}`],
-		['initialMessage&&await session.prompt(initialMessage,{images:initialImages});for(let message2 of messages)await session.prompt(message2);',
-		 `initialMessage&&(await session.prompt(initialMessage,{images:initialImages}),await session.waitForExtensionTasks());/* ${marker} */for(let message2 of messages){await session.prompt(message2);await session.waitForExtensionTasks();}`],
+		[`initialMessage&&await session.prompt(initialMessage,{images:initialImages});for(let ${loopVar} of messages)await session.prompt(${loopVar});`,
+		 `initialMessage&&(await session.prompt(initialMessage,{images:initialImages}),await session.waitForExtensionTasks());/* ${marker} */for(let ${loopVar} of messages){await session.prompt(${loopVar});await session.waitForExtensionTasks();}`],
 	];
 	const prepared = [];
 	for (const [relative, replacements] of Object.entries(edits)) {
