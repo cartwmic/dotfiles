@@ -71,7 +71,10 @@ bun test dot_pi/private_agent/extensions/auto-compact/index.test.ts
 Each artifact directory must be new. `--pi /path/to/dist/bundle/cli.js` tests
 an isolated candidate; `--extension /path/to/index.ts` selects source or deployed
 extension. The default is the deployed `~/.pi/agent/extensions/auto-compact/index.ts`,
-including its machine-local configuration.
+including its machine-local configuration. The fixture's history reaches roughly
+45% of the scripted 272000-token window, so a machine whose auto-compact
+`thresholdPercent` is higher never compacts and the proof fails on config, not
+on the patch — point `--extension` at a copy with a lowered threshold instead.
 
 The fixture uses the public `--print --no-skills --no-extensions -e ...` CLI,
 a local OpenAI-compatible HTTP server, isolated settings/auth, native tools,
