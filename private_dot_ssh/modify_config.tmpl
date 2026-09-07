@@ -170,6 +170,22 @@ Host laptop
     ControlPath ~/.ssh/cm-%r@%h:%p
     ControlPersist 10m
 
+# macOS shell over NanoKVM USB. SSH terminates on NanoKVM, not macOS.
+# One interactive session; no command execution, SFTP, forwarding or multiplexing.
+Host mac-kvm
+    HostName 10.19.1.223
+    Port 22
+    User macbridge
+    IdentityFile ~/.ssh/homelab
+    IdentitiesOnly yes
+    IdentityAgent none
+    RequestTTY force
+    ControlMaster no
+    ControlPath none
+    ControlPersist no
+    ServerAliveInterval 5
+    ServerAliveCountMax 2
+
 # Whonix Workstation via Gateway ProxyJump.
 # Path: phone -> user@10.19.1.210 (gw) -> user@10.152.152.11 (ws).
 # Key: ~/.ssh/whonix-homelab (also provisioned by 05_provision_termux_ssh_keys).
