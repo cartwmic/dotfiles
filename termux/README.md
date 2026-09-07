@@ -50,6 +50,11 @@ After apply (and SSH key provision below):
 - `ssh cartwmic-server` / `ssh remote` → `cartwmic@192.0.2.221` via `~/.ssh/homelab` (ControlMaster)
 - `ssh macbook` → `cartwmic@192.0.2.200` via `~/.ssh/homelab` (ControlMaster)
 - `ssh laptop` → `michael@192.0.2.112` via `~/.ssh/homelab` (ControlMaster)
+- `ssh mac-kvm` → normal-user macOS shell over NanoKVM USB. SSH terminates as
+  `macbridge@192.0.2.223`, using `~/.ssh/homelab`. The address is reserved in
+  OPNsense for NanoKVM Ethernet MAC `48:da:35:6f:61:ad`. A PTY is forced and
+  multiplexing disabled: one interactive shell, no remote commands, SFTP or
+  forwarding. The Mac user bridge must be running (configured to start at login).
 - `ssh whonix-gw` / `ssh whonix-ws` → Whonix via `~/.ssh/whonix-homelab`
 - Jump handlers live in `~/bin/{zellij,herdr}-jump`. Usage: `<id> [host]`.
   Unset identity (missing host) defaults to `remote`. A present host must be a
