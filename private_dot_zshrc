@@ -244,3 +244,60 @@ fi
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
 
+
+# Loop Engine monitor helpers: on-demand view of any loop-engine run.
+# Each run gets its own temp folder: $LOOP_ENGINE_MONITOR_DIR/<run-id>/ containing
+# monitor.tsv (TSV rows), monitor.err (engine stderr), and monitor.log (engine stdout).
+export LOOP_ENGINE_MONITOR_DIR="${LOOP_ENGINE_MONITOR_DIR:-/tmp/loop-engine-monitor}"
+export LOOP_ENGINE="${LOOP_ENGINE:-loop-engine}"
+loop-engine-mon-start() {
+  # usage: loop-engine-mon-start <run-id> [poll-seconds] [extra monitor args...]
+  # extra args pass through to loop-engine monitor (e.g. --invocation ID, --attention-seconds N)
+  : "${1:?usage: loop-engine-mon-start <run-id> [poll-seconds] [extra monitor args...]}"
+  local run_id="$1" poll="${2:-10}"
+  shift 2
+  local dir="$LOOP_ENGINE_MONITOR_DIR/$run_id"
+  mkdir -p "$dir"
+  printf 'time\tevent\tstate\tboundary\tworkers\tsteps\tjudgment\tdiagnostics\n' > "$dir/monitor.tsv"
+  nohup "$LOOP_ENGINE" monitor --run "$run_id" --poll-seconds "$poll" --json "$@" 2>"$dir/monitor.err" \
+    | jq -r --unbuffered '[
+        (.sampled_at_ms/1000 | strftime("%H:%M:%S")),
+        .event, .workflow.current_state, (.boundary.event // "-"),
+        ([.conformance.workers[]? | "\(.assignment_id):\(.status)(exit \(.exit_code))"] | join(" ")),
+        ([.helper.graph.steps[]? | "\(.name):\(.state)"] | join(" ")),
+        (.judgment.state // "-"),
+        (if (.diagnostics|length)>0 then (.diagnostics|tostring|.[0:100]) else "-" end)
+      ] | @tsv' >> "$dir/monitor.tsv" &
+  echo "monitor started for $run_id (poll ${poll}s) -> $dir/monitor.tsv"
+}
+loop-engine-mon-log() {
+  # usage: loop-engine-mon-log <run-id> [lines]  - engine stderr from the run's temp folder
+  : "${1:?usage: loop-engine-mon-log <run-id> [lines]}"
+  local run_id="$1" lines="${2:-20}"
+  local dir="$LOOP_ENGINE_MONITOR_DIR/$run_id"
+  test -f "$dir/monitor.err" || { printf 'no monitor log for %s\n' "$run_id" >&2; return 1; }
+  tail -n "$lines" "$dir/monitor.err"
+}
+loop-engine-mon() {
+  # usage: loop-engine-mon <run-id> [lines]
+  : "${1:?usage: loop-engine-mon <run-id> [lines]}"
+  local run_id="$1" lines="${2:-5}"
+  local dir="$LOOP_ENGINE_MONITOR_DIR/$run_id"
+  if ! test -s "$dir/monitor.tsv"; then
+    printf 'no monitor data for %s; run: loop-engine-mon-start %s\n' "$run_id" "$run_id" >&2
+    return 1
+  fi
+  awk -F'\t' '
+    NR==FNR { for (i = 1; i <= NF; i++) if (length($i) > w[i]) w[i] = length($i); next }
+    { for (i = 1; i <= NF; i++) printf "%-*s%s", w[i], $i, (i == NF ? "\n" : "  ") }
+  ' "$dir/monitor.tsv" "$dir/monitor.tsv" | head -n "$((lines + 1))"
+}
+loop-engine-mon-stop() {
+  # usage: loop-engine-mon-stop <run-id>
+  : "${1:?usage: loop-engine-mon-stop <run-id>}"
+  if pkill -f "loop-engine monitor.*--run $1" 2>/dev/null; then
+    echo "monitor stopped for $1"
+  else
+    echo "no monitor running for $1"
+  fi
+}
