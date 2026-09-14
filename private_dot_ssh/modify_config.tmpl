@@ -114,7 +114,7 @@ $HOMELAB_BEGIN
 # a stale 'cartwmic-homelab - user1' that no homelab host authorizes). Without
 # this pin those get offered first and can exhaust MaxAuthTries before the
 # right key is ever tried.
-Host cartwmic-server remote
+Host mac-mini cartwmic-server remote
     HostName 10.19.1.221
     User cartwmic
     IdentityFile ~/.ssh/homelab
@@ -141,9 +141,9 @@ $TERMUX_BEGIN
 # Homelab targets from Termux. IdentityFile is the shared cartwmic-homelab key
 # provisioned to ~/.ssh/homelab (see 05_provision_termux_ssh_keys).
 # \`remote\` is retained as an alias of cartwmic-server so a missing jump host
-# still sshs over that ControlMaster. Jumpable aliases (remote, cartwmic-server,
-# macbook, laptop) all share ControlMaster/ControlPath/ControlPersist.
-Host cartwmic-server remote
+# still sshs over that ControlMaster. Jumpable aliases (mac-mini, remote,
+# cartwmic-server, macbook, laptop) all share ControlMaster/ControlPath/ControlPersist.
+Host mac-mini cartwmic-server remote
     HostName 10.19.1.221
     User cartwmic
     IdentityFile ~/.ssh/homelab
