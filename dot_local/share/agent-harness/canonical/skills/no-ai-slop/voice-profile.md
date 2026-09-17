@@ -4,41 +4,19 @@ Evidence-derived writing profile for the repository owner. Load this in Edit mod
 target document is the owner's own writing, or when asked to repair a draft that reads as
 generated. Pair with [voice-excerpts.md](voice-excerpts.md).
 
-Derived from six documents the owner wrote himself: an opinionated tooling comparison, an
-evaluation-metrics specification, a system design produced under deadline, a cross-service
-systems explainer, and two post-incident reviews. Each document was analysed independently
-with no access to the others. Only traits that converged across those analyses appear as
-general rules.
+The document rules come from six owner-written sources: an opinionated tooling comparison,
+an evaluation-metrics specification, a system design, a cross-service explainer, and two
+post-incident reviews. Reported traits converged across those sources. Measured rates come
+from 4,237 words of specification prose and apply only as loose guidance.
 
-A fifth register, casual / status, comes from seven supplied Slack sources: team-channel
-posts, direct outreach, and short conversational exchanges. These sources were not part of
-the original six-way analysis and have not been counted. Private exchanges are not persisted
-or quoted; they contribute only non-identifying aggregate traits. Traits unique to this
-register must not be imported into the document registers.
+Casual/status Slack, review comments, and tasking prompts supply unmeasured evidence for
+their own registers. Private exchanges appear as redacted excerpts only when the owner
+explicitly requests inclusion. Internal names and product terms are genericised while
+sentence shape is preserved.
 
-Internal service names, regions, and product terms in the excerpts are genericised.
-Sentence shape is preserved verbatim, because shape is what carries voice.
-
-**Evidence status.** Traits below were reported independently across six documents, but only
-one has been counted in full: a specification, 4,237 words of prose after excluding tables,
-prompt templates, the referenced-document inventory, and a 636-word appendix of sample
-queries written by someone else. That appendix was included in an earlier revision's counts,
-which contaminated roughly 13% of the measured text with a third party's writing and shifted
-several published numbers. Rules marked *(measured)* have numbers behind them. Rules marked
-*(reported)* rest on convergent qualitative reporting. They are tendencies. Do not read them
-as laws.
-
-**Measurement caveats.** Sentence-splitting and word-counting choices move these numbers, so
-treat them as direction. None is a gate. Two are known to be unstable: sentence-length
-standard deviation swings widely with tokenizer choice, and the triple rate depends entirely
-on whether a specification enumeration is counted, which no rubric here fully settles.
-Two blind reviews against the primary sample have corrected this file, once for stating
-tendencies as universals and once for structural rules that did not survive counting.
-
-**Genre fitness overrides every rule here.** Where a rule would make a requirement vaguer,
-a heading less navigable, or push a substantive claim into an aside, the document's job
-wins and the rule loses. This profile is evidence about one writer. It carries no authority
-as a general style guide.
+Genre fitness overrides this profile. A requirement must remain testable, a heading must
+remain navigable, and substantive content must stay in the main clause. This is evidence
+about one writer, with no authority as a general style guide.
 
 ## 0. Register comes first
 
@@ -51,6 +29,13 @@ Treating this as a single style produces the wrong output. The measured split:
 | Design / decision | 81% impersonal, `we` common, `I` rare | rare | 14.5 w |
 | Incident review | zero `I`, `we` only subordinated | none | 14–19 w |
 | Casual / status | heavy `I` for owned work and commitments | none observed | highly variable; bullets, long additive paragraphs, and rapid short turns |
+
+Two unmeasured working registers sit outside this table. Review comments lead with direct
+questions, test the implications of a term or framing, and often offer a concrete example or
+alternative that would resolve the ambiguity. Challenges are owned with `I` / `IMO` and may
+end with a scope hedge or self-deprecating aside. A short comment can consist only of the
+missing distinction. Tasking prompts lead with the requested outcome, attach the known gap
+or reason inline, and state validation or subagent constraints in the same working register.
 
 Match the register before matching anything else. A PRD or design doc sits between design
 and specification: impersonal by default, `we` for commitments, `I` only for a judgment
@@ -94,6 +79,8 @@ Traits unique to casual / status, from the supplied Slack sources:
 - Offers to help are concrete and low-ceremony: ask who owns the work, request the relevant
   repository or access, state willingness to spend time, and make room for the owner to be
   candid about boundaries.
+- Confidence tracks current experience. Stale familiarity does not support a present-tense
+  claim.
 - Live conversation can collapse to lowercase fragments, one-line agreement, jokes, and
   immediate follow-up questions. Do not expand these into polished paragraphs or preserve
   an exchange sequence merely to reproduce that rhythm.
@@ -147,10 +134,9 @@ plan-following execution`). In specifications they are plain labels (`Design Pri
 `Metrics`). Match the register, and never trade a navigable heading for a rhetorical one.
 
 **V10. Rough edges survive.** Occasional `it's` for `its`, run-on sentences, subjectless
-fragments, fused spellings (`naildown/explore`), lowercase mid-stream (`prd`), slightly
-broken closers (`into the prd going as well`). This is working prose, before copy-editing. Do
-not introduce errors deliberately, but do not sand every sentence to the same finish
-either.
+fragments, fused spellings (`naildown/explore`), lowercase mid-stream (`prd`), and slightly
+broken closers (`into the prd going as well`) appear in the evidence. Never introduce an
+error. Leave harmless rough edges when correcting them would only homogenize the prose.
 
 **V11. In incident writing, accountability lands on roles and systems, never people.**
 Wrong calls get the benefit of what was known at the time. No moral vocabulary.
@@ -159,59 +145,33 @@ Wrong calls get the benefit of what was known at the time. No moral vocabulary.
 "users/customers", "who/when/how", "low risk/priority". Casual writing runs this
 rougher: "naildown/explore", "framework/harness", "claims/narrative/RCA".
 
-**V13. Tables carry repeated comparable records; prose keeps its enumerations** *(measured,
-revised)*. Catalogs with one row per item live in tables. Prose enumerations coexist with
-them freely — 29 comma-coordinated inventories appear in the sample's prose, including
-"product safety, quality, and effectiveness" — so tables do not displace enumeration and a
-prose list is not evidence of a defect. A stronger claim in an earlier revision, that
-enumerations go in tables and thereby keep the prose clean, was contradicted by counting.
-When a list is a set of comparable records with shared fields, a table is usually better;
-otherwise leave it in the sentence.
+**V13. Tables carry repeated comparable records; prose keeps its enumerations** *(measured)*.
+The sample contains 29 comma-coordinated prose inventories. Use a table for comparable
+records with shared fields. Leave ordinary enumerations in prose.
 
 **V14. Long sentences appear and are built by subordination** *(measured: 7.6% of prose
-sentences exceed 40 words; median 16)*. Joins are ordinary — `so`, `while`, `whereas`,
-`which`, `since`, and semicolons. Uniformly medium-length sentences are a flat, generated
-rhythm, and the fix is combining adjacent sentences that already share a subject, never
-padding one out.
+sentences exceed 40 words; median 16)*. Ordinary joins include `so`, `while`, `whereas`,
+`which`, `since`, and semicolons. Merge only when the clauses already share a clear relation.
+Never invent causality or leave a pronoun without a stable antecedent. The measured rate is
+not a quota.
 
-An earlier revision claimed long sentences are characteristically answered by a short one.
-Counting found that shape in 2 of 14 cases, so it is occasional. Do not target it.
-**Do not treat any long-sentence rate as a quota.** Merging carries specific
-risk: joining two independent statements with `so`, `since`, `which`, or `where` can invent
-causality or leave a pronoun without a stable antecedent. Both happened in the first document
-edited under this rule — one merge asserted that following the rules caused the failure the
-rules were meant to limit, and another made an approval step's actor ambiguous. Merge only
-where the sentence reads better on its own terms.
-
-**Do not apply V14 to requirements.** A requirement that states one obligation per sentence
-is testable, and merging obligations to lengthen a sentence makes it ambiguous and can
-silently drop one. Specification sections legitimately run flatter than prose — measured at
-0% of sentences over 40 words in one requirements document, against 3.3% in that same
-document's prose — and that is correct. Do not edit it away.
+Requirements are exempt from V14. Keep one testable obligation per sentence.
 
 ## 2. Anti-patterns
 
 Each item below was independently reported as absent by at least two of the six analyses.
 Treat any of these appearing in a draft as a defect to fix.
 
-- **Excess parallel triples.** Measured at roughly 5.2 per 1,000 words of prose, so they
-  are present and normal — the defect is overuse. Generated prose runs two to three times
-  that rate. Count only rhetorical parallelism: a specification enumeration such as
-  `satisfied, unmet, not evaluated, or downstream` is content and must not be broken. An
-  earlier version of this file claimed a zero rate, which the primary sample contradicts.
-  Breaking a genuine enumeration to lower a count has already cost one document a
-  prohibition, so treat that as the greater risk.
+- **Excess parallel triples.** The sample contains roughly 5.2 per 1,000 words of prose.
+  Count rhetorical parallelism only. A specification enumeration such as `satisfied, unmet,
+  not evaluated, or downstream` carries content and must remain intact.
 - **Bold lead-ins on running prose paragraphs.** Zero of 314 units in the specification. In
   flowing prose the owner's substitute is a plain micro-head: a short fragment acting as a
   label, followed by full-sentence explanation.
 
-  **Owner override, and it beats this measurement.** In labelled lists the owner wants bold
-  lead-ins and bullets — identifier items (`G1`, `J3`, `R12`) and named items (`Timeliness.`,
-  `Executor routing.`) alike. He asked for them back explicitly after a pass removed them, so
-  a bulleted list whose items open in bold is house style. The distinction is
-  structural: bold opening a paragraph of argument is decoration, bold opening a list item is
-  a label doing navigational work in a document people scan for a specific requirement.
-  Never strip bold from a labelled list to satisfy this file.
+  Labelled list items may use bold lead-ins, including identifiers (`G1`, `J3`, `R12`) and
+  names (`Timeliness.`, `Executor routing.`). Those labels help readers scan for a specific
+  requirement. Bold opening a running paragraph remains decorative.
 - **Rhetorical questions**, a register-sensitive tendency. They do occur. The
   sample opens a section with "can investigators trust the answers, are responses grounded in
   evidence, and does the system know when to stay silent?", so framing questions do occur in
