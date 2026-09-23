@@ -34,7 +34,7 @@ const MODELS_JSON = path.join(AGENT_DIR, "models.json");
 const MODELS_STORE_JSON = path.join(AGENT_DIR, "models-store.json");
 // Chezmoi source of models.json — mentioned in the nudge so the fix lands in
 // the right place instead of being clobbered by the next `chezmoi apply`.
-const CHEZMOI_SOURCE = "dot_pi/agent/private_models.json.tmpl";
+const CHEZMOI_SOURCE = "dot_pi/private_agent/private_models.json.tmpl";
 
 function readJson(file: string): any | null {
 	try {
