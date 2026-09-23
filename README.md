@@ -310,7 +310,7 @@ included into those; it is not a fifth home-directory file.
 - [dot_pi/agent/extensions/README.md](./dot_pi/agent/extensions/README.md) — authoring: tests, never capture `ctx`, `create_` vs managed files, profile gates in `.chezmoiignore`. Deploys to `~/.pi/agent/extensions/README.md` (safe: Pi ignores README).
 - Per-extension READMEs: [auto-compact](./dot_pi/agent/extensions/auto-compact/README.md), [hindsight](./dot_pi/agent/extensions/hindsight/README.md), [issue](./dot_pi/agent/extensions/issue/README.md), [ntfy](./dot_pi/agent/extensions/ntfy/README.md), [openrouter-gate](./dot_pi/agent/extensions/openrouter-gate/README.md), [pi-patch-guard](./dot_pi/agent/extensions/pi-patch-guard/README.md), [catalog-overlay-nudge](./dot_pi/agent/extensions/catalog-overlay-nudge/README.md), [goal](./dot_pi/agent/extensions/goal/README.md), [subagent](./dot_pi/agent/extensions/subagent/README.md), [web-search](./dot_pi/agent/extensions/web-search/README.md)
 - [dot_config/nvim/README.md](./dot_config/nvim/README.md) — local LazyVim overlay, not the stock starter: plugins in `lua/plugins/`, do not vendor LazyVim, refresh `lazy-lock.json` via [prompts/git-commit-chezmoi-lazylock.md](./dot_config/nvim/prompts/git-commit-chezmoi-lazylock.md)
-- [dot_pi/session-search/README.md](./dot_pi/session-search/README.md) — personal/homelab only (`ollama.internal` + claude-bridge digest). Ignored on work/termux. Do not copy onto `axon-work-computer`.
+- [dot_pi/session-search/README.md](./dot_pi/session-search/README.md) — personal/homelab only (`ollama.internal` + OpenAI Codex digest). Ignored on work/termux. Do not copy onto `axon-work-computer`.
 
 ### Leave without their own doc
 

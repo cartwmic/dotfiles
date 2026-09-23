@@ -9,7 +9,7 @@ or Termux. Work stays fts-raw.
 The `pi-session-search` package itself is installed from Pi settings on every
 non-Termux machine. These two files are the homelab opt-in that switches
 **personal** Pi from FTS-raw keyword search to digest-hybrid (Ollama embeddings
-plus claude-bridge summaries).
+plus OpenAI Codex digests).
 
 ## Overview
 
@@ -20,7 +20,7 @@ embeddings plus BM25 over digest body and raw content.
 | File | Role | Values in this tree |
 | --- | --- | --- |
 | [config.json](./config.json) | OpenAI-compatible embedder (`POST <baseUrl>/v1/embeddings`) | model `nomic-embed-text:latest`, baseUrl `https://ollama.internal.cartwmic.com` |
-| [digest.json](./digest.json) | Explicit digest model (never auto-selected) | provider `claude-bridge`, model `claude-haiku-4-5` |
+| [digest.json](./digest.json) | Explicit digest model (never auto-selected) | provider `openai-codex`, model `gpt-6-luna` |
 
 Remaining digest fields are the package defaults already filled in:
 `debounceSeconds` 60, `resummarizeTokenThreshold` 10000, `maxTokens` 1500,
@@ -37,7 +37,9 @@ Without both a working embedder and a digest model that resolves in the live
 registry, the package stays `fts-raw` (no digest.json) or enters a
 **misconfigured** verdict (digest.json present but embedder or model missing).
 That is why work and Termux must not receive this tree: they do not have
-`ollama.internal` or the personal-only `claude-bridge` package.
+`ollama.internal` or this personal profile's Codex digest configuration. The
+Pi `modelThinkingLevels` entry for Luna controls chat startup, not the separate
+digest request; digest effort is not pinned by this file.
 
 ## Setup
 
@@ -72,8 +74,7 @@ files, not `create_`).
 ## Usage
 
 On personal, after dest exists, Pi auto-detects `digest-hybrid` when the
-embedder constructs and `claude-bridge/claude-haiku-4-5` is in the model
-registry.
+embedder constructs and `openai-codex/gpt-6-luna` is in the model registry.
 
 | Surface | What it does |
 | --- | --- |
@@ -84,7 +85,7 @@ registry.
 
 Do not copy [config.json](./config.json) or [digest.json](./digest.json) onto
 `axon-work-computer` or Termux. Work Pi should stay fts-raw (no homelab
-embedder, no claude-bridge digest). Termux does not run the Pi agent surface.
+embedder or personal Codex digest config). Termux does not run the Pi agent surface.
 
 ## Validation
 
@@ -92,7 +93,7 @@ From **this directory**, both files must parse and match the homelab values:
 
 ```sh
 jq -e '.embedder.baseUrl == "https://ollama.internal.cartwmic.com" and .embedder.model == "nomic-embed-text:latest"' config.json
-jq -e '.provider == "claude-bridge" and .model == "claude-haiku-4-5"' digest.json
+jq -e '.provider == "openai-codex" and .model == "gpt-6-luna"' digest.json
 ```
 
 Both commands must print `true`. Confirm the dest is managed only on personal:

@@ -29,14 +29,20 @@
 {{- end -}}
 {
 {{- if eq .profile "personal" }}
-  "defaultProvider": "cursor",
-  "defaultModel": "cursor-grok-4.6",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-6-sol",
 {{- else }}
   "defaultProvider": "private-glm",
   "defaultModel": "glm-5.3-flash",
 {{- end }}
   "defaultThinkingLevel": "high",
-{{- if ne .profile "personal" }}
+{{- if eq .profile "personal" }}
+  "modelThinkingLevels": {
+    "openai-codex/gpt-6-sol": "max",
+    "openai-codex/gpt-6-astra": "medium",
+    "openai-codex/gpt-6-luna": "max"
+  },
+{{- else }}
   "modelThinkingLevels": {
     "anthropic/claude-opus-5-5": "medium"
   },
