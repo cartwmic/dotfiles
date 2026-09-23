@@ -36,6 +36,14 @@
   "defaultModel": "glm-5.3-flash",
 {{- end }}
   "defaultThinkingLevel": "high",
+{{- if ne .profile "personal" }}
+  "modelThinkingLevels": {
+    "anthropic/claude-opus-5-5": "medium"
+  },
+  "subagents": {
+    "disableThinking": true
+  },
+{{- end }}
   "enabledModels": [
 {{- if eq .profile "personal" }}
     "openai-codex/gpt-6-astra",
