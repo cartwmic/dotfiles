@@ -11,9 +11,10 @@ import {
 	shouldFast,
 } from "./index.ts";
 
-test("isLunaModel: only openai-codex/gpt-5.6-luna", () => {
+test("isLunaModel: only openai-codex/gpt-6-luna", () => {
 	assert.equal(isLunaModel({ provider: LUNA_PROVIDER, id: LUNA_MODEL_ID }), true);
-	assert.equal(isLunaModel({ provider: LUNA_PROVIDER, id: "gpt-5.6-sol" }), false);
+	assert.equal(isLunaModel({ provider: LUNA_PROVIDER, id: "gpt-5.6-luna" }), false);
+	assert.equal(isLunaModel({ provider: LUNA_PROVIDER, id: "gpt-6-sol" }), false);
 	assert.equal(isLunaModel({ provider: LUNA_PROVIDER, id: "gpt-5.6-terra" }), false);
 	assert.equal(isLunaModel({ provider: "cursor", id: LUNA_MODEL_ID }), false);
 	assert.equal(isLunaModel(undefined), false);
@@ -22,15 +23,15 @@ test("isLunaModel: only openai-codex/gpt-5.6-luna", () => {
 test("payloadLooksLikeLuna: id or provider/id, ignores missing model", () => {
 	assert.equal(payloadLooksLikeLuna({ model: LUNA_MODEL_ID }), true);
 	assert.equal(payloadLooksLikeLuna({ model: LUNA_MODEL }), true);
-	assert.equal(payloadLooksLikeLuna({ model: "gpt-5.6-sol" }), false);
+	assert.equal(payloadLooksLikeLuna({ model: "gpt-5.6-luna" }), false);
 	assert.equal(payloadLooksLikeLuna({ model: null }), false);
 	assert.equal(payloadLooksLikeLuna(null), false);
 });
 
 test("shouldFast: ctx model or payload model is enough", () => {
 	assert.equal(shouldFast({ provider: LUNA_PROVIDER, id: LUNA_MODEL_ID }, { model: null }), true);
-	assert.equal(shouldFast({ provider: LUNA_PROVIDER, id: "gpt-5.6-sol" }, { model: LUNA_MODEL_ID }), true);
-	assert.equal(shouldFast({ provider: LUNA_PROVIDER, id: "gpt-5.6-sol" }, { model: "gpt-5.6-sol" }), false);
+	assert.equal(shouldFast({ provider: LUNA_PROVIDER, id: "gpt-6-sol" }, { model: LUNA_MODEL_ID }), true);
+	assert.equal(shouldFast({ provider: LUNA_PROVIDER, id: "gpt-6-sol" }, { model: "gpt-6-sol" }), false);
 });
 
 test("applyFastTier: sets priority and preserves the rest", () => {
