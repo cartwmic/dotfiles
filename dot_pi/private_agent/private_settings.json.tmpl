@@ -6,10 +6,7 @@
 */ -}}
 {{- $version := "0.70.2" -}}
 {{- $theme := "dark" -}}
-{{- $privateProvider := dict -}}
-{{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiProviderRef") -}}
-{{-   $privateProvider = output "op" "read" .privatePiProviderRef | fromJson -}}
-{{- end -}}
+{{- $hideThinking := false -}}
 {{- $privateGlmProvider := dict -}}
 {{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiGlmProviderRef") -}}
 {{-   $privateGlmProvider = output "op" "read" .privatePiGlmProviderRef | fromJson -}}
@@ -25,14 +22,18 @@
 {{-   if $themeFound -}}
 {{-     $theme = $themeFound -}}
 {{-   end -}}
+{{-   $hideThinking = get $existingSettings "hideThinkingBlock" -}}
+{{- end -}}
+{{- if not $hideThinking -}}
+{{-   $hideThinking = false -}}
 {{- end -}}
 {
 {{- if eq .profile "personal" }}
   "defaultProvider": "cursor",
   "defaultModel": "cursor-grok-4.6",
 {{- else }}
-  "defaultProvider": "anthropic",
-  "defaultModel": "claude-opus-5",
+  "defaultProvider": "private-glm",
+  "defaultModel": "glm-5.3-flash",
 {{- end }}
   "defaultThinkingLevel": "high",
   "enabledModels": [
@@ -48,17 +49,11 @@
     "claude-bridge/claude-opus-5",
     "claude-bridge/claude-sonnet-5"
 {{- else }}
-    "cursor/composer-2.5",
-    "cursor/cursor-grok-4.6",
     "cursor/gpt-5.6-luna",
-    "cursor/gpt-5.6-terra",
     "cursor/gpt-5.6-sol",
-    "anthropic/claude-fable-5",
-    "anthropic/claude-opus-5",
+    "cursor/grok-4.7",
+    "anthropic/claude-opus-5-5",
     "anthropic/claude-sonnet-5"
-{{- range $model := $privateProvider.models }},
-    {{ printf "private-anthropic/%s" $model.id | quote }}
-{{- end }}
 {{- range $model := $privateGlmProvider.models }},
     {{ printf "private-glm/%s" $model.id | quote }}
 {{- end }}
@@ -90,5 +85,6 @@
     "enabled": false
   },
   "lastChangelogVersion": {{ $version | quote }},
-  "theme": {{ $theme | quote }}
+  "theme": {{ $theme | quote }},
+  "hideThinkingBlock": {{ $hideThinking }}
 }
