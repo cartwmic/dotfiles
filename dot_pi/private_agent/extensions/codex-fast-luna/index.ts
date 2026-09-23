@@ -1,6 +1,6 @@
 /**
  * codex-fast-luna — always send Codex Fast (`service_tier: "priority"`)
- * for openai-codex/gpt-5.6-luna. Other models are left unchanged.
+ * for openai-codex/gpt-6-luna. Other models are left unchanged.
  *
  * Replaces the third-party pi-codex-fast package, which Fast-ifies every
  * supported Codex model once the toggle is on.
@@ -8,7 +8,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export const LUNA_PROVIDER = "openai-codex";
-export const LUNA_MODEL_ID = "gpt-5.6-luna";
+export const LUNA_MODEL_ID = "gpt-6-luna";
 export const LUNA_MODEL = `${LUNA_PROVIDER}/${LUNA_MODEL_ID}`;
 export const FAST_SERVICE_TIER = "priority";
 const STATUS_KEY = "codex-fast-luna";

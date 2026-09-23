@@ -1,7 +1,7 @@
 # codex-fast-luna
 
 Always send Codex Fast (`service_tier: "priority"`) for
-`openai-codex/gpt-5.6-luna`. Other models are not changed.
+`openai-codex/gpt-6-luna`. Other models are not changed.
 
 Chezmoi deploys this directory to `~/.pi/agent/extensions/codex-fast-luna`.
 
