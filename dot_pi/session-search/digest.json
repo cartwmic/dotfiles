@@ -1,6 +1,6 @@
 {
-  "provider": "claude-bridge",
-  "model": "claude-haiku-4-5",
+  "provider": "openai-codex",
+  "model": "gpt-6-luna",
   "debounceSeconds": 60,
   "resummarizeTokenThreshold": 10000,
   "maxTokens": 1500,
