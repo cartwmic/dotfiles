@@ -63,16 +63,19 @@ Repeat a precise term. Do not cycle through synonyms. If meaning is unclear, ask
 - Use direct verbs when clearer, but do not ban passive voice or forms of “be.”
 - Keep existing structure unless it obscures the argument.
 - Never optimize for an AI-detector score. Optimize for clarity, specificity, fidelity, and voice.
+- When the brief asks you to persuade, lay out the facts in causal order and let the reader draw the stakes. Do not add stakes clauses or end a paragraph on a kicker.
 
 ## Patterns to Inspect
 
 A single word or construction is not enough. Edit when a pattern is empty, repeated, misleading, or mismatched to the voice. One entry below is an unconditional ban and takes no such judgment: **binary contrast templates**.
 
 - **Throat clearing:** “Here's the thing,” “It's worth noting,” “In today's world.” Remove setup that delays the point.
-- **Binary contrast templates — banned, no exceptions.** Any construction that reaches its point by first rejecting an alternative: “It's not X. It's Y.”, “not X, but Y”, “X, not Y”, “X rather than Y”, “less about X, more about Y”, “instead of X, Y”, and negative lists such as “Not for A, not for B.” Delete the rejected half and assert the claim. If the rejection is load-bearing, split it out as its own standalone prohibition sentence (“Do not do X.”) placed after the claim. Three things survive the ban: a negation with no replacement attached to it, `not` used as a data value inside an enumeration, and protected spans. Never satisfy this ban by weakening the claim.
+- **Binary contrast templates — banned, no exceptions.** Any construction that reaches its point by first rejecting an alternative: “It's not X. It's Y.”, “not X, but Y”, “X, not Y”, “X rather than Y”, “less about X, more about Y”, “instead of X, Y”, “X in place of Y”, stat drama such as “X overall but only Y when…”, and negative lists such as “Not for A, not for B.” Delete the rejected half and assert the claim. For stat drama, give the second figure in parentheses or its own sentence, without “only.” If the rejection is load-bearing, split it out as its own standalone prohibition sentence (“Do not do X.”) placed after the claim. Three things survive the ban: a negation with no replacement attached to it, `not` used as a data value inside an enumeration, and protected spans. Never satisfy this ban by weakening the claim.
 - **Faux-insight setups:** “What everyone misses,” “The uncomfortable truth.” Remove borrowed authority and support the claim.
 - **Importance puffery:** “pivotal,” “transformative,” “a testament to.” Replace labels with the fact that makes the point matter.
-- **Superficial analysis:** trailing clauses beginning with “highlighting,” “underscoring,” or “showcasing.” They restate significance. Name the consequence.
+- **Trailing stakes:** a clause tacked onto a fact to restate why it matters. This covers participles (“highlighting,” “underscoring,” “showcasing”), “…, and X can mean Y,” and paired stakes such as “a missed deadline or a missed sale.” Cut the clause. Keep a consequence only when it adds a fact the reader lacks, and give it its own sentence.
+- **Maxims and counterfactuals:** universal rules such as “Every X needs Y,” counterfactual punches such as “without X, we're guessing” or “flying blind,” and one-line openers that fit any document (“Cost and scale are coupled.”). State the specific fact the maxim stands in for, or cut it.
+- **Announced structure and restatement:** “This does two things,” “Two steps set the pace. One is… The other is…,” a paragraph whose last sentence restates its first from the other side, and mirrored or chiastic doublets (“their load and their incidents on our capacity and our on-call”). Name the items directly, state each point once, and drop the doublet's second half.
 - **Weasel attribution:** “experts agree,” “studies show,” “many argue.” Name a source or remove the unsupported attribution.
 - **Generic promotional language:** words such as “robust,” “streamline,” “unlock,” “leverage,” or “cutting-edge” when they hide a specific mechanism.
 - **Interpretive metadiscourse:** “The key point is,” “This distinction matters,” “As you can see.” Let evidence carry emphasis when it already does.
@@ -83,7 +86,7 @@ A single word or construction is not enough. Edit when a pattern is empty, repea
 - **Formatting slop:** decorative bold, emoji headings, needless micro-sections, or lists that obscure a simple relationship.
 - **Punctuation habits:** clusters of em dashes or other punctuation used as a default rhythm. Keep punctuation that genuinely improves the sentence.
 
-Use the portability test: if a sentence could move unchanged to an unrelated person, company, or product, it may be filler. Cut it or ground it in this subject.
+Use the portability test: if a sentence could move unchanged to an unrelated person, company, or product, it may be filler. Cut it or ground it in this subject. Apply it to the first and last sentence of every paragraph, where maxims and kickers collect.
 
 ## Workflow
 

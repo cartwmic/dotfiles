@@ -173,7 +173,7 @@ Treat any of these appearing in a draft as a defect to fix.
   names (`Timeliness.`, `Executor routing.`). Those labels help readers scan for a specific
   requirement. Bold opening a running paragraph remains decorative.
 - **Rhetorical questions**, a register-sensitive tendency. They do occur. The
-  sample opens a section with "can investigators trust the answers, are responses grounded in
+  sample opens a section with "can users trust the answers, are responses grounded in
   evidence, and does the system know when to stay silent?", so framing questions do occur in
   specifications. Genuine open questions in a requirements document are not a defect at all.
   What to avoid is the decorative question-then-answer beat.
