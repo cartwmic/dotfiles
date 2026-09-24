@@ -1,0 +1,8 @@
+{
+	"dateContext": "always",
+	"responseTiming": "detailed",
+	"showExactTimeline": true,
+	"assistantMetadata": "expanded",
+	"showCostSinceUser": true,
+	"toolStamps": true
+}
