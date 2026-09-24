@@ -18,8 +18,10 @@ Run after one editing pass. Inspect changed passages against original draft. Thi
 
 ## Quality
 
-- Zero binary contrast templates survive or were introduced. Search changed passages for `not … but`, `, not `, `rather than`, `instead of`, `less about … more about`, and `It's not X. It's Y.` Every hit is a failure unless it is a negation with no replacement attached, `not` as a data value in an enumeration, or a protected span.
+- Zero binary contrast templates survive or were introduced. Search changed passages for `not … but`, `, not `, `rather than`, `instead of`, `in place of`, `but only`, `yet only`, `less about … more about`, and `It's not X. It's Y.` Every hit is a failure unless it is a negation with no replacement attached, `not` as a data value in an enumeration, or a protected span.
 - Material formulaic patterns were removed or grounded in specific content.
+- No trailing stakes clause, maxim, counterfactual punch, or announced structure survives unless it adds a fact the reader lacks.
+- The first and last sentence of each changed paragraph say something specific to this subject. Neither restates the other, and neither could move unchanged into another product's document.
 - Cuts and rewrites are proportional to actual problems.
 - New wording is clearer or more specific. No synonym churn.
 - Structure and formatting changed only where they impeded the document's job.
