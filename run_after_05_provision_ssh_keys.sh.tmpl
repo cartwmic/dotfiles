@@ -84,11 +84,13 @@ write_token_file() {
 
 write_key_from_stdin() {
   local path="$1"
+  local want_fp="$2"
   local tmp
-  tmp="$(mktemp "$HOME/.ssh/.key.XXXXXX")"
   umask 077
+  tmp="$(mktemp "$HOME/.ssh/.key.XXXXXX")"
   cat >"$tmp"
-  if ! head -n1 "$tmp" | grep -q 'BEGIN OPENSSH PRIVATE KEY'; then
+  if ! head -n1 "$tmp" | grep -q 'BEGIN OPENSSH PRIVATE KEY' \
+      || [ "$(fingerprint_of "$tmp")" != "$want_fp" ]; then
     rm -f "$tmp"
     return 1
   fi
@@ -230,8 +232,8 @@ fetch_key() {
     return 1
   fi
 
-  if ! printf '%s\n' "$material" | write_key_from_stdin "$path"; then
-    warn "fetched $label was not an OpenSSH private key"
+  if ! printf '%s\n' "$material" | write_key_from_stdin "$path" "$want_fp"; then
+    warn "fetched $label was not the expected OpenSSH private key"
     return 1
   fi
   if [ "$(fingerprint_of "$path")" != "$want_fp" ]; then
@@ -245,6 +247,17 @@ fetch_key() {
 if keys_already_provisioned; then
   exit 0
 fi
+
+# Never replace an unexpected existing credential, even if 1Password is
+# available. A fresh phone has no keys; partial provisioning may have one.
+for spec in "$HOMELAB_PATH:$HOMELAB_FP" "$WHONIX_PATH:$WHONIX_FP"; do
+  path="${spec%%:*}"
+  want_fp="${spec#*:}"
+  if [ -e "$path" ] && ! key_ok "$path" "$want_fp"; then
+    warn "$path has an unexpected fingerprint; refusing to overwrite"
+    exit 1
+  fi
+done
 
 ensure_ssh_dir
 
