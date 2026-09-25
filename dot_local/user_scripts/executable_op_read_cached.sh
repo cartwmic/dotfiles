@@ -109,6 +109,17 @@ if ! command -v op >/dev/null 2>&1; then
 	exit 1
 fi
 
+# Rotation-proof: the file always wins when the env var is absent. Some callers
+# (e.g. loop-engine fan-out workers spawned through dagu) run with a curated
+# environment that drops OP_SERVICE_ACCOUNT_TOKEN; without this fallback `op`
+# falls back to desktop-app integration and pops a Touch ID unlock prompt
+# whenever 1Password is locked. Same convention as apply_harness_config.sh and
+# the zshrc block, which only cover shells and their children.
+if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && [ -r "$HOME/.config/agent-harness/op-service-token" ]; then
+	OP_SERVICE_ACCOUNT_TOKEN="$(cat "$HOME/.config/agent-harness/op-service-token")"
+	export OP_SERVICE_ACCOUNT_TOKEN
+fi
+
 cache_dir="${OP_READ_CACHE_DIR:-$HOME/.cache/agent-harness/secrets}"
 ttl_minutes="${OP_READ_CACHE_TTL_MINUTES:-720}"
 
