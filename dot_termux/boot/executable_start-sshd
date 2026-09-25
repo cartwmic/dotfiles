@@ -2,6 +2,8 @@
 # Termux:Boot starts key-only SSH on Wi-Fi and WireGuard after Android boots.
 set -eu
 
+# Keep Termux's foreground service alive so Android does not reap sshd.
+termux-wake-lock
 exec sshd -p 8022 \
   -o ListenAddress=0.0.0.0 \
   -o PasswordAuthentication=no \
