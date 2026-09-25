@@ -84,21 +84,36 @@ esac
 
 cat <<EOF
 $PHONE_BEGIN
-# phone (Termux sshd on :8022). Auto-pick the reachable path:
-#   - 10.21.1.6   = phone's WireGuard IP (wg1 peer on OPNsense). Works whenever
+# daily-phone (Z Fold 7 Termux sshd on :8022). Auto-pick the reachable path:
+#   - 10.21.1.6   = its WireGuard IP (wg1 peer on OPNsense). Works whenever
 #                   the tunnel is up, home or remote, routed via the gateway.
-#   - 10.19.1.222 = phone's home Wi-Fi DHCP IP. Works only on LAN with WG off.
+#   - 10.19.1.222 = its home Wi-Fi IP. Works only on LAN with WG off.
 # First-obtained HostName wins, so the WG probe is tried first.
-Match host phone exec "/usr/bin/nc -z -G 1 -w 1 10.21.1.6 8022 >/dev/null 2>&1"
+Match host daily-phone exec "/usr/bin/nc -z -G 1 -w 1 10.21.1.6 8022 >/dev/null 2>&1"
     HostName 10.21.1.6
 
-Match host phone exec "/usr/bin/nc -z -G 1 -w 1 10.19.1.222 8022 >/dev/null 2>&1"
+Match host daily-phone exec "/usr/bin/nc -z -G 1 -w 1 10.19.1.222 8022 >/dev/null 2>&1"
     HostName 10.19.1.222
 
-Host phone
+Host daily-phone
     HostName 10.21.1.6
     Port 8022
     User u0_a540
+    IdentityFile ~/.ssh/homelab
+    IdentitiesOnly yes
+
+# ssh-phone (Moto G Stylus 5G 2024). Prefer its WireGuard peer when up;
+# fall back to its OPNsense-reserved home Wi-Fi address when the tunnel is off.
+Match host ssh-phone exec "/usr/bin/nc -z -G 1 -w 1 10.21.1.7 8022 >/dev/null 2>&1"
+    HostName 10.21.1.7
+
+Match host ssh-phone exec "/usr/bin/nc -z -G 1 -w 1 10.19.1.88 8022 >/dev/null 2>&1"
+    HostName 10.19.1.88
+
+Host ssh-phone
+    HostName 10.21.1.7
+    Port 8022
+    User u0_a465
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
 $PHONE_END
