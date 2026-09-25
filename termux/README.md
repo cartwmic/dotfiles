@@ -128,10 +128,11 @@ reminder. Do not use ADB to overwrite phone config — edit sources under
 
 ## Pulling live phone drift back into the repo
 
-From a machine with the `personal` profile (needs `Host phone` in SSH config):
+From a machine with the `personal` profile (needs `Host ssh-phone` in SSH config;
+`daily-phone` is the older Z Fold 7):
 
 ```bash
-scp phone:.termux/termux.properties dot_termux/termux.properties
-scp phone:bin/zellij-jump bin/executable_zellij-jump
-scp phone:bin/herdr-jump bin/executable_herdr-jump
+scp ssh-phone:.termux/termux.properties dot_termux/termux.properties
+scp ssh-phone:bin/zellij-jump bin/executable_zellij-jump
+scp ssh-phone:bin/herdr-jump bin/executable_herdr-jump
 ```
