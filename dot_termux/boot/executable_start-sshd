@@ -1,0 +1,8 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Termux:Boot starts key-only SSH on Wi-Fi and WireGuard after Android boots.
+set -eu
+
+exec sshd -p 8022 \
+  -o ListenAddress=0.0.0.0 \
+  -o PasswordAuthentication=no \
+  -o KbdInteractiveAuthentication=no
