@@ -3,16 +3,16 @@
 **/target/*
 *.diff
 # Repo-only docs at source root. Patterns match DESTINATION names.
-# Leading slash keeps these to $HOME/AGENTS.md and $HOME/README.md;
-# a bare AGENTS.md pattern would also drop nested files (for example
-# .codex/AGENTS.md) and any other source whose target is AGENTS.md.
-# /AGENTS.md stays in git for Pi/Codex in this repo; it is not deployed.
+# ./ anchors these patterns to $HOME/AGENTS.md and $HOME/README.md without
+# confusing them with nested files such as .codex/AGENTS.md. Leading slash
+# patterns are rejected by chezmoi v2.72.2 on Termux.
+# ./AGENTS.md stays in git for Pi/Codex in this repo; it is not deployed.
 # Pi-global instructions are dot_pi/agent/literal_AGENTS.md.tmpl -> ~/.pi/agent/AGENTS.md.
 # Do not add a source that deploys to ~/AGENTS.md: same target as this file,
 # chezmoi reports inconsistent state.
-# /README.md is the product README; do not also land it at ~/README.md.
-/AGENTS.md
-/README.md
+# ./README.md is the product README; do not also land it at ~/README.md.
+./AGENTS.md
+./README.md
 docs/
 .playwright-mcp/
 .claude/*
