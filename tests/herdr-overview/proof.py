@@ -1616,7 +1616,7 @@ def maybe_start_adb(serial: str, run_id: str) -> None:
     if launched.returncode != 0:
         raise ProofBlocked("could not open Termux on the explicitly selected ADB device")
     time.sleep(3)
-    command = f"~/bin/herdr-overview-proof%20{run_id}%20macbook"
+    command = f"/data/data/com.termux/files/home/bin/herdr-overview-proof%s{run_id}%smacbook"
     typed = run_process([adb, "-s", serial, "shell", "input", "text", command], check=False, timeout=10)
     entered = run_process([adb, "-s", serial, "shell", "input", "keyevent", "66"], check=False, timeout=10)
     if typed.returncode != 0 or entered.returncode != 0:

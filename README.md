@@ -65,7 +65,7 @@ Termux is a first-class profile (`profile: "termux"`) — thin SSH jump host,
 desktop/agent stack. See `termux/README.md`.
 
 ```bash
-pkg install -y chezmoi git openssh coreutils termux-api python
+pkg install -y chezmoi git openssh coreutils termux-api python vim
 mkdir -p ~/.config/chezmoi
 printf 'data:\n  profile: "termux"\n' > ~/.config/chezmoi/chezmoi.yaml
 chezmoi init --apply https://github.com/cartwmic/dotfiles.git
