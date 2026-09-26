@@ -167,6 +167,31 @@ def cli_recap(home: Path, env: dict[str, str], *args: str, stdin: str = "", chec
     return run_process([str(home / ".local/bin/session-recap"), *args], env=env, input_text=stdin, check=check)
 
 
+def pi_pane_workspace_at_publication(env: dict[str, str], pane_id: str) -> str | None:
+    node = shutil.which("node", path=env.get("PATH"))
+    if not node:
+        raise ProofBlocked("Node.js is required to run the Pi publication membership helper")
+    helper = ROOT / "dot_pi/private_agent/extensions/herdr-overview/helpers.ts"
+    helper_env = dict(env)
+    helper_env["HERDR_OVERVIEW_PROOF_PANE_ID"] = pane_id
+    helper_env["HERDR_OVERVIEW_PI_HELPERS"] = str(helper)
+    script = """import { pathToFileURL } from 'node:url';
+const { paneWorkspaceAtPublication } = await import(pathToFileURL(process.env.HERDR_OVERVIEW_PI_HELPERS));
+const workspaceId = await paneWorkspaceAtPublication(process.env.HERDR_SOCKET_PATH, process.env.HERDR_OVERVIEW_PROOF_PANE_ID);
+process.stdout.write(JSON.stringify(workspaceId));
+"""
+    completed = run_process(
+        [node, "--input-type=module", "-e", script], env=helper_env, cwd=ROOT, timeout=10,
+    )
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ProofFailure("Pi membership helper did not return JSON") from exc
+    if value is not None and (not isinstance(value, str) or not value.strip()):
+        raise ProofFailure("Pi membership helper returned an invalid workspace ID")
+    return value
+
+
 def find_record(data_dir: Path, record_id: str) -> tuple[Path, dict[str, Any]]:
     for path in sorted((data_dir / "records").glob("*/*.json")):
         record = read_json(path)
@@ -754,8 +779,11 @@ def server_status(state: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
         info = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
         raise ProofFailure("Herdr status did not return JSON") from exc
-    if info.get("socket") != state["socket_path"]:
+    socket_path = info.get("socket")
+    if not isinstance(socket_path, str) or Path(socket_path).resolve() != Path(state["socket_path"]).resolve():
         raise ProofFailure("Herdr status resolved to a socket other than the recorded isolated socket")
+    # Herdr may report /tmp while Python canonicalizes the same path as /private/tmp.
+    info["socket"] = str(Path(socket_path).resolve())
     return info
 
 
@@ -1629,19 +1657,25 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         Path(env["HOME"]), env, "prepare", "--source-id", session_id, "--pane-id", old_pane_id,
         stdin="Completed work after the native pane move; terminal identity remains stable.\n",
     ).stdout.strip()
+    publication_workspace_id = pi_pane_workspace_at_publication(env, old_pane_id)
+    if publication_workspace_id != target["workspace_id"]:
+        raise ProofFailure(
+            "Pi's caller-aware pane.current helper did not resolve the moved pane to its live workspace: "
+            f"{publication_workspace_id!r} != {target['workspace_id']!r}"
+        )
     published_id = cli_recap(
         Path(env["HOME"]), env, "publish", "--prepared-id", prepared_id,
-        "--workspace-id", target["workspace_id"],
+        "--workspace-id", publication_workspace_id,
     ).stdout.strip()
     moved_recap = find_record(data_root, published_id)[1]
-    if moved_recap.get("pane_id") != old_pane_id or moved_recap.get("workspace_id") != target["workspace_id"]:
-        raise ProofFailure("portable Pi publication did not retain its old pane ID and current workspace attribution")
+    if moved_recap.get("pane_id") != old_pane_id or moved_recap.get("workspace_id") != publication_workspace_id:
+        raise ProofFailure("portable Pi publication did not retain its old pane ID and adapter-observed workspace attribution")
     invoke_overview(state, env)
 
     def deadline_state() -> tuple[dict[str, Any], str] | None:
         current = read_json(state_path)
         deadlines = ((current.get("recapCoordinator") or {}).get("workspaceDeadlines") or {})
-        deadline = deadlines.get(target["workspace_id"])
+        deadline = deadlines.get(publication_workspace_id)
         return (current, deadline) if deadline else None
 
     _current_state, deadline_text = wait_for(deadline_state, "the current-workspace quiet deadline", timeout=20)
@@ -1664,15 +1698,15 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
 
     workspace_entry = wait_for(
         lambda: (lambda entry: entry if entry and entry.get("latest_success_id") else None)(
-            latest_entry(data_root, "workspace", target["workspace_id"])
+            latest_entry(data_root, "workspace", publication_workspace_id)
         ),
         "the native-move workspace group publication", timeout=40,
     )
     _group_path, group_record = find_record(data_root, workspace_entry["latest_success_id"])
     if group_record.get("status") != "published" or group_record.get("member_record_ids") != [published_id]:
         raise ProofFailure("workspace group output did not include exactly the latest moved-pane recap")
-    if group_record.get("source_id") != target["workspace_id"]:
-        raise ProofFailure("workspace group output used the wrong current native workspace ID")
+    if group_record.get("source_id") != publication_workspace_id:
+        raise ProofFailure("workspace group output used the wrong adapter-observed native workspace ID")
 
     return {
         "old_pane_id": old_pane_id,
@@ -1682,7 +1716,8 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         "publication_before_move_id": published_before_move,
         "old_workspace_recap_unchanged_after_move": True,
         "published_recap_id": published_id,
-        "workspace_id": target["workspace_id"],
+        "workspace_id": publication_workspace_id,
+        "membership_lookup": "Pi adapter pane.current caller_pane_id",
         "group_record_id": group_record["record_id"],
         "group_contains_latest_moved_recap": True,
         "quiet_period_seconds": round(time.time() - actual + 30, 1),
