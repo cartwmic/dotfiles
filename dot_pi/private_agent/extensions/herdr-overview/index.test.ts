@@ -58,6 +58,7 @@ interface TestWorld {
 	piSessionDir: string;
 	env: Record<string, string>;
 	setBackendMode(mode: "success" | "blank" | "nonzero"): void;
+	setCurrentPane(pane: { pane_id: string; workspace_id: string } | undefined): void;
 	close(): Promise<void>;
 }
 
@@ -118,6 +119,10 @@ async function createWorld(): Promise<TestWorld> {
 			{ pane_id: "ui-focused-pane", workspace_id: "workspace-wrong", focused: true },
 		],
 	};
+	let currentPane: { pane_id: string; workspace_id: string } | undefined = {
+		pane_id: "exact-pane",
+		workspace_id: "workspace-exact",
+	};
 	const calls: any[] = [];
 	const herdrServer = net.createServer((socket) => {
 		let buffer = "";
@@ -134,6 +139,8 @@ async function createWorld(): Promise<TestWorld> {
 				const call: any = { method: request.method, params: request.params };
 				if (request.method === "session.snapshot") {
 					call.snapshot = currentSnapshot;
+				} else if (request.method === "pane.current") {
+					call.currentPane = request.params?.caller_pane_id === "exact-pane" ? currentPane : undefined;
 				} else if (request.method === "plugin.action.invoke") {
 					try {
 						const latest = readJson(path.join(dataRoot, "latest.json"));
@@ -144,7 +151,11 @@ async function createWorld(): Promise<TestWorld> {
 					}
 				}
 				calls.push(call);
-				const result = request.method === "session.snapshot" ? { snapshot: currentSnapshot } : {};
+				const result = request.method === "session.snapshot"
+					? { snapshot: currentSnapshot }
+					: request.method === "pane.current"
+						? { type: "pane_current", pane: request.params?.caller_pane_id === "exact-pane" ? currentPane : undefined }
+						: {};
 				socket.write(`${JSON.stringify({ id: request.id, result })}\n`);
 				return;
 			}
@@ -174,6 +185,7 @@ async function createWorld(): Promise<TestWorld> {
 			HERDR_PANE_ID: "exact-pane",
 		},
 		setBackendMode,
+		setCurrentPane: (pane) => { currentPane = pane; },
 		close: async () => {
 			await new Promise<void>((resolve) => herdrServer.close(() => resolve()));
 			rmSync(root, { recursive: true, force: true });
@@ -313,7 +325,7 @@ test("interactive prompt stays separate; settled publication uses exact pane mem
 			const order = readTrace(world.tracePath);
 			const preparedAt = order.findIndex((line) => line.startsWith("cli prepare "));
 			assert.ok(preparedAt >= 0);
-			assert.equal(order[preparedAt + 1], "herdr session.snapshot");
+			assert.equal(order[preparedAt + 1], "herdr pane.current");
 			assert.match(order[preparedAt + 2], /^cli publish /);
 			assert.equal(order[preparedAt + 3], "herdr plugin.action.invoke");
 
@@ -557,40 +569,58 @@ test("a temporary Pi RPC session publishes only settled nonblank recaps with pub
 		assert.equal(firstWake.params.action_id, "overview.reconcile");
 		assert.equal(firstWake.publishedRecord.record_id, firstRecap.record_id);
 
-		// A later real RPC prompt updates the current prompt; absent native membership is not guessed from UI focus.
-		herdr.snapshot = { protocol: 22, focused_pane_id: "ui-focused-pane", panes: [{ pane_id: "other-pane", workspace_id: "wrong-workspace" }] };
+		// A successful caller-aware lookup follows the running pane after Herdr rekeys it.
+		herdr.snapshot = { protocol: 22, focused_pane_id: "ui-focused-pane", panes: [{ pane_id: "rekeyed-pane", workspace_id: "workspace-after-move" }] };
+		assert.equal(herdr.snapshot.panes.some((pane: any) => pane.pane_id === "exact-pane"), false);
+		herdr.setCurrentPane({ pane_id: "rekeyed-pane", workspace_id: "workspace-after-move" });
 		const eventTwo = rpc.records.filter((record) => record.type === "agent_settled").length + 1;
-		await rpc.sendPrompt("RPC request two: no native pane membership is available.");
+		await rpc.sendPrompt("RPC request two: the pane moved and its native ID changed.");
 		await rpc.waitForEvent("agent_settled", eventTwo);
 		await waitFor(() => herdr.calls.filter((call) => call.method === "plugin.action.invoke").length === 2, "the second publication wake-up");
 		const secondRecap = latestPublished(world.dataRoot, "rpc-session");
 		assert.notEqual(secondRecap.record_id, firstRecap.record_id);
-		assert.equal(Object.hasOwn(secondRecap, "workspace_id"), false);
-		assert.equal(promptRecord(world.dataRoot, "rpc-session").text, "RPC request two: no native pane membership is available.");
+		assert.equal(secondRecap.workspace_id, "workspace-after-move");
+		const moveLookup = herdr.calls.filter((call) => call.method === "pane.current")[1];
+		assert.equal(moveLookup.params.caller_pane_id, "exact-pane");
+		assert.equal(moveLookup.currentPane.pane_id, "rekeyed-pane");
+		assert.equal(promptRecord(world.dataRoot, "rpc-session").text, "RPC request two: the pane moved and its native ID changed.");
+		assert.equal(promptRecord(world.dataRoot, "rpc-session").working, false);
+
+		// Missing caller membership publishes without guessing from the UI-focused pane.
+		herdr.snapshot = { protocol: 22, focused_pane_id: "ui-focused-pane", panes: [{ pane_id: "ui-focused-pane", workspace_id: "wrong-workspace" }] };
+		herdr.setCurrentPane(undefined);
+		const eventThree = rpc.records.filter((record) => record.type === "agent_settled").length + 1;
+		await rpc.sendPrompt("RPC request three: no native pane membership is available.");
+		await rpc.waitForEvent("agent_settled", eventThree);
+		await waitFor(() => herdr.calls.filter((call) => call.method === "plugin.action.invoke").length === 3, "the third publication wake-up");
+		const thirdRecap = latestPublished(world.dataRoot, "rpc-session");
+		assert.notEqual(thirdRecap.record_id, secondRecap.record_id);
+		assert.equal(Object.hasOwn(thirdRecap, "workspace_id"), false);
+		assert.equal(promptRecord(world.dataRoot, "rpc-session").text, "RPC request three: no native pane membership is available.");
 		assert.equal(promptRecord(world.dataRoot, "rpc-session").working, false);
 
 		// Blank backend output is a failed T1 attempt: it cannot replace the latest success or wake Herdr.
 		world.setBackendMode("blank");
-		const eventThree = rpc.records.filter((record) => record.type === "agent_settled").length + 1;
-		await rpc.sendPrompt("RPC request three: the recap backend will return blank output.");
-		await rpc.waitForEvent("agent_settled", eventThree);
-		await waitFor(() => sourceEntry(world.dataRoot, "rpc-session")?.last_attempt_id !== secondRecap.record_id, "the failed T1 attempt");
+		const eventFour = rpc.records.filter((record) => record.type === "agent_settled").length + 1;
+		await rpc.sendPrompt("RPC request four: the recap backend will return blank output.");
+		await rpc.waitForEvent("agent_settled", eventFour);
+		await waitFor(() => sourceEntry(world.dataRoot, "rpc-session")?.last_attempt_id !== thirdRecap.record_id, "the failed T1 attempt");
 		const latestEntry = sourceEntry(world.dataRoot, "rpc-session");
-		assert.equal(latestEntry.latest_success_id, secondRecap.record_id);
+		assert.equal(latestEntry.latest_success_id, thirdRecap.record_id);
 		assert.equal(readRecord(world.dataRoot, latestEntry.last_attempt_id).status, "failed");
-		assert.equal(herdr.calls.filter((call) => call.method === "plugin.action.invoke").length, 2);
-		assert.equal(herdr.calls.filter((call) => call.method === "session.snapshot").length, 2);
+		assert.equal(herdr.calls.filter((call) => call.method === "plugin.action.invoke").length, 3);
+		assert.equal(herdr.calls.filter((call) => call.method === "pane.current").length, 3);
 		assert.equal(promptRecord(world.dataRoot, "rpc-session").working, false);
 
 		const trace = readTrace(world.tracePath);
 		const prepareIndices = trace.flatMap((line, index) => line.startsWith("cli prepare ") ? [index] : []);
-		assert.equal(prepareIndices.length, 3);
-		for (const index of prepareIndices.slice(0, 2)) {
-			assert.equal(trace[index + 1], "herdr session.snapshot");
+		assert.equal(prepareIndices.length, 4);
+		for (const index of prepareIndices.slice(0, 3)) {
+			assert.equal(trace[index + 1], "herdr pane.current");
 			assert.match(trace[index + 2], /^cli publish /);
 			assert.equal(trace[index + 3], "herdr plugin.action.invoke");
 		}
-		assert.notEqual(trace[prepareIndices[2] + 1], "herdr session.snapshot");
+		assert.notEqual(trace[prepareIndices[3] + 1], "herdr pane.current");
 	} finally {
 		provider.releaseFirst();
 		await rpc.close().catch(() => {});

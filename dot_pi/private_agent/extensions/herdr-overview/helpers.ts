@@ -4,7 +4,6 @@ import net from "node:net";
 import { homedir } from "node:os";
 import path from "node:path";
 
-const HERDR_PROTOCOL = 22;
 const HERDR_REQUEST_TIMEOUT_MS = 2_000;
 const RECAP_COMMAND_TIMEOUT_MS = 5 * 60 * 1_000;
 const MAX_COMMAND_OUTPUT = 64 * 1024;
@@ -162,13 +161,14 @@ export async function paneWorkspaceAtPublication(
 ): Promise<string | undefined> {
 	if (!socketPath || !paneId) return undefined;
 	try {
-		const result = await requestHerdr(socketPath, "session.snapshot") as {
-			snapshot?: { protocol?: unknown; panes?: Array<{ pane_id?: unknown; workspace_id?: unknown }> };
+		const result = await requestHerdr(socketPath, "pane.current", { caller_pane_id: paneId }) as {
+			type?: unknown;
+			pane?: { pane_id?: unknown; workspace_id?: unknown };
 		} | null;
-		const snapshot = result?.snapshot;
-		if (snapshot?.protocol !== HERDR_PROTOCOL || !Array.isArray(snapshot.panes)) return undefined;
-		const pane = snapshot.panes.find((item) => item?.pane_id === paneId);
-		return typeof pane?.workspace_id === "string" && pane.workspace_id.trim()
+		if (result?.type !== "pane_current") return undefined;
+		const pane = result.pane;
+		return typeof pane?.pane_id === "string" && pane.pane_id.trim()
+			&& typeof pane.workspace_id === "string" && pane.workspace_id.trim()
 			? pane.workspace_id
 			: undefined;
 	} catch {
