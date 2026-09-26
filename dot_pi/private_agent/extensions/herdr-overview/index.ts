@@ -96,14 +96,15 @@ function settlePromptAndQueuePublication(
 	sessionId: string,
 	response: ReturnType<typeof settledAssistantResponse>,
 ): Promise<void> {
-	return runSessionRecap(["prompt", "settle", "--session-id", sessionId])
-		.catch(() => warn("could not mark the current prompt settled"))
-		.then(() => {
-			// Keep an older, slow recap from overwriting a newer settled response.
-			queue.promise = queue.promise
-				.then(() => prepareAndPublish(pending, sessionId, response))
-				.catch(() => warn("could not publish the settled Pi response"));
-		});
+	const promptSettlement = runSessionRecap(["prompt", "settle", "--session-id", sessionId])
+		.catch(() => warn("could not mark the current prompt settled"));
+	// Enqueue synchronously, before awaiting the CLI, so overlapping settled hooks
+	// publish in event order even if an earlier prompt-settle process is slower.
+	queue.promise = queue.promise
+		.then(() => promptSettlement)
+		.then(() => prepareAndPublish(pending, sessionId, response))
+		.catch(() => warn("could not publish the settled Pi response"));
+	return promptSettlement;
 }
 
 export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {

@@ -77,7 +77,27 @@ export async function readLatestRecapRecords(root = sessionRecapDataRoot(), sour
   return records.filter((record) => record?.status === "published");
 }
 
-export async function readRecapFields(snapshot, root = sessionRecapDataRoot()) {
+function recordTime(record, field) {
+  const value = Date.parse(record?.[field] ?? record?.published_at ?? record?.created_at ?? "");
+  return Number.isFinite(value) ? value : 0;
+}
+
+function newerRecord(left, right, field) {
+  if (!left) return right ?? null;
+  if (!right) return left;
+  const timeDifference = recordTime(right, field) - recordTime(left, field);
+  if (timeDifference !== 0) return timeDifference > 0 ? right : left;
+  return String(right.record_id ?? "").localeCompare(String(left.record_id ?? "")) >= 0 ? right : left;
+}
+
+function mergeRecapFields(current, incoming) {
+  return {
+    latest: newerRecord(current?.latest, incoming?.latest, "published_at"),
+    lastAttempt: newerRecord(current?.lastAttempt, incoming?.lastAttempt, "created_at"),
+  };
+}
+
+export async function readRecapFields(snapshot, root = sessionRecapDataRoot(), piTerminalIdsBySessionId = {}) {
   const latestIndex = await readJson(path.join(root, "latest.json"));
   const sources = Array.isArray(latestIndex?.sources) ? latestIndex.sources : [];
   const dayNames = await recordDays(root);
@@ -112,18 +132,50 @@ export async function readRecapFields(snapshot, root = sessionRecapDataRoot()) {
 
   const piRecapsBySessionId = {};
   const piRecapsByPaneId = {};
-  const piSources = sources.filter((item) => item?.source_kind === "pi-session" && typeof item.source_id === "string");
-  const recapReads = await Promise.all(piSources.map(async (item) => ({
-    sessionId: item.source_id,
-    recap: await bySource("pi-session", item.source_id),
-  })));
-  for (const { sessionId, recap } of recapReads) {
-    piRecapsBySessionId[sessionId] = recap;
-    const paneId = recap.lastAttempt?.pane_id ?? recap.latest?.pane_id;
-    if (!paneId) continue;
-    const existing = piRecapsByPaneId[paneId];
-    const dateOf = (value) => value?.lastAttempt?.created_at ?? value?.latest?.published_at ?? "";
-    if (!existing || dateOf(recap) >= dateOf(existing)) piRecapsByPaneId[paneId] = recap;
+  const recapsByPaneId = {};
+  const paneIds = new Set((snapshot.panes ?? []).map((pane) => pane.pane_id).filter((id) => typeof id === "string"));
+  const recapReads = await Promise.all(sources
+    .filter((item) => item && typeof item === "object"
+      && typeof item.source_kind === "string" && typeof item.source_id === "string")
+    .map(async (item) => ({
+      sourceKind: item.source_kind,
+      sourceId: item.source_id,
+      recap: await bySource(item.source_kind, item.source_id),
+    })));
+  for (const { sourceKind, sourceId, recap } of recapReads) {
+    if (sourceKind === "pi-session") piRecapsBySessionId[sourceId] = recap;
+    const attributedPaneId = recap.lastAttempt?.pane_id ?? recap.latest?.pane_id;
+    const paneId = paneIds.has(attributedPaneId) ? attributedPaneId
+      : sourceKind === "manual" && paneIds.has(sourceId) ? sourceId
+        : null;
+    if (!paneId || (!recap.latest && !recap.lastAttempt)) continue;
+    recapsByPaneId[paneId] = mergeRecapFields(recapsByPaneId[paneId], recap);
+    if (sourceKind === "pi-session") {
+      piRecapsByPaneId[paneId] = mergeRecapFields(piRecapsByPaneId[paneId], recap);
+    }
+  }
+
+  // Herdr can rekey a pane ID on pane.move. Use the durable terminal-ID
+  // association learned while the published recap still named the live pane;
+  // keep the old publication pane/workspace fields untouched for naming.
+  const panesByTerminalId = new Map((snapshot.panes ?? [])
+    .filter((pane) => typeof pane.terminal_id === "string" && pane.terminal_id)
+    .map((pane) => [pane.terminal_id, pane]));
+  for (const [sessionId, terminalId] of Object.entries(piTerminalIdsBySessionId ?? {})) {
+    const pane = panesByTerminalId.get(terminalId);
+    const recap = piRecapsBySessionId[sessionId];
+    if (pane && recap) recapsByPaneId[pane.pane_id] = mergeRecapFields(recapsByPaneId[pane.pane_id], recap);
+  }
+
+  // Preserve native agent-session matching when v0.9.1 supplies it, but do not
+  // require it: real Pi panes can report agent=pi with agent_session=null.
+  const agentByPaneId = new Map((snapshot.agents ?? []).map((agent) => [agent.pane_id, agent]));
+  for (const pane of snapshot.panes ?? []) {
+    const agent = agentByPaneId.get(pane.pane_id);
+    const session = agent?.agent_session ?? pane.agent_session;
+    if (session?.agent !== "pi" || session.kind !== "id" || typeof session.value !== "string") continue;
+    const recap = piRecapsBySessionId[session.value];
+    if (recap) recapsByPaneId[pane.pane_id] = mergeRecapFields(recapsByPaneId[pane.pane_id], recap);
   }
 
   const workspaceRecaps = {};
@@ -134,6 +186,7 @@ export async function readRecapFields(snapshot, root = sessionRecapDataRoot()) {
   return {
     promptsByPaneId,
     promptsBySessionId,
+    recapsByPaneId,
     piRecapsByPaneId,
     piRecapsBySessionId,
     workspaceRecaps,

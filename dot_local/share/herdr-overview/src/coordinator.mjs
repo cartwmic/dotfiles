@@ -83,12 +83,14 @@ export async function reconcileOverview({
 } = {}) {
   return withStateLock(stateDir, async () => {
     const previousState = await readState(stateDir);
+    const snapshotBeforeOpen = await api.snapshot();
     let recapCoordinator = previousState.recapCoordinator ?? null;
     let wakeups = [];
     if (coordinatorWake) {
       const result = await reconcileRecapCoordinator({
         state: recapCoordinator,
         dataRoot,
+        snapshot: snapshotBeforeOpen,
         now: coordinatorNow(),
         runRecap: recapRunner,
         resumeDeadlines,
@@ -101,7 +103,6 @@ export async function reconcileOverview({
     const name = eventName(event);
     const data = eventPayload(event);
     const changedPane = targetPaneId(event, data);
-    const snapshotBeforeOpen = await api.snapshot();
     let overviewPaneId = previousState.overviewPaneId ?? null;
 
     if (overviewPaneId && snapshotBeforeOpen.panes.some((pane) => pane.pane_id === overviewPaneId)) {
@@ -157,7 +158,7 @@ export async function reconcileOverview({
       }
     }
 
-    const supplied = await readRecapFields(snapshot, dataRoot);
+    const supplied = await readRecapFields(snapshot, dataRoot, recapCoordinator?.piTerminalIdsBySessionId);
     const namingInputs = {
       processByPaneId,
       supplied,

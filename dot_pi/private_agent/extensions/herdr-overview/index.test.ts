@@ -216,6 +216,10 @@ function readTrace(tracePath: string): string[] {
 	return text ? text.split("\n") : [];
 }
 
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 function registeredHandlers(): Map<string, (...args: any[]) => any> {
 	const handlers = new Map<string, (...args: any[]) => any>();
 	extension({ on: (event: string, handler: (...args: any[]) => any) => handlers.set(event, handler) } as any);
@@ -319,6 +323,64 @@ test("interactive prompt stays separate; settled publication uses exact pane mem
 			);
 			assert.equal(readTrace(world.tracePath).filter((line) => line.startsWith("cli prepare ")).length, 1);
 			assert.equal(world.calls.filter((call) => call.method === "plugin.action.invoke").length, 1);
+		});
+	} finally {
+		await world.close();
+	}
+});
+
+test("overlapping settled responses publish in event order when an earlier prompt settle is slow", async () => {
+	const world = await createWorld();
+	const markerPath = path.join(world.root, "first-settle-started");
+	const delayedCliPath = path.join(world.root, "delayed-session-recap");
+	const spyCliPath = path.join(world.root, "session-recap-spy");
+	writeFileSync(delayedCliPath, [
+		"#!/bin/sh",
+		`if [ \"$1\" = prompt ] && [ \"$2\" = settle ] && [ ! -e ${shellQuote(markerPath)} ]; then`,
+		`  : > ${shellQuote(markerPath)}`,
+		"  sleep 0.3",
+		"fi",
+		`exec ${shellQuote(spyCliPath)} \"$@\"`,
+	].join("\n") + "\n");
+	chmodSync(delayedCliPath, 0o755);
+	const backendPath = path.join(world.root, "ordered-backend.mjs");
+	writeFileSync(backendPath, `let prompt = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { prompt += chunk; });
+process.stdin.on("end", () => {
+  if (prompt.includes("First settled response.")) process.stdout.write("Recap for first response.\\n");
+  else if (prompt.includes("Second settled response.")) process.stdout.write("Recap for second response.\\n");
+  else process.exitCode = 7;
+});
+`);
+	writeFileSync(
+		path.join(world.root, "config", "session-recap", "config.toml"),
+		`command = ${JSON.stringify([process.execPath, backendPath])}\n`,
+	);
+
+	try {
+		await withProcessEnv({ ...world.env, SESSION_RECAP_BIN: delayedCliPath }, async () => {
+			const handlers = registeredHandlers();
+			const input = handlers.get("input")!;
+			await input({ type: "input", source: "interactive", text: "First request." },
+				fakeContext("ordered-session", "tui", false, []).ctx);
+			const firstSettled = handlers.get("agent_settled")!(
+				{}, fakeContext("ordered-session", "tui", true, responseEntry("First settled response.")).ctx,
+			) as Promise<void>;
+			await waitFor(() => existsSync(markerPath), "the first delayed prompt settle");
+
+			await input({ type: "input", source: "interactive", text: "Second request." },
+				fakeContext("ordered-session", "tui", false, []).ctx);
+			await handlers.get("agent_settled")!(
+				{}, fakeContext("ordered-session", "tui", true, responseEntry("Second settled response.")).ctx,
+			);
+			await firstSettled;
+			await waitFor(
+				() => world.calls.filter((call) => call.method === "plugin.action.invoke").length === 2,
+				"both ordered recap publications",
+			);
+
+			assert.equal(latestPublished(world.dataRoot, "ordered-session").summary, "Recap for second response.");
 		});
 	} finally {
 		await world.close();

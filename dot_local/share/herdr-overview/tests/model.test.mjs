@@ -54,6 +54,7 @@ test("normalizes the v0.9.1 snapshot by native IDs and shares Herdr focus", () =
   assert.deepEqual(model.workspaces["ws-a"].tabIds, ["ws-a:tab-1"]);
   assert.deepEqual(model.tabs["ws-a:tab-1"].paneIds, ["ws-a:pane-shell", "ws-a:pane-pi", "ws-a:pane-unknown"]);
   assert.equal(model.panes["ws-a:pane-shell"].title, "shell title");
+  assert.equal(model.panes["ws-a:pane-pi"].terminalId, "term-pi");
   assert.equal(model.panes["ws-a:pane-shell"].processInfo.foreground_processes[0].name, "zsh");
   assert.equal(model.panes["ws-a:pane-shell"].preview, "build ok");
   assert.equal(model.panes["ws-a:pane-shell"].agent.present, false);

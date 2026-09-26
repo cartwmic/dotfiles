@@ -204,8 +204,10 @@ real-user prompt separately from a recap generated after a response settles.
 The overview is a passive display of native Herdr pane state, those supplied
 prompts, and published recaps. It does not parse transcripts or produce
 summaries. Panes and tabs can be auto-named from available metadata and
-published recaps; workspaces are not auto-named, and manual pane/tab labels
-remain until explicitly returned to automatic naming.
+eligible published Pi-session recaps; manually published pane-source recaps
+appear in pane detail but do not drive automatic names. Workspaces are not
+auto-named, and manual pane/tab labels remain until explicitly returned to
+automatic naming.
 
 The overview uses Herdr's active configured theme. At the configured
 `[ui].mobile_width_threshold` (64 by default), it presents a summary-first

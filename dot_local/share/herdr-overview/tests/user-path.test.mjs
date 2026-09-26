@@ -12,8 +12,11 @@ import { readTheme } from "../src/theme.mjs";
 
 const NOW = Date.now();
 
-function makeScenario() {
-  const workspaces = [
+function makeScenario(workspaceCount = 3) {
+  if (!Number.isInteger(workspaceCount) || workspaceCount < 2 || workspaceCount > 5) {
+    throw new RangeError("user-path scenarios support 2–5 workspaces");
+  }
+  const baseWorkspaces = [
     { id: "ws-1", label: "API", tabs: [
       { id: "ws-1:t1", label: "Build", panes: [
         { id: "ws-1:p1", label: "Pi task", agent: "pi", status: "working", preview: "latest API output" },
@@ -41,6 +44,19 @@ function makeScenario() {
       ] },
     ] },
   ];
+  const workspaces = baseWorkspaces.slice(0, Math.min(workspaceCount, baseWorkspaces.length));
+  for (let number = 4; number <= workspaceCount; number += 1) {
+    const id = `ws-${number}`;
+    workspaces.push({ id, label: `Extra ${number}`, tabs: [
+      { id: `${id}:t1`, label: `Mixed ${number}`, panes: [
+        { id: `${id}:p1`, label: `Codex ${number}`, agent: "codex", status: "working", preview: `recognized ${number} output` },
+        { id: `${id}:p2`, label: `Unknown ${number}`, agent: null, recognized: false, status: "unknown", preview: `unrecognized ${number} output` },
+      ] },
+      { id: `${id}:t2`, label: `Shell ${number}`, panes: [
+        { id: `${id}:p3`, label: `Shell ${number}`, preview: `shell ${number} output` },
+      ] },
+    ] });
+  }
   const snapshot = {
     protocol: 22,
     version: "0.9.1",
@@ -243,11 +259,16 @@ async function driveEveryNativePane({ t, width, rows, defs, model, files, socket
   if (expectedPresenter === "Mosaic") {
     for (const workspace of defs) assert.ok(presenter.output.latest().includes(workspace.label), `initial Mosaic omitted ${workspace.label}`);
     for (const paneId of model.paneOrder) assert.ok(presenter.output.latest().includes(paneId), `initial Mosaic omitted ${paneId}`);
-  } else {
-    for (const workspace of defs) assert.ok(presenter.output.latest().includes(workspace.label), `Board summary omitted ${workspace.label}`);
   }
 
   const focused = [];
+  if (expectedPresenter === "Board") {
+    for (const [workspaceIndex, workspace] of defs.entries()) {
+      if (workspaceIndex > 0) await presenter.press("j");
+      assert.ok(presenter.output.latest().includes(workspace.label), `Board could not scroll to ${workspace.label}`);
+    }
+    for (let index = defs.length - 1; index > 0; index -= 1) await presenter.press("k");
+  }
   for (const [workspaceIndex, workspace] of defs.entries()) {
     if (workspaceIndex > 0) {
       await presenter.press("escape");
@@ -274,7 +295,27 @@ async function driveEveryNativePane({ t, width, rows, defs, model, files, socket
         const detail = presenter.output.latest();
         assert.ok(detail.includes(pane.id), `detail did not identify ${pane.id}`);
         assert.match(detail, /RECENT OUTPUT|Recent output/);
-        if (pane.id === "ws-1:p1") assert.ok(detail.includes("latest API output"));
+        assert.ok(detail.includes(pane.preview), `detail omitted recent output for ${pane.id}`);
+        let detailPages = detail;
+        if (["ws-1:p1", "ws-1:p2", "ws-2:p5", "ws-1:p3"].includes(pane.id)) {
+          detailPages += `\n${await presenter.press(" ")}`;
+        }
+        if (pane.id === "ws-1:p1") {
+          assert.ok(detailPages.includes("Finish the API migration"), "detail omitted the distinct current Pi prompt");
+          assert.ok(detailPages.includes("Updated the API and added validation."), "detail omitted the published recap");
+          assert.ok(detailPages.includes("2m ago"), "detail omitted the published recap age");
+        }
+        if (pane.id === "ws-1:p2") assert.ok(detailPages.includes("Unavailable · no published recap"), "missing recap status was not shown");
+        if (pane.id === "ws-2:p5") {
+          assert.ok(detailPages.includes("Unavailable · last attempt failed"), "failed recap status was not shown");
+          assert.ok(detailPages.includes("scripted backend unavailable"), "failed recap reason was not shown");
+          assert.ok(detailPages.includes("3m ago"), "failed recap age was not shown");
+        }
+        if (pane.id === "ws-1:p3") {
+          const unknownState = expectedPresenter === "Board" ? "agent unrecognized · unknown" : "Agent: unrecognized · unknown";
+          assert.ok(detailPages.includes(unknownState), "unrecognized agent state was hidden or misrepresented");
+          assert.doesNotMatch(detailPages, /unrecognized · done/);
+        }
         await presenter.press("f");
         focused.push(calls.filter((call) => call.method === "pane.focus").at(-1)?.params.pane_id);
         assert.equal(focused.at(-1), pane.id, `native focus did not target ${pane.id}`);
@@ -293,30 +334,32 @@ async function driveEveryNativePane({ t, width, rows, defs, model, files, socket
   return presenter;
 }
 
-test("narrow Board user path reaches all 3 workspaces, all tabs/panes, live state and native focus without recap generation", async (t) => {
-  const { model, workspaces, snapshot } = makeScenario();
-  const files = await fixtureFiles(t, model);
-  const socket = await scriptedServer(t, snapshot);
-  const presenter = await driveEveryNativePane({ t, width: 48, rows: 13, defs: workspaces, model, files, socket, calls: socket.calls });
-  assert.equal(presenter.input.isRaw, true);
+for (const workspaceCount of [2, 3, 4, 5]) {
+  test(`narrow Board user path reaches every tab/pane in ${workspaceCount} workspaces without recap generation`, async (t) => {
+    const { model, workspaces, snapshot } = makeScenario(workspaceCount);
+    const files = await fixtureFiles(t, model);
+    const socket = await scriptedServer(t, snapshot);
+    const presenter = await driveEveryNativePane({ t, width: 48, rows: 13, defs: workspaces, model, files, socket, calls: socket.calls });
+    assert.equal(presenter.input.isRaw, true);
 
-  const marker = await readFile(files.recapMarker, "utf8").catch(() => "");
-  assert.equal(marker, "", "opening, navigating, reading previews and focusing must never run the recap command");
-  assert.deepEqual(socket.calls.filter((call) => call.method === "pane.focus").map((call) => call.params.pane_id), model.paneOrder);
+    const marker = await readFile(files.recapMarker, "utf8").catch(() => "");
+    assert.equal(marker, "", "opening, navigating, reading previews and focusing must never run the recap command");
+    assert.deepEqual(socket.calls.filter((call) => call.method === "pane.focus").map((call) => call.params.pane_id), model.paneOrder);
 
-  presenter.input.press("q");
-  await presenter.promise;
-  assert.equal(presenter.input.isRaw, false);
-});
+    presenter.input.press("q");
+    await presenter.promise;
+    assert.equal(presenter.input.isRaw, false);
+  });
 
-test("wide Mosaic user path represents every workspace/pane and focuses the same native IDs without recap generation", async (t) => {
-  const { model, workspaces, snapshot } = makeScenario();
-  const files = await fixtureFiles(t, model);
-  const socket = await scriptedServer(t, snapshot);
-  const presenter = await driveEveryNativePane({ t, width: 120, rows: 48, defs: workspaces, model, files, socket, calls: socket.calls });
-  assert.deepEqual(socket.calls.filter((call) => call.method === "pane.focus").map((call) => call.params.pane_id), model.paneOrder);
-  const marker = await readFile(files.recapMarker, "utf8").catch(() => "");
-  assert.equal(marker, "", "Mosaic selection and native focus are passive recap readers");
-  presenter.input.press("q");
-  await presenter.promise;
-});
+  test(`wide Mosaic user path reaches every tab/pane in ${workspaceCount} workspaces without recap generation`, async (t) => {
+    const { model, workspaces, snapshot } = makeScenario(workspaceCount);
+    const files = await fixtureFiles(t, model);
+    const socket = await scriptedServer(t, snapshot);
+    const presenter = await driveEveryNativePane({ t, width: 120, rows: 48, defs: workspaces, model, files, socket, calls: socket.calls });
+    assert.deepEqual(socket.calls.filter((call) => call.method === "pane.focus").map((call) => call.params.pane_id), model.paneOrder);
+    const marker = await readFile(files.recapMarker, "utf8").catch(() => "");
+    assert.equal(marker, "", "Mosaic selection and native focus are passive recap readers");
+    presenter.input.press("q");
+    await presenter.promise;
+  });
+}
