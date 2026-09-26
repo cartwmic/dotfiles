@@ -1,0 +1,228 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Termux client for the isolated desktop proof. The phone owns this helper via
+# its termux chezmoi profile; this script never copies or installs dotfiles.
+set -eu
+
+usage() {
+  printf '%s\n' 'Usage: herdr-overview-proof RUN_ID [macbook|cartwmic-server]' \
+    'Runs the isolated desktop Herdr session over the real phone SSH terminal,' \
+    'then reviews a whole Pi reply and recent pane output locally in Termux.'
+}
+
+run_id=${1:-}
+host=${2:-macbook}
+if [ "$run_id" = "-h" ] || [ "$run_id" = "--help" ]; then
+  usage
+  exit 0
+fi
+if [ "${#run_id}" -ne 16 ]; then
+  usage >&2
+  exit 2
+fi
+case "$run_id" in
+  *[!0123456789abcdef]*) usage >&2; exit 2 ;;
+esac
+case "$host" in
+  macbook|cartwmic-server) ;;
+  *) printf 'Unsupported desktop SSH alias: %s\n' "$host" >&2; exit 2 ;;
+esac
+if ! command -v ssh >/dev/null 2>&1; then
+  printf '%s\n' '{"status":"BLOCKED","reason":"ssh is not installed"}'
+  exit 2
+fi
+
+remote_driver='"$HOME/.local/share/chezmoi/tests/herdr-overview/proof.py"'
+remote_client="python3 $remote_driver phone-client --run-id $run_id"
+remote_source_pi="python3 $remote_driver phone-source --run-id $run_id --kind pi-reply"
+remote_source_pane="python3 $remote_driver phone-source --run-id $run_id --kind pane-output"
+
+record_receipt() {
+  receipt_status=$1
+  receipt_reason=$2
+  reply_review=${3:-}
+  reply_count=${4:-0}
+  reply_notes=${5:-}
+  reply_export=${6:-}
+  pane_review=${7:-}
+  pane_count=${8:-0}
+  pane_notes=${9:-}
+  pane_export=${10:-}
+  unchanged=${11:-false}
+  case "$unchanged" in true) unchanged_flag=--snapshot-unchanged ;; *) unchanged_flag= ;; esac
+  remote_record="python3 $remote_driver phone-record --run-id $run_id --status $receipt_status --reply-note-count $reply_count --pane-note-count $pane_count"
+  [ -z "$receipt_reason" ] || remote_record="$remote_record --reason '$receipt_reason'"
+  [ -z "$reply_review" ] || remote_record="$remote_record --reply-review-id $reply_review"
+  [ -z "$reply_notes" ] || remote_record="$remote_record --reply-note-ids $reply_notes"
+  [ -z "$reply_export" ] || remote_record="$remote_record --reply-exported-note-id $reply_export"
+  [ -z "$pane_review" ] || remote_record="$remote_record --pane-review-id $pane_review"
+  [ -z "$pane_notes" ] || remote_record="$remote_record --pane-note-ids $pane_notes"
+  [ -z "$pane_export" ] || remote_record="$remote_record --pane-exported-note-id $pane_export"
+  remote_record="$remote_record $unchanged_flag"
+  # Every interpolated value above is either a validated ID, a decimal count,
+  # or a fixed status/reason owned by this script.
+  ssh -o BatchMode=yes -o ConnectTimeout=8 "$host" "$remote_record"
+}
+
+if ! ssh -tt -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
+  "$host" "$remote_client"; then
+  printf '%s\n' '{"status":"BLOCKED","reason":"could not complete the isolated Termux-over-SSH Herdr journey"}'
+  exit 2
+fi
+
+review_cli=$(command -v passage-review 2>/dev/null || true)
+if [ -z "$review_cli" ] && [ -x "$HOME/bin/passage-review" ]; then review_cli="$HOME/bin/passage-review"; fi
+if [ -z "$review_cli" ] && [ -x "$HOME/.local/bin/passage-review" ]; then review_cli="$HOME/.local/bin/passage-review"; fi
+if [ -z "$review_cli" ]; then
+  printf '%s\n' '{"status":"BLOCKED","reason":"passage-review is not installed in the phone-owned Termux profile"}'
+  record_receipt BLOCKED "passage-review is unavailable on this Termux profile" || true
+  exit 2
+fi
+
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/herdr-overview-proof.XXXXXX") || {
+  printf '%s\n' '{"status":"FAIL","reason":"could not create an isolated Termux review directory"}'
+  exit 1
+}
+cleanup() {
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT HUP INT TERM
+export XDG_DATA_HOME="$work_dir/data"
+export PASSAGE_REVIEW_CLIPBOARD=off
+review_root="$XDG_DATA_HOME/passage-review/reviews"
+mkdir -p "$work_dir/sources"
+
+extract_review() {
+  review_dirs=0
+  review_dir=
+  for candidate in "$review_root"/rv-*; do
+    [ -d "$candidate" ] || continue
+    candidate_id=${candidate##*/}
+    [ "$candidate_id" = "${reply_review:-}" ] && continue
+    review_dirs=$((review_dirs + 1))
+    review_dir=$candidate
+  done
+  [ "$review_dirs" -eq 1 ] || return 1
+  review_id=${review_dir##*/}
+  case "$review_id" in rv-????????????) ;; *) return 1 ;; esac
+}
+
+note_ids() {
+  note_count=0
+  first_note=
+  second_note=
+  for note_path in "$review_dir"/notes/n-*.json; do
+    [ -f "$note_path" ] || continue
+    note_id=${note_path##*/}
+    note_id=${note_id%.json}
+    case "$note_id" in n-????????) ;; *) return 1 ;; esac
+    note_count=$((note_count + 1))
+    if [ -z "$first_note" ]; then first_note=$note_id; else second_note=$note_id; fi
+  done
+  [ "$note_count" -gt 0 ]
+}
+
+printf '%s\n' 'Phone route opened the isolated Herdr server over SSH.' \
+  'In the next review, page through the entire Pi reply, add two passage comments, then export only one.'
+if ! ssh -o BatchMode=yes -o ConnectTimeout=8 "$host" "$remote_source_pi" > "$work_dir/sources/pi-reply.txt"; then
+  printf '%s\n' '{"status":"FAIL","reason":"could not retrieve the scripted Pi reply over SSH"}'
+  record_receipt FAIL "could not retrieve the scripted Pi reply" || true
+  exit 1
+fi
+if [ ! -s "$work_dir/sources/pi-reply.txt" ]; then
+  printf '%s\n' '{"status":"FAIL","reason":"the scripted Pi reply was empty"}'
+  record_receipt FAIL "the scripted Pi reply was empty" || true
+  exit 1
+fi
+"$review_cli" new --title "Herdr proof: complete Pi reply" < "$work_dir/sources/pi-reply.txt"
+extract_review || {
+  printf '%s\n' '{"status":"FAIL","reason":"Pi reply review was not saved"}'
+  record_receipt FAIL "Pi reply review was not saved" || true
+  exit 1
+}
+reply_review=$review_id
+note_ids || {
+  printf '%s\n' '{"status":"FAIL","reason":"no Pi reply passage comment was saved"}'
+  record_receipt FAIL "no Pi reply passage comment was saved" "$reply_review" 0 || true
+  exit 1
+}
+if [ "$note_count" -lt 2 ]; then
+  printf '%s\n' '{"status":"FAIL","reason":"add two comments to the whole Pi reply to complete this proof"}'
+  record_receipt FAIL "fewer than two Pi reply comments were saved" "$reply_review" "$note_count" "$first_note" || true
+  exit 1
+fi
+reply_count=$note_count
+reply_notes="$first_note,$second_note"
+reply_export=$first_note
+cp "$review_dir/snapshot.txt" "$work_dir/pi-snapshot.before"
+"$review_cli" export "$reply_review" --note "$reply_export"
+set -- "$review_dir"/exports/*.md
+[ -f "$1" ] || {
+  printf '%s\n' '{"status":"FAIL","reason":"Pi reply export file was not created"}'
+  record_receipt FAIL "Pi reply export file was not created" "$reply_review" "$reply_count" "$reply_notes" "$reply_export" || true
+  exit 1
+}
+if grep -F "$second_note" "$1" >/dev/null 2>&1 || ! grep -F "$reply_export" "$1" >/dev/null 2>&1; then
+  printf '%s\n' '{"status":"FAIL","reason":"Pi reply export did not select only one pending note"}'
+  record_receipt FAIL "Pi reply export selection was incorrect" "$reply_review" "$reply_count" "$reply_notes" "$reply_export" || true
+  exit 1
+fi
+cmp -s "$work_dir/pi-snapshot.before" "$review_dir/snapshot.txt" || {
+  printf '%s\n' '{"status":"FAIL","reason":"Pi reply snapshot changed during export"}'
+  record_receipt FAIL "Pi reply snapshot changed during export" "$reply_review" "$reply_count" "$reply_notes" "$reply_export" || true
+  exit 1
+}
+note_ids || exit 1
+if [ "$note_count" -ne "$reply_count" ] || [ ! -f "$review_dir/notes/$first_note.json" ] || [ ! -f "$review_dir/notes/$second_note.json" ]; then
+  printf '%s\n' '{"status":"FAIL","reason":"Pi reply export changed pending-note state"}'
+  record_receipt FAIL "Pi reply export changed pending-note state" "$reply_review" "$reply_count" "$reply_notes" "$reply_export" || true
+  exit 1
+fi
+
+printf '%s\n' 'Next, read the recent Herdr pane output inside the reviewer, select a line, and save one comment.'
+if ! ssh -o BatchMode=yes -o ConnectTimeout=8 "$host" "$remote_source_pane" > "$work_dir/sources/pane-output.txt"; then
+  printf '%s\n' '{"status":"FAIL","reason":"could not retrieve isolated Herdr pane output over SSH"}'
+  record_receipt FAIL "could not retrieve Herdr pane output" "$reply_review" "$reply_count" "$reply_notes" "$reply_export" || true
+  exit 1
+fi
+if [ ! -s "$work_dir/sources/pane-output.txt" ]; then
+  printf '%s\n' '{"status":"FAIL","reason":"recent Herdr pane output was empty"}'
+  record_receipt FAIL "recent pane output was empty" "$reply_review" "$reply_count" "$reply_notes" "$reply_export" || true
+  exit 1
+fi
+"$review_cli" new --title "Herdr proof: recent pane output" < "$work_dir/sources/pane-output.txt"
+extract_review || {
+  printf '%s\n' '{"status":"FAIL","reason":"pane-output review was not saved"}'
+  record_receipt FAIL "pane-output review was not saved" "$reply_review" "$reply_count" "$reply_notes" "$reply_export" || true
+  exit 1
+}
+pane_review=$review_id
+note_ids || {
+  printf '%s\n' '{"status":"FAIL","reason":"no pane-output passage comment was saved"}'
+  record_receipt FAIL "pane-output comment was not saved" "$reply_review" "$reply_count" "$reply_notes" "$reply_export" "$pane_review" 0 || true
+  exit 1
+}
+pane_count=$note_count
+pane_notes=$first_note
+pane_export=$first_note
+cp "$review_dir/snapshot.txt" "$work_dir/pane-snapshot.before"
+"$review_cli" export "$pane_review" --note "$pane_export"
+set -- "$review_dir"/exports/*.md
+[ -f "$1" ] || {
+  printf '%s\n' '{"status":"FAIL","reason":"pane-output export file was not created"}'
+  record_receipt FAIL "pane-output export file was not created" "$reply_review" "$reply_count" "$reply_notes" "$reply_export" "$pane_review" "$pane_count" "$pane_notes" "$pane_export" || true
+  exit 1
+}
+if ! grep -F "$pane_export" "$1" >/dev/null 2>&1 || ! cmp -s "$work_dir/pane-snapshot.before" "$review_dir/snapshot.txt"; then
+  printf '%s\n' '{"status":"FAIL","reason":"pane-output export changed selection or snapshot"}'
+  record_receipt FAIL "pane-output export changed selection or snapshot" "$reply_review" "$reply_count" "$reply_notes" "$reply_export" "$pane_review" "$pane_count" "$pane_notes" "$pane_export" || true
+  exit 1
+fi
+note_ids || exit 1
+if [ "$note_count" -ne "$pane_count" ]; then
+  printf '%s\n' '{"status":"FAIL","reason":"export changed pending pane-output note state"}'
+  record_receipt FAIL "export changed pending pane-output note state" "$reply_review" "$reply_count" "$reply_notes" "$reply_export" "$pane_review" "$pane_count" "$pane_notes" "$pane_export" || true
+  exit 1
+fi
+
+record_receipt PASS "" "$reply_review" "$reply_count" "$reply_notes" "$reply_export" \
+  "$pane_review" "$pane_count" "$pane_notes" "$pane_export" true

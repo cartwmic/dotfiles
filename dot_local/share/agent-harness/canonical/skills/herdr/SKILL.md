@@ -43,6 +43,49 @@ Do not run bare `herdr` for discovery; it launches or attaches the TUI. Do not p
 
 Most control commands return JSON. Read identifiers and state from those responses instead of predicting them.
 
+## Overview, names, recaps, and passage review
+
+On the desktop profiles, the source-managed Herdr Overview plugin targets Herdr
+**0.9.1 / protocol 22**. Termux is only an SSH client; it is not a Herdr plugin
+host. The plugin starts with a compatible server start. Linking/installing it
+does not run startup and applying dotfiles never restarts the owner's main
+server. A running server must be restarted or started only under owner control.
+
+The overview is passive: it renders native workspace/tab/pane state, available
+metadata and output, Pi's supplied current prompt, and independently published
+recaps. It never parses Pi transcripts or runs a recap producer. At or below
+Herdr's `[ui].mobile_width_threshold` (64 by default), it shows a summary-first
+Board; wider terminals show the all-pane Mosaic. `j`/`k` navigates, `[`/`]`
+selects tabs, `Enter` opens the next level, `Esc` returns, and `f` focuses the
+actual native pane. Current Pi prompt, live agent state, and latest recap are
+separate fields; a prompt is not a recap, and missing/failed recaps do not hide
+live pane information.
+
+Panes and tabs may be automatically labeled using available Herdr metadata and
+published recaps; workspaces are never auto-named. Preserve any manual pane or
+tab label. Only the owner's explicit return-to-automatic action for that exact
+pane/tab allows naming automation to resume. A tab containing unrelated agents
+should represent both available tasks. Pi session names and identities are not
+renamed. Non-Pi labels must not claim more than native metadata supports.
+
+The portable `session-recap` command works without Pi or Herdr. It accepts
+single stdin input or related group JSON and invokes the configured command
+with the rendered prompt on stdin. Nonzero or blank output is failure and must
+not replace the last good recap. Earlier dated records live outside Herdr.
+Pi publishes a settled-session recap; a successful in-workspace Pi publication
+starts/restarts a 30-second quiet interval. At expiry, the coordinator groups
+currently published member recaps, then can publish the all-workspaces session
+recap. Failed recap attempts do not reset the interval. The overview only
+reads/displays these records.
+
+`passage-review` is also standalone. Use `new --file PATH` or pipe a supplied
+snapshot to `new --title TITLE`, then `open REVIEW_ID` to add/revisit passage
+comments. `export REVIEW_ID --note NOTE_ID` exports only selected pending notes
+as quoted, attributed feedback. Export neither edits the source, archives the
+notes, nor sends feedback to an agent. Its library and export work while Pi and
+Herdr are stopped; on a phone, review saved whole replies or select recent pane
+output inside the reviewer when direct SSH selection capture is unavailable.
+
 ## Understand layout, panes, and agents
 
 Choose the primitive that matches the job:

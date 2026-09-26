@@ -1,0 +1,1395 @@
+{
+  "attribution": {
+    "commit": "8544776216a8d28088db59a5344ea21ee2d05d2b",
+    "derivation": "Color::Rgb literals were converted to #rrggbb; Reset and ANSI variants are kept as typed values.",
+    "project": "herdrdev/herdr",
+    "release": "v0.9.1",
+    "source_file": "src/app/state.rs",
+    "source_symbol": "Palette constructors and Palette::from_name"
+  },
+  "protocol": 22,
+  "themes": {
+    "catppuccin": {
+      "accent": {
+        "hex": "#89b4fa",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#1e1e2e",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#89b4fa",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#a6e3a1",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#cba6f7",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#6c7086",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#7f849c",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#181825",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#fab387",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#f38ba8",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#313244",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#a6adc8",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#313244",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#45475a",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#1e1e2e",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#94e2d5",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#cdd6f4",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#f9e2af",
+        "kind": "rgb"
+      }
+    },
+    "catppuccin-latte": {
+      "accent": {
+        "hex": "#1e66f5",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#e6e9ef",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#1e66f5",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#40a02b",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#8839ef",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#9ca0b0",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#8c8fa1",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#eff1f5",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#fe640b",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#d20f39",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#bdd0f5",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#6c6f85",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#ccd0da",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#bcc0cc",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#e6e9ef",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#179299",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#4c4f69",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#df8e1d",
+        "kind": "rgb"
+      }
+    },
+    "dracula": {
+      "accent": {
+        "hex": "#bd93f9",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#373c52",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#8be9fd",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#50fa7b",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#ff79c6",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#6272a4",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#828cb4",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#282a36",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#ffb86c",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#ff5555",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#463f5d",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#d2d2dc",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#44475a",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#6272a4",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#282a36",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#8be9fd",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#f8f8f2",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#f1fa8c",
+        "kind": "rgb"
+      }
+    },
+    "gruvbox": {
+      "accent": {
+        "hex": "#d79921",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#323130",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#83a598",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#b8bb26",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#d3869b",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#928374",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#a89984",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#282828",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#fe8019",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#fb4934",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#4b3f27",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#d5c4a1",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#3c3836",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#504945",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#282828",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#8ec07c",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#ebdbb2",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#fabd2f",
+        "kind": "rgb"
+      }
+    },
+    "gruvbox-light": {
+      "accent": {
+        "hex": "#076678",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#f2e5bc",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#076678",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#79740e",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#8f3f71",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#928374",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#7c6f64",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#fbf1c7",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#af3a03",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#9d0006",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#ebdbb2",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#504945",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#ebdbb2",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#d5c4a1",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#f2e5bc",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#427b58",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#3c3836",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#b57614",
+        "kind": "rgb"
+      }
+    },
+    "kanagawa": {
+      "accent": {
+        "hex": "#7e9cd8",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#363646",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#7e9cd8",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#76946a",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#957fb8",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#727169",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#87867d",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#1f1f28",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#ffa066",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#c34043",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#32384b",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#c8c3aa",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#2a2a37",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#363646",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#1f1f28",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#7fb4ca",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#dcd7ba",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#c0a36e",
+        "kind": "rgb"
+      }
+    },
+    "kanagawa-lotus": {
+      "accent": {
+        "hex": "#4d699b",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#d5cea3",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#4d699b",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#6f894e",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#624c83",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#a09cac",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#8a8980",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#f2ecbc",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#cc6d00",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#c84053",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#dcd5ac",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#43436c",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#dcd5ac",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#c9cbd1",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#d5cea3",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#4e8ca2",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#545464",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#77713f",
+        "kind": "rgb"
+      }
+    },
+    "nord": {
+      "accent": {
+        "hex": "#88c0d0",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#434c5e",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#81a1c1",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#a3be8c",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#b48ead",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#4c566a",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#646e82",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#2e3440",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#d08770",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#bf616a",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#40505d",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#d8dee9",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#3b4252",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#434c5e",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#2e3440",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#8fbcbb",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#eceff4",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#ebcb8b",
+        "kind": "rgb"
+      }
+    },
+    "one-dark": {
+      "accent": {
+        "hex": "#61afef",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#313640",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#61afef",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#98c379",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#c678dd",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#5c6370",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#737a87",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#282c34",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#d19a66",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#e06c75",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#334659",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#969ca8",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#2c313a",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#3e4451",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#282c34",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#56b6c2",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#abb2bf",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#e5c07b",
+        "kind": "rgb"
+      }
+    },
+    "one-light": {
+      "accent": {
+        "hex": "#4078f2",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#d8dbe2",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#4078f2",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#50a14f",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#a626a4",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#a0a1a7",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#686b77",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#fafafa",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#986801",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#e45649",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#cddbf8",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#686b77",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#f0f0f1",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#e5e5e6",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#f5f5f6",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#0184bc",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#383a42",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#c18401",
+        "kind": "rgb"
+      }
+    },
+    "rose-pine": {
+      "accent": {
+        "hex": "#c4a7e7",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#26233a",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#31748f",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#31748f",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#c4a7e7",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#6e6a86",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#908caa",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#191724",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#ea9a97",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#eb6f92",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#3b344b",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#c8c5dc",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#1f1d2e",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#26233a",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#26233a",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#9ccfd8",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#e0def4",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#f6c177",
+        "kind": "rgb"
+      }
+    },
+    "rose-pine-dawn": {
+      "accent": {
+        "hex": "#907aa9",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#e3d9cf",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#286983",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#286983",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#907aa9",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#9893a5",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#797593",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#faf4ed",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#d7827e",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#b4637a",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#f2e9e1",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#797593",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#f2e9e1",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#fffaf3",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#f2e9e1",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#56949f",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#464261",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#ea9d34",
+        "kind": "rgb"
+      }
+    },
+    "solarized": {
+      "accent": {
+        "hex": "#268bd2",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#164b57",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#268bd2",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#859900",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#d33682",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#586e75",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#657b83",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#002b36",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#cb4b16",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#dc322f",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#083e55",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#839496",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#073642",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#586e75",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#002b36",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#2aa198",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#93a1a1",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#b58900",
+        "kind": "rgb"
+      }
+    },
+    "solarized-light": {
+      "accent": {
+        "hex": "#268bd2",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#eee8d5",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#268bd2",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#859900",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#d33682",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#93a1a1",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#586e75",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#fdf6e3",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#cb4b16",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#dc322f",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#c9dcdf",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#839496",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#eee8d5",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#93a1a1",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#eee8d5",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#2aa198",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#657b83",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#b58900",
+        "kind": "rgb"
+      }
+    },
+    "terminal": {
+      "accent": {
+        "kind": "ansi",
+        "name": "blue"
+      },
+      "active_row_bg": {
+        "kind": "ansi",
+        "name": "darkgray"
+      },
+      "blue": {
+        "kind": "ansi",
+        "name": "blue"
+      },
+      "green": {
+        "kind": "ansi",
+        "name": "green"
+      },
+      "mauve": {
+        "kind": "ansi",
+        "name": "gray"
+      },
+      "overlay0": {
+        "kind": "ansi",
+        "name": "gray"
+      },
+      "overlay1": {
+        "kind": "ansi",
+        "name": "white"
+      },
+      "panel_bg": {
+        "kind": "reset"
+      },
+      "peach": {
+        "kind": "ansi",
+        "name": "yellow"
+      },
+      "red": {
+        "kind": "ansi",
+        "name": "lightred"
+      },
+      "selection_bg": {
+        "kind": "reset"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "kind": "ansi",
+        "name": "gray"
+      },
+      "surface0": {
+        "kind": "reset"
+      },
+      "surface1": {
+        "kind": "ansi",
+        "name": "darkgray"
+      },
+      "surface_dim": {
+        "kind": "ansi",
+        "name": "darkgray"
+      },
+      "teal": {
+        "kind": "ansi",
+        "name": "cyan"
+      },
+      "text": {
+        "kind": "reset"
+      },
+      "yellow": {
+        "kind": "ansi",
+        "name": "yellow"
+      }
+    },
+    "tokyo-night": {
+      "accent": {
+        "hex": "#7aa2f7",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#232636",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#7aa2f7",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#9ece6a",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#bb9af7",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#565f89",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#697196",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#1a1b26",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#ff9e64",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#f7768e",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#2d3650",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#a9b1d6",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#24283b",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#414868",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#1a1b26",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#7dcfff",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#c0caf5",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#e0af68",
+        "kind": "rgb"
+      }
+    },
+    "tokyo-night-day": {
+      "accent": {
+        "hex": "#2e7de9",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#d2d3da",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#2e7de9",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#587539",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#7847bd",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#8990b3",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#68709a",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#e1e2e7",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#b15c00",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#f52a65",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#b6cae7",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#6172b0",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#c4c8da",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#a8aecb",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#d2d3da",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#118c74",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#3760bf",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#8c6c3e",
+        "kind": "rgb"
+      }
+    },
+    "vesper": {
+      "accent": {
+        "hex": "#ffc799",
+        "kind": "rgb"
+      },
+      "active_row_bg": {
+        "hex": "#101010",
+        "kind": "rgb"
+      },
+      "blue": {
+        "hex": "#b0b0b0",
+        "kind": "rgb"
+      },
+      "green": {
+        "hex": "#99ffe4",
+        "kind": "rgb"
+      },
+      "mauve": {
+        "hex": "#ffd1a8",
+        "kind": "rgb"
+      },
+      "overlay0": {
+        "hex": "#5c5c5c",
+        "kind": "rgb"
+      },
+      "overlay1": {
+        "hex": "#7e7e7e",
+        "kind": "rgb"
+      },
+      "panel_bg": {
+        "hex": "#1a1a1a",
+        "kind": "rgb"
+      },
+      "peach": {
+        "hex": "#ffc799",
+        "kind": "rgb"
+      },
+      "red": {
+        "hex": "#ff8080",
+        "kind": "rgb"
+      },
+      "selection_bg": {
+        "hex": "#232323",
+        "kind": "rgb"
+      },
+      "sidebar_bg": {
+        "kind": "reset"
+      },
+      "subtext0": {
+        "hex": "#a0a0a0",
+        "kind": "rgb"
+      },
+      "surface0": {
+        "hex": "#232323",
+        "kind": "rgb"
+      },
+      "surface1": {
+        "hex": "#282828",
+        "kind": "rgb"
+      },
+      "surface_dim": {
+        "hex": "#101010",
+        "kind": "rgb"
+      },
+      "teal": {
+        "hex": "#66ddcc",
+        "kind": "rgb"
+      },
+      "text": {
+        "hex": "#ffffff",
+        "kind": "rgb"
+      },
+      "yellow": {
+        "hex": "#ffc799",
+        "kind": "rgb"
+      }
+    }
+  }
+}

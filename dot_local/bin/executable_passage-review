@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+case "$0" in
+  /*) script_path=$0 ;;
+  */*) script_path="$(pwd)/$0" ;;
+  *) script_path=$(command -v "$0") ;;
+esac
+script_dir=$(dirname "$script_path")
+implementation="$script_dir/../share/passage-review/passage_review.py"
+
+if [ ! -f "$implementation" ]; then
+  implementation="${HOME:?HOME is not set}/.local/share/passage-review/passage_review.py"
+fi
+if [ ! -f "$implementation" ]; then
+  printf '%s\n' 'passage-review: implementation not found under ~/.local/share/passage-review' >&2
+  exit 1
+fi
+
+exec python3 "$implementation" "$@"

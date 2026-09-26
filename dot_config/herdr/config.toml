@@ -89,3 +89,10 @@ auto_switch = false
 # Preserve Tokyo Night while giving active and selected rows distinct contrast.
 surface_dim = "#24283B"
 surface0 = "#3B4261"
+
+# Reconcile or open the source-managed overview; the plugin startup hook runs
+# only after the local package is linked and a Herdr server starts.
+[[keys.command]]
+key = "prefix+shift+o"
+type = "plugin_action"
+command = "overview.reconcile"

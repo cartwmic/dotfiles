@@ -11,6 +11,10 @@ phone, set `profile: "termux"` and `chezmoi apply` owns:
 | `~/.termux/font.ttf` | `dot_termux/font.ttf` |
 | `~/bin/zellij-jump` | `bin/executable_zellij-jump` |
 | `~/bin/herdr-jump` | `bin/executable_herdr-jump` |
+| `~/bin/herdr-overview-proof` | `bin/executable_herdr-overview-proof` |
+| `~/bin/passage-review` | `bin/executable_passage-review` |
+| `~/.local/bin/passage-review` | `dot_local/bin/executable_passage-review` |
+| `~/.local/share/passage-review/` | `dot_local/share/passage-review/` |
 | `~/.ssh/config` (managed block) | `private_dot_ssh/modify_config.tmpl` |
 | `~/.ssh/homelab`, `~/.ssh/whonix-homelab` | `run_after_05_provision_termux_ssh_keys.sh.tmpl` |
 
@@ -19,6 +23,54 @@ and deprecated helpers**. Chezmoi ignores this directory on every profile;
 no `~/termux` staging tree is deployed. The Mac utilities install apps and
 open a USB-only SSH connection, but **never push dotfiles through ADB**.
 Phone-side chezmoi owns configuration.
+
+## Herdr overview from the phone
+
+Termux is only the phone-side SSH/jump client. Herdr 0.9.1, its compatible
+protocol-22 server, and the overview plugin run on the desktop. For the everyday
+route, from the phone's Termux shell attach to the managed desktop alias, then
+attach to that desktop's running Herdr session:
+
+```sh
+ssh macbook
+herdr
+```
+
+The phone sees the same one desktop session as other clients. Its actual SSH
+PTY width chooses the summary-first Board at or below
+`[ui].mobile_width_threshold` (64 by default); wider terminals show the Mosaic.
+Open a workspace to see its tabs and scrollable pane tiles, open a pane for
+recent output/current prompt/latest published recap, and press `f` to focus
+that native pane. No Herdr plugin, Herdr server, or desktop config is installed
+on the phone. For workspace/tab/pane navigation and names, recap semantics, and
+the live-prompt/recap distinction, see the root product
+[README](../README.md).
+
+The phone-owned `~/bin/herdr-overview-proof` helper is only for the isolated
+acceptance run. On the desktop, run `herdr-prepare`, `herdr-wide`, and
+`pi-grouped` from `tests/herdr-overview/proof.py` against the same printed run
+ID; then use that run ID on the phone. After the helper returns, the desktop
+runs `termux-ssh` to validate the receipt before `herdr-cleanup`:
+
+```sh
+herdr-overview-proof RUN_ID macbook
+```
+
+The helper is POSIX shell: it opens the real isolated desktop session over
+phone-to-desktop SSH, guides an attended Board/detail/focus journey, reviews the
+whole scripted Pi reply and recent pane output in the phone's `passage-review`
+UI, and returns a bounded machine-readable receipt over SSH. It does not need a
+Python package on the phone to run the Herdr client check. The local
+`passage-review` command uses Python 3's standard library (installed by the
+Termux package list below). ADB may start/type the helper into an already
+configured Termux emulator, but must not push the helper, dotfiles, or config;
+the phone's own chezmoi profile owns the deployed helper.
+
+**Current phone-proof status: BLOCKED / not run by this source-only change.**
+Do not count AC-1 or phone review as proved until the helper returns a receipt
+from an attended physical phone or ADB-controlled Termux emulator and the host
+`termux-ssh` scenario accepts it. A local narrow PTY or width emulation is not
+phone proof.
 
 ## Rebuild a phone (Mac-driven)
 
@@ -223,7 +275,7 @@ No Mac/ADB config sync. Prerequisites:
 2. Packages:
 
 ```bash
-pkg install -y chezmoi git openssh coreutils termux-api
+pkg install -y chezmoi git openssh coreutils termux-api python
 ```
 
 `cartwmic/dotfiles` is **public**, so first bootstrap needs no GitHub auth.
@@ -240,7 +292,14 @@ EOF
 chezmoi init --apply https://github.com/cartwmic/dotfiles.git
 ```
 
-After apply (and SSH key provision below):
+After apply (and SSH key provision below), `passage-review` and
+`herdr-overview-proof` are available in `~/bin`.
+It reviews stdin or files locally in Termux; use `passage-review open REVIEW_ID`
+to select recent pane-output passages even when no Herdr selection adapter is
+available. `$VISUAL` (then `$EDITOR`) can be set to a terminal editor, and the
+phone's existing dictation keyboard can supply comment text. The library stays
+under `~/.local/share/passage-review` (or `$XDG_DATA_HOME` if set); it is not
+sent back to the desktop.
 
 - `ssh cartwmic-server` / `ssh remote` → `cartwmic@10.19.1.221` via `~/.ssh/homelab` (ControlMaster)
 - `ssh macbook` → `cartwmic@10.19.1.200` via `~/.ssh/homelab` (ControlMaster)

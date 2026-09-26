@@ -48,7 +48,7 @@ zig = "0.15.2"    # Pinned: builds the cartwmic/claude-p fork (pi-claude-bridge 
 # =============================================================================
 starship = "latest"                       # Shell prompt
 zellij = "latest"                         # General-purpose terminal multiplexer
-"github:herdrdev/herdr" = "0.7.5"         # Agent-aware workspace manager; pin client/server protocol
+"github:herdrdev/herdr" = "0.9.1"         # Plugin-capable release; client/server protocol 22
 zoxide = "latest"                         # Smart cd replacement
 
 # Zsh tools
@@ -930,6 +930,56 @@ fi
 echo "✅ Zellij plugins installed in $PLUGIN_DIR"
 '''
 
+[tasks."install-herdr-overview"]
+description = "Install Herdr 0.9.1 and link the local overview plugin without starting or restarting Herdr"
+run = '''
+set -eu
+PROFILE="$(chezmoi data --format json 2>/dev/null | jq -r '.profile // empty' || true)"
+case "$PROFILE" in
+  personal|axon-work-computer) ;;
+  *)
+    echo "Skipping Herdr Overview for chezmoi profile ${PROFILE:-unknown}"
+    exit 0
+    ;;
+esac
+
+HERDR_VERSION="0.9.1"
+mise install "github:herdrdev/herdr@${HERDR_VERSION}"
+HERDR_BIN="$(mise where "github:herdrdev/herdr@${HERDR_VERSION}")/herdr"
+ACTUAL_VERSION="$("$HERDR_BIN" --version | awk '{print $2}')"
+if [ "$ACTUAL_VERSION" != "$HERDR_VERSION" ]; then
+  echo "ERROR: expected Herdr ${HERDR_VERSION}, found ${ACTUAL_VERSION}" >&2
+  exit 1
+fi
+
+MANIFEST="$(chezmoi source-path "$HOME/.local/share/herdr-overview/herdr-plugin.toml")"
+PLUGIN_DIR="${MANIFEST%/herdr-plugin.toml}"
+if [ ! -f "$MANIFEST" ]; then
+  echo "ERROR: Herdr Overview source manifest not found: $MANIFEST" >&2
+  exit 1
+fi
+PLUGIN_DIR="$(cd "$PLUGIN_DIR" && pwd -P)"
+
+# Use a private, nonexistent socket path so link writes the registry offline
+# and never contacts, starts, or restarts the owner's running server.
+LINK_SOCKET="$HOME/.config/herdr/.herdr-overview-link-$$.sock"
+PLUGIN_REGISTRY="${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins.json"
+# Read the on-disk registry so this installer stays offline even if an older
+# Herdr server is still running. Refuse to replace a different plugin ID.
+EXISTING="$(jq -r '.[]? | select(.plugin_id == "overview") | .plugin_root // empty' "$PLUGIN_REGISTRY" 2>/dev/null | head -n 1 || true)"
+if [ -n "$EXISTING" ]; then
+  if [ "$(cd "$EXISTING" 2>/dev/null && pwd -P || printf '%s' "$EXISTING")" = "$PLUGIN_DIR" ]; then
+    echo "Herdr Overview already linked from $PLUGIN_DIR"
+    exit 0
+  fi
+  echo "ERROR: plugin ID 'overview' is already linked from $EXISTING" >&2
+  exit 1
+fi
+
+HERDR_SOCKET_PATH="$LINK_SOCKET" "$HERDR_BIN" plugin link "$PLUGIN_DIR" --enabled
+echo "Herdr Overview linked from $PLUGIN_DIR. Its startup hook runs only after a compatible Herdr server starts; this task did not start or restart a server."
+'''
+
 [tasks.bootstrap]
 description = "Complete system bootstrap"
 depends = [
@@ -957,6 +1007,7 @@ depends = [
   "setup-fzf-shell",
   "install-nvim-rosetta",
   "install-zellij-plugins",
+  "install-herdr-overview",
 ]
 run = '''
 echo "✅ Bootstrap complete!"
