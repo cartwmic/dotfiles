@@ -77,9 +77,13 @@ with the rendered prompt on stdin. Nonzero or blank output is failure and must
 not replace the last good recap. Earlier dated records live outside Herdr.
 Pi publishes a settled-session recap; a successful in-workspace Pi publication
 starts/restarts a 30-second quiet interval. At expiry, the coordinator groups
-currently published member recaps, then can publish the all-workspaces session
-recap. Failed recap attempts do not reset the interval. The overview only
-reads/displays these records.
+the latest published recaps for panes currently in that native workspace,
+including manually source-attributed non-Pi panes. A moved pane may join its
+new workspace's group, but a pane no longer present in the original workspace
+and a closed pane are omitted. After a successful workspace group, it can
+publish the all-workspaces session recap from latest workspace records whose
+workspace IDs are still live in the native snapshot. Failed recap attempts do not reset the
+interval. The overview only reads/displays these records.
 
 `passage-review` is also standalone. Use `new --file PATH` or pipe a supplied
 snapshot to `new --title TITLE`, then `open REVIEW_ID` to add/revisit passage

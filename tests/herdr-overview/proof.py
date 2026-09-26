@@ -21,11 +21,9 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
 
@@ -1210,70 +1208,93 @@ def navigate_wide_fixture(state: dict[str, Any], env: dict[str, str]) -> dict[st
             "overview_did_not_run_recap": True}
 
 
-class ScriptedCompletionState:
-    def __init__(self) -> None:
-        self.count = 0
-        self.started = threading.Event()
-        self.release_first = threading.Event()
-        self.lock = threading.Lock()
-        self.prompts: list[str] = []
-        self.reply = "\n".join(
-            [f"Scripted Pi proof reply, review line {i:02d}: deterministic response content." for i in range(1, 38)]
-            + ["Present state: the scripted response is complete; no external model was called."]
+def scripted_pi_reply() -> str:
+    return "\n".join(
+        [f"Scripted Pi proof reply, review line {index:02d}: deterministic response content."
+         for index in range(1, 38)]
+        + ["Present state: the scripted response is complete; no external model was called."]
+    )
+
+
+def provider_requests(root: Path) -> list[dict[str, Any]]:
+    path = root / "scripted-provider-requests.jsonl"
+    if not path.is_file():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def start_scripted_provider(root: Path, env: dict[str, str]) -> dict[str, Any]:
+    ready_path = root / "scripted-provider-ready.json"
+    release_path = root / "scripted-provider-release-first"
+    ready_path.unlink(missing_ok=True)
+    release_path.unlink(missing_ok=True)
+    log_path = root / "scripted-provider-server.log"
+    provider_script = ROOT / "tests/herdr-overview/scripted_pi_provider.py"
+    with log_path.open("ab") as log:
+        process = subprocess.Popen(
+            [sys.executable, str(provider_script), "--root", str(root.resolve())],
+            cwd=ROOT,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
 
+    def ready() -> dict[str, Any] | None:
+        if process.poll() is not None:
+            raise ProofFailure(f"scripted Pi provider exited early: {bounded(log_path.read_text(errors='replace'), 1000)}")
+        if not ready_path.is_file():
+            return None
+        value = read_json(ready_path)
+        if value.get("pid") != process.pid or value.get("root") != str(root.resolve()):
+            raise ProofFailure("scripted Pi provider readiness record does not match this isolated run")
+        if value.get("host") != "127.0.0.1" or not isinstance(value.get("port"), int):
+            raise ProofFailure("scripted Pi provider did not bind a valid loopback endpoint")
+        return value
 
-class ScriptedProviderHandler(BaseHTTPRequestHandler):
-    provider_state: ScriptedCompletionState
+    ready_value = wait_for(ready, "the isolated scripted Pi provider", timeout=10)
+    provider = {
+        "pid": process.pid,
+        "root": str(root.resolve()),
+        "port": ready_value["port"],
+        "url": f"http://127.0.0.1:{ready_value['port']}/v1",
+        "release_file": str(release_path),
+    }
+    return provider
 
-    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        state = type(self).provider_state
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length).decode("utf-8", "replace")
-        with state.lock:
-            state.count += 1
-            current = state.count
-            state.prompts.append(body)
-        if current == 1:
-            state.started.set()
-            state.release_first.wait(75)
-        text = state.reply if current == 1 else "Scripted second Pi response: present state remains unchanged."
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        common = {"id": f"t8-scripted-{current}", "object": "chat.completion.chunk", "created": 1,
-                  "model": "scripted-model"}
-        chunks = [
-            {**common, "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": None}]},
-            {**common, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-             "usage": {"prompt_tokens": 20, "completion_tokens": 40, "total_tokens": 60}},
-        ]
-        for chunk in chunks:
+
+def provider_process_matches(provider: dict[str, Any], root: Path) -> bool:
+    pid = provider.get("pid")
+    if not isinstance(pid, int) or pid <= 0 or provider.get("root") != str(root.resolve()):
+        return False
+    completed = run_process(["ps", "-p", str(pid), "-o", "command="], check=False, timeout=5)
+    command = completed.stdout.strip()
+    return completed.returncode == 0 and str(ROOT / "tests/herdr-overview/scripted_pi_provider.py") in command \
+        and str(root.resolve()) in command
+
+
+def stop_scripted_provider(root: Path, marker: dict[str, Any]) -> bool:
+    provider = marker.get("scripted_provider")
+    if not provider:
+        return False
+    if not isinstance(provider, dict) or provider.get("root") != str(root.resolve()):
+        raise ProofFailure("cleanup refused a scripted provider not recorded for this proof root")
+    pid = provider.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        raise ProofFailure("cleanup refused an invalid scripted provider PID")
+    if provider_process_matches(provider, root):
+        os.kill(pid, signal.SIGTERM)
+        def stopped() -> bool:
             try:
-                self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode("utf-8"))
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                return
-        try:
-            self.wfile.write(b"data: [DONE]\n\n")
-            self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-
-    def log_message(self, _format: str, *_args: Any) -> None:
-        return
-
-
-def start_scripted_provider() -> tuple[ThreadingHTTPServer, ScriptedCompletionState, threading.Thread, str]:
-    state = ScriptedCompletionState()
-    handler = type("T8ProviderHandler", (ScriptedProviderHandler,), {"provider_state": state})
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever, name="herdr-proof-pi-provider", daemon=True)
-    thread.start()
-    return server, state, thread, f"http://127.0.0.1:{server.server_address[1]}/v1"
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            return not provider_process_matches(provider, root)
+        wait_for(stopped, "the isolated scripted Pi provider to stop", timeout=8, interval=0.1)
+    elif run_process(["ps", "-p", str(pid), "-o", "command="], check=False, timeout=5).returncode == 0:
+        raise ProofFailure("cleanup refused to signal a PID that no longer matches the recorded provider")
+    return True
 
 
 def make_pi_provider_extension(path: Path) -> None:
@@ -1335,11 +1356,14 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
     if not state.get("wide_proof_passed"):
         raise ProofBlocked("run herdr-wide first on this same isolated server")
     state["fixture"].get("overview_pane_id") or (_ for _ in ()).throw(ProofFailure("overview pane is missing"))
-    provider, provider_state, provider_thread, provider_url = start_scripted_provider()
     pi_bin = shutil.which("pi")
     if not pi_bin:
-        provider.shutdown()
         raise ProofBlocked("Pi is not installed; the settlement journey cannot run")
+    provider = start_scripted_provider(root, env)
+    state["scripted_provider"] = provider
+    json_dump(root / PROOF_MARKER, state)
+    provider_url = provider["url"]
+    Path(env["HERDR_OVERVIEW_PI_REPLY"]).write_text(scripted_pi_reply() + "\n", encoding="utf-8")
     provider_extension = root / "scripted-pi-provider.mjs"
     make_pi_provider_extension(provider_extension)
     real_pi = pi_bin
@@ -1351,8 +1375,6 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
                f"exec {shlex.quote(real_pi)} \"$@\"\n")
     Path(env["HERDR_OVERVIEW_TEST_PROVIDER_URL_FILE"]).write_text(provider_url + "\n", encoding="utf-8")
     env["HERDR_OVERVIEW_TEST_PROVIDER_URL"] = provider_url
-    reply_path = Path(env["HERDR_OVERVIEW_PI_REPLY"])
-    reply_path.write_text(provider_state.reply + "\n", encoding="utf-8")
     pane_id = state["fixture"]["pi_pane_id"]
     agent_name = "t8-proof-pi"
     try:
@@ -1371,8 +1393,12 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
             stderr=subprocess.PIPE,
             text=True,
         )
-        if not provider_state.started.wait(60):
-            raise ProofFailure("the scripted provider did not receive Pi's prompt")
+        first_request = wait_for(
+            lambda: (lambda requests: requests[0] if requests else None)(provider_requests(root)),
+            "the scripted provider to receive Pi's prompt", timeout=60,
+        )
+        if "Proof request" not in first_request.get("body", ""):
+            raise ProofFailure("the scripted provider did not receive the real Pi request")
         data_root = root / "data/session-recap"
         working_prompt = wait_for(lambda: read_pi_prompt(data_root, pane_id), "Pi's current prompt publication", timeout=20)
         if working_prompt.get("text") != current_prompt or working_prompt.get("working") is not True:
@@ -1391,7 +1417,7 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         if "".join(current_prompt.split()) not in visible_prompt or "CURRENTPIPROMPT" not in visible_prompt:
             raise ProofFailure("the live selected-pane view omitted the current Pi prompt")
 
-        provider_state.release_first.set()
+        Path(provider["release_file"]).touch()
         try:
             out, err = prompt_process.communicate(timeout=140)
         except subprocess.TimeoutExpired:
@@ -1418,13 +1444,13 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         actual_deadline = datetime.fromisoformat(after_publish_state.replace("Z", "+00:00")).timestamp()
         if abs(actual_deadline - expected_deadline) > 2:
             raise ProofFailure("successful Pi publication did not start the exact 30-second workspace interval")
-        if not provider_state.prompts or "Proof request" not in provider_state.prompts[0]:
+        if not provider_requests(root) or "Proof request" not in provider_requests(root)[0].get("body", ""):
             raise ProofFailure("the real Pi session did not use the scripted response provider")
 
         # A second settled Pi response gets blank T1 output. It must neither
         # replace the first good session recap nor move the quiet deadline.
         Path(env["FAKE_RECAP_MODE_FILE"]).write_text("blank\n", encoding="utf-8")
-        provider_state.release_first.set()
+        Path(provider["release_file"]).touch()
         second_prompt = f"Proof request {run_id}: this recap backend will return blank output."
         second = herdr_cmd(state, env, "agent", "prompt", agent_name, second_prompt, check=False, timeout=15)
         if second.returncode != 0:
@@ -1543,10 +1569,9 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
             "response_provider": "scripted local OpenAI-compatible SSE provider",
         }
     finally:
-        provider_state.release_first.set()
-        provider.shutdown()
-        provider.server_close()
-        provider_thread.join(timeout=3)
+        # Keep this run-owned loopback provider alive for the post-phone native
+        # pane-move proof, which sends real Pi input through the inherited caller ID.
+        Path(provider["release_file"]).touch()
         # If an unexpected error leaves the prompt CLI alive, stop only that
         # child launched by this scenario. Herdr's isolated server is retained
         # for explicit herdr-cleanup.
@@ -1562,11 +1587,19 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     root, state, env = load_run(run_id, base)
     if not state.get("server_started") or not state.get("wide_proof_passed"):
         raise ProofBlocked("run herdr-prepare and herdr-wide first on this same isolated server")
+    phone = validate_phone_receipt(root, run_id)
+    provider = state.get("scripted_provider")
+    if not isinstance(provider, dict) or not provider_process_matches(provider, root):
+        raise ProofFailure("the recorded isolated scripted Pi provider is not running for the native-move input")
+    if not Path(provider.get("release_file", "")).is_file():
+        raise ProofFailure("the scripted Pi provider's first-response gate was not released")
 
     old_pane_id = state.get("fixture", {}).get("pi_pane_id")
     if not old_pane_id:
         raise ProofBlocked("the isolated fixture has no Pi pane")
     data_root = Path(env["XDG_DATA_HOME"]) / "session-recap"
+    prior_session_entry = latest_entry(data_root, "herdr-session", "active")
+    prior_session_record_id = prior_session_entry.get("latest_success_id") if prior_session_entry else None
     prior_recap, _attempt = read_latest_pi_record(data_root, old_pane_id)
     if not prior_recap or prior_recap.get("status") != "published":
         raise ProofBlocked("run pi-grouped first to publish a Pi recap on the fixture pane")
@@ -1585,6 +1618,9 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     identity = ((plugin_state(root).get("recapCoordinator") or {}).get("piTerminalIdsBySessionId") or {})
     if identity.get(session_id) != terminal_id:
         raise ProofFailure("overview.reconcile did not persist the published Pi source's native terminal_id")
+    pre_move_prompt = read_pi_prompt(data_root, old_pane_id)
+    if not pre_move_prompt or not pre_move_prompt.get("text"):
+        raise ProofFailure("the fixture lacks a current Pi prompt to follow through the native pane move")
 
     source_workspace_id = old_pane["workspace_id"]
     prior_source_group = latest_entry(data_root, "workspace", source_workspace_id)
@@ -1607,6 +1643,8 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
 
     original_deadline_text = wait_for(original_deadline, "the publication-time original-workspace deadline", timeout=20)
     target = state["fixture"]["workspaces"][1]
+    if len(state["fixture"].get("workspaces", [])) < 3:
+        raise ProofFailure("the isolated fixture needs a third workspace for the closed-workspace regression")
     moved_output = herdr_cmd(
         state, env, "pane", "move", old_pane_id, "--new-tab", "--workspace", target["workspace_id"], "--no-focus",
     )
@@ -1635,13 +1673,19 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     if moved_pane.get("agent_session") is not None or moved_agent.get("agent_session") is not None:
         raise ProofFailure("the moved v0.9.1 pane unexpectedly exposed agent_session")
 
-    def old_recap_in_new_detail() -> dict[str, Any] | None:
+    def old_recap_and_prompt_in_new_detail() -> dict[str, Any] | None:
         current = read_json(state_path)
         pane = ((current.get("model") or {}).get("panes") or {}).get(new_pane_id) or {}
         latest = (pane.get("recap") or {}).get("latest") or {}
-        return current if latest.get("record_id") == published_before_move else None
+        prompt = pane.get("prompt") or {}
+        if latest.get("record_id") == published_before_move \
+                and prompt.get("text") == pre_move_prompt["text"] \
+                and prompt.get("pane_id") == old_pane_id:
+            return current
+        return None
 
-    wait_for(old_recap_in_new_detail, "the prior published recap to follow terminal_id into the new pane detail", timeout=20)
+    wait_for(old_recap_and_prompt_in_new_detail,
+             "the pre-move recap and current prompt to follow terminal_id into the rekeyed pane detail", timeout=20)
     original_due = datetime.fromisoformat(original_deadline_text.replace("Z", "+00:00")).timestamp()
     remaining = original_due - time.time()
     if remaining > 0:
@@ -1651,26 +1695,95 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     if not source_group_after_move or source_group_after_move.get("latest_success_id") != prior_source_group_id:
         raise ProofFailure("the original workspace incorrectly grouped a pane that moved away before its quiet deadline")
 
-    # Now publish in the new workspace using the old pane ID retained by the
-    # prepared Pi source; its stable terminal identity must bind the new pane.
-    prepared_id = cli_recap(
-        Path(env["HOME"]), env, "prepare", "--source-id", session_id, "--pane-id", old_pane_id,
-        stdin="Completed work after the native pane move; terminal identity remains stable.\n",
+    # Materialize a real workspace recap, then close that workspace before the
+    # next Pi-triggered grouping. Its history must remain stored but not enter
+    # the active Herdr-session group.
+    closed_workspace = state["fixture"]["workspaces"][2]
+    closed_manual_id = cli_recap(
+        Path(env["HOME"]), env, "create", "--kind", "single", "--source-id", closed_workspace["root_pane_id"],
+        "--label", "Closed workspace proof member", stdin="This workspace will close before the next group.\n",
     ).stdout.strip()
+    closed_manual = find_record(data_root, closed_manual_id)[1]
+    closed_group_input = json.dumps({"members": [{
+        "record_id": closed_manual_id,
+        "label": "Closed workspace proof member",
+        "text": closed_manual["summary"],
+    }]}) + "\n"
+    closed_workspace_record_id = cli_recap(
+        Path(env["HOME"]), env, "create", "--kind", "group", "--source-kind", "workspace",
+        "--source-id", closed_workspace["workspace_id"], stdin=closed_group_input,
+    ).stdout.strip()
+    closed_workspace_record = find_record(data_root, closed_workspace_record_id)[1]
+    if closed_workspace_record.get("member_record_ids") != [closed_manual_id]:
+        raise ProofFailure("the closed-workspace fixture recap did not retain its member record")
+    herdr_cmd(state, env, "workspace", "close", closed_workspace["workspace_id"], timeout=20)
+    wait_for(
+        lambda: True if all(item.get("workspace_id") != closed_workspace["workspace_id"]
+                            for item in snapshot(state).get("workspaces", [])) else None,
+        "the native snapshot to remove the closed workspace", timeout=20,
+    )
+
+    # A manual source ID matching the live non-Pi pane is a current pane member,
+    # but it does not drive the Pi-only quiet-deadline coordinator.
+    manual_pane_id = target["root_pane_id"]
+    manual_id = cli_recap(
+        Path(env["HOME"]), env, "create", "--kind", "single", "--source-id", manual_pane_id,
+        "--label", "Current non-Pi pane recap", stdin="A manually supplied recap for the live shell pane.\n",
+    ).stdout.strip()
+    manual_record = find_record(data_root, manual_id)[1]
+    if manual_record.get("source_kind") != "manual" or manual_record.get("source_id") != manual_pane_id \
+            or manual_record.get("status") != "published":
+        raise ProofFailure("the non-Pi pane recap did not retain its explicit native pane source ID")
+    target_snapshot = snapshot(state)
+    manual_pane = one_by(target_snapshot.get("panes", []), "pane_id", manual_pane_id)
+    manual_agent = next((item for item in target_snapshot.get("agents", [])
+                         if item.get("pane_id") == manual_pane_id), {})
+    if manual_pane.get("agent") == "pi" or manual_agent.get("agent") == "pi":
+        raise ProofFailure("the pane-source member fixture is not a non-Pi native pane")
+
+    # Check the same public Pi adapter membership helper used by the live input
+    # and publication path. Do not supply this value to the Pi or recap CLI.
     publication_workspace_id = pi_pane_workspace_at_publication(env, old_pane_id)
     if publication_workspace_id != target["workspace_id"]:
         raise ProofFailure(
             "Pi's caller-aware pane.current helper did not resolve the moved pane to its live workspace: "
             f"{publication_workspace_id!r} != {target['workspace_id']!r}"
         )
-    published_id = cli_recap(
-        Path(env["HOME"]), env, "publish", "--prepared-id", prepared_id,
-        "--workspace-id", publication_workspace_id,
-    ).stdout.strip()
-    moved_recap = find_record(data_root, published_id)[1]
-    if moved_recap.get("pane_id") != old_pane_id or moved_recap.get("workspace_id") != publication_workspace_id:
-        raise ProofFailure("portable Pi publication did not retain its old pane ID and adapter-observed workspace attribution")
-    invoke_overview(state, env)
+
+    post_move_prompt = f"Proof request {run_id}: after the native move, report the current pane state."
+    herdr_cmd(
+        state, env, "agent", "prompt", "t8-proof-pi", post_move_prompt,
+        "--wait", "--timeout", "120000", timeout=130,
+    )
+    provider_calls = wait_for(
+        lambda: (lambda calls: calls if len(calls) >= 3 else None)(provider_requests(root)),
+        "the persistent scripted provider to receive real Pi input after pane.move", timeout=20,
+    )
+    if post_move_prompt not in provider_calls[-1].get("body", ""):
+        raise ProofFailure("the scripted provider did not receive the post-move user prompt")
+
+    def rekeyed_prompt() -> dict[str, Any] | None:
+        prompt = read_pi_prompt(data_root, new_pane_id)
+        return prompt if prompt and prompt.get("text") == post_move_prompt and prompt.get("working") is False else None
+
+    current_prompt = wait_for(rekeyed_prompt, "the current prompt attributed to the rekeyed native pane", timeout=20)
+    prompt_commands = [json.loads(line) for line in (root / "recap-commands.jsonl").read_text(encoding="utf-8").splitlines()]
+    if not any(args[:2] == ["prompt", "set"] and "--pane-id" in args
+               and args[args.index("--pane-id") + 1] == new_pane_id for args in prompt_commands):
+        raise ProofFailure("the real Pi input adapter did not store the current prompt under Herdr's rekeyed pane ID")
+    if current_prompt.get("pane_id") != new_pane_id:
+        raise ProofFailure("the current Pi prompt retained its pre-move pane ID")
+
+    def rekeyed_pi_recap() -> dict[str, Any] | None:
+        latest, _attempt = read_latest_pi_record(data_root, new_pane_id)
+        return latest if latest and latest.get("source_id") == session_id else None
+
+    moved_recap = wait_for(rekeyed_pi_recap, "the settled Pi publication for the rekeyed native pane", timeout=30)
+    published_id = moved_recap["record_id"]
+    if moved_recap.get("pane_id") != new_pane_id or moved_recap.get("workspace_id") != publication_workspace_id:
+        raise ProofFailure("the real Pi adapter publication did not use its live rekeyed pane/workspace attribution")
+    if moved_recap.get("summary") != SUCCESS_SUMMARY:
+        raise ProofFailure("the post-move Pi response did not use the deterministic recap backend")
 
     def deadline_state() -> tuple[dict[str, Any], str] | None:
         current = read_json(state_path)
@@ -1683,14 +1796,32 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     actual = datetime.fromisoformat(deadline_text.replace("Z", "+00:00")).timestamp()
     if abs(actual - expected) > 2:
         raise ProofFailure("the moved Pi recap did not start its publication-time quiet deadline")
-    # The action persists its deadline before it finishes refreshing the model.
-    # Wait for the user-facing detail rather than reading that intermediate state.
-    def new_recap_in_moved_detail() -> bool:
+
+    def current_prompt_and_recap_in_model() -> dict[str, Any] | None:
         current = read_json(state_path)
         pane = ((current.get("model") or {}).get("panes") or {}).get(new_pane_id) or {}
-        return (pane.get("recap") or {}).get("latest", {}).get("record_id") == published_id
+        prompt = pane.get("prompt") or {}
+        recap = (pane.get("recap") or {}).get("latest") or {}
+        return current if prompt.get("text") == post_move_prompt and recap.get("record_id") == published_id else None
 
-    wait_for(new_recap_in_moved_detail, "the published recap in the rekeyed pane detail", timeout=20)
+    wait_for(current_prompt_and_recap_in_model, "the current prompt and recap in the rekeyed pane model", timeout=20)
+    select_workspace(state, env, target)
+    live = snapshot(state)
+    moved_pane = one_by(live.get("panes", []), "pane_id", new_pane_id)
+    workspace = one_by(live.get("workspaces", []), "workspace_id", target["workspace_id"])
+    tab_order = workspace.get("tab_ids") or [item["tab_id"] for item in live.get("tabs", [])
+                                                if item.get("workspace_id") == target["workspace_id"]]
+    current_tab_id = workspace.get("active_tab_id")
+    if not tab_order or moved_pane.get("tab_id") not in tab_order:
+        raise ProofFailure("the moved Pi pane's tab is not reachable in the native target workspace")
+    if current_tab_id not in tab_order:
+        current_tab_id = tab_order[0]
+    for _ in range((tab_order.index(moved_pane["tab_id"]) - tab_order.index(current_tab_id)) % len(tab_order)):
+        send_overview_key(state, env, "]")
+    moved_detail = open_pane_from_workspace(state, env, new_pane_id)
+    visible_detail = "".join(plain_terminal(moved_detail).split())
+    if "CURRENTPIPROMPT" not in visible_detail or "".join(post_move_prompt.split()) not in visible_detail:
+        raise ProofFailure("rekeyed pane detail did not display the current post-move Pi prompt")
 
     remaining = actual - time.time()
     if remaining > 0:
@@ -1703,23 +1834,48 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         "the native-move workspace group publication", timeout=40,
     )
     _group_path, group_record = find_record(data_root, workspace_entry["latest_success_id"])
-    if group_record.get("status") != "published" or group_record.get("member_record_ids") != [published_id]:
-        raise ProofFailure("workspace group output did not include exactly the latest moved-pane recap")
+    if group_record.get("status") != "published" or set(group_record.get("member_record_ids", [])) != {published_id, manual_id}:
+        raise ProofFailure("workspace group omitted the moved Pi recap or the current manual non-Pi pane recap")
     if group_record.get("source_id") != publication_workspace_id:
         raise ProofFailure("workspace group output used the wrong adapter-observed native workspace ID")
 
+    def session_group() -> dict[str, Any] | None:
+        entry = latest_entry(data_root, "herdr-session", "active")
+        if not entry or entry.get("latest_success_id") == prior_session_record_id:
+            return None
+        try:
+            return find_record(data_root, entry["latest_success_id"])[1]
+        except ProofFailure:
+            return None
+
+    session_record = wait_for(session_group, "the Herdr-session group after the live workspace group", timeout=20)
+    expected_session_members = {prior_source_group_id, group_record["record_id"]}
+    if set(session_record.get("member_record_ids", [])) != expected_session_members:
+        raise ProofFailure("Herdr-session group did not use only latest recaps from currently live workspaces")
+    if closed_workspace_record_id in session_record.get("member_record_ids", []):
+        raise ProofFailure("Herdr-session group included a workspace that was closed before publication")
+    if any(item.get("workspace_id") == closed_workspace["workspace_id"]
+           for item in snapshot(state).get("workspaces", [])):
+        raise ProofFailure("the closed workspace reappeared in the native session snapshot")
+
     return {
+        "phone_receipt": phone["phone_receipt"],
         "old_pane_id": old_pane_id,
         "new_pane_id": new_pane_id,
         "terminal_id_preserved": terminal_id,
         "agent_session_null": True,
         "publication_before_move_id": published_before_move,
         "old_workspace_recap_unchanged_after_move": True,
+        "current_prompt_written_to_rekeyed_pane": current_prompt.get("pane_id") == new_pane_id,
+        "current_prompt_visible_in_rekeyed_detail": True,
         "published_recap_id": published_id,
         "workspace_id": publication_workspace_id,
-        "membership_lookup": "Pi adapter pane.current caller_pane_id",
+        "membership_lookup": "real Pi adapter pane.current caller_pane_id over isolated socket",
         "group_record_id": group_record["record_id"],
-        "group_contains_latest_moved_recap": True,
+        "group_contains_latest_moved_pi_and_manual_non_pi_recaps": True,
+        "closed_workspace_record_id": closed_workspace_record_id,
+        "session_group_id": session_record["record_id"],
+        "closed_workspace_excluded_from_session_group": True,
         "quiet_period_seconds": round(time.time() - actual + 30, 1),
     }
 
@@ -1924,6 +2080,7 @@ def scenario_cleanup(run_id: str, base: Path | None) -> dict[str, Any]:
     expected_socket = (root / "server/herdr.sock").resolve()
     if Path(marker.get("socket_path", "")).resolve() != expected_socket:
         raise ProofFailure("cleanup refused a socket not owned by this test run")
+    provider_stopped = stop_scripted_provider(root, marker)
     info = server_status(state, env)
     if info.get("running"):
         if info.get("socket") != str(expected_socket):
@@ -1942,8 +2099,8 @@ def scenario_cleanup(run_id: str, base: Path | None) -> dict[str, Any]:
         else:
             raise ProofFailure("isolated Herdr socket still responds after stop")
     shutil.rmtree(root)
-    return {"run_id": run_id, "isolated_server_stopped": True, "temporary_root_removed": True,
-            "owner_server_touched": False, "stopped_socket": str(expected_socket)}
+    return {"run_id": run_id, "isolated_server_stopped": True, "scripted_provider_stopped": provider_stopped,
+            "temporary_root_removed": True, "owner_server_touched": False, "stopped_socket": str(expected_socket)}
 
 
 def scenario_chezmoi() -> dict[str, Any]:

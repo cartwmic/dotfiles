@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, InputEvent } from "@earendil-works/pi-coding-agent";
 import {
+	currentPaneForCaller,
 	invokeOverviewReconcile,
 	paneWorkspaceAtPublication,
 	runSessionRecap,
@@ -7,6 +8,7 @@ import {
 } from "./helpers.ts";
 
 interface PendingPrompt {
+	callerPaneId?: string;
 	paneId?: string;
 	settled: boolean;
 }
@@ -34,10 +36,24 @@ interface PublicationQueue {
 	promise: Promise<void>;
 }
 
-function storeCurrentPrompt(args: string[], text: string): Promise<{ action: "continue" }> {
-	return runSessionRecap(args, text)
-		.catch(() => warn("could not store the current Pi prompt"))
-		.then(() => ({ action: "continue" as const }));
+async function storeCurrentPrompt(
+	pending: PendingPrompt,
+	sessionId: string,
+	text: string,
+	isCurrent: () => boolean,
+): Promise<{ action: "continue" }> {
+	const pane = await currentPaneForCaller(process.env.HERDR_SOCKET_PATH?.trim() || undefined, pending.callerPaneId);
+	if (!isCurrent()) return { action: "continue" };
+	pending.paneId = pane?.paneId;
+
+	const args = ["prompt", "set", "--session-id", sessionId];
+	if (pending.paneId) args.push("--pane-id", pending.paneId);
+	try {
+		await runSessionRecap(args, text);
+	} catch {
+		warn("could not store the current Pi prompt");
+	}
+	return { action: "continue" };
 }
 
 async function prepareAndPublish(
@@ -64,7 +80,7 @@ async function prepareAndPublish(
 	}
 
 	const socketPath = process.env.HERDR_SOCKET_PATH?.trim() || undefined;
-	const workspaceId = await paneWorkspaceAtPublication(socketPath, pending.paneId);
+	const workspaceId = await paneWorkspaceAtPublication(socketPath, pending.callerPaneId);
 	const publishArgs = ["publish", "--prepared-id", preparedId];
 	if (workspaceId) publishArgs.push("--workspace-id", workspaceId);
 
@@ -121,14 +137,17 @@ export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {
 		const text = event.text;
 
 		const pending: PendingPrompt = {
-			paneId: herdrPaneId(),
+			callerPaneId: herdrPaneId(),
 			settled: false,
 		};
 		pendingBySession.set(sessionId, pending);
 
-		const args = ["prompt", "set", "--session-id", sessionId];
-		if (pending.paneId) args.push("--pane-id", pending.paneId);
-		return storeCurrentPrompt(args, text);
+		return storeCurrentPrompt(
+			pending,
+			sessionId,
+			text,
+			() => pendingBySession.get(sessionId) === pending,
+		);
 	});
 
 	pi.on("agent_settled", (_event, ctx) => {

@@ -130,6 +130,18 @@ export async function readRecapFields(snapshot, root = sessionRecapDataRoot(), p
     // Current prompts are optional; the live Herdr model remains complete without them.
   }
 
+  const panesByTerminalId = new Map((snapshot.panes ?? [])
+    .filter((pane) => typeof pane.terminal_id === "string" && pane.terminal_id)
+    .map((pane) => [pane.terminal_id, pane]));
+  // A Pi prompt can still carry the pane ID inherited before pane.move. Follow
+  // the persisted session-to-terminal association to the current native ID;
+  // Herdr 0.9.1 may not expose agent_session on the moved pane.
+  for (const [sessionId, terminalId] of Object.entries(piTerminalIdsBySessionId ?? {})) {
+    const pane = panesByTerminalId.get(terminalId);
+    const prompt = promptsBySessionId[sessionId];
+    if (pane && prompt) promptsByPaneId[pane.pane_id] = prompt;
+  }
+
   const piRecapsBySessionId = {};
   const piRecapsByPaneId = {};
   const recapsByPaneId = {};
@@ -158,9 +170,6 @@ export async function readRecapFields(snapshot, root = sessionRecapDataRoot(), p
   // Herdr can rekey a pane ID on pane.move. Use the durable terminal-ID
   // association learned while the published recap still named the live pane;
   // keep the old publication pane/workspace fields untouched for naming.
-  const panesByTerminalId = new Map((snapshot.panes ?? [])
-    .filter((pane) => typeof pane.terminal_id === "string" && pane.terminal_id)
-    .map((pane) => [pane.terminal_id, pane]));
   for (const [sessionId, terminalId] of Object.entries(piTerminalIdsBySessionId ?? {})) {
     const pane = panesByTerminalId.get(terminalId);
     const recap = piRecapsBySessionId[sessionId];

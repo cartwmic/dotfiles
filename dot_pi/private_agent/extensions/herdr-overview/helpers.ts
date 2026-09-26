@@ -155,26 +155,40 @@ export function requestHerdr(
 	});
 }
 
-export async function paneWorkspaceAtPublication(
+export interface CurrentPane {
+	paneId: string;
+	workspaceId?: string;
+}
+
+export async function currentPaneForCaller(
 	socketPath: string | undefined,
-	paneId: string | undefined,
-): Promise<string | undefined> {
-	if (!socketPath || !paneId) return undefined;
+	callerPaneId: string | undefined,
+): Promise<CurrentPane | undefined> {
+	if (!socketPath || !callerPaneId) return undefined;
 	try {
-		const result = await requestHerdr(socketPath, "pane.current", { caller_pane_id: paneId }) as {
+		const result = await requestHerdr(socketPath, "pane.current", { caller_pane_id: callerPaneId }) as {
 			type?: unknown;
 			pane?: { pane_id?: unknown; workspace_id?: unknown };
 		} | null;
 		if (result?.type !== "pane_current") return undefined;
-		const pane = result.pane;
-		return typeof pane?.pane_id === "string" && pane.pane_id.trim()
-			&& typeof pane.workspace_id === "string" && pane.workspace_id.trim()
-			? pane.workspace_id
-			: undefined;
+		const paneId = result.pane?.pane_id;
+		if (typeof paneId !== "string" || !paneId.trim()) return undefined;
+		const workspaceId = result.pane?.workspace_id;
+		return {
+			paneId,
+			...(typeof workspaceId === "string" && workspaceId.trim() ? { workspaceId } : {}),
+		};
 	} catch {
-		// Publication is still useful without Herdr membership. Never infer it from UI focus.
+		// Missing native membership stays unattributed; never infer it from UI focus.
 		return undefined;
 	}
+}
+
+export async function paneWorkspaceAtPublication(
+	socketPath: string | undefined,
+	callerPaneId: string | undefined,
+): Promise<string | undefined> {
+	return (await currentPaneForCaller(socketPath, callerPaneId))?.workspaceId;
 }
 
 export function invokeOverviewReconcile(socketPath: string): Promise<unknown> {

@@ -46,7 +46,7 @@ async function makeRuntime(t) {
   return { root, configPath, dataRoot, stateDir, captureLog, env, runRecap, setBackendMode };
 }
 
-function scriptedHerdrApi(initialMembership, initialTerminalIds = {}) {
+function scriptedHerdrApi(initialMembership, initialTerminalIds = {}, initialAgentNames = {}) {
   const membership = new Map(Object.entries(initialMembership));
   const terminalIds = new Map();
   for (const paneId of membership.keys()) terminalIds.set(paneId, initialTerminalIds[paneId] ?? `terminal-${paneId}`);
@@ -74,7 +74,7 @@ function scriptedHerdrApi(initialMembership, initialTerminalIds = {}) {
         tab_id: `${workspace_id}:tab`,
         terminal_id: terminalIds.get(pane_id),
         focused: index === 0,
-        agent: "pi",
+        agent: initialAgentNames[pane_id] ?? "pi",
         agent_status: "unknown",
         revision: 1,
         cwd: "/workspace",
@@ -100,7 +100,7 @@ function scriptedHerdrApi(initialMembership, initialTerminalIds = {}) {
         tabs,
         panes,
         // Herdr's real Pi snapshot can report agent=pi but agent_session=null.
-        agents: panes.map((pane) => ({ pane_id: pane.pane_id, agent: "pi" })),
+        agents: panes.map((pane) => ({ pane_id: pane.pane_id, agent: pane.agent })),
         layouts: [],
       };
     },
@@ -137,6 +137,13 @@ async function publishPi(runtime, { sessionId, paneId, workspaceId, text = "Comp
   const publishArgs = ["publish", "--prepared-id", preparedId];
   if (workspaceId) publishArgs.push("--workspace-id", workspaceId);
   const recordId = await runtime.runRecap(publishArgs);
+  return (await readAllRecapRecords(runtime.dataRoot)).find((record) => record.record_id === recordId);
+}
+
+async function publishManualPane(runtime, paneId, { label, text = "Manual pane recap." } = {}) {
+  const args = ["create", "--kind", "single", "--source-id", paneId];
+  if (label) args.push("--label", label);
+  const recordId = await runtime.runRecap(args, text);
   return (await readAllRecapRecords(runtime.dataRoot)).find((record) => record.record_id === recordId);
 }
 
@@ -262,6 +269,74 @@ test("replay preserves publication-time deadlines while grouping rekeyed panes b
   const activeSessionRecap = records.find((record) => record.record_id === activeSessionId);
   assert.ok(activeSessionRecap);
   assert.deepEqual(new Set(activeSessionRecap.member_record_ids), new Set([workspaceOriginal.record_id, workspaceNow.record_id]));
+});
+
+test("workspace groups include latest manual pane recaps and session groups exclude closed workspaces", async (t) => {
+  const runtime = await makeRuntime(t);
+  runtime.scheduled = [];
+  const api = scriptedHerdrApi({
+    "pi-pane": "workspace-live",
+    "shell-pane": "workspace-live",
+    "closed-pane": "workspace-closed",
+  }, {}, { "shell-pane": "claude" });
+
+  const oldManual = await publishManualPane(runtime, "shell-pane", { label: "Old shell recap" });
+  const currentManual = await publishManualPane(runtime, "shell-pane", { label: "Current shell recap" });
+  const closedMember = await publishManualPane(runtime, "closed-pane", { label: "Closed workspace recap" });
+  const closedWorkspaceId = await runtime.runRecap(
+    ["create", "--kind", "group", "--source-kind", "workspace", "--source-id", "workspace-closed"],
+    `${JSON.stringify({ members: [{ record_id: closedMember.record_id, text: closedMember.summary, label: closedMember.label }] })}\n`,
+  );
+  const closedWorkspace = (await readAllRecapRecords(runtime.dataRoot))
+    .find((record) => record.record_id === closedWorkspaceId);
+  assert.equal(closedWorkspace.source_id, "workspace-closed");
+
+  // A manual pane recap is a member, not a quiet-deadline trigger.
+  api.removePane("closed-pane");
+  const currentSnapshot = await api.snapshot();
+  assert.equal(currentSnapshot.panes.find((pane) => pane.pane_id === "shell-pane").agent, "claude");
+  assert.ok(!currentSnapshot.workspaces.some((workspace) => workspace.workspace_id === "workspace-closed"));
+  let state = await reconcile(runtime, api, { now: Date.now() });
+  assert.deepEqual(state.recapCoordinator.workspaceDeadlines, {});
+  assert.equal(latestSource(await readLatestIndex(runtime.dataRoot), "workspace", "workspace-live"), undefined);
+
+  const piRecap = await publishPi(runtime, {
+    sessionId: "pi-live", paneId: "pi-pane", workspaceId: "workspace-live", text: "Pi pane recap",
+  });
+  state = await reconcile(runtime, api, { now: Date.now() });
+  const deadline = state.recapCoordinator.workspaceDeadlines["workspace-live"];
+  assert.ok(deadline);
+  state = await reconcile(runtime, api, { now: Date.parse(deadline) - 1 });
+  assert.equal(state.recapCoordinator.workspaceDeadlines["workspace-live"], deadline);
+  assert.equal(
+    (await readAllRecapRecords(runtime.dataRoot)).some((record) => record.source_kind === "workspace" && record.source_id === "workspace-live"),
+    false,
+    "no workspace recap is created before the quiet deadline",
+  );
+
+  state = await reconcile(runtime, api, { now: Date.parse(deadline), resumeDeadlines: true });
+  assert.equal(state.recapCoordinator.workspaceDeadlines["workspace-live"], undefined);
+  const records = await readAllRecapRecords(runtime.dataRoot);
+  const liveWorkspace = records.find((record) => record.source_kind === "workspace" && record.source_id === "workspace-live" && record.status === "published");
+  const sessionRecap = records.find((record) => record.source_kind === "herdr-session" && record.source_id === "active" && record.status === "published");
+  assert.ok(liveWorkspace);
+  assert.ok(sessionRecap);
+  assert.deepEqual(liveWorkspace.member_record_ids, [currentManual.record_id, piRecap.record_id]);
+  assert.ok(!liveWorkspace.member_record_ids.includes(oldManual.record_id), "superseded manual history is retained but not grouped");
+  assert.deepEqual(sessionRecap.member_record_ids, [liveWorkspace.record_id]);
+  assert.ok(!sessionRecap.member_record_ids.includes(closedWorkspace.record_id), "closed workspace records are excluded from the session group");
+  assert.ok(records.some((record) => record.record_id === oldManual.record_id), "older manual recap history remains on disk");
+  assert.ok(records.some((record) => record.record_id === closedWorkspace.record_id), "closed workspace history remains on disk");
+
+  const index = await readLatestIndex(runtime.dataRoot);
+  assert.equal(latestSource(index, "manual", "shell-pane").latest_success_id, currentManual.record_id);
+  assert.equal(latestSource(index, "workspace", "workspace-closed").latest_success_id, closedWorkspace.record_id);
+  assert.equal(latestSource(index, "workspace", "workspace-live").latest_success_id, liveWorkspace.record_id);
+  assert.equal(latestSource(index, "herdr-session", "active").latest_success_id, sessionRecap.record_id);
+  const groupCalls = (await readFile(runtime.captureLog, "utf8")).trim().split("\n")
+    .map((line) => JSON.parse(line))
+    .filter((call) => call.prompt.startsWith("group:"));
+  assert.ok(groupCalls.some((call) => call.prompt.includes("label: Current shell recap")), "the pane-source label reaches the workspace group input");
 });
 
 test("restart drains an unprocessed success, resumes its quiet deadline, and publishes current groups once", async (t) => {

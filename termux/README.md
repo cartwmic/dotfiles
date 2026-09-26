@@ -70,8 +70,9 @@ the phone's own chezmoi profile owns the deployed helper.
 
 Count the phone journey only when the helper returns a receipt from an
 attended physical phone or ADB-controlled Termux emulator and the host
-`termux-ssh` scenario accepts it. A local narrow PTY or width emulation is not
-phone proof.
+`termux-ssh` scenario accepts it. If that control-and-return route is
+unavailable, report the phone scenario as BLOCKED; a local narrow PTY or width
+emulation is not phone proof.
 
 ## Rebuild a phone (Mac-driven)
 

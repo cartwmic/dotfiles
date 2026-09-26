@@ -116,6 +116,12 @@ function grid(panes, columns, cardWidth, makeCard) {
   return { body, anchors };
 }
 
+function gridLayout(width) {
+  const columns = Math.max(1, Math.floor((width + 2) / 38));
+  const cardWidth = Math.max(28, Math.min(48, Math.floor((width - 2 * (columns - 1)) / columns)));
+  return { columns, cardWidth };
+}
+
 function paneCard(pane, tabLabel, width, selected) {
   const inner = Math.max(16, width - 4);
   const border = `+${"-".repeat(width - 2)}+`;
@@ -150,8 +156,7 @@ export function renderMosaicOverview(state, width = 100, height = 24, now = Date
   ];
   const body = [];
   let anchor = null;
-  const columns = Math.max(1, Math.floor((width - 4) / 36));
-  const cardWidth = Math.max(28, Math.min(48, Math.floor((width - 4) / columns)));
+  const { columns, cardWidth } = gridLayout(width);
   for (const workspaceId of model.workspaceOrder) {
     const workspace = model.workspaces[workspaceId];
     if (!workspace) continue;
@@ -182,8 +187,7 @@ export function renderMosaicWorkspace(state, width = 100, height = 24) {
   ];
   const body = [];
   let anchor = null;
-  const columns = Math.max(1, Math.floor((width - 4) / 36));
-  const cardWidth = Math.max(28, Math.min(48, Math.floor((width - 4) / columns)));
+  const { columns, cardWidth } = gridLayout(width);
   for (const tabId of workspace?.tabIds ?? []) {
     const tab = model.tabs[tabId];
     if (!tab) continue;

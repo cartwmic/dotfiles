@@ -289,14 +289,23 @@ test("interactive prompt stays separate; settled publication uses exact pane mem
 			);
 			assert.deepEqual(continuation, { action: "continue" });
 			assert.equal(promptRecord(world.dataRoot, "interactive-session").text, "Fix the interactive request.");
+			assert.equal(promptRecord(world.dataRoot, "interactive-session").pane_id, "exact-pane");
 			assert.equal(readTrace(world.tracePath).filter((line) => line.startsWith("cli prompt set ")).length, 1);
+			assert.deepEqual(readTrace(world.tracePath).map((line) => line.split(" ").slice(0, 2).join(" ")), [
+				"herdr pane.current",
+				"cli prompt",
+			]);
+			assert.deepEqual(world.calls[0].params, { caller_pane_id: "exact-pane" });
 
 			const beforeIdle = handlers.get("agent_settled")!(
 				{},
 				fakeContext("interactive-session", "tui", false, responseEntry("Settled assistant answer.")).ctx,
 			);
 			assert.equal(beforeIdle, undefined);
-			assert.deepEqual(readTrace(world.tracePath).map((line) => line.split(" ").slice(0, 2).join(" ")), ["cli prompt"]);
+			assert.deepEqual(readTrace(world.tracePath).map((line) => line.split(" ").slice(0, 2).join(" ")), [
+				"herdr pane.current",
+				"cli prompt",
+			]);
 
 			await handlers.get("agent_settled")!(
 				{},
@@ -317,6 +326,7 @@ test("interactive prompt stays separate; settled publication uses exact pane mem
 			assert.equal(recap.source_kind, "pi-session");
 			assert.equal(recap.pane_id, "exact-pane");
 			assert.equal(recap.workspace_id, "workspace-exact");
+			assert.equal(world.calls.filter((call) => call.method === "pane.current").length, 2);
 			assert.notEqual(prompt.text, recap.summary);
 			assert.match(readFileSync(world.capturePath, "utf8"), /Settled assistant answer\./);
 			assert.equal(world.calls.find((call) => call.method === "plugin.action.invoke").params.action_id, "overview.reconcile");
@@ -556,7 +566,8 @@ test("a temporary Pi RPC session publishes only settled nonblank recaps with pub
 		assert.equal(promptRecord(world.dataRoot, "rpc-session").text, "RPC request one: verify the current prompt and recap stay separate.");
 		assert.equal(readTrace(world.tracePath).some((line) => line.startsWith("cli prepare ")), false);
 		assert.equal(readTrace(world.tracePath).some((line) => line.startsWith("cli publish ")), false);
-		assert.equal(herdr.calls.length, 0, "no membership lookup or wake-up occurs while the response is streaming");
+		assert.deepEqual(herdr.calls.map((call: any) => call.method), ["pane.current"],
+			"input resolves the caller pane, but no publication lookup or wake-up occurs while the response is streaming");
 
 		provider.releaseFirst();
 		await rpc.waitForEvent("agent_settled", eventOne);
@@ -565,6 +576,7 @@ test("a temporary Pi RPC session publishes only settled nonblank recaps with pub
 		assert.equal(firstRecap.summary, SUCCESS_SUMMARY);
 		assert.equal(firstRecap.workspace_id, "workspace-exact");
 		assert.equal(firstRecap.pane_id, "exact-pane");
+		assert.equal(promptRecord(world.dataRoot, "rpc-session").pane_id, "exact-pane");
 		const firstWake = herdr.calls.find((call: any) => call.method === "plugin.action.invoke");
 		assert.equal(firstWake.params.action_id, "overview.reconcile");
 		assert.equal(firstWake.publishedRecord.record_id, firstRecap.record_id);
@@ -580,10 +592,13 @@ test("a temporary Pi RPC session publishes only settled nonblank recaps with pub
 		const secondRecap = latestPublished(world.dataRoot, "rpc-session");
 		assert.notEqual(secondRecap.record_id, firstRecap.record_id);
 		assert.equal(secondRecap.workspace_id, "workspace-after-move");
-		const moveLookup = herdr.calls.filter((call) => call.method === "pane.current")[1];
-		assert.equal(moveLookup.params.caller_pane_id, "exact-pane");
-		assert.equal(moveLookup.currentPane.pane_id, "rekeyed-pane");
+		const moveLookups = herdr.calls.filter((call) => call.method === "pane.current").slice(2, 4);
+		assert.equal(moveLookups.length, 2, "input and publication both resolve through the inherited caller ID");
+		assert.ok(moveLookups.every((call) => call.params.caller_pane_id === "exact-pane"));
+		assert.ok(moveLookups.every((call) => call.currentPane.pane_id === "rekeyed-pane"));
 		assert.equal(promptRecord(world.dataRoot, "rpc-session").text, "RPC request two: the pane moved and its native ID changed.");
+		assert.equal(promptRecord(world.dataRoot, "rpc-session").pane_id, "rekeyed-pane");
+		assert.equal(secondRecap.pane_id, "rekeyed-pane");
 		assert.equal(promptRecord(world.dataRoot, "rpc-session").working, false);
 
 		// Missing caller membership publishes without guessing from the UI-focused pane.
@@ -596,7 +611,9 @@ test("a temporary Pi RPC session publishes only settled nonblank recaps with pub
 		const thirdRecap = latestPublished(world.dataRoot, "rpc-session");
 		assert.notEqual(thirdRecap.record_id, secondRecap.record_id);
 		assert.equal(Object.hasOwn(thirdRecap, "workspace_id"), false);
+		assert.equal(Object.hasOwn(thirdRecap, "pane_id"), false);
 		assert.equal(promptRecord(world.dataRoot, "rpc-session").text, "RPC request three: no native pane membership is available.");
+		assert.equal(Object.hasOwn(promptRecord(world.dataRoot, "rpc-session"), "pane_id"), false);
 		assert.equal(promptRecord(world.dataRoot, "rpc-session").working, false);
 
 		// Blank backend output is a failed T1 attempt: it cannot replace the latest success or wake Herdr.
@@ -609,10 +626,15 @@ test("a temporary Pi RPC session publishes only settled nonblank recaps with pub
 		assert.equal(latestEntry.latest_success_id, thirdRecap.record_id);
 		assert.equal(readRecord(world.dataRoot, latestEntry.last_attempt_id).status, "failed");
 		assert.equal(herdr.calls.filter((call) => call.method === "plugin.action.invoke").length, 3);
-		assert.equal(herdr.calls.filter((call) => call.method === "pane.current").length, 3);
+		assert.equal(herdr.calls.filter((call) => call.method === "pane.current").length, 7);
+		assert.ok(herdr.calls.every((call) => call.method !== "session.snapshot"), "never fall back to snapshots or UI focus");
 		assert.equal(promptRecord(world.dataRoot, "rpc-session").working, false);
 
 		const trace = readTrace(world.tracePath);
+		const promptSetIndices = trace.flatMap((line, index) => line.startsWith("cli prompt set ") ? [index] : []);
+		assert.equal(promptSetIndices.length, 4);
+		for (const index of promptSetIndices) assert.equal(trace[index - 1], "herdr pane.current");
+		assert.ok(trace.some((line) => line === "cli prompt set --session-id rpc-session --pane-id rekeyed-pane"));
 		const prepareIndices = trace.flatMap((line, index) => line.startsWith("cli prepare ") ? [index] : []);
 		assert.equal(prepareIndices.length, 4);
 		for (const index of prepareIndices.slice(0, 3)) {
