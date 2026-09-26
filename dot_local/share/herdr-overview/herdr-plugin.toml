@@ -1,0 +1,111 @@
+id = "overview"
+name = "Herdr Overview"
+version = "0.1.0"
+min_herdr_version = "0.9.1"
+description = "Shared native-ID overview model and themed session pane for Herdr 0.9.1."
+platforms = ["macos", "linux"]
+
+[[startup]]
+command = ["node", "index.mjs", "startup"]
+
+[[actions]]
+id = "reconcile"
+title = "Reconcile overview"
+description = "Reconcile native session state, catch up Pi recap publications, and ensure the overview pane is open."
+command = ["node", "index.mjs", "reconcile"]
+
+[[actions]]
+id = "auto_name_pane"
+title = "Return pane label to automatic naming"
+description = "Explicitly let automatic naming manage the selected pane label again."
+contexts = ["pane"]
+command = ["node", "index.mjs", "auto-name-pane"]
+
+[[actions]]
+id = "auto_name_tab"
+title = "Return tab label to automatic naming"
+description = "Explicitly let automatic naming manage the selected tab label again."
+contexts = ["tab"]
+command = ["node", "index.mjs", "auto-name-tab"]
+
+[[panes]]
+id = "overview"
+title = "Herdr Overview"
+placement = "tab"
+command = ["node", "index.mjs", "overview"]
+
+[[events]]
+on = "workspace.created"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "workspace.updated"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "workspace.closed"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "workspace.renamed"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "workspace.moved"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "workspace.reordered"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "workspace.focused"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "tab.created"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "tab.closed"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "tab.renamed"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "tab.moved"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "tab.focused"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "pane.created"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "pane.closed"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "pane.focused"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "pane.moved"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "pane.exited"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["node", "index.mjs", "event"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["node", "index.mjs", "event"]

@@ -2,12 +2,11 @@
 
 ## Overview
 
-This directory is the chezmoi **source** for Pi coding-agent extensions shipped
-by this dotfiles tree. It is for people adding or changing those extensions.
-Each extension is one subdirectory and deploys to
-`~/.pi/agent/extensions/<name>`. This README is shared authoring procedure for
-that layout. Chezmoi also deploys it to `~/.pi/agent/extensions/README.md`
-(Pi does not auto-load README files).
+This directory (`dot_pi/private_agent/extensions/`) is the chezmoi **source**
+for Pi coding-agent extensions shipped by this dotfiles tree. Each extension
+is one subdirectory and deploys to `~/.pi/agent/extensions/<name>`. This README
+is shared authoring procedure for that layout. Chezmoi also deploys it to
+`~/.pi/agent/extensions/README.md` (Pi does not auto-load README files).
 
 Edit sources here. Live files under `~/.pi/agent/extensions/` are generated.
 Chezmoi apply, secrets, and profile mechanics live in the repo-root
@@ -27,7 +26,7 @@ gates in the Profile gates section.
 Work in the chezmoi source tree. From any cwd, list this directory:
 
 ```sh
-cd ~/.local/share/chezmoi/dot_pi/agent/extensions && ls -1 .
+cd ~/.local/share/chezmoi/dot_pi/private_agent/extensions && ls -1 .
 ```
 
 You should see one directory per extension plus this README. The Herdr-managed
@@ -50,7 +49,7 @@ with the files Pi loads (typically `index.ts`). Keep tests next to the
 extension: `index.test.ts` or `helpers.test.ts`.
 
 ```text
-dot_pi/agent/extensions/<name>/     →  ~/.pi/agent/extensions/<name>
+dot_pi/private_agent/extensions/<name>/  →  ~/.pi/agent/extensions/<name>
 ```
 
 ### Never capture `ctx`
@@ -116,6 +115,7 @@ Gates live in the repo-root `.chezmoiignore`:
 | [openrouter-gate](./openrouter-gate/README.md) | `personal` only |
 | [issue](./issue/README.md) | `axon-work-computer` only |
 | `dot_pi/session-search/` (sibling of `agent/`, not this folder) | `personal` only |
+| [herdr-overview](./herdr-overview/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 
 Do not deploy personal/homelab-only extensions onto `axon-work-computer`.
 
@@ -134,6 +134,8 @@ READMEs already in this tree:
 - [goal](./goal/README.md)
 - [inspect-prompt](./inspect-prompt/README.md)
 - [subagent](./subagent/README.md)
+- [passage-review](./passage-review/README.md)
+- [herdr-overview](./herdr-overview/README.md)
 - [web-search](./web-search/README.md)
 
 `subagent` is currently a config overlay (`config.json` with
@@ -153,7 +155,8 @@ Other in-tree suites today: `auto-compact/index.test.ts`,
 `goal/helpers.test.ts`, `hindsight/index.test.ts`, `inspect-prompt/index.test.ts`,
 `issue/index.test.ts`, `ntfy/index.test.ts`, `openrouter-gate/index.test.ts`,
 `codex-fast-luna/index.test.ts`, `web-search/config.test.ts`.
-`catalog-overlay-nudge` and `subagent` do not have tests yet.
+`catalog-overlay-nudge` and `subagent` do not have tests yet. `passage-review`
+and `herdr-overview` have `index.test.ts`.
 
 Chezmoi apply and secret handling are not validated here; use repo-root
 `AGENTS.md`.

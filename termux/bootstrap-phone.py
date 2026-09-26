@@ -222,7 +222,7 @@ def usb_connection(serial, start_ui, packages_ready=False):
             adb(serial, "shell", "am", "start", "-n", "com.termux/.app.TermuxActivity")
             time.sleep(2)
             if not packages_ready:
-                terminal_command(serial, "pkg install -y chezmoi git openssh coreutils termux-api")
+                terminal_command(serial, "pkg install -y chezmoi git openssh coreutils termux-api python")
                 raise BootstrapError("PENDING: finish pkg install on the visible Termux terminal and wait for its shell prompt; rerun provision --start-ui --packages-ready")
             terminal_command(serial, "mkdir -p ~/.ssh; chmod 700 ~/.ssh; touch ~/.ssh/authorized_keys")
             # grep by key blob prevents duplicates across reruns. No secret is typed.

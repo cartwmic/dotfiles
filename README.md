@@ -65,7 +65,7 @@ Termux is a first-class profile (`profile: "termux"`) — thin SSH jump host,
 desktop/agent stack. See `termux/README.md`.
 
 ```bash
-pkg install -y chezmoi git openssh coreutils termux-api
+pkg install -y chezmoi git openssh coreutils termux-api python
 mkdir -p ~/.config/chezmoi
 printf 'data:\n  profile: "termux"\n' > ~/.config/chezmoi/chezmoi.yaml
 chezmoi init --apply https://github.com/cartwmic/dotfiles.git
@@ -96,6 +96,8 @@ chezmoi init --apply https://github.com/cartwmic/dotfiles.git
 **AI Tools:**
 
 - Pi coding agent, claude, claude-code-acp, vectorcode, mistral-vibe, mermaid-cli
+- Herdr **0.9.1 / protocol 22** with a desktop-only overview plugin on `personal` and `axon-work-computer`
+- Portable `session-recap` and `passage-review` workflows; Termux stays an SSH client, not a Herdr plugin host
 
 **Remote access:**
 
@@ -191,6 +193,86 @@ Notes:
 - Harness instruction files are hand-maintained and split: repo [AGENTS.md](./AGENTS.md) (chezmoi source, not deployed), Pi-global [dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl) (`~/.pi/agent/AGENTS.md`). Claude still uses `~/.claude/CLAUDE.md`; Codex still uses `~/.codex/AGENTS.md`.
 - `furi` is installed by the `mise` bootstrap task, and bootstrap registers and starts `ashwwwin/automation-mcp` so the canonical `furi` MCP entry works for both Claude and Codex after apply.
 - On macOS, `automation-mcp` also needs Accessibility and Screen Recording permissions in System Settings > Privacy & Security before its tools can fully control the machine.
+
+## Herdr overview and phone route
+
+The personal and work desktop profiles pin Herdr **0.9.1**, whose client and
+server use protocol 22, and link the source-managed overview plugin from
+`dot_local/share/herdr-overview/`. The Pi publication adapter is
+`dot_pi/private_agent/extensions/herdr-overview/`; it publishes the current
+real-user prompt separately from a recap generated after a response settles.
+The overview is a passive display of native Herdr pane state, those supplied
+prompts, and published recaps. It does not parse transcripts or produce
+summaries. Panes and tabs can be auto-named from available metadata and
+published recaps; workspaces are not auto-named, and manual pane/tab labels
+remain until explicitly returned to automatic naming.
+
+The overview uses Herdr's active configured theme. At the configured
+`[ui].mobile_width_threshold` (64 by default), it presents a summary-first
+Board; wider terminals show the all-pane Mosaic. Both navigate the same one
+Herdr session. `j`/`k` moves through workspaces or panes, `[`/`]` selects tabs,
+`Enter` opens the next level, `Esc` returns, and `f` focuses the selected native
+pane. Pane detail keeps recent output, the current Pi prompt, live agent state,
+and the latest published recap distinct. A missing or failed recap does not
+hide live pane information. See
+[the Herdr plugin guide](./dot_local/share/herdr-overview/README.md).
+
+The `install-herdr-overview` mise task (also part of desktop bootstrap)
+verifies Herdr 0.9.1 and links/enables the source manifest. Linking does **not**
+run its server-start hook, start a server, or restart the owner's main Herdr
+server. Applying dotfiles never restarts that process. A compatible server
+start/restart is owner-controlled; until then, the already-running server has
+not loaded newly linked plugin code. If the plugin is already loaded, the
+explicit `herdr plugin action invoke overview.reconcile --plugin overview`
+action reconciles its pane/model without restarting the server.
+
+On Android, Termux remains the phone-owned `termux` chezmoi profile and an SSH
+client. It does not install the native Herdr plugin. From the phone, run
+`ssh macbook`, then `herdr` in the desktop shell to attach to that same session.
+The actual phone PTY width selects Board or Mosaic; shrinking a local
+terminal is not phone proof. See [Termux phone setup](./termux/README.md) for
+the route and acceptance-proof status.
+
+## Portable recaps
+
+`session-recap` works independently of Pi and Herdr. It accepts supplied stdin
+for one input or a related group, runs the configured argv directly, rejects
+blank/nonzero output, and stores dated results under
+`${XDG_DATA_HOME:-$HOME/.local/share}/session-recap/records/YYYY-MM-DD/`:
+
+```sh
+printf '%s\n' 'Parser is fixed; migration is the next step.' | session-recap create --kind single
+printf '%s\n' '{"members":[{"label":"api","text":"API work is complete."},{"text":"Tests remain."}]}' | \
+  session-recap create --kind group --label "Release work"
+```
+
+The personal and work desktop configs default to `claude -p`; both editable
+prompt templates and the host-local `~/.config/session-recap/config.local.toml`
+argv override are documented in
+[`dot_local/share/session-recap/README.md`](./dot_local/share/session-recap/README.md).
+Pi's adapter prepares then publishes settled recaps. Successful Pi publications
+start/restart a 30-second workspace quiet period; a successful workspace group
+can trigger a Herdr-session group. Failed recaps do not replace the last good
+record or reset that interval. Dated history remains outside Herdr.
+
+## Passage review
+
+`passage-review` freezes a selected file or supplied snapshot, stores multiple
+passage comments separately, and can reopen them later. Export only selected
+pending note IDs as quoted, attributed feedback; export neither edits the
+source nor changes note state or sends text to an agent:
+
+```sh
+passage-review new --file notes.md
+passage-review open REVIEW_ID
+passage-review export REVIEW_ID --note NOTE_ID
+```
+
+Its local library works with Pi and Herdr stopped and stays on the viewing
+machine. On Termux, the phone's own profile installs the CLI and local library;
+phone-to-desktop SSH output can be reviewed in the phone UI when direct remote
+selection capture is unavailable. See
+[`dot_local/share/passage-review/README.md`](./dot_local/share/passage-review/README.md).
 
 ## Tool Management with mise
 
@@ -307,8 +389,12 @@ included into those; it is not a fifth home-directory file.
 - [dot_local/share/agent-harness/README.md](./dot_local/share/agent-harness/README.md) — skills/MCP adapters
 - [dot_local/share/pi-patches/README.md](./dot_local/share/pi-patches/README.md) — add a `patch.mjs`, `PI_CHEZMOI_PROFILE=personal` gate, state/backup paths, re-apply after `npm update -g` / mise reinstall
 - Per-patch READMEs under `dot_local/share/pi-patches/` (failure modes)
-- [dot_pi/agent/extensions/README.md](./dot_pi/agent/extensions/README.md) — authoring: tests, never capture `ctx`, `create_` vs managed files, profile gates in `.chezmoiignore`. Deploys to `~/.pi/agent/extensions/README.md` (safe: Pi ignores README).
-- Per-extension READMEs: [auto-compact](./dot_pi/agent/extensions/auto-compact/README.md), [hindsight](./dot_pi/agent/extensions/hindsight/README.md), [issue](./dot_pi/agent/extensions/issue/README.md), [ntfy](./dot_pi/agent/extensions/ntfy/README.md), [openrouter-gate](./dot_pi/agent/extensions/openrouter-gate/README.md), [pi-patch-guard](./dot_pi/agent/extensions/pi-patch-guard/README.md), [catalog-overlay-nudge](./dot_pi/agent/extensions/catalog-overlay-nudge/README.md), [goal](./dot_pi/agent/extensions/goal/README.md), [subagent](./dot_pi/agent/extensions/subagent/README.md), [web-search](./dot_pi/agent/extensions/web-search/README.md)
+- [dot_pi/private_agent/extensions/README.md](./dot_pi/private_agent/extensions/README.md) — authoring: tests, never capture `ctx`, `create_` vs managed files, profile gates in `.chezmoiignore`. Deploys to `~/.pi/agent/extensions/README.md` (safe: Pi ignores README).
+- Per-extension READMEs: [auto-compact](./dot_pi/private_agent/extensions/auto-compact/README.md), [hindsight](./dot_pi/private_agent/extensions/hindsight/README.md), [issue](./dot_pi/private_agent/extensions/issue/README.md), [ntfy](./dot_pi/private_agent/extensions/ntfy/README.md), [openrouter-gate](./dot_pi/private_agent/extensions/openrouter-gate/README.md), [pi-patch-guard](./dot_pi/private_agent/extensions/pi-patch-guard/README.md), [catalog-overlay-nudge](./dot_pi/private_agent/extensions/catalog-overlay-nudge/README.md), [goal](./dot_pi/private_agent/extensions/goal/README.md), [subagent](./dot_pi/private_agent/extensions/subagent/README.md), [web-search](./dot_pi/private_agent/extensions/web-search/README.md), [Herdr overview](./dot_pi/private_agent/extensions/herdr-overview/README.md), [passage review](./dot_pi/private_agent/extensions/passage-review/README.md)
+- [dot_local/share/herdr-overview/README.md](./dot_local/share/herdr-overview/README.md) — desktop Herdr 0.9.1 runtime, Board/Mosaic behavior, passive recap display, naming, theme, and checks.
+- [dot_local/share/session-recap/README.md](./dot_local/share/session-recap/README.md) — portable CLI, prompts, profile defaults, host override, and dated history.
+- [dot_local/share/passage-review/README.md](./dot_local/share/passage-review/README.md) — standalone snapshot/review/export CLI and local library.
+- [tests/herdr-overview/](./tests/herdr-overview/) — source-only outside-in proof driver; excluded from home deployment.
 - [dot_config/nvim/README.md](./dot_config/nvim/README.md) — local LazyVim overlay, not the stock starter: plugins in `lua/plugins/`, do not vendor LazyVim, refresh `lazy-lock.json` via [prompts/git-commit-chezmoi-lazylock.md](./dot_config/nvim/prompts/git-commit-chezmoi-lazylock.md)
 - [dot_pi/session-search/README.md](./dot_pi/session-search/README.md) — personal/homelab only (`ollama.internal` + OpenAI Codex digest). Ignored on work/termux. Do not copy onto `axon-work-computer`.
 
