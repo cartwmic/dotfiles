@@ -66,3 +66,53 @@ test("live pane output refreshes the open view without competing for the plugin 
   input.emit("end");
   await session;
 });
+
+test("a PTY resize switches Board and Mosaic at each open journey level", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-resize-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const stateDir = path.join(root, "state");
+  await mkdir(stateDir);
+  await writeFile(path.join(stateDir, "overview.json"), JSON.stringify({ model }));
+  const configPath = path.join(root, "config.toml");
+  await writeFile(configPath, '[theme]\nname = "terminal"\nauto_switch = false\n');
+  const input = new EventEmitter();
+  input.isTTY = true;
+  input.setRawMode = (enabled) => { input.isRaw = enabled; };
+  input.resume = () => {};
+  input.pause = () => {};
+  const frames = [];
+  const output = Object.assign(new EventEmitter(), {
+    columns: 100, rows: 24, isTTY: true,
+    write: (text) => { frames.push(text); },
+  });
+  let subscribed;
+  const ready = new Promise((resolve) => { subscribed = resolve; });
+  const api = { async subscribe() { subscribed(); return { close() {} }; } };
+  const session = runOverviewPane({ api, stateDir, configPath, input, output });
+  await ready;
+  await new Promise((resolve) => setImmediate(resolve));
+  try {
+    assert.match(frames.at(-1), /· Mosaic/);
+    output.columns = 48;
+    output.emit("resize");
+    assert.match(frames.at(-1), /· Board/);
+
+    input.emit("data", Buffer.from("\r"));
+    assert.match(frames.at(-1), /· Board · workspace/);
+    output.columns = 100;
+    output.emit("resize");
+    assert.match(frames.at(-1), /· Mosaic · workspace/);
+
+    input.emit("data", Buffer.from("\r"));
+    assert.match(frames.at(-1), /· Mosaic · selected pane/);
+    output.columns = 48;
+    output.emit("resize");
+    assert.match(frames.at(-1), /· Board · pane detail/);
+  } finally {
+    input.emit("end");
+    await session;
+  }
+  const frameCount = frames.length;
+  output.emit("resize");
+  assert.equal(frames.length, frameCount, "closed panes do not redraw on resize");
+});

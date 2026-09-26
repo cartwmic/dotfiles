@@ -141,6 +141,7 @@ export async function runOverviewPane({
     if (nextTheme) theme = nextTheme;
     draw();
   });
+  output.on?.("resize", draw);
   try { await syncOutputSubscription(); }
   catch (error) { output.write(`\nOutput subscription failed: ${error.message}\n`); }
 
@@ -150,6 +151,7 @@ export async function runOverviewPane({
     cleaned = true;
     stateWatcher.close();
     stopThemeWatch();
+    output.off?.("resize", draw);
     outputSubscription?.close();
     input.off?.("data", onKey);
     if (input.isTTY && input.isRaw) input.setRawMode(false);

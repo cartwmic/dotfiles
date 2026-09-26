@@ -66,9 +66,8 @@ Termux package list below). ADB may start/type the helper into an already
 configured Termux emulator, but must not push the helper, dotfiles, or config;
 the phone's own chezmoi profile owns the deployed helper.
 
-**Current phone-proof status: BLOCKED / not run by this source-only change.**
-Do not count AC-1 or phone review as proved until the helper returns a receipt
-from an attended physical phone or ADB-controlled Termux emulator and the host
+Count the phone journey only when the helper returns a receipt from an
+attended physical phone or ADB-controlled Termux emulator and the host
 `termux-ssh` scenario accepts it. A local narrow PTY or width emulation is not
 phone proof.
 
@@ -275,7 +274,7 @@ No Mac/ADB config sync. Prerequisites:
 2. Packages:
 
 ```bash
-pkg install -y chezmoi git openssh coreutils termux-api python
+pkg install -y chezmoi git openssh coreutils termux-api python vim
 ```
 
 `cartwmic/dotfiles` is **public**, so first bootstrap needs no GitHub auth.
@@ -296,8 +295,9 @@ After apply (and SSH key provision below), `passage-review` and
 `herdr-overview-proof` are available in `~/bin`.
 It reviews stdin or files locally in Termux; use `passage-review open REVIEW_ID`
 to select recent pane-output passages even when no Herdr selection adapter is
-available. `$VISUAL` (then `$EDITOR`) can be set to a terminal editor, and the
-phone's existing dictation keyboard can supply comment text. The library stays
+available. `vim` supplies the default `vi` comment editor; alternatively set
+`$VISUAL` or `$EDITOR` to another installed terminal editor. The phone's
+existing dictation keyboard can supply comment text. The library stays
 under `~/.local/share/passage-review` (or `$XDG_DATA_HOME` if set); it is not
 sent back to the desktop.
 
