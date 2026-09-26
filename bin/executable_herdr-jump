@@ -6,17 +6,20 @@
 #
 # Missing host -> ssh remote. Present host is used only when it matches
 # ^[A-Za-z][A-Za-z0-9_-]{0,63}$ and is one of remote, cartwmic-server,
-# macbook, laptop; otherwise exit without ssh (no remote fallback).
+# macbook, laptop, mac-kvm; otherwise exit without ssh (no remote fallback).
+# mac-kvm is a single-purpose non-PTY forced command over the NanoKVM broker,
+# not a normal SSH remote command to the Work Mac.
 
 terminal_id="${1:-}"
 case "$terminal_id" in
   term_*) ;;
-  *) exit 0 ;;
+  *) exit 1 ;;
 esac
 hex="${terminal_id#term_}"
 case "$hex" in
-  ""|*[!0-9a-f]*) exit 0 ;;
+  ""|*[!0123456789abcdef]*) exit 1 ;;
 esac
+[ "${#hex}" -le 64 ] || exit 1
 
 if [ $# -lt 2 ]; then
   ssh_host=remote
@@ -24,16 +27,22 @@ else
   ssh_host="$2"
   case "$ssh_host" in
     [A-Za-z]|[A-Za-z][A-Za-z0-9_-]*)
-      [ "${#ssh_host}" -le 64 ] || exit 0
+      [ "${#ssh_host}" -le 64 ] || exit 1
       ;;
     *)
-      exit 0
+      exit 1
       ;;
   esac
   case "$ssh_host" in
-    remote|cartwmic-server|macbook|laptop) ;;
-    *) exit 0 ;;
+    remote|cartwmic-server|macbook|laptop|mac-kvm) ;;
+    *) exit 1 ;;
   esac
+fi
+
+if [ "$ssh_host" = mac-kvm ]; then
+  exec timeout 15 ssh -T -o RequestTTY=no -o BatchMode=yes \
+    -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
+    mac-kvm "herdr-jump $terminal_id"
 fi
 
 exec timeout 15 ssh \

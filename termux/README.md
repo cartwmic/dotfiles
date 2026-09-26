@@ -189,6 +189,7 @@ the chezmoi source separately.
    notifications, and send one harmless test. Check Android HTTPS trust and
    DNS both on Wi-Fi and over the WireGuard path. Tap an actual pi notification;
    a Termux session must be named **`macbook`** to focus that SSH/Herdr path.
+   Name the interactive Work Mac `ssh mac-kvm` session **`mac-kvm`**.
 3. Restore/configure Whisperian's provider/profile/history through supported
    Android/app UI, grant microphone and its keyboard/Accessibility controls.
    App-private data has no proven export/import path on this unrooted phone;
@@ -252,12 +253,14 @@ After apply (and SSH key provision below):
 - `ssh whonix-gw` / `ssh whonix-ws` → Whonix via `~/.ssh/whonix-homelab`
 - Jump handlers live in `~/bin/{zellij,herdr}-jump`. Usage: `<id> [host]`.
   Unset identity (missing host) defaults to `remote`. A present host must be a
-  grammar-valid Termux SSH alias in `{remote, cartwmic-server, macbook, laptop}`
-  or the script exits without ssh.
+  grammar-valid Termux SSH alias in `{remote, cartwmic-server, macbook, laptop,
+  mac-kvm}` or the script exits without ssh. `mac-kvm` routes through the
+  NanoKVM's single-purpose, non-PTY Herdr control request, not SSH remote
+  execution on the Work Mac; the Work Mac bridge must have a live shell.
 - ntfy Click URLs carry a host query (`?host=<alias>`) when the producer stamps
   that alias. Termux session name equals alias: the visible session must be named
-  exactly the stamped SSH alias for focus. A miss still foregrounds Termux and
-  still jumps over SSH.
+  exactly the stamped SSH alias for focus. A miss still foregrounds Termux;
+  the background jump fails if the Work Mac bridge has no live shell.
 
 Phone `chezmoi apply` owns the jump scripts and the SSH ControlMaster block. It
 does not:

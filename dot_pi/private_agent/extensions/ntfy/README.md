@@ -19,7 +19,7 @@ to the correct Herdr agent or Zellij pane.
 ## Config (`config.json`)
 
 Per-machine identity is `jumpSshHost` in chezmoi data (this host's Termux SSH
-alias: `remote`, `cartwmic-server`, `macbook`, or `laptop`). The rendered
+alias: `remote`, `cartwmic-server`, `macbook`, `laptop`, or `mac-kvm`). The rendered
 `config.json` includes it when set. The zellij notify wrapper uses the same
 alias via `JUMP_SSH_HOST`.
 
@@ -44,7 +44,9 @@ alias via `JUMP_SSH_HOST`.
   `^[A-Za-z][A-Za-z0-9_-]{0,63}$`. A valid alias is the Click `?host=` value and
   the title's first segment. Unset or invalid omits the host query (phone jump
   scripts keep the default `remote` SSH path) and still titles as `remote`.
-  Set it in `~/.config/chezmoi/chezmoi.yaml` as `data.jumpSshHost`.
+  Set it in `~/.config/chezmoi/chezmoi.yaml` as `data.jumpSshHost` (`macbook`
+  on the personal Mac, `mac-kvm` on the Work Mac). For `mac-kvm`, the phone
+  script uses the NanoKVM's bounded control request, not SSH remote execution.
 
 ## Apply scope
 
