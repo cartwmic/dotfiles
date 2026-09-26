@@ -60,6 +60,49 @@ test("maps T1 prompt and recap fields by pane ID even without a native session r
   assert.equal(pane.agent.status, "working");
 });
 
+test("maps a pre-move Pi prompt to the rekeyed pane through its persisted terminal ID", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-moved-prompt-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sessionId = "pi-session-moved";
+  const oldPaneId = "w1:p4";
+  const currentPaneId = "w2:p3";
+  const terminalId = "terminal-stable-4";
+  const prompt = {
+    schema_version: 1,
+    session_id: sessionId,
+    pane_id: oldPaneId,
+    text: "Continue after the pane move",
+    working: true,
+    captured_at: "2026-09-27T13:00:00Z",
+  };
+  await writeJson(path.join(root, "prompts", `${encodeURIComponent(sessionId)}.json`), prompt);
+
+  const snapshot = {
+    protocol: 22,
+    version: "0.9.1",
+    workspaces: [{ workspace_id: "w2", number: 2, label: "Current", focused: true, active_tab_id: "w2:t1", agent_status: "working" }],
+    tabs: [{ tab_id: "w2:t1", workspace_id: "w2", number: 1, label: "Main", focused: true, pane_count: 1, agent_status: "working" }],
+    panes: [{
+      pane_id: currentPaneId,
+      workspace_id: "w2",
+      tab_id: "w2:t1",
+      terminal_id: terminalId,
+      focused: true,
+      agent: "pi",
+      agent_status: "working",
+    }],
+    agents: [{ pane_id: currentPaneId, agent: "pi" }],
+  };
+  assert.equal(Object.hasOwn(snapshot.panes[0], "agent_session"), false);
+  assert.equal(Object.hasOwn(snapshot.agents[0], "agent_session"), false);
+
+  const supplied = await readRecapFields(snapshot, root, { [sessionId]: terminalId });
+  const model = normalizeSnapshot(snapshot, supplied);
+  assert.deepEqual(supplied.promptsByPaneId[currentPaneId], prompt);
+  assert.deepEqual(model.panes[currentPaneId].prompt, prompt);
+  assert.equal(model.panes[currentPaneId].prompt.pane_id, oldPaneId);
+});
+
 test("maps manually published pane-source recaps into detail without using them for Pi naming", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-manual-recap-"));
   t.after(() => rm(root, { recursive: true, force: true }));

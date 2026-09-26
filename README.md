@@ -253,9 +253,12 @@ prompt templates and the host-local `~/.config/session-recap/config.local.toml`
 argv override are documented in
 [`dot_local/share/session-recap/README.md`](./dot_local/share/session-recap/README.md).
 Pi's adapter prepares then publishes settled recaps. Successful Pi publications
-start/restart a 30-second workspace quiet period; a successful workspace group
-can trigger a Herdr-session group. Failed recaps do not replace the last good
-record or reset that interval. Dated history remains outside Herdr.
+start/restart a 30-second workspace quiet period; when it expires, the group uses
+latest published recaps for panes currently in that native workspace, including
+manual pane-source recaps for non-Pi panes. A successful workspace group can
+trigger a Herdr-session group from workspaces still live in the native snapshot.
+Failed recaps do not replace the last good record or reset that interval. Dated
+history remains outside Herdr.
 
 ## Passage review
 

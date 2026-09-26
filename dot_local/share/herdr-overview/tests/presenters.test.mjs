@@ -231,6 +231,22 @@ test("narrow and threshold-edge frames stay inside the active terminal width", (
   }
 });
 
+test("wide Mosaic overview and workspace grids stay within terminal width", () => {
+  const { state } = scenario();
+  const widths = [65, 76, 120, 153, 180, 190, 200, 220, 256, 320];
+  for (const width of widths) {
+    const frames = [
+      renderMosaicOverview(state, width, 80),
+      renderMosaicWorkspace({ ...state, journey: { ...state.journey, level: "workspace" } }, width, 80),
+    ];
+    for (const frame of frames) {
+      for (const line of stripAnsi(frame).split("\n")) {
+        assert.ok(line.length <= width, `Mosaic overflowed ${width} columns: ${line}`);
+      }
+    }
+  }
+});
+
 test("a width/level-specific redraw does not mutate the common model or the other presenter's output", () => {
   const { state } = scenario();
   const before = structuredClone(state);

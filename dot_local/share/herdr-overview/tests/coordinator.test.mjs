@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { reconcileOverview } from "../src/coordinator.mjs";
+import { renderOverview } from "../src/pane.mjs";
 
 function makeSnapshot(withOverview = false) {
   const panes = [{
@@ -81,6 +82,71 @@ test("startup and reconcile share an idempotent initializer, exclude its own pan
   assert.equal(closes, 1, "only the stale plugin-owned shell pane is closed");
   assert.equal(opens, 2, "a stopped plugin pane is reopened on server startup");
   assert.equal(restarted.overviewPaneId, "ws-a:p-overview");
+});
+
+test("reconciliation and pane detail retain a Pi prompt after Herdr rekeys its pane ID", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-moved-prompt-path-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const stateDir = path.join(root, "state");
+  const dataRoot = path.join(root, "session-recap");
+  const configPath = path.join(root, "config.toml");
+  const sessionId = "pi-session-moved";
+  const currentPaneId = "w2:p3";
+  const terminalId = "terminal-stable-4";
+  await writeFile(configPath, '[theme]\nname = "nord"\nauto_switch = false\n');
+  await mkdir(path.join(dataRoot, "prompts"), { recursive: true });
+  await writeFile(path.join(dataRoot, "prompts", `${encodeURIComponent(sessionId)}.json`), JSON.stringify({
+    schema_version: 1,
+    session_id: sessionId,
+    pane_id: "w1:p4",
+    text: "Continue after the pane move",
+    working: true,
+    captured_at: "2026-09-27T13:00:00Z",
+  }));
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(path.join(stateDir, "overview.json"), JSON.stringify({
+    recapCoordinator: { piTerminalIdsBySessionId: { [sessionId]: terminalId } },
+  }));
+
+  const snapshot = {
+    protocol: 22,
+    version: "0.9.1",
+    focused_workspace_id: "w2",
+    focused_tab_id: "w2:t1",
+    focused_pane_id: currentPaneId,
+    workspaces: [{ workspace_id: "w2", number: 2, label: "Current", focused: true, active_tab_id: "w2:t1", agent_status: "working" }],
+    tabs: [{ tab_id: "w2:t1", workspace_id: "w2", number: 1, label: "Main", focused: true, pane_count: 1, agent_status: "working" }],
+    panes: [{
+      pane_id: currentPaneId,
+      workspace_id: "w2",
+      tab_id: "w2:t1",
+      terminal_id: terminalId,
+      focused: true,
+      label: "Pi task",
+      agent: "pi",
+      agent_status: "working",
+    }],
+    agents: [{ pane_id: currentPaneId, agent: "pi" }],
+    layouts: [],
+  };
+  assert.equal(Object.hasOwn(snapshot.panes[0], "agent_session"), false);
+  assert.equal(Object.hasOwn(snapshot.agents[0], "agent_session"), false);
+  const api = {
+    async snapshot() { return snapshot; },
+    async readPane(paneId) { assert.equal(paneId, currentPaneId); return "output after move"; },
+    async processInfo() { return null; },
+  };
+
+  const state = await reconcileOverview({ api, stateDir, dataRoot, configPath, openPane: false });
+  assert.equal(state.model.panes[currentPaneId].prompt.pane_id, "w1:p4");
+  assert.equal(state.model.panes[currentPaneId].agent.session, null);
+  const detail = renderOverview({
+    ...state,
+    journey: { level: "pane", workspaceId: "w2", tabId: "w2:t1", paneId: currentPaneId, detailScroll: 0 },
+  }, 60, 24);
+  assert.match(detail, /output after move/);
+  assert.match(detail, /Current Pi prompt/);
+  assert.match(detail, /Continue after the pane move/);
 });
 
 test("empty-server startup waits for the first native workspace before opening the pane", async (t) => {
