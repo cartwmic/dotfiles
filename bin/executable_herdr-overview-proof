@@ -32,9 +32,12 @@ if ! command -v ssh >/dev/null 2>&1; then
 fi
 
 remote_driver='"$HOME/.local/share/chezmoi/tests/herdr-overview/proof.py"'
-remote_client="python3 $remote_driver phone-client --run-id $run_id"
-remote_source_pi="python3 $remote_driver phone-source --run-id $run_id --kind pi-reply"
-remote_source_pane="python3 $remote_driver phone-source --run-id $run_id --kind pane-output"
+# A remote SSH command does not load the desktop's interactive mise PATH.
+remote_python='"$HOME/.local/share/mise/shims/python3"'
+remote_path='PATH="$HOME/.local/share/mise/shims:$PATH"'
+remote_client="$remote_path $remote_python $remote_driver phone-client --run-id $run_id"
+remote_source_pi="$remote_path $remote_python $remote_driver phone-source --run-id $run_id --kind pi-reply"
+remote_source_pane="$remote_path $remote_python $remote_driver phone-source --run-id $run_id --kind pane-output"
 
 record_receipt() {
   receipt_status=$1
@@ -49,7 +52,7 @@ record_receipt() {
   pane_export=${10:-}
   unchanged=${11:-false}
   case "$unchanged" in true) unchanged_flag=--snapshot-unchanged ;; *) unchanged_flag= ;; esac
-  remote_record="python3 $remote_driver phone-record --run-id $run_id --status $receipt_status --reply-note-count $reply_count --pane-note-count $pane_count"
+  remote_record="$remote_path $remote_python $remote_driver phone-record --run-id $run_id --status $receipt_status --reply-note-count $reply_count --pane-note-count $pane_count"
   [ -z "$receipt_reason" ] || remote_record="$remote_record --reason '$receipt_reason'"
   [ -z "$reply_review" ] || remote_record="$remote_record --reply-review-id $reply_review"
   [ -z "$reply_notes" ] || remote_record="$remote_record --reply-note-ids $reply_notes"
