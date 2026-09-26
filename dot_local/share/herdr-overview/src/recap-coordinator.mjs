@@ -68,7 +68,13 @@ function normalizedState(value = {}) {
       }
     }
   }
-  return { schema_version: 1, processedRecordIds, workspaceDeadlines };
+  const piTerminalIdsBySessionId = {};
+  if (value.piTerminalIdsBySessionId && typeof value.piTerminalIdsBySessionId === "object") {
+    for (const [sessionId, terminalId] of Object.entries(value.piTerminalIdsBySessionId)) {
+      if (sessionId && typeof terminalId === "string" && terminalId) piTerminalIdsBySessionId[sessionId] = terminalId;
+    }
+  }
+  return { schema_version: 1, processedRecordIds, workspaceDeadlines, piTerminalIdsBySessionId };
 }
 
 function publicationTime(record, fallback) {
@@ -88,19 +94,50 @@ function groupMember(record) {
   return member;
 }
 
-async function currentPaneMembers(dataRoot, workspaceId) {
-  const latest = await readLatestRecapRecords(dataRoot, "pi-session");
-  const byPaneId = new Map();
-  for (const record of latest) {
-    if (typeof record.pane_id !== "string" || !record.pane_id
-      || typeof record.summary !== "string" || !record.summary.trim() || typeof record.record_id !== "string") continue;
-    const existing = byPaneId.get(record.pane_id);
-    if (!existing || compareRecords(existing, record) <= 0) byPaneId.set(record.pane_id, record);
+async function currentPaneMembers(workspaceId, snapshot, latest, piTerminalIdsBySessionId) {
+  if (!snapshot || !Array.isArray(snapshot.panes)) {
+    throw new Error("Herdr membership snapshot is unavailable for recap grouping");
   }
-  return [...byPaneId.values()]
-    .filter((record) => record.workspace_id === workspaceId)
-    .sort(compareRecords)
-    .map(groupMember);
+  const agentsByPaneId = new Map((snapshot.agents ?? []).map((agent) => [agent.pane_id, agent]));
+  const bySessionId = new Map();
+  const byPaneId = new Map();
+  const byTerminalId = new Map();
+  for (const record of latest) {
+    if (typeof record.source_id !== "string" || !record.source_id
+      || typeof record.summary !== "string" || !record.summary.trim()
+      || typeof record.record_id !== "string" || !record.record_id) continue;
+    const existing = bySessionId.get(record.source_id);
+    if (!existing || compareRecords(existing, record) <= 0) bySessionId.set(record.source_id, record);
+    if (typeof record.pane_id === "string" && record.pane_id) {
+      const paneRecord = byPaneId.get(record.pane_id);
+      if (!paneRecord || compareRecords(paneRecord, record) <= 0) byPaneId.set(record.pane_id, record);
+    }
+    const terminalId = piTerminalIdsBySessionId?.[record.source_id];
+    if (typeof terminalId === "string" && terminalId) {
+      const terminalRecord = byTerminalId.get(terminalId);
+      if (!terminalRecord || compareRecords(terminalRecord, record) <= 0) byTerminalId.set(terminalId, record);
+    }
+  }
+
+  const members = [];
+  const seenRecordIds = new Set();
+  for (const pane of snapshot.panes) {
+    if (pane?.workspace_id !== workspaceId || typeof pane.pane_id !== "string") continue;
+    const agent = agentsByPaneId.get(pane.pane_id);
+    const agentName = agent?.agent ?? pane.agent;
+    if (agentName !== "pi") continue;
+    const session = agent?.agent_session ?? pane.agent_session;
+    const sessionId = session?.agent === "pi" && session.kind === "id" && typeof session.value === "string"
+      ? session.value
+      : null;
+    const record = (sessionId ? bySessionId.get(sessionId) : null)
+      ?? byPaneId.get(pane.pane_id)
+      ?? byTerminalId.get(pane.terminal_id);
+    if (!record || seenRecordIds.has(record.record_id)) continue;
+    seenRecordIds.add(record.record_id);
+    members.push(record);
+  }
+  return members.sort(compareRecords).map(groupMember);
 }
 
 async function createGroup(runRecap, dataRoot, sourceKind, sourceId, members) {
@@ -110,8 +147,9 @@ async function createGroup(runRecap, dataRoot, sourceKind, sourceId, members) {
     throw new Error("session-recap did not return a published record ID");
   }
   const latest = await readLatestRecapRecords(dataRoot, sourceKind);
-  if (!latest.some((record) => record.source_id === sourceId && record.record_id === output)) {
-    throw new Error(`session-recap did not index the published ${sourceKind} recap`);
+  const published = latest.find((record) => record.source_id === sourceId && record.record_id === output);
+  if (!published || typeof published.summary !== "string" || !published.summary.trim()) {
+    throw new Error(`session-recap did not index a nonblank published ${sourceKind} recap`);
   }
   return output;
 }
@@ -119,6 +157,7 @@ async function createGroup(runRecap, dataRoot, sourceKind, sourceId, members) {
 export async function reconcileRecapCoordinator({
   state,
   dataRoot,
+  snapshot,
   now = Date.now(),
   runRecap = runSessionRecap,
   persist = async () => {},
@@ -141,6 +180,23 @@ export async function reconcileRecapCoordinator({
     changedDeadlines.add(record.workspace_id);
   }
   next.processedRecordIds = [...processed];
+  const latestPiRecaps = await readLatestRecapRecords(dataRoot, "pi-session");
+  const currentSessions = new Set(latestPiRecaps
+    .map((record) => record.source_id)
+    .filter((sessionId) => typeof sessionId === "string" && sessionId));
+  for (const sessionId of Object.keys(next.piTerminalIdsBySessionId)) {
+    if (!currentSessions.has(sessionId)) delete next.piTerminalIdsBySessionId[sessionId];
+  }
+  if (Array.isArray(snapshot?.panes)) {
+    const paneById = new Map(snapshot.panes.map((pane) => [pane.pane_id, pane]));
+    for (const record of latestPiRecaps) {
+      if (typeof record.source_id !== "string" || !record.source_id) continue;
+      const pane = paneById.get(record.pane_id);
+      if (typeof pane?.terminal_id === "string" && pane.terminal_id) {
+        next.piTerminalIdsBySessionId[record.source_id] = pane.terminal_id;
+      }
+    }
+  }
   await persist(next);
 
   const due = Object.entries(next.workspaceDeadlines)
@@ -148,7 +204,13 @@ export async function reconcileRecapCoordinator({
     .sort(([leftId, leftDeadline], [rightId, rightDeadline]) => Date.parse(leftDeadline) - Date.parse(rightDeadline) || leftId.localeCompare(rightId));
 
   for (const [workspaceId] of due) {
-    const members = await currentPaneMembers(dataRoot, workspaceId);
+    let members;
+    try {
+      members = await currentPaneMembers(workspaceId, snapshot, latestPiRecaps, next.piTerminalIdsBySessionId);
+    } catch (error) {
+      onError(error, workspaceId);
+      continue;
+    }
     if (!members.length) {
       delete next.workspaceDeadlines[workspaceId];
       await persist(next);

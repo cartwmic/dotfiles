@@ -36,6 +36,7 @@ SCENARIO_COMMANDS = {
     "herdr-prepare": "proof-herdr-isolated-start",
     "herdr-wide": "proof-herdr-wide-journey",
     "pi-grouped": "proof-pi-grouped-journey",
+    "herdr-native-move": "proof-herdr-native-move-journey",
     "termux-ssh": "proof-herdr-termux-ssh-journey",
     "herdr-cleanup": "proof-herdr-isolated-cleanup",
     "chezmoi-dry-run": "proof-chezmoi-target-dry-run",
@@ -515,7 +516,23 @@ def run_root(run_id: str, base: Path | None = None) -> Path:
     return (base or default_cache_root()) / run_id
 
 
-def make_herdr_env(root: Path) -> dict[str, str]:
+def herdr_091_binary() -> str:
+    mise = shutil.which("mise")
+    if not mise:
+        raise ProofBlocked("mise is required to resolve the pinned Herdr 0.9.1 binary")
+    located = run_process([mise, "where", "github:herdrdev/herdr@0.9.1"], cwd=ROOT, check=False, timeout=20)
+    if located.returncode != 0:
+        raise ProofBlocked("Herdr 0.9.1 is not installed; run `mise install github:herdrdev/herdr@0.9.1`")
+    binary = (Path(located.stdout.strip()) / "herdr").resolve()
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise ProofBlocked(f"the pinned Herdr 0.9.1 binary is missing: {binary}")
+    version = run_process([str(binary), "--version"], cwd=ROOT, check=False, timeout=10)
+    if version.returncode != 0 or version.stdout.strip() != "herdr 0.9.1":
+        raise ProofFailure(f"mise resolved a non-0.9.1 Herdr binary: {bounded(version.stdout or version.stderr, 200)}")
+    return str(binary)
+
+
+def make_herdr_env(root: Path, herdr_binary: str) -> dict[str, str]:
     home = root / "home"
     config_home = root / "config"
     data_home = root / "data"
@@ -523,7 +540,7 @@ def make_herdr_env(root: Path) -> dict[str, str]:
     for path in (home, config_home / "herdr", data_home, state_home, root / "tmp", root / "server", root / "bin"):
         path.mkdir(parents=True, exist_ok=True)
     path_parts = [os.environ.get("PATH", "/usr/bin:/bin")]
-    for executable in (shutil.which("node"), shutil.which("pi"), shutil.which("herdr"), sys.executable):
+    for executable in (shutil.which("node"), shutil.which("pi"), herdr_binary, sys.executable):
         if executable:
             path_parts.insert(0, str(Path(executable).resolve().parent))
     path_parts.insert(0, str(root / "bin"))
@@ -558,8 +575,9 @@ def setup_herdr_run(run_id: str, base: Path | None = None) -> tuple[Path, dict[s
         if marker.exists():
             raise ProofFailure(f"proof run already exists; use its run ID for the existing fixture: {root}")
         raise ProofFailure(f"refusing to reuse unmarked proof directory: {root}")
+    herdr_binary = herdr_091_binary()
     root.mkdir(parents=True, mode=0o700)
-    env = make_herdr_env(root)
+    env = make_herdr_env(root, herdr_binary)
     recap_home, recap_config, recap_data = copy_recap_install(root)
     env["HOME"] = str(root / "home")
     env["XDG_CONFIG_HOME"] = str(root / "config")
@@ -606,7 +624,7 @@ def setup_herdr_run(run_id: str, base: Path | None = None) -> tuple[Path, dict[s
         "home": str((root / "home").resolve()),
         "config_path": str((root / "config/herdr/config.toml").resolve()),
         "socket_path": str((root / "server/herdr.sock").resolve()),
-        "herdr_bin": shutil.which("herdr"),
+        "herdr_bin": herdr_binary,
         "repo_root": str(ROOT.resolve()),
         "fixture": {"workspaces": [], "pi_pane_id": None, "non_pi_pane_id": None, "overview_pane_id": None},
         "server_started": False,
@@ -635,8 +653,8 @@ manifest_check = false
     herdr_bin = plugin_state["herdr_bin"]
     if not herdr_bin:
         raise ProofBlocked("Herdr is not installed; install the pinned 0.9.1 desktop release first")
-    version = run_process([herdr_bin, "--version"], env=link_env, check=False)
-    if version.returncode != 0 or "0.9.1" not in version.stdout:
+    version = run_process([herdr_bin, "--version"], env=link_env, cwd=ROOT, check=False)
+    if version.returncode != 0 or version.stdout.strip() != "herdr 0.9.1":
         raise ProofBlocked(f"Herdr 0.9.1 is required; found {bounded(version.stdout or version.stderr, 200)}")
     node = shutil.which("node")
     if not node:
@@ -662,7 +680,7 @@ def load_run(run_id: str, base: Path | None = None) -> tuple[Path, dict[str, Any
     expected_socket = (root / "server/herdr.sock").resolve()
     if Path(state.get("socket_path", "")).resolve() != expected_socket:
         raise ProofFailure("recorded Herdr socket is not the isolated fixture socket")
-    env = make_herdr_env(root)
+    env = make_herdr_env(root, state["herdr_bin"])
     env.update({
         "HERDR_CONFIG_PATH": state["config_path"],
         "HERDR_SOCKET_PATH": state["socket_path"],
@@ -937,6 +955,13 @@ def scenario_herdr_prepare(run_id: str | None, base: Path | None) -> tuple[str, 
             "prepared_at": utc_now(),
         })
         json_dump(root / PROOF_MARKER, state)
+        def manual_labels_ready() -> bool | None:
+            try:
+                require_manual_names(state, env)
+                return True
+            except ProofFailure:
+                return None
+        wait_for(manual_labels_ready, "owner-set fixture names to settle after startup reconciliation", timeout=12)
         return run_id, {
             "run_id": run_id,
             "server_version": "0.9.1",
@@ -1052,10 +1077,11 @@ def select_workspace(state: dict[str, Any], env: dict[str, str], workspace: dict
             line.lstrip().startswith("›") and f"[{workspace['workspace_id']}]" in line for line in text.splitlines()
         ):
             send_overview_key(state, env, "enter")
-            opened = overview_text(state, env)
-            if "· Mosaic · workspace" not in opened or workspace["label"] not in opened:
-                raise ProofFailure(f"opening {workspace['label']} did not enter its Mosaic workspace grid")
-            return opened
+            return wait_for(
+                lambda: (lambda opened: opened if "· Mosaic · workspace" in opened
+                         and workspace["label"] in opened else None)(overview_text(state, env)),
+                f"opening {workspace['label']} into its Mosaic workspace grid", timeout=5,
+            )
         send_overview_key(state, env, "j")
         text = overview_text(state, env)
     raise ProofFailure(f"all-workspaces navigation could not select {workspace['label']}")
@@ -1333,7 +1359,8 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         pi_workspace = state["fixture"]["workspaces"][0]
         select_workspace(state, env, pi_workspace)
         overview_text_value = open_pane_from_workspace(state, env, pane_id)
-        if current_prompt not in overview_text_value or "CURRENT PI PROMPT" not in overview_text_value:
+        visible_prompt = "".join(plain_terminal(overview_text_value).split())
+        if "".join(current_prompt.split()) not in visible_prompt or "CURRENTPIPROMPT" not in visible_prompt:
             raise ProofFailure("the live selected-pane view omitted the current Pi prompt")
 
         provider_state.release_first.set()
@@ -1427,6 +1454,52 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         plain = __import__("re").sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", visible)
         if session_record["summary"] not in plain:
             raise ProofFailure("all-workspaces overview did not display the published Herdr-session recap")
+
+        # A manual single recap can be addressed to a native pane by source ID.
+        # Verify the overview reads that independent source and keeps its failure
+        # status separate from both Pi naming and the successful latest record.
+        recap_home = Path(env["HOME"])
+        manual_id = cli_recap(recap_home, env, "create", "--kind", "single", "--source-id", pane_id,
+                              stdin="Manually supplied pane recap input.\n").stdout.strip()
+        _manual_path, manual_record = find_record(data_root, manual_id)
+        if manual_record.get("source_kind") != "manual" or manual_record.get("source_id") != pane_id or manual_record.get("pane_id"):
+            raise ProofFailure("manual single recap did not use the native pane ID as its source attribution")
+        manual_summary = manual_record.get("summary")
+        Path(env["FAKE_RECAP_MODE_FILE"]).write_text("blank\n", encoding="utf-8")
+        manual_failure = cli_recap(recap_home, env, "create", "--kind", "single", "--source-id", pane_id,
+                                   stdin="Record an independent manual recap failure.\n", check=False)
+        Path(env["FAKE_RECAP_MODE_FILE"]).write_text("success\n", encoding="utf-8")
+        if manual_failure.returncode == 0:
+            raise ProofFailure("blank manual recap attempt unexpectedly published")
+        manual_source = latest_entry(data_root, "manual", pane_id)
+        if not manual_source or manual_source.get("latest_success_id") != manual_id:
+            raise ProofFailure("manual recap failure replaced its latest successful record")
+        _failure_path, manual_failure_record = find_record(data_root, manual_source.get("last_attempt_id", ""))
+        if manual_failure_record.get("status") != "failed":
+            raise ProofFailure("manual pane recap failure was not retained as the latest attempt")
+
+        invoke_overview(state, env)
+        def manual_recap_in_model() -> dict[str, Any] | None:
+            current = read_json(recap_state_path)
+            pane = ((current.get("model") or {}).get("panes") or {}).get(pane_id) or {}
+            recap = pane.get("recap") or {}
+            latest = recap.get("latest") or {}
+            attempt = recap.get("lastAttempt") or {}
+            if latest.get("record_id") == manual_id and attempt.get("record_id") == manual_failure_record["record_id"]:
+                return current
+            return None
+
+        state_with_manual = wait_for(manual_recap_in_model, "manual source-attributed recap and failure status in the pane model")
+        manual_pane = state_with_manual["model"]["panes"][pane_id]
+        if manual_pane["recap"]["latest"].get("source_kind") != "manual":
+            raise ProofFailure("pane model did not preserve the independent manual recap source")
+        select_workspace(state, env, pi_workspace)
+        manual_detail = open_pane_from_workspace(state, env, pane_id)
+        if manual_summary not in manual_detail or "Latest attempt failed" not in manual_detail:
+            raise ProofFailure("selected-pane detail omitted the manual recap or its latest failure status")
+        if manual_pane.get("label") != "Owner Pi proof pane":
+            raise ProofFailure("manual recap incorrectly drove Pi-only automatic pane naming")
+
         return {
             "pi_pane_id": pane_id,
             "pi_session_id": first_latest["source_id"],
@@ -1437,6 +1510,8 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
             "quiet_period_seconds": round(workspace_published - datetime.fromisoformat(first_latest["published_at"].replace("Z", "+00:00")).timestamp(), 1),
             "failed_recap_preserved_latest_and_deadline": True,
             "overview_displays_session_recap": True,
+            "manual_pane_source_recap_and_failure_visible": True,
+            "manual_recap_did_not_drive_pi_naming": True,
             "response_provider": "scripted local OpenAI-compatible SSE provider",
         }
     finally:
@@ -1453,6 +1528,165 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
                 prompt_process.wait(timeout=5)
         except Exception:
             pass
+
+
+def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]:
+    root, state, env = load_run(run_id, base)
+    if not state.get("server_started") or not state.get("wide_proof_passed"):
+        raise ProofBlocked("run herdr-prepare and herdr-wide first on this same isolated server")
+
+    old_pane_id = state.get("fixture", {}).get("pi_pane_id")
+    if not old_pane_id:
+        raise ProofBlocked("the isolated fixture has no Pi pane")
+    data_root = Path(env["XDG_DATA_HOME"]) / "session-recap"
+    prior_recap, _attempt = read_latest_pi_record(data_root, old_pane_id)
+    if not prior_recap or prior_recap.get("status") != "published":
+        raise ProofBlocked("run pi-grouped first to publish a Pi recap on the fixture pane")
+    session_id = prior_recap.get("source_id")
+    before = snapshot(state)
+    old_pane = one_by(before.get("panes", []), "pane_id", old_pane_id)
+    terminal_id = old_pane.get("terminal_id")
+    agent = next((item for item in before.get("agents", []) if item.get("pane_id") == old_pane_id), {})
+    if not isinstance(terminal_id, str) or not terminal_id:
+        raise ProofFailure("the live Pi pane has no native terminal_id")
+    if old_pane.get("agent") != "pi" and agent.get("agent") != "pi":
+        raise ProofFailure("Herdr no longer recognizes the fixture pane as Pi")
+    if old_pane.get("agent_session") is not None or agent.get("agent_session") is not None:
+        raise ProofFailure("the native-move proof expected v0.9.1's observed agent_session=null path")
+
+    identity = ((plugin_state(root).get("recapCoordinator") or {}).get("piTerminalIdsBySessionId") or {})
+    if identity.get(session_id) != terminal_id:
+        raise ProofFailure("overview.reconcile did not persist the published Pi source's native terminal_id")
+
+    source_workspace_id = old_pane["workspace_id"]
+    prior_source_group = latest_entry(data_root, "workspace", source_workspace_id)
+    if not prior_source_group or not prior_source_group.get("latest_success_id"):
+        raise ProofBlocked("pi-grouped must publish the original workspace recap before a move")
+    prior_source_group_id = prior_source_group["latest_success_id"]
+    prepared_before_move = cli_recap(
+        Path(env["HOME"]), env, "prepare", "--source-id", session_id, "--pane-id", old_pane_id,
+        stdin="Completed work in the original workspace before the native pane move.\n",
+    ).stdout.strip()
+    published_before_move = cli_recap(
+        Path(env["HOME"]), env, "publish", "--prepared-id", prepared_before_move,
+        "--workspace-id", source_workspace_id,
+    ).stdout.strip()
+    invoke_overview(state, env)
+    state_path = overview_state_path(root)
+    def original_deadline() -> str | None:
+        current = read_json(state_path)
+        return ((current.get("recapCoordinator") or {}).get("workspaceDeadlines") or {}).get(source_workspace_id)
+
+    original_deadline_text = wait_for(original_deadline, "the publication-time original-workspace deadline", timeout=20)
+    target = state["fixture"]["workspaces"][1]
+    moved_output = herdr_cmd(
+        state, env, "pane", "move", old_pane_id, "--new-tab", "--workspace", target["workspace_id"], "--no-focus",
+    )
+    try:
+        move_result = json.loads(moved_output.stdout).get("result", {}).get("move_result", {})
+    except json.JSONDecodeError as exc:
+        raise ProofFailure("Herdr pane move did not return its public move_result") from exc
+    if move_result.get("previous_pane_id") != old_pane_id:
+        raise ProofFailure("Herdr pane.move did not report the old native pane ID")
+    new_pane = move_result.get("pane") or {}
+    new_pane_id = new_pane.get("pane_id")
+    if not isinstance(new_pane_id, str) or not new_pane_id:
+        raise ProofFailure("Herdr pane.move did not return the rekeyed pane ID")
+
+    moved_snapshot = wait_for(
+        lambda: (lambda value: value if not any(pane.get("pane_id") == old_pane_id for pane in value.get("panes", []))
+                 and any(pane.get("pane_id") == new_pane_id for pane in value.get("panes", [])) else None)(snapshot(state)),
+        "the live snapshot to drop the old pane ID and expose the rekeyed pane", timeout=15,
+    )
+    moved_pane = one_by(moved_snapshot["panes"], "pane_id", new_pane_id)
+    moved_agent = next((item for item in moved_snapshot.get("agents", []) if item.get("pane_id") == new_pane_id), {})
+    if moved_pane.get("terminal_id") != terminal_id:
+        raise ProofFailure("Herdr pane.move changed the native terminal_id")
+    if moved_pane.get("agent") != "pi" and moved_agent.get("agent") != "pi":
+        raise ProofFailure("the rekeyed pane no longer reports agent=pi")
+    if moved_pane.get("agent_session") is not None or moved_agent.get("agent_session") is not None:
+        raise ProofFailure("the moved v0.9.1 pane unexpectedly exposed agent_session")
+
+    def old_recap_in_new_detail() -> dict[str, Any] | None:
+        current = read_json(state_path)
+        pane = ((current.get("model") or {}).get("panes") or {}).get(new_pane_id) or {}
+        latest = (pane.get("recap") or {}).get("latest") or {}
+        return current if latest.get("record_id") == published_before_move else None
+
+    wait_for(old_recap_in_new_detail, "the prior published recap to follow terminal_id into the new pane detail", timeout=20)
+    original_due = datetime.fromisoformat(original_deadline_text.replace("Z", "+00:00")).timestamp()
+    remaining = original_due - time.time()
+    if remaining > 0:
+        time.sleep(remaining + 0.8)
+    wait_for(lambda: not original_deadline(), "the original quiet deadline to expire without its moved pane", timeout=40)
+    source_group_after_move = latest_entry(data_root, "workspace", source_workspace_id)
+    if not source_group_after_move or source_group_after_move.get("latest_success_id") != prior_source_group_id:
+        raise ProofFailure("the original workspace incorrectly grouped a pane that moved away before its quiet deadline")
+
+    # Now publish in the new workspace using the old pane ID retained by the
+    # prepared Pi source; its stable terminal identity must bind the new pane.
+    prepared_id = cli_recap(
+        Path(env["HOME"]), env, "prepare", "--source-id", session_id, "--pane-id", old_pane_id,
+        stdin="Completed work after the native pane move; terminal identity remains stable.\n",
+    ).stdout.strip()
+    published_id = cli_recap(
+        Path(env["HOME"]), env, "publish", "--prepared-id", prepared_id,
+        "--workspace-id", target["workspace_id"],
+    ).stdout.strip()
+    moved_recap = find_record(data_root, published_id)[1]
+    if moved_recap.get("pane_id") != old_pane_id or moved_recap.get("workspace_id") != target["workspace_id"]:
+        raise ProofFailure("portable Pi publication did not retain its old pane ID and current workspace attribution")
+    invoke_overview(state, env)
+
+    def deadline_state() -> tuple[dict[str, Any], str] | None:
+        current = read_json(state_path)
+        deadlines = ((current.get("recapCoordinator") or {}).get("workspaceDeadlines") or {})
+        deadline = deadlines.get(target["workspace_id"])
+        return (current, deadline) if deadline else None
+
+    _current_state, deadline_text = wait_for(deadline_state, "the current-workspace quiet deadline", timeout=20)
+    expected = datetime.fromisoformat(moved_recap["published_at"].replace("Z", "+00:00")).timestamp() + 30
+    actual = datetime.fromisoformat(deadline_text.replace("Z", "+00:00")).timestamp()
+    if abs(actual - expected) > 2:
+        raise ProofFailure("the moved Pi recap did not start its publication-time quiet deadline")
+    # The action persists its deadline before it finishes refreshing the model.
+    # Wait for the user-facing detail rather than reading that intermediate state.
+    def new_recap_in_moved_detail() -> bool:
+        current = read_json(state_path)
+        pane = ((current.get("model") or {}).get("panes") or {}).get(new_pane_id) or {}
+        return (pane.get("recap") or {}).get("latest", {}).get("record_id") == published_id
+
+    wait_for(new_recap_in_moved_detail, "the published recap in the rekeyed pane detail", timeout=20)
+
+    remaining = actual - time.time()
+    if remaining > 0:
+        time.sleep(remaining + 0.8)
+
+    workspace_entry = wait_for(
+        lambda: (lambda entry: entry if entry and entry.get("latest_success_id") else None)(
+            latest_entry(data_root, "workspace", target["workspace_id"])
+        ),
+        "the native-move workspace group publication", timeout=40,
+    )
+    _group_path, group_record = find_record(data_root, workspace_entry["latest_success_id"])
+    if group_record.get("status") != "published" or group_record.get("member_record_ids") != [published_id]:
+        raise ProofFailure("workspace group output did not include exactly the latest moved-pane recap")
+    if group_record.get("source_id") != target["workspace_id"]:
+        raise ProofFailure("workspace group output used the wrong current native workspace ID")
+
+    return {
+        "old_pane_id": old_pane_id,
+        "new_pane_id": new_pane_id,
+        "terminal_id_preserved": terminal_id,
+        "agent_session_null": True,
+        "publication_before_move_id": published_before_move,
+        "old_workspace_recap_unchanged_after_move": True,
+        "published_recap_id": published_id,
+        "workspace_id": target["workspace_id"],
+        "group_record_id": group_record["record_id"],
+        "group_contains_latest_moved_recap": True,
+        "quiet_period_seconds": round(time.time() - actual + 30, 1),
+    }
 
 
 def validate_phone_receipt(root: Path, run_id: str) -> dict[str, Any]:
@@ -1812,6 +2046,11 @@ def scenario_result(args: argparse.Namespace) -> int:
                 raise ProofBlocked("termux-ssh requires the run ID printed by herdr-prepare")
             details = scenario_termux_ssh(args.run_id, args.state_base, args.adb_serial)
             return result(command_id, scenario, "PASS", run_id=args.run_id, **details)
+        if scenario == "herdr-native-move":
+            if not args.run_id:
+                raise ProofBlocked("herdr-native-move requires the run ID printed by herdr-prepare")
+            return result(command_id, scenario, "PASS", run_id=args.run_id,
+                          **scenario_herdr_native_move(args.run_id, args.state_base))
         if scenario == "herdr-cleanup":
             if not args.run_id:
                 raise ProofBlocked("herdr-cleanup requires the run ID printed by herdr-prepare")

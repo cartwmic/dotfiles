@@ -50,7 +50,9 @@ The phone-owned `~/bin/herdr-overview-proof` helper is only for the isolated
 acceptance run. On the desktop, run `herdr-prepare`, `herdr-wide`, and
 `pi-grouped` from `tests/herdr-overview/proof.py` against the same printed run
 ID; then use that run ID on the phone. After the helper returns, the desktop
-runs `termux-ssh` to validate the receipt before `herdr-cleanup`:
+runs `termux-ssh` to validate the receipt, then runs the isolated native pane-move
+proof before `herdr-cleanup` (the move is deliberately last so it cannot change
+the phone's named fixture):
 
 ```sh
 herdr-overview-proof RUN_ID macbook

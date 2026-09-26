@@ -24,6 +24,7 @@ export function normalizeSnapshot(snapshot, supplied = {}, runtime = {}) {
   const promptByPane = objectMap(supplied.promptsByPaneId);
   const promptBySession = objectMap(supplied.promptsBySessionId);
   const recapByPane = objectMap(supplied.piRecapsByPaneId);
+  const recapBySourcePane = objectMap(supplied.recapsByPaneId);
   const recapBySession = objectMap(supplied.piRecapsBySessionId);
   const workspaceRecaps = objectMap(supplied.workspaceRecaps);
   const displayNameOwnership = objectMap(runtime.displayNameOwnership);
@@ -77,6 +78,7 @@ export function normalizeSnapshot(snapshot, supplied = {}, runtime = {}) {
       id,
       workspaceId: nativePane.workspace_id,
       tabId: nativePane.tab_id,
+      terminalId: nativePane.terminal_id ?? null,
       label: nativePane.label ?? null,
       displayNameOwnership: displayNameOwnership[`pane:${id}`] ?? null,
       title: nativePane.title ?? null,
@@ -97,7 +99,7 @@ export function normalizeSnapshot(snapshot, supplied = {}, runtime = {}) {
       processInfo,
       preview,
       prompt: promptByPane[id] ?? (piSessionId ? promptBySession[piSessionId] : null) ?? null,
-      recap: recapByPane[id] ?? (piSessionId ? recapBySession[piSessionId] : null) ?? { latest: null, lastAttempt: null },
+      recap: recapBySourcePane[id] ?? recapByPane[id] ?? (piSessionId ? recapBySession[piSessionId] : null) ?? { latest: null, lastAttempt: null },
       tokens: nativePane.tokens ?? {},
     };
     tabs[nativePane.tab_id]?.paneIds.push(id);

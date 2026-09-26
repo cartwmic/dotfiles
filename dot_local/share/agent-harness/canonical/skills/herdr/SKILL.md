@@ -62,10 +62,13 @@ separate fields; a prompt is not a recap, and missing/failed recaps do not hide
 live pane information.
 
 Panes and tabs may be automatically labeled using available Herdr metadata and
-published recaps; workspaces are never auto-named. Preserve any manual pane or
-tab label. Only the owner's explicit return-to-automatic action for that exact
-pane/tab allows naming automation to resume. A tab containing unrelated agents
-should represent both available tasks. Pi session names and identities are not
+eligible published Pi-session recaps; workspaces are never auto-named. A
+manually published single recap with `--source-id` equal to the native pane ID
+appears in that pane's detail, including failed-attempt status, but does not
+drive Pi automatic naming. Preserve any manual pane or tab label. Only the
+owner's explicit return-to-automatic action for that exact pane/tab allows
+naming automation to resume. A tab containing unrelated agents should
+represent both available tasks. Pi session names and identities are not
 renamed. Non-Pi labels must not claim more than native metadata supports.
 
 The portable `session-recap` command works without Pi or Herdr. It accepts
