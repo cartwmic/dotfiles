@@ -1274,6 +1274,34 @@ def provider_process_matches(provider: dict[str, Any], root: Path) -> bool:
         and str(root.resolve()) in command
 
 
+def validate_recorded_scripted_provider(provider: Any, root: Path) -> dict[str, Any]:
+    expected_root = str(root.resolve())
+    if not isinstance(provider, dict) or provider.get("root") != expected_root:
+        raise ProofFailure("recorded scripted Pi provider is not scoped to this isolated run")
+    if not provider_process_matches(provider, root):
+        raise ProofFailure("recorded isolated scripted Pi provider is not running or does not match this run")
+    try:
+        ready = read_json(root / "scripted-provider-ready.json")
+    except (OSError, ValueError, ProofFailure) as exc:
+        raise ProofFailure("recorded scripted Pi provider has no valid readiness record") from exc
+    port = provider.get("port")
+    if (ready.get("pid") != provider.get("pid") or ready.get("root") != expected_root
+            or ready.get("host") != "127.0.0.1" or not isinstance(port, int) or not 1 <= port <= 65535
+            or ready.get("port") != port or provider.get("url") != f"http://127.0.0.1:{port}/v1"
+            or provider.get("release_file") != str(root / "scripted-provider-release-first")):
+        raise ProofFailure("recorded scripted Pi provider endpoint does not match this isolated run")
+    return provider
+
+
+def ensure_scripted_provider(root: Path, state: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
+    if "scripted_provider" in state:
+        return validate_recorded_scripted_provider(state["scripted_provider"], root)
+    provider = start_scripted_provider(root, env)
+    state["scripted_provider"] = provider
+    json_dump(root / PROOF_MARKER, state)
+    return validate_recorded_scripted_provider(provider, root)
+
+
 def stop_scripted_provider(root: Path, marker: dict[str, Any]) -> bool:
     provider = marker.get("scripted_provider")
     if not provider:
@@ -1359,9 +1387,7 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
     pi_bin = shutil.which("pi")
     if not pi_bin:
         raise ProofBlocked("Pi is not installed; the settlement journey cannot run")
-    provider = start_scripted_provider(root, env)
-    state["scripted_provider"] = provider
-    json_dump(root / PROOF_MARKER, state)
+    provider = ensure_scripted_provider(root, state, env)
     provider_url = provider["url"]
     Path(env["HERDR_OVERVIEW_PI_REPLY"]).write_text(scripted_pi_reply() + "\n", encoding="utf-8")
     provider_extension = root / "scripted-pi-provider.mjs"
@@ -1581,6 +1607,20 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
                 prompt_process.wait(timeout=5)
         except Exception:
             pass
+
+
+def scenario_pi_provider_start(run_id: str, base: Path | None) -> dict[str, Any]:
+    root, state, env = load_run(run_id, base)
+    if not state.get("server_started") or not state.get("wide_proof_passed"):
+        raise ProofBlocked("run herdr-prepare and herdr-wide first on this same isolated server")
+    provider = ensure_scripted_provider(root, state, env)
+    return {
+        "setup_only": True,
+        "run_id": run_id,
+        "provider_pid": provider["pid"],
+        "provider_root": provider["root"],
+        "provider_url": provider["url"],
+    }
 
 
 def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]:
@@ -2261,7 +2301,7 @@ def scenario_result(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("scenario", nargs="?", choices=[*SCENARIO_COMMANDS, "phone-client", "phone-source", "phone-record"])
+    parser.add_argument("scenario", nargs="?", choices=[*SCENARIO_COMMANDS, "pi-provider-start", "phone-client", "phone-source", "phone-record"])
     parser.add_argument("--run-id")
     parser.add_argument("--state-base", type=Path, help="override the private cache root; must be reused for every scenario")
     parser.add_argument("--adb-serial", help="explicit attached ADB emulator serial; UI input only, no app/config push")
@@ -2285,6 +2325,24 @@ def main(argv: list[str] | None = None) -> int:
     if not args.scenario:
         build_parser().print_help()
         return 0
+    if args.scenario == "pi-provider-start":
+        if not args.run_id:
+            print(json.dumps({"scenario": "pi-provider-start", "status": "FAIL", "reason": "--run-id is required"}))
+            return 1
+        try:
+            details = scenario_pi_provider_start(args.run_id, args.state_base)
+            print(json.dumps({"scenario": "pi-provider-start", "status": "READY", **details}, sort_keys=True), flush=True)
+            return 0
+        except ProofBlocked as exc:
+            print(json.dumps({"scenario": "pi-provider-start", "status": "BLOCKED", "reason": str(exc)}), flush=True)
+            return 2
+        except ProofFailure as exc:
+            print(json.dumps({"scenario": "pi-provider-start", "status": "FAIL", "reason": str(exc)}), flush=True)
+            return 1
+        except Exception as exc:
+            print(json.dumps({"scenario": "pi-provider-start", "status": "FAIL",
+                              "reason": f"{type(exc).__name__}: {bounded(str(exc), 2500)}"}), flush=True)
+            return 1
     if args.scenario == "phone-client":
         if not args.run_id:
             print(json.dumps({"status": "FAIL", "reason": "phone-client requires --run-id"}))
