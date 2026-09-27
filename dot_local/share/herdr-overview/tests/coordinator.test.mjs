@@ -219,3 +219,42 @@ test("a manual pane and tab rename during reconciliation are not overwritten", a
   assert.equal(state.displayNameOwnership["pane:ws-a:p1"].mode, "manual");
   assert.equal(state.displayNameOwnership["tab:ws-a:t1"].mode, "manual");
 });
+
+test("owner renames after policy evaluation survive each queued automatic write", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-queued-name-race-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const stateDir = path.join(root, "state");
+  const configPath = path.join(root, "config.toml");
+  await writeFile(configPath, '[theme]\nname = "nord"\nauto_switch = false\n');
+  const current = makeSnapshot();
+  current.tabs[0].label = "1";
+  let snapshots = 0;
+  const renames = [];
+  const api = {
+    async snapshot() {
+      snapshots += 1;
+      const observed = structuredClone(current);
+      if (snapshots === 2) {
+        // The earlier policy refresh has captured defaults; the owner edits
+        // land before its queued pane/tab renames reach Herdr.
+        current.panes[0].label = "Owner Proof Alpha shell";
+        current.tabs[0].label = "Owner Proof Alpha tab";
+      }
+      return observed;
+    },
+    async readPane() { return "recent output"; },
+    async processInfo() { return { foreground_processes: [{ name: "bash" }] }; },
+    async renamePane(id, label) { renames.push(["pane", id, label]); current.panes[0].label = label; },
+    async renameTab(id, label) { renames.push(["tab", id, label]); current.tabs[0].label = label; },
+  };
+
+  const state = await reconcileOverview({ api, stateDir, configPath, openPane: false });
+  assert.deepEqual(renames, []);
+  assert.equal(snapshots, 4, "each queued pane/tab write got a final native snapshot");
+  assert.equal(state.model.panes["ws-a:p1"].label, "Owner Proof Alpha shell");
+  assert.equal(state.model.tabs["ws-a:t1"].label, "Owner Proof Alpha tab");
+  assert.equal(state.displayNameOwnership["pane:ws-a:p1"].mode, "manual");
+  assert.equal(state.displayNameOwnership["pane:ws-a:p1"].observedLabel, "Owner Proof Alpha shell");
+  assert.equal(state.displayNameOwnership["tab:ws-a:t1"].mode, "manual");
+  assert.equal(state.displayNameOwnership["tab:ws-a:t1"].observedLabel, "Owner Proof Alpha tab");
+});

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { HerdrApi } from "./herdr-api.mjs";
 import { normalizeSnapshot } from "./model.mjs";
-import { evaluateDisplayNamePolicy, recordDisplayNameWrite } from "./display-name-policy.mjs";
+import { confirmDisplayNameWrite, evaluateDisplayNamePolicy, recordDisplayNameWrite } from "./display-name-policy.mjs";
 import { readRecapFields, sessionRecapDataRoot } from "./recap-store.mjs";
 import { reconcileRecapCoordinator, runSessionRecap } from "./recap-coordinator.mjs";
 import { scheduleDeadlineWakeup } from "./deadline-wakeup.mjs";
@@ -167,12 +167,14 @@ export async function reconcileOverview({
       excludedPaneIds,
     };
     let namePolicy = evaluateDisplayNamePolicy(snapshot, namingInputs);
-    // Pane/output reads can take long enough for an owner to rename a label.
-    // Recheck native labels immediately before writing any automatic names.
+    // Refresh after potentially slow pane reads, then confirm each queued
+    // target again immediately before its automatic rename.
     if (namePolicy.rename.length) {
       namePolicy = evaluateDisplayNamePolicy(await api.snapshot(), namingInputs);
     }
     for (const update of namePolicy.rename) {
+      const liveSnapshot = await api.snapshot();
+      if (!confirmDisplayNameWrite(namePolicy, liveSnapshot, update)) continue;
       try {
         if (update.kind === "pane") await api.renamePane(update.id, update.label);
         else await api.renameTab(update.id, update.label);
