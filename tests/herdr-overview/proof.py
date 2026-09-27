@@ -1098,20 +1098,22 @@ def overview_location(text: str) -> tuple[str, str] | None:
     return None
 
 
-def current_prompt_detail_visible(text: str, pane_id: str, prompt: str) -> bool:
+def current_prompt_detail_visible(text: str, pane_id: str, prompt: str, *, require_id: bool = True) -> bool:
     location = overview_location(text)
     if location not in (("Board", "detail"), ("Mosaic", "detail")):
         return False
     plain = plain_terminal(text)
     prompt_heading = "Current Pi prompt" if location[0] == "Board" else "CURRENT PI PROMPT"
     expected_prompt = "".join(prompt.split())
-    return (bool(expected_prompt) and f"[{pane_id}]" in plain and prompt_heading in plain
-            and expected_prompt in "".join(plain.split()))
+    return (bool(expected_prompt) and (not require_id or f"[{pane_id}]" in plain)
+            and prompt_heading in plain and expected_prompt in "".join(plain.split()))
 
 
-def open_pane_from_workspace(state: dict[str, Any], env: dict[str, str], pane_id: str) -> str:
-    # Cards prioritize task labels and can truncate their ID. The current exact
-    # presenter header and visible detail identify the actual selected pane.
+def open_pane_from_workspace(state: dict[str, Any], env: dict[str, str], pane_id: str,
+                             match_detail: Callable[[str], bool] | None = None) -> str:
+    # A long automatic task label can truncate the native ID in a narrow
+    # detail. A caller with a unique visible marker must verify identity by
+    # focusing the selected pane and checking Herdr's native snapshot.
     location = overview_location(overview_text(state, env))
     if not location or location[1] != "workspace":
         raise ProofFailure("pane navigation did not start from a recognized current workspace header")
@@ -1122,7 +1124,7 @@ def open_pane_from_workspace(state: dict[str, Any], env: dict[str, str], pane_id
             lambda: (lambda text: text if overview_location(text) == (presenter, "detail") else None)(overview_text(state, env)),
             "workspace selection to open a pane detail", timeout=4,
         )
-        if f"[{pane_id}]" in detail:
+        if f"[{pane_id}]" in detail or (match_detail is not None and match_detail(detail)):
             return detail
         send_overview_key(state, env, "esc")
         wait_for(
@@ -2030,9 +2032,16 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         raise ProofFailure("the moved Pi pane's tab is not reachable in the native target workspace")
     # Native active_tab_id is not the overview's selection. Its own j navigation
     # visits panes across tabs; pre-advancing from the native tab can skip one.
-    moved_detail = open_pane_from_workspace(state, env, new_pane_id)
-    if not current_prompt_detail_visible(moved_detail, new_pane_id, post_move_prompt):
-        raise ProofFailure("rekeyed pane detail did not visibly show its native ID, current-prompt heading, and full post-move Pi prompt")
+    moved_detail = open_pane_from_workspace(
+        state, env, new_pane_id,
+        match_detail=lambda detail: current_prompt_detail_visible(
+            detail, new_pane_id, post_move_prompt, require_id=False),
+    )
+    if not current_prompt_detail_visible(moved_detail, new_pane_id, post_move_prompt, require_id=False):
+        raise ProofFailure("rekeyed pane detail did not visibly show the current-prompt heading and full post-move Pi prompt")
+    send_overview_key(state, env, "f")
+    wait_for(lambda: True if snapshot(state).get("focused_pane_id") == new_pane_id else None,
+             "the overview to focus the actual rekeyed native Pi pane", timeout=10)
 
     remaining = actual - time.time()
     if remaining > 0:
@@ -2079,6 +2088,7 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         "old_workspace_recap_unchanged_after_move": True,
         "current_prompt_written_to_rekeyed_pane": current_prompt.get("pane_id") == new_pane_id,
         "current_prompt_visible_in_rekeyed_detail": True,
+        "selected_rekeyed_pane_confirmed_by_native_focus": True,
         "published_recap_id": published_id,
         "workspace_id": publication_workspace_id,
         "membership_lookup": "real Pi adapter pane.current caller_pane_id over isolated socket",

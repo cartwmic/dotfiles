@@ -63,6 +63,23 @@ class OverviewNavigationTest(unittest.TestCase):
         self.assertIn("[w2:p3]", result)
         self.assertEqual(keys, ["enter", "esc", "j", "enter", "esc", "j", "enter"])
 
+    def test_truncated_auto_name_requires_unique_visible_prompt_before_native_focus(self):
+        prompt = "After the move, report the current pane state."
+        visible = [
+            "Herdr Overview · Board · workspace\nBravo [w2]",
+            "Herdr Overview · Board · pane detail\nOwner shell [w2:p1]\nCurrent Pi prompt\nUnavailable",
+            "Herdr Overview · Board · workspace\nBravo [w2]",
+            f"Herdr Overview · Board · pane detail\nRecent work is complete. Present state: read…\nCurrent Pi prompt\n{prompt}",
+        ]
+        matcher = lambda detail: proof.current_prompt_detail_visible(
+            detail, "w2:p3", prompt, require_id=False)
+        with patch.object(proof, "overview_text", side_effect=visible), \
+                patch.object(proof, "send_overview_key") as send_key:
+            result = proof.open_pane_from_workspace({}, {}, "w2:p3", match_detail=matcher)
+        self.assertTrue(matcher(result))
+        self.assertFalse(proof.current_prompt_detail_visible(result, "w2:p3", prompt))
+        self.assertEqual([call.args[2] for call in send_key.call_args_list], ["enter", "esc", "j", "enter"])
+
     def test_opens_mosaic_pane_detail(self):
         visible = [
             "Herdr Overview · Mosaic · workspace\nAlpha [w1]",
