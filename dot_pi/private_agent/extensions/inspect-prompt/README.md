@@ -1,119 +1,112 @@
 # inspect-prompt
 
-This extension provides two local editor snapshots:
+## Overview
 
-- `/inspect-prompt` opens the assembled system prompt.
-- `/inspect-session` or **Ctrl+Alt+E** opens the current conversation.
+This Pi extension opens local, read-only editor snapshots of two different
+things: the assembled system prompt and the current conversation. Use the
+first to see the instructions Pi loaded. Use the second to read or search the
+conversation while an answer is still streaming. Editor changes are discarded.
 
-## System prompt snapshot
+The extension is managed from this chezmoi source tree on the `personal` and
+`axon-work-computer` profiles. Termux skips Pi. Its agent-facing procedure is
+in [AGENTS.md](./AGENTS.md).
 
-`/inspect-prompt` opens a **snapshot** of Pi's currently assembled system
-prompt (`ctx.getSystemPrompt()` at invoke time) in the same external editor Pi
-uses for the user-query box (`settings.externalEditor`, else `$VISUAL`, else
-`$EDITOR`, else `nano` / `notepad`). The document includes agents files,
-appendments, skills, and other prompt contributions already loaded into that
-assembly. It is **not** the conversation transcript and **not** the raw
-provider HTTP payload after per-request rewrites.
+## Setup
 
-Edits in the editor are discarded. Closing the editor returns to the Pi TUI.
-The command does not submit a user query or start an agent turn. If there is no
-interactive UI (`pi --print` / json), it returns without waiting on an editor;
-if the agent is still running, it notifies and returns without opening the
-system-prompt editor.
+Pi needs an interactive TUI and an external editor. `/inspect-session` also
+requires fullscreen mode (`tuiMode: "fullscreen"`); the managed desktop
+settings enable it. The project `.pi/settings.json` `externalEditor` key takes
+precedence over the Pi-global key. If neither supplies a usable command, it tries `$VISUAL`, `$EDITOR`,
+then `nano` (or `notepad` on Windows). The editor command is split on spaces,
+so an executable path containing spaces needs a wrapper on `PATH`.
 
-## Conversation snapshot
-
-Use `/inspect-session` or **Ctrl+Alt+E** to open the active conversation in
-Pi's configured external editor (`externalEditor`, then `$VISUAL`, `$EDITOR`,
-then Pi's platform default). The command and shortcut work while the agent is
-streaming. The snapshot includes finalized messages on the current session
-branch, assistant/tool progress already emitted to Pi, and user `!` / `!!`
-Bash output currently displayed in chat or pending. Completed chat components are
-reconciled against saved branch results by command and output occurrence. Running
-components are kept even when an older identical command remains in history.
-Completed pending components are reconciled only against matching Bash results
-appended after the latest user message. That includes the interval after agent
-settlement when Pi has flushed a deferred result into the branch but has not yet
-moved its UI component out of the pending area; an older identical result before
-the current turn will not suppress still-deferred output. This avoids duplicates
-without dropping a new repeated command after compaction.
-
-The snapshot excludes system instructions and abandoned branches, does not
-include tool/system-prompt internals, and stays static while Pi continues
-working. Pi pauses its fullscreen TUI while the editor is open and resumes the
-same session on exit. The editor file is private and temporary; edits are
-removed and never applied to the conversation. The live-component reader is
-verified against Pi 0.87.1's fullscreen layout and fails closed on an
-unrecognized layout rather than silently omitting Bash output.
-
-The implementation is source-managed in this chezmoi tree. Do not hand-edit
-generated `~/.pi` files, apply this change to the live home, or restart/handoff
-the running Herdr server without separate rollout approval. Use the repository
-procedure for a targeted chezmoi dry-run before any separately approved apply.
-
-## Interactive scenario proof
-
-Run the outer-path scenario from the chezmoi source checkout:
+From the chezmoi source root, preview the managed destination:
 
 ```sh
-python3 dot_pi/private_agent/extensions/inspect-prompt/scenario.py
+chezmoi --source "$PWD" apply --dry-run --verbose "$HOME/.pi/agent/extensions/inspect-prompt"
 ```
 
-It starts a private named Herdr server and PTY-attached client, launches Pi in a
-Herdr pane with a scripted faux provider and configured dummy editor, and
-writes synthetic editor receipts and screen captures to a private temporary
-directory. Pass `--artifact-dir PATH` to retain them at a chosen location. The
-Ctrl+Alt+E press/release bytes go through the attached client PTY (not the pane
-input API); before each shortcut the scenario selects the Pi pane through that
-client and verifies focus at editor open and return. It proves bottom-follow
-independently, then scrolls up during active assistant text and active tool
-updates, requiring further streamed progress while the same passage remains
-nearby and the latest-message affordance stays visible. It captures partial
-assistant/tool output plus idle, running, deferred-complete, and
-post-settlement `!` output.
-A fixture-only TUI probe confirms the completed pending-dock component and
-persisted Bash result coexist after agent settlement without sending another
-normal user prompt; the actual shortcut receipt must contain its command and
-unique output exactly once. It also
-checks a repeated `!` command after real Pi compaction: that receipt asserts
-both repeated outputs and the finalized `scenario_stream_tool` assistant call
-exactly once, then checks branch exclusion and a subsequent turn in the same Pi
-process. It fails closed if the client route or any snapshot assertion misses;
-the outcome receipt lists receipts, transcript, and cleanup result. It never
-contacts a live model or controls the default Herdr session.
-
-## Herdr scrollback
-
-The Pi-specific shortcut does not remap Herdr. Herdr's source config still
-assigns `prefix+e` for non-Pi pane scrollback; the isolated host result below
-distinguishes that config from verified key routing.
-
-The isolated non-Pi host check is reproducible with:
+After approval to roll out the source, apply that destination and start a new
+Pi process:
 
 ```sh
+chezmoi --source "$PWD" apply "$HOME/.pi/agent/extensions/inspect-prompt"
+pi
+```
+
+Applying does not restart the owner's Herdr server. This repository's
+`AGENTS.md` owns apply and conflict procedure; an edit to this README alone
+does not authorize a live apply.
+
+## Usage
+
+`/inspect-prompt` opens Pi's assembled system prompt at invocation time,
+including loaded agent instructions and skills. It works when Pi is idle. The
+file is a snapshot of `ctx.getSystemPrompt()`, so provider-side per-request
+rewrites are outside its scope. The command does not submit a query. When Pi
+is busy it reports that the prompt is available once the agent is idle.
+
+`/inspect-session` or **Ctrl+Alt+E** opens the active conversation even while
+Pi streams. It includes saved messages on the current branch, visible
+assistant/tool progress, compaction summaries, and displayed or pending user
+`!` / `!!` Bash output. Completed and running Bash output is reconciled so a
+repeated command after compaction still appears without a duplicate of the
+same execution. The snapshot excludes system instructions, internal thinking,
+and abandoned branches. It stays fixed while the editor is open; closing the
+editor returns to the same Pi session without applying any edits.
+
+Ctrl+Alt+E is Pi-specific. Herdr's `prefix+e` continues to open scrollback for
+a selected non-Pi pane.
+
+## Validation
+
+From the chezmoi source root, run the focused tests and the private-session
+journeys after changing snapshot or shortcut behavior:
+
+```sh
+(cd dot_pi/private_agent/extensions/inspect-prompt && node --test)
+python3 dot_pi/private_agent/extensions/inspect-prompt/scenario.py
 python3 dot_pi/private_agent/extensions/inspect-prompt/herdr-scenario.py
 ```
 
-It creates a private named Herdr 0.9.1 session, attaches a real client to a
-PTY, and checks next/previous-tab and left/right-pane navigation. Its dummy
-editor expects `T4_NONPI_SCROLLBACK_FIRST`, then
-`T4_NONPI_SCROLLBACK_MIDDLE`, then `T4_NONPI_SCROLLBACK_LAST` exactly once
-in the selected non-Pi pane's scrollback; markers from another pane and tab
-must be absent. It stops and deletes only its own named session and removes
-its temporary root.
+`scenario.py` launches installed Pi in a private Herdr 0.9.1 client, with a
+scripted provider and dummy editor. It routes Ctrl+Alt+E through that client,
+checks eight editor receipts, and observes a scrolled-up passage during
+assistant-text and tool streaming. The receipts cover partial output,
+running and post-settlement Bash output, repeated commands after compaction,
+branch exclusion, editor return, and a subsequent Pi turn. Bottom-follow is
+checked separately. The script writes an `outcome.json` and editor receipts;
+pass `--artifact-dir PATH` to keep them in a chosen directory.
 
-Host result (Herdr 0.9.1 / protocol 22): **PASS**. The real PTY-attached client
-used `prefix+n` and `prefix+p` to navigate tabs, then `prefix+l` and
-`prefix+h` to move between panes. From the selected non-Pi pane, `prefix+e`
-launched the configured dummy editor through the client key path (not the API
-substitute) exactly once. The editor contained
-`T4_NONPI_SCROLLBACK_FIRST`, `T4_NONPI_SCROLLBACK_MIDDLE`, and
-`T4_NONPI_SCROLLBACK_LAST` exactly once and in that order; markers from the
-other pane and tab were absent. Herdr returned to the same pane, navigation
-still worked, and Herdr removed its temporary scrollback file.
+`herdr-scenario.py` checks tab/pane navigation and the actual non-Pi
+`prefix+e` editor dispatch in its own Herdr session. Its scrollback receipt
+contains the selected pane's ordered markers once and omits markers from the
+other pane and tab. Both scripts clean up only their private sessions. The
+journeys exercise installed Pi and Herdr processes with a dummy editor and
+scripted model; they do not prove a live apply, real-model behavior, or
+physical-keyboard delivery. The Pi journey currently exercises
+`/inspect-session`. For a change to `/inspect-prompt`, also require a real
+Pi TUI command-to-dummy-editor receipt showing the assembled prompt, editor
+return, and no submitted query; the agent procedure in [AGENTS.md](./AGENTS.md)
+sets that completion boundary.
 
-The test detached its client, stopped and deleted only its private named
-session, removed its private temporary root, and did not touch the owner's
-server. Herdr bindings remain unchanged. This non-Pi `prefix+e` path opens the
-selected pane's Herdr scrollback; Pi's **Ctrl+Alt+E** alternative above opens a
-static snapshot of the Pi conversation instead.
+## Limits and troubleshooting
+
+The conversation reader depends on Pi 0.87.1's private fullscreen component
+layout for live Bash output. An unsupported-layout error can also mean Pi
+is in inline mode; set `tuiMode` to `fullscreen` and start a new Pi process.
+If a Pi upgrade changes the fullscreen layout, `/inspect-session` stops before
+opening the editor. `scenario.py` pins Pi 0.87.1 and Herdr 0.9.1; `herdr-scenario.py` pins
+Herdr 0.9.1. On another version, they report BLOCKED before exercising the
+editor. Check the changed layout or key route, update the reader and test
+pins/fixtures after verifying compatibility, then rerun the private journeys.
+BLOCKED is no validation. The snapshot is local and temporary; it cannot
+follow edits or serve as a saved transcript.
+
+If `/inspect-prompt` does nothing during a turn, wait for Pi to become idle.
+If it reports "Opened" but no editor appeared, its current command path did
+not surface a spawn failure; check the editor command or use `/inspect-session`
+to get a launch error. If `/inspect-session` reports that it needs an
+interactive TUI, start Pi interactively; `pi --print` has no editor UI. For an
+editor launch error, check the configured command before blaming the shortcut. If the command works but Ctrl+Alt+E does not arrive through Herdr,
+run `scenario.py` on its pinned Pi/Herdr versions to inspect the client route.
