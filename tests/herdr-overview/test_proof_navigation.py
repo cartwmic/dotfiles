@@ -69,6 +69,19 @@ class OverviewNavigationTest(unittest.TestCase):
         truncated = board.replace(prompt, prompt[:-8])
         self.assertFalse(proof.current_prompt_detail_visible(truncated, "w2:p3", prompt))
 
+    def test_auto_name_proof_uses_public_scoped_pane_and_tab_action_contexts(self):
+        with patch.object(proof, "api_request") as request:
+            proof.invoke_auto_name({"socket_path": "/isolated/herdr.sock"}, "pane", "w1:p3")
+            proof.invoke_auto_name({"socket_path": "/isolated/herdr.sock"}, "tab", "w1:t2")
+        self.assertEqual(request.call_args_list, [
+            call({"socket_path": "/isolated/herdr.sock"}, "plugin.action.invoke", {
+                "action_id": "overview.auto_name_pane", "context": {"focused_pane_id": "w1:p3"},
+            }),
+            call({"socket_path": "/isolated/herdr.sock"}, "plugin.action.invoke", {
+                "action_id": "overview.auto_name_tab", "context": {"tab_id": "w1:t2"},
+            }),
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

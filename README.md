@@ -207,7 +207,9 @@ summaries. Panes and tabs can be auto-named from available metadata and
 eligible published Pi-session recaps; manually published pane-source recaps
 appear in pane detail but do not drive automatic names. Workspaces are not
 auto-named, and manual pane/tab labels remain until explicitly returned to
-automatic naming.
+automatic naming. Reconciliation rechecks each target label immediately before
+an automatic rename, but Herdr 0.9.1 has no atomic conditional rename, so a
+manual edit in the final snapshot-to-write interval can still race.
 
 The overview uses Herdr's active configured theme. At the configured
 `[ui].mobile_width_threshold` (64 by default), it presents a summary-first

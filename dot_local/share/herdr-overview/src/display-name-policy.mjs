@@ -202,6 +202,26 @@ export function evaluateDisplayNamePolicy(snapshot, {
   return { snapshot: nextSnapshot, ownership: nextOwnership, rename };
 }
 
+export function confirmDisplayNameWrite(policy, liveSnapshot, { kind, id }) {
+  const collectionName = kind === "pane" ? "panes" : "tabs";
+  const field = kind === "pane" ? "pane_id" : "tab_id";
+  const evaluated = policy.snapshot[collectionName].find((candidate) => candidate[field] === id);
+  const live = (liveSnapshot?.[collectionName] ?? []).find((candidate) => candidate[field] === id);
+  if (!evaluated || !live) return false;
+
+  const observedLabel = normalizedLabel(live.label);
+  if (observedLabel === normalizedLabel(evaluated.label)) return true;
+
+  evaluated.label = live.label ?? null;
+  const entry = policy.ownership[keyFor(kind, id)];
+  if (entry) {
+    entry.mode = "manual";
+    entry.observedLabel = observedLabel;
+    entry.defaultLabel = null;
+  }
+  return false;
+}
+
 export function recordDisplayNameWrite(policy, { kind, id, label }) {
   const collection = kind === "pane" ? policy.snapshot.panes : policy.snapshot.tabs;
   const field = kind === "pane" ? "pane_id" : "tab_id";

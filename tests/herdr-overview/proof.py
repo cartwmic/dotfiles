@@ -1047,6 +1047,19 @@ def invoke_overview(state: dict[str, Any], env: dict[str, str]) -> None:
     api_request(state, "plugin.action.invoke", {"action_id": "overview.reconcile"})
 
 
+def invoke_auto_name(state: dict[str, Any], kind: str, native_id: str) -> None:
+    if kind == "pane":
+        context = {"focused_pane_id": native_id}
+    elif kind == "tab":
+        context = {"tab_id": native_id}
+    else:
+        raise ProofFailure(f"unsupported automatic-name target: {kind}")
+    api_request(state, "plugin.action.invoke", {
+        "action_id": f"overview.auto_name_{kind}",
+        "context": context,
+    })
+
+
 def plugin_state(root: Path) -> dict[str, Any]:
     return read_json(overview_state_path(root))
 
@@ -1485,6 +1498,32 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         if "".join(current_prompt.split()) not in visible_prompt or "CURRENTPIPROMPT" not in visible_prompt:
             raise ProofFailure("the live selected-pane view omitted the current Pi prompt")
 
+        # Return this already-recognized Pi pane to automatic naming while its
+        # live prompt is visible but before any successful recap exists.
+        pane_before_publication_snapshot = snapshot(state)
+        pane_before_publication = one_by(pane_before_publication_snapshot.get("panes", []), "pane_id", pane_id)
+        agent_before_publication = next((item for item in pane_before_publication_snapshot.get("agents", [])
+                                         if item.get("pane_id") == pane_id), {})
+        if pane_before_publication.get("agent") != "pi" and agent_before_publication.get("agent") != "pi":
+            raise ProofFailure("the live prompt fixture is not recognized by Herdr as a Pi pane")
+        if pane_before_publication.get("label") != "Owner Pi proof pane":
+            raise ProofFailure("the Pi fixture label changed before its first successful publication")
+        latest_before_publication, _attempt_before_publication = read_latest_pi_record(data_root, pane_id)
+        if latest_before_publication and latest_before_publication.get("status") == "published":
+            raise ProofFailure("the Pi naming gate started with an already-published recap")
+        invoke_auto_name(state, "pane", pane_id)
+
+        def pi_name_waits_for_publication() -> dict[str, Any] | None:
+            current = plugin_state(root)
+            native = one_by(snapshot(state).get("panes", []), "pane_id", pane_id)
+            owner = (current.get("displayNameOwnership") or {}).get(f"pane:{pane_id}") or {}
+            prompt = (((current.get("model") or {}).get("panes") or {}).get(pane_id) or {}).get("prompt") or {}
+            return current if owner.get("mode") == "automatic" and native.get("label") == "Owner Pi proof pane" \
+                and prompt.get("text") == current_prompt and prompt.get("working") is True else None
+
+        wait_for(pi_name_waits_for_publication,
+                 "automatic Pi naming to remain unchanged while only the live prompt is available", timeout=15)
+
         Path(provider["release_file"]).touch()
         try:
             out, err = prompt_process.communicate(timeout=140)
@@ -1501,6 +1540,15 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         )
         if first_latest.get("summary") != SUCCESS_SUMMARY or first_latest.get("workspace_id") != state["fixture"]["workspaces"][0]["workspace_id"]:
             raise ProofFailure("settled Pi recap is missing or has incorrect publication-time workspace attribution")
+
+        def pi_name_follows_successful_publication() -> dict[str, Any] | None:
+            current = plugin_state(root)
+            native = one_by(snapshot(state).get("panes", []), "pane_id", pane_id)
+            owner = (current.get("displayNameOwnership") or {}).get(f"pane:{pane_id}") or {}
+            return current if owner.get("mode") == "automatic" and native.get("label") == first_latest["summary"] else None
+
+        wait_for(pi_name_follows_successful_publication,
+                 "automatic Pi naming to follow its successful recap publication", timeout=20)
         first_workspace_id = first_latest["workspace_id"]
         recap_state_path = overview_state_path(root)
         after_publish_state = wait_for(
@@ -1619,8 +1667,8 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         manual_detail = open_pane_from_workspace(state, env, pane_id)
         if manual_summary not in manual_detail or "Latest attempt failed" not in manual_detail:
             raise ProofFailure("selected-pane detail omitted the manual recap or its latest failure status")
-        if manual_pane.get("label") != "Owner Pi proof pane":
-            raise ProofFailure("manual recap incorrectly drove Pi-only automatic pane naming")
+        if manual_pane.get("label") != first_latest["summary"]:
+            raise ProofFailure("manual recap changed the Pi name away from its successful Pi-session publication")
 
         return {
             "pi_pane_id": pane_id,
@@ -1633,6 +1681,8 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
             "failed_recap_preserved_latest_and_deadline": True,
             "overview_displays_session_recap": True,
             "manual_pane_source_recap_and_failure_visible": True,
+            "pi_name_waited_for_successful_publication": True,
+            "published_pi_name": first_latest["summary"],
             "manual_recap_did_not_drive_pi_naming": True,
             "response_provider": "scripted local OpenAI-compatible SSE provider",
         }
@@ -1685,6 +1735,9 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     prior_recap, _attempt = read_latest_pi_record(data_root, old_pane_id)
     if not prior_recap or prior_recap.get("status") != "published":
         raise ProofBlocked("run pi-grouped first to publish a Pi recap on the fixture pane")
+    pi_task_label = prior_recap.get("summary")
+    if not isinstance(pi_task_label, str) or not pi_task_label.strip():
+        raise ProofFailure("the published Pi recap has no task label for the automatic tab proof")
     session_id = prior_recap.get("source_id")
     before = snapshot(state)
     old_pane = one_by(before.get("panes", []), "pane_id", old_pane_id)
@@ -1703,6 +1756,89 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     pre_move_prompt = read_pi_prompt(data_root, old_pane_id)
     if not pre_move_prompt or not pre_move_prompt.get("text"):
         raise ProofFailure("the fixture lacks a current Pi prompt to follow through the native pane move")
+
+    # Exercise name ownership on the real server after the phone journey, so
+    # these temporary labels cannot alter the phone's named fixture. The shell
+    # edit after an automatic write must survive reconciliation; only the
+    # explicit public reset may return it to the automatic candidate.
+    alpha = state["fixture"]["workspaces"][0]
+    root_pane_id = alpha["root_pane_id"]
+    root_tab_id = alpha["root_tab_id"]
+    names_before = snapshot(state)
+    root_pane_before = one_by(names_before.get("panes", []), "pane_id", root_pane_id)
+    root_tab_before = one_by(names_before.get("tabs", []), "tab_id", root_tab_id)
+    if root_pane_before.get("tab_id") != root_tab_id or old_pane.get("tab_id") != root_tab_id:
+        raise ProofFailure("the shell and published Pi tasks no longer share their native tab")
+    original_shell_label = root_pane_before.get("label")
+    original_tab_label = root_tab_before.get("label")
+    if not original_shell_label or not original_tab_label:
+        raise ProofFailure("the name ownership fixture lost its owner-set shell or tab label")
+
+    seed_label = f"Owner AC4 reset seed {run_id}"
+    herdr_cmd(state, env, "pane", "rename", root_pane_id, seed_label)
+    invoke_overview(state, env)
+    wait_for(
+        lambda: (lambda current: current if current.get("label") == seed_label
+                 and ((plugin_state(root).get("displayNameOwnership") or {}).get(f"pane:{root_pane_id}") or {}).get("mode") == "manual"
+                 else None)(one_by(snapshot(state).get("panes", []), "pane_id", root_pane_id)),
+        "the native shell's owner-set seed label to be recorded as manual", timeout=15,
+    )
+    invoke_auto_name(state, "pane", root_pane_id)
+
+    def automatic_shell_label() -> str | None:
+        current = plugin_state(root)
+        native = one_by(snapshot(state).get("panes", []), "pane_id", root_pane_id)
+        ownership = (current.get("displayNameOwnership") or {}).get(f"pane:{root_pane_id}") or {}
+        label = native.get("label")
+        return label if ownership.get("mode") == "automatic" and isinstance(label, str) and label.strip() and label != seed_label else None
+
+    auto_shell_label = wait_for(automatic_shell_label, "the public pane reset to apply an automatic shell name", timeout=15)
+    manual_followup = f"Owner AC4 preserved edit {run_id}"
+    herdr_cmd(state, env, "pane", "rename", root_pane_id, manual_followup)
+    invoke_overview(state, env)
+
+    def manual_shell_label() -> dict[str, Any] | None:
+        current = plugin_state(root)
+        native = one_by(snapshot(state).get("panes", []), "pane_id", root_pane_id)
+        ownership = (current.get("displayNameOwnership") or {}).get(f"pane:{root_pane_id}") or {}
+        return current if native.get("label") == manual_followup and ownership.get("mode") == "manual" else None
+
+    wait_for(manual_shell_label, "a later owner pane rename to survive real reconciliation", timeout=15)
+    invoke_auto_name(state, "pane", root_pane_id)
+    if wait_for(automatic_shell_label, "the explicit pane reset to resume automatic naming", timeout=15) != auto_shell_label:
+        raise ProofFailure("automatic pane reset did not restore the same live task name")
+
+    invoke_auto_name(state, "tab", root_tab_id)
+
+    def automatic_two_task_tab() -> dict[str, Any] | None:
+        current = plugin_state(root)
+        native = one_by(snapshot(state).get("tabs", []), "tab_id", root_tab_id)
+        ownership = (current.get("displayNameOwnership") or {}).get(f"tab:{root_tab_id}") or {}
+        label = native.get("label") or ""
+        if ownership.get("mode") == "automatic" and " + " in label \
+                and auto_shell_label in label and pi_task_label in label:
+            return label
+        return None
+
+    combined_tab = wait_for(automatic_two_task_tab,
+                            "the reset tab name to represent both its shell and published Pi tasks", timeout=15)
+    herdr_cmd(state, env, "pane", "rename", root_pane_id, original_shell_label)
+    herdr_cmd(state, env, "tab", "rename", root_tab_id, original_tab_label)
+    invoke_overview(state, env)
+
+    def restored_owner_names() -> dict[str, Any] | None:
+        current = plugin_state(root)
+        live = snapshot(state)
+        pane = one_by(live.get("panes", []), "pane_id", root_pane_id)
+        tab = one_by(live.get("tabs", []), "tab_id", root_tab_id)
+        owners = current.get("displayNameOwnership") or {}
+        if (pane.get("label") == original_shell_label and tab.get("label") == original_tab_label
+                and (owners.get(f"pane:{root_pane_id}") or {}).get("mode") == "manual"
+                and (owners.get(f"tab:{root_tab_id}") or {}).get("mode") == "manual"):
+            return current
+        return None
+
+    wait_for(restored_owner_names, "the original owner labels to be restored before pane.move", timeout=15)
 
     source_workspace_id = old_pane["workspace_id"]
     prior_source_group = latest_entry(data_root, "workspace", source_workspace_id)
@@ -1949,6 +2085,10 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         "published_recap_id": published_id,
         "workspace_id": publication_workspace_id,
         "membership_lookup": "real Pi adapter pane.current caller_pane_id over isolated socket",
+        "manual_rename_survived_reconciliation": True,
+        "automatic_pane_reset_restored": auto_shell_label,
+        "automatic_tab_contains_shell_and_published_pi_tasks": combined_tab,
+        "owner_labels_restored_before_move": True,
         "group_record_id": group_record["record_id"],
         "group_contains_latest_moved_pi_and_manual_non_pi_recaps": True,
         "closed_workspace_record_id": closed_workspace_record_id,

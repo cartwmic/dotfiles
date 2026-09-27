@@ -328,7 +328,7 @@ test("auto-name pane action completes through the plugin entrypoint and scripted
     child.once("close", resolve);
   });
   assert.equal(exitCode, 0, `${stdout}\n${stderr}`);
-  assert.deepEqual(calls.map((call) => call.method), ["session.snapshot", "pane.read", "pane.process_info", "session.snapshot", "pane.rename"]);
+  assert.deepEqual(calls.map((call) => call.method), ["session.snapshot", "pane.read", "pane.process_info", "session.snapshot", "session.snapshot", "pane.rename"]);
   assert.deepEqual(calls.at(-1).params, { pane_id: "ws-a:p1", label: "node · app" });
   assert.equal(nativeSnapshot.panes[0].label, "node · app");
   assert.equal(nativeSnapshot.tabs[0].label, "Manual tab");
