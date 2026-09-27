@@ -35,6 +35,34 @@ class OverviewNavigationTest(unittest.TestCase):
         self.assertEqual(proof.overview_location(result), ("Board", "detail"))
         send_key.assert_called_once_with({}, {}, "enter")
 
+    def test_exhaustive_workspace_navigation_reaches_a_moved_pane_across_tabs(self):
+        # Native active tab may be t2 while the overview cursor starts at t1.
+        # The overview's own j sequence, not a native-tab offset, reaches t3.
+        keys = []
+        selected = 0
+        level = "workspace"
+        panes = ("w2:p1", "w2:p2", "w2:p3")
+
+        def visible(_state, _env):
+            header = "Herdr Overview · Board · pane detail" if level == "detail" else "Herdr Overview · Board · workspace"
+            return f"{header}\nSelected [{panes[selected]}]"
+
+        def key(_state, _env, value):
+            nonlocal level, selected
+            keys.append(value)
+            if value == "enter":
+                level = "detail"
+            elif value == "esc":
+                level = "workspace"
+            elif value == "j":
+                selected = (selected + 1) % len(panes)
+
+        with patch.object(proof, "overview_text", side_effect=visible), \
+                patch.object(proof, "send_overview_key", side_effect=key):
+            result = proof.open_pane_from_workspace({}, {}, "w2:p3")
+        self.assertIn("[w2:p3]", result)
+        self.assertEqual(keys, ["enter", "esc", "j", "enter", "esc", "j", "enter"])
+
     def test_opens_mosaic_pane_detail(self):
         visible = [
             "Herdr Overview · Mosaic · workspace\nAlpha [w1]",
