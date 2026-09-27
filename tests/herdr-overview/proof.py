@@ -2026,13 +2026,10 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     workspace = one_by(live.get("workspaces", []), "workspace_id", target["workspace_id"])
     tab_order = workspace.get("tab_ids") or [item["tab_id"] for item in live.get("tabs", [])
                                                 if item.get("workspace_id") == target["workspace_id"]]
-    current_tab_id = workspace.get("active_tab_id")
     if not tab_order or moved_pane.get("tab_id") not in tab_order:
         raise ProofFailure("the moved Pi pane's tab is not reachable in the native target workspace")
-    if current_tab_id not in tab_order:
-        current_tab_id = tab_order[0]
-    for _ in range((tab_order.index(moved_pane["tab_id"]) - tab_order.index(current_tab_id)) % len(tab_order)):
-        send_overview_key(state, env, "]")
+    # Native active_tab_id is not the overview's selection. Its own j navigation
+    # visits panes across tabs; pre-advancing from the native tab can skip one.
     moved_detail = open_pane_from_workspace(state, env, new_pane_id)
     if not current_prompt_detail_visible(moved_detail, new_pane_id, post_move_prompt):
         raise ProofFailure("rekeyed pane detail did not visibly show its native ID, current-prompt heading, and full post-move Pi prompt")

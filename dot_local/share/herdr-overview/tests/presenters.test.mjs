@@ -1,5 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { normalizeSnapshot } from "../src/model.mjs";
 import { renderBoardDetail, renderBoardOverview, renderBoardWorkspace } from "../src/presenters/board.mjs";
 import { renderMosaicDetail, renderMosaicOverview, renderMosaicWorkspace } from "../src/presenters/mosaic.mjs";
@@ -117,6 +121,40 @@ function scenario() {
 function stripAnsi(value) {
   return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
 }
+
+test("changing only narrow pane detail leaves narrow overview/workspace and every wide level intact", async () => {
+  const { state } = scenario();
+  const beforeModel = JSON.stringify(state.model);
+  const narrow = [
+    () => renderBoardOverview(state, 48, 40, NOW),
+    () => renderBoardWorkspace({ ...state, journey: { ...state.journey, level: "workspace" } }, 48, 40),
+    () => renderBoardDetail({ ...state, journey: { ...state.journey, level: "pane" } }, 48, 40, NOW),
+  ];
+  const wide = [
+    () => renderMosaicOverview(state, 120, 40, NOW),
+    () => renderMosaicWorkspace({ ...state, journey: { ...state.journey, level: "workspace" } }, 120, 40),
+    () => renderMosaicDetail({ ...state, journey: { ...state.journey, level: "pane" } }, 120, 40, NOW),
+  ];
+  const baselineNarrow = narrow.map((render) => render());
+  const baselineWide = wide.map((render) => render());
+  const source = readFileSync(new URL("../src/presenters/board.mjs", import.meta.url), "utf8");
+  const original = " · Board · pane detail";
+  assert.equal(source.split(original).length, 2);
+  const directory = mkdtempSync(join(tmpdir(), "herdr-board-detail-proof-"));
+  try {
+    const changed = join(directory, "board.mjs");
+    writeFileSync(changed, source.replace(original, " · Board · independent detail change"));
+    const replacement = await import(pathToFileURL(changed).href);
+    assert.equal(replacement.renderBoardOverview(state, 48, 40, NOW), baselineNarrow[0]);
+    assert.equal(replacement.renderBoardWorkspace({ ...state, journey: { ...state.journey, level: "workspace" } }, 48, 40), baselineNarrow[1]);
+    assert.notEqual(replacement.renderBoardDetail({ ...state, journey: { ...state.journey, level: "pane" } }, 48, 40, NOW), baselineNarrow[2]);
+    assert.match(replacement.renderBoardDetail({ ...state, journey: { ...state.journey, level: "pane" } }, 48, 40, NOW), /independent detail change/);
+    assert.deepEqual(wide.map((render) => render()), baselineWide);
+    assert.equal(JSON.stringify(state.model), beforeModel);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("Board summarizes three workspaces, then keeps every tab and pane visible in grouped tiles", () => {
   const { state } = scenario();
