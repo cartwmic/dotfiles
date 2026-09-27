@@ -1177,6 +1177,15 @@ def overview_location(text: str) -> tuple[str, str] | None:
     return None
 
 
+def published_recap_detail_visible(text: str, summary: str) -> bool:
+    location = overview_location(text)
+    if location not in (("Board", "detail"), ("Mosaic", "detail")):
+        return False
+    heading = "Latest recap" if location[0] == "Board" else "LATEST PUBLISHED RECAP"
+    plain = plain_terminal(text)
+    return heading in plain and bool(summary.strip()) and "".join(summary.split()) in "".join(plain.split())
+
+
 def current_prompt_detail_visible(text: str, pane_id: str, prompt: str, *, require_id: bool = True) -> bool:
     location = overview_location(text)
     if location not in (("Board", "detail"), ("Mosaic", "detail")):
@@ -2048,7 +2057,7 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
              "the published manual pane-source recap to follow terminal identity after pane.move", timeout=20)
     select_workspace(state, env, target)
     manual_detail = open_pane_from_workspace(state, env, moved_manual_pane_id)
-    if "Latest recap" not in manual_detail or manual_source_record["summary"] not in manual_detail:
+    if not published_recap_detail_visible(manual_detail, manual_source_record["summary"]):
         raise ProofFailure("the rekeyed non-Pi pane detail omitted its published manual recap")
 
     def old_recap_and_prompt_in_new_detail() -> dict[str, Any] | None:

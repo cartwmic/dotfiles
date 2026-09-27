@@ -119,6 +119,15 @@ class OverviewNavigationTest(unittest.TestCase):
         self.assertEqual(proof.overview_location(result), ("Board", "workspace"))
         send_key.assert_called_once_with(state, {}, "enter")
 
+    def test_published_recap_detail_accepts_both_presenters_and_wrapped_summary(self):
+        summary = "Recent work is complete. Present state: ready for the next step."
+        board = "Herdr Overview · Board · pane detail\nLatest recap\nRecent work is complete. Present state:\nready for the next step."
+        mosaic = "Herdr Overview · Mosaic · selected pane\nLATEST PUBLISHED RECAP\n" + summary
+        self.assertTrue(proof.published_recap_detail_visible(board, summary))
+        self.assertTrue(proof.published_recap_detail_visible(mosaic, summary))
+        self.assertFalse(proof.published_recap_detail_visible(mosaic.replace("ready", "blocked"), summary))
+        self.assertFalse(proof.published_recap_detail_visible("Herdr Overview · Mosaic · workspace\n" + summary, summary))
+
     def test_current_prompt_detail_accepts_both_presenters_and_requires_full_visible_content(self):
         prompt = "After the move, report the complete current pane state."
         board = f"Herdr Overview · Board · pane detail\nPi [w2:p3]\nCurrent Pi prompt · settled\n{prompt}"

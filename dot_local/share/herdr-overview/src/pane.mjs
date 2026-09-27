@@ -123,16 +123,19 @@ export async function runOverviewPane({
   const statePath = path.join(stateDir, "overview.json");
   let outputSubscription = null;
   let subscribedPaneIds = "";
+  let subscriptionGeneration = 0;
   let cleaned = false;
   const syncOutputSubscription = async () => {
+    if (cleaned) return;
     const paneIds = Object.keys(state?.model?.panes ?? {}).sort();
     const key = paneIds.join("\n");
     if (key === subscribedPaneIds) return;
+    const generation = ++subscriptionGeneration;
     outputSubscription?.close();
     outputSubscription = null;
     subscribedPaneIds = "";
     if (paneIds.length) {
-      outputSubscription = await api.subscribe(paneIds.map((paneId) => ({
+      const subscription = await api.subscribe(paneIds.map((paneId) => ({
         type: "pane.output_matched",
         pane_id: paneId,
         source: "recent_unwrapped",
@@ -145,12 +148,17 @@ export async function runOverviewPane({
         const data = event?.data ?? event;
         const paneId = data?.pane_id;
         const text = data?.read?.text;
-        if (typeof text !== "string" || !state.model?.panes?.[paneId]) return;
+        if (cleaned || typeof text !== "string" || !state.model?.panes?.[paneId]) return;
         previewEventRevisions.set(paneId, (previewEventRevisions.get(paneId) ?? 0) + 1);
         livePreviews.set(paneId, text);
         state.model.panes[paneId].preview = text;
         draw();
       }, (error) => output.write(`\nOutput subscription failed: ${error.message}\n`));
+      if (cleaned || generation !== subscriptionGeneration) {
+        subscription.close();
+        return;
+      }
+      outputSubscription = subscription;
     }
     subscribedPaneIds = key;
   };
@@ -183,6 +191,7 @@ export async function runOverviewPane({
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
+    subscriptionGeneration++;
     stateWatcher.close();
     stopThemeWatch();
     output.off?.("resize", draw);

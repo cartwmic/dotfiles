@@ -76,6 +76,48 @@ test("live pane output refreshes the open view without competing for the plugin 
   }
 });
 
+test("overlapping output subscriptions all close when the overview quits", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-subscribe-race-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const stateDir = path.join(root, "state");
+  await mkdir(stateDir);
+  const statePath = path.join(stateDir, "overview.json");
+  await writeFile(statePath, JSON.stringify({ model }));
+  const configPath = path.join(root, "config.toml");
+  await writeFile(configPath, '[theme]\nname = "terminal"\n');
+  const input = new EventEmitter();
+  input.isTTY = true;
+  input.setRawMode = () => {};
+  input.resume = () => {};
+  input.pause = () => {};
+  const output = Object.assign(new EventEmitter(), {
+    columns: 100, rows: 24, isTTY: false, write: () => {},
+  });
+  const pending = [];
+  const closed = [];
+  const api = {
+    async subscribe() {
+      return await new Promise((resolve) => pending.push(resolve));
+    },
+  };
+  const until = async (predicate) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (predicate()) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error("overview subscription race did not reach the expected step");
+  };
+  const session = runOverviewPane({ api, stateDir, configPath, input, output });
+  await until(() => pending.length >= 1);
+  await writeFile(statePath, JSON.stringify({ model, generated_at: "later" }));
+  await until(() => pending.length >= 2);
+  for (const [index, resolve] of pending.entries()) resolve({ close: () => closed.push(index) });
+  await until(() => input.listenerCount("data") > 0);
+  input.emit("data", Buffer.from("q"));
+  await session;
+  assert.deepEqual(closed.sort(), [0, 1], "no subscription survives the closed overview process");
+});
+
 test("reopening reads current native output before showing a stale saved preview", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-reopen-output-"));
   t.after(() => rm(root, { recursive: true, force: true }));
