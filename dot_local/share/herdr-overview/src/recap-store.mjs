@@ -97,11 +97,24 @@ function mergeRecapFields(current, incoming) {
   };
 }
 
+export async function readCurrentPiPrompts(root = sessionRecapDataRoot()) {
+  try {
+    const files = await readdir(path.join(root, "prompts"), { withFileTypes: true });
+    const prompts = await Promise.all(files
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => readJson(path.join(root, "prompts", entry.name))));
+    return prompts.filter((prompt) => prompt?.schema_version === 1 && typeof prompt.session_id === "string");
+  } catch {
+    return [];
+  }
+}
+
 export async function readRecapFields(
   snapshot,
   root = sessionRecapDataRoot(),
   piTerminalIdsBySessionId = {},
   manualTerminalIdsBySourceId = {},
+  rekeyedPanes = [],
 ) {
   const latestIndex = await readJson(path.join(root, "latest.json"));
   const sources = Array.isArray(latestIndex?.sources) ? latestIndex.sources : [];
@@ -122,17 +135,12 @@ export async function readRecapFields(
 
   const promptsBySessionId = {};
   const promptsByPaneId = {};
-  try {
-    const promptFiles = await readdir(path.join(root, "prompts"), { withFileTypes: true });
-    for (const entry of promptFiles) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const prompt = await readJson(path.join(root, "prompts", entry.name));
-      if (prompt?.schema_version !== 1 || typeof prompt.session_id !== "string") continue;
-      promptsBySessionId[prompt.session_id] = prompt;
-      if (typeof prompt.pane_id === "string") promptsByPaneId[prompt.pane_id] = prompt;
-    }
-  } catch {
-    // Current prompts are optional; the live Herdr model remains complete without them.
+  const piTerminalIds = { ...piTerminalIdsBySessionId };
+  for (const prompt of await readCurrentPiPrompts(root)) {
+    promptsBySessionId[prompt.session_id] = prompt;
+    if (typeof prompt.pane_id === "string") promptsByPaneId[prompt.pane_id] = prompt;
+    const rekey = rekeyedPanes.find((pane) => pane.previousPaneId === prompt.pane_id);
+    if (rekey) piTerminalIds[prompt.session_id] = rekey.terminalId;
   }
 
   const panesByTerminalId = new Map((snapshot.panes ?? [])
@@ -141,7 +149,7 @@ export async function readRecapFields(
   // A Pi prompt can still carry the pane ID inherited before pane.move. Follow
   // the persisted session-to-terminal association to the current native ID;
   // Herdr 0.9.1 may not expose agent_session on the moved pane.
-  for (const [sessionId, terminalId] of Object.entries(piTerminalIdsBySessionId ?? {})) {
+  for (const [sessionId, terminalId] of Object.entries(piTerminalIds)) {
     const pane = panesByTerminalId.get(terminalId);
     const prompt = promptsBySessionId[sessionId];
     if (pane && prompt) promptsByPaneId[pane.pane_id] = prompt;
@@ -180,7 +188,7 @@ export async function readRecapFields(
   // Herdr can rekey a pane ID on pane.move. Use the durable terminal-ID
   // association learned while the published recap still named the live pane;
   // keep the old publication pane/workspace fields untouched for naming.
-  for (const [sessionId, terminalId] of Object.entries(piTerminalIdsBySessionId ?? {})) {
+  for (const [sessionId, terminalId] of Object.entries(piTerminalIds)) {
     const pane = panesByTerminalId.get(terminalId);
     const recap = piRecapsBySessionId[sessionId];
     if (pane && recap) recapsByPaneId[pane.pane_id] = mergeRecapFields(recapsByPaneId[pane.pane_id], recap);
@@ -205,6 +213,7 @@ export async function readRecapFields(
   return {
     promptsByPaneId,
     promptsBySessionId,
+    piTerminalIdsBySessionId: piTerminalIds,
     recapsByPaneId,
     piRecapsByPaneId,
     piRecapsBySessionId,

@@ -272,7 +272,7 @@ function promptRecord(dataRoot: string, sessionId: string): any {
 	return readJson(promptFile(dataRoot, sessionId));
 }
 
-test("interactive prompt stays separate; settled publication uses exact pane membership once", async () => {
+test("interactive prompt stays separate; settled publication rechecks exact pane membership", async () => {
 	const world = await createWorld();
 	try {
 		await withProcessEnv(world.env, async () => {
@@ -326,7 +326,7 @@ test("interactive prompt stays separate; settled publication uses exact pane mem
 			assert.equal(recap.source_kind, "pi-session");
 			assert.equal(recap.pane_id, "exact-pane");
 			assert.equal(recap.workspace_id, "workspace-exact");
-			assert.equal(world.calls.filter((call) => call.method === "pane.current").length, 2);
+			assert.equal(world.calls.filter((call) => call.method === "pane.current").length, 3);
 			assert.notEqual(prompt.text, recap.summary);
 			assert.match(readFileSync(world.capturePath, "utf8"), /Settled assistant answer\./);
 			assert.equal(world.calls.find((call) => call.method === "plugin.action.invoke").params.action_id, "overview.reconcile");
@@ -345,6 +345,38 @@ test("interactive prompt stays separate; settled publication uses exact pane mem
 			);
 			assert.equal(readTrace(world.tracePath).filter((line) => line.startsWith("cli prepare ")).length, 1);
 			assert.equal(world.calls.filter((call) => call.method === "plugin.action.invoke").length, 1);
+		});
+	} finally {
+		await world.close();
+	}
+});
+
+test("first Pi response moved before settlement rekeys prompt and prepared recap", async () => {
+	const world = await createWorld();
+	try {
+		await withProcessEnv(world.env, async () => {
+			const handlers = registeredHandlers();
+			const text = "First request before a native pane move.";
+			await handlers.get("input")!(
+				{ type: "input", source: "interactive", text },
+				fakeContext("first-move-session", "tui", false, []).ctx,
+			);
+			assert.equal(promptRecord(world.dataRoot, "first-move-session").pane_id, "exact-pane");
+			world.setCurrentPane({ pane_id: "moved-pane", workspace_id: "workspace-new" });
+			await handlers.get("agent_settled")!(
+				{}, fakeContext("first-move-session", "tui", true, responseEntry("First completed response.")).ctx,
+			);
+			await waitFor(() => existsSync(path.join(world.dataRoot, "latest.json"))
+				&& latestPublished(world.dataRoot, "first-move-session"), "first moved publication");
+			const prompt = promptRecord(world.dataRoot, "first-move-session");
+			const recap = latestPublished(world.dataRoot, "first-move-session");
+			assert.equal(prompt.text, text);
+			assert.equal(prompt.pane_id, "moved-pane");
+			assert.equal(prompt.working, false);
+			assert.equal(recap.pane_id, "moved-pane");
+			assert.equal(recap.workspace_id, "workspace-new");
+			await waitFor(() => world.calls.some((call) => call.method === "plugin.action.invoke"), "first moved overview wake-up");
+			assert.equal(world.calls.find((call) => call.method === "plugin.action.invoke")?.publishedRecord?.record_id, recap.record_id);
 		});
 	} finally {
 		await world.close();
@@ -592,8 +624,8 @@ test("a temporary Pi RPC session publishes only settled nonblank recaps with pub
 		const secondRecap = latestPublished(world.dataRoot, "rpc-session");
 		assert.notEqual(secondRecap.record_id, firstRecap.record_id);
 		assert.equal(secondRecap.workspace_id, "workspace-after-move");
-		const moveLookups = herdr.calls.filter((call) => call.method === "pane.current").slice(2, 4);
-		assert.equal(moveLookups.length, 2, "input and publication both resolve through the inherited caller ID");
+		const moveLookups = herdr.calls.filter((call) => call.method === "pane.current").slice(3, 6);
+		assert.equal(moveLookups.length, 3, "input, preparation, and publication resolve through the inherited caller ID");
 		assert.ok(moveLookups.every((call) => call.params.caller_pane_id === "exact-pane"));
 		assert.ok(moveLookups.every((call) => call.currentPane.pane_id === "rekeyed-pane"));
 		assert.equal(promptRecord(world.dataRoot, "rpc-session").text, "RPC request two: the pane moved and its native ID changed.");
@@ -626,7 +658,7 @@ test("a temporary Pi RPC session publishes only settled nonblank recaps with pub
 		assert.equal(latestEntry.latest_success_id, thirdRecap.record_id);
 		assert.equal(readRecord(world.dataRoot, latestEntry.last_attempt_id).status, "failed");
 		assert.equal(herdr.calls.filter((call) => call.method === "plugin.action.invoke").length, 3);
-		assert.equal(herdr.calls.filter((call) => call.method === "pane.current").length, 7);
+		assert.equal(herdr.calls.filter((call) => call.method === "pane.current").length, 11);
 		assert.ok(herdr.calls.every((call) => call.method !== "session.snapshot"), "never fall back to snapshots or UI focus");
 		assert.equal(promptRecord(world.dataRoot, "rpc-session").working, false);
 

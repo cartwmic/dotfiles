@@ -527,6 +527,25 @@ def _run_prompt_set(args: argparse.Namespace, root: Path) -> None:
         _atomic_write_json(_prompt_path(root, args.session_id), prompt)
 
 
+def _run_prompt_rekey(args: argparse.Namespace, root: Path) -> None:
+    text = read_stdin_text()
+    if not text.strip():
+        raise RecapError("prompt text must not be blank")
+    path = _prompt_path(root, args.session_id)
+    with _store_lock(root):
+        if not path.is_file():
+            return
+        prompt = _read_json(path)
+        if prompt.get("schema_version") != 1 or prompt.get("session_id") != args.session_id:
+            raise RecapError(f"invalid current prompt for session: {args.session_id}")
+        # A newer input may have replaced this session's prompt while the old
+        # response waited for publication. Never replace or re-mark that input.
+        if prompt.get("pane_id") != args.from_pane_id or prompt.get("text") != text:
+            return
+        prompt["pane_id"] = args.pane_id
+        _atomic_write_json(path, prompt)
+
+
 def _run_prompt_settle(args: argparse.Namespace, root: Path) -> None:
     path = _prompt_path(root, args.session_id)
     with _store_lock(root):
@@ -569,6 +588,10 @@ def build_parser() -> argparse.ArgumentParser:
     prompt_set = prompt_subparsers.add_parser("set", help="store a real user prompt as working")
     prompt_set.add_argument("--session-id", required=True)
     prompt_set.add_argument("--pane-id", help="optional native Herdr pane ID")
+    prompt_rekey = prompt_subparsers.add_parser("rekey", help="retarget a matching current prompt after a pane move")
+    prompt_rekey.add_argument("--session-id", required=True)
+    prompt_rekey.add_argument("--from-pane-id")
+    prompt_rekey.add_argument("--pane-id", required=True)
     prompt_settle = prompt_subparsers.add_parser("settle", help="mark the stored prompt as settled")
     prompt_settle.add_argument("--session-id", required=True)
     return parser
@@ -602,6 +625,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.pane_id is not None:
                 args.pane_id = _required_id(args.pane_id, "--pane-id")
             _run_prompt_set(args, root)
+        elif args.subcommand == "prompt" and args.prompt_action == "rekey":
+            args.session_id = _required_id(args.session_id, "--session-id")
+            args.pane_id = _required_id(args.pane_id, "--pane-id")
+            if args.from_pane_id is not None:
+                args.from_pane_id = _required_id(args.from_pane_id, "--from-pane-id")
+            _run_prompt_rekey(args, root)
         elif args.subcommand == "prompt" and args.prompt_action == "settle":
             args.session_id = _required_id(args.session_id, "--session-id")
             _run_prompt_settle(args, root)

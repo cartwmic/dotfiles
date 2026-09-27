@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { readAllRecapRecords, readLatestRecapRecords } from "./recap-store.mjs";
+import { readAllRecapRecords, readCurrentPiPrompts, readLatestRecapRecords } from "./recap-store.mjs";
 
 export const WORKSPACE_QUIET_PERIOD_MS = 30_000;
 const MAX_COMMAND_OUTPUT = 64 * 1024;
@@ -202,8 +202,9 @@ export async function reconcileRecapCoordinator({
   for (const sourceId of Object.keys(next.manualTerminalIdsBySourceId)) {
     if (!currentManualSourceIds.has(sourceId)) delete next.manualTerminalIdsBySourceId[sourceId];
   }
-  const currentSessions = new Set(latestPiRecaps
-    .map((record) => record.source_id)
+  const prompts = await readCurrentPiPrompts(dataRoot);
+  const currentSessions = new Set([...latestPiRecaps.map((record) => record.source_id),
+    ...prompts.map((prompt) => prompt.session_id)]
     .filter((sessionId) => typeof sessionId === "string" && sessionId));
   for (const sessionId of Object.keys(next.piTerminalIdsBySessionId)) {
     if (!currentSessions.has(sessionId)) delete next.piTerminalIdsBySessionId[sessionId];
@@ -215,6 +216,12 @@ export async function reconcileRecapCoordinator({
       const pane = paneById.get(record.pane_id);
       if (typeof pane?.terminal_id === "string" && pane.terminal_id) {
         next.piTerminalIdsBySessionId[record.source_id] = pane.terminal_id;
+      }
+    }
+    for (const prompt of prompts) {
+      const pane = paneById.get(prompt.pane_id);
+      if (typeof pane?.terminal_id === "string" && pane.terminal_id) {
+        next.piTerminalIdsBySessionId[prompt.session_id] = pane.terminal_id;
       }
     }
     for (const record of latestManualRecaps) {

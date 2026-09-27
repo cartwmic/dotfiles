@@ -10,6 +10,7 @@ import {
 interface PendingPrompt {
 	callerPaneId?: string;
 	paneId?: string;
+	text: string;
 	settled: boolean;
 }
 
@@ -63,6 +64,22 @@ async function prepareAndPublish(
 ): Promise<void> {
 	if (!response?.text.trim() || response.stopReason === "aborted" || response.stopReason === "error") return;
 
+	const socketPath = process.env.HERDR_SOCKET_PATH?.trim() || undefined;
+	const current = await currentPaneForCaller(socketPath, pending.callerPaneId);
+	if (current?.paneId !== pending.paneId) {
+		const oldPaneId = pending.paneId;
+		pending.paneId = current?.paneId;
+		if (pending.paneId) {
+			const args = ["prompt", "rekey", "--session-id", sessionId, "--pane-id", pending.paneId];
+			if (oldPaneId) args.push("--from-pane-id", oldPaneId);
+			try {
+				await runSessionRecap(args, pending.text);
+			} catch {
+				warn("could not retarget the current Pi prompt after its pane moved");
+			}
+		}
+	}
+
 	const prepareArgs = ["prepare", "--source-id", sessionId];
 	if (pending.paneId) prepareArgs.push("--pane-id", pending.paneId);
 
@@ -79,7 +96,6 @@ async function prepareAndPublish(
 		return;
 	}
 
-	const socketPath = process.env.HERDR_SOCKET_PATH?.trim() || undefined;
 	const workspaceId = await paneWorkspaceAtPublication(socketPath, pending.callerPaneId);
 	const publishArgs = ["publish", "--prepared-id", preparedId];
 	if (workspaceId) publishArgs.push("--workspace-id", workspaceId);
@@ -138,6 +154,7 @@ export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {
 
 		const pending: PendingPrompt = {
 			callerPaneId: herdrPaneId(),
+			text,
 			settled: false,
 		};
 		pendingBySession.set(sessionId, pending);
