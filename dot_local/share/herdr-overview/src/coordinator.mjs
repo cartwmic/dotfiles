@@ -132,17 +132,33 @@ export async function reconcileOverview({
         ? await api.snapshot()
         : snapshotBeforeOpen;
     const excludedPaneIds = overviewPaneId ? [overviewPaneId] : [];
-    const moveFromId = name === "pane.moved" ? data.previous_pane_id : null;
-    const moveToId = name === "pane.moved" ? data.pane?.pane_id ?? changedPane : null;
+    const currentIds = new Set(snapshot.panes.map((pane) => pane.pane_id));
+    const lostByTerminal = new Map();
+    for (const [previousPaneId, previous] of Object.entries(previousPanes)) {
+      if (currentIds.has(previousPaneId) || previousPaneId === previousState.overviewPaneId || !previous.terminalId) continue;
+      const lost = lostByTerminal.get(previous.terminalId) ?? [];
+      lost.push(previousPaneId);
+      lostByTerminal.set(previous.terminalId, lost);
+    }
+    // Herdr may emit pane.created before pane.moved. Detect a rekey from the
+    // unique live terminal identity, not from event ordering or UI focus.
+    const rekeys = snapshot.panes.flatMap((pane) => {
+      const matches = lostByTerminal.get(pane.terminal_id) ?? [];
+      if (excludedPaneIds.includes(pane.pane_id) || previousPanes[pane.pane_id]
+        || matches.length !== 1
+        || snapshot.panes.filter((item) => item.terminal_id === pane.terminal_id).length !== 1) return [];
+      return [{ previousPaneId: matches[0], paneId: pane.pane_id, terminalId: pane.terminal_id }];
+    });
+    const previousIdByCurrentId = new Map(rekeys.map((rekey) => [rekey.paneId, rekey.previousPaneId]));
     const outputByPaneId = {};
     const processByPaneId = {};
 
     for (const pane of snapshot.panes) {
       const id = pane.pane_id;
       if (excludedPaneIds.includes(id)) continue;
-      const previousId = id === moveToId && moveFromId ? moveFromId : id;
+      const previousId = previousIdByCurrentId.get(id) ?? id;
       const previous = previousPanes[previousId];
-      const wasTargeted = id === changedPane || previousId === changedPane || id === moveToId;
+      const wasTargeted = id === changedPane || previousId === changedPane || previousId !== id;
       if (name === "pane.output_matched" && id === changedPane && typeof data.read?.text === "string") {
         outputByPaneId[id] = data.read.text;
         processByPaneId[id] = previous?.processInfo ?? null;
@@ -163,11 +179,24 @@ export async function reconcileOverview({
       dataRoot,
       recapCoordinator?.piTerminalIdsBySessionId,
       recapCoordinator?.manualTerminalIdsBySourceId,
+      rekeys,
     );
+    if (rekeys.length) {
+      recapCoordinator = { ...(recapCoordinator ?? {}), piTerminalIdsBySessionId: supplied.piTerminalIdsBySessionId };
+    }
+    const ownership = { ...(previousState.displayNameOwnership ?? {}) };
+    for (const { previousPaneId, paneId } of rekeys) {
+      const fromKey = `pane:${previousPaneId}`;
+      const toKey = `pane:${paneId}`;
+      if (Object.hasOwn(ownership, fromKey) && !Object.hasOwn(ownership, toKey)) {
+        ownership[toKey] = ownership[fromKey];
+        delete ownership[fromKey];
+      }
+    }
     const namingInputs = {
       processByPaneId,
       supplied,
-      ownership: previousState.displayNameOwnership,
+      ownership,
       resetName,
       excludedPaneIds,
     };

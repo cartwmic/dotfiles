@@ -149,6 +149,77 @@ test("reconciliation and pane detail retain a Pi prompt after Herdr rekeys its p
   assert.match(detail, /Continue after the pane move/);
 });
 
+test("an automatically owned Pi pane survives pane.created before pane.moved", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-moved-automatic-name-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const stateDir = path.join(root, "state");
+  const dataRoot = path.join(root, "session-recap");
+  const configPath = path.join(root, "config.toml");
+  await mkdir(stateDir);
+  await mkdir(path.join(dataRoot, "records", "2026-09-27"), { recursive: true });
+  await writeFile(configPath, '[theme]\nname = "nord"\nauto_switch = false\n');
+  const recap = {
+    schema_version: 1, record_id: "new-task", source_kind: "pi-session", source_id: "session-one",
+    kind: "single", pane_id: "w2:p1", workspace_id: "w2", status: "published",
+    summary: "A distinct second task is now complete.",
+    created_at: "2026-09-27T10:00:00Z", published_at: "2026-09-27T10:00:01Z",
+  };
+  await writeFile(path.join(dataRoot, "records", "2026-09-27", "new-task.json"), JSON.stringify(recap));
+  await writeFile(path.join(dataRoot, "latest.json"), JSON.stringify({ sources: [{
+    source_kind: "pi-session", source_id: "session-one", latest_success_id: "new-task", last_attempt_id: "new-task",
+  }] }));
+  await writeFile(path.join(stateDir, "overview.json"), JSON.stringify({
+    model: { panes: { "w1:p1": { terminalId: "stable-terminal", preview: "prior output" } } },
+    displayNameOwnership: { "pane:w1:p1": {
+      mode: "automatic", lastWrittenLabel: "Old automatic task", observedLabel: "Old automatic task", defaultLabel: null,
+    } },
+  }));
+  let label = "Old automatic task";
+  let paneId = "w2:p1";
+  const renames = [];
+  const api = {
+    async snapshot() {
+      return {
+        protocol: 22, version: "0.9.1", focused_workspace_id: "w2", focused_tab_id: "w2:t1", focused_pane_id: paneId,
+        workspaces: [{ workspace_id: "w2", number: 2, label: "Bravo", focused: true, active_tab_id: "w2:t1" }],
+        tabs: [{ tab_id: "w2:t1", workspace_id: "w2", number: 1, label: "1", focused: true }],
+        panes: [{ pane_id: paneId, workspace_id: "w2", tab_id: "w2:t1", terminal_id: "stable-terminal",
+          label, agent: "pi", focused: true, agent_status: "done" }],
+        agents: [{ pane_id: paneId, agent: "pi" }], layouts: [],
+      };
+    },
+    async readPane() { return "second task output"; },
+    async processInfo() { return null; },
+    async renamePane(id, next) { renames.push([id, next]); label = next; },
+    async renameTab() {},
+  };
+  const state = await reconcileOverview({ api, stateDir, dataRoot, configPath, openPane: false,
+    event: { event: "pane.created", data: { pane: { pane_id: "w2:p1" } } },
+  });
+  assert.equal(state.displayNameOwnership["pane:w2:p1"].mode, "automatic");
+  assert.equal(state.displayNameOwnership["pane:w1:p1"], undefined);
+  assert.deepEqual(renames, [["w2:p1", recap.summary]]);
+  assert.equal(state.model.panes["w2:p1"].label, recap.summary);
+  const lateMove = await reconcileOverview({ api, stateDir, dataRoot, configPath, openPane: false,
+    event: { event: "pane.moved", data: { previous_pane_id: "w1:p1", pane: { pane_id: "w2:p1" } } },
+  });
+  assert.equal(lateMove.displayNameOwnership["pane:w2:p1"].mode, "automatic");
+  assert.deepEqual(renames, [["w2:p1", recap.summary]]);
+
+  label = "Owner takes over the moved pane";
+  const manual = await reconcileOverview({ api, stateDir, dataRoot, configPath, openPane: false,
+    event: { event: "pane.updated", data: { pane_id: paneId } },
+  });
+  assert.equal(manual.displayNameOwnership["pane:w2:p1"].mode, "manual");
+  paneId = "w2:p2";
+  const movedAgain = await reconcileOverview({ api, stateDir, dataRoot, configPath, openPane: false,
+    event: { event: "pane.created", data: { pane: { pane_id: paneId } } },
+  });
+  assert.equal(movedAgain.displayNameOwnership["pane:w2:p2"].mode, "manual");
+  assert.equal(movedAgain.model.panes[paneId].label, label);
+  assert.deepEqual(renames, [["w2:p1", recap.summary]]);
+});
+
 test("empty-server startup waits for the first native workspace before opening the pane", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-empty-"));
   t.after(() => rm(root, { recursive: true, force: true }));

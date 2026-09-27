@@ -344,6 +344,43 @@ test("workspace groups include latest manual pane recaps and session groups excl
   assert.ok(groupCalls.some((call) => call.prompt.includes("label: Current shell recap")), "the pane-source label reaches the workspace group input");
 });
 
+test("a first working Pi prompt follows a rekey even when pane.created precedes pane.moved", async (t) => {
+  const runtime = await makeRuntime(t);
+  runtime.scheduled = [];
+  const api = scriptedHerdrApi({ "old-pi-pane": "workspace-old", "shell-pane": "workspace-new" }, {
+    "old-pi-pane": "terminal-pi", "shell-pane": "terminal-shell",
+  }, { "old-pi-pane": "pi", "shell-pane": "bash" });
+  await reconcile(runtime, api, { now: Date.now() });
+  await runtime.runRecap(["prompt", "set", "--session-id", "first-session", "--pane-id", "old-pi-pane"], "First request in progress.\n");
+  api.movePane("old-pi-pane", "new-pi-pane", "workspace-new");
+  let state = await reconcileOverview({
+    ...coordinatorOptions(runtime, api),
+    coordinatorWake: false,
+    event: { event: "pane.created", data: { pane: { pane_id: "new-pi-pane" } } },
+  });
+  assert.equal(state.recapCoordinator.piTerminalIdsBySessionId["first-session"], "terminal-pi");
+  assert.equal(state.model.panes["new-pi-pane"].prompt.text, "First request in progress.\n");
+  assert.equal(state.model.panes["new-pi-pane"].prompt.working, true);
+  assert.equal(state.model.panes["old-pi-pane"], undefined);
+
+  // A reconcile while the response is still working must not discard the
+  // terminal association just because no successful recap exists yet.
+  state = await reconcile(runtime, api, { now: Date.now() });
+  assert.equal(state.recapCoordinator.piTerminalIdsBySessionId["first-session"], "terminal-pi");
+  assert.equal(state.model.panes["new-pi-pane"].prompt.text, "First request in progress.\n");
+
+  const first = await publishPi(runtime, {
+    sessionId: "first-session", paneId: "new-pi-pane", workspaceId: "workspace-new",
+  });
+  state = await reconcile(runtime, api, { now: Date.now() });
+  assert.equal(state.model.panes["new-pi-pane"].recap.latest.record_id, first.record_id);
+  const dueAt = Date.parse(state.recapCoordinator.workspaceDeadlines["workspace-new"]);
+  state = await reconcile(runtime, api, { now: dueAt });
+  const group = (await readAllRecapRecords(runtime.dataRoot)).find((record) => record.source_kind === "workspace"
+    && record.source_id === "workspace-new" && record.status === "published");
+  assert.deepEqual(group.member_record_ids, [first.record_id]);
+});
+
 test("manual pane-source recaps follow live terminal identity across a move and restart", async (t) => {
   const runtime = await makeRuntime(t);
   runtime.scheduled = [];

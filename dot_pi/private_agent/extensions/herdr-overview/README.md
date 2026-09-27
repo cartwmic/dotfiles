@@ -1,6 +1,6 @@
 # Herdr Overview Pi publication adapter
 
-This desktop-only Pi extension supplies the current prompt and publishes a recap after a settled response. T1 stores the current prompt separately from dated recap records; this extension only calls `session-recap prompt set/settle` and `prepare/publish`. It does not own recap prompts, persistence, grouping, or Herdr overview state.
+This desktop-only Pi extension supplies the current prompt and publishes a recap after a settled response. T1 stores the current prompt separately from dated recap records; this extension only calls `session-recap prompt set/settle/rekey` and `prepare/publish`. It does not own recap prompts, persistence, grouping, or Herdr overview state.
 
 ## Requirements
 
@@ -14,7 +14,7 @@ The source lives under `dot_pi/private_agent/extensions/`, so it deploys with th
 
 - Pi's public `input` event stores text from real interactive (`source: interactive`, TUI mode) and RPC (`source: rpc`, RPC mode) input with `session-recap prompt set`. When `HERDR_PANE_ID` is present, the adapter first calls Herdr's caller-aware `pane.current` and stores the returned live native pane ID, so a pane rekeyed by `pane.move` does not leave the current prompt attached to its old ID. Missing membership leaves the prompt session-only; it is never guessed from UI focus. Extension-generated input is ignored, so continuations do not replace the last real prompt.
 - On `agent_settled`, the adapter requires `ctx.isIdle() === true`, marks that prompt settled, and reads the latest assistant message from the public `ctx.sessionManager.getBranch()` API. It does not inspect session files.
-- A nonblank response is sent to `session-recap prepare`. Failed or blank backend output is not published and does not wake Herdr.
+- Before preparing a nonblank response, the adapter rechecks `pane.current` through the inherited caller ID. If the pane moved during its first response, `prompt rekey` atomically retargets only the matching current prompt without replacing a newer input or changing its working state; `prepare` records the new native pane ID. Failed or blank backend output is not published and does not wake Herdr.
 - Immediately before `session-recap publish`, it calls Herdr 0.9.1's public `pane.current` with `{ caller_pane_id: HERDR_PANE_ID }`. This caller-aware lookup follows a running pane if `pane.move` has rekeyed its native pane ID; it never substitutes the UI-focused pane. The observed `workspace_id` is attached to that publication; missing pane, workspace, socket, or response means publication without workspace attribution.
 - After confirmed publication, it invokes only the existing public `plugin.action.invoke` action `overview.reconcile`. A failed wake-up does not undo the durable recap; Herdr startup reconciliation can catch it up.
 

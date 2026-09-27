@@ -70,7 +70,10 @@ Dated records are the history and survive process or Herdr restarts. The latest
 index can point to a failed attempt while preserving its prior successful
 record. Current prompts are not recaps. They are published by the Pi input hook
 while work is in progress; successful settled-response recaps are a separate
-publication.
+publication. `prompt rekey --session-id ID --from-pane-id OLD --pane-id NEW`
+reads the expected prompt text from stdin and changes only a matching current
+prompt under the store lock. It preserves the working state and does not
+replace a newer input while a prior response waits to publish.
 
 ## Checks
 

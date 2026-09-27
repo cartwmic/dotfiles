@@ -265,6 +265,26 @@ class SessionRecapCliTests(unittest.TestCase):
         self.assertGreaterEqual(settled["captured_at"], working["captured_at"])
         self.assertNotIn(prompt_text, record["summary"])
 
+    def test_prompt_rekey_preserves_state_and_cannot_clobber_newer_input(self) -> None:
+        session_id = "first-response-move"
+        prompt_path = self.data_dir / "prompts" / f"{session_id}.json"
+        self.run_cli("prompt", "set", "--session-id", session_id, "--pane-id", "old-pane", input_text="First task")
+        self.run_cli("prompt", "settle", "--session-id", session_id)
+        settled = json.loads(prompt_path.read_text(encoding="utf-8"))
+        self.run_cli("prompt", "rekey", "--session-id", session_id, "--from-pane-id", "old-pane",
+                     "--pane-id", "new-pane", input_text="First task")
+        rekeyed = json.loads(prompt_path.read_text(encoding="utf-8"))
+        self.assertEqual(rekeyed, {**settled, "pane_id": "new-pane"})
+
+        self.run_cli("prompt", "set", "--session-id", session_id, "--pane-id", "new-pane", input_text="Next task")
+        next_prompt = json.loads(prompt_path.read_text(encoding="utf-8"))
+        self.run_cli("prompt", "rekey", "--session-id", session_id, "--from-pane-id", "new-pane",
+                     "--pane-id", "later-pane", input_text="First task")
+        self.assertEqual(json.loads(prompt_path.read_text(encoding="utf-8")), next_prompt)
+        self.run_cli("prompt", "rekey", "--session-id", session_id, "--from-pane-id", "old-pane",
+                     "--pane-id", "later-pane", input_text="Next task")
+        self.assertEqual(json.loads(prompt_path.read_text(encoding="utf-8")), next_prompt)
+
     def test_local_argv_override_and_both_editable_prompts_reach_backend(self) -> None:
         self.write_config("nonzero")
         override = [sys.executable, str(FAKE_BACKEND), "success"]
