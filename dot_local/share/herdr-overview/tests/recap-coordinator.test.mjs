@@ -49,6 +49,7 @@ async function makeRuntime(t) {
 function scriptedHerdrApi(initialMembership, initialTerminalIds = {}, initialAgentNames = {}) {
   const membership = new Map(Object.entries(initialMembership));
   const terminalIds = new Map();
+  const agentNames = new Map(Object.entries(initialAgentNames));
   for (const paneId of membership.keys()) terminalIds.set(paneId, initialTerminalIds[paneId] ?? `terminal-${paneId}`);
   const api = {
     socketPath: null,
@@ -62,10 +63,14 @@ function scriptedHerdrApi(initialMembership, initialTerminalIds = {}, initialAge
       terminalIds.delete(previousPaneId);
       membership.set(newPaneId, workspaceId);
       if (terminalId) terminalIds.set(newPaneId, terminalId);
+      const agentName = agentNames.get(previousPaneId);
+      agentNames.delete(previousPaneId);
+      if (agentName) agentNames.set(newPaneId, agentName);
     },
     removePane(paneId) {
       membership.delete(paneId);
       terminalIds.delete(paneId);
+      agentNames.delete(paneId);
     },
     async snapshot() {
       const panes = [...membership.entries()].map(([pane_id, workspace_id], index) => ({
@@ -74,7 +79,7 @@ function scriptedHerdrApi(initialMembership, initialTerminalIds = {}, initialAge
         tab_id: `${workspace_id}:tab`,
         terminal_id: terminalIds.get(pane_id),
         focused: index === 0,
-        agent: initialAgentNames[pane_id] ?? "pi",
+        agent: agentNames.get(pane_id) ?? "pi",
         agent_status: "unknown",
         revision: 1,
         cwd: "/workspace",
@@ -337,6 +342,92 @@ test("workspace groups include latest manual pane recaps and session groups excl
     .map((line) => JSON.parse(line))
     .filter((call) => call.prompt.startsWith("group:"));
   assert.ok(groupCalls.some((call) => call.prompt.includes("label: Current shell recap")), "the pane-source label reaches the workspace group input");
+});
+
+test("manual pane-source recaps follow live terminal identity across a move and restart", async (t) => {
+  const runtime = await makeRuntime(t);
+  runtime.scheduled = [];
+  let api = scriptedHerdrApi({
+    "old-pi-pane": "workspace-old",
+    "new-pi-pane": "workspace-new",
+    "shell-old-pane": "workspace-old",
+  }, {
+    "old-pi-pane": "terminal-old-pi",
+    "new-pi-pane": "terminal-new-pi",
+    "shell-old-pane": "terminal-shell",
+  }, { "shell-old-pane": "claude" });
+
+  const manual = await publishManualPane(runtime, "shell-old-pane", {
+    label: "Current shell recap",
+    text: "A manually published recap for the shell pane.",
+  });
+  await runtime.setBackendMode("nonzero");
+  await assert.rejects(publishManualPane(runtime, "shell-old-pane", { text: "A failed newer manual attempt." }));
+  await runtime.setBackendMode("success");
+  const orphan = await publishManualPane(runtime, "not-a-live-pane", { text: "Must not be assigned to a native pane." });
+  let state = await reconcile(runtime, api, { now: Date.now(), resumeDeadlines: true });
+  assert.equal(state.recapCoordinator.manualTerminalIdsBySourceId["shell-old-pane"], "terminal-shell");
+  assert.equal(state.recapCoordinator.manualTerminalIdsBySourceId["not-a-live-pane"], undefined);
+  assert.equal(state.model.panes["shell-old-pane"].recap.latest.record_id, manual.record_id);
+  assert.equal(state.model.panes["shell-old-pane"].recap.lastAttempt.status, "failed");
+
+  const oldPi = await publishPi(runtime, {
+    sessionId: "pi-old-workspace", paneId: "old-pi-pane", workspaceId: "workspace-old", text: "Still working in old workspace.",
+  });
+  const newPi = await publishPi(runtime, {
+    sessionId: "pi-new-workspace", paneId: "new-pi-pane", workspaceId: "workspace-new", text: "Work in destination workspace.",
+  });
+  state = await reconcile(runtime, api, { now: Date.now(), resumeDeadlines: true });
+  const oldDeadline = state.recapCoordinator.workspaceDeadlines["workspace-old"];
+  const newDeadline = state.recapCoordinator.workspaceDeadlines["workspace-new"];
+  assert.ok(oldDeadline && newDeadline);
+
+  api.movePane("shell-old-pane", "shell-new-pane", "workspace-new");
+  const movedSnapshot = await api.snapshot();
+  assert.equal(movedSnapshot.panes.some((pane) => pane.pane_id === "shell-old-pane"), false);
+  assert.equal(movedSnapshot.panes.find((pane) => pane.pane_id === "shell-new-pane").terminal_id, "terminal-shell");
+  assert.equal(movedSnapshot.panes.find((pane) => pane.pane_id === "shell-new-pane").agent, "claude");
+
+  // A fresh adapter models server restart: the persisted source-to-terminal
+  // association keeps the immutable manual source attached to this live pane.
+  api = scriptedHerdrApi(
+    Object.fromEntries(movedSnapshot.panes.map((pane) => [pane.pane_id, pane.workspace_id])),
+    Object.fromEntries(movedSnapshot.panes.map((pane) => [pane.pane_id, pane.terminal_id])),
+    Object.fromEntries(movedSnapshot.panes.map((pane) => [pane.pane_id, pane.agent])),
+  );
+  state = await reconcileOverview({
+    ...coordinatorOptions(runtime, api),
+    coordinatorWake: false,
+    event: { event: "pane.moved", data: { previous_pane_id: "shell-old-pane", pane: { pane_id: "shell-new-pane" } } },
+  });
+  assert.equal(state.model.panes["shell-old-pane"], undefined);
+  assert.equal(state.model.panes["shell-new-pane"].recap.latest.record_id, manual.record_id);
+  assert.equal(state.model.panes["shell-new-pane"].recap.lastAttempt.status, "failed");
+  assert.equal(state.recapCoordinator.manualTerminalIdsBySourceId["shell-old-pane"], "terminal-shell");
+
+  const dueAt = Math.max(Date.parse(oldDeadline), Date.parse(newDeadline));
+  state = await reconcile(runtime, api, { now: dueAt, resumeDeadlines: true });
+  assert.equal(state.recapCoordinator.workspaceDeadlines["workspace-old"], undefined);
+  assert.equal(state.recapCoordinator.workspaceDeadlines["workspace-new"], undefined);
+
+  const records = await readAllRecapRecords(runtime.dataRoot);
+  const oldWorkspace = records.find((record) => record.source_kind === "workspace"
+    && record.source_id === "workspace-old" && record.status === "published");
+  const newWorkspace = records.find((record) => record.source_kind === "workspace"
+    && record.source_id === "workspace-new" && record.status === "published");
+  assert.ok(oldWorkspace && newWorkspace);
+  assert.deepEqual(oldWorkspace.member_record_ids, [oldPi.record_id]);
+  assert.deepEqual(new Set(newWorkspace.member_record_ids), new Set([manual.record_id, newPi.record_id]));
+  assert.ok(!newWorkspace.member_record_ids.includes(orphan.record_id));
+
+  const index = await readLatestIndex(runtime.dataRoot);
+  assert.equal(latestSource(index, "workspace", "workspace-old").latest_success_id, oldWorkspace.record_id);
+  assert.equal(latestSource(index, "workspace", "workspace-new").latest_success_id, newWorkspace.record_id);
+  const activeSessionId = latestSource(index, "herdr-session", "active").latest_success_id;
+  const activeSession = records.find((record) => record.record_id === activeSessionId);
+  assert.ok(activeSession);
+  assert.deepEqual(new Set(activeSession.member_record_ids), new Set([oldWorkspace.record_id, newWorkspace.record_id]));
+  assert.ok(records.some((record) => record.record_id === manual.record_id), "the original manual record remains retained");
 });
 
 test("restart drains an unprocessed success, resumes its quiet deadline, and publishes current groups once", async (t) => {

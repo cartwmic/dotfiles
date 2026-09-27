@@ -205,7 +205,10 @@ The overview is a passive display of native Herdr pane state, those supplied
 prompts, and published recaps. It does not parse transcripts or produce
 summaries. Panes and tabs can be auto-named from available metadata and
 eligible published Pi-session recaps; manually published pane-source recaps
-appear in pane detail but do not drive automatic names. Workspaces are not
+appear in pane detail but do not drive automatic names. After publishing one,
+run `herdr plugin action invoke overview.reconcile --plugin overview` while its
+source pane is live; the overview then follows that terminal if `pane.move`
+rekeys it, without changing the recap's source attribution. Workspaces are not
 auto-named, and manual pane/tab labels remain until explicitly returned to
 automatic naming. Reconciliation rechecks each target label immediately before
 an automatic rename, but Herdr 0.9.1 has no atomic conditional rename, so a
@@ -217,8 +220,10 @@ Board; wider terminals show the all-pane Mosaic. Both navigate the same one
 Herdr session. `j`/`k` moves through workspaces or panes, `[`/`]` selects tabs,
 `Enter` opens the next level, `Esc` returns, and `f` focuses the selected native
 pane. Pane detail keeps recent output, the current Pi prompt, live agent state,
-and the latest published recap distinct. A missing or failed recap does not
-hide live pane information. See
+and the latest published recap distinct. Each overview-pane entry reads recent
+native output before its first frame, so output produced while the view was
+closed appears without waiting for another output event. A missing or failed
+recap does not hide live pane information. See
 [the Herdr plugin guide](./dot_local/share/herdr-overview/README.md).
 
 The `install-herdr-overview` mise task (also part of desktop bootstrap)

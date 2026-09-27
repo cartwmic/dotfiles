@@ -47,7 +47,12 @@ test("live pane output refreshes the open view without competing for the plugin 
   input.resume = () => {};
   input.pause = () => {};
   const frames = [];
-  const output = { columns: 100, rows: 24, isTTY: false, write: (text) => { frames.push(text); } };
+  let rendered;
+  const firstFrame = new Promise((resolve) => { rendered = resolve; });
+  const output = { columns: 100, rows: 24, isTTY: false, write: (text) => {
+    frames.push(text);
+    if (text.includes("Herdr Overview")) rendered();
+  } };
   let onOutput;
   let subscribed;
   const ready = new Promise((resolve) => { subscribed = resolve; });
@@ -58,13 +63,64 @@ test("live pane output refreshes the open view without competing for the plugin 
   } };
 
   const session = runOverviewPane({ api, stateDir, configPath, input, output });
+  try {
+    await ready;
+    await firstFrame;
+    onOutput({ event: "pane.output_matched", data: { pane_id: "w1:p1", read: { text: "live excerpt" } } });
+    assert.match(frames.at(-1), /live excerpt/);
+    const saved = JSON.parse(await readFile(statePath, "utf8"));
+    assert.equal(saved.model.panes["w1:p1"].preview, "compiled", "output redraw does not lock/rewrite plugin state");
+  } finally {
+    input.emit("end");
+    await session;
+  }
+});
+
+test("reopening reads current native output before showing a stale saved preview", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-reopen-output-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const stateDir = path.join(root, "state");
+  await mkdir(stateDir);
+  const savedModel = structuredClone(model);
+  savedModel.panes["w1:p1"].preview = "saved output before close";
+  const statePath = path.join(stateDir, "overview.json");
+  await writeFile(statePath, JSON.stringify({ model: savedModel }));
+  const configPath = path.join(root, "config.toml");
+  await writeFile(configPath, '[theme]\nname = "terminal"\nauto_switch = false\n');
+
+  const input = new EventEmitter();
+  input.isTTY = true;
+  input.setRawMode = (enabled) => { input.isRaw = enabled; };
+  input.resume = () => {};
+  input.pause = () => {};
+  const frames = [];
+  const output = Object.assign(new EventEmitter(), {
+    columns: 100, rows: 24, isTTY: true,
+    write: (text) => { frames.push(text); },
+  });
+  let subscribed;
+  const ready = new Promise((resolve) => { subscribed = resolve; });
+  const reads = [];
+  const api = {
+    async readPane(paneId, options) {
+      reads.push({ paneId, options });
+      return "CLOSED_VIEW_NEW_OUTPUT_MARKER";
+    },
+    async subscribe() { subscribed(); return { close() {} }; },
+  };
+  const session = runOverviewPane({ api, stateDir, configPath, input, output });
   await ready;
-  onOutput({ event: "pane.output_matched", data: { pane_id: "w1:p1", read: { text: "live excerpt" } } });
-  assert.match(frames.at(-1), /live excerpt/);
-  const saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.equal(saved.model.panes["w1:p1"].preview, "compiled", "output redraw does not lock/rewrite plugin state");
-  input.emit("end");
-  await session;
+  await new Promise((resolve) => setImmediate(resolve));
+  try {
+    assert.deepEqual(reads.map((read) => read.paneId), ["w1:p1"]);
+    assert.deepEqual(reads[0].options, { lines: 12, source: "recent_unwrapped" });
+    assert.match(frames.at(-1), /CLOSED_VIEW_NEW_OUTPUT_MARKER/);
+    assert.doesNotMatch(frames.at(-1), /saved output before close/);
+    assert.equal(JSON.parse(await readFile(statePath, "utf8")).model.panes["w1:p1"].preview, "saved output before close");
+  } finally {
+    input.emit("end");
+    await session;
+  }
 });
 
 test("a PTY resize switches Board and Mosaic at each open journey level", async (t) => {
