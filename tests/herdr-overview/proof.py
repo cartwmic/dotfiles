@@ -44,6 +44,14 @@ REVIEW_ID_RE = __import__("re").compile(r"^rv-[0-9a-f]{12}$")
 NOTE_ID_RE = __import__("re").compile(r"^n-[0-9a-f]{8}$")
 SUCCESS_SUMMARY = "Recent work is complete. Present state: ready for the next step."
 PROOF_MARKER = ".herdr-overview-proof.json"
+OVERVIEW_HEADERS = {
+    "Herdr Overview · Board": ("Board", "all"),
+    "Herdr Overview · Board · workspace": ("Board", "workspace"),
+    "Herdr Overview · Board · pane detail": ("Board", "detail"),
+    "Herdr Overview · Mosaic": ("Mosaic", "all"),
+    "Herdr Overview · Mosaic · workspace": ("Mosaic", "workspace"),
+    "Herdr Overview · Mosaic · selected pane": ("Mosaic", "detail"),
+}
 
 
 class ProofBlocked(Exception):
@@ -1063,23 +1071,51 @@ def plain_terminal(text: str) -> str:
 
 
 def overview_text(state: dict[str, Any], env: dict[str, str]) -> str:
-    return plain_terminal(pane_text(state, env, state["fixture"]["overview_pane_id"], fmt="ansi", lines=260))
+    return plain_terminal(pane_text(state, env, state["fixture"]["overview_pane_id"],
+                                    source="visible", fmt="ansi", lines=260))
+
+
+def overview_location(text: str) -> tuple[str, str] | None:
+    """Read the exact presenter/level from the current visible pane header."""
+    lines = plain_terminal(text).splitlines()
+    for line in lines:
+        header = line.strip()
+        if header:
+            return OVERVIEW_HEADERS.get(header)
+    return None
+
+
+def current_prompt_detail_visible(text: str, pane_id: str, prompt: str) -> bool:
+    location = overview_location(text)
+    if location not in (("Board", "detail"), ("Mosaic", "detail")):
+        return False
+    plain = plain_terminal(text)
+    prompt_heading = "Current Pi prompt" if location[0] == "Board" else "CURRENT PI PROMPT"
+    expected_prompt = "".join(prompt.split())
+    return (bool(expected_prompt) and f"[{pane_id}]" in plain and prompt_heading in plain
+            and expected_prompt in "".join(plain.split()))
 
 
 def open_pane_from_workspace(state: dict[str, Any], env: dict[str, str], pane_id: str) -> str:
-    # Cards prioritize task labels and can truncate their ID. The detail header
-    # identifies the selected native pane, so drive the actual selection path.
+    # Cards prioritize task labels and can truncate their ID. The current exact
+    # presenter header and visible detail identify the actual selected pane.
+    location = overview_location(overview_text(state, env))
+    if not location or location[1] != "workspace":
+        raise ProofFailure("pane navigation did not start from a recognized current workspace header")
+    presenter = location[0]
     for _ in range(40):
         send_overview_key(state, env, "enter")
         detail = wait_for(
-            lambda: (lambda text: text if "selected pane" in text else None)(overview_text(state, env)),
+            lambda: (lambda text: text if overview_location(text) == (presenter, "detail") else None)(overview_text(state, env)),
             "workspace selection to open a pane detail", timeout=4,
         )
         if f"[{pane_id}]" in detail:
             return detail
         send_overview_key(state, env, "esc")
-        wait_for(lambda: (lambda text: text if "· Mosaic · workspace" in text else None)(overview_text(state, env)),
-                 "pane detail to return to the workspace grid", timeout=4)
+        wait_for(
+            lambda: (lambda text: text if overview_location(text) == (presenter, "workspace") else None)(overview_text(state, env)),
+            "pane detail to return to the current workspace grid", timeout=4,
+        )
         send_overview_key(state, env, "j")
     raise ProofFailure(f"workspace grid could not reach pane {pane_id}")
 
@@ -1087,29 +1123,35 @@ def open_pane_from_workspace(state: dict[str, Any], env: dict[str, str], pane_id
 def return_to_all_workspaces(state: dict[str, Any], env: dict[str, str]) -> str:
     for _ in range(3):
         text = overview_text(state, env)
-        if "Herdr Overview" in text and "· Mosaic" in text and "· Mosaic · workspace" not in text and "· selected pane" not in text:
+        location = overview_location(text)
+        if location and location[1] == "all":
             return text
+        if not location:
+            raise ProofFailure("overview has no recognized current Board or Mosaic header")
         send_overview_key(state, env, "esc")
-    text = overview_text(state, env)
-    if "· Mosaic · workspace" in text or "· selected pane" in text:
-        raise ProofFailure("overview could not return to its all-workspaces level")
-    return text
+    raise ProofFailure("overview could not return to its all-workspaces level")
 
 
 def select_workspace(state: dict[str, Any], env: dict[str, str], workspace: dict[str, Any]) -> str:
     text = return_to_all_workspaces(state, env)
+    location = overview_location(text)
+    if not location or location[1] != "all":
+        raise ProofFailure("workspace selection did not start at a recognized all-workspaces header")
+    presenter = location[0]
     for _ in range(len(state["fixture"]["workspaces"]) + 1):
         if f"[{workspace['workspace_id']}]" in text and any(
             line.lstrip().startswith("›") and f"[{workspace['workspace_id']}]" in line for line in text.splitlines()
         ):
             send_overview_key(state, env, "enter")
             return wait_for(
-                lambda: (lambda opened: opened if "· Mosaic · workspace" in opened
+                lambda: (lambda opened: opened if overview_location(opened) == (presenter, "workspace")
                          and workspace["label"] in opened else None)(overview_text(state, env)),
-                f"opening {workspace['label']} into its Mosaic workspace grid", timeout=5,
+                f"opening {workspace['label']} in the {presenter} workspace grid", timeout=5,
             )
         send_overview_key(state, env, "j")
         text = overview_text(state, env)
+        if overview_location(text) != (presenter, "all"):
+            raise ProofFailure("workspace navigation left the current all-workspaces presenter unexpectedly")
     raise ProofFailure(f"all-workspaces navigation could not select {workspace['label']}")
 
 
@@ -1129,8 +1171,8 @@ def navigate_wide_fixture(state: dict[str, Any], env: dict[str, str]) -> dict[st
     require_manual_names(state, env)
     overview_id = state["fixture"]["overview_pane_id"]
     all_screen = return_to_all_workspaces(state, env)
-    if "Mosaic" not in all_screen:
-        raise ProofFailure("wide overview did not render the Mosaic presenter")
+    if overview_location(all_screen) != ("Mosaic", "all"):
+        raise ProofFailure("wide overview did not render the current all-workspaces Mosaic presenter")
     if "Output subscription failed" in all_screen:
         raise ProofFailure("live output refresh failed during the wide overview journey")
     live = snapshot(state)
@@ -1791,10 +1833,7 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         )
 
     post_move_prompt = f"Proof request {run_id}: after the native move, report the current pane state."
-    herdr_cmd(
-        state, env, "agent", "prompt", "t8-proof-pi", post_move_prompt,
-        "--wait", "--timeout", "120000", timeout=130,
-    )
+    herdr_cmd(state, env, "agent", "prompt", "t8-proof-pi", post_move_prompt)
     provider_calls = wait_for(
         lambda: (lambda calls: calls if len(calls) >= 3 else None)(provider_requests(root)),
         "the persistent scripted provider to receive real Pi input after pane.move", timeout=20,
@@ -1859,9 +1898,8 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     for _ in range((tab_order.index(moved_pane["tab_id"]) - tab_order.index(current_tab_id)) % len(tab_order)):
         send_overview_key(state, env, "]")
     moved_detail = open_pane_from_workspace(state, env, new_pane_id)
-    visible_detail = "".join(plain_terminal(moved_detail).split())
-    if "CURRENTPIPROMPT" not in visible_detail or "".join(post_move_prompt.split()) not in visible_detail:
-        raise ProofFailure("rekeyed pane detail did not display the current post-move Pi prompt")
+    if not current_prompt_detail_visible(moved_detail, new_pane_id, post_move_prompt):
+        raise ProofFailure("rekeyed pane detail did not visibly show its native ID, current-prompt heading, and full post-move Pi prompt")
 
     remaining = actual - time.time()
     if remaining > 0:
