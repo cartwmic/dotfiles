@@ -34,7 +34,8 @@ python3 tests/herdr-overview/proof.py recap
 python3 tests/herdr-overview/proof.py review
 python3 tests/herdr-overview/proof.py herdr-prepare # copy run_id from its JSON result
 python3 tests/herdr-overview/proof.py herdr-wide --run-id RUN_ID
-# Optional capture-harness setup: run outside capture ownership before pi-grouped.
+# For capture harnesses that clean command descendants, start from a one-shot
+# parent outside capture ownership before pi-grouped.
 python3 tests/herdr-overview/proof.py pi-provider-start --run-id RUN_ID
 python3 tests/herdr-overview/proof.py pi-grouped --run-id RUN_ID
 # On the attended Termux phone: ~/bin/herdr-overview-proof RUN_ID macbook
@@ -45,12 +46,11 @@ python3 tests/herdr-overview/proof.py herdr-cleanup --run-id RUN_ID
 python3 tests/herdr-overview/proof.py chezmoi-dry-run
 ```
 
-The `pi-provider-start` setup helper starts the same run-owned loopback provider
-used by `pi-grouped`; running it outside a capture command lets the provider
-survive capture cleanup between rows. The helper records its PID/root identity,
-and `pi-grouped` reuses only a matching live process; a stale or mismatched
-recorded provider is a failure, not a reason to start a replacement. Without
-this split-capture setup, standalone `pi-grouped` starts its provider directly.
+The `pi-provider-start` helper starts the run-owned loopback provider used by
+`pi-grouped` and the later native-move journey. Start it outside capture-command
+ownership when the harness cleans command descendants. Its PID/root identity is
+recorded; scenarios reuse only that matching live process, and fail on a stale
+record. Standalone `pi-grouped` starts its own provider when none is recorded.
 
 The supplemental `herdr-native-move` journey requires the returned phone receipt
 and runs after the phone stage. It moves the live Pi pane with native `pane.move`, submits a new prompt through the process's inherited caller ID,
