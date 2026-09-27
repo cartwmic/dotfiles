@@ -9,7 +9,7 @@ Ubuntu/WSL, and Termux). Chezmoi maps these files onto `$HOME`; mise installs
 and versions the tools. Profiles (`personal`, `axon-work-computer`, `termux`)
 select what gets deployed.
 
-Two agent-instruction files exist on purpose and must stay different:
+Two top-level agent-instruction sources serve different scopes:
 
 - [AGENTS.md](./AGENTS.md) — repo-only guide for work **in this tree**. Listed
   in `.chezmoiignore`; never deployed. Chezmoi matches ignore rules against
@@ -355,13 +355,14 @@ docs belong only where the subtree has its own audience or procedure.
 
 Pi auto-loads `AGENTS.md` / `AGENTS.override.md` / `CLAUDE.md` from
 `~/.pi/agent/` first, then every ancestor of the cwd (path-deduped). It does
-**not** auto-load `README.md`. Nested `AGENTS.md` in a source dir therefore
-stacks on [AGENTS.md](./AGENTS.md) and the Pi-global file whenever cwd is in
-that subtree. Use README for subtree procedure. Do not add `~/AGENTS.md`. Do
-not add a second Pi-global copy besides
+**not** auto-load `README.md`. A nested `AGENTS.md` adds local instructions
+when cwd is in its subtree. Keep those instructions scoped so the repo and
+Pi-global guides do not load twice in substance. No source may deploy to
+`~/AGENTS.md`: it collides with this repo's ignored root file. The Pi-global
+copy comes from
 [dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl).
 
-### Instruction files (exactly these)
+### Repository and harness instruction sources
 
 | File | Audience | Deployed |
 | --- | --- | --- |
@@ -383,9 +384,11 @@ Harness-agnostic skill/MCP procedure stays in
 [dot_local/share/agent-harness/README.md](./dot_local/share/agent-harness/README.md).
 Skills use `SKILL.md`, not `AGENTS.md`.
 
-Do not add nested `AGENTS.md`. The auto-loaded agent-instruction files are the
-repo, Pi, Claude, and Codex rows in the table. The canonical `AGENTS.md` is
-included into those; it is not a fifth home-directory file.
+The table lists repository and harness-wide sources. Nested files may add
+specific instructions for their subtree; see
+[inspect-prompt/AGENTS.md](./dot_pi/private_agent/extensions/inspect-prompt/AGENTS.md).
+The canonical `AGENTS.md` is included in the harness-wide files; it is not
+a fifth home-directory instruction file.
 
 ### Already present (keep)
 
@@ -395,7 +398,7 @@ included into those; it is not a fifth home-directory file.
 - [dot_local/share/pi-patches/README.md](./dot_local/share/pi-patches/README.md) — add a `patch.mjs`, `PI_CHEZMOI_PROFILE=personal` gate, state/backup paths, re-apply after `npm update -g` / mise reinstall
 - Per-patch READMEs under `dot_local/share/pi-patches/` (failure modes)
 - [dot_pi/private_agent/extensions/README.md](./dot_pi/private_agent/extensions/README.md) — authoring: tests, never capture `ctx`, `create_` vs managed files, profile gates in `.chezmoiignore`. Deploys to `~/.pi/agent/extensions/README.md` (safe: Pi ignores README).
-- Per-extension READMEs: [auto-compact](./dot_pi/private_agent/extensions/auto-compact/README.md), [hindsight](./dot_pi/private_agent/extensions/hindsight/README.md), [issue](./dot_pi/private_agent/extensions/issue/README.md), [ntfy](./dot_pi/private_agent/extensions/ntfy/README.md), [openrouter-gate](./dot_pi/private_agent/extensions/openrouter-gate/README.md), [pi-patch-guard](./dot_pi/private_agent/extensions/pi-patch-guard/README.md), [catalog-overlay-nudge](./dot_pi/private_agent/extensions/catalog-overlay-nudge/README.md), [goal](./dot_pi/private_agent/extensions/goal/README.md), [subagent](./dot_pi/private_agent/extensions/subagent/README.md), [web-search](./dot_pi/private_agent/extensions/web-search/README.md), [Herdr overview](./dot_pi/private_agent/extensions/herdr-overview/README.md), [passage review](./dot_pi/private_agent/extensions/passage-review/README.md)
+- Per-extension READMEs: [auto-compact](./dot_pi/private_agent/extensions/auto-compact/README.md), [hindsight](./dot_pi/private_agent/extensions/hindsight/README.md), [issue](./dot_pi/private_agent/extensions/issue/README.md), [ntfy](./dot_pi/private_agent/extensions/ntfy/README.md), [openrouter-gate](./dot_pi/private_agent/extensions/openrouter-gate/README.md), [pi-patch-guard](./dot_pi/private_agent/extensions/pi-patch-guard/README.md), [catalog-overlay-nudge](./dot_pi/private_agent/extensions/catalog-overlay-nudge/README.md), [goal](./dot_pi/private_agent/extensions/goal/README.md), [subagent](./dot_pi/private_agent/extensions/subagent/README.md), [web-search](./dot_pi/private_agent/extensions/web-search/README.md), [Herdr overview](./dot_pi/private_agent/extensions/herdr-overview/README.md), [passage review](./dot_pi/private_agent/extensions/passage-review/README.md), [inspect-prompt](./dot_pi/private_agent/extensions/inspect-prompt/README.md)
 - [dot_local/share/herdr-overview/README.md](./dot_local/share/herdr-overview/README.md) — desktop Herdr 0.9.1 runtime, Board/Mosaic behavior, passive recap display, naming, theme, and checks.
 - [dot_local/share/session-recap/README.md](./dot_local/share/session-recap/README.md) — portable CLI, prompts, profile defaults, host override, and dated history.
 - [dot_local/share/passage-review/README.md](./dot_local/share/passage-review/README.md) — standalone snapshot/review/export CLI and local library.

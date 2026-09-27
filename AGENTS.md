@@ -128,21 +128,25 @@ with `chezmoi managed` / `chezmoi source-path <dest>`.
 
 ## Nested docs
 
-Subtree procedure lives in [README.md](./README.md), not another `AGENTS.md`.
-Pi auto-loads `AGENTS.md` / `CLAUDE.md` from `~/.pi/agent/` then every ancestor
-of cwd. A nested `AGENTS.md` in this tree therefore stacks on this file and the
-Pi-global file. See README Docs map for where READMEs belong.
+Use a subtree README for product or procedure that a human must discover.
+A nested `AGENTS.md` may carry instructions specific to agents working in that
+subtree; keep it short and avoid repeating this file or the Pi-global guide.
+Pi auto-loads `AGENTS.md` / `CLAUDE.md` from `~/.pi/agent/` and then every
+ancestor of cwd. A nested file stacks on those instructions when cwd is inside
+its subtree. See the README Docs map for the current files.
 
 Shared subtree READMEs (relative from repo root):
 
-- [dot_pi/agent/extensions/README.md](./dot_pi/agent/extensions/README.md) — shared extension rules, including never capture `ctx`
+- [dot_pi/private_agent/extensions/README.md](./dot_pi/private_agent/extensions/README.md) — shared extension rules, including never capture `ctx`
 - [dot_local/share/pi-patches/README.md](./dot_local/share/pi-patches/README.md)
 - [dot_config/nvim/README.md](./dot_config/nvim/README.md)
 - [dot_pi/session-search/README.md](./dot_pi/session-search/README.md)
 
-Do not add `AGENTS.md` under `dot_pi/agent/extensions/`, `pi-patches/`,
-skills, `dot_config/`, or `~/AGENTS.md`. Claude and Codex already have
-`dot_claude/CLAUDE.md.tmpl` and `dot_codex/modify_AGENTS.md.tmpl`.
+[inspect-prompt/AGENTS.md](./dot_pi/private_agent/extensions/inspect-prompt/AGENTS.md)
+scopes its instructions to that extension. Do not add a source that deploys
+to `~/AGENTS.md`; it would collide with this repo's ignored root file.
+Claude and Codex already have `dot_claude/CLAUDE.md.tmpl` and
+`dot_codex/modify_AGENTS.md.tmpl`.
 
 ## Completion and handoff
 
