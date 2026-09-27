@@ -5,6 +5,21 @@ import proof
 
 
 class OverviewNavigationTest(unittest.TestCase):
+    def test_overview_lifecycle_probe_matches_only_the_live_plugin_entry(self):
+        self.assertTrue(proof.overview_entry_running({
+            "foreground_processes": [{
+                "argv0": "node",
+                "argv": ["/managed/herdr-overview/index.mjs", "overview"],
+                "cmdline": "node /managed/herdr-overview/index.mjs overview",
+            }],
+        }))
+        self.assertFalse(proof.overview_entry_running({
+            "foreground_processes": [{"name": "zsh", "cmdline": "zsh"}],
+        }))
+        self.assertFalse(proof.overview_entry_running({
+            "foreground_processes": [{"cmdline": "node index.mjs reconcile"}],
+        }))
+
     def test_reads_exact_current_header_not_a_later_presenter_mention(self):
         text = "\x1b[36mHerdr Overview\x1b[0m · Board · workspace\n" \
                "Herdr Overview · Mosaic was visible earlier"

@@ -74,22 +74,49 @@ export async function runOverviewPane({
   let state = await readState(stateDir) ?? { model: null };
   let journey = state.model ? createJourney(state.model) : null;
   const livePreviews = new Map();
+  const previewEventRevisions = new Map();
   const retainLivePreviews = (next) => {
     for (const [paneId, text] of livePreviews) {
       if (next.model?.panes?.[paneId]) next.model.panes[paneId].preview = text;
-      else livePreviews.delete(paneId);
+      else {
+        livePreviews.delete(paneId);
+        previewEventRevisions.delete(paneId);
+      }
     }
     return next;
   };
+  const refreshPanePreviews = async (paneIds) => {
+    if (typeof api.readPane !== "function") return;
+    await Promise.all(paneIds.map(async (paneId) => {
+      const pane = state.model?.panes?.[paneId];
+      if (!pane) return;
+      const terminalId = pane.terminalId;
+      const eventRevision = previewEventRevisions.get(paneId) ?? 0;
+      try {
+        const text = await api.readPane(paneId, { lines: 12, source: "recent_unwrapped" });
+        const currentPane = state.model?.panes?.[paneId];
+        if (typeof text !== "string" || !currentPane || currentPane.terminalId !== terminalId
+          || (previewEventRevisions.get(paneId) ?? 0) !== eventRevision) return;
+        livePreviews.set(paneId, text);
+        currentPane.preview = text;
+      } catch { /* A pane that closed during entry keeps its saved preview and metadata. */ }
+    }));
+  };
   let theme = state.theme ?? null;
+  let initialPreviewRefreshComplete = false;
   try { theme = await readTheme(configPath); } catch { /* Theme errors do not hide live panes. */ }
   const draw = () => {
+    if (!initialPreviewRefreshComplete) return;
     const screen = renderOverview({ ...state, journey, theme }, output.columns || 100, output.rows || 24);
     if (output.isTTY) output.write("\u001b[2J\u001b[H");
     output.write(`${screen}\n`);
   };
-  draw();
-  if (!input.isTTY || !input.setRawMode) return;
+  if (!input.isTTY || !input.setRawMode) {
+    await refreshPanePreviews(Object.keys(state.model?.panes ?? {}));
+    initialPreviewRefreshComplete = true;
+    draw();
+    return;
+  }
 
   input.setRawMode(true);
   input.resume();
@@ -119,6 +146,7 @@ export async function runOverviewPane({
         const paneId = data?.pane_id;
         const text = data?.read?.text;
         if (typeof text !== "string" || !state.model?.panes?.[paneId]) return;
+        previewEventRevisions.set(paneId, (previewEventRevisions.get(paneId) ?? 0) + 1);
         livePreviews.set(paneId, text);
         state.model.panes[paneId].preview = text;
         draw();
@@ -130,11 +158,14 @@ export async function runOverviewPane({
     if (changed && changed.toString() !== path.basename(statePath)) return;
     readState(stateDir).then(async (next) => {
       if (!next) return;
+      const previousPaneIds = new Set(Object.keys(state.model?.panes ?? {}));
       state = retainLivePreviews(next);
       journey = reconcileJourney(journey, state.model);
-      draw();
       try { await syncOutputSubscription(); }
       catch (error) { output.write(`\nOutput subscription failed: ${error.message}\n`); }
+      const enteredPaneIds = Object.keys(state.model?.panes ?? {}).filter((paneId) => !previousPaneIds.has(paneId));
+      await refreshPanePreviews(enteredPaneIds);
+      draw();
     }).catch(() => {});
   });
   const stopThemeWatch = watchThemeConfig(configPath, (nextTheme) => {
@@ -144,6 +175,9 @@ export async function runOverviewPane({
   output.on?.("resize", draw);
   try { await syncOutputSubscription(); }
   catch (error) { output.write(`\nOutput subscription failed: ${error.message}\n`); }
+  await refreshPanePreviews(Object.keys(state.model?.panes ?? {}));
+  initialPreviewRefreshComplete = true;
+  draw();
 
   let onKey;
   const cleanup = () => {

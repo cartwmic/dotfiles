@@ -64,8 +64,11 @@ live pane information.
 Panes and tabs may be automatically labeled using available Herdr metadata and
 eligible published Pi-session recaps; workspaces are never auto-named. A
 manually published single recap with `--source-id` equal to the native pane ID
-appears in that pane's detail, including failed-attempt status, but does not
-drive Pi automatic naming. Preserve any manual pane or tab label. Only the
+appears in that pane's detail after `herdr plugin action invoke
+overview.reconcile --plugin overview`; reconcile while the source pane is live
+to retain its terminal identity through a later `pane.move`. Failed-attempt
+status is displayed, but a manual recap does not drive Pi automatic naming.
+Preserve any manual pane or tab label. Only the
 owner's explicit return-to-automatic action for that exact pane/tab allows
 naming automation to resume. A tab containing unrelated agents should
 represent both available tasks. Pi session names and identities are not

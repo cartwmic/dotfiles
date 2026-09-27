@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import pty
+import re
 import select
 import shlex
 import shutil
@@ -1088,6 +1089,84 @@ def overview_text(state: dict[str, Any], env: dict[str, str]) -> str:
                                     source="visible", fmt="ansi", lines=260))
 
 
+def overview_entry_running(process_info: dict[str, Any] | None) -> bool:
+    for process in (process_info or {}).get("foreground_processes", []):
+        command = " ".join(str(value) for value in (
+            process.get("argv0"), *(process.get("argv") or []), process.get("cmdline"),
+        ) if value)
+        if re.search(r"(?:^|[/\s])index\.mjs(?:\s|$)", command) \
+                and re.search(r"(?:^|\s)overview(?:\s|$)", command):
+            return True
+    return False
+
+
+def overview_pane_running(state: dict[str, Any], pane_id: str) -> bool:
+    if not any(pane.get("pane_id") == pane_id for pane in snapshot(state).get("panes", [])):
+        return False
+    response = api_request(state, "pane.process_info", {"pane_id": pane_id})
+    return overview_entry_running(response.get("process_info"))
+
+
+def prove_reopened_output(state: dict[str, Any], root: Path, env: dict[str, str]) -> dict[str, Any]:
+    old_overview_id = state["fixture"].get("overview_pane_id")
+    target_pane_id = state["fixture"].get("non_pi_pane_id")
+    if not old_overview_id or not target_pane_id:
+        raise ProofFailure("the isolated fixture lacks an overview or non-Pi pane for the reopen journey")
+    target = one_by(snapshot(state).get("panes", []), "pane_id", target_pane_id)
+    workspace = one_by(state["fixture"]["workspaces"], "workspace_id", target["workspace_id"])
+    marker = f"AFTER_OVERVIEW_CLOSED_{state['run_id']}"
+    before = (plugin_state(root).get("model", {}).get("panes", {}).get(target_pane_id) or {}).get("preview") or ""
+    if marker in before:
+        raise ProofFailure("the unique reopen marker already exists in saved overview state")
+    if not overview_pane_running(state, old_overview_id):
+        raise ProofFailure("the isolated overview was not running before the close/reopen test")
+
+    send_overview_key(state, env, "q")
+    wait_for(lambda: not overview_pane_running(state, old_overview_id),
+             "the overview process to stop before native output is produced", timeout=15)
+    herdr_cmd(state, env, "pane", "run", target_pane_id, f"printf '%s\\n' '{marker}'")
+    herdr_cmd(state, env, "pane", "wait-output", target_pane_id, "--match", marker, "--timeout", "10000")
+    native_recent = pane_text(state, env, target_pane_id, source="recent_unwrapped", lines=12)
+    if marker not in native_recent:
+        raise ProofFailure("the closed-view native pane does not contain the new output marker")
+    saved = plugin_state(root)
+    saved_preview = ((saved.get("model") or {}).get("panes") or {}).get(target_pane_id, {}).get("preview") or ""
+    if marker in saved_preview:
+        raise ProofFailure("the fixture refreshed saved preview state while the overview was closed")
+
+    invoke_overview(state, env)
+
+    def reopened() -> tuple[dict[str, Any], str] | None:
+        current = plugin_state(root)
+        pane_id = current.get("overviewPaneId")
+        if not isinstance(pane_id, str) or not pane_id or not overview_pane_running(state, pane_id):
+            return None
+        return current, pane_id
+
+    reopened_state, new_overview_id = wait_for(reopened, "a new overview entry process", timeout=20)
+    if (reopened_state.get("model", {}).get("panes", {}).get(target_pane_id, {}).get("preview") or "") == marker:
+        raise ProofFailure("overview reconciliation unexpectedly changed the stale saved preview in this fixture")
+    state["fixture"]["overview_pane_id"] = new_overview_id
+    json_dump(root / PROOF_MARKER, state)
+    wait_for(lambda: overview_location(overview_text(state, env)) is not None,
+             "the reopened overview's first visible frame", timeout=15)
+    select_workspace(state, env, workspace)
+    detail = open_pane_from_workspace(state, env, target_pane_id)
+    if marker not in detail:
+        raise ProofFailure("reopened pane detail omitted output produced while the overview was stopped")
+    send_overview_key(state, env, "f")
+    wait_for(lambda: True if snapshot(state).get("focused_pane_id") == target_pane_id else None,
+             "the reopened overview to focus the native pane whose output changed", timeout=10)
+    return {
+        "old_overview_pane_id": old_overview_id,
+        "reopened_overview_pane_id": new_overview_id,
+        "closed_before_native_output": True,
+        "saved_preview_remained_stale": True,
+        "reopened_detail_shows_current_output": marker,
+        "native_focus_confirmed": True,
+    }
+
+
 def overview_location(text: str) -> tuple[str, str] | None:
     """Read the exact presenter/level from the current visible pane header."""
     lines = plain_terminal(text).splitlines()
@@ -1728,6 +1807,7 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     if not Path(provider.get("release_file", "")).is_file():
         raise ProofFailure("the scripted Pi provider's first-response gate was not released")
 
+    stale_reopen = prove_reopened_output(state, root, env)
     old_pane_id = state.get("fixture", {}).get("pi_pane_id")
     if not old_pane_id:
         raise ProofBlocked("the isolated fixture has no Pi pane")
@@ -1773,6 +1853,13 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         raise ProofFailure("the shell and published Pi tasks no longer share their native tab")
     original_shell_label = root_pane_before.get("label")
     original_tab_label = root_tab_before.get("label")
+    manual_source_terminal_id = root_pane_before.get("terminal_id")
+    if not isinstance(manual_source_terminal_id, str) or not manual_source_terminal_id:
+        raise ProofFailure("the manual recap pane has no native terminal_id")
+    root_agent = next((item for item in names_before.get("agents", [])
+                       if item.get("pane_id") == root_pane_id), {})
+    if root_pane_before.get("agent") == "pi" or root_agent.get("agent") == "pi":
+        raise ProofFailure("the manual pane-source fixture is not a non-Pi native pane")
     if not original_shell_label or not original_tab_label:
         raise ProofFailure("the name ownership fixture lost its owner-set shell or tab label")
 
@@ -1862,6 +1949,35 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         return ((current.get("recapCoordinator") or {}).get("workspaceDeadlines") or {}).get(source_workspace_id)
 
     original_deadline_text = wait_for(original_deadline, "the publication-time original-workspace deadline", timeout=20)
+
+    # Publish a manual recap against a live non-Pi pane, then reconcile while
+    # its source ID still resolves so the coordinator can persist terminal identity.
+    manual_source_pane_id = root_pane_id
+    manual_source_label = "Manual moved shell recap"
+    manual_source_record_id = cli_recap(
+        Path(env["HOME"]), env, "create", "--kind", "single", "--source-id", manual_source_pane_id,
+        "--label", manual_source_label, stdin="A published manual recap for the shell before it moves.\n",
+    ).stdout.strip()
+    manual_source_record = find_record(data_root, manual_source_record_id)[1]
+    if manual_source_record.get("source_kind") != "manual" or manual_source_record.get("source_id") != manual_source_pane_id:
+        raise ProofFailure("manual recap did not preserve its native pane source ID")
+    invoke_overview(state, env)
+
+    def manual_identity_persisted() -> dict[str, Any] | None:
+        current = read_json(state_path)
+        coordinator = current.get("recapCoordinator") or {}
+        mapping = coordinator.get("manualTerminalIdsBySourceId") or {}
+        pane = ((current.get("model") or {}).get("panes") or {}).get(manual_source_pane_id) or {}
+        latest = (pane.get("recap") or {}).get("latest") or {}
+        if (mapping.get(manual_source_pane_id) == manual_source_terminal_id
+                and latest.get("record_id") == manual_source_record_id):
+            return current
+        return None
+
+    wait_for(manual_identity_persisted, "the live manual pane recap and terminal association", timeout=20)
+    if original_deadline() != original_deadline_text:
+        raise ProofFailure("a manual pane recap changed the successful Pi publication's quiet deadline")
+
     target = state["fixture"]["workspaces"][1]
     if len(state["fixture"].get("workspaces", [])) < 3:
         raise ProofFailure("the isolated fixture needs a third workspace for the closed-workspace regression")
@@ -1892,6 +2008,48 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         raise ProofFailure("the rekeyed pane no longer reports agent=pi")
     if moved_pane.get("agent_session") is not None or moved_agent.get("agent_session") is not None:
         raise ProofFailure("the moved v0.9.1 pane unexpectedly exposed agent_session")
+
+    manual_move_output = herdr_cmd(
+        state, env, "pane", "move", manual_source_pane_id, "--new-tab", "--workspace",
+        target["workspace_id"], "--no-focus",
+    )
+    try:
+        manual_move_result = json.loads(manual_move_output.stdout).get("result", {}).get("move_result", {})
+    except json.JSONDecodeError as exc:
+        raise ProofFailure("manual non-Pi pane.move did not return its public move_result") from exc
+    if manual_move_result.get("previous_pane_id") != manual_source_pane_id:
+        raise ProofFailure("Herdr pane.move did not report the manual recap's old native pane ID")
+    moved_manual_pane = manual_move_result.get("pane") or {}
+    moved_manual_pane_id = moved_manual_pane.get("pane_id")
+    if not isinstance(moved_manual_pane_id, str) or not moved_manual_pane_id:
+        raise ProofFailure("manual non-Pi pane.move did not return a rekeyed pane ID")
+    manual_moved_snapshot = wait_for(
+        lambda: (lambda value: value if not any(pane.get("pane_id") == manual_source_pane_id
+                                                for pane in value.get("panes", []))
+                 and any(pane.get("pane_id") == moved_manual_pane_id
+                         for pane in value.get("panes", [])) else None)(snapshot(state)),
+        "the live snapshot to rekey the manual source pane", timeout=15,
+    )
+    moved_manual_native = one_by(manual_moved_snapshot.get("panes", []), "pane_id", moved_manual_pane_id)
+    if moved_manual_native.get("terminal_id") != manual_source_terminal_id:
+        raise ProofFailure("manual pane.move changed the source pane's native terminal_id")
+    moved_manual_agent = next((item for item in manual_moved_snapshot.get("agents", [])
+                               if item.get("pane_id") == moved_manual_pane_id), {})
+    if moved_manual_native.get("agent") == "pi" or moved_manual_agent.get("agent") == "pi":
+        raise ProofFailure("the moved manual recap pane unexpectedly became a Pi pane")
+
+    def manual_recap_follows_native_move() -> dict[str, Any] | None:
+        current = read_json(state_path)
+        pane = ((current.get("model") or {}).get("panes") or {}).get(moved_manual_pane_id) or {}
+        latest = (pane.get("recap") or {}).get("latest") or {}
+        return current if latest.get("record_id") == manual_source_record_id else None
+
+    wait_for(manual_recap_follows_native_move,
+             "the published manual pane-source recap to follow terminal identity after pane.move", timeout=20)
+    select_workspace(state, env, target)
+    manual_detail = open_pane_from_workspace(state, env, moved_manual_pane_id)
+    if "Latest recap" not in manual_detail or manual_source_record["summary"] not in manual_detail:
+        raise ProofFailure("the rekeyed non-Pi pane detail omitted its published manual recap")
 
     def old_recap_and_prompt_in_new_detail() -> dict[str, Any] | None:
         current = read_json(state_path)
@@ -1943,24 +2101,9 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         "the native snapshot to remove the closed workspace", timeout=20,
     )
 
-    # A manual source ID matching the live non-Pi pane is a current pane member,
-    # but it does not drive the Pi-only quiet-deadline coordinator.
-    manual_pane_id = target["root_pane_id"]
-    manual_id = cli_recap(
-        Path(env["HOME"]), env, "create", "--kind", "single", "--source-id", manual_pane_id,
-        "--label", "Current non-Pi pane recap", stdin="A manually supplied recap for the live shell pane.\n",
-    ).stdout.strip()
-    manual_record = find_record(data_root, manual_id)[1]
-    if manual_record.get("source_kind") != "manual" or manual_record.get("source_id") != manual_pane_id \
-            or manual_record.get("status") != "published":
-        raise ProofFailure("the non-Pi pane recap did not retain its explicit native pane source ID")
-    target_snapshot = snapshot(state)
-    manual_pane = one_by(target_snapshot.get("panes", []), "pane_id", manual_pane_id)
-    manual_agent = next((item for item in target_snapshot.get("agents", [])
-                         if item.get("pane_id") == manual_pane_id), {})
-    if manual_pane.get("agent") == "pi" or manual_agent.get("agent") == "pi":
-        raise ProofFailure("the pane-source member fixture is not a non-Pi native pane")
-
+    # The old source ID stays immutable; the coordinator must follow its
+    # persisted terminal association into the new workspace.
+    manual_id = manual_source_record_id
     # Check the same public Pi adapter membership helper used by the live input
     # and publication path. Do not supply this value to the Pi or recap CLI.
     publication_workspace_id = pi_pane_workspace_at_publication(env, old_pane_id)
@@ -2080,6 +2223,12 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
 
     return {
         "phone_receipt": phone["phone_receipt"],
+        "closed_overview_reopen": stale_reopen,
+        "manual_source_old_pane_id": manual_source_pane_id,
+        "manual_source_new_pane_id": moved_manual_pane_id,
+        "manual_source_terminal_id": manual_source_terminal_id,
+        "manual_recap_followed_native_move": True,
+        "manual_recap_visible_in_rekeyed_detail": True,
         "old_pane_id": old_pane_id,
         "new_pane_id": new_pane_id,
         "terminal_id_preserved": terminal_id,

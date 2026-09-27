@@ -74,7 +74,13 @@ function normalizedState(value = {}) {
       if (sessionId && typeof terminalId === "string" && terminalId) piTerminalIdsBySessionId[sessionId] = terminalId;
     }
   }
-  return { schema_version: 1, processedRecordIds, workspaceDeadlines, piTerminalIdsBySessionId };
+  const manualTerminalIdsBySourceId = {};
+  if (value.manualTerminalIdsBySourceId && typeof value.manualTerminalIdsBySourceId === "object") {
+    for (const [sourceId, terminalId] of Object.entries(value.manualTerminalIdsBySourceId)) {
+      if (sourceId && typeof terminalId === "string" && terminalId) manualTerminalIdsBySourceId[sourceId] = terminalId;
+    }
+  }
+  return { schema_version: 1, processedRecordIds, workspaceDeadlines, piTerminalIdsBySessionId, manualTerminalIdsBySourceId };
 }
 
 function publicationTime(record, fallback) {
@@ -100,7 +106,7 @@ function setNewestRecord(recordsByKey, key, record) {
   if (!existing || compareRecords(existing, record) <= 0) recordsByKey.set(key, record);
 }
 
-async function currentPaneMembers(workspaceId, snapshot, latest, piTerminalIdsBySessionId) {
+async function currentPaneMembers(workspaceId, snapshot, latest, piTerminalIdsBySessionId, manualTerminalIdsBySourceId) {
   if (!snapshot || !Array.isArray(snapshot.panes)) {
     throw new Error("Herdr membership snapshot is unavailable for recap grouping");
   }
@@ -109,6 +115,7 @@ async function currentPaneMembers(workspaceId, snapshot, latest, piTerminalIdsBy
   const piByPaneId = new Map();
   const piByTerminalId = new Map();
   const manualByPaneId = new Map();
+  const manualByTerminalId = new Map();
   for (const record of latest) {
     if (typeof record.source_id !== "string" || !record.source_id
       || typeof record.summary !== "string" || !record.summary.trim()
@@ -118,8 +125,11 @@ async function currentPaneMembers(workspaceId, snapshot, latest, piTerminalIdsBy
       setNewestRecord(piByPaneId, record.pane_id, record);
       setNewestRecord(piByTerminalId, piTerminalIdsBySessionId?.[record.source_id], record);
     } else if (record.source_kind === "manual") {
-      // A manual recap may be explicitly attributed to any native pane, Pi or not.
-      setNewestRecord(manualByPaneId, record.source_id, record);
+      // Follow a source-attributed manual recap after pane.move only when its
+      // terminal association was learned while that native pane ID was live.
+      const terminalId = manualTerminalIdsBySourceId?.[record.source_id];
+      if (terminalId) setNewestRecord(manualByTerminalId, terminalId, record);
+      else setNewestRecord(manualByPaneId, record.source_id, record);
     }
   }
 
@@ -135,7 +145,7 @@ async function currentPaneMembers(workspaceId, snapshot, latest, piTerminalIdsBy
     const piRecord = (sessionId ? piBySessionId.get(sessionId) : null)
       ?? piByPaneId.get(pane.pane_id)
       ?? piByTerminalId.get(pane.terminal_id);
-    const manualRecord = manualByPaneId.get(pane.pane_id);
+    const manualRecord = manualByTerminalId.get(pane.terminal_id) ?? manualByPaneId.get(pane.pane_id);
     const record = [piRecord, manualRecord].filter(Boolean).sort(compareRecords).at(-1);
     if (!record || seenRecordIds.has(record.record_id)) continue;
     seenRecordIds.add(record.record_id);
@@ -186,6 +196,12 @@ export async function reconcileRecapCoordinator({
   next.processedRecordIds = [...processed];
   const latestRecaps = await readLatestRecapRecords(dataRoot);
   const latestPiRecaps = latestRecaps.filter((record) => record.source_kind === "pi-session");
+  const latestManualRecaps = latestRecaps.filter((record) => record.source_kind === "manual"
+    && typeof record.source_id === "string" && record.source_id);
+  const currentManualSourceIds = new Set(latestManualRecaps.map((record) => record.source_id));
+  for (const sourceId of Object.keys(next.manualTerminalIdsBySourceId)) {
+    if (!currentManualSourceIds.has(sourceId)) delete next.manualTerminalIdsBySourceId[sourceId];
+  }
   const currentSessions = new Set(latestPiRecaps
     .map((record) => record.source_id)
     .filter((sessionId) => typeof sessionId === "string" && sessionId));
@@ -201,6 +217,15 @@ export async function reconcileRecapCoordinator({
         next.piTerminalIdsBySessionId[record.source_id] = pane.terminal_id;
       }
     }
+    for (const record of latestManualRecaps) {
+      // Manual --source-id is intentionally immutable. Persist an association
+      // only while that exact source ID resolves to a live native pane.
+      if (next.manualTerminalIdsBySourceId[record.source_id]) continue;
+      const pane = paneById.get(record.source_id);
+      if (typeof pane?.terminal_id === "string" && pane.terminal_id) {
+        next.manualTerminalIdsBySourceId[record.source_id] = pane.terminal_id;
+      }
+    }
   }
   await persist(next);
 
@@ -211,7 +236,9 @@ export async function reconcileRecapCoordinator({
   for (const [workspaceId] of due) {
     let members;
     try {
-      members = await currentPaneMembers(workspaceId, snapshot, latestRecaps, next.piTerminalIdsBySessionId);
+      members = await currentPaneMembers(
+        workspaceId, snapshot, latestRecaps, next.piTerminalIdsBySessionId, next.manualTerminalIdsBySourceId,
+      );
     } catch (error) {
       onError(error, workspaceId);
       continue;

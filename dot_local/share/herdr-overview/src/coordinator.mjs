@@ -158,7 +158,12 @@ export async function reconcileOverview({
       }
     }
 
-    const supplied = await readRecapFields(snapshot, dataRoot, recapCoordinator?.piTerminalIdsBySessionId);
+    const supplied = await readRecapFields(
+      snapshot,
+      dataRoot,
+      recapCoordinator?.piTerminalIdsBySessionId,
+      recapCoordinator?.manualTerminalIdsBySourceId,
+    );
     const namingInputs = {
       processByPaneId,
       supplied,

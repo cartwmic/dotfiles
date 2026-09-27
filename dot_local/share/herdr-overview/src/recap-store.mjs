@@ -97,7 +97,12 @@ function mergeRecapFields(current, incoming) {
   };
 }
 
-export async function readRecapFields(snapshot, root = sessionRecapDataRoot(), piTerminalIdsBySessionId = {}) {
+export async function readRecapFields(
+  snapshot,
+  root = sessionRecapDataRoot(),
+  piTerminalIdsBySessionId = {},
+  manualTerminalIdsBySourceId = {},
+) {
   const latestIndex = await readJson(path.join(root, "latest.json"));
   const sources = Array.isArray(latestIndex?.sources) ? latestIndex.sources : [];
   const dayNames = await recordDays(root);
@@ -157,9 +162,14 @@ export async function readRecapFields(snapshot, root = sessionRecapDataRoot(), p
   for (const { sourceKind, sourceId, recap } of recapReads) {
     if (sourceKind === "pi-session") piRecapsBySessionId[sourceId] = recap;
     const attributedPaneId = recap.lastAttempt?.pane_id ?? recap.latest?.pane_id;
-    const paneId = paneIds.has(attributedPaneId) ? attributedPaneId
-      : sourceKind === "manual" && paneIds.has(sourceId) ? sourceId
-        : null;
+    const manualTerminalId = sourceKind === "manual" ? manualTerminalIdsBySourceId?.[sourceId] : null;
+    let paneId;
+    if (sourceKind === "manual") {
+      if (manualTerminalId) paneId = panesByTerminalId.get(manualTerminalId)?.pane_id ?? null;
+      else if (paneIds.has(sourceId)) paneId = sourceId;
+    } else if (paneIds.has(attributedPaneId)) {
+      paneId = attributedPaneId;
+    }
     if (!paneId || (!recap.latest && !recap.lastAttempt)) continue;
     recapsByPaneId[paneId] = mergeRecapFields(recapsByPaneId[paneId], recap);
     if (sourceKind === "pi-session") {

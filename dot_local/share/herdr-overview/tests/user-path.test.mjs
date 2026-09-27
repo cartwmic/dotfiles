@@ -168,7 +168,7 @@ async function waitFor(predicate, message) {
   throw new Error(message);
 }
 
-async function scriptedServer(t, snapshot) {
+async function scriptedServer(t, snapshot, previews) {
   const root = await mkdtemp(path.join(os.tmpdir(), "herdr-presenter-socket-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const socketPath = path.join(root, "herdr.sock");
@@ -187,9 +187,11 @@ async function scriptedServer(t, snapshot) {
         calls.push(request);
         const result = request.method === "session.snapshot"
           ? { type: "session_snapshot", snapshot }
-          : request.method === "events.subscribe"
-            ? { type: "subscription_started" }
-            : { type: "ok" };
+          : request.method === "pane.read"
+            ? { type: "pane_read", read: { text: previews[request.params.pane_id] ?? "" } }
+            : request.method === "events.subscribe"
+              ? { type: "subscription_started" }
+              : { type: "ok" };
         socket.write(`${JSON.stringify({ id: request.id, result })}\n`);
       }
     });
@@ -251,6 +253,15 @@ async function fixtureFiles(t, model) {
   return { root, stateDir, dataRoot, configPath, recapBin, recapMarker };
 }
 
+function nativeReadPreviews(workspaces) {
+  return Object.fromEntries(
+    workspaces.flatMap((workspace) => workspace.tabs.flatMap((tab) => tab.panes.map((pane) => [
+      pane.id,
+      `NATIVE-READ:${pane.preview}`,
+    ]))),
+  );
+}
+
 async function driveEveryNativePane({ t, width, rows, defs, model, files, socket, calls }) {
   const presenter = await startPresenter({ t, columns: width, rows, scenario: socket, ...files, calls });
   const expectedPresenter = width <= 64 ? "Board" : "Mosaic";
@@ -296,6 +307,7 @@ async function driveEveryNativePane({ t, width, rows, defs, model, files, socket
         assert.ok(detail.includes(pane.id), `detail did not identify ${pane.id}`);
         assert.match(detail, /RECENT OUTPUT|Recent output/);
         assert.ok(detail.includes(pane.preview), `detail omitted recent output for ${pane.id}`);
+        assert.ok(detail.includes("NATIVE-READ:"), `detail did not refresh native pane output for ${pane.id}`);
         let detailPages = detail;
         if (["ws-1:p1", "ws-1:p2", "ws-2:p5", "ws-1:p3"].includes(pane.id)) {
           detailPages += `\n${await presenter.press(" ")}`;
@@ -338,7 +350,8 @@ for (const workspaceCount of [2, 3, 4, 5]) {
   test(`narrow Board user path reaches every tab/pane in ${workspaceCount} workspaces without recap generation`, async (t) => {
     const { model, workspaces, snapshot } = makeScenario(workspaceCount);
     const files = await fixtureFiles(t, model);
-    const socket = await scriptedServer(t, snapshot);
+    const previews = nativeReadPreviews(workspaces);
+    const socket = await scriptedServer(t, snapshot, previews);
     const presenter = await driveEveryNativePane({ t, width: 48, rows: 13, defs: workspaces, model, files, socket, calls: socket.calls });
     assert.equal(presenter.input.isRaw, true);
 
@@ -354,7 +367,8 @@ for (const workspaceCount of [2, 3, 4, 5]) {
   test(`wide Mosaic user path reaches every tab/pane in ${workspaceCount} workspaces without recap generation`, async (t) => {
     const { model, workspaces, snapshot } = makeScenario(workspaceCount);
     const files = await fixtureFiles(t, model);
-    const socket = await scriptedServer(t, snapshot);
+    const previews = nativeReadPreviews(workspaces);
+    const socket = await scriptedServer(t, snapshot, previews);
     const presenter = await driveEveryNativePane({ t, width: 120, rows: 48, defs: workspaces, model, files, socket, calls: socket.calls });
     assert.deepEqual(socket.calls.filter((call) => call.method === "pane.focus").map((call) => call.params.pane_id), model.paneOrder);
     const marker = await readFile(files.recapMarker, "utf8").catch(() => "");
