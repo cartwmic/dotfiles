@@ -182,6 +182,7 @@ component-specific implementation procedure and traps. Pi loads the global
 agent-directory instructions, then each ancestor `AGENTS.md` of the cwd. Work
 inside one of these source subtrees loads this file and its local guide:
 
+- [Learnings monitor](./dot_pi/private_agent/extensions/learnings-monitor/AGENTS.md) — opt-in observer, local records, confirmed promotion, and work-bank verification.
 - [Standing reminder](./dot_pi/private_agent/extensions/standing-reminder/AGENTS.md) — session-current state, input-origin patch, and isolated Pi proof.
 - [System One Pi integration](./dot_pi/private_agent/extensions/system-one/AGENTS.md) — personal Git package settings, isolated checks, and rollout.
 - [Herdr plugin runtime](./dot_local/share/herdr-overview/AGENTS.md) — native model, naming, grouping, and isolated server proof.

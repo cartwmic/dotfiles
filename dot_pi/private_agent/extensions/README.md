@@ -117,6 +117,7 @@ Gates live in the repo-root `.chezmoiignore`:
 | `dot_pi/session-search/` (sibling of `agent/`, not this folder) | `personal` only |
 | [herdr-overview](./herdr-overview/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [standing-reminder](./standing-reminder/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
+| [learnings-monitor](./learnings-monitor/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 
 Do not deploy personal/homelab-only extensions onto `axon-work-computer`.
 
@@ -134,6 +135,7 @@ READMEs already in this tree:
 - [codex-fast-luna](./codex-fast-luna/README.md)
 - [goal](./goal/README.md)
 - [inspect-prompt](./inspect-prompt/README.md)
+- [learnings-monitor](./learnings-monitor/README.md)
 - [subagent](./subagent/README.md)
 - [passage-review](./passage-review/README.md)
 - [herdr-overview](./herdr-overview/README.md)
@@ -156,7 +158,8 @@ cd ./pi-patch-guard && node --test
 Other in-tree suites today: `auto-compact/index.test.ts`,
 `goal/helpers.test.ts`, `hindsight/index.test.ts`, `inspect-prompt/index.test.ts`,
 `issue/index.test.ts`, `ntfy/index.test.ts`, `openrouter-gate/index.test.ts`,
-`codex-fast-luna/index.test.ts`, `web-search/config.test.ts`.
+`codex-fast-luna/index.test.ts`, `web-search/config.test.ts`, and
+`learnings-monitor/` (`node --test`).
 `catalog-overlay-nudge` and `subagent` do not have tests yet. `passage-review`,
 `herdr-overview`, and `standing-reminder` have `index.test.ts`. The standing
 reminder also has an isolated real-Pi journey and a separate capped live cache
