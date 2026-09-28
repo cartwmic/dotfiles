@@ -116,6 +116,7 @@ Gates live in the repo-root `.chezmoiignore`:
 | [issue](./issue/README.md) | `axon-work-computer` only |
 | `dot_pi/session-search/` (sibling of `agent/`, not this folder) | `personal` only |
 | [herdr-overview](./herdr-overview/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
+| [standing-reminder](./standing-reminder/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 
 Do not deploy personal/homelab-only extensions onto `axon-work-computer`.
 
@@ -137,6 +138,7 @@ READMEs already in this tree:
 - [passage-review](./passage-review/README.md)
 - [herdr-overview](./herdr-overview/README.md)
 - [web-search](./web-search/README.md)
+- [standing-reminder](./standing-reminder/README.md)
 
 `subagent` is currently a config overlay (`config.json` with
 `maxSubagentDepth`); it has no `index.ts` yet.
@@ -155,8 +157,10 @@ Other in-tree suites today: `auto-compact/index.test.ts`,
 `goal/helpers.test.ts`, `hindsight/index.test.ts`, `inspect-prompt/index.test.ts`,
 `issue/index.test.ts`, `ntfy/index.test.ts`, `openrouter-gate/index.test.ts`,
 `codex-fast-luna/index.test.ts`, `web-search/config.test.ts`.
-`catalog-overlay-nudge` and `subagent` do not have tests yet. `passage-review`
-and `herdr-overview` have `index.test.ts`.
+`catalog-overlay-nudge` and `subagent` do not have tests yet. `passage-review`,
+`herdr-overview`, and `standing-reminder` have `index.test.ts`. The standing
+reminder also has an isolated real-Pi journey and a separate capped live cache
+proof; see its [README](./standing-reminder/README.md).
 
 Chezmoi apply and secret handling are not validated here; use repo-root
 `AGENTS.md`.

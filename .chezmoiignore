@@ -7,6 +7,8 @@
 .local/share/herdr-overview/tests/**
 .local/share/passage-review/test_passage_review.py
 .pi/agent/extensions/herdr-overview/index.test.ts
+# Source-only instructions for work in the standing-reminder extension tree.
+.pi/agent/extensions/standing-reminder/AGENTS.md
 .local/share/passage-review/__pycache__
 .local/share/passage-review/__pycache__/**
 # Repo-only docs at source root. Patterns match DESTINATION names.
@@ -14,7 +16,7 @@
 # confusing them with nested files such as .codex/AGENTS.md. Leading slash
 # patterns are rejected by chezmoi v2.72.2 on Termux.
 # ./AGENTS.md stays in git for Pi/Codex in this repo; it is not deployed.
-# Pi-global instructions are dot_pi/agent/literal_AGENTS.md.tmpl -> ~/.pi/agent/AGENTS.md.
+# Pi-global instructions are dot_pi/private_agent/literal_AGENTS.md.tmpl -> ~/.pi/agent/AGENTS.md.
 # Do not add a source that deploys to ~/AGENTS.md: same target as this file,
 # chezmoi reports inconsistent state.
 # ./README.md is the product README; do not also land it at ~/README.md.
