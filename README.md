@@ -216,6 +216,22 @@ Notes:
 - `furi` is installed by the `mise` bootstrap task, and bootstrap registers and starts `ashwwwin/automation-mcp` so the canonical `furi` MCP entry works for both Claude and Codex after apply.
 - On macOS, `automation-mcp` also needs Accessibility and Screen Recording permissions in System Settings > Privacy & Security before its tools can fully control the machine.
 
+## Learnings monitor in Pi
+
+The desktop-only Learnings monitor starts off. `/learnings on` enables a
+read-only observer for the current saved Pi session; `/learnings flush` asks
+it to catch up, `/learnings-review` opens local editable Markdown, and
+`/learnings off` stops observation. Advice stays machine-local unless you
+explicitly confirm promotion to Hindsight. It does not edit project files.
+
+For work machines, install both the extension and Hindsight config, check the
+effective bank in the environment that launches Pi, and restart Pi. Missing
+settings or environment overrides can select personal bank `cartwmic`; there
+is no runtime fail-closed guard. See the
+[Learnings guide](./dot_pi/private_agent/extensions/learnings-monitor/README.md)
+for configuration, review, promotion, and scripted-backend proofs. Termux
+does not deploy the extension.
+
 ## Standing reminder in Pi
 
 On desktop profiles, `/reminder` edits one current reminder for the saved Pi
