@@ -216,6 +216,21 @@ Notes:
 - `furi` is installed by the `mise` bootstrap task, and bootstrap registers and starts `ashwwwin/automation-mcp` so the canonical `furi` MCP entry works for both Claude and Codex after apply.
 - On macOS, `automation-mcp` also needs Accessibility and Screen Recording permissions in System Settings > Privacy & Security before its tools can fully control the machine.
 
+## System One in Pi
+
+The `personal` profile loads [cartwmic/system-one-tools](https://github.com/cartwmic/system-one-tools)
+as a Git package, not an npm package. Work and Termux omit it. The local
+[System One directory](./dot_pi/private_agent/extensions/system-one/README.md)
+contains documentation, not another extension loader.
+
+After approving a targeted settings apply, restart Pi and run `/so status`.
+Agent access starts off; `/so on` enables the current session. Use `/so settings`
+to select a machine-local connection and adapter. Keep credentials in the
+runtime environment, not this public repository. The Git URL is unpinned;
+package updates and paid provider tests need separate approval. The scoped
+[agent guide](./dot_pi/private_agent/extensions/system-one/AGENTS.md) covers
+isolated tests and rollout. Rendering settings alone does not prove a provider call.
+
 ## Herdr overview and phone route
 
 The personal and work desktop profiles pin Herdr **0.9.1 / protocol 22** and
@@ -368,7 +383,7 @@ chezmoi apply
 ## Docs map
 
 Start here for machine setup and user workflows. For work in this source tree,
-read [AGENTS.md](./AGENTS.md); it links the five component-local agent guides
+read [AGENTS.md](./AGENTS.md); it links the component-local agent guides
 and controls apply. Pi's global instructions are a separate source file at
 [dot_pi/private_agent/literal_AGENTS.md.tmpl](./dot_pi/private_agent/literal_AGENTS.md.tmpl).
 Component READMEs cover setup and use:

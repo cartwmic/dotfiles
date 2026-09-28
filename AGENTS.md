@@ -109,7 +109,10 @@ OpenSpec/`opsx` is retired; do not revive it. Do not write ADRs.
 
 Pi extensions in this tree: never capture `ExtensionContext` `ctx` in a
 long-lived closure; use the per-call `ctx`. Do not couple new extensions
-to retired opsx.
+to retired opsx. System One is a Git package enabled only in personal Pi
+settings; its local extension directory is docs-only. Load its scoped guide
+before changing that package entry. Do not add a local loader that registers
+its tools twice.
 
 Adding a mise-registry tool: edit `dot_config/mise/config.toml` `[tools]`,
 then apply. Custom install: add a `[tasks]` entry with an idempotent
@@ -125,11 +128,18 @@ destination separately. A merge conflict needs an owner choice of source or
 live state; only an approved source-side choice permits `--force`. A TTY
 failure without an understood conflict is not permission to force.
 
+Use `chezmoi --source "$REPO"` when working in a feature worktree; cwd alone
+does not change chezmoi's configured source. Inspect `.chezmoiremove` before
+apply, including any persistent directories it would remove. For canonical
+skill sync from a worktree, also set `CHEZMOI_SOURCE_DIR="$REPO"` so the adapter
+does not read the base checkout instead.
+
 Typical loop:
 
 ```bash
-chezmoi apply --dry-run --verbose
-chezmoi execute-template '{{ .profile }}'
+REPO="$(git rev-parse --show-toplevel)"
+chezmoi --source "$REPO" apply --dry-run --verbose
+chezmoi --source "$REPO" execute-template '{{ .profile }}'
 ```
 
 For a touched destination, resolve its source, render it, read the live file
@@ -167,6 +177,7 @@ component-specific implementation procedure and traps. Pi loads the global
 agent-directory instructions, then each ancestor `AGENTS.md` of the cwd. Work
 inside one of these source subtrees loads this file and its local guide:
 
+- [System One Pi integration](./dot_pi/private_agent/extensions/system-one/AGENTS.md) — personal Git package settings, isolated checks, and rollout.
 - [Herdr plugin runtime](./dot_local/share/herdr-overview/AGENTS.md) — native model, naming, grouping, and isolated server proof.
 - [Herdr Pi adapter](./dot_pi/private_agent/extensions/herdr-overview/AGENTS.md) — settled publication and caller-aware membership.
 - [session-recap](./dot_local/share/session-recap/AGENTS.md) — standalone prompt/store invariants.

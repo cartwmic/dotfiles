@@ -96,6 +96,9 @@ Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 .local/user_scripts/configure_rustdesk.sh
 .pi/agent/extensions/openrouter-gate
 .pi/agent/extensions/openrouter-gate/**
+# The remotely installed System One package is enabled in personal Pi settings only.
+.pi/agent/extensions/system-one
+.pi/agent/extensions/system-one/**
 # Homelab session-digest: claude-bridge + ollama.internal. Work stays fts-raw.
 .pi/session-search
 .pi/session-search/**
