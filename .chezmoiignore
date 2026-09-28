@@ -76,6 +76,7 @@ utils.sh
 
 {{- if ne .profile "termux" }}
 # Phone-only destinations — never apply onto personal/work machines.
+.bash_profile
 .termux
 .termux/**
 bin

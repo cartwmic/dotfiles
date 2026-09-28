@@ -1,0 +1,10 @@
+# Termux login shells: keep phone helpers available without affecting other profiles.
+case ":$PATH:" in
+    *":$HOME/bin:"*) ;;
+    *) export PATH="$HOME/bin:$PATH" ;;
+esac
+
+# Replaces this shell so the launcher leaves only macbook and mac-kvm tabs.
+resume-ssh() {
+    exec "$HOME/bin/resume-ssh"
+}
