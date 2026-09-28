@@ -23,6 +23,9 @@ Per-patch rationale and failure modes stay in the sibling READMEs:
 
 - [anthropic-idle-watchdog](anthropic-idle-watchdog/README.md) — SSE idle watchdog (all profiles)
 - [custom-message-marker](custom-message-marker/README.md) — wrap injected `custom` messages (all profiles)
+- [empty-turn-retry](empty-turn-retry/README.md) — retry empty assistant responses
+- [headless-extension-drain](headless-extension-drain/README.md) — drain fire-and-forget extension work in print mode
+- [standing-reminder-origin](standing-reminder-origin/README.md) — carry input origin to processed messages on desktop profiles
 - [hide-nonbridge-claude-models](hide-nonbridge-claude-models/README.md) — personal-only model-list filter
 - [cursor-provider](cursor-provider/README.md) — retired leftover-splice restore (not desired-state delivery; widget comes from the fork)
 
@@ -36,8 +39,9 @@ ls
 ```
 
 You should see one subdirectory per patch (`anthropic-idle-watchdog`,
-`custom-message-marker`, `hide-nonbridge-claude-models`,
-`cursor-provider`) plus this README.
+`cursor-provider`, `custom-message-marker`, `empty-turn-retry`,
+`headless-extension-drain`, `hide-nonbridge-claude-models`,
+`standing-reminder-origin`) plus this README.
 
 Layout of each patch:
 
@@ -115,20 +119,25 @@ work-only patches must treat that as skip / un-patch.
    Fail-safe default is do not apply. Do not add a work-only widget splice;
    Cursor remaining/spend is configuration on the fork. `cursor-provider`
    restores leftovers on every profile. Ungated patches ignore the variable.
-5. Keep state under `~/.local/state/chezmoi-pi-patches/<name>.json`. Backup
-   the unpatched file next to the target as `<file>.orig.chezmoi-pi-patch`.
+5. Keep state under `~/.local/state/chezmoi-pi-patches/<name>.json`. For
+   shared files, do not restore a whole-file backup over sibling patches; reverse
+   only this patch's checked edits.
 6. Do not edit installed package files by hand. Re-apply via `chezmoi apply`
    after `npm update -g @earendil-works/pi-coding-agent`, a mise reinstall
    of pi, or a widget-package upgrade under `~/.pi/agent/npm`.
 
 ### Profile gate
 
-| `PI_CHEZMOI_PROFILE` | personal-only patch | `cursor-provider` (retired restore) | un-gated patch |
-|---|---|---|---|
-| `personal` | apply | restore leftovers / no-op | apply |
-| `axon-work-computer` | skip; restore | restore leftovers / no-op | apply |
-| any other value | skip; restore backup if previously applied | restore leftovers / no-op | apply |
-| unset (manual script) | skip; un-patch | restore leftovers / no-op | apply |
+| `PI_CHEZMOI_PROFILE` | personal-only patch | `cursor-provider` (retired restore) | `standing-reminder-origin` | un-gated patch |
+|---|---|---|---|---|
+| `personal` | apply | restore leftovers / no-op | apply | apply |
+| `axon-work-computer` | skip; restore | restore leftovers / no-op | apply | apply |
+| `termux` | skip; restore | restore leftovers / no-op | skip/unpatch | apply |
+| any other value | skip; restore backup if previously applied | restore leftovers / no-op | skip/unpatch | apply |
+| unset (manual script) | skip; un-patch | restore leftovers / no-op | skip/unpatch | apply |
+
+`standing-reminder-origin` reverses only its own literal blocks when disabled,
+preserving sibling edits in shared files.
 
 ### After a pi or widget upgrade
 
@@ -150,6 +159,9 @@ ls */patch.mjs
 node anthropic-idle-watchdog/patch.mjs --check
 node custom-message-marker/patch.mjs --check
 PI_CHEZMOI_PROFILE=personal node hide-nonbridge-claude-models/patch.mjs --check
+PI_CHEZMOI_PROFILE=personal node standing-reminder-origin/patch.mjs --check
+PI_CHEZMOI_PROFILE=axon-work-computer node standing-reminder-origin/patch.mjs --check
+PI_CHEZMOI_PROFILE=termux node standing-reminder-origin/patch.mjs --check
 PI_CHEZMOI_PROFILE=axon-work-computer node cursor-provider/patch.mjs --check
 PI_CHEZMOI_PROFILE=personal node cursor-provider/patch.mjs --check
 ```
