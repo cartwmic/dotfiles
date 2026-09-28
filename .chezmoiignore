@@ -9,6 +9,8 @@
 .local/share/herdr-overview/tests/**
 .local/share/passage-review/test_passage_review.py
 .pi/agent/extensions/herdr-overview/index.test.ts
+# Source-only instructions for work in the standing-reminder extension tree.
+.pi/agent/extensions/standing-reminder/AGENTS.md
 .local/share/passage-review/__pycache__
 .local/share/passage-review/__pycache__/**
 # Repo-only docs at source root. Patterns match DESTINATION names.

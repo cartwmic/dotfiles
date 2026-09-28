@@ -101,9 +101,14 @@ or MCP changes, apply with the commands below (or `chezmoi apply`, which
 runs the apply script).
 
 Pi runtime patches: `dot_local/share/pi-patches/<name>/patch.mjs`. After
-`npm update -g` / mise reinstall of pi, `chezmoi apply` must re-run so
-patches re-apply. Do not edit installed pi `dist/` files except through
-that patch mechanism.
+`npm update -g` / mise reinstall of Pi, patches must be reapplied through
+that mechanism, not by hand-editing installed `dist/` files. A same-version
+reinstall may not retrigger chezmoi's onchange script. For an approved patch
+apply from a worktree, set `PI_PATCHES_ROOT="$REPO/dot_local/share/pi-patches"`
+and the actual `PI_CHEZMOI_PROFILE`; follow the patch guide's checks. The
+standing-reminder extension also requires its input-origin patch. Validate
+that pair through `tests/standing-reminder/isolated_pi.py`, which patches a
+private Pi copy rather than the installed runtime.
 
 OpenSpec/`opsx` is retired; do not revive it. Do not write ADRs.
 
@@ -177,6 +182,7 @@ component-specific implementation procedure and traps. Pi loads the global
 agent-directory instructions, then each ancestor `AGENTS.md` of the cwd. Work
 inside one of these source subtrees loads this file and its local guide:
 
+- [Standing reminder](./dot_pi/private_agent/extensions/standing-reminder/AGENTS.md) — session-current state, input-origin patch, and isolated Pi proof.
 - [System One Pi integration](./dot_pi/private_agent/extensions/system-one/AGENTS.md) — personal Git package settings, isolated checks, and rollout.
 - [Herdr plugin runtime](./dot_local/share/herdr-overview/AGENTS.md) — native model, naming, grouping, and isolated server proof.
 - [Herdr Pi adapter](./dot_pi/private_agent/extensions/herdr-overview/AGENTS.md) — settled publication and caller-aware membership.

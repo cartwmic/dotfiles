@@ -216,6 +216,21 @@ Notes:
 - `furi` is installed by the `mise` bootstrap task, and bootstrap registers and starts `ashwwwin/automation-mcp` so the canonical `furi` MCP entry works for both Claude and Codex after apply.
 - On macOS, `automation-mcp` also needs Accessibility and Screen Recording permissions in System Settings > Privacy & Security before its tools can fully control the machine.
 
+## Standing reminder in Pi
+
+On desktop profiles, `/reminder` edits one current reminder for the saved Pi
+session. Successful editor close activates it; canceled or failed edits leave
+the prior value unchanged. Each operator message receives the value current
+when Pi processes it, including queued steering. `/tree` keeps the session's
+current value; `/fork` and `/clone` copy it into independent sessions. Tool
+continuations and extension-generated messages do not receive a new reminder.
+
+The extension needs the source-managed input-origin runtime patch. Apply both
+only after approval, then restart Pi. Its isolated proof currently pins Pi
+0.87.1; rerun it after checking patch anchors on upgrades. See the
+[extension guide](./dot_pi/private_agent/extensions/standing-reminder/README.md)
+and [proof commands](./tests/standing-reminder/README.md). Termux excludes Pi.
+
 ## System One in Pi
 
 The `personal` profile loads [cartwmic/system-one-tools](https://github.com/cartwmic/system-one-tools)
