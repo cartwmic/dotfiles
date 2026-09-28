@@ -9,66 +9,98 @@ Ubuntu/WSL, and Termux). Chezmoi maps these files onto `$HOME`; mise installs
 and versions the tools. Profiles (`personal`, `axon-work-computer`, `termux`)
 select what gets deployed.
 
-Two agent-instruction files exist on purpose and must stay different:
+Two baseline agent-instruction files exist on purpose and must stay different:
 
 - [AGENTS.md](./AGENTS.md) — repo-only guide for work **in this tree**. Listed
   in `.chezmoiignore`; never deployed. Chezmoi matches ignore rules against
   **destination** names, so this file cannot coexist with a source that deploys
   to `~/AGENTS.md` (same target; `inconsistent state`).
-- [dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl) — deploys to
+- [dot_pi/private_agent/literal_AGENTS.md.tmpl](./dot_pi/private_agent/literal_AGENTS.md.tmpl) — deploys to
   `~/.pi/agent/AGENTS.md`. Pi loads that agent-directory file first on every
   session, then walks ancestors from the cwd. Source is `literal_AGENTS.md.tmpl` so
-  a session whose cwd is under `dot_pi/agent/` does not also load the source
+  a session whose cwd is under `dot_pi/private_agent/` does not also load the source
   (same text, two paths). Do not also create `~/AGENTS.md`.
 
 Humans start at [Quick Start](#quick-start). Agents working in this repo start
 at [AGENTS.md](./AGENTS.md). Phone setup is in [termux/README.md](./termux/README.md).
 Harness internals are in [dot_local/share/agent-harness/README.md](./dot_local/share/agent-harness/README.md).
 Zellij plugin/fork notes are in [dot_config/zellij/README.md](./dot_config/zellij/README.md).
-Pi-global agent instructions are in [dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl).
+Pi-global agent instructions are in [dot_pi/private_agent/literal_AGENTS.md.tmpl](./dot_pi/private_agent/literal_AGENTS.md.tmpl).
 
 ## Quick Start
 
-```bash
-# Install zsh and set as default shell (required before running chezmoi)
-# Ubuntu/WSL:
+This unmodified setup is for the owner's fresh `personal` machine. It needs
+access to the owner's 1Password references and internal services (including
+SSH provisioning, Hindsight, and ntfy). On another machine, adapt or disable
+those integrations before applying. On macOS, [install Homebrew](https://brew.sh/)
+first: the mise installer uses it. On WSL, the chezmoi pre-hook needs `op`
+or the Windows `op.exe` on PATH; install one before init if missing. On
+Ubuntu/WSL, install zsh and set it as the default shell:
+
+```sh
 sudo apt-get update && sudo apt-get install -y zsh
 sudo chsh "$USER" -s /usr/bin/zsh
+```
 
-# macOS (zsh is already default on modern macOS)
-# Skip this step
+For a fresh personal installation, create the profile config once and clone
+the source **without applying**. An existing `~/.config/chezmoi/chezmoi.yaml`
+needs its own review; the command below refuses to replace it.
 
-# Create chezmoi config directory
+```sh
+set -eu
 mkdir -p ~/.config/chezmoi
-
-# Copy example config (download from repo or create manually)
-# Option 1: Download from GitHub
+[ ! -e ~/.config/chezmoi/chezmoi.yaml ] || { printf '%s\n' 'Existing chezmoi profile; inspect it first' >&2; exit 1; }
 curl -fsSL https://raw.githubusercontent.com/cartwmic/dotfiles/main/example.chezmoi.yaml -o ~/.config/chezmoi/chezmoi.yaml
+installer=$(curl -fsLS https://get.chezmoi.io)
+sh -c "$installer" -- -b "$HOME/.local/bin" init cartwmic
+```
 
-# Option 2: Create manually
-cat > ~/.config/chezmoi/chezmoi.yaml << 'EOF'
-data:
-  profile: "personal"
-EOF
+Before the **first** apply, inspect the cloned [removal list](./.chezmoiremove),
+especially `~/termux`, and ask the owner if any persistent directory contains
+unrelated data. Preview the effects:
 
-# Install chezmoi and apply dotfiles (automatically installs mise + all tools)
-sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" init --apply cartwmic
+```sh
+"$HOME/.local/bin/chezmoi" apply --dry-run --verbose
+```
 
-# That's it! Restart your shell
-exec zsh
+Apply only when that output matches intent. Bootstrap runs the configured
+profile tasks; check their results before assuming a tool installed. On a fresh
+macOS host, the first RustDesk configuration may stop until RustDesk has been
+launched once to create its local identity; launch and quit it, then rerun
+`chezmoi apply`. If personal SSH later reports `Permission denied (publickey)`,
+authenticate 1Password or run `~/.local/user_scripts/refresh_op_service_account_token.sh`,
+then reapply to provision the key. Other [manual steps](#manual-steps) remain:
+
+```sh
+"$HOME/.local/bin/chezmoi" apply && exec zsh
 ```
 
 ### Termux (Android)
 
 Termux is a first-class profile (`profile: "termux"`) — thin SSH jump host,
 `.termux` UI config, and ntfy jump handlers. It does **not** install the full
-desktop/agent stack. See `termux/README.md`.
+desktop/agent stack. See [Termux setup](./termux/README.md). On a fresh phone,
+create the profile once and clone before applying:
 
 ```bash
+set -eu
 pkg install -y chezmoi git openssh coreutils termux-api python vim
 mkdir -p ~/.config/chezmoi
+[ ! -e ~/.config/chezmoi/chezmoi.yaml ] || { printf '%s\n' 'Existing chezmoi profile; inspect it first' >&2; exit 1; }
 printf 'data:\n  profile: "termux"\n' > ~/.config/chezmoi/chezmoi.yaml
-chezmoi init --apply https://github.com/cartwmic/dotfiles.git
+chezmoi init https://github.com/cartwmic/dotfiles.git
+```
+
+Inspect [`.chezmoiremove`](./.chezmoiremove) in the cloned source before the
+first apply, check ownership of persistent paths, then preview and apply only
+if the output matches intent:
+
+```bash
+chezmoi apply --dry-run --verbose
+```
+
+```bash
+chezmoi apply
 ```
 
 ## What's Included
@@ -97,7 +129,7 @@ chezmoi init --apply https://github.com/cartwmic/dotfiles.git
 
 - Pi coding agent, claude, claude-code-acp, vectorcode, mistral-vibe, mermaid-cli
 - Herdr **0.9.1 / protocol 22** with a desktop-only overview plugin on `personal` and `axon-work-computer`
-- Portable `session-recap` and `passage-review` workflows; Termux stays an SSH client, not a Herdr plugin host
+- Portable `session-recap` and `passage-review` workflows; Termux stays an SSH client and has no Herdr plugin
 
 **Remote access:**
 
@@ -115,7 +147,7 @@ On Ubuntu, provisioning refuses to remove conflicting distribution packages auto
 
 On `personal` profile hosts, `mise run bootstrap` installs RustDesk when missing. Other chezmoi profiles skip RustDesk. A chezmoi onchange script then applies portable settings from `.chezmoidata.toml`: rendezvous server, relay server, public server key, password approval mode, permanent-password verification, and service-enabled state. It removes RustDesk's `stop-service` option. Device identity, trusted-device data, proxy credentials, local IP state, UI state, and hardware-codec state remain machine-local.
 
-On macOS, the same helper installs pinned RustDesk 1.4.9 launchd definitions, hardened to write daemon logs under `/Library/Logs/RustDesk` instead of `/tmp`: a root LaunchDaemon for the machine service and a LoginWindow/Aqua LaunchAgent for screen capture and input. Root service identity is seeded once from existing user identity, never from chezmoi source. After password rotation, only encrypted password storage and its salt are synchronized between Aqua and LoginWindow identity profiles. This lets RustDesk start at macOS login window after FileVault has been unlocked; nothing can start before FileVault unlock. A service first installed while machine is already at login window becomes available after next reboot. Fresh machines must first log in and launch RustDesk once to initialize identity.
+On macOS, the same helper installs pinned RustDesk 1.4.9 launchd definitions that write daemon logs under `/Library/Logs/RustDesk`: a root LaunchDaemon for the machine service and a LoginWindow/Aqua LaunchAgent for screen capture and input. Do not put those logs under `/tmp`. Root service identity is seeded once from existing user identity, never from chezmoi source. After password rotation, only encrypted password storage and its salt are synchronized between Aqua and LoginWindow identity profiles. This lets RustDesk start at macOS login window after FileVault has been unlocked; nothing can start before FileVault unlock. A service first installed while machine is already at login window becomes available after next reboot. Fresh machines must first log in and launch RustDesk once to initialize identity.
 
 The permanent password lives only in 1Password. Rotate it there, then apply it again with:
 
@@ -138,10 +170,12 @@ Shared passwords increase blast radius: compromise of one machine or this 1Passw
 
 Canonical harness-agnostic configuration lives under:
 
-- `~/.local/share/agent-harness/canonical/skills/`
-- `~/.local/share/agent-harness/canonical/mcp/servers.json`
+- `dot_local/share/agent-harness/canonical/skills/`
+- `dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl`
 
-These are the authoring sources of truth. Harness-specific adapters project them into supported harnesses.
+Edit these chezmoi source paths. Chezmoi deploys them under
+`~/.local/share/agent-harness/`; harness-specific adapters then project them
+into supported harnesses.
 
 Current supported harnesses:
 
@@ -154,45 +188,31 @@ Current supported configuration domains:
 - `skills`
 - `mcp`
 
-Maintenance and extension documentation lives in [dot_local/share/agent-harness/README.md](./dot_local/share/agent-harness/README.md).
-
-Apply all supported adapters:
-
-```bash
-~/.local/user_scripts/apply_harness_config.sh
-```
-
-Apply a single harness:
-
-```bash
-~/.local/user_scripts/apply_harness_config.sh claude
-~/.local/user_scripts/apply_harness_config.sh codex
-~/.local/user_scripts/apply_harness_config.sh pi
-```
-
-Interactively sync canonical skills (shows diff, prompts before applying):
-
-```bash
-~/.local/user_scripts/sync_harness_skills.sh            # interactive
-~/.local/user_scripts/sync_harness_skills.sh --dry-run   # preview only
-~/.local/user_scripts/sync_harness_skills.sh --yes        # no prompt
-```
-
-Behavior:
-
-- Skills are linked into harness skill directories from the canonical `SKILL.md` bundles.
-- `sync_harness_skills.sh` compares chezmoi source against deployed canonical skills, showing additions, removals (orphans), and content changes before applying.
-- Claude MCP is generated as a managed setup script and applied through the Claude CLI when available.
-- Codex MCP is rendered into a managed block inside `~/.codex/config.toml`.
-- Canonical MCP entries are authored in `dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl`.
+[Harness adapter maintenance](./dot_local/share/agent-harness/README.md)
+covers applying skills and MCP configuration, including the interactive skill
+sync and each harness's projection.
 
 Notes:
 
 - Harness-specific MCP secrets can be mapped in adapter metadata under `~/.local/share/agent-harness/adapters/<harness>/mcp-secrets.json`.
 - Secret-backed adapter metadata is resolved through the 1Password CLI via `op read`.
-- Harness instruction files are hand-maintained and split: repo [AGENTS.md](./AGENTS.md) (chezmoi source, not deployed), Pi-global [dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl) (`~/.pi/agent/AGENTS.md`). Claude still uses `~/.claude/CLAUDE.md`; Codex still uses `~/.codex/AGENTS.md`.
+- Harness instruction files are hand-maintained and split: repo [AGENTS.md](./AGENTS.md) stays in chezmoi source and is ignored on deployment; Pi-global [dot_pi/private_agent/literal_AGENTS.md.tmpl](./dot_pi/private_agent/literal_AGENTS.md.tmpl) deploys to `~/.pi/agent/AGENTS.md`. Claude still uses `~/.claude/CLAUDE.md`; Codex still uses `~/.codex/AGENTS.md`.
 - `furi` is installed by the `mise` bootstrap task, and bootstrap registers and starts `ashwwwin/automation-mcp` so the canonical `furi` MCP entry works for both Claude and Codex after apply.
 - On macOS, `automation-mcp` also needs Accessibility and Screen Recording permissions in System Settings > Privacy & Security before its tools can fully control the machine.
+
+## System One in Pi
+
+The `personal` profile lists the unpinned
+[`system-one-tools` Git package](https://github.com/cartwmic/system-one-tools)
+for Pi. It loads one `system_one` tool and `/so` commands for evidence-backed
+Choice, Boolean, and Score judgments. This checkout supplies no decision
+service or model; generic chat-completions endpoints cannot serve its typed
+requests. The package's in-process session API is internal. The Git checkout
+can move to a later commit on `pi update https://github.com/cartwmic/system-one-tools`;
+results and probabilities are advisory, and live calls may cost money. [Setup, use, and troubleshooting](./dot_pi/private_agent/extensions/system-one/README.md)
+live in a docs-only chezmoi directory alongside its scoped
+[maintenance instructions](./dot_pi/private_agent/extensions/system-one/AGENTS.md).
+The work and Termux profiles receive neither the package entry nor these docs.
 
 ## Herdr overview and phone route
 
@@ -288,7 +308,7 @@ selection capture is unavailable. See
 
 ## Tool Management with mise
 
-mise handles version management for Node.js, Python, and Rust with automatic version switching:
+mise handles Node.js and Python version switching; rustup selects Rust toolchains:
 
 ```bash
 # Install multiple Node versions
@@ -323,7 +343,7 @@ dot_config/
   ├── lazygit/                   # Lazygit TUI
   └── zellij/                    # Zellij multiplexer (see dot_config/zellij/README.md for plugin/fork notes)
 run_once_after_00_install_mise.sh          # Installs mise first in post-apply phase
-run_onchange_after_10_mise_bootstrap.sh    # Installs tools after mise is available
+run_onchange_after_10_mise_bootstrap.sh.tmpl # Installs tools after mise is available
 private_dot_zshrc                # Zsh configuration
 dot_zsh_plugins.txt              # Antidote plugin list
 ```
@@ -333,117 +353,72 @@ dot_zsh_plugins.txt              # Antidote plugin list
 - **macOS**: Homebrew + mise
 - **Ubuntu/WSL**: apt + mise
 
-All tools install automatically via `chezmoi apply`.
+`chezmoi apply` runs the configured profile tasks. Inspect their results;
+[manual steps](#manual-steps) and host-specific limits still apply.
 
 ## Usage
 
 Edit **source** in this repository (or via `chezmoi edit` on a destination
 path). Apply to materialize `$HOME`. Onchange scripts re-run when their
 inputs change (mise bootstrap, harness apply, Pi patches, RustDesk, and so on).
+In a worktree, pass its path with `--source`; otherwise chezmoi uses the base
+checkout. Inspect the dry-run and live destination before an approved apply.
 
 ```bash
-# Edit config files
-chezmoi edit ~/.zshrc
-chezmoi edit ~/.config/mise/config.toml
-
-# Preview, then apply (auto-runs mise bootstrap if config changed)
-chezmoi apply --dry-run --verbose
-chezmoi apply
+REPO="$(git rev-parse --show-toplevel)"
+chezmoi --source "$REPO" edit ~/.zshrc
+chezmoi --source "$REPO" edit ~/.config/mise/config.toml
+chezmoi --source "$REPO" apply --dry-run --verbose ~/.zshrc
+# After approval and inspection:
+chezmoi --source "$REPO" apply ~/.zshrc
 ```
 
-`chezmoi re-add` is a silent no-op on templated source files — change the
-`.tmpl` in this tree instead. `chezmoi diff` shows live destination on the
-**a/** side and source on **b/** (inverted from a usual source→target diff).
+For template and drift traps, use the repo [AGENTS.md](./AGENTS.md) before
+changing the source or taking one side of a live conflict.
 
 ## Docs map
 
-Root [README.md](./README.md) is the product doc (ignored from `$HOME`). Nested
-docs belong only where the subtree has its own audience or procedure.
+This README covers installation and what each profile contains. Agents editing
+this source use [AGENTS.md](./AGENTS.md) for repository procedure. The
+[Pi-global source](./dot_pi/private_agent/literal_AGENTS.md.tmpl) deploys to
+`~/.pi/agent/AGENTS.md`; the [System One scoped guide](./dot_pi/private_agent/extensions/system-one/AGENTS.md)
+applies only inside its docs directory. Shared instruction fragments and
+harness adapter procedure are in the [agent-harness guide](./dot_local/share/agent-harness/README.md).
 
-Pi auto-loads `AGENTS.md` / `AGENTS.override.md` / `CLAUDE.md` from
-`~/.pi/agent/` first, then every ancestor of the cwd (path-deduped). It does
-**not** auto-load `README.md`. Nested `AGENTS.md` in a source dir therefore
-stacks on [AGENTS.md](./AGENTS.md) and the Pi-global file whenever cwd is in
-that subtree. Use README for subtree procedure. Do not add `~/AGENTS.md`. Do
-not add a second Pi-global copy besides
-[dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl).
-
-### Instruction files (exactly these)
-
-| File | Audience | Deployed |
-| --- | --- | --- |
-| [AGENTS.md](./AGENTS.md) | Chezmoi source operations | No |
-| [dot_local/share/agent-harness/canonical/instructions/AGENTS.md](./dot_local/share/agent-harness/canonical/instructions/AGENTS.md) | Every harness (included) | Pi / Codex `AGENTS.md`; Claude `CLAUDE.md` |
-| [dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl) | Every Pi session | `~/.pi/agent/AGENTS.md` |
-| [dot_claude/CLAUDE.md.tmpl](./dot_claude/CLAUDE.md.tmpl) | Every Claude Code session | `~/.claude/CLAUDE.md` |
-| [dot_codex/modify_AGENTS.md.tmpl](./dot_codex/modify_AGENTS.md.tmpl) | Codex (managed canonical-instruction block) | `~/.codex/AGENTS.md` |
-
-Shared standing rules live in
-[dot_local/share/agent-harness/canonical/instructions/AGENTS.md](./dot_local/share/agent-harness/canonical/instructions/AGENTS.md)
-and are included into each harness `AGENTS.md`: Pi
-[dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl),
-Codex `~/.codex/AGENTS.md`, and Claude `~/.claude/CLAUDE.md` (Claude's
-user-global filename is `CLAUDE.md`). Do not create `~/AGENTS.md`. Hindsight
-guidance is a second include in those same files (Pi: `APPEND_SYSTEM.md`).
-
-Harness-agnostic skill/MCP procedure stays in
-[dot_local/share/agent-harness/README.md](./dot_local/share/agent-harness/README.md).
-Skills use `SKILL.md`, not `AGENTS.md`.
-
-Do not add nested `AGENTS.md`. The auto-loaded agent-instruction files are the
-repo, Pi, Claude, and Codex rows in the table. The canonical `AGENTS.md` is
-included into those; it is not a fifth home-directory file.
-
-### Already present (keep)
-
-- [termux/README.md](./termux/README.md) — Termux profile / phone jump host
-- [dot_config/zellij/README.md](./dot_config/zellij/README.md) — plugins/forks
-- [dot_local/share/agent-harness/README.md](./dot_local/share/agent-harness/README.md) — skills/MCP adapters
-- [dot_local/share/pi-patches/README.md](./dot_local/share/pi-patches/README.md) — add a `patch.mjs`, `PI_CHEZMOI_PROFILE=personal` gate, state/backup paths, re-apply after `npm update -g` / mise reinstall
-- Per-patch READMEs under `dot_local/share/pi-patches/` (failure modes)
-- [dot_pi/private_agent/extensions/README.md](./dot_pi/private_agent/extensions/README.md) — authoring: tests, never capture `ctx`, `create_` vs managed files, profile gates in `.chezmoiignore`. Deploys to `~/.pi/agent/extensions/README.md` (safe: Pi ignores README).
-- Per-extension READMEs: [auto-compact](./dot_pi/private_agent/extensions/auto-compact/README.md), [hindsight](./dot_pi/private_agent/extensions/hindsight/README.md), [issue](./dot_pi/private_agent/extensions/issue/README.md), [ntfy](./dot_pi/private_agent/extensions/ntfy/README.md), [openrouter-gate](./dot_pi/private_agent/extensions/openrouter-gate/README.md), [pi-patch-guard](./dot_pi/private_agent/extensions/pi-patch-guard/README.md), [catalog-overlay-nudge](./dot_pi/private_agent/extensions/catalog-overlay-nudge/README.md), [goal](./dot_pi/private_agent/extensions/goal/README.md), [subagent](./dot_pi/private_agent/extensions/subagent/README.md), [web-search](./dot_pi/private_agent/extensions/web-search/README.md), [Herdr overview](./dot_pi/private_agent/extensions/herdr-overview/README.md), [passage review](./dot_pi/private_agent/extensions/passage-review/README.md)
-- [dot_local/share/herdr-overview/README.md](./dot_local/share/herdr-overview/README.md) — desktop Herdr 0.9.1 runtime, Board/Mosaic behavior, passive recap display, naming, theme, and checks.
-- [dot_local/share/session-recap/README.md](./dot_local/share/session-recap/README.md) — portable CLI, prompts, profile defaults, host override, and dated history.
-- [dot_local/share/passage-review/README.md](./dot_local/share/passage-review/README.md) — standalone snapshot/review/export CLI and local library.
-- [tests/herdr-overview/](./tests/herdr-overview/) — source-only outside-in proof driver; excluded from home deployment.
-- [dot_config/nvim/README.md](./dot_config/nvim/README.md) — local LazyVim overlay, not the stock starter: plugins in `lua/plugins/`, do not vendor LazyVim, refresh `lazy-lock.json` via [prompts/git-commit-chezmoi-lazylock.md](./dot_config/nvim/prompts/git-commit-chezmoi-lazylock.md)
-- [dot_pi/session-search/README.md](./dot_pi/session-search/README.md) — personal/homelab only (`ollama.internal` + OpenAI Codex digest). Ignored on work/termux. Do not copy onto `axon-work-computer`.
-
-### Leave without their own doc
-
-`dot_config/mise` (comments in `config.toml`), `dot_config/kitty`,
-`dot_config/lazygit`, `dot_config/herdr`, `dot_config/mcphub` (nvim MCPHub
-plugin, not agent-harness MCP), `private_dot_ssh`, `dot_local/user_scripts`,
-`Library/`, `docs/plans/` (historical), `bin/` (covered by
-[termux/README.md](./termux/README.md)), `dot_vibe/` (not a first-class
-harness), `dot_local/share/loop-engine-providers/` (untracked / incomplete).
-
+Other subtree guides: [Termux](./termux/README.md),
+[Zellij](./dot_config/zellij/README.md), [Pi extensions](./dot_pi/private_agent/extensions/README.md),
+[Pi patches](./dot_local/share/pi-patches/README.md),
+[Herdr overview](./dot_local/share/herdr-overview/README.md),
+[session-recap](./dot_local/share/session-recap/README.md),
+[passage-review](./dot_local/share/passage-review/README.md),
+[Neovim](./dot_config/nvim/README.md), and
+[session-search](./dot_pi/session-search/README.md).
 
 ## Validation
 
 After editing source, confirm mapping and that apply would not surprise you:
 
 ```bash
-chezmoi doctor
-chezmoi verify
-chezmoi apply --dry-run --verbose
+REPO="$(git rev-parse --show-toplevel)"
+chezmoi --source "$REPO" doctor
+chezmoi --source "$REPO" verify
+chezmoi --source "$REPO" apply --dry-run --verbose
 ```
 
-`chezmoi doctor` should stay `ok` for source-dir and dest-dir. Treat a dirty
-working tree warning as informational while you still have uncommitted edits.
-`chezmoi verify` reports destinations that drifted from source. Dry-run before
-any real apply; from a non-TTY agent shell, apply needs `--force` if chezmoi
-refuses `/dev/tty`.
+`chezmoi doctor` should stay `ok` for source-dir and dest-dir. A dirty
+working tree warning is expected while editing. `chezmoi verify` reports
+live destinations that differ from source. Review the dry-run before any
+real apply; [AGENTS.md](./AGENTS.md) owns the conflict and non-TTY procedure.
 
 ## Manual Steps
 
-After `chezmoi apply`, only these require manual setup:
+After `chezmoi apply`, some first-run steps still need the owner:
 
 - Install gvm: `bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')`
-- Set default Go version: `gvm use go1.21 --default`
-- [macOS] Add XQuartz as login item
-- [macOS] Grant RustDesk Accessibility, Screen Recording, and, if needed, Input Monitoring permissions
+- Install Go 1.21 with `gvm install go1.21`, then set it as default: `gvm use go1.21 --default`
+- [macOS] Add XQuartz as a login item; launch Docker Desktop once to accept its license ([Docker provisioning](#docker-provisioning)).
+- [macOS] If the first apply stops on RustDesk identity, log in, launch and quit RustDesk once, then reapply. Grant Accessibility, Screen Recording, and, if needed, Input Monitoring permissions ([RustDesk provisioning](#rustdesk-provisioning)).
+- [personal] Configure a System One connection and restart Pi after its package is installed ([System One setup](./dot_pi/private_agent/extensions/system-one/README.md)).
 
 See [AGENTS.md](./AGENTS.md) for repository agent instructions (not deployed).
-See [dot_pi/agent/literal_AGENTS.md.tmpl](./dot_pi/agent/literal_AGENTS.md.tmpl) for Pi-global agent instructions.
+See [dot_pi/private_agent/literal_AGENTS.md.tmpl](./dot_pi/private_agent/literal_AGENTS.md.tmpl) for Pi-global agent instructions.

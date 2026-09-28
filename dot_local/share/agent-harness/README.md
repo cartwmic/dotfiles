@@ -33,9 +33,9 @@ Rules:
 ## Add A Canonical Instruction
 
 Edit a file under [`canonical/instructions/`](./canonical/instructions/). These
-fragments are included into every harness, not copied by hand:
+fragments are included into every harness. Do not copy them by hand:
 
-- Pi: [`dot_pi/agent/literal_AGENTS.md.tmpl`](../../../dot_pi/agent/literal_AGENTS.md.tmpl) (`~/.pi/agent/AGENTS.md`)
+- Pi: [`dot_pi/private_agent/literal_AGENTS.md.tmpl`](../../../dot_pi/private_agent/literal_AGENTS.md.tmpl) (`~/.pi/agent/AGENTS.md`)
 - Claude: [`dot_claude/CLAUDE.md.tmpl`](../../../dot_claude/CLAUDE.md.tmpl) (Claude's user-global filename is `CLAUDE.md`)
 - Codex: [`dot_codex/modify_AGENTS.md.tmpl`](../../../dot_codex/modify_AGENTS.md.tmpl) (`~/.codex/AGENTS.md` managed block)
 
@@ -43,7 +43,7 @@ Guidelines:
 
 - One concern per file. Keep fragments includable (a section heading is fine; do not add a document H1).
 - Shared standing rules live in [`canonical/instructions/AGENTS.md`](./canonical/instructions/AGENTS.md). Include that file into each harness's `AGENTS.md` (Claude: `CLAUDE.md`). Do not create `~/AGENTS.md`. Do not put shared rules in Pi `APPEND_SYSTEM.md`.
-- Apply with `chezmoi apply --force` and check the live dest files.
+- Follow [Apply and Verify](#apply-and-verify), then check the live destination files.
 
 Current files: [AGENTS.md](./canonical/instructions/AGENTS.md) (YAGNI, KISS, scripts vs skills, voice, black-box validation) and [hindsight-guidance.md](./canonical/instructions/hindsight-guidance.md).
 
@@ -107,7 +107,7 @@ On macOS, remember to grant Accessibility and Screen Recording permissions in Sy
 After editing the canonical MCP file:
 
 1. If the server needs secrets, add or update adapter metadata in `adapters/<harness>/mcp-secrets.json.tmpl`.
-2. Apply with `chezmoi apply --force`.
+2. Follow [Apply and Verify](#apply-and-verify) for the changed source.
 3. Verify the harness-specific result:
    - Claude: `claude mcp list`
    - Codex: `codex mcp list`
@@ -134,8 +134,8 @@ Guidelines:
 
 After adding a skill:
 
-1. Run `~/.local/user_scripts/sync_harness_skills.sh` to preview and apply.
-2. Or apply with `chezmoi apply --force` (no preview).
+1. Follow [Apply and Verify](#apply-and-verify) to deploy the changed canonical source.
+2. Follow [Sync Skills](#sync-skills) with `CHEZMOI_SOURCE_DIR` set to the current worktree; inspect orphan removals before applying.
 3. Verify the symlinks exist:
    - `find ~/.claude/skills -mindepth 1 -maxdepth 1 -type l`
    - `find ~/.codex/skills -mindepth 1 -maxdepth 1 -type l`
@@ -215,7 +215,7 @@ To add one:
    - clear logging
 3. Add adapter metadata under `adapters/<harness>/` only if needed.
 4. Document the new domain in the top-level README and this file.
-5. Apply with `chezmoi apply --force`.
+5. Follow [Apply and Verify](#apply-and-verify) for the changed source.
 6. Verify the live harness outputs.
 
 Guidelines:
@@ -226,18 +226,20 @@ Guidelines:
 
 ## Sync Skills
 
-Use `sync_harness_skills.sh` to interactively sync canonical skills from chezmoi source to the deployed location. It compares the two directories and shows a color-coded diff before making changes.
+Use `sync_harness_skills.sh` to compare canonical skills in this worktree
+with the deployed location. Its default source is the base chezmoi checkout,
+so set `CHEZMOI_SOURCE_DIR` explicitly. The preview lists orphan directories
+that the apply would remove; inspect their ownership before approving it.
 
 ```bash
-# Preview what would change
-~/.local/user_scripts/sync_harness_skills.sh --dry-run
-
-# Interactive — shows diff, prompts before applying
-~/.local/user_scripts/sync_harness_skills.sh
-
-# Non-interactive — shows diff, applies immediately
-~/.local/user_scripts/sync_harness_skills.sh --yes
+REPO="$(git rev-parse --show-toplevel)"
+CHEZMOI_SOURCE_DIR="$REPO" ~/.local/user_scripts/sync_harness_skills.sh --dry-run
+# After reviewing additions, updates, and orphan removals with the owner:
+CHEZMOI_SOURCE_DIR="$REPO" ~/.local/user_scripts/sync_harness_skills.sh
 ```
+
+The script also supports `--yes` for an owner-approved unattended run; it
+skips the interactive confirmation.
 
 The script detects:
 - **Additions**: skills in chezmoi source not yet deployed
@@ -248,17 +250,24 @@ After syncing canonical skills it automatically runs `apply_harness_config.sh` t
 
 ## Apply And Verify
 
-Canonical changes are meant to be applied through chezmoi, not by manually copying files around.
-
-Apply:
+Canonical changes go through the repo-root [AGENTS.md](../../../AGENTS.md)
+apply boundary. Use the current worktree, inspect the dry-run and live targets,
+and get owner approval before any real apply. A full apply also runs onchange
+scripts; include their effects in that inspection. Use `--force` only after
+choosing the source side of a known conflict.
 
 ```bash
-# Full chezmoi apply (skills + MCP + everything else)
-chezmoi apply --force
-
-# Or sync just skills interactively
-~/.local/user_scripts/sync_harness_skills.sh
+REPO="$(git rev-parse --show-toplevel)"
+chezmoi --source "$REPO" apply --dry-run --verbose
+# After reviewing the exact effects and obtaining approval:
+chezmoi --source "$REPO" apply
 ```
+
+For a skill-only change, deploy the canonical source first, then run the
+interactive `sync_harness_skills.sh` above with the same worktree source. For
+MCP changes, verify each harness's result after apply; Pi writes
+`~/.pi/agent/mcp.json` (check it parses privately with `jq empty
+~/.pi/agent/mcp.json`). Do not paste rendered secret values into logs.
 
 Useful verification commands:
 
