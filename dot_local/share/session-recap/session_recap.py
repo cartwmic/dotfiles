@@ -56,7 +56,7 @@ def _merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, A
     return merged
 
 
-def load_config(directory: Path) -> tuple[list[str], str, str]:
+def _read_config(directory: Path) -> dict[str, Any]:
     config_path = directory / "config.toml"
     if not config_path.is_file():
         raise RecapError(f"missing configuration: {config_path}")
@@ -64,24 +64,35 @@ def load_config(directory: Path) -> tuple[list[str], str, str]:
         config = tomllib.loads(config_path.read_text(encoding="utf-8"))
         local_path = directory / "config.local.toml"
         if local_path.is_file():
-            local = tomllib.loads(local_path.read_text(encoding="utf-8"))
-            config = _merge_config(config, local)
+            config = _merge_config(config, tomllib.loads(local_path.read_text(encoding="utf-8")))
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise RecapError(f"could not read configuration: {exc}") from exc
+    return config
 
-    command = config.get("command")
+
+def load_config(directory: Path) -> tuple[list[str], str, str]:
+    command = _read_config(directory).get("command")
     if (
         not isinstance(command, list)
         or not command
         or not all(isinstance(arg, str) for arg in command)
         or not command[0]
     ):
-        raise RecapError(f"{config_path} must define a non-empty command string array")
+        raise RecapError(f"configure a non-empty command array in {directory / 'config.local.toml'}")
 
     for name in ("single-prompt.md", "group-prompt.md"):
         if not (directory / name).is_file():
             raise RecapError(f"missing prompt template: {directory / name}")
     return command, "single-prompt.md", "group-prompt.md"
+
+
+def auto_publish_enabled(directory: Path) -> bool:
+    enabled = _read_config(directory).get("auto_publish", False)
+    if not isinstance(enabled, bool):
+        raise RecapError("auto_publish must be a boolean")
+    if enabled:
+        load_config(directory)
+    return enabled
 
 
 def _render_template(template: str, values: dict[str, str]) -> str:
@@ -569,6 +580,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="session-recap", description="Generate and store dated session recaps.")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
+    config = subparsers.add_parser("config", help="inspect automatic recap policy")
+    config_subparsers = config.add_subparsers(dest="config_action", required=True)
+    config_subparsers.add_parser("auto-publish", help="print enabled or disabled")
+
     create = subparsers.add_parser("create", help="generate and publish a recap from stdin")
     create.add_argument("--kind", required=True, choices=("single", "group"))
     create.add_argument("--label")
@@ -603,7 +618,9 @@ def main(argv: list[str] | None = None) -> int:
     root = data_dir()
     directory = config_dir()
     try:
-        if args.subcommand == "create":
+        if args.subcommand == "config":
+            print("enabled" if auto_publish_enabled(directory) else "disabled")
+        elif args.subcommand == "create":
             if args.source_id is not None:
                 args.source_id = _required_id(args.source_id, "--source-id")
             if args.kind == "single" and args.source_kind not in (None, "manual"):

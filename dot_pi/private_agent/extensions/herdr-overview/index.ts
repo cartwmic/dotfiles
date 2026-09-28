@@ -64,6 +64,19 @@ async function prepareAndPublish(
 ): Promise<void> {
 	if (!response?.text.trim() || response.stopReason === "aborted" || response.stopReason === "error") return;
 
+	let autoPublish: string;
+	try {
+		autoPublish = await runSessionRecap(["config", "auto-publish"]);
+	} catch {
+		warn("could not read recap auto-publish policy; run session-recap config auto-publish");
+		return;
+	}
+	if (autoPublish === "disabled") return;
+	if (autoPublish !== "enabled") {
+		warn("session-recap returned an invalid auto-publish policy");
+		return;
+	}
+
 	const socketPath = process.env.HERDR_SOCKET_PATH?.trim() || undefined;
 	const current = await currentPaneForCaller(socketPath, pending.callerPaneId);
 	if (current?.paneId !== pending.paneId) {

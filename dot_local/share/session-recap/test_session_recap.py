@@ -104,6 +104,37 @@ class SessionRecapCliTests(unittest.TestCase):
         )
         return result.stdout.strip()
 
+    def test_managed_default_is_off_until_host_opts_in(self) -> None:
+        (self.config_dir / "config.toml").write_text("auto_publish = false\n", encoding="utf-8")
+        self.assertEqual(self.run_cli("config", "auto-publish").stdout.strip(), "disabled")
+        self.run_cli("prompt", "set", "--session-id", "default-off", input_text="Current task.")
+        self.run_cli("prompt", "settle", "--session-id", "default-off")
+        self.assertFalse((self.data_dir / "records").exists())
+        missing = self.run_cli("create", "--kind", "single", input_text="Current task.", check=False)
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("config.local.toml", missing.stderr)
+
+        command = [sys.executable, str(FAKE_BACKEND), "success"]
+        local = self.config_dir / "config.local.toml"
+        local.write_text("auto_publish = true\ncommand = " + json.dumps(command) + "\n", encoding="utf-8")
+        self.assertEqual(self.run_cli("config", "auto-publish").stdout.strip(), "enabled")
+        self.assertRegex(self.create_single("Now opted in."), r"^[0-9a-f]{32}$")
+
+        local.write_text("auto_publish = false\ncommand = " + json.dumps(command) + "\n", encoding="utf-8")
+        self.assertEqual(self.run_cli("config", "auto-publish").stdout.strip(), "disabled")
+        self.assertRegex(self.create_single("Manual-only recap."), r"^[0-9a-f]{32}$")
+
+    def test_auto_opt_in_without_backend_fails_closed(self) -> None:
+        (self.config_dir / "config.toml").write_text("auto_publish = true\n", encoding="utf-8")
+        result = self.run_cli("config", "auto-publish", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("config.local.toml", result.stderr)
+
+        (self.config_dir / "config.toml").write_text('auto_publish = "true"\n', encoding="utf-8")
+        invalid = self.run_cli("config", "auto-publish", check=False)
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn("auto_publish must be a boolean", invalid.stderr)
+
     def test_single_without_label_publishes_a_dated_record(self) -> None:
         text = "Fixed the café ordering flow; next, verify the receipt email."
         record_id = self.create_single(text)

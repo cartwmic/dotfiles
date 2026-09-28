@@ -26,7 +26,10 @@ async function makeRuntime(t) {
   const captureLog = path.join(root, "backend-calls.jsonl");
   const recapConfigDir = path.join(configHome, "session-recap");
   await mkdir(recapConfigDir, { recursive: true });
-  await writeFile(path.join(recapConfigDir, "config.toml"), `command = ["python3", ${JSON.stringify(fakeBackend)}]\n`);
+  const recapConfigPath = path.join(recapConfigDir, "config.toml");
+  const recapCommand = `command = ["python3", ${JSON.stringify(fakeBackend)}]\n`;
+  const setAutoPublish = (enabled) => writeFile(recapConfigPath, `auto_publish = ${enabled}\n${recapCommand}`);
+  await setAutoPublish(true);
   await writeFile(path.join(recapConfigDir, "single-prompt.md"), "single:\n[[TEXT]]\n");
   await writeFile(path.join(recapConfigDir, "group-prompt.md"), "group:\n[[MEMBERS]]\n");
   await writeFile(configPath, '[theme]\nname = "nord"\nauto_switch = false\n');
@@ -43,7 +46,7 @@ async function makeRuntime(t) {
   };
   const runRecap = (args, input = "") => runSessionRecap(args, input, { bin: recapCli, env });
   const setBackendMode = (mode) => writeFile(modePath, `${mode}\n`);
-  return { root, configPath, dataRoot, stateDir, captureLog, env, runRecap, setBackendMode };
+  return { root, configPath, dataRoot, stateDir, captureLog, env, runRecap, setBackendMode, setAutoPublish };
 }
 
 function scriptedHerdrApi(initialMembership, initialTerminalIds = {}, initialAgentNames = {}) {
@@ -562,6 +565,39 @@ test("one-shot deadline wake-ups invoke only overview.reconcile and ignore super
   }));
   assert.equal(await runDeadlineWakeup({ workspaceId, deadline: due, stateDir, socketPath: "/tmp/herdr-test.sock", api }), true);
   assert.deepEqual(calls, [{ method: "plugin.action.invoke", params: { action_id: "overview.reconcile" } }]);
+});
+
+test("auto-off suppresses pending group calls and wake-ups until opt-in", async (t) => {
+  const runtime = await makeRuntime(t);
+  runtime.scheduled = [];
+  const api = scriptedHerdrApi({ "pane-one": "workspace-one" });
+  const piRecap = await publishPi(runtime, {
+    sessionId: "pi-pending", paneId: "pane-one", workspaceId: "workspace-one", text: "Ready for grouping",
+  });
+  let state = await reconcile(runtime, api, { now: Date.now() });
+  const deadline = state.recapCoordinator.workspaceDeadlines["workspace-one"];
+  assert.ok(deadline);
+  const capturesBefore = (await readFile(runtime.captureLog, "utf8")).trim().split("\n").length;
+
+  await runtime.setAutoPublish(false);
+  runtime.scheduled.length = 0;
+  state = await reconcile(runtime, api, { now: Date.parse(deadline) - 1, resumeDeadlines: true });
+  assert.equal(state.recapCoordinator.workspaceDeadlines["workspace-one"], deadline);
+  assert.deepEqual(runtime.scheduled, []);
+  state = await reconcile(runtime, api, { now: Date.parse(deadline), resumeDeadlines: true });
+  assert.equal(state.recapCoordinator.workspaceDeadlines["workspace-one"], deadline);
+  assert.equal(state.model.panes["pane-one"].recap.latest.record_id, piRecap.record_id);
+  assert.deepEqual(runtime.scheduled, []);
+  assert.equal((await readAllRecapRecords(runtime.dataRoot)).filter((r) =>
+    r.source_kind === "workspace" || r.source_kind === "herdr-session").length, 0);
+  assert.equal((await readFile(runtime.captureLog, "utf8")).trim().split("\n").length, capturesBefore);
+
+  await runtime.setAutoPublish(true);
+  state = await reconcile(runtime, api, { now: Date.parse(deadline), resumeDeadlines: true });
+  assert.equal(state.recapCoordinator.workspaceDeadlines["workspace-one"], undefined);
+  const groups = (await readAllRecapRecords(runtime.dataRoot)).filter((r) =>
+    r.source_kind === "workspace" || r.source_kind === "herdr-session");
+  assert.deepEqual(groups.map((r) => r.source_kind).sort(), ["herdr-session", "workspace"]);
 });
 
 test("failed workspace grouping records failure and never triggers session grouping", async (t) => {

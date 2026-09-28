@@ -626,7 +626,7 @@ def setup_herdr_run(run_id: str, base: Path | None = None) -> tuple[Path, dict[s
     (root / "backend-mode").write_text("success\n", encoding="utf-8")
     fake = ROOT / "tests/herdr-overview/fake_recap_backend.py"
     (recap_config / "config.toml").write_text(
-        f"command = [{json.dumps(sys.executable)}, {json.dumps(str(fake))}, \"success\"]\n",
+        f"auto_publish = true\ncommand = [{json.dumps(sys.executable)}, {json.dumps(str(fake))}, \"success\"]\n",
         encoding="utf-8",
     )
     (recap_config / "single-prompt.md").write_text(
@@ -2542,8 +2542,10 @@ def scenario_chezmoi() -> dict[str, Any]:
             template = run_process([binary, "--override-data-file", str(override), "execute-template", "--file",
                                     str(ROOT / "dot_config/session-recap/config.toml.tmpl")],
                                    check=False, timeout=20)
-            if template.returncode != 0 or "command =" not in template.stdout:
-                raise ProofFailure(f"could not render session-recap defaults for {profile}")
+            if (template.returncode != 0
+                or not re.search(r"(?m)^auto_publish\s*=\s*false\s*$", template.stdout)
+                or re.search(r"(?m)^command\s*=", template.stdout)):
+                raise ProofFailure(f"{profile} session-recap must default off without a managed backend")
             rendered_profiles[profile] = template.stdout
     profile_paths: dict[str, list[str]] = {}
     with tempfile.TemporaryDirectory(prefix="herdr-proof-profile-map-") as temp:
@@ -2577,11 +2579,9 @@ def scenario_chezmoi() -> dict[str, Any]:
                     raise ProofFailure(f"Termux-only proof helper leaked into the {profile} desktop profile")
                 if not any(path.startswith(".pi/agent/extensions/herdr-overview/") for path in paths):
                     raise ProofFailure(f"{profile} profile omits the desktop Pi publication adapter")
-    for profile, rendered in rendered_profiles.items():
-        if "claude" not in rendered:
-            raise ProofFailure(f"{profile} session-recap default did not render a configured command")
     return {"targeted_dry_run": True, "current_profile": current_profile,
             "desktop_mappings_checked": mappings, "rendered_profiles": list(rendered_profiles),
+            "recap_default_off": True,
             "profile_paths_checked": {profile: len(paths) for profile, paths in profile_paths.items()},
             "source_only_tests_excluded": True, "real_apply": False}
 

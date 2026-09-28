@@ -15,11 +15,14 @@ Herdr adapter; put native workspace grouping in the Herdr plugin.
   `SESSION_RECAP_PYTHON`, then a compatible `python3` on `PATH`, then a mise
   shim. Test that selection if changing the wrapper; macOS's system Python
   can be too old in a Herdr-hosted shell.
-- Keep recap generation a configured executable argv fed on stdin. The
-  managed desktop default is `claude -p`; the host-local
-  `~/.config/session-recap/config.local.toml` may override it. Tests must
-  use a fake backend. Do not commit credentials or call a paid/live backend
-  merely to check storage behavior.
+- Keep recap generation a configured executable argv fed on stdin. Managed
+  desktop config has `auto_publish = false` and no command. A host-local
+  `~/.config/session-recap/config.local.toml` supplies the backend; its
+  `auto_publish = true` opts Pi into automatic publication. The
+  `config auto-publish` command reports the resolved policy without invoking
+  a model. Manual `create` still works with a command when automation is off.
+  Tests use a fake backend. Do not commit credentials or call a paid/live
+  backend merely to check storage behavior.
 - `create` publishes a single or group record. Pi uses `prompt set/settle`
   for the current user input, then `prepare/publish` for a settled response.
   `prompt rekey` changes only a matching current prompt under the store lock;

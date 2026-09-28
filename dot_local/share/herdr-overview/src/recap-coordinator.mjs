@@ -239,6 +239,22 @@ export async function reconcileRecapCoordinator({
   const due = Object.entries(next.workspaceDeadlines)
     .filter(([, deadline]) => Date.parse(deadline) <= now)
     .sort(([leftId, leftDeadline], [rightId, rightDeadline]) => Date.parse(leftDeadline) - Date.parse(rightDeadline) || leftId.localeCompare(rightId));
+  const needsWakeup = Object.entries(next.workspaceDeadlines)
+    .some(([workspaceId, deadline]) => Date.parse(deadline) > now && (resumeDeadlines || changedDeadlines.has(workspaceId)));
+  if (due.length || needsWakeup) {
+    let autoPublish;
+    try {
+      autoPublish = await runRecap(["config", "auto-publish"]);
+    } catch (error) {
+      onError(error);
+      return { state: next, wakeups: [] };
+    }
+    if (autoPublish === "disabled") return { state: next, wakeups: [] };
+    if (autoPublish !== "enabled") {
+      onError(new Error("session-recap returned an invalid auto-publish policy"));
+      return { state: next, wakeups: [] };
+    }
+  }
 
   for (const [workspaceId] of due) {
     let members;

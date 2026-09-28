@@ -11,9 +11,9 @@ exposes macOS's older `/usr/bin/python3`. The CLI and Python implementation live
 at `dot_local/bin/executable_session-recap` and
 `dot_local/share/session-recap/session_recap.py` in chezmoi source. Use
 `create` for standalone single or group recaps; Pi and Herdr use the
-prompt/prepare/publish commands. The CLI runs on demand and requires a
-configured recap command. This repository does not bundle a model or recap
-service.
+prompt/prepare/publish commands. `create` and `prepare` require a configured
+recap command. Prompt storage works without one. This repository does not
+bundle a model or recap service.
 
 ## Setup
 
@@ -28,17 +28,23 @@ chezmoi apply ~/.local/bin/session-recap ~/.local/share/session-recap ~/.config/
 Desktop chezmoi profiles `personal` and `axon-work-computer` deploy the config
 template and editable prompts to `~/.config/session-recap/`:
 
-- `config.toml` — profile default command (`claude -p` for both desktop profiles)
+- `config.toml` — `auto_publish = false`, with no managed backend command
 - `single-prompt.md` — `[[LABEL]]` and `[[TEXT]]`
 - `group-prompt.md` — `[[LABEL]]` and `[[MEMBERS]]`
 
-The default command needs an installed, authenticated Claude CLI. For another
-stdin-to-stdout recap program, create the host-local, unmanaged
-`~/.config/session-recap/config.local.toml`:
+To generate a recap, create the host-local, unmanaged
+`~/.config/session-recap/config.local.toml` with a stdin-to-stdout command:
 
 ```toml
 command = ["/path/to/my-recap-command", "--stdin"]
+# Add auto_publish = true to publish settled Pi replies automatically.
 ```
+
+A configured command also works for manual `create` when automatic publication
+is off. `session-recap config auto-publish` prints `enabled` or `disabled`; an
+opt-in without a configured command fails closed. The Pi adapter checks this
+setting after settling the current prompt; the Herdr coordinator checks it
+before group generation or a deadline wake-up.
 
 The argv runs directly without a shell. The rendered prompt is sent on
 stdin; successful nonblank UTF-8 stdout is the recap. Exit failure, invalid
@@ -48,7 +54,7 @@ an SSH client. Its phone-side review library is separate.
 
 ## Usage
 
-A single input does not require a label:
+With a backend configured, a single input does not require a label:
 
 ```sh
 printf '%s\n' 'Recent changes and the present state.' |
@@ -99,12 +105,14 @@ replace a newer input while a prior response waits to publish.
 - `python3` is too old: the CLI requires Python 3.11+; set
   `SESSION_RECAP_PYTHON` to a compatible interpreter or make one available
   through mise.
-- The default backend exits or prints nothing: authenticate the Claude CLI
-  used by `claude -p`, or set `command` in host-local `config.local.toml` to
-  an available stdin-to-stdout program. The failed attempt stays in history
-  and the last good recap remains indexed.
-- No Herdr overview recap appears: this CLI also works on its own. Pi
-  publication requires the adapter in
+- `create` reports no command: add a nonempty `command` array in
+  `config.local.toml`. The managed config does not select a model.
+- No automatic Pi recap appears: run `session-recap config auto-publish`.
+  `disabled` is the managed default. Set `auto_publish = true` alongside a
+  working command in the local config to opt in. A failed or blank command
+  leaves the failed attempt in history and preserves the last good recap.
+- No Herdr overview recap appears after opting in: Pi publication requires
+  the adapter in
   `dot_pi/private_agent/extensions/herdr-overview/README.md` and the loaded
   plugin in `dot_local/share/herdr-overview/README.md` (paths relative to the
   chezmoi source root).
@@ -118,4 +126,5 @@ tests and the fake-backend CLI journey:
 mise exec -- python3 -c 'import sys; assert sys.version_info >= (3, 11)'
 PYTHONDONTWRITEBYTECODE=1 mise exec -- python3 -m unittest discover -s dot_local/share/session-recap -p 'test_*.py' -v
 mise exec -- python3 tests/herdr-overview/proof.py recap
+mise exec -- python3 tests/herdr-overview/proof.py chezmoi-dry-run
 ```
