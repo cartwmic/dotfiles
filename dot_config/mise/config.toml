@@ -651,15 +651,31 @@ fi
 '''
 
 [tasks."install-kubectl"]
-description = "Install kubectl CLI"
+description = "Install kubectl CLI for the host OS and architecture"
 run = '''
-if ! command -v kubectl >/dev/null 2>&1; then
-  VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt 2>/dev/null || echo "v1.31.0")
-  curl -LO "https://dl.k8s.io/release/${VERSION}/bin/linux/amd64/kubectl" || curl -k -LO "https://dl.k8s.io/release/${VERSION}/bin/linux/amd64/kubectl"
-  chmod +x kubectl
-  mkdir -p "$HOME/.local/bin"
-  mv kubectl "$HOME/.local/bin/"
+set -eu
+if command -v kubectl >/dev/null 2>&1; then
+  kubectl version --client
+  exit 0
 fi
+case "$(uname -s)" in
+  Darwin) OS=darwin ;;
+  Linux) OS=linux ;;
+  *) echo "ERROR: kubectl installer supports macOS and Linux" >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=amd64 ;;
+  arm64|aarch64) ARCH=arm64 ;;
+  *) echo "ERROR: kubectl installer supports amd64 and arm64" >&2; exit 1 ;;
+esac
+VERSION=$(curl -fsSL https://dl.k8s.io/release/stable.txt)
+TEMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TEMP_DIR"' EXIT HUP INT TERM
+curl -fsSL "https://dl.k8s.io/release/${VERSION}/bin/${OS}/${ARCH}/kubectl" -o "$TEMP_DIR/kubectl"
+chmod +x "$TEMP_DIR/kubectl"
+"$TEMP_DIR/kubectl" version --client
+mkdir -p "$HOME/.local/bin"
+mv "$TEMP_DIR/kubectl" "$HOME/.local/bin/kubectl"
 '''
 
 [tasks."install-claude-code-acp"]

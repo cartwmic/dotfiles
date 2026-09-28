@@ -37,50 +37,80 @@ stops if `brew` is missing. On a `personal` desktop, prepare an authenticated
 1Password CLI (`op`) that can read `op://developer/RustDesk/password` before
 applying. The RustDesk post-apply helper reads that item using desktop-app
 authentication or a host-local service-account token. The owner must provision
-access to the item in 1Password; this repository does not create it. A
-`personal` apply stops at the helper if the item cannot be read. Keep the token
-outside this repository.
+access to the item in 1Password; this repository does not create it. When the
+RustDesk onchange helper runs on a supported personal desktop, it stops if the
+item cannot be read. Confirm access before each personal desktop apply even
+when unchanged inputs will skip the helper. Keep the token outside this repository.
+
+The commands below are for a **fresh installation** and stop if a chezmoi
+config already exists. On an existing host, preserve that config, inspect its
+profile and hooks, and use the [preview/update path](#usage). Do not overwrite
+it with an example.
+
+The optional [example config](./example.chezmoi.yaml) includes a source-read
+hook. On WSL it needs Windows 1Password CLI `op.exe` on PATH or a working `op`;
+otherwise it stops before apply. Even dry-runs invoke configured source-read
+hooks; see [hook preflight](./AGENTS.md#workflow). The minimal config below
+omits that hook.
 
 ```bash
-# Install zsh and set as default shell (required before running chezmoi)
-# Ubuntu/WSL:
-sudo apt-get update && sudo apt-get install -y zsh
-sudo chsh "$USER" -s /usr/bin/zsh
-
-# macOS (zsh is already default on modern macOS)
-# Skip this step
-
-# Create chezmoi config directory
-mkdir -p ~/.config/chezmoi
-
-# Copy example config (download from repo or create manually)
-# Option 1: Download from GitHub
-curl -fsSL https://raw.githubusercontent.com/cartwmic/dotfiles/main/example.chezmoi.yaml -o ~/.config/chezmoi/chezmoi.yaml
-
-# Option 2: Create manually
-cat > ~/.config/chezmoi/chezmoi.yaml << 'EOF'
-data:
-  profile: "personal"
-EOF
-
-# Install chezmoi and apply dotfiles (runs profile-gated mise bootstrap)
+(
+set -eu
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/chezmoi"
+for existing in "$config_dir"/chezmoi.*; do
+  if [ -e "$existing" ] || [ -L "$existing" ]; then
+    printf 'Existing config or backup: %s; preserve it and follow Usage.\n' "$existing" >&2
+    exit 1
+  fi
+done
+config="$config_dir/chezmoi.yaml"
+printf 'Desktop profile (personal or axon-work-computer): '
+read -r profile
+case "$profile" in
+  personal|axon-work-computer) ;;
+  *) printf 'Choose a supported desktop profile.\n' >&2; exit 1 ;;
+esac
+# Ubuntu/WSL needs zsh; modern macOS already provides it.
+if [ "$(uname -s)" = Linux ]; then
+  sudo apt-get update && sudo apt-get install -y zsh
+  sudo chsh "$USER" -s /usr/bin/zsh
+fi
+mkdir -p "$(dirname "$config")"
+printf 'data:\n  profile: "%s"\n' "$profile" > "$config"
 sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" init --apply cartwmic
-
-# Restart your shell, then complete the applicable manual steps below
-exec zsh
+) && exec zsh
 ```
+
+Complete the applicable [manual steps](#manual-steps) after installation.
 
 ### Termux (Android)
 
 Termux is a first-class profile (`profile: "termux"`) — thin SSH jump host,
 `.termux` UI config, and ntfy jump handlers. It does **not** install the full
-desktop/agent stack. See `termux/README.md`.
+desktop/agent stack. Basic SSH works in stock Termux. Notification jumping and
+named-session helpers require the owner's custom signed Termux fork and matching
+Termux:API/Boot apps. Preconfigured SSH aliases require the owner's private
+network and provisioned keys. See [Termux setup](./termux/README.md) for app,
+key, and host configuration before applying this profile.
+
+This fresh-install block also refuses to replace an existing config:
 
 ```bash
+(
+set -eu
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/chezmoi"
+for existing in "$config_dir"/chezmoi.*; do
+  if [ -e "$existing" ] || [ -L "$existing" ]; then
+    printf 'Existing config or backup: %s; preserve it and follow Usage.\n' "$existing" >&2
+    exit 1
+  fi
+done
+config="$config_dir/chezmoi.yaml"
 pkg install -y chezmoi git openssh coreutils termux-api python vim
-mkdir -p ~/.config/chezmoi
-printf 'data:\n  profile: "termux"\n' > ~/.config/chezmoi/chezmoi.yaml
+mkdir -p "$(dirname "$config")"
+printf 'data:\n  profile: "termux"\n' > "$config"
 chezmoi init --apply https://github.com/cartwmic/dotfiles.git
+)
 ```
 
 ## What's Included
@@ -125,10 +155,11 @@ On Ubuntu, provisioning refuses to remove conflicting distribution packages auto
 
 ## RustDesk Provisioning
 
-On `personal` hosts, `mise run bootstrap` installs RustDesk when missing. Other
-profiles skip it. A chezmoi onchange helper applies rendezvous, relay, server
-key, password approval, and service settings. Device identity and trust data
-stay machine-local.
+On `personal` macOS and native Ubuntu/Debian hosts, `mise run bootstrap`
+installs RustDesk when missing. WSL and other profiles skip it. A chezmoi
+onchange helper applies rendezvous, relay, server key, password approval, and
+service settings when its tracked inputs change. Device identity and trust
+data stay machine-local.
 
 On macOS, the helper installs pinned RustDesk 1.4.9 launchd jobs for service
 and login-window capture. Daemon logs go under `/Library/Logs/RustDesk`. The
@@ -158,12 +189,14 @@ Shared passwords increase blast radius: compromise of one machine or this
 
 ## Harness Config Adapters
 
-Canonical harness-agnostic configuration lives under:
+Author canonical harness-agnostic configuration in this repository:
 
-- `~/.local/share/agent-harness/canonical/skills/`
-- `~/.local/share/agent-harness/canonical/mcp/servers.json`
+- `dot_local/share/agent-harness/canonical/skills/`
+- `dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl`
 
-These are the authoring sources of truth. Harness-specific adapters project them into supported harnesses.
+Chezmoi deploys these under `~/.local/share/agent-harness/canonical/`, rendering
+`servers.json` from its template. Edit the repository sources; harness-specific
+adapters project the deployed configuration into supported harnesses.
 
 Current supported harnesses:
 
@@ -227,8 +260,10 @@ reader for non-Pi panes.
 
 `/inspect-prompt` separately opens the assembled system prompt while Pi is
 idle. See the [inspector guide](./dot_pi/private_agent/extensions/inspect-prompt/README.md)
-for editor configuration and limits. The private Pi/Herdr proofs pin Pi
-0.87.1 and Herdr 0.9.1; upgrades require revalidation.
+for editor configuration and limits. `/inspect-session` depends on Pi 0.87.1's
+private fullscreen layout and may refuse to open after an upgrade until the
+reader is updated and revalidated. The isolated Pi/Herdr proofs pin Pi 0.87.1
+and Herdr 0.9.1.
 
 ## Learnings monitor in Pi
 
@@ -237,6 +272,10 @@ read-only observer for the current saved Pi session; `/learnings flush` asks
 it to catch up, `/learnings-review` opens local editable Markdown, and
 `/learnings off` stops observation. Advice stays machine-local unless you
 explicitly confirm promotion to Hindsight. It does not edit project files.
+The observer can read any file accessible to your user without an extra
+outside-workspace prompt. Inputs and read results can reach the selected model
+provider; privacy filtering can miss secrets, and model spending has no
+product-enforced cap. Review these limits before enabling it.
 
 For work machines, install both the extension and Hindsight config, check the
 effective bank in the environment that launches Pi, and restart Pi. Missing
@@ -393,7 +432,7 @@ dot_config/
   ├── lazygit/                   # Lazygit TUI
   └── zellij/                    # Zellij multiplexer (see dot_config/zellij/README.md for plugin/fork notes)
 run_once_after_00_install_mise.sh          # Installs mise first in post-apply phase
-run_onchange_after_10_mise_bootstrap.sh    # Installs tools after mise is available
+run_onchange_after_10_mise_bootstrap.sh.tmpl # Installs tools after mise is available
 private_dot_zshrc                # Zsh configuration
 dot_zsh_plugins.txt              # Antidote plugin list
 ```
@@ -463,13 +502,23 @@ source-side choice in a specific conflict.
 
 After `chezmoi apply`, complete the steps that apply to this host:
 
-- Install gvm: `bash < <(curl -LSs 'https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer')`
-- Set default Go version: `gvm use go1.21 --default`
+- [gvm users] Follow [gvm's installation and platform prerequisites](https://github.com/moovweb/gvm#installing), then load it and install a Go version before selecting a default. See the sequence below.
 - [macOS] Add XQuartz as a login item.
 - [personal macOS] Launch Docker Desktop once to accept its license and finish setup. See [Docker Provisioning](#docker-provisioning).
 - [personal macOS] Log in and launch RustDesk once on a fresh machine; grant Accessibility, Screen Recording, and, if needed, Input Monitoring permissions. See [RustDesk Provisioning](#rustdesk-provisioning).
-- [desktop Herdr] Start or restart a compatible server after linking the overview plugin. An existing server has not loaded the new startup hook. See [Herdr overview and phone route](#herdr-overview-and-phone-route).
+- [desktop Herdr] On an existing compatible server, invoke the overview reconcile action after linking; otherwise use a later owner-controlled server start. Reload config only to pick up the keybinding. See [Herdr overview and phone route](#herdr-overview-and-phone-route) for commands.
 - [recap users] Set a host-local recap command; opt in to automatic Pi publication if wanted. See [Portable recaps](#portable-recaps).
+
+After installing gvm, use a fresh zsh or load its script in the current shell.
+Select a supported version from `gvm listall` when prompted:
+
+```sh
+source "$HOME/.gvm/scripts/gvm"
+gvm listall
+printf 'Go version to install (from the list above): '
+read -r GO_VERSION
+gvm install "$GO_VERSION" && gvm use "$GO_VERSION" --default
+```
 
 See [AGENTS.md](./AGENTS.md) for repository agent instructions (not deployed).
 See [dot_pi/private_agent/literal_AGENTS.md.tmpl](./dot_pi/private_agent/literal_AGENTS.md.tmpl) for Pi-global agent instructions.

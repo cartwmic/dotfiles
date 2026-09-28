@@ -284,15 +284,13 @@ pkg install -y chezmoi git openssh coreutils termux-api python vim
 (Optional later: `pkg install gh && gh auth login` if you want `gh` / push from
 the phone.)
 
-```bash
-mkdir -p ~/.config/chezmoi
-cat > ~/.config/chezmoi/chezmoi.yaml <<'EOF'
-data:
-  profile: "termux"
-EOF
-
-chezmoi init --apply https://github.com/cartwmic/dotfiles.git
-```
+For a new installation, use the root README's
+[guarded Termux setup](../README.md#termux-android). It checks the effective
+config directory for existing config files, backups, and symlinks before
+creating a `termux` profile. If a config already exists, preserve it: inspect
+its profile and hooks, then preview the phone's source and live destinations
+before approving an apply. Do not replace existing configuration with a
+fresh-install example.
 
 After apply (and SSH key provision below), `passage-review` and
 `herdr-overview-proof` are available in `~/bin`.

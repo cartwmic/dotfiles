@@ -33,11 +33,16 @@ Precedence when the cwd is this repo:
    chezmoi operations and safety.
 3. `~/.pi/agent/AGENTS.md` — cross-project habits (hindsight, communication).
    It must not be treated as a second copy of this guide.
-4. `README.md` and component READMEs — human product, setup, and usage. Do not
-   treat them as apply/edit procedure.
+4. `README.md` covers human product, setup, and usage. The component READMEs
+   explicitly linked under Nested docs also supply procedure for their named
+   tasks, subordinate to this file and the applicable component `AGENTS.md`.
 
-Load a task-specific skill when its description matches the work. Its
-procedure operates within this repository's source and apply boundaries.
+Load a task-specific skill when its description matches the work. Skills
+supply task procedure below this file and applicable component instructions.
+An owner-approved task PRD supplies task requirements; README supplies product
+background. Generated PRD candidates are proposals until accepted. Ask the
+owner about conflicts between task requirements and repository instructions
+before editing.
 
 On conflict inside this tree, this file wins. Do not “sync” the two AGENTS
 files toward each other.
@@ -67,7 +72,13 @@ Source naming (chezmoi):
 
 Profiles (`~/.config/chezmoi/chezmoi.yaml` → `data.profile`): `personal`,
 `axon-work-computer`, `termux`. `.chezmoiignore` is the authority for what
-each profile deploys.
+each profile deploys. For root-only exclusions use `./AGENTS.md`-style
+anchored destination patterns. Leading `/` patterns are rejected by chezmoi
+v2.72.2 on Termux. `termux/` is ignored legacy staging plus current docs/bootstrap
+helpers; edits to its old config copies do not deploy. Phone-managed source is
+under `dot_termux/`, `bin/`, `private_dot_ssh/`, and `dot_bash_profile`. Load the
+[Termux guide](./termux/README.md) for the complete mapping and bootstrap traps,
+then verify mapping with the `termux` profile.
 
 Shell scripts: POSIX where possible, `set -eu`, helpers from `utils.sh`
 (`is_macos`, `is_ubuntu`), log prefix `[script_name] LEVEL: message`, clean
@@ -77,11 +88,13 @@ Secrets: never commit API keys, tokens, or passwords. Read secrets at
 runtime with 1Password (`op read`, service-account token at
 `~/.config/agent-harness/op-service-token`, mode 0600, outside this repo).
 `private_dot_zshrc` is the pattern. `rage`/age is available for files that
-must be encrypted in source. A `personal` apply invokes the RustDesk helper;
-it stops when `op` cannot read `op://developer/RustDesk/password`. Before an
-authorized personal apply, confirm that the owner's desktop-app authentication
-or host-local service-account token can read that item. Stop and ask the owner
-to provision access if it cannot; never print the password.
+must be encrypted in source. On supported personal desktops, changed RustDesk
+onchange inputs run the helper; unchanged inputs skip it, and WSL is excluded.
+The helper stops when `op` cannot read `op://developer/RustDesk/password`.
+As a preflight rule for personal desktop applies, confirm the owner's
+1Password access even when the helper is expected to be skipped. Use desktop-app
+authentication or the host-local service-account token; stop and ask the owner
+to provision access if needed. Never print the password.
 
 RustDesk: do not sync `RustDesk.toml`, `RustDesk_local.toml`, or
 `RustDesk_hwcodec.toml`. The unattended password is only
@@ -96,9 +109,11 @@ non-destructive to foreign keys.
 
 Agent harness: canonical skills and MCP live under
 `dot_local/share/agent-harness/`. Adapters project into Claude, Codex, and
-Pi. Do not put harness-specific semantics in canonical files. After skill
-or MCP changes, apply with the commands below (or `chezmoi apply`, which
-runs the apply script).
+Pi. Keep harness-specific semantics in adapters. After canonical changes,
+follow the [apply and verify sequence](./dot_local/share/agent-harness/README.md#apply-and-verify):
+preview the current source, obtain approval, then deploy it. For skill changes,
+continue with the linked interactive skill sync using the same worktree source.
+For MCP changes, verify the generated output in each affected harness.
 
 Pi runtime patches: `dot_local/share/pi-patches/<name>/patch.mjs`. After
 `npm update -g` / mise reinstall of Pi, patches must be reapplied through
@@ -110,7 +125,9 @@ standing-reminder extension also requires its input-origin patch. Validate
 that pair through `tests/standing-reminder/isolated_pi.py`, which patches a
 private Pi copy rather than the installed runtime.
 
-OpenSpec/`opsx` is retired; do not revive it. Do not write ADRs.
+OpenSpec/`opsx` is retired; do not revive it. Do not write ADRs. Put current
+product/design guidance in the relevant component README and agent procedure
+in its scoped guide; follow the task-specific skill for workflow artifacts.
 
 Pi extensions in this tree: never capture `ExtensionContext` `ctx` in a
 long-lived closure; use the per-call `ctx`. Do not couple new extensions
@@ -139,7 +156,19 @@ apply, including any persistent directories it would remove. For canonical
 skill sync from a worktree, also set `CHEZMOI_SOURCE_DIR="$REPO"` so the adapter
 does not read the base checkout instead.
 
-Typical loop:
+Before any chezmoi source read, inspect the effective config file (normally
+`~/.config/chezmoi/chezmoi.yaml`) for `hooks.read-source-state.pre`. The example
+config invokes `.install-password-manager.sh`, which reads `utils.sh` from the
+base checkout and can install `op` or create a WSL symlink when `command -v op`
+fails. A dry-run does not suppress this hook. If that hook would change the
+host, get owner approval before invoking chezmoi, including previews. Rendering
+some work-profile templates can also call `op read`; keep output private.
+
+Installation examples are fresh-install-only. Preserve an existing chezmoi
+config; inspect its profile and hooks, and ask before replacing it. A setup
+command is not permission to overwrite persistent host configuration.
+
+Typical loop after that preflight:
 
 ```bash
 REPO="$(git rev-parse --show-toplevel)"
@@ -152,10 +181,11 @@ independently, and inspect the targeted dry-run before requesting apply.
 Replace `DEST` with the path you changed:
 
 ```sh
+REPO="$(git rev-parse --show-toplevel)"
 DEST="$HOME/.zshrc"
-chezmoi source-path "$DEST"
-chezmoi cat "$DEST"             # rendered source
-chezmoi apply --dry-run --verbose "$DEST"
+chezmoi --source "$REPO" source-path "$DEST"
+chezmoi --source "$REPO" cat "$DEST" # inspect rendered source privately
+chezmoi --source "$REPO" apply --dry-run --verbose "$DEST"
 ```
 
 `chezmoi cat` can render secrets. Keep their values out of logs and chat. Use
@@ -169,11 +199,12 @@ mechanically excludes the root agent guide from home deployment; do not
 assume a hook enforces the other boundaries.
 
 After approval to take the source side of a specific merge conflict, a
-non-TTY apply may target that destination with `chezmoi apply --force ~/.zshrc`.
-Stop and ask on any other TTY failure.
+non-TTY apply may use `chezmoi --source "$REPO" apply --force "$DEST"` with
+the exact source and destination already inspected. Stop and ask on any other
+TTY failure.
 
-Validate templates with `chezmoi execute-template` and destination mapping
-with `chezmoi managed` / `chezmoi source-path <dest>`.
+Validate templates with `chezmoi --source "$REPO" execute-template` and mapping
+with `chezmoi --source "$REPO" managed` / `source-path <dest>`.
 
 ## Nested docs
 
@@ -192,6 +223,13 @@ inside one of these source subtrees loads this file and its local guide:
 - [passage-review](./dot_local/share/passage-review/AGENTS.md) — snapshot, note, export, and phone-local invariants.
 - [passage-review Pi adapter](./dot_pi/private_agent/extensions/passage-review/AGENTS.md) — `/review` TUI entry and process handoff.
 
+For phone config, bootstrap, or SSH/jump changes, load
+[termux/README.md](./termux/README.md); its phone procedure remains subordinate
+to this guide's apply, secrets, and approval rules.
+
+Before Herdr linking or rollout, load the [runtime guide's deployment procedure](./dot_local/share/herdr-overview/AGENTS.md#deployment-from-worktrees)
+for its configured-source limitation and separate worktree proof path.
+
 For common Pi extension procedure, read
 [dot_pi/private_agent/extensions/README.md](./dot_pi/private_agent/extensions/README.md)
 when editing an extension. Other subtree guides are task-specific:
@@ -209,7 +247,10 @@ Done means all of the following that apply:
 
 - Source files in **this** tree are updated; live `~` files were not hand-edited
   as if they were source.
-- `chezmoi apply --dry-run --verbose` was run for the touched destinations.
+- Applicable component checks and the source-scoped dry-run for each touched
+  destination passed. Mark failed, skipped, or unavailable checks blocked or
+  pending with a reason; do not describe unverified behavior as done. For ignored
+  source-only docs, confirm they remain ignored; there is no live target to preview.
 - A real `chezmoi apply` ran only with explicit user approval. If verification
   requires materializing and approval is absent, name that check as pending.
 - No commit or push unless the user asked.
@@ -221,6 +262,9 @@ Done means all of the following that apply:
 
 Handoff must name:
 
+- Repository/cwd and commands or checks run, their outcomes, and any blocked,
+  skipped, or pending validation
+- Actual commit/push state and any unverified behavior
 - Source paths changed (use chezmoi names; include destinations when helpful)
 - Whether apply ran, with `--force` or not
 - Profile assumptions (`personal` / `axon-work-computer` / `termux`)
