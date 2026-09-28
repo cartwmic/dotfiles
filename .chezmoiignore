@@ -14,7 +14,7 @@
 # confusing them with nested files such as .codex/AGENTS.md. Leading slash
 # patterns are rejected by chezmoi v2.72.2 on Termux.
 # ./AGENTS.md stays in git for Pi/Codex in this repo; it is not deployed.
-# Pi-global instructions are dot_pi/agent/literal_AGENTS.md.tmpl -> ~/.pi/agent/AGENTS.md.
+# Pi-global instructions are dot_pi/private_agent/literal_AGENTS.md.tmpl -> ~/.pi/agent/AGENTS.md.
 # Do not add a source that deploys to ~/AGENTS.md: same target as this file,
 # chezmoi reports inconsistent state.
 # ./README.md is the product README; do not also land it at ~/README.md.
@@ -94,6 +94,9 @@ Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 .local/user_scripts/configure_rustdesk.sh
 .pi/agent/extensions/openrouter-gate
 .pi/agent/extensions/openrouter-gate/**
+# The remotely installed System One package is enabled in personal Pi settings only.
+.pi/agent/extensions/system-one
+.pi/agent/extensions/system-one/**
 # Homelab session-digest: claude-bridge + ollama.internal. Work stays fts-raw.
 .pi/session-search
 .pi/session-search/**

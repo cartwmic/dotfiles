@@ -5,10 +5,10 @@
 ## Scope
 
 These instructions apply on this machine for **every** Pi session. They live
-at `~/.pi/agent/AGENTS.md` (chezmoi source `dot_pi/agent/literal_AGENTS.md.tmpl`).
+at `~/.pi/agent/AGENTS.md` (chezmoi source `dot_pi/private_agent/literal_AGENTS.md.tmpl`).
 Pi loads this file from its agent directory first, then walks ancestors from
 the cwd. The source is named `literal_AGENTS.md.tmpl` so Pi’s ancestor walk does
-**not** also pick it up when the cwd is under `dot_pi/agent/` in this repo
+**not** also pick it up when the cwd is under `dot_pi/private_agent/` in this repo
 (that would be the same text twice: live dest + source).
 
 They are **not** the chezmoi repository guide. That guide is a different
