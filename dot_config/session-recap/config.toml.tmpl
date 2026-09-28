@@ -1,17 +1,9 @@
-# Command used to produce the recap. It receives the rendered prompt on stdin;
-# successful output must be a nonblank UTF-8 narrative on stdout.
-{{ if eq .profile "personal" }}
-# Personal desktop default: Claude CLI in print mode.
-command = ["claude", "-p"]
-{{ else if eq .profile "axon-work-computer" }}
-# Work desktop default: Claude CLI in print mode.
-command = ["claude", "-p"]
-{{ else }}
-# Desktop fallback; this config is not deployed to the Termux profile.
-command = ["claude", "-p"]
-{{ end }}
+# Automatic Pi recap publication is off on managed desktop profiles.
+# The standalone CLI can still store prompts without a model backend.
+auto_publish = false
 
-# Host-local override (not managed by chezmoi): create
-# ~/.config/session-recap/config.local.toml with a replacement argv, e.g.
-# command = ["/path/to/my-recap-command", "--stdin"]
-# The command is executed directly (no shell); only its argv is overridden.
+# For recaps, create an unmanaged ~/.config/session-recap/config.local.toml:
+# command = ["/path/to/recap-command", "--stdin"]
+# Add auto_publish = true there to publish settled Pi replies automatically.
+# The command receives the rendered prompt on stdin and must return nonblank
+# UTF-8 recap text on stdout. No model command is provided by chezmoi.

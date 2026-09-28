@@ -2,17 +2,18 @@
 
 ## Overview
 
-This desktop-only Pi extension supplies the current prompt and publishes a recap after a settled response. T1 stores the current prompt separately from dated recap records; this extension only calls `session-recap prompt set/settle/rekey` and `prepare/publish`. It does not own recap prompts, persistence, grouping, or Herdr overview state.
+This desktop-only Pi extension supplies the current prompt and, when opted in, publishes a recap after a settled response. `session-recap` stores prompts separately from dated recap records; the extension calls its prompt and prepare/publish commands. It does not own recap prompts, persistence, grouping, or Herdr overview state.
 
 ## Setup
 
-On a `personal` or `axon-work-computer` desktop, first configure the
-standalone recap CLI using `dot_local/share/session-recap/README.md` (paths
-here are relative to the chezmoi source root). Its default backend needs an
-authenticated Claude CLI; a host-local argv override can use another command.
-Load the plugin using `dot_local/share/herdr-overview/README.md` in a compatible
-server for workspace attribution and the overview display. Then review and
-apply this Pi extension. Restart Pi to load it:
+On a `personal` or `axon-work-computer` desktop, set up the standalone CLI
+using `dot_local/share/session-recap/README.md` (paths here are relative to
+the chezmoi source root). Managed installs store prompts and start with
+automatic recap publication off. Add a host-local command and
+`auto_publish = true` in `~/.config/session-recap/config.local.toml` to opt in.
+Load the Herdr plugin using `dot_local/share/herdr-overview/README.md` for
+workspace attribution and the overview display. Then review and apply this
+Pi extension. Restart Pi to load it:
 
 ```sh
 chezmoi apply --dry-run --verbose ~/.pi/agent/extensions/herdr-overview
@@ -29,10 +30,11 @@ The source lives under `dot_pi/private_agent/extensions/`, so it deploys with th
 ## Usage
 
 Run Pi inside a Herdr pane and submit an interactive prompt. While Pi works,
-the overview pane detail shows that current prompt separately. After the
-assistant reply settles and the recap backend succeeds, the same detail shows
-the published recap; the standalone CLI keeps its dated record. A failed
-backend leaves the native pane and prompt visible. See
+the overview pane detail shows that current prompt separately. The prompt
+settles even when automatic recaps are off. With `auto_publish = true` and a
+working backend, the settled reply also produces a published recap and dated
+record. A disabled or failed backend leaves the native pane and prompt
+visible. See
 `dot_local/share/herdr-overview/README.md` (Usage) for navigation.
 
 - Pi's public `input` event stores text from real interactive (`source: interactive`, TUI mode) and RPC (`source: rpc`, RPC mode) input with `session-recap prompt set`. When `HERDR_PANE_ID` is present, the adapter first calls Herdr's caller-aware `pane.current` and stores the returned live native pane ID, so a pane rekeyed by `pane.move` does not leave the current prompt attached to its old ID. Missing membership leaves the prompt session-only; it is never guessed from UI focus. Extension-generated input is ignored, so continuations do not replace the last real prompt.
@@ -45,13 +47,15 @@ Duplicate settled events are consumed once per real prompt. Pi context objects a
 
 ## Troubleshooting
 
-- No published recap: check CLI configuration and backend authentication in
-  `dot_local/share/session-recap/README.md` (Setup), then verify
-  `SESSION_RECAP_BIN` if the CLI is outside `PATH`. Blank or failed backend
-  output is recorded without a publication wake-up.
-- Recap published but no overview tab: the compatible Herdr server must load
-  the plugin linked in `dot_local/share/herdr-overview/README.md` (Setup) at
-  an owner-controlled start or restart.
+- No published recap: run `session-recap config auto-publish`. `disabled` is
+  expected until the local config opts in. If the policy check errors, fix
+  the command/configuration in `dot_local/share/session-recap/README.md`
+  (Setup). `SESSION_RECAP_BIN` can override the installed CLI path. Blank or
+  failed backend output is recorded without a publication wake-up.
+- Recap published but no overview tab: invoke
+  `herdr plugin action invoke overview.reconcile --plugin overview` on a
+  compatible running server. This loads a newly linked plugin action without
+  restarting; see `dot_local/share/herdr-overview/README.md` (Setup).
 - Recap without a workspace group: the adapter needs live caller pane and
   workspace membership through `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`.
   Missing membership stays session-only; it is never borrowed from UI focus.
@@ -64,4 +68,4 @@ From this directory:
 node --test
 ```
 
-The tests use a temporary Pi RPC session, a scripted OpenAI-compatible response server, the real T1 `session-recap` CLI with a fake backend, and a fake Herdr protocol-22 socket. No live model or Herdr server is required.
+The tests drive both the default-off and opted-in Pi RPC paths with a scripted response server, the real `session-recap` CLI, a fake recap backend, and a fake Herdr protocol-22 socket. No live model or Herdr server is required.

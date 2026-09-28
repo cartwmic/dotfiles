@@ -25,7 +25,10 @@ backend configuration; the Herdr plugin owns the native overview and grouping.
   pane, or workspace keeps the record session-only. Never substitute UI focus
   or change Pi session identity or `herdr-agent-state.ts`.
 - `session-recap prompt set/settle/rekey` keeps the working prompt separate
-  from `prepare/publish`. Confirm the prepared ID and publication before
+  from `prepare/publish`. After settling the prompt, check
+  `session-recap config auto-publish`. The managed default is `disabled` and
+  must skip preparation and wake-up without warning; an invalid policy fails
+  closed. When opted in, confirm the prepared ID and publication before
   invoking the public `overview.reconcile` action. A failed Herdr wake-up
   leaves the durable publication for later startup reconciliation. The plugin
   does not generate a recap when its pane renders.

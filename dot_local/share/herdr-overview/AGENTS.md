@@ -18,8 +18,10 @@ do not move their logic into this plugin.
   `pane.read` before its first frame; Herdr plugin hooks omit high-volume
   output events. Close subscriptions on exit. A failed read keeps native
   metadata and the saved preview. The `install-herdr-overview` mise task
-  links the manifest. Linking does not load a startup hook into an
-  already-running server; ask the owner before restarting that server.
+  links the manifest. The startup hook runs on server start. The
+  `herdr plugin action invoke overview.reconcile --plugin overview` action
+  loads the linked plugin on a compatible running server and opens a
+  background tab. Ask the owner before restarting that server.
 - Keep native pane IDs as model keys. If `pane.move` rekeys one, use a unique
   live terminal ID to carry its prompt, manually sourced recap, and naming
   ownership. Do not borrow the UI-focused pane for a publication. Check
@@ -38,7 +40,10 @@ do not move their logic into this plugin.
   including exact live manually sourced non-Pi pane recaps. Closed panes are
   excluded. Failed grouping leaves prior good records intact and the
   deadline due for a later wake-up; it cannot trigger a session group.
-  Rendering, focus, scrolling, and output refresh must remain passive.
+  When `auto_publish = false`, preserve deadlines and pane associations but
+  suppress group generation and wake-ups. A later reconcile after opt-in can
+  process due work. Rendering, focus, scrolling, and output refresh must
+  remain passive.
 - Board and Mosaic share the model but own separate layouts in
   `src/presenters/`. Change each intentionally. The palette fixture
   `src/palette-v0.9.1.json` is copied from `herdrdev/herdr` tag `v0.9.1`,

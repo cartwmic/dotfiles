@@ -99,14 +99,14 @@ async function createWorld(): Promise<TestWorld> {
 	const spyCliPath = path.join(root, "session-recap-spy");
 	writeFileSync(
 		spyCliPath,
-		"#!/bin/sh\nprintf 'cli %s\\n' \"$*\" >> \"$HERDR_OVERVIEW_TEST_TRACE\"\nexec \"$SESSION_RECAP_REAL_BIN\" \"$@\"\n",
+		"#!/bin/sh\nprintf 'cli %s\\n' \"$*\" >> \"$HERDR_OVERVIEW_TEST_TRACE\"\nif [ \"$1\" = config ]; then\n  \"$SESSION_RECAP_REAL_BIN\" \"$@\"\n  status=$?\n  printf 'cli done %s %s\\n' \"$*\" \"$status\" >> \"$HERDR_OVERVIEW_TEST_TRACE\"\n  exit \"$status\"\nfi\nexec \"$SESSION_RECAP_REAL_BIN\" \"$@\"\n",
 	);
 	chmodSync(spyCliPath, 0o755);
 
 	const configPath = path.join(configDir, "config.toml");
 	const setBackendMode = (mode: "success" | "blank" | "nonzero") => {
 		const command = [process.env.PYTHON ?? "python3", fakeBackend, mode];
-		writeFileSync(configPath, `command = ${JSON.stringify(command)}\n`);
+		writeFileSync(configPath, `auto_publish = true\ncommand = ${JSON.stringify(command)}\n`);
 	};
 	setBackendMode("success");
 
@@ -272,6 +272,33 @@ function promptRecord(dataRoot: string, sessionId: string): any {
 	return readJson(promptFile(dataRoot, sessionId));
 }
 
+test("managed default-off settles the prompt without preparing or waking a recap", async () => {
+	const world = await createWorld();
+	writeFileSync(path.join(world.root, "config", "session-recap", "config.toml"), "auto_publish = false\n");
+	try {
+		await withProcessEnv(world.env, async () => {
+			const handlers = registeredHandlers();
+			await handlers.get("input")!(
+				{ type: "input", source: "interactive", text: "Keep the current prompt visible." },
+				fakeContext("default-off-session", "tui", false, []).ctx,
+			);
+			await handlers.get("agent_settled")!(
+				{}, fakeContext("default-off-session", "tui", true, responseEntry("A settled reply without a recap.")).ctx,
+			);
+			await waitFor(() => readTrace(world.tracePath).includes("cli done config auto-publish 0"),
+				"the completed automatic recap policy check", 1_500);
+			assert.equal(promptRecord(world.dataRoot, "default-off-session").working, false);
+			assert.equal(existsSync(path.join(world.dataRoot, "latest.json")), false);
+			assert.equal(existsSync(world.capturePath), false);
+			assert.deepEqual(world.calls.map((call) => call.method), ["pane.current"]);
+			assert.equal(readTrace(world.tracePath).some((line) => line.startsWith("cli prepare ")), false);
+			assert.equal(readTrace(world.tracePath).some((line) => line.startsWith("cli publish ")), false);
+		});
+	} finally {
+		await world.close();
+	}
+});
+
 test("interactive prompt stays separate; settled publication rechecks exact pane membership", async () => {
 	const world = await createWorld();
 	try {
@@ -409,7 +436,7 @@ process.stdin.on("end", () => {
 `);
 	writeFileSync(
 		path.join(world.root, "config", "session-recap", "config.toml"),
-		`command = ${JSON.stringify([process.execPath, backendPath])}\n`,
+		`auto_publish = true\ncommand = ${JSON.stringify([process.execPath, backendPath])}\n`,
 	);
 
 	try {
@@ -572,10 +599,7 @@ async function startScriptedProvider() {
 	};
 }
 
-test("a temporary Pi RPC session publishes only settled nonblank recaps with publication-time membership", async () => {
-	const world = await createWorld();
-	const herdr = world as TestWorld & { snapshot: any; calls: any[] };
-	const provider = await startScriptedProvider();
+function scriptedProviderExtension(world: TestWorld): string {
 	const providerExtension = path.join(world.root, "scripted-provider.mjs");
 	writeFileSync(providerExtension, `export default function (pi) {
   pi.registerProvider("herdr-scripted", {
@@ -589,7 +613,42 @@ test("a temporary Pi RPC session publishes only settled nonblank recaps with pub
     }],
   });
 }`);
+	return providerExtension;
+}
 
+test("a temporary Pi RPC reply settles without recap publication when managed default is off", async () => {
+	const world = await createWorld();
+	writeFileSync(path.join(world.root, "config", "session-recap", "config.toml"), "auto_publish = false\n");
+	const herdr = world as TestWorld & { calls: any[] };
+	const provider = await startScriptedProvider();
+	const rpc = startRpcPi(world, provider.url, scriptedProviderExtension(world));
+	try {
+		const settled = rpc.records.filter((record) => record.type === "agent_settled").length + 1;
+		await rpc.sendPrompt("RPC default-off request: preserve the prompt without a recap.");
+		await provider.firstRequest;
+		provider.releaseFirst();
+		await rpc.waitForEvent("agent_settled", settled);
+		await waitFor(() => readTrace(world.tracePath).includes("cli done config auto-publish 0"),
+			"the completed default-off policy check");
+		assert.equal(promptRecord(world.dataRoot, "rpc-session").working, false);
+		assert.equal(existsSync(path.join(world.dataRoot, "latest.json")), false);
+		assert.equal(existsSync(world.capturePath), false);
+		assert.deepEqual(herdr.calls.map((call: any) => call.method), ["pane.current"]);
+		assert.equal(readTrace(world.tracePath).some((line) => line.startsWith("cli prepare ")), false);
+		assert.equal(readTrace(world.tracePath).some((line) => line.startsWith("cli publish ")), false);
+	} finally {
+		provider.releaseFirst();
+		await rpc.close().catch(() => {});
+		await provider.close();
+		await world.close();
+	}
+});
+
+test("a temporary Pi RPC session publishes only settled nonblank recaps with publication-time membership", async () => {
+	const world = await createWorld();
+	const herdr = world as TestWorld & { snapshot: any; calls: any[] };
+	const provider = await startScriptedProvider();
+	const providerExtension = scriptedProviderExtension(world);
 	const rpc = startRpcPi(world, provider.url, providerExtension);
 	try {
 		const eventOne = rpc.records.filter((record) => record.type === "agent_settled").length + 1;

@@ -220,7 +220,7 @@ Notes:
 
 The personal and work desktop profiles pin Herdr **0.9.1 / protocol 22** and
 link the source-managed overview plugin. The Pi adapter publishes a real-user
-prompt and, after the response settles, a separate recap. The overview reads
+prompt and, when opted in, a separate recap after the response settles. The overview reads
 native Herdr pane state and those supplied records. It does not parse a
 transcript or generate a summary. Manual pane/tab labels remain under owner
 control; workspaces are never auto-named. Herdr 0.9.1 has no atomic
@@ -236,13 +236,12 @@ navigation, manual pane-source recaps, naming policy, and move behavior. The
 covers publication.
 
 The `install-herdr-overview` mise task (also part of desktop bootstrap)
-verifies Herdr 0.9.1 and links/enables the source manifest. Linking does **not**
-run its server-start hook, start a server, or restart the owner's main Herdr
-server. Applying dotfiles never restarts that process. A compatible server
-start/restart is owner-controlled; until then, the already-running server has
-not loaded newly linked plugin code. If the plugin is already loaded, the
-explicit `herdr plugin action invoke overview.reconcile --plugin overview`
-action reconciles its pane/model without restarting the server.
+verifies Herdr 0.9.1 and links/enables the source manifest. Linking leaves the
+running server untouched. On a compatible running server,
+`herdr plugin action invoke overview.reconcile --plugin overview` loads the
+linked action and opens or reconciles an overview tab in the background.
+`herdr server reload-config` separately applies the new keybinding. A later
+owner-controlled server start also runs the plugin's startup hook.
 
 On Android, Termux remains the phone-owned `termux` chezmoi profile and an SSH
 client. It does not install the native Herdr plugin. From the phone, run
@@ -264,16 +263,19 @@ printf '%s\n' '{"members":[{"label":"api","text":"API work is complete."},{"text
   session-recap create --kind group --label "Release work"
 ```
 
-The personal and work desktop configs default to `claude -p`; both editable
-prompt templates and the host-local `~/.config/session-recap/config.local.toml`
-argv override are documented in
-[`dot_local/share/session-recap/README.md`](./dot_local/share/session-recap/README.md).
-Pi's adapter prepares then publishes settled recaps. Successful Pi publications
+Desktop installs default to `auto_publish = false` with no recap command.
+Configure an unmanaged `~/.config/session-recap/config.local.toml` with an
+executable argv for manual recaps; add `auto_publish = true` to opt in to Pi
+publication. The editable prompt templates and local configuration are
+covered in [`dot_local/share/session-recap/README.md`](./dot_local/share/session-recap/README.md).
+When enabled, Pi's adapter prepares then publishes settled recaps. Successful Pi publications
 start/restart a 30-second workspace quiet period; when it expires, the group uses
 latest published recaps for panes currently in that native workspace, including
 manual pane-source recaps for non-Pi panes. A successful workspace group can
 trigger a Herdr-session group from workspaces still live in the native snapshot.
-Failed recaps do not replace the last good record or reset that interval. Dated
+Failed recaps do not replace the last good record or reset that interval. With
+`auto_publish = false`, pending group deadlines stay stored without group
+model calls or wake-ups; a later reconcile after opt-in can catch up. Dated
 history remains outside Herdr.
 
 ## Passage review
@@ -407,7 +409,7 @@ After `chezmoi apply`, complete the steps that apply to this host:
 - [personal macOS] Launch Docker Desktop once to accept its license and finish setup. See [Docker Provisioning](#docker-provisioning).
 - [personal macOS] Log in and launch RustDesk once on a fresh machine; grant Accessibility, Screen Recording, and, if needed, Input Monitoring permissions. See [RustDesk Provisioning](#rustdesk-provisioning).
 - [desktop Herdr] Start or restart a compatible server after linking the overview plugin. An existing server has not loaded the new startup hook. See [Herdr overview and phone route](#herdr-overview-and-phone-route).
-- [recap users] Authenticate the default Claude CLI or configure another recap command. See [Portable recaps](#portable-recaps).
+- [recap users] Set a host-local recap command; opt in to automatic Pi publication if wanted. See [Portable recaps](#portable-recaps).
 
 See [AGENTS.md](./AGENTS.md) for repository agent instructions (not deployed).
 See [dot_pi/private_agent/literal_AGENTS.md.tmpl](./dot_pi/private_agent/literal_AGENTS.md.tmpl) for Pi-global agent instructions.

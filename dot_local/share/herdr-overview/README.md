@@ -34,22 +34,22 @@ chezmoi apply ~/.local/share/herdr-overview
 mise run install-herdr-overview
 ```
 
-The task links the plugin without starting or restarting Herdr. Start or
-restart a compatible Herdr server yourself, then run `herdr` in a desktop
-terminal to attach and open the overview tab. An already running server loads
-newly linked plugin code only after that restart. If it has already loaded the
-plugin, reconcile the pane and model with:
+The task links the plugin without starting or restarting Herdr. On a
+compatible running server, load the linked action and open an overview tab
+in the background with:
 
 ```sh
 herdr plugin action invoke overview.reconcile --plugin overview
 ```
 
-For desktop provisioning, see `README.md` (Herdr overview and phone route) at
-the chezmoi source root. To supply recaps, set up the standalone CLI using
-`dot_local/share/session-recap/README.md`. Pi publication setup is in
+The server's next start runs the startup hook; no restart is needed for this
+manual initialization. `herdr server reload-config` separately applies the
+new `prefix+shift+o` shortcut. For desktop provisioning, see `README.md`
+(Herdr overview and phone route) at the chezmoi source root. To supply
+recaps, set up `dot_local/share/session-recap/README.md` and the Pi adapter at
 `dot_pi/private_agent/extensions/herdr-overview/README.md`. These paths are
-relative to the source root. The plugin supplies the view and grouping
-coordinator; a compatible server and recap backend are separate prerequisites.
+relative to the source root. Pi publication needs a local recap command and
+`auto_publish = true`; manual `session-recap create` only needs the command.
 The standalone CLI also works with Herdr stopped.
 
 ## Usage
@@ -68,7 +68,10 @@ recaps for panes in that workspace's **current** native membership, including
 manually sourced recaps for non-Pi panes; closed panes are excluded. A
 successful workspace group can produce an active Herdr-session group. A failed
 group preserves the last good record and cannot trigger a session group.
-Pending deadlines resume after restart. Raw non-Pi output is never included.
+Pending deadlines resume after restart. With `auto_publish = false`, the
+plugin retains those deadlines and existing recaps while suppressing group
+model calls and wake-ups. A later reconcile after opt-in can process due
+deadlines. Raw non-Pi output is never included.
 
 Unlabelled panes and Herdr's positional numeric tab defaults may be named from
 native titles, agent/process metadata, cwd, and eligible published Pi recaps.
@@ -89,12 +92,12 @@ itself. Palette provenance and adapter tests are in the
 
 ## Troubleshooting
 
-- Linked plugin, missing overview tab: the running server has not loaded the
-  startup hook. Start or restart the compatible server intentionally. The
-  reconcile action works once the plugin has loaded.
+- Linked plugin, missing overview tab: run
+  `herdr plugin action invoke overview.reconcile --plugin overview` on a
+  compatible server, then look for the background tab named Herdr Overview.
 - Missing or failed recap: the overview still shows native pane details.
-  Check the recap command and authentication in
-  `dot_local/share/session-recap/README.md` and Pi publication setup in
+  Check `session-recap config auto-publish` and the local command described in
+  `dot_local/share/session-recap/README.md`. Pi publication setup is in
   `dot_pi/private_agent/extensions/herdr-overview/README.md`.
 - Real-server proof needs an isolated socket and cleanup. Use
   `python3 tests/herdr-overview/proof.py --help` for its scenarios; the phone
