@@ -1,10 +1,58 @@
 # Herdr Overview plugin runtime
 
-This source-managed Herdr plugin (`dot_local/share/herdr-overview/`) targets Herdr **0.9.1 / protocol 22**. The desktop mise task `install-herdr-overview` installs Herdr 0.9.1 and links/enables this manifest; it is deployed on `personal` and `axon-work-computer`. Termux skips `.config` and `.pi` and remains an SSH client, not a plugin host. The thin Pi adapter lives at `dot_pi/private_agent/extensions/herdr-overview/`. Linking does not run the startup hook or restart a Herdr server. The plugin `[[startup]]` hook runs after a compatible server starts, opens one overview tab, and initializes the shared model. It detects a saved overview pane whose plugin process did not survive a server restart, and closes that stale plugin-owned shell pane only when its dedicated tab is still intact. The `overview.reconcile` action calls the same idempotent initializer for an already-loaded server. No apply or bootstrap step restarts the owner's main server.
+## Overview
 
-The adapter uses only public protocol methods: `session.snapshot`, `pane.read`, `pane.process_info`, `pane.focus`, `pane.rename`, `tab.rename`, `events.subscribe`, `plugin.pane.open`, and `plugin.action.invoke`. Manifest event hooks refresh structural, focus, and agent changes; each overview-pane entry subscribes to the public `pane.output_matched` stream and reads current recent output for its saved native pane IDs before the first frame (Herdr 0.9.1 intentionally excludes high-volume output events from plugin hooks). Failed entry reads keep the saved preview and native metadata; reads are passive and never invoke recap generation. Model keys are native Herdr IDs. The reader joins T1's `session-recap` v1 prompt and published recap files to native panes by their optional `pane_id` fields or an explicit manual source ID matching a pane ID, with the live Herdr Pi session ID as a fallback. At reconciliation, it persists each current Pi prompt or published Pi source's Herdr `terminal_id` while its pane ID still resolves. When Herdr rekeys a pane, the unique live terminal identity carries a pending prompt and naming ownership across even if `pane.created` precedes `pane.moved`. This association preserves pane detail after the move, including before a first publication and when v0.9.1 reports `agent_session = null`. Prompt, recap, and live agent state stay separate.
+This source-managed plugin targets Herdr **0.9.1 / protocol 22**. The desktop
+`install-herdr-overview` mise task installs Herdr and links/enables its
+manifest on `personal` and `axon-work-computer`. Termux remains an SSH client.
+It does not host the plugin. The thin Pi adapter lives at
+`dot_pi/private_agent/extensions/herdr-overview/`.
 
-## Presenters and navigation
+Linking leaves the running server untouched. On a compatible server start,
+the plugin's `[[startup]]` hook opens one overview tab and initializes its
+model. If a prior plugin process died during a server restart, it closes the
+stale plugin-owned shell pane only while that dedicated tab remains intact.
+The `overview.reconcile` action uses the same initializer for an already-loaded
+server. Chezmoi apply and bootstrap never restart the owner's main server.
+
+The plugin reads native Herdr pane state and recent output through the public
+protocol. It joins supplied Pi prompts and published `session-recap` records to
+those panes, keeping prompt, recap, and live agent state separate. A pane move
+can rekey its native ID; a verified live terminal identity keeps its supplied
+prompt and recap visible after the move. Reads never generate recaps. The
+[component agent guide](./AGENTS.md) covers ID joins, hooks, and tests.
+
+## Setup
+
+On a `personal` or `axon-work-computer` desktop, review the managed files,
+apply them, then run the pinned installer/link task from the chezmoi source
+checkout:
+
+```sh
+chezmoi apply --dry-run --verbose ~/.local/share/herdr-overview
+chezmoi apply ~/.local/share/herdr-overview
+mise run install-herdr-overview
+```
+
+The task links the plugin without starting or restarting Herdr. Start or
+restart a compatible Herdr server yourself, then run `herdr` in a desktop
+terminal to attach and open the overview tab. An already running server loads
+newly linked plugin code only after that restart. If it has already loaded the
+plugin, reconcile the pane and model with:
+
+```sh
+herdr plugin action invoke overview.reconcile --plugin overview
+```
+
+For desktop provisioning, see `README.md` (Herdr overview and phone route) at
+the chezmoi source root. To supply recaps, set up the standalone CLI using
+`dot_local/share/session-recap/README.md`. Pi publication setup is in
+`dot_pi/private_agent/extensions/herdr-overview/README.md`. These paths are
+relative to the source root. The plugin supplies the view and grouping
+coordinator; a compatible server and recap backend are separate prerequisites.
+The standalone CLI also works with Herdr stopped.
+
+## Usage
 
 The pane selects the narrow Board when its width is at or below `[ui].mobile_width_threshold` in Herdr `config.toml` (the managed value is 64); wider terminals get the independent Mosaic. There is no runtime layout switch. Each presenter owns its all-workspaces, workspace, and pane-detail rendering over the same ID-keyed model.
 
@@ -14,77 +62,56 @@ The pane selects the narrow Board when its width is at or below `[ui].mobile_wid
 
 The display is passive: it shows only supplied prompt fields and published recap records, with age and missing/failure status. Opening, selection, preview refresh, scrolling, and focus never run `session-recap` or synthesize recap text. `overview.reconcile` remains a separate plugin action for publication coordination and manual-library refresh. To show a manually generated single recap in a pane's detail, use that native pane ID as the source ID, for example `printf '%s\n' 'Recent work and current state.' | session-recap create --kind single --source-id PANE_ID`, then invoke `herdr plugin action invoke overview.reconcile --plugin overview` while the source pane is live. This lets the overview display its published or failed status and persist the live terminal association used if `pane.move` later rekeys the pane. Manual results are not Pi auto-naming inputs.
 
-The existing `overview.reconcile` action and server-start hook also drain successful Pi-session publications. The coordinator deduplicates published record IDs and stores them with absolute per-workspace deadlines in user-local `herdr-overview/overview.json` state. A publication's recorded `workspace_id` is authoritative for its deadline attribution; later pane moves do not reassign that deadline. Each in-workspace success starts or resets a 30-second quiet period. A detached one-shot deadline wake-up invokes the same existing action; startup resumes pending deadlines. At reconciliation, a manual pane-source recap is associated with a terminal ID only when its exact source ID resolves to a live native pane; that association follows the same pane if Herdr rekeys its ID on move, without rewriting the recap's source. At expiry, a fresh native snapshot selects each current pane's latest indexed published recap, including Pi-session records matched through the current session or persisted terminal-ID association after pane moves, and manual pane-source recaps for non-Pi panes (also followed by terminal ID after a move); closed panes are excluded. Those member recaps are supplied to `session-recap create --kind group`. Only a successful workspace publication is followed by an `active` Herdr-session group from latest indexed workspace recaps whose native workspace IDs are still live. Failed workspace grouping leaves its deadline due for the next startup/reconcile wake-up; it does not trigger a session recap or a retry poll. Raw non-Pi output is not included. The overview itself remains a passive reader; it does not poll or generate recaps on display events.
+A successful Pi recap starts or resets a 30-second quiet period for its
+workspace at publication time. At expiry, grouping uses the latest published
+recaps for panes in that workspace's **current** native membership, including
+manually sourced recaps for non-Pi panes; closed panes are excluded. A
+successful workspace group can produce an active Herdr-session group. A failed
+group preserves the last good record and cannot trigger a session group.
+Pending deadlines resume after restart. Raw non-Pi output is never included.
 
-Display-name ownership is persisted per pane/tab ID in overview state and follows a verified native terminal-ID rekey without turning automatic ownership into manual ownership. Unlabelled panes and Herdr v0.9.1's positional numeric tab defaults (`1`, `2`, etc.; `workspace.rs::tab_display_name`) can be named from native titles, agent/process metadata, cwd, and eligible published Pi recaps. Unknown initial labels and later owner edits become manual and are preserved. Before each automatic pane/tab rename, reconciliation takes a fresh native snapshot; if that target's label changed since policy evaluation, it skips the write, records manual ownership, and keeps the live label in the model. Herdr 0.9.1 exposes no conditional rename/CAS operation, so a manual edit in the final snapshot-to-rename interval can still race; this check narrows the window but is not atomic. The `overview.auto_name_pane` and `overview.auto_name_tab` actions are scoped to Herdr's pane/tab action contexts and explicitly return only that live ID to automatic ownership. Pi names use only a successful recap published for that pane in its Herdr workspace; the live prompt, workspace labels, and Pi session identity are never naming inputs or mutation targets. A tab name combines the available pane task labels from its panes.
+Unlabelled panes and Herdr's positional numeric tab defaults may be named from
+native titles, agent/process metadata, cwd, and eligible published Pi recaps.
+Unknown initial labels and owner edits stay manual. The scoped
+`overview.auto_name_pane` and `overview.auto_name_tab` actions return one label
+to automatic control. Pi names require a successful recap published for that
+pane in its workspace. Workspace names and Pi identity stay untouched. A tab
+can combine its pane task labels. Reconciliation rereads a target before an
+automatic rename; Herdr 0.9.1 has no conditional rename, so a manual edit in
+the final snapshot-to-write interval can still race.
 
-`src/palette-v0.9.1.json` is attributed to `herdrdev/herdr` tag `v0.9.1` (commit `8544776216a8d28088db59a5344ea21ee2d05d2b`), `src/app/state.rs`, `Palette` constructors and `Palette::from_name`. RGB values are copied from the pinned source literals; Reset and ANSI variants remain typed. The theme adapter reads the managed `config.toml` on pane open and watches the file for changes. With `auto_switch = false`, `[theme].name` and `[theme.custom]` resolve directly. If `auto_switch = true`, the adapter does not claim host appearance detection without an explicit appearance input.
+The theme adapter uses Herdr 0.9.1's pinned palette, reads the managed
+`config.toml` on pane open, and watches for changes. It resolves `[theme].name`
+and `[theme.custom]` when `auto_switch = false`. With `auto_switch = true`, it
+needs an explicit appearance input; it does not detect host appearance by
+itself. Palette provenance and adapter tests are in the
+[component agent guide](./AGENTS.md).
 
-Run package tests with:
+## Troubleshooting
+
+- Linked plugin, missing overview tab: the running server has not loaded the
+  startup hook. Start or restart the compatible server intentionally. The
+  reconcile action works once the plugin has loaded.
+- Missing or failed recap: the overview still shows native pane details.
+  Check the recap command and authentication in
+  `dot_local/share/session-recap/README.md` and Pi publication setup in
+  `dot_pi/private_agent/extensions/herdr-overview/README.md`.
+- Real-server proof needs an isolated socket and cleanup. Use
+  `python3 tests/herdr-overview/proof.py --help` for its scenarios; the phone
+  journey requires an attended Termux-over-SSH client.
+
+## Validation
+
+From the chezmoi source root, run the package tests and the standalone
+recap/review checks:
 
 ```sh
-npm test
-```
-
-The source-only outside-in driver is `tests/herdr-overview/proof.py`; it is
-excluded from chezmoi deployment. Run its named scenarios from the repo root:
-
-```sh
+npm test --prefix dot_local/share/herdr-overview
 python3 tests/herdr-overview/proof.py recap
 python3 tests/herdr-overview/proof.py review
-python3 tests/herdr-overview/proof.py herdr-prepare # copy run_id from its JSON result
-python3 tests/herdr-overview/proof.py herdr-wide --run-id RUN_ID
-# For capture harnesses that clean command descendants, start from a one-shot
-# parent outside capture ownership before pi-grouped.
-python3 tests/herdr-overview/proof.py pi-provider-start --run-id RUN_ID
-python3 tests/herdr-overview/proof.py pi-grouped --run-id RUN_ID
-# On the attended Termux phone: ~/bin/herdr-overview-proof RUN_ID macbook
-python3 tests/herdr-overview/proof.py termux-ssh --run-id RUN_ID
-# After the attended phone route: name ownership/reset, real pane.move, post-move Pi input, and live-group regressions.
-python3 tests/herdr-overview/proof.py herdr-native-move --run-id RUN_ID
-python3 tests/herdr-overview/proof.py herdr-cleanup --run-id RUN_ID
 python3 tests/herdr-overview/proof.py chezmoi-dry-run
-# Separate fresh fixture: move Pi during its first pending response.
-python3 tests/herdr-overview/proof.py herdr-prepare # use this fresh RUN_ID
-python3 tests/herdr-overview/first_response_move.py --run-id RUN_ID --output /tmp/first-move.json
-python3 tests/herdr-overview/proof.py herdr-cleanup --run-id RUN_ID
 ```
 
-The `pi-provider-start` helper starts the run-owned loopback provider used by
-`pi-grouped` and the later native-move journey. Start it outside capture-command
-ownership when the harness cleans command descendants. Its PID/root identity is
-recorded; scenarios reuse only that matching live process, and fail on a stale
-record. Standalone `pi-grouped` and `first_response_move.py` start their own
-provider when none is recorded. The latter submits the first prompt without
-Herdr's `--wait` option, moves the running pane before releasing the scripted
-reply, then verifies visible working and published detail, native automatic
-naming, and the destination group. Herdr 0.9.1's `--wait` can return
-`agent_not_running` on the old ID after a native move even when Pi completes;
-the non-wait submission is checked for success and completion is observed
-through Pi's published record and the visible overview.
-
-The `pi-grouped` journey returns the live Pi pane to automatic naming while
-its current prompt is visible but before a successful recap; it then checks
-that the published recap, and not the prompt or a manual pane-source recap,
-provides the Pi name. The supplemental `herdr-native-move` journey requires the
-returned phone receipt and runs after the phone stage. On the isolated server
-it stops the overview, emits unseen native pane output, reopens the overview,
-and verifies the fresh output in pane detail while saved preview state remains
-stale. It also checks that a later owner pane edit survives reconciliation,
-the public pane reset restores automatic naming, and the automatic tab name
-includes both the shell task and published Pi task. It restores the owner's
-fixture labels, publishes a manual recap under a live non-Pi pane ID, persists
-its terminal association, then moves both that pane and the live Pi pane with
-native `pane.move`. It checks manual recap detail attribution after the move,
-submits a new Pi prompt through the process's inherited caller ID, checks the
-current prompt in the rekeyed Pi pane detail, groups the moved Pi and manual
-recaps in the destination workspace, and closes another workspace before the
-next Herdr-session group. Its scripted loopback Pi provider is recorded under
-the same isolated run and stopped by `herdr-cleanup`. Each JSON line carries
-its `command_id`. Cleanup stops only that run's recorded provider/server and
-removes only its marked temporary directory.
-A `termux-ssh` PASS requires an attended phone or ADB-controlled Termux
-emulator to run the phone-owned helper and return its receipt over
-phone-to-desktop SSH; a narrow local PTY is never phone proof. The stable-tree
-driver runs the sole full matrix and retains each JSON outcome under its
-`command_id`.
+For isolated real-server and first-response-move fixtures, see
+[AGENTS.md](./AGENTS.md). Phone proof needs an attended Termux-over-SSH client
+and its returned receipt; a local narrow PTY does not establish that route.
