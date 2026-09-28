@@ -216,6 +216,20 @@ Notes:
 - `furi` is installed by the `mise` bootstrap task, and bootstrap registers and starts `ashwwwin/automation-mcp` so the canonical `furi` MCP entry works for both Claude and Codex after apply.
 - On macOS, `automation-mcp` also needs Accessibility and Screen Recording permissions in System Settings > Privacy & Security before its tools can fully control the machine.
 
+## Reading a streaming Pi session
+
+Desktop Pi settings enable fullscreen mode. `/inspect-session` or
+**Ctrl+Alt+E** opens a read-only conversation snapshot in the configured
+external editor, even during streaming. Closing it returns to the same
+session; editor changes are discarded. System instructions, thinking, and
+abandoned branches are excluded. Herdr's `prefix+e` remains the scrollback
+reader for non-Pi panes.
+
+`/inspect-prompt` separately opens the assembled system prompt while Pi is
+idle. See the [inspector guide](./dot_pi/private_agent/extensions/inspect-prompt/README.md)
+for editor configuration and limits. The private Pi/Herdr proofs pin Pi
+0.87.1 and Herdr 0.9.1; upgrades require revalidation.
+
 ## Learnings monitor in Pi
 
 The desktop-only Learnings monitor starts off. `/learnings on` enables a
