@@ -1,5 +1,7 @@
 # session-recap
 
+## Overview
+
 `session-recap` is a portable stdin-to-command recap CLI. It works without Pi or
 Herdr, accepts a configured executable argv (no shell), and writes dated records
 outside either application. The CLI needs Python 3.11+ (`tomllib`). Its wrapper
@@ -7,9 +9,21 @@ uses `SESSION_RECAP_PYTHON` when set, then a compatible `python3` on `PATH`, the
 an available user-managed mise shim. This matters when a Herdr-hosted Pi shell
 exposes macOS's older `/usr/bin/python3`. The CLI and Python implementation live
 at `dot_local/bin/executable_session-recap` and
-`dot_local/share/session-recap/session_recap.py` in chezmoi source.
+`dot_local/share/session-recap/session_recap.py` in chezmoi source. Use
+`create` for standalone single or group recaps; Pi and Herdr use the
+prompt/prepare/publish commands. The CLI runs on demand and requires a
+configured recap command. This repository does not bundle a model or recap
+service.
 
-## Configure
+## Setup
+
+From a desktop with chezmoi initialized, preview and apply the CLI and its
+configuration:
+
+```sh
+chezmoi apply --dry-run --verbose ~/.local/bin/session-recap ~/.local/share/session-recap ~/.config/session-recap
+chezmoi apply ~/.local/bin/session-recap ~/.local/share/session-recap ~/.config/session-recap
+```
 
 Desktop chezmoi profiles `personal` and `axon-work-computer` deploy the config
 template and editable prompts to `~/.config/session-recap/`:
@@ -18,20 +32,21 @@ template and editable prompts to `~/.config/session-recap/`:
 - `single-prompt.md` — `[[LABEL]]` and `[[TEXT]]`
 - `group-prompt.md` — `[[LABEL]]` and `[[MEMBERS]]`
 
-To override only the command on one host, create the un-managed
+The default command needs an installed, authenticated Claude CLI. For another
+stdin-to-stdout recap program, create the host-local, unmanaged
 `~/.config/session-recap/config.local.toml`:
 
 ```toml
 command = ["/path/to/my-recap-command", "--stdin"]
 ```
 
-The argv runs directly, not through a shell. The rendered prompt is sent on
+The argv runs directly without a shell. The rendered prompt is sent on
 stdin; successful nonblank UTF-8 stdout is the recap. Exit failure, invalid
 UTF-8, and blank output are recorded as failed attempts and do not replace the
 last successful recap. Termux does not deploy the desktop command/config; it is
 an SSH client. Its phone-side review library is separate.
 
-## Create recaps
+## Usage
 
 A single input does not require a label:
 
@@ -39,6 +54,10 @@ A single input does not require a label:
 printf '%s\n' 'Recent changes and the present state.' |
   session-recap create --kind single
 ```
+
+A successful command prints the record ID. Find its published summary under
+`~/.local/share/session-recap/records/YYYY-MM-DD/` (or the selected
+`$XDG_DATA_HOME`); the CLI does not print the recap text.
 
 A related group accepts optional labels and retains member record IDs when
 provided:
@@ -75,9 +94,28 @@ reads the expected prompt text from stdin and changes only a matching current
 prompt under the store lock. It preserves the working state and does not
 replace a newer input while a prior response waits to publish.
 
-## Checks
+## Troubleshooting
+
+- `python3` is too old: the CLI requires Python 3.11+; set
+  `SESSION_RECAP_PYTHON` to a compatible interpreter or make one available
+  through mise.
+- The default backend exits or prints nothing: authenticate the Claude CLI
+  used by `claude -p`, or set `command` in host-local `config.local.toml` to
+  an available stdin-to-stdout program. The failed attempt stays in history
+  and the last good recap remains indexed.
+- No Herdr overview recap appears: this CLI also works on its own. Pi
+  publication requires the adapter in
+  `dot_pi/private_agent/extensions/herdr-overview/README.md` and the loaded
+  plugin in `dot_local/share/herdr-overview/README.md` (paths relative to the
+  chezmoi source root).
+
+## Validation
+
+From the chezmoi source root, select the mise-managed Python for both unit
+tests and the fake-backend CLI journey:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
-  -s dot_local/share/session-recap -p 'test_*.py' -v
+mise exec -- python3 -c 'import sys; assert sys.version_info >= (3, 11)'
+PYTHONDONTWRITEBYTECODE=1 mise exec -- python3 -m unittest discover -s dot_local/share/session-recap -p 'test_*.py' -v
+mise exec -- python3 tests/herdr-overview/proof.py recap
 ```
