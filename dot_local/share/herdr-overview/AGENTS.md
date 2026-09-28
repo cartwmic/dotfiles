@@ -54,6 +54,28 @@ do not move their logic into this plugin.
   Termux-over-SSH proof needs an attended phone client. Termux does not host
   this plugin.
 
+## Deployment from worktrees
+
+The `install-herdr-overview` mise task resolves the configured chezmoi source,
+even when launched from a feature worktree. Use the isolated-server journey
+below to validate worktree changes. For live rollout, first merge into the
+configured source checkout, obtain approval, and follow the setup task in
+`README.md` there. Check its source manifest and the registry's `plugin_root`
+refer to that approved checkout:
+
+```sh
+chezmoi source-path "$HOME/.local/share/herdr-overview/herdr-plugin.toml"
+jq -r '.[] | select(.plugin_id == "overview") | .plugin_root' \
+  "${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins.json"
+```
+
+These two reads deliberately inspect the configured source and live registry.
+A registry entry pointing elsewhere requires an owner decision; the installer
+refuses to replace it. Do not claim the task tested or deployed a feature worktree.
+Linking is offline. On an existing compatible server, the reconcile action
+listed above loads the linked plugin without requiring a restart; reload config
+separately for a changed keybinding.
+
 ## Validation
 
 From the chezmoi source root, run the local package and outside-in portable

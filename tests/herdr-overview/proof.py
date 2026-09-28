@@ -2490,6 +2490,7 @@ def scenario_chezmoi() -> dict[str, Any]:
     binary = shutil.which("chezmoi")
     if not binary:
         raise ProofBlocked("chezmoi is not installed")
+    command = [binary, "--source", str(ROOT)]
     desktop_targets = [
         "~/.config/mise/config.toml",
         "~/.config/herdr/config.toml",
@@ -2506,12 +2507,12 @@ def scenario_chezmoi() -> dict[str, Any]:
     ]
     mappings: dict[str, str] = {}
     for dest in desktop_targets:
-        mapped = run_process([binary, "source-path", dest], check=False, timeout=10)
+        mapped = run_process([*command, "source-path", dest], check=False, timeout=10)
         if mapped.returncode == 0 and mapped.stdout.strip():
             mappings[dest] = mapped.stdout.strip()
     if not mappings:
         raise ProofFailure("chezmoi did not map any requested desktop destinations to source")
-    data = run_process([binary, "data", "--format", "json"], check=False, timeout=20)
+    data = run_process([*command, "data", "--format", "json"], check=False, timeout=20)
     if data.returncode != 0:
         raise ProofFailure(f"could not read the active chezmoi profile: {bounded(data.stderr)}")
     try:
@@ -2520,7 +2521,7 @@ def scenario_chezmoi() -> dict[str, Any]:
             or data_value.get("chezmoi", {}).get("config", {}).get("data", {}).get("profile")
     except json.JSONDecodeError as exc:
         raise ProofFailure("chezmoi data did not return JSON") from exc
-    dry_run = run_process([binary, "apply", "--dry-run", "--verbose", "--no-tty", *desktop_targets],
+    dry_run = run_process([*command, "apply", "--dry-run", "--verbose", "--no-tty", *desktop_targets],
                           check=False, timeout=120)
     if dry_run.returncode != 0:
         raise ProofFailure(f"targeted chezmoi dry-run failed: {bounded(dry_run.stdout + dry_run.stderr)}")
@@ -2535,11 +2536,11 @@ def scenario_chezmoi() -> dict[str, Any]:
         for profile in ("personal", "axon-work-computer"):
             override = tmp / f"{profile}.json"
             override.write_text(json.dumps({"profile": profile}) + "\n", encoding="utf-8")
-            rendered = run_process([binary, "--override-data-file", str(override), "execute-template", "{{ .profile }}"],
+            rendered = run_process([*command, "--override-data-file", str(override), "execute-template", "{{ .profile }}"],
                                   check=False, timeout=20)
             if rendered.returncode != 0 or rendered.stdout.strip() != profile:
                 raise ProofFailure(f"could not render the {profile} profile template")
-            template = run_process([binary, "--override-data-file", str(override), "execute-template", "--file",
+            template = run_process([*command, "--override-data-file", str(override), "execute-template", "--file",
                                     str(ROOT / "dot_config/session-recap/config.toml.tmpl")],
                                    check=False, timeout=20)
             if (template.returncode != 0
@@ -2556,7 +2557,7 @@ def scenario_chezmoi() -> dict[str, Any]:
             destination = tmp / profile
             destination.mkdir()
             managed = run_process([
-                binary, "--source", str(ROOT), "--destination", str(destination),
+                *command, "--destination", str(destination),
                 "--override-data-file", str(override), "managed", "--path-style", "relative", "--no-tty",
             ], check=False, timeout=30)
             if managed.returncode != 0:
