@@ -1341,7 +1341,10 @@ def run_integrated(root: Path, backend: ScriptedBackends, env: dict[str, str], a
         report["checks"].append("AC-22-one-warning-for-repeated-failures")
 
         # Recovery resets failure health. A successful pass must be silent.
+        # Exceed the former 1.5s cap while staying within this fixture's configured
+        # 2.5s timeout: the real Pi entry point must honor the Hindsight config.
         backend.fail_recalls = False
+        backend.delay_next_recall = 1.8
         before_warning = event_count(log, "notify", event_type="warning", message=WARNING)
         next_observer_call = observer_call_count(backend) + 1
         for label in ("C01", "C02", "C03"):
@@ -1350,9 +1353,11 @@ def run_integrated(root: Path, backend: ScriptedBackends, env: dict[str, str], a
         wait_batch_processed(backend, root, sid, 3, 3)
         wait_condition(lambda: not (operational_state(root, sid) or {}).get("pending"), "successful observer pass", owner="T4")
         status_after_recovery = status_for(pi, log)
-        require("(failed)" not in status_after_recovery.get("message", "") and "Failure:" not in status_after_recovery.get("message", ""), "successful Hindsight lookup did not clear failure health", "T6")
+        require("(failed)" not in status_after_recovery.get("message", "") and "Failure:" not in status_after_recovery.get("message", ""), "Hindsight lookup within the configured timeout did not clear failure health", "T6")
+        recovery_recall = backend.recall_calls[2]
+        require(recovery_recall["finished"] is not None and recovery_recall["finished"] - recovery_recall["started"] > 1.5, "recovery lookup did not exercise a response slower than the former timeout cap", "T6")
         require(event_count(log, "notify", event_type="warning", message=WARNING) == before_warning, "successful observer/memory pass emitted a warning", "T6")
-        report["checks"].append("failure-recovery-is-silent")
+        report["checks"].extend(["failure-recovery-is-silent", "hindsight-configured-timeout-above-1500ms"])
 
         # Create a real alternate Pi /tree branch, record its evidence, then leave
         # it and verify the historical note stays distinct from the active branch.
@@ -1684,7 +1689,7 @@ def run_integrated(root: Path, backend: ScriptedBackends, env: dict[str, str], a
             if process:
                 with contextlib.suppress(OSError):
                     terminal_log = root / f"{name}-terminal.txt"
-                    terminal_log.write_bytes(process.output)
+                    terminal_log.write_bytes(bytes(process.output))
                     terminal_log.chmod(0o600)
                 process.close()
 
