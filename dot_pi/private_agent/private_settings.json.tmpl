@@ -1,6 +1,7 @@
 {{- /*
   Read the existing lastChangelogVersion from the live file (pi auto-bumps it
-  on every CLI run). Without this, chezmoi sees drift every time pi runs. We
+  on every CLI run). Keep this template without a final newline to match
+  Pi's JSON writer. Without this, chezmoi sees drift every time pi runs. We
   preserve whatever's currently on disk and fall back to a sensible default
   on a fresh machine where the file doesn't exist yet.
 */ -}}
@@ -30,7 +31,7 @@
 {
 {{- if eq .profile "personal" }}
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-6-sol",
+  "defaultModel": "gpt-6.1-sol",
 {{- else }}
   "defaultProvider": "private-glm",
   "defaultModel": "glm-5.3-flash",
@@ -65,6 +66,9 @@
     {{ printf "private-glm/%s" $model.id | quote }}
 {{- end }}
 {{- end }}
+  ],
+  "extensions": [
+    "-builtin:mcp"
   ],
   "packages": [
     "https://github.com/cartwmic/pi-rtk-optimizer",

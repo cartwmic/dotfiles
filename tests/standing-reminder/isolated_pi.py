@@ -124,6 +124,10 @@ def main() -> int:
             invoke([node, str(SIBLING_PATCH)], sibling_env)
             invoke([node, str(SIBLING_PATCH), "--check"], sibling_env)
             assert_sibling_patch(stage, True)
+            # The installed source may already carry the origin bridge. Normalize
+            # only our private copy before recording the sibling-only baseline.
+            run_patch(node, stage, "termux")
+            run_patch(node, stage, "termux", check=True)
             sibling_fingerprint = package_fingerprint(stage)
 
             run_patch(node, stage, "personal")

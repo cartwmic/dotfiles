@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // chezmoi-pi-patch:anthropic-idle-watchdog
 //
-// Idempotently patches @mariozechner/pi-ai's compiled
-// providers/anthropic.js to add a per-chunk SSE idle watchdog and forward
+// Idempotently patches @earendil-works/pi-ai's compiled
+// api/anthropic-messages.js to add a per-chunk SSE idle watchdog and forward
 // Anthropic ping events through the AssistantMessageEventStream.
 //
 // See sibling README.md for rationale, failure modes, and resolution.
@@ -17,14 +17,14 @@
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync, copyFileSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync, copyFileSync, existsSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
 // Bump this when patch.mjs's edits change. The marker comment embedded into
-// the patched file uses this; a stale marker triggers an automatic
-// restore-from-backup + re-apply.
-const PATCH_REVISION = 1;
+// the patched file uses this; a stale marker fails closed rather than
+// restoring a shared-file backup over sibling patches.
+const PATCH_REVISION = 2;
 
 const PATCH_NAME = "anthropic-idle-watchdog";
 const MARKER = `chezmoi-pi-patch:${PATCH_NAME} v${PATCH_REVISION}`;
@@ -33,13 +33,13 @@ const STATE_DIR = join(homedir(), ".local", "state", "chezmoi-pi-patches");
 const STATE_FILE = join(STATE_DIR, `${PATCH_NAME}.json`);
 
 const log = (msg) => console.log(`[pi-patch:${PATCH_NAME}] ${msg}`);
-const warn = (msg) => console.warn(`[pi-patch:${PATCH_NAME}] WARN: ${msg}`);
 const fail = (msg) => {
 	console.error(`[pi-patch:${PATCH_NAME}] ERROR: ${msg}`);
 	process.exit(1);
 };
 
 const checkOnly = process.argv.includes("--check");
+const isolatedPackage = process.env.PI_ANTHROPIC_IDLE_WATCHDOG_PACKAGE;
 
 // ─── Edit definitions ──────────────────────────────────────────────────────
 //
@@ -108,8 +108,10 @@ const EDITS = [
 	{
 		name: "streamAnthropic — forward ping events to AssistantMessageEventStream",
 		find: `            for await (const event of iterateAnthropicEvents(response, options?.signal)) {
+                await options?.onProviderStreamEvent?.(event, model);
                 if (event.type === "message_start") {`,
 		replace: `            for await (const event of iterateAnthropicEvents(response, options?.signal)) {
+                await options?.onProviderStreamEvent?.(event, model);
                 // ${MARKER} — surface ping events for heartbeat / progress
                 if (event.type === "ping") {
                     stream.push({ type: "ping", partial: output });
@@ -140,6 +142,11 @@ function firstExisting(paths) {
 }
 
 function locateTarget() {
+	if (isolatedPackage) {
+		const target = join(isolatedPackage, "node_modules", "@earendil-works", "pi-ai", "dist", "api", "anthropic-messages.js");
+		if (!existsSync(target)) fail(`isolated pi-ai target not found: ${target}`);
+		return target;
+	}
 	// We run under the same node that runs pi (chezmoi invokes `node patch.mjs`).
 	const requireFromHome = createRequire(join(homedir(), "package.json"));
 	const candidates = [];
@@ -176,6 +183,14 @@ function locateTarget() {
 }
 
 function getInstalledVersions() {
+	if (isolatedPackage) {
+		return {
+			piCodingAgent: JSON.parse(readFileSync(join(isolatedPackage, "package.json"), "utf8")).version,
+			piAi: JSON.parse(readFileSync(join(isolatedPackage, "node_modules", "@earendil-works", "pi-ai", "package.json"), "utf8")).version,
+			scope: "@earendil-works",
+			root: isolatedPackage,
+		};
+	}
 	const versions = { piCodingAgent: null, piAi: null, scope: null };
 	const requireFromHome = createRequire(join(homedir(), "package.json"));
 	let npmRoot;
@@ -202,6 +217,7 @@ function getInstalledVersions() {
 		}
 		versions.scope = scope;
 		const pcaDir = dirname(pcaPkgPath);
+		versions.root = pcaDir;
 		const piAiPkgCandidates = [
 			join(pcaDir, "node_modules", scope, "pi-ai", "package.json"), // nested
 			join(pcaDir, "..", "pi-ai", "package.json"), // hoisted sibling
@@ -233,132 +249,92 @@ if (!target) {
 }
 log(`target: ${target}`);
 
-const original = readFileSync(target, "utf8");
 const versions = getInstalledVersions();
+const chunks = versions.root && join(versions.root, "dist", "bundle", "chunks");
+if (!chunks || !existsSync(chunks)) fail("Pi CLI bundle not found; update this patch for the installed version");
+const bundles = readdirSync(chunks).filter((file) => file.endsWith(".js") &&
+	readFileSync(join(chunks, file), "utf8").includes("async function*iterateAnthropicEvents(response,signal)"));
+if (bundles.length !== 1) fail(`expected one Anthropic CLI bundle, found ${bundles.length}`);
+const bundle = join(chunks, bundles[0]);
+const bundleEdits = [
+	{
+		name: "CLI event filter — forward ping",
+		find: 'ANTHROPIC_MESSAGE_EVENTS=new Set(["message_start","message_delta","message_stop","content_block_start","content_block_delta","content_block_stop"])',
+		replace: `ANTHROPIC_MESSAGE_EVENTS=new Set(["message_start","message_delta","message_stop","content_block_start","content_block_delta","content_block_stop","ping"/* ${MARKER} */])`,
+	},
+	{
+		name: "CLI SSE reader — idle watchdog",
+		find: 'if(signal?.aborted)throw new Error("Request was aborted");let{value,done}=await reader.read();',
+		replace: EDITS[1].replace,
+	},
+	{
+		name: "CLI stream — provider callback before ping handling",
+		find: 'stream2.push({type:"start",partial:output});let blocks=output.content;for await(let event of iterateAnthropicEvents(response,options?.signal))if(await options?.onProviderStreamEvent?.(event,model),event.type==="message_start")',
+		replace: `stream2.push({type:"start",partial:output});let blocks=output.content;for await(let event of iterateAnthropicEvents(response,options?.signal))if(await options?.onProviderStreamEvent?.(event,model),event.type==="ping"){/* ${MARKER} */stream2.push({type:"ping",partial:output})}else if(event.type==="message_start")`,
+	},
+];
 
-// ─── Idempotency: marker check ────────────────────────────────────────────
-
-const markerCount = (original.match(new RegExp(MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
-
-if (markerCount > 0) {
-	// File already carries our marker for this revision.
-	if (markerCount !== EDITS.length) {
-		warn(
-			`marker count (${markerCount}) ≠ expected (${EDITS.length}); file may be partially patched`,
-		);
-	}
-	if (checkOnly) {
-		log(`already patched at revision ${PATCH_REVISION}`);
-		process.exit(0);
-	}
-	// Refresh state file in case it was lost (e.g. fresh machine).
-	writeStateFile({ status: "already-patched", target, versions });
-	log(`already patched at revision ${PATCH_REVISION} — no-op`);
-	process.exit(0);
-}
-
-// Look for stale marker (different revision) — restore from backup before
-// re-patching.
-const STALE_MARKER_PREFIX = `chezmoi-pi-patch:${PATCH_NAME}`;
-if (original.includes(STALE_MARKER_PREFIX)) {
-	if (checkOnly) {
-		fail(`stale patch revision present; expected v${PATCH_REVISION}`);
-	}
-	const backup = `${target}${BACKUP_SUFFIX}`;
-	if (!existsSync(backup)) {
-		fail(
-			`stale patch revision in ${target} but no backup at ${backup} — cannot safely re-patch. Manually reinstall pi-coding-agent and re-run chezmoi apply.`,
-		);
-	}
-	log(`stale patch revision detected; restoring from ${backup}`);
-	copyFileSync(backup, target);
-	// Re-read from the restored file.
-	process.argv.push("--restored");
-	main(target, readFileSync(target, "utf8"), versions);
-	process.exit(0);
-}
-
-if (checkOnly) {
-	fail(`file is unpatched at revision ${PATCH_REVISION}`);
-}
-
-main(target, original, versions);
+main([{ target, edits: EDITS }, { target: bundle, edits: bundleEdits }], versions);
 
 // ─── Patch application ────────────────────────────────────────────────────
 
-function main(targetPath, content, vers) {
-	// Pre-flight: every anchor must appear exactly once.
-	for (const edit of EDITS) {
-		const occurrences = countOccurrences(content, edit.find);
-		if (occurrences !== 1) {
-			emitDiagnostic(targetPath, content, edit, occurrences);
-			fail(
-				`anchor for edit "${edit.name}" found ${occurrences} times (expected 1) in ${targetPath}. ` +
-					`See diagnostic above. Either upstream changed the code shape (update patch.mjs anchors and bump PATCH_REVISION) ` +
-					`or upstream merged a real fix (delete this patch — see README §F1).`,
-			);
+function main(files, vers) {
+	const prepared = files.map(({ target, edits }) => {
+		const original = readFileSync(target, "utf8");
+		const markerCount = countOccurrences(original, MARKER);
+		if (markerCount > 0) {
+			if (markerCount !== edits.length || edits.some((edit) => countOccurrences(original, edit.replace) !== 1)) {
+				fail(`patch blocks are incomplete or changed in ${target}; no files were modified`);
+			}
+			return { target, original, content: original };
 		}
-	}
-
-	// Backup once per pi-ai install. If a backup exists from a prior
-	// revision, leave it (it captures the truly-unpatched state).
-	const backup = `${targetPath}${BACKUP_SUFFIX}`;
-	if (!existsSync(backup)) {
-		copyFileSync(targetPath, backup);
-		log(`backup written: ${backup}`);
-	}
-
-	// Apply edits.
-	let patched = content;
-	for (const edit of EDITS) {
-		patched = patched.replace(edit.find, edit.replace);
-	}
-
-	// Write atomically: temp file → fsync → rename. Preserve the .js
-	// extension so `node --check` can determine module type from the
-	// containing package.json ("type": "module").
-	const tmp = targetPath.replace(/\.js$/, "") + ".chezmoi-pi-patch.tmp.js";
-	writeFileSync(tmp, patched, "utf8");
-
-	// Validate via `node --check`.
-	try {
-		execFileSync(process.execPath, ["--check", tmp], { stdio: "pipe" });
-	} catch (err) {
-		const stderr = err.stderr ? err.stderr.toString() : String(err);
-		try {
-			execFileSync("rm", ["-f", tmp]);
-		} catch {
-			/* best effort */
+		// Shared files may carry sibling patches. Never restore a whole-file backup.
+		if (original.includes(`chezmoi-pi-patch:${PATCH_NAME}`)) {
+			fail(`stale patch revision in ${target}; expected v${PATCH_REVISION}. No files were modified. Reinstall the current Pi version, then reapply all patches.`);
 		}
-		fail(`syntax error after patch application — restored target untouched. node --check output:\n${stderr}`);
-	}
-
-	// Atomic replace.
-	execFileSync("mv", [tmp, targetPath]);
-
-	// Verify markers landed.
-	const verify = readFileSync(targetPath, "utf8");
-	const markerCountAfter = (
-		verify.match(new RegExp(MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []
-	).length;
-	if (markerCountAfter !== EDITS.length) {
-		fail(
-			`post-patch marker count ${markerCountAfter} ≠ expected ${EDITS.length}. ` +
-				`Restoring from backup at ${backup}.`,
-		);
-	}
-
-	writeStateFile({
-		status: "patched",
-		target: targetPath,
-		backup,
-		versions: vers,
-		patchRevision: PATCH_REVISION,
-		fingerprintPre: sha256(content),
-		fingerprintPost: sha256(verify),
+		let content = original;
+		for (const edit of edits) {
+			const occurrences = countOccurrences(original, edit.find);
+			if (occurrences !== 1) {
+				emitDiagnostic(target, original, edit, occurrences);
+				fail(`anchor for edit "${edit.name}" found ${occurrences} times (expected 1) in ${target}; update this patch rather than guessing`);
+			}
+			content = content.replace(edit.find, edit.replace);
+		}
+		return { target, original, content };
 	});
-
-	log(`patched ${EDITS.length} edits at revision ${PATCH_REVISION} (pi-ai ${vers.piAi}, pi-coding-agent ${vers.piCodingAgent})`);
+	const changing = prepared.filter((file) => file.content !== file.original);
+	if (checkOnly) {
+		if (changing.length) fail(`unpatched files at revision ${PATCH_REVISION}: ${changing.map((file) => file.target).join(", ")}`);
+		log(`verified SDK and CLI patch blocks at revision ${PATCH_REVISION}`);
+		return;
+	}
+	// Validate all rewritten JavaScript before replacing either runtime surface.
+	const temporary = [];
+	try {
+		for (const file of changing) {
+			file.tmp = `${file.target}.${PATCH_NAME}.tmp.js`;
+			temporary.push(file.tmp);
+			writeFileSync(file.tmp, file.content, "utf8");
+			execFileSync(process.execPath, ["--check", file.tmp], { stdio: "pipe" });
+		}
+		for (const file of changing) {
+			const backup = `${file.target}${BACKUP_SUFFIX}`;
+			if (!existsSync(backup)) copyFileSync(file.target, backup);
+			renameSync(file.tmp, file.target);
+			log(`patched ${file.target}`);
+		}
+	} finally {
+		for (const tmp of temporary) if (existsSync(tmp)) unlinkSync(tmp);
+	}
+	writeStateFile({
+		status: changing.length ? "patched" : "already-patched",
+		target: files[0].target,
+		backup: `${files[0].target}${BACKUP_SUFFIX}`,
+		versions: vers,
+		targets: prepared.map((file) => ({ target: file.target, sha256: sha256(file.content) })),
+	});
+	log(`${changing.length ? "patched" : "already patched"} SDK and CLI at revision ${PATCH_REVISION}`);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -408,6 +384,7 @@ function indent(s) {
 }
 
 function writeStateFile(payload) {
+	if (isolatedPackage) return;
 	mkdirSync(STATE_DIR, { recursive: true });
 	const state = {
 		patchName: PATCH_NAME,

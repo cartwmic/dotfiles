@@ -1,6 +1,6 @@
 # Standing-reminder input origin bridge
 
-Pi 0.87.1 exposes `input.source` before a message is processed, but the later
+Pi 0.99.1 exposes `input.source` before a message is processed, but the later
 `message_start` event does not identify where its user message came from. Text
 matching cannot safely bridge those events: operator and extension messages
 may have identical text, operator input may be expanded by a prompt template,
@@ -23,6 +23,11 @@ extensions:
 - The discovered `dist/bundle/chunks/*.js` containing Pi's input queue — CLI
   runtime actually loaded by the executable
 - `dist/core/extensions/types.d.ts` — `MessageStartEvent.source?: InputSource`
+
+Revision 2 ports the core prompt indentation and bundled declaration anchors
+to Pi 0.99.1. A previous revision is not migrated by restoring shared backups;
+reinstall the current Pi version and reapply all patches when a stale revision
+is present.
 
 Every literal anchor must occur exactly once, and every patched block must be
 present as a complete set. A changed, duplicate, or partially applied anchor

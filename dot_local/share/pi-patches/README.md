@@ -157,6 +157,7 @@ desired state for the active profile.
 ```sh
 ls */patch.mjs
 node anthropic-idle-watchdog/patch.mjs --check
+# From the repo root: python3 tests/pi-patches/anthropic_watchdog.py
 node custom-message-marker/patch.mjs --check
 PI_CHEZMOI_PROFILE=personal node hide-nonbridge-claude-models/patch.mjs --check
 PI_CHEZMOI_PROFILE=personal node standing-reminder-origin/patch.mjs --check

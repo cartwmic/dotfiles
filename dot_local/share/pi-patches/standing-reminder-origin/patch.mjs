@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// chezmoi-pi-patch:standing-reminder-origin v1
+// chezmoi-pi-patch:standing-reminder-origin v2
 // Carry input source on the exact user-message object until message_start.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const NAME = "standing-reminder-origin";
-const REVISION = 1;
+const REVISION = 2;
 const MARKER = `chezmoi-pi-patch:${NAME}`;
 const VERSION_MARKER = `${MARKER} v${REVISION}`;
 const STATE_DIR = join(homedir(), ".local", "state", "chezmoi-pi-patches");
@@ -90,33 +90,33 @@ const edits = {
 		},
 		{
 			name: "initial prompt origin",
-			before: `            messages.push({
-                role: "user",
-                content: userContent,
-                timestamp: Date.now(),
-            });`,
-			after: `            const userMessage = {
-                role: "user",
-                content: userContent,
-                timestamp: Date.now(),
-            };
-            this._inputSources.set(userMessage, options?.source ?? "interactive");
-            messages.push(userMessage);`,
+			before: `        messages.push({
+            role: "user",
+            content: userContent,
+            timestamp: Date.now(),
+        });`,
+			after: `        const userMessage = {
+            role: "user",
+            content: userContent,
+            timestamp: Date.now(),
+        };
+        this._inputSources.set(userMessage, options?.source ?? "interactive");
+        messages.push(userMessage);`,
 		},
 		{
 			name: "streaming prompt origin",
-			before: `                if (options.streamingBehavior === "followUp") {
-                    await this._queueFollowUp(expandedText, currentImages);
-                }
-                else {
-                    await this._queueSteer(expandedText, currentImages);
-                }`,
-			after: `                if (options.streamingBehavior === "followUp") {
-                    await this._queueFollowUp(expandedText, currentImages, options?.source ?? "interactive");
-                }
-                else {
-                    await this._queueSteer(expandedText, currentImages, options?.source ?? "interactive");
-                }`,
+			before: `            if (options.streamingBehavior === "followUp") {
+                await this._queueFollowUp(expandedText, currentImages);
+            }
+            else {
+                await this._queueSteer(expandedText, currentImages);
+            }`,
+			after: `            if (options.streamingBehavior === "followUp") {
+                await this._queueFollowUp(expandedText, currentImages, options?.source ?? "interactive");
+            }
+            else {
+                await this._queueSteer(expandedText, currentImages, options?.source ?? "interactive");
+            }`,
 		},
 		{
 			name: "queued prompt origin",
@@ -231,8 +231,8 @@ try {
 		},
 		{
 			name: "initial prompt origin",
-			before: `let userContent=[{type:"text",text:userText}];userContent.push(...normalized.images),messages.push({role:"user",content:userContent,timestamp:Date.now()});`,
-			after: `let userContent=[{type:"text",text:userText}];userContent.push(...normalized.images);let userMessage={role:"user",content:userContent,timestamp:Date.now()};this._inputSources.set(userMessage,options?.source??"interactive"),messages.push(userMessage);`,
+			before: `userContent=[{type:"text",text:userText}];userContent.push(...normalized.images),messages.push({role:"user",content:userContent,timestamp:Date.now()});`,
+			after: `userContent=[{type:"text",text:userText}];userContent.push(...normalized.images);let userMessage={role:"user",content:userContent,timestamp:Date.now()};this._inputSources.set(userMessage,options?.source??"interactive"),messages.push(userMessage);`,
 		},
 		{
 			name: "streaming prompt origin",

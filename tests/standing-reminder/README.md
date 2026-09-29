@@ -15,7 +15,7 @@ chezmoi --source "$PWD" apply --dry-run --verbose --force \
 ```
 
 Run `proof.py` through `isolated_pi.py` as above. The runner patches a private
-copy of real Pi 0.87.1; `proof.py` then drives it in an isolated PTY with a
+copy of real Pi 0.99.1; `proof.py` then drives it in an isolated PTY with a
 local scripted OpenAI-compatible provider and a gate-controlled editor. It
 uses temporary agent, project, and session directories, makes no external
 provider calls, and reads no user provider credentials. The journey checks exact
@@ -76,6 +76,10 @@ validation:
 python3 tests/standing-reminder/isolated_pi.py -- \
   python3 tests/standing-reminder/cache_proof.py --cap-usd 5
 ```
+
+The live cache driver remains pinned to Pi 0.87.1 and is blocked on 0.99.1.
+The non-billable compatibility proof does not revalidate cache reuse. Port and
+approve the live driver separately before running this command on 0.99.1.
 
 This frozen command enforces a `$5.00` total reported-spend cap for the exact
 `openai-codex/gpt-6-sol` model. The run reserves at most `$2.28840` for ten
