@@ -3,8 +3,11 @@
 ## Overview
 
 The Learnings monitor is an opt-in Pi observer for a persisted primary
-session. It looks for grounded workflow friction and plausible improvements,
-then leaves them for you to review. It does not advise the primary agent,
+session. It looks for grounded, reusable process lessons—non-obvious failure
+modes or decision rules that could help on a different task—then leaves them
+for you to review. One-off corrections, preferences, and restatements of
+requests are not intended as opportunities; an empty batch is fine. The model
+can still get this judgment wrong. It does not advise the primary agent,
 change its instructions, or implement suggestions.
 
 It suits a single operator who wants a machine-local review queue. Leave it

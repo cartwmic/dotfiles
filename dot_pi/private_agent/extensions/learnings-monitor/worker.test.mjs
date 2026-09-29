@@ -237,6 +237,10 @@ test("native observer sessions persist, resume, use only read/search tools, foll
 	assert.ok(first.sessionFile);
 	assert.ok((await fs.stat(first.sessionFile)).isFile());
 	assert.match(calls[0].prompt, /Serialized activity batch/);
+	assert.match(calls[0].prompt, /non-obvious, evidence-backed failure mode or decision rule/);
+	assert.match(calls[0].prompt, /asking for color in a monochrome terminal mock-up does not establish a process lesson/);
+	assert.match(calls[0].prompt, /stateful command fails after a session switch/);
+	assert.match(calls[0].prompt, /Return at most two strong proposals; zero is normal/);
 	assert.match(calls[0].prompt, /evidence-read/);
 	assert.match(calls[0].prompt, /Review reusable verification opportunities/);
 	const workerStats = await runner.stats(sourceA);
