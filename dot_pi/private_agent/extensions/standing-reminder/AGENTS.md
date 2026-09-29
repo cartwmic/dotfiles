@@ -57,7 +57,9 @@ links when that workflow is used. Rerun behavior tests if the prose changes
 a behavior claim.
 The separate cache proof uses `openai-codex/gpt-6-sol` and can spend up to $5.
 Run it only with owner approval when cache behavior needs fresh proof. The
-isolated proof pins Pi 0.87.1, and the origin patch uses exact anchors. After
+non-billable isolated proof pins Pi 0.99.1, and the origin patch uses exact
+anchors. The separate billable cache proof remains pinned to 0.87.1; do not
+relax its gates or claim cache reuse on 0.99.1 without a new approved proof. After
 a Pi upgrade, review/update the patch anchors and version-pinned proof first;
 then run the isolated journey. A version-blocked run proves nothing about the
 upgraded Pi.

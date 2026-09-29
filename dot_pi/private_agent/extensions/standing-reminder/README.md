@@ -11,7 +11,7 @@ Permanent rules belong in agent instructions; track task progress elsewhere.
 The extension and its `standing-reminder-origin` Pi patch deploy together on
 `personal` and `axon-work-computer`. Termux excludes `.pi`. From the chezmoi
 source root, review the full apply before installing; it runs the Pi patch
-onchange script. The delivered behavior was tested with Pi 0.87.1. A later
+onchange script. The delivered behavior was tested with Pi 0.99.1. A later
 Pi version needs updated patch anchors and version-pinned proof before the
 isolated journey can validate it.
 
@@ -115,8 +115,9 @@ chezmoi --source "$PWD" apply --dry-run --verbose --force
 
 The source-only proof guide at `tests/standing-reminder/README.md` gives the
 full check list. The separate live cache proof uses `openai-codex/gpt-6-sol`
-and may spend up to $5; run it only with owner approval. That proof checks
-cache-read counters on an isolated patched Pi copy. The command and budget
+and may spend up to $5; run it only with owner approval. It remains pinned to
+Pi 0.87.1 and is blocked on 0.99.1 until separately ported and approved. Cache
+reuse was not revalidated by the non-billable compatibility repair. The command and budget
 are in the proof guide.
 
 ## Troubleshooting

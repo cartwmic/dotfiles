@@ -55,7 +55,7 @@ TEMPLATE_MESSAGE = "PROOF-EXPANDED-OPERATOR-MESSAGE\nPROOF-TEMPLATE-ARGUMENT"
 TOOL_PROMPT = "PROOF-TOOL-ONLY-CONTINUATION"
 TREE_POINT = "PROOF-FORK-POINT-OLDER-USER-MESSAGE"
 TREE_SEARCH = "fork-point"
-PATCH_MARKER = "chezmoi-pi-patch:standing-reminder-origin v1"
+PATCH_MARKER = "chezmoi-pi-patch:standing-reminder-origin v2"
 ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 
 
@@ -85,8 +85,8 @@ def require_isolated_patched_pi(pi_bin: str) -> None:
                    if PATCH_MARKER in path.read_text(encoding="utf-8")]
     except (OSError, json.JSONDecodeError) as exc:
         raise ProofBlocked("the isolated Pi package or standing-reminder patch is incomplete") from exc
-    if metadata.get("name") != "@earendil-works/pi-coding-agent" or metadata.get("version") != "0.87.1":
-        raise ProofBlocked("the proof requires isolated @earendil-works/pi-coding-agent 0.87.1")
+    if metadata.get("name") != "@earendil-works/pi-coding-agent" or metadata.get("version") != "0.99.1":
+        raise ProofBlocked("the proof requires isolated @earendil-works/pi-coding-agent 0.99.1")
     if (PATCH_MARKER not in runtime or PATCH_MARKER not in declarations or len(bundles) != 1
             or os.environ.get("PI_CHEZMOI_PROFILE") not in {"personal", "axon-work-computer"}):
         raise ProofBlocked("the desktop-gated standing-reminder origin patch is missing from isolated Pi")
@@ -148,7 +148,8 @@ def latest_request_for(provider: "ScriptedProvider", prompt: str) -> dict[str, A
 
 def assert_user_message(body: dict[str, Any], prompt: str) -> None:
     found = [m for m in body.get("messages", []) if m.get("role") == "user" and as_text(m.get("content")) == prompt]
-    require(bool(found), f"provider request changed or omitted operator message {prompt!r}")
+    require(bool(found), f"provider request changed or omitted operator message {prompt!r}; "
+            f"latest user text: {latest_user_text(body)[:500]!r}")
 
 
 def assert_reminder(body: dict[str, Any], prompt: str, reminder: str) -> None:
@@ -1273,6 +1274,7 @@ def run_interactive_journey(run: ProofRun) -> tuple[str, str, str]:
             "older-point /fork did not copy the parent's current reminder")
     require(run.saved_state(parent_id).get("reminder") == REMINDER_PARENT_NAVIGATED,
             "fork creation changed the parent reminder")
+    pi.key(b"\x15")  # /fork preloads the selected user message into the editor.
     fork_prompt = run.prompt_and_wait(pi, "PROOF-FORK-CURRENT-VALUE")
     assert_reminder(fork_prompt, "PROOF-FORK-CURRENT-VALUE", REMINDER_PARENT_NAVIGATED)
 
@@ -1653,8 +1655,8 @@ def main() -> int:
     try:
         require_isolated_patched_pi(pi_bin)
         version = subprocess.run([pi_bin, "--version"], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
-        if version != "0.87.1":
-            raise ProofBlocked(f"Pi 0.87.1 is the proven interactive boundary; found {version}")
+        if version != "0.99.1":
+            raise ProofBlocked(f"Pi 0.99.1 is the prepared interactive boundary; found {version}")
         print(f"Using Pi {version}; local scripted provider and gate-controlled editor")
         with tempfile.TemporaryDirectory(prefix="pi-standing-reminder-proof-") as temporary:
             run = configure_run(Path(temporary), extension)
