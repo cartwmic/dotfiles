@@ -25,7 +25,7 @@ function createMemoryAdapter(agentDir: string) {
 			recallBudget: config.recallBudget,
 			recallMaxTokens: config.recallMaxTokens,
 			// Related-memory lookup runs only during detached observation or explicit cross-source review.
-			requestTimeoutMs: Math.min(config.requestTimeoutMs, 1_500),
+			requestTimeoutMs: config.requestTimeoutMs,
 		});
 	} catch {
 		return null;
