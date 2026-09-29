@@ -1620,6 +1620,11 @@ def run_integrated(root: Path, backend: ScriptedBackends, env: dict[str, str], a
         # Positive and negative controls for extension ownership, session count, and persistence.
         model_counts = [row for row in backend.model_requests if row.get("observer")]
         require(len(model_counts) >= observer_batch_count(backend) and len(backend.tool_calls) >= 1, "native worker transcript/model requests are incomplete", "T4")
+        first_messages = model_counts[0]["request"]["messages"]
+        system_text = "\n".join(content_text(message.get("content")) for message in first_messages if message.get("role") == "system")
+        batch_text = "\n".join(content_text(message.get("content")) for message in first_messages if message.get("role") == "user")
+        require("reusable process lessons, not a log of session corrections" in system_text, "observer system prompt did not carry the process-level selection bar", "T4")
+        require("non-obvious, evidence-backed failure mode or decision rule" in batch_text and "asking for color in a monochrome terminal mock-up" in batch_text and "stateful command fails after a session switch" in batch_text, "observer model request did not receive the selection bar and contrasting examples", "T4")
         require(len(all_records(root)) == 3, "primary branch/fork record count differed from the expected three, or an off turn created an extra record", "T2")
         require(len(primary_user_messages(primary)) == 19, f"slash commands/flush altered primary transcript or an exchange was lost: {len(primary_user_messages(primary))} user messages", "T3")
         report["checks"].append("positive-negative-controls-and-primary-transcript")
