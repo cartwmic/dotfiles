@@ -950,7 +950,7 @@ echo "✅ Zellij plugins installed in $PLUGIN_DIR"
 description = "Install Herdr 0.9.1 and link the local overview plugin without starting or restarting Herdr"
 run = '''
 set -eu
-PROFILE="$(chezmoi data --format json 2>/dev/null | jq -r '.profile // empty' || true)"
+PROFILE="${HERDR_OVERVIEW_APPLY_PROFILE:-$(chezmoi data --format json 2>/dev/null | jq -r '.profile // empty' || true)}"
 case "$PROFILE" in
   personal|axon-work-computer) ;;
   *)
@@ -968,7 +968,11 @@ if [ "$ACTUAL_VERSION" != "$HERDR_VERSION" ]; then
   exit 1
 fi
 
-MANIFEST="$(chezmoi source-path "$HOME/.local/share/herdr-overview/herdr-plugin.toml")"
+# The apply script supplies its active source; standalone runs resolve the configured source.
+MANIFEST="${HERDR_OVERVIEW_APPLY_MANIFEST:-}"
+if [ -z "$MANIFEST" ]; then
+  MANIFEST="$(chezmoi source-path "$HOME/.local/share/herdr-overview/herdr-plugin.toml")"
+fi
 PLUGIN_DIR="${MANIFEST%/herdr-plugin.toml}"
 if [ ! -f "$MANIFEST" ]; then
   echo "ERROR: Herdr Overview source manifest not found: $MANIFEST" >&2

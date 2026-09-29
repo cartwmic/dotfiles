@@ -251,12 +251,14 @@ Notes:
 
 ## Reading a streaming Pi session
 
-Desktop Pi settings enable fullscreen mode. `/inspect-session` or
-**Ctrl+Alt+E** opens a read-only conversation snapshot in the configured
-external editor, even during streaming. Closing it returns to the same
-session; editor changes are discarded. System instructions, thinking, and
-abandoned branches are excluded. Herdr's `prefix+e` remains the scrollback
-reader for non-Pi panes.
+Desktop Pi settings use regular mode on personal and work machines.
+`/inspect-session` and **Ctrl+Alt+E** require fullscreen mode: change
+`tuiMode` to `"fullscreen"` in the managed Pi settings template, apply the
+settings after approval, and start a new Pi process. In fullscreen, they open
+a read-only conversation snapshot in the configured external editor, even
+during streaming. Closing it returns to the same session; editor changes are
+discarded. System instructions, thinking, and abandoned branches are excluded.
+Herdr's `prefix+e` remains the scrollback reader for non-Pi panes.
 
 `/inspect-prompt` separately opens the assembled system prompt while Pi is
 idle. See the [inspector guide](./dot_pi/private_agent/extensions/inspect-prompt/README.md)

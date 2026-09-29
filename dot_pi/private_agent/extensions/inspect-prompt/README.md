@@ -14,11 +14,14 @@ in [AGENTS.md](./AGENTS.md).
 ## Setup
 
 Pi needs an interactive TUI and an external editor. `/inspect-session` also
-requires fullscreen mode (`tuiMode: "fullscreen"`); the managed desktop
-settings enable it. The project `.pi/settings.json` `externalEditor` key takes
-precedence over the Pi-global key. If neither supplies a usable command, it tries `$VISUAL`, `$EDITOR`,
-then `nano` (or `notepad` on Windows). The editor command is split on spaces,
-so an executable path containing spaces needs a wrapper on `PATH`.
+requires fullscreen mode (`tuiMode: "fullscreen"`). Managed settings now use
+regular mode on both desktop profiles. To use the conversation reader, change
+`dot_pi/private_agent/private_settings.json.tmpl`, apply
+`~/.pi/agent/settings.json` after approval, and start a new Pi process.
+The project `.pi/settings.json` `externalEditor` key takes precedence over
+the Pi-global key. If neither supplies a usable command, it tries `$VISUAL`,
+`$EDITOR`, then `nano` (or `notepad` on Windows). The editor command is split
+on spaces, so an executable path containing spaces needs a wrapper on `PATH`.
 
 From the chezmoi source root, preview the managed destination:
 
