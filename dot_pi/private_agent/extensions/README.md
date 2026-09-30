@@ -111,14 +111,27 @@ on every apply, preserving other config fields and existing work-profile setting
 
 ### Codex Fast
 
-The personal profile loads `npm:pi-codex-fast@1.1.0` instead of the retired
-Luna-only extension. [create_pi-codex-fast.json](./create_pi-codex-fast.json)
-seeds Fast disabled with only `openai-codex/gpt-6.1-sol` eligible.
+The personal profile loads the [pi-codex-fast fork](https://github.com/cartwmic/pi-codex-fast)
+instead of the retired Luna-only extension.
+[create_pi-codex-fast.json](./create_pi-codex-fast.json) seeds
+`defaultEnabled: false` with only `openai-codex/gpt-6.1-sol` eligible.
 
-Use `/fast on`, `/fast off`, and `/fast status`. Commands persist the toggle
-in `~/.pi/agent/extensions/pi-codex-fast.json`; later applies leave it alone.
-The package defaults to static status styling. Version 1.1.0 uses native
-provider streams but does not forward every advanced request option.
+Use `/fast on`, `/fast off`, and `/fast status` for the current session branch.
+The choice survives reload and resume in the session history; it does not
+change other sessions. New sessions start from the user default.
+
+Use `/fast default on|off|status` to edit or inspect the default for new
+sessions. Defaults, model eligibility, and style live in
+`~/.pi/agent/extensions/pi-codex-fast.json`; later applies leave them alone.
+The old global `enabled` toggle is ignored, so it cannot silently become
+a default. Native provider streaming is unchanged, including its existing
+advanced-request-option limitations. Status styles render static frames
+without retaining a Pi context in animation timers.
+
+Pi does not save a session file until it contains a conversation message.
+A pre-chat toggle survives reload in memory, but cannot be resumed after
+quitting an empty session. Historical branches without a Fast snapshot
+initialize from the current default when first visited.
 
 ### Profile gates
 
