@@ -166,7 +166,7 @@ class PhoneCLITest(unittest.TestCase):
         self.bt = bin_dir
         self.apks = Path(self.temp.name) / "apks"
         self.apks.mkdir()
-        for file, pkg, code in (("termux-app.apk", "com.termux", 1008),
+        for file, pkg, code in (("termux-app.apk", "com.termux", 1009),
                                 ("termux-api.apk", "com.termux.api", 1003),
                                 ("termux-boot.apk", "com.termux.boot", 1000)):
             (self.apks / file).write_text(f"{pkg},{code}")
@@ -267,6 +267,14 @@ class PhoneCLITest(unittest.TestCase):
         result = self.invoke("bootstrap-phone.py", "install", "--serial", SERIAL,
                              "--apks-dir", str(self.apks), "--confirm-install")
         self.assertEqual(result.returncode, 2)
+        self.assertFalse(any(x.startswith('adb install') for x in self.state['calls']))
+
+    def test_refuse_stale_app_version_before_any_install(self):
+        (self.apks / "termux-app.apk").write_text("com.termux,1008")
+        result = self.invoke("bootstrap-phone.py", "install", "--serial", SERIAL,
+                             "--apks-dir", str(self.apks), "--confirm-install")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("differs from pinned 1009", result.stderr)
         self.assertFalse(any(x.startswith('adb install') for x in self.state['calls']))
 
     def test_refuse_existing_differently_signed_termux_without_uninstall(self):

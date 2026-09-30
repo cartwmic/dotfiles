@@ -8,6 +8,7 @@ phone, set `profile: "termux"` and `chezmoi apply` owns:
 | Destination | Source |
 |---|---|
 | `~/.termux/termux.properties` | `dot_termux/termux.properties` |
+| `~/.termux/colors.properties` | `dot_termux/colors.properties` |
 | `~/.termux/font.ttf` | `dot_termux/font.ttf` |
 | `~/bin/zellij-jump` | `bin/executable_zellij-jump` |
 | `~/bin/herdr-jump` | `bin/executable_herdr-jump` |
@@ -23,6 +24,19 @@ and deprecated helpers**. Chezmoi ignores this directory on every profile;
 no `~/termux` staging tree is deployed. The Mac utilities install apps and
 open a USB-only SSH connection, but **never push dotfiles through ADB**.
 Phone-side chezmoi owns configuration.
+
+## Terminal colors
+
+The phone-owned `colors.properties` sets Tokyo Night to match the managed Kitty
+palette. Herdr's interface theme is separate from this terminal palette. Pi's
+System theme needs the Termux fork's OSC 4 query support (versionCode 1009 or
+later) to inherit all 16 ANSI colors through SSH and Herdr; older builds return
+no palette colors.
+
+After applying the palette, run `termux-reload-settings` in a local phone shell
+**while Termux is visible**. Reattach Herdr and run `/reload` in Pi to refresh
+its reported colors. Do not copy the palette to the phone instead of applying
+its chezmoi source.
 
 ## Herdr overview from the phone
 
