@@ -2,9 +2,9 @@
  * Jira provider — backed by an MCP-remote stdio client.
  * Reads transport config from ~/.pi/agent/mcp.json under mcpServers.jira.
  */
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { sanitizeErrorMessage } from "../helpers.ts";
 import type {
   CreateIssueInput,
@@ -31,10 +31,7 @@ interface McpClientLike {
 
 type RealHandles = {
 	client: {
-    callTool: (req: {
-      name: string;
-      arguments?: Record<string, unknown>;
-    }) => Promise<unknown>;
+    callTool: (name: string, args?: Record<string, unknown>) => Promise<unknown>;
 		close: () => Promise<void>;
 	};
 	transport: { close: () => Promise<void> };
@@ -90,7 +87,7 @@ async function getMcpClient(cfg: JiraConfig): Promise<McpClientLike> {
 	return {
 		async callTool(name, args = {}) {
 			try {
-				return await live!.client.callTool({ name, arguments: args });
+				return await live!.client.callTool(name, args);
 			} catch (err) {
 				throw new Error(sanitizeErrorMessage(err));
 			}
@@ -106,19 +103,13 @@ async function connectLive(cfg: JiraConfig): Promise<RealHandles> {
 		throw new Error(cfg.mcpConfigError ?? "Jira MCP server is unavailable");
 	}
 
-	const sdkRoot = resolveSdkRoot();
-	const { Client } = await import(`${sdkRoot}/dist/esm/client/index.js`);
-  const { StdioClientTransport } = await import(
-    `${sdkRoot}/dist/esm/client/stdio.js`
-  );
-
-	const transport = new StdioClientTransport({
+	const { McpClient, StdioTransport } = await import(resolvePiMcpEntry());
+	const transport = new StdioTransport({
 		command: cfg.mcpTransport.command,
 		args: [...cfg.mcpTransport.args],
-		env: process.env as Record<string, string>,
-		stderr: "ignore",
+		stderr: "pipe",
 	});
-  const client = new Client({
+  const client = new McpClient({
     name: "pi-issue-extension-jira",
     version: "0.1.0",
   });
@@ -135,24 +126,19 @@ async function connectLive(cfg: JiraConfig): Promise<RealHandles> {
 	return { client, transport };
 }
 
-function resolveSdkRoot(): string {
-	const home = homedir();
-	const candidates = [
-    join(
-      home,
-      ".local/share/mise/installs/node/24.12.0/lib/node_modules/pi-mcp-adapter/node_modules/@modelcontextprotocol/sdk",
-    ),
-    join(
-      home,
-      ".local/share/mise/installs/node/current/lib/node_modules/pi-mcp-adapter/node_modules/@modelcontextprotocol/sdk",
-    ),
-	];
-	for (const c of candidates) {
-		if (existsSync(join(c, "package.json"))) return c;
+function resolvePiMcpEntry(): string {
+	// pi-mcp is an import-only dependency of npm-installed Pi, not a virtual
+	// extension import. Resolve beside the running CLI, independent of mise's
+	// Node version and without depending on a retired extension's checkout.
+	let root = dirname(realpathSync(process.argv[1]));
+	for (;;) {
+		const entry = join(root, "node_modules/@earendil-works/pi-mcp/dist/index.js");
+		if (existsSync(entry)) return pathToFileURL(entry).href;
+		const parent = dirname(root);
+		if (parent === root) break;
+		root = parent;
 	}
-	throw new Error(
-		"@modelcontextprotocol/sdk not found beside pi-mcp-adapter (see ~/.mcp-auth for OAuth cache)",
-	);
+	throw new Error("Pi's native MCP client was not found; /issue Jira requires an npm-installed Pi 0.99 or newer");
 }
 
 function extractAdfText(node: Record<string, unknown>): string {

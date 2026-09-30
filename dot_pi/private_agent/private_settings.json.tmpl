@@ -67,14 +67,14 @@
 {{- end }}
 {{- end }}
   ],
-  "extensions": [
-    "-builtin:mcp"
-  ],
+  "defaultTools": ["+codemode"],
+  "codemode": {
+    "mode": "only"
+  },
   "packages": [
     "https://github.com/cartwmic/pi-rtk-optimizer",
     "https://github.com/cartwmic/pi-sub",
     "https://github.com/cartwmic/pi-token-usage",
-    "https://github.com/cartwmic/pi-mcp-adapter",
     "https://github.com/cartwmic/pi-subagents",
     "https://github.com/hk-vk/pi-connect",
     "https://github.com/cartwmic/pi-cursor",

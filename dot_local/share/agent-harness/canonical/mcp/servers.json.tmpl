@@ -21,8 +21,7 @@
     },
     "hindsight": {
       "type": "http",
-      "url": "https://hindsight-api.internal.cartwmic.com/mcp/{{ if eq .profile "axon-work-computer" }}work{{ else }}cartwmic{{ end }}/",
-      "lifecycle": "keep-alive"
+      "url": "https://hindsight-api.internal.cartwmic.com/mcp/{{ if eq .profile "axon-work-computer" }}work{{ else }}cartwmic{{ end }}/"
     }{{ if eq .profile "axon-work-computer" }},
     "jira": {
       "command": "npx",

@@ -27,6 +27,13 @@ Rules:
 
 - `canonical/` is the source of truth.
 - Canonical sources should stay standards-based.
+- Pi 0.99+ uses native MCP and codemode, not `pi-mcp-adapter`. The Pi adapter
+  still generates `~/.pi/agent/mcp.json` from these canonical sources and
+  preserves manually added servers. Manage connections with `/mcp`; use
+  `codemode` for tool discovery and batching instead of `mcp`/`mcpScript`.
+  Both desktop profiles use codemode's `only` mode: ordinary tools remain
+  callable from scripts rather than directly declared to the model.
+  Hindsight's automatic hooks use REST and are independent of MCP.
 - `adapters/` may contain harness-specific metadata needed to project canonical sources into a given harness.
 - Do not put harness-specific semantics into canonical files unless the open standard itself requires them.
 
@@ -111,6 +118,7 @@ After editing the canonical MCP file:
 3. Verify the harness-specific result:
    - Claude: `claude mcp list`
    - Codex: `codex mcp list`
+   - Pi: `pi mcp list`, then `/mcp` in a fresh Pi session
 
 ## Add A Canonical Skill
 
@@ -269,11 +277,17 @@ MCP changes, verify each harness's result after apply; Pi writes
 `~/.pi/agent/mcp.json` (check it parses privately with `jq empty
 ~/.pi/agent/mcp.json`). Do not paste rendered secret values into logs.
 
+From the dotfiles source root, `python3 tests/native-mcp/proof.py` checks both
+Pi settings profiles and completed native MCP/codemode and `/issue` journeys
+through the real CLI, RPC, and TUI. It uses scripted local backends, not live
+providers or user credentials.
+
 Useful verification commands:
 
 ```bash
 claude mcp list
 codex mcp list
+pi mcp list
 find ~/.claude/skills -mindepth 1 -maxdepth 1 -type l | sort
 find ~/.codex/skills -mindepth 1 -maxdepth 1 -type l | sort
 find ~/.pi/agent/skills -mindepth 1 -maxdepth 1 -type l | sort
