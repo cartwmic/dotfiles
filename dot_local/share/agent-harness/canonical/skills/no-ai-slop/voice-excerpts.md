@@ -265,6 +265,47 @@ Shape of a counter-experience post:
 
 > It has gotten to the point that I'm, like, pretty bummed we don't have access to it for software related work :P
 
+Shape of pushback on a colleague's proposal in a team thread. The colleague posted a
+sizing proposal for moving a limit from per-[case] to per-[account]; the owner replied
+across several turns. Product, store, company, and quantity identifiers are replaced.
+
+Opening turn: a one-line verdict, then numbered concerns with inline uncertainty.
+
+> Moving in the right direction, so this is good. Some initial concerns/open questions:
+>
+> 1. how did we initially estimate cost of our product given the statistics around number of [items] in a [case] and number of [cases] in an [account]?  we will likely need to make sure that, on average, our margins are healthy given the proposed new "[case] limit" and the average expected usage.
+> 2. [case] graph data scales exponentially (I think?) as we add more and more entities into the graph. outside of the obvious potential storage costs, this has effects on individual [case] graph operation latency as well I would think (needs verified) since we partition by [case] - mostly meaning we would need to load test what [the graph store] can actually handle for very large [cases] still (this is an unchanged requirement - we would still need this even if we kept to the same "items-per-[case]" limits we use today but wanted [N] or [M])
+> 3. "resets yearly" what does this mean in this context?
+
+Follow-up when the answer fixed a typo but left the term undefined:
+
+> but what does "reset" mean? haha maybe I'm being dense here which is possible
+
+> poor ai got confused I imagine :P
+
+The ranked concern, argued by mechanism:
+
+> also my absolute biggest concern with limits that are not based on actual consumption/usage of the product is how the pricing scales as we get more and more users. the pricing might work out for our current scale and deployment of infra, but infra costs do not scale linearly so as we get more users and need to scale our infra, things on our end get much more expensive. pricing by usage let's us hedge more of that up front growing pain as we grow IMO.
+>
+> also applies to any infra we use where we are charged based on traffic - that immediately starts to eat into our margin as soon as concurrent usage starts to increase over our projected usage for that infra.
+
+Conditional acceptance of an incremental step:
+
+> but I'm also open to baby steps here. if "[N] [cases]" is a good next step and we are ok with potentially changing pricing in the future again as we scale, then as long as we do our due diligence for our margins now then its a bit moot
+
+After the colleague set margins aside and said the goal was to be "undeniable". Agreement,
+then the risk stated once, echoing the colleague's word:
+
+> agreed to all that, just need you to be aware that this could be problematic pricing wise in the future. that is undeniable.
+
+Drawing the line on what engineering owns, tied back to an earlier numbered point:
+
+> also, to be fair, pricing is relevant to us. it's true we don't need to worry about what we price things at as engineers for the most part. but it's also true that we _do_ need to worry about how the price is _framed_. framing it around number of [items] in a [case] vs [cases] in an [account] is a material difference we need to engineer around.
+>
+> so that means highlighting my concern number 2 I mentioned earlier on [case] graph storage cost, latency, and throughput scale effecting cost.
+>
+> we can ignore, from an engineering perspective, how that effects the pricing of the product itself. not our concern. but we can't ignore how much that costs [the company] - we are the ones on the hook for explaining why our engineering choices cost as much as they do in infra to leadership :P
+
 Explicitly supplied direct-message excerpts. The owner asked for these to be retained;
 identifiers are replaced and the voice is left intact. Conversational register only.
 
