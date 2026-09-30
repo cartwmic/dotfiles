@@ -99,6 +99,8 @@ Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 .local/user_scripts/configure_rustdesk.sh
 .pi/agent/extensions/openrouter-gate
 .pi/agent/extensions/openrouter-gate/**
+# Codex Fast is configured only in personal Pi settings.
+.pi/agent/extensions/pi-codex-fast.json
 # The remotely installed System One package is enabled in personal Pi settings only.
 .pi/agent/extensions/system-one
 .pi/agent/extensions/system-one/**
