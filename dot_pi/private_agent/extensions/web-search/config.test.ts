@@ -40,6 +40,30 @@ test("trims models and drops empty anthropicModel", () => {
   assert.equal(normalizeConfig({ codexModel: "" }).codexModel, DEFAULT_CODEX_MODEL);
 });
 
+test("reasoning effort is optional, normalized, and rejects unknown values", () => {
+  assert.equal(normalizeConfig({}).codexReasoningEffort, undefined);
+  assert.equal(normalizeConfig({ codexReasoningEffort: " LOW " }).codexReasoningEffort, "low");
+  for (const value of ["", "turbo", 2, null]) {
+    assert.equal(normalizeConfig({ codexReasoningEffort: value }).codexReasoningEffort, undefined);
+  }
+});
+
+test("reasoning effort env override falls through when empty or invalid", () => {
+  const cfg = normalizeConfig({ codexReasoningEffort: "low" });
+  assert.equal(resolveEffectiveConfig(cfg, {}).codexReasoningEffort, "low");
+  assert.equal(
+    resolveEffectiveConfig(cfg, { CODEX_SEARCH_REASONING_EFFORT: " HIGH " }).codexReasoningEffort,
+    "high"
+  );
+  for (const value of ["", "  ", "turbo"]) {
+    assert.equal(
+      resolveEffectiveConfig(cfg, { CODEX_SEARCH_REASONING_EFFORT: value }).codexReasoningEffort,
+      "low"
+    );
+  }
+  assert.equal(resolveEffectiveConfig(DEFAULT_CONFIG, {}).codexReasoningEffort, undefined);
+});
+
 test("invalid WEB_SEARCH_PROVIDER falls through to config", () => {
   const cfg = normalizeConfig({ searchProvider: "codex" });
   const effective = resolveEffectiveConfig(cfg, { WEB_SEARCH_PROVIDER: "openai" });
@@ -66,6 +90,8 @@ test("describeConfig names the env override", () => {
   const text = describeConfig(DEFAULT_CONFIG, { WEB_SEARCH_PROVIDER: "codex" });
   assert.match(text, /provider codex \(WEB_SEARCH_PROVIDER\)/);
   assert.match(text, /fetch omitted \(codex\)/);
+  assert.match(text, /effort backend default/);
+  assert.match(describeConfig(normalizeConfig({ codexReasoningEffort: "low" }), {}), /effort low/);
 });
 
 test("active tool listing omits fetch for Codex and restores it for Anthropic", () => {
@@ -129,15 +155,22 @@ test("saveConfig round-trips a normalized file", () => {
   const dir = mkdtempSync(join(tmpdir(), "web-search-config-"));
   try {
     const file = join(dir, "config.json");
-    saveConfig(file, { searchProvider: "codex", anthropicModel: " claude-opus-5 ", codexModel: "gpt-5.6-terra" });
+    saveConfig(file, {
+      searchProvider: "codex",
+      anthropicModel: " claude-opus-5 ",
+      codexModel: "gpt-5.6-terra",
+      codexReasoningEffort: "low",
+    });
     const written = JSON.parse(readFileSync(file, "utf8"));
     assert.equal(written.searchProvider, "codex");
     assert.equal(written.anthropicModel, "claude-opus-5");
     assert.equal(written.codexModel, "gpt-5.6-terra");
+    assert.equal(written.codexReasoningEffort, "low");
     assert.deepEqual(loadConfig(file), {
       searchProvider: "codex",
       anthropicModel: "claude-opus-5",
       codexModel: "gpt-5.6-terra",
+      codexReasoningEffort: "low",
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });

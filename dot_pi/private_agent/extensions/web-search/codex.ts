@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { CodexReasoningEffort } from "./config.ts";
 
 const DEFAULT_BASE_URL = "https://chatgpt.com/backend-api";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
@@ -291,6 +292,7 @@ async function collectSseItems(
 export async function callCodexSearch(options: {
   query: string;
   model: string;
+  reasoningEffort?: CodexReasoningEffort;
   systemPrompt?: string;
   signal?: AbortSignal;
 }): Promise<{ text: string; details: CodexSearchDetails }> {
@@ -312,6 +314,7 @@ export async function callCodexSearch(options: {
 
   const body = {
     model: options.model,
+    ...(options.reasoningEffort ? { reasoning: { effort: options.reasoningEffort } } : {}),
     instructions:
       options.systemPrompt ??
       "You are a concise web search assistant. Use web search, answer the query, and preserve source citations.",

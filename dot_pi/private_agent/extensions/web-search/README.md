@@ -9,7 +9,8 @@ not a local crawler.
 Authoring layout for this folder lives in the parent `extensions/README.md`
 (one directory up; not linked here because it sits outside this folder).
 Implementation: [index.ts](./index.ts), [config.ts](./config.ts),
-[codex.ts](./codex.ts). Tests: [config.test.ts](./config.test.ts).
+[codex.ts](./codex.ts). Tests: [config.test.ts](./config.test.ts),
+[codex.test.ts](./codex.test.ts).
 
 ## Overview
 
@@ -34,42 +35,49 @@ This directory is the chezmoi **source**. It deploys to
 `~/.pi/agent/extensions/web-search`. Confirm the source is present:
 
 ```sh
-cd ~/.local/share/chezmoi/dot_pi/agent/extensions/web-search && ls -1
+cd ~/.local/share/chezmoi/dot_pi/private_agent/extensions/web-search && ls -1
 ```
 
 You should see [index.ts](./index.ts), [config.ts](./config.ts),
-[codex.ts](./codex.ts), [create_config.json](./create_config.json), and this
+[codex.ts](./codex.ts), [modify_config.json.tmpl](./modify_config.json.tmpl), and this
 README. After apply, restart Pi so it reloads extensions. Apply itself is the
-parent-tree procedure in `dot_pi/agent/extensions/README.md`; do not apply
+parent-tree procedure in `dot_pi/private_agent/extensions/README.md`; do not apply
 from here. The `termux` profile skips `.pi`, so this extension does not
 deploy there.
 
-`[create_config.json](./create_config.json)` is a chezmoi `create_` source.
-Chezmoi writes the destination `config.json` only when that dest file does
-not already exist. After the first apply, `/web-search` edits to
-`~/.pi/agent/extensions/web-search/config.json` stay machine-local.
-
-Default create contents:
+[modify_config.json.tmpl](./modify_config.json.tmpl) merges profile settings into
+`~/.pi/agent/extensions/web-search/config.json` using `jq`. For `personal`, every
+apply sets these fields and preserves the others:
 
 ```json
 {
-  "searchProvider": "anthropic",
-  "codexModel": "gpt-5.6-luna"
+  "searchProvider": "codex",
+  "codexModel": "gpt-6.1-sol",
+  "codexReasoningEffort": "low"
 }
 ```
 
+The work profile preserves existing settings. A missing work config starts with
+Anthropic search and `gpt-5.6-luna` for Codex, without an explicit reasoning effort.
+`/web-search` changes stay machine-local, but the three personal-managed fields
+are reset on the next apply. Fetch behavior is unchanged: Codex still omits it.
+
 Optional `anthropicModel` is also accepted in that file. Precedence for every
-setting: **env var > `config.json` > built-in default**. Empty env values are
-ignored.
+setting: **env var > `config.json` > built-in default**. Empty or invalid effort
+env values are ignored.
 
 | Setting | Env | Config key | Default |
 | --- | --- | --- | --- |
 | Search backend | `WEB_SEARCH_PROVIDER` | `searchProvider` | `anthropic` |
 | Anthropic search/fetch model | `ANTHROPIC_SEARCH_MODEL` | `anthropicModel` | `claude-opus-5` |
 | Codex search model | `CODEX_SEARCH_MODEL` | `codexModel` | `gpt-5.6-luna` |
+| Codex reasoning effort | `CODEX_SEARCH_REASONING_EFFORT` | `codexReasoningEffort` | Backend default (unset) |
 
 `WEB_SEARCH_PROVIDER` accepts `anthropic` or `codex`. Unknown values fall
-through to config.
+through to config. `codexReasoningEffort` accepts `none`, `minimal`, `low`,
+`medium`, `high`, or `xhigh`; the selected model must support that effort.
+The personal profile uses `gpt-6.1-sol` with `low`, overriding the built-in defaults
+in the table.
 
 ### Anthropic auth (search when provider is Anthropic, and all fetch)
 
@@ -182,10 +190,23 @@ that selects who performs the search.
 From this directory:
 
 ```sh
-cd ~/.local/share/chezmoi/dot_pi/agent/extensions/web-search && node --test
+cd ~/.local/share/chezmoi/dot_pi/private_agent/extensions/web-search && node --test
 ```
 
-That suite covers config normalize/load/save, active-tool listing, command
-parsing, Codex URL shaping, and result formatting. It does **not** make a live Anthropic, Codex,
-or web call. Apply and a Pi restart are still required before a session can
-use `/web-search provider codex`.
+That suite covers config normalize/load/save, effort overrides, active-tool
+listing, command parsing, Codex URL shaping, request bodies, and result formatting.
+The request tests use dummy auth and scripted SSE responses; they make no live
+Anthropic, Codex, or web call.
+
+For profile preservation checks and a complete offline Pi tool journey, run from
+the repo root:
+
+```sh
+python3 tests/web-search/proof.py
+```
+
+This uses a private home, dummy credentials, and a loopback scripted backend. It
+checks the outgoing model/effort, unchanged Codex tool listing, and a final Pi reply
+using the returned answer and citation. It does not verify live Codex model access.
+Apply and a Pi restart are still required before an existing session can use the
+changed code.
