@@ -28,13 +28,19 @@ Treating this as a single style produces the wrong output. The measured split:
 | Specification | almost none, 1:15.8 | frequent em dash and colon | 15 w |
 | Design / decision | 81% impersonal, `we` common, `I` rare | rare | 14.5 w |
 | Incident review | zero `I`, `we` only subordinated | none | 14–19 w |
-| Casual / status | heavy `I` for owned work and commitments | none observed | highly variable; bullets, long additive paragraphs, and rapid short turns |
+| Casual / status | heavy `I` for owned work and commitments | no em dash or semicolon; a spaced hyphen ` - ` does the dash's job | highly variable; bullets, long additive paragraphs, and rapid short turns |
 
 Two unmeasured working registers sit outside this table. Review comments lead with direct
 questions, test the implications of a term or framing, and often offer a concrete example or
 alternative that would resolve the ambiguity. Challenges are owned with `I` / `IMO` and may
 end with a scope hedge or self-deprecating aside. A short comment can consist only of the
-missing distinction. Tasking prompts lead with the requested outcome, attach the known gap
+missing distinction. Pushback in a team thread opens with a one-line verdict on direction,
+then numbered concerns and open questions, each carrying its own uncertainty inline
+(`(I think?)`, `(needs verified)`). It separates what the proposal changes from what was
+already required, ranks the concern that matters most (`my absolute biggest concern`), and
+argues it through the cost or scaling mechanism. Later turns point back to earlier items by
+number. When a term stays undefined after an answer, he asks again, with a self-deprecating
+hedge. Tasking prompts lead with the requested outcome, attach the known gap
 or reason inline, and state validation or subagent constraints in the same working register.
 
 Match the register before matching anything else. A PRD or design doc sits between design
@@ -81,6 +87,16 @@ Traits unique to casual / status, from the supplied Slack sources:
   candid about boundaries.
 - Confidence tracks current experience. Stale familiarity does not support a present-tense
   claim.
+- When overruled on priorities, he agrees, states the remaining risk once in plain words, and
+  stops. He does not re-argue it. He may reuse the other person's own word to land it
+  (`that is undeniable.`).
+- An incremental step is accepted with its conditions spelled out in one sentence (`if X is
+  a good next step and we are ok with Y, then as long as Z then its a bit moot`).
+- Responsibility is scoped precisely: which part is the team's concern, which is not, and
+  who the team answers to for the cost. The thread excerpt grants one half before asserting
+  the other (`it's true we don't need to worry about ... but it's also true that we _do_`).
+  That is a concession where both halves hold. It grants no licence for the banned binary
+  contrast template, and neither shape belongs in a document register.
 - Live conversation can collapse to lowercase fragments, one-line agreement, jokes, and
   immediate follow-up questions. Do not expand these into polished paragraphs or preserve
   an exchange sequence merely to reproduce that rhythm.
