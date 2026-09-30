@@ -698,6 +698,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
           const { text, details } = await callCodexSearch({
             query: p.query,
             model: current.codexModel,
+            reasoningEffort: current.codexReasoningEffort,
             systemPrompt: p.system_prompt,
             signal,
           });

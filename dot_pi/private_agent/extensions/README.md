@@ -101,10 +101,13 @@ workflow.
 Chezmoi `create_` sources write the destination only when it does not already
 exist. Examples: [auto-compact/create_config.json](./auto-compact/create_config.json),
 [goal/create_config.json](./goal/create_config.json),
-[openrouter-gate/create_config.json](./openrouter-gate/create_config.json),
-[web-search/create_config.json](./web-search/create_config.json). After the first apply,
+[openrouter-gate/create_config.json](./openrouter-gate/create_config.json). After the first apply,
 interactive edits to that dest file stay machine-local. Do not expect
 `chezmoi apply` to reset them.
+
+[web-search/modify_config.json.tmpl](./web-search/modify_config.json.tmpl) instead
+manages the personal profile's search provider, Codex model, and reasoning effort
+on every apply, preserving other config fields and existing work-profile settings.
 
 ### Profile gates
 
@@ -158,7 +161,7 @@ cd ./pi-patch-guard && node --test
 Other in-tree suites today: `auto-compact/index.test.ts`,
 `goal/helpers.test.ts`, `hindsight/index.test.ts`, `inspect-prompt/index.test.ts`,
 `issue/index.test.ts`, `ntfy/index.test.ts`, `openrouter-gate/index.test.ts`,
-`codex-fast-luna/index.test.ts`, `web-search/config.test.ts`, and
+`codex-fast-luna/index.test.ts`, `web-search/config.test.ts`, `web-search/codex.test.ts`, and
 `learnings-monitor/` (`node --test`).
 `catalog-overlay-nudge` and `subagent` do not have tests yet. `passage-review`,
 `herdr-overview`, and `standing-reminder` have `index.test.ts`. The standing

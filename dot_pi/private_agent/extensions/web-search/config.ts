@@ -5,6 +5,8 @@ export type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 
 export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5";
 export const DEFAULT_CODEX_MODEL = "gpt-5.6-luna";
+export const CODEX_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
+export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
 export const TOOL_NAME_SEARCH = "web_search";
 export const TOOL_NAME_SEARCH_PRIVATE = "claude_web_search";
 export const TOOL_NAME_FETCH = "web_fetch";
@@ -56,12 +58,15 @@ export interface WebSearchConfig {
   anthropicModel?: string;
   /** Codex Responses model for the search side-call. */
   codexModel: string;
+  /** Unset preserves the Codex backend's default reasoning effort. */
+  codexReasoningEffort?: CodexReasoningEffort;
 }
 
 export interface EffectiveWebSearchConfig {
   searchProvider: SearchProvider;
   anthropicModel: string;
   codexModel: string;
+  codexReasoningEffort?: CodexReasoningEffort;
   providerSource: "env" | "config";
 }
 
@@ -80,13 +85,23 @@ function optionalModel(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function optionalReasoningEffort(value: unknown): CodexReasoningEffort | undefined {
+  if (typeof value !== "string") return undefined;
+  const effort = value.trim().toLowerCase();
+  return CODEX_REASONING_EFFORTS.includes(effort as CodexReasoningEffort)
+    ? (effort as CodexReasoningEffort)
+    : undefined;
+}
+
 export function normalizeConfig(value: unknown): WebSearchConfig {
   const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const anthropicModel = optionalModel(raw.anthropicModel);
+  const codexReasoningEffort = optionalReasoningEffort(raw.codexReasoningEffort);
   return {
     searchProvider: isSearchProvider(raw.searchProvider) ? raw.searchProvider : DEFAULT_CONFIG.searchProvider,
     ...(anthropicModel ? { anthropicModel } : {}),
     codexModel: optionalModel(raw.codexModel) ?? DEFAULT_CODEX_MODEL,
+    ...(codexReasoningEffort ? { codexReasoningEffort } : {}),
   };
 }
 
@@ -116,6 +131,8 @@ export function resolveEffectiveConfig(
     anthropicModel:
       optionalModel(env.ANTHROPIC_SEARCH_MODEL) ?? config.anthropicModel ?? DEFAULT_ANTHROPIC_MODEL,
     codexModel: optionalModel(env.CODEX_SEARCH_MODEL) ?? config.codexModel,
+    codexReasoningEffort:
+      optionalReasoningEffort(env.CODEX_SEARCH_REASONING_EFFORT) ?? config.codexReasoningEffort,
     providerSource: isSearchProvider(envProvider) ? "env" : "config",
   };
 }
@@ -131,7 +148,8 @@ export function describeConfig(
       : effective.searchProvider;
   return (
     `web-search provider ${provider}; anthropic ${effective.anthropicModel}; ` +
-    `codex ${effective.codexModel}; fetch ${effective.searchProvider === "anthropic" ? "listed (anthropic)" : "omitted (codex)"}`
+    `codex ${effective.codexModel} (effort ${effective.codexReasoningEffort ?? "backend default"}); ` +
+    `fetch ${effective.searchProvider === "anthropic" ? "listed (anthropic)" : "omitted (codex)"}`
   );
 }
 

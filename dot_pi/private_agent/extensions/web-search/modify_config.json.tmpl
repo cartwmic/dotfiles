@@ -1,0 +1,16 @@
+#!/bin/sh
+# Manage personal search settings while preserving other config fields.
+set -eu
+
+exec jq -s '
+  if length == 0 then
+    {searchProvider: "anthropic", codexModel: "gpt-5.6-luna"}
+  elif length == 1 and (.[0] | type) == "object" then
+    .[0]
+  else
+    error("web-search config must be a JSON object")
+  end
+{{ if eq .profile "personal" -}}
+  | . + {searchProvider: "codex", codexModel: "gpt-6.1-sol", codexReasoningEffort: "low"}
+{{ end -}}
+'
