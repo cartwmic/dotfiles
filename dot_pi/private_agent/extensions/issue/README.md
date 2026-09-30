@@ -58,10 +58,14 @@ already bound, its project is reused and the full input is drafting guidance.
 
 ### Jira
 
-Backed by an MCP-remote stdio client using the resolved `jira` command and
-arguments from `~/.pi/agent/mcp.json`. Run `apply_harness_config` after
-changing MCP settings. Raw tool names (`get_jira_issue`, `search_jira_issues`,
-etc.) — not `jira_*` aliases. Search auto-detects common JQL operators; prefix
+Uses Pi 0.99+'s native `@earendil-works/pi-mcp` client with the resolved
+`jira` command and arguments from `~/.pi/agent/mcp.json`. It requires an
+npm-installed Pi; it no longer depends on `pi-mcp-adapter` or a fixed mise
+Node version. `/issue` owns a separate command-side connection, since Pi's
+nested tool execution API is available to tools, not slash commands. The
+configured `mcp-remote` process still owns Jira OAuth in `~/.mcp-auth`.
+Run `apply_harness_config` after changing MCP settings and reload Pi. Raw tool
+names (`get_jira_issue`, `search_jira_issues`, etc.) — not `jira_*` aliases. Search auto-detects common JQL operators; prefix
 with `jql:` to force an ambiguous expression to be passed through unchanged.
 
 ### GitHub
@@ -162,5 +166,5 @@ extension's chezmoi source.
 ## Tests
 
 ```bash
-bun test dot_pi/agent/extensions/issue/
+bun test dot_pi/private_agent/extensions/issue/
 ```
