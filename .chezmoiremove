@@ -1,3 +1,7 @@
+# Retired 2026-09-30: replace Luna-only Fast injection with pi-codex-fast.
+# Removing source alone leaves the old extension active on existing hosts.
+.pi/agent/extensions/codex-fast-luna
+
 # Retired 2026-08-13: caveman response-style instruction. Source deletion
 # alone does not remove already-deployed copies; chezmoi removes these on
 # apply. Prune once every machine has applied.

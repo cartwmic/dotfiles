@@ -109,6 +109,17 @@ interactive edits to that dest file stay machine-local. Do not expect
 manages the personal profile's search provider, Codex model, and reasoning effort
 on every apply, preserving other config fields and existing work-profile settings.
 
+### Codex Fast
+
+The personal profile loads `npm:pi-codex-fast@1.1.0` instead of the retired
+Luna-only extension. [create_pi-codex-fast.json](./create_pi-codex-fast.json)
+seeds Fast disabled with only `openai-codex/gpt-6.1-sol` eligible.
+
+Use `/fast on`, `/fast off`, and `/fast status`. Commands persist the toggle
+in `~/.pi/agent/extensions/pi-codex-fast.json`; later applies leave it alone.
+The package defaults to static status styling. Version 1.1.0 uses native
+provider streams but does not forward every advanced request option.
+
 ### Profile gates
 
 Gates live in the repo-root `.chezmoiignore`:
@@ -135,7 +146,6 @@ READMEs already in this tree:
 - [openrouter-gate](./openrouter-gate/README.md)
 - [pi-patch-guard](./pi-patch-guard/README.md)
 - [catalog-overlay-nudge](./catalog-overlay-nudge/README.md)
-- [codex-fast-luna](./codex-fast-luna/README.md)
 - [goal](./goal/README.md)
 - [inspect-prompt](./inspect-prompt/README.md)
 - [learnings-monitor](./learnings-monitor/README.md)
@@ -161,7 +171,7 @@ cd ./pi-patch-guard && node --test
 Other in-tree suites today: `auto-compact/index.test.ts`,
 `goal/helpers.test.ts`, `hindsight/index.test.ts`, `inspect-prompt/index.test.ts`,
 `issue/index.test.ts`, `ntfy/index.test.ts`, `openrouter-gate/index.test.ts`,
-`codex-fast-luna/index.test.ts`, `web-search/config.test.ts`, `web-search/codex.test.ts`, and
+`web-search/config.test.ts`, `web-search/codex.test.ts`, and
 `learnings-monitor/` (`node --test`).
 `catalog-overlay-nudge` and `subagent` do not have tests yet. `passage-review`,
 `herdr-overview`, and `standing-reminder` have `index.test.ts`. The standing
