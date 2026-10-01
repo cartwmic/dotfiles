@@ -6,13 +6,13 @@ This directory is chezmoi documentation for the Git package listed in `dot_pi/pr
 
 ## Workflow
 
-Work from the current chezmoi worktree. Keep the Git package entry inside the `personal` settings branch and exclude this docs directory on work and Termux in `.chezmoiignore`. Confirm the profile is `personal` and map each destination separately. The settings template reads the existing live JSON during rendering to preserve `lastChangelogVersion`, `theme`, and `hideThinkingBlock`; check that file's JSON first. A successful targeted dry-run is required; unchanged destinations need not appear in its output.
+Work from the current chezmoi worktree. Keep the Git package entry in the shared (all-profile) part of the settings package list; do not ignore this docs directory in `.chezmoiignore` (Termux skips `.pi` entirely). Confirm the profile is `personal` or `axon-work-computer` and map each destination separately. The settings template reads the existing live JSON during rendering to preserve `lastChangelogVersion`, `theme`, and `hideThinkingBlock`; check that file's JSON first. A successful targeted dry-run is required; unchanged destinations need not appear in its output.
 
 ```sh
 set -eu
 REPO="$(git rev-parse --show-toplevel)"
 profile=$(chezmoi --source "$REPO" execute-template '{{ .profile }}')
-[ "$profile" = personal ] || { printf 'Expected personal profile; got %s\n' "$profile" >&2; exit 1; }
+case "$profile" in personal|axon-work-computer) ;; *) printf 'Expected personal or axon-work-computer profile; got %s\n' "$profile" >&2; exit 1;; esac
 for dest in "$HOME/.pi/agent/settings.json" "$HOME/.pi/agent/extensions/system-one/README.md" "$HOME/.pi/agent/extensions/system-one/AGENTS.md"; do
   chezmoi --source "$REPO" source-path "$dest"
 done
@@ -24,7 +24,7 @@ chezmoi --source "$REPO" cat "$HOME/.pi/agent/settings.json" | jq -e '.packages 
 git -C "$REPO" diff --check # tracked changes only; see staged check below for new docs
 ```
 
-The work profile omits the package entry and docs; Termux omits `.pi` entirely. In a private terminal, inspect the complete rendered settings and live destination independently before taking the source side of drift:
+Both desktop profiles receive the package entry and docs; Termux omits `.pi` entirely. In a private terminal, inspect the complete rendered settings and live destination independently before taking the source side of drift:
 
 ```sh
 chezmoi --source "$REPO" cat "$HOME/.pi/agent/settings.json" | less
