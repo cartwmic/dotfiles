@@ -1,6 +1,6 @@
 # Standing-reminder input origin bridge
 
-Pi 0.99.1 exposes `input.source` before a message is processed, but the later
+Pi 0.99.2 exposes `input.source` before a message is processed, but the later
 `message_start` event does not identify where its user message came from. Text
 matching cannot safely bridge those events: operator and extension messages
 may have identical text, operator input may be expanded by a prompt template,
@@ -25,7 +25,10 @@ extensions:
 - `dist/core/extensions/types.d.ts` — `MessageStartEvent.source?: InputSource`
 
 Revision 2 ports the core prompt indentation and bundled declaration anchors
-to Pi 0.99.1. A previous revision is not migrated by restoring shared backups;
+to Pi 0.99.1; the same exact anchors are verified on the supported Pi 0.99.2 pin.
+The private stager normalizes an already-patched copy before recording its
+sibling-only fingerprint and compares installed fingerprints before/after.
+It does not normalize installed files. A previous revision is not migrated by restoring shared backups;
 reinstall the current Pi version and reapply all patches when a stale revision
 is present.
 
@@ -89,5 +92,7 @@ completed request, and no stale delivery in TUI, print, JSON, and RPC.
 The journey also drives threshold compaction within operator work. It requires
 an ordinary post-compaction continuation, tolerates repeated summaries,
 asserts no reminder on any same-work summary or continuation, then verifies
-the next operator receives the current value. The capped cache proof also runs
-through this staged patched copy.
+the next operator receives the current value. The selective proof additionally drives the installed question package's real
+multi-tab UI and explicitly loads builtin codemode. See the proof README for
+focused and full commands. The separate live-cache driver is a separate owner
+duty; scripted traffic does not establish real cache reuse.

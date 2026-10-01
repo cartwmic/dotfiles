@@ -1,4 +1,6 @@
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { readTriggerConfig } from "./config.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { runExternalReminderEditor, type EditorResult } from "./editor.ts";
 import {
@@ -25,11 +27,7 @@ type UserMessage = {
 type ActiveRequest = {
 	timestamp: number;
 	origin: "operator" | "extension" | "unknown";
-	reminder: string | null;
-	revision: number;
-	projection?: UserMessage;
 	contextSeen: boolean;
-	suppressedAfterCompaction: boolean;
 };
 
 function notify(ctx: ExtensionContext, message: string, type: "info" | "warning" | "error" = "info"): void {
@@ -49,11 +47,11 @@ function renderStatus(ctx: ExtensionContext, state: ReminderState, available: bo
 	if (!available) {
 		text = "Reminder unavailable · requests proceed without it · /reminder to replace";
 	} else if (state.reminder !== null && state.pending) {
-		text = `Reminder saved · applies to next request: ${preview(state.reminder)}`;
+		text = `Reminder saved · applies to next normal request: ${preview(state.reminder)}`;
 	} else if (state.reminder !== null) {
 		text = `Reminder: ${preview(state.reminder)} · /reminder to edit`;
 	} else if (state.pending) {
-		text = "Reminder cleared · applies to next request";
+		text = "Reminder cleared · applies to next normal request";
 	} else {
 		text = "No session reminder · /reminder to set one";
 	}
@@ -183,7 +181,7 @@ function acceptEditorResult(
 	if (!persist(ctx, pi, next)) return;
 	onSaved(next);
 	renderStatus(ctx, next, true);
-	notify(ctx, "Reminder saved; applies to the next request.");
+	notify(ctx, "Reminder saved; applies to the next normal request.");
 }
 
 export default function standingReminder(pi: ExtensionAPI): void {
@@ -192,13 +190,40 @@ export default function standingReminder(pi: ExtensionAPI): void {
 	let revision = 0;
 	let activeRequests: ActiveRequest[] = [];
 	let pendingInput = false;
-	let continuationRequests: ActiveRequest[] = [];
+	let triggers = new Set<string>();
+	let refreshPending = false;
+	let anchors: Array<{ key: string; projection: UserMessage; revision: number }> = [];
+	let customCounts = new Map<string, number>();
+	const messageKey = (message: any) => JSON.stringify([message.role, message.timestamp, message.toolCallId, message.customType]);
+	const keyed = (messages: any[]) => {
+		const counts = new Map<string, number>();
+		return messages.map((message) => {
+			const key = messageKey(message);
+			const count = (counts.get(key) ?? 0) + 1;
+			counts.set(key, count);
+			return `${key}:${count}`;
+		});
+	};
+	const baseline = (ctx: ExtensionContext) => {
+		customCounts = new Map();
+		// Raw custom_message entries are normalized by Pi into model-visible custom messages.
+		for (const message of ctx.sessionManager.buildSessionContext().messages) {
+			if (message.role !== "custom") continue;
+			const key = messageKey(message);
+			customCounts.set(key, (customCounts.get(key) ?? 0) + 1);
+		}
+	};
 
 	pi.on("session_start", (event, ctx) => {
 		activeRequests = [];
 		pendingInput = false;
-		continuationRequests = [];
 		revision = 0;
+		anchors = [];
+		refreshPending = false;
+		baseline(ctx);
+		const config = readTriggerConfig(join(dirname(fileURLToPath(import.meta.url)), "config.json"));
+		triggers = config.triggers;
+		if (config.warning) notify(ctx, config.warning, "warning");
 		const loaded = loadSessionState(ctx, pi, event);
 		state = loaded.state;
 		available = loaded.available;
@@ -206,12 +231,21 @@ export default function standingReminder(pi: ExtensionAPI): void {
 		renderStatus(ctx, state, available);
 	});
 
-	pi.on("session_tree", (_event, ctx) => renderStatus(ctx, state, available));
+	pi.on("session_tree", (_event, ctx) => {
+		baseline(ctx);
+		refreshPending = false;
+		anchors = [];
+		renderStatus(ctx, state, available);
+	});
 
-	pi.on("session_compact", () => {
-		for (const request of activeRequests) {
-			if (request.contextSeen) request.suppressedAfterCompaction = true;
-		}
+	pi.on("tool_execution_end", (event) => {
+		if (triggers.has(`tool-result:${event.toolName}`)) refreshPending = true;
+	});
+
+	pi.on("session_compact", (_event, ctx) => {
+		anchors = [];
+		baseline(ctx);
+
 	});
 
 	pi.on("message_start", (event, ctx) => {
@@ -223,22 +257,27 @@ export default function standingReminder(pi: ExtensionAPI): void {
 		const request: ActiveRequest = {
 			timestamp: event.message.timestamp,
 			origin,
-			reminder: origin === "operator" && available ? state.reminder : null,
-			revision,
 			contextSeen: false,
-			suppressedAfterCompaction: false,
 		};
 		if (origin === "unknown") {
 			notify(ctx, "Standing reminder omitted because Pi did not expose a known message origin.", "warning");
-		} else if (request.reminder !== null) {
-			request.projection = makeProjection(request.reminder);
 		}
 		activeRequests.push(request);
 		pendingInput = true;
 	});
 
 	pi.on("context", (event, ctx) => {
-		if (activeRequests.length === 0) return;
+		// Idle cache warming is not a delivery. Compaction summaries bypass Pi's context hook.
+		if (ctx.isIdle()) return;
+		const counts = new Map<string, number>();
+		for (const message of event.messages) {
+			if (message.role !== "custom") continue;
+			const key = messageKey(message);
+			const count = (counts.get(key) ?? 0) + 1;
+			counts.set(key, count);
+			if (count > (customCounts.get(key) ?? 0) && triggers.has(`message:${message.customType}`)) refreshPending = true;
+		}
+		for (const [key, count] of counts) customCounts.set(key, Math.max(count, customCounts.get(key) ?? 0));
 		const hasNewInput = pendingInput;
 		pendingInput = false;
 		// Pi clones context messages; preserved timestamps pair them with the processed message events without content matching.
@@ -268,23 +307,28 @@ export default function standingReminder(pi: ExtensionAPI): void {
 				});
 			}
 		}
-		if (matches.length === 0) {
-			if (hasNewInput) continuationRequests = [];
-			return;
-		}
 
 		const newlySeen = matches.filter(({ request }) => !request.contextSeen);
 		for (const { request } of newlySeen) request.contextSeen = true;
-		if (hasNewInput) {
-			continuationRequests = newlySeen
-				.filter(({ request }) => request.origin === "operator")
-				.map(({ request }) => request);
-		}
 
-		const deliveredPending = newlySeen.some(({ request }) =>
-			request.origin === "operator" && available && state.pending && request.revision === revision,
-		);
-		if (deliveredPending) {
+		const operatorDeliveries = newlySeen.filter(({ request }) => request.origin === "operator");
+		const boundary = operatorDeliveries.length > 0 || state.pending || refreshPending;
+		const keys = keyed(event.messages);
+		anchors = anchors.filter((anchor) => anchor.revision === revision && keys.includes(anchor.key));
+		if (hasNewInput) anchors = [];
+		if (boundary && available) {
+			if (state.reminder !== null) {
+				const indices = operatorDeliveries.length > 0
+					? operatorDeliveries.map(({ index }) => index)
+					: [event.messages.length - 1];
+				for (const index of indices) {
+					if (index >= 0) anchors.push({ key: keys[index]!, projection: makeProjection(state.reminder), revision });
+				}
+			}
+		}
+		const deliveredPending = boundary && available && event.messages.length > 0;
+		if (deliveredPending) refreshPending = false;
+		if (deliveredPending && state.pending) {
 			state = { ...state, pending: false };
 			if (!persist(ctx, pi, state)) {
 				notify(ctx, "The reminder was delivered, but its delivery status could not be saved.", "warning");
@@ -292,25 +336,20 @@ export default function standingReminder(pi: ExtensionAPI): void {
 			renderStatus(ctx, state, available);
 		}
 
-		// New input events define this delivery boundary. On tool-only continuations,
-		// reuse the already processed operator messages' projections.
-		const activeContinuations = new Set(continuationRequests);
-		const deliveries = (hasNewInput ? newlySeen : matches.filter(({ request }) => activeContinuations.has(request)))
-			.filter(({ request }) => request.origin === "operator")
-			.filter(({ request }) => !request.suppressedAfterCompaction && request.reminder !== null && request.projection);
-		if (deliveries.length === 0) return;
-
+		if (anchors.length === 0) return;
 		const messages = event.messages.slice();
-		for (const { index, request } of deliveries.sort((left, right) => right.index - left.index)) {
-			messages.splice(index + 1, 0, request.projection!);
+		const deliveries = anchors.map((anchor) => ({ index: keys.indexOf(anchor.key), anchor }));
+		for (const { index, anchor } of deliveries.sort((left, right) => right.index - left.index)) {
+			messages.splice(index + 1, 0, anchor.projection);
 		}
 		return { messages };
 	});
 
 	pi.on("agent_settled", () => {
+		anchors = [];
+		refreshPending = false;
 		activeRequests = [];
 		pendingInput = false;
-		continuationRequests = [];
 	});
 
 	pi.registerCommand("reminder", {
@@ -342,7 +381,7 @@ export default function standingReminder(pi: ExtensionAPI): void {
 			available = true;
 			revision++;
 			renderStatus(ctx, state, available);
-			notify(ctx, "Reminder cleared; applies to the next request.");
+			notify(ctx, "Reminder cleared; applies to the next normal request.");
 		},
 	});
 }

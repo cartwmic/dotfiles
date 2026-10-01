@@ -85,8 +85,8 @@ def require_isolated_patched_pi(pi_bin: str) -> None:
                    if PATCH_MARKER in path.read_text(encoding="utf-8")]
     except (OSError, json.JSONDecodeError) as exc:
         raise ProofBlocked("the isolated Pi package or standing-reminder patch is incomplete") from exc
-    if metadata.get("name") != "@earendil-works/pi-coding-agent" or metadata.get("version") != "0.99.1":
-        raise ProofBlocked("the proof requires isolated @earendil-works/pi-coding-agent 0.99.1")
+    if metadata.get("name") != "@earendil-works/pi-coding-agent" or metadata.get("version") != "0.99.2":
+        raise ProofBlocked("the proof requires isolated @earendil-works/pi-coding-agent 0.99.2")
     if (PATCH_MARKER not in runtime or PATCH_MARKER not in declarations or len(bundles) != 1
             or os.environ.get("PI_CHEZMOI_PROFILE") not in {"personal", "axon-work-computer"}):
         raise ProofBlocked("the desktop-gated standing-reminder origin patch is missing from isolated Pi")
@@ -550,8 +550,9 @@ class PiPTY:
         self.reader_done.set()
         try:
             os.killpg(self.process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        except (ProcessLookupError, PermissionError):
+            if self.process.poll() is None:
+                self.process.terminate()
         try:
             self.process.wait(timeout=3)
         except subprocess.TimeoutExpired:
@@ -707,7 +708,10 @@ class ProofRun:
                    extensions: bool = True) -> PiPTY:
         self.tui = PiPTY(self.argv(session=session, session_id=session_id, tui=True, extensions=extensions),
                          self.project, self.env())
-        self.tui.wait_output("standing-reminder-proof")
+        try:
+            self.tui.wait_output("standing-reminder-proof")
+        except ProofFailure as exc:
+            raise ProofFailure(f"{exc}; exit={self.tui.process.poll()}; TUI tail={self.tui.plain()[-2500:]!r}") from exc
         return self.tui
 
     def start_editor(self, tui: PiPTY) -> tuple[int, int]:
@@ -825,6 +829,15 @@ class ProofRun:
 
 
 def configure_run(root: Path, extension: Path, context_window: int = 32768) -> ProofRun:
+    # Config is loaded next to import.meta.url, not from the temporary agent dir.
+    # Copy real sources and their editor dependency; never modify measured source.
+    staged = root / "source-extension"
+    shutil.copytree(extension.parent, staged)
+    shutil.copytree(extension.parent.parent / "inspect-prompt", root / "inspect-prompt")
+    seed = staged / "create_config.json"
+    if seed.is_file():
+        shutil.copyfile(seed, staged / "config.json")
+    extension = staged / extension.name
     provider = ScriptedProvider()
     thread = provider.start()
     run = ProofRun(root, provider, thread, extension, context_window)
@@ -997,8 +1010,8 @@ def run_interactive_journey(run: ProofRun) -> tuple[str, str, str]:
     # Save the first exact multiline value, then prove a user request receives it.
     editor_output = run.next_editor(pi)
     pi.wait_output_since(editor_output, "Reminder saved")
-    pi.wait_output_since(editor_output, "applies to next request")
-    pi.wait_output_since(editor_output, "Reminder saved · applies to next request:")
+    pi.wait_output_since(editor_output, "applies to next normal request")
+    pi.wait_output_since(editor_output, "Reminder saved · applies to next normal request:")
     state = run.saved_state(parent_id)
     require(state.get("reminder") == REMINDER_OLD and state.get("pending") is True,
             "initial editor result or pending status was not persisted")
@@ -1058,7 +1071,7 @@ def run_interactive_journey(run: ProofRun) -> tuple[str, str, str]:
             "the active response settled before its streaming editor transaction completed")
 
     run.close_editor(pi, editor_invocation, _editor_output)
-    pi.wait_output_since(_editor_output, "Reminder saved · applies to next request:")
+    pi.wait_output_since(_editor_output, "Reminder saved · applies to next normal request:")
     require(run.saved_state(parent_id).get("reminder") == REMINDER_EDITED
             and run.saved_state(parent_id).get("pending") is True,
             "successful editor close did not commit the new reminder and next-request cue")
@@ -1203,8 +1216,8 @@ def run_interactive_journey(run: ProofRun) -> tuple[str, str, str]:
     clear_output = pi.output_length()
     pi.send("/reminder-clear")
     pi.wait_output_since(clear_output, "Reminder cleared")
-    pi.wait_output_since(clear_output, "applies to next request")
-    pi.wait_output_since(clear_output, "Reminder cleared · applies to next request")
+    pi.wait_output_since(clear_output, "applies to next normal request")
+    pi.wait_output_since(clear_output, "Reminder cleared · applies to next normal request")
     require(run.saved_state(parent_id).get("reminder") is None and run.saved_state(parent_id).get("pending") is True,
             "clear command did not persist its pending cleared state")
     no_reminder = run.prompt_and_wait(pi, "PROOF-CLEARED-REMINDER-REQUEST")
@@ -1215,7 +1228,7 @@ def run_interactive_journey(run: ProofRun) -> tuple[str, str, str]:
     editor_output = run.next_editor(pi)
     pi.wait_output_since(editor_output, "Reminder saved")
     editor_output = run.next_editor(pi)
-    pi.wait_output_since(editor_output, "Reminder cleared · applies to next request")
+    pi.wait_output_since(editor_output, "Reminder cleared · applies to next normal request")
     require(run.saved_state(parent_id).get("reminder") is None and run.saved_state(parent_id).get("pending") is True,
             "an empty successful editor save did not clear the living reminder")
     empty_editor_clear = run.prompt_and_wait(pi, "PROOF-EMPTY-EDITOR-CLEAR")
@@ -1414,7 +1427,7 @@ def run_mid_work_compaction(root: Path, extension: Path) -> None:
         run.session_file(session_id)
 
         editor_output = run.next_editor(pi)
-        pi.wait_output_since(editor_output, "Reminder saved · applies to next request:")
+        pi.wait_output_since(editor_output, "Reminder saved · applies to next normal request:")
         require(run.saved_state(session_id).get("reminder") == REMINDER_OLD,
                 "compaction fixture reminder was not saved before operator work")
 
@@ -1655,8 +1668,8 @@ def main() -> int:
     try:
         require_isolated_patched_pi(pi_bin)
         version = subprocess.run([pi_bin, "--version"], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
-        if version != "0.99.1":
-            raise ProofBlocked(f"Pi 0.99.1 is the prepared interactive boundary; found {version}")
+        if version != "0.99.2":
+            raise ProofBlocked(f"Pi 0.99.2 is the prepared interactive boundary; found {version}")
         print(f"Using Pi {version}; local scripted provider and gate-controlled editor")
         with tempfile.TemporaryDirectory(prefix="pi-standing-reminder-proof-") as temporary:
             run = configure_run(Path(temporary), extension)

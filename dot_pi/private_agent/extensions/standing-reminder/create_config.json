@@ -1,0 +1,3 @@
+{
+  "triggers": ["tool-result:ask_user_question"]
+}
