@@ -145,6 +145,8 @@ Gates live in the repo-root `.chezmoiignore`:
 | [herdr-overview](./herdr-overview/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [standing-reminder](./standing-reminder/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [learnings-monitor](./learnings-monitor/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
+| [system-one](./system-one/README.md) (docs; package in settings) | `personal` and `axon-work-computer`; Termux skips `.pi` |
+| [winnow-local](./winnow-local/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 
 Do not deploy personal/homelab-only extensions onto `axon-work-computer`.
 
@@ -167,6 +169,8 @@ READMEs already in this tree:
 - [herdr-overview](./herdr-overview/README.md)
 - [web-search](./web-search/README.md)
 - [standing-reminder](./standing-reminder/README.md)
+- [system-one](./system-one/README.md)
+- [winnow-local](./winnow-local/README.md) (local Winnow server: setup and launch)
 
 `subagent` is currently a config overlay (`config.json` with
 `maxSubagentDepth`); it has no `index.ts` yet.
