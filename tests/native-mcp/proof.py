@@ -329,27 +329,38 @@ def render_settings(profile, temp):
 
 
 def generator_proof(temp, env, agent):
-    rendered = subprocess.run(["chezmoi", "--source", str(ROOT), "--override-data", '{"profile":"personal"}',
-                               "execute-template"], input=(ROOT / "dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl").read_text(),
-                              text=True, capture_output=True, check=True, timeout=TIMEOUT)
     canonical = temp / "canonical"
     (canonical / "skills").mkdir(parents=True)
-    write_json(canonical / "mcp/servers.json", json.loads(rendered.stdout))
     manual = {"url": "http://127.0.0.1:9/mcp", "enabled": False, "exposure": "direct"}
-    write_json(agent / "mcp.json", {"autoEnableCodemode": False, "mcpServers": {
-        "manual": manual, "hindsight": {"url": "http://127.0.0.1:9/old", "lifecycle": "keep-alive"}}})
-    subprocess.run(["sh", str(ROOT / "dot_local/user_scripts/executable_apply_harness_config.sh"), "pi"],
-                   env={**env, "AGENT_HARNESS_CANONICAL_ROOT": str(canonical),
-                        "AGENT_HARNESS_GENERATED_ROOT": str(temp / "generated"),
-                        "AGENT_HARNESS_ADAPTERS_ROOT": str(temp / "no-secret-adapters"),
-                        "AGENT_HARNESS_EXTERNAL_ROOT": str(temp / "no-external-skills"),
-                        "AGENT_HARNESS_INLINE_SECRETS": "0"},
-                   capture_output=True, text=True, check=True, timeout=TIMEOUT)
-    merged = json.loads((agent / "mcp.json").read_text())
-    require(merged["mcpServers"]["manual"] == manual and merged["autoEnableCodemode"] is False,
-            "Pi generator lost manual server/configuration additions")
-    require("lifecycle" not in merged["mcpServers"]["hindsight"], "Pi generator retained the retired lifecycle field")
-    require(len(merged["mcpServers"]) == 5, "Pi generator lost canonical servers")
+    ticktick = {"type": "http", "url": "https://mcp.ticktick.com"}
+    for profile in ("personal", "axon-work-computer"):
+        rendered = subprocess.run(["chezmoi", "--source", str(ROOT), "--override-data", json.dumps({"profile": profile}),
+                                   "execute-template"], input=(ROOT / "dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl").read_text(),
+                                  text=True, capture_output=True, check=True, timeout=TIMEOUT)
+        servers = json.loads(rendered.stdout)["mcpServers"]
+        require(servers.get("ticktick") == ticktick, f"{profile}: official TickTick OAuth configuration missing")
+        write_json(canonical / "mcp/servers.json", {"mcpServers": servers})
+        write_json(agent / "mcp.json", {"autoEnableCodemode": False, "mcpServers": {
+            "manual": manual, "hindsight": {"url": "http://127.0.0.1:9/old", "lifecycle": "keep-alive"}}})
+        subprocess.run(["sh", str(ROOT / "dot_local/user_scripts/executable_apply_harness_config.sh"), "all"],
+                       env={**env, "AGENT_HARNESS_CANONICAL_ROOT": str(canonical),
+                            "AGENT_HARNESS_GENERATED_ROOT": str(temp / "generated"),
+                            "AGENT_HARNESS_ADAPTERS_ROOT": str(temp / "no-secret-adapters"),
+                            "AGENT_HARNESS_EXTERNAL_ROOT": str(temp / "no-external-skills"),
+                            "AGENT_HARNESS_INLINE_SECRETS": "0", "AGENT_HARNESS_APPLY_CLAUDE_MCP": "0"},
+                       capture_output=True, text=True, check=True, timeout=TIMEOUT)
+        merged = json.loads((agent / "mcp.json").read_text())
+        require(merged["mcpServers"]["manual"] == manual and merged["autoEnableCodemode"] is False,
+                "Pi generator lost manual server/configuration additions")
+        require("lifecycle" not in merged["mcpServers"]["hindsight"], "Pi generator retained the retired lifecycle field")
+        require(set(merged["mcpServers"]) == set(servers) | {"manual"}, "Pi generator lost canonical servers")
+        require(merged["mcpServers"]["ticktick"] == ticktick, f"{profile}: Pi changed the TickTick configuration")
+        claude = (temp / "generated/claude/setup-mcp.sh").read_text()
+        require('mcp add -s user --transport http "ticktick" "https://mcp.ticktick.com" || true' in claude,
+                f"{profile}: Claude TickTick registration missing")
+        codex = (Path(env["HOME"]) / ".codex/config.toml").read_text()
+        require('[mcp_servers.ticktick]\nurl = "https://mcp.ticktick.com"\n' in codex,
+                f"{profile}: Codex TickTick configuration missing")
 
 
 def main():
