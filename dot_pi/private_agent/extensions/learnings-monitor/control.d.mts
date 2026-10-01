@@ -17,7 +17,7 @@ export interface LearningsMonitorControlsOptions {
 
 export interface LearningsMonitorControls {
 	handle(args: string, ctx: ExtensionContext): Promise<string>;
-	register(pi: ExtensionAPI): void;
+	register(pi: ExtensionAPI, options?: { command?: boolean }): void;
 	recordFailure(sourceId: string, channel: string, error: unknown): void;
 	recordSuccess(sourceId: string, channel: string): void;
 	failureFor(sourceId: string): string | null;

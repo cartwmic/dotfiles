@@ -5,6 +5,7 @@ import type { HindsightMemoryAdapter } from "./memory.d.mts";
 import type { ObserverWorkerStats } from "./worker.d.mts";
 
 export interface LearningsReviewSurface {
+	readonly controls: import("./control.d.mts").LearningsMonitorControls;
 	readonly store: LearningStore;
 	readonly memory: HindsightMemoryAdapter | null;
 	sourceStatus(ctx: PiCaptureContext): ReturnType<PiCaptureBridge["status"]>;

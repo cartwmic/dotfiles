@@ -38,6 +38,16 @@ changing the config or Pi launch environment, restart Pi so the monitor reads
 it again. Opportunity notes and operational state remain machine-local outside
 chezmoi source.
 
+Source changes alone do not deploy this extension. From a feature worktree,
+use `chezmoi --source "$CHEZMOI_SOURCE"` for every preview and approved apply;
+never hand-edit the managed live extension. Inspect the effective read-source
+hook first (even dry-run can run it), require `op` already available and owner
+1Password access on personal desktops, and preserve the host config. The
+read-only `tests/learnings-monitor/source-preview.py` records hashes without
+printing rendered content or secrets. Live apply needs separate owner approval.
+Tests remain source-only and ignored by chezmoi. These component README and
+AGENTS guides are managed extension files and included in the targeted preview.
+
 From the dotfiles checkout root on a personal or work desktop, preview both
 the monitor and Hindsight config. Apply them after reviewing the dry-run, then
 check the bank in the same environment that launches Pi. The check prints only
@@ -130,27 +140,38 @@ not add a message to the primary conversation. If Pi exits with activity still
 pending, shutdown does not wait for a model call; the work remains on disk and
 `/learnings status` shows what remains.
 
-Review the current source with:
+`/learnings` opens **Learnings home**: Review, Status, On, Off, Focus,
+Model, Tools, Flush, Patterns, Promote, Cleanup. Settings/management entries
+request arguments. Only `/learnings` is registered, without aliases.
 
-```text
-/learnings-review
-```
+`/learnings review` opens terminal-only **Learnings review**, initially
+**Current session · Pending**. The compact list shows source, effective status
+and queued Promote. Scrollable details show original recorded local time and
+relative age (unknown for legacy records), evidence, provenance, history and
+Markdown path. Closing restores conversation without a review dump.
 
-Use `/learnings-review all` to list every source on this machine, or
-`/learnings-review <source-id>` for one source. The output includes status,
-evidence and branch provenance, pointer availability, and each record's exact
-Markdown path. A missing original Pi session is shown as unavailable rather
-than treated as verified evidence.
+- ↑/↓ select; PgUp/PgDn scroll details.
+- `k` stages Keep; `d` stages Dismiss and clears promotion; `p` toggles queued
+  Promote only for effectively kept items; `u` resets the selected draft.
+- `s` opens **Review scope**: Current session, All local sources, or named
+  source with exact id. `f` cycles Pending, Kept, Dismissed, All.
+- Esc exits. Dirty drafts open **Staged Learnings decisions**: **Apply**,
+  **Discard**, **Continue**. Cancel means Continue. Drafts and selection survive
+  scope/filter/Continue. Selected choices remain visible until navigating away.
+  Apply saves local statuses before exact promotion preview/confirmation;
+  cancellation/failure of promotion leaves Keep saved. Discard writes/sends nothing.
 
-- `/learnings-keep <record-id> [source-id]` and
-  `/learnings-dismiss <record-id> [source-id]` update the authoritative
-  Markdown status and review history. Dismissed duplicates stay suppressed
-  unless new evidence or a materially different intervention warrants a new
-  proposal.
-- `/learnings-review patterns` explicitly requests cross-source grouping when
-  Pi is idle and there are eligible records from at least two sources. It uses
-  bounded note text and the current Pi model, may incur model cost, changes no
-  opportunity Markdown, and does not run after every batch.
+Without custom terminal support, use `/learnings list [source-id|all]`,
+`/learnings keep <record-id> [source-id]`, `/learnings dismiss <record-id>
+[source-id]` and management subcommands. Review outside terminal mode fails
+explicitly, without mutation or sending fallback. Missing original sessions
+are shown as unavailable. Dismissed duplicates remain suppressed unless new
+evidence or a materially different intervention warrants a new proposal.
+
+`/learnings patterns` explicitly requests cross-source grouping while idle
+with eligible records in at least two sources. It uses bounded note text and
+the current model, may incur model cost, changes no opportunity Markdown,
+and never runs automatically.
 
 ### Edit records on disk
 
@@ -189,7 +210,7 @@ does not promote notes automatically.
 To retain an opportunity in Hindsight, first keep it, then run:
 
 ```text
-/learnings-promote <record-id> [source-id]
+/learnings promote <record-id> [source-id]
 ```
 
 Pi previews the exact Observation and Recommendation text and the destination
@@ -222,13 +243,45 @@ separate Hindsight auto-retain behavior.
 ## Cleanup
 
 To remove a source's local records and owned observer session, first turn
-monitoring off, then run `/learnings-cleanup [source-id]` and confirm. Without
+monitoring off, then run `/learnings cleanup [source-id]` and confirm. Without
 a source ID Pi selects the current persisted source when possible; otherwise
-it requires you to choose one from `/learnings-review all`. Cleanup removes
+it requires you to choose one from `/learnings list all`. Cleanup removes
 that source's notes, pending batches, checkpoint, and verified owned observer
 session file. It can discard pending, unreviewed activity, and it does not
 remove records for other sources. No cleanup happens automatically when you
 turn monitoring off, delete a primary session, or change machines.
+
+## Structured adapter interface
+
+`review.mjs` exports `createLearningsReviewCommands(surface, sdk)`,
+`createReviewDraft()` and `reviewIdentityKey(identity)`; `review.d.mts` declares
+all row, scope, draft and result shapes. The UI can use these operations without
+assembling command strings or asking the operator for IDs:
+
+- `query({ scope, status }, ctx)` returns `{ sources, rows, scope, status, root }`.
+  Scope defaults to `"current"` (no current persisted source means an empty
+  queue), or accepts `"all"` or `{ sourceId }`; status defaults to `"open"`.
+  Each row contains the exact `{ sourceId, id }` identity, source summary,
+  authoritative record, Markdown `path`, and plain-text `detail`.
+- `createDraft()` (also `commands.createDraft()`) owns only one interaction's
+  choices. `stage(row, "kept" | "dismissed")`, `togglePromotion(row)`,
+  `get(row)`, `reset(row)`, `entries()` and `clear()` never write or send.
+  Dismiss clears queued promotion; reset removes only that row's choice.
+  Keep the draft through scope/filter changes. Discard calls `clear()`.
+- `apply(draft, ctx)` rereads records and saves all chosen local statuses first.
+  It returns `applied`, `errors`, `promotions` and `remaining`; successful writes
+  are not rolled back on another file's failure. Failed local choices stay in
+  the draft. No promotion is offered for a failed local Keep. Untouched records
+  are not status-written. Promotion errors or cancellation do not revoke Keep.
+- `promoteRecord(row, ctx)` uses the exact source/id and fresh kept Markdown,
+  preserving the existing exact-text/bank confirmation and memory token boundary.
+  It is for applied records, not a replacement for queued draft promotion.
+
+`store.d.mts` exposes `StoredOpportunityRecord`, extending the portable record
+with optional `recordedAt`. The store sets it only at first record-file creation
+and preserves it through updates. Missing or invalid legacy timestamps stay
+unknown; there is no migration or filesystem-time fallback. Portable core
+identity and producer contracts remain unchanged.
 
 ## Validation
 
@@ -237,7 +290,12 @@ isolated work-profile render:
 
 ```sh
 python3 tests/learnings-monitor/proof.py
+python3 tests/learnings-monitor/ui-proof.py --scenario all
+# Focused staging journey during implementation:
+python3 tests/learnings-monitor/ui-proof.py --scenario stage
 python3 tests/learnings-monitor/profile-proof.py
+# Read-only worktree mapping/render/live-hash/targeted dry-run (never applies):
+python3 tests/learnings-monitor/source-preview.py
 ```
 
 The focused component and portable-core commands are in [AGENTS.md](./AGENTS.md)

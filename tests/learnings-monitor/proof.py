@@ -117,6 +117,7 @@ class ScriptedBackends:
         self.recall_calls: list[dict[str, Any]] = []
         self.retain_calls: list[dict[str, Any]] = []
         self.fail_recalls = True
+        self.fail_retains = False
         self.delay_next_recall = 0.0
         self.hold_next_observer = False
         self.cosmetic_sources: set[str] = set()
@@ -168,7 +169,8 @@ class ScriptedBackends:
                     with owner.condition:
                         owner.retain_calls.append(payload)
                         owner.condition.notify_all()
-                    owner._json_response(self, 202, {"accepted": True})
+                    owner._json_response(self, 503 if owner.fail_retains else 202,
+                                         {"error": "scripted retain failure"} if owner.fail_retains else {"accepted": True})
                     return
 
                 if self.path.endswith("/chat/completions"):
@@ -1391,7 +1393,7 @@ def run_integrated(root: Path, backend: ScriptedBackends, env: dict[str, str], a
         require(active_branch_match is not None, "Pi status omitted the active branch after /tree navigation", "T6")
         active_branch = active_branch_match.group(1)
         require(active_branch != branch_context, "the abandoned branch insight was presented as the active branch", "T3")
-        branch_review = command(pi, log, f"/learnings-review {sid}", "Learnings review")
+        branch_review = command(pi, log, f"/learnings list {sid}", "Learnings review")
         require(branch_metadata["id"] in branch_review.get("message", ""), "Pi review omitted the insight from the abandoned branch", "T7")
         require(branch_context in branch_review.get("message", ""), "Pi review omitted the branch provenance of the historical insight", "T7")
         report["checks"].append("AC-20-real-tree-branch-provenance")
@@ -1508,36 +1510,50 @@ def run_integrated(root: Path, backend: ScriptedBackends, env: dict[str, str], a
         # Review surface reads the edited Markdown; keep/dismiss changes that same file.
         current_record = next(item for item in all_records(root) if item[1].get("id") == metadata.get("id"))
         record_id = str(current_record[1]["id"])
-        review = command(resumed, log, "/learnings-review", "Learnings review")
+        review = command(resumed, log, "/learnings list", "Learnings review")
         require("EDITED_OBSERVATION_SENTINEL" in review.get("message", ""), "Pi review did not show the direct Markdown edit", "T7")
-        command(resumed, log, f"/learnings-keep {record_id}", "Authoritative Markdown updated")
+        # Exercise the actual reviewer and return, not a private adapter call.
+        modal_start = len(resumed.text())
+        resumed.sendline("/learnings review")
+        resumed.wait_text("Esc Exit", start=modal_start)
+        # A fresh native conversation footer proves the modal has returned;
+        # sending another command before that redraw can lose it to the modal.
+        restore_start = len(resumed.text())
+        resumed.send(b"\x1b")
+        resumed.wait_text(MODEL_ID, start=restore_start)
+        status_for(resumed, log)
+        command(resumed, log, f"/learnings keep {record_id}", "Authoritative Markdown updated")
         kept = next(item for item in all_records(root) if item[1].get("id") == record_id)
         require(markdown_status(kept[2]) == "kept", "keep command did not update authoritative Markdown", "T7")
-        keep_review = command(resumed, log, f"/learnings-review {sid}", "Learnings review")
+        keep_review = command(resumed, log, f"/learnings list {sid}", "Learnings review")
         require("[KEPT]" in keep_review.get("message", ""), "Pi review status diverged from the kept Markdown record", "T7")
 
         # Cancel promotion through the actual Pi confirmation UI, then confirm exact text.
         before_confirm = len(json_lines(log))
         before_modal = len(resumed.text())
-        resumed.sendline(f"/learnings-promote {record_id}")
+        resumed.sendline(f"/learnings promote {record_id}")
         resumed.wait_ui(log, lambda row: row.get("kind") == "confirm" and row.get("title") == "Promote kept opportunity to Hindsight", timeout=12, after=before_confirm)
         resumed.wait_text("Send this exact text?", start=before_modal)
         # Pi's confirmation selector starts on Yes; Down then Enter is an actual cancellation.
         before_cancel = len(json_lines(log))
+        restore_start = len(resumed.text())
         resumed.send(b"\x1b[B\r")
+        resumed.wait_text(MODEL_ID, start=restore_start)
         cancel_note = resumed.wait_ui(log, lambda row: row.get("kind") == "notify" and "Promotion cancelled" in row.get("message", ""), timeout=12, after=before_cancel)
         require(not backend.retain_calls, "cancelled promotion sent a Hindsight retain request", "T5")
         require("EDITED_OBSERVATION_SENTINEL" not in cancel_note.get("message", "") or "remains kept" in cancel_note.get("message", ""), "cancelled promotion did not preserve the kept local record", "T7")
 
         before_confirm = len(json_lines(log))
         before_modal = len(resumed.text())
-        resumed.sendline(f"/learnings-promote {record_id}")
+        resumed.sendline(f"/learnings promote {record_id}")
         preview = resumed.wait_ui(log, lambda row: row.get("kind") == "confirm" and row.get("title") == "Promote kept opportunity to Hindsight", timeout=12, after=before_confirm)
         resumed.wait_text("Send this exact text?", start=before_modal)
         require("EDITED_OBSERVATION_SENTINEL" in preview.get("message", ""), "promotion preview did not show exact edited Markdown text", "T5")
         require("TOOL_OUTPUT_PRIVATE_SENTINEL" not in preview.get("message", "") and "pi-session://" not in preview.get("message", ""), "promotion preview included raw evidence or source pointers", "T5")
         before_accept = len(json_lines(log))
+        restore_start = len(resumed.text())
         resumed.send(b"\r")
+        resumed.wait_text(MODEL_ID, start=restore_start)
         resumed.wait_ui(log, lambda row: row.get("kind") == "notify" and "Hindsight accepted the asynchronous request" in row.get("message", ""), timeout=12, after=before_accept)
         backend.wait_for("retain_calls", 1, timeout=8)
         sent_text = backend.retain_calls[0].get("items", [{}])[0].get("content")
@@ -1547,10 +1563,10 @@ def run_integrated(root: Path, backend: ScriptedBackends, env: dict[str, str], a
         ) if part)
         require(sent_text == expected_text, f"promotion did not send the exact user-visible text: {sent_text!r}", "T5")
         require(backend.retain_calls[0] == {"items": [{"content": expected_text}], "async": True}, "promotion payload contains extra fields or raw evidence", "T5")
-        command(resumed, log, f"/learnings-dismiss {record_id}", "Authoritative Markdown updated")
+        command(resumed, log, f"/learnings dismiss {record_id}", "Authoritative Markdown updated")
         dismissed = next(item for item in all_records(root) if item[1].get("id") == record_id)
         require(markdown_status(dismissed[2]) == "dismissed", "dismiss command did not update authoritative Markdown", "T7")
-        dismiss_review = command(resumed, log, f"/learnings-review {sid}", "Learnings review")
+        dismiss_review = command(resumed, log, f"/learnings list {sid}", "Learnings review")
         require("[DISMISSED]" in dismiss_review.get("message", ""), "Pi review status diverged from dismissed Markdown", "T7")
         report["checks"].append("AC-17-review-AC-11-exact-promotion")
 
@@ -1647,7 +1663,7 @@ def run_integrated(root: Path, backend: ScriptedBackends, env: dict[str, str], a
         fork_records = [item for item in all_records(root) if any(e.get("sourceId") == fork_sid for e in item[1].get("evidence", []))]
         require(len(fork_records) == 1, "fork did not have one distinct opportunity to dismiss", "T1")
         fork_record_id = str(fork_records[0][1]["id"])
-        command(child, log, f"/learnings-dismiss {fork_record_id}", "Authoritative Markdown updated")
+        command(child, log, f"/learnings dismiss {fork_record_id}", "Authoritative Markdown updated")
         child.exit()
         if child.exit_forced:
             report.setdefault("integrationFailures", []).append({
@@ -1673,7 +1689,7 @@ def run_integrated(root: Path, backend: ScriptedBackends, env: dict[str, str], a
         require(len(replay_records) == 1 and replay_records[0][1]["id"] == fork_record_id, "cosmetic rewrite created a second fork opportunity", "T1")
         require(markdown_status(replay_records[0][2]) == "dismissed" and replay_records[0][1].get("reviewHistory", [])[-1].get("status") == "dismissed", "cosmetic retry reopened or erased the dismissal", "T1")
         require(len(backend.recall_calls) == before_replay_recalls, "suppressed replay triggered a new Hindsight lookup", "T5")
-        replay_review = command(replayed_child, log, f"/learnings-review {fork_sid}", "Learnings review")
+        replay_review = command(replayed_child, log, f"/learnings list {fork_sid}", "Learnings review")
         require("[DISMISSED]" in replay_review.get("message", ""), "Pi review lost the dismissed state after cosmetic replay", "T7")
         report["checks"].append("AC-24-cosmetic-dismissal-suppression-on-real-Pi-retry")
         report["evidence"]["cosmeticReplayEvidence"] = replayed_id

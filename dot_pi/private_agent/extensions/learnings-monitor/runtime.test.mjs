@@ -438,7 +438,7 @@ test("the installed Pi extension loader loads index.ts and registers controls wi
 		assert.deepEqual(loaded.errors, []);
 		assert.equal(loaded.extensions.length, 1);
 		const extension = loaded.extensions[0];
-		assert.ok(extension.commands.has("learnings"));
+		assert.deepEqual([...extension.commands.keys()], ["learnings"]);
 		assert.ok(extension.handlers.has("session_start"));
 		assert.ok(extension.handlers.has("agent_settled"));
 		const notifications = [];
@@ -465,7 +465,9 @@ test("T7 review registration receives only the stable review surface", async (t)
 		registerReviewCommands: (api, surface) => { registered = { api, surface }; },
 	});
 	assert.equal(registered.api, pi);
-	assert.deepEqual(Object.keys(registered.surface).sort(), ["disposeWorker", "memory", "sourceStatus", "store", "workerStats"]);
+	assert.deepEqual(Object.keys(registered.surface).sort(), ["controls", "disposeWorker", "memory", "sourceStatus", "store", "workerStats"]);
+	assert.equal(registered.surface.controls, runtime.controls);
+	assert.equal(pi.commands.has("learnings"), false);
 	assert.equal(registered.surface.store, store);
 	assert.equal(registered.surface.memory, null);
 	await runtime.close();

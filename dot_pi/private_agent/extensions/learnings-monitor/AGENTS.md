@@ -66,6 +66,12 @@ NODE_PATH="$(npm root -g)" node --test dot_pi/private_agent/extensions/learnings
 python3 tests/learnings-monitor/proof.py --core-only
 ```
 
+The focused real-key reviewer proof is `python3 tests/learnings-monitor/ui-proof.py --scenario stage`; the final matrix uses `--scenario all` (stage, promotion, scope-time). It must pair actual pane navigation with authoritative Markdown and scripted request counts, and check primary conversation coherence. Do not replace keys with private review calls or add command aliases/debug dumps for proof.
+
+The scope/time scenario chooses sources by their displayed chooser labels, not fixed indices. It asserts older/newer local date and age, unknown legacy dates, and the unchanged date after Apply/reopen. Resize uses the standard PTY window-size ioctl and waits for native redraw. Fixture ordering may guide navigation keys only within the active status filter. Verify the source-qualified selected record and its recorded date in fresh native output after the scope/filter action; a header or an earlier cumulative pane match is not a completed detail frame.
+
+The read-only worktree deployment preflight is `python3 tests/learnings-monitor/source-preview.py`. It independently hashes rendered and live files, checks mapping and targeted dry-runs, and never applies. It fails closed when hook safety or owner 1Password access is unavailable. Tests remain source-only and ignored. Ask before any live deployment.
+
 The full private-PTY Pi journey and isolated work-profile render use the
 commands in [README.md](./README.md) under Validation. Run the completed Pi journey after behavior changes; a
 passing core seam test cannot establish that status, resume, or review works
@@ -75,7 +81,7 @@ disposable HOME and confirms the work Hindsight bank. It does not change the
 operator's HOME.
 
 Ask before a live chezmoi apply, a commit or push, or deletion of a real
-source's local notes through `/learnings-cleanup`. Disposable test roots may
+source's local notes through `/learnings cleanup`. Disposable test roots may
 clean up their own files. The broad read-only file-access risk and lack of a
 spending cap are owner-accepted boundaries; changing either needs a new owner
 decision. Markdown instructions are advisory. The read-tool allowlist, source
