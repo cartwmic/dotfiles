@@ -120,6 +120,13 @@ After editing the canonical MCP file:
    - Codex: `codex mcp list`
    - Pi: `pi mcp list`, then `/mcp` in a fresh Pi session
 
+TickTick uses the official server at `https://mcp.ticktick.com` in the personal
+and work desktop profiles. Sign in separately on each machine and in each
+harness: `pi mcp login ticktick`, `codex mcp login ticktick`, or Claude's `/mcp`
+menu. Credentials stay in the harness's local OAuth store, not in canonical
+configuration or 1Password adapter metadata. In a running Pi session, use
+`/reload` after applying, then `/mcp login ticktick`.
+
 ## Add A Canonical Skill
 
 Create a new directory under [`canonical/skills/`](./canonical/skills/) and place a `SKILL.md` file inside it.
