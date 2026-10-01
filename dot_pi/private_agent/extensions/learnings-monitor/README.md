@@ -142,7 +142,8 @@ pending, shutdown does not wait for a model call; the work remains on disk and
 
 `/learnings` opens **Learnings home**: Review, Status, On, Off, Focus,
 Model, Tools, Flush, Patterns, Promote, Cleanup. Settings/management entries
-request arguments. Only `/learnings` is registered, without aliases.
+request arguments. Each home entry includes a short explanation. Only
+`/learnings` is registered, without aliases.
 
 `/learnings review` opens terminal-only **Learnings review**, initially
 **Current session · Pending**. The compact list shows source, effective status
