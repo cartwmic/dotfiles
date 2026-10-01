@@ -304,8 +304,8 @@ and [proof commands](./tests/standing-reminder/README.md). Termux excludes Pi.
 
 ## System One in Pi
 
-The `personal` profile loads [cartwmic/system-one-tools](https://github.com/cartwmic/system-one-tools)
-as a Git package, not an npm package. Work and Termux omit it. The local
+The `personal` and `axon-work-computer` profiles load [cartwmic/system-one-tools](https://github.com/cartwmic/system-one-tools)
+as a Git package, not an npm package. Termux omits it. The local
 [System One directory](./dot_pi/private_agent/extensions/system-one/README.md)
 contains documentation, not another extension loader.
 
@@ -316,6 +316,22 @@ runtime environment, not this public repository. The Git URL is unpinned;
 package updates and paid provider tests need separate approval. The scoped
 [agent guide](./dot_pi/private_agent/extensions/system-one/AGENTS.md) covers
 isolated tests and rollout. Rendering settings alone does not prove a provider call.
+
+### Local Winnow (no API key)
+
+[Winnow-12B](https://huggingface.co/EldanRing/Winnow-12B) is a local Jev-class
+model that serves both System One and Pi's native classifier calls. One-time
+setup and the catalog entry are in the
+[winnow-local guide](./dot_pi/private_agent/extensions/winnow-local/README.md).
+Launch it in a terminal you keep open, then check with `/winnow` in Pi:
+
+```sh
+cd ~/git/winnow-inference
+python3 scripts/serve.py --profile apple-silicon --text-only --alias winnow-12b
+```
+
+Nothing starts it at login. It listens on `http://127.0.0.1:8091` and holds
+about 13 GB of memory while running; Ctrl+C stops it.
 
 ## Herdr overview and phone route
 
