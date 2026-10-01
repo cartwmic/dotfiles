@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This directory documents the [System One Git package](https://github.com/cartwmic/system-one-tools) enabled by the `personal` Pi settings template. Pi loads its `system_one` tool and `/so` commands from that repository. This chezmoi directory contains no loader or copy of the package code. The work and Termux profiles skip these files. [AGENTS.md](AGENTS.md) covers maintenance here; the [repo-root guide](https://github.com/cartwmic/dotfiles/blob/main/AGENTS.md) owns chezmoi apply and secret handling.
+This directory documents the [System One Git package](https://github.com/cartwmic/system-one-tools) enabled by the Pi settings template on the `personal` and `axon-work-computer` profiles. Pi loads its `system_one` tool and `/so` commands from that repository. This chezmoi directory contains no loader or copy of the package code. Termux skips these files. [AGENTS.md](AGENTS.md) covers maintenance here; the [repo-root guide](https://github.com/cartwmic/dotfiles/blob/main/AGENTS.md) owns chezmoi apply and secret handling.
 
 ## Setup
 
@@ -29,7 +29,8 @@ Pi, then run `/so status` to check that the extension loaded. The Git URL is
 unpinned; `pi update https://github.com/cartwmic/system-one-tools` can move it to a later commit.
 [AGENTS.md](AGENTS.md) covers that maintenance boundary.
 
-This checkout supplies no decision service or model. A generic
+This checkout supplies no decision service or model. For a free local one, see
+[winnow-local](../winnow-local/README.md). A generic
 chat-completions endpoint cannot answer typed System One requests. For a
 compatible OpenRouter Decisions route, use `/so settings` to save a connection
 in `${XDG_CONFIG_HOME:-$HOME/.config}/system-one/connections.json`: select the
