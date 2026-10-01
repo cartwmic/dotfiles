@@ -293,12 +293,16 @@ On desktop profiles, `/reminder` edits one current reminder for the saved Pi
 session. Successful editor close activates it; canceled or failed edits leave
 the prior value unchanged. Each operator message receives the value current
 when Pi processes it, including queued steering. `/tree` keeps the session's
-current value; `/fork` and `/clone` copy it into independent sessions. Tool
-continuations and extension-generated messages do not receive a new reminder.
+current value; `/fork` and `/clone` copy it into independent sessions. Selected
+completed `ask_user_question` results refresh it by default; saved edits or clears
+affect the next normal agent request. Unchanged ordinary tool continuations and
+unselected extension-generated messages do not independently refresh it. No
+control forces a request; transcript/history, private storage, session lifecycle,
+and editor handoff rules remain unchanged.
 
 The extension needs the source-managed input-origin runtime patch. Apply both
 only after approval, then restart Pi. Its isolated proof currently pins Pi
-0.87.1; rerun it after checking patch anchors on upgrades. See the
+0.99.2; rerun it after checking patch anchors on upgrades. See the
 [extension guide](./dot_pi/private_agent/extensions/standing-reminder/README.md)
 and [proof commands](./tests/standing-reminder/README.md). Termux excludes Pi.
 

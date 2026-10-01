@@ -4,6 +4,124 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import standingReminder from "./index.ts";
+import { readTriggerConfig } from "./config.ts";
+
+test("exact trigger configuration defaults, empty, explicit and invalid", () => {
+	const root = mkdtempSync(join(tmpdir(), "reminder-config-"));
+	const path = join(root, "config.json");
+	try {
+		assert.deepEqual([...readTriggerConfig(path).triggers], ["tool-result:ask_user_question"]);
+		for (const triggers of [[], ["tool-result:subagent", "message:handoff"]]) {
+			writeFileSync(path, JSON.stringify({ triggers }));
+			assert.deepEqual([...readTriggerConfig(path).triggers], triggers);
+		}
+		for (const value of ['broken', '{}', '{"triggers":["tool-result:*"]}', '{"triggers":["message:"]}']) {
+			writeFileSync(path, value);
+			assert.ok(readTriggerConfig(path).warning);
+			assert.equal(readTriggerConfig(path).triggers.size, 0);
+		}
+	} finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("selected direct/nested/error completions coalesce; ordinary tools and UI do not refresh", async () => {
+	const h = createHarness();
+	try {
+		await start(h);
+		setEditor(h, { text: "exact\n guidance" });
+		await h.command("reminder");
+		const operator = await submit(h, "work");
+		const initial = (await h.call("context", { messages: [operator] }) as any).messages[1];
+		const result = { role: "toolResult", toolCallId: "root", timestamp: 123, content: [] };
+		for (const toolName of ["read", "subagent"]) await h.call("tool_execution_end", { toolName });
+		h.ctx.ui.notify("question UI only");
+		const ordinary = (await h.call("context", { messages: [operator, result] }) as any).messages;
+		assert.equal(ordinary.length, 3);
+		assert.equal(ordinary[1], initial);
+		for (const event of [{}, { parentToolCallId: "root" }, { isError: true }]) {
+			await h.call("tool_execution_end", { toolName: "ask_user_question", ...event });
+		}
+		const refreshed = (await h.call("context", { messages: [operator, result] }) as any).messages;
+		assert.equal(refreshed.length, 4);
+		assert.equal(refreshed[3].content[0].text, "<standing-reminder>\nexact\n guidance\n</standing-reminder>");
+		assert.deepEqual((await h.call("context", { messages: [operator, result] }) as any).messages, refreshed);
+		setEditor(h, { text: "latest" }); await h.command("reminder");
+		setEditor(h, { text: "final" }); await h.command("reminder");
+		await h.call("tool_execution_end", { toolName: "ask_user_question" });
+		const queued = await submit(h, "continue");
+		const edited = (await h.call("context", { messages: [operator, result, queued] }) as any).messages;
+		assert.equal(edited.length, 4);
+		assert.equal(edited[3].content[0].text, "<standing-reminder>\nfinal\n</standing-reminder>");
+		await h.command("reminder-clear");
+		await h.call("tool_execution_end", { toolName: "ask_user_question", isError: true });
+		assert.equal(await h.call("context", { messages: [operator, result, queued] }), undefined);
+		assert.equal(serializedState(h).pending, false);
+	} finally { h.cleanup(); }
+});
+
+test("custom selectors baseline history and occurrences across tree, compaction and startup", async () => {
+	const path = new URL("./config.json", import.meta.url);
+	assert.equal(existsSync(path), false, "test will not overwrite an operator config");
+	const h = createHarness();
+	const custom = { role: "custom", customType: "handoff", timestamp: 77, content: [] };
+	try {
+		writeFileSync(path, JSON.stringify({ triggers: ["message:handoff"] }));
+		h.entries.push({ type: "message", message: custom });
+		await start(h); setEditor(h, { text: "guide" }); await h.command("reminder");
+		const operator = await submit(h, "work");
+		const first = (await h.call("context", { messages: [operator, custom] }) as any).messages;
+		assert.equal(first.length, 3);
+		assert.deepEqual((await h.call("context", { messages: [operator, custom] }) as any).messages, first);
+		const second = (await h.call("context", { messages: [operator, custom, custom] }) as any).messages;
+		assert.equal(second.length, 5);
+		assert.equal(second[4].content[0].text, "<standing-reminder>\nguide\n</standing-reminder>");
+		h.entries.push({ type: "message", message: custom });
+		await h.call("session_tree");
+		assert.equal(await h.call("context", { messages: [operator, custom, custom] }), undefined);
+		await h.call("session_compact");
+		assert.equal(await h.call("context", { messages: [operator, custom, custom] }), undefined);
+		await start(h, "resume");
+		assert.equal(await h.call("context", { messages: [operator, custom, custom] }), undefined);
+	} finally { rmSync(path); h.cleanup(); }
+});
+
+test("native custom_message history never refreshes an extension-only request", async () => {
+	const path = new URL("./config.json", import.meta.url);
+	assert.equal(existsSync(path), false, "test will not overwrite an operator config");
+	const h = createHarness();
+	const custom = { role: "custom", customType: "handoff", timestamp: 77, content: [] };
+	try {
+		writeFileSync(path, JSON.stringify({ triggers: ["message:handoff"] }));
+		h.entries.push({ type: "custom_message", customType: "handoff", timestamp: new Date(77).toISOString(), content: [], display: false });
+		await start(h); setEditor(h, { text: "guide" }); await h.command("reminder");
+		const operator = await submit(h, "work");
+		await h.call("context", { messages: [operator, custom] });
+		await h.call("agent_settled");
+		for (const lifecycle of ["session_start", "session_tree", "session_compact"]) {
+			await h.call(lifecycle, { reason: "resume" });
+			const extension = await submit(h, "extension continuation", "extension");
+			assert.equal(await h.call("context", { messages: [operator, custom, extension] }), undefined, lifecycle);
+			await h.call("agent_settled");
+		}
+	} finally { rmSync(path); h.cleanup(); }
+});
+
+test("idle warming and compaction do not consume pending saves; settlement preserves them", async () => {
+	const h = createHarness();
+	try {
+		await start(h); setEditor(h, { text: "pending" }); await h.command("reminder");
+		const operator = await submit(h, "work");
+		h.ctx.isIdle = () => true;
+		assert.equal(await h.call("context", { messages: [operator] }), undefined);
+		assert.equal(serializedState(h).pending, true);
+		await h.call("session_compact");
+		await h.call("agent_settled");
+		assert.equal(serializedState(h).pending, true);
+		h.ctx.isIdle = () => false;
+		const next = await submit(h, "next");
+		assert.equal((await h.call("context", { messages: [next] }) as any).messages[1].content[0].text, "<standing-reminder>\npending\n</standing-reminder>");
+		assert.equal(serializedState(h).pending, false);
+	} finally { h.cleanup(); }
+});
 import {
 	emptyReminderState,
 	hasReminderMarker,
@@ -18,12 +136,15 @@ type FakeContext = {
 	mode: string;
 	hasUI: boolean;
 	cwd: string;
+	isIdle: () => boolean;
 	sessionManager: {
 		getSessionId: () => string;
 		getSessionDir: () => string;
 		getSessionFile: () => string | undefined;
 		getEntries: () => any[];
 		getLeafId: () => string;
+		getBranch: () => any[];
+		buildSessionContext: () => { messages: any[] };
 	};
 	ui: {
 		notifications: Array<{ message: string; type?: string }>;
@@ -73,12 +194,18 @@ function createHarness(id = "session-parent", sharedSessionDir?: string) {
 		mode: "tui",
 		hasUI: true,
 		cwd: project,
+		isIdle: () => false,
 		sessionManager: {
 			getSessionId: () => id,
 			getSessionDir: () => sessionDir,
 			getSessionFile: () => sessionFile,
 			getEntries: () => entries,
 			getLeafId: () => "leaf-now",
+			getBranch: () => entries,
+			buildSessionContext: () => ({ messages: entries.flatMap((entry) =>
+				entry.type === "message" ? [entry.message] : entry.type === "custom_message"
+					? [{ role: "custom", customType: entry.customType, timestamp: new Date(entry.timestamp).getTime(), content: entry.content, display: entry.display }]
+					: []) }),
 		},
 		ui: {
 			notifications,
@@ -260,7 +387,7 @@ test("editor saves exact multiline text, views unchanged drafts without rewritin
 		await h.command("reminder");
 		assert.deepEqual(serializedState(h), { reminder: initial, pending: true });
 		assert.deepEqual(h.ctx.ui.tui, { stopped: 1, started: 1, renders: 1 });
-		assert.match(h.ctx.ui.widgets.get("standing-reminder")?.[0] ?? "", /applies to next request/);
+		assert.match(h.ctx.ui.widgets.get("standing-reminder")?.[0] ?? "", /applies to next normal request/);
 
 		setEditor(h, { write: false });
 		await h.command("reminder");
@@ -348,7 +475,7 @@ test("operator message gets one hidden exact projection through tool continuatio
 	}
 });
 
-test("queued input uses current state at message processing and prior task keeps its snapshot", async () => {
+test("edits retire prior projections at the next continuation and queued input uses current value", async () => {
 	const h = createHarness();
 	try {
 		await start(h);
@@ -360,7 +487,8 @@ test("queued input uses current state at message processing and prior task keeps
 		setEditor(h, { text: "new\nvalue" });
 		await h.command("reminder");
 		const oldContinuation = await h.call("context", { messages: [oldMessage, { role: "assistant", content: [] }] }) as any;
-		assert.equal(oldContinuation.messages[1], oldProjection);
+		assert.ok(!oldContinuation.messages.includes(oldProjection));
+		assert.equal(oldContinuation.messages[2].content[0].text, "<standing-reminder>\nnew\nvalue\n</standing-reminder>");
 
 		const queued = userMessage("queued request");
 		await h.call("message_start", { message: queued, source: "interactive" });
@@ -380,7 +508,7 @@ test("clear command is local, leaves a next-request cue, and does not submit a c
 		await h.command("reminder");
 		await h.command("reminder-clear");
 		assert.deepEqual(serializedState(h), { reminder: null, pending: true });
-		assert.match(h.ctx.ui.widgets.get("standing-reminder")?.[0] ?? "", /cleared.*next request/i);
+		assert.match(h.ctx.ui.widgets.get("standing-reminder")?.[0] ?? "", /cleared.*next normal request/i);
 		assert.equal(h.entries.filter((entry) => entry.type === "message").length, 0);
 	} finally {
 		h.cleanup();

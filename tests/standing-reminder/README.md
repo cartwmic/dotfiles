@@ -1,108 +1,199 @@
 # Standing-reminder proof
 
-Product behavior and usage live in the [extension README](../../dot_pi/private_agent/extensions/standing-reminder/README.md). These are source-only validation drivers; `.chezmoiignore` excludes `tests/` from home deployment.
+Product behavior lives in the [extension README](../../dot_pi/private_agent/extensions/standing-reminder/README.md). These drivers are source-only; `tests/` and the scoped extension `AGENTS.md` must remain ignored.
 
-## Commands
-
-From the chezmoi source root:
+## Commands (from this worktree)
 
 ```sh
-node --test dot_pi/private_agent/extensions/standing-reminder/index.test.ts
-python3 tests/standing-reminder/isolated_pi.py -- python3 tests/standing-reminder/proof.py
-chezmoi --source "$PWD" apply --dry-run --verbose --force \
-  ~/.pi/agent/extensions/standing-reminder \
-  ~/.local/share/pi-patches/standing-reminder-origin
+# legacy-journey: existing provenance/editor/session/unavailable-state regressions
+PYTHONDONTWRITEBYTECODE=1 python3 tests/standing-reminder/isolated_pi.py -- \
+  python3 tests/standing-reminder/proof.py
+
+# selective-journey: full new matrix (final driver owns execution)
+PYTHONDONTWRITEBYTECODE=1 python3 tests/standing-reminder/isolated_pi.py -- \
+  python3 tests/standing-reminder/selective_proof.py
+
+# focused acceptance path
+PYTHONDONTWRITEBYTECODE=1 python3 tests/standing-reminder/isolated_pi.py -- \
+  python3 tests/standing-reminder/selective_proof.py --case direct
+
+# focused historical replay regression (no operator delivery after reload)
+PYTHONDONTWRITEBYTECODE=1 python3 tests/standing-reminder/isolated_pi.py -- \
+  python3 tests/standing-reminder/selective_proof.py --case historical
+
+# source-preview: mappings, separate rendered/live reads, unforced targeted preview
+PYTHONDONTWRITEBYTECODE=1 python3 tests/standing-reminder/source_proof.py
 ```
 
-Run `proof.py` through `isolated_pi.py` as above. The runner patches a private
-copy of real Pi 0.99.1; `proof.py` then drives it in an isolated PTY with a
-local scripted OpenAI-compatible provider and a gate-controlled editor. It
-uses temporary agent, project, and session directories, makes no external
-provider calls, and reads no user provider credentials. The journey checks exact
-model-visible delivery, an intermediate editor draft that stays inactive until
-successful close, and an active-response edit contrast: the new saved preview
-and next-request cue appear before queued steering is processed, the in-flight
-request retains its old snapshot, and the queued request gets only the new
-reminder. It requires every streamed response chunk to redraw in order after
-the editor closes, and sends another operator request after an unsuccessful
-editor exit to prove the old reminder remains active. It also checks identical
-operator/extension text with distinct provenance, a canceled same-text queue
-neighbor, prompt-template expansion, and a mixed-origin `steeringMode=all`
-batch where both queued operator messages need one reminder and the extension
-message gets none. A separate real-Pi journey drives threshold compaction
-between tool steps of one operator request, tolerates repeated summaries,
-requires an ordinary same-work request after compaction, rejects a fresh
-reminder on every summary and continuation, waits for operator work to settle,
-then checks the next operator's reminder and visible answer. Other checks cover
-extension-generated follow-up exclusion, tool-only continuation, editor
-rollback and empty-file clear, status cues, `/reload`, manual `/compact`,
-saved-session resume, `/tree`, an older-point `/fork`, `/clone`, independent
-session state, noninteractive reuse, and corrupt- and missing-state warnings
-with completed requests in TUI, print, JSON, and RPC. It checks the staged
-runtime patch before starting Pi and verifies original user text is unchanged
-and no provenance marker or reminder projection enters the saved transcript.
+The supported offline pin is **Pi 0.99.2**, `@earendil-works/pi-coding-agent`.
+`isolated_pi.py` locates the actual package, prints exact target SHA-256 values,
+copies it privately, checks literal patch anchors, normalizes only the copied
+origin bridge, and validates desktop/Termux gates, idempotence, changed-anchor
+rejection and sibling-patch composition. Installed targets remain untouched and
+are fingerprinted again even if the child proof fails. No relaxed provenance
+checks or installed-package edits are permitted.
 
-For the public hook/editor feasibility probe, run it through the isolated Pi
-package runner:
+## Selective cases and assertion contract
+
+`--case` selects one case; omitted runs all:
+
+- `direct`, `cancel`, `invalid`: actual installed question tool, complete
+  two-tab answer submission, cancellation and invalid arguments. Cancellation
+  requires the actual 2.12.0 canonical `User declined to answer questions`
+  root result and closed UI; invalid arguments require the native
+  `Validation failed for tool "ask_user_question"` envelope identifying the
+  empty `questions` array and its minimum-item violation (not a literal
+  `cancel`/`error` keyword). Codemode requires that same validation envelope
+  inside its caught `QUESTION-ERROR` output.
+- `codemode`, `codemode-invalid`: explicit `builtin:codemode`, actual nested
+  question tool; require native `parentToolCallId` execution evidence.
+- `non-ui`: actual installed package's no-UI execution backstop, via native
+  codemode. Its reconciler normally strips the tool, so a private fixture uses
+  public `setActiveTools()` after reconciliation to reactivate that same
+  registered real tool for this case only. No replacement/wrapper execute
+  function is installed. Require the real `UI not available` result, native
+  nested completion event, refresh and completed ordinary work.
+- `edits`, `clear`, `coalesce`, `operator-coalesce`: A→B→C successful saves
+  during a gated already-running tool, clear without a model instruction,
+  question/save coalescing and queued operator/save/question coalescing.
+- `rollback`: unchanged close and nonzero exit after writing a failed draft.
+- `lifecycle`, `warming`: idle pending save through reload/resume/compaction;
+  actual scheduled idle cache-warmer replay with a local model's declared
+  lifetime/economics. Summary/warming requests must not consume pending state.
+  Scripted usage here is scheduler input, **not** live-cache evidence.
+- `tool-config`, `message-config`: one exact selector addition; the latter
+  distinguishes a real model-visible custom message from a UI notification.
+- `empty-config`, `invalid-config`, `default-exclusions`: disabling event
+  triggers, invalid-selector warning with ordinary completion, and no default
+  subagent/result/notification/custom-message refresh. Empty lists are valid
+  and need no warning; invalid lists warn and disable event refreshes.
+- `historical`: consume the saved pending value first, persist a real native
+  custom message, reload, then issue only a real extension-origin request.
+  Require exactly one completed request with zero projections and the custom
+  history present. No intervening operator delivery can mask replay refresh.
+- `independence`, `unavailable`: unrelated sessions remain empty, corrupt
+  saved state warns/omits stale text then recovers through the actual editor.
+  The legacy journey separately covers missing state, tree/fork/clone and
+  TUI/print/JSON/RPC recovery.
+
+Every selective work scenario records real provider counts before/after.
+One initial operator request yields a root batch, one handoff request and one
+ordinary tool continuation: exactly three work requests and a visible completed
+response. While a questionnaire tab or gate is unresolved, no request may be
+added. The handoff must contain every root result before exactly one fresh
+projection, when a selected cause applies. With unchanged wording the initial
+operator projection remains at its canonical position; the fresh one is after
+the complete batch. Ordinary continuation carries these positions without
+adding another projection. Edits retire A/B and deliver only C; clear removes
+all projections without a clear instruction. Each request is inspected for exact
+multiline text, not inferred from events/status. Provider completion depends on
+completed expected tool results, not unconditional ACK responses.
+
+The installed question entry is
+`/Users/cartwmic/.pi/agent/npm/node_modules/@juicesharp/rpiv-ask-user-question/index.ts`.
+Its version and source-tree fingerprint are printed and checked after the run.
+Question acceptance uses actual PTY key input and returned answer text, not a
+replacement question fixture or per-tab RPC walker. Fixture tools/custom
+messages only exercise explicit non-question selectors and ordinary work.
+
+## Source/config staging and privacy
+
+Both journeys copy the real source extension and its inspect-prompt editor
+helper dependency into temporary directories. `config.json` is placed **beside
+the source-loaded index.ts**, where production `import.meta.url` resolves it.
+The legacy journey uses `create_config.json`; selective cases supply explicit
+private configs. No production test-only config hook or measured-tree config is
+created. All agent/project/editor/session/provider files are temporary. The
+saved-session inspector rejects reminder messages and origin markers, checks
+unchanged original user text, and reads private current-value sidecars. Failure
+diagnostics contain only fixture text. Use `PYTHONDONTWRITEBYTECODE=1` to keep
+imports from leaving bytecode in the measured tree.
+
+`source_proof.py` inspects the effective config before source-state reads. It
+allows only the inspected password-manager pre-hook with `op` already present;
+unknown hooks or missing `op` block rather than install software. It checks all
+three profile mappings, independently reads rendered and live touched files,
+prints hashes rather than content, and runs the exact source-scoped targeted
+`apply --dry-run --verbose` **without force or apply**. Unexplained TTY/merge
+failure stays blocked; it is not permission to force. Preview includes the
+extension's runtime/README/config and origin-patch README, not global onchange
+execution. Destination-only `create_` config drift is preserved, not reset.
+
+## Separate live-cache duty
+
+This offline proof does not establish genuine provider cache reads or spend.
+`cache_proof.py` targets exact Pi **0.99.2** and
+`openai-codex/gpt-6.1-sol` (thinking low). The final driver, not the worker,
+owns billable execution on the stable tree:
 
 ```sh
-python3 tests/standing-reminder/isolated_pi.py -- \
-  python3 tests/standing-reminder/feasibility.py
-python3 tests/standing-reminder/isolated_pi.py -- \
-  python3 tests/standing-reminder/feasibility.py --extension dot_pi/private_agent/extensions/standing-reminder/index.ts
+# cache-self: no requests or credentials required
+PYTHONDONTWRITEBYTECODE=1 python3 tests/standing-reminder/cache_proof.py --self-test
+
+# Offline real-Pi loadout regression: private auth, forced exit before HTTP
+PYTHONDONTWRITEBYTECODE=1 python3 tests/standing-reminder/isolated_pi.py -- \
+  python3 tests/standing-reminder/cache_proof.py --loadout-test
+
+# cache-live: explicitly approved driver cap; capture stdout outside source
+PYTHONDONTWRITEBYTECODE=1 python3 tests/standing-reminder/isolated_pi.py -- \
+  python3 tests/standing-reminder/cache_proof.py --cap-usd 250
 ```
 
-The runner privately stages and patches Pi, checks both desktop profile values,
-reapplication, Termux exclusion, and coexistence with
-`headless-extension-drain`, then sets `PI_BIN` for the child scenario. It never
-writes to installed Pi. The probe contrasts identical cross-origin text, a
-canceled same-text extension input, prompt-template expansion, extension
-follow-up, and tool-only continuation while the scripted editor closes during
-streaming.
+The backend rejects `max_output_tokens`; an artificial `maxTokens: 256`
+override is not an enforced limit. No model override or request-field injection
+is used. Instead preflight requires the isolated registry's native metadata:
+272,000 context and 128,000 output tokens. The owner's 872,000-context
+`models.json` override is not copied into the private fixture. Reservation relies on declared provider/model capacity,
+not short-output instructions or a universal cloud guarantee. Missing or changed
+native metadata blocks. Offline self-tests do not establish a measured live
+outcome; retain the actual captured comparison before claiming cache evidence.
 
-The cache driver's first on-arm sidecar creation, cache-counter rejection,
-and ten-call reserve regressions run without a provider:
+Both arms share the same **300-row cold seed** (reduced from 400 after the
+measured gate continuation exceeded the unchanged 40,904-byte guard). This
+changes fixture size only, not acceptance or capacity reservation.
+The matched off/on arms each have six stages: cold, ordinary warm, unchanged
+ordinary, deterministic question completion, gated private saved-value change,
+and edited ordinary continuation. Each stage requires one fixture tool and one
+completed ACK: **24 provider calls maximum**. The on arm starts cold without a
+reminder, creates its first sidecar, then restores the active value. Ordinary
+continuations preserve the projection; question completion adds exactly one.
+The finite gate writes only current value/pending state; the next invocation
+restores the changed value. This live fixture does **not** prove editor/UI
+mid-turn saving: the selective journey separately drives actual UI semantics.
+No saved reminder
+messages are replayed to improve counters.
 
-```sh
-python3 tests/standing-reminder/cache_proof.py --self-test
-```
+Each call reserves 272,000 context tokens and 128,000 output tokens at the
+maximum reported input/cache/output rates across all tiers. At $5/M input and
+$15/M output the 24-call reserve is **$78.72** ($3.28 per call); actual native
+rates determine preflight's reservation, which must fit the finite explicit cap.
+The driver cap is **$250**, not a universal maximum. Before every stage, actual
+spend plus all remaining calls' worst-case reservation must fit that cap.
+The CLI uses `--tools cache_ordinary,ask_user_question,cache_gate`, not
+`--no-tools` (which disables extension tools too). A pre-provider hook refuses
+anything other than exactly those three function declarations. The offline
+real-Pi loadout regression proves both the allowlist and the old disabled-tool
+refusal, exiting before HTTP; it uses privately copied auth to construct the
+Codex payload without printing credentials. Retry, idle warming and compaction are disabled. Child guards exit before excess
+requests or tool deviations (ordinary handler exceptions would not suffice),
+check each response's identity, native token ceilings and spend before continuation,
+and enforce a 40,904-byte transcript ceiling with framing/tool headroom. These
+checks reserve native capacity; they do not claim wire-enforced short output.
 
-The separate live cache proof uses the same isolated patched Pi copy and only
-the exact `openai-codex/gpt-6-sol` model. This is the frozen cache-live
-command; it may make billable requests, so run it only for the final owner
-validation:
+Credentials are read only from the selected provider entry of the owner's Pi
+`auth.json`, copied into a 0700 temporary agent directory with a 0600 auth file,
+and never printed. HOME, settings, adjacent active reminder config,
+source extension/editor dependency and sessions are private temporary copies.
+Refresh cannot modify the owner's credentials. `isolated_pi.py` privately
+patches the same installed package and verifies installed fingerprints unchanged.
 
-```sh
-python3 tests/standing-reminder/isolated_pi.py -- \
-  python3 tests/standing-reminder/cache_proof.py --cap-usd 5
-```
-
-The live cache driver remains pinned to Pi 0.87.1 and is blocked on 0.99.1.
-The non-billable compatibility proof does not revalidate cache reuse. Port and
-approve the live driver separately before running this command on 0.99.1.
-
-This frozen command enforces a `$5.00` total reported-spend cap for the exact
-`openai-codex/gpt-6-sol` model. The run reserves at most `$2.28840` for ten
-bounded calls at the approved maximum rates; `--cap-usd` may lower but never
-raise the script's `$5.00` hard cap. The script refuses to run without the
-staged origin patch, applies private temporary 45,000-input/256-output-token
-limits, reserves worst-case cost for every request before starting, checks
-reported spend after each response, and requires usable
-input/cacheRead/cost counters plus nonzero warm and measured cache reads in both
-arms. Missing or zero aggregate cache evidence leaves the criterion unproven
-and blocks the comparison; prefix/request-shape evidence is not a fallback.
-
-## Proven boundary
-
-The chezmoi runtime bridge carries `input.source` on the actual user-message
-object through Pi's queue and expansion path, then exposes it as optional
-`message_start.source` to extensions. It uses object identity, not message text
-or queue position; the message content and persisted transcript are unchanged.
-The real-Pi journey requires interactive provenance for queued steering and a
-prompt-template-expanded message, extension provenance for identical text,
-and no processed message for a canceled neighbor. It verifies the pre-processing
-edit/status cue, old in-flight snapshot, new queued-message reminder, failed
-editor rollback on the next request, missing-sidecar warning without stale
-delivery, provider-boundary reminder pairing, and complete output catch-up
-after the editor closes during streaming. Anchor drift, missing origin, or a failed path blocks
-the proof. Re-run after every Pi upgrade.
+Output retains exact runtime/model/workload/reserve, per-call input/cacheRead,
+output/cacheWrite/cost, late full request snapshots and genuine zero-cache misses.
+Usable finite nonnegative integer token counters and finite nonnegative spend
+are mandatory; each arm must have some nonzero cacheRead during ordinary warm
+stages. Missing counters or an unwarmed arm block: no prefix-only substitute,
+universal hit ratio, or reliable-cache claim. Keep captures outside Git/source.
+Do not infer cache acceptance from scripted counters or prefix snapshots.
+No live chezmoi apply, installed changes, Git staging/commit/push or persistent
+user-state deletion is part of this proof. Focused self-tests do not replace
+the full matrix or live-provider proof.

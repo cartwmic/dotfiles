@@ -112,7 +112,9 @@ def main() -> int:
         require(bool(node), "Node.js is required to apply the isolated Pi patch")
         source = installed_package(args.source_package)
         version = json.loads((source / "package.json").read_text(encoding="utf-8"))["version"]
+        require(version == "0.99.2", f"isolated proof requires exact Pi 0.99.2, found {version}")
         source_fingerprint = package_fingerprint(source)
+        print(f"Installed Pi {version} fingerprint: {json.dumps(source_fingerprint, sort_keys=True)}", flush=True)
         with tempfile.TemporaryDirectory(prefix="pi-standing-origin-") as temporary:
             stage = Path(temporary) / "pi-coding-agent"
             shutil.copytree(source, stage, symlinks=True)
@@ -155,8 +157,7 @@ def main() -> int:
             })
             print(f"Using isolated Pi {version} from {stage}", flush=True)
             child = subprocess.run(child_command, env=child_env, text=True)
-            if child.returncode != 0:
-                return child.returncode
+            require(package_fingerprint(source) == source_fingerprint, "installed Pi dist changed during child validation")
 
             # A changed upstream anchor must fail closed in the isolated copy.
             changed_stage = Path(temporary) / "changed-anchor-package"
@@ -190,7 +191,7 @@ def main() -> int:
         require(package_fingerprint(source) == source_fingerprint, "installed Pi dist changed during isolated validation")
         print("PASS: installed Pi files remained unchanged")
         print("PASS: isolated package checks, desktop/Termux profile gate, and sibling-patch composition")
-        return 0
+        return child.returncode
     except Exception as exc:
         print(f"FAIL: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1

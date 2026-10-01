@@ -1,136 +1,103 @@
 # Standing reminder
 
-## Overview
-
-`standing-reminder` keeps one editable, multiline reminder for the current Pi
-session. Use it for an instruction that should stay salient while you work.
-Permanent rules belong in agent instructions; track task progress elsewhere.
-
-## Setup
-
-The extension and its `standing-reminder-origin` Pi patch deploy together on
-`personal` and `axon-work-computer`. Termux excludes `.pi`. From the chezmoi
-source root, review the full apply before installing; it runs the Pi patch
-onchange script. The delivered behavior was tested with Pi 0.99.1. A later
-Pi version needs updated patch anchors and version-pinned proof before the
-isolated journey can validate it.
-
-```sh
-chezmoi --source "$PWD" apply --dry-run --verbose
-PI_PATCHES_ROOT="$PWD/dot_local/share/pi-patches" chezmoi --source "$PWD" apply
-pi
-```
-
-Pi needs an authenticated, usable model for a real request. For a built-in
-provider, use `/login` to sign in and `/model` to select one; compatible custom
-endpoints follow Pi's [model setup](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md).
-The extension supplies no
-model or credentials. In the Pi terminal UI, run `/reminder`, save the editor
-file, then send a message. The widget previews the saved reminder and the next
-processed operator message receives it. The installed Pi package must have the
-origin patch; without known input provenance, delivery fails closed with a
-warning.
+One exact multiline reminder belongs to the current Pi session. Permanent rules
+belong in agent instructions. The reminder is advisory, not enforcement.
 
 ## Usage
 
-- `/reminder` opens Pi's configured external editor. It works while idle or
-  while a response is streaming. Pi temporarily gives the terminal to the
-  editor and redraws accumulated output when the editor closes.
-- A successful close commits the editor's final contents exactly, including
-  line breaks and spacing. Intermediate writes remain drafts until exit status
-  is successful. An unchanged close is view-only; saving an empty file clears
-  the reminder. A canceled or unsuccessful editor keeps the previous value and
-  warns.
-- `/reminder-clear` clears it without starting an agent request.
-- The status widget shows a short preview. A saved edit or clear shows that it
-  applies to the next request until Pi processes an eligible operator message.
+- `/reminder` opens Pi's external editor in the TUI, including during streaming.
+  A successful changed close saves the exact final contents. Intermediate writes
+  are drafts; failed/cancelled closes preserve the previous value. An unchanged
+  close is view-only. Empty contents clear the reminder.
+- `/reminder-clear` clears without starting a request.
+- The compact widget previews the current value. A saved edit or clear remains
+  pending for the **next normal request**, not just the next operator message.
 
-These controls do not add chat bubbles or rewrite a user's request. The
-reminder is advisory; the extension does not detect conflicts or enforce
-compliance.
+No control forces a turn, aborts a tool, or restarts a response. A request already
+in flight cannot be changed. If work ends before another request, the saved
+change waits. Editor terminal handoff/redraw behavior remains unchanged.
 
-## Delivery and lifetime
+## Delivery
 
-Pi reads the saved value when it processes an operator-submitted message,
-including queued steering. That request gets one hidden context projection
-with the exact saved wording. Ordinary tool continuations carry the existing
-projection; an extension-generated follow-up does not get a new one. A
-successful edit saved during an active response takes effect for the next
-operator message processed: already-started requests keep their original
-snapshot, while queued steering receives the new text and no superseded
-extension-owned projection. The status preview shows the saved value and an
-explicit next-request cue until delivery. A compaction during ongoing work can
-remove that request's projection; Pi does not insert another reminder into
-that work's next model request, and the next operator message gets the living
-value again. The configured editor can remain open while Pi processes queued
-work; its accumulated output is redrawn after the editor exits.
+Known interactive/RPC operator messages, including queued steering, each receive
+one hidden projection with the latest exact wording. Extension-origin messages
+are not operator input. Missing/unknown provenance warns and omits that trigger;
+text is never used to infer origin. Equal timestamps are paired by occurrence.
+The `standing-reminder-origin` patch is required for operator provenance.
 
-The current value belongs to the saved session. It survives `/reload`,
-compaction, and resuming the same session. `/tree` keeps that value unchanged.
-`/fork` and `/clone` copy the value current at creation
-time into a separate session; later edits do not cross between sessions. New
-sessions and delegated child agents do not inherit it.
+A selected completed tool result queues a refresh, including native nested
+completions and error results. The refresh is projected after the complete batch
+at the next ordinary context assembly, not when a questionnaire tab changes.
+A changed save independently queues the latest value at that same boundary.
+Multiple saves/results coalesce; fresh operator delivery satisfies coincident
+causes while preserving one projection per distinct operator input.
 
-The extension stores only current state in a private sidecar under Pi's
-session directory (`standing-reminder/<session-id>.json`, mode `0600` in a
-mode `0700` directory). Reminder contents are not in this public source tree.
-Treat Pi session storage as private: the sidecar contains the reminder in
-plain text. If saved state is unreadable or missing after a session previously
-used the extension, Pi warns and completes the request without sending stale
-text. A missing sidecar on a marked saved session is covered separately from
-corrupt state. In print/JSON modes the warning goes to stderr; RPC sends it
-through the extension UI notification protocol. Noninteractive modes deliver
-reminders but do not open the editor. If an external editor exits unsuccessfully
-after writing its draft, the previous value remains active and reaches the next
-model request.
+Edits retire superseded owned projections at the next normal request. Clears
+remove them without a model-visible clear instruction. Unchanged ordinary tool
+continuations reuse the same in-memory projection objects and canonical anchors;
+selected refreshes may append a fresh projection. No stable system prefix or
+ordinary conversation content is rewritten. Idle cache warming is excluded.
+Compaction summaries bypass Pi's normal context hook; compaction drops anchors
+without consuming pending saves or independently refreshing the reminder.
 
-The desktop-profile runtime patch at
-`dot_local/share/pi-patches/standing-reminder-origin/` carries each submission
-source on the exact user-message object and exposes it
-as `message_start.source`. This extension admits only `interactive` and `rpc`,
-ignores known `extension` messages, and never pairs events by submitted text.
-The isolated real-Pi journey also checks a mixed-origin `steeringMode=all`
-batch: both queued operator messages must receive one reminder in the same
-provider request, while the extension-origin steering message receives none.
-If the patch is absent or the origin is missing or unknown, it warns and omits
-the reminder. The patch preserves provenance through prompt expansion and
-queued steering; run the isolated Pi proof again after Pi upgrades. Chezmoi's
-Pi-patch onchange applies the bridge alongside this extension on desktop
-profiles.
+## Configuration
 
-## Validation
+`create_config.json` seeds `~/.pi/agent/extensions/standing-reminder/config.json`
+once; subsequent local edits are preserved by chezmoi. Defaults:
 
-From the chezmoi source root, run the focused tests and the isolated real-Pi
-journey. It stages and patches a private copy of the installed Pi package,
-then drives the terminal UI with a scripted provider and editor. It makes no
-live model request and does not edit installed Pi. The journey checks editor
-save/rollback during streaming, queued input origin, continuation and
-compaction boundaries, session copy/resume, and failed-state warnings.
+```json
+{"triggers":["tool-result:ask_user_question"]}
+```
+
+Add one exact `tool-result:NAME` or `message:CUSTOM_TYPE` entry to select another
+tool completion or model-visible custom message. No wildcard, UI-notification,
+usage, or default subagent trigger exists. Custom messages are counted by type,
+timestamp and occurrence, with existing history baselined at startup, tree
+navigation and compaction using `SessionManager.buildSessionContext().messages`,
+not raw branch entries (`custom_message` is normalized to role `custom` by Pi).
+Historical replay is not a fresh handoff.
+
+Missing config uses the default. `{"triggers":[]}` disables event refreshes,
+not operator/edit delivery. Invalid JSON, shape or selectors warn and disable
+only event refreshes. Config is loaded at session start; use `/reload` after
+changing it. It does not block ordinary work or reminder editing.
+
+## Storage and lifecycle
+
+Only current reminder/pending state is saved in the private sidecar
+`standing-reminder/<session-id>.json` under Pi's session directory (0600 file,
+0700 directory). A non-text restore marker may be saved in the session. There
+are no saved reminder messages, reminder history, or durable trigger backlogs.
+Treat sidecar plaintext as private.
+
+Reload/resume preserve the current value and pending save/clear. `/tree` keeps
+that value and rebaselines event admission. `/fork` and `/clone` copy current
+state into independent sessions, not runtime causes. Unrelated/child sessions
+start empty. Missing marked or unreadable state warns and proceeds without stale
+text; a successful `/reminder` save replaces unavailable state. Noninteractive
+modes deliver but do not open an editor; warnings use stderr or RPC UI routing.
+
+## Setup and validation
+
+Personal and axon-work-computer profiles deploy the extension and origin patch
+together; Termux excludes Pi. Preview source and obtain separate approval before
+live apply. Do not hand-edit installed Pi.
 
 ```sh
 node --test dot_pi/private_agent/extensions/standing-reminder/index.test.ts
-python3 tests/standing-reminder/isolated_pi.py -- python3 tests/standing-reminder/proof.py
-chezmoi --source "$PWD" apply --dry-run --verbose --force
 ```
 
-The source-only proof guide at `tests/standing-reminder/README.md` gives the
-full check list. The separate live cache proof uses `openai-codex/gpt-6-sol`
-and may spend up to $5; run it only with owner approval. It remains pinned to
-Pi 0.87.1 and is blocked on 0.99.1 until separately ported and approved. Cache
-reuse was not revalidated by the non-billable compatibility repair. The command and budget
-are in the proof guide.
-
-## Troubleshooting
-
-- A warning about unknown message origin means the installed Pi origin patch
-  is missing or no longer matches Pi. Review the patch under
-  `dot_local/share/pi-patches/standing-reminder-origin/`. The isolated journey
-  validates a private copy; it does not repair installed Pi. After source
-  anchors and the version-pinned proof pass for the installed Pi version, an
-  owner-approved full `chezmoi apply` runs the version-sensitive patch onchange
-  script. A separate worktree needs the patch-root choice from repo-root
-  `AGENTS.md`. The request proceeds without a reminder until repaired.
-- A missing or unreadable marked sidecar leaves the reminder unavailable.
-  Run `/reminder` to save a new value; Pi does not send stale text.
-- A canceled or unsuccessful editor leaves the previous reminder active. Check
-  the configured editor command before reopening `/reminder`.
+Focused tests are internal regression evidence only. The outer proof uses
+isolated Pi **0.99.2**, a scripted provider and the actual question UI, including
+builtin codemode nested/error paths. A separate matched live comparison uses
+`openai-codex/gpt-6.1-sol`. One designated proof owner runs the complete matrix
+on the stable tree; live requests require explicit approval and a finite cap.
+The cache driver reserves native context/output capacity and stages private
+configuration. The backend rejects the artificial short-token override; no
+enforced 256-token ceiling is claimed.
+See `tests/standing-reminder/README.md` for commands, rate-dependent
+reservation and the distinction between deterministic live fixtures and actual
+question/editor UI proof. No live apply or Git commit is included. Genuine
+provider input/cacheRead counters are required; prompt shape alone is not cache
+proof. No universal cache hit guarantee applies, especially after edits,
+refreshes or compaction.

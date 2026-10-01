@@ -21,9 +21,17 @@ provenance needs repair; leave installed Pi files alone. The extension needs
 messages. Missing or unknown provenance must warn and omit the reminder;
 message text cannot establish origin.
 
-Keep one current value per saved session. Capture it when Pi processes an
-operator message, including queued steering. Tool steps, extension follow-ups,
-and within-work compaction do not create another delivery. `/tree` keeps the
+Keep one current value per saved session. Snapshot latest wording at normal
+context assembly for operator input, pending edits/clears or selected events.
+Default refresh is only tool-result:ask_user_question, including nested/error
+execution ends. Ordinary tools and UI notifications do not refresh. Exact
+message:CUSTOM_TYPE selectors use occurrence baselines at startup/tree/compaction.
+Baseline `SessionManager.buildSessionContext().messages` with the per-call ctx:
+raw native `custom_message` entries are not `message` entries with role `custom`.
+Preserve normalized type/timestamp/count keys; historical replay cannot refresh.
+Idle warming and compaction summaries are not delivery. Superseded revision
+anchors retire at the next normal request; no saved reminder messages or durable
+trigger backlog is allowed. `/tree` keeps the
 current value; `/fork` and `/clone` copy it into independent sessions. Editor
 writes are drafts until a successful close; failed or canceled edits leave the
 old value active. A missing marked sidecar or unreadable state must warn and
@@ -55,14 +63,16 @@ edits, run `git diff --check` and the chezmoi checks above. The
 policy-document deterministic local-reference gate checks local Markdown
 links when that workflow is used. Rerun behavior tests if the prose changes
 a behavior claim.
-The separate cache proof uses `openai-codex/gpt-6-sol` and can spend up to $5.
-Run it only with owner approval when cache behavior needs fresh proof. The
-non-billable isolated proof pins Pi 0.99.1, and the origin patch uses exact
-anchors. The separate billable cache proof remains pinned to 0.87.1; do not
-relax its gates or claim cache reuse on 0.99.1 without a new approved proof. After
-a Pi upgrade, review/update the patch anchors and version-pinned proof first;
-then run the isolated journey. A version-blocked run proves nothing about the
-upgraded Pi.
+The proof pins Pi 0.99.2 and uses `openai-codex/gpt-6.1-sol` for separate
+live cache evidence. After upgrades, review native nested execution/error paths
+and exact origin-patch anchors before changing the pin; unit tests do not prove
+runtime compatibility. Workers run assigned focused checks. One designated
+proof owner runs the full stable-tree matrix and owner-approved billable proof.
+`cache-self` is offline; `cache-live` requires a finite explicit cap and
+reserves native capacity. The backend rejects the artificial short-token
+override; do not claim an enforced 256-token ceiling. See the proof README for
+commands and the rate-dependent reserve. Live deployment and Git operations
+remain separately gated.
 
 ## Completion and handoff
 
