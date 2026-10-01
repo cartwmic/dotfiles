@@ -7,10 +7,31 @@ No existing stored workflow, profile, evaluation or capture is rewritten.
 ## Observation (T02)
 
 `loop-engine --json show RUN --view action|status|full` defaults to action.
-`--compact` aliases status, including JSON. Action/full arm only after loading
-current instructions. Status uses `Persistence.load_status_data`, never
-`load_show_data`; unsupported adapters refuse, not fall back. SQLite uses a
-consistent read transaction with no observation update. T02 owns CLI routing.
+`--compact` aliases status, including JSON. Action arms only after the run
+identity and current instructions are available; full keeps the complete
+arming projection. Status is non-arming and uses a separate read-only SQLite
+connection. The CLI starts its deadline at command entry, gives bounded SQLite
+work 1.1 seconds, and returns a useful partial/unavailable envelope on lock,
+missing index or deadline rather than retrying with a full scan. Indexed reads
+sample at most 20 invocation summaries and 200 current-subject assignments.
+The process-to-last-byte public target remains under two seconds. A status read
+never invokes a provider or Dagu; it samples existing local graph status files
+best-effort. `invocation-progress` remains the separate detailed graph/trace
+query. T02 owns CLI routing.
+
+Machine and human status use the same provider-neutral assignment facts. Frozen
+caller/plan-graph labels are `{assignment_id,title,role}` and are joined to
+invocation and subject revision by stable IDs. Current-revision attempt and
+failure totals come from indexed assignment/attempt records; older revisions
+remain reachable through targeted reads. Legacy completed invocations without
+indexed assignment facts make the assignment lane explicitly partial; no
+migration/backfill is performed. Execution, output conformance and acceptance
+are separate lanes. Quiet or missed samples stay unknown. A local
+Dagu step sample may report queued/running/correcting/finished helper progress,
+but does not establish output validity or semantic acceptance. Completion and
+worker errors preserve their original capture locators. Action exposes current
+duties, available routes and focused locators; provider-fed helpers still use
+`show --view full` unchanged.
 
 `State.action_guidance` is optional opaque JSON, omitted for legacy states.
 Providers author normalized obligations and repair text at describe time. Core
@@ -22,6 +43,20 @@ sequence order, including exact transition, feedback, sequence and occurred_at.
 `latest_evaluations` keeps its existing reduction and identities. Legacy full
 JSON decodes with an empty history; that does not establish completeness.
 Overrides remain separate history, never synthetic allows.
+
+## Targeted reads (T02)
+
+`loop-engine read RUN --kind history|delta|assignment|error|attempt|stdout|stderr`
+reads durable sequence/history and indexed assignment facts without materializing
+full show. Pages report exact total, limit, cursor/next cursor and truncation
+when the selected data is indexed; legacy unindexed assignments return an
+explicit partial envelope with `total: null` and an unindexed-source count.
+History/delta use semantic sequence cursors. Assignment/error/attempt pages use
+stable assignment and optional invocation identities. Original streams require
+an invocation, assignment and attempt; stdout/stderr bytes are returned as exact
+hex with total byte length, offset, next offset and truncation. Unavailable,
+changed or out-of-origin streams fail visibly. `show --view full` remains the
+full-input path for helpers and consumers that require complete context/history.
 
 ## Capture (T03)
 
@@ -182,7 +217,12 @@ working-tree and single-snapshot contract.
 Publication checks use the range contract. For each ref update, the checker
 enumerates every commit reachable from the new tip and absent from the old tip,
 including merged branches, and validates each introduced commit against every
-parent. A new ref with a zero old tip traverses its reachable history. The
+parent. Coverage timing is tip-only (LE-133): snapshot-state findings on
+intermediate introduced commits are retained as visible `note:` diagnostics
+when the pushed tip tree is independently clean, because eligible citations
+may land later in the same range. Per-commit continuity findings and any
+acquisition, state-capture, or enumeration failure still block wherever they
+appear. A new ref with a zero old tip traverses its reachable history. The
 checker acquires missing ancestry from the configured source remote without
 moving HEAD, local branches, the index, or the worktree. Missing ancestry,
 failed acquisition, or incomplete enumeration remains incomplete and returns
@@ -222,13 +262,33 @@ not stalled work control. Polling defaults to one second (`--poll-seconds N`).
 rendering goes to stderr. Both follow until interrupted; neither cancels observed
 work. A pipe consumer should read until the selected source's `event` is
 `completion` or `attention`, then inspect `boundary.reason` and the separate
-`workflow`, `helper`, `worker`, `conformance`, and `judgment` lanes. `source` names
+`workflow_lane`, `execution`, `worker`/`worker_lane`, `conformance`, `acceptance`,
+`evidence`, `freshness`, and `uncertainty` lanes. The existing `workflow` and
+`helper` fields remain raw source detail for compatibility. `source` names
 `run:ID` or `capture:ABS`; packets include sample time and available invocation,
 attempt, receipt, history sequence/time and engine/catalog locators. Completion is
-selected execution/workflow termination, **not semantic approval**. One peer's
-completion is never promoted to another source. Unchanged boundary identities are
-not repeatedly notified. Restart rereads retained evidence and can notify again;
-there is no exact-once/replay contract or new event journal.
+selected execution/workflow termination, **not semantic approval**. The
+`acceptance` lane becomes `accepted` or `rejected` only from one explicit,
+attributed decision: a run/show context record may use `data.acceptance` or
+`data.judgment` with an accepted/rejected `state` or `result`, non-empty
+`source_locators`/`evidence`, and a `provider` or `attesting_driver`; an
+`--observation` file supplies the same decision shape alongside its required
+`run_id`, `sampled_at_ms`, and `attesting_driver`. An optional target must match
+the observed run and recorded invocation. Missing, malformed, stale/unknown,
+mismatched, multiple, or conflicting decisions remain `unknown`. Workflow
+allow/deny, process exit, helper/lifecycle completion, worker output, and
+mechanical conformance stay separate and cannot populate this lane. One peer's
+completion is never promoted to another source. Unchanged source packets produce
+no repetitive snapshot/owner heartbeat. Restart rereads retained evidence and can
+notify again; there is no exact-once/replay contract or new event journal.
+
+The `owner_update` field is assistant-owned conversation guidance, not an engine
+chat channel. After a meaningful packet change, including a newly explicit
+accepted, rejected, or unresolved decision, the coordinating assistant reads it
+and posts `observed_change` plus `needed_action_or_decision` in the active Pi
+conversation before its first later wait, inspect, or help decision. Machine
+completion/attention is not that owner update. `next_action` is descriptive and
+never authorizes workflow mutation.
 
 Capture matrix completion requires completed state, matching nonzero selected and
 expected row counts, identified successful receipts and intact streams. Running
@@ -245,12 +305,20 @@ produce attention. `--attention-seconds N` also emits a source-identified elapse
 observer deadline; it is not ETA and never authorizes retry or cancellation.
 Sampling and read timeouts can delay a deadline notification.
 
+`invocation-progress` is a linked detail read, not workflow authority. Its
+`visibility` object exposes the same execution, worker, conformance, acceptance,
+evidence, freshness, uncertainty and next-action residuals; worker output and
+semantic acceptance remain unknown until the driver reads the retained capture
+and provider evidence. The graph's `reaped` state is helper liveness only.
+
 Optional repeatable `--observation ABS` attaches driver-supplied JSON containing
-`run_id`, `sampled_at_ms`, and nonempty `attesting_driver`, plus opaque supplied
-content. Matching observations appear attributed and dated in the judgment lane;
-current applicability is unknown. Mismatched/malformed observations remain unknown.
-They do not override engine evidence or create completion. Deterministic observation
-neither interprets provider verdict semantics nor makes model calls.
+`run_id`, `sampled_at_ms`, and nonempty `attesting_driver`, plus the explicit
+accepted/rejected decision shape described above. Matching observations appear
+attributed and dated in the judgment lane; current applicability is still an
+external driver/provider decision. Mismatched, malformed, stale, or conflicting
+observations remain unknown. They do not override engine evidence or create
+completion. Deterministic observation neither interprets provider verdict
+semantics nor makes model calls.
 
 ### Optional advisory summaries
 
@@ -289,9 +357,10 @@ timeouts and malformed output fail conformance. This shape check does not verify
 truth, grounding, or the validity of a correction.
 
 The flushed `summary` JSONL lane is advisory and separate from snapshot,
-completion and attention. It displays attempts, budget, input digest and the last
-usable summary; changed evidence or failures label that output older. Usage/cost
-are only the command's supplied values, otherwise unknown. No summary approves,
+completion and attention. It displays attempts, budget, input digest, selected
+source locators, retained attempt directory, freshness and the last usable
+summary; changed evidence or failures label that output older. Usage/cost are
+only the command's supplied values, otherwise unknown. No summary approves,
 advances, retries or cancels work. Each `attempt-NNNN` retains `command.json`,
 `stdin.json`, raw `stdout`/`stderr` and `exit.json`. Earlier attempts are not replaced.
 
@@ -303,6 +372,51 @@ summaries, not observation. A restart with an interrupted attempt lacking exit
 evidence disables further automatic summaries rather than risking overlapping
 calls or pretending an unknown exit succeeded. Its raw files and reserved call
 remain; stopping an observer is not cancellation of observed workflow work.
+
+## Software-change reconciliation and proof ordering
+
+For new `contract_version: 3` software-change profiles, the provider-owned
+`reconciliation` state follows implementation editing and precedes final
+implementation proof and review. Its unbound `reconciliation-draft` slot
+writes `reconciliation.json`; `reconciliation-ready` checks that decision. The
+state does not write implementation or validation reports, checkpoints, or Git
+commits. It records one conditional three-way result: sufficient existing
+wording, including a corrected implementation defect, needs no requirement
+amendment and retains live traceability when Bookends is enabled;
+change-specific proof needs no requirement amendment; and only missing or
+changed enduring meaning requires exact owner acceptance plus separately
+authorized application and commit. A justified no-document-change result is
+valid; a blocked result names concrete blockers.
+
+Bookends-enabled reconciliation reads the actual accepted requirement wording
+and every authoritative document it names, retains live traceability, and does
+not accept a related ID, topic, token, parser result, or command exit as
+semantic coverage. Bookends-disabled reconciliation checks relevant repository
+documents against approved intent and delivered behavior without PRD IDs,
+Bookends citations, candidate machinery, or overlay obligations. After the
+state, report finalization, repository checkpoint, any configured implementation
+review, validation, and final proof use the resulting document tree. If an
+authorized reconciliation edit makes an earlier report or checkpoint stale,
+both reviewful and reviewless graphs expose the check-free
+`revise-implementation` return to `implement`; invoke the existing bound
+implementation/report owner through its supported selection (or perform the
+unbound correction), preserve the authorized document edits, and return through
+`implementation-ready` without reapplying them before finalizing proof. This is
+not a new phase or report framework. Older stored runs retain their original
+graph and evidence.
+
+The coordinating assistant owns the owner-facing conversation update. After it
+reads existing status or monitor output and observes a meaningful development,
+it posts the concise observed change and needed action or decision in the active
+conversation before its next wait, inspect, or help decision. Machine
+completion/attention is not that update. Bound model-facing delivery uses the
+normal compact projection: meaningful IDs, ordering, assignments, instructions,
+declared output requirements, full routed history, and verification evidence
+remain available; only redundant engine-owned envelope material is omitted from
+the model-facing clone. The observed oversized setup path remains classified
+against LE-127 unless distinct semantics are demonstrated. Workers run focused
+checks, while the coordinating driver owns the complete final stable-tree
+matrix and repeats only checks invalidated by later changes.
 
 ## Fixture entry point
 
