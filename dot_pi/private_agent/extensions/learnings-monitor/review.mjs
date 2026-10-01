@@ -621,10 +621,24 @@ export function registerLearningsReviewCommands(pi, surface, sdk, uiDeps) {
 		let input = args.trim();
 		if (!input) {
 			if (!ctx.hasUI || !ctx.ui?.select) return "Usage: /learnings review | list [source|all] | patterns | keep | dismiss | promote | cleanup | on | off | focus | model | tools | flush | status";
-			const choices = ["Review", "Status", "On", "Off", "Focus", "Model", "Tools", "Flush", "Patterns", "Promote", "Cleanup"];
-			const choice = await ctx.ui.select("Learnings home", choices);
-			if (!choice) return;
-			input = choice.toLowerCase();
+			const choices = [
+				["Review", "Browse records; stage Keep, Dismiss or Promote."],
+				["Status", "Show health, pending activity, model and usage."],
+				["On", "Observe this session's future exchanges."],
+				["Off", "Stop the observer; preserve pending evidence."],
+				["Focus", "Set observer-only focus, or clear to reset."],
+				["Model", "Set provider/model-id, or follow the primary."],
+				["Tools", "Choose read,grep,find,ls, or default to reset."],
+				["Flush", "Process pending activity now."],
+				["Patterns", "Find cross-source themes; runs the model."],
+				["Promote", "Send a kept record to Hindsight: id [source-id]."],
+				["Cleanup", "Delete source notes and owned observer; confirms."],
+			];
+			const labels = choices.map(([name, help]) => `${name} — ${help}`);
+			const choice = await ctx.ui.select("Learnings home", labels);
+			const selected = labels.indexOf(choice);
+			if (selected < 0) return;
+			input = choices[selected][0].toLowerCase();
 			if (["focus", "model", "tools", "promote", "cleanup"].includes(input)) {
 				const value = await ctx.ui.input(`Learnings ${input}`, input === "cleanup" ? "Source id (blank = current)" : "Arguments");
 				if (value === undefined) return;

@@ -112,7 +112,10 @@ def run(scenario):
             h.turn(pi,'UI_BEFORE','PI_CASE:UI_BEFORE primary conversation before review')
             session=h.primary_session(sessions); sid=h.source_id(h.parse_session(session)[0]['id'])
             seed(root,sid); before=snapshot(root)
-            start=len(pi.text()); pi.sendline('/learnings'); pi.wait_text('Learnings',start=start)
+            start=len(pi.text()); pi.sendline('/learnings')
+            home=pi.wait_text('Cleanup — Delete source notes and owned observer; confirms.',start=start)[start:]
+            for name in ('Review','Status','On','Off','Focus','Model','Tools','Flush','Patterns','Promote','Cleanup'):
+                h.require(re.search(rf'{name} — \S',home),f'home lacks visible help for {name}','UI')
             key(pi,'\r','Esc Exit')
             scrolled=key(pi,'\x1b[6~','DETAIL_')
             h.require('DETAIL_6_23' in scrolled[-8000:],'PageDown did not expose later detail lines','UI')

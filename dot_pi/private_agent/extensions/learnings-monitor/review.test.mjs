@@ -93,6 +93,39 @@ async function invoke(pi, name, args, ctx, notices) {
 	return notices.slice(count).at(-1)?.message ?? "";
 }
 
+test("Learnings home explains each action without forwarding help as arguments", async (t) => {
+	const { store } = await fixture(t);
+	const pi = makePi();
+	const calls = [];
+	const { ctx, notices } = makeContext();
+	let choices;
+	ctx.ui.select = async (title, options) => {
+		assert.equal(title, "Learnings home");
+		choices = options;
+		return options.find((label) => label.startsWith("Focus — "));
+	};
+	ctx.ui.input = async (title) => {
+		assert.equal(title, "Learnings focus");
+		return "triage";
+	};
+	registerLearningsReviewCommands(pi, {
+		store,
+		controls: { async handle(args, context) { calls.push({ args, context }); return "Focus saved"; } },
+	});
+	await pi.commands.get("learnings")("", ctx);
+	assert.deepEqual(choices.map((label) => label.split(" — ")[0]),
+		["Review", "Status", "On", "Off", "Focus", "Model", "Tools", "Flush", "Patterns", "Promote", "Cleanup"]);
+	assert.ok(choices.every((label) => label.split(" — ")[1]?.trim()));
+	assert.deepEqual(calls, [{ args: "focus triage", context: ctx }]);
+	assert.equal(notices.at(-1).message, "Focus saved");
+	ctx.ui.select = async (_title, options) => options.find((label) => label.startsWith("Status — "));
+	await pi.commands.get("learnings")("", ctx);
+	assert.equal(calls.at(-1).args, "status");
+	ctx.ui.select = async () => undefined;
+	await pi.commands.get("learnings")("", ctx);
+	assert.equal(calls.length, 2, "canceling home must not invoke an action");
+});
+
 async function startServer(t, handler) {
 	const server = createServer(async (request, response) => {
 		const chunks = [];
