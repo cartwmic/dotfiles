@@ -8,7 +8,7 @@ import test from "node:test";
 import { reviewActivity } from "./core/index.mjs";
 import { createHindsightMemoryAdapter } from "./memory.mjs";
 import { createLearningStore } from "./store.mjs";
-import { registerLearningsReviewCommands } from "./review.mjs";
+import { createLearningsReviewCommands, createReviewDraft, registerLearningsReviewCommands } from "./review.mjs";
 import { piSourceId } from "./capture.mjs";
 
 function activity(sourceId, evidenceId, label = sourceId, summary = `Evidence ${evidenceId}`) {
@@ -88,7 +88,8 @@ function register(store, options = {}) {
 
 async function invoke(pi, name, args, ctx, notices) {
 	const count = notices.length;
-	await pi.commands.get(name)(args, ctx);
+	const operation = name.replace("learnings-", "");
+	await pi.commands.get("learnings")(`${operation === "review" ? (args === "patterns" ? "patterns" : "list") : operation} ${args === "patterns" && operation === "review" ? "" : args}`, ctx);
 	return notices.slice(count).at(-1)?.message ?? "";
 }
 
@@ -168,9 +169,7 @@ test("review rereads Markdown after an external edit during generated update; ke
 	const kept = await invoke(pi, "learnings-keep", `${initial.id} ${sourceId}`, ctx, notices);
 	assert.match(kept, /\[KEPT\]/);
 	assert.equal((await store.getRecord(sourceId, initial.id)).status, "kept");
-	assert.deepEqual([...pi.commands.keys()].sort(), [
-		"learnings-cleanup", "learnings-dismiss", "learnings-keep", "learnings-promote", "learnings-review",
-	]);
+	assert.deepEqual([...pi.commands.keys()], ["learnings"]);
 	assert.equal(surface.store, store);
 });
 
@@ -338,6 +337,141 @@ test("promotion previews exact current text, cancellation sends nothing, and fai
 	assert.equal(requests.length, 2);
 });
 
+test("structured choices are source-qualified, editable/resettable, and preserve fresh Markdown", async (t) => {
+	const { store } = await fixture(t);
+	const a = makeRecord("source-a", "e1");
+	const b = makeRecord("source-b", "e1");
+	b.id = a.id; // same opaque ID is legal in another source
+	const untouched = makeRecord("source-a", "e2");
+	untouched.id = "untouched";
+	await store.applyChanges("source-a", [a, untouched], { label: "source-b" });
+	await store.applyChanges("source-b", [b]);
+	const commands = createLearningsReviewCommands({ store, sourceStatus: async () => ({ ok: true, sourceId: "source-a" }) });
+	const current = await commands.query();
+	assert.equal(current.rows.length, 2);
+	assert.ok(current.rows.every((row) => row.sourceId === "source-a"));
+	const all = await commands.query({ scope: "all" });
+	const rowA = all.rows.find((row) => row.sourceId === "source-a" && row.id === a.id);
+	const rowB = all.rows.find((row) => row.sourceId === "source-b");
+	assert.equal(rowA.path, recordPath(store, "source-a", a.id));
+	assert.match(rowA.detail, /Recorded:/);
+	const draft = commands.createDraft();
+	draft.stage(rowA, "kept");
+	assert.equal(draft.togglePromotion(rowA), true);
+	draft.stage(rowA, "dismissed");
+	assert.equal(draft.get(rowA).promote, false);
+	assert.equal(draft.togglePromotion(rowA), false);
+	draft.reset(rowA);
+	assert.equal(draft.size, 0);
+	draft.stage(rowA, "dismissed");
+	draft.clear(); // Discard is memory-only
+	assert.equal((await store.getRecord("source-a", a.id)).status, "open");
+	draft.stage(rowA, "kept");
+	draft.stage(rowB, "dismissed");
+	assert.equal((await commands.query({ scope: { sourceId: "source-b" } })).rows.length, 1);
+	assert.equal((await commands.query({ scope: "all", status: "kept" })).rows.length, 0);
+	assert.equal(draft.size, 2, "scope/filter changes do not discard choices");
+	assert.equal((await createLearningsReviewCommands({ store }).query()).rows.length, 0, "no current source never silently selects all");
+	const untouchedPath = recordPath(store, "source-a", untouched.id);
+	const untouchedBefore = await fs.readFile(untouchedPath, "utf8");
+	const fresh = (await fs.readFile(rowA.path, "utf8")).replace(a.observation, "Fresh operator body");
+	await fs.writeFile(rowA.path, fresh);
+	const result = await commands.apply(draft);
+	assert.equal(result.errors.length, 0);
+	assert.equal(result.applied.length, 2);
+	assert.equal(draft.size, 0);
+	assert.equal((await store.getRecord("source-a", a.id)).observation, "Fresh operator body");
+	assert.equal((await store.getRecord("source-a", a.id)).status, "kept");
+	assert.equal((await store.getRecord("source-b", a.id)).status, "dismissed");
+	assert.equal(await fs.readFile(untouchedPath, "utf8"), untouchedBefore);
+	assert.deepEqual((await store.getRecord("source-a", a.id)).evidence, rowA.record.evidence);
+	assert.equal((await store.getRecord("source-a", a.id)).recordedAt, rowA.record.recordedAt);
+});
+
+test("structured promotion uses fresh exact source text after all local writes; Dismiss sends nothing", async (t) => {
+	const { store } = await fixture(t);
+	const a = makeRecord("source-a", "e1"), b = makeRecord("source-b", "e1");
+	b.id = a.id;
+	await store.applyChanges("source-a", [a]);
+	await store.applyChanges("source-b", [b]);
+	const requests = [];
+	const apiUrl = await startServer(t, async ({ response, body }) => { requests.push(body); respond(response, 202, {}); });
+	const memory = createHindsightMemoryAdapter({ profile: "personal", apiUrl });
+	const commands = createLearningsReviewCommands({ store, memory });
+	const rows = (await commands.query({ scope: "all" })).rows;
+	assert.equal((await commands.query({ scope: { sourceId: "source-b" } })).rows[0].sourceId, "source-b");
+	const draft = commands.createDraft();
+	for (const row of rows) { draft.stage(row, "kept"); draft.togglePromotion(row); }
+	const rowB = rows.find((row) => row.sourceId === "source-b");
+	draft.stage(rowB, "dismissed");
+	const rowA = rows.find((row) => row.sourceId === "source-a");
+	await fs.writeFile(rowA.path, (await fs.readFile(rowA.path, "utf8"))
+		.replace(a.observation, "Edited selected-source observation")
+		.replace(a.recommendation, "Edited selected-source recommendation"));
+	const { ctx, confirmations } = makeContext({ confirm: async () => {
+		assert.equal((await store.getRecord("source-a", a.id)).status, "kept");
+		assert.equal((await store.getRecord("source-b", b.id)).status, "dismissed");
+		assert.equal(requests.length, 0);
+		return true;
+	} });
+	const applied = await commands.apply(draft, ctx);
+	assert.equal(applied.applied.length, 2);
+	assert.equal(confirmations.length, 1);
+	assert.equal(requests.length, 1);
+	assert.deepEqual(requests[0].items, [{ content: "Edited selected-source observation\n\nEdited selected-source recommendation" }]);
+	assert.match(applied.promotions[0].message, /accepted the asynchronous request/);
+	// A confirmation failure is independent of an already saved local Keep.
+	draft.togglePromotion({ ...rowA, record: await store.getRecord("source-a", a.id) });
+	ctx.ui.confirm = async () => { throw new Error("scripted confirmation error"); };
+	const failed = await commands.apply(draft, ctx);
+	assert.equal(failed.errors.length, 0);
+	assert.match(failed.promotions[0].message, /scripted confirmation error/);
+	assert.equal((await store.getRecord("source-a", a.id)).status, "kept");
+	assert.equal(requests.length, 1);
+});
+
+test("structured Apply saves all local decisions before promotion and retains failed choices", async (t) => {
+	const { store } = await fixture(t);
+	const a = makeRecord("source-a", "e1"), b = makeRecord("source-b", "e1");
+	await store.applyChanges("source-a", [a]);
+	await store.applyChanges("source-b", [b]);
+	const requests = [];
+	const apiUrl = await startServer(t, async ({ response, body }) => { requests.push(body); respond(response, 503, {}); });
+	const memory = createHindsightMemoryAdapter({ profile: "personal", apiUrl });
+	let fail = true;
+	const wrapped = { ...store, async setReviewStatus(sourceId, ...args) {
+		if (sourceId === "source-b" && fail) throw new Error("scripted local write failure");
+		return store.setReviewStatus(sourceId, ...args);
+	} };
+	const commands = createLearningsReviewCommands({ store: wrapped, memory });
+	const rows = (await commands.query({ scope: "all" })).rows;
+	const draft = createReviewDraft();
+	for (const row of rows) { draft.stage(row, "kept"); draft.togglePromotion(row); }
+	assert.equal(requests.length, 0);
+	const { ctx, confirmations } = makeContext({ confirm: async () => {
+		assert.equal((await store.getRecord("source-a", a.id)).status, "kept");
+		assert.equal((await store.getRecord("source-b", b.id)).status, "open");
+		return false;
+	} });
+	// makeContext uses a sync-or-promise confirm result; await is honored by controller.
+	const partial = await commands.apply(draft, ctx);
+	assert.equal(partial.applied.length, 1);
+	assert.equal(partial.errors.length, 1);
+	assert.equal(partial.remaining[0].sourceId, "source-b");
+	assert.equal(confirmations.length, 1);
+	assert.equal(requests.length, 0);
+	assert.match(partial.promotions[0].message, /cancelled/);
+	fail = false;
+	ctx.ui.confirm = async () => true;
+	const completed = await commands.apply(draft, ctx);
+	assert.equal(completed.errors.length, 0);
+	assert.equal(draft.size, 0);
+	assert.equal(requests.length, 1);
+	assert.match(completed.promotions[0].message, /failed/);
+	assert.equal((await store.getRecord("source-b", b.id)).status, "kept");
+	assert.equal((await store.getRecord("source-a", a.id)).status, "kept");
+});
+
 test("cleanup confirms one source, then removes its Markdown, checkpoint, and only the owned observer file", async (t) => {
 	const { root, store } = await fixture(t);
 	const sourceId = "pi-session://machine/cleanup-source";
@@ -392,7 +526,7 @@ test("cleanup without a current primary requires an explicit source even when on
 	const { ctx, notices, confirmations } = makeContext();
 
 	const result = await invoke(pi, "learnings-cleanup", "", ctx, notices);
-	assert.match(result, /specify one source id from \/learnings-review all/);
+	assert.match(result, /specify one source id from \/learnings list all/);
 	assert.equal(confirmations.length, 0);
 	assert.equal((await store.readRecords(sourceId)).length, 1);
 });

@@ -1,5 +1,8 @@
 import type { OpportunityRecord } from "./core/index.d.mts";
 
+/** Adapter-only first record-file creation time. Missing/invalid legacy dates are unknown. */
+export type StoredOpportunityRecord = OpportunityRecord & { recordedAt?: string };
+
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 export interface PendingBatch {
@@ -32,10 +35,10 @@ export interface LearningStore {
 	readonly root: string;
 	getSourceDirectory(sourceId: string): string;
 	listSources(): Promise<SourceSummary[]>;
-	readRecords(sourceId: string): Promise<OpportunityRecord[]>;
-	getRecord(sourceId: string, id: string): Promise<OpportunityRecord | null>;
-	applyChanges(sourceId: string, changes: OpportunityRecord[], options?: { basedOn?: OpportunityRecord[]; label?: string }): Promise<OpportunityRecord[]>;
-	setReviewStatus(sourceId: string, id: string, status: "kept" | "dismissed", options?: { at?: string }): Promise<OpportunityRecord>;
+	readRecords(sourceId: string): Promise<StoredOpportunityRecord[]>;
+	getRecord(sourceId: string, id: string): Promise<StoredOpportunityRecord | null>;
+	applyChanges(sourceId: string, changes: OpportunityRecord[], options?: { basedOn?: OpportunityRecord[]; label?: string }): Promise<StoredOpportunityRecord[]>;
+	setReviewStatus(sourceId: string, id: string, status: "kept" | "dismissed", options?: { at?: string }): Promise<StoredOpportunityRecord>;
 	markSourceUnavailable(sourceId: string): Promise<number>;
 	getOperationalState(sourceId: string): Promise<OperationalState>;
 	updateOperationalState(sourceId: string, patch: Partial<Pick<OperationalState, "enabled" | "cursor" | "focus" | "modelOverride" | "workerSession">>): Promise<OperationalState>;

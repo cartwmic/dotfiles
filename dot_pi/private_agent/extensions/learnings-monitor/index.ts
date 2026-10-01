@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as sdk from "@earendil-works/pi-coding-agent";
+import { Text, ScrollView, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { loadConfig as loadHindsightConfig } from "../hindsight/config.ts";
 import { createHindsightMemoryAdapter } from "./memory.mjs";
 import { createLearningStore } from "./store.mjs";
@@ -50,7 +51,7 @@ export default function (pi: ExtensionAPI): void {
 			agentDir,
 			tools,
 		}),
-		registerReviewCommands: (extension, review) => registerLearningsReviewCommands(extension, review, sdk),
+		registerReviewCommands: (extension, review) => registerLearningsReviewCommands(extension, review, sdk, { Text, ScrollView, matchesKey, truncateToWidth, wrapTextWithAnsi }),
 	});
 }
 

@@ -76,6 +76,7 @@ function sourceLine(evidence) {
 function recordText(source, record, store) {
 	const lines = [
 		`[${record.status.toUpperCase()}] ${record.id} — ${record.type}`,
+		`Recorded: ${record.recordedAt ?? "unknown"}`,
 		`Observation: ${record.observation}`,
 	];
 	if (record.recommendation) lines.push(`Recommendation: ${record.recommendation}`);
@@ -244,17 +245,50 @@ function formatPatternReview({ result, records, relatedEvidence, memoryStatus, m
 
 function parseRecordCommand(args, action) {
 	const pieces = String(args ?? "").trim().split(/\s+/).filter(Boolean);
-	if (!pieces.length || pieces.length > 2) throw new Error(`Usage: /learnings-${action} <record-id> [source-id]`);
+	if (!pieces.length || pieces.length > 2) throw new Error(`Usage: /learnings ${action === "kept" ? "keep" : action === "dismissed" ? "dismiss" : action} <record-id> [source-id]`);
 	return { id: pieces[0], sourceId: pieces[1] };
 }
 
 function notify(ctx, message) {
+	if (!message) return;
 	if (ctx?.hasUI && typeof ctx.ui?.notify === "function") {
 		const type = /^(?:Error:|Promotion (?:unavailable|refused)|Hindsight promotion failed|Cleanup (?:refused|stopped|incomplete))/.test(message)
 			? "error"
 			: "info";
 		ctx.ui.notify(message, type);
 	}
+}
+
+/** Collision-free, source-qualified identity; IDs are opaque and never parsed. */
+export function reviewIdentityKey({ sourceId, id }) {
+	if (typeof sourceId !== "string" || !sourceId || typeof id !== "string" || !id) throw new TypeError("review identity requires sourceId and id");
+	return JSON.stringify([sourceId, id]);
+}
+
+/** One interaction's choices only. No store, context, or sends are owned here. */
+export function createReviewDraft() {
+	const choices = new Map();
+	return Object.freeze({
+		get size() { return choices.size; },
+		entries: () => [...choices.values()].map((choice) => ({ ...choice })),
+		get: (identity) => { const choice = choices.get(reviewIdentityKey(identity)); return choice ? { ...choice } : undefined; },
+		stage(identity, status) {
+			if (status !== "kept" && status !== "dismissed") throw new TypeError("status must be kept or dismissed");
+			const key = reviewIdentityKey(identity);
+			choices.set(key, { sourceId: identity.sourceId, id: identity.id, status, promote: status === "kept" && (choices.get(key)?.promote ?? false) });
+		},
+		togglePromotion(row) {
+			const key = reviewIdentityKey(row);
+			const previous = choices.get(key);
+			if ((previous?.status ?? row.record.status) !== "kept") return false;
+			const promote = !previous?.promote;
+			if (!previous?.status && !promote) choices.delete(key);
+			else choices.set(key, { sourceId: row.sourceId, id: row.id, ...(previous?.status ? { status: previous.status } : {}), promote });
+			return promote;
+		},
+		reset: (identity) => choices.delete(reviewIdentityKey(identity)),
+		clear: () => choices.clear(),
+	});
 }
 
 export function createLearningsReviewCommands(surface, sdk) {
@@ -313,10 +347,67 @@ export function createLearningsReviewCommands(surface, sdk) {
 				?? { sourceId: current.sourceId, label: current.sourceId, path: store.getSourceDirectory(current.sourceId) };
 		}
 		if (!sources.length) throw new Error("there are no local Learnings sources to clean up");
-		throw new Error("specify one source id from /learnings-review all; cleanup is one source at a time");
+		throw new Error("specify one source id from /learnings list all; cleanup is one source at a time");
 	}
 
-	return Object.freeze({
+	const commands = Object.freeze({
+		createDraft: createReviewDraft,
+
+		/** Default scope is current, never silently all. Filter does not consume a draft. */
+		async query({ scope = "current", status = "open" } = {}, ctx) {
+			if (!["open", "kept", "dismissed", "all"].includes(status)) throw new TypeError("invalid review status filter");
+			const sources = await store.listSources();
+			let targets;
+			if (scope === "all") targets = sources;
+			else if (scope === "current") {
+				const current = await surface.sourceStatus?.(ctx);
+				targets = current?.ok && current.sourceId ? [sources.find((source) => source.sourceId === current.sourceId)
+					?? { sourceId: current.sourceId, label: current.sourceId, path: store.getSourceDirectory(current.sourceId) }] : [];
+			} else {
+				if (!scope || typeof scope.sourceId !== "string") throw new TypeError("scope requires an exact sourceId");
+				let source = sources.find((item) => item.sourceId === scope.sourceId);
+				if (!source) {
+					const current = await surface.sourceStatus?.(ctx);
+					if (current?.ok && current.sourceId === scope.sourceId) source = { sourceId: scope.sourceId, label: scope.sourceId, path: store.getSourceDirectory(scope.sourceId) };
+				}
+				if (!source) throw new Error(`no local source matches exact sourceId '${scope.sourceId}'`);
+				targets = [source];
+			}
+			const rows = [];
+			const availableSessionIds = await localSessionIds(sdk, ctx);
+			for (const source of targets) {
+				for (const record of await readSourceRecords(source, availableSessionIds)) {
+					if (status !== "all" && record.status !== status) continue;
+					rows.push({ sourceId: source.sourceId, id: record.id, source, record,
+						path: recordPath(store, source.sourceId, record.id), detail: recordText(source, record, store) });
+				}
+			}
+			return { scope, status, sources, rows, root: store.root };
+		},
+
+		/** All local writes precede any confirmation/send. Failed choices stay staged. */
+		async apply(draft, ctx) {
+			const applied = [], errors = [], promotions = [], queued = [];
+			for (const choice of draft.entries()) {
+				try {
+					const current = await store.getRecord(choice.sourceId, choice.id);
+					if (!current) throw new Error("record no longer exists");
+					const record = choice.status
+						? await store.setReviewStatus(choice.sourceId, choice.id, choice.status, { at: new Date().toISOString() }) : current;
+					applied.push({ sourceId: choice.sourceId, id: choice.id, record });
+					draft.reset(choice);
+					if (choice.promote && record.status === "kept") queued.push(choice);
+				} catch (error) {
+					errors.push({ sourceId: choice.sourceId, id: choice.id, error: shortError(error) });
+				}
+			}
+			for (const identity of queued) {
+				try { promotions.push({ sourceId: identity.sourceId, id: identity.id, message: await commands.promoteRecord(identity, ctx) }); }
+				catch (error) { promotions.push({ sourceId: identity.sourceId, id: identity.id, message: `Hindsight promotion failed (${shortError(error)}). Local Keep remains saved.` }); }
+			}
+			return { applied, errors, promotions, remaining: draft.entries() };
+		},
+
 		async review(args, ctx) {
 			const selector = String(args ?? "").trim();
 			if (selector.toLowerCase() === "patterns") {
@@ -410,7 +501,15 @@ export function createLearningsReviewCommands(surface, sdk) {
 
 		async promote(args, ctx) {
 			const { id, sourceId } = parseRecordCommand(args, "promote");
-			const { source, record } = await findRecord(id, sourceId, ctx);
+			const { source } = await findRecord(id, sourceId, ctx);
+			return commands.promoteRecord({ sourceId: source.sourceId, id }, ctx);
+		},
+
+		async promoteRecord(identity, ctx) {
+			reviewIdentityKey(identity);
+			const { id, sourceId } = identity;
+			const record = await store.getRecord(sourceId, id);
+			if (!record) throw new Error("record no longer exists");
 			if (record.status !== "kept") return `Promotion refused: ${id} is ${record.status}, not kept. The local Markdown was not changed.`;
 			if (!memory) return "Promotion unavailable: no profile-selected Hindsight adapter is configured. The kept local record remains unchanged.";
 			if (!ctx?.hasUI || typeof ctx.ui?.confirm !== "function") {
@@ -498,9 +597,10 @@ export function createLearningsReviewCommands(surface, sdk) {
 			return `Cleanup complete for ${source.sourceId}: ${removedSource ? `removed ${sourceDirectory}` : "no local source directory remained"}; ${removedSession ? `removed owned observer session ${workerFile}` : worker.available === false && workerFile ? "observer session file was already unavailable" : "no observer session file to remove"}.`;
 		},
 	});
+	return commands;
 }
 
-export function registerLearningsReviewCommands(pi, surface, sdk) {
+export function registerLearningsReviewCommands(pi, surface, sdk, uiDeps) {
 	if (!pi?.registerCommand) throw new TypeError("Pi ExtensionAPI is required");
 	const commands = createLearningsReviewCommands(surface, sdk);
 	const register = (name, description, operation) => {
@@ -517,10 +617,33 @@ export function registerLearningsReviewCommands(pi, surface, sdk) {
 			},
 		});
 	};
-	register("learnings-review", "Review local Learnings records or request cross-source synthesis", (args, ctx) => commands.review(args, ctx));
-	register("learnings-keep", "Keep a local Learnings opportunity", (args, ctx) => commands.setStatus(args, "kept", ctx));
-	register("learnings-dismiss", "Dismiss a local Learnings opportunity", (args, ctx) => commands.setStatus(args, "dismissed", ctx));
-	register("learnings-promote", "Confirm exact-text promotion of a kept opportunity to Hindsight", (args, ctx) => commands.promote(args, ctx));
-	register("learnings-cleanup", "Confirm cleanup of one source's local Learnings notes and owned observer session", (args, ctx) => commands.cleanup(args, ctx));
+	register("learnings", "Learnings home, review and monitor controls", async (args, ctx) => {
+		let input = args.trim();
+		if (!input) {
+			if (!ctx.hasUI || !ctx.ui?.select) return "Usage: /learnings review | list [source|all] | patterns | keep | dismiss | promote | cleanup | on | off | focus | model | tools | flush | status";
+			const choices = ["Review", "Status", "On", "Off", "Focus", "Model", "Tools", "Flush", "Patterns", "Promote", "Cleanup"];
+			const choice = await ctx.ui.select("Learnings home", choices);
+			if (!choice) return;
+			input = choice.toLowerCase();
+			if (["focus", "model", "tools", "promote", "cleanup"].includes(input)) {
+				const value = await ctx.ui.input(`Learnings ${input}`, input === "cleanup" ? "Source id (blank = current)" : "Arguments");
+				if (value === undefined) return;
+				input += ` ${value}`;
+			}
+		}
+		const [verb, ...rest] = input.split(/\s+/);
+		const value = rest.join(" ");
+		if (verb === "review" && value !== "patterns") {
+			const { openReview } = await import("./review-ui.mjs");
+			await openReview(commands, ctx, uiDeps);
+			return;
+		}
+		if (verb === "patterns" || (verb === "review" && value === "patterns")) return commands.review("patterns", ctx);
+		if (verb === "list") return commands.review(value, ctx);
+		if (verb === "keep" || verb === "dismiss") return commands.setStatus(value, verb === "keep" ? "kept" : "dismissed", ctx);
+		if (verb === "promote") return commands.promote(value, ctx);
+		if (verb === "cleanup") return commands.cleanup(value, ctx);
+		return surface.controls?.handle(input, ctx) ?? "Unknown Learnings operation. Use /learnings for home.";
+	});
 	return commands;
 }

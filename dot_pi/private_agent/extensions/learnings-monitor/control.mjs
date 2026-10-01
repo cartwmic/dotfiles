@@ -263,8 +263,8 @@ export function createLearningsMonitorControls({
 		return reply;
 	}
 
-	function register(pi) {
-		pi.registerCommand("learnings", {
+	function register(pi, { command = true } = {}) {
+		if (command) pi.registerCommand("learnings", {
 			description: "Control the silent workflow observer",
 			handler: async (args, ctx) => {
 				const reply = await handle(args, ctx);

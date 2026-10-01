@@ -222,6 +222,42 @@ test("keep/dismiss commands edit authoritative Markdown history and cleanup is s
 	assert.equal((await store.listSources()).some((item) => item.sourceId === "other-source"), true);
 });
 
+test("recordedAt is first creation only and survives every existing update path", async (t) => {
+	const { store } = await fixture(t);
+	const [initial] = candidate();
+	initial.recordedAt = "1999-01-01T00:00:00.000Z";
+	const before = Date.now();
+	const [created] = await store.applyChanges(sourceId, [initial]);
+	assert.ok(Date.parse(created.recordedAt) >= before);
+	assert.ok(Date.parse(created.recordedAt) <= Date.now());
+	const original = created.recordedAt;
+	await store.applyChanges(sourceId, [{ ...initial, recordedAt: "2099-01-01T00:00:00.000Z" }]);
+	assert.equal((await store.getRecord(sourceId, initial.id)).recordedAt, original);
+	assert.equal((await store.setReviewStatus(sourceId, initial.id, "kept")).recordedAt, original);
+	await store.markSourceUnavailable(sourceId);
+	assert.equal((await store.getRecord(sourceId, initial.id)).recordedAt, original);
+	assert.match(await fs.readFile(markdownPath(store, sourceId, initial.id), "utf8"), new RegExp(original));
+});
+
+test("legacy and invalid recordedAt never acquire a fabricated time", async (t) => {
+	const { store } = await fixture(t);
+	const [initial] = candidate();
+	await store.applyChanges(sourceId, [initial]);
+	const filename = markdownPath(store, sourceId, initial.id);
+	for (const value of [undefined, "not-a-date", "2030-02-30T00:00:00.000Z", 123]) {
+		let markdown = await fs.readFile(filename, "utf8");
+		markdown = markdown.replace(/\s*"recordedAt": [^\n]+,\n/, "\n");
+		if (value !== undefined) markdown = markdown.replace('"formatVersion": 1,', `"formatVersion": 1,\n  "recordedAt": ${JSON.stringify(value)},`);
+		await fs.writeFile(filename, markdown);
+		assert.equal((await store.getRecord(sourceId, initial.id)).recordedAt, undefined);
+		await store.applyChanges(sourceId, [{ ...initial, recordedAt: new Date().toISOString() }]);
+		await store.setReviewStatus(sourceId, initial.id, "dismissed");
+		await store.markSourceUnavailable(sourceId);
+		assert.equal((await store.getRecord(sourceId, initial.id)).recordedAt, undefined);
+		assert.doesNotMatch(await fs.readFile(filename, "utf8"), /"recordedAt"/);
+	}
+});
+
 function candidateForSource(id) {
 	return reviewActivity({
 		activity: { source: { id }, evidence: [{ id: "e1", summary: "evidence", provenance: { pointer: "source://e1" } }] },

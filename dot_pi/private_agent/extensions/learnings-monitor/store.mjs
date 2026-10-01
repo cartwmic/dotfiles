@@ -91,6 +91,12 @@ async function atomicWriteFile(filename, content) {
 	}
 }
 
+function recordedTime(value) {
+	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return undefined;
+	const date = new Date(value);
+	return Number.isFinite(date.getTime()) && date.toISOString() === value.replace(/Z$/, value.includes(".") ? "Z" : ".000Z") ? value : undefined;
+}
+
 function normalizeRecord(record, expectedSourceId) {
 	if (!record || typeof record !== "object" || Array.isArray(record)) throw new TypeError("record must be an object");
 	const id = requiredText(record.id, "record.id");
@@ -109,6 +115,7 @@ function normalizeRecord(record, expectedSourceId) {
 		...cloneJson(record, "record"),
 		id,
 		proposalKey,
+		recordedAt: recordedTime(record.recordedAt),
 		observation,
 		...(recommendation ? { recommendation } : { recommendation: undefined }),
 	};
@@ -121,6 +128,7 @@ function metadataFor(sourceId, record) {
 		id: record.id,
 		proposalKey: record.proposalKey,
 		type: record.type,
+		recordedAt: record.recordedAt,
 		reviewHistory: record.reviewHistory,
 		evidence: record.evidence,
 		evidenceAssessment: record.evidenceAssessment,
@@ -236,6 +244,7 @@ function parseRecordMarkdown(markdown, expectedSourceId) {
 		id: metadata.id,
 		proposalKey: metadata.proposalKey,
 		type: metadata.type,
+		recordedAt: metadata.recordedAt,
 		status: statusMatch[1],
 		observation: readSection(markdown, "observation"),
 		recommendation: readSection(markdown, "recommendation"),
@@ -512,6 +521,7 @@ export function createLearningStore({ root = defaultStoreRoot() } = {}) {
 						if (error.code !== "ENOENT") throw error;
 					}
 					if (!current) {
+						generated.recordedAt = new Date().toISOString();
 						const content = renderRecord(normalizedId, generated);
 						await atomicWriteFile(filename, content);
 						written.push(generated);

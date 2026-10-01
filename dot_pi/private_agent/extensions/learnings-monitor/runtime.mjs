@@ -160,7 +160,7 @@ export function createLearningsMonitorRuntime(pi, {
 	});
 
 	registerPiCaptureLifecycle(pi, capture);
-	controls.register(pi);
+	controls.register(pi, { command: typeof registerReviewCommands !== "function" });
 	pi.on("session_shutdown", () => {
 		for (const [sourceId, runner] of runners) {
 			cancellationEpoch.set(sourceId, (cancellationEpoch.get(sourceId) ?? 0) + 1);
@@ -169,6 +169,7 @@ export function createLearningsMonitorRuntime(pi, {
 	});
 
 	const review = Object.freeze({
+		controls,
 		store,
 		memory,
 		sourceStatus: (ctx) => capture.status(ctx),
