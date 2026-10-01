@@ -24,11 +24,24 @@ non-circular local obligation.
 
 ## Report claims
 
-Keep the provider's existing report schema. `coverage.commit` is exactly current
-`git rev-parse HEAD` plus `+uncommitted-worktree`. `changed_surface` is exactly the
-ordered pathname list after each two-letter status from
-`git status --porcelain=v1 --untracked-files=all` (including Git's quoting/rename
-notation). This is not a sorted set.
+Keep the provider's existing report schema. By default, `coverage.commit` is
+exactly current `git rev-parse HEAD` plus `+uncommitted-worktree`.
+`changed_surface` is exactly the ordered pathname list after each two-letter
+status from `git status --porcelain=v1 --untracked-files=all` (including Git's
+quoting/rename notation). This is not a sorted set.
+
+For a clean, committed delivery, pass `--baseline-commit FULL_STARTING_SHA`.
+Use the recorded starting commit of the delivery, not an inferred `HEAD^`.
+The checker requires a full commit SHA that is an ancestor of current HEAD,
+a clean checkout, and a nonempty delivered path list. In this mode,
+`coverage.commit` is exactly HEAD without a suffix, and `changed_surface` is
+exactly the ordered output lines of
+`git diff --name-only --no-renames FULL_STARTING_SHA HEAD --`.
+This includes committed additions, modifications and deletions; a rename is
+represented by its old and new paths. It does not invent a dirty file or relax
+the provider's schema. Current-tree receipts and all other checks remain
+required. Add the flag to the declared post-report executor through the normal
+plan/steering procedure; it grants no Git or workflow authority.
 
 `validation` uses the provider's closed `{proof, criterion_id?}` objects, not
 strings. Rows without `criterion_id` contain one matrix status in `proof`: all
@@ -53,6 +66,75 @@ pending local work is valid to *report*, but cannot pass the final checker.
 A provisional summarizer report is not final proof. Do not copy obsolete T06
 commands, terminal-run markers, packaged-smoke obligations, or hosted success
 strings into a new report merely to satisfy the old checker.
+
+## Criterion proof handoff
+
+Keep `intent.json.acceptance[*].id` as the one AC-N spine. Follow the existing
+references, not a new inventory: `plan.json.tasks[*].criterion_ids` selects the
+owning task; its `validation` entries name the operator-path observation,
+distinguishing assertion, and task `proof_command_ids`. Resolve each named ID
+through `plan.json.proof_commands[*].id` to the matching
+`proof-matrix.json.local_final[*].id`. The existing task validation/proof notes name each practical historical case,
+its actual capture locator and paired current proof command; that capture is
+separate from passing current commands. Retain each current command's real argv,
+cwd, streams, exit/timeout/spawn facts, target identity and the assertion it
+actually exercised. Reviewers follow that existing link: **plan AC -> owning
+task validation -> named proof command -> retained assertion/capture -> fixed
+validation-report index -> fresh independent criterion/goal verdict**. A shared
+command may support multiple ACs only when each retains its own distinct
+assertion; matching command lists, citations, reviewer prose or exit 0 do not
+make that link.
+
+At validation freeze, `validation-report.json` fixes `command_evidence_ids`,
+`criteria[*].{criterion_id,verdict_ids}`, and `goal_verdict_ids`. The provider
+imports only selected current-tree captures into `command-evidence` records;
+independent verdicts then bind to that report revision/checkpoint and cite the
+relevant selected current command-evidence IDs in `evidence_context_ids`.
+The current index stays fixed while fresh, independent criterion and goal
+judgments are collected. Reviewers inspect the assertion, original capture,
+source target and current Git identity themselves. They do not treat a green
+journey, captured marker, candidate projection or another review's pass as a
+verdict. Scripted fixture actors and mechanically consistent records prove only
+plumbing, never semantic truth.
+
+A practical before-fix execution is different evidence: preserve the actual old
+binary/tree and data identity, argv, cwd/setup, before/after source identity,
+streams, digest, exit (including expected nonzero), timeout and spawn facts in
+the historical capture named by the existing task validation/proof notes. Link
+it to the paired current `proof_command_ids` assertion, but keep it outside the
+passing `local_final` receipt selection, implementation-report matrix status and
+current `validation-report.json` command-evidence IDs. A correct old refusal is
+a correct refusal, not a manufactured defect. If a practical capture is missing,
+the case remains incomplete unless that task validation records a concrete
+case-specific limitation and nearest current negative. Never backfill an old
+identity from a later tree or relabel an old nonzero receipt as a current pass.
+
+Run every planned practical current-tree negative on the exact settled target,
+and retain each case's distinct assertion in its captured evidence. A missing
+planned case is incomplete even if the suite exits 0. For a current command to
+count, retain the complete expected negative assertion and actual stable Git
+identity; a success exit without that assertion, stale/wrong identity, wrong cwd
+or missing capture fails closed. The public report checker validates actual
+current repository identities, not report prose.
+
+For finding triage, preserve the original reviewer finding and identify every
+actor. A factual-error rejection names the exact claim and source fact that
+contradicts it, with a separately attributed driver disposition. An unresolved
+substantive dispute gets focused independent reconsideration against the original
+claim, grounds and evidence; the driver does not rewrite the finding or impersonate
+the reviewer. Re-entry cost, schedule, or a parent pass is a reviewable
+non-merits counterexample, not a valid rejection. If a material defect exceeds
+authorized scope/budget, present its consequence and repair choices to the owner.
+Only a specific owner-attested residual may be excepted: retain its exact scope,
+reason, owner act, finding and history, and label the outcome exceptional rather
+than an ordinary pass. For an owner decision, present a compact comparison against
+the unchanged finding: its claim and source fact, the attributed driver disposition,
+any independently authored reconsideration and its status, and the remaining
+defect's consequence, repair choices and exact exception scope/reason versus
+ordinary completion. Mechanical consistency checks do not judge whether the reason
+or attestation is true. These relationships live in the plan/task captures, fixed
+validation index and separately authored judgments; do not add a second criterion
+or finding ledger.
 
 `post_report` rows are not in `validation`. After-authorization rows must remain
 `pending` in this pre-authorization implementation report. They are not mandatory
@@ -192,7 +274,10 @@ Neither terminal records nor pre-commit reports are rewritten.
 actual tiny scripted subprocess receipts, including an actual exit-7 comparison.
 It checks positive current evidence, revision/path-order errors, missing
 measurements/captures, failure/pending status, stale tree/argv/cwd, missing stdout
-markers, serialization, and circular/hosted claims. These synthetic benchmark
+markers, serialization, and circular/hosted claims. A separate temporary Git
+fixture proves clean committed delivery through the same public CLI, including
+baseline ancestry, delivered paths, dirty-tree refusal and unchanged receipt
+requirements. These synthetic benchmark
 names test evidence plumbing, not real speedup.
 
 To retain fixtures and each CLI result outside the checkout:
