@@ -12,6 +12,8 @@ Before kicking off subagents, check the current model list by running `pi --list
 
 When the user specifies a model for a subagent invocation, always pass it via the `model` field in the `subagent()` call. Never fall back to the builtin agent's default model when the user has stated which model to use.
 
+Always prefer async subagents vs synchronously awaiting them
+
 ## Clarifying questions (`ask_user_question`)
 
 The `ask_user_question` tool (from `rpiv-ask-user-question`) opens a structured
