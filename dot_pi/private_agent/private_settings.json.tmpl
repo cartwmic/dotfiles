@@ -8,6 +8,7 @@
 {{- $version := "0.70.2" -}}
 {{- $theme := "dark" -}}
 {{- $hideThinking := false -}}
+{{- $deviceId := "" -}}
 {{- $privateGlmProvider := dict "models" (list) -}}
 {{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiGlmProviderRef") -}}
 {{-   $privateGlmProvider = output "op" "read" .privatePiGlmProviderRef | fromJson -}}
@@ -24,6 +25,7 @@
 {{-     $theme = $themeFound -}}
 {{-   end -}}
 {{-   $hideThinking = get $existingSettings "hideThinkingBlock" -}}
+{{-   $deviceId = get $existingSettings "deviceId" -}}
 {{- end -}}
 {{- if not $hideThinking -}}
 {{-   $hideThinking = false -}}
@@ -96,4 +98,7 @@
   "lastChangelogVersion": {{ $version | quote }},
   "theme": {{ $theme | quote }},
   "hideThinkingBlock": {{ $hideThinking }}
+{{- if $deviceId }},
+  "deviceId": {{ $deviceId | quote }}
+{{- end }}
 }
