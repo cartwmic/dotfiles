@@ -1043,7 +1043,7 @@ def invoke_overview(state: dict[str, Any], env: dict[str, str]) -> None:
     from map_identity import wait_frame
     client = popup_client(state, env)
     api_request(state, "plugin.action.invoke", {"action_id": "overview.open"})
-    wait_frame(client, 'j/k select/scroll', 'n blocked')
+    wait_frame(client, 'arrows/hjkl select', 'n blocked')
 
 
 def invoke_auto_name(state: dict[str, Any], kind: str, native_id: str) -> None:
@@ -1100,7 +1100,7 @@ def prove_reopened_output(state: dict[str, Any], root: Path, env: dict[str, str]
         raise ProofFailure('closed popup remains busy')
     # The allocation probe is itself a popup; dismiss only that owned viewer.
     from map_identity import wait_frame
-    wait_frame(popup_client(state, env), 'j/k select/scroll')
+    wait_frame(popup_client(state, env), 'arrows/hjkl select')
     send_overview_key(state, env, 'q')
     invoke_overview(state, env)
     detail = open_pane_from_workspace(state, env, pane_id)

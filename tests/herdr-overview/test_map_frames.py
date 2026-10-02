@@ -15,7 +15,7 @@ def card_frame(number=1, selected=True, subject=None):
         f'│ {"›" if selected else " "} Tab {number}            │',
         '│ '+(subject or f'Subject {number}').ljust(18)+' │','│                    │',
         '│ READY              │','│                    │','└────────────────────┘']
-    return 'Herdr Overview\n!0 W0 R1 · 1ws 1t\n'+'\n'.join(rows)+'\nj/k select/scroll · n blocked · Esc/q'
+    return 'Herdr Overview\n!0 W0 R1 · 1ws 1t\n'+'\n'.join(rows)+'\narrows/hjkl select · n blocked · Esc/q'
 
 
 class FrameTests(unittest.TestCase):
@@ -47,5 +47,5 @@ class FrameTests(unittest.TestCase):
         with self.assertRaises(proof.ProofFailure): selected_in_frame(card_frame(1),'missing',native)
 
     def test_duplicate_matching_card_fails_closed(self):
-        frame=card_frame(1).replace('\nj/k select/scroll', '\n'+card_frame(1).split('\n',2)[2].rsplit('\n',1)[0]+'\nj/k select/scroll')
+        frame=card_frame(1).replace('\narrows/hjkl select', '\n'+card_frame(1).split('\n',2)[2].rsplit('\n',1)[0]+'\narrows/hjkl select')
         with self.assertRaises(proof.ProofFailure): card(frame,'w2:p1',native_fixture())

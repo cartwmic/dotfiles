@@ -123,7 +123,7 @@ def wait_native_frame(client, *markers, timeout=20):
 def ready_map(client, open_map):
     open_map()
     # The key legend is emitted by the Node viewer, unlike the native border.
-    return wait_frame(client, 'j/k select/scroll', 'n blocked')
+    return wait_frame(client, 'arrows/hjkl select', 'n blocked')
 
 
 def identity(root, state, env, pane_id, receipts, clients, open_map, log_digest,

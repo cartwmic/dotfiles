@@ -10,16 +10,20 @@ import proof
 class ReadinessTests(unittest.TestCase):
     def test_native_border_and_old_output_are_not_viewer_ready(self):
         class Client:
-            output = b'j/k select/scroll n blocked'
-            def __init__(self): self.frames = iter(['Herdr Overview', 'Herdr Overview\nj/k select/scroll n blocked Esc/q'])
+            output = b'arrows/hjkl select n blocked'
+            def __init__(self): self.frames = iter([
+                'Herdr Overview',
+                'Herdr Overview\nj/k select/scroll n blocked Esc/q',
+                'Herdr Overview\narrows/hjkl select n blocked Esc/q'])
             def frame(self): return next(self.frames)
         client = Client()
         opened = []
         def wait(predicate, *_args, **_kwargs):
             self.assertIsNone(predicate())
+            self.assertIsNone(predicate())
             return predicate()
         with patch.object(proof, 'wait_for', side_effect=wait):
-            self.assertEqual(ready_map(client, lambda: opened.append(True)), 'Herdr Overview\nj/k select/scroll n blocked Esc/q')
+            self.assertEqual(ready_map(client, lambda: opened.append(True)), 'Herdr Overview\narrows/hjkl select n blocked Esc/q')
         self.assertEqual(opened, [True])
 
     def test_body_must_belong_to_its_visible_header(self):
