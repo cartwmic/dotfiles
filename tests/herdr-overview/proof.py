@@ -45,15 +45,6 @@ REVIEW_ID_RE = __import__("re").compile(r"^rv-[0-9a-f]{12}$")
 NOTE_ID_RE = __import__("re").compile(r"^n-[0-9a-f]{8}$")
 SUCCESS_SUMMARY = "Recent work is complete. Present state: ready for the next step."
 PROOF_MARKER = ".herdr-overview-proof.json"
-OVERVIEW_HEADERS = {
-    "Herdr Overview · Board": ("Board", "all"),
-    "Herdr Overview · Board · workspace": ("Board", "workspace"),
-    "Herdr Overview · Board · pane detail": ("Board", "detail"),
-    "Herdr Overview · Mosaic": ("Mosaic", "all"),
-    "Herdr Overview · Mosaic · workspace": ("Mosaic", "workspace"),
-    "Herdr Overview · Mosaic · selected pane": ("Mosaic", "detail"),
-}
-
 
 class ProofBlocked(Exception):
     """The requested path cannot be driven in the current environment."""
@@ -601,7 +592,9 @@ def make_herdr_env(root: Path, herdr_binary: str) -> dict[str, str]:
 
 
 def setup_herdr_run(run_id: str, base: Path | None = None) -> tuple[Path, dict[str, Any], dict[str, str]]:
-    root = run_root(run_id, base)
+    # One literal socket identity across prepare/load and inherited publishers;
+    # macOS /tmp is a symlink, not a distinct server membership.
+    root = run_root(run_id, base).resolve()
     marker = root / PROOF_MARKER
     if root.exists():
         if marker.exists():
@@ -658,7 +651,7 @@ def setup_herdr_run(run_id: str, base: Path | None = None) -> tuple[Path, dict[s
         "socket_path": str((root / "server/herdr.sock").resolve()),
         "herdr_bin": herdr_binary,
         "repo_root": str(ROOT.resolve()),
-        "fixture": {"workspaces": [], "pi_pane_id": None, "non_pi_pane_id": None, "overview_pane_id": None},
+        "fixture": {"workspaces": [], "pi_pane_id": None, "non_pi_pane_id": None},
         "server_started": False,
     }
     config = """onboarding = false
@@ -829,8 +822,8 @@ def wait_plugin_state(root: Path, timeout: float = 20) -> dict[str, Any]:
             state = read_json(path)
         except (OSError, ValueError):
             return None
-        return state if state.get("model") is not None and state.get("overviewPaneId") else None
-    return wait_for(read, "the real overview plugin pane and state", timeout=timeout)
+        return state if state.get("model") is not None else None
+    return wait_for(read, "the real overview model state", timeout=timeout)
 
 
 def scenario_herdr_prepare(run_id: str | None, base: Path | None) -> tuple[str, dict[str, Any]]:
@@ -952,31 +945,19 @@ def scenario_herdr_prepare(run_id: str | None, base: Path | None) -> tuple[str, 
             "workspaces": created,
             "pi_pane_id": pi_pane_id,
             "non_pi_pane_id": created[1]["root_pane_id"],
-            "overview_pane_id": None,
             "manual_workspace_labels": [item["label"] for item in created],
             "manual_tab_labels": [f"Owner {item['label']} tab" for item in created],
         }
         herdr_cmd(state, env, "workspace", "focus", created[0]["workspace_id"])
         api_request(state, "plugin.action.invoke", {"action_id": "overview.reconcile"})
-        overview = wait_plugin_state(root)
-        fixture["overview_pane_id"] = overview.get("overviewPaneId")
-        if not fixture["overview_pane_id"]:
-            raise ProofFailure("the overview startup/reconcile action did not open a pane")
+        wait_plugin_state(root)
         def fixture_ready() -> dict[str, Any] | None:
             live = snapshot(state)
             model = plugin_state(root).get("model") or {}
-            native_panes = {pane["pane_id"] for pane in live.get("panes", [])
-                            if pane.get("pane_id") != fixture["overview_pane_id"]}
-            if set((model.get("panes") or {}).keys()) != native_panes:
+            if set((model.get("panes") or {}).keys()) != {p["pane_id"] for p in live["panes"]}:
                 return None
             if set((model.get("workspaces") or {}).keys()) != {item["workspace_id"] for item in created}:
                 return None
-            screen = plain_terminal(pane_text(state, env, fixture["overview_pane_id"], fmt="ansi", lines=260))
-            for item in created:
-                count = sum(pane.get("workspace_id") == item["workspace_id"] for pane in live["panes"]
-                            if pane.get("pane_id") != fixture["overview_pane_id"])
-                if f"{item['label']} [{item['workspace_id']}]" not in screen or f"· {count} panes" not in screen:
-                    return None
             return live
 
         live = wait_for(fixture_ready, "the full native pane set in the visible overview", timeout=30)
@@ -1036,16 +1017,33 @@ def pane_text(state: dict[str, Any], env: dict[str, str], pane_id: str, *, sourc
     return completed.stdout
 
 
+_POPUP_CLIENTS = {}
+
+
+def popup_client(state, env):
+    """Owned attached client: popup is session-shared and has no native pane ID."""
+    from map_journey import Client
+    import atexit
+    key = state['socket_path']
+    client = _POPUP_CLIENTS.get(key)
+    if client is None or client.closed:
+        client = Client(state, env, 180)
+        _POPUP_CLIENTS[key] = client
+        atexit.register(client.close)
+        client.drain(1)
+    return client
+
+
 def send_overview_key(state: dict[str, Any], env: dict[str, str], key: str) -> None:
-    pane_id = state.get("fixture", {}).get("overview_pane_id")
-    if not pane_id:
-        raise ProofFailure("isolated overview pane ID is missing")
-    herdr_cmd(state, env, "pane", "send-keys", pane_id, key, timeout=10)
-    time.sleep(0.25)
+    keys = {'esc': b'\x1b', 'enter': b'\r', 'q': b'q'}
+    popup_client(state, env).key(keys.get(key, key.encode()))
 
 
 def invoke_overview(state: dict[str, Any], env: dict[str, str]) -> None:
-    api_request(state, "plugin.action.invoke", {"action_id": "overview.reconcile"})
+    from map_identity import wait_frame
+    client = popup_client(state, env)
+    api_request(state, "plugin.action.invoke", {"action_id": "overview.open"})
+    wait_frame(client, 'j/k select/scroll', 'n blocked')
 
 
 def invoke_auto_name(state: dict[str, Any], kind: str, native_id: str) -> None:
@@ -1085,272 +1083,160 @@ def plain_terminal(text: str) -> str:
 
 
 def overview_text(state: dict[str, Any], env: dict[str, str]) -> str:
-    return plain_terminal(pane_text(state, env, state["fixture"]["overview_pane_id"],
-                                    source="visible", fmt="ansi", lines=260))
-
-
-def overview_entry_running(process_info: dict[str, Any] | None) -> bool:
-    for process in (process_info or {}).get("foreground_processes", []):
-        command = " ".join(str(value) for value in (
-            process.get("argv0"), *(process.get("argv") or []), process.get("cmdline"),
-        ) if value)
-        if re.search(r"(?:^|[/\s])index\.mjs(?:\s|$)", command) \
-                and re.search(r"(?:^|\s)overview(?:\s|$)", command):
-            return True
-    return False
-
-
-def overview_pane_running(state: dict[str, Any], pane_id: str) -> bool:
-    if not any(pane.get("pane_id") == pane_id for pane in snapshot(state).get("panes", [])):
-        return False
-    response = api_request(state, "pane.process_info", {"pane_id": pane_id})
-    return overview_entry_running(response.get("process_info"))
+    return popup_client(state, env).frame()
 
 
 def prove_reopened_output(state: dict[str, Any], root: Path, env: dict[str, str]) -> dict[str, Any]:
-    old_overview_id = state["fixture"].get("overview_pane_id")
-    target_pane_id = state["fixture"].get("non_pi_pane_id")
-    if not old_overview_id or not target_pane_id:
-        raise ProofFailure("the isolated fixture lacks an overview or non-Pi pane for the reopen journey")
-    target = one_by(snapshot(state).get("panes", []), "pane_id", target_pane_id)
-    workspace = one_by(state["fixture"]["workspaces"], "workspace_id", target["workspace_id"])
-    marker = f"AFTER_OVERVIEW_CLOSED_{state['run_id']}"
-    before = (plugin_state(root).get("model", {}).get("panes", {}).get(target_pane_id) or {}).get("preview") or ""
-    if marker in before:
-        raise ProofFailure("the unique reopen marker already exists in saved overview state")
-    if not overview_pane_running(state, old_overview_id):
-        raise ProofFailure("the isolated overview was not running before the close/reopen test")
-
-    send_overview_key(state, env, "q")
-    wait_for(lambda: not overview_pane_running(state, old_overview_id),
-             "the overview process to stop before native output is produced", timeout=15)
-    herdr_cmd(state, env, "pane", "run", target_pane_id, f"printf '%s\\n' '{marker}'")
-    herdr_cmd(state, env, "pane", "wait-output", target_pane_id, "--match", marker, "--timeout", "10000")
-    native_recent = pane_text(state, env, target_pane_id, source="recent_unwrapped", lines=12)
-    if marker not in native_recent:
-        raise ProofFailure("the closed-view native pane does not contain the new output marker")
-    saved = plugin_state(root)
-    saved_preview = ((saved.get("model") or {}).get("panes") or {}).get(target_pane_id, {}).get("preview") or ""
-    if marker in saved_preview:
-        raise ProofFailure("the fixture refreshed saved preview state while the overview was closed")
-
+    """Close/reopen the transient view, then read current supplied data and focus."""
+    pane_id = state['fixture']['pi_pane_id']
+    before = (plugin_state(root)['model']['panes'][pane_id].get('prompt') or {}).get('text')
+    if not before:
+        raise ProofFailure('reopen fixture has no actual supplied prompt')
     invoke_overview(state, env)
-
-    def reopened() -> tuple[dict[str, Any], str] | None:
-        current = plugin_state(root)
-        pane_id = current.get("overviewPaneId")
-        if not isinstance(pane_id, str) or not pane_id or not overview_pane_running(state, pane_id):
-            return None
-        return current, pane_id
-
-    reopened_state, new_overview_id = wait_for(reopened, "a new overview entry process", timeout=20)
-    if (reopened_state.get("model", {}).get("panes", {}).get(target_pane_id, {}).get("preview") or "") == marker:
-        raise ProofFailure("overview reconciliation unexpectedly changed the stale saved preview in this fixture")
-    state["fixture"]["overview_pane_id"] = new_overview_id
-    json_dump(root / PROOF_MARKER, state)
-    wait_for(lambda: overview_location(overview_text(state, env)) is not None,
-             "the reopened overview's first visible frame", timeout=15)
-    select_workspace(state, env, workspace)
-    detail = open_pane_from_workspace(state, env, target_pane_id)
-    if marker not in detail:
-        raise ProofFailure("reopened pane detail omitted output produced while the overview was stopped")
-    send_overview_key(state, env, "f")
-    wait_for(lambda: True if snapshot(state).get("focused_pane_id") == target_pane_id else None,
-             "the reopened overview to focus the native pane whose output changed", timeout=10)
-    return {
-        "old_overview_pane_id": old_overview_id,
-        "reopened_overview_pane_id": new_overview_id,
-        "closed_before_native_output": True,
-        "saved_preview_remained_stale": True,
-        "reopened_detail_shows_current_output": marker,
-        "native_focus_confirmed": True,
-    }
+    send_overview_key(state, env, 'q')
+    from map_journey import popup_busy
+    busy, response = popup_busy(state)
+    if busy:
+        raise ProofFailure('closed popup remains busy')
+    # The allocation probe is itself a popup; dismiss only that owned viewer.
+    from map_identity import wait_frame
+    wait_frame(popup_client(state, env), 'j/k select/scroll')
+    send_overview_key(state, env, 'q')
+    invoke_overview(state, env)
+    detail = open_pane_from_workspace(state, env, pane_id)
+    if not current_prompt_detail_visible(detail, pane_id, before, native_snapshot=snapshot(state)):
+        raise ProofFailure('reopened detail omitted current supplied prompt')
+    send_overview_key(state, env, 'f')
+    wait_for(lambda: snapshot(state)['focused_pane_id'] == pane_id, 'exact reopened native focus')
+    return {'closed_then_ordinary_reopen': True, 'current_supplied_prompt_visible': True,
+            'native_focus_confirmed': True, 'popup_has_no_native_pane_id': True}
 
 
 def overview_location(text: str) -> tuple[str, str] | None:
-    """Read the exact presenter/level from the current visible pane header."""
-    lines = plain_terminal(text).splitlines()
-    for line in lines:
-        header = line.strip()
-        if header:
-            return OVERVIEW_HEADERS.get(header)
-    return None
+    """Recognize a completed current canvas, excluding native chrome/history."""
+    from map_frames import canvas, contains
+    try:
+        rows = canvas(plain_terminal(text))
+    except ProofFailure:
+        return None
+    plain = '\n'.join(rows)
+    if 'Latest good recap' in plain or 'Supplied prompt' in plain:
+        return ('Map', 'detail')
+    if 'Session digest' in plain:
+        return ('Map', 'digest')
+    return ('Map', 'all')
 
 
 def published_recap_detail_visible(text: str, summary: str) -> bool:
-    location = overview_location(text)
-    if location not in (("Board", "detail"), ("Mosaic", "detail")):
-        return False
-    heading = "Latest recap" if location[0] == "Board" else "LATEST PUBLISHED RECAP"
-    plain = plain_terminal(text)
-    return heading in plain and bool(summary.strip()) and "".join(summary.split()) in "".join(plain.split())
+    return (overview_location(text) == ('Map', 'detail') and 'Latest good recap' in text
+            and bool(summary.strip()) and ''.join(summary.split()) in ''.join(text.replace('│', '').split()))
 
 
-def current_prompt_detail_visible(text: str, pane_id: str, prompt: str, *, require_id: bool = True) -> bool:
-    location = overview_location(text)
-    if location not in (("Board", "detail"), ("Mosaic", "detail")):
-        return False
-    plain = plain_terminal(text)
-    prompt_heading = "Current Pi prompt" if location[0] == "Board" else "CURRENT PI PROMPT"
-    expected_prompt = "".join(prompt.split())
-    return (bool(expected_prompt) and (not require_id or f"[{pane_id}]" in plain)
-            and prompt_heading in plain and expected_prompt in "".join(plain.split()))
+def current_prompt_detail_visible(text: str, pane_id: str, prompt: str, *, require_id: bool = True, native_snapshot=None) -> bool:
+    return (overview_location(text) == ('Map', 'detail') and 'Supplied prompt' in text
+            and (not require_id or native_snapshot is not None and any(p.get('pane_id') == pane_id and ''.join((p.get('label') or '').split()) in ''.join(text.replace('│','').split()) for p in native_snapshot['panes']))
+            and bool(prompt.strip()) and ''.join(prompt.split()) in ''.join(text.replace('│', '').split()))
 
 
 def open_pane_from_workspace(state: dict[str, Any], env: dict[str, str], pane_id: str,
                              match_detail: Callable[[str], bool] | None = None) -> str:
-    # A long automatic task label can truncate the native ID in a narrow
-    # detail. A caller with a unique visible marker must verify identity by
-    # focusing the selected pane and checking Herdr's native snapshot.
-    location = overview_location(overview_text(state, env))
-    if not location or location[1] != "workspace":
-        raise ProofFailure("pane navigation did not start from a recognized current workspace header")
-    presenter = location[0]
-    for _ in range(40):
-        send_overview_key(state, env, "enter")
-        detail = wait_for(
-            lambda: (lambda text: text if overview_location(text) == (presenter, "detail") else None)(overview_text(state, env)),
-            "workspace selection to open a pane detail", timeout=4,
-        )
-        if f"[{pane_id}]" in detail or (match_detail is not None and match_detail(detail)):
-            return detail
-        send_overview_key(state, env, "esc")
-        wait_for(
-            lambda: (lambda text: text if overview_location(text) == (presenter, "workspace") else None)(overview_text(state, env)),
-            "pane detail to return to the current workspace grid", timeout=4,
-        )
-        send_overview_key(state, env, "j")
-    raise ProofFailure(f"workspace grid could not reach pane {pane_id}")
+    from map_frames import selected_in_frame
+    return_to_all_workspaces(state, env)
+    live = snapshot(state)
+    target = next((p for p in live['panes'] if p['pane_id'] == pane_id), None)
+    if not target or not target.get('terminal_id') or sum(p.get('terminal_id') == target['terminal_id'] for p in live['panes']) != 1:
+        raise ProofFailure(f'exact target lacks a unique current native terminal: {pane_id}')
+    for _ in range(len(live['panes'])):
+        collapsed = overview_text(state, env)
+        if selected_in_frame(collapsed, pane_id, live):
+            send_overview_key(state, env, 'enter')
+            detail = overview_text(state, env)
+            current = snapshot(state)
+            if not any(p['pane_id'] == pane_id and p.get('terminal_id') == target['terminal_id'] for p in current['panes']):
+                raise ProofFailure('selected native target changed during detail expansion')
+            if match_detail is None or match_detail(detail):
+                return detail
+            send_overview_key(state, env, 'esc')
+        send_overview_key(state, env, ']')
+    raise ProofFailure(f'native map could not select exact pane {pane_id}')
 
 
 def return_to_all_workspaces(state: dict[str, Any], env: dict[str, str]) -> str:
+    invoke_overview(state, env)
     for _ in range(3):
         text = overview_text(state, env)
         location = overview_location(text)
-        if location and location[1] == "all":
+        if location == ('Map', 'all'):
             return text
-        if not location:
-            raise ProofFailure("overview has no recognized current Board or Mosaic header")
-        send_overview_key(state, env, "esc")
-    raise ProofFailure("overview could not return to its all-workspaces level")
+        if location not in (('Map', 'detail'), ('Map', 'digest')):
+            raise ProofFailure('current native map canvas unavailable')
+        send_overview_key(state, env, 'esc')
+    raise ProofFailure('layered Escape failed to return to map')
 
 
 def select_workspace(state: dict[str, Any], env: dict[str, str], workspace: dict[str, Any]) -> str:
-    text = return_to_all_workspaces(state, env)
-    location = overview_location(text)
-    if not location or location[1] != "all":
-        raise ProofFailure("workspace selection did not start at a recognized all-workspaces header")
-    presenter = location[0]
-    for _ in range(len(state["fixture"]["workspaces"]) + 1):
-        if f"[{workspace['workspace_id']}]" in text and any(
-            line.lstrip().startswith("›") and f"[{workspace['workspace_id']}]" in line for line in text.splitlines()
-        ):
-            send_overview_key(state, env, "enter")
-            return wait_for(
-                lambda: (lambda opened: opened if overview_location(opened) == (presenter, "workspace")
-                         and workspace["label"] in opened else None)(overview_text(state, env)),
-                f"opening {workspace['label']} in the {presenter} workspace grid", timeout=5,
-            )
-        send_overview_key(state, env, "j")
-        text = overview_text(state, env)
-        if overview_location(text) != (presenter, "all"):
-            raise ProofFailure("workspace navigation left the current all-workspaces presenter unexpectedly")
-    raise ProofFailure(f"all-workspaces navigation could not select {workspace['label']}")
+    # The map has no workspace screen/preset. Select an actual member card.
+    live = snapshot(state)
+    target = next((p for p in live['panes'] if p['workspace_id'] == workspace['workspace_id']), None)
+    if not target:
+        raise ProofFailure('selected workspace has no live native pane')
+    open_pane_from_workspace(state, env, target['pane_id'])
+    send_overview_key(state, env, 'esc')
+    return overview_text(state, env)
 
 
 def focus_pane_from_workspace(state: dict[str, Any], env: dict[str, str], pane_id: str) -> None:
     detail = open_pane_from_workspace(state, env, pane_id)
-    if "selected pane" not in detail or f"[{pane_id}]" not in detail:
-        raise ProofFailure(f"selected-pane detail did not display native pane {pane_id}")
     send_overview_key(state, env, "f")
     focused = snapshot(state).get("focused_pane_id")
     if focused != pane_id:
         raise ProofFailure(f"overview focus did not target native pane {pane_id}: {focused}")
-    send_overview_key(state, env, "esc")
 
 
 def navigate_wide_fixture(state: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
-    root = Path(state["root"])
+    from map_journey import log_digest, require_busy
+    root = Path(state['root'])
+    receipts = root / 'wide-receipts'; receipts.mkdir(exist_ok=True)
     require_manual_names(state, env)
-    overview_id = state["fixture"]["overview_pane_id"]
-    all_screen = return_to_all_workspaces(state, env)
-    if overview_location(all_screen) != ("Mosaic", "all"):
-        raise ProofFailure("wide overview did not render the current all-workspaces Mosaic presenter")
-    if "Output subscription failed" in all_screen:
-        raise ProofFailure("live output refresh failed during the wide overview journey")
+    baseline = log_digest(root)
     live = snapshot(state)
-    for item in state["fixture"]["workspaces"]:
-        if item["label"] not in all_screen:
-            raise ProofFailure(f"wide all-workspaces Mosaic omitted {item['label']}")
-        workspace = one_by(live["workspaces"], "workspace_id", item["workspace_id"])
-        overview_pane = one_by(live["panes"], "pane_id", overview_id)
-        tabs = [tab for tab in live["tabs"] if tab.get("workspace_id") == item["workspace_id"]
-                and tab.get("tab_id") != overview_pane.get("tab_id")]
-        pane_ids = [pane["pane_id"] for pane in live["panes"] if pane.get("workspace_id") == item["workspace_id"]
-                    and pane["pane_id"] != overview_id]
-        heading = f"{item['label']} [{item['workspace_id']}]"
-        start = all_screen.find(heading)
-        if start < 0:
-            raise ProofFailure(f"wide all-workspaces Mosaic omitted heading {heading}")
-        later = [all_screen.find(f"{other['label']} [{other['workspace_id']}]", start + len(heading))
-                 for other in state["fixture"]["workspaces"] if other is not item]
-        end = min([position for position in later if position >= 0] + [len(all_screen)])
-        section = all_screen[start:end]
-        borders = sum(line.count("+----") for line in section.splitlines() if line.lstrip().startswith("+"))
-        rendered_cards = borders // 2
-        if borders % 2 or rendered_cards != len(pane_ids):
-            raise ProofFailure(f"wide all-workspaces Mosaic rendered {rendered_cards} cards for "
-                               f"{item['label']}, expected {len(pane_ids)}")
-        workspace_screen = select_workspace(state, env, {**item, "workspace_id": workspace["workspace_id"]})
-        current_tab_id = workspace.get("active_tab_id")
-        for tab in tabs:
-            if tab.get("label", "").startswith("Owner ") and tab["label"] not in workspace_screen:
-                raise ProofFailure(f"workspace grid omitted tab group {tab['label']}")
-            tab_panes = [pane["pane_id"] for pane in live["panes"] if pane.get("tab_id") == tab["tab_id"]
-                         and pane["pane_id"] != overview_id]
-            if not tab_panes:
-                raise ProofFailure(f"fixture tab has no reachable panes: {tab['tab_id']}")
-            # Bracket navigation is the actual workspace-level tab control.
-            # `active_tab_id` is Herdr's selected tab when entering a workspace.
-            tab_order = workspace.get("tab_ids") or [value["tab_id"] for value in live["tabs"]
-                                                   if value.get("workspace_id") == item["workspace_id"]]
-            if current_tab_id not in tab_order:
-                current_tab_id = tab_order[0]
-            current_index = tab_order.index(current_tab_id)
-            target_index = tab_order.index(tab["tab_id"])
-            for _ in range((target_index - current_index) % len(tab_order)):
-                send_overview_key(state, env, "]")
-            current_tab_id = tab["tab_id"]
-            for pane_id in tab_panes:
-                focus_pane_from_workspace(state, env, pane_id)
-        send_overview_key(state, env, "esc")
+    order = [p['pane_id'] for w in live['workspaces'] for t in live['tabs']
+             if t['workspace_id'] == w['workspace_id'] for p in live['panes'] if p['tab_id'] == t['tab_id']]
+    for pane_id in order:
+        invoke_overview(state, env)
+        require_busy(state, receipts, 'wide-popup-busy')
+        detail = open_pane_from_workspace(state, env, pane_id)
+        (receipts / f'{pane_id}-frame.txt').write_text(detail)
+        send_overview_key(state, env, 'f')
+        wait_for(lambda: snapshot(state)['focused_pane_id'] == pane_id, 'exact selected native focus')
     require_manual_names(state, env)
-    if state.get("theme_changed") is not True:
-        config = Path(state["config_path"])
-        config.write_text(
-            "onboarding = false\n[server]\nheadless_cols = 160\nheadless_rows = 80\n"
-            "[ui]\nmobile_width_threshold = 64\n[theme]\nname = \"dracula\"\nauto_switch = false\n"
-            "[theme.custom]\naccent = \"#ff00aa\"\n",
-            encoding="utf-8",
-        )
-        after = wait_for(
-            lambda: (lambda text: text if "38;2;255;0;170" in text else None)(
-                pane_text(state, env, overview_id, fmt="ansi")
-            ),
-            "the live overview to render the changed Herdr theme accent", timeout=8, interval=0.2,
-        )
-        if "38;2;255;121;198" not in after:
-            raise ProofFailure("live wide overview did not adopt Dracula's built-in palette")
-        state["theme_changed"] = True
-        json_dump(root / PROOF_MARKER, state)
-    # Overview presentation and selection must not execute a recap producer.
-    log_path = root / "recap-commands.jsonl"
-    commands = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()] if log_path.exists() else []
-    if any(args and args[0] in ("create", "prepare") for args in commands):
-        raise ProofFailure("overview open/navigation triggered recap generation")
-    return {"workspace_count": len(state["fixture"]["workspaces"]), "all_panes_rendered": True,
-            "native_focus_confirmed": True, "manual_names_preserved": True, "theme_change_visible": True,
-            "overview_did_not_run_recap": True}
+    # Preserve the old live-theme obligation on actual popup cells, not a
+    # dedicated pane's accumulated ANSI output or the outer native chrome.
+    config = Path(env['HERDR_CONFIG_PATH'])
+    original_config = config.read_text()
+    try:
+        invoke_overview(state, env)
+        config.write_text(original_config.replace('tokyo-night', 'dracula'))
+        client = popup_client(state, env)
+        def accented_current_header():
+            frame = client.frame()
+            for row, line in enumerate(frame.splitlines()):
+                marker = 'Herdr Overview · native map'
+                if marker in line:
+                    column = line.index(marker)
+                    if client.screen.buffer[row][column].fg == 'bd93f9':
+                        return frame
+            return None
+        frame = wait_for(accented_current_header, 'live popup Dracula accent cells', timeout=8)
+        (receipts / 'live-theme-frame.txt').write_text(frame)
+        send_overview_key(state, env, 'q')
+    finally:
+        config.write_text(original_config)
+    if baseline != log_digest(root):
+        raise ProofFailure('wide navigation generated recap/backend work')
+    return {'all_native_panes_selected_in_order': order, 'native_focus_confirmed': True,
+            'manual_names_preserved': True, 'theme_change_visible': True,
+            'overview_did_not_run_recap': True, 'transient_native_popup': True}
 
 
 def scripted_pi_reply() -> str:
@@ -1528,7 +1414,6 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         raise ProofBlocked("isolated server/Pi fixture is not ready")
     if not state.get("wide_proof_passed"):
         raise ProofBlocked("run herdr-wide first on this same isolated server")
-    state["fixture"].get("overview_pane_id") or (_ for _ in ()).throw(ProofFailure("overview pane is missing"))
     pi_bin = shutil.which("pi")
     if not pi_bin:
         raise ProofBlocked("Pi is not installed; the settlement journey cannot run")
@@ -1554,7 +1439,7 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
                   "--extension", str(ROOT / "dot_pi/private_agent/extensions/herdr-overview/index.ts"),
                   "--extension", str(provider_extension), "--no-skills", "--no-prompt-templates", "--no-themes",
                   "--no-context-files", "--no-tools", "--offline", "--approve", "--session-dir", str(root / "pi-sessions"),
-                  "--session-id", f"herdr-proof-{run_id}", timeout=130)
+                  timeout=130)
         current_prompt = f"Proof request {run_id}: inspect the current parser and report the completed work."
         prompt_process = subprocess.Popen(
             [state["herdr_bin"], "agent", "prompt", agent_name, current_prompt, "--wait", "--timeout", "120000"],
@@ -1585,7 +1470,7 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         select_workspace(state, env, pi_workspace)
         overview_text_value = open_pane_from_workspace(state, env, pane_id)
         visible_prompt = "".join(plain_terminal(overview_text_value).split())
-        if "".join(current_prompt.split()) not in visible_prompt or "CURRENTPIPROMPT" not in visible_prompt:
+        if "".join(current_prompt.split()) not in visible_prompt or "Suppliedprompt" not in visible_prompt:
             raise ProofFailure("the live selected-pane view omitted the current Pi prompt")
 
         # Return this already-recognized Pi pane to automatic naming while its
@@ -1601,18 +1486,20 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         latest_before_publication, _attempt_before_publication = read_latest_pi_record(data_root, pane_id)
         if latest_before_publication and latest_before_publication.get("status") == "published":
             raise ProofFailure("the Pi naming gate started with an already-published recap")
+        stable_subject = wait_for(lambda: (plugin_state(root)['model']['panes'][pane_id]).get('subject'),
+                                  'stable naming subject before recap')
         invoke_auto_name(state, "pane", pane_id)
 
-        def pi_name_waits_for_publication() -> dict[str, Any] | None:
+        def pi_name_before_publication() -> dict[str, Any] | None:
             current = plugin_state(root)
             native = one_by(snapshot(state).get("panes", []), "pane_id", pane_id)
             owner = (current.get("displayNameOwnership") or {}).get(f"pane:{pane_id}") or {}
             prompt = (((current.get("model") or {}).get("panes") or {}).get(pane_id) or {}).get("prompt") or {}
-            return current if owner.get("mode") == "automatic" and native.get("label") == "Owner Pi proof pane" \
+            return current if owner.get("mode") == "automatic" and native.get("label") == stable_subject \
                 and prompt.get("text") == current_prompt and prompt.get("working") is True else None
 
-        wait_for(pi_name_waits_for_publication,
-                 "automatic Pi naming to remain unchanged while only the live prompt is available", timeout=15)
+        wait_for(pi_name_before_publication,
+                 "automatic Pi naming to use stable subject before any recap", timeout=15)
 
         Path(provider["release_file"]).touch()
         try:
@@ -1631,14 +1518,14 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         if first_latest.get("summary") != SUCCESS_SUMMARY or first_latest.get("workspace_id") != state["fixture"]["workspaces"][0]["workspace_id"]:
             raise ProofFailure("settled Pi recap is missing or has incorrect publication-time workspace attribution")
 
-        def pi_name_follows_successful_publication() -> dict[str, Any] | None:
+        def pi_name_survives_publication() -> dict[str, Any] | None:
             current = plugin_state(root)
             native = one_by(snapshot(state).get("panes", []), "pane_id", pane_id)
             owner = (current.get("displayNameOwnership") or {}).get(f"pane:{pane_id}") or {}
-            return current if owner.get("mode") == "automatic" and native.get("label") == first_latest["summary"] else None
+            return current if owner.get("mode") == "automatic" and native.get("label") == stable_subject else None
 
-        wait_for(pi_name_follows_successful_publication,
-                 "automatic Pi naming to follow its successful recap publication", timeout=20)
+        wait_for(pi_name_survives_publication,
+                 "automatic Pi naming to remain stable after recap publication", timeout=20)
         first_workspace_id = first_latest["workspace_id"]
         recap_state_path = overview_state_path(root)
         after_publish_state = wait_for(
@@ -1648,7 +1535,7 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         )
         expected_deadline = datetime.fromisoformat(first_latest["published_at"].replace("Z", "+00:00")).timestamp() + 30
         actual_deadline = datetime.fromisoformat(after_publish_state.replace("Z", "+00:00")).timestamp()
-        if abs(actual_deadline - expected_deadline) > 2:
+        if abs(actual_deadline - expected_deadline) > .002:
             raise ProofFailure("successful Pi publication did not start the exact 30-second workspace interval")
         if not provider_requests(root) or "Proof request" not in provider_requests(root)[0].get("body", ""):
             raise ProofFailure("the real Pi session did not use the scripted response provider")
@@ -1692,7 +1579,7 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
             return (None, None)
         workspace_record, session_record = wait_for(grouped, "30-second workspace and session group publication", timeout=40)
         workspace_published = datetime.fromisoformat(workspace_record["published_at"].replace("Z", "+00:00")).timestamp()
-        if workspace_published < due - 2:
+        if workspace_published < due - .002:
             raise ProofFailure("workspace recap appeared before the persisted quiet deadline")
         if first_latest["record_id"] not in workspace_record.get("member_record_ids", []):
             raise ProofFailure("workspace recap did not retain the Pi member recap ID")
@@ -1704,16 +1591,12 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
             return value if latest.get("record_id") == session_record["record_id"] else None
 
         state_now = wait_for(session_recap_in_model, "session recap publication in the overview model", timeout=20)
-        # All-workspaces overview must display the current session recap, not only
-        # leave it in the backing JSON store.
-        overview_id = state["fixture"]["overview_pane_id"]
-        send_overview_key(state, env, "esc")
-        send_overview_key(state, env, "esc")
+        # Grouped member identities remain in the current session model;
+        # the map discloses the selected pane's dated latest-good recap.
         invoke_overview(state, env)
-        visible = pane_text(state, env, overview_id, fmt="ansi", lines=260)
-        plain = __import__("re").sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", visible)
-        if session_record["summary"] not in plain:
-            raise ProofFailure("all-workspaces overview did not display the published Herdr-session recap")
+        detail = open_pane_from_workspace(state, env, pane_id)
+        if not published_recap_detail_visible(detail, first_latest['summary']):
+            raise ProofFailure('current popup omitted selected published recap')
 
         # A manual single recap can be addressed to a native pane by source ID.
         # Verify the overview reads that independent source and keeps its failure
@@ -1738,6 +1621,8 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         if manual_failure_record.get("status") != "failed":
             raise ProofFailure("manual pane recap failure was not retained as the latest attempt")
 
+        # Explicit manual publication wake-up, not a viewing side effect.
+        api_request(state, 'plugin.action.invoke', {'action_id': 'overview.reconcile'})
         invoke_overview(state, env)
         def manual_recap_in_model() -> dict[str, Any] | None:
             current = read_json(recap_state_path)
@@ -1755,10 +1640,10 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
             raise ProofFailure("pane model did not preserve the independent manual recap source")
         select_workspace(state, env, pi_workspace)
         manual_detail = open_pane_from_workspace(state, env, pane_id)
-        if manual_summary not in manual_detail or "Latest attempt failed" not in manual_detail:
+        if manual_summary not in manual_detail or "Newer attempt failed" not in manual_detail:
             raise ProofFailure("selected-pane detail omitted the manual recap or its latest failure status")
-        if manual_pane.get("label") != first_latest["summary"]:
-            raise ProofFailure("manual recap changed the Pi name away from its successful Pi-session publication")
+        if manual_pane.get("label") != stable_subject:
+            raise ProofFailure("manual recap changed the stable Pi subject")
 
         return {
             "pi_pane_id": pane_id,
@@ -1769,10 +1654,10 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
             "session_recap_id": session_record["record_id"],
             "quiet_period_seconds": round(workspace_published - datetime.fromisoformat(first_latest["published_at"].replace("Z", "+00:00")).timestamp(), 1),
             "failed_recap_preserved_latest_and_deadline": True,
-            "overview_displays_session_recap": True,
+            "grouped_session_model_and_selected_recap_visible": True,
             "manual_pane_source_recap_and_failure_visible": True,
-            "pi_name_waited_for_successful_publication": True,
-            "published_pi_name": first_latest["summary"],
+            "pi_name_stable_before_after_publication": True,
+            "stable_pi_name": stable_subject,
             "manual_recap_did_not_drive_pi_naming": True,
             "response_provider": "scripted local OpenAI-compatible SSE provider",
         }
@@ -1826,9 +1711,9 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     prior_recap, _attempt = read_latest_pi_record(data_root, old_pane_id)
     if not prior_recap or prior_recap.get("status") != "published":
         raise ProofBlocked("run pi-grouped first to publish a Pi recap on the fixture pane")
-    pi_task_label = prior_recap.get("summary")
+    pi_task_label = (plugin_state(root)["model"]["panes"][old_pane_id]).get("subject")
     if not isinstance(pi_task_label, str) or not pi_task_label.strip():
-        raise ProofFailure("the published Pi recap has no task label for the automatic tab proof")
+        raise ProofFailure("the current Pi pane has no stable subject for the automatic tab proof")
     session_id = prior_recap.get("source_id")
     before = snapshot(state)
     old_pane = one_by(before.get("panes", []), "pane_id", old_pane_id)
@@ -1859,7 +1744,7 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     root_pane_before = one_by(names_before.get("panes", []), "pane_id", root_pane_id)
     root_tab_before = one_by(names_before.get("tabs", []), "tab_id", root_tab_id)
     if root_pane_before.get("tab_id") != root_tab_id or old_pane.get("tab_id") != root_tab_id:
-        raise ProofFailure("the shell and published Pi tasks no longer share their native tab")
+        raise ProofFailure("the shell and stable Pi subjects no longer share their native tab")
     original_shell_label = root_pane_before.get("label")
     original_tab_label = root_tab_before.get("label")
     manual_source_terminal_id = root_pane_before.get("terminal_id")
@@ -1919,7 +1804,7 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         return None
 
     combined_tab = wait_for(automatic_two_task_tab,
-                            "the reset tab name to represent both its shell and published Pi tasks", timeout=15)
+                            "the reset tab name to represent both its shell and stable Pi subjects", timeout=15)
     herdr_cmd(state, env, "pane", "rename", root_pane_id, original_shell_label)
     herdr_cmd(state, env, "tab", "rename", root_tab_id, original_tab_label)
     invoke_overview(state, env)
@@ -1951,6 +1836,7 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         Path(env["HOME"]), env, "publish", "--prepared-id", prepared_before_move,
         "--workspace-id", source_workspace_id,
     ).stdout.strip()
+    api_request(state, 'plugin.action.invoke', {'action_id': 'overview.reconcile'})
     invoke_overview(state, env)
     state_path = overview_state_path(root)
     def original_deadline() -> str | None:
@@ -1970,6 +1856,7 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     manual_source_record = find_record(data_root, manual_source_record_id)[1]
     if manual_source_record.get("source_kind") != "manual" or manual_source_record.get("source_id") != manual_source_pane_id:
         raise ProofFailure("manual recap did not preserve its native pane source ID")
+    api_request(state, 'plugin.action.invoke', {'action_id': 'overview.reconcile'})
     invoke_overview(state, env)
 
     def manual_identity_persisted() -> dict[str, Any] | None:
@@ -2163,7 +2050,7 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     _current_state, deadline_text = wait_for(deadline_state, "the current-workspace quiet deadline", timeout=20)
     expected = datetime.fromisoformat(moved_recap["published_at"].replace("Z", "+00:00")).timestamp() + 30
     actual = datetime.fromisoformat(deadline_text.replace("Z", "+00:00")).timestamp()
-    if abs(actual - expected) > 2:
+    if abs(actual - expected) > .002:
         raise ProofFailure("the moved Pi recap did not start its publication-time quiet deadline")
 
     def current_prompt_and_recap_in_model() -> dict[str, Any] | None:
@@ -2252,7 +2139,7 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
         "membership_lookup": "real Pi adapter pane.current caller_pane_id over isolated socket",
         "manual_rename_survived_reconciliation": True,
         "automatic_pane_reset_restored": auto_shell_label,
-        "automatic_tab_contains_shell_and_published_pi_tasks": combined_tab,
+        "automatic_tab_contains_shell_and_stable_pi_subjects": combined_tab,
         "owner_labels_restored_before_move": True,
         "group_record_id": group_record["record_id"],
         "group_contains_latest_moved_pi_and_manual_non_pi_recaps": True,
@@ -2281,7 +2168,7 @@ def validate_phone_receipt(root: Path, run_id: str) -> dict[str, Any]:
     if route.get("terminal_columns", 999) > 64:
         raise ProofBlocked("the phone route was not narrow (terminal width is above 64); do not substitute width emulation")
     if not route.get("journey_attested"):
-        raise ProofFailure("the attended phone user did not confirm Board/workspace/detail/focus navigation")
+        raise ProofFailure("the attended phone user did not confirm map/detail/digest/focus navigation")
     expected_pane = read_json(root / PROOF_MARKER)["fixture"]["pi_pane_id"]
     if route.get("focused_pane_id") != expected_pane:
         raise ProofFailure("phone focus did not reach the actual selected native Pi pane")
@@ -2314,7 +2201,7 @@ def phone_client(run_id: str, base: Path | None) -> int:
                       "terminal_columns": columns, "terminal_rows": rows,
                       "expected_pi_pane_id": state["fixture"]["pi_pane_id"]}), flush=True)
     if columns > 64:
-        print("BLOCKED: this phone SSH terminal is wider than the Board threshold; do not resize/emulate it.", flush=True)
+        print("BLOCKED: this phone SSH terminal is wider than the supported narrow width; do not resize/emulate it.", flush=True)
     print("Open Herdr Overview. Visit every Proof workspace, its tabs/panes, open the Pi pane detail, and press f to focus it.", flush=True)
     print(f"Expected selected native Pi pane: {state['fixture']['pi_pane_id']}", flush=True)
     print("Quit the Herdr client only after that phone journey, then confirm below.", flush=True)
@@ -2326,7 +2213,7 @@ def phone_client(run_id: str, base: Path | None) -> int:
         except Exception:
             focused = None
     if columns <= 64 and completed.returncode == 0 and focused == state["fixture"]["pi_pane_id"]:
-        print("Did you reach every workspace/tab/pane in the Board and read the whole Pi reply in detail? [y/N] ", end="", flush=True)
+        print("Did you reach every workspace/tab/pane in the native map and read the supplied prompt/recap/digest in detail? [y/N] ", end="", flush=True)
         answer = sys.stdin.readline().strip().lower()
         attested = answer in ("y", "yes")
     else:

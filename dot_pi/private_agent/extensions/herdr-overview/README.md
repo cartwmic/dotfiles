@@ -30,7 +30,7 @@ The source lives under `dot_pi/private_agent/extensions/`, so it deploys with th
 ## Usage
 
 Run Pi inside a Herdr pane and submit an interactive prompt. While Pi works,
-the overview pane detail shows that current prompt separately. The prompt
+the overview inline detail shows that current prompt separately. The prompt
 settles even when automatic recaps are off. With `auto_publish = true` and a
 working backend, the settled reply also produces a published recap and dated
 record. A disabled or failed backend leaves the native pane and prompt
@@ -43,6 +43,23 @@ visible. See
 - Immediately before `session-recap publish`, it calls Herdr 0.9.1's public `pane.current` with `{ caller_pane_id: HERDR_PANE_ID }`. This caller-aware lookup follows a running pane if `pane.move` has rekeyed its native pane ID; it never substitutes the UI-focused pane. The observed `workspace_id` is attached to that publication; missing pane, workspace, socket, or response means publication without workspace attribution.
 - After confirmed publication, it invokes only the existing public `plugin.action.invoke` action `overview.reconcile`. A failed wake-up does not undo the durable recap; Herdr startup reconciliation can catch it up.
 
+The adapter publishes private current identity/name metadata independently of
+recap opt-in in `$XDG_STATE_HOME/herdr-overview/pi-sessions`, using the actual
+per-call public Pi UUID/name and caller-resolved live socket/terminal. Only TUI
+and RPC modes publish: text-print/JSON children cannot take over or retire the
+interactive binding. Session replacement/reload creates a fresh generation;
+compare-owned retirement prevents an old publisher from deleting its successor.
+`session_info_changed` refreshes metadata and calls passive
+`overview.refresh_names`, not recap-enabled `overview.reconcile`: no model work
+is caused by changing names or viewing.
+
+The reader requires one live publisher and one uniquely matching native
+terminal on the correct socket, with no conflicting native UUID or duplicate
+record. Names/recap/digest BODY, title and cwd cannot infer digest identity.
+The popup reads only `.pi/session-search/digests/<verified-UUID>.json`; missing
+or malformed dated digests are honestly unavailable. Naming may use an explicit
+native Pi title as a naming-only fallback, never as a session/digest join.
+
 Duplicate settled events are consumed once per real prompt. Pi context objects are read only during their event callback and are never retained. Pi session identity and Herdr-managed `herdr-agent-state.ts` are untouched.
 
 ## Troubleshooting
@@ -52,10 +69,9 @@ Duplicate settled events are consumed once per real prompt. Pi context objects a
   the command/configuration in `dot_local/share/session-recap/README.md`
   (Setup). `SESSION_RECAP_BIN` can override the installed CLI path. Blank or
   failed backend output is recorded without a publication wake-up.
-- Recap published but no overview tab: invoke
-  `herdr plugin action invoke overview.reconcile --plugin overview` on a
-  compatible running server. This loads a newly linked plugin action without
-  restarting; see `dot_local/share/herdr-overview/README.md` (Setup).
+- Recap published but no popup: `overview.reconcile` refreshes the model
+  without opening a view. Invoke `herdr plugin action invoke overview.open
+  --plugin overview` or use `prefix+shift+o`; see the plugin guide (Setup).
 - Recap without a workspace group: the adapter needs live caller pane and
   workspace membership through `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`.
   Missing membership stays session-only; it is never borrowed from UI focus.

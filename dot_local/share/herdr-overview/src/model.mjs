@@ -1,3 +1,5 @@
+import { evaluateDisplayNamePolicy } from "./display-name-policy.mjs";
+
 export const HERDR_PROTOCOL = 22;
 
 const AGENT_STATES = new Set(["idle", "working", "blocked", "done", "unknown"]);
@@ -21,6 +23,13 @@ export function normalizeSnapshot(snapshot, supplied = {}, runtime = {}) {
     throw new Error(`Herdr protocol ${HERDR_PROTOCOL} required; server reports ${snapshot.protocol ?? "unknown"}`);
   }
 
+  const names = evaluateDisplayNamePolicy(snapshot, {
+    supplied,
+    ownership: runtime.displayNameOwnership,
+    processByPaneId: runtime.processByPaneId,
+    excludedPaneIds: runtime.excludedPaneIds,
+  });
+  const piSessions = objectMap(supplied.piSessionsByPaneId);
   const promptByPane = objectMap(supplied.promptsByPaneId);
   const promptBySession = objectMap(supplied.promptsBySessionId);
   const recapByPane = objectMap(supplied.piRecapsByPaneId);
@@ -47,6 +56,7 @@ export function normalizeSnapshot(snapshot, supplied = {}, runtime = {}) {
     workspaceId: tab.workspace_id,
     number: tab.number,
     label: tab.label,
+    fullTitle: names.tabTitles[tab.tab_id] ?? tab.label ?? null,
     displayNameOwnership: displayNameOwnership[`tab:${tab.tab_id}`] ?? null,
     focused: Boolean(tab.focused),
     agentStatus: stateOf(tab.agent_status),
@@ -81,6 +91,10 @@ export function normalizeSnapshot(snapshot, supplied = {}, runtime = {}) {
       terminalId: nativePane.terminal_id ?? null,
       label: nativePane.label ?? null,
       displayNameOwnership: displayNameOwnership[`pane:${id}`] ?? null,
+      subject: names.paneSubjects[id] ?? null,
+      piSession: piSessions[id] ?? null,
+      sessionName: piSessions[id]?.sessionName ?? null,
+      digest: piSessions[id]?.digest ?? { status: "unavailable", body: null, generatedAt: null, reason: "unmatched" },
       title: nativePane.title ?? null,
       terminalTitle: nativePane.terminal_title_stripped ?? nativePane.terminal_title ?? null,
       cwd: nativePane.cwd ?? null,

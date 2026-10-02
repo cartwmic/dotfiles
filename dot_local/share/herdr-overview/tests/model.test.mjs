@@ -84,6 +84,30 @@ test("keeps supplied current prompt and published recap as separate fields from 
   assert.equal(model.recap.latest.summary, "Session recap");
 });
 
+test("verified session and full subject fields never infer native agent state", () => {
+  const current = snapshot();
+  const id = "ws-a:pane-shell";
+  const sessionName = "Synthetic long stable subject ".repeat(10).trim();
+  const digest = { status: "available", body: "Synthetic digest", generatedAt: "2026-10-01T00:00:00Z", reason: null };
+  const piSession = { sessionId: "11111111-1111-4111-8111-111111111111", sessionName, digest };
+  const model = normalizeSnapshot(current, { piSessionsByPaneId: { [id]: piSession } });
+  assert.equal(model.panes[id].piSession, piSession);
+  assert.equal(model.panes[id].sessionName, sessionName);
+  assert.equal(model.panes[id].subject, sessionName);
+  assert.equal(model.panes[id].digest, digest);
+  assert.equal(model.panes[id].agent.recognized, false);
+  assert.equal(model.panes[id].agent.status, "unknown");
+  assert.equal(model.panes[id].agent.session, null);
+  current.panes[0].terminal_title_stripped = "π - Naming only - /repo";
+  current.panes[0].title = null;
+  const unverified = normalizeSnapshot(current);
+  assert.equal(unverified.panes[id].subject, "Naming only");
+  assert.equal(unverified.panes[id].piSession, null);
+  assert.equal(unverified.panes[id].sessionName, null);
+  assert.equal(unverified.panes[id].digest.status, "unavailable");
+  assert.equal(unverified.panes[id].agent.recognized, false);
+});
+
 test("rejects a server outside the pinned public protocol", () => {
   assert.throws(() => normalizeSnapshot({ ...snapshot(), protocol: 21 }), /protocol 22 required/);
 });

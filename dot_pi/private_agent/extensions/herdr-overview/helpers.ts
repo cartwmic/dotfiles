@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { spawn } from "node:child_process";
 import net from "node:net";
 import { homedir } from "node:os";
@@ -156,6 +157,7 @@ export function requestHerdr(
 }
 
 export interface CurrentPane {
+	terminalId?: string;
 	paneId: string;
 	workspaceId?: string;
 }
@@ -168,7 +170,7 @@ export async function currentPaneForCaller(
 	try {
 		const result = await requestHerdr(socketPath, "pane.current", { caller_pane_id: callerPaneId }) as {
 			type?: unknown;
-			pane?: { pane_id?: unknown; workspace_id?: unknown };
+			pane?: { pane_id?: unknown; workspace_id?: unknown; terminal_id?: unknown };
 		} | null;
 		if (result?.type !== "pane_current") return undefined;
 		const paneId = result.pane?.pane_id;
@@ -176,6 +178,7 @@ export async function currentPaneForCaller(
 		const workspaceId = result.pane?.workspace_id;
 		return {
 			paneId,
+			...(typeof result.pane?.terminal_id === "string" && result.pane.terminal_id ? { terminalId: result.pane.terminal_id } : {}),
 			...(typeof workspaceId === "string" && workspaceId.trim() ? { workspaceId } : {}),
 		};
 	} catch {
@@ -189,6 +192,46 @@ export async function paneWorkspaceAtPublication(
 	callerPaneId: string | undefined,
 ): Promise<string | undefined> {
 	return (await currentPaneForCaller(socketPath, callerPaneId))?.workspaceId;
+}
+
+export async function exactTerminalForCaller(socketPath: string, callerPaneId: string): Promise<CurrentPane | undefined> {
+	const pane = await currentPaneForCaller(socketPath, callerPaneId);
+	if (!pane) return undefined;
+	try {
+		const result = await requestHerdr(socketPath, "session.snapshot") as any;
+		const snapshot = result?.snapshot;
+		if (snapshot?.protocol !== 22) return undefined;
+		const matches = snapshot.panes?.filter((item: any) => item.pane_id === pane.paneId) ?? [];
+		if (matches.length !== 1) return undefined;
+		const terminalId = matches[0].terminal_id;
+		if (typeof terminalId !== "string" || !terminalId || (pane.terminalId && pane.terminalId !== terminalId)) return undefined;
+		if (snapshot.panes.filter((item: any) => item.terminal_id === terminalId).length !== 1) return undefined;
+		return { ...pane, terminalId };
+	} catch { return undefined; }
+}
+
+export function writePiMetadata(record: Record<string, unknown>): string {
+	const directory = process.env.HERDR_OVERVIEW_PI_SESSIONS_DIR || path.join(process.env.XDG_STATE_HOME || path.join(process.env.HOME || homedir(), ".local/state"), "herdr-overview", "pi-sessions");
+	mkdirSync(directory, { recursive: true, mode: 0o700 });
+	const file = path.join(directory, createHash("sha256").update(JSON.stringify([record.socketPath, record.terminalId])).digest("hex") + ".json");
+	const temporary = `${file}.${randomUUID()}.tmp`;
+	try {
+		writeFileSync(temporary, JSON.stringify(record), { mode: 0o600 });
+		renameSync(temporary, file);
+	} finally { try { unlinkSync(temporary); } catch {} }
+	return file;
+}
+
+export function retirePiMetadata(file: string | undefined, generation: string): void {
+	if (!file) return;
+	try {
+		const record = JSON.parse(readFileSync(file, "utf8"));
+		if (record.publisherPid === process.pid && record.generation === generation) unlinkSync(file);
+	} catch {}
+}
+
+export function invokeOverviewNameRefresh(socketPath: string): Promise<unknown> {
+	return requestHerdr(socketPath, "plugin.action.invoke", { action_id: "overview.refresh_names" });
 }
 
 export function invokeOverviewReconcile(socketPath: string): Promise<unknown> {

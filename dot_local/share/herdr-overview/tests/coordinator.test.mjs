@@ -23,14 +23,14 @@ function makeSnapshot(withOverview = false) {
   };
 }
 
-test("startup and reconcile share an idempotent initializer, exclude its own pane, and refresh invalidated output", async (t) => {
+test("startup and reconcile never create or delete views and preserve legacy owner tabs", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-coordinator-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const stateDir = path.join(root, "state");
   const dataRoot = path.join(root, "session-recap");
   const configPath = path.join(root, "config.toml");
   await writeFile(configPath, '[theme]\nname = "nord"\nauto_switch = false\n');
-  let hasOverview = false;
+  let hasOverview = true;
   let overviewProcessRunning = true;
   let opens = 0;
   let closes = 0;
@@ -45,7 +45,7 @@ test("startup and reconcile share an idempotent initializer, exclude its own pan
     },
     async renameTab() {},
     async closePane(paneId) { assert.equal(paneId, "ws-a:p-overview"); closes += 1; hasOverview = false; },
-    async readPane(paneId) { assert.equal(paneId, "ws-a:p1"); return output; },
+    async readPane(paneId) { return output; },
     async processInfo(paneId) {
       if (paneId === "ws-a:p-overview") return overviewProcessRunning
         ? { foreground_processes: [{ argv0: "node", argv: ["index.mjs", "overview"], cmdline: "node index.mjs overview" }] }
@@ -55,15 +55,15 @@ test("startup and reconcile share an idempotent initializer, exclude its own pan
   };
 
   const first = await reconcileOverview({ api, stateDir, dataRoot, configPath });
-  assert.equal(opens, 1);
-  assert.equal(first.overviewPaneId, "ws-a:p-overview");
-  assert.deepEqual(Object.keys(first.model.panes), ["ws-a:p1"]);
+  assert.equal(opens, 0);
+  assert.equal(first.overviewPaneId, undefined);
+  assert.deepEqual(Object.keys(first.model.panes), ["ws-a:p1", "ws-a:p-overview"]);
   assert.equal(first.model.panes["ws-a:p1"].agent.status, "unknown");
   assert.equal(first.model.panes["ws-a:p1"].preview, "initial output");
   assert.equal(first.theme.name, "nord");
 
   const second = await reconcileOverview({ api, stateDir, dataRoot, configPath });
-  assert.equal(opens, 1);
+  assert.equal(opens, 0);
   assert.equal(second.model.panes["ws-a:p1"].processInfo.foreground_processes[0].name, "node");
 
   output = "changed output";
@@ -75,13 +75,13 @@ test("startup and reconcile share an idempotent initializer, exclude its own pan
   assert.equal(third.model.selection.paneId, "ws-a:p1");
   const persisted = JSON.parse(await readFile(path.join(stateDir, "overview.json"), "utf8"));
   assert.equal(persisted.schema_version, 1);
-  assert.equal(persisted.overviewPaneId, "ws-a:p-overview");
+  assert.equal(persisted.overviewPaneId, undefined);
 
   overviewProcessRunning = false;
   const restarted = await reconcileOverview({ api, stateDir, dataRoot, configPath });
-  assert.equal(closes, 1, "only the stale plugin-owned shell pane is closed");
-  assert.equal(opens, 2, "a stopped plugin pane is reopened on server startup");
-  assert.equal(restarted.overviewPaneId, "ws-a:p-overview");
+  assert.equal(closes, 0, "owner legacy tab is never closed");
+  assert.equal(opens, 0);
+  assert.ok(restarted.model.panes['ws-a:p-overview']);
 });
 
 test("reconciliation and pane detail retain a Pi prompt after Herdr rekeys its pane ID", async (t) => {
@@ -144,8 +144,8 @@ test("reconciliation and pane detail retain a Pi prompt after Herdr rekeys its p
     ...state,
     journey: { level: "pane", workspaceId: "w2", tabId: "w2:t1", paneId: currentPaneId, detailScroll: 0 },
   }, 60, 24);
-  assert.match(detail, /output after move/);
-  assert.match(detail, /Current Pi prompt/);
+  assert.doesNotMatch(detail, /output after move/);
+  assert.match(detail, /Supplied prompt/);
   assert.match(detail, /Continue after the pane move/);
 });
 
@@ -184,7 +184,7 @@ test("an automatically owned Pi pane survives pane.created before pane.moved", a
         workspaces: [{ workspace_id: "w2", number: 2, label: "Bravo", focused: true, active_tab_id: "w2:t1" }],
         tabs: [{ tab_id: "w2:t1", workspace_id: "w2", number: 1, label: "1", focused: true }],
         panes: [{ pane_id: paneId, workspace_id: "w2", tab_id: "w2:t1", terminal_id: "stable-terminal",
-          label, agent: "pi", focused: true, agent_status: "done" }],
+          label, terminal_title_stripped: "π - Stable moved task - /repo", agent: "pi", focused: true, agent_status: "done" }],
         agents: [{ pane_id: paneId, agent: "pi" }], layouts: [],
       };
     },
@@ -198,13 +198,14 @@ test("an automatically owned Pi pane survives pane.created before pane.moved", a
   });
   assert.equal(state.displayNameOwnership["pane:w2:p1"].mode, "automatic");
   assert.equal(state.displayNameOwnership["pane:w1:p1"], undefined);
-  assert.deepEqual(renames, [["w2:p1", recap.summary]]);
-  assert.equal(state.model.panes["w2:p1"].label, recap.summary);
+  assert.deepEqual(renames, [["w2:p1", "Stable moved task"]]);
+  assert.equal(state.model.panes["w2:p1"].label, "Stable moved task");
+  assert.equal(state.model.panes["w2:p1"].recap.latest.summary, recap.summary);
   const lateMove = await reconcileOverview({ api, stateDir, dataRoot, configPath, openPane: false,
     event: { event: "pane.moved", data: { previous_pane_id: "w1:p1", pane: { pane_id: "w2:p1" } } },
   });
   assert.equal(lateMove.displayNameOwnership["pane:w2:p1"].mode, "automatic");
-  assert.deepEqual(renames, [["w2:p1", recap.summary]]);
+  assert.deepEqual(renames, [["w2:p1", "Stable moved task"]]);
 
   label = "Owner takes over the moved pane";
   const manual = await reconcileOverview({ api, stateDir, dataRoot, configPath, openPane: false,
@@ -217,10 +218,10 @@ test("an automatically owned Pi pane survives pane.created before pane.moved", a
   });
   assert.equal(movedAgain.displayNameOwnership["pane:w2:p2"].mode, "manual");
   assert.equal(movedAgain.model.panes[paneId].label, label);
-  assert.deepEqual(renames, [["w2:p1", recap.summary]]);
+  assert.deepEqual(renames, [["w2:p1", "Stable moved task"]]);
 });
 
-test("empty-server startup waits for the first native workspace before opening the pane", async (t) => {
+test("empty-server startup and workspace events remain view-free", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-empty-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const stateDir = path.join(root, "state");
@@ -244,7 +245,7 @@ test("empty-server startup waits for the first native workspace before opening t
 
   const startup = await reconcileOverview({ api, stateDir, configPath, openPane: true });
   assert.equal(opens, 0);
-  assert.equal(startup.overviewPaneId, null);
+  assert.equal(startup.overviewPaneId, undefined);
   assert.deepEqual(startup.model.workspaceOrder, []);
 
   hasWorkspace = true;
@@ -252,8 +253,8 @@ test("empty-server startup waits for the first native workspace before opening t
     api, stateDir, configPath, openPane: true,
     event: { event: "workspace.created", data: { type: "workspace_created" } },
   });
-  assert.equal(opens, 1);
-  assert.equal(created.overviewPaneId, "ws-a:p-overview");
+  assert.equal(opens, 0);
+  assert.equal(created.overviewPaneId, undefined);
   assert.deepEqual(Object.keys(created.model.panes), ["ws-a:p1"]);
 });
 

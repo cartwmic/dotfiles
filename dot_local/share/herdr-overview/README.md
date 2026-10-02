@@ -9,14 +9,15 @@ It does not host the plugin. The thin Pi adapter lives at
 `dot_pi/private_agent/extensions/herdr-overview/`.
 
 Linking leaves the running server untouched. On a compatible server start,
-the plugin's `[[startup]]` hook opens one overview tab and initializes its
-model. If a prior plugin process died during a server restart, it closes the
-stale plugin-owned shell pane only while that dedicated tab remains intact.
-The `overview.reconcile` action uses the same initializer for an already-loaded
-server. Chezmoi apply and bootstrap never restart the owner's main server.
+the plugin's `[[startup]]` hook initializes its model without creating a tab.
+The `overview.reconcile` action refreshes that model without opening a view.
+`overview.open` opens a temporary shared pane-canvas popup, not a native tab.
+Herdr 0.9.1 retains its sidebar/tab strip or phone header around this canvas. Chezmoi apply and bootstrap never restart the owner's main server.
 
-The plugin reads native Herdr pane state and recent output through the public
-protocol. It joins supplied Pi prompts and published `session-recap` records to
+An old persistent Overview tab is not destroyed during migration. Close that
+old tab manually if desired; the plugin never deletes owner panes to recreate it.
+
+The plugin reads native Herdr pane state through the public protocol. It joins supplied Pi prompts and published `session-recap` records to
 those panes, keeping prompt, recap, and live agent state separate. A pane move
 can rekey its native ID; a verified live terminal identity keeps its supplied
 prompt and recap visible after the move. Reads never generate recaps. The
@@ -35,8 +36,7 @@ mise run install-herdr-overview
 ```
 
 The task links the plugin without starting or restarting Herdr. On a
-compatible running server, load the linked action and open an overview tab
-in the background with:
+compatible running server, load the linked action and reconcile the model with:
 
 ```sh
 herdr plugin action invoke overview.reconcile --plugin overview
@@ -54,13 +54,38 @@ The standalone CLI also works with Herdr stopped.
 
 ## Usage
 
-The pane selects the narrow Board when its width is at or below `[ui].mobile_width_threshold` in Herdr `config.toml` (the managed value is 64); wider terminals get the independent Mosaic. There is no runtime layout switch. Each presenter owns its all-workspaces, workspace, and pane-detail rendering over the same ID-keyed model.
+Open the popup with `prefix+shift+o` or
+`herdr plugin action invoke overview.open --plugin overview`. Clients share one
+session-singleton, 100% native popup with no pane ID; another
+modal returns `ui_busy`. Deleting its owner tab dismisses it natively; reopen
+from an ordinary surviving pane. There is no anchor, resurrection or background
+automatic open on startup, events or reconcile. A selected non-owner target
+that disappears while the popup lives produces a notice and cannot focus an
+unrelated pane. The responsive native map groups
+single-pane tabs together beneath their workspace and keeps multi-pane tabs
+as groups, in native workspace/tab/pane order, without urgency reordering. Wide
+layouts use workspace columns; singleton tabs share compact card rows (two
+columns from an actual popup-canvas width of 32 columns). Cards are bordered,
+padded and word-wrapped; shortened collapsed titles end in an ellipsis. `M`
+marks manual names; headings show tab and attention counts. Normal reading
+shows prose, not raw JSON. Outer widths 40/48/120/180 currently yield popup
+widths 38/46/92/152. Outer width 32 yields only 30: below the card floor, where
+ordinary clipping can occur, not a supported-width claim. The single shared
+native popup PTY can clip a narrow attached peer when another client is wide;
+detach the other peer for readable single-client geometry. Board/Mosaic and their background tab
+are retired.
 
-- Board: summary-first workspaces, then scrollable tab-grouped pane tiles and recent-output-first detail.
-- Mosaic: all-workspace/all-pane simultaneous preview, then a tab-grouped preview grid and pane detail.
-- `j`/`k` moves through workspaces or panes; `[`/`]` selects tabs; `Enter` opens the next level; `Esc` returns; `f` focuses the selected native pane; `q` closes; `r` rereads saved overview state. In pane detail, `j`/`k`, Space, and `b` scroll.
+- `j`/`k` selects panes in native order; `[`/`]` also selects previous/next pane.
+- `Enter` expands the selected pane in the map, including its full tab name;
+  another Enter returns to the map. `d` enters the separate digest view and does nothing if already there.
+- In detail, `j`/`k`, Space, and `b` scroll. `n` selects the next blocked pane.
+- `Esc` restores the prior recap passage from digest, then returns to map, then
+  dismisses; `q` dismisses immediately.
+- `r` refreshes native state and saved records. Resize redraws the map.
+- `f` checks the selected live terminal identity again, focuses its native pane
+  and dismisses only on success. A vanished/conflicting target stays open.
 
-The display is passive: it shows only supplied prompt fields and published recap records, with age and missing/failure status. Opening, selection, preview refresh, scrolling, and focus never run `session-recap` or synthesize recap text. `overview.reconcile` remains a separate plugin action for publication coordination and manual-library refresh. To show a manually generated single recap in a pane's detail, use that native pane ID as the source ID, for example `printf '%s\n' 'Recent work and current state.' | session-recap create --kind single --source-id PANE_ID`, then invoke `herdr plugin action invoke overview.reconcile --plugin overview` while the source pane is live. This lets the overview display its published or failed status and persist the live terminal association used if `pane.move` later rekeys the pane. Manual results are not Pi auto-naming inputs.
+The display is passive: it shows only supplied prompt fields and published recap records, with age and missing/failure status. Opening, selection, refresh, scrolling, and focus never run `session-recap` or synthesize recap text. `overview.reconcile` remains a separate plugin action for publication coordination and manual-library refresh. To show a manually generated single recap in a pane's detail, use that native pane ID as the source ID, for example `printf '%s\n' 'Recent work and current state.' | session-recap create --kind single --source-id PANE_ID`, then invoke `herdr plugin action invoke overview.reconcile --plugin overview` while the source pane is live. This lets the overview display its published or failed status and persist the live terminal association used if `pane.move` later rekeys the pane. Manual results are not Pi auto-naming inputs.
 
 A successful Pi recap starts or resets a 30-second quiet period for its
 workspace at publication time. At expiry, grouping uses the latest published
@@ -74,17 +99,24 @@ model calls and wake-ups. A later reconcile after opt-in can process due
 deadlines. Raw non-Pi output is never included.
 
 Unlabelled panes and Herdr's positional numeric tab defaults may be named from
-native titles, agent/process metadata, cwd, and eligible published Pi recaps.
+stable current Pi session names, native titles, agent/process metadata and cwd.
+Recap and digest bodies are not naming inputs.
 Unknown initial labels and owner edits stay manual. The scoped
 `overview.auto_name_pane` and `overview.auto_name_tab` actions return one label
-to automatic control. Pi names require a successful recap published for that
-pane in its workspace. Workspace names and Pi identity stay untouched. A tab
-can combine its pane task labels. Reconciliation rereads a target before an
+to automatic control. Workspace names and Pi identity stay untouched. A
+single-pane tab uses its stable pane subject; a two-pane tab combines both short subjects when they fit; otherwise a
+multi-pane tab uses the first useful stable subject plus `N more` (remaining
+live panes). Body-only recap/digest changes do not rename
+it. Private Pi metadata joins the current socket and unique live terminal,
+rejecting conflicting native session identity or dead publishers. Digest bodies
+join only the verified current session UUID; missing/malformed digests are
+unavailable, and valid dated digests remain explicitly dated. Latest-good recap,
+later failed attempt, current prompt and digest remain separate. Reconciliation rereads a target before an
 automatic rename; Herdr 0.9.1 has no conditional rename, so a manual edit in
 the final snapshot-to-write interval can still race.
 
 The theme adapter uses Herdr 0.9.1's pinned palette, reads the managed
-`config.toml` on pane open, and watches for changes. It resolves `[theme].name`
+`config.toml` on popup open, and watches for changes. It resolves `[theme].name`
 and `[theme.custom]` when `auto_switch = false`. With `auto_switch = true`, it
 needs an explicit appearance input; it does not detect host appearance by
 itself. Palette provenance and adapter tests are in the
@@ -92,9 +124,9 @@ itself. Palette provenance and adapter tests are in the
 
 ## Troubleshooting
 
-- Linked plugin, missing overview tab: run
-  `herdr plugin action invoke overview.reconcile --plugin overview` on a
-  compatible server, then look for the background tab named Herdr Overview.
+- Linked plugin, missing popup: invoke `overview.open` on a compatible server.
+  `overview.reconcile` intentionally opens no view. If Herdr reports busy,
+  dismiss the other modal first.
 - Missing or failed recap: the overview still shows native pane details.
   Check `session-recap config auto-publish` and the local command described in
   `dot_local/share/session-recap/README.md`. Pi publication setup is in
@@ -115,6 +147,18 @@ python3 tests/herdr-overview/proof.py review
 python3 tests/herdr-overview/proof.py chezmoi-dry-run
 ```
 
-For isolated real-server and first-response-move fixtures, see
-[AGENTS.md](./AGENTS.md). Phone proof needs an attended Termux-over-SSH client
-and its returned receipt; a local narrow PTY does not establish that route.
+The complete isolated journey is `python3 tests/herdr-overview/map_journey.py
+--scenario all`. It composes native interaction/lifetime, real Pi publication,
+identity/lifecycle, naming, digest and rekey assertions on one owned server.
+`interactions` and `identity` remain focused diagnostics; `smoke` is not the
+complete matrix. Receipts default to a fresh private `/tmp` directory; failures
+exit nonzero and retain their evidence. Install the pinned `pyte==0.8.2` from
+`tests/herdr-overview/requirements-interactions.txt` into a private environment
+and use its interpreter for the journey and harness tests (the checked task
+interpreter is `/tmp/hm-pyte-t4a/bin/python`). Run `python3 -m unittest discover
+-s tests/herdr-overview -p 'test_*.py'` with that interpreter too.
+
+The fixture commands in [AGENTS.md](./AGENTS.md) use the same transient native
+popup contract, not a dedicated viewer pane. Physical phone proof and live
+rollout remain owner-pending: a local 40-column PTY checks layout, not an
+attended Termux-over-SSH route.

@@ -32,6 +32,17 @@ backend configuration; the Herdr plugin owns the native overview and grouping.
   invoking the public `overview.reconcile` action. A failed Herdr wake-up
   leaves the durable publication for later startup reconciliation. The plugin
   does not generate a recap when its pane renders.
+- Keep private current session identity/name publication independent of recap
+  opt-in. Join by socket and unique live terminal, refresh on session lifecycle
+  replacement/reload and `session_info_changed`, using actual public UUID/name
+  from per-call `ctx` before awaits. Name-only refresh invokes passive
+  `overview.refresh_names`, not recap-enabled reconcile. Only TUI/RPC publish;
+  print/JSON children must neither claim nor retire interactive records.
+  Keep generation/revision guards and compare-owned retirement. Reader joins
+  require live publisher, unique native terminal, correct socket and no
+  duplicate/conflicting session record. Do not infer session identity
+  from recap/digest text or focused panes. The popup reads UUID-keyed dated
+  digests separately; rendering must not generate them.
 - This adapter is desktop-only. The `termux` profile skips `.pi`; phone
   access reaches the desktop through SSH.
 

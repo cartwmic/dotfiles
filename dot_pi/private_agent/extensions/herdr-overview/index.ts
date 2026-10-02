@@ -1,7 +1,12 @@
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, InputEvent } from "@earendil-works/pi-coding-agent";
 import {
 	currentPaneForCaller,
+	exactTerminalForCaller,
+	writePiMetadata,
+	retirePiMetadata,
 	invokeOverviewReconcile,
+	invokeOverviewNameRefresh,
 	paneWorkspaceAtPublication,
 	runSessionRecap,
 	settledAssistantResponse,
@@ -156,8 +161,50 @@ export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {
 	const pendingBySession = new Map<string, PendingPrompt>();
 	const publicationQueue: PublicationQueue = { promise: Promise.resolve() };
 
-	pi.on("session_start", () => pendingBySession.clear());
-	pi.on("session_shutdown", () => pendingBySession.clear());
+	let generation = randomUUID();
+	let metadataFile: string | undefined;
+	let revision = 0;
+	const retire = () => {
+		revision++;
+		retirePiMetadata(metadataFile, generation);
+		metadataFile = undefined;
+		generation = randomUUID();
+	};
+	const refreshMetadata = async (_event: unknown, ctx: ExtensionContext) => {
+		if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
+		// Capture plain public values before any await; never retain a session context.
+		const sessionId = sessionIdOf(ctx);
+		const sessionName = ctx.sessionManager.getSessionName?.() || null;
+		const socketPath = process.env.HERDR_SOCKET_PATH;
+		const callerPaneId = herdrPaneId();
+		const currentRevision = ++revision;
+		const token = generation;
+		if (!sessionId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId) || !socketPath || !callerPaneId) {
+			retirePiMetadata(metadataFile, generation); metadataFile = undefined; return;
+		}
+		const pane = await exactTerminalForCaller(socketPath, callerPaneId);
+		if (currentRevision !== revision || token !== generation) return;
+		if (!pane?.terminalId) { retirePiMetadata(metadataFile, generation); metadataFile = undefined; return; }
+		const file = writePiMetadata({ schemaVersion: 1, socketPath, terminalId: pane.terminalId, paneId: pane.paneId, sessionId, sessionName, publisherPid: process.pid, generation });
+		if (metadataFile !== file) retirePiMetadata(metadataFile, generation);
+		metadataFile = file;
+	};
+	pi.on("session_start", (event, ctx) => { if (ctx.mode !== "tui" && ctx.mode !== "rpc") return; pendingBySession.clear(); retire(); return refreshMetadata(event, ctx); });
+	pi.on("session_shutdown", (_event, ctx) => { if (ctx.mode !== "tui" && ctx.mode !== "rpc") return; pendingBySession.clear(); retire(); });
+	pi.on("session_info_changed", async (event, ctx) => {
+		if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
+		const socketPath = process.env.HERDR_SOCKET_PATH;
+		const token = generation;
+		const refresh = refreshMetadata(event, ctx);
+		const currentRevision = revision;
+		await refresh;
+		if (!metadataFile || !socketPath || token !== generation || currentRevision !== revision) return;
+		try { await invokeOverviewNameRefresh(socketPath); }
+		catch { warn("Pi name metadata refreshed, but Herdr's passive name refresh failed"); }
+	});
+	pi.on("session_tree", refreshMetadata);
+	pi.on("input", refreshMetadata);
+	pi.on("agent_settled", refreshMetadata);
 
 	pi.on("input", (event, ctx) => {
 		if (!isRealUserInput(event, ctx) || !event.text.trim()) return { action: "continue" };

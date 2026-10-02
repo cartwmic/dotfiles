@@ -13,23 +13,31 @@ do not move their logic into this plugin.
 
 - Keep the public Herdr **0.9.1 / protocol 22** boundary in `src/herdr-api.mjs`.
   A server with another protocol fails closed. `herdr-plugin.toml` owns the
-  startup, event, pane, and action hooks. Output refresh uses the public
-  `pane.output_matched` subscription while a view is open, with an initial
-  `pane.read` before its first frame; Herdr plugin hooks omit high-volume
-  output events. Close subscriptions on exit. A failed read keeps native
-  metadata and the saved preview. The `install-herdr-overview` mise task
+  startup, event, pane, and action hooks. The viewer joins native snapshot,
+  supplied prompts, published recaps and verified UUID-keyed digests; never
+  scrape transcripts, raw terminal tails or generate viewer summaries. The
+  `install-herdr-overview` mise task
   links the manifest. The startup hook runs on server start. The
   `herdr plugin action invoke overview.reconcile --plugin overview` action
-  loads the linked plugin on a compatible running server and opens a
-  background tab. Ask the owner before restarting that server.
+  loads the linked plugin on a compatible running server without a view.
+  `overview.open` opens the shared temporary 100% native popup, with no pane ID.
+  Modal `ui_busy` is native. Deleting the owner tab dismisses it; ordinary
+  reopening is not survival/resurrection. A vanished non-owner selection must
+  notice/refuse unrelated focus while its popup lives. Startup/events/reconcile
+  must not open a view. Ask the owner before restarting that server.
 - Keep native pane IDs as model keys. If `pane.move` rekeys one, use a unique
   live terminal ID to carry its prompt, manually sourced recap, and naming
   ownership. Do not borrow the UI-focused pane for a publication. Check
   `src/model.mjs`, `src/pane.mjs`, and their tests before changing this join.
 - Preserve manual pane and tab labels. `src/display-name-policy.mjs` may
-  auto-name an eligible pane from a successful in-workspace Pi recap;
+  auto-name an eligible pane from its verified current stable Pi session name
+  or stable native subject, never recap/digest bodies;
   `overview.auto_name_pane` and `overview.auto_name_tab` explicitly return
-  individual labels to automatic control. Recheck live labels before writing.
+  individual labels to automatic control. One-pane tabs use their stable
+  subject; short two-pane subjects combine, otherwise first + N more counts
+  remaining live panes. Verified metadata wins; native-title parsing is
+  naming-only fallback, never a digest/session identity heuristic. Honest
+  generic non-Pi subjects are supported. Recheck live labels before writing.
   Herdr has no atomic conditional rename, so document any residual race.
   Workspace names and Pi identity stay owner-controlled.
 - Choose the data path before changing recap behavior: Pi supplies a prompt
@@ -43,9 +51,11 @@ do not move their logic into this plugin.
   When `auto_publish = false`, preserve deadlines and pane associations but
   suppress group generation and wake-ups. A later reconcile after opt-in can
   process due work. Rendering, focus, scrolling, and output refresh must
-  remain passive.
-- Board and Mosaic share the model but own separate layouts in
-  `src/presenters/`. Change each intentionally. The palette fixture
+  remain passive. `overview.refresh_names` is passive too: it neither opens
+  nor advances publication/group deadlines; Pi `session_info_changed` uses it.
+- The responsive popup map lives in `src/presenters/map.mjs`. Board/Mosaic
+  are retired compatibility surfaces, not public layouts. Keep full-name,
+  recap, digest and failure boundaries separate. The palette fixture
   `src/palette-v0.9.1.json` is copied from `herdrdev/herdr` tag `v0.9.1`,
   commit `8544776216a8d28088db59a5344ea21ee2d05d2b` (`src/app/state.rs`,
   `Palette` constructors and `Palette::from_name`). Keep Reset and ANSI tokens
@@ -90,7 +100,21 @@ python3 tests/herdr-overview/proof.py chezmoi-dry-run
 ```
 
 For startup, presenter navigation, or native-pane behavior changes, require
-an isolated-server journey after the portable checks. From the source root:
+an isolated-server journey after the portable checks. The popup entry is
+`python3 tests/herdr-overview/map_journey.py --scenario all --receipts NEW_PRIVATE_DIR`.
+It composes completed interactions and identity/publication assertions on one
+owned server, preserving lifecycle boundaries. Focused `interactions` and
+`identity` scenarios diagnose failures; `smoke` alone is not acceptance. Use a
+private interpreter with `pyte==0.8.2` from
+`tests/herdr-overview/requirements-interactions.txt` (checked task environment:
+`/tmp/hm-pyte-t4a/bin/python`); use it also for `unittest discover -s
+tests/herdr-overview -p 'test_*.py'`. Preserve private failure receipts and
+current-frame assertions. For true wide geometry detach the narrow peer;
+clients share the native popup PTY size. Source-only test fixtures must contain
+synthetic names/prompts/bodies, never private real session content.
+
+The reusable fixture commands use attached clients for the same transient
+popup, not native pane reads/keys or preset switching:
 
 ```sh
 python3 tests/herdr-overview/proof.py herdr-prepare

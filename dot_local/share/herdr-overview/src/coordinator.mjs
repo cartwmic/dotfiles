@@ -3,6 +3,7 @@ import { HerdrApi } from "./herdr-api.mjs";
 import { normalizeSnapshot } from "./model.mjs";
 import { confirmDisplayNameWrite, evaluateDisplayNamePolicy, recordDisplayNameWrite } from "./display-name-policy.mjs";
 import { readRecapFields, sessionRecapDataRoot } from "./recap-store.mjs";
+import { readPiSessionFields } from "./pi-session-store.mjs";
 import { reconcileRecapCoordinator, runSessionRecap } from "./recap-coordinator.mjs";
 import { scheduleDeadlineWakeup } from "./deadline-wakeup.mjs";
 import { readTheme } from "./theme.mjs";
@@ -29,49 +30,12 @@ async function tryRead(callback, fallback) {
   }
 }
 
-function isOverviewProcess(processInfo) {
-  return (processInfo?.foreground_processes ?? []).some((process) => {
-    const command = [process.argv0, ...(process.argv ?? []), process.cmdline].filter(Boolean).join(" ");
-    return /(?:^|[\/\s])index\.mjs(?:\s|$)/.test(command) && /(?:^|\s)overview(?:\s|$)/.test(command);
-  });
-}
-
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const SHELL_NAMES = new Set(["bash", "zsh", "sh", "dash", "fish", "nu", "pwsh", "powershell"]);
-
-function isShellOnly(processInfo) {
-  const processes = processInfo?.foreground_processes ?? [];
-  return processes.length > 0 && processes.every((process) => {
-    const name = path.basename(process.name ?? process.argv0 ?? "").toLowerCase();
-    return SHELL_NAMES.has(name);
-  });
-}
-
-async function overviewPaneProcessInfo(api, paneId) {
-  let latest = null;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    latest = await tryRead(() => api.processInfo(paneId), null);
-    if (isOverviewProcess(latest) || isShellOnly(latest)) return latest;
-    if (attempt < 5) await delay(100);
-  }
-  return latest;
-}
-
-async function closeStaleOverviewPane(api, snapshot, paneId, processInfo) {
-  const pane = snapshot.panes.find((item) => item.pane_id === paneId);
-  const tab = snapshot.tabs.find((item) => item.tab_id === pane?.tab_id);
-  const hasSiblingTab = Boolean(pane && snapshot.tabs.some((item) => item.workspace_id === pane.workspace_id && item.tab_id !== pane.tab_id));
-  if (tab?.label !== "Herdr Overview" || tab.pane_count !== 1 || !hasSiblingTab || !isShellOnly(processInfo)) return false;
-  await api.closePane(paneId);
-  return true;
-}
-
 export async function reconcileOverview({
   api = new HerdrApi(),
   stateDir = overviewStateDir(),
   dataRoot = sessionRecapDataRoot(),
   configPath = process.env.HERDR_CONFIG_PATH || path.join(process.env.HOME || "", ".config", "herdr", "config.toml"),
-  openPane = true,
+  openPane = false,
   event = null,
   resetName = null,
   coordinatorWake = false,
@@ -103,35 +67,9 @@ export async function reconcileOverview({
     const name = eventName(event);
     const data = eventPayload(event);
     const changedPane = targetPaneId(event, data);
-    let overviewPaneId = previousState.overviewPaneId ?? null;
-
-    if (overviewPaneId && snapshotBeforeOpen.panes.some((pane) => pane.pane_id === overviewPaneId)) {
-      const processInfo = await overviewPaneProcessInfo(api, overviewPaneId);
-      if (!isOverviewProcess(processInfo)) {
-        await tryRead(() => closeStaleOverviewPane(api, snapshotBeforeOpen, overviewPaneId, processInfo), false);
-        overviewPaneId = null;
-      }
-    } else {
-      overviewPaneId = null;
-    }
-    if (env.HERDR_PLUGIN_ENTRYPOINT_ID === "overview" && snapshotBeforeOpen.panes.some((pane) => pane.pane_id === env.HERDR_PANE_ID)) {
-      overviewPaneId = env.HERDR_PANE_ID;
-    }
-
-    if (openPane && !overviewPaneId && snapshotBeforeOpen.workspaces.length > 0) {
-      const opened = await api.openOverviewPane({ placement: "tab", focus: false });
-      const openedPane = opened?.plugin_pane?.pane;
-      overviewPaneId = openedPane?.pane_id ?? null;
-      if (!overviewPaneId) throw new Error("Herdr did not return the opened overview pane ID");
-      if (openedPane.tab_id) await api.renameTab(openedPane.tab_id, "Herdr Overview");
-    }
-
-    const snapshot = openPane && !overviewPaneId
-      ? await api.snapshot()
-      : overviewPaneId && !snapshotBeforeOpen.panes.some((pane) => pane.pane_id === overviewPaneId)
-        ? await api.snapshot()
-        : snapshotBeforeOpen;
-    const excludedPaneIds = overviewPaneId ? [overviewPaneId] : [];
+    // A popup has no native pane identity. Legacy tabs belong to the owner.
+    const snapshot = snapshotBeforeOpen;
+    const excludedPaneIds = [];
     const currentIds = new Set(snapshot.panes.map((pane) => pane.pane_id));
     const lostByTerminal = new Map();
     for (const [previousPaneId, previous] of Object.entries(previousPanes)) {
@@ -174,14 +112,21 @@ export async function reconcileOverview({
       }
     }
 
+    const sessionFields = readPiSessionFields(snapshot, { socketPath: api.socketPath ?? env.HERDR_SOCKET_PATH, env });
+    const piTerminalIds = { ...(recapCoordinator?.piTerminalIdsBySessionId ?? {}) };
+    for (const pane of snapshot.panes) {
+      const session = sessionFields.piSessionsByPaneId[pane.pane_id];
+      if (session) piTerminalIds[session.sessionId] = pane.terminal_id;
+    }
     const supplied = await readRecapFields(
       snapshot,
       dataRoot,
-      recapCoordinator?.piTerminalIdsBySessionId,
+      piTerminalIds,
       recapCoordinator?.manualTerminalIdsBySourceId,
       rekeys,
     );
-    if (rekeys.length) {
+    Object.assign(supplied, sessionFields);
+    if (rekeys.length || Object.keys(piTerminalIds).length) {
       recapCoordinator = { ...(recapCoordinator ?? {}), piTerminalIdsBySessionId: supplied.piTerminalIdsBySessionId };
     }
     const ownership = { ...(previousState.displayNameOwnership ?? {}) };
@@ -209,6 +154,8 @@ export async function reconcileOverview({
     for (const update of namePolicy.rename) {
       const liveSnapshot = await api.snapshot();
       if (!confirmDisplayNameWrite(namePolicy, liveSnapshot, update)) continue;
+      // Herdr protocol 22 has no conditional rename. An owner edit between
+      // this snapshot and the write can still race; no client fork is implied.
       try {
         if (update.kind === "pane") await api.renamePane(update.id, update.label);
         else await api.renameTab(update.id, update.label);
@@ -235,7 +182,6 @@ export async function reconcileOverview({
     const state = {
       schema_version: 1,
       generated_at: new Date().toISOString(),
-      overviewPaneId,
       displayNameOwnership: namePolicy.ownership,
       model,
       theme,

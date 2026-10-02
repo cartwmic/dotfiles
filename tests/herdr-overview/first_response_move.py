@@ -14,8 +14,8 @@ from pathlib import Path
 import proof as p
 
 
-def prove(run_id: str, output: Path) -> None:
-    root, state, env = p.load_run(run_id)
+def prove(run_id: str, output: Path, base: Path | None = None) -> None:
+    root, state, env = p.load_run(run_id, base)
     provider = p.ensure_scripted_provider(root, state, env)
     if Path(provider["release_file"]).exists() or p.provider_requests(root):
         raise p.ProofBlocked("first-response proof requires an unused scripted provider")
@@ -25,7 +25,6 @@ def prove(run_id: str, output: Path) -> None:
     old = state["fixture"]["pi_pane_id"]
     target_workspace = state["fixture"]["workspaces"][1]
     target = target_workspace["workspace_id"]
-    session_id = f"herdr-first-move-{run_id}"
     prompt = f"First response pending move {run_id}: report the current task."
     data = Path(env["XDG_DATA_HOME"]) / "session-recap"
     outcome = {"run_id": run_id, "status": "FAIL", "old_pane_id": old, "target_workspace_id": target}
@@ -45,7 +44,8 @@ def prove(run_id: str, output: Path) -> None:
                     "--extension", str(p.ROOT / "dot_pi/private_agent/extensions/herdr-overview/index.ts"),
                     "--extension", str(extension), "--no-skills", "--no-prompt-templates", "--no-themes",
                     "--no-context-files", "--no-tools", "--offline", "--approve", "--session-dir", str(root / "pi-sessions"),
-                    "--session-id", session_id, timeout=130)
+                    timeout=130)
+        from map_identity import current_metadata
         submitted = p.herdr_cmd(state, env, "agent", "prompt", "first-move-pi", prompt, timeout=30)
         outcome["prompt_submission"] = {"exit": submitted.returncode, "stdout": p.bounded(submitted.stdout, 400)}
         p.wait_for(lambda: p.provider_requests(root)[0] if p.provider_requests(root) else None,
@@ -53,6 +53,8 @@ def prove(run_id: str, output: Path) -> None:
         working = p.wait_for(lambda: p.read_pi_prompt(data, old), "first working prompt", timeout=20)
         if working["text"] != prompt or working["working"] is not True:
             raise p.ProofFailure("the first Pi input was not stored as a working prompt")
+        _native, metadata = p.wait_for(lambda: current_metadata(state, env, old), 'actual first-response UUID')
+        session_id = metadata['sessionId']
         p.invoke_overview(state, env)
         p.wait_for(lambda: (p.plugin_state(root).get("model", {}).get("panes", {}).get(old, {}).get("prompt") or {}).get("text") == prompt,
                    "first prompt in the visible overview", timeout=20)
@@ -60,6 +62,9 @@ def prove(run_id: str, output: Path) -> None:
         p.wait_for(lambda: (p.plugin_state(root).get("displayNameOwnership", {}).get(f"pane:{old}") or {}).get("mode") == "automatic",
                    "automatic name ownership before the move", timeout=20)
         native_before = p.one_by(p.snapshot(state)["panes"], "pane_id", old)
+        # This first-response session is unnamed. Capture its actual stable
+        # native fallback; a recap BODY must not replace it with a task name.
+        stable_subject = native_before.get('label')
         moved = p.herdr_cmd(state, env, "pane", "move", old, "--new-tab", "--workspace", target, "--no-focus")
         result = json.loads(moved.stdout)["result"]["move_result"]
         new = result["pane"]["pane_id"]
@@ -89,7 +94,7 @@ def prove(run_id: str, output: Path) -> None:
             match_detail=lambda text: p.current_prompt_detail_visible(text, new, prompt, require_id=False),
         )
         if not p.current_prompt_detail_visible(detail, new, prompt, require_id=False):
-            raise p.ProofFailure("visible Board detail omitted the moved working prompt")
+            raise p.ProofFailure("visible native map detail omitted the moved working prompt")
         outcome["visible_working_detail"] = True
 
         Path(provider["release_file"]).touch()
@@ -109,11 +114,11 @@ def prove(run_id: str, output: Path) -> None:
             return text if p.current_prompt_detail_visible(text, new, prompt, require_id=False) \
                 and p.published_recap_detail_visible(text, latest["summary"]) else None
 
-        p.wait_for(published_detail, "visible current prompt and published recap on destination Board detail", timeout=30)
+        p.wait_for(published_detail, "visible current prompt and published recap on destination native map detail", timeout=30)
         outcome["visible_published_detail"] = True
-        p.wait_for(lambda: p.one_by(p.snapshot(state)["panes"], "pane_id", new).get("label") == latest["summary"],
-                   "automatic pane label updated after first publication", timeout=20)
-        outcome["automatic_native_label"] = latest["summary"]
+        p.wait_for(lambda: p.one_by(p.snapshot(state)["panes"], "pane_id", new).get("label") == stable_subject,
+                   "stable automatic pane label unchanged by first publication", timeout=20)
+        outcome["automatic_native_label"] = stable_subject
 
         def destination_group():
             entry = p.latest_entry(data, "workspace", target)
@@ -149,5 +154,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument('--state-base', type=Path)
     args = parser.parse_args()
-    prove(args.run_id, args.output)
+    prove(args.run_id, args.output, args.state_base)

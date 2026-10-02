@@ -1,216 +1,50 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { renderOverview, runOverviewPane } from "../src/pane.mjs";
-import { PALETTE_FIXTURE } from "../src/theme.mjs";
-
-const model = {
-  protocol: 22,
-  herdrVersion: "0.9.1",
-  selection: { workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p1" },
-  workspaceOrder: ["w1"],
-  workspaces: { w1: { id: "w1", label: "API", agentStatus: "unknown", tabIds: ["w1:t1"] } },
-  tabs: { "w1:t1": { id: "w1:t1", label: "Main", paneIds: ["w1:p1"] } },
-  panes: { "w1:p1": { id: "w1:p1", label: "Build", agent: { kind: "pi", status: "unknown" }, cwd: "/repo", preview: "compiled" } },
-};
-
-test("renders typed RGB and ANSI palette tokens without guessing colors", () => {
-  const theme = {
-    palette: PALETTE_FIXTURE.themes.terminal,
-  };
-  const output = renderOverview({ model, theme }, 80);
-  assert.ok(output.includes("\u001b[34mHerdr Overview"), "terminal accent is ANSI blue");
-  assert.ok(output.includes("\u001b[37mAPI"), "terminal mauve is ANSI gray");
-
-  const custom = renderOverview({
-    model,
-    theme: { palette: { ...PALETTE_FIXTURE.themes.terminal, accent: { kind: "rgb", hex: "#010203" } } },
-  }, 80);
-  assert.ok(custom.includes("\u001b[38;2;1;2;3mHerdr Overview"));
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { normalizeSnapshot } from '../src/model.mjs';
+import { runOverviewPane, renderOverview } from '../src/pane.mjs';
+import { snapshot } from './popup-fixture.mjs';
+const wait = async predicate => { for (let n=0;n<200;n++) { if (predicate()) return; await new Promise(r=>setTimeout(r,5)); } throw Error('view timeout'); };
+test('theme uses validated typed tokens', () => {
+  const text = renderOverview({ model: normalizeSnapshot(snapshot()), theme: { palette: { accent: { kind:'rgb', hex:'#010203' } } } },100,30);
+  assert.match(text, /\x1b\[38;2;1;2;3mHerdr Overview/);
 });
-
-test("live pane output refreshes the open view without competing for the plugin state lock", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-live-output-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const stateDir = path.join(root, "state");
-  await mkdir(stateDir);
-  const statePath = path.join(stateDir, "overview.json");
-  await writeFile(statePath, JSON.stringify({ model, theme: { palette: PALETTE_FIXTURE.themes.terminal } }));
-  const configPath = path.join(root, "config.toml");
-  await writeFile(configPath, '[theme]\nname = "terminal"\nauto_switch = false\n');
-  const input = new EventEmitter();
-  input.isTTY = true;
-  input.setRawMode = (enabled) => { input.isRaw = enabled; };
-  input.resume = () => {};
-  input.pause = () => {};
-  const frames = [];
-  let rendered;
-  const firstFrame = new Promise((resolve) => { rendered = resolve; });
-  const output = { columns: 100, rows: 24, isTTY: false, write: (text) => {
-    frames.push(text);
-    if (text.includes("Herdr Overview")) rendered();
-  } };
-  let onOutput;
-  let subscribed;
-  const ready = new Promise((resolve) => { subscribed = resolve; });
-  const api = { async subscribe(_subscriptions, callback) {
-    onOutput = callback;
-    subscribed();
-    return { close() {} };
-  } };
-
-  const session = runOverviewPane({ api, stateDir, configPath, input, output });
-  try {
-    await ready;
-    await firstFrame;
-    onOutput({ event: "pane.output_matched", data: { pane_id: "w1:p1", read: { text: "live excerpt" } } });
-    assert.match(frames.at(-1), /live excerpt/);
-    const saved = JSON.parse(await readFile(statePath, "utf8"));
-    assert.equal(saved.model.panes["w1:p1"].preview, "compiled", "output redraw does not lock/rewrite plugin state");
-  } finally {
-    input.emit("end");
-    await session;
-  }
+test('real pane loop serializes keys, refreshes saved native changes, exact rekey focus exits, closes input/watchers', async t => {
+  const root=await mkdtemp(path.join(os.tmpdir(),'overview-pane-')); t.after(()=>rm(root,{recursive:true,force:true}));
+  const stateDir=path.join(root,'state'); await mkdir(stateDir);
+  const configPath=path.join(root,'config.toml'); await writeFile(configPath,'[theme]\nname="terminal"\n');
+  let native=snapshot(); await writeFile(path.join(stateDir,'overview.json'),JSON.stringify({model:normalizeSnapshot(native)}));
+  const input=new EventEmitter(); Object.assign(input,{isTTY:true,isRaw:false,setRawMode(value){this.isRaw=value;},resume(){},pause(){}});
+  const output=new EventEmitter(); const frames=[]; Object.assign(output,{columns:40,rows:24,isTTY:false,write(text){frames.push(text);}});
+  const calls=[]; let fail=true;
+  const api={async snapshot(){calls.push('snapshot'); return native;},async focusPane(id){calls.push(`focus:${id}`); if(fail)throw Error('synthetic focus failure');}};
+  const running=runOverviewPane({api,stateDir,configPath,dataRoot:path.join(root,'recaps'),input,output});
+  t.after(async()=>{input.emit('data',Buffer.from('q')); await running;});
+  await wait(()=>input.listenerCount('data')>0);
+  input.emit('data',Buffer.from(']f')); await wait(()=>frames.some(frame=>frame.includes('Could not focus')));
+  assert.deepEqual(calls.filter(call=>call.startsWith('focus:')),['focus:p2']); assert.equal(input.listenerCount('data'),1);
+  native.panes[1].pane_id='moved';
+  await writeFile(path.join(stateDir,'overview.json'),JSON.stringify({model:normalizeSnapshot(native)}));
+  await wait(()=>frames.at(-1).includes('› Tab 2'));
+  output.columns=100; output.emit('resize'); assert.match(frames.at(-1),/› Tab 2/);
+  input.emit('data',Buffer.from('d')); await wait(()=>frames.at(-1).includes('Unavailable'));
+  input.emit('data',Buffer.from('\x1b')); await wait(()=>frames.at(-1).includes('Latest good recap'));
+  fail=false; input.emit('data',Buffer.from('f')); await running;
+  assert.equal(calls.at(-1),'focus:moved'); assert.equal(input.isRaw,false); assert.equal(input.listenerCount('data'),0);
+  assert.ok(calls.every(call=>call==='snapshot'||call.startsWith('focus:')),'no output reads or generation');
 });
-
-test("overlapping output subscriptions all close when the overview quits", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-subscribe-race-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const stateDir = path.join(root, "state");
-  await mkdir(stateDir);
-  const statePath = path.join(stateDir, "overview.json");
-  await writeFile(statePath, JSON.stringify({ model }));
-  const configPath = path.join(root, "config.toml");
-  await writeFile(configPath, '[theme]\nname = "terminal"\n');
-  const input = new EventEmitter();
-  input.isTTY = true;
-  input.setRawMode = () => {};
-  input.resume = () => {};
-  input.pause = () => {};
-  const output = Object.assign(new EventEmitter(), {
-    columns: 100, rows: 24, isTTY: false, write: () => {},
-  });
-  const pending = [];
-  const closed = [];
-  const api = {
-    async subscribe() {
-      return await new Promise((resolve) => pending.push(resolve));
-    },
-  };
-  const until = async (predicate) => {
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (predicate()) return;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    throw new Error("overview subscription race did not reach the expected step");
-  };
-  const session = runOverviewPane({ api, stateDir, configPath, input, output });
-  await until(() => pending.length >= 1);
-  await writeFile(statePath, JSON.stringify({ model, generated_at: "later" }));
-  await until(() => pending.length >= 2);
-  for (const [index, resolve] of pending.entries()) resolve({ close: () => closed.push(index) });
-  await until(() => input.listenerCount("data") > 0);
-  input.emit("data", Buffer.from("q"));
-  await session;
-  assert.deepEqual(closed.sort(), [0, 1], "no subscription survives the closed overview process");
-});
-
-test("reopening reads current native output before showing a stale saved preview", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-reopen-output-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const stateDir = path.join(root, "state");
-  await mkdir(stateDir);
-  const savedModel = structuredClone(model);
-  savedModel.panes["w1:p1"].preview = "saved output before close";
-  const statePath = path.join(stateDir, "overview.json");
-  await writeFile(statePath, JSON.stringify({ model: savedModel }));
-  const configPath = path.join(root, "config.toml");
-  await writeFile(configPath, '[theme]\nname = "terminal"\nauto_switch = false\n');
-
-  const input = new EventEmitter();
-  input.isTTY = true;
-  input.setRawMode = (enabled) => { input.isRaw = enabled; };
-  input.resume = () => {};
-  input.pause = () => {};
-  const frames = [];
-  const output = Object.assign(new EventEmitter(), {
-    columns: 100, rows: 24, isTTY: true,
-    write: (text) => { frames.push(text); },
-  });
-  let subscribed;
-  const ready = new Promise((resolve) => { subscribed = resolve; });
-  const reads = [];
-  const api = {
-    async readPane(paneId, options) {
-      reads.push({ paneId, options });
-      return "CLOSED_VIEW_NEW_OUTPUT_MARKER";
-    },
-    async subscribe() { subscribed(); return { close() {} }; },
-  };
-  const session = runOverviewPane({ api, stateDir, configPath, input, output });
-  await ready;
-  await new Promise((resolve) => setImmediate(resolve));
-  try {
-    assert.deepEqual(reads.map((read) => read.paneId), ["w1:p1"]);
-    assert.deepEqual(reads[0].options, { lines: 12, source: "recent_unwrapped" });
-    assert.match(frames.at(-1), /CLOSED_VIEW_NEW_OUTPUT_MARKER/);
-    assert.doesNotMatch(frames.at(-1), /saved output before close/);
-    assert.equal(JSON.parse(await readFile(statePath, "utf8")).model.panes["w1:p1"].preview, "saved output before close");
-  } finally {
-    input.emit("end");
-    await session;
-  }
-});
-
-test("a PTY resize switches Board and Mosaic at each open journey level", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-resize-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const stateDir = path.join(root, "state");
-  await mkdir(stateDir);
-  await writeFile(path.join(stateDir, "overview.json"), JSON.stringify({ model }));
-  const configPath = path.join(root, "config.toml");
-  await writeFile(configPath, '[theme]\nname = "terminal"\nauto_switch = false\n');
-  const input = new EventEmitter();
-  input.isTTY = true;
-  input.setRawMode = (enabled) => { input.isRaw = enabled; };
-  input.resume = () => {};
-  input.pause = () => {};
-  const frames = [];
-  const output = Object.assign(new EventEmitter(), {
-    columns: 100, rows: 24, isTTY: true,
-    write: (text) => { frames.push(text); },
-  });
-  let subscribed;
-  const ready = new Promise((resolve) => { subscribed = resolve; });
-  const api = { async subscribe() { subscribed(); return { close() {} }; } };
-  const session = runOverviewPane({ api, stateDir, configPath, input, output });
-  await ready;
-  await new Promise((resolve) => setImmediate(resolve));
-  try {
-    assert.match(frames.at(-1), /· Mosaic/);
-    output.columns = 48;
-    output.emit("resize");
-    assert.match(frames.at(-1), /· Board/);
-
-    input.emit("data", Buffer.from("\r"));
-    assert.match(frames.at(-1), /· Board · workspace/);
-    output.columns = 100;
-    output.emit("resize");
-    assert.match(frames.at(-1), /· Mosaic · workspace/);
-
-    input.emit("data", Buffer.from("\r"));
-    assert.match(frames.at(-1), /· Mosaic · selected pane/);
-    output.columns = 48;
-    output.emit("resize");
-    assert.match(frames.at(-1), /· Board · pane detail/);
-  } finally {
-    input.emit("end");
-    await session;
-  }
-  const frameCount = frames.length;
-  output.emit("resize");
-  assert.equal(frames.length, frameCount, "closed panes do not redraw on resize");
+test('failed snapshot and vanished selection cannot focus cached or unrelated native pane', async t => {
+  const root=await mkdtemp(path.join(os.tmpdir(),'overview-fail-')); t.after(()=>rm(root,{recursive:true,force:true}));
+  await writeFile(path.join(root,'overview.json'),JSON.stringify({model:normalizeSnapshot(snapshot())}));
+  const input=new EventEmitter(); Object.assign(input,{isTTY:true,setRawMode(v){this.isRaw=v;},resume(){},pause(){}});
+  const frames=[]; const output={columns:60,rows:24,write(text){frames.push(text);}}; let focuses=0;
+  const api={async snapshot(){throw Error('offline');},async focusPane(){focuses++;}};
+  const run=runOverviewPane({api,stateDir:root,configPath:path.join(root,'missing'),input,output});
+  await wait(()=>input.listenerCount('data'));
+  input.emit('data',Buffer.from('f')); await new Promise(r=>setTimeout(r,30));
+  assert.equal(focuses,0); assert.match(frames.at(-1),/offline/);
+  input.emit('data',Buffer.from('q')); await run;
 });

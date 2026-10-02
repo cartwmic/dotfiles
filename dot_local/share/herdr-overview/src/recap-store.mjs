@@ -144,7 +144,8 @@ export async function readRecapFields(
   }
 
   const panesByTerminalId = new Map((snapshot.panes ?? [])
-    .filter((pane) => typeof pane.terminal_id === "string" && pane.terminal_id)
+    .filter((pane) => typeof pane.terminal_id === "string" && pane.terminal_id
+      && snapshot.panes.filter((other) => other.terminal_id === pane.terminal_id).length === 1)
     .map((pane) => [pane.terminal_id, pane]));
   // A Pi prompt can still carry the pane ID inherited before pane.move. Follow
   // the persisted session-to-terminal association to the current native ID;
