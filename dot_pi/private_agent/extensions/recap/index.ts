@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { getPackageDir, getAgentDir } from '@earendil-works/pi-coding-agent';
+import { getPackageDir, getAgentDir, estimateTokens } from '@earendil-works/pi-coding-agent';
 import { Input, SelectList, truncateToWidth, stripTerminalSequences, matchesKey, Key, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, openSync, closeSync } from 'node:fs';
@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { budgets } from './backend.mjs';
-import { restoreState, resolveSettings, setOverride, project, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, argumentCompletions, commandHelp, projectContext, recapScope, failureNotice } from './helpers.ts';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const configPath = join(directory, 'config.json');
@@ -28,6 +28,7 @@ const records = () => {
     return JSON.parse(readFileSync(path, 'utf8')).records;
   } finally { rmSync(temp, { recursive: true, force: true }); }
 };
+const requestInput = (instructions: string, material: string, background: string) => instructions + '\n\n' + (background ? 'Background only (not new activity):\n' + background + '\n\nNew material:\n' : '') + material;
 const interactive = (ctx: ExtensionContext) => ctx.mode === 'tui' && ctx.hasUI;
 
 export default function recap(pi: ExtensionAPI) {
@@ -35,6 +36,19 @@ export default function recap(pi: ExtensionAPI) {
   let state: any;
   let working = false, settlements = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let widgetTimer: ReturnType<typeof setTimeout> | undefined;
+  let job: { nativeSessionId: string; historyId: string; token: string; capturedEnd: string | null } | undefined;
+  const finishedTokens = new Set<string>();
+  function stopWidgetTimer() { if (widgetTimer) clearTimeout(widgetTimer); widgetTimer = undefined; }
+  function watchWidget() {
+    stopWidgetTimer();
+    const id = sessionId, epoch = contextEpoch;
+    widgetTimer = setTimeout(() => {
+      widgetTimer = undefined;
+      if (active && sessionId === id && contextEpoch === epoch) dispatch();
+    }, 1000);
+    widgetTimer.unref();
+  }
   let observation = '';
   const live = new Map<string, any>();
   const actions: { sessionId: string; trigger: string }[] = [];
@@ -69,7 +83,8 @@ export default function recap(pi: ExtensionAPI) {
     sessionId = ctx.sessionManager.getSessionId();
     state = restoreState(sessionId, ctx.sessionManager.getEntries().filter((e: any) => e.type === 'custom' && e.customType === 'recap-state').map((e: any) => e.data));
     pi.appendEntry('recap-state', state);
-    working = false; settlements = 0; live.clear(); observation = ''; actions.length = 0; stopTimer();
+    job = ctx.sessionManager.getEntries().filter((e: any) => e.type === 'custom' && e.customType === 'recap-job' && e.data.nativeSessionId === sessionId && e.data.historyId === state.historyId).at(-1)?.data;
+    working = false; settlements = 0; live.clear(); observation = ''; actions.length = 0; stopTimer(); stopWidgetTimer();
     refreshWidget(ctx);
   }
   function dispatch() {
@@ -83,13 +98,27 @@ export default function recap(pi: ExtensionAPI) {
   }
   function refreshWidget(ctx: ExtensionContext) {
     // Factories retain only plain presentation data, never a session context.
-    let record; try { record = currentRecap(ctx); } catch { /* Hide unavailable history. */ }
-    if (!record) { ctx.ui.setWidget('recap', undefined); return; }
-    const time = displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone);
-    const excerpt = stripTerminalSequences(record.summary).replace(/\s+/g, ' ').trim();
+    stopWidgetTimer();
+    let record, running = false;
+    try {
+      const rows = records(), ids = ctx.sessionManager.getBranch().map((e: any) => e.id);
+      record = compatibleRecord(rows, state, ids);
+      if (job?.nativeSessionId === sessionId && job.historyId === state.historyId && (!job.capturedEnd || ids.includes(job.capturedEnd))) {
+        const current = call('current', '--key', key(sessionId), '--json');
+        // Dated outcomes are authoritative even if updating the convenience
+        // request state failed. A retry's first failed attempt is not terminal.
+        const finished = finishedTokens.has(job.token) || rows.some((r: any) => r.token === job!.token && (r.status === 'published' || (r.attempt === 2 && ['failed', 'generated-unsaved'].includes(r.status))));
+        running = current.token === job.token && current.status === 'running' && !finished;
+      }
+    } catch { /* Do not invent running state when durable state is unavailable. */ }
+    if (running) watchWidget();
+    if (!record && !running) { ctx.ui.setWidget('recap', undefined); return; }
+    const time = record ? displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone) : '';
+    const heading = running ? `Recap running${time ? ` · ${time}` : ''}` : `Recap updated ${time}`;
+    const excerpt = record ? stripTerminalSequences(record.summary).replace(/\s+/g, ' ').trim() : 'No saved recap yet.';
     ctx.ui.setWidget('recap', (_tui, theme) => ({
       invalidate() {},
-      render(width: number) { return [theme.fg('dim', stripTerminalSequences(truncateToWidth(`Recap updated ${time}`, width))), theme.fg('dim', stripTerminalSequences(truncateToWidth(excerpt, width)))]; },
+      render(width: number) { return [theme.fg('dim', stripTerminalSequences(truncateToWidth(heading, width))), theme.fg('dim', stripTerminalSequences(truncateToWidth(excerpt, width)))]; },
     }), { placement: 'aboveEditor' });
   }
   function saved(record: any) {
@@ -107,13 +136,15 @@ export default function recap(pi: ExtensionAPI) {
       if (generations.get(id) !== item.generation || (item.epoch !== undefined && item.epoch !== contextEpoch)) continue;
       let current; try { current = call('current', '--key', key(id), '--json'); } catch { continue; }
       if (current.token !== item.token || generations.get(id) !== item.generation || ctx.sessionManager.getSessionId() !== id) continue;
+      if (item.event === 'accepted') continue;
+      if (item.event === 'terminal') finishedTokens.add(item.token);
       if (item.notice) notice(ctx, item.notice);
       else if (item.status === 'published') {
         const record = call('read', item.record_id, '--json').record;
         saved(record);
         refreshWidget(ctx);
       } else if (item.status === 'generated-unsaved') ctx.ui.notify(item.warning, 'warning');
-      else if (!['superseded', 'cancelled'].includes(item.status)) notice(ctx, `Recap ${item.status}; coverage unchanged.`);
+      else if (!['superseded', 'cancelled', 'canceled'].includes(item.status)) notice(ctx, failureNotice(item.failure));
     }
   }
   async function picker(ctx: ExtensionContext) {
@@ -132,10 +163,10 @@ export default function recap(pi: ExtensionAPI) {
       const help: Record<string, string> = {
         model: 'null follows current Pi model', completed: 'After final response, error or abort',
         periodic: 'Progress only while Pi is active', beforeCompaction: 'Capture before context is compacted',
-        mode: 'New activity or full branch snapshot', cadence: 'Final responses per automatic recap',
+        mode: 'New activity or full current context snapshot', cadence: 'Final responses per automatic recap',
         intervalMinutes: 'Active progress interval in minutes', timeoutSeconds: 'Whole attempt limit; one retry',
         recursion: 'Allow reduction of oversized input', instructions: 'Instructions for recap generation',
-        options: 'Independent thinking and output limit', inputBudget: 'Input byte ceiling; model bound applies',
+        options: 'Independent thinking and output limit',
         timeZone: 'Display only: local, UTC or IANA zone',
       };
       const items = ['Done', scope === 'session' ? 'Edit defaults' : 'Edit session', ...fields];
@@ -212,12 +243,13 @@ export default function recap(pi: ExtensionAPI) {
   async function request(ctx: ExtensionContext, mode = 'incremental', trigger = 'manual') {
     const id = ctx.sessionManager.getSessionId(), generation = invalidate(id), epoch = contextEpoch;
     const reserved = call('reserve', '--key', key(id), '--json');
+    refreshWidget(ctx);
     const own = structuredClone(state);
     let settings = capturedSettings(resolveSettings(defaults(), own.overrides), ctx.model);
     const entries = ctx.sessionManager.getBranch(), ids = entries.map((e: any) => e.id);
-    const units = project(entries, [...live.values()]);
+    const units = projectContext(ctx.sessionManager.buildSessionProjection(), [...live.values()]);
     if (!units.length) { if (trigger === 'manual') notice(ctx, 'Nothing to recap yet.'); return; }
-    const prior = compatibleRecord(records(), own, ids);
+    const prior = compatibleRecord(records(), own, ids, recapScope);
     const pending = uncovered(units, prior?.metadata.pi.coverage ?? null, ids);
     if ((mode !== 'full' || trigger === 'periodic') && !pending.length) { refreshWidget(ctx); if (trigger === 'manual') notice(ctx, 'No new activity.'); return; }
     if (!settings.model) {
@@ -230,17 +262,21 @@ export default function recap(pi: ExtensionAPI) {
       else { state = setOverride(state, 'model', model); pi.appendEntry('recap-state', state); }
       settings = capturedSettings(resolveSettings(defaults(), state.overrides), ctx.model);
     }
-    const material = (mode === 'full' ? units : pending).map(u => `[${u.status}] ${u.text}`).join('\n\n');
+    const material = `[Scope: ${mode === 'full' ? 'full current' : 'new activity in current'} compaction-aware context; summaries are not coverage of archived originals]\n\n` + (mode === 'full' ? units : pending).map(u => `[${u.status}] ${u.text}`).join('\n\n');
     let effectiveBudgets;
     try {
       const selectedModel = ctx.modelRegistry.find(settings.model.provider, settings.model.id);
       if (!selectedModel) throw new Error('Selected recap model unavailable');
-      if (selectedModel.api !== 'pi-virtual') effectiveBudgets = budgets(selectedModel, settings, settings.options.thinkingLevel ?? 'off');
-    } catch { notice(ctx, 'Recap selected model unavailable or unusable; coverage unchanged.'); return; }
+      if (selectedModel.api !== 'pi-virtual') effectiveBudgets = budgets(selectedModel, settings, settings.options.thinkingLevel ?? 'off', estimateTokens, requestInput(settings.instructions, material, prior?.summary ?? ''));
+    } catch { notice(ctx, failureNotice({ reason: 'model_limits' })); return; }
     // Capture everything while this call's context is fresh, before compaction
     // can change public material. Neither preflight nor its callbacks receive ctx.
     const work = { id, generation, epoch, token: reserved.token, own, settings, units, ids, mode, trigger, material, background: prior?.summary ?? '', cwd: ctx.cwd, ongoing: trigger === 'periodic' ? ongoing() : '', capturedAt: new Date().toISOString(), effectiveBudgets };
-    handoff(work);
+    if (handoff(work)) {
+      job = { nativeSessionId: id, historyId: own.historyId, token: reserved.token, capturedEnd: ids.at(-1) ?? null };
+      pi.appendEntry('recap-job', job);
+      refreshWidget(ctx);
+    }
   }
   function authorized(work: any) {
     try { return call('current', '--key', key(work.id), '--json').token === work.token; }
@@ -256,33 +292,34 @@ export default function recap(pi: ExtensionAPI) {
     try {
       if (!authorized(work)) return;
       const effectiveBudgets = work.effectiveBudgets;
-      const generationSettings = effectiveBudgets ? { ...settings, inputBudget: effectiveBudgets.inputBudget, options: { ...settings.options, maxTokens: effectiveBudgets.maxTokens } } : settings;
+      const generationSettings = effectiveBudgets ? { ...settings, options: { ...settings.options, maxTokens: effectiveBudgets.maxTokens } } : settings;
       // Virtual budgets are resolved inside each detached attempt. Fingerprints
       // describe captured source/settings, not metadata that is not yet known.
-      const snapshot: any = capture(units, ids, own, effectiveBudgets ? { ...settings, effectiveBudgets } : settings, mode, trigger, work.capturedAt);
+      const snapshot: any = capture(units, ids, own, effectiveBudgets ? { ...settings, effectiveBudgets: { maxTokens: effectiveBudgets.maxTokens, availableTokens: effectiveBudgets.availableTokens } } : settings, mode, trigger, work.capturedAt);
       const reuse = mode === 'full' && records().find((r: any) => r.status === 'published' && r.metadata?.pi?.historyId === own.historyId && r.metadata.pi.fingerprint === snapshot.fingerprint);
       if (reuse) { if (trigger === 'manual') enqueueNotice(work, 'Reused matching full recap.'); return; }
       if (!authorized(work)) return;
       const temp = mkdtempSync(join(tmpdir(), 'pi-recap-'));
       const path = join(temp, 'request.json');
       snapshot.metadata.pi.fingerprint = snapshot.fingerprint;
-      const command = backendCommand(getPackageDir, join(directory, 'backend.mjs'), getAgentDir(), cwd, generationSettings);
-      writeFileSync(path, JSON.stringify({ schema_version: 1, request_key: key(id), token: work.token, source_kind: 'pi', source_id: id, kind: 'single', metadata: snapshot.metadata, material, background, instructions: settings.instructions, command, ...(!effectiveBudgets ? { preflight: { command: [...command, '--preflight'] } } : {}), backend_identity: { provider: settings.model.provider, model: settings.model.id }, timeout_seconds: settings.timeoutSeconds, input_budget_bytes: effectiveBudgets?.inputBudget ?? settings.inputBudget, recursive: settings.recursion }), { mode: 0o600 });
+      const command = backendCommand(getPackageDir, join(directory, 'backend.mjs'), getAgentDir(), cwd, { ...generationSettings, budgetBackground: background });
+      writeFileSync(path, JSON.stringify({ schema_version: 1, request_key: key(id), token: work.token, source_kind: 'pi', source_id: id, kind: 'single', metadata: snapshot.metadata, material, background, instructions: settings.instructions, command, ...(!effectiveBudgets ? { preflight: { command: [...command, '--preflight'] } } : {}), backend_identity: { provider: settings.model.provider, model: settings.model.id }, timeout_seconds: settings.timeoutSeconds, input_budget_bytes: effectiveBudgets?.inputBudget ?? Number.MAX_SAFE_INTEGER, recursive: settings.recursion }), { mode: 0o600 });
       const child = spawn(cli, ['run', '--request-file', path, '--json-lines'], { env: cliEnv(), detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
       pipes.add(child.stdout); let buffer = '';
       child.stdout.on('data', (chunk: Buffer) => {
         buffer += chunk.toString(); let end;
         while ((end = buffer.indexOf('\n')) >= 0) {
           const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-          try { const event = JSON.parse(line); if (event.event === 'terminal') {
+          try { const event = JSON.parse(line); if (['accepted', 'terminal'].includes(event.event)) {
             if (event.status === 'published' && active && sessionId === id && generations.get(id) === generation && call('current', '--key', key(id), '--json').token === event.token) armTimer();
             queue.push({ ...event, sessionId: id, generation, epoch: work.epoch }); dispatch();
           } } catch { /* Invalid pipe event is not an outcome. */ }
         }
       });
-      child.on('error', () => { rmSync(temp, { recursive: true, force: true }); });
+      child.on('error', () => { enqueueNotice(work, 'Recap operation failed; coverage unchanged.'); rmSync(temp, { recursive: true, force: true }); });
       child.on('close', () => { pipes.delete(child.stdout); rmSync(temp, { recursive: true, force: true }); });
       child.unref(); child.stdout.unref();
+      return true;
     } catch { enqueueNotice(work, 'Recap operation failed; coverage unchanged.'); }
   }
   pi.registerCommand(dispatchName, { description: 'Internal recap delivery', handler: async (args, ctx) => {
@@ -295,12 +332,12 @@ export default function recap(pi: ExtensionAPI) {
       catch { notice(ctx, 'Recap operation failed; coverage unchanged.'); }
     }
   } });
-  pi.registerCommand('recap', { description: 'Recap [view|full|history [all|attempts|legacy]|settings [defaults]|cancel]', handler: async (args, ctx) => {
+  pi.registerCommand('recap', { description: 'Recap [view|full|history [all|attempts|legacy]|settings [defaults]|cancel|help]', getArgumentCompletions: argumentCompletions, handler: async (args, ctx) => {
     if (!interactive(ctx)) return;
     if (sessionId !== ctx.sessionManager.getSessionId()) initialize(ctx);
     const parts = args.trim().split(/\s+/);
     try {
-      if (parts[0] === 'cancel') { invalidate(sessionId); call('cancel', '--key', key(sessionId), '--json'); notice(ctx, 'Recap cancelled; saved history retained.'); }
+      if (parts[0] === 'cancel') { invalidate(sessionId); call('cancel', '--key', key(sessionId), '--json'); refreshWidget(ctx); notice(ctx, 'Recap cancelled; saved history retained.'); }
       else if (parts[0] === 'settings') {
         const before = resolveSettings(defaults(), state.overrides);
         await settings(ctx, parts[1] === 'defaults' ? 'defaults' : 'session');
@@ -309,12 +346,13 @@ export default function recap(pi: ExtensionAPI) {
       }
       else if (parts[0] === 'view') {
         const record = currentRecap(ctx);
-        if (record) await viewer(ctx, `Recap ${displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone)}`, record.summary);
+        if (record) await viewer(ctx, `Recap ${record.metadata?.pi?.scope ?? 'legacy scope'} ${displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone)}`, record.summary);
         else notice(ctx, 'No saved recap for this branch.');
       }
+      else if (parts[0] === 'help') await viewer(ctx, 'Recap help', commandHelp);
       else if (parts[0] === 'history') await history(ctx, parts.slice(1));
       else if (!parts[0] || parts[0] === 'full') await request(ctx, parts[0] === 'full' ? 'full' : 'incremental');
-      else notice(ctx, 'Use /recap [view|full|history|settings|cancel].');
+      else notice(ctx, 'Unknown recap command. Use /recap help.');
     } catch { notice(ctx, 'Recap operation failed; coverage unchanged.'); }
   } });
   pi.on('session_start', async (_event, ctx) => {
@@ -376,5 +414,5 @@ export default function recap(pi: ExtensionAPI) {
     }
   });
   pi.on('session_tree', (_event, ctx) => { live.clear(); observation = ''; if (interactive(ctx)) refreshWidget(ctx); });
-  pi.on('session_shutdown', () => { contextEpoch++; active = false; working = false; stopTimer(); actions.length = 0; live.clear(); for (const pipe of pipes) pipe.destroy(); pipes.clear(); });
+  pi.on('session_shutdown', () => { contextEpoch++; active = false; working = false; stopTimer(); stopWidgetTimer(); job = undefined; actions.length = 0; live.clear(); for (const pipe of pipes) pipe.destroy(); pipes.clear(); });
 }

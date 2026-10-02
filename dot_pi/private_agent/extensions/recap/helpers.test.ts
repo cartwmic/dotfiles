@@ -1,8 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, argumentCompletions, commandCatalog, commandHelp, projectContext, failureNotice } from './helpers.ts';
 
+test('native completions replace the whole argument prefix and match parser contexts', () => {
+  assert.deepEqual(argumentCompletions('').map(c => c.value), commandCatalog.map(c => c.value));
+  assert.ok(argumentCompletions('').every(c => c.description));
+  assert.deepEqual(argumentCompletions('he').map(c => c.value), ['help']);
+  assert.deepEqual(argumentCompletions('settings d').map(c => c.value), ['settings defaults']);
+  assert.deepEqual(argumentCompletions('history all a').map(c => c.value), ['history all attempts']);
+  assert.deepEqual(argumentCompletions('history attempts l').map(c => c.value), ['history attempts legacy']);
+  assert.deepEqual(argumentCompletions('history legacy ').map(c => c.value), ['history legacy all', 'history legacy attempts']);
+  for (const prefix of ['view ', 'full ', 'cancel ', 'help ', 'settings defaults ', 'history invalid ', 'unknown ']) assert.deepEqual(argumentCompletions(prefix), []);
+  assert.ok(argumentCompletions('history all attempts legacy ').length === 0);
+});
+test('read-only help states commands and unchanged generation/settings/cancel semantics', () => {
+  for (const c of commandCatalog) assert.ok(commandHelp.includes(`/recap ${c.value}`));
+  for (const phrase of ['incremental', 'reused without generation', 'Filters combine', 'Clear override', 'not Pi’s agent', 'default on', 'follows current Pi', 'display-only', 'do not generate']) assert.ok(commandHelp.includes(phrase), phrase);
+});
 test('production automation defaults remain independent of accelerated PTY settings', () => {
   assert.equal(seedSettings.completed, true);
   assert.equal(seedSettings.periodic, true);
@@ -67,4 +82,22 @@ test('timezone is presentation-only, validated, and observes DST', () => {
   assert.equal(compatibleRecord([row], state, ['m']), row);
   assert.equal(compatibleRecord([row], state, ['other']), undefined);
   assert.equal(compatibleRecord([row], restoreState('b', []), ['m']), undefined);
+});
+
+test('current projection uses source provenance and summaries never cover originals', () => {
+  const projection = { entries: [
+    { sourceEntry: { id: 'compact', type: 'compaction' }, messages: [{ role: 'compactionSummary', summary: 'same public text' }] },
+    { sourceEntry: { id: 'kept', type: 'message' }, messages: [{ role: 'user', content: 'edited public text' }] },
+    { sourceEntry: { id: 'output', type: 'custom_message' }, messages: [{ role: 'custom', content: 'recap excluded' }] },
+  ] };
+  const units = projectContext(projection);
+  assert.deepEqual(units.map(u => u.id), ['compact:compactionSummary', 'kept']);
+  assert.equal(units[1].text, 'user: edited public text');
+  const state = restoreState('a', []), snapshot = capture(units, ['compact', 'kept'], state, seedSettings, 'incremental', 'manual');
+  assert.equal(snapshot.metadata.pi.scope, 'current-context');
+  const row = { status: 'published', created_at: '2026', record_id: 'r', metadata: snapshot.metadata };
+  assert.equal(compatibleRecord([row], state, ['kept'], 'raw-branch'), undefined);
+  assert.equal(resolveSettings({ inputBudget: 1 }, { inputBudget: 2 }).inputBudget, undefined);
+  assert.match(failureNotice({ reason: 'context_limit', message: 'PRIVATE' }), /routed model context window/);
+  assert.equal(failureNotice({ message: 'PRIVATE' }), 'Recap failed; coverage unchanged.');
 });

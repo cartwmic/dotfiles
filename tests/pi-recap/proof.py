@@ -115,6 +115,7 @@ def main():
                             ['env', 'RECAP_PROOF_FINISH=length', py, ROOT / 'tests/pi-recap/backend.py']))
     elif args.section == 'tui':
         rows = [execute_case('unsaved-warning-editor-preservation-public', ['UX-unsaved', 'UX-view', 'UX-editor'], [py, ROOT / 'tests/pi-recap/ux_unsaved.py'], 120),
+                execute_case('recap-discovery-running-public', ['UX-discovery', 'UX-running', 'AC-11', 'AC-12'], [py, ROOT / 'tests/pi-recap/discovery.py'], 240),
                 execute_case('defaults-quiet-view-current-model-timezone-public', ['UX-defaults', 'UX-view', 'UX-model', 'UX-timezone'], [py, ROOT / 'tests/pi-recap/ux_followup.py'], 240),
                 execute_case('history-viewer-phone-wide-width-public', ['AC-3'], [py, ROOT / 'tests/pi-recap/viewer_width.py']),
                 execute_case('large-retained-history-public', ['AC-1', 'AC-2', 'AC-3', 'AC-6', 'AC-7', 'AC-10', 'AC-12', 'AC-13'], [py, ROOT / 'tests/pi-recap/history_transport.py'], 240),
