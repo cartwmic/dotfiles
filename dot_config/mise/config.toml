@@ -1004,6 +1004,43 @@ HERDR_SOCKET_PATH="$LINK_SOCKET" "$HERDR_BIN" plugin link "$PLUGIN_DIR" --enable
 echo "Herdr Overview linked from $PLUGIN_DIR. Its startup hook runs only after a compatible Herdr server starts; this task did not start or restart a server."
 '''
 
+[tasks."install-herdr-palette"]
+description = "Install the pinned upstream Herdr command palette without contacting the running server"
+depends = ["install-herdr-overview"]
+run = '''
+set -eu
+PROFILE="${HERDR_PALETTE_APPLY_PROFILE:-$(chezmoi data --format json | jq -r '.profile // empty')}"
+case "$PROFILE" in
+  personal|axon-work-computer) ;;
+  *)
+    echo "[install-herdr-palette] INFO: skipping profile ${PROFILE:-unknown}"
+    exit 0
+    ;;
+esac
+
+HERDR_BIN="$(mise where github:herdrdev/herdr@0.9.1)/herdr"
+# Install/register offline, as with Overview. Bootstrap must not touch a live server.
+export HERDR_SOCKET_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/herdr/.herdr-palette-install-$$.sock"
+PLUGINS="$("$HERDR_BIN" plugin list --plugin vjeantet.palette --json)"
+# Idempotent condition: the native manifest, GitHub pin and runnable binary agree.
+if printf '%s\n' "$PLUGINS" | jq -e '
+  .result.plugins[]? | select(
+    .plugin_id == "vjeantet.palette" and .version == "0.2.2" and
+    .enabled == true and .source.kind == "github" and
+    .source.owner == "vjeantet" and .source.repo == "herdr-palette" and
+    .source.requested_ref == "v0.2.2"
+  )' >/dev/null; then
+  PLUGIN_ROOT="$(printf '%s\n' "$PLUGINS" | jq -r '.result.plugins[] | select(.plugin_id == "vjeantet.palette") | .plugin_root')"
+  if [ -x "$PLUGIN_ROOT/target/release/herdr-palette" ]; then
+    echo "[install-herdr-palette] INFO: v0.2.2 already installed"
+    exit 0
+  fi
+fi
+
+"$HERDR_BIN" plugin install vjeantet/herdr-palette --ref v0.2.2 --yes
+echo "[install-herdr-palette] INFO: installed v0.2.2; reload Herdr config separately to activate the shortcuts"
+'''
+
 [tasks.bootstrap]
 description = "Complete system bootstrap"
 depends = [
@@ -1032,6 +1069,7 @@ depends = [
   "install-nvim-rosetta",
   "install-zellij-plugins",
   "install-herdr-overview",
+  "install-herdr-palette",
 ]
 run = '''
 echo "✅ Bootstrap complete!"
