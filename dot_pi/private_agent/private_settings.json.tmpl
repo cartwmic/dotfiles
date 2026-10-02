@@ -32,8 +32,8 @@
 {{- end -}}
 {
 {{- if eq .profile "personal" }}
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-6.1-sol",
+  "defaultProvider": "claude-compat",
+  "defaultModel": "claude-opus-5-5",
 {{- else }}
   "defaultProvider": "private-glm",
   "defaultModel": "glm-5.3-flash",
@@ -60,7 +60,6 @@
     "openai-codex/gpt-6-astra",
     "openai-codex/gpt-6.1-sol",
     "openrouter/z-ai/glm-5.3-flash",
-    "claude-compat/claude-haiku-4-5",
     "claude-compat/claude-sonnet-5-5",
     "claude-compat/claude-opus-5-5"
 {{- else }}
