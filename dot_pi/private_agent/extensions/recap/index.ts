@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { getPackageDir, getAgentDir } from '@earendil-works/pi-coding-agent';
+import { getPackageDir, getAgentDir, estimateTokens } from '@earendil-works/pi-coding-agent';
 import { Input, SelectList, truncateToWidth, stripTerminalSequences, matchesKey, Key, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, openSync, closeSync } from 'node:fs';
@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { budgets } from './backend.mjs';
-import { restoreState, resolveSettings, setOverride, project, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, argumentCompletions, commandHelp } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, argumentCompletions, commandHelp, projectContext, recapScope, failureNotice } from './helpers.ts';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const configPath = join(directory, 'config.json');
@@ -28,6 +28,7 @@ const records = () => {
     return JSON.parse(readFileSync(path, 'utf8')).records;
   } finally { rmSync(temp, { recursive: true, force: true }); }
 };
+const requestInput = (instructions: string, material: string, background: string) => instructions + '\n\n' + (background ? 'Background only (not new activity):\n' + background + '\n\nNew material:\n' : '') + material;
 const interactive = (ctx: ExtensionContext) => ctx.mode === 'tui' && ctx.hasUI;
 
 export default function recap(pi: ExtensionAPI) {
@@ -143,7 +144,7 @@ export default function recap(pi: ExtensionAPI) {
         saved(record);
         refreshWidget(ctx);
       } else if (item.status === 'generated-unsaved') ctx.ui.notify(item.warning, 'warning');
-      else if (!['superseded', 'cancelled'].includes(item.status)) notice(ctx, `Recap ${item.status}; coverage unchanged.`);
+      else if (!['superseded', 'cancelled', 'canceled'].includes(item.status)) notice(ctx, failureNotice(item.failure));
     }
   }
   async function picker(ctx: ExtensionContext) {
@@ -162,10 +163,10 @@ export default function recap(pi: ExtensionAPI) {
       const help: Record<string, string> = {
         model: 'null follows current Pi model', completed: 'After final response, error or abort',
         periodic: 'Progress only while Pi is active', beforeCompaction: 'Capture before context is compacted',
-        mode: 'New activity or full branch snapshot', cadence: 'Final responses per automatic recap',
+        mode: 'New activity or full current context snapshot', cadence: 'Final responses per automatic recap',
         intervalMinutes: 'Active progress interval in minutes', timeoutSeconds: 'Whole attempt limit; one retry',
         recursion: 'Allow reduction of oversized input', instructions: 'Instructions for recap generation',
-        options: 'Independent thinking and output limit', inputBudget: 'Input byte ceiling; model bound applies',
+        options: 'Independent thinking and output limit',
         timeZone: 'Display only: local, UTC or IANA zone',
       };
       const items = ['Done', scope === 'session' ? 'Edit defaults' : 'Edit session', ...fields];
@@ -246,9 +247,9 @@ export default function recap(pi: ExtensionAPI) {
     const own = structuredClone(state);
     let settings = capturedSettings(resolveSettings(defaults(), own.overrides), ctx.model);
     const entries = ctx.sessionManager.getBranch(), ids = entries.map((e: any) => e.id);
-    const units = project(entries, [...live.values()]);
+    const units = projectContext(ctx.sessionManager.buildSessionProjection(), [...live.values()]);
     if (!units.length) { if (trigger === 'manual') notice(ctx, 'Nothing to recap yet.'); return; }
-    const prior = compatibleRecord(records(), own, ids);
+    const prior = compatibleRecord(records(), own, ids, recapScope);
     const pending = uncovered(units, prior?.metadata.pi.coverage ?? null, ids);
     if ((mode !== 'full' || trigger === 'periodic') && !pending.length) { refreshWidget(ctx); if (trigger === 'manual') notice(ctx, 'No new activity.'); return; }
     if (!settings.model) {
@@ -261,13 +262,13 @@ export default function recap(pi: ExtensionAPI) {
       else { state = setOverride(state, 'model', model); pi.appendEntry('recap-state', state); }
       settings = capturedSettings(resolveSettings(defaults(), state.overrides), ctx.model);
     }
-    const material = (mode === 'full' ? units : pending).map(u => `[${u.status}] ${u.text}`).join('\n\n');
+    const material = `[Scope: ${mode === 'full' ? 'full current' : 'new activity in current'} compaction-aware context; summaries are not coverage of archived originals]\n\n` + (mode === 'full' ? units : pending).map(u => `[${u.status}] ${u.text}`).join('\n\n');
     let effectiveBudgets;
     try {
       const selectedModel = ctx.modelRegistry.find(settings.model.provider, settings.model.id);
       if (!selectedModel) throw new Error('Selected recap model unavailable');
-      if (selectedModel.api !== 'pi-virtual') effectiveBudgets = budgets(selectedModel, settings, settings.options.thinkingLevel ?? 'off');
-    } catch { notice(ctx, 'Recap selected model unavailable or unusable; coverage unchanged.'); return; }
+      if (selectedModel.api !== 'pi-virtual') effectiveBudgets = budgets(selectedModel, settings, settings.options.thinkingLevel ?? 'off', estimateTokens, requestInput(settings.instructions, material, prior?.summary ?? ''));
+    } catch { notice(ctx, failureNotice({ reason: 'model_limits' })); return; }
     // Capture everything while this call's context is fresh, before compaction
     // can change public material. Neither preflight nor its callbacks receive ctx.
     const work = { id, generation, epoch, token: reserved.token, own, settings, units, ids, mode, trigger, material, background: prior?.summary ?? '', cwd: ctx.cwd, ongoing: trigger === 'periodic' ? ongoing() : '', capturedAt: new Date().toISOString(), effectiveBudgets };
@@ -291,18 +292,18 @@ export default function recap(pi: ExtensionAPI) {
     try {
       if (!authorized(work)) return;
       const effectiveBudgets = work.effectiveBudgets;
-      const generationSettings = effectiveBudgets ? { ...settings, inputBudget: effectiveBudgets.inputBudget, options: { ...settings.options, maxTokens: effectiveBudgets.maxTokens } } : settings;
+      const generationSettings = effectiveBudgets ? { ...settings, options: { ...settings.options, maxTokens: effectiveBudgets.maxTokens } } : settings;
       // Virtual budgets are resolved inside each detached attempt. Fingerprints
       // describe captured source/settings, not metadata that is not yet known.
-      const snapshot: any = capture(units, ids, own, effectiveBudgets ? { ...settings, effectiveBudgets } : settings, mode, trigger, work.capturedAt);
+      const snapshot: any = capture(units, ids, own, effectiveBudgets ? { ...settings, effectiveBudgets: { maxTokens: effectiveBudgets.maxTokens, availableTokens: effectiveBudgets.availableTokens } } : settings, mode, trigger, work.capturedAt);
       const reuse = mode === 'full' && records().find((r: any) => r.status === 'published' && r.metadata?.pi?.historyId === own.historyId && r.metadata.pi.fingerprint === snapshot.fingerprint);
       if (reuse) { if (trigger === 'manual') enqueueNotice(work, 'Reused matching full recap.'); return; }
       if (!authorized(work)) return;
       const temp = mkdtempSync(join(tmpdir(), 'pi-recap-'));
       const path = join(temp, 'request.json');
       snapshot.metadata.pi.fingerprint = snapshot.fingerprint;
-      const command = backendCommand(getPackageDir, join(directory, 'backend.mjs'), getAgentDir(), cwd, generationSettings);
-      writeFileSync(path, JSON.stringify({ schema_version: 1, request_key: key(id), token: work.token, source_kind: 'pi', source_id: id, kind: 'single', metadata: snapshot.metadata, material, background, instructions: settings.instructions, command, ...(!effectiveBudgets ? { preflight: { command: [...command, '--preflight'] } } : {}), backend_identity: { provider: settings.model.provider, model: settings.model.id }, timeout_seconds: settings.timeoutSeconds, input_budget_bytes: effectiveBudgets?.inputBudget ?? settings.inputBudget, recursive: settings.recursion }), { mode: 0o600 });
+      const command = backendCommand(getPackageDir, join(directory, 'backend.mjs'), getAgentDir(), cwd, { ...generationSettings, budgetBackground: background });
+      writeFileSync(path, JSON.stringify({ schema_version: 1, request_key: key(id), token: work.token, source_kind: 'pi', source_id: id, kind: 'single', metadata: snapshot.metadata, material, background, instructions: settings.instructions, command, ...(!effectiveBudgets ? { preflight: { command: [...command, '--preflight'] } } : {}), backend_identity: { provider: settings.model.provider, model: settings.model.id }, timeout_seconds: settings.timeoutSeconds, input_budget_bytes: effectiveBudgets?.inputBudget ?? Number.MAX_SAFE_INTEGER, recursive: settings.recursion }), { mode: 0o600 });
       const child = spawn(cli, ['run', '--request-file', path, '--json-lines'], { env: cliEnv(), detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
       pipes.add(child.stdout); let buffer = '';
       child.stdout.on('data', (chunk: Buffer) => {
@@ -345,7 +346,7 @@ export default function recap(pi: ExtensionAPI) {
       }
       else if (parts[0] === 'view') {
         const record = currentRecap(ctx);
-        if (record) await viewer(ctx, `Recap ${displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone)}`, record.summary);
+        if (record) await viewer(ctx, `Recap ${record.metadata?.pi?.scope ?? 'legacy scope'} ${displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone)}`, record.summary);
         else notice(ctx, 'No saved recap for this branch.');
       }
       else if (parts[0] === 'help') await viewer(ctx, 'Recap help', commandHelp);

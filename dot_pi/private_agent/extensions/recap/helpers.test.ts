@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, argumentCompletions, commandCatalog, commandHelp } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, argumentCompletions, commandCatalog, commandHelp, projectContext, failureNotice } from './helpers.ts';
 
 test('native completions replace the whole argument prefix and match parser contexts', () => {
   assert.deepEqual(argumentCompletions('').map(c => c.value), commandCatalog.map(c => c.value));
@@ -82,4 +82,22 @@ test('timezone is presentation-only, validated, and observes DST', () => {
   assert.equal(compatibleRecord([row], state, ['m']), row);
   assert.equal(compatibleRecord([row], state, ['other']), undefined);
   assert.equal(compatibleRecord([row], restoreState('b', []), ['m']), undefined);
+});
+
+test('current projection uses source provenance and summaries never cover originals', () => {
+  const projection = { entries: [
+    { sourceEntry: { id: 'compact', type: 'compaction' }, messages: [{ role: 'compactionSummary', summary: 'same public text' }] },
+    { sourceEntry: { id: 'kept', type: 'message' }, messages: [{ role: 'user', content: 'edited public text' }] },
+    { sourceEntry: { id: 'output', type: 'custom_message' }, messages: [{ role: 'custom', content: 'recap excluded' }] },
+  ] };
+  const units = projectContext(projection);
+  assert.deepEqual(units.map(u => u.id), ['compact:compactionSummary', 'kept']);
+  assert.equal(units[1].text, 'user: edited public text');
+  const state = restoreState('a', []), snapshot = capture(units, ['compact', 'kept'], state, seedSettings, 'incremental', 'manual');
+  assert.equal(snapshot.metadata.pi.scope, 'current-context');
+  const row = { status: 'published', created_at: '2026', record_id: 'r', metadata: snapshot.metadata };
+  assert.equal(compatibleRecord([row], state, ['kept'], 'raw-branch'), undefined);
+  assert.equal(resolveSettings({ inputBudget: 1 }, { inputBudget: 2 }).inputBudget, undefined);
+  assert.match(failureNotice({ reason: 'context_limit', message: 'PRIVATE' }), /routed model context window/);
+  assert.equal(failureNotice({ message: 'PRIVATE' }), 'Recap failed; coverage unchanged.');
 });

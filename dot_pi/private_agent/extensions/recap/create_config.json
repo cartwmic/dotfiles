@@ -13,6 +13,5 @@
     "thinkingLevel": "off",
     "maxTokens": 4096
   },
-  "inputBudget": 24000,
   "timeZone": "local"
 }

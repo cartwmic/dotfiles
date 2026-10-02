@@ -65,7 +65,7 @@ def run(case):
             for fact in ('orchard-checks-passed', 'harbor-deployment-unfinished', 'harbor-review-before-deploy'):
                 assert fact in material, 'late capture lost original material'
             pi.wait(lambda: any(e['event'] == 'preflight' for e in pi.receipts()), 'supervised preflight not observed')
-            assert next(e['input_budget_bytes'] for e in pi.receipts() if e['event'] == 'preflight') < 4096
+            assert 4096 < next(e['input_budget_bytes'] for e in pi.receipts() if e['event'] == 'preflight') < 4096 * 4  # SDK estimated tokens, not one byte/token
             pi.gate.unlink()
             pi.wait(lambda: pi.terminal(envelope['token']), 'captured job did not complete')
             assert pi.terminal(envelope['token'])['status'] == 'published'
