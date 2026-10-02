@@ -1,0 +1,12 @@
+{
+  "project": "asciinema-player",
+  "version": "3.17.0",
+  "license": "Apache-2.0",
+  "source": "https://github.com/asciinema/asciinema-player/tree/v3.17.0",
+  "distribution": "https://github.com/asciinema/asciinema-player/releases/download/v3.17.0/",
+  "sha256": {
+    "LICENSE": "63422284ed65be54ab38d8a94e7518d27e222fbb26c9ae4cd984c63926e91c12",
+    "asciinema-player.css": "f619fe17597043564f03b2c6918b3daf890ee8b912fb408542fba11afade4fdb",
+    "asciinema-player.min.js": "a13c37632e1b5c49fe9128417b9319a9b5bc64cb457dd5ae52cbba8a3aceb880"
+  }
+}

@@ -28,6 +28,10 @@ research = "github:cartwmic/loop-engine"
 # Core Language Runtimes
 # =============================================================================
 [tools]
+# Timed terminal review: immutable v3 capture, GIF renderer, H.264 CFR export.
+"github:asciinema/asciinema" = { version = "3.2.1", matching_regex = "^asciinema-", rename_exe = "asciinema" }
+"github:asciinema/agg" = { version = "1.9.0", matching_regex = "^agg-", rename_exe = "agg" }
+ffmpeg = "6.0.1"
 # NOTE: rust is deliberately NOT managed by mise.
 # mise's rust backend is a thin wrapper over rustup and unconditionally exports
 # RUSTUP_TOOLCHAIN=<resolved version> into the environment. rustup's resolution
