@@ -48,6 +48,11 @@ export default function (pi: any) {
           message.content = [{ type: 'text', text }];
           const fault = process.env.HOME + '/unfinished';
           if (existsSync(fault) && readFileSync(fault, 'utf8') === (reduction ? 'reduction' : 'final')) message.stopReason = 'length';
+          if (existsSync(process.env.HOME + '/context-rejection')) { message.stopReason = 'error'; message.errorMessage = 'maximum context length exceeded PRIVATE_CONTEXT_SENTINEL'; }
+          if (existsSync(process.env.HOME + '/private-error')) {
+            console.error('PRIVATE_STDERR_SENTINEL auth/path/private');
+            message.stopReason = 'error'; message.errorMessage = 'PRIVATE_PROVIDER_SENTINEL auth/path/private';
+          }
         } else {
           const topic = /orchard|harbor|older|newer/.exec(prompt)?.[0] ?? 'unknown';
           log({ event: 'call', model: model.id, topic });
@@ -79,7 +84,7 @@ export default function (pi: any) {
     }
     log({ event: 'budget-resolved', pid: process.pid });
     if (existsSync(process.env.HOME + '/budget-failure')) throw new Error('Scripted route metadata unavailable');
-    return { model, thinkingLevel: 'off' };
+    return { model: !preflight && existsSync(process.env.HOME + '/smaller-route') ? ctx.modelRegistry.find('recap-proof', 'unusable') : model, thinkingLevel: 'off' };
   } });
   pi.registerTool({ name: 'proof_evidence', label: 'Evidence', description: 'Scripted evidence collection', parameters: Type.Object({ topic: Type.String() }), async execute(_id: string, args: any, signal: AbortSignal) {
     const topic = args.topic;

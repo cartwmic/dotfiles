@@ -220,3 +220,10 @@ single/group creation, history reads, annotations, failures and interpreter
 selection. Never call a paid/owner backend for storage checks. Follow the root
 AGENTS preflight and approval rules before source-scoped chezmoi previews or
 live applies; no live apply is implied by these examples.
+
+Failed supervised backends may return exactly
+`SESSION_RECAP_FAILURE:context_limit\n` or `SESSION_RECAP_FAILURE:model_limits\n`
+on stdout with a nonzero exit. Only these closed reason codes cross UI/history
+boundaries; stderr is discarded and arbitrary failure output remains redacted.
+Transport oversize and timeout have supervisor-owned `input_limit`/`timed_out`
+classifications. This protocol does not select models or impose caller policy.

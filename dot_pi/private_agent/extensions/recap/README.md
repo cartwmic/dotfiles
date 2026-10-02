@@ -3,7 +3,7 @@
 Independent recap UX for interactive desktop Pi (`personal` and
 `axon-work-computer`), not RPC/print/JSON or local Termux. It does not need
 Herdr. Existing standalone CLI settings and legacy recap records are not
-imported. New defaults follow the current Pi model and enable all three
+imported. Normal incremental requests use current compaction-aware Pi context, not the retained raw archive. New defaults follow the current Pi model and enable all three
 supported automatic triggers; explicit saved choices, including false, remain.
 
 ## Commands and settings
@@ -23,7 +23,8 @@ instructions, independent generation options, mode, 60-second whole-attempt
 timeout, recursive reduction (off initially), completed cadence (every final
 response), periodic interval (15 minutes while active), and before-compaction
 automation. All three automatic triggers default on; explicit persisted false
-values remain off. Existing `create_` configs are not migrated.
+values remain off. The retired `inputBudget` byte cap is ignored even in existing
+defaults/session overrides and is no longer editable; archives/preferences are not migrated.
 
 The at-most-two-line muted widget above the editor shows truthful `Recap running`
 once the detached job is accepted, including while preflight is blocked and before
@@ -45,8 +46,18 @@ DST). Invalid input is rejected before saving. This is presentation only:
 canonical UTC records and generation fingerprints are unchanged.
 
 Manual and enabled automatic requests share saved active-branch coverage.
-`/recap` selects new observed conversation/tool outcomes; `/recap full` selects
-the branch snapshot. Thinking and recap output are excluded. Matching full
+`/recap` selects new public conversation/tool outcomes from the SDK
+compaction-aware projection: the current compaction/branch summary, retained
+recent messages and live observations. Projection provenance supplies stable
+identities; context edits are honored. `/recap full` selects all of the current compaction-aware context rather
+than only uncovered activity. The saved automatic `mode: full` choice uses the
+same full-current policy. With compaction this means summary plus retained
+messages; without compaction it naturally includes the active public branch.
+Neither mode expands archived pre-compaction originals. There is no raw/archive
+recap command. Scope is labeled in input, saved metadata and the viewer.
+Current-context coverage covers a summary itself, never the archived originals
+it replaced. Full reuse requires the matching full-current snapshot; old raw/unscoped
+records remain viewable but do not invent current-context coverage. Thinking and recap output are excluded. Matching full
 snapshots can be reused. A no-new request keeps the latest compatible recap widget
 without another generation. Success covers only the captured end, not later
 work. Failed or unsaved output never advances coverage. Prior narrative is
@@ -148,24 +159,34 @@ Before handoff, physical limits come from public `ctx.modelRegistry.find` metada
 virtual limits use the Pi-owned no-generation SDK helper inside each detached
 CLI attempt (display metadata is not a limit). Pi never hosts an asynchronous
 budget query. The private request includes optional generic `preflight.command`;
-`backend.mjs --preflight` returns only the effective input byte budget and opaque
+`backend.mjs --preflight` receives material-only stdin under the unchanged
+generic contract. Its private captured selection supplies prior narrative; the
+Pi helper assembles/estimates instructions/background/framing and returns only
+the effective input byte budget and opaque
 backend argv adjustments. The CLI owns its process group, current-token fence,
 retry and one deadline spanning preflight, startup, every reduction/final call
 and save. A blocked route helper is actually stopped on cancel/supersession,
 without opening a gate or retrying. Captured virtual fingerprints identify
 original settings and public material, not yet-unknown effective route metadata;
 physical fingerprints also include their synchronously known derived ceilings.
-`inputBudget` and `options.maxTokens` remain user ceilings, not permission to exceed
-the model. Output is capped at the model ceiling and one quarter of its context.
-Both paths share one budget calculation. Input uses a conservative one-UTF-8-byte-per-token upper bound, subtracting system
-instructions, 1024 tokens of framing/reduction overhead and the output allowance.
-With reasoning on, reserve the entire model output ceiling because some adapters
-add thinking tokens to `maxTokens`. Unknown/unusable budgets refuse safely; saved
-preferences are unchanged and source is never truncated. Each actual chunk/final
-call checks its resolved route again; virtual display limits or a changing router
-cannot bypass the bound. Only a nonblank response with explicit normal `stop`
-succeeds; unfinished/error/aborted outcomes use the existing safe failure/one-retry
-path without advancing coverage.
+`options.maxTokens` remains the explicit user output ceiling, capped by the
+physical model output limit and the existing quarter-context-window output guard.
+Input has no extra application cap. Both paths use
+public SDK `estimateTokens` on the actual prompt (including instructions and
+prior narrative), reserve the system instructions, serialized request framing
+and output, and derive the generic transport's UTF-8 byte allowance from measured
+prompt bytes / estimated tokens. Estimates are approximate, not exact tokenizer
+counts; bytes are not tokens. With reasoning on, reserve the entire model output
+ceiling because some adapters add thinking tokens to `maxTokens`.
+Unknown/unusable budgets refuse safely; source is never truncated. Each actual
+chunk/final call independently checks its resolved model's estimated context
+window; a smaller routed model or recognized provider context rejection fails
+closed. Recursion is still explicit opt-in, never automatically enabled.
+Known input/context/model-limit failures give safe actionable guidance; timeout
+retains its safe classification. The backend emits only a closed reason-code
+protocol; arbitrary provider errors/stderr/auth/paths remain redacted in UI and
+history. Only nonblank normal `stop` output succeeds. Failure retains the
+existing one-retry path and never advances coverage.
 
 Both control and detached jobs use `~/.local/bin/session-recap` and its maintained
 `SESSION_RECAP_PYTHON`/compatible PATH/mise interpreter selection. The private
@@ -231,3 +252,15 @@ runs against hook-free private configuration,
 not the owner's effective config. Native preview requires the root-guide
 config/hook/1Password preflight and independent rendered/live reads. Do not
 apply or commit based on this guide.
+
+Focused current-context regression (private dummy backend; no owner recap):
+
+```sh
+RECAP_CONTEXT_EVIDENCE=/tmp/recap-context-proof /tmp/hm-pyte-t4a/bin/python tests/pi-recap/context_limits.py
+```
+
+This seeds a >5MB retained archive through the public SDK and drives real Pi.
+It checks summary/recent eligibility above the retired cap, scoped coverage,
+no-new, automatic/fresh activity, full-current reuse and incremental/full coverage sharing, physical/virtual limits
+and private provider-error redaction. Old byte-cap proof expectations are
+historical and do not establish the revised model-derived policy.
