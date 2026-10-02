@@ -6,7 +6,7 @@ from test_map_frames import native_fixture, card_frame
 
 
 def canvas(body='Synthetic workspace'):
-    return 'Herdr Overview\n!0 W0 R1 · 1ws 1t\n' + body + '\nj/k select/scroll · n blocked · Esc/q'
+    return 'Herdr Overview\n!0 W0 R1 · 1ws 1t\n' + body + '\narrows/hjkl select · n blocked · Esc/q'
 
 
 class OverviewNavigationTest(unittest.TestCase):
