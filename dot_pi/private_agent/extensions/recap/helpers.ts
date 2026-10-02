@@ -8,6 +8,38 @@ export function canonical(value: any): string {
   return JSON.stringify(value);
 }
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+export const commandCatalog = [
+  { value: 'view', label: 'view', description: 'View the saved recap for this branch' },
+  { value: 'full', label: 'full', description: 'Recap the full branch; reuse matching snapshots' },
+  { value: 'history', label: 'history', description: 'Search saved recaps for this session history' },
+  { value: 'settings', label: 'settings', description: 'Edit session overrides' },
+  { value: 'cancel', label: 'cancel', description: 'Cancel recap work, not Pi’s agent' },
+  { value: 'help', label: 'help', description: 'Open this read-only command guide' },
+];
+export function argumentCompletions(prefix: string) {
+  const words = prefix.trimStart().split(/\s+/), fragment = words.pop() ?? '';
+  let choices = commandCatalog;
+  if (words[0] === 'history' && words.slice(1).every(w => ['all', 'attempts', 'legacy'].includes(w))) {
+    choices = [
+      { value: 'all', label: 'all', description: 'Include other Pi session histories' },
+      { value: 'attempts', label: 'attempts', description: 'Include unsuccessful attempts' },
+      { value: 'legacy', label: 'legacy', description: 'Browse legacy records instead of Pi histories' },
+    ].filter(c => !words.includes(c.value));
+  } else if (words.length === 1 && words[0] === 'settings') {
+    choices = [{ value: 'defaults', label: 'defaults', description: 'Edit defaults for future sessions' }];
+  } else if (words.length) return [];
+  return choices.filter(c => c.value.startsWith(fragment)).map(c => ({ ...c, value: [...words, c.value].join(' ') }));
+}
+export const commandHelp = [
+  '/recap — Generate from new observed activity (incremental). No new activity makes no model call.',
+  ...commandCatalog.map(c => `/recap ${c.value} — ${c.description}.`),
+  '/recap full — A matching full snapshot is reused without generation; successful coverage ends at capture.',
+  '/recap history [all|attempts|legacy] — Filters combine: all includes other Pi histories; attempts includes failures; legacy browses older records instead. Type to search, Enter to view.',
+  '/recap settings [defaults] — Session overrides inherit defaults; Clear override restores inheritance. defaults edits future defaults, not saved overrides.',
+  '/recap cancel — Stops recap work only, not Pi’s agent; saved history and coverage remain.',
+  'Automatic final-response, active-periodic and before-compaction recaps default on. Settings can disable them. The model follows current Pi unless overridden, captured per request.',
+  'timeZone is display-only: local (default), UTC or an IANA zone. Help/view/history do not generate, cancel, change coverage or interrupt the main agent.',
+].join('\n\n');
 export const seedSettings = Object.freeze({ model: null, completed: true, periodic: true, beforeCompaction: true, mode: 'incremental', cadence: 1, intervalMinutes: 15, timeoutSeconds: 60, recursion: false, instructions: 'Write a detailed narrative recap for reorientation and resumption. Distinguish confirmed results from ongoing, queued, partial and failed work.', options: { thinkingLevel: 'off', maxTokens: 4096 }, inputBudget: 24000, timeZone: 'local' });
 export type OwnedState = { nativeSessionId: string; historyId: string; overrides: Record<string, any> };
 /** Pass all custom entries, not merely the branch, for session-wide preferences. */

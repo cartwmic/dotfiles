@@ -7,7 +7,10 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export default function (pi: any) {
   // Private keyboard launcher reaches the actual public slash-command handler
   // without consuming the owner's unsent main-editor draft.
-  if (process.env.RECAP_PROOF_UX === '1') pi.registerShortcut('alt+g', { description: 'Proof: open public recap view', handler: () => { pi.sendUserMessage('/recap view', { expandPromptTemplates: true }); } });
+  if (process.env.RECAP_PROOF_UX === '1') {
+    pi.registerShortcut('alt+g', { description: 'Proof: open public recap view', handler: () => { pi.sendUserMessage('/recap view', { expandPromptTemplates: true }); } });
+    pi.registerShortcut('alt+h', { description: 'Proof: open public recap help', handler: () => { pi.sendUserMessage('/recap help', { expandPromptTemplates: true }); } });
+  }
   pi.registerProvider('recap-proof', {
     api: 'openai-completions', baseUrl: 'http://unused.invalid', apiKey: 'dummy',
     models: ['main', ...(process.env.RECAP_PROOF_UX === '1' ? ['main-next'] : []), 'recap', 'unusable'].map(id => ({ id, name: id, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: id === 'unusable' ? 1024 : id === 'recap' ? Number(process.env.RECAP_PROOF_CONTEXT ?? 100000) : 100000, maxTokens: id === 'recap' ? Number(process.env.RECAP_PROOF_MAX_OUTPUT ?? 4096) : 4096 })),

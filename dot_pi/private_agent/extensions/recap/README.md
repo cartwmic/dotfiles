@@ -8,6 +8,12 @@ supported automatic triggers; explicit saved choices, including false, remain.
 
 ## Commands and settings
 
+Type `/recap ` to see native, described argument completions; Tab selects a
+verb or contextual history filter/settings scope. `/recap help` opens a
+transient scrollable command guide; Escape returns without generation,
+reservation, coverage changes or interrupting Pi's agent. Bare `/recap` still
+generates incrementally, not help.
+
 Start with `/recap settings` for session overrides or `/recap settings defaults`
 for future defaults. By default each request captures the current Pi model;
 an explicit recap model override stays independent of later main-model changes.
@@ -19,8 +25,14 @@ response), periodic interval (15 minutes while active), and before-compaction
 automation. All three automatic triggers default on; explicit persisted false
 values remain off. Existing `create_` configs are not migrated.
 
-Saved results appear as at most two muted lines above the editor: the actual
-last successful update time and a width-truncated excerpt. `/recap view` opens
+The at-most-two-line muted widget above the editor shows truthful `Recap running`
+once the detached job is accepted, including while preflight is blocked and before
+the first save. With a prior success it retains that recap's update time and excerpt;
+without one it says no recap has been saved yet. Completion, failure, unsaved output,
+cancel and supersession clear only the matching running state. New sessions/forks
+and incompatible branches hide foreign jobs. Reload recovers a matching captured job
+from durable request state, polling through fresh-context commands until it finishes.
+Saved results show the actual last successful update time and width-truncated excerpt. `/recap view` opens
 the current compatible saved narrative in the scrollable viewer; PageUp/PageDown
 scroll and Escape returns to the editor without generating, canceling work,
 changing coverage or adding a conversation message. Failure/unsaved warnings
@@ -61,7 +73,8 @@ and owns native attribution; it never configures or generates Pi recaps.
 ## Implementation and proof boundaries
 
 `index.ts` registers `/recap`, `/recap view`, `/recap full`, `/recap cancel`,
-`/recap settings [defaults]`, and `/recap history [all|attempts|legacy]`.
+`/recap settings [defaults]`, `/recap help`, and `/recap history [all|attempts|legacy]`.
+History filters can combine (for example `history all attempts` or `history legacy attempts`).
 Settings default to session scope, with sparse overrides and explicit clearing.
 The independent model picker does not change the conversation model.
 History uses a searchable selector and a keyboard-scrollable dim viewer.
@@ -183,6 +196,8 @@ Source-root proof commands (no deployment or paid backend):
 
 ```sh
 python3 tests/pi-recap/proof.py cli --case native-cli-timezone-public
+# Use a private Python with pyte/wcwidth (see tests/pi-recap/current_screen.py).
+RECAP_DISCOVERY_EVIDENCE=/tmp/recap-discovery-proof python3 tests/pi-recap/proof.py tui --case recap-discovery-running-public
 python3 tests/pi-recap/proof.py tui --case defaults-quiet-view-current-model-timezone-public
 python3 tests/pi-recap/proof.py cli
 python3 tests/pi-recap/proof.py backend

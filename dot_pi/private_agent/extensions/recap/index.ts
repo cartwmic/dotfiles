@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { budgets } from './backend.mjs';
-import { restoreState, resolveSettings, setOverride, project, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, project, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, argumentCompletions, commandHelp } from './helpers.ts';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const configPath = join(directory, 'config.json');
@@ -35,6 +35,19 @@ export default function recap(pi: ExtensionAPI) {
   let state: any;
   let working = false, settlements = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let widgetTimer: ReturnType<typeof setTimeout> | undefined;
+  let job: { nativeSessionId: string; historyId: string; token: string; capturedEnd: string | null } | undefined;
+  const finishedTokens = new Set<string>();
+  function stopWidgetTimer() { if (widgetTimer) clearTimeout(widgetTimer); widgetTimer = undefined; }
+  function watchWidget() {
+    stopWidgetTimer();
+    const id = sessionId, epoch = contextEpoch;
+    widgetTimer = setTimeout(() => {
+      widgetTimer = undefined;
+      if (active && sessionId === id && contextEpoch === epoch) dispatch();
+    }, 1000);
+    widgetTimer.unref();
+  }
   let observation = '';
   const live = new Map<string, any>();
   const actions: { sessionId: string; trigger: string }[] = [];
@@ -69,7 +82,8 @@ export default function recap(pi: ExtensionAPI) {
     sessionId = ctx.sessionManager.getSessionId();
     state = restoreState(sessionId, ctx.sessionManager.getEntries().filter((e: any) => e.type === 'custom' && e.customType === 'recap-state').map((e: any) => e.data));
     pi.appendEntry('recap-state', state);
-    working = false; settlements = 0; live.clear(); observation = ''; actions.length = 0; stopTimer();
+    job = ctx.sessionManager.getEntries().filter((e: any) => e.type === 'custom' && e.customType === 'recap-job' && e.data.nativeSessionId === sessionId && e.data.historyId === state.historyId).at(-1)?.data;
+    working = false; settlements = 0; live.clear(); observation = ''; actions.length = 0; stopTimer(); stopWidgetTimer();
     refreshWidget(ctx);
   }
   function dispatch() {
@@ -83,13 +97,27 @@ export default function recap(pi: ExtensionAPI) {
   }
   function refreshWidget(ctx: ExtensionContext) {
     // Factories retain only plain presentation data, never a session context.
-    let record; try { record = currentRecap(ctx); } catch { /* Hide unavailable history. */ }
-    if (!record) { ctx.ui.setWidget('recap', undefined); return; }
-    const time = displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone);
-    const excerpt = stripTerminalSequences(record.summary).replace(/\s+/g, ' ').trim();
+    stopWidgetTimer();
+    let record, running = false;
+    try {
+      const rows = records(), ids = ctx.sessionManager.getBranch().map((e: any) => e.id);
+      record = compatibleRecord(rows, state, ids);
+      if (job?.nativeSessionId === sessionId && job.historyId === state.historyId && (!job.capturedEnd || ids.includes(job.capturedEnd))) {
+        const current = call('current', '--key', key(sessionId), '--json');
+        // Dated outcomes are authoritative even if updating the convenience
+        // request state failed. A retry's first failed attempt is not terminal.
+        const finished = finishedTokens.has(job.token) || rows.some((r: any) => r.token === job!.token && (r.status === 'published' || (r.attempt === 2 && ['failed', 'generated-unsaved'].includes(r.status))));
+        running = current.token === job.token && current.status === 'running' && !finished;
+      }
+    } catch { /* Do not invent running state when durable state is unavailable. */ }
+    if (running) watchWidget();
+    if (!record && !running) { ctx.ui.setWidget('recap', undefined); return; }
+    const time = record ? displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone) : '';
+    const heading = running ? `Recap running${time ? ` · ${time}` : ''}` : `Recap updated ${time}`;
+    const excerpt = record ? stripTerminalSequences(record.summary).replace(/\s+/g, ' ').trim() : 'No saved recap yet.';
     ctx.ui.setWidget('recap', (_tui, theme) => ({
       invalidate() {},
-      render(width: number) { return [theme.fg('dim', stripTerminalSequences(truncateToWidth(`Recap updated ${time}`, width))), theme.fg('dim', stripTerminalSequences(truncateToWidth(excerpt, width)))]; },
+      render(width: number) { return [theme.fg('dim', stripTerminalSequences(truncateToWidth(heading, width))), theme.fg('dim', stripTerminalSequences(truncateToWidth(excerpt, width)))]; },
     }), { placement: 'aboveEditor' });
   }
   function saved(record: any) {
@@ -107,6 +135,8 @@ export default function recap(pi: ExtensionAPI) {
       if (generations.get(id) !== item.generation || (item.epoch !== undefined && item.epoch !== contextEpoch)) continue;
       let current; try { current = call('current', '--key', key(id), '--json'); } catch { continue; }
       if (current.token !== item.token || generations.get(id) !== item.generation || ctx.sessionManager.getSessionId() !== id) continue;
+      if (item.event === 'accepted') continue;
+      if (item.event === 'terminal') finishedTokens.add(item.token);
       if (item.notice) notice(ctx, item.notice);
       else if (item.status === 'published') {
         const record = call('read', item.record_id, '--json').record;
@@ -212,6 +242,7 @@ export default function recap(pi: ExtensionAPI) {
   async function request(ctx: ExtensionContext, mode = 'incremental', trigger = 'manual') {
     const id = ctx.sessionManager.getSessionId(), generation = invalidate(id), epoch = contextEpoch;
     const reserved = call('reserve', '--key', key(id), '--json');
+    refreshWidget(ctx);
     const own = structuredClone(state);
     let settings = capturedSettings(resolveSettings(defaults(), own.overrides), ctx.model);
     const entries = ctx.sessionManager.getBranch(), ids = entries.map((e: any) => e.id);
@@ -240,7 +271,11 @@ export default function recap(pi: ExtensionAPI) {
     // Capture everything while this call's context is fresh, before compaction
     // can change public material. Neither preflight nor its callbacks receive ctx.
     const work = { id, generation, epoch, token: reserved.token, own, settings, units, ids, mode, trigger, material, background: prior?.summary ?? '', cwd: ctx.cwd, ongoing: trigger === 'periodic' ? ongoing() : '', capturedAt: new Date().toISOString(), effectiveBudgets };
-    handoff(work);
+    if (handoff(work)) {
+      job = { nativeSessionId: id, historyId: own.historyId, token: reserved.token, capturedEnd: ids.at(-1) ?? null };
+      pi.appendEntry('recap-job', job);
+      refreshWidget(ctx);
+    }
   }
   function authorized(work: any) {
     try { return call('current', '--key', key(work.id), '--json').token === work.token; }
@@ -274,15 +309,16 @@ export default function recap(pi: ExtensionAPI) {
         buffer += chunk.toString(); let end;
         while ((end = buffer.indexOf('\n')) >= 0) {
           const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-          try { const event = JSON.parse(line); if (event.event === 'terminal') {
+          try { const event = JSON.parse(line); if (['accepted', 'terminal'].includes(event.event)) {
             if (event.status === 'published' && active && sessionId === id && generations.get(id) === generation && call('current', '--key', key(id), '--json').token === event.token) armTimer();
             queue.push({ ...event, sessionId: id, generation, epoch: work.epoch }); dispatch();
           } } catch { /* Invalid pipe event is not an outcome. */ }
         }
       });
-      child.on('error', () => { rmSync(temp, { recursive: true, force: true }); });
+      child.on('error', () => { enqueueNotice(work, 'Recap operation failed; coverage unchanged.'); rmSync(temp, { recursive: true, force: true }); });
       child.on('close', () => { pipes.delete(child.stdout); rmSync(temp, { recursive: true, force: true }); });
       child.unref(); child.stdout.unref();
+      return true;
     } catch { enqueueNotice(work, 'Recap operation failed; coverage unchanged.'); }
   }
   pi.registerCommand(dispatchName, { description: 'Internal recap delivery', handler: async (args, ctx) => {
@@ -295,12 +331,12 @@ export default function recap(pi: ExtensionAPI) {
       catch { notice(ctx, 'Recap operation failed; coverage unchanged.'); }
     }
   } });
-  pi.registerCommand('recap', { description: 'Recap [view|full|history [all|attempts|legacy]|settings [defaults]|cancel]', handler: async (args, ctx) => {
+  pi.registerCommand('recap', { description: 'Recap [view|full|history [all|attempts|legacy]|settings [defaults]|cancel|help]', getArgumentCompletions: argumentCompletions, handler: async (args, ctx) => {
     if (!interactive(ctx)) return;
     if (sessionId !== ctx.sessionManager.getSessionId()) initialize(ctx);
     const parts = args.trim().split(/\s+/);
     try {
-      if (parts[0] === 'cancel') { invalidate(sessionId); call('cancel', '--key', key(sessionId), '--json'); notice(ctx, 'Recap cancelled; saved history retained.'); }
+      if (parts[0] === 'cancel') { invalidate(sessionId); call('cancel', '--key', key(sessionId), '--json'); refreshWidget(ctx); notice(ctx, 'Recap cancelled; saved history retained.'); }
       else if (parts[0] === 'settings') {
         const before = resolveSettings(defaults(), state.overrides);
         await settings(ctx, parts[1] === 'defaults' ? 'defaults' : 'session');
@@ -312,9 +348,10 @@ export default function recap(pi: ExtensionAPI) {
         if (record) await viewer(ctx, `Recap ${displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone)}`, record.summary);
         else notice(ctx, 'No saved recap for this branch.');
       }
+      else if (parts[0] === 'help') await viewer(ctx, 'Recap help', commandHelp);
       else if (parts[0] === 'history') await history(ctx, parts.slice(1));
       else if (!parts[0] || parts[0] === 'full') await request(ctx, parts[0] === 'full' ? 'full' : 'incremental');
-      else notice(ctx, 'Use /recap [view|full|history|settings|cancel].');
+      else notice(ctx, 'Unknown recap command. Use /recap help.');
     } catch { notice(ctx, 'Recap operation failed; coverage unchanged.'); }
   } });
   pi.on('session_start', async (_event, ctx) => {
@@ -376,5 +413,5 @@ export default function recap(pi: ExtensionAPI) {
     }
   });
   pi.on('session_tree', (_event, ctx) => { live.clear(); observation = ''; if (interactive(ctx)) refreshWidget(ctx); });
-  pi.on('session_shutdown', () => { contextEpoch++; active = false; working = false; stopTimer(); actions.length = 0; live.clear(); for (const pipe of pipes) pipe.destroy(); pipes.clear(); });
+  pi.on('session_shutdown', () => { contextEpoch++; active = false; working = false; stopTimer(); stopWidgetTimer(); job = undefined; actions.length = 0; live.clear(); for (const pipe of pipes) pipe.destroy(); pipes.clear(); });
 }
