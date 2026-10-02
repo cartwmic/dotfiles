@@ -101,9 +101,6 @@ Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 .pi/agent/extensions/openrouter-gate/**
 # Codex Fast is configured only in personal Pi settings.
 .pi/agent/extensions/pi-codex-fast.json
-# The remotely installed System One package is enabled in personal Pi settings only.
-.pi/agent/extensions/system-one
-.pi/agent/extensions/system-one/**
 # Homelab session-digest: claude-bridge + ollama.internal. Work stays fts-raw.
 .pi/session-search
 .pi/session-search/**
@@ -111,4 +108,10 @@ Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 {{- if ne .profile "axon-work-computer" }}
 .pi/agent/extensions/issue
 .pi/agent/extensions/issue/**
+{{- end }}
+
+{{- if and (ne .profile "personal") (ne .profile "axon-work-computer") }}
+# System One docs accompany the desktop Git package; never deploy on Termux.
+.pi/agent/extensions/system-one
+.pi/agent/extensions/system-one/**
 {{- end }}

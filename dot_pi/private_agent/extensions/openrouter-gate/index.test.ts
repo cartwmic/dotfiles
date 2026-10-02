@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
 	buildAllowedModels,
+	mergeClassifierCatalog,
+	toProviderModelConfig,
 	catalogIdsFor,
 	describeConfig,
 	fallbackModel,
@@ -18,7 +20,7 @@ import {
 	normalizeConfig,
 	saveConfig,
 } from "./config.ts";
-import { parseSubcommand, readStash, writeStash, catalogSignature, getOpenRouterModels, formatStatus, reply } from "./index.ts";
+import { compatibleApiKeyReference, parseSubcommand, readStash, writeStash, catalogSignature, getOpenRouterModels, formatStatus, reply } from "./index.ts";
 import {
 	addAllowedModel,
 	commandCompletions,
@@ -501,3 +503,49 @@ test("reply: notifies TUI; ignores empty and missing notify", () => {
 		["⚠ bad", "warning"],
 	]);
 });
+
+const nativeFixture = {
+ type: "classifier" as const, id: "~typesafe/jev-latest", name: "Native",
+ api: "typesafe-system-one", baseUrl: "https://fixture.invalid/v1", input: ["text"] as Array<"text">,
+ inputLimits: { text: 123 }, cost: { input: 0.042, output: 0, cacheRead: 0, cacheWrite: 0, tier: 7 }, contextWindow: 32000,
+};
+test("native conversion preserves metadata without chat defaults", () => {
+ assert.deepEqual(toProviderModelConfig(nativeFixture), { ...nativeFixture, headers: undefined });
+ assert.equal("maxTokens" in toProviderModelConfig(nativeFixture), false);
+ assert.equal("reasoning" in toProviderModelConfig(nativeFixture), false);
+});
+test("native merge restores builtin over chat, current classifier wins", () => {
+ const chat = model(nativeFixture.id);
+ const builtin = nativeFixture;
+ assert.equal(mergeClassifierCatalog([chat], [builtin])[0], builtin);
+ const current = { ...builtin, contextWindow: 99, api: "other-native" };
+ assert.equal(mergeClassifierCatalog([current], [builtin])[0], current);
+ assert.equal(mergeClassifierCatalog([chat], [])[0], chat);
+});
+test("native exact/glob filtering and empty/off remain fail closed", () => {
+ for (const pattern of [nativeFixture.id, "~typesafe/*"]) {
+  assert.equal(buildAllowedModels([nativeFixture], [pattern])[0].type, "classifier");
+ }
+ assert.deepEqual(buildAllowedModels([nativeFixture], []), []);
+ assert.equal(isProviderOpen({ enabled: false, allowedModels: [nativeFixture.id] }), false);
+ assert.equal(buildAllowedModels([nativeFixture], ["chat-missing"])[0].type, undefined);
+});
+test("signature observes same-id type and native metadata refresh", () => {
+ const config = { enabled: true, allowedModels: [nativeFixture.id] };
+ const sig = catalogSignature(config, [nativeFixture], [toProviderModelConfig(nativeFixture)]);
+ for (const changed of [{ ...nativeFixture, contextWindow: 10 }, { ...nativeFixture, api: "changed" }, model(nativeFixture.id)]) {
+  assert.notEqual(catalogSignature(config, [changed], [toProviderModelConfig(changed)]), sig);
+ }
+});
+test("typed registry discovery includes classifiers bound to current registry", () => {
+ const ctx = { modelRegistry: { getAll() { return []; }, getModelsOfType(type: string, provider: string) {
+  assert.equal(type, "classifier"); assert.equal(provider, "openrouter");
+  return [{ ...nativeFixture, provider }];
+ } } };
+ assert.equal(getOpenRouterModels(ctx)[0].type, "classifier");
+});
+
+ test("only known legacy plus auth reference is normalized", () => {
+ assert.equal(compatibleApiKeyReference("OPENROUTER_API_KEY"), "$OPENROUTER_API_KEY");
+ for (const value of [undefined, "literal-key", "$OPENROUTER_API_KEY", "${OPENROUTER_API_KEY}", "OTHER_KEY", ""]) assert.equal(compatibleApiKeyReference(value), undefined);
+ });
