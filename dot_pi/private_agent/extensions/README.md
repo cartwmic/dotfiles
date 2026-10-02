@@ -21,6 +21,18 @@ The `termux` profile skips `.pi` entirely, so none of these extensions deploy
 there. Remaining machines use `personal` or `axon-work-computer`, plus the
 gates in the Profile gates section.
 
+## System One Git package
+
+[System One](./system-one/README.md) is included once in personal and
+axon-work-computer settings. Its local directory is docs-only, not a loader;
+Termux excludes `.pi`. Native macOS delivery targets Pi 0.99.2+ / Node.js
+22.19+. Pi owns provider/auth setup and classifier selection independently
+of the CLI catalog (CLI Node.js 20+ macOS/Linux support is unchanged).
+`/so off` gates only `system_one`; private manual use and direct native
+codemode are separate. See the guide for native typed forms, selection
+lifecycle, separate accounting and the 30-second deadline / per-operation
+`maxRetries:2`. Source reconciliation does not authorize apply or installation.
+
 ## Setup
 
 Work in the chezmoi source tree. From any cwd, list this directory:
@@ -139,6 +151,7 @@ Gates live in the repo-root `.chezmoiignore`:
 
 | Path | Who receives it |
 | --- | --- |
+| [system-one](./system-one/README.md) (docs only) | `personal` and `axon-work-computer` |
 | [openrouter-gate](./openrouter-gate/README.md) | `personal` only |
 | [issue](./issue/README.md) | `axon-work-computer` only |
 | `dot_pi/session-search/` (sibling of `agent/`, not this folder) | `personal` only |

@@ -308,18 +308,27 @@ and [proof commands](./tests/standing-reminder/README.md). Termux excludes Pi.
 
 ## System One in Pi
 
-The `personal` and `axon-work-computer` profiles load [cartwmic/system-one-tools](https://github.com/cartwmic/system-one-tools)
-as a Git package, not an npm package. Termux omits it. The local
+The `personal` and `axon-work-computer` profiles include
+[cartwmic/system-one-tools](https://github.com/cartwmic/system-one-tools)
+as one Git package, not an npm package. Termux excludes `.pi`. The local
 [System One directory](./dot_pi/private_agent/extensions/system-one/README.md)
-contains documentation, not another extension loader.
+is docs-only; there is no second loader. Source reconciliation is not deployment.
+Native first-delivery targets are macOS, Pi 0.99.2+ and Node.js 22.19+;
+the independent CLI retains Node.js 20+ and macOS/Linux support.
 
-After approving a targeted settings apply, restart Pi and run `/so status`.
-Agent access starts off; `/so on` enables the current session. Use `/so settings`
-to select a machine-local connection and adapter. Keep credentials in the
-runtime environment, not this public repository. The Git URL is unpinned;
-package updates and paid provider tests need separate approval. The scoped
+Pi owns native classifier providers and authentication. `/so settings` selects
+a default provider/id independently of the chat model and CLI catalog;
+`/so use` sets a session override, and `/so ask` selects for one private call.
+Agent access starts off. `/so off` governs only `system_one`, not direct native
+codemode classification; manual use remains available with separate accounting.
+Each evaluation has one 30-second deadline and `maxRetries:2` per native HTTP
+operation, not a global three-request cap. See the linked guide for native
+object/choice/bool/score inputs and selection lifecycle.
+
+Apply, package installation/update and paid provider tests require separate
+approval. The Git URL is unpinned. The scoped
 [agent guide](./dot_pi/private_agent/extensions/system-one/AGENTS.md) covers
-isolated tests and rollout. Rendering settings alone does not prove a provider call.
+isolated source checks and rollout. Rendering does not prove a provider call.
 
 ### Local Winnow (no API key)
 

@@ -2,56 +2,80 @@
 
 ## Scope and authority
 
-This directory is chezmoi documentation for the Git package listed in `dot_pi/private_agent/private_settings.json.tmpl`. It contains no extension entry point. Pi loads code from `cartwmic/system-one-tools`; runtime changes belong there, under its [repository procedure](https://github.com/cartwmic/system-one-tools/blob/main/AGENTS.md). A local `index.js` would register a second tool. Repo-root `AGENTS.md` controls source naming, apply, profile gates, secrets, and Git. [README.md](README.md) is the human setup and usage guide. This scoped procedure applies whenever the System One package entry or these docs are maintained. Pi auto-loads it when cwd is under this directory; load it explicitly from another cwd.
+This directory is chezmoi documentation for the single Git package in
+`dot_pi/private_agent/private_settings.json.tmpl`, not an extension entry point.
+Pi loads code from `cartwmic/system-one-tools`; runtime changes belong there
+under its repository procedure. Never add `index.js` or `index.ts`: that would
+register tools twice. Repo-root `AGENTS.md` owns source naming, profiles, apply,
+secrets and Git; the global home guide is a separate policy, not this file.
+[README.md](README.md) owns product setup and native usage.
 
-## Workflow
+Owner-authorized source policy includes personal and axon-work-computer;
+Termux excludes `.pi`. Keep one unconditional System One Git package entry
+and docs mapping for both desktops. Do not move personal OpenRouter gate/plus
+or unrelated profile gates. Native first-delivery targets are macOS, Pi 0.99.2+
+and Node.js 22.19+; preserve the CLI's Node.js 20+ macOS/Linux contract and
+existing public platform claims without claiming untested Linux Pi delivery.
 
-Work from the current chezmoi worktree. Keep the Git package entry in the shared (all-profile) part of the settings package list; do not ignore this docs directory in `.chezmoiignore` (Termux skips `.pi` entirely). Confirm the profile is `personal` or `axon-work-computer` and map each destination separately. The settings template reads the existing live JSON during rendering to preserve `lastChangelogVersion`, `theme`, and `hideThinkingBlock`; check that file's JSON first. A successful targeted dry-run is required; unchanged destinations need not appear in its output.
+## Source-only checks
+
+Work from the current source worktree. Before any chezmoi source command,
+inspect the effective config and `hooks.read-source-state.pre` risk; a dry-run
+can execute that hook. Do not invoke the owner's hook or replace their config.
+Inspect `.chezmoiremove` too, including persistent directories. Settings render
+reads live JSON to preserve lastChangelogVersion, theme and hideThinkingBlock;
+read it independently and privately. Work data `privatePiGlmProviderRef` can
+invoke `op read`; omit it in controlled proofs. No secret lookup is needed.
+
+Run only the isolated profile proof for source reconciliation:
 
 ```sh
-set -eu
 REPO="$(git rev-parse --show-toplevel)"
-profile=$(chezmoi --source "$REPO" execute-template '{{ .profile }}')
-case "$profile" in personal|axon-work-computer) ;; *) printf 'Expected personal or axon-work-computer profile; got %s\n' "$profile" >&2; exit 1;; esac
-for dest in "$HOME/.pi/agent/settings.json" "$HOME/.pi/agent/extensions/system-one/README.md" "$HOME/.pi/agent/extensions/system-one/AGENTS.md"; do
-  chezmoi --source "$REPO" source-path "$dest"
-done
-if [ -e "$HOME/.pi/agent/settings.json" ]; then
-  jq -e 'type == "object"' "$HOME/.pi/agent/settings.json" >/dev/null
-fi
-chezmoi --source "$REPO" apply --dry-run --verbose "$HOME/.pi/agent/settings.json" "$HOME/.pi/agent/extensions/system-one/README.md" "$HOME/.pi/agent/extensions/system-one/AGENTS.md"
-chezmoi --source "$REPO" cat "$HOME/.pi/agent/settings.json" | jq -e '.packages | index("https://github.com/cartwmic/system-one-tools") != null'
-git -C "$REPO" diff --check # tracked changes only; see staged check below for new docs
+python3 "$REPO/tests/system-one/profile-proof.py" --profile personal
+python3 "$REPO/tests/system-one/profile-proof.py" --profile axon-work-computer
+git -C "$REPO" diff --check
 ```
 
-Both desktop profiles receive the package entry and docs; Termux omits `.pi` entirely. In a private terminal, inspect the complete rendered settings and live destination independently before taking the source side of drift:
+It uses explicit worktree `--source`, isolated HOME/destination/config/cache/
+state, hook-free config and seeded valid settings; it runs managed/source-path/
+cat and targeted `apply --dry-run` only for settings and these two docs. Even
+in a temporary home, do not perform real apply or Pi Git package installation.
+Unchanged destinations may be absent from dry-run output. Root AGENTS/README
+and tests stay mechanically ignored; the global home guide is not edited.
+Check new-file whitespace separately without staging. Inspect actual touched
+live files privately for drift; report only structural/redacted findings,
+never choose source-vs-live or apply as part of reconciliation.
 
-```sh
-chezmoi --source "$REPO" cat "$HOME/.pi/agent/settings.json" | less
-less "$HOME/.pi/agent/settings.json"
-```
+## Runtime and rollout boundaries
 
-Do not paste their contents into logs. Check `.chezmoiremove` for unrelated persistent data. A real apply needs the owner's approval. After an approved settings-only apply, restart Pi and check `pi list` plus `/so status` in a fresh session. `/so status` verifies command loading without a provider call; `pi list` alone only reports configuration.
+Pi owns native provider/auth and classifier operations; `/so settings` owns
+Pi preferences, not the CLI catalog. Default/session/owner-only one-call selection
+and native object/choice/bool/score forms are in README. `/so off` gates only
+`system_one`, not direct native codemode; manual use is private with separate
+accounting. One 30-second logical deadline spans all operations and waits;
+`maxRetries:2` applies to each native HTTP operation, not the whole evaluation.
 
-The Git URL is unpinned. Ask before updating or installing in the regular Pi environment. For a System One-only update, run `pi update https://github.com/cartwmic/system-one-tools` after approval; record the installed checkout revision before and after. Test the exact new HEAD in a disposable clone, keeping the installed Pi checkout untouched:
+A real apply, regular install/update, commit/push or paid call needs separate
+owner approval. No such action is authorized by a source proof. Before a later
+approved deployment, follow root preflight and inspect exact rendered/live
+settings independently without logging credentials, then preview the exact
+settings and doc destinations from this source. After approval and restart,
+`pi list` verifies configuration and fresh `/so status` verifies command loading,
+not native callability. The Git URL is unpinned; record before/after installed
+revisions for a separately approved update and verify the exact new revision
+in a disposable consumer without modifying installed caches by hand.
 
-```sh
-set -eu
-installed="$HOME/.pi/agent/git/github.com/cartwmic/system-one-tools"
-before=$(git -C "$installed" rev-parse HEAD)
-pi update https://github.com/cartwmic/system-one-tools
-after=$(git -C "$installed" rev-parse HEAD)
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-git clone --quiet "$installed" "$tmp"
-git -C "$tmp" checkout --quiet --detach "$after"
-( cd "$tmp" && npm ci && npm run check && npm run test:journey && npm run test:tui )
-```
-
-`npm run check` rebuilds the shared `dist/` used by focused tests. Inspect the TAP result for the selected TUI journey completing successfully; `test:tui` filters by name, so other cases in that file appear as intentional skips. Run `npm run test:package` in that clone for packaging claims (macOS with Docker). Record `before`, `after`, and test outcomes; a settings dry-run or old `/so status` cannot prove new code. Restart Pi after the approved update and check `/so status` in a fresh session.
-
-Choose proof by claim: source mapping needs the targeted dry-run; command loading needs fresh `/so status`; Pi session controls and manual ask need `test:tui`; shared CLI/Pi caller behavior needs `test:journey`. Run both for a claim spanning session controls and cross-caller behavior. Packaging needs `test:package`. Agent access starts off: use `/so on` for this session or `/so settings` for user-global defaults; project-local Pi settings cannot enable it. An OpenRouter URL alone leaves the native `/systemone` adapter selected; choose OpenRouter Decisions explicitly in `/so settings`. A live-provider claim must name the adapter, route, model, and caller path first. Ask before a bounded paid call, then test that exact path (`/so ask` for manual use, `system_one` for agent use). Connections live in the machine-local `${XDG_CONFIG_HOME:-$HOME/.config}/system-one/connections.json`; select one with `/so settings` and store only the credential variable name. Credential values belong in the runtime environment, never this public tree or catalog. These markdown rules are advisory. The preflight `git diff --check` omits untracked docs. Before claiming validation or committing, stage only approved paths, run `git diff --cached --check`, and inspect the staged diff for secrets and duplicate entry points. No repository hook or CI gate enforces them here.
+Choose proof by claim: source dry-run, actual command loading, real agent turns,
+PTY manual/session/privacy/accounting, native retry/deadline/cancellation, and
+CLI/public packaging are distinct obligations. Old CLI/provider evidence cannot
+substitute for native Pi proof. Name the provider/model/route/caller before any
+separately approved bounded paid test. Stop and ask if native integration needs
+substantial glue or runtime patches.
 
 ## Completion and handoff
 
-Report the changed chezmoi source paths, profile, dry-run result, and whether settings and these docs were applied. If settings were applied, report `pi list` and fresh `/so status` results or why either was skipped. For an approved package update, include the before/after installed revisions, checks against the new HEAD, and fresh `/so status` result (or why it was skipped). State destination-only drift and actual commit/push state. Leave unrelated work in the base checkout alone.
+Name changed chezmoi source paths/destinations, both profiles, exact controlled
+commands/results, ignored root docs, private drift conclusions and pending runtime
+proofs. State no-hook/no-secret/no-apply/no-install and actual Git disposition.
+Preserve unrelated changes and prior gate evidence. Source success is not delivery
+or public-provider acceptance.

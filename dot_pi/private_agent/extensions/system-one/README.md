@@ -1,86 +1,104 @@
 # System One in Pi
 
-## Purpose
+## Purpose and delivery
 
-This directory documents the [System One Git package](https://github.com/cartwmic/system-one-tools) enabled by the Pi settings template on the `personal` and `axon-work-computer` profiles. Pi loads its `system_one` tool and `/so` commands from that repository. This chezmoi directory contains no loader or copy of the package code. Termux skips these files. [AGENTS.md](AGENTS.md) covers maintenance here; the [repo-root guide](https://github.com/cartwmic/dotfiles/blob/main/AGENTS.md) owns chezmoi apply and secret handling.
+The `personal` and `axon-work-computer` settings include one
+[System One Git package](https://github.com/cartwmic/system-one-tools).
+This directory is docs-only: no local `index.js` or `index.ts` loader.
+Termux excludes `.pi`. Native first-delivery targets are macOS with Pi
+0.99.2+ and Node.js 22.19+. Source checks are not runtime delivery proof;
+no new Linux Pi proof is claimed. The independent standalone CLI retains
+its Node.js 20+ macOS/Linux contract and shared connection catalog.
 
-## Setup
+[AGENTS.md](AGENTS.md) covers maintenance; repo-root `AGENTS.md` owns
+chezmoi, secrets and apply approval. Source reconciliation alone does not
+install or update the package or apply these files. The Git URL is unpinned;
+updates, deployment and paid tests require separate approval. After an approved
+deployment/restart, `pi list` checks configuration and `/so status` checks
+command loading, not provider callability.
 
-From the dotfiles source root, inspect the three targeted destinations. Run the
-dry-run first:
+## Native setup and selection
 
-```sh
-chezmoi --source "$PWD" apply --dry-run --verbose ~/.pi/agent/settings.json ~/.pi/agent/extensions/system-one/README.md ~/.pi/agent/extensions/system-one/AGENTS.md
+Pi owns classifier providers, authentication, transport and pricing. Configure
+native providers/models in Pi's `models.json`, using Pi `/login` or provider
+runtime environment variables as appropriate. `/so settings` offers persistent
+classifier selection and agent defaults, guidance, and Provider/auth setup;
+it neither edits credentials nor reads or migrates the CLI `connections.json`.
+Do not put credential values in this public tree or transcripts.
+
+Selection is an explicit provider/id pair, independent of the chat model and
+CLI default. `/so use` offers available native classifiers; `/so use <provider>
+<id>` sets a session override and `/so use default` restores the persistent
+default. `/so ask` chooses a classifier for one owner-only call without changing
+either selection. Missing, removed or unauthenticated selection fails clearly;
+there is no arbitrary fallback. Persistent settings edits leave session overrides
+unchanged. Reload/resume/tree restore active-branch controls; new sessions clear
+overrides; `/so reset` restores persistent defaults. `/so status` shows effective,
+persistent and session values.
+
+On personal machines the OpenRouter gate/plus composition remains personal-only.
+Allowed native classifier discovery still follows its enabled/allowlist policy;
+this reconciliation does not add allowed ids or credentials. Work uses its own
+Pi provider configuration, not the personal gate. A URL alone is not native
+classifier setup or proof that a provider is callable. For the separately
+configured local Winnow service, see [winnow-local](../winnow-local/README.md).
+This migration does not start or reconfigure that service.
+
+## Usage and native request
+
+Agent access starts off. `/so on` enables `system_one` for the session;
+`/so off` disables only that tool, not direct native codemode classification,
+which follows Pi provider/model access. `/so mode` retains explicit, selective,
+proactive and custom guidance. Missing, empty or unreadable custom guidance
+blocks agent use, not manual use; fixed evidence/data/action boundaries remain.
+
+Submit only explicit relevant evidence for an atomic judgment. The tool accepts
+object state and named typed questions, never a model/destination override or
+automatic transcript attachment. Probabilities are advisory, not authority to
+act. Factual lookup, exact calculations, generation and substantial multi-step
+reasoning need other tools. Native Pi forms differ from the unchanged CLI forms:
+
+```json
+{
+  "state": { "evidence": "The sample is blue." },
+  "questions": {
+    "color": { "type": "choice", "instructions": "Choose the supported color", "criteria": { "blue": "Blue evidence", "red": "Red evidence" } },
+    "blue": { "type": "bool", "instructions": "Is it blue?", "criteria": { "true": "Blue", "false": "Not blue" } },
+    "support": { "type": "score", "instructions": "Rate support", "criteria": ["Evidence supports blue"] }
+  }
+}
 ```
 
-Follow the [scoped maintenance guide](AGENTS.md) and the repo-root guide
-above for drift inspection and approval. Once that check is complete, apply
-the three destinations:
+`/so ask` edits this JSON and selects a classifier before the evaluation starts.
+Cancelling either step makes no evaluation call. Manual use works with agent
+access off. Request/result are terminal-only, never agent context, transcript
+or control entries; result-editor edits are discarded. Manual reported usage
+and estimated catalog cost are separate from agent totals. Missing usage/price
+is labelled unavailable, not free. Agent results forward reported native usage
+into Pi totals, including billed failures. Error/aborted results have no usable
+answers.
 
-```sh
-chezmoi --source "$PWD" apply ~/.pi/agent/settings.json ~/.pi/agent/extensions/system-one/README.md ~/.pi/agent/extensions/system-one/AGENTS.md
-pi list
-```
+One logical evaluation has a shared 30-second deadline starting before
+classifier resolution/authentication, covering all native preparation/readout
+operations and retry waits. `maxRetries:2` allows at most three attempts per
+native HTTP operation, retrying transient failures only. Multi-request native
+algorithms are allowed: this is not a global three-request cap. There is no
+outer evaluation retry, deadline reset or model fallback. Owner editing and
+selection are outside this budget.
 
-Pi clones the Git package and builds its shared connection runtime when it is
-installed. It needs Node.js 22.19+; the Pi extension was tested with Pi 0.87.1.
-The packages are unpublished to npm, and the source is `UNLICENSED`. Restart
-Pi, then run `/so status` to check that the extension loaded. The Git URL is
-unpinned; `pi update https://github.com/cartwmic/system-one-tools` can move it to a later commit.
-[AGENTS.md](AGENTS.md) covers that maintenance boundary.
+## Validation and limits
 
-This checkout supplies no decision service or model. For a free local one, see
-[winnow-local](../winnow-local/README.md). A generic
-chat-completions endpoint cannot answer typed System One requests. For a
-compatible OpenRouter Decisions route, use `/so settings` to save a connection
-in `${XDG_CONFIG_HOME:-$HOME/.config}/system-one/connections.json`: select the
-OpenRouter adapter, base URL `https://openrouter.ai/api/v1`, model
-`~typesafe/jev-latest`, and credential variable name `OPENROUTER_API_KEY`.
-For agent calls, select it as the catalog default or run
-`/so use <connection-id>`; until then, `/so status` may report `not selected`.
-`/so ask` prompts for a connection and optional model for that call, so a
-manual request can use a saved connection without a default. The catalog
-stores the variable name only. Supply the value to the Pi process at runtime. On `personal`,
-`/openrouter on` can inject the stashed key when the
-[OpenRouter gate](https://github.com/cartwmic/dotfiles/blob/main/dot_pi/private_agent/extensions/openrouter-gate/README.md) has a stashed key and nonempty
-allowlist; that command also enables allowed OpenRouter models. A separately
-supplied process environment variable works for a one-off Pi session. The
-[package guide](https://github.com/cartwmic/system-one-tools#usage) covers
-native System One endpoints and the connection format. Pi's tool and `/so ask`
-use the SDK's 10-second evaluation deadline with no timeout override; choose
-a responsive service or use the CLI's `--timeout-ms` for slower endpoints.
-The published live calls establish the OpenRouter Decisions route with the
-Jev latest alias; direct TypeSafe authentication, other models, and local-model
-calibration remain unverified.
+`tests/system-one/profile-proof.py --profile personal` and `--profile
+axon-work-computer` validate isolated source mapping/rendering and targeted
+dry-runs only, never apply/install. They do not prove command loading, completed
+agent/manual calls, privacy, accounting or deadlines. Those require separate
+scripted real-Pi/PTY/native-provider and public-consumer proofs from the
+[package Pi guide](https://github.com/cartwmic/system-one-tools/tree/main/packages/pi-system-one).
+Paid Jev proof is separately approved and bounded; old CLI route evidence is
+not native Pi proof. Direct TypeSafe authentication, arbitrary models and
+calibration are not established by these source checks.
 
-## Usage
-
-`/so ask` submits a manual Choice, Boolean, or Score request while agent
-access is off. Its editor and result are terminal-only; neither request nor
-result enters agent context. `/so on` enables the `system_one` tool for the
-current session; `/so off` disables it. Use the tool for atomic judgments
-backed by relevant evidence. Factual lookup, exact calculations, open-ended
-generation, and substantial multi-step reasoning need other tools. The agent
-tool submits only the state and questions given to it; it does not attach a
-transcript or choose a connection. Results and probabilities are advisory.
-These commands and the tool are the owner-facing surface; the package's
-in-process session API is internal. See the
-[package's Pi guide](https://github.com/cartwmic/system-one-tools/tree/main/packages/pi-system-one)
-for command details and request shape.
-
-## Validation
-
-After targeted apply and a Pi restart, check the configured package and extension command:
-
-```sh
-pi list
-```
-
-`pi list` should show `https://github.com/cartwmic/system-one-tools`. In Pi, `/so status` should report the loaded extension and either a selected connection or `not selected` until one is chosen; it does not make a provider call. A live `/so ask` verifies the connection chosen for that call and may cost money. The shipped System One repository has scripted CLI, Pi TUI, cross-caller, and package-consumer checks. This dotfiles directory does not run those tests or publish that package.
-
-## Troubleshooting
-
-- `/so` is unknown: check `pi list`, install or update the Git package, then restart Pi. The docs-only directory here cannot register a command.
-- Missing credential (CLI code `MISSING_CREDENTIAL`): Pi reports the missing environment variable named by `apiKeyEnv`. Check the OpenRouter gate's stash and allowlist before `/openrouter on`, or provide the variable when starting Pi. Keep its value out of settings and transcripts.
-- Missing or invalid catalog/selection (CLI codes `CONNECTION_CATALOG_ERROR` and `CONNECTION_SELECTION_ERROR`): open `/so settings` and check the saved catalog and default. The extension does not choose another connection on failure.
-- Evaluation failures (CLI codes `TIMEOUT`, `NETWORK_ERROR`, `PROVIDER_REJECTED`, and `MALFORMED_RESPONSE`): Pi shows error messages; see the [package troubleshooting guide](https://github.com/cartwmic/system-one-tools#troubleshooting) for route, latency, model, and response checks.
+If `/so` is unknown, configuration/loading needs verification after an approved
+install/update and restart. If selection/auth is unavailable, inspect Pi provider
+setup and `/so settings`; do not edit the CLI catalog to repair Pi. Failures and
+cancellation must stay distinguishable from usable answers.

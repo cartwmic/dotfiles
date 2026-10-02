@@ -30,6 +30,10 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
 	type CatalogModel,
+	type ClassifierCatalogModel,
+	type TypedCatalogModel,
+	mergeClassifierCatalog,
+	toProviderModelConfig,
 	type OpenRouterGateConfig,
 	buildAllowedModels,
 	describeConfig,
@@ -178,18 +182,20 @@ function getRuntime(ctx: unknown): RuntimeLike | undefined {
 	return undefined;
 }
 
-export function getOpenRouterModels(ctx: unknown): CatalogModel[] {
-	const registry = (ctx as { modelRegistry?: { getAll?: () => unknown } })?.modelRegistry;
+export function getOpenRouterModels(ctx: unknown): TypedCatalogModel[] {
+	const registry = (ctx as { modelRegistry?: { getAll?: () => unknown; getModelsOfType?: (type: string, provider: string) => unknown } })?.modelRegistry;
 	if (typeof registry?.getAll !== "function") return [];
 	try {
-		const all = registry.getAll();
+		const chats = registry.getAll();
+		const classifiers = registry.getModelsOfType?.("classifier", PROVIDER) ?? [];
+		const all = Array.isArray(chats) && Array.isArray(classifiers) ? [...chats, ...classifiers] : chats;
 		if (!Array.isArray(all)) return [];
-		const models: CatalogModel[] = [];
+		const models: TypedCatalogModel[] = [];
 		for (const entry of all) {
 			if (!entry || typeof entry !== "object") continue;
 			const model = entry as Partial<CatalogModel> & { provider?: unknown };
 			if (model.provider !== PROVIDER || typeof model.id !== "string" || model.id.length === 0) continue;
-			models.push(model as CatalogModel);
+			models.push(model as TypedCatalogModel);
 		}
 		return models;
 	} catch {
@@ -199,10 +205,10 @@ export function getOpenRouterModels(ctx: unknown): CatalogModel[] {
 
 export function catalogSignature(
 	config: OpenRouterGateConfig,
-	catalogIds: readonly string[],
-	registeredIds: readonly string[],
+	catalogIds: readonly unknown[],
+	registeredIds: readonly unknown[],
 ): string {
-	return `${config.enabled}\0${config.allowedModels.join("\n")}\0${catalogIds.join("\n")}\0${registeredIds.join("\n")}`;
+	return `${config.enabled}\0${config.allowedModels.join("\n")}\0${JSON.stringify(catalogIds)}\0${JSON.stringify(registeredIds)}`;
 }
 
 const MISSING_STASH_WARNING =
@@ -253,7 +259,14 @@ export function formatStatus(opts: {
 	return lines.join("\n");
 }
 
-export default function (pi: ExtensionAPI): void {
+/** Only plus's known legacy environment reference needs syntax compatibility. */
+export function compatibleApiKeyReference(value: unknown): string | undefined {
+	return value === ENV_VAR ? `$${ENV_VAR}` : undefined;
+}
+
+export default async function (pi: ExtensionAPI): Promise<void> {
+	const { getBuiltinClassifierModels } = await import("@earendil-works/pi-ai/providers/all");
+	const builtinClassifiers = getBuiltinClassifierModels(PROVIDER) as ClassifierCatalogModel[];
 	const configPath = defaultConfigPath();
 	let config = loadConfig(configPath);
 	let keyInjected = false;
@@ -261,16 +274,22 @@ export default function (pi: ExtensionAPI): void {
 
 	function applyCatalog(ctx: unknown): void {
 		try {
-			const catalog = getOpenRouterModels(ctx);
-			rememberPickerModels(catalog);
+			const current = getOpenRouterModels(ctx);
+			const catalog = mergeClassifierCatalog(current, builtinClassifiers);
+			rememberPickerModels(catalog.filter((model): model is CatalogModel => model.type !== "classifier"));
 			const models = isProviderOpen(config) ? buildAllowedModels(catalog, config.allowedModels) : [];
 			const signature = catalogSignature(
 				config,
-				catalog.map((model) => model.id),
-				models.map((model) => model.id),
+				current,
+				models,
 			);
-			if (signature === lastCatalogSignature) return;
-			pi.registerProvider(PROVIDER, { models });
+			if (
+				signature === lastCatalogSignature &&
+				JSON.stringify(current.map(toProviderModelConfig)) === JSON.stringify(models)
+			) return;
+			const registry = (ctx as { modelRegistry?: { getRegisteredProviderConfig?: (id: string) => { apiKey?: unknown } | undefined } })?.modelRegistry;
+			const apiKey = compatibleApiKeyReference(registry?.getRegisteredProviderConfig?.(PROVIDER)?.apiKey);
+			pi.registerProvider(PROVIDER, { models, ...(apiKey ? { apiKey } : {}) });
 			lastCatalogSignature = signature;
 		} catch {
 			// Never break a turn.
