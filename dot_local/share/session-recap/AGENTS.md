@@ -6,8 +6,9 @@ This file covers `dot_local/share/session-recap/session_recap.py` and its
 source-local tests. The CLI wrapper is `dot_local/bin/executable_session-recap`;
 the desktop config and prompt templates are in `dot_config/session-recap/`.
 The repo-root `AGENTS.md` controls chezmoi apply and secrets. This directory's
-`README.md` owns human setup and CLI usage. Put Pi event handling in its
-Herdr adapter; put native workspace grouping in the Herdr plugin.
+`README.md` owns human setup and CLI usage. Put Pi recap policy/event handling in the independent Pi recap adapter;
+put native workspace grouping in the Herdr plugin. This store imposes no Pi
+branch, coverage, provider or Herdr identity rules.
 
 ## Workflow
 
@@ -18,22 +19,29 @@ Herdr adapter; put native workspace grouping in the Herdr plugin.
 - Keep recap generation a configured executable argv fed on stdin. Managed
   desktop config has `auto_publish = false` and no command. A host-local
   `~/.config/session-recap/config.local.toml` supplies the backend; its
-  `auto_publish = true` opts Pi into automatic publication. The
+  `auto_publish = true` enables the standalone legacy publication policy.
+  Independent Pi recap settings never inherit this policy. The
   `config auto-publish` command reports the resolved policy without invoking
   a model. Manual `create` still works with a command when automation is off.
   Tests use a fake backend. Do not commit credentials or call a paid/live
   backend merely to check storage behavior.
-- `create` publishes a single or group record. Pi uses `prompt set/settle`
-  for the current user input, then `prepare/publish` for a settled response.
-  `prompt rekey` changes only a matching current prompt under the store lock;
-  it must not replace a newer input. Publication-time native membership is
-  supplied by the adapter, never guessed by this store.
+- `create` publishes generic v2 single/group records with arbitrary source keys
+  and opaque caller metadata. `list --json` and `read ID --json` scan dated
+  history, including honest sanitized v1 views. `annotate` replaces only one
+  namespace, never narrative/coverage. Do not archive argv, auth or stdio input.
+  Pi-specific `prepare`/`publish`/`prompt` interfaces are retired; parser
+  rejection must not invoke a backend or mutate storage. Preserve existing
+  legacy history and prompt/prepared files without reviving their lifecycle.
+  Publication-time native membership is supplied by the adapter, never guessed
+  by this store.
 - Preserve dated records and the latest-success index when a command fails,
   exits nonzero, returns invalid UTF-8, or prints blank output. Failed
   attempts are visible; they cannot replace a successful recap. Keep data
   under `${XDG_DATA_HOME:-$HOME/.local/share}/session-recap/`, outside the
   chezmoi source. Check atomic writes and lock behavior in
-  `test_session_recap.py` when changing the schema.
+  `test_session_recap.py` when changing the schema. A committed dated record
+  remains successful even when convenience indexing fails; history reads must
+  not depend on `latest.json`.
 - Termux does not deploy the desktop recap command/config. Its phone-side
   passage-review library is independent.
 

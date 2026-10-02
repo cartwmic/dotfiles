@@ -156,6 +156,7 @@ Gates live in the repo-root `.chezmoiignore`:
 | [issue](./issue/README.md) | `axon-work-computer` only |
 | `dot_pi/session-search/` (sibling of `agent/`, not this folder) | `personal` only |
 | [herdr-overview](./herdr-overview/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
+| [recap](./recap/README.md) | `personal` and `axon-work-computer`; interactive TUI only; Termux skips `.pi` |
 | [standing-reminder](./standing-reminder/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [learnings-monitor](./learnings-monitor/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [system-one](./system-one/README.md) (docs; package in settings) | `personal` and `axon-work-computer`; Termux skips `.pi` |
@@ -180,6 +181,7 @@ READMEs already in this tree:
 - [subagent](./subagent/README.md)
 - [passage-review](./passage-review/README.md)
 - [herdr-overview](./herdr-overview/README.md)
+- [recap](./recap/README.md)
 - [web-search](./web-search/README.md)
 - [standing-reminder](./standing-reminder/README.md)
 - [system-one](./system-one/README.md)
@@ -208,5 +210,22 @@ Other in-tree suites today: `auto-compact/index.test.ts`,
 reminder also has an isolated real-Pi journey and a separate capped live cache
 proof; see its [README](./standing-reminder/README.md).
 
+Recap's source-root proof entry point is `python3 tests/pi-recap/proof.py`
+with sections `cli`, `backend`, `tui`, `lifecycle`, `overview-isolated`, and
+`profiles`. Receipts name observed cases and criterion associations; they are
+not blanket acceptance. Backend cases drive installed-SDK explicit/virtual routing
+and runtime-auth CLI publication/privacy. Lifecycle cases drive real disposable Pi:
+manual/full reuse, populated history search/view/scroll, settings/defaults/resume,
+tree/fork/clone coverage, cancellation, buffered generated-unsaved consumption,
+and gated switch/return/reload/shutdown with original-session resume. Reasoning
+and authenticated live-error privacy cases inspect records, requests, transcripts
+and captures, with retry and coverage-preserving follow-ups. Failed assertions or
+unavailable prerequisites fail closed. The final stable-tree matrix and native
+overview execution remain driver-owned and pending. The overview section uses a
+private state base and cleans its own prepared fixture even after a failure.
+The profile section uses a disposable explicit config without installing hooks;
+it does not preview or replace host configuration.
+
 Chezmoi apply and secret handling are not validated here; use repo-root
-`AGENTS.md`.
+`AGENTS.md`. Native touched-destination previews still require the effective
+host-config/read-hook and `op` preflight; no proof command authorizes apply.

@@ -1,50 +1,50 @@
-# Herdr Overview Pi publication adapter
+# Herdr Overview Pi consumer
 
-## Overview
+## Ownership and setup
 
-This desktop-only Pi extension supplies the current prompt and, when opted in, publishes a recap after a settled response. `session-recap` stores prompts separately from dated recap records; the extension calls its prompt and prepare/publish commands. It does not own recap prompts, persistence, grouping, or Herdr overview state.
+This desktop adapter owns real-user prompt files and native Herdr membership.
+It never generates Pi recaps or reads the CLI's automatic-publication preference.
+The independent `recap` extension owns `/recap`, generation, coverage and Pi
+settings. Recap works with this adapter disabled or Herdr stopped.
 
-## Setup
+On `personal` and `axon-work-computer`, explicitly configure Pi using
+`/recap settings`. Old CLI backend/auto preferences are not imported. Set up
+`dot_pi/private_agent/extensions/recap/README.md` and the native plugin at
+`dot_local/share/herdr-overview/README.md` (paths relative to the source root).
+Review both extensions before applying them using the repository procedure;
+restart/reload Pi only with owner approval. Termux does not host either adapter.
 
-On a `personal` or `axon-work-computer` desktop, set up the standalone CLI
-using `dot_local/share/session-recap/README.md` (paths here are relative to
-the chezmoi source root). Managed installs store prompts and start with
-automatic recap publication off. Add a host-local command and
-`auto_publish = true` in `~/.config/session-recap/config.local.toml` to opt in.
-Load the Herdr plugin using `dot_local/share/herdr-overview/README.md` for
-workspace attribution and the overview display. Then review and apply this
-Pi extension. Restart Pi to load it:
+The generic `session-recap` CLI is normally `~/.local/bin/session-recap`;
+`SESSION_RECAP_BIN` can override it. Herdr **0.9.1 / protocol 22** supplies
+`HERDR_SOCKET_PATH` and `HERDR_PANE_ID` inside a pane.
 
-```sh
-chezmoi apply --dry-run --verbose ~/.pi/agent/extensions/herdr-overview
-chezmoi apply ~/.pi/agent/extensions/herdr-overview
-```
+## Behavior
 
-- The `session-recap` CLI from this dotfiles tree, normally at `~/.local/bin/session-recap`, with its normal configuration and local data directory.
-- For Herdr publication-time attribution and wake-up, Herdr **0.9.1 / protocol 22** must be running with the existing Herdr Overview plugin loaded.
-- Herdr supplies `HERDR_SOCKET_PATH` and, inside a pane, `HERDR_PANE_ID`. `SESSION_RECAP_BIN` can override the CLI path for a host or test.
-
-The source lives under `dot_pi/private_agent/extensions/`, so it deploys with the desktop Pi extensions. The existing chezmoi `termux` profile skips `.pi` completely; this extension is not installed on Termux. This code runs inside Pi. The Herdr host plugin lives at
-`dot_local/share/herdr-overview/` in chezmoi source.
-
-## Usage
-
-Run Pi inside a Herdr pane and submit an interactive prompt. While Pi works,
-the overview inline detail shows that current prompt separately. The prompt
-settles even when automatic recaps are off. With `auto_publish = true` and a
-working backend, the settled reply also produces a published recap and dated
-record. A disabled or failed backend leaves the native pane and prompt
-visible. See
-`dot_local/share/herdr-overview/README.md` (Usage) for navigation.
-
-- Pi's public `input` event stores text from real interactive (`source: interactive`, TUI mode) and RPC (`source: rpc`, RPC mode) input with `session-recap prompt set`. When `HERDR_PANE_ID` is present, the adapter first calls Herdr's caller-aware `pane.current` and stores the returned live native pane ID, so a pane rekeyed by `pane.move` does not leave the current prompt attached to its old ID. Missing membership leaves the prompt session-only; it is never guessed from UI focus. Extension-generated input is ignored, so continuations do not replace the last real prompt.
-- On `agent_settled`, the adapter requires `ctx.isIdle() === true`, marks that prompt settled, and reads the latest assistant message from the public `ctx.sessionManager.getBranch()` API. It does not inspect session files.
-- Before preparing a nonblank response, the adapter rechecks `pane.current` through the inherited caller ID. If the pane moved during its first response, `prompt rekey` atomically retargets only the matching current prompt without replacing a newer input or changing its working state; `prepare` records the new native pane ID. Failed or blank backend output is not published and does not wake Herdr.
-- Immediately before `session-recap publish`, it calls Herdr 0.9.1's public `pane.current` with `{ caller_pane_id: HERDR_PANE_ID }`. This caller-aware lookup follows a running pane if `pane.move` has rekeyed its native pane ID; it never substitutes the UI-focused pane. The observed `workspace_id` is attached to that publication; missing pane, workspace, socket, or response means publication without workspace attribution.
-- After confirmed publication, it invokes only the existing public `plugin.action.invoke` action `overview.reconcile`. A failed wake-up does not undo the durable recap; Herdr startup reconciliation can catch it up.
+- Real TUI/RPC user input writes a private, atomic prompt file under
+  `${XDG_DATA_HOME:-~/.local/share}/herdr-overview/prompts`. Generated
+  continuations cannot replace it. Final public settlement with no queued input
+  marks it not working, without needing a recap, backend, CLI preference or
+  Herdr connection. Pi counts awaited settlement hooks as busy, so the guard
+  uses public `hasPendingMessages()`, not `isIdle()` inside the hook.
+- Caller-aware `pane.current` follows rekeys using the inherited caller ID.
+  It refreshes prompt membership on input, settlement and session return.
+  Missing socket/pane leaves the prompt session-only, never UI-focused.
+- `recap:saved` is a notification, not trusted publication data. The adapter
+  reads the authoritative generic record, checks its native Pi session identity
+  (`metadata.pi.sessionId`, also accepting `nativeSessionId`), then refreshes
+  membership before writing `annotations.herdr = {pane_id, workspace_id}`.
+  The independent history/source key is not a native session identifier.
+- Startup/return scans saved records for the current native session, recovering
+  detached completion and missed notifications. A missing socket records empty
+  attribution and remains session-only. Existing attribution is not reassigned
+  on return/move; publication time owns the quiet deadline.
+- Annotation never rewrites narrative, coverage, settings or source identity.
+  After annotation, the adapter invokes `overview.reconcile`. A failed wake-up
+  leaves durable records/annotations for later plugin startup or session return.
+  It never calls managed `prepare`, `publish`, `prompt` or `create` commands.
 
 The adapter publishes private current identity/name metadata independently of
-recap opt-in in `$XDG_STATE_HOME/herdr-overview/pi-sessions`, using the actual
+recap generation in `$XDG_STATE_HOME/herdr-overview/pi-sessions`, using the actual
 per-call public Pi UUID/name and caller-resolved live socket/terminal. Only TUI
 and RPC modes publish: text-print/JSON children cannot take over or retire the
 interactive binding. Session replacement/reload creates a fresh generation;
@@ -60,28 +60,28 @@ The popup reads only `.pi/session-search/digests/<verified-UUID>.json`; missing
 or malformed dated digests are honestly unavailable. Naming may use an explicit
 native Pi title as a naming-only fallback, never as a session/digest join.
 
-Duplicate settled events are consumed once per real prompt. Pi context objects are read only during their event callback and are never retained. Pi session identity and Herdr-managed `herdr-agent-state.ts` are untouched.
+The plugin reads private prompt files and generic recaps, while retaining legacy
+record/prompt reading. It owns grouping and manual label protection. Pi context
+objects are never retained; neither Pi identity nor `herdr-agent-state.ts` changes.
+Open the transient native popup using `prefix+shift+o` or `overview.open`; see
+`dot_local/share/herdr-overview/README.md` for navigation. Reconcile opens no view.
 
-## Troubleshooting
-
-- No published recap: run `session-recap config auto-publish`. `disabled` is
-  expected until the local config opts in. If the policy check errors, fix
-  the command/configuration in `dot_local/share/session-recap/README.md`
-  (Setup). `SESSION_RECAP_BIN` can override the installed CLI path. Blank or
-  failed backend output is recorded without a publication wake-up.
-- Recap published but no popup: `overview.reconcile` refreshes the model
-  without opening a view. Invoke `herdr plugin action invoke overview.open
-  --plugin overview` or use `prefix+shift+o`; see the plugin guide (Setup).
-- Recap without a workspace group: the adapter needs live caller pane and
-  workspace membership through `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`.
-  Missing membership stays session-only; it is never borrowed from UI focus.
-
-## Validation
-
-From this directory:
+## Validation and troubleshooting
 
 ```sh
-node --test
+node --test dot_pi/private_agent/extensions/herdr-overview/index.test.ts
+npm test --prefix dot_local/share/herdr-overview
 ```
 
-The tests drive both the default-off and opted-in Pi RPC paths with a scripted response server, the real `session-recap` CLI, a fake recap backend, and a fake Herdr protocol-22 socket. No live model or Herdr server is required.
+Tests drive real Pi RPC with a scripted provider, the generic CLI, and a fake
+protocol-22 socket. They cover saved-event/startup/return recovery, prompt rekey,
+private files, missing socket, missed wake-up, no duplicate generation and current
+UUID/name publication, replacement/reload/retirement and print-child exclusion.
+The driver owns the full isolated-server journey; these checks do not establish
+owner-server rollout, a native move journey or phone access.
+
+For missing recaps, check `/recap settings` and `/recap history` first. CLI
+`config auto-publish` controls plugin **group generation**, not Pi recap settings.
+For a missed overview wake-up, invoke the loaded plugin's `overview.reconcile`
+action; no owner-process restart is implied. Missing caller pane/workspace
+membership stays session-only and is never borrowed from UI focus.
