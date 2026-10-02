@@ -121,6 +121,7 @@ async function currentPaneMembers(workspaceId, snapshot, latest, piTerminalIdsBy
       || typeof record.summary !== "string" || !record.summary.trim()
       || typeof record.record_id !== "string" || !record.record_id) continue;
     if (record.source_kind === "pi-session") {
+      if (record.overview_attributed !== undefined && (!record.pane_id || !record.workspace_id)) continue;
       setNewestRecord(piBySessionId, record.source_id, record);
       setNewestRecord(piByPaneId, record.pane_id, record);
       setNewestRecord(piByTerminalId, piTerminalIdsBySessionId?.[record.source_id], record);
@@ -182,6 +183,7 @@ export async function reconcileRecapCoordinator({
   const processed = new Set(next.processedRecordIds);
   const publications = (await readAllRecapRecords(dataRoot))
     .filter((record) => record?.source_kind === "pi-session" && record.status === "published"
+      && record.overview_attributed !== false
       && typeof record.record_id === "string" && record.record_id && !processed.has(record.record_id))
     .sort(compareRecords);
   const changedDeadlines = new Set();
@@ -190,7 +192,9 @@ export async function reconcileRecapCoordinator({
     processed.add(record.record_id);
     if (typeof record.workspace_id !== "string" || !record.workspace_id.trim()) continue;
     const deadline = publicationTime(record, now) + WORKSPACE_QUIET_PERIOD_MS;
-    next.workspaceDeadlines[record.workspace_id] = new Date(deadline).toISOString();
+    next.workspaceDeadlines[record.workspace_id] = new Date(Math.max(
+      deadline, Date.parse(next.workspaceDeadlines[record.workspace_id] ?? "") || 0,
+    )).toISOString();
     changedDeadlines.add(record.workspace_id);
   }
   next.processedRecordIds = [...processed];

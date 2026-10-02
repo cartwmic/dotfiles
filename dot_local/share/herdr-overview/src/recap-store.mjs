@@ -6,10 +6,6 @@ export function sessionRecapDataRoot(env = process.env) {
   return path.join(env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"), "session-recap");
 }
 
-function encodeSessionId(sessionId) {
-  return encodeURIComponent(sessionId).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
-}
-
 async function readJson(filePath) {
   try {
     const value = JSON.parse(await readFile(filePath, "utf8"));
@@ -31,25 +27,6 @@ async function recordDays(root) {
   }
 }
 
-async function recordPath(root, recordId, dayNames) {
-  if (typeof recordId !== "string" || !recordId) return null;
-  for (const day of dayNames) {
-    const candidate = path.join(root, "records", day, `${recordId}.json`);
-    try {
-      await readFile(candidate, "utf8");
-      return candidate;
-    } catch {
-      // Continue through dated record directories; the latest index stores IDs, not dates.
-    }
-  }
-  return null;
-}
-
-async function readRecord(root, recordId, dayNames) {
-  const filePath = await recordPath(root, recordId, dayNames);
-  return filePath ? readJson(filePath) : null;
-}
-
 export async function readAllRecapRecords(root = sessionRecapDataRoot()) {
   const days = await recordDays(root);
   const records = await Promise.all(days.map(async (day) => {
@@ -62,19 +39,31 @@ export async function readAllRecapRecords(root = sessionRecapDataRoot()) {
     }
     return Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => readJson(path.join(directory, name))));
   }));
-  return records.flat().filter(Boolean);
+  return records.flat().filter(Boolean).map(overviewRecord);
+}
+
+// A read-only projection keeps native consumers and legacy records compatible.
+// The generic record's narrative, coverage, history identity and source stay untouched.
+export function overviewRecord(record) {
+  const pi = record?.metadata?.pi;
+  if (record?.source_kind !== "pi" || !pi) return record;
+  const sessionId = pi.sessionId ?? pi.nativeSessionId;
+  if (typeof sessionId !== "string" || !sessionId) return record;
+  const herdr = record.annotations?.herdr;
+  return { ...record, source_kind: "pi-session", source_id: sessionId,
+    pane_id: herdr?.pane_id, workspace_id: herdr?.workspace_id,
+    overview_attributed: Object.hasOwn(record.annotations ?? {}, "herdr") };
 }
 
 export async function readLatestRecapRecords(root = sessionRecapDataRoot(), sourceKind = null) {
-  const latestIndex = await readJson(path.join(root, "latest.json"));
-  const sources = Array.isArray(latestIndex?.sources) ? latestIndex.sources : [];
-  const days = await recordDays(root);
-  const records = await Promise.all(sources
-    .filter((item) => item && typeof item === "object"
-      && (!sourceKind || item.source_kind === sourceKind)
-      && typeof item.latest_success_id === "string")
-    .map((item) => readRecord(root, item.latest_success_id, days)));
-  return records.filter((record) => record?.status === "published");
+  const latest = new Map();
+  for (const record of await readAllRecapRecords(root)) {
+    if (record.status !== "published" || record.overview_attributed === false
+      || (sourceKind && record.source_kind !== sourceKind)) continue;
+    const key = JSON.stringify([record.source_kind, record.source_id]);
+    latest.set(key, newerRecord(latest.get(key), record, "published_at"));
+  }
+  return [...latest.values()];
 }
 
 function recordTime(record, field) {
@@ -98,15 +87,18 @@ function mergeRecapFields(current, incoming) {
 }
 
 export async function readCurrentPiPrompts(root = sessionRecapDataRoot()) {
-  try {
-    const files = await readdir(path.join(root, "prompts"), { withFileTypes: true });
-    const prompts = await Promise.all(files
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-      .map((entry) => readJson(path.join(root, "prompts", entry.name))));
-    return prompts.filter((prompt) => prompt?.schema_version === 1 && typeof prompt.session_id === "string");
-  } catch {
-    return [];
+  const bySession = new Map();
+  // Read old prompt files without migrating or deleting them; adapter-owned files win.
+  for (const directory of [path.join(root, "prompts"), path.join(path.dirname(root), "herdr-overview", "prompts")]) {
+    try {
+      for (const name of await readdir(directory)) {
+        if (!name.endsWith(".json")) continue;
+        const prompt = await readJson(path.join(directory, name));
+        if (prompt?.schema_version === 1 && typeof prompt.session_id === "string") bySession.set(prompt.session_id, prompt);
+      }
+    } catch { /* Missing prompt directories are normal. */ }
   }
+  return [...bySession.values()];
 }
 
 export async function readRecapFields(
@@ -116,20 +108,15 @@ export async function readRecapFields(
   manualTerminalIdsBySourceId = {},
   rekeyedPanes = [],
 ) {
-  const latestIndex = await readJson(path.join(root, "latest.json"));
-  const sources = Array.isArray(latestIndex?.sources) ? latestIndex.sources : [];
-  const dayNames = await recordDays(root);
+  const all = await readAllRecapRecords(root);
+  const sources = [...new Map(all.map(record => [JSON.stringify([record.source_kind, record.source_id]),
+    { source_kind: record.source_kind, source_id: record.source_id }])).values()];
 
   async function bySource(sourceKind, sourceId) {
-    const entry = sources.find((item) => item?.source_kind === sourceKind && item?.source_id === sourceId);
-    if (!entry) return { latest: null, lastAttempt: null };
-    const [latest, lastAttempt] = await Promise.all([
-      readRecord(root, entry.latest_success_id, dayNames),
-      readRecord(root, entry.last_attempt_id, dayNames),
-    ]);
+    const records = all.filter(record => record.source_kind === sourceKind && record.source_id === sourceId);
     return {
-      latest: latest?.status === "published" ? latest : null,
-      lastAttempt: lastAttempt ?? null,
+      latest: records.filter(record => record.status === "published").reduce((a, b) => newerRecord(a, b, "published_at"), null),
+      lastAttempt: records.reduce((a, b) => newerRecord(a, b, "created_at"), null),
     };
   }
 
