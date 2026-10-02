@@ -124,15 +124,15 @@ os.execv(sys.executable, [sys.executable, os.environ['GENUINE_RECAP_CLI'], *sys.
     def setting(self, field, value):
         # Real /recap settings selector, Set action and JSON input. Row ordering is
         # the public seed-settings ordering already used by manual.py.
-        fields = ['model', 'completed', 'periodic', 'beforeCompaction', 'mode', 'cadence', 'intervalMinutes', 'timeoutSeconds', 'recursion', 'instructions', 'options', 'inputBudget', 'timeZone']
+        fields = ['model', 'completed', 'periodic', 'beforeCompaction', 'mode', 'cadence', 'intervalMinutes', 'timeoutSeconds', 'recursion', 'instructions', 'options', 'timeZone']
         defaults_before = (self.extension / 'config.json').read_text()
         start = len(self.output)
         self.send('/recap settings')
-        assert 'Recap session settings' in self.visible(start)
+        self.wait(lambda: 'Recap session settings' in ('\n'.join(self.terminal_screen.screen.display) if self.terminal_screen else self.visible(start)), 'settings did not open', seconds=10)
         for _ in range(fields.index(field) + 2):
             os.write(self.master, b'\x1b[B'); self.collect(.05)
         self.send(''); self.send('')
-        assert f'Set {field}' in self.visible(start), 'wrong setting dialog'
+        assert f'Set {field}' in ('\n'.join(self.terminal_screen.screen.display) if self.terminal_screen else self.visible(start)), 'wrong setting dialog'
         os.write(self.master, b'\x01\x0b')
         self.send(json.dumps(value))
         os.write(self.master, b'\x1b'); self.collect(.5)

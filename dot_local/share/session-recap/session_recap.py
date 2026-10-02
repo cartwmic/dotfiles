@@ -28,11 +28,20 @@ class RecapError(Exception):
     """An expected user-facing error."""
 
 
+# Closed, caller-agnostic failure protocol; never persist arbitrary backend stderr.
+SAFE_FAILURES = {
+    "timed_out": "attempt deadline exceeded",
+    "input_limit": "input exceeds transport budget; recursive reduction is disabled",
+    "context_limit": "backend context limit exceeded",
+    "model_limits": "backend model limits unavailable or unusable",
+}
+
+
 class GenerationFailure(RecapError):
     def __init__(self, message: str, exit_code: int | None = None, *, reason: str | None = None) -> None:
         super().__init__(message)
         self.failure: dict[str, Any] = {"message": message}
-        if reason == "timed_out":
+        if reason in SAFE_FAILURES:
             self.failure["reason"] = reason
         if exit_code is not None:
             self.failure["exit_code"] = exit_code
@@ -499,8 +508,9 @@ def _public_record(record: dict[str, Any]) -> dict[str, Any]:
         result["failure"] = {"message": "recap generation failed"}
         # Only our closed, supervisor-owned classification crosses the public
         # boundary. Never expose arbitrary stored/backend failure messages.
-        if version == 2 and failure.get("reason") == "timed_out":
-            result["failure"] = {"message": "attempt deadline exceeded", "reason": "timed_out"}
+        if version == 2 and failure.get("reason") in SAFE_FAILURES:
+            reason = failure["reason"]
+            result["failure"] = {"message": SAFE_FAILURES[reason], "reason": reason}
         if isinstance(failure.get("exit_code"), int):
             result["failure"]["exit_code"] = failure["exit_code"]
     return result
@@ -660,7 +670,9 @@ def _supervised_call(root: Path, request: dict[str, Any], prompt: str, deadline:
                 payload = None
         _fence(root, request, deadline)
         if process.returncode != 0:
-            raise GenerationFailure("backend exited nonzero", process.returncode)
+            reason = next((code for code in ("context_limit", "model_limits")
+                           if output == f"SESSION_RECAP_FAILURE:{code}\n".encode()), None)
+            raise GenerationFailure(SAFE_FAILURES.get(reason, "backend exited nonzero"), process.returncode, reason=reason)
         try:
             text = output.decode("utf-8").strip()
         except UnicodeDecodeError as exc:
@@ -732,10 +744,10 @@ def _generate_request(root: Path, request: dict[str, Any], deadline: float) -> t
     budget = request["input_budget_bytes"]
     room = budget - len(header.encode("utf-8"))
     if room <= 0:
-        raise GenerationFailure("instructions exceed input budget")
+        raise GenerationFailure("instructions exceed input budget", reason="input_limit")
     reduced = len(material.encode("utf-8")) > room
     if reduced and not request["recursive"]:
-        raise GenerationFailure("input exceeds budget; recursive reduction is disabled")
+        raise GenerationFailure(SAFE_FAILURES["input_limit"], reason="input_limit")
     reduction_header = ("Reduce this complete chunk, preserving meaningful facts, identifiers, outcomes, "
                         "uncertainties and unresolved work. Do not omit unresolved material.\n\n")
     chunk_room = budget - len(reduction_header.encode("utf-8"))

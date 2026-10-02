@@ -7,7 +7,10 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export default function (pi: any) {
   // Private keyboard launcher reaches the actual public slash-command handler
   // without consuming the owner's unsent main-editor draft.
-  if (process.env.RECAP_PROOF_UX === '1') pi.registerShortcut('alt+g', { description: 'Proof: open public recap view', handler: () => { pi.sendUserMessage('/recap view', { expandPromptTemplates: true }); } });
+  if (process.env.RECAP_PROOF_UX === '1') {
+    pi.registerShortcut('alt+g', { description: 'Proof: open public recap view', handler: () => { pi.sendUserMessage('/recap view', { expandPromptTemplates: true }); } });
+    pi.registerShortcut('alt+h', { description: 'Proof: open public recap help', handler: () => { pi.sendUserMessage('/recap help', { expandPromptTemplates: true }); } });
+  }
   pi.registerProvider('recap-proof', {
     api: 'openai-completions', baseUrl: 'http://unused.invalid', apiKey: 'dummy',
     models: ['main', ...(process.env.RECAP_PROOF_UX === '1' ? ['main-next'] : []), 'recap', 'unusable'].map(id => ({ id, name: id, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: id === 'unusable' ? 1024 : id === 'recap' ? Number(process.env.RECAP_PROOF_CONTEXT ?? 100000) : 100000, maxTokens: id === 'recap' ? Number(process.env.RECAP_PROOF_MAX_OUTPUT ?? 4096) : 4096 })),
@@ -45,6 +48,11 @@ export default function (pi: any) {
           message.content = [{ type: 'text', text }];
           const fault = process.env.HOME + '/unfinished';
           if (existsSync(fault) && readFileSync(fault, 'utf8') === (reduction ? 'reduction' : 'final')) message.stopReason = 'length';
+          if (existsSync(process.env.HOME + '/context-rejection')) { message.stopReason = 'error'; message.errorMessage = 'maximum context length exceeded PRIVATE_CONTEXT_SENTINEL'; }
+          if (existsSync(process.env.HOME + '/private-error')) {
+            console.error('PRIVATE_STDERR_SENTINEL auth/path/private');
+            message.stopReason = 'error'; message.errorMessage = 'PRIVATE_PROVIDER_SENTINEL auth/path/private';
+          }
         } else {
           const topic = /orchard|harbor|older|newer/.exec(prompt)?.[0] ?? 'unknown';
           log({ event: 'call', model: model.id, topic });
@@ -76,7 +84,7 @@ export default function (pi: any) {
     }
     log({ event: 'budget-resolved', pid: process.pid });
     if (existsSync(process.env.HOME + '/budget-failure')) throw new Error('Scripted route metadata unavailable');
-    return { model, thinkingLevel: 'off' };
+    return { model: !preflight && existsSync(process.env.HOME + '/smaller-route') ? ctx.modelRegistry.find('recap-proof', 'unusable') : model, thinkingLevel: 'off' };
   } });
   pi.registerTool({ name: 'proof_evidence', label: 'Evidence', description: 'Scripted evidence collection', parameters: Type.Object({ topic: Type.String() }), async execute(_id: string, args: any, signal: AbortSignal) {
     const topic = args.topic;
