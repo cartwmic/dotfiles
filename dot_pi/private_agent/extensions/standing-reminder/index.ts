@@ -57,7 +57,7 @@ function renderStatus(ctx: ExtensionContext, state: ReminderState, available: bo
 		text = "No session reminder · /reminder to set one";
 	}
 	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => ({
-		render: (width) => [truncateToWidth(theme.fg("muted", text), width)],
+		render: (width) => [truncateToWidth(theme.fg("dim", text), width)],
 		invalidate() {},
 	}), { placement: "aboveEditor" });
 }
