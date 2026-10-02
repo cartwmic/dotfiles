@@ -96,3 +96,10 @@ surface0 = "#3B4261"
 key = "prefix+shift+o"
 type = "plugin_action"
 command = "overview.open"
+
+# Command palette: preserve prefix+p (previous tab) and Shift+P (rename pane).
+[[keys.command]]
+key = "prefix+space"
+type = "plugin_action"
+command = "vjeantet.palette.open"
+description = "Command palette"

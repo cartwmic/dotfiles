@@ -346,6 +346,30 @@ python3 scripts/serve.py --profile apple-silicon --text-only --alias winnow-12b
 Nothing starts it at login. It listens on `http://127.0.0.1:8091` and holds
 about 13 GB of memory while running; Ctrl+C stops it.
 
+## Herdr command palette
+
+Both desktop profiles (`personal` and `axon-work-computer`) install
+[vjeantet/herdr-palette](https://github.com/vjeantet/herdr-palette) **v0.2.2**
+through `mise run install-herdr-palette`, also included in desktop bootstrap.
+The task uses the normal upstream installer:
+
+```sh
+herdr plugin install vjeantet/herdr-palette --ref v0.2.2 --yes
+```
+
+It skips an already installed, enabled, runnable copy at that pin. Installation
+uses a private nonexistent socket, leaving the running server untouched. After
+applying the shared Herdr config, run `herdr server reload-config` to activate it.
+Open with **Ctrl+B, Space**, type to search, Enter to select, and Esc to cancel.
+Existing tab-navigation and pane-rename bindings stay intact. In Termux, swipe
+up on **CTRL** to send that sequence; swipe up on **ALT** sends **Ctrl+O**.
+Normal taps still act as modifiers.
+
+The palette starts with upstream built-ins and installed plugin actions,
+including Overview; no custom commands or prompts are configured. Its checkout,
+binary and last-used state stay machine-local, outside chezmoi. Termux does not
+install it; its prefix shortcut works over SSH to a configured desktop.
+
 ## Herdr overview and phone route
 
 The personal and work desktop profiles pin Herdr **0.9.1 / protocol 22** and
