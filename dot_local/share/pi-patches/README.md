@@ -25,6 +25,7 @@ Per-patch rationale and failure modes stay in the sibling READMEs:
 - [custom-message-marker](custom-message-marker/README.md) — wrap injected `custom` messages (all profiles)
 - [empty-turn-retry](empty-turn-retry/README.md) — retry empty assistant responses
 - [headless-extension-drain](headless-extension-drain/README.md) — drain fire-and-forget extension work in print mode
+- [response-visibility](response-visibility/README.md) — delegate the optional Pi 0.99.2 telemetry helper on desktop profiles
 - [standing-reminder-origin](standing-reminder-origin/README.md) — carry input origin to processed messages on desktop profiles
 - [hide-nonbridge-claude-models](hide-nonbridge-claude-models/README.md) — personal-only model-list filter
 - [cursor-provider](cursor-provider/README.md) — retired leftover-splice restore (not desired-state delivery; widget comes from the fork)
