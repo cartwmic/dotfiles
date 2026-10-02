@@ -6,13 +6,12 @@ has been silently wiped by a pi update.
 ## Why
 
 Runtime patches (see `~/.local/share/pi-patches/`, e.g.
-`hide-nonbridge-claude-models`) edit files *inside* the installed
+`anthropic-idle-watchdog`) edit files *inside* the installed
 `@earendil-works/pi-coding-agent` package. Any reinstall of that package
 (`npm i -g …@latest`, a pi self-update, a node version bump that reinstalls
 globals) rewrites `dist/` and **erases the edit**. The re-apply only runs on
 `chezmoi apply`, so between an out-of-band update and the next apply the patch is
-gone — for `hide-nonbridge-claude-models` that means non-bridge Claude models
-reappear in the picker / `pi --list-models`, and every fresh `pi` process
+gone — its behavior silently reverts, and every fresh `pi` process
 (including subagents) reads the unpatched file.
 
 This bit us once already: pi self-updated `0.79.4 → 0.79.6`, wiped the patch, and
@@ -39,7 +38,7 @@ overlay-vs-`getModels()` — after an insert, `getModels()` already contains the
 id, so that comparison cannot tell overlay from upstream.
 
 **Profile-aware for free.** A patch gated off for the active chezmoi profile
-(e.g. `hide-nonbridge-claude-models` on a non-`personal` profile) writes
+(e.g. `standing-reminder-origin` on Termux) writes
 `status: "unpatched"`, which is not intended-on ⇒ no drift, no warning. Patches
 that have never run (no state file) are simply not watched. The guard reads no
 `PI_CHEZMOI_PROFILE` itself — the state files already encode the decision.
@@ -49,7 +48,7 @@ that have never run (no state file) are simply not watched. The guard reads no
 
 ```sh
 PI_CHEZMOI_PROFILE=personal node \
-  ~/.local/share/pi-patches/hide-nonbridge-claude-models/patch.mjs
+  ~/.local/share/pi-patches/<patch>/patch.mjs
 ```
 
 …then reload pi (the running session's own in-memory model list is frozen until

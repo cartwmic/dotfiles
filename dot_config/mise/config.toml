@@ -45,7 +45,6 @@ node = "lts"      # Replaces nvm
 # engines.pnpm = ">=11.0.0". The pnpm bundled with the mise node install is
 # 8.x, which fails those engine checks.
 pnpm = "11"
-zig = "0.15.2"    # Pinned: builds the cartwmic/claude-p fork (pi-claude-bridge build-on-install)
 
 # =============================================================================
 # Shell & Terminal Tools

@@ -153,6 +153,7 @@ Gates live in the repo-root `.chezmoiignore`:
 | --- | --- |
 | [system-one](./system-one/README.md) (docs only) | `personal` and `axon-work-computer` |
 | [openrouter-gate](./openrouter-gate/README.md) | `personal` only |
+| [claude-compat-guard](./claude-compat-guard/README.md) | `personal` only |
 | [issue](./issue/README.md) | `axon-work-computer` only |
 | `dot_pi/session-search/` (sibling of `agent/`, not this folder) | `personal` only |
 | [herdr-overview](./herdr-overview/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
@@ -169,6 +170,7 @@ Do not deploy personal/homelab-only extensions onto `axon-work-computer`.
 READMEs already in this tree:
 
 - [auto-compact](./auto-compact/README.md)
+- [claude-compat-guard](./claude-compat-guard/README.md)
 - [hindsight](./hindsight/README.md)
 - [issue](./issue/README.md)
 - [ntfy](./ntfy/README.md)

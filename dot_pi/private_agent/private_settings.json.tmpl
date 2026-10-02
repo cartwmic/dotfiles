@@ -43,7 +43,9 @@
 {{- if eq .profile "personal" }}
   "modelThinkingLevels": {
     "openai-codex/gpt-6.1-sol": "high",
-    "openai-codex/gpt-6-astra": "high"
+    "openai-codex/gpt-6-astra": "high",
+    "claude-compat/claude-opus-5-5": "medium",
+    "claude-compat/claude-sonnet-5-5": "high"
   },
 {{- else }}
   "modelThinkingLevels": {
@@ -57,7 +59,10 @@
 {{- if eq .profile "personal" }}
     "openai-codex/gpt-6-astra",
     "openai-codex/gpt-6.1-sol",
-    "openrouter/z-ai/glm-5.3-flash"
+    "openrouter/z-ai/glm-5.3-flash",
+    "claude-compat/claude-haiku-4-5",
+    "claude-compat/claude-sonnet-5-5",
+    "claude-compat/claude-opus-5-5"
 {{- else }}
     "cursor/gpt-5.6-luna",
     "cursor/gpt-5.6-sol",
@@ -83,7 +88,10 @@
 {{- if eq .profile "personal" }}
     "https://github.com/cartwmic/pi-codex-fast",
     "https://github.com/olixis/pi-openrouter-plus",
-    "https://github.com/cartwmic/pi-claude-bridge",
+    {
+      "source": "git:github.com/vazzma/pi-claude-request-compat@d915546395e31e6a6a6b49268d21c2b9e50cf10a",
+      "extensions": []
+    },
 {{- end }}
     "https://github.com/cartwmic/system-one-tools",
     "https://github.com/cartwmic/pi-session-search",
