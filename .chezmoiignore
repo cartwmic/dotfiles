@@ -109,3 +109,9 @@ Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 .pi/agent/extensions/issue
 .pi/agent/extensions/issue/**
 {{- end }}
+
+{{- if and (ne .profile "personal") (ne .profile "axon-work-computer") }}
+# System One docs accompany the desktop Git package; never deploy on Termux.
+.pi/agent/extensions/system-one
+.pi/agent/extensions/system-one/**
+{{- end }}

@@ -131,7 +131,7 @@ in its scoped guide; follow the task-specific skill for workflow artifacts.
 
 Pi extensions in this tree: never capture `ExtensionContext` `ctx` in a
 long-lived closure; use the per-call `ctx`. Do not couple new extensions
-to retired opsx. System One is a Git package enabled in personal and work Pi
+to retired opsx. System One is a Git package enabled in personal and axon-work-computer Pi
 settings; its local extension directory is docs-only. Load its scoped guide
 before changing that package entry. Do not add a local loader that registers
 its tools twice.
@@ -216,7 +216,7 @@ inside one of these source subtrees loads this file and its local guide:
 - [Pi inspector](./dot_pi/private_agent/extensions/inspect-prompt/AGENTS.md) — fullscreen conversation snapshots, editor return, and private Pi/Herdr journeys.
 - [Learnings monitor](./dot_pi/private_agent/extensions/learnings-monitor/AGENTS.md) — opt-in observer, local records, confirmed promotion, and work-bank verification.
 - [Standing reminder](./dot_pi/private_agent/extensions/standing-reminder/AGENTS.md) — session-current state, input-origin patch, and isolated Pi proof.
-- [System One Pi integration](./dot_pi/private_agent/extensions/system-one/AGENTS.md) — Git package settings, isolated checks, and rollout.
+- [System One Pi integration](./dot_pi/private_agent/extensions/system-one/AGENTS.md) — personal/work Git package settings, isolated checks, and rollout.
 - [Herdr plugin runtime](./dot_local/share/herdr-overview/AGENTS.md) — native model, naming, grouping, and isolated server proof.
 - [Herdr Pi adapter](./dot_pi/private_agent/extensions/herdr-overview/AGENTS.md) — settled publication and caller-aware membership.
 - [session-recap](./dot_local/share/session-recap/AGENTS.md) — standalone prompt/store invariants.

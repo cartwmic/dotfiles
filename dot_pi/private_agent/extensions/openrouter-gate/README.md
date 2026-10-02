@@ -108,3 +108,29 @@ if a pi upgrade removes it, `/openrouter on` reports it instead of throwing.
 ```sh
 cd ~/.local/share/chezmoi/dot_pi/private_agent/extensions/openrouter-gate && node --test
 ```
+
+## Native classifiers and auth compatibility
+
+The gate merges Pi's real builtin OpenRouter classifier metadata with current
+chat/classifier discovery before applying the same enabled flag and allowlist.
+It preserves native classifier type, API, inputs, limits, cost and headers;
+chat routing and plus headers remain unchanged. Refresh hooks restore typed
+entries after plus overlays the catalog.
+
+For the exact legacy plus registration `apiKey: "OPENROUTER_API_KEY"`, the gate
+uses Pi's supported `$OPENROUTER_API_KEY` reference syntax. Pi resolves the
+existing runtime/environment credential afresh; the gate does not capture an
+API key in a model definition. Other literal keys and references are untouched.
+In the disposable personal fixture, allowed classifier and chat calls send the
+fixture credential. After off removes runtime/env auth, even a remembered
+classifier definition fails before transport. Deny/reload and plus refresh hide
+denied classifiers; restoring the allowlist restores discovery/availability.
+These are local scripted outcomes, not actual OpenRouter provider results.
+
+This is not universal credential revocation or a caller-supplied model sandbox.
+Trusted code deliberately supplying/caching a credential, or a separate live
+auth/config source, is outside the gate's absence-of-auth boundary. Catalog deny
+hides denied definitions; it does not revoke credentials for permitted models
+or intercept arbitrary caller-supplied definitions. The earlier permissive
+fixture's success after off was invalid-auth mock evidence, not proof that Pi
+cached a valid credential.
