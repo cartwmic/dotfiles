@@ -25,8 +25,9 @@ from map_identity import identity
 
 
 class Client:
-    def __init__(self, state, env, width, command=None):
+    def __init__(self, state, env, width, command=None, max_drain=10):
         self.closed = False
+        self.max_drain = max_drain
         self.master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 32, width, 0, 0))
         import pyte
@@ -46,7 +47,7 @@ class Client:
         if self.closed:
             return
         minimum = time.monotonic() + seconds
-        deadline = minimum + 10
+        deadline = minimum + self.max_drain
         while time.monotonic() < deadline:
             ready, _, _ = select.select([self.master], [], [], .15)
             if not ready and time.monotonic() >= minimum:

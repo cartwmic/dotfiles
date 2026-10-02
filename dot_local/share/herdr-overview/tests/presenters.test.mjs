@@ -10,7 +10,7 @@ test('one map has two-column narrow singles and explicit selectable native multi
     const frame = renderMap({ model, journey: { ...journey } }, width, 30);
     assert.ok(frame.split('\n').every(line => cellWidth(line) <= width));
     assert.match(frame, /Tab 3/);
-    assert.match(frame, /BLOCKED/);
+    assert.match(mapLines({model,journey},width).body.join('\n'), /BLOCKED/); // Previews push later groups below the first viewport.
     assert.ok(frame.split('\n').some(line => line.includes('Single 1') && line.includes('Single 2')));
     assert.doesNotMatch(frame, /Recent output|preview|Mosaic|Board/);
   }

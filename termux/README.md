@@ -421,3 +421,20 @@ passage and `q` dismisses immediately. The card floor is actual popup width 32,
 not outer width: outer 40/48/120/180 yield 38/46/92/152; outer32 yields30 and
 may clip. Simultaneously attached clients share one PTY geometry; a wide peer
 can clip the narrow peer. Use one attached client for readable geometry.
+
+Overview arrows and `h/j/k/l` move in displayed directions without wrapping;
+`[`/`]` retain native-order traversal. Every collapsed card shows a two-line
+latest-good recap excerpt, producer-supplied date metadata, and a separate newer
+failure warning. Recap CLI owns timezone formatting; the viewer does not convert it.
+On supported desktop attached clients, the wheel browses the map or expanded
+reading independently of selection, and a click selects only. `f` remains the
+explicit identity-checked terminal focus action. Phone mouse gesture parity is
+not promised. The native red × marks blocked; an actual collapsed or expanded Pi
+question wait also says Awaiting answer. Older settlement-abort v1 makes
+`ctx.isIdle()` false in final handlers and suppresses native READY. Desktop proof
+needs a compatible runtime preserving main-agent idle; compatible stock unpatched
+runtimes do not require this user patch. The reviewed v2 was compatibility-tested
+on a private copy of real Pi 0.99.2, not installed live. Before deployment, complete
+the source-scoped native/visual driver matrix and independent acceptance, then
+obtain explicit apply authorization; private proof does not authorize apply.
+Narrow desktop PTYs are layout evidence, not attended physical-phone proof.

@@ -1,3 +1,4 @@
+import { registerQuestionWait } from './question-wait.ts';
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, InputEvent } from "@earendil-works/pi-coding-agent";
 import {
@@ -158,6 +159,7 @@ function settlePromptAndQueuePublication(
 }
 
 export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {
+	registerQuestionWait(pi);
 	const pendingBySession = new Map<string, PendingPrompt>();
 	const publicationQueue: PublicationQueue = { promise: Promise.resolve() };
 

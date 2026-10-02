@@ -31,7 +31,7 @@ test('real pane loop serializes keys, refreshes saved native changes, exact reke
   await wait(()=>frames.at(-1).includes('› Tab 2'));
   output.columns=100; output.emit('resize'); assert.match(frames.at(-1),/› Tab 2/);
   input.emit('data',Buffer.from('d')); await wait(()=>frames.at(-1).includes('Unavailable'));
-  input.emit('data',Buffer.from('\x1b')); await wait(()=>frames.at(-1).includes('Latest good recap'));
+  input.emit('data',Buffer.from('\x1b')); await wait(()=>frames.at(-1).includes('Supplied prompt'));
   fail=false; input.emit('data',Buffer.from('f')); await running;
   assert.equal(calls.at(-1),'focus:moved'); assert.equal(input.isRaw,false); assert.equal(input.listenerCount('data'),0);
   assert.ok(calls.every(call=>call==='snapshot'||call.startsWith('focus:')),'no output reads or generation');
@@ -47,4 +47,18 @@ test('failed snapshot and vanished selection cannot focus cached or unrelated na
   input.emit('data',Buffer.from('f')); await new Promise(r=>setTimeout(r,30));
   assert.equal(focuses,0); assert.match(frames.at(-1),/offline/);
   input.emit('data',Buffer.from('q')); await run;
+});
+
+test('EOF and input/output errors restore owned mouse modes and prior raw state',async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'overview-cleanup-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ await writeFile(path.join(root,'overview.json'),JSON.stringify({model:normalizeSnapshot(snapshot())}));
+ for(const event of ['end','input-error','output-error']) {
+  const input=new EventEmitter(),output=new EventEmitter(),writes=[];
+  Object.assign(input,{isTTY:true,isRaw:false,setRawMode(v){this.isRaw=v},resume(){},pause(){}});Object.assign(output,{columns:100,rows:24,write(text){writes.push(text)}});
+  const running=runOverviewPane({api:{async snapshot(){return snapshot()}},stateDir:root,configPath:path.join(root,'missing'),dataRoot:path.join(root,'recaps'),input,output});
+  const completed=event==='end'?running:assert.rejects(running,/synthetic/);
+  await wait(()=>input.listenerCount('data'));input.emit('data',Buffer.from('\x1b[<0;'));
+  if(event==='end')input.emit('end');else (event==='input-error'?input:output).emit('error',Error('synthetic'));
+  await completed;assert.equal(input.isRaw,false);assert.ok(writes.join('').includes('\x1b[?1000h'));assert.ok(writes.join('').includes('\x1b[?1006l\x1b[?1000l'));assert.equal(input.listenerCount('data'),0);
+ }
 });

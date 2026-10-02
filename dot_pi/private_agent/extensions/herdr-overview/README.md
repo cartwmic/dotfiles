@@ -85,3 +85,34 @@ node --test
 ```
 
 The tests drive both the default-off and opted-in Pi RPC paths with a scripted response server, the real `session-recap` CLI, a fake recap backend, and a fake Herdr protocol-22 socket. No live model or Herdr server is required.
+
+## Actual questionnaire waiting
+
+The adjacent `question-wait.ts` listens to the installed question package's public
+`rpiv:ask-user:blocked` active boolean, not tool names or transcript text. One
+idempotent `herdr:blocked` contribution goes to the existing stock native writer.
+Only its own `herdr:overview-question` metadata source supplies the blocked reason
+`Awaiting answer`, guarded by `applies_to_source = herdr:pi`. Caller-aware terminal
+identity, ordered reports and session/wait generations fence late publication.
+Answer, cancel and teardown clear only that contribution and its reason labels;
+foreign blockers and labels are not cleared. Collapsing the question is not completion.
+No long-lived Pi context is retained, and this adapter never reports native agent
+state directly or modifies the installed stock integration.
+
+Older settlement-abort v1 reports `ctx.isIdle() === false` in final handlers,
+including `agent_settled`, suppressing stock native READY reporting. Use a compatible
+runtime preserving main-agent idle there; compatible stock unpatched runtimes do
+not require this user patch. The separately reviewed v2 was compatibility-tested on
+a private copy of real Pi 0.99.2, not installed live. Before deployment, complete the
+source-scoped native/visual driver matrix and independent acceptance, then obtain
+explicit apply authorization. Private proof does not authorize apply; this source
+never bypasses the native or adapter idle guard.
+
+The maintained question fixture exercises the real installed package with a scripted
+provider. Its error case renders and dismisses the actual dialog, then injects a
+controlled rejection at the public `ui.custom` completion boundary, exercising the
+package's real wait/finally cleanup. It does not fabricate question events. Public
+reload while a collapsed dialog waits is refused until idle; new-session waits for
+the dialog to finish before replacing the session. The fixture records these busy
+observations separately from completed reload/new/switch lifecycle markers and UUIDs.
+Recap timestamps remain producer-owned and are displayed unchanged by Overview.
