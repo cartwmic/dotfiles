@@ -84,6 +84,15 @@ class DriverTests(unittest.TestCase):
             self.assertEqual(result, 0 if expected else 1)
             self.assertEqual(json.loads(output.getvalue())['status'], 'PASS' if expected else 'FAIL')
 
+    def test_discovery_running_is_scope_selectable_without_other_journeys(self):
+        calls = []
+        def fake(case, criteria, argv, timeout=180):
+            calls.append((case, argv))
+            return dict(case=case, status='PASS')
+        with patch.object(proof.sys, 'argv', ['proof.py', 'tui', '--case', 'recap-discovery-running-public']), patch.object(proof, 'execute', fake), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(proof.main(), 0)
+        self.assertEqual(calls, [('recap-discovery-running-public', [proof.sys.executable, proof.ROOT / 'tests/pi-recap/discovery.py'])])
+
     def test_large_retained_history_is_wired_into_tui_and_scope_selectable(self):
         name = 'large-retained-history-public'
         calls = []

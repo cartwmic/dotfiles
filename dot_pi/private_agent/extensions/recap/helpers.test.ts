@@ -1,8 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, argumentCompletions, commandCatalog, commandHelp } from './helpers.ts';
 
+test('native completions replace the whole argument prefix and match parser contexts', () => {
+  assert.deepEqual(argumentCompletions('').map(c => c.value), commandCatalog.map(c => c.value));
+  assert.ok(argumentCompletions('').every(c => c.description));
+  assert.deepEqual(argumentCompletions('he').map(c => c.value), ['help']);
+  assert.deepEqual(argumentCompletions('settings d').map(c => c.value), ['settings defaults']);
+  assert.deepEqual(argumentCompletions('history all a').map(c => c.value), ['history all attempts']);
+  assert.deepEqual(argumentCompletions('history attempts l').map(c => c.value), ['history attempts legacy']);
+  assert.deepEqual(argumentCompletions('history legacy ').map(c => c.value), ['history legacy all', 'history legacy attempts']);
+  for (const prefix of ['view ', 'full ', 'cancel ', 'help ', 'settings defaults ', 'history invalid ', 'unknown ']) assert.deepEqual(argumentCompletions(prefix), []);
+  assert.ok(argumentCompletions('history all attempts legacy ').length === 0);
+});
+test('read-only help states commands and unchanged generation/settings/cancel semantics', () => {
+  for (const c of commandCatalog) assert.ok(commandHelp.includes(`/recap ${c.value}`));
+  for (const phrase of ['incremental', 'reused without generation', 'Filters combine', 'Clear override', 'not Pi’s agent', 'default on', 'follows current Pi', 'display-only', 'do not generate']) assert.ok(commandHelp.includes(phrase), phrase);
+});
 test('production automation defaults remain independent of accelerated PTY settings', () => {
   assert.equal(seedSettings.completed, true);
   assert.equal(seedSettings.periodic, true);
