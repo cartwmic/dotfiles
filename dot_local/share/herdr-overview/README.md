@@ -16,8 +16,12 @@ The `overview.reconcile` action uses the same initializer for an already-loaded
 server. Chezmoi apply and bootstrap never restart the owner's main server.
 
 The plugin reads native Herdr pane state and recent output through the public
-protocol. It joins supplied Pi prompts and published `session-recap` records to
-those panes, keeping prompt, recap, and live agent state separate. A pane move
+protocol. It joins adapter-owned private Pi prompt files and published
+`session-recap` records to those panes, keeping prompt, recap, and live agent
+state separate. Generic Pi records join native sessions via
+`metadata.pi.sessionId` (also accepting `nativeSessionId`), not their independent
+history key; `annotations.herdr` supplies pane/workspace attribution. Legacy
+records and prompt files remain readable without migration/deletion. A pane move
 can rekey its native ID; a verified live terminal identity keeps its supplied
 prompt and recap visible after the move. Reads never generate recaps. The
 [component agent guide](./AGENTS.md) covers ID joins, hooks, and tests.
@@ -48,9 +52,13 @@ new `prefix+shift+o` shortcut. For desktop provisioning, see `README.md`
 (Herdr overview and phone route) at the chezmoi source root. To supply
 recaps, set up `dot_local/share/session-recap/README.md` and the Pi adapter at
 `dot_pi/private_agent/extensions/herdr-overview/README.md`. These paths are
-relative to the source root. Pi publication needs a local recap command and
-`auto_publish = true`; manual `session-recap create` only needs the command.
-The standalone CLI also works with Herdr stopped.
+relative to the source root. Pi recap generation needs explicit new setup via
+`/recap settings` in the independent Pi recap extension; it never imports the
+CLI's backend or auto preferences. The overview adapter only tracks prompts
+and annotates saved recaps. `auto_publish = true` and a local CLI backend
+control plugin group generation, not Pi recap generation. Generic manual
+`session-recap create` remains supported. Pi recap and the standalone CLI both
+work with Herdr stopped.
 
 ## Usage
 
@@ -62,8 +70,11 @@ The pane selects the narrow Board when its width is at or below `[ui].mobile_wid
 
 The display is passive: it shows only supplied prompt fields and published recap records, with age and missing/failure status. Opening, selection, preview refresh, scrolling, and focus never run `session-recap` or synthesize recap text. `overview.reconcile` remains a separate plugin action for publication coordination and manual-library refresh. To show a manually generated single recap in a pane's detail, use that native pane ID as the source ID, for example `printf '%s\n' 'Recent work and current state.' | session-recap create --kind single --source-id PANE_ID`, then invoke `herdr plugin action invoke overview.reconcile --plugin overview` while the source pane is live. This lets the overview display its published or failed status and persist the live terminal association used if `pane.move` later rekeys the pane. Manual results are not Pi auto-naming inputs.
 
-A successful Pi recap starts or resets a 30-second quiet period for its
-workspace at publication time. At expiry, grouping uses the latest published
+A successful Pi recap with durable overview attribution starts or resets a
+30-second quiet period for its workspace at publication time. An unannotated
+new record waits for the adapter; a session-only record cannot trigger a
+workspace group. Startup reconciles durable annotations after a missed wake-up.
+Later moves/returns do not reassign the publication's workspace or deadline. At expiry, grouping uses the latest published
 recaps for panes in that workspace's **current** native membership, including
 manually sourced recaps for non-Pi panes; closed panes are excluded. A
 successful workspace group can produce an active Herdr-session group. A failed
@@ -96,8 +107,9 @@ itself. Palette provenance and adapter tests are in the
   `herdr plugin action invoke overview.reconcile --plugin overview` on a
   compatible server, then look for the background tab named Herdr Overview.
 - Missing or failed recap: the overview still shows native pane details.
-  Check `session-recap config auto-publish` and the local command described in
-  `dot_local/share/session-recap/README.md`. Pi publication setup is in
+  Check `/recap settings` and `/recap history` for Pi generation. Check
+  `session-recap config auto-publish` and the local CLI backend only for plugin
+  groups. Consumer setup is in
   `dot_pi/private_agent/extensions/herdr-overview/README.md`.
 - Real-server proof needs an isolated socket and cleanup. Use
   `python3 tests/herdr-overview/proof.py --help` for its scenarios; the phone

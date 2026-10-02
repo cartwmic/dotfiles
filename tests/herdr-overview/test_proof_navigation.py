@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import call, patch
 
@@ -5,6 +8,43 @@ import proof
 
 
 class OverviewNavigationTest(unittest.TestCase):
+    def test_native_recap_lookup_projects_annotations_and_reads_terminal_attempt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary)
+            day = data / 'records' / '2026-10-01'
+            day.mkdir(parents=True)
+            published = {'record_id': 'good', 'source_kind': 'pi', 'source_id': 'session',
+                         'status': 'published', 'created_at': '2026-10-01T00:00:00Z',
+                         'metadata': {'pi': {'nativeSessionId': 'session'}},
+                         'annotations': {'herdr': {'pane_id': 'p1', 'workspace_id': 'w1'}}}
+            failed = {**published, 'record_id': 'failed', 'status': 'failed',
+                      'created_at': '2026-10-01T00:01:00Z', 'annotations': {}, 'attempt': 2}
+            for record in (published, failed):
+                (day / (record['record_id'] + '.json')).write_text(json.dumps(record))
+            (data / 'latest.json').write_text(json.dumps({'sources': [{
+                'source_kind': 'pi', 'source_id': 'session', 'latest_success_id': 'good',
+                'last_attempt_id': 'good'}]}))
+            latest, attempt = proof.read_latest_pi_record(data, 'p1')
+            self.assertEqual((latest['source_id'], latest['pane_id'], latest['workspace_id']),
+                             ('session', 'p1', 'w1'))
+            self.assertEqual((attempt['record_id'], attempt['attempt']), ('failed', 2))
+            self.assertEqual(json.loads((day / 'good.json').read_text()), published)
+
+
+    def test_native_prompt_uses_overview_store_not_legacy_recap_store(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary)
+            recap = data / "session-recap"
+            legacy = recap / "prompts"
+            native = data / "herdr-overview" / "prompts"
+            legacy.mkdir(parents=True)
+            native.mkdir(parents=True)
+            (legacy / "old.json").write_text(json.dumps({"pane_id": "p1", "text": "stale"}))
+            current = {"pane_id": "p1", "text": "current", "working": True}
+            (native / "current.json").write_text(json.dumps(current))
+            self.assertEqual(proof.read_pi_prompt(recap, "p1"), current)
+            self.assertIsNone(proof.read_pi_prompt(recap, "missing"))
+
     def test_overview_lifecycle_probe_matches_only_the_live_plugin_entry(self):
         self.assertTrue(proof.overview_entry_running({
             "foreground_processes": [{

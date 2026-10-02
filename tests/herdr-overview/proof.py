@@ -295,19 +295,20 @@ def scenario_recap() -> dict[str, Any]:
                 raise ProofFailure(f"{name} attempt was not recorded as failed")
         mode_file.write_text("success\n", encoding="utf-8")
 
-        # Exercise prepare/publish attribution, workspace grouping, session grouping,
-        # and retained member IDs using the same T1 command/store as the Pi adapter.
+        # Exercise generic records/annotations and preserved group creation.
+        # Pi policy is not imported; overview consumes records, not lifecycle commands.
         pi_ids: list[str] = []
         for suffix in ("a", "b"):
-            prepared = cli_recap(home, env, "prepare", "--source-id", f"proof-pi-{suffix}",
-                                 "--pane-id", f"pane-{suffix}", stdin=f"Pi response {suffix}.\n").stdout.strip()
-            published = cli_recap(home, env, "publish", "--prepared-id", prepared,
-                                  "--workspace-id", "workspace-proof").stdout.strip()
-            if published != prepared:
-                raise ProofFailure("prepared Pi recap did not publish under its stable record ID")
+            metadata = {"pi": {"sessionId": f"proof-pi-{suffix}", "historyId": f"history-{suffix}"}}
+            published = cli_recap(home, env, "create", "--kind", "single", "--source-kind", "pi",
+                                  "--source-id", f"history-{suffix}", "--metadata-json", json.dumps(metadata),
+                                  stdin=f"Pi response {suffix}.\n").stdout.strip()
+            attribution = {"pane_id": f"pane-{suffix}", "workspace_id": "workspace-proof"}
+            cli_recap(home, env, "annotate", published, "--namespace", "herdr",
+                      "--metadata-json", json.dumps(attribution))
             _path, record = find_record(data_dir, published)
-            if record.get("workspace_id") != "workspace-proof" or record.get("pane_id") != f"pane-{suffix}":
-                raise ProofFailure("Pi recap lost its publication-time pane/workspace attribution")
+            if record.get("annotations", {}).get("herdr") != attribution or record.get("metadata") != metadata:
+                raise ProofFailure("Generic annotation lost membership or changed Pi metadata")
             pi_ids.append(published)
         workspace_group_input = json.dumps({"members": [
             {"record_id": record_id, "label": f"pane {index}", "text": find_record(data_dir, record_id)[1]["summary"]}
@@ -1484,7 +1485,8 @@ def make_pi_provider_extension(path: Path) -> None:
 
 
 def read_pi_prompt(data_root: Path, pane_id: str) -> dict[str, Any] | None:
-    for path in (data_root / "prompts").glob("*.json"):
+    # Native prompt publication belongs to the overview adapter, not recap storage.
+    for path in (data_root.parent / "herdr-overview" / "prompts").glob("*.json"):
         try:
             value = read_json(path)
         except (OSError, ValueError):
@@ -1500,13 +1502,14 @@ def read_latest_pi_record(data_root: Path, pane_id: str) -> tuple[dict[str, Any]
     if not latest_path.exists():
         return None, None
     for item in read_json(latest_path).get("sources", []):
-        if item.get("source_kind") != "pi-session":
+        if item.get("source_kind") not in ("pi-session", "pi"):
             continue
         try:
             _path, record = find_record(data_root, item.get("latest_success_id", ""))
         except ProofFailure:
             record = None
-        if record and record.get("pane_id") == pane_id:
+        if record and (record.get("annotations", {}).get("herdr", {}).get("pane_id")
+                       if record.get("source_kind") == "pi" else record.get("pane_id")) == pane_id:
             entry = item
             break
     if not entry:
@@ -1519,7 +1522,30 @@ def read_latest_pi_record(data_root: Path, pane_id: str) -> tuple[dict[str, Any]
         _path, attempt = find_record(data_root, entry.get("last_attempt_id", ""))
     except ProofFailure:
         attempt = None
-    return latest, attempt
+    # Match the plugin's read-only native projection without changing stored data.
+    def native_projection(record):
+        if not record or record.get("source_kind") != "pi":
+            return record
+        pi = record.get("metadata", {}).get("pi", {})
+        session_id = pi.get("sessionId") or pi.get("nativeSessionId")
+        if not session_id:
+            raise ProofFailure("native Pi recap omitted metadata.pi session identity")
+        return {**record, **record.get("annotations", {}).get("herdr", {}),
+                "source_kind": "pi-session", "source_id": session_id}
+    if latest and latest.get('source_kind') == 'pi':
+        # Native run attempts are authoritative records, not legacy latest.json
+        # attempt pointers. Failed attempts intentionally do not rewrite that index.
+        identity = latest.get('metadata', {}).get('pi', {})
+        native_session = identity.get('sessionId') or identity.get('nativeSessionId')
+        candidates = []
+        for path in (data_root / 'records').glob('*/*.json'):
+            record = read_json(path)
+            identity = record.get('metadata', {}).get('pi', {})
+            if record.get('source_kind') == 'pi' and (identity.get('sessionId') or identity.get('nativeSessionId')) == native_session:
+                candidates.append(record)
+        if candidates:
+            attempt = max(candidates, key=lambda record: (record.get('created_at', ''), record.get('record_id', '')))
+    return native_projection(latest), native_projection(attempt)
 
 
 def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
@@ -1537,6 +1563,31 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
     Path(env["HERDR_OVERVIEW_PI_REPLY"]).write_text(scripted_pi_reply() + "\n", encoding="utf-8")
     provider_extension = root / "scripted-pi-provider.mjs"
     make_pi_provider_extension(provider_extension)
+    # Both foreground Pi and the independent recap helper load the same private
+    # provider registration. The recap route delegates to the existing scripted
+    # backend, preserving its call log and blank-output failure behavior.
+    recap_provider = Path(env["PI_CODING_AGENT_DIR"]) / "extensions" / "recap-provider.ts"
+    recap_provider.parent.mkdir(parents=True, exist_ok=True)
+    recap_provider.write_text(
+        "import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';\n"
+        "import { execFileSync } from 'node:child_process';\n"
+        "export default function(pi) { pi.registerProvider('native-recap-proof', {\n"
+        " api: 'openai-completions', baseUrl: 'http://unused.invalid', apiKey: 'fixture',\n"
+        " models: [{id:'recap',name:'recap',reasoning:false,input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:100000,maxTokens:4096}],\n"
+        " streamSimple(model, context) { const stream=createAssistantMessageEventStream();\n"
+        " queueMicrotask(() => { const message={role:'assistant',api:model.api,provider:model.provider,model:model.id,timestamp:Date.now(),content:[],stopReason:'stop',usage:{input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};\n"
+        f" try {{ const text=execFileSync({json.dumps(sys.executable)}, [{json.dumps(str(ROOT / 'tests/herdr-overview/fake_recap_backend.py'))}, 'success'], {{input:JSON.stringify(context),encoding:'utf8'}}); message.content=[{{type:'text',text}}]; }}\n"
+        " catch { message.stopReason='error'; message.errorMessage='Scripted recap failure'; }\n"
+        " stream.push({type:'start',partial:message});\n"
+        " if(message.stopReason==='error') stream.push({type:'error',reason:'error',error:message});\n"
+        " else stream.push({type:'done',reason:'stop',message}); stream.end(); }); return stream; }\n"
+        " }); }\n", encoding="utf-8")
+    recap_extension = root / "recap-extension"
+    shutil.copytree(ROOT / "dot_pi/private_agent/extensions/recap", recap_extension, dirs_exist_ok=True)
+    json_dump(recap_extension / "config.json", {
+        "model": {"provider": "native-recap-proof", "id": "recap"},
+        "completed": True, "cadence": 1, "periodic": False, "beforeCompaction": False,
+    })
     real_pi = pi_bin
     write_exec(root / "bin/pi", "#!/bin/sh\nset -eu\n"
                "if [ -r \"$HERDR_OVERVIEW_TEST_PROVIDER_URL_FILE\" ]; then\n"
@@ -1547,23 +1598,20 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
     Path(env["HERDR_OVERVIEW_TEST_PROVIDER_URL_FILE"]).write_text(provider_url + "\n", encoding="utf-8")
     env["HERDR_OVERVIEW_TEST_PROVIDER_URL"] = provider_url
     pane_id = state["fixture"]["pi_pane_id"]
-    agent_name = "t8-proof-pi"
     try:
-        herdr_cmd(state, env, "agent", "start", agent_name, "--kind", "pi", "--pane", pane_id,
-                  "--timeout", "120000", "--", "--provider", "herdr-proof-scripted", "--model", "scripted-model",
-                  "--extension", str(ROOT / "dot_pi/private_agent/extensions/herdr-overview/index.ts"),
-                  "--extension", str(provider_extension), "--no-skills", "--no-prompt-templates", "--no-themes",
-                  "--no-context-files", "--no-tools", "--offline", "--approve", "--session-dir", str(root / "pi-sessions"),
-                  "--session-id", f"herdr-proof-{run_id}", timeout=130)
+        command = [str(root / 'bin/pi'), '--provider', 'herdr-proof-scripted', '--model', 'scripted-model',
+                   '--extension', str(ROOT / 'dot_pi/private_agent/extensions/herdr-overview/index.ts'),
+                   '--extension', str(provider_extension), '--extension', str(recap_extension / 'index.ts'),
+                   '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files',
+                   '--no-tools', '--offline', '--session-dir', str(root / 'pi-sessions')]
+        # pane.run owns a real terminal; agent.start would force RPC mode.
+        launch = 'env ' + ' '.join(shlex.quote(f'{key}={value}') for key, value in env.items()) + ' ' + shlex.join(command)
+        herdr_cmd(state, env, 'pane', 'run', pane_id, launch)
+        wait_for(lambda: 'Pi can explain its own features' in pane_text(state, env, pane_id, fmt='text', lines=100),
+                 'interactive Pi to initialize in the native pane', timeout=30)
         current_prompt = f"Proof request {run_id}: inspect the current parser and report the completed work."
-        prompt_process = subprocess.Popen(
-            [state["herdr_bin"], "agent", "prompt", agent_name, current_prompt, "--wait", "--timeout", "120000"],
-            cwd=root,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        herdr_cmd(state, env, 'pane', 'send-text', pane_id, current_prompt)
+        herdr_cmd(state, env, 'pane', 'send-keys', pane_id, 'enter')
         first_request = wait_for(
             lambda: (lambda requests: requests[0] if requests else None)(provider_requests(root)),
             "the scripted provider to receive Pi's prompt", timeout=60,
@@ -1615,14 +1663,8 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
                  "automatic Pi naming to remain unchanged while only the live prompt is available", timeout=15)
 
         Path(provider["release_file"]).touch()
-        try:
-            out, err = prompt_process.communicate(timeout=140)
-        except subprocess.TimeoutExpired:
-            prompt_process.kill()
-            out, err = prompt_process.communicate()
-            raise ProofFailure("Herdr agent prompt did not settle after the scripted response")
-        if prompt_process.returncode != 0:
-            raise ProofFailure(f"Herdr Pi prompt failed: {bounded(out + err)}")
+        wait_for(lambda: (read_pi_prompt(data_root, pane_id) or {}).get('working') is False,
+                 'interactive Pi response settlement', timeout=140)
         first_latest, first_attempt = wait_for(
             lambda: (lambda pair: pair if pair[0] and pair[0].get("status") == "published" else None)(read_latest_pi_record(data_root, pane_id)),
             "published settled Pi recap",
@@ -1658,11 +1700,10 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
         Path(env["FAKE_RECAP_MODE_FILE"]).write_text("blank\n", encoding="utf-8")
         Path(provider["release_file"]).touch()
         second_prompt = f"Proof request {run_id}: this recap backend will return blank output."
-        second = herdr_cmd(state, env, "agent", "prompt", agent_name, second_prompt, check=False, timeout=15)
-        if second.returncode != 0:
-            raise ProofFailure(f"second Pi prompt was not submitted: {bounded(second.stderr)}")
+        herdr_cmd(state, env, 'pane', 'send-text', pane_id, second_prompt)
+        herdr_cmd(state, env, 'pane', 'send-keys', pane_id, 'enter')
         second_latest, second_attempt = wait_for(
-            lambda: (lambda pair: pair if pair[1] and pair[1].get("status") == "failed" else None)(read_latest_pi_record(data_root, pane_id)),
+            lambda: (lambda pair: pair if pair[1] and pair[1].get("status") == "failed" and pair[1].get('attempt', 2) == 2 else None)(read_latest_pi_record(data_root, pane_id)),
             "blank recap failure record after the settled second response",
             timeout=30,
         )
@@ -1690,12 +1731,14 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
             if workspace_record.get("status") == "published" and session_record.get("status") == "published":
                 return workspace_record, session_record
             return (None, None)
-        workspace_record, session_record = wait_for(grouped, "30-second workspace and session group publication", timeout=40)
+        workspace_record, session_record = wait_for(
+            lambda: (lambda pair: pair if all(pair) else None)(grouped()),
+            "30-second workspace and session group publication", timeout=40)
         workspace_published = datetime.fromisoformat(workspace_record["published_at"].replace("Z", "+00:00")).timestamp()
         if workspace_published < due - 2:
             raise ProofFailure("workspace recap appeared before the persisted quiet deadline")
         if first_latest["record_id"] not in workspace_record.get("member_record_ids", []):
-            raise ProofFailure("workspace recap did not retain the Pi member recap ID")
+            raise ProofFailure(f"workspace recap did not retain the Pi member recap ID: expected {first_latest['record_id']}, actual {workspace_record!r}")
         if workspace_record["record_id"] not in session_record.get("member_record_ids", []):
             raise ProofFailure("session recap did not retain the workspace recap ID")
         def session_recap_in_model() -> dict[str, Any] | None:
@@ -1776,19 +1819,16 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
             "manual_recap_did_not_drive_pi_naming": True,
             "response_provider": "scripted local OpenAI-compatible SSE provider",
         }
+    except Exception:
+        # Capture actual terminal diagnostics before orchestrated fixture cleanup.
+        print(bounded(pane_text(state, env, pane_id, fmt='text', lines=160), 12000), file=sys.stderr)
+        raise
     finally:
         # Keep this run-owned loopback provider alive for the post-phone native
         # pane-move proof, which sends real Pi input through the inherited caller ID.
         Path(provider["release_file"]).touch()
-        # If an unexpected error leaves the prompt CLI alive, stop only that
-        # child launched by this scenario. Herdr's isolated server is retained
-        # for explicit herdr-cleanup.
-        try:
-            if "prompt_process" in locals() and prompt_process.poll() is None:
-                prompt_process.terminate()
-                prompt_process.wait(timeout=5)
-        except Exception:
-            pass
+        # The real Pi terminal is owned by this isolated Herdr server; explicit
+        # herdr-cleanup stops that server and its panes even after a failure.
 
 
 def scenario_pi_provider_start(run_id: str, base: Path | None) -> dict[str, Any]:

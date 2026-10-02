@@ -1,0 +1,55 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { readRecapFields, readLatestRecapRecords, readCurrentPiPrompts } from '../src/recap-store.mjs';
+import { reconcileRecapCoordinator } from '../src/recap-coordinator.mjs';
+
+test('native history joins via Pi session metadata; annotation does not mutate narrative/coverage; delayed consumption and legacy coexist', async t => {
+  const base = await mkdtemp(path.join(os.tmpdir(), 'overview-native-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const root = path.join(base, 'session-recap');
+  const directory = path.join(root, 'records/2026-10-01');
+  await mkdir(directory, { recursive: true });
+  const native = { schema_version: 2, record_id: 'a'.repeat(32), status: 'published', source_kind: 'pi', source_id: 'different-history-key', created_at: '2026-10-01T00:00:00Z', published_at: '2026-10-01T00:00:00Z', summary: 'Native saved recap', metadata: { pi: { sessionId: 'native-session', historyId: 'different-history-key', coverage: { anchor: 'coverage-preserved' } } }, annotations: {} };
+  const filename = path.join(directory, `${native.record_id}.json`);
+  await writeFile(filename, JSON.stringify(native));
+  const legacy = { schema_version: 1, record_id: 'b'.repeat(32), status: 'published', source_kind: 'pi-session', source_id: 'legacy-session', pane_id: 'legacy-pane', workspace_id: 'workspace', published_at: '2026-09-30T00:00:00Z', summary: 'Legacy saved recap' };
+  await writeFile(path.join(directory, `${legacy.record_id}.json`), JSON.stringify(legacy));
+  const snapshot = { panes: [{ pane_id: 'native-pane', workspace_id: 'workspace', terminal_id: 'terminal' }], workspaces: [{ workspace_id: 'workspace' }] };
+  let { state } = await reconcileRecapCoordinator({ dataRoot: root, snapshot, now: Date.parse(native.published_at), runRecap: async () => 'disabled' });
+  assert.ok(!state.processedRecordIds.includes(native.record_id), 'do not consume before annotation exists');
+  native.annotations.herdr = { pane_id: 'native-pane', workspace_id: 'workspace' };
+  await writeFile(filename, JSON.stringify(native));
+  const recovered = await reconcileRecapCoordinator({ state, dataRoot: root, snapshot, now: Date.parse(native.published_at) + 10_000, runRecap: async args => { assert.deepEqual(args, ['config', 'auto-publish']); return 'enabled'; } });
+  state = recovered.state;
+  assert.equal(state.workspaceDeadlines.workspace, '2026-10-01T00:00:30.000Z');
+  assert.equal(recovered.wakeups[0].deadline, '2026-10-01T00:00:30.000Z');
+  assert.equal(state.piTerminalIdsBySessionId['native-session'], 'terminal');
+  const fields = await readRecapFields(snapshot, root);
+  assert.equal(fields.piRecapsBySessionId['native-session'].latest.record_id, native.record_id);
+  assert.equal(fields.piRecapsByPaneId['native-pane'].latest.summary, native.summary);
+  assert.equal(fields.piRecapsBySessionId['legacy-session'].latest.summary, legacy.summary);
+  assert.deepEqual(JSON.parse(await readFile(filename, 'utf8')), native);
+  assert.equal((await readLatestRecapRecords(root, 'pi-session')).length, 2, 'dated records work without latest index');
+  const moved = { ...snapshot, panes: [{ pane_id: 'moved-pane', workspace_id: 'other-workspace', terminal_id: 'terminal' }] };
+  const afterMove = await readRecapFields(moved, root, state.piTerminalIdsBySessionId);
+  assert.equal(afterMove.recapsByPaneId['moved-pane'].latest.record_id, native.record_id);
+  assert.equal(afterMove.recapsByPaneId['moved-pane'].latest.workspace_id, 'workspace', 'publication attribution remains fixed');
+});
+
+test('adapter-owned private prompts override legacy files without removing them', async t => {
+  const base = await mkdtemp(path.join(os.tmpdir(), 'overview-prompts-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const root = path.join(base, 'session-recap');
+  const oldDir = path.join(root, 'prompts');
+  const newDir = path.join(base, 'herdr-overview/prompts');
+  await mkdir(oldDir, { recursive: true }); await mkdir(newDir, { recursive: true });
+  const legacy = { schema_version: 1, session_id: 'session', text: 'Old prompt', working: true };
+  const current = { ...legacy, text: 'New real user prompt', working: false, pane_id: 'new-pane' };
+  await writeFile(path.join(oldDir, 'session.json'), JSON.stringify(legacy));
+  await writeFile(path.join(newDir, 'session.json'), JSON.stringify(current), { mode: 0o600 });
+  assert.deepEqual(await readCurrentPiPrompts(root), [current]);
+  assert.deepEqual(JSON.parse(await readFile(path.join(oldDir, 'session.json'), 'utf8')), legacy);
+});

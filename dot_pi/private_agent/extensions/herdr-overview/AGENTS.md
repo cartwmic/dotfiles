@@ -2,60 +2,52 @@
 
 ## Scope and authority
 
-This file covers `dot_pi/private_agent/extensions/herdr-overview/`. The
-repo-root `AGENTS.md` controls chezmoi source and apply. Read
-`dot_pi/private_agent/extensions/README.md` for shared Pi extension rules when
-editing this adapter, especially per-call `ctx` lifetime. The local
-`README.md` owns human setup. `session-recap` owns prompts, recap records, and
-backend configuration; the Herdr plugin owns the native overview and grouping.
+This file covers `dot_pi/private_agent/extensions/herdr-overview/`. Repository
+`AGENTS.md` controls chezmoi operations; the parent extensions README controls
+shared Pi procedure. The local README owns setup. Pi `recap` owns generation,
+settings and coverage; the CLI owns generic records. This adapter owns private
+prompts/native membership; the Herdr plugin owns overview/grouping.
 
 ## Workflow
 
-- Work in `index.ts` and `helpers.ts`. Hold only serializable pending state
-  across events. Use the `ctx` passed to each callback; a saved
-  `ExtensionContext` becomes stale after session replacement or reload.
-- Accept only real interactive TUI or RPC user input for current prompts.
-  Extension-generated continuations must not replace them. At
-  `agent_settled`, require idle state and take the latest assistant reply from
-  the public branch API. Consume a prompt once, before awaiting the backend;
-  skip blank, aborted, and errored responses.
-- For a Pi pane, call Herdr's caller-aware `pane.current` using the inherited
-  `HERDR_PANE_ID`. Resolve it before prompt storage, after a possible pane
-  rekey, and again at publication for workspace membership. Missing socket,
-  pane, or workspace keeps the record session-only. Never substitute UI focus
-  or change Pi session identity or `herdr-agent-state.ts`.
-- `session-recap prompt set/settle/rekey` keeps the working prompt separate
-  from `prepare/publish`. After settling the prompt, check
-  `session-recap config auto-publish`. The managed default is `disabled` and
-  must skip preparation and wake-up without warning; an invalid policy fails
-  closed. When opted in, confirm the prepared ID and publication before
-  invoking the public `overview.reconcile` action. A failed Herdr wake-up
-  leaves the durable publication for later startup reconciliation. The plugin
-  does not generate a recap when its pane renders.
-- This adapter is desktop-only. The `termux` profile skips `.pi`; phone
-  access reaches the desktop through SSH.
+- Hold serializable state only. Never retain `ctx` after its callback.
+- Accept real TUI/RPC input, not extension-generated continuations. Own atomic
+  mode-0600 prompt files in Herdr overview data. Final idle `agent_settled`
+  marks the matching prompt settled without reading/generating an assistant recap.
+- Refresh caller-aware `pane.current` via inherited `HERDR_PANE_ID` on input,
+  settlement, return and before annotation. Missing socket/pane/workspace stays
+  session-only. Never substitute UI focus, alter Pi identity or edit
+  `herdr-agent-state.ts`.
+- Consume `recap:saved` and startup/return records through generic CLI
+  `list/read/annotate`. Events are hints; read authoritative saved records.
+  Join native sessions through `metadata.pi.sessionId` (also accept
+  `nativeSessionId`), never through the independent history/source key.
+- Write only `annotations.herdr` membership. Do not rewrite narrative, coverage,
+  source identity or existing publication attribution after move/return.
+  Wake `overview.reconcile` after durable annotation. A missed wake-up remains
+  recoverable on startup/return. Do not generate Pi recaps, invoke managed
+  prepare/publish/prompt commands, or import old CLI auto/backend preferences.
+- Desktop profiles only; Termux reaches the desktop through SSH.
 
 ## Validation
 
-From the chezmoi source root, run the adapter suite after changing hooks,
-caller membership, or publication. The test drives temporary Pi RPC with a
-scripted response server, the real CLI with a fake recap backend, and a fake
-protocol-22 Herdr socket. It needs no owner server or live model.
+From the source root:
 
 ```sh
 node --test dot_pi/private_agent/extensions/herdr-overview/index.test.ts
-python3 tests/herdr-overview/proof.py recap
-chezmoi apply --dry-run --verbose ~/.pi/agent/extensions/herdr-overview
+npm test --prefix dot_local/share/herdr-overview
+# After repo preflight, with explicit worktree source:
+chezmoi --source "$REPO" apply --dry-run --verbose ~/.pi/agent/extensions/herdr-overview
 ```
 
-For a user-facing Pi TUI change, load the `pi-tui-scenario-tests` skill and
-use an outside-in disposable path; `index.test.ts` alone cannot prove what a
-user sees after move/reload. Ask before applying, restarting Pi or Herdr, or
-running an attended phone check.
+The adapter suite drives real Pi RPC with a scripted provider, real generic
+CLI reads/annotations, and a fake protocol-22 socket. It checks prompt/rekey,
+saved/startup/return recovery, missing socket and missed wake-up without paid
+models or owner processes. The driver owns the full isolated-server proof.
+For a visible TUI change, load the pi-tui-scenario-tests skill and require an
+outside-in disposable journey. Unit/RPC checks do not prove phone/native moves.
 
 ## Completion and handoff
 
-Name changed source paths, which input and publication cases were checked,
-the exact tests and dry-run result, and any untested live TUI or phone path.
-Leave live apply and owner-process restarts explicitly to the owner unless
-authorized.
+Name source paths, actual checks and pending dry-runs/live journeys. No live
+apply, link, restart, commit or phone claim without separate approval.
