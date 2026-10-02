@@ -8,7 +8,7 @@
 {{- $version := "0.70.2" -}}
 {{- $theme := "dark" -}}
 {{- $hideThinking := false -}}
-{{- $privateGlmProvider := dict -}}
+{{- $privateGlmProvider := dict "models" (list) -}}
 {{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiGlmProviderRef") -}}
 {{-   $privateGlmProvider = output "op" "read" .privatePiGlmProviderRef | fromJson -}}
 {{- end -}}

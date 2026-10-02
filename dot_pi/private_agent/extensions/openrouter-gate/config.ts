@@ -13,7 +13,23 @@ export interface OpenRouterGateConfig {
 	allowedModels: string[];
 }
 
+export interface ClassifierCatalogModel {
+	type: "classifier";
+	id: string;
+	name: string;
+	api?: string;
+	baseUrl?: string;
+	input: Array<"text" | "image">;
+	inputLimits?: unknown;
+	cost: CatalogModel["cost"];
+	contextWindow: number;
+	headers?: Record<string, string>;
+}
+
+export type TypedCatalogModel = CatalogModel | ClassifierCatalogModel;
+
 export interface CatalogModel {
+	type?: "chat";
 	id: string;
 	name: string;
 	api?: string;
@@ -154,7 +170,14 @@ export function filterModels<T extends { id: string }>(models: readonly T[], pat
 	return models.filter((model) => modelAllowed(model.id, patterns));
 }
 
-export function toProviderModelConfig(model: CatalogModel): ProviderModelConfig {
+export function toProviderModelConfig(model: CatalogModel): ProviderModelConfig;
+export function toProviderModelConfig(model: ClassifierCatalogModel): ClassifierCatalogModel;
+export function toProviderModelConfig(model: TypedCatalogModel): ProviderModelConfig | ClassifierCatalogModel;
+export function toProviderModelConfig(model: TypedCatalogModel): ProviderModelConfig | ClassifierCatalogModel {
+	if (model.type === "classifier") {
+		const { id, name, type, api, baseUrl, input, inputLimits, cost, contextWindow, headers } = model;
+		return { id, name, type, api, baseUrl, input, inputLimits, cost, contextWindow, headers };
+	}
 	const config: ProviderModelConfig = {
 		id: model.id,
 		name: model.name || model.id,
@@ -209,9 +232,9 @@ export function fallbackModel(id: string): ProviderModelConfig {
 
 /** Filtered catalog plus stub entries for exact allowlist ids not yet synced. */
 export function buildAllowedModels(
-	catalog: readonly CatalogModel[],
+	catalog: readonly TypedCatalogModel[],
 	patterns: readonly string[],
-): ProviderModelConfig[] {
+): Array<ProviderModelConfig | ClassifierCatalogModel> {
 	if (patterns.length === 0) return [];
 	const filtered = filterModels(catalog, patterns).map(toProviderModelConfig);
 	const present = new Set(filtered.map((model) => model.id));
@@ -229,4 +252,16 @@ export function describeConfig(config: OpenRouterGateConfig): string {
 			? "allowlist empty (fail-closed)"
 			: `allowlist: ${config.allowedModels.join(", ")}`;
 	return `OpenRouter ${config.enabled ? "ON" : "OFF"}; ${allow}`;
+}
+
+/** Native current definitions win; chat overlays cannot erase builtin classifiers. */
+export function mergeClassifierCatalog(
+	current: readonly TypedCatalogModel[],
+	builtin: readonly ClassifierCatalogModel[],
+): TypedCatalogModel[] {
+	const merged = new Map<string, TypedCatalogModel>(current.map(model => [model.id, model]));
+	for (const model of builtin) {
+		if (merged.get(model.id)?.type !== "classifier") merged.set(model.id, model);
+	}
+	return [...merged.values()];
 }
