@@ -1,9 +1,9 @@
 export function orderedPaneIds(model) {
   return (model.workspaceOrder ?? []).flatMap(id => (model.workspaces[id]?.tabIds ?? []).flatMap(tab => model.tabs[tab]?.paneIds ?? [])).filter(id => model.panes[id]);
 }
-function select(journey, model, id) {
+export function select(journey, model, id) {
   const pane = model.panes[id];
-  return { ...journey, paneId: id ?? null, terminalId: pane?.terminalId ?? null, workspaceId: pane?.workspaceId ?? null, tabId: pane?.tabId ?? null, detailScroll: 0, readingPosition: null, scrollDelta: 0 };
+  return { ...journey, ensureVisible: true, paneId: id ?? null, terminalId: pane?.terminalId ?? null, workspaceId: pane?.workspaceId ?? null, tabId: pane?.tabId ?? null, detailScroll: 0, readingPosition: null, scrollDelta: 0 };
 }
 export function createJourney(model) {
   return select({ level: 'overview', detailScroll: 0 }, model, model.panes[model.selection?.paneId] ? model.selection.paneId : orderedPaneIds(model)[0]);
@@ -37,6 +37,24 @@ export function nextBlocked(journey, model) {
   }
   return journey;
 }
-export function openJourneyLevel(journey) { return { ...journey, level: journey.level === 'overview' ? 'pane' : 'overview', detailScroll: 0, readingPosition: null, scrollDelta: 0 }; }
-export function backJourneyLevel(journey) { return { ...journey, level: journey.level === 'digest' ? 'pane' : 'overview', detailScroll: 0, readingPosition: null, scrollDelta: 0, ...(journey.level === 'digest' ? journey.returnReading : {}) }; }
+export function openJourneyLevel(journey) { return { ...journey, ensureVisible: true, level: journey.level === 'overview' ? 'pane' : 'overview', detailScroll: 0, readingPosition: null, scrollDelta: 0 }; }
+export function backJourneyLevel(journey) { return { ...journey, ensureVisible: true, level: journey.level === 'digest' ? 'pane' : 'overview', detailScroll: 0, readingPosition: null, scrollDelta: 0, ...(journey.level === 'digest' ? journey.returnReading : {}) }; }
 export function scrollDetail(journey, delta) { return { ...journey, detailScroll: Math.max(0, (journey.detailScroll ?? 0) + delta), scrollDelta: (journey.scrollDelta || 0) + delta }; }
+
+export function scrollOverview(journey, delta) { return { ...journey, overviewScroll: Math.max(0, (journey.overviewScroll || 0) + delta), ensureVisible: false }; }
+export function moveDirection(journey, model, rectangles, direction) {
+  const current = rectangles.find(r => r.paneId === journey.paneId);
+  if (!current) return journey;
+  const horizontal = direction === 'h' || direction === 'l', sign = direction === 'h' || direction === 'k' ? -1 : 1;
+  const axis = horizontal ? 'x' : 'y', cross = horizontal ? 'y' : 'x', size = horizontal ? 'width' : 'height', span = horizontal ? 'height' : 'width';
+  const center = (r,a,z) => r[a]+r[z]/2;
+  const candidates = rectangles.filter(r => r.paneId !== current.paneId && model.panes[r.paneId]).map((r,index) => {
+    const distance = sign*(center(r,axis,size)-center(current,axis,size)), perpendicular = Math.abs(center(r,cross,span)-center(current,cross,span));
+    const overlap = r[cross] < current[cross]+current[span] && current[cross] < r[cross]+r[span];
+    const gap = Math.max(0, sign > 0 ? r[axis]-current[axis]-current[size] : current[axis]-r[axis]-r[size]);
+    return {r,index,distance,perpendicular,overlap,gap};
+  }).filter(c=>c.distance>0);
+  const aligned = candidates.filter(c=>c.overlap), choices=aligned.length ? aligned : candidates;
+  choices.sort((a,b)=> aligned.length ? a.gap-b.gap || a.perpendicular-b.perpendicular || a.index-b.index : a.perpendicular/a.distance-b.perpendicular/b.distance || Math.hypot(a.distance,a.perpendicular)-Math.hypot(b.distance,b.perpendicular) || a.index-b.index);
+  return choices.length ? select(journey,model,choices[0].r.paneId) : {...journey,ensureVisible:true};
+}

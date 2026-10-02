@@ -75,7 +75,11 @@ native popup PTY can clip a narrow attached peer when another client is wide;
 detach the other peer for readable single-client geometry. Board/Mosaic and their background tab
 are retired.
 
-- `j`/`k` selects panes in native order; `[`/`]` also selects previous/next pane.
+- Arrows and `h`/`j`/`k`/`l` select in the displayed direction, without wrapping.
+  `[`/`]` retain previous/next pane traversal in native order.
+- The wheel scrolls the map independently of selection, or the expanded recap/digest.
+  A left click selects a visible card only; it never focuses a terminal or dismisses.
+  Keyboard selection brings its target back into view; resize preserves identity.
 - `Enter` expands the selected pane in the map, including its full tab name;
   another Enter returns to the map. `d` enters the separate digest view and does nothing if already there.
 - In detail, `j`/`k`, Space, and `b` scroll. `n` selects the next blocked pane.
@@ -84,6 +88,24 @@ are retired.
 - `r` refreshes native state and saved records. Resize redraws the map.
 - `f` checks the selected live terminal identity again, focuses its native pane
   and dismisses only on success. A vanished/conflicting target stays open.
+
+Every collapsed card shows its latest-good recap with at most two excerpt lines.
+An ellipsis means text was omitted; short recaps are not marked truncated. Missing
+recaps are unavailable, and a newer failed attempt is a separate warning.
+Publication metadata is displayed verbatim (`published_at`, then `created_at`);
+recap CLI owns timezone formatting. Overview has no timezone setting/conversion.
+
+Native blocked status uses the red × symbol. An actual Pi questionnaire wait adds
+**Awaiting answer**, including while its dialog is collapsed. Generic blockers do
+not claim that reason. Answer/cancel clears only the question contribution; other
+blockers remain authoritative. Older settlement-abort v1 makes `ctx.isIdle()` false
+in final handlers and suppresses stock native READY reporting. Use a compatible
+runtime that preserves main-agent idle there; compatible stock unpatched runtimes
+do not require this user patch. The separately reviewed v2 was compatibility-tested
+on a private copy of real Pi 0.99.2, not installed live. Before deployment, complete
+the source-scoped native/visual driver matrix and independent acceptance, then
+obtain explicit apply authorization. Private proof does not authorize apply.
+This viewer does not bypass or repair the native idle guard.
 
 The display is passive: it shows only supplied prompt fields and published recap records, with age and missing/failure status. Opening, selection, refresh, scrolling, and focus never run `session-recap` or synthesize recap text. `overview.reconcile` remains a separate plugin action for publication coordination and manual-library refresh. To show a manually generated single recap in a pane's detail, use that native pane ID as the source ID, for example `printf '%s\n' 'Recent work and current state.' | session-recap create --kind single --source-id PANE_ID`, then invoke `herdr plugin action invoke overview.reconcile --plugin overview` while the source pane is live. This lets the overview display its published or failed status and persist the live terminal association used if `pane.move` later rekeys the pane. Manual results are not Pi auto-naming inputs.
 
@@ -162,3 +184,10 @@ The fixture commands in [AGENTS.md](./AGENTS.md) use the same transient native
 popup contract, not a dedicated viewer pane. Physical phone proof and live
 rollout remain owner-pending: a local 40-column PTY checks layout, not an
 attended Termux-over-SSH route.
+
+Focused follow-up fixtures: `tests/herdr-overview/follow_up_journey.py` takes
+`--receipts`, `--reference`, and `--browser-python`; `question_wait_journey.py`
+takes `--receipts`. They use owned native servers and scripted/dummy backends.
+Whole native color cells/SVG/PNG and same-data v1 browser reference images are
+review evidence, not automatic visual acceptance. The full driver matrix and
+independent visual review remain separate obligations.

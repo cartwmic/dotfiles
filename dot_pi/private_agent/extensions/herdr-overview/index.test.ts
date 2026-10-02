@@ -185,6 +185,7 @@ async function createWorld(): Promise<TestWorld> {
 			FAKE_RECAP_CAPTURE: capturePath,
 			HERDR_SOCKET_PATH: socketPath,
 			HERDR_PANE_ID: "exact-pane",
+            HERDR_ENV: "0",
 		},
 		setBackendMode,
 		setCurrentPane: (pane) => { currentPane = pane; },
@@ -200,6 +201,7 @@ async function createWorld(): Promise<TestWorld> {
 }
 
 const ENV_KEYS = [
+ "HERDR_ENV",
 	"HOME",
 	"XDG_CONFIG_HOME",
 	"XDG_DATA_HOME",
@@ -236,7 +238,7 @@ function shellQuote(value: string): string {
 
 function registeredHandlers(): Map<string, (...args: any[]) => any> {
 	const handlers = new Map<string, (...args: any[]) => any>();
-	extension({ on: (event: string, handler: (...args: any[]) => any) => handlers.set(event, handler) } as any);
+	extension({ events: {on(){},emit(){}}, on: (event: string, handler: (...args: any[]) => any) => handlers.set(event, handler) } as any);
 	return handlers;
 }
 
@@ -832,4 +834,32 @@ test("real print and JSON children with inherited Herdr env never contact or cla
 			assert.equal(readTrace(world.tracePath).some(line => line.startsWith("cli ")), false);
 		}
 	} finally { await provider.close(); await world.close(); }
+});
+
+test('actual public wait edges pair one native contribution and clear only owned reason across lifecycle', async () => {
+ const {registerQuestionWait}=await import('./question-wait.ts');
+ const {EventEmitter}=await import('node:events');
+ const world=await createWorld();
+ try {
+  world.snapshot={protocol:22,panes:[{pane_id:'exact-pane',terminal_id:'terminal-question',workspace_id:'workspace-exact'}]};
+  world.setCurrentPane({pane_id:'exact-pane',workspace_id:'workspace-exact'});
+  await withProcessEnv({...world.env,HERDR_ENV:'1'},async()=>{
+   const handlers=new Map<string,any>(),bus=new EventEmitter(),edges:any[]=[];
+   bus.on('herdr:blocked',data=>edges.push(data));
+   registerQuestionWait({events:{on:(name:string,fn:any)=>bus.on(name,fn),emit:(name:string,data:any)=>bus.emit(name,data)},on:(name:string,fn:any)=>handlers.set(name,fn)} as any);
+   const ctx={mode:'tui',hasUI:true,sessionManager:{getSessionId:()=> 'question-session'}} as any;
+   await handlers.get('session_start')({},ctx);
+   bus.emit('rpiv:ask-user:blocked',{active:true});bus.emit('rpiv:ask-user:blocked',{active:true});
+   await waitFor(()=>world.calls.some(c=>c.method==='pane.report_metadata'&&c.params.state_labels?.blocked==='Awaiting answer'),'owned question label');
+   bus.emit('rpiv:ask-user:blocked',{active:false});bus.emit('rpiv:ask-user:blocked',{active:false});
+   await handlers.get('session_shutdown')({reason:'reload'},ctx);
+   assert.deepEqual(edges,[{active:true,label:'Awaiting answer'},{active:false,label:'Awaiting answer'}]);
+   const reports=world.calls.filter(c=>c.method==='pane.report_metadata');
+   assert.ok(reports.length>=3);assert.ok(reports.every(c=>c.params.source==='herdr:overview-question'&&c.params.applies_to_source==='herdr:pi'));
+   assert.equal(reports.at(-1).params.clear_state_labels,true);
+   assert.ok(reports.every((c,i)=>!i||c.params.seq>reports[i-1].params.seq));
+   assert.ok(!world.calls.some(c=>c.method==='pane.report_agent'||c.method==='pane.clear_agent_authority'));
+   bus.emit('rpiv:ask-user:blocked',{active:true});assert.equal(edges.length,2);
+  });
+ } finally {await world.close();}
 });

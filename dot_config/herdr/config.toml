@@ -62,6 +62,7 @@ navigate_pane_up = "k"
 navigate_pane_right = "l"
 
 [ui]
+status_indicators = "symbols"
 # Keep Herdr's phone-focused single-column interface at its upstream threshold.
 mobile_width_threshold = 64
 mouse_capture = true

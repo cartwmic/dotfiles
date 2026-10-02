@@ -199,7 +199,7 @@ with tempfile.TemporaryDirectory(prefix='overview-popup-pty-') as tmp:
                 assert not any('Synthetic workspace' in line and 'Second workspace' in line for line in rows)
                 key(']'*4,'Second workspace')
                 assert '› Tab 5' in current_frame()
-                key(']'*2,'Synthetic workspace')
+                key(']'*2,'› Tab 1')
             else:
                 headings=next(line for line in rows if 'Synthetic workspace' in line and 'Second workspace' in line)
                 assert headings.index('Second workspace') > headings.index('Synthetic workspace')

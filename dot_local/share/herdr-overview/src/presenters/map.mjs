@@ -34,8 +34,9 @@ export function paint(token, bg = false) {
   const codes = { black:30,red:31,green:32,yellow:33,blue:34,magenta:35,purple:35,cyan:36,white:37,gray:37,grey:37,darkgray:90,darkgrey:90,lightred:91,lightgreen:92,lightyellow:93,lightblue:94,lightmagenta:95,lightcyan:96,lightwhite:97 };
   return token?.kind === 'ansi' && codes[token.name] ? `\x1b[${codes[token.name] + (bg ? 10 : 0)}m` : '';
 }
-const stateName = pane => pane.agent?.recognized ? ({ idle:'READY' }[pane.agent.status] || pane.agent.status?.toUpperCase() || 'UNKNOWN') : pane.agent?.present ? 'UNKNOWN' : 'NO AGENT';
-const stateColor = pane => !pane.agent?.recognized ? 'overlay0' : ({ blocked:'yellow', working:'green', idle:'blue', done:'teal' }[pane.agent?.status] || 'overlay0');
+const awaiting = pane => pane.agent?.status === 'blocked' && pane.agent?.stateLabels?.blocked === 'Awaiting answer';
+const stateName = pane => awaiting(pane) ? '× Awaiting answer' : pane.agent?.recognized ? ({ idle:'READY', blocked:'× BLOCKED' }[pane.agent.status] || pane.agent.status?.toUpperCase() || 'UNKNOWN') : pane.agent?.present ? 'UNKNOWN' : 'NO AGENT';
+const stateColor = pane => !pane.agent?.recognized ? 'overlay0' : ({ blocked:'red', working:'green', idle:'blue', done:'teal' }[pane.agent?.status] || 'overlay0');
 function blocked(model, ids) { return ids.filter(id => model.panes[id]?.agent?.recognized && model.panes[id]?.agent?.status === 'blocked').length; }
 export function mapLines(state, width, now = Date.now()) {
   const { model, journey } = state, palette = state.theme?.palette;
@@ -43,7 +44,7 @@ export function mapLines(state, width, now = Date.now()) {
   const columns = Math.max(1, Math.min(model.workspaceOrder.length, Math.floor((width + 3) / 55)));
   const workspaceWidth = Math.floor((width - (columns - 1) * 3) / columns);
   const chunks = model.workspaceOrder.map(workspaceId => {
-    const workspace = model.workspaces[workspaceId], lines = []; let anchor = 0, end = null, positions = [], selectedLine = 0;
+    const workspace = model.workspaces[workspaceId], lines = []; let anchor = 0, end = null, positions = [], selectedLine = 0, rectangles = [];
     const cellSize = Math.floor((workspaceWidth - 2) / 2);
     const box = (content, size, border = 'overlay1', selected = false, overrideSurface = null) => {
       const surface = overrideSurface || (selected ? 'selection_bg' : 'active_row_bg'), inner = Math.max(1, size - 4);
@@ -59,7 +60,14 @@ export function mapLines(state, width, now = Date.now()) {
       if (wrapped.length > 2) names[1] = clip(names[1].trimEnd(), Math.max(0, size - 5)) + '…';
       while (names.length < 2) names.push('');
       const manual = (multi ? pane : tab).displayNameOwnership?.mode === 'manual';
-      return box([{text:`${selected ? '›' : ' '} ${multi ? 'Pane' : 'Tab ' + (tab.number ?? '')}${manual ? ' M' : ''}`,role:manual ? 'mauve' : 'overlay0'}, ...names.map(text=>({text})), {text:stateName(pane),role:stateColor(pane)}], size, pane.agent?.status === 'blocked' ? 'yellow' : selected ? 'accent' : 'overlay1', selected);
+      const latest = pane.recap?.latest, attempt = pane.recap?.lastAttempt;
+      const good = latest?.status === 'published';
+      const excerpt = wrap(good ? latest.summary || 'Unavailable' : 'Unavailable · no published recap', size - 4);
+      const preview = excerpt.slice(0, 2);
+      if (excerpt.length > 2) preview[1] = clip(preview[1].trimEnd(), size - 5) + '…';
+      while (preview.length < 2) preview.push('');
+      const metadata = wrap(`Latest good recap · ${good ? latest.published_at || latest.created_at || 'date unavailable' : 'unavailable'}`, size - 4);
+      return box([{text:`${selected ? '›' : ' '} ${multi ? 'Pane' : 'Tab ' + (tab.number ?? '')}${manual ? ' M' : ''}`,role:manual ? 'mauve' : 'overlay0'}, ...names.map(text=>({text})), ...wrap(stateName(pane), size - 4).map(text=>({text,role:stateColor(pane)})), ...metadata.map(text=>({text,role:'teal'})), ...preview.map(text=>({text,role:good?'text':'overlay0'})), ...wrap(attempt && attempt.record_id !== latest?.record_id ? `Newer attempt ${attempt.status}` : '', size - 4).map(text=>({text,role:'yellow'}))], size, pane.agent?.status === 'blocked' ? 'red' : selected ? 'accent' : 'overlay1', selected);
     };
     const reading = tab => {
       const logical = []; let selectedLogical = 0; const add = (text, role='text', surface) => logical.push({text,role,surface});
@@ -97,29 +105,30 @@ export function mapLines(state, width, now = Date.now()) {
     const attention = blocked(model, workspace.tabIds.flatMap(id=>model.tabs[id]?.paneIds ?? []));
     lines.push(style(pad(`${workspace.tabIds.length} tabs · ${attention} needs input`,workspaceWidth),attention ? 'yellow':'overlay0'), '');
     let pending=[];
-    const flush = () => { if (!pending.length) return; const cards=pending.map(({tab,pane})=>card(tab,pane,cellSize)); if(pending.some(({pane})=>pane.id===journey?.paneId)) anchor=lines.length;
+    const flush = () => { if (!pending.length) return; const cards=pending.map(({tab,pane})=>card(tab,pane,cellSize)); const height=Math.max(...cards.map(c=>c.length)); cards.forEach((c,i)=>{ while(c.length<height)c.splice(c.length-2,0,c[c.length-2]); rectangles.push({paneId:pending[i].pane.id,x:i*(cellSize+2),y:lines.length,width:cellSize,height}); }); if(pending.some(({pane})=>pane.id===journey?.paneId)) anchor=lines.length;
       for(let y=0;y<cards[0].length;y++) lines.push(cards.map(card=>card[y]).join('  ')); lines.push('');pending=[]; };
     for(const tabId of workspace.tabIds) {
       const tab=model.tabs[tabId], ids=tab.paneIds.filter(id=>model.panes[id]); const expanded=journey?.level !== 'overview' && journey?.tabId===tabId;
       if(expanded || ids.length>1) { flush(); if(ids.includes(journey?.paneId)) anchor=lines.length;
         if(expanded) { lines.push(...reading(tab)); end=lines.length; }
-        else { lines.push(style(pad(compact(`Tab ${tab.number ?? ''} · ${fullTitle(tab)} · ${ids.length} panes`,workspaceWidth),workspaceWidth),'mauve')); for(const id of ids) { if(id===journey?.paneId) anchor=lines.length; lines.push(...card(tab,model.panes[id],workspaceWidth)); } }
+        else { lines.push(style(pad(compact(`Tab ${tab.number ?? ''} · ${fullTitle(tab)} · ${ids.length} panes`,workspaceWidth),workspaceWidth),'mauve')); for(const id of ids) { if(id===journey?.paneId) anchor=lines.length; const tile=card(tab,model.panes[id],workspaceWidth); rectangles.push({paneId:id,x:0,y:lines.length,width:workspaceWidth,height:tile.length}); lines.push(...tile); } }
         lines.push('');
       } else if(ids.length) { pending.push({tab,pane:model.panes[ids[0]]}); if(pending.length===2) flush(); }
     }
-    flush(); return {lines,anchor,end,positions,selectedLine,selected:workspaceId===journey?.workspaceId};
+    flush(); return {lines,anchor,end,positions,selectedLine,rectangles,selected:workspaceId===journey?.workspaceId};
   });
-  const body=[];let anchor=0,end=null,positions=[],selectedLine=0;
+  const body=[],rectangles=[];let anchor=0,end=null,positions=[],selectedLine=0;
   for(let start=0;start<chunks.length;start+=columns) { const row=chunks.slice(start,start+columns),offset=body.length,selected=row.find(chunk=>chunk.selected);
+    row.forEach((chunk,x)=>rectangles.push(...chunk.rectangles.map(r=>({...r,x:r.x+x*(workspaceWidth+3),y:r.y+offset}))));
     if(selected) { anchor=offset+selected.anchor;end=selected.end===null ? null : offset+selected.end;positions=selected.positions;selectedLine=selected.selectedLine; }
     for(let y=0;y<Math.max(...row.map(chunk=>chunk.lines.length));y++) body.push(row.map(chunk=>pad(chunk.lines[y]||'',workspaceWidth)).join('   ')); body.push('');
   }
-  return {body:body.length ? body:['No native panes available.'],anchor,end,positions,selectedLine};
+  return {body:body.length ? body:['No native panes available.'],anchor,end,positions,selectedLine,rectangles};
 }
-export function renderMap(state,width=100,height=24,now=Date.now()) {
+export function mapFrame(state,width=100,height=24,now=Date.now()) {
   width=Math.max(1,width);height=Math.max(3,height);
-  const {body,anchor,end,positions,selectedLine}=mapLines(state,width,now),journey=state.journey;
-  const footers=width<cellWidth('j/k select/scroll · [/] pane · Enter details · d digest · f focus · n blocked · r refresh · Esc/q') && height>=6 ? ['j/k select/scroll · [/] pane','Enter details · d digest · f focus','n blocked · r refresh · Esc/q'].map(line=>compact(line,width)) : [compact('j/k select/scroll · [/] pane · Enter details · d digest · f focus · n blocked · r refresh · Esc/q',width)];
+  const {body,anchor,end,positions,selectedLine,rectangles}=mapLines(state,width,now),journey=state.journey;
+  const footers=width<cellWidth('arrows/hjkl select · [/] pane · Enter details · d digest · f focus · n blocked · r refresh · Esc/q') && height>=6 ? ['arrows/hjkl select · [/] pane','Enter details · d digest · f focus','n blocked · r refresh · Esc/q'].map(line=>compact(line,width)) : [compact('arrows/hjkl select · [/] pane · Enter details · d digest · f focus · n blocked · r refresh · Esc/q',width)];
   const panes=Object.values(state.model.panes),count=status=>panes.filter(p=>p.agent?.recognized && p.agent.status===status).length;
   const summary=`!${count('blocked')} W${count('working')} R${count('idle')} · ${state.model.workspaceOrder.length}ws ${Object.keys(state.model.tabs).length}t`;
   const headers=['Herdr Overview',summary];
@@ -130,10 +139,14 @@ export function renderMap(state,width=100,height=24,now=Date.now()) {
   if(end!==null && journey?.readingPosition) { const p=journey.readingPosition; const match=positions.findLastIndex(x=>x.line<p.line || x.line===p.line && x.cell<=p.cell); relative=Math.max(0,match)+(journey.scrollDelta||0); }
   const limit=end===null ? max : Math.max(0,end-anchor-capacity);
   relative=Math.max(0,Math.min(limit,relative));
-  const offset=end===null ? Math.min(max,Math.max(0,anchor-Math.floor(capacity/2))) : Math.min(max,anchor+relative);
+  let offset=end===null ? Math.min(max,Math.max(0,journey?.overviewScroll || 0)) : Math.min(max,anchor+relative);
+  if(end===null && journey?.ensureVisible !== false) { const r=rectangles.find(r=>r.paneId===journey?.paneId); if(r) { if(r.y<offset)offset=r.y; else if(r.y+r.height>offset+capacity)offset=Math.min(r.y, r.y+r.height-capacity); } offset=Math.max(0,Math.min(max,offset)); }
+  if(journey) { if(end===null) {journey.overviewScroll=offset; journey.ensureVisible=false;} }
   if(journey) { journey.detailScroll=relative;journey.readingPosition=end===null ? null : journey.readingPosition && !journey.scrollDelta ? journey.readingPosition : positions[relative];journey.scrollDelta=0; }
   const palette=state.theme?.palette;
   const style=(text,role)=>`${paint(palette?.[role])}${paint(palette?.panel_bg,true)}${pad(compact(text,width),width)}\x1b[0m`;
   const visible=body.slice(offset,offset+capacity);while(visible.length<capacity)visible.push(style('','text'));
-  return [style(headers[0],'accent'), paint(palette?.panel_bg,true) + [[`!${count('blocked')}`,count('blocked')?'yellow':'overlay0'],[` W${count('working')}`,'green'],[` R${count('idle')}`,'blue'],[` · ${state.model.workspaceOrder.length}ws ${Object.keys(state.model.tabs).length}t`,'subtext0']].map(([text,role])=>paint(palette?.[role])+text).join('') + ' '.repeat(Math.max(0,width-cellWidth(summary))) + '\x1b[0m',...visible,...(state.notice?[style(state.notice,'yellow')]:[]),...footers.map(line=>style(line,'overlay0'))].join('\n');
+  const text = [style(headers[0],'accent'), paint(palette?.panel_bg,true) + [[`!${count('blocked')}`,count('blocked')?'yellow':'overlay0'],[` W${count('working')}`,'green'],[` R${count('idle')}`,'blue'],[` · ${state.model.workspaceOrder.length}ws ${Object.keys(state.model.tabs).length}t`,'subtext0']].map(([text,role])=>paint(palette?.[role])+text).join('') + ' '.repeat(Math.max(0,width-cellWidth(summary))) + '\x1b[0m',...visible,...(state.notice?[style(state.notice,'yellow')]:[]),...footers.map(line=>style(line,'overlay0'))].join('\n');
+  return {text,rectangles,viewport:{x:0,y:headers.length,width,height:capacity,offset,max}};
 }
+export function renderMap(...args) { return mapFrame(...args).text; }
