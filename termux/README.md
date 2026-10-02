@@ -45,8 +45,20 @@ The two-row extra-key layout keeps its normal tap behavior. Swipe up on
 command palette over SSH. Swipe up on **ALT** to send **Ctrl+O** (`CTRL o`) to
 the current terminal application; it is not the Herdr prefix+O action.
 
+Each key label shows its swipe-up after the tap name: 🗺️ overview, 🎛️ palette,
+❌ close pane, `^O`/`^P` for Ctrl+O/Ctrl+P, and `⇧⇥` for Shift+Tab.
+
+Four more swipe-ups:
+
+| Key | Macro | Action |
+|-----|-------|--------|
+| **ESC** | `CTRL b O` | Herdr overview (`prefix+shift+o`) |
+| **SHIFT** | `CTRL p` | Ctrl+P (Pi model cycle) |
+| **TAB** | `SHIFT TAB` | Shift+Tab |
+| **ctrl-]** | `CTRL b x` | Herdr `close_pane` (`prefix+x`) |
+
 After a phone-side chezmoi apply, run `termux-reload-settings` while Termux is
-visible. Confirm both swipes on-device; a desktop config check does not prove
+visible. Confirm every swipe on-device; a desktop config check does not prove
 Android touch behavior.
 
 ## Herdr overview from the phone
