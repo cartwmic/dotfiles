@@ -90,9 +90,9 @@ auto_switch = false
 surface_dim = "#24283B"
 surface0 = "#3B4261"
 
-# Reconcile or open the source-managed overview; the plugin startup hook runs
+# Open the temporary source-managed overview; the plugin startup hook runs
 # only after the local package is linked and a Herdr server starts.
 [[keys.command]]
 key = "prefix+shift+o"
 type = "plugin_action"
-command = "overview.reconcile"
+command = "overview.open"

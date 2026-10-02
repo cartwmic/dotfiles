@@ -149,11 +149,13 @@ export class HerdrApi {
     return this.request("pane.close", { pane_id: paneId });
   }
 
-  openOverviewPane({ placement = "tab", focus = false } = {}) {
+  openOverviewPane({ placement = "popup", focus = true } = {}) {
     return this.request("plugin.pane.open", {
       plugin_id: "overview",
       entrypoint: "overview",
       placement,
+      width: "100%",
+      height: "100%",
       focus,
     });
   }

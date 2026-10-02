@@ -49,20 +49,31 @@ On the desktop profiles, the source-managed Herdr Overview plugin targets Herdr
 **0.9.1 / protocol 22**. Termux is only an SSH client; it is not a Herdr plugin
 host. The plugin starts with a compatible server start. Linking/installing it
 does not run startup and applying dotfiles never restarts the owner's main
-server. A running server must be restarted or started only under owner control.
+server. `overview.reconcile` loads/refreshes the linked plugin on a compatible
+running server without opening a view; any server restart remains owner-controlled.
 
-The overview is passive: it renders native workspace/tab/pane state, available
-metadata and output, Pi's supplied current prompt, and independently published
-recaps. It never parses Pi transcripts or runs a recap producer. At or below
-Herdr's `[ui].mobile_width_threshold` (64 by default), it shows a summary-first
-Board; wider terminals show the all-pane Mosaic. `j`/`k` navigates, `[`/`]`
-selects tabs, `Enter` opens the next level, `Esc` returns, and `f` focuses the
-actual native pane. Current Pi prompt, live agent state, and latest recap are
-separate fields; a prompt is not a recap, and missing/failed recaps do not hide
-live pane information.
+Open the temporary native map with `prefix+shift+o` or `herdr plugin action
+invoke overview.open --plugin overview`. It is one shared 100% pane-canvas
+popup, not a persistent tab. Another modal returns `ui_busy`; clients share
+its geometry. Owner-tab deletion dismisses it natively; reopen ordinarily from
+a surviving pane, without an anchor or resurrection. Startup/events/reconcile
+never open it automatically.
 
-Panes and tabs may be automatically labeled using available Herdr metadata and
-eligible published Pi-session recaps; workspaces are never auto-named. A
+The map keeps native workspace/tab/pane order, shared compact singleton rows
+and grouped multi-pane tabs, adapting to narrow cards or wide workspace columns.
+`j`/`k` and `[`/`]` select panes; Enter expands full tab/pane detail, `d` opens
+the separate dated verified-UUID digest, `n` selects the next blocked pane and
+`r` refreshes passively. Detail keys scroll; Esc backs out through disclosures
+then dismisses, and `q` dismisses. `f` rechecks and focuses the exact live selected
+terminal, closing only on success; vanished/conflicting targets cannot focus
+an unrelated pane. The native map reads supplied prompts, dated latest-good
+recaps and separate newer failures/digests without transcript scraping or
+viewer generation. Missing content leaves native state/navigation available.
+
+Automatic pane/tab names use verified stable Pi session names or honest native
+subjects, never prompt/recap/digest bodies. One-pane tabs use their subject;
+short two-subject tabs combine, otherwise use the first useful subject + N more.
+Manual labels win; workspaces and Pi identity stay owner-controlled. A
 manually published single recap with `--source-id` equal to the native pane ID
 appears in that pane's detail after `herdr plugin action invoke
 overview.reconcile --plugin overview`; reconcile while the source pane is live
@@ -244,3 +255,12 @@ Full-screen agents may use the terminal alternate screen. Rows that disappear fr
 - Never run `herdr server stop` from an active session unless the user explicitly intends to stop the server and its pane processes.
 - Never kill the main Herdr process. Use named test sessions for experiments that need an isolated server.
 - CLI server errors are JSON on stderr with exit status 1. CLI syntax errors exit with status 2.
+
+Herdr Overview uses bordered, padded, word-wrapped cards in native workspace
+order, with two singleton columns and separate multi-pane groups. `M` marks
+manual names; headings show counts; clipped collapsed titles end in an ellipsis.
+`d` enters the dated digest (idempotent there); Esc restores the prior recap
+passage and `q` dismisses immediately. The card floor is actual popup width 32,
+not outer width: outer 40/48/120/180 yield 38/46/92/152; outer32 yields30 and
+may clip. Simultaneously attached clients share one PTY geometry; a wide peer
+can clip the narrow peer. Use one attached client for readable geometry.

@@ -11,8 +11,20 @@ command = ["node", "index.mjs", "startup"]
 [[actions]]
 id = "reconcile"
 title = "Reconcile overview"
-description = "Reconcile native session state, catch up Pi recap publications, and ensure the overview pane is open."
+description = "Reconcile native session state without opening a view."
 command = ["node", "index.mjs", "reconcile"]
+
+[[actions]]
+id = "refresh_names"
+title = "Refresh automatic names"
+description = "Passively refresh stable session names without recap coordination or opening a view."
+command = ["node", "index.mjs", "refresh-names"]
+
+[[actions]]
+id = "open"
+title = "Open overview map"
+description = "Open the passive temporary native workspace map."
+command = ["node", "index.mjs", "open"]
 
 [[actions]]
 id = "auto_name_pane"
@@ -31,7 +43,9 @@ command = ["node", "index.mjs", "auto-name-tab"]
 [[panes]]
 id = "overview"
 title = "Herdr Overview"
-placement = "tab"
+placement = "popup"
+width = "100%"
+height = "100%"
 command = ["node", "index.mjs", "overview"]
 
 [[events]]

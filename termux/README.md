@@ -50,18 +50,22 @@ ssh macbook
 herdr
 ```
 
-The phone sees the same one desktop session as other clients. Its actual SSH
-PTY width chooses the summary-first Board at or below
-`[ui].mobile_width_threshold` (64 by default); wider terminals show the Mosaic.
-Open a workspace to see its tabs and scrollable pane tiles, open a pane for
-recent output/current prompt/latest published recap, and press `f` to focus
-that native pane. No Herdr plugin, Herdr server, or desktop config is installed
+The phone sees the same desktop session and shared popup as other clients.
+`prefix+shift+o` opens the responsive native map, not a Board/Mosaic background
+tab. `j`/`k` or `[`/`]` selects a pane; Enter expands full names and latest-good
+recap, `d` opens the separate dated digest, `n` selects the next blocked pane,
+and `f` verifies/focuses the selected live terminal. Esc backs out and dismisses;
+`q` dismisses. Stable session/native subjects drive labels, not recap bodies.
+Later failures do not replace good recaps or turn digests into current facts. No Herdr plugin, Herdr server, or desktop config is installed
 on the phone. For workspace/tab/pane navigation and names, recap semantics, and
 the live-prompt/recap distinction, see the root product
 [README](../README.md).
 
 The phone-owned `~/bin/herdr-overview-proof` helper is only for the isolated
-acceptance run. On the desktop, run `herdr-prepare`, `herdr-wide`, and
+acceptance run. Its desktop fixture uses the transient native popup, not a
+dedicated viewer pane. Local 40-column layout checks are not physical
+Termux-over-SSH evidence. Attended phone, native-move receipts on that route
+and live rollout remain owner-pending until actually run. On the desktop, run `herdr-prepare`, `herdr-wide`, and
 `pi-grouped` from `tests/herdr-overview/proof.py` against the same printed run
 ID; then use that run ID on the phone. After the helper returns, the desktop
 runs `termux-ssh` to validate the receipt, then runs the isolated native pane-move
@@ -73,7 +77,7 @@ herdr-overview-proof RUN_ID macbook
 ```
 
 The helper is POSIX shell: it opens the real isolated desktop session over
-phone-to-desktop SSH, guides an attended Board/detail/focus journey, reviews the
+phone-to-desktop SSH, guides an attended native-map/detail/digest/exact-focus journey, reviews the
 whole scripted Pi reply and recent pane output in the phone's `passage-review`
 UI, and returns a bounded machine-readable receipt over SSH. It does not need a
 Python package on the phone to run the Herdr client check. The local
@@ -408,3 +412,12 @@ scp ssh-phone:.termux/termux.properties dot_termux/termux.properties
 scp ssh-phone:bin/zellij-jump bin/executable_zellij-jump
 scp ssh-phone:bin/herdr-jump bin/executable_herdr-jump
 ```
+
+Herdr Overview uses bordered, padded, word-wrapped cards in native workspace
+order, with two singleton columns and separate multi-pane groups. `M` marks
+manual names; headings show counts; clipped collapsed titles end in an ellipsis.
+`d` enters the dated digest (idempotent there); Esc restores the prior recap
+passage and `q` dismisses immediately. The card floor is actual popup width 32,
+not outer width: outer 40/48/120/180 yield 38/46/92/152; outer32 yields30 and
+may clip. Simultaneously attached clients share one PTY geometry; a wide peer
+can clip the narrow peer. Use one attached client for readable geometry.

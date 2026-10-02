@@ -347,10 +347,14 @@ transcript or generate a summary. Manual pane/tab labels remain under owner
 control; workspaces are never auto-named. Herdr 0.9.1 has no atomic
 conditional rename, so a manual edit can still race the final automatic write.
 
-At `[ui].mobile_width_threshold` (64 by default), the view selects the narrow
-Board; wider terminals get Mosaic. Both navigate the same native session.
-Pane detail keeps recent output, prompt, live agent state, and published recap
-distinct, and native details remain visible when a recap is missing or failed.
+`prefix+shift+o` opens a responsive shared pane-canvas popup map; it creates no
+background tab or pane ID. It is a temporary 100% native session-singleton;
+modal `ui_busy` and owner-tab deletion/dismissal are native. Reopen normally
+from a surviving pane; no startup/event/reconcile auto-open. Single-pane tabs combine beneath their workspace; multi-pane
+tabs remain groups. Enter expands full names/recap; `d` opens the separate dated
+digest; `n` selects the next blocked pane; `f` focuses the verified live target.
+Stable current session/native subjects drive automatic names, not recap/digest
+bodies. Latest-good recap, later failure, digest and live agent state stay distinct.
 See the [Herdr plugin guide](./dot_local/share/herdr-overview/README.md) for
 navigation, manual pane-source recaps, naming policy, and move behavior. The
 [Pi adapter guide](./dot_pi/private_agent/extensions/herdr-overview/README.md)
@@ -360,15 +364,19 @@ The `install-herdr-overview` mise task (also part of desktop bootstrap)
 verifies Herdr 0.9.1 and links/enables the source manifest. Linking leaves the
 running server untouched. On a compatible running server,
 `herdr plugin action invoke overview.reconcile --plugin overview` loads the
-linked action and opens or reconciles an overview tab in the background.
+linked action and reconciles without opening a view. Invoke `overview.open`
+separately for the popup.
 `herdr server reload-config` separately applies the new keybinding. A later
 owner-controlled server start also runs the plugin's startup hook.
 
 On Android, Termux remains the phone-owned `termux` chezmoi profile and an SSH
 client. It does not install the native Herdr plugin. From the phone, run
 `ssh macbook`, then `herdr` in the desktop shell to attach to that same session.
-The actual phone PTY width selects Board or Mosaic; shrinking a local
-terminal is not phone proof. See [Termux phone setup](./termux/README.md) for
+The map adapts to the actual phone PTY width; shrinking a local terminal is
+not phone proof. The combined isolated `map_journey.py --scenario all` checks
+interactions and real Pi identity/publication together; use its private pinned
+pyte interpreter. Physical phone and live rollout remain owner-pending; no
+physical-phone popup receipt is claimed. See [Termux phone setup](./termux/README.md) for
 the route and acceptance-proof status.
 
 ## Portable recaps
@@ -544,3 +552,12 @@ gvm install "$GO_VERSION" && gvm use "$GO_VERSION" --default
 
 See [AGENTS.md](./AGENTS.md) for repository agent instructions (not deployed).
 See [dot_pi/private_agent/literal_AGENTS.md.tmpl](./dot_pi/private_agent/literal_AGENTS.md.tmpl) for Pi-global agent instructions.
+
+Herdr Overview uses bordered, padded, word-wrapped cards in native workspace
+order, with two singleton columns and separate multi-pane groups. `M` marks
+manual names; headings show counts; clipped collapsed titles end in an ellipsis.
+`d` enters the dated digest (idempotent there); Esc restores the prior recap
+passage and `q` dismisses immediately. The card floor is actual popup width 32,
+not outer width: outer 40/48/120/180 yield 38/46/92/152; outer32 yields30 and
+may clip. Simultaneously attached clients share one PTY geometry; a wide peer
+can clip the narrow peer. Use one attached client for readable geometry.

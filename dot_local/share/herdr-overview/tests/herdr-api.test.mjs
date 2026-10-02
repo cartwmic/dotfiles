@@ -60,7 +60,7 @@ test("uses the v0.9.1 public socket methods for snapshot, output, focus, rename,
     { action_id: "overview.auto_name_tab", context: { tab_id: "ws:t1" } },
   ]);
   assert.deepEqual(calls.find((call) => call.method === "plugin.pane.open").params, {
-    plugin_id: "overview", entrypoint: "overview", placement: "tab", focus: false,
+    plugin_id: "overview", entrypoint: "overview", placement: "popup", width: "100%", height: "100%", focus: true,
   });
 });
 

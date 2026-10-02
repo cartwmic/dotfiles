@@ -1,116 +1,42 @@
-function workspaceIds(model) {
-  return model.workspaceOrder.filter((id) => model.workspaces[id]);
+export function orderedPaneIds(model) {
+  return (model.workspaceOrder ?? []).flatMap(id => (model.workspaces[id]?.tabIds ?? []).flatMap(tab => model.tabs[tab]?.paneIds ?? [])).filter(id => model.panes[id]);
 }
-
-function paneIds(model, workspaceId) {
-  const workspace = model.workspaces[workspaceId];
-  if (!workspace) return [];
-  return workspace.tabIds.flatMap((tabId) => model.tabs[tabId]?.paneIds ?? []).filter((id) => model.panes[id]);
+function select(journey, model, id) {
+  const pane = model.panes[id];
+  return { ...journey, paneId: id ?? null, terminalId: pane?.terminalId ?? null, workspaceId: pane?.workspaceId ?? null, tabId: pane?.tabId ?? null, detailScroll: 0, readingPosition: null, scrollDelta: 0 };
 }
-
-function firstPaneFor(model, workspaceId, tabId = null) {
-  const workspace = model.workspaces[workspaceId];
-  const tabIds = tabId && workspace?.tabIds.includes(tabId) ? [tabId] : workspace?.tabIds ?? [];
-  for (const id of tabIds) {
-    const paneId = model.tabs[id]?.paneIds.find((candidate) => model.panes[candidate]);
-    if (paneId) return { tabId: id, paneId };
-  }
-  return { tabId: tabIds[0] ?? null, paneId: null };
-}
-
-function selectionInWorkspace(model, workspaceId, paneId) {
-  if (paneId && model.panes[paneId]?.workspaceId === workspaceId) {
-    return { tabId: model.panes[paneId].tabId, paneId };
-  }
-  const workspace = model.workspaces[workspaceId];
-  return firstPaneFor(model, workspaceId, workspace?.activeTabId);
-}
-
 export function createJourney(model) {
-  const ids = workspaceIds(model);
-  const selectedPane = model.selection?.paneId ? model.panes[model.selection.paneId] : null;
-  const workspaceId = ids.includes(model.selection?.workspaceId)
-    ? model.selection.workspaceId
-    : selectedPane?.workspaceId ?? ids[0] ?? null;
-  const selection = selectionInWorkspace(model, workspaceId, model.selection?.paneId);
-  const nativeTabId = model.selection?.tabId;
-  if (!model.tabs[selection.tabId] && model.tabs[nativeTabId]?.workspaceId === workspaceId) selection.tabId = nativeTabId;
-  return { level: "overview", workspaceId, ...selection, detailScroll: 0 };
+  return select({ level: 'overview', detailScroll: 0 }, model, model.panes[model.selection?.paneId] ? model.selection.paneId : orderedPaneIds(model)[0]);
 }
-
 export function reconcileJourney(journey, model) {
-  const ids = workspaceIds(model);
-  if (!ids.length) return { level: "overview", workspaceId: null, tabId: null, paneId: null, detailScroll: 0 };
-  let workspaceId = ids.includes(journey?.workspaceId) ? journey.workspaceId : null;
-  const survivingPane = model.panes[journey?.paneId];
-  if (survivingPane && ids.includes(survivingPane.workspaceId)) workspaceId = survivingPane.workspaceId;
-  if (!workspaceId) workspaceId = ids[0];
-  let selection;
-  if (journey?.tabId && model.tabs[journey.tabId]?.workspaceId === workspaceId) {
-    const tab = model.tabs[journey.tabId];
-    const paneId = tab.paneIds.includes(journey.paneId) ? journey.paneId : tab.paneIds.find((id) => model.panes[id]) ?? null;
-    selection = { tabId: tab.id, paneId };
-  } else {
-    selection = selectionInWorkspace(model, workspaceId, journey?.paneId);
-  }
-  const level = journey?.level === "workspace" || journey?.level === "pane" ? journey.level : "overview";
-  if (level === "pane" && !selection.paneId) return { level: "workspace", workspaceId, ...selection, detailScroll: 0 };
-  return {
-    level,
-    workspaceId,
-    ...selection,
-    detailScroll: Number.isInteger(journey?.detailScroll) && journey.detailScroll > 0 ? journey.detailScroll : 0,
-  };
+  if (!journey) return createJourney(model);
+  const matches = Object.values(model.panes).filter(pane => pane.terminalId && pane.terminalId === journey.terminalId);
+  const same = model.panes[journey.paneId];
+  const pane = journey.terminalId ? (matches.length === 1 ? matches[0] : null) : same;
+  if (!pane || (same && journey.terminalId && same.terminalId !== journey.terminalId)) return { ...journey, paneId: null };
+  return { ...journey, paneId: pane.id, workspaceId: pane.workspaceId, tabId: pane.tabId };
 }
-
 export function getCurrentPaneId(journey, model) {
-  const selected = model.panes[journey?.paneId];
-  if (selected && selected.workspaceId === journey.workspaceId) return selected.id;
-  const native = model.panes[model.selection?.paneId];
-  if (native && native.workspaceId === journey.workspaceId) return native.id;
-  return paneIds(model, journey?.workspaceId)[0] ?? null;
+  const current = reconcileJourney(journey, model);
+  return current.paneId ?? null;
 }
-
-export function moveWorkspace(journey, model, delta) {
-  const ids = workspaceIds(model);
-  if (!ids.length) return journey;
-  const current = Math.max(0, ids.indexOf(journey.workspaceId));
-  const workspaceId = ids[(current + delta + ids.length) % ids.length];
-  return { ...journey, workspaceId, ...selectionInWorkspace(model, workspaceId, null), detailScroll: 0 };
-}
-
 export function movePane(journey, model, delta) {
-  const ids = paneIds(model, journey.workspaceId);
+  const ids = orderedPaneIds(model);
   if (!ids.length) return journey;
-  const current = Math.max(0, ids.indexOf(journey.paneId));
-  const paneId = ids[(current + delta + ids.length) % ids.length];
-  const pane = model.panes[paneId];
-  return { ...journey, tabId: pane.tabId, paneId, detailScroll: 0 };
+  const index = ids.indexOf(journey.paneId);
+  return select(journey, model, ids[(Math.max(0, index) + delta + ids.length) % ids.length]);
 }
-
-export function moveTab(journey, model, delta) {
-  const tabs = model.workspaces[journey.workspaceId]?.tabIds.filter((id) => model.tabs[id]) ?? [];
-  if (!tabs.length) return journey;
-  const current = Math.max(0, tabs.indexOf(journey.tabId));
-  const tabId = tabs[(current + delta + tabs.length) % tabs.length];
-  const paneId = model.tabs[tabId].paneIds.find((id) => model.panes[id]) ?? null;
-  return { ...journey, tabId, paneId, detailScroll: 0 };
-}
-
-export function openJourneyLevel(journey, model) {
-  if (journey.level === "overview") return { ...journey, level: "workspace", detailScroll: 0 };
-  if (journey.level === "workspace" && getCurrentPaneId(journey, model)) {
-    return { ...journey, paneId: getCurrentPaneId(journey, model), level: "pane", detailScroll: 0 };
+export const moveTab = movePane;
+export const moveWorkspace = movePane;
+export function nextBlocked(journey, model) {
+  const ids = orderedPaneIds(model);
+  const start = ids.indexOf(journey.paneId);
+  for (let step = 1; step <= ids.length; step++) {
+    const id = ids[(start + step + ids.length) % ids.length];
+    if (model.panes[id].agent?.status === 'blocked') return select(journey, model, id);
   }
   return journey;
 }
-
-export function backJourneyLevel(journey) {
-  if (journey.level === "pane") return { ...journey, level: "workspace", detailScroll: 0 };
-  if (journey.level === "workspace") return { ...journey, level: "overview", detailScroll: 0 };
-  return journey;
-}
-
-export function scrollDetail(journey, delta) {
-  return { ...journey, detailScroll: Math.max(0, (journey.detailScroll ?? 0) + delta) };
-}
+export function openJourneyLevel(journey) { return { ...journey, level: journey.level === 'overview' ? 'pane' : 'overview', detailScroll: 0, readingPosition: null, scrollDelta: 0 }; }
+export function backJourneyLevel(journey) { return { ...journey, level: journey.level === 'digest' ? 'pane' : 'overview', detailScroll: 0, readingPosition: null, scrollDelta: 0, ...(journey.level === 'digest' ? journey.returnReading : {}) }; }
+export function scrollDetail(journey, delta) { return { ...journey, detailScroll: Math.max(0, (journey.detailScroll ?? 0) + delta), scrollDelta: (journey.scrollDelta || 0) + delta }; }

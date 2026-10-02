@@ -8,6 +8,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import extension from "./index.ts";
+import { readPiSessionFields, piSessionFile } from "../../../../dot_local/share/herdr-overview/src/pi-session-store.mjs";
+import { writePiMetadata, retirePiMetadata } from "./helpers.ts";
 
 const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(extensionDir, "../../../..");
@@ -477,11 +479,11 @@ interface RpcHarness {
 	close(): Promise<void>;
 }
 
-function startRpcPi(world: TestWorld, providerUrl: string, providerExtension: string): RpcHarness {
+function startRpcPi(world: TestWorld, providerUrl: string, providerExtension: string, sessionId = "rpc-session"): RpcHarness {
 	const child = spawn("pi", [
 		"--mode", "rpc",
 		"--session-dir", world.piSessionDir,
-		"--session-id", "rpc-session",
+		"--session-id", sessionId,
 		"--provider", "herdr-scripted",
 		"--model", "scripted-model",
 		"--no-extensions",
@@ -616,6 +618,75 @@ function scriptedProviderExtension(world: TestWorld): string {
 	return providerExtension;
 }
 
+test("private bridge rejects duplicates, conflicts and invalid digests; retirement is compare-owned", async () => {
+	const world = await createWorld();
+	try { await withProcessEnv(world.env, async () => {
+		const sessionId = "11111111-1111-4111-8111-111111111111";
+		const record = { schemaVersion: 1, socketPath: world.env.HERDR_SOCKET_PATH, terminalId: "terminal-exact", paneId: "old-pane", sessionId, sessionName: "Full stable synthetic name", publisherPid: process.pid, generation: "new-owner" };
+		const file = writePiMetadata(record);
+		const snapshot = { protocol: 22, panes: [{ pane_id: "new-pane", terminal_id: "terminal-exact" }] };
+		const read = () => readPiSessionFields(snapshot, { socketPath: record.socketPath, env: world.env }).piSessionsByPaneId;
+		assert.equal(read()["new-pane"].digest.reason, "missing");
+		const dir = path.join(world.env.HOME, ".pi/session-search/digests"); mkdirSync(dir, { recursive: true });
+		writeFileSync(path.join(dir, sessionId + ".json"), JSON.stringify({ schemaVersion: 1, body: "POSITIVE NEW DIGEST", generatedAt: "2026-01-01T00:00:00Z" }));
+		assert.equal(read()["new-pane"].digest.body, "POSITIVE NEW DIGEST");
+		retirePiMetadata(file, "old-owner"); assert.ok(existsSync(file));
+		writeFileSync(path.join(path.dirname(file), "duplicate.json"), JSON.stringify(record)); assert.deepEqual(read(), {}); rmSync(path.join(path.dirname(file), "duplicate.json"));
+		(snapshot.panes[0] as any).agent_session = "22222222-2222-4222-8222-222222222222"; assert.deepEqual(read(), {}); delete (snapshot.panes[0] as any).agent_session;
+		writeFileSync(path.join(dir, sessionId + ".json"), JSON.stringify({ schemaVersion: 1, body: "NEGATIVE INVALID", generatedAt: "bad" })); assert.equal(read()["new-pane"].digest.body, null);
+		writePiMetadata({ ...record, publisherPid: 2147483647 }); assert.deepEqual(read(), {});
+		writePiMetadata(record); retirePiMetadata(file, "new-owner"); assert.equal(existsSync(file), false);
+	}); } finally { await world.close(); }
+});
+
+test("disposable Pi replacement and reload publish only the current caller-bound UUID", async () => {
+	const world = await createWorld();
+	const herdr = world as TestWorld & { snapshot: any };
+	herdr.snapshot.panes[0].terminal_id = "terminal-exact";
+	herdr.snapshot.panes[1].terminal_id = "terminal-focused";
+	const provider = await startScriptedProvider();
+	const providerFile = scriptedProviderExtension(world);
+	writeFileSync(providerFile, readFileSync(providerFile, "utf8").replace('export default function (pi) {', 'export default function (pi) { pi.registerCommand("fixture-clear-name", { description: "Clear name fixture", handler: async () => { pi.setSessionName(""); } }); pi.registerCommand("fixture-reload", { description: "Reload fixture", handler: async (_args, ctx) => { await ctx.reload(); } }); pi.on("session_start", () => pi.setSessionName("Synthetic full stable lifecycle name"));'));
+	const firstId = "11111111-1111-4111-8111-111111111111";
+	const rpc = startRpcPi(world, provider.url, providerFile, firstId);
+	const file = piSessionFile(world.env.HERDR_SOCKET_PATH, "terminal-exact", world.env);
+	const request = async (type: string, fields = {}) => {
+		const id = `${type}-${Date.now()}`;
+		rpc.child.stdin.write(JSON.stringify({ id, type, ...fields }) + "\n");
+		await waitFor(() => rpc.records.some(record => record.id === id), type);
+		assert.equal(rpc.records.find(record => record.id === id).success, true, JSON.stringify(rpc.records.find(record => record.id === id)));
+	};
+	try {
+		await waitFor(() => existsSync(file), "initial bridge");
+		assert.equal(readJson(file).sessionId, firstId);
+		for (const name of ["Real RPC stable name", "Replacement RPC stable name"]) {
+			await request("set_session_name", { name });
+			await waitFor(() => readJson(file).sessionName === name, "public name event bridge refresh");
+		}
+		await waitFor(() => herdr.calls.filter((call: any) => call.params?.action_id === "overview.refresh_names").length >= 2, "passive name wake-up");
+		await rpc.sendPrompt("/fixture-clear-name");
+		await waitFor(() => readJson(file).sessionName === null, "public cleared name event");
+		assert.equal(readJson(file).sessionId, firstId);
+		assert.equal(provider.count(), 0);
+		assert.equal(existsSync(world.capturePath), false);
+		assert.equal(readTrace(world.tracePath).some(line => line.startsWith("cli ")), false);
+		const dir = path.join(world.env.HOME, ".pi/session-search/digests"); mkdirSync(dir, { recursive: true });
+		writeFileSync(path.join(dir, firstId + ".json"), JSON.stringify({ schemaVersion: 1, body: "NEGATIVE OLD SESSION", generatedAt: "2026-01-01T00:00:00Z" }));
+		await request("new_session");
+		await waitFor(() => existsSync(file) && readJson(file).sessionId !== firstId, "replacement bridge");
+		const newId = readJson(file).sessionId;
+		assert.equal(readPiSessionFields(herdr.snapshot, { socketPath: world.env.HERDR_SOCKET_PATH, env: world.env }).piSessionsByPaneId["exact-pane"].digest.body, null);
+		writeFileSync(path.join(dir, newId + ".json"), JSON.stringify({ schemaVersion: 1, body: "POSITIVE NEW SESSION", generatedAt: "2026-01-02T00:00:00Z" }));
+		assert.equal(readPiSessionFields(herdr.snapshot, { socketPath: world.env.HERDR_SOCKET_PATH, env: world.env }).piSessionsByPaneId["exact-pane"].digest.body, "POSITIVE NEW SESSION");
+		assert.equal(readPiSessionFields(herdr.snapshot, { socketPath: world.env.HERDR_SOCKET_PATH, env: world.env }).piSessionsByPaneId["ui-focused-pane"], undefined);
+		const oldGeneration = readJson(file).generation;
+		await rpc.sendPrompt("/fixture-reload");
+		await waitFor(() => existsSync(file) && readJson(file).generation !== oldGeneration && readJson(file).sessionId === newId, "reload bridge");
+		assert.equal(readJson(file).sessionName, "Synthetic full stable lifecycle name");
+		await rpc.close(); await waitFor(() => !existsSync(file), "owned retirement");
+	} finally { provider.releaseFirst(); await rpc.close(); await provider.close(); await world.close(); }
+});
+
 test("a temporary Pi RPC reply settles without recap publication when managed default is off", async () => {
 	const world = await createWorld();
 	writeFileSync(path.join(world.root, "config", "session-recap", "config.toml"), "auto_publish = false\n");
@@ -740,4 +811,25 @@ test("a temporary Pi RPC session publishes only settled nonblank recaps with pub
 		await provider.close();
 		await world.close();
 	}
+});
+
+test("real print and JSON children with inherited Herdr env never contact or claim the parent binding", async () => {
+	const world = await createWorld();
+	const herdr = world as TestWorld & { calls: any[] };
+	const provider = await startScriptedProvider();
+	provider.releaseFirst();
+	const providerFile = scriptedProviderExtension(world);
+	try {
+		for (const mode of ["text", "json"]) {
+			const child = spawn("pi", ["--print", "--mode", mode, "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools", "--offline", "--extension", extensionDir, "--extension", providerFile, "--provider", "herdr-scripted", "--model", "scripted-model", "Synthetic child reply"], {
+				cwd: world.root, env: { ...process.env, ...world.env, PI_CODING_AGENT_DIR: world.piAgentDir, HERDR_TEST_PROVIDER_BASE_URL: provider.url }, stdio: ["ignore", "pipe", "pipe"],
+			});
+			let stderr = ""; child.stdout.resume(); child.stderr.on("data", data => { stderr += data; });
+			const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+			assert.equal(code, 0, stderr);
+			assert.deepEqual(herdr.calls, []);
+			assert.equal(existsSync(path.join(world.env.HOME, ".local/state", "herdr-overview", "pi-sessions")), false);
+			assert.equal(readTrace(world.tracePath).some(line => line.startsWith("cli ")), false);
+		}
+	} finally { await provider.close(); await world.close(); }
 });

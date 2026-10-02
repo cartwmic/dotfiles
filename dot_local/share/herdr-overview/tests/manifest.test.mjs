@@ -12,9 +12,12 @@ test("plugin manifest pins the minimum Herdr API and separates startup, pane, ac
   assert.match(manifest, /^min_herdr_version = "0\.9\.1"/m);
   assert.match(manifest, /\[\[startup\]\][\s\S]*command = \["node", "index\.mjs", "startup"\]/);
   assert.match(manifest, /\[\[actions\]\][\s\S]*id = "reconcile"[\s\S]*"node", "index\.mjs", "reconcile"/);
+  assert.match(manifest, /id = "refresh_names"[\s\S]*"node", "index\.mjs", "refresh-names"/);
+  const entry = await readFile(path.join(root, "index.mjs"), "utf8");
+  assert.match(entry, /entrypoint === "refresh-names"[\s\S]*?reconcileOverview\(\{ openPane: false, coordinatorWake: false, resumeDeadlines: false \}\)/);
   assert.match(manifest, /id = "auto_name_pane"[\s\S]*contexts = \["pane"\][\s\S]*"node", "index\.mjs", "auto-name-pane"/);
   assert.match(manifest, /id = "auto_name_tab"[\s\S]*contexts = \["tab"\][\s\S]*"node", "index\.mjs", "auto-name-tab"/);
-  assert.match(manifest, /\[\[panes\]\][\s\S]*id = "overview"[\s\S]*placement = "tab"/);
+  assert.match(manifest, /\[\[panes\]\][\s\S]*id = "overview"[\s\S]*placement = "popup"/);
   for (const event of ["workspace.created", "tab.focused", "pane.focused", "pane.agent_status_changed", "pane.moved", "pane.exited"]) {
     assert.ok(manifest.includes(`on = "${event}"`), `missing ${event} hook`);
   }

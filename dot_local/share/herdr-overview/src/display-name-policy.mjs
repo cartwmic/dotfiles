@@ -23,20 +23,11 @@ function keyFor(kind, id) {
   return `${kind}:${id}`;
 }
 
-function paneRecapLabel(pane, agentSession, supplied) {
-  const byPane = objectMap(supplied.piRecapsByPaneId)[pane.pane_id];
-  const bySession = agentSession?.kind === "id"
-    ? objectMap(supplied.piRecapsBySessionId)[agentSession.value]
-    : null;
-
-  for (const recap of [byPane, bySession]) {
-    const latest = recap?.latest;
-    if (latest?.status !== "published"
-      || latest.source_kind !== "pi-session"
-      || latest.pane_id !== pane.pane_id
-      || latest.workspace_id !== pane.workspace_id) continue;
-    const label = shortLabel(latest.summary, 72);
-    if (label) return label;
+// Naming-only fallback: this title is not session identity or agent status.
+function nativePiName(pane) {
+  for (const value of [pane.terminal_title_stripped, pane.terminal_title, pane.title]) {
+    const match = normalizedLabel(value)?.match(/^π - (.+) - (.+)$/u);
+    if (match) return normalizedLabel(match[1]);
   }
   return null;
 }
@@ -51,23 +42,25 @@ function processLabel(processInfo) {
 }
 
 function paneTaskLabel(pane, agentInfo, processInfo, supplied) {
+  const verified = objectMap(supplied.piSessionsByPaneId)[pane.pane_id];
   const agentName = agentInfo?.agent ?? pane.agent ?? null;
   const agentSession = agentInfo?.agent_session ?? pane.agent_session ?? null;
-  if (agentName === "pi" || agentSession?.agent === "pi") {
-    return paneRecapLabel(pane, agentSession, supplied);
+  const fallback = nativePiName(pane);
+  if (verified || agentName === "pi" || agentSession?.agent === "pi" || fallback) {
+    return normalizedLabel(verified?.sessionName) ?? fallback;
   }
 
-  const title = shortLabel(pane.title) ?? shortLabel(pane.terminal_title_stripped) ?? shortLabel(pane.terminal_title);
+  const title = normalizedLabel(pane.title) ?? normalizedLabel(pane.terminal_title_stripped) ?? normalizedLabel(pane.terminal_title);
   if (title) return title;
 
   const cwd = [pane.foreground_cwd, agentInfo?.foreground_cwd, pane.cwd]
     .find((value) => typeof value === "string" && value.trim());
   const directory = cwd ? path.basename(String(cwd).replace(/[\\/]+$/, "")) : "";
-  const subject = shortLabel(agentInfo?.display_agent, 48)
-    ?? shortLabel(pane.display_agent, 48)
-    ?? shortLabel(processLabel(processInfo), 48);
-  if (subject && directory) return shortLabel(`${subject} · ${directory}`, 72);
-  return subject ?? shortLabel(directory);
+  const subject = normalizedLabel(agentInfo?.display_agent)
+    ?? normalizedLabel(pane.display_agent)
+    ?? normalizedLabel(processLabel(processInfo));
+  if (subject && directory) return normalizedLabel(`${subject} · ${directory}`);
+  return subject ?? normalizedLabel(directory);
 }
 
 function isKnownDefault(kind, label, defaultLabel) {
@@ -152,6 +145,8 @@ export function evaluateDisplayNamePolicy(snapshot, {
   const nextOwnership = {};
   const rename = [];
   const paneLabels = new Map();
+  const paneSubjects = {};
+  const tabTitles = {};
   const tabDefaults = new Map();
   const tabPositions = new Map();
   for (const tab of nextSnapshot.tabs) {
@@ -167,8 +162,10 @@ export function evaluateDisplayNamePolicy(snapshot, {
     const agentInfo = agentByPane.get(id);
     const entry = ownershipFor("pane", pane, previous[keyFor("pane", id)], resetName);
     nextOwnership[keyFor("pane", id)] = entry;
-    const candidate = paneTaskLabel(pane, agentInfo, processes[id], supplied);
-    paneLabels.set(id, candidate);
+    const subject = paneTaskLabel(pane, agentInfo, processes[id], supplied);
+    paneSubjects[id] = entry.mode === "manual" ? normalizedLabel(pane.label) ?? subject : subject;
+    const candidate = shortLabel(subject, 72);
+    paneLabels.set(id, paneSubjects[id]);
     if (entry.mode === "automatic" && candidate && candidate !== normalizedLabel(pane.label)) {
       rename.push({ kind: "pane", id, label: candidate });
     }
@@ -189,7 +186,13 @@ export function evaluateDisplayNamePolicy(snapshot, {
     const entry = ownershipFor("tab", tab, previous[keyFor("tab", id)], resetName, tabDefaults.get(id));
     nextOwnership[keyFor("tab", id)] = entry;
     const taskLabels = paneIds.map((paneId) => paneLabels.get(paneId)).filter(Boolean);
-    const candidate = taskLabels.length ? shortLabel(taskLabels.join(" + "), 160) : null;
+    const fullTitle = taskLabels.length === 0 ? null
+      : paneIds.length === 1 ? taskLabels[0]
+        : paneIds.length === 2 && taskLabels.length === 2 && taskLabels.every((label) => label.length <= 48)
+          ? taskLabels.join(" + ")
+          : `${taskLabels[0]} + ${paneIds.length - 1} more`;
+    tabTitles[id] = entry.mode === "manual" ? normalizedLabel(tab.label) : fullTitle ?? normalizedLabel(tab.label);
+    const candidate = shortLabel(fullTitle, 160);
     if (entry.mode === "automatic" && candidate && candidate !== normalizedLabel(tab.label)) {
       rename.push({ kind: "tab", id, label: candidate });
     }
@@ -199,7 +202,7 @@ export function evaluateDisplayNamePolicy(snapshot, {
     throw new Error(`cannot return unknown or excluded ${resetName.kind} ${resetName.id} to automatic naming`);
   }
 
-  return { snapshot: nextSnapshot, ownership: nextOwnership, rename };
+  return { snapshot: nextSnapshot, ownership: nextOwnership, rename, paneSubjects, tabTitles };
 }
 
 export function confirmDisplayNameWrite(policy, liveSnapshot, { kind, id }) {

@@ -139,7 +139,7 @@ test("an explicit per-ID reset returns a manual pane or tab to automatic naming"
     processByPaneId: { "ws-a:p1": { foreground_processes: [{ name: "node" }] } },
     resetName: { kind: "tab", id: "ws-a:t1" },
   });
-  assert.deepEqual(tabReset.rename, [{ kind: "tab", id: "ws-a:t1", label: "node · app" }]);
+  assert.deepEqual(tabReset.rename, [{ kind: "tab", id: "ws-a:t1", label: "Owner pane" }]);
   assert.equal(tabReset.ownership["pane:ws-a:p1"].mode, "manual");
   assert.equal(tabReset.ownership["tab:ws-a:t1"].mode, "automatic");
   assert.deepEqual(displayNameResetFromContext({ tab_id: "ws-a:t1" }, "tab"), {
@@ -152,7 +152,7 @@ test("an explicit per-ID reset returns a manual pane or tab to automatic naming"
   assert.throws(() => displayNameResetFromContext({}), /selected pane or tab ID/);
 });
 
-test("Pi pane labels require a successful in-workspace published recap, never the live prompt", () => {
+test("Pi pane labels use verified session names, never recap or live prompt", () => {
   const session = { source: "herdr:pi", agent: "pi", kind: "id", value: "pi-1" };
   const current = snapshot({
     agents: [{ pane_id: "ws-a:p1", agent: "pi", display_agent: "Pi", agent_session: session }],
@@ -160,9 +160,10 @@ test("Pi pane labels require a successful in-workspace published recap, never th
   current.panes[0].agent = "pi";
   current.panes[0].agent_session = session;
   const processByPaneId = { "ws-a:p1": { foreground_processes: [{ name: "pi" }] } };
-  const run = (recap) => evaluateDisplayNamePolicy(current, {
+  const run = (recap, sessionName = null) => evaluateDisplayNamePolicy(current, {
     processByPaneId,
     supplied: {
+      piSessionsByPaneId: { "ws-a:p1": { sessionId: "pi-1", sessionName } },
       promptsBySessionId: { "pi-1": { text: "LIVE PROMPT MUST NOT BECOME THE NAME" } },
       piRecapsBySessionId: recap ? { "pi-1": recap } : {},
     },
@@ -171,15 +172,16 @@ test("Pi pane labels require a successful in-workspace published recap, never th
   assert.equal(run(null).rename.some((entry) => entry.kind === "pane"), false);
   assert.equal(run({ latest: { ...publishedRecap("ws-a:p1", "Ignored failed record").latest, status: "failed" } }).rename.some((entry) => entry.kind === "pane"), false);
   assert.equal(run(publishedRecap("ws-a:p1", "Published outside Herdr", { workspace_id: null })).rename.some((entry) => entry.kind === "pane"), false);
-  const published = run(publishedRecap("ws-a:p1", "Published migration recap"));
+  assert.deepEqual(run(publishedRecap("ws-a:p1", "Recap is not identity")).rename, []);
+  const published = run(publishedRecap("ws-a:p1", "Published migration recap"), "Stable migration");
   assert.deepEqual(published.rename, [
-    { kind: "pane", id: "ws-a:p1", label: "Published migration recap" },
-    { kind: "tab", id: "ws-a:t1", label: "Published migration recap" },
+    { kind: "pane", id: "ws-a:p1", label: "Stable migration" },
+    { kind: "tab", id: "ws-a:t1", label: "Stable migration" },
   ]);
   assert.equal(published.snapshot.panes[0].agent_session.value, "pi-1");
 });
 
-test("overview.reconcile names Pi panes only from successful in-workspace recap records", async (t) => {
+test("overview.reconcile retains recap publication/failure without naming from it", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "herdr-pi-names-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const stateDir = path.join(root, "state");
@@ -238,32 +240,34 @@ test("overview.reconcile names Pi panes only from successful in-workspace recap 
   })}\n`);
   await writeLatest(firstId);
   const published = await reconcile();
-  assert.equal(published.model.panes["ws-a:p1"].label, "Migrate authentication");
+  assert.equal(published.model.panes["ws-a:p1"].label, null);
+  assert.equal(published.model.panes["ws-a:p1"].recap.latest.summary, "Migrate authentication");
   assert.equal(published.model.panes["ws-a:p1"].prompt.text, "LIVE PROMPT ONLY");
   assert.equal(published.model.panes["ws-a:p1"].agent.session.value, "pi-1");
   assert.equal(published.model.workspaces["ws-a"].label, "Do not rename");
-  assert.equal(renameCalls.length, 2);
+  assert.equal(renameCalls.length, 0);
 
   const failedId = "b".repeat(32);
   await record({ id: failedId, status: "failed" });
   await writeLatest(firstId, failedId);
   await reconcile();
-  assert.equal(renameCalls.length, 2, "a failed attempt does not change an automatic name");
+  assert.equal(renameCalls.length, 0, "a failed attempt does not change an automatic name");
 
   const outsideId = "c".repeat(32);
   await record({ id: outsideId, status: "published", summary: "Must not name an in-workspace pane", workspaceId: null });
   await writeLatest(outsideId);
   const outside = await reconcile();
-  assert.equal(outside.model.panes["ws-a:p1"].label, "Migrate authentication");
-  assert.equal(renameCalls.length, 2, "an out-of-workspace publication is not a naming event");
+  assert.equal(outside.model.panes["ws-a:p1"].label, null);
+  assert.equal(renameCalls.length, 0, "an out-of-workspace publication is not a naming event");
 
   const secondId = "d".repeat(32);
   await record({ id: secondId, status: "published", summary: "Ship migration" });
   await writeLatest(secondId);
   const nextPublished = await reconcile();
-  assert.equal(nextPublished.model.panes["ws-a:p1"].label, "Ship migration");
-  assert.equal(nextPublished.model.tabs["ws-a:t1"].label, "Ship migration");
-  assert.equal(renameCalls.length, 4);
+  assert.equal(nextPublished.model.panes["ws-a:p1"].label, null);
+  assert.equal(nextPublished.model.tabs["ws-a:t1"].label, "1");
+  assert.equal(nextPublished.model.panes["ws-a:p1"].recap.latest.summary, "Ship migration");
+  assert.equal(renameCalls.length, 0);
 });
 
 test("auto-name pane action completes through the plugin entrypoint and scripted Herdr socket", async (t) => {
@@ -338,7 +342,7 @@ test("auto-name pane action completes through the plugin entrypoint and scripted
   assert.equal(state.displayNameOwnership["pane:ws-a:p1"].lastWrittenLabel, "node · app");
 });
 
-test("an automatic multi-agent tab represents both published Pi tasks", () => {
+test("an automatic two-pane tab combines short verified subjects", () => {
   const agents = [1, 2].map((index) => ({
     pane_id: `ws-a:p${index}`,
     agent: "pi",
@@ -352,6 +356,10 @@ test("an automatic multi-agent tab represents both published Pi tasks", () => {
   }
   const result = evaluateDisplayNamePolicy(current, {
     supplied: {
+      piSessionsByPaneId: {
+        "ws-a:p1": { sessionName: "Migrate auth" },
+        "ws-a:p2": { sessionName: "Add cache" },
+      },
       promptsBySessionId: {
         "pi-1": { text: "Ignore live prompt one" },
         "pi-2": { text: "Ignore live prompt two" },
