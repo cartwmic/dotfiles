@@ -9,39 +9,6 @@ const HERDR_REQUEST_TIMEOUT_MS = 2_000;
 const RECAP_COMMAND_TIMEOUT_MS = 5 * 60 * 1_000;
 const MAX_COMMAND_OUTPUT = 64 * 1024;
 
-export interface SettledResponse {
-	text: string;
-	stopReason?: string;
-}
-
-export function settledAssistantResponse(entries: readonly unknown[]): SettledResponse | undefined {
-	for (let index = entries.length - 1; index >= 0; index -= 1) {
-		const entry = entries[index] as {
-			type?: unknown;
-			message?: { role?: unknown; content?: unknown; stopReason?: unknown };
-		} | null;
-		if (entry?.type !== "message" || entry.message?.role !== "assistant") continue;
-
-		const content = entry.message.content;
-		const text = typeof content === "string"
-			? content
-			: Array.isArray(content)
-				? content
-					.filter((part): part is { type: "text"; text: string } =>
-						!!part && typeof part === "object" && (part as { type?: unknown }).type === "text" && typeof (part as { text?: unknown }).text === "string",
-					)
-					.map((part) => part.text)
-					.join("\n")
-				: "";
-
-		return {
-			text,
-			stopReason: typeof entry.message.stopReason === "string" ? entry.message.stopReason : undefined,
-		};
-	}
-	return undefined;
-}
-
 function recapCliPath(): string {
 	const override = process.env.SESSION_RECAP_BIN?.trim();
 	return override || path.join(homedir(), ".local", "bin", "session-recap");
@@ -52,7 +19,6 @@ export function runSessionRecap(args: string[], input = ""): Promise<string> {
 		const child = spawn(recapCliPath(), args, { stdio: ["pipe", "pipe", "pipe"] });
 		let stdout = "";
 		let stderr = "";
-		let outputTooLarge = false;
 		const timeout = setTimeout(() => {
 			child.kill("SIGTERM");
 			reject(new Error("session-recap timed out"));
@@ -68,10 +34,6 @@ export function runSessionRecap(args: string[], input = ""): Promise<string> {
 		child.once("error", (error) => finish(new Error(`could not start session-recap: ${error.message}`)));
 		child.stdout.on("data", (chunk: Buffer) => {
 			stdout += chunk.toString("utf8");
-			if (Buffer.byteLength(stdout, "utf8") > MAX_COMMAND_OUTPUT) {
-				outputTooLarge = true;
-				child.kill("SIGTERM");
-			}
 		});
 		child.stderr.on("data", (chunk: Buffer) => {
 			stderr += chunk.toString("utf8");
@@ -81,9 +43,7 @@ export function runSessionRecap(args: string[], input = ""): Promise<string> {
 			// The child close event reports the command outcome, including early exits.
 		});
 		child.once("close", (code, signal) => {
-			if (outputTooLarge) {
-				finish(new Error("session-recap returned too much output"));
-			} else if (code !== 0) {
+			if (code !== 0) {
 				const detail = stderr.trim();
 				finish(new Error(detail ? `session-recap failed: ${detail}` : `session-recap exited with ${signal ?? code}`));
 			} else {
@@ -185,13 +145,6 @@ export async function currentPaneForCaller(
 		// Missing native membership stays unattributed; never infer it from UI focus.
 		return undefined;
 	}
-}
-
-export async function paneWorkspaceAtPublication(
-	socketPath: string | undefined,
-	callerPaneId: string | undefined,
-): Promise<string | undefined> {
-	return (await currentPaneForCaller(socketPath, callerPaneId))?.workspaceId;
 }
 
 export async function exactTerminalForCaller(socketPath: string, callerPaneId: string): Promise<CurrentPane | undefined> {

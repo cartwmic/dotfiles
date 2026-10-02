@@ -139,12 +139,10 @@ async function reconcile(runtime, api, options = {}) {
 }
 
 async function publishPi(runtime, { sessionId, paneId, workspaceId, text = "Completed a useful unit of work." }) {
-  const prepareArgs = ["prepare", "--source-id", sessionId];
-  if (paneId) prepareArgs.push("--pane-id", paneId);
-  const preparedId = await runtime.runRecap(prepareArgs, text);
-  const publishArgs = ["publish", "--prepared-id", preparedId];
-  if (workspaceId) publishArgs.push("--workspace-id", workspaceId);
-  const recordId = await runtime.runRecap(publishArgs);
+  const recordId = await runtime.runRecap(["create", "--kind", "single", "--source-kind", "pi", "--source-id", `history-${sessionId}`,
+    "--metadata-json", JSON.stringify({ pi: { sessionId, historyId: `history-${sessionId}` } })], text);
+  await runtime.runRecap(["annotate", recordId, "--namespace", "herdr", "--metadata-json",
+    JSON.stringify({ ...(paneId ? { pane_id: paneId } : {}), ...(workspaceId ? { workspace_id: workspaceId } : {}) })]);
   return (await readAllRecapRecords(runtime.dataRoot)).find((record) => record.record_id === recordId);
 }
 
@@ -215,12 +213,14 @@ test("replay preserves publication-time deadlines while grouping rekeyed panes b
   assert.equal(state.recapCoordinator.workspaceDeadlines["workspace-original"], firstDeadline);
   assert.equal(state.recapCoordinator.processedRecordIds.filter((id) => id === first.record_id).length, 1);
 
-  // Failed, blank, prepared-but-unpublished, and no-workspace records are not resets.
+  // Failed, blank, unannotated generic, and no-workspace records are not resets.
   await runtime.setBackendMode("blank");
-  await assert.rejects(runtime.runRecap(["prepare", "--source-id", "pi-session-one", "--pane-id", "pane-one"], "blank result"));
+  await assert.rejects(runtime.runRecap(["create", "--kind", "single", "--source-kind", "pi", "--source-id", "history-blank",
+    "--metadata-json", JSON.stringify({ pi: { sessionId: "pi-session-one" } })], "blank result"));
   await runtime.setBackendMode("success");
-  const unpublished = await runtime.runRecap(["prepare", "--source-id", "pi-unpublished", "--pane-id", "pane-one"], "prepared only");
-  assert.ok(unpublished);
+  const unannotated = await runtime.runRecap(["create", "--kind", "single", "--source-kind", "pi", "--source-id", "history-unannotated",
+    "--metadata-json", JSON.stringify({ pi: { sessionId: "pi-unannotated" } })], "Awaiting overview consumption");
+  assert.ok(unannotated);
   const noWorkspace = await publishPi(runtime, {
     sessionId: "pi-without-workspace", paneId: "pane-outside", text: "Published without Herdr membership",
   });
@@ -354,7 +354,10 @@ test("a first working Pi prompt follows a rekey even when pane.created precedes 
     "old-pi-pane": "terminal-pi", "shell-pane": "terminal-shell",
   }, { "old-pi-pane": "pi", "shell-pane": "bash" });
   await reconcile(runtime, api, { now: Date.now() });
-  await runtime.runRecap(["prompt", "set", "--session-id", "first-session", "--pane-id", "old-pi-pane"], "First request in progress.\n");
+  const promptDir = path.join(path.dirname(runtime.dataRoot), "herdr-overview", "prompts");
+  await mkdir(promptDir, { recursive: true });
+  await writeFile(path.join(promptDir, "first-session.json"), JSON.stringify({ schema_version: 1,
+    session_id: "first-session", pane_id: "old-pi-pane", text: "First request in progress.\n", working: true }), { mode: 0o600 });
   api.movePane("old-pi-pane", "new-pi-pane", "workspace-new");
   let state = await reconcileOverview({
     ...coordinatorOptions(runtime, api),

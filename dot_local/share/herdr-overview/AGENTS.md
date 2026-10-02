@@ -40,16 +40,24 @@ do not move their logic into this plugin.
   generic non-Pi subjects are supported. Recheck live labels before writing.
   Herdr has no atomic conditional rename, so document any residual race.
   Workspace names and Pi identity stay owner-controlled.
-- Choose the data path before changing recap behavior: Pi supplies a prompt
-  and a settled publication; `session-recap` owns records; this plugin reads
-  them. A successful in-workspace publication resets a 30-second quiet
-  deadline attributed to that workspace. A later pane move does not reassign
+- Choose the data path before changing recap behavior: the overview adapter
+  owns private real-user prompts under Herdr overview data and consumes native
+  Pi saved recaps. The independent Pi recap extension owns generation/settings;
+  `session-recap` owns generic records. Read `metadata.pi.sessionId` (also
+  accepting `nativeSessionId`) for the native-session join, not history/source
+  keys. Project `annotations.herdr` into legacy native fields only in memory;
+  never mutate narrative/coverage. Retain legacy records and prompt reading.
+  Unannotated new records wait for consumption; session-only annotations cannot
+  generate workspace groups. A successful attributed publication resets a
+  30-second quiet deadline attributed to that workspace. A later pane move does not reassign
   the deadline. At expiry, grouping uses **current** native pane membership,
   including exact live manually sourced non-Pi pane recaps. Closed panes are
   excluded. Failed grouping leaves prior good records intact and the
   deadline due for a later wake-up; it cannot trigger a session group.
   When `auto_publish = false`, preserve deadlines and pane associations but
-  suppress group generation and wake-ups. A later reconcile after opt-in can
+  suppress group generation and wake-ups. This generic CLI policy controls
+  plugin groups only; never import it into Pi recap settings or generate Pi
+  recaps here. A later reconcile after opt-in can
   process due work. Rendering, focus, scrolling, and output refresh must
   remain passive. `overview.refresh_names` is passive too: it neither opens
   nor advances publication/group deadlines; Pi `session_info_changed` uses it.
