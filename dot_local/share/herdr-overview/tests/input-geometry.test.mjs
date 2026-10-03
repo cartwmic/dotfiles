@@ -23,7 +23,7 @@ test('renderer rectangles drive movement, click projection and independent bound
   const r=frame.rectangles.find(r=>r.paneId==='p2');assert.equal(hitPane(frame,r.x+2,r.y-frame.viewport.offset+frame.viewport.y+2),'p2');
   assert.equal(hitPane(frame,r.x-1,r.y+frame.viewport.y),null);
   journey=scrollOverview(journey,999);frame=mapFrame({model,journey},100,24);assert.equal(journey.paneId,'p1');assert.equal(frame.viewport.offset,frame.viewport.max);
-  journey.ensureVisible=true;frame=mapFrame({model,journey},40,24);assert.equal(journey.paneId,'p1');assert.ok(frame.viewport.offset<=frame.rectangles[0].y);
+  journey.ensureVisible=true;frame=mapFrame({model,journey},40,24);assert.equal(journey.paneId,'p1');assert.ok(frame.viewport.offset<=frame.rectangles.find(r=>r.paneId==='p1').y);
 });
 test('all cards show published producer metadata, short text is honest and failed attempt stays separate',()=>{
  const model=normalizeSnapshot(snapshot());model.panes.p1.recap={latest:{status:'published',record_id:'good',published_at:'Producer local 02:30 +09',summary:'Short recap.'},lastAttempt:{status:'failed',record_id:'bad'}};

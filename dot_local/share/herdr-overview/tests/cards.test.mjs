@@ -13,7 +13,8 @@ test('padded outlined cards and in-place full-width reading replace debug rows',
   assert.ok(lines.every(l=>cellWidth(l)<=width));
   assert.ok(lines.some(l=>/│ [› ] Tab/.test(l.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,''))));
   const detail = mapLines({model,journey:{...journey,level:'pane'}},width).body.join('\n');
-  assert.ok(detail.indexOf('Latest good recap') < detail.indexOf('Tab 3'));
+  // The blocked multi-pane group bubbles above the expanded working Tab 1.
+  assert.ok(detail.indexOf('Tab 3') < detail.indexOf('Latest good recap'));
   assert.doesNotMatch(detail,/Process |cwd |\[p1\]/);
  }
  const frame=renderMap({model,journey,theme:resolvePalette({name:'tokyo-night'})},40,40);
@@ -49,9 +50,9 @@ test('late reading anchors, middle passage resize/refresh, digest end and back p
  const model=normalizeSnapshot(native), pane=model.panes['late-pane'];
  pane.recap={latest:{status:'published',published_at:'2026-10-01',summary:Array.from({length:80},(_,n)=>`Passage ${n} meaningful synthetic text with natural word wrapping`).join('\n')+'\nRECAP-LAST'}};
  pane.digest={status:'available',generatedAt:'2026-10-02',body:'digest line\n'.repeat(80)+'DIGEST-END'};
- let journey={...movePane(createJourney(model),model,4),level:'pane'};
+ let journey={...movePane(createJourney(model),model,2),level:'pane'}; // p3,p4,p1,p2,late
  assert.match(renderMap({model,journey},40,24),/Late subject/);
- journey=scrollDetail(journey,41);renderMap({model,journey},40,24);const position={...journey.readingPosition};
+ journey=scrollDetail(journey,40);renderMap({model,journey},40,24);const position={...journey.readingPosition};
  assert.ok(position.cell>0,'middle wrapped passage exercises a nonzero cell offset');
  for(const width of [120,32,48,40]) { renderMap({model,journey},width,24); assert.deepEqual(journey.readingPosition,position); }
  const before=renderMap({model,journey},40,24);
@@ -63,6 +64,7 @@ test('late reading anchors, middle passage resize/refresh, digest end and back p
 
 test('collapsed two-row titles signal omitted rows without truncating expanded titles', () => {
  const model=normalizeSnapshot(snapshot()), journey=createJourney(model);
+ model.panes.p3.agent.status='working'; // keep native order so Tab 1 is the first card
  for (const title of ['alpha beta', 'alpha beta gamma delta epsilon zeta eta theta', '部署確認 é 😀 検証作業完了後に安全な公開を確認する']) {
   model.tabs.t1.fullTitle=title;
   for (const width of [32,40,48,120,180]) {

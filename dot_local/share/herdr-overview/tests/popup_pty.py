@@ -157,8 +157,9 @@ with tempfile.TemporaryDirectory(prefix='overview-popup-pty-') as tmp:
                 if os.environ.get('OVERVIEW_CAPTURE_THEME','tokyo-night') == 'tokyo-night':
                     backgrounds={c.bg for row in screen.buffer.values() for c in row.values()}
                     assert '2d3650' in backgrounds and '232636' in backgrounds, backgrounds
-                key(']','READY'); capture(f'after-{width}-manual-selected'); assert '› Tab 2 M' in current_frame()
-                key('[','WORKING')
+                # Ready Tab 2 sorts above working Tab 1 (blocked Tab 3 group is first).
+                key('[','READY'); capture(f'after-{width}-manual-selected'); assert '› Tab 2 M' in current_frame()
+                key(']','WORKING')
                 key('\r','Latest good recap'); capture(f'after-{width}-reading')
                 key('j'*40,'recap synthetic line'); capture(f'after-{width}-middle')
                 passage=re.search(r'recap synthetic line \d+',current_frame()).group()
@@ -181,16 +182,20 @@ with tempfile.TemporaryDirectory(prefix='overview-popup-pty-') as tmp:
                 key('\r','Latest good recap'); capture(f'after-{width}-blocked-reading')
                 assert '部署' in current_frame()
                 key('j'*10,'Distinct peer subject'); capture(f'after-{width}-peer-reading')
-                key(']'*2,'Latest good recap'); assert 'Second' in current_frame(); capture(f'after-{width}-late-reading')
+                key(']'*4,'Latest good recap'); assert 'Second' in current_frame(); capture(f'after-{width}-late-reading')
                 late=current_frame(); key('d','Session digest'); assert 'Unavailable' in current_frame(); key('d','Session digest'); capture(f'after-{width}-late-digest')
                 key('\x1b','Latest good recap'); assert current_frame()==late
                 assert 'Process ' not in current_frame()
                 key('q'); finish(); assert process.returncode==0
                 return len(transcript)
             if focus_index is not None:
+                # Displayed order: blocked group (p3,p4), then p1, p2, then p5, p6.
+                display=[native['panes'][i]['pane_id'] for i in [2,3,0,1,4,5]]
                 key(']'*focus_index)
-                expected=native['panes'][focus_index]['pane_id']
-                key('f'); finish()
+                expected=display[(2+focus_index)%6]
+                # Enter opens the recap, a second Enter focuses the pane.
+                before=len(calls); key('\r','Latest good recap'); assert not any(c['method']=='pane.focus' for c in calls[before:])
+                key('\r'); finish()
                 assert process.returncode==0
                 assert calls[-1]['method']=='pane.focus' and calls[-1]['params']['pane_id']==expected
                 return expected
@@ -199,20 +204,28 @@ with tempfile.TemporaryDirectory(prefix='overview-popup-pty-') as tmp:
             assert any('Single 1' in line and 'Single 2' in line for line in rows)
             if width < 100:
                 assert not any('Synthetic workspace' in line and 'Second workspace' in line for line in rows)
-                key(']'*4,'Second workspace')
+                key(']'*2,'Second workspace')
                 assert '› Tab 5' in current_frame()
-                key(']'*2,'› Tab 1')
+                key(']'*4,'› Tab 1')
             else:
+                # The blocked group sits on top, so its selection shows the headings.
+                key('n','› Pane'); key('\x1b[<64;5;5M','Synthetic workspace'); rows=current_frame().splitlines()  # wheel up to the headings
                 headings=next(line for line in rows if 'Synthetic workspace' in line and 'Second workspace' in line)
                 assert headings.index('Second workspace') > headings.index('Synthetic workspace')
-                assert any('Single 1' in line and 'Second single 5' in line for line in rows)
-            # Native logical traversal remains workspace/tab/pane order, not visual row order.
-            for target in ['p2','p3','p4','p5','p6','p1']:
+                assert any('› Pane' in line and 'Second single 5' in line for line in rows), '\n'.join(rows)
+                key(']]','› Tab 1')
+            # Traversal follows the displayed order: questions, ready, working, then others.
+            for target in ['p2','p5','p6','p3','p4','p1']:
                 key(']')
                 key('\r', 'Latest good recap')
                 assert 'Latest good recap' in current_frame()
                 if target in ['p3','p4']: assert 'Subject '+target[1:] in current_frame()
                 key('\x1b','Herdr Overview')
+            # A left click on a card opens its recap in place and never focuses.
+            rows=current_frame().splitlines(); y=next(i for i,line in enumerate(rows) if 'Single 2' in line); x=rows[y].index('Single 2')
+            before=len(calls); key(f'\x1b[<0;{x+1};{y+1}M','Latest good recap')
+            assert '› Tab' not in current_frame() and not any(c['method']=='pane.focus' for c in calls[before:])
+            key('\x1b','Herdr Overview'); assert '› Tab 2' in current_frame(); key('[','› Tab 1')
             native['panes'][0]['agent_status']='idle'
             key('r','READY')
             native['panes'][0]['agent_status']='working'
@@ -234,7 +247,7 @@ with tempfile.TemporaryDirectory(prefix='overview-popup-pty-') as tmp:
                 key('f'); finish()
                 assert calls[-1]['method']=='pane.focus' and calls[-1]['params']['pane_id']=='moved-p3'
             else:
-                key('[[')
+                key(']]')
                 lost=native['panes'].pop(0)
                 key('r')
                 key('f','Cannot focus:')
@@ -292,9 +305,9 @@ with tempfile.TemporaryDirectory(prefix='overview-popup-pty-') as tmp:
     narrow=journey(40)
     wide=journey(120,True)
     focused=[journey(120,focus_index=i) for i in range(6)]
-    assert focused==['p1','p2','moved-p3','p4','p5','p6']
+    assert focused==['p1','p2','p5','p6','moved-p3','p4']
     viewer_calls=calls[viewer_start:]
     assert all(c['method'] in ['session.snapshot','pane.focus'] for c in viewer_calls),viewer_calls
     assert not any('generate' in c['method'] or 'recap' in c['method'] for c in viewer_calls)
     stopped=True; server.close()
-    print(json.dumps(dict(status='PASS',current_frame_layout='wide workspace columns; narrow stacked workspace two-card rows',native_order=['p1','p2','p3','p4','p5','p6'],exact_focus_targets=focused,narrow_bytes=narrow,wide_bytes=wide,viewer_methods=[c['method'] for c in viewer_calls],generation_requests=0)))
+    print(json.dumps(dict(status='PASS',current_frame_layout='wide workspace columns; narrow stacked workspace two-card rows',display_order=['p3','p4','p1','p2','p5','p6'],exact_focus_targets=focused,narrow_bytes=narrow,wide_bytes=wide,viewer_methods=[c['method'] for c in viewer_calls],generation_requests=0)))

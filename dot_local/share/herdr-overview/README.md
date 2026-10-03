@@ -72,10 +72,13 @@ automatic open on startup, events or reconcile. A selected non-owner target
 that disappears while the popup lives produces a notice and cannot focus an
 unrelated pane. The responsive native map groups
 single-pane tabs together beneath their workspace and keeps multi-pane tabs
-as groups, in native workspace/tab/pane order, without urgency reordering. Wide
+as groups. Inside each workspace, tabs and panes are ordered by state:
+questions/blocked first, then ready, then working, then the rest; native
+order breaks ties, and `[`/`]` follow this displayed order. Wide
 layouts use workspace columns; singleton tabs share compact card rows (two
 columns from an actual popup-canvas width of 32 columns). Cards are bordered,
-padded and word-wrapped; shortened collapsed titles end in an ellipsis. `M`
+word-wrapped and vertically tight (no blank border rows, spacer lines, or
+unused title/preview rows); shortened collapsed titles end in an ellipsis. `M`
 marks manual names; headings show tab and attention counts. Normal reading
 shows prose, not raw JSON. Expanded recap and digest bodies render a small
 markdown subset (`src/markdown.mjs`: headings, bold/italic, inline code,
@@ -86,8 +89,8 @@ shows them in the recap CLI's `time_zone` (`~/.config/session-recap/config.toml`
 `2026-10-03 06:19:35 GMT−7 [America/Los_Angeles]`. Cards omit the bracketed
 zone name. Unparseable values are shown unchanged. Card previews show at least two recap lines and also fill
 rows that would otherwise be blank (no newer-attempt warning, or a taller paired
-card) without making the card taller. The two-row title block stays fixed so
-paired cards keep their rows aligned. Supplied prompts and failures stay literal. Outer widths 40/48/120/180 currently yield popup
+card) without making the card taller. Paired cards share one title-block height
+(one or two rows) so their rows stay aligned. Supplied prompts and failures stay literal. Outer widths 40/48/120/180 currently yield popup
 widths 38/46/92/152. Outer width 32 yields only 30: below the card floor, where
 ordinary clipping can occur, not a supported-width claim. The single shared
 native popup PTY can clip a narrow attached peer when another client is wide;
@@ -95,12 +98,14 @@ detach the other peer for readable single-client geometry. Board/Mosaic and thei
 are retired.
 
 - Arrows and `h`/`j`/`k`/`l` select in the displayed direction, without wrapping.
-  `[`/`]` retain previous/next pane traversal in native order.
+  `[`/`]` select the previous/next pane in displayed order.
 - The wheel scrolls the map independently of selection, or the expanded recap/digest.
-  A left click selects a visible card only; it never focuses a terminal or dismisses.
+  A left click on a card selects it and opens its recap in place; it never
+  focuses a terminal or dismisses.
   Keyboard selection brings its target back into view; resize preserves identity.
 - `Enter` expands the selected pane in the map, including its full tab name;
-  another Enter returns to the map. `d` enters the separate digest view and does nothing if already there.
+  Enter on the expanded recap or digest focuses that pane (same identity check
+  as `f`). `Esc` returns to the map. `d` enters the separate digest view and does nothing if already there.
 - In detail, `j`/`k`, Space, and `b` scroll. `n` selects the next blocked pane.
 - `Esc` restores the prior recap passage from digest, then returns to map, then
   dismisses; `q` dismisses immediately.

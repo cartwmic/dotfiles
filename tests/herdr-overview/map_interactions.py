@@ -23,6 +23,19 @@ def selected_in_frame(frame, target, snapshot):
     return selected_card(frame, target, snapshot)
 
 
+def display_order(snapshot):
+    """Overview order inside a workspace: blocked, ready, working, then the rest."""
+    rank = lambda p: {'blocked': 0, 'idle': 1, 'working': 2}.get(p.get('agent_status'), 3) if p.get('agent') else 3
+    order = []
+    for w in snapshot['workspaces']:
+        tabs = []
+        for index, t in enumerate(x for x in snapshot['tabs'] if x['workspace_id'] == w['workspace_id']):
+            panes = sorted(((rank(p), n, p['pane_id']) for n, p in enumerate(p for p in snapshot['panes'] if p['tab_id'] == t['tab_id'])))
+            if panes: tabs.append((min(3, panes[0][0]), index, [p[2] for p in panes]))
+        order += [pane for tab in sorted(tabs) for pane in tab[2]]
+    return order
+
+
 def native_interactions(root, state, env, receipts, clients, open_map, log_digest):
     baseline = log_digest(root)
     live = proof.snapshot(state)
@@ -326,42 +339,50 @@ def scripted_interactions(root, env, receipts, Client):
             actual = card(status_frame, 'p1', snapshot)
             if not selected_in_frame(status_frame, 'p1', snapshot) or not actual or not any(row.strip() == expected for row in actual['rows']):
                 raise proof.ProofFailure(f'scripted native status mismatch: {status}')
-            for target in ('p2', 'p3', 'p4'):
+            order = display_order(snapshot); start = order.index('p1')
+            forward = [order[(start + k) % len(order)] for k in range(1, len(order))]
+            for target in forward:
                 client.key(b']')
-                if not selected_in_frame(capture(f'status-{status}-{target}'), target, snapshot):
-                    raise proof.ProofFailure('status traversal lost native order')
-            title_frame = capture(f'status-{status}-title-only')
+                current = capture(f'status-{status}-{target}')
+                if not selected_in_frame(current, target, snapshot):
+                    raise proof.ProofFailure('status traversal lost display order')
+                if target == 'p4': title_frame = current
             absent = card(title_frame, 'p4', snapshot)
             if not absent or not any(row.strip() == 'NO AGENT' for row in absent['rows']):
                 raise proof.ProofFailure(f'scripted status/title-only detection mismatch: {status}')
             if any(row.strip() == 'WORKING' for row in absent['rows']) or 'Pi: SCRIPTED TITLE ONLY' in title_frame:
                 raise proof.ProofFailure('title-only fixture became recognized agent or crowded glance')
-            for target in ('p3', 'p2', 'p1'):
+            for target in [*reversed(forward[:-1]), 'p1']:
                 client.key(b'[')
                 if not selected_in_frame(capture(f'status-{status}-return-{target}'), target, snapshot):
-                    raise proof.ProofFailure('status traversal failed to return in native order')
-        order_before = [p['pane_id'] for p in snapshot['panes']]
+                    raise proof.ProofFailure('status traversal failed to return in display order')
+        native_before = [p['pane_id'] for p in snapshot['panes']]
         snapshot['panes'][0]['agent_status'] = 'idle'
         snapshot['panes'][1]['agent_status'] = 'blocked'
         client.key(b'r'); changed = capture('changed-status')
         if not any(row.strip() == 'READY' for row in card(changed,'p1',snapshot)['rows']) or not any(row.strip() == '× BLOCKED' for row in card(changed,'p2',snapshot)['rows']):
             raise proof.ProofFailure('current status frame did not reflect transition')
-        observed_pairs = set()
-        for target in order_before:
+        # The blocked p2 and the blocked group bubble above ready p1.
+        order = display_order(snapshot)
+        if order != ['p2', 'p3', 'p4', 'p1']:
+            raise proof.ProofFailure(f'unexpected scripted display order {order}')
+        observed_pairs = set(); start = order.index('p1')
+        steps = [order[(start + k) % len(order)] for k in range(len(order))]
+        for target in steps:
             current = capture(f'changed-order-{target}')
             if not selected_in_frame(current, target, snapshot):
-                raise proof.ProofFailure('status transition changed native traversal order')
-            group = ('p1', 'p2') if target in ('p1', 'p2') else ('p3', 'p4')
-            pair = [card(current, pane, snapshot) for pane in group]
-            if all(pair):
-                if (pair[0]['row'], pair[0]['col']) >= (pair[1]['row'], pair[1]['col']):
-                    raise proof.ProofFailure('status transition reordered current viewer cards')
-                observed_pairs.add(group)
-            if target != order_before[-1]:
+                raise proof.ProofFailure('status transition changed display traversal order')
+            cards = [card(current, pane, snapshot) for pane in order]
+            for a, b in zip(range(len(order)), range(1, len(order))):
+                if cards[a] and cards[b]:
+                    if (cards[a]['row'], cards[a]['col']) >= (cards[b]['row'], cards[b]['col']):
+                        raise proof.ProofFailure('status transition did not reorder current viewer cards')
+                    observed_pairs.add((order[a], order[b]))
+            if target != steps[-1]:
                 client.key(b']')
-        if observed_pairs != {('p1', 'p2'), ('p3', 'p4')}:
-            raise proof.ProofFailure('status transition lacks completed visible pair-order evidence')
-        if [p['pane_id'] for p in snapshot['panes']] != order_before:
+        if observed_pairs != {('p2', 'p3'), ('p3', 'p4'), ('p4', 'p1')}:
+            raise proof.ProofFailure(f'status transition lacks visible order evidence: {sorted(observed_pairs)}')
+        if [p['pane_id'] for p in snapshot['panes']] != native_before:
             raise proof.ProofFailure('status transition reordered fixture')
         client.key(b'[' * 3)
         if not selected_in_frame(capture('changed-order-return'), 'p1', snapshot):

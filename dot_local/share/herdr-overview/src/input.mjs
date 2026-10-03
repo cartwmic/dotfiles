@@ -34,5 +34,5 @@ export class InputDecoder {
 export function hitPane(frame, x, y) {
   const v = frame?.viewport;
   if (!v || x < 0 || x >= v.width || y < v.y || y >= v.y+v.height) return null;
-  return frame.rectangles.find(r => x >= r.x+2 && x < r.x+r.width-2 && y-v.y+v.offset >= r.y+2 && y-v.y+v.offset < r.y+r.height-2)?.paneId ?? null;
+  return frame.rectangles.find(r => x >= r.x+2 && x < r.x+r.width-2 && y-v.y+v.offset >= r.y+1 && y-v.y+v.offset < r.y+r.height-1)?.paneId ?? null;
 }

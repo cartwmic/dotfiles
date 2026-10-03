@@ -82,7 +82,8 @@ export async function runOverviewPane({ api = new HerdrApi(), stateDir = overvie
         if (!state.model || !journey) return;
         const v=frame?.viewport; if(!v || key.x<0 || key.x>=v.width || key.y<v.y || key.y>=v.y+v.height)return;
         if (key.type === 'wheel') journey = journey.level === 'overview' ? scrollOverview(journey,key.delta) : scrollDetail(journey,key.delta);
-        else if (journey.level === 'overview') { const id=hitPane(frame,key.x,key.y); if(id && state.model.panes[id]) journey=select(journey,state.model,id); }
+        // A card click opens that pane's recap; it never focuses (Enter does that next).
+        else { const id=hitPane(frame,key.x,key.y); if(id && state.model.panes[id]) journey={...select(journey,state.model,id),level:'overview'}, journey=openJourneyLevel(journey); }
         draw(); return;
       }
       if (key === 'q') return dismiss();
@@ -90,7 +91,7 @@ export async function runOverviewPane({ api = new HerdrApi(), stateDir = overvie
       if (key === 'r') return refresh();
       if (!state.model || !journey) return;
       if (key === 'escape') { if (journey.level === 'overview') return dismiss(); journey = backJourneyLevel(journey); }
-      else if (key === 'f') {
+      else if (key === 'f' || key === 'enter' && journey.level !== 'overview') {
         // Resolve against a fresh native snapshot immediately before focus.
         const expected = journey.terminalId;
         if (!await refresh()) return;
@@ -103,7 +104,7 @@ export async function runOverviewPane({ api = new HerdrApi(), stateDir = overvie
       }
       else if (key === '[' || key === ']') journey = movePane(journey, state.model, key === '[' ? -1 : 1);
       else if (key === 'n') journey = nextBlocked(journey, state.model);
-      else if (key === 'enter') journey = openJourneyLevel(journey);
+      else if (key === 'enter') journey = openJourneyLevel(journey); // overview → expanded
       else if (key === 'd' && journey.level !== 'digest') journey = { ...journey, returnReading: { detailScroll: journey.detailScroll, readingPosition: journey.readingPosition }, level: 'digest', detailScroll: 0, readingPosition: null };
       else if ('hjkl'.includes(key)) journey = journey.level === 'overview' ? moveDirection(journey, state.model, frame?.rectangles || [], key) : key === 'j' || key === 'k' ? scrollDetail(journey, key === 'j' ? 1 : -1) : journey;
       else if (key === ' ' || key === 'b') journey = (journey.level === 'overview' ? scrollOverview : scrollDetail)(journey, (key === ' ' ? 1 : -1) * Math.max(1, (output.rows || 24) - 3));
