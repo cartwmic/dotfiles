@@ -7,7 +7,7 @@ import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { budgets } from './backend.mjs';
+import { budgets } from './budgets.mjs';
 import { restoreState, resolveSettings, setOverride, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, argumentCompletions, commandHelp, projectContext, recapScope, failureNotice } from './helpers.ts';
 
 const directory = dirname(fileURLToPath(import.meta.url));

@@ -40,7 +40,7 @@ export const commandHelp = [
   'Automatic final-response, active-periodic and before-compaction recaps default on. Settings can disable them. The model follows current Pi unless overridden, captured per request.',
   'timeZone is display-only: local (default), UTC or an IANA zone. Help/view/history do not generate, cancel, change coverage or interrupt the main agent.',
 ].join('\n\n');
-export const seedSettings = Object.freeze({ model: null, completed: true, periodic: true, beforeCompaction: true, mode: 'incremental', cadence: 1, intervalMinutes: 15, timeoutSeconds: 60, recursion: false, instructions: 'Write a detailed narrative recap for reorientation and resumption. Distinguish confirmed results from ongoing, queued, partial and failed work.', options: { thinkingLevel: 'off', maxTokens: 4096 }, timeZone: 'local' });
+export const seedSettings = Object.freeze({ model: null, completed: true, periodic: true, beforeCompaction: true, mode: 'incremental', cadence: 1, intervalMinutes: 15, timeoutSeconds: 60, recursion: false, instructions: 'Write a detailed narrative recap for reorientation and resumption. Distinguish confirmed results from ongoing, queued, partial and failed work.', options: { thinkingLevel: 'off' }, timeZone: 'local' });
 export type OwnedState = { nativeSessionId: string; historyId: string; overrides: Record<string, any> };
 /** Pass all custom entries, not merely the branch, for session-wide preferences. */
 export function restoreState(nativeSessionId: string, states: OwnedState[]): OwnedState {

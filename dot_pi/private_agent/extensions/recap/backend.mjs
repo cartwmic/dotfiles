@@ -3,29 +3,8 @@ import { realpathSync } from 'node:fs';
 
 const isContextRejection = message => typeof message === 'string' && !/rate.?limit|too many requests|throttl/i.test(message) && /context[_ ]length[_ ]exceeded|maximum context length|(?:exceeds the |exceeded )context window|context window exceeded|too many tokens|prompt (?:is )?too long/i.test(message);
 
-export class LimitFailure extends Error {
-  constructor(reason, message) { super(message); this.reason = reason; }
-}
-/** SDK estimates are not a tokenizer. The generic byte transport ceiling is
- * derived from the captured prompt's measured bytes/estimated tokens, not a Pi
- * application cap. Every actual routed call is independently estimated below.
- * Reserve the system prompt, serialized request framing and effective output;
- * reasoning adapters may consume the entire model output ceiling.
- */
-export function budgets(model, selection, thinkingLevel, estimateTokens, input) {
-  const context = model.contextWindow, limit = model.maxTokens;
-  const requested = selection.options.maxTokens ?? 4096;
-  if (![context, limit, requested].every(n => Number.isSafeInteger(n) && n > 0)) throw new LimitFailure('model_limits', 'Recap model limits unavailable');
-  const maxTokens = Math.min(requested, limit, Math.floor(context / 4));
-  const outputReserve = thinkingLevel === 'off' ? maxTokens : limit;
-  const framing = JSON.stringify({ systemPrompt: selection.instructions, messages: [{ role: 'user', content: [{ type: 'text', text: '' }] }] });
-  const inputTokens = estimateTokens({ role: 'user', content: [{ type: 'text', text: input }] });
-  const availableTokens = context - outputReserve - estimateTokens({ role: 'system', content: framing });
-  if (availableTokens <= 0 || !Number.isSafeInteger(inputTokens) || inputTokens <= 0) throw new LimitFailure('model_limits', 'Recap model budget unusable');
-  const inputBudget = Math.floor(Buffer.byteLength(input, 'utf8') * availableTokens / inputTokens);
-  if (!Number.isSafeInteger(inputBudget) || inputBudget <= 0) throw new LimitFailure('model_limits', 'Recap model budget unusable');
-  return { inputBudget, maxTokens, availableTokens, estimatedInputTokens: inputTokens };
-}
+import { LimitFailure, budgets } from './budgets.mjs';
+export { LimitFailure, budgets };
 
 /** Independent direct provider request. No prompt(), binding, tools or session archive.
  * budgetOnly resolves whitelisted limits without a provider generation request.

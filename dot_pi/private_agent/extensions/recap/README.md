@@ -169,7 +169,8 @@ and save. A blocked route helper is actually stopped on cancel/supersession,
 without opening a gate or retrying. Captured virtual fingerprints identify
 original settings and public material, not yet-unknown effective route metadata;
 physical fingerprints also include their synchronously known derived ceilings.
-`options.maxTokens` remains the explicit user output ceiling, capped by the
+`options.maxTokens` is an optional output ceiling. Unset, it defaults to the
+physical model output limit (the provider API requires some value). It is capped by the
 physical model output limit and the existing quarter-context-window output guard.
 Input has no extra application cap. Both paths use
 public SDK `estimateTokens` on the actual prompt (including instructions and
