@@ -50,7 +50,7 @@ export function mapLines(state, width, now = Date.now()) {
       const surface = overrideSurface || (selected ? 'selection_bg' : 'active_row_bg'), inner = Math.max(1, size - 4);
       const edge = text => style(text, border, surface);
       return [edge('┌' + '─'.repeat(size - 2) + '┐'), edge('│' + ' '.repeat(size - 2) + '│'),
-        ...content.map(row => edge('│ ') + style(pad(clip(row.text, inner), inner), row.role || 'text', row.surface || surface) + edge(' │')),
+        ...content.map(row => edge('│ ') + (row.bold ? '\x1b[1m' : '') + style(pad(clip(row.text, inner), inner), row.role || 'text', row.surface || surface) + edge(' │')),
         edge('│' + ' '.repeat(size - 2) + '│'), edge('└' + '─'.repeat(size - 2) + '┘')];
     };
     const card = (tab, pane, size) => {
@@ -67,7 +67,7 @@ export function mapLines(state, width, now = Date.now()) {
       if (excerpt.length > 2) preview[1] = clip(preview[1].trimEnd(), size - 5) + '…';
       while (preview.length < 2) preview.push('');
       const metadata = wrap(`Latest good recap · ${good ? latest.published_at || latest.created_at || 'date unavailable' : 'unavailable'}`, size - 4);
-      return box([{text:`${selected ? '›' : ' '} ${multi ? 'Pane' : 'Tab ' + (tab.number ?? '')}${manual ? ' M' : ''}`,role:manual ? 'mauve' : 'overlay0'}, ...names.map(text=>({text})), ...wrap(stateName(pane), size - 4).map(text=>({text,role:stateColor(pane)})), ...metadata.map(text=>({text,role:'teal'})), ...preview.map(text=>({text,role:good?'text':'overlay0'})), ...wrap(attempt && attempt.record_id !== latest?.record_id ? `Newer attempt ${attempt.status}` : '', size - 4).map(text=>({text,role:'yellow'}))], size, pane.agent?.status === 'blocked' ? 'red' : selected ? 'accent' : 'overlay1', selected);
+      return box([{text:`${selected ? '›' : ' '} ${multi ? 'Pane' : 'Tab ' + (tab.number ?? '')}${manual ? ' M' : ''}`,role:manual ? 'mauve' : 'overlay0'}, ...names.map(text=>({text})), ...wrap(stateName(pane), size - 4).map(text=>({text,role:stateColor(pane),bold:true})), ...metadata.map(text=>({text,role:'overlay1'})), ...preview.map(text=>({text,role:good?'text':'overlay0'})), ...wrap(attempt && attempt.record_id !== latest?.record_id ? `Newer attempt ${attempt.status}` : '', size - 4).map(text=>({text,role:'yellow'}))], size, pane.agent?.status === 'blocked' ? 'red' : selected ? 'accent' : 'overlay1', selected);
     };
     const reading = tab => {
       const logical = []; let selectedLogical = 0; const add = (text, role='text', surface) => logical.push({text,role,surface});
