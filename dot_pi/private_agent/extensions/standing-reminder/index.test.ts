@@ -3,7 +3,19 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import standingReminder from "./index.ts";
+import { execFileSync } from "node:child_process";
+import { createRequire, registerHooks } from "node:module";
+import { pathToFileURL } from "node:url";
+
+// Direct Node tests need the same TUI dependency Pi supplies to extensions.
+const piRequire = createRequire(join(execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim(), "@earendil-works/pi-coding-agent/package.json"));
+const tuiURL = pathToFileURL(piRequire.resolve("@earendil-works/pi-tui")).href;
+registerHooks({ resolve(specifier, context, nextResolve) {
+	return specifier === "@earendil-works/pi-tui"
+		? { url: tuiURL, shortCircuit: true }
+		: nextResolve(specifier, context);
+} });
+const { default: standingReminder } = await import("./index.ts");
 import { readTriggerConfig } from "./config.ts";
 
 test("exact trigger configuration defaults, empty, explicit and invalid", () => {
@@ -152,7 +164,7 @@ type FakeContext = {
 		tui: { stopped: number; started: number; renders: number };
 		custom: (factory: (tui: any, theme: unknown, keybindings: unknown, done: (value: unknown) => void) => unknown) => Promise<unknown>;
 		notify: (message: string, type?: string) => void;
-		setWidget: (key: string, content: string[] | undefined) => void;
+		setWidget: (key: string, content: string[] | ((tui: any, theme: any) => { render: (width: number) => string[] }) | undefined) => void;
 	};
 };
 
@@ -227,7 +239,9 @@ function createHarness(id = "session-parent", sharedSessionDir?: string) {
 			},
 			notify: (message, type) => notifications.push({ message, type }),
 			setWidget: (key, content) => {
-				if (content) widgets.set(key, content);
+				if (content) widgets.set(key, typeof content === "function"
+					? content({}, { fg: (color: string, text: string) => { assert.equal(color, "dim"); return `\x1b[90m${text}\x1b[39m`; } }).render(200)
+					: content);
 				else widgets.delete(key);
 			},
 		},
@@ -283,6 +297,14 @@ function serializedState(harness: ReturnType<typeof createHarness>) {
 	assert.equal(result.kind, "ok");
 	return result.kind === "ok" ? result.state : emptyReminderState();
 }
+
+test("reminder widget is dim and has no leading padding", async () => {
+	const h = createHarness();
+	try {
+		await start(h);
+		assert.equal(h.ctx.ui.widgets.get("standing-reminder")?.[0], "\x1b[90mNo session reminder · /reminder to set one\x1b[39m");
+	} finally { h.cleanup(); }
+});
 
 test("session state writes atomically with private permissions and validates restores", () => {
 	const root = mkdtempSync(join(tmpdir(), "standing-reminder-state-test-"));

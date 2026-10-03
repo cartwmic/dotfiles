@@ -200,7 +200,7 @@ async function createPrimarySession({ cwd, agentDir, sessionDir, runtime }) {
 test("default provider-extension loadout matches Pi's installed package paths", () => {
 	const agentDir = path.join(os.tmpdir(), "pi-agent");
 	assert.deepEqual(getDefaultProviderExtensionLoadout(agentDir), {
-		"claude-bridge": [path.join(agentDir, "git/github.com/cartwmic/pi-claude-bridge/index.ts")],
+		"claude-compat": [path.join(agentDir, "extensions/claude-compat-guard/index.ts")],
 		cursor: [path.join(agentDir, "git/github.com/cartwmic/pi-cursor/src/index.ts")],
 		openrouter: [path.join(agentDir, "git/github.com/olixis/pi-openrouter-plus/extensions/openrouter-routing/index.ts")],
 	});
@@ -705,6 +705,77 @@ test("provider extension loadout supplies the selected route without loading the
 		await runner.close();
 		delete globalThis.__learningsObserverTestStream;
 		delete globalThis.__learningsObserverMonitorLoaded;
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
+
+test("Compat observer binds session-start guard before its real SDK prompt", async (t) => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "learnings-compat-guard-"));
+	const agentDir = path.join(root, "agent"), cwd = path.join(root, "work"), sessionDir = path.join(root, "sessions");
+	const providerPath = path.join(agentDir, "provider.mjs");
+	const guardModule = pathToFileURL(path.resolve(import.meta.dirname, "../claude-compat-guard/guard.mjs")).href;
+	await Promise.all([agentDir, cwd, sessionDir].map(p => fs.mkdir(p, { recursive: true })));
+	await fs.writeFile(path.join(agentDir, "auth.json"), JSON.stringify({ "claude-compat": { type: "api_key", key: "scripted-test-key" } }));
+	const docs = "<docs>\nPi documentation (read only when the user asks about pi itself, its SDK):\n- Topics: models (docs/models.md), pi packages (docs/packages.md), MCP\n</docs>";
+	await fs.writeFile(providerPath, `import { guardProvider } from ${JSON.stringify(guardModule)};
+export default function(pi) {
+	let started = false;
+	pi.on("session_start", () => { started = true; });
+	const stream = (model, context, options) => globalThis.__learningsCompatGuardStream(model, context, options, started);
+	const provider = {
+		id: "claude-compat", name: "Scripted Compat", baseUrl: "http://scripted.test/v1",
+		auth: { apiKey: { name: "Scripted key", resolve: async ({ credential }) => credential?.key
+			? { auth: { apiKey: credential.key }, source: "stored credential" } : undefined } },
+		getModels: () => [{ id: "compat-observer", name: "Compat observer", provider: "claude-compat",
+			api: "claude-compat-messages", baseUrl: "http://scripted.test/v1", input: ["text"],
+			reasoning: false, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 32000, maxTokens: 2000 }],
+		stream, streamSimple: stream,
+	};
+	pi.registerProvider(guardProvider(provider));
+	pi.on("before_agent_start", (event, ctx) => {
+		globalThis.__learningsCompatGuardInstalled = ctx.modelRegistry.getRegisteredNativeProvider("claude-compat").streamSimple !== stream;
+		return { systemPromptOptions: { ...event.systemPromptOptions,
+			sections: { ...event.systemPromptOptions.sections, docs: ${JSON.stringify(docs)} } } };
+	});
+}`);
+	let calls = 0;
+	globalThis.__learningsCompatGuardStream = (model, context, options, started) => scriptedStream(model, options, () => {
+		assert.equal(started, true, "upstream session_start must run");
+		assert.equal(globalThis.__learningsCompatGuardInstalled, true, "session_start must run before observer prompt");
+		const transmitted = context.messages.filter(m => m.role === "system").map(m => m.sections?.docs ?? m.content).join("\\n");
+		assert.match(transmitted, /about Pi itself/);
+		assert.match(transmitted, /, Pi packages \(docs\/packages.md\),/);
+		assert.doesNotMatch(transmitted, /about pi itself/);
+		calls++;
+		return { kind: "text", text: '{"proposals":[]}' };
+	});
+	const runner = createPiObserverRunner({
+		sdk, agentDir, cwd, sessionDir,
+		store: createLearningStore({ root: path.join(root, "store") }),
+		providerExtensionLoadout: { "claude-compat": [providerPath] },
+		resourceLoaderFactory: ({ cwd, agentDir, settingsManager, extensionPaths }) => {
+			const loader = new sdk.DefaultResourceLoader({ cwd, agentDir, settingsManager,
+				additionalExtensionPaths: extensionPaths, noExtensions: true, noSkills: true,
+				noPromptTemplates: true, noThemes: true, noContextFiles: true });
+			const reload = loader.reload.bind(loader);
+			loader.reload = async () => { await reload(); assert.deepEqual(loader.getExtensions().errors, []); };
+			return loader;
+		},
+	});
+	try {
+		const result = await runner.run(makeBatch("compat-guard-source", cwd, "compat-evidence", {
+			primaryModel: { provider: "claude-compat", id: "compat-observer" },
+		}));
+		assert.deepEqual(JSON.parse(result.text), { proposals: [] });
+		assert.equal(calls, 1);
+		const saved = await fs.readFile(result.sessionFile, "utf8");
+		assert.match(saved, /about pi itself/);
+		assert.doesNotMatch(saved, /about Pi itself/);
+	} finally {
+		await runner.close();
+		delete globalThis.__learningsCompatGuardStream;
+		delete globalThis.__learningsCompatGuardInstalled;
 		await fs.rm(root, { recursive: true, force: true });
 	}
 });

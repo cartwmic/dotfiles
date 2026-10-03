@@ -346,6 +346,30 @@ python3 scripts/serve.py --profile apple-silicon --text-only --alias winnow-12b
 Nothing starts it at login. It listens on `http://127.0.0.1:8091` and holds
 about 13 GB of memory while running; Ctrl+C stops it.
 
+## Herdr command palette
+
+Both desktop profiles (`personal` and `axon-work-computer`) install
+[vjeantet/herdr-palette](https://github.com/vjeantet/herdr-palette) **v0.2.2**
+through `mise run install-herdr-palette`, also included in desktop bootstrap.
+The task uses the normal upstream installer:
+
+```sh
+herdr plugin install vjeantet/herdr-palette --ref v0.2.2 --yes
+```
+
+It skips an already installed, enabled, runnable copy at that pin. Installation
+uses a private nonexistent socket, leaving the running server untouched. After
+applying the shared Herdr config, run `herdr server reload-config` to activate it.
+Open with **Ctrl+B, Space**, type to search, Enter to select, and Esc to cancel.
+Existing tab-navigation and pane-rename bindings stay intact. In Termux, swipe
+up on **CTRL** to send that sequence; swipe up on **ALT** sends **Ctrl+O**.
+Normal taps still act as modifiers.
+
+The palette starts with upstream built-ins and installed plugin actions,
+including Overview; no custom commands or prompts are configured. Its checkout,
+binary and last-used state stay machine-local, outside chezmoi. Termux does not
+install it; its prefix shortcut works over SSH to a configured desktop.
+
 ## Herdr overview and phone route
 
 The personal and work desktop profiles pin Herdr **0.9.1 / protocol 22** and
@@ -403,10 +427,21 @@ printf '%s\n' '{"members":[{"label":"api","text":"API work is complete."},{"text
 
 Desktop installs default to `auto_publish = false` with no recap command.
 Configure an unmanaged `~/.config/session-recap/config.local.toml` with an
-executable argv for manual recaps; add `auto_publish = true` to opt in to Pi
-publication. The editable prompt templates and local configuration are
-covered in [`dot_local/share/session-recap/README.md`](./dot_local/share/session-recap/README.md).
-When enabled, Pi's adapter prepares then publishes settled recaps. Successful Pi publications
+executable argv for manual recaps; add `auto_publish = true` to opt in to Herdr
+**group generation**, not Pi generation. The editable prompt templates and local
+configuration are covered in [`dot_local/share/session-recap/README.md`](./dot_local/share/session-recap/README.md).
+
+Pi has independent `/recap`, `/recap view`, `/recap history` and `/recap settings`
+commands. New defaults follow the current Pi model and enable settlement,
+active periodic (15 minutes), and before-compaction recaps; saved opt-outs and
+model overrides remain. Saved output is a two-line widget above the editor,
+with the full narrative available through `/recap view`. Pi's `timeZone` setting
+and CLI `time_zone` / `--time-zone` display local time by default, with UTC/IANA
+options; canonical record timestamps remain UTC. No CLI preferences are imported. See the
+[Pi recap guide](./dot_pi/private_agent/extensions/recap/README.md). Recap works
+without Herdr. The separate overview adapter owns private real-user prompts and
+consumes saved recaps, annotating native membership without duplicate generation.
+Successful attributed Pi publications
 start/restart a 30-second workspace quiet period; when it expires, the group uses
 latest published recaps for panes currently in that native workspace, including
 manual pane-source recaps for non-Pi panes. A successful workspace group can
@@ -546,7 +581,7 @@ After `chezmoi apply`, complete the steps that apply to this host:
 - [personal macOS] Launch Docker Desktop once to accept its license and finish setup. See [Docker Provisioning](#docker-provisioning).
 - [personal macOS] Log in and launch RustDesk once on a fresh machine; grant Accessibility, Screen Recording, and, if needed, Input Monitoring permissions. See [RustDesk Provisioning](#rustdesk-provisioning).
 - [desktop Herdr] On an existing compatible server, invoke the overview reconcile action after linking; otherwise use a later owner-controlled server start. Reload config only to pick up the keybinding. See [Herdr overview and phone route](#herdr-overview-and-phone-route) for commands.
-- [recap users] Set a host-local recap command; opt in to automatic Pi publication if wanted. See [Portable recaps](#portable-recaps).
+- [recap users] Review Pi defaults/overrides with `/recap settings`; set a host-local CLI command for standalone recaps/Herdr groups if wanted. See [Portable recaps](#portable-recaps).
 
 After installing gvm, use a fresh zsh or load its script in the current shell.
 Select a supported version from `gvm listall` when prompted:
