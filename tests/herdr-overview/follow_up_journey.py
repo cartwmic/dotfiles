@@ -13,7 +13,8 @@ import traceback
 import time
 import proof
 from map_journey import Client, log_digest, require_busy
-from map_frames import canvas, selected_in_frame, wait_frame
+from map_frames import canvas, card, compact, contains, selected_in_frame, wait_frame
+from map_identity import current_metadata
 from native_visual import capture
 
 BROWSER = r'''
@@ -62,10 +63,11 @@ def run(receipts, reference, browser_python):
     for n,pane in enumerate(p for p in proof.snapshot(state)['panes'] if p['tab_id']==tab['tab_id']):
      name=label if t<2 else ['部署 😀 rollback verification','Peer review notes'][n]+f' {w+1}';rename('pane',pane['pane_id'],name)
      summary='' if t==1 else 'Short verified recap.' if n==1 else 'The release candidate passed the configuration checks. Preserve the rollback artifact and wait for owner approval. '*4
-     date='Producer Oct 2 · 11:05 UTC' if w==0 else 'Producer fallback · 20:05 +09'
+     missing_date=w==0 and t==2 and n==1
+     date='date unavailable' if missing_date else 'Producer Oct 2 · 11:05 UTC' if w==0 else 'Producer fallback · 20:05 +09'
      rid=f'good-{w}-{t}-{n}';failure=t==0
      if summary:
-      value=dict(schema_version=1,record_id=rid,status='published',source_kind='manual',source_id=pane['pane_id'],pane_id=pane['pane_id'],summary=summary,**({'published_at':date} if w==0 else {'created_at':date}))
+      value=dict(schema_version=1,record_id=rid,status='published',source_kind='manual',source_id=pane['pane_id'],pane_id=pane['pane_id'],summary=summary,**({} if missing_date else {'published_at':date} if w==0 else {'created_at':date}))
       proof.json_dump(records/(rid+'.json'),value)
       item=dict(source_kind='manual',source_id=pane['pane_id'],latest_success_id=rid,last_attempt_id=rid)
       if failure:
@@ -91,6 +93,16 @@ def run(receipts, reference, browser_python):
    field='agent_session_path' if session['kind']=='path' else 'agent_session_id'
    proof.api_request(state,'pane.report_agent',dict(pane_id=pane['pane_id'],source='herdr:pi',agent='pi',state='blocked',**{field:session['value']},seq=time.time_ns()//1000))
    if question:proof.api_request(state,'pane.report_metadata',dict(pane_id=pane['pane_id'],source='herdr:overview-question',agent='pi',applies_to_source='herdr:pi',state_labels={'blocked':'Awaiting answer'},seq=time.time_ns()//1000))
+  # A synthetic live publisher binds an exact UUID to a non-agent terminal;
+  # native Pi status fixtures remain independent of digest identity.
+  digest_native=proof.snapshot(state)['panes'][0];digest_pane=digest_native['pane_id']
+  metadata=dict(schemaVersion=1,socketPath=state['socket_path'],terminalId=digest_native['terminal_id'],paneId=digest_pane,sessionId='12345678-1234-1234-1234-123456789abc',sessionName=None,publisherPid=os.getpid(),generation='synthetic-digest-fixture')
+  bridge=Path(env['XDG_STATE_HOME'])/'herdr-overview/pi-sessions';bridge.mkdir(parents=True,exist_ok=True)
+  proof.json_dump(bridge/'synthetic-digest.json',metadata)
+  assert current_metadata(state,env,digest_pane)
+  directory=Path(env['HOME'])/'.pi/session-search/digests';directory.mkdir(parents=True,exist_ok=True)
+  proof.json_dump(directory/(metadata['sessionId']+'.json'),dict(schemaVersion=1,generatedAt='2026-10-02T12:34:56Z',body='\n'.join(['SYNTHETIC-DIGEST-BEGIN']+[f'SYNTHETIC-DIGEST-LINE-{i:03d}' for i in range(65)]+['ZZZ-END-DIGEST-VERIFIED'])))
+  proof.json_dump(receipts/'digest-fixture.json',metadata)
   native=proof.snapshot(state);first=native['panes'][0];proof.api_request(state,'pane.focus',dict(pane_id=first['pane_id']))
   proof.api_request(state,'plugin.action.invoke',dict(action_id='overview.refresh_names'))
   baseline=log_digest(root);proof.json_dump(receipts/'native-fixture.json',proof.snapshot(state));proof.json_dump(receipts/'reference-data.json',reference_data)
@@ -109,6 +121,22 @@ def run(receipts, reference, browser_python):
    client=Client(state,env,width);client.drain(2);open_map();selected(first['pane_id'])
    capture(client,receipts,f'native-{width}-collapsed')
    rows=client.frame().splitlines();oy=next(y for y,row in enumerate(rows) if 'Herdr Overview' in row and row[row.index('Herdr Overview')-1]!='┌');ox=rows[oy].index('Herdr Overview')
+   focus_before=proof.snapshot(state)['focused_pane_id']
+   if width in (40,180):
+    host('d');wait_frame(client,'Session digest','SYNTHETIC-DIGEST-BEGIN')
+    before_digest=canvas(client.frame());assert not contains(client.frame(),'ZZZ-END-DIGEST-VERIFIED')
+    capture(client,receipts,f'native-{width}-digest-start')
+    for _ in range(30):
+     host(f'\x1b[<65;{ox+4};{oy+5}M')
+     if contains(client.frame(),'ZZZ-END-DIGEST-VERIFIED'):break
+    wait_frame(client,'ZZZ-END-DIGEST-VERIFIED');assert canvas(client.frame())!=before_digest
+    assert proof.snapshot(state)['focused_pane_id']==focus_before
+    require_busy(state,receipts,f'digest-wheel-{width}')
+    capture(client,receipts,f'native-{width}-digest-wheel-end')
+    host('\x1b');wait_frame(client,'Latest good recap')
+    host('\x1b');selected(first['pane_id'])
+    assert current_metadata(state,env,digest_pane)[1]['sessionId']==metadata['sessionId']
+    result['outcomes'][f'digest_host_wheel_{width}']=True
    frame=canvas(client.frame());target=next((y,row.index('Tab 2')) for y,row in enumerate(frame) if 'Tab 2' in row)
    focus_before=proof.snapshot(state)['focused_pane_id']
    host(f'\x1b[<0;{ox+target[1]+2};{oy+target[0]+1}M');host(f'\x1b[<0;{ox+target[1]+2};{oy+target[0]+1}m')
@@ -118,6 +146,11 @@ def run(receipts, reference, browser_python):
    grouped=reference_data[0]['tabs'][2]['panes']
    host('j');selected(grouped[0]['id']);capture(client,receipts,f'native-{width}-question-wait')
    host('j');selected(grouped[1]['id']);capture(client,receipts,f'native-{width}-short-recap')
+   missing_card=card(client.frame(),grouped[1]['id'],proof.snapshot(state))
+   assert missing_card and compact('Latest good recap · date unavailable') in compact(''.join(missing_card['rows']))
+   assert compact('Short verified recap.') in compact(''.join(missing_card['rows']))
+   capture(client,receipts,f'native-{width}-missing-metadata')
+   result['outcomes'][f'collapsed_missing_metadata_{width}']=True
    host('k');selected(grouped[0]['id']);host('k')
    for _ in range(len(native['panes'])):
     if selected_in_frame(client.frame(),second,proof.snapshot(state)):break
