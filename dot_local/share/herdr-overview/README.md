@@ -80,7 +80,11 @@ marks manual names; headings show tab and attention counts. Normal reading
 shows prose, not raw JSON. Expanded recap and digest bodies render a small
 markdown subset (`src/markdown.mjs`: headings, bold/italic, inline code,
 lists, quotes, rules, code fences); collapsed card previews drop the markers
-and stay plain text. Card previews show at least two recap lines and also fill
+and stay plain text. Recap and digest times are stored in UTC; the overview
+shows them in the recap CLI's `time_zone` (`~/.config/session-recap/config.toml`,
+`config.local.toml` wins; default `local`), DST-aware, e.g.
+`2026-10-03 06:19:35 GMT−7 [America/Los_Angeles]`. Cards omit the bracketed
+zone name. Unparseable values are shown unchanged. Card previews show at least two recap lines and also fill
 rows that would otherwise be blank (no newer-attempt warning, or a taller paired
 card) without making the card taller. The two-row title block stays fixed so
 paired cards keep their rows aligned. Supplied prompts and failures stay literal. Outer widths 40/48/120/180 currently yield popup
@@ -107,8 +111,8 @@ are retired.
 Every collapsed card shows its latest-good recap with at most two excerpt lines.
 An ellipsis means text was omitted; short recaps are not marked truncated. Missing
 recaps are unavailable, and a newer failed attempt is a separate warning.
-Publication metadata is displayed verbatim (`published_at`, then `created_at`);
-recap CLI owns timezone formatting. Overview has no timezone setting/conversion.
+Publication time uses `published_at`, then `created_at`, converted for display
+only with the recap CLI's `time_zone`. Overview has no timezone setting of its own.
 
 Native blocked status uses the red × symbol. An actual Pi questionnaire wait adds
 **Awaiting answer**, including while its dialog is collapsed. Generic blockers do

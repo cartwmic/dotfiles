@@ -5,6 +5,7 @@ open_map, log_digest, publication_outcomes=None). Reuses completed publication.
 Lifecycle failures retain fresh native bindings and frames before owned cleanup.
 Identity completes independently; the combined integration gate remains T4c.
 """
+from datetime import datetime
 import json
 import os
 import re
@@ -150,7 +151,7 @@ def identity(root, state, env, pane_id, receipts, clients, open_map, log_digest,
     offset = len(client.output)
     ready_map(client, open_map)
     client.key(b'd')
-    wait_frame(client, generated, 'SYNTHETIC-DIGEST-BEGIN')
+    wait_frame(client, '2026-09-30 12:34:56 GMT+0 [UTC]', 'SYNTHETIC-DIGEST-BEGIN')  # UTC record shown in pinned zone
     if current_metadata(state,env,pane_id)[1]['sessionId'] != metadata['sessionId']:
         raise proof.ProofFailure('digest source is not current native adapter UUID')
     for _ in range(75):
@@ -296,7 +297,9 @@ def disclosure(root, state, env, pane_id, receipts, client, open_map, log_digest
         # for date comparison, never accept an old ANSI stream.
         (receipts / f'full-disclosure-{width}-frames.txt').write_text(seen)
         compact = ''.join(seen.replace('│', '').replace('┃', '').split())
-        for date in (published['good']['published_at'], published['failed']['created_at']):
+        # Stored UTC, shown in the fixture's pinned recap time_zone (UTC).
+        shown = lambda value: datetime.fromisoformat(value.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S GMT+0 [UTC]')
+        for date in (shown(published['good']['published_at']), shown(published['failed']['created_at'])):
             if date not in seen and ''.join(date.split()) not in compact:
                 raise proof.ProofFailure(f'{width}-column disclosure missing date {date}')
         file = receipts / f'full-disclosure-{width}.json'
@@ -349,7 +352,7 @@ def native_identity(root, state, env, pane_id, receipts, client, open_map, log_d
     if typed_pane.get('agent_session', {}).get('value') != record['sessionId']:
         raise proof.ProofFailure('public native report did not store genuine UUID')
     ready_map(client, open_map); client.key(b'd')
-    frame = wait_frame(client, '2026-10-01T01:02:03Z', 'TYPED-NATIVE-DIGEST-END')
+    frame = wait_frame(client, '2026-10-01 01:02:03 GMT+0 [UTC]', 'TYPED-NATIVE-DIGEST-END')
     (receipts / 'typed-native-matching.txt').write_text(frame)
     client.key(b'q')
     report('00000000-0000-0000-0000-000000000000')

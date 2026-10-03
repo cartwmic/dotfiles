@@ -68,10 +68,10 @@ test('collapsed card status is bold and recap date is dimmer than recap text', a
   const model = normalizeSnapshot(snapshot()); const journey = createJourney(model);
   model.panes.p1.agent = { ...model.panes.p1.agent, recognized: true, status: 'idle' };
   model.panes.p1.recap = { latest: { status: 'published', record_id: 'good', published_at: '2026-10-01T00:00:00Z', summary: 'short' } };
-  const frame = renderMap({ model, journey, theme }, 100, 40);
+  const frame = renderMap({ model, journey, theme, timeZone: 'UTC' }, 100, 40);
   const color = token => token?.kind === 'rgb' ? token.hex.slice(1).match(/../g).map(h => parseInt(h, 16)).join(';') : null;
   const ready = frame.split('\n').find(line => line.includes('READY'));
-  const dated = frame.split('\n').find(line => line.includes('Latest good recap · 2026-10-01T00:00:00Z'));
+  const dated = frame.split('\n').find(line => line.includes('Latest good recap · 2026-10-01 00:00:00 GMT+0'));
   assert.match(ready, new RegExp('\\x1b\\[1m\\x1b\\[38;2;' + color(palette.blue) + 'm(\\x1b\\[[0-9;]*m)*READY'));
   // The foreground set immediately before each text (borders carry their own colors).
   const fg = (line, text) => line.slice(0, line.indexOf(text)).match(/\x1b\[38;2;([0-9;]+)m(?:\x1b\[48;2;[0-9;]+m)?$/)?.[1];

@@ -620,7 +620,8 @@ def setup_herdr_run(run_id: str, base: Path | None = None) -> tuple[Path, dict[s
     (root / "backend-mode").write_text("success\n", encoding="utf-8")
     fake = ROOT / "tests/herdr-overview/fake_recap_backend.py"
     (recap_config / "config.toml").write_text(
-        f"auto_publish = true\ncommand = [{json.dumps(sys.executable)}, {json.dumps(str(fake))}, \"success\"]\n",
+        # Pinned presentation zone: overview shows recap/digest times in it.
+        f"auto_publish = true\ntime_zone = \"UTC\"\ncommand = [{json.dumps(sys.executable)}, {json.dumps(str(fake))}, \"success\"]\n",
         encoding="utf-8",
     )
     (recap_config / "single-prompt.md").write_text(
