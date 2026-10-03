@@ -120,6 +120,12 @@ export function applyEnvOverrides(cfg: HindsightConfig, env: NodeJS.ProcessEnv):
 	if (env.HINDSIGHT_AUTO_RECALL === "false") out.autoRecall = false;
 	if (env.HINDSIGHT_AUTO_RETAIN === "false") out.autoRetain = false;
 	if (env.HINDSIGHT_DEBUG === "true") out.debug = true;
+	// Subagent children: the parent session already recalls and retains their
+	// outcome. Child transcripts flooded the bank with reviewer/worker detail.
+	if (env.PI_SUBAGENT_CHILD === "1") {
+		out.autoRecall = false;
+		out.autoRetain = false;
+	}
 	return out;
 }
 
