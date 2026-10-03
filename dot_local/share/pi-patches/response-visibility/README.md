@@ -5,7 +5,7 @@ payload, version checks and sibling-safe rollback. No telemetry payload lives he
 Only `personal` and `axon-work-computer` run the helper; Termux, unknown and unset
 profiles skip without touching Pi.
 
-Prerequisites: Node >=22.19, Pi 0.99.2, and the canonical package installed by Pi
+Prerequisites: Node >=22.19, a Pi version whose patch anchors all match, and the canonical package installed by Pi
 from `https://github.com/cartwmic/pi-response-visibility`. Desktop Pi settings
 declare that package. The wrapper finds its helper in Pi's installed Git checkout;
 an explicit `PI_RESPONSE_VISIBILITY_HELPER` or a package bin on PATH takes precedence.
