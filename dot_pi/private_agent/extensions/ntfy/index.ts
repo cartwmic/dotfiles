@@ -294,13 +294,37 @@ export function parseHerdrLabel(raw: string, kind: "workspace" | "tab"): string 
 	return typeof label === "string" && label.trim() ? label.trim() : undefined;
 }
 
-function runHerdrCommand(args: readonly string[]): Promise<string> {
+/**
+ * Herdr can answer with empty stdout (exit 0) at the exact moment Pi settles,
+ * while other extensions report agent state. Retry briefly before giving up.
+ */
+async function runHerdrCommand(args: readonly string[]): Promise<string> {
+	let lastError: unknown;
+	for (let attempt = 0; attempt < 4; attempt++) {
+		if (attempt > 0) await new Promise((r) => setTimeout(r, 150 * attempt));
+		try {
+			return await runHerdrCommandOnce(args);
+		} catch (err: unknown) {
+			lastError = err;
+			if (!(err instanceof Error) || !err.message.startsWith("empty stdout")) throw err;
+		}
+	}
+	throw new Error(`${(lastError as Error).message} after 4 attempts`);
+}
+
+function runHerdrCommandOnce(args: readonly string[]): Promise<string> {
 	return new Promise((resolve, reject) => {
 		execFile(
 			"herdr",
 			[...args],
 			{ encoding: "utf8", timeout: HERDR_COMMAND_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
-			(error, stdout) => error ? reject(error) : resolve(stdout),
+			(error, stdout, stderr) => {
+				if (error) return reject(error);
+				if (!String(stdout).trim()) {
+					return reject(new Error(`empty stdout; stderr=${String(stderr).trim().slice(0, 200)}`));
+				}
+				resolve(stdout);
+			},
 		);
 	});
 }
@@ -401,6 +425,8 @@ export interface NotificationLocation {
 	workspaceName?: string;
 	tabName?: string;
 	clickUrl?: string;
+	/** Why a Herdr jump route could not be resolved (logged, never sent). */
+	lookupError?: string;
 }
 
 /**
@@ -416,11 +442,29 @@ export async function resolveNotificationLocation(opts: {
 }): Promise<NotificationLocation> {
 	const env = opts.env ?? process.env;
 	if (env.HERDR_ENV === "1" && env.HERDR_PANE_ID) {
-		const location = await resolveHerdrLocation(opts.runHerdr ?? runHerdrCommand);
+		const run = opts.runHerdr ?? runHerdrCommand;
+		let lookupError: string | undefined;
+		const location = await resolveHerdrLocation(async (args) => {
+			try {
+				const out = await run(args);
+				if (args[1] === "current" && !parseHerdrPaneCurrent(out)) {
+					lookupError = `unparseable: ${String(out).replace(/\s+/g, " ").slice(0, 300)}`;
+				}
+				return out;
+			} catch (err: unknown) {
+				if (args[1] === "current") {
+					const e = err as { code?: unknown; killed?: unknown; message?: unknown };
+					lookupError = [e.code, e.killed ? "killed" : "", String(e.message ?? err)]
+						.filter(Boolean).join(" ").replace(/\s+/g, " ").slice(0, 200);
+				}
+				throw err;
+			}
+		});
 		if (!location) {
 			return {
 				workspaceName: env.HERDR_WORKSPACE_ID,
 				tabName: env.HERDR_TAB_ID,
+				lookupError: `pane=${env.HERDR_PANE_ID} ${lookupError ?? "unparseable pane current"}`,
 			};
 		}
 		return {
@@ -756,6 +800,13 @@ export function registerNtfyExtension(
 				excerpt,
 				jumpSshHost: config.jumpSshHost,
 			});
+			if (location.lookupError) {
+				try {
+					appendSendLog(dir, `${new Date().toISOString()} no-click pid=${process.pid} ${location.lookupError}`);
+				} catch {
+					/* diagnostics are best-effort */
+				}
+			}
 			await sendFn(config.url, title, body, tags, location.clickUrl);
 		})();
 
@@ -813,7 +864,10 @@ export function registerNtfyExtension(
 		suppressNextSettled = false;
 		if (suppress) return;
 		// hasUI is true in TUI and RPC modes, false in print (-p) / json modes.
-		if (!ctx.hasUI || !ctx.isIdle()) return;
+		// Do not gate on ctx.isIdle(): the settlement-abort Pi patch keeps the
+		// session busy (isIdle false) while agent_settled handlers run, so that
+		// guard skipped every notification. Check the operation signal instead.
+		if (!ctx.hasUI || ctx.signal?.aborted) return;
 		if (!enabled) return;
 		if (!config.url) return;
 		// User ESC and other interrupted runs surface in the TUI as

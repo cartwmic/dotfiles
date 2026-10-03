@@ -1,4 +1,7 @@
-"""Current popup/map navigation contract; old dedicated/preset cases migrated."""
+"""Current popup/map navigation and independent saved-recap joins."""
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import call, patch
 import proof
@@ -17,6 +20,43 @@ class OverviewNavigationTest(unittest.TestCase):
         with patch.object(proof, 'api_request', return_value={'pane_id': None}) as request:
             self.assertFalse(popup_busy({})[0])
             self.assertEqual(request.call_args.args[2]['placement'], 'popup')
+
+    def test_native_recap_lookup_projects_annotations_and_reads_terminal_attempt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary)
+            day = data / 'records' / '2026-10-01'
+            day.mkdir(parents=True)
+            published = {'record_id': 'good', 'source_kind': 'pi', 'source_id': 'session',
+                         'status': 'published', 'created_at': '2026-10-01T00:00:00Z',
+                         'metadata': {'pi': {'nativeSessionId': 'session'}},
+                         'annotations': {'herdr': {'pane_id': 'p1', 'workspace_id': 'w1'}}}
+            failed = {**published, 'record_id': 'failed', 'status': 'failed',
+                      'created_at': '2026-10-01T00:01:00Z', 'annotations': {}, 'attempt': 2}
+            for record in (published, failed):
+                (day / (record['record_id'] + '.json')).write_text(json.dumps(record))
+            (data / 'latest.json').write_text(json.dumps({'sources': [{
+                'source_kind': 'pi', 'source_id': 'session', 'latest_success_id': 'good',
+                'last_attempt_id': 'good'}]}))
+            latest, attempt = proof.read_latest_pi_record(data, 'p1')
+            self.assertEqual((latest['source_id'], latest['pane_id'], latest['workspace_id']),
+                             ('session', 'p1', 'w1'))
+            self.assertEqual((attempt['record_id'], attempt['attempt']), ('failed', 2))
+            self.assertEqual(json.loads((day / 'good.json').read_text()), published)
+
+
+    def test_native_prompt_uses_overview_store_not_legacy_recap_store(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary)
+            recap = data / "session-recap"
+            legacy = recap / "prompts"
+            native = data / "herdr-overview" / "prompts"
+            legacy.mkdir(parents=True)
+            native.mkdir(parents=True)
+            (legacy / "old.json").write_text(json.dumps({"pane_id": "p1", "text": "stale"}))
+            current = {"pane_id": "p1", "text": "current", "working": True}
+            (native / "current.json").write_text(json.dumps(current))
+            self.assertEqual(proof.read_pi_prompt(recap, "p1"), current)
+            self.assertIsNone(proof.read_pi_prompt(recap, "missing"))
 
     def test_reads_current_canvas_not_a_later_presenter_mention(self):
         self.assertEqual(proof.overview_location(canvas()), ('Map', 'all'))
@@ -64,6 +104,15 @@ class OverviewNavigationTest(unittest.TestCase):
         self.assertTrue(proof.published_recap_detail_visible(frame, summary))
         self.assertFalse(proof.published_recap_detail_visible(frame.replace('recap\n','wrong\n'), summary))
         self.assertFalse(proof.published_recap_detail_visible(canvas(summary), summary))
+
+    def test_wrapped_public_content_uses_only_current_popup_canvas_not_native_chrome(self):
+        body = ['Herdr Overview', 'Latest good recap', 'Subject 3',
+                'Synthetic complete', 'recap', 'Supplied prompt',
+                'Synthetic complete', 'current prompt', 'j/k select/scroll · Esc/q']
+        frame = '\n'.join(f'{("Chrome" + str(n)):8}│{line:50}│' for n, line in enumerate(body))
+        self.assertTrue(proof.published_recap_detail_visible(frame, 'Synthetic complete recap'))
+        self.assertTrue(proof.current_prompt_detail_visible(frame, 'w2:p3', 'Synthetic complete current prompt', native_snapshot=native_fixture()))
+        self.assertFalse(proof.published_recap_detail_visible(frame, 'Chrome3'))
 
     def test_current_prompt_requires_supplied_heading_full_content_and_id(self):
         prompt='Synthetic complete current prompt'

@@ -7,7 +7,7 @@ export { OBSERVER_SESSION_MARKER };
 
 const READ_SEARCH_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const DEFAULT_PROVIDER_EXTENSION_LOADOUTS = Object.freeze({
-	"claude-bridge": ["git/github.com/cartwmic/pi-claude-bridge/index.ts"],
+	"claude-compat": ["extensions/claude-compat-guard/index.ts"],
 	cursor: ["git/github.com/cartwmic/pi-cursor/src/index.ts"],
 	openrouter: ["git/github.com/olixis/pi-openrouter-plus/extensions/openrouter-routing/index.ts"],
 });
@@ -296,6 +296,7 @@ export function createPiObserverRunner({
 				resourceLoader,
 				tools: selectedTools,
 			}));
+			await session.bindExtensions({ mode: "print" });
 		} catch (error) {
 			if (error instanceof ObserverRunnerError) throw error;
 			throw new ObserverRunnerError("session-open-failed", `Could not open observer session: ${errorText(error)}`, {

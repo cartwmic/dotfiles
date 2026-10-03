@@ -1,0 +1,16 @@
+{
+  "model": null,
+  "completed": true,
+  "periodic": true,
+  "beforeCompaction": true,
+  "mode": "incremental",
+  "cadence": 1,
+  "intervalMinutes": 15,
+  "timeoutSeconds": 180,
+  "recursion": false,
+  "instructions": "Write a detailed narrative recap for reorientation and resumption. Distinguish confirmed results from ongoing, queued, partial and failed work.",
+  "options": {
+    "thinkingLevel": "off"
+  },
+  "timeZone": "local"
+}
