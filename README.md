@@ -396,7 +396,7 @@ covers publication.
 The `install-herdr-overview` mise task (also part of desktop bootstrap)
 verifies Herdr 0.9.1 and links/enables the source manifest. Linking leaves the
 running server untouched. On a compatible running server,
-`herdr plugin action invoke overview.reconcile --plugin overview` loads the
+`herdr plugin action invoke overview.reconcile` loads the
 linked action and reconciles without opening a view. Invoke `overview.open`
 separately for the popup.
 `herdr server reload-config` separately applies the new keybinding. A later
