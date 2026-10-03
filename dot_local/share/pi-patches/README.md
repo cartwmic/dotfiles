@@ -139,6 +139,13 @@ work-only patches must treat that as skip / un-patch.
 `standing-reminder-origin` reverses only its own literal blocks when disabled,
 preserving sibling edits in shared files.
 
+[`settlement-abort`](settlement-abort/README.md) uses the same desktop gate
+(`personal` / `axon-work-computer`) and exact-block reversal. Tested Pi 0.99.2:
+operation-lifetime `ctx.signal` through awaited final-settlement handlers,
+busy streaming final settlement with compatible main-agent idle semantics, and discard aborted
+pre-settlement proposals. Settled remains notification-only.
+Private public-path proof: `python3 tests/pi-patches/settlement_abort.py`.
+
 ### After a pi or widget upgrade
 
 `npm update -g` and mise reinstall replace pi-coding-agent `dist/` and drop
