@@ -73,7 +73,8 @@ def export(out,chapters=None,actions_path=None):
  elapsed=0;last_output=0
  for event in lines[1:]:
   elapsed+=event[0]
-  if event[1] in ('o','r'):last_output=elapsed
+  # agg renders no frame for a trailing resize; only output ends the visible movie.
+  if event[1]=='o':last_output=elapsed
  final_dwell=max(.001,duration-last_output)
  actions_source=Path(actions_path) if actions_path else out/'actions.json' if (out/'actions.json').exists() else None
  actions=load_actions(actions_source,duration)
