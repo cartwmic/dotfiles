@@ -19,7 +19,7 @@ for future defaults. By default each request captures the current Pi model;
 an explicit recap model override stays independent of later main-model changes.
 Neither choice changes the main model or its options. Each selectable field has
 muted help and identifies inherited, session or default scope. Settings include
-instructions, independent generation options, mode, 60-second whole-attempt
+instructions, independent generation options, mode, 180-second whole-attempt
 timeout, recursive reduction (off initially), completed cadence (every final
 response), periodic interval (15 minutes while active), and before-compaction
 automation. All three automatic triggers default on; explicit persisted false

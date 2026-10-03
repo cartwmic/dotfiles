@@ -6,7 +6,7 @@
   "mode": "incremental",
   "cadence": 1,
   "intervalMinutes": 15,
-  "timeoutSeconds": 60,
+  "timeoutSeconds": 180,
   "recursion": false,
   "instructions": "Write a detailed narrative recap for reorientation and resumption. Distinguish confirmed results from ongoing, queued, partial and failed work.",
   "options": {
