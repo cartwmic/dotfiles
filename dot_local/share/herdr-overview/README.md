@@ -44,7 +44,7 @@ The task links the plugin without starting or restarting Herdr. On a
 compatible running server, load the linked action and reconcile the model with:
 
 ```sh
-herdr plugin action invoke overview.reconcile --plugin overview
+herdr plugin action invoke overview.reconcile
 ```
 
 The server's next start runs the startup hook; no restart is needed for this
@@ -64,7 +64,7 @@ work with Herdr stopped.
 ## Usage
 
 Open the popup with `prefix+shift+o` or
-`herdr plugin action invoke overview.open --plugin overview`. Clients share one
+`herdr plugin action invoke overview.open`. Clients share one
 session-singleton, 100% native popup with no pane ID; another
 modal returns `ui_busy`. Deleting its owner tab dismisses it natively; reopen
 from an ordinary surviving pane. There is no anchor, resurrection or background
@@ -122,7 +122,7 @@ the source-scoped native/visual driver matrix and independent acceptance, then
 obtain explicit apply authorization. Private proof does not authorize apply.
 This viewer does not bypass or repair the native idle guard.
 
-The display is passive: it shows only supplied prompt fields and published recap records, with age and missing/failure status. Opening, selection, refresh, scrolling, and focus never run `session-recap` or synthesize recap text. `overview.reconcile` remains a separate plugin action for publication coordination and manual-library refresh. To show a manually generated single recap in a pane's detail, use that native pane ID as the source ID, for example `printf '%s\n' 'Recent work and current state.' | session-recap create --kind single --source-id PANE_ID`, then invoke `herdr plugin action invoke overview.reconcile --plugin overview` while the source pane is live. This lets the overview display its published or failed status and persist the live terminal association used if `pane.move` later rekeys the pane. Manual results are not Pi auto-naming inputs.
+The display is passive: it shows only supplied prompt fields and published recap records, with age and missing/failure status. Opening, selection, refresh, scrolling, and focus never run `session-recap` or synthesize recap text. `overview.reconcile` remains a separate plugin action for publication coordination and manual-library refresh. To show a manually generated single recap in a pane's detail, use that native pane ID as the source ID, for example `printf '%s\n' 'Recent work and current state.' | session-recap create --kind single --source-id PANE_ID`, then invoke `herdr plugin action invoke overview.reconcile` while the source pane is live. This lets the overview display its published or failed status and persist the live terminal association used if `pane.move` later rekeys the pane. Manual results are not Pi auto-naming inputs.
 
 A successful Pi recap with durable overview attribution starts or resets a
 30-second quiet period for its workspace at publication time. An unannotated

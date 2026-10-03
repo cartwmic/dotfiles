@@ -18,7 +18,7 @@ do not move their logic into this plugin.
   scrape transcripts, raw terminal tails or generate viewer summaries. The
   `install-herdr-overview` mise task
   links the manifest. The startup hook runs on server start. The
-  `herdr plugin action invoke overview.reconcile --plugin overview` action
+  `herdr plugin action invoke overview.reconcile` action
   loads the linked plugin on a compatible running server without a view.
   `overview.open` opens the shared temporary 100% native popup, with no pane ID.
   Modal `ui_busy` is native. Deleting the owner tab dismisses it; ordinary
