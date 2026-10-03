@@ -9,9 +9,11 @@
  *     relevant memories and inject them as a hidden `role:"custom"` message
  *     (model sees it, the chat transcript does not) — the additionalContext
  *     equivalent.
- *   - Auto-retain: on `agent_end` (per response cycle), ship a full-session
- *     transcript to Hindsight every N cycles (fire-and-forget), plus a final
- *     awaited retain on `session_shutdown`.
+ *   - Auto-retain: on `agent_end` (per response cycle), buffer that run's
+ *     messages and append them to the session's Hindsight document every N
+ *     cycles (fire-and-forget), plus a final awaited flush on
+ *     `session_shutdown`. Subagent children (PI_SUBAGENT_CHILD=1) and headless
+ *     print/JSON runs (no UI, e.g. Loop Engine workers) skip both.
  *
  * The `hindsight` MCP server (registered separately) still gives the model
  * explicit recall/reflect/retain tools; this extension makes the common case
@@ -20,15 +22,17 @@
  * Resilience: every network path is wrapped — a memory failure never blocks
  * or crashes a turn. Toggle live with `/hindsight [on|off|toggle|status]`.
  */
+import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { recall, retain } from "./client.ts";
+import { type MemoryItemInput, recall, retain } from "./client.ts";
 import { type HindsightConfig, loadConfig, loadEnabled, saveEnabled } from "./config.ts";
 import {
 	buildRecallQuery,
 	deriveProjectTag,
 	formatMemoryBlock,
+	lastAssistantText,
 	type LooseMessage,
 	messagesToTranscript,
 } from "./content.ts";
@@ -55,11 +59,8 @@ export default function (pi: ExtensionAPI): void {
 	const cfg = loadConfig(dir);
 	let enabled = loadEnabled(dir, cfg.enabled);
 
-	// Response cycles since the last retain (drives the every-N cadence).
-	let cyclesSinceRetain = 0;
-	let everRetained = false;
-	// Latest conversation snapshot (session_shutdown carries no messages).
-	let lastMessages: LooseMessage[] = [];
+	// Source of the most recent input; consumed by the next recall.
+	let lastInputSource: string | undefined;
 
 	pi.registerCommand("hindsight", {
 		description: "Toggle Hindsight auto memory (on | off | toggle | status)",
@@ -89,10 +90,21 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	// --- Auto-recall: inject relevant memories before the agent loop ---
+	pi.on("input", (event) => {
+		lastInputSource = event.source;
+	});
+
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (!enabled || !cfg.autoRecall) return;
+		const source = lastInputSource;
+		lastInputSource = undefined;
+		// Only interactive sessions (TUI/RPC): headless print/JSON runs are
+		// automation such as Loop Engine workers.
+		if (!enabled || !cfg.autoRecall || !ctx.hasUI) return;
 		try {
-			const query = buildRecallQuery(event.prompt, cfg.recallMaxQueryChars);
+			const query = buildRecallQuery(event.prompt, cfg.recallMaxQueryChars, {
+				previousReply: lastAssistantText(ctx.sessionManager.getBranch() as never),
+				includePrompt: source !== "extension",
+			});
 			if (!query) return;
 			const results = await recall(cfg, query);
 			const block = formatMemoryBlock(results);
@@ -118,63 +130,95 @@ export default function (pi: ExtensionAPI): void {
 		}
 	});
 
-	// --- Auto-retain: ship a full-session transcript on a cadence ---
-	function buildRetain(messages: LooseMessage[], ctx: { cwd: string; sessionId: string }) {
-		const transcript = messagesToTranscript(messages, {
+	// --- Auto-retain: append new conversation to the session document ---
+	// agent_end carries only the messages of that one run, so runs are
+	// buffered per session and appended. (Shipping them with "replace" used to
+	// delete everything the session had retained before.) Append also creates
+	// the document if it is missing.
+	type Batch = { sessionId: string; cwd: string; messages: LooseMessage[]; operationId: string; failures: number };
+	// A batch the server keeps rejecting as invalid (4xx other than 408/429) is
+	// dropped rather than blocking the queue. Outages, timeouts, 408/429 and 5xx
+	// are kept for later retry.
+	const MAX_RETAIN_ATTEMPTS = 3;
+	const rejected = (err: unknown) => {
+		const status = Number(/^HTTP (\d{3})/.exec(err instanceof Error ? err.message : "")?.[1]);
+		return status >= 400 && status < 500 && status !== 408 && status !== 429;
+	};
+	let open: { sessionId: string; cwd: string; messages: LooseMessage[]; cycles: number } | null = null;
+	// Sealed batches not yet acknowledged, oldest first. Each keeps its
+	// operation_id across retries so a lost acknowledgement never duplicates it.
+	const unsent: Batch[] = [];
+	let sending: Promise<void> = Promise.resolve();
+
+	function buildRetain(b: Batch): MemoryItemInput[] | null {
+		const transcript = messagesToTranscript(b.messages, {
 			roles: cfg.retainRoles,
 			includeToolCalls: cfg.retainToolCalls,
 		});
 		if (!transcript) return null;
-		const projectTag = deriveProjectTag(ctx.cwd);
-		const tags = [`session:${ctx.sessionId}`, ...(projectTag ? [projectTag] : [])];
-		return {
-			items: [
-				{
-					content: transcript,
-					tags,
-					context: "pi",
-					document_id: `pi-session-${ctx.sessionId}`,
-					update_mode: "replace" as const,
-				},
-			],
-			documentTags: projectTag ? [projectTag] : undefined,
-		};
+		const projectTag = deriveProjectTag(b.cwd);
+		// session: stays as provenance; shared scope keeps it from fencing
+		// observations into one scope per session (no cross-session dedup).
+		const tags = [`session:${b.sessionId}`, ...(projectTag ? [projectTag] : [])];
+		return [
+			{
+				content: transcript,
+				tags,
+				context: "pi",
+				document_id: `pi-session-${b.sessionId}`,
+				update_mode: "append",
+				observation_scopes: "shared",
+			},
+		];
 	}
 
-	async function doRetain(messages: LooseMessage[], ctx: { cwd: string; sessionId: string }) {
-		const built = buildRetain(messages, ctx);
-		if (!built) return;
-		await retain(cfg, built.items, built.documentTags);
-		everRetained = true;
-		debugLog(cfg, `retain: shipped full-session (${built.items[0].content.length} chars)`);
+	/** Send unsent batches in order; stop at the first failure and keep the rest. */
+	async function sendUnsent(): Promise<void> {
+		while (unsent.length > 0) {
+			const b = unsent[0];
+			const items = buildRetain(b);
+			if (items) {
+				try {
+					await retain(cfg, items, b.operationId);
+				} catch (err) {
+					logRetainError(err);
+					if (!rejected(err) || ++b.failures < MAX_RETAIN_ATTEMPTS) return;
+					debugLog(cfg, `retain: dropped a batch after ${b.failures} failed attempts`);
+				}
+			}
+			unsent.shift();
+		}
 	}
+
+	/** Seal the open buffer and queue sending; one send runs at a time. */
+	function flush(): Promise<void> {
+		if (open && open.messages.length > 0) {
+			unsent.push({ sessionId: open.sessionId, cwd: open.cwd, messages: open.messages, operationId: randomUUID(), failures: 0 });
+			open = { ...open, messages: [], cycles: 0 };
+		}
+		sending = sending.then(sendUnsent);
+		return sending;
+	}
+
+	const logRetainError = (err: unknown) =>
+		debugLog(cfg, `retain failed: ${err instanceof Error ? err.message : String(err)}`);
 
 	pi.on("agent_end", async (event, ctx) => {
-		if (!enabled || !cfg.autoRetain) return;
-		lastMessages = (event.messages ?? []) as LooseMessage[];
-		cyclesSinceRetain++;
-		if (cyclesSinceRetain < cfg.retainEveryNTurns) return;
-		cyclesSinceRetain = 0;
+		if (!enabled || !cfg.autoRetain || !ctx.hasUI) return;
 		const sm = ctx.sessionManager;
+		const sessionId = sm.getSessionId();
+		// Session switched in this process: seal and ship the old session's buffer.
+		if (open && open.sessionId !== sessionId) void flush();
+		if (!open || open.sessionId !== sessionId) open = { sessionId, cwd: sm.getCwd(), messages: [], cycles: 0 };
+		open.messages.push(...((event.messages ?? []) as LooseMessage[]));
+		open.cycles++;
 		// Fire-and-forget so the turn never blocks on memory writes.
-		void doRetain((event.messages ?? []) as LooseMessage[], {
-			cwd: sm.getCwd(),
-			sessionId: sm.getSessionId(),
-		}).catch((err) =>
-			debugLog(cfg, `retain failed: ${err instanceof Error ? err.message : String(err)}`),
-		);
+		if (open.cycles >= cfg.retainEveryNTurns) void flush();
 	});
 
-	// --- Final flush on shutdown (awaited so it completes before exit) ---
-	pi.on("session_shutdown", async (event, ctx) => {
+	// --- Final flush on shutdown: waits for any in-flight send, then the rest ---
+	pi.on("session_shutdown", async () => {
 		if (!enabled || !cfg.autoRetain || !cfg.retainOnSessionEnd) return;
-		// Skip if nothing happened since the last cadence retain.
-		if (cyclesSinceRetain === 0 && everRetained) return;
-		const sm = ctx.sessionManager;
-		try {
-			await doRetain(lastMessages, { cwd: sm.getCwd(), sessionId: sm.getSessionId() });
-		} catch (err) {
-			debugLog(cfg, `final retain failed: ${err instanceof Error ? err.message : String(err)}`);
-		}
+		await flush();
 	});
 }

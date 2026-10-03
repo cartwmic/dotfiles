@@ -16,6 +16,8 @@ export interface MemoryItemInput {
 	document_id?: string;
 	update_mode?: "replace" | "append";
 	timestamp?: string;
+	/** "shared" consolidates into one global scope regardless of tags. */
+	observation_scopes?: "shared";
 }
 
 function bankBase(cfg: HindsightConfig): string {
@@ -23,11 +25,7 @@ function bankBase(cfg: HindsightConfig): string {
 }
 
 /** POST JSON to an absolute URL with timeout + optional bearer. Resolves parsed JSON. */
-export function postJson(
-	cfg: HindsightConfig,
-	url: string,
-	body: unknown,
-): Promise<unknown> {
+export function postJson(cfg: HindsightConfig, url: string, body: unknown): Promise<unknown> {
 	return new Promise((resolve, reject) => {
 		let payload: string;
 		try {
@@ -83,6 +81,8 @@ export async function recall(
 		types: cfg.recallTypes,
 		budget: cfg.recallBudget,
 		max_tokens: cfg.recallMaxTokens,
+		// Entities are on by default (~30 KB per response) and never used here.
+		include: { entities: null },
 	})) as { results?: Array<Record<string, unknown>> };
 	const results = Array.isArray(resp?.results) ? resp.results : [];
 	return results
@@ -94,15 +94,18 @@ export async function recall(
 		.filter((r) => r.text.length > 0);
 }
 
-/** Retain items into the bank. Async extraction (non-blocking server-side). */
+/**
+ * Retain items into the bank. Async extraction (non-blocking server-side).
+ * Reusing operationId on a retry makes a lost acknowledgement a no-op.
+ */
 export async function retain(
 	cfg: HindsightConfig,
 	items: MemoryItemInput[],
-	documentTags?: string[],
+	operationId?: string,
 ): Promise<void> {
 	await postJson(cfg, `${bankBase(cfg)}/memories`, {
 		items,
 		async: true,
-		...(documentTags && documentTags.length ? { document_tags: documentTags } : {}),
+		...(operationId ? { operation_id: operationId } : {}),
 	});
 }

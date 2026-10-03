@@ -1,8 +1,9 @@
 /**
- * Pure content helpers for the hindsight extension: tag derivation, recall
- * query building, memory-block formatting, feedback-loop stripping, and
- * transcript serialization. No I/O — all unit-testable.
+ * Content helpers for the hindsight extension: tag derivation, recall query
+ * building, memory-block formatting, feedback-loop stripping, and transcript
+ * serialization. Only deriveProjectTag reads the filesystem (to find the repo).
  */
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 export const MEMORY_OPEN = "<hindsight_memories>";
@@ -36,18 +37,82 @@ export function sanitizeTag(value: string): string {
 		.slice(0, 64);
 }
 
-/** Derive a `project:<name>` tag from a working directory. Null if undecidable. */
+/**
+ * Find the main repository directory for cwd. A linked worktree's `.git` file
+ * points into `<main>/.git/worktrees/<name>`, so every worktree maps to its
+ * main checkout. Null outside a git repository.
+ */
+export function findRepoRoot(cwd: string): string | null {
+	let dir = path.resolve(cwd);
+	try {
+		dir = fs.realpathSync(dir); // a symlinked alias maps to the same repo
+	} catch {
+		/* missing path: walk the literal one */
+	}
+	for (;;) {
+		const dotGit = path.join(dir, ".git");
+		try {
+			const stat = fs.statSync(dotGit);
+			if (stat.isDirectory()) return dir;
+			const m = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(dotGit, "utf8"));
+			if (!m) return dir;
+			const gitdir = path.resolve(dir, m[1].trim());
+			const i = gitdir.lastIndexOf(`${path.sep}.git${path.sep}worktrees${path.sep}`);
+			return i >= 0 ? gitdir.slice(0, i) : dir;
+		} catch {
+			/* no .git here; keep walking up */
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) return null;
+		dir = parent;
+	}
+}
+
+/**
+ * Derive a `project:<name>` tag: the main repository's directory name when cwd
+ * is inside git (so worktrees and subdirectories share one tag), else the cwd
+ * basename. Null if undecidable.
+ */
 export function deriveProjectTag(cwd: string | undefined): string | null {
 	if (!cwd) return null;
-	const base = sanitizeTag(path.basename(cwd.replace(/\/+$/, "")));
+	const root = findRepoRoot(cwd) ?? cwd;
+	const base = sanitizeTag(path.basename(root.replace(/\/+$/, "")));
 	return base ? `project:${base}` : null;
 }
 
-/** Build the recall query from the user's prompt: strip prior memory blocks, trim. */
-export function buildRecallQuery(prompt: string | undefined, maxChars: number): string {
-	if (!prompt) return "";
-	const cleaned = stripMemoryBlocks(prompt).trim();
-	return cleaned.length > maxChars ? cleaned.slice(0, maxChars) : cleaned;
+/** Characters of the previous assistant reply added to the recall query. */
+export const RECALL_CONTEXT_CHARS = 300;
+
+/**
+ * Build the recall query. The prompt alone is often anaphoric ("this rule",
+ * "continue"), so the start of the previous assistant reply is appended as
+ * context. The prompt stays first so a topic switch still wins. When the
+ * prompt was sent by an extension (e.g. a compaction "continue"), it is
+ * boilerplate and only the context is used.
+ */
+export function buildRecallQuery(
+	prompt: string | undefined,
+	maxChars: number,
+	opts: { previousReply?: string; includePrompt?: boolean } = {},
+): string {
+	const cleaned = stripMemoryBlocks(prompt ?? "").trim();
+	const user = cleaned.length > maxChars ? cleaned.slice(0, maxChars) : cleaned;
+	const reply = stripMemoryBlocks(opts.previousReply ?? "").trim().slice(0, RECALL_CONTEXT_CHARS);
+	if (!reply) return user;
+	const context = `Context (previous assistant reply): ${reply}`;
+	if (opts.includePrompt === false || !user) return context;
+	return `User: ${user}\n\n${context}`;
+}
+
+/** Text of the most recent assistant message with text on a session branch. */
+export function lastAssistantText(entries: Array<{ type?: string; message?: LooseMessage }>): string {
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const m = entries[i]?.type === "message" ? entries[i].message : undefined;
+		if (m?.role !== "assistant") continue;
+		const text = extractText(m, false).trim();
+		if (text) return text;
+	}
+	return "";
 }
 
 /** Remove any <hindsight_memories>...</hindsight_memories> spans (feedback-loop guard). */
