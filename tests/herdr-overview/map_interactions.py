@@ -236,8 +236,17 @@ def scripted_interactions(root, env, receipts, Client):
     try:
         client = Client({}, scripted_env, 120, ['node', str(proof.ROOT / 'dot_local/share/herdr-overview/index.mjs'), 'overview'])
         client.drain(1)
+        def current():
+            # A repaint can briefly clear the PTY; wait for the next completed canvas.
+            deadline = time.monotonic() + 10
+            while True:
+                frame = client.frame()
+                try:
+                    canvas(frame); return frame
+                except proof.ProofFailure:
+                    if time.monotonic() > deadline: raise
         def capture(name):
-            frame = client.frame(); (receipts / f'scripted-{name}.txt').write_text(frame); return frame
+            frame = current(); (receipts / f'scripted-{name}.txt').write_text(frame); return frame
         frame = capture('initial')
         if 'SCRIPTED' not in frame or 'BLOCKED' not in frame:
             raise proof.ProofFailure('scripted status fixture did not render')
@@ -249,7 +258,7 @@ def scripted_interactions(root, env, receipts, Client):
         client.key(b'\r'); client.key(b'k'*100)
         seen = set(); reading = None
         for i in range(220):
-            frame = client.frame()
+            frame = current()
             (receipts / 'scripted-current-detail.txt').write_text(frame)
             for marker in ('TITLE-END','RECAP-END','ERROR-END','PROMPT-END'):
                 if contains(frame, marker):
@@ -258,7 +267,7 @@ def scripted_interactions(root, env, receipts, Client):
             if i == 40:
                 reading = frame
                 client.key(b'r')
-                if client.frame() != reading:
+                if current() != reading:
                     raise proof.ProofFailure('refresh changed reading position')
                 client.resize(40)
                 capture('narrow-reading')
@@ -274,7 +283,7 @@ def scripted_interactions(root, env, receipts, Client):
         # Batched key writes still drive the real input parser; take a fresh
         # current frame after each batch, never search accumulated output.
         for _ in range(80):
-            frame = client.frame()
+            frame = current()
             (receipts / 'scripted-current-detail.txt').write_text(frame)
             for marker in ('TITLE-END','RECAP-END','ERROR-END','PROMPT-END'):
                 if contains(frame, marker):
