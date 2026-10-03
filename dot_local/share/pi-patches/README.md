@@ -139,7 +139,7 @@ work-only patches must treat that as skip / un-patch.
 preserving sibling edits in shared files.
 
 [`settlement-abort`](settlement-abort/README.md) uses the same desktop gate
-(`personal` / `axon-work-computer`) and exact-block reversal. Tested Pi 0.99.2:
+(`personal` / `axon-work-computer`) and exact-block reversal. Tested Pi 0.99.2 and 1.0.0:
 operation-lifetime `ctx.signal` through awaited final-settlement handlers,
 busy streaming final settlement with compatible main-agent idle semantics, and discard aborted
 pre-settlement proposals. Settled remains notification-only.
