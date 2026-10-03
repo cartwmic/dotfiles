@@ -50,3 +50,19 @@ test('the viewer redraws in place inside a synchronized update, never clearing t
   await new Promise(r => setTimeout(r, 200)); input.write('\x1b[<65;5;5M'); await new Promise(r => setTimeout(r, 100)); input.write('q'); await done;
   assert.ok(text.includes('\x1b[?2026h\x1b[H') && text.includes('\x1b[J\x1b[?2026l')); assert.ok(!text.includes('\x1b[2J'));
 });
+
+test('paired cards keep equal heights and full borders when recaps contain blank lines', () => {
+  const model = normalizeSnapshot(snapshot());
+  const recap = summary => ({ latest: { record_id: 'r', status: 'published', published_at: '2026-10-03T17:00:00Z', summary } });
+  model.panes.p1.recap = recap('Recap for reorientation and resumption\n\nWhere things stand\n\nMore text here');
+  model.panes.p2.recap = recap('Recap: viewer fixes are committed, merged, applied and pushed\n\nWhere things stand');
+  model.tabs.t1.fullTitle = 'Pi lifecycle classifiers and Jev integration'; model.panes.p3.agent.status = 'working';
+  for (const width of [40, 46, 92, 160]) {
+    const rows = plain(mapFrame({ model, journey: createJourney(model) }, width, 60).text).split('\n');
+    const top = rows.findIndex(r => r.includes('┌')), bottom = rows.findIndex((r, i) => i > top && r.includes('└'));
+    assert.equal((rows[top].match(/┌/g) || []).length, 2, width);
+    assert.equal((rows[bottom].match(/└/g) || []).length, 2, `both bottom borders on one row at ${width}`);
+    for (const row of rows.slice(top + 1, bottom)) assert.equal((row.match(/│/g) || []).length, 4, width);
+    assert.ok(!rows[top].includes('┐  ┌'), `one-column gap between paired cards at ${width}`);
+  }
+});
