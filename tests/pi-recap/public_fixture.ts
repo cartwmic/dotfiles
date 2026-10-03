@@ -44,6 +44,7 @@ export default function (pi: any) {
             text = earlier + `Observed ${topic}: the tool confirmed ${result}. Unfinished work: ${pending}. Present state: evidence collected, follow-up pending. Next: ${next}.`;
           }
           if (process.env.RECAP_PROOF_UX === '1' && !reduction) text = '観察 \x1b[36m' + text + '\x1b[0m\n' + Array.from({ length: 36 }, (_, i) => `詳しい${i + 1}: ${facts.join(' ')}; evidence preserved for review.`).join('\n');
+          if (process.env.RECAP_PROOF_MARKDOWN === '1' && !reduction) text = '## Orchard status\n**Complete:** ' + text + ' Commit `abc1234` merged.\n- first follow-up item\n- second follow-up item';
           log({ event: 'response', model: model.id, number, reduction, text });
           message.content = [{ type: 'text', text }];
           const fault = process.env.HOME + '/unfinished';

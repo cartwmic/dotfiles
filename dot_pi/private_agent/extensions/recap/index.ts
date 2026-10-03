@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { getPackageDir, getAgentDir, estimateTokens } from '@earendil-works/pi-coding-agent';
-import { Input, SelectList, truncateToWidth, stripTerminalSequences, matchesKey, Key, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { getPackageDir, getAgentDir, estimateTokens, getMarkdownTheme } from '@earendil-works/pi-coding-agent';
+import { Input, SelectList, Markdown, truncateToWidth, stripTerminalSequences, matchesKey, Key, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
@@ -212,10 +212,12 @@ export default function recap(pi: ExtensionAPI) {
       await refreshWidget(ctx);
     }
   }
-  async function viewer(ctx: ExtensionContext, title: string, text: string) {
+  // Recap narratives are markdown; help and failure JSON stay plain dim text.
+  async function viewer(ctx: ExtensionContext, title: string, text: string, markdown = false) {
     await ctx.ui.custom<void>((tui, theme, _kb, done) => {
       let top = 0;
-      return { invalidate() {}, render(width: number) { const lines = wrapTextWithAnsi(text, width); top = Math.min(top, Math.max(0, lines.length - 18)); return [...wrapTextWithAnsi(theme.fg('dim', title + ' — ↑↓ scroll, Esc close'), width), ...lines.slice(top, top + 18).map(l => theme.fg('dim', l))]; }, handleInput(data: string) { if (matchesKey(data, Key.escape)) done(); else { if (matchesKey(data, Key.up)) top = Math.max(0, top - 1); if (matchesKey(data, Key.down)) top++; if (matchesKey(data, Key.pageDown)) top += 18; if (matchesKey(data, Key.pageUp)) top = Math.max(0, top - 18); tui.requestRender(); } } };
+      const md = markdown ? new Markdown(text, 0, 0, getMarkdownTheme()) : undefined;
+      return { invalidate() { md?.invalidate(); }, render(width: number) { const lines = md ? md.render(width) : wrapTextWithAnsi(text, width).map(l => theme.fg('dim', l)); top = Math.min(top, Math.max(0, lines.length - 18)); return [...wrapTextWithAnsi(theme.fg('dim', title + ' — ↑↓ scroll, Esc close'), width), ...lines.slice(top, top + 18)]; }, handleInput(data: string) { if (matchesKey(data, Key.escape)) done(); else { if (matchesKey(data, Key.up)) top = Math.max(0, top - 1); if (matchesKey(data, Key.down)) top++; if (matchesKey(data, Key.pageDown)) top += 18; if (matchesKey(data, Key.pageUp)) top = Math.max(0, top - 18); tui.requestRender(); } } };
     });
   }
   async function history(ctx: ExtensionContext, args: string[]) {
@@ -244,7 +246,7 @@ export default function recap(pi: ExtensionAPI) {
       };
     });
     const record = choice === undefined ? undefined : rows[Number(choice)];
-    if (record) await viewer(ctx, `${record.record_id} ${displayTime(record.created_at, zone)} ${record.status}`, record.summary ?? JSON.stringify(record.failure ?? record, null, 2));
+    if (record) await viewer(ctx, `${record.record_id} ${displayTime(record.created_at, zone)} ${record.status}`, record.summary ?? JSON.stringify(record.failure ?? record, null, 2), record.summary != null);
   }
   async function request(ctx: ExtensionContext, mode = 'incremental', trigger = 'manual') {
     const id = ctx.sessionManager.getSessionId(), generation = invalidate(id), epoch = contextEpoch;
@@ -355,7 +357,7 @@ export default function recap(pi: ExtensionAPI) {
       }
       else if (parts[0] === 'view') {
         const record = await currentRecap(ctx);
-        if (record) await viewer(ctx, `Recap ${record.metadata?.pi?.scope ?? 'legacy scope'} ${displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone)}`, record.summary);
+        if (record) await viewer(ctx, `Recap ${record.metadata?.pi?.scope ?? 'legacy scope'} ${displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone)}`, record.summary, true);
         else notice(ctx, 'No saved recap for this branch.');
       }
       else if (parts[0] === 'help') await viewer(ctx, 'Recap help', commandHelp);

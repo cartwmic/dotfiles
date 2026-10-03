@@ -77,7 +77,13 @@ layouts use workspace columns; singleton tabs share compact card rows (two
 columns from an actual popup-canvas width of 32 columns). Cards are bordered,
 padded and word-wrapped; shortened collapsed titles end in an ellipsis. `M`
 marks manual names; headings show tab and attention counts. Normal reading
-shows prose, not raw JSON. Outer widths 40/48/120/180 currently yield popup
+shows prose, not raw JSON. Expanded recap and digest bodies render a small
+markdown subset (`src/markdown.mjs`: headings, bold/italic, inline code,
+lists, quotes, rules, code fences); collapsed card previews drop the markers
+and stay plain text. Card previews show at least two recap lines and also fill
+rows that would otherwise be blank (no newer-attempt warning, or a taller paired
+card) without making the card taller. The two-row title block stays fixed so
+paired cards keep their rows aligned. Supplied prompts and failures stay literal. Outer widths 40/48/120/180 currently yield popup
 widths 38/46/92/152. Outer width 32 yields only 30: below the card floor, where
 ordinary clipping can occur, not a supported-width claim. The single shared
 native popup PTY can clip a narrow attached peer when another client is wide;
