@@ -30,7 +30,7 @@ async function world() {
     { pane_id: 'pane-original', terminal_id: 'terminal-exact' },
     { pane_id: 'focused-pane', terminal_id: 'terminal-focused' },
   ] };
-  let failWake = false;
+  let failWake = false, limitFailures = 0;
   const socketPath = path.join(root, 'h.sock');
   const server = net.createServer(socket => {
     let buffer = '';
@@ -43,7 +43,9 @@ async function world() {
       socket.end(JSON.stringify({ id: request.id, ...(request.method === 'pane.current'
         ? { result: { type: 'pane_current', pane } }
         : request.method === 'session.snapshot' ? { result: { snapshot } }
-        : failWake ? { error: { message: 'scripted missed wake-up' } } : { result: {} }) }) + '\n');
+        : failWake ? { error: { message: 'scripted missed wake-up' } }
+        : limitFailures > 0 && limitFailures-- ? { error: { code: 'plugin_command_limit_reached', message: 'maximum concurrent plugin commands reached (32)' } }
+        : { result: {} }) }) + '\n');
     });
   });
   await new Promise<void>(resolve => server.listen(socketPath, resolve));
@@ -76,7 +78,7 @@ async function world() {
     return record;
   };
   return { root, env, cli, calls, snapshot, ctx, fire, put, listeners,
-    setPane(value: any) { pane = value; }, failWake(value: boolean) { failWake = value; },
+    setPane(value: any) { pane = value; }, failWake(value: boolean) { failWake = value; }, limit(count: number) { limitFailures = count; },
     record(id: string) { return readJson(path.join(recordsDir, `${id}.json`)); },
     async close() {
       await fire('session_shutdown');
@@ -320,3 +322,15 @@ test('actual public wait edges pair one native contribution and clear only owned
   } finally { delete process.env.HERDR_ENV; await w.close(); }
 });
 
+test('reload with many saved recaps wakes overview once and rides out a full plugin command table', async () => {
+  const w = await world();
+  const warnings: string[] = []; const original = console.warn; console.warn = (...args: any[]) => { warnings.push(args.join(' ')); };
+  try {
+    for (const id of ['d', 'e', 'f', '1', '2', '3']) w.put(id.repeat(32));
+    w.limit(2);
+    await w.fire('session_start');
+    const invokes = w.calls.filter(c => c.method === 'plugin.action.invoke' && c.params?.action_id === 'overview.reconcile');
+    assert.equal(invokes.length, 3, 'one wake-up for six records, retried twice past the command limit');
+    assert.deepEqual(warnings, [], 'a full command table is not reported as a failure');
+  } finally { console.warn = original; await w.close(); }
+});

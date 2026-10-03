@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix='recap-discovery-') as temporary:
         os.write(pi.master, b'\x01\x0b'); pi.collect(.2)
     def published(): return [r for r in pi.records() if r['status'] == 'published']
     def running(label, saved=None):
-        lines = frame(label)
+        lines = [line.removeprefix('▎ ') for line in frame(label)]
         headings = [i for i, line in enumerate(lines) if line.startswith('Recap running')]
         assert len(headings) == 1, (label, lines)
         row = headings[0]
@@ -42,8 +42,9 @@ with tempfile.TemporaryDirectory(prefix='recap-discovery-') as temporary:
             assert shown and ' '.join(plain(first).split()).startswith(shown), (label, lines[row + 1])
         rule = next(i for i in range(row + 1, row + 6) if lines[i].startswith('─'))
         assert rule - row <= 4, (label, 'more than three excerpt rows')
-        assert all(c.get('faint') for y in range(row, rule) for c in screen.frames[-1]['cells'][y] if c['data'].strip())
-    def not_running(label): assert not any(line.startswith('Recap running') for line in frame(label))
+        assert all(screen.frames[-1]['cells'][y][0]['data'] == '▎' for y in range(row, rule)), (label, 'widget bar missing')
+        assert all(c.get('faint') for y in range(row, rule) for c in screen.frames[-1]['cells'][y][2:] if c['data'].strip())
+    def not_running(label): assert not any(line.removeprefix('▎ ').startswith('Recap running') for line in frame(label))
     try:
         if 'Trust project folder?' in pi.visible(): os.write(pi.master, b'\x1b[B\r'); pi.collect(2)
         for cols, rows in ((48, 32), (180, 40)):
@@ -87,7 +88,7 @@ with tempfile.TemporaryDirectory(prefix='recap-discovery-') as temporary:
         pi.wait(lambda: bool(pi.calls()), 'gated provider not called')
         first = pi.envelopes()[-1]
         pi.collect(.7)
-        shown = any(line.startswith('Recap running') for line in frame('first-gated-running'))
+        shown = any(line.removeprefix('▎ ').startswith('Recap running') for line in frame('first-gated-running'))
         observations.append({'first_running': shown, 'token': first['token'], 'current': pi.current(first['request_key'])})
         if before:
             assert not shown and all(not o.get('native_arguments', False) and not o.get('transient_guide', False) for o in observations if 'width' in o)
@@ -124,7 +125,7 @@ with tempfile.TemporaryDirectory(prefix='recap-discovery-') as temporary:
             running('old-terminal-keeps-newer', saved)
             pi.send('/recap cancel')
             pi.wait(lambda: pi.current(newer['request_key'])['status'] == 'canceled', 'public cancel did not change durable fence')
-            pi.wait(lambda: not any(line.startswith('Recap running') for line in screen.screen.display), 'cancel did not clear running widget', seconds=10)
+            pi.wait(lambda: not any(line.removeprefix('▎ ').startswith('Recap running') for line in screen.screen.display), 'cancel did not clear running widget', seconds=10)
             not_running('cancel-clears')
             pi.wait(lambda: pi.terminal(newer['token']) is not None, 'newer not canceled')
             pi.gate.unlink(); (root / 'unfinished').write_text('final')

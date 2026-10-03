@@ -240,7 +240,7 @@ function createHarness(id = "session-parent", sharedSessionDir?: string) {
 			notify: (message, type) => notifications.push({ message, type }),
 			setWidget: (key, content) => {
 				if (content) widgets.set(key, typeof content === "function"
-					? content({}, { fg: (color: string, text: string) => { assert.equal(color, "dim"); return `\x1b[90m${text}\x1b[39m`; } }).render(200)
+					? content({}, { fg: (color: string, text: string) => { assert.ok(color === "dim" || color === "warning" && text === "▎ ", color); return color === "dim" ? `\x1b[90m${text}\x1b[39m` : `<bar>${text}`; } }).render(200)
 					: content);
 				else widgets.delete(key);
 			},
@@ -298,11 +298,11 @@ function serializedState(harness: ReturnType<typeof createHarness>) {
 	return result.kind === "ok" ? result.state : emptyReminderState();
 }
 
-test("reminder widget is dim and has no leading padding", async () => {
+test("reminder widget is dim behind its coloured bar", async () => {
 	const h = createHarness();
 	try {
 		await start(h);
-		assert.equal(h.ctx.ui.widgets.get("standing-reminder")?.[0], "\x1b[90mNo session reminder · /reminder to set one\x1b[39m");
+		assert.equal(h.ctx.ui.widgets.get("standing-reminder")?.[0], "<bar>▎ \x1b[90mNo session reminder · /reminder to set one\x1b[39m");
 	} finally { h.cleanup(); }
 });
 

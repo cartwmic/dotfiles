@@ -12,6 +12,18 @@ function identity(ctx: ExtensionContext): string | undefined {
   return typeof id === "string" && id.trim() ? id : undefined;
 }
 function warn(message: string) { console.warn(`[herdr-overview] ${message}`); }
+const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms).unref?.());
+// Herdr caps concurrent plugin commands (32). A session reload fans out many
+// wake-ups at once, so a full slot table is retried briefly rather than reported.
+async function invokeWithRetry(call: () => Promise<unknown>): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try { await call(); return; }
+    catch (error) {
+      if (attempt >= 3 || !/maximum concurrent plugin commands/.test(String((error as Error)?.message))) throw error;
+      await pause(500 * 2 ** attempt);
+    }
+  }
+}
 
 export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {
   registerQuestionWait(pi);
@@ -62,13 +74,14 @@ export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {
 		const currentRevision = revision;
 		await refresh;
 		if (!metadataFile || !socketPath || token !== generation || currentRevision !== revision) return;
-		try { await invokeOverviewNameRefresh(socketPath); }
+		try { await invokeWithRetry(() => invokeOverviewNameRefresh(socketPath)); }
 		catch { warn("Pi name metadata refreshed, but Herdr's passive name refresh failed"); }
 	});
 	pi.on("session_tree", refreshMetadata);
 	pi.on("input", refreshMetadata);
 	pi.on("agent_settled", refreshMetadata);
   async function consume(sessionId: string, generation: number, recordId?: string) {
+    let wake = false;
     const records = recordId
       ? [JSON.parse(await runSessionRecap(["read", recordId, "--json"])).record]
       : JSON.parse(await runSessionRecap(["list", "--json", "--source-kind", "pi", "--status", "published"])).records;
@@ -87,11 +100,13 @@ export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {
           ...(pane ? { pane_id: pane.paneId, ...(pane.workspaceId ? { workspace_id: pane.workspaceId } : {}) } : {}),
         })]);
       }
-      if (process.env.HERDR_SOCKET_PATH?.trim()) {
-        try { await invokeOverviewReconcile(process.env.HERDR_SOCKET_PATH.trim()); }
-        catch { warn("saved recap annotation retained; overview wake-up failed"); }
-      }
+      wake = true;
     }
+    // One wake-up per pass: reconcile reads every record, so per-record calls only add load.
+    const socket = process.env.HERDR_SOCKET_PATH?.trim();
+    if (!wake || !socket || active !== sessionId || epoch !== generation) return;
+    try { await invokeWithRetry(() => invokeOverviewReconcile(socket)); }
+    catch { warn("saved recap annotation retained; overview wake-up failed"); }
   }
 
   pi.on("session_start", (_event, ctx) => {

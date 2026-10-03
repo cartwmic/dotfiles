@@ -26,7 +26,8 @@ automation. All three automatic triggers default on; explicit persisted false
 values remain off. The retired `inputBudget` byte cap is ignored even in existing
 defaults/session overrides and is no longer editable; archives/preferences are not migrated.
 
-The muted widget (a heading plus up to three excerpt rows) above the editor shows truthful `Recap running`
+The muted widget (a heading plus up to three excerpt rows, behind an accent-coloured `▎`
+bar that sets it apart from the reminder and latency widgets) above the editor shows truthful `Recap running`
 once the detached job is accepted, including while preflight is blocked and before
 the first save. With a prior success it retains that recap's update time and excerpt;
 without one it says no recap has been saved yet. Completion, failure, unsaved output,

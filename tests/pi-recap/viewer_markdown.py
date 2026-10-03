@@ -45,16 +45,17 @@ with tempfile.TemporaryDirectory(prefix='recap-viewer-markdown-') as temporary:
         assert '**Complete:**' in saved['summary'], 'stored narrative must keep raw markdown'
         # Widget: dim markdown, markers gone, bold kept, own line breaks, max 3 rows.
         frame = screen.capture('widget')
-        lines = [line.rstrip() for line in frame['lines']]
+        lines = [line.rstrip().removeprefix('▎ ') for line in frame['lines']]
         head = next(i for i, line in enumerate(lines) if line.startswith('Recap updated'))
         rule = next(i for i in range(head + 1, head + 6) if lines[i].startswith('─'))
         rows = lines[head + 1:rule]
         assert rows[0] == 'Orchard status' and rows[1].startswith('Complete:') and len(rows) == 3, ('widget', rows)
         assert rows[2].endswith('...') and not any('**' in r or '##' in r or '`' in r for r in rows), ('widget', rows)
-        cells = frame['cells'][head + 2]
+        cells = frame['cells'][head + 2][2:]
         assert all(cells[i]['bold'] and cells[i].get('faint') for i in range(len('Complete:'))), ('widget', 'bold not dim-bold')
-        assert all(c.get('faint') for y in range(head, rule) for c in frame['cells'][y] if c['data'].strip()), ('widget', 'not all dim')
-        assert len({c['fg'] for y in range(head, rule) for c in frame['cells'][y] if c['data'].strip()}) == 1, ('widget', 'colored')
+        assert all(c.get('faint') for y in range(head, rule) for c in frame['cells'][y][2:] if c['data'].strip()), ('widget', 'not all dim')
+        assert len({c['fg'] for y in range(head, rule) for c in frame['cells'][y][2:] if c['data'].strip()}) == 1, ('widget', 'colored')
+        assert len({frame['cells'][y][0]['fg'] for y in range(head, rule)}) == 1 and frame['cells'][head][0]['data'] == '▎', ('widget', 'bar')
         observed.append('widget')
         calls = len(pi.calls())
         pi.send('/recap view', 1.5)

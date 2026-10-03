@@ -10,7 +10,8 @@ belong in agent instructions. The reminder is advisory, not enforcement.
   are drafts; failed/cancelled closes preserve the previous value. An unchanged
   close is view-only. Empty contents clear the reminder.
 - `/reminder-clear` clears without starting a request.
-- The compact widget previews the current value. A saved edit or clear remains
+- The compact widget previews the current value behind a warning-coloured `▎`
+  bar that sets it apart from the recap and latency widgets. A saved edit or clear remains
   pending for the **next normal request**, not just the next operator message.
 
 No control forces a turn, aborts a tool, or restarts a response. A request already
