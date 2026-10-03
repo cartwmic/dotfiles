@@ -3,8 +3,8 @@
 # No APK or signing secret is stored in this public repository.
 set -euo pipefail
 
-APP_REF=950fe777391b8b944de901ec429d48b4c21c425c
-API_REF=5491d9c5dbf0d06ec5d0b98b38792350bb447d38
+APP_REF=edb205affd8e1376881f4b0340f11f94b53f08c1
+API_REF=ce5160965d97ef0d709d5c066cb99657e61a46b6
 BOOT_REF=a8493bd6ba016bc370af34aa65fcbe065cc00ced
 SIGNER=ec1ab3f5e4d261a4c6c5e2979b4af4f8d0071a951761575a2929ce59dcf1c0c1
 
@@ -62,8 +62,8 @@ check_apk() {
   [ "$version" = "$want_version" ] || die "$package versionCode is $version, expected pinned $want_version"
 }
 check_all() {
-  check_apk "$app" com.termux 1009
-  check_apk "$api" com.termux.api 1003
+  check_apk "$app" com.termux 1010
+  check_apk "$api" com.termux.api 1004
   check_apk "$boot" com.termux.boot 1000
   printf 'verified app=%s api=%s boot=%s signer=%s\n' "$app" "$api" "$boot" "$SIGNER"
 }
