@@ -3,6 +3,15 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Herdr reports a Pi session either by id or by its session file path, whose
+// name ends in _<uuid>.jsonl. Anything else is not a Pi session id.
+export function nativePiSessionId(session) {
+  if (!session || typeof session !== 'object' || session.agent !== 'pi' || typeof session.value !== 'string') return null;
+  if (session.kind === 'id') return session.value;
+  if (session.kind !== 'path') return null;
+  const match = /_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(path.basename(session.value));
+  return match ? match[1] : null;
+}
 export function piSessionsDirectory(env = process.env) {
   return env.HERDR_OVERVIEW_PI_SESSIONS_DIR || path.join(env.XDG_STATE_HOME || path.join(env.HOME, '.local/state'), 'herdr-overview', 'pi-sessions');
 }
@@ -33,7 +42,7 @@ export function readPiSessionFields(snapshot, { socketPath, env = process.env } 
     const record = matches[0];
     if (record.schemaVersion !== 1 || !UUID.test(record.sessionId ?? '') || typeof record.paneId !== 'string' || !record.paneId || typeof record.generation !== 'string' || !record.generation || !alive(record.publisherPid) || !(record.sessionName === null || typeof record.sessionName === 'string')) continue;
     const nativeSessions = [pane.agent_session, ...(snapshot.agents ?? []).filter(agent => agent.pane_id === pane.pane_id).map(agent => agent.agent_session)].filter(id => id !== null && id !== undefined);
-    if (nativeSessions.some(id => typeof id !== 'object' || id.agent !== 'pi' || id.kind !== 'id' || id.value !== record.sessionId)) continue;
+    if (nativeSessions.some(id => nativePiSessionId(id) !== record.sessionId)) continue;
     piSessionsByPaneId[pane.pane_id] = { sessionId: record.sessionId, sessionName: record.sessionName, digest: digest(record.sessionId, env) };
   }
   return { piSessionsByPaneId };

@@ -105,7 +105,7 @@ with tempfile.TemporaryDirectory(prefix='overview-popup-pty-') as tmp:
         def current_frame():
             # Inspect only the latest clear-screen frame from the actual viewer PTY,
             # never outer Herdr sidebar labels or accumulated stream substrings.
-            raw = transcript.rsplit(b'\x1b[2J\x1b[H',1)[-1].decode(errors='replace')
+            raw = transcript.rsplit(b'\x1b[?2026h\x1b[H',1)[-1].decode(errors='replace')
             return re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', raw)
         def finish():
             deadline=time.time()+10
@@ -126,7 +126,7 @@ with tempfile.TemporaryDirectory(prefix='overview-popup-pty-') as tmp:
                 import pyte
                 target=pathlib.Path(os.environ['OVERVIEW_VISUAL_PROOF']); target.mkdir(parents=True,exist_ok=True)
                 def capture(name):
-                    screen=pyte.Screen(width,24); pyte.Stream(screen).feed(transcript.rsplit(b'\x1b[2J\x1b[H',1)[-1].decode(errors='replace'))
+                    screen=pyte.Screen(width,24); pyte.Stream(screen).feed(transcript.rsplit(b'\x1b[?2026h\x1b[H',1)[-1].decode(errors='replace'))
                     assert 'Herdr Overview' in screen.display[0], screen.display
                     assert 'Esc/q' in screen.display[-1], screen.display
                     for y,line in enumerate(screen.display):
@@ -233,7 +233,8 @@ with tempfile.TemporaryDirectory(prefix='overview-popup-pty-') as tmp:
             key('j'*95,'RECAP-FINAL-MARKER')
             assert 'DIGEST-FINAL-MARKER' not in current_frame()
             assert 'Second workspace' not in current_frame()
-            key('d','2026-09-30 22:00:00 GMT−4')
+            key('d','Session digest · 2026-09-30')  # the time may wrap at 40 columns
+            assert '22:00:00' in current_frame()
             key('j'*130,'DIGEST-FINAL-MARKER')
             assert 'RECAP-FINAL-MARKER' not in current_frame()
             assert 'NEWER-ATTEMPT-ERROR' not in current_frame()
@@ -278,7 +279,7 @@ with tempfile.TemporaryDirectory(prefix='overview-popup-pty-') as tmp:
             while time.time()<deadline:
                 if select.select([master], [], [], .05)[0]:
                     output += os.read(master, 65536)
-                frame = output.rsplit(b'\x1b[2J\x1b[H', 1)[-1]
+                frame = output.rsplit(b'\x1b[?2026h\x1b[H', 1)[-1]
                 if marker.encode() in frame:
                     return frame
             raise AssertionError('missing negative identity frame '+marker)

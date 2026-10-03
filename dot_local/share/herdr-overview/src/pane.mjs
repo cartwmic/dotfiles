@@ -28,7 +28,9 @@ export async function runOverviewPane({ api = new HerdrApi(), stateDir = overvie
   let closed = false, queue = Promise.resolve();
   try { theme = await readTheme(configPath); } catch {}
   const timeZone = recapTimeZone(env);
-  const draw = () => { if (closed) return; if (output.isTTY) output.write('\x1b[2J\x1b[H'); frame = state.model ? mapFrame({ ...state, journey, theme, timeZone }, output.columns || 100, output.rows || 24) : null; output.write((frame?.text || renderOverview({ ...state, journey, theme })) + (output.isTTY ? '' : '\n')); };
+  // Redraw in place inside one synchronized update: clearing the whole screen
+  // first made every scroll step flash blank.
+  const draw = () => { if (closed) return; frame = state.model ? mapFrame({ ...state, journey, theme, timeZone }, output.columns || 100, output.rows || 24) : null; const text = frame?.text || renderOverview({ ...state, journey, theme }); output.write(output.isTTY ? '\x1b[?2026h\x1b[H' + text + '\x1b[J\x1b[?2026l' : text + '\n'); };
   const refresh = async () => {
     const saved = await readState(stateDir);
     if (saved) state = saved;

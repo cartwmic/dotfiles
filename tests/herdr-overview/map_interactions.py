@@ -326,7 +326,7 @@ def scripted_interactions(root, env, receipts, Client):
         first, second = card(escaped, 'p1', snapshot), card(escaped, 'p2', snapshot)
         if (not selected_in_frame(escaped, 'p1', snapshot) or not first or not second
                 or first['row'] != second['row'] or first['col'] >= second['col']
-                or not contains(escaped, 'Latest good recap')
+                or not contains(escaped, 'Recap ')
                 or any(contains(escaped, marker) for marker in
                     ('TITLE-END', 'PROMPT-BEGIN', 'PROMPT-END', 'RECAP-END', 'DIGEST-BEGIN', 'DIGEST-END'))):
             raise proof.ProofFailure('Escape did not unwind detail to collapsed selected p1 grid')

@@ -52,7 +52,7 @@ test('late reading anchors, middle passage resize/refresh, digest end and back p
  pane.digest={status:'available',generatedAt:'2026-10-02',body:'digest line\n'.repeat(80)+'DIGEST-END'};
  let journey={...movePane(createJourney(model),model,2),level:'pane'}; // p3,p4,p1,p2,late
  assert.match(renderMap({model,journey},40,24),/Late subject/);
- journey=scrollDetail(journey,40);renderMap({model,journey},40,24);const position={...journey.readingPosition};
+ journey=scrollDetail(journey,39);renderMap({model,journey},40,24);const position={...journey.readingPosition};
  assert.ok(position.cell>0,'middle wrapped passage exercises a nonzero cell offset');
  for(const width of [120,32,48,40]) { renderMap({model,journey},width,24); assert.deepEqual(journey.readingPosition,position); }
  const before=renderMap({model,journey},40,24);
@@ -70,7 +70,7 @@ test('collapsed two-row titles signal omitted rows without truncating expanded t
   for (const width of [32,40,48,120,180]) {
    const inner=Math.floor((width-2)/2)-4;
    const collapsed=mapLines({model,journey},width).body;
-   const first=collapsed.slice(0,12).join('\n').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'');
+   const first=collapsed.slice(0,collapsed.findIndex(line=>line.includes('└'))+1).join('\n').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'');
    assert.ok(collapsed.every(line=>cellWidth(line)<=width));
    // First card contains no omitted-title cue when the complete title fits.
    if(cellWidth(title)<=inner) assert.ok(!first.includes('…'));

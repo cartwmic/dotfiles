@@ -31,7 +31,7 @@ test('cards and reading show the converted time, not raw Z', () => {
   model.panes.p1.recap = { latest: { record_id: 'r', status: 'published', published_at: '2026-07-15T12:00:00Z', summary: 'Synthetic recap.' } };
   const journey = createJourney(model), plain = s => s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
   const card = plain(mapLines({ model, journey, timeZone: 'Asia/Tokyo' }, 120).body.join('\n'));
-  assert.match(card, /Latest good recap · 2026-07-15 21:00:00 GMT\+9 /); assert.doesNotMatch(card, /T12:00:00Z|\[Asia/);
+  assert.match(card, /Recap 2026-07-15 21:00 GMT\+9 /); assert.doesNotMatch(card, /T12:00:00Z|\[Asia/);
   const reading = plain(mapLines({ model, journey: { ...journey, level: 'pane' }, timeZone: 'Asia/Tokyo' }, 120).body.join('\n'));
-  assert.match(reading, /Published 2026-07-15 21:00:00 GMT\+9 \[Asia\/Tokyo\]/); assert.doesNotMatch(reading, /T12:00:00Z/);
+  assert.match(reading, /Latest good recap · 2026-07-15 21:00:00 GMT\+9 \[Asia\/Tokyo\]/); assert.doesNotMatch(reading, /T12:00:00Z/);
 });

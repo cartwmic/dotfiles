@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { readAllRecapRecords, readCurrentPiPrompts, readLatestRecapRecords } from "./recap-store.mjs";
+import { nativePiSessionId } from "./pi-session-store.mjs";
 
 export const WORKSPACE_QUIET_PERIOD_MS = 30_000;
 const MAX_COMMAND_OUTPUT = 64 * 1024;
@@ -140,9 +141,7 @@ async function currentPaneMembers(workspaceId, snapshot, latest, piTerminalIdsBy
     if (pane?.workspace_id !== workspaceId || typeof pane.pane_id !== "string") continue;
     const agent = agentsByPaneId.get(pane.pane_id);
     const session = agent?.agent_session ?? pane.agent_session;
-    const sessionId = session?.agent === "pi" && session.kind === "id" && typeof session.value === "string"
-      ? session.value
-      : null;
+    const sessionId = nativePiSessionId(session);
     const piRecord = (sessionId ? piBySessionId.get(sessionId) : null)
       ?? piByPaneId.get(pane.pane_id)
       ?? piByTerminalId.get(pane.terminal_id);
