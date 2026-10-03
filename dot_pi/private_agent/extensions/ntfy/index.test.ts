@@ -316,7 +316,11 @@ test("resolveNotificationLocation fails closed to Herdr ids without a Click", as
 		},
 		runHerdr: async () => { throw new Error("socket unavailable"); },
 	});
-	assert.deepEqual(location, { workspaceName: "w1", tabName: "w1:t7" });
+	assert.deepEqual(location, {
+		workspaceName: "w1",
+		tabName: "w1:t7",
+		lookupError: "pane=w1:p7 socket unavailable",
+	});
 });
 
 // --- ask_user_question excerpt ---
