@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { getPackageDir, getAgentDir, estimateTokens, getMarkdownTheme } from '@earendil-works/pi-coding-agent';
-import { Input, SelectList, Markdown, truncateToWidth, stripTerminalSequences, matchesKey, Key, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { Input, SelectList, Markdown, truncateToWidth, stripTerminalSequences, matchesKey, Key, wrapTextWithAnsi, visibleWidth } from '@earendil-works/pi-tui';
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { budgets } from './budgets.mjs';
-import { restoreState, resolveSettings, setOverride, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, argumentCompletions, commandHelp, projectContext, recapScope, failureNotice } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, argumentCompletions, commandHelp, projectContext, recapScope, failureNotice, hardBreaks } from './helpers.ts';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const configPath = join(directory, 'config.json');
@@ -121,10 +121,29 @@ export default function recap(pi: ExtensionAPI) {
     if (!record && !running) { ctx.ui.setWidget('recap', undefined); return; }
     const time = record ? displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone) : '';
     const heading = running ? `Recap running${time ? ` · ${time}` : ''}` : `Recap updated ${time}`;
-    const excerpt = record ? stripTerminalSequences(record.summary).replace(/\s+/g, ' ').trim() : 'No saved recap yet.';
+    const excerpt = record ? hardBreaks(stripTerminalSequences(record.summary)) : null;
     ctx.ui.setWidget('recap', (_tui, theme) => ({
       invalidate() {},
-      render(width: number) { return [theme.fg('dim', stripTerminalSequences(truncateToWidth(heading, width))), theme.fg('dim', stripTerminalSequences(truncateToWidth(excerpt, width)))]; },
+      render(width: number) {
+        const dim = (text: string) => theme.fg('dim', text);
+        const top = dim(stripTerminalSequences(truncateToWidth(heading, width)));
+        if (!excerpt) return [top, dim(truncateToWidth('No saved recap yet.', width))];
+        // Dim markdown: structure (bold, italic, bullets) without theme colours.
+        const md = new Markdown(excerpt, 0, 0, {
+          heading: s => theme.bold(dim(s)), link: dim, linkUrl: dim, code: dim, codeBlock: dim, codeBlockBorder: dim,
+          quote: s => theme.italic(dim(s)), quoteBorder: dim, hr: dim, listBullet: dim,
+          bold: s => theme.bold(s), italic: s => theme.italic(s), underline: s => theme.underline(s), strikethrough: s => theme.strikethrough(s),
+          highlightCode: code => code.split('\n').map(dim),
+        }, { color: dim });
+        // Up to three non-blank rows; the last ends in ... when text remains.
+        const rows = md.render(Math.max(1, width)).filter(line => stripTerminalSequences(line).trim());
+        const shown = rows.slice(0, 3);
+        if (rows.length > 3) {
+          const used = Math.min(visibleWidth(stripTerminalSequences(shown[2]).trimEnd()), width - 3);
+          shown[2] = truncateToWidth(shown[2], Math.max(0, used), '') + dim('...');
+        }
+        return [top, ...shown];
+      },
     }), { placement: 'aboveEditor' });
   }
   function saved(record: any) {

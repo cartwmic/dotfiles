@@ -36,9 +36,13 @@ with tempfile.TemporaryDirectory(prefix='recap-discovery-') as temporary:
         if saved:
             from current_screen import excerpt
             assert 'GMT' in lines[row] and '202' in lines[row], (label, lines[row])
-            assert lines[row + 1].rstrip() == excerpt(saved['summary'], screen.screen.columns)
-        assert lines[row + 2].startswith('─'), (label, 'more than two widget lines')
-        assert all(c.get('faint') and not c['bold'] for y in (row, row + 1) for c in screen.frames[-1]['cells'][y] if c['data'].strip())
+            first = next(line for line in saved['summary'].splitlines() if line.strip())
+            from current_screen import plain
+            shown = lines[row + 1].rstrip().removesuffix('...').rstrip()
+            assert shown and ' '.join(plain(first).split()).startswith(shown), (label, lines[row + 1])
+        rule = next(i for i in range(row + 1, row + 6) if lines[i].startswith('─'))
+        assert rule - row <= 4, (label, 'more than three excerpt rows')
+        assert all(c.get('faint') for y in range(row, rule) for c in screen.frames[-1]['cells'][y] if c['data'].strip())
     def not_running(label): assert not any(line.startswith('Recap running') for line in frame(label))
     try:
         if 'Trust project folder?' in pi.visible(): os.write(pi.master, b'\x1b[B\r'); pi.collect(2)

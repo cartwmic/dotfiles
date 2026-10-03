@@ -26,14 +26,17 @@ automation. All three automatic triggers default on; explicit persisted false
 values remain off. The retired `inputBudget` byte cap is ignored even in existing
 defaults/session overrides and is no longer editable; archives/preferences are not migrated.
 
-The at-most-two-line muted widget above the editor shows truthful `Recap running`
+The muted widget (a heading plus up to three excerpt rows) above the editor shows truthful `Recap running`
 once the detached job is accepted, including while preflight is blocked and before
 the first save. With a prior success it retains that recap's update time and excerpt;
 without one it says no recap has been saved yet. Completion, failure, unsaved output,
 cancel and supersession clear only the matching running state. New sessions/forks
 and incompatible branches hide foreign jobs. Reload recovers a matching captured job
 from durable request state, polling through fresh-context commands until it finishes.
-Saved results show the actual last successful update time and width-truncated excerpt. `/recap view` opens
+Saved results show the actual last successful update time and an excerpt of up to
+three rows: the summary's own line breaks are kept, long lines wrap, blank lines and
+code fences are dropped, markdown markers are stripped, and `...` ends the last row
+when text remains. `/recap view` opens
 the current compatible saved narrative in the scrollable viewer; PageUp/PageDown
 scroll and Escape returns to the editor without generating, canceling work,
 changing coverage or adding a conversation message. Failure/unsaved warnings
@@ -91,7 +94,7 @@ The independent model picker does not change the conversation model.
 History uses a searchable selector and a keyboard-scrollable viewer. Recap
 narratives in `/recap view` and history render as markdown with Pi's own
 markdown theme; help text and failure details stay plain dim text. The compact
-widget excerpt stays raw text.
+widget excerpt is plain text with markers stripped.
 
 Requests are captured into a private temporary file and handed to a detached,
 unreferenced Python supervisor. Shutdown closes the result pipes, not the job.

@@ -18,7 +18,7 @@ def check(label):
     lines = [line.rstrip() for line in frame['lines']]
     top = next((i for i, line in enumerate(lines) if 'Esc close' in line), None)
     assert top is not None, (label, 'viewer not open', lines)
-    # Only the viewer region; the compact widget above stays a raw excerpt.
+    # Only the viewer region; the compact widget above is a separate dim excerpt.
     text = '\n'.join(lines[top:])
     assert 'Orchard status' in text and '## Orchard' not in text, (label, 'heading marker shown')
     assert '**' not in text and '`abc1234`' not in text and 'abc1234' in text, (label, 'inline markers shown')
@@ -43,6 +43,19 @@ with tempfile.TemporaryDirectory(prefix='recap-viewer-markdown-') as temporary:
         pi.collect(1)
         saved = next(r for r in pi.records() if r['status'] == 'published')
         assert '**Complete:**' in saved['summary'], 'stored narrative must keep raw markdown'
+        # Widget: dim markdown, markers gone, bold kept, own line breaks, max 3 rows.
+        frame = screen.capture('widget')
+        lines = [line.rstrip() for line in frame['lines']]
+        head = next(i for i, line in enumerate(lines) if line.startswith('Recap updated'))
+        rule = next(i for i in range(head + 1, head + 6) if lines[i].startswith('─'))
+        rows = lines[head + 1:rule]
+        assert rows[0] == 'Orchard status' and rows[1].startswith('Complete:') and len(rows) == 3, ('widget', rows)
+        assert rows[2].endswith('...') and not any('**' in r or '##' in r or '`' in r for r in rows), ('widget', rows)
+        cells = frame['cells'][head + 2]
+        assert all(cells[i]['bold'] and cells[i].get('faint') for i in range(len('Complete:'))), ('widget', 'bold not dim-bold')
+        assert all(c.get('faint') for y in range(head, rule) for c in frame['cells'][y] if c['data'].strip()), ('widget', 'not all dim')
+        assert len({c['fg'] for y in range(head, rule) for c in frame['cells'][y] if c['data'].strip()}) == 1, ('widget', 'colored')
+        observed.append('widget')
         calls = len(pi.calls())
         pi.send('/recap view', 1.5)
         check('recap-view')

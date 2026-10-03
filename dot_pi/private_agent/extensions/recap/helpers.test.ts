@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, argumentCompletions, commandCatalog, commandHelp, projectContext, failureNotice } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, argumentCompletions, commandCatalog, commandHelp, projectContext, failureNotice, hardBreaks } from './helpers.ts';
 
 test('native completions replace the whole argument prefix and match parser contexts', () => {
   assert.deepEqual(argumentCompletions('').map(c => c.value), commandCatalog.map(c => c.value));
@@ -100,4 +100,10 @@ test('current projection uses source provenance and summaries never cover origin
   assert.equal(resolveSettings({ inputBudget: 1 }, { inputBudget: 2 }).inputBudget, undefined);
   assert.match(failureNotice({ reason: 'context_limit', message: 'PRIVATE' }), /routed model context window/);
   assert.equal(failureNotice({ message: 'PRIVATE' }), 'Recap failed; coverage unchanged.');
+});
+
+test('widget excerpt keeps single newlines as hard breaks outside code fences', () => {
+  assert.equal(hardBreaks('# Title\nline one\nline two\n\nnext'), '# Title  \nline one  \nline two\n\nnext');
+  assert.equal(hardBreaks('a\n```\ncode\nmore\n```\nb'), 'a\n```\ncode\nmore\n```\nb');
+  assert.equal(hardBreaks(''), '');
 });
