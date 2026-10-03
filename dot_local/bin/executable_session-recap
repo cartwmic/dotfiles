@@ -7,10 +7,12 @@ case "$0" in
   *) script_path=$(command -v "$0") ;;
 esac
 script_dir=$(dirname "$script_path")
-implementation="$script_dir/../share/session-recap/session_recap.py"
-
-if [ ! -f "$implementation" ]; then
-  implementation="${HOME:?HOME is not set}/.local/share/session-recap/session_recap.py"
+implementation=${SESSION_RECAP_IMPLEMENTATION:-}
+if [ -z "$implementation" ]; then
+  implementation="$script_dir/../share/session-recap/session_recap.py"
+  if [ ! -f "$implementation" ]; then
+    implementation="${HOME:?HOME is not set}/.local/share/session-recap/session_recap.py"
+  fi
 fi
 if [ ! -f "$implementation" ]; then
   printf '%s\n' 'session-recap: implementation not found under ~/.local/share/session-recap' >&2

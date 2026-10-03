@@ -1,9 +1,13 @@
-# Automatic Pi recap publication is off on managed desktop profiles.
-# The standalone CLI can still store prompts without a model backend.
+# Automatic Herdr recap grouping is off on managed desktop profiles.
+# Pi recap settings are independent; overview owns its private prompt files.
 auto_publish = false
 
 # For recaps, create an unmanaged ~/.config/session-recap/config.local.toml:
 # command = ["/path/to/recap-command", "--stdin"]
-# Add auto_publish = true there to publish settled Pi replies automatically.
+# Add auto_publish = true there to enable Herdr workspace/session grouping.
+# Configure Pi separately with /recap settings; CLI preferences are not imported.
 # The command receives the rendered prompt on stdin and must return nonblank
 # UTF-8 recap text on stdout. No model command is provided by chezmoi.
+
+# Presentation only; canonical records retain UTC timestamps.
+time_zone = "local"

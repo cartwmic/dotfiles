@@ -38,6 +38,32 @@ After applying the palette, run `termux-reload-settings` in a local phone shell
 its reported colors. Do not copy the palette to the phone instead of applying
 its chezmoi source.
 
+## Extra-key swipe actions
+
+The two-row extra-key layout keeps its normal tap behavior. Swipe up on
+**CTRL** to send **Ctrl+B, Space** (`CTRL b SPACE`), opening the desktop Herdr
+command palette over SSH. Swipe up on **ALT** to send **Ctrl+O** (`CTRL o`) to
+the current terminal application; it is not the Herdr prefix+O action.
+
+`extra-keys-border = true` draws faint dividers between keys (Termux fork
+property; stock Termux ignores it).
+
+Each key label shows its swipe-up after the tap name: 🗺️ overview, 🎛️ palette,
+❌ close pane, `^O`/`^P` for Ctrl+O/Ctrl+P, and `⇧⇥` for Shift+Tab.
+
+Four more swipe-ups:
+
+| Key | Macro | Action |
+|-----|-------|--------|
+| **ESC** | `CTRL b O` | Herdr overview (`prefix+shift+o`) |
+| **SHIFT** | `CTRL p` | Ctrl+P (Pi model cycle) |
+| **TAB** | `SHIFT TAB` | Shift+Tab |
+| **ctrl-]** | `CTRL b x` | Herdr `close_pane` (`prefix+x`) |
+
+After a phone-side chezmoi apply, run `termux-reload-settings` while Termux is
+visible. Confirm every swipe on-device; a desktop config check does not prove
+Android touch behavior.
+
 ## Herdr overview from the phone
 
 Termux is only the phone-side SSH/jump client. Herdr 0.9.1, its compatible

@@ -119,6 +119,12 @@ try {
 	const sessionEdits = edits["dist/core/agent-session.js"];
 	const bundleFile = `dist/bundle/chunks/${matches[0]}`;
 	const bundleSource = readFileSync(join(root, bundleFile), "utf8");
+	// Upstream minifier renamed the shared catch variable between 0.99.2 (err2)
+	// and 1.0.0 (err). Detect the variant, including an already-patched bundle,
+	// so re-runs and upgrades both match instead of failing on the rename.
+	const errMatch = bundleSource.match(/sendUserMessage:\(content,options\)=>\{(?:\/\*[^*]*\*\/)?(?:this\._trackExtensionTask\(this\.|this\.)?sendUserMessage\(content,options\)\.catch\((err2?)=>\{runner\.emitError\(\{extensionPath:"<runtime>",event:"send_user_message",error:\1 instanceof Error/);
+	if (!errMatch) throw new Error(`Changed upstream anchor in ${bundleFile}; update this patch, do not guess`);
+	const errVar = errMatch[1];
 	// Upstream renamed the print prompt-loop variable between 0.85.0 (message2)
 	// and 0.85.1 (message). Detect the variant, including an already-patched
 	// bundle, so re-runs skip instead of failing on the renamed anchor.
@@ -130,10 +136,10 @@ try {
 	if (!loopVar) throw new Error(`Changed upstream anchor in ${bundleFile}; update this patch, do not guess`);
 	edits[bundleFile] = [
 		["async _runAgentPrompt(messages){", sessionEdits[0][1].replace("    async _runAgentPrompt(messages) {", "async _runAgentPrompt(messages){")],
-		['sendUserMessage:(content,options)=>{this.sendUserMessage(content,options).catch(err2=>{runner.emitError({extensionPath:"<runtime>",event:"send_user_message",error:err2 instanceof Error?err2.message:String(err2)})})}',
-		 `sendUserMessage:(content,options)=>{/* ${marker} */this._trackExtensionTask(this.sendUserMessage(content,options).catch(err2=>{runner.emitError({extensionPath:"<runtime>",event:"send_user_message",error:err2 instanceof Error?err2.message:String(err2)});throw err2;}))}`],
-		['compact:options=>{(async()=>{try{let result=await this.compact(options?.customInstructions);options?.onComplete?.(result)}catch(error){let err2=error instanceof Error?error:new Error(String(error));options?.onError?.(err2)}})()}',
-		 `compact:options=>{/* ${marker} */this._trackExtensionTask((async()=>{try{let result=await this.compact(options?.customInstructions);options?.onComplete?.(result)}catch(error){let err2=error instanceof Error?error:new Error(String(error));if(!options?.onError)throw err2;options.onError(err2)}})())}`],
+		[`sendUserMessage:(content,options)=>{this.sendUserMessage(content,options).catch(${errVar}=>{runner.emitError({extensionPath:"<runtime>",event:"send_user_message",error:${errVar} instanceof Error?${errVar}.message:String(${errVar})})})}`,
+		 `sendUserMessage:(content,options)=>{/* ${marker} */this._trackExtensionTask(this.sendUserMessage(content,options).catch(${errVar}=>{runner.emitError({extensionPath:"<runtime>",event:"send_user_message",error:${errVar} instanceof Error?${errVar}.message:String(${errVar})});throw ${errVar};}))}`],
+		[`compact:options=>{(async()=>{try{let result=await this.compact(options?.customInstructions);options?.onComplete?.(result)}catch(error){let ${errVar}=error instanceof Error?error:new Error(String(error));options?.onError?.(${errVar})}})()}`,
+		 `compact:options=>{/* ${marker} */this._trackExtensionTask((async()=>{try{let result=await this.compact(options?.customInstructions);options?.onComplete?.(result)}catch(error){let ${errVar}=error instanceof Error?error:new Error(String(error));if(!options?.onError)throw ${errVar};options.onError(${errVar})}})())}`],
 		[`initialMessage&&await session.prompt(initialMessage,{images:initialImages});for(let ${loopVar} of messages)await session.prompt(${loopVar});`,
 		 `initialMessage&&(await session.prompt(initialMessage,{images:initialImages}),await session.waitForExtensionTasks());/* ${marker} */for(let ${loopVar} of messages){await session.prompt(${loopVar});await session.waitForExtensionTasks();}`],
 	];

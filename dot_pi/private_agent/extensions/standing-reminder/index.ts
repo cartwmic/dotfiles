@@ -1,3 +1,4 @@
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readTriggerConfig } from "./config.ts";
@@ -55,7 +56,10 @@ function renderStatus(ctx: ExtensionContext, state: ReminderState, available: bo
 	} else {
 		text = "No session reminder · /reminder to set one";
 	}
-	ctx.ui.setWidget(WIDGET_KEY, [text], { placement: "aboveEditor" });
+	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => ({
+		render: (width) => [truncateToWidth(theme.fg("dim", text), width)],
+		invalidate() {},
+	}), { placement: "aboveEditor" });
 }
 
 function statePath(ctx: ExtensionContext): string {

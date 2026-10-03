@@ -1,7 +1,9 @@
-"""Exercise Herdr Overview bootstrap through a real chezmoi apply with fake installers."""
+"""Exercise desktop Herdr plugin bootstrap through real chezmoi apply with fake installers."""
 
+import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +28,9 @@ class InstallHerdrOverviewTests(unittest.TestCase):
         for relative in (
             "run_onchange_after_10_mise_bootstrap.sh.tmpl",
             "dot_config/mise/config.toml",
+            "dot_config/herdr/config.toml",
+            "dot_termux/termux.properties",
+            ".chezmoiignore",
             "dot_local/share/herdr-overview/herdr-plugin.toml",
         ):
             destination = self.source / relative
@@ -39,12 +44,36 @@ class InstallHerdrOverviewTests(unittest.TestCase):
         install = self.root / "installed-herdr"
         install.mkdir()
         self.write_tool(install / "herdr", """
-import os, pathlib, sys
+import json, os, pathlib, sys
 args = sys.argv[1:]
 if args == ['--version']:
     print('herdr 0.9.1')
 elif len(args) == 4 and args[:2] == ['plugin', 'link'] and args[3] == '--enabled':
     pathlib.Path(os.environ['LINK_LOG']).write_text(args[2])
+elif args in (
+    ['plugin', 'list', '--plugin', 'vjeantet.palette', '--json'],
+    ['plugin', 'install', 'vjeantet/herdr-palette', '--ref', 'v0.2.2', '--yes'],
+):
+    socket = pathlib.Path(os.environ['HERDR_SOCKET_PATH'])
+    assert socket.parent == pathlib.Path(os.environ['XDG_CONFIG_HOME']) / 'herdr'
+    assert socket.name.startswith('.herdr-palette-install-') and not socket.exists()
+    state = pathlib.Path(os.environ['PALETTE_STATE'])
+    if args[1] == 'list':
+        print(json.dumps({'result': {'plugins': json.loads(state.read_text()) if state.exists() else []}}))
+    else:
+        log = pathlib.Path(os.environ['PALETTE_LOG'])
+        log.write_text((log.read_text() if log.exists() else '') + 'install\\n')
+        root = state.parent / 'palette'
+        binary = root / 'target/release/herdr-palette'
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.touch()
+        binary.chmod(0o755)
+        state.write_text(json.dumps([{
+            'plugin_id': 'vjeantet.palette', 'version': '0.2.2', 'enabled': True,
+            'plugin_root': str(root),
+            'source': {'kind': 'github', 'owner': 'vjeantet', 'repo': 'herdr-palette',
+                       'requested_ref': 'v0.2.2'},
+        }]))
 else:
     sys.exit('unexpected herdr call: ' + repr(args))
 """)
@@ -55,9 +84,16 @@ if args == ['--version']:
     print('test mise')
 elif args == ['where', 'github:herdrdev/herdr@0.9.1']:
     print(os.environ['FAKE_HERDR_DIR'])
-elif args == ['run', 'bootstrap']:
+elif args in (['run', 'bootstrap'], ['run', 'install-herdr-palette']):
     config = tomllib.loads(pathlib.Path(os.environ['HERDR_TEST_CONFIG']).read_text())
-    sys.exit(subprocess.run(['/bin/sh', '-c', config['tasks']['install-herdr-overview']['run']]).returncode)
+    tasks = ['install-herdr-overview', 'install-herdr-palette'] if args[1] == 'bootstrap' else [args[1]]
+    if args[1] == 'bootstrap':
+        assert all(task in config['tasks']['bootstrap']['depends'] for task in tasks)
+        assert config['tasks']['install-herdr-palette']['depends'] == ['install-herdr-overview']
+    for task in tasks:
+        result = subprocess.run(['/bin/sh', '-c', config['tasks'][task]['run']])
+        if result.returncode:
+            sys.exit(result.returncode)
 elif args in (['install'], ['install', 'github:herdrdev/herdr@0.9.1'], ['run', 'setup-ubuntu-essentials']):
     pass
 else:
@@ -65,7 +101,7 @@ else:
 """)
         self.env = os.environ.copy()
         for key in list(self.env):
-            if key.startswith(("CHEZMOI_", "HERDR_OVERVIEW_", "OP_")):
+            if key.startswith(("CHEZMOI_", "HERDR_OVERVIEW_", "HERDR_PALETTE_", "OP_")):
                 self.env.pop(key)
         self.env.update({
             "HOME": str(self.home),
@@ -77,6 +113,8 @@ else:
             "FAKE_HERDR_DIR": str(install),
             "HERDR_TEST_CONFIG": str(self.source / "dot_config/mise/config.toml"),
             "LINK_LOG": str(self.link_log),
+            "PALETTE_LOG": str(self.root / "palette-installs"),
+            "PALETTE_STATE": str(self.root / "palette-state.json"),
         })
 
     @staticmethod
@@ -92,6 +130,71 @@ else:
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertEqual(self.link_log.read_text(), str(self.source / "dot_local/share/herdr-overview"))
         self.assertIn("mise bootstrap complete", completed.stderr)
+
+    def test_palette_installs_for_both_desktop_profiles_and_skips_a_second_run(self):
+        for profile in ("personal", "axon-work-computer"):
+            with self.subTest(profile=profile):
+                config = self.home / ".config/chezmoi/chezmoi.yaml"
+                config.write_text(f"data:\n  profile: {profile}\n")
+                for key in ("PALETTE_STATE", "PALETTE_LOG"):
+                    Path(self.env[key]).unlink(missing_ok=True)
+                completed = subprocess.run(
+                    [CHEZMOI, "--source", str(self.source), "apply"],
+                    cwd=self.root, env=self.env, capture_output=True, text=True, timeout=45,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                self.assertEqual(Path(self.env["PALETTE_LOG"]).read_text(), "install\n")
+                keys = tomllib.loads((self.home / ".config/herdr/config.toml").read_text())["keys"]
+                self.assertEqual(
+                    [entry["key"] for entry in keys["command"] if entry["command"] == "vjeantet.palette.open"],
+                    ["prefix+space"],
+                )
+                self.assertFalse((self.home / ".termux/termux.properties").exists())
+                repeated = subprocess.run(
+                    ["mise", "run", "install-herdr-palette"], cwd=self.root, env=self.env,
+                    capture_output=True, text=True, timeout=20,
+                )
+                self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
+                self.assertIn("already installed", repeated.stdout)
+                self.assertEqual(Path(self.env["PALETTE_LOG"]).read_text(), "install\n")
+                # Ensure the onchange script runs again for the other profile.
+                script = self.source / "run_onchange_after_10_mise_bootstrap.sh.tmpl"
+                script.write_text(script.read_text() + f"\n# Tested profile: {profile}\n")
+
+    def test_palette_skips_termux_and_its_config_is_not_managed(self):
+        config = self.home / ".config/chezmoi/chezmoi.yaml"
+        config.write_text("data:\n  profile: termux\n")
+        completed = subprocess.run(
+            [CHEZMOI, "--source", str(self.source), "apply"],
+            cwd=self.root, env=self.env, capture_output=True, text=True, timeout=45,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertFalse((self.home / ".config/herdr/config.toml").exists())
+        properties = (self.home / ".termux/termux.properties").read_text()
+        extra_keys = next(line.split("=", 1)[1].strip() for line in properties.splitlines()
+                          if line.startswith("extra-keys ="))
+        layout = json.loads(re.sub(r"(\w+):", r'"\1":', extra_keys).replace("'", '"'))
+        self.assertEqual(layout[0][1], {
+            "key": "CTRL", "display": "ctrl",
+            "popup": {"macro": "CTRL b SPACE", "display": "palette"},
+        })
+        self.assertEqual(layout[0][2], {
+            "key": "ALT", "display": "alt",
+            "popup": {"macro": "CTRL o", "display": "ctrl-o"},
+        })
+        self.assertEqual(
+            [[entry.get("key", entry.get("macro")) if isinstance(entry, dict) else entry
+              for entry in row] for row in layout],
+            [["ESC", "CTRL", "ALT", "UP", "KEYBOARD", "ENTER"],
+             ["SHIFT", "TAB", "LEFT", "DOWN", "RIGHT", "CTRL ]"]],
+        )
+        skipped = subprocess.run(
+            ["mise", "run", "install-herdr-palette"], cwd=self.root, env=self.env,
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(skipped.returncode, 0, skipped.stdout + skipped.stderr)
+        self.assertIn("skipping profile termux", skipped.stdout)
+        self.assertFalse(Path(self.env["PALETTE_LOG"]).exists())
 
     def test_apply_uses_the_active_worktree_instead_of_the_configured_checkout(self):
         worktree = self.root / "feature worktree"

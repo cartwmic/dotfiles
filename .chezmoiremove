@@ -1,3 +1,9 @@
+# Retired 2026-10-02: Claude bridge and its Claude Code → Pi credential
+# copier. Compat now reuses Pi's own Anthropic OAuth login.
+Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
+.local/bin/sync-claude-pi-auth.sh
+.local/share/pi-patches/hide-nonbridge-claude-models
+
 # Retired 2026-09-30: replace Luna-only Fast injection with pi-codex-fast.
 # Removing source alone leaves the old extension active on existing hosts.
 .pi/agent/extensions/codex-fast-luna

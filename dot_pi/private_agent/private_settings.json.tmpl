@@ -8,6 +8,7 @@
 {{- $version := "0.70.2" -}}
 {{- $theme := "dark" -}}
 {{- $hideThinking := false -}}
+{{- $deviceId := "" -}}
 {{- $privateGlmProvider := dict "models" (list) -}}
 {{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiGlmProviderRef") -}}
 {{-   $privateGlmProvider = output "op" "read" .privatePiGlmProviderRef | fromJson -}}
@@ -24,14 +25,15 @@
 {{-     $theme = $themeFound -}}
 {{-   end -}}
 {{-   $hideThinking = get $existingSettings "hideThinkingBlock" -}}
+{{-   $deviceId = get $existingSettings "deviceId" -}}
 {{- end -}}
 {{- if not $hideThinking -}}
 {{-   $hideThinking = false -}}
 {{- end -}}
 {
 {{- if eq .profile "personal" }}
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-6.1-sol",
+  "defaultProvider": "claude-compat",
+  "defaultModel": "claude-opus-5-5",
 {{- else }}
   "defaultProvider": "private-glm",
   "defaultModel": "glm-5.3-flash",
@@ -41,7 +43,9 @@
 {{- if eq .profile "personal" }}
   "modelThinkingLevels": {
     "openai-codex/gpt-6.1-sol": "high",
-    "openai-codex/gpt-6-astra": "high"
+    "openai-codex/gpt-6-astra": "high",
+    "claude-compat/claude-opus-5-5": "medium",
+    "claude-compat/claude-sonnet-5-5": "high"
   },
 {{- else }}
   "modelThinkingLevels": {
@@ -55,7 +59,9 @@
 {{- if eq .profile "personal" }}
     "openai-codex/gpt-6-astra",
     "openai-codex/gpt-6.1-sol",
-    "openrouter/z-ai/glm-5.3-flash"
+    "openrouter/z-ai/glm-5.3-flash",
+    "claude-compat/claude-sonnet-5-5",
+    "claude-compat/claude-opus-5-5"
 {{- else }}
     "cursor/gpt-5.6-luna",
     "cursor/gpt-5.6-sol",
@@ -81,10 +87,14 @@
 {{- if eq .profile "personal" }}
     "https://github.com/cartwmic/pi-codex-fast",
     "https://github.com/olixis/pi-openrouter-plus",
-    "https://github.com/cartwmic/pi-claude-bridge",
+    {
+      "source": "git:github.com/vazzma/pi-claude-request-compat@d915546395e31e6a6a6b49268d21c2b9e50cf10a",
+      "extensions": []
+    },
 {{- end }}
     "https://github.com/cartwmic/system-one-tools",
     "https://github.com/cartwmic/pi-session-search",
+    "https://github.com/cartwmic/pi-response-visibility",
     "npm:@juicesharp/rpiv-ask-user-question",
     "npm:@injaneity/pi-computer-use",
     "npm:@narumitw/pi-stamp"
@@ -95,4 +105,7 @@
   "lastChangelogVersion": {{ $version | quote }},
   "theme": {{ $theme | quote }},
   "hideThinkingBlock": {{ $hideThinking }}
+{{- if $deviceId }},
+  "deviceId": {{ $deviceId | quote }}
+{{- end }}
 }
