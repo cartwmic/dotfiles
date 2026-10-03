@@ -229,8 +229,8 @@ def scripted_interactions(root, env, receipts, Client):
     data = fixture / 'data/session-recap'; records = data / 'records/2026-09-30'; records.mkdir(parents=True)
     prompts = data / 'prompts'; prompts.mkdir()
     (data / 'latest.json').write_text(json.dumps({'sources': [{'source_kind': 'manual', 'source_id': 'p1', 'latest_success_id': 'good', 'last_attempt_id': 'bad'}]}))
-    (records / 'good.json').write_text(json.dumps({'record_id': 'good', 'status': 'published', 'published_at': '2026-09-30T00:00:00Z', 'summary': '\n'.join(['RECAP-BEGIN'] + [f'RECAP-LINE-{i:03d}' for i in range(70)] + ['RECAP-END'])}))
-    (records / 'bad.json').write_text(json.dumps({'record_id': 'bad', 'status': 'failed', 'created_at': '2026-09-30T01:00:00Z', 'failure': {'message': 'ERROR-BEGIN\n' + 'error\n'*35 + 'ERROR-END'}}))
+    (records / 'good.json').write_text(json.dumps({'record_id': 'good', 'source_kind': 'manual', 'source_id': 'p1', 'status': 'published', 'published_at': '2026-09-30T00:00:00Z', 'summary': '\n'.join(['RECAP-BEGIN'] + [f'RECAP-LINE-{i:03d}' for i in range(70)] + ['RECAP-END'])}))
+    (records / 'bad.json').write_text(json.dumps({'record_id': 'bad', 'source_kind': 'manual', 'source_id': 'p1', 'status': 'failed', 'created_at': '2026-09-30T01:00:00Z', 'failure': {'message': 'ERROR-BEGIN\n' + 'error\n'*35 + 'ERROR-END'}}))
     (prompts / 'p1.json').write_text(json.dumps({'schema_version': 1, 'session_id': 'synthetic-session', 'pane_id': 'p1', 'text': 'PROMPT-BEGIN\n' + 'prompt\n'*35 + 'PROMPT-END'}))
     client = None
     try:
