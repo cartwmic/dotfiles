@@ -79,7 +79,9 @@ layouts use workspace columns; singleton tabs share compact card rows (two
 columns from an actual popup-canvas width of 32 columns). Cards are bordered,
 word-wrapped, one column apart (two between workspace columns), and vertically tight (no blank border rows, spacer lines, or
 unused title/preview rows); shortened collapsed titles end in an ellipsis. `M`
-marks manual names; headings show tab and attention counts. Normal reading
+marks manual names. Each workspace is framed by a thin box whose top edge carries the bold name and
+counts, `┌─ name ───── N tabs · K needs input ─┐`; on narrow columns the counts
+move inside the frame and the frame drops its inner padding. Normal reading
 shows prose, not raw JSON. Expanded recap and digest bodies render a small
 markdown subset (`src/markdown.mjs`: headings, bold/italic, inline code,
 lists, quotes, rules, code fences); collapsed card previews drop the markers

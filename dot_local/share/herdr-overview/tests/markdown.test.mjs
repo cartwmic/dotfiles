@@ -54,6 +54,8 @@ test('markdown reading keeps source-line scroll position across reflow', () => {
   assert.match(narrow, new RegExp(item + '\\b'));
 });
 
+// Strip the workspace frame (single-workspace fixtures) so card geometry can be checked directly.
+const unframe = rows => rows.filter(r => !/^┌─ /.test(r) && !/^└─+┘\s*$/.test(r)).map(r => r.replace(/^│ ?/, '').replace(/ ?│\s*$/, ''));
 test('collapsed cards give otherwise blank rows to the recap without growing', () => {
   const words = n => Array.from({ length: n }, (_, i) => `word${i}`).join(' ');
   const recap = summary => ({ latest: { record_id: 'r', status: 'published', published_at: '2026-01-01T00:00:00Z', summary } });
@@ -64,7 +66,7 @@ test('collapsed cards give otherwise blank rows to the recap without growing', (
   model.panes.p3.agent.status = 'working'; // keep the singleton pair first
   const journey = createJourney(model);
   for (const width of [40, 120]) {
-    const rows = plain(mapLines({ model, journey }, width).body.join('\n')).split('\n');
+    const rows = unframe(plain(mapLines({ model, journey }, width).body.join('\n')).split('\n'));
     const top = rows.findIndex(r => r.includes('┌')), bottom = rows.findIndex(r => r.includes('└'));
     const split = rows[top].lastIndexOf('┌');
     const left = rows.slice(top, bottom + 1).map(s => s.slice(0, split)), other = rows.slice(top, bottom + 1).map(s => s.slice(split));

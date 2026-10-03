@@ -97,7 +97,8 @@ def own_section(frame, pane_subject, marker, sibling_subjects=()):
     body = ''.join(marker.split())
     siblings = [''.join(label.split()) for label in sibling_subjects]
     for n, line in enumerate(rows):
-        segments = [(m.start()+1, m.end()-1, m.group(1)) for m in re.finditer(r'│([^│]*)│', line)] if '│' in line else [(0,len(line),line)]
+        # Overlapping matches: the workspace frame nests the reading box (│ │ text │ │).
+        segments = [(m.start()+1, m.start()+1+len(m.group(1)), m.group(1)) for m in re.finditer(r'(?=│([^│]*)│)', line)] if '│' in line else [(0,len(line),line)]
         for left,right,heading in segments:
             if ''.join(heading.strip().removeprefix('›').split()) != own:
                 continue
