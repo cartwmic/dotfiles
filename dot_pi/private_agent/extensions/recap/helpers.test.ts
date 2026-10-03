@@ -26,7 +26,7 @@ test('production automation defaults remain independent of accelerated PTY setti
   assert.equal(seedSettings.mode, 'incremental');
   assert.equal(seedSettings.cadence, 1);
   assert.equal(seedSettings.intervalMinutes, 15);
-  assert.equal(seedSettings.timeoutSeconds, 60);
+  assert.equal(seedSettings.timeoutSeconds, 180);
   assert.deepEqual(JSON.parse(readFileSync(new URL('./create_config.json', import.meta.url), 'utf8')), seedSettings);
 });
 test('independent fork/clone history and sparse session-wide inheritance', () => {
