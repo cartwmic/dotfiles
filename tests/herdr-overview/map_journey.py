@@ -147,10 +147,22 @@ def require_busy(state, receipts, name):
     return response
 
 
+# Read-only CLI queries (the recap extension's widget/history refresh) are not
+# generation; only these subcommands can create or start a recap.
+GENERATING_RECAP_COMMANDS = {'create', 'run', 'reserve', 'prepare', 'publish'}
+
+
 def log_digest(root):
-    return {name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-            if (root / name).exists() else None
-            for name in ('backend-captures.jsonl', 'recap-commands.jsonl')}
+    def content(name):
+        path = root / name
+        if not path.exists():
+            return None
+        data = path.read_bytes()
+        if name == 'recap-commands.jsonl':
+            data = b''.join(line + b'\n' for line in data.splitlines()
+                            if json.loads(line)[0] in GENERATING_RECAP_COMMANDS)
+        return hashlib.sha256(data).hexdigest()
+    return {name: content(name) for name in ('backend-captures.jsonl', 'recap-commands.jsonl')}
 
 
 INTERACTION_OUTCOMES = {

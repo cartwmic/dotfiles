@@ -1436,6 +1436,39 @@ def read_latest_pi_record(data_root: Path, pane_id: str) -> tuple[dict[str, Any]
     return native_projection(latest), native_projection(attempt)
 
 
+def install_native_recap(root: Path, env: dict[str, str], backend: Path | None = None) -> Path:
+    """Load the real recap extension with a private provider over the scripted backend."""
+    backend = backend or ROOT / "tests/herdr-overview/fake_recap_backend.py"
+    # Both foreground Pi and the independent recap helper load the same private
+    # provider registration. The recap route delegates to the existing scripted
+    # backend, preserving its call log and blank-output failure behavior.
+    recap_provider = Path(env["PI_CODING_AGENT_DIR"]) / "extensions" / "recap-provider.ts"
+    recap_provider.parent.mkdir(parents=True, exist_ok=True)
+    recap_provider.write_text(
+        "import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';\n"
+        "import { execFileSync } from 'node:child_process';\n"
+        "export default function(pi) { pi.registerProvider('native-recap-proof', {\n"
+        " api: 'openai-completions', baseUrl: 'http://unused.invalid', apiKey: 'fixture',\n"
+        " models: [{id:'recap',name:'recap',reasoning:false,input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:100000,maxTokens:4096}],\n"
+        " streamSimple(model, context) { const stream=createAssistantMessageEventStream();\n"
+        " queueMicrotask(() => { const message={role:'assistant',api:model.api,provider:model.provider,model:model.id,timestamp:Date.now(),content:[],stopReason:'stop',usage:{input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};\n"
+        f" try {{ const base=execFileSync({json.dumps(sys.executable)}, [{json.dumps(str(backend))}, 'success'], {{input:JSON.stringify(context),encoding:'utf8'}});\n"
+        " const material=context.messages.map(m=>typeof m.content==='string'?m.content:(m.content??[]).filter(c=>c.type==='text').map(c=>c.text).join('\\n')).join('\\n');\n"
+        " const observed=material.match(/Proof request [^\\n]+/); const text=base.trim()?base.trim()+'\\nObserved request: '+(observed?.[0]??'missing public request'):base; message.content=[{type:'text',text}]; }\n"
+        " catch { message.stopReason='error'; message.errorMessage='Scripted recap failure'; }\n"
+        " stream.push({type:'start',partial:message});\n"
+        " if(message.stopReason==='error') stream.push({type:'error',reason:'error',error:message});\n"
+        " else stream.push({type:'done',reason:'stop',message}); stream.end(); }); return stream; }\n"
+        " }); }\n", encoding="utf-8")
+    recap_extension = root / "recap-extension"
+    shutil.copytree(ROOT / "dot_pi/private_agent/extensions/recap", recap_extension, dirs_exist_ok=True)
+    json_dump(recap_extension / "config.json", {
+        "model": {"provider": "native-recap-proof", "id": "recap"},
+        "completed": True, "cadence": 1, "periodic": False, "beforeCompaction": False,
+    })
+    return recap_extension / "index.ts"
+
+
 def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
     root, state, env = load_run(run_id, base)
     if not state.get("server_started") or not state.get("fixture", {}).get("pi_pane_id"):
@@ -1454,33 +1487,7 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
     provider_extension.write_text(provider_source.replace(
         'export default function (pi) {',
         'export default function (pi) { pi.on("session_start", () => pi.setSessionName("Synthetic native recap session"));', 1))
-    # Both foreground Pi and the independent recap helper load the same private
-    # provider registration. The recap route delegates to the existing scripted
-    # backend, preserving its call log and blank-output failure behavior.
-    recap_provider = Path(env["PI_CODING_AGENT_DIR"]) / "extensions" / "recap-provider.ts"
-    recap_provider.parent.mkdir(parents=True, exist_ok=True)
-    recap_provider.write_text(
-        "import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';\n"
-        "import { execFileSync } from 'node:child_process';\n"
-        "export default function(pi) { pi.registerProvider('native-recap-proof', {\n"
-        " api: 'openai-completions', baseUrl: 'http://unused.invalid', apiKey: 'fixture',\n"
-        " models: [{id:'recap',name:'recap',reasoning:false,input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:100000,maxTokens:4096}],\n"
-        " streamSimple(model, context) { const stream=createAssistantMessageEventStream();\n"
-        " queueMicrotask(() => { const message={role:'assistant',api:model.api,provider:model.provider,model:model.id,timestamp:Date.now(),content:[],stopReason:'stop',usage:{input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};\n"
-        f" try {{ const base=execFileSync({json.dumps(sys.executable)}, [{json.dumps(str(ROOT / 'tests/herdr-overview/fake_recap_backend.py'))}, 'success'], {{input:JSON.stringify(context),encoding:'utf8'}});\n"
-        " const material=context.messages.map(m=>typeof m.content==='string'?m.content:(m.content??[]).filter(c=>c.type==='text').map(c=>c.text).join('\\n')).join('\\n');\n"
-        " const observed=material.match(/Proof request [^\\n]+/); const text=base.trim()?base.trim()+'\\nObserved request: '+(observed?.[0]??'missing public request'):base; message.content=[{type:'text',text}]; }\n"
-        " catch { message.stopReason='error'; message.errorMessage='Scripted recap failure'; }\n"
-        " stream.push({type:'start',partial:message});\n"
-        " if(message.stopReason==='error') stream.push({type:'error',reason:'error',error:message});\n"
-        " else stream.push({type:'done',reason:'stop',message}); stream.end(); }); return stream; }\n"
-        " }); }\n", encoding="utf-8")
-    recap_extension = root / "recap-extension"
-    shutil.copytree(ROOT / "dot_pi/private_agent/extensions/recap", recap_extension, dirs_exist_ok=True)
-    json_dump(recap_extension / "config.json", {
-        "model": {"provider": "native-recap-proof", "id": "recap"},
-        "completed": True, "cadence": 1, "periodic": False, "beforeCompaction": False,
-    })
+    recap_index = install_native_recap(root, env)
     real_pi = pi_bin
     write_exec(root / "bin/pi", "#!/bin/sh\nset -eu\n"
                "if [ -r \"$HERDR_OVERVIEW_TEST_PROVIDER_URL_FILE\" ]; then\n"
@@ -1494,7 +1501,7 @@ def scenario_pi_grouped(run_id: str, base: Path | None) -> dict[str, Any]:
     try:
         command = [str(root / 'bin/pi'), '--provider', 'herdr-proof-scripted', '--model', 'scripted-model',
                    '--extension', str(ROOT / 'dot_pi/private_agent/extensions/herdr-overview/index.ts'),
-                   '--extension', str(provider_extension), '--extension', str(recap_extension / 'index.ts'),
+                   '--extension', str(provider_extension), '--extension', str(recap_index),
                    '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files',
                    '--no-tools', '--offline', '--session-dir', str(root / 'pi-sessions')]
         # pane.run owns a real terminal; agent.start would force RPC mode.
