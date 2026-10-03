@@ -25,7 +25,7 @@ PACKAGES = {
     "termux-api.apk": "com.termux.api",
     "termux-boot.apk": "com.termux.boot",
 }
-EXPECTED_VERSIONS = {"com.termux": 1009, "com.termux.api": 1003, "com.termux.boot": 1000}
+EXPECTED_VERSIONS = {"com.termux": 1010, "com.termux.api": 1004, "com.termux.boot": 1000}
 PLAY_PACKAGES = ("com.wireguard.android", "io.heckel.ntfy", "app.whisperian.client")
 REPO = Path(__file__).resolve().parent.parent
 
