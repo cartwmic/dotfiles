@@ -147,3 +147,14 @@ export function displayTime(timestamp: string, zone = 'local'): string {
 export function compatibleRecord(rows: any[], state: OwnedState, branchIds: string[], scope?: string) {
   return rows.filter(r => r.status === 'published' && (!scope || r.metadata?.pi?.scope === scope) && r.metadata?.pi?.nativeSessionId === state.nativeSessionId && r.metadata.pi.historyId === state.historyId && r.metadata.pi.coverage && (!r.metadata.pi.coverage.anchor || branchIds.includes(r.metadata.pi.coverage.anchor))).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.record_id.localeCompare(b.record_id)).at(-1);
 }
+
+// Widget excerpt source: keep the summary's own line breaks under markdown by
+// turning single newlines inside prose into hard breaks (code fences untouched).
+export function hardBreaks(summary: string): string {
+  let fence = false;
+  const lines = String(summary ?? '').split(/\r?\n/);
+  return lines.map((line, i) => {
+    if (/^\s*(```|~~~)/.test(line)) { fence = !fence; return line; }
+    return !fence && line.trim() && lines[i + 1]?.trim() && !/^\s*(```|~~~)/.test(lines[i + 1]) ? line.replace(/\s*$/, '  ') : line;
+  }).join('\n');
+}

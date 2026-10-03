@@ -53,7 +53,7 @@ server. `overview.reconcile` loads/refreshes the linked plugin on a compatible
 running server without opening a view; any server restart remains owner-controlled.
 
 Open the temporary native map with `prefix+shift+o` or `herdr plugin action
-invoke overview.open --plugin overview`. It is one shared 100% pane-canvas
+invoke overview.open`. It is one shared 100% pane-canvas
 popup, not a persistent tab. Another modal returns `ui_busy`; clients share
 its geometry. Owner-tab deletion dismisses it natively; reopen ordinarily from
 a surviving pane, without an anchor or resurrection. Startup/events/reconcile
@@ -76,7 +76,7 @@ short two-subject tabs combine, otherwise use the first useful subject + N more.
 Manual labels win; workspaces and Pi identity stay owner-controlled. A
 manually published single recap with `--source-id` equal to the native pane ID
 appears in that pane's detail after `herdr plugin action invoke
-overview.reconcile --plugin overview`; reconcile while the source pane is live
+overview.reconcile`; reconcile while the source pane is live
 to retain its terminal identity through a later `pane.move`. Failed-attempt
 status is displayed, but a manual recap does not drive Pi automatic naming.
 Preserve any manual pane or tab label. Only the

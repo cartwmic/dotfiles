@@ -92,15 +92,25 @@ const f = new Intl.DateTimeFormat('sv-SE', {...(zone === 'local' ? {} : {timeZon
 console.log(`${f.format(new Date(timestamp))} [${zone === 'local' ? f.resolvedOptions().timeZone : zone}]`);'''
         display_time = subprocess.check_output(['node', '-e', script, json.dumps([timestamp, zone])], env=env, text=True).strip()
         assert lines[row] == excerpt('Recap updated ' + display_time, frame['columns']), (label, lines[row], display_time)
-        assert lines[row + 1] == excerpt(record['summary'], frame['columns']), (label, lines[row + 1], excerpt(record['summary'], frame['columns']))
-        # Both widget rows must use the exact muted heading color. Inner model
-        # ANSI must not reset it or recolor any visible excerpt character.
+        # Dim markdown excerpt: up to three rows, the summary's own line breaks
+        # kept (each source line starts a row), '...' when text remains.
+        rule = next((i for i in range(row + 1, min(len(lines), row + 6)) if lines[i].startswith('─')), None)
+        assert rule is not None and 2 <= rule - row <= 4, (label, 'widget not 1-3 excerpt rows directly above editor', lines[row:row + 6])
+        rows = range(row + 1, rule)
+        source = [' '.join(plain(line).split()) for line in record['summary'].splitlines() if line.strip()]
+        shown = lines[row + 1].removesuffix('...').rstrip()
+        assert shown and source[0].startswith(shown), (label, lines[row + 1], source[0])
+        assert all(lines[y].strip() for y in rows), (label, 'blank excerpt row', lines[row:row + 4])
+        if len(source) > 1 and len(source[0]) < frame['columns']:
+            assert lines[row + 2].startswith(source[1][:10]), (label, 'source line break not kept', lines[row + 2], source[1])
+        if len(source) > 3:
+            assert len(rows) == 3 and lines[rule - 1].endswith('...'), (label, 'truncated excerpt lacks ...', lines[rule - 1])
+        # Every widget cell uses the one muted color and stays faint; model
+        # ANSI must not recolor it (markdown bold/italic are allowed).
         colors = {c['fg'] for c in frame['cells'][row] if c['data'].strip()}
         assert len(colors) == 1, (label, colors)
-        assert all(c.get('faint') for c in frame['cells'][row] if c['data'].strip()), (label, 'heading not dim')
-        for y in (row, row + 1):
-            assert all(c['fg'] in colors and c.get('faint') and not c['bold'] for c in frame['cells'][y] if c['data'].strip()), (label, y, {c['fg'] for c in frame['cells'][y] if c['data'].strip()})
-        assert row + 2 < len(lines) and lines[row + 2].startswith('─'), (label, 'widget not immediately above editor', lines[row + 2:])
-        # No third excerpt row/partial narrative elsewhere in the current frame.
-        assert not any('詳しい' in line or '観察 ' in line for i, line in enumerate(lines) if i != row + 1), (label, 'narrative outside widget')
-        return lines[row:row + 2]
+        for y in (row, *rows):
+            assert all(c['fg'] in colors and c.get('faint') for c in frame['cells'][y] if c['data'].strip()), (label, y, {c['fg'] for c in frame['cells'][y] if c['data'].strip()})
+        # No partial narrative elsewhere in the current frame.
+        assert not any('詳しい' in line or '観察 ' in line for i, line in enumerate(lines) if i not in rows), (label, 'narrative outside widget')
+        return lines[row:rule]
