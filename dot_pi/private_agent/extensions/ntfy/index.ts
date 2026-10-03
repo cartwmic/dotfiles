@@ -813,7 +813,10 @@ export function registerNtfyExtension(
 		suppressNextSettled = false;
 		if (suppress) return;
 		// hasUI is true in TUI and RPC modes, false in print (-p) / json modes.
-		if (!ctx.hasUI || !ctx.isIdle()) return;
+		// Do not gate on ctx.isIdle(): the settlement-abort Pi patch keeps the
+		// session busy (isIdle false) while agent_settled handlers run, so that
+		// guard skipped every notification. Check the operation signal instead.
+		if (!ctx.hasUI || ctx.signal?.aborted) return;
 		if (!enabled) return;
 		if (!config.url) return;
 		// User ESC and other interrupted runs surface in the TUI as
