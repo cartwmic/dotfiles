@@ -6,6 +6,19 @@ import proof
 from map_frames import selected_in_frame as selected_card, canvas, contains, card
 
 
+def completed(client, timeout=10):
+    """Return the next completed popup canvas; a repaint can briefly clear the PTY."""
+    deadline = time.monotonic() + timeout
+    while True:
+        frame = client.frame()
+        try:
+            canvas(frame)
+            return frame
+        except proof.ProofFailure:
+            if time.monotonic() > deadline:
+                raise
+
+
 def selected_in_frame(frame, target, snapshot):
     return selected_card(frame, target, snapshot)
 
@@ -109,10 +122,10 @@ def native_interactions(root, state, env, receipts, clients, open_map, log_diges
             raise proof.ProofFailure(f'exact focus failed for {target}')
     open_map(); client.drain(1)
     client.key(b'\r'); client.key(b'k'*100)
-    frame = client.frame()
+    frame = completed(client)
     original_width = client.screen.columns
     client.resize(40); client.resize(original_width); client.key(b'r')
-    if client.frame() != frame:
+    if completed(client) != frame:
         raise proof.ProofFailure('native resize/refresh lost selected detail position')
     (receipts / 'native-resize-detail.txt').write_text(frame)
     client.key(b'\x1b')
@@ -237,14 +250,7 @@ def scripted_interactions(root, env, receipts, Client):
         client = Client({}, scripted_env, 120, ['node', str(proof.ROOT / 'dot_local/share/herdr-overview/index.mjs'), 'overview'])
         client.drain(1)
         def current():
-            # A repaint can briefly clear the PTY; wait for the next completed canvas.
-            deadline = time.monotonic() + 10
-            while True:
-                frame = client.frame()
-                try:
-                    canvas(frame); return frame
-                except proof.ProofFailure:
-                    if time.monotonic() > deadline: raise
+            return completed(client)
         def capture(name):
             frame = current(); (receipts / f'scripted-{name}.txt').write_text(frame); return frame
         frame = capture('initial')
