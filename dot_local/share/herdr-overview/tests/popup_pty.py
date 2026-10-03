@@ -31,12 +31,14 @@ with tempfile.TemporaryDirectory(prefix='overview-popup-pty-') as tmp:
     if os.environ.get('OVERVIEW_VISUAL_PROOF'): record['sessionName']='Synthetic deployment readiness and rollback checklist'
     key = hashlib.sha256(json.dumps([sockpath,'terminal1'],separators=(',',':')).encode()).hexdigest()
     (sessions/(key+'.json')).write_text(json.dumps(record))
+    # The overview follows the recap CLI's presentation zone (records stay UTC).
+    recap_config = home/'xdg-config'/'session-recap'; recap_config.mkdir(parents=True); (recap_config/'config.toml').write_text('time_zone = "America/New_York"\n')
     (digests/(sid+'.json')).write_text(json.dumps(dict(schemaVersion=1,generatedAt='2026-10-01T02:00:00Z',body='digest synthetic line\n'*100+'DIGEST-FINAL-MARKER')))
     good=dict(schema_version=1,status='published',record_id='good',source_kind='manual',source_id='p1',pane_id='p1',published_at='2026-10-01T00:00:00Z',summary=''.join(f'recap synthetic line {n:03d}\n' for n in range(100))+'RECAP-FINAL-MARKER')
     bad=dict(schema_version=1,status='failed',record_id='bad',source_kind='manual',source_id='p1',pane_id='p1',created_at='2026-10-01T01:00:00Z',failure=dict(message='NEWER-ATTEMPT-ERROR'))
     for value in [good,bad]: (recaps/'records/2026-10-01'/(value['record_id']+'.json')).write_text(json.dumps(value))
     (recaps/'latest.json').write_text(json.dumps(dict(sources=[dict(source_kind='manual',source_id='p1',latest_success_id='good',last_attempt_id='bad')])))
-    env={**os.environ,'HOME':tmp,'XDG_DATA_HOME':str(home/'data'),'XDG_STATE_HOME':str(home/'xdg-state'),'HERDR_SOCKET_PATH':sockpath,'HERDR_PLUGIN_STATE_DIR':str(state),'HERDR_CONFIG_PATH':str(config),'HERDR_OVERVIEW_PI_SESSIONS_DIR':str(sessions),'PI_SESSION_SEARCH_DIGEST_DIR':str(digests)}
+    env={**os.environ,'HOME':tmp,'XDG_DATA_HOME':str(home/'data'),'XDG_STATE_HOME':str(home/'xdg-state'),'XDG_CONFIG_HOME':str(home/'xdg-config'),'HERDR_SOCKET_PATH':sockpath,'HERDR_PLUGIN_STATE_DIR':str(state),'HERDR_CONFIG_PATH':str(config),'HERDR_OVERVIEW_PI_SESSIONS_DIR':str(sessions),'PI_SESSION_SEARCH_DIGEST_DIR':str(digests)}
     calls=[]; busy=False; focus_fail=False
     server=socket.socket(socket.AF_UNIX); server.bind(sockpath); server.listen(); stopped=False
     def serve():
@@ -218,7 +220,7 @@ with tempfile.TemporaryDirectory(prefix='overview-popup-pty-') as tmp:
             key('j'*95,'RECAP-FINAL-MARKER')
             assert 'DIGEST-FINAL-MARKER' not in current_frame()
             assert 'Second workspace' not in current_frame()
-            key('d','2026-10-01T02:00:00Z')
+            key('d','2026-09-30 22:00:00 GMT−4')
             key('j'*130,'DIGEST-FINAL-MARKER')
             assert 'RECAP-FINAL-MARKER' not in current_frame()
             assert 'NEWER-ATTEMPT-ERROR' not in current_frame()

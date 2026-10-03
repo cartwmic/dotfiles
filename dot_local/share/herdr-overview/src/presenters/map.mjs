@@ -1,4 +1,5 @@
 import { markdownLines, plainMarkdown } from '../markdown.mjs';
+import { displayTime } from '../time.mjs';
 const clean = value => String(value ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\t/g, '    ').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ');
 // Keep ANSI, combining sequences and emoji clusters out of cell arithmetic.
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
@@ -57,6 +58,7 @@ const stateColor = pane => !pane.agent?.recognized ? 'overlay0' : ({ blocked:'re
 function blocked(model, ids) { return ids.filter(id => model.panes[id]?.agent?.recognized && model.panes[id]?.agent?.status === 'blocked').length; }
 export function mapLines(state, width, now = Date.now()) {
   const { model, journey } = state, palette = state.theme?.palette;
+  const when = (value, label = true) => value ? displayTime(value, state.timeZone ?? 'local', label) : value;
   const style = (text, role = 'text', surface = 'panel_bg') => `${paint(palette?.[role])}${paint(palette?.[surface], true)}${text}\x1b[0m`;
   const columns = Math.max(1, Math.min(model.workspaceOrder.length, Math.floor((width + 3) / 55)));
   const workspaceWidth = Math.floor((width - (columns - 1) * 3) / columns);
@@ -90,7 +92,7 @@ export function mapLines(state, width, now = Date.now()) {
       const preview = excerpt.slice(0, budget);
       if (excerpt.length > budget) preview[budget - 1] = clip(preview[budget - 1].trimEnd(), size - 5) + '…';
       while (preview.length < budget) preview.push('');
-      const metadata = wrap(`Latest good recap · ${good ? latest.published_at || latest.created_at || 'date unavailable' : 'unavailable'}`, size - 4);
+      const metadata = wrap(`Latest good recap · ${good ? when(latest.published_at || latest.created_at, false) || 'date unavailable' : 'unavailable'}`, size - 4);
       return box([{text:`${selected ? '›' : ' '} ${multi ? 'Pane' : 'Tab ' + (tab.number ?? '')}${manual ? ' M' : ''}`,role:manual ? 'mauve' : 'overlay0'}, ...names.map(text=>({text})), ...wrap(stateName(pane), size - 4).map(text=>({text,role:stateColor(pane),bold:true})), ...metadata.map(text=>({text,role:'overlay1'})), ...preview.map(text=>({text,role:good?'text':'overlay0'})), ...warning.map(text=>({text,role:'yellow'}))], size, pane.agent?.status === 'blocked' ? 'red' : selected ? 'accent' : 'overlay1', selected);
     };
     const reading = tab => {
@@ -102,16 +104,16 @@ export function mapLines(state, width, now = Date.now()) {
         if (tab.paneIds.length > 1) { add('─'.repeat(workspaceWidth - 4),'overlay1'); add(`${id === journey.paneId ? '› ' : ''}${paneTitle(pane)}`); }
         add(`${pane.agent?.recognized ? (pane.agent.displayName || pane.agent.kind || 'Agent') : 'Manual'} · ${stateName(pane)}`, stateColor(pane)); add('');
         if (journey.level === 'digest' && id === journey.paneId) {
-          add('Session digest','mauve'); add(pane.digest?.generatedAt || 'date unavailable','overlay0');
+          add('Session digest','mauve'); add(when(pane.digest?.generatedAt) || 'date unavailable','overlay0');
           if (pane.digest?.status === 'available') add(pane.digest.body,'text','active_row_bg',true); else add('Unavailable · no verified digest','text','active_row_bg');
         } else {
           const latest = pane.recap?.latest, attempt = pane.recap?.lastAttempt;
           add('Latest good recap','teal');
-          if (latest?.status === 'published') { const date = latest.published_at || latest.created_at; add(`Published ${date || 'date unavailable'}`,'overlay0'); if (latest.summary) add(latest.summary,'text','active_row_bg',true); else add('Unavailable','text','active_row_bg'); }
+          if (latest?.status === 'published') { const date = when(latest.published_at || latest.created_at); add(`Published ${date || 'date unavailable'}`,'overlay0'); if (latest.summary) add(latest.summary,'text','active_row_bg',true); else add('Unavailable','text','active_row_bg'); }
           else add('Unavailable · no published recap','overlay0');
-          if (attempt && attempt.record_id !== latest?.record_id) { add(''); add(`Newer attempt ${attempt.status}`,'yellow'); add(attempt.created_at || attempt.published_at || 'date unavailable','overlay0'); add(attempt.failure?.message || '', 'yellow','active_row_bg'); }
+          if (attempt && attempt.record_id !== latest?.record_id) { add(''); add(`Newer attempt ${attempt.status}`,'yellow'); add(when(attempt.created_at || attempt.published_at) || 'date unavailable','overlay0'); add(attempt.failure?.message || '', 'yellow','active_row_bg'); }
           add(''); add('Supplied prompt','teal'); add(pane.prompt?.text || 'Unavailable · no supplied prompt','text','active_row_bg'); add('');
-          add('▸ Session digest · d to read','mauve'); add(pane.digest?.generatedAt || 'unavailable','overlay0');
+          add('▸ Session digest · d to read','mauve'); add(when(pane.digest?.generatedAt) || 'unavailable','overlay0');
         }
         add('');
       }

@@ -7,6 +7,7 @@ import { readRecapFields, sessionRecapDataRoot } from './recap-store.mjs';
 import { readPiSessionFields } from './pi-session-store.mjs';
 import { overviewStateDir } from './state-store.mjs';
 import { readTheme, watchThemeConfig } from './theme.mjs';
+import { recapTimeZone } from './time.mjs';
 import { renderMap, mapFrame } from './presenters/map.mjs';
 import { reconcileJourney, getCurrentPaneId, movePane, nextBlocked, openJourneyLevel, backJourneyLevel, scrollDetail, scrollOverview, moveDirection, select } from './navigation.mjs';
 export function renderOverview(state, width = 100, height = 24, now = Date.now()) {
@@ -26,7 +27,8 @@ export async function runOverviewPane({ api = new HerdrApi(), stateDir = overvie
   let frame, escapeTimer; const decoder = new InputDecoder();
   let closed = false, queue = Promise.resolve();
   try { theme = await readTheme(configPath); } catch {}
-  const draw = () => { if (closed) return; if (output.isTTY) output.write('\x1b[2J\x1b[H'); frame = state.model ? mapFrame({ ...state, journey, theme }, output.columns || 100, output.rows || 24) : null; output.write((frame?.text || renderOverview({ ...state, journey, theme })) + (output.isTTY ? '' : '\n')); };
+  const timeZone = recapTimeZone(env);
+  const draw = () => { if (closed) return; if (output.isTTY) output.write('\x1b[2J\x1b[H'); frame = state.model ? mapFrame({ ...state, journey, theme, timeZone }, output.columns || 100, output.rows || 24) : null; output.write((frame?.text || renderOverview({ ...state, journey, theme })) + (output.isTTY ? '' : '\n')); };
   const refresh = async () => {
     const saved = await readState(stateDir);
     if (saved) state = saved;
