@@ -147,7 +147,7 @@ def run(receipts, reference, browser_python):
    host('j');selected(grouped[0]['id']);capture(client,receipts,f'native-{width}-question-wait')
    host('j');selected(grouped[1]['id']);capture(client,receipts,f'native-{width}-short-recap')
    missing_card=card(client.frame(),grouped[1]['id'],proof.snapshot(state))
-   assert missing_card and compact('Latest good recap · date unavailable') in compact(''.join(missing_card['rows']))
+   assert missing_card and compact('Recap date unavailable') in compact(''.join(missing_card['rows']))
    assert compact('Short verified recap.') in compact(''.join(missing_card['rows']))
    capture(client,receipts,f'native-{width}-missing-metadata')
    result['outcomes'][f'collapsed_missing_metadata_{width}']=True

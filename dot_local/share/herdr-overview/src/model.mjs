@@ -1,4 +1,5 @@
 import { evaluateDisplayNamePolicy } from "./display-name-policy.mjs";
+import { nativePiSessionId } from "./pi-session-store.mjs";
 
 export const HERDR_PROTOCOL = 22;
 
@@ -79,7 +80,7 @@ export function normalizeSnapshot(snapshot, supplied = {}, runtime = {}) {
     const agentInfo = agents.get(id);
     const agentName = agentInfo?.agent ?? nativePane.agent ?? null;
     const agentSession = agentInfo?.agent_session ?? nativePane.agent_session ?? null;
-    const piSessionId = agentSession?.agent === "pi" && agentSession.kind === "id" ? agentSession.value : null;
+    const piSessionId = nativePiSessionId(agentSession);
     const previous = previousPanes[id] ?? {};
     const preview = Object.hasOwn(outputByPane, id) ? outputByPane[id] : previous.preview ?? null;
     const processInfo = Object.hasOwn(processByPane, id) ? processByPane[id] : previous.processInfo ?? null;

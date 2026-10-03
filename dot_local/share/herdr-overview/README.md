@@ -86,8 +86,13 @@ lists, quotes, rules, code fences); collapsed card previews drop the markers
 and stay plain text. Recap and digest times are stored in UTC; the overview
 shows them in the recap CLI's `time_zone` (`~/.config/session-recap/config.toml`,
 `config.local.toml` wins; default `local`), DST-aware, e.g.
-`2026-10-03 06:19:35 GMT−7 [America/Los_Angeles]`. Cards omit the bracketed
-zone name. Unparseable values are shown unchanged. Card previews show at least two recap lines and also fill
+`2026-10-03 06:19:35 GMT−7 [America/Los_Angeles]`. Cards show one lean dim
+line, `Recap 2026-10-03 06:19 GMT−7` (no seconds or zone name), or
+`Recap unavailable`; the expanded view puts the full date on its section
+heading (`Latest good recap · …`, `Session digest · …`). Unparseable values
+are shown unchanged. An expanded card always starts at the top of the view,
+even when it is short. The viewer redraws in place (synchronized update, no
+full-screen clear), so scrolling does not flash. Card previews show at least two recap lines and also fill
 rows that would otherwise be blank (no newer-attempt warning, or a taller paired
 card) without making the card taller. Paired cards share one title-block height
 (one or two rows) so their rows stay aligned. Supplied prompts and failures stay literal. Outer widths 40/48/120/180 currently yield popup
@@ -157,7 +162,9 @@ single-pane tab uses its stable pane subject; a two-pane tab combines both short
 multi-pane tab uses the first useful stable subject plus `N more` (remaining
 live panes). Body-only recap/digest changes do not rename
 it. Private Pi metadata joins the current socket and unique live terminal,
-rejecting conflicting native session identity or dead publishers. Digest bodies
+rejecting conflicting native session identity or dead publishers. Herdr may
+report a Pi session by id or by its session file path; a path counts only when
+its file name ends in `_<uuid>.jsonl`, and that exact UUID is used. Digest bodies
 join only the verified current session UUID; missing/malformed digests are
 unavailable, and valid dated digests remain explicitly dated. Latest-good recap,
 later failed attempt, current prompt and digest remain separate. Reconciliation rereads a target before an

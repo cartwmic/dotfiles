@@ -1,6 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { nativePiSessionId } from "./pi-session-store.mjs";
 
 export function sessionRecapDataRoot(env = process.env) {
   return path.join(env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"), "session-recap");
@@ -205,8 +206,9 @@ export async function readRecapFields(
   for (const pane of snapshot.panes ?? []) {
     const agent = agentByPaneId.get(pane.pane_id);
     const session = agent?.agent_session ?? pane.agent_session;
-    if (session?.agent !== "pi" || session.kind !== "id" || typeof session.value !== "string") continue;
-    const recap = piRecapsBySessionId[session.value];
+    const sessionId = nativePiSessionId(session);
+    if (!sessionId) continue;
+    const recap = piRecapsBySessionId[sessionId];
     if (recap) recapsByPaneId[pane.pane_id] = mergeRecapFields(recapsByPaneId[pane.pane_id], recap);
   }
 

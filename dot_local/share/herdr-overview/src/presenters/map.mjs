@@ -59,7 +59,7 @@ const stateColor = pane => !pane.agent?.recognized ? 'overlay0' : ({ blocked:'re
 function blocked(model, ids) { return ids.filter(id => model.panes[id]?.agent?.recognized && model.panes[id]?.agent?.status === 'blocked').length; }
 export function mapLines(state, width, now = Date.now()) {
   const { model, journey } = state, palette = state.theme?.palette;
-  const when = (value, label = true) => value ? displayTime(value, state.timeZone ?? 'local', label) : value;
+  const when = (value, label = true, seconds = true) => value ? displayTime(value, state.timeZone ?? 'local', label, seconds) : value;
   const style = (text, role = 'text', surface = 'panel_bg') => `${paint(palette?.[role])}${paint(palette?.[surface], true)}${text}\x1b[0m`;
   const columns = Math.max(1, Math.min(model.workspaceOrder.length, Math.floor((width + 3) / 55)));
   const workspaceWidth = Math.floor((width - (columns - 1) * 3) / columns);
@@ -92,10 +92,10 @@ export function mapLines(state, width, now = Date.now()) {
       const warning = attempt && attempt.record_id !== latest?.record_id ? wrap(`Newer attempt ${attempt.status}`, size - 4) : [];
       // At least two preview lines; an unused warning slot goes to the recap.
       const budget = 2 + extra + (warning.length ? 0 : 1);
-      const excerpt = wrap(good ? plainMarkdown(latest.summary) || 'Unavailable' : 'Unavailable · no published recap', size - 4).filter((line, i, all) => line.trim() || (i > 0 && all[i - 1].trim()));
+      const excerpt = (good ? wrap(plainMarkdown(latest.summary) || 'Unavailable', size - 4) : []).filter((line, i, all) => line.trim() || (i > 0 && all[i - 1].trim()));
       const preview = excerpt.slice(0, budget);
-      if (excerpt.length > budget) preview[budget - 1] = clip(preview[budget - 1].trimEnd(), size - 5) + '…';
-      const metadata = wrap(`Latest good recap · ${good ? when(latest.published_at || latest.created_at, false) || 'date unavailable' : 'unavailable'}`, size - 4);
+      if (excerpt.length > budget) { let last = budget - 1; while (last > 0 && !preview[last].trim()) last--; preview.length = last + 1; preview[last] = clip(preview[last].trimEnd(), size - 5) + '…'; }
+      const metadata = wrap(good ? `Recap ${when(latest.published_at || latest.created_at, false, false) || 'date unavailable'}` : 'Recap unavailable', size - 4);
       return box([{text:`${selected ? '›' : ' '} ${multi ? 'Pane' : 'Tab ' + (tab.number ?? '')}${manual ? ' M' : ''}`,role:manual ? 'mauve' : 'overlay0'}, ...names.map(text=>({text})), ...wrap(stateName(pane), size - 4).map(text=>({text,role:stateColor(pane),bold:true})), ...metadata.map(text=>({text,role:'overlay1'})), ...preview.map(text=>({text,role:good?'text':'overlay0'})), ...warning.map(text=>({text,role:'yellow'}))], size, pane.agent?.status === 'blocked' ? 'red' : selected ? 'accent' : 'overlay1', selected);
     };
     const reading = tab => {
@@ -107,16 +107,15 @@ export function mapLines(state, width, now = Date.now()) {
         if (tab.paneIds.length > 1) { add('─'.repeat(workspaceWidth - 4),'overlay1'); add(`${id === journey.paneId ? '› ' : ''}${paneTitle(pane)}`); }
         add(`${pane.agent?.recognized ? (pane.agent.displayName || pane.agent.kind || 'Agent') : 'Manual'} · ${stateName(pane)}`, stateColor(pane)); add('');
         if (journey.level === 'digest' && id === journey.paneId) {
-          add('Session digest','mauve'); add(when(pane.digest?.generatedAt) || 'date unavailable','overlay0');
+          add(`Session digest · ${when(pane.digest?.generatedAt) || 'date unavailable'}`,'mauve');
           if (pane.digest?.status === 'available') add(pane.digest.body,'text','active_row_bg',true); else add('Unavailable · no verified digest','text','active_row_bg');
         } else {
           const latest = pane.recap?.latest, attempt = pane.recap?.lastAttempt;
-          add('Latest good recap','teal');
-          if (latest?.status === 'published') { const date = when(latest.published_at || latest.created_at); add(`Published ${date || 'date unavailable'}`,'overlay0'); if (latest.summary) add(latest.summary,'text','active_row_bg',true); else add('Unavailable','text','active_row_bg'); }
-          else add('Unavailable · no published recap','overlay0');
+          if (latest?.status === 'published') { add(`Latest good recap · ${when(latest.published_at || latest.created_at) || 'date unavailable'}`,'teal'); if (latest.summary) add(latest.summary,'text','active_row_bg',true); else add('Unavailable','text','active_row_bg'); }
+          else add('Latest good recap · unavailable','teal');
           if (attempt && attempt.record_id !== latest?.record_id) { add(''); add(`Newer attempt ${attempt.status}`,'yellow'); add(when(attempt.created_at || attempt.published_at) || 'date unavailable','overlay0'); add(attempt.failure?.message || '', 'yellow','active_row_bg'); }
           add(''); add('Supplied prompt','teal'); add(pane.prompt?.text || 'Unavailable · no supplied prompt','text','active_row_bg'); add('');
-          add('▸ Session digest · d to read','mauve'); add(when(pane.digest?.generatedAt) || 'unavailable','overlay0');
+          add(`▸ Session digest · d to read · ${pane.digest?.status === 'available' ? when(pane.digest.generatedAt) || 'date unavailable' : 'unavailable'}`,'mauve');
         }
         add('');
       }
@@ -171,13 +170,15 @@ export function mapFrame(state,width=100,height=24,now=Date.now()) {
   if(end!==null && journey?.readingPosition) { const p=journey.readingPosition; const match=positions.findLastIndex(x=>x.line<p.line || x.line===p.line && x.cell<=p.cell); relative=Math.max(0,match)+(journey.scrollDelta||0); }
   const limit=end===null ? max : Math.max(0,end-anchor-capacity);
   relative=Math.max(0,Math.min(limit,relative));
-  let offset=end===null ? Math.min(max,Math.max(0,journey?.overviewScroll || 0)) : Math.min(max,anchor+relative);
+  // An expanded card stays at the top even when the map below it is short.
+  let offset=end===null ? Math.min(max,Math.max(0,journey?.overviewScroll || 0)) : anchor+relative;
   if(end===null && journey?.ensureVisible !== false) { const r=rectangles.find(r=>r.paneId===journey?.paneId); if(r) { if(r.y<offset)offset=r.y; else if(r.y+r.height>offset+capacity)offset=Math.min(r.y, r.y+r.height-capacity); } offset=Math.max(0,Math.min(max,offset)); }
   if(journey) { if(end===null) {journey.overviewScroll=offset; journey.ensureVisible=false;} }
   if(journey) { journey.detailScroll=relative;journey.readingPosition=end===null ? null : journey.readingPosition && !journey.scrollDelta ? journey.readingPosition : positions[relative];journey.scrollDelta=0; }
   const palette=state.theme?.palette;
   const style=(text,role)=>`${paint(palette?.[role])}${paint(palette?.panel_bg,true)}${pad(compact(text,width),width)}\x1b[0m`;
-  const visible=body.slice(offset,offset+capacity);while(visible.length<capacity)visible.push(style('','text'));
+  // Lines narrower than the canvas clear their old tail (the viewer redraws in place).
+  const visible=body.slice(offset,offset+capacity).map(line=>cellWidth(line)<width ? line+'\x1b[K' : line);while(visible.length<capacity)visible.push(style('','text'));
   const text = [style(headers[0],'accent'), paint(palette?.panel_bg,true) + [[`!${count('blocked')}`,count('blocked')?'yellow':'overlay0'],[` W${count('working')}`,'green'],[` R${count('idle')}`,'blue'],[` · ${state.model.workspaceOrder.length}ws ${Object.keys(state.model.tabs).length}t`,'subtext0']].map(([text,role])=>paint(palette?.[role])+text).join('') + ' '.repeat(Math.max(0,width-cellWidth(summary))) + '\x1b[0m',...visible,...(state.notice?[style(state.notice,'yellow')]:[]),...footers.map(line=>style(line,'overlay0'))].join('\n');
   return {text,rectangles,viewport:{x:0,y:headers.length,width,height:capacity,offset,max}};
 }

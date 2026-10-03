@@ -16,11 +16,12 @@ export function recapTimeZone(env = process.env) {
 // Same shape as Pi recap: "2026-10-03 06:19:35 GMT−7 [America/Los_Angeles]".
 // Unparseable timestamps or zones are shown unchanged rather than guessed.
 // label=false drops the [zone] suffix for narrow cards; the offset stays.
-export function displayTime(timestamp, zone = 'local', label = true) {
+// seconds=false gives the compact card form, e.g. "2026-10-03 06:19 GMT−7".
+export function displayTime(timestamp, zone = 'local', label = true, seconds = true) {
   const date = new Date(timestamp ?? '');
   if (!timestamp || Number.isNaN(date.getTime()) || !/(Z|[+-]\d\d:?\d\d)$/i.test(timestamp)) return timestamp;
   try {
-    const f = new Intl.DateTimeFormat('sv-SE', { ...(zone === 'local' ? {} : { timeZone: zone }), year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'shortOffset' });
+    const f = new Intl.DateTimeFormat('sv-SE', { ...(zone === 'local' ? {} : { timeZone: zone }), year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}), hourCycle: 'h23', timeZoneName: 'shortOffset' });
     return label ? `${f.format(date)} [${zone === 'local' ? f.resolvedOptions().timeZone : zone}]` : f.format(date);
   } catch { return timestamp; }
 }
