@@ -45,6 +45,9 @@ The two-row extra-key layout keeps its normal tap behavior. Swipe up on
 command palette over SSH. Swipe up on **ALT** to send **Ctrl+O** (`CTRL o`) to
 the current terminal application; it is not the Herdr prefix+O action.
 
+`extra-keys-border = true` draws faint dividers between keys (Termux fork
+property; stock Termux ignores it).
+
 Each key label shows its swipe-up after the tap name: 🗺️ overview, 🎛️ palette,
 ❌ close pane, `^O`/`^P` for Ctrl+O/Ctrl+P, and `⇧⇥` for Shift+Tab.
 

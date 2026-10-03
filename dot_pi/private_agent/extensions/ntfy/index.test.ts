@@ -488,7 +488,7 @@ test("lifecycle wiring: end caches, settled+idle sends, question sends immediate
 	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
 	const busHandlers = new Map<string, (data: unknown) => void>();
 	const sends: unknown[][] = [];
-	let idle = false;
+	let aborted = true;
 	const pi = {
 		registerCommand: () => {},
 		on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => {
@@ -503,7 +503,9 @@ test("lifecycle wiring: end caches, settled+idle sends, question sends immediate
 	};
 	const ctx = {
 		hasUI: true,
-		isIdle: () => idle,
+		// Patched Pi keeps isIdle false during agent_settled handlers.
+		isIdle: () => false,
+		get signal() { return { aborted }; },
 		sessionManager: {
 			getCwd: () => "/tmp/project",
 			getSessionName: () => "named",
@@ -538,9 +540,9 @@ test("lifecycle wiring: end caches, settled+idle sends, question sends immediate
 
 		await handlers.get("agent_settled")?.({}, ctx);
 		await flushAsyncDispatch();
-		assert.equal(sends.length, 0, "non-idle settled event does not notify");
+		assert.equal(sends.length, 0, "aborted settled event does not notify");
 
-		idle = true;
+		aborted = false;
 		await handlers.get("agent_settled")?.({}, ctx);
 		await flushAsyncDispatch();
 		assert.equal(sends.length, 1);
