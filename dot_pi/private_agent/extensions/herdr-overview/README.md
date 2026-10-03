@@ -39,7 +39,9 @@ The generic `session-recap` CLI is normally `~/.local/bin/session-recap`;
   attribution and remains session-only. Existing attribution is not reassigned
   on return/move; publication time owns the quiet deadline.
 - Annotation never rewrites narrative, coverage, settings or source identity.
-  After annotation, the adapter invokes `overview.reconcile`. A failed wake-up
+  After annotating, the adapter invokes `overview.reconcile` once per pass (not
+  per record). Herdr caps concurrent plugin commands at 32, so a full table is
+  retried briefly (up to three times) instead of being reported. A failed wake-up
   leaves durable records/annotations for later plugin startup or session return.
   It never calls managed `prepare`, `publish`, `prompt` or `create` commands.
 

@@ -12,6 +12,7 @@ from collections import namedtuple
 import pyte
 from wcwidth import wcwidth, wcswidth
 
+BAR = '▎ '
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 
 
@@ -82,7 +83,8 @@ class CurrentScreen:
 
     def widget(self, record, zone, env, label):
         frame = self.capture(label)
-        lines = [line.rstrip() for line in frame['lines']]
+        # Widget rows sit behind a coloured '▎ ' bar; read the text after it.
+        lines = [line.rstrip().removeprefix(BAR) for line in frame['lines']]
         heading_rows = [i for i, line in enumerate(lines) if line.startswith('Recap updated ')]
         assert len(heading_rows) == 1, (label, heading_rows, lines)
         row = heading_rows[0]
@@ -91,7 +93,7 @@ class CurrentScreen:
 const f = new Intl.DateTimeFormat('sv-SE', {...(zone === 'local' ? {} : {timeZone: zone}), year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23', timeZoneName:'shortOffset'});
 console.log(`${f.format(new Date(timestamp))} [${zone === 'local' ? f.resolvedOptions().timeZone : zone}]`);'''
         display_time = subprocess.check_output(['node', '-e', script, json.dumps([timestamp, zone])], env=env, text=True).strip()
-        assert lines[row] == excerpt('Recap updated ' + display_time, frame['columns']), (label, lines[row], display_time)
+        assert lines[row] == excerpt('Recap updated ' + display_time, frame['columns'] - 2), (label, lines[row], display_time)
         # Dim markdown excerpt: up to three rows, the summary's own line breaks
         # kept (each source line starts a row), '...' when text remains.
         rule = next((i for i in range(row + 1, min(len(lines), row + 6)) if lines[i].startswith('─')), None)
@@ -107,10 +109,12 @@ console.log(`${f.format(new Date(timestamp))} [${zone === 'local' ? f.resolvedOp
             assert len(rows) == 3 and lines[rule - 1].endswith('...'), (label, 'truncated excerpt lacks ...', lines[rule - 1])
         # Every widget cell uses the one muted color and stays faint; model
         # ANSI must not recolor it (markdown bold/italic are allowed).
-        colors = {c['fg'] for c in frame['cells'][row] if c['data'].strip()}
+        colors = {c['fg'] for c in frame['cells'][row][2:] if c['data'].strip()}
         assert len(colors) == 1, (label, colors)
         for y in (row, *rows):
-            assert all(c['fg'] in colors and c.get('faint') for c in frame['cells'][y] if c['data'].strip()), (label, y, {c['fg'] for c in frame['cells'][y] if c['data'].strip()})
+            bar = frame['cells'][y][0]
+            assert bar['data'] == '▎' and bar['fg'] not in colors, (label, y, 'widget bar missing or not coloured')
+            assert all(c['fg'] in colors and c.get('faint') for c in frame['cells'][y][2:] if c['data'].strip()), (label, y, {c['fg'] for c in frame['cells'][y][2:] if c['data'].strip()})
         # No partial narrative elsewhere in the current frame.
         assert not any('詳しい' in line or '観察 ' in line for i, line in enumerate(lines) if i not in rows), (label, 'narrative outside widget')
         return lines[row:rule]

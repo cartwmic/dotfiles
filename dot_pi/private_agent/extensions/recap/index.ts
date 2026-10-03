@@ -124,10 +124,12 @@ export default function recap(pi: ExtensionAPI) {
     const excerpt = record ? hardBreaks(stripTerminalSequences(record.summary)) : null;
     ctx.ui.setWidget('recap', (_tui, theme) => ({
       invalidate() {},
-      render(width: number) {
+      render(full: number) {
+        // A coloured left bar sets the recap widget apart from its neighbours.
+        const bar = theme.fg('accent', '▎ '), width = Math.max(1, full - 2);
         const dim = (text: string) => theme.fg('dim', text);
         const top = dim(stripTerminalSequences(truncateToWidth(heading, width)));
-        if (!excerpt) return [top, dim(truncateToWidth('No saved recap yet.', width))];
+        if (!excerpt) return [top, dim(truncateToWidth('No saved recap yet.', width))].map(line => bar + line);
         // Dim markdown: structure (bold, italic, bullets) without theme colours.
         const md = new Markdown(excerpt, 0, 0, {
           heading: s => theme.bold(dim(s)), link: dim, linkUrl: dim, code: dim, codeBlock: dim, codeBlockBorder: dim,
@@ -142,7 +144,7 @@ export default function recap(pi: ExtensionAPI) {
           const used = Math.min(visibleWidth(stripTerminalSequences(shown[2]).trimEnd()), width - 3);
           shown[2] = truncateToWidth(shown[2], Math.max(0, used), '') + dim('...');
         }
-        return [top, ...shown];
+        return [top, ...shown].map(line => bar + line);
       },
     }), { placement: 'aboveEditor' });
   }
