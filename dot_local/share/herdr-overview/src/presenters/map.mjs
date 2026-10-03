@@ -1,3 +1,4 @@
+import { markdownLines, plainMarkdown } from '../markdown.mjs';
 const clean = value => String(value ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\t/g, '    ').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ');
 // Keep ANSI, combining sequences and emoji clusters out of cell arithmetic.
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
@@ -25,6 +26,22 @@ export function wrap(value, width) {
     return parts;
   });
 }
+// Wrap styled spans at spaces like wrap(); continuation rows hang under the prefix.
+function wrapSpans(prefix, spans, width) {
+  let indent = prefix.reduce((sum, span) => sum + cellWidth(span.text), 0);
+  if (width - indent < 8) { prefix = []; indent = 0; }
+  const items = spans.flatMap(span => graphemes(span.text).map(g => ({ g, span }))), rows = [];
+  if (!items.length) return [prefix];
+  while (items.length) {
+    let count = 0, used = 0, space = -1;
+    while (count < items.length && used + cells(items[count].g) <= width - indent) { used += cells(items[count].g); if (/\s/u.test(items[count].g)) space = count; count++; }
+    if (count < items.length && space > 0) count = space + 1;
+    const row = [];
+    for (const { g, span } of items.splice(0, Math.max(1, count))) { if (row.at(-1)?.source === span) row.at(-1).text += g; else row.push({ ...span, source: span, text: g }); }
+    rows.push([...(rows.length ? (indent ? [{ text: ' '.repeat(indent) }] : []) : prefix), ...row]);
+  }
+  return rows;
+}
 const title = value => value?.label || value?.sessionName || value?.subject || value?.title || value?.terminalTitle || 'Unavailable';
 const fullTitle = tab => tab.displayNameOwnership?.mode === 'manual' ? title(tab) : tab.fullTitle || title(tab);
 const paneTitle = pane => pane.displayNameOwnership?.mode === 'manual' ? title(pane) : pane.paneSubject || pane.sessionName || pane.subject || title(pane);
@@ -50,27 +67,34 @@ export function mapLines(state, width, now = Date.now()) {
       const surface = overrideSurface || (selected ? 'selection_bg' : 'active_row_bg'), inner = Math.max(1, size - 4);
       const edge = text => style(text, border, surface);
       return [edge('┌' + '─'.repeat(size - 2) + '┐'), edge('│' + ' '.repeat(size - 2) + '│'),
-        ...content.map(row => edge('│ ') + (row.bold ? '\x1b[1m' : '') + style(pad(clip(row.text, inner), inner), row.role || 'text', row.surface || surface) + edge(' │')),
+        ...content.map(row => edge('│ ') + (row.spans ? spanRow(row, inner, row.surface || surface) : (row.bold ? '\x1b[1m' : '') + style(pad(clip(row.text, inner), inner), row.role || 'text', row.surface || surface)) + edge(' │')),
         edge('│' + ' '.repeat(size - 2) + '│'), edge('└' + '─'.repeat(size - 2) + '┘')];
     };
-    const card = (tab, pane, size) => {
+    const spanRow = (row, inner, surface) => { let used = 0, out = '';
+      for (const span of row.spans) { const text = clip(span.text, inner - used); if (!text) continue; used += cellWidth(text); out += (span.bold ? '\x1b[1m' : '') + (span.italic ? '\x1b[3m' : '') + style(text, span.role || row.role || 'text', surface); }
+      return out + style(' '.repeat(Math.max(0, inner - used)), row.role || 'text', surface); };
+    // extra: rows a taller paired card would otherwise leave blank; the recap fills them.
+    const card = (tab, pane, size, extra = 0) => {
       const selected = pane.id === journey?.paneId, multi = tab.paneIds.length > 1;
       const wrapped = wrap(multi ? paneTitle(pane) : fullTitle(tab), size - 4);
       const names = wrapped.slice(0, 2);
       if (wrapped.length > 2) names[1] = clip(names[1].trimEnd(), Math.max(0, size - 5)) + '…';
-      while (names.length < 2) names.push('');
+      while (names.length < 2) names.push(''); // fixed title block keeps paired rows aligned
       const manual = (multi ? pane : tab).displayNameOwnership?.mode === 'manual';
       const latest = pane.recap?.latest, attempt = pane.recap?.lastAttempt;
       const good = latest?.status === 'published';
-      const excerpt = wrap(good ? latest.summary || 'Unavailable' : 'Unavailable · no published recap', size - 4);
-      const preview = excerpt.slice(0, 2);
-      if (excerpt.length > 2) preview[1] = clip(preview[1].trimEnd(), size - 5) + '…';
-      while (preview.length < 2) preview.push('');
+      const warning = attempt && attempt.record_id !== latest?.record_id ? wrap(`Newer attempt ${attempt.status}`, size - 4) : [];
+      // At least two preview lines; an unused warning slot goes to the recap.
+      const budget = 2 + extra + (warning.length ? 0 : 1);
+      const excerpt = wrap(good ? plainMarkdown(latest.summary) || 'Unavailable' : 'Unavailable · no published recap', size - 4).filter((line, i, all) => line.trim() || (i > 0 && all[i - 1].trim()));
+      const preview = excerpt.slice(0, budget);
+      if (excerpt.length > budget) preview[budget - 1] = clip(preview[budget - 1].trimEnd(), size - 5) + '…';
+      while (preview.length < budget) preview.push('');
       const metadata = wrap(`Latest good recap · ${good ? latest.published_at || latest.created_at || 'date unavailable' : 'unavailable'}`, size - 4);
-      return box([{text:`${selected ? '›' : ' '} ${multi ? 'Pane' : 'Tab ' + (tab.number ?? '')}${manual ? ' M' : ''}`,role:manual ? 'mauve' : 'overlay0'}, ...names.map(text=>({text})), ...wrap(stateName(pane), size - 4).map(text=>({text,role:stateColor(pane),bold:true})), ...metadata.map(text=>({text,role:'overlay1'})), ...preview.map(text=>({text,role:good?'text':'overlay0'})), ...wrap(attempt && attempt.record_id !== latest?.record_id ? `Newer attempt ${attempt.status}` : '', size - 4).map(text=>({text,role:'yellow'}))], size, pane.agent?.status === 'blocked' ? 'red' : selected ? 'accent' : 'overlay1', selected);
+      return box([{text:`${selected ? '›' : ' '} ${multi ? 'Pane' : 'Tab ' + (tab.number ?? '')}${manual ? ' M' : ''}`,role:manual ? 'mauve' : 'overlay0'}, ...names.map(text=>({text})), ...wrap(stateName(pane), size - 4).map(text=>({text,role:stateColor(pane),bold:true})), ...metadata.map(text=>({text,role:'overlay1'})), ...preview.map(text=>({text,role:good?'text':'overlay0'})), ...warning.map(text=>({text,role:'yellow'}))], size, pane.agent?.status === 'blocked' ? 'red' : selected ? 'accent' : 'overlay1', selected);
     };
     const reading = tab => {
-      const logical = []; let selectedLogical = 0; const add = (text, role='text', surface) => logical.push({text,role,surface});
+      const logical = []; let selectedLogical = 0; const add = (text, role='text', surface, md=false) => logical.push({text,role,surface,md});
       add(fullTitle(tab)); add('');
       for (const id of tab.paneIds) {
         const pane = model.panes[id]; if (!pane || journey.level === 'digest' && id !== journey.paneId) continue;
@@ -79,11 +103,11 @@ export function mapLines(state, width, now = Date.now()) {
         add(`${pane.agent?.recognized ? (pane.agent.displayName || pane.agent.kind || 'Agent') : 'Manual'} · ${stateName(pane)}`, stateColor(pane)); add('');
         if (journey.level === 'digest' && id === journey.paneId) {
           add('Session digest','mauve'); add(pane.digest?.generatedAt || 'date unavailable','overlay0');
-          add(pane.digest?.status === 'available' ? pane.digest.body : 'Unavailable · no verified digest','text','active_row_bg');
+          if (pane.digest?.status === 'available') add(pane.digest.body,'text','active_row_bg',true); else add('Unavailable · no verified digest','text','active_row_bg');
         } else {
           const latest = pane.recap?.latest, attempt = pane.recap?.lastAttempt;
           add('Latest good recap','teal');
-          if (latest?.status === 'published') { const date = latest.published_at || latest.created_at; add(`Published ${date || 'date unavailable'}`,'overlay0'); add(latest.summary || 'Unavailable','text','active_row_bg'); }
+          if (latest?.status === 'published') { const date = latest.published_at || latest.created_at; add(`Published ${date || 'date unavailable'}`,'overlay0'); if (latest.summary) add(latest.summary,'text','active_row_bg',true); else add('Unavailable','text','active_row_bg'); }
           else add('Unavailable · no published recap','overlay0');
           if (attempt && attempt.record_id !== latest?.record_id) { add(''); add(`Newer attempt ${attempt.status}`,'yellow'); add(attempt.created_at || attempt.published_at || 'date unavailable','overlay0'); add(attempt.failure?.message || '', 'yellow','active_row_bg'); }
           add(''); add('Supplied prompt','teal'); add(pane.prompt?.text || 'Unavailable · no supplied prompt','text','active_row_bg'); add('');
@@ -93,9 +117,12 @@ export function mapLines(state, width, now = Date.now()) {
       }
       const rows = []; positions = [{line:-2,cell:0},{line:-1,cell:0}];
       let line = 0; selectedLine = 0;
-      for (const [index,item] of logical.entries()) { if (index === selectedLogical && selectedLogical > 2) selectedLine = positions.length; for (const source of clean(item.text).split(/\r?\n/)) {
+      for (const [index,item] of logical.entries()) { if (index === selectedLogical && selectedLogical > 2) selectedLine = positions.length; const inner = workspaceWidth - 4;
+      for (const source of item.md ? markdownLines(clean(item.text)) : clean(item.text).split(/\r?\n/)) {
         let cell = 0;
-        for (const text of wrap(source, workspaceWidth - 4)) { rows.push({...item,text}); positions.push({line,cell}); cell += cellWidth(text); }
+        const wrapped = !item.md ? wrap(source, inner).map(text => ({...item,text}))
+          : source.skip ? [] : (source.rule ? [[{text:'─'.repeat(inner),role:'overlay1'}]] : wrapSpans(source.prefix, source.spans, inner)).map(spans => ({...item,spans,text:spans.map(s=>s.text).join('')}));
+        for (const row of wrapped) { rows.push(row); positions.push({line,cell}); cell += cellWidth(row.text); }
         line++;
       } }
       positions.push({line,cell:0},{line:line+1,cell:0});
@@ -105,7 +132,7 @@ export function mapLines(state, width, now = Date.now()) {
     const attention = blocked(model, workspace.tabIds.flatMap(id=>model.tabs[id]?.paneIds ?? []));
     lines.push(style(pad(`${workspace.tabIds.length} tabs · ${attention} needs input`,workspaceWidth),attention ? 'yellow':'overlay0'), '');
     let pending=[];
-    const flush = () => { if (!pending.length) return; const cards=pending.map(({tab,pane})=>card(tab,pane,cellSize)); const height=Math.max(...cards.map(c=>c.length)); cards.forEach((c,i)=>{ while(c.length<height)c.splice(c.length-2,0,c[c.length-2]); rectangles.push({paneId:pending[i].pane.id,x:i*(cellSize+2),y:lines.length,width:cellSize,height}); }); if(pending.some(({pane})=>pane.id===journey?.paneId)) anchor=lines.length;
+    const flush = () => { if (!pending.length) return; let cards=pending.map(({tab,pane})=>card(tab,pane,cellSize)); const height=Math.max(...cards.map(c=>c.length)); cards=cards.map((c,i)=>c.length<height ? card(pending[i].tab,pending[i].pane,cellSize,height-c.length) : c); cards.forEach((c,i)=>{ while(c.length<height)c.splice(c.length-2,0,c[c.length-2]); rectangles.push({paneId:pending[i].pane.id,x:i*(cellSize+2),y:lines.length,width:cellSize,height}); }); if(pending.some(({pane})=>pane.id===journey?.paneId)) anchor=lines.length;
       for(let y=0;y<cards[0].length;y++) lines.push(cards.map(card=>card[y]).join('  ')); lines.push('');pending=[]; };
     for(const tabId of workspace.tabIds) {
       const tab=model.tabs[tabId], ids=tab.paneIds.filter(id=>model.panes[id]); const expanded=journey?.level !== 'overview' && journey?.tabId===tabId;

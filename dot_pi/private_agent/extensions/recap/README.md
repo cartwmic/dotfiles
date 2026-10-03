@@ -88,7 +88,10 @@ and owns native attribution; it never configures or generates Pi recaps.
 History filters can combine (for example `history all attempts` or `history legacy attempts`).
 Settings default to session scope, with sparse overrides and explicit clearing.
 The independent model picker does not change the conversation model.
-History uses a searchable selector and a keyboard-scrollable dim viewer.
+History uses a searchable selector and a keyboard-scrollable viewer. Recap
+narratives in `/recap view` and history render as markdown with Pi's own
+markdown theme; help text and failure details stay plain dim text. The compact
+widget excerpt stays raw text.
 
 Requests are captured into a private temporary file and handed to a detached,
 unreferenced Python supervisor. Shutdown closes the result pipes, not the job.
@@ -258,6 +261,12 @@ Focused current-context regression (private dummy backend; no owner recap):
 
 ```sh
 RECAP_CONTEXT_EVIDENCE=/tmp/recap-context-proof /tmp/hm-pyte-t4a/bin/python tests/pi-recap/context_limits.py
+```
+
+Markdown viewer journey (real Pi, scripted markdown recap, pyte cell checks):
+
+```sh
+/tmp/hm-pyte-t4a/bin/python tests/pi-recap/viewer_markdown.py
 ```
 
 This seeds a >5MB retained archive through the public SDK and drives real Pi.
