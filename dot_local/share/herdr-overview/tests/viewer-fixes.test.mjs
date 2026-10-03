@@ -12,6 +12,8 @@ import { runOverviewPane } from '../src/pane.mjs';
 import { snapshot } from './popup-fixture.mjs';
 
 const sid = '01a101ec-1006-747c-95d9-63674f7ba4df';
+// Strip the workspace frame (single-workspace fixtures) so card geometry can be checked directly.
+const unframe = rows => rows.filter(r => !/^┌─ /.test(r) && !/^└─+┘\s*$/.test(r)).map(r => r.replace(/^│ ?/, '').replace(/ ?│\s*$/, ''));
 const plain = s => s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
 
 test('a Pi session reported by file path yields its exact UUID; other shapes do not', () => {
@@ -36,7 +38,9 @@ test('a short expanded digest stays at the top of the viewport, not clamped to t
   const model = normalizeSnapshot(snapshot());
   const journey = { ...createJourney(model), level: 'digest' };
   const lines = plain(mapFrame({ model, journey }, 60, 40).text).split('\n');
-  assert.match(lines[2], /^┌/); assert.match(lines[3], /Single 1/); assert.match(lines.join('\n'), /Session digest · date unavailable/);
+  assert.match(lines[2], /^│ ┌/); assert.match(lines[3], /Single 1/);
+  const map = plain(mapFrame({ model, journey: createJourney(model) }, 60, 40).text).split('\n');
+  assert.match(map[2], /^┌─ Synthetic workspace ─+ 3 tabs · 1 needs input ─┐$/); assert.match(map.findLast(l => l.startsWith('└')), /^└─+┘$/); assert.match(lines.join('\n'), /Session digest · date unavailable/);
 });
 
 test('the viewer redraws in place inside a synchronized update, never clearing the screen', async () => {
@@ -58,7 +62,7 @@ test('paired cards keep equal heights and full borders when recaps contain blank
   model.panes.p2.recap = recap('Recap: viewer fixes are committed, merged, applied and pushed\n\nWhere things stand');
   model.tabs.t1.fullTitle = 'Pi lifecycle classifiers and Jev integration'; model.panes.p3.agent.status = 'working';
   for (const width of [40, 46, 92, 160]) {
-    const rows = plain(mapFrame({ model, journey: createJourney(model) }, width, 60).text).split('\n');
+    const rows = unframe(plain(mapFrame({ model, journey: createJourney(model) }, width, 60).text).split('\n'));
     const top = rows.findIndex(r => r.includes('┌')), bottom = rows.findIndex((r, i) => i > top && r.includes('└'));
     assert.equal((rows[top].match(/┌/g) || []).length, 2, width);
     assert.equal((rows[bottom].match(/└/g) || []).length, 2, `both bottom borders on one row at ${width}`);

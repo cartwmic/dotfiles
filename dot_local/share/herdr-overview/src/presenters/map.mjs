@@ -63,8 +63,11 @@ export function mapLines(state, width, now = Date.now()) {
   const style = (text, role = 'text', surface = 'panel_bg') => `${paint(palette?.[role])}${paint(palette?.[surface], true)}${text}\x1b[0m`;
   const columns = Math.max(1, Math.min(model.workspaceOrder.length, Math.floor((width + 2) / 55)));
   // Gaps: one column between paired cards, two between workspace columns.
-  const workspaceWidth = Math.floor((width - (columns - 1) * 2) / columns);
+  const slotWidth = Math.floor((width - (columns - 1) * 2) / columns);
+  // Each workspace is framed: '│ ' + content + ' │' ('│' + content + '│' when narrow).
   const chunks = model.workspaceOrder.map(workspaceId => {
+    // Narrow slots drop the inner frame padding so cards keep usable width.
+    const gutter = slotWidth >= 48 ? 1 : 0, workspaceWidth = Math.max(1, slotWidth - 2 - 2 * gutter);
     const workspace = model.workspaces[workspaceId], lines = []; let anchor = 0, end = null, positions = [], selectedLine = 0, rectangles = [];
     const cellSize = Math.floor((workspaceWidth - 1) / 2);
     const box = (content, size, border = 'overlay1', selected = false, overrideSurface = null) => {
@@ -134,11 +137,18 @@ export function mapLines(state, width, now = Date.now()) {
       positions.push({line,cell:0});
       return box(rows, workspaceWidth, model.panes[journey.paneId]?.agent?.status === 'blocked' ? 'yellow' : 'accent', true, 'panel_bg');
     };
-    lines.push(style(pad(compact(title(workspace),workspaceWidth),workspaceWidth),'mauve'));
     const attention = blocked(model, workspace.tabIds.flatMap(id=>model.tabs[id]?.paneIds ?? []));
-    lines.push(style(pad(`${workspace.tabIds.length} tabs · ${attention} needs input`,workspaceWidth),attention ? 'yellow':'overlay0'));
+    // Workspace frame top: ┌─ bold name ───── counts ─┐ (counts drop inside the frame when narrow).
+    const counts = `${workspace.tabIds.length} tab${workspace.tabIds.length === 1 ? '' : 's'} · ${attention} needs input`;
+    const rule = text => style(text, 'overlay1');
+    const name = compact(title(workspace), Math.max(1, slotWidth - 6));
+    const inline = cellWidth(name) + cellWidth(counts) + 10 <= slotWidth;
+    const fill = slotWidth - 6 - cellWidth(name) - (inline ? cellWidth(counts) + 2 : 0);
+    const top = rule('┌─') + style(' ') + '\x1b[1m' + style(name, 'mauve') + style(' ') + rule('─'.repeat(Math.max(0, fill))) + (inline ? style(' ') + style(counts, attention ? 'yellow' : 'overlay0') + style(' ') : '') + rule('─┐');
+    lines.push(top);
+    if (!inline) lines.push(style(pad(counts, workspaceWidth), attention ? 'yellow' : 'overlay0'));
     let pending=[];
-    const flush = () => { if (!pending.length) return; const titles=Math.max(...pending.map(({tab,pane})=>titleRows(tab,pane,cellSize))); let cards=pending.map(({tab,pane})=>card(tab,pane,cellSize,0,titles)); let height=Math.max(...cards.map(c=>c.length)); cards=cards.map((c,i)=>c.length<height ? card(pending[i].tab,pending[i].pane,cellSize,height-c.length,titles) : c);
+    const flush = () => { if (!pending.length) return; const sizes=[cellSize, workspaceWidth-cellSize-1], titles=Math.max(...pending.map(({tab,pane},i)=>titleRows(tab,pane,sizes[i]))); let cards=pending.map(({tab,pane},i)=>card(tab,pane,sizes[i],0,titles)); let height=Math.max(...cards.map(c=>c.length)); cards=cards.map((c,i)=>c.length<height ? card(pending[i].tab,pending[i].pane,sizes[i],height-c.length,titles) : c);
       // A rebuilt card can miss its target (the ellipsis drops blank rows); pad all to the final tallest.
       height=Math.max(...cards.map(c=>c.length)); cards.forEach((c,i)=>{ while(c.length<height)c.splice(c.length-1,0,c.blank); rectangles.push({paneId:pending[i].pane.id,x:i*(cellSize+1),y:lines.length,width:cellSize,height}); }); if(pending.some(({pane})=>pane.id===journey?.paneId)) anchor=lines.length;
       for(let y=0;y<cards[0].length;y++) lines.push(cards.map(card=>card[y]).join(' ')); pending=[]; };
@@ -149,13 +159,18 @@ export function mapLines(state, width, now = Date.now()) {
         else { lines.push(style(pad(compact(`Tab ${tab.number ?? ''} · ${fullTitle(tab)} · ${ids.length} panes`,workspaceWidth),workspaceWidth),'mauve')); for(const id of ids) { if(id===journey?.paneId) anchor=lines.length; const tile=card(tab,model.panes[id],workspaceWidth); rectangles.push({paneId:id,x:0,y:lines.length,width:workspaceWidth,height:tile.length}); lines.push(...tile); } }
       } else if(ids.length) { pending.push({tab,pane:model.panes[ids[0]]}); if(pending.length===2) flush(); }
     }
-    flush(); while(lines.at(-1)==='') lines.pop(); return {lines,anchor,end,positions,selectedLine,rectangles,selected:workspaceId===journey?.workspaceId};
+    flush(); while(lines.at(-1)==='') lines.pop();
+    // Frame every content row; line indices (anchors, positions) are unchanged.
+    for (let y = 1; y < lines.length; y++) lines[y] = rule('│') + style(' '.repeat(gutter)) + pad(lines[y], workspaceWidth) + style(' '.repeat(gutter)) + rule('│');
+    lines.push(rule('└' + '─'.repeat(Math.max(0, slotWidth - 2)) + '┘'));
+    rectangles = rectangles.map(r => ({ ...r, x: r.x + 1 + gutter }));
+    return {lines,anchor,end,positions,selectedLine,rectangles,selected:workspaceId===journey?.workspaceId};
   });
   const body=[],rectangles=[];let anchor=0,end=null,positions=[],selectedLine=0;
   for(let start=0;start<chunks.length;start+=columns) { const row=chunks.slice(start,start+columns),offset=body.length,selected=row.find(chunk=>chunk.selected);
-    row.forEach((chunk,x)=>rectangles.push(...chunk.rectangles.map(r=>({...r,x:r.x+x*(workspaceWidth+2),y:r.y+offset}))));
+    row.forEach((chunk,x)=>rectangles.push(...chunk.rectangles.map(r=>({...r,x:r.x+x*(slotWidth+2),y:r.y+offset}))));
     if(selected) { anchor=offset+selected.anchor;end=selected.end===null ? null : offset+selected.end;positions=selected.positions;selectedLine=selected.selectedLine; }
-    for(let y=0;y<Math.max(...row.map(chunk=>chunk.lines.length));y++) body.push(row.map(chunk=>pad(chunk.lines[y]||'',workspaceWidth)).join('  ')); body.push('');
+    for(let y=0;y<Math.max(...row.map(chunk=>chunk.lines.length));y++) body.push(row.map(chunk=>pad(chunk.lines[y]||'',slotWidth)).join('  ')); body.push('');
   }
   return {body:body.length ? body:['No native panes available.'],anchor,end,positions,selectedLine,rectangles};
 }
