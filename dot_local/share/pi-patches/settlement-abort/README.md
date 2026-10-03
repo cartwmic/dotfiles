@@ -1,6 +1,6 @@
 # Settlement abort
 
-Tested against **Pi 0.99.2**, including its actual bundled CLI and unbundled
+Tested against **Pi 0.99.2 and 1.0.0**, including its actual bundled CLI and unbundled
 `dist/cli.js`. Enabled on `personal` and `axon-work-computer`; other profiles
 (including unset) reverse only this patch's exact blocks, preserving siblings.
 
@@ -55,7 +55,7 @@ From the maintained checkout:
 python3 tests/pi-patches/settlement_abort.py
 ```
 
-The test copies a real Pi 0.99.2 package into temporary storage, uses isolated
+The test copies a real Pi 0.99.2 or 1.0.0 package into temporary storage, uses isolated
 homes and a local scripted OpenAI-compatible backend, and never reads real
 credentials. Set `PI_SETTLEMENT_SOURCE_PACKAGE` to another installed package
 root if needed. It demonstrates the unpatched regression, then proves ordinary
