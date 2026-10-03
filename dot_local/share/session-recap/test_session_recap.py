@@ -135,6 +135,27 @@ class SessionRecapCliTests(unittest.TestCase):
         self.run_cli("annotate", "legacy", "--namespace", "new", "--metadata-json", '{"ok":true}')
         self.assertEqual(json.loads(self.run_cli("read", "legacy", "--json").stdout)["record"]["annotations"], {"new": {"ok": True}})
 
+    def test_undrained_read_does_not_hold_the_store_lock(self) -> None:
+        # Regression: a Pi caller spawned `read` with pipes, then blocked its
+        # event loop on a synchronous `current`. A record larger than the pipe
+        # buffer left `read` stuck writing while holding the global lock.
+        record_id = self.create_single("Large")
+        path = next((self.data_dir / "records").glob(f"*/{record_id}.json"))
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["summary"] = "x" * (512 * 1024)
+        path.write_text(json.dumps(record), encoding="utf-8")
+        reader = subprocess.Popen([str(CLI), "read", record_id, "--json"], stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, env=self.environment())
+        self.addCleanup(reader.stdout.close)
+        self.addCleanup(reader.wait)
+        self.addCleanup(reader.kill)
+        # Give the reader time to take the lock and fill the pipe.
+        reader.stdout.peek(1)
+        current = subprocess.run([str(CLI), "current", "--key", "k", "--json"], capture_output=True,
+                                 text=True, env=self.environment(), timeout=10, check=True)
+        self.assertEqual(json.loads(current.stdout)["status"], "absent")
+        self.assertEqual(len(json.loads(reader.stdout.read())["record"]["summary"]), 512 * 1024)
+
     def test_managed_default_is_off_until_host_opts_in(self) -> None:
         (self.config_dir / "config.toml").write_text("auto_publish = false\n", encoding="utf-8")
         self.assertEqual(self.run_cli("config", "auto-publish").stdout.strip(), "disabled")

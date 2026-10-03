@@ -1,8 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { getPackageDir, getAgentDir, estimateTokens } from '@earendil-works/pi-coding-agent';
 import { Input, SelectList, truncateToWidth, stripTerminalSequences, matchesKey, Key, wrapTextWithAnsi } from '@earendil-works/pi-tui';
-import { spawn, execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, openSync, closeSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,20 +14,20 @@ const directory = dirname(fileURLToPath(import.meta.url));
 const configPath = join(directory, 'config.json');
 const cli = join(homedir(), '.local/bin/session-recap');
 const cliEnv = () => ({ ...process.env, ...(process.env.PI_RECAP_CLI ? { SESSION_RECAP_IMPLEMENTATION: process.env.PI_RECAP_CLI } : {}) });
-const call = (...args: string[]) => JSON.parse(execFileSync(cli, args, { env: cliEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
-const records = () => {
-  // Retained history is unbounded by policy; a pipe would impose Node's
-  // default 1 MiB maxBuffer on every caller, even for a small active branch.
-  const temp = mkdtempSync(join(tmpdir(), 'pi-recap-records-'));
-  const path = join(temp, 'records.json');
-  try {
-    const fd = openSync(path, 'wx', 0o600);
-    try {
-      execFileSync(cli, ['list', '--json'], { env: cliEnv(), stdio: ['ignore', fd, 'ignore'] });
-    } finally { closeSync(fd); }
-    return JSON.parse(readFileSync(path, 'utf8')).records;
-  } finally { rmSync(temp, { recursive: true, force: true }); }
-};
+// Never call the CLI synchronously: a blocked event loop cannot drain other
+// recap children's pipes, and one of them may hold the shared store lock.
+// Streaming stdout also has no maxBuffer cap for unbounded retained history.
+const call = (...args: string[]): Promise<any> => new Promise((resolve, reject) => {
+  const child = spawn(cli, args, { env: cliEnv(), stdio: ['ignore', 'pipe', 'ignore'] });
+  const chunks: Buffer[] = [];
+  child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+  child.on('error', reject);
+  child.on('close', code => {
+    if (code !== 0) return reject(new Error(`session-recap ${args[0]} exited ${code}`));
+    try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (error) { reject(error); }
+  });
+});
+const records = async () => (await call('list', '--json')).records;
 const requestInput = (instructions: string, material: string, background: string) => instructions + '\n\n' + (background ? 'Background only (not new activity):\n' + background + '\n\nNew material:\n' : '') + material;
 const interactive = (ctx: ExtensionContext) => ctx.mode === 'tui' && ctx.hasUI;
 
@@ -78,14 +78,14 @@ export default function recap(pi: ExtensionAPI) {
   const key = (id: string) => `pi-recap:${id}`;
   const invalidate = (id: string) => { const n = (generations.get(id) ?? 0) + 1; generations.set(id, n); return n; };
   function defaults() { try { return JSON.parse(readFileSync(configPath, 'utf8')); } catch { return {}; } }
-  function initialize(ctx: ExtensionContext) {
+  async function initialize(ctx: ExtensionContext) {
     contextEpoch++;
     sessionId = ctx.sessionManager.getSessionId();
     state = restoreState(sessionId, ctx.sessionManager.getEntries().filter((e: any) => e.type === 'custom' && e.customType === 'recap-state').map((e: any) => e.data));
     pi.appendEntry('recap-state', state);
     job = ctx.sessionManager.getEntries().filter((e: any) => e.type === 'custom' && e.customType === 'recap-job' && e.data.nativeSessionId === sessionId && e.data.historyId === state.historyId).at(-1)?.data;
     working = false; settlements = 0; live.clear(); observation = ''; actions.length = 0; stopTimer(); stopWidgetTimer();
-    refreshWidget(ctx);
+    await refreshWidget(ctx);
   }
   function dispatch() {
     if (!active || !pi.getCommands().some(c => c.name === dispatchName)) return false;
@@ -93,24 +93,30 @@ export default function recap(pi: ExtensionAPI) {
     return true;
   }
   function notice(ctx: ExtensionContext, text: string) { ctx.ui.notify(ctx.ui.theme.fg('dim', text), 'info'); }
-  function currentRecap(ctx: ExtensionContext) {
-    return compatibleRecord(records(), state, ctx.sessionManager.getBranch().map((e: any) => e.id));
+  async function currentRecap(ctx: ExtensionContext) {
+    const ids = ctx.sessionManager.getBranch().map((e: any) => e.id);
+    return compatibleRecord(await records(), state, ids);
   }
-  function refreshWidget(ctx: ExtensionContext) {
+  let widgetSeq = 0;
+  async function refreshWidget(ctx: ExtensionContext) {
     // Factories retain only plain presentation data, never a session context.
     stopWidgetTimer();
+    const seq = ++widgetSeq, id = sessionId, epoch = contextEpoch;
     let record, running = false;
     try {
-      const rows = records(), ids = ctx.sessionManager.getBranch().map((e: any) => e.id);
+      const ids = ctx.sessionManager.getBranch().map((e: any) => e.id);
+      const rows = await records();
       record = compatibleRecord(rows, state, ids);
       if (job?.nativeSessionId === sessionId && job.historyId === state.historyId && (!job.capturedEnd || ids.includes(job.capturedEnd))) {
-        const current = call('current', '--key', key(sessionId), '--json');
+        const current = await call('current', '--key', key(sessionId), '--json');
         // Dated outcomes are authoritative even if updating the convenience
         // request state failed. A retry's first failed attempt is not terminal.
         const finished = finishedTokens.has(job.token) || rows.some((r: any) => r.token === job!.token && (r.status === 'published' || (r.attempt === 2 && ['failed', 'generated-unsaved'].includes(r.status))));
         running = current.token === job.token && current.status === 'running' && !finished;
       }
     } catch { /* Do not invent running state when durable state is unavailable. */ }
+    // A newer refresh or a session change superseded this one while it awaited.
+    if (seq !== widgetSeq || !active || sessionId !== id || contextEpoch !== epoch) return;
     if (running) watchWidget();
     if (!record && !running) { ctx.ui.setWidget('recap', undefined); return; }
     const time = record ? displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone) : '';
@@ -129,20 +135,20 @@ export default function recap(pi: ExtensionAPI) {
   async function consume(ctx: ExtensionContext) {
     if (!interactive(ctx)) return;
     const id = ctx.sessionManager.getSessionId();
-    for (let i = queue.length - 1; i >= 0; i--) {
-      const item = queue[i];
-      if (item.sessionId !== id) continue;
-      queue.splice(i, 1);
+    // Claim items before awaiting so concurrent consumers cannot double-process.
+    const items: any[] = [];
+    for (let i = queue.length - 1; i >= 0; i--) if (queue[i].sessionId === id) items.push(...queue.splice(i, 1));
+    for (const item of items) {
       if (generations.get(id) !== item.generation || (item.epoch !== undefined && item.epoch !== contextEpoch)) continue;
-      let current; try { current = call('current', '--key', key(id), '--json'); } catch { continue; }
+      let current; try { current = await call('current', '--key', key(id), '--json'); } catch { continue; }
       if (current.token !== item.token || generations.get(id) !== item.generation || ctx.sessionManager.getSessionId() !== id) continue;
       if (item.event === 'accepted') continue;
       if (item.event === 'terminal') finishedTokens.add(item.token);
       if (item.notice) notice(ctx, item.notice);
       else if (item.status === 'published') {
-        const record = call('read', item.record_id, '--json').record;
+        const record = (await call('read', item.record_id, '--json')).record;
         saved(record);
-        refreshWidget(ctx);
+        await refreshWidget(ctx);
       } else if (item.status === 'generated-unsaved') ctx.ui.notify(item.warning, 'warning');
       else if (!['superseded', 'cancelled', 'canceled'].includes(item.status)) notice(ctx, failureNotice(item.failure));
     }
@@ -203,7 +209,7 @@ export default function recap(pi: ExtensionAPI) {
       }
       if (scope === 'defaults') writeFileSync(configPath, JSON.stringify({ ...base, [field]: value }, null, 2) + '\n', { mode: 0o600 });
       else { state = setOverride(state, field, value); pi.appendEntry('recap-state', state); }
-      refreshWidget(ctx);
+      await refreshWidget(ctx);
     }
   }
   async function viewer(ctx: ExtensionContext, title: string, text: string) {
@@ -214,7 +220,7 @@ export default function recap(pi: ExtensionAPI) {
   }
   async function history(ctx: ExtensionContext, args: string[]) {
     const legacy = args.includes('legacy'), attempts = args.includes('attempts'), all = args.includes('all');
-    const rows = records().filter((r: any) => legacy ? !r.metadata?.pi?.historyId : r.source_kind === 'pi' && !!r.metadata?.pi?.historyId).filter((r: any) => all || legacy || r.metadata.pi.historyId === state.historyId).filter((r: any) => attempts || r.status === 'published').sort((a: any, b: any) => Number(b.metadata?.pi?.historyId === state.historyId) - Number(a.metadata?.pi?.historyId === state.historyId) || b.created_at.localeCompare(a.created_at));
+    const rows = (await records()).filter((r: any) => legacy ? !r.metadata?.pi?.historyId : r.source_kind === 'pi' && !!r.metadata?.pi?.historyId).filter((r: any) => all || legacy || r.metadata.pi.historyId === state.historyId).filter((r: any) => attempts || r.status === 'published').sort((a: any, b: any) => Number(b.metadata?.pi?.historyId === state.historyId) - Number(a.metadata?.pi?.historyId === state.historyId) || b.created_at.localeCompare(a.created_at));
     const zone = resolveSettings(defaults(), state.overrides).timeZone;
     const labels = rows.map((r: any) => `${displayTime(r.created_at, zone)} ${r.status}${r.failure?.reason === 'timed_out' ? ' (timed out)' : ''} ${r.metadata?.pi?.trigger ?? 'legacy'} ${r.source_id} ${r.record_id}`);
     const choice = await ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
@@ -242,22 +248,22 @@ export default function recap(pi: ExtensionAPI) {
   }
   async function request(ctx: ExtensionContext, mode = 'incremental', trigger = 'manual') {
     const id = ctx.sessionManager.getSessionId(), generation = invalidate(id), epoch = contextEpoch;
-    const reserved = call('reserve', '--key', key(id), '--json');
-    refreshWidget(ctx);
+    const reserved = await call('reserve', '--key', key(id), '--json');
+    await refreshWidget(ctx);
     const own = structuredClone(state);
     let settings = capturedSettings(resolveSettings(defaults(), own.overrides), ctx.model);
     const entries = ctx.sessionManager.getBranch(), ids = entries.map((e: any) => e.id);
     const units = projectContext(ctx.sessionManager.buildSessionProjection(), [...live.values()]);
     if (!units.length) { if (trigger === 'manual') notice(ctx, 'Nothing to recap yet.'); return; }
-    const prior = compatibleRecord(records(), own, ids, recapScope);
+    const prior = compatibleRecord(await records(), own, ids, recapScope);
     const pending = uncovered(units, prior?.metadata.pi.coverage ?? null, ids);
-    if ((mode !== 'full' || trigger === 'periodic') && !pending.length) { refreshWidget(ctx); if (trigger === 'manual') notice(ctx, 'No new activity.'); return; }
+    if ((mode !== 'full' || trigger === 'periodic') && !pending.length) { await refreshWidget(ctx); if (trigger === 'manual') notice(ctx, 'No new activity.'); return; }
     if (!settings.model) {
       if (trigger !== 'manual') { ctx.ui.notify('Recap model unavailable; coverage unchanged.', 'warning'); return; }
-      const setupCurrent = () => active && contextEpoch === epoch && sessionId === id && generations.get(id) === generation && ctx.sessionManager.getSessionId() === id && call('current', '--key', key(id), '--json').token === reserved.token;
-      const model = await picker(ctx); if (!model || !setupCurrent()) return;
+      const setupCurrent = async () => active && contextEpoch === epoch && sessionId === id && generations.get(id) === generation && ctx.sessionManager.getSessionId() === id && (await call('current', '--key', key(id), '--json')).token === reserved.token;
+      const model = await picker(ctx); if (!model || !(await setupCurrent())) return;
       const scope = await ctx.ui.select('Save recap model', ['Current session', 'Defaults for future sessions']);
-      if (!scope || !setupCurrent()) return;
+      if (!scope || !(await setupCurrent())) return;
       if (scope === 'Defaults for future sessions') writeFileSync(configPath, JSON.stringify({ ...defaults(), model }, null, 2) + '\n', { mode: 0o600 });
       else { state = setOverride(state, 'model', model); pi.appendEntry('recap-state', state); }
       settings = capturedSettings(resolveSettings(defaults(), state.overrides), ctx.model);
@@ -272,33 +278,34 @@ export default function recap(pi: ExtensionAPI) {
     // Capture everything while this call's context is fresh, before compaction
     // can change public material. Neither preflight nor its callbacks receive ctx.
     const work = { id, generation, epoch, token: reserved.token, own, settings, units, ids, mode, trigger, material, background: prior?.summary ?? '', cwd: ctx.cwd, ongoing: trigger === 'periodic' ? ongoing() : '', capturedAt: new Date().toISOString(), effectiveBudgets };
-    if (handoff(work)) {
+    if (await handoff(work)) {
       job = { nativeSessionId: id, historyId: own.historyId, token: reserved.token, capturedEnd: ids.at(-1) ?? null };
       pi.appendEntry('recap-job', job);
-      refreshWidget(ctx);
+      await refreshWidget(ctx);
     }
   }
-  function authorized(work: any) {
-    try { return call('current', '--key', key(work.id), '--json').token === work.token; }
+  async function authorized(work: any) {
+    try { return (await call('current', '--key', key(work.id), '--json')).token === work.token; }
     catch { return false; }
   }
-  function enqueueNotice(work: any, text: string) {
-    if (!active || contextEpoch !== work.epoch || sessionId !== work.id || generations.get(work.id) !== work.generation || !authorized(work)) return;
+  async function enqueueNotice(work: any, text: string) {
+    const current = () => active && contextEpoch === work.epoch && sessionId === work.id && generations.get(work.id) === work.generation;
+    if (!current() || !(await authorized(work)) || !current()) return;
     queue.push({ sessionId: work.id, generation: work.generation, epoch: work.epoch, token: work.token, notice: text });
     dispatch();
   }
-  function handoff(work: any) {
+  async function handoff(work: any) {
     const { id, generation, own, settings, units, ids, mode, trigger, material, background, cwd } = work;
     try {
-      if (!authorized(work)) return;
+      if (!(await authorized(work))) return;
       const effectiveBudgets = work.effectiveBudgets;
       const generationSettings = effectiveBudgets ? { ...settings, options: { ...settings.options, maxTokens: effectiveBudgets.maxTokens } } : settings;
       // Virtual budgets are resolved inside each detached attempt. Fingerprints
       // describe captured source/settings, not metadata that is not yet known.
       const snapshot: any = capture(units, ids, own, effectiveBudgets ? { ...settings, effectiveBudgets: { maxTokens: effectiveBudgets.maxTokens, availableTokens: effectiveBudgets.availableTokens } } : settings, mode, trigger, work.capturedAt);
-      const reuse = mode === 'full' && records().find((r: any) => r.status === 'published' && r.metadata?.pi?.historyId === own.historyId && r.metadata.pi.fingerprint === snapshot.fingerprint);
-      if (reuse) { if (trigger === 'manual') enqueueNotice(work, 'Reused matching full recap.'); return; }
-      if (!authorized(work)) return;
+      const reuse = mode === 'full' && (await records()).find((r: any) => r.status === 'published' && r.metadata?.pi?.historyId === own.historyId && r.metadata.pi.fingerprint === snapshot.fingerprint);
+      if (reuse) { if (trigger === 'manual') await enqueueNotice(work, 'Reused matching full recap.'); return; }
+      if (!(await authorized(work))) return;
       const temp = mkdtempSync(join(tmpdir(), 'pi-recap-'));
       const path = join(temp, 'request.json');
       snapshot.metadata.pi.fingerprint = snapshot.fingerprint;
@@ -311,21 +318,23 @@ export default function recap(pi: ExtensionAPI) {
         while ((end = buffer.indexOf('\n')) >= 0) {
           const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
           try { const event = JSON.parse(line); if (['accepted', 'terminal'].includes(event.event)) {
-            if (event.status === 'published' && active && sessionId === id && generations.get(id) === generation && call('current', '--key', key(id), '--json').token === event.token) armTimer();
+            if (event.status === 'published' && active && sessionId === id && generations.get(id) === generation) {
+              call('current', '--key', key(id), '--json').then(current => { if (current.token === event.token && active && sessionId === id && generations.get(id) === generation) armTimer(); }, () => {});
+            }
             queue.push({ ...event, sessionId: id, generation, epoch: work.epoch }); dispatch();
           } } catch { /* Invalid pipe event is not an outcome. */ }
         }
       });
-      child.on('error', () => { enqueueNotice(work, 'Recap operation failed; coverage unchanged.'); rmSync(temp, { recursive: true, force: true }); });
+      child.on('error', () => { void enqueueNotice(work, 'Recap operation failed; coverage unchanged.'); rmSync(temp, { recursive: true, force: true }); });
       child.on('close', () => { pipes.delete(child.stdout); rmSync(temp, { recursive: true, force: true }); });
       child.unref(); child.stdout.unref();
       return true;
-    } catch { enqueueNotice(work, 'Recap operation failed; coverage unchanged.'); }
+    } catch { await enqueueNotice(work, 'Recap operation failed; coverage unchanged.'); }
   }
   pi.registerCommand(dispatchName, { description: 'Internal recap delivery', handler: async (args, ctx) => {
     if (!active || args !== nonce || !interactive(ctx) || ctx.sessionManager.getSessionId() !== sessionId) return;
     await consume(ctx);
-    refreshWidget(ctx);
+    await refreshWidget(ctx);
     for (const action of actions.splice(0)) {
       if (action.sessionId !== sessionId || (action.trigger === 'periodic' && !working)) continue;
       try { await request(ctx, resolveSettings(defaults(), state.overrides).mode, action.trigger); }
@@ -334,10 +343,10 @@ export default function recap(pi: ExtensionAPI) {
   } });
   pi.registerCommand('recap', { description: 'Recap [view|full|history [all|attempts|legacy]|settings [defaults]|cancel|help]', getArgumentCompletions: argumentCompletions, handler: async (args, ctx) => {
     if (!interactive(ctx)) return;
-    if (sessionId !== ctx.sessionManager.getSessionId()) initialize(ctx);
+    if (sessionId !== ctx.sessionManager.getSessionId()) await initialize(ctx);
     const parts = args.trim().split(/\s+/);
     try {
-      if (parts[0] === 'cancel') { invalidate(sessionId); call('cancel', '--key', key(sessionId), '--json'); refreshWidget(ctx); notice(ctx, 'Recap cancelled; saved history retained.'); }
+      if (parts[0] === 'cancel') { invalidate(sessionId); await call('cancel', '--key', key(sessionId), '--json'); await refreshWidget(ctx); notice(ctx, 'Recap cancelled; saved history retained.'); }
       else if (parts[0] === 'settings') {
         const before = resolveSettings(defaults(), state.overrides);
         await settings(ctx, parts[1] === 'defaults' ? 'defaults' : 'session');
@@ -345,7 +354,7 @@ export default function recap(pi: ExtensionAPI) {
         if (before.periodic !== after.periodic || before.intervalMinutes !== after.intervalMinutes) armTimer();
       }
       else if (parts[0] === 'view') {
-        const record = currentRecap(ctx);
+        const record = await currentRecap(ctx);
         if (record) await viewer(ctx, `Recap ${record.metadata?.pi?.scope ?? 'legacy scope'} ${displayTime(record.published_at ?? record.created_at, resolveSettings(defaults(), state.overrides).timeZone)}`, record.summary);
         else notice(ctx, 'No saved recap for this branch.');
       }
@@ -357,8 +366,8 @@ export default function recap(pi: ExtensionAPI) {
   } });
   pi.on('session_start', async (_event, ctx) => {
     active = interactive(ctx); if (!active) return;
-    initialize(ctx);
-    try { for (const record of records().filter((r: any) => r.status === 'published' && r.metadata?.pi?.nativeSessionId === sessionId)) saved(record); await consume(ctx); } catch { /* Recovery can be retried via history. */ }
+    await initialize(ctx);
+    try { for (const record of (await records()).filter((r: any) => r.status === 'published' && r.metadata?.pi?.nativeSessionId === sessionId)) saved(record); await consume(ctx); } catch { /* Recovery can be retried via history. */ }
   });
   pi.on('agent_start', (_event, ctx) => {
     if (!active || !interactive(ctx)) return;
@@ -413,6 +422,6 @@ export default function recap(pi: ExtensionAPI) {
       try { await request(ctx, settings.mode, 'before-compaction'); } catch { notice(ctx, 'Recap operation failed; coverage unchanged.'); }
     }
   });
-  pi.on('session_tree', (_event, ctx) => { live.clear(); observation = ''; if (interactive(ctx)) refreshWidget(ctx); });
+  pi.on('session_tree', async (_event, ctx) => { live.clear(); observation = ''; if (interactive(ctx)) await refreshWidget(ctx); });
   pi.on('session_shutdown', () => { contextEpoch++; active = false; working = false; stopTimer(); stopWidgetTimer(); job = undefined; actions.length = 0; live.clear(); for (const pipe of pipes) pipe.destroy(); pipes.clear(); });
 }

@@ -547,14 +547,16 @@ def _run_records(args: argparse.Namespace, root: Path) -> None:
             record[field] = annotations
             _atomic_write_json(path, record)
         result = _public_record(record)
-        if args.subcommand == 'annotate':
+    # Print only after releasing the lock: a caller that stops draining stdout
+    # must not hold every other store operation hostage.
+    if args.subcommand == 'annotate':
             print(_json_text({"record": result}), end="")
-        elif args.json:
-            print(_json_text({"record": result, "presentation": {"time_zone": args.zone[0], **presentation(result, args.zone)}}), end="")
-        else:
-            if args.with_metadata:
-                print(f"{result['record_id']} {result['status']} {presentation_time(result.get('published_at', result.get('created_at', '')), args.zone)}")
-            print(result.get('summary', ''))
+    elif args.json:
+        print(_json_text({"record": result, "presentation": {"time_zone": args.zone[0], **presentation(result, args.zone)}}), end="")
+    else:
+        if args.with_metadata:
+            print(f"{result['record_id']} {result['status']} {presentation_time(result.get('published_at', result.get('created_at', '')), args.zone)}")
+        print(result.get('summary', ''))
 
 
 def _required_id(value: str, argument: str) -> str:
