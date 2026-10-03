@@ -77,7 +77,7 @@ questions/blocked first, then ready, then working, then the rest; native
 order breaks ties, and `[`/`]` follow this displayed order. Wide
 layouts use workspace columns; singleton tabs share compact card rows (two
 columns from an actual popup-canvas width of 32 columns). Cards are bordered,
-word-wrapped and vertically tight (no blank border rows, spacer lines, or
+word-wrapped, one column apart (two between workspace columns), and vertically tight (no blank border rows, spacer lines, or
 unused title/preview rows); shortened collapsed titles end in an ellipsis. `M`
 marks manual names; headings show tab and attention counts. Normal reading
 shows prose, not raw JSON. Expanded recap and digest bodies render a small
@@ -94,7 +94,7 @@ are shown unchanged. An expanded card always starts at the top of the view,
 even when it is short. The viewer redraws in place (synchronized update, no
 full-screen clear), so scrolling does not flash. Card previews show at least two recap lines and also fill
 rows that would otherwise be blank (no newer-attempt warning, or a taller paired
-card) without making the card taller. Paired cards share one title-block height
+card) without making the card taller. Collapsed previews skip blank lines. Paired cards share one title-block height
 (one or two rows) so their rows stay aligned. Supplied prompts and failures stay literal. Outer widths 40/48/120/180 currently yield popup
 widths 38/46/92/152. Outer width 32 yields only 30: below the card floor, where
 ordinary clipping can occur, not a supported-width claim. The single shared
