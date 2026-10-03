@@ -9,7 +9,7 @@ test('one map has two-column narrow singles and explicit selectable native multi
   for (const width of [32,40,64,100,160]) {
     const frame = renderMap({ model, journey: { ...journey } }, width, 30);
     assert.ok(frame.split('\n').every(line => cellWidth(line) <= width));
-    assert.match(frame, /Tab 3/);
+    assert.match(mapLines({model,journey},width).body.join('\n'), /Tab 3/);
     assert.match(mapLines({model,journey},width).body.join('\n'), /BLOCKED/); // Previews push later groups below the first viewport.
     assert.ok(frame.split('\n').some(line => line.includes('Single 1') && line.includes('Single 2')));
     assert.doesNotMatch(frame, /Recent output|preview|Mosaic|Board/);
@@ -51,7 +51,7 @@ test('workspace rows wrap in native order and selected anchors/details survive c
   for (const width of [32, 40, 82, 120, 160]) {
     const map = mapLines({ model, journey }, width);
     assert.ok(map.body.every(line => cellWidth(line) <= width));
-    assert.match(map.body[map.anchor + 2], /› Tab 5/);
+    assert.match(map.body[map.anchor + 1], /› Tab 5/);
     const frame = renderMap({ model, journey: { ...journey } }, width, 12);
     assert.match(frame, /› Tab 5/);
     const detail = mapLines({ model, journey: { ...journey, level: 'pane' } }, width).body.join('\n');

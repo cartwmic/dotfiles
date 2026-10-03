@@ -61,6 +61,7 @@ test('collapsed cards give otherwise blank rows to the recap without growing', (
   model.panes.p1.recap = recap(words(80));
   model.panes.p2.recap = { ...recap(words(80)), lastAttempt: { record_id: 'f', status: 'failed' } };
   model.tabs.t2.fullTitle = 'A much longer second title that wraps onto two lines';
+  model.panes.p3.agent.status = 'working'; // keep the singleton pair first
   const journey = createJourney(model);
   for (const width of [40, 120]) {
     const rows = plain(mapLines({ model, journey }, width).body.join('\n')).split('\n');

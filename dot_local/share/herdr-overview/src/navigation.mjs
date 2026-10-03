@@ -1,5 +1,16 @@
+// Display order inside a workspace: questions (blocked), then ready, then
+// working, then everything else; native order breaks ties.
+const RANK = { blocked: 0, idle: 1, working: 2 };
+export const paneRank = pane => pane?.agent?.recognized ? RANK[pane.agent.status] ?? 3 : 3;
+const byRank = (ids, rank) => ids.map((id, index) => ({ id, index, rank: rank(id) })).sort((a, b) => a.rank - b.rank || a.index - b.index).map(item => item.id);
+export function orderedPanesOfTab(model, tabId) {
+  return byRank((model.tabs[tabId]?.paneIds ?? []).filter(id => model.panes[id]), id => paneRank(model.panes[id]));
+}
+export function orderedTabIds(model, workspaceId) {
+  return byRank((model.workspaces[workspaceId]?.tabIds ?? []).filter(id => model.tabs[id]), id => Math.min(3, ...orderedPanesOfTab(model, id).map(pane => paneRank(model.panes[pane]))));
+}
 export function orderedPaneIds(model) {
-  return (model.workspaceOrder ?? []).flatMap(id => (model.workspaces[id]?.tabIds ?? []).flatMap(tab => model.tabs[tab]?.paneIds ?? [])).filter(id => model.panes[id]);
+  return (model.workspaceOrder ?? []).flatMap(id => orderedTabIds(model, id).flatMap(tab => orderedPanesOfTab(model, tab)));
 }
 export function select(journey, model, id) {
   const pane = model.panes[id];

@@ -1,5 +1,6 @@
 import { markdownLines, plainMarkdown } from '../markdown.mjs';
 import { displayTime } from '../time.mjs';
+import { orderedPanesOfTab, orderedTabIds } from '../navigation.mjs';
 const clean = value => String(value ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\t/g, '    ').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ');
 // Keep ANSI, combining sequences and emoji clusters out of cell arithmetic.
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
@@ -68,20 +69,23 @@ export function mapLines(state, width, now = Date.now()) {
     const box = (content, size, border = 'overlay1', selected = false, overrideSurface = null) => {
       const surface = overrideSurface || (selected ? 'selection_bg' : 'active_row_bg'), inner = Math.max(1, size - 4);
       const edge = text => style(text, border, surface);
-      return [edge('┌' + '─'.repeat(size - 2) + '┐'), edge('│' + ' '.repeat(size - 2) + '│'),
+      const rows = [edge('┌' + '─'.repeat(size - 2) + '┐'),
         ...content.map(row => edge('│ ') + (row.spans ? spanRow(row, inner, row.surface || surface) : (row.bold ? '\x1b[1m' : '') + style(pad(clip(row.text, inner), inner), row.role || 'text', row.surface || surface)) + edge(' │')),
-        edge('│' + ' '.repeat(size - 2) + '│'), edge('└' + '─'.repeat(size - 2) + '┘')];
+        edge('└' + '─'.repeat(size - 2) + '┘')];
+      rows.blank = edge('│' + ' '.repeat(size - 2) + '│'); return rows;
     };
     const spanRow = (row, inner, surface) => { let used = 0, out = '';
       for (const span of row.spans) { const text = clip(span.text, inner - used); if (!text) continue; used += cellWidth(text); out += (span.bold ? '\x1b[1m' : '') + (span.italic ? '\x1b[3m' : '') + style(text, span.role || row.role || 'text', surface); }
       return out + style(' '.repeat(Math.max(0, inner - used)), row.role || 'text', surface); };
     // extra: rows a taller paired card would otherwise leave blank; the recap fills them.
-    const card = (tab, pane, size, extra = 0) => {
+    const titleRows = (tab, pane, size) => Math.min(2, wrap(tab.paneIds.length > 1 ? paneTitle(pane) : fullTitle(tab), size - 4).length);
+    // titles: rows of the title block, shared by paired cards so their rows align.
+    const card = (tab, pane, size, extra = 0, titles = titleRows(tab, pane, size)) => {
       const selected = pane.id === journey?.paneId, multi = tab.paneIds.length > 1;
       const wrapped = wrap(multi ? paneTitle(pane) : fullTitle(tab), size - 4);
       const names = wrapped.slice(0, 2);
       if (wrapped.length > 2) names[1] = clip(names[1].trimEnd(), Math.max(0, size - 5)) + '…';
-      while (names.length < 2) names.push(''); // fixed title block keeps paired rows aligned
+      while (names.length < titles) names.push('');
       const manual = (multi ? pane : tab).displayNameOwnership?.mode === 'manual';
       const latest = pane.recap?.latest, attempt = pane.recap?.lastAttempt;
       const good = latest?.status === 'published';
@@ -91,14 +95,13 @@ export function mapLines(state, width, now = Date.now()) {
       const excerpt = wrap(good ? plainMarkdown(latest.summary) || 'Unavailable' : 'Unavailable · no published recap', size - 4).filter((line, i, all) => line.trim() || (i > 0 && all[i - 1].trim()));
       const preview = excerpt.slice(0, budget);
       if (excerpt.length > budget) preview[budget - 1] = clip(preview[budget - 1].trimEnd(), size - 5) + '…';
-      while (preview.length < budget) preview.push('');
       const metadata = wrap(`Latest good recap · ${good ? when(latest.published_at || latest.created_at, false) || 'date unavailable' : 'unavailable'}`, size - 4);
       return box([{text:`${selected ? '›' : ' '} ${multi ? 'Pane' : 'Tab ' + (tab.number ?? '')}${manual ? ' M' : ''}`,role:manual ? 'mauve' : 'overlay0'}, ...names.map(text=>({text})), ...wrap(stateName(pane), size - 4).map(text=>({text,role:stateColor(pane),bold:true})), ...metadata.map(text=>({text,role:'overlay1'})), ...preview.map(text=>({text,role:good?'text':'overlay0'})), ...warning.map(text=>({text,role:'yellow'}))], size, pane.agent?.status === 'blocked' ? 'red' : selected ? 'accent' : 'overlay1', selected);
     };
     const reading = tab => {
       const logical = []; let selectedLogical = 0; const add = (text, role='text', surface, md=false) => logical.push({text,role,surface,md});
       add(fullTitle(tab)); add('');
-      for (const id of tab.paneIds) {
+      for (const id of orderedPanesOfTab(model, tab.id)) {
         const pane = model.panes[id]; if (!pane || journey.level === 'digest' && id !== journey.paneId) continue;
         if (id === journey.paneId && tab.paneIds.length > 1 && journey.level !== 'digest') selectedLogical = logical.length;
         if (tab.paneIds.length > 1) { add('─'.repeat(workspaceWidth - 4),'overlay1'); add(`${id === journey.paneId ? '› ' : ''}${paneTitle(pane)}`); }
@@ -117,7 +120,7 @@ export function mapLines(state, width, now = Date.now()) {
         }
         add('');
       }
-      const rows = []; positions = [{line:-2,cell:0},{line:-1,cell:0}];
+      const rows = []; positions = [{line:-1,cell:0}];
       let line = 0; selectedLine = 0;
       for (const [index,item] of logical.entries()) { if (index === selectedLogical && selectedLogical > 2) selectedLine = positions.length; const inner = workspaceWidth - 4;
       for (const source of item.md ? markdownLines(clean(item.text)) : clean(item.text).split(/\r?\n/)) {
@@ -127,24 +130,23 @@ export function mapLines(state, width, now = Date.now()) {
         for (const row of wrapped) { rows.push(row); positions.push({line,cell}); cell += cellWidth(row.text); }
         line++;
       } }
-      positions.push({line,cell:0},{line:line+1,cell:0});
+      positions.push({line,cell:0});
       return box(rows, workspaceWidth, model.panes[journey.paneId]?.agent?.status === 'blocked' ? 'yellow' : 'accent', true, 'panel_bg');
     };
     lines.push(style(pad(compact(title(workspace),workspaceWidth),workspaceWidth),'mauve'));
     const attention = blocked(model, workspace.tabIds.flatMap(id=>model.tabs[id]?.paneIds ?? []));
-    lines.push(style(pad(`${workspace.tabIds.length} tabs · ${attention} needs input`,workspaceWidth),attention ? 'yellow':'overlay0'), '');
+    lines.push(style(pad(`${workspace.tabIds.length} tabs · ${attention} needs input`,workspaceWidth),attention ? 'yellow':'overlay0'));
     let pending=[];
-    const flush = () => { if (!pending.length) return; let cards=pending.map(({tab,pane})=>card(tab,pane,cellSize)); const height=Math.max(...cards.map(c=>c.length)); cards=cards.map((c,i)=>c.length<height ? card(pending[i].tab,pending[i].pane,cellSize,height-c.length) : c); cards.forEach((c,i)=>{ while(c.length<height)c.splice(c.length-2,0,c[c.length-2]); rectangles.push({paneId:pending[i].pane.id,x:i*(cellSize+2),y:lines.length,width:cellSize,height}); }); if(pending.some(({pane})=>pane.id===journey?.paneId)) anchor=lines.length;
-      for(let y=0;y<cards[0].length;y++) lines.push(cards.map(card=>card[y]).join('  ')); lines.push('');pending=[]; };
-    for(const tabId of workspace.tabIds) {
-      const tab=model.tabs[tabId], ids=tab.paneIds.filter(id=>model.panes[id]); const expanded=journey?.level !== 'overview' && journey?.tabId===tabId;
+    const flush = () => { if (!pending.length) return; const titles=Math.max(...pending.map(({tab,pane})=>titleRows(tab,pane,cellSize))); let cards=pending.map(({tab,pane})=>card(tab,pane,cellSize,0,titles)); const height=Math.max(...cards.map(c=>c.length)); cards=cards.map((c,i)=>c.length<height ? card(pending[i].tab,pending[i].pane,cellSize,height-c.length,titles) : c); cards.forEach((c,i)=>{ while(c.length<height)c.splice(c.length-1,0,c.blank); rectangles.push({paneId:pending[i].pane.id,x:i*(cellSize+2),y:lines.length,width:cellSize,height}); }); if(pending.some(({pane})=>pane.id===journey?.paneId)) anchor=lines.length;
+      for(let y=0;y<cards[0].length;y++) lines.push(cards.map(card=>card[y]).join('  ')); pending=[]; };
+    for(const tabId of orderedTabIds(model, workspaceId)) {
+      const tab=model.tabs[tabId], ids=orderedPanesOfTab(model, tabId); const expanded=journey?.level !== 'overview' && journey?.tabId===tabId;
       if(expanded || ids.length>1) { flush(); if(ids.includes(journey?.paneId)) anchor=lines.length;
         if(expanded) { lines.push(...reading(tab)); end=lines.length; }
         else { lines.push(style(pad(compact(`Tab ${tab.number ?? ''} · ${fullTitle(tab)} · ${ids.length} panes`,workspaceWidth),workspaceWidth),'mauve')); for(const id of ids) { if(id===journey?.paneId) anchor=lines.length; const tile=card(tab,model.panes[id],workspaceWidth); rectangles.push({paneId:id,x:0,y:lines.length,width:workspaceWidth,height:tile.length}); lines.push(...tile); } }
-        lines.push('');
       } else if(ids.length) { pending.push({tab,pane:model.panes[ids[0]]}); if(pending.length===2) flush(); }
     }
-    flush(); return {lines,anchor,end,positions,selectedLine,rectangles,selected:workspaceId===journey?.workspaceId};
+    flush(); while(lines.at(-1)==='') lines.pop(); return {lines,anchor,end,positions,selectedLine,rectangles,selected:workspaceId===journey?.workspaceId};
   });
   const body=[],rectangles=[];let anchor=0,end=null,positions=[],selectedLine=0;
   for(let start=0;start<chunks.length;start+=columns) { const row=chunks.slice(start,start+columns),offset=body.length,selected=row.find(chunk=>chunk.selected);
@@ -154,10 +156,11 @@ export function mapLines(state, width, now = Date.now()) {
   }
   return {body:body.length ? body:['No native panes available.'],anchor,end,positions,selectedLine,rectangles};
 }
+const FOOTER='arrows/hjkl select · [/] pane · Enter open/focus · d digest · f focus · n blocked · r refresh · Esc/q';
 export function mapFrame(state,width=100,height=24,now=Date.now()) {
   width=Math.max(1,width);height=Math.max(3,height);
   const {body,anchor,end,positions,selectedLine,rectangles}=mapLines(state,width,now),journey=state.journey;
-  const footers=width<cellWidth('arrows/hjkl select · [/] pane · Enter details · d digest · f focus · n blocked · r refresh · Esc/q') && height>=6 ? ['arrows/hjkl select · [/] pane','Enter details · d digest · f focus','n blocked · r refresh · Esc/q'].map(line=>compact(line,width)) : [compact('arrows/hjkl select · [/] pane · Enter details · d digest · f focus · n blocked · r refresh · Esc/q',width)];
+  const footers=width<cellWidth(FOOTER) && height>=6 ? ['arrows/hjkl select · [/] pane','Enter open/focus · d digest · f focus','n blocked · r refresh · Esc/q'].map(line=>compact(line,width)) : [compact(FOOTER,width)];
   const panes=Object.values(state.model.panes),count=status=>panes.filter(p=>p.agent?.recognized && p.agent.status===status).length;
   const summary=`!${count('blocked')} W${count('working')} R${count('idle')} · ${state.model.workspaceOrder.length}ws ${Object.keys(state.model.tabs).length}t`;
   const headers=['Herdr Overview',summary];

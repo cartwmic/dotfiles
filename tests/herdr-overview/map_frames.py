@@ -72,10 +72,13 @@ def card(frame, target, snapshot):
             end = line.find('│', at)
             if edge < 0 or end < 0:
                 continue
-            titles = [cell_slice(row,edge+1,end) for row in rows[n+1:n+3]]
-            title = compact(''.join(titles)).rstrip('…')
             expected = compact(subject)
-            if title and (expected == title or expected.startswith(title) and '…' in ''.join(titles)):
+            # The title block is one or two rows (paired cards share its height).
+            def titled(count):
+                titles = [cell_slice(row,edge+1,end) for row in rows[n+1:n+1+count]]
+                title = compact(''.join(titles)).rstrip('…')
+                return title and (expected == title or expected.startswith(title) and '…' in ''.join(titles))
+            if titled(1) or titled(2):
                 contents = []
                 for row in rows[n:]:
                     contents.append(cell_slice(row,edge+1,end))
