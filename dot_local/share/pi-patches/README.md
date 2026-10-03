@@ -27,7 +27,6 @@ Per-patch rationale and failure modes stay in the sibling READMEs:
 - [headless-extension-drain](headless-extension-drain/README.md) — drain fire-and-forget extension work in print mode
 - [response-visibility](response-visibility/README.md) — delegate the optional Pi 0.99.2 telemetry helper on desktop profiles
 - [standing-reminder-origin](standing-reminder-origin/README.md) — carry input origin to processed messages on desktop profiles
-- [hide-nonbridge-claude-models](hide-nonbridge-claude-models/README.md) — personal-only model-list filter
 - [cursor-provider](cursor-provider/README.md) — retired leftover-splice restore (not desired-state delivery; widget comes from the fork)
 
 ## Setup
@@ -41,7 +40,7 @@ ls
 
 You should see one subdirectory per patch (`anthropic-idle-watchdog`,
 `cursor-provider`, `custom-message-marker`, `empty-turn-retry`,
-`headless-extension-drain`, `hide-nonbridge-claude-models`,
+`headless-extension-drain`, `response-visibility`,
 `standing-reminder-origin`) plus this README.
 
 Layout of each patch:
@@ -113,10 +112,9 @@ work-only patches must treat that as skip / un-patch.
 3. Add a hash-trigger line in
    [run_onchange_after_30_apply_pi_patches.sh.tmpl](../../../run_onchange_after_30_apply_pi_patches.sh.tmpl):
    `# patch.mjs (<name>): {{ include "dot_local/share/pi-patches/<name>/patch.mjs" | sha256sum }}`
-4. If the patch is personal-only, follow
-   [hide-nonbridge-claude-models](hide-nonbridge-claude-models/README.md):
-   apply only when `PI_CHEZMOI_PROFILE=personal`; otherwise skip and, if a
-   previous run applied it, restore `<target>.orig.chezmoi-pi-patch`.
+4. If the patch is personal-only, apply only when
+   `PI_CHEZMOI_PROFILE=personal`; otherwise skip and, if a previous run
+   applied it, reverse only its own checked edits.
    Fail-safe default is do not apply. Do not add a work-only widget splice;
    Cursor remaining/spend is configuration on the fork. `cursor-provider`
    restores leftovers on every profile. Ungated patches ignore the variable.
@@ -140,6 +138,13 @@ work-only patches must treat that as skip / un-patch.
 `standing-reminder-origin` reverses only its own literal blocks when disabled,
 preserving sibling edits in shared files.
 
+[`settlement-abort`](settlement-abort/README.md) uses the same desktop gate
+(`personal` / `axon-work-computer`) and exact-block reversal. Tested Pi 0.99.2 and 1.0.0:
+operation-lifetime `ctx.signal` through awaited final-settlement handlers,
+busy streaming final settlement with compatible main-agent idle semantics, and discard aborted
+pre-settlement proposals. Settled remains notification-only.
+Private public-path proof: `python3 tests/pi-patches/settlement_abort.py`.
+
 ### After a pi or widget upgrade
 
 `npm update -g` and mise reinstall replace pi-coding-agent `dist/` and drop
@@ -160,7 +165,6 @@ ls */patch.mjs
 node anthropic-idle-watchdog/patch.mjs --check
 # From the repo root: python3 tests/pi-patches/anthropic_watchdog.py
 node custom-message-marker/patch.mjs --check
-PI_CHEZMOI_PROFILE=personal node hide-nonbridge-claude-models/patch.mjs --check
 PI_CHEZMOI_PROFILE=personal node standing-reminder-origin/patch.mjs --check
 PI_CHEZMOI_PROFILE=axon-work-computer node standing-reminder-origin/patch.mjs --check
 PI_CHEZMOI_PROFILE=termux node standing-reminder-origin/patch.mjs --check
@@ -168,8 +172,7 @@ PI_CHEZMOI_PROFILE=axon-work-computer node cursor-provider/patch.mjs --check
 PI_CHEZMOI_PROFILE=personal node cursor-provider/patch.mjs --check
 ```
 
-On a non-personal profile, omit `=personal` (or set the real profile) so
-the hide-nonbridge check expects the un-patched files. `cursor-provider --check`
+`cursor-provider --check`
 expects unspliced leftover `@marckrenn/pi-sub-*` files (or an absent npm tree)
 on every profile, including work.
 

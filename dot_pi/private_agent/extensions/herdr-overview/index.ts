@@ -1,167 +1,28 @@
-import { registerQuestionWait } from './question-wait.ts';
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
-import type { ExtensionAPI, ExtensionContext, InputEvent } from "@earendil-works/pi-coding-agent";
 import {
-	currentPaneForCaller,
-	exactTerminalForCaller,
-	writePiMetadata,
-	retirePiMetadata,
-	invokeOverviewReconcile,
-	invokeOverviewNameRefresh,
-	paneWorkspaceAtPublication,
-	runSessionRecap,
-	settledAssistantResponse,
+  currentPaneForCaller, exactTerminalForCaller, writePiMetadata, retirePiMetadata,
+  invokeOverviewReconcile, invokeOverviewNameRefresh, runSessionRecap,
 } from "./helpers.ts";
+import { readPrompt, writePrompt } from "./prompt-store.ts";
+import { registerQuestionWait } from "./question-wait.ts";
 
-interface PendingPrompt {
-	callerPaneId?: string;
-	paneId?: string;
-	text: string;
-	settled: boolean;
+function identity(ctx: ExtensionContext): string | undefined {
+  const id = ctx.sessionManager.getSessionId();
+  return typeof id === "string" && id.trim() ? id : undefined;
 }
-
-function sessionIdOf(ctx: ExtensionContext): string | undefined {
-	const value = ctx.sessionManager.getSessionId();
-	return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function herdrPaneId(): string | undefined {
-	const value = process.env.HERDR_PANE_ID?.trim();
-	return value || undefined;
-}
-
-function warn(message: string): void {
-	console.warn(`[herdr-overview] ${message}`);
-}
-
-function isRealUserInput(event: InputEvent, ctx: ExtensionContext): boolean {
-	return (event.source === "interactive" && ctx.mode === "tui")
-		|| (event.source === "rpc" && ctx.mode === "rpc");
-}
-
-interface PublicationQueue {
-	promise: Promise<void>;
-}
-
-async function storeCurrentPrompt(
-	pending: PendingPrompt,
-	sessionId: string,
-	text: string,
-	isCurrent: () => boolean,
-): Promise<{ action: "continue" }> {
-	const pane = await currentPaneForCaller(process.env.HERDR_SOCKET_PATH?.trim() || undefined, pending.callerPaneId);
-	if (!isCurrent()) return { action: "continue" };
-	pending.paneId = pane?.paneId;
-
-	const args = ["prompt", "set", "--session-id", sessionId];
-	if (pending.paneId) args.push("--pane-id", pending.paneId);
-	try {
-		await runSessionRecap(args, text);
-	} catch {
-		warn("could not store the current Pi prompt");
-	}
-	return { action: "continue" };
-}
-
-async function prepareAndPublish(
-	pending: PendingPrompt,
-	sessionId: string,
-	response: ReturnType<typeof settledAssistantResponse>,
-): Promise<void> {
-	if (!response?.text.trim() || response.stopReason === "aborted" || response.stopReason === "error") return;
-
-	let autoPublish: string;
-	try {
-		autoPublish = await runSessionRecap(["config", "auto-publish"]);
-	} catch {
-		warn("could not read recap auto-publish policy; run session-recap config auto-publish");
-		return;
-	}
-	if (autoPublish === "disabled") return;
-	if (autoPublish !== "enabled") {
-		warn("session-recap returned an invalid auto-publish policy");
-		return;
-	}
-
-	const socketPath = process.env.HERDR_SOCKET_PATH?.trim() || undefined;
-	const current = await currentPaneForCaller(socketPath, pending.callerPaneId);
-	if (current?.paneId !== pending.paneId) {
-		const oldPaneId = pending.paneId;
-		pending.paneId = current?.paneId;
-		if (pending.paneId) {
-			const args = ["prompt", "rekey", "--session-id", sessionId, "--pane-id", pending.paneId];
-			if (oldPaneId) args.push("--from-pane-id", oldPaneId);
-			try {
-				await runSessionRecap(args, pending.text);
-			} catch {
-				warn("could not retarget the current Pi prompt after its pane moved");
-			}
-		}
-	}
-
-	const prepareArgs = ["prepare", "--source-id", sessionId];
-	if (pending.paneId) prepareArgs.push("--pane-id", pending.paneId);
-
-	let preparedId: string;
-	try {
-		preparedId = await runSessionRecap(prepareArgs, response.text);
-	} catch {
-		// T1 stores failed prepare attempts; a failure is not a publication or wake-up.
-		warn("session-recap did not prepare a publishable Pi recap");
-		return;
-	}
-	if (!/^[0-9a-f]{32}$/.test(preparedId)) {
-		warn("session-recap returned an invalid prepared recap ID");
-		return;
-	}
-
-	const workspaceId = await paneWorkspaceAtPublication(socketPath, pending.callerPaneId);
-	const publishArgs = ["publish", "--prepared-id", preparedId];
-	if (workspaceId) publishArgs.push("--workspace-id", workspaceId);
-
-	let publishedId: string;
-	try {
-		publishedId = await runSessionRecap(publishArgs);
-	} catch {
-		warn("session-recap could not publish the prepared Pi recap");
-		return;
-	}
-	if (publishedId !== preparedId) {
-		warn("session-recap did not confirm the prepared Pi recap publication");
-		return;
-	}
-
-	if (socketPath) {
-		try {
-			await invokeOverviewReconcile(socketPath);
-		} catch {
-			// The successful record remains durable; Herdr startup reconciliation can catch it up.
-			warn("Pi recap was published, but Herdr's overview.reconcile wake-up failed");
-		}
-	}
-}
-
-function settlePromptAndQueuePublication(
-	queue: PublicationQueue,
-	pending: PendingPrompt,
-	sessionId: string,
-	response: ReturnType<typeof settledAssistantResponse>,
-): Promise<void> {
-	const promptSettlement = runSessionRecap(["prompt", "settle", "--session-id", sessionId])
-		.catch(() => warn("could not mark the current prompt settled"));
-	// Enqueue synchronously, before awaiting the CLI, so overlapping settled hooks
-	// publish in event order even if an earlier prompt-settle process is slower.
-	queue.promise = queue.promise
-		.then(() => promptSettlement)
-		.then(() => prepareAndPublish(pending, sessionId, response))
-		.catch(() => warn("could not publish the settled Pi response"));
-	return promptSettlement;
-}
+function warn(message: string) { console.warn(`[herdr-overview] ${message}`); }
 
 export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {
-	registerQuestionWait(pi);
-	const pendingBySession = new Map<string, PendingPrompt>();
-	const publicationQueue: PublicationQueue = { promise: Promise.resolve() };
+  registerQuestionWait(pi);
+  let active: string | undefined;
+  let epoch = 0;
+  let queue = Promise.resolve();
+  const enqueue = (task: () => Promise<void>) => {
+    queue = queue.then(task).catch(() => warn("overview update failed; saved recaps remain available for recovery"));
+    return queue;
+  };
+  const membership = () => currentPaneForCaller(process.env.HERDR_SOCKET_PATH?.trim() || undefined, process.env.HERDR_PANE_ID?.trim() || undefined);
 
 	let generation = randomUUID();
 	let metadataFile: string | undefined;
@@ -175,10 +36,10 @@ export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {
 	const refreshMetadata = async (_event: unknown, ctx: ExtensionContext) => {
 		if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
 		// Capture plain public values before any await; never retain a session context.
-		const sessionId = sessionIdOf(ctx);
+		const sessionId = identity(ctx);
 		const sessionName = ctx.sessionManager.getSessionName?.() || null;
 		const socketPath = process.env.HERDR_SOCKET_PATH;
-		const callerPaneId = herdrPaneId();
+		const callerPaneId = process.env.HERDR_PANE_ID?.trim();
 		const currentRevision = ++revision;
 		const token = generation;
 		if (!sessionId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId) || !socketPath || !callerPaneId) {
@@ -191,8 +52,8 @@ export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {
 		if (metadataFile !== file) retirePiMetadata(metadataFile, generation);
 		metadataFile = file;
 	};
-	pi.on("session_start", (event, ctx) => { if (ctx.mode !== "tui" && ctx.mode !== "rpc") return; pendingBySession.clear(); retire(); return refreshMetadata(event, ctx); });
-	pi.on("session_shutdown", (_event, ctx) => { if (ctx.mode !== "tui" && ctx.mode !== "rpc") return; pendingBySession.clear(); retire(); });
+	pi.on("session_start", (event, ctx) => { if (ctx.mode !== "tui" && ctx.mode !== "rpc") return; retire(); return refreshMetadata(event, ctx); });
+	pi.on("session_shutdown", (_event, ctx) => { if (ctx.mode !== "tui" && ctx.mode !== "rpc") return; retire(); });
 	pi.on("session_info_changed", async (event, ctx) => {
 		if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
 		const socketPath = process.env.HERDR_SOCKET_PATH;
@@ -207,46 +68,81 @@ export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {
 	pi.on("session_tree", refreshMetadata);
 	pi.on("input", refreshMetadata);
 	pi.on("agent_settled", refreshMetadata);
+  async function consume(sessionId: string, generation: number, recordId?: string) {
+    const records = recordId
+      ? [JSON.parse(await runSessionRecap(["read", recordId, "--json"])).record]
+      : JSON.parse(await runSessionRecap(["list", "--json", "--source-kind", "pi", "--status", "published"])).records;
+    for (const record of records) {
+      const owner = record.metadata?.pi?.sessionId ?? record.metadata?.pi?.nativeSessionId;
+      if (record.status !== "published" || owner !== sessionId) continue;
+      if (active !== sessionId || epoch !== generation) return;
+      const pane = await membership();
+      if (active !== sessionId || epoch !== generation) return;
+      const prompt = readPrompt(sessionId);
+      if (prompt) writePrompt({ ...prompt, pane_id: pane?.paneId });
+      // Attribution is immutable once recorded. Return/startup may retry a missed wake-up,
+      // but must not move the publication's quiet deadline to a different workspace.
+      if (!Object.hasOwn(record.annotations ?? {}, "herdr")) {
+        await runSessionRecap(["annotate", record.record_id, "--namespace", "herdr", "--metadata-json", JSON.stringify({
+          ...(pane ? { pane_id: pane.paneId, ...(pane.workspaceId ? { workspace_id: pane.workspaceId } : {}) } : {}),
+        })]);
+      }
+      if (process.env.HERDR_SOCKET_PATH?.trim()) {
+        try { await invokeOverviewReconcile(process.env.HERDR_SOCKET_PATH.trim()); }
+        catch { warn("saved recap annotation retained; overview wake-up failed"); }
+      }
+    }
+  }
 
-	pi.on("input", (event, ctx) => {
-		if (!isRealUserInput(event, ctx) || !event.text.trim()) return { action: "continue" };
-		const sessionId = sessionIdOf(ctx);
-		if (!sessionId) return { action: "continue" };
-		const text = event.text;
+  pi.on("session_start", (_event, ctx) => {
+    if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
+    active = identity(ctx);
+    const generation = ++epoch;
+    const sessionId = active;
+    if (!sessionId) return;
+    return enqueue(async () => {
+      const pane = await membership();
+      if (active !== sessionId || epoch !== generation) return;
+      const prompt = readPrompt(sessionId);
+      if (prompt) writePrompt({ ...prompt, pane_id: pane?.paneId });
+      await consume(sessionId, generation);
+    });
+  });
+  pi.on("session_shutdown", (_event, ctx) => {
+    if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
+    active = undefined; epoch++;
+  });
+  pi.events.on("recap:saved", (event: any) => {
+    if (typeof event?.recordId !== "string" || event.sessionId !== active || !active) return;
+    const sessionId = active;
+    const generation = epoch;
+    void enqueue(() => consume(sessionId, generation, event.recordId));
+  });
 
-		const pending: PendingPrompt = {
-			callerPaneId: herdrPaneId(),
-			text,
-			settled: false,
-		};
-		pendingBySession.set(sessionId, pending);
-
-		return storeCurrentPrompt(
-			pending,
-			sessionId,
-			text,
-			() => pendingBySession.get(sessionId) === pending,
-		);
-	});
-
-	pi.on("agent_settled", (_event, ctx) => {
-		if (ctx.isIdle() !== true) return;
-
-		try {
-			const sessionId = sessionIdOf(ctx);
-			if (!sessionId) return;
-			const pending = pendingBySession.get(sessionId);
-			if (!pending || pending.settled) return;
-			const response = settledAssistantResponse(ctx.sessionManager.getBranch());
-			// Consume this prompt before any await so duplicate settle notifications cannot prepare twice.
-			pending.settled = true;
-			return settlePromptAndQueuePublication(publicationQueue, pending, sessionId, response);
-		} catch {
-			warn("could not read the settled Pi session response");
-		}
-	});
+  pi.on("input", async (event, ctx) => {
+    if (!((event.source === "interactive" && ctx.mode === "tui") || (event.source === "rpc" && ctx.mode === "rpc")) || !event.text.trim()) return { action: "continue" };
+    const sessionId = identity(ctx);
+    if (!sessionId) return { action: "continue" };
+    const generation = epoch;
+    const prompt = { schema_version: 1, prompt_id: randomUUID(), session_id: sessionId, text: event.text, working: true, captured_at: new Date().toISOString() };
+    // Persist before the socket await; a newer input must never be overwritten.
+    writePrompt(prompt);
+    const pane = await membership();
+    if (active === sessionId && epoch === generation && readPrompt(sessionId)?.prompt_id === prompt.prompt_id) writePrompt({ ...readPrompt(sessionId), pane_id: pane?.paneId });
+    return { action: "continue" };
+  });
+  pi.on("agent_settled", async (_event, ctx) => {
+    // Final settlement is public, but modern Pi counts its awaited hooks as busy.
+    // isIdle() is therefore false inside this event; queued input must still wait.
+    if ((ctx.mode !== "tui" && ctx.mode !== "rpc") || ctx.hasPendingMessages()) return;
+    const sessionId = identity(ctx);
+    if (!sessionId) return;
+    const generation = epoch;
+    const prompt = readPrompt(sessionId);
+    if (!prompt?.working) return;
+    writePrompt({ ...prompt, working: false });
+    const pane = await membership();
+    if (active === sessionId && epoch === generation && readPrompt(sessionId)?.prompt_id === prompt.prompt_id) writePrompt({ ...readPrompt(sessionId), pane_id: pane?.paneId });
+  });
 }
-
-export default function (pi: ExtensionAPI): void {
-	registerHerdrOverviewExtension(pi);
-}
+export default registerHerdrOverviewExtension;

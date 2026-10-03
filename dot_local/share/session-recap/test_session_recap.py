@@ -104,11 +104,61 @@ class SessionRecapCliTests(unittest.TestCase):
         )
         return result.stdout.strip()
 
+    def test_generic_records_public_contract(self) -> None:
+        record_id = self.run_cli("create", "--kind", "single", "--source-kind", "other",
+                                 "--source-id", "caller", "--metadata-json",
+                                 '{"coverage":{"end":3}}', input_text="PRIVATE INPUT").stdout.strip()
+        before = json.loads(self.run_cli("read", record_id, "--json").stdout)["record"]
+        self.assertEqual(before["metadata"], {"coverage": {"end": 3}})
+        self.run_cli("annotate", record_id, "--namespace", "consumer", "--metadata-json", '{"group":"g"}')
+        after = json.loads(self.run_cli("read", record_id, "--json").stdout)["record"]
+        self.assertEqual(after.pop("annotations"), {"consumer": {"group": "g"}})
+        before.pop("annotations")
+        self.assertEqual(after, before)
+        listing = json.loads(self.run_cli("list", "--json", "--source-kind", "other",
+                                         "--source-id", "caller", "--status", "published").stdout)
+        self.assertEqual(len(listing["records"]), 1)
+        self.assertNotIn("PRIVATE INPUT", json.dumps(self.records()))
+        self.assertNotIn(str(FAKE_BACKEND), json.dumps(self.records()))
+        # A broken convenience index cannot hide a committed success.
+        (self.data_dir / "latest.json").write_text("broken", encoding="utf-8")
+        second = self.create_single("Second")
+        self.assertEqual(json.loads(self.run_cli("read", second, "--json").stdout)["record"]["status"], "published")
+        legacy = dict(before, schema_version=1, record_id="legacy", metadata={"argv": "SECRET"},
+                      annotations={"auth": "SECRET"}, failure={"message": "SECRET", "exit_code": 4})
+        path = self.data_dir / "records" / "2000-01-01" / "legacy.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+        safe = self.run_cli("read", "legacy", "--json").stdout
+        self.assertNotIn("SECRET", safe)
+        self.assertEqual(json.loads(safe)["record"]["schema_version"], 1)
+        self.run_cli("annotate", "legacy", "--namespace", "new", "--metadata-json", '{"ok":true}')
+        self.assertEqual(json.loads(self.run_cli("read", "legacy", "--json").stdout)["record"]["annotations"], {"new": {"ok": True}})
+
+    def test_undrained_read_does_not_hold_the_store_lock(self) -> None:
+        # Regression: a Pi caller spawned `read` with pipes, then blocked its
+        # event loop on a synchronous `current`. A record larger than the pipe
+        # buffer left `read` stuck writing while holding the global lock.
+        record_id = self.create_single("Large")
+        path = next((self.data_dir / "records").glob(f"*/{record_id}.json"))
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["summary"] = "x" * (512 * 1024)
+        path.write_text(json.dumps(record), encoding="utf-8")
+        reader = subprocess.Popen([str(CLI), "read", record_id, "--json"], stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, env=self.environment())
+        self.addCleanup(reader.stdout.close)
+        self.addCleanup(reader.wait)
+        self.addCleanup(reader.kill)
+        # Give the reader time to take the lock and fill the pipe.
+        reader.stdout.peek(1)
+        current = subprocess.run([str(CLI), "current", "--key", "k", "--json"], capture_output=True,
+                                 text=True, env=self.environment(), timeout=10, check=True)
+        self.assertEqual(json.loads(current.stdout)["status"], "absent")
+        self.assertEqual(len(json.loads(reader.stdout.read())["record"]["summary"]), 512 * 1024)
+
     def test_managed_default_is_off_until_host_opts_in(self) -> None:
         (self.config_dir / "config.toml").write_text("auto_publish = false\n", encoding="utf-8")
         self.assertEqual(self.run_cli("config", "auto-publish").stdout.strip(), "disabled")
-        self.run_cli("prompt", "set", "--session-id", "default-off", input_text="Current task.")
-        self.run_cli("prompt", "settle", "--session-id", "default-off")
         self.assertFalse((self.data_dir / "records").exists())
         missing = self.run_cli("create", "--kind", "single", input_text="Current task.", check=False)
         self.assertNotEqual(missing.returncode, 0)
@@ -141,7 +191,7 @@ class SessionRecapCliTests(unittest.TestCase):
         record = next(item for item in self.records() if item["record_id"] == record_id)
 
         self.assertRegex(record_id, r"^[0-9a-f]{32}$")
-        self.assertEqual(record["schema_version"], 1)
+        self.assertEqual(record["schema_version"], 2)
         self.assertEqual(record["source_kind"], "manual")
         self.assertEqual(record["source_id"], record_id)
         self.assertEqual(record["kind"], "single")
@@ -239,82 +289,36 @@ class SessionRecapCliTests(unittest.TestCase):
         self.assertEqual(self.source_entry("workspace", "ws-failures")["latest_success_id"], success_id)
         self.assertEqual(len(self.records()), 4)
 
-    def test_prepare_publish_and_prompt_settle_are_separate_and_keep_optional_ids(self) -> None:
-        session_id = "pi/session one"
-        prepared_id = self.run_cli(
-            "prepare",
-            "--source-id",
-            session_id,
-            input_text="The Pi response has settled; publish only after workspace lookup.",
-        ).stdout.strip()
-        self.assertTrue((self.data_dir / "prepared" / f"{prepared_id}.json").is_file())
-        self.assertFalse((self.data_dir / "latest.json").exists())
-
-        self.run_cli("publish", "--prepared-id", prepared_id, "--workspace-id", "workspace-native-1")
-        record = next(item for item in self.records() if item["record_id"] == prepared_id)
-        self.assertEqual(record["source_kind"], "pi-session")
-        self.assertEqual(record["source_id"], session_id)
-        self.assertEqual(record["workspace_id"], "workspace-native-1")
-        self.assertNotIn("pane_id", record)
-        self.assertEqual(self.source_entry("pi-session", session_id)["latest_success_id"], prepared_id)
-
-        second_prepared_id = self.run_cli(
-            "prepare",
-            "--source-id",
-            "pi-session-with-pane",
-            "--pane-id",
-            "native-pane-2",
-            input_text="A second settled response without workspace attribution.",
-        ).stdout.strip()
-        second_prepared = json.loads(
-            (self.data_dir / "prepared" / f"{second_prepared_id}.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(second_prepared["pane_id"], "native-pane-2")
-        self.assertNotIn("workspace_id", second_prepared)
-        self.run_cli("publish", "--prepared-id", second_prepared_id)
-        second_record = next(item for item in self.records() if item["record_id"] == second_prepared_id)
-        self.assertEqual(second_record["pane_id"], "native-pane-2")
-        self.assertNotIn("workspace_id", second_record)
-
-        prompt_path = self.data_dir / "prompts" / "pi%2Fsession%20one.json"
-        prompt_text = "Investigate the open regression; do not confuse this with recap text."
-        self.run_cli(
-            "prompt", "set", "--session-id", session_id, input_text=prompt_text
-        )
-        working = json.loads(prompt_path.read_text(encoding="utf-8"))
-        self.assertEqual(working["schema_version"], 1)
-        self.assertEqual(working["session_id"], session_id)
-        self.assertEqual(working["text"], prompt_text)
-        self.assertTrue(working["working"])
-        self.assertNotIn("pane_id", working)
-
-        self.run_cli("prompt", "settle", "--session-id", session_id)
-        settled = json.loads(prompt_path.read_text(encoding="utf-8"))
-        self.assertEqual(settled["text"], prompt_text)
-        self.assertEqual(settled["session_id"], session_id)
-        self.assertFalse(settled["working"])
-        self.assertGreaterEqual(settled["captured_at"], working["captured_at"])
-        self.assertNotIn(prompt_text, record["summary"])
-
-    def test_prompt_rekey_preserves_state_and_cannot_clobber_newer_input(self) -> None:
-        session_id = "first-response-move"
-        prompt_path = self.data_dir / "prompts" / f"{session_id}.json"
-        self.run_cli("prompt", "set", "--session-id", session_id, "--pane-id", "old-pane", input_text="First task")
-        self.run_cli("prompt", "settle", "--session-id", session_id)
-        settled = json.loads(prompt_path.read_text(encoding="utf-8"))
-        self.run_cli("prompt", "rekey", "--session-id", session_id, "--from-pane-id", "old-pane",
-                     "--pane-id", "new-pane", input_text="First task")
-        rekeyed = json.loads(prompt_path.read_text(encoding="utf-8"))
-        self.assertEqual(rekeyed, {**settled, "pane_id": "new-pane"})
-
-        self.run_cli("prompt", "set", "--session-id", session_id, "--pane-id", "new-pane", input_text="Next task")
-        next_prompt = json.loads(prompt_path.read_text(encoding="utf-8"))
-        self.run_cli("prompt", "rekey", "--session-id", session_id, "--from-pane-id", "new-pane",
-                     "--pane-id", "later-pane", input_text="First task")
-        self.assertEqual(json.loads(prompt_path.read_text(encoding="utf-8")), next_prompt)
-        self.run_cli("prompt", "rekey", "--session-id", session_id, "--from-pane-id", "old-pane",
-                     "--pane-id", "later-pane", input_text="Next task")
-        self.assertEqual(json.loads(prompt_path.read_text(encoding="utf-8")), next_prompt)
+    def test_retired_commands_rejected_without_mutation_and_legacy_history_readable(self) -> None:
+        record_id = self.run_cli("create", "--kind", "single", input_text="Existing success").stdout.strip()
+        path = next(self.data_dir.glob("records/*/*.json"))
+        legacy = json.loads(path.read_text(encoding="utf-8"))
+        legacy.update(schema_version=1, source_kind="pi-session", source_id="old-session")
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+        for directory in ("prepared", "prompts"):
+            target = self.data_dir / directory / "legacy.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('{"schema_version":1,"text":"preserved"}', encoding="utf-8")
+        before = {str(p.relative_to(self.data_dir)): p.read_bytes()
+                  for p in self.data_dir.rglob("*") if p.is_file()}
+        capture_before = self.capture.read_bytes()
+        for args in (("prepare", "--source-id", "new"),
+                     ("publish", "--prepared-id", record_id),
+                     ("prompt", "set", "--session-id", "old-session"),
+                     ("prompt", "settle", "--session-id", "old-session"),
+                     ("prompt", "rekey", "--session-id", "old-session", "--pane-id", "new")):
+            result = self.run_cli(*args, input_text="Must not generate", check=False)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("invalid choice", result.stderr)
+        self.assertEqual(self.capture.read_bytes(), capture_before)
+        record = json.loads(self.run_cli("read", record_id, "--json").stdout)["record"]
+        self.assertEqual(record["schema_version"], 1)
+        self.assertEqual(record["summary"], legacy["summary"])
+        records = json.loads(self.run_cli("list", "--json", "--source-kind", "pi-session").stdout)["records"]
+        self.assertEqual([r["record_id"] for r in records], [record_id])
+        after = {str(p.relative_to(self.data_dir)): p.read_bytes()
+                 for p in self.data_dir.rglob("*") if p.is_file()}
+        self.assertEqual(after, before)
 
     def test_local_argv_override_and_both_editable_prompts_reach_backend(self) -> None:
         self.write_config("nonzero")
@@ -344,7 +348,7 @@ class SessionRecapCliTests(unittest.TestCase):
         env["PATH"] = "/usr/bin:/bin"
         env["SESSION_RECAP_PYTHON"] = sys.executable
         result = subprocess.run(
-            [str(CLI), "prompt", "set", "--session-id", "hosted-pi"],
+            [str(CLI), "create", "--kind", "single", "--source-kind", "other", "--source-id", "hosted"],
             input="Current user prompt from Herdr-hosted Pi",
             text=True,
             encoding="utf-8",
@@ -354,8 +358,7 @@ class SessionRecapCliTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        prompt = json.loads((self.data_dir / "prompts" / "hosted-pi.json").read_text(encoding="utf-8"))
-        self.assertEqual(prompt["text"], "Current user prompt from Herdr-hosted Pi")
+        self.assertEqual(self.records()[0]["source_kind"], "other")
 
     def test_implementation_runs_under_python_and_cli_help_is_available(self) -> None:
         result = subprocess.run(
@@ -367,8 +370,10 @@ class SessionRecapCliTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("prepare", result.stdout)
-        self.assertIn("publish", result.stdout)
+        self.assertIn("create", result.stdout)
+        choices = result.stdout.split("{", 1)[1].split("}", 1)[0].split(",")
+        for retired in ("prepare", "publish", "prompt"):
+            self.assertNotIn(retired, choices)
 
 
 if __name__ == "__main__":

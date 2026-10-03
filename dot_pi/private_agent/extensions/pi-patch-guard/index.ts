@@ -2,11 +2,11 @@
  * pi-patch-guard — pi extension: warn when a chezmoi-managed pi runtime patch
  * has been silently wiped by a pi self-update / `npm i -g` reinstall.
  *
- * Background: runtime patches (e.g. hide-nonbridge-claude-models) edit files
+ * Background: runtime patches (e.g. anthropic-idle-watchdog) edit files
  * *inside* the installed `@earendil-works/pi-coding-agent` package. Any reinstall
  * of that package rewrites `dist/` and erases the edit. The re-apply only runs on
  * `chezmoi apply`, so between an out-of-band update and the next apply, the patch
- * is gone — non-bridge Claude models reappear in the picker/`--list-models`, and
+ * is gone — its behavior silently reverts, and
  * fresh `pi` processes (subagents) read the unpatched file.
  *
  * This guard does NOT heal anything. It is a tripwire: at session start and

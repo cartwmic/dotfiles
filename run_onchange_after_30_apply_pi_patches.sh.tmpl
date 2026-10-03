@@ -8,8 +8,8 @@
 # edit them by hand — chezmoi templating regenerates them on apply.
 #
 # patch.mjs (anthropic-idle-watchdog):      {{ include "dot_local/share/pi-patches/anthropic-idle-watchdog/patch.mjs" | sha256sum }}
-# patch.mjs (hide-nonbridge-claude-models): {{ include "dot_local/share/pi-patches/hide-nonbridge-claude-models/patch.mjs" | sha256sum }}
 # patch.mjs (headless-extension-drain):     {{ include "dot_local/share/pi-patches/headless-extension-drain/patch.mjs" | sha256sum }}
+# patch.mjs (settlement-abort):             {{ include "dot_local/share/pi-patches/settlement-abort/patch.mjs" | sha256sum }}
 # patch.mjs (standing-reminder-origin):     {{ include "dot_local/share/pi-patches/standing-reminder-origin/patch.mjs" | sha256sum }}
 # patch.mjs (custom-message-marker):        {{ include "dot_local/share/pi-patches/custom-message-marker/patch.mjs" | sha256sum }}
 # patch.mjs (empty-turn-retry):             {{ include "dot_local/share/pi-patches/empty-turn-retry/patch.mjs" | sha256sum }}
@@ -36,7 +36,7 @@ if [ ! -x "$SCRIPT" ]; then
 fi
 
 # Thread the active chezmoi profile to the patch loop. Profile-gated patches
-# (e.g. hide-nonbridge-claude-models) read PI_CHEZMOI_PROFILE and only apply on
+# (e.g. standing-reminder-origin) read PI_CHEZMOI_PROFILE and only apply on
 # the matching profile; un-gated patches ignore it.
 export PI_CHEZMOI_PROFILE="{{ .profile }}"
 
