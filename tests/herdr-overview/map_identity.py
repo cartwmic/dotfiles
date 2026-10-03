@@ -499,7 +499,9 @@ def native_identity(root, state, env, pane_id, receipts, client, open_map, log_d
     source = source.replace('"Recent work is complete. Present state: ready for the next step.\\n"', repr('RECAP BODY CHANGED NOT A SUBJECT\n'))
     backend.write_text(source)
     prompt = 'SYNTHETIC POST MOVE CURRENT SESSION END-POST-MOVE-PROMPT'
-    proof.herdr_cmd(state, env, 'agent', 'prompt', 'synthetic-map-pi', prompt, timeout=20)
+    # The pane runs interactive Pi (the recap extension publishes only from TUI).
+    proof.herdr_cmd(state, env, 'pane', 'send-text', moved_id, prompt)
+    proof.herdr_cmd(state, env, 'pane', 'send-keys', moved_id, 'enter')
     data = root / 'data/session-recap'
     def current_publication():
         good, _ = proof.read_latest_pi_record(data, moved_id)
