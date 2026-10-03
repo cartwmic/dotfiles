@@ -249,10 +249,10 @@ def scripted_interactions(root, env, receipts, Client):
     try:
         client = Client({}, scripted_env, 120, ['node', str(proof.ROOT / 'dot_local/share/herdr-overview/index.mjs'), 'overview'])
         client.drain(1)
-        def current():
+        def fresh():
             return completed(client)
         def capture(name):
-            frame = current(); (receipts / f'scripted-{name}.txt').write_text(frame); return frame
+            frame = fresh(); (receipts / f'scripted-{name}.txt').write_text(frame); return frame
         frame = capture('initial')
         if 'SCRIPTED' not in frame or 'BLOCKED' not in frame:
             raise proof.ProofFailure('scripted status fixture did not render')
@@ -264,7 +264,7 @@ def scripted_interactions(root, env, receipts, Client):
         client.key(b'\r'); client.key(b'k'*100)
         seen = set(); reading = None
         for i in range(220):
-            frame = current()
+            frame = fresh()
             (receipts / 'scripted-current-detail.txt').write_text(frame)
             for marker in ('TITLE-END','RECAP-END','ERROR-END','PROMPT-END'):
                 if contains(frame, marker):
@@ -273,7 +273,7 @@ def scripted_interactions(root, env, receipts, Client):
             if i == 40:
                 reading = frame
                 client.key(b'r')
-                if current() != reading:
+                if fresh() != reading:
                     raise proof.ProofFailure('refresh changed reading position')
                 client.resize(40)
                 capture('narrow-reading')
@@ -289,7 +289,7 @@ def scripted_interactions(root, env, receipts, Client):
         # Batched key writes still drive the real input parser; take a fresh
         # current frame after each batch, never search accumulated output.
         for _ in range(80):
-            frame = current()
+            frame = fresh()
             (receipts / 'scripted-current-detail.txt').write_text(frame)
             for marker in ('TITLE-END','RECAP-END','ERROR-END','PROMPT-END'):
                 if contains(frame, marker):
