@@ -153,7 +153,7 @@ export async function exactTerminalForCaller(socketPath: string, callerPaneId: s
 	try {
 		const result = await requestHerdr(socketPath, "session.snapshot") as any;
 		const snapshot = result?.snapshot;
-		if (snapshot?.protocol !== 22) return undefined;
+		if (!Array.isArray(snapshot?.panes)) return undefined;
 		const matches = snapshot.panes?.filter((item: any) => item.pane_id === pane.paneId) ?? [];
 		if (matches.length !== 1) return undefined;
 		const terminalId = matches[0].terminal_id;

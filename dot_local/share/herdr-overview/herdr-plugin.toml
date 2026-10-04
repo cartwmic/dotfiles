@@ -2,7 +2,7 @@ id = "overview"
 name = "Herdr Overview"
 version = "0.1.0"
 min_herdr_version = "0.9.1"
-description = "Shared native-ID overview model and themed session pane for Herdr 0.9.1."
+description = "Shared native-ID overview model and themed session pane for Herdr API protocol 22."
 platforms = ["macos", "linux"]
 
 [[startup]]

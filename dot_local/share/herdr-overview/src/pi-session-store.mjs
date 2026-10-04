@@ -31,7 +31,7 @@ function digest(sessionId, env) {
 // Native agent detection is deliberately not part of this association.
 export function readPiSessionFields(snapshot, { socketPath, env = process.env } = {}) {
   const piSessionsByPaneId = {};
-  if (!socketPath || snapshot?.protocol !== 22) return { piSessionsByPaneId };
+  if (!socketPath || !Array.isArray(snapshot?.panes)) return { piSessionsByPaneId };
   let files; try { files = fs.readdirSync(piSessionsDirectory(env)); } catch { return { piSessionsByPaneId }; }
   const records = files.filter(file => file.endsWith('.json')).map(file => read(path.join(piSessionsDirectory(env), file))).filter(record => record?.socketPath === socketPath);
   for (const pane of snapshot.panes ?? []) {

@@ -32,6 +32,8 @@ class InstallHerdrOverviewTests(unittest.TestCase):
             "dot_termux/termux.properties",
             ".chezmoiignore",
             "dot_local/share/herdr-overview/herdr-plugin.toml",
+            "dot_local/share/herdr-overview/check-herdr-api.mjs",
+            "dot_local/share/herdr-overview/src/herdr-compat.mjs",
         ):
             destination = self.source / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -47,7 +49,10 @@ class InstallHerdrOverviewTests(unittest.TestCase):
 import json, os, pathlib, sys
 args = sys.argv[1:]
 if args == ['--version']:
-    print('herdr 0.9.1')
+    print('herdr ' + os.environ.get('FAKE_HERDR_VERSION', '0.9.1'))
+elif args == ['api', 'schema', '--json']:
+    assert not pathlib.Path(os.environ['HERDR_SOCKET_PATH']).exists()
+    print(pathlib.Path(os.environ['FAKE_HERDR_SCHEMA']).read_text())
 elif len(args) == 4 and args[:2] == ['plugin', 'link'] and args[3] == '--enabled':
     pathlib.Path(os.environ['LINK_LOG']).write_text(args[2])
 elif args in (
@@ -82,7 +87,7 @@ import os, pathlib, subprocess, sys, tomllib
 args = sys.argv[1:]
 if args == ['--version']:
     print('test mise')
-elif args == ['where', 'github:herdrdev/herdr@0.9.1']:
+elif args == ['where', 'github:herdrdev/herdr']:
     print(os.environ['FAKE_HERDR_DIR'])
 elif args in (['run', 'bootstrap'], ['run', 'install-herdr-palette']):
     config = tomllib.loads(pathlib.Path(os.environ['HERDR_TEST_CONFIG']).read_text())
@@ -94,7 +99,7 @@ elif args in (['run', 'bootstrap'], ['run', 'install-herdr-palette']):
         result = subprocess.run(['/bin/sh', '-c', config['tasks'][task]['run']])
         if result.returncode:
             sys.exit(result.returncode)
-elif args in (['install'], ['install', 'github:herdrdev/herdr@0.9.1'], ['run', 'setup-ubuntu-essentials']):
+elif args in (['install'], ['install', 'github:herdrdev/herdr'], ['run', 'setup-ubuntu-essentials']):
     pass
 else:
     sys.exit('unexpected mise call: ' + repr(args))
@@ -115,7 +120,25 @@ else:
             "LINK_LOG": str(self.link_log),
             "PALETTE_LOG": str(self.root / "palette-installs"),
             "PALETTE_STATE": str(self.root / "palette-state.json"),
+            "FAKE_HERDR_SCHEMA": str(self.root / "schema.json"),
         })
+        self.write_schema()
+
+    def write_schema(self, protocol=22, drop_method=None):
+        """A schema offering exactly what the plugin's API contract lists."""
+        script = (
+            "import { HERDR_API_CONTRACT as c, manifestEvents } from " + json.dumps(str(self.source / "dot_local/share/herdr-overview/src/herdr-compat.mjs")) + ";"
+            "const defs = {}; const oneOf = Object.entries(c.methods).filter(([m]) => m !== process.argv[2]).map(([m, p], i) => {"
+            " defs['P' + i] = { properties: Object.fromEntries(p.map((n) => [n, {}])) };"
+            " return { properties: { method: { const: m }, params: { $ref: '#/schemas/request/$defs/P' + i } } }; });"
+            "const res = Object.fromEntries(Object.entries(c.results).map(([n, f]) => [n, { properties: Object.fromEntries(f.map((x) => [x, {}])) }]));"
+            "res.ResponseResult = { oneOf: c.resultTypes.map((t) => ({ properties: { type: { const: t } } })) };"
+            "res.EventKind = { enum: manifestEvents().map((e) => e.replace('.', '_')) };"
+            "console.log(JSON.stringify({ protocol: Number(process.argv[1]), schemas: { request: { oneOf, $defs: defs }, success_response: { $defs: res } } }));"
+        )
+        schema = subprocess.run(["node", "--input-type=module", "-e", script, str(protocol), drop_method or ""],
+                                check=True, capture_output=True, text=True).stdout
+        Path(self.env["FAKE_HERDR_SCHEMA"]).write_text(schema)
 
     @staticmethod
     def write_tool(path, body):
@@ -215,6 +238,26 @@ else:
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertEqual(self.link_log.read_text(), str(self.source / "dot_local/share/herdr-overview"))
+
+    def test_task_links_any_version_whose_api_meets_the_plugin_needs(self):
+        task = tomllib.loads((self.source / "dot_config/mise/config.toml").read_text())["tasks"]["install-herdr-overview"]["run"]
+        for version, protocol, drop, linked in (
+            ("0.9.3", 22, None, True),
+            ("2.0.0", 31, None, True),
+            ("0.9.3", 22, "pane.focus", False),
+        ):
+            with self.subTest(version=version, protocol=protocol, drop=drop):
+                self.write_schema(protocol, drop)
+                self.link_log.unlink(missing_ok=True)
+                completed = subprocess.run(
+                    ["/bin/sh", "-c", task], cwd=self.root, env=dict(self.env, FAKE_HERDR_VERSION=version),
+                    capture_output=True, text=True, timeout=20,
+                )
+                self.assertEqual(completed.returncode == 0, linked, completed.stdout + completed.stderr)
+                self.assertEqual(self.link_log.exists(), linked)
+                if not linked:
+                    self.assertIn("method pane.focus is missing", completed.stderr)
+                    self.assertIn(f"herdr {version} does not offer the API Herdr Overview uses", completed.stderr)
 
 
 if __name__ == "__main__":

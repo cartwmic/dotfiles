@@ -540,20 +540,30 @@ def run_root(run_id: str, base: Path | None = None) -> Path:
     return (base or default_cache_root()) / run_id
 
 
-def herdr_091_binary() -> str:
+def pinned_herdr() -> tuple[str, str]:
+    """Resolve the Herdr this source pins (or HERDR_OVERVIEW_PROOF_HERDR, to try a
+    candidate before bumping) and require that its API meets the plugin's needs.
+    Returns (binary, version)."""
+    import tomllib
+    pin = tomllib.loads((ROOT / "dot_config/mise/config.toml").read_text(encoding="utf-8"))["tools"]["github:herdrdev/herdr"]
+    wanted = os.environ.get("HERDR_OVERVIEW_PROOF_HERDR") or pin
     mise = shutil.which("mise")
     if not mise:
-        raise ProofBlocked("mise is required to resolve the pinned Herdr 0.9.1 binary")
-    located = run_process([mise, "where", "github:herdrdev/herdr@0.9.1"], cwd=ROOT, check=False, timeout=20)
+        raise ProofBlocked("mise is required to resolve the pinned Herdr binary")
+    located = run_process([mise, "where", f"github:herdrdev/herdr@{wanted}"], cwd=ROOT, check=False, timeout=20)
     if located.returncode != 0:
-        raise ProofBlocked("Herdr 0.9.1 is not installed; run `mise install github:herdrdev/herdr@0.9.1`")
+        raise ProofBlocked(f"Herdr {wanted} is not installed; run `mise install github:herdrdev/herdr@{wanted}`")
     binary = (Path(located.stdout.strip()) / "herdr").resolve()
     if not binary.is_file() or not os.access(binary, os.X_OK):
-        raise ProofBlocked(f"the pinned Herdr 0.9.1 binary is missing: {binary}")
+        raise ProofBlocked(f"the Herdr {wanted} binary is missing: {binary}")
     version = run_process([str(binary), "--version"], cwd=ROOT, check=False, timeout=10)
-    if version.returncode != 0 or version.stdout.strip() != "herdr 0.9.1":
-        raise ProofFailure(f"mise resolved a non-0.9.1 Herdr binary: {bounded(version.stdout or version.stderr, 200)}")
-    return str(binary)
+    if version.returncode != 0 or version.stdout.strip() != f"herdr {wanted}":
+        raise ProofFailure(f"mise resolved a Herdr binary other than {wanted}: {bounded(version.stdout or version.stderr, 200)}")
+    check = run_process([shutil.which("node") or "node", str(ROOT / "dot_local/share/herdr-overview/check-herdr-api.mjs"), str(binary)],
+                        cwd=ROOT, check=False, timeout=20)
+    if check.returncode != 0:
+        raise ProofBlocked(f"Herdr {wanted} does not meet the plugin's API needs: {bounded(check.stderr or check.stdout, 1000)}")
+    return str(binary), wanted
 
 
 def make_herdr_env(root: Path, herdr_binary: str) -> dict[str, str]:
@@ -601,7 +611,7 @@ def setup_herdr_run(run_id: str, base: Path | None = None) -> tuple[Path, dict[s
         if marker.exists():
             raise ProofFailure(f"proof run already exists; use its run ID for the existing fixture: {root}")
         raise ProofFailure(f"refusing to reuse unmarked proof directory: {root}")
-    herdr_binary = herdr_091_binary()
+    herdr_binary, herdr_version = pinned_herdr()
     root.mkdir(parents=True, mode=0o700)
     env = make_herdr_env(root, herdr_binary)
     recap_home, recap_config, recap_data = copy_recap_install(root)
@@ -652,6 +662,7 @@ def setup_herdr_run(run_id: str, base: Path | None = None) -> tuple[Path, dict[s
         "config_path": str((root / "config/herdr/config.toml").resolve()),
         "socket_path": str((root / "server/herdr.sock").resolve()),
         "herdr_bin": herdr_binary,
+        "herdr_version": herdr_version,
         "repo_root": str(ROOT.resolve()),
         "fixture": {"workspaces": [], "pi_pane_id": None, "non_pi_pane_id": None},
         "server_started": False,
@@ -679,10 +690,10 @@ manifest_check = false
     link_env["HERDR_SOCKET_PATH"] = str(root / "server/plugin-link-only.sock")
     herdr_bin = plugin_state["herdr_bin"]
     if not herdr_bin:
-        raise ProofBlocked("Herdr is not installed; install the pinned 0.9.1 desktop release first")
+        raise ProofBlocked("Herdr is not installed; install the pinned desktop release first")
     version = run_process([herdr_bin, "--version"], env=link_env, cwd=ROOT, check=False)
-    if version.returncode != 0 or version.stdout.strip() != "herdr 0.9.1":
-        raise ProofBlocked(f"Herdr 0.9.1 is required; found {bounded(version.stdout or version.stderr, 200)}")
+    if version.returncode != 0 or version.stdout.strip() != f"herdr {herdr_version}":
+        raise ProofBlocked(f"Herdr {herdr_version} is required; found {bounded(version.stdout or version.stderr, 200)}")
     node = shutil.which("node")
     if not node:
         raise ProofBlocked("Node.js is required to run the source-managed Herdr plugin")
@@ -768,8 +779,9 @@ def api_request(state: dict[str, Any], method: str, params: dict[str, Any] | Non
 def snapshot(state: dict[str, Any], timeout: float = 5) -> dict[str, Any]:
     result_value = api_request(state, "session.snapshot", timeout=timeout)
     value = result_value.get("snapshot")
-    if not isinstance(value, dict) or value.get("protocol") != 22 or value.get("version") != "0.9.1":
-        raise ProofFailure(f"isolated server is not Herdr v0.9.1/protocol-22: {value!r}")
+    expected = state.get("herdr_version", "0.9.1")
+    if not isinstance(value, dict) or value.get("version") != expected:
+        raise ProofFailure(f"isolated server is not the fixture's Herdr {expected}: {value!r}")
     return value
 
 
@@ -843,7 +855,7 @@ def scenario_herdr_prepare(run_id: str | None, base: Path | None) -> tuple[str, 
     try:
         herdr_bin = state["herdr_bin"]
         if not herdr_bin:
-            raise ProofBlocked("the pinned Herdr 0.9.1 binary is not installed")
+            raise ProofBlocked("the pinned Herdr binary is not installed")
         first_workdir = root / "workspaces/bootstrap"
         first_workdir.mkdir(parents=True)
         # Workspace commands require a running server. Start only with this
@@ -862,7 +874,7 @@ def scenario_herdr_prepare(run_id: str | None, base: Path | None) -> tuple[str, 
             return server_status(state, env) if Path(state["socket_path"]).exists() else None
 
         try:
-            info = wait_for(isolated_status, "the isolated v0.9.1 server", timeout=25)
+            info = wait_for(isolated_status, "the isolated Herdr server", timeout=25)
         except BaseException:
             if server_process.poll() is None:
                 server_process.terminate()
@@ -874,8 +886,8 @@ def scenario_herdr_prepare(run_id: str | None, base: Path | None) -> tuple[str, 
             raise
         herdr_cmd(state, env, "workspace", "create", "--cwd", str(first_workdir),
                   "--label", "Proof Bootstrap", "--no-focus")
-        if not info.get("running") or info.get("version") != "0.9.1" or info.get("protocol") != 22:
-            raise ProofFailure(f"isolated Herdr server is not running v0.9.1/protocol 22: {info}")
+        if not info.get("running") or info.get("version") != state["herdr_version"]:
+            raise ProofFailure(f"isolated Herdr server is not running {state['herdr_version']}: {info}")
         state["server_started"] = True
         json_dump(root / PROOF_MARKER, state)
         # Reuse the isolated bootstrap workspace as Proof Alpha; no operation
@@ -968,8 +980,8 @@ def scenario_herdr_prepare(run_id: str | None, base: Path | None) -> tuple[str, 
         state.update({
             "server_started": True,
             "fixture": fixture,
-            "server_version": "0.9.1",
-            "server_protocol": 22,
+            "server_version": state["herdr_version"],
+            "server_protocol": info.get("protocol"),
             "prepared_at": utc_now(),
         })
         json_dump(root / PROOF_MARKER, state)
@@ -982,8 +994,8 @@ def scenario_herdr_prepare(run_id: str | None, base: Path | None) -> tuple[str, 
         wait_for(manual_labels_ready, "owner-set fixture names to settle after startup reconciliation", timeout=12)
         return run_id, {
             "run_id": run_id,
-            "server_version": "0.9.1",
-            "protocol": 22,
+            "server_version": state["herdr_version"],
+            "protocol": state["server_protocol"],
             "socket_path": state["socket_path"],
             "workspaces": [item["label"] for item in created],
             "pane_count": len(live.get("panes", [])),
@@ -1802,7 +1814,7 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     if old_pane.get("agent") != "pi" and agent.get("agent") != "pi":
         raise ProofFailure("Herdr no longer recognizes the fixture pane as Pi")
     if old_pane.get("agent_session") is not None or agent.get("agent_session") is not None:
-        raise ProofFailure("the native-move proof expected v0.9.1's observed agent_session=null path")
+        raise ProofFailure("the native-move proof expected the observed agent_session=null path (first seen on Herdr 0.9.1); recheck the terminal-ID fallback")
 
     identity = ((plugin_state(root).get("recapCoordinator") or {}).get("piTerminalIdsBySessionId") or {})
     if identity.get(session_id) != terminal_id:
@@ -1981,7 +1993,7 @@ def scenario_herdr_native_move(run_id: str, base: Path | None) -> dict[str, Any]
     if moved_pane.get("agent") != "pi" and moved_agent.get("agent") != "pi":
         raise ProofFailure("the rekeyed pane no longer reports agent=pi")
     if moved_pane.get("agent_session") is not None or moved_agent.get("agent_session") is not None:
-        raise ProofFailure("the moved v0.9.1 pane unexpectedly exposed agent_session")
+        raise ProofFailure("the moved pane unexpectedly exposed agent_session (Herdr 0.9.1 did not); recheck the terminal-ID fallback")
 
     manual_move_output = herdr_cmd(
         state, env, "pane", "move", manual_source_pane_id, "--new-tab", "--workspace",

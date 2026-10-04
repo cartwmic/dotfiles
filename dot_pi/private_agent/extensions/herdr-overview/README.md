@@ -15,7 +15,7 @@ Review both extensions before applying them using the repository procedure;
 restart/reload Pi only with owner approval. Termux does not host either adapter.
 
 The generic `session-recap` CLI is normally `~/.local/bin/session-recap`;
-`SESSION_RECAP_BIN` can override it. Herdr **0.9.1 / protocol 22** supplies
+`SESSION_RECAP_BIN` can override it. Herdr supplies
 `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` inside a pane.
 
 ## Behavior

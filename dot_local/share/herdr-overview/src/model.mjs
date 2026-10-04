@@ -1,7 +1,16 @@
 import { evaluateDisplayNamePolicy } from "./display-name-policy.mjs";
 import { nativePiSessionId } from "./pi-session-store.mjs";
 
-export const HERDR_PROTOCOL = 22;
+// Fail closed on a snapshot the model cannot join, whatever the Herdr version
+// or protocol number. check-herdr-api.mjs gates the full API at install time.
+export function snapshotShapeError(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return "session.snapshot must be an object";
+  for (const list of ["workspaces", "tabs", "panes"]) {
+    if (!Array.isArray(snapshot[list])) return `Herdr snapshot has no ${list} list`;
+  }
+  const bad = snapshot.panes.some((pane) => typeof pane?.pane_id !== "string" || !pane.pane_id);
+  return bad ? "Herdr snapshot panes lack native pane IDs" : null;
+}
 
 const AGENT_STATES = new Set(["idle", "working", "blocked", "done", "unknown"]);
 
@@ -19,10 +28,8 @@ function recapFor(map, kind, id) {
 }
 
 export function normalizeSnapshot(snapshot, supplied = {}, runtime = {}) {
-  if (!snapshot || typeof snapshot !== "object") throw new TypeError("session.snapshot must be an object");
-  if (snapshot.protocol !== HERDR_PROTOCOL) {
-    throw new Error(`Herdr protocol ${HERDR_PROTOCOL} required; server reports ${snapshot.protocol ?? "unknown"}`);
-  }
+  const shapeError = snapshotShapeError(snapshot);
+  if (shapeError) throw new TypeError(shapeError);
 
   const names = evaluateDisplayNamePolicy(snapshot, {
     supplied,

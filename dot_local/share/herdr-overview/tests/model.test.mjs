@@ -108,6 +108,9 @@ test("verified session and full subject fields never infer native agent state", 
   assert.equal(unverified.panes[id].agent.recognized, false);
 });
 
-test("rejects a server outside the pinned public protocol", () => {
-  assert.throws(() => normalizeSnapshot({ ...snapshot(), protocol: 21 }), /protocol 22 required/);
+test("ignores the protocol number but rejects a snapshot it cannot join", () => {
+  assert.equal(normalizeSnapshot({ ...snapshot(), protocol: 23 }).protocol, 23);
+  const unjoinable = snapshot();
+  delete unjoinable.panes[0].pane_id;
+  assert.throws(() => normalizeSnapshot(unjoinable), /lack native pane IDs/);
 });

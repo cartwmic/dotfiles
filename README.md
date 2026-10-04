@@ -138,7 +138,7 @@ chezmoi init --apply https://github.com/cartwmic/dotfiles.git
 **AI Tools:**
 
 - Pi coding agent, claude, claude-code-acp, vectorcode, mistral-vibe, mermaid-cli
-- Herdr **0.9.1 / protocol 22** with a desktop-only overview plugin on `personal` and `axon-work-computer`
+- Herdr (pinned; upgrades gated on the plugin's API needs) with a desktop-only overview plugin on `personal` and `axon-work-computer`
 - Portable `session-recap` and `passage-review` workflows; Termux stays an SSH client. It does not host the Herdr plugin.
 
 **Remote access:**
@@ -372,7 +372,7 @@ install it; its prefix shortcut works over SSH to a configured desktop.
 
 ## Herdr overview and phone route
 
-The personal and work desktop profiles pin Herdr **0.9.1 / protocol 22** and
+The personal and work desktop profiles pin one Herdr release and
 link the source-managed overview plugin. The Pi adapter publishes a real-user
 prompt and, when opted in, a separate recap after the response settles. The overview reads
 native Herdr pane state and those supplied records. It does not parse a
@@ -394,7 +394,11 @@ navigation, manual pane-source recaps, naming policy, and move behavior. The
 covers publication.
 
 The `install-herdr-overview` mise task (also part of desktop bootstrap)
-verifies Herdr 0.9.1 and links/enables the source manifest. Linking leaves the
+checks that the pinned Herdr's bundled API schema offers every method, parameter,
+field, and event the plugin uses (`dot_local/share/herdr-overview/src/herdr-compat.mjs`),
+then links/enables the source manifest. Version and protocol numbers do not matter.
+To upgrade, run `mise run check-herdr-upgrade [version]` (default: latest); if it
+passes, set that version in `dot_config/mise/config.toml` and apply. Linking leaves the
 running server untouched. On a compatible running server,
 `herdr plugin action invoke overview.reconcile` loads the
 linked action and reconciles without opening a view. Invoke `overview.open`

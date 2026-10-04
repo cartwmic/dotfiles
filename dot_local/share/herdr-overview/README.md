@@ -2,7 +2,8 @@
 
 ## Overview
 
-This source-managed plugin targets Herdr **0.9.1 / protocol 22**. The desktop
+This source-managed plugin runs on any Herdr whose API offers what it uses
+(`src/herdr-compat.mjs`); the version and protocol numbers do not matter. The desktop
 `install-herdr-overview` mise task installs Herdr and links/enables its
 manifest on `personal` and `axon-work-computer`. Termux remains an SSH client.
 It does not host the plugin. The thin Pi adapter lives at
@@ -33,6 +34,18 @@ prompt and recap visible after the move. Reads never generate recaps. The
 On a `personal` or `axon-work-computer` desktop, review the managed files,
 apply them, then run the pinned installer/link task from the chezmoi source
 checkout:
+
+To try a newer Herdr, check it first; it installs beside the pinned one and
+changes nothing else:
+
+```sh
+mise run check-herdr-upgrade        # latest release
+mise run check-herdr-upgrade 0.9.3  # or a specific one
+```
+
+If it passes, set that version on the `github:herdrdev/herdr` line in
+`dot_config/mise/config.toml` and apply. `install-herdr-overview` runs the same
+check against the pin and refuses to link on a failure.
 
 ```sh
 chezmoi apply --dry-run --verbose ~/.local/share/herdr-overview
