@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { nativePiSessionId } from "./pi-session-store.mjs";
@@ -28,8 +28,32 @@ async function recordDays(root) {
   }
 }
 
+// The store only grows, and every reconcile and popup refresh scans it. Records
+// are written by atomic replace, so an unchanged stat means unchanged content:
+// reuse the parsed projection and parse only new or rewritten files.
+const recordCache = new Map();
+
+async function readRecordFile(file) {
+  let info;
+  try {
+    info = await stat(file);
+  } catch {
+    recordCache.delete(file);
+    return null;
+  }
+  const key = `${info.mtimeMs}:${info.size}:${info.ino}`;
+  const cached = recordCache.get(file);
+  if (cached?.key === key) return cached.record;
+  const value = await readJson(file);
+  const record = value ? overviewRecord(value) : null;
+  recordCache.set(file, { key, record });
+  return record;
+}
+
 export async function readAllRecapRecords(root = sessionRecapDataRoot()) {
   const days = await recordDays(root);
+  const recordsRoot = path.join(root, "records") + path.sep;
+  const seen = new Set();
   const records = await Promise.all(days.map(async (day) => {
     const directory = path.join(root, "records", day);
     let names;
@@ -38,20 +62,31 @@ export async function readAllRecapRecords(root = sessionRecapDataRoot()) {
     } catch {
       return [];
     }
-    return Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => readJson(path.join(directory, name))));
+    return Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => {
+      const file = path.join(directory, name);
+      seen.add(file);
+      return readRecordFile(file);
+    }));
   }));
-  return records.flat().filter(Boolean).map(overviewRecord);
+  for (const file of recordCache.keys()) {
+    if (file.startsWith(recordsRoot) && !seen.has(file)) recordCache.delete(file);
+  }
+  return records.flat().filter(Boolean);
 }
 
 // A read-only projection keeps native consumers and legacy records compatible.
-// The generic record's narrative, coverage, history identity and source stay untouched.
+// The generic record's narrative, coverage, history identity and source stay
+// untouched on disk. The in-memory copy omits Pi coverage: nothing here reads
+// it, and it is most of each record's size and of the saved overview state.
 export function overviewRecord(record) {
   const pi = record?.metadata?.pi;
   if (record?.source_kind !== "pi" || !pi) return record;
   const sessionId = pi.sessionId ?? pi.nativeSessionId;
   if (typeof sessionId !== "string" || !sessionId) return record;
   const herdr = record.annotations?.herdr;
-  return { ...record, source_kind: "pi-session", source_id: sessionId,
+  const { coverage: _coverage, ...piWithoutCoverage } = pi;
+  return { ...record, metadata: { ...record.metadata, pi: piWithoutCoverage },
+    source_kind: "pi-session", source_id: sessionId,
     pane_id: herdr?.pane_id, workspace_id: herdr?.workspace_id,
     overview_attributed: Object.hasOwn(record.annotations ?? {}, "herdr") };
 }

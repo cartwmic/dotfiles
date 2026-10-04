@@ -18,8 +18,13 @@ test("plugin manifest pins the minimum Herdr API and separates startup, pane, ac
   assert.match(manifest, /id = "auto_name_pane"[\s\S]*contexts = \["pane"\][\s\S]*"node", "index\.mjs", "auto-name-pane"/);
   assert.match(manifest, /id = "auto_name_tab"[\s\S]*contexts = \["tab"\][\s\S]*"node", "index\.mjs", "auto-name-tab"/);
   assert.match(manifest, /\[\[panes\]\][\s\S]*id = "overview"[\s\S]*placement = "popup"/);
-  for (const event of ["workspace.created", "tab.focused", "pane.focused", "pane.agent_status_changed", "pane.moved", "pane.exited"]) {
+  for (const event of ["workspace.created", "pane.agent_status_changed", "pane.moved", "pane.exited"]) {
     assert.ok(manifest.includes(`on = "${event}"`), `missing ${event} hook`);
+  }
+  // Focus changes do not change saved state the popup needs (it reads a live
+  // snapshot on open), and they fire constantly; each hook is a full reconcile.
+  for (const event of ["workspace.focused", "tab.focused", "pane.focused"]) {
+    assert.ok(!manifest.includes(`on = "${event}"`), `${event} hook must stay off`);
   }
 });
 
