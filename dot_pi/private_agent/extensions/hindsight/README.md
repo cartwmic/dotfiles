@@ -70,7 +70,7 @@ automatic, mirroring the official Claude Code plugin's hook design.
 | `apiToken` | `""` | Bearer; empty = no auth (current state). Set when server auth lands. |
 | `autoRecall` / `autoRetain` | `true` | Master switches |
 | `recallBudget` | `mid` | `low`/`mid`/`high` — search effort vs latency |
-| `recallTypes` | `["observation"]` | Consolidated, deduped beliefs |
+| `recallTypes` | `["observation","world","experience"]` | Observations plus raw facts; recall sends `prefer_observations: true`, so a fact already merged into a returned observation is dropped and only unmerged facts appear |
 | `recallMaxTokens` | `1024` | Injected block size cap |
 | `retainEveryNTurns` | `10` | Ship cadence (response cycles) |
 | `retainToolCalls` | `false` | Include tool calls in transcript |

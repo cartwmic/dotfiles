@@ -50,7 +50,7 @@ export const DEFAULTS: HindsightConfig = {
 	autoRetain: true,
 	recallBudget: "mid",
 	recallMaxTokens: 1024,
-	recallTypes: ["observation"],
+	recallTypes: ["observation", "world", "experience"],
 	recallMaxQueryChars: 800,
 	retainEveryNTurns: 10,
 	retainOnSessionEnd: true,
