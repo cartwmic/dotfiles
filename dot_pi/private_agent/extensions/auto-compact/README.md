@@ -28,6 +28,11 @@ Edit `~/.pi/agent/extensions/auto-compact/config.json` or run `/auto-compact` in
   - Default: `"Continue from where you left off."`
   - Set to `false` (or an empty string) to disable resume.
   - Final-turn and `agent_end` compactions never auto-continue — the run already finished.
+  - A message you send (Enter or Alt+Enter) while auto-compaction runs replaces the
+    continuation, whether compaction succeeds or fails. Pi submits that queued
+    message after compaction, and the extension sees it through Pi's `input`
+    event before its completion callback. Extension slash-commands and
+    extension-sent messages do not cancel it.
 - `/auto-compact status`: show active configuration and file path.
 - `/auto-compact reload`: reload edits made directly to the JSON file.
 

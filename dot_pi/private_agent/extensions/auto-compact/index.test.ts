@@ -179,6 +179,115 @@ describe("auto-compact threshold", () => {
 		]);
 	});
 
+	for (const outcome of ["complete", "error"] as const) {
+		test(`user input flushed before ${outcome} replaces the continuation`, () => {
+			const handlers = new Map<string, (event: any, ctx: any) => void>();
+			const followUps: string[] = [];
+			extension({
+				on: (name: string, handler: (event: any, ctx: any) => void) => handlers.set(name, handler),
+				registerCommand: () => {},
+				sendUserMessage: (text: string) => followUps.push(text),
+			} as any);
+			const ctx = {
+				hasUI: false,
+				getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
+				compact: (cb: { onComplete: () => void; onError: (e: Error) => void }) => {
+					// Real Pi ordering: compaction_end flushes the TUI queue through
+					// prompt(), which emits input before compact() returns.
+					handlers.get("input")?.({ type: "input", text: "STEER", source: "interactive" }, ctx);
+					if (outcome === "complete") cb.onComplete();
+					else cb.onError(new Error("summary failed"));
+				},
+			};
+			handlers.get("turn_end")?.({}, ctx);
+			handlers.get("turn_start")?.({}, ctx);
+			expect(followUps).toEqual([]);
+		});
+	}
+
+	test("user input seen after onComplete drops the continuation at its own input event", () => {
+		const handlers = new Map<string, (event: any, ctx: any) => any>();
+		const followUps: string[] = [];
+		extension({
+			on: (name: string, handler: (event: any, ctx: any) => any) => handlers.set(name, handler),
+			registerCommand: () => {},
+			sendUserMessage: (text: string) => followUps.push(text),
+		} as any);
+		const ctx = {
+			hasUI: false,
+			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
+			compact: ({ onComplete }: { onComplete: () => void }) => onComplete(),
+		};
+		handlers.get("turn_end")?.({}, ctx);
+		handlers.get("turn_start")?.({}, ctx);
+		// An earlier extension's async input handler delayed the user's message
+		// past onComplete, so the continuation was already sent.
+		expect(followUps).toEqual([DEFAULT_CONTINUATION]);
+		expect(handlers.get("input")?.({ type: "input", text: "STEER", source: "interactive" }, ctx)).toBeUndefined();
+		expect(handlers.get("input")?.({ type: "input", text: DEFAULT_CONTINUATION, source: "extension" }, ctx)).toEqual({
+			action: "handled",
+		});
+	});
+
+	test("continuation passes its input event when the user did not speak", () => {
+		const handlers = new Map<string, (event: any, ctx: any) => any>();
+		extension({
+			on: (name: string, handler: (event: any, ctx: any) => any) => handlers.set(name, handler),
+			registerCommand: () => {},
+			sendUserMessage: () => {},
+		} as any);
+		const ctx = {
+			hasUI: false,
+			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
+			compact: ({ onComplete }: { onComplete: () => void }) => onComplete(),
+		};
+		handlers.get("turn_end")?.({}, ctx);
+		handlers.get("turn_start")?.({}, ctx);
+		expect(handlers.get("input")?.({ type: "input", text: DEFAULT_CONTINUATION, source: "extension" }, ctx)).toBeUndefined();
+		// Later user input is ordinary and no longer tied to the delivered continuation.
+		expect(handlers.get("input")?.({ type: "input", text: "later", source: "interactive" }, ctx)).toBeUndefined();
+	});
+
+	test("extension-sourced input does not cancel the continuation", () => {
+		const handlers = new Map<string, (event: any, ctx: any) => void>();
+		const followUps: string[] = [];
+		extension({
+			on: (name: string, handler: (event: any, ctx: any) => void) => handlers.set(name, handler),
+			registerCommand: () => {},
+			sendUserMessage: (text: string) => followUps.push(text),
+		} as any);
+		const ctx = {
+			hasUI: false,
+			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
+			compact: ({ onComplete }: { onComplete: () => void }) => {
+				handlers.get("input")?.({ type: "input", text: "x", source: "extension" }, ctx);
+				onComplete();
+			},
+		};
+		handlers.get("turn_end")?.({}, ctx);
+		handlers.get("turn_start")?.({}, ctx);
+		expect(followUps).toEqual([DEFAULT_CONTINUATION]);
+	});
+
+	test("user input outside compaction does not cancel a later continuation", () => {
+		const handlers = new Map<string, (event: any, ctx: any) => void>();
+		const followUps: string[] = [];
+		extension({
+			on: (name: string, handler: (event: any, ctx: any) => void) => handlers.set(name, handler),
+			registerCommand: () => {},
+			sendUserMessage: (text: string) => followUps.push(text),
+		} as any);
+		const ctx = {
+			hasUI: false,
+			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
+			compact: ({ onComplete }: { onComplete: () => void }) => onComplete(),
+		};
+		handlers.get("input")?.({ type: "input", text: "earlier", source: "interactive" }, ctx);
+		handlers.get("turn_end")?.({}, ctx);
+		handlers.get("turn_start")?.({}, ctx);
+		expect(followUps).toEqual([DEFAULT_CONTINUATION]);
+	});
+
 	test("does not resume when core overflow recovery already retries (willRetry)", () => {
 		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
 		const followUps: string[] = [];
