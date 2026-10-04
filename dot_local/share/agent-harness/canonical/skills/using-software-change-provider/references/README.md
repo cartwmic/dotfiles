@@ -1,217 +1,48 @@
-# Software-change provider
+# software-change-provider
 
-## Overview
+## Purpose
 
-`software-change` is Loop Engine's reference provider for software-change workflows. Its standalone binary includes versioned profiles, artifact templates and review guidance. The engine owns durable state and progression; callers author work and review it externally.
+Track code delivery obligations, externally supplied reviews and validation evidence. This provider is for external workflow drivers, not autonomous execution. The engine stores and evaluates workflow state; it never executes agents, advisors or proof commands. Bring your own agent/reviewer harness, model selection and any required service credentials. The [reviewer protocol](data/reviewer-protocol.md) describes judgment obligations; its historical plain-show pipe and bound-worker examples are not current intake instructions. Use the [local agent guide](AGENTS.md) for the shipped external-review packet contract and the bundled profile for current version/axis/group obligations.
 
-- `describe` returns the workflow selected by `initial_input.review_policies`. Bare discovery returns a sixteen-state union; reconciliation-capable contract-v3 profiles (introduced in generation 11 and retained in generation 12) yield seventeen states when ordinary and challenge reviews are enabled for all five phases. Discovery is not configuration validation.
-- `evaluate` checks the exact engine-selected transition against frozen schemas, revision links, external review evidence and applicable checkpoint/ledger rules.
-- The deterministic `setup` helper prepares a per-run configuration from shipped review data and explicit caller commands. It does not start or progress a run.
-- Reconciliation-capable contract-v3 profiles include a provider-owned `reconciliation` state after implementation editing. It records document and behavior observations before downstream report, checkpoint, review, validation, and final-proof work.
+Provider requirements/protocols are frozen; use the process boundary rather than depending on internal Rust APIs. Runs retain frozen obligations and the original command/args association, not executable bytes. Drivers must preserve a compatible runtime at the stored path; no active-run migration is authorized. Checked transitions validate obligations, not the truth of reviewers' judgments.
 
-The `describe` and `evaluate` protocol operations do not launch models, edit authored subject artifacts or judge semantic truth. Separate execution helpers can launch workers and replace artifacts, as detailed below. An allowed implementation-to-validation `evaluate` records checkpoint history under `implementation-proof-history/`. Requirements R1–R29 and A1–A16, including amendments, are in [docs/prd.md](docs/prd.md); [data/reviewer-protocol.md](data/reviewer-protocol.md) defines the review contract.
+## Installation
 
-Checkpoints bind report bytes to Git HEAD, index/status and tracked or non-ignored untracked repository entries. Accepted implementation checkpoints are retained under `implementation-proof-history/`; later validation must match that accepted identity. Checkpointing does not stage, commit, push or manage worktrees.
-
-Submodule entries identify their HEAD. Dirty submodule contents require separate content proof or committed, clean submodules because different edits can leave the same parent status.
-
-### Start here
-
-- **Human operators:** [Setup](#setup), [Usage](#usage), [Limits](#limits) and [Troubleshooting](#troubleshooting).
-- **Agents and drivers:** [AGENTS.md](AGENTS.md) governs this checkout. Drive source builds with the [current provider skill](skills/using-software-change-provider/SKILL.md); drive released v0.20.0 with its [versioned skill](https://github.com/cartwmic/loop-engine/blob/v0.20.0/crates/software-change-provider/skills/using-software-change-provider/SKILL.md). Each names its matching engine companion.
-- **Maintainers:** [crate validation](AGENTS.md#workflow) and the repository-root checkout instructions.
-
-## Setup
-
-This README describes its checkout. The source version comes from the workspace Cargo.toml (currently `0.22.0`); current profiles use semantic contract v3. Release numbers, semantic contract versions (`2`/`3`), worker review contract versions, and profile generations are separate. Profile suffixes `-10`, `-11`, and `-12` are not product or semantic contract versions: generation 11 introduced reconciliation and two intent questions, retained by the current generation 12. New `software-change setup` refuses known shipped `-10` and `-11` identities; preserve the original provider, worker output contract, and version-matched guidance for existing runs. Released v0.20.0 carries earlier contract-v2 profiles; preserve its matching binaries and [versioned driving guide](https://github.com/cartwmic/loop-engine/blob/v0.20.0/crates/software-change-provider/skills/using-software-change-provider/SKILL.md) for those runs. Source builds and published releases have separate delivery status.
-
-### Install a release
-
-[GitHub Releases](https://github.com/cartwmic/loop-engine/releases) supplies separate engine and provider archives for macOS arm64 and Linux x86_64. Archives contain the executable and license texts. GitHub Releases provides separate SHA-256 checksum files. The generated installers below select the platform and install v0.20.0:
-
-```sh
-VERSION=v0.20.0
-for app in loop-cli software-change-provider; do
-  curl --proto '=https' --tlsv1.2 -LsSf \
-    "https://github.com/cartwmic/loop-engine/releases/download/$VERSION/$app-installer.sh" | sh
-done
-ENGINE="$(command -v loop-engine)"
-PROVIDER="$(command -v software-change)"
-```
-
-If the installed commands are missing from PATH, follow the installer's printed destination/PATH instructions before continuing.
-
-**Known v0.20.0 limits:** an absent optional `repository_effect` can falsely cause `missing standing prerequisites`; inspect full `show` before choosing a supported dependency rerun. Numeric PID/PGID reuse can falsely mark completed work `live_owned_work: true`. Never cancel or signal uncertain ownership or edit ownership records to bypass the guard; preserve captures and seek an owner recovery decision. Current-source builds correct the comparison and add process-incarnation checks for new runs. Choose a matching current-source engine/provider pair for new runs needing those fixes; existing runs still require their preserved runtime and guidance.
-
-### Build current source
-
-Install Rust through rustup and native compiler/linker tools for bundled SQLite. The repository's `rust-toolchain.toml` selects the toolchain. Run from the repository root:
+From the repository root with Rust/Cargo installed:
 
 ```sh
 cargo build --locked -p loop-cli -p software-change-provider
-ENGINE="$PWD/target/debug/loop-engine"
-PROVIDER="$PWD/target/debug/software-change"
 ```
 
-Fan-out and plan-graph execution also require operator-installed [Dagu](https://github.com/dagu-org/dagu/releases) >=2.14.0 on PATH. Archives do not include it. Dagu runs as a GPLv3 subprocess. Check it before binding such workers:
+This builds `target/debug/loop-engine` and `target/debug/software-change`. Source examples use the [standard profile](data/configs/standard.json); packaged users can export bundled data to a fresh, driver-owned directory outside the checkout:
 
 ```sh
-dagu version
+target/debug/software-change data-dump /absolute/fresh-provider-data
 ```
+
+Replace the destination with your chosen fresh directory. This is data export, not model installation or user configuration.
 
 ## Usage
 
-### First unbound run
+For predictable artifact ownership, copy the profile and set `artifact_root` to an existing writable absolute directory outside the checkout. With engine `start`, an omitted root is allocated automatically: inspect full show initial input to find it before authoring artifacts. Direct provider requests need an explicit root; absent, relative or inaccessible roots fail artifact access. See [local operator preparation](AGENTS.md) for the owned procedure.
 
-This first-run example works with either matching binary pair above and selects the minimal profile embedded in that provider. It launches no model workers. Before an agent executes `start`, confirm the profile and work-slot policy using the matching guide: [released v0.20.0 setup](https://github.com/cartwmic/loop-engine/blob/v0.20.0/crates/software-change-provider/skills/using-software-change-provider/SKILL.md#setup) or [current-source setup](skills/using-software-change-provider/SKILL.md#setup). Shipped profiles are unbound; copying one does not select or authorize a model.
-
-```sh
-set -eu
-case "$ENGINE:$PROVIDER" in
-  /*:/*) ;;
-  *) echo "ENGINE and PROVIDER must be absolute executable paths" >&2; exit 1 ;;
-esac
-DATA_ROOT="$(mktemp -d)"
-"$PROVIDER" data-dump "$DATA_ROOT"
-PROFILE="$DATA_ROOT/run-profile.json"
-cp "$DATA_ROOT/crates/software-change-provider/data/configs/minimal.json" "$PROFILE"
-PROVIDER_CONFIG="$DATA_ROOT/providers.toml"
-cat >"$PROVIDER_CONFIG" <<EOF
-[providers.software-change]
-command = "$PROVIDER"
-args = []
-EOF
-"$ENGINE" --json --config "$PROVIDER_CONFIG" \
-  start software-change "@$PROFILE" "my software change"
-```
-
-Set `RUN_ID` to `result.run.id` from the completed start response, replacing the placeholder below:
+Start a run with the profile through `loop-engine start`, using a dedicated database and explicit provider TOML whose command is the absolute built provider path. The [skill](skills/using-software-change-provider/SKILL.md) owns input preparation, commission, review intake and progression; load it before driving a run. Early commissions with `missing_inputs` are not ready. External reviewers return judgments and drivers explicitly append accepted evidence and send events after fresh action/full observations.
 
 ```sh
-RUN_ID="REPLACE_WITH_RETURNED_RUN_ID"
-"$ENGINE" --json show "$RUN_ID" --view full
+target/debug/loop-engine --help
 ```
 
-`start` allocates the run's durable artifact directory and records its absolute path as `initial_input.artifact_root`; full `show` reveals it with the frozen obligations. Keep version-matched binaries and dumped guidance for the run, and retain machine-local provider TOML outside committed files. Use the normal user catalog unless the owner explicitly requests isolation.
-
-Use a complete dumped or setup-generated profile. `start` stores the provider's described workflow but does not ask it to validate all initial-input fields. For example, omitting `review_policies` can create a durable run whose first checked transition fails evaluation. Successful creation or bare `describe` therefore does not establish usable configuration.
-
-The data dump preserves `crates/software-change-provider/data/...` paths. It refuses existing target files. Subject filenames are `intent.json`, `design.json`, `plan.json`, `implementation-report.json` and `validation-report.json`; reconciliation-capable v11 and v12 runs also use `reconciliation.json`.
-
-For a released v0.20.0 run, continue with its [versioned per-gate loop](https://github.com/cartwmic/loop-engine/blob/v0.20.0/crates/software-change-provider/skills/using-software-change-provider/SKILL.md#per-gate-loop). The remaining interface sections below describe current-source contract v3 and link to the [current per-gate loop](skills/using-software-change-provider/SKILL.md#per-gate-loop). Use preserved, version-matched guidance for historical v11 runs; do not apply current worker/setup procedures to them or v3 procedures to a v2 run.
-
-### Review profiles
-
-Current source profiles are `minimal-12`, `standard-12` and `high-rigor-12`, with `contract_version: 3`. Every level includes ordinary and challenge review at intent, design, plan, implementation and validation. Intent review additionally asks `acceptance-granularity` and `owner-comprehensible`; high-rigor keeps those new questions at its aggregate stage while its existing axes retain individual and aggregate stages. Bookends is off until explicitly enabled.
-
-| Profile | Review pattern | Independent criterion/goal authors |
-|---|---|---|
-| Minimal | One author reviews all axes together | 1 |
-| Standard | Two authors each review all axes together | 2 |
-| High | The same two authors review individual axes, then each reviews all axes in a fresh session on unchanged work before fixes | 2 |
-
-High's first aggregate inputs exclude individual-stage findings. Both stages remain required; aggregate ordinary-validation authors alone produce the criterion/goal rows from retained command evidence. The [reviewer protocol](data/reviewer-protocol.md) defines the full stage and evidence rules.
-
-Source `software-change setup` requires an ordered roster of closed `{author,command,args,token_budget}` entries. Each `token_budget` declares the exact model/window and system, framing, output, and reasoning reserves. Setup requires exactly one advice choice: `--advice-config PATH` or `--decline-advice`. See the skill's [Setup](skills/using-software-change-provider/SKILL.md#setup) for the complete roster shape and commands. Each command must satisfy the worker contract; model/effort arguments are explicit caller choices. The optional `--draft-worker PATH` input is a closed `{command,args}` object for the caller-supplied `intent-draft` worker; it does not replace the roster's review bindings. The helper exposes the complete profile for approval, previews bindings, and writes no run state. Use the skill's [exact profile confirmation](skills/using-software-change-provider/SKILL.md#exact-profile-confirmation) before hash-guarded start. Compact model-facing delivery is the supported default for bound drafting and review, while the full routed context and verification records remain available to deterministic consumers.
-
-### Review output
-
-For current generation-12 setup (semantic `contract_version: 3`), the closed worker batch is `{review_contract_version:2,review_stage,author,judgments:[...]}`. Fresh judgment rows require `axis`, `result`, `findings`, and `grounds` with a concise reason and exact source-file locators and whole-file SHA-256 digests. Aggregate `validation-review` workers also supply `validation_verdicts` under their generated schema. Worker review contract v2 is distinct from semantic contract v3. See the [current v2 worker schema](data/review-worker-output-schema-v2.json), [worker preamble](data/review-worker-preamble.txt) and [reviewer protocol](data/reviewer-protocol.md).
-
-A completed bound review can be inspected through this read-only pipe:
-
-```sh
-"$ENGINE" --json show --view full "$RUN_ID" | "$PROVIDER" review-candidates
-```
-
-`review-candidates` extracts per-axis candidates in durable invocation/assignment order and reports missing, malformed or exhausted output. `ready` means the selected bytes were readable, digest-matching and mechanically conforming. The command does not perform a new semantic review, retry workers or record evidence. The original worker judgments become gate evidence through driver inspection and recording under the [per-gate procedure](skills/using-software-change-provider/SKILL.md#per-gate-loop). A process exit 0 does not establish approval.
-
-## Reconciliation and document integration
-
-Current `minimal-12`, `standard-12`, and `high-rigor-12` runs retain `reconciliation`, introduced in generation 11, after implementation editing and before the final implementation proof boundary. The unbound `reconciliation-draft` slot authors `reconciliation.json`; the checked `reconciliation-ready` event validates it against [data/reconciliation-schema.json](data/reconciliation-schema.json). The result records its mode, branch, document and behavior observations, action, authorization/application/commit status, traceability, proof references, blockers, and completion decision.
-
-The decision is conditional, not a requirement rewrite. Sufficient existing wording needs only implementation and public proof. Change-specific proof creates no permanent requirement. An implementation defect requires a code correction. Only missing or changed enduring meaning requires exact owner acceptance, separately authorized application and commit, mode-appropriate traceability, and independent inspection of the resulting documents and proof. Bookends-enabled changes update requirement links; the disabled document-edit path keeps traceability `not-applicable` with empty references. A justified no-document-change result is valid; unresolved or unauthorized gaps remain blocked.
-
-Bookends-enabled runs inspect the accepted text of each cited requirement and every authoritative cross-reference. Bookends-disabled runs inspect relevant repository documents against the approved intent and delivered behavior without PRD IDs, candidate machinery, or overlay obligations. The provider does not accept a related ID, matching token, parser result, or command exit as semantic coverage, and reconciliation evaluation itself does not edit repository documents, perform Git actions or owner approval, or author reports/primary checkpoints. Separate provider helpers do write reports/checkpoints, and accepted implementation evaluation retains checkpoint history as described above. Final reports, repository checkpoints, implementation review, validation, and proof must use the post-reconciliation tree. Historical profiles and stored runs keep their original graph and are not migrated.
-
-## Recovery and profile contracts
-
-Public helpers keep execution and judgment separate:
-
-| Helper | Public responsibility |
-|---|---|
-| `commission` | Select provider-scoped context for a slot/task from a completed full-show envelope |
-| `review-candidates` | Extract inspectable candidate judgments from completed full-show data |
-| `run-validation` | Execute named plan commands and emit command candidates plus an index draft |
-| `prepare-validation` | Prepare report/candidate drafts and pending judgment-batch metadata from retained execution without executing, appending or checkpointing |
-| `checkpoint` | Bind the matching implementation or validation report to repository identity |
-| `run-plan-graph` | Execute the supplied task graph in one existing absolute Git working directory and retain task/summarizer results |
-
-The [provider skill](skills/using-software-change-provider/SKILL.md) owns exact argv/stdin forms, checkpoint finalization, source disposition, evidence reuse and selected repair. The [late-finding guide](skills/using-software-change-provider/SKILL.md#proportional-late-finding-guide) identifies the owning phase for corrections.
-
-Earlier-phase routes do not roll back repository edits. Live or cleanup-pending work blocks overlapping retry and departure. An exceptional owner override preserves failures and labels completion `completed-with-overrides`; it supplies no reviewer pass or Bookends GREEN. Older profiles keep their original runtime and obligations; current helpers provide no active-run migration.
-
-## Criterion spine and Bookends overlay
-
-Intent acceptance uses run-local AC-N IDs. Every new plan task needs meaningful current `criterion_ids`; other intermediate links remain optional. Final validation requires every current criterion and a separate goal judgment backed by real named command evidence at one accepted checkpoint.
-
-The optional Bookends overlay adds one `prd_traceability` disposition per criterion: `linked-live`, `candidate` or `not-applicable`. A current candidate blocks final completion. `not-applicable` concerns traceability and does not waive or fulfill the criterion. Enabled final validation requires GREEN; BYPASS cannot satisfy it. Configuration and recording belong to the [overlay procedure](skills/using-software-change-provider/SKILL.md#criterion-spine-and-bookends-overlay). New semantic-coverage guidance reads the cited requirement text and explicit authoritative cross-references; it does not treat a related live ID as sufficient coverage. Bookends-off runs keep the same semantic distinction without adding PRD metadata.
-
-## Limits
-
-- This is a local workflow for a trusted sole owner and well-intentioned drivers, with one logical mutator per run. It provides no multi-user authentication, remote scheduling/lifecycle management or special handling for sensitive data. Callers own confidentiality and retention.
-- The 0.x CLI and profile/protocol interfaces can change; workspace crates are not supported public APIs. The current source version follows workspace Cargo.toml (now `0.22.0`); the v0.20.0 release reports `0.20.0` and carries the earlier contract-v2 profiles. `--version` alone cannot establish compatibility: preserve or verify the exact binary/profile identity and matching guidance.
-- Direct `run-plan-graph` without `--task-worker` launches `pi --print --no-skills --no-extensions`: it needs an installed/configured Pi and uses its unpinned default model. Supply an explicit worker command with a pinned model, or obtain explicit owner acceptance of that changing default. Direct graph execution defaults to four concurrent ordinary tasks in one shared working directory. It supplies no worktree isolation, file locking or conflict detection. Use `--max-active 1` unless task write ownership is demonstrably disjoint; setup-generated implementation bindings already use that serial limit. The summarizer uses the same checkout after tasks finish.
-- Profiles configure this provider's defined workflow. Custom topology requires another provider; the engine has no general workflow-expression language.
-- Run history is not an exhaustive execution or compliance-audit trace. Worker output lives in separate captures; retain those alongside durable state. Inputs and context are assumed to be reasonably sized; high-volume operation is not guaranteed.
-- Author identities, declared revisions/config versions and semantic applicability are trusted claims. False author claims or material edits without a revision bump can evade those checks. The provider does not authenticate reviewers.
-- Artifact reads are not locked or atomic with engine transition commits. The workflow provides no adversarial or transactional assurance over external files.
-- Checkpointing requires a valid Git HEAD and no unmerged index entries. Repository paths must be UTF-8; supported entries are regular files, symlinks and submodules. On supported Unix platforms, symlink targets are hashed as raw bytes. Read failures or unsupported entries prevent a valid checkpoint.
-- Failed workers can leave partial edits or missing/replaced proof. Graph and ad-hoc repair delete the implementation report/checkpoint before workers start; `run-validation` replaces the validation report before execution. Use non-mutating `invoke --preview` or `prepare-validation` before intentional regeneration; see the recovery entries below. Neither successful execution nor a retry establishes semantic approval.
-- Reconciliation is provider-owned state, not a commit service: owner acceptance, document application, Git commit, and current-run traceability remain separate driver actions. A justified no-change result is valid, but an unresolved or unauthorized durable gap blocks completion.
-- New setup refuses known shipped v10/v11 profile IDs; generation 11 already has reconciliation under its original runtime, while generation 10 does not. Replacing a binary or profile does not migrate a stored run's topology, runtime, worker output contract, evidence, or obligations.
-- Stable digests and synthetic journeys establish identity/mechanics. They do not establish semantic truth. Calibration fixtures use supplied fictional companions and must not be resolved against a live checkout.
-
-## Troubleshooting
-
-- **`data-dump` refuses to overwrite:** choose a fresh empty dump root. Retain matching dumped data needed by active runs; do not overwrite it with a different release.
-- **`setup --output PATH` replaces a file:** this helper uses atomic replacement. Use a new run-specific path, or inspect/back up the existing destination before deliberately replacing it.
-- **`checkpoint mismatch` after checkpoint creation succeeded:** checked evaluation uses the provider process's CWD. The checkpoint command's `--working-directory` does not configure later evaluation. Request checked events from the intended checkout and keep HEAD, index/status and tracked/non-ignored untracked bytes stable. Follow the skill's [owning-phase recovery](skills/using-software-change-provider/SKILL.md#proportional-late-finding-guide) to regenerate affected reports/checkpoints and review evidence.
-- **Implementation report/checkpoint missing after failure:** graph and ad-hoc repair remove stale `implementation-report.json` and `implementation-checkpoint.json` before launching workers. Preserve captures and partial source edits; deliberately regenerate proof through the skill's [implementation correction route](skills/using-software-change-provider/SKILL.md#proportional-late-finding-guide). Use `invoke --preview` when only preparing, not executing, a retry.
-- **Validation report incomplete or checkpoint stale after failure:** `run-validation` replaces `validation-report.json` before execution. Inspect retained failures and follow the [validation correction/checkpoint procedure](skills/using-software-change-provider/SKILL.md#proportional-late-finding-guide); do not reuse the old checkpoint as proof of the replacement report. [prepare-validation](skills/using-software-change-provider/SKILL.md#prepare-validation-from-retained-commands) prepares from retained captures without executing or checkpointing.
-- **Retry or departure blocked by overrun/cleanup-pending work:** allowed time elapsed while owned work remains live, or cancellation has not finished verified cleanup. Follow [execution recovery](skills/using-software-change-provider/SKILL.md#proportional-late-finding-guide): wait or cancel only recorded, verified owned work, verify cleanup, then re-read full `show` before retrying. An observer deadline or vanished waiter is not cleanup proof.
-- **Worker output is rejected despite exit 0:** inspect selected/raw captures and the generated output schema, including `review_stage` and validation-specific rows. Keep failed attempts and follow the [review procedure](skills/using-software-change-provider/SKILL.md#per-gate-loop).
-- **`reconciliation-ready` is denied:** inspect `reconciliation.json` against [data/reconciliation-schema.json](data/reconciliation-schema.json). Keep branch, authorization, application, commit, traceability, proof, and blocker fields consistent; do not use the state to silently rewrite requirements or certify the pre-reconciliation tree.
-- **A target-specific document workflow is still in `prepare`:** a successful `show` or fixture journey is not completion. The driver must perform deterministic review, digest-bound semantic evidence for every configured axis, checked `passed` transitions, and a full-envelope assertion before treating the document as integrated.
-- **Plan-graph rejects a task ID:** IDs must match `[A-Za-z0-9_-]+` and cannot be `summarizer`. Correct IDs and dependency references through the owning plan phase and normal review before retrying. See the [plan repair route](skills/using-software-change-provider/SKILL.md#proportional-late-finding-guide).
-- **An older profile is unsupported:** restore its preserved matching runtime and guidance. A new binary at the same path does not migrate the run.
+Use root `README.md` for a first-run catalog example and root `AGENTS.md` for repository operations (paths relative to the checkout root). Follow the [local agent guide](AGENTS.md) when editing this crate.
 
 ## Validation
 
-For an operator installation smoke check, use the `PROVIDER` path established in Setup:
+From the repository root:
 
 ```sh
-printf '%s\n' '{"operation":"describe"}' | "$PROVIDER"
+cargo test -p software-change-provider
 ```
 
-A successful workflow description establishes basic provider execution only. It does not prove profile compatibility, completed workflow behavior or semantic review quality.
+These are mechanical tests, not genuine semantic review. The root agent guide owns journey and final-proof requirements. For stalls involving missing inputs, stale evidence, author floors or observation permits, load the [skill](skills/using-software-change-provider/SKILL.md); do not infer acceptance from process exit. Typed advice answers, where applicable, are externally supplied context of kind `advice-answer`.
 
-Maintainers must follow the complete [crate/workspace validation procedure](AGENTS.md#workflow), including its focused tests, self-tests, formatting and public journeys. Full source journeys use real CLI processes and completed outcomes; packaged journeys consume extracted binaries and dumped data. Their isolated fixture catalogs grant no production-isolation authority. Calibration, document review and final stable-tree proof remain separate obligations; hosted success requires observed execution there.
-
-## Shipped data
-
-### Config profiles
-
-- [Minimal](data/configs/minimal.json)
-- [Standard](data/configs/standard.json)
-- [High-rigor](data/configs/high-rigor.json)
-
-### Artifact templates
-
-`artifact_schemas` use a bounded language: object, array and string declarations, restricted keywords, and designated built-in ID patterns at supported locations. General numeric/boolean schemas, `$ref`, composition and arbitrary regex are unsupported. [src/schema.rs](src/schema.rs) and the shipped profiles define the exact subset. Worker `full_output_schema` is a separate contract.
-
-Templates: [intent](data/templates/intent.md), [design](data/templates/design.md), [task packet](data/templates/task-packet.md), [implementation report](data/templates/implementation-report.md), [validation report](data/templates/validation-report.md), [finding ledger](data/templates/finding-ledger.json) and [advisory finding proposal](data/templates/advisory-finding-proposal.json). The reconciliation result uses [data/reconciliation-schema.json](data/reconciliation-schema.json). Advisory proposals require driver disposition before authoritative recording.
-
-### Review and calibration
-
-The [current v2 worker schema](data/review-worker-output-schema-v2.json) requires `{review_contract_version:2,review_stage,author,judgments}` and grounds for fresh judgments; aggregate ordinary validation uses the generated `validation_verdicts` extension. The [reviewer protocol](data/reviewer-protocol.md) defines evidence and adjudication rules. The [calibration procedure](data/calibration/PROCEDURE.md) defines supplied-material framing, fresh review and attestation; the [manifest](data/calibration/manifest.json) records actual row status. Changed supplied bytes require fresh review. No shipped harness invokes reviewers or rewrites attestations. The coordinating driver owns the complete final stable-tree proof matrix; workers run assigned focused checks and reviewers consume retained outcomes rather than rerunning the matrix.
+Preserve review groups, self-review declarations and effective author counts. Declare evidence applicability explicitly; check ordinary review clearance before challenge review.
+Use `review-candidates` for retained external judgments and `prepare-validation` for genuine external command results; inspect their candidates before appending evidence.

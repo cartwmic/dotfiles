@@ -1,18 +1,36 @@
 ---
 name: coordinating-loop-engine
-description: Delegate independent Loop Engine work to provider drivers and resume durable handoffs without controlling peer runs. Use when coordinating multiple outcomes or providers.
+description: Use when delegating independent outcomes to external provider drivers or resuming durable handoffs without controlling peer runs.
 ---
 
 # Coordinate independent drivers
 
-Outcome: each driver can finish or return a durable blocker independently, without chat history or control over another driver's run.
+Outcome: each driver finishes or returns a durable blocker independently of chat history.
 
-1. Confirm the desired outcomes, acceptance boundaries, risks and non-goals. Ask the owner to supply checkout/write ownership and coordination ownership; do not allocate worktrees, invent a scheduler, or infer permission to share a writer. Stop on ambiguous ownership.
-2. Select the appropriate provider procedure: repository paths `crates/software-change-provider/skills/using-software-change-provider/SKILL.md`, `crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md`, or `crates/research-provider/skills/using-research-provider/SKILL.md` (Generate-PRD additionally uses `using-generate-prd/SKILL.md` beside it). Read the selected skill and the [engine skill](../using-loop-engine/SKILL.md) before delegating. The coordinator does not replace provider policy.
-3. Obtain exact owner-confirmed role/model assignments and profile/binding bytes/hash/preview through those procedures. Verify each model against `pi --list-models` and pass it explicitly; no default, fallback or substitution. Independent driver launches need their own authority even when a different run has frozen bindings.
-4. Give each driver a durable handoff: outcome; provider and required skill; working directory and source references; owner-supplied write/coordination ownership; model/binding confirmation references; approved serial budget; monitor and escalation owner; run ID and actual catalog path if started; artifact/output locators; next observation and return destination. Omit production isolation overrides unless the owner explicitly requested isolation this session.
-5. Follow the engine skill's **Choose an observation**: `loop-engine monitor --run RUN_A --run RUN_B --json --attention-seconds 300` watches independent sources; attach external executions with `--capture-dir ABS`. Notify the responsible driver on source-specific completion/attention, not routine samples. When a meaningful packet change is observed, the responsible coordinating assistant must read the status/monitor lanes and post the concise observed-change plus needed-action/decision update in the active Pi conversation before its first later wait, inspect, or help decision; machine attention is not owner chat. Stop the observer when finished; it does not stop work. Use `--engine ABS` for released compatibility. Optional summaries need a confirmed command/model and budget, and remain advisory. Observing authorizes no mutation or cancellation; each driver reads its own action/full show before acting.
-6. A blocked driver returns the durable reason, completed outcomes, retained failed captures, unresolved ownership/cleanup, required owner decision and resume references. Keep successful peers independent; do not cancel, restart or advance them to unblock another. Resume from the named current run observation and files, not a chat summary. Budget serial closure, proof and review honestly; escalate before expensive unapproved re-execution.
-7. Return execution facts, output conformance and external judgment separately. Task exit 0 is not semantic approval. Preserve pending calibration, owner decisions and Git/hosted delivery; do not manufacture final completion.
+1. Confirm outcomes, acceptance boundaries, risks and non-goals. Obtain owner-supplied
+   checkout/write ownership and coordination ownership. Do not invent worktrees,
+   a scheduler or permission to share a writer; stop on consequential ambiguity.
+2. Load the [engine skill](../using-loop-engine/SKILL.md) and the selected provider
+   skill at its crate-local skills directory. Generate-PRD additionally requires
+   using-generate-prd beside the research skill. The coordinator does not replace policy.
+3. Confirm exact profile bytes/hash and separate external role/model commands,
+   budget and proof owner. Verify model availability before each launch; no fallback.
+4. Give each driver a durable handoff: outcome, provider/skill, working directory,
+   source references, write ownership, confirmations, serial dependency budget,
+   escalation owner, catalog/run identity, artifact locators, next observation and
+   return destination. Do not copy test isolation into production without permission.
+5. Observe each run passively with monitor or status show. External execution remains
+   the launching driver's responsibility, not a monitor inference. Post meaningful
+   source-backed changes and needed owner decisions in the active conversation.
+   Observation authorizes no peer append, event, termination or cancellation.
+6. A blocked driver returns completed outcomes, retained failed outputs, unresolved
+   cleanup/ownership, concrete blocker, required decision and resume references.
+   Keep successful peers independent; do not restart them to unblock another.
+7. Resume from current action/full show and actual files, not a chat summary. Budget
+   serial closure, proof and review; escalate before expensive unapproved reruns.
+8. Separate execution facts, conformance and independent judgment in final handoff.
+   Preserve pending calibration, Git authorization and hosted-delivery obligations.
 
-Example: a research driver returns a missing-source blocker while a document driver completes its own authorized outcome. Retain both run/output references. Ask the source owner for the missing material, then return it only to the blocked research driver, which observes its own current state before resuming. The coordinator never requests an event on the completed document run.
+Example: retain a research driver's missing-source blocker while a document driver
+finishes its own outcome. Return newly supplied evidence only to the blocked driver;
+that driver observes its current run before continuing. Do not advance the peer run.
