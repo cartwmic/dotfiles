@@ -168,16 +168,12 @@ async function createGroup(runRecap, dataRoot, sourceKind, sourceId, members) {
   return output;
 }
 
-export async function reconcileRecapCoordinator({
-  state,
-  dataRoot,
-  snapshot,
-  now = Date.now(),
-  runRecap = runSessionRecap,
-  persist = async () => {},
-  onError = (error, workspaceId) => console.warn(`[herdr-overview] recap grouping failed${workspaceId ? ` for ${workspaceId}` : ""}: ${error.message}`),
-  resumeDeadlines = false,
-} = {}) {
+const defaultOnError = (error, workspaceId) => console.warn(`[herdr-overview] recap grouping failed${workspaceId ? ` for ${workspaceId}` : ""}: ${error.message}`);
+
+// Bookkeeping only: consume new publications, advance quiet deadlines and
+// terminal associations. It reads local files and never calls session-recap,
+// so it is cheap enough to run under the overview state lock.
+export async function planRecapCoordinator({ state, dataRoot, snapshot, now = Date.now(), resumeDeadlines = false } = {}) {
   const next = normalizedState(state);
   const processed = new Set(next.processedRecordIds);
   const publications = (await readAllRecapRecords(dataRoot))
@@ -237,41 +233,55 @@ export async function reconcileRecapCoordinator({
       }
     }
   }
-  await persist(next);
 
   const due = Object.entries(next.workspaceDeadlines)
     .filter(([, deadline]) => Date.parse(deadline) <= now)
-    .sort(([leftId, leftDeadline], [rightId, rightDeadline]) => Date.parse(leftDeadline) - Date.parse(rightDeadline) || leftId.localeCompare(rightId));
-  const needsWakeup = Object.entries(next.workspaceDeadlines)
-    .some(([workspaceId, deadline]) => Date.parse(deadline) > now && (resumeDeadlines || changedDeadlines.has(workspaceId)));
-  if (due.length || needsWakeup) {
-    let autoPublish;
-    try {
-      autoPublish = await runRecap(["config", "auto-publish"]);
-    } catch (error) {
-      onError(error);
-      return { state: next, wakeups: [] };
-    }
-    if (autoPublish === "disabled") return { state: next, wakeups: [] };
-    if (autoPublish !== "enabled") {
-      onError(new Error("session-recap returned an invalid auto-publish policy"));
-      return { state: next, wakeups: [] };
-    }
-  }
+    .sort(([leftId, leftDeadline], [rightId, rightDeadline]) => Date.parse(leftDeadline) - Date.parse(rightDeadline) || leftId.localeCompare(rightId))
+    .map(([workspaceId, deadline]) => ({ workspaceId, deadline }));
+  const wakeups = Object.entries(next.workspaceDeadlines)
+    .filter(([, deadline]) => Date.parse(deadline) > now)
+    .filter(([workspaceId]) => resumeDeadlines || changedDeadlines.has(workspaceId))
+    .map(([workspaceId, deadline]) => ({ workspaceId, deadline }));
+  return { state: next, due, wakeups };
+}
 
-  for (const [workspaceId] of due) {
+// Returns true only when the generic CLI policy enables group publication.
+export async function autoPublishEnabled(runRecap = runSessionRecap, onError = defaultOnError) {
+  let autoPublish;
+  try {
+    autoPublish = await runRecap(["config", "auto-publish"]);
+  } catch (error) {
+    onError(error);
+    return false;
+  }
+  if (autoPublish === "enabled") return true;
+  if (autoPublish !== "disabled") onError(new Error("session-recap returned an invalid auto-publish policy"));
+  return false;
+}
+
+// Generates groups for due workspaces. This calls the summary model and can
+// take minutes, so callers must not hold the overview state lock around it.
+// Returns the due entries that are finished: grouped, or with no members left.
+// A failed group is omitted so its deadline stays due for a later wake-up.
+export async function runDueGroups({
+  due, state, dataRoot, snapshot, runRecap = runSessionRecap, onError = defaultOnError,
+} = {}) {
+  const coordinator = normalizedState(state);
+  const latestRecaps = await readLatestRecapRecords(dataRoot);
+  const completed = [];
+  for (const entry of due) {
+    const { workspaceId } = entry;
     let members;
     try {
       members = await currentPaneMembers(
-        workspaceId, snapshot, latestRecaps, next.piTerminalIdsBySessionId, next.manualTerminalIdsBySourceId,
+        workspaceId, snapshot, latestRecaps, coordinator.piTerminalIdsBySessionId, coordinator.manualTerminalIdsBySourceId,
       );
     } catch (error) {
       onError(error, workspaceId);
       continue;
     }
     if (!members.length) {
-      delete next.workspaceDeadlines[workspaceId];
-      await persist(next);
+      completed.push(entry);
       continue;
     }
 
@@ -281,9 +291,7 @@ export async function reconcileRecapCoordinator({
       onError(error, workspaceId);
       continue;
     }
-
-    delete next.workspaceDeadlines[workspaceId];
-    await persist(next);
+    completed.push(entry);
 
     if (!Array.isArray(snapshot?.workspaces)) {
       onError(new Error("Herdr workspace snapshot is unavailable for session recap grouping"), "active");
@@ -306,11 +314,38 @@ export async function reconcileRecapCoordinator({
       onError(error, "active");
     }
   }
+  return completed;
+}
 
-  const wakeups = Object.entries(next.workspaceDeadlines)
-    .filter(([, deadline]) => Date.parse(deadline) > now)
-    .filter(([workspaceId]) => resumeDeadlines || changedDeadlines.has(workspaceId))
-    .map(([workspaceId, deadline]) => ({ workspaceId, deadline }));
+// Clears finished deadlines. A deadline a newer publication extended while the
+// group ran stays: that later quiet window still needs its own group.
+export function applyCompletedGroups(state, completed = []) {
+  const next = normalizedState(state);
+  for (const { workspaceId, deadline } of completed) {
+    if (next.workspaceDeadlines[workspaceId] === deadline) delete next.workspaceDeadlines[workspaceId];
+  }
+  return next;
+}
 
-  return { state: next, wakeups };
+export async function reconcileRecapCoordinator({
+  state,
+  dataRoot,
+  snapshot,
+  now = Date.now(),
+  runRecap = runSessionRecap,
+  persist = async () => {},
+  onError = defaultOnError,
+  resumeDeadlines = false,
+} = {}) {
+  const plan = await planRecapCoordinator({ state, dataRoot, snapshot, now, resumeDeadlines });
+  let next = plan.state;
+  await persist(next);
+  if (!plan.due.length && !plan.wakeups.length) return { state: next, wakeups: [] };
+  if (!await autoPublishEnabled(runRecap, onError)) return { state: next, wakeups: [] };
+  const completed = await runDueGroups({ due: plan.due, state: next, dataRoot, snapshot, runRecap, onError });
+  if (completed.length) {
+    next = applyCompletedGroups(next, completed);
+    await persist(next);
+  }
+  return { state: next, wakeups: plan.wakeups };
 }

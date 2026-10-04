@@ -31,7 +31,19 @@ export async function runOverviewPane({ api = new HerdrApi(), stateDir = overvie
   // Redraw in place inside one synchronized update: clearing the whole screen
   // first made every scroll step flash blank.
   const draw = () => { if (closed) return; frame = state.model ? mapFrame({ ...state, journey, theme, timeZone }, output.columns || 100, output.rows || 24) : null; const text = frame?.text || renderOverview({ ...state, journey, theme }); output.write(output.isTTY ? '\x1b[?2026h\x1b[H' + text + '\x1b[J\x1b[?2026l' : text + '\n'); };
-  const refresh = async () => {
+  // Coalesce: while a refresh runs, further requests collapse into one rerun,
+  // and every caller waits for a refresh that started after its request.
+  let inflight = null, rerun = false;
+  const refresh = () => {
+    if (inflight) { rerun = true; return inflight; }
+    inflight = (async () => {
+      let ok;
+      do { rerun = false; ok = await refreshOnce(); } while (rerun && !closed);
+      return ok;
+    })().finally(() => { inflight = null; });
+    return inflight;
+  };
+  const refreshOnce = async () => {
     const saved = await readState(stateDir);
     if (saved) state = saved;
     try {
@@ -117,7 +129,8 @@ export async function runOverviewPane({ api = new HerdrApi(), stateDir = overvie
     process.once('SIGTERM',dismiss); process.once('SIGHUP',dismiss);
     onEnd = dismiss; onError = error => { cleanup(); reject(error); };
     input.on('data', onKey); input.on('end', onEnd); input.on('error', onError); output.on?.('resize', onResize); output.on?.('error',onError);
-    try { watcher = watch(stateDir, (_event, name) => { if (!name || name.toString() === 'overview.json') enqueue(refresh); }); } catch {}
+    // Saved-state refreshes run beside the key queue so keys never wait behind them.
+    try { watcher = watch(stateDir, (_event, name) => { if (!closed && (!name || name.toString() === 'overview.json')) refresh().catch(error => { state.notice = error.message; try { draw(); } catch {} }); }); } catch {}
     try { stopThemeWatch = watchThemeConfig(configPath, next => { if (next) theme = next; draw(); }); } catch { /* Missing config must not prevent dismissal. */ }
     // Native event hooks publish saved state; reload it without terminal-tail reads.
     // Explicit r also covers events missed while hooks were unavailable.

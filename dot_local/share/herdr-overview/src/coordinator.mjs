@@ -4,10 +4,10 @@ import { normalizeSnapshot } from "./model.mjs";
 import { confirmDisplayNameWrite, evaluateDisplayNamePolicy, recordDisplayNameWrite } from "./display-name-policy.mjs";
 import { readRecapFields, sessionRecapDataRoot } from "./recap-store.mjs";
 import { readPiSessionFields } from "./pi-session-store.mjs";
-import { reconcileRecapCoordinator, runSessionRecap } from "./recap-coordinator.mjs";
+import { applyCompletedGroups, autoPublishEnabled, planRecapCoordinator, runDueGroups, runSessionRecap } from "./recap-coordinator.mjs";
 import { scheduleDeadlineWakeup } from "./deadline-wakeup.mjs";
 import { readTheme } from "./theme.mjs";
-import { overviewStateDir, readState, withStateLock, writeState } from "./state-store.mjs";
+import { overviewStateDir, readState, withGroupLock, withStateLock, writeState } from "./state-store.mjs";
 
 function eventPayload(event) {
   if (!event || typeof event !== "object") return {};
@@ -30,38 +30,81 @@ async function tryRead(callback, fallback) {
   }
 }
 
-export async function reconcileOverview({
-  api = new HerdrApi(),
-  stateDir = overviewStateDir(),
-  dataRoot = sessionRecapDataRoot(),
+// Group generation calls the summary model. It runs between two short
+// state-lock passes so event hooks and the popup never wait on the model.
+export async function reconcileOverview(options = {}) {
+  const {
+    api = new HerdrApi(),
+    stateDir = overviewStateDir(),
+    dataRoot = sessionRecapDataRoot(),
+    coordinatorWake = false,
+    recapRunner = runSessionRecap,
+    scheduleWakeup = scheduleDeadlineWakeup,
+    env = process.env,
+  } = options;
+  const run = { ...options, api, stateDir, dataRoot };
+  let result = await withStateLock(stateDir, () => refreshOverview(run));
+  if (!coordinatorWake) return result.state;
+
+  const firstPlan = result.plan;
+  const enabled = (firstPlan.due.length || firstPlan.wakeups.length) && await autoPublishEnabled(recapRunner);
+  if (enabled && firstPlan.due.length) {
+    // Each workspace gets one attempt per run; a failure stays due for a later wake-up.
+    const attempted = new Set();
+    // If another process holds the group lock, it rechecks due work before it stops.
+    await withGroupLock(stateDir, async () => {
+      for (;;) {
+        const due = result.plan.due.filter(({ workspaceId }) => !attempted.has(workspaceId));
+        if (!due.length) return;
+        for (const { workspaceId } of due) attempted.add(workspaceId);
+        const completed = await runDueGroups({
+          due, state: result.state.recapCoordinator, dataRoot, snapshot: result.snapshot, runRecap: recapRunner,
+        });
+        result = await withStateLock(stateDir, () => refreshOverview({ ...run, completedGroups: completed }));
+      }
+    });
+  }
+  if (enabled) {
+    const socketPath = api.socketPath ?? env.HERDR_SOCKET_PATH;
+    for (const wakeup of firstPlan.wakeups) {
+      try {
+        scheduleWakeup({ stateDir, ...wakeup, socketPath, env });
+      } catch (error) {
+        console.error(`[herdr-overview] could not schedule recap deadline wake-up: ${error.message}`);
+      }
+    }
+  }
+  return result.state;
+}
+
+// One locked pass: native snapshot, recap bookkeeping, naming, model, state write.
+async function refreshOverview({
+  api,
+  stateDir,
+  dataRoot,
   configPath = process.env.HERDR_CONFIG_PATH || path.join(process.env.HOME || "", ".config", "herdr", "config.toml"),
-  openPane = false,
   event = null,
   resetName = null,
   coordinatorWake = false,
   resumeDeadlines = false,
   coordinatorNow = () => Date.now(),
-  recapRunner = runSessionRecap,
-  scheduleWakeup = scheduleDeadlineWakeup,
+  completedGroups = null,
   env = process.env,
-} = {}) {
-  return withStateLock(stateDir, async () => {
+}) {
     const previousState = await readState(stateDir);
     const snapshotBeforeOpen = await api.snapshot();
     let recapCoordinator = previousState.recapCoordinator ?? null;
-    let wakeups = [];
+    let plan = null;
     if (coordinatorWake) {
-      const result = await reconcileRecapCoordinator({
+      if (completedGroups) recapCoordinator = applyCompletedGroups(recapCoordinator, completedGroups);
+      plan = await planRecapCoordinator({
         state: recapCoordinator,
         dataRoot,
         snapshot: snapshotBeforeOpen,
         now: coordinatorNow(),
-        runRecap: recapRunner,
         resumeDeadlines,
-        persist: async (next) => writeState(stateDir, { ...previousState, recapCoordinator: next }),
       });
-      recapCoordinator = result.state;
-      wakeups = result.wakeups;
+      recapCoordinator = plan.state;
     }
     const previousPanes = previousState.model?.panes ?? {};
     const name = eventName(event);
@@ -189,16 +232,5 @@ export async function reconcileOverview({
       ...(recapCoordinator ? { recapCoordinator } : {}),
     };
     await writeState(stateDir, state);
-    if (coordinatorWake) {
-      const socketPath = api.socketPath ?? env.HERDR_SOCKET_PATH;
-      for (const wakeup of wakeups) {
-        try {
-          scheduleWakeup({ stateDir, ...wakeup, socketPath, env });
-        } catch (error) {
-          console.error(`[herdr-overview] could not schedule recap deadline wake-up: ${error.message}`);
-        }
-      }
-    }
-    return state;
-  });
+    return { state, plan, snapshot: snapshotBeforeOpen };
 }

@@ -61,6 +61,11 @@ do not move their logic into this plugin.
   process due work. Rendering, focus, scrolling, and output refresh must
   remain passive. `overview.refresh_names` is passive too: it neither opens
   nor advances publication/group deadlines; Pi `session_info_changed` uses it.
+- Keep hooks cheap. Group generation calls the summary model, so it runs
+  outside the overview state lock under the non-blocking `.groups.lock`;
+  event hooks and the popup must never wait on it. Focus events are not
+  hooked (each hook is a full reconcile). The popup coalesces saved-state
+  refreshes and handles keys beside them.
 - The responsive popup map lives in `src/presenters/map.mjs`. Board/Mosaic
   are retired compatibility surfaces, not public layouts. Keep full-name,
   recap, digest and failure boundaries separate. The palette fixture
