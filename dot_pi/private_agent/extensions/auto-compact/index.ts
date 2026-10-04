@@ -134,6 +134,11 @@ export function registerAutoCompactExtension(
 	let compacting = false;
 	let lastAttemptTokens: number | undefined;
 	let pendingResume: string | undefined;
+	// A user message queued during our compaction replaces the continuation.
+	// userSpoke: non-extension input seen since compaction started.
+	// awaitingResume: continuation text sent but not yet seen in "input".
+	let userSpoke = false;
+	let awaitingResume: string | undefined;
 	let pendingTurnEndCheck = false;
 	// Circuit breaker: consecutive compactions that did not bring context below
 	// threshold. When it reaches config.maxIneffectiveCompactions we pause
@@ -146,6 +151,8 @@ export function registerAutoCompactExtension(
 		compacting = false;
 		lastAttemptTokens = undefined;
 		pendingResume = undefined;
+		userSpoke = false;
+		awaitingResume = undefined;
 		pendingTurnEndCheck = false;
 		consecutiveIneffective = 0;
 		autoDisabledForSession = false;
@@ -199,6 +206,8 @@ export function registerAutoCompactExtension(
 
 		lastAttemptTokens = tokens;
 		compacting = true;
+		userSpoke = false;
+		awaitingResume = undefined;
 		if (ctx.hasUI) {
 			ctx.ui.notify(
 				`Auto-compaction: ${tokens.toLocaleString()}/${contextWindow.toLocaleString()} tokens at ${checkPoint}; compacting`,
@@ -223,6 +232,14 @@ export function registerAutoCompactExtension(
 			// follow-up will resume it, so they do not treat it as a user interrupt.
 			pi.events?.emit(AUTO_COMPACT_WILL_RESUME_EVENT, undefined);
 		}
+		// Send the continuation unless the user already spoke; the input handler
+		// drops it later if the user's queued message is seen after this point.
+		const sendResume = (resume: string | undefined): boolean => {
+			if (!resume || userSpoke) return false;
+			awaitingResume = resume;
+			pi.sendUserMessage(resume, { deliverAs: "followUp" });
+			return true;
+		};
 		try {
 			ctx.compact({
 				onComplete: () => {
@@ -230,7 +247,7 @@ export function registerAutoCompactExtension(
 					const resume = pendingResume;
 					pendingResume = undefined;
 					try {
-						if (resume) pi.sendUserMessage(resume, { deliverAs: "followUp" });
+						sendResume(resume);
 						if (ctx.hasUI) {
 							ctx.ui.notify(
 								resume ? "Auto-compaction completed; continuing" : "Auto-compaction completed",
@@ -251,7 +268,7 @@ export function registerAutoCompactExtension(
 					const resume = pendingResume;
 					pendingResume = undefined;
 					try {
-						if (resume) pi.sendUserMessage(resume, { deliverAs: "followUp" });
+						sendResume(resume);
 						if (ctx.hasUI) ctx.ui.notify(`Auto-compaction failed: ${formatError(error)}`, "warning");
 					} catch {
 						// Stale ctx after session teardown; drop the resume.
@@ -267,6 +284,26 @@ export function registerAutoCompactExtension(
 
 	pi.on("session_start", resetAttemptState);
 	pi.on("session_shutdown", resetAttemptState);
+	// A user message queued while this extension's compaction runs replaces the
+	// continuation. Pi's TUI holds such messages until compaction ends, then
+	// submits them through prompt(). Input handlers run in extension order and are
+	// awaited, so that message may reach us before or after onComplete. Both
+	// prompts pass through the same handlers and the user's starts first, so:
+	// mark the user's input, and drop the continuation when its own input event
+	// arrives after the mark. Extension slash-commands never reach "input".
+	pi.on("input", (event) => {
+		if (event.source !== "extension") {
+			if (compacting || awaitingResume !== undefined) userSpoke = true;
+			return;
+		}
+		if (awaitingResume !== undefined && event.text === awaitingResume) {
+			awaitingResume = undefined;
+			if (userSpoke) {
+				userSpoke = false;
+				return { action: "handled" as const };
+			}
+		}
+	});
 	pi.on("session_compact", (event) => {
 		// session_compact precedes onComplete. Never submit from here: Pi still
 		// rejects prompts while its compaction controller is active. Only cancel a

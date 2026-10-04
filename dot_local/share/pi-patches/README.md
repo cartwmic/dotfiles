@@ -27,6 +27,8 @@ Per-patch rationale and failure modes stay in the sibling READMEs:
 - [headless-extension-drain](headless-extension-drain/README.md) — drain fire-and-forget extension work in print mode
 - [response-visibility](response-visibility/README.md) — delegate the optional Pi 0.99.2 telemetry helper on desktop profiles
 - [standing-reminder-origin](standing-reminder-origin/README.md) — carry input origin to processed messages on desktop profiles
+- [settlement-abort](settlement-abort/README.md) — cancel through final settlement on desktop profiles
+- [prompt-start-race](prompt-start-race/README.md) — queue a prompt that loses the start race on desktop profiles
 - [cursor-provider](cursor-provider/README.md) — retired leftover-splice restore (not desired-state delivery; widget comes from the fork)
 
 ## Setup
@@ -40,8 +42,8 @@ ls
 
 You should see one subdirectory per patch (`anthropic-idle-watchdog`,
 `cursor-provider`, `custom-message-marker`, `empty-turn-retry`,
-`headless-extension-drain`, `response-visibility`,
-`standing-reminder-origin`) plus this README.
+`headless-extension-drain`, `prompt-start-race`, `response-visibility`,
+`settlement-abort`, `standing-reminder-origin`) plus this README.
 
 Layout of each patch:
 
@@ -144,6 +146,12 @@ operation-lifetime `ctx.signal` through awaited final-settlement handlers,
 busy streaming final settlement with compatible main-agent idle semantics, and discard aborted
 pre-settlement proposals. Settled remains notification-only.
 Private public-path proof: `python3 tests/pi-patches/settlement_abort.py`.
+
+[`prompt-start-race`](prompt-start-race/README.md) uses the same desktop gate
+and exact-block reversal. Tested Pi 1.0.0: a prompt that loses the start race
+queues into the active run (steer by default, follow-up if requested) instead
+of throwing, so it cannot emit a false `agent_settled`. Private real-TUI proof:
+`python3 tests/auto-compact-steer/proof.py`.
 
 ### After a pi or widget upgrade
 
