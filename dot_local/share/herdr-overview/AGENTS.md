@@ -11,8 +11,12 @@ do not move their logic into this plugin.
 
 ## Workflow
 
-- Keep the public Herdr **0.9.1 / protocol 22** boundary in `src/herdr-api.mjs`.
-  A server with another protocol fails closed. `herdr-plugin.toml` owns the
+- Keep the Herdr API boundary in `src/herdr-api.mjs`. Compatibility is the
+  contract in `src/herdr-compat.mjs` (methods, parameters, fields, events),
+  checked against a binary's bundled schema by `check-herdr-api.mjs`; never
+  gate on a version or protocol number. When code starts using another
+  method, parameter, or field, add it to the contract in the same change. At
+  runtime a snapshot without pane IDs fails closed. `herdr-plugin.toml` owns the
   startup, event, pane, and action hooks. The viewer joins native snapshot,
   supplied prompts, published recaps and verified UUID-keyed digests; never
   scrape transcripts, raw terminal tails or generate viewer summaries. The
@@ -137,7 +141,11 @@ python3 tests/herdr-overview/proof.py herdr-cleanup --run-id RUN_ID
 ```
 
 Use the same `--state-base` on every command if overriding the private cache
-root. Run cleanup for that fixture even after a failed journey; preserve its
+root. The fixture uses the source's mise pin; set
+`HERDR_OVERVIEW_PROOF_HERDR=<version>` on `herdr-prepare` (and `map_journey.py`)
+to prove a candidate release before bumping the pin. `herdr-prepare` can
+time out on "owner-set fixture names to settle" (about 1 in 5 runs, on 0.9.1
+too); rerun before investigating. Run cleanup for that fixture even after a failed journey; preserve its
 failure receipt. For grouping changes, run `python3 tests/herdr-overview/proof.py pi-grouped --run-id RUN_ID`
 after `herdr-wide` and before cleanup. That scenario starts
 the scripted Pi provider and releases its response gate. For a native-move

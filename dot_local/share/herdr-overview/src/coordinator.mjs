@@ -197,7 +197,7 @@ async function refreshOverview({
     for (const update of namePolicy.rename) {
       const liveSnapshot = await api.snapshot();
       if (!confirmDisplayNameWrite(namePolicy, liveSnapshot, update)) continue;
-      // Herdr protocol 22 has no conditional rename. An owner edit between
+      // Herdr's API has no conditional rename. An owner edit between
       // this snapshot and the write can still race; no client fork is implied.
       try {
         if (update.kind === "pane") await api.renamePane(update.id, update.label);

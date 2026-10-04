@@ -6,12 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import { HerdrApi, HerdrApiError } from "../src/herdr-api.mjs";
 
-async function fakeApi(t, snapshotProtocol = 22) {
+async function fakeApi(t, snapshotProtocol = 22, extra = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "herdr-overview-api-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const socketPath = path.join(root, "herdr.sock");
   const calls = [];
-  const snapshot = { protocol: snapshotProtocol, version: "0.9.1", workspaces: [], tabs: [], panes: [], agents: [], layouts: [] };
+  const snapshot = { protocol: snapshotProtocol, version: "0.9.1", workspaces: [], tabs: [], panes: [], agents: [], layouts: [], ...extra };
   const server = net.createServer((socket) => {
     let buffer = "";
     socket.on("data", (chunk) => {
@@ -81,9 +81,10 @@ test("subscribes through the public output-matched stream for pane output invali
   });
 });
 
-test("fails closed when the connected server is not protocol 22", async (t) => {
-  const { api } = await fakeApi(t, 21);
-  await assert.rejects(api.snapshot(), /protocol 22 required/);
+test("accepts any protocol number with a compatible snapshot and fails closed on a missing shape", async (t) => {
+  assert.equal((await (await fakeApi(t, 23)).api.snapshot()).protocol, 23);
+  const { api } = await fakeApi(t, 23, { panes: undefined });
+  await assert.rejects(api.snapshot(), /incompatible Herdr server \(protocol 23\): Herdr snapshot has no panes list/);
 });
 
 test("keeps Herdr API errors typed for callers", () => {

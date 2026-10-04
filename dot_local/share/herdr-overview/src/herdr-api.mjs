@@ -1,6 +1,6 @@
 import net from "node:net";
 import { randomUUID } from "node:crypto";
-import { HERDR_PROTOCOL } from "./model.mjs";
+import { snapshotShapeError } from "./model.mjs";
 
 export class HerdrApiError extends Error {
   constructor(code, message) {
@@ -107,9 +107,8 @@ export class HerdrApi {
   async snapshot() {
     const result = await this.request("session.snapshot");
     const snapshot = result?.snapshot;
-    if (!snapshot || snapshot.protocol !== HERDR_PROTOCOL) {
-      throw new Error(`Herdr protocol ${HERDR_PROTOCOL} required; server reports ${snapshot?.protocol ?? "unknown"}`);
-    }
+    const shapeError = snapshotShapeError(snapshot);
+    if (shapeError) throw new Error(`incompatible Herdr server (protocol ${snapshot?.protocol ?? "unknown"}): ${shapeError}`);
     return snapshot;
   }
 
