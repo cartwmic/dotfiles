@@ -1,342 +1,257 @@
 ---
 name: using-software-change-provider
-description: Use when running the software-change workflow through Loop Engine with the software-change provider — confirming work-slot bindings and models with the user before start, selecting a config profile, authoring gate artifacts against frozen operating context, invoking bound implement workers or performing unbound rooms, appending concise review-evidence, evidence-applicability, and driver-authored finding-ledger snapshots, and clearing checked transitions.
+description: Use when driving software-change intent, design, plan, implementation, reconciliation and validation with externally performed work, independent reviews and driver-owned finding disposition.
 ---
 
 # Using the software-change provider
 
 ## Scoped discovery and delivery decisions
 
-Before drafting, discover the actual operator path, desired observable outcome, constraints, accepted risks and non-goals. Ask about consequential ambiguity; do not launder a predetermined mechanism into intent. Budget the complete serial dependency closure, summarizer, proof and review, not just one worker. Return a durable blocker and seek direction when the approved budget is insufficient; do not silently retry.
-
-For bound and unbound review, use the shipped `data/review-worker-preamble.txt` framing: comprehensive first review across assigned axes; scoped confirmations of accepted fixes and fix-introduced holes; explicit original-evidence applicability for unaffected axes. Falsify circular proof by asking what observation distinguishes the claim from its opposite. Embedded conclusions and a report citing itself do not establish the outcome. Keep existing axes and frozen materiality limits.
-
-After implementation capture triage, before independent review, obtain the owner's Git decision. Inspect staged names and diff; perform/confirm only the owner-authorized human/driver commit and verify its resulting identity with `git rev-parse HEAD`, or record pending/declined without changing Git or claiming a created commit. Workers do not independently commit. The reminder is not authorization. HEAD/index/status changes invalidate current identity-bound receipts, report and checkpoints: settle Git first, refresh invalidated proof through its existing owner (the graph summarizer owns its report), then keep source/Git identity stable through review and validation. Do not make the post-report checker its own prerequisite or normal terminal completion a pre-terminal proof obligation.
-
-## Overview
-
-`software-change` is Loop Engine's reference provider, distributed standalone with its shipped data embedded (`software-change data-dump DIR` materializes it); a repo checkout remains the development path. The live graph is the union of five draft rooms plus parent and adversarial review rooms when those policy lists are nonempty; `describe` omits empty lists. Draft ready events check their declared schemas, revision links and proof obligations; the reconciliation handoff, introduced in v11 and retained in supporting successors, has no report/checkpoint prerequisite. Parent semantic axes live on the parent review state; adversarial axes live on the distinct adversarial-review state. Validation-report-local corrections stay in the validation draft after edit/recheck for the next checked hop; the validation draft also exposes check-free `revise-implementation` when validation exposes a repository-state mismatch. Nearest `revise` from validation-review and validation-adversarial-review returns to that draft, and those states also expose `revise-implementation`. Phase-named owning routes (`revise-intent`, `revise-design`, `revise-plan`) handle upstream defects from review states and directly from the implement draft in newly described graphs. Reviewer convergence contract requires candidate triage before append or mutation, focused external reconsideration for disputed candidates, comprehensive first review, and bounded confirmation review. Quiet, progress, and thrash count per review state on the post-triage accepted-unresolved finding-ledger set. Confirmation consumes the durable set and does not search again except for fix-introduced holes. Bound workers do not use previously overlooked after that state's first comprehensive review of the subject; humans still may with full failure burden. Review packets carry the current ledger snapshot in immutable context; the frozen worker assignment identifies ordered axes, and the reviewer inspects entries whose `review_axes` include each assigned axis without changing policy or verdict authority. Known accepted material defects are never waived. Adversarial output is candidate data under the YAGNI/pragmatic append bar: extra mechanism, unlisted requirements, and hypothetical-future fails are not appended. Late findings still require current evidence, violated obligation, consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); prior visibility or overlook does not waive known material defects, while comprehensive-first and scope/materiality burdens block drip-feeding or unrelated reopening. Human-facing challenge review must meaningfully falsify a parent pass claim against frozen intent, not manufacture a second opinion.
-
-The provider is deterministic only: it validates artifact schemas and revision links, then aggregates externally supplied review evidence. `describe` and `evaluate` never generate prompts, invoke a model, or judge findings. Bound workers, when frozen, are started by `loop-engine invoke`; you still triage outputs and append verdicts. Per-run obligations are frozen in immutable `initial_input`, and every later actor must inspect the run's frozen `intent.json` operating context rather than relying on chat memory or a profile default.
-
-The criterion spine is run-local and intentionally small. Write each current intent acceptance entry as the closed `{id, statement}` record with an `AC-N` ID matching `^AC-[1-9][0-9]*$`; preserve an ID when its meaning is materially unchanged and use a new ID for replacement. Design coverage, implementation validation rows, and validation proof rows may carry optional `criterion_id` or `criterion_ids` references. Every contract-v3 plan task requires a nonempty unique `criterion_ids` set of current AC-N IDs; the provider checks membership while reviewers judge relevance. Other intermediate references remain optional. Contract v3 final validation requires complete criterion/goal coverage through the fixed index described below; the provider checks relationships, never semantic sufficiency.
-
-## Required companion and engine driving minimum
-
-`using-loop-engine` (`skills/using-loop-engine/SKILL.md`) is a **required companion**. This skill does not replace it. The closed driving minimum below is what you cannot skip when this skill is loaded alone; load the companion for full engine semantics.
-
-**Run-state commands:** `start`, `list`, `show`, `append`, `event`, `history`, `terminate`, `invoke`, `amend-binding`, and `cancel-invocation`.
-
-**Shared controls:** use the engine companion's **Choose an observation** and **Capture external commands** procedures for `monitor`, optional summaries, `capture-command`, `capture-matrix`, resume and `capture-abort`. These do not append provider evidence or advance a gate. Monitor emits JSONL; capture streams raw output, unlike workflow envelopes.
-
-**Envelopes:** `completed`, `rejected`, `error`, and `invalid-invocation`. Parse JSON even on nonzero exit. Treat only `completed` as success.
-
-**Bound versus unbound:** a catalog slot ID present in frozen `work_slot_bindings` is bound — `invoke` it; do not perform the stored work body. An absent key is unbound — perform the stored instructions yourself, then append and request the event.
-
-**Overlay meaning:** overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. You still triage worker output, append provider-shaped records, and request the shown event.
-
-**Observation:** action `show` (default) gives current instructions and arms the visit; repeat after every transition before mutation. Use `show --view full` for frozen input, context, invocation/change reports and helper stdin. Status/compact and `monitor` never arm. Wait through passive `monitor`, using `invocation-progress` only for targeted graph/trace diagnosis. Helper `reaped`, worker exit, output conformance and provider judgment are distinct.
-
-**Concurrency:** `loop-engine fan-out --max-active N` omitted stays uncapped; set N is at most N worker steps. `software-change run-plan-graph --working-directory ABS --max-active N` requires the driver's existing absolute directory; omitted stays 4 ordinary plan tasks, set N is at most N ordinary plan tasks, and the summarizer still runs after those tasks.
-
-**Lock-in-before-start:** do not call `start` until the user confirms (1) bind or not (which slot IDs), (2) exact `{command, args}` per bound slot, and (3) model identity in those frozen args (nested `--worker` / `--task-worker` count) or explicit unpinned-default acceptance. Initial bindings freeze; owner-attested `amend-binding` changes future execution only, not initial input, policy or launched attempts. See the required engine companion for controls, preview, cancellation and override.
-
-Run `loop-engine preview-bindings` on the JSON you will freeze before `start`. That report includes a `dagu` PATH check (minimum 2.14.0): ok with resolved path and version, or a warning naming the path or that PATH lookup found nothing; well-formed bindings still exit 0. `fan-out` and `software-change run-plan-graph` execute fail-close on the same condition before any worker spawn. Isolated home is `capture_dir/dagu-home/` with locator keys `dagu_home`, `dag_name`, and `run_name` (`plan-graph-<capture-dir-name>` for plan-graph). Provider packages do not ship `dagu`. Dagu is GPLv3: invoke the binary as a subprocess only; do not embed its Go API. Bound review `fan-out` joins mechanically (`fan-out-join` writes `summary.json`, invokes no model). Bound worker stdin is compact location JSON (absolute `artifact_root`, plus `context` when the catalog slot lists `stdin_context_kinds`); it does not dump `instruction_body`. All software-change slots forward eligible ledger/evidence/applicability/user-steering/incorporation context, with validation proof records additionally eligible at validation. The provider commission filter selects applicable recipients from the launch snapshot. Assigned axes are frozen in the review preamble; implementation tasks receive only exact-task findings and steering in their task packet, not dependant/summarizer spillover. Hidden stdin-exec colocates Pi sessions under each worker `capture_dir/sessions` via `PI_CODING_AGENT_SESSION_DIR` unless that variable is already inherited; do not add `--session-dir` to frozen argv, and do not switch bound Pi commands to `--mode json`. Provider contract details: `crates/software-change-provider/README.md`; frozen requirements: `crates/software-change-provider/docs/prd.md`.
-
-## Frozen intent and operating boundary
-
-Before authoring, commissioning, triaging, or validating any phase, read the current `intent.json` beneath the run's `artifact_root`. Treat its `operating_context` (`operators`, `environment`, `threat_boundary`, `accepted_risks`, and `outside_obligations`) as frozen and shared by every later actor. Do not demand speculative hostile-user or multi-tenant hardening excluded by `threat_boundary` unless the change invalidates that boundary or an outside obligation requires it. Accepted risks are residuals, not waivers: they never excuse a stated outcome, acceptance line, or outside obligation. Treat `AC-N` as the only criterion identity; optional downstream references must point to the current intent and must not create a second `LE-N` spine.
-
-For v11 and successor intent review, author one authoritative plain-English intent with exact technical references and structured metadata alongside the decision prose. Explain a specialist term when it first matters, preserve obligations and qualifications, and do not add a second narrative, readability score, or technical-language ban. Shape each acceptance criterion as one coherent bounded outcome with a practical evidence path: combine clauses sharing one decision, split independently varying outcomes, keep inseparable aspects together, and name a concrete reason when proof is impractical. The `acceptance-granularity` and `owner-comprehensible` axes are distinct external questions; style, sentence length, reading-grade scores, technical vocabulary, word counts, and conjunction counts are not findings.
-
-For every initial or materially revised intent commission, inspect retained qualified `user-steering` sources and their supersession, not `steering-incorporation` summaries. The artifact path retains only the current intent and review history retains judgments, not old subject bytes; use the existing owner-source record for the exact prior intent rather than creating a second history ledger. A later material revision needs an exact prior-intent source in an effective owner steering `intent_baseline` so the owner view can show a real byte-bound structural wording delta. Inspect `software-change commission --slot intent-review` for the full current intent, owner statements, delta, choices, and separate drafter/reviewer/driver/owner identities. Commission output is not owner approval; the owner makes that decision externally. Missing exact prior bytes block a later commission instead of authorizing a driver paraphrase.
-
-Bound fan-out delivers compact context by default for all workers, with or without preamble: only each selected record's engine-owned top-level `data.loop_engine_origin` is omitted from a clone. Record IDs/order, concise origin, judgments, meaningful fields, assignment and controls remain; no model classification, opt-in flag or recursive stripping applies. Actual captured stdin is the truthful delivered input, not a full verification snapshot. The original selected full context is independently retained in per-worker `fan-out-spec.json` `routed_inputs` and summary routing. `capture_format: "bound-context-projection-v1"` requires that full snapshot for captured-commission verification; missing/malformed snapshots refuse. Unmarked legacy captures keep stdin-based verification. Core/provider history and existing selected-output, digest, assignment, attempt and applicability checks remain full-strength. Raw ad-hoc fan-out instruction bytes are unchanged. Graph task/findings/steering and summarizer packets remain their separate existing projection; no-task `ad-hoc-repair` still uses its closed repair packet and worker-owned report, not a graph summarizer. Handle oversized intent-draft setup under LE-127 unless distinct semantics require more. Compact delivery remains the normal supported path and does not permit stripping generic protocol data needed by deterministic or non-model consumers.
-
-The driver owns semantic disposition and Git lifecycle. Reviewer output is candidate evidence only. Preserve raw stdout/stderr, append an advisory `advisory-finding-proposal` only as an inert suggestion, and append the driver-edited `finding-ledger` snapshot that alone controls gate agreement and exact implementation routing. Do not let a proposal, report claim, or passing worker exit substitute for a driver decision.
-
-The existing review-axis IDs remain unchanged, and the v11 and successor intent profiles include the named `acceptance-granularity` and `owner-comprehensible` questions. High-rigor `plan-review` uses exactly `task-sized`, `context-sufficient`, `done-observable`, `decision-free`, `design-faithful`, and `dependencies-honest`; validation uses exactly `intent-delivered`, `docs-integrated`, and `requirement-proof-mapping`. Read every profile's exact axis lists; the successor profiles share the same phase axis IDs, with different author floors and review stages. Do not add an axis to satisfy a finding or create another requirement axis.
-
-Run checked implementation/validation evaluation from the intended repository checkout, not the artifact directory: verification resolves the repository from the provider's current working directory. The artifact root locates reports, not the evaluation repository. Checkpoint creation's explicit `--working-directory` does not change later evaluation CWD.
-
-For implementation and validation, the report is not proof by itself. Run `software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS` after the report is complete. Both directories must already exist and be absolute. The command only reads repository state and writes the phase checkpoint; it never stages, commits, branches, pushes, creates, selects, merges, cleans, manages, or suggests worktrees. The checked transition that admits implementation to validation records the exact checkpoint under content-addressed `implementation-proof-history/`, with or without implementation review. Validation requires the sole history entry for the current report revision to match the current report, document revisions, and repository state. Later context, regenerated mutable checkpoints, or overwritten history bytes cannot admit different bytes. If a checked event reports a stale checkpoint, use `revise-implementation` where shown, regenerate implementation report/checkpoint and validation report/checkpoint for the same current tree, then append fresh review evidence and ledger state before retrying. Validation cannot replace implementation proof.
-
-## Contract v3, simplicity and final criterion proof
-
-Bundled defaults are `minimal-12`, `standard-12`, `high-rigor-12` with semantic `contract_version: 3`. These successor identities reflect the mandatory changed reviewer preamble/output contract, not a categorical rule for disabled advice-map bytes. Earlier v11 profiles retain their original output contracts and require their original provider; new setup must refuse known historical shipped IDs rather than silently bind worker review-contract v2 under them. Do not guess at custom caller-managed IDs: their version correctness and exact generated binding confirmation remain caller-managed. Semantic contract 3, worker `review_contract_version: 2`, candidate projection schema 3 and profile config versions are distinct. Independent criterion/goal floors are 1/2/2 for minimal/standard/high and remain separate from review-axis floors. Profiles remain unbound and Bookends-off by default. Intent review includes the distinct `acceptance-granularity` and `owner-comprehensible` questions at aggregate stage; high review evidence keeps `individual` and `aggregate` stages for its existing axes, while the new intent questions are aggregate-only. The same two author identities must cover high's existing stages, while standard and minimal use aggregate coverage only. Unsupported v2 semantic evaluation refuses explicitly; keep fixed original providers for historical runs. Bare describe is discovery; provider-free show/history preserves original records with no implied ownership/control capability. Do not migrate active bootstrap input, topology or bindings by catalog edits.
-
-Simple-first/YAGNI/KISS apply product-wide. Complexity needs a meaningful current requirement/failure and inadequate simpler alternative in the ordinary design. Existing implementation/protocol/schema/dependency choices have no presumption of preservation; do not add speculative hardening or a justification bureaucracy.
-
-Use the shipped `data/templates/validation-report.md` and `data/validation-report-schema.json` for exact v2 forms. The unbound command is `loop-engine --json show RUN --view full | software-change run-validation --engine ABS --working-directory ABS --revision REV [--commands ID,...] [--timeout-ms N]`. It executes named plan `proof_commands` (id, command, args, owner, obligation), retains actual command/cwd/exit/time/output/repository evidence and writes the report index plus inert command candidates. A subset never waives required final proof. It does not append, checkpoint, invoke reviewers or advance; do not emit a command-only bound validation draft that leaves its report duty to the driver.
-
-### Prepare validation from retained commands
-
-When commands already ran through common capture, use `prepare-validation` instead of rerunning them. This inert helper requires the validation draft state; it does not replace a bound validation worker's duty. First read `show --view full` and inspect `commission --slot validation-draft` for effective proof commands. Capture each required command with its exact ID, argv, obligation and declared settings, beneath the run artifact root and outside the checkout. Keep source/Git identity stable. See the engine companion for capture/resume.
-
-Build one packet with `show` (the completed full envelope), absolute `working_directory`, fresh `revision`, `author: {name,kind}`, absolute `capture_indexes`, `execution_settings: {timeout_ms,environment,inherit_environment}`, and `additions: []`. Settings must match the captured rows; inspect repository `docs/operational-ux-contracts.md`, **Supplemental validation**, for exact forms.
-
-```sh
-software-change prepare-validation < preparation.json > prepared.json
-```
-
-Inspect `diagnostics` and require `commands_complete` before finalizing. This checks collection mechanics, not acceptance. Missing, failed, stale, duplicate or incomplete-cleanup receipts require correction or fresh execution; never infer a pass. The helper launches nothing, appends nothing, writes no report/checkpoint and supplies no passing verdicts.
-
-For additional proof, supply unique `{id,command,args,owner,obligation}` entries in `additions` and corresponding real captures. They cannot replace frozen required IDs; `proof_updates` corrects existing executors, not adds commands. Append the returned `addition_candidates` as `validation-command` and `command_candidates` as `command-evidence`, preserving their proposed record IDs and data after inspection. Do not resubmit already-appended additions; later full observations expose them through commission. Use a fresh revision on a proposed-ID collision.
-
-Install `report_draft` as `validation-report.json` only after completing the collection and choosing genuine unused verdict IDs. `judgment_batches` names pending AC/goal positions, not completed judgments; honor `excluded_authors`. Then follow the fixed-index procedure below. `run-validation` remains the execution alternative when fresh named plan-command execution is needed; neither helper upgrades a run frozen to an older provider.
-
-### Finalize and judge the fixed index
-
-Inspect and append genuine command candidates, finalize the index and prechosen unused verdict IDs, then checkpoint its bytes before review. No placeholders/reservations or report rewrite after judgment. The index names current implementation_revision, command_evidence_ids, exactly one `{criterion_id,verdict_ids}` per current AC-N, and separate goal_verdict_ids. Validation-ready can leave verdict IDs pending only with live review; ordinary approval or a reviewless final draft hop requires complete independent coverage and matching accepted implementation-proof-history. Criterion/goal authors cannot be report/implementation authors. Missing/duplicate/unknown/stale/self-authored/unsupported or unresolved failing coverage blocks. Ordinary validation workers may return `validation_verdicts` alongside axes; append actual rows with their prechosen IDs after triage. Challenge consumes that collection, not a second criterion review or proof run.
-
-After repair append `criterion-revalidation: {subject_revision,affected_criteria,change_kind,reason}` (`change_kind` material or report-index-only). Affected criteria require fresh judgments; unaffected index rows may reference explicit evidence-applicability to original verdicts at the current report/checkpoint, retaining author/result/source and reason. Material repair requires fresh goal; only explained report-index-only correction can carry it. `commission --slot validation-review` exposes pending/fresh/carried rows. Failed criterion/goal sources use exact-source finding dispositions with policy_id AC-N or goal, never a fabricated pass.
-
-Workers run assigned focused checks; one driver/proof owner runs the full stable-tree matrix and repeats only invalidated checks. Reviewers consume retained outcomes. The public journey uses `--jobs 2` by default for independent isolated work; `--jobs 1` remains serial. Final benchmark comparisons, hosted exact-commit checks and later live dogfood are not proved by focused or synthetic runs.
-
-## Setup
-
-Before starting a run, load `skills/using-loop-engine/SKILL.md`, its **Deterministic setup** procedure, and the catalog/override rules. Use the normal user catalog. A database or artifact override needs an explicit isolation decision for this session.
-
-Build the paired binaries with:
-
-```sh
-cargo build -p loop-cli -p software-change-provider
-```
-
-Export standalone examples with `software-change data-dump DIR`, copy and edit one of `crates/software-change-provider/data/configs/{minimal,standard,high-rigor}.json`, then use exactly one profile selector. The three examples carry the same eight advice occasions and select no backend. Setup requires one explicit choice: `--advice-config PATH` reads a closed `{command,args,timeout_ms,max_request_bytes,max_response_bytes}` configuration, or `--decline-advice` freezes advice disabled. Omission or supplying both refuses before writing a profile.
-
-```sh
-# Choose an embedded example by rigor; explicitly decline advice:
-software-change setup --rigor standard \
-  --roster /absolute/path/roster.json \
-  --engine /absolute/path/loop-engine \
-  --provider /absolute/path/software-change \
-  --output /absolute/path/run-profile.json --decline-advice [--bookends]
-
-# Or use a copied, edited complete profile (exclusive with --rigor):
-software-change setup --profile /absolute/path/copied-profile.json \
-  --roster /absolute/path/roster.json \
-  --engine /absolute/path/loop-engine \
-  --provider /absolute/path/software-change \
-  --output /absolute/path/run-profile.json --decline-advice [--bookends]
-```
-
-The roster is an ordered, closed JSON array of `{ "author": "...", "command": "...", "args": [...], "token_budget": {...} }` records. Author labels are distinct and nonempty. `token_budget` requires the exact `model_id`, `context_window_tokens`, and positive `system_tokens`, `framing_tokens`, `output_reserve_tokens`, and `reasoning_reserve_tokens`; verify these values against the actual commissioned model and call. The framing reserve covers its exact preamble, assigned rubric, and protocol framing. Setup preserves worker command/argument bytes and does not add model, effort, extension, or shell flags. The generated review context filter freezes each per-call budget and refuses when mandatory context/originals exceed the available window after all reserves. UTF-8 bytes are a conservative input upper bound; initial supplied evidence (context plus mandatory originals) starts at 32 KiB and cumulative supplied/retrieved evidence at 256 KiB. These are starting refusal bounds, not universal model limits. Keep later exact source reads and their original locators in the existing worker session/capture and count them before retrieval; the driver still inspects captured bytes and actual model usage. Setup does not tokenize a live call or select a fallback. `--draft-worker PATH` is an optional closed `{ "command": "...", "args": [...] }` object. When supplied, setup preserves it as the bound `intent-draft` binding; callers that need compact context normally make that binding the existing engine `fan-out` facade with one nested worker. The optional implementation file is one closed `{ "command": "...", "args": [...], "working_directory": "..." }` object. Its directory must already exist and be absolute.
-
-Setup reads the selected profile, review preamble, and version-2 output schema from embedded provider data. It assembles every live review gate, exact policy order and stage, first-N author allocation, assignment-specific schema, and a `commission --call-budgets <exact roster budgets>` context filter. High-rigor workers run individual assignments before fresh aggregate assignments through the generic `fan-out --then` barrier. First aggregate projection removes same-target individual judgments/findings and linked applicability/ledger entries before the shared fan-out packet is frozen. Review fan-out is frozen with `--max-active 2`. An implementation binding uses `run-plan-graph --max-active 1` and the supplied worker and directory.
-
-The selected file's contents, not its basename, determine configured policies, stages, counts, and schemas. Setup refuses `--profile` combined with `--rigor`, insufficient reviewer roster coverage, invalid profile data, and an implementation command already wrapped as a task worker. The implementation input is the inner task-worker command; setup adds the `run-plan-graph --task-worker` wrapper.
-
-The command invokes `ENGINE preview-bindings` and writes the generated profile only after input and preview validation succeed. The replacement is atomic. It starts no run, invokes no worker, selects no model, adapts no CLI, creates no worktree, and saves no preference. Its JSON stdout shows the selected source bytes/hash, effective output bytes/hash (`output_byte_length`, `output_sha256`, `output_sha256_digest`, `output_bytes`), `effective_policy`, exact `effective_bindings`, the exact roster, generated profile path, Bookends enablement, shared occasion descriptions/map, effective advice state/limits, plus the engine binding preview. Warnings in the preview remain warnings; preview errors fail setup. Advice occasions do not select or configure a backend.
-
-Setup refuses malformed or duplicate roster records, malformed draft-worker input, an insufficient author count for any configured stage, malformed implementation input, invalid selected policy/schema data, non-absolute engine/provider paths, and incompatible output contracts. It never drops an axis or reduces an author floor to make input fit.
-
-For an enabled run, action guidance names due departures and their exact occasion IDs. First decide whether a bounded judgment has sufficient supplied evidence; investigation, missing-fact inference, planning and whole-workflow synthesis stay with the driver, for every backend. Do not use a confidence score as authority or silently substitute a reasoning model. Select actual source context IDs and artifact/document excerpts from full show. The `software-change advice-request` packet also requires `admissibility: {bounded_judgment: true, evidence_sufficient: true}` and a nonempty `judgments` map of caller-chosen IDs to atomic claim strings. These declarations are the driver's assessment, not engine proof. The prepared request carries the declaration under `state.admissibility`, preserving the existing five-field request envelope. The helper preserves the claims separately from tool-resolved records, artifacts/hashes, policies, invocations and selected check/capture evidence, and asks only whether that evidence directly supports or contradicts each claim. It does not dispatch the old broad occasion questions. Send the prepared JSON to `loop-engine advise RUN_ID @REQUEST_FILE`.
-
-If no admissible question exists, record the existing `advice-occasion` form with `triggered: false`, a concrete `reason`, and empty trigger/response IDs; do not make an advisor call or invent a response. Ordinary checks/authorization and dispositions of every actual successful answer remain required. This is not a way to hide a failed eligible call; its existing recovery/exception rules still apply. The provider prepares questions only; the configured command returns advice only. The driver still triages findings, owns every route and progression decision, and must append a reasoned `advice-disposition` for every answer before normal departure. Rejection of wrong advice is ordinary progress. An ACTIVE driver may also request ad-hoc advice; every successful answer, including ad-hoc and superseded answers, needs an individual disposition. A timeout or invalid required response remains unanswered. Only an exact scoped owner exception can excuse a due occasion, and it cannot pass a reviewer, Bookends, criterion, or proof gate.
-
-Before `start`, inspect the setup report and the exact output file. Confirm:
-
-1. the rigor label, config version, contract version, criterion/goal author policy, every live gate and every normalized stage/axis author count;
-2. Bookends state and any overlay axes;
-3. every roster command and argument, each exact per-call model/window/system/framing/output/reasoning budget, every nested review worker and output-contract version, author/stage assignment, review concurrency, implementation concurrency, and commission filter;
-4. the exact output bytes and SHA-256.
-
-Hash that same output file immediately before `start` and abort on any mismatch. Start that unchanged file with the canonical engine procedure. A setup report or preview is not a run and does not authorize progression.
-
-Shipped data remains unbound. For changed A11 supplied reviewer inputs, prepare affected current rows and obtain fresh external returns and owner attestation before the calibration no-pending gate. Mechanical rehash and packets alone prove no semantic review; the separately enumerated A11 stream does not directly attest the standalone worker preamble or worker output schema. The generated file is the per-run authority; later edits to shipped or copied profiles, the skill, or a roster do not change a started run. Do not replace a confirmed file with a pristine profile after confirmation. Active runs keep their frozen policy, bindings, stages, and evidence. Use `show --view full` before a correction. In high rigor, select only affected individual assignments, create explicit applicability records for unaffected axes, and run both aggregate authors freshly across every axis. Aggregate authors remain the same identities as the individual stage. Accepted-unresolved findings still block. An owner-attested binding amendment changes only a future executor; it cannot raise or lower a frozen policy or criterion/goal author floor. If a floor or policy must change, start a fresh run from the corrected profile; do not use `amend-binding` as a policy edit.
-
-## Criterion spine and Bookends overlay
-
-Before approving a Bookends-enabled plan, run `software-change bookends-preview --working-directory ABS` on the intended repository. It is read-only and reports configuration, current parsed live wording and explicit references, eligible public locations, recognized required-CI collection/cwd, and missing prerequisites. It does not run the gate or demand passing proof for behavior not yet implemented; it does not establish owner acceptance or semantic coverage.
-
-Shipped profiles leave Bookends off. With the overlay disabled, `AC-N` is the only criterion spine. To opt in, pass `--bookends` to setup; the generated profile freezes `extra.bookends.enabled: true`. Overlay-on requires exactly one `prd_traceability` object on every current intent criterion: `linked-live`, `candidate`, or `not-applicable`. A current candidate blocks final completion until the owner accepts it into a committed PRD or reclassifies it. `not-applicable` never waives or fulfills the criterion. Inspect `BOOKENDS_BYPASS` before final approval; a bypass remains visible and cannot satisfy final GREEN.
-
-New semantic-coverage profile revisions retain the `ids-grounded` axis rather than adding a second requirement ledger. During intent/design drafting and review, read the actual normative wording of every cited live requirement and every authoritative document it explicitly names. Classify each promised enduring outcome into the three branches: sufficient existing wording, change-specific proof, or missing or changed enduring meaning. When delivered behavior is wrong under sufficient wording, record the implementation defect within the sufficient branch and correct the code; it is not a fourth requirement-meaning branch. A related ID, shared topic, matching token, parser-valid candidate, or command success is not coverage. Keep proposal wording substantive and provisional; record owner acceptance, application, and commit separately, and never treat a candidate as live. Bookends-disabled runs use the same semantic handoff for relevant repository documents without PRD IDs or overlay obligations. Existing frozen profile revisions keep their original ids-grounded rubric.
-
-## Reconciliation state and proof ownership
-
-Reconciliation-capable v11 and successor semantic contract-v3 graphs expose the provider-owned `reconciliation` state after implementation editing and before the final implementation proof/review boundary. Its unbound `reconciliation-draft` slot authors `reconciliation.json`; the checked `reconciliation-ready` event validates it. The state does not write implementation or validation reports, checkpoints, or Git commits. Make the three-way branch conditional: sufficient existing wording, including an implementation defect corrected under sufficient wording, needs only the needed implementation and public proof and retains live traceability when Bookends is enabled; change-specific proof creates no requirement proposal or PRD commit; only missing or changed enduring meaning needs exact owner acceptance, separately authorized application and commit, updated traceability, and independent inspection of the resulting PRD text and associated public proof. A justified no-document-change result is valid, and a blocked result must retain concrete blockers.
-
-With Bookends enabled, read the actual accepted text of every cited requirement and every authoritative document it explicitly names. Preserve live traceability and reject related IDs, shared topics, matching tokens, parser-valid candidates, and command success as semantic coverage. With Bookends disabled, inspect relevant repository documents against approved intent and delivered behavior without PRD IDs, Bookends citations, candidate machinery, or overlay obligations. After reconciliation, finalize the implementation report, create the repository checkpoint, conduct any configured implementation review, validation, and final proof against the resulting tree. If an authorized reconciliation edit makes an earlier report or checkpoint stale, both reviewful and reviewless graphs expose the check-free `revise-implementation` return to `implement`; invoke the existing bound implementation/report owner through its supported selection (or perform the unbound correction), preserve the authorized document edits, and return through `implementation-ready` without reapplying them before finalizing proof. Existing frozen runs are not migrated; perform equivalent reconciliation through the stored workflow and evidence conventions.
-
-The coordinating assistant owns the passive owner update: after reading existing status or monitor output and observing a meaningful development, it posts a concise source-backed update naming the observed change and needed action or decision in the active conversation before the next wait, inspect, or help decision. Machine completion/attention is not that update. Workers run assigned focused checks; the coordinating driver is the designated proof owner for the complete final stable-tree matrix and repeats only checks invalidated by later changes.
-
-## Work-slot policy (confirm before start)
-
-Cataloged slots are `intent-draft`, `intent-review`, `intent-adversarial-review`, `design-draft`, `design-review`, `design-adversarial-review`, `plan-draft`, `plan-review`, `plan-adversarial-review`, `implement`, `implementation-review`, `implementation-adversarial-review`, `validation-draft`, `validation-review`, and `validation-adversarial-review`; v11 and supporting successors additionally catalog `reconciliation-draft` in `reconciliation`. Bindings are sparse and freeze at `start`; a binding must name a slot in the snapshotted catalog. Setup emits live review bindings, preserves an optional caller-supplied `intent-draft` binding from `--draft-worker`, and may emit an optional `implement` binding. A slot with no configured policy axes must remain unbound.
-
-Before `start`, run `loop-engine preview-bindings` on the exact `work_slot_bindings` map and confirm the report. Confirm the exact outer commands, every nested worker/task worker, author/stage assignment, concurrency, commission filter, and any model/effort arguments supplied by the caller. An unbound slot remains driver-performed. Owner-attested binding amendments affect future execution only; they do not rewrite initial input or an already launched attempt.
+Discover the operator path, observable outcome, constraints, accepted risks and non-goals
+before drafting. Ask about consequential ambiguity; do not turn a chosen mechanism into
+intent. Budget the serial dependency closure, implementation report, proof and review.
+Escalate a concrete budget blocker instead of silently retrying.
+Simple-first/YAGNI/KISS apply: complexity needs a current requirement/failure and an
+inadequate simpler alternative, not hypothetical future hardening.
+
+software-change validates schemas, revision links, checkpoints and external evidence.
+It never executes agents, advisors or proof commands and never judges findings for you.
+
+## Required companion and driving minimum
+
+Load repository skills/using-loop-engine/SKILL.md, especially Deterministic setup,
+Exact profile confirmation and Choose an observation. Use explicit --config and
+inspect LOOP_/XDG/home redirects. Production isolation requires current owner approval;
+tests always use driver-owned catalogs/artifacts outside the checkout.
+
+Action/full show arms mutation; status/compact, monitor, list and history do not.
+Re-observe after each transition. Use full show as helper stdin, not a bounded view.
+Parse workflow envelopes even on failure; only completed means success.
+Global --timeout-ms bounds provider transport (default 30000), not external workers.
+The engine never executes agents, advisors or proof commands.
 
 ## Exact profile confirmation
 
-Treat the generated profile as immutable after confirmation. Recompute and record its SHA-256, inspect the full `work_slot_bindings` map, and run `loop-engine preview-bindings` on that same map. A profile hash covers the generated file and its embedded assignment bytes. It does not cover work performed by unbound actors or a later replacement roster. If any byte, command, argument, stage, author, or model/effort argument changes, repeat the report, preview, and owner confirmation before starting.
+Display and hash the exact per-run profile, confirm its identity, all live policies,
+groups/stages, self-review rules and author counts with the user, and rehash before
+start. Separately confirm external role/model commands, write ownership, budget and
+proof owner. Never substitute a model or silently reduce an axis/floor.
+Started runs retain frozen policy; inspect effective author-counts and use only
+explicit owner-attested amendments for supported count changes.
 
-Unbound launches use a separate owner-confirmed role-to-model manifest. Keep its exact bytes and hash outside the profile, verify each requested model with `pi --list-models`, and pass that exact model when the role launches. Stop on an unavailable or substituted model. A generated setup roster remains the authority for bound worker command and argument bytes; it does not supply an implicit external-fleet choice.
+## Setup
 
-For an active run, never retrofit new profile obligations into the frozen input. Read the current show, use the stored graph and bindings, and choose the owning correction route. Preserve valid evidence explicitly; obtain fresh evidence for affected stages and subjects. A failed or overrun attempt does not authorize an overlapping retry. The driver triages captures and appends evidence; setup never appends, retries, dispositions, or progresses a gate.
-
-The implement binding remains a separate opt-in `run-plan-graph --working-directory ABS --task-worker` pattern. Leave task selection out of frozen argv. Omit invoke input for the full plan. When an existing frozen task owns a correction, use `loop-engine invoke RUN_ID implement --input '{"plan_revision":"REVISION","task_roots":["TASK_ID"]}'`; the provider requires that closed shape, current revision, unique known roots, and same-revision standing results for every prerequisite outside the roots-plus-dependants selection. Only when a current accepted unresolved implementation finding has no honest frozen task owner, leave its `task_ids` empty and invoke the same binding with exact `--input '{"repair_finding_ids":["FINDING_ID"]}'`. Repair requires unique current forwarded ledger entries that are accepted, unresolved, implementation-owned, current for the verified implementation checkpoint, and no-task-routed. Malformed, empty, unknown, stale, wrong-owner/status/disposition, task-routed, or absent-context requests refuse before Dagu resolution or mutation. Packet input combined with frozen `--task`/`--tasks` also refuses.
-
-A valid repair runs one `ad-hoc-repair` assignment under the frozen task worker and checkout. Its compact packet contains the exact finding objects, frozen plan revision, provider-derived pre-report and repository-state identity, and the narrow report-writing obligation. It runs no plan task or summarizer and does not alter `plan-task-results.json`. The provider accepts the result only when `implementation-report.json` is schema-valid, links the frozen plan, and uses a revision absent from the pre-proof and all accepted implementation-proof history; only then does it create a new checkpoint. Inspect `summary.json` generic worker/output/routed-input data and `repair` pre/post metadata. A failed worker or report creates no post checkpoint but may leave partial checkout edits; restore or deliberately incorporate them before another mutation. After success, append a later ledger snapshot resolving the finding and reconfirm affected independent implementation review and validation. There is no direct unbound repair form.
-
-Direct callers may still select roots with repeated `--task ID` or one `--tasks ID,ID,...`; omitted selection remains full execution. The implementation binding, whether supplied through setup or configured explicitly, must freeze one existing absolute directory selected and maintained by the driver, must not pass `--no-context-files`, and must freeze its model before start. Task mode projects only current accepted unresolved findings with `owner_phase: implementation` and an exact matching `task_ids` entry under that task's `finding_context`; stale, resolved, rejected, advisory, and unrelated entries are absent. Omitted, relative, nonexistent, and non-directory working directories are rejected before workers; the same graph-level cwd reaches every plan task and summarizer or the repair worker. Successful execution requires that directory to be a Git working tree for checkpoint generation, and the provider does not create, discover, select, reuse, merge, clean, manage, or suggest worktrees. Optional `--max-active N` may live in that frozen argv (omitted stays 4 ordinary plan tasks; set N is at most N ordinary plan tasks). Hidden `software-change stdin-exec` uses the same argv as `loop-engine stdin-exec` and is omitted from `--help`/`--version`; plan-graph uses `--exit-mode propagate` only.
-
-On the bound implement path, invoke persists the exact optional `invocation_input` on the invocation view and also supplies generic `standing_assignment_ids` from the same provider-free `show` projection. The graph treats a recorded prerequisite as standing only when its sidecar revision/success agrees and its assignment ID is in that engine list; graph-local exit 0 alone cannot admit stale work. A driver who wants to reuse a non-standing task must use the appropriate check-free correction route and then provide fresh proof. Direct ad-hoc `run-plan-graph` without an engine packet retains its sidecar-only contract.
-
-```json
-"implement": {
-  "command": "software-change",
-  "args": [
-    "run-plan-graph",
-    "--working-directory",
-    "/absolute/path/to/driver-selected-checkout",
-    "--task-worker",
-    "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"--model\",\"MODEL\"]}"
-  ]
-}
-```
-
-Add an existing extension path only when the selected model provider requires it. Keep the chosen model and its effort argument in the frozen worker args; setup does not infer extensions or models.
-
-## Proportional late-finding guide
-
-A late material finding remains actionable, but the driver should choose the narrowest honest shipped response. This is guidance, not an automatic router or semantic dependency closure. If a correction is material, bump the owning subject revision; its standing evidence becomes stale by design. Preserve valid upstream work and append-only history rather than re-clearing it for ceremony.
-
-| Defect owner | Shipped response | Ordinary cost |
-|---|---|---|
-| Validation-report-only | Edit `validation-report.json` in the validation draft; retry `validation-ready` or terminal `passed`, using nearest `revise` only from a review state. | Recheck the report and validation checkpoint; fresh validation evidence follows a material report revision. Earlier implementation proof and work remain unless the repository checkpoint is stale. |
-| Implementation, frozen task owns defect | Use `revise-implementation`, then bound `{plan_revision,task_roots}` selection (or direct `--task` only outside a bound run). | Rerun that task plus dependants, regenerate implementation and validation reports/checkpoints, and reconfirm affected downstream reviews. |
-| Implementation, no frozen task honestly owns defect | Use `revise-implementation`, keep accepted unresolved finding `task_ids` empty, then invoke the same frozen slot with `{repair_finding_ids}`. | Run one captured repair worker, resolve the ledger finding, regenerate proof, and reconfirm affected implementation and validation reviews without replaying plan tasks. |
-| Plan | Use `revise-plan` from implement or implementation/validation review. | Plan revision normally invalidates downstream implementation/validation artifacts, checkpoints, and reviews; re-author and re-clear forward. |
-| Design | Use `revise-design` from implement or plan/implementation/validation review. | Design revision normally invalidates downstream plan, implementation, and validation work/proof/reviews; intent remains valid. |
-| Intent | Use `revise-intent` from implement or design/plan/implementation/validation review. | Intent revision normally invalidates all downstream artifacts, checkpoints, and evidence; re-author and re-clear the downstream path. |
-
-From implement, choose the owning route yourself: `revise-plan` targets `plan`, `revise-design` targets `design`, and `revise-intent` targets `explore`. These check-free routes require no implementation report or checkpoint for rejected work. First observe with `show` and wait for owned work to finish, or use `cancel-invocation RUN INVOCATION` and verify cleanup. Elapsed-but-live work and cleanup-pending cancellation block both departure and retry. Artifacts, repository edits, invocation/capture evidence, and denial history remain; there is no rollback or automatic defect classification. Consult the stored graph's available events: upgrading binaries does not add routes to an older run.
-
-Deeper backtracking is exceptional: use an owning-phase event only when that phase's accepted obligation is materially wrong. Captured ad hoc repair is shipped only for the no-honest-frozen-task case; it is not a substitute for task selection or plan revision. Owner-attested `event --override` is an exceptional engine operation: only one available edge after observation/quiescence, permanently labeled `completed-with-overrides` on final completion. It never fabricates evidence or changes frozen policy; later edges retain their obligations. Load the engine companion's exact attestation and cancellation rules before use. Evidence applicability is an explicit driver declaration, not a work-routing or waiver mechanism. If frozen obligations or the operating boundary cannot be corrected in place, replacement is the existing fresh-run escape; retain the old run and its history.
-
-## Gate map
-
-Draft ready/passed events check their declared schemas and revision links. In reconciliation-capable graphs, `implementation-ready` enters reconciliation without requiring an implementation report/checkpoint; `reconciliation-ready` checks the reconciliation result. Finalize the report and checkpoint against the reconciled tree before commissioning implementation review (or entering validation when no implementation review is live). Historical graphs without reconciliation keep their original implementation-ready report/checkpoint check. Implementation review and validation checked hops require their current provider-generated repository checkpoint. Live review `approved` or `passed` rechecks the subject, validates that gate's `review-evidence`, and requires a well-formed current `finding-ledger` snapshot with fresh subject and checkpoint state. Its exact-source dispositions must discharge current failures; accepted-unresolved findings still block across revisions. Discharged fails count as independent judgments, not rewritten passes. The live last hop into `end` is `passed`; earlier live review hops are `approved`.
-
-| Event (from state) | Subject checked | Evidence gate |
-|---|---|---|
-| `intent-ready` (explore) | `intent.json` | schema/links only |
-| `approved` / `passed` (`intent-review`) | `intent.json` | `intent-review` |
-| `approved` / `passed` (`intent-adversarial-review`) | `intent.json` | `intent-adversarial-review` |
-| `design-ready` (design) | `design.json` | schema/links only |
-| `approved` / `passed` (`design-review`) | `design.json` | `design-review` |
-| `approved` / `passed` (`design-adversarial-review`) | `design.json` | `design-adversarial-review` |
-| `plan-ready` (plan) | `plan.json` | schema/links only |
-| `approved` / `passed` (`plan-review`) | `plan.json` | `plan-review` |
-| `approved` / `passed` (`plan-adversarial-review`) | `plan.json` | `plan-adversarial-review` |
-| `implementation-ready` (implement → reconciliation, v11+) | no artifact prerequisite | checked handoff; bound execution must still finish |
-| `reconciliation-ready` (reconciliation, v11+) | `reconciliation.json` | result schema and mode/branch obligations; a direct hop to validation also requires the post-reconciliation implementation report/checkpoint |
-| `implementation-ready` (implement, historical graph without reconciliation) | `implementation-report.json` | schema/links + current implementation checkpoint |
-| `approved` / `passed` (`implementation-review`) | `implementation-report.json` | `implementation-review` |
-| `approved` / `passed` (`implementation-adversarial-review`) | `implementation-report.json` | `implementation-adversarial-review` |
-| `validation-ready` / `passed` (validation) | `validation-report.json` | schema/links + current validation checkpoint matching accepted `implementation-proof-history/` entry |
-| `approved` / `passed` (`validation-review`) | `validation-report.json` | `validation-review` |
-| `passed` (`validation-adversarial-review`) | `validation-report.json` | `validation-adversarial-review` |
-| `revise-plan` / `revise-design` / `revise-intent` (implement) | — check-free, owned work must be quiescent | no implementation report required |
-| `revise-implementation` (reconciliation, validation draft/review states) | — check-free | regenerate implementation, report, review, and proof; preserve authorized reconciliation edits and re-enter reconciliation |
-| `revise` (any review state) | — check-free | — |
-
-## Per-gate loop
-
-1. Read action `show` for instructions, obligations, events and work locators; read full for frozen input, complete context and invocation/change reports. Action/full arms the visit: repeat after every transition before mutation. Read `artifact_root/intent.json` operating context before phase work; never infer missing legacy author counts as zero.
-2. If **bound**, do not author the room yourself. `invoke` it (`loop-engine --json --timeout-ms N invoke RUN_ID SLOT_ID`; choose an allowance above the 30s default), then monitor until completion or attention. On overrun, wait or cancel owned work and verify cleanup, then observe before retry. Inspect `capture_dir/summary.json`, selected attempts and stdout before stderr; overlay succeeded is only bound CLI exit 0. For implement, follow the selection/repair procedure above: tasks and summarizer share the frozen checkout; full/selected mode's summarizer owns the report, while no-task repair's single worker owns it. Use `invocation-progress` only for targeted diagnosis.
-3. If this state is **unbound**, author or revise the subject artifact in `artifact_root` using its template from `crates/software-change-provider/data/templates/`. Material content changes require a revision bump — a bump makes prior raw verdicts stale for coverage, but does not resolve accepted-unresolved ledger findings; keeping the revision asserts the edit was immaterial. Preserve the frozen operating context, stated outcomes, and outside obligations; do not turn accepted risks into waivers or add excluded hostile/multi-tenant requirements. Every contract-v3 plan task must carry a nonempty unique current `criterion_ids` set; design and intermediate implementation references remain optional and use only current `AC-N` IDs. Final validation requires the fixed complete criterion/goal index, not a parallel PRD-ID spine. For unbound implementation or validation work, create the matching checkpoint only after the report is complete: `software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS`. Both directories must already exist and be absolute; the command is read-only with respect to Git.
-4. For evidence gates, obtain each configured stage/axis's `required_authors` count of distinct external judgments (minimal aggregate 1; standard aggregate 2; high individual and aggregate 2): fresh context, not the artifact's author, each judging every assigned axis separately using its exact `example_prompt`. High aggregate authors must be the same identities as the individual stage. Default to one aggregate commission per used author per gate and one individual commission per axis and used author; focused confirmation carries only explicitly unaffected judgments. Follow `crates/software-change-provider/data/reviewer-protocol.md`. Reviewers must judge within frozen `operating_context`; do not append speculative hostile or multi-tenant demands outside `threat_boundary`, and do not treat `accepted_risks` as permission to waive outcomes or `outside_obligations`. For plan review, require affected user/operator paths, observable outcomes, pragmatic black-box proof or a concrete impracticality reason, sufficient context, and implementation freedom. For validation review, reject activity-only evidence and inspect every new or changed Bookends citation semantically rather than accepting its requirement token. Unbound: you commission those reviewers. Bound review: read the captures, then you still triage and append; `fan-out` does not write records. Preserve each axis's first-N author allocation in frozen review `--worker` args; individual-stage assignments are singleton axes, while aggregate-stage assignments group all axes for each author. Adversarial output is candidate data; extra mechanism, unlisted requirements, and hypothetical-future fails are not appended.
-5. Append one record per accepted axis judgment — after triaging against the frozen intent and operating context, `kind` is `review-evidence`, `data` is the stage-aware object. Semantic contract v3 requires `review_stage` plus the eight original judgment fields; new setup bindings also require `review_contract_version: 2`, concise `grounds.reason`, and mechanically resolvable `grounds.evidence` file/digest locators. `result` is exactly `pass` or `fail`; `author.kind` is exactly `human`, `agent`, or `script`; `findings` is non-empty on `fail`; and `config_version` must match the run's frozen config. For a v2 bound worker, preserve `review_contract_version` and `grounds` exactly from the selected output. Add only the concise origin reference:
-
-```json
-{
-  "gate": "design-review",
-  "policy_id": "intent-faithful",
-  "review_stage": "aggregate",
-  "result": "pass",
-  "findings": "",
-  "review_contract_version": 2,
-  "grounds": {"reason":"Inspected evidence supports the pass.","evidence":[{"locator":"design.json#/revision","sha256":"sha256:<exact file digest>"}]},
-  "author": {"name": "reviewer-sol", "kind": "agent"},
-  "subject": "design.json",
-  "subject_revision": "3",
-  "config_version": "standard-12",
-  "origin": {"kind": "selected-assignment-output", "id": "INVOCATION_ID", "assignment_id": "ASSIGNMENT_ID"}
-}
-```
+Use `software-change data-dump DIR` for installed embedded data in an empty destination.
+Choose a shipped minimal, standard or high-rigor profile; read its exact policy lists.
+Generate a policy-only per-run file, explicitly choosing advice enablement:
 
 ```sh
-loop-engine --json append "$RUN_ID" review-evidence @verdict.json
+software-change setup --rigor standard --output /absolute/profile.json --decline-advice
+# Alternatively, use edited complete profile bytes:
+software-change setup --profile /absolute/copied.json --output /absolute/profile.json --enable-advice
+loop-engine --json --config /absolute/providers.toml start software-change @/absolute/profile.json "change"
 ```
 
-Core resolves the invocation and assignment from the same run and adds `loop_engine_origin`; do not copy its selected attempt, digest, path, capture directory, command, or binding. For unchanged original output, verify the real selected raw attempt and bytes. Only an eligible derived selection after explicit fidelity triage keeps the **true** immutable raw attempt separately from selected repaired bytes/digest/derivation; formatting does not create a new raw attempt or reviewer verdict. The provider verifies the declared selected bytes and compares `axis`, `author`, `result`, `findings`, contract version, and grounds. Missing, changed, unavailable, or disagreeing bytes are `unverified`. Omit `origin` only for genuinely external hand-authored evidence; new pass grounds still need source references that resolve mechanically.
+`setup` edits policy only. Tools prepare or evaluate data, not external execution.
+Setup starts no run or worker. Inspect output/explanation and effective policy;
+--set, --add-axis and --remove-axis are explicit policy edits, not executor controls.
+Confirm every changed obligation, author floor and advice/Bookends state before start.
+Use --bookends only for an explicit opt-in. Read the resulting exact config/contract
+versions; do not apply current contracts to historical runs or silently migrate them.
+Register the absolute provider command under exact alias software-change.
 
-Before authoring any record, a fresh driver may run the exact read-only candidate pipe over the explicit `show --view full` envelope:
+## Cold reconstruction comparison
+
+For enabled `intent-sufficient`, declare the pre-change `intent.baseline` and retain
+it across revisions unless the owner explicitly selects a new baseline. Commission
+unbriefed readers with only current intent and that source baseline. Retain every
+counted reconstruction via `review-candidates`; intake snapshots the baseline.
+Before ordinary approval, append the owner or explicitly owner-authorized
+`intent-comparison` described in the reviewer protocol, addressing every counted
+return and useful alternative. Clarify unwanted permitted alternatives in intent
+and obtain a fresh cold exercise; private comparison comments are not constraints.
+Prepare informed challenge only after this alignment clearance. Missing comparison,
+partial coverage and changed reconstruction baseline block clearance. Scripted
+journey declarations prove these mechanics only, never genuine semantic alignment.
+
+## Frozen intent and operating boundary
+
+Read current intent.json before authoring, commissioning, triaging or validating.
+Share its operating_context: operators, environment, threat_boundary, accepted_risks
+and outside_obligations. Accepted risks are residuals, never waivers of acceptance or
+outside obligations. Do not demand excluded speculative hostile-user/multitenant controls.
+
+Write one authoritative plain-English intent with exact technical references and
+structured metadata. Explain specialist terms when needed, preserve qualifications,
+and avoid a second narrative or readability-score rule. Acceptance entries are closed
+{id, statement} records with AC-N IDs (positive integers, no leading zeros). Preserve
+identity for unchanged meaning; replace IDs for changed meaning. Group inseparable
+outcomes, split independently varying ones, and name a practical evidence path or
+concrete reason proof is impractical. Word/conjunction counts are not findings.
+
+Inspect qualified user-steering originals and supersession, not incorporation summaries.
+Later material intent revisions need an exact prior-intent owner source for byte-bound
+delta; a driver paraphrase is not a baseline. Owner approval views from commission
+are not owner approval. Keep drafter/reviewer/driver/owner identities separate.
+
+## Gate map and artifact authoring
+
+Author from embedded data/templates and exact frozen artifact schemas under artifact_root.
+
+| Phase | Durable subject and obligation |
+|---|---|
+| Intent | intent.json: outcome, boundary and AC-N criteria |
+| Design | design.json: current intent link and sufficient simple solution |
+| Plan | plan.json: current design link, dependencies, observable task completion |
+| Implement | implementation-report.json: actual changes and current plan link |
+| Reconciliation | reconciliation.json: delivered meaning versus authoritative docs |
+| Validation | validation-report.json: fixed current proof/criterion/goal index |
+
+Contract-v3 plan tasks require nonempty unique current criterion_ids. Optional design,
+implementation and proof references must name current criteria, not a second spine.
+Use shown events (intent-ready, design-ready, plan-ready, implementation-ready,
+reconciliation-ready and validation-ready where present), not a remembered topology.
+Empty review lists omit rooms; zero axes require no fabricated evidence.
+Checked drafts validate shape/links. Reconciliation has no report/checkpoint prerequisite.
+Review states expose phase-owning revise routes. Validation-local report corrections
+stay in validation; repository-state mismatch uses shown revise-implementation.
+
+## Per-gate loop and external commissioning
+
+1. Observe action/full. Perform the draft externally, then check schema/links before
+   collecting judgments whose subject might otherwise change.
+2. Pipe completed full show to `software-change commission --slot SLOT`; select
+   --stage where needed. Read missing_inputs and supply them before launch.
+   Preserve frozen operating context, selected steering, ledger and original sources.
+3. Commission comprehensive first review across assigned axes/groups and exact author
+   counts. For high rigor, honor individual then aggregate stages and their identities.
+   First ordinary review is independent of peers. A parent pass is not challenge input
+   until ordinary clearance; challenge must falsify its claim against frozen intent.
+4. Preserve genuine request and original response. `software-change review-candidates`
+   accepts stdin with show, assignment, request and original. assignment names gate,
+   stage, group, author, subject and subject_revision. The original.text holds the
+   actual external return. Structured returns carry assessment_id and judgments with
+   axis, result, findings and grounds (reason plus evidence locators). Non-JSON returns
+   need a driver-confirmed projection without invented outcomes. Inspect projected
+   records and refusal diagnostics.
+5. Triage before append or mutation: accept only in-scope material failures or genuinely
+   supported passes. Preserve grounds/evidence and self-review declarations. Disputed
+   substantive candidates need focused independent reconsideration; reject provably
+   false claims with the contradicting source fact, not schedule or re-entry cost.
+6. Append accepted review-evidence and a driver-authored finding-ledger snapshot, then
+   observe and request approved/passed as shown. A process exit or projector success
+   never supplies semantic judgment. Ordinary clearance precedes challenge clearance.
+
+## Ledger, applicability and finding routing
+
+Use data/templates/finding-ledger.json. The schema-version-1 snapshot has driver author,
+gate, subject, subject_revision and stable F-... finding IDs. Sources use exact
+context-record IDs. Accepted findings retain unresolved/resolved/stale status and an
+owning phase; rejected/advisory entries use recorded/stale, null owner and empty routes.
+For implementation findings, task_ids name honest frozen task owners; empty means no
+honest task owner, not permission to dodge work. External driver routes that repair.
+Revise the plan when decomposition is materially wrong.
+
+An advisory-finding-proposal is inert; inspect, accept/edit/reject, then append the
+separate authoritative ledger. Do not silently drop accepted unresolved findings on
+revision change. Exact-source dispositions address current fails; they are not passes.
+Reviewer-manifest and retired-author reasons preserve replacement history and unchanged
+independent floors. Quiet/progress/thrash concern post-triage accepted-unresolved sets.
+
+Confirmation reviews consume that durable set and inspect fixes plus fix-introduced
+holes, not a second unrestricted search. Late findings need current evidence, violated
+obligation, consequence, validation gap and provenance (newly exposed, fix-introduced,
+previously overlooked). Known material defects are not waived by prior clearance;
+comprehensive-first and materiality burdens prohibit drip-feeding or unrelated reopening.
+
+Reuse requires explicit evidence-applicability with original context-record origin,
+current target subject/revision/checkpoint, attesting_driver and reason. Preserve author,
+result and source; do not copy stale identities into new evidence or invent a pass.
+Respect declared source scopes. Inspect `software-change author-counts` with full show.
+Owner amendments use `software-change author-counts --propose JSON`, exact targets,
+after count, actor, authority reference and reason; inspect/append the candidate.
+Counts do not rewrite policy, replace failed evidence or authorize self-review.
+
+## Reconciliation and Bookends
+
+Read actual normative wording and authoritative documents explicitly cited by intent.
+Classify delivered outcomes: sufficient existing wording (including code defects to fix),
+change-specific proof, or missing/changed enduring meaning. A related ID, shared topic,
+parser-valid candidate or command success is not semantic coverage.
+Only changed enduring meaning needs exact owner acceptance, separately authorized
+application/commit and independent inspection of resulting docs and public proof.
+A justified no-document-change result is valid; retain concrete blockers otherwise.
+
+Bookends is off by default. Enabled intent criteria each need prd_traceability:
+linked-live, candidate or not-applicable. Candidate is provisional and blocks final
+completion until accepted into committed PRD or reclassified; not-applicable is no waiver.
+Use `software-change bookends-preview --working-directory ABS` before plan approval
+for read-only prerequisite inspection, not implementation proof. Final gate needs real
+GREEN, not BOOKENDS_BYPASS. Disabled runs reconcile relevant docs without inventing PRD IDs.
+
+## Git and proof ownership
+
+After implementation triage, obtain the owner's Git checkpoint decision before review.
+Workers never stage/commit independently. Record pending/declined honestly; for an
+authorized commit inspect staged names/diff and verify actual HEAD identity. A reminder
+is not authorization. Settle Git before final identity-bound proof and keep tree stable.
+The external proof owner runs full stable-tree checks; reviewers consume retained outcomes.
+Repeat only checks invalidated by changes, never make a post-report checker its prerequisite.
+
+Run evaluation from the intended repository checkout, not the artifact directory.
+After complete reports, create read-only repository checkpoints:
 
 ```sh
-"$ENGINE" --json show "$RUN_ID" --view full | "$PROVIDER" review-candidates
+software-change checkpoint --phase implementation --artifact-root ABS --working-directory ABS
+software-change checkpoint --phase validation --artifact-root ABS --working-directory ABS
 ```
 
-The provider expands each completed contracted review batch into fresh per-axis candidates in durable invocation/assignment then frozen axis order. Authorized reuse rows are separately labeled `carried` references with their exact `applicability_id`, not new reviewer verdicts. Candidate schema version 3 preserves reviewer contract version and grounds on fresh rows, validates each file digest/selector mechanically, and emits row-specific invalid-reuse diagnostics and factual preview records. A malformed whole-batch envelope remains unusable; after it passes structure/byte checks, an invalid reuse leaves its own obligation and gate unsatisfied without erasing valid fresh siblings. Resume any explicitly triaged append only on identical ID/bytes/source/target, refusing conflicts or drift. `ready` is only a selected-byte/contract result with stable invocation/assignment origin; citation validity does not establish semantic support. The command does not open the catalog, retry, deduplicate distinct durable invocations, rewrite raw attempts, append context, route findings, or satisfy a gate. Inspect the raw attempts and then explicitly **accept, edit, or reject** each candidate. Candidate output is not `review-evidence` and is not semantic review; use the unchanged ordinary append path for driver-authored `review-evidence` and `finding-ledger`, then request the shown checked event.
+Both directories must exist and be absolute. This never changes Git. Checked admission
+retains implementation-proof-history; validation cannot replace that proof with mutable
+checkpoints. On stale proof, take shown revise-implementation, refresh reports/checkpoints
+for the same current tree, and refresh affected independent evidence before retry.
 
-For review reuse, append one distinct applicability declaration. It references the original evidence context record and names only the current target, attesting driver, and short reason; semantic applicability remains the driver's judgment:
+## Prepare and finalize validation
 
-```sh
-loop-engine --json append "$RUN_ID" evidence-applicability @applicability.json
-```
+Execute required proof commands externally, preserving real argv, cwd, exit_code,
+stdout/stderr, producer and source identity. Obtain identity with
+`software-change source-identity --working-directory ABS`; do not fabricate results.
+Feed `software-change prepare-validation` stdin with show, working_directory, revision,
+author, command_results and additions. Missing/failed/stale results need correction;
+the helper launches nothing and supplies no passing verdicts.
+Inspect diagnostics/commands_complete, append genuine addition_candidates and
+command_candidates with their proposed IDs, then complete report_draft.
 
-The provider retains the original evidence author, verdict, findings, subject revision, and config identity. It checks the named context record and current target/checkpoint mechanically and does not infer applicability from repository changes.
+The fixed index links current implementation_revision, command_evidence_ids, exactly
+one criterion row per current AC-N and separate goal_verdict_ids. Choose genuine unused
+verdict IDs before checkpointing; no placeholders or rewriting index after judgment.
+Criterion/goal authors exclude implementation/report authors by default. Explicit frozen
+profile permission lets eligible authors count once as labeled self-review, not independent
+or cold review. Required counts change only through authorized author-count amendment. Final coverage
+needs all required genuine judgments, matching implementation history and no unresolved fail.
+Challenge consumes that collection, not another proof run or criterion review.
 
-After triage, append one driver-authored `finding-ledger` snapshot from the shipped template. Its finding `source` is a context-record reference to the original review evidence. Keep every earlier snapshot and raw capture unchanged; `show --view full` exposes the full context history.
+After repair, append criterion-revalidation with subject_revision, affected_criteria,
+change_kind material/report-index-only and reason. Materially affected judgments need fresh assessment;
+criterion and whole-goal rows may carry only when the driver explicitly declares with a
+reason that their complete scope and judging meaning remain applicable. Material repair
+does not categorically require fresh goal judgment.
 
-```sh
-TEMPLATE="$DATA_ROOT/crates/software-change-provider/data/templates/finding-ledger.json"
-jq \
-  --arg gate "$GATE" \
-  --arg subject "$SUBJECT" \
-  --arg rev "$SUBJECT_REVISION" \
-  --argjson findings "$FINDINGS_JSON" \
-  '.data.gate=$gate | .data.subject=$subject | .data.subject_revision=$rev | .data.findings=$findings' \
-  "$TEMPLATE" >finding-ledger.envelope.json
-KIND=$(jq -r .kind finding-ledger.envelope.json)
-loop-engine --json append "$RUN_ID" "$KIND" "$(jq -c .data finding-ledger.envelope.json)"
-```
+## External advice, recovery and final handoff
 
-The closed snapshot uses `schema_version: "1"`, a driver `author`, and a unique `F-...` ID for each finding. Each source is exactly `{"kind":"context-record","id":"REVIEW_EVIDENCE_ID"}`; the provider resolves that record and its engine origin. Accepted findings use `unresolved`, `resolved`, or `stale` plus an owning phase; rejected/advisory findings use `recorded` or `stale` with null owner and empty routing arrays. For an accepted unresolved implementation finding, nonempty `task_ids` means the named frozen task owns correction and enables focused task selection; empty `task_ids` is the driver's explicit no-honest-frozen-task judgment and is eligible for exact `{repair_finding_ids}` selection. Do not leave the array empty merely to avoid task execution, and revise the plan when decomposition is materially wrong. The provider rejects invalid current subject/checkpoint/routing and changed stable source identities. Resolved historical source revisions and routing remain valid history without false applicability. Accepted-unresolved findings cannot be silently dropped or resolved by a revision bump. It derives current checkpoint identity; the snapshot does not copy repository-state, path, digest, attempt, command, binding, or changed-input fields.
+For enabled advice, inspect due occasion IDs. Prepare bounded, evidence-sufficient
+atomic claims with `software-change advice-request` stdin; the driver sends questions
+externally and appends actual typed advice-answer context. Every answer needs reasoned
+advice-disposition. No admissible question uses honest advice-occasion triggered:false
+with reason and empty trigger/response IDs. Timeout/invalid return is unanswered, not
+negative advice. Scoped owner exceptions never satisfy review, proof or Bookends.
 
-For contracts with LE-157, reject a provably false finding with its contradicting source fact; an unresolved substantive material dispute instead needs focused independent reconsideration. Re-entry cost, schedule and a parent pass are not merits. Present a material out-of-budget or out-of-scope correction with consequences and repair choices to the owner; only their specific scoped attestation leaves a visible residual and exceptional outcome. The driver remains the author of the ledger reason; do not invent a reviewer decision or an extra axis. Preserve older frozen obligations; this rule applies only where accepted and present in the stored contract.
+On external timeout/failure, retain outputs and inspect partial edits, verify cleanup
+and no overlapping writer, then restore or deliberately incorporate changes. Route
+correction to its owner and refresh only invalidated evidence. Out-of-scope/budget material
+correction needs the owner's specific decision; visible residuals are not ordinary pass.
+At actual end, return terminal observation, artifact/proof locators, criterion/goal
+coverage, review/ledger decisions, residuals and pending owner Git/delivery decisions.
+Synthetic journeys establish mechanics, not semantic approval or hosted exact-commit proof.
 
-### Advisory classification and routing proposal
-
-A semantic classifier may write an advisory context record from `data/templates/advisory-finding-proposal.json` with kind `advisory-finding-proposal`. It can suggest candidate source IDs, a disposition, reason, owner phase, task IDs, review axes, and rationale. The driver must inspect each proposal and **accept, edit, or reject** it. A proposal never satisfies a gate, changes a reviewer packet, or routes an implementation task. Only the resulting driver-authored `finding-ledger` snapshot is authoritative; append that snapshot separately after triage.
-
-6. Request the event. Interpret the outcome:
-   - **Schema denial** (`rejected`) — artifact shape or link failed; evidence was not judged: fix shape first.
-   - **Evidence denial** (`rejected`) — names unsatisfied policy axes and diagnostics for nonconforming/ignored records.
-   - **Error** — invalid or inaccessible `artifact_root`, or provider failure; nothing advanced.
-
-## Evidence rules (condensed)
-
-- Latest conforming verdict per `(axis, subject_revision, author)` stands. Evidence is not a vote; an undispositioned standing `fail` blocks even when others pass. Reasoned rejection/resolution discharges only its exact source and counts as judgment, not pass.
-- Distinct-author counts use exact `(name, kind)`; the subject's author never counts toward its own review.
-- Stale `subject_revision` never satisfies; wrong `config_version` counts as neither pass nor fail.
-- Nonconforming records block the axis with a malformed diagnostic until a later conforming record supersedes them.
-- Normal gates retain accepted-unresolved findings across revisions until explicit disposition. Override is a separately visible owner exception, never reviewer pass or ledger repair.
-- After triage, a well-formed fresh `finding-ledger` snapshot is required before live-review `approved` or `passed`; current fails require exact-source nonblocking dispositions, and accepted-unresolved findings remain blocking. The provider does not judge statements, reasons, dispositions, owners, quiet/progress/thrash, or provenance.
-- Confirmation consumes the durable finding-ledger set and does not search again except for fix-introduced holes. Bound workers do not use previously overlooked after that state's first comprehensive review of the subject; humans still may with full failure burden.
-- Late findings remain actionable when they provide current evidence, violated obligation, concrete consequence, validation gap, and provenance as newly exposed, fix-introduced, or previously overlooked; timing, prior visibility, or reviewer overlook does not waive materiality. Comprehensive-first review and scope/materiality burdens still bar drip-feeding and unrelated reopening.
-
-`retired-author` requires a nonempty reason and ordered per-gate `reviewer-manifest` snapshots (`{gate,authors:[{name,kind}],reason}`) showing the source author present then absent. Retired authors do not count; replacements must meet the unchanged independent-author floor. Rejected/advisory/retired findings have null owner, empty routes and recorded/stale status; advisory/stale alone never discharges a current raw fail.
-
-Inspect later steering with `loop-engine --json show RUN --view full | software-change commission --slot SLOT [--task TASK]`. The required engine companion defines user-steering targets, supersession, proof_updates and steering-incorporation. Configure the shared commission filter for bound selection; task-only instructions do not reach dependants or summarizer, and launched attempts keep their original commission.
-
-## Opted-in direct acts and report finalization
-
-Only an expressly opted-in non-review draft/implement slot on a supporting graph may use a driver-attributed `event --driver-act` instead of a bound worker success for a small correction with unchanged accepted intent/design/decomposition and quiescent work; the checked provider/evidence/Bookends gates still execute. Do not use it on a review slot or a frozen graph without the opt-in. After an actual checked reconciliation decision and separately authorized document/Git changes, a graph with the selector may use `{plan_revision,report_only:true}` on its same bound graph only when all tasks stand; it runs only the frozen summarizer and refreshes the report/checkpoint. A real affected task instead uses nonempty task roots plus dependants. When a frozen graph has no report-only selector and no task genuinely needs work, stop/escalate; never invent task work, hand-author the report or use override as ordinary completion.
-
-## Production proof boundary
-
-Use `scripts/software-change-journey.py` for repository and archive checks. Those journey commands are harness examples, distinct from the production start; do not copy isolation flags from them into production start. Source `full` mode drives separate Loop Engine processes across provider TOML, SQLite, production provider, shipped high-rigor artifacts, deterministic denials, evidence aggregation, and terminal state. After the high-rigor run reaches `end`, it starts a second run from shipped `minimal.json` and walks the stitched hops (empty review lists omitted, last-hop `passed`). Packaged `checked-prefix` mode starts extracted binaries, materializes embedded data with `data-dump`, and runs one checked transition from that dump. Synthetic pass records prove schema/evidence shape, independence, routing, aggregation, and persistence only; they are not semantic review judgments.
+Preserve review groups, self-review declarations and effective author counts. Declare evidence applicability explicitly; check ordinary review clearance before challenge review.

@@ -1,81 +1,51 @@
-# Policy document provider
+# policy-document-provider
 
-## Overview
+## Purpose
 
-`policy-document` is the release- and source-distributed external provider for PRD section 11. It never edits the target, invokes a reviewer, or judges semantic quality. It reads exact UTF-8 target bytes, applies run-frozen deterministic policies, and aggregates externally supplied semantic verdicts bound to the current digest.
+Draft or audit README.md and AGENTS.md against deterministic and externally judged semantic policies. This provider is for external workflow drivers, not autonomous execution. The engine stores and evaluates workflow state; it never executes agents, advisors or proof commands. Bring your own agent/reviewer harness, model selection and any required service credentials. The judgment contract is the [reviewer protocol](data/reviewer-protocol.md).
 
-Fixed topology is `prepare` → `deterministic-review` → `semantic-review` → `end`; both revision edges are check-free. Initial input is closed JSON containing `schema_version`, `profile_version`, `mode` (`draft` or `audit`), absolute target `{id,path}`, non-empty deterministic policies, and non-empty semantic policies. Reserved `artifact_root` and `work_slot_bindings` are accepted and ignored by this provider. This provider-only treatment does not bypass the engine's binding validation at normal `start`; arbitrary binding JSON is not a supported engine-start contract. The provider is not required to write artifact files. Other unknown `initial_input` keys still fail. Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a run with [skills/using-policy-document-provider/SKILL.md](skills/using-policy-document-provider/SKILL.md).
+Provider requirements/protocols are frozen; use the process boundary rather than depending on internal Rust APIs. Runs retain frozen obligations and the original command/args association, not executable bytes. Drivers must preserve a compatible runtime at the stored path; no active-run migration is authorized. Checked transitions validate obligations, not the truth of reviewers' judgments. Target-file edits are not atomically locked or versioned with workflow commits: keep the document quiescent during review and verify its final digest afterward. This is not a transactional document assessment service; see [target guidance](data/target-guidance.md).
 
-README profile `readme-3` keeps the title, purpose, onboarding, usage, validation, command, and local-reference deterministic floors. Its semantic axes also cover honest fitness, verifiable claims, and troubleshooting; onboarding review traces prerequisites through the first useful result, including compatible external-service setup or an explicit bring-your-own contract. AGENTS profile `agents-3` keeps the scope/authority, workflow/validation, completion/handoff, command, and local-reference floors, without a title or exact heading spelling requirement. Its semantic axes also cover non-discoverable sharp edges, ambiguity resolution, signal density, and living config; operational review checks fresh-checkout and post-edit command dependencies, and risk review checks cleanup/installation boundaries when relevant. Neither revision changes existing run-frozen inputs or adds a semantic axis. The skill describes an optional blind-first document assessment before independent repository-backed review; it is not a provider gate.
+## Installation
 
-## Setup
-
-Run from the repository root with [rustup](https://rustup.rs/) and native C compiler/linker tools installed (macOS Command Line Tools or the Linux build toolchain). The checkout pins Rust 1.98.0, not a public minimum supported version.
+From the repository root with Rust/Cargo installed:
 
 ```sh
-cargo build --release -p loop-cli -p policy-document-provider
-./target/release/policy-document data-dump /tmp/policy-data
+cargo build --locked -p loop-cli -p policy-document-provider
 ```
 
-Dump refuses to overwrite any directory entry, including dangling symlinks. On write failure, rollback removes only files created by that invocation; caller-owned files and destination entries remain untouched. Shipped files appear at:
+This builds `target/debug/loop-engine` and `target/debug/policy-document`. Source examples use the [standard profile](data/readme.json); packaged users can export bundled data to a fresh, driver-owned directory outside the checkout:
 
-- `/tmp/policy-data/crates/policy-document-provider/data/readme.json`
-- `/tmp/policy-data/crates/policy-document-provider/data/agents.json`
-- `/tmp/policy-data/crates/policy-document-provider/data/reviewer-protocol.md`
-- `/tmp/policy-data/crates/policy-document-provider/data/semantic-review-worker-preamble.md`
-- `/tmp/policy-data/crates/policy-document-provider/data/semantic-review-worker-output-schema.json`
-- `/tmp/policy-data/crates/policy-document-provider/data/target-guidance.md`
+```sh
+target/debug/policy-document data-dump /absolute/fresh-provider-data
+```
 
-Copy chosen JSON profile, set `mode`, and replace target path with an absolute path. Keep target ID `README.md` or `AGENTS.md` for shipped profiles. The shipped skill uses the dumped worker files and that same selected profile to construct assigned semantic-review workers, then previews and hash-confirms the resulting profile before starting it unchanged. Current semantic policies reject `required_authors` as an unknown field: the provider requires at least one current pass and no standing fail per axis, not a configurable author floor. The generic constructor's roster/count handling does not extend that public input contract.
+Replace the destination with your chosen fresh directory. This is data export, not model installation or user configuration.
 
 ## Usage
 
-Create `/tmp/policy-document-providers.toml`:
-
-```toml
-[providers.policy-document]
-command = "/absolute/path/to/target/release/policy-document"
-args = []
-```
-
-Before starting with the copied profile, load [Setup](skills/using-policy-document-provider/SKILL.md#setup), including canonical engine Deterministic setup. Use the normal user catalog: no database or artifact override unless the human explicitly requests isolation in this session; other runs and old preferences confer no permission. The engine owns durable run storage and records/injects `artifact_root`; this provider ignores that reserved field and reads absolute `target.path`.
+Start a run with the profile through `loop-engine start`, using a dedicated database and explicit provider TOML whose command is the absolute built provider path. The [skill](skills/using-policy-document-provider/SKILL.md) owns input preparation, commission, review intake and progression; load it before driving a run. Early commissions with `missing_inputs` are not ready. Before semantic review, declare actual target authors using context kind `target-authorship`, data `{"target_sha256":"CURRENT_DIGEST","author":{"name":"ACTUAL_AUTHOR","kind":"agent"}}` (one record per author; kind is human, agent or script). Missing/stale declarations block coverage. Target authors are excluded unless the frozen policy permits self-review, which counts only as labeled self-review; every rewrite needs a declaration bound to its new bytes. `initial_input.target_author` is not supported. External reviewers return judgments and drivers explicitly append accepted evidence and send events after fresh action/full observations.
 
 ```sh
-./target/release/loop-engine --json --config /tmp/policy-document-providers.toml \
-  start --id docs-audit policy-document @/tmp/readme.json "README audit"
-./target/release/loop-engine --json show docs-audit
+target/debug/loop-engine --help
 ```
 
-`start` returns the run ID at `result.run.id`. Draft means authoring/revision intent; audit means assessment of existing bytes. Both have identical provider mechanics and neither enforces caller read-only work. Corrections remain caller-owned and require authorization. Follow the skill's [Run loop](skills/using-policy-document-provider/SKILL.md#run-loop) for observation, review and revision.
-
-## External evidence
-
-Current-source `policy-document commission "$FROZEN_PROFILE_JSON"` consumes a completed full-show envelope (or bound filter packet) to prepare explicitly selected historical review context, not a verdict. See [Explicit historical review context](skills/using-policy-document-provider/SKILL.md#explicit-historical-review-context) for selection and receipt freshness. Historical findings never become current proof by attachment.
-
-For digest-bound evidence shape and recording, use [Evidence record](skills/using-policy-document-provider/SKILL.md#evidence-record) and [Evidence rules](skills/using-policy-document-provider/SKILL.md#evidence-rules). The provider never invokes a reviewer/model or edits the target. Candidate focused views and default compact delivery with independent full verification do not change document evidence rules or upgrade released v0.19.0 runs. Monitor/advisory output cannot approve a document; source integration is not a semantic audit.
-
-Evidence requires exact frozen fields and enums. One current pass and no current standing fail are required per semantic axis. Malformed attributable evidence blocks until any later shape-conforming record for that axis. Wrong profile, target, or digest is stale and never satisfies current conformance. Any target byte change requires fresh evidence.
-
-Reviewer identity, digest, and verdict remain caller claims, not signatures or provenance. Provider reads target once per evaluation but cannot lock it between evaluation and engine transition commit. Evaluation receives a fixed context snapshot; a concurrent append can be absent from an in-flight decision. Serialize `append` and `event` operations per run using one logical mutator.
-
-## Limitations
-
-The bounded Markdown parser recognizes ATX headings outside fences, and closed fenced blocks containing a nonblank, noncomment line—not executable commands. It checks inline links/images and line-leading `@` imports, not reference-style or HTML links. It does not execute commands or validate remote links, anchors, or every Markdown reference. Local references must remain within the target directory; percent-encoded and absolute paths are rejected. The resolver can normalize `sub/../file` inside that directory, but crate authoring rules prohibit `..` in Markdown links outright.
+Use root `README.md` for a first-run catalog example and root `AGENTS.md` for repository operations (paths relative to the checkout root). Follow the [local agent guide](AGENTS.md) when editing this crate.
 
 ## Validation
 
-Run source journeys against shipped profile bytes:
+From the repository root:
 
 ```sh
-for mode in draft audit; do
-  python3 scripts/policy-document-journey.py \
-    --engine target/release/loop-engine \
-    --provider target/release/policy-document \
-    --profile crates/policy-document-provider/data/readme.json \
-    --mode "$mode"
-done
+cargo test -p policy-document-provider
 ```
 
-The software-change journey `--self-test` executes this crate's semantic-review constructor against the shipped readme and agents profile shapes (temporary absolute targets) and prints `worker-data skill/root policy assertions passed` only after those fixtures, required keys/data bytes/preview visibility, and fail-closed invalid cases pass.
+These are mechanical tests, not genuine semantic review. The root agent guide owns journey and final-proof requirements. For stalls involving missing inputs, stale evidence, author floors or observation permits, load the [skill](skills/using-policy-document-provider/SKILL.md); do not infer acceptance from process exit. Typed advice answers, where applicable, are externally supplied context of kind `advice-answer`.
 
-Packaged archive smoke extracts `loop-engine` and `policy-document`, runs `policy-document data-dump` into an empty temporary root, then runs both modes from an empty working directory using only dumped profile bytes. macOS arm64 and Linux x86_64 archive smoke must pass before release publication.
+## Base-derived profiles
+
+Use `target/debug/policy-document setup --rigor standard --output /absolute/profile.json`
+(or `--profile FILE` for a selected custom base). `setup --help` lists review
+count, eligible-self, group and axis overrides. Inspect `profile.json.explain.json`
+for base/override/effective identity; replay options with `--previous-explain FILE`
+when selecting a newer base to see drift. No active run follows changed defaults.

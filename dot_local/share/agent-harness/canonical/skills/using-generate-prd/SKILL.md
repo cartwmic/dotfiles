@@ -11,7 +11,7 @@ Generate-PRD is a recurring research profile plus this skill. It proposes a sche
 
 Drive the run with the **existing** `research` binary and `crates/research-provider/data/configs/generate-prd.json`. Describe and evaluate stay on that binary. Never invoke a model from the research provider binary itself. Never call software-change evaluate.
 
-`using-research-provider` (`skills/using-research-provider/SKILL.md`) and `using-loop-engine` (`skills/using-loop-engine/SKILL.md`) are required companions for engine driving, bindings, evidence, and envelopes. This skill does not replace them. Do not markdown-link outside this crate.
+`using-research-provider` (`skills/using-research-provider/SKILL.md`) and `using-loop-engine` (`skills/using-loop-engine/SKILL.md`) are required companions for engine driving, external work policy, evidence, and envelopes. This skill does not replace them. Do not markdown-link outside this crate.
 
 ## Hard rules
 
@@ -27,7 +27,12 @@ cargo build -p loop-cli -p research-provider -p bookends-check
 
 Register `target/debug/research` under exact alias `research` (absolute `command` path) in uncommitted machine-local provider TOML, the same way as `skills/using-research-provider/SKILL.md`. There is no generate-prd binary and no extract provider.
 
-Copy `crates/research-provider/data/configs/generate-prd.json` to a run-specific file. Shipped profiles omit `work_slot_bindings` (or `{}`). Cataloged slots remain `scope`, `gather`, `verify`, and `synthesize`. Opt-in review bindings use the constructor in `skills/using-research-provider/SKILL.md` against this per-run generate-prd copy (`SLOT_ID=verify` or `SLOT_ID=synthesize`).
+Prepare with `research setup --rigor generate-prd --output /absolute/profile.json`.
+Confirm exact profile bytes/hash, policies, groups, self-review declarations and author
+counts with the user. Confirm the external role/model manifest, ownership and budget
+separately; rehash unchanged profile immediately before start. No engine executor is
+configured. Follow the research companion for external review commissioning/intake.
+Inspect LOOP_/XDG/home redirects and use explicit --config.
 
 When the human did not explicitly ask to isolate in that session, omit `--database` and omit `artifact_root`. Then:
 
@@ -36,13 +41,13 @@ loop-engine --json --config "$PROVIDER_CONFIG" \
   start research "@/tmp/research-generate-prd.json" "generate PRD candidate"
 ```
 
-For an installed binary, dump into an empty directory first (`research data-dump "$DATA_ROOT"`), then copy `$DATA_ROOT/crates/research-provider/data/configs/generate-prd.json`.
+For an installed binary, dump into an empty directory first (`research data-dump "$DATA_ROOT"`), then select that file with `setup --profile FILE --output /absolute/profile.json` for full-custom preparation.
 
 Subject files under the allocated `artifact_root` stay `brief.json`, `sources.json`, `verification.json`, and `report.json`. Author from `crates/research-provider/data/templates/generate-prd/`. Shipped `config_version` is `research-1`. Extra profile identity is `generate-prd`; `template_root` is `crates/research-provider/data/templates/generate-prd`.
 
 ## External extract work
 
-Do the primary work outside Loop Engine, then record it in the subject artifacts. Follow the research companion's per-gate loop: action `show` for driving, full for frozen input/context, passive `monitor` for waiting. The engine companion covers captured external commands and optional advisory summaries; execution receipts and summary prose do not establish requirement truth or candidate acceptance.
+Do the primary work outside Loop Engine, then record it in the subject artifacts. Follow the research companion's per-gate loop: action `show` for driving, full for frozen input/context, passive `monitor` for waiting. Retain external command results and source identities through the driver; execution receipts and summary prose do not establish requirement truth or candidate acceptance. Global --timeout-ms bounds provider transport, not external extraction time. Status/compact, monitor, list and history do not arm mutations; re-observe action/full after each transition.
 
 1. **Scope** — question is to extract a schema-valid living markdown PRD candidate for the current repository. Name observable acceptance, constraints, and non-goals. Do not present a chosen PRD as the question.
 2. **Gather** — investigate this repository without a predetermined requirement list. This is discovery and synthesis, not lookup of an already-known PRD. Separate observed behavior, stated obligations, conflicting evidence and unknown intent; do not promote every implementation detail into a requirement. Search this repository. Record sources with stable ids, locators to tracked files or tests, and exact extracts later verification can check. `brief_revision` must equal current `brief.json` revision.
@@ -67,3 +72,12 @@ This extract path is not required to start a software-change run.
 ## Gate map
 
 Same research topology as `standard.json`: `scope → gather → verify → synthesize → end`, plus check-free owning-phase `revise*` edges. Checked events, evidence rules, and production-start isolation rules are those in `skills/using-research-provider/SKILL.md`. Do not treat generate-PRD as a software-change workflow (`intent` / `design` / `plan` / `implement` / `validation`) and do not run `scripts/software-change-journey.py` for this path.
+
+Small pre-start overrides use `--set review.GATE.AXIS.required_authors=N`,
+`--set review.GATE.AXIS.self_review=true`, and `--set review.GATE.AXIS.group=NAME`.
+Policy-document uses gate `semantic-review`; research uses `verify` or `synthesize`.
+Use `--add-axis GATE.NEW=GATE.EXISTING` or `--remove-axis GATE.AXIS` for membership.
+Inspect the output and `FILE.explain.json` (base identity, overrides, effective policy).
+To select a newer base, replay the options with `--previous-explain OLD.explain.json`;
+inspect drift and resolve refused missing targets before start. Raw prompt/schema
+replacement remains a full custom file; preparation never launches work or changes a run.

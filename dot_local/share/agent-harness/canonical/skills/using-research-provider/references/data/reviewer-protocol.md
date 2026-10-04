@@ -4,7 +4,7 @@ Provider checks evidence shape and aggregation. A review worker decides truth ex
 
 ## Review worker deliverable
 
-A bound review worker is read-only and returns only one JSON object with top-level keys `axis`, `author`, `result`, and `findings`. The shipped `review-worker-preamble.txt` defines the worker role, artifact lookup through the mechanically forwarded `artifact_root`, and the authority of its frozen assignment. The shipped `review-worker-output-schema.json` declares the mechanically required keys used by opt-in bindings.
+An externally commissioned reviewer is read-only and returns candidate judgments. The driver owns assignments, delivery, projection, triage, and evidence recording; the engine and provider execute no reviewer.
 
 The judgment is candidate data, not provider evidence. The worker does not conduct web research, author artifacts, run deterministic checks, call `show`, append evidence, request an event, or progress the run. Those are driver duties. Exit 0 and mechanical key presence do not establish a valid deliverable; the driver must compare the values to the frozen assignment, inspect reviewer independence, and triage the captured judgment before append.
 
@@ -21,14 +21,16 @@ The judgment is candidate data, not provider evidence. The worker does not condu
     "author": {"name": "reviewer-sol", "kind": "agent"},
     "subject": "verification.json",
     "subject_revision": "3",
-    "config_version": "research-1"
+    "config_version": "research-2"
   }
 }
 ```
 
 All eight fields are required. `result` is exactly `pass` or `fail`; `findings` is a string and is non-empty for `fail`. Author identity is exact `(name, kind)`. `subject` must match gate subject. `subject_revision` and `config_version` must name what was reviewed and which frozen config judged it.
 
-Within current revision/config and independent-author evidence, the latest conforming record in append order wins for each `(axis, subject_revision, author.name, author.kind)`. Any remaining current fail blocks even when other authors supply enough passes. Obtain genuine conforming reconsideration from the same exact author for that subject revision/config, or fix the actual subject, bump its revision and obtain fresh independent evidence. Another reviewer's pass cannot clear that standing fail; a gratuitous revision bump must not evade an accepted defect. Malformed attributable evidence is different: a later conforming record for that axis clears its malformed-evidence block, not another author's conforming fail.
+Subject authors are excluded by default; explicit frozen-profile permission lets eligible subject authors count once as labeled self-review, not independent or cold review. Required counts change only through authorized durable author-count amendment. Same-run judgments may carry through explicit reasoned driver applicability when their complete scope and judging meaning remain applicable; materially affected judgments require fresh assessment.
+
+Within current revision/config and eligible-author evidence, the latest conforming record in append order wins for each `(axis, subject_revision, author.name, author.kind)`. Any remaining current fail blocks even when other authors supply enough passes. Obtain genuine conforming reconsideration from the same exact author for that subject revision/config, or fix the actual subject, bump its revision and obtain fresh affected judgments with explicit applicability for unaffected judgments. Another reviewer's pass cannot clear that standing fail; a gratuitous revision bump must not evade an accepted defect. Malformed attributable evidence is different: a later conforming record for that axis clears its malformed-evidence block, not another author's conforming fail.
 
 Evidence gates are `verify` (subject `verification.json`) and `synthesize` (subject `report.json`). Scope and gather checked events are schema and revision-link only.
 
