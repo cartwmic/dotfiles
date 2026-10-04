@@ -28,7 +28,8 @@ model, native compaction off, and `fixture.mjs` (writes a JSONL trace of
 `input`, `before_agent_start` and `agent_settled`; optionally races two prompts
 with file-released holds). Everything fails closed on timeout.
 
-- **Negative controls:** the baseline extension (git `HEAD`) on unpatched Pi
+- **Negative controls:** the baseline extension (pre-fix commit
+  `BASELINE_REF` in `proof.py`) on unpatched Pi
   shows the prompt-start error or sends the continuation; the baseline
   extension on patched Pi still sends the continuation; the race on unpatched
   Pi shows an error or a false `agent_settled`.

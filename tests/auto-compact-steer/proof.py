@@ -33,6 +33,8 @@ PATCHES = ROOT / 'dot_local/share/pi-patches'
 PSR = PATCHES / 'prompt-start-race/patch.mjs'
 EXT_SOURCE = ROOT / 'dot_pi/private_agent/extensions/auto-compact'
 LIVE_EXT = Path.home() / '.pi/agent/extensions/auto-compact'
+# Last commit before the auto-compact steer fix; negative controls run its extension.
+BASELINE_REF = 'ba1246bdac5474285a90f5ebafb634099b9e91c2'
 INSTALLED = Path(os.environ.get('PI_AUTO_COMPACT_STEER_SOURCE_PACKAGE',
     '/Users/cartwmic/.local/share/mise/installs/node/24.18.1/lib/node_modules/@earendil-works/pi-coding-agent'))
 CONTINUATION = 'Continue from where you left off.'
@@ -282,11 +284,11 @@ def ext_copy(source, directory, threshold=50):
 
 
 def baseline_ext(directory):
-    """auto-compact as committed at HEAD (before this change), for negative controls."""
+    """auto-compact as committed before this fix (BASELINE_REF), for negative controls."""
     source = directory / 'baseline-src'
     source.mkdir(parents=True)
     for name in ['index.ts', 'config.ts', 'events.ts']:
-        blob = subprocess.run(['git', 'show', f'HEAD:dot_pi/private_agent/extensions/auto-compact/{name}'],
+        blob = subprocess.run(['git', 'show', f'{BASELINE_REF}:dot_pi/private_agent/extensions/auto-compact/{name}'],
                               cwd=ROOT, check=True, capture_output=True).stdout
         (source / name).write_bytes(blob)
     return source
