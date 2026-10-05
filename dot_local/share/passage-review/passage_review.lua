@@ -433,7 +433,80 @@ function M.review_current()
   end)
 end
 
+local function remove_review(id)
+  local ok, err = pcall(cli, { "remove", id })
+  if not ok then
+    return notify(err, vim.log.levels.ERROR)
+  end
+  -- Close buffers still showing the deleted snapshot (and md-render views of them).
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    local session = md_session(b)
+    if vim.b[b].passage_review_id == id or (session and vim.b[session.source_bufnr].passage_review_id == id) then
+      pcall(vim.api.nvim_buf_delete, b, { force = true })
+    end
+  end
+  notify("Deleted review " .. id)
+end
+
+local function confirm_remove(review)
+  vim.ui.select({ "Delete", "Cancel" }, {
+    prompt = ("Delete review %s (%s, %s pending)? Notes and exports go too."):format(review.id, review.title, review.pending),
+  }, function(choice)
+    if choice == "Delete" then
+      remove_review(review.id)
+    end
+  end)
+end
+
+--- Delete a saved review. With no ID, pick one (the current review first).
+function M.delete(id)
+  local ok, listing = pcall(cli, { "list" })
+  if not ok then
+    return notify(listing, vim.log.levels.ERROR)
+  end
+  local reviews = {}
+  for line in listing:gmatch("[^\n]+") do
+    local rid, title, pending, created = line:match("^(rv%-%x+)\t(.-)\t(%d+) pending\t(.*)$")
+    if rid then
+      table.insert(reviews, { id = rid, title = title, pending = pending, created = created })
+    end
+  end
+  if id and id ~= "" then
+    for _, review in ipairs(reviews) do
+      if review.id == id then
+        return confirm_remove(review)
+      end
+    end
+    return notify("No review " .. id, vim.log.levels.WARN)
+  end
+  if #reviews == 0 then
+    return notify("No saved reviews.")
+  end
+  local session = md_session(vim.api.nvim_get_current_buf())
+  local current = vim.b.passage_review_id or (session and vim.b[session.source_bufnr].passage_review_id)
+  table.sort(reviews, function(a, b)
+    if (a.id == current) ~= (b.id == current) then
+      return a.id == current
+    end
+    return a.created > b.created
+  end)
+  vim.ui.select(reviews, {
+    prompt = "Delete which review?",
+    format_item = function(r)
+      return ("%s%s · %s · %s pending · %s"):format(
+        r.id == current and "(current) " or "", r.id, r.title, r.pending, r.created:sub(1, 16):gsub("T", " "))
+    end,
+  }, function(choice)
+    if choice then
+      confirm_remove(choice)
+    end
+  end)
+end
+
 function M.setup()
+  vim.api.nvim_create_user_command("PassageReviewDelete", function(opts)
+    M.delete(opts.args)
+  end, { nargs = "?", desc = "passage-review: delete a saved review (pick one, or give its ID)" })
   vim.api.nvim_create_user_command("PassageReview", function(opts)
     if opts.args ~= "" then
       M.open(opts.args)
