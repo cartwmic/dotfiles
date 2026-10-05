@@ -426,9 +426,10 @@ vim.ui.select = function(items, opts, choice)
   choice(items[1])
 end
 vim.cmd("PassageReview")
-assert(#offered == 2, "expected the pending review plus 'new', got " .. #offered)
-assert(offered[1].label:find(vim.env.OLD_ID, 1, true), offered[1].label)
+assert(#offered == 3, "expected reopen, new and delete, got " .. #offered)
+assert(offered[1].label:find("Reopen " .. vim.env.OLD_ID, 1, true), offered[1].label)
 assert(offered[2].label == "Start a new review", offered[2].label)
+assert(offered[3].label == "Delete " .. vim.env.OLD_ID, offered[3].label)
 assert(vim.b.passage_review_id == vim.env.OLD_ID, "reopened " .. tostring(vim.b.passage_review_id))
 """.replace("vim.env.OLD_ID", repr(old)))
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -437,12 +438,39 @@ assert(vim.b.passage_review_id == vim.env.OLD_ID, "reopened " .. tostring(vim.b.
         # Choosing "new" still starts a fresh review.
         result = self.run_nvim(doc, """
 dofile(vim.env.PASSAGE_REVIEW_LUA)
-vim.ui.select = function(items, opts, choice) choice(items[#items]) end
+vim.ui.select = function(items, opts, choice) choice(items[2]) end
 vim.cmd("PassageReview")
 assert(vim.b.passage_review_id and vim.b.passage_review_id ~= %r, "expected a new review")
 """ % old)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(len(self.review_ids()), 2)
+
+    @unittest.skipUnless(shutil.which("nvim"), "nvim is not installed")
+    def test_passage_review_command_can_delete_a_pending_review_then_asks_again(self) -> None:
+        doc = self.root / "doc.md"
+        doc.write_text("first line\n", encoding="utf-8")
+        old = self.cli("new", "--file", str(doc), "--no-open").stdout.strip()
+        self.cli("note", old, "--lines", "1", input_text="pending\n")
+        result = self.run_nvim(doc, """
+dofile(vim.env.PASSAGE_REVIEW_LUA)
+local prompts = {}
+vim.ui.select = function(items, opts, choice)
+  table.insert(prompts, opts.prompt)
+  if #prompts == 1 then
+    choice(items[3])  -- Delete <old>
+  elseif #prompts == 2 then
+    assert(items[1] == "Delete", "expected a confirmation")
+    choice("Delete")
+  end
+end
+vim.cmd("PassageReview")
+vim.wait(1000, function() return #prompts >= 2 end)
+vim.wait(200)
+-- Nothing pending is left, so the picker comes back with just "new".
+assert(#prompts == 3, "expected the picker again, got " .. #prompts .. " prompts")
+""")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(self.review_ids(), [])
 
     def test_remove_deletes_a_whole_review(self) -> None:
         review_id = self.new_review("line\n")

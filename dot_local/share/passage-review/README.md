@@ -85,7 +85,9 @@ To review a buffer you already have open in Neovim, run `:PassageReview`. It
 freezes the buffer (the saved file, or the buffer text if it is unsaved) as a
 new review and opens it for comments. If the saved file already has reviews
 with pending notes, it asks first: reopen one of them (marked "file changed
-since" when the file no longer matches that snapshot) or start a new review. `:PassageReview REVIEW_ID` reopens an
+since" when the file no longer matches that snapshot), start a new review, or
+delete one of them. Deleting asks for confirmation, then shows the choice
+again. `:PassageReview REVIEW_ID` reopens an
 existing review. `:PassageReviewDelete` picks a saved review to delete (the
 current one is listed first) and asks before deleting it;
 `:PassageReviewDelete REVIEW_ID` goes straight to that confirmation. Deleting
