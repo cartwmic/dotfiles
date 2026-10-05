@@ -593,6 +593,15 @@ def change_note_state(review_id: str, note_ids: list[str], action: str) -> None:
             print(f"Deleted {note_id}.")
 
 
+def remove_review(review_id: str) -> None:
+    """Delete a whole review: snapshot, notes (pending and archived) and exports."""
+    directory = _review_dir(review_id)
+    if not (directory / "review.json").is_file():
+        raise ReviewError(f"review not found: {review_id}")
+    shutil.rmtree(directory)
+    print(f"Removed review {review_id}.")
+
+
 def list_reviews() -> None:
     root = library_path() / "reviews"
     if not root.exists():
@@ -653,6 +662,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("list", help="list saved reviews and pending-note counts")
 
+    remove = commands.add_parser("remove", help="delete a whole review, including all its notes and exports")
+    remove.add_argument("review_id")
+
     note = commands.add_parser("note", help="add one pending note; the comment is read from stdin")
     note.add_argument("review_id")
     note.add_argument("--lines", required=True, metavar="START[-END]", help="1-based snapshot line range")
@@ -688,6 +700,8 @@ def main(argv: list[str] | None = None) -> int:
             export_notes(args.review_id, args.note)
         elif args.command in ("archive", "delete"):
             change_note_state(args.review_id, args.note, args.command)
+        elif args.command == "remove":
+            remove_review(args.review_id)
         elif args.command == "list":
             list_reviews()
         elif args.command == "note":

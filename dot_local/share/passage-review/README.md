@@ -45,6 +45,7 @@ passage-review delete REVIEW_ID --note NOTE_ID [--note NOTE_ID ...]
 passage-review list
 passage-review note REVIEW_ID --lines START[-END] [--quote TEXT] < comment.txt
 passage-review show REVIEW_ID
+passage-review remove REVIEW_ID
 ```
 
 ### Review in Neovim
@@ -85,7 +86,12 @@ freezes the buffer (the saved file, or the buffer text if it is unsaved) as a
 new review and opens it for comments. If the saved file already has reviews
 with pending notes, it asks first: reopen one of them (marked "file changed
 since" when the file no longer matches that snapshot) or start a new review. `:PassageReview REVIEW_ID` reopens an
-existing review.
+existing review. `:PassageReviewDelete` picks a saved review to delete (the
+current one is listed first) and asks before deleting it;
+`:PassageReviewDelete REVIEW_ID` goes straight to that confirmation. Deleting
+removes the snapshot, every note (pending and archived) and its exports, and
+closes buffers still showing it. `passage-review remove REVIEW_ID` does the
+same from the shell without asking.
 
 `note` and `show` are the plumbing the Neovim view uses: `note` saves one
 pending note with the comment read from stdin, and `show` prints the snapshot

@@ -444,6 +444,44 @@ assert(vim.b.passage_review_id and vim.b.passage_review_id ~= %r, "expected a ne
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(len(self.review_ids()), 2)
 
+    def test_remove_deletes_a_whole_review(self) -> None:
+        review_id = self.new_review("line\n")
+        self.cli("note", review_id, "--lines", "1", input_text="note\n")
+        removed = self.cli("remove", review_id)
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assertFalse(self.review_directory(review_id).exists())
+        again = self.cli("remove", review_id)
+        self.assertNotEqual(again.returncode, 0)
+        self.assertIn("not found", again.stderr)
+
+    @unittest.skipUnless(shutil.which("nvim"), "nvim is not installed")
+    def test_passage_review_delete_picks_current_review_and_confirms(self) -> None:
+        doc = self.root / "doc.md"
+        doc.write_text("only line\n", encoding="utf-8")
+        keep = self.cli("new", "--file", str(doc), "--no-open").stdout.strip()
+        target = self.cli("new", "--file", str(doc), "--no-open").stdout.strip()
+        result = self.run_nvim(doc, """
+local M = dofile(vim.env.PASSAGE_REVIEW_LUA)
+M.open(%r)
+local prompts = {}
+vim.ui.select = function(items, opts, choice)
+  table.insert(prompts, opts.prompt)
+  if #prompts == 1 then
+    assert(items[1].id == %r, "current review should be offered first")
+    choice(items[1])
+  else
+    choice("Cancel")
+  end
+end
+vim.cmd("PassageReviewDelete")
+assert(#prompts == 2, "expected pick + confirm")
+vim.ui.select = function(items, opts, choice) choice(items[1] == "Delete" and "Delete" or items[1]) end
+vim.cmd("PassageReviewDelete " .. %r)
+assert(not vim.b.passage_review_id, "deleted review buffer should be closed")
+""" % (target, target, target))
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(self.review_ids(), [keep])
+
     @unittest.skipUnless(shutil.which("nvim"), "nvim is not installed")
     def test_passage_review_command_starts_new_review_without_asking_when_nothing_is_pending(self) -> None:
         doc = self.root / "doc.md"
