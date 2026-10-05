@@ -393,6 +393,71 @@ vim.cmd("qa!")
         self.assertEqual((by_comment["charwise note\n"]["line_start"], by_comment["charwise note\n"]["line_end"]), (2, 2))
         self.assertEqual(by_comment["linewise note\n"]["quote"], "line one\nthe quick brown fox\n")
 
+    def run_nvim(self, file: Path, lua: str) -> subprocess.CompletedProcess[str]:
+        script = self.root / "drive.lua"
+        script.write_text(
+            "local ok, err = pcall(function()\n" + lua + "\nend)\n"
+            "if not ok then io.stderr:write(tostring(err)); vim.cmd('cquit 1') end\n"
+            "vim.cmd('qa!')\n",
+            encoding="utf-8",
+        )
+        self.env["PASSAGE_REVIEW_LUA"] = str(NVIM_MODULE)
+        return subprocess.run(
+            ["nvim", "--clean", "--headless", str(file), "-c", f"luafile {script}"],
+            env=self.env, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30, check=False,
+        )
+
+    def review_ids(self) -> list[str]:
+        return [line.split("\t")[0] for line in self.cli("list").stdout.splitlines() if line.startswith("rv-")]
+
+    @unittest.skipUnless(shutil.which("nvim"), "nvim is not installed")
+    def test_passage_review_command_offers_to_reopen_a_review_with_pending_notes(self) -> None:
+        doc = self.root / "doc.md"
+        doc.write_text("first line\nsecond line\n", encoding="utf-8")
+        old = self.cli("new", "--file", str(doc), "--no-open").stdout.strip()
+        self.assertEqual(self.cli("note", old, "--lines", "1", input_text="keep me\n").returncode, 0)
+
+        # Choosing the existing review reopens it; nothing new is created.
+        result = self.run_nvim(doc, """
+local M = dofile(vim.env.PASSAGE_REVIEW_LUA)
+local offered
+vim.ui.select = function(items, opts, choice)
+  offered = items
+  choice(items[1])
+end
+vim.cmd("PassageReview")
+assert(#offered == 2, "expected the pending review plus 'new', got " .. #offered)
+assert(offered[1].label:find(vim.env.OLD_ID, 1, true), offered[1].label)
+assert(offered[2].label == "Start a new review", offered[2].label)
+assert(vim.b.passage_review_id == vim.env.OLD_ID, "reopened " .. tostring(vim.b.passage_review_id))
+""".replace("vim.env.OLD_ID", repr(old)))
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(self.review_ids(), [old])
+
+        # Choosing "new" still starts a fresh review.
+        result = self.run_nvim(doc, """
+dofile(vim.env.PASSAGE_REVIEW_LUA)
+vim.ui.select = function(items, opts, choice) choice(items[#items]) end
+vim.cmd("PassageReview")
+assert(vim.b.passage_review_id and vim.b.passage_review_id ~= %r, "expected a new review")
+""" % old)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(len(self.review_ids()), 2)
+
+    @unittest.skipUnless(shutil.which("nvim"), "nvim is not installed")
+    def test_passage_review_command_starts_new_review_without_asking_when_nothing_is_pending(self) -> None:
+        doc = self.root / "doc.md"
+        doc.write_text("only line\n", encoding="utf-8")
+        old = self.cli("new", "--file", str(doc), "--no-open").stdout.strip()
+        result = self.run_nvim(doc, """
+dofile(vim.env.PASSAGE_REVIEW_LUA)
+vim.ui.select = function() error("should not ask") end
+vim.cmd("PassageReview")
+assert(vim.b.passage_review_id and vim.b.passage_review_id ~= %r, "expected a new review")
+""" % old)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(len(self.review_ids()), 2)
+
     @unittest.skipUnless(
         shutil.which("nvim") and MD_RENDER.is_dir(), "nvim or the installed md-render.nvim plugin is missing"
     )

@@ -116,6 +116,67 @@ local function scale_headings()
   end
 end
 
+-- Flicker: Neovim sends each redraw as one synchronized frame (DEC 2026), and
+-- md-render paints scaled headings in a separate write after it. Any redraw
+-- that touches a heading row shows a frame of plain headings first. While
+-- scaled headings are on screen, open the frame ourselves when a redraw
+-- starts, let Neovim write into it ('termsync' off), paint the headings after
+-- the flush (SafeState), then close it, so the terminal shows one frame.
+local function sync_heading_frames()
+  local text_size = require("md-render.text_size")
+  local preview = require("md-render.preview")
+  local open, timer = false, vim.uv.new_timer()
+
+  local function states()
+    local list = {}
+    for _, session in pairs(preview._sessions or {}) do
+      local st = session.text_size_state
+      if st and st.win and vim.api.nvim_win_is_valid(st.win) then
+        table.insert(list, st)
+      end
+    end
+    return list
+  end
+
+  local function close(paint)
+    if not open then
+      return
+    end
+    if paint then
+      for _, st in ipairs(states()) do
+        pcall(text_size.paint, st)
+      end
+    end
+    open = false
+    timer:stop()
+    vim.api.nvim_ui_send("\27[?2026l")
+  end
+
+  local ns = vim.api.nvim_create_namespace("md_render_frame_sync")
+  vim.api.nvim_set_decoration_provider(ns, {
+    on_start = function()
+      local active = #states() > 0 and text_size.supports()
+      if vim.o.termsync == active then
+        vim.o.termsync = not active
+      end
+      if active and not open then
+        open = true
+        pcall(vim.api.nvim_ui_send, "\27[?2026h")
+        -- Never hold a frame for long (keys held down skip SafeState).
+        timer:start(150, 0, vim.schedule_wrap(function()
+          close(false)
+        end))
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("SafeState", {
+    group = vim.api.nvim_create_augroup("md_render_frame_sync", { clear = true }),
+    callback = function()
+      close(true)
+    end,
+  })
+end
+
 return {
   {
     "delphinus/md-render.nvim",
@@ -139,6 +200,7 @@ return {
     },
     config = function()
       scale_headings()
+      sync_heading_frames()
       vim.api.nvim_create_autocmd({ "BufWinEnter", "WinEnter", "WinResized", "VimResized" }, {
         group = vim.api.nvim_create_augroup("md_render_fit_window", { clear = true }),
         callback = function()

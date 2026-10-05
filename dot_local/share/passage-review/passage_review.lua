@@ -350,15 +350,34 @@ function M.open(review_id)
   attach(vim.api.nvim_get_current_buf(), data)
 end
 
---- Freeze the current buffer as a new review and open it for commenting.
-function M.review_current()
-  local buf = vim.api.nvim_get_current_buf()
-  if vim.b[buf].passage_review_id then
-    return notify("This buffer is already review " .. vim.b[buf].passage_review_id)
+--- Saved reviews of `path` that still have pending notes, newest first.
+local function pending_reviews_of(path)
+  local ok, listing = pcall(cli, { "list" })
+  if not ok then
+    return {}
   end
+  local found = {}
+  for line in listing:gmatch("[^\n]+") do
+    local id, pending, created = line:match("^(rv%-%x+)\t.-\t(%d+) pending\t(.*)$")
+    if id and tonumber(pending) > 0 then
+      local shown, out = pcall(cli, { "show", id })
+      local data = shown and vim.json.decode(out) or nil
+      if data and data.source.kind == "file" and vim.fs.normalize(data.source.reference) == path then
+        table.insert(found, { id = id, pending = tonumber(pending), created = created, snapshot = data.snapshot_path })
+      end
+    end
+  end
+  table.sort(found, function(a, b)
+    return a.created > b.created
+  end)
+  return found
+end
+
+--- Freeze the current buffer as a new review and open it for commenting.
+local function new_review(buf, as_file)
   local name = vim.api.nvim_buf_get_name(buf)
   local args, stdin
-  if name ~= "" and vim.bo[buf].buftype == "" and not vim.bo[buf].modified and vim.uv.fs_stat(name) then
+  if as_file then
     args = { "new", "--file", name, "--no-open" }
   else
     local title = name ~= "" and vim.fn.fnamemodify(name, ":t") or "[No Name]"
@@ -370,6 +389,48 @@ function M.review_current()
     return notify(out, vim.log.levels.ERROR)
   end
   M.open(vim.trim(out))
+end
+
+--- Review the current buffer. A saved file that already has reviews with
+--- pending notes offers to reopen one of them instead of starting a new one.
+function M.review_current()
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.b[buf].passage_review_id then
+    return notify("This buffer is already review " .. vim.b[buf].passage_review_id)
+  end
+  local name = vim.api.nvim_buf_get_name(buf)
+  local as_file = name ~= "" and vim.bo[buf].buftype == "" and not vim.bo[buf].modified and vim.uv.fs_stat(name) ~= nil
+  local existing = as_file and pending_reviews_of(vim.fs.normalize(vim.uv.fs_realpath(name) or name)) or {}
+  if #existing == 0 then
+    return new_review(buf, as_file)
+  end
+  local current = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") .. "\n"
+  local choices = {}
+  for _, review in ipairs(existing) do
+    local snapshot = table.concat(vim.fn.readfile(review.snapshot, "b"), "\n")
+    review.label = ("Reopen %s · %d pending · %s%s"):format(
+      review.id,
+      review.pending,
+      review.created:sub(1, 16):gsub("T", " "),
+      snapshot ~= current and snapshot .. "\n" ~= current and " · file changed since" or ""
+    )
+    table.insert(choices, review)
+  end
+  table.insert(choices, { label = "Start a new review" })
+  vim.ui.select(choices, {
+    prompt = "This file has a review with pending notes",
+    format_item = function(item)
+      return item.label
+    end,
+  }, function(choice)
+    if not choice then
+      return
+    elseif choice.id then
+      M.open(choice.id)
+    else
+      new_review(buf, as_file)
+    end
+  end)
 end
 
 function M.setup()
