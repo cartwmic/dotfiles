@@ -79,8 +79,8 @@ export async function recall(
 	const resp = (await postJson(cfg, `${bankBase(cfg)}/memories/recall`, {
 		query,
 		types: cfg.recallTypes,
-		// Drop raw facts already folded into a returned observation; unmerged
-		// facts still surface while consolidation lags.
+		// Only matters when recallTypes includes raw facts: drop facts already
+		// folded into a returned observation.
 		prefer_observations: true,
 		budget: cfg.recallBudget,
 		max_tokens: cfg.recallMaxTokens,

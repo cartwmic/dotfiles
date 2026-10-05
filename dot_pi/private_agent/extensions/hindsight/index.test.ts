@@ -174,7 +174,7 @@ test("recall and retain send the expected request bodies", async () => {
 	}
 	assert.equal(bodies[0].url, "/v1/default/banks/b/memories/recall");
 	assert.deepEqual(bodies[0].body.include, { entities: null });
-	assert.deepEqual(bodies[0].body.types, ["observation", "world", "experience"]);
+	assert.deepEqual(bodies[0].body.types, ["observation"]);
 	assert.equal(bodies[0].body.prefer_observations, true);
 	assert.equal(bodies[1].url, "/v1/default/banks/b/memories");
 	assert.deepEqual(bodies[1].body, {
