@@ -95,7 +95,120 @@ end
 -- The comment is drafted in a real temporary Markdown file, so the whole
 -- Neovim config (completion, spelling, linting, formatting) works as usual.
 -- Every :w saves the draft as a pending note; later writes replace that note.
-local function open_comment(buf, first, last, quote)
+-- md-render.nvim support: its rendered view of a review is a separate buffer.
+-- Map rendered lines back to snapshot lines so comments work there too.
+local function md_session(buf)
+  if not vim.b[buf].md_render then
+    return nil
+  end
+  local ok, preview = pcall(require, "md-render.preview")
+  local session = ok and type(preview._sessions) == "table" and preview._sessions[buf] or nil
+  local source = session and session.source_bufnr
+  if source and vim.api.nvim_buf_is_valid(source) and vim.b[source].passage_review_id then
+    return session
+  end
+end
+
+local function render_views(source)
+  local ok, preview = pcall(require, "md-render.preview")
+  if not ok or type(preview._sessions) ~= "table" then
+    return
+  end
+  for view, session in pairs(preview._sessions) do
+    if session.source_bufnr == source and vim.api.nvim_buf_is_valid(view) then
+      M.render_view(view)
+    end
+  end
+end
+
+local open_comment
+
+function M.render_view(view)
+  local session = md_session(view)
+  local map = session and session.content and session.content.source_line_map
+  if not map then
+    return
+  end
+  local ok, out = pcall(cli, { "show", vim.b[session.source_bufnr].passage_review_id })
+  if not ok then
+    return
+  end
+  vim.api.nvim_buf_clear_namespace(view, ns, 0, -1)
+  local line_count = vim.api.nvim_buf_line_count(view)
+  for _, note in ipairs(vim.json.decode(out).notes) do
+    local last
+    for row = 1, math.min(#map, line_count) do
+      if map[row] and map[row] >= note.line_start and map[row] <= note.line_end then
+        vim.api.nvim_buf_set_extmark(view, ns, row - 1, 0, { sign_text = "✎", sign_hl_group = "PassageReviewSign" })
+        last = row
+      end
+    end
+    if last then
+      local virt_lines = { { { "  ✎ " .. note.note_id, "PassageReviewSign" } } }
+      for _, line in ipairs(vim.split(vim.trim(note.comment), "\n")) do
+        virt_lines[#virt_lines + 1] = { { "    " .. line, "PassageReviewComment" } }
+      end
+      vim.api.nvim_buf_set_extmark(view, ns, last - 1, 0, { virt_lines = virt_lines })
+    end
+  end
+end
+
+local function comment_rendered(view)
+  local session = md_session(view)
+  if not session then
+    return
+  end
+  local mode = vim.fn.mode()
+  local p1, p2 = vim.fn.getpos("v"), vim.fn.getpos(".")
+  if mode ~= "v" and mode ~= "V" then
+    p1 = p2
+  end
+  local map = session.content.source_line_map or {}
+  local first, last
+  for row = math.min(p1[2], p2[2]), math.max(p1[2], p2[2]) do
+    local line = map[row]
+    if line and line > 0 then
+      first, last = math.min(first or line, line), math.max(last or line, line)
+    end
+  end
+  local selected = mode == "v" and vim.trim(table.concat(vim.fn.getregion(p1, p2, { type = "v" }), "\n")) or ""
+  if mode == "v" or mode == "V" then
+    vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "nx", false)
+  end
+  if not first then
+    return notify("No source lines under the selection.", vim.log.levels.WARN)
+  end
+  -- Keep an exact quote when the rendered text appears verbatim in the source.
+  local source = table.concat(vim.api.nvim_buf_get_lines(session.source_bufnr, first - 1, last, false), "\n")
+  local quote = selected ~= "" and source:find(selected, 1, true) and selected or nil
+  open_comment(session.source_bufnr, first, last, quote)
+end
+
+local function attach_view(view)
+  if not md_session(view) then
+    return
+  end
+  if not vim.b[view].passage_review_mapped then
+    vim.b[view].passage_review_mapped = true
+    vim.keymap.set({ "n", "x" }, "<leader>zc", function()
+      comment_rendered(view)
+    end, { buffer = view, desc = "passage-review: comment on selection or line" })
+  end
+  M.render_view(view)
+end
+
+vim.api.nvim_create_autocmd({ "BufWinEnter", "WinResized" }, {
+  group = vim.api.nvim_create_augroup("passage_review_md_render", { clear = true }),
+  callback = function()
+    vim.schedule(function()
+      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        attach_view(vim.api.nvim_win_get_buf(win))
+      end
+    end)
+  end,
+})
+
+function open_comment(buf, first, last, quote)
   local id = vim.b[buf].passage_review_id
   local excerpt = vim.trim((quote or vim.api.nvim_buf_get_lines(buf, first - 1, first, false)[1] or ""):gsub("%s+", " "))
   if vim.fn.strchars(excerpt) > 40 then
@@ -135,6 +248,7 @@ local function open_comment(buf, first, last, quote)
       end
       if vim.api.nvim_buf_is_valid(buf) then
         render(buf)
+        render_views(buf)
       end
     end,
   })

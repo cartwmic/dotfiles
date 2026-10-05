@@ -90,6 +90,7 @@ but turned off by [`disabled.lua.tmpl`](./lua/plugins/disabled.lua.tmpl).
 | [`nvim-metals.lua`](./lua/plugins/nvim-metals.lua) | Metals for Scala/sbt/Java (needs coursier) |
 | [`rustaceanvim.lua`](./lua/plugins/rustaceanvim.lua) | rust-analyzer overlay |
 | [`markdown.lua`](./lua/plugins/markdown.lua) | `tadmccorkle/markdown.nvim` maps |
+| [`md-render.lua`](./lua/plugins/md-render.lua) | Rendered Markdown view (`delphinus/md-render.nvim`); see below |
 | [`lint.lua`](./lua/plugins/lint.lua) | `markdownlint-cli2` config at `~/.config/.markdownlint-cli2.jsonc` |
 | [`image.lua`](./lua/plugins/image.lua) | `magick_cli` processor; no luarocks build |
 | [`diagram.lua`](./lua/plugins/diagram.lua) | Spec present but **disabled** in `disabled.lua.tmpl` |
@@ -99,6 +100,29 @@ but turned off by [`disabled.lua.tmpl`](./lua/plugins/disabled.lua.tmpl).
 | [`colorful-winsep.lua`](./lua/plugins/colorful-winsep.lua) | Active-window separator |
 | [`vectorcode.lua`](./lua/plugins/vectorcode.lua) | VectorCode (`uv tool upgrade vectorcode` on build) |
 | [`vim-just.lua`](./lua/plugins/vim-just.lua) | Justfile syntax |
+
+### Rendered Markdown
+
+LazyVim's `render-markdown.nvim` decorates the source buffer. For a
+browser-like view, [`md-render.lua`](./lua/plugins/md-render.lua) adds
+[md-render.nvim](https://github.com/delphinus/md-render.nvim): an
+80-column rendered buffer with tables, callouts, code blocks, images and
+Mermaid. In a plain kitty window (0.40 or newer) headings are drawn at larger
+sizes with kitty's text sizing protocol. Inside a multiplexer such as Herdr the
+terminal is not identified as kitty, so headings stay normal size and inline
+images may be missing.
+
+| Keys | Action |
+| --- | --- |
+| `<leader>mr` | Toggle the current window between source and rendered view |
+| `<leader>ms` | Source and rendered view side by side; edits show up live |
+| `<leader>ma` | Rendered view outside Insert mode, source while typing (experimental) |
+| `<leader>mf` | Floating rendered preview |
+
+The rendered view is read-only; edit in the source. Scaled headings are painted
+over Neovim's grid, so floating windows on top of them (for example zen mode)
+leave stale large text until the float closes. `<leader>cp` still opens the
+browser preview.
 
 [`plugin/passage_review.lua`](./plugin/passage_review.lua) adds
 `:PassageReview` when the passage-review CLI is installed. It freezes the
