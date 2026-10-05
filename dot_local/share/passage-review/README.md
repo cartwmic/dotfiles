@@ -71,6 +71,14 @@ passage, and stay there when you reopen the review. Quit Neovim as usual.
 After Neovim exits, the CLI lists the pending notes and prints the `export`
 command for them.
 
+With [md-render.nvim](https://github.com/delphinus/md-render.nvim) installed
+(the chezmoi Neovim config maps it to `<leader>mr`), you can read the review
+as rendered Markdown and comment there too. `<leader>zc` in the rendered view
+maps the selected rows back to snapshot lines. A characterwise selection keeps
+an exact quote only when that text appears verbatim in the source; otherwise
+the note quotes the whole source lines. This uses md-render's internal
+line map, so a plugin update can break it; the source view always works.
+
 To review a buffer you already have open in Neovim, run `:PassageReview`. It
 freezes the buffer (the saved file, or the buffer text if it is unsaved) as a
 new review and opens it for comments. `:PassageReview REVIEW_ID` reopens an

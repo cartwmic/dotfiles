@@ -19,6 +19,7 @@ from pathlib import Path
 
 CLI = Path(__file__).resolve().parents[3] / "dot_local" / "bin" / "executable_passage-review"
 NVIM_MODULE = Path(__file__).resolve().with_name("passage_review.lua")
+MD_RENDER = Path.home() / ".local" / "share" / "nvim" / "lazy" / "md-render.nvim"
 REVIEW_ID_RE = re.compile(r"rv-[0-9a-f]{12}")
 
 
@@ -391,6 +392,54 @@ vim.cmd("qa!")
         self.assertEqual(by_comment["charwise note\n"]["quote"], "brown")
         self.assertEqual((by_comment["charwise note\n"]["line_start"], by_comment["charwise note\n"]["line_end"]), (2, 2))
         self.assertEqual(by_comment["linewise note\n"]["quote"], "line one\nthe quick brown fox\n")
+
+    @unittest.skipUnless(
+        shutil.which("nvim") and MD_RENDER.is_dir(), "nvim or the installed md-render.nvim plugin is missing"
+    )
+    def test_comment_from_md_render_view_maps_to_snapshot_lines(self) -> None:
+        review_id = self.new_review("# Title\n\nIntro paragraph.\n\n- first item\n- second item\n")
+        script = self.root / "drive.lua"
+        script.write_text(
+            """
+local ok, err = pcall(function()
+vim.g.mapleader = " "
+vim.opt.rtp:prepend(vim.env.MD_RENDER)
+local M = dofile(vim.env.PASSAGE_REVIEW_LUA)
+M.open(vim.env.PASSAGE_REVIEW_ID)
+require("md-render.preview").toggle()
+vim.api.nvim_exec_autocmds("BufWinEnter", {})
+vim.wait(200)
+local view = vim.api.nvim_get_current_buf()
+assert(vim.b[view].md_render, "expected the md-render view")
+local row = vim.fn.search("second item")
+assert(row > 0, "rendered text not found")
+vim.api.nvim_feedkeys(vim.keycode("V<Space>zc"), "x", false)
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "from the rendered view" })
+vim.cmd("stopinsert | write | quit")
+local virt = 0
+for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(view, vim.api.nvim_create_namespace("passage_review"), 0, -1, { details = true })) do
+  if mark[4].virt_lines then virt = virt + 1 end
+end
+assert(virt == 1, "expected the comment in the rendered view, got " .. virt)
+end)
+if not ok then
+  io.stderr:write(tostring(err))
+  vim.cmd("cquit 1")
+end
+vim.cmd("qa!")
+""",
+            encoding="utf-8",
+        )
+        self.env.update(PASSAGE_REVIEW_LUA=str(NVIM_MODULE), PASSAGE_REVIEW_ID=review_id, MD_RENDER=str(MD_RENDER))
+        result = subprocess.run(
+            ["nvim", "--clean", "--headless", "-c", f"luafile {script}"],
+            env=self.env, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        notes = json.loads(self.cli("show", review_id).stdout)["notes"]
+        self.assertEqual(len(notes), 1)
+        self.assertEqual((notes[0]["line_start"], notes[0]["line_end"]), (6, 6))
+        self.assertEqual(notes[0]["quote"], "- second item\n")
 
 
 if __name__ == "__main__":
