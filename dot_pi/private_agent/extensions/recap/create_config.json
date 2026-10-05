@@ -8,7 +8,7 @@
   "intervalMinutes": 15,
   "timeoutSeconds": 180,
   "recursion": false,
-  "instructions": "Write a detailed narrative recap for reorientation and resumption. Distinguish confirmed results from ongoing, queued, partial and failed work.",
+  "instructions": "Write a concise narrative of the recent work. Use only the supplied information and do not invent details. Distinguish confirmed results from ongoing, queued, partial and failed work. End with the present state: what is complete, what remains, and the current next step when clear. Keep the result short and useful as a session recap.",
   "options": {
     "thinkingLevel": "off"
   },
