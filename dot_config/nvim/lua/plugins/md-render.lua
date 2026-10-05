@@ -1,9 +1,57 @@
--- Browser-like Markdown view inside Neovim: an 80-column rendered buffer with
--- tables, callouts, images and Mermaid. In a plain kitty window (>= 0.40)
--- headings are drawn larger with kitty's text sizing protocol; elsewhere
--- (for example inside Herdr) they fall back to normal size. The rendered view
--- is a separate read-only buffer; edit in the source. passage-review reviews
+-- Browser-like Markdown view inside Neovim: tables, callouts, images and
+-- Mermaid in a separate read-only rendered buffer; edit in the source. In a
+-- plain kitty window (>= 0.40) headings are drawn larger with kitty's text
+-- sizing protocol; inside Herdr they stay normal size. passage-review reviews
 -- also accept <leader>zc comments in the rendered view.
+--
+-- Width: md-render caps text at 80 columns. Here the rendered text fills the
+-- window instead, so zen mode (<leader>uz) sets the reading column.
+
+-- md-render has no option for "follow the window"; set the width on its
+-- session (internal fields) and mark it explicit so its own 80-column resize
+-- handler stays out of the way.
+--
+-- Scaled headings (kitty text sizing) are painted for one window per session.
+-- Zen shows the rendered buffer in a float, so move that painting to the
+-- window in front: zen's float while it is open, the original after.
+local function reattach_text_size(session, win)
+  local text_size = require("md-render.text_size")
+  if session.text_size_state then
+    -- detach also forces a full redraw, which clears stale scaled glyphs.
+    pcall(text_size.detach, session.text_size_state)
+    session.text_size_state = nil
+  end
+  session.text_size_state = text_size.attach(win, session.content)
+end
+
+local function fit_render_windows()
+  local ok, preview = pcall(require, "md-render.preview")
+  if not ok or type(preview._sessions) ~= "table" then
+    return
+  end
+  local current = vim.api.nvim_get_current_win()
+  for buf, session in pairs(preview._sessions) do
+    local win = vim.api.nvim_win_get_buf(current) == buf and current or vim.fn.bufwinid(buf)
+    if win ~= -1 and vim.api.nvim_win_is_valid(win) then
+      local changed = session.win ~= win
+      session.win = win
+      local info = vim.fn.getwininfo(win)[1]
+      local width = math.max(20, vim.api.nvim_win_get_width(win) - (info and info.textoff or 0) - 2)
+      session._explicit_max_width = true
+      if session.opts.max_width ~= width then
+        session.opts.max_width = width
+        pcall(session.rebuild, session)
+        changed = true
+      end
+      -- A rebuild or a window switch can leave headings plain-size or stale;
+      -- start painting afresh in the window that is in front.
+      if changed then
+        pcall(reattach_text_size, session, win)
+      end
+    end
+  end
+end
+
 return {
   {
     "delphinus/md-render.nvim",
@@ -25,10 +73,34 @@ return {
       { "<leader>ma", "<cmd>MdRender auto toggle<cr>", ft = "markdown", desc = "Markdown: render outside Insert" },
       { "<leader>mf", "<Plug>(md-render-preview)", ft = "markdown", desc = "Markdown: floating preview" },
     },
+    config = function()
+      vim.api.nvim_create_autocmd({ "BufWinEnter", "WinEnter", "WinResized", "VimResized" }, {
+        group = vim.api.nvim_create_augroup("md_render_fit_window", { clear = true }),
+        callback = function()
+          vim.schedule(fit_render_windows)
+        end,
+      })
+      vim.schedule(fit_render_windows)
+    end,
   },
   {
     "folke/which-key.nvim",
     optional = true,
     opts = { spec = { { "<leader>m", group = "markdown" } } },
+  },
+  -- Zen (<leader>uz) is the narrow reading column; headings follow it there.
+  {
+    "folke/snacks.nvim",
+    opts = {
+      zen = {
+        win = { width = 90 },
+        on_open = function()
+          vim.schedule(fit_render_windows)
+        end,
+        on_close = function()
+          vim.schedule(fit_render_windows)
+        end,
+      },
+    },
   },
 }

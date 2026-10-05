@@ -105,9 +105,11 @@ but turned off by [`disabled.lua.tmpl`](./lua/plugins/disabled.lua.tmpl).
 
 LazyVim's `render-markdown.nvim` decorates the source buffer. For a
 browser-like view, [`md-render.lua`](./lua/plugins/md-render.lua) adds
-[md-render.nvim](https://github.com/delphinus/md-render.nvim): an
-80-column rendered buffer with tables, callouts, code blocks, images and
-Mermaid. In a plain kitty window (0.40 or newer) headings are drawn at larger
+[md-render.nvim](https://github.com/delphinus/md-render.nvim): a rendered
+buffer with tables, callouts, code blocks, images and Mermaid. The rendered
+text fills its window instead of md-render's fixed 80 columns, so zen mode
+(`<leader>uz`, 90 columns here) sets the reading width. This sets fields on
+md-render's internal session, so a plugin update can break it. In a plain kitty window (0.40 or newer) headings are drawn at larger
 sizes with kitty's text sizing protocol. Inside a multiplexer such as Herdr the
 terminal is not identified as kitty, so headings stay normal size and inline
 images may be missing.
@@ -119,9 +121,11 @@ images may be missing.
 | `<leader>ma` | Rendered view outside Insert mode, source while typing (experimental) |
 | `<leader>mf` | Floating rendered preview |
 
-The rendered view is read-only; edit in the source. Scaled headings are painted
-over Neovim's grid, so floating windows on top of them (for example zen mode)
-leave stale large text until the float closes. `<leader>cp` still opens the
+The rendered view is read-only; edit in the source. md-render paints scaled
+headings in one window per view, so the config moves that painting to the
+window in front: zen's float while zen is open, the original window after it
+closes. For about a second after zen opens, the large headings behind it may
+still show before the redraw clears them. `<leader>cp` still opens the
 browser preview.
 
 [`plugin/passage_review.lua`](./plugin/passage_review.lua) adds
