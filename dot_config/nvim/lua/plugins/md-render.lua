@@ -151,7 +151,13 @@ return {
     opts = {
       zen = {
         win = { width = 90 },
-        on_open = function()
+        on_open = function(win)
+          -- Zen dims everything but the code around the cursor; that hides most
+          -- of a document, so keep Markdown (source or rendered) undimmed.
+          local buf = win and win.buf or vim.api.nvim_get_current_buf()
+          if vim.b[buf].md_render or vim.bo[buf].filetype == "markdown" then
+            Snacks.dim.disable()
+          end
           vim.schedule(fit_render_windows)
         end,
         on_close = function()
