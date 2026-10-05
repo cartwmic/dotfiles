@@ -5,16 +5,14 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { piCodingAgentRoot } from "../pi-root.mjs";
 
 const name = "headless-extension-drain";
 const marker = `chezmoi-pi-patch:${name} v1`;
 const log = (text) => console.log(`[pi-patch:${name}] ${text}`);
 const check = process.argv.includes("--check");
 // Test a copied package without modifying the installed CLI.
-const root = process.env.PI_HEADLESS_PATCH_PACKAGE ?? join(
-	execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim(),
-	"@earendil-works/pi-coding-agent",
-);
+const root = process.env.PI_HEADLESS_PATCH_PACKAGE ?? piCodingAgentRoot();
 const edits = {
 	"dist/core/agent-session.js": [
 		[
@@ -106,7 +104,7 @@ const edits = {
 };
 
 try {
-	if (!existsSync(join(root, "package.json"))) {
+	if (!root || !existsSync(join(root, "package.json"))) {
 		if (check) throw new Error("Pi is not installed; cannot verify");
 		log("Pi is not installed; skipped");
 		process.exit(0);

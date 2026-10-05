@@ -68,7 +68,9 @@ fork (`SIDE_CHANNEL_BLOCK_START` / `isContextModeSideChannelText` in
 
 ## Scope
 
-- **Target:** `@earendil-works/pi-coding-agent/dist/core/messages.js`
+- **Targets:** `@earendil-works/pi-coding-agent/dist/core/messages.js` (SDK) and
+  the `dist/bundle/chunks/*.js` chunk holding `convertToLlm` (the `pi` CLI runs
+  the bundle). The bundle anchor is the minified `case"custom":return{…}`.
 - **Profiles:** all (no profile gate). The wrapping is safe for every provider.
 - **Anchor:** the single `const content = typeof m.content === "string" …`
   line in `convertToLlm`'s `case "custom"`.
