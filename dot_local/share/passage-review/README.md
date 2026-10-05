@@ -82,7 +82,9 @@ line map, so a plugin update can break it; the source view always works.
 
 To review a buffer you already have open in Neovim, run `:PassageReview`. It
 freezes the buffer (the saved file, or the buffer text if it is unsaved) as a
-new review and opens it for comments. `:PassageReview REVIEW_ID` reopens an
+new review and opens it for comments. If the saved file already has reviews
+with pending notes, it asks first: reopen one of them (marked "file changed
+since" when the file no longer matches that snapshot) or start a new review. `:PassageReview REVIEW_ID` reopens an
 existing review.
 
 `note` and `show` are the plumbing the Neovim view uses: `note` saves one

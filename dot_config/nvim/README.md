@@ -131,7 +131,10 @@ the escape codes it sends), so recheck headings after updating the plugin.
 The rendered view is read-only; edit in the source. md-render paints scaled
 headings in one window per view, so the config moves that painting to the
 window in front: zen's float while zen is open, the original window after it
-closes. For about a second after zen opens, the large headings behind it may
+closes. Neovim sends each redraw as one terminal frame and md-render paints
+headings in a separate write, which flickered plain headings on `j`/`k`. While
+scaled headings are on screen the config turns `'termsync'` off and frames the
+redraw plus the heading paint itself. For about a second after zen opens, the large headings behind it may
 still show before the redraw clears them. `<leader>cp` still opens the
 browser preview.
 
