@@ -356,6 +356,14 @@ def scripted_interactions(root, env, receipts, Client):
                 client.key(b'[')
                 if not selected_in_frame(capture(f'status-{status}-return-{target}'), target, snapshot):
                     raise proof.ProofFailure('status traversal failed to return in display order')
+        # A labelled idle/done state is pending background work, e.g. Pi async subagents.
+        for status in ('idle', 'done'):
+            snapshot['panes'][0]['agent_status'] = status
+            snapshot['panes'][0]['state_labels'] = {status: '⏳ 1 subagent (worker)'}
+            client.key(b'r'); waiting = card(capture(f'waiting-{status}'), 'p1', snapshot)
+            if not waiting or not any(row.strip() == 'WAITING · 1 subagent' for row in waiting['rows']):
+                raise proof.ProofFailure(f'labelled {status} pane did not render WAITING')
+        del snapshot['panes'][0]['state_labels']
         native_before = [p['pane_id'] for p in snapshot['panes']]
         snapshot['panes'][0]['agent_status'] = 'idle'
         snapshot['panes'][1]['agent_status'] = 'blocked'

@@ -1,6 +1,6 @@
 import { markdownLines, plainMarkdown } from '../markdown.mjs';
 import { displayTime } from '../time.mjs';
-import { orderedPanesOfTab, orderedTabIds } from '../navigation.mjs';
+import { orderedPanesOfTab, orderedTabIds, waitingLabel } from '../navigation.mjs';
 const clean = value => String(value ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\t/g, '    ').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ');
 // Keep ANSI, combining sequences and emoji clusters out of cell arithmetic.
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
@@ -54,8 +54,10 @@ export function paint(token, bg = false) {
   return token?.kind === 'ansi' && codes[token.name] ? `\x1b[${codes[token.name] + (bg ? 10 : 0)}m` : '';
 }
 const awaiting = pane => pane.agent?.status === 'blocked' && pane.agent?.stateLabels?.blocked === 'Awaiting answer';
-const stateName = pane => awaiting(pane) ? '× Awaiting answer' : pane.agent?.recognized ? ({ idle:'READY', blocked:'× BLOCKED' }[pane.agent.status] || pane.agent.status?.toUpperCase() || 'UNKNOWN') : pane.agent?.present ? 'UNKNOWN' : 'NO AGENT';
-const stateColor = pane => !pane.agent?.recognized ? 'overlay0' : ({ blocked:'red', working:'green', idle:'blue', done:'teal' }[pane.agent?.status] || 'overlay0');
+// Only the pending count is shown; agent names and task text stay in Herdr's own label.
+const waitingName = pane => { const count = waitingLabel(pane).match(/(\d+)\s+subagents?\b/)?.[1]; return count ? `WAITING · ${count} subagent${count === '1' ? '' : 's'}` : 'WAITING'; };
+const stateName = pane => awaiting(pane) ? '× Awaiting answer' : waitingLabel(pane) ? waitingName(pane) : pane.agent?.recognized ? ({ idle:'READY', blocked:'× BLOCKED' }[pane.agent.status] || pane.agent.status?.toUpperCase() || 'UNKNOWN') : pane.agent?.present ? 'UNKNOWN' : 'NO AGENT';
+const stateColor = pane => !pane.agent?.recognized ? 'overlay0' : waitingLabel(pane) ? 'peach' : ({ blocked:'red', working:'green', idle:'blue', done:'teal' }[pane.agent?.status] || 'overlay0');
 function blocked(model, ids) { return ids.filter(id => model.panes[id]?.agent?.recognized && model.panes[id]?.agent?.status === 'blocked').length; }
 export function mapLines(state, width, now = Date.now()) {
   const { model, journey } = state, palette = state.theme?.palette;
@@ -179,8 +181,8 @@ export function mapFrame(state,width=100,height=24,now=Date.now()) {
   width=Math.max(1,width);height=Math.max(3,height);
   const {body,anchor,end,positions,selectedLine,rectangles}=mapLines(state,width,now),journey=state.journey;
   const footers=width<cellWidth(FOOTER) && height>=6 ? ['arrows/hjkl select · [/] pane','Enter open/focus · d digest · f focus','n blocked · r refresh · Esc/q'].map(line=>compact(line,width)) : [compact(FOOTER,width)];
-  const panes=Object.values(state.model.panes),count=status=>panes.filter(p=>p.agent?.recognized && p.agent.status===status).length;
-  const summary=`!${count('blocked')} W${count('working')} R${count('idle')} · ${state.model.workspaceOrder.length}ws ${Object.keys(state.model.tabs).length}t`;
+  const panes=Object.values(state.model.panes),count=status=>panes.filter(p=>p.agent?.recognized && p.agent.status===status && !waitingLabel(p)).length,waiting=panes.filter(waitingLabel).length;
+  const summary=`!${count('blocked')} W${count('working')} R${count('idle')} P${waiting} · ${state.model.workspaceOrder.length}ws ${Object.keys(state.model.tabs).length}t`;
   const headers=['Herdr Overview',summary];
   const capacity=Math.max(0,height-headers.length-footers.length-(state.notice ? 1:0)),max=Math.max(0,body.length-capacity);
   let relative=Math.max(0,journey?.detailScroll||0);
@@ -198,7 +200,7 @@ export function mapFrame(state,width=100,height=24,now=Date.now()) {
   const style=(text,role)=>`${paint(palette?.[role])}${paint(palette?.panel_bg,true)}${pad(compact(text,width),width)}\x1b[0m`;
   // Lines narrower than the canvas clear their old tail (the viewer redraws in place).
   const visible=body.slice(offset,offset+capacity).map(line=>cellWidth(line)<width ? line+'\x1b[K' : line);while(visible.length<capacity)visible.push(style('','text'));
-  const text = [style(headers[0],'accent'), paint(palette?.panel_bg,true) + [[`!${count('blocked')}`,count('blocked')?'yellow':'overlay0'],[` W${count('working')}`,'green'],[` R${count('idle')}`,'blue'],[` · ${state.model.workspaceOrder.length}ws ${Object.keys(state.model.tabs).length}t`,'subtext0']].map(([text,role])=>paint(palette?.[role])+text).join('') + ' '.repeat(Math.max(0,width-cellWidth(summary))) + '\x1b[0m',...visible,...(state.notice?[style(state.notice,'yellow')]:[]),...footers.map(line=>style(line,'overlay0'))].join('\n');
+  const text = [style(headers[0],'accent'), paint(palette?.panel_bg,true) + [[`!${count('blocked')}`,count('blocked')?'yellow':'overlay0'],[` W${count('working')}`,'green'],[` R${count('idle')}`,'blue'],[` P${waiting}`,'peach'],[` · ${state.model.workspaceOrder.length}ws ${Object.keys(state.model.tabs).length}t`,'subtext0']].map(([text,role])=>paint(palette?.[role])+text).join('') + ' '.repeat(Math.max(0,width-cellWidth(summary))) + '\x1b[0m',...visible,...(state.notice?[style(state.notice,'yellow')]:[]),...footers.map(line=>style(line,'overlay0'))].join('\n');
   return {text,rectangles,viewport:{x:0,y:headers.length,width,height:capacity,offset,max}};
 }
 export function renderMap(...args) { return mapFrame(...args).text; }

@@ -1,7 +1,15 @@
 // Display order inside a workspace: questions (blocked), then ready, then
-// working, then everything else; native order breaks ties.
+// working or waiting, then everything else; native order breaks ties.
 const RANK = { blocked: 0, idle: 1, working: 2 };
-export const paneRank = pane => pane?.agent?.recognized ? RANK[pane.agent.status] ?? 3 : 3;
+// An idle/done agent whose integration labels that state still has pending
+// background work (for example Pi async subagents), so it is not ready yet.
+export const waitingLabel = pane => {
+  const agent = pane?.agent;
+  if (!agent?.recognized || (agent.status !== 'idle' && agent.status !== 'done')) return null;
+  const label = agent.stateLabels?.[agent.status];
+  return typeof label === 'string' && label.trim() ? label.trim() : null;
+};
+export const paneRank = pane => !pane?.agent?.recognized ? 3 : waitingLabel(pane) ? RANK.working : RANK[pane.agent.status] ?? 3;
 const byRank = (ids, rank) => ids.map((id, index) => ({ id, index, rank: rank(id) })).sort((a, b) => a.rank - b.rank || a.index - b.index).map(item => item.id);
 export function orderedPanesOfTab(model, tabId) {
   return byRank((model.tabs[tabId]?.paneIds ?? []).filter(id => model.panes[id]), id => paneRank(model.panes[id]));
