@@ -121,6 +121,12 @@ images may be missing.
 | `<leader>ma` | Rendered view outside Insert mode, source while typing (experimental) |
 | `<leader>mf` | Floating rendered preview |
 
+Heading sizes are overridden: `#` at 3x and `##` at 2x, with the level icon
+scaled too; `###` and below stay normal size. md-render's own ladder (2x,
+1.75x, 1.5x ...) draws in-between sizes in chunks that leave gaps inside
+words; whole multiples do not. This patches md-render internals (including
+the escape codes it sends), so recheck headings after updating the plugin.
+
 The rendered view is read-only; edit in the source. md-render paints scaled
 headings in one window per view, so the config moves that painting to the
 window in front: zen's float while zen is open, the original window after it

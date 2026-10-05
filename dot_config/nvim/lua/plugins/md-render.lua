@@ -52,6 +52,62 @@ local function fit_render_windows()
   end
 end
 
+-- Heading sizes: # at 3x, ## at 2x, the rest plain (bold, coloured, icon).
+-- md-render's own ladder (2x, 1.75x, 1.5x ...) fakes in-between sizes with
+-- chunked runs that leave gaps inside words; whole multiples have no gaps.
+-- The level icon is scaled with its heading, so the icon gets room for a
+-- double-width scaled glyph. All of this patches md-render internals and is
+-- pinned by lazy-lock.json; recheck after updating the plugin.
+local HEADING_SCALE = { [1] = 3, [2] = 2 }
+
+local function scale_headings()
+  local text_size = require("md-render.text_size")
+  local markdown = require("md-render.markdown")
+
+  local stock_spec = text_size.spec_for
+  text_size.spec_for = function(level)
+    local s = HEADING_SCALE[level]
+    if not s or not stock_spec(level) then -- stock checks enabled + kitty support
+      return nil
+    end
+    return { level = level, s = s, ratio = s }
+  end
+
+  -- Icon block is 2*s cells wide; one more cell separates it from the text.
+  local stock_prefix = markdown.heading_icon_prefix
+  markdown.heading_icon_prefix = function(level)
+    local s = HEADING_SCALE[level]
+    if s and text_size.spec_for(level) then
+      local icon = markdown.heading_icon(level)
+      return icon .. string.rep(" ", 2 * s + 1 - vim.api.nvim_strwidth(icon))
+    end
+    return stock_prefix(level)
+  end
+
+  -- md-render paints the icon at plain size ("s=S:n=1:d=S:w=1") and fills the
+  -- block's lower rows from icon_col + S. Paint the icon scaled instead, two
+  -- cells wide so the Nerd Font glyph is not clipped, and start the fill after it.
+  local send = vim.api.nvim_ui_send
+  vim.api.nvim_ui_send = function(data)
+    if type(data) ~= "string" or not data:find("\27]66;s=%d+:n=1:d=%d+:w=1:") then
+      return send(data)
+    end
+    local moves = {}
+    data = data:gsub("\27%[(%d+);(%d+)H([\27%[%d;m]*)\27%]66;s=(%d+):n=1:d=%d+:w=1:v=%d+;", function(r, c, sgr, sc)
+      r, c, sc = tonumber(r), tonumber(c), tonumber(sc)
+      for i = 1, sc - 1 do
+        moves[(r + i) .. ";" .. (c + sc)] = c + 2 * sc
+      end
+      return ("\27[%d;%dH%s\27]66;s=%d:w=2;"):format(r, c, sgr, sc)
+    end)
+    data = data:gsub("\27%[(%d+);(%d+)H", function(r, c)
+      local to = moves[r .. ";" .. c]
+      return to and ("\27[%s;%dH"):format(r, to) or nil
+    end)
+    return send(data)
+  end
+end
+
 return {
   {
     "delphinus/md-render.nvim",
@@ -74,6 +130,7 @@ return {
       { "<leader>mf", "<Plug>(md-render-preview)", ft = "markdown", desc = "Markdown: floating preview" },
     },
     config = function()
+      scale_headings()
       vim.api.nvim_create_autocmd({ "BufWinEnter", "WinEnter", "WinResized", "VimResized" }, {
         group = vim.api.nvim_create_augroup("md_render_fit_window", { clear = true }),
         callback = function()
