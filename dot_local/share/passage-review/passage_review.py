@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Any, TextIO
 
 
+NVIM_PLUGIN = Path(__file__).resolve().with_suffix(".lua")
+
+
 class ReviewError(Exception):
     """An expected user-facing error."""
 
@@ -206,6 +209,43 @@ def _edit_comment(tty: TextIO) -> str | None:
         path.unlink(missing_ok=True)
 
 
+def save_note(
+    directory: Path,
+    metadata: dict[str, Any],
+    source: str,
+    start: int,
+    end: int,
+    comment: str,
+    quote: str | None = None,
+) -> str:
+    """Save one pending note. `quote` narrows the anchor to exact text inside the line range."""
+    lines = source.splitlines(keepends=True)
+    if start < 1 or end < start or end > len(lines):
+        raise ReviewError(f"line range must be between 1 and {len(lines)}")
+    passage = "".join(lines[start - 1 : end])
+    if quote is None:
+        quote = passage
+    elif not quote.strip() or quote not in passage:
+        raise ReviewError(f"quote must be non-blank text from lines {start}-{end}")
+    if not comment.strip():
+        raise ReviewError("blank comment; nothing saved")
+    note_id = _next_note_id(directory)
+    note = {
+        "schema_version": 1,
+        "note_id": note_id,
+        "review_id": metadata["review_id"],
+        "created_at": utc_now(),
+        "line_start": start,
+        "line_end": end,
+        "quote": quote,
+        "comment": comment,
+    }
+    path = _note_path(directory, note_id)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _write_json(path, note)
+    return note_id
+
+
 def add_note(directory: Path, metadata: dict[str, Any], source: str, tty: TextIO) -> None:
     line_count = len(source.splitlines())
     if line_count == 0:
@@ -227,20 +267,7 @@ def add_note(directory: Path, metadata: dict[str, Any], source: str, tty: TextIO
         print("Blank comment; nothing saved.", flush=True)
         return
 
-    note_id = _next_note_id(directory)
-    note = {
-        "schema_version": 1,
-        "note_id": note_id,
-        "review_id": metadata["review_id"],
-        "created_at": utc_now(),
-        "line_start": start,
-        "line_end": end,
-        "quote": quote,
-        "comment": comment,
-    }
-    path = _note_path(directory, note_id)
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    _write_json(path, note)
+    note_id = save_note(directory, metadata, source, start, end, comment)
     print(f"Saved pending note {note_id}.", flush=True)
 
 
@@ -353,9 +380,76 @@ def open_review(review_id: str) -> None:
             _print_note(note)
         return
     try:
-        open_interactive(review_id, tty)
+        if _editor_is_nvim():
+            open_in_nvim(review_id, tty)
+        else:
+            open_interactive(review_id, tty)
     finally:
         tty.close()
+
+
+def _editor_command() -> list[str]:
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+    try:
+        return shlex.split(editor)
+    except ValueError:
+        return []
+
+
+def _editor_is_nvim() -> bool:
+    command = _editor_command()
+    return bool(command) and Path(command[0]).name == "nvim" and NVIM_PLUGIN.is_file()
+
+
+
+def open_in_nvim(review_id: str, tty: TextIO) -> None:
+    """Read the frozen snapshot in Neovim; visual selections become pending notes."""
+    directory, _metadata, _source = load_review(review_id)
+    env = os.environ.copy()
+    env["PASSAGE_REVIEW_LUA"] = str(NVIM_PLUGIN)
+    env["PASSAGE_REVIEW_ID"] = review_id
+    command = _editor_command() + [
+        str(directory / "snapshot.txt"),
+        "-c",
+        "lua dofile(vim.env.PASSAGE_REVIEW_LUA).open(vim.env.PASSAGE_REVIEW_ID)",
+    ]
+    try:
+        result = subprocess.run(command, stdin=tty, stdout=sys.stdout, stderr=sys.stderr, env=env, check=False)
+    except OSError as exc:
+        raise ReviewError(f"could not start editor {command[0]}: {exc}") from exc
+    if result.returncode != 0:
+        raise ReviewError(f"editor exited with status {result.returncode}")
+    notes = pending_notes(directory)
+    print(f"Review {review_id}: {len(notes)} pending comment(s).", flush=True)
+    for note in notes:
+        _print_note(note)
+    if notes:
+        flags = " ".join(f"--note {note['note_id']}" for note in notes)
+        print(f"Export with: passage-review export {review_id} {flags}", flush=True)
+
+
+def show_review(review_id: str) -> None:
+    directory, metadata, _source = load_review(review_id)
+    print(
+        json.dumps(
+            {
+                "review_id": review_id,
+                "title": metadata["title"],
+                "source": metadata["source"],
+                "snapshot_path": str(directory / "snapshot.txt"),
+                "notes": pending_notes(directory),
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+def note_from_stdin(review_id: str, raw_range: str, quote: str | None) -> None:
+    directory, metadata, source = load_review(review_id)
+    start, end = _format_range(raw_range, len(source.splitlines()))
+    comment = _read_stdin_snapshot()
+    note_id = save_note(directory, metadata, source, start, end, comment, quote)
+    print(note_id)
 
 
 def _markdown_quote(quote: str) -> str:
@@ -543,6 +637,7 @@ def build_parser() -> argparse.ArgumentParser:
     source = new.add_mutually_exclusive_group(required=True)
     source.add_argument("--file", metavar="PATH", help="snapshot this UTF-8 file")
     source.add_argument("--title", metavar="TITLE", help="title for a UTF-8 snapshot read from stdin")
+    new.add_argument("--no-open", action="store_true", help="only save the snapshot and print its review ID")
 
     reopen = commands.add_parser("open", help="reopen a saved review and add passage comments")
     reopen.add_argument("review_id")
@@ -557,6 +652,14 @@ def build_parser() -> argparse.ArgumentParser:
         change.add_argument("--note", action="append", required=True, metavar="NOTE_ID")
 
     commands.add_parser("list", help="list saved reviews and pending-note counts")
+
+    note = commands.add_parser("note", help="add one pending note; the comment is read from stdin")
+    note.add_argument("review_id")
+    note.add_argument("--lines", required=True, metavar="START[-END]", help="1-based snapshot line range")
+    note.add_argument("--quote", metavar="TEXT", help="exact selected text inside those lines (default: whole lines)")
+
+    show = commands.add_parser("show", help="print the snapshot path and pending notes as JSON")
+    show.add_argument("review_id")
     return parser
 
 
@@ -574,6 +677,9 @@ def main(argv: list[str] | None = None) -> int:
                 reference = "supplied stdin snapshot"
                 source_kind = "stdin"
             review_id = create_review(title, source_kind, reference, text)
+            if args.no_open:
+                print(review_id)
+                return 0
             print(f"Saved immutable review snapshot {review_id}.", flush=True)
             open_review(review_id)
         elif args.command == "open":
@@ -584,6 +690,10 @@ def main(argv: list[str] | None = None) -> int:
             change_note_state(args.review_id, args.note, args.command)
         elif args.command == "list":
             list_reviews()
+        elif args.command == "note":
+            note_from_stdin(args.review_id, args.lines, args.quote)
+        elif args.command == "show":
+            show_review(args.review_id)
         return 0
     except (ReviewError, OSError) as exc:
         print(f"passage-review: {exc}", file=sys.stderr)

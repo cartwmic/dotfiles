@@ -7,6 +7,7 @@ import os
 import pty
 import re
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from pathlib import Path
 
 
 CLI = Path(__file__).resolve().parents[3] / "dot_local" / "bin" / "executable_passage-review"
+NVIM_MODULE = Path(__file__).resolve().with_name("passage_review.lua")
 REVIEW_ID_RE = re.compile(r"rv-[0-9a-f]{12}")
 
 
@@ -31,8 +33,10 @@ class PassageReviewCliTests(unittest.TestCase):
                 "XDG_DATA_HOME": str(self.root / "data"),
                 "PAGER": "cat",
                 "PASSAGE_REVIEW_CLIPBOARD": "off",
+                "EDITOR": "vi",
             }
         )
+        self.env.pop("VISUAL", None)
         for name in tuple(self.env):
             if name.startswith(("PI_", "HERDR_")):
                 self.env.pop(name)
@@ -278,6 +282,115 @@ class PassageReviewCliTests(unittest.TestCase):
         opened = self.cli("open", review_id)
         self.assertNotEqual(opened.returncode, 0)
         self.assertIn("integrity check failed", opened.stderr)
+
+    def new_review(self, text: str) -> str:
+        result = self.cli("new", "--title", "nvim test", "--no-open", input_text=text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout.strip(), r"^rv-[0-9a-f]{12}$")
+        return result.stdout.strip()
+
+    def test_note_command_anchors_lines_or_exact_text_and_show_lists_them(self) -> None:
+        review_id = self.new_review("line one\nthe quick brown fox\nlast line\n")
+        whole = self.cli("note", review_id, "--lines", "1-2", input_text="whole lines\n")
+        self.assertEqual(whole.returncode, 0, whole.stderr)
+        exact = self.cli("note", review_id, "--lines", "2", "--quote", "brown fox", input_text="exact text\n")
+        self.assertEqual(exact.returncode, 0, exact.stderr)
+        outside = self.cli("note", review_id, "--lines", "1", "--quote", "brown", input_text="no\n")
+        self.assertNotEqual(outside.returncode, 0)
+        blank = self.cli("note", review_id, "--lines", "1", input_text="  \n")
+        self.assertNotEqual(blank.returncode, 0)
+
+        shown = json.loads(self.cli("show", review_id).stdout)
+        self.assertEqual(Path(shown["snapshot_path"]), self.review_directory(review_id) / "snapshot.txt")
+        by_id = {note["note_id"]: note for note in shown["notes"]}
+        self.assertEqual(set(by_id), {whole.stdout.strip(), exact.stdout.strip()})
+        self.assertEqual(by_id[whole.stdout.strip()]["quote"], "line one\nthe quick brown fox\n")
+        self.assertEqual(by_id[exact.stdout.strip()]["quote"], "brown fox")
+        self.assertEqual(by_id[exact.stdout.strip()]["line_start"], 2)
+
+    def test_open_with_nvim_editor_reads_snapshot_in_nvim_with_the_plugin(self) -> None:
+        review_id = self.new_review("readable text\n")
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        record = self.root / "nvim-call.json"
+        fake = bin_dir / "nvim"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, sys\n"
+            f"open({str(record)!r}, 'w').write(json.dumps({{'argv': sys.argv[1:], "
+            "'lua': os.environ.get('PASSAGE_REVIEW_LUA'), 'id': os.environ.get('PASSAGE_REVIEW_ID'), "
+            "'tty': os.isatty(0)}))\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o700)
+        self.env["VISUAL"] = str(fake)
+        terminal = self.run_tty("open", review_id, steps=[])
+        call = json.loads(record.read_text())
+        self.assertEqual(call["argv"][0], str(self.review_directory(review_id) / "snapshot.txt"))
+        self.assertIn("-c", call["argv"])
+        self.assertEqual(Path(call["lua"]), NVIM_MODULE)
+        self.assertEqual(call["id"], review_id)
+        self.assertTrue(call["tty"])
+        self.assertIn("0 pending comment(s)", terminal)
+        self.assertNotIn("[a]dd passage comment", terminal)
+
+    @unittest.skipUnless(shutil.which("nvim"), "nvim is not installed")
+    def test_real_nvim_visual_selection_saves_and_renders_notes(self) -> None:
+        review_id = self.new_review("line one\nthe quick brown fox\nlast line\n")
+        script = self.root / "drive.lua"
+        script.write_text(
+            """
+local ok, err = pcall(function()
+vim.g.mapleader = " "
+local M = dofile(vim.env.PASSAGE_REVIEW_LUA)
+M.open(vim.env.PASSAGE_REVIEW_ID)
+local review = vim.api.nvim_get_current_buf()
+assert(not vim.bo.modifiable, "snapshot must not be modifiable")
+for _, mode in ipairs({ "n", "x" }) do
+  for _, map in ipairs(vim.api.nvim_buf_get_keymap(review, mode)) do
+    assert(map.lhs ~= "c" and map.lhs ~= "q", "review must not remap " .. map.lhs)
+  end
+end
+local function comment(keys, texts)
+  vim.api.nvim_set_current_win(vim.fn.bufwinid(review))
+  vim.api.nvim_feedkeys(vim.keycode(keys), "x", false)
+  assert(vim.bo.buftype == "" and vim.api.nvim_buf_get_name(0):match("%.md$"), "comment must be a normal file")
+  for _, text in ipairs(texts) do
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { text })
+    vim.cmd("stopinsert | write")
+  end
+  vim.cmd("quit")
+end
+comment("2G0wwve<Space>zc", { "first draft", "charwise note" })  -- selects "brown"; second :w replaces the note
+comment("1GVj<Space>zc", { "linewise note" })
+local marks = vim.api.nvim_buf_get_extmarks(review, vim.api.nvim_create_namespace("passage_review"), 0, -1, { details = true })
+local virt = 0
+for _, mark in ipairs(marks) do
+  if mark[4].virt_lines then virt = virt + 1 end
+end
+assert(virt == 2, "expected two rendered comments, got " .. virt)
+end)
+if not ok then
+  io.stderr:write(tostring(err))
+  vim.cmd("cquit 1")
+end
+vim.cmd("qa!")
+""",
+            encoding="utf-8",
+        )
+        self.env["PASSAGE_REVIEW_LUA"] = str(NVIM_MODULE)
+        self.env["PASSAGE_REVIEW_ID"] = review_id
+        result = subprocess.run(
+            ["nvim", "--clean", "--headless", "-c", f"luafile {script}"],
+            env=self.env, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        notes = json.loads(self.cli("show", review_id).stdout)["notes"]
+        by_comment = {note["comment"]: note for note in notes}
+        self.assertEqual(set(by_comment), {"charwise note\n", "linewise note\n"})
+        self.assertEqual(by_comment["charwise note\n"]["quote"], "brown")
+        self.assertEqual((by_comment["charwise note\n"]["line_start"], by_comment["charwise note\n"]["line_end"]), (2, 2))
+        self.assertEqual(by_comment["linewise note\n"]["quote"], "line one\nthe quick brown fox\n")
 
 
 if __name__ == "__main__":

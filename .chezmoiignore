@@ -66,6 +66,7 @@ termux/**
 !.local/share/passage-review
 .local/share/passage-review/*
 !.local/share/passage-review/passage_review.py
+!.local/share/passage-review/passage_review.lua
 !.local/share/passage-review/README.md
 .pi
 .pi/**

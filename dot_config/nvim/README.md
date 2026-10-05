@@ -100,6 +100,11 @@ but turned off by [`disabled.lua.tmpl`](./lua/plugins/disabled.lua.tmpl).
 | [`vectorcode.lua`](./lua/plugins/vectorcode.lua) | VectorCode (`uv tool upgrade vectorcode` on build) |
 | [`vim-just.lua`](./lua/plugins/vim-just.lua) | Justfile syntax |
 
+[`plugin/passage_review.lua`](./plugin/passage_review.lua) adds
+`:PassageReview` when the passage-review CLI is installed. It freezes the
+current buffer and lets you comment on visual selections; see
+`dot_local/share/passage-review/README.md` in the chezmoi source.
+
 [`after/plugin/sql_rust_automagic.lua`](./after/plugin/sql_rust_automagic.lua)
 formats `sqlx::query*` raw strings in Rust on write via
 [`bin/sql-format-via-python.py`](./bin/sql-format-via-python.py) (`python3` +

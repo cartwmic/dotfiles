@@ -7,7 +7,9 @@
 `dot_local/bin/executable_passage-review`. It freezes UTF-8 input in a
 user-local snapshot, stores comments separately with exact quote and 1-based
 line-range anchors, and exports only pending notes selected by ID. It does not
-edit source files, send feedback, or depend on Pi or Herdr. Desktop and Termux
+edit source files, send feedback, or depend on Pi or Herdr. When your editor
+is Neovim, the review opens in Neovim: read the document, visually select
+lines or text, and comment on them. Desktop and Termux
 profiles own separate local libraries; phone data is not synced back to the
 desktop.
 
@@ -26,7 +28,9 @@ chezmoi apply ~/bin/passage-review ~/.local/share/passage-review
 ```
 
 The wrapper needs `python3` on `PATH` and a terminal editor (`$VISUAL`,
-`$EDITOR`, or `vi`). Termux's phone bootstrap installs `vim`; its library
+`$EDITOR`, or `vi`). The Neovim view needs Neovim 0.10 or newer and the
+deployed `~/.local/share/passage-review/passage_review.lua`; desktop profiles
+also deploy `~/.config/nvim/plugin/passage_review.lua` for `:PassageReview`. Termux's phone bootstrap installs `vim`; its library
 stays on the phone. Use an interactive terminal with `/dev/tty` to add notes.
 
 ## Usage
@@ -39,15 +43,53 @@ passage-review export REVIEW_ID --note NOTE_ID [--note NOTE_ID ...]
 passage-review archive REVIEW_ID --note NOTE_ID [--note NOTE_ID ...]
 passage-review delete REVIEW_ID --note NOTE_ID [--note NOTE_ID ...]
 passage-review list
+passage-review note REVIEW_ID --lines START[-END] [--quote TEXT] < comment.txt
+passage-review show REVIEW_ID
 ```
+
+### Review in Neovim
+
+If `$VISUAL` (or `$EDITOR` when `$VISUAL` is unset) is `nvim`, `new` and
+`open` open the frozen snapshot in Neovim instead of the pager and `[a]dd`
+prompts. Your full Neovim config loads. The snapshot buffer is read-only;
+every other key, motion, search, and plugin works as usual. The review adds
+one buffer-local mapping:
+
+| Keys | Action |
+| --- | --- |
+| `v` … `<leader>zc` | Comment on the selected text. The note quotes exactly that text. |
+| `V` … `<leader>zc` | Comment on the selected lines. |
+| `<leader>zc` | Comment on the current line. |
+
+`<leader>zc` opens the comment in a split as a normal temporary Markdown
+file, so completion, spelling, linting, and the rest of your config work
+there too. Each `:w` saves the draft as a pending note; writing again
+replaces that note with the new text (and a new note ID). Quit the split
+without writing to cancel. The temporary file is deleted when its buffer
+closes. Saved comments show as a `✎` sign and wrapped text under the
+passage, and stay there when you reopen the review. Quit Neovim as usual.
+After Neovim exits, the CLI lists the pending notes and prints the `export`
+command for them.
+
+To review a buffer you already have open in Neovim, run `:PassageReview`. It
+freezes the buffer (the saved file, or the buffer text if it is unsaved) as a
+new review and opens it for comments. `:PassageReview REVIEW_ID` reopens an
+existing review.
+
+`note` and `show` are the plumbing the Neovim view uses: `note` saves one
+pending note with the comment read from stdin, and `show` prints the snapshot
+path and pending notes as JSON. `new --no-open` saves a snapshot and prints
+only its review ID.
 
 `new` prints `Saved immutable review snapshot REVIEW_ID`, then opens the
 reviewer. Keep that ID for `open` and `export`. `--file` uses the file name
 as the initial title and records its path as attribution. `--title` reads the
 whole UTF-8 snapshot from stdin; it works with a pipe, redirected file, or a
-terminal selection pasted into the terminal and ended with Ctrl-D. Once open, page through the frozen source, choose `[a]dd`, enter a line or
-line range, and write the comment in `$VISUAL`, falling back to `$EDITOR` and
-then `vi`. The CLI prints `Saved pending note NOTE_ID`; use that ID with
+terminal selection pasted into the terminal and ended with Ctrl-D. With
+Neovim, see [Review in Neovim](#review-in-neovim). With any other editor (for
+example `vim` on the phone), page through the frozen source, choose `[a]dd`,
+enter a line or line range, and write the comment in `$VISUAL`, falling back
+to `$EDITOR` and then `vi`. The CLI prints `Saved pending note NOTE_ID`; use that ID with
 `passage-review export REVIEW_ID --note NOTE_ID` after quitting the reviewer.
 Use your phone's existing dictation keyboard in that editor if desired. Blank
 comments are not saved. Reopening an ID shows the same bytes and lets you add
@@ -115,6 +157,9 @@ the CLI owns snapshots, notes, state, and export.
 - The review prints a snapshot but offers no `[a]dd` prompt: there is no
   controlling `/dev/tty`. Reopen the saved ID from an interactive terminal.
   The snapshot remains readable without a TTY; note creation needs one.
+- You expected Neovim but got the pager and `[a]dd` prompt: check that
+  `$VISUAL` (or `$EDITOR` when `$VISUAL` is unset) runs `nvim`, and that
+  `passage_review.lua` sits next to `passage_review.py`.
 - Clipboard transfer fails: `export` still prints the feedback and saves a
   Markdown copy in the review's `exports/` directory.
 

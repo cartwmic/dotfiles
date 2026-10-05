@@ -20,6 +20,12 @@ The Pi `/review` extension supplies input; it does not own this library.
   `export` takes explicit pending note IDs, writes attributed quoted feedback,
   and leaves state pending. `archive` and `delete` are separate explicit
   mutations. Do not edit the source or send feedback to an agent on export.
+- `passage_review.lua` is the Neovim view. It is used when the editor command
+  is `nvim`; it only talks to the CLI through `new --no-open`, `note`,
+  `show`, and `delete` (to replace a re-saved draft), never the JSON files.
+  Keep normal Neovim behavior: one buffer-local `<leader>zc` mapping, no
+  remapped built-in keys, and comment drafts in real temporary files. `dot_config/nvim/plugin/passage_review.lua`
+  only loads the deployed module for `:PassageReview`.
 - Choose interaction path up front: with `/dev/tty`, opening a review can
   prompt for passages and run `$VISUAL`, `$EDITOR`, or `vi`. Without a
   controlling terminal it only prints the saved snapshot and notes; reopen
