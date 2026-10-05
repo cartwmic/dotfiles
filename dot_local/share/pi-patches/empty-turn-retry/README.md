@@ -68,7 +68,9 @@ text or a tool call to be useful to the agent loop.
 - **Target:** `@earendil-works/pi-ai/dist/api/anthropic-messages.js`
   (nested under pi-coding-agent's `node_modules`; npm-root fallback probed).
   The legacy `dist/providers/anthropic.js` layout only re-exports
-  `anthropicMessagesApi`, so this one file covers every layout.
+  `anthropicMessagesApi`, so this one file covers every SDK layout. Pi 1.0.x
+  also patches the `dist/bundle/chunks/anthropic-messages-*.js` chunk, which is
+  what the `pi` CLI runs.
 - **Profiles:** all (no profile gate). The check is content-based and
   provider-agnostic: an empty `end_turn` turn is degenerate for any provider
   using the anthropic-messages API.

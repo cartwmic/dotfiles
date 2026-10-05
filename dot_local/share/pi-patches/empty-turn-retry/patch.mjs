@@ -24,9 +24,10 @@
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync, copyFileSync, existsSync, unlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, copyFileSync, existsSync, unlinkSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { piAiRoot, piCodingAgentRoot } from "../pi-root.mjs";
 
 const PATCH_REVISION = 1;
 
@@ -46,7 +47,7 @@ const fail = (msg) => {
 
 const checkOnly = process.argv.includes("--check");
 
-const EDITS = [
+const SDK_EDITS = [
 	{
 		name: "stream — surface empty end_turn turns as retryable provider errors",
 		find: `            if (output.stopReason === "pending") {
@@ -88,9 +89,23 @@ const EDITS = [
 // pi-ai is nested inside pi-coding-agent's node_modules on current builds
 // (0.80.x+); the streaming code lives in dist/api/anthropic-messages.js.
 // Older layouts hoisted pi-ai to a top-level node_modules — probe both.
-function locateTarget() {
-	const requireFromHome = createRequire(join(homedir(), "package.json"));
+
+// Same edit against the minified CLI bundle (the `pi` command loads this copy).
+const BUNDLE_EDITS = [
+	{
+		name: "bundle stream — surface empty end_turn turns as retryable provider errors",
+		find: `if(output.stopReason==="aborted"||output.stopReason==="error")throw new Error(output.errorMessage||"An unknown error occurred");`,
+		replace: `if(output.stopReason==="aborted"||output.stopReason==="error")throw new Error(output.errorMessage||"An unknown error occurred");/* ${MARKER} */if(output.stopReason==="stop"&&!output.content.some(block=>block.type==="toolCall"||block.type==="text"&&typeof block.text=="string"&&block.text.trim()!==""))throw new Error("Provider returned error: empty assistant turn (stop_reason=end_turn, no text and no tool calls) - likely premature EOS");`,
+	},
+];
+const NOT_INSTALLED = "pi-ai not installed";
+
+function locateSdkTarget() {
 	const candidates = [];
+	// 0. The Pi tree the `pi` command loads (managed install or npm global).
+	const piAi = piAiRoot();
+	if (piAi) candidates.push(join(piAi, "dist", "api", "anthropic-messages.js"));
+	const requireFromHome = createRequire(join(homedir(), "package.json"));
 	// 1. pi-coding-agent resolvable — walk into its nested pi-ai.
 	try {
 		const pcaPkg = requireFromHome.resolve("@earendil-works/pi-coding-agent/package.json");
@@ -118,12 +133,32 @@ function locateTarget() {
 	return null;
 }
 
+// The `pi` CLI loads dist/bundle/chunks, not dist/core or pi-ai/dist. Find the
+// one chunk that holds the Anthropic stream.
+function locateBundleChunk(pca) {
+	const dir = join(pca, "dist", "bundle", "chunks");
+	if (!existsSync(dir)) return null;
+	const needle = "Anthropic stream ended without a stop reason";
+	const matches = readdirSync(dir).filter((f) => f.endsWith(".js") && !f.includes(".chezmoi-pi-patch") && readFileSync(join(dir, f), "utf8").includes(needle));
+	if (matches.length !== 1) fail(`expected one bundle chunk containing the Anthropic stream, found ${matches.length}; update this patch for the installed Pi version`);
+	return join(dir, matches[0]);
+}
+
+
+// Returns [{ path, edits }]: the pi-ai SDK file (if present) and the CLI bundle chunk.
+function locateTargets() {
+	const targets = [];
+	const sdk = locateSdkTarget();
+	if (sdk) targets.push({ path: sdk, edits: SDK_EDITS });
+	const pca = piCodingAgentRoot();
+	const chunk = pca && locateBundleChunk(pca);
+	if (chunk) targets.push({ path: chunk, edits: BUNDLE_EDITS });
+	return targets;
+}
+
 function getInstalledVersion() {
 	try {
-		const npmRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
-		const pkg = JSON.parse(
-			readFileSync(join(npmRoot, "@earendil-works", "pi-coding-agent", "package.json"), "utf8"),
-		);
+		const pkg = JSON.parse(readFileSync(join(piCodingAgentRoot(), "package.json"), "utf8"));
 		return pkg.version;
 	} catch {
 		return null;
@@ -165,80 +200,61 @@ function writeValidated(targetPath, content) {
 	execFileSync("mv", [tmp, targetPath]);
 }
 
-const target = locateTarget();
-if (!target) {
-	if (checkOnly) fail("pi-ai not installed; cannot verify patch");
-	log("pi-ai not installed — nothing to patch");
+const targets = locateTargets();
+if (targets.length === 0) {
+	if (checkOnly) fail(NOT_INSTALLED + "; cannot verify patch");
+	log(NOT_INSTALLED + " — nothing to patch");
 	process.exit(0);
 }
-log(`target: ${target}`);
-
-const original = readFileSync(target, "utf8");
-const markerCount = countMarker(original, MARKER);
-const hasAnyMarker = original.includes(MARKER_PREFIX);
 const version = getInstalledVersion();
+const results = [];
 
-if (markerCount > 0) {
-	if (markerCount !== EDITS.length) warn(`marker count (${markerCount}) ≠ expected (${EDITS.length}); file may be partially patched`);
-	if (checkOnly) {
-		log(`already patched at revision ${PATCH_REVISION}`);
-		process.exit(0);
+for (const { path: target, edits } of targets) {
+	log(`target: ${target}`);
+	const original = readFileSync(target, "utf8");
+	const markerCount = countMarker(original, MARKER);
+	if (markerCount > 0) {
+		if (markerCount !== edits.length) warn(`marker count (${markerCount}) ≠ expected (${edits.length}) in ${target}; file may be partially patched`);
+		results.push({ target, status: "already-patched" });
+		continue;
 	}
-	writeStateFile({ status: "already-patched", target, version, patchRevision: PATCH_REVISION });
-	log(`already patched at revision ${PATCH_REVISION} — no-op`);
+	let content = original;
+	const backup = `${target}${BACKUP_SUFFIX}`;
+	if (original.includes(MARKER_PREFIX)) {
+		if (checkOnly) fail(`stale patch revision present in ${target}; expected v${PATCH_REVISION}`);
+		if (!existsSync(backup)) {
+			fail(`stale patch revision in ${target} but no backup at ${backup} — cannot safely re-patch. Reinstall Pi and re-run chezmoi apply.`);
+		}
+		log(`stale patch revision detected; restoring from ${backup}`);
+		copyFileSync(backup, target);
+		content = readFileSync(target, "utf8");
+	}
+	if (checkOnly) fail(`${target} is unpatched at revision ${PATCH_REVISION}`);
+	for (const edit of edits) {
+		const occurrences = countOccurrences(content, edit.find);
+		if (occurrences !== 1) {
+			fail(`anchor for edit "${edit.name}" found ${occurrences} times (expected 1) in ${target}. Upstream likely changed the anthropic stream() terminal-check shape — update patch.mjs anchors and bump PATCH_REVISION, or upstream started rejecting empty end_turn turns itself (delete this patch — see README).`);
+		}
+	}
+	if (!existsSync(backup)) {
+		copyFileSync(target, backup);
+		log(`backup written: ${backup}`);
+	}
+	let patched = content;
+	for (const edit of edits) patched = patched.replace(edit.find, edit.replace);
+	writeValidated(target, patched);
+	const verify = readFileSync(target, "utf8");
+	if (countMarker(verify, MARKER) !== edits.length) {
+		fail(`post-patch marker count ≠ expected ${edits.length} in ${target}. Restore from backup at ${backup}.`);
+	}
+	results.push({ target, backup, status: "patched", fingerprintPre: sha256(original), fingerprintPost: sha256(verify) });
+}
+
+if (checkOnly) {
+	log(`verified ${targets.length} target(s) at revision ${PATCH_REVISION}`);
 	process.exit(0);
 }
-
-let content = original;
-if (hasAnyMarker) {
-	if (checkOnly) fail(`stale patch revision present; expected v${PATCH_REVISION}`);
-	const backup = `${target}${BACKUP_SUFFIX}`;
-	if (!existsSync(backup)) {
-		fail(`stale patch revision in ${target} but no backup at ${backup} — cannot safely re-patch. Reinstall pi-coding-agent and re-run chezmoi apply.`);
-	}
-	log(`stale patch revision detected; restoring from ${backup}`);
-	copyFileSync(backup, target);
-	content = readFileSync(target, "utf8");
-}
-
-if (checkOnly) fail(`file is unpatched at revision ${PATCH_REVISION}`);
-
-for (const edit of EDITS) {
-	const occurrences = countOccurrences(content, edit.find);
-	if (occurrences !== 1) {
-		fail(
-			`anchor for edit "${edit.name}" found ${occurrences} times (expected 1) in ${target}. ` +
-				`Upstream likely changed the anthropic stream() terminal-check shape — update patch.mjs anchors and bump PATCH_REVISION, ` +
-				`or upstream started rejecting empty end_turn turns itself (delete this patch — see README).`,
-		);
-	}
-}
-
-const backup = `${target}${BACKUP_SUFFIX}`;
-if (!existsSync(backup)) {
-	copyFileSync(target, backup);
-	log(`backup written: ${backup}`);
-}
-
-let patched = content;
-for (const edit of EDITS) patched = patched.replace(edit.find, edit.replace);
-
-writeValidated(target, patched);
-
-const verify = readFileSync(target, "utf8");
-const markerCountAfter = countMarker(verify, MARKER);
-if (markerCountAfter !== EDITS.length) {
-	fail(`post-patch marker count ${markerCountAfter} ≠ expected ${EDITS.length}. Restore from backup at ${backup}.`);
-}
-
-writeStateFile({
-	status: "patched",
-	target,
-	backup,
-	version,
-	patchRevision: PATCH_REVISION,
-	fingerprintPre: sha256(original),
-	fingerprintPost: sha256(verify),
-});
-log(`patched at revision ${PATCH_REVISION}`);
+const anyPatched = results.some((r) => r.status === "patched");
+writeStateFile({ status: anyPatched ? "patched" : "already-patched", target: targets[0].path, targets: results, version, patchRevision: PATCH_REVISION });
+log(anyPatched ? `patched at revision ${PATCH_REVISION}` : `already patched at revision ${PATCH_REVISION} — no-op`);
 process.exit(0);

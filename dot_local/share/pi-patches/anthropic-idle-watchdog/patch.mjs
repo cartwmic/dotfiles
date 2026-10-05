@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync, copyFileSync, existsSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { piAiRoot, piCodingAgentRoot } from "../pi-root.mjs";
 
 // Bump this when patch.mjs's edits change. The marker comment embedded into
 // the patched file uses this; a stale marker fails closed rather than
@@ -147,9 +148,12 @@ function locateTarget() {
 		if (!existsSync(target)) fail(`isolated pi-ai target not found: ${target}`);
 		return target;
 	}
+	const candidates = [];
+	// 0. The Pi tree the `pi` command loads (managed install or npm global).
+	const piAi = piAiRoot();
+	if (piAi) for (const sub of PI_AI_SUBPATHS) candidates.push(join(piAi, sub));
 	// We run under the same node that runs pi (chezmoi invokes `node patch.mjs`).
 	const requireFromHome = createRequire(join(homedir(), "package.json"));
-	const candidates = [];
 	for (const scope of SCOPES) {
 		for (const sub of PI_AI_SUBPATHS) {
 			// 1. pi-ai resolvable directly (hoisted to a top-level node_modules).
@@ -192,6 +196,20 @@ function getInstalledVersions() {
 		};
 	}
 	const versions = { piCodingAgent: null, piAi: null, scope: null };
+	const pca = piCodingAgentRoot();
+	const piAi = piAiRoot(pca);
+	if (pca && piAi) {
+		try {
+			return {
+				piCodingAgent: JSON.parse(readFileSync(join(pca, "package.json"), "utf8")).version,
+				piAi: JSON.parse(readFileSync(join(piAi, "package.json"), "utf8")).version,
+				scope: "@earendil-works",
+				root: pca,
+			};
+		} catch {
+			/* fall through to legacy probes */
+		}
+	}
 	const requireFromHome = createRequire(join(homedir(), "package.json"));
 	let npmRoot;
 	try {

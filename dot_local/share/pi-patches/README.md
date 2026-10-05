@@ -25,7 +25,7 @@ Per-patch rationale and failure modes stay in the sibling READMEs:
 - [custom-message-marker](custom-message-marker/README.md) — wrap injected `custom` messages (all profiles)
 - [empty-turn-retry](empty-turn-retry/README.md) — retry empty assistant responses
 - [headless-extension-drain](headless-extension-drain/README.md) — drain fire-and-forget extension work in print mode
-- [response-visibility](response-visibility/README.md) — delegate the optional Pi 0.99.2 telemetry helper on desktop profiles
+- [response-visibility](response-visibility/README.md) — delegate the optional Pi telemetry helper on desktop profiles
 - [standing-reminder-origin](standing-reminder-origin/README.md) — carry input origin to processed messages on desktop profiles
 - [settlement-abort](settlement-abort/README.md) — cancel through final settlement on desktop profiles
 - [prompt-start-race](prompt-start-race/README.md) — queue a prompt that loses the start race on desktop profiles
@@ -71,7 +71,9 @@ as documented in [cursor-provider](cursor-provider/README.md). Cursor remaining
 or spend comes from the GitHub-installed fork and `metricSet`, not this patch.
 
 Prerequisites: Node on PATH (mise installs it earlier in the after-script
-phase) and the target package tree each patch locates. Missing Node or a
+phase) and the target package tree each patch locates. Patches find Pi through
+[pi-root.mjs](pi-root.mjs): `PI_ROOT`, then Pi's managed install
+(`~/.pi/agent/install/releases/<current-version>/`), then `npm root -g`. Missing Node or a
 missing patches directory makes the apply script exit 0 with a notice.
 `cursor-provider` restores leftovers if that npm tree exists, and no-ops if it
 is absent. It never applies the splice.

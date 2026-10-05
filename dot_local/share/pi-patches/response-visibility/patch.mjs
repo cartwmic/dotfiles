@@ -3,7 +3,8 @@
 import { existsSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { homedir } from 'node:os';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
+import { piCodingAgentRoot } from '../pi-root.mjs';
 
 const profile = process.env.PI_CHEZMOI_PROFILE;
 if (!['personal', 'axon-work-computer'].includes(profile)) {
@@ -26,10 +27,12 @@ if (!helper || !existsSync(helper)) {
   process.exit(1);
 }
 const forwarded = [helper, actions[args[0]] || 'apply'];
-let root = process.env.PI_ROOT;
+// PI_ROOT override, then Pi's managed install, then the npm global root.
+const root = piCodingAgentRoot();
 if (!root) {
-  try { root = join(execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim(), '@earendil-works', 'pi-coding-agent'); }
-  catch { console.error('[response-visibility] cannot resolve global Pi root; set PI_ROOT explicitly'); process.exit(1); }
+  if (actions[args[0]] === 'check') { console.error('[response-visibility] Pi is not installed; cannot verify'); process.exit(1); }
+  console.log('[response-visibility] Pi is not installed; skipped');
+  process.exit(0);
 }
 forwarded.push('--pi-root', root);
 const result = spawnSync(process.execPath, forwarded, { stdio: 'inherit' });

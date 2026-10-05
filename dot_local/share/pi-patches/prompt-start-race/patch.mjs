@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { piCodingAgentRoot } from "../pi-root.mjs";
 
 const NAME = "prompt-start-race";
 const REVISION = 1;
@@ -24,12 +25,7 @@ function fail(message) {
 }
 
 function packageRoot() {
-	if (process.env.PI_PROMPT_START_RACE_PACKAGE) return process.env.PI_PROMPT_START_RACE_PACKAGE;
-	try {
-		return join(execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim(), "@earendil-works", "pi-coding-agent");
-	} catch {
-		return undefined;
-	}
+	return process.env.PI_PROMPT_START_RACE_PACKAGE || piCodingAgentRoot();
 }
 
 function count(text, needle) {
