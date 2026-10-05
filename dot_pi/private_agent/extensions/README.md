@@ -41,9 +41,10 @@ Work in the chezmoi source tree. From any cwd, list this directory:
 cd ~/.local/share/chezmoi/dot_pi/private_agent/extensions && ls -1 .
 ```
 
-You should see one directory per extension plus this README. The Herdr-managed
-`herdr-agent-state.ts` at this folder root is not a chezmoi-authored
-extension; do not use it as a template.
+You should see one directory per extension plus this README. The live
+`~/.pi/agent/extensions/herdr-agent-state.ts` is written by
+`herdr integration install pi` and is not tracked here; do not add it back
+or use it as a template.
 
 Chezmoi destination mapping is `./<name>/` → `~/.pi/agent/extensions/<name>`.
 Profile gates that omit an extension from a machine live in the repo-root
