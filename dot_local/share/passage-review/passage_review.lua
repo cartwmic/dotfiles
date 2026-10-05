@@ -391,48 +391,6 @@ local function new_review(buf, as_file)
   M.open(vim.trim(out))
 end
 
---- Review the current buffer. A saved file that already has reviews with
---- pending notes offers to reopen one of them instead of starting a new one.
-function M.review_current()
-  local buf = vim.api.nvim_get_current_buf()
-  if vim.b[buf].passage_review_id then
-    return notify("This buffer is already review " .. vim.b[buf].passage_review_id)
-  end
-  local name = vim.api.nvim_buf_get_name(buf)
-  local as_file = name ~= "" and vim.bo[buf].buftype == "" and not vim.bo[buf].modified and vim.uv.fs_stat(name) ~= nil
-  local existing = as_file and pending_reviews_of(vim.fs.normalize(vim.uv.fs_realpath(name) or name)) or {}
-  if #existing == 0 then
-    return new_review(buf, as_file)
-  end
-  local current = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") .. "\n"
-  local choices = {}
-  for _, review in ipairs(existing) do
-    local snapshot = table.concat(vim.fn.readfile(review.snapshot, "b"), "\n")
-    review.label = ("Reopen %s · %d pending · %s%s"):format(
-      review.id,
-      review.pending,
-      review.created:sub(1, 16):gsub("T", " "),
-      snapshot ~= current and snapshot .. "\n" ~= current and " · file changed since" or ""
-    )
-    table.insert(choices, review)
-  end
-  table.insert(choices, { label = "Start a new review" })
-  vim.ui.select(choices, {
-    prompt = "This file has a review with pending notes",
-    format_item = function(item)
-      return item.label
-    end,
-  }, function(choice)
-    if not choice then
-      return
-    elseif choice.id then
-      M.open(choice.id)
-    else
-      new_review(buf, as_file)
-    end
-  end)
-end
-
 local function remove_review(id)
   local ok, err = pcall(cli, { "remove", id })
   if not ok then
@@ -448,14 +406,75 @@ local function remove_review(id)
   notify("Deleted review " .. id)
 end
 
-local function confirm_remove(review)
+local function confirm_remove(review, after)
   vim.ui.select({ "Delete", "Cancel" }, {
-    prompt = ("Delete review %s (%s, %s pending)? Notes and exports go too."):format(review.id, review.title, review.pending),
+    prompt = ("Delete review %s (%s%s pending)? Notes and exports go too."):format(
+      review.id, review.title and (review.title .. ", ") or "", review.pending),
   }, function(choice)
     if choice == "Delete" then
       remove_review(review.id)
     end
+    if after then
+      after()
+    end
   end)
+end
+
+--- Review the current buffer. A saved file that already has reviews with
+--- pending notes asks first: reopen one, delete one, or start a new review.
+function M.review_current()
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.b[buf].passage_review_id then
+    return notify("This buffer is already review " .. vim.b[buf].passage_review_id)
+  end
+  local name = vim.api.nvim_buf_get_name(buf)
+  local as_file = name ~= "" and vim.bo[buf].buftype == "" and not vim.bo[buf].modified and vim.uv.fs_stat(name) ~= nil
+  local path = as_file and vim.fs.normalize(vim.uv.fs_realpath(name) or name)
+  local existing = as_file and pending_reviews_of(path) or {}
+  if #existing == 0 then
+    return new_review(buf, as_file)
+  end
+
+  local function pick(reviews)
+    local current = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") .. "\n"
+    local choices = {}
+    for _, review in ipairs(reviews) do
+      local snapshot = table.concat(vim.fn.readfile(review.snapshot, "b"), "\n")
+      local detail = ("%s · %d pending · %s%s"):format(
+        review.id,
+        review.pending,
+        review.created:sub(1, 16):gsub("T", " "),
+        snapshot ~= current and snapshot .. "\n" ~= current and " · file changed since" or ""
+      )
+      table.insert(choices, { action = "open", review = review, label = "Reopen " .. detail })
+    end
+    table.insert(choices, { action = "new", label = "Start a new review" })
+    for _, review in ipairs(reviews) do
+      table.insert(choices, { action = "delete", review = review, label = "Delete " .. review.id })
+    end
+    vim.ui.select(choices, {
+      prompt = "This file has a review with pending notes",
+      format_item = function(item)
+        return item.label
+      end,
+    }, function(choice)
+      if not choice then
+        return
+      elseif choice.action == "open" then
+        M.open(choice.review.id)
+      elseif choice.action == "new" then
+        new_review(buf, as_file)
+      else
+        -- After deleting (or cancelling), come back to the same choice.
+        confirm_remove(choice.review, function()
+          vim.schedule(function()
+            pick(pending_reviews_of(path))
+          end)
+        end)
+      end
+    end)
+  end
+  pick(existing)
 end
 
 --- Delete a saved review. With no ID, pick one (the current review first).
