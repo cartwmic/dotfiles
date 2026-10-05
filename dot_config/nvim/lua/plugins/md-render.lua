@@ -31,7 +31,15 @@ local function fit_render_windows()
   end
   local current = vim.api.nvim_get_current_win()
   for buf, session in pairs(preview._sessions) do
-    local win = vim.api.nvim_win_get_buf(current) == buf and current or vim.fn.bufwinid(buf)
+    -- The window to render for: the current one if it shows the view, else
+    -- the topmost one (zen's float sits above the window it came from).
+    local win, z = -1, -1
+    for _, w in ipairs(vim.fn.win_findbuf(buf)) do
+      local wz = w == current and math.huge or (vim.api.nvim_win_get_config(w).zindex or 0)
+      if wz > z then
+        win, z = w, wz
+      end
+    end
     if win ~= -1 and vim.api.nvim_win_is_valid(win) then
       local changed = session.win ~= win
       session.win = win

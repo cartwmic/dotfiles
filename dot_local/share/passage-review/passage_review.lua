@@ -188,6 +188,22 @@ local function attach_view(view)
   if not md_session(view) then
     return
   end
+  local session = md_session(view)
+  if not session._passage_review_rebuild then
+    -- A rebuild (re-wrap on resize, zen, live edit) replaces every line and
+    -- leaves our marks on the wrong rows. Redraw the comments after it.
+    local rebuild = session.rebuild
+    session._passage_review_rebuild = rebuild
+    session.rebuild = function(self, ...)
+      local results = { rebuild(self, ...) }
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(view) then
+          M.render_view(view)
+        end
+      end)
+      return unpack(results)
+    end
+  end
   if not vim.b[view].passage_review_mapped then
     vim.b[view].passage_review_mapped = true
     vim.keymap.set({ "n", "x" }, "<leader>zc", function()
@@ -216,9 +232,34 @@ function open_comment(buf, first, last, quote)
   end
 
   local path = vim.fn.tempname() .. ".md"
-  vim.cmd("botright 8split " .. vim.fn.fnameescape(path))
+  local title = (" Lines %d-%d “%s” · :w saves the note"):format(first, last, excerpt)
+  local from = vim.api.nvim_get_current_win()
+  local float = vim.api.nvim_win_get_config(from)
+  if float.relative ~= "" then
+    -- From a floating window (for example zen mode), a split would land behind
+    -- it and close it. Open the comment as a float on top instead; closing it
+    -- returns to the window it came from.
+    local width, height = vim.api.nvim_win_get_width(from), vim.api.nvim_win_get_height(from)
+    local h = math.min(8, math.max(3, height - 4))
+    local scratch = vim.api.nvim_create_buf(false, true)
+    vim.bo[scratch].bufhidden = "wipe"
+    vim.api.nvim_open_win(scratch, true, {
+      relative = "win",
+      win = from,
+      row = height - h - 2,
+      col = 0,
+      width = math.max(20, width - 2),
+      height = h,
+      border = "rounded",
+      title = title,
+      zindex = (float.zindex or 50) + 10,
+    })
+    vim.cmd.edit(vim.fn.fnameescape(path))
+  else
+    vim.cmd("botright 8split " .. vim.fn.fnameescape(path))
+    vim.wo.winbar = title
+  end
   local cbuf = vim.api.nvim_get_current_buf()
-  vim.wo.winbar = (" Lines %d-%d “%s” · :w saves the note"):format(first, last, excerpt)
 
   local group = vim.api.nvim_create_augroup("passage_review_comment_" .. cbuf, { clear = true })
   vim.api.nvim_create_autocmd("BufWritePost", {

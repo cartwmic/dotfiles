@@ -61,7 +61,8 @@ one buffer-local mapping:
 | `V` … `<leader>zc` | Comment on the selected lines. |
 | `<leader>zc` | Comment on the current line. |
 
-`<leader>zc` opens the comment in a split as a normal temporary Markdown
+`<leader>zc` opens the comment in a split (a float on top when you are in a
+floating window such as zen mode, so zen stays open) as a normal temporary Markdown
 file, so completion, spelling, linting, and the rest of your config work
 there too. Each `:w` saves the draft as a pending note; writing again
 replaces that note with the new text (and a new note ID). Quit the split
