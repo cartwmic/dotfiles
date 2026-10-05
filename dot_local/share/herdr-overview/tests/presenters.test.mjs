@@ -62,6 +62,29 @@ test('workspace rows wrap in native order and selected anchors/details survive c
     } else assert.ok(!map.body.some(line => line.includes('Synthetic workspace') && line.includes('Workspace 2')));
   }
 });
+test('idle or done with a native state label shows WAITING, ranks with working and counts as pending', async () => {
+  const { resolvePalette } = await import('../src/theme.mjs');
+  const { paneRank } = await import('../src/navigation.mjs');
+  const theme = resolvePalette({ name: 'catppuccin' }), palette = theme.palette;
+  const color = token => token.hex.slice(1).match(/../g).map(h => parseInt(h, 16)).join(';');
+  for (const status of ['idle', 'done']) {
+    const model = normalizeSnapshot(snapshot()); const journey = createJourney(model);
+    model.panes.p1.agent = { ...model.panes.p1.agent, recognized: true, status, stateLabels: { [status]: '⏳ 1 subagent (worker)' } };
+    const frame = renderMap({ model, journey, theme }, 100, 40);
+    const line = frame.split('\n').find(row => row.includes('WAITING'));
+    assert.match(line, /WAITING · 1 subagent(?!s)/);
+    assert.doesNotMatch(frame, /worker|⏳/);
+    assert.match(line, new RegExp('\\x1b\\[38;2;' + color(palette.peach) + 'm(\\x1b\\[[0-9;]*m)*WAITING'));
+    assert.match(frame.replace(/\x1b\[[0-9;]*[A-Za-z]/g, ''), / R\d+ P1 · /);
+    assert.equal(paneRank(model.panes.p1), paneRank({ agent: { recognized: true, status: 'working' } }));
+    model.panes.p1.agent.stateLabels = { [status]: '⏳ 3 subagents (a, b, c) · 1 pane · task' };
+    assert.match(renderMap({ model, journey, theme }, 100, 40), /WAITING · 3 subagents/);
+    model.panes.p1.agent.stateLabels = { [status]: 'custom label' };
+    assert.match(renderMap({ model, journey, theme }, 100, 40).replace(/\x1b\[[0-9;]*[A-Za-z]/g, ''), /WAITING\s*│/);
+    model.panes.p1.agent.stateLabels = { working: 'other state only' };
+    assert.doesNotMatch(renderMap({ model, journey, theme }, 100, 40), /WAITING/);
+  }
+});
 test('collapsed card status is bold and recap date is dimmer than recap text', async () => {
   const { resolvePalette } = await import('../src/theme.mjs');
   const theme = resolvePalette({ name: 'catppuccin' }), palette = theme.palette;

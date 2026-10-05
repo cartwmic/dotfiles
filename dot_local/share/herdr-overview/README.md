@@ -139,6 +139,11 @@ recaps are unavailable, and a newer failed attempt is a separate warning.
 Publication time uses `published_at`, then `created_at`, converted for display
 only with the recap CLI's `time_zone`. Overview has no timezone setting of its own.
 
+An idle or done pane whose integration labels that state is still waiting on
+background work. It shows orange **WAITING**, ranks with working panes and counts
+as `P` in the header. Pi's subagent package publishes such a label while async
+subagents run; Overview shows only their count (`WAITING · 2 subagents`).
+
 Native blocked status uses the red × symbol. An actual Pi questionnaire wait adds
 **Awaiting answer**, including while its dialog is collapsed. Generic blockers do
 not claim that reason. Answer/cancel clears only the question contribution; other
