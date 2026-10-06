@@ -204,12 +204,6 @@ local function attach_view(view)
       return unpack(results)
     end
   end
-  if not vim.b[view].passage_review_mapped then
-    vim.b[view].passage_review_mapped = true
-    vim.keymap.set({ "n", "x" }, "<leader>zc", function()
-      comment_rendered(view)
-    end, { buffer = view, desc = "passage-review: comment on selection or line" })
-  end
   M.render_view(view)
 end
 
@@ -325,15 +319,8 @@ local function attach(buf, data)
   vim.bo[buf].readonly = true
   vim.bo[buf].modifiable = false
   vim.bo[buf].filetype = vim.filetype.match({ filename = data.title }) or "markdown"
-  vim.wo.winbar = (" %s · <leader>zc comments on the selection or line"):format(data.title)
-  -- Only one buffer-local mapping, on a free prefix; every normal key keeps its meaning.
-  vim.keymap.set("x", "<leader>zc", function()
-    comment_selection(buf)
-  end, { buffer = buf, desc = "passage-review: comment on selection" })
-  vim.keymap.set("n", "<leader>zc", function()
-    local row = vim.api.nvim_win_get_cursor(0)[1]
-    open_comment(buf, row, row, nil)
-  end, { buffer = buf, desc = "passage-review: comment on line" })
+  vim.b[buf].passage_review_title = data.title
+  M.refresh_header()
   render(buf)
 end
 
@@ -522,7 +509,61 @@ function M.delete(id)
   end)
 end
 
+--- The review source buffer behind `buf`: the buffer itself, or the source of
+--- an md-render view of it.
+local function review_source(buf)
+  if vim.b[buf].passage_review_id then
+    return buf
+  end
+  local session = md_session(buf)
+  return session and session.source_bufnr or nil
+end
+
+--- Show the review header on the current window when it shows a review (source
+--- or rendered), and remove it when the window has moved on to something else.
+--- Window-local, so it has to follow buffer swaps (md-render toggles, zen).
+function M.refresh_header()
+  local win = vim.api.nvim_get_current_win()
+  local source = review_source(vim.api.nvim_win_get_buf(win))
+  if source then
+    local header = (" %s · <leader>zc comments on the selection or line"):format(
+      vim.b[source].passage_review_title or vim.b[source].passage_review_id)
+    if vim.wo[win].winbar ~= header then
+      vim.wo[win].winbar = header
+    end
+    vim.w[win].passage_review_header = true
+  elseif vim.w[win].passage_review_header then
+    vim.wo[win].winbar = ""
+    vim.w[win].passage_review_header = nil
+  end
+end
+
+--- <leader>zc: comment on the selection or line in a review, source or rendered.
+--- Global rather than buffer-local, so it keeps working when md-render or zen
+--- swap buffers and windows underneath.
+local function comment_here()
+  local buf = vim.api.nvim_get_current_buf()
+  if md_session(buf) then
+    return comment_rendered(buf)
+  elseif vim.b[buf].passage_review_id then
+    local mode = vim.fn.mode()
+    if mode == "v" or mode == "V" or mode == "\22" then
+      return comment_selection(buf)
+    end
+    local row = vim.api.nvim_win_get_cursor(0)[1]
+    return open_comment(buf, row, row, nil)
+  end
+  notify("Not a passage-review buffer (open one with :PassageReview).", vim.log.levels.WARN)
+end
+
 function M.setup()
+  vim.keymap.set({ "n", "x" }, "<leader>zc", comment_here, { desc = "passage-review: comment on selection or line" })
+  vim.api.nvim_create_autocmd({ "BufWinEnter", "WinEnter", "SafeState" }, {
+    group = vim.api.nvim_create_augroup("passage_review_header", { clear = true }),
+    callback = function()
+      pcall(M.refresh_header)
+    end,
+  })
   vim.api.nvim_create_user_command("PassageReviewDelete", function(opts)
     M.delete(opts.args)
   end, { nargs = "?", desc = "passage-review: delete a saved review (pick one, or give its ID)" })

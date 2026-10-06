@@ -472,6 +472,48 @@ assert(#prompts == 3, "expected the picker again, got " .. #prompts .. " prompts
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(self.review_ids(), [])
 
+    @unittest.skipUnless(
+        shutil.which("nvim") and MD_RENDER.is_dir(), "nvim or the installed md-render.nvim plugin is missing"
+    )
+    def test_comment_key_and_header_follow_buffer_swaps(self) -> None:
+        # Zen and md-render move the review between windows and buffers; a
+        # window md-render never set up must still show the header and comment.
+        doc = self.root / "doc.md"
+        doc.write_text("# Title\n\nPara one.\n\n- item\n", encoding="utf-8")
+        review_id = self.new_review(doc.read_text())
+        self.env["MD_RENDER"] = str(MD_RENDER)
+        result = self.run_nvim(doc, """
+vim.g.mapleader = " "
+vim.opt.rtp:prepend(vim.env.MD_RENDER)
+local M = dofile(vim.env.PASSAGE_REVIEW_LUA)
+-- A later global <leader>zc (like the old empty placeholder) must not win in a review.
+M.open(%r)
+require("md-render.preview").toggle()
+local view = vim.api.nvim_get_current_buf()
+assert(vim.b[view].md_render, "expected the rendered view")
+-- Show the rendered view in a fresh float, as zen does.
+local float = vim.api.nvim_open_win(view, true, { relative = "editor", row = 1, col = 1, width = 60, height = 10 })
+vim.api.nvim_exec_autocmds("SafeState", {})
+assert(vim.wo[float].winbar:find("zc comments", 1, true), "header missing in the float: " .. vim.wo[float].winbar)
+for i = 1, 2 do
+  vim.api.nvim_set_current_win(float)
+  vim.fn.cursor(vim.fn.search("Para"), 1)
+  vim.api.nvim_feedkeys(vim.keycode("<Space>zc"), "x", false)
+  assert(vim.api.nvim_get_current_win() ~= float, "comment #" .. i .. " did not open")
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "note " .. i })
+  vim.cmd("stopinsert | write | quit")
+end
+-- Back to an ordinary buffer: the header goes away.
+vim.api.nvim_set_current_win(float)
+vim.cmd("enew")
+vim.api.nvim_exec_autocmds("SafeState", {})
+assert(vim.wo[float].winbar == "", "stale header: " .. vim.wo[float].winbar)
+""" % review_id)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        notes = json.loads(self.cli("show", review_id).stdout)["notes"]
+        self.assertEqual(sorted(n["comment"] for n in notes), ["note 1\n", "note 2\n"])
+        self.assertEqual({n["line_start"] for n in notes}, {3})
+
     def test_remove_deletes_a_whole_review(self) -> None:
         review_id = self.new_review("line\n")
         self.cli("note", review_id, "--lines", "1", input_text="note\n")

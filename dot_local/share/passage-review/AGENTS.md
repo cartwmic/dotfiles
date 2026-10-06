@@ -23,8 +23,11 @@ The Pi `/review` extension supplies input; it does not own this library.
 - `passage_review.lua` is the Neovim view. It is used when the editor command
   is `nvim`; it only talks to the CLI through `new --no-open`, `note`,
   `show`, and `delete` (to replace a re-saved draft), never the JSON files.
-  Keep normal Neovim behavior: one buffer-local `<leader>zc` mapping, no
-  remapped built-in keys, and comment drafts in real temporary files. `dot_config/nvim/plugin/passage_review.lua`
+  Keep normal Neovim behavior: one global `<leader>zc` mapping that acts
+  only in review buffers (source or md-render view), no remapped built-in
+  keys, and comment drafts in real temporary files. Zen and md-render swap
+  buffers between windows without the usual events, so the header and key
+  must not depend on per-buffer or per-window setup at attach time. `dot_config/nvim/plugin/passage_review.lua`
   only loads the deployed module for `:PassageReview`.
 - Choose interaction path up front: with `/dev/tty`, opening a review can
   prompt for passages and run `$VISUAL`, `$EDITOR`, or `vi`. Without a
