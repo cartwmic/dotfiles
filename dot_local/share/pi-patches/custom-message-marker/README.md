@@ -2,7 +2,8 @@
 
 Wraps extension-injected `custom` messages in `<injected-context>` … `</injected-context>`
 tags inside pi-core's `convertToLlm()`, so stateful provider adapters can tell
-injected context apart from real user turns.
+injected context apart from real user turns — and (v2) passes turn-prompt custom
+messages through **unwrapped**.
 
 ## Problem
 
@@ -61,19 +62,45 @@ are **not** wrapped and keep the normal last-turn-wins behavior. Stateless
 providers just see the bracketed text — cosmetically clarifying, functionally
 inert.
 
-This is the pi-core half of the fix; the companion half lives in the cursor
-fork (`SIDE_CHANNEL_BLOCK_START` / `isContextModeSideChannelText` in
-`src/stream/context-normalize.ts`, commit `832f434`). **Keep the open tag
-(`<injected-context>`) in sync between the two.**
+`convertToLlm` throws away.
+
+## v2: turn-prompt custom messages pass through unwrapped
+
+Async subagent completion notifications are **turn prompts**, not injected
+context: pi-subagents sends them with `triggerTurn: true`, pi-core starts a
+new LLM turn whose only prompt message is the notification. Wrapping them
+made the cursor fork classify the wake turn's only user message as side-channel
+context and drop it, erroring `No user message found` (`native-core.ts:530`).
+
+v2 fixes this at the source: `sendCustomMessage` persists the delivery intent
+on the message as `promptIntent` (computed to match the delivery branch —
+`nextTurn` → false, steer/followUp while streaming → `triggerTurn !== false`,
+otherwise `triggerTurn === true`), and `convertToLlm` skips the wrap when
+`promptIntent === true`. Context injections (`before_agent_start` messages,
+no-trigger sends) keep the wrapping, so the original demotion fix is untouched.
+
+Validated: a real pi session (claude-haiku-4-5) ran an async subagent; the
+completion notification triggered a wake turn that completed with the parent
+reporting the subagent's result, and zero `No user message found` errors.
 
 ## Scope
 
-- **Targets:** `@earendil-works/pi-coding-agent/dist/core/messages.js` (SDK) and
-  the `dist/bundle/chunks/*.js` chunk holding `convertToLlm` (the `pi` CLI runs
-  the bundle). The bundle anchor is the minified `case"custom":return{…}`.
+- **Targets:** `@earendil-works/pi-coding-agent/dist/core/messages.js` (SDK,
+  solely owned — backup restore is safe), `dist/core/agent-session.js` (SDK,
+  **shared** with settlement-abort/headless-drain/prompt-start-race/
+  standing-reminder-origin), and the `dist/bundle/chunks/*.js` chunk holding
+  `convertToLlm` and `sendCustomMessage` (the `pi` CLI runs the bundle; also
+  **shared**).
+- **Shared-file guard:** v2 never restores a shared target from backup — that
+  would silently drop the other patches' edits. A stale revision on a shared
+  target is transformed in place by alternative anchors (the bundle
+  `convertToLlm` edit accepts both the original and the v1-patched minified
+  form); only `messages.js` is restored from backup.
 - **Profiles:** all (no profile gate). The wrapping is safe for every provider.
-- **Anchor:** the single `const content = typeof m.content === "string" …`
-  line in `convertToLlm`'s `case "custom"`.
+- **Anchors:** the `const content = typeof m.content === "string" …` line in
+  `convertToLlm`'s `case "custom"` (SDK + bundle), the `appMessage` literal in
+  `sendCustomMessage` (SDK + bundle), and the minified `case"custom":return{…}`
+  (bundle, original or v1-patched form).
 
 ## Failure modes
 
