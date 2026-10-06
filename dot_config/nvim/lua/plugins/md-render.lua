@@ -188,8 +188,23 @@ return {
       {
         "<leader>mr",
         function()
+          local preview = require("md-render").preview
+          local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+          local state = vim.w.md_render_state
+          local session = preview._sessions and preview._sessions[buf]
+          -- md-render tracks source/render per window. Zen opens a new window
+          -- and copies buffers back to the one behind it, so a window can show
+          -- a rendered view md-render does not know it holds, and its toggle
+          -- then refuses. Switch such a window back to the source ourselves.
+          if vim.b.md_render and session and not (state and state.mode == "render" and state.render_buf == buf) then
+            local line = session:rendered_to_source(vim.api.nvim_win_get_cursor(win)[1]) or 1
+            vim.api.nvim_win_set_buf(win, session.source_bufnr)
+            pcall(vim.api.nvim_win_set_cursor, win, { math.min(line, vim.api.nvim_buf_line_count(session.source_bufnr)), 0 })
+            vim.w.md_render_state = { source_buf = session.source_bufnr, render_buf = buf, mode = "source" }
+            return
+          end
           if vim.b.md_render or vim.bo.filetype == "markdown" then
-            require("md-render").preview.toggle()
+            preview.toggle()
           end
         end,
         desc = "Markdown: toggle rendered view",
