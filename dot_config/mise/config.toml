@@ -8,7 +8,9 @@
 # Usage:
 #   mise install              # Install all tools
 #   mise run bootstrap        # Run full bootstrap including custom tasks
-#   mise upgrade              # Upgrade all tools
+#   mise upgrade              # Upgrade mise-managed tools (not Pi)
+#   mise run update-pi        # Update managed Pi and reapply runtime patches
+#   Plain pi update bypasses patch reapplication; use the task above instead.
 #
 # IMPORTANT: Add to ~/.zshrc EARLY (before other version managers):
 #   eval "$(mise activate zsh)"
@@ -698,15 +700,53 @@ fi
 '''
 
 [tasks."install-pi"]
-description = "Install Pi coding agent"
+description = "Install Pi with its dependency-pinned managed installer"
 run = '''
-if ! command -v pi >/dev/null 2>&1; then
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "ERROR: npm not found. Node.js must be installed first."
-    exit 1
-  fi
-  npm install -g @earendil-works/pi-coding-agent
+set -eu
+PI_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+PI_BIN="$PI_AGENT_DIR/bin/pi"
+# The installer can create its PATH entry without editing a managed shell profile.
+export PATH="$PI_AGENT_DIR/bin:$HOME/.local/bin:$PATH"
+if [ ! -x "$PI_BIN" ] || [ ! -f "$PI_AGENT_DIR/install/current-version" ]; then
+  TEMP_DIR=$(mktemp -d)
+  trap 'rm -rf "$TEMP_DIR"' EXIT HUP INT TERM
+  curl -fsSL https://pi.dev/install.sh -o "$TEMP_DIR/install.sh"
+  sh "$TEMP_DIR/install.sh"
 fi
+# Cancellation or an incomplete install must not report success.
+"$PI_BIN" --version
+mise run apply-pi-patches
+'''
+
+[tasks."update-pi"]
+description = "Update managed Pi, then reapply custom runtime patches"
+run = '''
+set -eu
+PI_BIN="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/bin/pi"
+if [ ! -x "$PI_BIN" ]; then
+  echo "[update-pi] ERROR: managed Pi is missing; run mise run install-pi first" >&2
+  exit 1
+fi
+"$PI_BIN" update --self
+"$PI_BIN" --version
+mise run apply-pi-patches
+'''
+
+[tasks."apply-pi-patches"]
+description = "Apply custom patches to the active Pi release"
+run = '''
+set -eu
+# Bootstrap supplies these while chezmoi holds its state lock. Standalone tasks
+# resolve the configured profile; do not silently disable profile-gated patches.
+PI_CHEZMOI_PROFILE="${PI_CHEZMOI_PROFILE:-$(chezmoi data --format json | jq -er '.profile')}"
+PI_PATCHES_ROOT="${PI_PATCHES_ROOT:-$HOME/.local/share/pi-patches}"
+export PI_CHEZMOI_PROFILE PI_PATCHES_ROOT
+# Desktop patches also require the Pi-declared response-visibility Git package.
+if [ ! -d "$PI_PATCHES_ROOT" ] || ! command -v node >/dev/null 2>&1; then
+  echo "[apply-pi-patches] ERROR: Node and deployed pi-patches are required; apply chezmoi source first" >&2
+  exit 1
+fi
+sh "$HOME/.local/user_scripts/apply_pi_patches.sh"
 '''
 
 [tasks."install-mermaid-cli"]

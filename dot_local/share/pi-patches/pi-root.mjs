@@ -32,7 +32,8 @@ function npmGlobalRoot() {
 // Absolute pi-coding-agent package dir, or undefined when Pi is not installed.
 export function piCodingAgentRoot() {
 	if (process.env.PI_ROOT) return process.env.PI_ROOT;
-	for (const root of [managedRoot(), npmGlobalRoot()]) {
+	for (const locate of [managedRoot, npmGlobalRoot]) {
+		const root = locate();
 		if (root && existsSync(join(root, "package.json"))) return root;
 	}
 	return undefined;
