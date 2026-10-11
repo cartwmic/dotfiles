@@ -849,7 +849,7 @@ Review-state routing is explicit in this reference graph: external review operat
 
 ### 10.1 Run-Configured Semantic Review Policies
 
-The software-change provider's shipped review contract remains external and deterministic at its boundary. Binaries built from this candidate source expose identity through `--help`/`-h` and `--version`/`-V` before stdin; public v0.2.2 binaries predate those flags. Direct pushes to `main` reuse read-only production preflight at the pushed SHA. Calibration fixtures are supplied-material-only and use stable fictional path labels with shipped companions, so review does not resolve labels against a live checkout. Stale evidence is recovery context under `details.informational`; current unsatisfied obligations remain under blocking `details.diagnostics`.
+The software-change provider's shipped review contract remains external and deterministic at its boundary. Binaries built from this candidate source expose identity through `--help`/`-h` and `--version`/`-V` before stdin; public v0.2.2 binaries predate those flags. Direct pushes to `main` run blocking CI (`ci.yml`) at the pushed SHA. Calibration fixtures are supplied-material-only and use stable fictional path labels with shipped companions, so review does not resolve labels against a live checkout. Stale evidence is recovery context under `details.informational`; current unsatisfied obligations remain under blocking `details.diagnostics`.
 
 At run creation, the software-change workflow may receive semantic review policies in immutable initial input. These policies configure what must be reviewed at the live review gates. A present `review_policies` object is applied at `describe`: only nonempty gate lists keep those review states, and start snapshots that live graph. Core does not interpret `review_policies`. The snapshotted topology for an existing run does not change during that run.
 
@@ -1415,9 +1415,13 @@ For an LE-166-enabled run, provider unavailability is still not a check-free gat
 - Status: live
 - Coverage: e2e/journey
 
+**Lean CI/release amendment:** The exact heading above is retained solely as historical requirement identity text. It does not require the retired pipeline; this body supersedes the heading's former operative pipeline description. Blocking CI in `ci.yml` runs only on pushes to `main` and requires formatting checks, all-target workspace Clippy with `-D warnings`, a locked workspace build, workspace tests, the bare self-tests of all five journey scripts (external-work, software-change, policy-document, research and generate-PRD), and the Bookends gate over every introduced reachable commit from main's tip before the push (`before`) through the pushed tip (`after`), not merely the pushed tip against its own parent. Bookends retains the history and continuity obligations of LE-125 and LE-133. A separate informational workflow runs the full source journeys on the same main pushes and exposes their pass or fail; it never gates Release, including when failed or still running.
+
 ### LE-69: cargo-dist plan and release-gate assertions include the research binary.
 - Status: live
 - Coverage: e2e/journey
+
+**Lean CI/release amendment:** Release is dispatch-only, with no push or pull-request trigger. Every dispatch, including dry-run, requires a prior successful push-event `ci.yml` run for the exact dispatched commit before artifact compilation; absent or unsuccessful exact-commit proof stops the already dispatched workflow before artifact compilation. On every dispatch, every executable in every built native release archive for macOS arm64 (`aarch64-apple-darwin`) and Linux x86_64 (`x86_64-unknown-linux-gnu`) must exit 0 for `--version` and report exactly one whole version token equal to that archive's release version, not a substring or prefix match. Publication is admitted only when archive-check succeeds; failed, skipped, cancelled or missing archive-check results cannot admit publication. The research binary remains included in cargo-dist plan and release-gate assertions and in the native release matrix for both targets.
 
 ### LE-70: The provider does not fetch, invoke models, or judge semantic truth.
 - Status: live
@@ -1811,7 +1815,7 @@ The driver-owned pointer refuses content mismatches, preserves pending versus ob
 - Status: live
 - Coverage: e2e/journey
 
-Live-ID disappearance, tombstone removal, reassignment and revival are refused in both full and CI-equivalent shallow clones. The gate obtains required parent history or fails closed, while genuine first adoption remains valid; publication checks cover the introduced history required by LE-133.
+Live-ID disappearance, tombstone removal, reassignment and revival are refused in both full and CI-equivalent shallow clones. The gate obtains required parent history or fails closed, while genuine first adoption remains valid; required push-to-main CI checks cover the introduced history required by LE-133.
 
 ### LE-126: Bookends bypass permission requires durable local invocation evidence and remains distinct from GREEN.
 - Status: live
@@ -1878,7 +1882,7 @@ The resulting exact effective policy, bindings, selected-file bytes/hash, Booken
 - Status: live
 - Coverage: e2e/journey
 
-Pre-push and required CI inspect every commit introduced by each updated ref, including merged branch commits, and check continuity against each relevant parent. Per-commit continuity (no silent removal, reassignment, revival, adoption removal, or tombstone games) still blocks wherever it appears, and incomplete history still fails closed. Coverage-timing findings on intermediate commits (eligible citations landing later in the same pushed range) are retained as visible diagnostics instead of blocking, provided the pushed tip tree is independently clean. Legitimate first adoption and permanent tombstones retain their meaning. Coverage of the published tip is checked against that tip's content. Known residual: landing an uncovered live ID then tombstoning it in the same range passes; tombstones are permanent and review-visible.
+Required push-to-main CI inspects every commit introduced by the main ref update, starting from main's tip before the push (`before`) through the pushed tip (`after`), including merged branch commits, and checks continuity against each relevant parent. For a generic supplied update stream, Bookends inspects every supplied updated ref using that ref's own old/new range and checks every introduced reachable commit, including merged branch commits, against each relevant parent. No installed local Git hook or retired hosted workflow is required. Per-commit continuity (no silent removal, reassignment, revival, adoption removal, or tombstone games) still blocks wherever it appears, and incomplete history still fails closed. Coverage-timing findings on intermediate commits (eligible citations landing later in the same pushed range) are retained as visible diagnostics instead of blocking, provided the pushed tip tree is independently clean. Legitimate first adoption and permanent tombstones retain their meaning. Coverage of the published tip is checked against that tip's content. Known residual: landing an uncovered live ID then tombstoning it in the same range passes; tombstones are permanent and review-visible.
 
 Local and hosted checks obtain required history before claiming complete coverage. Equivalent available history produces the same decision in full and shallow clones. Missing history, incomplete enumeration, interruption or a resource limit cannot produce complete GREEN. A new ref cannot use a guessed baseline to omit its ancestry. Explicit bypass retains its reason and durable invocation evidence under LE-126.
 
@@ -2419,3 +2423,37 @@ Drivers and harnesses run proof/test commands and use supported recording to ret
 Configured normal command-proof obligations have a supported external-result fulfillment path. Sufficient genuine results are not rerun merely to obtain an engine-owned capture, and the new product has no optional proof-command/matrix runner. Mechanical source/target/command/currentness checks and actual semantic proof relevance still govern admission and completion. Exit zero, valid metadata or an all-green summary alone does not establish delivery. Missing, wrong-repository, stale, failed or insufficient results remain pending or fail under the existing rules; correction/reuse cannot fabricate them.
 
 Preserve actual output and original attribution, and distinguish recording acceptance from independent judgment that command assertions prove the intended result. Deterministic provider calls and metadata inspection are not primary work execution. No private-call verification, arbitrary evidence quota or duplicate command-provenance registry is required.
+
+### LE-184: Software-change plans expose safe real parallelism and plan review checks it
+- Status: live
+- Coverage: e2e/journey
+
+Software-change plan guidance tells the driver to decompose work into tasks that do not share writable files or state unless one depends on the other, to declare a dependency only where a real contract, context or hard-input need exists, and, during implementation, to dispatch tasks with no dependency path between them concurrently by default, giving a reason when it runs them serially. Concurrency is expressed only through the plan's existing task dependencies; there is no separate concurrency or touched-files field, and nothing measures or enforces actual dispatch.
+
+Every shipped software-change rigor level reviews a plan's parallelism at ordinary and challenge plan review through a distinct `parallelism-honest` axis. It fails material missed parallelism across the whole dependency graph, unchained tasks that collide on the same files or state, and over-splitting that adds coordination cost without real concurrent gain. It passes an honest serial chain and a well-decomposed parallel plan. Whether each individual declared predecessor is needed remains `dependencies-honest`, and whether a task is bounded and small enough remains `task-sized`. Runs started on an earlier profile keep their frozen review obligations.
+
+### LE-185: Optional reviewed narratives and owner checkpoints for software-change runs
+- Status: live
+- Coverage: e2e/journey
+
+For new software-change runs, the owner may choose at setup, per run and frozen at start, (a) which of the design, plan and validation phases produce a plain-English markdown narrative and (b) which of the intent, design, plan, implementation and validation phase exits wait for an owner decision. Both are off in every shipped profile; a run with both off visits no narrative or checkpoint step and keeps its existing review obligations.
+
+A narrative is written only after that phase's JSON artifact has cleared its ordinary and challenge review, describes that exact artifact revision, and must itself clear ordinary and challenge review against the artifact and the frozen intent at the profile's stages and author counts before the run leaves the phase. The narrative step never changes the JSON, which stays authoritative for later phases. A new artifact revision makes its narrative and any owner decision stale. After the run ends, the last reviewed narrative for each enabled phase remains readable as its own markdown file among the run's artifacts.
+
+At a configured checkpoint the run does not leave the phase until a recorded owner decision approves the current subject revision: the narrative when one is enabled, otherwise the artifact. A rejection carries the owner's reason and names its target: an artifact rejection sends the run through that phase's existing revise route; a narrative rejection requires a rewritten and re-reviewed narrative and a new owner decision while the unchanged artifact's reviews stay valid. Each decision record keeps the owner's verbatim decision text, and decisions and rejections remain visible in history. The decision record shape and its evaluation are a provider convention shared through loop-integrations without software-change-specific assumptions; core assigns them no approval meaning (LE-18), and the provider does not prove that a decision came from a human. Runs started before this capability keep their frozen obligations.
+
+### LE-186: Approved run artifacts remain inspectable after run files are deleted
+- Status: live
+- Coverage: e2e/journey
+
+For new runs of the shipped software-change, research and policy-document providers, each time a run leaves an artifact's owning phase forward, the exact content of that artifact as it stood at that moment is retained in the run catalog. Deleting the run's artifact directory, or any other file outside the catalog, does not lose that content: an operator can read every retained copy, in order, with its artifact name, the transition that retained it and when, through the ordinary inspection commands.
+
+Only phase exits are retained, not intermediate drafts or revisions written between exits. A later exit after a revise loop adds a new entry; an artifact whose bytes are unchanged since its last retained copy is recorded as exited again without storing its content a second time. An exit by owner override is retained and visibly marked as not checked. Core assigns this content no artifact, approval or revision meaning; runs started before this capability are not backfilled.
+
+### LE-187: Operators can reclaim legacy catalog space from finished runs
+- Status: live
+- Coverage: e2e/journey
+
+An operator can deliberately reclaim catalog space held by bulky per-invocation detail that earlier releases stored for work-slot invocations, such as worker command, argument and prompt payloads and their duplicated completion snapshots. Before changing anything the operator can see which finished runs would be affected and roughly how much space would be reclaimed. Applying it discards that detail only for final or terminated runs, keeps those runs listed, and returns the freed space so the catalog file on disk becomes smaller.
+
+Active runs and their data are unaffected, and cleanup does not refuse merely because other runs are active. While the catalog file is being shrunk, concurrent commands may briefly wait or fail with a clear retryable busy error, but nothing is corrupted or lost beyond the selected legacy detail. Inspection of a cleaned run may be degraded; original worker payloads for cleaned runs, and verification that depends on them, are intentionally no longer available. Cleanup never runs automatically.
