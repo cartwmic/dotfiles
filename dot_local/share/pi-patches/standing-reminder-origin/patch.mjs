@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// chezmoi-pi-patch:standing-reminder-origin v2
+// chezmoi-pi-patch:standing-reminder-origin v3
 // Carry input source on the exact user-message object until message_start.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { piCodingAgentRoot } from "../pi-root.mjs";
 
 const NAME = "standing-reminder-origin";
-const REVISION = 2;
+const REVISION = 3;
 const MARKER = `chezmoi-pi-patch:${NAME}`;
 const VERSION_MARKER = `${MARKER} v${REVISION}`;
 const STATE_DIR = join(homedir(), ".local", "state", "chezmoi-pi-patches");
@@ -80,22 +80,39 @@ const edits = {
 		{
 			name: "per-message origin map",
 			before: "    _entryIdsByMessage = new WeakMap();",
-			after: `    _entryIdsByMessage = new WeakMap();\n    // ${VERSION_MARKER}\n    _inputSources = new WeakMap();`,
+			after: `    _entryIdsByMessage = new WeakMap();\n    // ${VERSION_MARKER}\n    _inputSources = new WeakMap();\n    _pendingPromptStart = undefined;`,
+		},
+		{
+			name: "prompt start origin handoff",
+			before: `            throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
+        }`,
+			after: `            throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
+        }
+        this._pendingPromptStart = { prompt: expandedText, images: currentImages, source: options?.source ?? "interactive" };`,
+		},
+		{
+			name: "prepare run origin capture",
+			before: `    async _prepareRun(trigger) {`,
+			after: `    async _prepareRun(trigger) {
+        const promptStart = this._pendingPromptStart;
+        this._pendingPromptStart = undefined;`,
 		},
 		{
 			name: "initial prompt origin",
-			before: `        messages.push({
-            role: "user",
-            content: userContent,
-            timestamp: Date.now(),
-        });`,
-			after: `        const userMessage = {
-            role: "user",
-            content: userContent,
-            timestamp: Date.now(),
-        };
-        this._inputSources.set(userMessage, options?.source ?? "interactive");
-        messages.push(userMessage);`,
+			before: `            messages.push({
+                role: "user",
+                content: [{ type: "text", text }, ...normalized.images],
+                timestamp: Date.now(),
+            });`,
+			after: `            const userMessage = {
+                role: "user",
+                content: [{ type: "text", text }, ...normalized.images],
+                timestamp: Date.now(),
+            };
+            if (promptStart?.prompt === trigger.prompt && promptStart.images === trigger.images) {
+                this._inputSources.set(userMessage, promptStart.source);
+            }
+            messages.push(userMessage);`,
 		},
 		{
 			name: "streaming prompt origin",
@@ -221,12 +238,22 @@ try {
 		{
 			name: "per-message origin map",
 			before: "_entryIdsByMessage=new WeakMap;",
-			after: `_entryIdsByMessage=new WeakMap;/* ${VERSION_MARKER} */_inputSources=new WeakMap;`,
+			after: `_entryIdsByMessage=new WeakMap;/* ${VERSION_MARKER} */_inputSources=new WeakMap;_pendingPromptStart=void 0;`,
+		},
+		{
+			name: "prompt start origin handoff",
+			before: "new Error(formatNoApiKeyFoundMessage(this.model.provider))",
+			after: `new Error(formatNoApiKeyFoundMessage(this.model.provider));this._pendingPromptStart={prompt:expandedText,images:currentImages,source:options?.source??"interactive"}`,
+		},
+		{
+			name: "prepare run origin capture",
+			before: "async _prepareRun(trigger){",
+			after: "async _prepareRun(trigger){let promptStart=this._pendingPromptStart;this._pendingPromptStart=void 0;",
 		},
 		{
 			name: "initial prompt origin",
-			before: `userContent=[{type:"text",text:userText}];userContent.push(...normalized.images),messages.push({role:"user",content:userContent,timestamp:Date.now()});`,
-			after: `userContent=[{type:"text",text:userText}];userContent.push(...normalized.images);let userMessage={role:"user",content:userContent,timestamp:Date.now()};this._inputSources.set(userMessage,options?.source??"interactive"),messages.push(userMessage);`,
+			before: `messages.push({role:"user",content:[{type:"text",text},...normalized.images],timestamp:Date.now()})}`,
+			after: `let userMessage={role:"user",content:[{type:"text",text},...normalized.images],timestamp:Date.now()};promptStart?.prompt===trigger.prompt&&promptStart.images===trigger.images&&this._inputSources.set(userMessage,promptStart.source),messages.push(userMessage)}`,
 		},
 		{
 			name: "streaming prompt origin",

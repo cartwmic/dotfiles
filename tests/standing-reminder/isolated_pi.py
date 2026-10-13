@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PATCH = ROOT / "dot_local/share/pi-patches/standing-reminder-origin/patch.mjs"
 SIBLING_PATCH = ROOT / "dot_local/share/pi-patches/headless-extension-drain/patch.mjs"
-HEADLESS_MARKER = "chezmoi-pi-patch:headless-extension-drain v1"
+HEADLESS_MARKER = "chezmoi-pi-patch:headless-extension-drain v2"
 ORIGIN_MARKER = "chezmoi-pi-patch:standing-reminder-origin"
 
 
@@ -44,6 +44,31 @@ def installed_package(explicit: Path | None) -> Path:
     metadata = json.loads((package / "package.json").read_text(encoding="utf-8"))
     require(metadata.get("name") == "@earendil-works/pi-coding-agent", f"unexpected package at {package}")
     return package
+
+
+def stage_package(source: Path, temporary: Path) -> Path:
+    """Copy the package under a private node_modules so its dependencies still resolve.
+
+    Pi 1.2.0 loads jiti and other dependencies from the enclosing node_modules; sibling
+    packages are symlinked, only the package under test is copied and patched.
+    """
+    modules = source.parent.parent
+    if modules.name != "node_modules" or source.parent.name != "@earendil-works":
+        stage = temporary / "pi-coding-agent"
+        shutil.copytree(source, stage, symlinks=True)
+        return stage
+    private_modules = temporary / "node_modules"
+    private_scope = private_modules / "@earendil-works"
+    private_scope.mkdir(parents=True)
+    for entry in modules.iterdir():
+        if entry.name != "@earendil-works":
+            (private_modules / entry.name).symlink_to(entry)
+    for entry in source.parent.iterdir():
+        if entry.name != source.name:
+            (private_scope / entry.name).symlink_to(entry)
+    stage = private_scope / source.name
+    shutil.copytree(source, stage, symlinks=True)
+    return stage
 
 
 def invoke(command: list[str], env: dict[str, str], *, expect_success: bool = True) -> subprocess.CompletedProcess[str]:
@@ -112,12 +137,11 @@ def main() -> int:
         require(bool(node), "Node.js is required to apply the isolated Pi patch")
         source = installed_package(args.source_package)
         version = json.loads((source / "package.json").read_text(encoding="utf-8"))["version"]
-        require(version == "0.99.2", f"isolated proof requires exact Pi 0.99.2, found {version}")
+        require(version == "1.2.0", f"isolated proof requires exact Pi 1.2.0, found {version}")
         source_fingerprint = package_fingerprint(source)
         print(f"Installed Pi {version} fingerprint: {json.dumps(source_fingerprint, sort_keys=True)}", flush=True)
         with tempfile.TemporaryDirectory(prefix="pi-standing-origin-") as temporary:
-            stage = Path(temporary) / "pi-coding-agent"
-            shutil.copytree(source, stage, symlinks=True)
+            stage = stage_package(source, Path(temporary))
 
             # Ensure the existing shared-file patch is present in the test copy,
             # even when the source install came from a clean Pi package.

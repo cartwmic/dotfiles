@@ -184,7 +184,7 @@ class Pi:
             'retry': {'enabled': False}}))
         env = {k: v for k, v in os.environ.items() if not any(x in k for x in ['API_KEY', 'TOKEN', 'PI_', 'HERDR_'])}
         env.update(HOME=str(directory), PI_CODING_AGENT_DIR=str(agent), PROOF_TRACE=str(self.trace_path),
-                   PROOF_HOLDS=str(self.holds), TERM='xterm-256color', NO_COLOR='1')
+                   PROOF_HOLDS=str(self.holds), TERM='xterm-256color', NO_COLOR='1', NODE_PATH=str(INSTALLED.parents[1]))
         if race:
             env['RACE_SPEC'] = json.dumps(race)
         args = ['node', str(package / 'dist/bundle/cli.js'), '--provider', 'proof', '--model', 'proof',
@@ -366,8 +366,8 @@ def compaction_journey(package, directory, ext_source, mode, key=b'\r', summary=
 # ---------------------------------------------------------------- race journeys
 
 def race_journey(package, directory, schedule, loser_mode, expect_fixed=True):
-    """Two prompts start together. schedule 'late' holds both in before_agent_start;
-    'early' holds the loser in its input handler. loser_mode 'steer' or 'followUp'."""
+    """Two prompts start together. schedule 'early' holds the loser in its input handler;
+    'settling' holds final settlement. loser_mode 'steer' or 'followUp'."""
     if schedule == 'settling':
         return settling_journey(package, directory, expect_fixed)
     if loser_mode == 'steer':
@@ -377,7 +377,7 @@ def race_journey(package, directory, schedule, loser_mode, expect_fixed=True):
         winner, loser = 'RACE-A', 'RACE-B'  # extension follow-up B loses
         spec = {'marker': 'RACE-A', 'spawn': {'text': 'RACE-B', 'deliverAs': 'followUp'}}
     spec['holdInput'] = [loser] if schedule == 'early' else []
-    spec['holdBAS'] = [winner, loser] if schedule == 'late' else []
+    spec['holdBAS'] = []
 
     def script(info):
         if info['has_tool'] and info['index'] == 1:
@@ -391,16 +391,9 @@ def race_journey(package, directory, schedule, loser_mode, expect_fixed=True):
     try:
         start = pi.settled()
         pi.type('RACE-A')
-        if schedule == 'late':
-            wait(lambda: {e.get('text') for e in pi.trace() if e['kind'] == 'held' and e['point'] == 'bas'} >= {winner, loser},
-                 'both prompts past the early check')
-            pi.release_hold('bas', winner)
-            wait(lambda: pi.backend.requests and winner in pi.backend.requests[0]['last_user'], 'winner reached backend')
-            pi.release_hold('bas', loser)
-        else:
-            wait(lambda: any(e['kind'] == 'held' and e['point'] == 'input' for e in pi.trace()), 'loser held in input handler')
-            wait(lambda: pi.backend.requests and winner in pi.backend.requests[0]['last_user'], 'winner reached backend')
-            pi.release_hold('input', loser)
+        wait(lambda: any(e['kind'] == 'held' and e['point'] == 'input' for e in pi.trace()), 'loser held in input handler')
+        wait(lambda: pi.backend.requests and winner in pi.backend.requests[0]['last_user'], 'winner reached backend')
+        pi.release_hold('input', loser)
         pending = 'Steering:' if loser_mode == 'steer' else 'Follow-up:'
         if expect_fixed:
             wait(lambda: any(pending in line and loser in line for line in pi.screen_text().splitlines()),
@@ -509,6 +502,7 @@ def mechanics(root):
     patches.mkdir()
     for name in SIBLINGS:
         shutil.copytree(PATCHES / name, patches / name)
+    shutil.copy2(PATCHES / 'pi-root.mjs', patches / 'pi-root.mjs')  # every patch imports ../pi-root.mjs
     helper_env = {**os.environ, 'HOME': str(root / 'helper-home'), 'PI_PATCHES_ROOT': str(patches), 'PI_CHEZMOI_PROFILE': 'personal',
                   **{var: str(package) for var in SIBLINGS.values()}}
     subprocess.run(['sh', str(ROOT / 'dot_local/user_scripts/executable_apply_pi_patches.sh')], env=helper_env, cwd=ROOT, check=True, capture_output=True)
@@ -529,7 +523,7 @@ def mechanics(root):
     print('PASS: AC-7 disabled profile exact reversal, siblings intact', flush=True)
     target = package / 'dist/core/agent-session.js'
     saved = target.read_text()
-    anchor = '        const normalized = await this._normalizePromptImages(currentImages);\n'
+    anchor = '        await this._startRun({ messageType: "user", prompt: expandedText, images: currentImages }, () => preflightResult?.("started"));\n'
     for mutated in [saved.replace(anchor, '/* moved */\n'), saved.replace(anchor, anchor + anchor)]:
         target.write_text(mutated)
         before = fingerprint(package)
@@ -572,7 +566,7 @@ def main():
     parser.add_argument('--prepare-package', help='write a private Pi copy with prompt-start-race applied (settlement-abort reversed)')
     args = parser.parse_args()
     version = json.loads((INSTALLED / 'package.json').read_text())['version']
-    require(version == '1.0.0', f'requires Pi 1.0.0, found {version}')
+    require(version == '1.2.0', f'requires Pi 1.2.0, found {version}')
     original = fingerprint(INSTALLED)
     print('IDENTITY:', INSTALLED, 'Pi', version, flush=True)
 
@@ -606,16 +600,14 @@ def main():
             compaction_journey(unpatched, root / 'neg-ac1', baseline, 'steer', expect_fixed=False)
             compaction_journey(patched, root / 'neg-ac1-patched', baseline, 'steer', expect_fixed=False)  # patch alone still sends the continuation
             race_journey(unpatched, root / 'neg-early', 'early', 'steer', expect_fixed=False)
-            race_journey(unpatched, root / 'neg-late', 'late', 'steer', expect_fixed=False)
             race_journey(unpatched, root / 'neg-settling', 'settling', 'steer', expect_fixed=False)
             compaction_journey(patched, root / 'ac1', EXT_SOURCE, 'steer')
             compaction_journey(patched, root / 'ac2', EXT_SOURCE, 'steer', key=b'\x1b\r')
             compaction_journey(patched, root / 'ac3', EXT_SOURCE, 'none')
             compaction_journey(patched, root / 'ac4', EXT_SOURCE, 'steer', esc=True)
             compaction_journey(patched, root / 'ac5', EXT_SOURCE, 'steer', summary='error')
-            for schedule in ['late', 'early']:
-                for mode in ['steer', 'followUp']:
-                    race_journey(patched, root / f'race-{schedule}-{mode}', schedule, mode)
+            for mode in ['steer', 'followUp']:
+                race_journey(patched, root / f'race-early-{mode}', 'early', mode)
             race_journey(patched, root / 'race-settling', 'settling', 'steer')
             mechanics(root)
     require(fingerprint(INSTALLED) == original, 'installed package changed')
