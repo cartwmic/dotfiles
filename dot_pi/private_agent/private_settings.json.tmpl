@@ -67,7 +67,8 @@
     "cursor/gpt-5.6-sol",
     "cursor/grok-4.7",
     "anthropic/claude-opus-5-5",
-    "anthropic/claude-sonnet-5"
+    "anthropic/claude-sonnet-5-5",
+    "anthropic/claude-haiku-5-5"
 {{- range $model := $privateGlmProvider.models }},
     {{ printf "private-glm/%s" $model.id | quote }}
 {{- end }}
