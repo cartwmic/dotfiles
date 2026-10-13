@@ -26,25 +26,11 @@
 
 set -eu
 
-# Node is installed by mise earlier in this after-script phase. Run through mise
-# because its activation cannot modify chezmoi's already-running parent process.
-export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-
-SCRIPT="$HOME/.local/user_scripts/apply_pi_patches.sh"
-
-if [ ! -x "$SCRIPT" ]; then
-  echo "[apply_pi_patches] INFO: pi-patches apply script not found at $SCRIPT, skipping"
-  exit 0
-fi
-
-# Thread the active chezmoi profile to the patch loop. Profile-gated patches
-# (e.g. standing-reminder-origin) read PI_CHEZMOI_PROFILE and only apply on
-# the matching profile; un-gated patches ignore it.
+# One entry point: the same mise task install-pi and update-pi use. mise and
+# Node are installed by 10_mise_bootstrap; Termux ignores both scripts.
+# The task cannot call chezmoi while this apply holds its state lock, so pass
+# the profile and source patch root in.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 export PI_CHEZMOI_PROFILE={{ .profile | quote }}
 export PI_PATCHES_ROOT={{ joinPath .chezmoi.sourceDir "dot_local/share/pi-patches" | quote }}
-
-if command -v mise >/dev/null 2>&1; then
-  exec mise exec -- "$SCRIPT"
-fi
-
-exec "$SCRIPT"
+exec mise run apply-pi-patches
