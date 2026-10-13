@@ -797,6 +797,10 @@ run = '''
 OS="$(uname -s)"
 case "$OS" in
   Darwin)
+    # Skip brew (and its network-bound self-update) when the font is already present.
+    if ls "$HOME/Library/Fonts" /Library/Fonts 2>/dev/null | grep -qi "SauceCodePro"; then
+      exit 0
+    fi
     brew install --cask font-sauce-code-pro-nerd-font
     ;;
 esac
