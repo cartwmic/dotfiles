@@ -1,6 +1,7 @@
 # Settlement abort
 
-Tested against **Pi 0.99.2 and 1.0.0**, including its actual bundled CLI and unbundled
+Tested against **Pi 1.2.0** (revision 3; the earlier 0.99.2/1.0.0 results predate
+the `_startRun` refactor and no longer apply to this payload), including its actual bundled CLI and unbundled
 `dist/cli.js`. Enabled on `personal` and `axon-work-computer`; other profiles
 (including unset) reverse only this patch's exact blocks, preserving siblings.
 
@@ -11,7 +12,8 @@ checked the abort flag. Final `agent_settled` handlers also need cancellation:
 upstream marks the session non-streaming before awaiting these handlers, so
 Escape otherwise does not call session abort.
 
-This patch owns one AbortController for `_runAgentPrompt`: it survives low-level
+This patch owns one AbortController for `_startRun` (Pi 1.2.0's single run
+entry; it was `_runAgentPrompt` before): it survives low-level
 continuations, retries and automatic compaction, fires synchronously from
 `session.abort()`, and remains available throughout awaited notification-only
 `agent_settled` handlers. `isStreaming` includes this final settlement phase;
@@ -38,14 +40,34 @@ for handlers to finish. This is cancellation signaling, not forced termination.
 
 The payload checks literal blocks in `dist/core/agent-session.js`,
 `dist/core/extensions/types.d.ts`, and the unique CLI chunk containing
-`async _runAgentPrompt(messages){`. Anchors are `_runAgentPrompt` entry,
-`_emitAgentSettled` call in its finalizer, `abort()` entry, `getSignal` callback,
+`async _startRun(trigger,onStarted){`. Anchors are `_startRun` entry,
+the `_startRun` prepare-failure `catch` (the controller is cleared there too,
+since that path bypasses the finalizer), `_emitAgentSettled` call in its finalizer, `abort()` entry, `getSignal` callback,
 the pre-settlement commit/flush/context block, settled-dispatch entry/finalizer,
 streaming getter, internal idle wait/resolver, and the existing signal JSDoc.
 The public idle getter is validated but not changed in v2.
 The checked strings and their reversals are in `patch.mjs`. Changed, ambiguous,
 partial or mixed application refuses before replacing any target; JavaScript
 syntax is validated in temporary files first. No whole-file backup restoration.
+
+## Pi 1.2.0 port notes
+
+Upstream PR #10739 (`_startRun`/`_prepareRun`, session busy during
+`before_agent_start`, abort during start honored at `agent_start`) did not fix
+this problem: `ctx.signal` still falls back to the low-level signal, which is
+cleared before `agent_before_settle`/`agent_settled`, and returned boundary
+proposals are still committed before the abort flag is checked. Nothing was
+dropped. Changes: the controller is created at `_startRun` entry (so it also
+covers `before_agent_start` handlers), the `_prepareRun` failure path now clears
+it (new anchor; that path throws before the `try/finally`), and the revision is
+3. v1/v2 → v3 upgrade is not supported or tested: those blocks only exist on
+older Pi, whose anchors no longer apply. The bundle chunk is located by the
+`_startRun` entry string. Apply order on shared files: custom-message-marker,
+empty-turn-retry, headless-extension-drain (inserts before the `_startRun`
+line; this patch inserts after it), prompt-start-race (relies on busy-final-
+settlement semantics from this patch; untouched anchors), then this patch.
+Proof on 1.2.0 was run without standing-reminder-origin, which is not yet
+ported; the committed proof applies it and will fail until it is.
 
 ## Validation
 
@@ -55,7 +77,7 @@ From the maintained checkout:
 python3 tests/pi-patches/settlement_abort.py
 ```
 
-The test copies a real Pi 0.99.2 or 1.0.0 package into temporary storage, uses isolated
+The test copies a real Pi package (0.99.2, 1.0.0 or 1.2.0; for a managed install it copies the whole surrounding `node_modules`) into temporary storage, uses isolated
 homes and a local scripted OpenAI-compatible backend, and never reads real
 credentials. Set `PI_SETTLEMENT_SOURCE_PACKAGE` to another installed package
 root if needed. It demonstrates the unpatched regression, then proves ordinary

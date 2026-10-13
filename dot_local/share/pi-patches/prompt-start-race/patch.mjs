@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// chezmoi-pi-patch:prompt-start-race v1
+// chezmoi-pi-patch:prompt-start-race v2
 // Queue a prompt that loses the start race instead of throwing or starting a second run.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { piCodingAgentRoot } from "../pi-root.mjs";
 
 const NAME = "prompt-start-race";
-const REVISION = 1;
+const REVISION = 2;
 const MARKER = `chezmoi-pi-patch:${NAME}`;
 const VERSION_MARKER = `${MARKER} v${REVISION}`;
 const STATE_DIR = join(homedir(), ".local", "state", "chezmoi-pi-patches");
@@ -70,7 +70,8 @@ function locateBundle(root) {
 
 // Two places in prompt() can discover that another prompt already started a run:
 // the streaming branch after the awaited input handlers, and the point after the
-// last await (image normalization) just before the run starts. Both queue the
+// last await (the auth check) just before _startRun. Pi 1.2.0 marks the run active
+// synchronously inside _startRun, so only these two windows remain. Both queue the
 // prompt into the active run with its requested delivery, defaulting to steer.
 // When settlement-abort is applied, isStreaming also covers awaited final
 // settlement after the agent run has ended; nothing would drain a queue then, so
@@ -99,10 +100,9 @@ const edits = {
 		},
 		{
 			name: "late start check",
-			before: `        const normalized = await this._normalizePromptImages(currentImages);
+			before: `        await this._startRun({ messageType: "user", prompt: expandedText, images: currentImages }, () => preflightResult?.("started"));
 `,
-			after: `        const normalized = await this._normalizePromptImages(currentImages);
-        // ${VERSION_MARKER}: another prompt started a run during our awaits; join it.
+			after: `        // ${VERSION_MARKER}: another prompt started a run during our awaits; join it.
         if (this.isStreaming && !this._isAgentRunActive)
             await this.waitForIdle();
         if (this._isAgentRunActive) {
@@ -115,6 +115,7 @@ const edits = {
             preflightResult?.("queued");
             return;
         }
+        await this._startRun({ messageType: "user", prompt: expandedText, images: currentImages }, () => preflightResult?.("started"));
 `,
 		},
 	],
@@ -142,8 +143,8 @@ try {
 		},
 		{
 			name: "late start check",
-			before: `let normalized=await this._normalizePromptImages(currentImages),userText=`,
-			after: `let normalized=await this._normalizePromptImages(currentImages);this.isStreaming&&!this._isAgentRunActive&&await this.waitForIdle();if(this._isAgentRunActive){/* ${VERSION_MARKER} late */options?.streamingBehavior==="followUp"?await this._queueFollowUp(expandedText,currentImages,options?.source??"interactive"):await this._queueSteer(expandedText,currentImages,options?.source??"interactive"),preflightResult?.("queued");return}let userText=`,
+			before: `;await this._startRun({messageType:"user",prompt:expandedText,images:currentImages},()=>preflightResult?.("started"))}`,
+			after: `;this.isStreaming&&!this._isAgentRunActive&&await this.waitForIdle();if(this._isAgentRunActive){/* ${VERSION_MARKER} late */options?.streamingBehavior==="followUp"?await this._queueFollowUp(expandedText,currentImages,options?.source??"interactive"):await this._queueSteer(expandedText,currentImages,options?.source??"interactive"),preflightResult?.("queued");return}await this._startRun({messageType:"user",prompt:expandedText,images:currentImages},()=>preflightResult?.("started"))}`,
 		},
 	];
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// chezmoi-pi-patch:settlement-abort v2
+// chezmoi-pi-patch:settlement-abort v3
 // Preserve cancellation across low-level runs through the settlement boundary.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { piCodingAgentRoot } from "../pi-root.mjs";
 
 const NAME = "settlement-abort";
-const REVISION = 2;
+const REVISION = 3;
 const MARKER = `chezmoi-pi-patch:${NAME}`;
 const VERSION_MARKER = `${MARKER} v${REVISION}`;
 const STATE_DIR = join(homedir(), ".local", "state", "chezmoi-pi-patches");
@@ -65,7 +65,7 @@ function writeState(status, target, version, targets = []) {
 function locateBundle(root) {
 	const directory = join(root, "dist", "bundle", "chunks");
 	if (!existsSync(directory)) fail(`Pi bundle directory not found: ${directory}`);
-	const needle = "async _runAgentPrompt(messages){";
+	const needle = "async _startRun(trigger,onStarted){";
 	const matches = readdirSync(directory)
 		.filter((name) => name.endsWith(".js"))
 		.filter((name) => readFileSync(join(directory, name), "utf8").includes(needle));
@@ -119,11 +119,26 @@ const edits = {
         },
         {
             name: "operation controller",
-			before: `    async _runAgentPrompt(messages) {`,
-			after: `    async _runAgentPrompt(messages) {
+			before: `    async _startRun(trigger, onStarted) {`,
+			after: `    async _startRun(trigger, onStarted) {
         // ${VERSION_MARKER}
         const operationAbortController = new AbortController();
         this._operationAbortController = operationAbortController;`,
+		},
+		{
+			name: "start failure cleanup",
+			before: `            this._isAgentRunActive = false;
+            this._flushPendingBashMessages();
+            this._flushPendingCustomMessages();
+            this._resolveIdleWaitIfIdle();
+            throw error;`,
+			after: `            this._isAgentRunActive = false;
+            if (this._operationAbortController === operationAbortController)
+                this._operationAbortController = undefined;
+            this._flushPendingBashMessages();
+            this._flushPendingCustomMessages();
+            this._resolveIdleWaitIfIdle();
+            throw error;`,
 		},
 		{
 			name: "operation cleanup",
@@ -240,8 +255,13 @@ try {
         },
         {
             name: "operation controller",
-			before: `async _runAgentPrompt(messages){`,
-			after: `async _runAgentPrompt(messages){/* ${VERSION_MARKER} */const operationAbortController=new AbortController;this._operationAbortController=operationAbortController;`,
+			before: `async _startRun(trigger,onStarted){`,
+			after: `async _startRun(trigger,onStarted){/* ${VERSION_MARKER} */const operationAbortController=new AbortController;this._operationAbortController=operationAbortController;`,
+		},
+		{
+			name: "start failure cleanup",
+			before: `throw this._isAgentRunActive=!1,this._flushPendingBashMessages(),this._flushPendingCustomMessages(),this._resolveIdleWaitIfIdle(),error}`,
+			after: `throw this._isAgentRunActive=!1,this._operationAbortController===operationAbortController&&(this._operationAbortController=void 0),this._flushPendingBashMessages(),this._flushPendingCustomMessages(),this._resolveIdleWaitIfIdle(),error}`,
 		},
 		{
 			name: "operation cleanup",

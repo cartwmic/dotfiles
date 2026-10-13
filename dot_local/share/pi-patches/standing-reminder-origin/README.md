@@ -1,6 +1,6 @@
 # Standing-reminder input origin bridge
 
-Pi 0.99.2 exposes `input.source` before a message is processed, but the later
+Pi exposes `input.source` before a message is processed, but the later
 `message_start` event does not identify where its user message came from. Text
 matching cannot safely bridge those events: operator and extension messages
 may have identical text, operator input may be expanded by a prompt template,
@@ -24,8 +24,29 @@ extensions:
   runtime actually loaded by the executable
 - `dist/core/extensions/types.d.ts` — `MessageStartEvent.source?: InputSource`
 
-Revision 2 ports the core prompt indentation and bundled declaration anchors
-to Pi 0.99.1; the same exact anchors are verified on the supported Pi 0.99.2 pin.
+Revision 3 is tested on **Pi 1.2.0** (only that version; older pins are not
+claimed). Pi 1.2.0 replaced `_runAgentPrompt(messages)` with
+`_startRun(trigger)` + `_prepareRun(trigger)`, and the initial user message is
+now built inside `_prepareRun` from a `trigger` that carries no input source.
+Rather than edit the `_startRun` call that `prompt-start-race` anchors on, the
+patch hands the source over in a private field: `prompt()` stores
+`{ prompt, images, source }` as `_pendingPromptStart` right after the auth check, and `_prepareRun` consumes it on entry and tags the
+user message only when the trigger's `prompt` and `images` match. A mismatch or
+missing handoff leaves the message without a source (fail closed). Stock 1.2.0
+has no `await` between the handoff and `_startRun`, but `prompt-start-race`
+adds a `waitForIdle()` there when a prompt meets final settlement. A deferred
+prompt that runs during that wait replaces the handoff, so the first prompt
+goes out untagged (never mis-tagged). This is a known residual. Custom `triggerTurn` messages are
+not user messages and carry no source. Anchors moved or added for 1.2.0, in
+both `dist/core/agent-session.js` and the bundle chunk: the `_inputSources`
+field (plus `_pendingPromptStart`), the end of the no-API-key throw in
+`prompt()`, the `_prepareRun` entry, and the `messages.push({ role: "user", ... })`
+inside `_prepareRun`. The streaming/queued/`_queueSteer`/`_queueFollowUp` and
+`message_start` anchors are unchanged. Nothing was dropped: 1.2.0 still does
+not carry origin to `message_start`. The new anchors do not overlap
+`prompt-start-race` (its anchors begin at the `_startRun` call and the
+`streamingBehavior` block) or the `_startRun` edits of the other patches.
+
 The private stager normalizes an already-patched copy before recording its
 sibling-only fingerprint and compares installed fingerprints before/after.
 It does not normalize installed files. A previous revision is not migrated by restoring shared backups;

@@ -28,6 +28,17 @@ auto-compaction stays disabled. No configuration values are rewritten.
 
 ## Deployment
 
+Tested against Pi 1.2.0 (revision 2, marker `v2`). Pi 1.2.0 replaced
+`AgentSession._runAgentPrompt(messages)` with `_startRun(trigger, onStarted)`;
+the only anchor that moved is the insertion point for the task-tracking helpers,
+which now sits before `async _startRun(trigger, onStarted) {` (bundle:
+`async _startRun(trigger,onStarted){`). The `sendUserMessage` and `compact`
+callback anchors and the print-mode `session.prompt` anchors are unchanged.
+Nothing was dropped: 1.2.0 does not own fire-and-forget extension work through
+print shutdown. Residual: only 1.2.0 was tested. `settlement-abort` shares the `_startRun`
+definition anchor (this patch inserts before it, that one after); the full
+ordered stack was verified together on 1.2.0.
+
 `patch.mjs` patches both the CLI-load-bearing `dist/bundle/chunks/*.js` and
 the equivalent unbundled `dist/core/agent-session.js` and
 `dist/modes/print-mode.js`. The chunk is discovered by its print-mode function,

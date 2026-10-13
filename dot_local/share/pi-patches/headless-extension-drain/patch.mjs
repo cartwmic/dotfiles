@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { piCodingAgentRoot } from "../pi-root.mjs";
 
 const name = "headless-extension-drain";
-const marker = `chezmoi-pi-patch:${name} v1`;
+const marker = `chezmoi-pi-patch:${name} v2`;
 const log = (text) => console.log(`[pi-patch:${name}] ${text}`);
 const check = process.argv.includes("--check");
 // Test a copied package without modifying the installed CLI.
@@ -16,7 +16,7 @@ const root = process.env.PI_HEADLESS_PATCH_PACKAGE ?? piCodingAgentRoot();
 const edits = {
 	"dist/core/agent-session.js": [
 		[
-			"    async _runAgentPrompt(messages) {",
+			"    async _startRun(trigger, onStarted) {",
 			`    // ${marker}
     // Extension compact/sendUserMessage are intentionally fire-and-forget.
     // The print host must own them through callbacks and resumed prompts, but
@@ -38,7 +38,7 @@ const edits = {
         this._extensionTaskError = undefined;
         if (error !== undefined) throw error;
     }
-    async _runAgentPrompt(messages) {`,
+    async _startRun(trigger, onStarted) {`,
 		],
 		[
 			`                this.sendUserMessage(content, options).catch((err) => {
@@ -133,7 +133,7 @@ try {
 		: undefined;
 	if (!loopVar) throw new Error(`Changed upstream anchor in ${bundleFile}; update this patch, do not guess`);
 	edits[bundleFile] = [
-		["async _runAgentPrompt(messages){", sessionEdits[0][1].replace("    async _runAgentPrompt(messages) {", "async _runAgentPrompt(messages){")],
+		["async _startRun(trigger,onStarted){", sessionEdits[0][1].replace("    async _startRun(trigger, onStarted) {", "async _startRun(trigger,onStarted){")],
 		[`sendUserMessage:(content,options)=>{this.sendUserMessage(content,options).catch(${errVar}=>{runner.emitError({extensionPath:"<runtime>",event:"send_user_message",error:${errVar} instanceof Error?${errVar}.message:String(${errVar})})})}`,
 		 `sendUserMessage:(content,options)=>{/* ${marker} */this._trackExtensionTask(this.sendUserMessage(content,options).catch(${errVar}=>{runner.emitError({extensionPath:"<runtime>",event:"send_user_message",error:${errVar} instanceof Error?${errVar}.message:String(${errVar})});throw ${errVar};}))}`],
 		[`compact:options=>{(async()=>{try{let result=await this.compact(options?.customInstructions);options?.onComplete?.(result)}catch(error){let ${errVar}=error instanceof Error?error:new Error(String(error));options?.onError?.(${errVar})}})()}`,
@@ -183,7 +183,7 @@ try {
 	if (!process.env.PI_HEADLESS_PATCH_PACKAGE) {
 		mkdirSync(stateDir, { recursive: true });
 		writeFileSync(join(stateDir, `${name}.json`), JSON.stringify({
-			patchName: name, patchRevision: 1, status: "patched", marker,
+			patchName: name, patchRevision: 2, status: "patched", marker,
 			target: join(chunks, matches[0]), when: new Date().toISOString(),
 			version: JSON.parse(readFileSync(join(root, "package.json"))).version,
 			targets: prepared.map(({ target, content }) => ({ target, sha256: createHash("sha256").update(content).digest("hex") })),

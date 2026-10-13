@@ -25,7 +25,10 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/standing-reminder/isolated_pi.py -- \
 PYTHONDONTWRITEBYTECODE=1 python3 tests/standing-reminder/source_proof.py
 ```
 
-The supported offline pin is **Pi 0.99.2**, `@earendil-works/pi-coding-agent`.
+The supported offline pin is **Pi 0.99.2**, `@earendil-works/pi-coding-agent`,
+except that `isolated_pi.py` and the `feasibility.py` origin journey now run
+against **Pi 1.2.0**; the other proofs here (`proof.py`, `selective_proof.py`,
+`cache_proof.py`) still pin 0.99.2 and have not been ported.
 `isolated_pi.py` locates the actual package, prints exact target SHA-256 values,
 copies it privately, checks literal patch anchors, normalizes only the copied
 origin bridge, and validates desktop/Termux gates, idempotence, changed-anchor

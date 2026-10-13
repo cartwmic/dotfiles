@@ -89,7 +89,7 @@ class Backend(http.server.ThreadingHTTPServer):
 
 def fingerprint(package):
     paths=[package/'dist/core/agent-session.js',package/'dist/core/extensions/types.d.ts']
-    paths += [p for p in (package/'dist/bundle/chunks').glob('*.js') if 'async _runAgentPrompt(messages){' in p.read_text()]
+    paths += [p for p in (package/'dist/bundle/chunks').glob('*.js') if 'async _startRun(trigger,onStarted){' in p.read_text() or 'async _runAgentPrompt(messages){' in p.read_text()]
     return {str(p.relative_to(package)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 
 def patch(package,profile='personal',check=False,success=True):
@@ -112,7 +112,7 @@ def journey(package, directory, module=False, tui=False, abort=True, patched=Tru
     ipc=None;ipc_temp=None;reports=[]
     if stock:
         require(tui and settled and not abort, 'stock diagnostic requires TUI settled control')
-        stock_source=Path('/Users/cartwmic/.pi/agent/extensions/herdr-agent-state.ts')
+        stock_source=Path.home()/'.pi/agent/extensions/herdr-agent-state.ts'
         stock_copy=directory/'stock-herdr.ts';shutil.copyfile(stock_source,stock_copy)
         print('STOCK:', hashlib.sha256(stock_copy.read_bytes()).hexdigest(), flush=True)
         ipc_temp=tempfile.TemporaryDirectory(prefix='pi-ipc-',dir='/tmp')
@@ -263,12 +263,17 @@ def main():
     trigger=(ROOT/'run_onchange_after_30_apply_pi_patches.sh.tmpl').read_text()
     require(trigger.count('include "dot_local/share/pi-patches/settlement-abort/patch.mjs" | sha256sum')==1, 'expected one source hash trigger')
     version=json.loads((SOURCE/'package.json').read_text())['version']
-    require(version in ('0.99.2','1.0.0'),'requires tested Pi 0.99.2 or 1.0.0')
+    require(version in ('0.99.2','1.0.0','1.2.0'),'requires tested Pi 0.99.2, 1.0.0 or 1.2.0')
     original=fingerprint(SOURCE)
     print('IDENTITY:', SOURCE, 'Pi', version, json.dumps(original), flush=True)
     print('PAYLOAD:', hashlib.sha256(PATCH.read_bytes()).hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix='pi-settlement-proof-') as temp:
-        root=Path(temp);package=root/'package';shutil.copytree(SOURCE,package,symlinks=True)
+        root=Path(temp)
+        # A managed install resolves dependencies from the surrounding node_modules tree, so copy that tree.
+        if SOURCE.parent.parent.name=='node_modules':
+            shutil.copytree(SOURCE.parent.parent,root/'node_modules',symlinks=True);package=root/'node_modules'/SOURCE.parent.name/SOURCE.name
+        else:
+            package=root/'package';shutil.copytree(SOURCE,package,symlinks=True)
         if 'chezmoi-pi-patch:settlement-abort v1' in (package/'dist/core/agent-session.js').read_text():
             for module in [False, True]:
                 journey(package,root/f'legacy-idle-{module}',module=module,settled=True,abort=False,legacy=True)
@@ -290,7 +295,7 @@ def main():
             require(fingerprint(package)==disabled,'disabled legacy reversal differs from v2 reversal')
             patch(package);require(fingerprint(package)==upgraded,'legacy disabled/reapply changed siblings')
             print('PASS: legacy v1 guard failure, exact upgrade, mixed/partial refusal',flush=True)
-        for name, override in [('headless-extension-drain','PI_HEADLESS_PATCH_PACKAGE'), ('standing-reminder-origin','PI_STANDING_REMINDER_ORIGIN_PACKAGE')]:
+        for name, override in [('headless-extension-drain','PI_HEADLESS_PATCH_PACKAGE'), ('prompt-start-race','PI_PROMPT_START_RACE_PACKAGE'), ('standing-reminder-origin','PI_STANDING_REMINDER_ORIGIN_PACKAGE')]:
             subprocess.run(['node',str(ROOT/f'dot_local/share/pi-patches/{name}/patch.mjs')],env={**os.environ,override:str(package),'PI_CHEZMOI_PROFILE':'personal'},cwd=ROOT,check=True,capture_output=True)
         patch(package,'termux');baseline=fingerprint(package)
         require('chezmoi-pi-patch:headless-extension-drain' in (package/'dist/core/agent-session.js').read_text(), 'headless sibling not installed')
@@ -300,11 +305,12 @@ def main():
         patch(package,check=True,success=False)
         patch(package);after=fingerprint(package);patch(package);require(fingerprint(package)==after,'not idempotent')
         patches=root/'patches';patches.mkdir()
-        for name in ['headless-extension-drain','standing-reminder-origin','settlement-abort']:
+        for name in ['headless-extension-drain','prompt-start-race','standing-reminder-origin','settlement-abort']:
             shutil.copytree(ROOT/f'dot_local/share/pi-patches/{name}',patches/name)
-        helper_env={**os.environ,'HOME':str(root/'helper-home'),'PI_PATCHES_ROOT':str(patches),'PI_CHEZMOI_PROFILE':'personal','PI_HEADLESS_PATCH_PACKAGE':str(package),'PI_STANDING_REMINDER_ORIGIN_PACKAGE':str(package),'PI_SETTLEMENT_ABORT_PACKAGE':str(package)}
+        shutil.copyfile(ROOT/'dot_local/share/pi-patches/pi-root.mjs',patches/'pi-root.mjs')
+        helper_env={**os.environ,'HOME':str(root/'helper-home'),'PI_PATCHES_ROOT':str(patches),'PI_CHEZMOI_PROFILE':'personal','PI_HEADLESS_PATCH_PACKAGE':str(package),'PI_PROMPT_START_RACE_PACKAGE':str(package),'PI_STANDING_REMINDER_ORIGIN_PACKAGE':str(package),'PI_SETTLEMENT_ABORT_PACKAGE':str(package)}
         for repeat in range(2):
-            for name in ['headless-extension-drain','standing-reminder-origin']:
+            for name in ['headless-extension-drain','prompt-start-race','standing-reminder-origin']:
                 subprocess.run(['node',str(patches/name/'patch.mjs'),'--check'],env=helper_env,cwd=ROOT,check=True,capture_output=True)
             subprocess.run(['sh',str(ROOT/'dot_local/user_scripts/executable_apply_pi_patches.sh')],env=helper_env,cwd=ROOT,check=True,capture_output=True)
             patch(package,check=True)
@@ -329,7 +335,7 @@ def main():
         journey(package,root/'module-tui-settled',module=True,tui=True,settled=True)
         journey(package,root/'module-stock-ready',module=True,tui=True,settled=True,abort=False,stock=True)
         target=package/'dist/core/agent-session.js';saved=target.read_text()
-        for malformed in [saved.replace('chezmoi-pi-patch:settlement-abort v2','chezmoi-pi-patch:settlement-abort v3'), saved.replace('this._operationAbortController?.abort();','/* missing abort */')]:
+        for malformed in [saved.replace('chezmoi-pi-patch:settlement-abort v3','chezmoi-pi-patch:settlement-abort v4'), saved.replace('this._operationAbortController?.abort();','/* missing abort */')]:
             target.write_text(malformed);before=fingerprint(package)
             patch(package,success=False);require(fingerprint(package)==before,'unknown/partial v2 refusal wrote targets')
         target.write_text(saved)

@@ -15,8 +15,9 @@ env PI_SETTLEMENT_SOURCE_PACKAGE=/tmp/auto-compact-steer-prepared/pi-coding-agen
 python3 tests/auto-compact-steer/proof.py --installed --journeys AC-1,AC-4   # after an approved live apply
 ```
 
-Requires Pi 1.0.0 at the mise path (override with
-`PI_AUTO_COMPACT_STEER_SOURCE_PACKAGE`), Node, git, and the Python module
+Requires a pristine Pi 1.2.0 package inside a `node_modules` tree (set
+`PI_AUTO_COMPACT_STEER_SOURCE_PACKAGE`; the harness sets `NODE_PATH` to that tree
+so private copies resolve `jiti`), Node, git, and the Python module
 `pyte` (terminal emulator for screen assertions). Set
 `PI_AUTO_COMPACT_STEER_ARTIFACTS=/abs/dir` to keep each journey's trace, backend
 requests, final screen and raw output.
@@ -45,9 +46,9 @@ with file-released holds). Everything fails closed on timeout.
   completes.
 - **AC-5:** the summary request fails (HTTP 500) with a message queued; that
   message is sent next and the continuation is not.
-- **AC-6 / AC-9:** a TUI prompt and an extension prompt start together, under a
-  late schedule (both held in `before_agent_start`, past the early check) and an
-  early schedule (loser held in its input handler). The winner's first reply is
+- **AC-6 / AC-9:** a TUI prompt and an extension prompt start together, with the
+  loser held in its input handler (Pi 1.2.0 closed the old late
+  `before_agent_start` window upstream). The winner's first reply is
   a tool call held until the loser shows as queued. A steer/default loser must
   appear in the request after the tool result, before the final reply, then Esc
   cancels that held stream; a follow-up loser must appear only after the final
