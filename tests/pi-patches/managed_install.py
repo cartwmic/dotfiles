@@ -50,7 +50,7 @@ def main():
     pca = Path(run([node, "--input-type=module", "-e",
                    f'import {{piCodingAgentRoot}} from {json.dumps(locator.as_uri())}; console.log(piCodingAgentRoot());']).strip())
     release = pca.parents[2]
-    require(release.name == "1.1.0", "this fixture is prepared for managed Pi 1.1.0")
+    require(release.name == "1.2.0", "this fixture is prepared for managed Pi 1.2.0")
     helper = Path(os.environ.get("PI_RESPONSE_VISIBILITY_HELPER",
                   str(Path.home() / ".pi/agent/git/github.com/cartwmic/pi-response-visibility/bin/core.mjs")))
     require(helper.is_file(), "install the canonical response-visibility package first")
@@ -104,7 +104,7 @@ def main():
                 self.wfile.write(json.dumps(payload).encode())
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        server.latest = "1.1.0"
+        server.latest = "1.2.0"
         server.requests = []
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
@@ -219,31 +219,34 @@ Object.defineProperty(globalThis, "fetch", {
             check()
             print("PASS: official installer, npm migration, all nine patches, repeat-run idempotence")
 
-            server.latest = "1.1.1"
+            server.latest = "1.2.1"
             update_output = task("update-pi")
             active = home / ".pi/agent/install"
-            require((active / "current-version").read_text().strip() == "1.1.1", "update did not activate next release:\n" + repr(server.requests) + "\n" + Path(env["FIXTURE_EVENTS"]).read_text() + "\n" + update_output)
+            require((active / "current-version").read_text().strip() == "1.2.1", "update did not activate next release:\n" + repr(server.requests) + "\n" + Path(env["FIXTURE_EVENTS"]).read_text() + "\n" + update_output)
             check()
             print("PASS: real managed Pi update activates a clean fixture release; all nine patches follow it")
 
             # Upstream failure must stop before patching or changing the active version.
-            server.latest = "1.1.2"
+            server.latest = "1.2.2"
             failed_env = {**env, "FIXTURE_FAIL_CI": "1"}
             run([mise, "run", "--skip-tools", "update-pi"], failed_env, base, success=False)
-            require((active / "current-version").read_text().strip() == "1.1.1", "failed update changed active release")
+            require((active / "current-version").read_text().strip() == "1.2.1", "failed update changed active release")
             check()
-            # Patch failures must also propagate through the parent mise task.
+            # An already-installed Pi is left to chezmoi's patch script.
             bad = deployed / "fixture-failure/patch.mjs"
             bad.parent.mkdir()
             bad.write_text("process.exit(1);\n")
+            task("install-pi")
+            # Patch failures after a fresh install propagate through the parent mise task.
+            shutil.rmtree(home / ".pi/agent")
+            server.latest = "1.2.0"
             task("install-pi", success=False)
             bad.unlink()
             bad.parent.rmdir()
-            print("PASS: install/update/patch failures return failure")
+            print("PASS: install/update/patch failures return failure; installed Pi is not re-patched")
 
             # Fresh install: remove only this test's managed tree, no legacy executable.
             shutil.rmtree(home / ".pi/agent")
-            server.latest = "1.1.0"
             task("install-pi")
             check()
             print("PASS: fresh managed installation and completed patch loop")

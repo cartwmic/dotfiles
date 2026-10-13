@@ -74,7 +74,8 @@ Prerequisites: Node on PATH (mise installs it earlier in the after-script
 phase) and the target package tree each patch locates. Patches find Pi through
 [pi-root.mjs](pi-root.mjs): `PI_ROOT`, then Pi's managed install
 (`~/.pi/agent/install/releases/<current-version>/`), then `npm root -g`. Missing Node or a
-missing patches directory makes the apply script exit 0 with a notice.
+missing patches directory makes the `apply-pi-patches` mise task fail (the bare
+script would exit 0 with a notice).
 `cursor-provider` restores leftovers if that npm tree exists, and no-ops if it
 is absent. It never applies the splice.
 
@@ -82,9 +83,10 @@ is absent. It never applies the splice.
 
 ### Apply
 
-Chezmoi runs the onchange wrapper after mise. The wrapper exports the
-active profile, then execs the apply script (through `mise exec` when mise
-is present). In the tmpl:
+Every path uses one entry point, the `apply-pi-patches` mise task: chezmoi's
+onchange wrapper (after mise bootstrap), `install-pi` after a fresh install,
+and `update-pi`. The wrapper exports the active profile and source patch root,
+then execs `mise run apply-pi-patches`. In the tmpl:
 
 ```sh
 export PI_CHEZMOI_PROFILE="{{ .profile }}"
