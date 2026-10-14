@@ -7,6 +7,7 @@ import {
   DEFAULT_ANTHROPIC_MODEL,
   DEFAULT_CODEX_MODEL,
   DEFAULT_CONFIG,
+  anthropicThinkingBudget,
   describeConfig,
   loadConfig,
   nextActiveWebSearchTools,
@@ -38,6 +39,41 @@ test("trims models and drops empty anthropicModel", () => {
   assert.equal(cfg.codexModel, "gpt-5.6-sol");
   assert.equal(normalizeConfig({ anthropicModel: "   " }).anthropicModel, undefined);
   assert.equal(normalizeConfig({ codexModel: "" }).codexModel, DEFAULT_CODEX_MODEL);
+});
+
+test("anthropic thinking level is optional, normalized, and rejects unknown values", () => {
+  assert.equal(normalizeConfig({}).anthropicThinking, undefined);
+  assert.equal(normalizeConfig({ anthropicThinking: " XHIGH " }).anthropicThinking, "xhigh");
+  assert.equal(normalizeConfig({ anthropicThinking: "off" }).anthropicThinking, "off");
+  for (const value of ["", "turbo", 2, null]) {
+    assert.equal(normalizeConfig({ anthropicThinking: value }).anthropicThinking, undefined);
+  }
+});
+
+test("anthropic thinking budget maps levels and drops off", () => {
+  assert.equal(anthropicThinkingBudget(undefined), undefined);
+  assert.equal(anthropicThinkingBudget("off"), undefined);
+  assert.equal(anthropicThinkingBudget("minimal"), 1024);
+  assert.equal(anthropicThinkingBudget("low"), 2048);
+  assert.equal(anthropicThinkingBudget("medium"), 8192);
+  assert.equal(anthropicThinkingBudget("high"), 16384);
+  assert.equal(anthropicThinkingBudget("xhigh"), 32000);
+});
+
+test("anthropic thinking env override falls through when empty or invalid", () => {
+  const cfg = normalizeConfig({ anthropicThinking: "xhigh" });
+  assert.equal(resolveEffectiveConfig(cfg, {}).anthropicThinking, "xhigh");
+  assert.equal(
+    resolveEffectiveConfig(cfg, { ANTHROPIC_SEARCH_THINKING: " LOW " }).anthropicThinking,
+    "low"
+  );
+  for (const value of ["", "  ", "turbo"]) {
+    assert.equal(
+      resolveEffectiveConfig(cfg, { ANTHROPIC_SEARCH_THINKING: value }).anthropicThinking,
+      "xhigh"
+    );
+  }
+  assert.equal(resolveEffectiveConfig(DEFAULT_CONFIG, {}).anthropicThinking, undefined);
 });
 
 test("reasoning effort is optional, normalized, and rejects unknown values", () => {
@@ -92,6 +128,11 @@ test("describeConfig names the env override", () => {
   assert.match(text, /fetch omitted \(codex\)/);
   assert.match(text, /effort backend default/);
   assert.match(describeConfig(normalizeConfig({ codexReasoningEffort: "low" }), {}), /effort low/);
+  assert.match(
+    describeConfig(normalizeConfig({ anthropicThinking: "xhigh" }), {}),
+    /anthropic claude-opus-5 \(thinking xhigh\)/
+  );
+  assert.doesNotMatch(describeConfig(DEFAULT_CONFIG, {}), /thinking/);
 });
 
 test("active tool listing omits fetch for Codex and restores it for Anthropic", () => {
