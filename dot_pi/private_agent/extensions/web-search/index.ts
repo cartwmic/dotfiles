@@ -39,6 +39,7 @@ import {
   parseWebSearchCommand,
   resolveEffectiveConfig,
   saveConfig,
+  anthropicThinkingBudget,
   TOOL_NAME_FETCH,
   TOOL_NAME_SEARCH,
   TOOL_NAME_SEARCH_PRIVATE,
@@ -744,6 +745,12 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
               ...(auth.isOAuth ? { cache_control: { type: "ephemeral" } } : {}),
             },
           ];
+        }
+        const thinkingBudget = anthropicThinkingBudget(current.anthropicThinking);
+        if (thinkingBudget) {
+          // Anthropic requires budget_tokens < max_tokens; keep 1024 answer room like pi.
+          body.max_tokens = Math.max(p.max_tokens ?? 4096, thinkingBudget + 1024);
+          body.thinking = { type: "enabled", budget_tokens: thinkingBudget };
         }
         const response = await callAnthropic(auth, body, signal);
         const { text, details } = formatSearchResponse(response, auth.source);

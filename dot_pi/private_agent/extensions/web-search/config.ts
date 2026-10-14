@@ -7,6 +7,25 @@ export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5";
 export const DEFAULT_CODEX_MODEL = "gpt-5.6-luna";
 export const CODEX_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
 export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+export const ANTHROPIC_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+export type AnthropicThinking = (typeof ANTHROPIC_THINKING_LEVELS)[number];
+// Mirrors pi's DEFAULT_THINKING_BUDGETS for minimal..high. xhigh gets double the
+// high budget: the search side-call is a one-shot raw Anthropic request, so unlike
+// pi's chat path there is no adaptive-thinking effort tier to delegate to.
+export const ANTHROPIC_THINKING_BUDGETS: Record<Exclude<AnthropicThinking, "off">, number> = {
+  minimal: 1024,
+  low: 2048,
+  medium: 8192,
+  high: 16384,
+  xhigh: 32000,
+};
+
+export function anthropicThinkingBudget(
+  level: AnthropicThinking | undefined
+): number | undefined {
+  if (!level || level === "off") return undefined;
+  return ANTHROPIC_THINKING_BUDGETS[level];
+}
 export const TOOL_NAME_SEARCH = "web_search";
 export const TOOL_NAME_SEARCH_PRIVATE = "claude_web_search";
 export const TOOL_NAME_FETCH = "web_fetch";
@@ -56,6 +75,8 @@ export interface WebSearchConfig {
   searchProvider: SearchProvider;
   /** Optional Claude model override. Unset → `ANTHROPIC_SEARCH_MODEL` or default. */
   anthropicModel?: string;
+  /** Thinking level for the Anthropic search side-call. Unset or "off" → no thinking param. */
+  anthropicThinking?: AnthropicThinking;
   /** Codex Responses model for the search side-call. */
   codexModel: string;
   /** Unset preserves the Codex backend's default reasoning effort. */
@@ -65,6 +86,7 @@ export interface WebSearchConfig {
 export interface EffectiveWebSearchConfig {
   searchProvider: SearchProvider;
   anthropicModel: string;
+  anthropicThinking?: AnthropicThinking;
   codexModel: string;
   codexReasoningEffort?: CodexReasoningEffort;
   providerSource: "env" | "config";
@@ -85,6 +107,14 @@ function optionalModel(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function optionalThinkingLevel(value: unknown): AnthropicThinking | undefined {
+  if (typeof value !== "string") return undefined;
+  const level = value.trim().toLowerCase();
+  return ANTHROPIC_THINKING_LEVELS.includes(level as AnthropicThinking)
+    ? (level as AnthropicThinking)
+    : undefined;
+}
+
 function optionalReasoningEffort(value: unknown): CodexReasoningEffort | undefined {
   if (typeof value !== "string") return undefined;
   const effort = value.trim().toLowerCase();
@@ -96,10 +126,12 @@ function optionalReasoningEffort(value: unknown): CodexReasoningEffort | undefin
 export function normalizeConfig(value: unknown): WebSearchConfig {
   const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const anthropicModel = optionalModel(raw.anthropicModel);
+  const anthropicThinking = optionalThinkingLevel(raw.anthropicThinking);
   const codexReasoningEffort = optionalReasoningEffort(raw.codexReasoningEffort);
   return {
     searchProvider: isSearchProvider(raw.searchProvider) ? raw.searchProvider : DEFAULT_CONFIG.searchProvider,
     ...(anthropicModel ? { anthropicModel } : {}),
+    ...(anthropicThinking ? { anthropicThinking } : {}),
     codexModel: optionalModel(raw.codexModel) ?? DEFAULT_CODEX_MODEL,
     ...(codexReasoningEffort ? { codexReasoningEffort } : {}),
   };
@@ -133,6 +165,8 @@ export function resolveEffectiveConfig(
     codexModel: optionalModel(env.CODEX_SEARCH_MODEL) ?? config.codexModel,
     codexReasoningEffort:
       optionalReasoningEffort(env.CODEX_SEARCH_REASONING_EFFORT) ?? config.codexReasoningEffort,
+    anthropicThinking:
+      optionalThinkingLevel(env.ANTHROPIC_SEARCH_THINKING) ?? config.anthropicThinking,
     providerSource: isSearchProvider(envProvider) ? "env" : "config",
   };
 }
@@ -146,8 +180,9 @@ export function describeConfig(
     effective.providerSource === "env"
       ? `${effective.searchProvider} (WEB_SEARCH_PROVIDER)`
       : effective.searchProvider;
+  const thinking = effective.anthropicThinking ? ` (thinking ${effective.anthropicThinking})` : "";
   return (
-    `web-search provider ${provider}; anthropic ${effective.anthropicModel}; ` +
+    `web-search provider ${provider}; anthropic ${effective.anthropicModel}${thinking}; ` +
     `codex ${effective.codexModel} (effort ${effective.codexReasoningEffort ?? "backend default"}); ` +
     `fetch ${effective.searchProvider === "anthropic" ? "listed (anthropic)" : "omitted (codex)"}`
   );
