@@ -52,6 +52,10 @@ Treat these spans as protected unless the user explicitly requests changes:
 
 Repeat a precise term. Do not cycle through synonyms. If meaning is unclear, ask; do not guess.
 
+Every clause must trace to the source wording. A clause that adds irony, drama, an example, or an attitude the source does not contain is invented content, even when it sounds plausible. Cut it.
+
+When drafting from an interview or dictation, use the owner's own words and details. Do not turn option labels or phrasings the agent wrote into prose for the owner.
+
 ## Editing Principles
 
 - Preserve distinctive vocabulary, cadence, bluntness, humor, uncertainty, and useful imperfection.
@@ -74,13 +78,14 @@ A single word or construction is not enough. Edit when a pattern is empty, repea
 - **Faux-insight setups:** “What everyone misses,” “The uncomfortable truth.” Remove borrowed authority and support the claim.
 - **Importance puffery:** “pivotal,” “transformative,” “a testament to.” Replace labels with the fact that makes the point matter.
 - **Trailing stakes:** a clause tacked onto a fact to restate why it matters. This covers participles (“highlighting,” “underscoring,” “showcasing”), “…, and X can mean Y,” and paired stakes such as “a missed deadline or a missed sale.” Cut the clause. Keep a consequence only when it adds a fact the reader lacks, and give it its own sentence.
-- **Maxims and counterfactuals:** universal rules such as “Every X needs Y,” counterfactual punches such as “without X, we're guessing” or “flying blind,” and one-line openers that fit any document (“Cost and scale are coupled.”). State the specific fact the maxim stands in for, or cut it.
+- **Maxims and counterfactuals:** universal rules such as “Every X needs Y,” counterfactual punches such as “without X, we're guessing” or “flying blind,” and one-line openers that fit any document (“Cost and scale are coupled.”). State the specific fact the maxim stands in for, or cut it. A general statement that follows from named specifics in the same passage and carries the writer's own hedge or example is not a maxim. Flag the shape when nothing concrete follows it.
+- **Wrap-up generalizations:** a sentence after a list or example set that restates the items as an abstract thesis (“and then they become X,” “the pattern is Y”). Cut it, or name the specific case it stands for.
 - **Announced structure and restatement:** “This does two things,” “Two steps set the pace. One is… The other is…,” a paragraph whose last sentence restates its first from the other side, and mirrored or chiastic doublets (“their load and their incidents on our capacity and our on-call”). Name the items directly, state each point once, and drop the doublet's second half.
 - **Weasel attribution:** “experts agree,” “studies show,” “many argue.” Name a source or remove the unsupported attribution.
 - **Generic promotional language:** words such as “robust,” “streamline,” “unlock,” “leverage,” or “cutting-edge” when they hide a specific mechanism.
 - **Interpretive metadiscourse:** “The key point is,” “This distinction matters,” “As you can see.” Let evidence carry emphasis when it already does.
 - **Synonym cycling:** changing names for the same concept only to avoid repetition.
-- **Robotic rhythm:** repeated sentence shapes, uniformly sized paragraphs, stacked fragments, or mechanically balanced lists.
+- **Robotic rhythm:** repeated sentence shapes, uniformly sized paragraphs, stacked fragments, or mechanically balanced lists. This includes echo kickers: a repeated verb phrase or word pair (“get done and get done fast”) closing a paragraph as a tagline.
 - **Dramatic scaffolding:** colon reveals, “Question? Answer.” pairs, negative lists, or mic-drop fragments used as decoration.
 - **Generic endings:** recap paragraphs, fake-profound kickers, or “In conclusion” after the argument has already ended.
 - **Formatting slop:** decorative bold, emoji headings, needless micro-sections, or lists that obscure a simple relationship.
@@ -98,6 +103,7 @@ Use the portability test: if a sentence could move unchanged to an unrelated per
 6. If checks fail, make one targeted repair pass limited to affected passages; it may address several known failures. Recheck those passages. Do not run another general rewrite.
 7. Restore original wording wherever fidelity remains uncertain. Flag every other unresolved passage and failed check for human review.
 8. Deliver according to Edit mode: update requested files in place, or return full edited text. Include a concise `What changed` section. If no material edit was needed, return the original unchanged and say so.
+9. In `What changed`, list each [eval.md](eval.md) check that ran and its result, including the portability test on first and last sentences, and every flagged passage left for the owner. A grep for banned templates is one check. Do not claim the result is in the owner's voice; the owner decides that.
 
 Stop after checks pass or unresolved failures are flagged. Repeated rewriting causes factual drift, synonym churn, and voice flattening.
 
