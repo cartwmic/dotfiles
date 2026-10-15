@@ -13,7 +13,7 @@ Additional sources include review comments on a shared proposal, task prompts, a
 set of direct-message excerpts the owner explicitly supplied. All follow the same
 genericisation rules.
 
-Do not copy these sentences into a document. Match their construction. Only the
+Do not copy these sentences into a document. Take rhythm, hedging, and register from them. Some excerpts contain binary contrast templates (for example "This is not meant to be a full comparison", "is not throwaway work", "unlike some telemetry systems"). Never take that construction; SKILL.md's ban applies to all output. Only the
 blockquotes are voice evidence; surrounding prose records provenance and register boundaries.
 
 ---

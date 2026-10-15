@@ -1,6 +1,6 @@
 # No AI Slop Check
 
-Run after one editing pass. Inspect changed passages against original draft. This checklist tests the policy in `SKILL.md`; when wording conflicts, `SKILL.md` controls.
+Run after one editing pass. Inspect changed passages against original draft. The contrast scan and the portability test cover the whole document. This checklist tests the policy in `SKILL.md`; when wording conflicts, `SKILL.md` controls.
 
 ## Fidelity
 
@@ -20,11 +20,11 @@ Run after one editing pass. Inspect changed passages against original draft. Thi
 
 ## Quality
 
-- Zero binary contrast templates survive or were introduced. Search changed passages for `not … but`, `, not `, `rather than`, `instead of`, `in place of`, `but only`, `yet only`, `less about … more about`, and `It's not X. It's Y.` Every hit is a failure unless it is a negation with no replacement attached, `not` as a data value in an enumeration, or a protected span.
+- Zero binary contrast templates survive or were introduced. Run the contrast scan defined in SKILL.md over the whole document. Every hit not listed as rewritten or as one of the three survivors fails.
 - Material formulaic patterns were removed or grounded in specific content.
 - No trailing stakes clause, maxim, counterfactual punch, or announced structure survives unless it adds a fact the reader lacks.
 - No wrap-up sentence restates a list as an abstract thesis. No paragraph ends on an echo kicker (a repeated phrase used as a tagline).
-- The first and last sentence of each changed paragraph say something specific to this subject. Neither restates the other, and neither could move unchanged into another product's document.
+- The first and last sentence of every paragraph say something specific to this subject. Neither restates the other, and neither could move unchanged into another product's document.
 - Cuts and rewrites are proportional to actual problems.
 - New wording is clearer or more specific. No synonym churn.
 - Structure and formatting changed only where they impeded the document's job.
@@ -32,5 +32,7 @@ Run after one editing pass. Inspect changed passages against original draft. Thi
 
 ## Reporting
 
-- The report lists every check above that ran, with its result, and every flagged passage left for the owner.
+- The report lists every check above, each marked `pass`, `fail`, or `not run (reason)`. The contrast scan lists every hit with its disposition. The portability check states how many paragraphs it examined and quotes any failing sentence.
+- The report begins with the `Voice:` line defined in SKILL.md.
+- The report lists every flagged passage left for the owner.
 - The report does not claim the result matches the owner's voice.
