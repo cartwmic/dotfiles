@@ -1,8 +1,7 @@
 # House voice profile
 
-Evidence-derived writing profile for the repository owner. Load this in Edit mode when the
-target document is the owner's own writing, or when asked to repair a draft that reads as
-generated. Pair with [voice-excerpts.md](voice-excerpts.md).
+Evidence-derived writing profile for the repository owner. SKILL.md decides when to load it
+and controls wherever the two conflict. Pair with [voice-excerpts.md](voice-excerpts.md).
 
 The document rules come from six owner-written sources: an opinionated tooling comparison,
 an evaluation-metrics specification, a system design, a cross-service explainer, and two
@@ -175,8 +174,9 @@ Requirements are exempt from V14. Keep one testable obligation per sentence.
 
 ## 2. Anti-patterns
 
-Each item below was independently reported as absent by at least two of the six analyses.
-Treat any of these appearing in a draft as a defect to fix.
+Each item below was reported as rare in the owner's documents by at least two of the six analyses.
+Apply them under SKILL.md's rule: edit when a pattern is empty, repeated, misleading, or mismatched.
+Only binary contrast templates are unconditional.
 
 - **Excess parallel triples.** The sample contains roughly 5.2 per 1,000 words of prose.
   Count rhetorical parallelism only. A specification enumeration such as `satisfied, unmet,
@@ -195,22 +195,23 @@ Treat any of these appearing in a draft as a defect to fix.
   What to avoid is the decorative question-then-answer beat.
 - **Importance puffery.** No "critical to understand", "key takeaway", "worth noting".
   Where something matters, say what breaks.
-- **Dramatic colon reveals.** Colons introduce lists and contracts only.
+- **Dramatic colon reveals.** Decorative reveal colons only. Colons before lists, contracts, and labels are in character.
 - **Binary contrast templates — banned outright in every register.** Any construction that
   reaches its point by first rejecting an alternative: "It's not X. It's Y.", "not X, but
   Y", "X, not Y", "X rather than Y", "less about X, more about Y", "instead of X, Y", and
   negative lists such as "Not for A, not for B." The owner names this the single framing he
-  most wants absent, so it is not a countable tendency and has no genre-fitness override.
+  most wants removed. It does occur in some excerpts, and the ban applies regardless, so it is
+  not a countable tendency and has no genre-fitness override.
   Delete the rejected half and assert the claim. Where the rejection is load-bearing, make
   it a standalone prohibition sentence after the claim. Survivors: a negation with no
-  replacement attached, `not` as a data value in an enumeration, and verbatim excerpts.
+  replacement attached, `not` as a data value in an enumeration, and text that must stay verbatim.
 - **Symmetrical concession blocks.**
 - **Polished closing flourish, recap, or call to action.** Casual / status writing may
   end with a genuine thank-you plus a small emoji, a hopeful aside after a digression,
   or a factual `Summary -`; leave that. Do not add those endings to a document, and do
   not treat them as this anti-pattern.
-- **External citations or appeals to authority.** Support is internal: tickets, prior art,
-  stakeholder acceptance, measured estimates.
+- **Appeals to authority.** Support in the owner's documents is internal: tickets, prior art,
+  stakeholder acceptance, measured estimates. Never remove an existing citation; SKILL.md protects it.
 - **Probabilistic confidence language.** Ranges, buffers, `~`, and invented 1–5 scales are
   in character; confidence percentages are not.
 - **Emotional or apologetic register in incident writing.** Casual warmth (a thank-you,
@@ -242,4 +243,4 @@ requirements list is how a stylistic pass starts damaging obligations.
 | First-person `I` | 0 in specifications | only at a contestable judgment, and not in an accepted requirements document. Casual / status: expected for owned work; do not strip |
 | Final paragraph | — | narrows the claim or stops; no kicker. Casual / status: preserve an observed thank-you, digression aside, factual `Summary -`, or abrupt stop |
 | Concessions | — | one clause; never a mirrored paragraph |
-| Binary contrast templates | — | hard zero, all registers. Grep changed text for `not … but`, `, not `, `rather than`, `instead of`, `less about`. Every hit fails unless the negation has no replacement attached, `not` is a data value in an enumeration, or the span is a verbatim excerpt |
+| Binary contrast templates | — | hard zero, all registers. Run the contrast scan defined in SKILL.md over the whole document |

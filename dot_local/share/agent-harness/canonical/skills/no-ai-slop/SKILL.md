@@ -34,9 +34,9 @@ Before editing, identify the document's purpose and up to 3–5 evidence-support
 
 Use up to 3–5 short, relevant examples when the user provides them or project instructions identify accepted documents. Do not search broadly for examples. If none are available, infer voice from the draft itself. Prefer observed traits over labels such as “human,” “engaging,” or “professional.” Do not copy example content or force imitation where genres differ.
 
-When the draft is the repository owner's own writing, or when asked to repair a draft that reads as generated, read [voice-profile.md](voice-profile.md), identify the register, then read only that register's section in [voice-excerpts.md](voice-excerpts.md). Use 3–5 excerpts at most. The registers are opinion, specification, design, incident, casual/status, review comments, and tasking prompts. Casual/status evidence comes from owner-supplied Slack and remains unmeasured. Keep its emoji, emphasis, and thank-you closers out of document registers. A suspected generated draft cannot supply its own voice evidence.
+When the draft is the repository owner's own writing, or when asked to repair a draft that reads as generated, read [voice-profile.md](voice-profile.md), identify the register, then read only that register's section in [voice-excerpts.md](voice-excerpts.md). Use 3–5 excerpts at most. The registers are opinion, design, specification, systems explainer, incident, review comments, tasking prompts, and casual/status. If none fits, use the draft alone and do not read the excerpts. Where voice-profile.md or voice-excerpts.md conflicts with this file, this file controls. Casual/status evidence comes from owner-supplied Slack and remains unmeasured. Keep its emoji, emphasis, and thank-you closers out of document registers. A suspected generated draft cannot supply its own voice evidence.
 
-Keep this analysis internal unless the user asks for it.
+Keep this analysis internal unless the user asks for it. The one exception is a first line in every report, `Voice: profile loaded|not loaded; register: <name>|none`, placed at the top of `Findings` or `What changed`.
 
 ## Protect Meaning
 
@@ -74,12 +74,14 @@ When drafting from an interview or dictation, use the owner's own words and deta
 A single word or construction is not enough. Edit when a pattern is empty, repeated, misleading, or mismatched to the voice. One entry below is an unconditional ban and takes no such judgment: **binary contrast templates**.
 
 - **Throat clearing:** “Here's the thing,” “It's worth noting,” “In today's world.” Remove setup that delays the point.
-- **Binary contrast templates — banned, no exceptions.** Any construction that reaches its point by first rejecting an alternative: “It's not X. It's Y.”, “not X, but Y”, “X, not Y”, “X rather than Y”, “less about X, more about Y”, “instead of X, Y”, “X in place of Y”, stat drama such as “X overall but only Y when…”, and negative lists such as “Not for A, not for B.” Delete the rejected half and assert the claim. For stat drama, give the second figure in parentheses or its own sentence, without “only.” If the rejection is load-bearing, split it out as its own standalone prohibition sentence (“Do not do X.”) placed after the claim. Three things survive the ban: a negation with no replacement attached to it, `not` used as a data value inside an enumeration, and protected spans. Never satisfy this ban by weakening the claim.
+- **Binary contrast templates:** banned. Any construction that reaches its point by first rejecting an alternative: “It's not X. It's Y.”, “not X, but Y”, “X, not Y”, “X rather than Y”, “less about X, more about Y”, “instead of X, Y”, “X in place of Y”, stat drama such as “X overall but only Y when…”, and negative lists such as “Not for A, not for B.” Delete the rejected half and assert the claim. For stat drama, give the second figure in parentheses or its own sentence, without “only.” If the rejection is load-bearing, split it out as its own standalone prohibition sentence (“Do not do X.”) placed after the claim. Exactly three things survive the ban: a negation with no replacement attached to it, `not` used as a data value inside an enumeration, and text inside code, commands, or quotation marks that must stay verbatim. Limitation or scope language is not a survivor. Rewrite it as a claim plus a standalone negation. Never satisfy this ban by weakening the claim.
+
+**Contrast scan.** In both modes, search the whole document, not only changed passages, for `not`, `rather than`, `instead of`, `in place of`, `unlike`, `less about`, `but only`, and `yet only`. Read each hit with the sentence after it, since a contrast can cross a sentence boundary. Report every hit as `quote → rewritten | survivor (reason)`. In Detect mode, report each non-survivor under the pattern name below.
 - **Faux-insight setups:** “What everyone misses,” “The uncomfortable truth.” Remove borrowed authority and support the claim.
-- **Importance puffery:** “pivotal,” “transformative,” “a testament to.” Replace labels with the fact that makes the point matter.
+- **Importance puffery:** “pivotal,” “transformative,” “a testament to.” Replace labels with a fact already in the draft that makes the point matter. If none exists, cut the label.
 - **Trailing stakes:** a clause tacked onto a fact to restate why it matters. This covers participles (“highlighting,” “underscoring,” “showcasing”), “…, and X can mean Y,” and paired stakes such as “a missed deadline or a missed sale.” Cut the clause. Keep a consequence only when it adds a fact the reader lacks, and give it its own sentence.
-- **Maxims and counterfactuals:** universal rules such as “Every X needs Y,” counterfactual punches such as “without X, we're guessing” or “flying blind,” and one-line openers that fit any document (“Cost and scale are coupled.”). State the specific fact the maxim stands in for, or cut it. A general statement that follows from named specifics in the same passage and carries the writer's own hedge or example is not a maxim. Flag the shape when nothing concrete follows it.
-- **Wrap-up generalizations:** a sentence after a list or example set that restates the items as an abstract thesis (“and then they become X,” “the pattern is Y”). Cut it, or name the specific case it stands for.
+- **Maxims and counterfactuals:** universal rules such as “Every X needs Y,” counterfactual punches such as “without X, we're guessing” or “flying blind,” and one-line openers that fit any document (“Cost and scale are coupled.”). State the specific fact from the draft that the maxim stands in for, or cut it. A general statement that follows from named specifics in the same passage and carries the writer's own hedge or example is not a maxim. Flag the shape when nothing concrete follows it.
+- **Wrap-up generalizations:** a sentence after a list or example set that restates the items as an abstract thesis (“and then they become X,” “the pattern is Y”). Cut it, or name the specific case from the draft that it stands for.
 - **Announced structure and restatement:** “This does two things,” “Two steps set the pace. One is… The other is…,” a paragraph whose last sentence restates its first from the other side, and mirrored or chiastic doublets (“their load and their incidents on our capacity and our on-call”). Name the items directly, state each point once, and drop the doublet's second half.
 - **Weasel attribution:** “experts agree,” “studies show,” “many argue.” Name a source or remove the unsupported attribution.
 - **Generic promotional language:** words such as “robust,” “streamline,” “unlock,” “leverage,” or “cutting-edge” when they hide a specific mechanism.
@@ -97,13 +99,13 @@ Use the portability test: if a sentence could move unchanged to an unrelated per
 
 1. Read the complete draft before changing it.
 2. Identify purpose, core point, protected spans, and voice signals.
-3. In Detect mode, report every material pattern and stop. If none appear, say so.
+3. In Detect mode, report every material pattern and stop. If none appear, say so. Label each finding with the exact pattern name from Patterns to Inspect, without the trailing colon and without extra words. Report a portability failure under the pattern it matches. Order findings by position in the draft. A binary contrast template is always material. Any other pattern is material when it meets the empty, repeated, misleading, or mismatched test.
 4. In Edit mode, make one minimum-effective editing pass.
-5. Check all changed passages against [eval.md](eval.md) and collect every failed check.
+5. Check all changed passages against [eval.md](eval.md) and collect every failed check. The contrast scan and the portability test cover the whole document.
 6. If checks fail, make one targeted repair pass limited to affected passages; it may address several known failures. Recheck those passages. Do not run another general rewrite.
-7. Restore original wording wherever fidelity remains uncertain. Flag every other unresolved passage and failed check for human review.
+7. Restore original wording wherever fidelity remains uncertain. Restoring never brings back a binary contrast template; flag that passage instead. Flag every other unresolved passage and failed check for human review.
 8. Deliver according to Edit mode: update requested files in place, or return full edited text. Include a concise `What changed` section. If no material edit was needed, return the original unchanged and say so.
-9. In `What changed`, list each [eval.md](eval.md) check that ran and its result, including the portability test on first and last sentences, and every flagged passage left for the owner. A grep for banned templates is one check. Do not claim the result is in the owner's voice; the owner decides that.
+9. In `What changed`, list every [eval.md](eval.md) check, each marked `pass`, `fail`, or `not run (reason)`. For the contrast scan, list every hit and its disposition. For the portability test, state how many paragraphs were examined and quote any failing sentence. List every flagged passage left for the owner. Do not claim the result is in the owner's voice; the owner decides that.
 
 Stop after checks pass or unresolved failures are flagged. Repeated rewriting causes factual drift, synonym churn, and voice flattening.
 
@@ -113,7 +115,7 @@ Detect:
 
 ```markdown
 ## Findings
-- **Pattern:** “quoted passage” — brief problem; suggested fix.
+- **Pattern name:** “quoted passage” — brief problem; suggested fix.
 ```
 
 With no findings: `No material slop patterns found.`
