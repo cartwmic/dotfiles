@@ -101,6 +101,8 @@ class ReaderTests(unittest.TestCase):
         finally:
             tracemalloc.stop()
         # Scoped: its 30 matches (a quarter of the store) plus one file in flight.
+        matched_bytes = self.store_bytes // len(SOURCES)
+        self.assertLess(scoped_peak, matched_bytes * 5)
         self.assertLess(scoped_peak, self.store_bytes * 0.9)
         # Control: unscoped still needs the whole result, so the bound is not vacuous.
         self.assertGreater(full_peak, scoped_peak * 2.5)
@@ -129,14 +131,16 @@ class ReaderTests(unittest.TestCase):
         code, output = self.run_cli("read", "r0007", "--json")
         self.assertEqual(json.loads(output)["record"]["record_id"], "r0007")
 
-    def test_read_peak_memory_is_one_record(self) -> None:
-        tracemalloc.start()
-        try:
+    def test_read_opens_one_file_not_the_store(self) -> None:
+        with unittest.mock.patch.object(recap, "_read_json", wraps=recap._read_json) as spy:
             self.run_cli("read", "r0007", "--json")
-            _, peak = tracemalloc.get_traced_memory()
-        finally:
-            tracemalloc.stop()
-        self.assertLess(peak, 2_000_000)
+        # fast path: the named file for the lookup, then the re-read under the lock
+        self.assertLessEqual(spy.call_count, 2)
+
+    def test_over_long_id_is_just_not_found(self) -> None:
+        code, out, err = self.run_cli_err("read", "r" * 400, "--json")
+        self.assertNotEqual(code, 0)
+        self.assertIn("not found or ambiguous", err)
 
     def test_read_falls_back_to_content_match_for_a_renamed_file(self) -> None:
         value = record(950, "s-a")

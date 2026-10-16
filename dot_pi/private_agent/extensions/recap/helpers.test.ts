@@ -122,7 +122,7 @@ test('sessionListArgs lists only one Pi session through the real CLI', () => {
       writeFileSync(join(day, id + '.json'), JSON.stringify({ schema_version: 2, record_id: id, source_kind: 'pi', source_id: sid, kind: 'single', status, summary: 's', created_at: '2026-10-10T00:00:0' + id[1] + '+00:00', metadata: { pi: { nativeSessionId: sid } }, annotations: {} }));
     }
     const cli = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'dot_local', 'bin', 'executable_session-recap');
-    const env = { ...process.env, XDG_DATA_HOME: join(root, 'data'), XDG_CONFIG_HOME: join(root, 'config') };
+    const env: Record<string, string | undefined> = { ...process.env, SESSION_RECAP_IMPLEMENTATION: undefined, XDG_DATA_HOME: join(root, 'data'), XDG_CONFIG_HOME: join(root, 'config') };
     const run = (args: string[]) => JSON.parse(spawnSync(cli, args, { env, encoding: 'utf8' }).stdout).records.map((r: any) => r.record_id);
     assert.deepEqual(sessionListArgs('sess-a'), ['list', '--json', '--source-kind', 'pi', '--source-id', 'sess-a']);
     assert.deepEqual(run(sessionListArgs('sess-a')), ['r1', 'r3']);
