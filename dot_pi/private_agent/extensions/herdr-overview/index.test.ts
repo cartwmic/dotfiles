@@ -169,7 +169,7 @@ test('startup scoped list keeps legacy and fork owner semantics and ignores othe
     const annotated = (c: string) => Object.hasOwn(w.record(idOf(c)).annotations, 'herdr');
     assert.deepEqual(['d', 'e', 'f', 'g', 'h'].map(annotated), [true, false, true, true, false]);
     const log = readFileSync(path.join(w.root, 'cli.log'), 'utf8').split('\n').filter(c => c.startsWith('list '));
-    assert.deepEqual(log, ['list --json --source-kind pi --status published --pi-owner native-session']);
+    assert.deepEqual(log, ['list --json --source-kind pi --status published --pi-owner=native-session']);
   } finally { await w.close(); }
 });
 
@@ -281,7 +281,7 @@ test('disposable Pi replacement and reload publish only the current caller-bound
     await wait(() => readJson(file).sessionName === null, 'public cleared name');
     assert.equal(readJson(file).sessionId, firstId);
     assert.equal(provider.count(), 0);
-    assert.ok(!existsSync(path.join(w.root, 'cli.log')) || readFileSync(path.join(w.root, 'cli.log'), 'utf8').trim().split('\n').every(c => c.startsWith('list --json --source-kind pi --status published --pi-owner ')));
+    assert.ok(!existsSync(path.join(w.root, 'cli.log')) || readFileSync(path.join(w.root, 'cli.log'), 'utf8').trim().split('\n').every(c => c.startsWith('list --json --source-kind pi --status published --pi-owner=')));
     const digestDir = path.join(w.env.HOME, '.pi/session-search/digests'); mkdirSync(digestDir, { recursive: true });
     writeFileSync(path.join(digestDir, firstId + '.json'), JSON.stringify({ schemaVersion: 1, body: 'NEGATIVE OLD SESSION', generatedAt: '2026-01-01T00:00:00Z' }));
     await rpc.request('new_session');

@@ -201,10 +201,11 @@ class ReaderTests(unittest.TestCase):
         ids = sorted(r["record_id"] for r in json.loads(out)["records"])
         self.assertEqual(ids, sorted(cases[k]["record_id"] for k in ("o-session", "o-native", "o-null")))
 
-    def test_pi_owner_matches_exactly_the_javascript_predicate(self) -> None:
+    def test_pi_owner_agrees_with_a_python_rewrite_of_the_adapter_predicate(self) -> None:
         # Cross-check against the adapter's expression on every fixture owner shape.
         shapes = [{"sessionId": "me"}, {"nativeSessionId": "me"}, {"sessionId": None, "nativeSessionId": "me"},
-                  {"sessionId": "", "nativeSessionId": "me"}, {"sessionId": 5}, {}, {"sessionId": "me", "nativeSessionId": "x"}]
+                  {"sessionId": "", "nativeSessionId": "me"}, {"sessionId": 5}, {}, {"sessionId": "me", "nativeSessionId": "x"},
+                  {"sessionId": False, "nativeSessionId": "me"}, {"sessionId": 0}, {"sessionId": ["me"]}, {"nativeSessionId": ["me"]}]
         for index, pi in enumerate(shapes):
             self.put(self.owned(700 + index, f"h-{index}", pi))
         code, out = self.run_cli("list", "--json", "--pi-owner", "me")
@@ -226,7 +227,8 @@ class ReaderTests(unittest.TestCase):
         self.assertLess(peak, 4 * 150_000 * 5)
 
     def test_unfiltered_output_is_unchanged_by_the_new_option(self) -> None:
-        self.assertEqual(self.run_cli("list", "--json")[1], self.run_cli("list", "--json")[1])
+        code, out = self.run_cli("list", "--json")
+        self.assertEqual(len(json.loads(out)["records"]), len(self.records))  # no flag: every fixture record, as before
         self.assertEqual(json.loads(self.run_cli("list", "--json", "--pi-owner", "nobody")[1])["records"], [])
 
 if __name__ == "__main__":
