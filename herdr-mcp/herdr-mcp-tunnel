@@ -1,0 +1,573 @@
+#!/bin/zsh
+# herdr-mcp-tunnel - opt-in control for the Herdr control MCP bridge behind an
+# OpenAI Secure MCP Tunnel (tunnel-client). See README.md next to this file.
+# macOS arm64 only. Nothing here runs at login unless 'agent install' is used.
+if [[ -o xtrace || -o verbose ]]; then unsetopt xtrace verbose; print -u2 "herdr-mcp-tunnel: refusing to run with shell tracing on"; exit 2; fi
+unset ZSH_XTRACEFD
+umask 077
+ORIG_PATH=$PATH
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+TC_VERSION=v0.0.16
+ZIP_NAME=tunnel-client-$TC_VERSION-darwin-arm64.zip
+ZIP_URL=https://github.com/openai/tunnel-client/releases/download/$TC_VERSION/$ZIP_NAME
+ZIP_SHA=a160820d45089b5253d8d671fe2a689bde0f73d78c135d1497a7b33f28a3ac62
+CLIENT_SHA=6f1e8d5494d6c4d6c45cd4f6e07b5291459c0b23f4b8cd8266c7a64be3d9a2a0
+SHARE=${0:A:h}
+SELF=$SHARE/herdr-mcp-tunnel
+BRIDGE=$SHARE/herdr_control_mcp.py
+BRIDGE_SHA=388293e0a798543d7d01d9c1880baa4afd8a3ab841a8616e9a016b9bea4b3e55
+WRAP=$SHARE/herdr_control_mcp_child.sh
+WRAP_SHA=48e7026d7702cd62f389574bdebdc34b7d0c65d87a95f42506f89af67fe7ee06
+WRAP_EXEC_LINE='exec /usr/bin/python3 -I -B "$here/herdr_control_mcp.py"'
+PY=/usr/bin/python3
+STATE=$HOME/.local/state/herdr-mcp
+RUN=$STATE/run
+PTR=$RUN/launcher.ptr
+CLIENT_DIR=$STATE/tc-$TC_VERSION
+CLIENT=$CLIENT_DIR/tunnel-client
+CONFIG=$HOME/.config/herdr-mcp/config
+KEY_SERVICE=herdr-mcp-tunnel
+LABEL=local.herdr-mcp-tunnel
+PLIST=$HOME/Library/LaunchAgents/$LABEL.plist
+AGENT_LOG=$STATE/agent.log
+CHILD_LOG=$STATE/children.log
+CHILD_LOG_MAX=262144      # rotate to children.log.1 (one generation) past this size
+OBSERVE_FAST_SECS=120     # poll every 0.25 s for this long after client start, then every 5 s
+SECURITY=/usr/bin/security
+LAUNCHCTL=/bin/launchctl
+KEEP_PAT='(PATH|HOME|TMPDIR|USER|LOGNAME|LANG|LC_*|TERM|SHELL|PWD|OLDPWD|SHLVL|_)'
+EXTRA_ARGS=()
+# @@TEST_OVERRIDES@@
+
+TUNNEL_ID=""; HERDR_EXE=""; HERDR_SHA=""
+run_id=""; cpid=""; opid=""; rundir=""; urlfile=""; saved_stty=""; have_ptr=0; sig=""; scratch=""; k=""
+
+usage() {
+  print -u2 "usage: herdr-mcp-tunnel install-client [--zip PATH] | configure --tunnel-id ID [--herdr PATH]
+       | key set|status|delete | check | start | run | status | stop | agent install [--no-load]|uninstall|status"
+  exit 2
+}
+die() { print -u2 -- "herdr-mcp-tunnel: $*"; exit 1 }
+sha() { /usr/bin/shasum -a 256 -- "$1" 2>/dev/null | /usr/bin/awk '{print $1}' }
+regular() { [[ -f $1 && ! -L $1 ]] }
+have_tty() { ( exec </dev/tty >/dev/tty ) 2>/dev/null }  # a file-mode test on /dev/tty is not enough
+
+log_run() {
+  # Nonsecret one-line record: time, pids, how the client ended, status.
+  mkdir -p $STATE 2>/dev/null
+  print -r -- "$(date -u +%Y-%m-%dT%H:%M:%SZ) launcher=$$ client=$3 launcher_signal=${sig:-none} event=$1 client_status=$2" >> $STATE/launcher-runs.log 2>/dev/null
+}
+
+cleanup() {
+  trap '' INT TERM HUP QUIT
+  local how cst
+  [[ -n $opid ]] && { kill -TERM $opid 2>/dev/null; wait $opid 2>/dev/null; opid=""; }
+  if [[ -n $cpid ]]; then
+    if kill -0 $cpid 2>/dev/null; then
+      kill -TERM $cpid 2>/dev/null; how="stopped-by-launcher(TERM)"
+      for _ in {1..50}; do kill -0 $cpid 2>/dev/null || break; sleep 0.1; done
+      if kill -0 $cpid 2>/dev/null; then kill -KILL $cpid 2>/dev/null; how="stopped-by-launcher(KILL)"; fi
+    else
+      how="already-exited-before-cleanup"
+    fi
+    wait $cpid 2>/dev/null; cst=$?
+    print -u2 "herdr-mcp-tunnel: cleanup: tunnel-client pid $cpid $how, wait status $cst"
+    log_run "$how" $cst $cpid
+    cpid=""
+  fi
+  if [[ -n $saved_stty ]]; then
+    stty "$saved_stty" </dev/tty 2>/dev/null || print -u2 "herdr-mcp-tunnel: WARNING could not restore terminal echo; run: stty sane"
+  fi
+  k=""; unset k CONTROL_PLANE_API_KEY
+  if (( have_ptr )) && [[ -f $PTR && ! -L $PTR && $(sed -n 1p $PTR 2>/dev/null) == $$ ]]; then rm -f $PTR; fi
+  [[ -n $urlfile ]] && rm -f $urlfile
+  [[ -n $rundir ]] && rmdir $rundir 2>/dev/null
+  [[ -n $scratch ]] && rm -rf $scratch
+}
+trap cleanup EXIT
+trap 'sig=INT; exit 130' INT
+trap 'sig=TERM; exit 143' TERM
+trap 'sig=HUP; exit 129' HUP
+trap 'sig=QUIT; exit 131' QUIT
+
+valid_tunnel_id() { [[ $1 =~ '^tunnel_[a-z0-9]{32}$' ]] }
+
+read_config() {
+  local line
+  regular $CONFIG || die "not configured; run: herdr-mcp-tunnel configure --tunnel-id tunnel_..."
+  while IFS= read -r line; do
+    case $line in
+      tunnel_id=*) TUNNEL_ID=${line#*=} ;;
+      herdr_exe=*) HERDR_EXE=${line#*=} ;;
+      herdr_sha256=*) HERDR_SHA=${line#*=} ;;
+    esac
+  done < $CONFIG
+  valid_tunnel_id $TUNNEL_ID || die "config $CONFIG: tunnel_id missing or malformed"
+  [[ $HERDR_EXE == /* ]] || die "config $CONFIG: herdr_exe missing or not absolute"
+  [[ $HERDR_SHA =~ '^[0-9a-f]{64}$' ]] || die "config $CONFIG: herdr_sha256 missing or malformed"
+}
+
+client_ok() { regular $CLIENT && [[ -x $CLIENT && $(sha $CLIENT) == $CLIENT_SHA ]] }
+
+install_client_main() {
+  local zip=""
+  (( $# == 0 )) || { [[ $1 == --zip && $# == 2 ]] || usage; zip=${2:A}; }
+  if [[ -e $CLIENT_DIR || -L $CLIENT_DIR ]]; then
+    [[ -d $CLIENT_DIR && ! -L $CLIENT_DIR ]] || die "$CLIENT_DIR exists and is not a plain directory; refusing"
+    client_ok || die "$CLIENT_DIR exists but its tunnel-client does not match the pinned SHA-256; refusing to overwrite or use it"
+    print "already installed: $CLIENT (tunnel-client $TC_VERSION, SHA-256 verified)"
+    return 0
+  fi
+  mkdir -p $STATE || die "cannot create $STATE"
+  scratch=$(mktemp -d "$STATE/.install.XXXXXX") || die "cannot create scratch dir"
+  if [[ -z $zip ]]; then
+    print "downloading $ZIP_URL"
+    curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --max-time 600 -o $scratch/$ZIP_NAME $ZIP_URL ||
+      die "download failed; nothing installed"
+    zip=$scratch/$ZIP_NAME
+  fi
+  regular $zip || die "missing archive $zip"
+  [[ $(sha $zip) == $ZIP_SHA ]] || die "archive SHA-256 mismatch (expected $ZIP_SHA); nothing installed"
+  mkdir $scratch/x && unzip -q $zip tunnel-client -d $scratch/x || die "could not extract tunnel-client; nothing installed"
+  regular $scratch/x/tunnel-client && [[ $(sha $scratch/x/tunnel-client) == $CLIENT_SHA ]] ||
+    die "extracted tunnel-client does not match the pinned SHA-256; nothing installed"
+  chmod 755 $scratch/x/tunnel-client
+  mv $scratch/x $CLIENT_DIR || die "could not place $CLIENT_DIR"
+  print "installed: $CLIENT (tunnel-client $TC_VERSION; cloudflared not extracted)"
+}
+
+configure_main() {
+  local id="" exe="" out tmp
+  while (( $# )); do
+    case $1 in
+      --tunnel-id) (( $# >= 2 )) || usage; id=$2; shift 2 ;;
+      --herdr) (( $# >= 2 )) || usage; exe=$2; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  valid_tunnel_id $id || die "--tunnel-id must look like tunnel_<32 lowercase letters or digits>"
+  if [[ -z $exe ]]; then
+    exe=$(PATH=$ORIG_PATH mise which herdr 2>/dev/null) || exe=$(PATH=$ORIG_PATH whence -p herdr 2>/dev/null) ||
+      die "herdr not found; pass --herdr /absolute/path/to/herdr"
+  fi
+  exe=${exe:A}
+  regular $exe && [[ -x $exe ]] || die "herdr executable not found: $exe"
+  out=$(env -i HOME=$HOME PATH=/usr/bin:/bin $exe --version 2>&1) || die "$exe --version failed (a mise shim will not work; pass the real binary)"
+  [[ $out == herdr\ * ]] || die "$exe --version did not report herdr: ${out[1,80]}"
+  mkdir -p ${CONFIG:h} || die "cannot create ${CONFIG:h}"
+  chmod 700 ${CONFIG:h}
+  tmp=$(mktemp "${CONFIG}.XXXXXX") || die "cannot write config"
+  print -r -- "# herdr-mcp-tunnel config (nonsecret). Written by: herdr-mcp-tunnel configure"$'\n'"tunnel_id=$id"$'\n'"herdr_exe=$exe"$'\n'"herdr_sha256=$(sha $exe)" > $tmp &&
+    mv $tmp $CONFIG || { rm -f $tmp; die "cannot write $CONFIG"; }
+  print "configured $CONFIG: tunnel_id=$id herdr=$exe ($out)"
+}
+
+key_main() {
+  (( $# == 1 )) || usage
+  read_config
+  case $1 in
+    set)
+      # Not 'security add-generic-password -w' with its own prompt: that prompt uses
+      # getpass(3), which silently keeps only the first 128 characters. Instead: hidden zsh
+      # read (no length limit), then the command goes to 'security -i' on stdin, written by
+      # the print builtin, so the key is in no argv, environment, file or history. All
+      # security output is discarded. The item is read back into memory and compared;
+      # only match or mismatch is reported.
+      local k2 back
+      have_tty || die "key set needs a terminal (never pass the key as an argument)"
+      read_hidden "Runtime key (hidden; Restricted Tunnels Read+Use): " k
+      read_hidden "Same key again: " k2
+      [[ $k == $k2 ]] || { k=""; k2=""; die "the two entries differ; nothing stored"; }
+      k2=""
+      # API-key alphabet only, first character alphanumeric: nothing security -i could split,
+      # quote or read as an option.
+      # (glob plus length: zsh regex cannot repeat more than 255 times)
+      [[ $k == [A-Za-z0-9]* && $k != *[^A-Za-z0-9_-]* ]] && (( ${#k} >= 20 && ${#k} <= 400 )) ||
+        { k=""; die "key rejected (need 20-400 of A-Z a-z 0-9 _ -, starting alphanumeric); nothing stored"; }
+      print -r -- "add-generic-password -U -s $KEY_SERVICE -a $TUNNEL_ID -l herdr-mcp-tunnel-runtime-key -w $k" |
+        $SECURITY -i >/dev/null 2>&1
+      back=$($SECURITY find-generic-password -s $KEY_SERVICE -a $TUNNEL_ID -w 2>/dev/null)
+      if [[ $back == $k ]]; then
+        k=""; back=""
+        print "stored and verified: keychain item service=$KEY_SERVICE account=$TUNNEL_ID matches what was typed"
+      else
+        k=""; back=""
+        die "keychain item does not match what was typed (missing or altered); do not use it"
+      fi ;;
+    status)
+      if $SECURITY find-generic-password -s $KEY_SERVICE -a $TUNNEL_ID >/dev/null 2>&1; then
+        print "present: keychain item service=$KEY_SERVICE account=$TUNNEL_ID (value not read)"
+      else
+        print "absent: no keychain item service=$KEY_SERVICE account=$TUNNEL_ID"; exit 1
+      fi ;;
+    delete)
+      $SECURITY delete-generic-password -s $KEY_SERVICE -a $TUNNEL_ID >/dev/null 2>&1 &&
+        print "deleted keychain item service=$KEY_SERVICE account=$TUNNEL_ID" ||
+        print "absent: nothing deleted" ;;
+    *) usage ;;
+  esac
+}
+
+preflight() {
+  read_config
+  [[ $WRAP != *[[:space:],=\"\']* ]] || die "wrapper path has characters the client's command parser may split on: $WRAP"
+  regular $BRIDGE && [[ $(sha $BRIDGE) == $BRIDGE_SHA ]] || die "bridge missing or SHA-256 differs from the pin: $BRIDGE"
+  regular $WRAP && [[ -x $WRAP && $(sha $WRAP) == $WRAP_SHA ]] || die "child wrapper missing, not executable, or SHA-256 differs from the pin: $WRAP"
+  grep -qxF -- "$WRAP_EXEC_LINE" $WRAP || die "child wrapper does not exec the pinned interpreter and bridge"
+  [[ -x $PY && $(stat -f %Su $PY) == root ]] || die "interpreter $PY missing or not root-owned"
+  $PY -I -B -c pass || die "interpreter $PY does not run"
+  regular $HERDR_EXE && [[ $(sha $HERDR_EXE) == $HERDR_SHA ]] || die "herdr at $HERDR_EXE does not match the configured SHA-256; rerun configure after an intended upgrade"
+  [[ -e $CLIENT_DIR ]] || die "tunnel-client not installed; run: herdr-mcp-tunnel install-client"
+  client_ok || die "$CLIENT does not match the pinned SHA-256; refusing"
+  local help f
+  help=$(env -i HOME=$HOME PATH=$PATH $CLIENT run --help 2>&1) || die "tunnel-client run --help failed"
+  for f in --control-plane.tunnel-id --mcp.command --health.listen-addr --health.url-file --cloudflared.managed --allow-remote-ui; do
+    [[ $help == *" $f "* ]] || die "this tunnel-client does not list $f; refusing"
+  done
+}
+
+client_running() { pgrep -f -- "control-plane.tunnel-id[ =]$TUNNEL_ID( |\$)" >/dev/null 2>&1 }
+
+ours() { [[ $(ps -o command= -p $1 2>/dev/null) == *herdr-mcp-tunnel\ (start|run) ]] }
+
+take_lock() {
+  # Single-instance lock held for the launcher's lifetime (zsh marks it close-on-exec, so
+  # tunnel-client does not inherit it; client_running covers an orphaned client).
+  # The kernel releases it when the launcher exits. Pointer reclaim runs only under it.
+  zmodload zsh/system || die "zsh/system module unavailable"
+  mkdir -p $RUN && chmod 700 $RUN || die "cannot create $RUN"
+  [[ ! -L $RUN/launcher.lock ]] || die "$RUN/launcher.lock is a symlink; refusing"
+  [[ -f $RUN/launcher.lock ]] || { : >> $RUN/launcher.lock } 2>/dev/null || die "cannot create $RUN/launcher.lock"
+  zsystem flock -t 0 $RUN/launcher.lock 2>/dev/null ||
+    die "another herdr-mcp-tunnel launcher (or its tunnel-client) holds $RUN/launcher.lock; not starting another"
+}
+
+claim_ptr() {
+  local old olddir
+  if ( set -C; print -r -- "$$"$'\n'"$urlfile"$'\n'"$run_id" > $PTR ) 2>/dev/null; then have_ptr=1; return 0; fi
+  regular $PTR || die "$PTR exists and is not a plain file; refusing"
+  old=$(sed -n 1p $PTR 2>/dev/null); olddir=$(sed -n 2p $PTR 2>/dev/null)
+  if [[ $old == <-> ]] && kill -0 $old 2>/dev/null && ours $old; then die "launcher pid $old is already running; not starting another"; fi
+  # Recorded launcher is gone and no client for this tunnel runs (checked first): reclaim.
+  print -u2 "herdr-mcp-tunnel: removing stale pointer (launcher pid '$old' not running)"
+  [[ $olddir == $RUN/tc.*/health.url ]] && { rm -f $olddir; rmdir ${olddir:h} 2>/dev/null; }
+  rm -f $PTR
+  ( set -C; print -r -- "$$"$'\n'"$urlfile"$'\n'"$run_id" > $PTR ) 2>/dev/null || die "could not claim $PTR"
+  have_ptr=1
+}
+
+start_client() {
+  (
+    local e
+    for e in ${(k)parameters[(R)*export*]}; do
+      [[ $e == $~KEEP_PAT ]] || unset $e 2>/dev/null
+    done
+    for e in ${(k)parameters[(R)*export*]}; do
+      [[ $e == $~KEEP_PAT ]] || { print -u2 "herdr-mcp-tunnel: could not remove exported variable $e; client not started"; exit 97 }
+    done
+    export CONTROL_PLANE_API_KEY=$k
+    k=""; unset k
+    exec $CLIENT run --control-plane.tunnel-id $TUNNEL_ID --mcp.command=$WRAP \
+      --health.listen-addr 127.0.0.1:0 --health.url-file $urlfile \
+      --cloudflared.managed=false --allow-remote-ui=false $EXTRA_ARGS
+  ) &
+  cpid=$!
+}
+
+prepare() {
+  preflight
+  client_running && die "a tunnel-client for $TUNNEL_ID is already running; not starting another"
+  [[ -z ${CONTROL_PLANE_API_KEY-} ]] || die "CONTROL_PLANE_API_KEY is already set in this environment; refusing"
+  take_lock
+  client_running && die "a tunnel-client for $TUNNEL_ID is already running; not starting another"
+  run_id=$$-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM
+  rundir=$(mktemp -d "$RUN/tc.XXXXXX") || die "cannot create run dir"
+  urlfile=$rundir/health.url
+  claim_ptr
+}
+
+read_hidden() {
+  # read_hidden PROMPT VAR: one line from the terminal with echo off, echo restored after.
+  local rd
+  saved_stty=$(stty -g </dev/tty) || die "cannot read terminal state; nothing read"
+  stty -echo </dev/tty || die "could not turn terminal echo off; nothing was read"
+  stty -a </dev/tty | tr ' ' '\n' | grep -qx -- '-echo' || die "terminal echo is still on; nothing was read"
+  print -n -- "$1" >/dev/tty
+  IFS= read -r $2 </dev/tty
+  rd=$?
+  if ! stty "$saved_stty" </dev/tty; then k=""; k2=""; die "could not restore terminal echo; run: stty sane   (nothing stored)"; fi
+  saved_stty=""
+  print >/dev/tty
+  (( rd == 0 )) || { k=""; k2=""; die "no input read; nothing stored"; }
+  [[ $2 == k ]] && k=${k%$'\r'}
+  [[ $2 == k2 ]] && k2=${k2%$'\r'}
+  return 0
+}
+
+check_key() {
+  k=${k%$'\r'}
+  if [[ -z $k || $k == *[[:space:][:cntrl:]]* ]] || (( ${#k} < 20 || ${#k} > 400 )); then
+    k=""; die "key rejected (empty, whitespace/control characters, or implausible length); nothing started"
+  fi
+}
+
+obs_log() {
+  local size
+  size=$(stat -f %z $CHILD_LOG 2>/dev/null) && (( size > CHILD_LOG_MAX )) && mv -f $CHILD_LOG $CHILD_LOG.1
+  print -r -- "$(date -u +%Y-%m-%dT%H:%M:%SZ) client=$1 $2" >> $CHILD_LOG 2>/dev/null
+}
+
+obs_class() {
+  case $1 in
+    codex) REPLY=codex ;;
+    zsh|sh|bash|path_helper) REPLY=shell ;;
+    Python|python3*) REPLY=bridge ;;
+    tunnel-client) REPLY=client ;;
+    *) REPLY=other ;;
+  esac
+}
+
+observe_children() {
+  # Metadata-only record of processes under tunnel-client: pid, ppid, depth below the
+  # client and a fixed class from ucomm (the kernel's name for the executed file), never
+  # the name itself, argv or environment. The class is a name observation only, not
+  # executable identity or activity: class=codex means a process named codex was seen;
+  # class=shell without codex does not prove nothing else ran (short-lived, reparented or
+  # differently named executables can be missed). A pid that execs another program (zsh -c execs its last command)
+  # is logged as event=reclassified. Polling: processes shorter than one interval, execs
+  # between polls that are replaced again, and processes reparented away from the client
+  # before a poll sees them are missed. event=unobserved means "no longer in ps", not a
+  # verified exit. Children still present when the client goes get no synthetic end.
+  trap - EXIT INT TERM HUP QUIT
+  trap 'exit 0' TERM
+  zmodload zsh/zselect 2>/dev/null
+  local root=$1 start=$SECONDS pid ppid comm a d
+  typeset -A seen born pp cm
+  touch $CHILD_LOG 2>/dev/null && chmod 600 $CHILD_LOG
+  obs_log $root "event=observe_start fast_secs=$OBSERVE_FAST_SECS"
+  while :; do
+    pp=(); cm=()
+    ps -axo pid=,ppid=,ucomm= 2>/dev/null | while read -r pid ppid comm; do pp[$pid]=$ppid; cm[$pid]=$comm; done
+    for pid in ${(k)seen}; do
+      if [[ -z ${pp[$pid]} ]]; then
+        obs_log $root "event=unobserved pid=$pid class=${seen[$pid]} observed_secs=$(( SECONDS - born[$pid] ))"
+        unset "seen[$pid]" "born[$pid]"
+        continue
+      fi
+      obs_class ${cm[$pid]}
+      if [[ $REPLY != ${seen[$pid]} ]]; then
+        obs_log $root "event=reclassified pid=$pid from=${seen[$pid]} to=$REPLY"
+        seen[$pid]=$REPLY
+      fi
+    done
+    for pid in ${(k)pp}; do
+      [[ -n ${seen[$pid]} || $pid == $root ]] && continue
+      a=$pid; d=0
+      while (( d < 8 )) && [[ -n ${pp[$a]} && ${pp[$a]} != 1 && ${pp[$a]} != 0 ]]; do
+        a=${pp[$a]}; (( d++ ))
+        if [[ $a == $root ]]; then
+          obs_class ${cm[$pid]}
+          seen[$pid]=$REPLY; born[$pid]=$SECONDS
+          obs_log $root "event=seen pid=$pid ppid=${pp[$pid]} depth=$d class=$REPLY"
+          break
+        fi
+      done
+    done
+    [[ -n ${pp[$root]} ]] || { obs_log $root "event=observe_end reason=client_gone still_observed=${#seen}"; exit 0; }
+    # zselect -t returns 1 on a plain timeout; only a missing module falls back to sleep.
+    if (( SECONDS - start < OBSERVE_FAST_SECS )); then zselect -t 25 2>/dev/null; (( $? <= 1 )) || sleep 0.25
+    else zselect -t 500 2>/dev/null; (( $? <= 1 )) || sleep 5; fi
+  done
+}
+
+supervise() {
+  local rd
+  start_client
+  k=""
+  observe_children $cpid &
+  opid=$!
+  print "tunnel-client started (pid $cpid): loopback health only, Cloudflare off, remote UI off."
+  wait $cpid; rd=$?
+  log_run client-exited $rd $cpid
+  cpid=""
+  [[ -n $opid ]] && { for _ in {1..20}; do kill -0 $opid 2>/dev/null || break; sleep 0.1; done; kill -TERM $opid 2>/dev/null; wait $opid 2>/dev/null; opid=""; }
+  print "tunnel-client exited with status $rd"
+  exit $rd
+}
+
+start_main() {
+  local rd
+  have_tty || die "start needs a controlling terminal (unattended: use the LaunchAgent)"
+  prepare
+  saved_stty=$(stty -g </dev/tty) || die "cannot read terminal state; nothing read"
+  stty -echo </dev/tty || die "could not turn terminal echo off; nothing was read"
+  stty -a </dev/tty | tr ' ' '\n' | grep -qx -- '-echo' || die "terminal echo is still on; nothing was read"
+  print -n "Runtime key (hidden; Restricted Tunnels Read+Use): " >/dev/tty
+  IFS= read -r k </dev/tty
+  rd=$?
+  if ! stty "$saved_stty" </dev/tty; then k=""; die "could not restore terminal echo; run: stty sane   (nothing started)"; fi
+  saved_stty=""
+  print >/dev/tty
+  (( rd == 0 )) || die "no key read"
+  # @@TEST_KEYGUARD@@
+  check_key
+  print "Status from another terminal: herdr-mcp-tunnel status    Stop: Ctrl-C here or herdr-mcp-tunnel stop"
+  supervise
+}
+
+run_main() {
+  # Unattended start (LaunchAgent): key comes from the login keychain item.
+  prepare
+  # stdout here is agent.log (launchd). Keep it owner-only, and mark where this run starts
+  # so status counts auth errors from this run only.
+  [[ -f $AGENT_LOG && ! -L $AGENT_LOG && -O $AGENT_LOG ]] && chmod 600 $AGENT_LOG
+  print -r -- "herdr-mcp-tunnel: run-start run=$run_id"
+  k=$($SECURITY find-generic-password -s $KEY_SERVICE -a $TUNNEL_ID -w 2>/dev/null) ||
+    { k=""; die "cannot read keychain item service=$KEY_SERVICE account=$TUNNEL_ID (absent, keychain locked, or access denied); run: herdr-mcp-tunnel key set"; }
+  check_key
+  supervise
+}
+
+pointer_pid() {
+  regular $PTR || { print "not running (no pointer at $PTR)"; exit $1; }
+  pid=$(sed -n 1p $PTR)
+  [[ $pid == <-> ]] || die "malformed pointer $PTR"
+  kill -0 $pid 2>/dev/null && ours $pid || die "stale pointer: launcher pid $pid is not running (the next start or run reclaims it)"
+}
+
+status_main() {
+  # Exit: 0 local-ready, 1 not ready, 3 not running, 4 auth failed in this run.
+  # /readyz is local health only. It proves neither control-plane authentication nor that
+  # ChatGPT can reach the bridge; only a recorded parent MCP round trip proves that.
+  local pid uf base kids rid cmd auth
+  pointer_pid 3
+  uf=$(sed -n 2p $PTR); rid=$(sed -n 3p $PTR)
+  kids=$(pgrep -P $pid | tr '\n' ' ')
+  print "launcher pid $pid; child pids: ${kids:-none}; run ${rid:-unknown}"
+  [[ $uf == $RUN/tc.*/health.url ]] || die "unexpected health path in pointer"
+  regular $uf || die "client has not published its health address yet; retry in a few seconds"
+  base=$(<$uf); base=${base%/}
+  [[ $base == (http://127.0.0.1|http://localhost):<-> ]] || die "health address is not loopback: $base"
+  print "health: $base"
+  curl -fsS --max-time 5 "$base/readyz" >/dev/null 2>&1 || die "not locally ready (readyz failed)"
+  cmd=$(ps -o command= -p $pid)
+  if [[ $cmd == *herdr-mcp-tunnel\ run && -n $rid ]] && regular $AGENT_LOG; then
+    # Count only lines after this run's exact marker; earlier runs' errors are ignored.
+    auth=$(awk -v m="herdr-mcp-tunnel: run-start run=$rid" '$0 == m { f = 1; n = 0; next }
+      f && /status 401|status 403|invalid_api_key|Unauthorized/ { n++ } END { print (f ? n : -1) }' $AGENT_LOG)
+    if (( auth > 0 )); then
+      print "AUTH-FAILED: $auth control-plane auth error lines in this run's log ($AGENT_LOG)"; exit 4
+    elif (( auth == 0 )); then
+      print "auth: no control-plane auth error in this run's log so far (not proof of authentication)"
+    else
+      print "auth: marker for run $rid not found in $AGENT_LOG; not checked"
+    fi
+  else
+    print "auth: not checked (interactive start; client output is in that terminal)"
+  fi
+  print "LOCAL-READY (local health only; not authenticated, not end-to-end; confirm with a parent MCP round trip)"
+}
+
+stop_main() {
+  local pid
+  pointer_pid 0
+  [[ $pid != $(agent_pid) ]] ||
+    die "launcher pid $pid is the LaunchAgent's (launchd would restart it); run: herdr-mcp-tunnel agent uninstall"
+  kill -TERM $pid || die "could not signal launcher pid $pid"
+  for _ in {1..150}; do kill -0 $pid 2>/dev/null || break; sleep 0.1; done
+  kill -0 $pid 2>/dev/null && die "launcher pid $pid still running after 15s; not escalating. Inspect: ps -p $pid; pgrep -lP $pid"
+  print "stopped launcher pid $pid (it stops and waits for its tunnel-client)"
+}
+
+plist_text() {
+  print -r -- '<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>'$LABEL'</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/zsh</string><string>'$SELF'</string><string>run</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>'$AGENT_LOG'</string>
+  <key>StandardErrorPath</key><string>'$AGENT_LOG'</string>
+</dict>
+</plist>'
+}
+
+agent_loaded() { $LAUNCHCTL print gui/$UID/$LABEL >/dev/null 2>&1 }
+agent_pid() { $LAUNCHCTL print gui/$UID/$LABEL 2>/dev/null | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)$/\1/p' | head -1 }
+
+agent_main() {
+  local load=1 tmp
+  (( $# >= 1 )) || usage
+  case $1 in
+    install)
+      (( $# == 1 )) || { [[ $# == 2 && $2 == --no-load ]] || usage; load=0; }
+      preflight
+      $SECURITY find-generic-password -s $KEY_SERVICE -a $TUNNEL_ID >/dev/null 2>&1 ||
+        die "no keychain item service=$KEY_SERVICE account=$TUNNEL_ID; run: herdr-mcp-tunnel key set"
+      [[ "$SELF$AGENT_LOG" != *[\<\>\&\"\']* ]] || die "paths contain XML-special characters; refusing"
+      mkdir -p ${PLIST:h} $STATE || die "cannot create ${PLIST:h}"
+      # launchd would create StandardOutPath world-readable; create it owner-only first.
+      [[ ! -L $AGENT_LOG ]] || die "$AGENT_LOG is a symlink; refusing"
+      { : >> $AGENT_LOG && chmod 600 $AGENT_LOG } || die "cannot create $AGENT_LOG"
+      tmp=$(mktemp "$PLIST.XXXXXX") || die "cannot write plist"
+      plist_text > $tmp && chmod 644 $tmp && plutil -lint -s $tmp || { rm -f $tmp; die "plist generation failed"; }
+      if regular $PLIST && cmp -s $tmp $PLIST; then rm -f $tmp; print "plist unchanged: $PLIST"
+      else
+        agent_loaded && { $LAUNCHCTL bootout gui/$UID/$LABEL || { rm -f $tmp; die "could not unload the old agent"; } }
+        mv $tmp $PLIST || { rm -f $tmp; die "cannot place $PLIST"; }
+        print "wrote $PLIST (runs 'herdr-mcp-tunnel run' at login; log $AGENT_LOG)"
+      fi
+      if (( load )); then
+        if agent_loaded; then print "agent already loaded: $LABEL"
+        else $LAUNCHCTL bootstrap gui/$UID $PLIST || die "launchctl bootstrap failed"; print "agent loaded: $LABEL"; fi
+      else
+        print "not loaded now (--no-load); it starts at next login, or run: launchctl bootstrap gui/$UID $PLIST"
+      fi ;;
+    uninstall)
+      (( $# == 1 )) || usage
+      local apid
+      if agent_loaded; then
+        apid=$(agent_pid)
+        $LAUNCHCTL bootout gui/$UID/$LABEL || die "launchctl bootout failed; plist kept"
+        print "agent unloaded: $LABEL"
+        if [[ -n $apid ]]; then
+          for _ in {1..300}; do kill -0 $apid 2>/dev/null || break; sleep 0.1; done
+          kill -0 $apid 2>/dev/null && die "launcher pid $apid still running 30s after bootout; plist kept. Inspect: ps -p $apid; pgrep -lP $apid"
+          print "launcher pid $apid exited"
+        fi
+      fi
+      if [[ -e $PLIST ]]; then rm -f $PLIST || die "could not remove $PLIST"; print "removed $PLIST"; else print "no plist at $PLIST"; fi ;;
+    status)
+      (( $# == 1 )) || usage
+      if regular $PLIST; then print "plist: $PLIST"; else print "plist: absent"; fi
+      if agent_loaded; then
+        print "launchd: loaded"
+        $LAUNCHCTL print gui/$UID/$LABEL 2>/dev/null | grep -E '^[[:space:]]*(state|pid|last exit code) =' | sed 's/^[[:space:]]*/  /'
+      else
+        print "launchd: not loaded"
+      fi
+      status_main ;;
+    *) usage ;;
+  esac
+}
+
+(( $# >= 1 )) || usage
+cmd=$1; shift
+case $cmd in
+  install-client) install_client_main "$@" ;;
+  configure) configure_main "$@" ;;
+  key) key_main "$@" ;;
+  check) (( $# == 0 )) || usage; preflight; print "CHECK-OK config, client, bridge, wrapper, interpreter, herdr pin, flags verified; nothing started" ;;
+  start) (( $# == 0 )) || usage; start_main ;;
+  run) (( $# == 0 )) || usage; run_main ;;
+  status) (( $# == 0 )) || usage; status_main ;;
+  stop) (( $# == 0 )) || usage; stop_main ;;
+  agent) agent_main "$@" ;;
+  *) usage ;;
+esac
