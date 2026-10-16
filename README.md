@@ -393,6 +393,10 @@ navigation, manual pane-source recaps, naming policy, and move behavior. The
 [Pi adapter guide](./dot_pi/private_agent/extensions/herdr-overview/README.md)
 covers publication.
 
+The opt-in [Herdr control MCP tunnel](./herdr-mcp/README.md) lets a ChatGPT
+custom app control local Herdr through an OpenAI Secure MCP Tunnel. Chezmoi
+never deploys it; install it explicitly with `herdr-mcp/install.sh`.
+
 The `install-herdr-overview` mise task (also part of desktop bootstrap)
 checks that the pinned Herdr's bundled API schema offers every method, parameter,
 field, and event the plugin uses (`dot_local/share/herdr-overview/src/herdr-compat.mjs`),

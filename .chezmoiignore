@@ -44,6 +44,10 @@ docs/
 # not deploy them to ~/termux on any profile.
 termux
 termux/**
+# Opt-in Herdr control MCP tunnel: never auto-deployed. Install explicitly with
+# herdr-mcp/install.sh (see herdr-mcp/README.md).
+herdr-mcp
+herdr-mcp/**
 
 {{- if eq .profile "termux" }}
 # Termux is a thin outbound/jump host — keep desktop/agent config out, but
