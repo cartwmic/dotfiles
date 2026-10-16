@@ -231,5 +231,58 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(len(json.loads(out)["records"]), len(self.records))  # no flag: every fixture record, as before
         self.assertEqual(json.loads(self.run_cli("list", "--json", "--pi-owner", "nobody")[1])["records"], [])
 
+    def grow(self, sid: str, count: int, start: int = 2000) -> None:
+        for index in range(start, start + count):
+            value = record(index, sid)
+            value["metadata"] = {"pi": {"nativeSessionId": sid, "historyId": "h", "scope": "current-context", "fingerprint": "f%d" % index,
+                                         "coverage": {"anchor": "a%d" % index, "units": [{"id": "u%d" % n, "v": "x" * 2000} for n in range(75)]}}}
+            self.put(value)
+
+    def peak(self, *argv: str) -> tuple[int, dict]:
+        tracemalloc.start()
+        try:
+            code, out = self.run_cli(*argv)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(code, 0)
+        return peak, json.loads(out)
+
+    def test_omit_units_projection_is_the_same_record_minus_units(self) -> None:
+        self.grow("grow-a", 3)
+        full = json.loads(self.run_cli("list", "--json", "--source-id", "grow-a")[1])["records"]
+        lite = json.loads(self.run_cli("list", "--json", "--source-id", "grow-a", "--omit-coverage-units")[1])["records"]
+        self.assertEqual(len(full), 3); self.assertEqual(len(lite), 3)
+        for f, l in zip(full, lite):
+            cov = f["metadata"]["pi"]["coverage"]
+            expected = json.loads(json.dumps(f))
+            del expected["metadata"]["pi"]["coverage"]["units"]
+            expected["metadata"]["pi"]["coverage"]["unitsOmitted"] = len(cov["units"])
+            self.assertEqual(l, expected)
+            self.assertNotIn("units", l["metadata"]["pi"]["coverage"])
+        # read still returns the units in full
+        code, out = self.run_cli("read", full[0]["record_id"], "--json")
+        self.assertEqual(json.loads(out)["record"]["metadata"]["pi"]["coverage"]["units"], full[0]["metadata"]["pi"]["coverage"]["units"])
+
+    def test_records_without_units_or_pi_pass_through_unchanged(self) -> None:
+        self.put(self.owned(990, "plain", {"sessionId": "x"}))      # pi object without coverage
+        self.put(self.owned(991, "plain", ...))                      # no metadata.pi
+        self.put(self.owned(992, "plain", {"coverage": {"anchor": None}}))  # coverage without units
+        a = json.loads(self.run_cli("list", "--json", "--source-id", "plain")[1])["records"]
+        b = json.loads(self.run_cli("list", "--json", "--source-id", "plain", "--omit-coverage-units")[1])["records"]
+        self.assertEqual(a, b)
+
+    def test_projection_memory_does_not_grow_with_a_sessions_record_count(self) -> None:
+        self.grow("grow-b", 20)
+        small, _ = self.peak("list", "--json", "--source-kind", "pi", "--source-id", "grow-b", "--omit-coverage-units")
+        full_small, _ = self.peak("list", "--json", "--source-kind", "pi", "--source-id", "grow-b")
+        self.grow("grow-b", 140, start=3000)   # session grows 8x
+        big, data = self.peak("list", "--json", "--source-kind", "pi", "--source-id", "grow-b", "--omit-coverage-units")
+        full_big, _ = self.peak("list", "--json", "--source-kind", "pi", "--source-id", "grow-b")
+        self.assertEqual(len(data["records"]), 160)
+        self.assertLess(big, small * 3)                 # 8x the records, projection peak stays near flat (output is small)
+        self.assertGreater(full_big, big * 8)           # control: the unprojected list grows with the session
+        self.assertGreater(full_big, full_small * 4)
+
 if __name__ == "__main__":
     unittest.main()
