@@ -176,5 +176,58 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(stored["metadata"], self.records[3]["metadata"])
 
 
+    def owned(self, index: int, source_id: str, pi: object, version: int = 2, status: str = "published") -> dict:
+        value = record(index, source_id, status=status, version=version)
+        value["metadata"] = {"pi": pi} if pi is not ... else {}
+        if version == 1:
+            value.pop("metadata"); value["generic_annotations"] = {}
+        return value
+
+    def test_pi_owner_matches_the_adapter_owner_rule_not_source_id(self) -> None:
+        cases = {
+            "o-session": self.owned(800, "history-1", {"sessionId": "me", "nativeSessionId": "other"}),   # sessionId wins
+            "o-native": self.owned(801, "history-2", {"nativeSessionId": "me"}),                         # legacy: native only
+            "o-null": self.owned(802, "history-3", {"sessionId": None, "nativeSessionId": "me"}),         # null falls back like ??
+            "x-other-owner": self.owned(803, "me", {"sessionId": "someone-else", "nativeSessionId": "me"}),  # source_id==me but owner differs
+            "x-no-pi": self.owned(804, "me", ...),
+            "x-pi-not-object": self.owned(805, "me", "me"),
+            "x-v1": self.owned(806, "me", {"sessionId": "me"}, version=1),
+            "x-unpublished": self.owned(807, "me", {"sessionId": "me"}, status="failed"),
+        }
+        for value in cases.values():
+            self.put(value)
+        code, out = self.run_cli("list", "--json", "--source-kind", "pi", "--status", "published", "--pi-owner", "me")
+        self.assertEqual(code, 0)
+        ids = sorted(r["record_id"] for r in json.loads(out)["records"])
+        self.assertEqual(ids, sorted(cases[k]["record_id"] for k in ("o-session", "o-native", "o-null")))
+
+    def test_pi_owner_matches_exactly_the_javascript_predicate(self) -> None:
+        # Cross-check against the adapter's expression on every fixture owner shape.
+        shapes = [{"sessionId": "me"}, {"nativeSessionId": "me"}, {"sessionId": None, "nativeSessionId": "me"},
+                  {"sessionId": "", "nativeSessionId": "me"}, {"sessionId": 5}, {}, {"sessionId": "me", "nativeSessionId": "x"}]
+        for index, pi in enumerate(shapes):
+            self.put(self.owned(700 + index, f"h-{index}", pi))
+        code, out = self.run_cli("list", "--json", "--pi-owner", "me")
+        got = {r["record_id"] for r in json.loads(out)["records"] if r["record_id"].startswith("r07")}
+        expect = {f"r{700 + i:04d}" for i, pi in enumerate(shapes)
+                  if (pi.get("sessionId") if pi.get("sessionId") is not None else pi.get("nativeSessionId")) == "me"}
+        self.assertEqual(got, expect)
+
+    def test_pi_owner_scoped_memory_is_bounded(self) -> None:
+        for index in range(4):
+            self.put(self.owned(600 + index, "history-x", {"sessionId": "mine"}))
+        tracemalloc.start()
+        try:
+            code, out = self.run_cli("list", "--json", "--source-kind", "pi", "--status", "published", "--pi-owner", "mine")
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(len(json.loads(out)["records"]), 4)
+        self.assertLess(peak, 4 * 150_000 * 5)
+
+    def test_unfiltered_output_is_unchanged_by_the_new_option(self) -> None:
+        self.assertEqual(self.run_cli("list", "--json")[1], self.run_cli("list", "--json")[1])
+        self.assertEqual(json.loads(self.run_cli("list", "--json", "--pi-owner", "nobody")[1])["records"], [])
+
 if __name__ == "__main__":
     unittest.main()

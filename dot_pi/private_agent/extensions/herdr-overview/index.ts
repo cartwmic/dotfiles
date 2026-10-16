@@ -84,7 +84,8 @@ export function registerHerdrOverviewExtension(pi: ExtensionAPI): void {
     let wake = false;
     const records = recordId
       ? [JSON.parse(await runSessionRecap(["read", recordId, "--json"])).record]
-      : JSON.parse(await runSessionRecap(["list", "--json", "--source-kind", "pi", "--status", "published"])).records;
+      : // Owner-scoped in the CLI (same owner rule as below) so the store reader returns only this session's records instead of every Pi recap (cartwmic/dotfiles#12).
+      JSON.parse(await runSessionRecap(["list", "--json", "--source-kind", "pi", "--status", "published", "--pi-owner", sessionId])).records;
     for (const record of records) {
       const owner = record.metadata?.pi?.sessionId ?? record.metadata?.pi?.nativeSessionId;
       if (record.status !== "published" || owner !== sessionId) continue;

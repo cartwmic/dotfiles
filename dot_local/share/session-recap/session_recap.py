@@ -509,6 +509,22 @@ def _record_version(record: dict[str, Any]) -> Any:
     return version
 
 
+def _pi_owner(record: dict[str, Any]) -> Any:
+    """The Pi session that owns a schema 2 record: metadata.pi.sessionId, else nativeSessionId.
+
+    Mirrors the Herdr adapter's owner rule (null falls back, like JavaScript's ??),
+    so a record saved under a different source_id is still found by its owner.
+    """
+    if record.get("schema_version") != 2:
+        return None
+    metadata = record.get("metadata")
+    pi = metadata.get("pi") if isinstance(metadata, dict) else None
+    if not isinstance(pi, dict):
+        return None
+    owner = pi.get("sessionId")
+    return owner if owner is not None else pi.get("nativeSessionId")
+
+
 def _public_record(record: dict[str, Any]) -> dict[str, Any]:
     version = _record_version(record)
     # Legacy records have no generic caller metadata contract. Only expose
@@ -550,7 +566,8 @@ def _run_records(args: argparse.Namespace, root: Path) -> None:
             raw = _read_json(path)
             _record_version(raw)
             if all(getattr(args, field) is None or raw.get(field) == getattr(args, field)
-                   for field in ("source_kind", "source_id", "status")):
+                   for field in ("source_kind", "source_id", "status")) and (
+                    args.pi_owner is None or _pi_owner(raw) == args.pi_owner):
                 records.append(_public_record(raw))
         records.sort(key=lambda record: (record.get("created_at", ""), record["record_id"]))
         if args.json:
@@ -916,6 +933,7 @@ def build_parser() -> argparse.ArgumentParser:
     listing.add_argument("--json", action="store_true")
     for field in ("source-kind", "source-id", "status"):
         listing.add_argument("--" + field)
+    listing.add_argument("--pi-owner", help="only schema 2 records whose metadata.pi.sessionId (else nativeSessionId) equals this id")
     reading = subparsers.add_parser("read", help="read a safe structured record")
     reading.add_argument("record_id")
     reading.add_argument("--json", action="store_true")
@@ -945,6 +963,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.subcommand == "config":
             print("enabled" if auto_publish_enabled(directory) else "disabled")
         elif args.subcommand in ("list", "read", "annotate"):
+            if getattr(args, "pi_owner", None) is not None:
+                args.pi_owner = _required_id(args.pi_owner, "--pi-owner")
             _run_records(args, root)
         elif args.subcommand == "create":
             if args.source_id is not None:
