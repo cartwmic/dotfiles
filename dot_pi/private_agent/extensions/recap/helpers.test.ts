@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, argumentCompletions, commandCatalog, commandHelp, projectContext, failureNotice, hardBreaks } from './helpers.ts';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, sessionListArgs, argumentCompletions, commandCatalog, commandHelp, projectContext, failureNotice, hardBreaks } from './helpers.ts';
 
 test('native completions replace the whole argument prefix and match parser contexts', () => {
   assert.deepEqual(argumentCompletions('').map(c => c.value), commandCatalog.map(c => c.value));
@@ -106,4 +110,23 @@ test('widget excerpt keeps single newlines as hard breaks outside code fences', 
   assert.equal(hardBreaks('# Title\nline one\nline two\n\nnext'), '# Title  \nline one  \nline two\n\nnext');
   assert.equal(hardBreaks('a\n```\ncode\nmore\n```\nb'), 'a\n```\ncode\nmore\n```\nb');
   assert.equal(hardBreaks(''), '');
+});
+
+// cartwmic/dotfiles#12: per-session reads must reach the real CLI as a scoped list.
+test('sessionListArgs lists only one Pi session through the real CLI', () => {
+  const root = mkdtempSync(join(tmpdir(), 'recap-scope-'));
+  try {
+    const day = join(root, 'data', 'session-recap', 'records', '2026-10-10');
+    mkdirSync(day, { recursive: true });
+    for (const [id, sid, status] of [['r1', 'sess-a', 'published'], ['r2', 'sess-b', 'published'], ['r3', 'sess-a', 'failed']]) {
+      writeFileSync(join(day, id + '.json'), JSON.stringify({ schema_version: 2, record_id: id, source_kind: 'pi', source_id: sid, kind: 'single', status, summary: 's', created_at: '2026-10-10T00:00:0' + id[1] + '+00:00', metadata: { pi: { nativeSessionId: sid } }, annotations: {} }));
+    }
+    const cli = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'dot_local', 'bin', 'executable_session-recap');
+    const env = { ...process.env, XDG_DATA_HOME: join(root, 'data'), XDG_CONFIG_HOME: join(root, 'config') };
+    const run = (args: string[]) => JSON.parse(spawnSync(cli, args, { env, encoding: 'utf8' }).stdout).records.map((r: any) => r.record_id);
+    assert.deepEqual(sessionListArgs('sess-a'), ['list', '--json', '--source-kind', 'pi', '--source-id', 'sess-a']);
+    assert.deepEqual(run(sessionListArgs('sess-a')), ['r1', 'r3']);
+    assert.deepEqual(run(sessionListArgs('sess-b')), ['r2']);
+    assert.deepEqual(run(sessionListArgs('absent')), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

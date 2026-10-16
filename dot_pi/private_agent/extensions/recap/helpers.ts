@@ -144,6 +144,11 @@ export function displayTime(timestamp: string, zone = 'local'): string {
   const formatter = new Intl.DateTimeFormat('sv-SE', { ...(zone === 'local' ? {} : { timeZone: zone }), year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'shortOffset' });
   return `${formatter.format(new Date(timestamp))} [${zone === 'local' ? formatter.resolvedOptions().timeZone : zone}]`;
 }
+/** CLI args listing only one Pi session's records. The store keeps a Pi recap's source_id equal to its native session id, so this returns every record compatibleRecord could accept without loading the rest of the store (cartwmic/dotfiles#12). */
+export function sessionListArgs(nativeSessionId: string): string[] {
+  return ['list', '--json', '--source-kind', 'pi', '--source-id', nativeSessionId];
+}
+
 export function compatibleRecord(rows: any[], state: OwnedState, branchIds: string[], scope?: string) {
   return rows.filter(r => r.status === 'published' && (!scope || r.metadata?.pi?.scope === scope) && r.metadata?.pi?.nativeSessionId === state.nativeSessionId && r.metadata.pi.historyId === state.historyId && r.metadata.pi.coverage && (!r.metadata.pi.coverage.anchor || branchIds.includes(r.metadata.pi.coverage.anchor))).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.record_id.localeCompare(b.record_id)).at(-1);
 }
