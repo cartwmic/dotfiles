@@ -280,7 +280,9 @@ export default function recap(pi: ExtensionAPI) {
     const entries = ctx.sessionManager.getBranch(), ids = entries.map((e: any) => e.id);
     const units = projectContext(ctx.sessionManager.buildSessionProjection(), [...live.values()]);
     if (!units.length) { if (trigger === 'manual') notice(ctx, 'Nothing to recap yet.'); return; }
-    const prior = compatibleRecord(await recordsFor(own.nativeSessionId), own, ids, recapScope);
+    // The listing omits coverage units (size); selection needs only anchor/scope/history. Read the one chosen record in full for the unit diff.
+    const priorLite = compatibleRecord(await recordsFor(own.nativeSessionId), own, ids, recapScope);
+    const prior = priorLite ? (await call('read', priorLite.record_id, '--json')).record : undefined;
     const pending = uncovered(units, prior?.metadata.pi.coverage ?? null, ids);
     if ((mode !== 'full' || trigger === 'periodic') && !pending.length) { await refreshWidget(ctx); if (trigger === 'manual') notice(ctx, 'No new activity.'); return; }
     if (!settings.model) {

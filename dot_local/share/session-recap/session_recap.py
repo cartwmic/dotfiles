@@ -525,6 +525,23 @@ def _pi_owner(record: dict[str, Any]) -> Any:
     return owner if owner is not None else pi.get("nativeSessionId")
 
 
+def _without_coverage_units(public: dict[str, Any]) -> dict[str, Any]:
+    """Projection for list: same record minus metadata.pi.coverage.units, which dominates record size.
+
+    Only the nested dicts on the path are copied, the rest is shared. The units key is removed, not emptied,
+    so a caller that needs units fails loudly instead of treating coverage as empty. unitsOmitted keeps the count.
+    """
+    metadata = public.get("metadata")
+    pi = metadata.get("pi") if isinstance(metadata, dict) else None
+    coverage = pi.get("coverage") if isinstance(pi, dict) else None
+    if not isinstance(coverage, dict) or "units" not in coverage:
+        return public
+    units = coverage["units"]
+    slim = {key: value for key, value in coverage.items() if key != "units"}
+    slim["unitsOmitted"] = len(units) if isinstance(units, list) else True
+    return {**public, "metadata": {**metadata, "pi": {**pi, "coverage": slim}}}
+
+
 def _public_record(record: dict[str, Any]) -> dict[str, Any]:
     version = _record_version(record)
     # Legacy records have no generic caller metadata contract. Only expose
@@ -568,7 +585,8 @@ def _run_records(args: argparse.Namespace, root: Path) -> None:
             if all(getattr(args, field) is None or raw.get(field) == getattr(args, field)
                    for field in ("source_kind", "source_id", "status")) and (
                     args.pi_owner is None or _pi_owner(raw) == args.pi_owner):
-                records.append(_public_record(raw))
+                public = _public_record(raw)
+                records.append(_without_coverage_units(public) if args.omit_coverage_units else public)
         records.sort(key=lambda record: (record.get("created_at", ""), record["record_id"]))
         if args.json:
             print(_json_text({"records": records, "presentation": {"time_zone": args.zone[0], "records": {r["record_id"]: presentation(r, args.zone) for r in records}}}), end="")
@@ -933,6 +951,7 @@ def build_parser() -> argparse.ArgumentParser:
     listing.add_argument("--json", action="store_true")
     for field in ("source-kind", "source-id", "status"):
         listing.add_argument("--" + field)
+    listing.add_argument("--omit-coverage-units", action="store_true", help="drop metadata.pi.coverage.units from each listed record (leaves anchor and unitsOmitted); read ID returns them in full")
     listing.add_argument("--pi-owner", help="only schema 2 records whose metadata.pi.sessionId (else nativeSessionId) equals this id")
     reading = subparsers.add_parser("read", help="read a safe structured record")
     reading.add_argument("record_id")

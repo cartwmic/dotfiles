@@ -146,7 +146,7 @@ export function displayTime(timestamp: string, zone = 'local'): string {
 }
 /** CLI args listing only one Pi session's records. The store keeps a Pi recap's source_id equal to its native session id, so this returns every record compatibleRecord could accept without loading the rest of the store (cartwmic/dotfiles#12). */
 export function sessionListArgs(nativeSessionId: string): string[] {
-  return ['list', '--json', '--source-kind', 'pi', '--source-id', nativeSessionId];
+  return ['list', '--json', '--source-kind', 'pi', '--source-id', nativeSessionId, '--omit-coverage-units'];
 }
 
 export function compatibleRecord(rows: any[], state: OwnedState, branchIds: string[], scope?: string) {
