@@ -336,9 +336,12 @@ def _record_paths(root: Path, record_id: str) -> list[Path]:
     if not records_dir.exists():
         return []
     if record_id and record_id not in (".", "..") and not any(c in record_id for c in "/\\\0"):
-        named = [day / f"{record_id}.json" for day in sorted(records_dir.iterdir()) if day.is_dir()]
-        found = [path for path in named
-                 if path.is_file() and _read_json(path).get("record_id") == record_id]
+        try:
+            named = [day / f"{record_id}.json" for day in sorted(records_dir.iterdir()) if day.is_dir()]
+            found = [path for path in named
+                     if path.is_file() and _read_json(path).get("record_id") == record_id]
+        except OSError:
+            found = []  # e.g. an over-long id: fall through to the compatible scan
         if found:
             return found
     return [path for path in sorted(records_dir.glob("*/*.json"))
