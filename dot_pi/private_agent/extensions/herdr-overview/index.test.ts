@@ -147,6 +147,32 @@ test('startup discovers detached saves for native identity; absent Herdr stays s
   } finally { await w.close(); }
 });
 
+// cartwmic/dotfiles#12: the startup list is owner-scoped in the CLI. Owner semantics (sessionId, else
+// nativeSessionId) must survive records whose source_id is a different history id.
+test('startup scoped list keeps legacy and fork owner semantics and ignores other sessions', async () => {
+  const w = await world();
+  try {
+    delete process.env.HERDR_SOCKET_PATH;
+    const dir = path.join(w.root, 'data/session-recap/records/2026-10-01');
+    const rewrite = (id: string, source_id: string, pi: object) => {
+      const value = { ...readJson(path.join(dir, id + '.json')), source_id, metadata: { pi } };
+      writeFileSync(path.join(dir, id + '.json'), JSON.stringify(value));
+    };
+    const idOf = (c: string) => c.repeat(32);
+    for (const c of 'defgh') w.put(idOf(c));
+    rewrite(idOf('d'), 'history-d', { nativeSessionId: 'native-session', historyId: 'h1', coverage: {} });                       // legacy: native only
+    rewrite(idOf('e'), 'native-session', { sessionId: 'a-fork', nativeSessionId: 'native-session', historyId: 'h2', coverage: {} }); // source_id matches, owner is a fork
+    rewrite(idOf('f'), 'history-f', { sessionId: 'native-session', nativeSessionId: 'older', historyId: 'h3', coverage: {} });       // sessionId wins
+    rewrite(idOf('g'), 'history-g', { sessionId: null, nativeSessionId: 'native-session', historyId: 'h4', coverage: {} });         // null falls back
+    rewrite(idOf('h'), 'history-h', { sessionId: 'other-session', historyId: 'h5', coverage: {} });                                 // someone else
+    await w.fire('session_start');
+    const annotated = (c: string) => Object.hasOwn(w.record(idOf(c)).annotations, 'herdr');
+    assert.deepEqual(['d', 'e', 'f', 'g', 'h'].map(annotated), [true, false, true, true, false]);
+    const log = readFileSync(path.join(w.root, 'cli.log'), 'utf8').split('\n').filter(c => c.startsWith('list '));
+    assert.deepEqual(log, ['list --json --source-kind pi --status published --pi-owner native-session']);
+  } finally { await w.close(); }
+});
+
 async function scriptedProvider(w: Awaited<ReturnType<typeof world>>) {
   let count = 0;
   const server = http.createServer((request, response) => {
@@ -255,7 +281,7 @@ test('disposable Pi replacement and reload publish only the current caller-bound
     await wait(() => readJson(file).sessionName === null, 'public cleared name');
     assert.equal(readJson(file).sessionId, firstId);
     assert.equal(provider.count(), 0);
-    assert.ok(!existsSync(path.join(w.root, 'cli.log')) || readFileSync(path.join(w.root, 'cli.log'), 'utf8').trim().split('\n').every(c => c === 'list --json --source-kind pi --status published'));
+    assert.ok(!existsSync(path.join(w.root, 'cli.log')) || readFileSync(path.join(w.root, 'cli.log'), 'utf8').trim().split('\n').every(c => c.startsWith('list --json --source-kind pi --status published --pi-owner ')));
     const digestDir = path.join(w.env.HOME, '.pi/session-search/digests'); mkdirSync(digestDir, { recursive: true });
     writeFileSync(path.join(digestDir, firstId + '.json'), JSON.stringify({ schemaVersion: 1, body: 'NEGATIVE OLD SESSION', generatedAt: '2026-01-01T00:00:00Z' }));
     await rpc.request('new_session');
