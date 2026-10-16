@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { budgets } from './budgets.mjs';
-import { restoreState, resolveSettings, setOverride, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, argumentCompletions, commandHelp, projectContext, recapScope, failureNotice, hardBreaks } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, sessionListArgs, argumentCompletions, commandHelp, projectContext, recapScope, failureNotice, hardBreaks } from './helpers.ts';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const configPath = join(directory, 'config.json');
@@ -28,6 +28,8 @@ const call = (...args: string[]): Promise<any> => new Promise((resolve, reject) 
   });
 });
 const records = async () => (await call('list', '--json')).records;
+// Per-session reads pass the session id so the CLI loads only that session's records (cartwmic/dotfiles#12). Whole-store records() is for manual history browsing only.
+const recordsFor = async (nativeSessionId: string) => (await call(...sessionListArgs(nativeSessionId))).records;
 const requestInput = (instructions: string, material: string, background: string) => instructions + '\n\n' + (background ? 'Background only (not new activity):\n' + background + '\n\nNew material:\n' : '') + material;
 const interactive = (ctx: ExtensionContext) => ctx.mode === 'tui' && ctx.hasUI;
 
@@ -95,7 +97,7 @@ export default function recap(pi: ExtensionAPI) {
   function notice(ctx: ExtensionContext, text: string) { ctx.ui.notify(ctx.ui.theme.fg('dim', text), 'info'); }
   async function currentRecap(ctx: ExtensionContext) {
     const ids = ctx.sessionManager.getBranch().map((e: any) => e.id);
-    return compatibleRecord(await records(), state, ids);
+    return compatibleRecord(await recordsFor(state.nativeSessionId), state, ids);
   }
   let widgetSeq = 0;
   async function refreshWidget(ctx: ExtensionContext) {
@@ -105,7 +107,7 @@ export default function recap(pi: ExtensionAPI) {
     let record, running = false;
     try {
       const ids = ctx.sessionManager.getBranch().map((e: any) => e.id);
-      const rows = await records();
+      const rows = await recordsFor(state.nativeSessionId);
       record = compatibleRecord(rows, state, ids);
       if (job?.nativeSessionId === sessionId && job.historyId === state.historyId && (!job.capturedEnd || ids.includes(job.capturedEnd))) {
         const current = await call('current', '--key', key(sessionId), '--json');
@@ -278,7 +280,7 @@ export default function recap(pi: ExtensionAPI) {
     const entries = ctx.sessionManager.getBranch(), ids = entries.map((e: any) => e.id);
     const units = projectContext(ctx.sessionManager.buildSessionProjection(), [...live.values()]);
     if (!units.length) { if (trigger === 'manual') notice(ctx, 'Nothing to recap yet.'); return; }
-    const prior = compatibleRecord(await records(), own, ids, recapScope);
+    const prior = compatibleRecord(await recordsFor(own.nativeSessionId), own, ids, recapScope);
     const pending = uncovered(units, prior?.metadata.pi.coverage ?? null, ids);
     if ((mode !== 'full' || trigger === 'periodic') && !pending.length) { await refreshWidget(ctx); if (trigger === 'manual') notice(ctx, 'No new activity.'); return; }
     if (!settings.model) {
@@ -326,7 +328,7 @@ export default function recap(pi: ExtensionAPI) {
       // Virtual budgets are resolved inside each detached attempt. Fingerprints
       // describe captured source/settings, not metadata that is not yet known.
       const snapshot: any = capture(units, ids, own, effectiveBudgets ? { ...settings, effectiveBudgets: { maxTokens: effectiveBudgets.maxTokens, availableTokens: effectiveBudgets.availableTokens } } : settings, mode, trigger, work.capturedAt);
-      const reuse = mode === 'full' && (await records()).find((r: any) => r.status === 'published' && r.metadata?.pi?.historyId === own.historyId && r.metadata.pi.fingerprint === snapshot.fingerprint);
+      const reuse = mode === 'full' && (await recordsFor(own.nativeSessionId)).find((r: any) => r.status === 'published' && r.metadata?.pi?.historyId === own.historyId && r.metadata.pi.fingerprint === snapshot.fingerprint);
       if (reuse) { if (trigger === 'manual') await enqueueNotice(work, 'Reused matching full recap.'); return; }
       if (!(await authorized(work))) return;
       const temp = mkdtempSync(join(tmpdir(), 'pi-recap-'));
@@ -390,7 +392,7 @@ export default function recap(pi: ExtensionAPI) {
   pi.on('session_start', async (_event, ctx) => {
     active = interactive(ctx); if (!active) return;
     await initialize(ctx);
-    try { for (const record of (await records()).filter((r: any) => r.status === 'published' && r.metadata?.pi?.nativeSessionId === sessionId)) saved(record); await consume(ctx); } catch { /* Recovery can be retried via history. */ }
+    try { for (const record of (await recordsFor(sessionId)).filter((r: any) => r.status === 'published' && r.metadata?.pi?.nativeSessionId === sessionId)) saved(record); await consume(ctx); } catch { /* Recovery can be retried via history. */ }
   });
   pi.on('agent_start', (_event, ctx) => {
     if (!active || !interactive(ctx)) return;

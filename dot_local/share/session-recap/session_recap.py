@@ -325,15 +325,29 @@ def _read_members(root: Path, stdin_text: str) -> list[dict[str, str | None]]:
     return members
 
 
-def _find_record(root: Path, record_id: str) -> dict[str, Any] | None:
+def _record_paths(root: Path, record_id: str) -> list[Path]:
+    """Paths of dated files whose content has this record_id.
+
+    Records are saved as records/<date>/<record_id>.json, so look there first
+    and read only those files. If that finds nothing (a hand-placed or renamed
+    file), scan every file as before, one at a time, so behavior is unchanged.
+    """
     records_dir = root / "records"
     if not records_dir.exists():
-        return None
-    for path in records_dir.glob("*/*.json"):
-        value = _read_json(path)
-        if value.get("record_id") == record_id:
-            return value
-    return None
+        return []
+    if record_id and record_id not in (".", "..") and not any(c in record_id for c in "/\\\0"):
+        named = [day / f"{record_id}.json" for day in sorted(records_dir.iterdir()) if day.is_dir()]
+        found = [path for path in named
+                 if path.is_file() and _read_json(path).get("record_id") == record_id]
+        if found:
+            return found
+    return [path for path in sorted(records_dir.glob("*/*.json"))
+            if _read_json(path).get("record_id") == record_id]
+
+
+def _find_record(root: Path, record_id: str) -> dict[str, Any] | None:
+    paths = _record_paths(root, record_id)
+    return _read_json(paths[0]) if paths else None
 
 
 def _validate_group_members(
@@ -485,10 +499,15 @@ def _metadata_object(text: str) -> dict[str, Any]:
     return value
 
 
-def _public_record(record: dict[str, Any]) -> dict[str, Any]:
+def _record_version(record: dict[str, Any]) -> Any:
     version = record.get("schema_version")
     if version not in (1, 2):
         raise RecapError(f"unsupported record schema: {version}")
+    return version
+
+
+def _public_record(record: dict[str, Any]) -> dict[str, Any]:
+    version = _record_version(record)
     # Legacy records have no generic caller metadata contract. Only expose
     # known narrative/identity fields, never arbitrary historical payloads.
     fields = ("schema_version", "record_id", "source_kind", "source_id", "kind",
@@ -518,11 +537,18 @@ def _public_record(record: dict[str, Any]) -> dict[str, Any]:
 
 def _run_records(args: argparse.Namespace, root: Path) -> None:
     if args.subcommand == "list":
-        records = [_public_record(_read_json(path))
-                   for path in sorted((root / "records").glob("*/*.json"))]
-        records = [record for record in records if all(
-            getattr(args, field) is None or record.get(field) == getattr(args, field)
-            for field in ("source_kind", "source_id", "status"))]
+        # Read one file at a time and apply the filters to the raw record
+        # before building its public form, so only matching records stay in
+        # memory. Every file is still read and its schema still checked, so
+        # errors are the same as before. Public fields are copied unchanged,
+        # so a raw field equals the public one.
+        records = []
+        for path in sorted((root / "records").glob("*/*.json")):
+            raw = _read_json(path)
+            _record_version(raw)
+            if all(getattr(args, field) is None or raw.get(field) == getattr(args, field)
+                   for field in ("source_kind", "source_id", "status")):
+                records.append(_public_record(raw))
         records.sort(key=lambda record: (record.get("created_at", ""), record["record_id"]))
         if args.json:
             print(_json_text({"records": records, "presentation": {"time_zone": args.zone[0], "records": {r["record_id"]: presentation(r, args.zone) for r in records}}}), end="")
@@ -531,8 +557,7 @@ def _run_records(args: argparse.Namespace, root: Path) -> None:
                 print(f"{presentation_time(record.get('created_at', ''), args.zone)} {record['record_id']} {record['status']} {record['source_kind']} {record['source_id']}")
         return
     with _store_lock(root):
-        paths = [path for path in (root / "records").glob("*/*.json")
-                 if _read_json(path).get("record_id") == args.record_id]
+        paths = _record_paths(root, args.record_id)
         if len(paths) != 1:
             raise RecapError(f"record not found or ambiguous: {args.record_id}")
         path = paths[0]
