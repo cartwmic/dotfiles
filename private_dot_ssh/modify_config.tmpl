@@ -102,18 +102,18 @@ Host daily-phone
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
 
-# ssh-phone (Moto G Stylus 5G 2024). Prefer its WireGuard peer when up;
+# ssh-phone (Moto Razr 2024). Prefer its WireGuard peer when up;
 # fall back to its OPNsense-reserved home Wi-Fi address when the tunnel is off.
-Match host ssh-phone exec "/usr/bin/nc -z -G 1 -w 1 10.21.1.7 8022 >/dev/null 2>&1"
-    HostName 10.21.1.7
+Match host ssh-phone exec "/usr/bin/nc -z -G 1 -w 1 10.21.1.8 8022 >/dev/null 2>&1"
+    HostName 10.21.1.8
 
-Match host ssh-phone exec "/usr/bin/nc -z -G 1 -w 1 10.19.1.88 8022 >/dev/null 2>&1"
-    HostName 10.19.1.88
+Match host ssh-phone exec "/usr/bin/nc -z -G 1 -w 1 10.19.1.93 8022 >/dev/null 2>&1"
+    HostName 10.19.1.93
 
 Host ssh-phone
-    HostName 10.21.1.7
+    HostName 10.21.1.8
     Port 8022
-    User u0_a465
+    User u0_a532
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
 $PHONE_END
