@@ -171,7 +171,8 @@ MAX_OUT = 50_000
 LIST = {"workspace": "workspace.list", "tab": "tab.list", "pane": "pane.list", "agent": "agent.list"}
 GET = {"workspace": ("workspace.get", "workspace_id"), "tab": ("tab.get", "tab_id"),
        "pane": ("pane.get", "pane_id"), "agent": ("agent.get", "target")}
-SOURCES = ["visible", "recent", "recent-unwrapped", "detection"]
+SOURCES = ["visible", "recent", "recent_unwrapped", "detection"]  # Herdr 0.9.1 ReadSource
+SOURCE_ALIASES = {"recent-unwrapped": "recent_unwrapped"}  # earlier advertised spelling
 
 
 def rpc(method, params=None):
@@ -219,7 +220,7 @@ TOOLS = {
                    {"type": "object", "properties": {"pane_id": {"type": "string"}, "source": {"type": "string", "enum": SOURCES},
                                                       "lines": {"type": "integer", "minimum": 1, "maximum": 200}},
                     "required": ["pane_id"]},
-                   lambda a: rpc("pane.read", {"pane_id": a["pane_id"], "source": a.get("source", "recent"),
+                   lambda a: rpc("pane.read", {"pane_id": a["pane_id"], "source": SOURCE_ALIASES.get(a.get("source", "recent"), a.get("source", "recent")),
                                                "lines": min(int(a.get("lines", 50)), 200)})),
 }
 
