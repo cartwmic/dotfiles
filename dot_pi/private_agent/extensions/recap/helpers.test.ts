@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, sessionListArgs, argumentCompletions, commandCatalog, commandHelp, projectContext, failureNotice, hardBreaks } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, priorRecord, sessionListArgs, argumentCompletions, commandCatalog, commandHelp, projectContext, failureNotice, hardBreaks } from './helpers.ts';
 
 test('native completions replace the whole argument prefix and match parser contexts', () => {
   assert.deepEqual(argumentCompletions('').map(c => c.value), commandCatalog.map(c => c.value));
@@ -155,4 +155,28 @@ test('compatibleRecord picks the same record from the units-omitted listing, and
       }
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('priorRecord reads the ONE chosen record in full (the listing omits coverage units), and reads nothing when no recap is compatible', async () => {
+  const state: any = { nativeSessionId: 'S', historyId: 'H', overrides: {} };
+  const row = (id: string, anchor: string | null) => ({ record_id: id, source_kind: 'pi', source_id: 'S', status: 'published', created_at: '2026-10-10T00:00:0' + id.slice(1) + '+00:00', metadata: { pi: { nativeSessionId: 'S', historyId: 'H', scope: 'current-context', coverage: { anchor, unitsOmitted: 3 } } } });
+  const full = (id: string) => ({ record_id: id, metadata: { pi: { coverage: { anchor: 'a2', units: [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }] } } } });
+  const reads: string[] = [];
+  const read = async (id: string) => { reads.push(id); return full(id); };
+  const got = await priorRecord([row('r1', 'a1'), row('r2', 'a2')], state, ['a1', 'a2'], 'current-context', read);
+  assert.deepEqual(reads, ['r2'], 'exactly one full read, of the record selected from the listing');
+  assert.equal(got.metadata.pi.coverage.units.length, 3, 'the caller gets the FULL record with units, not the units-less listing row');
+  reads.length = 0;
+  assert.equal(await priorRecord([row('r1', 'gone')], state, ['a1'], 'current-context', read), undefined);
+  assert.equal(await priorRecord([], state, ['a1'], 'current-context', read), undefined);
+  assert.deepEqual(reads, [], 'no compatible recap means no read');
+});
+
+test('recap/index.ts wires the prior through priorRecord with a real "read" call, not the listing row', () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
+  const uses = src.split('\n').filter((line) => line.includes('priorRecord(') && !line.includes('import '));
+  assert.equal(uses.length, 1, 'one call site');
+  assert.ok(uses[0].includes("call('read', recordId, '--json')).record"), 'the reader is the CLI read subcommand');
+  assert.ok(!src.includes('const prior = priorLite'), 'the units-less listing row is never used as the prior');
+  assert.ok(!src.includes('compatibleRecord(await recordsFor(own.nativeSessionId)'), 'no direct use of the listing row for the prior');
 });

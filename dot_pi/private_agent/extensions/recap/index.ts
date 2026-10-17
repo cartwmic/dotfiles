@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { budgets } from './budgets.mjs';
-import { restoreState, resolveSettings, setOverride, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, sessionListArgs, argumentCompletions, commandHelp, projectContext, recapScope, failureNotice, hardBreaks } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, priorRecord, sessionListArgs, argumentCompletions, commandHelp, projectContext, recapScope, failureNotice, hardBreaks } from './helpers.ts';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const configPath = join(directory, 'config.json');
@@ -281,8 +281,7 @@ export default function recap(pi: ExtensionAPI) {
     const units = projectContext(ctx.sessionManager.buildSessionProjection(), [...live.values()]);
     if (!units.length) { if (trigger === 'manual') notice(ctx, 'Nothing to recap yet.'); return; }
     // The listing omits coverage units (size); selection needs only anchor/scope/history. Read the one chosen record in full for the unit diff.
-    const priorLite = compatibleRecord(await recordsFor(own.nativeSessionId), own, ids, recapScope);
-    const prior = priorLite ? (await call('read', priorLite.record_id, '--json')).record : undefined;
+    const prior = await priorRecord(await recordsFor(own.nativeSessionId), own, ids, recapScope, async (recordId) => (await call('read', recordId, '--json')).record);
     const pending = uncovered(units, prior?.metadata.pi.coverage ?? null, ids);
     if ((mode !== 'full' || trigger === 'periodic') && !pending.length) { await refreshWidget(ctx); if (trigger === 'manual') notice(ctx, 'No new activity.'); return; }
     if (!settings.model) {
