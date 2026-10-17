@@ -13,7 +13,7 @@ still exists. It is not the delivery vehicle and must not splice.
 
 ## Pi version selection
 
-Four patches (headless-extension-drain, prompt-start-race, settlement-abort, standing-reminder-origin) have anchors that differ
+Five patches (headless-extension-drain, prompt-start-race, settlement-abort, standing-reminder-origin, btw-native-session) have anchors that differ
 between Pi minor series, so each directory holds one payload per series and `patch.mjs` is only an entry point:
 
 | File | Role |
@@ -30,8 +30,11 @@ To support a new series, add `patch.pi-<major>.<minor>.mjs`, add it to the `vari
 hash line to `run_onchange_after_30_apply_pi_patches.sh.tmpl` and port that payload's proof. `tests/pi-patches/pi_select.test.mjs`
 checks the wiring (run: `node --test tests/pi-patches/pi_select.test.mjs`).
 
-Other patches are not version-aware: `btw-native-session` supports exactly Pi 1.1.0 and fails on any other version, and
-`response-visibility` fails its anchor check on Pi 1.2.0 (observed on a scratch install: unsupported or ambiguous anchor for `emitBeforeAgentStart` in `dist/core/extensions/runner.js`), so a full apply on Pi 1.2.x still exits 1 until those are ported.
+`btw-native-session` payloads are exact-version: `patch.pi-1.1.mjs` + `edits.json` need Pi 1.1.0, `patch.pi-1.2.mjs` + `edits.pi-1.2.json` need Pi 1.2.0.
+`edits.pi-1.2.json` is `edits.json` ported to 1.2.0: bundle chunks renamed (`chunk-OIM2DMFI.js` -> `chunk-TJXZSVTD.js`, `chunk-OTL6MGLJ.js` -> `chunk-6MWTY2OB.js`),
+and two bundle blocks re-anchored by a 3-way merge (upstream renamed `isWorkingStatusEditor` -> `isEmbeddedStatus` and `errorMessage4` -> `errorMessage5`,
+and added embedded-status colouring). Every other edit is unchanged.
+`response-visibility` is not version-aware here: its payload lives in `cartwmic/pi-response-visibility`, which matches Pi 1.2.0 from commit `106aa4c` (and no longer matches 1.1.0).
 
 ## Overview
 
