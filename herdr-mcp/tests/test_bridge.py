@@ -156,6 +156,16 @@ class StdioBridgeTests(unittest.TestCase):
         self.assertEqual(read['echo']['lines'], 200)
         self.assertEqual([r['method'] for r in self.server.seen], ['ping', 'agent.list', 'pane.read'])
 
+    def test_read_source_matches_herdr_enum(self):
+        tools = {t['name']: t for t in self.rpc('tools/list')['result']['tools']}
+        self.assertEqual(tools['herdr_read']['inputSchema']['properties']['source']['enum'],
+                         ['visible', 'recent', 'recent_unwrapped', 'detection'])
+        for given in ('recent_unwrapped', 'recent-unwrapped'):
+            self.call('herdr_read', {'pane_id': 'w1:p1', 'source': given})
+        self.call('herdr_read', {'pane_id': 'w1:p1'})
+        self.assertEqual([r['params']['source'] for r in self.server.seen],
+                         ['recent_unwrapped', 'recent_unwrapped', 'recent'])
+
     def test_request_literal_payload_native_error_and_unknown(self):
         text = '$(do-not-execute); ' + BACKTICK + 'literal' + BACKTICK + '\nsecond'
         ok = self.call('herdr_request', {'method': 'pane.send_input', 'params': {'pane_id': 'w1:p1', 'text': text}})
