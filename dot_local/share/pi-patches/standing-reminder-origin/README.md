@@ -1,5 +1,8 @@
 # Standing-reminder input origin bridge
 
+> **Layout:** `patch.mjs` selects `patch.pi-1.1.mjs` or `patch.pi-1.2.mjs` by installed Pi version (see ../README.md, "Pi version selection"). This README and its proofs describe the Pi 1.2.x payload (`patch.pi-1.2.mjs`); the 1.1.x payload is the unchanged pre-port revision.
+
+
 Pi exposes `input.source` before a message is processed, but the later
 `message_start` event does not identify where its user message came from. Text
 matching cannot safely bridge those events: operator and extension messages

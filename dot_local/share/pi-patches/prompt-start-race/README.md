@@ -1,5 +1,8 @@
 # Prompt start race
 
+> **Layout:** `patch.mjs` selects `patch.pi-1.1.mjs` or `patch.pi-1.2.mjs` by installed Pi version (see ../README.md, "Pi version selection"). This README and its proofs describe the Pi 1.2.x payload (`patch.pi-1.2.mjs`); the 1.1.x payload is the unchanged pre-port revision.
+
+
 Tested against **Pi 1.2.0** (module `dist/core/agent-session.js` and the bundled
 CLI chunk that contains `AgentSession.prompt`). Enabled on `personal` and
 `axon-work-computer`; other profiles (including unset) reverse only this

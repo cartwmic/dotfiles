@@ -1,5 +1,8 @@
 # Settlement abort
 
+> **Layout:** `patch.mjs` selects `patch.pi-1.1.mjs` or `patch.pi-1.2.mjs` by installed Pi version (see ../README.md, "Pi version selection"). This README and its proofs describe the Pi 1.2.x payload (`patch.pi-1.2.mjs`); the 1.1.x payload is the unchanged pre-port revision.
+
+
 Tested against **Pi 1.2.0** (revision 3; the earlier 0.99.2/1.0.0 results predate
 the `_startRun` refactor and no longer apply to this payload), including its actual bundled CLI and unbundled
 `dist/cli.js`. Enabled on `personal` and `axon-work-computer`; other profiles
