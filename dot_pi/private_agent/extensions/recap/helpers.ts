@@ -144,8 +144,19 @@ export function displayTime(timestamp: string, zone = 'local'): string {
   const formatter = new Intl.DateTimeFormat('sv-SE', { ...(zone === 'local' ? {} : { timeZone: zone }), year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'shortOffset' });
   return `${formatter.format(new Date(timestamp))} [${zone === 'local' ? formatter.resolvedOptions().timeZone : zone}]`;
 }
+/** CLI args listing only one Pi session's records. The store keeps a Pi recap's source_id equal to its native session id, so this returns every record compatibleRecord could accept without loading the rest of the store (cartwmic/dotfiles#12). */
+export function sessionListArgs(nativeSessionId: string): string[] {
+  return ['list', '--json', '--source-kind', 'pi', '--source-id', nativeSessionId, '--omit-coverage-units'];
+}
+
 export function compatibleRecord(rows: any[], state: OwnedState, branchIds: string[], scope?: string) {
   return rows.filter(r => r.status === 'published' && (!scope || r.metadata?.pi?.scope === scope) && r.metadata?.pi?.nativeSessionId === state.nativeSessionId && r.metadata.pi.historyId === state.historyId && r.metadata.pi.coverage && (!r.metadata.pi.coverage.anchor || branchIds.includes(r.metadata.pi.coverage.anchor))).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.record_id.localeCompare(b.record_id)).at(-1);
+}
+
+/** Pick the prior recap from a listing that omits coverage units, then read that ONE record in full (units are needed for the unit diff). */
+export async function priorRecord(rows: any[], state: OwnedState, branchIds: string[], scope: string | undefined, read: (recordId: string) => Promise<any>) {
+  const lite = compatibleRecord(rows, state, branchIds, scope);
+  return lite ? await read(lite.record_id) : undefined;
 }
 
 // Widget excerpt source: keep the summary's own line breaks under markdown by

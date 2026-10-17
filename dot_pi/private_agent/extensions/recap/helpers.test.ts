@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, argumentCompletions, commandCatalog, commandHelp, projectContext, failureNotice, hardBreaks } from './helpers.ts';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, priorRecord, sessionListArgs, argumentCompletions, commandCatalog, commandHelp, projectContext, failureNotice, hardBreaks } from './helpers.ts';
 
 test('native completions replace the whole argument prefix and match parser contexts', () => {
   assert.deepEqual(argumentCompletions('').map(c => c.value), commandCatalog.map(c => c.value));
@@ -106,4 +110,73 @@ test('widget excerpt keeps single newlines as hard breaks outside code fences', 
   assert.equal(hardBreaks('# Title\nline one\nline two\n\nnext'), '# Title  \nline one  \nline two\n\nnext');
   assert.equal(hardBreaks('a\n```\ncode\nmore\n```\nb'), 'a\n```\ncode\nmore\n```\nb');
   assert.equal(hardBreaks(''), '');
+});
+
+// cartwmic/dotfiles#12: per-session reads must reach the real CLI as a scoped list.
+test('sessionListArgs lists only one Pi session through the real CLI', () => {
+  const root = mkdtempSync(join(tmpdir(), 'recap-scope-'));
+  try {
+    const day = join(root, 'data', 'session-recap', 'records', '2026-10-10');
+    mkdirSync(day, { recursive: true });
+    for (const [id, sid, status] of [['r1', 'sess-a', 'published'], ['r2', 'sess-b', 'published'], ['r3', 'sess-a', 'failed']]) {
+      writeFileSync(join(day, id + '.json'), JSON.stringify({ schema_version: 2, record_id: id, source_kind: 'pi', source_id: sid, kind: 'single', status, summary: 's', created_at: '2026-10-10T00:00:0' + id[1] + '+00:00', metadata: { pi: { nativeSessionId: sid } }, annotations: {} }));
+    }
+    const cli = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'dot_local', 'bin', 'executable_session-recap');
+    const env: Record<string, string | undefined> = { ...process.env, SESSION_RECAP_IMPLEMENTATION: undefined, XDG_DATA_HOME: join(root, 'data'), XDG_CONFIG_HOME: join(root, 'config') };
+    const run = (args: string[]) => JSON.parse(spawnSync(cli, args, { env, encoding: 'utf8' }).stdout).records.map((r: any) => r.record_id);
+    assert.deepEqual(sessionListArgs('sess-a'), ['list', '--json', '--source-kind', 'pi', '--source-id', 'sess-a', '--omit-coverage-units']);
+    assert.deepEqual(run(sessionListArgs('sess-a')), ['r1', 'r3']);
+    assert.deepEqual(run(sessionListArgs('sess-b')), ['r2']);
+    assert.deepEqual(run(sessionListArgs('absent')), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// Selection must not change when coverage units are omitted from the listing (cartwmic/dotfiles#12 follow-up).
+test('compatibleRecord picks the same record from the units-omitted listing, and read supplies the units', () => {
+  const root = mkdtempSync(join(tmpdir(), 'recap-lite-'));
+  try {
+    const day = join(root, 'data', 'session-recap', 'records', '2026-10-10');
+    mkdirSync(day, { recursive: true });
+    const mk = (id: string, at: string, anchor: string | null, extra: any = {}) => writeFileSync(join(day, id + '.json'), JSON.stringify({ schema_version: 2, record_id: id, source_kind: 'pi', source_id: 'S', kind: 'single', status: 'published', summary: 's', created_at: at, metadata: { pi: { nativeSessionId: 'S', historyId: 'H', scope: 'current-context', coverage: { anchor, units: [{ id: 'u1', v: id }] }, ...extra } }, annotations: {} }));
+    mk('r1', '2026-10-10T00:00:01+00:00', 'a1'); mk('r2', '2026-10-10T00:00:02+00:00', 'a2'); mk('r3', '2026-10-10T00:00:03+00:00', 'gone'); mk('r4', '2026-10-10T00:00:04+00:00', null, { scope: 'other' });
+    const cli = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'dot_local', 'bin', 'executable_session-recap');
+    const env: Record<string, string | undefined> = { ...process.env, SESSION_RECAP_IMPLEMENTATION: undefined, XDG_DATA_HOME: join(root, 'data'), XDG_CONFIG_HOME: join(root, 'config') };
+    const list = (args: string[]) => JSON.parse(spawnSync(cli, args, { env, encoding: 'utf8' }).stdout).records;
+    const state: any = { nativeSessionId: 'S', historyId: 'H', overrides: {} };
+    for (const ids of [['a1', 'a2'], ['a1'], ['zzz'], ['a1', 'a2', 'gone']]) {
+      const full = compatibleRecord(list(['list', '--json', '--source-kind', 'pi', '--source-id', 'S']), state, ids, 'current-context');
+      const lite = compatibleRecord(list(sessionListArgs('S')), state, ids, 'current-context');
+      assert.equal(lite?.record_id, full?.record_id, 'branch ' + ids.join(','));
+      if (lite) {
+        assert.equal(lite.metadata.pi.coverage.units, undefined);
+        assert.equal(lite.metadata.pi.coverage.unitsOmitted, 1);
+        const whole = JSON.parse(spawnSync(cli, ['read', lite.record_id, '--json'], { env, encoding: 'utf8' }).stdout).record;
+        assert.deepEqual(whole.metadata.pi.coverage.units, full.metadata.pi.coverage.units);
+      }
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('priorRecord reads the ONE chosen record in full (the listing omits coverage units), and reads nothing when no recap is compatible', async () => {
+  const state: any = { nativeSessionId: 'S', historyId: 'H', overrides: {} };
+  const row = (id: string, anchor: string | null) => ({ record_id: id, source_kind: 'pi', source_id: 'S', status: 'published', created_at: '2026-10-10T00:00:0' + id.slice(1) + '+00:00', metadata: { pi: { nativeSessionId: 'S', historyId: 'H', scope: 'current-context', coverage: { anchor, unitsOmitted: 3 } } } });
+  const full = (id: string) => ({ record_id: id, metadata: { pi: { coverage: { anchor: 'a2', units: [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }] } } } });
+  const reads: string[] = [];
+  const read = async (id: string) => { reads.push(id); return full(id); };
+  const got = await priorRecord([row('r1', 'a1'), row('r2', 'a2')], state, ['a1', 'a2'], 'current-context', read);
+  assert.deepEqual(reads, ['r2'], 'exactly one full read, of the record selected from the listing');
+  assert.equal(got.metadata.pi.coverage.units.length, 3, 'the caller gets the FULL record with units, not the units-less listing row');
+  reads.length = 0;
+  assert.equal(await priorRecord([row('r1', 'gone')], state, ['a1'], 'current-context', read), undefined);
+  assert.equal(await priorRecord([], state, ['a1'], 'current-context', read), undefined);
+  assert.deepEqual(reads, [], 'no compatible recap means no read');
+});
+
+test('recap/index.ts wires the prior through priorRecord with a real "read" call, not the listing row', () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
+  const uses = src.split('\n').filter((line) => line.includes('priorRecord(') && !line.includes('import '));
+  assert.equal(uses.length, 1, 'one call site');
+  assert.ok(uses[0].includes("call('read', recordId, '--json')).record"), 'the reader is the CLI read subcommand');
+  assert.ok(!src.includes('const prior = priorLite'), 'the units-less listing row is never used as the prior');
+  assert.ok(!src.includes('compatibleRecord(await recordsFor(own.nativeSessionId)'), 'no direct use of the listing row for the prior');
 });

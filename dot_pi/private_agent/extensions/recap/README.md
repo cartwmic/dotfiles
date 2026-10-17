@@ -204,6 +204,8 @@ so macOS `/var` temporary paths invoke the worker correctly. Runtime-only provid
 than falling back. The CLI controls deadline/retry/recursive reduction; every
 recursive call uses the same explicit backend configuration.
 
+Per-session reads (widget refresh, prior recap, full-snapshot reuse, session start) call `session-recap list` with `--source-kind pi --source-id <native session id>` so the CLI loads only that session's records (cartwmic/dotfiles#12). Only manual history browsing lists the whole store.
+
 Tests: `node --test dot_pi/private_agent/extensions/recap/helpers.test.ts dot_pi/private_agent/extensions/recap/backend.test.mjs`.
 The backend unit test is scripted at the SDK boundary. The separate `backend`
 proof section drives the installed SDK/helper and delivered CLI with a scripted
