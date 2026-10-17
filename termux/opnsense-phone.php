@@ -2,6 +2,7 @@
 // Run only via router-phone.py over root SSH on OPNsense. Input contains public
 // identifiers only. Never serialize config.xml or server/private client keys.
 require_once 'config.inc';
+require_once 'util.inc';
 
 function fail_phone(string $message): never {
     fwrite(STDERR, "phone peer: $message\n");
