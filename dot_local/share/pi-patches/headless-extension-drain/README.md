@@ -1,5 +1,8 @@
 # Headless extension compaction drain
 
+> **Layout:** `patch.mjs` selects `patch.pi-1.1.mjs` or `patch.pi-1.2.mjs` by installed Pi version (see ../README.md, "Pi version selection"). This README and its proofs describe the Pi 1.2.x payload (`patch.pi-1.2.mjs`); the 1.1.x payload is the unchanged pre-port revision.
+
+
 Pi 0.85.0's `--print` host awaits `session.prompt()` but does not own the
 fire-and-forget `ctx.compact()` or `pi.sendUserMessage()` work started by
 extensions. Auto-compact aborts the current run at an inter-turn threshold.

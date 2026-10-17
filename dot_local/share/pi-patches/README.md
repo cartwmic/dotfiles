@@ -11,6 +11,28 @@ instead of `npm:@marckrenn/pi-sub-bar`. `cursor-provider` is **retired** leftove
 restore against `~/.pi/agent/npm/node_modules/@marckrenn/pi-sub-*` if that tree
 still exists. It is not the delivery vehicle and must not splice.
 
+## Pi version selection
+
+Four patches (headless-extension-drain, prompt-start-race, settlement-abort, standing-reminder-origin) have anchors that differ
+between Pi minor series, so each directory holds one payload per series and `patch.mjs` is only an entry point:
+
+| File | Role |
+|---|---|
+| `patch.mjs` | Entry point the apply loop, the onchange hash and the proofs use. Calls `dispatchByPiVersion` in `pi-select.mjs`. |
+| `patch.pi-1.1.mjs` | Payload for Pi 1.1.x (the revisions before the 1.2.0 port: v1/v1/v2/v2). |
+| `patch.pi-1.2.mjs` | Payload for Pi 1.2.x (the 1.2.0 port: v2/v2/v3/v3). |
+
+Selection reads the installed Pi version (same locator and per-patch `PI_*_PACKAGE` override the payloads use) and runs the matching
+payload with the same arguments and environment; its exit code is the result. An installed Pi whose minor series has no payload
+(or whose version cannot be read) **fails with exit 1 and changes nothing**; it never falls back to another series. With no Pi
+installed the newest payload runs and keeps its own "not installed; skipped" / `--check` "cannot verify" behaviour.
+To support a new series, add `patch.pi-<major>.<minor>.mjs`, add it to the `variants` map in the patch's `patch.mjs`, add its
+hash line to `run_onchange_after_30_apply_pi_patches.sh.tmpl` and port that payload's proof. `tests/pi-patches/pi_select.test.mjs`
+checks the wiring (run: `node --test tests/pi-patches/pi_select.test.mjs`).
+
+Other patches are not version-aware: `btw-native-session` supports exactly Pi 1.1.0 and fails on any other version, and
+`response-visibility` fails its anchor check on Pi 1.2.0 (observed on a scratch install: unsupported or ambiguous anchor for `emitBeforeAgentStart` in `dist/core/extensions/runner.js`), so a full apply on Pi 1.2.x still exits 1 until those are ported.
+
 ## Overview
 
 Each subdirectory here is one patch. The apply script walks every
