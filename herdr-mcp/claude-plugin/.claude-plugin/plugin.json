@@ -1,0 +1,5 @@
+{
+  "name": "herdr-control",
+  "version": "0.1.0",
+  "description": "Full local Herdr control through the installed herdr-mcp bridge (7 tools, audited to ~/.local/state/herdr-mcp/audit.log)."
+}
