@@ -153,6 +153,12 @@ export function compatibleRecord(rows: any[], state: OwnedState, branchIds: stri
   return rows.filter(r => r.status === 'published' && (!scope || r.metadata?.pi?.scope === scope) && r.metadata?.pi?.nativeSessionId === state.nativeSessionId && r.metadata.pi.historyId === state.historyId && r.metadata.pi.coverage && (!r.metadata.pi.coverage.anchor || branchIds.includes(r.metadata.pi.coverage.anchor))).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.record_id.localeCompare(b.record_id)).at(-1);
 }
 
+/** Pick the prior recap from a listing that omits coverage units, then read that ONE record in full (units are needed for the unit diff). */
+export async function priorRecord(rows: any[], state: OwnedState, branchIds: string[], scope: string | undefined, read: (recordId: string) => Promise<any>) {
+  const lite = compatibleRecord(rows, state, branchIds, scope);
+  return lite ? await read(lite.record_id) : undefined;
+}
+
 // Widget excerpt source: keep the summary's own line breaks under markdown by
 // turning single newlines inside prose into hard breaks (code fences untouched).
 export function hardBreaks(summary: string): string {
