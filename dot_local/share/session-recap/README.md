@@ -48,6 +48,8 @@ session-recap annotate ID --namespace NAME --metadata-json '{"group":"id"}'
 List returns `{"records":[...]}`, ordered by creation time and ID; read and
 annotate return `{"record":{...}}`. Reads need no backend configuration.
 
+`list` reads one dated file at a time and applies `--source-kind`, `--source-id` and `--status` before it builds a record, so memory grows with the number of matches, not with the store. An unfiltered `list` still returns every record, so pass a filter whenever you need only one source. `read` and `annotate` open `records/<date>/<ID>.json` directly and scan the store only if no file has that name. Tracked in cartwmic/dotfiles#12; bounded-memory tests are in `test_reader_bounds.py`.
+
 Timestamp presentation defaults to the host's local timezone. Set
 `time_zone = "America/New_York"` in `config.local.toml`, or override it with
 `--time-zone local|UTC|IANA_NAME` on `create`, `list` or `read`. Invalid zones fail

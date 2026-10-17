@@ -325,15 +325,32 @@ def _read_members(root: Path, stdin_text: str) -> list[dict[str, str | None]]:
     return members
 
 
-def _find_record(root: Path, record_id: str) -> dict[str, Any] | None:
+def _record_paths(root: Path, record_id: str) -> list[Path]:
+    """Paths of dated files whose content has this record_id.
+
+    Records are saved as records/<date>/<record_id>.json, so look there first
+    and read only those files. If that finds nothing (a hand-placed or renamed
+    file), scan every file as before, one at a time, so behavior is unchanged.
+    """
     records_dir = root / "records"
     if not records_dir.exists():
-        return None
-    for path in records_dir.glob("*/*.json"):
-        value = _read_json(path)
-        if value.get("record_id") == record_id:
-            return value
-    return None
+        return []
+    if record_id and record_id not in (".", "..") and not any(c in record_id for c in "/\\\0"):
+        try:
+            named = [day / f"{record_id}.json" for day in sorted(records_dir.iterdir()) if day.is_dir()]
+            found = [path for path in named
+                     if path.is_file() and _read_json(path).get("record_id") == record_id]
+        except OSError:
+            found = []  # e.g. an over-long id: fall through to the compatible scan
+        if found:
+            return found
+    return [path for path in sorted(records_dir.glob("*/*.json"))
+            if _read_json(path).get("record_id") == record_id]
+
+
+def _find_record(root: Path, record_id: str) -> dict[str, Any] | None:
+    paths = _record_paths(root, record_id)
+    return _read_json(paths[0]) if paths else None
 
 
 def _validate_group_members(
@@ -485,10 +502,48 @@ def _metadata_object(text: str) -> dict[str, Any]:
     return value
 
 
-def _public_record(record: dict[str, Any]) -> dict[str, Any]:
+def _record_version(record: dict[str, Any]) -> Any:
     version = record.get("schema_version")
     if version not in (1, 2):
         raise RecapError(f"unsupported record schema: {version}")
+    return version
+
+
+def _pi_owner(record: dict[str, Any]) -> Any:
+    """The Pi session that owns a schema 2 record: metadata.pi.sessionId, else nativeSessionId.
+
+    Mirrors the Herdr adapter's owner rule (null falls back, like JavaScript's ??),
+    so a record saved under a different source_id is still found by its owner.
+    """
+    if record.get("schema_version") != 2:
+        return None
+    metadata = record.get("metadata")
+    pi = metadata.get("pi") if isinstance(metadata, dict) else None
+    if not isinstance(pi, dict):
+        return None
+    owner = pi.get("sessionId")
+    return owner if owner is not None else pi.get("nativeSessionId")
+
+
+def _without_coverage_units(public: dict[str, Any]) -> dict[str, Any]:
+    """Projection for list: same record minus metadata.pi.coverage.units, which dominates record size.
+
+    Only the nested dicts on the path are copied, the rest is shared. The units key is removed, not emptied,
+    so a caller that needs units fails loudly instead of treating coverage as empty. unitsOmitted keeps the count.
+    """
+    metadata = public.get("metadata")
+    pi = metadata.get("pi") if isinstance(metadata, dict) else None
+    coverage = pi.get("coverage") if isinstance(pi, dict) else None
+    if not isinstance(coverage, dict) or "units" not in coverage:
+        return public
+    units = coverage["units"]
+    slim = {key: value for key, value in coverage.items() if key != "units"}
+    slim["unitsOmitted"] = len(units) if isinstance(units, list) else True
+    return {**public, "metadata": {**metadata, "pi": {**pi, "coverage": slim}}}
+
+
+def _public_record(record: dict[str, Any]) -> dict[str, Any]:
+    version = _record_version(record)
     # Legacy records have no generic caller metadata contract. Only expose
     # known narrative/identity fields, never arbitrary historical payloads.
     fields = ("schema_version", "record_id", "source_kind", "source_id", "kind",
@@ -518,11 +573,20 @@ def _public_record(record: dict[str, Any]) -> dict[str, Any]:
 
 def _run_records(args: argparse.Namespace, root: Path) -> None:
     if args.subcommand == "list":
-        records = [_public_record(_read_json(path))
-                   for path in sorted((root / "records").glob("*/*.json"))]
-        records = [record for record in records if all(
-            getattr(args, field) is None or record.get(field) == getattr(args, field)
-            for field in ("source_kind", "source_id", "status"))]
+        # Read one file at a time and apply the filters to the raw record
+        # before building its public form, so only matching records stay in
+        # memory. Every file is still read and its schema still checked, so
+        # errors are the same as before. Public fields are copied unchanged,
+        # so a raw field equals the public one.
+        records = []
+        for path in sorted((root / "records").glob("*/*.json")):
+            raw = _read_json(path)
+            _record_version(raw)
+            if all(getattr(args, field) is None or raw.get(field) == getattr(args, field)
+                   for field in ("source_kind", "source_id", "status")) and (
+                    args.pi_owner is None or _pi_owner(raw) == args.pi_owner):
+                public = _public_record(raw)
+                records.append(_without_coverage_units(public) if args.omit_coverage_units else public)
         records.sort(key=lambda record: (record.get("created_at", ""), record["record_id"]))
         if args.json:
             print(_json_text({"records": records, "presentation": {"time_zone": args.zone[0], "records": {r["record_id"]: presentation(r, args.zone) for r in records}}}), end="")
@@ -531,8 +595,7 @@ def _run_records(args: argparse.Namespace, root: Path) -> None:
                 print(f"{presentation_time(record.get('created_at', ''), args.zone)} {record['record_id']} {record['status']} {record['source_kind']} {record['source_id']}")
         return
     with _store_lock(root):
-        paths = [path for path in (root / "records").glob("*/*.json")
-                 if _read_json(path).get("record_id") == args.record_id]
+        paths = _record_paths(root, args.record_id)
         if len(paths) != 1:
             raise RecapError(f"record not found or ambiguous: {args.record_id}")
         path = paths[0]
@@ -888,6 +951,8 @@ def build_parser() -> argparse.ArgumentParser:
     listing.add_argument("--json", action="store_true")
     for field in ("source-kind", "source-id", "status"):
         listing.add_argument("--" + field)
+    listing.add_argument("--omit-coverage-units", action="store_true", help="drop metadata.pi.coverage.units from each listed record (leaves anchor and unitsOmitted); read ID returns them in full")
+    listing.add_argument("--pi-owner", help="only schema 2 records whose metadata.pi.sessionId (else nativeSessionId) equals this id")
     reading = subparsers.add_parser("read", help="read a safe structured record")
     reading.add_argument("record_id")
     reading.add_argument("--json", action="store_true")
@@ -917,6 +982,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.subcommand == "config":
             print("enabled" if auto_publish_enabled(directory) else "disabled")
         elif args.subcommand in ("list", "read", "annotate"):
+            if getattr(args, "pi_owner", None) is not None:
+                args.pi_owner = _required_id(args.pi_owner, "--pi-owner")
             _run_records(args, root)
         elif args.subcommand == "create":
             if args.source_id is not None:
