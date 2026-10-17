@@ -17,6 +17,7 @@ login until you run the commands below.
 | `herdr_control_mcp_child.sh` | What tunnel-client launches. Removes `CONTROL_PLANE_*`, `OPENAI_*`, `ANTHROPIC_*`, `AWS_*`, `CLOUDFLARED*`, `TUNNEL_CLIENT_*`, `MCP_*`, `HEALTH_*` and admin-UI variables, then execs the bridge. |
 | `herdr-mcp-tunnel` | zsh CLI: install-client, configure, key, check, start, run, status, stop, agent. |
 | `install.sh` | Copies the three files above and this README to `~/.local/share/herdr-mcp/` and links `~/.local/bin/herdr-mcp-tunnel`. Idempotent. |
+| `claude-plugin/`, `build-claude-plugin.sh` | Optional Claude Desktop plugin (see Claude Desktop local plugin). Not installed. |
 | `tests/` | Temp-HOME tests (see Tests). Not installed. |
 
 Seven tools:
@@ -106,6 +107,28 @@ The observer polls `ps` every 0.25 s for the first 120 s after the client starts
 ```sh
 grep -E 'class=(codex|shell)|to=' ~/.local/state/herdr-mcp/children.log
 ```
+
+## Claude Desktop local plugin (opt-in)
+
+`claude-plugin/` and `build-claude-plugin.sh` give Claude the same 7 tools through a plugin that runs the installed bridge on this Mac: `/bin/sh ~/.local/share/herdr-mcp/herdr_control_mcp_child.sh`, with the same audit log. Like the tunnel, it is opt-in: `chezmoi apply` deploys none of it, and it needs no tunnel, LaunchAgent, credential or public network endpoint. It does not depend on the OpenAI tunnel being set up.
+
+Why a plugin: Anthropic documents that servers in `claude_desktop_config.json` are not available in Cowork or claude.ai, while a plugin's local MCP server runs on the host (not the Cowork VM) through Claude Desktop. Conversations on web or mobile can use it while Desktop is open. The verified path is this Desktop-backed plugin. Cloud-only sessions that are not backed by Desktop cannot reach it, and which surfaces get Desktop backing depends on the account's Claude version.
+
+Setup:
+
+1. `sh ~/.local/share/chezmoi/herdr-mcp/install.sh`
+2. `sh ~/.local/share/chezmoi/herdr-mcp/build-claude-plugin.sh` writes `~/Downloads/herdr-control-plugin.zip` (or the path given as its argument). It generates `.mcp.json` with this user's absolute wrapper path, so the repo holds none, and runs `claude plugin validate` when the `claude` CLI is on PATH.
+3. **owner:** in Claude Desktop, open Customize > Plugins and upload the zip. Uploading grants Claude persistent access to all 7 tools, including `herdr_request` and `herdr_cli` (commands and session control). Pane text, metadata and action results go to Anthropic. Claude's default per-tool prompts apply unless changed in Desktop.
+4. **owner:** call `herdr_status` from Desktop, then from the same conversation on mobile, and check `audit.log` for the matching `herdr_status` lines.
+
+Revoke by disabling or removing the plugin in Claude Desktop. That leaves the OpenAI tunnel unchanged. After editing the bridge, rerun `install.sh`; rebuild the plugin only if HOME changes.
+
+Verified 2026-10-16 (Claude Desktop 2.42304.0): after upload, the bridge ran on the host as a child of Claude Desktop, separate from the tunnel-client bridge. Two `herdr_status` calls returned `ok` in `audit.log`. The owner reported one from Desktop and one from the same conversation on Android. The log does not record the device.
+
+Limits:
+
+- Works only while the Mac is awake and Claude Desktop is open.
+- `audit.log` has no client or pid field, so it cannot tell Claude from ChatGPT calls, or Desktop from mobile. Separate them only by timing and the bridge's process parent.
 
 ## Known limits
 
