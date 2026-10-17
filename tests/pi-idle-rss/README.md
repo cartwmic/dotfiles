@@ -56,4 +56,4 @@ a watcher discards the sample and backs off if pressure rises.
 - Credential-backed extensions are smoke-checked only to "loads without error"; their own hermetic tests (for example
   `dot_pi/private_agent/extensions/web-search/codex.test.ts`) are the functional evidence when such an extension changes.
 
-Findings and figures are reported on cartwmic/dotfiles#14; this README is the authoritative description of the procedure.
+Results of the first investigation (Pi 1.2.0, 2026-10-17): [RESULTS-pi-1.2.0-2026-10-17.md](./RESULTS-pi-1.2.0-2026-10-17.md). A short summary is on cartwmic/dotfiles#14; this README is the authoritative description of the procedure.
