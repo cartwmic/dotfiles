@@ -77,15 +77,14 @@ def field(value):
 
 
 def build_message(raw):
-    """A one-line nudge. Tolerates any kind, extra members and an unreadable line."""
+    """A one-line nudge, or None when the line is not a JSON object. Tolerates any kind and extra members."""
     event = None
     try:
         event = json.loads(raw)
     except ValueError:
         pass
     if not isinstance(event, dict):
-        log_problem("event line is not a JSON object; sent a generic nudge")
-        return "agent-alert: a new event arrived. Check the inbox."
+        return None
     worker = field(event.get("worker")) or "unknown worker"
     kind = field(event.get("kind")) or "unknown kind"
     seq = event.get("seq")
@@ -141,7 +140,11 @@ def main():
     if session_id is None:
         log_problem("no session id configured (session_id in the doorbell config or AGENT_ALERT_DOORBELL_SESSION); no nudge sent")
         return 0
-    ring(build_message(raw), session_id, timeout)
+    message = build_message(raw)
+    if message is None:
+        log_problem("event line is not a JSON object; skipped, not rung")
+        return 0
+    ring(message, session_id, timeout)
     return 0
 
 

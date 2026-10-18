@@ -12,6 +12,9 @@ Run (from the repository root):
   The README's pane procedure (`tail -F` in a pane) and its next-sequence
   `herdr pane wait-output` command run as written, with the pane and without it,
   and with a hand-made partial line in the inbox.
+* The adapter READMEs' own steps run the same way: the Herdr adapter's install
+  block against a scratch Herdr, and the Claude doorbell's config JSON and
+  session-id shell block in a scratch HOME with a scripted `claude` on PATH.
 * The two Python examples are extracted from the fenced blocks of SPEC.md, shown
   to equal the files in examples/, and run as written, including a hand-written
   line of a kind they have never heard of.
@@ -25,9 +28,11 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
 from pathlib import Path
@@ -65,6 +70,13 @@ def fenced_blocks(markdown, language):
 
 def readme_blocks(section):
     return fenced_blocks(sections(README.read_text(encoding="utf-8"))[section], "sh")
+
+
+def adapter_readme_blocks(adapter, section, language):
+    """Fenced blocks of one section of an adapter README; list-item indentation is removed."""
+    text = (TOOL / "adapters" / adapter / "README.md").read_text(encoding="utf-8")
+    pattern = r"^[ ]*```" + re.escape(language) + r"\n(.*?)^[ ]*```$"
+    return [textwrap.dedent(block) for block in re.findall(pattern, sections(text)[section], re.S | re.M)]
 
 
 def heading_slugs(markdown):
@@ -283,6 +295,88 @@ class ReadmeProcedureTests(unittest.TestCase):
         self.assertEqual([e["seq"] for e in events], list(range(1, last + 2)))
         self.assertEqual(events[-1]["summary"], "intact after the fragment")
         self.assertEqual(self.server.inbox_lines()[-2], fragment)
+
+
+class HerdrAdapterReadmeTests(unittest.TestCase):
+    """adapters/herdr/README.md: its install steps, run as written, then real status reports."""
+
+    def setUp(self):
+        if not HERDR_REQUIRED:
+            self.skipTest("herdr is not installed")
+        self.server = DocsHerdr(self)
+        self.server.start()
+        self.assertEqual(self.server.version, "0.9.1")
+
+    def test_install_block_links_and_enables_the_plugin_and_blocked_and_idle_reports_reach_the_inbox(self):
+        install_block, = adapter_readme_blocks("herdr", "Install", "sh")
+        self.assertIn("herdr plugin link", install_block)
+        self.assertIn("herdr plugin enable agent-alert", install_block)
+        self.assertIn("herdr plugin log list", install_block)
+        # `set -e` makes every command of the block, not only the last, have to succeed
+        result = self.server.sh("set -e\n" + install_block)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        listed = self.server.herdr("plugin", "list").stdout
+        self.assertIn("agent-alert", listed)
+        self.assertIn("enabled", listed)
+        pane, _ = self.server.new_pane("adapter-readme")
+        self.server.report(pane, "working")
+        self.server.report(pane, "blocked")
+        self.server.report(pane, "idle")
+        self.server.settle()
+        events = [e for e in self.server.parsed_events() if e["worker"] == pane]
+        self.assertEqual(sorted(e["kind"] for e in events), ["blocked", "finished"])
+        # the README's own check after the first event: every run succeeded with empty stderr
+        shown = self.server.sh("herdr plugin log list")
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        for entry in self.server.api("plugin", "log", "list")["logs"]:
+            self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
+
+
+class DoorbellReadmeTests(unittest.TestCase):
+    """adapters/claude-doorbell/README.md: config JSON and session-id block as written, default paths."""
+
+    def setUp(self):
+        self.server = DocsHerdr(self)  # only for its scratch HOME holding the deployed tree; no server is started
+        self.fake_bin = self.server.root / "fakebin"
+        self.fake_bin.mkdir()
+        self.record = self.server.root / "claude-record.txt"
+        claude = self.fake_bin / "claude"
+        claude.write_text('#!/bin/sh\nfor argument in "$@"; do printf \'%s\\n\' "$argument" >> "$FAKE_CLAUDE_RECORD"; done\nexit 0\n')
+        claude.chmod(claude.stat().st_mode | stat.S_IXUSR)
+        self.server.env["PATH"] = "%s:%s" % (self.fake_bin, self.server.env["PATH"])
+        self.server.env["FAKE_CLAUDE_RECORD"] = str(self.record)
+
+    def test_config_json_and_session_id_block_as_written_ring_the_fake_claude_on_emit(self):
+        config_block, = adapter_readme_blocks("claude-doorbell", "Install", "json")
+        id_block, = adapter_readme_blocks("claude-doorbell", "Configuration", "sh")
+        self.assertIn("PASTE-THE-SESSION-ID-HERE", id_block)
+        home = self.server.home
+        # Install step 1: the JSON block is the core config file, written as printed
+        config_path = home / ".config" / "agent-alert" / "config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(config_block, encoding="utf-8")
+        sink = json.loads(config_block)["sinks"][0]
+        self.assertEqual(sink, "~/.local/share/agent-alert/adapters/claude-doorbell/doorbell.py")
+        self.assertTrue((Path(os.path.expanduser(sink.replace("~", str(home), 1)))).is_file())
+        # Install step 2 / Configuration: the shell block, with only the placeholder replaced
+        result = self.server.sh(id_block.replace("PASTE-THE-SESSION-ID-HERE", "fake-session-0000"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        doorbell_config = home / ".config" / "agent-alert" / "claude-doorbell.json"
+        self.assertEqual(json.loads(doorbell_config.read_text()), {"session_id": "fake-session-0000"})
+        self.assertEqual(stat.S_IMODE(doorbell_config.stat().st_mode), 0o600)
+        # the real core, default paths: the event is in the default inbox and claude was rung
+        self.server.emit("readme-worker", "finished", "All checks pass.")
+        [event] = self.server.parsed_events()
+        self.assertEqual((event["worker"], event["kind"]), ("readme-worker", "finished"))
+        self.assertTrue(self.server.inbox_path.is_file())
+        arguments = self.record.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(arguments), 4, arguments)
+        self.assertEqual(arguments[0], "-p")
+        self.assertIn("readme-worker", arguments[1])
+        self.assertIn("finished", arguments[1])
+        self.assertEqual(arguments[2:], ["--cloud", "fake-session-0000"])
+        log = home / ".local" / "state" / "agent-alert" / "agent-alert.log"
+        self.assertEqual(log.read_text() if log.exists() else "", "")
 
 
 class ExampleTests(unittest.TestCase):

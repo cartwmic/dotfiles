@@ -206,18 +206,28 @@ class DirectSinkTests(DoorbellTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("claude command not found", "".join(self.doorbell_log_lines()))
 
-    def test_line_that_is_not_a_json_object_gets_a_generic_nudge(self):
-        for text in ("not json at all\n", "[1,2]\n", "", '{"worker": 5, "kind": null}\n'):
+    def test_line_that_is_not_a_json_object_is_skipped_not_rung_and_logged(self):
+        for text in ("not json at all\n", "[1,2]\n", "", "42\n", '{"cut off'):
             with self.subTest(text=text):
                 self.record.unlink(missing_ok=True)
                 self.install_fake_claude("exit 0\n")
                 self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
                 result = self.run_doorbell(line=text)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                arguments = self.recorded_arguments()
-                self.assertEqual(arguments[0], "-p")
-                self.assertEqual(arguments[2:], ["--cloud", SCRATCH_SESSION_ID])
-                self.assertEqual(len(arguments), 4)
+                self.assertIsNone(self.recorded_arguments(), "claude must not be run for an unparseable line")
+                self.assertIn("event line is not a JSON object; skipped, not rung", "".join(self.doorbell_log_lines()))
+                self.scratch.log.unlink(missing_ok=True)
+
+    def test_json_object_with_unusable_members_is_still_rung(self):
+        self.install_fake_claude("exit 0\n")
+        self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
+        result = self.run_doorbell(line='{"worker": 5, "kind": null}\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        arguments = self.recorded_arguments()
+        self.assertEqual(arguments[0], "-p")
+        self.assertEqual(arguments[2:], ["--cloud", SCRATCH_SESSION_ID])
+        self.assertEqual(len(arguments), 4)
+        self.assertEqual(self.doorbell_log_lines(), [])
 
     def test_hostile_worker_text_stays_one_line_and_short(self):
         self.install_fake_claude("exit 0\n")

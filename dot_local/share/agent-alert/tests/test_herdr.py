@@ -720,6 +720,42 @@ class HerdrServerTests(unittest.TestCase):
         for entry in server.plugin_logs():
             self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
 
+    def test_error_ending_turn_and_error_mentioning_turn_are_both_finished_never_errored(self):
+        # adapters/herdr/README.md, "`errored` is never emitted": Herdr 0.9.1 has no error
+        # status and the adapter has no reliable indicator, so both turns are `finished`.
+        server = self.server
+        server.link_adapter()
+        failed_pane, _ = server.new_pane("ws-failed")
+        passing_pane, _ = server.new_pane("ws-passing")
+        failed_text = "Request failed: 429 rate limit exceeded. Stopping here, nothing was changed."
+        passing_text = "I fixed the error handling in the parser and all checks pass now."
+        started = {}
+        for pane in (failed_pane, passing_pane):
+            started[pane] = utc_now_string()
+            server.report(pane, "working")
+        server.show_text(failed_pane, "\u276f fix the build\n" + failed_text + "\n", "nothing was changed.")
+        server.show_text(passing_pane, "\u276f tidy the parser\n" + passing_text + "\n", "all checks pass now.")
+        for pane in (failed_pane, passing_pane):
+            server.report(pane, "idle")
+        server.settle()
+        for pane, text in ((failed_pane, failed_text), (passing_pane, passing_text)):
+            events = self.events_for(pane)
+            self.assertNotIn("errored", [e["kind"] for e in events], events)
+            finished = [e for e in events if e["kind"] == "finished" and e["time"] >= started[pane]]
+            self.assertTrue(finished, events)
+            self.assertEqual(finished[0]["summary"], text)
+        self.assertNotIn("errored", [e["kind"] for e in server.inbox_events()])
+        for entry in server.plugin_logs():
+            self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
+
+    def test_adapter_readme_says_it_has_no_reliable_error_indicator_and_emits_finished(self):
+        readme = (common.TOOL_SOURCE_DIR / "adapters" / "herdr" / "README.md").read_text(encoding="utf-8")
+        section = readme.split("## `errored` is never emitted", 1)[1].split("\n## ", 1)[0]
+        flat = " ".join(section.split())
+        self.assertIn("no error status", flat)
+        self.assertIn("no other reliable indicator", flat)
+        self.assertIn("every finished turn is a `finished` event", flat)
+
     def test_unwritable_inbox_leaves_server_and_second_plugin_running(self):
         server = self.server
         server.link_adapter()
