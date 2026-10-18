@@ -4,6 +4,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -245,6 +246,40 @@ class LoadedInventory(unittest.TestCase):
         s.err_count = 2
         s.buf = b""
         self.assertEqual(m.Session.load_errors(s), 2)
+
+
+class FinalAcceptance(unittest.TestCase):
+    FULL = m.parse_variant("full")
+    DROP = m.parse_variant("full-pkg:x")
+
+    def test_clean_sample_is_accepted(self):
+        self.assertEqual(m.accept_sample(True, None, False, 0, {"missing": []}, {"missing": []}, self.FULL), (True, None, None))
+
+    def test_error_arriving_after_the_readings_rejects(self):
+        # the cumulative count is read after every pump, so a late error is caught
+        self.assertEqual(m.accept_sample(True, None, False, 1, {"missing": []}, {"missing": []}, self.FULL)[:2], (False, "load errors seen (1)"))
+
+    def test_pressure_rising_during_final_readings_rejects(self):
+        self.assertEqual(m.accept_sample(True, None, True, 0, None, None, self.FULL)[:2], (False, "pressure"))
+
+    def test_missing_owner_rejects_everywhere_missing_command_only_for_full(self):
+        self.assertFalse(m.accept_sample(True, None, False, 0, {"missing": ["ext:a"]}, {"missing": []}, self.DROP)[0])
+        self.assertFalse(m.accept_sample(True, None, False, 0, {"missing": []}, {"missing": ["ext:a:cmd"]}, self.FULL)[0])
+        self.assertEqual(m.accept_sample(True, None, False, 0, {"missing": []}, {"missing": ["pkg:p:cmd"]}, self.DROP), (True, None, ["pkg:p:cmd"]))
+
+    def test_earlier_failure_reason_is_kept(self):
+        self.assertEqual(m.accept_sample(False, "unsettled", False, 0, None, None, self.FULL), (False, "unsettled", None))
+
+    def test_readings_and_smoke_stop_when_pressure_is_raised(self):
+        class FakeSession:
+            def measure(self):
+                return {"rss_pi_kb": 1, "owned": []}
+            def pump(self, seconds, abort=None):
+                return not (abort is not None and abort.is_set())
+        ev = threading.Event()
+        self.assertIsNotNone(m.median_reading(FakeSession(), n=1, gap=0, abort=ev))
+        ev.set()
+        self.assertIsNone(m.median_reading(FakeSession(), n=1, gap=0, abort=ev))
 
 
 class Gate(unittest.TestCase):
