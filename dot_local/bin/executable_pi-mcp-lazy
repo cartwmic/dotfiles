@@ -395,6 +395,14 @@ class Lazy:
         if method is not None and has_id:
             self.on_request(msg, line)
         elif method is not None:
+            if method == "notifications/cancelled":
+                # Pi cancels on abort and on timeout. A server may then send no reply at all (rea does not), so the
+                # cancelled request is no longer in flight: forget it here, or the idle clock would never run again.
+                rid = (msg.get("params") or {}).get("requestId")
+                if rid is not None:
+                    with self.state_lock:
+                        self.inflight.pop(idkey(rid), None)
+                        self.last = time.time()
             if method != "notifications/initialized":
                 c = self.child
                 if c and c.alive():

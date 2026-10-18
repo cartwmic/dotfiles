@@ -51,6 +51,31 @@ class LifecycleTests(unittest.TestCase):
         self.assertTrue(procs(self.e.marker))
         self.assertTrue(wait_until(lambda: procs(self.e.marker) == [], timeout=12))
 
+    def _send_hang_call(self, s):
+        s.n += 1
+        rid = s.n
+        s.send({"jsonrpc": "2.0", "id": rid, "method": "tools/call", "params": {"name": "hang", "arguments": {"seconds": 0.3}}})
+        return rid
+
+    def test_cancelled_call_with_no_reply_does_not_keep_the_server_up(self):
+        # Pi cancels on abort and timeout; a server such as rea then sends no reply at all
+        s = self.sess(2)
+        rid = self._send_hang_call(s)
+        self.assertTrue(wait_until(lambda: len(procs(self.e.marker)) == 2, timeout=10))
+        time.sleep(0.6)  # the server has finished its work and will never answer
+        s.send({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": rid, "reason": "Aborted"}})
+        self.assertTrue(wait_until(lambda: procs(self.e.marker) == [], timeout=15), "server kept up after a cancelled call: %r" % procs(self.e.marker))
+        self.assertEqual(text_of(s.call("echo", {"text": "again"})), "echo:again")
+        self.assertEqual(self.e.starts(), 2)
+
+    def test_uncancelled_call_with_no_reply_is_still_protected(self):
+        # without the cancel the request is still in flight: never stopped under it
+        s = self.sess(2)
+        self._send_hang_call(s)
+        self.assertTrue(wait_until(lambda: len(procs(self.e.marker)) == 2, timeout=10))
+        time.sleep(5)
+        self.assertEqual(len(procs(self.e.marker)), 2, "stopped under a request still in flight")
+
     def test_idle_clock_counts_from_last_activity(self):
         s = self.sess(3)
         s.call("echo", {"text": "a"})
