@@ -302,7 +302,7 @@ class FinalAcceptance(unittest.TestCase):
         w = type("W", (), {})()
         w.rose = threading.Event()
         with mock.patch.object(m, "wait_settled", return_value={"settled": True, "extra_wait_s": 0}), \
-             mock.patch.object(m, "median_reading", return_value={"rss_pi_kb": 1}), \
+             mock.patch.object(m, "median_reading", return_value={"rss_pi_kb": 1, "pi_readings_kb": [1, 1, 1]}), \
              mock.patch.object(m, "pressure_ok", return_value=True):
             out = m.aged_driver(FakeSession(), w, lambda *_: None, order=("turn",))
         self.assertEqual(out["loaded"]["loaded"]["missing"], ["ext:x"])
@@ -351,7 +351,7 @@ class AgedPressure(unittest.TestCase):
         if rose:
             w.rose.set()
         with mock.patch.object(m, "wait_settled", return_value={"settled": True, "extra_wait_s": 0}), \
-             mock.patch.object(m, "median_reading", side_effect=lambda sess, abort=None: None if (abort is not None and abort.is_set()) else {"rss_pi_kb": 1}), \
+             mock.patch.object(m, "median_reading", side_effect=lambda sess, abort=None: None if (abort is not None and abort.is_set()) else {"rss_pi_kb": 1, "pi_readings_kb": [1, 1, 1]}), \
              mock.patch.object(m, "pressure_ok", return_value=ok):
             out = m.aged_driver(s, w, lambda *_: None, order=("turn",))
         return out, s.sent
@@ -375,7 +375,7 @@ class AgedPressure(unittest.TestCase):
         w = type("W", (), {})()
         w.rose = threading.Event()
         with mock.patch.object(m, "wait_settled", return_value={"settled": True, "extra_wait_s": 0}), \
-             mock.patch.object(m, "median_reading", return_value={"rss_pi_kb": 1}), \
+             mock.patch.object(m, "median_reading", return_value={"rss_pi_kb": 1, "pi_readings_kb": [1, 1, 1]}), \
              mock.patch.object(m, "pressure_ok", return_value=True):
             return m.aged_driver(s, w, lambda *_: None, order=("reload",))
 
@@ -458,6 +458,17 @@ class Reporting(unittest.TestCase):
             self.assertEqual(m.scan_post(text), [])
         self.assertTrue(m.scan_post("token sk-" + "a" * 30))
         self.assertTrue(m.scan_post("see /Users/x/.pi/agent/sessions/abc.jsonl"))
+
+
+class ReadingStabilityTests(unittest.TestCase):
+    def test_a_compaction_still_finishing_is_not_stable(self):
+        self.assertFalse(m.readings_stable([3128656, 663744, 667568]))
+        self.assertFalse(m.readings_stable([2928416, 478176, 478224]))
+
+    def test_agreeing_readings_are_stable(self):
+        self.assertTrue(m.readings_stable([510208, 510208, 510208]))
+        self.assertTrue(m.readings_stable([3053648, 2938224, 2990048]))
+        self.assertFalse(m.readings_stable([]))
 
 
 class ExtensionGroupTests(unittest.TestCase):
