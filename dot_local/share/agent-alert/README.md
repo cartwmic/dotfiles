@@ -162,10 +162,29 @@ agent.
 
 ## Claude doorbell sink
 
-A sink that rings a Claude cloud session after each event, by running
-`claude -p "<message>" --cloud <session-id>`. The message is one line, for example
-`agent-alert: worker pane-3 finished (event 7). Check the inbox.` The ring is best
-effort and may be lost. The doorbell always exits 0.
+A sink that rings a Claude cloud session when an event arrives, by running
+`claude --safe-mode --no-session-persistence -p "<message>" --cloud <session-id>`.
+The message is one short line, for example `agent-alert: pane-3 finished #7`
+(about 30 bytes). The ring is best effort and may be lost. The doorbell always
+exits 0.
+
+What it costs and what it skips:
+
+- **Lean start.** `--cloud <id>` with `-p` posts one message into the existing cloud
+  session and exits; it starts no model turn of its own. `--safe-mode` also skips
+  CLAUDE.md, skills, plugins, hooks, MCP servers and auto-memory on the machine that
+  runs it, and keeps the login working (`--bare` would not: it never reads the login).
+  `--no-session-persistence` saves no local transcript. The command runs from the
+  directory of the operator log (`~/.local/state/agent-alert` by default), which holds
+  no CLAUDE.md.
+- **At most one ring per 30 seconds.** The first event rings; an event that arrives
+  inside the next 30 seconds is not rung (it is in the inbox, and the ring only says
+  "look"). The window starts at an attempt, so a failed ring also opens it. The time of
+  the last ring is kept in `claude-doorbell.last` beside the operator log
+  (`AGENT_ALERT_DOORBELL_STATE` overrides the path). Events that arrive in a burst
+  therefore produce one ring for the first; read the inbox (`tail`) for the rest.
+- **Cloud sessions only.** `--cloud` takes a cloud session id (`session_…` or `cse_…`)
+  or a claude.ai/code URL. It cannot ring a local terminal session.
 
 Configure it in two steps, taken by you; install never enables it and the session
 id is never stored in the repository.
@@ -178,7 +197,9 @@ id is never stored in the repository.
 
 2. Write the session id to the doorbell's own file, `~/.config/agent-alert/claude-doorbell.json`
    (the path in `AGENT_ALERT_DOORBELL_CONFIG` if set; the environment variable
-   `AGENT_ALERT_DOORBELL_SESSION` overrides the file):
+   `AGENT_ALERT_DOORBELL_SESSION` overrides the file). The file is read on every
+   ring, so you can change the session at any time with no reinstall and no Herdr
+   relaunch:
 
    ```sh
    mkdir -p ~/.config/agent-alert
@@ -198,6 +219,7 @@ changes `emit`'s exit status or loses the event.
 | `claude` not found | `claude command not found on PATH; no nudge sent` | Put `claude` on the `PATH` of the process that runs `emit`. |
 | `claude` exits nonzero | `claude exited with status N` | A missing or expired login is the usual cause: sign in to `claude` in a terminal. |
 | Timeout | `claude timed out after 4 seconds and was killed` | The call was slow or hung; the ring may not have been sent. |
+| Throttled | nothing is logged | An event inside the 30-second window is not rung on purpose. |
 | Cannot start `claude` | `cannot start claude: …` | Fix the error shown. |
 | Not an event | `event line is not a JSON object; skipped` | Nothing; the line is not rung. |
 
@@ -213,7 +235,7 @@ None of these corrupts the inbox. The operator log is
 |---|---|---|
 | **Lost ring**: the ring is not sent, not delivered, or the session does not wake | The event is in the inbox; the coordinator is not told | Read the inbox on a schedule (`tail`, or the wait above). Never treat the ring as the record. |
 | **Login expired or missing** (`claude` signed out) | The doorbell logs `claude exited with status N`; no ring | Sign in to `claude` in a terminal. |
-| **Herdr not relaunched**: you signed in, or installed a tool, after Herdr started | Hooks started by the running Herdr do not see the new login or `PATH`: `claude` or `python3` fails or is not found | Relaunch Herdr, then check `herdr plugin log list` and the operator log. |
+| **Herdr not relaunched**: you signed in, or installed a tool, after Herdr started, or Herdr was started from an SSH or other background session | Hooks started by the running Herdr keep that server's environment and session: they do not see a new login or `PATH`, and a login kept in the macOS Keychain may not be readable from a background session, so `claude` fails or is not found | Relaunch Herdr from Terminal.app (a GUI session), then check `herdr plugin log list` and the operator log. Relaunching ends the running panes (see Herdr's session-state docs); pick a safe moment. |
 | **Unwritable inbox** (bad path, unwritable directory, full disk) | `emit` exits nonzero and writes nothing; the event is **lost**; the hook logs `event was not delivered` and the core logs to the operator log. Nothing is retried; later events are delivered once the inbox works again | Fix the path or free the space. If you need the lost event, the source has to emit it again. |
 | **A hook that ran before presence was recorded**: Herdr's `pane.exited` or `pane.closed` hook runs before any other hook of that pane has shown the adapter that the pane had an agent | No `exited` event for that pane | Accepted. The inbox still has the pane's earlier events; check panes with `herdr pane list`. |
 | **A partial line** in the inbox (a media fault, or a disk filled by another process mid-write) | Readers skip it; the next `emit` ends it with a newline and writes on its own line | Nothing; [SPEC.md](./SPEC.md#writer-guarantees) explains. |

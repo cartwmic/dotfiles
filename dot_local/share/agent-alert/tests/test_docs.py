@@ -353,11 +353,11 @@ class DoorbellReadmeTests(unittest.TestCase):
         [event] = self.server.parsed_events()
         self.assertEqual((event["worker"], event["kind"]), ("readme-worker", "finished"))
         arguments = self.record.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(arguments), 4, arguments)
-        self.assertEqual(arguments[0], "-p")
-        self.assertIn("readme-worker", arguments[1])
-        self.assertIn("finished", arguments[1])
-        self.assertEqual(arguments[2:], ["--cloud", "fake-session-0000"])
+        self.assertEqual(len(arguments), 6, arguments)
+        self.assertEqual(arguments[:3], ["--safe-mode", "--no-session-persistence", "-p"])
+        self.assertIn("readme-worker", arguments[3])
+        self.assertIn("finished", arguments[3])
+        self.assertEqual(arguments[4:], ["--cloud", "fake-session-0000"])
         log = home / ".local" / "state" / "agent-alert" / "agent-alert.log"
         self.assertEqual(log.read_text() if log.exists() else "", "")
 

@@ -100,22 +100,31 @@ class DoorbellTestCase(unittest.TestCase):
         result.elapsed = time.monotonic() - started
         return result
 
+    def throttle_file(self):
+        self.scratch.log.parent.mkdir(parents=True, exist_ok=True)
+        return self.scratch.log.parent / "claude-doorbell.last"
+
+    def age_throttle(self, seconds=31):
+        """Make the last ring look `seconds` old, instead of sleeping."""
+        path = self.throttle_file()
+        path.write_text(repr(time.time() - seconds), encoding="utf-8")
+
     def doorbell_log_lines(self):
         return [line for line in self.scratch.log_text().splitlines() if " claude-doorbell: " in line]
 
-    def assert_rang_with(self, worker, kind, seq=None):
+    def assert_rang_with(self, worker, kind, seq=None, session=None):
         arguments = self.recorded_arguments()
         self.assertIsNotNone(arguments, "claude was not run")
-        self.assertEqual(len(arguments), 4, arguments)
-        self.assertEqual(arguments[0], "-p")
-        self.assertEqual(arguments[2], "--cloud")
-        self.assertEqual(arguments[3], SCRATCH_SESSION_ID)
-        message = arguments[1]
+        self.assertEqual(arguments[:3], ["--safe-mode", "--no-session-persistence", "-p"], arguments)
+        self.assertEqual(len(arguments), 6, arguments)
+        self.assertEqual(arguments[4], "--cloud")
+        self.assertEqual(arguments[5], session or SCRATCH_SESSION_ID)
+        message = arguments[3]
         self.assertIn(worker, message)
         self.assertIn(kind, message)
         if seq is not None:
-            self.assertIn(str(seq), message)
-        self.assertIn("inbox", message)
+            self.assertIn("#%s" % seq, message)
+        self.assertLessEqual(len(message.encode("utf-8")), 48, message)
         return message
 
 
@@ -141,6 +150,17 @@ class DirectSinkTests(DoorbellTestCase):
         result = self.run_doorbell(AGENT_ALERT_DOORBELL_SESSION=SCRATCH_SESSION_ID)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_rang_with("pane-3", "finished")
+
+    def test_session_id_is_read_fresh_on_every_ring(self):
+        self.install_fake_claude("exit 0\n")
+        self.write_doorbell_config(session_id="first-session")
+        self.assertEqual(self.run_doorbell().returncode, 0)
+        self.assert_rang_with("pane-3", "finished", session="first-session")
+        self.record.unlink()
+        self.age_throttle()
+        self.write_doorbell_config(session_id="second-session")  # changed between rings, no restart
+        self.assertEqual(self.run_doorbell().returncode, 0)
+        self.assert_rang_with("pane-3", "finished", session="second-session")
 
     def test_nonzero_exit_is_logged_with_cause_and_exits_zero(self):
         self.install_fake_claude("exit 1\n")
@@ -181,6 +201,77 @@ class DirectSinkTests(DoorbellTestCase):
         self.assertEqual(len(log), 1, log)
         self.assertIn("timed out after 4 seconds", log[0])
         self.assertTrue(self.process_gone(int(pid_file.read_text())), "claude survived the kill")
+
+    def test_message_is_short_and_names_worker_kind_and_seq(self):
+        self.install_fake_claude("exit 0\n")
+        self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
+        self.assertEqual(self.run_doorbell().returncode, 0)
+        self.assertEqual(self.assert_rang_with("pane-3", "finished", seq=7), "agent-alert: pane-3 finished #7")
+
+    def test_claude_runs_lean_from_a_neutral_directory_without_claude_md(self):
+        cwd_file = self.root / "claude-cwd.txt"
+        self.install_fake_claude('pwd -P >> "%s"\nexit 0\n' % cwd_file)
+        self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
+        self.assertEqual(self.run_doorbell().returncode, 0)
+        cwd = Path(cwd_file.read_text().strip())
+        self.assertEqual(cwd, self.scratch.log.parent.resolve())
+        for name in ("CLAUDE.md", "AGENTS.md", ".claude", ".mcp.json"):
+            self.assertFalse((cwd / name).exists(), name)
+
+    def test_second_event_inside_the_window_is_not_rung_and_nothing_is_logged(self):
+        self.install_fake_claude("exit 0\n")
+        self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
+        self.assertEqual(self.run_doorbell().returncode, 0)
+        first = self.recorded_arguments()
+        second = self.run_doorbell(line=UNKNOWN_KIND_LINE)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(self.recorded_arguments(), first, "a second ring was sent inside the window")
+        self.assertEqual(self.doorbell_log_lines(), [])
+
+    def test_event_after_the_window_rings_again(self):
+        self.install_fake_claude("exit 0\n")
+        self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
+        self.assertEqual(self.run_doorbell().returncode, 0)
+        self.record.unlink()
+        self.age_throttle(31)
+        self.assertEqual(self.run_doorbell(line=UNKNOWN_KIND_LINE).returncode, 0)
+        self.assert_rang_with("pane-4", "paused", seq=9)
+
+    def test_event_just_inside_the_window_is_still_held_back(self):
+        self.install_fake_claude("exit 0\n")
+        self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
+        self.age_throttle(20)
+        self.assertEqual(self.run_doorbell().returncode, 0)
+        self.assertIsNone(self.recorded_arguments())
+
+    def test_six_doorbells_started_together_ring_exactly_once(self):
+        self.install_fake_claude("exit 0\n")
+        self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
+        processes = [
+            subprocess.Popen([sys.executable, str(self.doorbell)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, env=self.env(), text=True)
+            for _ in range(6)
+        ]
+        for process in processes:
+            process.communicate(EVENT_LINE, timeout=30)
+            self.assertEqual(process.returncode, 0)
+        arguments = self.recorded_arguments()
+        self.assertEqual(len(arguments), 6, arguments)  # one claude call = six recorded arguments
+
+    def test_unreadable_throttle_state_still_rings(self):
+        self.install_fake_claude("exit 0\n")
+        self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
+        self.throttle_file().write_text("not a number", encoding="utf-8")
+        self.assertEqual(self.run_doorbell().returncode, 0)
+        self.assert_rang_with("pane-3", "finished", seq=7)
+
+    def test_a_ring_that_fails_still_opens_the_window(self):
+        self.install_fake_claude("exit 1\n")
+        self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
+        self.assertEqual(self.run_doorbell().returncode, 0)
+        self.assertEqual(len(self.doorbell_log_lines()), 1)
+        self.assertEqual(self.run_doorbell().returncode, 0)
+        self.assertEqual(len(self.doorbell_log_lines()), 1, "the second event rang inside the window")
 
     def test_hand_written_event_of_an_unknown_kind_is_rung(self):
         self.install_fake_claude("exit 0\n")
