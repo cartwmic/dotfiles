@@ -219,6 +219,8 @@ configured sink once, whatever the kind of the event:
 - A sink MUST tolerate an event whose `kind` it does not know and members it does
   not know, and SHOULD ring or fail soft rather than fail. A sink MUST NOT write
   to the inbox.
+- A sink MAY decide not to nudge for an event (the Claude doorbell, for example, rings
+  at most once per 30 seconds); the event is in the inbox either way.
 - A sink MUST NOT assume the nudge is the only way the coordinator learns of the
   event: nudges may be lost.
 
