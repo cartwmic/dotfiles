@@ -96,12 +96,18 @@ the number after your last `ack`). This blocks until the pane shows the complete
 event line with that sequence number, or fails after 30 seconds:
 
 ```sh
-herdr pane wait-output "$PANE" --source recent-unwrapped --timeout 30000 --regex '(?m)^\{"version":1,"seq":'"$NEXT"',.*\}$'
+herdr pane wait-output "$PANE" --source recent-unwrapped --timeout 30000 --regex '(?m)^\{"version":1,"seq":'"$NEXT"',.*[^\\](?:\\\\)*"\}\}?$'
 ```
 
-The expression starts at the fixed beginning of an event line and ends at its
-closing brace ([why](./SPEC.md#event-line-format-version-1)), so a partial line
-that merely contains the number does not satisfy it. Use `--source
+The expression starts at the fixed beginning of an event line and ends the way
+every complete line ends, with an unescaped `"` and then `}` or `}}`
+([why](./SPEC.md#event-line-format-version-1)), so a partial line that merely
+contains the number, or that was cut at a brace inside the summary, does not
+satisfy it. The wait is a wake-up, not a check: a regular expression cannot
+validate JSON. When it returns, parse the line and `ack` only events that parse
+([the example below](#reading-in-a-program) skips the rest); a torn line that
+happens to end like a complete one can still wake the wait, and the reader skips
+it. Use `--source
 recent-unwrapped`: a long event line wraps in a narrow pane, and the wrapped
 source gives it back as one line. A pane that is not running the follower never
 satisfies the wait; read the inbox with `tail` instead, which needs no pane. The

@@ -45,10 +45,23 @@ Example (wrapped here for reading; in the file it is one line):
 ```
 
 Because the prefix `{"version":1,"seq":` is fixed and `seq` is followed by `,`, a
-reader or a pane-watcher can match one complete event line by a regular expression
-that anchors the fixed prefix and the closing brace, for example
-`^\{"version":1,"seq":12,.*\}$` for the event with `seq` 12. A fragment that
-merely contains the number does not match it.
+reader or a pane-watcher can wake on one event line by a regular expression that
+anchors the fixed prefix and the way a complete line ends. The writer emits
+compact JSON with `summary` last, or `context` last when there is one, and every
+string closes with a `"`. So a complete line ends with an unescaped `"` and then
+`}` (no context) or `}}` (context). For example
+`^\{"version":1,"seq":12,.*[^\\](?:\\\\)*"\}\}?$` is the expression for the event
+with `seq` 12: after a non-backslash character, an even number of backslashes
+(an unescaped quote), the quote, then one or two closing braces. A fragment that
+merely contains the number, or that was cut at a brace inside the summary text,
+does not match it. The opening brace is escaped (`\{`) because Herdr's regex
+engine reads a bare `{` as the start of a repeat count.
+
+The expression cannot validate JSON, so a match is a wake-up and not proof of a
+complete event. The reader MUST parse the line and acknowledge only events that
+parse. A torn line that happens to end like a complete one (for example a
+`context` cut just before its last brace) can still wake a wait; the reader skips
+it because it does not parse.
 
 ### Kinds
 
