@@ -868,10 +868,12 @@ def aged_driver(s: Session, watcher: PressureWatcher, log, order=("turn", "compa
                 raise SampleRejected("no compaction entry recorded after /compact")
         if name == "after_reload":
             after_children = s.child_pids()
-            replaced = bool(before_children) and not (before_children & after_children) == before_children
-            stages[name]["reload_verified"] = True if replaced else (None if not before_children else False)
-            stages[name]["child_pids_replaced"] = len(before_children - after_children)
-            if stages[name]["reload_verified"] is False:
+            replaced = len(before_children - after_children)
+            stages[name]["child_pids_replaced"] = replaced
+            stages[name]["reload_verified"] = bool(before_children) and replaced > 0
+            if not before_children:
+                raise SampleRejected("/reload cannot be verified: no extension-owned child process existed before it")
+            if not stages[name]["reload_verified"]:
                 raise SampleRejected("/reload did not restart any extension-owned child process")
     return stages
 

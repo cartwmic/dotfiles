@@ -366,6 +366,32 @@ class AgedPressure(unittest.TestCase):
         self.assertIsNone(out)
         self.assertEqual(sent, [])  # no command is sent, and it returned immediately instead of waiting up to 15 minutes
 
+    def reload_driver(self, before, after):
+        calls = iter([before, after])
+        class S(self.Fake):
+            def child_pids(inner):
+                return next(calls, after)
+        s = S()
+        w = type("W", (), {})()
+        w.rose = threading.Event()
+        with mock.patch.object(m, "wait_settled", return_value={"settled": True, "extra_wait_s": 0}), \
+             mock.patch.object(m, "median_reading", return_value={"rss_pi_kb": 1}), \
+             mock.patch.object(m, "pressure_ok", return_value=True):
+            return m.aged_driver(s, w, lambda *_: None, order=("reload",))
+
+    def test_reload_with_no_child_before_is_rejected_not_nulled(self):
+        with self.assertRaises(m.SampleRejected):
+            self.reload_driver(set(), set())
+
+    def test_reload_that_replaces_no_child_is_rejected(self):
+        with self.assertRaises(m.SampleRejected):
+            self.reload_driver({1, 2}, {1, 2})
+
+    def test_reload_that_replaces_a_child_is_verified(self):
+        out = self.reload_driver({1, 2}, {1, 3})
+        self.assertIs(out["after_reload"]["reload_verified"], True)
+        self.assertEqual(out["after_reload"]["child_pids_replaced"], 1)
+
     def test_aged_driver_proceeds_at_normal_pressure(self):
         out, sent = self.run_driver()
         self.assertEqual(sent, ["continue"])
