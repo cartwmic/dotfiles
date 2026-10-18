@@ -162,6 +162,31 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(m.package_dir(a, "npm:@s/p"), a / "npm/node_modules/@s/p")
 
 
+class LoadedInventory(unittest.TestCase):
+    HEAD = "x [Extensions] @s/pi-stamp:dist, auto-compact, catalog-overlay-nudge, herdr-agent-state.ts, pi-cursor/src, sub-bar Warning: something"
+
+    def test_header_parse(self):
+        self.assertEqual(m.header_extensions(self.HEAD), ["@s/pi-stamp:dist", "auto-compact", "catalog-overlay-nudge", "herdr-agent-state.ts", "pi-cursor/src", "sub-bar"])
+        self.assertEqual(m.header_extensions("no header"), [])
+
+    def test_commandless_owner_missing_is_detected(self):
+        with tempfile.TemporaryDirectory() as d:
+            agent = Path(d)
+            (agent / "extensions/auto-compact").mkdir(parents=True)
+            (agent / "extensions/catalog-overlay-nudge").mkdir()
+            (agent / "extensions/herdr-agent-state.ts").write_text("x")
+            (agent / "extensions/README.md").write_text("x")
+            pk = agent / "git/github.com/o/pi-sub"
+            pk.mkdir(parents=True)
+            (pk / "package.json").write_text(json.dumps({"pi": {"extensions": ["./packages/sub-bar/index.ts"]}}))
+            (agent / "settings.json").write_text(json.dumps({"packages": ["https://github.com/o/pi-sub", "npm:@s/pi-stamp"]}))
+            owners = m.expected_loaded(agent)
+            self.assertNotIn("ext:README.md", owners)
+            self.assertEqual(m.missing_loaded(m.header_extensions(self.HEAD), owners), [])
+            tokens = [x for x in m.header_extensions(self.HEAD) if x != "catalog-overlay-nudge"]
+            self.assertEqual(m.missing_loaded(tokens, owners), ["ext:catalog-overlay-nudge"])
+
+
 class Gate(unittest.TestCase):
     def test_gate_returns_at_normal_pressure(self):
         with mock.patch.object(m, "pressure_level", return_value=1), mock.patch.object(m, "free_percent", return_value=60):
