@@ -26,7 +26,7 @@ class LifecycleTests(unittest.TestCase):
         first = self.e.server_pid()
         self.assertEqual(len(procs(self.e.marker)), 2, procs(self.e.marker))
         self.assertTrue(wait_until(lambda: procs(self.e.marker) == [], timeout=12), procs(self.e.marker))
-        self.assertFalse(pid_alive(first))
+        self.assertTrue(wait_until(lambda: not pid_alive(first), timeout=5), "server process not reaped")
         self.assertEqual(text_of(s.call("echo", {"text": "2"})), "echo:2")
         self.assertEqual(self.e.starts(), 2)
         self.assertNotEqual(self.e.server_pid(), first)

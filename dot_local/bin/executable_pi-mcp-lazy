@@ -59,29 +59,52 @@ def idkey(i):
     return json.dumps(i, sort_keys=True)
 
 
-def read_copy(path):
+def parse_copy(f, path):
     """A saved copy is two lines: a small JSON object (key, handshake, tool-list hash) and the tool list as raw JSON.
-    The tool list is kept as bytes and served verbatim; it is never parsed in a session (rea's is several MB)."""
-    try:
-        raw = Path(path).read_bytes()
-    except OSError:
-        return None
-    head, _, rest = raw.partition(b"\n")
-    del raw
+    Only the first line is read into memory; the tool list is located by offsets and streamed to Pi from the file
+    (rea's is about 2 MB, and three stand-ins run in every session)."""
+    head = f.readline()
+    start = f.tell()
+    f.seek(0, 2)
+    size = f.tell()
+    f.seek(max(start, size - 2))
+    tail = f.read()
+    end = size - (len(tail) - len(tail.rstrip(b"\n")))
+    f.seek(start)
+    first = f.read(1)
     try:
         meta = json.loads(head)
     except ValueError:
         return None
-    tools_raw = rest.strip()
-    del rest
-    if not (isinstance(meta, dict) and tools_raw.startswith(b"[") and tools_raw.endswith(b"]")):
+    if not (isinstance(meta, dict) and first == b"[" and tail.rstrip()[-1:] == b"]" and end > start):
         return None
     i = meta.get("initialize")
     if not (isinstance(i, dict) and isinstance(i.get("protocolVersion"), str)
             and isinstance(i.get("capabilities"), dict) and isinstance(i.get("serverInfo"), dict)):
         return None
-    meta["tools_raw"] = tools_raw
+    meta.update(path=str(path), start=start, end=end)
     return meta
+
+
+def read_copy(path):
+    try:
+        with open(path, "rb") as f:
+            return parse_copy(f, path)
+    except OSError:
+        return None
+
+
+def copy_tools(meta):
+    """The tool list of a saved copy as bytes (only when it has to be compared or re-saved)."""
+    try:
+        with open(meta["path"], "rb") as f:
+            m = parse_copy(f, meta["path"])
+            if m is None:
+                return b"[]"
+            f.seek(m["start"])
+            return f.read(m["end"] - m["start"])
+    except OSError:
+        return b"[]"
 
 
 def write_copy(name, key, init, tools_raw, tools_sha):
@@ -99,7 +122,7 @@ def write_copy(name, key, init, tools_raw, tools_sha):
 
 
 def canon_tools(tools_raw):
-    tools = json.loads(tools_raw)
+    tools = json.loads(tools_raw or b"[]")
     return json.dumps(sorted(tools, key=lambda t: str(t.get("name"))), sort_keys=True)
 
 
@@ -295,6 +318,37 @@ class Lazy:
         except (BrokenPipeError, OSError, ValueError):
             self.closing = True
 
+    def send_tools(self, rid):
+        """Answer tools/list by streaming the tool list from the saved copy in chunks: it is never held in memory."""
+        prefix = b'{"jsonrpc":"2.0","id":' + json.dumps(rid).encode() + b',"result":{"tools":'
+        try:
+            f = open(self.cache["path"], "rb") if self.cache else None
+        except OSError:
+            f = None
+        try:
+            meta = parse_copy(f, self.cache["path"]) if f else None
+            with self.out_lock:
+                out = sys.stdout.buffer
+                out.write(prefix)
+                if meta is None:
+                    out.write(b"[]")
+                else:
+                    f.seek(meta["start"])
+                    left = meta["end"] - meta["start"]
+                    while left > 0:
+                        chunk = f.read(min(65536, left))
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        left -= len(chunk)
+                out.write(b"}}\n")
+                out.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            self.closing = True
+        finally:
+            if f:
+                f.close()
+
     def reply(self, rid, result):
         self.to_client({"jsonrpc": "2.0", "id": rid, "result": result})
 
@@ -367,8 +421,7 @@ class Lazy:
         if m == "tools/list":
             if self.cache is None:
                 self.cache = self.load()
-            tools_raw = (self.cache or {}).get("tools_raw", b"[]")
-            return self.to_client(b'{"jsonrpc":"2.0","id":' + json.dumps(rid).encode() + b',"result":{"tools":' + tools_raw + b"}}")
+            return self.send_tools(rid)
         with self.lock:
             try:
                 changed = self.ensure_child()
@@ -426,7 +479,7 @@ class Lazy:
         hash the list is unchanged and nothing is parsed (tools_raw is None). Otherwise the list is parsed once, compared
         and re-serialised compactly."""
         if (init.get("capabilities") or {}).get("tools") is None:
-            return b"[]", None, bool(self.cache and canon_tools(self.cache["tools_raw"]) != "[]")
+            return b"[]", None, bool(self.cache and canon_tools(copy_tools(self.cache)) != "[]")
         child.send({"jsonrpc": "2.0", "id": "pml-tools", "method": "tools/list", "params": {}})
         raw = child.wait_internal_raw("pml-tools", START_TIMEOUT)
         sha = hashlib.sha256(raw).hexdigest()
@@ -450,21 +503,21 @@ class Lazy:
             cursor = (page.get("result") or {}).get("nextCursor")
         tools_raw = json.dumps(tools, separators=(",", ":")).encode()
         del msg, res, tools
-        changed = self.cache is None or canon_tools(self.cache["tools_raw"]) != canon_tools(tools_raw)
+        changed = self.cache is None or canon_tools(copy_tools(self.cache)) != canon_tools(tools_raw)
         return tools_raw, (sha if pages == 1 else None), changed
 
     def record(self, init, tools_raw, sha, changed):
         """Save the real handshake and tool list; True when the list differs from what Pi was served."""
         served = self.cache
-        if tools_raw is None:
-            tools_raw = served["tools_raw"]
         if (self.refresh_mode or changed or served is None or served.get("key") != self.key
                 or served.get("initialize") != init or served.get("tools_sha") != sha):
+            if tools_raw is None:  # list unchanged: carry it over into the new copy
+                tools_raw = copy_tools(served)
             try:
                 write_copy(self.name, self.key, init, tools_raw, sha)
+                self.cache = read_copy(state_dir() / (self.name + ".json")) or served
             except OSError as e:
                 log("%s: could not save copy: %s" % (self.name, e))
-        self.cache = {"key": self.key, "initialize": init, "tools_raw": tools_raw, "tools_sha": sha}
         return changed and not self.refresh_mode
 
     # ---- messages from the real server
@@ -578,7 +631,7 @@ def refresh(name, cmd):
         return 1
     finally:
         lz.shutdown()
-    count = len(json.loads((lz.cache or {}).get("tools_raw", b"[]")))
+    count = len(json.loads(copy_tools(lz.cache))) if lz.cache else 0
     log("%s: saved %d tools to %s" % (name, count, state_dir() / (name + ".json")))
     return 0
 

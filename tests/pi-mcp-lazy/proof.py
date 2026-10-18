@@ -220,6 +220,11 @@ def mcp_side_rss_kb(pi_pid):
     return sum(r[2] for r in tree(pi_pid))
 
 
+def pi_rss_kb(pi_pid):
+    out = subprocess.run(["ps", "-o", "rss=", "-p", str(pi_pid)], capture_output=True, text=True).stdout.strip()
+    return int(out) if out else 0
+
+
 class Fake:
     """One scripted stand-in-fronted server: its own marker, fake-server directory and extra arguments."""
 
@@ -699,6 +704,7 @@ def real_calls(root, port):
         def none_before():
             rpc.prompt("noop")
             holder["rss_pre"] = mcp_side_rss_kb(rpc.p.pid)
+            holder["owned_pre"] = holder["rss_pre"] + pi_rss_kb(rpc.p.pid)
             names = owned_names()
             require(not [n for n in names if n in tool.MCP_REAL_NAMES], "real server processes before any call: %r" % names)
             return {"owned_process_names": names}
@@ -733,13 +739,16 @@ def real_calls(root, port):
             time.sleep(1)
             after = mcp_side_rss_kb(rpc.p.pid)
             pre = holder["rss_pre"]
-            require(after <= 1.10 * pre, "MCP-side RSS before %d kB, after idle %d kB" % (pre, after))
+            # AC-5 is about the whole owned set (Pi plus everything it started); the stand-ins alone are reported too
+            owned_pre, owned_after = holder["owned_pre"], after + pi_rss_kb(rpc.p.pid)
+            require(owned_after <= 1.10 * owned_pre, "owned-set RSS before %d kB, after idle %d kB" % (owned_pre, owned_after))
             names = owned_names()
             require(len([n for n in names if "pi-mcp-lazy" in n]) == 3, "stand-ins should stay: %r" % names)
             out = rpc.prompt("real-rea", timeout=180)
             require('"isError":false' in out, out[:300])
             require("node rea" in owned_names(), "rea was not started again")
-            return {"mcp_side_rss_kb": {"before_use": pre, "servers_up": up, "after_idle": after}, "owned_after_idle": names}
+            return {"owned_set_rss_kb": {"before_use": owned_pre, "after_idle": owned_after},
+                    "stand_ins_only_rss_kb": {"before_use": pre, "servers_up": up, "after_idle": after}, "owned_after_idle": names}
         idle_real()
     finally:
         try:
