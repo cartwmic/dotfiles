@@ -155,7 +155,39 @@ fi
 (umask 077 && mkdir -p "$cache_dir")
 
 value=""
-if value="$(op read "$ref" --no-newline 2>/dev/null)" && [ -n "$value" ]; then
+# Pure service-account mode. With OP_SERVICE_ACCOUNT_TOKEN set, `op` should
+# never touch the 1Password desktop app, but on macOS it still discovers the app
+# through $HOME (~/Library/Group Containers/...1password, ~/.config/op) and can
+# block forever on desktop-app integration when the app is locked or the caller
+# isn't in the GUI session (seen 2026-10-18 after a Herdr relaunch: every `op`
+# call hung with no network activity, while the same token under an empty HOME
+# answered instantly). Run `op` under a dedicated empty HOME so the service
+# account is the only auth path. Without a token, fall back to the normal HOME.
+op_sa() {
+	if [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+		sa_home="${OP_SA_HOME:-$HOME/.cache/agent-harness/op-sa-home}"
+		(umask 077 && mkdir -p "$sa_home")
+		HOME="$sa_home" XDG_CONFIG_HOME="$sa_home/.config" exec op "$@"
+	else
+		exec op "$@"
+	fi
+}
+
+# Never let a wedged `op` hang the caller: kill it after a bound and fall
+# through to the stale-cache path below.
+op_timeout_seconds="${OP_READ_TIMEOUT_SECONDS:-20}"
+run_bounded() {
+	"$@" &
+	cmd_pid=$!
+	( sleep "$op_timeout_seconds"; kill -9 "$cmd_pid" 2>/dev/null ) >/dev/null 2>&1 &
+	watchdog_pid=$!
+	cmd_rc=0; wait "$cmd_pid" || cmd_rc=$?
+	kill "$watchdog_pid" 2>/dev/null || true
+	wait "$watchdog_pid" 2>/dev/null || true
+	return "$cmd_rc"
+}
+
+if value="$(run_bounded op_sa read "$ref" --no-newline 2>/dev/null)" && [ -n "$value" ]; then
 	tmp_file="$cache_file.$$"
 	trap 'rm -f "$tmp_file"' EXIT
 	(umask 077 && printf '%s' "$value" >"$tmp_file")
