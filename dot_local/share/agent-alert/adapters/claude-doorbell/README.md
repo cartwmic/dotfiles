@@ -14,9 +14,10 @@ coordinator should not rely on the ring alone.
 The message is one line, for example
 `agent-alert: worker pane-3 finished (event 7). Check the inbox.` It names the
 worker and kind but carries no summary. An event of a kind this version does not
-know, or with extra members, is rung the same way; a line that is not a JSON
-object gets the generic message `agent-alert: a new event arrived. Check the
-inbox.`
+know, or with extra members, is rung the same way. A line that is not a JSON
+object is skipped, as every reader of the inbox skips an unparseable line: no
+ring, one line in the operator log (`event line is not a JSON object; skipped,
+not rung`).
 
 The doorbell always exits 0. Every failure is appended to the operator log
 (`AGENT_ALERT_LOG`, default `~/.local/state/agent-alert/agent-alert.log`) as
