@@ -1186,9 +1186,49 @@ def attribution_variants() -> list[str]:
         names.append(f"full-pkg:{package_key(src)}")
     mcp = json.loads((REAL_AGENT / "mcp.json").read_text()).get("mcpServers", {}) if (REAL_AGENT / "mcp.json").exists() else {}
     names += [f"full-mcp:{n}" for n in mcp]
-    exts = sorted(p.name for p in (REAL_AGENT / "extensions").iterdir())
-    names += ["full-ext:*"] + [f"full-ext:{'+'.join(exts[: len(exts)//2])}", f"full-ext:{'+'.join(exts[len(exts)//2:])}"]
+    ext_dir = REAL_AGENT / "extensions"
+    exts = sorted(p.name for p in ext_dir.iterdir())
+    a, b = split_extension_groups(exts, extension_imports(ext_dir))
+    names += ["full-ext:*", f"full-ext:{'+'.join(a)}", f"full-ext:{'+'.join(b)}"]
     return names
+
+
+def extension_imports(ext_dir: Path) -> dict:
+    """Which extensions import files from a sibling extension (relative ../<name>/...)."""
+    rx = re.compile(r"""(?:from|import\()\s*["']\.\./([A-Za-z0-9_.-]+)/""")
+    out: dict = {}
+    for p in sorted(ext_dir.rglob("*")):
+        if p.suffix not in (".ts", ".mjs", ".js") or ".test." in p.name or "node_modules" in p.parts or not p.is_file():
+            continue
+        owner = p.relative_to(ext_dir).parts[0]
+        for m in rx.finditer(p.read_text(errors="ignore")):
+            if m.group(1) != owner:
+                out.setdefault(owner, set()).add(m.group(1))
+    return out
+
+
+def split_extension_groups(exts: list, imports: dict) -> tuple:
+    """Two groups of about equal size such that no extension imports from the other group,
+    so removing one group never breaks the survivors. Extensions joined by an import stay together."""
+    parent = {e: e for e in exts}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for owner, deps in imports.items():
+        for d in deps:
+            if owner in parent and d in parent:
+                parent[find(owner)] = find(d)
+    comps: dict = {}
+    for e in sorted(exts):
+        comps.setdefault(find(e), []).append(e)
+    a: list = []
+    b: list = []
+    for c in sorted(comps.values(), key=lambda c: (-len(c), c[0])):
+        (a if len(a) <= len(b) else b).extend(c)
+    return sorted(a), sorted(b)
 
 
 def main(argv=None) -> int:

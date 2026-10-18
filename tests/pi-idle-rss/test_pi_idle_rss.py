@@ -460,5 +460,25 @@ class Reporting(unittest.TestCase):
         self.assertTrue(m.scan_post("see /Users/x/.pi/agent/sessions/abc.jsonl"))
 
 
+class ExtensionGroupTests(unittest.TestCase):
+    def test_groups_never_split_an_import(self):
+        exts = ["a", "b", "c", "d", "e", "f"]
+        imports = {"b": {"e"}, "f": {"a"}}
+        g1, g2 = m.split_extension_groups(exts, imports)
+        self.assertEqual(sorted(g1 + g2), exts)
+        for owner, deps in imports.items():
+            for d in deps:
+                self.assertEqual(owner in g1, d in g1)
+        self.assertTrue(g1 and g2)
+
+    def test_extension_imports_reads_sibling_imports_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "x").mkdir(); (root / "y").mkdir()
+            (root / "x" / "index.ts").write_text('import { h } from "../y/helpers.ts";\nimport z from "./local.ts";\n')
+            (root / "y" / "helpers.ts").write_text("export const h = 1;\n")
+            self.assertEqual(m.extension_imports(root), {"x": {"y"}})
+
+
 if __name__ == "__main__":
     unittest.main()
