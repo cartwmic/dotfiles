@@ -12,9 +12,12 @@ RFC 2119.
   name.
 - **Source**: any program that turns some system's events into `agent-alert emit`
   calls.
-- **Sink**: any program that receives one event on its standard input and nudges
-  a coordinator to read the inbox. A sink may be lossy; the inbox is the source
-  of truth.
+- **Sink**: the one program the core may be configured to run after an append. It
+  receives the event on its standard input and nudges a coordinator to read the
+  inbox. A sink may be lossy; the inbox is the source of truth.
+
+An event is only a nudge: it carries no message text. A coordinator that wants to
+know more reads the worker itself.
 
 ## Inbox file
 
@@ -33,35 +36,36 @@ whitespace between tokens:
 | `version` | integer | The format version. `1` for this specification. |
 | `seq` | integer | Sequence number. Starts at 1 and rises by exactly 1 for each line `emit` writes into that inbox. |
 | `time` | string | UTC ISO-8601 time taken when `emit` runs, `YYYY-MM-DDTHH:MM:SS.mmmZ`. |
-| `worker` | string | Worker id chosen by the source: not blank, at most 128 characters, no control or line-break characters. |
+| `worker` | string | Worker id chosen by the source. Any string that is not blank. |
 | `kind` | string | One of the kinds below. |
-| `summary` | string | One line, at most 200 characters, masked (see [Summary](#summary)). May be empty. |
-| `context` | object | Optional. At most 8 members; each key is at most 32 characters and each value is a string of at most 100 characters, masked like the summary. Omitted when the source gave none. |
+| `context` | object | Optional. An object whose values are all strings. Omitted when the source gave none. |
+
+`emit` stores `worker` and `context` as given and writes no message member.
 
 Example (wrapped here for reading; in the file it is one line):
 
 ```
-{"version":1,"seq":7,"time":"2026-10-17T12:30:05.123Z","worker":"pane-3","kind":"finished","summary":"…Should I delete the staging branch now?","context":{"workspace":"main"}}
+{"version":1,"seq":7,"time":"2026-10-17T12:30:05.123Z","worker":"pane-3","kind":"finished","context":{"workspace":"main"}}
 ```
 
-Because the prefix `{"version":1,"seq":` is fixed and `seq` is followed by `,`, a
-reader or a pane-watcher can wake on one event line by a regular expression that
-anchors the fixed prefix and the way a complete line ends. The writer emits
-compact JSON with `summary` last, or `context` last when there is one, and every
-string closes with a `"`. So a complete line ends with an unescaped `"` and then
-`}` (no context) or `}}` (context). For example
-`^\{"version":1,"seq":12,.*[^\\](?:\\\\)*"\}\}?$` is the expression for the event
-with `seq` 12: after a non-backslash character, an even number of backslashes
-(an unescaped quote), the quote, then one or two closing braces. A fragment that
-merely contains the number, or that was cut at a brace inside the summary text,
-does not match it. The opening brace is escaped (`\{`) because Herdr's regex
-engine reads a bare `{` as the start of a repeat count.
+### Waiting for one event line
 
-The expression cannot validate JSON, so a match is a wake-up and not proof of a
-complete event. The reader MUST parse the line and acknowledge only events that
-parse. A torn line that happens to end like a complete one (for example a
-`context` cut just before its last brace) can still wake a wait; the reader skips
-it because it does not parse.
+Because the prefix `{"version":1,"seq":` is fixed and `seq` is followed by `,`, a
+pane-watcher can wake on one event line with a regular expression that anchors the
+fixed prefix and the closing brace. The writer emits compact JSON on one line, and
+every complete line ends with `}`. For the event with `seq` 12 the expression is
+
+```
+^\{"version":1,"seq":12,.*\}$
+```
+
+The opening brace is escaped (`\{`) because Herdr's regex engine reads a bare `{`
+as the start of a repeat count. Herdr matches the expression against one line of
+the pane at a time.
+
+A match is a wake-up and not proof of a complete event: the expression cannot
+validate JSON, and a torn line that happens to end in `}` can match. The reader
+MUST parse the line and acknowledge only events that parse.
 
 ### Kinds
 
@@ -69,10 +73,10 @@ Format version 1 defines exactly these kinds:
 
 | Kind | Meaning |
 |---|---|
-| `finished` | The agent's turn ended normally. This includes a turn that ends by asking a question or reporting a gate; the question or gate is carried in the summary. |
+| `finished` | The agent's turn ended normally. This includes a turn that ends by asking a question or reporting a gate; the event does not carry the question. |
 | `blocked` | The agent is waiting on an approval or input before it can continue. |
 | `errored` | The agent's turn ended on a failure such as an API error or a rate limit, and the agent did not complete its work. |
-| `exited` | The agent's process or pane is gone. |
+| `exited` | The agent's process or session is gone. |
 
 `emit` accepts only a kind defined by the format version it implements. It
 rejects any other kind with exit status 2 and appends nothing.
@@ -89,22 +93,16 @@ rejects any other kind with exit status 2 and appends nothing.
   next `seq` is one more than the `seq` of the last line of the inbox that
   parses (1 for a new inbox), read under that lock, so sequence numbers are
   consecutive and continue across process runs.
-- Before writing, `emit` checks the free space available on the inbox's
-  filesystem. If it is below the length of the line plus `free_space_margin_bytes`
-  (default 1048576), `emit` exits 3 and writes nothing, so an ordinary full disk
-  cannot leave a partial line.
 - If the file is non-empty and does not end in a newline (a fragment), `emit`
   first writes one newline, which ends the fragment as a line of its own, and
   then its event. The new event therefore always stands alone on a line.
-- If `emit` cannot write (an unwritable inbox, too little space, a failed
-  write), it exits nonzero with a message on standard error and a line in the
+- If `emit` cannot write (an unwritable inbox, a failed write), it exits nonzero with a message on standard error and a line in the
   operator log. It does not undo anything it already wrote.
 
 The guarantee is exactly this: every line a successful `emit` wrote is a
 complete, newline-terminated JSON object. A line that does not parse can still
-appear, because a media fault, or another process filling the disk between the
-free-space check and the write, can leave a fragment. That is why readers MUST
-skip such lines.
+appear, because a media fault or a full disk can leave a fragment. That is why
+readers MUST skip such lines.
 
 ### Reader rules
 
@@ -117,64 +115,23 @@ skip such lines.
 - A reader MUST ignore members it does not know.
 - A reader MUST NOT write to the inbox.
 
-### Compatibility rules
+### Unknown kinds
 
-The format version is the integer `version`. Within one version:
-
-- Adding a kind is a backward-compatible change and does not change `version`.
-  This is why every reader MUST accept an unknown kind.
-- Adding an optional member to an event, or a key to `context`, is
-  backward-compatible and does not change `version`.
-- Removing or renaming a member, changing the type or meaning of a member, or
-  changing how `seq` is assigned is a breaking change and MUST increase
-  `version`.
-
-A reader that sees a `version` higher than it knows SHOULD still read the members
-it knows and MUST still skip, not fail on, a line it cannot use. `emit` writes
-only the version it implements and accepts only the kinds that version defines.
-
-## Summary
-
-The core applies these rules to the `summary` of every `emit`, whatever the
-source, and the masking rules to every value in `context`:
-
-1. **Mask** token-shaped strings with `***`: API keys of the shapes `sk-…`,
-   `ghp_…` (and `gho_`, `ghu_`, `ghs_`, `ghr_`), `github_pat_…`, `AKIA…` and
-   `xox[abprs]-…`; `Bearer` tokens; and the value in `name=value`, `name: value`
-   or `"name": "value"` where the name ends in `token`, `secret`, `password`,
-   `passwd`, `api_key`/`api-key`/`apikey`, or is `key` (alone or after `_`, `.` or
-   `-`). A quoted value is masked up to its closing quote, and a backslash-escaped
-   quote (`\"`, `\'`) inside it does not end the value. Masking covers common
-   shapes only and is not a guarantee against every secret format. Known
-   shapes it does not mask: JSON escaped inside a JSON string (`{\"password\":…}`),
-   a quoted value with no unescaped closing quote (it is masked up to a later
-   plain quote if there is one, otherwise only up to the first whitespace),
-   `=>` assignments, camelCase names such as `secretKey`, names with a suffix
-   (`token_value`, `password_hash`), a name followed by a value with no `:` or
-   `=`, `Authorization` schemes other than `Bearer`, URL userinfo, XML elements,
-   curly quotes, and the key name of a `--context` pair.
-2. **Collapse** every run of whitespace, newlines and control characters into one
-   space and trim.
-3. **Keep the end**: if more than 200 characters remain, keep the last 199
-   characters and put `…` (U+2026) in front. The end is kept because a question
-   or request for a decision usually closes a message.
-
-Masking runs before the cut, so a secret that the cut would split cannot survive.
-`emit` also refuses a `worker` or a context key that is itself token-shaped (exit
-2), so no token-shaped secret is stored anywhere in the inbox.
+Adding a kind does not change `version`, which is why every reader MUST accept an
+unknown kind (see the reader rules). `emit` accepts only the kinds defined above.
 
 ## Commands
 
 ```
-agent-alert emit --worker ID --kind KIND [--summary TEXT|-] [--context KEY=VALUE]... [--context-json OBJECT]
+agent-alert emit --worker ID --kind KIND [--context KEY=VALUE]... [--context-json OBJECT]
 agent-alert tail [--since N]
 agent-alert ack N
 ```
 
 `emit`
 : Validates the input, builds the line, appends it as described above, then runs
-  the configured sinks. `--summary -` reads the text from standard input.
-  `--context` may be repeated; `--context-json` takes a JSON object whose values
+  the configured sink. There is no option for message text. `--context` may be
+  repeated; `--context-json` takes a JSON object whose values
   are all strings (a number, nested object or array value is rejected). Writes
   nothing to standard output.
 
@@ -197,16 +154,17 @@ agent-alert ack N
 
 | Code | Meaning |
 |---|---|
-| 0 | Success. For `emit`, the event is in the inbox, whatever its sinks did. |
-| 2 | Bad input or bad configuration: unknown kind, blank or secret-shaped worker, a non-string or oversized context, an unknown command or option, an unreadable or invalid config file, `ack` beyond the latest sequence number. Nothing is written. |
-| 3 | The inbox, its lock or its acknowledgment file could not be used: unwritable path, unreadable file, failed write, or free space below the margin. |
+| 0 | Success. For `emit`, the event is in the inbox, whatever its sink did. |
+| 2 | Bad input or bad configuration: unknown kind, blank worker, a context that is not an object of strings, an unknown command or option (including `--summary`), an unreadable or invalid config file, an unusable `sink_timeout_seconds`, `ack` beyond the latest sequence number. Nothing is written. |
+| 3 | The inbox, its lock or its acknowledgment file could not be used: unwritable path, unreadable file, or failed write. |
 
 ## Configuration
 
 The core reads settings in this order: an environment variable, then the JSON
 config file, then the default. A missing config file means all defaults. A config
-file that is not a JSON object, or has a value of the wrong type, makes every
-command exit 2. Unknown keys are ignored. A leading `~` in a path is expanded.
+file that is not a JSON object, or has a `sink_timeout_seconds` that is not a
+number above 0, makes every command exit 2. Unknown keys are ignored. A leading
+`~` in a path, and in the first element of `sink`, is expanded.
 
 Config file: `~/.config/agent-alert/config.json`, or the path in
 `AGENT_ALERT_CONFIG`.
@@ -215,13 +173,11 @@ Config file: `~/.config/agent-alert/config.json`, or the path in
 |---|---|---|---|
 | `inbox_path` | string | `~/.local/share/coordinator/inbox.jsonl` | `AGENT_ALERT_INBOX` |
 | `log_path` | string | `~/.local/state/agent-alert/agent-alert.log` | `AGENT_ALERT_LOG` |
-| `sinks` | list | `[]` | none |
+| `sink` | list of strings | none (no sink) | `AGENT_ALERT_SINK`, a JSON list of strings; when set it replaces the `sink` key |
 | `sink_timeout_seconds` | number above 0 | `5` | none |
-| `free_space_margin_bytes` | integer, 0 or more | `1048576` | none |
 
-Each `sinks` entry is either a string (the path of a program, run with no
-arguments) or a non-empty list of strings (a program followed by its arguments).
-The inbox directory is created on demand. Files beside the inbox are
+`sink` is the one sink command: a program followed by its arguments. The inbox
+directory is created on demand. Files beside the inbox are
 `<inbox>.lock` and `<inbox>.ack`.
 
 Settings of a source or sink (for example a sink's own credentials or target)
@@ -235,7 +191,7 @@ An append-only text file at `log_path`, one line per problem, in the form
 <UTC time> <component>: <cause>
 ```
 
-The core writes its own failures (`core: emit failed: …`) and each sink failure
+The core writes its own failures (`core: emit failed: …`) and a failure of the sink
 (`core: sink <program>: exited with status 3`, `…: cannot start: …`,
 `…: timed out after 5 seconds and was killed`). A sink or source MAY append its
 own lines with another component name. Logging is best effort and never changes
@@ -243,7 +199,7 @@ an exit status.
 
 ## Sink contract
 
-After a successful append, and after releasing the lock, the core invokes **each**
+After a successful append, and after releasing the lock, the core runs the one
 configured sink once, whatever the kind of the event:
 
 - The sink is started as its own process (its own process group) with the **event
@@ -252,13 +208,12 @@ configured sink once, whatever the kind of the event:
   discarded; a sink reports problems through the operator log.
 - The environment is the core's environment plus `AGENT_ALERT_INBOX`,
   `AGENT_ALERT_LOG` and `AGENT_ALERT_CONFIG`, set to the resolved paths.
-- All sinks are started at once and share one deadline of `sink_timeout_seconds`
-  counted from just before the sinks are started. A sink still running at the deadline
-  is killed with its process group. `emit` therefore returns within the
-  deadline plus a small constant, and sooner when every sink has finished.
+- The core waits for the sink for at most `sink_timeout_seconds`. A sink still
+  running then is killed with its process group. `emit` therefore returns within
+  that bound plus a small constant, and sooner when the sink has finished.
 - The sink's exit status is ignored for `emit`'s exit status. A sink that exits
   nonzero, cannot be started (missing or not executable) or is killed at the
-  deadline is logged with that cause; the event stays in the inbox, and `emit`
+  bound is logged with that cause; the event stays in the inbox, and `emit`
   still exits 0. A sink never fails, delays beyond the bound, or undoes an
   `emit`.
 - A sink MUST tolerate an event whose `kind` it does not know and members it does
@@ -276,9 +231,6 @@ the inbox:
   numbers; `emit` does that.
 - A source promises only that it calls `emit` for every completion (or other
   event) it is told about. Keeping the event is the core's guarantee.
-- A source passes the raw text it wants summarized as `--summary` (or
-  `--summary -` with the text on standard input); the core masks and shortens it,
-  so a source MUST NOT rely on its own masking and need not do any.
 - A source chooses a stable `worker` id for the thing it describes (for example a
   pane id) and MAY pass a small `context` of short strings.
 - A source MUST treat a nonzero exit from `emit` as "this event was not
@@ -300,32 +252,32 @@ use the Python standard library only.
 
 ### A source (30 lines or fewer)
 
-A source needs only to run `agent-alert emit` for each thing it is told about,
-and to report, without stopping, an `emit` that failed. This one turns lines of
-the form `WORKER STATUS free text` on standard input into events.
+A source needs only to run `agent-alert emit` with a worker and a kind for each
+thing it is told about, and to report, without stopping, an `emit` that failed.
+This one stands in for an adapter to another multiplexer: it turns lines of the
+form `PANE STATE` on standard input into events and uses nothing from Herdr.
 
 ```python
 #!/usr/bin/env python3
-"""Worked source: read "WORKER STATUS free text" lines on stdin, emit one event each.
+"""Worked source: stands in for an adapter to some other multiplexer.
 
-STATUS is done, waiting, failed or gone. The core masks and shortens the text.
+Reads "PANE STATE" lines on stdin (STATE is idle, waiting, failed or closed) and
+emits one event per line: a worker and a kind, no message text.
 """
 import subprocess
 import sys
 from pathlib import Path
 
 CORE = Path(__file__).resolve().parent.parent / "core" / "agent-alert"  # found relative to this file
-KINDS = {"done": "finished", "waiting": "blocked", "failed": "errored", "gone": "exited"}
+KINDS = {"idle": "finished", "waiting": "blocked", "failed": "errored", "closed": "exited"}
 
 for line in sys.stdin:
-    parts = line.split(None, 2)
-    if len(parts) < 2 or parts[1] not in KINDS:
+    parts = line.split()
+    if len(parts) != 2 or parts[1] not in KINDS:
         print("skipped: " + line.strip(), file=sys.stderr)
         continue
-    command = [str(CORE), "emit", "--worker", parts[0], "--kind", KINDS[parts[1]],
-               "--context", "source=example", "--summary", "-"]
-    result = subprocess.run(command, input=parts[2] if len(parts) > 2 else "",
-                            text=True, capture_output=True)
+    result = subprocess.run([str(CORE), "emit", "--worker", parts[0], "--kind", KINDS[parts[1]]],
+                            capture_output=True, text=True)
     if result.returncode != 0:  # the event was not recorded: say so, keep going
         print("not recorded (%d): %s" % (result.returncode, result.stderr.strip()), file=sys.stderr)
 ```
@@ -333,14 +285,15 @@ for line in sys.stdin:
 Try it, with the tree installed at `~/.local/share/agent-alert`:
 
 ```
-printf 'job-1 done Build finished. Deploy now?\n' | python3 ~/.local/share/agent-alert/examples/source-example.py
+printf 'pane-1 idle\n' | python3 ~/.local/share/agent-alert/examples/source-example.py
 ```
 
 ### A consumer
 
 A consumer reads the output of `agent-alert tail`. It skips a line that is not an
 event, accepts a `kind` it does not know, and ignores members it does not know,
-as the [reader rules](#reader-rules) require.
+as the [reader rules](#reader-rules) require. Events carry no message text, so it
+prints the sequence number, worker and kind.
 
 ```python
 #!/usr/bin/env python3
@@ -363,7 +316,7 @@ for line in sys.stdin:
         continue  # a line that is not an event: skip it and keep reading
     kind = event.get("kind")
     note = "" if str(kind) in KNOWN_KINDS else " (kind unknown to this reader, shown anyway)"
-    print("%d %s %s%s: %s" % (seq, event.get("worker"), kind, note, event.get("summary", "")))
+    print("%d %s %s%s" % (seq, event.get("worker"), kind, note))
 ```
 
 Try it:
