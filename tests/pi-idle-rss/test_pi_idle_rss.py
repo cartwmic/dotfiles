@@ -282,6 +282,47 @@ class FinalAcceptance(unittest.TestCase):
         self.assertIsNone(m.median_reading(FakeSession(), n=1, gap=0, abort=ev))
 
 
+class AgedPressure(unittest.TestCase):
+    class Fake:
+        def __init__(self):
+            self.sent = []
+            self.session_file = None
+            self.backend_requests = lambda: 0
+        def send(self, text):
+            self.sent.append(text)
+        def pump(self, seconds, abort=None):
+            return not (abort is not None and abort.is_set())
+        def child_pids(self):
+            return set()
+
+    def run_driver(self, rose=False, ok=True):
+        s = self.Fake()
+        w = type("W", (), {})()
+        w.rose = threading.Event()
+        if rose:
+            w.rose.set()
+        with mock.patch.object(m, "wait_settled", return_value={"settled": True, "extra_wait_s": 0}), \
+             mock.patch.object(m, "median_reading", side_effect=lambda sess, abort=None: None if (abort is not None and abort.is_set()) else {"rss_pi_kb": 1}), \
+             mock.patch.object(m, "pressure_ok", return_value=ok):
+            out = m.aged_driver(s, w, lambda *_: None, order=("turn",))
+        return out, s.sent
+
+    def test_aged_driver_aborts_on_raised_watcher_and_sends_nothing(self):
+        out, sent = self.run_driver(rose=True)
+        self.assertIsNone(out)
+        self.assertEqual(sent, [])
+
+    def test_aged_driver_does_not_wait_for_pressure_with_the_session_alive(self):
+        out, sent = self.run_driver(ok=False)
+        self.assertIsNone(out)
+        self.assertEqual(sent, [])  # no command is sent, and it returned immediately instead of waiting up to 15 minutes
+
+    def test_aged_driver_proceeds_at_normal_pressure(self):
+        out, sent = self.run_driver()
+        self.assertEqual(sent, ["continue"])
+        self.assertIn("after_turn", out)
+
+
 class Gate(unittest.TestCase):
     def test_gate_returns_at_normal_pressure(self):
         with mock.patch.object(m, "pressure_level", return_value=1), mock.patch.object(m, "free_percent", return_value=60):
