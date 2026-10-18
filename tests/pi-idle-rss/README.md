@@ -42,6 +42,14 @@ Several local extensions read `~/.pi/agent/auth.json` through the home directory
 5. **process ownership by a per-sample environment marker** (not process group, not name): recap and some helpers start
    detached workers. Teardown signals only marker-owned processes, then verifies none remain; otherwise the run halts.
 
+## What a sample must satisfy to count
+
+- **Settled:** owned RSS varies by 3% or less over three 10 s readings; an unsettled sample is discarded and retried (three attempts, then the run stops).
+- **Dependencies accounted for:** the preflight scans the local extensions for home-relative paths and credential references and fails the variant if any is unaccounted for (a credential helper that resolves to a real binary, a credential-looking file, a missing recap CLI). `security`, `op` and `ssh-agent` are stubbed.
+- **Registered commands (first sample of each variant):** the editor's command menu is the record of what the loaded extensions registered. The tool types one representative command per loaded extension or package (every literal command for `full`) and requires the menu to list it; commands that call themselves internal are skipped; nothing is executed. This shows each kept extension loaded and registered, not that its commands work. The recap CLI is additionally exercised for real. Credential-backed behaviour is not exercised.
+- **Aged stages:** `/compact` must leave a compaction entry in the session file; `/reload` must replace at least one extension-owned child process (MCP servers restart). Otherwise the sample is discarded. Runs with a different stage set carry a distinct tag (for example `aged-large[reload]`) and are never pooled with the full sequence.
+- **Report:** rows with fewer than three samples are flagged; the numeric unexplained remainder is (full - core) minus the parts whose removal saves more than the full configuration's noise floor.
+
 Memory pressure is checked before each launch and before each heavy in-session step (load, `/compact`, `/reload`);
 a watcher discards the sample and backs off if pressure rises.
 
