@@ -27,7 +27,9 @@ Lazy MCP variants (the pi-mcp-lazy stand-in, see dot_local/share/pi-mcp-lazy/REA
 the real Pi rendering step (apply_harness_config.sh) in a scratch home, so the three local servers are wrapped and their state
 copies are built by the refresh mode; `full-lazy-nostate` is the same without the state copies (the shipped seed is served);
 `full-lazy-failedrefresh` is rendered with a refresh that fails (wrapped, no state copy). The report adds a table of MCP server
-processes per accepted sample (stand-ins counted apart from real servers and their npm wrappers).
+processes per accepted sample (stand-ins counted apart from real servers and their npm wrappers). Results of
+the first before/after run (#14, lazy stand-ins) are in dot_local/share/pi-mcp-lazy/README.md. In a throwaway home the
+system Python has no bytecode cache, so a stand-in reads about 4 MB larger there than in a real home.
 
 A sample is **settled** when owned RSS varies by 3% or less over three 10 s readings (after a minimum settle time).
 Reported figures are medians of three readings per session, then per-variant median, min and max over sessions.
