@@ -739,7 +739,7 @@ class Session:
     def child_pids(self) -> set[int]:
         return {r["pid"] for r in owned_set(ps_table(), self.marker, self.proc.pid) if r["pid"] != self.proc.pid}
 
-    def smoke_commands(self, everything: bool = False) -> dict:
+    def smoke_commands(self, everything: bool = False, abort: threading.Event | None = None) -> dict | None:
         """Type an expected command into the editor and require the command menu to list it, then clear the line.
         The menu lists exactly what the loaded extensions registered; nothing is executed. By default one representative
         command per loaded owner (extension or package); everything=True checks every literal command."""
@@ -748,7 +748,8 @@ class Session:
             for n in (names if everything else names[:1]):
                 self.buf = b""
                 os.write(self.master, ("/" + n).encode())
-                self.pump(2.5)
+                if not self.pump(2.5, abort):
+                    return None
                 checked += 1
                 if not menu_has(self.screen_text(), n):
                     missing.append(f"{owner}:{n}")
@@ -800,11 +801,12 @@ def wait_settled(session: Session, abort: threading.Event, window: int = 3, gap:
     return {"settled": False, "extra_wait_s": round(time.time() - start)}
 
 
-def median_reading(session: Session, n: int = 3, gap: float = 5.0) -> dict:
+def median_reading(session: Session, n: int = 3, gap: float = 5.0, abort: threading.Event | None = None) -> dict | None:
     readings = []
     for _ in range(n):
         readings.append(session.measure())
-        session.pump(gap)
+        if not session.pump(gap, abort):
+            return None
     out = {}
     for k in readings[0]:
         if k == "owned":
@@ -861,6 +863,24 @@ def aged_driver(s: Session, watcher: PressureWatcher, log, order=("turn", "compa
     return stages
 
 
+def accept_sample(ok: bool, reason: str | None, pressure_rose: bool, load_errors: int, loaded: dict | None, smoke: dict | None, v: dict) -> tuple:
+    """Final decision, taken after every reading and smoke step: (accepted, reason, variant_effects)."""
+    if not ok:
+        return False, reason or "pressure", None
+    if pressure_rose:
+        return False, "pressure", None
+    if load_errors:
+        return False, f"load errors seen ({load_errors})", None
+    if loaded and loaded.get("missing"):
+        return False, "smoke: loaded-extension check failed missing=" + ",".join(loaded["missing"]), None
+    if smoke and smoke.get("missing"):
+        if v["drop_pkgs"] or v["drop_ext"] or v["drop_mcp"] or v["no_mcp"] or v["patches"]:
+            # removing a part can legitimately stop a dependent part from registering a command: a measured effect
+            return True, None, list(smoke["missing"])
+        return False, "smoke: registered commands missing " + ",".join(smoke["missing"]), None
+    return True, None, None
+
+
 def run_sample(v, root, store, backend, node_dir, settle, out_file, tag="fresh", session_file=None, driver=None, log=print, max_settle=300.0, smoke=False):
     for attempt in range(3):
         reason = None
@@ -894,31 +914,28 @@ def run_sample(v, root, store, backend, node_dir, settle, out_file, tag="fresh",
                 except SampleRejected as e:
                     stages, reason = None, f"rejected: {e}"
                 ok = stages is not None
+            if ok and driver is None:
+                reading = median_reading(s, abort=watcher.rose)
+                if reading is None:
+                    ok = False
+                else:
+                    record.update(reading)
             if ok and smoke and driver is None:
-                record.update(s.measure())
-                record.update(median_reading(s))
-                record["smoke"] = s.smoke_commands(everything=(v["name"] == "full"))
-                record["loaded"] = s.loaded_check()
-                if record["loaded"]["missing"] or record["loaded"]["load_error_markers"]:
-                    ok, reason = False, "smoke: loaded-extension check failed missing=" + ",".join(record["loaded"]["missing"]) + f" load_errors={record['loaded']['load_error_markers']}"
-                elif record["smoke"]["missing"]:
-                    if v["drop_pkgs"] or v["drop_ext"] or v["drop_mcp"] or v["no_mcp"] or v["patches"]:
-                        # removing a part can legitimately stop a dependent part from registering a command: a measured effect
-                        record["variant_effects"] = record["smoke"]["missing"]
-                    else:
-                        ok, reason = False, "smoke: registered commands missing " + ",".join(record["smoke"]["missing"])
-            if ok and s.load_errors():
-                ok, reason = False, f"load errors seen ({s.load_errors()})"
-                record["load_error_markers"] = s.load_errors()
+                sm = s.smoke_commands(everything=(v["name"] == "full"), abort=watcher.rose)
+                if sm is None:
+                    ok = False
+                else:
+                    record["smoke"] = sm
+                    record["loaded"] = s.loaded_check()
+            # one final decision after every pump: nothing that arrives later can be missed
+            ok, reason, effects = accept_sample(ok, reason, watcher.rose.is_set(), s.load_errors(), record.get("loaded"), record.get("smoke"), v)
+            record["load_error_markers"] = s.load_errors()
+            if effects:
+                record["variant_effects"] = effects
             if not ok:
                 record["aborted"] = reason or "pressure"
                 log(f"[sample] discarding sample {v['name']} (attempt {attempt}): {record['aborted']}")
             else:
-                if not smoke:
-                    record.update(s.measure() if driver is None else {})
-                    if driver is None:
-                        record.update(median_reading(s))
-                record["load_error_markers"] = s.load_errors()
                 record["backend_requests"] = backend.requests
         finally:
             watcher.stop()
