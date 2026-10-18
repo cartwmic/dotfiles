@@ -557,6 +557,54 @@ def expected_commands(agent: Path, v: dict) -> dict:
 MENU_NAME_WIDTH = 30  # the menu truncates long command names
 
 
+HEADER_RE = re.compile(r"\[Extensions\]\s+((?:[@\w./:+-]+,\s*)*[@\w./:+-]+)")
+
+
+def header_extensions(head_text: str) -> list[str]:
+    """Entries of Pi's startup '[Extensions]' header (every loaded extension, with or without commands)."""
+    mt = HEADER_RE.search(head_text)
+    return [x.strip() for x in mt.group(1).split(",")] if mt else []
+
+
+def expected_loaded(agent: Path) -> dict:
+    """Owners that must appear in the startup header: local extension dirs/files, and each configured package."""
+    owners: dict[str, set[str]] = {}
+    ext = agent / "extensions"
+    if ext.exists():
+        for e in sorted(ext.iterdir()):
+            if e.is_dir() or e.suffix in (".ts", ".js", ".mjs"):
+                owners[f"ext:{e.name}"] = {e.name}
+    try:
+        packages = json.loads((agent / "settings.json").read_text()).get("packages", [])
+    except (OSError, ValueError):
+        packages = []
+    for entry in packages:
+        src = entry if isinstance(entry, str) else entry.get("source", "")
+        d = package_dir(agent, entry)
+        key = package_key(src)
+        cands = {key}
+        try:
+            entries = json.loads((d / "package.json").read_text()).get("pi", {}).get("extensions", []) if d else []
+        except (OSError, ValueError):
+            entries = []
+        for rel in entries or []:
+            parts = Path(rel).parts
+            cands.add(Path(rel).name)
+            if len(parts) >= 2:
+                cands.add(parts[-2])
+        owners[f"pkg:{key}"] = cands
+    return owners
+
+
+def missing_loaded(tokens: list[str], owners: dict) -> list[str]:
+    """Owners with no matching header entry (an entry matches by equality or by containing the owner's candidate name)."""
+    missing = []
+    for owner, cands in owners.items():
+        if not any(t == c or c in t for t in tokens for c in cands):
+            missing.append(owner)
+    return missing
+
+
 def menu_has(screen_text: str, name: str) -> bool:
     """True when the command menu lists the command: an arrow or space, the (possibly truncated) name, then its source tag."""
     shown = re.escape(name[:MENU_NAME_WIDTH])
@@ -611,6 +659,7 @@ class Session:
         self.expected = expected_commands(self.h["agent"], v)
         self._backend = backend
         self.buf = b""
+        self.head = b""
         self.proc = None
         self.master = None
 
@@ -632,9 +681,12 @@ class Session:
             r, _, _ = select.select([self.master], [], [], 0.5)
             if r:
                 try:
-                    self.buf = (self.buf + os.read(self.master, 65536))[-65536:]
+                    data = os.read(self.master, 65536)
                 except OSError:
                     break
+                self.buf = (self.buf + data)[-65536:]
+                if len(self.head) < 60000:
+                    self.head += data
         return True
 
     def send(self, text: str):
@@ -651,6 +703,17 @@ class Session:
     def screen_text(self, tail: int = 2500) -> str:
         txt = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07", b" ", self.buf).decode("utf8", "ignore")
         return re.sub(r"\s+", " ", txt)[-tail:]
+
+    def head_text(self) -> str:
+        txt = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07", b" ", self.head).decode("utf8", "ignore")
+        return re.sub(r"\s+", " ", txt)
+
+    def loaded_check(self) -> dict:
+        """Every owner (local extension or package) in the variant must appear in the startup header; load errors fail."""
+        tokens = header_extensions(self.head_text())
+        owners = expected_loaded(self.h["agent"])
+        missing = missing_loaded(tokens, owners) if self.v["base"] != "core" else []
+        return {"header_entries": len(tokens), "owners": len(owners), "missing": missing, "load_error_markers": self.load_errors()}
 
     def child_pids(self) -> set[int]:
         return {r["pid"] for r in owned_set(ps_table(), self.marker, self.proc.pid) if r["pid"] != self.proc.pid}
@@ -813,8 +876,15 @@ def run_sample(v, root, store, backend, node_dir, settle, out_file, tag="fresh",
                 record.update(s.measure())
                 record.update(median_reading(s))
                 record["smoke"] = s.smoke_commands(everything=(v["name"] == "full"))
-                if record["smoke"]["missing"]:
-                    ok, reason = False, "smoke: registered commands missing " + ",".join(record["smoke"]["missing"])
+                record["loaded"] = s.loaded_check()
+                if record["loaded"]["missing"] or record["loaded"]["load_error_markers"]:
+                    ok, reason = False, "smoke: loaded-extension check failed missing=" + ",".join(record["loaded"]["missing"]) + f" load_errors={record['loaded']['load_error_markers']}"
+                elif record["smoke"]["missing"]:
+                    if v["drop_pkgs"] or v["drop_ext"] or v["drop_mcp"] or v["no_mcp"] or v["patches"]:
+                        # removing a part can legitimately stop a dependent part from registering a command: a measured effect
+                        record["variant_effects"] = record["smoke"]["missing"]
+                    else:
+                        ok, reason = False, "smoke: registered commands missing " + ",".join(record["smoke"]["missing"])
             if not ok:
                 record["aborted"] = reason or "pressure"
                 log(f"[sample] discarding sample {v['name']} (attempt {attempt}): {record['aborted']}")
