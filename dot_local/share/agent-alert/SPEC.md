@@ -143,8 +143,14 @@ source, and the masking rules to every value in `context`:
    `xox[abprs]-…`; `Bearer` tokens; and the value in `name=value`, `name: value`
    or `"name": "value"` where the name ends in `token`, `secret`, `password`,
    `passwd`, `api_key`/`api-key`/`apikey`, or is `key` (alone or after `_`, `.` or
-   `-`). Masking covers common shapes only and is not a guarantee against every
-   secret format.
+   `-`). A quoted value is masked up to its closing quote, and a backslash-escaped
+   quote (`\"`, `\'`) inside it does not end the value. Masking covers common
+   shapes only and is not a guarantee against every secret format. Known
+   shapes it does not mask: JSON escaped inside a JSON string (`{\"password\":…}`),
+   `=>` assignments, camelCase names such as `secretKey`, names with a suffix
+   (`token_value`, `password_hash`), a name followed by a value with no `:` or
+   `=`, `Authorization` schemes other than `Bearer`, URL userinfo, XML elements,
+   curly quotes, and the key name of a `--context` pair.
 2. **Collapse** every run of whitespace, newlines and control characters into one
    space and trim.
 3. **Keep the end**: if more than 200 characters remain, keep the last 199

@@ -342,6 +342,57 @@ class SummaryTests(CoreTestCase):
         self.assertEqual(context["label"], "***")
         self.assertEqual(context["note"], "password=***")
 
+    TAIL = "FAKE_PRIVATE_TAIL_99"
+
+    def assert_tail_masked(self, stored_text):
+        self.assertNotIn(self.TAIL, stored_text)
+        self.assertNotIn("FAKE_PRIVATE", stored_text)
+        self.assertIn("***", stored_text)
+
+    def test_json_style_escaped_double_quote_in_summary_is_fully_masked(self):
+        self.emit_ok(summary='{"password":"a\\"%s"}' % self.TAIL)
+        self.assert_tail_masked(self.scratch.inbox_bytes().decode("utf-8"))
+        self.assertEqual(self.scratch.events()[0]["summary"], '{"password":***}')
+
+    def test_json_style_escaped_double_quote_in_context_value_is_fully_masked(self):
+        result = self.scratch.run(
+            "emit", "--worker", "w", "--kind", "finished", "--summary", "ok",
+            "--context-json", json.dumps({"payload": '{"password":"a\\"%s"}' % self.TAIL}),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_tail_masked(self.scratch.inbox_bytes().decode("utf-8"))
+        self.assertEqual(self.scratch.events()[0]["context"]["payload"], '{"password":***}')
+
+    def test_single_quoted_value_with_escaped_single_quote_is_fully_masked(self):
+        self.emit_ok(summary="token='it\\'s %s' and ordinary words" % self.TAIL)
+        self.assert_tail_masked(self.scratch.inbox_bytes().decode("utf-8"))
+        self.assertEqual(self.scratch.events()[0]["summary"], "token=*** and ordinary words")
+
+    def test_escaped_backslash_before_the_closing_quote_ends_the_value(self):
+        # "a\\" is a complete value: the text after it is not part of the secret.
+        self.emit_ok(summary='password="%s\\\\" and ordinary words' % self.TAIL)
+        self.assert_tail_masked(self.scratch.inbox_bytes().decode("utf-8"))
+        self.assertEqual(self.scratch.events()[0]["summary"], "password=*** and ordinary words")
+
+    def test_escaped_backslash_followed_by_escaped_quote_stays_inside_the_value(self):
+        self.emit_ok(summary='{"password":"a\\\\\\"%s"} done' % self.TAIL)
+        self.assert_tail_masked(self.scratch.inbox_bytes().decode("utf-8"))
+        self.assertEqual(self.scratch.events()[0]["summary"], '{"password":***} done')
+
+    def test_plain_assignments_mask_exactly_as_before(self):
+        cases = {
+            "password=%s" % self.TAIL: "password=***",
+            'password: "%s"' % self.TAIL: "password: ***",
+            "token = '%s' next" % self.TAIL: "token = *** next",
+            '{"api_key": "%s"}' % self.TAIL: '{"api_key": ***}',
+            "secret: %s, other" % self.TAIL: "secret: ***, other",
+            'password="two words %s" end' % self.TAIL: "password=*** end",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.emit_ok(summary=text)
+                self.assertEqual(self.scratch.events()[-1]["summary"], expected)
+
     def test_short_summary_and_ordinary_words_are_kept(self):
         self.emit_ok(summary="Updated the monkey keyboard; what key should be used?")
         self.assertEqual(self.scratch.events()[0]["summary"], "Updated the monkey keyboard; what key should be used?")
