@@ -1,28 +1,30 @@
-# Pi 1.2.0 idle memory: findings (2026-10-17, cartwmic/dotfiles#14)
+# Pi 1.2.0 idle memory: findings (cartwmic/dotfiles#14)
 
-Measured with `pi_idle_rss.py` in this directory (see README.md for method and limitations). Pi 1.2.0, the deployed configuration at `main` 68eeb30, a 32 GiB macOS machine shared with other workers. Numbers and names only; no message contents, credentials or transcripts.
+Measured with `pi_idle_rss.py` in this directory (see README.md for method and limitations). Pi 1.2.0, the deployed configuration at `main` 68eeb30, a 32 GiB macOS machine shared with other workers. All figures below are from one clean final run (baseline on tool commit 4755578; attribution, aged, reload and after runs on fd8b463, which differs only in the aged-sample checks and the extension grouping). Numbers and names only; no message contents, credentials or transcripts. This file replaces the first screening figures posted on 2026-10-17, which were single-run and are superseded.
 
-## Summary (medians, MB)
+## Summary (medians, MB; n=3 unless noted)
 
 | Condition | Pi process alone (RSS) | Whole process tree (RSS) |
 |---|---|---|
-| Core Pi, no packages, extensions or MCP | 133 | 133 |
-| Deployed config, fresh session | 295 (footprint 211) | 1,250 (footprint 950) |
-| Deployed config minus the `rea` and `playwright` MCP servers | 278 | 388 |
-| Deployed config minus all MCP servers | 275 | 275 |
-| Deployed config with a 116 MB / 8,094-message history loaded | 2,723 | 3,692 |
-| Same session after one compaction | 848 (two of three samples 676-850; one 2,814) | 1,588 |
-| Same session after `/reload` with no compaction (n=2) | about 2,800 | about 3,700 |
-| 1 MB history, loaded / after compaction / after `/reload` | 324 / 363 / 328 | 1,290 / 1,102 / 1,269 |
+| Core Pi, no packages, extensions or MCP | 130 | 130 |
+| Deployed config, fresh session (n=6) | 263 (footprint 219) | 1,222 (footprint 954) |
+| Deployed config minus the `rea` and `playwright` MCP servers | 270 | 384 |
+| Deployed config minus all MCP servers (n=6) | 259 | 259 |
+| 170 MB / 12,016-message history, loaded | 2,990 | 3,830 |
+| ...after one scripted turn | 3,579 | 4,205 |
+| ...then one compaction | 498 (467-652) | 1,076 |
+| ...then `/reload` | 651 | 1,600 |
+| Same history, one turn then `/reload` with no compaction (n=2) | 3,358 | 4,290 |
+| 1 MB history, loaded / after compaction / after `/reload` | 362 / 417 / 346 | 1,114 / 1,151 / 1,289 |
 
-1. **Fresh session, Pi process alone:** the deployed config settles at about 295 MB RSS, roughly 160 MB above core Pi. This is near the 300 MB target, with no change.
-2. **Fresh session, whole tree:** about 1.25 GB, because Pi starts every enabled MCP server at launch: `rea` (about 400 MB RSS), `playwright` (about 145), `furi` (about 115), plus two `npm exec` wrappers. Removing those servers is the only change in these runs that moves the whole-tree figure (to 388 MB without `rea` and `playwright`, 275 MB without any MCP).
-3. **Packages and local extensions:** none of the 16 packages or the local extensions is separable from run-to-run noise (about +/-30 MB in Pi footprint). An earlier single-sample 64 MB effect for `pi-sub` did not replicate (n=4).
-4. **Long sessions:** memory follows uncompacted history. A history the size of the longest idle real session holds about 2.7 GB in the Pi process; compaction usually brings it to about 0.7-0.85 GB; `/reload` alone does not. Compaction is disabled in the deployed settings, and `auto-compact` triggers at 40% of the model's context window. A 1 MB history shows no growth.
-5. **Target:** 300 MB or less was met only by the fresh Pi process alone. It was not met by the whole tree or by aged sessions, which stay above 300 MB even after compaction (best about 0.7 GB).
+1. **Fresh session, Pi process alone:** the deployed config settles at about 263 MB RSS (footprint 219), roughly 130 MB above core Pi. This is under the 300 MB target with no change.
+2. **Fresh session, whole tree:** about 1.2 GB, because Pi starts every enabled MCP server at launch. By footprint of the whole tree, `rea` accounts for about 490 MB and `playwright` about 240 MB; removing those two is the only change in these runs that moves the whole-tree figure much (to 384 MB; 259 MB without any MCP).
+3. **Packages and local extensions:** none of the 16 packages or the local extensions is separable from run-to-run noise (single-part effects on Pi footprint run from -21 to 37 MB against a noise floor of 61 MB). The two extension groups split along their import graph, so removing one never breaks the other.
+4. **Long sessions:** memory follows uncompacted history. A history the size of the longest idle real session holds about 3.0 GB in the Pi process; one compaction brought it to about 0.5 GB in all three samples. `/reload` without compaction does not drop it (3.4 GB before and after, n=2). Compaction is disabled in the deployed settings, and `auto-compact` triggers at 40% of the model's context window. A 1 MB history shows no growth.
+5. **Target:** 300 MB or less was met only by the fresh Pi process alone. It was not met by the whole tree or by aged sessions, which stay above 300 MB even after compaction (best about 0.5 GB for Pi alone, about 1.1 GB whole tree).
 6. **Decision:** no configuration change was made as part of this investigation; reductions (disabling heavy MCP servers, lowering the compaction threshold) are listed here for the owner to decide.
 
-Caveats: the scripted backend leaves provider-specific extensions inactive; aged sessions are synthetic and content-free; RSS is unreliable when macOS compresses pages under pressure (one sample read 101 MB RSS against a 238 MB footprint), so footprint is the attribution metric; a run-to-run spread of about 30 MB means single-sample rows (n=1) are indicative only.
+Caveats: the scripted backend leaves provider-specific extensions inactive; aged sessions are synthetic and content-free; RSS is unreliable when macOS compresses pages under pressure (seven samples read well below their footprint), so footprint is the attribution metric; the `/reload` without compaction row has two samples and is indicative only; `/reload` typed as the very first command leaves the extension-owned child processes unchanged and cannot be verified, so that case is not reported.
 
 ## Full report (generated by `pi_idle_rss.py report`)
 
@@ -30,76 +32,96 @@ Median (min-max, n) in MB. RSS = resident set; footprint includes compressed pag
 
 | variant | tag | RSS Pi | RSS owned | footprint Pi | footprint owned |
 |---|---|---|---|---|---|
-| core | fresh | 133 (130-135, n=3) | 133 (130-135, n=3) | 88 (86-90, n=3) | 88 (86-90, n=3) |
-| full | aged-large:after_compact | 848 (676-2814, n=3) | 1588 (1236-3413, n=3) | 699 (663-2932, n=3) | 1206 (1164-3437, n=3) |
-| full | aged-large:after_reload | 988 (479-2827, n=5) | 1929 (1416-3755, n=5) | 847 (395-2969, n=5) | 1571 (1113-3703, n=5) |
-| full | aged-large:after_turn | 3258 (2627-3362, n=3) | 3852 (3107-4105, n=3) | 3377 (2796-3423, n=3) | 3888 (3324-3942, n=3) |
-| full | aged-large:loaded | 2723 (2611-2798, n=5) | 3692 (3412-3750, n=5) | 2772 (2617-2843, n=5) | 3511 (3353-3582, n=5) |
-| full | aged-small:after_compact | 363 (363-399, n=3) | 1102 (1091-1143, n=3) | 273 (265-306, n=3) | 747 (719-789, n=3) |
-| full | aged-small:after_reload | 328 (324-407, n=3) | 1269 (1268-1360, n=3) | 222 (211-255, n=3) | 940 (934-988, n=3) |
-| full | aged-small:after_turn | 357 (356-393, n=3) | 1109 (1104-1140, n=3) | 266 (258-299, n=3) | 759 (757-813, n=3) |
-| full | aged-small:loaded | 324 (323-358, n=3) | 1290 (1288-1310, n=3) | 235 (226-266, n=3) | 977 (974-1002, n=3) |
-| full | fresh | 295 (284-380, n=9) | 1250 (1239-1341, n=9) | 211 (189-277, n=9) | 950 (924-1024, n=9) |
-| full-ext:* | fresh | 275 (216-277, n=4) | 1227 (1012-1233, n=4) | 202 (178-219, n=4) | 938 (912-962, n=4) |
-| full-ext:openrouter-gate+passage-review+pi-codex-fast.json+pi-patch-guard+pi-rtk-optimizer+recap+standing-reminder+subagent+system-one+web-search+winnow-local | fresh | 334 (334-334, n=1) | 1287 (1287-1287, n=1) | 257 (257-257, n=1) | 996 (996-996, n=1) |
-| full-mcp:context7 | fresh | 288 (288-288, n=1) | 1233 (1233-1233, n=1) | 190 (190-190, n=1) | 918 (918-918, n=1) |
-| full-mcp:furi | fresh | 285 (285-285, n=1) | 1133 (1133-1133, n=1) | 215 (215-215, n=1) | 918 (918-918, n=1) |
-| full-mcp:hindsight | fresh | 300 (300-300, n=1) | 1253 (1253-1253, n=1) | 229 (229-229, n=1) | 967 (967-967, n=1) |
-| full-mcp:playwright | fresh | 286 (286-286, n=1) | 935 (935-935, n=1) | 193 (193-193, n=1) | 709 (709-709, n=1) |
-| full-mcp:rea | fresh | 264 (256-268, n=4) | 683 (670-686, n=4) | 192 (186-205, n=4) | 454 (449-470, n=4) |
-| full-mcp:rea+playwright | fresh | 278 (256-284, n=3) | 388 (367-395, n=3) | 208 (173-238, n=3) | 249 (213-279, n=3) |
-| full-mcp:ticktick | fresh | 294 (294-294, n=1) | 1253 (1253-1253, n=1) | 192 (192-192, n=1) | 936 (936-936, n=1) |
-| full-nomcp | fresh | 275 (272-287, n=4) | 275 (272-287, n=4) | 212 (202-228, n=4) | 212 (202-228, n=4) |
-| full-pkg:pi-btw | fresh | 286 (286-286, n=1) | 1238 (1238-1238, n=1) | 189 (189-189, n=1) | 926 (926-926, n=1) |
-| full-pkg:pi-claude-request-compat | fresh | 291 (291-291, n=1) | 1227 (1227-1227, n=1) | 221 (221-221, n=1) | 945 (945-945, n=1) |
-| full-pkg:pi-codex-fast | fresh | 314 (314-314, n=1) | 1266 (1266-1266, n=1) | 239 (239-239, n=1) | 977 (977-977, n=1) |
-| full-pkg:pi-computer-use | fresh | 312 (312-312, n=1) | 1272 (1272-1272, n=1) | 237 (237-237, n=1) | 982 (982-982, n=1) |
-| full-pkg:pi-connect | fresh | 290 (290-290, n=1) | 1235 (1235-1235, n=1) | 219 (219-219, n=1) | 950 (950-950, n=1) |
-| full-pkg:pi-cursor | fresh | 303 (280-320, n=4) | 1263 (1236-1272, n=4) | 212 (186-220, n=4) | 952 (936-958, n=4) |
-| full-pkg:pi-openrouter-plus | fresh | 309 (309-309, n=1) | 1261 (1261-1261, n=1) | 206 (206-206, n=1) | 943 (943-943, n=1) |
-| full-pkg:pi-response-visibility | fresh | 284 (101-304, n=4) | 1240 (660-1272, n=4) | 200 (192-238, n=4) | 938 (750-950, n=4) |
-| full-pkg:pi-rtk-optimizer | fresh | 291 (291-291, n=1) | 1250 (1250-1250, n=1) | 219 (219-219, n=1) | 963 (963-963, n=1) |
-| full-pkg:pi-session-search | fresh | 226 (166-292, n=4) | 964 (451-1245, n=4) | 192 (168-200, n=4) | 930 (902-949, n=4) |
-| full-pkg:pi-stamp | fresh | 297 (297-297, n=1) | 1251 (1251-1251, n=1) | 193 (193-193, n=1) | 932 (932-932, n=1) |
-| full-pkg:pi-sub | fresh | 292 (226-312, n=4) | 1238 (1134-1256, n=4) | 220 (193-260, n=4) | 957 (923-994, n=4) |
-| full-pkg:pi-subagents | fresh | 272 (160-275, n=4) | 1229 (803-1246, n=4) | 179 (175-196, n=4) | 936 (915-952, n=4) |
-| full-pkg:pi-token-usage | fresh | 288 (288-288, n=1) | 1237 (1237-1237, n=1) | 243 (243-243, n=1) | 973 (973-973, n=1) |
-| full-pkg:rpiv-ask-user-question | fresh | 303 (303-303, n=1) | 1257 (1257-1257, n=1) | 205 (205-205, n=1) | 945 (945-945, n=1) |
-| full-pkg:system-one-tools | fresh | 284 (284-284, n=1) | 1236 (1236-1236, n=1) | 211 (211-211, n=1) | 949 (949-949, n=1) |
+| core | fresh | 130 (86-131, n=3) | 130 (86-131, n=3) | 84 (71-86, n=3) | 84 (71-86, n=3) |
+| full | aged-large:after_compact | 498 (467-652, n=3) | 1076 (777-1278, n=3) | 435 (421-593, n=3) | 916 (913-1090, n=3) |
+| full | aged-large:after_reload | 651 (576-735, n=3) | 1600 (1520-1672, n=3) | 540 (511-652, n=3) | 1275 (1237-1373, n=3) |
+| full | aged-large:after_turn | 3579 (2989-3865, n=3) | 4205 (3281-4431, n=3) | 3659 (3212-4067, n=3) | 4156 (3690-4562, n=3) |
+| full | aged-large:loaded | 2990 (2920-3082, n=3) | 3830 (3678-3951, n=3) | 3091 (3040-3128, n=3) | 3752 (3634-3786, n=3) |
+| full | aged-large[turn+reload]:after_reload | 3358 (3307-3408, n=2 <3: indicative only) | 4290 (4244-4336, n=2 <3: indicative only) | 3384 (3323-3446, n=2 <3: indicative only) | 4118 (4061-4176, n=2 <3: indicative only) |
+| full | aged-large[turn+reload]:after_turn | 3393 (3313-3474, n=2 <3: indicative only) | 4132 (4052-4213, n=2 <3: indicative only) | 3418 (3331-3504, n=2 <3: indicative only) | 3898 (3814-3981, n=2 <3: indicative only) |
+| full | aged-large[turn+reload]:loaded | 3070 (3053-3086, n=2 <3: indicative only) | 3922 (3803-4041, n=2 <3: indicative only) | 3074 (3006-3141, n=2 <3: indicative only) | 3700 (3518-3883, n=2 <3: indicative only) |
+| full | aged-small:after_compact | 417 (306-489, n=3) | 1151 (1039-1231, n=3) | 324 (207-388, n=3) | 795 (657-878, n=3) |
+| full | aged-small:after_reload | 346 (337-402, n=3) | 1289 (1275-1348, n=3) | 238 (230-266, n=3) | 967 (939-996, n=3) |
+| full | aged-small:after_turn | 415 (406-478, n=3) | 1147 (1143-1216, n=3) | 325 (312-378, n=3) | 815 (811-868, n=3) |
+| full | aged-small:loaded | 362 (315-393, n=3) | 1114 (1063-1148, n=3) | 271 (219-290, n=3) | 791 (734-810, n=3) |
+| full | fresh | 263 (103-306, n=6) | 1222 (381-1266, n=6) | 219 (192-314, n=6) | 954 (942-1061, n=6) |
+| full-ext:* | fresh | 290 (279-313, n=3) | 1248 (1242-1277, n=3) | 213 (206-222, n=3) | 949 (926-972, n=3) |
+| full-ext:README.md+auto-compact+catalog-overlay-nudge+goal+herdr-agent-state.ts+ntfy+openrouter-gate+pi-codex-fast.json+pi-rtk-optimizer+subagent+web-search | fresh | 301 (299-314, n=3) | 1258 (1256-1278, n=3) | 198 (195-235, n=3) | 941 (935-981, n=3) |
+| full-ext:claude-compat-guard+herdr-overview+hindsight+inspect-prompt+learnings-monitor+passage-review+pi-patch-guard+recap+standing-reminder+system-one+winnow-local | fresh | 283 (280-291, n=3) | 1245 (1236-1258, n=3) | 205 (204-207, n=3) | 952 (941-960, n=3) |
+| full-mcp:context7 | fresh | 285 (280-298, n=3) | 1241 (1239-1258, n=3) | 215 (210-226, n=3) | 964 (952-970, n=3) |
+| full-mcp:furi | fresh | 300 (298-307, n=3) | 1139 (1133-1147, n=3) | 233 (222-261, n=3) | 927 (914-957, n=3) |
+| full-mcp:hindsight | fresh | 312 (284-329, n=3) | 1285 (1246-1287, n=3) | 212 (208-233, n=3) | 971 (952-972, n=3) |
+| full-mcp:playwright | fresh | 289 (281-294, n=3) | 946 (935-948, n=3) | 198 (195-210, n=3) | 717 (712-732, n=3) |
+| full-mcp:rea | fresh | 262 (261-268, n=3) | 686 (680-690, n=3) | 200 (192-203, n=3) | 465 (459-471, n=3) |
+| full-mcp:rea+playwright | fresh | 270 (266-271, n=3) | 384 (381-386, n=3) | 205 (187-211, n=3) | 250 (231-256, n=3) |
+| full-mcp:ticktick | fresh | 292 (291-307, n=3) | 1257 (1255-1262, n=3) | 199 (198-240, n=3) | 950 (942-969, n=3) |
+| full-nomcp | fresh | 259 (206-270, n=6) | 259 (206-270, n=6) | 197 (189-240, n=6) | 197 (189-240, n=6) |
+| full-pkg:pi-btw | fresh | 282 (129-290, n=3) | 1236 (804-1244, n=3) | 190 (187-233, n=3) | 930 (928-986, n=3) |
+| full-pkg:pi-claude-request-compat | fresh | 289 (283-307, n=3) | 1253 (1243-1261, n=3) | 189 (185-262, n=3) | 932 (930-995, n=3) |
+| full-pkg:pi-codex-fast | fresh | 292 (128-335, n=3) | 1245 (723-1297, n=3) | 225 (192-229, n=3) | 965 (720-977, n=3) |
+| full-pkg:pi-computer-use | fresh | 281 (162-293, n=3) | 1233 (820-1253, n=3) | 201 (185-227, n=3) | 923 (756-946, n=3) |
+| full-pkg:pi-connect | fresh | 288 (253-302, n=3) | 1256 (1223-1259, n=3) | 197 (189-218, n=3) | 944 (941-971, n=3) |
+| full-pkg:pi-cursor | fresh | 302 (293-305, n=3) | 1259 (1255-1268, n=3) | 200 (197-221, n=3) | 949 (940-967, n=3) |
+| full-pkg:pi-openrouter-plus | fresh | 297 (177-307, n=3) | 1224 (658-1257, n=3) | 219 (199-273, n=3) | 954 (939-1024, n=3) |
+| full-pkg:pi-response-visibility | fresh | 284 (156-296, n=3) | 1232 (782-1258, n=3) | 198 (188-213, n=3) | 935 (742-943, n=3) |
+| full-pkg:pi-rtk-optimizer | fresh | 216 (196-286, n=3) | 805 (744-1266, n=3) | 228 (190-249, n=3) | 981 (950-1000, n=3) |
+| full-pkg:pi-session-search | fresh | 277 (273-282, n=3) | 1232 (1231-1248, n=3) | 218 (176-234, n=3) | 972 (931-978, n=3) |
+| full-pkg:pi-stamp | fresh | 286 (183-287, n=3) | 1244 (699-1245, n=3) | 219 (191-266, n=3) | 959 (933-1021, n=3) |
+| full-pkg:pi-sub | fresh | 289 (207-354, n=3) | 1258 (741-1317, n=3) | 219 (215-255, n=3) | 967 (956-998, n=3) |
+| full-pkg:pi-subagents | fresh | 245 (189-273, n=3) | 1122 (1084-1240, n=3) | 182 (173-201, n=3) | 926 (925-959, n=3) |
+| full-pkg:pi-token-usage | fresh | 236 (230-254, n=3) | 1101 (1038-1209, n=3) | 193 (175-272, n=3) | 920 (906-1023, n=3) |
+| full-pkg:rpiv-ask-user-question | fresh | 304 (285-308, n=3) | 1263 (1256-1268, n=3) | 215 (211-224, n=3) | 966 (951-968, n=3) |
+| full-pkg:system-one-tools | fresh | 232 (212-307, n=3) | 951 (766-1274, n=3) | 240 (229-285, n=3) | 994 (980-1028, n=3) |
 
-Core-only vs full (median MB): RSS Pi 133 -> 295; footprint Pi 88 -> 211; RSS owned 133 -> 1250; footprint owned 88 -> 950.
+Variant effects (commands that stopped registering because their owner depended on the removed part): full-ext:*: pkg:pi-claude-request-compat:claude-compat-status; full-ext:claude-compat-guard+herdr-overview+hindsight+inspect-prompt+learnings-monitor+passage-review+pi-patch-guard+recap+standing-reminder+system-one+winnow-local: pkg:pi-claude-request-compat:claude-compat-status.
 
-1 sample(s) had RSS far below footprint (macOS compressed the process's pages while it ran), so RSS is unreliable under memory pressure; footprint (which includes compressed pages) is the attribution metric: full-pkg:pi-response-visibility rss 101 vs fp 238.
+Discarded sample attempts (retried): pressure x8, rejected x3.
+
+Core-only vs full (median MB): RSS Pi 130 -> 263; footprint Pi 84 -> 219; RSS owned 130 -> 1222; footprint owned 84 -> 954.
+
+7 sample(s) had RSS far below footprint (macOS compressed the process's pages while it ran), so RSS is unreliable under memory pressure; footprint (which includes compressed pages) is the attribution metric: full-pkg:pi-btw rss 129 vs fp 233, full-pkg:pi-codex-fast rss 128 vs fp 192, full-pkg:system-one-tools rss 212 vs fp 285, full-pkg:pi-response-visibility rss 156 vs fp 213, full-pkg:pi-computer-use rss 162 vs fp 227, full-pkg:pi-stamp rss 183 vs fp 266, full rss 103 vs fp 314.
 
 ## Attribution (full median minus variant median = MB saved by removing the part; positive = the part costs memory)
 
 | removed | footprint Pi | RSS Pi | footprint owned | RSS owned |
 |---|---|---|---|---|
-| full-pkg:pi-subagents | 32 | 22 | 14 | 21 |
-| full-pkg:pi-btw | 22 | 9 | 24 | 13 |
-| full-mcp:context7 | 21 | 6 | 32 | 17 |
-| full-mcp:rea | 20 | 30 | 496 | 568 |
-| full-mcp:ticktick | 19 | 0 | 14 | -3 |
-| full-pkg:pi-session-search | 18 | 68 | 20 | 286 |
-| full-pkg:pi-stamp | 18 | -2 | 18 | -0 |
-| full-mcp:playwright | 18 | 9 | 241 | 316 |
-| full-pkg:pi-response-visibility | 12 | 10 | 12 | 10 |
-| full-ext:* | 10 | 20 | 12 | 23 |
-| full-pkg:rpiv-ask-user-question | 6 | -8 | 5 | -7 |
-| full-pkg:pi-openrouter-plus | 5 | -15 | 7 | -11 |
-| full-mcp:rea+playwright | 3 | 17 | 701 | 862 |
-| full-pkg:system-one-tools | 0 | 11 | 1 | 14 |
-| full-pkg:pi-cursor | -0 | -8 | -2 | -13 |
-| full-nomcp | -1 | 20 | 738 | 976 |
-| full-mcp:furi | -4 | 9 | 32 | 118 |
-| full-pkg:pi-rtk-optimizer | -8 | 4 | -13 | 0 |
-| full-pkg:pi-connect | -8 | 4 | 0 | 15 |
-| full-pkg:pi-sub | -10 | 2 | -7 | 12 |
-| full-pkg:pi-claude-request-compat | -10 | 4 | 5 | 23 |
-| full-mcp:hindsight | -18 | -5 | -17 | -2 |
-| full-pkg:pi-computer-use | -26 | -17 | -32 | -22 |
-| full-pkg:pi-codex-fast | -28 | -19 | -27 | -16 |
-| full-pkg:pi-token-usage | -32 | 7 | -23 | 13 |
-| full-ext:openrouter-gate+passage-review+pi-codex-fast.json+pi-patch-guard+pi-rtk-optimizer+recap+standing-reminder+subagent+system-one+web-search+winnow-local | -46 | -40 | -46 | -37 |
+| full-pkg:pi-subagents | 37 | 18 | 28 | 100 |
+| full-pkg:pi-claude-request-compat | 30 | -26 | 22 | -31 |
+| full-pkg:pi-btw | 29 | -19 | 24 | -14 |
+| full-pkg:pi-token-usage | 26 | 28 | 34 | 121 |
+| full-nomcp | 22 | 5 | 757 | 963 |
+| full-pkg:pi-connect | 22 | -25 | 10 | -34 |
+| full-pkg:pi-response-visibility | 21 | -21 | 19 | -10 |
+| full-mcp:playwright | 21 | -25 | 237 | 276 |
+| full-ext:README.md+auto-compact+catalog-overlay-nudge+goal+herdr-agent-state.ts+ntfy+openrouter-gate+pi-codex-fast.json+pi-rtk-optimizer+subagent+web-search | 21 | -38 | 13 | -36 |
+| full-mcp:ticktick | 20 | -29 | 4 | -35 |
+| full-pkg:pi-cursor | 19 | -39 | 5 | -37 |
+| full-mcp:rea | 19 | 1 | 489 | 536 |
+| full-pkg:pi-computer-use | 18 | -18 | 31 | -11 |
+| full-mcp:rea+playwright | 14 | -7 | 704 | 838 |
+| full-ext:claude-compat-guard+herdr-overview+hindsight+inspect-prompt+learnings-monitor+passage-review+pi-patch-guard+recap+standing-reminder+system-one+winnow-local | 14 | -19 | 2 | -23 |
+| full-mcp:hindsight | 7 | -49 | -17 | -63 |
+| full-ext:* | 6 | -27 | 5 | -26 |
+| full-pkg:rpiv-ask-user-question | 4 | -41 | -12 | -41 |
+| full-mcp:context7 | 4 | -21 | -10 | -19 |
+| full-pkg:pi-session-search | 1 | -14 | -18 | -10 |
+| full-pkg:pi-sub | 0 | -26 | -13 | -36 |
+| full-pkg:pi-openrouter-plus | 0 | -34 | 0 | -2 |
+| full-pkg:pi-stamp | 0 | -23 | -5 | -22 |
+| full-pkg:pi-codex-fast | -6 | -29 | -11 | -24 |
+| full-pkg:pi-rtk-optimizer | -9 | 47 | -27 | 417 |
+| full-mcp:furi | -14 | -37 | 27 | 83 |
+| full-pkg:system-one-tools | -21 | 31 | -40 | 271 |
 
-Pi-process footprint effect of single parts ranges -46 to 32 MB; where that spread is about the size of the run-to-run spread of the full configuration itself, the part is not separable from noise. Parts do not add up (interactions, shared dependencies); the remainder is (full - core) minus the supported effects.
+## Unexplained remainder
+
+Noise floor = half the min-max spread of the full configuration's own samples (at least 15 MB). A part is 'supported' when removing it saves more than the noise floor; groups and the no-MCP variant are aggregates and are not summed.
+
+| metric | full - core | noise floor | supported parts (MB) | sum | unexplained |
+|---|---|---|---|---|---|
+| footprint Pi | 135 | 61 | none | 0 | 135 |
+| RSS Pi | 134 | 101 | none | 0 | 134 |
+| footprint owned | 870 | 60 | rea 489, playwright 237 | 726 | 144 |
+| RSS owned | 1092 | 442 | rea 536 | 536 | 557 |
+
+Pi-process footprint effect of single parts ranges -21 to 37 MB; a part whose effect is within the noise floor is not separable from noise. Parts need not add up (interactions, shared dependencies).
