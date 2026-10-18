@@ -77,6 +77,27 @@ Remove a name from `~/.local/share/pi-mcp-lazy/servers.list` (source: `dot_local
 apply again: that entry returns to its canonical form. Removing the file returns all of them. Reload or restart a
 Pi session to pick the change up.
 
+## Measured effect (2026-10-18, #14 procedure, throwaway home, scripted backend, n=3, medians)
+
+| fresh full-configuration session | Pi RSS | owned-set RSS | owned-set footprint | MCP processes |
+|---|---|---|---|---|
+| before (d6118aba) | 292 MB | 1257 MB | 975 MB | 5 real servers/wrappers |
+| after, state copy present | 284 MB | 334 MB | 228 MB | 3 stand-ins, 0 real |
+| after, refresh failed at apply (seed) | 291 MB | 341 MB | 226 MB | 3 stand-ins, 0 real |
+| after, no state copy (seed) | 309 MB / 307 MB (two runs) | 359 MB / 357 MB | 272 / 251 MB | 3 stand-ins, 0 real |
+
+The 350 MB owned-set target is met with a state copy (the normal state after an apply) and after a failed refresh; it is
+missed by 7-9 MB in the no-state-copy variant, where the difference sits in the Pi process, not the stand-ins
+(16 MB each in every variant). Small aged session (one compaction, one /reload): owned-set footprint after /reload
+269 MB, with no real MCP process at any stage; the baseline had 5 and 1001 MB. Full tables and the aged analysis are in
+the pull request.
+
+The stand-ins read 16 MB each in these figures because the measurement home has no Python bytecode cache; with a warm
+cache one idles at about 12 MB. A stand-in runs on the system Python (`/usr/bin/python3`) when the macOS command-line
+tools are present, because it is about 10 MB smaller than a current mise Python, and on `python3` from PATH otherwise.
+The first call to a stopped server costs the server's own start time (furi and rea about 2 s, playwright about 1 s
+here) plus about 0.04 s for the stand-in.
+
 ## Tests and measurement
 
 - `python3 -m unittest discover -s tests/pi-mcp-lazy -v`: protocol, saved copies, start failure, idle lifecycle, rendering.
