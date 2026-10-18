@@ -844,6 +844,11 @@ def aged_driver(s: Session, watcher: PressureWatcher, log, order=("turn", "compa
 
     if not reading("loaded", 420):
         return None
+    stages["loaded"]["loaded"] = s.loaded_check()
+    sm = s.smoke_commands(everything=False, abort=watcher.rose)
+    if sm is None:
+        return None
+    stages["loaded"]["smoke"] = sm
     for name, command, extra in (AGED_STAGES[k] for k in order):
         # a live aged session is memory-heavy: never wait for pressure to ease with it running; discard and back off
         if watcher.rose.is_set() or not pressure_ok():
@@ -863,15 +868,19 @@ def aged_driver(s: Session, watcher: PressureWatcher, log, order=("turn", "compa
                 raise SampleRejected("no compaction entry recorded after /compact")
         if name == "after_reload":
             after_children = s.child_pids()
-            replaced = bool(before_children) and not (before_children & after_children) == before_children
-            stages[name]["reload_verified"] = True if replaced else (None if not before_children else False)
-            stages[name]["child_pids_replaced"] = len(before_children - after_children)
-            if stages[name]["reload_verified"] is False:
+            gone, started = before_children - after_children, after_children - before_children
+            stages[name]["child_pids_replaced"] = len(gone)
+            stages[name]["child_pids_started"] = len(started)
+            # a child that merely exited is not a reload: a new extension-owned child must also have started
+            stages[name]["reload_verified"] = bool(before_children) and bool(gone) and bool(started)
+            if not before_children:
+                raise SampleRejected("/reload cannot be verified: no extension-owned child process existed before it")
+            if not stages[name]["reload_verified"]:
                 raise SampleRejected("/reload did not restart any extension-owned child process")
     return stages
 
 
-def accept_sample(ok: bool, reason: str | None, pressure_rose: bool, load_errors: int, loaded: dict | None, smoke: dict | None, v: dict) -> tuple:
+def accept_sample(ok: bool, reason: str | None, pressure_rose: bool, load_errors: int, loaded: dict | None, smoke: dict | None, v: dict, smoke_required: bool = False) -> tuple:
     """Final decision, taken after every reading and smoke step: (accepted, reason, variant_effects)."""
     if not ok:
         return False, reason or "pressure", None
@@ -879,8 +888,12 @@ def accept_sample(ok: bool, reason: str | None, pressure_rose: bool, load_errors
         return False, "pressure", None
     if load_errors:
         return False, f"load errors seen ({load_errors})", None
+    if loaded is None and v["base"] != "core":
+        return False, "loaded-owner inventory missing: no evidence is not a pass", None
     if loaded and loaded.get("missing"):
         return False, "smoke: loaded-extension check failed missing=" + ",".join(loaded["missing"]), None
+    if smoke is None and smoke_required:
+        return False, "command-registration smoke missing: no evidence is not a pass", None
     if smoke and smoke.get("missing"):
         if v["drop_pkgs"] or v["drop_ext"] or v["drop_mcp"] or v["no_mcp"] or v["patches"]:
             # removing a part can legitimately stop a dependent part from registering a command: a measured effect
@@ -928,15 +941,19 @@ def run_sample(v, root, store, backend, node_dir, settle, out_file, tag="fresh",
                     ok = False
                 else:
                     record.update(reading)
+            if ok and driver is not None:
+                first = stages.get("loaded", {})
+                record["loaded"], record["smoke"] = first.get("loaded"), first.get("smoke")
+            if ok and driver is None:
+                record["loaded"] = s.loaded_check()  # cheap (startup header + error count): mandatory on every sample
             if ok and smoke and driver is None:
                 sm = s.smoke_commands(everything=(v["name"] == "full"), abort=watcher.rose)
                 if sm is None:
                     ok = False
                 else:
                     record["smoke"] = sm
-                    record["loaded"] = s.loaded_check()
             # one final decision after every pump: nothing that arrives later can be missed
-            ok, reason, effects = accept_sample(ok, reason, watcher.rose.is_set(), s.load_errors(), record.get("loaded"), record.get("smoke"), v)
+            ok, reason, effects = accept_sample(ok, reason, watcher.rose.is_set(), s.load_errors(), record.get("loaded"), record.get("smoke"), v, smoke_required=bool(smoke or driver))
             record["load_error_markers"] = s.load_errors()
             if effects:
                 record["variant_effects"] = effects
