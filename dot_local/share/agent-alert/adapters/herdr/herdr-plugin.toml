@@ -1,0 +1,22 @@
+id = "agent-alert"
+name = "Agent Alert"
+version = "0.1.0"
+min_herdr_version = "0.9.1"
+description = "Turns Herdr agent events into agent-alert inbox events (finished, blocked, exited); no message text."
+platforms = ["macos", "linux"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["python3", "hook.py"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["python3", "hook.py"]
+
+[[events]]
+on = "pane.exited"
+command = ["python3", "hook.py"]
+
+[[events]]
+on = "pane.closed"
+command = ["python3", "hook.py"]

@@ -1,0 +1,472 @@
+#!/usr/bin/env python3
+"""agent-alert core: an append-only JSONL inbox with three commands.
+
+    agent-alert emit --worker ID --kind KIND [--context K=V]... [--context-json OBJECT]
+    agent-alert tail [--since N]
+    agent-alert ack N
+
+SPEC.md (next to this directory) is the authoritative description of the
+format, the configuration and the sink contract. Python 3 standard library only.
+
+Exit codes: 0 success, 2 bad input or bad configuration, 3 inbox, lock or
+acknowledgment file could not be used.
+"""
+
+import argparse
+import datetime
+import fcntl
+import json
+import os
+import signal
+import subprocess
+import sys
+
+FORMAT_VERSION = 1
+KINDS = ("finished", "blocked", "errored", "exited")
+
+DEFAULT_INBOX = "~/.local/share/coordinator/inbox.jsonl"
+DEFAULT_LOG = "~/.local/state/agent-alert/agent-alert.log"
+DEFAULT_CONFIG = "~/.config/agent-alert/config.json"
+DEFAULT_SINK_TIMEOUT = 5.0
+
+EXIT_BAD_INPUT = 2
+EXIT_STORE = 3
+
+
+class Failure(Exception):
+    """A failure that ends the command with a message and an exit code."""
+
+    def __init__(self, code, message):
+        Exception.__init__(self, message)
+        self.code = code
+        self.message = message
+
+
+# --------------------------------------------------------------------------
+# Configuration: environment, then the JSON config file, then defaults.
+# --------------------------------------------------------------------------
+
+
+def load_config(environ):
+    config_path = os.path.expanduser(environ.get("AGENT_ALERT_CONFIG") or DEFAULT_CONFIG)
+    values = {}
+    try:
+        with open(config_path, "rb") as handle:
+            raw = handle.read()
+    except FileNotFoundError:
+        raw = None
+    except OSError as error:
+        raise Failure(EXIT_BAD_INPUT, "cannot read configuration %s: %s" % (config_path, error))
+    if raw is not None:
+        try:
+            values = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as error:
+            raise Failure(EXIT_BAD_INPUT, "configuration %s is not valid JSON: %s" % (config_path, error))
+        if not isinstance(values, dict):
+            raise Failure(EXIT_BAD_INPUT, "configuration %s must be a JSON object" % config_path)
+
+    def path_setting(key, env_name, default):
+        return os.path.expanduser(environ.get(env_name) or values.get(key) or default)
+
+    sink = values.get("sink")
+    if environ.get("AGENT_ALERT_SINK"):
+        try:
+            sink = json.loads(environ["AGENT_ALERT_SINK"])
+        except ValueError as error:
+            raise Failure(EXIT_BAD_INPUT, "AGENT_ALERT_SINK is not valid JSON: %s" % error)
+
+    timeout = values.get("sink_timeout_seconds", DEFAULT_SINK_TIMEOUT)
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+        raise Failure(EXIT_BAD_INPUT, "configuration sink_timeout_seconds must be a number above 0")
+
+    return {
+        "config_path": config_path,
+        "inbox_path": path_setting("inbox_path", "AGENT_ALERT_INBOX", DEFAULT_INBOX),
+        "log_path": path_setting("log_path", "AGENT_ALERT_LOG", DEFAULT_LOG),
+        "sink": sink,
+        "sink_timeout_seconds": float(timeout),
+    }
+
+
+# --------------------------------------------------------------------------
+# Operator log: append-only text, one line per problem.
+# --------------------------------------------------------------------------
+
+
+def utc_now(fraction=False):
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if fraction:
+        return now.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (now.microsecond // 1000)
+    return now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def log_problem(config, message):
+    """Best effort: a problem that cannot be logged is only printed."""
+    line = "%s core: %s\n" % (utc_now(), " ".join(message.split()))
+    try:
+        os.makedirs(os.path.dirname(config["log_path"]) or ".", exist_ok=True)
+        fd = os.open(config["log_path"], os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, line.encode("utf-8", "replace"))
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+# --------------------------------------------------------------------------
+# Event model: validation and the one-line encoding.
+# --------------------------------------------------------------------------
+
+
+def reject(message):
+    raise Failure(EXIT_BAD_INPUT, message)
+
+
+def clean_text(value):
+    """Make a str safe to encode as UTF-8 (a lone surrogate becomes ?)."""
+    return value.encode("utf-8", "replace").decode("utf-8")
+
+
+def build_context(pairs, context_json):
+    """pairs: list of KEY=VALUE strings; context_json: a JSON object text or None."""
+    context = {}
+    if context_json is not None:
+        try:
+            decoded = json.loads(context_json)
+        except ValueError as error:
+            reject("--context-json is not valid JSON: %s" % error)
+        if not isinstance(decoded, dict):
+            reject("--context-json must be a JSON object")
+        context.update(decoded)
+    for pair in pairs:
+        key, separator, value = pair.partition("=")
+        if not separator:
+            reject("--context expects KEY=VALUE, got %r" % pair)
+        context[key] = value
+    for key, value in context.items():
+        if not isinstance(value, str):
+            reject("context value for %r must be a string" % key)
+    return {clean_text(key): clean_text(value) for key, value in context.items()}
+
+
+def build_event(seq, worker, kind, context):
+    event = {
+        "version": FORMAT_VERSION,
+        "seq": seq,
+        "time": utc_now(fraction=True),
+        "worker": worker,
+        "kind": kind,
+    }
+    if context:
+        event["context"] = context
+    return (json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+# --------------------------------------------------------------------------
+# Reading the inbox (tail, ack and the writer's sequence lookup).
+# --------------------------------------------------------------------------
+
+
+def parse_event_seq(line):
+    """The seq of a line that parses as a JSON object with an integer seq, else None."""
+    try:
+        decoded = json.loads(line.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    seq = decoded.get("seq")
+    if isinstance(seq, bool) or not isinstance(seq, int):
+        return None
+    return seq
+
+
+def last_seq(fd):
+    """Sequence number of the last line that parses; 0 for an empty or unparseable file.
+
+    Reads backwards in blocks so a large inbox is not read whole.
+    """
+    position = os.lseek(fd, 0, os.SEEK_END)
+    buffered = b""
+    while position > 0:
+        step = min(65536, position)
+        position -= step
+        os.lseek(fd, position, os.SEEK_SET)
+        buffered = _read_exactly(fd, step) + buffered
+        lines = buffered.split(b"\n")
+        complete = lines if position == 0 else lines[1:]
+        for line in reversed(complete):
+            seq = parse_event_seq(line)
+            if seq is not None:
+                return seq
+        buffered = b"" if position == 0 else lines[0]
+    return 0
+
+
+def _read_exactly(fd, count):
+    chunks = []
+    while count > 0:
+        chunk = os.read(fd, count)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        count -= len(chunk)
+    return b"".join(chunks)
+
+
+def ends_with_newline(fd):
+    size = os.lseek(fd, 0, os.SEEK_END)
+    if size == 0:
+        return True
+    os.lseek(fd, size - 1, os.SEEK_SET)
+    return os.read(fd, 1) == b"\n"
+
+
+def iter_inbox_lines(path):
+    """Yield (seq, raw_line) for every line that parses, in file order."""
+    try:
+        handle = open(path, "rb")
+    except FileNotFoundError:
+        return
+    with handle:
+        for raw in handle:
+            line = raw[:-1] if raw.endswith(b"\n") else raw
+            seq = parse_event_seq(line)
+            if seq is not None:
+                yield seq, line
+
+
+def read_acknowledged(config):
+    try:
+        with open(ack_path(config), "rb") as handle:
+            stored = json.loads(handle.read().decode("utf-8"))
+        value = stored["acked"]
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    except (OSError, ValueError, KeyError, TypeError, UnicodeDecodeError):
+        pass
+    return 0
+
+
+def ack_path(config):
+    return config["inbox_path"] + ".ack"
+
+
+def lock_path(config):
+    return config["inbox_path"] + ".lock"
+
+
+class InboxLock:
+    """Exclusive advisory lock on the file next to the inbox."""
+
+    def __init__(self, config):
+        self.config = config
+        self.fd = None
+
+    def __enter__(self):
+        try:
+            os.makedirs(os.path.dirname(self.config["inbox_path"]) or ".", exist_ok=True)
+            self.fd = os.open(lock_path(self.config), os.O_RDWR | os.O_CREAT, 0o644)
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except OSError as error:
+            self.release()
+            raise Failure(EXIT_STORE, "cannot lock the inbox: %s" % error)
+        return self
+
+    def release(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
+
+
+# --------------------------------------------------------------------------
+# emit
+# --------------------------------------------------------------------------
+
+
+def write_all(fd, data):
+    view = memoryview(data)
+    while len(view):
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("write made no progress")
+        view = view[written:]
+
+
+def append_event(config, worker, kind, context):
+    """Append one line under the lock; return the line written. Never truncates."""
+    with InboxLock(config):
+        try:
+            fd = os.open(config["inbox_path"], os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o644)
+        except OSError as error:
+            raise Failure(EXIT_STORE, "cannot open the inbox: %s" % error)
+        try:
+            try:
+                line = build_event(last_seq(fd) + 1, worker, kind, context)
+                prefix = b"" if ends_with_newline(fd) else b"\n"
+            except OSError as error:
+                raise Failure(EXIT_STORE, "cannot read the inbox: %s" % error)
+            try:
+                write_all(fd, prefix + line)
+                os.fsync(fd)
+            except OSError as error:
+                raise Failure(EXIT_STORE, "writing the inbox failed: %s" % error)
+        finally:
+            os.close(fd)
+    return line
+
+
+def run_sink(config, line):
+    """Run the one sink with the event on stdin; kill it and its group at the time bound."""
+    if not config["sink"]:
+        return
+    environment = dict(os.environ)
+    environment["AGENT_ALERT_INBOX"] = config["inbox_path"]
+    environment["AGENT_ALERT_LOG"] = config["log_path"]
+    environment["AGENT_ALERT_CONFIG"] = config["config_path"]
+    command = config["sink"]
+    name = command[0] if isinstance(command, list) and command else command
+    try:
+        command = [os.path.expanduser(command[0])] + command[1:]
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=environment,
+            start_new_session=True,
+        )
+    except (OSError, TypeError, ValueError, IndexError) as error:
+        log_problem(config, "sink %s: cannot start: %s" % (name, error))
+        return
+    try:
+        process.communicate(line, timeout=config["sink_timeout_seconds"])
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            process.kill()
+        process.wait()
+        log_problem(
+            config,
+            "sink %s: timed out after %g seconds and was killed" % (name, config["sink_timeout_seconds"]),
+        )
+        return
+    if process.returncode != 0:
+        log_problem(config, "sink %s: exited with status %d" % (name, process.returncode))
+
+
+def command_emit(config, args):
+    kind = args.kind
+    if kind not in KINDS:
+        reject("unknown kind %r; format version %d defines: %s" % (kind, FORMAT_VERSION, ", ".join(KINDS)))
+    if not args.worker.strip():
+        reject("worker must not be empty")
+    worker = clean_text(args.worker)
+    context = build_context(args.context, args.context_json)
+    try:
+        line = append_event(config, worker, kind, context)
+    except Failure as failure:
+        log_problem(config, "emit failed: %s" % failure.message)
+        raise
+    run_sink(config, line)
+
+
+# --------------------------------------------------------------------------
+# tail and ack
+# --------------------------------------------------------------------------
+
+
+def command_tail(config, args):
+    since = args.since if args.since is not None else read_acknowledged(config)
+    out = sys.stdout.buffer
+    try:
+        for seq, line in iter_inbox_lines(config["inbox_path"]):
+            if seq > since:
+                out.write(line + b"\n")
+        out.flush()
+    except BrokenPipeError:
+        # The reader went away; point stdout at /dev/null so the exit flush is quiet.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except OSError as error:
+        raise Failure(EXIT_STORE, "cannot read the inbox: %s" % error)
+
+
+def command_ack(config, args):
+    with InboxLock(config):
+        try:
+            latest = max([seq for seq, _ in iter_inbox_lines(config["inbox_path"])] or [0])
+        except OSError as error:
+            raise Failure(EXIT_STORE, "cannot read the inbox: %s" % error)
+        if args.number > latest:
+            raise Failure(EXIT_BAD_INPUT, "cannot acknowledge %d: the latest sequence number is %d" % (args.number, latest))
+        if args.number <= read_acknowledged(config):
+            return
+        temporary = "%s.tmp.%d" % (ack_path(config), os.getpid())
+        try:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+            try:
+                write_all(fd, json.dumps({"acked": args.number}).encode("utf-8") + b"\n")
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(temporary, ack_path(config))
+        except OSError as error:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise Failure(EXIT_STORE, "cannot store the acknowledgment: %s" % error)
+
+
+# --------------------------------------------------------------------------
+# Command line
+# --------------------------------------------------------------------------
+
+
+def non_negative(text):
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r is not an integer" % text)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be 0 or more")
+    return value
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="agent-alert", description="Append-only alert inbox.")
+    commands = parser.add_subparsers(dest="command", required=True, metavar="{emit,tail,ack}")
+
+    emit = commands.add_parser("emit", help="append one event to the inbox")
+    emit.add_argument("--worker", required=True, help="worker id chosen by the source")
+    emit.add_argument("--kind", required=True, help="one of: " + ", ".join(KINDS))
+    emit.add_argument("--context", action="append", default=[], metavar="KEY=VALUE", help="context value (repeatable)")
+    emit.add_argument("--context-json", default=None, metavar="OBJECT", help="context as a JSON object of strings")
+
+    tail = commands.add_parser("tail", help="print events after a sequence number")
+    tail.add_argument("--since", type=non_negative, default=None, metavar="N", help="default: the latest acknowledgment")
+
+    ack = commands.add_parser("ack", help="record that events through N are handled")
+    ack.add_argument("number", type=non_negative, metavar="N")
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    handler = {"emit": command_emit, "tail": command_tail, "ack": command_ack}[args.command]
+    try:
+        handler(load_config(os.environ), args)
+    except Failure as failure:
+        print("agent-alert: %s" % failure.message, file=sys.stderr)
+        return failure.code
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
