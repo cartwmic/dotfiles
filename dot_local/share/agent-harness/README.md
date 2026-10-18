@@ -34,6 +34,9 @@ Rules:
   Both desktop profiles use codemode's `only` mode: ordinary tools remain
   callable from scripts rather than directly declared to the model.
   Hindsight's automatic hooks use REST and are independent of MCP.
+- The Pi adapter wraps the local `furi`, `playwright` and `rea` entries in `~/.local/bin/pi-mcp-lazy` (names in
+  `~/.local/share/pi-mcp-lazy/servers.list`) so Pi starts them on first use and stops them when idle. Claude and Codex
+  keep the canonical entries. See [`pi-mcp-lazy`](../pi-mcp-lazy/README.md).
 - `adapters/` may contain harness-specific metadata needed to project canonical sources into a given harness.
 - Do not put harness-specific semantics into canonical files unless the open standard itself requires them.
 

@@ -1,0 +1,2 @@
+{"server": "furi", "key": "[\"furi\", \"connect\"]", "initialize": {"protocolVersion": "2024-11-05", "capabilities": {"resources": {}, "logging": {}}, "serverInfo": {"name": "Furikake MCP Server", "version": "1.0.0"}}, "tools_sha": null, "saved_at": 1792348603}
+[]

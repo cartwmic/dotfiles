@@ -1,0 +1,121 @@
+import os
+import signal
+import subprocess
+import sys
+import time
+import unittest
+
+from harness import Env, Session, STANDIN, pid_alive, procs, text_of, wait_until, write_copy
+
+
+class LifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.e = Env()
+        self.addCleanup(self.e.cleanup)
+        write_copy(self.e.state, "fake", self.e.key("--grandchild"))
+
+    def sess(self, idle=2, *a, **k):
+        s = Session(self.e, "fake", idle, "--grandchild", *a, **k)
+        self.addCleanup(s.close)
+        s.initialize()
+        return s
+
+    def test_idle_stop_kills_server_and_grandchild_then_restarts(self):
+        s = self.sess(2)
+        self.assertEqual(text_of(s.call("echo", {"text": "1"})), "echo:1")
+        first = self.e.server_pid()
+        self.assertEqual(len(procs(self.e.marker)), 2, procs(self.e.marker))
+        self.assertTrue(wait_until(lambda: procs(self.e.marker) == [], timeout=12), procs(self.e.marker))
+        self.assertFalse(pid_alive(first))
+        self.assertEqual(text_of(s.call("echo", {"text": "2"})), "echo:2")
+        self.assertEqual(self.e.starts(), 2)
+        self.assertNotEqual(self.e.server_pid(), first)
+        self.assertEqual(len(procs(self.e.marker)), 2)
+
+    def test_server_keepalive_pings_do_not_hold_the_server_up(self):
+        write_copy(self.e.state, "fake", self.e.key("--grandchild", "--ping-every", "0.4"))
+        s = Session(self.e, "fake", 3, "--grandchild", "--ping-every", "0.4")
+        self.addCleanup(s.close)
+        s.initialize()
+        self.assertEqual(text_of(s.call("echo", {"text": "p"})), "echo:p")
+        self.assertEqual(len(procs(self.e.marker)), 2)
+        self.assertTrue(wait_until(lambda: procs(self.e.marker) == [], timeout=15), procs(self.e.marker))
+
+    def test_long_call_is_never_interrupted(self):
+        s = self.sess(1)
+        t0 = time.time()
+        r = s.call("slow", {"seconds": 4}, timeout=30)
+        self.assertEqual(text_of(r), "slow-done")
+        self.assertGreaterEqual(time.time() - t0, 3.9)
+        self.assertEqual(self.e.starts(), 1)
+        self.assertTrue(procs(self.e.marker))
+        self.assertTrue(wait_until(lambda: procs(self.e.marker) == [], timeout=12))
+
+    def test_idle_clock_counts_from_last_activity(self):
+        s = self.sess(3)
+        s.call("echo", {"text": "a"})
+        time.sleep(2)
+        s.call("echo", {"text": "b"})
+        time.sleep(2)
+        self.assertTrue(procs(self.e.marker), "stopped 2s after the last call although idle period is 3s")
+        self.assertEqual(self.e.starts(), 1)
+        self.assertTrue(wait_until(lambda: procs(self.e.marker) == [], timeout=12))
+
+    def _exit_leaves_nothing(self, how):
+        s = self.sess(600)
+        s.call("echo", {"text": "x"})
+        self.assertEqual(len(procs(self.e.marker)), 2)
+        how(s)
+        s.p.wait(timeout=15)
+        self.assertTrue(wait_until(lambda: procs(self.e.marker) == [], timeout=10), procs(self.e.marker))
+
+    def test_stdin_close_leaves_nothing(self):
+        self._exit_leaves_nothing(lambda s: s.p.stdin.close())
+
+    def test_sigterm_leaves_nothing(self):
+        self._exit_leaves_nothing(lambda s: s.p.send_signal(signal.SIGTERM))
+
+    def test_sighup_leaves_nothing(self):
+        self._exit_leaves_nothing(lambda s: s.p.send_signal(signal.SIGHUP))
+
+    def test_sigkill_observation(self):
+        """Stated limit: SIGKILL gives the stand-in no chance to clean up. Record what happens."""
+        s = self.sess(600)
+        s.call("echo", {"text": "x"})
+        s.p.kill()
+        s.p.wait(timeout=10)
+        time.sleep(1.5)
+        left = procs(self.e.marker)
+        print("\nSIGKILL observation: %d marker process(es) remain after the stand-in is killed: %s"
+              % (len(left), [l.split(None, 1)[0] for l in left]))
+        for l in left:
+            try:
+                os.kill(int(l.split()[0]), signal.SIGKILL)
+            except Exception:
+                pass
+
+    def test_unexpected_server_exit_errors_inflight_and_restarts(self):
+        s = self.sess(600)
+        s.call("echo", {"text": "x"})
+        pid = self.e.server_pid()
+        s.n += 1
+        rid = s.n
+        s.send({"jsonrpc": "2.0", "id": rid, "method": "tools/call", "params": {"name": "slow", "arguments": {"seconds": 30}}})
+        time.sleep(0.5)
+        os.kill(pid, signal.SIGKILL)
+        r = None
+        end = time.time() + 15
+        while time.time() < end and r is None:
+            try:
+                m = s.q.get(timeout=0.5)
+                if m.get("id") == rid:
+                    r = m
+            except Exception:
+                pass
+        self.assertIsNotNone(r)
+        self.assertIn("exited unexpectedly", r["error"]["message"])
+        self.assertEqual(text_of(s.call("echo", {"text": "after"})), "echo:after")
+
+
+if __name__ == "__main__":
+    unittest.main()
