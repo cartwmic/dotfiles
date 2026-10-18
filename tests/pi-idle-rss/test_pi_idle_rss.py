@@ -460,6 +460,28 @@ class Reporting(unittest.TestCase):
         self.assertTrue(m.scan_post("see /Users/x/.pi/agent/sessions/abc.jsonl"))
 
 
+class WarmupIsolationTests(unittest.TestCase):
+    def run_main(self, pf_ok):
+        pf = {"ok": pf_ok, "checks": [{"name": "no-credential-looking-files-placed", "ok": pf_ok}]}
+        with tempfile.TemporaryDirectory() as td, \
+             mock.patch.object(m, "release_paths", return_value=(Path(td), Path(td))), \
+             mock.patch.object(m, "Store"), mock.patch.object(m, "Backend"), \
+             mock.patch.object(m, "preflight", return_value=pf) as pre, \
+             mock.patch.object(m, "run_sample") as run:
+            rc = m.main(["measure", "--variants", "full", "--samples", "1", "--warmup", "--out", td + "/out"])
+        return rc, pre, run
+
+    def test_failed_isolation_launches_nothing_not_even_the_warmup(self):
+        rc, pre, run = self.run_main(False)
+        self.assertEqual(rc, 2)
+        run.assert_not_called()
+
+    def test_passing_isolation_runs_warmup_then_samples(self):
+        rc, pre, run = self.run_main(True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(run.call_count, 2)
+
+
 class ReadingStabilityTests(unittest.TestCase):
     def test_a_compaction_still_finishing_is_not_stable(self):
         self.assertFalse(m.readings_stable([3128656, 663744, 667568]))
