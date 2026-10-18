@@ -84,13 +84,14 @@ Pi session to pick the change up.
 | before (d6118aba) | 3 | 292 MB | 1257 MB | 975 MB | 5 real servers/wrappers |
 | after, all lazy variants pooled (state copy, seed only, refresh failed) | 21 | 335 MB | **385 MB** (334-417) | about 270 MB | 3 stand-ins, 0 real |
 
-Owned-set RSS falls by about 70% and no real MCP process runs at the settled point. **The 350 MB target (AC-2) is not met
-reliably**: 5 of 21 after-change samples were at or below it. The three stand-ins are a fixed 48 MB (16 MB each); the rest is
-the Pi process, whose RSS alone varied between 283 and 367 MB from launch to launch (two modes, about 285 and about 345 MB),
-whatever the variant. Early three-sample runs happened to land in the low mode (334 MB with a state copy, 341 MB after a failed
-refresh, 357-359 MB seed only); an interleaved rerun (three rounds of each variant, alternating) landed in the high mode for all
-variants (385-417 MB), so the variants do not differ from each other. Small aged session (one compaction, one /reload):
-owned-set footprint after /reload 269 MB with no real MCP process at any stage; the baseline had 5 processes and 1001 MB.
+Owned-set RSS falls by about 70% (69% at the median, 67% in the worst session; the acceptance line set by the owner is a cut of at
+least 65%), and no real MCP process runs at the settled point. The three stand-ins are a fixed 48 MB (16 MB each); the rest is the Pi
+process, whose RSS alone varied between 283 and 367 MB from launch to launch (two modes, about 285 and about 345 MB), whatever the
+variant. That variation is reported and not judged. An earlier target of 350 MB owned-set RSS was met in only 5 of 21 sessions; the
+owner replaced it with the 65% cut. Early three-sample runs happened to land in the low mode (334 MB with a state copy, 341 MB after a
+failed refresh, 357-359 MB seed only); an interleaved rerun (three rounds of each variant, alternating) landed in the high mode for all
+variants (385-417 MB), so the variants do not differ from each other. Small aged session (one compaction, one /reload): owned-set
+footprint after /reload 269 MB with no real MCP process at any stage; the baseline had 5 processes and 1001 MB.
 
 The stand-ins read 16 MB each here because the measurement home has no Python bytecode cache; with a warm cache one idles at
 about 12 MB. A stand-in runs on the system Python (`/usr/bin/python3`) when the macOS command-line tools are present, because it
