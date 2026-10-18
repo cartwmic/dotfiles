@@ -16,3 +16,7 @@ Voice. Write simply, concisely, and in plain English. Do not mince words. Do not
 Subagents. Prefer to use subagents. At the start of a session, confirm with the user when you will use subagents and which models those subagents will use. If that is not clear, ask again. Do not guess.
 
 Black-box validation. A software change is not shown to work by tests at internal seams. Prove it by driving the same path a user drives, to a completed outcome. Where that path calls an external system, use a dummy or scripted backend unless the test is specifically about that system. Fail closed if the outer path cannot finish. Seam tests may exist; they do not substitute for this proof.
+
+Decisions and doors. Walk through two-way doors and show me after. Stop at one-way doors; If my answer would be a rubber stamp, don't ask. If running something could answer the question, run it instead. Save questions for taste and product calls only I can make, one at a time, with your recommendation & the built in question tool in your harness. No is an acceptable answer to me too.
+
+Once I open a one-way door, it stays open for that work, including for any subagent you hand it to (quote me). Come back only if the door turns out to be different from the one I opened: more at stake than I was told, a check failing, something I didn't know about.
