@@ -61,6 +61,11 @@ def free_percent() -> int:
     return int(m.group(1)) if m else 0
 
 
+def pressure_ok(min_free: int = 30) -> bool:
+    """Non-blocking: normal pressure and enough headroom right now."""
+    return pressure_level() == 1 and free_percent() >= min_free
+
+
 def gate(label: str, min_free: int = 30, wait_max: int = 900, poll: int = 15, log=print) -> dict:
     """Block until memory pressure is normal and headroom is sufficient, else abort the run."""
     start = time.time()
@@ -831,15 +836,18 @@ def aged_driver(s: Session, watcher: PressureWatcher, log, order=("turn", "compa
             return False
         if not st["settled"]:
             raise SampleRejected(f"unsettled at {name}")
-        stages[name] = {**median_reading(s), "settle": st}
+        rd = median_reading(s, abort=watcher.rose)
+        if rd is None:
+            return False
+        stages[name] = {**rd, "settle": st}
         return True
 
     if not reading("loaded", 420):
         return None
     for name, command, extra in (AGED_STAGES[k] for k in order):
-        try:
-            gate(f"in-session {name}", log=log)
-        except Fatal:
+        # a live aged session is memory-heavy: never wait for pressure to ease with it running; discard and back off
+        if watcher.rose.is_set() or not pressure_ok():
+            log(f"[aged] pressure not normal before {name}: discarding this sample")
             return None
         before_children = s.child_pids()
         s.send(command)
