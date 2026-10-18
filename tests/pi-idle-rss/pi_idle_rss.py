@@ -567,13 +567,17 @@ def header_extensions(head_text: str) -> list[str]:
 
 
 def expected_loaded(agent: Path) -> dict:
-    """Owners that must appear in the startup header: local extension dirs/files, and each configured package."""
-    owners: dict[str, set[str]] = {}
+    """Owners that must appear in Pi's startup header, as {owner: [set of acceptable exact entries, one set per required entry]}."""
+    owners: dict[str, list[set[str]]] = {}
     ext = agent / "extensions"
     if ext.exists():
         for e in sorted(ext.iterdir()):
-            if e.is_dir() or e.suffix in (".ts", ".js", ".mjs"):
-                owners[f"ext:{e.name}"] = {e.name}
+            if e.is_dir():
+                has_entry = any((e / n).exists() for n in ("index.ts", "index.js", "index.mjs")) or (e / "package.json").exists()
+                if has_entry:  # config-only or docs-only directories load nothing
+                    owners[f"ext:{e.name}"] = [{e.name}]
+            elif e.suffix in (".ts", ".js", ".mjs"):
+                owners[f"ext:{e.name}"] = [{e.name}]
     try:
         packages = json.loads((agent / "settings.json").read_text()).get("packages", [])
     except (OSError, ValueError):
@@ -582,25 +586,35 @@ def expected_loaded(agent: Path) -> dict:
         src = entry if isinstance(entry, str) else entry.get("source", "")
         d = package_dir(agent, entry)
         key = package_key(src)
-        cands = {key}
+        if isinstance(entry, dict) and entry.get("extensions") == []:
+            owners[f"pkg:{key}"] = []  # configured with no extensions: it loads nothing by design
+            continue
+        name = src[4:].split("@", 1)[0] if src.startswith("npm:") and not src[4:].startswith("@") else ("@" + src[5:].split("@", 1)[0] if src.startswith("npm:") else key)
         try:
             entries = json.loads((d / "package.json").read_text()).get("pi", {}).get("extensions", []) if d else []
         except (OSError, ValueError):
             entries = []
+        required: list[set[str]] = []
         for rel in entries or []:
             parts = Path(rel).parts
-            cands.add(Path(rel).name)
-            if len(parts) >= 2:
-                cands.add(parts[-2])
-        owners[f"pkg:{key}"] = cands
+            base = Path(rel).name
+            directory = parts[-2] if len(parts) >= 2 and parts[-2] != "." else ""
+            cands = {name, key, base, f"{name}:{base}"}
+            if directory:
+                cands |= {directory, f"{key}/{directory}", f"{name}:{directory}"}
+            if len(parts) >= 3 and parts[-3] != ".":
+                cands.add(f"{parts[-3]}/{directory}")
+            required.append(cands)
+        owners[f"pkg:{key}"] = required or [{name, key}]
     return owners
 
 
 def missing_loaded(tokens: list[str], owners: dict) -> list[str]:
-    """Owners with no matching header entry (an entry matches by equality or by containing the owner's candidate name)."""
+    """Owners with a required entry that no header entry equals exactly (no substring matching: pi-subagents is not pi-sub)."""
+    seen = set(tokens) | {t.split(":", 1)[0] for t in tokens}
     missing = []
-    for owner, cands in owners.items():
-        if not any(t == c or c in t for t in tokens for c in cands):
+    for owner, required in owners.items():
+        if any(not (cands & seen) for cands in required):
             missing.append(owner)
     return missing
 
@@ -647,6 +661,9 @@ def preflight(v: dict, root: Path, store: Store, node_dir: Path, workdir: Path) 
 
 
 # ----------------------------------------------------------------- pty session
+ERROR_RE = re.compile(rb"(?i)failed to load|extension error|cannot find module")
+
+
 class Session:
     def __init__(self, v: dict, root: Path, store: Store, backend: Backend, node_dir: Path, session_file: Path | None = None):
         self.v, self.root, self.marker = v, root, uuid.uuid4().hex[:12]
@@ -660,6 +677,8 @@ class Session:
         self._backend = backend
         self.buf = b""
         self.head = b""
+        self.err_count = 0
+        self._carry = b""
         self.proc = None
         self.master = None
 
@@ -685,6 +704,8 @@ class Session:
                 except OSError:
                     break
                 self.buf = (self.buf + data)[-65536:]
+                self.err_count += len(ERROR_RE.findall(self._carry + data))
+                self._carry = data[-48:]
                 if len(self.head) < 60000:
                     self.head += data
         return True
@@ -739,7 +760,8 @@ class Session:
         return getattr(self, "_backend", None).requests if getattr(self, "_backend", None) else -1
 
     def load_errors(self) -> int:
-        return len(re.findall(rb"(?i)failed to load|extension error|cannot find module", self.buf))
+        """Cumulative since start; independent of the screen buffer, which the command smoke clears."""
+        return self.err_count
 
     def stop(self):
         try:
@@ -885,6 +907,9 @@ def run_sample(v, root, store, backend, node_dir, settle, out_file, tag="fresh",
                         record["variant_effects"] = record["smoke"]["missing"]
                     else:
                         ok, reason = False, "smoke: registered commands missing " + ",".join(record["smoke"]["missing"])
+            if ok and s.load_errors():
+                ok, reason = False, f"load errors seen ({s.load_errors()})"
+                record["load_error_markers"] = s.load_errors()
             if not ok:
                 record["aborted"] = reason or "pressure"
                 log(f"[sample] discarding sample {v['name']} (attempt {attempt}): {record['aborted']}")
@@ -1062,6 +1087,12 @@ def report(indir: Path) -> str:
         cols = [summarize([r[k] for r in rs if r.get(k) is not None]) for k in ("rss_pi_kb", "rss_owned_kb", "fp_pi_kb", "fp_owned_kb")]
         med[(var, tag)] = cols[0].get("median")
         out.append(f"| {var} | {tag} | " + " | ".join(fmt(c) for c in cols) + " |")
+    effects = {}
+    for r in all_rows:
+        if r.get("variant_effects") and not r.get("aborted"):
+            effects.setdefault(r["variant"], set()).update(r["variant_effects"])
+    if effects:
+        out += ["", "Variant effects (commands that stopped registering because their owner depended on the removed part): " + "; ".join(f"{v}: {', '.join(sorted(c))}" for v, c in sorted(effects.items())) + "."]
     if rejected:
         out += ["", "Discarded sample attempts (retried): " + ", ".join(f"{k} x{n}" for k, n in sorted(rejected.items())) + "."]
     metrics = {"rss_pi_kb": "RSS Pi", "fp_pi_kb": "footprint Pi", "rss_owned_kb": "RSS owned", "fp_owned_kb": "footprint owned"}
