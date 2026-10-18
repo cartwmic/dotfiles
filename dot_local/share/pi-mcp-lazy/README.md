@@ -16,6 +16,9 @@ server, but for `furi`, `playwright` and `rea` that process is the stand-in:
 - **After the idle period with no request in flight** the whole process tree is stopped (stdin closed, SIGTERM, a
   short grace, SIGKILL, plus any descendant that left the group). A later request starts it again. A call that runs
   longer than the idle period is never interrupted: the clock runs only while nothing is in flight.
+- **A cancelled call is not in flight.** Pi cancels a call when the user aborts it or it times out, and some servers (rea) then
+  send no reply at all. The stand-in forgets a request as soon as Pi cancels it, so an unanswered cancelled call cannot keep the
+  server up past the idle period.
 - **A server that cannot start** answers the waiting request with an error that names the server and carries the
   tail of its stderr. The stand-in stays up and the next request tries again.
 - Closing Pi's stdin, SIGTERM and SIGHUP stop the real server too, so exiting Pi or `/reload` leaves nothing behind.
