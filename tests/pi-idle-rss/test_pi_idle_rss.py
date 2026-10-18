@@ -119,6 +119,49 @@ class Isolation(unittest.TestCase):
             self.assertTrue(next(c for c in res["checks"] if c["name"] == "home-resolves-to-throwaway")["ok"])
 
 
+class Acceptance(unittest.TestCase):
+    def test_dependency_classification(self):
+        deps = {"web-search": ["auth_json", "keychain", "cred_helper"], "recap": ["home", "recap_cli"]}
+        ok = m.classify_dependencies(deps, {"security": "stub", "op": "stub", "gh": "absent"}, [], True)
+        self.assertEqual(ok, {})
+        bad = m.classify_dependencies(deps, {"security": "real", "op": "stub"}, ["x/auth.json"], False)
+        self.assertEqual(sorted(bad), ["recap", "web-search"])
+        self.assertTrue(any("real binary" in x for x in bad["web-search"]))
+        self.assertTrue(any("credential-looking" in x for x in bad["web-search"]))
+
+    def test_expected_commands_scan_respects_variant_packages(self):
+        with tempfile.TemporaryDirectory() as d:
+            agent = Path(d)
+            (agent / "extensions/a").mkdir(parents=True)
+            (agent / "extensions/a/index.ts").write_text("pi.registerCommand('alpha', {}); pi.registerCommand(dynamicName, {})")
+            (agent / "extensions/a/index.test.ts").write_text("pi.registerCommand('ignored', {})")
+            (agent / "extensions/a/bridge.ts").write_text("pi.registerCommand('hidden', { description: 'Internal dispatch', handler })")
+            pkg = agent / "git/github.com/o/pk"
+            (pkg / "src").mkdir(parents=True)
+            (pkg / "package.json").write_text(json.dumps({"pi": {"extensions": ["./src/index.ts"]}}))
+            (pkg / "src/index.ts").write_text('pi.registerCommand("beta", {})')
+            (agent / "settings.json").write_text(json.dumps({"packages": ["https://github.com/o/pk", "https://github.com/o/gone"]}))
+            exp = m.expected_commands(agent, m.parse_variant("full"))
+            self.assertEqual(exp, {"ext:a": ["alpha"], "pkg:pk": ["beta"]})
+
+    def test_menu_match_is_not_fooled_by_typed_echo(self):
+        self.assertTrue(m.menu_has("/goal → goal [u] Set a goal", "goal"))
+        self.assertFalse(m.menu_has("/goal  no matching commands", "goal"))
+        self.assertTrue(m.menu_has("→ subagents-refresh-provider-mod [u:git:github.com/o/p] Refresh", "subagents-refresh-provider-models"))
+        self.assertTrue(m.menu_has("x btw [u] side thread btw:ask [u] ask", "btw:ask"))
+        self.assertFalse(m.menu_has("/goal → goals-list [u]", "goal"))
+
+    def test_aged_tags_keep_reload_only_separate(self):
+        self.assertEqual(m.aged_tag("large", "turn,compact,reload"), "aged-large")
+        self.assertEqual(m.aged_tag("large", "reload"), "aged-large[reload]")
+
+    def test_package_dir_mapping(self):
+        a = Path("/a")
+        self.assertEqual(m.package_dir(a, "https://github.com/o/r"), a / "git/github.com/o/r")
+        self.assertEqual(m.package_dir(a, {"source": "git:github.com/o/r@abc"}), a / "git/github.com/o/r")
+        self.assertEqual(m.package_dir(a, "npm:@s/p"), a / "npm/node_modules/@s/p")
+
+
 class Gate(unittest.TestCase):
     def test_gate_returns_at_normal_pressure(self):
         with mock.patch.object(m, "pressure_level", return_value=1), mock.patch.object(m, "free_percent", return_value=60):
@@ -128,6 +171,17 @@ class Gate(unittest.TestCase):
         with mock.patch.object(m, "pressure_level", return_value=2), mock.patch.object(m, "free_percent", return_value=60):
             with self.assertRaises(m.Fatal):
                 m.gate("t", wait_max=0, poll=0, log=lambda *_: None)
+
+
+class RemainderTests(unittest.TestCase):
+    def test_numeric_remainder_and_noise_floor(self):
+        mm = {("core", "fresh"): {"fp_pi_kb": 90 * 1024}, ("full", "fresh"): {"fp_pi_kb": 210 * 1024},
+              ("full-pkg:big", "fresh"): {"fp_pi_kb": 150 * 1024}, ("full-pkg:noise", "fresh"): {"fp_pi_kb": 205 * 1024},
+              ("full-nomcp", "fresh"): {"fp_pi_kb": 100 * 1024}, ("full-mcp:a+b", "fresh"): {"fp_pi_kb": 100 * 1024}}
+        r = m.remainder(mm, {"fp_pi_kb": 40 * 1024}, "fp_pi_kb")
+        self.assertEqual(list(r["supported"]), ["full-pkg:big"])  # aggregates and in-noise parts excluded
+        self.assertAlmostEqual(r["unexplained_mb"], 120 - 60)
+        self.assertAlmostEqual(r["noise_mb"], 20)
 
 
 class Aged(unittest.TestCase):

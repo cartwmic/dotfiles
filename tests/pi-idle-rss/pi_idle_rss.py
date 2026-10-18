@@ -8,6 +8,7 @@ marker; only marker-owned processes are ever signalled. See README.md.
 from __future__ import annotations
 
 import argparse
+import collections
 import fcntl
 import functools
 import http.server
@@ -34,7 +35,7 @@ from pathlib import Path
 REAL_HOME = Path(os.environ.get("PI_IDLE_RSS_REAL_HOME") or Path.home())
 REAL_AGENT = REAL_HOME / ".pi" / "agent"
 MARKER = "PI_IDLE_RSS_SAMPLE"
-CRED_STUBS = ("security", "op")
+CRED_STUBS = ("security", "op", "ssh-agent")
 CRED_FILE_RE = re.compile(r"(^auth\.json|^mcp-auth|^\.env|\.pem$|^id_(rsa|ed25519|ecdsa)|\.netrc$|^\.npmrc$|^credentials?(\.json)?$)", re.I)
 CRED_ENV_RE = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|CREDENTIAL|^OP_|^AWS_|^GH_|^GITHUB_)", re.I)
 ENV_ALLOW = ("TERM", "LANG", "LC_ALL", "TMPDIR")
@@ -42,6 +43,10 @@ ENV_ALLOW = ("TERM", "LANG", "LC_ALL", "TMPDIR")
 
 class Fatal(RuntimeError):
     """Cleanup or isolation could not be guaranteed: stop the whole run."""
+
+
+class SampleRejected(RuntimeError):
+    """The sample does not meet its own acceptance conditions (not settled, stage not verified, smoke failed)."""
 
 
 # ----------------------------------------------------------------- pressure gate
@@ -459,6 +464,106 @@ def scan_extension_deps(ext_dir: Path) -> dict:
     return {k: sorted(v) for k, v in out.items()}
 
 
+CRED_HELPERS = ("op", "security", "ssh-agent", "gh", "aws", "gcloud")
+
+
+def classify_dependencies(deps: dict, resolved: dict, files_placed: list[str], recap_present: bool) -> dict:
+    """Every home-relative / credential reference found by the scan must be accounted for:
+    isolated (lives in the throwaway HOME), provisioned (recap CLI present), or excluded (credential file absent,
+    helper stubbed or unresolvable). Returns the unclassified ones."""
+    unclassified = {}
+    for ext, hits in deps.items():
+        bad = []
+        if "auth_json" in hits and files_placed:
+            bad.append("auth_json: credential-looking file placed")
+        if ("keychain" in hits or "cred_helper" in hits):
+            live = [h for h, where in resolved.items() if where not in ("stub", "absent")]
+            if live:
+                bad.append("credential helper resolvable to a real binary: " + ",".join(sorted(live)))
+        if "recap_cli" in hits and not recap_present:
+            bad.append("recap CLI not provisioned")
+        if bad:
+            unclassified[ext] = bad
+    return unclassified
+
+
+def resolve_helpers(env: dict, stubs: Path) -> dict:
+    out = {}
+    for h in CRED_HELPERS:
+        where = subprocess.run(["sh", "-c", f"command -v {h}"], env=env, capture_output=True, text=True).stdout.strip()
+        out[h] = "absent" if not where else ("stub" if where.startswith(str(stubs)) else "real")
+    return out
+
+
+COMMAND_RE = re.compile(r"""registerCommand\(\s*["'`]([A-Za-z0-9:_-]+)["'`]""")
+
+
+def scan_commands(root: Path) -> set[str]:
+    names = set()
+    for p in root.rglob("*"):
+        if p.suffix not in (".ts", ".mjs", ".js") or ".test." in p.name or "node_modules" in p.parts:
+            continue
+        try:
+            text = p.read_text(errors="ignore")
+        except OSError:
+            continue
+        for mt in COMMAND_RE.finditer(text):
+            # commands that describe themselves as internal are not listed in the menu
+            if re.search(r"description:\s*[\"'`]Internal", text[mt.end(): mt.end() + 160]):
+                continue
+            names.add(mt.group(1))
+    return names
+
+
+def package_dir(agent: Path, source: str) -> Path | None:
+    s = source if isinstance(source, str) else source.get("source", "")
+    if s.startswith("npm:"):
+        return agent / "npm" / "node_modules" / s[4:].split("@", 1)[0] if not s[4:].startswith("@") else agent / "npm" / "node_modules" / ("@" + s[5:].split("@", 1)[0])
+    m = re.match(r"^(?:git:|https?://)(github\.com)/([^/]+)/([^/@]+?)(?:\.git)?(?:@.*)?$", s)
+    return agent / "git" / m.group(1) / m.group(2) / m.group(3) if m else None
+
+
+def expected_commands(agent: Path, v: dict) -> dict:
+    """Slash commands that the variant's loaded extensions register as literals, by owner (names only)."""
+    out: dict[str, set[str]] = {}
+    ext = agent / "extensions"
+    if ext.exists():
+        for e in sorted(ext.iterdir()):
+            if e.is_dir():
+                found = scan_commands(e)
+                if found:
+                    out[f"ext:{e.name}"] = found
+    try:
+        packages = json.loads((agent / "settings.json").read_text()).get("packages", [])
+    except (OSError, ValueError):
+        packages = []
+    for entry in packages:
+        d = package_dir(agent, entry)
+        if not d or not d.exists():
+            continue
+        try:
+            entries = json.loads((d / "package.json").read_text()).get("pi", {}).get("extensions", [])
+        except (OSError, ValueError):
+            entries = []
+        found = set()
+        for rel in entries or []:
+            target = (d / rel).parent if (d / rel).suffix else d / rel
+            found |= scan_commands(target)
+        if found:
+            out[f"pkg:{package_key(entry if isinstance(entry, str) else entry.get('source', ''))}"] = found
+    return {k: sorted(vv) for k, vv in out.items()}
+
+
+MENU_NAME_WIDTH = 30  # the menu truncates long command names
+
+
+def menu_has(screen_text: str, name: str) -> bool:
+    """True when the command menu lists the command: an arrow or space, the (possibly truncated) name, then its source tag."""
+    shown = re.escape(name[:MENU_NAME_WIDTH])
+    tail = r"[A-Za-z0-9_:-]*" if len(name) > MENU_NAME_WIDTH else ""
+    return re.search(r"(?:→\s*|\s)" + shown + tail + r"\s+\[", screen_text) is not None
+
+
 def preflight(v: dict, root: Path, store: Store, node_dir: Path, workdir: Path) -> dict:
     h = build_home(v, root, store, "http://127.0.0.1:1/v1", workdir)
     env = launch_env(h, "preflight", node_dir)
@@ -477,8 +582,12 @@ def preflight(v: dict, root: Path, store: Store, node_dir: Path, workdir: Path) 
     which = subprocess.run(["sh", "-c", "command -v security"], env=env, capture_output=True, text=True).stdout.strip()
     add("credential-stub-first-on-path", which == str(h["stubs"] / "security"), "")
     deps = scan_extension_deps(h["agent"] / "extensions") if (h["agent"] / "extensions").exists() else {}
-    add("home-dependencies-classified", True, f"extensions_with_home_refs={len(deps)}")
     recap = h["home"] / ".local" / "bin" / "session-recap"
+    resolved = resolve_helpers(env, h["stubs"])
+    unclassified = classify_dependencies(deps, resolved, placed_credential_files(h["home"]), recap.exists())
+    add("home-dependencies-classified", not unclassified, f"extensions_with_refs={len(deps)} unclassified={len(unclassified)} helpers={resolved}")
+    exp = expected_commands(h["agent"], v)
+    add("expected-commands-found-by-scan", v["base"] == "core" or bool(exp), f"owners={len(exp)} commands={sum(len(x) for x in exp.values())}")
     if recap.exists():
         r = subprocess.run([str(recap), "list", "--json", "--omit-coverage-units"], env=env, capture_output=True, text=True, timeout=60)
         try:
@@ -486,7 +595,7 @@ def preflight(v: dict, root: Path, store: Store, node_dir: Path, workdir: Path) 
         except ValueError:
             listed = None
         add("smoke:recap-cli-functional", r.returncode == 0 and listed is not None, f"exit={r.returncode} json={'yes' if listed is not None else 'no'}")
-    return {"variant": v["name"], "ok": all(c["ok"] for c in checks), "checks": checks, "manifest": h["manifest"], "extension_deps": deps}
+    return {"variant": v["name"], "ok": all(c["ok"] for c in checks), "checks": checks, "manifest": h["manifest"], "extension_deps": deps, "unclassified": unclassified, "expected_commands": exp}
 
 
 # ----------------------------------------------------------------- pty session
@@ -499,6 +608,7 @@ class Session:
         self.env = launch_env(self.h, self.marker, node_dir)
         self.pi_bin, _ = release_paths()
         self.session_file = session_file
+        self.expected = expected_commands(self.h["agent"], v)
         self._backend = backend
         self.buf = b""
         self.proc = None
@@ -537,6 +647,30 @@ class Session:
         return {"owned": [{"name": cmd_name(r["line"]), "rss_kb": r["rss_kb"]} for r in rows],
                 "rss_pi_kb": pi["rss_kb"] if pi else None, "rss_owned_kb": sum(r["rss_kb"] for r in rows),
                 "fp_pi_kb": fps.get(self.proc.pid), "fp_owned_kb": sum(x or 0 for x in fps.values()), "owned_count": len(rows)}
+
+    def screen_text(self, tail: int = 2500) -> str:
+        txt = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07", b" ", self.buf).decode("utf8", "ignore")
+        return re.sub(r"\s+", " ", txt)[-tail:]
+
+    def child_pids(self) -> set[int]:
+        return {r["pid"] for r in owned_set(ps_table(), self.marker, self.proc.pid) if r["pid"] != self.proc.pid}
+
+    def smoke_commands(self, everything: bool = False) -> dict:
+        """Type an expected command into the editor and require the command menu to list it, then clear the line.
+        The menu lists exactly what the loaded extensions registered; nothing is executed. By default one representative
+        command per loaded owner (extension or package); everything=True checks every literal command."""
+        missing, checked = [], 0
+        for owner, names in sorted(self.expected.items()):
+            for n in (names if everything else names[:1]):
+                self.buf = b""
+                os.write(self.master, ("/" + n).encode())
+                self.pump(2.5)
+                checked += 1
+                if not menu_has(self.screen_text(), n):
+                    missing.append(f"{owner}:{n}")
+                os.write(self.master, b"\x15")
+                self.pump(0.5)
+        return {"checked": checked, "missing": missing}
 
     def backend_requests(self) -> int:
         return getattr(self, "_backend", None).requests if getattr(self, "_backend", None) else -1
@@ -608,6 +742,8 @@ def aged_driver(s: Session, watcher: PressureWatcher, log, order=("turn", "compa
         st = wait_settled(s, watcher.rose, max_s=wait)
         if st is None:
             return False
+        if not st["settled"]:
+            raise SampleRejected(f"unsettled at {name}")
         stages[name] = {**median_reading(s), "settle": st}
         return True
 
@@ -618,21 +754,31 @@ def aged_driver(s: Session, watcher: PressureWatcher, log, order=("turn", "compa
             gate(f"in-session {name}", log=log)
         except Fatal:
             return None
+        before_children = s.child_pids()
         s.send(command)
         if not s.pump(extra, watcher.rose):
             return None
         if not reading(name, 300):
             return None
         stages[name]["backend_requests"] = s.backend_requests()
-    if "after_reload" in stages:
-        stages["after_reload"]["reload_seen"] = bool(re.search(rb"(?i)reload", s.buf))
-    if "after_compact" in stages:
-        stages["after_compact"]["compaction_entries"] = count_marker(s.session_file, b'"type":"compaction"') if s.session_file and Path(s.session_file).exists() else 0
+        if name == "after_compact":
+            n = count_marker(s.session_file, b'"type":"compaction"') if s.session_file and Path(s.session_file).exists() else 0
+            stages[name]["compaction_entries"] = n
+            if n < 1:
+                raise SampleRejected("no compaction entry recorded after /compact")
+        if name == "after_reload":
+            after_children = s.child_pids()
+            replaced = bool(before_children) and not (before_children & after_children) == before_children
+            stages[name]["reload_verified"] = True if replaced else (None if not before_children else False)
+            stages[name]["child_pids_replaced"] = len(before_children - after_children)
+            if stages[name]["reload_verified"] is False:
+                raise SampleRejected("/reload did not restart any extension-owned child process")
     return stages
 
 
-def run_sample(v, root, store, backend, node_dir, settle, out_file, tag="fresh", session_file=None, driver=None, log=print, max_settle=300.0):
+def run_sample(v, root, store, backend, node_dir, settle, out_file, tag="fresh", session_file=None, driver=None, log=print, max_settle=300.0, smoke=False):
     for attempt in range(3):
+        reason = None
         before = gate(f"launch {v['name']}", log=log)
         watcher = PressureWatcher()
         watcher.start()
@@ -655,16 +801,28 @@ def run_sample(v, root, store, backend, node_dir, settle, out_file, tag="fresh",
                 st = wait_settled(s, watcher.rose, max_s=max_settle)
                 ok = st is not None
                 record["settle"] = st
+                if st is not None and not st["settled"]:
+                    ok, reason = False, "unsettled"
             if ok and driver:
-                stages = driver(s, watcher, log)
+                try:
+                    stages = driver(s, watcher, log)
+                except SampleRejected as e:
+                    stages, reason = None, f"rejected: {e}"
                 ok = stages is not None
+            if ok and smoke and driver is None:
+                record.update(s.measure())
+                record.update(median_reading(s))
+                record["smoke"] = s.smoke_commands(everything=(v["name"] == "full"))
+                if record["smoke"]["missing"]:
+                    ok, reason = False, "smoke: registered commands missing " + ",".join(record["smoke"]["missing"])
             if not ok:
-                record["aborted"] = "pressure"
-                log(f"[sample] pressure rose: discarding sample {v['name']} (attempt {attempt})")
+                record["aborted"] = reason or "pressure"
+                log(f"[sample] discarding sample {v['name']} (attempt {attempt}): {record['aborted']}")
             else:
-                record.update(s.measure() if driver is None else {})
-                if driver is None:
-                    record.update(median_reading(s))
+                if not smoke:
+                    record.update(s.measure() if driver is None else {})
+                    if driver is None:
+                        record.update(median_reading(s))
                 record["load_error_markers"] = s.load_errors()
                 record["backend_requests"] = backend.requests
         finally:
@@ -684,8 +842,9 @@ def run_sample(v, root, store, backend, node_dir, settle, out_file, tag="fresh",
                 f.write(json.dumps(row) + "\n")
         if not record.get("aborted"):
             return record
-        time.sleep(60)
-    raise Fatal(f"sample {v['name']} aborted three times under memory pressure")
+        if record["aborted"] == "pressure":
+            time.sleep(60)
+    raise Fatal(f"sample {v['name']} discarded three times; last reason: {record.get('aborted')}")
 
 
 # ------------------------------------------------------------- aged sessions
@@ -708,6 +867,11 @@ def real_session_stats(days: int = 7, idle_minutes: int = 60) -> dict:
                 n += chunk.count(b'"type":"message"')
         best = {"bytes": st.st_size, "messages": n}
     return best
+
+
+def aged_tag(size: str, stages: str) -> str:
+    """Distinct tag per stage set so a reload-only run is never pooled with a turn+compact+reload run."""
+    return f"aged-{size}" if stages == "turn,compact,reload" else f"aged-{size}[{stages.replace(',', '+')}]"
 
 
 def size_plan(names: str) -> dict:
@@ -790,7 +954,26 @@ def mb(kb):
 def fmt(s: dict, scale=1024) -> str:
     if not s.get("n"):
         return "-"
-    return f"{s['median']/scale:.0f} ({s['min']/scale:.0f}-{s['max']/scale:.0f}, n={s['n']})"
+    flag = "" if s["n"] >= 3 else " <3: indicative only"
+    return f"{s['median']/scale:.0f} ({s['min']/scale:.0f}-{s['max']/scale:.0f}, n={s['n']}{flag})"
+
+
+def is_part(variant: str) -> bool:
+    """A single removable part (one package, one MCP server, or the local extensions as one part); groups overlap and are aggregates."""
+    return variant.startswith("full-pkg:") or variant == "full-ext:*" or (variant.startswith("full-mcp:") and "+" not in variant)
+
+
+def remainder(mm: dict, spreads: dict, metric: str) -> dict | None:
+    """(full - core) minus the effects of single parts that exceed the noise floor of the full configuration."""
+    full, core = mm.get(("full", "fresh")), mm.get(("core", "fresh"))
+    if not full or not core or not full.get(metric) or not core.get(metric):
+        return None
+    noise = max(spreads.get(metric, 0) / 2, 15 * 1024)
+    effects = {v: full[metric] - m[metric] for (v, tag), m in mm.items() if tag == "fresh" and is_part(v) and m.get(metric)}
+    supported = {v: e for v, e in effects.items() if e > noise}
+    total = full[metric] - core[metric]
+    return {"metric": metric, "noise_mb": noise / 1024, "total_mb": total / 1024, "supported": {v: e / 1024 for v, e in supported.items()},
+            "sum_mb": sum(supported.values()) / 1024, "unexplained_mb": (total - sum(supported.values())) / 1024}
 
 
 def report(indir: Path) -> str:
@@ -798,6 +981,10 @@ def report(indir: Path) -> str:
     groups: dict[tuple, list[dict]] = {}
     for r in rows:
         groups.setdefault((r["variant"], r.get("tag", "fresh")), []).append(r)
+    all_rows = []
+    for f in sorted(indir.rglob("samples.jsonl")):
+        all_rows += [json.loads(x) for x in f.read_text().splitlines() if x.strip()]
+    rejected = collections.Counter(re.sub(r"^(rejected|smoke).*", r"\1", r.get("aborted", "")) for r in all_rows if r.get("aborted"))
     out = ["# Pi idle memory report", "", "Median (min-max, n) in MB. RSS = resident set; footprint includes compressed pages. 'owned' = Pi plus every process it started (MCP servers, recap workers).", "",
            "| variant | tag | RSS Pi | RSS owned | footprint Pi | footprint owned |", "|---|---|---|---|---|---|"]
     med = {}
@@ -805,6 +992,8 @@ def report(indir: Path) -> str:
         cols = [summarize([r[k] for r in rs if r.get(k) is not None]) for k in ("rss_pi_kb", "rss_owned_kb", "fp_pi_kb", "fp_owned_kb")]
         med[(var, tag)] = cols[0].get("median")
         out.append(f"| {var} | {tag} | " + " | ".join(fmt(c) for c in cols) + " |")
+    if rejected:
+        out += ["", "Discarded sample attempts (retried): " + ", ".join(f"{k} x{n}" for k, n in sorted(rejected.items())) + "."]
     metrics = {"rss_pi_kb": "RSS Pi", "fp_pi_kb": "footprint Pi", "rss_owned_kb": "RSS owned", "fp_owned_kb": "footprint owned"}
     mm = {(var, tag): {k: summarize([r[k] for r in rs if r.get(k) is not None]).get("median") for k in metrics} for (var, tag), rs in groups.items()}
     low = [(r["variant"], round(r["rss_pi_kb"] / 1024), round(r["fp_pi_kb"] / 1024)) for r in rows if r.get("rss_pi_kb") and r.get("fp_pi_kb") and r["rss_pi_kb"] < 0.75 * r["fp_pi_kb"]]
@@ -822,8 +1011,17 @@ def report(indir: Path) -> str:
             out += ["", "## Attribution (full median minus variant median = MB saved by removing the part; positive = the part costs memory)", "",
                     "| removed | footprint Pi | RSS Pi | footprint owned | RSS owned |", "|---|---|---|---|---|"]
             out += [f"| {v} | " + " | ".join(f"{d.get(k, 0):.0f}" for k in ("fp_pi_kb", "rss_pi_kb", "fp_owned_kb", "rss_owned_kb")) + " |" for v, d in rows_t]
+            fr = [r for r in groups.get(("full", "fresh"), [])]
+            spreads = {k: (max(r[k] for r in fr if r.get(k)) - min(r[k] for r in fr if r.get(k))) if fr else 0 for k in metrics}
+            out += ["", "## Unexplained remainder", "", "Noise floor = half the min-max spread of the full configuration's own samples (at least 15 MB). A part is 'supported' when removing it saves more than the noise floor; groups and the no-MCP variant are aggregates and are not summed.", "",
+                    "| metric | full - core | noise floor | supported parts (MB) | sum | unexplained |", "|---|---|---|---|---|---|"]
+            for k in ("fp_pi_kb", "rss_pi_kb", "fp_owned_kb", "rss_owned_kb"):
+                rm = remainder(mm, spreads, k)
+                if rm:
+                    parts = ", ".join(f"{v.split(':', 1)[1]} {e:.0f}" for v, e in sorted(rm["supported"].items(), key=lambda x: -x[1])) or "none"
+                    out.append(f"| {metrics[k]} | {rm['total_mb']:.0f} | {rm['noise_mb']:.0f} | {parts} | {rm['sum_mb']:.0f} | {rm['unexplained_mb']:.0f} |")
             n_fp = [d["fp_pi_kb"] for _, d in rows_t if "fp_pi_kb" in d]
-            out += ["", f"Pi-process footprint effect of single parts ranges {min(n_fp):.0f} to {max(n_fp):.0f} MB; where that spread is about the size of the run-to-run spread of the full configuration itself, the part is not separable from noise. Parts do not add up (interactions, shared dependencies); the remainder is (full - core) minus the supported effects."]
+            out += ["", f"Pi-process footprint effect of single parts ranges {min(n_fp):.0f} to {max(n_fp):.0f} MB; a part whose effect is within the noise floor is not separable from noise. Parts need not add up (interactions, shared dependencies)."]
     return "\n".join(out) + "\n"
 
 
@@ -857,6 +1055,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("measure"); p.add_argument("--variants", required=True); p.add_argument("--samples", type=int, default=3)
     p.add_argument("--settle-seconds", type=int, default=60); p.add_argument("--out", required=True); p.add_argument("--also-aged", action="store_true")
     p.add_argument("--warmup", action="store_true", help="discard one full-config launch first (cold caches after the store clone)")
+    p.add_argument("--no-smoke", action="store_true", help="skip the command-registration smoke check (diagnostics only)")
     p = sub.add_parser("aged"); p.add_argument("--variant", default="full"); p.add_argument("--sizes", default="small,large")
     p.add_argument("--samples", type=int, default=3); p.add_argument("--settle-seconds", type=int, default=60); p.add_argument("--out", required=True)
     p.add_argument("--stages", default="turn,compact,reload", help="ordered subset of turn,compact,reload")
@@ -906,7 +1105,7 @@ def main(argv=None) -> int:
             if a.cmd == "measure":
                 for i in range(a.samples):
                     log(f"[measure] {spec} sample {i+1}/{a.samples}")
-                    run_sample(v, base / "run", store, backend, node_dir, a.settle_seconds, out / "samples.jsonl", log=log)
+                    run_sample(v, base / "run", store, backend, node_dir, a.settle_seconds, out / "samples.jsonl", log=log, smoke=(i == 0 and not a.no_smoke))
             else:
                 plan = size_plan(a.sizes)
                 for size, info in plan.items():
@@ -920,7 +1119,7 @@ def main(argv=None) -> int:
                     for i in range(a.samples):
                         log(f"[aged] {spec} {size} sample {i+1}/{a.samples}")
                         run_sample(v, base / "run", store, backend, node_dir, a.settle_seconds, out / "samples.jsonl",
-                                   tag=f"aged-{size}", session_file=make, driver=functools.partial(aged_driver, order=tuple(a.stages.split(","))), log=log)
+                                   tag=aged_tag(size, a.stages), session_file=make, driver=functools.partial(aged_driver, order=tuple(a.stages.split(","))), log=log)
         return 0
     except Fatal as e:
         print(f"FATAL: {e}", file=sys.stderr)
