@@ -18,24 +18,35 @@ Environment (all optional): PI_MCP_LAZY_STATE_DIR, PI_MCP_LAZY_SEED_DIR, PI_MCP_
 (seconds between SIGTERM and SIGKILL, default 3), PI_MCP_LAZY_START_TIMEOUT (default 120).
 Saved copies hold only server-published metadata, never credentials.
 """
-import hashlib
 import json
 import os
-import re
-import shlex
 import signal
-import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
+# subprocess, hashlib and shlex are imported where they are first needed: an idle stand-in never loads them, and every
+# module not loaded is memory not held (there is one stand-in per server per Pi session)
 
 VERSION = "1"
 GRACE = float(os.environ.get("PI_MCP_LAZY_GRACE", "3"))
 START_TIMEOUT = float(os.environ.get("PI_MCP_LAZY_START_TIMEOUT", "120"))
 STDERR_KEEP = 4000
-NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-INTERNAL_ID_RE = re.compile(rb'"id"\s*:\s*"(pml-[^"]*)"')
+
+
+def valid_name(s):
+    return bool(s) and s.isascii() and all(c.isalnum() or c in "_-" for c in s)
+
+
+def internal_id(line):
+    """The id of an answer to one of the stand-in's own requests (ids start with 'pml-'), found without parsing the line."""
+    i = line.find(b'"pml-')
+    while i != -1:
+        before = line[max(0, i - 16):i].rstrip()
+        if before.endswith(b":") and before[:-1].rstrip().endswith(b'"id"'):
+            j = line.find(b'"', i + 1)
+            return line[i + 1:j].decode() if j != -1 else None
+        i = line.find(b'"pml-', i + 1)
+    return None
 
 
 def log(msg):
@@ -44,15 +55,15 @@ def log(msg):
 
 
 def home():
-    return Path(os.environ.get("HOME") or Path.home())
+    return os.environ.get("HOME") or os.path.expanduser("~")
 
 
 def state_dir():
-    return Path(os.environ.get("PI_MCP_LAZY_STATE_DIR") or home() / ".local" / "state" / "pi-mcp-lazy")
+    return os.environ.get("PI_MCP_LAZY_STATE_DIR") or os.path.join(home(), ".local", "state", "pi-mcp-lazy")
 
 
 def seed_dir():
-    return Path(os.environ.get("PI_MCP_LAZY_SEED_DIR") or home() / ".local" / "share" / "pi-mcp-lazy" / "seed")
+    return os.environ.get("PI_MCP_LAZY_SEED_DIR") or os.path.join(home(), ".local", "share", "pi-mcp-lazy", "seed")
 
 
 def idkey(i):
@@ -109,16 +120,16 @@ def copy_tools(meta):
 
 def write_copy(name, key, init, tools_raw, tools_sha):
     d = state_dir()
-    d.mkdir(parents=True, exist_ok=True)
+    os.makedirs(d, exist_ok=True)
     try:
         os.chmod(d, 0o700)
     except OSError:
         pass
-    tmp = d / (".%s.json.%d.tmp" % (name, os.getpid()))
+    tmp = os.path.join(d, ".%s.json.%d.tmp" % (name, os.getpid()))
     head = json.dumps({"server": name, "key": key, "initialize": init, "tools_sha": tools_sha, "saved_at": int(time.time())})
     with open(tmp, "wb") as f:
         f.write(head.encode() + b"\n" + tools_raw + b"\n")
-    os.replace(tmp, d / (name + ".json"))
+    os.replace(tmp, os.path.join(d, name + ".json"))
 
 
 def canon_tools(tools_raw):
@@ -127,6 +138,7 @@ def canon_tools(tools_raw):
 
 
 def descendants(pid):
+    import subprocess
     try:
         out = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=5).stdout
     except Exception:
@@ -169,6 +181,7 @@ class Child:
         self.internal = {}
         self.eof = False
         try:
+            import subprocess
             self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, start_new_session=True)
         except FileNotFoundError:
@@ -184,9 +197,9 @@ class Child:
                 line = line.strip()
                 if not line:
                     continue
-                internal = INTERNAL_ID_RE.search(line)  # our own request's answer: kept as raw bytes, parsed only if needed
+                internal = internal_id(line)  # our own request's answer: kept as raw bytes, parsed only if needed
                 if internal:
-                    self.deliver(internal.group(1).decode(), line)
+                    self.deliver(internal, line)
                     continue
                 try:
                     msg = json.loads(line)
@@ -361,8 +374,8 @@ class Lazy:
 
     # ---- saved copy
     def load(self):
-        for src, p in (("state copy", state_dir() / (self.name + ".json")),
-                       ("seed", seed_dir() / (self.name + ".json"))):
+        for src, p in (("state copy", os.path.join(state_dir(), self.name + ".json")),
+                       ("seed", os.path.join(seed_dir(), self.name + ".json"))):
             c = read_copy(p)
             if c:
                 if c.get("key") != self.key:
@@ -409,7 +422,7 @@ class Lazy:
             if not c:
                 return self.error(rid, "pi-mcp-lazy: no saved tool list for '%s' (no state copy in %s, no seed in %s); "
                                   "nothing was started. Repair: pi-mcp-lazy --refresh %s -- %s" % (
-                                      self.name, state_dir(), seed_dir(), self.name, " ".join(shlex.quote(a) for a in self.cmd)))
+                                      self.name, state_dir(), seed_dir(), self.name, " ".join(__import__("shlex").quote(a) for a in self.cmd)))
             self.cache = c
             init = dict(c["initialize"])
             req = self.client_init.get("protocolVersion")
@@ -482,6 +495,7 @@ class Lazy:
             return b"[]", None, bool(self.cache and canon_tools(copy_tools(self.cache)) != "[]")
         child.send({"jsonrpc": "2.0", "id": "pml-tools", "method": "tools/list", "params": {}})
         raw = child.wait_internal_raw("pml-tools", START_TIMEOUT)
+        import hashlib
         sha = hashlib.sha256(raw).hexdigest()
         if served_sha and sha == served_sha and b"nextCursor" not in raw:
             return None, sha, False
@@ -515,7 +529,7 @@ class Lazy:
                 tools_raw = copy_tools(served)
             try:
                 write_copy(self.name, self.key, init, tools_raw, sha)
-                self.cache = read_copy(state_dir() / (self.name + ".json")) or served
+                self.cache = read_copy(os.path.join(state_dir(), self.name + ".json")) or served
             except OSError as e:
                 log("%s: could not save copy: %s" % (self.name, e))
         return changed and not self.refresh_mode
@@ -632,7 +646,7 @@ def refresh(name, cmd):
     finally:
         lz.shutdown()
     count = len(json.loads(copy_tools(lz.cache))) if lz.cache else 0
-    log("%s: saved %d tools to %s" % (name, count, state_dir() / (name + ".json")))
+    log("%s: saved %d tools to %s" % (name, count, os.path.join(state_dir(), name + ".json")))
     return 0
 
 
@@ -647,11 +661,11 @@ def main(argv):
         log(usage)
         return 2
     if head[:1] == ["--refresh"]:
-        if len(head) != 2 or not NAME_RE.match(head[1]):
+        if len(head) != 2 or not valid_name(head[1]):
             log(usage)
             return 2
         return refresh(head[1], cmd)
-    if len(head) != 2 or not NAME_RE.match(head[0]):
+    if len(head) != 2 or not valid_name(head[0]):
         log(usage)
         return 2
     try:
