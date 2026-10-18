@@ -82,7 +82,13 @@ def handle(msg):
             text = "echo:" + str(args.get("text", ""))
         elif n == "slow":
             time.sleep(float(args.get("seconds", 1)))
+            if args.get("noreply"):
+                return  # does the work, then never answers (a cancelled call on a server such as rea)
             text = "slow-done"
+        elif n == "hang":
+            # does the work, then never answers (like a server that drops the reply of a cancelled call)
+            time.sleep(float(args.get("seconds", 0.2)))
+            return
         elif n == "roots":
             ev = threading.Event()
             waiting["srv-1"] = [ev, None]

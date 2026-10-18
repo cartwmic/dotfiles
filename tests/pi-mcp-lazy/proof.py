@@ -343,6 +343,7 @@ def js_names(prefix):
 def register_codes(name):
     CODES["discover-" + name] = js_names(name)
     CODES["echo-" + name] = "const r = await tools.mcp__%s__echo({text:'hi'}); text('RESULT:' + r.content[0].text);" % name
+    CODES["slowquiet-" + name] = "const r = await tools.mcp__%s__slow({seconds:%d, noreply:true}); text('RESULT:' + r.content[0].text);" % (name, 3)
     CODES["slow-" + name] = "const r = await tools.mcp__%s__slow({seconds:%d}); text('RESULT:' + r.content[0].text);" % (name, 14)
     CODES["try-echo-" + name] = ("try { const r = await tools.mcp__%s__echo({text:'x'}); text('OK:' + r.content[0].text); }"
                                  " catch (e) { text('ERR:' + String(e && e.message || e)); }") % name
@@ -527,6 +528,25 @@ def lifecycle(root, port, idle):
             require(wait_until(lambda: f.procs() == [], idle + 30), "server not stopped after the call")
             return {"call_s": round(time.monotonic() - t0, 1), "idle_s": idle}
         long_call()
+
+        @check("cancelled call: the user aborts a call the server never answers; the server still stops when idle, and starts again")
+        def cancelled_call():
+            n = f.starts()
+            rpc.start_prompt("slowquiet-furi")
+            require(wait_until(lambda: len(f.procs()) == 2 and f.starts() == n + 1, 30), "server did not start for the call")
+            time.sleep(4)  # the server has finished its work and will never reply
+            require(len(f.procs()) == 2, "stopped under a request still in flight: %r" % f.procs())
+            mark = len(rpc.events)
+            rpc.command("abort")  # Pi sends notifications/cancelled for the pending request
+            if not any(e.get("type") == "agent_settled" for e in rpc.events[mark:]):  # the settle event may arrive before the reply
+                rpc.until(lambda r: r.get("type") == "agent_settled", 60)
+            require(wait_until(lambda: f.procs() == [], idle + 30),
+                    "server kept up after a cancelled call: %r" % f.procs())
+            out = rpc.prompt("echo-furi")
+            require("RESULT:echo:hi" in out, out[:300])
+            require(f.starts() == n + 2, "server was not started again")
+            require(wait_until(lambda: f.procs() == [], idle + 30), "second idle stop failed")
+        cancelled_call()
 
         @check("exit cleanup: closing Pi leaves no server or stand-in")
         def exit_cleanup():
