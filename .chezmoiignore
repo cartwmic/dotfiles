@@ -9,6 +9,7 @@
 .local/share/session-recap/__pycache__
 .local/share/session-recap/__pycache__/**
 .local/share/herdr-overview/tests/**
+.local/share/agent-alert/tests/**
 .local/share/passage-review/test_passage_review.py
 .pi/agent/extensions/herdr-overview/index.test.ts
 .pi/agent/extensions/recap/automation-fixture.ts
