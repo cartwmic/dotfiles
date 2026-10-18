@@ -1,6 +1,6 @@
 # Pi 1.2.0 idle memory: findings (cartwmic/dotfiles#14)
 
-Measured with `pi_idle_rss.py` in this directory (see README.md for method and limitations). Pi 1.2.0, the deployed configuration at `main` 68eeb30, a 32 GiB macOS machine shared with other workers. All figures below are from one clean final run (baseline on tool commit 4755578; attribution, aged, reload and after runs on fd8b463, which differs only in the aged-sample checks and the extension grouping). Numbers and names only; no message contents, credentials or transcripts. This file replaces the first screening figures posted on 2026-10-17, which were single-run and are superseded.
+Measured with `pi_idle_rss.py` in this directory (see README.md for method and limitations). Pi 1.2.0, the deployed configuration at `main` 68eeb30, a 32 GiB macOS machine shared with other workers. All figures below are from one clean final run (baseline on tool commit 4755578; attribution and after runs on fd8b463; aged and reload runs on eb8561d, which adds the check that aged readings must agree). Numbers and names only; no message contents, credentials or transcripts. This file replaces the first screening figures posted on 2026-10-17, which were single-run and are superseded.
 
 ## Summary (medians, MB; n=3 unless noted)
 
@@ -10,21 +10,21 @@ Measured with `pi_idle_rss.py` in this directory (see README.md for method and l
 | Deployed config, fresh session (n=6) | 263 (footprint 219) | 1,222 (footprint 954) |
 | Deployed config minus the `rea` and `playwright` MCP servers | 270 | 384 |
 | Deployed config minus all MCP servers (n=6) | 259 | 259 |
-| 170 MB / 12,016-message history, loaded | 2,990 | 3,830 |
-| ...after one scripted turn | 3,579 | 4,205 |
-| ...then one compaction | 498 (467-652) | 1,076 |
-| ...then `/reload` | 651 | 1,600 |
-| Same history, one turn then `/reload` with no compaction (n=2) | 3,358 | 4,290 |
-| 1 MB history, loaded / after compaction / after `/reload` | 362 / 417 / 346 | 1,114 / 1,151 / 1,289 |
+| 116 MB / 8,094-message history, loaded | 2,797 | 3,753 |
+| ...after one scripted turn | 2,826 | 3,270 |
+| ...then one compaction | 521 (367-543; footprint 519) | 956 |
+| ...then `/reload` | 583 | 1,526 |
+| Same history, one turn then `/reload` with no compaction (n=2) | 2,872 | 3,807 |
+| 1 MB history, loaded / after compaction / after `/reload` | 311 / 412 / 337 | 1,065 / 1,152 / 1,276 |
 
 1. **Fresh session, Pi process alone:** the deployed config settles at about 263 MB RSS (footprint 219), roughly 130 MB above core Pi. This is under the 300 MB target with no change.
 2. **Fresh session, whole tree:** about 1.2 GB, because Pi starts every enabled MCP server at launch. By footprint of the whole tree, `rea` accounts for about 490 MB and `playwright` about 240 MB; removing those two is the only change in these runs that moves the whole-tree figure much (to 384 MB; 259 MB without any MCP).
-3. **Packages and local extensions:** none of the 16 packages or the local extensions is separable from run-to-run noise (single-part effects on Pi footprint run from -21 to 37 MB against a noise floor of 61 MB). The two extension groups split along their import graph, so removing one never breaks the other.
-4. **Long sessions:** memory follows uncompacted history. A history the size of the longest idle real session holds about 3.0 GB in the Pi process; one compaction brought it to about 0.5 GB in all three samples. `/reload` without compaction does not drop it (3.4 GB before and after, n=2). Compaction is disabled in the deployed settings, and `auto-compact` triggers at 40% of the model's context window. A 1 MB history shows no growth.
-5. **Target:** 300 MB or less was met only by the fresh Pi process alone. It was not met by the whole tree or by aged sessions, which stay above 300 MB even after compaction (best about 0.5 GB for Pi alone, about 1.1 GB whole tree).
+3. **Packages and local extensions:** none of the 16 packages or the local extensions is separable from run-to-run noise (single-part effects on Pi footprint run from -21 to 37 MB against a noise floor of 61 MB). The aged-history size follows the longest idle real session at run time (116 MB / 8,094 messages in the final run; an earlier screening run used 170 MB / 12,016). The two extension groups split along their import graph, so removing one never breaks the other.
+4. **Long sessions:** memory follows uncompacted history. A history the size of the longest idle real session holds about 2.8 GB in the Pi process; one compaction brought it to about 0.5 GB in all three samples. `/reload` without compaction does not drop it (2.85 GB after the turn, 2.87 GB after the reload, n=2). Compaction is disabled in the deployed settings, and `auto-compact` triggers at 40% of the model's context window. A 1 MB history shows no growth.
+5. **Target:** 300 MB or less was met only by the fresh Pi process alone. It was not met by the whole tree or by aged sessions, which stay above 300 MB even after compaction (best about 0.5 GB for Pi alone, about 1.0 GB whole tree).
 6. **Decision:** no configuration change was made as part of this investigation; reductions (disabling heavy MCP servers, lowering the compaction threshold) are listed here for the owner to decide.
 
-Caveats: the scripted backend leaves provider-specific extensions inactive; aged sessions are synthetic and content-free; RSS is unreliable when macOS compresses pages under pressure (seven samples read well below their footprint), so footprint is the attribution metric; the `/reload` without compaction row has two samples and is indicative only; `/reload` typed as the very first command leaves the extension-owned child processes unchanged and cannot be verified, so that case is not reported.
+Caveats: the scripted backend leaves provider-specific extensions inactive; aged sessions are synthetic and content-free; RSS is unreliable when macOS compresses pages under pressure (some samples read well below their footprint), so footprint is the attribution metric; the `/reload` without compaction row has two samples and is indicative only; `/reload` typed as the very first command leaves the extension-owned child processes unchanged and cannot be verified, so that case is not reported.
 
 ## Full report (generated by `pi_idle_rss.py report`)
 
@@ -33,17 +33,17 @@ Median (min-max, n) in MB. RSS = resident set; footprint includes compressed pag
 | variant | tag | RSS Pi | RSS owned | footprint Pi | footprint owned |
 |---|---|---|---|---|---|
 | core | fresh | 130 (86-131, n=3) | 130 (86-131, n=3) | 84 (71-86, n=3) | 84 (71-86, n=3) |
-| full | aged-large:after_compact | 498 (467-652, n=3) | 1076 (777-1278, n=3) | 435 (421-593, n=3) | 916 (913-1090, n=3) |
-| full | aged-large:after_reload | 651 (576-735, n=3) | 1600 (1520-1672, n=3) | 540 (511-652, n=3) | 1275 (1237-1373, n=3) |
-| full | aged-large:after_turn | 3579 (2989-3865, n=3) | 4205 (3281-4431, n=3) | 3659 (3212-4067, n=3) | 4156 (3690-4562, n=3) |
-| full | aged-large:loaded | 2990 (2920-3082, n=3) | 3830 (3678-3951, n=3) | 3091 (3040-3128, n=3) | 3752 (3634-3786, n=3) |
-| full | aged-large[turn+reload]:after_reload | 3358 (3307-3408, n=2 <3: indicative only) | 4290 (4244-4336, n=2 <3: indicative only) | 3384 (3323-3446, n=2 <3: indicative only) | 4118 (4061-4176, n=2 <3: indicative only) |
-| full | aged-large[turn+reload]:after_turn | 3393 (3313-3474, n=2 <3: indicative only) | 4132 (4052-4213, n=2 <3: indicative only) | 3418 (3331-3504, n=2 <3: indicative only) | 3898 (3814-3981, n=2 <3: indicative only) |
-| full | aged-large[turn+reload]:loaded | 3070 (3053-3086, n=2 <3: indicative only) | 3922 (3803-4041, n=2 <3: indicative only) | 3074 (3006-3141, n=2 <3: indicative only) | 3700 (3518-3883, n=2 <3: indicative only) |
-| full | aged-small:after_compact | 417 (306-489, n=3) | 1151 (1039-1231, n=3) | 324 (207-388, n=3) | 795 (657-878, n=3) |
-| full | aged-small:after_reload | 346 (337-402, n=3) | 1289 (1275-1348, n=3) | 238 (230-266, n=3) | 967 (939-996, n=3) |
-| full | aged-small:after_turn | 415 (406-478, n=3) | 1147 (1143-1216, n=3) | 325 (312-378, n=3) | 815 (811-868, n=3) |
-| full | aged-small:loaded | 362 (315-393, n=3) | 1114 (1063-1148, n=3) | 271 (219-290, n=3) | 791 (734-810, n=3) |
+| full | aged-large:after_compact | 521 (367-543, n=3) | 956 (671-1141, n=3) | 519 (516-614, n=3) | 1028 (981-1096, n=3) |
+| full | aged-large:after_reload | 583 (286-619, n=3) | 1526 (819-1563, n=3) | 570 (569-701, n=3) | 1297 (1294-1428, n=3) |
+| full | aged-large:after_turn | 2826 (2751-3307, n=3) | 3270 (3056-4014, n=3) | 3466 (3215-3480, n=3) | 3964 (3678-3992, n=3) |
+| full | aged-large:loaded | 2797 (2685-2842, n=3) | 3753 (3643-3806, n=3) | 2918 (2736-2966, n=3) | 3659 (3476-3705, n=3) |
+| full | aged-large[turn+reload]:after_reload | 2872 (2787-2956, n=2 <3: indicative only) | 3807 (3725-3889, n=2 <3: indicative only) | 3016 (2942-3091, n=2 <3: indicative only) | 3753 (3680-3826, n=2 <3: indicative only) |
+| full | aged-large[turn+reload]:after_turn | 2845 (2760-2930, n=2 <3: indicative only) | 3431 (3321-3540, n=2 <3: indicative only) | 3034 (2935-3133, n=2 <3: indicative only) | 3527 (3420-3634, n=2 <3: indicative only) |
+| full | aged-large[turn+reload]:loaded | 2667 (2618-2717, n=2 <3: indicative only) | 3291 (3257-3325, n=2 <3: indicative only) | 2884 (2840-2928, n=2 <3: indicative only) | 3510 (3438-3583, n=2 <3: indicative only) |
+| full | aged-small:after_compact | 412 (408-470, n=3) | 1152 (1147-1207, n=3) | 324 (323-375, n=3) | 790 (787-865, n=3) |
+| full | aged-small:after_reload | 337 (332-386, n=3) | 1276 (1274-1330, n=3) | 230 (227-258, n=3) | 954 (952-983, n=3) |
+| full | aged-small:after_turn | 402 (399-459, n=3) | 1143 (1140-1194, n=3) | 314 (314-363, n=3) | 807 (802-853, n=3) |
+| full | aged-small:loaded | 311 (310-368, n=3) | 1065 (1064-1122, n=3) | 245 (219-268, n=3) | 766 (739-788, n=3) |
 | full | fresh | 263 (103-306, n=6) | 1222 (381-1266, n=6) | 219 (192-314, n=6) | 954 (942-1061, n=6) |
 | full-ext:* | fresh | 290 (279-313, n=3) | 1248 (1242-1277, n=3) | 213 (206-222, n=3) | 949 (926-972, n=3) |
 | full-ext:README.md+auto-compact+catalog-overlay-nudge+goal+herdr-agent-state.ts+ntfy+openrouter-gate+pi-codex-fast.json+pi-rtk-optimizer+subagent+web-search | fresh | 301 (299-314, n=3) | 1258 (1256-1278, n=3) | 198 (195-235, n=3) | 941 (935-981, n=3) |
@@ -75,11 +75,11 @@ Median (min-max, n) in MB. RSS = resident set; footprint includes compressed pag
 
 Variant effects (commands that stopped registering because their owner depended on the removed part): full-ext:*: pkg:pi-claude-request-compat:claude-compat-status; full-ext:claude-compat-guard+herdr-overview+hindsight+inspect-prompt+learnings-monitor+passage-review+pi-patch-guard+recap+standing-reminder+system-one+winnow-local: pkg:pi-claude-request-compat:claude-compat-status.
 
-Discarded sample attempts (retried): pressure x8, rejected x3.
+Discarded sample attempts (retried): pressure x12, rejected x2.
 
 Core-only vs full (median MB): RSS Pi 130 -> 263; footprint Pi 84 -> 219; RSS owned 130 -> 1222; footprint owned 84 -> 954.
 
-7 sample(s) had RSS far below footprint (macOS compressed the process's pages while it ran), so RSS is unreliable under memory pressure; footprint (which includes compressed pages) is the attribution metric: full-pkg:pi-btw rss 129 vs fp 233, full-pkg:pi-codex-fast rss 128 vs fp 192, full-pkg:system-one-tools rss 212 vs fp 285, full-pkg:pi-response-visibility rss 156 vs fp 213, full-pkg:pi-computer-use rss 162 vs fp 227, full-pkg:pi-stamp rss 183 vs fp 266, full rss 103 vs fp 314.
+9 sample(s) had RSS far below footprint (macOS compressed the process's pages while it ran), so RSS is unreliable under memory pressure; footprint (which includes compressed pages) is the attribution metric: full rss 367 vs fp 614, full rss 286 vs fp 701, full-pkg:pi-btw rss 129 vs fp 233, full-pkg:pi-codex-fast rss 128 vs fp 192, full-pkg:system-one-tools rss 212 vs fp 285, full-pkg:pi-response-visibility rss 156 vs fp 213, full-pkg:pi-computer-use rss 162 vs fp 227, full-pkg:pi-stamp rss 183 vs fp 266, full rss 103 vs fp 314.
 
 ## Attribution (full median minus variant median = MB saved by removing the part; positive = the part costs memory)
 
