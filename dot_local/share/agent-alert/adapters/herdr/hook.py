@@ -40,7 +40,6 @@ READ_LINES = 120
 MAX_MESSAGE_LINES = 40
 READ_TIMEOUT_SECONDS = 10
 EMIT_TIMEOUT_SECONDS = 30
-CONTEXT_VALUE_LIMIT = 100
 
 STATUS_EVENT = "pane.agent_status_changed"
 DETECTED_EVENT = "pane.agent_detected"
@@ -225,7 +224,9 @@ def build_context(environment, data, agent):
         context["workspace_label"] = label
     if agent:
         context["agent"] = agent
-    return {key: value[:CONTEXT_VALUE_LIMIT] for key, value in context.items()}
+    # Full values go to the core: it masks secrets first and only then cuts to its own
+    # limit. Cutting here would split a token below the mask's minimum length.
+    return context
 
 
 def read_last_message(environment, pane):
