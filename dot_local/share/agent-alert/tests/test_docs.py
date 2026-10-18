@@ -131,9 +131,10 @@ class DocsHerdr(ScratchHerdr):
             encoding="utf-8",
         )
 
-    def emit(self, worker, kind, summary):
+    def emit(self, worker, kind, summary, context=None):
+        context_arguments = ["--context=%s=%s" % pair for pair in (context or {}).items()]
         result = subprocess.run(
-            [str(self.core), "emit", "--worker", worker, "--kind", kind, "--summary", summary],
+            [str(self.core), "emit", "--worker", worker, "--kind", kind, "--summary", summary] + context_arguments,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -295,6 +296,48 @@ class ReadmeProcedureTests(unittest.TestCase):
         self.assertEqual([e["seq"] for e in events], list(range(1, last + 2)))
         self.assertEqual(events[-1]["summary"], "intact after the fragment")
         self.assertEqual(self.server.inbox_lines()[-2], fragment)
+
+    def test_brace_inside_the_summary_does_not_satisfy_the_wait_but_the_complete_line_does(self):
+        self.install()
+        pane, _ = self.server.new_pane("docs-brace")
+        self.start_follower(pane)
+        head = '{"version":1,"seq":%d,"time":"2026-10-17T12:30:05.123Z","worker":"torn","kind":"finished","summary":"%s'
+        # (fragment text cut inside the summary or context, summary of the complete event, its context)
+        rounds = (
+            ("Use {}", "Use {}", None),
+            ("Use }", "Use }", None),
+            ('say \\"}', 'say "}', None),
+            ('x","context":{"workspace":"{}}', "x", {"workspace": "{}"}),
+            ('x","context":{"workspace":"a \\"}}', "x", {"workspace": 'a "'}),
+        )
+        for number, (cut, summary, context) in enumerate(rounds):
+            marker = "marker%d" % number
+            with self.subTest(cut=cut):
+                last = self.server.parsed_events()[-1]["seq"]
+                fragment = head % (last + 1, marker + " " + cut)
+                with open(self.server.inbox_path, "ab") as inbox:
+                    inbox.write(fragment.encode("utf-8"))  # torn inside the text, closing brace(s) present
+                deadline = time.monotonic() + 20
+                while marker not in self.server.pane_text(pane):
+                    self.assertLess(time.monotonic(), deadline, "the pane never showed the fragment")
+                    time.sleep(0.2)
+                self.assertNotEqual(self.short_wait(pane, last + 1).returncode, 0)
+                waiting = self.wait_started(pane, last + 1)
+                self.server.emit("w1", "finished", marker + " " + summary, context)
+                self.finish(waiting)
+                self.assertEqual(self.server.parsed_events()[-1]["seq"], last + 1)
+                self.assertEqual(self.server.inbox_lines()[-2], fragment)
+
+    def test_complete_lines_ending_in_a_backslash_satisfy_the_wait(self):
+        self.install()
+        pane, _ = self.server.new_pane("docs-backslash")
+        self.start_follower(pane)
+        for summary, context in (("path C:\\", None), ("path C:\\", {"dir": "D:\\\\"})):
+            with self.subTest(summary=summary, context=context):
+                last = self.server.parsed_events()[-1]["seq"]
+                waiting = self.wait_started(pane, last + 1)
+                self.server.emit("w1", "finished", summary, context)
+                self.finish(waiting)
 
 
 class HerdrAdapterReadmeTests(unittest.TestCase):
@@ -536,6 +579,26 @@ class ReadmeStructureTests(unittest.TestCase):
         self.assertFalse(compiled.search(complete[:-1]))
         self.assertFalse(compiled.search(complete.replace('"seq":12,', '"seq":123,')))
         self.assertFalse(compiled.search('{"version":1,"seq":12,"time":"2026-10-17T12:30:05.123Z","worker":"w","kind":"fin'))
+        head = '{"version":1,"seq":12,"time":"2026-10-17T12:30:05.123Z","worker":"w","kind":"finished",'
+        for torn in (
+            head + '"summary":"Use {}',
+            head + '"summary":"Use }',
+            head + '"summary":"say \\"}',
+            head + '"summary":"x","context":{"workspace":"{}}',
+            head + '"summary":"x","context":{"workspace":"a \\"}}',
+        ):
+            self.assertFalse(compiled.search(torn), torn)
+        for whole in (
+            complete,
+            head + '"summary":""}',
+            head + '"summary":"Use {}"}',
+            head + '"summary":"path C:\\\\"}',
+            head + '"summary":"say \\"}"}',
+            head + '"summary":"x","context":{"workspace":"main"}}',
+            head + '"summary":"x","context":{"dir":"D:\\\\"}}',
+        ):
+            self.assertTrue(compiled.search(whole), whole)
+            self.assertIsNotNone(json.loads(whole))
 
 
 if __name__ == "__main__":
