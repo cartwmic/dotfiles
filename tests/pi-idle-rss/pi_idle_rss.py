@@ -1287,6 +1287,11 @@ def main(argv=None) -> int:
         backend = Backend()
         specs = attribution_variants() if a.cmd == "measure" and a.variants == "attribution" else (a.variants.split(",") if a.cmd == "measure" else [a.variant])
         if a.cmd == "measure" and a.warmup:
+            # isolation is checked before ANY Pi launch, the discarded warm-up included
+            wpf = preflight(parse_variant("full"), base / "pf", store, node_dir, base / "pf-work")
+            shutil.rmtree(base / "pf", ignore_errors=True)
+            if not wpf["ok"]:
+                raise Fatal(f"isolation check failed for the warm-up: {[c['name'] for c in wpf['checks'] if not c['ok']]}")
             log("[warmup] discarded full-config launch")
             run_sample(parse_variant("full"), base / "run", store, backend, node_dir, a.settle_seconds, out / "warmup.jsonl", tag="warmup", log=log)
         for spec in specs:
