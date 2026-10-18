@@ -163,28 +163,88 @@ class Acceptance(unittest.TestCase):
 
 
 class LoadedInventory(unittest.TestCase):
-    HEAD = "x [Extensions] @s/pi-stamp:dist, auto-compact, catalog-overlay-nudge, herdr-agent-state.ts, pi-cursor/src, sub-bar Warning: something"
+    HEAD = "x [Extensions] @s/pi-stamp:dist, auto-compact, catalog-overlay-nudge, herdr-agent-state.ts, pi-cursor/src, sub-bar, sub-core, pi-subagents Warning: something"
+
+    def fixture(self, d):
+        agent = Path(d)
+        (agent / "extensions/auto-compact").mkdir(parents=True)
+        (agent / "extensions/auto-compact/index.ts").write_text("x")
+        (agent / "extensions/catalog-overlay-nudge").mkdir()
+        (agent / "extensions/catalog-overlay-nudge/index.ts").write_text("x")
+        (agent / "extensions/herdr-agent-state.ts").write_text("x")
+        (agent / "extensions/README.md").write_text("x")
+        pk = agent / "git/github.com/o/pi-sub"
+        pk.mkdir(parents=True)
+        (pk / "package.json").write_text(json.dumps({"pi": {"extensions": ["./packages/sub-bar/index.ts", "./packages/sub-core/index.ts"]}}))
+        cu = agent / "git/github.com/o/pi-cursor"
+        cu.mkdir(parents=True)
+        (cu / "package.json").write_text(json.dumps({"pi": {"extensions": ["./src/index.ts"]}}))
+        (agent / "settings.json").write_text(json.dumps({"packages": ["https://github.com/o/pi-sub", "https://github.com/o/pi-cursor", "npm:@s/pi-stamp"]}))
+        return agent
 
     def test_header_parse(self):
-        self.assertEqual(m.header_extensions(self.HEAD), ["@s/pi-stamp:dist", "auto-compact", "catalog-overlay-nudge", "herdr-agent-state.ts", "pi-cursor/src", "sub-bar"])
+        self.assertEqual(m.header_extensions(self.HEAD)[:3], ["@s/pi-stamp:dist", "auto-compact", "catalog-overlay-nudge"])
         self.assertEqual(m.header_extensions("no header"), [])
 
-    def test_commandless_owner_missing_is_detected(self):
+    def test_all_owners_found_including_commandless(self):
         with tempfile.TemporaryDirectory() as d:
-            agent = Path(d)
-            (agent / "extensions/auto-compact").mkdir(parents=True)
-            (agent / "extensions/catalog-overlay-nudge").mkdir()
-            (agent / "extensions/herdr-agent-state.ts").write_text("x")
-            (agent / "extensions/README.md").write_text("x")
-            pk = agent / "git/github.com/o/pi-sub"
-            pk.mkdir(parents=True)
-            (pk / "package.json").write_text(json.dumps({"pi": {"extensions": ["./packages/sub-bar/index.ts"]}}))
-            (agent / "settings.json").write_text(json.dumps({"packages": ["https://github.com/o/pi-sub", "npm:@s/pi-stamp"]}))
-            owners = m.expected_loaded(agent)
+            owners = m.expected_loaded(self.fixture(d))
             self.assertNotIn("ext:README.md", owners)
             self.assertEqual(m.missing_loaded(m.header_extensions(self.HEAD), owners), [])
+
+    def test_missing_commandless_owner_is_detected(self):
+        with tempfile.TemporaryDirectory() as d:
+            owners = m.expected_loaded(self.fixture(d))
             tokens = [x for x in m.header_extensions(self.HEAD) if x != "catalog-overlay-nudge"]
             self.assertEqual(m.missing_loaded(tokens, owners), ["ext:catalog-overlay-nudge"])
+
+    def test_overlapping_name_does_not_satisfy_a_missing_owner(self):
+        with tempfile.TemporaryDirectory() as d:
+            owners = m.expected_loaded(self.fixture(d))
+            tokens = [x for x in m.header_extensions(self.HEAD) if x not in ("sub-bar", "sub-core")]  # only pi-subagents left
+            self.assertEqual(m.missing_loaded(tokens, owners), ["pkg:pi-sub"])
+            self.assertEqual(sorted(m.missing_loaded([x for x in tokens if x != "pi-cursor/src"], owners)), ["pkg:pi-cursor", "pkg:pi-sub"])
+
+    def test_directories_without_an_entry_and_packages_with_no_extensions_are_not_owners(self):
+        with tempfile.TemporaryDirectory() as d:
+            agent = self.fixture(d)
+            (agent / "extensions/config-only").mkdir()
+            (agent / "extensions/config-only/config.json").write_text("{}")
+            pk = agent / "git/github.com/o/lib"
+            pk.mkdir(parents=True)
+            (pk / "package.json").write_text(json.dumps({"pi": {"extensions": ["./src/index.ts"]}}))
+            st = json.loads((agent / "settings.json").read_text())
+            st["packages"].append({"source": "https://github.com/o/lib", "extensions": []})
+            (agent / "settings.json").write_text(json.dumps(st))
+            owners = m.expected_loaded(agent)
+            self.assertNotIn("ext:config-only", owners)
+            self.assertEqual(owners["pkg:lib"], [])
+            self.assertEqual(m.missing_loaded(m.header_extensions(self.HEAD), owners), [])
+
+    def test_nested_entry_directory_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            agent = Path(d)
+            pk = agent / "git/github.com/o/tools"
+            pk.mkdir(parents=True)
+            (pk / "package.json").write_text(json.dumps({"pi": {"extensions": ["./packages/pi-thing/src/index.js"]}}))
+            (agent / "settings.json").write_text(json.dumps({"packages": ["https://github.com/o/tools"]}))
+            owners = m.expected_loaded(agent)
+            self.assertEqual(m.missing_loaded(["pi-thing/src"], owners), [])
+            self.assertEqual(m.missing_loaded(["tools-x"], owners), ["pkg:tools"])
+
+    def test_one_of_several_package_entries_missing_is_detected(self):
+        with tempfile.TemporaryDirectory() as d:
+            owners = m.expected_loaded(self.fixture(d))
+            tokens = [x for x in m.header_extensions(self.HEAD) if x != "sub-core"]
+            self.assertEqual(m.missing_loaded(tokens, owners), ["pkg:pi-sub"])
+
+    def test_startup_errors_survive_a_screen_buffer_clear(self):
+        n = len(m.ERROR_RE.findall(b"...Failed to load extension x..."))
+        self.assertEqual(n, 1)
+        s = m.Session.__new__(m.Session)
+        s.err_count = 2
+        s.buf = b""
+        self.assertEqual(m.Session.load_errors(s), 2)
 
 
 class Gate(unittest.TestCase):
