@@ -178,6 +178,20 @@ class HookDirectTests(unittest.TestCase):
         self.assertEqual(event["context"], {"workspace_id": "w1", "workspace_label": "main-ws", "agent": "pi"})
         self.assertEqual([e["seq"] for e in self.h.events()], [1, 2, 3])
 
+    def test_long_workspace_label_is_masked_by_the_core_before_it_is_cut(self):
+        token = "ghp_" + "FAKE" * 7 + "ab"  # 30 synthetic token characters
+        label = "a" * 81 + " " + token
+        self.assertQuietSuccess(self.h.status("w1:p1", "idle", label=label))
+        [event] = self.h.events()
+        stored = event["context"]["workspace_label"]
+        self.assertIn("***", stored)
+        self.assertNotIn("ghp_", stored)
+        self.assertNotIn("FAKE", stored)
+        self.assertNotIn("ghp_FAKE", self.h.scratch.inbox_bytes().decode())
+        short = "a-short-label"
+        self.assertQuietSuccess(self.h.status("w1:p2", "idle", label=short))
+        self.assertEqual(self.h.events()[1]["context"]["workspace_label"], short)
+
     def test_agentless_pane_emits_nothing(self):
         self.assertQuietSuccess(self.h.status("w1:p1", "idle", agent=None))
         self.assertQuietSuccess(self.h.status("w1:p1", "blocked", agent=None))
