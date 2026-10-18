@@ -248,6 +248,22 @@ class LoadedInventory(unittest.TestCase):
         self.assertEqual(m.Session.load_errors(s), 2)
 
 
+class _AgedFake:
+    def __init__(self):
+        self.sent = []
+        self.session_file = None
+        self.backend_requests = lambda: 0
+
+    def send(self, text):
+        self.sent.append(text)
+
+    def pump(self, seconds, abort=None):
+        return not (abort is not None and abort.is_set())
+
+    def child_pids(self):
+        return set()
+
+
 class FinalAcceptance(unittest.TestCase):
     FULL = m.parse_variant("full")
     DROP = m.parse_variant("full-pkg:x")
@@ -266,6 +282,33 @@ class FinalAcceptance(unittest.TestCase):
         self.assertFalse(m.accept_sample(True, None, False, 0, {"missing": ["ext:a"]}, {"missing": []}, self.DROP)[0])
         self.assertFalse(m.accept_sample(True, None, False, 0, {"missing": []}, {"missing": ["ext:a:cmd"]}, self.FULL)[0])
         self.assertEqual(m.accept_sample(True, None, False, 0, {"missing": []}, {"missing": ["pkg:p:cmd"]}, self.DROP), (True, None, ["pkg:p:cmd"]))
+
+    def test_absent_inventory_is_not_a_pass(self):
+        ok, reason, _ = m.accept_sample(True, None, False, 0, None, {"missing": []}, self.FULL)
+        self.assertFalse(ok)
+        self.assertIn("inventory missing", reason)
+        self.assertTrue(m.accept_sample(True, None, False, 0, None, None, m.parse_variant("core"))[0])
+
+    def test_absent_smoke_rejects_when_required_but_not_for_plain_fresh_samples(self):
+        self.assertFalse(m.accept_sample(True, None, False, 0, {"missing": []}, None, self.FULL, smoke_required=True)[0])
+        self.assertTrue(m.accept_sample(True, None, False, 0, {"missing": []}, None, self.FULL, smoke_required=False)[0])
+
+    def test_aged_driver_runs_inventory_and_smoke_after_the_loaded_reading(self):
+        class FakeSession(_AgedFake):
+            def loaded_check(self):
+                return {"missing": ["ext:x"], "load_error_markers": 0}
+            def smoke_commands(self, everything=False, abort=None):
+                return {"checked": 3, "missing": []}
+        w = type("W", (), {})()
+        w.rose = threading.Event()
+        with mock.patch.object(m, "wait_settled", return_value={"settled": True, "extra_wait_s": 0}), \
+             mock.patch.object(m, "median_reading", return_value={"rss_pi_kb": 1}), \
+             mock.patch.object(m, "pressure_ok", return_value=True):
+            out = m.aged_driver(FakeSession(), w, lambda *_: None, order=("turn",))
+        self.assertEqual(out["loaded"]["loaded"]["missing"], ["ext:x"])
+        self.assertEqual(out["loaded"]["smoke"]["checked"], 3)
+        # and final acceptance rejects the missing owner on the aged path
+        self.assertFalse(m.accept_sample(True, None, False, 0, out["loaded"]["loaded"], out["loaded"]["smoke"], m.parse_variant("full"), smoke_required=True)[0])
 
     def test_earlier_failure_reason_is_kept(self):
         self.assertEqual(m.accept_sample(False, "unsettled", False, 0, None, None, self.FULL), (False, "unsettled", None))
@@ -294,6 +337,12 @@ class AgedPressure(unittest.TestCase):
             return not (abort is not None and abort.is_set())
         def child_pids(self):
             return set()
+
+        def loaded_check(self):
+            return {"missing": [], "load_error_markers": 0}
+
+        def smoke_commands(self, everything=False, abort=None):
+            return None if (abort is not None and abort.is_set()) else {"checked": 1, "missing": []}
 
     def run_driver(self, rose=False, ok=True):
         s = self.Fake()
