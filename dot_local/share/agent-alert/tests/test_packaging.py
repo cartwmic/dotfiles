@@ -5,14 +5,16 @@ Run (from the repository root):
     PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
         -s dot_local/share/agent-alert/tests -p 'test_packaging.py'
 
-* Layering: core/ names neither Herdr nor Claude, and its tests pass on a copy of
-  the deployed tree whose adapters/ and examples/ directories were deleted.
+* Layering: core/ contains none of the words Herdr, Pi, Claude, tmux, zellij, and
+  its tests and the worked source example pass on a copy of the deployed tree
+  whose adapters/ directory was deleted.
 * Containment: nothing in the deployable files reaches a path outside this
   directory, apart from the documented per-user locations of the inbox, the
   config, the operator log and the Herdr plugin link.
 * Deployment: chezmoi previews (never `apply` without `--dry-run`, never a real
-  apply) show that the new files map to ~/.local/share/agent-alert, that tests/
-  is not deployed, and that the termux profile does not receive the tree.
+  apply) show that the files map to ~/.local/share/agent-alert, that tests/ is
+  not deployed, that the adapter READMEs are gone, and that the termux profile
+  does not receive the tree.
 
 Before running chezmoi the test reads the effective chezmoi config for
 `hooks.read-source-state.pre` and proceeds only when that hook is the known
@@ -26,6 +28,7 @@ import subprocess
 import sys
 import tarfile
 import io
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -37,7 +40,7 @@ REPO = common.REPO_ROOT
 DESTINATION = Path.home() / common.DESTINATION_RELATIVE
 IGNORE_LINE = ".local/share/agent-alert/tests/**"
 
-DEPLOYED_SUFFIXES = {".py", ".md", ".toml", ""}
+CORE_FORBIDDEN_WORDS = ("Herdr", "Pi", "Claude", "tmux", "zellij")
 
 
 def deployable_files():
@@ -79,21 +82,25 @@ def run_chezmoi(*args, **options):
 
 
 class LayeringTests(unittest.TestCase):
-    def test_core_names_neither_herdr_nor_claude(self):
+    def test_core_names_none_of_the_five_adapter_words(self):
         core_files = [p for p in deployable_files() if p.relative_to(TOOL).parts[0] == "core"]
         self.assertTrue(core_files)
         for path in core_files:
-            text = path.read_text(encoding="utf-8").lower()
-            for word in ("herdr", "claude", "doorbell"):
-                self.assertNotIn(word, text, "%s mentions %s" % (path.relative_to(TOOL), word))
-        grep = subprocess.run(["grep", "-rniE", "herdr|claude", str(TOOL / "core")], stdout=subprocess.PIPE, text=True)
+            text = path.read_text(encoding="utf-8")
+            for word in CORE_FORBIDDEN_WORDS:
+                self.assertIsNone(re.search(r"\b%s\b" % word, text, re.I), "%s mentions %s" % (path.relative_to(TOOL), word))
+        grep = subprocess.run(["grep", "-rniwE", "|".join(CORE_FORBIDDEN_WORDS), str(TOOL / "core")], stdout=subprocess.PIPE, text=True)
         self.assertEqual((grep.returncode, grep.stdout), (1, ""))  # grep exits 1 for "no match"
 
-    def test_core_tests_pass_on_a_copy_without_adapters(self):
-        copy = common.deployed_copy(delete_adapters=True)
-        self.assertTrue((copy / "core" / "agent-alert").is_file())
-        self.assertFalse((copy / "adapters").exists())
-        self.assertFalse((copy / "examples").exists())
+    def test_core_tests_and_the_worked_source_example_pass_on_a_copy_without_adapters(self):
+        copy = Path(tempfile.mkdtemp(prefix="agent-alert-noadapters-"))
+        self.addCleanup(shutil.rmtree, copy, ignore_errors=True)
+        shutil.copytree(common.deployed_copy(delete_adapters=False), copy / "tree", ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        tree = copy / "tree"
+        shutil.rmtree(tree / "adapters")
+        self.assertTrue((tree / "core" / "agent-alert").is_file())
+        self.assertTrue((tree / "examples" / "source-example.py").is_file())
+        self.assertFalse((tree / "adapters").exists())
         environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
         result = subprocess.run(
             [sys.executable, "-m", "unittest", "discover", "-s", str(TOOL / "tests"), "-p", "test_core.py"],
@@ -105,14 +112,25 @@ class LayeringTests(unittest.TestCase):
             encoding="utf-8",
         )
         summary = result.stdout.strip().splitlines()[-3:]
-        print("core tests on a copy without adapters/ and examples/:", " | ".join(summary))
+        print("core tests on a deployed copy without adapters/:", " | ".join(summary))
         self.assertEqual(result.returncode, 0, result.stdout[-2000:])
         self.assertIn("OK", summary[-1])
-        # and the copy really runs: an event goes in and comes out
-        scratch = common.Scratch(cli=copy / "core" / "agent-alert")
+        # and the copy really runs the worked source example: an event goes in and comes out
+        scratch = common.Scratch(cli=tree / "core" / "agent-alert")
         self.addCleanup(scratch.cleanup)
-        self.assertEqual(scratch.emit(summary="standalone core").returncode, 0)
-        self.assertIn("standalone core", scratch.run("tail", "--since", "0").stdout)
+        example = subprocess.run(
+            [sys.executable, str(tree / "examples" / "source-example.py")],
+            input="standalone-pane idle\n",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=scratch.env(),
+            timeout=60,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual((example.returncode, example.stderr), (0, ""))
+        self.assertEqual([(e["worker"], e["kind"]) for e in scratch.events()], [("standalone-pane", "finished")])
+        self.assertIn('"worker":"standalone-pane"', scratch.run("tail", "--since", "0").stdout)
 
 
 class ContainmentTests(unittest.TestCase):
@@ -131,7 +149,7 @@ class ContainmentTests(unittest.TestCase):
         absolute_tokens = re.compile(r"(?:^|[\s\"'(=`])(/[A-Za-z][A-Za-z0-9_.\-]*(?:/[A-Za-z0-9_.\-]*)*)")
         offenders = []
         files = deployable_files()
-        self.assertGreaterEqual(len(files), 10)
+        self.assertGreaterEqual(len(files), 8)
         for path in files:
             text = path.read_text(encoding="utf-8")
             for token in home_tokens.findall(text):
@@ -144,6 +162,11 @@ class ContainmentTests(unittest.TestCase):
                 if literal in text:
                     offenders.append((str(path.relative_to(TOOL)), literal))
         self.assertEqual(offenders, [])
+
+    def test_the_tree_has_one_readme_and_no_file_with_live_in_its_name(self):
+        files = [p.relative_to(TOOL) for p in TOOL.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
+        self.assertEqual([str(p) for p in files if p.name == "README.md"], ["README.md"])
+        self.assertEqual([str(p) for p in files if "live" in p.name.lower()], [])
 
     def test_adapters_reach_the_core_only_through_their_own_location(self):
         for path in deployable_files():
@@ -190,12 +213,11 @@ class ChezmoiPreviewTests(unittest.TestCase):
             "examples/consumer-example.py",
             "adapters/herdr/hook.py",
             "adapters/herdr/herdr-plugin.toml",
-            "adapters/herdr/README.md",
             "adapters/claude-doorbell/doorbell.py",
-            "adapters/claude-doorbell/README.md",
         ]
         for name in expected:
             self.assertIn(common.DESTINATION_RELATIVE + "/" + name, mine)
+        self.assertEqual([line for line in mine if line.endswith("README.md")], [common.DESTINATION_RELATIVE + "/README.md"])
         self.assertEqual([line for line in mine if "/tests" in line], [])
         self.assertEqual([line for line in mine if "__pycache__" in line], [])
         for name in ("README.md", "core/agent-alert", "examples/source-example.py", "adapters/claude-doorbell/doorbell.py"):

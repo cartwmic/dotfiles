@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """agent-alert core: an append-only JSONL inbox with three commands.
 
-    agent-alert emit --worker ID --kind KIND [--summary TEXT|-] [--context K=V]...
+    agent-alert emit --worker ID --kind KIND [--context K=V]... [--context-json OBJECT]
     agent-alert tail [--since N]
     agent-alert ack N
 
@@ -9,7 +9,7 @@ SPEC.md (next to this directory) is the authoritative description of the
 format, the configuration and the sink contract. Python 3 standard library only.
 
 Exit codes: 0 success, 2 bad input or bad configuration, 3 inbox, lock or
-acknowledgment file could not be used (including a refused free-space check).
+acknowledgment file could not be used.
 """
 
 import argparse
@@ -17,26 +17,17 @@ import datetime
 import fcntl
 import json
 import os
-import re
 import signal
 import subprocess
 import sys
-import time
 
 FORMAT_VERSION = 1
 KINDS = ("finished", "blocked", "errored", "exited")
-
-SUMMARY_LIMIT = 200
-CONTEXT_MAX_ENTRIES = 8
-CONTEXT_KEY_MAX = 32
-CONTEXT_VALUE_LIMIT = 100
-WORKER_MAX = 128
 
 DEFAULT_INBOX = "~/.local/share/coordinator/inbox.jsonl"
 DEFAULT_LOG = "~/.local/state/agent-alert/agent-alert.log"
 DEFAULT_CONFIG = "~/.config/agent-alert/config.json"
 DEFAULT_SINK_TIMEOUT = 5.0
-DEFAULT_MARGIN = 1048576
 
 EXIT_BAD_INPUT = 2
 EXIT_STORE = 3
@@ -74,37 +65,26 @@ def load_config(environ):
         if not isinstance(values, dict):
             raise Failure(EXIT_BAD_INPUT, "configuration %s must be a JSON object" % config_path)
 
-    def text_setting(key, env_name, default):
-        value = environ.get(env_name) or values.get(key, default)
-        if not isinstance(value, str) or not value:
-            raise Failure(EXIT_BAD_INPUT, "configuration %s must be a non-empty string" % key)
-        return os.path.expanduser(value)
+    def path_setting(key, env_name, default):
+        return os.path.expanduser(environ.get(env_name) or values.get(key) or default)
+
+    sink = values.get("sink")
+    if environ.get("AGENT_ALERT_SINK"):
+        try:
+            sink = json.loads(environ["AGENT_ALERT_SINK"])
+        except ValueError as error:
+            raise Failure(EXIT_BAD_INPUT, "AGENT_ALERT_SINK is not valid JSON: %s" % error)
 
     timeout = values.get("sink_timeout_seconds", DEFAULT_SINK_TIMEOUT)
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
         raise Failure(EXIT_BAD_INPUT, "configuration sink_timeout_seconds must be a number above 0")
-    margin = values.get("free_space_margin_bytes", DEFAULT_MARGIN)
-    if isinstance(margin, bool) or not isinstance(margin, int) or margin < 0:
-        raise Failure(EXIT_BAD_INPUT, "configuration free_space_margin_bytes must be an integer of 0 or more")
-    sinks = values.get("sinks", [])
-    if not isinstance(sinks, list):
-        raise Failure(EXIT_BAD_INPUT, "configuration sinks must be a list")
-    commands = []
-    for entry in sinks:
-        if isinstance(entry, str) and entry:
-            commands.append([os.path.expanduser(entry)])
-        elif isinstance(entry, list) and entry and all(isinstance(part, str) and part for part in entry):
-            commands.append([os.path.expanduser(entry[0])] + entry[1:])
-        else:
-            raise Failure(EXIT_BAD_INPUT, "each configuration sinks entry must be a program path or a non-empty list of strings")
 
     return {
         "config_path": config_path,
-        "inbox_path": text_setting("inbox_path", "AGENT_ALERT_INBOX", DEFAULT_INBOX),
-        "log_path": text_setting("log_path", "AGENT_ALERT_LOG", DEFAULT_LOG),
-        "sinks": commands,
+        "inbox_path": path_setting("inbox_path", "AGENT_ALERT_INBOX", DEFAULT_INBOX),
+        "log_path": path_setting("log_path", "AGENT_ALERT_LOG", DEFAULT_LOG),
+        "sink": sink,
         "sink_timeout_seconds": float(timeout),
-        "free_space_margin_bytes": margin,
     }
 
 
@@ -135,49 +115,6 @@ def log_problem(config, message):
 
 
 # --------------------------------------------------------------------------
-# Summary sanitizer: mask, then collapse whitespace, then keep the end.
-# --------------------------------------------------------------------------
-
-_MASKS = [
-    re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}"),
-    re.compile(r"(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{16,}"),
-    re.compile(r"(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{16,}"),
-    re.compile(r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}"),
-    re.compile(r"(?<![A-Za-z0-9])xox[abprs]-[A-Za-z0-9-]{10,}"),
-]
-_BEARER = re.compile(r"(\bBearer\s+)[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
-_ASSIGNED = re.compile(
-    r"""(?<![A-Za-z0-9_.-])
-        ((?:[A-Za-z0-9_.-]*(?:token|secret|password|passwd|api[_-]?key)|(?:[A-Za-z0-9]+[_.-])*key)
-         ["']?\s*[:=]\s*)
-        ("(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'|"[^"]*"|'[^']*'|[^\s,;]+)""",
-    re.IGNORECASE | re.VERBOSE,
-)
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-_LINE_BREAKS = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]")
-
-
-def clean_text(value):
-    """Make a str safe to encode as UTF-8 (a lone surrogate becomes ?)."""
-    return value.encode("utf-8", "replace").decode("utf-8")
-
-
-def mask_secrets(text):
-    for pattern in _MASKS:
-        text = pattern.sub("***", text)
-    text = _BEARER.sub(r"\1***", text)
-    return _ASSIGNED.sub(r"\1***", text)
-
-
-def sanitize(text, limit):
-    text = mask_secrets(clean_text(text))
-    text = " ".join(_CONTROL.sub(" ", text).split())
-    if len(text) > limit:
-        text = "\u2026" + text[-(limit - 1):].lstrip()
-    return text
-
-
-# --------------------------------------------------------------------------
 # Event model: validation and the one-line encoding.
 # --------------------------------------------------------------------------
 
@@ -186,18 +123,9 @@ def reject(message):
     raise Failure(EXIT_BAD_INPUT, message)
 
 
-def check_identifier(value, label, limit):
-    if not isinstance(value, str):
-        reject("%s must be a string" % label)
-    if not value.strip():
-        reject("%s must not be empty" % label)
-    if len(value) > limit:
-        reject("%s is longer than %d characters" % (label, limit))
-    if _LINE_BREAKS.search(value):
-        reject("%s must not contain control or line-break characters" % label)
-    if mask_secrets(value) != value:
-        reject("%s looks like a secret and is not stored" % label)
-    return clean_text(value)
+def clean_text(value):
+    """Make a str safe to encode as UTF-8 (a lone surrogate becomes ?)."""
+    return value.encode("utf-8", "replace").decode("utf-8")
 
 
 def build_context(pairs, context_json):
@@ -216,25 +144,19 @@ def build_context(pairs, context_json):
         if not separator:
             reject("--context expects KEY=VALUE, got %r" % pair)
         context[key] = value
-    if len(context) > CONTEXT_MAX_ENTRIES:
-        reject("context has more than %d entries" % CONTEXT_MAX_ENTRIES)
-    checked = {}
     for key, value in context.items():
-        key = check_identifier(key, "context key", CONTEXT_KEY_MAX)
         if not isinstance(value, str):
             reject("context value for %r must be a string" % key)
-        checked[key] = sanitize(value, CONTEXT_VALUE_LIMIT)
-    return checked
+    return {clean_text(key): clean_text(value) for key, value in context.items()}
 
 
-def build_event(seq, worker, kind, summary, context):
+def build_event(seq, worker, kind, context):
     event = {
         "version": FORMAT_VERSION,
         "seq": seq,
         "time": utc_now(fraction=True),
         "worker": worker,
         "kind": kind,
-        "summary": summary,
     }
     if context:
         event["context"] = context
@@ -376,7 +298,7 @@ def write_all(fd, data):
         view = view[written:]
 
 
-def append_event(config, worker, kind, summary, context):
+def append_event(config, worker, kind, context):
     """Append one line under the lock; return the line written. Never truncates."""
     with InboxLock(config):
         try:
@@ -385,20 +307,10 @@ def append_event(config, worker, kind, summary, context):
             raise Failure(EXIT_STORE, "cannot open the inbox: %s" % error)
         try:
             try:
-                line = build_event(last_seq(fd) + 1, worker, kind, summary, context)
+                line = build_event(last_seq(fd) + 1, worker, kind, context)
                 prefix = b"" if ends_with_newline(fd) else b"\n"
-                stats = os.fstatvfs(fd)
             except OSError as error:
                 raise Failure(EXIT_STORE, "cannot read the inbox: %s" % error)
-            free = stats.f_bavail * stats.f_frsize
-            needed = len(prefix) + len(line) + config["free_space_margin_bytes"]
-            if free < needed:
-                raise Failure(
-                    EXIT_STORE,
-                    "not enough free space for the inbox: %d bytes free, %d needed "
-                    "(free_space_margin_bytes is %d); nothing written"
-                    % (free, needed, config["free_space_margin_bytes"]),
-                )
             try:
                 write_all(fd, prefix + line)
                 os.fsync(fd)
@@ -409,79 +321,60 @@ def append_event(config, worker, kind, summary, context):
     return line
 
 
-def run_sinks(config, line):
-    """Start every sink at once with the event on stdin; kill any still running at the deadline."""
-    if not config["sinks"]:
+def run_sink(config, line):
+    """Run the one sink with the event on stdin; kill it and its group at the time bound."""
+    if not config["sink"]:
         return
     environment = dict(os.environ)
     environment["AGENT_ALERT_INBOX"] = config["inbox_path"]
     environment["AGENT_ALERT_LOG"] = config["log_path"]
     environment["AGENT_ALERT_CONFIG"] = config["config_path"]
-    deadline = time.monotonic() + config["sink_timeout_seconds"]
-    running = []
-    for command in config["sinks"]:
-        name = command[0]
+    command = config["sink"]
+    name = command[0] if isinstance(command, list) and command else command
+    try:
+        command = [os.path.expanduser(command[0])] + command[1:]
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=environment,
+            start_new_session=True,
+        )
+    except (OSError, TypeError, ValueError, IndexError) as error:
+        log_problem(config, "sink %s: cannot start: %s" % (name, error))
+        return
+    try:
+        process.communicate(line, timeout=config["sink_timeout_seconds"])
+    except subprocess.TimeoutExpired:
         try:
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=environment,
-                start_new_session=True,
-            )
-        except OSError as error:
-            log_problem(config, "sink %s: cannot start: %s" % (name, error))
-            continue
-        try:
-            process.stdin.write(line)
-            process.stdin.close()
+            os.killpg(process.pid, signal.SIGKILL)
         except OSError:
-            pass
-        running.append((name, process))
-    while running and time.monotonic() < deadline:
-        still = []
-        for name, process in running:
-            status = process.poll()
-            if status is None:
-                still.append((name, process))
-            elif status != 0:
-                log_problem(config, "sink %s: exited with status %d" % (name, status))
-        running = still
-        if running:
-            time.sleep(0.02)
-    for name, process in running:
-        status = process.poll()
-        if status is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except OSError:
-                process.kill()
-            process.wait()
-            log_problem(
-                config,
-                "sink %s: timed out after %g seconds and was killed" % (name, config["sink_timeout_seconds"]),
-            )
-        elif status != 0:
-            log_problem(config, "sink %s: exited with status %d" % (name, status))
+            process.kill()
+        process.wait()
+        log_problem(
+            config,
+            "sink %s: timed out after %g seconds and was killed" % (name, config["sink_timeout_seconds"]),
+        )
+        return
+    if process.returncode != 0:
+        log_problem(config, "sink %s: exited with status %d" % (name, process.returncode))
 
 
 def command_emit(config, args):
     kind = args.kind
-    if not isinstance(kind, str) or kind not in KINDS:
+    if kind not in KINDS:
         reject("unknown kind %r; format version %d defines: %s" % (kind, FORMAT_VERSION, ", ".join(KINDS)))
-    worker = check_identifier(args.worker, "worker", WORKER_MAX)
-    summary_text = args.summary
-    if summary_text == "-":
-        summary_text = sys.stdin.buffer.read().decode("utf-8", "replace")
-    summary = sanitize(summary_text, SUMMARY_LIMIT)
+    if not args.worker.strip():
+        reject("worker must not be empty")
+    worker = clean_text(args.worker)
     context = build_context(args.context, args.context_json)
     try:
-        line = append_event(config, worker, kind, summary, context)
+        line = append_event(config, worker, kind, context)
     except Failure as failure:
         log_problem(config, "emit failed: %s" % failure.message)
         raise
-    run_sinks(config, line)
+    run_sink(config, line)
 
 
 # --------------------------------------------------------------------------
@@ -553,8 +446,7 @@ def build_parser():
     emit = commands.add_parser("emit", help="append one event to the inbox")
     emit.add_argument("--worker", required=True, help="worker id chosen by the source")
     emit.add_argument("--kind", required=True, help="one of: " + ", ".join(KINDS))
-    emit.add_argument("--summary", default="", help="text to summarize, or - to read it from stdin")
-    emit.add_argument("--context", action="append", default=[], metavar="KEY=VALUE", help="short context value (repeatable)")
+    emit.add_argument("--context", action="append", default=[], metavar="KEY=VALUE", help="context value (repeatable)")
     emit.add_argument("--context-json", default=None, metavar="OBJECT", help="context as a JSON object of strings")
 
     tail = commands.add_parser("tail", help="print events after a sequence number")

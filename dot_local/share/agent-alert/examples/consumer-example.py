@@ -18,4 +18,4 @@ for line in sys.stdin:
         continue  # a line that is not an event: skip it and keep reading
     kind = event.get("kind")
     note = "" if str(kind) in KNOWN_KINDS else " (kind unknown to this reader, shown anyway)"
-    print("%d %s %s%s: %s" % (seq, event.get("worker"), kind, note, event.get("summary", "")))
+    print("%d %s %s%s" % (seq, event.get("worker"), kind, note))

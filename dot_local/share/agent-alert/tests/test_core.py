@@ -6,11 +6,9 @@ Run (from the repository root):
 
 Every test runs the real core/agent-alert from a deployed-layout copy that
 chezmoi archived (adapters/ and examples/ deleted) with a scratch HOME.
+The core writes no message text: an event is only a nudge.
 """
 
-import importlib.machinery
-import importlib.util
-import itertools
 import json
 import os
 import re
@@ -50,11 +48,14 @@ class DeployedLayoutTests(CoreTestCase):
         copy = common.deployed_copy()
         self.assertFalse((copy / "adapters").exists())
         self.assertTrue(os.access(copy / "core" / "agent-alert", os.X_OK))
+        forbidden = re.compile(r"\b(herdr|pi|claude|tmux|zellij)\b", re.IGNORECASE)
+        checked = 0
         for path in (copy / "core").rglob("*"):
             if path.is_file():
-                text = path.read_text(encoding="utf-8", errors="replace").lower()
-                self.assertNotIn("herdr", text, str(path))
-                self.assertNotIn("claude", text, str(path))
+                checked += 1
+                text = path.read_text(encoding="utf-8", errors="replace")
+                self.assertIsNone(forbidden.search(text), str(path))
+        self.assertGreater(checked, 0)
 
     def test_exactly_three_commands(self):
         helped = self.scratch.run("--help")
@@ -67,18 +68,18 @@ class DeployedLayoutTests(CoreTestCase):
 class EmitFormatTests(CoreTestCase):
     def test_all_four_kinds_are_valid_lines_with_consecutive_seq(self):
         for kind in ("finished", "blocked", "errored", "exited"):
-            self.emit_ok(worker="pane-" + kind, kind=kind, summary="done with " + kind)
+            self.emit_ok(worker="pane-" + kind, kind=kind)
         events = self.scratch.events()
         self.assertEqual([e["seq"] for e in events], [1, 2, 3, 4])
         self.assertEqual([e["kind"] for e in events], ["finished", "blocked", "errored", "exited"])
         for event in events:
+            self.assertEqual(list(event), ["version", "seq", "time", "worker", "kind"])
             self.assertEqual(event["version"], 1)
             self.assertRegex(event["time"], TIME_PATTERN)
             self.assertTrue(event["worker"])
-            self.assertIsInstance(event["summary"], str)
-            self.assertNotIn("context", event)
         first_line = self.scratch.inbox_bytes().splitlines()[0]
         self.assertTrue(first_line.startswith(b'{"version":1,"seq":1,"time":"'), first_line)
+        self.assertTrue(first_line.endswith(b'","kind":"finished"}'), first_line)
 
     def test_default_inbox_and_config_locations_under_home(self):
         environment = {"HOME": str(self.scratch.home), "PATH": os.environ["PATH"]}
@@ -102,17 +103,41 @@ class EmitFormatTests(CoreTestCase):
         self.assertTrue(self.scratch.inbox.exists())
         self.assertFalse(configured.exists())
 
-    def test_summary_from_stdin_and_whitespace_collapse(self):
-        self.emit_ok(summary="-", stdin="line one\n\n  line\ttwo \x07 end\n")
-        self.assertEqual(self.scratch.events()[0]["summary"], "line one line two end")
-
-    def test_context_stored_as_short_strings(self):
-        self.emit_ok(summary="x")  # seq 1, no context
+    def test_context_is_last_and_stored_as_given(self):
+        self.emit_ok()  # seq 1, no context
         result = self.scratch.run(
-            "emit", "--worker", "w1", "--kind", "blocked", "--context", "workspace=main label", "--context-json", '{"agent":"pi"}'
+            "emit", "--worker", "w1", "--kind", "blocked", "--context", "workspace=main label", "--context-json", '{"agent":"x"}'
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.scratch.events()[1]["context"], {"agent": "pi", "workspace": "main label"})
+        event = self.scratch.events()[1]
+        self.assertEqual(list(event), ["version", "seq", "time", "worker", "kind", "context"])
+        self.assertEqual(event["context"], {"agent": "x", "workspace": "main label"})
+
+    def test_no_message_member_in_any_line_and_no_summary_option(self):
+        self.emit_ok()
+        self.scratch.run("emit", "--worker", "w2", "--kind", "finished", "--context", "k=v")
+        before = self.scratch.inbox_bytes()
+        for args in (("--summary", "some text"), ("--summary", "-")):
+            result = self.scratch.run("emit", "--worker", "w3", "--kind", "finished", *args, stdin="text on stdin")
+            self.assertEqual(result.returncode, 2, args)
+            self.assertIn("--summary", result.stderr)
+        self.assertEqual(self.scratch.inbox_bytes(), before)
+        for event in self.scratch.events():
+            for member in ("summary", "message", "text"):
+                self.assertNotIn(member, event)
+            self.assertLessEqual(set(event), {"version", "seq", "time", "worker", "kind", "context"})
+
+    def test_worker_and_context_are_stored_as_given_without_limits_or_masking(self):
+        worker = "sk-abcdefghijklmnop " + "w" * 500 + " \u00e9\u4e2d\t\u2028end"
+        value = "password=hunter2hunter2 " + "v" * 500
+        key = "k" * 100
+        self.assertEqual(self.scratch.run("emit", "--worker", worker, "--kind", "finished", "--context", key + "=" + value).returncode, 0)
+        event = self.scratch.events()[0]
+        self.assertEqual(event["worker"], worker)
+        self.assertEqual(event["context"], {key: value})
+        many = {"k%d" % i: "v" for i in range(20)}
+        self.assertEqual(self.scratch.run("emit", "--worker", "w", "--kind", "finished", "--context-json", json.dumps(many)).returncode, 0)
+        self.assertEqual(self.scratch.events()[1]["context"], many)
 
 
 class EmitConcurrencyTests(CoreTestCase):
@@ -122,7 +147,7 @@ class EmitConcurrencyTests(CoreTestCase):
 
         def worker(index):
             barrier.wait()
-            results[index] = self.scratch.emit(worker="burst-%d" % index, kind=kind, summary="burst %d" % index)
+            results[index] = self.scratch.emit(worker="burst-%d" % index, kind=kind)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(count)]
         for thread in threads:
@@ -132,19 +157,18 @@ class EmitConcurrencyTests(CoreTestCase):
         for result in results:
             self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_simultaneous_emits_are_intact_and_seq_continues_across_runs(self):
-        self.burst(12)
+    def test_six_simultaneous_emits_are_intact_with_consecutive_seq(self):
+        self.burst(6)
         events = self.scratch.events()
-        self.assertEqual(sorted(e["seq"] for e in events), list(range(1, 13)))
-        self.assertEqual([e["seq"] for e in events], list(range(1, 13)), "file order must follow seq")
-        self.assertEqual(sorted(e["worker"] for e in events), sorted("burst-%d" % i for i in range(12)))
+        self.assertEqual([e["seq"] for e in events], list(range(1, 7)), "file order must follow seq")
+        self.assertEqual(sorted(e["worker"] for e in events), sorted("burst-%d" % i for i in range(6)))
         self.burst(6, kind="blocked")
         events = self.scratch.events()
-        self.assertEqual([e["seq"] for e in events], list(range(1, 19)))
+        self.assertEqual([e["seq"] for e in events], list(range(1, 13)), "seq continues across runs")
 
     def test_two_rapid_emits_same_worker_and_kind_give_two_lines(self):
-        self.emit_ok(worker="same", kind="finished", summary="turn")
-        self.emit_ok(worker="same", kind="finished", summary="turn")
+        self.emit_ok(worker="same", kind="finished")
+        self.emit_ok(worker="same", kind="finished")
         events = self.scratch.events()
         self.assertEqual([(e["seq"], e["worker"], e["kind"]) for e in events], [(1, "same", "finished"), (2, "same", "finished")])
 
@@ -171,10 +195,10 @@ class EmitRefusalTests(CoreTestCase):
         self.assertEqual(result.returncode, 3)
         self.assertEqual(os.listdir(directory), [])
 
-    def assert_rejected(self, *args, stdin=None):
-        self.emit_ok(summary="baseline")
+    def assert_rejected(self, *args):
+        self.emit_ok()
         before = self.scratch.inbox_bytes()
-        result = self.scratch.run("emit", *args, stdin=stdin)
+        result = self.scratch.run("emit", *args)
         self.assertNotEqual(result.returncode, 0, args)
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("agent-alert", result.stderr)
@@ -196,38 +220,16 @@ class EmitRefusalTests(CoreTestCase):
         self.assert_rejected("--worker", "w1", "--kind", "finished", "--context-json", '["a"]')
         self.assert_rejected("--worker", "w1", "--kind", "finished", "--context-json", "not json")
 
-    def test_context_beyond_limits_is_rejected(self):
-        many = json.dumps({"k%d" % i: "v" for i in range(9)})
-        self.assert_rejected("--worker", "w1", "--kind", "finished", "--context-json", many)
-        self.assert_rejected("--worker", "w1", "--kind", "finished", "--context", "x" * 33 + "=v")
-
-    def test_secret_shaped_worker_is_rejected(self):
-        self.assert_rejected("--worker", "sk-abcdefghijklmnop", "--kind", "finished")
-
     def test_bad_configuration_is_rejected_before_writing(self):
         self.scratch.config.write_text("{not json")
         result = self.scratch.emit()
         self.assertEqual(result.returncode, 2)
         self.assertEqual(self.scratch.inbox_bytes(), b"")
 
-    def test_margin_above_available_space_refuses_with_inbox_unchanged(self):
-        self.emit_ok(summary="before")
-        before = self.scratch.inbox_bytes()
-        self.scratch.write_config(free_space_margin_bytes=2**62)
-        result = self.scratch.emit(summary="refused")
-        self.assertEqual(result.returncode, 3)
-        self.assertIn("free space", result.stderr)
-        self.assertEqual(self.scratch.inbox_bytes(), before)
-        self.assertIn("not enough free space", self.scratch.log_text())
-        # With the margin removed the same call succeeds: the refusal was the margin.
-        self.scratch.write_config(free_space_margin_bytes=0)
-        self.emit_ok(summary="accepted")
-        self.assertEqual(self.scratch.events()[-1]["seq"], 2)
-
 
 class FragmentTests(CoreTestCase):
     def test_hand_made_fragment_then_emit_gives_own_line_and_next_seq(self):
-        self.emit_ok(summary="first")
+        self.emit_ok()
         fragment = b'{"version":1,"seq":2,"time":"2026-01-01T00:00:00.000Z","wor'
         with open(self.scratch.inbox, "ab") as handle:
             handle.write(fragment)
@@ -240,14 +242,14 @@ class FragmentTests(CoreTestCase):
         self.assertEqual(self.scratch.run("ack", "2").returncode, 2)
         self.assertEqual(self.scratch.inbox_bytes(), before)
 
-        self.emit_ok(summary="after fragment")
+        self.emit_ok(worker="after-fragment")
         after = self.scratch.inbox_bytes()
         self.assertTrue(after.startswith(before + b"\n"), "emit must first end the fragment with a newline")
         new_line = after[len(before) + 1:]
         self.assertTrue(new_line.endswith(b"\n"))
         decoded = json.loads(new_line)
         self.assertEqual(decoded["seq"], 2)
-        self.assertEqual(decoded["summary"], "after fragment")
+        self.assertEqual(decoded["worker"], "after-fragment")
         tailed = self.scratch.run("tail", "--since", "0")
         self.assertEqual([json.loads(l)["seq"] for l in tailed.stdout.splitlines()], [1, 2])
 
@@ -261,318 +263,26 @@ class FragmentTests(CoreTestCase):
     def test_short_write_under_file_size_limit_leaves_next_emit_intact(self):
         limit = self.file_size_limit_bytes()
         self.assertGreater(limit, 0)
-        self.emit_ok(summary="first")
+        self.emit_ok()
         first_size = len(self.scratch.inbox_bytes())
         with open(self.scratch.inbox, "ab") as handle:
             handle.write(b"x" * (limit - first_size - 100) + b"\n")  # not an event: readers skip it
         before = self.scratch.inbox_bytes()
         self.assertLess(len(before), limit)
-        result = self.scratch.emit(worker="w2", summary="y" * 150, wrapper="ulimit -f 1;")
+        result = self.scratch.emit(worker="y" * 150, wrapper="ulimit -f 1;")
         self.assertNotEqual(result.returncode, 0)
         partial = self.scratch.inbox_bytes()
         self.assertGreater(len(partial), len(before), "the limit should have cut the write short")
         self.assertTrue(partial.startswith(before))
         self.assertFalse(partial.endswith(b"\n"))
 
-        self.emit_ok(worker="w3", summary="recovered")
+        self.emit_ok(worker="w3")
         final = self.scratch.inbox_bytes()
         self.assertTrue(final.startswith(partial + b"\n"))
         last = json.loads(final[len(partial) + 1:])
         self.assertEqual((last["seq"], last["worker"]), (2, "w3"))
         tailed = self.scratch.run("tail", "--since", "0")
         self.assertEqual([json.loads(l)["seq"] for l in tailed.stdout.splitlines()], [1, 2])
-
-
-class SummaryTests(CoreTestCase):
-    SECRETS = [
-        "sk-ant-api03-FAKEFAKEFAKE1234567890",
-        "ghp_FAKEFAKEFAKEFAKE1234567890abcd",
-        "FAKEbearerTOKEN1234567890",
-        "hunter2hunter2",
-        "FAKEAPIKEYVALUE99XYZ",
-    ]
-    QUESTION = "Should I go ahead and delete the staging branch now?"
-
-    def assert_masked(self, text):
-        for secret in self.SECRETS:
-            self.assertNotIn(secret, text)
-            for start in range(0, len(secret) - 9):
-                self.assertNotIn(secret[start:start + 10], text, "secret fragment leaked")
-
-    def test_long_multi_paragraph_message_keeps_the_end_and_masks_secrets(self):
-        preamble = "I started by reading the repository layout and the existing tests. " * 6
-        message = "\n\n".join(
-            [
-                preamble,
-                "Config note: use sk-ant-api03-FAKEFAKEFAKE1234567890 for the client.",
-                "Then I pushed with ghp_FAKEFAKEFAKEFAKE1234567890abcd and Authorization: Bearer FAKEbearerTOKEN1234567890 in the header.",
-                "The settings file has password=hunter2hunter2 and api_key: FAKEAPIKEYVALUE99XYZ in it.",
-                "Everything else passed.",
-                self.QUESTION,
-            ]
-        )
-        self.assertGreater(len(message), 600)
-        self.emit_ok(summary=message)
-        summary = self.scratch.events()[0]["summary"]
-        self.assertLessEqual(len(summary), 200)
-        self.assertNotIn("\n", summary)
-        self.assertTrue(summary.endswith(self.QUESTION), summary)
-        self.assert_masked(summary)
-        self.assertNotIn("repository layout", summary)
-        self.assert_masked(self.scratch.inbox_bytes().decode("utf-8"))
-
-    def test_secrets_are_masked_before_the_cut_so_a_split_secret_cannot_survive(self):
-        secret = "ghp_" + "Q" * 30
-        tail = " ".join(["word"] * 34)  # about 170 characters after the secret
-        self.emit_ok(summary="start " * 40 + secret + " " + tail)
-        summary = self.scratch.events()[0]["summary"]
-        self.assertLessEqual(len(summary), 200)
-        self.assertNotIn("QQQQQ", summary)
-        self.assertNotIn("ghp_", summary)
-
-    def test_secret_shaped_context_values_are_stored_masked(self):
-        self.emit_ok(summary="ok")
-        result = self.scratch.run(
-            "emit", "--worker", "w", "--kind", "finished",
-            "--context", "workspace=ghp_FAKEFAKEFAKEFAKE1234567890abcd",
-            "--context-json", json.dumps({"label": "sk-ant-api03-FAKEFAKEFAKE1234567890", "note": "password=hunter2hunter2"}),
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        raw = self.scratch.inbox_bytes().decode("utf-8")
-        self.assert_masked(raw)
-        context = self.scratch.events()[1]["context"]
-        self.assertEqual(context["workspace"], "***")
-        self.assertEqual(context["label"], "***")
-        self.assertEqual(context["note"], "password=***")
-
-    TAIL = "FAKE_PRIVATE_TAIL_99"
-
-    def assert_tail_masked(self, stored_text):
-        self.assertNotIn(self.TAIL, stored_text)
-        self.assertNotIn("FAKE_PRIVATE", stored_text)
-        self.assertIn("***", stored_text)
-
-    def test_json_style_escaped_double_quote_in_summary_is_fully_masked(self):
-        self.emit_ok(summary='{"password":"a\\"%s"}' % self.TAIL)
-        self.assert_tail_masked(self.scratch.inbox_bytes().decode("utf-8"))
-        self.assertEqual(self.scratch.events()[0]["summary"], '{"password":***}')
-
-    def test_json_style_escaped_double_quote_in_context_value_is_fully_masked(self):
-        result = self.scratch.run(
-            "emit", "--worker", "w", "--kind", "finished", "--summary", "ok",
-            "--context-json", json.dumps({"payload": '{"password":"a\\"%s"}' % self.TAIL}),
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_tail_masked(self.scratch.inbox_bytes().decode("utf-8"))
-        self.assertEqual(self.scratch.events()[0]["context"]["payload"], '{"password":***}')
-
-    def test_single_quoted_value_with_escaped_single_quote_is_fully_masked(self):
-        self.emit_ok(summary="token='it\\'s %s' and ordinary words" % self.TAIL)
-        self.assert_tail_masked(self.scratch.inbox_bytes().decode("utf-8"))
-        self.assertEqual(self.scratch.events()[0]["summary"], "token=*** and ordinary words")
-
-    def test_escaped_backslash_before_the_closing_quote_ends_the_value(self):
-        # "a\\" is a complete value: the text after it is not part of the secret.
-        self.emit_ok(summary='password="%s\\\\" and ordinary words' % self.TAIL)
-        self.assert_tail_masked(self.scratch.inbox_bytes().decode("utf-8"))
-        self.assertEqual(self.scratch.events()[0]["summary"], "password=*** and ordinary words")
-
-    def test_escaped_backslash_followed_by_escaped_quote_stays_inside_the_value(self):
-        self.emit_ok(summary='{"password":"a\\\\\\"%s"} done' % self.TAIL)
-        self.assert_tail_masked(self.scratch.inbox_bytes().decode("utf-8"))
-        self.assertEqual(self.scratch.events()[0]["summary"], '{"password":***} done')
-
-    def test_plain_assignments_mask_exactly_as_before(self):
-        cases = {
-            "password=%s" % self.TAIL: "password=***",
-            'password: "%s"' % self.TAIL: "password: ***",
-            "token = '%s' next" % self.TAIL: "token = *** next",
-            '{"api_key": "%s"}' % self.TAIL: '{"api_key": ***}',
-            "secret: %s, other" % self.TAIL: "secret: ***, other",
-            'password="two words %s" end' % self.TAIL: "password=*** end",
-        }
-        for text, expected in cases.items():
-            with self.subTest(text=text):
-                self.emit_ok(summary=text)
-                self.assertEqual(self.scratch.events()[-1]["summary"], expected)
-
-    def test_short_summary_and_ordinary_words_are_kept(self):
-        self.emit_ok(summary="Updated the monkey keyboard; what key should be used?")
-        self.assertEqual(self.scratch.events()[0]["summary"], "Updated the monkey keyboard; what key should be used?")
-
-
-# The _ASSIGNED pattern as it was before commit 63ff38a ("quoted value ends at the
-# first quote"). Copied verbatim as the baseline the current pattern must never
-# leak more than: whatever it masked, the current pattern must also mask.
-OLD_ASSIGNED_SOURCE = r"""(?<![A-Za-z0-9_.-])
-        ((?:[A-Za-z0-9_.-]*(?:token|secret|password|passwd|api[_-]?key)|(?:[A-Za-z0-9]+[_.-])*key)
-         ["']?\s*[:=]\s*)
-        ("[^"]*"|'[^']*'|[^\s,;]+)"""
-OLD_ASSIGNED = re.compile(OLD_ASSIGNED_SOURCE, re.IGNORECASE | re.VERBOSE)
-
-MARKER = "FAKE_PRIVATE_TAIL_99"
-
-
-def load_deployed_core():
-    """Import the deployed-layout core/agent-alert (no .py suffix) as a module."""
-    path = str(common.deployed_copy() / "core" / "agent-alert")
-    loader = importlib.machinery.SourceFileLoader("agent_alert_core_under_test", path)
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
-
-
-def is_unterminated_quote(text):
-    """True when the first quoted assignment in text has no unescaped closing quote."""
-    match = re.search(r"[:=]\s*([\"'])", text)
-    if not match:
-        return False
-    quote, index = match.group(1), match.end()
-    while index < len(text):
-        if text[index] == "\\":
-            index += 2
-        elif text[index] == quote:
-            return False
-        else:
-            index += 1
-    return True
-
-
-def hostile_corpus():
-    """Deterministic hostile assignments; each value contains MARKER."""
-    names = ["password", '"password"', "token", "api_key", "key"]
-    separators = ["=", ":", " = ", ": "]
-    quotes = ["", '"', "'"]
-    fragments = [
-        MARKER, "a", "\\", "\\\\", '\\"', "\\'", '"', "'",
-        "\n", "\r", "\r\n", "\t", "\u2028", "\u2029", "\u0085", " ",
-    ]
-    prefixes = list(itertools.product(names, separators, quotes))
-    short = [seq for n in range(3) for seq in itertools.product(fragments, repeat=n)]
-    long_ = [seq for n in (3, 4) for seq in itertools.product(fragments, repeat=n)]
-    # Every prefix x every sequence of length 0-2; length 3-4 sampled by a fixed stride.
-    sequences = [(p, seq) for p in prefixes for seq in short]
-    sequences += [(prefixes[i % len(prefixes)], seq) for i, seq in enumerate(long_) if i % 7 == 0]
-    cases = []
-    for index, ((name, separator, quote), seq) in enumerate(sequences):
-        value = "".join(seq)
-        if MARKER not in value:
-            value += MARKER
-        closing = quote if (quote and index % 2 == 0) else ""
-        trailer = " and ordinary words" if index % 3 == 0 else ""
-        cases.append(name + separator + quote + value + closing + trailer)
-    return cases
-
-
-class MaskRegressionTests(CoreTestCase):
-    """The quoted-assignment mask must never leak a tail the previous mask hid."""
-
-    BACKSLASH_BREAK_VALUES = {
-        "backslash-LF": "first\\\n" + MARKER,
-        "backslash-CRLF": "first\\\r\n" + MARKER,
-        "backslash-CR": "first\\\r" + MARKER,
-        "backslash-U+2028": "first\\\u2028" + MARKER,
-        "backslash-U+2029": "first\\\u2029" + MARKER,
-        "backslash-U+0085": "first\\\u0085" + MARKER,
-        "backslash-TAB": "first\\\t" + MARKER,
-        "escaped-quote-then-LF": 'first\\"\n' + MARKER,
-        "escaped-backslash-then-LF": "first\\\\\n" + MARKER,
-        "plain-LF": "first\n" + MARKER,
-    }
-
-    def old_masked_marker_but_current_leaks(self, cases):
-        core = load_deployed_core()
-        compared = 0
-        regressions = []
-        for text in cases:
-            if MARKER in OLD_ASSIGNED.sub(r"\1***", text):
-                continue
-            compared += 1
-            if MARKER in core._ASSIGNED.sub(r"\1***", text):
-                regressions.append(text)
-        return compared, regressions
-
-    def test_new_pattern_masks_everything_the_old_pattern_masked(self):
-        cases = hostile_corpus()
-        self.assertGreaterEqual(len(cases), 3000)
-        compared, regressions = self.old_masked_marker_but_current_leaks(cases)
-        self.assertGreater(compared, 500)
-        self.assertEqual(
-            len(regressions), 0,
-            "%d of %d corpus cases (%d compared): old pattern masked the marker, current "
-            "pattern leaks it; first: %r" % (len(regressions), len(cases), compared, regressions[:10]),
-        )
-
-    def test_unterminated_quote_ending_in_an_escaped_quote_is_still_masked_like_before(self):
-        # `password="two words\\"` has no unescaped closing quote. The old mask ended at
-        # the escaped quote and hid everything; the current mask must too.
-        cases = [text for text in hostile_corpus() if is_unterminated_quote(text)]
-        compared, regressions = self.old_masked_marker_but_current_leaks(cases)
-        self.assertGreater(compared, 0)
-        self.assertEqual(len(regressions), 0, "%d of %d: %r" % (len(regressions), compared, regressions[:10]))
-
-    def test_backslash_line_breaks_in_quoted_values_never_reach_the_inbox_summary(self):
-        for quote in ('"', "'"):
-            for label, value in self.BACKSLASH_BREAK_VALUES.items():
-                with self.subTest(quote=quote, case=label):
-                    scratch = common.Scratch()
-                    self.addCleanup(scratch.cleanup)
-                    text = "password=" + quote + value + quote + " and ordinary words"
-                    result = scratch.emit(summary=text)
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    stored = scratch.inbox_bytes().decode("utf-8")
-                    self.assertNotIn(MARKER, stored)
-                    self.assertNotIn("FAKE_PRIVATE", stored)
-                    self.assertEqual(scratch.events()[0]["summary"], "password=*** and ordinary words")
-
-    def test_backslash_line_breaks_in_quoted_values_never_reach_the_inbox_context(self):
-        for label, value in self.BACKSLASH_BREAK_VALUES.items():
-            with self.subTest(case=label):
-                scratch = common.Scratch()
-                self.addCleanup(scratch.cleanup)
-                payload = '{"password": "' + value + '"} done'
-                result = scratch.run(
-                    "emit", "--worker", "w", "--kind", "finished", "--summary", "ok",
-                    "--context-json", json.dumps({"payload": payload}),
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                stored = scratch.inbox_bytes().decode("utf-8")
-                self.assertNotIn(MARKER, stored)
-                self.assertNotIn("FAKE_PRIVATE", stored)
-                self.assertEqual(scratch.events()[0]["context"]["payload"], '{"password": ***} done')
-
-    UNTERMINATED_QUOTE_TEXTS = [
-        'password="two words ' + MARKER + '\\"',
-        "token='it is " + MARKER + "\\'",
-        'password="two words\\"',
-    ]
-
-    def test_unterminated_quoted_values_never_reach_the_inbox_summary(self):
-        for text in self.UNTERMINATED_QUOTE_TEXTS:
-            with self.subTest(text=text):
-                scratch = common.Scratch()
-                self.addCleanup(scratch.cleanup)
-                result = scratch.emit(summary=text)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                stored = scratch.inbox_bytes().decode("utf-8")
-                self.assertNotIn(MARKER, stored)
-                self.assertNotIn("FAKE_PRIVATE", stored)
-                self.assertEqual(scratch.events()[0]["summary"], text.split("=")[0] + "=***")
-
-    def test_unterminated_quoted_values_never_reach_the_inbox_context(self):
-        for text in self.UNTERMINATED_QUOTE_TEXTS:
-            with self.subTest(text=text):
-                scratch = common.Scratch()
-                self.addCleanup(scratch.cleanup)
-                result = scratch.run(
-                    "emit", "--worker", "w", "--kind", "finished", "--summary", "ok",
-                    "--context-json", json.dumps({"payload": text}),
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                stored = scratch.inbox_bytes().decode("utf-8")
-                self.assertNotIn(MARKER, stored)
-                self.assertNotIn("FAKE_PRIVATE", stored)
 
 
 class ReadAndAckTests(CoreTestCase):
@@ -582,7 +292,7 @@ class ReadAndAckTests(CoreTestCase):
 
     def test_tail_since_ack_and_lower_ack(self):
         for index in range(5):
-            self.emit_ok(worker="w%d" % index, summary="event %d" % (index + 1))
+            self.emit_ok(worker="w%d" % index)
         raw_lines = self.scratch.inbox_bytes().decode("utf-8").splitlines()
 
         self.assertEqual(self.seqs(self.scratch.run("tail", "--since", "0")), [1, 2, 3, 4, 5])
@@ -617,15 +327,15 @@ class ReadAndAckTests(CoreTestCase):
         self.assertFalse(self.scratch.inbox.exists())
 
     def test_unknown_kind_line_passes_through_tail_unchanged(self):
-        self.emit_ok(summary="first")
-        hand_written = '{"version":2,"seq":2,"time":"2030-01-01T00:00:00Z","worker":"w9","kind":"paused","summary":"a later kind","extra":[1,2]}'
+        self.emit_ok()
+        hand_written = '{"version":2,"seq":2,"time":"2030-01-01T00:00:00Z","worker":"w9","kind":"paused","extra":[1,2]}'
         with open(self.scratch.inbox, "ab") as handle:
             handle.write(b"not json at all\n[1,2]\n" + b'{"no":"seq"}\n' + hand_written.encode() + b"\n")
         tailed = self.scratch.run("tail", "--since", "1")
         self.assertEqual(tailed.stdout.splitlines(), [hand_written])
         self.assertEqual(self.scratch.run("ack", "2").returncode, 0)
         # emit continues from the last parseable line
-        self.emit_ok(summary="after")
+        self.emit_ok(worker="after")
         self.assertEqual(json.loads(self.scratch.inbox_bytes().splitlines()[-1])["seq"], 3)
 
 
@@ -639,36 +349,49 @@ class SinkTests(CoreTestCase):
         )
         self.failing_sink = self.write_script("sink-fail.sh", "cat >/dev/null\nexit 3\n")
         self.pid_file = self.scratch.root / "sleeper.pid"
-        self.sleeping_sink = self.write_script("sink-sleep.sh", 'echo $$ > "%s"\nexec sleep 30\n' % self.pid_file)
+        self.child_pid_file = self.scratch.root / "sleeper-child.pid"
+        self.sleeping_sink = self.write_script(
+            "sink-sleep.sh",
+            'echo $$ > "%s"\nsleep 30 &\necho $! > "%s"\nwait\n' % (self.pid_file, self.child_pid_file),
+        )
         self.missing_sink = self.scratch.root / "no-such-sink"
 
     def assert_event_kept(self, kind="finished"):
         events = self.scratch.events()
         self.assertEqual(events[-1]["kind"], kind)
 
-    def test_ok_sink_receives_every_kind_once_and_sees_resolved_paths(self):
-        self.scratch.write_config(sinks=[str(self.ok_sink)])
-        for kind in ("finished", "blocked", "errored", "exited"):
-            self.emit_ok(kind=kind, summary="for the sink")
-        received = [json.loads(line) for line in self.received.read_text().splitlines()]
-        self.assertEqual([e["kind"] for e in received], ["finished", "blocked", "errored", "exited"])
-        self.assertEqual(received, self.scratch.events())
-        environment = self.received.with_name("received.jsonl.env").read_text().splitlines()[0]
-        self.assertEqual(environment, "log=%s inbox=%s" % (self.scratch.log, self.scratch.inbox))
-        self.assertEqual(self.scratch.log_text(), "")
-
-    def test_sink_argument_list_form(self):
-        self.scratch.write_config(sinks=[["sh", "-c", 'cat > "$1"', "sh", str(self.received)]])
-        self.emit_ok()
-        self.assertEqual(json.loads(self.received.read_text())["seq"], 1)
-
     def run_timed(self, **kwargs):
         started = time.monotonic()
         result = self.scratch.emit(**kwargs)
         return result, time.monotonic() - started
 
+    def test_ok_sink_receives_every_kind_once_with_the_line_on_stdin(self):
+        self.scratch.write_config(sink=[str(self.ok_sink)])
+        for kind in ("finished", "blocked", "errored", "exited"):
+            self.emit_ok(kind=kind)
+        received = self.received.read_bytes()
+        self.assertEqual(received, self.scratch.inbox_bytes(), "the exact bytes appended, once per event")
+        self.assertEqual([json.loads(line)["kind"] for line in received.splitlines()], ["finished", "blocked", "errored", "exited"])
+        environment = self.received.with_name("received.jsonl.env").read_text().splitlines()[0]
+        self.assertEqual(environment, "log=%s inbox=%s" % (self.scratch.log, self.scratch.inbox))
+        self.assertEqual(self.scratch.log_text(), "")
+
+    def test_no_sink_configured_is_fine(self):
+        self.emit_ok()
+        self.assertEqual(self.scratch.log_text(), "")
+
+    def test_sink_argument_list_and_environment_override(self):
+        self.scratch.write_config(sink=["sh", "-c", 'cat > "$1"', "sh", str(self.received)])
+        self.emit_ok()
+        self.assertEqual(json.loads(self.received.read_text())["seq"], 1)
+        other = self.scratch.root / "other.jsonl"
+        env = self.scratch.env(AGENT_ALERT_SINK=json.dumps(["sh", "-c", 'cat > "$1"', "sh", str(other)]))
+        self.emit_ok(env=env)
+        self.assertEqual(json.loads(other.read_text())["seq"], 2)
+        self.assertEqual(json.loads(self.received.read_text())["seq"], 1, "the override replaces the configured sink")
+
     def test_nonzero_sink_is_logged_and_event_kept(self):
-        self.scratch.write_config(sinks=[str(self.failing_sink)])
+        self.scratch.write_config(sink=[str(self.failing_sink)])
         result, _ = self.run_timed()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_event_kept()
@@ -676,51 +399,47 @@ class SinkTests(CoreTestCase):
         self.assertIn(str(self.failing_sink), self.scratch.log_text())
 
     def test_missing_sink_is_logged_and_event_kept(self):
-        self.scratch.write_config(sinks=[str(self.missing_sink)])
+        self.scratch.write_config(sink=[str(self.missing_sink)])
         result, _ = self.run_timed()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_event_kept()
         self.assertIn("cannot start", self.scratch.log_text())
         self.assertIn("no-such-sink", self.scratch.log_text())
 
-    def test_sink_sleeping_past_the_bound_is_killed_and_emit_returns_within_bound(self):
-        self.scratch.write_config(sinks=[str(self.sleeping_sink)], sink_timeout_seconds=1)
+    def wait_gone(self, pid):
+        for _ in range(50):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.1)
+        self.fail("process %d is still running" % pid)
+
+    def test_sink_sleeping_past_the_bound_is_killed_with_its_group(self):
+        self.scratch.write_config(sink=[str(self.sleeping_sink)], sink_timeout_seconds=1)
         result, elapsed = self.run_timed()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertGreaterEqual(elapsed, 0.9)
         self.assertLess(elapsed, 4.0)
         self.assert_event_kept()
         self.assertIn("timed out after 1 seconds", self.scratch.log_text())
-        pid = int(self.pid_file.read_text())
-        for _ in range(50):
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.1)
-        else:
-            self.fail("the timed-out sink is still running")
-
-    def test_all_sinks_run_together_under_one_bound(self):
-        self.scratch.write_config(
-            sinks=[str(self.sleeping_sink), str(self.missing_sink), str(self.failing_sink), str(self.ok_sink)],
-            sink_timeout_seconds=1,
-        )
-        result, elapsed = self.run_timed(summary="all at once")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertLess(elapsed, 4.0)
-        self.assertEqual(len(self.scratch.events()), 1)
-        self.assertEqual(json.loads(self.received.read_text())["summary"], "all at once")
-        log = self.scratch.log_text()
-        for cause in ("timed out", "cannot start", "exited with status 3"):
-            self.assertIn(cause, log)
+        self.wait_gone(int(self.pid_file.read_text()))
+        self.wait_gone(int(self.child_pid_file.read_text()))
 
     def test_sink_that_ignores_its_stdin_still_lets_emit_finish(self):
         quiet = self.write_script("sink-quiet.sh", "exit 0\n")
-        self.scratch.write_config(sinks=[str(quiet)])
+        self.scratch.write_config(sink=[str(quiet)])
         result, _ = self.run_timed()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.scratch.log_text(), "")
+
+    def test_unusable_sink_timeout_is_rejected_before_writing(self):
+        for value in (0, -1, "5", True):
+            with self.subTest(value=value):
+                self.scratch.write_config(sink_timeout_seconds=value)
+                result = self.scratch.emit()
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(self.scratch.inbox_bytes(), b"")
 
 
 if __name__ == "__main__":

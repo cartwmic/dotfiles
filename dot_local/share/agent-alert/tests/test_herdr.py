@@ -10,9 +10,9 @@ Two kinds of test, both against the deployed-layout copy that chezmoi archives
 
 * HookDirectTests run adapters/herdr/hook.py itself, as Herdr would, with
   crafted event environments, in chosen orders and concurrently, with a fake
-  `herdr` binary that serves fixture pane text. This is how reordered and
-  concurrent events are proved: Herdr cannot be told to run two hooks of one
-  pane in a given order.
+  `herdr` binary that records any call (the hook must make none). This is how
+  reordered and concurrent events are proved: Herdr cannot be told to run two
+  hooks of one pane in a given order.
 * HerdrServerTests start one real scratch Herdr 0.9.1 server at a time (its
   own HOME, config path and sockets, all under a short scratch directory),
   link and enable the plugin there, and drive it with `herdr pane
@@ -39,7 +39,6 @@ from urllib.parse import quote
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common  # noqa: E402
 
-PLACEHOLDER = "(last message unavailable)"
 HERDR_REQUIRED = shutil.which("herdr") is not None
 
 
@@ -56,11 +55,9 @@ def utc_now_string():
 # ------------------------------------------------------------ direct hook runs
 
 FAKE_HERDR = """#!/bin/sh
-# Stand-in for the herdr binary the hook calls: serves fixture pane text.
-[ "$1" = agent ] && [ "$2" = read ] || { echo "unexpected: $*" >&2; exit 64; }
-echo "$3" >> "$FAKE_HERDR_CALLS"
-if [ -n "$FAKE_HERDR_FAIL" ]; then echo "pane $3 not found" >&2; exit 1; fi
-cat "$FAKE_HERDR_TEXT"
+# Stand-in for the herdr binary: the hook must never call it, so any call is recorded.
+echo "$*" >> "$FAKE_HERDR_CALLS"
+exit 64
 """
 
 
@@ -73,17 +70,12 @@ class DirectHarness:
         self.scratch = common.Scratch(cli=self.copy / "core" / "agent-alert")
         test_case.addCleanup(self.scratch.cleanup)
         self.state_dir = self.scratch.root / "plugin-state"
-        self.text_file = self.scratch.root / "pane-text.txt"
         self.calls_file = self.scratch.root / "herdr-calls.txt"
         self.fake_herdr = self.scratch.root / "herdr"
         self.fake_herdr.write_text(FAKE_HERDR)
         self.fake_herdr.chmod(self.fake_herdr.stat().st_mode | stat.S_IXUSR)
-        self.text_file.write_text("")
 
-    def set_pane_text(self, text):
-        self.text_file.write_text(text, encoding="utf-8")
-
-    def environment(self, event, pane, status=None, agent="pi", workspace="w1", label="main-ws", released=False, fail_read=False):
+    def environment(self, event, pane, status=None, agent="pi", workspace="w1", label="main-ws", released=False):
         name = event.replace(".", "_")
         data = {"type": name, "pane_id": pane, "workspace_id": workspace}
         if status is not None:
@@ -102,11 +94,9 @@ class DirectHarness:
             HERDR_PLUGIN_CONTEXT_JSON=json.dumps({"workspace_id": workspace, "workspace_label": label}),
             HERDR_PLUGIN_STATE_DIR=str(self.state_dir),
             HERDR_BIN_PATH=str(self.fake_herdr),
-            FAKE_HERDR_TEXT=str(self.text_file),
             FAKE_HERDR_CALLS=str(self.calls_file),
         )
-        if fail_read:
-            environment["FAKE_HERDR_FAIL"] = "1"
+        environment["PATH"] = str(self.scratch.root) + os.pathsep + environment["PATH"]
         return environment
 
     def command(self, hook=None):
@@ -164,8 +154,7 @@ class HookDirectTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
 
     def test_status_maps_to_kind_and_worker_and_context(self):
-        self.h.set_pane_text("● I changed the parser.\n")
-        for status in ("working", "unknown"):
+        for status in ("working", "unknown", "something-new"):
             self.assertQuietSuccess(self.h.status("w1:p1", status))
         self.assertEqual(self.h.events(), [])
         for pane, status in (("w1:p2", "blocked"), ("w1:p3", "idle"), ("w1:p4", "done")):
@@ -173,24 +162,21 @@ class HookDirectTests(unittest.TestCase):
         by_pane = {e["worker"]: e for e in self.h.events()}
         self.assertEqual({p: e["kind"] for p, e in by_pane.items()}, {"w1:p2": "blocked", "w1:p3": "finished", "w1:p4": "finished"})
         event = by_pane["w1:p3"]
+        self.assertEqual(list(event), ["version", "seq", "time", "worker", "kind", "context"])  # no message member
         self.assertEqual(event["version"], 1)
-        self.assertEqual(event["summary"], "● I changed the parser.")
         self.assertEqual(event["context"], {"workspace_id": "w1", "workspace_label": "main-ws", "agent": "pi"})
         self.assertEqual([e["seq"] for e in self.h.events()], [1, 2, 3])
+        self.assertNotIn("errored", self.h.kinds())
 
-    def test_long_workspace_label_is_masked_by_the_core_before_it_is_cut(self):
-        token = "ghp_" + "FAKE" * 7 + "ab"  # 30 synthetic token characters
-        label = "a" * 81 + " " + token
-        self.assertQuietSuccess(self.h.status("w1:p1", "idle", label=label))
-        [event] = self.h.events()
-        stored = event["context"]["workspace_label"]
-        self.assertIn("***", stored)
-        self.assertNotIn("ghp_", stored)
-        self.assertNotIn("FAKE", stored)
-        self.assertNotIn("ghp_FAKE", self.h.scratch.inbox_bytes().decode())
-        short = "a-short-label"
-        self.assertQuietSuccess(self.h.status("w1:p2", "idle", label=short))
-        self.assertEqual(self.h.events()[1]["context"]["workspace_label"], short)
+    def test_working_and_unknown_reports_add_no_event_but_record_presence(self):
+        for status in ("working", "unknown"):
+            pane = "w1:" + status
+            self.assertQuietSuccess(self.h.status(pane, status))
+            self.assertTrue((self.h.state_dir / "panes" / quote(pane, safe="")).is_file())
+        self.assertEqual(self.h.events(), [])
+        self.assertQuietSuccess(self.h.closed("w1:working"))
+        self.assertQuietSuccess(self.h.exited("w1:unknown"))
+        self.assertEqual(sorted((e["worker"], e["kind"]) for e in self.h.events()), [("w1:unknown", "exited"), ("w1:working", "exited")])
 
     def test_agentless_pane_emits_nothing(self):
         self.assertQuietSuccess(self.h.status("w1:p1", "idle", agent=None))
@@ -242,7 +228,6 @@ class HookDirectTests(unittest.TestCase):
 
     def test_six_panes_at_once_all_reach_the_inbox_intact(self):
         panes = ["w1:p%d" % n for n in range(1, 7)]
-        self.h.set_pane_text("done with step\nAnything else?\n")
         wave = []
         for pane in panes:
             for event, status in (("pane.agent_detected", None), ("pane.agent_status_changed", "working"), ("pane.agent_status_changed", "idle")):
@@ -261,95 +246,23 @@ class HookDirectTests(unittest.TestCase):
         self.assertEqual([e["seq"] for e in events], list(range(1, 13)))
         self.assertEqual(sorted(e["worker"] for e in events if e["kind"] == "finished"), panes)
         self.assertEqual(sorted(e["worker"] for e in events if e["kind"] == "exited"), panes)
-        self.assertEqual({e["summary"] for e in events if e["kind"] == "finished"}, {"done with step Anything else?"})
 
-    def test_exited_summary_is_empty_and_pane_is_not_read(self):
+    def test_no_pane_is_read_and_no_message_is_sent(self):
         self.h.detected("w1:p1")
+        self.h.status("w1:p1", "idle")
+        self.h.status("w1:p1", "blocked")
         self.h.closed("w1:p1")
-        self.assertEqual(self.h.events()[0]["summary"], "")
-        self.assertFalse(self.h.calls_file.exists())
+        self.assertEqual(self.h.kinds(), ["finished", "blocked", "exited"])
+        for event in self.h.events():
+            self.assertNotIn("summary", event)
+        self.assertFalse(self.h.calls_file.exists())  # the fake herdr was never called
 
-    # ------------------------------------------------------------ extractor
-
-    def summary_of(self, pane_text, **options):
-        self.h.set_pane_text(pane_text)
-        result = self.h.status("w1:p9", "idle", **options)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return self.h.events()[-1]["summary"]
-
-    def test_extractor_returns_only_the_last_message_without_chrome(self):
-        text = (
-            "\u2500" * 60 + "\n"
-            "\u2502 older output that is framed \u2502\n"
-            "ancient message before the prompt\n"
-            "\n"
-            "\u276f please carry on\n"
-            "\x1b[1mFirst paragraph.\x1b[0m\n"
-            "\n"
-            "Second paragraph?\n"
-            + "\u2500" * 60 + "\n"
-            "\u276f \n"
-            + "\u2500" * 60 + "\n"
-            "~/work/project (main)\n"
-            "\u2191 12k \u2193 3k $0.05\n"
-        )
-        self.assertEqual(self.summary_of(text), "First paragraph. Second paragraph?")
-
-    def test_two_short_messages_separated_by_a_prompt_give_only_the_last(self):
-        self.assertEqual(self.summary_of("first short message\n\u276f next task\nsecond short message\n"), "second short message")
-        self.assertEqual(self.summary_of("first short message\n\u203a \nsecond short message\n"), "second short message")
-        self.assertEqual(self.summary_of("first short message\n$ ls\nsecond short message\n"), "second short message")
-
-    def test_trailing_prompt_leaves_the_message_before_it(self):
-        self.assertEqual(self.summary_of("the message\n\n\u276f \n"), "the message")
-
-    def test_each_boundary_kind_separates_messages(self):
-        cases = {
-            "framed line": "earlier\n\u2502 tool output \u2502\nlast one\n",
-            "spinner line": "earlier\n\u280b Working...\nlast one\n",
-            "timing line": "earlier\nTook 3.2s\nlast one\n",
-            "two blank lines": "earlier\n\n\nlast one\n",
-            "rule of box characters": "earlier\n\u2501\u2501\u2501\u2501\nlast one\n",
-        }
-        for name, text in cases.items():
-            with self.subTest(name):
-                self.assertEqual(self.summary_of(text), "last one")
-
-    def test_single_blank_line_is_a_paragraph_break_inside_one_message(self):
-        self.assertEqual(self.summary_of("para one\n\npara two\n"), "para one para two")
-
-    def test_long_last_message_with_fake_secrets_is_cut_to_its_end_and_masked(self):
-        secret_key = "sk-" + "A1b2C3d4" * 3
-        token = "ghp_" + "Zy9Xw8Vu7T" * 3
-        preamble = "We looked at the staging database layout and compared the migrations in detail. " * 6
-        message = (
-            preamble
-            + "By mistake the log shows %s and also password=hunter2hunter2 and %s. " % (secret_key, token)
-            + "Should I delete the staging branch now?"
-        )
-        text = "ancient message\n\u276f go\n" + message + "\n" + "\u2500" * 40 + "\n\u276f \n" + "\u2500" * 40 + "\n~/dir\n"
-        summary = self.summary_of(text)
-        self.assertLessEqual(len(summary), 200)
-        self.assertTrue(summary.startswith("\u2026"), summary)
-        self.assertTrue(summary.endswith("Should I delete the staging branch now?"), summary)
-        self.assertIn("***", summary)
-        for forbidden in (secret_key, token, "hunter2", "ancient", "~/dir"):
-            self.assertNotIn(forbidden, summary)
-        self.assertNotIn("sk-A1b2", self.h.scratch.inbox_bytes().decode())
-        self.assertNotIn("ghp_Zy9X", self.h.scratch.inbox_bytes().decode())
-
-    def test_empty_pane_text_gives_the_placeholder(self):
-        self.assertEqual(self.summary_of(""), PLACEHOLDER)
-        self.assertEqual(self.summary_of("\u2500" * 20 + "\n\u276f \n"), PLACEHOLDER)
-
-    def test_unreadable_pane_still_emits_with_placeholder_and_reports_on_stderr(self):
-        result = self.h.status("w1:p1", "idle", fail_read=True)
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("cannot read the last message of pane w1:p1", result.stderr)
-        self.assertIn("not found", result.stderr)
-        events = self.h.events()
-        self.assertEqual([(e["kind"], e["summary"]) for e in events], [("finished", PLACEHOLDER)])
-        self.assertEqual(self.h.calls_file.read_text().split(), ["w1:p1"])  # asked once, no retry
+    def test_hook_source_has_no_pane_read_call(self):
+        source = self.h.hook.read_text(encoding="utf-8")
+        for forbidden in ("agent read", '"read"', "pane read", "recent-unwrapped", "--summary", "HERDR_BIN_PATH", "PLACEHOLDER"):
+            self.assertNotIn(forbidden, source)
+        self.assertEqual(re.findall(r"subprocess\.run", source), ["subprocess.run"])  # the one emit call
+        self.assertEqual(source.count('"emit"'), 1)
 
     # ---------------------------------------------------------- containment
 
@@ -363,7 +276,7 @@ class HookDirectTests(unittest.TestCase):
         self.assertIn("emit", result.stderr)
         self.assertIn("event was not delivered", result.stderr)
         self.assertLess(time.monotonic() - started, 30)
-        self.assertEqual(self.h.calls_file.read_text().split(), ["w1:p1"])
+        self.assertFalse(self.h.calls_file.exists())
         self.assertIn("core: emit failed", self.h.scratch.log_text())
 
     def test_core_missing_is_reported_and_exits_zero(self):
@@ -468,11 +381,13 @@ class ScratchHerdr:
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             status = self.herdr("status", "server", check=False)
-            if status.returncode == 0 and "running" in status.stdout:
+            found = re.search(r"version: (\S+)", status.stdout)
+            # The server can say "running" a moment before it prints its version: keep polling.
+            if status.returncode == 0 and "running" in status.stdout and found:
                 if "socket: %s" % self.socket not in status.stdout:
                     self.stop()
                     raise AssertionError("scratch server reports a socket that is not ours: " + status.stdout)
-                self.version = re.search(r"version: (\S+)", status.stdout).group(1)
+                self.version = found.group(1)
                 return
             time.sleep(0.2)
         raise AssertionError("scratch Herdr server did not start")
@@ -625,7 +540,7 @@ class HerdrServerTests(unittest.TestCase):
                     working_times.setdefault(name, []).append(utc_now_string())
                 server.report(panes[name], state)
 
-        turn("blk", ["working", "blocked", "idle"])
+        turn("blk", ["working", "unknown", "blocked", "idle"])
         turn("idl", ["idle", "blocked", "idle"])
         turn("quick", ["working", "idle", "working", "idle", "working", "idle"])
         turn("repeat", ["working", "idle", "idle"])
@@ -641,7 +556,7 @@ class HerdrServerTests(unittest.TestCase):
         self.assertEqual(kinds("blk"), ["blocked", "finished"])
         self.assertEqual(kinds("idl"), ["blocked", "finished", "finished"])
         self.assertEqual(kinds("repeat"), ["finished"])  # the unchanged repeat gave one event
-        self.assertEqual(kinds("workonly"), [])  # working alone calls nothing
+        self.assertEqual(kinds("workonly"), [])  # working alone adds no event
         self.assertEqual(kinds("agentless"), [])  # no agent: not even an exit
         self.assertEqual(kinds("closing"), ["exited"])
         # every turn that ended in idle has a finished event after its last working report
@@ -681,48 +596,27 @@ class HerdrServerTests(unittest.TestCase):
             self.assertEqual((entry["status"], entry["exit_code"]), ("succeeded", 0), entry)
         self.assertTrue(server.server_answers())
 
-    def test_last_message_from_real_pane_text(self):
+    def test_pane_showing_a_distinctive_marker_gives_a_marker_free_inbox_with_context(self):
         server = self.server
         server.link_adapter()
-        long_pane, _ = server.new_pane("ws-long")
-        two_pane, _ = server.new_pane("ws-two")
-        chrome_pane, _ = server.new_pane("ws-chrome")
-        for pane in (long_pane, two_pane, chrome_pane):
-            server.report(pane, "working")
-        secret_key = "sk-" + "Q7w8E9r0" * 3
-        long_message = (
-            "The migration notes cover every table and every index in detail. " * 8
-            + "I pasted %s and password=correcthorse1 in the log by mistake. " % secret_key
-            + "Shall I rotate the credentials and delete the staging branch?"
-        )
-        server.show_text(long_pane, "OLDER-MESSAGE-MARK\n\u276f earlier request\n" + long_message + "\n", "delete the staging branch?")
-        server.show_text(two_pane, "first short message\n\u276f \nsecond short message\n", "second short message")
-        server.show_text(
-            chrome_pane,
-            "ancient CHROME-OLD\n\u276f go on\nThe tests pass.\n\nAll done here.\n" + "\u2500" * 50 + "\n\u276f \n" + "\u2500" * 50 + "\n~/proj (main)\n\u2191 3k \u2193 1k $0.02\n",
-            "$0.02",
-        )
-        for pane in (long_pane, two_pane, chrome_pane):
-            server.report(pane, "idle")
+        pane, workspace = server.new_pane("ws-marker")
+        server.report(pane, "working")
+        marker = "MARKER-" + "Q7w8E9r0" * 3
+        server.show_text(pane, "\u276f earlier request\nThe answer holds %s and password=correcthorse1.\n" % marker, marker)
+        server.report(pane, "idle")
         server.settle()
-        long_summary = self.events_for(long_pane)[0]["summary"]
-        self.assertLessEqual(len(long_summary), 200)
-        self.assertTrue(long_summary.endswith("Shall I rotate the credentials and delete the staging branch?"), long_summary)
-        self.assertIn("***", long_summary)
-        self.assertNotIn(secret_key, long_summary)
-        self.assertNotIn("correcthorse1", long_summary)
-        self.assertNotIn("OLDER-MESSAGE-MARK", long_summary)
-        self.assertEqual(self.events_for(two_pane)[0]["summary"], "second short message")
-        self.assertEqual(self.events_for(chrome_pane)[0]["summary"], "The tests pass. All done here.")
+        [event] = [e for e in self.events_for(pane) if e["kind"] == "finished"]
+        self.assertEqual(list(event), ["version", "seq", "time", "worker", "kind", "context"])
+        self.assertEqual(event["context"], {"workspace_id": workspace, "workspace_label": "ws-marker", "agent": "pi"})
         raw = server.core_scratch.inbox_bytes().decode()
-        self.assertNotIn(secret_key, raw)
-        self.assertNotIn("correcthorse1", raw)
+        for text in (marker, "MARKER-", "correcthorse1", "earlier request"):
+            self.assertNotIn(text, raw)
         for entry in server.plugin_logs():
             self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
 
     def test_error_ending_turn_and_error_mentioning_turn_are_both_finished_never_errored(self):
-        # adapters/herdr/README.md, "`errored` is never emitted": Herdr 0.9.1 has no error
-        # status and the adapter has no reliable indicator, so both turns are `finished`.
+        # Herdr 0.9.1 has no error status and the adapter never reads the pane, so both turns
+        # are `finished`.
         server = self.server
         server.link_adapter()
         failed_pane, _ = server.new_pane("ws-failed")
@@ -743,18 +637,10 @@ class HerdrServerTests(unittest.TestCase):
             self.assertNotIn("errored", [e["kind"] for e in events], events)
             finished = [e for e in events if e["kind"] == "finished" and e["time"] >= started[pane]]
             self.assertTrue(finished, events)
-            self.assertEqual(finished[0]["summary"], text)
+            self.assertNotIn(text[:20], server.core_scratch.inbox_bytes().decode())
         self.assertNotIn("errored", [e["kind"] for e in server.inbox_events()])
         for entry in server.plugin_logs():
             self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
-
-    def test_adapter_readme_says_it_has_no_reliable_error_indicator_and_emits_finished(self):
-        readme = (common.TOOL_SOURCE_DIR / "adapters" / "herdr" / "README.md").read_text(encoding="utf-8")
-        section = readme.split("## `errored` is never emitted", 1)[1].split("\n## ", 1)[0]
-        flat = " ".join(section.split())
-        self.assertIn("no error status", flat)
-        self.assertIn("no other reliable indicator", flat)
-        self.assertIn("every finished turn is a `finished` event", flat)
 
     def test_unwritable_inbox_leaves_server_and_second_plugin_running(self):
         server = self.server
@@ -783,7 +669,7 @@ class HerdrServerTests(unittest.TestCase):
         server.settle()
         self.assertEqual([e["kind"] for e in server.inbox_events()], ["blocked"])
 
-    def test_closed_pane_and_unreadable_text_leave_server_and_second_plugin_running(self):
+    def test_closed_pane_leaves_server_and_second_plugin_running(self):
         server = self.server
         server.link_adapter(delay_seconds=1)  # the hook starts after the pane is gone
         server.link_witness()
@@ -793,31 +679,14 @@ class HerdrServerTests(unittest.TestCase):
         server.settle(quiet_seconds=2.5)
         status_runs = [e for e in server.plugin_logs() if e["event"] == "pane.agent_status_changed"]
         self.assertTrue(status_runs)
-        for entry in status_runs:
-            self.assertEqual((entry["status"], entry["exit_code"]), ("succeeded", 0), entry)
-            self.assertIn("cannot read the last message of pane %s" % pane, entry["stderr"])
-        finished = [e for e in server.inbox_events() if e["kind"] == "finished"]
-        self.assertEqual([(e["worker"], e["summary"]) for e in finished], [(pane, PLACEHOLDER)])
-        self.assertIn("pane.closed %s" % pane, server.witness_lines())
-        self.assertIn("pane.agent_status_changed %s" % pane, server.witness_lines())
-        for entry in server.plugin_logs("witness"):
-            self.assertEqual((entry["status"], entry["exit_code"]), ("succeeded", 0), entry)
-        self.assertTrue(server.server_answers())
-
-    def test_unreadable_text_of_an_open_pane_leaves_server_and_second_plugin_running(self):
-        server = self.server
-        server.link_adapter(delay_seconds=1)  # the hook starts after the agent is released
-        server.link_witness()
-        pane, _ = server.new_pane("ws-released")
-        server.report(pane, "idle")
-        server.herdr("pane", "release-agent", pane, "--source", "t2h", "--agent", "pi")
-        server.settle(quiet_seconds=2.5)
-        self.assertIn(pane, [p["pane_id"] for p in server.api("pane", "list")["panes"]])  # the pane is still open
-        status_runs = [e for e in server.plugin_logs() if e["event"] == "pane.agent_status_changed"]
-        self.assertTrue(any("cannot read the last message of pane %s" % pane in e["stderr"] for e in status_runs), status_runs)
         for entry in server.plugin_logs() + server.plugin_logs("witness"):
-            self.assertEqual((entry["status"], entry["exit_code"]), ("succeeded", 0), entry)
-        self.assertIn((pane, PLACEHOLDER), [(e["worker"], e["summary"]) for e in server.inbox_events() if e["kind"] == "finished"])
+            self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
+        # the late status hook still delivers finished (the close hook may or may not find the
+        # presence marker yet: a missed exit is an accepted risk)
+        kinds = [e["kind"] for e in server.inbox_events() if e["worker"] == pane]
+        self.assertIn("finished", kinds)
+        self.assertTrue(set(kinds) <= {"finished", "exited"}, kinds)
+        self.assertIn("pane.closed %s" % pane, server.witness_lines())
         self.assertIn("pane.agent_status_changed %s" % pane, server.witness_lines())
         self.assertTrue(server.server_answers())
 
