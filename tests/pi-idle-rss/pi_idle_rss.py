@@ -823,6 +823,14 @@ def median_reading(session: Session, n: int = 3, gap: float = 5.0, abort: thread
     return out
 
 
+def readings_stable(readings: list, tol: float = 0.25) -> bool:
+    """The settle check looks at an earlier window; the readings that are summarised must themselves agree
+    (e.g. a compaction still finishing shows as 3.1 GB then 0.66 GB). Aged stages only: fresh RSS can jump
+    when macOS compresses pages, which is not a transition."""
+    vals = [r for r in readings if r]
+    return bool(vals) and max(vals) <= min(vals) * (1 + tol)
+
+
 AGED_STAGES = {"turn": ("after_turn", "continue", 25), "compact": ("after_compact", "/compact", 90), "reload": ("after_reload", "/reload", 60)}
 
 
@@ -839,6 +847,8 @@ def aged_driver(s: Session, watcher: PressureWatcher, log, order=("turn", "compa
         rd = median_reading(s, abort=watcher.rose)
         if rd is None:
             return False
+        if not readings_stable(rd["pi_readings_kb"]):
+            raise SampleRejected(f"still changing during the {name} readings: {rd['pi_readings_kb']}")
         stages[name] = {**rd, "settle": st}
         return True
 
