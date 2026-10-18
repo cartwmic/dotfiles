@@ -387,6 +387,16 @@ class AgedPressure(unittest.TestCase):
         with self.assertRaises(m.SampleRejected):
             self.reload_driver({1, 2}, {1, 2})
 
+    def test_reload_where_a_child_only_disappears_is_rejected(self):
+        with self.assertRaises(m.SampleRejected):
+            self.reload_driver({1, 2}, {1})
+        with self.assertRaises(m.SampleRejected):
+            self.reload_driver({1}, set())
+
+    def test_reload_where_only_new_children_appear_is_rejected(self):
+        with self.assertRaises(m.SampleRejected):
+            self.reload_driver({1, 2}, {1, 2, 3})
+
     def test_reload_that_replaces_a_child_is_verified(self):
         out = self.reload_driver({1, 2}, {1, 3})
         self.assertIs(out["after_reload"]["reload_verified"], True)
