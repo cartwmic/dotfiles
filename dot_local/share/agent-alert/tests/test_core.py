@@ -8,6 +8,9 @@ Every test runs the real core/agent-alert from a deployed-layout copy that
 chezmoi archived (adapters/ and examples/ deleted) with a scratch HOME.
 """
 
+import importlib.machinery
+import importlib.util
+import itertools
 import json
 import os
 import re
@@ -396,6 +399,180 @@ class SummaryTests(CoreTestCase):
     def test_short_summary_and_ordinary_words_are_kept(self):
         self.emit_ok(summary="Updated the monkey keyboard; what key should be used?")
         self.assertEqual(self.scratch.events()[0]["summary"], "Updated the monkey keyboard; what key should be used?")
+
+
+# The _ASSIGNED pattern as it was before commit 63ff38a ("quoted value ends at the
+# first quote"). Copied verbatim as the baseline the current pattern must never
+# leak more than: whatever it masked, the current pattern must also mask.
+OLD_ASSIGNED_SOURCE = r"""(?<![A-Za-z0-9_.-])
+        ((?:[A-Za-z0-9_.-]*(?:token|secret|password|passwd|api[_-]?key)|(?:[A-Za-z0-9]+[_.-])*key)
+         ["']?\s*[:=]\s*)
+        ("[^"]*"|'[^']*'|[^\s,;]+)"""
+OLD_ASSIGNED = re.compile(OLD_ASSIGNED_SOURCE, re.IGNORECASE | re.VERBOSE)
+
+MARKER = "FAKE_PRIVATE_TAIL_99"
+
+
+def load_deployed_core():
+    """Import the deployed-layout core/agent-alert (no .py suffix) as a module."""
+    path = str(common.deployed_copy() / "core" / "agent-alert")
+    loader = importlib.machinery.SourceFileLoader("agent_alert_core_under_test", path)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def is_unterminated_quote(text):
+    """True when the first quoted assignment in text has no unescaped closing quote."""
+    match = re.search(r"[:=]\s*([\"'])", text)
+    if not match:
+        return False
+    quote, index = match.group(1), match.end()
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+        elif text[index] == quote:
+            return False
+        else:
+            index += 1
+    return True
+
+
+def hostile_corpus():
+    """Deterministic hostile assignments; each value contains MARKER."""
+    names = ["password", '"password"', "token", "api_key", "key"]
+    separators = ["=", ":", " = ", ": "]
+    quotes = ["", '"', "'"]
+    fragments = [
+        MARKER, "a", "\\", "\\\\", '\\"', "\\'", '"', "'",
+        "\n", "\r", "\r\n", "\t", "\u2028", "\u2029", "\u0085", " ",
+    ]
+    prefixes = list(itertools.product(names, separators, quotes))
+    short = [seq for n in range(3) for seq in itertools.product(fragments, repeat=n)]
+    long_ = [seq for n in (3, 4) for seq in itertools.product(fragments, repeat=n)]
+    # Every prefix x every sequence of length 0-2; length 3-4 sampled by a fixed stride.
+    sequences = [(p, seq) for p in prefixes for seq in short]
+    sequences += [(prefixes[i % len(prefixes)], seq) for i, seq in enumerate(long_) if i % 7 == 0]
+    cases = []
+    for index, ((name, separator, quote), seq) in enumerate(sequences):
+        value = "".join(seq)
+        if MARKER not in value:
+            value += MARKER
+        closing = quote if (quote and index % 2 == 0) else ""
+        trailer = " and ordinary words" if index % 3 == 0 else ""
+        cases.append(name + separator + quote + value + closing + trailer)
+    return cases
+
+
+class MaskRegressionTests(CoreTestCase):
+    """The quoted-assignment mask must never leak a tail the previous mask hid."""
+
+    BACKSLASH_BREAK_VALUES = {
+        "backslash-LF": "first\\\n" + MARKER,
+        "backslash-CRLF": "first\\\r\n" + MARKER,
+        "backslash-CR": "first\\\r" + MARKER,
+        "backslash-U+2028": "first\\\u2028" + MARKER,
+        "backslash-U+2029": "first\\\u2029" + MARKER,
+        "backslash-U+0085": "first\\\u0085" + MARKER,
+        "backslash-TAB": "first\\\t" + MARKER,
+        "escaped-quote-then-LF": 'first\\"\n' + MARKER,
+        "escaped-backslash-then-LF": "first\\\\\n" + MARKER,
+        "plain-LF": "first\n" + MARKER,
+    }
+
+    def old_masked_marker_but_current_leaks(self, cases):
+        core = load_deployed_core()
+        compared = 0
+        regressions = []
+        for text in cases:
+            if MARKER in OLD_ASSIGNED.sub(r"\1***", text):
+                continue
+            compared += 1
+            if MARKER in core._ASSIGNED.sub(r"\1***", text):
+                regressions.append(text)
+        return compared, regressions
+
+    def test_new_pattern_masks_everything_the_old_pattern_masked(self):
+        cases = hostile_corpus()
+        self.assertGreaterEqual(len(cases), 3000)
+        compared, regressions = self.old_masked_marker_but_current_leaks(cases)
+        self.assertGreater(compared, 500)
+        self.assertEqual(
+            len(regressions), 0,
+            "%d of %d corpus cases (%d compared): old pattern masked the marker, current "
+            "pattern leaks it; first: %r" % (len(regressions), len(cases), compared, regressions[:10]),
+        )
+
+    def test_unterminated_quote_ending_in_an_escaped_quote_is_still_masked_like_before(self):
+        # `password="two words\\"` has no unescaped closing quote. The old mask ended at
+        # the escaped quote and hid everything; the current mask must too.
+        cases = [text for text in hostile_corpus() if is_unterminated_quote(text)]
+        compared, regressions = self.old_masked_marker_but_current_leaks(cases)
+        self.assertGreater(compared, 0)
+        self.assertEqual(len(regressions), 0, "%d of %d: %r" % (len(regressions), compared, regressions[:10]))
+
+    def test_backslash_line_breaks_in_quoted_values_never_reach_the_inbox_summary(self):
+        for quote in ('"', "'"):
+            for label, value in self.BACKSLASH_BREAK_VALUES.items():
+                with self.subTest(quote=quote, case=label):
+                    scratch = common.Scratch()
+                    self.addCleanup(scratch.cleanup)
+                    text = "password=" + quote + value + quote + " and ordinary words"
+                    result = scratch.emit(summary=text)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    stored = scratch.inbox_bytes().decode("utf-8")
+                    self.assertNotIn(MARKER, stored)
+                    self.assertNotIn("FAKE_PRIVATE", stored)
+                    self.assertEqual(scratch.events()[0]["summary"], "password=*** and ordinary words")
+
+    def test_backslash_line_breaks_in_quoted_values_never_reach_the_inbox_context(self):
+        for label, value in self.BACKSLASH_BREAK_VALUES.items():
+            with self.subTest(case=label):
+                scratch = common.Scratch()
+                self.addCleanup(scratch.cleanup)
+                payload = '{"password": "' + value + '"} done'
+                result = scratch.run(
+                    "emit", "--worker", "w", "--kind", "finished", "--summary", "ok",
+                    "--context-json", json.dumps({"payload": payload}),
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                stored = scratch.inbox_bytes().decode("utf-8")
+                self.assertNotIn(MARKER, stored)
+                self.assertNotIn("FAKE_PRIVATE", stored)
+                self.assertEqual(scratch.events()[0]["context"]["payload"], '{"password": ***} done')
+
+    UNTERMINATED_QUOTE_TEXTS = [
+        'password="two words ' + MARKER + '\\"',
+        "token='it is " + MARKER + "\\'",
+        'password="two words\\"',
+    ]
+
+    def test_unterminated_quoted_values_never_reach_the_inbox_summary(self):
+        for text in self.UNTERMINATED_QUOTE_TEXTS:
+            with self.subTest(text=text):
+                scratch = common.Scratch()
+                self.addCleanup(scratch.cleanup)
+                result = scratch.emit(summary=text)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                stored = scratch.inbox_bytes().decode("utf-8")
+                self.assertNotIn(MARKER, stored)
+                self.assertNotIn("FAKE_PRIVATE", stored)
+                self.assertEqual(scratch.events()[0]["summary"], text.split("=")[0] + "=***")
+
+    def test_unterminated_quoted_values_never_reach_the_inbox_context(self):
+        for text in self.UNTERMINATED_QUOTE_TEXTS:
+            with self.subTest(text=text):
+                scratch = common.Scratch()
+                self.addCleanup(scratch.cleanup)
+                result = scratch.run(
+                    "emit", "--worker", "w", "--kind", "finished", "--summary", "ok",
+                    "--context-json", json.dumps({"payload": text}),
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                stored = scratch.inbox_bytes().decode("utf-8")
+                self.assertNotIn(MARKER, stored)
+                self.assertNotIn("FAKE_PRIVATE", stored)
 
 
 class ReadAndAckTests(CoreTestCase):

@@ -147,6 +147,8 @@ source, and the masking rules to every value in `context`:
    quote (`\"`, `\'`) inside it does not end the value. Masking covers common
    shapes only and is not a guarantee against every secret format. Known
    shapes it does not mask: JSON escaped inside a JSON string (`{\"password\":…}`),
+   a quoted value with no unescaped closing quote (it is masked up to a later
+   plain quote if there is one, otherwise only up to the first whitespace),
    `=>` assignments, camelCase names such as `secretKey`, names with a suffix
    (`token_value`, `password_hash`), a name followed by a value with no `:` or
    `=`, `Authorization` schemes other than `Bearer`, URL userinfo, XML elements,
