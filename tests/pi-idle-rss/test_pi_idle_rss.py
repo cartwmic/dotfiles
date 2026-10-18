@@ -513,5 +513,30 @@ class ExtensionGroupTests(unittest.TestCase):
             self.assertEqual(m.extension_imports(root), {"x": {"y"}})
 
 
+
+class LazyVariantTests(unittest.TestCase):
+    def test_lazy_variants_parse(self):
+        self.assertEqual(m.parse_variant("full-lazy")["lazy"], "state")
+        self.assertEqual(m.parse_variant("full-lazy-nostate")["lazy"], "nostate")
+        self.assertEqual(m.parse_variant("full-lazy-failedrefresh")["lazy"], "failed")
+        self.assertIsNone(m.parse_variant("full")["lazy"])
+        with self.assertRaises(ValueError):
+            m.parse_variant("full-lazy-bogus")
+
+    def test_mcp_process_counts_separate_stand_ins_from_real_servers(self):
+        owned = [{"name": "pi", "rss_kb": 1}, {"name": "python3 pi-mcp-lazy", "rss_kb": 1}, {"name": "python3 pi-mcp-lazy", "rss_kb": 1},
+                 {"name": "node rea", "rss_kb": 1}, {"name": "npm exec", "rss_kb": 1}, {"name": "furi", "rss_kb": 1}, {"name": "node other", "rss_kb": 1}]
+        self.assertEqual(m.mcp_process_counts(owned), (2, 3))
+
+    def test_report_lists_mcp_process_counts_per_sample(self):
+        with tempfile.TemporaryDirectory() as t:
+            rows = [{"variant": "full-lazy", "tag": "fresh", "rss_pi_kb": 200000, "rss_owned_kb": 260000, "fp_pi_kb": 150000, "fp_owned_kb": 200000,
+                     "owned": [{"name": "pi", "rss_kb": 1}, {"name": "python3 pi-mcp-lazy", "rss_kb": 1}]} for _ in range(3)]
+            (Path(t) / "samples.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+            text = m.report(Path(t))
+        self.assertIn("MCP server processes at the settled point", text)
+        self.assertIn("| full-lazy | fresh | 1/1/1 | 0/0/0 |", text)
+
+
 if __name__ == "__main__":
     unittest.main()

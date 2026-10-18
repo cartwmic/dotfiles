@@ -433,6 +433,68 @@ apply_codex() {
   log "Updated Codex config: $HOME/.codex/config.toml"
 }
 
+# Pi only: wrap the local MCP servers named in servers.list in the lazy stand-in, so a
+# session does not start them until a call needs them. Each server is refreshed once here
+# (the stand-in's --refresh mode saves its handshake and tool list). A failed refresh is
+# logged and the entry is still wrapped: sessions then serve the shipped seed. Claude and
+# Codex rendering do not call this. Roll back by removing the name from servers.list.
+wrap_pi_lazy_servers() {
+  resolved_json="$1"
+  lazy_list="${PI_MCP_LAZY_LIST:-$HOME/.local/share/pi-mcp-lazy/servers.list}"
+  lazy_bin="${PI_MCP_LAZY_BIN:-$HOME/.local/bin/pi-mcp-lazy}"
+  lazy_idle="${PI_MCP_LAZY_IDLE:-600}"
+
+  if [ ! -f "$lazy_list" ]; then
+    log "pi-mcp-lazy: no server list at $lazy_list; Pi MCP entries stay as rendered"
+    return 0
+  fi
+  if [ ! -x "$lazy_bin" ]; then
+    log_error "pi-mcp-lazy: stand-in not executable at $lazy_bin; Pi MCP entries stay as rendered"
+    return 0
+  fi
+
+  python3 - "$resolved_json" "$lazy_list" "$lazy_bin" "$lazy_idle" <<'PY'
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+path, list_file, binp, idle = sys.argv[1:5]
+data = json.loads(pathlib.Path(path).read_text())
+servers = data.get("mcpServers", {})
+names = [l.strip() for l in pathlib.Path(list_file).read_text().splitlines()
+         if l.strip() and not l.strip().startswith("#")]
+
+def say(msg):
+    print(f"[apply_harness_config] pi-mcp-lazy: {msg}")
+
+for name in names:
+    cfg = servers.get(name)
+    if not isinstance(cfg, dict) or "command" not in cfg:
+        say(f"{name} is not a local (command) server in this profile; skipped")
+        continue
+    args = [str(a) for a in cfg.get("args", [])]
+    env = dict(os.environ)
+    env.update({str(k): str(v) for k, v in (cfg.get("env") or {}).items()})
+    try:
+        r = subprocess.run([binp, "--refresh", name, "--", cfg["command"], *args], capture_output=True,
+                           text=True, timeout=240, env=env, cwd=cfg.get("cwd") or None)
+        ok, tail = r.returncode == 0, (r.stderr or "").strip()[-600:]
+    except Exception as e:  # never abort the apply for the other entries
+        ok, tail = False, str(e)
+    if ok:
+        say(f"refreshed {name}")
+    else:
+        say(f"refresh of {name} failed, wrapping anyway (sessions serve the shipped seed): {tail}")
+    wrapped = {"command": binp, "args": [name, idle, "--", cfg["command"], *args]}
+    wrapped.update({k: v for k, v in cfg.items() if k not in ("command", "args")})
+    servers[name] = wrapped
+
+pathlib.Path(path).write_text(json.dumps(data, indent=2) + "\n")
+PY
+}
+
 merge_pi_mcp() {
   harness_json="$1"
   target_json="$2"
@@ -470,6 +532,7 @@ apply_pi() {
   resolved_mcp="$GENERATED_ROOT/pi/mcp-resolved.json"
   pi_mcp_json="$HOME/.pi/agent/mcp.json"
   render_harness_mcp_json "pi" "$resolved_mcp"
+  wrap_pi_lazy_servers "$resolved_mcp"
   ensure_parent "$pi_mcp_json"
   merge_pi_mcp "$resolved_mcp" "$pi_mcp_json"
   log "Updated Pi MCP config: $pi_mcp_json"
