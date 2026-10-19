@@ -55,17 +55,45 @@ loop-engine --json --config /absolute/providers.toml start software-change @/abs
 ```
 
 `setup` edits policy only. Tools prepare or evaluate data, not external execution.
-Setup starts no run or worker. Current shipped source IDs are `minimal-16`, `standard-16` and `high-rigor-16`; setup refuses historical shipped IDs through -15 and reports these supported IDs. An identity bump is not semantic calibration or applicability. Preserve frozen older runtime/profile bytes. Inspect output/explanation and effective policy;
+Setup starts no run or worker. Current shipped source IDs are `minimal-17`, `standard-17` and `high-rigor-17`; setup refuses historical shipped IDs through -16 and reports these supported IDs. An identity bump is not semantic calibration or applicability. Preserve frozen older runtime/profile bytes. Inspect output/explanation and effective policy;
 --set, --add-axis and --remove-axis are explicit policy edits, not executor controls.
 Confirm every changed obligation, author floor and advice/Bookends state before start.
 Use --bookends only for an explicit opt-in. Read the resulting exact config/contract
 versions; do not apply current contracts to historical runs or silently migrate them.
 Register the absolute provider command under exact alias software-change.
 
+## Model bindings
+
+A run may require a model and thinking level per role: `driver`, `author`,
+`implementer`, `ordinary-reviewer`, `challenge-reviewer`, `cold-reader` and
+`criterion-author`. Shipped profiles bind none, and a run with no `model_bindings` and
+no `model-binding-amendment` behaves as before (no session needed, no new refusal).
+Use exact shapes in checkout-root `docs/agent-usage.md`, section Software-change model
+bindings.
+
+- Setup: `--set binding.<role>=provider/model@thinking` and, when the driver is bound,
+  `--set binding.driver-session=provider/model@thinking`. This writes the top-level
+  `model_bindings` key, which the confirmed profile bytes and hash include. Confirm it
+  with the owner before start.
+- Declare, from each session's own metadata: `assignment.session` at
+  `review-candidates` intake; a top-level `session` on `criterion-verdict` and
+  `goal-verdict` data; a `session-declaration` record (`subject`, `subject_revision`,
+  `role`, `session`) for an author draft or implementer report of the exact current
+  revision before the checked event. A bound role with a missing or unequal session is
+  refused naming the role, expected and actual; read the cause and correct the session,
+  not the binding.
+- Amend only on the owner's own words: append `model-binding-amendment` (human actor,
+  owner authority, verbatim `words`, per-role `changes` with `old` and `new`, optional
+  `mark_stale` for the four evidence roles, and `driver_session` when the driver is
+  bound afterward). Never edit the profile of a started run or fabricate owner words.
+  Evidence under an older binding stays eligible unless the owner marks it stale.
+- The check compares declared text only. It cannot prove the real model, and the driver
+  declares only at start and at each amendment.
+
 ## Optional narratives and owner checkpoints
 
-Use the current source provider for this procedure. Its `minimal-16`, `standard-16`
-and `high-rigor-16` profiles default `extra.narratives` and `extra.checkpoints` to
+Use the current source provider for this procedure. Its `minimal-17`, `standard-17`
+and `high-rigor-17` profiles default `extra.narratives` and `extra.checkpoints` to
 empty lists. Installed 0.24.1 and existing `-14` runs retain their earlier capabilities
 and obligations; do not change their runtime or infer these options from this skill.
 
@@ -330,6 +358,13 @@ in validation; repository-state mismatch uses shown revise-implementation.
    pointers/line ranges or allowed immutable `record:ACTUAL_CONTEXT_ID#JSON-Pointer`
    over the complete ContextRecord. The reviewer protocol gives the eight-kind allowlist,
    including intent-correction; use actual delivered `review_record_sources` IDs.
+   Commission's `locator_guidance` lists the accepted forms, the root each relative path
+   resolves against (declared `source_scopes`, else the artifact directory's git top level,
+   never the invoking directory) and each JSON source's real keys and array lengths. A refused
+   pointer names the closest existing one. When a structured return's only defect is evidence
+   locators that do not resolve, recover it with provider-checked locator repair (below), not
+   a new reviewer session; use the driver-attributed projection only for a non-JSON or
+   otherwise misshapen return.
 5. Triage before append or mutation: accept only in-scope material failures or genuinely
    supported passes. Preserve grounds/evidence and self-review declarations. Disputed
    substantive candidates need focused independent reconsideration; reject provably
@@ -337,6 +372,41 @@ in validation; repository-state mismatch uses shown revise-implementation.
 6. Append accepted review-evidence and a driver-authored finding-ledger snapshot, then
    observe and request approved/passed as shown. A process exit or projector success
    never supplies semantic judgment. Ordinary clearance precedes challenge clearance.
+
+### Locator repair for a return whose only defect is unresolvable locators
+
+Use it when `review-candidates` refused a structured review contract v3 return solely
+because one or more `grounds.evidence` locators do not resolve (for example `/acceptance/12`
+past the end of the array). Do not use it for any other defect (missing or empty reason,
+invalid verdict, duplicated or malformed locator, absolute or out-of-root path, non-JSON
+text, reused rows), and never to change what the reviewer judged.
+
+Input is the ordinary `review-candidates` stdin plus
+`locator_repair: {driver: {name, kind}, repaired: {text | reference}}`. `repaired` is a full
+copy of the original return in which only evidence locators were edited: replace each
+unresolvable locator with one that resolves, or delete it. Keep every locator that already
+resolves, in order. Do not add evidence, and keep at least one resolving entry per judgment.
+`locator_repair` cannot be combined with `projection` or `formatter`.
+
+The provider checks, with no catalog access, that the original is valid except for
+unresolvable locators in every judgment; that author, stage, contract version, assessment
+identity, judgment count and order, each axis, verdict, findings text and reason are
+identical; that nothing but permitted locator replacement or dropping differs; and that
+every corrected locator resolves. Any difference refuses the whole request (exit 2,
+`locator repair refused: ...` naming each difference) and releases no candidate, so run
+state, context and history are unchanged.
+
+On success the candidates are ordinary `review-evidence` of the original reviewer with the
+original's derived assessment identity; they count toward floors, independence and grouping
+exactly as the original return would, and no more. `external_review.original` is the
+unchanged original; `external_review.locator_repair` records `kind: "locator-repair"`, the
+repairing `driver`, `original_sha256` and each
+judgment's `corrections` (`before`, and `after` or null when dropped). The record is visibly
+a repair; it is not a fresh review and not the reviewer's unaltered return.
+
+Projection differs: it is the driver's own confirmation that a misshapen or prose return is
+faithfully represented, with the formatter named and no provider comparison of what changed.
+Triage repaired candidates like any other, then append them.
 
 ### Challenge review targets the clean conclusion
 
@@ -401,6 +471,13 @@ comprehensive-first and materiality burdens prohibit drip-feeding or unrelated r
 Reuse requires explicit evidence-applicability with original context-record origin,
 current target subject/revision/checkpoint, attesting_driver and reason. Preserve author,
 result and source; do not copy stale identities into new evidence or invent a pass.
+Carried and fresh judgments may cover one review group together: a group whose counted
+evidence includes a carried row is judged per axis (every axis covered, each axis at its
+configured floor, carried rows keep their original author and assessment, one author's fresh
+rows share one assessment); a group with no carried row is judged whole as before. A carry
+that cites a criterion stays current only while that criterion's text is unchanged. A
+challenge packet labels carried parts `original judgment` / `current applicability
+attestation` and names the unmet prerequisite when a carried aggregate cannot supply it.
 Respect declared source scopes. Inspect `software-change author-counts` with full show.
 Owner amendments use `software-change author-counts --propose JSON`, exact targets,
 after count, actor, authority reference and reason; inspect/append the candidate.
