@@ -1,0 +1,62 @@
+name: CI
+
+# Fast, secret-free tests only: pi-mcp-lazy (incl. render), pi-idle-rss seam tests, mise tasks.
+# Not run here: *proof.py / journey scripts that drive a real Pi, Herdr or phone, and
+# anything needing 1Password or other secrets (tests/native-mcp, tests/pi-recap, tests/standing-reminder, ...).
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Install chezmoi (render test uses it)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" -t v2.71.1
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Agent-harness render and pi-mcp-lazy tests
+        run: python3 -m unittest discover -s tests/pi-mcp-lazy -v
+      - name: Pi idle-RSS seam tests
+        run: python3 -m unittest discover -s tests/pi-idle-rss -v
+
+  # macOS: the kubectl task test puts /usr/bin first on PATH, and the ubuntu runner image
+  # ships /usr/bin/kubectl, which makes the task skip itself.
+  mise-tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Install chezmoi and mise (pinned to the dev-machine versions)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" -t v2.71.1
+          curl -fsSL https://mise.run | MISE_VERSION=v2026.7.18 sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # Includes one expectedFailure (termux palette extra-keys label).
+      - name: Mise task tests
+        run: python3 -m unittest discover -s tests/mise -v
