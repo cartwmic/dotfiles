@@ -75,10 +75,13 @@ are unchanged.
   cancels those timers when the stand-in exits and then sends the group one last SIGTERM only, so on the normal path the stand-in's own
   tidy-up (stdin close, SIGTERM, 1 s grace, SIGKILL by process id) is what stops a server that ignores SIGTERM. A helper a server
   detaches into its own session (a browser) is outside any group signal: the stand-in reaches it from its process-tree walk at stop time.
-- **Known limits, accepted by the owner** (Michael, 2026-10-18: "Accept limits, go to validation"): the process-tree walk is a single
-  `ps` snapshot at stop time, so a failed or timed-out walk, a group or terminal signal that kills the server before the walk, a server
-  that crashes before the walk, and a stale process id can leave a detached or re-parented helper behind; a SIGKILLed stand-in cannot
-  tidy up at all. Continuous tracking of the server's tree while it runs would close most of these and is a separate follow-up.
+- **Known limits, accepted by the owner** (Michael, 2026-10-18: "Accept limits, go to validation"): the stand-in finds the server's
+  helpers by walking the process tree with `ps`. It walks just before it closes the server's stdin, before the SIGKILL round and every 0.2 s while it waits, and signals
+  anything new, so a process a helper starts mid-stop is caught while its parent lives. A walk is still a snapshot: a failed or
+  timed-out walk, a group or terminal signal that kills the server before the first walk, a server that crashes before the walk, a
+  process that is started and orphaned within one walk interval, and a stale process id can leave a detached or re-parented helper
+  behind; a SIGKILLed stand-in cannot tidy up at all. Continuous tracking of the server's tree while it runs would close most of these
+  and is a separate follow-up.
 - A helper left behind by a server that crashes outright (the server dies before the stand-in can walk its process tree) is re-parented
   and is not reached by the stand-in; it stays until something stops it, as it would under a direct launch.
 - If the stand-in itself is killed with SIGKILL it cannot tidy up, but its group-mates die with it when Pi's group kill is the

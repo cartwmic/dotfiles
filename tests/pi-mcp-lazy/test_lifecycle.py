@@ -254,6 +254,23 @@ class LifecycleTests(unittest.TestCase):
                         "detached helper survived the idle stop: %r" % procs(self.e.marker))
         self.assertEqual(text_of(s.call("echo", {"text": "again"})), "echo:again")
 
+    def test_idle_stop_reaches_a_process_a_helper_forks_after_the_first_walk(self):
+        # limit 8: the helper (own session, dies on SIGTERM) forks a SIGTERM-ignoring child AFTER stop()'s first walk. The walk made
+        # again just before the signals finds that child while its parent lives; the single early walk of the previous code did not.
+        write_copy(self.e.state, "fake", self.e.key("--late-fork"))
+        s = Session(self.e, "fake", 2, "--late-fork", extra_env={"PI_MCP_LAZY_GRACE": None, "PI_MCP_LAZY_TEST_PAUSE_AFTER_WALK": "1.5"})
+        self.addCleanup(s.close)
+        s.initialize()
+        self.assertEqual(text_of(s.call("echo", {"text": "x"})), "echo:x")
+        self.assertTrue(wait_until(lambda: (self.e.fdir / "helper.pid").exists(), timeout=10))
+        # the idle stop starts about 2 s after the call and then pauses 1.5 s after its first walk: trigger the fork inside that pause
+        time.sleep(2.6)
+        (self.e.fdir / "fork.now").write_text("1")
+        self.assertTrue(wait_until(lambda: (self.e.fdir / "late.pid").exists(), timeout=5), "the helper did not fork")
+        late = int((self.e.fdir / "late.pid").read_text())
+        self.assertTrue(wait_until(lambda: not pid_alive(late) and procs(self.e.marker) == [], timeout=15),
+                        "process forked after the first walk survived the stop: %r" % procs(self.e.marker))
+
     def test_stdin_close_leaves_nothing(self):
         self._exit_leaves_nothing(lambda s: s.p.stdin.close())
 
