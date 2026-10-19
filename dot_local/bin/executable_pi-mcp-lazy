@@ -29,9 +29,11 @@ import time
 
 VERSION = "1"
 # The real server runs in the stand-in's own process group. Pi spawns the stand-in as the leader of that group and, to shut a server
-# down, closes stdin, SIGTERMs the group 0.5 s later and SIGKILLs it 2 s after that (pi-mcp stdio transport), so at exit Pi itself
-# reaches the server and every same-group helper. The stand-in's own tidy-up (this grace, then SIGKILL) is best effort and also
-# serves the idle stop, where the stand-in keeps running and therefore never signals a group.
+# down, closes stdin, SIGTERMs the group 0.5 s later and SIGKILLs it 2 s after that (pi-mcp stdio transport). Those timers are cancelled
+# as soon as the stand-in exits, and Pi then sends the group one last SIGTERM only. So Pi reaches a server and its same-group helpers
+# directly while the stand-in is still running; once the stand-in has exited, only a SIGTERM follows. The stand-in's own tidy-up (this
+# grace, then SIGKILL by process id) is therefore what stops a SIGTERM-ignoring server on the normal exit path, and it also serves the
+# idle stop, where the stand-in keeps running and never signals a group.
 GRACE = float(os.environ.get("PI_MCP_LAZY_GRACE", "1.0"))
 START_TIMEOUT = float(os.environ.get("PI_MCP_LAZY_START_TIMEOUT", "120"))
 STDERR_KEEP = 4000
