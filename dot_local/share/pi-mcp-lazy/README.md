@@ -24,8 +24,24 @@ server, but for `playwright` and `rea` that process is the stand-in:
   tail of its stderr. The stand-in stays up and the next request tries again.
 - Closing Pi's stdin, SIGTERM and SIGHUP stop the real server too, so exiting Pi or `/reload` leaves nothing behind.
 
-Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`playwright`, `rea`). The remote HTTP servers
-(`hindsight`, `context7`, `ticktick`) are not touched.
+Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`playwright` and `rea` on every profile, plus `jira` on
+`axon-work-computer`; the source is `servers.list.tmpl`, which renders the `jira` line only on that profile). The remote HTTP
+servers (`hindsight`, `context7`, `ticktick`) are not touched.
+
+### jira (work profile)
+
+`jira` is `npx -y mcp-remote <URL>`, a local stdio proxy to a remote server. It has **no shipped seed**: its tool list can
+only be captured on the work computer, where the URL (a 1Password secret) and the sign-in exist. The **first apply on the work
+computer populates it**: the apply refreshes `jira` and saves its handshake and tool list to
+`~/.local/state/pi-mcp-lazy/jira.json`. Every later apply refreshes it again.
+
+If that refresh fails (not signed in, offline, `mcp-remote` cannot start) and no saved list exists, the apply **leaves the `jira`
+entry as rendered**. Pi then starts it at session start exactly as before this change, so `jira` never shows up with zero tools.
+The apply logs `jira has no saved tool list; left as rendered`; fix the cause and apply again. A refresh that fails while an
+older saved list exists keeps the entry wrapped and serves that list.
+
+The saved copy's `key` field is the command line, which for `jira` includes the resolved URL. The state directory is mode 0700
+and the same URL is already in `~/.pi/agent/mcp.json`. The apply log hides URLs and env values from a failed refresh's output.
 
 ## Where the saved tool list comes from
 
@@ -36,7 +52,7 @@ server would have to be started just to answer. A list always exists:
    rewritten by every real start in a session when the tool list differs (Pi is told with
    `notifications/tools/list_changed`).
 2. **Seed**: `~/.local/share/pi-mcp-lazy/seed/<server>.json`, shipped by this repository, read when there is no state
-   copy (the apply-time refresh failed, or the file was deleted).
+   copy (the apply-time refresh failed, or the file was deleted). `jira` has none (see above).
 
 A copy saved for a different command line (a version bump of `rea`, say) is still served and noted on stderr; the next
 apply or real start replaces it. A stale list never starts a server. Only if neither file exists (an incomplete
@@ -50,6 +66,8 @@ credentials.
 - Idle period: 600 seconds, written into each rendered entry as its second argument. Change it for one server by editing
   that entry's argument in `~/.pi/agent/mcp.json`, or for all by exporting `PI_MCP_LAZY_IDLE` when applying.
 - Rebuild a copy by hand: `pi-mcp-lazy --refresh NAME -- COMMAND [ARGS...]` (starts the real server once, saves, stops).
+- Ask whether serving would show Pi any tools: `pi-mcp-lazy --check NAME -- COMMAND [ARGS...]` (exit 0 if the state copy, else
+  the seed, holds at least one tool; starts nothing). The apply uses it after each refresh.
 - Regenerate the seeds from the real servers (do this when preparing a change that bumps a server):
   `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh playwright -- npx @playwright/mcp`
   and likewise for `rea` (`npx -y rea-agents@6.4.0 mcp`).
@@ -60,8 +78,9 @@ credentials.
 
 `apply_harness_config.sh` (Pi path only) runs the refresh for each name in `servers.list` and then rewrites that
 entry in `~/.pi/agent/mcp.json` to `{"command": "~/.local/bin/pi-mcp-lazy", "args": [NAME, "600", "--", <original command and
-args>]}`, keeping any other keys of the entry. A failed refresh is logged by name with the stderr tail and the entry is
-still wrapped (sessions then serve the seed). The canonical `servers.json`, and therefore the Claude and Codex renderings,
+args>]}`, keeping any other keys of the entry. A failed refresh is logged by name with the stderr tail (URLs and env values
+hidden). The entry is still wrapped when `--check` finds a saved list with tools (an older state copy, or the seed); otherwise it is
+left as rendered and Pi starts the server at session start. The canonical `servers.json`, and therefore the Claude and Codex renderings,
 are unchanged.
 
 ## Accepted limits
@@ -91,7 +110,7 @@ are unchanged.
 
 ## Roll back
 
-Remove a name from `~/.local/share/pi-mcp-lazy/servers.list` (source: `dot_local/share/pi-mcp-lazy/servers.list`) and
+Remove a name from `~/.local/share/pi-mcp-lazy/servers.list` (source: `dot_local/share/pi-mcp-lazy/servers.list.tmpl`) and
 apply again: that entry returns to its canonical form. Removing the file returns all of them. Reload or restart a
 Pi session to pick the change up.
 

@@ -11,7 +11,7 @@
 # adapters/codex/secrets:  {{ include "dot_local/share/agent-harness/adapters/codex/mcp-secrets.json.tmpl" | sha256sum }}
 # apply-script:            {{ include "dot_local/user_scripts/executable_apply_harness_config.sh" | sha256sum }}
 # pi-mcp-lazy stand-in:    {{ include "dot_local/bin/executable_pi-mcp-lazy" | sha256sum }}
-# pi-mcp-lazy list:        {{ include "dot_local/share/pi-mcp-lazy/servers.list" | sha256sum }}
+# pi-mcp-lazy list:        {{ include "dot_local/share/pi-mcp-lazy/servers.list.tmpl" | sha256sum }}
 {{ $skillsRoot := joinPath .chezmoi.sourceDir "dot_local/share/agent-harness/canonical/skills" -}}
 {{ $skills := list -}}
 {{ range (glob (joinPath $skillsRoot "*/SKILL.md") | sortAlpha) -}}

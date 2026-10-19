@@ -436,8 +436,10 @@ apply_codex() {
 # Pi only: wrap the local MCP servers named in servers.list in the lazy stand-in, so a
 # session does not start them until a call needs them. Each server is refreshed once here
 # (the stand-in's --refresh mode saves its handshake and tool list). A failed refresh is
-# logged and the entry is still wrapped: sessions then serve the shipped seed. Claude and
-# Codex rendering do not call this. Roll back by removing the name from servers.list.
+# logged. The entry is still wrapped when a saved list with tools exists (an earlier state
+# copy or the shipped seed); with none, it is left as rendered so Pi starts the server at
+# session start instead of showing no tools. Claude and Codex rendering do not call this.
+# Roll back by removing the name from servers.list.
 wrap_pi_lazy_servers() {
   resolved_json="$1"
   lazy_list="${PI_MCP_LAZY_LIST:-$HOME/.local/share/pi-mcp-lazy/servers.list}"
@@ -461,6 +463,21 @@ import subprocess
 import sys
 
 path, list_file, binp, idle = sys.argv[1:5]
+
+def run_bounded(argv, env, cwd, limit):
+    """Run argv; on timeout ask it to stop (SIGTERM, so the stand-in stops the server it started) before killing it."""
+    p = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env, cwd=cwd)
+    try:
+        _, err = p.communicate(timeout=limit)
+    except subprocess.TimeoutExpired:
+        p.terminate()
+        try:
+            _, err = p.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            _, err = p.communicate()
+        return False, "timed out after %ss" % limit
+    return p.returncode == 0, (err or "").strip()[-600:]
 data = json.loads(pathlib.Path(path).read_text())
 servers = data.get("mcpServers", {})
 names = [l.strip() for l in pathlib.Path(list_file).read_text().splitlines()
@@ -477,16 +494,27 @@ for name in names:
     args = [str(a) for a in cfg.get("args", [])]
     env = dict(os.environ)
     env.update({str(k): str(v) for k, v in (cfg.get("env") or {}).items()})
+    cwd = cfg.get("cwd") or None
+    # Arguments and env values can carry a resolved secret (a server URL); keep them out of the log.
+    hidden = [a for a in args if a.startswith(("http://", "https://"))]
+    hidden += [str(v) for v in (cfg.get("env") or {}).values() if len(str(v)) > 3]
     try:
-        r = subprocess.run([binp, "--refresh", name, "--", cfg["command"], *args], capture_output=True,
-                           text=True, timeout=240, env=env, cwd=cfg.get("cwd") or None)
-        ok, tail = r.returncode == 0, (r.stderr or "").strip()[-600:]
+        ok, tail = run_bounded([binp, "--refresh", name, "--", cfg["command"], *args], env, cwd, 240)
     except Exception as e:  # never abort the apply for the other entries
         ok, tail = False, str(e)
+    for s in hidden:
+        tail = tail.replace(s, "<hidden>")
     if ok:
         say(f"refreshed {name}")
     else:
-        say(f"refresh of {name} failed, wrapping anyway (sessions serve the shipped seed): {tail}")
+        say(f"refresh of {name} failed: {tail}")
+    try:
+        usable, _ = run_bounded([binp, "--check", name, "--", cfg["command"], *args], env, cwd, 30)
+    except Exception:
+        usable = False
+    if not usable:
+        say(f"{name} has no saved tool list; left as rendered, so Pi starts it at session start")
+        continue
     wrapped = {"command": binp, "args": [name, idle, "--", cfg["command"], *args]}
     wrapped.update({k: v for k, v in cfg.items() if k not in ("command", "args")})
     servers[name] = wrapped
