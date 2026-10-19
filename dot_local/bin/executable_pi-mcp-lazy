@@ -13,6 +13,8 @@ After the idle period with nothing in flight the whole process tree is stopped a
   pi-mcp-lazy NAME IDLE_SECONDS -- COMMAND [ARGS...]    serve Pi on stdio
   pi-mcp-lazy --refresh NAME -- COMMAND [ARGS...]       start the real server once, save
                                                         its handshake and tool list, stop it
+  pi-mcp-lazy --check NAME -- COMMAND [ARGS...]         exit 0 only if a saved copy (state copy,
+                                                        else seed) with at least one tool exists
 
 Environment (all optional): PI_MCP_LAZY_STATE_DIR, PI_MCP_LAZY_SEED_DIR, PI_MCP_LAZY_GRACE
 (seconds between SIGTERM and SIGKILL, default 1.0), PI_MCP_LAZY_START_TIMEOUT (default 120).
@@ -729,8 +731,24 @@ def refresh(name, cmd):
     return 0
 
 
+def check(name, cmd):
+    """Exit 0 when serving this server would show Pi at least one tool; 1 otherwise. Starts nothing."""
+    for p in (os.path.join(state_dir(), name + ".json"), os.path.join(seed_dir(), name + ".json")):
+        c = read_copy(p)
+        if c:
+            try:
+                count = len(json.loads(copy_tools(c)))
+            except ValueError:
+                count = 0
+            if count and c.get("key") != json.dumps(cmd):
+                log("%s: %s was saved for a different command line (stale)" % (name, p))
+            return 0 if count else 1
+    log("%s: no saved tool list (no state copy in %s, no seed in %s)" % (name, state_dir(), seed_dir()))
+    return 1
+
+
 def main(argv):
-    usage = "usage: pi-mcp-lazy NAME IDLE_SECONDS -- COMMAND [ARGS...] | pi-mcp-lazy --refresh NAME -- COMMAND [ARGS...]"
+    usage = "usage: pi-mcp-lazy NAME IDLE_SECONDS -- COMMAND [ARGS...] | pi-mcp-lazy --refresh|--check NAME -- COMMAND [ARGS...]"
     if "--" not in argv:
         log(usage)
         return 2
@@ -744,6 +762,11 @@ def main(argv):
             log(usage)
             return 2
         return refresh(head[1], cmd)
+    if head[:1] == ["--check"]:
+        if len(head) != 2 or not valid_name(head[1]):
+            log(usage)
+            return 2
+        return check(head[1], cmd)
     if len(head) != 2 or not valid_name(head[0]):
         log(usage)
         return 2

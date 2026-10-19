@@ -245,11 +245,15 @@ class Fake:
 
 
 class World:
-    def __init__(self, root, label, idle, fakes, remotes=(), fail_refresh=False, extra_env=None):
+    def __init__(self, root, label, idle, fakes, remotes=(), fail_refresh=False, extra_env=None, seed_file=None):
         self.tmp = Path(tempfile.mkdtemp(prefix="pmlproof-" + label + "-", dir=root))
         self.home, self.project = self.tmp / "home", self.tmp / "project"
         self.agent = self.home / ".pi" / "agent"
         self.agent.mkdir(parents=True)
+        if seed_file:  # a shipped seed is in place before the apply, as it is on a real host
+            seed_dir = self.home / ".local" / "share" / "pi-mcp-lazy" / "seed"
+            seed_dir.mkdir(parents=True)
+            shutil.copy2(seed_file, seed_dir / "alpha.json")
         self.project.mkdir()
         self.fakes = {f.name: f for f in fakes}
         self.idle, self.label = idle, label
@@ -354,10 +358,31 @@ CODES["remote"] = "const r = await tools.mcp__hindsight__echo({text:'remote'}); 
 EXPECTED = ["mcp__%s__echo", "mcp__%s__roots", "mcp__%s__slow"]
 
 
-def discovery_check(name, root, port, idle, mutate=None, fail_refresh=False):
+def eager_fallback_check(name, root, port, idle):
+    """Refresh failed and no seed exists: the entry is left as rendered, so Pi still gets the tools (from a server started at session start)."""
+    f = Fake(Path(root), "alpha")
+    w = World(root, name, idle, [f], fail_refresh=True)
+    try:
+        require("left as rendered" in w.apply_log, "fallback not logged: " + w.apply_log[-300:])
+        require(os.path.basename(w.servers_config()["alpha"]["command"]) != "pi-mcp-lazy", "entry was wrapped without a saved list")
+        w.write_models(port)
+        rpc = w.open()
+        try:
+            out = rpc.prompt("discover-alpha")
+            data = json.loads(out.split("OUT:", 1)[1].strip().splitlines()[-1])
+            require(data["names"] == sorted(n % "alpha" for n in EXPECTED), "tools listed: %r" % data["names"])
+        finally:
+            rpc.close()
+        require(wait_until(lambda: f.procs() == [], 10), "processes left after Pi exit")
+        return {"tools": len(data["names"]), "wrapped": False}
+    finally:
+        w.cleanup()
+
+
+def discovery_check(name, root, port, idle, mutate=None, fail_refresh=False, seed_file=None):
     """Discover the server's tools in a fresh Pi without starting it, in one copy state."""
     f = Fake(Path(root), "alpha")
-    w = World(root, name, idle, [f], fail_refresh=fail_refresh)
+    w = World(root, name, idle, [f], fail_refresh=fail_refresh, seed_file=seed_file)
     try:
         w.write_models(port)
         base = f.starts()  # the apply step's refresh started the server once, on purpose, before any session
@@ -447,8 +472,7 @@ def discovery(root, port, idle, stale, no_state):
     def failed_refresh_state(w):  # the renderer produced no state copy; the shipped seed is what remains
         require(not w.state.exists(), "state copy exists after a failed refresh")
         require("refresh of alpha failed" in w.apply_log, "failure not logged by name")
-        w.seed.mkdir(parents=True)
-        shutil.copy2(Path(tempfile.gettempdir()) / "pml-seed-for-failed.json", w.seed / "alpha.json")
+        require(os.path.basename(w.servers_config()["alpha"]["command"]) == "pi-mcp-lazy", "entry with a seed was not wrapped")
     # produce a seed once from a successful refresh, then use it in the failed-refresh world
     tmp_world = World(root, "seedmaker", idle, [Fake(Path(root), "alpha")])
     try:
@@ -456,7 +480,9 @@ def discovery(root, port, idle, stale, no_state):
     finally:
         tmp_world.cleanup()
     check("discovery: refresh failed at apply time (seed), no server started")(discovery_check)(
-        "failedrefresh", root, port, idle, mutate=failed_refresh_state, fail_refresh=True)
+        "failedrefresh", root, port, idle, mutate=failed_refresh_state, fail_refresh=True,
+        seed_file=Path(tempfile.gettempdir()) / "pml-seed-for-failed.json")
+    check("discovery: refresh failed and no seed, entry left eager, tools still listed")(eager_fallback_check)("eager", root, port, idle)
 
 
 

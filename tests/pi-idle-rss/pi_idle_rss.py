@@ -354,7 +354,19 @@ class Store:
 # ------------------------------------------------- lazy MCP stand-in variants (pi-mcp-lazy)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAZY_SRC = REPO_ROOT / "dot_local" / "bin" / "executable_pi-mcp-lazy"
-LAZY_LIST = REPO_ROOT / "dot_local" / "share" / "pi-mcp-lazy" / "servers.list"
+LAZY_LIST = REPO_ROOT / "dot_local" / "share" / "pi-mcp-lazy" / "servers.list.tmpl"
+
+
+def lazy_list_names() -> list:
+    """Names in servers.list.tmpl for the personal profile (the work-only block is dropped)."""
+    text = re.sub(r"\{\{ if .*?\{\{ end -\}\}", "", LAZY_LIST.read_text(), flags=re.S)
+    return [n.strip() for n in text.splitlines() if n.strip() and not n.startswith("#")]
+
+
+def lazy_list_file(root: Path) -> Path:
+    p = root / "servers.list"
+    p.write_text("\n".join(lazy_list_names()) + "\n")
+    return p
 LAZY_SEED = REPO_ROOT / "dot_local" / "share" / "pi-mcp-lazy" / "seed"
 APPLY_SRC = REPO_ROOT / "dot_local" / "user_scripts" / "executable_apply_harness_config.sh"
 LAZY_VARIANTS = {"full-lazy": "state", "full-lazy-nostate": "nostate", "full-lazy-failedrefresh": "failed"}
@@ -410,7 +422,7 @@ def lazy_render(store: "Store", kind: str, node_dir: Path) -> dict:
         "PI_OFFLINE": "1", "npm_config_offline": "true", MARKER: marker_value,
         "AGENT_HARNESS_CANONICAL_ROOT": str(canon), "AGENT_HARNESS_GENERATED_ROOT": str(root / "generated"),
         "AGENT_HARNESS_ADAPTERS_ROOT": str(root / "adapters"), "AGENT_HARNESS_EXTERNAL_ROOT": str(root / "external"),
-        "AGENT_HARNESS_APPLY_CLAUDE_MCP": "0", "PI_MCP_LAZY_LIST": str(LAZY_LIST), "PI_MCP_LAZY_BIN": str(bindir / "pi-mcp-lazy"),
+        "AGENT_HARNESS_APPLY_CLAUDE_MCP": "0", "PI_MCP_LAZY_LIST": str(lazy_list_file(root)), "PI_MCP_LAZY_BIN": str(bindir / "pi-mcp-lazy"),
         "PI_MCP_LAZY_SEED_DIR": str(LAZY_SEED),
     })
     r = subprocess.run(["sh", str(APPLY_SRC), "pi"], env=env, capture_output=True, text=True, timeout=900)
@@ -752,7 +764,7 @@ def preflight(v: dict, root: Path, store: Store, node_dir: Path, workdir: Path) 
     unclassified = classify_dependencies(deps, resolved, placed_credential_files(h["home"]), recap.exists())
     add("home-dependencies-classified", not unclassified, f"extensions_with_refs={len(deps)} unclassified={len(unclassified)} helpers={resolved}")
     if v.get("lazy"):
-        names = [n.strip() for n in LAZY_LIST.read_text().splitlines() if n.strip() and not n.startswith("#")]
+        names = lazy_list_names()
         servers = json.loads((h["agent"] / "mcp.json").read_text()).get("mcpServers", {})
         wrapped = [n for n in names if "pi-mcp-lazy" in str(servers.get(n, {}).get("command", ""))]
         add("lazy-entries-wrapped", wrapped == names, f"wrapped={wrapped}")
