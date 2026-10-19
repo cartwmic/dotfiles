@@ -27,12 +27,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      - name: Install chezmoi and mise
+      - name: Install chezmoi and mise (pinned to the dev-machine versions)
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.local/bin"
           sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" -t v2.71.1
-          curl -fsSL https://mise.run | sh
+          curl -fsSL https://mise.run | MISE_VERSION=v2026.7.18 sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Agent-harness render and pi-mcp-lazy tests
         run: python3 -m unittest discover -s tests/pi-mcp-lazy -v
