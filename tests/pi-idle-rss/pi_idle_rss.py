@@ -146,7 +146,7 @@ def cmd_name(line: str) -> str:
     if not toks:
         return "?"
     name = os.path.basename(toks[0])
-    if name in ("node", "python3", "python", "npm", "sh", "bash") and len(toks) > 1:
+    if name.lower() in ("node", "python3", "python", "npm", "sh", "bash") and len(toks) > 1:
         name += " " + os.path.basename(toks[1])
     return name
 
@@ -248,8 +248,9 @@ PATCHES = {
 
 
 def parse_variant(spec: str) -> dict:
-    """core | full | full-nomcp | full-pkg:SUBSTR | full-mcp:NAME | full-ext:a+b | full-ext:* (combine with '/')."""
-    v = {"name": spec, "base": "full", "drop_pkgs": [], "drop_mcp": [], "drop_ext": [], "no_mcp": False, "patches": []}
+    """core | full | full-nomcp | full-pkg:SUBSTR | full-mcp:NAME | full-ext:a+b | full-ext:* | full-lazy | full-lazy-nostate |
+    full-lazy-failedrefresh (combine with '/'). The lazy variants render the MCP entries with the real Pi rendering step."""
+    v = {"name": spec, "base": "full", "drop_pkgs": [], "drop_mcp": [], "drop_ext": [], "no_mcp": False, "patches": [], "lazy": None}
     if spec == "core":
         v["base"] = "core"
         return v
@@ -272,6 +273,8 @@ def parse_variant(spec: str) -> dict:
                     raise ValueError(f"unknown patch '{n}'")
         elif p.startswith("full-ext:"):
             v["drop_ext"] += p.split(":", 1)[1].split("+")
+        elif p in LAZY_VARIANTS:
+            v["lazy"] = LAZY_VARIANTS[p]
         else:
             raise ValueError(f"unknown variant part '{p}'")
     return v
@@ -342,9 +345,101 @@ class Store:
 
     def __init__(self, root: Path):
         self.root = root
+        self.lazy: dict = {}
         for name, src in (("git", REAL_AGENT / "git"), ("npm", REAL_AGENT / "npm"), ("npx", REAL_HOME / ".npm" / "_npx"), ("cacache", REAL_HOME / ".npm" / "_cacache")):
             if src.exists():
                 clone(src, root / name)
+
+
+# ------------------------------------------------- lazy MCP stand-in variants (pi-mcp-lazy)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+LAZY_SRC = REPO_ROOT / "dot_local" / "bin" / "executable_pi-mcp-lazy"
+LAZY_LIST = REPO_ROOT / "dot_local" / "share" / "pi-mcp-lazy" / "servers.list"
+LAZY_SEED = REPO_ROOT / "dot_local" / "share" / "pi-mcp-lazy" / "seed"
+APPLY_SRC = REPO_ROOT / "dot_local" / "user_scripts" / "executable_apply_harness_config.sh"
+LAZY_VARIANTS = {"full-lazy": "state", "full-lazy-nostate": "nostate", "full-lazy-failedrefresh": "failed"}
+# Process names (cmd_name) of the real MCP servers and their npm wrappers in the owner's configuration.
+MCP_REAL_NAMES = {"furi", "npm exec", "node rea", "node playwright-mcp"}
+FAILING_WRAPPER = """#!/bin/sh
+[ "$1" = "--refresh" ] && { echo "simulated refresh failure" >&2; exit 1; }
+exec "$(dirname "$0")/pi-mcp-lazy-real" "$@"
+"""
+
+
+def lazy_render(store: "Store", kind: str, node_dir: Path) -> dict:
+    """Run the real Pi rendering (apply_harness_config.sh pi) once per invocation in a scratch HOME.
+    kind 'state': the refresh succeeds (state copies are built); kind 'failed': the refresh fails (seed only)."""
+    if kind in store.lazy:
+        return store.lazy[kind]
+    for need in (LAZY_SRC, LAZY_LIST, APPLY_SRC):
+        if not need.is_file():
+            raise Fatal(f"lazy variant needs {need}")
+    if not LAZY_SEED.is_dir():
+        raise Fatal(f"lazy variant needs the shipped seed directory {LAZY_SEED}")
+    root = store.root / f"lazy-{kind}"
+    home, canon = root / "home", root / "canonical"
+    (canon / "mcp").mkdir(parents=True)
+    (canon / "skills").mkdir()
+    (root / "adapters").mkdir()
+    home.mkdir()
+    real_mcp = json.loads((REAL_AGENT / "mcp.json").read_text())
+    (canon / "mcp" / "servers.json").write_text(json.dumps(filter_mcp(real_mcp, parse_variant("full"))))
+    bindir = store.root / ("lazybin" if kind == "state" else "lazybin-failed")
+    bindir.mkdir(parents=True, exist_ok=True)
+    real_name = "pi-mcp-lazy" if kind == "state" else "pi-mcp-lazy-real"
+    shutil.copy2(LAZY_SRC, bindir / real_name)
+    (bindir / real_name).chmod(0o755)
+    if kind == "failed":
+        (bindir / "pi-mcp-lazy").write_text(FAILING_WRAPPER)
+        (bindir / "pi-mcp-lazy").chmod(0o755)
+    if (store.root / "npx").exists():  # offline npx so the refresh starts the real servers as a session would
+        (home / ".npm").mkdir()
+        (home / ".npm" / "_npx").symlink_to(store.root / "npx")
+        if (store.root / "cacache").exists():
+            (home / ".npm" / "_cacache").symlink_to(store.root / "cacache")
+    tools = root / "tools"
+    tools.mkdir()
+    for c in ("python3", "node", "npx", "npm", "furi", "git"):
+        real = shutil.which(c)
+        if real:
+            (tools / c).symlink_to(real)
+    marker_value = "lazy-render-" + uuid.uuid4().hex[:8]
+    env = {k: os.environ[k] for k in ENV_ALLOW if k in os.environ}
+    env.update({
+        "HOME": str(home), "PATH": ":".join([str(node_dir), str(tools), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
+        "PI_OFFLINE": "1", "npm_config_offline": "true", MARKER: marker_value,
+        "AGENT_HARNESS_CANONICAL_ROOT": str(canon), "AGENT_HARNESS_GENERATED_ROOT": str(root / "generated"),
+        "AGENT_HARNESS_ADAPTERS_ROOT": str(root / "adapters"), "AGENT_HARNESS_EXTERNAL_ROOT": str(root / "external"),
+        "AGENT_HARNESS_APPLY_CLAUDE_MCP": "0", "PI_MCP_LAZY_LIST": str(LAZY_LIST), "PI_MCP_LAZY_BIN": str(bindir / "pi-mcp-lazy"),
+        "PI_MCP_LAZY_SEED_DIR": str(LAZY_SEED),
+    })
+    r = subprocess.run(["sh", str(APPLY_SRC), "pi"], env=env, capture_output=True, text=True, timeout=900)
+    kill_owned(marker_value, None)  # the refresh stops its servers; verify nothing is left
+    if r.returncode != 0:
+        raise Fatal(f"lazy rendering failed (exit {r.returncode}): {r.stderr[-300:]}")
+    out = {"mcp": json.loads((home / ".pi" / "agent" / "mcp.json").read_text()), "state": home / ".local" / "state" / "pi-mcp-lazy",
+           "log": r.stdout[-1500:]}
+    store.lazy[kind] = out
+    return out
+
+
+def install_lazy(v: dict, h: dict, store: "Store") -> None:
+    """Replace the throwaway home's MCP entries by the real rendering, install the seed, and the state copies if wanted."""
+    node_dir = release_paths()[1]
+    rendered = lazy_render(store, "failed" if v["lazy"] == "failed" else "state", node_dir)
+    (h["agent"] / "mcp.json").write_text(json.dumps(rendered["mcp"]))
+    seed_dst = h["home"] / ".local" / "share" / "pi-mcp-lazy" / "seed"
+    seed_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(LAZY_SEED, seed_dst)
+    if v["lazy"] == "state" and rendered["state"].exists():
+        (h["home"] / ".local" / "state").mkdir(parents=True, exist_ok=True)
+        shutil.copytree(rendered["state"], h["home"] / ".local" / "state" / "pi-mcp-lazy")
+    h["manifest"]["provisioned"].append(f"pi-mcp-lazy ({v['lazy']}): MCP entries from apply_harness_config.sh, shipped seed installed")
+
+
+def mcp_process_counts(owned: list[dict]) -> tuple[int, int]:
+    """(stand-in processes, real MCP servers and their npm wrappers) among a sample's owned processes."""
+    return (sum(1 for o in owned if "pi-mcp-lazy" in o["name"]), sum(1 for o in owned if o["name"] in MCP_REAL_NAMES))
 
 
 def build_home(v: dict, root: Path, store: Store, backend_url: str, workdir: Path) -> dict:
@@ -420,7 +515,10 @@ def build_home(v: dict, root: Path, store: Store, backend_url: str, workdir: Pat
         real = shutil.which(c)
         if real and not (tools / c).exists():
             (tools / c).symlink_to(real)
-    return {"home": home, "agent": agent, "stubs": stubs, "tools": tools, "manifest": manifest}
+    built = {"home": home, "agent": agent, "stubs": stubs, "tools": tools, "manifest": manifest}
+    if v.get("lazy"):
+        install_lazy(v, built, store)
+    return built
 
 
 def launch_env(h: dict, marker_value: str, node_dir: Path) -> dict:
@@ -653,6 +751,16 @@ def preflight(v: dict, root: Path, store: Store, node_dir: Path, workdir: Path) 
     resolved = resolve_helpers(env, h["stubs"])
     unclassified = classify_dependencies(deps, resolved, placed_credential_files(h["home"]), recap.exists())
     add("home-dependencies-classified", not unclassified, f"extensions_with_refs={len(deps)} unclassified={len(unclassified)} helpers={resolved}")
+    if v.get("lazy"):
+        names = [n.strip() for n in LAZY_LIST.read_text().splitlines() if n.strip() and not n.startswith("#")]
+        servers = json.loads((h["agent"] / "mcp.json").read_text()).get("mcpServers", {})
+        wrapped = [n for n in names if "pi-mcp-lazy" in str(servers.get(n, {}).get("command", ""))]
+        add("lazy-entries-wrapped", wrapped == names, f"wrapped={wrapped}")
+        state = h["home"] / ".local" / "state" / "pi-mcp-lazy"
+        have = [n for n in names if (state / (n + ".json")).exists()]
+        add("lazy-state-copies-as-expected", have == (names if v["lazy"] == "state" else []), f"variant={v['lazy']} copies={have}")
+        seeds = [n for n in names if (h["home"] / ".local" / "share" / "pi-mcp-lazy" / "seed" / (n + ".json")).exists()]
+        add("lazy-seed-installed", seeds == names, f"seeds={seeds}")
     exp = expected_commands(h["agent"], v)
     add("expected-commands-found-by-scan", v["base"] == "core" or bool(exp), f"owners={len(exp)} commands={sum(len(x) for x in exp.values())}")
     if recap.exists():
@@ -1139,6 +1247,14 @@ def report(indir: Path) -> str:
         cols = [summarize([r[k] for r in rs if r.get(k) is not None]) for k in ("rss_pi_kb", "rss_owned_kb", "fp_pi_kb", "fp_owned_kb")]
         med[(var, tag)] = cols[0].get("median")
         out.append(f"| {var} | {tag} | " + " | ".join(fmt(c) for c in cols) + " |")
+    proc_rows = []
+    for (var, tag), rs in sorted(groups.items()):
+        counts = [mcp_process_counts(r["owned"]) for r in rs if r.get("owned")]
+        if counts:
+            proc_rows.append(f"| {var} | {tag} | " + "/".join(str(c[0]) for c in counts) + " | " + "/".join(str(c[1]) for c in counts) + " |")
+    if proc_rows:
+        out += ["", "## MCP server processes at the settled point (one number per accepted sample)", "",
+                "| variant | tag | stand-ins (pi-mcp-lazy) | real servers and npm wrappers |", "|---|---|---|---|"] + proc_rows
     effects = {}
     for r in all_rows:
         if r.get("variant_effects") and not r.get("aborted"):

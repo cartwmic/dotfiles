@@ -1,0 +1,760 @@
+#!/bin/sh
+# Valid sh and valid Python. The system Python (macOS command-line tools) is about 10 MB smaller per process than a current
+# mise Python, and there is one stand-in per server per Pi session; any other host falls back to python3 on PATH.
+"exec" "$( [ -x /usr/bin/python3 ] && [ -d /Library/Developer/CommandLineTools/usr/bin ] && echo /usr/bin/python3 || command -v python3 )" "$0" "$@"
+"""pi-mcp-lazy: a lazy stdio stand-in for one local MCP server.
+
+Pi starts this program in place of the real server (see apply_harness_config.sh). Until a
+request needs the real server, nothing real runs: the handshake and tools/list are answered
+from a saved copy (state copy, else shipped seed). The first other request starts the real
+server in the stand-in's own process group, replays Pi's initialize, and forwards everything unchanged.
+After the idle period with nothing in flight the whole process tree is stopped again.
+
+  pi-mcp-lazy NAME IDLE_SECONDS -- COMMAND [ARGS...]    serve Pi on stdio
+  pi-mcp-lazy --refresh NAME -- COMMAND [ARGS...]       start the real server once, save
+                                                        its handshake and tool list, stop it
+
+Environment (all optional): PI_MCP_LAZY_STATE_DIR, PI_MCP_LAZY_SEED_DIR, PI_MCP_LAZY_GRACE
+(seconds between SIGTERM and SIGKILL, default 1.0), PI_MCP_LAZY_START_TIMEOUT (default 120).
+Saved copies hold only server-published metadata, never credentials.
+"""
+import json
+import os
+import signal
+import sys
+import threading
+import time
+# subprocess, hashlib and shlex are imported where they are first needed: an idle stand-in never loads them, and every
+# module not loaded is memory not held (there is one stand-in per server per Pi session)
+
+VERSION = "1"
+# The real server runs in the stand-in's own process group. Pi spawns the stand-in as the leader of that group and, to shut a server
+# down, closes stdin, SIGTERMs the group 0.5 s later and SIGKILLs it 2 s after that (pi-mcp stdio transport). Those timers are cancelled
+# as soon as the stand-in exits, and Pi then sends the group one last SIGTERM only. So Pi reaches a server and its same-group helpers
+# directly while the stand-in is still running; once the stand-in has exited, only a SIGTERM follows. The stand-in's own tidy-up (this
+# grace, then SIGKILL by process id) is therefore what stops a SIGTERM-ignoring server on the normal exit path, and it also serves the
+# idle stop, where the stand-in keeps running and never signals a group.
+GRACE = float(os.environ.get("PI_MCP_LAZY_GRACE", "1.0"))
+START_TIMEOUT = float(os.environ.get("PI_MCP_LAZY_START_TIMEOUT", "120"))
+STDERR_KEEP = 4000
+
+
+def valid_name(s):
+    return bool(s) and s.isascii() and all(c.isalnum() or c in "_-" for c in s)
+
+
+def internal_id(line):
+    """The id of an answer to one of the stand-in's own requests (ids start with 'pml-'), found without parsing the line."""
+    i = line.find(b'"pml-')
+    while i != -1:
+        before = line[max(0, i - 16):i].rstrip()
+        if before.endswith(b":") and before[:-1].rstrip().endswith(b'"id"'):
+            j = line.find(b'"', i + 1)
+            return line[i + 1:j].decode() if j != -1 else None
+        i = line.find(b'"pml-', i + 1)
+    return None
+
+
+def log(msg):
+    sys.stderr.write("pi-mcp-lazy: %s\n" % msg)
+    sys.stderr.flush()
+
+
+def home():
+    return os.environ.get("HOME") or os.path.expanduser("~")
+
+
+def state_dir():
+    return os.environ.get("PI_MCP_LAZY_STATE_DIR") or os.path.join(home(), ".local", "state", "pi-mcp-lazy")
+
+
+def seed_dir():
+    return os.environ.get("PI_MCP_LAZY_SEED_DIR") or os.path.join(home(), ".local", "share", "pi-mcp-lazy", "seed")
+
+
+def idkey(i):
+    return json.dumps(i, sort_keys=True)
+
+
+def parse_copy(f, path):
+    """A saved copy is two lines: a small JSON object (key, handshake, tool-list hash) and the tool list as raw JSON.
+    Only the first line is read into memory; the tool list is located by offsets and streamed to Pi from the file
+    (rea's is about 2 MB, and three stand-ins run in every session)."""
+    head = f.readline()
+    start = f.tell()
+    f.seek(0, 2)
+    size = f.tell()
+    f.seek(max(start, size - 2))
+    tail = f.read()
+    end = size - (len(tail) - len(tail.rstrip(b"\n")))
+    f.seek(start)
+    first = f.read(1)
+    try:
+        meta = json.loads(head)
+    except ValueError:
+        return None
+    if not (isinstance(meta, dict) and first == b"[" and tail.rstrip()[-1:] == b"]" and end > start):
+        return None
+    i = meta.get("initialize")
+    if not (isinstance(i, dict) and isinstance(i.get("protocolVersion"), str)
+            and isinstance(i.get("capabilities"), dict) and isinstance(i.get("serverInfo"), dict)):
+        return None
+    meta.update(path=str(path), start=start, end=end)
+    return meta
+
+
+def read_copy(path):
+    try:
+        with open(path, "rb") as f:
+            return parse_copy(f, path)
+    except OSError:
+        return None
+
+
+def copy_tools(meta):
+    """The tool list of a saved copy as bytes (only when it has to be compared or re-saved)."""
+    try:
+        with open(meta["path"], "rb") as f:
+            m = parse_copy(f, meta["path"])
+            if m is None:
+                return b"[]"
+            f.seek(m["start"])
+            return f.read(m["end"] - m["start"])
+    except OSError:
+        return b"[]"
+
+
+def write_copy(name, key, init, tools_raw, tools_sha):
+    d = state_dir()
+    os.makedirs(d, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
+    tmp = os.path.join(d, ".%s.json.%d.tmp" % (name, os.getpid()))
+    head = json.dumps({"server": name, "key": key, "initialize": init, "tools_sha": tools_sha, "saved_at": int(time.time())})
+    with open(tmp, "wb") as f:
+        f.write(head.encode() + b"\n" + tools_raw + b"\n")
+    os.replace(tmp, os.path.join(d, name + ".json"))
+
+
+def canon_tools(tools_raw):
+    tools = json.loads(tools_raw or b"[]")
+    return json.dumps(sorted(tools, key=lambda t: str(t.get("name"))), sort_keys=True)
+
+
+def descendants(roots):
+    """Every process below any of the given pids (one ps listing); [] if ps fails."""
+    import subprocess
+    if isinstance(roots, int):
+        roots = [roots]
+    try:
+        out = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=0.5).stdout
+    except Exception:
+        return []
+    kids = {}
+    for line in out.splitlines():
+        p = line.split()
+        if len(p) == 2 and p[0].isdigit() and p[1].isdigit():
+            kids.setdefault(int(p[1]), []).append(int(p[0]))
+    res, stack = [], list(roots)
+    while stack:
+        for c in kids.get(stack.pop(), []):
+            res.append(c)
+            stack.append(c)
+    return res
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+class StartError(Exception):
+    pass
+
+
+class Child:
+    """The real server (in the stand-in's own process group), reader threads, internal request channel."""
+
+    def __init__(self, owner, name, cmd):
+        self.owner, self.name = owner, name
+        self.stopping = False
+        self.tree = set()  # the server's descendants, snapshotted before anything is signalled and kept for later stops
+        self.snapshotted = False
+        self.err = bytearray()
+        self.cond = threading.Condition()
+        self.internal = {}
+        self.eof = False
+        try:
+            import subprocess
+            # no new session or group: the server stays in the stand-in's group, which Pi kills as a whole when it shuts down
+            self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except FileNotFoundError:
+            raise StartError("MCP server '%s' failed to start: command not found: %s" % (name, cmd[0]))
+        except OSError as e:
+            raise StartError("MCP server '%s' failed to start: %s" % (name, e))
+        try:
+            pause = float(os.environ.get("PI_MCP_LAZY_TEST_PAUSE_AFTER_SPAWN", "0"))  # test hook: widens the spawn window
+            if pause > 0:
+                time.sleep(pause)
+            threading.Thread(target=self._read_out, daemon=True).start()
+            threading.Thread(target=self._read_err, daemon=True).start()
+        except BaseException:
+            # the server exists but nobody owns it yet: do not leave it behind
+            try:
+                os.kill(self.proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            raise
+
+    def _read_out(self):
+        try:
+            for line in iter(self.proc.stdout.readline, b""):
+                line = line.strip()
+                if not line:
+                    continue
+                internal = internal_id(line)  # our own request's answer: kept as raw bytes, parsed only if needed
+                if internal:
+                    self.deliver(internal, line)
+                    continue
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(msg, dict):
+                    self.owner.on_child_message(self, msg, line)
+        except (OSError, ValueError):
+            pass
+        with self.cond:
+            self.eof = True
+            self.cond.notify_all()
+        self.owner.on_child_exit(self)
+
+    def _read_err(self):
+        try:
+            for line in iter(self.proc.stderr.readline, b""):
+                self.err += line
+                if len(self.err) > STDERR_KEEP * 2:
+                    del self.err[:-STDERR_KEEP]
+        except (OSError, ValueError):
+            pass
+
+    def stderr_tail(self):
+        return bytes(self.err[-STDERR_KEEP:]).decode("utf-8", "replace").strip()
+
+    def alive(self):
+        return self.proc.poll() is None and not self.eof
+
+    def send(self, data):
+        if isinstance(data, dict):
+            data = json.dumps(data, separators=(",", ":")).encode()
+        self.proc.stdin.write(data.rstrip(b"\n") + b"\n")
+        self.proc.stdin.flush()
+
+    def deliver(self, rid, raw):
+        with self.cond:
+            self.internal[rid] = raw
+            self.cond.notify_all()
+
+    def wait_internal(self, rid, timeout):
+        return json.loads(self.wait_internal_raw(rid, timeout))
+
+    def wait_internal_raw(self, rid, timeout):
+        end = time.time() + timeout
+        with self.cond:
+            while rid not in self.internal:
+                left = end - time.time()
+                if self.eof or self.proc.poll() is not None:
+                    time.sleep(0.1)
+                    if rid in self.internal:
+                        break
+                    code = self.proc.poll()
+                    tail = self.stderr_tail()
+                    raise StartError("MCP server '%s' failed to start: exited%s before answering%s" % (
+                        self.name, "" if code is None else " with code %s" % code,
+                        ("\nstderr (tail):\n" + tail) if tail else ""))
+                if left <= 0:
+                    tail = self.stderr_tail()
+                    raise StartError("MCP server '%s' failed to start: no answer within %ds%s" % (
+                        self.name, timeout, ("\nstderr (tail):\n" + tail) if tail else ""))
+                self.cond.wait(min(left, 0.2))
+            return self.internal.pop(rid)
+
+    def sweep(self):
+        """Add to self.tree every process now below the server or any process already in the tree; returns the new ones. The
+        walk starts from the whole tree, not only the server, so a child forked by a helper whose parent has since gone is still
+        found while that helper lives."""
+        new = set(descendants([self.proc.pid] + list(self.tree))) - self.tree
+        self.tree |= new
+        return new
+
+    def stop(self):
+        """Stop the server and everything below it: stdin close, SIGTERM, grace, SIGKILL, signalled by process id (never a
+        group: the stand-in shares the server's group and keeps running after an idle stop). The tree is walked just BEFORE stdin is
+        closed, before the SIGKILL round, and again every 0.2 s while waiting, and anything new is signalled with the same signal, so a process
+        a helper starts after an earlier walk is found while its parent still lives. The walk results are kept on the child, so a
+        re-entrant second stop (Pi's SIGTERM arriving during the first) still has them, and a helper the server detached into
+        its own session (a browser) is included."""
+        again = self.stopping  # a second stop while one is running: the caller is already short of time, so SIGKILL at once
+        self.stopping = True
+        pid = self.proc.pid
+        if not self.snapshotted:
+            self.sweep()
+            self.snapshotted = True
+            pause = float(os.environ.get("PI_MCP_LAZY_TEST_PAUSE_AFTER_WALK", "0"))  # test hook: a helper forks after this walk
+            if pause > 0:
+                time.sleep(pause)
+        if not again:
+            self.sweep()  # just before stdin is closed: a closed stdin may end the server (and the chance to walk from it) at once
+
+        try:
+            self.proc.stdin.close()
+        except Exception:
+            pass
+
+        def any_alive():
+            return self.proc.poll() is None or any(pid_alive(p) for p in list(self.tree))
+
+        def send(sig, pids):
+            for p in pids:
+                try:
+                    os.kill(p, sig)
+                except (ProcessLookupError, PermissionError):
+                    pass
+
+        for sig, wait in (((signal.SIGKILL, 1.0),) if again else ((signal.SIGTERM, GRACE), (signal.SIGKILL, 1.0))):
+            if sig == signal.SIGKILL and not again:
+                self.sweep()
+            send(sig, [pid] + list(self.tree))
+            end, walked = time.time() + wait, time.time()
+            while time.time() < end and any_alive():
+                time.sleep(0.05)
+                if time.time() - walked >= 0.2:
+                    walked = time.time()
+                    send(sig, self.sweep())
+            if not any_alive():
+                break
+        try:
+            self.proc.wait(timeout=1)
+        except Exception:
+            pass
+
+
+class Lazy:
+    def __init__(self, name, idle, cmd, refresh_mode=False):
+        self.name, self.idle, self.cmd, self.refresh_mode = name, idle, cmd, refresh_mode
+        self.key = json.dumps(cmd)
+        self.lock = threading.RLock()        # child lifecycle
+        self.state_lock = threading.Lock()   # inflight, last activity
+        self.out_lock = threading.Lock()
+        self.child = None
+        self.client_init = None
+        self.cache = None
+        self.inflight = {}
+        self.server_pending = set()
+        self.last = time.time()
+        self.closing = False
+        self.spawning = False
+        self.exit_requested = 0
+        self.exit_code = 0
+        self.seq = 0
+
+    # ---- output to Pi
+    def to_client(self, obj):
+        data = obj if isinstance(obj, bytes) else json.dumps(obj, separators=(",", ":")).encode()
+        try:
+            with self.out_lock:
+                sys.stdout.buffer.write(data + b"\n")
+                sys.stdout.buffer.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            self.closing = True
+
+    def send_tools(self, rid):
+        """Answer tools/list by streaming the tool list from the saved copy in chunks: it is never held in memory."""
+        prefix = b'{"jsonrpc":"2.0","id":' + json.dumps(rid).encode() + b',"result":{"tools":'
+        try:
+            f = open(self.cache["path"], "rb") if self.cache else None
+        except OSError:
+            f = None
+        try:
+            meta = parse_copy(f, self.cache["path"]) if f else None
+            with self.out_lock:
+                out = sys.stdout.buffer
+                out.write(prefix)
+                if meta is None:
+                    out.write(b"[]")
+                else:
+                    f.seek(meta["start"])
+                    left = meta["end"] - meta["start"]
+                    while left > 0:
+                        chunk = f.read(min(65536, left))
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        left -= len(chunk)
+                out.write(b"}}\n")
+                out.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            self.closing = True
+        finally:
+            if f:
+                f.close()
+
+    def reply(self, rid, result):
+        self.to_client({"jsonrpc": "2.0", "id": rid, "result": result})
+
+    def error(self, rid, message, code=-32000):
+        self.to_client({"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}})
+
+    def touch(self):
+        with self.state_lock:
+            self.last = time.time()
+
+    # ---- saved copy
+    def load(self):
+        for src, p in (("state copy", os.path.join(state_dir(), self.name + ".json")),
+                       ("seed", os.path.join(seed_dir(), self.name + ".json"))):
+            c = read_copy(p)
+            if c:
+                if c.get("key") != self.key:
+                    log("%s: %s was saved for a different command line (stale); serving it anyway" % (self.name, src))
+                return c
+        return None
+
+    # ---- messages from Pi
+    def on_client_line(self, line):
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            return
+        if not isinstance(msg, dict):
+            return
+        method, has_id = msg.get("method"), "id" in msg
+        if method is not None and has_id:
+            self.on_request(msg, line)
+        elif method is not None:
+            if method == "notifications/cancelled":
+                # Pi cancels on abort and on timeout. A server may then send no reply at all (rea does not), so the
+                # cancelled request is no longer in flight: forget it here, or the idle clock would never run again.
+                rid = (msg.get("params") or {}).get("requestId")
+                if rid is not None:
+                    with self.state_lock:
+                        self.inflight.pop(idkey(rid), None)
+                        self.last = time.time()
+            if method != "notifications/initialized":
+                c = self.child
+                if c and c.alive():
+                    try:
+                        c.send(line)
+                    except Exception:
+                        pass
+        elif has_id:
+            with self.state_lock:
+                if idkey(msg["id"]) in self.server_pending:  # answer to a server request that counted as activity (not a ping)
+                    self.server_pending.discard(idkey(msg["id"]))
+                    self.last = time.time()
+            c = self.child
+            if c and c.alive():
+                try:
+                    c.send(line)
+                except Exception:
+                    pass
+
+    def on_request(self, msg, line):
+        m, rid = msg["method"], msg["id"]
+        if m == "initialize":
+            self.client_init = msg.get("params") or {}
+            c = self.load()
+            if not c:
+                return self.error(rid, "pi-mcp-lazy: no saved tool list for '%s' (no state copy in %s, no seed in %s); "
+                                  "nothing was started. Repair: pi-mcp-lazy --refresh %s -- %s" % (
+                                      self.name, state_dir(), seed_dir(), self.name, " ".join(__import__("shlex").quote(a) for a in self.cmd)))
+            self.cache = c
+            init = dict(c["initialize"])
+            req = self.client_init.get("protocolVersion")
+            if isinstance(req, str) and req < init["protocolVersion"]:
+                init["protocolVersion"] = req
+            return self.reply(rid, init)
+        if m == "ping":
+            return self.reply(rid, {})
+        if m == "tools/list":
+            if self.cache is None:
+                self.cache = self.load()
+            return self.send_tools(rid)
+        if self.closing:
+            return self.error(rid, "MCP server '%s' is shutting down" % self.name)
+        with self.lock:
+            try:
+                changed = self.ensure_child()
+            except StartError as e:
+                return self.error(rid, str(e))
+            if changed:
+                self.to_client({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+            with self.state_lock:
+                self.inflight[idkey(rid)] = rid
+                self.last = time.time()
+            try:
+                self.child.send(line)
+            except Exception:
+                with self.state_lock:
+                    self.inflight.pop(idkey(rid), None)
+                self.error(rid, "MCP server '%s' connection was lost; it will be started again on the next call" % self.name)
+
+    # ---- real server lifecycle (callers hold self.lock)
+    def ensure_child(self):
+        if self.child and self.child.alive():
+            return False
+        if self.child:
+            self.child.stop()
+            self.child = None
+        # A signal handler must not run between the server being spawned and self.child being set: it would find no child and
+        # exit with the server still running (Pi's group kill would get it, but a signal sent to the stand-in alone would not).
+        # While spawning, the handler only records the request.
+        self.spawning = True
+        try:
+            child = Child(self, self.name, self.cmd)
+            self.child = child
+        finally:
+            self.spawning = False
+        if self.exit_requested:
+            self.exit_now(self.exit_requested)
+        try:
+            return self.handshake(child)
+        except BaseException as e:
+            # self.child stays set until stop() has finished: a SIGTERM from Pi arriving during the stop must still find the
+            # child and send it SIGKILL (shutdown() / Child.stop() second call), not exit with the server still running.
+            child.stop()
+            self.child = None
+            if isinstance(e, StartError) or not isinstance(e, Exception):
+                raise
+            raise StartError("MCP server '%s' failed to start: %s" % (self.name, e))
+
+    def handshake(self, child):
+        params = dict(self.client_init or {})
+        if not params:
+            params = {"protocolVersion": "2025-11-25", "capabilities": {},
+                      "clientInfo": {"name": "pi-mcp-lazy", "version": VERSION}}
+        child.send({"jsonrpc": "2.0", "id": "pml-init", "method": "initialize", "params": params})
+        resp = child.wait_internal("pml-init", START_TIMEOUT)
+        if "error" in resp:
+            raise StartError("MCP server '%s' failed to start: initialize failed: %s" % (self.name, json.dumps(resp["error"])[:500]))
+        init = resp.get("result") or {}
+        child.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        served_sha = (self.cache or {}).get("tools_sha")
+        tools_raw, sha, changed = self.fetch_tools(child, init, served_sha)
+        return self.record(init, tools_raw, sha, changed)
+
+    def fetch_tools(self, child, init, served_sha):
+        """Ask the real server for its tool list. Returns (tools_raw, sha, changed). When the raw reply hashes to the saved
+        hash the list is unchanged and nothing is parsed (tools_raw is None). Otherwise the list is parsed once, compared
+        and re-serialised compactly."""
+        if (init.get("capabilities") or {}).get("tools") is None:
+            return b"[]", None, bool(self.cache and canon_tools(copy_tools(self.cache)) != "[]")
+        child.send({"jsonrpc": "2.0", "id": "pml-tools", "method": "tools/list", "params": {}})
+        raw = child.wait_internal_raw("pml-tools", START_TIMEOUT)
+        import hashlib
+        sha = hashlib.sha256(raw).hexdigest()
+        if served_sha and sha == served_sha and b"nextCursor" not in raw:
+            return None, sha, False
+        msg = json.loads(raw)
+        del raw
+        if "error" in msg:
+            raise StartError("MCP server '%s' failed to start: tools/list failed: %s" % (self.name, json.dumps(msg["error"])[:500]))
+        res = msg.get("result") or {}
+        tools, cursor, pages = list(res.get("tools") or []), res.get("nextCursor"), 1
+        while cursor and pages < 200:
+            pages += 1
+            self.seq += 1
+            rid = "pml-tools-%d" % self.seq
+            child.send({"jsonrpc": "2.0", "id": rid, "method": "tools/list", "params": {"cursor": cursor}})
+            page = child.wait_internal(rid, START_TIMEOUT)
+            if "error" in page:
+                raise StartError("MCP server '%s' failed to start: tools/list failed: %s" % (self.name, json.dumps(page["error"])[:500]))
+            tools += (page.get("result") or {}).get("tools") or []
+            cursor = (page.get("result") or {}).get("nextCursor")
+        tools_raw = json.dumps(tools, separators=(",", ":")).encode()
+        del msg, res, tools
+        changed = self.cache is None or canon_tools(copy_tools(self.cache)) != canon_tools(tools_raw)
+        return tools_raw, (sha if pages == 1 else None), changed
+
+    def record(self, init, tools_raw, sha, changed):
+        """Save the real handshake and tool list; True when the list differs from what Pi was served."""
+        served = self.cache
+        if (self.refresh_mode or changed or served is None or served.get("key") != self.key
+                or served.get("initialize") != init or served.get("tools_sha") != sha):
+            if tools_raw is None:  # list unchanged: carry it over into the new copy
+                tools_raw = copy_tools(served)
+            try:
+                write_copy(self.name, self.key, init, tools_raw, sha)
+                self.cache = read_copy(os.path.join(state_dir(), self.name + ".json")) or served
+            except OSError as e:
+                log("%s: could not save copy: %s" % (self.name, e))
+        return changed and not self.refresh_mode
+
+    # ---- messages from the real server
+    def on_child_message(self, child, msg, raw):
+        mid, method = msg.get("id"), msg.get("method")
+        if self.refresh_mode:
+            if method is not None and "id" in msg:
+                if method == "roots/list":
+                    child.send({"jsonrpc": "2.0", "id": mid, "result": {"roots": []}})
+                else:
+                    child.send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "no client"}})
+            return
+        if method is None and "id" in msg:                      # response to a request Pi sent
+            with self.state_lock:
+                self.inflight.pop(idkey(mid), None)
+                self.last = time.time()
+            return self.to_client(raw)
+        if method is not None and "id" in msg:                  # request from the server to Pi
+            if method != "ping":  # a server's own keep-alive is not use: it must not hold the server up
+                with self.state_lock:
+                    self.server_pending.add(idkey(mid))
+                    self.last = time.time()
+            return self.to_client(raw)
+        if method == "notifications/tools/list_changed":
+            threading.Thread(target=self.refresh_tools, args=(child,), daemon=True).start()
+            return
+        self.to_client(raw)  # notifications (logs, progress) are forwarded; they are not use, so they do not reset the idle clock
+
+    def refresh_tools(self, child):
+        try:
+            init = (self.cache or {}).get("initialize") or {}
+            if init:
+                tools_raw, sha, changed = self.fetch_tools(child, init, None)  # the server says it changed: always parse
+                self.record(init, tools_raw, sha, changed)
+        except Exception as e:
+            log("%s: could not refresh tool list: %s" % (self.name, e))
+        self.to_client({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+
+    def on_child_exit(self, child):
+        self.fail_inflight(child)
+
+    def fail_inflight(self, child):
+        """The real server died: answer every request still waiting for it with a named error."""
+        if child.stopping or self.refresh_mode:
+            return
+        with self.state_lock:
+            if child is not self.child:
+                return
+            pending = list(self.inflight.values())
+            self.inflight.clear()
+            self.server_pending.clear()
+        tail = child.stderr_tail()
+        for rid in pending:
+            self.error(rid, "MCP server '%s' exited unexpectedly; it will be started again on the next call%s" % (
+                self.name, ("\nstderr (tail):\n" + tail) if tail else ""))
+
+    # ---- idle watcher and shutdown
+    def watch(self):
+        tick = max(0.05, min(1.0, self.idle / 5.0))
+        while not self.closing:
+            time.sleep(tick)
+            with self.lock:
+                c = self.child
+                if not c:
+                    continue
+                if not c.alive():
+                    self.fail_inflight(c)
+                    c.stop()
+                    self.child = None
+                    continue
+                with self.state_lock:
+                    busy = bool(self.inflight or self.server_pending)
+                    quiet = time.time() - self.last
+                if not busy and quiet >= self.idle:
+                    log("%s: idle for %ss, stopping" % (self.name, int(self.idle)))
+                    c.stop()
+                    self.child = None
+
+    def shutdown(self):
+        """Stop the real server. Deliberately does not take self.lock: another thread (the idle watcher, or a request that is
+        starting or stopping the server) may be holding it while it waits out the grace period. Every place that stops a child
+        keeps it registered in self.child until stop() has returned, so this always finds it; a stop already in progress
+        turns into an immediate SIGKILL of the whole group."""
+        self.closing = True
+        c = self.child
+        if c:
+            c.stop()
+            if self.child is c:
+                self.child = None
+
+    def exit_now(self, signum):
+        self.shutdown()
+        os._exit(self.exit_code)
+
+    def install_signal_handlers(self, exit_code):
+        self.exit_code = exit_code
+
+        def on_signal(signum, frame):
+            if self.spawning:  # between spawn and registration: finish registering, then exit_now (see ensure_child)
+                self.exit_requested = signum
+                return
+            self.exit_now(signum)
+        for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            signal.signal(s, on_signal)
+
+    def serve(self):
+        threading.Thread(target=self.watch, daemon=True).start()
+        self.install_signal_handlers(0)
+        try:
+            for line in iter(sys.stdin.buffer.readline, b""):
+                line = line.strip()
+                if line and not self.closing:
+                    self.on_client_line(line)
+        finally:
+            self.shutdown()
+
+
+def refresh(name, cmd):
+    lz = Lazy(name, 0, cmd, refresh_mode=True)
+    lz.install_signal_handlers(1)  # an interrupted refresh (apply, Ctrl-C) must not leave the server it started running
+    lz.cache = lz.load()
+    try:
+        with lz.lock:
+            lz.ensure_child()
+    except StartError as e:
+        log(str(e))
+        return 1
+    finally:
+        lz.shutdown()
+    count = len(json.loads(copy_tools(lz.cache))) if lz.cache else 0
+    log("%s: saved %d tools to %s" % (name, count, os.path.join(state_dir(), name + ".json")))
+    return 0
+
+
+def main(argv):
+    usage = "usage: pi-mcp-lazy NAME IDLE_SECONDS -- COMMAND [ARGS...] | pi-mcp-lazy --refresh NAME -- COMMAND [ARGS...]"
+    if "--" not in argv:
+        log(usage)
+        return 2
+    cut = argv.index("--")
+    head, cmd = argv[:cut], argv[cut + 1:]
+    if not cmd:
+        log(usage)
+        return 2
+    if head[:1] == ["--refresh"]:
+        if len(head) != 2 or not valid_name(head[1]):
+            log(usage)
+            return 2
+        return refresh(head[1], cmd)
+    if len(head) != 2 or not valid_name(head[0]):
+        log(usage)
+        return 2
+    try:
+        idle = float(head[1])
+    except ValueError:
+        log(usage)
+        return 2
+    Lazy(head[0], idle, cmd).serve()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
