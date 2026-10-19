@@ -70,13 +70,17 @@ are unchanged.
   the idle period for that entry if that matters.
 - A cold first call can take seconds (`npx` start). Pi's per-request timeout is 60 seconds by default; add a larger
   `"timeout"` to the entry if a cold start is ever slower.
-- **Exit and /reload.** Because the server shares the stand-in's process group, Pi's own shutdown (close stdin, SIGTERM to the
-  group after 0.5 s, SIGKILL to the group after 2.5 s) reaches the server and every helper that stays in the group, whatever the
-  stand-in is doing; the stand-in's own tidy-up is best effort on top. A helper a server detaches into its own session (a
-  browser) is outside that kill: the stand-in stops it from its pre-signal process walk, and when the stand-in is killed
-  outright it is as exposed as it is under today's direct launch.
+- **Exit and /reload.** The server shares the stand-in's process group. Pi's shutdown (close stdin, SIGTERM to the group after
+  0.5 s, SIGKILL to the group after 2.5 s) reaches the server and every same-group helper while the stand-in is still running. Pi
+  cancels those timers when the stand-in exits and then sends the group one last SIGTERM only, so on the normal path the stand-in's own
+  tidy-up (stdin close, SIGTERM, 1 s grace, SIGKILL by process id) is what stops a server that ignores SIGTERM. A helper a server
+  detaches into its own session (a browser) is outside any group signal: the stand-in reaches it from its process-tree walk at stop time.
+- **Known limits, accepted by the owner** (Michael, 2026-10-18: "Accept limits, go to validation"): the process-tree walk is a single
+  `ps` snapshot at stop time, so a failed or timed-out walk, a group or terminal signal that kills the server before the walk, a server
+  that crashes before the walk, and a stale process id can leave a detached or re-parented helper behind; a SIGKILLed stand-in cannot
+  tidy up at all. Continuous tracking of the server's tree while it runs would close most of these and is a separate follow-up.
 - A helper left behind by a server that crashes outright (the server dies before the stand-in can walk its process tree) is re-parented
-  and stays until Pi's exit kills the stand-in's group, exactly as it would under a direct launch.
+  and is not reached by the stand-in; it stays until something stops it, as it would under a direct launch.
 - If the stand-in itself is killed with SIGKILL it cannot tidy up, but its group-mates die with it when Pi's group kill is the
   cause, and the server sees its stdin close either way. The lifecycle test prints what it observed.
 - A seed can be out of date until the next apply or real start; a tool that was removed since then returns the server's
