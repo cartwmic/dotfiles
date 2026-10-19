@@ -156,6 +156,50 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(len(procs(self.e.marker)), 2)
         self._signal_during_cleanup(s, "idle stop")
 
+    def test_exit_between_spawn_and_registration_still_kills_the_server(self):
+        # test hook: the stand-in pauses right after spawning the server, before anything could have registered it; Pi's
+        # SIGTERM arrives in that window. The server ignores SIGTERM and has its own process group.
+        write_copy(self.e.state, "fake", self.e.key("--ignore-term", "--start-delay", "60"))
+        s = Session(self.e, "fake", 600, "--ignore-term", "--start-delay", "60",
+                    extra_env={"PI_MCP_LAZY_GRACE": None, "PI_MCP_LAZY_TEST_PAUSE_AFTER_SPAWN": "0.4"})
+        self.addCleanup(s.close)
+        s.initialize()
+        s.n += 1
+        s.send({"jsonrpc": "2.0", "id": s.n, "method": "tools/call", "params": {"name": "echo", "arguments": {}}})
+        self.assertTrue(wait_until(lambda: len(procs(self.e.marker)) >= 1, timeout=10), "server was not spawned")
+        t0 = time.time()
+        s.p.send_signal(signal.SIGTERM)
+        s.p.wait(timeout=10)
+        took = time.time() - t0
+        left = procs(self.e.marker)
+        self.assertEqual(left, [], "server spawned just before the signal survived: %r" % left)
+        self.assertLess(took, 2.4, "exit took %.1fs; Pi kills the stand-in at 2.5s" % took)
+
+    def test_second_stop_still_reaches_a_helper_reparented_by_the_first(self):
+        # the server exits on SIGTERM; its helper (own session) ignores it and is re-parented. Pi's SIGTERM arrives while the
+        # first stop is in its grace period: the second stop must still find that helper.
+        write_copy(self.e.state, "fake", self.e.key("--escaped-helper"))
+        s = Session(self.e, "fake", 1, "--escaped-helper", extra_env={"PI_MCP_LAZY_GRACE": None})
+        self.addCleanup(s.close)
+        s.initialize()
+        self.assertEqual(text_of(s.call("echo", {"text": "x"})), "echo:x")
+        self.assertTrue(wait_until(lambda: (self.e.fdir / "helper.pid").exists(), timeout=10))
+        self._signal_during_cleanup(s, "idle stop with an escaped helper")
+
+    def test_interrupted_refresh_does_not_leave_the_server_running(self):
+        cmd = [sys.executable, STANDIN, "--refresh", "fake", "--"] + self.e.fake_cmd("--ignore-term", "--start-delay", "60")
+        p = subprocess.Popen(cmd, env=self.e.env(PI_MCP_LAZY_GRACE=None), stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self.addCleanup(lambda: p.poll() is None and p.kill())
+        self.assertTrue(wait_until(lambda: len(procs(self.e.marker)) >= 1, timeout=15), "refresh did not start the server")
+        time.sleep(0.5)
+        t0 = time.time()
+        p.send_signal(signal.SIGTERM)
+        p.wait(timeout=10)
+        left = procs(self.e.marker)
+        self.assertEqual(left, [], "refresh interrupted by SIGTERM left the server running: %r" % left)
+        self.assertLess(time.time() - t0, 2.4)
+
     def test_stdin_close_leaves_nothing(self):
         self._exit_leaves_nothing(lambda s: s.p.stdin.close())
 

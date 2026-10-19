@@ -142,7 +142,7 @@ def canon_tools(tools_raw):
 def descendants(pid):
     import subprocess
     try:
-        out = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=5).stdout
+        out = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=1).stdout
     except Exception:
         return []
     kids = {}
@@ -178,6 +178,7 @@ class Child:
     def __init__(self, owner, name, cmd):
         self.owner, self.name = owner, name
         self.stopping = False
+        self.tree = set()  # descendants seen by any stop() so far: a later stop must still reach those that were re-parented
         self.err = bytearray()
         self.cond = threading.Condition()
         self.internal = {}
@@ -190,8 +191,19 @@ class Child:
             raise StartError("MCP server '%s' failed to start: command not found: %s" % (name, cmd[0]))
         except OSError as e:
             raise StartError("MCP server '%s' failed to start: %s" % (name, e))
-        threading.Thread(target=self._read_out, daemon=True).start()
-        threading.Thread(target=self._read_err, daemon=True).start()
+        try:
+            pause = float(os.environ.get("PI_MCP_LAZY_TEST_PAUSE_AFTER_SPAWN", "0"))  # test hook: widens the spawn window
+            if pause > 0:
+                time.sleep(pause)
+            threading.Thread(target=self._read_out, daemon=True).start()
+            threading.Thread(target=self._read_err, daemon=True).start()
+        except BaseException:
+            # the server exists but nobody owns it yet: do not leave it behind
+            try:
+                os.killpg(self.proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            raise
 
     def _read_out(self):
         try:
@@ -271,7 +283,13 @@ class Child:
         again = self.stopping  # a second stop while one is running: the caller (Pi's SIGTERM) is already short of time
         self.stopping = True
         pid = self.proc.pid
-        tree = descendants(pid)
+        if again:  # do not spend time on anything before the kill
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        self.tree |= set(descendants(pid))  # accumulated: the first stop's snapshot survives into a second, re-entrant stop
+        tree = self.tree
         try:
             self.proc.stdin.close()
         except Exception:
@@ -292,7 +310,7 @@ class Child:
                 os.killpg(pid, sig)
             except (ProcessLookupError, PermissionError):
                 pass
-            for p in tree:
+            for p in list(tree):
                 try:
                     os.kill(p, sig)
                 except (ProcessLookupError, PermissionError):
@@ -322,6 +340,9 @@ class Lazy:
         self.server_pending = set()
         self.last = time.time()
         self.closing = False
+        self.spawning = False
+        self.exit_requested = 0
+        self.exit_code = 0
         self.seq = 0
 
     # ---- output to Pi
@@ -472,17 +493,23 @@ class Lazy:
         if self.child:
             self.child.stop()
             self.child = None
-        child = Child(self, self.name, self.cmd)
-        self.child = child
+        # A signal handler must not run between the server being spawned and self.child being set: it would find no child and
+        # exit with the server running in its own group. While spawning, the handler only records the request.
+        self.spawning = True
+        try:
+            child = Child(self, self.name, self.cmd)
+            self.child = child
+        finally:
+            self.spawning = False
+        if self.exit_requested:
+            self.exit_now(self.exit_requested)
         try:
             return self.handshake(child)
         except BaseException as e:
             # self.child stays set until stop() has finished: a SIGTERM from Pi arriving during the stop must still find the
             # child and send it SIGKILL (shutdown() / Child.stop() second call), not exit with the server still running.
-            try:
-                child.stop()
-            finally:
-                self.child = None
+            child.stop()
+            self.child = None
             if isinstance(e, StartError) or not isinstance(e, Exception):
                 raise
             raise StartError("MCP server '%s' failed to start: %s" % (self.name, e))
@@ -637,14 +664,24 @@ class Lazy:
             if self.child is c:
                 self.child = None
 
-    def serve(self):
-        threading.Thread(target=self.watch, daemon=True).start()
+    def exit_now(self, signum):
+        self.shutdown()
+        os._exit(self.exit_code)
+
+    def install_signal_handlers(self, exit_code):
+        self.exit_code = exit_code
 
         def on_signal(signum, frame):
-            self.shutdown()
-            os._exit(0)
+            if self.spawning:  # between spawn and registration: finish registering, then exit_now (see ensure_child)
+                self.exit_requested = signum
+                return
+            self.exit_now(signum)
         for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(s, on_signal)
+
+    def serve(self):
+        threading.Thread(target=self.watch, daemon=True).start()
+        self.install_signal_handlers(0)
         try:
             for line in iter(sys.stdin.buffer.readline, b""):
                 line = line.strip()
@@ -656,6 +693,7 @@ class Lazy:
 
 def refresh(name, cmd):
     lz = Lazy(name, 0, cmd, refresh_mode=True)
+    lz.install_signal_handlers(1)  # an interrupted refresh (apply, Ctrl-C) must not leave the server it started running
     lz.cache = lz.load()
     try:
         with lz.lock:

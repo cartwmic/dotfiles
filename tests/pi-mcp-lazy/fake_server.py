@@ -15,6 +15,7 @@ ap.add_argument("--toolset", default="a")
 ap.add_argument("--grandchild", action="store_true")
 ap.add_argument("--crash-file", default="")
 ap.add_argument("--noise", action="store_true")
+ap.add_argument("--escaped-helper", action="store_true", help="start a SIGTERM-ignoring helper in its own session; the server itself exits on SIGTERM")
 ap.add_argument("--ignore-term", action="store_true", help="ignore SIGTERM (server and grandchild), so only SIGKILL stops them")
 ap.add_argument("--resources", action="store_true")
 ap.add_argument("--start-delay", type=float, default=0)
@@ -36,6 +37,15 @@ if a.ignore_term:
     def _term(signum, frame):  # note it (a test waits for this), then ignore it
         open(os.path.join(a.dir, "term.seen"), "w").write("1")
     signal.signal(signal.SIGTERM, _term)
+if a.escaped_helper:
+    import signal
+    def _exit_on_term(signum, frame):
+        open(os.path.join(a.dir, "term.seen"), "w").write("1")
+        os._exit(0)
+    signal.signal(signal.SIGTERM, _exit_on_term)
+    h = subprocess.Popen([sys.executable, "-c", "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(300)", a.marker + "-helper"],
+                         start_new_session=True)
+    open(os.path.join(a.dir, "helper.pid"), "w").write(str(h.pid))
 time.sleep(a.start_delay)
 open(os.path.join(a.dir, "server.pid"), "w").write(str(os.getpid()))
 with open(os.path.join(a.dir, "events.log"), "a") as f:
