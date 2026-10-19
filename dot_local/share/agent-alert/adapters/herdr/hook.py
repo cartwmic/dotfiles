@@ -8,17 +8,35 @@ into at most one `agent-alert emit` call, with a worker (the pane id), a kind
 and a context (workspace id, workspace label, agent name). It sends no message
 text:
 
-    status blocked        -> kind blocked
+    status blocked        -> kind blocked, unless a Pi async subagent is the cause (below)
     status idle or done   -> kind question if the pane's last lines hold a line
-                             starting with AWAITING-OWNER:, else kind finished
+                             starting with AWAITING-OWNER: (and not a filler such as
+                             "none yet"); else nothing while a subagent still runs in
+                             the pane (below); else kind finished
     status working/other  -> nothing (the pane is still noted as having an agent)
     pane exited or closed -> kind exited, only if this pane was seen with an agent
 
-The one place it looks at a pane is that marker check (a worker whose turn ends
-waiting on the owner prints a line starting with AWAITING-OWNER:). It reads the
-last lines of the pane with `herdr pane read`, searches them for the marker and
-keeps only the yes or no: no pane text is stored, logged, put in the inbox or
-sent. If the read fails the event is a plain finished.
+Pi's subagent extension publishes the pane's running subagents as Herdr pane state
+labels ("⏳ 2 subagents (scout, worker)", with a trailing "⚠" while one of them needs
+attention, which includes a subagent waiting on contact_supervisor). Herdr puts those
+labels in the event (state_labels) and fires a new status event whenever they change
+or expire. That is the whole subagent signal; no pane text is searched for it.
+
+* A finished event whose pane still shows a running subagent is held, that is, not
+  emitted. Herdr fires another status event when the label clears; that one has no
+  running subagent and emits the finished. No timer or process is needed.
+* A blocked event whose pane shows a running subagent is dropped when the subagent
+  is flagged for attention (the worker answers those itself). The flag follows the
+  blocked report by a moment, so the hook looks at the pane again for up to
+  BLOCKED_SETTLE_SECONDS. Any other blocked event is emitted.
+* A question is never held or dropped, whatever the labels say.
+
+The places it looks at a pane are the marker check and, for a blocked event with a
+subagent running, the label recheck. The marker check (a worker whose turn ends waiting
+on the owner prints a line starting with AWAITING-OWNER:) reads the last lines of the
+pane with `herdr pane read`, searches them for a marker line that is not a filler and
+keeps only the yes or no: no pane text is stored, logged, put in the inbox or sent. If
+the read fails the event is a plain finished.
 
 It decides from the event's own status only and keeps no ordering state, so a
 hook that runs late or out of order cannot make it skip a completion; the price
@@ -41,6 +59,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -51,9 +70,21 @@ EMIT_TIMEOUT_SECONDS = 30
 # A worker whose turn ends waiting on the owner prints a line that starts with this
 # marker (after at most a few decoration characters such as a bullet or a box edge).
 # Only the marker is matched; whatever follows it is never read out.
-QUESTION_MARKER = re.compile(r"^[^\w\n]{0,8}AWAITING-OWNER:", re.MULTILINE)
+# What follows the marker is looked at only to tell a real question from a status filler
+# ("AWAITING-OWNER: none yet"); it is never kept.
+QUESTION_MARKER = re.compile(r"^[^\w\n]{0,8}AWAITING-OWNER:[ \t]*(.*)$", re.MULTILINE)
+QUESTION_FILLER = re.compile(r"[\W_]*none(?:\s+yet)?[\W_]*", re.IGNORECASE)
 PANE_READ_LINES = 30
 PANE_READ_TIMEOUT_SECONDS = 5
+PANE_GET_TIMEOUT_SECONDS = 5
+
+# Pane state labels from Pi's subagent extension: "⏳ N subagent(s) ..." while any runs,
+# ending in "⚠" while one needs attention.
+SUBAGENT_LABEL = re.compile(r"^\u23f3 \d+ subagents?\b")
+ATTENTION_MARK = "\u26a0"
+# How long a blocked event with a subagent running waits for the attention flag to appear.
+BLOCKED_SETTLE_SECONDS = 3.0
+BLOCKED_SETTLE_POLL_SECONDS = 0.5
 
 STATUS_EVENT = "pane.agent_status_changed"
 DETECTED_EVENT = "pane.agent_detected"
@@ -106,8 +137,54 @@ def take_presence(environment, pane):
     return agent
 
 
+def subagent_state(labels):
+    """(running, needs_attention) from a pane's state_labels (a dict of status -> text, or anything)."""
+    running = attention = False
+    if isinstance(labels, dict):
+        for value in labels.values():
+            if isinstance(value, str) and SUBAGENT_LABEL.match(value):
+                running = True
+                attention = attention or value.rstrip().endswith(ATTENTION_MARK)
+    return running, attention
+
+
+def herdr_pane_labels(environment, pane):
+    """The pane's current state_labels from `herdr pane get`. Raises on any failure."""
+    herdr = environment.get("HERDR_BIN_PATH") or "herdr"
+    result = subprocess.run(
+        [herdr, "pane", "get", pane],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=PANE_GET_TIMEOUT_SECONDS,
+        env=environment,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("herdr pane get exited %d" % result.returncode)
+    return json.loads(result.stdout.decode("utf-8", "replace"))["result"]["pane"].get("state_labels")
+
+
+def subagent_needs_attention(environment, pane):
+    """True once the pane shows a running subagent flagged for attention, within the settle time.
+
+    False as soon as the pane shows no running subagent, when the time is up, or if the pane cannot be read.
+    """
+    deadline = time.monotonic() + BLOCKED_SETTLE_SECONDS
+    while True:
+        try:
+            running, attention = subagent_state(herdr_pane_labels(environment, pane))
+        except Exception as error:  # noqa: BLE001 - unsure means the blocked event is sent
+            note("cannot recheck pane %s for a subagent (%s); sending blocked" % (pane, type(error).__name__))
+            return False
+        if attention:
+            return True
+        if not running or time.monotonic() >= deadline:
+            return False
+        time.sleep(BLOCKED_SETTLE_POLL_SECONDS)
+
+
 def pane_awaits_owner(environment, pane):
-    """True if the last lines of the pane hold the question marker. Raises on any failure to read."""
+    """True if the last lines of the pane hold a question marker line. Raises on any failure to read."""
     herdr = environment.get("HERDR_BIN_PATH") or "herdr"
     result = subprocess.run(
         [herdr, "pane", "read", pane, "--source", "recent-unwrapped", "--lines", str(PANE_READ_LINES)],
@@ -119,7 +196,8 @@ def pane_awaits_owner(environment, pane):
     )
     if result.returncode != 0:
         raise RuntimeError("herdr pane read exited %d" % result.returncode)
-    return QUESTION_MARKER.search(result.stdout.decode("utf-8", "replace")) is not None
+    text = result.stdout.decode("utf-8", "replace")
+    return any(not QUESTION_FILLER.fullmatch(match.group(1)) for match in QUESTION_MARKER.finditer(text))
 
 
 def build_context(environment, data, agent):
@@ -167,12 +245,20 @@ def handle(environment):
         except Exception as error:  # noqa: BLE001 - presence must not stop the alert
             note("cannot record presence of pane %s: %s" % (pane, error))
         kind = STATUS_TO_KIND.get(data.get("agent_status"))
+        running, attention = subagent_state(data.get("state_labels"))
         if kind == "finished":
+            asking = None  # None: could not tell, which is never a reason to hold
             try:
-                if pane_awaits_owner(environment, pane):
-                    kind = "question"
+                asking = pane_awaits_owner(environment, pane)
             except Exception as error:  # noqa: BLE001 - the marker is a refinement: keep finished
                 note("cannot check pane %s for the question marker (%s); sending finished" % (pane, type(error).__name__))
+            if asking:
+                kind = "question"
+            elif asking is False and running:
+                kind = None  # held: Herdr fires another status event when the subagent label clears
+        elif kind == "blocked" and running:
+            if attention or subagent_needs_attention(environment, pane):
+                kind = None  # a subagent is waiting on its supervisor, which is this worker
         if kind:
             emit(environment, pane, kind, build_context(environment, data, agent))
     elif name == DETECTED_EVENT:

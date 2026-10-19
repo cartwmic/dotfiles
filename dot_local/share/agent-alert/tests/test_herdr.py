@@ -60,10 +60,20 @@ def utc_now_string():
 # ------------------------------------------------------------ direct hook runs
 
 FAKE_HERDR = """#!/bin/sh
-# Stand-in for the herdr binary. Every call is recorded. Only `pane read` is answered: with the
+# Stand-in for the herdr binary. Every call is recorded. `pane read` is answered with the
 # text in $FAKE_HERDR_PANE_TEXT (nothing if there is no such file), or with a failure
-# ($FAKE_HERDR_MODE=fail) or a hang ($FAKE_HERDR_MODE=hang). Anything else is refused.
+# ($FAKE_HERDR_MODE=fail) or a hang ($FAKE_HERDR_MODE=hang). `pane get` is answered with the
+# Nth file get-N.json of $FAKE_HERDR_GET_DIR for its Nth call (the last file once they run
+# out; a failure if there is none). Anything else is refused.
 echo "$*" >> "$FAKE_HERDR_CALLS"
+if [ "$1 $2" = "pane get" ]; then
+  [ "$FAKE_HERDR_MODE" = "fail" ] && exit 1
+  n=$(grep -c '^pane get' "$FAKE_HERDR_CALLS")
+  while [ ! -f "$FAKE_HERDR_GET_DIR/get-$n.json" ] && [ "$n" -gt 1 ]; do n=$((n - 1)); done
+  [ -f "$FAKE_HERDR_GET_DIR/get-$n.json" ] || exit 1
+  cat "$FAKE_HERDR_GET_DIR/get-$n.json"
+  exit 0
+fi
 if [ "$1 $2" = "pane read" ]; then
   case "$FAKE_HERDR_MODE" in
     fail) echo "SECRET-PANE-TEXT-ON-STDERR" >&2; exit 1 ;;
@@ -90,7 +100,17 @@ class DirectHarness:
         self.fake_herdr.write_text(FAKE_HERDR)
         self.fake_herdr.chmod(self.fake_herdr.stat().st_mode | stat.S_IXUSR)
         self.pane_text_file = self.scratch.root / "pane-text.txt"
+        self.get_dir = self.scratch.root / "pane-get"
+        self.get_dir.mkdir()
         self.mode = ""
+
+    def pane_get(self, *label_sets):
+        """What the scripted herdr prints for the 1st, 2nd, ... `pane get`: each a state_labels dict."""
+        for number, labels in enumerate(label_sets, 1):
+            pane = {"pane_id": "w1:p1", "agent_status": "blocked"}
+            if labels is not None:
+                pane["state_labels"] = labels
+            (self.get_dir / ("get-%d.json" % number)).write_text(json.dumps({"result": {"pane": pane}}), encoding="utf-8")
 
     def show(self, text):
         """What the scripted herdr prints for `pane read`."""
@@ -102,11 +122,13 @@ class DirectHarness:
         except FileNotFoundError:
             return []
 
-    def environment(self, event, pane, status=None, agent="pi", workspace="w1", label="main-ws", released=False):
+    def environment(self, event, pane, status=None, agent="pi", workspace="w1", label="main-ws", released=False, labels=None):
         name = event.replace(".", "_")
         data = {"type": name, "pane_id": pane, "workspace_id": workspace}
         if status is not None:
             data["agent_status"] = status
+        if labels is not None:
+            data["state_labels"] = labels
         if agent is not None:
             data["agent"] = agent
         if released:
@@ -123,6 +145,7 @@ class DirectHarness:
             HERDR_BIN_PATH=str(self.fake_herdr),
             FAKE_HERDR_CALLS=str(self.calls_file),
             FAKE_HERDR_PANE_TEXT=str(self.pane_text_file),
+            FAKE_HERDR_GET_DIR=str(self.get_dir),
             FAKE_HERDR_MODE=self.mode,
         )
         environment["PATH"] = str(self.scratch.root) + os.pathsep + environment["PATH"]
@@ -298,10 +321,12 @@ class HookDirectTests(unittest.TestCase):
         source = self.h.hook.read_text(encoding="utf-8")
         for forbidden in ("agent read", "--summary", "PLACEHOLDER", "send-text", "send-keys", "report-agent"):
             self.assertNotIn(forbidden, source)
-        self.assertEqual(re.findall(r"subprocess\.run", source), ["subprocess.run"] * 2)  # the emit and the read
+        self.assertEqual(re.findall(r"subprocess\.run", source), ["subprocess.run"] * 3)  # the emit, the read and the label recheck
         self.assertEqual(source.count('"emit"'), 1)
         self.assertEqual(source.count('"pane", "read"'), 1)
+        self.assertEqual(source.count('"pane", "get"'), 1)
         self.assertEqual(source.count("pane_awaits_owner("), 2)  # its definition and its one use
+        self.assertEqual(source.count("herdr_pane_labels("), 2)  # its definition and its one use
 
     # ------------------------------------------------------------ question kind
 
@@ -399,6 +424,141 @@ class HookDirectTests(unittest.TestCase):
         self.h.show("done, nothing to ask\n")
         self.assertQuietSuccess(self.h.status("w1:p1", "idle"))
         self.assertEqual(self.h.kinds(), ["question", "finished"])
+
+    # ------------------------------------------- filler is not a question
+
+    def test_a_status_filler_after_the_marker_is_not_a_question(self):
+        for line in ("AWAITING-OWNER: none yet", "AWAITING-OWNER: none", "AWAITING-OWNER: None.", "AWAITING-OWNER:   NONE YET  ",
+                     "\u25cf AWAITING-OWNER: **none yet**", "AWAITING-OWNER: none yet \u2502"):
+            with self.subTest(line=line):
+                self.h.scratch.inbox.unlink(missing_ok=True)
+                self.question_events("work goes on\n%s\n" % line)
+                self.assertEqual(self.h.kinds(), ["finished"])
+
+    def test_text_that_only_starts_with_none_or_is_empty_stays_a_question(self):
+        for line in ("AWAITING-OWNER: none of the options work, pick one", "AWAITING-OWNER: nonexistent table?",
+                     "AWAITING-OWNER: need a none-yet decision", "AWAITING-OWNER:", "AWAITING-OWNER: which database?"):
+            with self.subTest(line=line):
+                self.h.scratch.inbox.unlink(missing_ok=True)
+                self.question_events("%s\n" % line)
+                self.assertEqual(self.h.kinds(), ["question"])
+
+    def test_a_filler_line_does_not_hide_a_real_marker_line(self):
+        self.question_events("AWAITING-OWNER: none yet\nlater\nAWAITING-OWNER: pick a database\n")
+        self.assertEqual(self.h.kinds(), ["question"])
+
+    # ------------------------------------------------- subagent noise (Herdr state labels)
+
+    RUNNING = {"idle": "\u23f3 1 subagent (scout)", "done": "\u23f3 1 subagent (scout)", "working": "\u23f3 1 subagent (scout)"}
+    FLAGGED = {key: value + " \u26a0" for key, value in RUNNING.items()}
+
+    def test_finished_is_held_while_a_subagent_runs_and_sent_when_the_label_clears(self):
+        for status in ("idle", "done"):
+            self.h.show("All done for now.\n")
+            self.assertQuietSuccess(self.h.status("w1:p1", status, labels=self.RUNNING))
+        self.assertEqual(self.h.events(), [])  # held
+        self.assertEqual(self.h.calls(), [self.READ_CALL % "w1:p1"] * 2)  # the marker check, no label recheck
+        # Herdr fires another status event when the label clears (or expires): that one is not held
+        self.assertQuietSuccess(self.h.status("w1:p1", "idle"))
+        self.assertEqual(self.h.kinds(), ["finished"])
+        self.assertQuietSuccess(self.h.status("w1:p1", "idle", labels={}))  # an emptied label dict is no subagent either
+        self.assertEqual(self.h.kinds(), ["finished", "finished"])
+
+    def test_finished_is_held_with_the_attention_flag_too(self):
+        self.assertQuietSuccess(self.h.status("w1:p1", "idle", labels=self.FLAGGED))
+        self.assertEqual(self.h.events(), [])
+
+    def test_a_question_is_never_held_while_a_subagent_runs(self):
+        for labels in (self.RUNNING, self.FLAGGED):
+            self.h.scratch.inbox.unlink(missing_ok=True)
+            self.h.show("AWAITING-OWNER: which database?\n")
+            started = time.monotonic()
+            self.assertQuietSuccess(self.h.status("w1:p1", "idle", labels=labels))
+            self.assertLess(time.monotonic() - started, 2)  # rung at once: no settle wait, no hold
+            [event] = self.h.events()
+            self.assertEqual(event["kind"], "question")
+            self.assertEqual(event["context"], {"workspace_id": "w1", "workspace_label": "main-ws", "agent": "pi"})
+
+    def test_a_filler_marker_with_a_running_subagent_is_held_like_any_finished(self):
+        self.h.show("AWAITING-OWNER: none yet\n")
+        self.assertQuietSuccess(self.h.status("w1:p1", "idle", labels=self.RUNNING))
+        self.assertEqual(self.h.events(), [])
+
+    def test_an_unreadable_pane_never_holds_a_finished(self):
+        self.h.mode = "fail"
+        result = self.h.status("w1:p1", "idle", labels=self.RUNNING)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("cannot check pane w1:p1", result.stderr)
+        self.assertEqual(self.h.kinds(), ["finished"])  # it could be a question: say so, do not hold
+
+    def test_a_label_that_is_not_a_subagent_label_holds_nothing(self):
+        for labels in ({"idle": "reviewing"}, {"idle": "\u23f3 waiting"}, {"idle": "2 subagents"}, {"idle": 7}, "\u23f3 1 subagent", ["\u23f3 1 subagent"]):
+            with self.subTest(labels=labels):
+                self.h.scratch.inbox.unlink(missing_ok=True)
+                self.assertQuietSuccess(self.h.status("w1:p1", "idle", labels=labels))
+                self.assertEqual(self.h.kinds(), ["finished"])
+
+    def test_blocked_by_a_flagged_subagent_is_dropped_at_once(self):
+        self.assertQuietSuccess(self.h.status("w1:p1", "blocked", labels=self.FLAGGED))
+        self.assertEqual(self.h.events(), [])
+        self.assertEqual(self.h.calls(), [])  # the event itself said so: no recheck, no read
+
+    def test_blocked_with_a_subagent_flagged_a_moment_later_is_dropped(self):
+        # Pi reports "blocked" first and the attention flag follows: the hook looks again.
+        self.h.pane_get(self.RUNNING, self.RUNNING, self.FLAGGED)
+        started = time.monotonic()
+        result = self.h.status("w1:p1", "blocked", labels=self.RUNNING)
+        self.assertQuietSuccess(result)
+        self.assertEqual(self.h.events(), [])
+        self.assertEqual(self.h.calls(), ["pane get w1:p1"] * 3)
+        self.assertLess(time.monotonic() - started, 3.0)
+
+    def test_blocked_with_a_running_subagent_but_no_flag_is_sent_after_the_settle_time(self):
+        self.h.pane_get(self.RUNNING)
+        started = time.monotonic()
+        self.assertQuietSuccess(self.h.status("w1:p1", "blocked", labels=self.RUNNING))
+        self.assertGreaterEqual(time.monotonic() - started, 2.5)
+        self.assertLess(time.monotonic() - started, 15)
+        self.assertEqual(self.h.kinds(), ["blocked"])  # some other cause: the owner is told
+        self.assertGreaterEqual(len(self.h.calls()), 3)
+        self.assertTrue(all(call == "pane get w1:p1" for call in self.h.calls()))
+
+    def test_blocked_is_sent_at_once_when_the_subagent_is_gone_by_the_recheck(self):
+        self.h.pane_get({}, None)
+        started = time.monotonic()
+        self.assertQuietSuccess(self.h.status("w1:p1", "blocked", labels=self.RUNNING))
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(self.h.kinds(), ["blocked"])
+        self.assertEqual(self.h.calls(), ["pane get w1:p1"])
+
+    def test_blocked_is_sent_when_the_recheck_fails(self):
+        self.h.mode = "fail"
+        result = self.h.status("w1:p1", "blocked", labels=self.RUNNING)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("cannot recheck pane w1:p1", result.stderr)
+        self.assertEqual(self.h.kinds(), ["blocked"])
+
+    def test_blocked_without_a_subagent_is_sent_at_once_and_never_rechecked(self):
+        for labels in (None, {}, {"idle": "reviewing"}):
+            self.h.scratch.inbox.unlink(missing_ok=True)
+            started = time.monotonic()
+            self.assertQuietSuccess(self.h.status("w1:p1", "blocked", labels=labels))
+            self.assertLess(time.monotonic() - started, 2)
+            self.assertEqual(self.h.kinds(), ["blocked"])
+        self.assertEqual(self.h.calls(), [])
+
+    def test_exit_is_sent_whatever_the_labels_say(self):
+        self.assertQuietSuccess(self.h.status("w1:p1", "working", labels=self.RUNNING))
+        self.assertQuietSuccess(self.h.closed("w1:p1", labels=self.FLAGGED))
+        self.assertEqual(self.h.kinds(), ["exited"])
+
+    def test_the_labels_never_reach_the_inbox(self):
+        secret = {"idle": "\u23f3 1 subagent (SECRET-AGENT-NAME)"}
+        self.h.pane_get(secret)
+        self.assertQuietSuccess(self.h.status("w1:p1", "blocked", labels=secret))  # sent after the settle time
+        self.assertQuietSuccess(self.h.status("w1:p2", "idle", labels=secret))
+        self.assertEqual(self.h.kinds(), ["blocked"])
+        self.assertNotIn("SECRET", self.h.scratch.inbox_bytes().decode("utf-8") + self.h.scratch.log_text())
 
     # ---------------------------------------------------------- containment
 
@@ -614,6 +774,21 @@ class ScratchHerdr:
     def report(self, pane, state):
         self.herdr("pane", "report-agent", pane, "--source", "t2h", "--agent", "pi", "--state", state)
 
+    _label_seq = 0
+
+    def subagent_label(self, pane, text=None, ttl_ms=600000):
+        """Publish (or with text=None clear) Pi's subagent state labels on the pane, as pi-subagents does."""
+        ScratchHerdr._label_seq += 1
+        args = ["pane", "report-metadata", pane, "--source", "t2h-labels", "--agent", "pi", "--applies-to-source", "t2h",
+                "--seq", str(ScratchHerdr._label_seq)]
+        if text is None:
+            args.append("--clear-state-labels")
+        else:
+            for state in ("idle", "done", "working"):
+                args += ["--state-label", "%s=%s" % (state, text)]
+            args += ["--ttl-ms", str(ttl_ms)]
+        self.herdr(*args)
+
     def show_text(self, pane, text, wait_for):
         """Make the pane's terminal show `text` (written to a file and cat'ed), and wait until it does."""
         fixture = self.root / ("fixture-%s.txt" % quote(pane, safe=""))
@@ -771,6 +946,66 @@ class HerdrServerTests(unittest.TestCase):
         raw = server.core_scratch.inbox_bytes().decode()
         for text in ("QUESTION-BODY", "choose a database", "AWAITING"):
             self.assertNotIn(text, raw)
+        for entry in server.plugin_logs():
+            self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
+
+    def wait_for_kinds(self, pane, kinds, timeout=20):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.server.settle(quiet_seconds=0.5)
+            if [e["kind"] for e in self.events_for(pane)] == kinds:
+                return
+            time.sleep(0.3)
+        self.assertEqual([e["kind"] for e in self.events_for(pane)], kinds)
+
+    def test_finished_is_held_while_a_subagent_label_shows_and_sent_when_it_clears_or_expires(self):
+        server = self.server
+        server.link_adapter()
+        cleared, _ = server.new_pane("ws-sub-clear")
+        expiring, _ = server.new_pane("ws-sub-ttl")
+        asking, _ = server.new_pane("ws-sub-ask")
+        plain, _ = server.new_pane("ws-sub-none")
+        for pane in (cleared, expiring, asking, plain):
+            server.report(pane, "working")
+        for pane in (cleared, asking):
+            server.subagent_label(pane, "\u23f3 1 subagent (scout)")
+        server.subagent_label(expiring, "\u23f3 2 subagents (scout, worker)", ttl_ms=6000)
+        server.show_text(asking, "\u276f go\nAWAITING-OWNER: which database?\n", "AWAITING-OWNER:")
+        for pane in (cleared, expiring, asking, plain):
+            server.report(pane, "idle")
+        server.settle()
+        self.assertEqual([e["kind"] for e in self.events_for(plain)], ["finished"])
+        self.assertEqual([e["kind"] for e in self.events_for(asking)], ["question"])  # never held
+        self.assertEqual(self.events_for(cleared), [])  # held
+        # the label clears: Herdr fires a status event with no label, and the finished goes out
+        server.subagent_label(cleared, None)
+        self.wait_for_kinds(cleared, ["finished"])
+        # the label expires (Pi died with a subagent running): the same
+        self.wait_for_kinds(expiring, ["finished"], timeout=30)
+        for entry in server.plugin_logs():
+            self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
+
+    def test_blocked_by_a_flagged_subagent_is_dropped_and_another_block_is_sent(self):
+        server = self.server
+        server.link_adapter()
+        flagged, _ = server.new_pane("ws-blk-sub")
+        other, _ = server.new_pane("ws-blk-other")
+        running, _ = server.new_pane("ws-blk-running")
+        for pane in (flagged, other, running):
+            server.report(pane, "working")
+        for pane in (flagged, running):
+            server.subagent_label(pane, "\u23f3 1 subagent (scout)")
+        # the subagent calls contact_supervisor: blocked first, the attention flag a moment later
+        server.report(flagged, "blocked")
+        server.subagent_label(flagged, "\u23f3 1 subagent (scout) \u26a0")
+        # a block with no subagent label at all
+        server.report(other, "blocked")
+        # a block while a subagent runs unflagged
+        server.report(running, "blocked")
+        server.settle(quiet_seconds=4.5)
+        self.assertEqual(self.events_for(flagged), [])
+        self.assertEqual([e["kind"] for e in self.events_for(other)], ["blocked"])
+        self.assertEqual([e["kind"] for e in self.events_for(running)], ["blocked"])
         for entry in server.plugin_logs():
             self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
 

@@ -74,8 +74,8 @@ Format version 1 defines exactly these kinds:
 | Kind | Meaning |
 |---|---|
 | `finished` | The agent's turn ended normally. A source that cannot tell that a turn ended by asking the owner something sends `finished` for it; the event never carries the question. |
-| `question` | The agent's turn ended waiting on the owner's answer. How a source knows is its own business (the Herdr adapter looks for a marker line the worker prints). The event does not carry the question. |
-| `blocked` | The agent is waiting on an approval or input before it can continue. |
+| `question` | The agent's turn ended waiting on the owner's answer. How a source knows is its own business (the Herdr adapter looks for a marker line the worker prints, and ignores a status filler such as `AWAITING-OWNER: none yet`). A source never holds or drops a `question`. The event does not carry the question. |
+| `blocked` | The agent is waiting on an approval or input before it can continue. A source may leave out a block that the agent's own supervisor answers (the Herdr adapter drops one caused by a Pi async subagent) and may hold a `finished` while the agent still has work running in a helper (the Herdr adapter holds it until the helper ends). |
 | `errored` | The agent's turn ended on a failure such as an API error or a rate limit, and the agent did not complete its work. |
 | `exited` | The agent's process or session is gone. |
 
