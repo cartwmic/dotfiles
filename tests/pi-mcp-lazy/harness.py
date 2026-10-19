@@ -61,7 +61,7 @@ class Env:
         e = dict(os.environ, PI_MCP_LAZY_STATE_DIR=str(self.state), PI_MCP_LAZY_SEED_DIR=str(self.seed),
                  PI_MCP_LAZY_GRACE="1", PI_MCP_LAZY_START_TIMEOUT="20")
         e.update(extra)
-        return e
+        return {k: v for k, v in e.items() if v is not None}  # a value of None removes the variable (e.g. the production default grace)
 
     def fake_cmd(self, *more):
         return [sys.executable, FAKE, "--dir", str(self.fdir), "--marker", self.marker] + list(more)

@@ -273,7 +273,7 @@ class World:
             wrapper.chmod(0o755)
             binp = str(wrapper)
         self.env = {"PATH": os.environ["PATH"], "HOME": str(self.home), "PI_CODING_AGENT_DIR": str(self.agent), "PI_OFFLINE": "1",
-                    "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0", "PI_MCP_LAZY_GRACE": "1", "PI_MCP_LAZY_START_TIMEOUT": "30"}
+                    "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0", "PI_MCP_LAZY_START_TIMEOUT": "30"}
         self.env.update(extra_env or {})
         apply_env = dict(self.env, AGENT_HARNESS_CANONICAL_ROOT=str(canon), AGENT_HARNESS_GENERATED_ROOT=str(self.tmp / "generated"),
                          AGENT_HARNESS_ADAPTERS_ROOT=str(self.tmp / "adapters"), AGENT_HARNESS_EXTERNAL_ROOT=str(self.tmp / "ext"),
@@ -779,11 +779,17 @@ def real_calls(root, port):
             rpc.close()
         except Exception:
             pass
-        tool.kill_owned(marker, None)
+        # judge Pi's own shutdown first, with the production grace; only then clean up whatever it left
+        left = []
+        try:
+            wait_until(lambda: not tool.owned_set(tool.ps_table(), marker, None), 15)
+            left = tool.owned_set(tool.ps_table(), marker, None)
+        finally:
+            tool.kill_owned(marker, None)
 
-    @check("real servers: nothing left running after Pi exits")
+    @check("real servers: nothing left running after Pi exits (checked before any cleanup helper runs)")
     def gone():
-        require(wait_until(lambda: not tool.owned_set(tool.ps_table(), marker, None), 15), "marker-owned processes remain")
+        require(not left, "marker-owned processes remained after Pi exited: %r" % (left,))
     gone()
 
 
