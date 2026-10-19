@@ -508,10 +508,11 @@ class ReadmeStructureTests(unittest.TestCase):
 
     def test_readme_states_the_herdr_and_doorbell_facts(self):
         herdr = " ".join(re.sub(r"[`*]", "", sections(self.readme)["Herdr source adapter"]).split())
-        for phrase in ("herdr plugin link", "errored is never emitted", "no error status", "no message text", "reads the named pane", "Duplicate and late events are accepted"):
+        for phrase in ("herdr plugin link", "errored is never emitted", "no error status", "no message text", "reads the named pane", "Duplicate and late events are accepted", "The question marker", "AWAITING-OWNER:"):
             self.assertIn(phrase, herdr)
         doorbell = sections(self.readme)["Claude doorbell sink"]
-        for phrase in ('"sink"', "AGENT_ALERT_DOORBELL_SESSION", "fixed 4 seconds", "claude exited with status N"):
+        for phrase in ('"sink"', "AGENT_ALERT_DOORBELL_SESSION", "fixed 4 seconds", "claude exited with status N",
+                       "none is dropped", "doorbell.py --flush", "+N more"):
             self.assertIn(phrase, doorbell)
         self.assertNotIn("timeout_seconds", doorbell)
 

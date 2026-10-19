@@ -5,13 +5,20 @@ Herdr runs this script for pane.agent_status_changed, pane.agent_detected,
 pane.exited and pane.closed (see herdr-plugin.toml) and passes the event in the
 environment (HERDR_PLUGIN_EVENT_JSON and friends). The script turns the event
 into at most one `agent-alert emit` call, with a worker (the pane id), a kind
-and a context (workspace id, workspace label, agent name). It never reads the
-pane and sends no message text:
+and a context (workspace id, workspace label, agent name). It sends no message
+text:
 
     status blocked        -> kind blocked
-    status idle or done   -> kind finished
+    status idle or done   -> kind question if the pane's last lines hold a line
+                             starting with AWAITING-OWNER:, else kind finished
     status working/other  -> nothing (the pane is still noted as having an agent)
     pane exited or closed -> kind exited, only if this pane was seen with an agent
+
+The one place it looks at a pane is that marker check (a worker whose turn ends
+waiting on the owner prints a line starting with AWAITING-OWNER:). It reads the
+last lines of the pane with `herdr pane read`, searches them for the marker and
+keeps only the yes or no: no pane text is stored, logged, put in the inbox or
+sent. If the read fails the event is a plain finished.
 
 It decides from the event's own status only and keeps no ordering state, so a
 hook that runs late or out of order cannot make it skip a completion; the price
@@ -31,6 +38,7 @@ Python 3 standard library only. The core is found relative to this file:
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +47,13 @@ from urllib.parse import quote
 CORE = Path(__file__).resolve().parents[2] / "core" / "agent-alert"
 
 EMIT_TIMEOUT_SECONDS = 30
+
+# A worker whose turn ends waiting on the owner prints a line that starts with this
+# marker (after at most a few decoration characters such as a bullet or a box edge).
+# Only the marker is matched; whatever follows it is never read out.
+QUESTION_MARKER = re.compile(r"^[^\w\n]{0,8}AWAITING-OWNER:", re.MULTILINE)
+PANE_READ_LINES = 30
+PANE_READ_TIMEOUT_SECONDS = 5
 
 STATUS_EVENT = "pane.agent_status_changed"
 DETECTED_EVENT = "pane.agent_detected"
@@ -91,6 +106,22 @@ def take_presence(environment, pane):
     return agent
 
 
+def pane_awaits_owner(environment, pane):
+    """True if the last lines of the pane hold the question marker. Raises on any failure to read."""
+    herdr = environment.get("HERDR_BIN_PATH") or "herdr"
+    result = subprocess.run(
+        [herdr, "pane", "read", pane, "--source", "recent-unwrapped", "--lines", str(PANE_READ_LINES)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=PANE_READ_TIMEOUT_SECONDS,
+        env=environment,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("herdr pane read exited %d" % result.returncode)
+    return QUESTION_MARKER.search(result.stdout.decode("utf-8", "replace")) is not None
+
+
 def build_context(environment, data, agent):
     context = {}
     workspace_id = data.get("workspace_id") or environment.get("HERDR_WORKSPACE_ID")
@@ -136,6 +167,12 @@ def handle(environment):
         except Exception as error:  # noqa: BLE001 - presence must not stop the alert
             note("cannot record presence of pane %s: %s" % (pane, error))
         kind = STATUS_TO_KIND.get(data.get("agent_status"))
+        if kind == "finished":
+            try:
+                if pane_awaits_owner(environment, pane):
+                    kind = "question"
+            except Exception as error:  # noqa: BLE001 - the marker is a refinement: keep finished
+                note("cannot check pane %s for the question marker (%s); sending finished" % (pane, type(error).__name__))
         if kind:
             emit(environment, pane, kind, build_context(environment, data, agent))
     elif name == DETECTED_EVENT:

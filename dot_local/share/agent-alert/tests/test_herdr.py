@@ -5,6 +5,11 @@ Run (from the repository root):
     PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
         -s dot_local/share/agent-alert/tests -p 'test_herdr.py'
 
+The hook looks at a pane in exactly one case: a turn that ended (status idle or done)
+is checked for a line starting with AWAITING-OWNER:, which makes the event `question`
+instead of `finished`. The direct tests give it a scripted `herdr` that prints canned
+pane text; the server tests show the text in a real pane.
+
 Two kinds of test, both against the deployed-layout copy that chezmoi archives
 (adapters/ kept; nothing is applied):
 
@@ -55,8 +60,18 @@ def utc_now_string():
 # ------------------------------------------------------------ direct hook runs
 
 FAKE_HERDR = """#!/bin/sh
-# Stand-in for the herdr binary: the hook must never call it, so any call is recorded.
+# Stand-in for the herdr binary. Every call is recorded. Only `pane read` is answered: with the
+# text in $FAKE_HERDR_PANE_TEXT (nothing if there is no such file), or with a failure
+# ($FAKE_HERDR_MODE=fail) or a hang ($FAKE_HERDR_MODE=hang). Anything else is refused.
 echo "$*" >> "$FAKE_HERDR_CALLS"
+if [ "$1 $2" = "pane read" ]; then
+  case "$FAKE_HERDR_MODE" in
+    fail) echo "SECRET-PANE-TEXT-ON-STDERR" >&2; exit 1 ;;
+    hang) exec sleep 60 ;;
+  esac
+  [ -f "$FAKE_HERDR_PANE_TEXT" ] && cat "$FAKE_HERDR_PANE_TEXT"
+  exit 0
+fi
 exit 64
 """
 
@@ -74,6 +89,18 @@ class DirectHarness:
         self.fake_herdr = self.scratch.root / "herdr"
         self.fake_herdr.write_text(FAKE_HERDR)
         self.fake_herdr.chmod(self.fake_herdr.stat().st_mode | stat.S_IXUSR)
+        self.pane_text_file = self.scratch.root / "pane-text.txt"
+        self.mode = ""
+
+    def show(self, text):
+        """What the scripted herdr prints for `pane read`."""
+        self.pane_text_file.write_text(text, encoding="utf-8")
+
+    def calls(self):
+        try:
+            return self.calls_file.read_text().splitlines()
+        except FileNotFoundError:
+            return []
 
     def environment(self, event, pane, status=None, agent="pi", workspace="w1", label="main-ws", released=False):
         name = event.replace(".", "_")
@@ -95,6 +122,8 @@ class DirectHarness:
             HERDR_PLUGIN_STATE_DIR=str(self.state_dir),
             HERDR_BIN_PATH=str(self.fake_herdr),
             FAKE_HERDR_CALLS=str(self.calls_file),
+            FAKE_HERDR_PANE_TEXT=str(self.pane_text_file),
+            FAKE_HERDR_MODE=self.mode,
         )
         environment["PATH"] = str(self.scratch.root) + os.pathsep + environment["PATH"]
         return environment
@@ -247,22 +276,129 @@ class HookDirectTests(unittest.TestCase):
         self.assertEqual(sorted(e["worker"] for e in events if e["kind"] == "finished"), panes)
         self.assertEqual(sorted(e["worker"] for e in events if e["kind"] == "exited"), panes)
 
-    def test_no_pane_is_read_and_no_message_is_sent(self):
+    READ_CALL = "pane read %s --source recent-unwrapped --lines 30"
+
+    def test_only_a_turn_that_ended_reads_the_pane_and_no_message_is_sent(self):
         self.h.detected("w1:p1")
-        self.h.status("w1:p1", "idle")
+        self.h.status("w1:p1", "working")
+        self.h.status("w1:p1", "unknown")
         self.h.status("w1:p1", "blocked")
         self.h.closed("w1:p1")
-        self.assertEqual(self.h.kinds(), ["finished", "blocked", "exited"])
+        self.assertEqual(self.h.calls(), [])  # no read for detection, working, unknown, blocked or exit
+        self.h.detected("w1:p2")
+        self.h.status("w1:p2", "idle")
+        self.h.status("w1:p2", "done")
+        self.assertEqual(self.h.calls(), [self.READ_CALL % "w1:p2"] * 2)
+        self.assertEqual(self.h.kinds(), ["blocked", "exited", "finished", "finished"])
         for event in self.h.events():
             self.assertNotIn("summary", event)
-        self.assertFalse(self.h.calls_file.exists())  # the fake herdr was never called
+            self.assertEqual(list(event)[:5], ["version", "seq", "time", "worker", "kind"])
 
-    def test_hook_source_has_no_pane_read_call(self):
+    def test_hook_source_reads_a_pane_only_for_the_marker(self):
         source = self.h.hook.read_text(encoding="utf-8")
-        for forbidden in ("agent read", '"read"', "pane read", "recent-unwrapped", "--summary", "HERDR_BIN_PATH", "PLACEHOLDER"):
+        for forbidden in ("agent read", "--summary", "PLACEHOLDER", "send-text", "send-keys", "report-agent"):
             self.assertNotIn(forbidden, source)
-        self.assertEqual(re.findall(r"subprocess\.run", source), ["subprocess.run"])  # the one emit call
+        self.assertEqual(re.findall(r"subprocess\.run", source), ["subprocess.run"] * 2)  # the emit and the read
         self.assertEqual(source.count('"emit"'), 1)
+        self.assertEqual(source.count('"pane", "read"'), 1)
+        self.assertEqual(source.count("pane_awaits_owner("), 2)  # its definition and its one use
+
+    # ------------------------------------------------------------ question kind
+
+    def question_events(self, text, status="idle", **options):
+        self.h.show(text)
+        result = self.h.status("w1:p1", status, **options)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def test_marker_line_in_the_last_lines_makes_the_event_a_question(self):
+        result = self.question_events("did the thing\nAWAITING-OWNER: which database?\n")
+        self.assertEqual(result.stderr, "")
+        [event] = self.h.events()
+        self.assertEqual(event["kind"], "question")
+        self.assertEqual(list(event), ["version", "seq", "time", "worker", "kind", "context"])
+        self.assertEqual(event["context"], {"workspace_id": "w1", "workspace_label": "main-ws", "agent": "pi"})
+        self.assertEqual(self.h.calls(), [self.READ_CALL % "w1:p1"])
+
+    def test_done_status_with_the_marker_is_a_question_too(self):
+        self.question_events("AWAITING-OWNER:\n", status="done")
+        self.assertEqual(self.h.kinds(), ["question"])
+
+    def test_no_marker_stays_finished(self):
+        self.question_events("All checks pass. Shall I continue? (that is only prose)\n")
+        self.assertEqual(self.h.kinds(), ["finished"])
+        self.h.show("")
+        self.assertQuietSuccess(self.h.status("w1:p2", "idle"))
+        self.assertEqual(self.h.kinds(), ["finished", "finished"])
+
+    def test_marker_must_start_a_line_after_at_most_a_little_decoration(self):
+        for text in ("\u25cf AWAITING-OWNER: x\n", "  \u2502 AWAITING-OWNER: x\n", "\t- AWAITING-OWNER: x\n", "first\nAWAITING-OWNER: x\nsecond\n"):
+            with self.subTest(text=text):
+                self.h.scratch.inbox.unlink(missing_ok=True)
+                self.question_events(text)
+                self.assertEqual(self.h.kinds(), ["question"])
+        for text in ("I will print AWAITING-OWNER: when done\n", "awaiting-owner: lower case\n", "AWAITING OWNER: no hyphen\n",
+                     "see the AWAITING-OWNER: line\n", "x" * 30 + "AWAITING-OWNER: far from the line start\n", "AWAITING-OWNER\n"):
+            with self.subTest(text=text):
+                self.h.scratch.inbox.unlink(missing_ok=True)
+                self.question_events(text)
+                self.assertEqual(self.h.kinds(), ["finished"])
+
+    def test_blocked_stays_blocked_even_with_the_marker_and_is_not_read(self):
+        self.h.show("AWAITING-OWNER: x\n")
+        self.assertQuietSuccess(self.h.status("w1:p1", "blocked"))
+        self.assertEqual(self.h.kinds(), ["blocked"])
+        self.assertEqual(self.h.calls(), [])
+
+    def test_text_around_the_marker_never_reaches_the_inbox_the_log_or_stderr(self):
+        text = "earlier SECRET-EARLIER-LINE\nAWAITING-OWNER: SECRET-QUESTION-TEXT password=correcthorse2\n"
+        result = self.question_events(text)
+        raw = self.h.scratch.inbox_bytes().decode("utf-8")
+        for secret in ("SECRET", "correcthorse2", "AWAITING-OWNER", "password"):
+            self.assertNotIn(secret, raw + result.stdout + result.stderr + self.h.scratch.log_text())
+        self.assertEqual(self.h.kinds(), ["question"])
+
+    def test_the_marker_is_found_through_the_path_when_herdr_gives_no_binary_path(self):
+        environment = self.h.environment("pane.agent_status_changed", "w1:p1", status="idle")
+        del environment["HERDR_BIN_PATH"]
+        self.h.show("AWAITING-OWNER: x\n")
+        result = self.h.run(None, None, environment=environment)
+        self.assertQuietSuccess(result)
+        self.assertEqual(self.h.kinds(), ["question"])
+
+    def test_failed_pane_read_sends_finished_and_says_so_without_pane_text(self):
+        self.h.mode = "fail"
+        self.h.show("AWAITING-OWNER: x\n")
+        result = self.h.status("w1:p1", "idle")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("cannot check pane w1:p1 for the question marker", result.stderr)
+        self.assertNotIn("SECRET", result.stderr)
+        self.assertNotIn("AWAITING", result.stderr)
+        self.assertEqual(self.h.kinds(), ["finished"])
+
+    def test_missing_herdr_binary_sends_finished_and_says_so(self):
+        environment = self.h.environment("pane.agent_status_changed", "w1:p1", status="idle")
+        environment["HERDR_BIN_PATH"] = str(self.h.scratch.root / "no-such-herdr")
+        result = self.h.run(None, None, environment=environment)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("cannot check pane w1:p1", result.stderr)
+        self.assertEqual(self.h.kinds(), ["finished"])
+
+    def test_hanging_pane_read_is_cut_off_and_sends_finished(self):
+        self.h.mode = "hang"
+        started = time.monotonic()
+        result = self.h.status("w1:p1", "idle")
+        self.assertEqual(result.returncode, 0)
+        self.assertLess(time.monotonic() - started, 20)
+        self.assertIn("cannot check pane", result.stderr)
+        self.assertEqual(self.h.kinds(), ["finished"])
+
+    def test_a_question_turn_and_a_plain_turn_each_get_their_own_kind(self):
+        self.h.show("AWAITING-OWNER:\n")
+        self.assertQuietSuccess(self.h.status("w1:p1", "idle"))
+        self.h.show("done, nothing to ask\n")
+        self.assertQuietSuccess(self.h.status("w1:p1", "idle"))
+        self.assertEqual(self.h.kinds(), ["question", "finished"])
 
     # ---------------------------------------------------------- containment
 
@@ -276,7 +412,7 @@ class HookDirectTests(unittest.TestCase):
         self.assertIn("emit", result.stderr)
         self.assertIn("event was not delivered", result.stderr)
         self.assertLess(time.monotonic() - started, 30)
-        self.assertFalse(self.h.calls_file.exists())
+        self.assertEqual(self.h.calls(), [self.READ_CALL % "w1:p1"])  # only the marker check
         self.assertIn("core: emit failed", self.h.scratch.log_text())
 
     def test_core_missing_is_reported_and_exits_zero(self):
@@ -614,6 +750,30 @@ class HerdrServerTests(unittest.TestCase):
         for entry in server.plugin_logs():
             self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
 
+    def test_turn_ending_with_the_marker_is_a_question_and_one_without_it_is_finished(self):
+        # The hook reads the pane through the real `herdr pane read` of the server that ran it.
+        server = self.server
+        server.link_adapter()
+        asking_pane, workspace = server.new_pane("ws-asking")
+        plain_pane, _ = server.new_pane("ws-plain")
+        asking_text = "Which database should I use? QUESTION-BODY-" + "Z9y8X7" * 3
+        for pane in (asking_pane, plain_pane):
+            server.report(pane, "working")
+        server.show_text(asking_pane, "\u276f set it up\n" + asking_text + "\nAWAITING-OWNER: choose a database\n", "AWAITING-OWNER:")
+        server.show_text(plain_pane, "\u276f set it up\nAll done. Mentioning AWAITING-OWNER: only in prose.\n", "only in prose.")
+        for pane in (asking_pane, plain_pane):
+            server.report(pane, "idle")
+        server.settle()
+        self.assertEqual([e["kind"] for e in self.events_for(asking_pane)], ["question"])
+        self.assertEqual([e["kind"] for e in self.events_for(plain_pane)], ["finished"])
+        [event] = self.events_for(asking_pane)
+        self.assertEqual(event["context"], {"workspace_id": workspace, "workspace_label": "ws-asking", "agent": "pi"})
+        raw = server.core_scratch.inbox_bytes().decode()
+        for text in ("QUESTION-BODY", "choose a database", "AWAITING"):
+            self.assertNotIn(text, raw)
+        for entry in server.plugin_logs():
+            self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
+
     def test_error_ending_turn_and_error_mentioning_turn_are_both_finished_never_errored(self):
         # Herdr 0.9.1 has no error status and the adapter never reads the pane, so both turns
         # are `finished`.
@@ -680,7 +840,12 @@ class HerdrServerTests(unittest.TestCase):
         status_runs = [e for e in server.plugin_logs() if e["event"] == "pane.agent_status_changed"]
         self.assertTrue(status_runs)
         for entry in server.plugin_logs() + server.plugin_logs("witness"):
-            self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
+            self.assertEqual((entry["status"], entry["exit_code"]), ("succeeded", 0), entry)
+            # the late hook finds its pane gone, so the marker check fails: it says so and sends finished
+            if entry["event"] == "pane.agent_status_changed" and entry["plugin_id"] == "agent-alert":
+                self.assertTrue(entry["stderr"] == "" or "cannot check pane" in entry["stderr"], entry)
+            else:
+                self.assertEqual(entry["stderr"], "", entry)
         # the late status hook still delivers finished (the close hook may or may not find the
         # presence marker yet: a missed exit is an accepted risk)
         kinds = [e["kind"] for e in server.inbox_events() if e["worker"] == pane]
