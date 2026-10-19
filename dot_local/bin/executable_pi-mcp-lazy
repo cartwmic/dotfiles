@@ -143,8 +143,11 @@ def canon_tools(tools_raw):
     return json.dumps(sorted(tools, key=lambda t: str(t.get("name"))), sort_keys=True)
 
 
-def descendants(pid):
+def descendants(roots):
+    """Every process below any of the given pids (one ps listing); [] if ps fails."""
     import subprocess
+    if isinstance(roots, int):
+        roots = [roots]
     try:
         out = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=0.5).stdout
     except Exception:
@@ -154,7 +157,7 @@ def descendants(pid):
         p = line.split()
         if len(p) == 2 and p[0].isdigit() and p[1].isdigit():
             kids.setdefault(int(p[1]), []).append(int(p[0]))
-    res, stack = [], [pid]
+    res, stack = [], list(roots)
     while stack:
         for c in kids.get(stack.pop(), []):
             res.append(c)
@@ -283,17 +286,32 @@ class Child:
                 self.cond.wait(min(left, 0.2))
             return self.internal.pop(rid)
 
+    def sweep(self):
+        """Add to self.tree every process now below the server or any process already in the tree; returns the new ones. The
+        walk starts from the whole tree, not only the server, so a child forked by a helper whose parent has since gone is still
+        found while that helper lives."""
+        new = set(descendants([self.proc.pid] + list(self.tree))) - self.tree
+        self.tree |= new
+        return new
+
     def stop(self):
         """Stop the server and everything below it: stdin close, SIGTERM, grace, SIGKILL, signalled by process id (never a
-        group: the stand-in shares the server's group and keeps running after an idle stop). The descendants are found by a
-        parent-child walk taken BEFORE anything is signalled, so a re-entrant second stop (Pi's SIGTERM arriving during the
-        first) still has them, and a helper the server detached into its own session (a browser) is included."""
+        group: the stand-in shares the server's group and keeps running after an idle stop). The tree is walked just BEFORE stdin is
+        closed, before the SIGKILL round, and again every 0.2 s while waiting, and anything new is signalled with the same signal, so a process
+        a helper starts after an earlier walk is found while its parent still lives. The walk results are kept on the child, so a
+        re-entrant second stop (Pi's SIGTERM arriving during the first) still has them, and a helper the server detached into
+        its own session (a browser) is included."""
         again = self.stopping  # a second stop while one is running: the caller is already short of time, so SIGKILL at once
         self.stopping = True
         pid = self.proc.pid
         if not self.snapshotted:
-            self.tree |= set(descendants(pid))
+            self.sweep()
             self.snapshotted = True
+            pause = float(os.environ.get("PI_MCP_LAZY_TEST_PAUSE_AFTER_WALK", "0"))  # test hook: a helper forks after this walk
+            if pause > 0:
+                time.sleep(pause)
+        if not again:
+            self.sweep()  # just before stdin is closed: a closed stdin may end the server (and the chance to walk from it) at once
 
         try:
             self.proc.stdin.close()
@@ -303,17 +321,23 @@ class Child:
         def any_alive():
             return self.proc.poll() is None or any(pid_alive(p) for p in list(self.tree))
 
-        for sig, wait in (((signal.SIGKILL, 1.0),) if again else ((signal.SIGTERM, GRACE), (signal.SIGKILL, 1.0))):
-            if sig == signal.SIGKILL and not again and self.proc.poll() is None:
-                self.tree |= set(descendants(pid))  # anything started since the first walk
-            for p in [pid] + list(self.tree):
+        def send(sig, pids):
+            for p in pids:
                 try:
                     os.kill(p, sig)
                 except (ProcessLookupError, PermissionError):
                     pass
-            end = time.time() + wait
+
+        for sig, wait in (((signal.SIGKILL, 1.0),) if again else ((signal.SIGTERM, GRACE), (signal.SIGKILL, 1.0))):
+            if sig == signal.SIGKILL and not again:
+                self.sweep()
+            send(sig, [pid] + list(self.tree))
+            end, walked = time.time() + wait, time.time()
             while time.time() < end and any_alive():
                 time.sleep(0.05)
+                if time.time() - walked >= 0.2:
+                    walked = time.time()
+                    send(sig, self.sweep())
             if not any_alive():
                 break
         try:

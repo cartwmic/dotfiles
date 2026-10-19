@@ -16,6 +16,7 @@ ap.add_argument("--grandchild", action="store_true")
 ap.add_argument("--crash-file", default="")
 ap.add_argument("--noise", action="store_true")
 ap.add_argument("--escaped-helper", action="store_true", help="start a SIGTERM-ignoring helper in its own session; the server itself exits on SIGTERM")
+ap.add_argument("--late-fork", action="store_true", help="start a helper in its own session that, once <dir>/fork.now exists, starts a SIGTERM-ignoring child of its own; the helper itself dies on SIGTERM")
 ap.add_argument("--ignore-term", action="store_true", help="ignore SIGTERM (server and grandchild), so only SIGKILL stops them")
 ap.add_argument("--resources", action="store_true")
 ap.add_argument("--start-delay", type=float, default=0)
@@ -45,6 +46,15 @@ if a.escaped_helper:
     signal.signal(signal.SIGTERM, _exit_on_term)
     h = subprocess.Popen([sys.executable, "-c", "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(300)", a.marker + "-helper"],
                          start_new_session=True)
+    open(os.path.join(a.dir, "helper.pid"), "w").write(str(h.pid))
+if a.late_fork:
+    code = ("import os,subprocess,sys,time\n"
+            "d=sys.argv[1]; m=sys.argv[2]\n"
+            "while not os.path.exists(os.path.join(d,'fork.now')): time.sleep(0.02)\n"
+            "g=subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(300)',m+'-late-grandchild'])\n"
+            "open(os.path.join(d,'late.pid'),'w').write(str(g.pid))\n"
+            "time.sleep(300)\n")
+    h = subprocess.Popen([sys.executable, "-c", code, a.dir, a.marker], start_new_session=True)
     open(os.path.join(a.dir, "helper.pid"), "w").write(str(h.pid))
 time.sleep(a.start_delay)
 open(os.path.join(a.dir, "server.pid"), "w").write(str(os.getpid()))
