@@ -122,6 +122,40 @@ class LifecycleTests(unittest.TestCase):
     def test_sigterm_ignoring_server_is_gone_within_pis_deadline_with_pis_sigterm(self):
         self._pi_style_exit(send_sigterm=True)
 
+    def _signal_during_cleanup(self, s, started):
+        """Wait until the real server has been sent its SIGTERM (cleanup under way), then do what Pi does on exit: SIGTERM the
+        stand-in. The server ignores SIGTERM, so only the stand-in's own SIGKILL can stop it. Production grace."""
+        term_seen = self.e.fdir / "term.seen"
+        self.assertTrue(wait_until(term_seen.exists, timeout=20), "cleanup never started")
+        t0 = time.time()
+        s.p.send_signal(signal.SIGTERM)
+        s.p.wait(timeout=10)
+        took = time.time() - t0
+        left = procs(self.e.marker)
+        self.assertEqual(left, [], "SIGTERM-ignoring server survived a stand-in exit during %s: %r" % (started, left))
+        self.assertLess(took, 1.0, "stand-in waited %.1fs for the cleanup already under way" % took)
+
+    def test_exit_during_failed_start_cleanup_still_kills_a_sigterm_ignoring_server(self):
+        # the server never answers initialize (start-delay) and ignores SIGTERM: the start fails after the timeout and the
+        # cleanup of the failed child is in its grace period when Pi's SIGTERM arrives
+        write_copy(self.e.state, "fake", self.e.key("--ignore-term", "--start-delay", "60"))
+        s = Session(self.e, "fake", 600, "--ignore-term", "--start-delay", "60",
+                    extra_env={"PI_MCP_LAZY_GRACE": None, "PI_MCP_LAZY_START_TIMEOUT": "2"})
+        self.addCleanup(s.close)
+        s.initialize()
+        s.n += 1
+        s.send({"jsonrpc": "2.0", "id": s.n, "method": "tools/call", "params": {"name": "echo", "arguments": {}}})
+        self._signal_during_cleanup(s, "failed-start cleanup")
+
+    def test_exit_during_idle_stop_still_kills_a_sigterm_ignoring_server(self):
+        write_copy(self.e.state, "fake", self.e.key("--grandchild", "--ignore-term"))
+        s = Session(self.e, "fake", 1, "--grandchild", "--ignore-term", extra_env={"PI_MCP_LAZY_GRACE": None})
+        self.addCleanup(s.close)
+        s.initialize()
+        self.assertEqual(text_of(s.call("echo", {"text": "x"})), "echo:x")
+        self.assertEqual(len(procs(self.e.marker)), 2)
+        self._signal_during_cleanup(s, "idle stop")
+
     def test_stdin_close_leaves_nothing(self):
         self._exit_leaves_nothing(lambda s: s.p.stdin.close())
 
