@@ -4,5 +4,5 @@ import { dispatchByPiVersion } from "../pi-select.mjs";
 dispatchByPiVersion(import.meta.url, {
 	name: "settlement-abort",
 	packageEnv: "PI_SETTLEMENT_ABORT_PACKAGE",
-	variants: { "1.1": "patch.pi-1.1.mjs", "1.2": "patch.pi-1.2.mjs" },
+	variants: { "1.1": "patch.pi-1.1.mjs", "1.2": "patch.pi-1.2.mjs", "1.3": "patch.pi-1.3.mjs" },
 });

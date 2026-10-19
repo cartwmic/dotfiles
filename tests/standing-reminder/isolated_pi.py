@@ -137,7 +137,7 @@ def main() -> int:
         require(bool(node), "Node.js is required to apply the isolated Pi patch")
         source = installed_package(args.source_package)
         version = json.loads((source / "package.json").read_text(encoding="utf-8"))["version"]
-        require(version == "1.2.0", f"isolated proof requires exact Pi 1.2.0, found {version}")
+        require(version in ("1.2.0", "1.3.0"), f"isolated proof requires Pi 1.2.0 or 1.3.0, found {version}")
         source_fingerprint = package_fingerprint(source)
         print(f"Installed Pi {version} fingerprint: {json.dumps(source_fingerprint, sort_keys=True)}", flush=True)
         with tempfile.TemporaryDirectory(prefix="pi-standing-origin-") as temporary:
