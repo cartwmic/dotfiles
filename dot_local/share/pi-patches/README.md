@@ -21,6 +21,7 @@ between Pi minor series, so each directory holds one payload per series and `pat
 | `patch.mjs` | Entry point the apply loop, the onchange hash and the proofs use. Calls `dispatchByPiVersion` in `pi-select.mjs`. |
 | `patch.pi-1.1.mjs` | Payload for Pi 1.1.x (the revisions before the 1.2.0 port: v1/v1/v2/v2). |
 | `patch.pi-1.2.mjs` | Payload for Pi 1.2.x (the 1.2.0 port: v2/v2/v3/v3). |
+| `patch.pi-1.3.mjs` | Payload for Pi 1.3.x: a byte-identical copy of `patch.pi-1.2.mjs`. Every 1.2 anchor matches 1.3.0 exactly; the only `agent-session.js` change upstream is unrelated tool restore. |
 
 Selection reads the installed Pi version (same locator and per-patch `PI_*_PACKAGE` override the payloads use) and runs the matching
 payload with the same arguments and environment; its exit code is the result. An installed Pi whose minor series has no payload
@@ -34,6 +35,9 @@ checks the wiring (run: `node --test tests/pi-patches/pi_select.test.mjs`).
 `edits.pi-1.2.json` is `edits.json` ported to 1.2.0: bundle chunks renamed (`chunk-OIM2DMFI.js` -> `chunk-TJXZSVTD.js`, `chunk-OTL6MGLJ.js` -> `chunk-6MWTY2OB.js`),
 and two bundle blocks re-anchored by a 3-way merge (upstream renamed `isWorkingStatusEditor` -> `isEmbeddedStatus` and `errorMessage4` -> `errorMessage5`,
 and added embedded-status colouring). Every other edit is unchanged.
+`patch.pi-1.3.mjs` + `edits.pi-1.3.json` need Pi 1.3.0. `edits.pi-1.3.json` is `edits.pi-1.2.json` with the bundle chunk renamed (`chunk-TJXZSVTD.js` -> `chunk-66G7ITPS.js`)
+and one bundle block (`showExtensionCustom`) re-anchored: upstream 1.3.0 closes an overlay through its own `overlayHandle?.hide()` instead of `this.ui.hideOverlay()` (fix for #10648).
+The same substitution is made in that block's replacement text, so the upstream fix is kept. Every other edit is unchanged.
 `response-visibility` is not version-aware here: its payload lives in `cartwmic/pi-response-visibility`, which matches Pi 1.2.0 from commit `106aa4c` (and no longer matches 1.1.0).
 
 ## Overview

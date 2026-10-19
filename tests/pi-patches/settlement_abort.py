@@ -263,7 +263,7 @@ def main():
     trigger=(ROOT/'run_onchange_after_30_apply_pi_patches.sh.tmpl').read_text()
     require(trigger.count('include "dot_local/share/pi-patches/settlement-abort/patch.mjs" | sha256sum')==1, 'expected one source hash trigger')
     version=json.loads((SOURCE/'package.json').read_text())['version']
-    require(version in ('0.99.2','1.0.0','1.2.0'),'requires tested Pi 0.99.2, 1.0.0 or 1.2.0')
+    require(version in ('0.99.2','1.0.0','1.2.0','1.3.0'),'requires tested Pi 0.99.2, 1.0.0, 1.2.0 or 1.3.0')
     original=fingerprint(SOURCE)
     print('IDENTITY:', SOURCE, 'Pi', version, json.dumps(original), flush=True)
     print('PAYLOAD:', hashlib.sha256(PATCH.read_bytes()).hexdigest(), flush=True)
@@ -307,7 +307,7 @@ def main():
         patches=root/'patches';patches.mkdir()
         for name in ['headless-extension-drain','prompt-start-race','standing-reminder-origin','settlement-abort']:
             shutil.copytree(ROOT/f'dot_local/share/pi-patches/{name}',patches/name)
-        shutil.copyfile(ROOT/'dot_local/share/pi-patches/pi-root.mjs',patches/'pi-root.mjs')
+        for shared in ['pi-root.mjs','pi-select.mjs']: shutil.copyfile(ROOT/f'dot_local/share/pi-patches/{shared}',patches/shared)
         helper_env={**os.environ,'HOME':str(root/'helper-home'),'PI_PATCHES_ROOT':str(patches),'PI_CHEZMOI_PROFILE':'personal','PI_HEADLESS_PATCH_PACKAGE':str(package),'PI_PROMPT_START_RACE_PACKAGE':str(package),'PI_STANDING_REMINDER_ORIGIN_PACKAGE':str(package),'PI_SETTLEMENT_ABORT_PACKAGE':str(package)}
         for repeat in range(2):
             for name in ['headless-extension-drain','prompt-start-race','standing-reminder-origin']:

@@ -502,7 +502,8 @@ def mechanics(root):
     patches.mkdir()
     for name in SIBLINGS:
         shutil.copytree(PATCHES / name, patches / name)
-    shutil.copy2(PATCHES / 'pi-root.mjs', patches / 'pi-root.mjs')  # every patch imports ../pi-root.mjs
+    for shared in ['pi-root.mjs', 'pi-select.mjs']:  # every patch imports ../pi-root.mjs; patch.mjs dispatches via ../pi-select.mjs
+        shutil.copy2(PATCHES / shared, patches / shared)
     helper_env = {**os.environ, 'HOME': str(root / 'helper-home'), 'PI_PATCHES_ROOT': str(patches), 'PI_CHEZMOI_PROFILE': 'personal',
                   **{var: str(package) for var in SIBLINGS.values()}}
     subprocess.run(['sh', str(ROOT / 'dot_local/user_scripts/executable_apply_pi_patches.sh')], env=helper_env, cwd=ROOT, check=True, capture_output=True)
@@ -566,7 +567,7 @@ def main():
     parser.add_argument('--prepare-package', help='write a private Pi copy with prompt-start-race applied (settlement-abort reversed)')
     args = parser.parse_args()
     version = json.loads((INSTALLED / 'package.json').read_text())['version']
-    require(version == '1.2.0', f'requires Pi 1.2.0, found {version}')
+    require(version in ('1.2.0', '1.3.0'), f'requires Pi 1.2.0 or 1.3.0, found {version}')
     original = fingerprint(INSTALLED)
     print('IDENTITY:', INSTALLED, 'Pi', version, flush=True)
 

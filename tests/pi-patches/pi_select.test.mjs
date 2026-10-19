@@ -10,7 +10,7 @@ import { seriesOf, selectPayload } from "../../dot_local/share/pi-patches/pi-sel
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const PATCHES = join(ROOT, "dot_local/share/pi-patches");
-const VARIANTS = { "1.1": "patch.pi-1.1.mjs", "1.2": "patch.pi-1.2.mjs" };
+const VARIANTS = { "1.1": "patch.pi-1.1.mjs", "1.2": "patch.pi-1.2.mjs", "1.3": "patch.pi-1.3.mjs" };
 const FOUR = ["headless-extension-drain", "prompt-start-race", "settlement-abort", "standing-reminder-origin"];
 
 test("seriesOf: minor series only, strict semver shape", () => {
@@ -23,13 +23,14 @@ test("selectPayload: match, unsupported (never prefix-matches), unparseable, unr
 	const at = (v) => selectPayload("/x", VARIANTS, () => v);
 	assert.deepEqual([at("1.1.0").kind, at("1.1.0").file], ["match", "patch.pi-1.1.mjs"]);
 	assert.deepEqual([at("1.2.0").kind, at("1.2.0").file], ["match", "patch.pi-1.2.mjs"]);
+	assert.deepEqual([at("1.3.0").kind, at("1.3.0").file], ["match", "patch.pi-1.3.mjs"]);
 	assert.equal(at("1.1.7").file, "patch.pi-1.1.mjs");
-	for (const v of ["1.0.0", "1.3.0", "2.0.0", "0.99.2", "1.10.0", "1.12.0"]) assert.equal(at(v).kind, "unsupported", v);
+	for (const v of ["1.0.0", "1.4.0", "2.0.0", "0.99.2", "1.10.0", "1.12.0"]) assert.equal(at(v).kind, "unsupported", v);
 	assert.equal(at("banana").kind, "unparseable");
 	assert.equal(selectPayload("/x", VARIANTS, () => { throw new Error("ENOENT"); }).kind, "unreadable");
 	const none = selectPayload(undefined, VARIANTS);
-	assert.deepEqual([none.kind, none.file], ["not-installed", "patch.pi-1.2.mjs"]);
-	assert.deepEqual(none.supported, ["1.2", "1.1"]);
+	assert.deepEqual([none.kind, none.file], ["not-installed", "patch.pi-1.3.mjs"]);
+	assert.deepEqual(none.supported, ["1.3", "1.2", "1.1"]);
 });
 
 function sandbox() {
@@ -37,7 +38,7 @@ function sandbox() {
 	copyFileSync(join(PATCHES, "pi-select.mjs"), join(dir, "pi-select.mjs"));
 	copyFileSync(join(PATCHES, "pi-root.mjs"), join(dir, "pi-root.mjs"));
 	const pd = join(dir, "demo"); mkdirSync(pd);
-	for (const [series, code] of [["1.1", 11], ["1.2", 12]]) {
+	for (const [series, code] of [["1.1", 11], ["1.2", 12], ["1.3", 13]]) {
 		writeFileSync(join(pd, `patch.pi-${series}.mjs`), `console.log("RAN ${series} args=" + JSON.stringify(process.argv.slice(2)) + " root=" + (process.env.PI_ROOT ?? "")); process.exit(${code});\n`);
 	}
 	writeFileSync(join(pd, "patch.mjs"), `import { dispatchByPiVersion } from "../pi-select.mjs";\ndispatchByPiVersion(import.meta.url, { name: "demo", packageEnv: "PI_DEMO_PACKAGE", variants: ${JSON.stringify(VARIANTS)} });\n`);
@@ -52,15 +53,16 @@ test("dispatcher end to end: picks the payload, forwards argv, propagates its ex
 		let r = s.run({ PI_ROOT: s.pi("1.1.0") }, "--check");
 		assert.equal(r.code, 11); assert.match(r.out, /RAN 1\.1 args=\["--check"\]/); assert.match(r.out, /Pi 1\.1\.0 -> payload patch\.pi-1\.1\.mjs/);
 		r = s.run({ PI_ROOT: s.pi("1.2.0") }); assert.equal(r.code, 12); assert.match(r.out, /RAN 1\.2 args=\[\]/);
-		r = s.run({ PI_ROOT: s.pi("1.3.0") });
-		assert.equal(r.code, 1); assert.doesNotMatch(r.out, /RAN/); assert.match(r.err, /no payload for Pi 1\.3\.0; supported Pi series: 1\.2\.x, 1\.1\.x/);
+		r = s.run({ PI_ROOT: s.pi("1.3.0") }); assert.equal(r.code, 13); assert.match(r.out, /RAN 1\.3 args=\[\]/);
+		r = s.run({ PI_ROOT: s.pi("1.4.0") });
+		assert.equal(r.code, 1); assert.doesNotMatch(r.out, /RAN/); assert.match(r.err, /no payload for Pi 1\.4\.0; supported Pi series: 1\.3\.x, 1\.2\.x, 1\.1\.x/);
 		r = s.run({ PI_ROOT: s.pi("1.0.0") }); assert.equal(r.code, 1, "an older Pi must not silently use a newer payload");
 		r = s.run({ PI_ROOT: s.pi("banana") }); assert.equal(r.code, 1); assert.match(r.err, /unrecognised Pi version "banana"/);
 		const noPkg = mkdtempSync(join(s.dir, "empty-")); r = s.run({ PI_ROOT: noPkg });
 		assert.equal(r.code, 1); assert.match(r.err, /cannot read Pi version/);
 		r = s.run({ PI_ROOT: s.pi("1.1.0"), PI_DEMO_PACKAGE: s.pi("1.2.0") }); assert.equal(r.code, 12, "the per-patch package override wins over PI_ROOT, like the payloads");
 		r = s.run({ HOME: s.dir, PI_CODING_AGENT_DIR: join(s.dir, "none"), PATH: "/usr/bin:/bin" });
-		assert.equal(r.code, 12); assert.match(r.out, /Pi not installed -> patch\.pi-1\.2\.mjs decides/);
+		assert.equal(r.code, 13); assert.match(r.out, /Pi not installed -> patch\.pi-1\.3\.mjs decides/);
 	} finally { rmSync(s.dir, { recursive: true, force: true }); }
 });
 
