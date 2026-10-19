@@ -133,8 +133,9 @@ The hook acts on each event's own status and keeps no history:
 
 | Herdr event | Emitted |
 |---|---|
-| `pane.agent_status_changed`, status `blocked` | `blocked` |
-| `pane.agent_status_changed`, status `idle` or `done`, and the pane's last lines hold the [question marker](#the-question-marker) | `question` |
+| `pane.agent_status_changed`, status `blocked` | `blocked`, except when a [Pi subagent](#pi-subagent-noise) is the cause: nothing |
+| `pane.agent_status_changed`, status `idle` or `done`, and the pane's last lines hold the [question marker](#the-question-marker) | `question` (always, even with a subagent running) |
+| `pane.agent_status_changed`, status `idle` or `done`, a subagent still running in the pane | nothing (held until the subagent label clears) |
 | `pane.agent_status_changed`, status `idle` or `done`, otherwise | `finished` |
 | `pane.agent_status_changed`, status `working`, `unknown` or anything else | nothing |
 | `pane.agent_detected` | nothing |
@@ -177,13 +178,20 @@ AWAITING-OWNER:
 at the end of its last message, for example `AWAITING-OWNER: which database?`. Put the
 instruction in the worker's prompt or its AGENTS.md; the adapter cannot ask for it.
 
+Use the marker only when the owner must answer. Report progress with a line that starts
+with `Status:` (for example `Status: tests running`). A marker followed by a status
+filler (`none` or `none yet`, any case, with or without punctuation) is not a question:
+the hook treats that turn as an ordinary `finished`. `AWAITING-OWNER: none yet` rings the
+owner's doorbell with nothing to answer, so do not print it.
+
 What the hook does with it:
 
 - On `idle` or `done` it runs `herdr pane read <pane> --source recent-unwrapped --lines 30`
   (5 second limit), looks for a line that starts with `AWAITING-OWNER:` (a bullet or a box
   edge in front, up to 8 non-word characters, is allowed), and emits `question`
-  instead of `finished` if it finds one. Text after the colon is never used, and the
-  pane text is not stored, logged or sent: the inbox and the ring carry the kind only.
+  instead of `finished` if it finds one. The text after the colon is read only to
+  recognise a status filler (see above), then dropped; the pane text is not stored,
+  logged or sent: the inbox and the ring carry the kind only.
 - If the read fails (the pane is gone, Herdr is slow, `herdr` is not found) the hook says
   so on stderr (without pane text) and emits `finished`: the event is never lost.
   `blocked` is never read or changed.
@@ -192,6 +200,41 @@ What the hook does with it:
   for a short later turn. That costs a look at the pane; a missed marker costs the old
   behaviour (`finished`). Print the marker only when you are waiting.
 - It finds `herdr` as `HERDR_BIN_PATH` (set by Herdr for the hook) or on `PATH`.
+
+### Pi subagent noise
+
+A Pi worker that starts async subagents makes two kinds of noise that need no owner:
+the worker's own turn ends (`idle`) while a subagent still runs, and a subagent that
+calls `contact_supervisor` turns the pane `blocked` (the worker answers it itself). The
+hook filters both, using only what Herdr already gives it.
+
+Pi's subagent extension publishes the running subagents as the pane's Herdr state labels:
+`⏳ 2 subagents (scout, worker)`, with a trailing `⚠` while a subagent needs attention
+(a subagent waiting on `contact_supervisor` is one). Herdr puts `state_labels` in every
+`pane.agent_status_changed` event and sends a new one whenever the labels change or
+expire. The hook does not read pane text for this. It matches `⏳ N subagent(s)` in the
+labels.
+
+- **`finished` is held while a subagent runs.** An `idle` or `done` event whose labels show
+  a running subagent emits nothing. When the subagent ends, the label clears, Herdr sends
+  another status event with no label, and that one emits the `finished`. If Pi dies with a
+  subagent running, the label expires (its TTL) and the same happens. There is no timer
+  and no extra process. The doorbell's 30 second hold combines this `finished` with the
+  worker's own, if the worker wakes and ends a turn right after.
+- **`question` is never held or dropped.** The marker check runs first. A turn that ends on
+  `AWAITING-OWNER:` rings at once, subagent or not. If the pane cannot be read the event is
+  `finished`, not held, because it might be a question.
+- **`blocked` from a subagent is dropped.** A `blocked` event whose labels show a running
+  subagent flagged `⚠` emits nothing. Pi reports `blocked` a moment before it publishes the
+  `⚠`, so for a `blocked` event with a running, unflagged subagent the hook asks
+  `herdr pane get` every half second for up to 3 seconds. If the flag shows, it drops the
+  event. If the subagent is gone, the 3 seconds pass, or the read fails, it emits `blocked`.
+  A `blocked` event with no subagent label is emitted at once.
+- **Limit.** The `⚠` means "a subagent needs attention", which is mostly
+  `contact_supervisor` but also a stuck tool or repeated failures; the label cannot tell
+  them apart. The worker handles all of those itself. A different block (for example an
+  `ask_user_question` prompt) that happens while a subagent is flagged is hidden too,
+  because Herdr has one `blocked` state per pane.
 
 ## Claude doorbell sink
 
