@@ -9,9 +9,17 @@ from harness import Env, Session, STANDIN, pid_alive, procs, text_of, wait_until
 
 
 class LifecycleTests(unittest.TestCase):
+    def _reap_strays(self):
+        for line in procs(self.e.marker):
+            try:
+                os.kill(int(line.split()[0]), signal.SIGKILL)
+            except (ValueError, ProcessLookupError, PermissionError):
+                pass
+
     def setUp(self):
         self.e = Env()
         self.addCleanup(self.e.cleanup)
+        self.addCleanup(self._reap_strays)  # runs first (cleanups are LIFO): a test must not leave processes of its own behind
         write_copy(self.e.state, "fake", self.e.key("--grandchild"))
 
     def sess(self, idle=2, *a, **k):
@@ -200,6 +208,52 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(left, [], "refresh interrupted by SIGTERM left the server running: %r" % left)
         self.assertLess(time.time() - t0, 2.4)
 
+    def test_pis_group_sigkill_takes_the_server_and_its_same_group_helper_with_it(self):
+        # Pi kills the stand-in's whole process group. The stand-in cannot tidy up (SIGKILL), the server and its helper ignore
+        # SIGTERM; because they share the stand-in's group they die with it. (With the server in a separate session of its own,
+        # this is exactly what survived.)
+        write_copy(self.e.state, "fake", self.e.key("--grandchild", "--ignore-term"))
+        s = Session(self.e, "fake", 600, "--grandchild", "--ignore-term", extra_env={"PI_MCP_LAZY_GRACE": None})
+        self.addCleanup(s.close)
+        s.initialize()
+        self.assertEqual(text_of(s.call("echo", {"text": "x"})), "echo:x")
+        self.assertEqual(len(procs(self.e.marker)), 2)
+        os.killpg(s.p.pid, signal.SIGKILL)
+        self.assertTrue(wait_until(lambda: procs(self.e.marker) == [], timeout=3),
+                        "server or helper outlived a group SIGKILL of the stand-in: %r" % procs(self.e.marker))
+
+    def test_pis_exit_sequence_on_the_group_leaves_nothing(self):
+        # Pi 1.2.0: close stdin, SIGTERM the group at +0.5 s, SIGKILL the group at +2.5 s; production default grace
+        write_copy(self.e.state, "fake", self.e.key("--grandchild", "--ignore-term"))
+        s = Session(self.e, "fake", 600, "--grandchild", "--ignore-term", extra_env={"PI_MCP_LAZY_GRACE": None})
+        self.addCleanup(s.close)
+        s.initialize()
+        self.assertEqual(text_of(s.call("echo", {"text": "x"})), "echo:x")
+        t0 = time.time()
+        s.p.stdin.close()
+        for sig, at in ((signal.SIGTERM, 0.5), (signal.SIGKILL, 2.5)):
+            time.sleep(max(0, at - (time.time() - t0)))
+            try:
+                os.killpg(s.p.pid, sig)
+            except (ProcessLookupError, PermissionError):  # the group is already gone (macOS says EPERM for that)
+                pass
+        s.p.wait(timeout=5)
+        self.assertTrue(wait_until(lambda: procs(self.e.marker) == [], timeout=2), procs(self.e.marker))
+
+    def test_idle_stop_stops_a_helper_detached_into_its_own_session(self):
+        # the shape of Playwright's Chromium: started by the server in a session of its own, ignores SIGTERM
+        write_copy(self.e.state, "fake", self.e.key("--escaped-helper"))
+        s = Session(self.e, "fake", 2, "--escaped-helper", extra_env={"PI_MCP_LAZY_GRACE": None})
+        self.addCleanup(s.close)
+        s.initialize()
+        self.assertEqual(text_of(s.call("echo", {"text": "x"})), "echo:x")
+        self.assertTrue(wait_until(lambda: (self.e.fdir / "helper.pid").exists(), timeout=10))
+        helper = int((self.e.fdir / "helper.pid").read_text())
+        self.assertTrue(pid_alive(helper))
+        self.assertTrue(wait_until(lambda: not pid_alive(helper) and procs(self.e.marker) == [], timeout=15),
+                        "detached helper survived the idle stop: %r" % procs(self.e.marker))
+        self.assertEqual(text_of(s.call("echo", {"text": "again"})), "echo:again")
+
     def test_stdin_close_leaves_nothing(self):
         self._exit_leaves_nothing(lambda s: s.p.stdin.close())
 
@@ -246,6 +300,8 @@ class LifecycleTests(unittest.TestCase):
         self.assertIsNotNone(r)
         self.assertIn("exited unexpectedly", r["error"]["message"])
         self.assertEqual(text_of(s.call("echo", {"text": "after"})), "echo:after")
+        # Stated limit: the crashed server's own grandchild was re-parented before the stand-in could walk the tree and stays
+        # until Pi's exit kills the group, exactly as under a direct launch; _reap_strays tidies it for the test.
 
 
 if __name__ == "__main__":

@@ -461,7 +461,7 @@ def discovery(root, port, idle, stale, no_state):
 
 
 def lifecycle(root, port, idle):
-    f = Fake(Path(root), "furi", "--grandchild")
+    f = Fake(Path(root), "furi", "--grandchild", "--ignore-term")  # server and helper ignore SIGTERM: only SIGKILL stops them
     w = World(root, "lifecycle", idle, [f])
     holder = {}
     try:
@@ -553,7 +553,8 @@ def lifecycle(root, port, idle):
             rpc.p.stdin.close()
             rpc.call = None
             rpc.p.wait(timeout=30)
-            require(wait_until(lambda: f.procs() == [] and not [r for r in ps_rows() if "executable_pi-mcp-lazy" in r[3] and str(w.home) in r[3]], 15),
+            # Pi has exited: its group kill (SIGTERM +0.5 s, SIGKILL +2.5 s) must already have taken the SIGTERM-ignoring server and helper
+            require(wait_until(lambda: f.procs() == [] and not [r for r in ps_rows() if "executable_pi-mcp-lazy" in r[3] and str(w.home) in r[3]], 3),
                     "processes left after Pi exit")
         exit_cleanup()
         holder["rpc"] = None
@@ -650,6 +651,20 @@ REAL_CODES = {
     "real-rea": "const r = await tools.mcp__rea__binary_session({}); const j = JSON.stringify(r); text('RESULT:' + JSON.stringify({isError: !!(r && r.isError), bytes: j.length, head: (r && r.isError) ? String((r.content && r.content[0] && r.content[0].text) || '').slice(0, 200) : ''}));",
 }
 REAL_PROCESS = {"furi": "furi", "playwright": "node playwright-mcp", "rea": "node rea"}
+
+
+def cached_chromium():
+    """A Chromium build playwright can be pointed at (the cache holds one that is not the exact build playwright-mcp wants)."""
+    base = Path.home() / "Library" / "Caches" / "ms-playwright"
+    for exe in sorted(base.glob("chromium-*/chrome-mac*/*.app/Contents/MacOS/*")):
+        if exe.is_file() and os.access(exe, os.X_OK):
+            return str(exe)
+    return None
+
+
+def is_browser(name):
+    n = name.lower()  # the tool cuts a command at its first space: "Google Chrome for Testing Helper" shows as "Google"
+    return "chromium" in n or "chrome" in n or n == "google"
 REAL_IDLE = 10
 
 
@@ -708,6 +723,10 @@ def real_calls(root, port):
         holder["env"] = {"PATH": ":".join([str(node_dir), str(tools_dir), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]), "HOME": str(home),
                          "PI_CODING_AGENT_DIR": str(agent), "PI_OFFLINE": "1", "npm_config_offline": "true", "PI_SKIP_VERSION_CHECK": "1",
                          "PI_TELEMETRY": "0", tool.MARKER: marker, "PLAYWRIGHT_MCP_HEADLESS": "true"}
+        holder["chromium"] = cached_chromium()
+        if holder["chromium"]:  # real Chromium, started by the real playwright-mcp in a session of its own
+            holder["env"]["PLAYWRIGHT_MCP_BROWSER"] = "chromium"
+            holder["env"]["PLAYWRIGHT_MCP_EXECUTABLE_PATH"] = holder["chromium"]
         holder["project"] = project
         servers = rendered["mcp"]["mcpServers"]
         for n in ("furi", "playwright", "rea"):
@@ -742,15 +761,20 @@ def real_calls(root, port):
                 took = time.monotonic() - t0
                 require("RESULT:" in out, out[:400])
                 outcome = "success"
-                if '"isError":true' in out:
+                if '"isError":true' in out and not (name == "playwright" and holder["chromium"]):
                     # Only playwright can answer this way here: no browser build matching this playwright-mcp is installed on
                     # this machine, so the live server gives the same error. It is the real server's own answer, relayed
                     # through the stand-in; a stand-in start error ("failed to start", "exited") never qualifies.
                     require(name == "playwright" and ("is not installed" in out or "is not found" in out)
                             and "failed to start" not in out and "exited" not in out, out[:400])
                     outcome = "real server's own answer: browser not installed (no matching browser build on this machine)"
+                if name == "playwright" and holder["chromium"]:
+                    require('"isError":false' in out, "real playwright with a real Chromium should succeed: " + out[:300])
+                    outcome = "success, with a real Chromium (%s)" % Path(holder["chromium"]).parts[-6]
                 names = owned_names()
                 require(REAL_PROCESS[name] in names, "%s did not start: %r" % (name, names))
+                if name == "playwright" and holder["chromium"]:
+                    require(any(is_browser(n) for n in names), "no Chromium process while playwright is up: %r" % names)
                 return {"call_to_result_s": round(took, 2), "outcome": outcome, "owned_process_names": names,
                         "tool": REAL_CODES["real-" + name].split("tools.")[1].split("(")[0]}
             one()
@@ -758,8 +782,8 @@ def real_calls(root, port):
         @check("real servers: idle stop reclaims every server and npm wrapper, memory back within 10%, restart works")
         def idle_real():
             up = mcp_side_rss_kb(rpc.p.pid)
-            gone = wait_until(lambda: not [n for n in owned_names() if n in tool.MCP_REAL_NAMES], REAL_IDLE + 90)
-            require(gone, "real MCP processes remain after the idle period: %r" % owned_names())
+            gone = wait_until(lambda: not [n for n in owned_names() if n in tool.MCP_REAL_NAMES or is_browser(n)], REAL_IDLE + 90)
+            require(gone, "real MCP processes (or the browser) remain after the idle period: %r" % owned_names())
             time.sleep(1)
             after = mcp_side_rss_kb(rpc.p.pid)
             pre = holder["rss_pre"]
@@ -771,6 +795,10 @@ def real_calls(root, port):
             out = rpc.prompt("real-rea", timeout=180)
             require('"isError":false' in out, out[:300])
             require("node rea" in owned_names(), "rea was not started again")
+            if holder["chromium"]:  # leave the real browser running, so Pi's exit is judged with it up
+                out = rpc.prompt("real-playwright", timeout=180)
+                require('"isError":false' in out, out[:300])
+                require(any(is_browser(n) for n in owned_names()), "Chromium was not started again")
             return {"owned_set_rss_kb": {"before_use": owned_pre, "after_idle": owned_after},
                     "stand_ins_only_rss_kb": {"before_use": pre, "servers_up": up, "after_idle": after}, "owned_after_idle": names}
         idle_real()
