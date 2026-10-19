@@ -184,5 +184,89 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(s["rea"]["command"], str(w.bin))
 
 
+class PruneTests(unittest.TestCase):
+    """Pi's mcp.json: servers the script wrote earlier and canonical no longer has are pruned; others are kept."""
+
+    def world(self, **k):
+        w = World(**k)
+        self.addCleanup(w.cleanup)
+        return w
+
+    @staticmethod
+    def set_canonical(w, **extra):
+        servers = dict(w.canonical["mcpServers"], **extra)
+        (w.canon / "mcp" / "servers.json").write_text(json.dumps({"mcpServers": servers}, indent=2))
+
+    @staticmethod
+    def seed_pi(w, servers):
+        p = w.home / ".pi" / "agent" / "mcp.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"mcpServers": servers, "settings": {"keep": True}}))
+
+    def test_removed_canonical_server_is_pruned_and_user_entries_kept(self):
+        w = self.world()
+        self.set_canonical(w, gone={"command": "npx", "args": ["gone-mcp"]})
+        self.seed_pi(w, {"mine": {"command": "my-tool", "args": ["x"]}})
+        r = w.run("pi")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(w.pi_servers()["gone"], {"command": "npx", "args": ["gone-mcp"]})
+        self.set_canonical(w)  # "gone" is removed from the canonical file
+        r = w.run("pi")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        s = w.pi_servers()
+        self.assertNotIn("gone", s)
+        self.assertEqual(s["mine"], {"command": "my-tool", "args": ["x"]})
+        self.assertEqual(set(s), set(w.canonical["mcpServers"]) | {"mine"})
+        self.assertIn("Pruned Pi MCP server no longer in canonical: gone", r.stdout)
+        self.assertEqual(json.loads((w.home / ".pi" / "agent" / "mcp.json").read_text())["settings"], {"keep": True})
+
+    def test_retired_names_from_before_the_record_are_pruned(self):
+        w = self.world()
+        self.seed_pi(w, {"furi": {"command": "furi"}, "automation-mcp": {"command": "am"}, "mine": {"command": "m"}})
+        r = w.run("pi")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        s = w.pi_servers()
+        self.assertNotIn("furi", s)
+        self.assertNotIn("automation-mcp", s)
+        self.assertIn("mine", s)
+
+    def test_user_entry_never_in_canonical_survives_repeated_applies(self):
+        w = self.world()
+        self.seed_pi(w, {"mine": {"command": "m"}})
+        for _ in range(3):
+            self.assertEqual(w.run("pi").returncode, 0)
+        self.assertEqual(w.pi_servers()["mine"], {"command": "m"})
+
+    def test_record_lists_exactly_the_rendered_names_and_second_apply_is_identical(self):
+        w = self.world()
+        w.run("pi")
+        rec = json.loads(w.generated("pi", "mcp-managed.json"))
+        self.assertEqual(rec, sorted(w.canonical["mcpServers"]))
+        first = (w.home / ".pi" / "agent" / "mcp.json").read_text()
+        w.run("pi")
+        self.assertEqual((w.home / ".pi" / "agent" / "mcp.json").read_text(), first)
+
+    def test_unreadable_record_prunes_nothing_but_retired_names(self):
+        w = self.world()
+        self.set_canonical(w, gone={"command": "npx", "args": ["gone-mcp"]})
+        w.run("pi")
+        self.set_canonical(w)
+        (w.tmp / "generated" / "pi" / "mcp-managed.json").write_text("not json")
+        r = w.run("pi")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("gone", w.pi_servers())  # conservative: unknown ownership is kept
+        w.run("pi")  # the record is rewritten, so ownership is known again from here on
+
+    def test_work_profile_servers_pruned_after_switch_to_personal_render(self):
+        w = self.world(profile="axon-work-computer")
+        w.run("pi")
+        self.assertIn("jira", w.pi_servers())
+        self.set_canonical(w)  # replace with the personal render
+        personal = render_canonical("personal")
+        (w.canon / "mcp" / "servers.json").write_text(json.dumps(personal))
+        w.run("pi")
+        self.assertNotIn("jira", w.pi_servers())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -495,17 +495,25 @@ pathlib.Path(path).write_text(json.dumps(data, indent=2) + "\n")
 PY
 }
 
+# Merge the rendered servers into Pi's mcp.json. Names this script wrote on an earlier apply
+# (recorded in $3, plus the retired names below that predate that record) and that are no longer
+# rendered are pruned; entries it never wrote are kept.
 merge_pi_mcp() {
   harness_json="$1"
   target_json="$2"
+  managed_json="$3"
 
-  python3 - "$harness_json" "$target_json" <<'PY'
+  python3 - "$harness_json" "$target_json" "$managed_json" <<'PY'
 import json
 import pathlib
 import sys
 
 harness_path = pathlib.Path(sys.argv[1])
 target_path = pathlib.Path(sys.argv[2])
+managed_path = pathlib.Path(sys.argv[3])
+
+# Harness-managed before the managed-names record existed, since removed from canonical.
+RETIRED = {"furi", "automation-mcp"}
 
 harness = json.loads(harness_path.read_text())
 harness_servers = harness.get("mcpServers", {})
@@ -517,11 +525,25 @@ else:
 
 existing_servers = existing.get("mcpServers", {})
 
+previous = set(RETIRED)
+if managed_path.exists():
+    try:
+        previous |= set(json.loads(managed_path.read_text()))
+    except (ValueError, TypeError):
+        pass  # unreadable record: prune only the retired names
+
+stale = sorted(n for n in previous if n in existing_servers and n not in harness_servers)
+kept = {n: c for n, c in existing_servers.items() if n not in stale}
+
 # Harness-managed servers overwrite their keys; manual additions are preserved
-merged_servers = {**existing_servers, **harness_servers}
+merged_servers = {**kept, **harness_servers}
 result = {**existing, "mcpServers": merged_servers}
 
 target_path.write_text(json.dumps(result, indent=2) + "\n")
+managed_path.parent.mkdir(parents=True, exist_ok=True)
+managed_path.write_text(json.dumps(sorted(harness_servers)) + "\n")
+for name in stale:
+    print(f"[apply_harness_config] Pruned Pi MCP server no longer in canonical: {name}")
 PY
 }
 
@@ -534,7 +556,7 @@ apply_pi() {
   render_harness_mcp_json "pi" "$resolved_mcp"
   wrap_pi_lazy_servers "$resolved_mcp"
   ensure_parent "$pi_mcp_json"
-  merge_pi_mcp "$resolved_mcp" "$pi_mcp_json"
+  merge_pi_mcp "$resolved_mcp" "$pi_mcp_json" "$GENERATED_ROOT/pi/mcp-managed.json"
   log "Updated Pi MCP config: $pi_mcp_json"
 }
 

@@ -29,7 +29,11 @@ Rules:
 - Canonical sources should stay standards-based.
 - Pi 0.99+ uses native MCP and codemode, not `pi-mcp-adapter`. The Pi adapter
   still generates `~/.pi/agent/mcp.json` from these canonical sources and
-  preserves manually added servers. Manage connections with `/mcp`; use
+  preserves manually added servers. It records the names it writes in
+  `~/.local/share/agent-harness/generated/pi/mcp-managed.json` and removes a recorded
+  name from `mcp.json` once canonical (or this profile's render) no longer has it;
+  `furi` and `automation-mcp` are also removed because they were managed before the
+  record existed. Manage connections with `/mcp`; use
   `codemode` for tool discovery and batching instead of `mcp`/`mcpScript`.
   Both desktop profiles use codemode's `only` mode: ordinary tools remain
   callable from scripts rather than directly declared to the model.
