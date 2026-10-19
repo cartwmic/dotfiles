@@ -356,7 +356,7 @@ EXPECTED = ["mcp__%s__echo", "mcp__%s__roots", "mcp__%s__slow"]
 
 def discovery_check(name, root, port, idle, mutate=None, fail_refresh=False):
     """Discover the server's tools in a fresh Pi without starting it, in one copy state."""
-    f = Fake(Path(root), "furi")
+    f = Fake(Path(root), "alpha")
     w = World(root, name, idle, [f], fail_refresh=fail_refresh)
     try:
         w.write_models(port)
@@ -365,11 +365,11 @@ def discovery_check(name, root, port, idle, mutate=None, fail_refresh=False):
             mutate(w)
         rpc = w.open()
         try:
-            out = rpc.prompt("discover-furi")
+            out = rpc.prompt("discover-alpha")
             require("OUT:" in out, out[:300])
             data = json.loads(out.split("OUT:", 1)[1].strip().splitlines()[-1])
-            require(data["names"] == sorted(n % "furi" for n in EXPECTED), "tools listed: %r" % data["names"])
-            require(data["described"] and "mcp__furi__echo" in data["found"], "search/describe failed: %r" % data)
+            require(data["names"] == sorted(n % "alpha" for n in EXPECTED), "tools listed: %r" % data["names"])
+            require(data["described"] and "mcp__alpha__echo" in data["found"], "search/describe failed: %r" % data)
             require(f.procs() == [] and f.starts() == base, "a real server was started by discovery: %r" % f.procs())
         finally:
             rpc.close()
@@ -393,12 +393,12 @@ def main():
     remote = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Remote)
     threading.Thread(target=remote.serve_forever, daemon=True).start()
     port, idle = model.server_port, a.idle
-    for n in ("furi", "playwright", "rea"):
+    for n in ("alpha", "playwright", "rea"):
         register_codes(n)
-    CODES["discover-furi"] = js_names("furi")
+    CODES["discover-alpha"] = js_names("alpha")
 
     def stale(w):
-        p = w.state / "furi.json"
+        p = w.state / "alpha.json"
         head, _, rest = p.read_text().partition("\n")
         d = json.loads(head)
         d["key"] = "built for another command line"
@@ -406,7 +406,7 @@ def main():
 
     def no_state(w):  # the shipped seed stands in: a copy of what the refresh produced
         w.seed.mkdir(parents=True)
-        shutil.copy2(w.state / "furi.json", w.seed / "furi.json")
+        shutil.copy2(w.state / "alpha.json", w.seed / "alpha.json")
         shutil.rmtree(w.state)
 
     try:
@@ -446,13 +446,13 @@ def discovery(root, port, idle, stale, no_state):
 
     def failed_refresh_state(w):  # the renderer produced no state copy; the shipped seed is what remains
         require(not w.state.exists(), "state copy exists after a failed refresh")
-        require("refresh of furi failed" in w.apply_log, "failure not logged by name")
+        require("refresh of alpha failed" in w.apply_log, "failure not logged by name")
         w.seed.mkdir(parents=True)
-        shutil.copy2(Path(tempfile.gettempdir()) / "pml-seed-for-failed.json", w.seed / "furi.json")
+        shutil.copy2(Path(tempfile.gettempdir()) / "pml-seed-for-failed.json", w.seed / "alpha.json")
     # produce a seed once from a successful refresh, then use it in the failed-refresh world
-    tmp_world = World(root, "seedmaker", idle, [Fake(Path(root), "furi")])
+    tmp_world = World(root, "seedmaker", idle, [Fake(Path(root), "alpha")])
     try:
-        shutil.copy2(tmp_world.state / "furi.json", Path(tempfile.gettempdir()) / "pml-seed-for-failed.json")
+        shutil.copy2(tmp_world.state / "alpha.json", Path(tempfile.gettempdir()) / "pml-seed-for-failed.json")
     finally:
         tmp_world.cleanup()
     check("discovery: refresh failed at apply time (seed), no server started")(discovery_check)(
@@ -461,7 +461,7 @@ def discovery(root, port, idle, stale, no_state):
 
 
 def lifecycle(root, port, idle):
-    f = Fake(Path(root), "furi", "--grandchild", "--ignore-term")  # server and helper ignore SIGTERM: only SIGKILL stops them
+    f = Fake(Path(root), "alpha", "--grandchild", "--ignore-term")  # server and helper ignore SIGTERM: only SIGKILL stops them
     w = World(root, "lifecycle", idle, [f])
     holder = {}
     try:
@@ -481,7 +481,7 @@ def lifecycle(root, port, idle):
             holder["owned_pre"] = holder["rss_pre"] + pi_rss_kb(pi_pid)
             require(f.procs() == [], "server running before first use")
             t0 = time.monotonic()
-            out = rpc.prompt("echo-furi")
+            out = rpc.prompt("echo-alpha")
             took = time.monotonic() - t0
             require("RESULT:echo:hi" in out, out[:300])
             time.sleep(0.5)  # let the fork/exec of the server's helper settle before counting processes
@@ -508,7 +508,7 @@ def lifecycle(root, port, idle):
 
         @check("restart: a later call starts the server again and succeeds")
         def restart():
-            out = rpc.prompt("echo-furi")
+            out = rpc.prompt("echo-alpha")
             require("RESULT:echo:hi" in out, out[:300])
             require(f.starts() == base + 2 and (f.dir / "server.pid").read_text() != holder["pid1"], "server was not restarted")
             require(wait_until(lambda: f.procs() == [], idle + 30), "second idle stop failed")
@@ -518,7 +518,7 @@ def lifecycle(root, port, idle):
         @check("long call: never stopped mid-call, stops after it ends")
         def long_call():
             t0 = time.monotonic()
-            rpc.start_prompt("slow-furi")
+            rpc.start_prompt("slow-alpha")
             time.sleep(idle + 4)
             require(len(f.procs()) == 2, "server stopped during the call: %r" % f.procs())
             out = rpc.settle(60)
@@ -532,7 +532,7 @@ def lifecycle(root, port, idle):
         @check("cancelled call: the user aborts a call the server never answers; the server still stops when idle, and starts again")
         def cancelled_call():
             n = f.starts()
-            rpc.start_prompt("slowquiet-furi")
+            rpc.start_prompt("slowquiet-alpha")
             require(wait_until(lambda: len(f.procs()) == 2 and f.starts() == n + 1, 30), "server did not start for the call")
             time.sleep(4)  # the server has finished its work and will never reply
             require(len(f.procs()) == 2, "stopped under a request still in flight: %r" % f.procs())
@@ -542,7 +542,7 @@ def lifecycle(root, port, idle):
                 rpc.until(lambda r: r.get("type") == "agent_settled", 60)
             require(wait_until(lambda: f.procs() == [], idle + 30),
                     "server kept up after a cancelled call: %r" % f.procs())
-            out = rpc.prompt("echo-furi")
+            out = rpc.prompt("echo-alpha")
             require("RESULT:echo:hi" in out, out[:300])
             require(f.starts() == n + 2, "server was not started again")
             require(wait_until(lambda: f.procs() == [], idle + 30), "second idle stop failed")
@@ -569,7 +569,7 @@ def lifecycle(root, port, idle):
 
 def failure_and_retry(root, port, idle):
     crash = Path(root) / "crash-flag"
-    f = Fake(Path(root), "furi", "--crash-file", str(crash))
+    f = Fake(Path(root), "alpha", "--crash-file", str(crash))
     w = World(root, "failure", idle, [f])
     try:
         w.write_models(port)
@@ -579,11 +579,11 @@ def failure_and_retry(root, port, idle):
             @check("start failure: named error with stderr tail, session responsive, later call retries")
             def failure():
                 crash.write_text("x")
-                out = rpc.prompt("try-echo-furi")
-                require("ERR:MCP server 'furi' failed to start" in out and "boom: cannot start" in out, out[:400])
+                out = rpc.prompt("try-echo-alpha")
+                require("ERR:MCP server 'alpha' failed to start" in out and "boom: cannot start" in out, out[:400])
                 require("noop" in rpc.prompt("noop"), "session unresponsive after a failed start")
                 crash.unlink()
-                out2 = rpc.prompt("try-echo-furi")
+                out2 = rpc.prompt("try-echo-alpha")
                 require("OK:echo:x" in out2, out2[:300])
                 require(f.starts() == base + 1, "starts=%d" % (f.starts() - base))
             failure()
@@ -595,7 +595,7 @@ def failure_and_retry(root, port, idle):
 
 
 def six_servers(root, port, remote_port, idle):
-    fakes = [Fake(Path(root), n) for n in ("furi", "playwright", "rea")]
+    fakes = [Fake(Path(root), n) for n in ("alpha", "playwright", "rea")]
     url = "http://127.0.0.1:%d/mcp" % remote_port
     w = World(root, "six", idle, fakes, remotes=[("hindsight", url), ("context7", url), ("ticktick", url)])
     try:
@@ -604,7 +604,7 @@ def six_servers(root, port, remote_port, idle):
 
         @check("rendering: three servers wrapped, three remote entries unchanged")
         def rendering():
-            for n in ("furi", "playwright", "rea"):
+            for n in ("alpha", "playwright", "rea"):
                 require(cfg[n]["command"] == STANDIN and cfg[n]["args"][:3] == [n, str(idle), "--"], cfg[n])
             for n in ("hindsight", "context7", "ticktick"):
                 require(cfg[n] == {"type": "http", "url": url}, cfg[n])
@@ -619,7 +619,7 @@ def six_servers(root, port, remote_port, idle):
             data = json.loads(r.stdout)
             rows = data if isinstance(data, list) else data.get("servers", data)
             names = {x.get("name") for x in rows} if isinstance(rows, list) else set(rows)
-            require(names >= {"furi", "playwright", "rea", "hindsight", "context7", "ticktick"}, names)
+            require(names >= {"alpha", "playwright", "rea", "hindsight", "context7", "ticktick"}, names)
             require('"connected"' in r.stdout and r.stdout.count('"connected"') >= 6, r.stdout[:600])
             for f in fakes:
                 require(f.procs() == [], "pi mcp list started %s" % f.name)
@@ -632,7 +632,7 @@ def six_servers(root, port, remote_port, idle):
             def session_mcp():
                 require(rpc.command("prompt", message="/mcp").get("disposition") == "handled", "/mcp not handled")
                 blob = json.dumps(rpc.events)
-                for n in ("furi", "playwright", "rea", "hindsight", "context7", "ticktick"):
+                for n in ("alpha", "playwright", "rea", "hindsight", "context7", "ticktick"):
                     require("%s: connected" % n in blob, "%s not listed as connected" % n)
                 out = rpc.prompt("remote")
                 require("RESULT:remote-echo:remote" in out, out[:300])
@@ -646,11 +646,10 @@ def six_servers(root, port, remote_port, idle):
 
 
 REAL_CODES = {
-    "real-furi": "const r = await tools.list_mcp_resources({server:'furi'}); const j = JSON.stringify(r); text('RESULT:' + JSON.stringify({isError: !!(r && r.isError), bytes: j.length, head: (r && r.isError) ? String((r.content && r.content[0] && r.content[0].text) || '').slice(0, 200) : ''}));",
     "real-playwright": "const r = await tools.mcp__playwright__browser_navigate({url:'about:blank'}); const j = JSON.stringify(r); text('RESULT:' + JSON.stringify({isError: !!(r && r.isError), bytes: j.length, head: (r && r.isError) ? String((r.content && r.content[0] && r.content[0].text) || '').slice(0, 200) : ''}));",
     "real-rea": "const r = await tools.mcp__rea__binary_session({}); const j = JSON.stringify(r); text('RESULT:' + JSON.stringify({isError: !!(r && r.isError), bytes: j.length, head: (r && r.isError) ? String((r.content && r.content[0] && r.content[0].text) || '').slice(0, 200) : ''}));",
 }
-REAL_PROCESS = {"furi": "furi", "playwright": "node playwright-mcp", "rea": "node rea"}
+REAL_PROCESS = {"playwright": "node playwright-mcp", "rea": "node rea"}
 
 
 def cached_chromium():
@@ -669,7 +668,7 @@ REAL_IDLE = 10
 
 
 def real_calls(root, port):
-    """One harmless call to each real server through a real Pi session in a throwaway home. The three entries come
+    """One harmless call to each real server through a real Pi session in a throwaway home. The two entries come
     from the real rendering step and state copies built by the real refresh. The throwaway home is the measurement
     tool's: offline npx from clones of the owner's npx cache, stubbed credential helpers, no credentials."""
     import types
@@ -693,7 +692,7 @@ def real_calls(root, port):
         agent = home / ".pi" / "agent"
         agent.mkdir(parents=True)
         mcp = json.loads(json.dumps(rendered["mcp"]))
-        for n in ("furi", "playwright", "rea"):
+        for n in ("playwright", "rea"):
             mcp["mcpServers"][n]["args"][1] = str(REAL_IDLE)  # shortened idle period, in the proof's own copy only
         (agent / "mcp.json").write_text(json.dumps(mcp))
         (home / ".local" / "state").mkdir(parents=True)
@@ -707,7 +706,7 @@ def real_calls(root, port):
                 (home / ".npm" / link).symlink_to(store_root / name)
         tools_dir = home / ".tools"
         tools_dir.mkdir()
-        for c in ("python3", "node", "npx", "npm", "furi", "git"):
+        for c in ("python3", "node", "npx", "npm", "git"):
             real = shutil.which(c)
             if real:
                 (tools_dir / c).symlink_to(real)
@@ -729,9 +728,9 @@ def real_calls(root, port):
             holder["env"]["PLAYWRIGHT_MCP_EXECUTABLE_PATH"] = holder["chromium"]
         holder["project"] = project
         servers = rendered["mcp"]["mcpServers"]
-        for n in ("furi", "playwright", "rea"):
+        for n in ("playwright", "rea"):
             require(servers[n]["command"].endswith("pi-mcp-lazy"), "%s not wrapped" % n)
-        require(all((home / ".local" / "state" / "pi-mcp-lazy" / (n + ".json")).exists() for n in ("furi", "playwright", "rea")), "state copies missing")
+        require(all((home / ".local" / "state" / "pi-mcp-lazy" / (n + ".json")).exists() for n in ("playwright", "rea")), "state copies missing")
 
     prepare()
     if "env" not in holder:
@@ -753,7 +752,7 @@ def real_calls(root, port):
             return {"owned_process_names": names}
         none_before()
 
-        for name in ("furi", "playwright", "rea"):
+        for name in ("playwright", "rea"):
             @check("real server %s: first harmless call starts it and returns a real result" % name)
             def one(name=name):
                 t0 = time.monotonic()
@@ -791,7 +790,7 @@ def real_calls(root, port):
             owned_pre, owned_after = holder["owned_pre"], after + pi_rss_kb(rpc.p.pid)
             require(owned_after <= 1.10 * owned_pre, "owned-set RSS before %d kB, after idle %d kB" % (owned_pre, owned_after))
             names = owned_names()
-            require(len([n for n in names if "pi-mcp-lazy" in n]) == 3, "stand-ins should stay: %r" % names)
+            require(len([n for n in names if "pi-mcp-lazy" in n]) == 2, "stand-ins should stay: %r" % names)
             out = rpc.prompt("real-rea", timeout=180)
             require('"isError":false' in out, out[:300])
             require("node rea" in owned_names(), "rea was not started again")

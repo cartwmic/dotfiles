@@ -84,20 +84,20 @@ class RenderTests(unittest.TestCase):
         self.addCleanup(w.cleanup)
         return w
 
-    def test_three_servers_wrapped_remote_unchanged(self):
+    def test_two_servers_wrapped_remote_unchanged(self):
         w = self.world()
         r = w.run("pi")
         self.assertEqual(r.returncode, 0, r.stderr)
         s = w.pi_servers()
         c = w.canonical["mcpServers"]
-        for name in ("furi", "playwright", "rea"):
+        for name in ("playwright", "rea"):
             self.assertEqual(s[name]["command"], str(w.bin))
             self.assertEqual(s[name]["args"], [name, "600", "--", c[name]["command"], *c[name]["args"]])
         for name in ("hindsight", "context7", "ticktick"):
             self.assertEqual(s[name], c[name])
         self.assertEqual(set(s), set(c))
         refreshed = w.log.read_text().splitlines()
-        self.assertEqual([l.split()[1] for l in refreshed if l.startswith("--refresh")], ["furi", "playwright", "rea"])
+        self.assertEqual([l.split()[1] for l in refreshed if l.startswith("--refresh")], ["playwright", "rea"])
 
     def test_failed_refresh_is_logged_by_name_and_entry_still_wrapped(self):
         w = self.world()
@@ -106,9 +106,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("refresh of playwright failed", r.stdout)
         self.assertIn("refresh exploded for playwright", r.stdout)
         s = w.pi_servers()
-        for name in ("furi", "playwright", "rea"):
+        for name in ("playwright", "rea"):
             self.assertEqual(s[name]["command"], str(w.bin), name)
-        self.assertIn("refreshed furi", r.stdout)
         self.assertIn("refreshed rea", r.stdout)
 
     def test_idle_argument_is_configurable(self):
@@ -159,11 +158,11 @@ class RenderTests(unittest.TestCase):
     def test_rollback_by_removing_list_entry(self):
         w = self.world()
         w.run("pi")
-        w.list.write_text("furi\nplaywright\n")
+        w.list.write_text("playwright\n")
         w.run("pi")
         s = w.pi_servers()
         self.assertEqual(s["rea"], w.canonical["mcpServers"]["rea"])
-        self.assertEqual(s["furi"]["command"], str(w.bin))
+        self.assertEqual(s["playwright"]["command"], str(w.bin))
 
     def test_missing_list_or_binary_leaves_entries_as_rendered_and_exits_zero(self):
         w = self.world(with_list=False)
