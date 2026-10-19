@@ -30,6 +30,15 @@ def main():
     work = root / 'work'
     work.mkdir()
     (work / 'payload.txt').write_text('x' * 12371)
+    # The fixture fills ~45% of the window. Run a private copy of the extension
+    # with the threshold capped below that, so local config cannot mask the result.
+    source = args.extension.resolve()
+    extension = root / 'extension'
+    shutil.copytree(source.parent, extension)
+    config_path = extension / 'config.json'
+    config = json.loads(config_path.read_text()) if config_path.exists() else {}
+    config['thresholdPercent'] = min(config.get('thresholdPercent', 100), 40)
+    config_path.write_text(json.dumps(config, indent=2))
     (agent / 'settings.json').write_text(json.dumps({
         'compaction': {'enabled': False}, 'retry': {'enabled': False},
         'defaultProjectTrust': 'no', 'packages': [],
@@ -110,7 +119,7 @@ def main():
         'baseUrl': f'http://127.0.0.1:{server.server_port}/v1', 'api': 'openai-completions', 'apiKey': 'dummy-local-only',
         'models': [{'id': 'scripted', 'contextWindow': 272000, 'maxTokens': 16384}],
     }}}))
-    command = [args.pi, '--print', '--no-skills', '--no-extensions', '-e', str(args.extension.resolve()),
+    command = [args.pi, '--print', '--no-skills', '--no-extensions', '-e', str(extension / source.name),
                '-e', str(HERE / 'observer.ts'), '--model', 'proof/scripted', '--session-dir', str(root / 'sessions'),
                '--system-prompt', 'Follow the scripted task.',
                'Establish historical context.',
