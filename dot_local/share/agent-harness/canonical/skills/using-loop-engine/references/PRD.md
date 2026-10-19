@@ -2301,6 +2301,8 @@ Genuine findings, review judgments, implementation work and command proof can re
 
 Original identities and results remain truthful. The driver explains applicability and obtains affected checks or judgments. This includes aggregate and whole-goal judgments when their complete scope and judging meaning remain applicable; existing categorical aggregate/goal freshness requirements are replaced by applicability-sensitive requirements. Materially affected judgments require fresh assessment, and stage/author coverage remains binding. Unresolved findings remain visible; reuse cannot silently discharge them or manufacture passing evidence.
 
+Carried review evidence that cites a criterion (an acceptance entry, the whole acceptance array, or a line range overlapping entries; an array or range counts as citing every criterion it holds) remains current only while the cited criteria's text is unchanged. A revision-only edit keeps the carry; changed criterion text makes it stale and the refusal names the changed criteria. When the earlier intent bytes are not retained, currency cannot be verified: the carry still counts, remains driver-attested and says so. Commission and the checked gate reach the same eligibility answer and name the same cause.
+
 ### LE-172: External advice with preserved configured obligations
 - Status: live
 - Coverage: e2e/journey
@@ -2371,6 +2373,8 @@ Early results can later satisfy the corresponding obligation when they genuinely
 
 A completed grouped judgment must genuinely consider its configured axes together with the required inputs. Isolated axis results are not silently promoted into that combined judgment. Useful partial work remains retained while necessary claims or inputs are missing and group fulfillment remains pending. No categorical rerun of valid partial work is required merely to serialize a batch; the configured combined assessment remains necessary.
 
+A group whose counted evidence includes at least one explicitly carried judgment may be covered by carried and fresh judgments together: every axis of the group must be covered at its configured author floor, carried judgments keep their original author and assessment, and the fresh judgments of any one author share one assessment. A group with no carried judgment is judged exactly as above, so two fresh authors covering disjoint axes remain refused. No floor, self-review exclusion or individual-versus-aggregate author relationship is lowered, and a refusal names the rule and the affected author, assessment and axis.
+
 An independently configured singleton group can qualify when its own inputs and required comparison are ready, without waiting for unrelated groups. This includes the default separate intent-sufficient ordinary and challenge groups described in LE-173. The challenge uses the accepted axis-level alignment claim and comparison, not a fabricated whole-gate pass.
 
 ### LE-178: Explicit, durable required-author-count amendment
@@ -2415,7 +2419,7 @@ Preserve required independence and self-review rules except choices expressly ma
 
 A driver can complete a supported software-change run whose intended work spans more than one Git repository, using the ordinary artifacts, externally performed work, evidence and checked progression rather than starting a separate run merely because work crosses a repository boundary. Applicable engine/shared and other-provider evidence/reference paths must not assume every relevant source lives beneath one evaluation cwd; retain each provider's existing target and phase meaning rather than inventing a new multi-target workflow.
 
-The driver declares the relevant repository/source scopes. Artifact coverage, source references, command proof and repository/checkpoint identities unambiguously identify the appropriate repository and revision/state. The same relative filename or local requirement ID in two repositories does not make them interchangeable. Required affected work and proof in a second repository cannot be omitted or passed by reusing an unrelated primary-repository success. Applicable Bookends and other authority obligations are assessed in their correct repository scope; do not silently waive them or merge distinct authorities into one unqualified ID list.
+The driver declares the relevant repository/source scopes. Without a declaration, repository-relative evidence locators resolve beneath the artifact directory and then beneath the git top level of the artifact directory, never the directory the command runs from; with neither, they are refused with a message naming the missing declaration. Artifact coverage, source references, command proof and repository/checkpoint identities unambiguously identify the appropriate repository and revision/state. The same relative filename or local requirement ID in two repositories does not make them interchangeable. Required affected work and proof in a second repository cannot be omitted or passed by reusing an unrelated primary-repository success. Applicable Bookends and other authority obligations are assessed in their correct repository scope; do not silently waive them or merge distinct authorities into one unqualified ID list.
 
 Existing source/evidence may be retained where genuinely applicable under LE-171, with current affected checks and honest identity/history. Keep declarations and mechanical checks proportional; use the existing durable references/captures and driver judgment rather than a mandatory external-work registry, repository manager or automatic semantic-impact classifier. The driver owns checkout/worktree/clone/merge/commit lifecycle and its authorization; the engine/provider gains no such ownership.
 
@@ -2512,3 +2516,48 @@ Taking a route keeps artifacts, context, findings and history, rolls nothing bac
 - Coverage: e2e/journey
 
 While a software-change run is in a review challenge state, a new write that belongs to the corresponding ordinary review is refused before it is stored. This covers ordinary review judgments, ordinary finding ledgers, required-author-count amendments targeting the ordinary review, intent-comparison during the intent challenge, and explicit applicability whose origin is an ordinary-review judgment. The refusal names the ordinary review and the existing revise route, and the run's context is unchanged. Challenge judgments and ledgers, applicability of challenge judgments, writes made in other states including early preparation under LE-174, and existing history are unaffected. The rule uses the shared every-write provider validation; it adds no route, reapproval shortcut or engine review concept, and an owner-attested override (LE-113) remains separate.
+
+### LE-195: Model bindings in the per-run profile
+- Status: live
+- Coverage: e2e/journey
+
+A software-change per-run profile MAY carry an optional `model_bindings` object holding, for any subset of the roles driver, author, implementer, ordinary-reviewer, challenge-reviewer, cold-reader and criterion-author, one required `provider/model` string and one thinking-level string, plus the driver's own declared session when the driver is bound. Both values MUST be nonblank. The bindings are part of the exact profile bytes and identity shown to the owner before start, are frozen with the run input, and are not changed by later profile-file edits. Start MUST refuse a malformed `model_bindings` value or a missing or unequal driver declaration, naming the cause. Shipped profiles MUST carry no bindings and choose no models.
+
+### LE-196: Declared sessions on stored work
+- Status: live
+- Coverage: e2e/journey
+
+For every role with a binding in force, the session producing the work MUST declare the provider/model and thinking level it ran with, as read from its own session metadata: on each review judgment, challenge judgment, cold-reader reconstruction and criterion or goal verdict; on a `session-declaration` for each author draft and implementer report of the exact subject revision; and from the driver at run start and in each binding amendment, but not on every command or append. A role with no binding in force needs no declaration. Declared values are compared as exact text with no aliasing or normalization. The engine and provider judge declared values only; they neither authenticate the declarer nor verify the real model.
+
+### LE-197: Refusal of missing or mismatched declarations
+- Status: live
+- Coverage: e2e/journey
+
+A declaration that is missing, or whose provider/model or thinking level differs from the binding in force for its role, MUST be refused at the point the run would first store or accept the work (append for returns, the checked step for drafts and reports, run start or amendment for the driver). The diagnostic MUST name the role, the expected and actual values (or that the statement is missing) and which part differs. Refused work is never stored or counted toward a gate, author floor or checkpoint, and context and state are unchanged. Where the refusal is a checked-event denial (author drafts, implementer reports), the engine's ordinary denied-transition record is the only history entry and no accepted record or transition is added; a refused append adds no history. Records stored earlier are never re-judged; each remains judged against the binding in force when it was stored.
+
+### LE-198: Owner binding amendment
+- Status: live
+- Coverage: e2e/journey
+
+The owner MAY add, change or remove bindings of one or more roles on a running software- change run, including a run started with none, by appending a `model-binding-amendment` record carrying a human actor, owner authority, the owner's verbatim nonblank words, each affected role with its old binding (none when adding) and new binding (none when removing), the driver's declaration whenever a driver binding is in force afterward, and an optional stale mark. The amendment takes effect at its own position in history, cannot be back-dated, and rewrites nothing. It MUST be refused, with the run unchanged and the cause named, when: the actor is not human; the authority is not owner; the words are blank; a role is unknown; a stated old binding is not the binding in force (including adding to a bound role or changing or removing an unbound one); a new binding is malformed; the driver declaration is missing or unequal to the driver binding in force afterward; or evidence is marked stale for a role other than ordinary-reviewer, challenge-reviewer, cold-reader or criterion-author. Standing delegation does not authorize an amendment.
+
+### LE-199: Eligibility of evidence across amendments
+- Status: live
+- Coverage: e2e/journey
+
+By default evidence produced under a superseded, changed or removed binding, or while the role was unbound, remains eligible exactly as it would have without the amendment, including carrying by explicit evidence-applicability and group coverage by returns made under different bindings. An amendment that marks a role stale makes that role's earlier returns ineligible for decisions requested after it and uncarryable to new targets, without reopening earlier decisions or changing any original record. Commission and the checked event MUST give the same eligible-or-refused answer, and a refusal MUST name the amendment, role, author, assessment and axis. Author floors, author independence, assessment identity and the coverage of every axis are unchanged.
+
+### LE-200: Visibility and unbound behavior
+- Status: live
+- Coverage: e2e/journey
+
+The `show` status and full views and the owner approval view prepared by commission MUST show, per role, the original binding (or none), the binding in force (or none), and the ordered amendment history (time, actor, verbatim words, old and new binding, stale mark), and MUST say explicitly when a run never had bindings and has no amendment. A run with no bindings and no amendment, including one created from unmodified earlier profile data, MUST behave exactly as before: no model statement, no new refusal. Runs started by earlier builds are not changed.
+
+Accepted limits for LE-195 to LE-200:
+
+- Declared values are the boundary: a wrong declaration equal to the binding passes.
+- The driver declares only at run start and in each amendment; a model change between
+  those points is not detected.
+- Superseded-binding evidence stays usable unless the owner's amendment marks it stale.
+- Interaction with the unmerged evidence-carry fix (#30, #31, #40, #41) is rechecked at
+  integration.
