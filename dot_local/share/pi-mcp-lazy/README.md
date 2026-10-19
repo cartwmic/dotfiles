@@ -5,7 +5,7 @@ that costs most of an idle session's memory (cartwmic/dotfiles#14). `pi-mcp-lazy
 `~/.local/bin/pi-mcp-lazy`) sits in front of one local server so it runs only while it is used.
 
 Pi's built-in MCP client is unchanged. It still reads `~/.pi/agent/mcp.json` and still starts one stdio process per
-server, but for `furi`, `playwright` and `rea` that process is the stand-in:
+server, but for `playwright` and `rea` that process is the stand-in:
 
 - **Handshake and tool list come from a saved copy.** Pi sees the same tools (`mcp__<server>__<tool>`) and the
   `mcp_servers` listing in the system prompt, and `searchTools`, `describeTool`, `describeNamespace` and `ALL_TOOLS`
@@ -24,7 +24,7 @@ server, but for `furi`, `playwright` and `rea` that process is the stand-in:
   tail of its stderr. The stand-in stays up and the next request tries again.
 - Closing Pi's stdin, SIGTERM and SIGHUP stop the real server too, so exiting Pi or `/reload` leaves nothing behind.
 
-Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`furi`, `playwright`, `rea`). The remote HTTP servers
+Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`playwright`, `rea`). The remote HTTP servers
 (`hindsight`, `context7`, `ticktick`) are not touched.
 
 ## Where the saved tool list comes from
@@ -51,8 +51,8 @@ credentials.
   that entry's argument in `~/.pi/agent/mcp.json`, or for all by exporting `PI_MCP_LAZY_IDLE` when applying.
 - Rebuild a copy by hand: `pi-mcp-lazy --refresh NAME -- COMMAND [ARGS...]` (starts the real server once, saves, stops).
 - Regenerate the seeds from the real servers (do this when preparing a change that bumps a server):
-  `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh furi -- furi connect`
-  and likewise for `playwright` (`npx @playwright/mcp`) and `rea` (`npx -y rea-agents@6.4.0 mcp`).
+  `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh playwright -- npx @playwright/mcp`
+  and likewise for `rea` (`npx -y rea-agents@6.4.0 mcp`).
 - Environment: `PI_MCP_LAZY_STATE_DIR`, `PI_MCP_LAZY_SEED_DIR`, `PI_MCP_LAZY_GRACE` (seconds between SIGTERM and SIGKILL,
   default 1.0), `PI_MCP_LAZY_START_TIMEOUT` (default 120).
 
@@ -114,7 +114,7 @@ footprint after /reload 269 MB with no real MCP process at any stage; the baseli
 The stand-ins read 16 MB each here because the measurement home has no Python bytecode cache; with a warm cache one idles at
 about 12 MB. A stand-in runs on the system Python (`/usr/bin/python3`) when the macOS command-line tools are present, because it
 is about 10 MB smaller than a current mise Python, and on `python3` from PATH otherwise. The first call to a stopped server
-costs the server's own start time (furi and rea about 2 s, playwright about 1 s here) plus about 0.04 s for the stand-in.
+costs the server's own start time (rea about 2 s, playwright about 1 s here) plus about 0.04 s for the stand-in.
 
 ## Tests and measurement
 
