@@ -38,9 +38,11 @@ which now sits before `async _startRun(trigger, onStarted) {` (bundle:
 `async _startRun(trigger,onStarted){`). The `sendUserMessage` and `compact`
 callback anchors and the print-mode `session.prompt` anchors are unchanged.
 Nothing was dropped: 1.2.0 does not own fire-and-forget extension work through
-print shutdown. Residual: only 1.2.0 was tested. `settlement-abort` shares the `_startRun`
+print shutdown. Pi 1.3.0 keeps every anchor, so `patch.pi-1.3.mjs` is the same
+payload; all four proof scenarios pass on 1.3.0, and stock 1.3.0 still fails
+inter-turn and final-turn. `settlement-abort` shares the `_startRun`
 definition anchor (this patch inserts before it, that one after); the full
-ordered stack was verified together on 1.2.0.
+ordered stack was verified together on 1.2.0 and 1.3.0.
 
 `patch.mjs` patches both the CLI-load-bearing `dist/bundle/chunks/*.js` and
 the equivalent unbundled `dist/core/agent-session.js` and
@@ -84,11 +86,11 @@ bun test dot_pi/private_agent/extensions/auto-compact/index.test.ts
 
 Each artifact directory must be new. `--pi /path/to/dist/bundle/cli.js` tests
 an isolated candidate; `--extension /path/to/index.ts` selects source or deployed
-extension. The default is the deployed `~/.pi/agent/extensions/auto-compact/index.ts`,
-including its machine-local configuration. The fixture's history reaches roughly
-45% of the scripted 272000-token window, so a machine whose auto-compact
-`thresholdPercent` is higher never compacts and the proof fails on config, not
-on the patch — point `--extension` at a copy with a lowered threshold instead.
+extension. The default is the deployed `~/.pi/agent/extensions/auto-compact/index.ts`.
+The proof runs a private copy of that extension directory (saved under the
+artifacts) with `thresholdPercent` capped at 40: the fixture's history reaches
+roughly 45% of the scripted 272000-token window, so a higher machine-local
+threshold would never compact and fail on config, not on the patch.
 
 The fixture uses the public `--print --no-skills --no-extensions -e ...` CLI,
 a local OpenAI-compatible HTTP server, isolated settings/auth, native tools,
