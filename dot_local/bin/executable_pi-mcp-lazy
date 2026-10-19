@@ -28,7 +28,9 @@ import time
 # module not loaded is memory not held (there is one stand-in per server per Pi session)
 
 VERSION = "1"
-GRACE = float(os.environ.get("PI_MCP_LAZY_GRACE", "3"))
+# Pi closes stdin, sends SIGTERM 0.5 s later and SIGKILLs the stand-in's own process group 2 s after that (2.5 s in all, pi-mcp
+# stdio transport). The real server runs in a separate group, so its SIGKILL must come before that deadline: default 1.5 s.
+GRACE = float(os.environ.get("PI_MCP_LAZY_GRACE", "1.5"))
 START_TIMEOUT = float(os.environ.get("PI_MCP_LAZY_START_TIMEOUT", "120"))
 STDERR_KEEP = 4000
 
@@ -266,6 +268,7 @@ class Child:
 
     def stop(self):
         """Stop the whole process tree: stdin close, SIGTERM, grace, SIGKILL; also stray descendants."""
+        again = self.stopping  # a second stop while one is running: the caller (Pi's SIGTERM) is already short of time
         self.stopping = True
         pid = self.proc.pid
         tree = descendants(pid)
@@ -284,7 +287,7 @@ class Child:
                 pass
             return any(pid_alive(p) for p in tree)
 
-        for sig, wait in ((signal.SIGTERM, GRACE), (signal.SIGKILL, 2.0)):
+        for sig, wait in (((signal.SIGKILL, 2.0),) if again else ((signal.SIGTERM, GRACE), (signal.SIGKILL, 2.0))):
             try:
                 os.killpg(pid, sig)
             except (ProcessLookupError, PermissionError):

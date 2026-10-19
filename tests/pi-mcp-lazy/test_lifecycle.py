@@ -94,6 +94,34 @@ class LifecycleTests(unittest.TestCase):
         s.p.wait(timeout=15)
         self.assertTrue(wait_until(lambda: procs(self.e.marker) == [], timeout=10), procs(self.e.marker))
 
+    def _pi_style_exit(self, send_sigterm):
+        """Exit the way Pi 1.2.0 does: close stdin; SIGTERM the stand-in 0.5 s later; SIGKILL its group at 2.5 s. The real
+        server and its helper ignore SIGTERM and run in their own group, so only the stand-in's own escalation can stop them.
+        Production default grace (PI_MCP_LAZY_GRACE removed)."""
+        write_copy(self.e.state, "fake", self.e.key("--grandchild", "--ignore-term"))
+        s = Session(self.e, "fake", 600, "--grandchild", "--ignore-term", extra_env={"PI_MCP_LAZY_GRACE": None})
+        self.addCleanup(s.close)
+        s.initialize()
+        self.assertEqual(text_of(s.call("echo", {"text": "x"})), "echo:x")
+        self.assertEqual(len(procs(self.e.marker)), 2)
+        t0 = time.time()
+        s.p.stdin.close()
+        if send_sigterm:
+            time.sleep(0.5)
+            s.p.send_signal(signal.SIGTERM)
+        s.p.wait(timeout=15)
+        left = procs(self.e.marker)
+        took = time.time() - t0
+        # Pi would SIGKILL the stand-in at 2.5 s; cleanup of the separate group must already be done by then
+        self.assertEqual(left, [], "SIGTERM-ignoring server survived the stand-in's exit (%.1fs): %r" % (took, left))
+        self.assertLess(took, 2.4, "stand-in took %.1fs to exit; Pi kills it at 2.5s" % took)
+
+    def test_sigterm_ignoring_server_is_gone_within_pis_deadline_after_stdin_close(self):
+        self._pi_style_exit(send_sigterm=False)
+
+    def test_sigterm_ignoring_server_is_gone_within_pis_deadline_with_pis_sigterm(self):
+        self._pi_style_exit(send_sigterm=True)
+
     def test_stdin_close_leaves_nothing(self):
         self._exit_leaves_nothing(lambda s: s.p.stdin.close())
 

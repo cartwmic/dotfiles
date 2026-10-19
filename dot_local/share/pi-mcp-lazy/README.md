@@ -53,7 +53,7 @@ credentials.
   `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh furi -- furi connect`
   and likewise for `playwright` (`npx @playwright/mcp`) and `rea` (`npx -y rea-agents@6.4.0 mcp`).
 - Environment: `PI_MCP_LAZY_STATE_DIR`, `PI_MCP_LAZY_SEED_DIR`, `PI_MCP_LAZY_GRACE` (seconds between SIGTERM and SIGKILL,
-  default 3), `PI_MCP_LAZY_START_TIMEOUT` (default 120).
+  default 1.5: Pi kills the stand-in 2.5 s after closing stdin, so the real server's group must be gone before that), `PI_MCP_LAZY_START_TIMEOUT` (default 120).
 
 ## How it is rendered
 

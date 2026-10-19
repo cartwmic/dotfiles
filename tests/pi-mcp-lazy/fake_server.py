@@ -15,6 +15,7 @@ ap.add_argument("--toolset", default="a")
 ap.add_argument("--grandchild", action="store_true")
 ap.add_argument("--crash-file", default="")
 ap.add_argument("--noise", action="store_true")
+ap.add_argument("--ignore-term", action="store_true", help="ignore SIGTERM (server and grandchild), so only SIGKILL stops them")
 ap.add_argument("--resources", action="store_true")
 ap.add_argument("--start-delay", type=float, default=0)
 ap.add_argument("--name", default="fake")
@@ -30,12 +31,16 @@ if a.noise:
     for i in range(30):
         sys.stderr.write("fake_server noise line %d\n" % i)
     sys.stderr.flush()
+if a.ignore_term:
+    import signal
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 time.sleep(a.start_delay)
 open(os.path.join(a.dir, "server.pid"), "w").write(str(os.getpid()))
 with open(os.path.join(a.dir, "events.log"), "a") as f:
     f.write("start %d\n" % os.getpid())
 if a.grandchild:
-    g = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(300)", a.marker + "-grandchild"])
+    code = ("import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);" if a.ignore_term else "import time;") + "time.sleep(300)"
+    g = subprocess.Popen([sys.executable, "-c", code, a.marker + "-grandchild"])
     open(os.path.join(a.dir, "grandchild.pid"), "w").write(str(g.pid))
 
 def _chatter():
