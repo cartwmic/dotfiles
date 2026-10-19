@@ -15,7 +15,7 @@ After the idle period with nothing in flight the whole process tree is stopped a
                                                         its handshake and tool list, stop it
 
 Environment (all optional): PI_MCP_LAZY_STATE_DIR, PI_MCP_LAZY_SEED_DIR, PI_MCP_LAZY_GRACE
-(seconds between SIGTERM and SIGKILL, default 3), PI_MCP_LAZY_START_TIMEOUT (default 120).
+(seconds between SIGTERM and SIGKILL, default 1.5), PI_MCP_LAZY_START_TIMEOUT (default 120).
 Saved copies hold only server-published metadata, never credentials.
 """
 import json
@@ -446,6 +446,8 @@ class Lazy:
             if self.cache is None:
                 self.cache = self.load()
             return self.send_tools(rid)
+        if self.closing:
+            return self.error(rid, "MCP server '%s' is shutting down" % self.name)
         with self.lock:
             try:
                 changed = self.ensure_child()
@@ -474,13 +476,15 @@ class Lazy:
         self.child = child
         try:
             return self.handshake(child)
-        except StartError:
-            self.child = None
-            child.stop()
-            raise
-        except Exception as e:
-            self.child = None
-            child.stop()
+        except BaseException as e:
+            # self.child stays set until stop() has finished: a SIGTERM from Pi arriving during the stop must still find the
+            # child and send it SIGKILL (shutdown() / Child.stop() second call), not exit with the server still running.
+            try:
+                child.stop()
+            finally:
+                self.child = None
+            if isinstance(e, StartError) or not isinstance(e, Exception):
+                raise
             raise StartError("MCP server '%s' failed to start: %s" % (self.name, e))
 
     def handshake(self, child):
@@ -622,10 +626,15 @@ class Lazy:
                     self.child = None
 
     def shutdown(self):
+        """Stop the real server. Deliberately does not take self.lock: another thread (the idle watcher, or a request that is
+        starting or stopping the server) may be holding it while it waits out the grace period. Every place that stops a child
+        keeps it registered in self.child until stop() has returned, so this always finds it; a stop already in progress
+        turns into an immediate SIGKILL of the whole group."""
         self.closing = True
-        with self.lock:
-            if self.child:
-                self.child.stop()
+        c = self.child
+        if c:
+            c.stop()
+            if self.child is c:
                 self.child = None
 
     def serve(self):

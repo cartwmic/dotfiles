@@ -33,7 +33,9 @@ if a.noise:
     sys.stderr.flush()
 if a.ignore_term:
     import signal
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    def _term(signum, frame):  # note it (a test waits for this), then ignore it
+        open(os.path.join(a.dir, "term.seen"), "w").write("1")
+    signal.signal(signal.SIGTERM, _term)
 time.sleep(a.start_delay)
 open(os.path.join(a.dir, "server.pid"), "w").write(str(os.getpid()))
 with open(os.path.join(a.dir, "events.log"), "a") as f:
