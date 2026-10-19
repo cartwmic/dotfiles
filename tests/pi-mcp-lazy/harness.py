@@ -109,7 +109,7 @@ class Session:
         self.roots = roots or [{"uri": "file:///tmp/x", "name": "x"}]
         cmd = [sys.executable, STANDIN, name, str(idle), "--"] + env.fake_cmd(*fake_args)
         self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  env=env.env(**(extra_env or {})))
+                                  env=env.env(**(extra_env or {})), start_new_session=True)  # Pi spawns a stand-in as the leader of its own group
         threading.Thread(target=self._rd, daemon=True).start()
         threading.Thread(target=self._er, daemon=True).start()
 

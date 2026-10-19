@@ -11,10 +11,11 @@ server, but for `furi`, `playwright` and `rea` that process is the stand-in:
   `mcp_servers` listing in the system prompt, and `searchTools`, `describeTool`, `describeNamespace` and `ALL_TOOLS`
   work, with no real server running.
 - **The first request that needs the real server starts it** (a tool call, or a resource or prompt request). It runs in
-  its own process group, receives Pi's own `initialize`, and everything after that is forwarded unchanged, including the
+  the stand-in's own process group (Pi starts each stand-in as the leader of a group of its own), receives Pi's own `initialize`, and everything after that is forwarded unchanged, including the
   server's own requests to Pi (for example `roots/list`).
 - **After the idle period with no request in flight** the whole process tree is stopped (stdin closed, SIGTERM, a
-  short grace, SIGKILL, plus any descendant that left the group). A later request starts it again. A call that runs
+  short grace, SIGKILL, signalled by process id: the server's pid and its descendants, found before anything is signalled, so
+  also a browser the server detached into its own session; never a group, because the stand-in shares the server's group). A later request starts it again. A call that runs
   longer than the idle period is never interrupted: the clock runs only while nothing is in flight.
 - **A cancelled call is not in flight.** Pi cancels a call when the user aborts it or it times out, and some servers (rea) then
   send no reply at all. The stand-in forgets a request as soon as Pi cancels it, so an unanswered cancelled call cannot keep the
@@ -53,7 +54,7 @@ credentials.
   `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh furi -- furi connect`
   and likewise for `playwright` (`npx @playwright/mcp`) and `rea` (`npx -y rea-agents@6.4.0 mcp`).
 - Environment: `PI_MCP_LAZY_STATE_DIR`, `PI_MCP_LAZY_SEED_DIR`, `PI_MCP_LAZY_GRACE` (seconds between SIGTERM and SIGKILL,
-  default 1.5: Pi kills the stand-in 2.5 s after closing stdin, so the real server's group must be gone before that), `PI_MCP_LAZY_START_TIMEOUT` (default 120).
+  default 1.0), `PI_MCP_LAZY_START_TIMEOUT` (default 120).
 
 ## How it is rendered
 
@@ -69,8 +70,15 @@ are unchanged.
   the idle period for that entry if that matters.
 - A cold first call can take seconds (`npx` start). Pi's per-request timeout is 60 seconds by default; add a larger
   `"timeout"` to the entry if a cold start is ever slower.
-- If the stand-in itself is killed with SIGKILL it cannot clean up. The real server sees its stdin close and normally
-  exits, but a process it spawned can be left behind (the lifecycle test prints what it observed).
+- **Exit and /reload.** Because the server shares the stand-in's process group, Pi's own shutdown (close stdin, SIGTERM to the
+  group after 0.5 s, SIGKILL to the group after 2.5 s) reaches the server and every helper that stays in the group, whatever the
+  stand-in is doing; the stand-in's own tidy-up is best effort on top. A helper a server detaches into its own session (a
+  browser) is outside that kill: the stand-in stops it from its pre-signal process walk, and when the stand-in is killed
+  outright it is as exposed as it is under today's direct launch.
+- A helper left behind by a server that crashes outright (the server dies before the stand-in can walk its process tree) is re-parented
+  and stays until Pi's exit kills the stand-in's group, exactly as it would under a direct launch.
+- If the stand-in itself is killed with SIGKILL it cannot tidy up, but its group-mates die with it when Pi's group kill is the
+  cause, and the server sees its stdin close either way. The lifecycle test prints what it observed.
 - A seed can be out of date until the next apply or real start; a tool that was removed since then returns the server's
   own unknown-tool error.
 
