@@ -66,12 +66,12 @@ class DeployedLayoutTests(CoreTestCase):
 
 
 class EmitFormatTests(CoreTestCase):
-    def test_all_four_kinds_are_valid_lines_with_consecutive_seq(self):
-        for kind in ("finished", "blocked", "errored", "exited"):
+    def test_all_five_kinds_are_valid_lines_with_consecutive_seq(self):
+        for kind in ("finished", "question", "blocked", "errored", "exited"):
             self.emit_ok(worker="pane-" + kind, kind=kind)
         events = self.scratch.events()
-        self.assertEqual([e["seq"] for e in events], [1, 2, 3, 4])
-        self.assertEqual([e["kind"] for e in events], ["finished", "blocked", "errored", "exited"])
+        self.assertEqual([e["seq"] for e in events], [1, 2, 3, 4, 5])
+        self.assertEqual([e["kind"] for e in events], ["finished", "question", "blocked", "errored", "exited"])
         for event in events:
             self.assertEqual(list(event), ["version", "seq", "time", "worker", "kind"])
             self.assertEqual(event["version"], 1)
@@ -367,11 +367,11 @@ class SinkTests(CoreTestCase):
 
     def test_ok_sink_receives_every_kind_once_with_the_line_on_stdin(self):
         self.scratch.write_config(sink=[str(self.ok_sink)])
-        for kind in ("finished", "blocked", "errored", "exited"):
+        for kind in ("finished", "question", "blocked", "errored", "exited"):
             self.emit_ok(kind=kind)
         received = self.received.read_bytes()
         self.assertEqual(received, self.scratch.inbox_bytes(), "the exact bytes appended, once per event")
-        self.assertEqual([json.loads(line)["kind"] for line in received.splitlines()], ["finished", "blocked", "errored", "exited"])
+        self.assertEqual([json.loads(line)["kind"] for line in received.splitlines()], ["finished", "question", "blocked", "errored", "exited"])
         environment = self.received.with_name("received.jsonl.env").read_text().splitlines()[0]
         self.assertEqual(environment, "log=%s inbox=%s" % (self.scratch.log, self.scratch.inbox))
         self.assertEqual(self.scratch.log_text(), "")

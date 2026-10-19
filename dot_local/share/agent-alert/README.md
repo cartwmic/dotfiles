@@ -1,7 +1,8 @@
 # agent-alert
 
 A small way for a coordinator to learn that a worker (an agent in a terminal pane,
-a build, anything that can run a command) has finished, is blocked, or has gone.
+a build, anything that can run a command) has finished, is waiting on a question,
+is blocked, or has gone.
 Every such event is appended as one line to an **inbox** file. An event is only a
 nudge: it names the worker and says what happened, and carries no message text.
 A **sink** may also ring the coordinator, but the ring is best effort; the inbox
@@ -133,7 +134,8 @@ The hook acts on each event's own status and keeps no history:
 | Herdr event | Emitted |
 |---|---|
 | `pane.agent_status_changed`, status `blocked` | `blocked` |
-| `pane.agent_status_changed`, status `idle` or `done` | `finished` |
+| `pane.agent_status_changed`, status `idle` or `done`, and the pane's last lines hold the [question marker](#the-question-marker) | `question` |
+| `pane.agent_status_changed`, status `idle` or `done`, otherwise | `finished` |
 | `pane.agent_status_changed`, status `working`, `unknown` or anything else | nothing |
 | `pane.agent_detected` | nothing |
 | `pane.exited` or `pane.closed` for a pane that was seen with an agent | `exited` |
@@ -146,8 +148,9 @@ agent.
 
 - **`errored` is never emitted.** Herdr 0.9.1 has no error status, so a turn that
   ended on an error arrives as an ordinary `finished`.
-- **Events carry no message text.** The hook never reads a pane. The worker is the
-  pane id, so the coordinator reads the named pane itself:
+- **Events carry no message text.** Only a turn that ended (`idle` or `done`) makes the
+  hook look at a pane, once, for the question marker below; it keeps the yes or no and
+  nothing else. The worker is the pane id, so the coordinator reads the named pane itself:
 
   ```sh
   herdr pane read "$PANE" --source recent-unwrapped --lines 40
@@ -160,12 +163,43 @@ agent.
 - **A missed `exited`** is accepted when the exit hook runs before any other hook
   of that pane has recorded that it had an agent.
 
+### The question marker
+
+Herdr 0.9.1 reports a turn that ends with a question as plain `idle`: it has no state
+for "waiting on the owner" (`blocked` is for an approval or input prompt the agent itself
+raised). So the worker says it. A worker whose turn ends waiting on the owner's answer
+prints one line that starts with
+
+```
+AWAITING-OWNER:
+```
+
+at the end of its last message, for example `AWAITING-OWNER: which database?`. Put the
+instruction in the worker's prompt or its AGENTS.md; the adapter cannot ask for it.
+
+What the hook does with it:
+
+- On `idle` or `done` it runs `herdr pane read <pane> --source recent-unwrapped --lines 30`
+  (5 second limit), looks for a line that starts with `AWAITING-OWNER:` (a bullet or a box
+  edge in front, up to 8 non-word characters, is allowed), and emits `question`
+  instead of `finished` if it finds one. Text after the colon is never used, and the
+  pane text is not stored, logged or sent: the inbox and the ring carry the kind only.
+- If the read fails (the pane is gone, Herdr is slow, `herdr` is not found) the hook says
+  so on stderr (without pane text) and emits `finished`: the event is never lost.
+  `blocked` is never read or changed.
+- It looks at the last 30 lines, which include the agent's prompt box and footer.
+  A marker from an earlier turn that is still in those lines gives a false `question`
+  for a short later turn. That costs a look at the pane; a missed marker costs the old
+  behaviour (`finished`). Print the marker only when you are waiting.
+- It finds `herdr` as `HERDR_BIN_PATH` (set by Herdr for the hook) or on `PATH`.
+
 ## Claude doorbell sink
 
 A sink that rings a Claude cloud session when an event arrives, by running
 `claude --safe-mode --no-session-persistence -p "<message>" --cloud <session-id>`.
 The message is one short line, for example `agent-alert: pane-3 finished #7`
-(about 30 bytes). The ring is best effort and may be lost. The doorbell always
+(about 30 bytes), or for several events at once `agent-alert: 2 events: w15:p3V finished #134,
+w19:p1 question #133`. The ring is best effort and may be lost. The doorbell always
 exits 0.
 
 What it costs and what it skips:
@@ -177,12 +211,21 @@ What it costs and what it skips:
   `--no-session-persistence` saves no local transcript. The command runs from the
   directory of the operator log (`~/.local/state/agent-alert` by default), which holds
   no CLAUDE.md.
-- **At most one ring per 30 seconds.** The first event rings; an event that arrives
-  inside the next 30 seconds is not rung (it is in the inbox, and the ring only says
-  "look"). The window starts at an attempt, so a failed ring also opens it. The time of
-  the last ring is kept in `claude-doorbell.last` beside the operator log
-  (`AGENT_ALERT_DOORBELL_STATE` overrides the path). Events that arrive in a burst
-  therefore produce one ring for the first; read the inbox (`tail`) for the rest.
+- **At most one ring per 30 seconds, and none is dropped.** The first event rings at
+  once. An event that arrives inside the next 30 seconds is held, and one combined ring for
+  everything held is sent when the window ends (it names the first four events, then
+  "+N more (latest #S)"). The window starts at an attempt, so a failed ring also opens it,
+  and a held ring that fails is logged and not retried (the inbox has the events).
+  The state is in `claude-doorbell.last` beside the operator log
+  (`AGENT_ALERT_DOORBELL_STATE` overrides the path): the time of the last ring, and the
+  worker, kind and seq of what is held; never message text.
+- **The held ring has one short-lived process.** The first held event starts
+  `doorbell.py --flush` in its own session, so the core's kill of the sink does not reach
+  it and `emit` does not wait for it. It sleeps until the window ends, rings, and exits as
+  soon as nothing is held (at the latest after 5 minutes). Only one exists at a time; it
+  is not a daemon and nothing restarts it. If it is killed, what it held waits for the
+  next event, which then rings it together with its own event. Look for it with
+  `pgrep -fl 'doorbell.py --flush'`.
 - **Cloud sessions only.** `--cloud` takes a cloud session id (`session_…` or `cse_…`)
   or a claude.ai/code URL. It cannot ring a local terminal session.
 
@@ -219,7 +262,9 @@ changes `emit`'s exit status or loses the event.
 | `claude` not found | `claude command not found on PATH; no nudge sent` | Put `claude` on the `PATH` of the process that runs `emit`. |
 | `claude` exits nonzero | `claude exited with status N` | A missing or expired login is the usual cause: sign in to `claude` in a terminal. |
 | Timeout | `claude timed out after 4 seconds and was killed` | The call was slow or hung; the ring may not have been sent. |
-| Throttled | nothing is logged | An event inside the 30-second window is not rung on purpose. |
+| Held | nothing is logged | An event inside the 30-second window is rung once, combined with the others, when the window ends. |
+| Held ring fails | the same line as the ring it replaces | The same fix as for an immediate ring; the held events are not retried. |
+| Cannot start the held-ring process | `cannot start the held-ring process: …` | The event stays held and rings with the next event. |
 | Cannot start `claude` | `cannot start claude: …` | Fix the error shown. |
 | Not an event | `event line is not a JSON object; skipped` | Nothing; the line is not rung. |
 

@@ -73,7 +73,8 @@ Format version 1 defines exactly these kinds:
 
 | Kind | Meaning |
 |---|---|
-| `finished` | The agent's turn ended normally. This includes a turn that ends by asking a question or reporting a gate; the event does not carry the question. |
+| `finished` | The agent's turn ended normally. A source that cannot tell that a turn ended by asking the owner something sends `finished` for it; the event never carries the question. |
+| `question` | The agent's turn ended waiting on the owner's answer. How a source knows is its own business (the Herdr adapter looks for a marker line the worker prints). The event does not carry the question. |
 | `blocked` | The agent is waiting on an approval or input before it can continue. |
 | `errored` | The agent's turn ended on a failure such as an API error or a rate limit, and the agent did not complete its work. |
 | `exited` | The agent's process or session is gone. |
@@ -219,8 +220,15 @@ configured sink once, whatever the kind of the event:
 - A sink MUST tolerate an event whose `kind` it does not know and members it does
   not know, and SHOULD ring or fail soft rather than fail. A sink MUST NOT write
   to the inbox.
-- A sink MAY decide not to nudge for an event (the Claude doorbell, for example, rings
-  at most once per 30 seconds); the event is in the inbox either way.
+- A sink MAY decide not to nudge for an event, or to hold it and nudge once later for
+  several (the Claude doorbell rings at most once per 30 seconds and combines the
+  events held in that window into one ring at its end); the event is in the inbox
+  either way.
+- A sink that nudges later MAY start one detached helper process (its own session, so
+  the kill at the bound does not reach it) to do it. That helper MUST end by itself
+  within a bounded time, MUST NOT outlive the work it was started for, MUST NOT write
+  to the inbox, and MUST log its failures like the sink does. The core does not wait
+  for it, track it or kill it.
 - A sink MUST NOT assume the nudge is the only way the coordinator learns of the
   event: nudges may be lost.
 
@@ -306,7 +314,7 @@ prints the sequence number, worker and kind.
 import json
 import sys
 
-KNOWN_KINDS = {"finished", "blocked", "errored", "exited"}
+KNOWN_KINDS = {"finished", "question", "blocked", "errored", "exited"}
 
 for line in sys.stdin:
     try:

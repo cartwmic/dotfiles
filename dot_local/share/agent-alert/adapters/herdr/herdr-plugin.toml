@@ -2,7 +2,7 @@ id = "agent-alert"
 name = "Agent Alert"
 version = "0.1.0"
 min_herdr_version = "0.9.1"
-description = "Turns Herdr agent events into agent-alert inbox events (finished, blocked, exited); no message text."
+description = "Turns Herdr agent events into agent-alert inbox events (finished, question, blocked, exited); no message text."
 platforms = ["macos", "linux"]
 
 [[events]]

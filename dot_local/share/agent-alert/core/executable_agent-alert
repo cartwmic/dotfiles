@@ -22,7 +22,7 @@ import subprocess
 import sys
 
 FORMAT_VERSION = 1
-KINDS = ("finished", "blocked", "errored", "exited")
+KINDS = ("finished", "question", "blocked", "errored", "exited")
 
 DEFAULT_INBOX = "~/.local/share/coordinator/inbox.jsonl"
 DEFAULT_LOG = "~/.local/state/agent-alert/agent-alert.log"

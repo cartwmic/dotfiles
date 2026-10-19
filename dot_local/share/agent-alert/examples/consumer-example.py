@@ -6,7 +6,7 @@
 import json
 import sys
 
-KNOWN_KINDS = {"finished", "blocked", "errored", "exited"}
+KNOWN_KINDS = {"finished", "question", "blocked", "errored", "exited"}
 
 for line in sys.stdin:
     try:
