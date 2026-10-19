@@ -1,6 +1,5 @@
 # Local MCP servers that Pi starts lazily (through ~/.local/bin/pi-mcp-lazy).
 # One name per line, matching a server in the canonical mcp/servers.json. Remove a line and
 # re-apply to roll that server back to Pi's normal start-at-session-start behaviour.
-furi
 playwright
 rea
