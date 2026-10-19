@@ -34,7 +34,7 @@ Rules:
   Both desktop profiles use codemode's `only` mode: ordinary tools remain
   callable from scripts rather than directly declared to the model.
   Hindsight's automatic hooks use REST and are independent of MCP.
-- The Pi adapter wraps the local `furi`, `playwright` and `rea` entries in `~/.local/bin/pi-mcp-lazy` (names in
+- The Pi adapter wraps the local `playwright` and `rea` entries in `~/.local/bin/pi-mcp-lazy` (names in
   `~/.local/share/pi-mcp-lazy/servers.list`) so Pi starts them on first use and stops them when idle. Claude and Codex
   keep the canonical entries. See [`pi-mcp-lazy`](../pi-mcp-lazy/README.md).
 - `adapters/` may contain harness-specific metadata needed to project canonical sources into a given harness.
@@ -96,23 +96,6 @@ Example HTTP server:
   }
 }
 ```
-
-Example `furi` bridge:
-
-```json
-{
-  "mcpServers": {
-    "furi": {
-      "command": "furi",
-      "args": ["connect"]
-    }
-  }
-}
-```
-
-For `ashwwwin/automation-mcp`, this repo manages the bridge in `canonical/mcp/servers.json.tmpl` and installs, registers, and starts the backing package through `dot_config/mise/config.toml`.
-
-On macOS, remember to grant Accessibility and Screen Recording permissions in System Settings > Privacy & Security for the process path running `automation-mcp`, or the server will start but desktop automation will be limited.
 
 After editing the canonical MCP file:
 
