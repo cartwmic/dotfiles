@@ -5,7 +5,7 @@ Run (from the repository root):
     PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
         -s dot_local/share/agent-alert/tests -p 'test_docs.py'
 
-* The shell blocks of README.md (Usage, the Herdr section, the doorbell section)
+* The shell blocks of README.md (Usage, the doorbell section)
   are extracted from the file and run literally (with `sh -c`) against one scratch
   Herdr 0.9.1 server at a time: the deployed tree is copied to
   `$HOME/.local/share/agent-alert` of a scratch home, so the README's own
@@ -37,7 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common  # noqa: E402
-from test_herdr import HERDR_REQUIRED, ScratchHerdr, adapter_copy  # noqa: E402
+from herdr_scratch import HERDR_REQUIRED, ScratchHerdr, adapter_copy  # noqa: E402
 
 TOOL = common.TOOL_SOURCE_DIR
 README = TOOL / "README.md"
@@ -179,17 +179,6 @@ class ReadmeProcedureTests(unittest.TestCase):
         self.assertEqual(self.server.version, "0.9.1")
         self.assertEqual(readme_blocks("Install", "sh"), [])  # the install step is `chezmoi apply`, never run here
         self.basic_block, self.pane_block, self.wait_block = readme_blocks("Usage")
-        herdr_blocks = readme_blocks("Herdr source adapter")
-        self.install_block, = [b for b in herdr_blocks if "herdr plugin link" in b]
-        self.read_block, = [b for b in herdr_blocks if "herdr pane read" in b]
-
-    def install(self):
-        # `set -e` makes every command of the block, not only the last, have to succeed
-        result = self.server.sh("set -e\n" + self.install_block)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        listed = self.server.herdr("plugin", "list").stdout
-        self.assertIn("agent-alert", listed)
-        self.assertIn("enabled", listed)
 
     def start_follower(self, pane):
         """Run the README's pane procedure, then prove the follower is live by its first event."""
@@ -216,26 +205,6 @@ class ReadmeProcedureTests(unittest.TestCase):
         block = self.wait_block.replace("--timeout 30000", "--timeout 2000")
         return self.server.sh(block, PANE=pane, NEXT=next_seq, timeout=30)
 
-    def test_herdr_install_block_links_and_enables_the_plugin_and_status_reports_reach_the_inbox(self):
-        self.install()
-        pane, _ = self.server.new_pane("docs-herdr")
-        self.server.report(pane, "working")
-        self.server.report(pane, "blocked")
-        self.server.report(pane, "idle")
-        self.server.settle()
-        events = [e for e in self.server.parsed_events() if e["worker"] == pane]
-        self.assertEqual(sorted(e["kind"] for e in events), ["blocked", "finished"])
-        for event in events:
-            self.assertEqual(list(event), ["version", "seq", "time", "worker", "kind", "context"])  # no message text
-        # the README's own check after the first event: every run succeeded with empty stderr
-        shown = self.server.sh("herdr plugin log list")
-        self.assertEqual(shown.returncode, 0, shown.stderr)
-        for entry in self.server.api("plugin", "log", "list")["logs"]:
-            self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
-        # the coordinator reads the named pane, as the section shows
-        read = self.server.sh(self.read_block, PANE=pane)
-        self.assertEqual(read.returncode, 0, read.stdout + read.stderr)
-
     def test_basic_usage_block_emits_reads_and_acknowledges_without_any_pane(self):
         result = self.server.sh(self.basic_block)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -247,30 +216,18 @@ class ReadmeProcedureTests(unittest.TestCase):
         self.assertEqual(json.loads((self.server.inbox_path.parent / "inbox.jsonl.ack").read_text()), {"acked": 1})
         self.assertEqual(self.server.sh('"$HOME/.local/share/agent-alert/core/agent-alert" tail').stdout, "")
 
-    def test_pane_follower_and_next_sequence_wait_see_hook_and_direct_events(self):
-        self.install()
+    def test_pane_follower_and_next_sequence_wait_see_each_new_event(self):
         pane, _ = self.server.new_pane("docs-pane")
         self.start_follower(pane)
-        # the next event comes from the Herdr plugin, through a real status change
-        waiting = self.wait_started(pane, self.server.parsed_events()[-1]["seq"] + 1)
-        self.server.report(pane, "working")
-        self.server.report(pane, "idle")
-        self.finish(waiting)
-        self.server.settle()
-        by_hook = self.server.parsed_events()[-1]
-        self.assertEqual((by_hook["worker"], by_hook["kind"]), (pane, "finished"))
         # the next event is written directly and is longer than the pane is wide
-        next_seq = by_hook["seq"] + 1
+        next_seq = self.server.parsed_events()[-1]["seq"] + 1
         waiting = self.wait_started(pane, next_seq)
         self.server.emit("direct-" + "x" * 300, "blocked")
         self.finish(waiting)
         # an event that has not happened is not matched: a later number does not satisfy the wait
         self.assertNotEqual(self.short_wait(pane, next_seq + 1).returncode, 0)
-        for entry in self.server.api("plugin", "log", "list")["logs"]:
-            self.assertEqual((entry["status"], entry["exit_code"], entry["stderr"]), ("succeeded", 0, ""), entry)
 
     def test_inbox_is_the_same_with_the_pane_closed_and_a_pane_without_the_follower_never_satisfies_the_wait(self):
-        self.install()
         silent_pane, _ = self.server.new_pane("docs-silent")
         self.server.emit("w1", "finished")
         # no follower in this pane: the wait fails, the inbox is unaffected
@@ -287,7 +244,6 @@ class ReadmeProcedureTests(unittest.TestCase):
         self.assertEqual(self.server.sh('"$HOME/.local/share/agent-alert/core/agent-alert" tail --since 2').stdout.count("\n"), 1)
 
     def test_partial_line_with_the_next_number_does_not_satisfy_the_wait_and_the_next_event_does(self):
-        self.install()
         pane, _ = self.server.new_pane("docs-fragment")
         self.start_follower(pane)
         last = self.server.parsed_events()[-1]["seq"]
@@ -304,7 +260,6 @@ class ReadmeProcedureTests(unittest.TestCase):
         self.assertEqual(self.server.inbox_lines()[-2], fragment)
 
     def test_a_torn_line_ending_in_a_brace_wakes_the_wait_and_the_reader_skips_it(self):
-        self.install()
         pane, _ = self.server.new_pane("docs-wake")
         self.start_follower(pane)
         last = self.server.parsed_events()[-1]["seq"]
@@ -473,11 +428,11 @@ class ReadmeStructureTests(unittest.TestCase):
         self.readme = README.read_text(encoding="utf-8")
 
     def test_the_two_adapter_readmes_are_gone_and_the_readme_has_a_section_for_each_adapter(self):
-        self.assertFalse((TOOL / "adapters" / "herdr" / "README.md").exists())
+        self.assertFalse((TOOL / "adapters" / "herdr").exists())
         self.assertFalse((TOOL / "adapters" / "claude-doorbell" / "README.md").exists())
         self.assertEqual(sorted(p.name for p in TOOL.rglob("README.md")), ["README.md"])
         found = sections(self.readme)
-        for heading in ("Herdr source adapter", "Claude doorbell sink", "Add an adapter", "Failure modes"):
+        for heading in ("Pi source: notify-owner", "Claude doorbell sink", "Add an adapter", "Failure modes"):
             self.assertIn(heading, found)
 
     def test_readme_links_the_spec_and_every_link_resolves(self):
@@ -506,10 +461,10 @@ class ReadmeStructureTests(unittest.TestCase):
         ):
             self.assertNotIn(fragment, self.readme)
 
-    def test_readme_states_the_herdr_and_doorbell_facts(self):
-        herdr = " ".join(re.sub(r"[`*]", "", sections(self.readme)["Herdr source adapter"]).split())
-        for phrase in ("herdr plugin link", "errored is never emitted", "no error status", "no message text", "reads the named pane", "Duplicate and late events are accepted", "The question marker", "AWAITING-OWNER:"):
-            self.assertIn(phrase, herdr)
+    def test_readme_states_the_pi_source_and_doorbell_facts(self):
+        pi = " ".join(re.sub(r"[`*]", "", sections(self.readme)["Pi source: notify-owner"]).split())
+        for phrase in ("notify_owner(question)", "ask_user_question", "Pi exits cleanly", "no message text", "hard kill", "Explicit only", "herdr pane read", "herdr plugin unlink agent-alert"):
+            self.assertIn(phrase, pi)
         doorbell = sections(self.readme)["Claude doorbell sink"]
         for phrase in ('"sink"', "AGENT_ALERT_DOORBELL_SESSION", "fixed 4 seconds", "claude exited with status N",
                        "none is dropped", "doorbell.py --flush", "+N more"):
@@ -518,7 +473,7 @@ class ReadmeStructureTests(unittest.TestCase):
 
     def test_readme_names_each_required_failure_mode_and_the_pane_procedure(self):
         text = self.readme.lower()
-        for phrase in ("lost ring", "login expired or missing", "herdr not relaunched", "unwritable inbox", "ran before presence was recorded"):
+        for phrase in ("lost ring", "login expired or missing", "pi not restarted", "unwritable inbox", "killed hard", "forgets `notify_owner`"):
             self.assertIn(phrase, text)
         self.assertIn("tail -n 20 -F", self.readme)
         self.assertIn("herdr pane wait-output", self.readme)

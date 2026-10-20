@@ -10,7 +10,7 @@ Run (from the repository root):
   whose adapters/ directory was deleted.
 * Containment: nothing in the deployable files reaches a path outside this
   directory, apart from the documented per-user locations of the inbox, the
-  config, the operator log and the Herdr plugin link.
+  config and the operator log.
 * Deployment: chezmoi previews (never `apply` without `--dry-run`, never a real
   apply) show that the files map to ~/.local/share/agent-alert, that tests/ is
   not deployed, that the adapter READMEs are gone, and that the termux profile
@@ -149,7 +149,7 @@ class ContainmentTests(unittest.TestCase):
         absolute_tokens = re.compile(r"(?:^|[\s\"'(=`])(/[A-Za-z][A-Za-z0-9_.\-]*(?:/[A-Za-z0-9_.\-]*)*)")
         offenders = []
         files = deployable_files()
-        self.assertGreaterEqual(len(files), 8)
+        self.assertGreaterEqual(len(files), 6)
         for path in files:
             text = path.read_text(encoding="utf-8")
             for token in home_tokens.findall(text):
@@ -211,12 +211,11 @@ class ChezmoiPreviewTests(unittest.TestCase):
             "core/agent-alert",
             "examples/source-example.py",
             "examples/consumer-example.py",
-            "adapters/herdr/hook.py",
-            "adapters/herdr/herdr-plugin.toml",
             "adapters/claude-doorbell/doorbell.py",
         ]
         for name in expected:
             self.assertIn(common.DESTINATION_RELATIVE + "/" + name, mine)
+        self.assertEqual([line for line in mine if "adapters/herdr/" in line], [])  # the Herdr hook is gone (its dir is only a .chezmoiremove entry)
         self.assertEqual([line for line in mine if line.endswith("README.md")], [common.DESTINATION_RELATIVE + "/README.md"])
         self.assertEqual([line for line in mine if "/tests" in line], [])
         self.assertEqual([line for line in mine if "__pycache__" in line], [])
@@ -264,7 +263,8 @@ class ChezmoiPreviewTests(unittest.TestCase):
         self.assertEqual(managed.returncode, 0, managed.stderr)
         shared = [line for line in managed.stdout.splitlines() if line.startswith(".local/share")]
         print("termux profile: chezmoi managed | grep '^.local/share':\n  " + "\n  ".join(shared))
-        self.assertEqual([line for line in shared if "agent-alert" in line], [])
+        # the retired Herdr hook dir is a .chezmoiremove entry, which applies everywhere and removes nothing here
+        self.assertEqual([line for line in shared if "agent-alert" in line and line != ".local/share/agent-alert/adapters/herdr"], [])
         source_path = run_chezmoi("--override-data", '{"profile":"termux"}', "source-path", DESTINATION / "README.md")
         print("termux profile: source-path ~/.local/share/agent-alert/README.md -> rc=%d %s" % (source_path.returncode, source_path.stderr.strip()))
         self.assertNotEqual(source_path.returncode, 0)
