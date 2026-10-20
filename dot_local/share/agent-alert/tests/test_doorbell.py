@@ -359,6 +359,39 @@ class DirectSinkTests(DoorbellTestCase):
         self.assert_rang_with("pane-4", "paused", seq=9)
         self.assertEqual(self.doorbell_log_lines(), [])
 
+    @staticmethod
+    def event_line(kind="finished", context=None, seq=7):
+        event = {"version": 1, "seq": seq, "time": "2026-10-17T12:30:05.123Z", "worker": "pane-3", "kind": kind}
+        if context is not None:
+            event["context"] = context
+        return json.dumps(event, separators=(",", ":")) + "\n"
+
+    def test_finished_with_awaiting_none_is_not_rung_not_held_and_opens_no_window(self):
+        self.install_fake_claude("exit 0\n")
+        self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
+        result = self.run_doorbell(line=self.event_line(context={"agent": "pi", "awaiting": "none"}))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNone(self.recorded_arguments())
+        self.assertEqual(self.doorbell_log_lines(), [])
+        self.assertFalse(self.throttle_file().exists())  # no window opened, nothing held, no held-ring process
+        self.assertIsNone(self.flusher_pid())
+        # the next event is the first one and rings at once
+        self.assertEqual(self.run_doorbell(line=self.event_line(seq=8)).returncode, 0)
+        self.assert_rang_with("pane-3", "finished", seq=8)
+
+    def test_quiet_applies_only_to_a_finished_event_with_exactly_awaiting_none(self):
+        self.install_fake_claude("exit 0\n")
+        self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
+        cases = [("question", {"awaiting": "none"}), ("blocked", {"awaiting": "none"}), ("exited", {"awaiting": "none"}),
+                 ("finished", {"awaiting": "owner"}), ("finished", {"awaiting": "None"}), ("finished", {"agent": "pi"}),
+                 ("finished", None), ("finished", ["awaiting", "none"])]
+        for seq, (kind, context) in enumerate(cases, 1):
+            with self.subTest(kind=kind, context=context):
+                self.record.unlink(missing_ok=True)
+                self.throttle_file().unlink(missing_ok=True)
+                self.assertEqual(self.run_doorbell(line=self.event_line(kind, context, seq)).returncode, 0)
+                self.assert_rang_with("pane-3", kind, seq=seq)
+
     def test_line_that_is_not_a_json_object_is_logged_and_not_rung(self):
         self.install_fake_claude("exit 0\n")
         self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
@@ -617,6 +650,19 @@ class ThroughCoreTests(DoorbellTestCase):
         self.assertLess(result.elapsed, 5 + 3)
         self.assertEqual(len(self.scratch.events()), 1)
         self.assertIn("claude-doorbell: claude timed out", self.scratch.log_text())
+
+    def test_a_none_turn_is_in_the_inbox_but_not_rung_and_a_question_still_rings(self):
+        self.install_fake_claude("exit 0\n")
+        self.write_doorbell_config(session_id=SCRATCH_SESSION_ID)
+        self.configure_core()
+        quiet = self.scratch.run("emit", "--worker", "pane-3", "--kind", "finished", "--context", "awaiting=none", env=self.env())
+        self.assertEqual(quiet.returncode, 0, quiet.stderr)
+        self.assertEqual([(e["kind"], e["context"]) for e in self.scratch.events()], [("finished", {"awaiting": "none"})])
+        self.assertIsNone(self.recorded_arguments())
+        self.assertEqual(self.scratch.log_text(), "")
+        asked = self.emit(kind="question")
+        self.assertEqual(asked.returncode, 0, asked.stderr)
+        self.assert_rang_with("pane-3", "question", seq=2)
 
     def test_held_ring_survives_the_core_killing_the_sink_group(self):
         # A sink wrapper that starts the real doorbell and then outlives the core's bound, so the

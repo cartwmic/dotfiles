@@ -325,7 +325,7 @@ class HookDirectTests(unittest.TestCase):
         self.assertEqual(source.count('"emit"'), 1)
         self.assertEqual(source.count('"pane", "read"'), 1)
         self.assertEqual(source.count('"pane", "get"'), 1)
-        self.assertEqual(source.count("pane_awaits_owner("), 2)  # its definition and its one use
+        self.assertEqual(source.count("pane_marker("), 2)  # its definition and its one use
         self.assertEqual(source.count("herdr_pane_labels("), 2)  # its definition and its one use
 
     # ------------------------------------------------------------ question kind
@@ -447,6 +447,45 @@ class HookDirectTests(unittest.TestCase):
         self.question_events("AWAITING-OWNER: none yet\nlater\nAWAITING-OWNER: pick a database\n")
         self.assertEqual(self.h.kinds(), ["question"])
 
+    # ------------------------------------------- a "none" turn is recorded but flagged quiet
+
+    QUIET_CONTEXT = {"workspace_id": "w1", "workspace_label": "main-ws", "agent": "pi", "awaiting": "none"}
+    PLAIN_CONTEXT = {"workspace_id": "w1", "workspace_label": "main-ws", "agent": "pi"}
+
+    def test_a_turn_whose_last_marker_is_none_is_finished_flagged_awaiting_none(self):
+        for line in ("AWAITING-OWNER: none", "AWAITING-OWNER: none yet", "AWAITING-OWNER: None.", "\u25cf AWAITING-OWNER: **none yet**"):
+            for status in ("idle", "done"):
+                with self.subTest(line=line, status=status):
+                    self.h.scratch.inbox.unlink(missing_ok=True)
+                    self.question_events("work\n%s\n" % line, status=status)
+                    [event] = self.h.events()
+                    self.assertEqual(event["kind"], "finished")  # still recorded: the inbox keeps every completion
+                    self.assertEqual(event["context"], self.QUIET_CONTEXT)
+
+    def test_a_question_an_unreadable_pane_and_no_marker_are_never_flagged(self):
+        self.question_events("AWAITING-OWNER: which database?\n")
+        self.question_events("all done, no marker\n")
+        self.h.mode = "fail"
+        self.assertEqual(self.h.status("w1:p1", "idle").returncode, 0)
+        self.assertEqual(self.h.kinds(), ["question", "finished", "finished"])
+        for event in self.h.events():
+            self.assertEqual(event["context"], self.PLAIN_CONTEXT)
+
+    def test_the_last_marker_decides(self):
+        self.question_events("AWAITING-OWNER: which database?\nanswered, carrying on\nAWAITING-OWNER: none\n")
+        [event] = self.h.events()
+        self.assertEqual((event["kind"], event["context"]), ("finished", self.QUIET_CONTEXT))
+        self.h.scratch.inbox.unlink(missing_ok=True)
+        self.question_events("AWAITING-OWNER: none\nnew turn\nAWAITING-OWNER: which database?\n")
+        [event] = self.h.events()
+        self.assertEqual((event["kind"], event["context"]), ("question", self.PLAIN_CONTEXT))
+
+    def test_blocked_is_never_flagged_even_with_a_none_marker_on_screen(self):
+        self.h.show("AWAITING-OWNER: none\n")
+        self.assertQuietSuccess(self.h.status("w1:p1", "blocked"))
+        [event] = self.h.events()
+        self.assertEqual((event["kind"], event["context"]), ("blocked", self.PLAIN_CONTEXT))
+
     # ------------------------------------------------- subagent noise (Herdr state labels)
 
     RUNNING = {"idle": "\u23f3 1 subagent (scout)", "done": "\u23f3 1 subagent (scout)", "working": "\u23f3 1 subagent (scout)"}
@@ -484,6 +523,14 @@ class HookDirectTests(unittest.TestCase):
         self.assertQuietSuccess(self.h.status("w1:p1", "idle", labels=self.RUNNING))
         self.assertEqual(self.h.events(), [])
 
+    def test_a_none_turn_with_a_running_subagent_is_held_then_sent_flagged_when_the_label_clears(self):
+        self.h.show("AWAITING-OWNER: none\n")
+        self.assertQuietSuccess(self.h.status("w1:p1", "idle", labels=self.RUNNING))
+        self.assertEqual(self.h.events(), [])
+        self.assertQuietSuccess(self.h.status("w1:p1", "idle"))
+        [event] = self.h.events()
+        self.assertEqual((event["kind"], event["context"]), ("finished", self.QUIET_CONTEXT))
+
     def test_an_unreadable_pane_never_holds_a_finished(self):
         self.h.mode = "fail"
         result = self.h.status("w1:p1", "idle", labels=self.RUNNING)
@@ -502,6 +549,16 @@ class HookDirectTests(unittest.TestCase):
         self.assertQuietSuccess(self.h.status("w1:p1", "blocked", labels=self.FLAGGED))
         self.assertEqual(self.h.events(), [])
         self.assertEqual(self.h.calls(), [])  # the event itself said so: no recheck, no read
+
+    def test_labels_as_pi_publishes_them_have_no_blocked_key_and_the_flag_is_found_in_any_key(self):
+        # Pi publishes idle, done and working labels only, with pane count and task text before the flag.
+        for text in ("\u23f3 1 subagent (worker) \u26a0", "\u23f3 2 subagents (scout, worker) \u00b7 1 pane \u00b7 review the plan \u26a0"):
+            for key in ("idle", "done", "working"):
+                with self.subTest(text=text, key=key):
+                    self.h.scratch.inbox.unlink(missing_ok=True)
+                    self.assertQuietSuccess(self.h.status("w1:p1", "blocked", labels={key: text}))
+                    self.assertEqual(self.h.events(), [])
+        self.assertEqual(self.h.calls(), [])
 
     def test_blocked_with_a_subagent_flagged_a_moment_later_is_dropped(self):
         # Pi reports "blocked" first and the attention flag follows: the hook looks again.
@@ -559,6 +616,56 @@ class HookDirectTests(unittest.TestCase):
         self.assertQuietSuccess(self.h.status("w1:p2", "idle", labels=secret))
         self.assertEqual(self.h.kinds(), ["blocked"])
         self.assertNotIn("SECRET", self.h.scratch.inbox_bytes().decode("utf-8") + self.h.scratch.log_text())
+
+    # ------------------------------------- the whole path: hook -> core -> Claude doorbell
+
+    def rings_through_the_doorbell(self):
+        """Wire the real core to the real doorbell with a scripted claude; returns a function giving the messages rung."""
+        h = self.h
+        h.scratch.write_config(sink=[str(h.copy / "adapters" / "claude-doorbell" / "doorbell.py")])
+        record = h.scratch.root / "claude-rings.txt"
+        claude = h.scratch.root / "claude"
+        claude.write_text("#!/bin/sh\nprintf '%s\\n' \"$4\" >> RECORD\n".replace("RECORD", str(record)))
+        claude.chmod(claude.stat().st_mode | stat.S_IXUSR)
+        window = h.scratch.log.parent / "claude-doorbell.last"  # beside the operator log
+
+        def drive(pane, status, text=None, labels=None, pane_get=None):
+            window.unlink(missing_ok=True)  # each step starts outside the 30 second window
+            if text is not None:
+                h.show(text)
+            if pane_get is not None:
+                h.pane_get(*pane_get)
+            environment = h.environment("pane.agent_status_changed", pane, status=status, labels=labels)
+            environment["AGENT_ALERT_DOORBELL_SESSION"] = "scratch-session-0000"
+            result = h.run("pane.agent_status_changed", pane, environment=environment)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            if not h.mode:
+                self.assertEqual(result.stderr, "")
+            return record.read_text(encoding="utf-8").splitlines() if record.exists() else []
+
+        return drive
+
+    def test_through_the_doorbell_only_a_none_turn_is_silent(self):
+        drive = self.rings_through_the_doorbell()
+        # a "none" turn: recorded in the inbox, no ring
+        self.assertEqual(drive("w1:p1", "idle", text="done\nAWAITING-OWNER: none\n"), [])
+        self.assertEqual(self.h.kinds(), ["finished"])
+        # a real question rings at once, with a subagent running or not
+        self.assertEqual(drive("w1:p2", "idle", text="AWAITING-OWNER: which database?\n"), ["agent-alert: w1:p2 question #2"])
+        self.assertEqual(drive("w1:p3", "idle", text="AWAITING-OWNER: which database?\n", labels=self.RUNNING)[-1],
+                         "agent-alert: w1:p3 question #3")
+        # a plain turn, an unreadable pane and the parent's own block (a subagent running, no flag) ring
+        self.assertEqual(drive("w1:p4", "idle", text="finished with no marker\n")[-1], "agent-alert: w1:p4 finished #4")
+        self.h.mode = "fail"
+        self.assertEqual(drive("w1:p5", "idle")[-1], "agent-alert: w1:p5 finished #5")
+        self.h.mode = ""
+        self.assertEqual(drive("w1:p6", "blocked", labels=self.RUNNING, pane_get=[self.RUNNING])[-1], "agent-alert: w1:p6 blocked #6")
+        self.assertEqual(self.h.kinds(), ["finished", "question", "question", "finished", "finished", "blocked"])
+
+    def test_through_the_doorbell_a_subagent_that_needs_attention_is_silent(self):
+        drive = self.rings_through_the_doorbell()
+        self.assertEqual(drive("w1:p1", "blocked", labels=self.FLAGGED), [])
+        self.assertEqual(self.h.events(), [])
 
     # ---------------------------------------------------------- containment
 

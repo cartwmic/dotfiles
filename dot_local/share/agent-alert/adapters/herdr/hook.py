@@ -9,10 +9,11 @@ and a context (workspace id, workspace label, agent name). It sends no message
 text:
 
     status blocked        -> kind blocked, unless a Pi async subagent is the cause (below)
-    status idle or done   -> kind question if the pane's last lines hold a line
-                             starting with AWAITING-OWNER: (and not a filler such as
-                             "none yet"); else nothing while a subagent still runs in
-                             the pane (below); else kind finished
+    status idle or done   -> kind question if the pane's last AWAITING-OWNER: marker
+                             line carries a real question; else nothing while a subagent
+                             still runs in the pane (below); else kind finished, with the
+                             context flag awaiting=none when that last marker is a filler
+                             ("none", "none yet"), which the Claude doorbell does not ring for
     status working/other  -> nothing (the pane is still noted as having an agent)
     pane exited or closed -> kind exited, only if this pane was seen with an agent
 
@@ -34,9 +35,9 @@ or expire. That is the whole subagent signal; no pane text is searched for it.
 The places it looks at a pane are the marker check and, for a blocked event with a
 subagent running, the label recheck. The marker check (a worker whose turn ends waiting
 on the owner prints a line starting with AWAITING-OWNER:) reads the last lines of the
-pane with `herdr pane read`, searches them for a marker line that is not a filler and
-keeps only the yes or no: no pane text is stored, logged, put in the inbox or sent. If
-the read fails the event is a plain finished.
+pane with `herdr pane read`, finds the LAST marker line and keeps only its class: a real
+question, a filler, or no marker. No pane text is stored, logged, put in the inbox or
+sent. If the read fails the event is a plain finished (no flag): it could be a question.
 
 It decides from the event's own status only and keeps no ordering state, so a
 hook that runs late or out of order cannot make it skip a completion; the price
@@ -74,6 +75,10 @@ EMIT_TIMEOUT_SECONDS = 30
 # ("AWAITING-OWNER: none yet"); it is never kept.
 QUESTION_MARKER = re.compile(r"^[^\w\n]{0,8}AWAITING-OWNER:[ \t]*(.*)$", re.MULTILINE)
 QUESTION_FILLER = re.compile(r"[\W_]*none(?:\s+yet)?[\W_]*", re.IGNORECASE)
+# A finished event whose pane's last marker is a filler carries this context flag. It is a fixed
+# value, not text from the pane. A sink may choose not to ring for it (the Claude doorbell does).
+QUIET_KEY = "awaiting"
+QUIET_VALUE = "none"
 PANE_READ_LINES = 30
 PANE_READ_TIMEOUT_SECONDS = 5
 PANE_GET_TIMEOUT_SECONDS = 5
@@ -183,8 +188,9 @@ def subagent_needs_attention(environment, pane):
         time.sleep(BLOCKED_SETTLE_POLL_SECONDS)
 
 
-def pane_awaits_owner(environment, pane):
-    """True if the last lines of the pane hold a question marker line. Raises on any failure to read."""
+def pane_marker(environment, pane):
+    """The class of the last marker line in the pane's last lines: "question", "none" (a filler) or ""
+    (no marker line). Raises on any failure to read."""
     herdr = environment.get("HERDR_BIN_PATH") or "herdr"
     result = subprocess.run(
         [herdr, "pane", "read", pane, "--source", "recent-unwrapped", "--lines", str(PANE_READ_LINES)],
@@ -197,7 +203,12 @@ def pane_awaits_owner(environment, pane):
     if result.returncode != 0:
         raise RuntimeError("herdr pane read exited %d" % result.returncode)
     text = result.stdout.decode("utf-8", "replace")
-    return any(not QUESTION_FILLER.fullmatch(match.group(1)) for match in QUESTION_MARKER.finditer(text))
+    last = None
+    for last in QUESTION_MARKER.finditer(text):
+        pass
+    if last is None:
+        return ""
+    return "none" if QUESTION_FILLER.fullmatch(last.group(1)) else "question"
 
 
 def build_context(environment, data, agent):
@@ -246,21 +257,24 @@ def handle(environment):
             note("cannot record presence of pane %s: %s" % (pane, error))
         kind = STATUS_TO_KIND.get(data.get("agent_status"))
         running, attention = subagent_state(data.get("state_labels"))
+        context = build_context(environment, data, agent)
         if kind == "finished":
-            asking = None  # None: could not tell, which is never a reason to hold
+            marker = None  # None: could not tell, which is never a reason to hold or to quiet the ring
             try:
-                asking = pane_awaits_owner(environment, pane)
+                marker = pane_marker(environment, pane)
             except Exception as error:  # noqa: BLE001 - the marker is a refinement: keep finished
                 note("cannot check pane %s for the question marker (%s); sending finished" % (pane, type(error).__name__))
-            if asking:
+            if marker == "question":
                 kind = "question"
-            elif asking is False and running:
+            elif marker is not None and running:
                 kind = None  # held: Herdr fires another status event when the subagent label clears
+            elif marker == "none":
+                context[QUIET_KEY] = QUIET_VALUE  # still recorded; the Claude doorbell does not ring for it
         elif kind == "blocked" and running:
             if attention or subagent_needs_attention(environment, pane):
                 kind = None  # a subagent is waiting on its supervisor, which is this worker
         if kind:
-            emit(environment, pane, kind, build_context(environment, data, agent))
+            emit(environment, pane, kind, context)
     elif name == DETECTED_EVENT:
         # A released agent (the pane's agent is going away) is not presence.
         if agent and not data.get("released"):
