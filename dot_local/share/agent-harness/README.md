@@ -146,6 +146,43 @@ After adding a skill:
    - `find ~/.codex/skills -mindepth 1 -maxdepth 1 -type l`
    - `find ~/.pi/agent/skills -mindepth 1 -maxdepth 1 -type l`
 
+## Import Loop Engine Skills From A Release Tag
+
+The six Loop Engine skill bundles (`using-loop-engine`, `coordinating-loop-engine`, `using-software-change-provider`,
+`using-research-provider`, `using-generate-prd`, `using-policy-document-provider`) come from a release tag of
+`cartwmic/loop-engine`. `import_release_skills.py` (source:
+[`dot_local/user_scripts/executable_import_release_skills.py`](../../user_scripts/executable_import_release_skills.py),
+tests: `tests/release-skills`) imports them into `canonical/skills/` and checks the result. It needs an
+authenticated `gh` and writes nothing without `--apply`.
+
+```bash
+REPO="$(git rev-parse --show-toplevel)"
+TOOL="$REPO/dot_local/user_scripts/executable_import_release_skills.py"
+python3 "$TOOL" import v0.28.0 --source "$REPO" --pins               # preview: per-bundle added/changed/orphan files
+python3 "$TOOL" import v0.28.0 --source "$REPO" --pins --apply        # refuses (exit 3) while orphan files exist
+python3 "$TOOL" import v0.28.0 --source "$REPO" --pins --apply --prune  # after you inspected the orphans
+```
+
+- **The tag.** It must be a published, non-prerelease release. The tool resolves it to one commit (printed; pass
+  `--expect-commit SHA` to fail if the tag moved), reads every file from that commit's archive, and requires each
+  file to match its git blob hash in the commit's tree. This repo's releases are not GitHub-immutable, so the commit
+  is the thing to record.
+- **The layout** is the one earlier imports used: `skills/<name>/**` or `crates/<crate>/skills/<name>/**` become the
+  bundle; a crate's `README.md`, `docs/` and `data/` become `using-<crate>/references/`; `using-loop-engine` also takes
+  five named `docs/` files (`ROOT_REFERENCES` in the script). Importing the current tag changes nothing.
+- **Orphans** are files in a bundle that the tag no longer has. Other skills in `canonical/skills/` are never touched.
+  Files chezmoi would read as attributes (`dot_`, `.tmpl`, a leading dot, and so on) or drop (empty files) stop the import.
+- **`--pins`** moves the four `loop-engine`, `software-change`, `policy-document` and `research` pins in
+  `dot_config/mise/config.toml` to the tag's version. `mise install` adds the new version and keeps the older ones, so
+  runs frozen on an older tool version keep it. Do not `mise uninstall` them to tidy up.
+- **Deploy** with the normal flow above: preview the targets, get approval, then
+  `chezmoi --source "$REPO" apply ~/.local/share/agent-harness/canonical/skills ~/.config/mise/config.toml` (and
+  `mise install` for the pins), then [Sync Skills](#sync-skills).
+- **Verify** the result with `python3 ~/.local/user_scripts/import_release_skills.py verify-deployed --source "$REPO"`: the
+  deployed bundles must equal the source byte for byte, and each of `~/.claude/skills`, `~/.codex/skills` and
+  `~/.pi/agent/skills` must link to the deployed bundle. Files left in a deployed bundle that the source no longer has are
+  reported as orphans; `chezmoi apply` does not delete them.
+
 ## Add Harness-Specific MCP Secrets
 
 Keep secret-resolution details out of canonical MCP. Put a `${VAR}` placeholder
