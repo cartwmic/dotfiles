@@ -87,8 +87,7 @@ class DocsHerdr(ScratchHerdr):
 
     def __init__(self, test_case):
         super().__init__(test_case)
-        # No AGENT_ALERT_* variable: the README's default paths under the scratch HOME are used.
-        self.env.pop("AGENT_ALERT_CONFIG", None)
+        # No AGENT_ALERT_* variable (the base class removes them): the README's default paths under the scratch HOME are used.
         self.installed = self.home / ".local" / "share" / "agent-alert"
         shutil.copytree(adapter_copy(), self.installed, ignore=shutil.ignore_patterns("tests", "__pycache__"))
         (self.home / ".zshrc").write_text("")  # keeps zsh from asking its first-run questions

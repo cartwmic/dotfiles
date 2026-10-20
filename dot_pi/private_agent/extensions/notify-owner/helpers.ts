@@ -99,12 +99,12 @@ export function registerNotifyOwner(pi: PiLike, Type: { Object(p: unknown): unkn
       "they or the coordinator asked you (summary like 'answer ready: <topic>'). It returns at once and does not wait: " +
       "put the same text in your reply and end your turn. Never for progress or for finishing a turn nobody is waiting on, " +
       "and not for a question you are asking with ask_user_question (that rings by itself).",
-    promptSnippet: "Ring the owner's doorbell when you need their answer or decision",
+    promptSnippet: "Ring the owner's doorbell when you need their answer or decision, or when you have answered a question they asked",
     parameters: Type.Object({ question: Type.String({ description: "The question, or the one-line answer summary. It stays in your transcript; the doorbell sends no text." }) }),
     async execute() {
       const result = ring(env, "question", spawnFn);
-      if (result === "sent") return text("Doorbell dispatched. Ask the question in your reply and end your turn; do not wait. (A failure to deliver is logged, not shown here.)");
-      return text(`Owner not notified (${result === "no-core" ? "agent-alert is not installed or not executable on this machine" : "this is not a Herdr pane"}). Ask the question in your reply anyway.`, true);
+      if (result === "sent") return text("Doorbell dispatched. Put the question or answer summary in your reply and end your turn; do not wait. (A failure to deliver is logged, not shown here.)");
+      return text(`Owner not notified (${result === "no-core" ? "agent-alert is not installed or not executable on this machine" : "this is not a Herdr pane"}). Put the question or answer summary in your reply anyway.`, true);
     },
   });
   pi.on("tool_execution_start", (event, ctx) => {

@@ -13,7 +13,6 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import quote
 
 import common
 
@@ -40,9 +39,6 @@ class ScratchHerdr:
         self.home = self.root / "home"
         (self.home / ".config" / "herdr").mkdir(parents=True)
         self.socket = self.root / "s.sock"
-        self.core_scratch = common.Scratch(cli=adapter_copy() / "core" / "agent-alert")
-        test_case.addCleanup(self.core_scratch.cleanup)
-        self.core_scratch.write_config(inbox_path=str(self.core_scratch.inbox), log_path=str(self.core_scratch.log))
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("HERDR_", "AGENT_ALERT_"))}
         self.env.update(
             HOME=str(self.home),
@@ -52,12 +48,10 @@ class ScratchHerdr:
             HERDR_CONFIG_PATH=str(self.home / ".config" / "herdr" / "config.toml"),
             HERDR_SOCKET_PATH=str(self.socket),
             HERDR_CLIENT_SOCKET_PATH=str(self.root / "c.sock"),
-            AGENT_ALERT_CONFIG=str(self.core_scratch.config),
         )
         for name in ("HERDR_CONFIG_PATH", "HERDR_SOCKET_PATH", "HERDR_CLIENT_SOCKET_PATH"):
             assert self.env[name].startswith(str(self.root) + os.sep), name
         self.process = None
-        self.sleep_marker = self.root.name
         test_case.addCleanup(self.stop)
 
     # ---- lifecycle
@@ -137,18 +131,3 @@ class ScratchHerdr:
     def new_pane(self, label):
         result = self.api("workspace", "create", "--cwd", self.root, "--label", label, "--no-focus")
         return result["root_pane"]["pane_id"], result["workspace"]["workspace_id"]
-
-
-    def show_text(self, pane, text, wait_for):
-        """Make the pane's terminal show `text` (written to a file and cat'ed), and wait until it does."""
-        fixture = self.root / ("fixture-%s.txt" % quote(pane, safe=""))
-        fixture.write_text(text, encoding="utf-8")
-        self.herdr("pane", "send-text", pane, "exec sh -c 'cat %s; sleep 3601' %s" % (fixture, self.sleep_marker))
-        self.herdr("pane", "send-keys", pane, "Enter")
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            shown = self.herdr("pane", "read", pane, "--source", "recent-unwrapped", "--lines", "200", check=False).stdout
-            if wait_for in shown:
-                return
-            time.sleep(0.2)
-        raise AssertionError("pane %s never showed %r" % (pane, wait_for))

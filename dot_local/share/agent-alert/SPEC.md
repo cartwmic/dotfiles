@@ -76,7 +76,7 @@ Format version 1 defines exactly these kinds:
 | Kind | Meaning |
 |---|---|
 | `finished` | The agent's turn ended normally. A source need not send it: the Pi source in this tree sends none, because only an explicit signal rings the owner. |
-| `question` | The agent's turn ended waiting on the owner's answer. How a source knows is its own business (the Pi source sends it when the worker calls a `notify_owner` tool or opens a questionnaire). A source never holds or drops a `question`. The event does not carry the question. |
+| `question` | Someone should look at this worker now: it is waiting on the owner's answer, or (a source's own convention) it has just answered a question and the answer is ready. How a source knows is its own business (the Pi source sends it when the worker calls a `notify_owner` tool, for either reason, or opens a questionnaire). A source never holds or drops a `question`. The event does not carry the question. |
 | `blocked` | The agent is waiting on an approval or input before it can continue. |
 | `errored` | The agent's turn ended on a failure such as an API error or a rate limit, and the agent did not complete its work. |
 | `exited` | The agent's process or session is gone. |
