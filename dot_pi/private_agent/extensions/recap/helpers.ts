@@ -149,6 +149,11 @@ export function sessionListArgs(nativeSessionId: string): string[] {
   return ['list', '--json', '--source-kind', 'pi', '--source-id', nativeSessionId, '--omit-coverage-units'];
 }
 
+/** CLI args for `/recap history`. The default view is this session's own records; `all` and `legacy` are the explicit opt-ins that browse the whole store (cartwmic/dotfiles#15). Units are omitted: the viewer shows the narrative or the failure, never the coverage units. */
+export function historyListArgs(nativeSessionId: string, wholeStore: boolean): string[] {
+  return wholeStore ? ['list', '--json', '--omit-coverage-units'] : sessionListArgs(nativeSessionId);
+}
+
 export function compatibleRecord(rows: any[], state: OwnedState, branchIds: string[], scope?: string) {
   return rows.filter(r => r.status === 'published' && (!scope || r.metadata?.pi?.scope === scope) && r.metadata?.pi?.nativeSessionId === state.nativeSessionId && r.metadata.pi.historyId === state.historyId && r.metadata.pi.coverage && (!r.metadata.pi.coverage.anchor || branchIds.includes(r.metadata.pi.coverage.anchor))).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.record_id.localeCompare(b.record_id)).at(-1);
 }

@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { budgets } from './budgets.mjs';
-import { restoreState, resolveSettings, setOverride, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, priorRecord, sessionListArgs, argumentCompletions, commandHelp, projectContext, recapScope, failureNotice, hardBreaks } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, capture, uncovered, backendCommand, messageUnit, publicContent, canonical, capturedSettings, validTimeZone, displayTime, compatibleRecord, priorRecord, sessionListArgs, historyListArgs, argumentCompletions, commandHelp, projectContext, recapScope, failureNotice, hardBreaks } from './helpers.ts';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const configPath = join(directory, 'config.json');
@@ -27,8 +27,7 @@ const call = (...args: string[]): Promise<any> => new Promise((resolve, reject) 
     try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (error) { reject(error); }
   });
 });
-const records = async () => (await call('list', '--json')).records;
-// Per-session reads pass the session id so the CLI loads only that session's records (cartwmic/dotfiles#12). Whole-store records() is for manual history browsing only.
+// Per-session reads pass the session id so the CLI loads only that session's records (cartwmic/dotfiles#12). `/recap history all|legacy` is the only whole-store read (cartwmic/dotfiles#15).
 const recordsFor = async (nativeSessionId: string) => (await call(...sessionListArgs(nativeSessionId))).records;
 const requestInput = (instructions: string, material: string, background: string) => instructions + '\n\n' + (background ? 'Background only (not new activity):\n' + background + '\n\nNew material:\n' : '') + material;
 const interactive = (ctx: ExtensionContext) => ctx.mode === 'tui' && ctx.hasUI;
@@ -245,7 +244,7 @@ export default function recap(pi: ExtensionAPI) {
   }
   async function history(ctx: ExtensionContext, args: string[]) {
     const legacy = args.includes('legacy'), attempts = args.includes('attempts'), all = args.includes('all');
-    const rows = (await records()).filter((r: any) => legacy ? !r.metadata?.pi?.historyId : r.source_kind === 'pi' && !!r.metadata?.pi?.historyId).filter((r: any) => all || legacy || r.metadata.pi.historyId === state.historyId).filter((r: any) => attempts || r.status === 'published').sort((a: any, b: any) => Number(b.metadata?.pi?.historyId === state.historyId) - Number(a.metadata?.pi?.historyId === state.historyId) || b.created_at.localeCompare(a.created_at));
+    const rows = (await call(...historyListArgs(state.nativeSessionId, all || legacy))).records.filter((r: any) => legacy ? !r.metadata?.pi?.historyId : r.source_kind === 'pi' && !!r.metadata?.pi?.historyId).filter((r: any) => all || legacy || r.metadata.pi.historyId === state.historyId).filter((r: any) => attempts || r.status === 'published').sort((a: any, b: any) => Number(b.metadata?.pi?.historyId === state.historyId) - Number(a.metadata?.pi?.historyId === state.historyId) || b.created_at.localeCompare(a.created_at));
     const zone = resolveSettings(defaults(), state.overrides).timeZone;
     const labels = rows.map((r: any) => `${displayTime(r.created_at, zone)} ${r.status}${r.failure?.reason === 'timed_out' ? ' (timed out)' : ''} ${r.metadata?.pi?.trigger ?? 'legacy'} ${r.source_id} ${r.record_id}`);
     const choice = await ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
