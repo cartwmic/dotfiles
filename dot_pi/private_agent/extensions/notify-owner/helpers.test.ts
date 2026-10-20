@@ -9,6 +9,19 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { ASK_TOOL_NAME, TOOL_NAME, corePath, eligible, registerNotifyOwner, ring } from "./helpers.ts";
 
+// A scripted child process for the injected spawner: records how it was started and lets a test fire its events.
+function fakeSpawner() {
+  const started: { command: string; args: string[]; options: Record<string, any> }[] = [];
+  const children: { handlers: Record<string, Function>; unrefs: number; emit(event: string, arg?: unknown): void }[] = [];
+  const spawnFn = (command: string, args: string[], options: Record<string, any>) => {
+    started.push({ command, args, options });
+    const child = { handlers: {} as Record<string, Function>, unrefs: 0, emit(event: string, arg?: unknown) { this.handlers[event]?.(arg); } };
+    children.push(child);
+    return { on: (event: string, handler: Function) => { child.handlers[event] = handler; }, unref: () => { child.unrefs++; } };
+  };
+  return { started, children, spawnFn };
+}
+
 const Type = { Object: (properties: unknown) => ({ type: "object", properties }), String: (options?: unknown) => ({ type: "string", ...(options as object) }) };
 
 function scratch() {
@@ -50,7 +63,7 @@ test("the tool is registered and its call runs emit --kind question for this pan
     assert.equal(tool.name, TOOL_NAME);
     assert.deepEqual(Object.keys(tool.parameters.properties), ["question"]);
     const result = await tool.execute("call-1", { question: "which database?" });
-    assert.match(result.content[0].text, /Owner notified/);
+    assert.match(result.content[0].text, /Doorbell dispatched/);
     assert.equal(result.isError, undefined);
     await until(() => s.calls().length === 1);
     assert.deepEqual(s.calls(), ["emit --worker w1:p2 --kind question --context agent=pi --context workspace_id=w1"]);
@@ -106,12 +119,70 @@ test("agent-alert not installed: the tool says so and the worker is told to ask 
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
-test("a core that cannot be started never throws into the worker", async () => {
+test("a core that is not executable is reported as not installed, not as sent", async () => {
   const s = scratch();
   try {
-    chmodSync(corePath(s.env), 0o644); // exists, not executable: spawn reports an error event
-    assert.equal(ring(s.env), "sent");
-    await new Promise((r) => setTimeout(r, 200)); // an unhandled 'error' event would have crashed the run
+    chmodSync(corePath(s.env), 0o644);
+    assert.equal(ring(s.env), "no-core");
+    const pi = fakePi();
+    registerNotifyOwner(pi, Type, s.env);
+    const result = await pi.tools[0].execute("c", { question: "q" });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /not installed or not executable/);
+  } finally { s.cleanup(); }
+});
+
+test("the emit is started detached, with ignored stdio, this environment, and unref'd; the tool does not wait for it", async () => {
+  const s = scratch();
+  try {
+    const { started, children, spawnFn } = fakeSpawner();
+    const pi = fakePi();
+    registerNotifyOwner(pi, Type, s.env, spawnFn as never);
+    const result = await pi.tools[0].execute("c", { question: "q" }); // the child never exits: execute still returned
+    assert.match(result.content[0].text, /dispatched/);
+    assert.equal(started.length, 1);
+    assert.equal(started[0].command, corePath(s.env));
+    assert.equal(started[0].options.detached, true);
+    assert.equal(started[0].options.stdio, "ignore");
+    assert.equal(started[0].options.env, s.env);
+    assert.equal(children[0].unrefs, 1);
+    assert.deepEqual(Object.keys(children[0].handlers).sort(), ["error", "exit"]); // an 'error' event can never go unhandled
+  } finally { s.cleanup(); }
+});
+
+test("a failure to start the emit, or a nonzero exit, goes to the operator log; a clean exit logs nothing", () => {
+  const s = scratch();
+  try {
+    const log = join(s.home, "operator.log");
+    const env = { ...s.env, AGENT_ALERT_LOG: log };
+    const { children, spawnFn } = fakeSpawner();
+    ring(env, "question", spawnFn as never);
+    children[0].emit("exit", 0);
+    assert.equal(existsSync(log), false);
+    children[0].emit("exit", 2);
+    ring(env, "exited", spawnFn as never);
+    children[1].emit("error", new Error("spawn EACCES"));
+    const lines = readFileSync(log, "utf8").trim().split("\n");
+    assert.equal(lines.length, 2);
+    assert.match(lines[0], /^\S+Z notify-owner: agent-alert emit \(question\) exited with status 2; the event was not recorded$/);
+    assert.match(lines[1], /notify-owner: cannot start agent-alert emit \(exited\): spawn EACCES$/);
+  } finally { s.cleanup(); }
+});
+
+test("a clean quit with a UI reports exited; reload, new, resume, fork, no UI and a stale ctx do not", async () => {
+  const s = scratch();
+  try {
+    const pi = fakePi();
+    registerNotifyOwner(pi, Type, s.env);
+    const [shutdown] = pi.handlers.session_shutdown;
+    for (const reason of ["reload", "new", "resume", "fork"]) shutdown({ reason }, { hasUI: true });
+    shutdown({ reason: "quit" }, { hasUI: false }); // a print-mode run is not the pane's agent
+    shutdown({ reason: "quit" }, { get hasUI(): boolean { throw new Error("stale"); } });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(s.calls(), []);
+    shutdown({ reason: "quit" }, { hasUI: true });
+    await until(() => s.calls().length === 1);
+    assert.deepEqual(s.calls(), ["emit --worker w1:p2 --kind exited --context agent=pi --context workspace_id=w1"]);
   } finally { s.cleanup(); }
 });
 

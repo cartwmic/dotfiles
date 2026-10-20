@@ -7,12 +7,20 @@ status, labels or screen text.
   and returns at once; it does not block the turn. The worker then states the question in its reply
   and ends its turn. The question text stays in the transcript: the doorbell sends no text
   ([agent-alert SPEC](../../../../dot_local/share/agent-alert/SPEC.md)).
-- **`ask_user_question` dialogs ring too**, on `tool_execution_start` of that tool (with a UI only).
+- **`ask_user_question` dialogs ring too**, on `tool_execution_start` of that tool (with a UI only). A worker
+  must not call `notify_owner` for the same question; the worker rule says so.
+- **A clean Pi exit reports `exited`** (`session_shutdown` with reason `quit`, with a UI): the `/quit` command,
+  SIGTERM, and SIGHUP, which is what closing the pane sends. Reload, new, resume and fork do not, and neither does a
+  print-mode run (`pi -p`). A hard kill (`kill -9`, OOM) cannot be reported: nothing runs. Checked against a real
+  interactive Pi on a pty for `/quit`, SIGHUP and SIGTERM.
 - **No ring** for a plain finished turn, for progress, or for a Herdr `blocked` status.
 - **No-op** (the tool is not even registered) when `PI_SUBAGENT_CHILD=1` (a subagent's questions go to its
   supervisor through `contact_supervisor`) or when `HERDR_PANE_ID` is unset (no pane to name).
-- If `~/.local/share/agent-alert/core/agent-alert` is missing the tool returns an error saying so; the
-  worker asks in its reply anyway.
+- If `~/.local/share/agent-alert/core/agent-alert` is missing or not executable the tool returns an error saying
+  so; the worker asks in its reply anyway.
+- The emit runs detached and the tool does not wait for it, so "Doorbell dispatched" means it was started. A failure
+  to start it, or a nonzero exit, is a line in the agent-alert operator log
+  (`<time> notify-owner: …`, `~/.local/state/agent-alert/agent-alert.log` unless `AGENT_ALERT_LOG`).
 
 The ring itself is the doorbell sink configured for agent-alert (a Claude cloud session), with its
 30 second throttle. This extension never talks to it directly.
@@ -35,8 +43,11 @@ still installed during the transition, so:
 - Workers keep ending replies with `AWAITING-OWNER: none` (the rule says so), which silences the hook; the
   tool is the only ring for a question.
 - An `ask_user_question` dialog also turns the pane `blocked` (the herdr-overview bridge), and the hook still
-  emits `blocked` for it: one `question` ring at once plus a `blocked` that the doorbell holds and sends
-  in one combined ring up to 30 seconds later. That pair goes away when the hook is removed.
+  emits `blocked` for it. That is two inbox events (`question`, `blocked`) for one dialog, in either order, and
+  possibly two rings; the doorbell's 30 second throttle decides whether they are one combined ring or two. The
+  `blocked` goes away when the hook is removed.
+- The hook also still emits `exited` for a pane that closes, next to this extension's `exited`: a second `exited`
+  event for the same pane. That goes away with the hook.
 - A worker that forgets the tool and ends with a real `AWAITING-OWNER: <question>` still rings through the hook.
 
 ## Tests

@@ -25,10 +25,11 @@ RISK_PARAGRAPH = """- Risk tolerance is high. This is personal, one-person softw
 DOORBELL_SECTION = """
 ## Doorbell
 
-The doorbell rings the owner only when you call the `notify_owner` tool. When you need
-the owner to answer or decide, call `notify_owner` with the question, put the question
-in your reply too, and end your turn. Do not call it for progress or for finishing: a turn
-that needs nothing is silent. Report progress on a separate `Status:` line.
+The doorbell rings the owner only when you ask it to. When you need the owner to answer or
+decide in your reply, call the `notify_owner` tool with the question, put the question in
+the reply too, and end your turn. An `ask_user_question` dialog rings by itself: do not also
+call `notify_owner` for it. Do not ring for progress or for finishing: a turn that needs
+nothing is silent. Report progress on a separate `Status:` line.
 
 While the old marker hook is still installed, also end every reply with the line
 `AWAITING-OWNER: none`, even when you called the tool. The hook reads it as "no
@@ -52,7 +53,7 @@ def render(profile):
 class AgentsRenderTests(unittest.TestCase):
     def test_personal_profile_gets_the_doorbell_rule(self):
         text = render("personal")
-        self.assertIn("call the `notify_owner` tool", text)
+        self.assertIn("call the `notify_owner` tool with the question", text)
         self.assertIn("AWAITING-OWNER: none`", text)
         self.assertNotIn("AWAITING-OWNER: <the one question>", text)
         self.assertEqual(text.count(DOORBELL_SECTION), 1)
