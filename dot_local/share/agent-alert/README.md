@@ -134,7 +134,7 @@ The hook acts on each event's own status and keeps no history:
 | Herdr event | Emitted |
 |---|---|
 | `pane.agent_status_changed`, status `blocked` | `blocked`, except when a [Pi subagent](#pi-subagent-noise) is the cause: nothing |
-| `pane.agent_status_changed`, status `idle` or `done`, and the pane's last lines hold the [question marker](#the-question-marker) | `question` (always, even with a subagent running) |
+| `pane.agent_status_changed`, status `idle` or `done`, and the final message of the turn holds the [question marker](#the-question-marker) | `question` (always, even with a subagent running) |
 | `pane.agent_status_changed`, status `idle` or `done`, a subagent still running in the pane | nothing (held until the subagent label clears) |
 | `pane.agent_status_changed`, status `idle` or `done`, and the pane's last marker is a filler (`AWAITING-OWNER: none` or `none yet`) | `finished` with context `awaiting=none`; the [Claude doorbell](#claude-doorbell-sink) does not ring for it |
 | `pane.agent_status_changed`, status `idle` or `done`, otherwise (no marker, or the pane cannot be read) | `finished` |
@@ -151,8 +151,9 @@ agent.
 - **`errored` is never emitted.** Herdr 0.9.1 has no error status, so a turn that
   ended on an error arrives as an ordinary `finished`.
 - **Events carry no message text.** Only a turn that ended (`idle` or `done`) makes the
-  hook look at a pane, once, for the question marker below; it keeps the yes or no and
-  nothing else. The worker is the pane id, so the coordinator reads the named pane itself:
+  hook look at the turn's final message (in the agent's session file, or on the pane's
+  screen), once, for the question marker below; it keeps the class of the marker
+  (question, none, or no marker) and nothing else. The worker is the pane id, so the coordinator reads the named pane itself:
 
   ```sh
   herdr pane read "$PANE" --source recent-unwrapped --lines 40
@@ -187,26 +188,41 @@ the hook records that turn as a `finished` whose context carries `awaiting=none`
 needs nothing from the owner is silent). The personal profile's Pi `AGENTS.md` has workers end
 every reply with `AWAITING-OWNER: none` when they need nothing, so those turns are silent at the
 doorbell; only a real question rings as a `question`. The quiet flag is a fixed context value, never
-text from the pane. Only the **last** marker line in the pane counts: an old question followed by a
-later `none` is quiet, and a `none` followed by a later question is a `question`. A pane that cannot
-be read, or shows no marker, is an ordinary `finished` and rings. `blocked` ignores the marker.
+text from the pane. Only the **last** marker line of the final message counts: an old question followed by a
+later `none` is quiet, and a `none` followed by a later question is a `question`. A turn whose
+message cannot be read, or shows no marker, is an ordinary `finished` and rings. `blocked` ignores the marker.
 
 What the hook does with it:
 
-- On `idle` or `done` it runs `herdr pane read <pane> --source recent-unwrapped --lines 30`
-  (5 second limit), looks for a line that starts with `AWAITING-OWNER:` (a bullet or a box
+- **The session file is read first.** On `idle` or `done` the hook runs `herdr pane get <pane>`.
+  Its `agent_session` (kind `path`) names the agent's transcript: Pi's session `.jsonl`, Claude
+  Code's or Codex's transcript, all of which Herdr's integrations report. The hook reads the tail of
+  that file (256 KB, widening to 2 MB and 16 MB only if the final message is not found yet) and takes
+  the text of the **final assistant message**: for Pi the newest `message` record when it is an
+  assistant message with `stopReason: "stop"` (the `custom` and `session_info` records Pi writes after it
+  are skipped), for Claude Code the newest non-side-chain user/assistant record when it is an assistant
+  text record, for Codex the newest `response_item` when it is an assistant message. Thinking text and
+  tool calls are never matched. Nothing on the screen is parsed, so footers, async-subagent boxes, recap
+  lines, wrapping and pane width cannot hide the marker.
+- **Unsure means the screen.** If the pane has no session path (or a kind other than `path`), the agent
+  has no reader above, the file cannot be read, or the newest record is not a finished assistant message
+  (a tool call or result, a user message, an error or aborted turn, a partly written file), the hook runs
+  `herdr pane read <pane> --source recent-unwrapped --lines 30` (5 second limit) instead, as before.
+- Either way it looks for a line that starts with `AWAITING-OWNER:` (a bullet or a box
   edge in front, up to 8 non-word characters, is allowed), and emits `question`
   instead of `finished` if the last such line carries a real question. The text after the
-  colon is read only to recognise a status filler (see above), then dropped; the pane text
-  is not stored, logged or sent: the inbox and the ring carry the kind (and the fixed
+  colon is read only to recognise a status filler (see above), then dropped; the message and pane
+  text are not stored, logged or sent: the inbox and the ring carry the kind (and the fixed
   `awaiting=none` flag) only.
-- If the read fails (the pane is gone, Herdr is slow, `herdr` is not found) the hook says
-  so on stderr (without pane text) and emits `finished`: the event is never lost.
-  `blocked` is never read or changed.
-- It looks at the last 30 lines, which include the agent's prompt box and footer.
-  A marker from an earlier turn that is still in those lines gives a false `question`
-  for a short later turn. That costs a look at the pane; a missed marker costs the old
-  behaviour (`finished`). Print the marker only when you are waiting.
+- If neither read works (the pane is gone, Herdr is slow, `herdr` is not found) the hook says
+  so on stderr (without text) and emits `finished`: the event is never lost. A session-file
+  failure is silent, since the screen read follows it. `blocked` is never read or changed.
+- The **screen fallback** looks at the last 30 lines, which include the agent's prompt box and
+  footer. In a narrow Pi pane the timing footer, an `async subagent · background` box, the recap lines
+  and the status bar can add up to more than 30 lines under the marker, so the screen read can miss a
+  `none`; the session file does not have that problem. A marker from an earlier turn still in those
+  lines gives a false `question` on the screen path. That costs a look at the pane; a missed marker
+  costs the old behaviour (`finished`). Print the marker only when you are waiting.
 - It finds `herdr` as `HERDR_BIN_PATH` (set by Herdr for the hook) or on `PATH`.
 
 ### Pi subagent noise
