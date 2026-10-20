@@ -42,3 +42,7 @@ Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 # (dot_termux / bin/*-jump / SSH modify). Remove the old ~/termux staging tree
 # that sync.sh previously pushed from.
 termux
+
+# Retired 2026-10-20: the Herdr hook of agent-alert (inference replaced by the notify-owner Pi extension).
+# Unlink the Herdr plugin first (herdr plugin disable/unlink agent-alert); see agent-alert/README.md.
+.local/share/agent-alert/adapters/herdr

@@ -22,9 +22,8 @@ goes wrong. Each adapter has a section here.
 | Part | What it is |
 |---|---|
 | `core/agent-alert` | `emit`, `tail`, `ack` ([SPEC.md](./SPEC.md)) |
-| `adapters/herdr/` | Source: a Herdr plugin ([section](#herdr-source-adapter)) |
 | `adapters/claude-doorbell/` | Sink: rings a Claude cloud session ([section](#claude-doorbell-sink)) |
-| Pi extension `notify-owner` | Source: a worker calls `notify_owner` to emit `question`; replaces the Herdr marker inference once the hook is removed (`dot_pi/private_agent/extensions/notify-owner/`) |
+| Pi extension `notify-owner` | Source: a worker calls `notify_owner` (or opens `ask_user_question`) to emit `question`; Pi's clean exit emits `exited` ([section](#pi-source-notify-owner)) |
 | `examples/` | A worked source and a worked consumer, also in [SPEC.md](./SPEC.md#worked-examples) |
 | `tests/` | Tests; source-only, not deployed |
 
@@ -38,7 +37,7 @@ chezmoi apply
 ```
 
 It deploys to `~/.local/share/agent-alert`. Nothing runs until you enable an
-adapter: see the [Herdr](#herdr-source-adapter) and
+adapter: see the [Pi source](#pi-source-notify-owner) and
 [doorbell](#claude-doorbell-sink) sections. The inbox is
 `~/.local/share/coordinator/inbox.jsonl` unless
 `~/.config/agent-alert/config.json` says otherwise.
@@ -114,158 +113,38 @@ exit quickly, never write the inbox.
 Neither kind changes the core. A reader of the inbox follows the
 [reader rules](./SPEC.md#reader-rules).
 
-## Herdr source adapter
+## Pi source: notify-owner
 
-A Herdr plugin that turns Herdr 0.9.1's agent events into `agent-alert emit`
-calls. Install it by linking and enabling the plugin, then check that Herdr
-accepted it:
+The only source in use is the Pi extension `notify-owner` (in the dotfiles repo:
+`dot_pi/private_agent/extensions/notify-owner/`, with its own README; it is deployed with Pi's other extensions,
+not into this directory). It runs `agent-alert emit` for the worker's Herdr pane
+(the pane id from `HERDR_PANE_ID` is the worker name) and nothing else; it needs no Herdr plugin, status event or screen read:
+
+| What happens in Pi | Emitted |
+|---|---|
+| The worker calls the `notify_owner(question)` tool | `question` |
+| An `ask_user_question` dialog opens | `question` |
+| Pi exits cleanly (the quit command, SIGTERM, SIGHUP: closing the pane) | `exited` |
+| Anything else: a finished turn, progress, a Herdr `blocked` status | nothing |
+
+The context carries `agent=pi` and, when Herdr gives it, `workspace_id`. Events carry no message text: the
+worker states its question in its reply and the coordinator reads the named pane itself:
 
 ```sh
-herdr plugin link "$HOME/.local/share/agent-alert/adapters/herdr"
-herdr plugin enable agent-alert
-herdr plugin log list
+herdr pane read "$PANE" --source recent-unwrapped --lines 40
 ```
 
-Herdr runs the hook as `python3`, with the environment of the **running Herdr
-server**. After the first agent event, `herdr plugin log list` should show the run
-as `succeeded` with empty `stderr`; a hook's own errors are kept there.
-
-The hook acts on each event's own status and keeps no history:
-
-| Herdr event | Emitted |
-|---|---|
-| `pane.agent_status_changed`, status `blocked` | `blocked`, except when a [Pi subagent](#pi-subagent-noise) is the cause: nothing |
-| `pane.agent_status_changed`, status `idle` or `done`, and the final message of the turn holds the [question marker](#the-question-marker) | `question` (always, even with a subagent running) |
-| `pane.agent_status_changed`, status `idle` or `done`, a subagent still running in the pane | nothing (held until the subagent label clears) |
-| `pane.agent_status_changed`, status `idle` or `done`, and the pane's last marker is a filler (`AWAITING-OWNER: none` or `none yet`) | `finished` with context `awaiting=none`; the [Claude doorbell](#claude-doorbell-sink) does not ring for it |
-| `pane.agent_status_changed`, status `idle` or `done`, otherwise (no marker, or the pane cannot be read) | `finished` |
-| `pane.agent_status_changed`, status `working`, `unknown` or anything else | nothing |
-| `pane.agent_detected` | nothing |
-| `pane.exited` or `pane.closed` for a pane that was seen with an agent | `exited` |
-| `pane.exited` or `pane.closed` for any other pane | nothing |
-
-The worker is the Herdr pane id (for example `w1:p2`); the context carries
-`workspace_id`, `workspace_label` and `agent`. The only state is a marker file per
-pane in the plugin's state directory, which is how an exit knows the pane had an
-agent.
-
-- **`errored` is never emitted.** Herdr 0.9.1 has no error status, so a turn that
-  ended on an error arrives as an ordinary `finished`.
-- **Events carry no message text.** Only a turn that ended (`idle` or `done`) makes the
-  hook look at the turn's final message (in the agent's session file, or on the pane's
-  screen), once, for the question marker below; it keeps the class of the marker
-  (question, none, or no marker) and nothing else. The worker is the pane id, so the coordinator reads the named pane itself:
-
-  ```sh
-  herdr pane read "$PANE" --source recent-unwrapped --lines 40
-  ```
-
-- **Duplicate and late events are accepted.** Herdr gives no ordering between its
-  hooks, so a `finished` can be duplicated or late; never missing a completion is
-  chosen over never repeating one. When an agent's process exits, Herdr also sends
-  a late `done`, which gives a `finished` next to the `exited`.
-- **A missed `exited`** is accepted when the exit hook runs before any other hook
-  of that pane has recorded that it had an agent.
-
-### The question marker
-
-Herdr 0.9.1 reports a turn that ends with a question as plain `idle`: it has no state
-for "waiting on the owner" (`blocked` is for an approval or input prompt the agent itself
-raised). So the worker says it. A worker whose turn ends waiting on the owner's answer
-prints one line that starts with
-
-```
-AWAITING-OWNER:
-```
-
-at the end of its last message, for example `AWAITING-OWNER: which database?`. Put the
-instruction in the worker's prompt or its AGENTS.md; the adapter cannot ask for it.
-
-Use the marker only when the owner must answer. Report progress with a line that starts
-with `Status:` (for example `Status: tests running`). A marker followed by a status
-filler (`none` or `none yet`, any case, with or without punctuation) is not a question:
-the hook records that turn as a `finished` whose context carries `awaiting=none`, and the
-[Claude doorbell](#claude-doorbell-sink) does not ring for it (owner decision: a turn that
-needs nothing from the owner is silent). The personal profile's Pi `AGENTS.md` has workers end
-every reply with `AWAITING-OWNER: none` when they need nothing, so those turns are silent at the
-doorbell; only a real question rings as a `question`. The quiet flag is a fixed context value, never
-text from the pane. Only the **last** marker line of the final message counts: an old question followed by a
-later `none` is quiet, and a `none` followed by a later question is a `question`. A turn whose
-message cannot be read, or shows no marker, is an ordinary `finished` and rings. `blocked` ignores the marker.
-
-What the hook does with it:
-
-- **The session file is read first.** On `idle` or `done` the hook runs `herdr pane get <pane>`.
-  Its `agent_session` (kind `path`) names the agent's transcript: Pi's session `.jsonl`, Claude
-  Code's or Codex's transcript, all of which Herdr's integrations report. The hook reads the tail of
-  that file (256 KB, widening to 2 MB and 16 MB only if the final message is not found yet) and takes
-  the text of the **final assistant message**: for Pi the newest `message` record when it is an
-  assistant message with `stopReason: "stop"` (the `custom` and `session_info` records Pi writes after it
-  are skipped), for Claude Code the newest non-side-chain user/assistant record when it is an assistant
-  text record, for Codex the newest `response_item` when it is an assistant message. Thinking text and
-  tool calls are never matched. Nothing on the screen is parsed, so footers, async-subagent boxes, recap
-  lines, wrapping and pane width cannot hide the marker.
-- **Unsure means the screen.** If the pane has no session path (or a kind other than `path`), the agent
-  has no reader above, the file cannot be read, or the newest record is not a finished assistant message
-  (a tool call or result, a user message, an error or aborted turn, a partly written file), the hook runs
-  `herdr pane read <pane> --source recent-unwrapped --lines 30` (5 second limit) instead, as before.
-- Either way it looks for a line that starts with `AWAITING-OWNER:` (a bullet or a box
-  edge in front, up to 8 non-word characters, is allowed), and emits `question`
-  instead of `finished` if the last such line carries a real question. The text after the
-  colon is read only to recognise a status filler (see above), then dropped; the message and pane
-  text are not stored, logged or sent: the inbox and the ring carry the kind (and the fixed
-  `awaiting=none` flag) only.
-- If neither read works (the pane is gone, Herdr is slow, `herdr` is not found) the hook says
-  so on stderr (without text) and emits `finished`: the event is never lost. A session-file
-  failure is silent, since the screen read follows it. `blocked` is never read or changed.
-- The **screen fallback** looks at the last 30 lines, which include the agent's prompt box and
-  footer. In a narrow Pi pane the timing footer, an `async subagent · background` box, the recap lines
-  and the status bar can add up to more than 30 lines under the marker, so the screen read can miss a
-  `none`; the session file does not have that problem. A marker from an earlier turn still in those
-  lines gives a false `question` on the screen path. That costs a look at the pane; a missed marker
-  costs the old behaviour (`finished`). Print the marker only when you are waiting.
-- It finds `herdr` as `HERDR_BIN_PATH` (set by Herdr for the hook) or on `PATH`.
-
-### Pi subagent noise
-
-A Pi worker that starts async subagents makes two kinds of noise that need no owner:
-the worker's own turn ends (`idle`) while a subagent still runs, and a subagent that
-calls `contact_supervisor` turns the pane `blocked` (the worker answers it itself). The
-hook filters both, using only what Herdr already gives it.
-
-Pi's subagent extension publishes the running subagents as the pane's Herdr state labels:
-`⏳ 2 subagents (scout, worker)`, with a trailing `⚠` while a subagent needs attention
-(a subagent waiting on `contact_supervisor` is one). Herdr puts `state_labels` in every
-`pane.agent_status_changed` event and sends a new one whenever the labels change or
-expire. The hook does not read pane text for this. It matches `⏳ N subagent(s)` in the
-labels.
-
-- **`finished` is held while a subagent runs.** An `idle` or `done` event whose labels show
-  a running subagent emits nothing. When the subagent ends, the label clears, Herdr sends
-  another status event with no label, and that one emits the `finished`. If Pi dies with a
-  subagent running, the label expires (its TTL) and the same happens. There is no timer
-  and no extra process. The doorbell's 30 second hold combines this `finished` with the
-  worker's own, if the worker wakes and ends a turn right after.
-- **`question` is never held or dropped.** The marker check runs first. A turn that ends on
-  `AWAITING-OWNER:` rings at once, subagent or not. If the pane cannot be read the event is
-  `finished`, not held, because it might be a question.
-- **`blocked` from a subagent is dropped.** A `blocked` event whose labels show a running
-  subagent flagged `⚠` emits nothing. Pi publishes its labels only under the `idle`, `done`
-  and `working` keys, never `blocked`, and Herdr puts all of them in every status event, so the
-  hook reads the labels of every key (a real Herdr server test covers this shape). Pi reports `blocked` a moment before it publishes the
-  `⚠`, so for a `blocked` event with a running, unflagged subagent the hook asks
-  `herdr pane get` every half second for up to 3 seconds. If the flag shows, it drops the
-  event. If the subagent is gone, the 3 seconds pass, or the read fails, it emits `blocked`.
-  A `blocked` event with no subagent label is emitted at once. Anything else rings: the parent's
-  own prompt (for example `ask_user_question`) while a subagent runs is a `blocked` with an
-  unflagged label, so it waits out the 3 seconds and is emitted. In Pi's subagent extension the
-  `⚠` and the `blocked` come from the same step, so a `blocked` that never gets the flag
-  is not caused by a subagent.
-- **Limit.** The `⚠` means "a subagent needs attention", which is mostly
-  `contact_supervisor` but also a stuck tool or repeated failures; the label cannot tell
-  them apart. The worker handles all of those itself. A different block (for example an
-  `ask_user_question` prompt) that happens while a subagent is flagged is hidden too,
-  because Herdr has one `blocked` state per pane.
+- **Explicit only.** A worker that needs the owner must call the tool (the personal profile's Pi
+  `AGENTS.md` says so). A worker that forgets is silent when its turn ends; the coordinator's own periodic
+  check of its panes is the backstop. Nothing is inferred from status, labels or screen text.
+- **A hard kill (`kill -9`, out of memory) is not reported** as `exited`: no code runs. The same backstop applies.
+- **Not for subagents.** A Pi subagent child (`PI_SUBAGENT_CHILD=1`) and a Pi run with no `HERDR_PANE_ID` register
+  nothing.
+- **Deploy.** A running Pi session gets the tool after its reload command or a restart.
+- **Removed: the Herdr plugin.** An earlier adapter turned Herdr status events into events by inference (status
+  mapping, subagent labels, a marker line, transcript parsing). It is gone. A machine that still has it linked
+  should run `herdr plugin disable agent-alert` and `herdr plugin unlink agent-alert` (see `herdr plugin --help`)
+  around the apply that removes `~/.local/share/agent-alert/adapters/herdr`.
 
 ## Claude doorbell sink
 
@@ -285,12 +164,6 @@ What it costs and what it skips:
   `--no-session-persistence` saves no local transcript. The command runs from the
   directory of the operator log (`~/.local/state/agent-alert` by default), which holds
   no CLAUDE.md.
-- **A `finished` that says `awaiting=none` is not rung.** The Herdr adapter sets that context
-  flag when the pane's last marker is `AWAITING-OWNER: none` (or `none yet`). The doorbell skips
-  such an event before the window, so it opens no window, holds nothing and starts no process;
-  the inbox still has the event. Every other event rings, including a `question`, a `blocked`
-  and a `finished` from an unreadable pane. This is the only sink that reads the flag; the inbox
-  and any other sink see the `finished` as before.
 - **At most one ring per 30 seconds, and none is dropped.** The first event rings at
   once. An event that arrives inside the next 30 seconds is held, and one combined ring for
   everything held is sent when the window ends (it names the first four events, then
@@ -321,8 +194,7 @@ id is never stored in the repository.
 2. Write the session id to the doorbell's own file, `~/.config/agent-alert/claude-doorbell.json`
    (the path in `AGENT_ALERT_DOORBELL_CONFIG` if set; the environment variable
    `AGENT_ALERT_DOORBELL_SESSION` overrides the file). The file is read on every
-   ring, so you can change the session at any time with no reinstall and no Herdr
-   relaunch:
+   ring, so you can change the session at any time with no reinstall and no restart:
 
    ```sh
    mkdir -p ~/.config/agent-alert
@@ -360,11 +232,11 @@ None of these corrupts the inbox. The operator log is
 |---|---|---|
 | **Lost ring**: the ring is not sent, not delivered, or the session does not wake | The event is in the inbox; the coordinator is not told | Read the inbox on a schedule (`tail`, or the wait above). Never treat the ring as the record. |
 | **Login expired or missing** (`claude` signed out) | The doorbell logs `claude exited with status N`; no ring | Sign in to `claude` in a terminal. |
-| **Herdr not relaunched**: you signed in, or installed a tool, after Herdr started, or Herdr was started from an SSH or other background session | Hooks started by the running Herdr keep that server's environment and session: they do not see a new login or `PATH`, and a login kept in the macOS Keychain may not be readable from a background session, so `claude` fails or is not found | Relaunch Herdr from Terminal.app (a GUI session), then check `herdr plugin log list` and the operator log. Relaunching ends the running panes (see Herdr's session-state docs); pick a safe moment. |
-| **Unwritable inbox** (bad path, unwritable directory, full disk) | `emit` exits nonzero and writes nothing; the event is **lost**; the hook logs `event was not delivered` and the core logs to the operator log. Nothing is retried; later events are delivered once the inbox works again | Fix the path or free the space. If you need the lost event, the source has to emit it again. |
-| **A hook that ran before presence was recorded**: Herdr's `pane.exited` or `pane.closed` hook runs before any other hook of that pane has shown the adapter that the pane had an agent | No `exited` event for that pane | Accepted. The inbox still has the pane's earlier events; check panes with `herdr pane list`. |
+| **Pi not restarted**: you signed in, or installed a tool, after the Pi session started, or Pi was started from an SSH or other background session | The doorbell runs inside the Pi process's environment and session: it does not see a new login or `PATH`, and a login kept in the macOS Keychain may not be readable from a background session, so `claude` fails or is not found | Start Pi again from a normal terminal session, then check the operator log. |
+| **Unwritable inbox** (bad path, unwritable directory, full disk) | `emit` exits nonzero and writes nothing; the event is **lost**; the extension and the core log to the operator log. Nothing is retried; later events are delivered once the inbox works again | Fix the path or free the space. If you need the lost event, the source has to emit it again. |
+| **A Pi that is killed hard** (`kill -9`, out of memory) | No `exited` event: no code runs | Accepted. Check panes with `herdr pane list`. |
 | **A partial line** in the inbox (a media fault, or a disk filled by another process mid-write) | Readers skip it; the next `emit` ends it with a newline and writes on its own line | Nothing; [SPEC.md](./SPEC.md#writer-guarantees) explains. |
-| **A turn that ended on an error in Herdr** | Arrives as an ordinary `finished` event | Read the pane. |
+| **A worker that forgets `notify_owner`** | Silent when its turn ends: nothing is inferred | The coordinator's periodic check of its panes. |
 
 ## Tests
 
@@ -375,5 +247,5 @@ repository root:
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s dot_local/share/agent-alert/tests
 ```
 
-They never apply anything and never touch the live Herdr, home or `claude`; see
+They never apply anything and never touch the live Herdr, home or `claude` (the pane procedure tests start a scratch Herdr server); see
 the test module headers for what each runs.

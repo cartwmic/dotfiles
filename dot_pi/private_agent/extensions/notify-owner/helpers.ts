@@ -95,11 +95,12 @@ export function registerNotifyOwner(pi: PiLike, Type: { Object(p: unknown): unkn
     name: TOOL_NAME,
     label: "Notify Owner",
     description:
-      "Ring the owner's doorbell because you need their answer or decision. It returns at once and does not wait: " +
-      "state the question in your reply and end your turn. Call it only when you cannot go on without the owner, " +
-      "never for progress or for finishing, and not for a question you are asking with ask_user_question (that rings by itself).",
+      "Ring the owner's doorbell because you need their answer or decision, or because you have answered a question " +
+      "they or the coordinator asked you (summary like 'answer ready: <topic>'). It returns at once and does not wait: " +
+      "put the same text in your reply and end your turn. Never for progress or for finishing a turn nobody is waiting on, " +
+      "and not for a question you are asking with ask_user_question (that rings by itself).",
     promptSnippet: "Ring the owner's doorbell when you need their answer or decision",
-    parameters: Type.Object({ question: Type.String({ description: "The question, in one short sentence. It stays in your transcript; the doorbell sends no text." }) }),
+    parameters: Type.Object({ question: Type.String({ description: "The question, or the one-line answer summary. It stays in your transcript; the doorbell sends no text." }) }),
     async execute() {
       const result = ring(env, "question", spawnFn);
       if (result === "sent") return text("Doorbell dispatched. Ask the question in your reply and end your turn; do not wait. (A failure to deliver is logged, not shown here.)");

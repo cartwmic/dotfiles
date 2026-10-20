@@ -3,8 +3,9 @@
 The explicit way a Pi worker rings the owner's doorbell. Nothing is inferred from
 status, labels or screen text.
 
-- **`notify_owner(question)`**: a tool. It runs `agent-alert emit --worker $HERDR_PANE_ID --kind question`
-  and returns at once; it does not block the turn. The worker then states the question in its reply
+- **`notify_owner(question)`**: a tool, called when the worker needs the owner, **and** when it has answered a
+  question the owner or coordinator asked (`answer ready: <topic>`): someone is waiting, so it rings. It runs `agent-alert emit --worker $HERDR_PANE_ID --kind question`
+  and returns at once; it does not block the turn. The worker puts the same text in its reply
   and ends its turn. The question text stays in the transcript: the doorbell sends no text
   ([agent-alert SPEC](../../../../dot_local/share/agent-alert/SPEC.md)).
 - **`ask_user_question` dialogs ring too**, on `tool_execution_start` of that tool (with a UI only). A worker
@@ -38,20 +39,11 @@ Deploys wherever `.pi` does (personal and work; not Termux). The worker rule tha
 Pi loads extensions at start. A running session gets the tool after `/reload` or a restart; until then it
 has no `notify_owner`.
 
-## Old hook, double rings
+## The old Herdr hook is gone
 
-The Herdr marker hook ([agent-alert](../../../../dot_local/share/agent-alert/README.md#herdr-source-adapter)) is
-still installed during the transition, so:
-
-- Workers keep ending replies with `AWAITING-OWNER: none` (the rule says so), which silences the hook; the
-  tool is the only ring for a question.
-- An `ask_user_question` dialog also turns the pane `blocked` (the herdr-overview bridge), and the hook still
-  emits `blocked` for it. That is two inbox events (`question`, `blocked`) for one dialog, in either order, and
-  possibly two rings; the doorbell's 30 second throttle decides whether they are one combined ring or two. The
-  `blocked` goes away when the hook is removed.
-- The hook also still emits `exited` for a pane that closes, next to this extension's `exited`: a second `exited`
-  event for the same pane. That goes away with the hook.
-- A worker that forgets the tool and ends with a real `AWAITING-OWNER: <question>` still rings through the hook.
+An earlier Herdr plugin inferred rings from pane status, subagent labels, a marker line and transcripts. It was
+removed once this extension had proven itself, so there are no double rings. A worker that forgets the tool is
+silent; the coordinator's periodic check of its panes is the backstop.
 
 ## Tests
 
