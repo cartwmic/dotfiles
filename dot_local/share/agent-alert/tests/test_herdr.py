@@ -79,7 +79,9 @@ if [ "$1 $2" = "pane read" ]; then
     fail) echo "SECRET-PANE-TEXT-ON-STDERR" >&2; exit 1 ;;
     hang) exec sleep 60 ;;
   esac
-  [ -f "$FAKE_HERDR_PANE_TEXT" ] && cat "$FAKE_HERDR_PANE_TEXT"
+  lines=100000
+  while [ $# -gt 0 ]; do [ "$1" = "--lines" ] && lines="$2"; shift; done
+  [ -f "$FAKE_HERDR_PANE_TEXT" ] && tail -n "$lines" "$FAKE_HERDR_PANE_TEXT"
   exit 0
 fi
 exit 64
@@ -111,6 +113,15 @@ class DirectHarness:
             if labels is not None:
                 pane["state_labels"] = labels
             (self.get_dir / ("get-%d.json" % number)).write_text(json.dumps({"result": {"pane": pane}}), encoding="utf-8")
+
+    def session(self, agent, records, kind="path", raw=None, name="session.jsonl"):
+        """Give the pane an agent session: the scripted herdr's `pane get` names a transcript file holding
+        `records` (a list of objects, one JSON line each; or the exact bytes in `raw`)."""
+        path = self.scratch.root / name
+        path.write_bytes(raw if raw is not None else b"".join(json.dumps(r).encode("utf-8") + b"\n" for r in records))
+        pane = {"pane_id": "w1:p1", "agent": agent, "agent_status": "done", "agent_session": {"agent": agent, "kind": kind, "source": "herdr:" + agent, "value": str(path)}}
+        (self.get_dir / "get-1.json").write_text(json.dumps({"result": {"pane": pane}}), encoding="utf-8")
+        return path
 
     def show(self, text):
         """What the scripted herdr prints for `pane read`."""
@@ -300,6 +311,11 @@ class HookDirectTests(unittest.TestCase):
         self.assertEqual(sorted(e["worker"] for e in events if e["kind"] == "exited"), panes)
 
     READ_CALL = "pane read %s --source recent-unwrapped --lines 30"
+    GET_CALL = "pane get %s"  # the session lookup that comes first; the scripted herdr has no pane to give, so the read follows
+    MARKER_CALLS = ["pane get %s", "pane read %s --source recent-unwrapped --lines 30"]
+
+    def marker_calls(self, pane, times=1):
+        return [call % pane for call in self.MARKER_CALLS] * times
 
     def test_only_a_turn_that_ended_reads_the_pane_and_no_message_is_sent(self):
         self.h.detected("w1:p1")
@@ -311,7 +327,7 @@ class HookDirectTests(unittest.TestCase):
         self.h.detected("w1:p2")
         self.h.status("w1:p2", "idle")
         self.h.status("w1:p2", "done")
-        self.assertEqual(self.h.calls(), [self.READ_CALL % "w1:p2"] * 2)
+        self.assertEqual(self.h.calls(), self.marker_calls("w1:p2", 2))
         self.assertEqual(self.h.kinds(), ["blocked", "exited", "finished", "finished"])
         for event in self.h.events():
             self.assertNotIn("summary", event)
@@ -343,7 +359,7 @@ class HookDirectTests(unittest.TestCase):
         self.assertEqual(event["kind"], "question")
         self.assertEqual(list(event), ["version", "seq", "time", "worker", "kind", "context"])
         self.assertEqual(event["context"], {"workspace_id": "w1", "workspace_label": "main-ws", "agent": "pi"})
-        self.assertEqual(self.h.calls(), [self.READ_CALL % "w1:p1"])
+        self.assertEqual(self.h.calls(), self.marker_calls("w1:p1"))
 
     def test_done_status_with_the_marker_is_a_question_too(self):
         self.question_events("AWAITING-OWNER:\n", status="done")
@@ -496,7 +512,7 @@ class HookDirectTests(unittest.TestCase):
             self.h.show("All done for now.\n")
             self.assertQuietSuccess(self.h.status("w1:p1", status, labels=self.RUNNING))
         self.assertEqual(self.h.events(), [])  # held
-        self.assertEqual(self.h.calls(), [self.READ_CALL % "w1:p1"] * 2)  # the marker check, no label recheck
+        self.assertEqual(self.h.calls(), self.marker_calls("w1:p1", 2))  # the marker check, no label recheck
         # Herdr fires another status event when the label clears (or expires): that one is not held
         self.assertQuietSuccess(self.h.status("w1:p1", "idle"))
         self.assertEqual(self.h.kinds(), ["finished"])
@@ -679,7 +695,7 @@ class HookDirectTests(unittest.TestCase):
         self.assertIn("emit", result.stderr)
         self.assertIn("event was not delivered", result.stderr)
         self.assertLess(time.monotonic() - started, 30)
-        self.assertEqual(self.h.calls(), [self.READ_CALL % "w1:p1"])  # only the marker check
+        self.assertEqual(self.h.calls(), self.marker_calls("w1:p1"))  # only the marker check
         self.assertIn("core: emit failed", self.h.scratch.log_text())
 
     def test_core_missing_is_reported_and_exits_zero(self):
@@ -709,6 +725,308 @@ class HookDirectTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("HERDR_PLUGIN_STATE_DIR", result.stderr)
         self.assertEqual(self.h.kinds(), ["finished"])
+
+
+# ------------------------------------------- marker from the agent's session file
+
+
+def pi_message(role, blocks, stop=None, **extra):
+    """A record in the shape Pi writes (synthetic text only)."""
+    message = {"role": role, "content": blocks}
+    if stop:
+        message.update({"api": "synthetic-api", "provider": "synthetic", "model": "synthetic-model", "stopReason": stop})
+    message.update(extra)
+    return {"type": "message", "id": "a1b2c3d4", "parentId": "e5f6a7b8", "timestamp": "2026-10-20T00:00:00.000Z", "message": message}
+
+
+def pi_text(text, stop="stop"):
+    return pi_message("assistant", [{"type": "thinking", "thinking": "synthetic reasoning", "thinkingSignature": "sig"}, {"type": "text", "text": text}], stop)
+
+
+PI_AFTERMATH = [  # what Pi writes after a final message: none of it is a conversation message
+    {"type": "custom", "customType": "pi-stamp", "data": {"role": "assistant", "completedAt": 1792473983249}, "id": "b1", "parentId": "b0", "timestamp": "2026-10-20T00:00:01.000Z"},
+    {"type": "custom", "customType": "recap-job", "data": None, "id": "b2", "parentId": "b1", "timestamp": "2026-10-20T00:00:02.000Z"},
+    {"type": "session_info", "id": "b3", "parentId": "b2", "timestamp": "2026-10-20T00:00:03.000Z", "name": "synthetic session"},
+]
+PI_OPENING = [
+    {"type": "session", "version": 3, "id": "synthetic", "timestamp": "2026-10-20T00:00:00.000Z", "cwd": "/synthetic"},
+    pi_message("user", [{"type": "text", "text": "synthetic request"}]),
+    pi_message("assistant", [{"type": "toolCall", "id": "call-1", "name": "read", "arguments": {}}], "toolUse"),
+    pi_message("toolResult", [{"type": "text", "text": "synthetic output"}], toolCallId="call-1", toolName="read", isError=False),
+]
+
+# The tail of a real narrow Pi pane after a "none" turn: the marker sits 36 lines from the end, under
+# a timing footer, an "async subagent" box, recap lines, the prompt box and the status bar. Generic
+# words only; the shape (not the text) is what a screen read would have to get through.
+PI_PANE_AFTER_NONE_TURN = (
+    "A short synthetic summary of the work,\nwith a second line of it.\n\n AWAITING-OWNER: none\n\n"
+    "  2026-10-20 \u00b7 06:13:16 \u00b7 first 4.6s \u00b7\n                            total 4.6s\n"
+    " the synthetic-model-name \u00b7 provider\n             synthetic-model \u00b7 high\n  synthetic-model-1 \u00b7 session one \u00b7\n"
+    "                             session two\n"
+    " tokens in 9 \u00b7 out 999 \u00b7 cached 9 \u00b7\nlast 999,999 \u00b7 total 9,999\n    \u00b7 cost 999,999 \u00b7 turn $0.0789 \u00b7\n"
+    "                    total $0.5086\n\n\u258e synthetic recap line one\n\u258e synthetic recap line two\n async subagent \u00b7 background\n"
+    "   \u2819 lifecycle-reader [synthetic] \u00b7 task\u2026\n     path: /synthetic/path/\u2026\n     \u23bf  working\n     synthetic tool line\n"
+    "\u258e synthetic recap 2026-10-20 06:13:00...\n\u258e synthetic recap more\n\u258e (synthetic), tail\n\u258e end...\n"
+    + "\u2500" * 38 + "\n\n" + "\u2500" * 38 + "\n  9 synthetic stats \u00b7 \u2193 32.9k\u2026\n"
+    " name  \u2502 col      \u2502 col\n cost  \u2502 99%/9%   \u2502 99%\n" + "\u2500" * 13 + "\u2534" + "\u2500" * 13 + "\u2534" + "\u2500" * 10 + "\n"
+    "/synthetic/dir \u2022 synthetic\n\u2191 1.4M \u2193 923k synthetic\nsynthetic footer \u00b7 model \u00b7 more\n"
+)
+RUNNING_SUBAGENT = {"idle": "\u23f3 1 subagent (worker)", "done": "\u23f3 1 subagent (worker)", "working": "\u23f3 1 subagent (worker)"}
+
+
+class SessionMarkerTests(unittest.TestCase):
+    """The hook reads the marker from the agent's session file, not from the screen.
+
+    `herdr pane get` names the transcript (agent_session, kind "path"); the hook reads its tail and
+    takes the text of the final assistant message. The pane is read only when that is not sure. The
+    transcripts here are synthetic, in the shapes of Pi, Claude Code and Codex.
+    """
+
+    def setUp(self):
+        self.h = DirectHarness(self)
+
+    def finish(self, status="idle", **options):
+        result = self.h.status("w1:p1", status, **options)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def only_event(self):
+        [event] = self.h.events()
+        return event["kind"], event["context"].get("awaiting")
+
+    def assertNoPaneRead(self):
+        self.assertEqual(self.h.calls(), [self.GET])
+
+    GET = "pane get w1:p1"
+
+    def marker_calls(self, pane):
+        return [self.GET, "pane read %s --source recent-unwrapped --lines 30" % pane]
+
+    # ---- Pi
+
+    def test_pi_none_turn_is_found_in_the_session_whatever_the_screen_shows(self):
+        self.h.session("pi", PI_OPENING + [pi_text("Did the work.\n\nAWAITING-OWNER: none")] + PI_AFTERMATH)
+        self.h.show(PI_PANE_AFTER_NONE_TURN.replace("AWAITING-OWNER: none", "no marker anywhere"))  # a screen read would find none
+        result = self.finish()
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(self.only_event(), ("finished", "none"))
+        self.assertNoPaneRead()
+
+    def test_without_a_session_a_marker_in_reach_of_the_screen_read_still_works(self):
+        # The same turn with no session: the screen read still works for a short pane tail (the old path).
+        self.h.show("Did the work.\n\n AWAITING-OWNER: none\n\n  2026-10-20 \u00b7 06:13:16 \u00b7 first 4.6s \u00b7\n async subagent \u00b7 background\n")
+        self.finish()
+        self.assertEqual(self.only_event(), ("finished", "none"))
+
+    def test_the_marker_far_above_the_screen_footer_rings_without_a_session_and_is_silent_with_one(self):
+        # 36 lines of chrome below the marker, as in a real narrow Pi pane: out of reach of the 30 line screen read.
+        self.h.show(PI_PANE_AFTER_NONE_TURN)
+        self.finish()
+        self.assertEqual(self.only_event(), ("finished", None))  # the known gap of the screen path: it rings
+        self.h.scratch.inbox.unlink(missing_ok=True)
+        self.h.session("pi", PI_OPENING + [pi_text("A short synthetic summary of the work.\n\nAWAITING-OWNER: none")] + PI_AFTERMATH)
+        self.finish()
+        self.assertEqual(self.only_event(), ("finished", "none"))
+
+    def test_pi_question_rings_at_once_with_or_without_a_subagent_running(self):
+        for labels in (None, RUNNING_SUBAGENT):
+            with self.subTest(labels=labels):
+                self.h.scratch.inbox.unlink(missing_ok=True)
+                self.h.session("pi", PI_OPENING + [pi_text("Need a decision.\n\nAWAITING-OWNER: which database?")] + PI_AFTERMATH)
+                started = time.monotonic()
+                self.finish(labels=labels)
+                self.assertLess(time.monotonic() - started, 2)
+                self.assertEqual(self.only_event(), ("question", None))
+        self.assertEqual(self.h.calls(), [self.GET] * 2)
+
+    def test_pi_message_without_a_marker_is_a_plain_finished_and_the_screen_is_not_asked(self):
+        self.h.session("pi", PI_OPENING + [pi_text("All done, nothing to ask.")] + PI_AFTERMATH)
+        self.h.show("AWAITING-OWNER: which database?\n")  # an old marker still on screen: the session wins
+        self.finish()
+        self.assertEqual(self.only_event(), ("finished", None))
+        self.assertNoPaneRead()
+
+    def test_pi_none_turn_with_a_running_subagent_is_held_then_sent_flagged(self):
+        self.h.session("pi", PI_OPENING + [pi_text("Waiting on a helper.\n\nAWAITING-OWNER: none")] + PI_AFTERMATH)
+        self.finish(labels=RUNNING_SUBAGENT)
+        self.assertEqual(self.h.events(), [])
+        self.finish()
+        self.assertEqual(self.only_event(), ("finished", "none"))
+
+    def test_the_last_marker_of_the_final_message_decides(self):
+        self.h.session("pi", [pi_text("AWAITING-OWNER: which database?\nanswered, going on\nAWAITING-OWNER: none yet")])
+        self.finish()
+        self.assertEqual(self.only_event(), ("finished", "none"))
+        self.h.scratch.inbox.unlink(missing_ok=True)
+        self.h.session("pi", [pi_text("AWAITING-OWNER: none\nmore work\nAWAITING-OWNER: which database?")])
+        self.finish()
+        self.assertEqual(self.only_event(), ("question", None))
+
+    def test_an_earlier_turns_marker_does_not_count(self):
+        records = [pi_text("Earlier turn.\n\nAWAITING-OWNER: none"), pi_message("user", [{"type": "text", "text": "go on"}]), pi_text("Short reply, no marker.")]
+        self.h.session("pi", records + PI_AFTERMATH)
+        self.finish()
+        self.assertEqual(self.only_event(), ("finished", None))  # rings
+        self.assertNoPaneRead()
+
+    def test_a_marker_in_the_thinking_or_a_tool_call_is_not_the_message(self):
+        blocks = [{"type": "thinking", "thinking": "I will end with AWAITING-OWNER: none", "thinkingSignature": "sig"},
+                  {"type": "text", "text": "Which database?\n\nAWAITING-OWNER: which database?"}]
+        self.h.session("pi", [pi_message("assistant", blocks, "stop")])
+        self.finish()
+        self.assertEqual(self.only_event(), ("question", None))
+        self.h.scratch.inbox.unlink(missing_ok=True)
+        self.h.session("pi", [pi_message("assistant", [{"type": "thinking", "thinking": "AWAITING-OWNER: none", "thinkingSignature": "sig"}, {"type": "text", "text": "Done."}], "stop")])
+        self.finish()
+        self.assertEqual(self.only_event(), ("finished", None))
+
+    def test_pi_unsure_session_states_fall_back_to_the_screen(self):
+        unsure = {
+            "last record is a tool result": PI_OPENING,
+            "last record is a user message": [pi_text("AWAITING-OWNER: none"), pi_message("user", [{"type": "text", "text": "go"}])],
+            "final message is a tool call": [pi_message("assistant", [{"type": "text", "text": "AWAITING-OWNER: none"}, {"type": "toolCall", "id": "c", "name": "read", "arguments": {}}], "toolUse")],
+            "turn ended on an error": [pi_text("AWAITING-OWNER: none", stop="error")],
+            "turn was aborted": [pi_text("AWAITING-OWNER: none", stop="aborted")],
+            "no message at all": [PI_OPENING[0]],
+        }
+        for label, records in unsure.items():
+            with self.subTest(label):
+                self.h.scratch.inbox.unlink(missing_ok=True)
+                self.h.calls_file.unlink(missing_ok=True)
+                self.h.session("pi", records)
+                self.h.show("AWAITING-OWNER: which database?\n")
+                self.finish()
+                self.assertEqual(self.only_event(), ("question", None))  # the screen decided
+                self.assertEqual(self.h.calls(), self.marker_calls("w1:p1"))
+
+    def test_session_that_cannot_be_used_falls_back_to_the_screen_and_a_bad_pane_still_rings(self):
+        cases = {
+            "file is gone": lambda: self.h.session("pi", [pi_text("AWAITING-OWNER: none")]).unlink(),
+            "kind is an id": lambda: self.h.session("pi", [pi_text("AWAITING-OWNER: none")], kind="id"),
+            "agent has no reader": lambda: self.h.session("vim", [pi_text("AWAITING-OWNER: none")]),
+            "file holds no JSON": lambda: self.h.session("pi", [], raw=b"not json\n\x00\xff\n"),
+            "file is empty": lambda: self.h.session("pi", [], raw=b""),
+        }
+        for label, arrange in cases.items():
+            with self.subTest(label):
+                self.h.scratch.inbox.unlink(missing_ok=True)
+                self.h.show("did it\nAWAITING-OWNER: which database?\n")
+                arrange()
+                self.finish()
+                self.assertEqual(self.only_event(), ("question", None))
+        # nothing readable at all: finished, never quiet
+        self.h.scratch.inbox.unlink(missing_ok=True)
+        (self.h.get_dir / "get-1.json").unlink()
+        self.h.mode = "fail"
+        result = self.h.status("w1:p1", "idle")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self.only_event(), ("finished", None))
+
+    def test_a_cut_first_line_and_a_half_written_last_line_do_not_hide_the_final_message(self):
+        good = json.dumps(pi_text("Done.\n\nAWAITING-OWNER: none")).encode("utf-8")
+        filler = b"".join(json.dumps(r).encode("utf-8") + b"\n" for r in PI_AFTERMATH)
+        self.h.session("pi", [], raw=good + b"\n" + filler + b'{"type":"custom","customType":"pi-st')
+        self.finish()
+        self.assertEqual(self.only_event(), ("finished", "none"))
+        self.assertNoPaneRead()
+
+    def test_the_tail_is_read_further_back_when_the_final_message_is_buried_or_huge(self):
+        pad = {"type": "custom", "customType": "pi-stamp", "data": {"note": "x" * 4000}}
+        buried = [pi_text("Done.\n\nAWAITING-OWNER: none")] + [pad] * 200  # about 800 KB of records after it
+        self.h.session("pi", buried)
+        self.finish()
+        self.assertEqual(self.only_event(), ("finished", "none"))
+        self.assertNoPaneRead()
+        self.h.scratch.inbox.unlink(missing_ok=True)
+        huge = pi_message("assistant", [{"type": "thinking", "thinking": "y" * 600000, "thinkingSignature": "sig"}, {"type": "text", "text": "Which one?\n\nAWAITING-OWNER: which one?"}], "stop")
+        self.h.session("pi", [PI_OPENING[1], huge] + PI_AFTERMATH)
+        self.finish()
+        self.assertEqual(self.only_event(), ("question", None))
+
+    def test_session_text_never_reaches_the_inbox_the_log_or_stderr(self):
+        self.h.session("pi", [pi_text("SECRET-SESSION-TEXT is private.\n\nAWAITING-OWNER: none")])
+        result = self.finish()
+        self.assertNotIn("SECRET", result.stderr + self.h.scratch.inbox_bytes().decode("utf-8") + self.h.scratch.log_text())
+        self.assertNoPaneRead()
+
+    # ---- Claude Code and Codex (transcripts, other shapes)
+
+    @staticmethod
+    def claude_record(kind, blocks, **extra):
+        message = {"role": kind, "content": blocks}
+        if kind == "assistant":
+            message.update({"id": "msg_synthetic", "type": "message", "model": "synthetic", "stop_reason": extra.pop("stop_reason", "end_turn")})
+        record = {"type": kind, "uuid": "u-1", "parentUuid": "u-0", "sessionId": "synthetic", "timestamp": "2026-10-20T00:00:00.000Z", "isSidechain": False, "message": message}
+        record.update(extra)
+        return record
+
+    CLAUDE_AFTERMATH = [{"type": "system", "subtype": "turn_duration", "durationMs": 1000, "isMeta": False},
+                        {"type": "file-history-snapshot", "messageId": "m", "snapshot": {}, "isSnapshotUpdate": False},
+                        {"type": "last-prompt", "lastPrompt": "synthetic", "sessionId": "synthetic"}]
+
+    def test_claude_final_text_record_decides(self):
+        user = self.claude_record("user", "synthetic request")
+        text = lambda t, **kw: self.claude_record("assistant", [{"type": "text", "text": t}], **kw)  # noqa: E731
+        tool = self.claude_record("assistant", [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}], stop_reason="tool_use")
+        self.h.session("claude", [user, tool, text("Done.\n\nAWAITING-OWNER: none")] + self.CLAUDE_AFTERMATH)
+        self.finish()
+        self.assertEqual(self.only_event(), ("finished", "none"))
+        self.assertNoPaneRead()
+        self.h.scratch.inbox.unlink(missing_ok=True)
+        # a side chain (a subagent's own messages) after the main reply does not displace it
+        side = self.claude_record("assistant", [{"type": "text", "text": "AWAITING-OWNER: none"}], isSidechain=True)
+        self.h.session("claude", [user, text("Need input.\n\nAWAITING-OWNER: which one?"), side] + self.CLAUDE_AFTERMATH)
+        self.finish()
+        self.assertEqual(self.only_event(), ("question", None))
+
+    def test_claude_unsure_states_fall_back_to_the_screen(self):
+        user = self.claude_record("user", "synthetic request")
+        tool = self.claude_record("assistant", [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}], stop_reason="tool_use")
+        thinking = self.claude_record("assistant", [{"type": "thinking", "thinking": "hm", "signature": "s"}])
+        for label, records in {"tool call last": [tool], "user last": [user], "thinking only": [thinking]}.items():
+            with self.subTest(label):
+                self.h.scratch.inbox.unlink(missing_ok=True)
+                self.h.session("claude", records + self.CLAUDE_AFTERMATH)
+                self.h.show("AWAITING-OWNER: which one?\n")
+                self.finish()
+                self.assertEqual(self.only_event(), ("question", None))
+
+    @staticmethod
+    def codex_item(payload_type, **payload):
+        return {"timestamp": "2026-10-20T00:00:00.000Z", "type": "response_item", "payload": dict({"type": payload_type}, **payload)}
+
+    CODEX_AFTERMATH = [{"type": "event_msg", "payload": {"type": "token_count", "info": None}},
+                       {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "t", "last_agent_message": "synthetic"}}]
+
+    def test_codex_final_message_decides(self):
+        final = lambda t: self.codex_item("message", role="assistant", phase="final_answer", status="completed", content=[{"type": "output_text", "text": t}])  # noqa: E731
+        call = self.codex_item("function_call", name="shell", arguments="{}", call_id="c1")
+        reasoning = self.codex_item("reasoning", summary=[], encrypted_content="x")
+        self.h.session("codex", [call, reasoning, final("Done.\n\nAWAITING-OWNER: none")] + self.CODEX_AFTERMATH)
+        self.finish()
+        self.assertEqual(self.only_event(), ("finished", "none"))
+        self.assertNoPaneRead()
+        self.h.scratch.inbox.unlink(missing_ok=True)
+        self.h.session("codex", [final("Need input.\n\nAWAITING-OWNER: which one?")] + self.CODEX_AFTERMATH)
+        self.finish()
+        self.assertEqual(self.only_event(), ("question", None))
+        for label, last in {"function call last": call, "reasoning last": reasoning}.items():
+            with self.subTest(label):
+                self.h.scratch.inbox.unlink(missing_ok=True)
+                self.h.session("codex", [final("AWAITING-OWNER: none"), last] + self.CODEX_AFTERMATH)
+                self.h.show("AWAITING-OWNER: which one?\n")
+                self.finish()
+                self.assertEqual(self.only_event(), ("question", None))
+
+    # ---- the whole path
+
+    def test_through_the_doorbell_a_none_turn_with_a_subagent_box_is_silent_and_a_question_rings(self):
+        drive = HookDirectTests.rings_through_the_doorbell(self)
+        self.h.session("pi", PI_OPENING + [pi_text("Summary.\n\nAWAITING-OWNER: none")] + PI_AFTERMATH)
+        self.assertEqual(drive("w1:p1", "idle", text=PI_PANE_AFTER_NONE_TURN), [])
+        self.assertEqual(self.h.kinds(), ["finished"])
+        self.h.session("pi", PI_OPENING + [pi_text("Summary.\n\nAWAITING-OWNER: which database?")] + PI_AFTERMATH)
+        self.assertEqual(drive("w1:p1", "idle", text=PI_PANE_AFTER_NONE_TURN), ["agent-alert: w1:p1 question #2"])
 
 
 # ------------------------------------------------------- real scratch server
