@@ -262,6 +262,41 @@ class ImportTests(Fixture):
                 self.assertIn(message, result.stderr)
                 self.assertEqual(self.tree_state(), {})
 
+    def test_a_bundle_name_chezmoi_would_read_as_an_attribute_is_refused(self):
+        for name in ("dot_extra", "private_x", "x.tmpl", ".hidden"):
+            with self.subTest(name=name):
+                self.release("v1.0.0", {**GOOD_TREE, "skills/%s/SKILL.md" % name: b"x\n"})
+                result = self.do_import("--apply")
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("bundle name", result.stderr)
+                self.assertEqual(self.tree_state(), {})
+
+    def test_a_symlinked_directory_in_a_bundle_is_refused_and_nothing_is_written_through_it(self):
+        self.do_import("--apply")
+        outside = self.dir / "outside"
+        outside.mkdir()
+        data = self.source / SKILLS / "using-foo-provider/references/data"
+        data.rename(outside / "data")
+        data.symlink_to(outside / "data")
+        before = {p.relative_to(outside).as_posix(): p.read_bytes() for p in outside.rglob("*") if p.is_file()}
+        files = dict(GOOD_TREE, **{"crates/foo-provider/data/a.json": b'{"a":99}\n', "crates/foo-provider/data/new.json": b"[]\n"})
+        self.release("v1.1.0", files, commit="c" * 40)
+        for flags in ((), ("--apply",)):
+            result = self.do_import(*flags, tag="v1.1.0")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("symlink", result.stderr)
+        self.assertEqual({p.relative_to(outside).as_posix(): p.read_bytes() for p in outside.rglob("*") if p.is_file()}, before)
+
+    def test_a_symlinked_bundle_root_is_refused(self):
+        self.do_import("--apply")
+        outside = self.dir / "outside-root"
+        (self.source / SKILLS / "using-other").rename(outside)
+        (self.source / SKILLS / "using-other").symlink_to(outside)
+        self.release("v1.1.0", dict(GOOD_TREE, **{"crates/foo-provider/skills/using-other/SKILL.md": b"new\n"}), commit="c" * 40)
+        result = self.do_import("--apply", tag="v1.1.0")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual((outside / "SKILL.md").read_bytes(), b"other skill\n")
+
     def test_an_executable_bit_in_the_tag_is_dropped_not_refused(self):
         self.release("v1.0.0", dict(GOOD_TREE), modes={"crates/foo-provider/data/a.json": "100755"})
         self.assertEqual(self.do_import("--apply").returncode, 0)

@@ -135,9 +135,13 @@ def plan_bundles(tree):
 
 def check_bundle_files(bundles):
     for name, entries in bundles.items():
+        if name in (".", "..") or "/" in name or CHEZMOI_SPECIAL.search(name):
+            raise Failure("bundle name %r would be read by chezmoi as an attribute or is not a plain name" % name)
         for destination, (source, _sha, mode) in entries.items():
             if mode not in ("100644", "100755"):  # an executable bit is dropped, as in every earlier import
                 raise Failure("%s: %s has mode %s; only plain files are imported" % (name, source, mode))
+            if destination.startswith("/") or any(part in ("", ".", "..") for part in destination.split("/")):
+                raise Failure("%s: %s is not a plain relative path" % (name, destination))
             if any(CHEZMOI_SPECIAL.search(part) for part in destination.split("/")):
                 raise Failure("%s: %s would be read by chezmoi as an attribute or dropped; rename support is not built" % (name, destination))
 
@@ -171,7 +175,12 @@ def fetch_files(repo, commit, bundles):
 
 def local_files(bundle_dir):
     found = {}
-    for root, _dirs, names in os.walk(bundle_dir):
+    if bundle_dir.is_symlink():
+        raise Failure("%s is a symlink; bundles hold plain files" % bundle_dir)
+    for root, dirs, names in os.walk(bundle_dir):
+        for directory in dirs:
+            if (Path(root) / directory).is_symlink():
+                raise Failure("%s is a symlink; bundles hold plain directories" % (Path(root) / directory))
         for filename in names:
             path = Path(root) / filename
             if path.is_symlink():
