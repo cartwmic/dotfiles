@@ -71,6 +71,23 @@ test("the tool is registered and its call runs emit --kind question for this pan
   } finally { s.cleanup(); }
 });
 
+test("an answer-ready call rings as a question, and the tool wording covers both uses", async () => {
+  const s = scratch();
+  try {
+    const pi = fakePi();
+    registerNotifyOwner(pi, Type, s.env);
+    const [tool] = pi.tools;
+    assert.match(tool.description, /answered a question/);
+    assert.match(tool.description, /answer ready: <topic>/);
+    assert.match(tool.promptSnippet, /answered a question/);
+    const result = await tool.execute("c", { question: "answer ready: database choice" });
+    assert.match(result.content[0].text, /question or answer summary/);
+    await until(() => s.calls().length === 1);
+    assert.match(s.calls()[0], /^emit --worker w1:p2 --kind question /);
+    assert.doesNotMatch(s.calls()[0], /database/);
+  } finally { s.cleanup(); }
+});
+
 test("an ask_user_question dialog rings; other tools, and no UI, do not", async () => {
   const s = scratch();
   try {

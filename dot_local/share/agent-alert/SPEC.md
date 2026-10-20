@@ -43,10 +43,6 @@ whitespace between tokens:
 `emit` stores `worker` and `context` as given and writes no message member.
 
 Context members are the source's own. A reader or sink MUST ignore a member it does not know.
-A sink MAY act on a member it does know: the Herdr adapter sets `awaiting` to `none` on a
-`finished` event whose pane's last `AWAITING-OWNER:` marker is a status filler (`none`,
-`none yet`), and the Claude doorbell does not ring for such an event. The value is fixed and
-never text from the worker.
 
 Example (wrapped here for reading; in the file it is one line):
 
@@ -79,9 +75,9 @@ Format version 1 defines exactly these kinds:
 
 | Kind | Meaning |
 |---|---|
-| `finished` | The agent's turn ended normally. A source that cannot tell that a turn ended by asking the owner something sends `finished` for it; the event never carries the question. |
-| `question` | The agent's turn ended waiting on the owner's answer. How a source knows is its own business (the Herdr adapter looks for a marker line the worker prints, and ignores a status filler such as `AWAITING-OWNER: none yet`). A source never holds or drops a `question`. The event does not carry the question. |
-| `blocked` | The agent is waiting on an approval or input before it can continue. A source may leave out a block that the agent's own supervisor answers (the Herdr adapter drops one caused by a Pi async subagent) and may hold a `finished` while the agent still has work running in a helper (the Herdr adapter holds it until the helper ends). |
+| `finished` | The agent's turn ended normally. A source need not send it: the Pi source in this tree sends none, because only an explicit signal rings the owner. |
+| `question` | Someone should look at this worker now: it is waiting on the owner's answer, or (a source's own convention) it has just answered a question and the answer is ready. How a source knows is its own business (the Pi source sends it when the worker calls a `notify_owner` tool, for either reason, or opens a questionnaire). A source never holds or drops a `question`. The event does not carry the question. |
+| `blocked` | The agent is waiting on an approval or input before it can continue. |
 | `errored` | The agent's turn ended on a failure such as an API error or a rate limit, and the agent did not complete its work. |
 | `exited` | The agent's process or session is gone. |
 
@@ -226,8 +222,7 @@ configured sink once, whatever the kind of the event:
 - A sink MUST tolerate an event whose `kind` it does not know and members it does
   not know, and SHOULD ring or fail soft rather than fail. A sink MUST NOT write
   to the inbox.
-- A sink MAY decide not to nudge for an event (the Claude doorbell skips a `finished` whose
-  context says `awaiting=none`), or to hold it and nudge once later for
+- A sink MAY decide not to nudge for an event, or to hold it and nudge once later for
   several (the Claude doorbell rings at most once per 30 seconds and combines the
   events held in that window into one ring at its end); the event is in the inbox
   either way.

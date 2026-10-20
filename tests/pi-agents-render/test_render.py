@@ -1,6 +1,6 @@
 """Render dot_pi/private_agent/literal_AGENTS.md.tmpl for both desktop profiles with the real chezmoi.
 
-The doorbell rule (end every reply with an AWAITING-OWNER line) is for the personal profile only; the
+The doorbell rule (call notify_owner when you need the owner or have answered a question) is for the personal profile only; the
 work profile must render without it. Skipped when chezmoi is not installed.
 
     python3 -m unittest discover -s tests/pi-agents-render -v
@@ -25,15 +25,16 @@ RISK_PARAGRAPH = """- Risk tolerance is high. This is personal, one-person softw
 DOORBELL_SECTION = """
 ## Doorbell
 
-The doorbell rings the owner only when you ask it to. When you need the owner to answer or
-decide in your reply, call the `notify_owner` tool with the question, put the question in
-the reply too, and end your turn. An `ask_user_question` dialog rings by itself: do not also
-call `notify_owner` for it. Do not ring for progress or for finishing: a turn that needs
-nothing is silent. Report progress on a separate `Status:` line.
+The doorbell rings the owner only when you ask it to. Call the `notify_owner` tool, with a
+one-line summary, in two cases, and put the same text in your reply:
 
-While the old marker hook is still installed, also end every reply with the line
-`AWAITING-OWNER: none`, even when you called the tool. The hook reads it as "no
-question", so the tool is the only ring.
+- You need the owner to answer or decide (the question).
+- You have answered a question the owner or coordinator asked you (`answer ready: <topic>`).
+  Someone is waiting on an answer, so it must ring; do not finish it quietly.
+
+End your turn after the call. An `ask_user_question` dialog rings by itself: do not also call
+`notify_owner` for it. Do not ring for progress or for finishing a turn nobody is waiting on:
+that stays silent. Report progress on a separate `Status:` line.
 """
 
 
@@ -53,8 +54,9 @@ def render(profile):
 class AgentsRenderTests(unittest.TestCase):
     def test_personal_profile_gets_the_doorbell_rule(self):
         text = render("personal")
-        self.assertIn("call the `notify_owner` tool with the question", text)
-        self.assertIn("AWAITING-OWNER: none`", text)
+        self.assertIn("Call the `notify_owner` tool, with a", text)
+        self.assertIn("answer ready: <topic>", text)
+        self.assertNotIn("AWAITING-OWNER: none", text)
         self.assertNotIn("AWAITING-OWNER: <the one question>", text)
         self.assertEqual(text.count(DOORBELL_SECTION), 1)
         self.assertTrue(text.endswith(DOORBELL_SECTION))

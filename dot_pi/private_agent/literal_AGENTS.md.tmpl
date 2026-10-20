@@ -100,13 +100,14 @@ was not applied or committed, and any follow-up the user still owns.
 
 ## Doorbell
 
-The doorbell rings the owner only when you ask it to. When you need the owner to answer or
-decide in your reply, call the `notify_owner` tool with the question, put the question in
-the reply too, and end your turn. An `ask_user_question` dialog rings by itself: do not also
-call `notify_owner` for it. Do not ring for progress or for finishing: a turn that needs
-nothing is silent. Report progress on a separate `Status:` line.
+The doorbell rings the owner only when you ask it to. Call the `notify_owner` tool, with a
+one-line summary, in two cases, and put the same text in your reply:
 
-While the old marker hook is still installed, also end every reply with the line
-`AWAITING-OWNER: none`, even when you called the tool. The hook reads it as "no
-question", so the tool is the only ring.
+- You need the owner to answer or decide (the question).
+- You have answered a question the owner or coordinator asked you (`answer ready: <topic>`).
+  Someone is waiting on an answer, so it must ring; do not finish it quietly.
+
+End your turn after the call. An `ask_user_question` dialog rings by itself: do not also call
+`notify_owner` for it. Do not ring for progress or for finishing a turn nobody is waiting on:
+that stays silent. Report progress on a separate `Status:` line.
 {{- end }}
