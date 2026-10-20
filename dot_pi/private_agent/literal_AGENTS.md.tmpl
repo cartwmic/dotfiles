@@ -96,3 +96,15 @@ Done means:
 
 Handoff must include: repo / cwd, what changed, how it was verified, what
 was not applied or committed, and any follow-up the user still owns.
+{{- if eq .profile "personal" }}
+
+## Doorbell
+
+A doorbell rings the owner when a turn ends. End every reply with one line:
+
+- `AWAITING-OWNER: <the one question>` when you need the owner to answer or decide.
+- `AWAITING-OWNER: none` otherwise.
+
+The doorbell reads `none` and `none yet` as "no question" and treats the turn as
+finished. Report progress on a separate `Status:` line, not with this marker.
+{{- end }}

@@ -65,6 +65,7 @@ class TimeZoneCliTests(unittest.TestCase):
                 run(*args, '--time-zone', 'Not/AZone', text='must not run', success=False)
             self.assertEqual((home / 'calls').read_bytes(), calls_before)
             after = {str(p.relative_to(home)): hashlib.sha256(p.read_bytes()).hexdigest() for p in (home / 'data').rglob('*') if p.is_file()}
+            after.pop('data/session-recap/list-index.json')  # list's own cache (not a record); the dated records and everything else must be unchanged
             self.assertEqual(before, after)
             self.assertEqual(json.loads(run('read', first, '--json'))['record'], original)
 

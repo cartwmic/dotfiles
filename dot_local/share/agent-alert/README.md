@@ -181,8 +181,9 @@ instruction in the worker's prompt or its AGENTS.md; the adapter cannot ask for 
 Use the marker only when the owner must answer. Report progress with a line that starts
 with `Status:` (for example `Status: tests running`). A marker followed by a status
 filler (`none` or `none yet`, any case, with or without punctuation) is not a question:
-the hook treats that turn as an ordinary `finished`. `AWAITING-OWNER: none yet` rings the
-owner's doorbell with nothing to answer, so do not print it.
+the hook treats that turn as an ordinary `finished`. The personal profile's Pi `AGENTS.md` has workers end
+every reply with `AWAITING-OWNER: none` when they need nothing, so a `finished` ring is the same with or without
+the line; only a real question makes it a `question`.
 
 What the hook does with it:
 
