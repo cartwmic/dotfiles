@@ -32,12 +32,21 @@ or expire. That is the whole subagent signal; no pane text is searched for it.
   BLOCKED_SETTLE_SECONDS. Any other blocked event is emitted.
 * A question is never held or dropped, whatever the labels say.
 
-The places it looks at a pane are the marker check and, for a blocked event with a
-subagent running, the label recheck. The marker check (a worker whose turn ends waiting
-on the owner prints a line starting with AWAITING-OWNER:) reads the last lines of the
-pane with `herdr pane read`, finds the LAST marker line and keeps only its class: a real
-question, a filler, or no marker. No pane text is stored, logged, put in the inbox or
-sent. If the read fails the event is a plain finished (no flag): it could be a question.
+The marker check (a worker whose turn ends waiting on the owner prints a line starting
+with AWAITING-OWNER:) finds the LAST marker line and keeps only its class: a real question,
+a filler, or no marker. No text is stored, logged, put in the inbox or sent. It reads, in
+this order:
+
+1. The agent's session file. `herdr pane get` gives the pane's agent_session (kind "path",
+   the transcript .jsonl of Pi, Claude Code or Codex). The hook reads the tail of that file
+   and takes the text of the final assistant message. This needs no screen parsing, so
+   footers, boxes, wrapping and pane width do not matter. It is used only when the file's
+   newest conversation record is a finished assistant text message (a Pi "stop", a Claude
+   text record, a Codex final message); a tool call, a tool result, a user message, an error,
+   an unknown agent or format, or any read failure means "unsure" and goes on to 2.
+2. The last lines of the pane, with `herdr pane read` (the older path, unchanged).
+
+If both fail the event is a plain finished (no flag): it could be a question.
 
 It decides from the event's own status only and keeps no ordering state, so a
 hook that runs late or out of order cannot make it skip a completion; the price
@@ -82,6 +91,10 @@ QUIET_VALUE = "none"
 PANE_READ_LINES = 30
 PANE_READ_TIMEOUT_SECONDS = 5
 PANE_GET_TIMEOUT_SECONDS = 5
+
+# The session file is read from its end, in steps, until the final assistant message is found.
+SESSION_TAIL_BYTES = (256 * 1024, 2 * 1024 * 1024, 16 * 1024 * 1024)
+NOT_FOUND = object()  # the records read so far hold no decisive record (read further back)
 
 # Pane state labels from Pi's subagent extension: "⏳ N subagent(s) ..." while any runs,
 # ending in "⚠" while one needs attention.
@@ -153,8 +166,8 @@ def subagent_state(labels):
     return running, attention
 
 
-def herdr_pane_labels(environment, pane):
-    """The pane's current state_labels from `herdr pane get`. Raises on any failure."""
+def herdr_pane(environment, pane):
+    """The pane object from `herdr pane get`. Raises on any failure."""
     herdr = environment.get("HERDR_BIN_PATH") or "herdr"
     result = subprocess.run(
         [herdr, "pane", "get", pane],
@@ -166,7 +179,12 @@ def herdr_pane_labels(environment, pane):
     )
     if result.returncode != 0:
         raise RuntimeError("herdr pane get exited %d" % result.returncode)
-    return json.loads(result.stdout.decode("utf-8", "replace"))["result"]["pane"].get("state_labels")
+    return json.loads(result.stdout.decode("utf-8", "replace"))["result"]["pane"]
+
+
+def herdr_pane_labels(environment, pane):
+    """The pane's current state_labels from `herdr pane get`. Raises on any failure."""
+    return herdr_pane(environment, pane).get("state_labels")
 
 
 def subagent_needs_attention(environment, pane):
@@ -188,9 +206,122 @@ def subagent_needs_attention(environment, pane):
         time.sleep(BLOCKED_SETTLE_POLL_SECONDS)
 
 
+def text_blocks(content, types):
+    """The text of a message's content (a string, or blocks of the given types), joined by newlines."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(b["text"] for b in content if isinstance(b, dict) and b.get("type") in types and isinstance(b.get("text"), str))
+
+
+def block_types(content):
+    return {b.get("type") for b in content if isinstance(b, dict)} if isinstance(content, list) else set()
+
+
+def pi_final_text(records):
+    """Pi: the newest "message" record decides. Text of a finished assistant message; None if unsure."""
+    for record in records:
+        message = record.get("message")
+        if record.get("type") != "message" or not isinstance(message, dict):
+            continue  # custom, session_info and the like sit between messages
+        if message.get("role") != "assistant" or message.get("stopReason") != "stop":
+            return None
+        return text_blocks(message.get("content"), ("text",))
+    return NOT_FOUND
+
+
+def claude_final_text(records):
+    """Claude Code: the newest user/assistant record of the main chain decides (blocks are separate records)."""
+    for record in records:
+        message = record.get("message")
+        if record.get("type") not in ("user", "assistant") or record.get("isSidechain") or not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if record.get("type") != "assistant" or message.get("stop_reason") == "tool_use" or "text" not in block_types(content) or "tool_use" in block_types(content):
+            return None
+        return text_blocks(content, ("text",))
+    return NOT_FOUND
+
+
+def codex_final_text(records):
+    """Codex: the newest response_item decides. Text of an assistant message; None if unsure."""
+    for record in records:
+        payload = record.get("payload")
+        if record.get("type") != "response_item" or not isinstance(payload, dict):
+            continue
+        if payload.get("type") != "message" or payload.get("role") != "assistant":
+            return None
+        return text_blocks(payload.get("content"), ("output_text", "text"))
+    return NOT_FOUND
+
+
+SESSION_READERS = (("pi", pi_final_text), ("claude", claude_final_text), ("codex", codex_final_text))
+
+
+def session_final_text(path, reader):
+    """The text of the agent's final message from the end of its session file, or None if unsure."""
+    size = os.path.getsize(path)
+    for window in SESSION_TAIL_BYTES:
+        length = min(window, size)
+        with open(path, "rb") as handle:
+            handle.seek(size - length)
+            data = handle.read(length)
+        lines = data.split(b"\n")
+        if length < size:
+            lines = lines[1:]  # the first line is cut
+
+        def records():
+            for line in reversed(lines):
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue  # blank, or a line still being written
+                if isinstance(record, dict):
+                    yield record
+
+        found = reader(records())
+        if found is not NOT_FOUND:
+            return found
+        if length >= size:
+            return None
+    return None
+
+
+def session_marker(environment, pane):
+    """Marker class from the agent's session file ("question", "none" or ""), or None if unsure."""
+    session = herdr_pane(environment, pane).get("agent_session")
+    if not isinstance(session, dict) or session.get("kind") != "path":
+        return None
+    path = session.get("value")
+    agent = str(session.get("agent") or "").lower()
+    reader = next((read for name, read in SESSION_READERS if agent == name or agent.startswith(name + "-")), None)
+    if reader is None or not isinstance(path, str) or not os.path.isabs(path) or not os.path.isfile(path):
+        return None
+    text = session_final_text(path, reader)
+    return None if text is None else marker_class(text)
+
+
+def marker_class(text):
+    """"question", "none" (a filler) or "" (no marker line) for the LAST marker line in text."""
+    last = None
+    for last in QUESTION_MARKER.finditer(text):
+        pass
+    if last is None:
+        return ""
+    return "none" if QUESTION_FILLER.fullmatch(last.group(1)) else "question"
+
+
 def pane_marker(environment, pane):
-    """The class of the last marker line in the pane's last lines: "question", "none" (a filler) or ""
-    (no marker line). Raises on any failure to read."""
+    """The class of the last marker line of the turn: "question", "none" (a filler) or "" (no marker
+    line). Reads the agent's session file; the last lines of the pane if that is not sure. Raises if
+    the pane cannot be read."""
+    try:
+        found = session_marker(environment, pane)
+    except Exception:  # noqa: BLE001 - quiet on purpose: the pane read below is the fallback
+        found = None
+    if found is not None:
+        return found
     herdr = environment.get("HERDR_BIN_PATH") or "herdr"
     result = subprocess.run(
         [herdr, "pane", "read", pane, "--source", "recent-unwrapped", "--lines", str(PANE_READ_LINES)],
@@ -203,12 +334,7 @@ def pane_marker(environment, pane):
     if result.returncode != 0:
         raise RuntimeError("herdr pane read exited %d" % result.returncode)
     text = result.stdout.decode("utf-8", "replace")
-    last = None
-    for last in QUESTION_MARKER.finditer(text):
-        pass
-    if last is None:
-        return ""
-    return "none" if QUESTION_FILLER.fullmatch(last.group(1)) else "question"
+    return marker_class(text)
 
 
 def build_context(environment, data, agent):
