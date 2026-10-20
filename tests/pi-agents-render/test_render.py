@@ -1,6 +1,6 @@
 """Render dot_pi/private_agent/literal_AGENTS.md.tmpl for both desktop profiles with the real chezmoi.
 
-The doorbell rule (end every reply with an AWAITING-OWNER line) is for the personal profile only; the
+The doorbell rule (call notify_owner when you need the owner or have answered a question) is for the personal profile only; the
 work profile must render without it. Skipped when chezmoi is not installed.
 
     python3 -m unittest discover -s tests/pi-agents-render -v
