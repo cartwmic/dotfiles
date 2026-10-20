@@ -24,6 +24,7 @@ goes wrong. Each adapter has a section here.
 | `core/agent-alert` | `emit`, `tail`, `ack` ([SPEC.md](./SPEC.md)) |
 | `adapters/herdr/` | Source: a Herdr plugin ([section](#herdr-source-adapter)) |
 | `adapters/claude-doorbell/` | Sink: rings a Claude cloud session ([section](#claude-doorbell-sink)) |
+| Pi extension `notify-owner` | Source: a worker calls `notify_owner` to emit `question`; replaces the Herdr marker inference once the hook is removed (`dot_pi/private_agent/extensions/notify-owner/`) |
 | `examples/` | A worked source and a worked consumer, also in [SPEC.md](./SPEC.md#worked-examples) |
 | `tests/` | Tests; source-only, not deployed |
 

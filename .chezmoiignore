@@ -16,6 +16,7 @@
 .pi/agent/extensions/recap/automation-pty.py
 .pi/agent/extensions/recap/tui-smoke.py
 .pi/agent/extensions/recap/*.test.*
+.pi/agent/extensions/notify-owner/*.test.*
 # Source-only instructions for work in the standing-reminder extension tree.
 .pi/agent/extensions/standing-reminder/AGENTS.md
 .local/share/passage-review/__pycache__

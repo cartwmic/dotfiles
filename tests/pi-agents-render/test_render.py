@@ -25,13 +25,15 @@ RISK_PARAGRAPH = """- Risk tolerance is high. This is personal, one-person softw
 DOORBELL_SECTION = """
 ## Doorbell
 
-A doorbell rings the owner when a turn ends. End every reply with one line:
+The doorbell rings the owner only when you ask it to. When you need the owner to answer or
+decide in your reply, call the `notify_owner` tool with the question, put the question in
+the reply too, and end your turn. An `ask_user_question` dialog rings by itself: do not also
+call `notify_owner` for it. Do not ring for progress or for finishing: a turn that needs
+nothing is silent. Report progress on a separate `Status:` line.
 
-- `AWAITING-OWNER: <the one question>` when you need the owner to answer or decide.
-- `AWAITING-OWNER: none` otherwise.
-
-The doorbell reads `none` and `none yet` as "no question" and treats the turn as
-finished. Report progress on a separate `Status:` line, not with this marker.
+While the old marker hook is still installed, also end every reply with the line
+`AWAITING-OWNER: none`, even when you called the tool. The hook reads it as "no
+question", so the tool is the only ring.
 """
 
 
@@ -51,8 +53,9 @@ def render(profile):
 class AgentsRenderTests(unittest.TestCase):
     def test_personal_profile_gets_the_doorbell_rule(self):
         text = render("personal")
-        self.assertIn("AWAITING-OWNER: <the one question>", text)
+        self.assertIn("call the `notify_owner` tool with the question", text)
         self.assertIn("AWAITING-OWNER: none`", text)
+        self.assertNotIn("AWAITING-OWNER: <the one question>", text)
         self.assertEqual(text.count(DOORBELL_SECTION), 1)
         self.assertTrue(text.endswith(DOORBELL_SECTION))
 
