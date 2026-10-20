@@ -196,7 +196,7 @@ def deployed_names(files):
 
 def diff_bundle(bundle_dir, wanted):
     """(added, changed, orphans) destination paths, sorted."""
-    have = local_files(bundle_dir) if bundle_dir.is_dir() else {}
+    have = local_files(bundle_dir)  # also rejects a symlinked root, dangling or not; a missing directory gives {}
     added = sorted(d for d in wanted if d not in have)
     changed = sorted(d for d in wanted if d in have and have[d] != wanted[d])
     orphans = sorted(d for d in have if d not in wanted)
