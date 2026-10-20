@@ -48,7 +48,7 @@ session-recap annotate ID --namespace NAME --metadata-json '{"group":"id"}'
 List returns `{"records":[...]}`, ordered by creation time and ID; read and
 annotate return `{"record":{...}}`. Reads need no backend configuration.
 
-`list` reads one dated file at a time and applies `--source-kind`, `--source-id` and `--status` before it builds a record, so memory grows with the number of matches, not with the store. An unfiltered `list` still returns every record, so pass a filter whenever you need only one source. `read` and `annotate` open `records/<date>/<ID>.json` directly and scan the store only if no file has that name. Tracked in cartwmic/dotfiles#12; bounded-memory tests are in `test_reader_bounds.py`.
+`list` reads one dated file at a time and applies `--source-kind`, `--source-id` and `--status` before it builds a record, so memory grows with the number of matches, not with the store. A cache beside the records (`list-index.json`: the filter fields, mtime and size of each file) lets a filtered `list` open only the files it returns; a new, edited or hand-placed file is read once and cached, and the cache can be deleted at any time. An unfiltered `list` still returns every record, so pass a filter whenever you need only one source. `read` and `annotate` open `records/<date>/<ID>.json` directly and scan the store only if no file has that name. Tracked in cartwmic/dotfiles#12; bounded-memory tests are in `test_reader_bounds.py`.
 
 Timestamp presentation defaults to the host's local timezone. Set
 `time_zone = "America/New_York"` in `config.local.toml`, or override it with
@@ -178,6 +178,7 @@ Data lives in `${XDG_DATA_HOME:-$HOME/.local/share}/session-recap/`:
 
 - `records/YYYY-MM-DD/<record-id>.json`: authoritative dated history
 - `latest.json`: best-effort latest-success/last-attempt convenience index
+- `list-index.json`: best-effort cache of each record file's filter fields, so a filtered `list` reads only the records it returns (cartwmic/dotfiles#15); safe to delete
 
 Generic v2 records retain `schema_version`, `record_id`, `source_kind`,
 `source_id`, `kind`, `status`, `created_at`, optional `label`, and group

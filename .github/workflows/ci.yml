@@ -1,6 +1,7 @@
 name: CI
 
 # Fast, secret-free tests only: pi-mcp-lazy (incl. render), pi-idle-rss seam tests, mise tasks.
+# Also: Pi AGENTS.md render, release-tag skill import, session-recap store tests (fake backends only).
 # Not run here: *proof.py / journey scripts that drive a real Pi, Herdr or phone, and
 # anything needing 1Password or other secrets (tests/native-mcp, tests/pi-recap, tests/standing-reminder, ...).
 
@@ -38,6 +39,12 @@ jobs:
         run: python3 -m unittest discover -s tests/pi-mcp-lazy -v
       - name: Pi idle-RSS seam tests
         run: python3 -m unittest discover -s tests/pi-idle-rss -v
+      - name: Pi AGENTS.md render (personal vs work profile)
+        run: python3 -m unittest discover -s tests/pi-agents-render -v
+      - name: Release-tag skill import tool
+        run: python3 -m unittest discover -s tests/release-skills -v
+      - name: Session-recap store tests
+        run: python3 -m unittest discover -s dot_local/share/session-recap -p 'test_*.py' -v
 
   # macOS: the kubectl task test puts /usr/bin first on PATH, and the ubuntu runner image
   # ships /usr/bin/kubectl, which makes the task skip itself.

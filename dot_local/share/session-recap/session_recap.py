@@ -571,22 +571,65 @@ def _public_record(record: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+LIST_INDEX_NAME = "list-index.json"
+LIST_FILTER_FIELDS = ("source_kind", "source_id", "status")
+
+
+def _load_list_index(root: Path) -> dict[str, Any]:
+    """The cached filter fields per record file, or {} if there is no usable cache."""
+    try:
+        index = json.loads((root / LIST_INDEX_NAME).read_text(encoding="utf-8"))
+        entries = index["entries"]
+        if index["version"] == 1 and isinstance(entries, dict):
+            return entries
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return {}
+
+
+def _save_list_index(root: Path, entries: dict[str, Any]) -> None:
+    try:
+        _atomic_write_json(root / LIST_INDEX_NAME, {"version": 1, "entries": entries})
+    except OSError:
+        pass  # A cache only: the next list rebuilds what is missing.
+
+
+def _list_records(args: argparse.Namespace, root: Path) -> list[dict[str, Any]]:
+    """Public records matching the filters, reading only the files that match.
+
+    A cache beside the records (list-index.json) holds, per record file, the fields the filters
+    test plus the file's mtime, ctime, inode and size (ctime changes on any write, even one that restores the mtime). A file whose mtime and size match its entry is not read
+    unless it matches; any other file is read, checked and re-cached, so a new, renamed, edited or
+    hand-placed file is always picked up. Dated records stay the only authority; the cache can be
+    deleted at any time. Public fields are copied unchanged, so a raw field equals the public one.
+    """
+    cached = _load_list_index(root)
+    entries: dict[str, Any] = {}
+    records = []
+    for path in sorted((root / "records").glob("*/*.json")):
+        name = f"{path.parent.name}/{path.name}"
+        stat = path.stat()
+        entry = cached.get(name)
+        raw = None
+        if not (isinstance(entry, dict) and entry.get("mtime_ns") == stat.st_mtime_ns and entry.get("size") == stat.st_size
+                and entry.get("ctime_ns") == stat.st_ctime_ns and entry.get("ino") == stat.st_ino):
+            raw = _read_json(path)
+            entry = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size, "ctime_ns": stat.st_ctime_ns, "ino": stat.st_ino, "schema_version": raw.get("schema_version"),
+                     "owner": _pi_owner(raw), **{field: raw.get(field) for field in LIST_FILTER_FIELDS}}
+        entries[name] = entry
+        _record_version(entry)  # Same error as before for an unsupported schema, whatever the filters.
+        if all(getattr(args, field) is None or entry.get(field) == getattr(args, field) for field in LIST_FILTER_FIELDS) and (
+                args.pi_owner is None or entry.get("owner") == args.pi_owner):
+            public = _public_record(raw if raw is not None else _read_json(path))
+            records.append(_without_coverage_units(public) if args.omit_coverage_units else public)
+    if entries != cached:
+        _save_list_index(root, entries)
+    return records
+
+
 def _run_records(args: argparse.Namespace, root: Path) -> None:
     if args.subcommand == "list":
-        # Read one file at a time and apply the filters to the raw record
-        # before building its public form, so only matching records stay in
-        # memory. Every file is still read and its schema still checked, so
-        # errors are the same as before. Public fields are copied unchanged,
-        # so a raw field equals the public one.
-        records = []
-        for path in sorted((root / "records").glob("*/*.json")):
-            raw = _read_json(path)
-            _record_version(raw)
-            if all(getattr(args, field) is None or raw.get(field) == getattr(args, field)
-                   for field in ("source_kind", "source_id", "status")) and (
-                    args.pi_owner is None or _pi_owner(raw) == args.pi_owner):
-                public = _public_record(raw)
-                records.append(_without_coverage_units(public) if args.omit_coverage_units else public)
+        records = _list_records(args, root)
         records.sort(key=lambda record: (record.get("created_at", ""), record["record_id"]))
         if args.json:
             print(_json_text({"records": records, "presentation": {"time_zone": args.zone[0], "records": {r["record_id"]: presentation(r, args.zone) for r in records}}}), end="")

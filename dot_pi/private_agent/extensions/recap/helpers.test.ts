@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, priorRecord, sessionListArgs, argumentCompletions, commandCatalog, commandHelp, projectContext, failureNotice, hardBreaks } from './helpers.ts';
+import { restoreState, resolveSettings, setOverride, project, capture, uncovered, version, seedSettings, capturedSettings, displayTime, validTimeZone, compatibleRecord, priorRecord, sessionListArgs, historyListArgs, argumentCompletions, commandCatalog, commandHelp, projectContext, failureNotice, hardBreaks } from './helpers.ts';
 
 test('native completions replace the whole argument prefix and match parser contexts', () => {
   assert.deepEqual(argumentCompletions('').map(c => c.value), commandCatalog.map(c => c.value));
@@ -129,6 +129,31 @@ test('sessionListArgs lists only one Pi session through the real CLI', () => {
     assert.deepEqual(run(sessionListArgs('sess-b')), ['r2']);
     assert.deepEqual(run(sessionListArgs('absent')), []);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// cartwmic/dotfiles#15: /recap history is the session's own records unless the owner asks for all or legacy.
+test('historyListArgs scopes the default history to the session and only all/legacy list the whole store', () => {
+  const root = mkdtempSync(join(tmpdir(), 'recap-history-'));
+  try {
+    const day = join(root, 'data', 'session-recap', 'records', '2026-10-10');
+    mkdirSync(day, { recursive: true });
+    for (const [id, sid] of [['r1', 'sess-a'], ['r2', 'sess-b'], ['r3', 'sess-a']]) {
+      writeFileSync(join(day, id + '.json'), JSON.stringify({ schema_version: 2, record_id: id, source_kind: 'pi', source_id: sid, kind: 'single', status: 'published', summary: 's', created_at: '2026-10-10T00:00:0' + id[1] + '+00:00', metadata: { pi: { nativeSessionId: sid } }, annotations: {} }));
+    }
+    const cli = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'dot_local', 'bin', 'executable_session-recap');
+    const env: Record<string, string | undefined> = { ...process.env, SESSION_RECAP_IMPLEMENTATION: undefined, XDG_DATA_HOME: join(root, 'data'), XDG_CONFIG_HOME: join(root, 'config') };
+    const run = (args: string[]) => JSON.parse(spawnSync(cli, args, { env, encoding: 'utf8' }).stdout).records.map((r: any) => r.record_id);
+    assert.deepEqual(historyListArgs('sess-a', false), sessionListArgs('sess-a'));
+    assert.deepEqual(run(historyListArgs('sess-a', false)), ['r1', 'r3']);
+    assert.deepEqual(run(historyListArgs('sess-a', true)), ['r1', 'r2', 'r3']);
+    assert.ok(historyListArgs('sess-a', true).includes('--omit-coverage-units'));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('recap/index.ts lists history through historyListArgs: whole store only for all or legacy', () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
+  assert.ok(src.includes('historyListArgs(state.nativeSessionId, all || legacy)'));
+  assert.ok(!src.includes("call('list', '--json')"), 'no unscoped whole-store list');
 });
 
 // Selection must not change when coverage units are omitted from the listing (cartwmic/dotfiles#12 follow-up).

@@ -285,5 +285,103 @@ class ReaderTests(unittest.TestCase):
         self.assertGreater(full_big, big * 8)           # control: the unprojected list grows with the session
         self.assertGreater(full_big, full_small * 4)
 
+    # --- list reads only the records it returns (cartwmic/dotfiles#15) ---
+
+    def full_reads(self, *argv: str) -> list[str]:
+        """Names of the record files the list opened, in order."""
+        with unittest.mock.patch.object(recap, "_read_json", wraps=recap._read_json) as spy:
+            code, _ = self.run_cli(*argv)
+        self.assertEqual(code, 0)
+        return [call.args[0].name for call in spy.call_args_list if call.args[0].parent.parent.name == "records"]
+
+    def test_first_list_builds_the_cache_and_later_scoped_lists_read_only_their_matches(self) -> None:
+        first = self.full_reads("list", "--json", "--source-kind", "pi", "--source-id", "s-b")
+        self.assertEqual(len(first), len(self.records))  # one pass over every file builds the cache
+        self.assertTrue((self.root / recap.LIST_INDEX_NAME).is_file())
+        second = self.full_reads("list", "--json", "--source-kind", "pi", "--source-id", "s-b")
+        expected = {f"{r['record_id']}.json" for r in self.records if r["source_id"] == "s-b"}
+        self.assertEqual(sorted(second), sorted(expected))  # exactly the 30 it returns, none of the other 90
+        self.assertEqual(self.full_reads("list", "--json", "--source-id", "no-such-session"), [])
+
+    def test_cached_list_output_is_identical_to_the_uncached_output(self) -> None:
+        argv = ("list", "--json", "--source-kind", "pi", "--status", "published", "--omit-coverage-units")
+        cold = self.run_cli(*argv)
+        self.assertTrue((self.root / recap.LIST_INDEX_NAME).is_file())
+        self.assertEqual(self.run_cli(*argv), cold)
+        (self.root / recap.LIST_INDEX_NAME).unlink()
+        self.assertEqual(self.run_cli(*argv), cold)
+
+    def test_pi_owner_lists_read_only_the_owners_records_once_cached(self) -> None:
+        self.put(self.owned(500, "history-q", {"sessionId": "mine"}))
+        self.run_cli("list", "--json", "--pi-owner", "mine")
+        self.assertEqual(self.full_reads("list", "--json", "--pi-owner", "mine"), ["r0500.json"])
+
+    def test_new_and_hand_placed_files_are_picked_up(self) -> None:
+        self.run_cli("list", "--json")
+        self.put(record(910, "s-a"))
+        self.put(record(911, "s-a"), name="renamed", day="2026-10-31")
+        ids = {r["record_id"] for r in json.loads(self.run_cli("list", "--json", "--source-id", "s-a")[1])["records"]}
+        self.assertTrue({"r0910", "r0911"} <= ids)
+
+    def test_an_edited_file_is_read_again_and_its_new_fields_apply(self) -> None:
+        self.run_cli("list", "--json")
+        path = self.put(record(0, "s-a", status="published"))
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value.update(source_id="moved", status="failed", summary="a longer summary than before")
+        path.write_text(recap._json_text(value), encoding="utf-8")
+        moved = json.loads(self.run_cli("list", "--json", "--source-id", "moved")[1])["records"]
+        self.assertEqual([r["record_id"] for r in moved], ["r0000"])
+        old = json.loads(self.run_cli("list", "--json", "--source-id", "s-a")[1])["records"]
+        self.assertNotIn("r0000", [r["record_id"] for r in old])
+
+    def test_a_same_size_rewrite_with_the_old_mtime_restored_is_still_seen(self) -> None:
+        self.run_cli("list", "--json")
+        path = self.root / "records" / self.records[0]["created_at"][:10] / "r0000.json"
+        before = path.stat()
+        path.write_text(path.read_text(encoding="utf-8").replace('"source_id": "s-a"', '"source_id": "s-q"'), encoding="utf-8")
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        self.assertEqual(path.stat().st_size, before.st_size)
+        self.assertEqual(path.stat().st_mtime_ns, before.st_mtime_ns)
+        moved = json.loads(self.run_cli("list", "--json", "--source-id", "s-q")[1])["records"]
+        self.assertEqual([r["record_id"] for r in moved], ["r0000"])
+        self.assertNotIn("r0000", [r["record_id"] for r in json.loads(self.run_cli("list", "--json", "--source-id", "s-a")[1])["records"]])
+
+    def test_a_deleted_file_is_dropped_from_the_cache(self) -> None:
+        self.run_cli("list", "--json")
+        (self.root / "records" / self.records[3]["created_at"][:10] / "r0003.json").unlink()
+        self.run_cli("list", "--json")
+        entries = json.loads((self.root / recap.LIST_INDEX_NAME).read_text(encoding="utf-8"))["entries"]
+        self.assertEqual(len(entries), len(self.records) - 1)
+
+    def test_a_broken_cache_is_ignored_and_rebuilt(self) -> None:
+        expected = self.run_cli("list", "--json", "--source-id", "s-c")
+        for junk in ("{not json", "[]", '{"version": 2, "entries": {}}', '{"version": 1, "entries": []}'):
+            with self.subTest(junk=junk):
+                (self.root / recap.LIST_INDEX_NAME).write_text(junk, encoding="utf-8")
+                self.assertEqual(self.run_cli("list", "--json", "--source-id", "s-c"), expected)
+
+    def test_a_cached_unsupported_schema_still_fails_the_list(self) -> None:
+        self.run_cli("list", "--json", "--source-id", "s-a")
+        self.put(record(900, "s-z", version=7))
+        for _ in range(2):  # uncached, then cached
+            code, out, err = self.run_cli_err("list", "--json", "--source-id", "s-a")
+            self.assertNotEqual(code, 0)
+            self.assertIn("unsupported record schema", err)
+            self.assertEqual(out, "")
+
+    def test_an_unwritable_cache_does_not_fail_the_list(self) -> None:
+        expected = self.run_cli("list", "--json", "--source-id", "s-d")
+        (self.root / recap.LIST_INDEX_NAME).unlink()
+        with unittest.mock.patch.object(recap, "_atomic_write_json", side_effect=PermissionError("read-only")):
+            self.assertEqual(self.run_cli("list", "--json", "--source-id", "s-d"), expected)
+        self.assertFalse((self.root / recap.LIST_INDEX_NAME).exists())
+
+    def test_cache_is_not_a_record_and_is_never_listed_or_read_as_one(self) -> None:
+        self.run_cli("list", "--json")
+        code, out, err = self.run_cli_err("read", "list-index", "--json")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(len(json.loads(self.run_cli("list", "--json")[1])["records"]), len(self.records))
+
+
 if __name__ == "__main__":
     unittest.main()
