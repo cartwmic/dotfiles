@@ -297,6 +297,15 @@ class ImportTests(Fixture):
         self.assertEqual(result.returncode, 1)
         self.assertEqual((outside / "SKILL.md").read_bytes(), b"other skill\n")
 
+    def test_a_dangling_symlink_as_a_bundle_root_is_refused_before_any_write(self):
+        (self.source / SKILLS / "using-other").symlink_to(self.dir / "nowhere")
+        for flags in ((), ("--apply",)):
+            result = self.do_import(*flags)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("symlink", result.stderr)
+        self.assertEqual({p.name for p in (self.source / SKILLS).iterdir()}, {"using-other"})  # earlier bundles were not written
+        self.assertFalse((self.dir / "nowhere").exists())
+
     def test_an_executable_bit_in_the_tag_is_dropped_not_refused(self):
         self.release("v1.0.0", dict(GOOD_TREE), modes={"crates/foo-provider/data/a.json": "100755"})
         self.assertEqual(self.do_import("--apply").returncode, 0)
