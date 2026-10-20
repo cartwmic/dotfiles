@@ -334,6 +334,18 @@ class ReaderTests(unittest.TestCase):
         old = json.loads(self.run_cli("list", "--json", "--source-id", "s-a")[1])["records"]
         self.assertNotIn("r0000", [r["record_id"] for r in old])
 
+    def test_a_same_size_rewrite_with_the_old_mtime_restored_is_still_seen(self) -> None:
+        self.run_cli("list", "--json")
+        path = self.root / "records" / self.records[0]["created_at"][:10] / "r0000.json"
+        before = path.stat()
+        path.write_text(path.read_text(encoding="utf-8").replace('"source_id": "s-a"', '"source_id": "s-q"'), encoding="utf-8")
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        self.assertEqual(path.stat().st_size, before.st_size)
+        self.assertEqual(path.stat().st_mtime_ns, before.st_mtime_ns)
+        moved = json.loads(self.run_cli("list", "--json", "--source-id", "s-q")[1])["records"]
+        self.assertEqual([r["record_id"] for r in moved], ["r0000"])
+        self.assertNotIn("r0000", [r["record_id"] for r in json.loads(self.run_cli("list", "--json", "--source-id", "s-a")[1])["records"]])
+
     def test_a_deleted_file_is_dropped_from_the_cache(self) -> None:
         self.run_cli("list", "--json")
         (self.root / "records" / self.records[3]["created_at"][:10] / "r0003.json").unlink()

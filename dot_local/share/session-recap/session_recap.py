@@ -598,7 +598,7 @@ def _list_records(args: argparse.Namespace, root: Path) -> list[dict[str, Any]]:
     """Public records matching the filters, reading only the files that match.
 
     A cache beside the records (list-index.json) holds, per record file, the fields the filters
-    test plus the file's mtime and size. A file whose mtime and size match its entry is not read
+    test plus the file's mtime, ctime, inode and size (ctime changes on any write, even one that restores the mtime). A file whose mtime and size match its entry is not read
     unless it matches; any other file is read, checked and re-cached, so a new, renamed, edited or
     hand-placed file is always picked up. Dated records stay the only authority; the cache can be
     deleted at any time. Public fields are copied unchanged, so a raw field equals the public one.
@@ -611,9 +611,10 @@ def _list_records(args: argparse.Namespace, root: Path) -> list[dict[str, Any]]:
         stat = path.stat()
         entry = cached.get(name)
         raw = None
-        if not (isinstance(entry, dict) and entry.get("mtime_ns") == stat.st_mtime_ns and entry.get("size") == stat.st_size):
+        if not (isinstance(entry, dict) and entry.get("mtime_ns") == stat.st_mtime_ns and entry.get("size") == stat.st_size
+                and entry.get("ctime_ns") == stat.st_ctime_ns and entry.get("ino") == stat.st_ino):
             raw = _read_json(path)
-            entry = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size, "schema_version": raw.get("schema_version"),
+            entry = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size, "ctime_ns": stat.st_ctime_ns, "ino": stat.st_ino, "schema_version": raw.get("schema_version"),
                      "owner": _pi_owner(raw), **{field: raw.get(field) for field in LIST_FILTER_FIELDS}}
         entries[name] = entry
         _record_version(entry)  # Same error as before for an unsupported schema, whatever the filters.
