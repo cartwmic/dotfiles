@@ -7,7 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { ASK_TOOL_NAME, TOOL_NAME, corePath, eligible, registerNotifyOwner, ring } from "./helpers.ts";
+import { ASK_TOOL_NAME, TOOL_NAME, corePath, eligible, logPath, registerNotifyOwner, ring } from "./helpers.ts";
 
 // A scripted child process for the injected spawner: records how it was started and lets a test fire its events.
 function fakeSpawner() {
@@ -169,18 +169,20 @@ test("a failure to start the emit, or a nonzero exit, goes to the operator log; 
   } finally { s.cleanup(); }
 });
 
-test("a clean quit with a UI reports exited; reload, new, resume, fork, no UI and a stale ctx do not", async () => {
+test("a clean quit in the TUI reports exited; reload, new, resume, fork, print, rpc and a stale ctx do not", async () => {
   const s = scratch();
   try {
     const pi = fakePi();
     registerNotifyOwner(pi, Type, s.env);
     const [shutdown] = pi.handlers.session_shutdown;
-    for (const reason of ["reload", "new", "resume", "fork"]) shutdown({ reason }, { hasUI: true });
-    shutdown({ reason: "quit" }, { hasUI: false }); // a print-mode run is not the pane's agent
-    shutdown({ reason: "quit" }, { get hasUI(): boolean { throw new Error("stale"); } });
+    for (const reason of ["reload", "new", "resume", "fork"]) shutdown({ reason }, { hasUI: true, mode: "tui" });
+    shutdown({ reason: "quit" }, { hasUI: false, mode: "print" }); // a print-mode run is not the pane's agent
+    shutdown({ reason: "quit" }, { hasUI: true, mode: "rpc" }); // nor is an RPC helper, though hasUI is true there
+    shutdown({ reason: "quit" }, { hasUI: true }); // no mode: unsure, so quiet
+    shutdown({ reason: "quit" }, { get mode(): string { throw new Error("stale"); } });
     await new Promise((r) => setTimeout(r, 300));
     assert.deepEqual(s.calls(), []);
-    shutdown({ reason: "quit" }, { hasUI: true });
+    shutdown({ reason: "quit" }, { hasUI: true, mode: "tui" });
     await until(() => s.calls().length === 1);
     assert.deepEqual(s.calls(), ["emit --worker w1:p2 --kind exited --context agent=pi --context workspace_id=w1"]);
   } finally { s.cleanup(); }
@@ -194,4 +196,19 @@ test("without HERDR_WORKSPACE_ID the workspace context is left out", async () =>
     await until(() => s.calls().length === 1);
     assert.deepEqual(s.calls(), ["emit --worker w1:p2 --kind question --context agent=pi"]);
   } finally { s.cleanup(); }
+});
+
+test("the operator log path is resolved as the core does: env (with ~), then config log_path, then the default", () => {
+  const home = mkdtempSync(join(tmpdir(), "notify-owner-"));
+  try {
+    assert.equal(logPath({ HOME: home }), join(home, ".local/state/agent-alert/agent-alert.log"));
+    assert.equal(logPath({ HOME: home, AGENT_ALERT_LOG: "~/alerts.log" }), join(home, "alerts.log"));
+    assert.equal(logPath({ HOME: home, AGENT_ALERT_LOG: "/var/x.log" }), "/var/x.log");
+    const config = join(home, "config.json");
+    writeFileSync(config, JSON.stringify({ log_path: "~/from-config.log" }));
+    assert.equal(logPath({ HOME: home, AGENT_ALERT_CONFIG: config }), join(home, "from-config.log"));
+    assert.equal(logPath({ HOME: home, AGENT_ALERT_CONFIG: config, AGENT_ALERT_LOG: "/env.log" }), "/env.log");
+    writeFileSync(config, "not json");
+    assert.equal(logPath({ HOME: home, AGENT_ALERT_CONFIG: config }), join(home, ".local/state/agent-alert/agent-alert.log"));
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
