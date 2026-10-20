@@ -30,6 +30,7 @@ export function corePath(env: Env): string {
   return join(env.HOME || homedir(), CORE_RELATIVE);
 }
 
+// Only "~" and "~/..." (the core also expands "~user/...", which nobody sets here).
 const expand = (path: string, home: string) => (path === "~" || path.startsWith("~/") ? join(home, path.slice(1)) : path);
 
 /** The operator log path, resolved as the core does: AGENT_ALERT_LOG, then log_path in the config file, then the default. */
