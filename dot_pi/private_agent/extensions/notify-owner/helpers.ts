@@ -7,7 +7,7 @@
 //
 // Kept free of Pi imports so node --test can run it. index.ts wires it to Pi.
 import { spawn } from "node:child_process";
-import { accessSync, appendFileSync, constants, mkdirSync } from "node:fs";
+import { accessSync, appendFileSync, constants, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -30,10 +30,25 @@ export function corePath(env: Env): string {
   return join(env.HOME || homedir(), CORE_RELATIVE);
 }
 
+const expand = (path: string, home: string) => (path === "~" || path.startsWith("~/") ? join(home, path.slice(1)) : path);
+
+/** The operator log path, resolved as the core does: AGENT_ALERT_LOG, then log_path in the config file, then the default. */
+export function logPath(env: Env): string {
+  const home = env.HOME || homedir();
+  if (env.AGENT_ALERT_LOG) return expand(env.AGENT_ALERT_LOG, home);
+  try {
+    const config = JSON.parse(readFileSync(expand(env.AGENT_ALERT_CONFIG || "~/.config/agent-alert/config.json", home), "utf8"));
+    if (typeof config?.log_path === "string" && config.log_path) return expand(config.log_path, home);
+  } catch {
+    // no config, or not JSON: the default
+  }
+  return join(home, LOG_RELATIVE);
+}
+
 /** The agent-alert operator log, where the core and the sinks already write their problems. */
 function logProblem(env: Env, message: string): void {
   try {
-    const path = env.AGENT_ALERT_LOG || join(env.HOME || homedir(), LOG_RELATIVE);
+    const path = logPath(env);
     mkdirSync(dirname(path), { recursive: true });
     appendFileSync(path, `${new Date().toISOString().replace(/\.\d+Z$/, "Z")} notify-owner: ${message}\n`);
   } catch {
@@ -69,7 +84,7 @@ const text = (message: string, isError = false) => ({ content: [{ type: "text" a
 
 export interface PiLike {
   registerTool(tool: Record<string, unknown>): void;
-  on(event: string, handler: (event: { toolName?: string; reason?: string }, ctx: { hasUI?: boolean }) => void): void;
+  on(event: string, handler: (event: { toolName?: string; reason?: string }, ctx: { hasUI?: boolean; mode?: string }) => void): void;
 }
 
 /** Register the tool and the listeners. `Type` is TypeBox's, passed in so tests need no Pi. */
@@ -94,14 +109,15 @@ export function registerNotifyOwner(pi: PiLike, Type: { Object(p: unknown): unkn
     if (event.toolName === ASK_TOOL_NAME && ctx.hasUI) ring(env, "question", spawnFn);
   });
   // A clean Pi exit, including SIGTERM and SIGHUP (closing the pane). Reload, new, resume and fork also
-  // shut a session down but Pi keeps running, so only "quit" counts. A print-mode run has no UI and is not a pane's agent.
+  // shut a session down but Pi keeps running, so only "quit" counts. Only the interactive TUI is a pane's agent: a
+  // print-mode run (no UI) or an RPC helper (hasUI is true there too) that inherited the pane id is not.
   pi.on("session_shutdown", (event, ctx) => {
-    let ui = false;
+    let tui = false;
     try {
-      ui = ctx.hasUI === true;
+      tui = ctx.mode === "tui";
     } catch {
       // a stale ctx: treat as not an interactive pane
     }
-    if (event.reason === "quit" && ui) ring(env, "exited", spawnFn);
+    if (event.reason === "quit" && tui) ring(env, "exited", spawnFn);
   });
 }
