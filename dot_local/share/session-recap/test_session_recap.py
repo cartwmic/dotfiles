@@ -318,6 +318,7 @@ class SessionRecapCliTests(unittest.TestCase):
         self.assertEqual([r["record_id"] for r in records], [record_id])
         after = {str(p.relative_to(self.data_dir)): p.read_bytes()
                  for p in self.data_dir.rglob("*") if p.is_file()}
+        after.pop("list-index.json")  # list's own cache (not a record); the dated records and everything else must be unchanged
         self.assertEqual(after, before)
 
     def test_local_argv_override_and_both_editable_prompts_reach_backend(self) -> None:
