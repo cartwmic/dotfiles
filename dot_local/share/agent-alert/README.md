@@ -136,7 +136,8 @@ The hook acts on each event's own status and keeps no history:
 | `pane.agent_status_changed`, status `blocked` | `blocked`, except when a [Pi subagent](#pi-subagent-noise) is the cause: nothing |
 | `pane.agent_status_changed`, status `idle` or `done`, and the pane's last lines hold the [question marker](#the-question-marker) | `question` (always, even with a subagent running) |
 | `pane.agent_status_changed`, status `idle` or `done`, a subagent still running in the pane | nothing (held until the subagent label clears) |
-| `pane.agent_status_changed`, status `idle` or `done`, otherwise | `finished` |
+| `pane.agent_status_changed`, status `idle` or `done`, and the pane's last marker is a filler (`AWAITING-OWNER: none` or `none yet`) | `finished` with context `awaiting=none`; the [Claude doorbell](#claude-doorbell-sink) does not ring for it |
+| `pane.agent_status_changed`, status `idle` or `done`, otherwise (no marker, or the pane cannot be read) | `finished` |
 | `pane.agent_status_changed`, status `working`, `unknown` or anything else | nothing |
 | `pane.agent_detected` | nothing |
 | `pane.exited` or `pane.closed` for a pane that was seen with an agent | `exited` |
@@ -181,18 +182,24 @@ instruction in the worker's prompt or its AGENTS.md; the adapter cannot ask for 
 Use the marker only when the owner must answer. Report progress with a line that starts
 with `Status:` (for example `Status: tests running`). A marker followed by a status
 filler (`none` or `none yet`, any case, with or without punctuation) is not a question:
-the hook treats that turn as an ordinary `finished`. The personal profile's Pi `AGENTS.md` has workers end
-every reply with `AWAITING-OWNER: none` when they need nothing, so a `finished` ring is the same with or without
-the line; only a real question makes it a `question`.
+the hook records that turn as a `finished` whose context carries `awaiting=none`, and the
+[Claude doorbell](#claude-doorbell-sink) does not ring for it (owner decision: a turn that
+needs nothing from the owner is silent). The personal profile's Pi `AGENTS.md` has workers end
+every reply with `AWAITING-OWNER: none` when they need nothing, so those turns are silent at the
+doorbell; only a real question rings as a `question`. The quiet flag is a fixed context value, never
+text from the pane. Only the **last** marker line in the pane counts: an old question followed by a
+later `none` is quiet, and a `none` followed by a later question is a `question`. A pane that cannot
+be read, or shows no marker, is an ordinary `finished` and rings. `blocked` ignores the marker.
 
 What the hook does with it:
 
 - On `idle` or `done` it runs `herdr pane read <pane> --source recent-unwrapped --lines 30`
   (5 second limit), looks for a line that starts with `AWAITING-OWNER:` (a bullet or a box
   edge in front, up to 8 non-word characters, is allowed), and emits `question`
-  instead of `finished` if it finds one. The text after the colon is read only to
-  recognise a status filler (see above), then dropped; the pane text is not stored,
-  logged or sent: the inbox and the ring carry the kind only.
+  instead of `finished` if the last such line carries a real question. The text after the
+  colon is read only to recognise a status filler (see above), then dropped; the pane text
+  is not stored, logged or sent: the inbox and the ring carry the kind (and the fixed
+  `awaiting=none` flag) only.
 - If the read fails (the pane is gone, Herdr is slow, `herdr` is not found) the hook says
   so on stderr (without pane text) and emits `finished`: the event is never lost.
   `blocked` is never read or changed.
@@ -226,11 +233,17 @@ labels.
   `AWAITING-OWNER:` rings at once, subagent or not. If the pane cannot be read the event is
   `finished`, not held, because it might be a question.
 - **`blocked` from a subagent is dropped.** A `blocked` event whose labels show a running
-  subagent flagged `⚠` emits nothing. Pi reports `blocked` a moment before it publishes the
+  subagent flagged `⚠` emits nothing. Pi publishes its labels only under the `idle`, `done`
+  and `working` keys, never `blocked`, and Herdr puts all of them in every status event, so the
+  hook reads the labels of every key (a real Herdr server test covers this shape). Pi reports `blocked` a moment before it publishes the
   `⚠`, so for a `blocked` event with a running, unflagged subagent the hook asks
   `herdr pane get` every half second for up to 3 seconds. If the flag shows, it drops the
   event. If the subagent is gone, the 3 seconds pass, or the read fails, it emits `blocked`.
-  A `blocked` event with no subagent label is emitted at once.
+  A `blocked` event with no subagent label is emitted at once. Anything else rings: the parent's
+  own prompt (for example `ask_user_question`) while a subagent runs is a `blocked` with an
+  unflagged label, so it waits out the 3 seconds and is emitted. In Pi's subagent extension the
+  `⚠` and the `blocked` come from the same step, so a `blocked` that never gets the flag
+  is not caused by a subagent.
 - **Limit.** The `⚠` means "a subagent needs attention", which is mostly
   `contact_supervisor` but also a stuck tool or repeated failures; the label cannot tell
   them apart. The worker handles all of those itself. A different block (for example an
@@ -255,6 +268,12 @@ What it costs and what it skips:
   `--no-session-persistence` saves no local transcript. The command runs from the
   directory of the operator log (`~/.local/state/agent-alert` by default), which holds
   no CLAUDE.md.
+- **A `finished` that says `awaiting=none` is not rung.** The Herdr adapter sets that context
+  flag when the pane's last marker is `AWAITING-OWNER: none` (or `none yet`). The doorbell skips
+  such an event before the window, so it opens no window, holds nothing and starts no process;
+  the inbox still has the event. Every other event rings, including a `question`, a `blocked`
+  and a `finished` from an unreadable pane. This is the only sink that reads the flag; the inbox
+  and any other sink see the `finished` as before.
 - **At most one ring per 30 seconds, and none is dropped.** The first event rings at
   once. An event that arrives inside the next 30 seconds is held, and one combined ring for
   everything held is sent when the window ends (it names the first four events, then

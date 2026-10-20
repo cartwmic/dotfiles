@@ -42,6 +42,12 @@ whitespace between tokens:
 
 `emit` stores `worker` and `context` as given and writes no message member.
 
+Context members are the source's own. A reader or sink MUST ignore a member it does not know.
+A sink MAY act on a member it does know: the Herdr adapter sets `awaiting` to `none` on a
+`finished` event whose pane's last `AWAITING-OWNER:` marker is a status filler (`none`,
+`none yet`), and the Claude doorbell does not ring for such an event. The value is fixed and
+never text from the worker.
+
 Example (wrapped here for reading; in the file it is one line):
 
 ```
@@ -220,7 +226,8 @@ configured sink once, whatever the kind of the event:
 - A sink MUST tolerate an event whose `kind` it does not know and members it does
   not know, and SHOULD ring or fail soft rather than fail. A sink MUST NOT write
   to the inbox.
-- A sink MAY decide not to nudge for an event, or to hold it and nudge once later for
+- A sink MAY decide not to nudge for an event (the Claude doorbell skips a `finished` whose
+  context says `awaiting=none`), or to hold it and nudge once later for
   several (the Claude doorbell rings at most once per 30 seconds and combines the
   events held in that window into one ring at its end); the event is in the inbox
   either way.

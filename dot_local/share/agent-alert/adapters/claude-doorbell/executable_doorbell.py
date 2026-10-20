@@ -20,6 +20,10 @@ every event; a ring that fails is logged and not retried.
 
 Every failure is appended to the operator log and the exit status is still 0.
 
+A finished event whose context says awaiting=none (the source saw the worker end its turn with
+"AWAITING-OWNER: none") is not rung and not held: it is skipped before anything else, and the
+inbox still has it. Every other event rings, including a question and a blocked.
+
 The session id is read on every ring from ~/.config/agent-alert/claude-doorbell.json
 ({"session_id": "..."}, or the path in AGENT_ALERT_DOORBELL_CONFIG), or from
 AGENT_ALERT_DOORBELL_SESSION. It is never stored in the repository.
@@ -51,6 +55,9 @@ FLUSHER_SLACK_SECONDS = 10
 # A combined ring names this many events, then says how many more there were.
 MAX_LISTED = 4
 FIELD_LIMIT = 32
+# A finished event with this context member and value is a turn that ended needing nothing from the owner.
+QUIET_KEY = "awaiting"
+QUIET_VALUE = "none"
 
 
 def log_problem(message):
@@ -183,6 +190,12 @@ def start_flusher(state, now):
     return True
 
 
+def is_quiet(event):
+    """True for a finished event that says its worker needs nothing from the owner (not rung, not held)."""
+    context = event.get("context")
+    return event.get("kind") == "finished" and isinstance(context, dict) and context.get(QUIET_KEY) == QUIET_VALUE
+
+
 def neutral_cwd():
     directory = state_dir()
     try:
@@ -300,6 +313,8 @@ def main():
         event = None
     if not isinstance(event, dict):
         log_problem("event line is not a JSON object; skipped")
+        return
+    if is_quiet(event):
         return
     session = session_id()
     if not session:
