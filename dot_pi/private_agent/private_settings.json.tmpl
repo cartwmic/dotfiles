@@ -103,9 +103,31 @@
     "npm:@injaneity/pi-computer-use",
     "npm:@narumitw/pi-stamp"
   ],
+{{- /*
+  Personal: native auto-compaction at 40% of each model's window. Pi only takes an absolute reserve
+  (it compacts when context > window - reserveTokens), so each enabled model gets reserve = 60% of its window:
+  1M -> 600000 (compacts above 400000), 872K -> 523200 (above 348800), 272K -> 163200 (above 108800).
+  The ordinary reserve stays at Pi's default so a model without an override can never get a reserve larger
+  than its window. Add an override when you enable another model. Work profile is unchanged (disabled).
+*/ -}}
+{{- if eq .profile "personal" }}
+  "compaction": {
+    "enabled": true,
+    "modelOverrides": {
+      "claude-compat/claude-sonnet-5-5": { "reserveTokens": 600000 },
+      "claude-compat/claude-opus-5-5": { "reserveTokens": 600000 },
+      "claude-compat/claude-haiku-5-5": { "reserveTokens": 600000 },
+      "openrouter/z-ai/glm-5.3-flash": { "reserveTokens": 600000 },
+      "openai-codex/gpt-6.1-sol": { "reserveTokens": 523200 },
+      "openai-codex/gpt-6-astra": { "reserveTokens": 523200 },
+      "openai-codex/gpt-6-luna": { "reserveTokens": 163200 }
+    }
+  },
+{{- else }}
   "compaction": {
     "enabled": false
   },
+{{- end }}
   "lastChangelogVersion": {{ $version | quote }},
   "theme": {{ $theme | quote }},
   "hideThinkingBlock": {{ $hideThinking }}
