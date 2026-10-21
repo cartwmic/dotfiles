@@ -546,6 +546,95 @@ class ReviewFixes(Base):
         con.close()
         self.assertEqual([tuple(r) for r in incremental], expected)
 
+    def test_error_event_attrs_use_the_sanitised_model(self):
+        f = Fixture()
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, stop="error", err="boom", model=f"model {SENTINEL}")
+        f.write(self.top())
+        self.build()
+        con = sqlite3.connect(self.db)
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        con.close()
+        blob = b"".join(p.read_bytes() for p in self.db.parent.iterdir())
+        self.assertNotIn(SENTINEL.encode(), blob)
+        self.assertEqual(json.loads(self.q("SELECT attrs FROM events WHERE kind='llm.error'")[0]["attrs"])["model"], "unknown")
+
+    def test_untimed_nested_call_makes_its_phase_unknown(self):
+        f = Fixture(session_id="nest")
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, calls=["w"])
+        f.tool("w", "codemode", T + 2500, T + 8500, nested=[("bash", 4000, "a"), ("read", None, "b")])
+        f.llm(T + 8600, T + 9000, stop="stop")
+        f.write(self.top())
+        self.build()
+        t = self.q("SELECT * FROM turns")[0]
+        self.assertIsNone(t["explore_ms"])       # the read had no duration: unknown, not 0
+        self.assertEqual(t["run_ms"], 4000)      # the bash is known
+        self.assertIsNone(t["other_ms"])         # residual wrapper time cannot be derived
+        self.assertEqual(t["timing_complete"], 0)
+        self.assertEqual(t["wall_ms"], 9000 - 1000)   # top-level intervals are all known
+        s = self.q("SELECT * FROM sessions")[0]
+        self.assertEqual(s["timing_complete"], 0)
+        self.assertEqual(s["tool_ms"], 6000)
+        self.assertIsNotNone(s["active_ms"])
+
+    def test_untimed_wrapper_keeps_known_nested_durations(self):
+        f = Fixture(session_id="wrap")
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, calls=["w"])
+        f.tool("w", "codemode", T + 2500, T + 8500, nested=[("bash", 4000, "a")], stamp=False, duration=False)
+        f.write(self.top())
+        self.build()
+        t = self.q("SELECT * FROM turns")[0]
+        self.assertEqual(t["run_ms"], 4000)
+        self.assertIsNone(t["other_ms"])
+        self.assertIsNone(self.q("SELECT tool_ms FROM sessions")[0][0])
+
+    def test_ownership_reversal_restores_the_original_prompt_time(self):
+        o = Fixture(session_id="orig")
+        o.user(T + 1000)
+        o.llm(T + 1500, T + 2500, cost=1.0, stop="stop", eid="o-llm")
+        origin = self.top("--work-proj--/2026-10-02T00-00-00-000Z_orig.jsonl")
+        o.write(origin)
+        b = Fixture(session_id="fork", start=T + 10_000)
+        b.entries.append(dict(o.entries[1]))
+        b.llm(T + 20_000, T + 21_000, cost=0.5, stop="stop", eid="f-llm")
+        b.write(self.top("--work-proj--/2026-10-03T00-00-00-000Z_fork.jsonl"))
+        self.build()
+        self.assertEqual(self.q("SELECT wall_ms FROM turns WHERE path LIKE '%fork.jsonl'")[0][0], 1000)
+        origin.unlink()
+        self.build()                      # fork now owns the prompt: its start is the prompt's own time
+        incremental = self.q("SELECT started_at_ms, wall_ms, inherited FROM turns WHERE path LIKE '%fork.jsonl'")[0]
+        self.assertEqual((incremental["inherited"], incremental["wall_ms"]), (0, 20_000))
+        fresh = Path(self._tmp.name) / "fresh.sqlite"
+        ae.build(self.root, fresh)
+        con = sqlite3.connect(fresh)
+        self.assertEqual(con.execute("SELECT wall_ms FROM turns").fetchone()[0], 20_000)
+        con.close()
+
+    def test_schema_reset_interrupted_midway_is_atomic(self):
+        standard_session().write(self.top())
+        self.build()
+        con = sqlite3.connect(self.db)
+        con.execute("UPDATE meta SET value='0' WHERE key='schema_version'")
+        con.commit()
+        con.close()
+        original = ae.SCHEMA_STATEMENTS
+        ae.SCHEMA_STATEMENTS = original + ["THIS IS NOT SQL"]
+        try:
+            with self.assertRaises(sqlite3.Error):
+                ae.connect(self.db)
+        finally:
+            ae.SCHEMA_STATEMENTS = original
+        con = sqlite3.connect(self.db)
+        self.assertEqual(con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "0")
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0], 1)  # old data intact
+        con.close()
+        res = self.build()                # a retry completes the reset
+        self.assertEqual((res["parsed"], res["sessions"]), (1, 1))
+        self.assertEqual(self.q("SELECT value FROM meta WHERE key='schema_version'")[0][0], str(ae.SCHEMA_VERSION))
+        self.assertIn("timing_complete", [r[1] for r in self.q("PRAGMA table_info(turns)")])
+
     def test_schema_version_change_discards_derived_data(self):
         standard_session().write(self.top())
         self.build()

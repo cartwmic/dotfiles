@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 CONTENT_POLICY = "no prompts, assistant text, tool args/results or error text are stored"
 
 SCHEMA = """
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   models TEXT);
 CREATE TABLE IF NOT EXISTS turns (
   path TEXT NOT NULL, turn_idx INTEGER NOT NULL, user_key TEXT, inherited INTEGER DEFAULT 0,
-  started_at_ms INTEGER, ended_at_ms INTEGER, wall_ms INTEGER, idle_after_ms INTEGER, timing_complete INTEGER,
+  started_at_ms INTEGER, ended_at_ms INTEGER, wall_ms INTEGER, idle_after_ms INTEGER, timing_complete INTEGER, prompt_ms INTEGER,
   active_ms INTEGER, llm_ms INTEGER, explore_ms INTEGER, edit_ms INTEGER, run_ms INTEGER,
   delegate_ms INTEGER, owner_ms INTEGER, other_ms INTEGER,
   llm_calls INTEGER, tool_calls INTEGER, errors INTEGER,
@@ -303,7 +303,7 @@ def _assistant(out, m, eid, ts_entry, turn, consec, minimal, path):
         consec += 1
         # only the bucket survives; the error text itself is discarded
         out.events.append({**base, "kind": "llm.error", "severity": "warn",
-                           "attrs": {"bucket": error_bucket(m.get("errorMessage")), "model": m.get("model")}})
+                           "attrs": {"bucket": error_bucket(m.get("errorMessage")), "model": call["model"]}})
         if consec >= 2:
             out.events.append({**base, "kind": "llm.retry_loop", "severity": "warn", "attrs": {"streak": consec}})
     else:
@@ -407,6 +407,38 @@ def _resolve_timing(out, stamps_llm, stamps_tool):
 
 # ---------------------------------------------------------------- storage
 
+SCHEMA_STATEMENTS = [s.strip() for s in SCHEMA.split(";\n") if s.strip()]
+
+
+def _init_schema(con):
+    """Create the schema, discarding derived data from another version, in one transaction.
+
+    DDL is transactional in SQLite, so an interruption leaves either the old database or the new one.
+    """
+    previous = con.isolation_level
+    con.isolation_level = None  # explicit BEGIN/COMMIT; executescript would commit early
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        old = None
+        if con.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone():
+            row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            old = row[0] if row else None
+        elif con.execute("SELECT 1 FROM sqlite_master WHERE type IN ('table','view') LIMIT 1").fetchone():
+            old = "unversioned"
+        if old is not None and old != str(SCHEMA_VERSION):
+            for name, kind in con.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','view')").fetchall():
+                con.execute(f"DROP {kind.upper()} IF EXISTS {name}")
+        for statement in SCHEMA_STATEMENTS:
+            con.execute(statement)
+        con.execute("INSERT OR REPLACE INTO meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
+        con.execute("COMMIT")
+    except BaseException:
+        con.execute("ROLLBACK")
+        raise
+    finally:
+        con.isolation_level = previous
+
+
 def connect(db_path, readonly=False):
     db_path = Path(db_path)
     if readonly:
@@ -414,18 +446,7 @@ def connect(db_path, readonly=False):
     else:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         con = sqlite3.connect(db_path)
-        old = None
-        if con.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone():
-            row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            old = row[0] if row else None
-        if old is not None and old != str(SCHEMA_VERSION):
-            # derived data from another schema version: start over rather than migrate
-            for name, kind in con.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','view')").fetchall():
-                con.execute(f"DROP {kind.upper()} IF EXISTS {name}")
-            con.commit()
-        con.executescript(SCHEMA)
-        con.execute("INSERT OR REPLACE INTO meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
-        con.commit()
+        _init_schema(con)
     con.row_factory = sqlite3.Row
     return con
 
@@ -450,8 +471,8 @@ def _insert(con, path, info, parsed, size, mtime_ns):
                 (p, parsed.header.get("id"), kind, parsed.header.get("cwd"), parent, child_id, run_index,
                  started, parsed.last_ts, quality, n_timed, len(timed) - n_timed))
     for idx, t in sorted(parsed.turns.items()):
-        con.execute("INSERT INTO turns (path, turn_idx, user_key, started_at_ms) VALUES (?,?,?,?)",
-                    (p, idx, t["user_key"], t["start"]))
+        con.execute("INSERT INTO turns (path, turn_idx, user_key, started_at_ms, prompt_ms) VALUES (?,?,?,?,?)",
+                    (p, idx, t["user_key"], t["start"], t["start"]))
     seq_of, seq = {}, 0
     for i, c in enumerate(parsed.calls):
         seq_of[i] = seq
@@ -589,56 +610,61 @@ def finalize(con, changed_paths=None):
 
 
 def _call_phase_ms(call, nested):
-    """Inclusive phase milliseconds for one tool call, or None when its duration is unknown.
+    """Inclusive phase milliseconds for one tool call -> (known_parts, unknown_phases).
 
     A call with nested calls (a codemode script) reports each nested call's own duration under
     its phase, unscaled: nested calls can run in parallel, so these may sum to more than the
-    wrapper. "other" is a lower bound on wrapper time no nested call accounts for.
+    wrapper. "other" is a lower bound on wrapper time no nested call accounts for; it is unknown
+    when the wrapper or any nested call has no duration. A nested call without a duration makes
+    its own phase unknown, whatever the wrapper's duration.
     """
     dur = call["dur_ms"]
-    if dur is None:
-        return None
-    if nested:
-        parts = {}
-        for n in nested:
-            if n["dur_ms"] is not None:
-                parts[n["phase"]] = parts.get(n["phase"], 0) + n["dur_ms"]
+    if not nested:
+        return ({call["phase"]: dur}, set()) if dur is not None else ({}, {call["phase"]})
+    parts, unknown = {}, set()
+    for n in nested:
+        if n["dur_ms"] is None:
+            unknown.add(n["phase"])
+        else:
+            parts[n["phase"]] = parts.get(n["phase"], 0) + n["dur_ms"]
+    if dur is None or unknown:
+        unknown.add("other")
+    else:
         rest = dur - sum(parts.values())
         if rest > 0:
             parts["other"] = parts.get("other", 0) + rest
-        return parts
-    return {call["phase"]: dur}
+    return parts, unknown
 
 
 def _agg(cs, nested_by_parent):
     llm = [c for c in cs if c["kind"] == "llm"]
     tools = [c for c in cs if c["kind"] == "tool"]
     phase = {p: 0 for p in PHASES}
-    unknown = set()
+    unknown = set()       # phases with an unknown contribution, nested ones included
+    top_unknown = set()   # phases of top-level calls with no recorded duration
     for c in llm:
         if c["dur_ms"] is None:
             unknown.add("llm")
+            top_unknown.add("llm")
         else:
             phase["llm"] += c["dur_ms"]
     for c in tools:
-        parts = _call_phase_ms(c, nested_by_parent.get(c["call_id"], []))
-        if parts is None:
-            unknown.add(c["phase"])
-            continue
+        parts, unk = _call_phase_ms(c, nested_by_parent.get(c["call_id"], []))
+        unknown |= unk
+        if c["dur_ms"] is None:
+            top_unknown.add(c["phase"])
         for ph, ms in parts.items():
             phase[ph] += ms
     spans = [c for c in llm + tools if c["start_ms"] is not None and c["end_ms"] is not None]
-    complete = not unknown
-    non_owner_known = not (unknown - {"owner"})
     iv_active = [(c["start_ms"], c["end_ms"]) for c in spans if c["phase"] != "owner"]
     iv_owner = [(c["start_ms"], c["end_ms"]) for c in spans if c["phase"] == "owner"]
-    tool_ms = None if (unknown - {"owner", "llm"}) else sum(c["dur_ms"] for c in tools if c["phase"] != "owner")
     return {
-        "complete": complete,
+        "complete": not unknown and not top_unknown,
+        "top_complete": not top_unknown,
         "phase": {p: (None if p in unknown else v) for p, v in phase.items()},
-        "active": union_ms(iv_active) if non_owner_known else None,
-        "owner": union_ms(iv_owner) if "owner" not in unknown else None,
-        "tool_ms": tool_ms,
+        "active": union_ms(iv_active) if not (top_unknown - {"owner"}) else None,
+        "owner": union_ms(iv_owner) if "owner" not in top_unknown else None,
+        "tool_ms": None if (top_unknown - {"owner", "llm"}) else sum(c["dur_ms"] for c in tools if c["phase"] != "owner"),
         "llm_calls": len(llm), "tool_calls": len(tools),
         "errors": sum(1 for c in llm + tools if c["status"] == "error"),
         "input": sum(c["input_tokens"] or 0 for c in llm),
@@ -675,14 +701,14 @@ def _rollup_session(con, path):
                         " WHERE path=? AND turn_idx=?", (path, t["turn_idx"]))
             continue
         a = _agg(own, nested_by_parent)
-        start = t["started_at_ms"]
+        start = t["prompt_ms"]  # as ingested; started_at_ms is the derived effective start
         if t["inherited"]:  # the prompt happened earlier, elsewhere; time starts at this file's own work
             start = min(a["starts"], default=None)
         aggs[t["turn_idx"]] = (t, a, start)
         live.append((t["turn_idx"], start))
     for idx, (t, a, start) in aggs.items():
         end = None
-        if a["complete"] and (a["ends"] or start is not None):
+        if a["top_complete"] and (a["ends"] or start is not None):
             end = max(a["ends"] + ([start] if start is not None else []))
         later = [s for i, s in live if i > idx and s is not None]
         idle = (later[0] - end) if (later and end is not None and later[0] >= end) else None
@@ -700,7 +726,7 @@ def _rollup_session(con, path):
     started = ses["started_at_ms"]
     ended = max([e for e in [ses["ended_at_ms"]] + whole["ends"] if e is not None], default=None)
     wall = (ended - started) if (ended is not None and started is not None) else None
-    covered = union_ms(whole["intervals"]) if whole["complete"] else None
+    covered = union_ms(whole["intervals"]) if whole["top_complete"] else None
     unaccounted = max(0, wall - covered) if (wall is not None and covered is not None) else None
     cost_rows = con.execute(
         "SELECT kind, dup, SUM(cost_usd) cost, SUM(input_tokens) i, SUM(fresh_input_tokens) f,"
