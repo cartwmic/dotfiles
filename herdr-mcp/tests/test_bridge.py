@@ -404,7 +404,9 @@ class SendLedgerTests(StdioBridgeTests):
         self.assertEqual(cc(['pane', 'nope', 'x']), ('pane', None, ['nope', 'x']))
         self.assertEqual(cc(['--version']), (None, None, []))
         self.assertEqual(cc(['bogus', 'list']), (None, None, []))
-        self.assertEqual(bridge.cli_positionals(['--wait', '--until', 'idle', 'w1:p1', '--', '-dash text']), ['w1:p1', '-dash text'])
+        self.assertEqual(bridge.cli_parse('agent', 'prompt', ['--wait', '--until', 'idle', 'w1:p1', '--', '-dash text']), (['w1:p1', '-dash text'], [], True))
+        self.assertEqual(bridge.cli_parse('pane', 'run', ['w1:p1', 'ls', '-la']), (['w1:p1', 'ls', '-la'], [], True))
+        self.assertEqual(bridge.cli_parse('pane', 'read', ['--mystery', 'w1:p1'])[2], False)
 
 
     def test_id_shaped_message_and_option_values_never_reach_targets(self):
@@ -419,25 +421,41 @@ class SendLedgerTests(StdioBridgeTests):
             for leaked in ('w9:p9', 'w7:p7', 'w8', 'w6:p6', 'w5:p5'):
                 self.assertNotIn(leaked, json.dumps(r))
 
-    def test_fifo_or_loose_key_is_ignored_without_blocking_or_changes(self):
+    def test_option_text_and_unknown_options_never_reach_targets(self):
         self.configure_herdr()
-        state = self.home / '.local' / 'state' / 'herdr-mcp'
-        state.mkdir(parents=True, mode=0o700)
-        key = state / 'text-hash.key'
-        os.mkfifo(str(key))
-        t0 = time.time()
-        out = self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'hello'}})
-        self.assertLess(time.time() - t0, 5)
-        self.assertFalse(out.get('isError'))
-        self.assertTrue(stat_is_fifo(key))
-        key.unlink()
-        key.write_bytes(b'k' * 32)
-        os.chmod(key, 0o644)
-        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'hello'}})
-        self.assertEqual(key.stat().st_mode & 0o777, 0o644)  # never modified
-        self.assertEqual(key.read_bytes(), b'k' * 32)
+        calls = [['pane', 'wait-output', '--match', 'w9:p9', 'w1:p1'],           # option value that looks like an id
+                 ['pane', 'wait-output', '--regex=w9:p9', 'w2:p2'],
+                 ['agent', 'start', 'reviewer', '--kind', 'pi', '--pane', 'w3:p3'],  # target in a named option
+                 ['pane', 'read', '--mystery', 'w9:p9', 'w4:p4'],                # unknown option: fail closed
+                 ['notification', 'show', 'w9:p9'],                              # first positional is free text here
+                 ['pane', 'run', 'w5:p5', 'echo', 'w9:p9']]                      # command line is never scanned
+        for argv in calls:
+            self.call('herdr_cli', {'argv': argv})
         _path, recs = self.records()
-        self.assertTrue(recs and all('text_hash' not in r for r in recs))
+        ends = [r for r in recs if r['event'] == 'end']
+        self.assertEqual([r['targets'] for r in ends], [['w1:p1'], ['w2:p2'], ['w3:p3'], [], [], ['w5:p5']])
+        self.assertNotIn('w9:p9', json.dumps(recs))
+
+    def test_duration_counts_from_the_start_record_timestamp(self):
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix='hmb-dur-', dir='/tmp'))
+        real, real_path = bridge.audit_write, bridge.AUDIT_PATH
+        bridge.AUDIT_PATH = str(tmp / 'audit.log')
+        def slow(record):
+            if record.get('event') == 'start':
+                time.sleep(.3)  # a slow start-record write (lock contention) must be inside the duration
+            real(record)
+        bridge.audit_write = slow
+        try:
+            bridge.audited_call('herdr_status', {}, 1)
+        finally:
+            bridge.audit_write, bridge.AUDIT_PATH = real, real_path
+        recs = [json.loads(l) for l in (tmp / 'audit.log').read_text().splitlines()]
+        shutil.rmtree(tmp)
+        start, end = recs
+        import datetime as _dt
+        ts = lambda r: _dt.datetime.fromisoformat(r['ts'].replace('Z', '+00:00')).timestamp()
+        self.assertGreaterEqual(end['duration_ms'], 280)
+        self.assertAlmostEqual(ts(end) - end['duration_ms'] / 1000.0, ts(start), delta=0.05)
 
 
 class SendReportTests(StdioBridgeTests):
@@ -553,8 +571,9 @@ class SendReportTests(StdioBridgeTests):
         share = self.home / '.local' / 'share' / 'herdr-mcp'
         mine = lambda: sorted(str(p) for p in self.home.rglob('*') if 'Library' not in p.parts)  # CLT python caches its own stdlib under ~/Library
         before = mine()
-        subprocess.run(['/usr/bin/python3', str(self.report_path)], env={'HOME': str(self.home), 'PATH': '/usr/bin:/bin'},
-                       capture_output=True, text=True)
+        r = subprocess.run(['/usr/bin/python3', str(self.report_path)], env={'HOME': str(self.home), 'PATH': '/usr/bin:/bin'},
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)  # it really ran (a key exists after the send above)
         self.assertEqual(mine(), before)
         self.assertFalse((share / '__pycache__').exists())
 
