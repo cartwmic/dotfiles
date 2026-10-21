@@ -635,6 +635,18 @@ class ReviewFixes(Base):
         self.assertEqual(self.q("SELECT value FROM meta WHERE key='schema_version'")[0][0], str(ae.SCHEMA_VERSION))
         self.assertIn("timing_complete", [r[1] for r in self.q("PRAGMA table_info(turns)")])
 
+    def test_meta_table_without_version_row_is_reset(self):
+        standard_session().write(self.top())
+        self.build()
+        con = sqlite3.connect(self.db)
+        con.execute("DELETE FROM meta")                      # interrupted init: tables exist, no version published
+        con.execute("ALTER TABLE turns DROP COLUMN prompt_ms")  # and they are an older shape
+        con.commit()
+        con.close()
+        res = self.build()
+        self.assertEqual((res["parsed"], res["sessions"]), (1, 1))
+        self.assertIn("prompt_ms", [r[1] for r in self.q("PRAGMA table_info(turns)")])
+
     def test_schema_version_change_discards_derived_data(self):
         standard_session().write(self.top())
         self.build()
