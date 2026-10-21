@@ -487,7 +487,7 @@ class InstallTests(Base):
         self.assertTrue(os.path.islink(self.e.link))
         self.assertEqual(os.readlink(self.e.link), str(self.e.cli))
         self.assertEqual(sorted(os.listdir(self.e.share)),
-                         ['README.md', 'herdr-mcp-tunnel', 'herdr_control_mcp.py', 'herdr_control_mcp_child.sh'])
+                         ['README.md', 'herdr-mcp-tunnel', 'herdr_control_mcp.py', 'herdr_control_mcp_child.sh', 'herdr_send_report.py'])
         self.assertEqual(self.e.share.joinpath('herdr_control_mcp_child.sh').stat().st_mode & 0o777, 0o755)
         self.assertFalse((self.e.home / 'Library').exists())
         self.assertFalse(self.e.state.exists())

@@ -16,7 +16,8 @@ login until you run the commands below.
 | `herdr_control_mcp.py` | stdio MCP server. Python 3.9 stdlib, run by `/usr/bin/python3 -I -B`. |
 | `herdr_control_mcp_child.sh` | What tunnel-client launches. Removes `CONTROL_PLANE_*`, `OPENAI_*`, `ANTHROPIC_*`, `AWS_*`, `CLOUDFLARED*`, `TUNNEL_CLIENT_*`, `MCP_*`, `HEALTH_*` and admin-UI variables, then execs the bridge. |
 | `herdr-mcp-tunnel` | zsh CLI: install-client, configure, key, check, start, run, status, stop, agent. |
-| `install.sh` | Copies the three files above and this README to `~/.local/share/herdr-mcp/` and links `~/.local/bin/herdr-mcp-tunnel`. Idempotent. |
+| `herdr_send_report.py` | Read-only report: text sends in the audit log with no matching landing in a Pi session (see Send report). Python 3.9 stdlib. |
+| `install.sh` | Copies the files above and this README to `~/.local/share/herdr-mcp/` and links `~/.local/bin/herdr-mcp-tunnel`. Idempotent. |
 | `claude-plugin/`, `build-claude-plugin.sh` | Optional Claude Desktop plugin (see Claude Desktop local plugin). Not installed. |
 | `tests/` | Temp-HOME tests (see Tests). Not installed. |
 
@@ -73,7 +74,8 @@ Keychain access is unverified. The item is created by `/usr/bin/security`, so it
 
 | Log | Contents | Where |
 |---|---|---|
-| Audit (bridge) | One `start` and one `end` JSON line per tool call, sharing a `call` uuid. Fields: `ts` (UTC), `tool`, `method` (one of the 103 request methods in the Herdr 0.9.1 protocol 22 schema, taken from `schemas.request.oneOf[*].properties.method.const` and kept in `tests/fixtures/herdr-0.9.1-request-methods.json`, else `unlisted`; for `herdr_cli` only the root command, e.g. `cli:pane`), `targets` (only values shaped like Herdr ids, e.g. `w1:p2`, `w15:p2R`; at most two trailing letters, so free text is dropped), `mcp_id`, `outcome` (`ok`, `error`, `unknown`, `not_sent`, `rejected`), `duration_ms`, and `exit_code` / `error_code` / `request_id` / `transport_error` where relevant. Never args, text, prompts, terminal output, error messages, keys or results. | `~/.local/state/herdr-mcp/audit.log` (dir 700, file 600). Rotates at 1 MiB, keeps `audit.log.1` to `.5`. An `audit.log.lock` flock serializes rotation across concurrent bridge processes. |
+| Audit (bridge) | One `start` and one `end` JSON line per tool call, sharing a `call` uuid. Fields: `ts` (UTC), `tool`, `method` (one of the 103 request methods in the Herdr 0.9.1 protocol 22 schema, taken from `schemas.request.oneOf[*].properties.method.const` and kept in `tests/fixtures/herdr-0.9.1-request-methods.json`, else `unlisted`; for `herdr_cli` only the root command, e.g. `cli:pane`), `targets` (only values shaped like Herdr ids, e.g. `w1:p2`, `w15:p2R`; at most two trailing letters, so free text is dropped), `mcp_id`, `outcome` (`ok`, `error`, `unknown`, `not_sent`, `rejected`), `duration_ms`, and `exit_code` / `error_code` / `request_id` / `transport_error` where relevant. For `herdr_cli`, `method` is the root command (`cli:pane`) and `sub` is the subcommand word (`send-text`, `prompt`, `run`, ...), logged only when it is in a fixed per-root list, so free text never reaches it. For a text send (`agent.prompt`, `pane.send_text`, `pane.send_input`, and the CLI `agent prompt`, `pane send-text`, `pane run`), `text_hash` and `text_len`: `h1:` plus 128 bits of HMAC-SHA256 of the normalized text (CRLF to LF, outer whitespace stripped), and its length in characters. Key presses (`send-keys`) carry no text and no hash. Never args, the text itself, prompts, terminal output, error messages, keys or results. | `~/.local/state/herdr-mcp/audit.log` (dir 700, file 600). Rotates at 1 MiB, keeps `audit.log.1` to `.5`. An `audit.log.lock` flock serializes rotation across concurrent bridge processes. |
+| Text-hash key | 32 random bytes, created by the bridge on the first text send (atomic, no overwrite). The hash is keyed so a copy of the log cannot confirm a guessed short message such as "yes". Losing the key only stops old hashes from matching new messages. | `~/.local/state/herdr-mcp/text-hash.key` (file 600). Never copy it off the Mac. |
 | Launcher runs | One line per client exit or stop: time, pids, signal, status. | `~/.local/state/herdr-mcp/launcher-runs.log` |
 | Client children | Metadata-only record of processes under tunnel-client: `event=seen` (pid, ppid, depth, class), `reclassified` (same pid exec'd another program), `unobserved` (no longer in `ps`, not a verified exit), `observe_start` / `observe_end`. `class` is fixed: `codex`, `shell` (zsh/sh/bash/path_helper), `bridge`, `client`, `other`, taken from the kernel's executable name, never argv, environment or the name itself. | `~/.local/state/herdr-mcp/children.log` (600). Rotates to `children.log.1` past 256 KiB. |
 | tunnel-client | Transport and lifecycle output at `info`. No raw HTTP; payload capture off. | The `start` terminal, or `agent.log` for the LaunchAgent. `agent.log` is not rotated. |
@@ -108,6 +110,18 @@ The observer polls `ps` every 0.25 s for the first 120 s after the client starts
 grep -E 'class=(codex|shell)|to=' ~/.local/state/herdr-mcp/children.log
 ```
 
+## Send report (dropped-message check)
+
+```sh
+/usr/bin/python3 -I -B ~/.local/share/herdr-mcp/herdr_send_report.py [--hours 24 | --since 2026-10-20T00:00:00Z] [--window 300] [--target w1:p2] [--json]
+```
+
+For each text send in the audit log it looks for a Pi user message with the same `text_hash` in `~/.pi/agent/sessions` between the start of the call and the end of the call plus `--window` seconds (default 300). A landing satisfies one send, so two identical sends need two landings. Each send is `landed`, `pending` (window still open), `unmatched`, or `not_delivered` (the bridge rejected it or never sent it; a call that errored after submission, such as a stalled or timed-out wait, is still checked for a landing). Only `unmatched` sends are listed, with time, call id prefix, kind, method, targets, length and hash prefix.
+
+It is read-only. It reads the audit log, the hash key and Pi session files (it hashes their user messages in memory), creates nothing, and prints no message text. It exits 2 if the key does not exist yet.
+
+An unmatched send is a candidate, not proof of a drop: the target may not be a Pi session, the agent may have queued the message beyond the window, or the session file may be elsewhere. `pane run` sends type into shells and are counted, not checked. Sends logged before this change have no hash and are counted as `sends_without_hash`. `agent prompt` targets given as names (not `w1:p1` ids) show no target. Whether Herdr submits the text unchanged, so that the hashes match in live use, has not been observed; check the first live sends.
+
 ## Claude Desktop local plugin (opt-in)
 
 `claude-plugin/` and `build-claude-plugin.sh` give Claude the same 7 tools through a plugin that runs the installed bridge on this Mac: `/bin/sh ~/.local/share/herdr-mcp/herdr_control_mcp_child.sh`, with the same audit log. Like the tunnel, it is opt-in: `chezmoi apply` deploys none of it, and it needs no tunnel, LaunchAgent, credential or public network endpoint. It does not depend on the OpenAI tunnel being set up.
@@ -138,6 +152,7 @@ Limits:
 - The audit method list is pinned to Herdr 0.9.1. After a Herdr upgrade, regenerate the fixture from the new schema and update `KNOWN_METHODS`, or new methods log as `unlisted`.
 - Installed Herdr 0.9.1 advertises graphics methods that the cached docs say were removed; no graphics support is claimed.
 - One client per tunnel id. Each interactive `start` needs the key typed again.
+- The send log and report see only calls that go through this bridge. A message typed or sent from another client (Herdr's own UI, a pane script) is not in the log.
 - After editing the bridge or wrapper, update `BRIDGE_SHA` / `WRAP_SHA` in `herdr-mcp-tunnel` (`tests/test_launcher.py` fails until they match), then rerun `install.sh`.
 - In one isolated test run, the pinned v0.0.16 tunnel-client launched a child `zsh -lc "codex" "app-server"`. No `codex` executable is on this Mac's login PATH. `tunnel-client run --help` and the docs offer no flag to turn this off; the owner accepted this. `children.log` records it (see above). The tests use a mock client.
 
@@ -172,5 +187,7 @@ HERDR_MCP_TEST_ZIP=/path/to/tunnel-client-v0.0.16-darwin-arm64.zip \
 Set `HERDR_MCP_TEST_SCHEMA=/path/to/installed-herdr-protocol-22.schema.json` to also re-extract the method list from the saved schema and compare it with the fixture; without it that test is skipped.
 
 The mock client also starts a shell that runs, and a shell that execs in place, an ad-hoc re-signed copy of `sleep` named `codex`, so the child log's `seen`, `reclassified` and `unobserved` records are exercised against real processes.
+
+`SendLedgerTests` and `SendReportTests` in `tests/test_bridge.py` cover the send log and the report: they drive the bridge over stdio, write fake Pi session files, and run the report as installed.
 
 Every test uses a temp HOME and TMPDIR, a fake Herdr socket, fake `herdr`, fake `security`, fake `launchctl` (which starts the plist's command as launchd would) and a mock tunnel-client that serves loopback `/readyz` and drives the real wrapper and bridge over stdio. With `HERDR_MCP_TEST_ZIP`, one extra test extracts the official zip against the production pins without executing it. No test touches a real keychain, LaunchAgent, Herdr server or the network.

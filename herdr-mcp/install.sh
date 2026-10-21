@@ -1,6 +1,6 @@
 #!/bin/sh
-# Opt-in installer: copies the Herdr control MCP bridge, child wrapper and
-# herdr-mcp-tunnel into ~/.local/share/herdr-mcp and links
+# Opt-in installer: copies the Herdr control MCP bridge, child wrapper, send
+# report and herdr-mcp-tunnel into ~/.local/share/herdr-mcp and links
 # ~/.local/bin/herdr-mcp-tunnel. Idempotent. Installs no tunnel-client,
 # credential, or LaunchAgent; those are separate explicit commands.
 set -eu
@@ -16,7 +16,7 @@ if [ -e "$link" ] || [ -L "$link" ]; then
     { log ERROR "$link exists and is not our symlink; refusing"; exit 1; }
 fi
 mkdir -p "$dest" "$HOME/.local/bin"
-for f in herdr_control_mcp.py:0644 herdr_control_mcp_child.sh:0755 herdr-mcp-tunnel:0755 README.md:0644; do
+for f in herdr_control_mcp.py:0644 herdr_control_mcp_child.sh:0755 herdr_send_report.py:0644 herdr-mcp-tunnel:0755 README.md:0644; do
   name=${f%%:*} mode=${f##*:}
   if cmp -s "$src/$name" "$dest/$name"; then continue; fi
   tmp=$(mktemp "$dest/.$name.XXXXXX")
