@@ -146,6 +146,12 @@ After adding a skill:
    - `find ~/.codex/skills -mindepth 1 -maxdepth 1 -type l`
    - `find ~/.pi/agent/skills -mindepth 1 -maxdepth 1 -type l`
 
+## Capability Tiers
+
+[`capability-tiers/`](./capability-tiers/README.md) holds a standalone tier registry (low, medium, high) and a
+read-only resolver that previews which model a role would get, using quota data. It is not canonical config for
+any harness and is wired into none yet.
+
 ## Import Loop Engine Skills From A Release Tag
 
 The six Loop Engine skill bundles (`using-loop-engine`, `coordinating-loop-engine`, `using-software-change-provider`,
