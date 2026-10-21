@@ -531,6 +531,16 @@ class SendReportTests(StdioBridgeTests):
             counts = self.report(*args)['summary']['counts']
         return counts
 
+    def test_target_filter_does_not_change_verdicts(self):
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'same words'}})
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w2:p1', 'text': 'same words'}})
+        (self.sessions / 'a.jsonl').write_text(self.user_entry('same words') + '\n')  # one landing for two sends
+        both = self.settled('--window', '1')
+        self.assertEqual(both, {'landed': 1, 'unmatched': 1})
+        late = self.report('--window', '1', '--target', 'w2:p1')
+        self.assertEqual(late['summary']['sends_checked'], 1)
+        self.assertEqual(late['summary']['counts'], {'unmatched': 1})  # w1:p1 took the landing, as unfiltered
+
     def test_tab_messages_and_cloned_sessions(self):
         self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'A\tB'}})
         self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'A\tB'}})
