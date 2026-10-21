@@ -596,6 +596,7 @@ class SendReportTests(StdioBridgeTests):
             handle.write(json.dumps(old) + '\n')
         out = self.report('--since', '2026-10-19T00:00:00Z', '--window', '1')
         self.assertEqual(out['summary']['sends_without_hash'], 1)
+        self.assertEqual(self.report('--since', '2026-10-19T00:00:00Z', '--window', '1', '--target', 'w9:p9')['summary']['sends_without_hash'], 0)
         (self.home / '.local' / 'state' / 'herdr-mcp' / 'text-hash.key').unlink()
         self.report(expect=2)
     def test_overlapping_calls_use_earliest_deadline_matching(self):
