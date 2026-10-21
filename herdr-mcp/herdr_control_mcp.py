@@ -432,7 +432,9 @@ CLI_TARGET_FIRST = {
 def cli_command(argv):
     """(root, sub, rest) of a herdr argv, after the global --session/--machine options.
     root is None unless it is a known command root; sub is None unless it is in CLI_SUBS[root]."""
-    words = [a for a in argv if isinstance(a, str)]
+    if any(not isinstance(a, str) for a in argv):
+        return None, None, []  # never drop elements: that would shift free text into a target slot
+    words = list(argv)
     while words and (words[0] in ('--session', '--machine') or words[0].startswith(('--session=', '--machine='))):
         words = words[1 if '=' in words[0] else 2:]
     if not words or words[0].startswith('-') or words[0] not in CLI_ROOTS:
@@ -476,8 +478,10 @@ def cli_parse(root, sub, rest):
 
 
 def normalize_text(text):
-    """Both the bridge and the report hash this form: LF newlines, no leading/trailing whitespace."""
-    return text.replace('\r\n', '\n').replace('\r', '\n').strip()
+    """Both the bridge and the report hash this form: LF newlines, tabs as 4 spaces, no outer whitespace."""
+    # Pi's editor turns each pasted tab into four spaces, so a tab-bearing message lands in the
+    # session as spaces; hash that form so the sent text and the landed text compare equal.
+    return text.replace('\r\n', '\n').replace('\r', '\n').replace('\t', '    ').strip()
 
 
 def load_hash_key(create=False):
