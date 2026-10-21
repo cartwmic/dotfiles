@@ -8,13 +8,14 @@ writes remain unknown. herdr_cli reads its executable path and SHA-256 pin from
 ~/.config/herdr-mcp/config (written by `herdr-mcp-tunnel configure`). Every tool
 call writes metadata-only start/end records to ~/.local/state/herdr-mcp/audit.log.
 """
-import fcntl, json, os, re, socket, sys, time, uuid, hashlib, subprocess, selectors
+import fcntl, hashlib, hmac, json, os, re, secrets, selectors, socket, stat, subprocess, sys, time, uuid
 
 CONFIG_PATH = os.path.expanduser('~/.config/herdr-mcp/config')
 CLI_CWD = os.path.expanduser('~')
 AUDIT_PATH = os.path.expanduser('~/.local/state/herdr-mcp/audit.log')
 AUDIT_MAX_BYTES = 1048576  # rotate before a write would pass this size
 AUDIT_KEEP = 5             # audit.log.1 .. audit.log.5; older records are dropped
+HASH_KEY_PATH = os.path.join(os.path.dirname(AUDIT_PATH), 'text-hash.key')  # 32 random bytes, mode 0600
 # Herdr ids look like w1, w1:t2, w15:p2R. Bounded so free text such as "w1Hunter2" is not logged.
 TARGET_ID = re.compile(r'^w[0-9]{1,6}[A-Za-z0-9]{0,2}(:[tp][0-9]{1,6}[A-Za-z0-9]{0,2})?$')
 CODE = re.compile(r'^[a-z][a-z0-9_]{0,47}$')
@@ -329,7 +330,13 @@ def audit_write(record):
 def audit_targets(name, args):
     """Only values shaped like Herdr ids (w1, w1:t2, w15:p2R); never free text."""
     if name == 'herdr_cli':
-        values = args.get('argv') if isinstance(args.get('argv'), list) else []
+        # Targets come only from named slots: the first positional of a command that has one, and
+        # target-naming options. Message text, other option values and --session/--machine values
+        # are never scanned (they can be ID-shaped), and an argv with an unknown option yields none.
+        root, sub, rest = cli_command(args.get('argv') if isinstance(args.get('argv'), list) else [])
+        pos, values, ok = cli_parse(root, sub, rest)
+        if ok and sub in CLI_TARGET_FIRST.get(root, ()):
+            values = pos[:1] + values
     else:
         params = args.get('params') if name == 'herdr_request' else args
         params = params if isinstance(params, dict) else {}
@@ -341,16 +348,229 @@ def audit_targets(name, args):
     return found[:8]
 
 
+# Subcommand words per CLI root (herdr 0.9.1 --help). Only a word found here is ever logged,
+# so free text in later argv positions can never reach the log.
+CLI_SUBS = {
+    'pane': {'list', 'current', 'get', 'layout', 'process-info', 'neighbor', 'edges', 'focus', 'resize', 'zoom',
+             'read', 'rename', 'input', 'split', 'swap', 'move', 'close', 'send-text', 'send-keys', 'wait-output',
+             'run', 'report-agent', 'report-agent-session', 'release-agent', 'report-metadata'},
+    'agent': {'list', 'get', 'read', 'send-keys', 'prompt', 'rename', 'focus', 'wait', 'attach', 'start', 'explain'},
+    'tab': {'list', 'create', 'get', 'focus', 'rename', 'close'},
+    'workspace': {'list', 'create', 'get', 'focus', 'rename', 'report-metadata', 'close'},
+    'worktree': {'list', 'create', 'open', 'remove'},
+    'notification': {'show'}, 'session': {'list', 'attach', 'stop', 'delete'},
+    'machine': {'list', 'add', 'rename', 'remove', 'enable', 'disable'},
+    'channel': {'show', 'set'}, 'config': {'check', 'reset-keys'},
+    'integration': {'install', 'uninstall', 'status'},
+    'plugin': {'install', 'uninstall', 'link', 'unlink', 'enable', 'disable', 'list', 'config-dir', 'action', 'log', 'pane'},
+    'api': {'snapshot', 'schema'}, 'server': {'stop', 'reload-config'},
+}
+# Native requests whose params.text is a message sent to a pane; the other send methods carry keys only.
+SEND_TEXT_METHODS = frozenset({'agent.prompt', 'pane.send_text', 'pane.send_input'})
+# Option arity per command. An option that is not one of THIS command's options (or an argv with no
+# recognized command) makes the argv ambiguous: nothing is taken from it as a target or as text
+# (fail closed). Option-shaped message text such as '--pane=w9:p9' therefore cannot leak.
+CLI_OPTIONS = {  # (root, sub) -> (value options, flag options); from 'herdr <root> <sub> --help' (0.9.1)
+    ('agent', 'attach'): (frozenset([]), frozenset(['--takeover'])),
+    ('agent', 'explain'): (frozenset(['--agent','--file','--format']), frozenset(['--json','--verbose','-v'])),
+    ('agent', 'prompt'): (frozenset(['--timeout','--until']), frozenset(['--wait'])),
+    ('agent', 'read'): (frozenset(['--format','--lines','--source']), frozenset(['--ansi'])),
+    ('agent', 'rename'): (frozenset([]), frozenset(['--clear'])),
+    ('agent', 'start'): (frozenset(['--kind','--pane','--timeout']), frozenset([])),
+    ('agent', 'wait'): (frozenset(['--timeout','--until']), frozenset([])),
+    ('api', 'schema'): (frozenset(['--output']), frozenset(['--json'])),
+    ('integration', 'status'): (frozenset([]), frozenset(['--outdated-only'])),
+    ('machine', 'add'): (frozenset(['--label','--remote-session']), frozenset([])),
+    ('machine', 'list'): (frozenset([]), frozenset(['--json'])),
+    ('machine', 'rename'): (frozenset(['--label']), frozenset([])),
+    ('notification', 'show'): (frozenset(['--body','--position','--sound']), frozenset([])),
+    ('pane', 'current'): (frozenset(['--pane']), frozenset(['--current'])),
+    ('pane', 'edges'): (frozenset(['--pane']), frozenset(['--current'])),
+    ('pane', 'focus'): (frozenset(['--direction','--pane']), frozenset(['--current'])),
+    ('pane', 'input'): (frozenset(['--pane','--right-click']), frozenset(['--current'])),
+    ('pane', 'layout'): (frozenset(['--pane']), frozenset(['--current'])),
+    ('pane', 'list'): (frozenset(['--workspace']), frozenset([])),
+    ('pane', 'move'): (frozenset(['--label','--ratio','--split','--tab','--tab-label','--target-pane','--workspace']), frozenset(['--focus','--new-tab','--new-workspace','--no-focus'])),
+    ('pane', 'neighbor'): (frozenset(['--direction','--pane']), frozenset(['--current'])),
+    ('pane', 'process-info'): (frozenset(['--pane']), frozenset(['--current'])),
+    ('pane', 'read'): (frozenset(['--format','--lines','--source']), frozenset(['--ansi','--raw'])),
+    ('pane', 'release-agent'): (frozenset(['--agent','--seq','--source']), frozenset([])),
+    ('pane', 'rename'): (frozenset([]), frozenset(['--clear'])),
+    ('pane', 'report-agent'): (frozenset(['--agent','--agent-session-id','--agent-session-path','--message','--seq','--source','--state']), frozenset([])),
+    ('pane', 'report-agent-session'): (frozenset(['--agent','--agent-session-id','--agent-session-path','--seq','--session-start-source','--source']), frozenset([])),
+    ('pane', 'report-metadata'): (frozenset(['--agent','--applies-to-source','--clear-token','--display-agent','--seq','--source','--state-label','--title','--token','--ttl-ms']), frozenset(['--clear-display-agent','--clear-state-labels','--clear-title'])),
+    ('pane', 'resize'): (frozenset(['--amount','--direction','--pane']), frozenset(['--current'])),
+    ('pane', 'split'): (frozenset(['--cwd','--direction','--env','--pane','--ratio','--right-click']), frozenset(['--current','--focus','--no-focus'])),
+    ('pane', 'swap'): (frozenset(['--direction','--pane','--source-pane','--target-pane']), frozenset(['--current'])),
+    ('pane', 'wait-output'): (frozenset(['--lines','--match','--regex','--source','--timeout']), frozenset(['--raw'])),
+    ('pane', 'zoom'): (frozenset(['--pane']), frozenset(['--current','--off','--on','--toggle'])),
+    ('plugin', 'install'): (frozenset(['--ref']), frozenset(['--yes','-y'])),
+    ('plugin', 'link'): (frozenset([]), frozenset(['--disabled','--enabled'])),
+    ('plugin', 'list'): (frozenset(['--plugin']), frozenset(['--json'])),
+    ('session', 'delete'): (frozenset([]), frozenset(['--json'])),
+    ('session', 'list'): (frozenset([]), frozenset(['--json'])),
+    ('session', 'stop'): (frozenset([]), frozenset(['--json'])),
+    ('tab', 'create'): (frozenset(['--cwd','--env','--label','--workspace']), frozenset(['--focus','--no-focus'])),
+    ('tab', 'list'): (frozenset(['--workspace']), frozenset([])),
+    ('workspace', 'create'): (frozenset(['--cwd','--env','--label']), frozenset(['--focus','--no-focus'])),
+    ('workspace', 'report-metadata'): (frozenset(['--clear-token','--seq','--source','--token','--ttl-ms']), frozenset([])),
+    ('worktree', 'create'): (frozenset(['--base','--branch','--cwd','--label','--path','--workspace']), frozenset(['--focus','--no-focus','--trust-repository'])),
+    ('worktree', 'list'): (frozenset(['--cwd','--workspace']), frozenset(['--trust-repository'])),
+    ('worktree', 'open'): (frozenset(['--branch','--cwd','--label','--path','--workspace']), frozenset(['--focus','--no-focus','--trust-repository'])),
+    ('worktree', 'remove'): (frozenset(['--workspace']), frozenset(['--force','--trust-repository'])),
+}
+# Value options that name a Herdr object, so an ID-shaped value is a target.
+CLI_TARGET_OPTIONS = frozenset({'--pane', '--workspace', '--tab', '--source-pane', '--target-pane'})
+# Commands whose first positional is a target (everything else: its first positional may be free text).
+CLI_TARGET_FIRST = {
+    'pane': {'get', 'layout', 'process-info', 'neighbor', 'edges', 'focus', 'resize', 'zoom', 'read', 'rename', 'input',
+             'split', 'swap', 'move', 'close', 'send-text', 'send-keys', 'wait-output', 'run'},
+    'agent': {'get', 'read', 'send-keys', 'prompt', 'rename', 'focus', 'wait', 'attach', 'explain'},
+    'tab': {'get', 'focus', 'rename', 'close'}, 'workspace': {'get', 'focus', 'rename', 'close'}}
+
+
+def cli_command(argv):
+    """(root, sub, rest) of a herdr argv, after the global --session/--machine options.
+    root is None unless it is a known command root; sub is None unless it is in CLI_SUBS[root]."""
+    if any(not isinstance(a, str) for a in argv):
+        return None, None, []  # never drop elements: that would shift free text into a target slot
+    words = list(argv)
+    while words and (words[0] in ('--session', '--machine') or words[0].startswith(('--session=', '--machine='))):
+        words = words[1 if '=' in words[0] else 2:]
+    if not words or words[0].startswith('-') or words[0] not in CLI_ROOTS:
+        return None, None, []
+    sub = words[1] if len(words) > 1 and words[1] in CLI_SUBS.get(words[0], ()) else None
+    return words[0], sub, words[2 if sub else 1:]
+
+
+def cli_parse(root, sub, rest):
+    """Split the words after the command into (positionals, option_targets, ok).
+    ok is False when an option of unknown arity appears: the split is then unreliable, so
+    callers take nothing from it. 'pane run' ends option parsing at its first positional (the
+    rest is the command line)."""
+    values_ok, flags_ok = CLI_OPTIONS.get((root, sub), (frozenset(), frozenset()))
+    if sub is None:
+        return [], [], False
+    pos, opt_targets, i, literal = [], [], 0, False
+    while i < len(rest):
+        a = rest[i]
+        if literal or not a.startswith('-') or a == '-':
+            pos.append(a)
+            if (root, sub) == ('pane', 'run') and len(pos) == 1:
+                pos.extend(rest[i + 1:])
+                break
+        elif a == '--':
+            literal = True
+        else:
+            name, eq, inline = a.partition('=') if a.startswith('--') else (a, '', '')
+            if name in ('--help', '-h') and not eq:
+                pass
+            elif name in values_ok:
+                value = inline if eq else (rest[i + 1] if i + 1 < len(rest) else None)
+                if not eq:
+                    i += 1
+                if name in CLI_TARGET_OPTIONS and isinstance(value, str) and TARGET_ID.match(value):
+                    opt_targets.append(value)
+            elif name not in flags_ok or eq:
+                return [], [], False
+        i += 1
+    return pos, opt_targets, True
+
+
+def normalize_text(text):
+    """Both the bridge and the report hash this form: LF newlines, tabs as 4 spaces, no outer whitespace."""
+    # Pi's editor turns each pasted tab into four spaces, so a tab-bearing message lands in the
+    # session as spaces; hash that form so the sent text and the landed text compare equal.
+    return text.replace('\r\n', '\n').replace('\r', '\n').replace('\t', '    ').strip()
+
+
+def load_hash_key(create=False):
+    """The per-install HMAC key (32 bytes), or None. Created atomically by the bridge only
+    (create=True); the report never creates it. Never raises."""
+    try:
+        fd = os.open(HASH_KEY_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)  # NONBLOCK: a FIFO must not hang a call
+    except FileNotFoundError:
+        fd = None
+    except OSError:
+        return None
+    if fd is None:
+        if not create:
+            return None
+        try:
+            os.makedirs(os.path.dirname(HASH_KEY_PATH), mode=0o700, exist_ok=True)
+            tmp = f'{HASH_KEY_PATH}.{os.getpid()}.{secrets.token_hex(4)}'
+            tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                os.write(tfd, secrets.token_bytes(32))
+            finally:
+                os.close(tfd)
+            try:
+                os.link(tmp, HASH_KEY_PATH)  # atomic; loses cleanly to a concurrent bridge process
+            except FileExistsError:
+                pass
+            finally:
+                os.unlink(tmp)
+            fd = os.open(HASH_KEY_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError:
+            return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077 or st.st_uid != os.geteuid():
+            return None  # only our own private regular file is a key; never modified here
+        key = os.read(fd, 64)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return key if len(key) == 32 else None
+
+
+def hash_text(text, key):
+    """'h1:' + first 128 bits of HMAC-SHA256(key, normalized text). Keyed so a leaked log
+    cannot confirm a guessed short message such as 'yes'."""
+    mac = hmac.new(key, normalize_text(text).encode('utf-8', 'replace'), hashlib.sha256)
+    return 'h1:' + mac.hexdigest()[:32]
+
+
+def audit_send(name, args):
+    """Extra metadata for a text send: CLI subcommand, and text_hash + text_len (never the text).
+    Empty dict for anything else. Never raises."""
+    try:
+        extra, text = {}, None
+        if name == 'herdr_cli':
+            root, sub, rest = cli_command(args.get('argv') if isinstance(args.get('argv'), list) else [])
+            if sub:
+                extra['sub'] = sub
+            pos, _targets, parsed = cli_parse(root, sub, rest)
+            if not parsed:
+                pass  # ambiguous argv: no text taken, so no hash
+            elif (root, sub) in (('agent', 'prompt'), ('pane', 'send-text')) and len(pos) >= 2:
+                text = pos[1]
+            elif (root, sub) == ('pane', 'run') and len(pos) >= 2:
+                text = ' '.join(pos[1:])
+        elif name == 'herdr_request':
+            params = args.get('params') if isinstance(args.get('params'), dict) else {}
+            if args.get('method') in SEND_TEXT_METHODS and isinstance(params.get('text'), str):
+                text = params['text']
+        if text is not None and normalize_text(text):
+            key = load_hash_key(create=True)
+            if key:
+                extra['text_hash'] = hash_text(text, key)
+                extra['text_len'] = len(normalize_text(text))
+        return extra
+    except Exception:
+        return {}
+
+
 def audit_method(name, args):
     """Native method name, or CLI root plus subcommand word. No arguments."""
     if name == 'herdr_request':
         m = args.get('method')
         return m if isinstance(m, str) and m in KNOWN_METHODS else 'unlisted'
     if name == 'herdr_cli':
-        # Root command only: later argv words can be free text.
-        argv = args.get('argv') if isinstance(args.get('argv'), list) else []
-        words = [a for a in argv if isinstance(a, str) and not a.startswith('-')][:1]
-        return 'cli:' + words[0] if words and words[0] in CLI_ROOTS else 'cli:other'
+        # Root command only (the subcommand goes in 'sub'): later argv words can be free text.
+        root = cli_command(args.get('argv') if isinstance(args.get('argv'), list) else [])[0]
+        return 'cli:' + root if root else 'cli:other'
     if name == 'herdr_list':
         return LIST.get(args.get('kind'), 'invalid') if isinstance(args.get('kind'), str) else 'invalid'
     if name == 'herdr_get':
@@ -397,11 +617,12 @@ def audited_call(name, args, call_id):
     safe_args = args if isinstance(args, dict) else {}
     tool = name if name in TOOLS or name in ("herdr_request", "herdr_cli") else "unknown_tool"
     base = {"call": str(uuid.uuid4()), "tool": tool, "method": audit_method(tool, safe_args),
-            "targets": audit_targets(tool, safe_args)}
+            "targets": audit_targets(tool, safe_args), **audit_send(tool, safe_args)}
     if (isinstance(call_id, int) and not isinstance(call_id, bool)) or (isinstance(call_id, str) and CALL_ID.match(call_id)):
         base["mcp_id"] = call_id
-    audit_write({"ts": audit_now(), "event": "start", **base})
-    started = time.monotonic()
+    start_ts = audit_now()
+    started = time.monotonic()  # duration counts from the start record's timestamp, not from after its write
+    audit_write({"ts": start_ts, "event": "start", **base})
     try:
         result = dispatch(name, args)
         outcome, extra = audit_outcome(tool, result)
