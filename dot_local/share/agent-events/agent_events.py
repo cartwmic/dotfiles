@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CONTENT_POLICY = "no prompts, assistant text, tool args/results or error text are stored"
 
 SCHEMA = """
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   path TEXT PRIMARY KEY, session_id TEXT, kind TEXT NOT NULL, cwd TEXT,
   parent_session_id TEXT, child_id TEXT, run_index INTEGER,
   started_at_ms INTEGER, ended_at_ms INTEGER, wall_ms INTEGER,
-  timing_quality TEXT, calls_timed INTEGER, calls_untimed INTEGER,
+  timing_quality TEXT, timing_complete INTEGER, calls_timed INTEGER, calls_untimed INTEGER,
   active_ms INTEGER, llm_ms INTEGER, tool_ms INTEGER, owner_wait_ms INTEGER,
   unaccounted_ms INTEGER,
   user_msgs INTEGER, turns INTEGER, llm_calls INTEGER, tool_calls INTEGER,
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   models TEXT);
 CREATE TABLE IF NOT EXISTS turns (
   path TEXT NOT NULL, turn_idx INTEGER NOT NULL, user_key TEXT, inherited INTEGER DEFAULT 0,
-  started_at_ms INTEGER, ended_at_ms INTEGER, wall_ms INTEGER, idle_after_ms INTEGER,
+  started_at_ms INTEGER, ended_at_ms INTEGER, wall_ms INTEGER, idle_after_ms INTEGER, timing_complete INTEGER,
   active_ms INTEGER, llm_ms INTEGER, explore_ms INTEGER, edit_ms INTEGER, run_ms INTEGER,
   delegate_ms INTEGER, owner_ms INTEGER, other_ms INTEGER,
   llm_calls INTEGER, tool_calls INTEGER, errors INTEGER,
@@ -105,6 +105,30 @@ def phase_of(tool):
     if tool in OWNER:
         return "owner"
     return "other"
+
+
+SAFE_NAME = re.compile(r"[A-Za-z0-9_.:/@+\-]{1,80}")
+STATUS_WORDS = {
+    "ok": ("ok", "success", "succeeded", "completed", "complete"),
+    "error": ("error", "failed", "failure"),
+    "aborted": ("aborted", "abort", "cancelled", "canceled"),
+    "timeout": ("timeout", "timed_out", "timedout"),
+    "unfinished": ("unfinished", "running", "pending"),
+}
+
+
+def safe_name(value):
+    """Names come from the file; anything that is not a plain identifier becomes 'unknown'."""
+    return value if isinstance(value, str) and SAFE_NAME.fullmatch(value) else "unknown"
+
+
+def norm_status(value):
+    """Fixed vocabulary only: arbitrary status text is never stored."""
+    s = value.lower() if isinstance(value, str) else ""
+    for name, words in STATUS_WORDS.items():
+        if s in words:
+            return name
+    return "unknown"
 
 
 def error_bucket(text):
@@ -228,7 +252,7 @@ def parse_session(path):
                                    "attrs": {"tokens_before": as_int(entry.get("tokensBefore")),
                                              "from_hook": bool(entry.get("fromHook"))}})
             elif etype == "model_change":
-                to = f"{entry.get('provider')}/{entry.get('modelId')}"
+                to = f"{safe_name(entry.get('provider'))}/{safe_name(entry.get('modelId'))}"
                 if last_model_change is not None:  # the first entry is the initial selection, not a switch
                     out.events.append({"ts": ts_entry, "turn": turn, "kind": "model.switch",
                                        "severity": "info", "key": f"id:{eid}" if eid else None,
@@ -239,7 +263,7 @@ def parse_session(path):
                 if seen_thinking:  # the first entry is the initial level, not a change
                     out.events.append({"ts": ts_entry, "turn": turn, "kind": "thinking.change",
                                        "severity": "info", "key": f"id:{eid}" if eid else None,
-                                       "attrs": {"level": level if isinstance(level, str) else None}})
+                                       "attrs": {"level": safe_name(level) if isinstance(level, str) else None}})
                 seen_thinking = True
     _resolve_timing(out, stamps_llm, stamps_tool)
     return out
@@ -268,10 +292,10 @@ def _assistant(out, m, eid, ts_entry, turn, consec, minimal, path):
     content = m.get("content") if isinstance(m.get("content"), list) else []
     has_tool_call = any(isinstance(c, dict) and c.get("type") == "toolCall" for c in content)
     status = {"error": "error", "aborted": "aborted", "length": "length"}.get(stop, "ok")
-    call = {"kind": "llm", "entry_id": eid, "name": m.get("model"), "phase": "llm", "turn": turn,
+    call = {"kind": "llm", "entry_id": eid, "name": safe_name(m.get("model")), "phase": "llm", "turn": turn,
             "ts": ts, "dur": as_int(m.get("durationMs")), "status": status,
-            "provider": m.get("provider"), "model": m.get("model"),
-            "thinking": m.get("thinkingLevel") if isinstance(m.get("thinkingLevel"), str) else None,
+            "provider": safe_name(m.get("provider")), "model": safe_name(m.get("model")),
+            "thinking": safe_name(m.get("thinkingLevel")) if isinstance(m.get("thinkingLevel"), str) else None,
             "usage": u, "key": _key(eid, path, ts, u["input"] + u["out"])}
     out.calls.append(call)
     base = {"ts": ts, "turn": turn, "key": call["key"], "call": len(out.calls) - 1}
@@ -299,7 +323,7 @@ def _assistant(out, m, eid, ts_entry, turn, consec, minimal, path):
 
 def _tool_result(out, m, eid, ts_entry, turn):
     ts_end = as_int(m.get("timestamp")) or ts_entry
-    name = m.get("toolName") if isinstance(m.get("toolName"), str) else "unknown"
+    name = safe_name(m.get("toolName"))
     call_id = m.get("toolCallId") if isinstance(m.get("toolCallId"), str) else None
     is_err = bool(m.get("isError"))
     details = m.get("details") if isinstance(m.get("details"), dict) else {}
@@ -314,13 +338,11 @@ def _tool_result(out, m, eid, ts_entry, turn):
         args = n.get("arguments") if isinstance(n.get("arguments"), dict) else {}
         cmd = args.get("command") if isinstance(args.get("command"), str) else ""
         sleep = SLEEP_RE.match(cmd) if n.get("name") == "bash" else None
-        status = n.get("status")
         call["nested"].append({
             "id": n.get("id") if isinstance(n.get("id"), str) else None,
-            "name": n.get("name") if isinstance(n.get("name"), str) else "unknown",
+            "name": safe_name(n.get("name")),
             "dur": as_int(n.get("durationMs")),
-            "status": "ok" if status in ("ok", "success", "completed") else
-                      ("error" if status in ("error", "failed") else str(status)[:20]),
+            "status": norm_status(n.get("status")),
             "sleep_s": float(sleep.group(1)) if sleep else None})
         # the command text is discarded here; only the sleep length survives
     out.calls.append(call)
@@ -342,7 +364,7 @@ def _overhead(out, entry, eid, ts_entry, turn, name):
     key = f"id:{eid}" if eid else f"fallback:{name}:{ts_entry}:{u['input'] + u['out']}"
     out.calls.append({"kind": "overhead", "entry_id": eid, "name": name, "phase": "other",
                       "turn": turn, "ts": ts_entry, "dur": None, "status": "ok",
-                      "provider": entry.get("provider"), "model": entry.get("model"),
+                      "provider": safe_name(entry.get("provider")), "model": safe_name(entry.get("model")),
                       "usage": u, "key": key})
     if name == "cache_warm":
         out.events.append({"ts": ts_entry, "turn": turn, "kind": "spend.cache_warm",
@@ -373,9 +395,9 @@ def _resolve_timing(out, stamps_llm, stamps_tool):
                 c["start"], c["end"] = st["startedAt"], st["completedAt"]
                 c["dur"] = c["end"] - c["start"]
                 c["source"] = "stamp"
-                outcome = st.get("outcome")
-                if c["status"] == "ok" and isinstance(outcome, str) and outcome not in ("success", "ok"):
-                    c["status"] = outcome[:20]
+                outcome = norm_status(st.get("outcome"))
+                if c["status"] == "ok" and outcome not in ("ok", "unknown"):
+                    c["status"] = outcome
             elif c["dur"] is not None and c["end"] is not None:
                 c["start"] = c["end"] - c["dur"]
                 c["source"] = "duration"
@@ -392,8 +414,18 @@ def connect(db_path, readonly=False):
     else:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         con = sqlite3.connect(db_path)
+        old = None
+        if con.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone():
+            row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            old = row[0] if row else None
+        if old is not None and old != str(SCHEMA_VERSION):
+            # derived data from another schema version: start over rather than migrate
+            for name, kind in con.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','view')").fetchall():
+                con.execute(f"DROP {kind.upper()} IF EXISTS {name}")
+            con.commit()
         con.executescript(SCHEMA)
         con.execute("INSERT OR REPLACE INTO meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
+        con.commit()
     con.row_factory = sqlite3.Row
     return con
 
@@ -461,7 +493,9 @@ def build(sessions_dir, db_path, since_ms=None, progress=None):
     sessions_dir = Path(sessions_dir)
     con = connect(db_path)
     known = {r["path"]: (r["size"], r["mtime_ns"]) for r in con.execute("SELECT path, size, mtime_ns FROM files")}
+    dirty = (con.execute("SELECT value FROM meta WHERE key='dirty'").fetchone() or ("0",))[0] == "1"
     seen, parsed_n, skipped, malformed = set(), 0, 0, 0
+    changed = set()
     candidates = sorted(sessions_dir.glob("*/**/*.jsonl")) if sessions_dir.is_dir() else []
     for path in candidates:
         info = classify_path(sessions_dir, path)
@@ -479,6 +513,8 @@ def build(sessions_dir, db_path, since_ms=None, progress=None):
         with con:
             _delete_file(con, str(path))
             _insert(con, path, info, parsed, st.st_size, st.st_mtime_ns)
+            con.execute("INSERT OR REPLACE INTO meta VALUES ('dirty', '1')")  # same transaction as the ingest
+        changed.add(str(path))
         parsed_n += 1
         if progress and parsed_n % 200 == 0:
             progress(f"parsed {parsed_n} files")
@@ -487,97 +523,130 @@ def build(sessions_dir, db_path, since_ms=None, progress=None):
         for gone in set(known) - seen:
             with con:
                 _delete_file(con, gone)
+                con.execute("INSERT OR REPLACE INTO meta VALUES ('dirty', '1')")
             removed += 1
-    if parsed_n or removed:
-        with con:
-            finalize(con)
+    if parsed_n or removed or dirty:
+        with con:  # cleared only if finalize succeeds; a crash leaves the marker for the next build
+            finalize(con, None if dirty else changed)
+            con.execute("INSERT OR REPLACE INTO meta VALUES ('dirty', '0')")
     n_sessions = con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     con.close()
-    return {"parsed": parsed_n, "unchanged": skipped, "removed": removed,
+    return {"parsed": parsed_n, "unchanged": skipped, "removed": removed, "refinalized": bool(dirty and not parsed_n and not removed),
             "malformed_lines": malformed, "sessions": n_sessions}
 
 
-def _mark_duplicates(con, select_sql, update_sql):
-    seen, dups = set(), []
+def _duplicate_set(con, select_sql):
+    """Rows whose key was already claimed by an earlier row in the select's order."""
+    seen, dups = set(), set()
     for r in con.execute(select_sql):
         if r[2] in seen:
-            dups.append((r[0], r[1]))
+            dups.add((r[0], r[1]))
         else:
             seen.add(r[2])
-    con.executemany(update_sql, dups)
+    return dups
 
 
-def finalize(con):
-    """Cross-file dedupe, then rebuild every rollup from non-duplicate rows.
+def _apply_flag(con, table, column, key_col, new, old_sql):
+    """Write only the flag changes; return the paths whose flags moved."""
+    old = {(r[0], r[1]) for r in con.execute(old_sql)}
+    for path, k in new - old:
+        con.execute(f"UPDATE {table} SET {column} = 1 WHERE path = ? AND {key_col} = ?", (path, k))
+    for path, k in old - new:
+        con.execute(f"UPDATE {table} SET {column} = 0 WHERE path = ? AND {key_col} = ?", (path, k))
+    return {path for path, _ in new ^ old}
+
+
+def finalize(con, changed_paths=None):
+    """Cross-file dedupe, then rebuild rollups for every session whose inputs moved.
 
     An entry copied into another file (fork, copied child history) is counted once:
     the shallowest, earliest file owns it, matching pi-token-usage's entry-id rule.
+    changed_paths=None (an interrupted earlier build) rolls up every session.
     """
-    con.execute("UPDATE calls SET dup = 0")
-    con.execute("UPDATE events SET dup = 0")
-    con.execute("UPDATE turns SET inherited = 0")
-    _mark_duplicates(
-        con, "SELECT c.path, c.seq, c.dedupe_key FROM calls c JOIN files f ON f.path = c.path"
-             " ORDER BY f.depth, f.started_at_ms, c.path, c.seq",
-        "UPDATE calls SET dup = 1 WHERE path = ? AND seq = ?")
-    _mark_duplicates(
-        con, "SELECT e.path, e.seq, e.dedupe_key FROM events e JOIN files f ON f.path = e.path"
-             " WHERE e.dedupe_key IS NOT NULL ORDER BY f.depth, f.started_at_ms, e.path, e.seq",
-        "UPDATE events SET dup = 1 WHERE path = ? AND seq = ?")
-    _mark_duplicates(
-        con, "SELECT t.path, t.turn_idx, t.user_key FROM turns t JOIN files f ON f.path = t.path"
-             " WHERE t.user_key IS NOT NULL ORDER BY f.depth, f.started_at_ms, t.path, t.turn_idx",
-        "UPDATE turns SET inherited = 1 WHERE path = ? AND turn_idx = ?")
-    for r in con.execute("SELECT path FROM sessions").fetchall():
-        _rollup_session(con, r["path"])
+    moved = set()
+    moved |= _apply_flag(
+        con, "calls", "dup", "seq",
+        _duplicate_set(con, "SELECT c.path, c.seq, c.dedupe_key FROM calls c JOIN files f ON f.path = c.path"
+                            " ORDER BY f.depth, f.started_at_ms, c.path, c.seq"),
+        "SELECT path, seq FROM calls WHERE dup = 1")
+    moved |= _apply_flag(
+        con, "events", "dup", "seq",
+        _duplicate_set(con, "SELECT e.path, e.seq, e.dedupe_key FROM events e JOIN files f ON f.path = e.path"
+                            " WHERE e.dedupe_key IS NOT NULL ORDER BY f.depth, f.started_at_ms, e.path, e.seq"),
+        "SELECT path, seq FROM events WHERE dup = 1")
+    moved |= _apply_flag(
+        con, "turns", "inherited", "turn_idx",
+        _duplicate_set(con, "SELECT t.path, t.turn_idx, t.user_key FROM turns t JOIN files f ON f.path = t.path"
+                            " WHERE t.user_key IS NOT NULL ORDER BY f.depth, f.started_at_ms, t.path, t.turn_idx"),
+        "SELECT path, turn_idx FROM turns WHERE inherited = 1")
+    if changed_paths is None:
+        todo = [r[0] for r in con.execute("SELECT path FROM sessions")]
+    else:
+        todo = sorted((moved | set(changed_paths)) & {r[0] for r in con.execute("SELECT path FROM sessions")})
+    for path in todo:
+        _rollup_session(con, path)
+    return len(todo)
 
 
 def _call_phase_ms(call, nested):
-    """Phase milliseconds for one tool call; codemode time is split by its nested calls."""
+    """Inclusive phase milliseconds for one tool call, or None when its duration is unknown.
+
+    A call with nested calls (a codemode script) reports each nested call's own duration under
+    its phase, unscaled: nested calls can run in parallel, so these may sum to more than the
+    wrapper. "other" is a lower bound on wrapper time no nested call accounts for.
+    """
     dur = call["dur_ms"]
     if dur is None:
-        return {}
-    if call["name"] == "codemode" and nested:
-        known = [(n["phase"], n["dur_ms"]) for n in nested if n["dur_ms"] is not None]
-        total = sum(d for _, d in known)
-        if total > 0:
-            scale = min(1.0, dur / total)
-            parts = {}
-            for ph, d in known:
-                parts[ph] = parts.get(ph, 0) + d * scale
-            rest = dur - sum(parts.values())
-            if rest > 0:
-                parts["other"] = parts.get("other", 0) + rest
-            return parts
+        return None
+    if nested:
+        parts = {}
+        for n in nested:
+            if n["dur_ms"] is not None:
+                parts[n["phase"]] = parts.get(n["phase"], 0) + n["dur_ms"]
+        rest = dur - sum(parts.values())
+        if rest > 0:
+            parts["other"] = parts.get("other", 0) + rest
+        return parts
     return {call["phase"]: dur}
 
 
 def _agg(cs, nested_by_parent):
     llm = [c for c in cs if c["kind"] == "llm"]
     tools = [c for c in cs if c["kind"] == "tool"]
+    phase = {p: 0 for p in PHASES}
+    unknown = set()
+    for c in llm:
+        if c["dur_ms"] is None:
+            unknown.add("llm")
+        else:
+            phase["llm"] += c["dur_ms"]
+    for c in tools:
+        parts = _call_phase_ms(c, nested_by_parent.get(c["call_id"], []))
+        if parts is None:
+            unknown.add(c["phase"])
+            continue
+        for ph, ms in parts.items():
+            phase[ph] += ms
     spans = [c for c in llm + tools if c["start_ms"] is not None and c["end_ms"] is not None]
+    complete = not unknown
+    non_owner_known = not (unknown - {"owner"})
     iv_active = [(c["start_ms"], c["end_ms"]) for c in spans if c["phase"] != "owner"]
     iv_owner = [(c["start_ms"], c["end_ms"]) for c in spans if c["phase"] == "owner"]
-    phase = {p: 0 for p in PHASES}
-    timed = False
-    for c in llm:
-        if c["dur_ms"] is not None:
-            phase["llm"] += c["dur_ms"]
-            timed = True
-    for c in tools:
-        for ph, ms in _call_phase_ms(c, nested_by_parent.get(c["call_id"], [])).items():
-            phase[ph] += int(round(ms))
-            timed = True
+    tool_ms = None if (unknown - {"owner", "llm"}) else sum(c["dur_ms"] for c in tools if c["phase"] != "owner")
     return {
-        "timed": timed, "phase": phase,
-        "active": union_ms(iv_active) if iv_active else (0 if timed else None),
-        "owner": union_ms(iv_owner) if iv_owner else (0 if timed else None),
+        "complete": complete,
+        "phase": {p: (None if p in unknown else v) for p, v in phase.items()},
+        "active": union_ms(iv_active) if non_owner_known else None,
+        "owner": union_ms(iv_owner) if "owner" not in unknown else None,
+        "tool_ms": tool_ms,
         "llm_calls": len(llm), "tool_calls": len(tools),
         "errors": sum(1 for c in llm + tools if c["status"] == "error"),
         "input": sum(c["input_tokens"] or 0 for c in llm),
         "output": sum(c["output_tokens"] or 0 for c in llm),
         "cost": sum(c["cost_usd"] or 0.0 for c in llm),
         "ends": [c["end_ms"] for c in cs if c["end_ms"] is not None],
+        "starts": [c["start_ms"] for c in llm + tools if c["start_ms"] is not None],
+        "intervals": [(c["start_ms"], c["end_ms"]) for c in spans],
         "stop": llm[-1]["status"] if llm else None,
     }
 
@@ -593,60 +662,66 @@ def _rollup_session(con, path):
     by_turn = {}
     for c in calls:
         by_turn.setdefault(c["turn_idx"], []).append(c)
-    live = [t for t in turns if not t["inherited"]]
+    # A turn whose user entry was copied from another file keeps its own non-duplicate work;
+    # only a turn with nothing of its own left is blanked.
+    live, aggs = [], {}
     for t in turns:
-        if t["inherited"]:
-            con.execute("UPDATE turns SET ended_at_ms=NULL, wall_ms=NULL, idle_after_ms=NULL, active_ms=NULL,"
-                        " llm_ms=NULL, explore_ms=NULL, edit_ms=NULL, run_ms=NULL, delegate_ms=NULL,"
-                        " owner_ms=NULL, other_ms=NULL, llm_calls=0, tool_calls=0, errors=0, input_tokens=0,"
-                        " output_tokens=0, notional_cost_usd=0, last_stop_reason=NULL"
+        own = by_turn.get(t["turn_idx"], [])
+        if t["inherited"] and not any(c["kind"] in ("llm", "tool") for c in own):
+            con.execute("UPDATE turns SET ended_at_ms=NULL, wall_ms=NULL, idle_after_ms=NULL, timing_complete=NULL,"
+                        " active_ms=NULL, llm_ms=NULL, explore_ms=NULL, edit_ms=NULL, run_ms=NULL,"
+                        " delegate_ms=NULL, owner_ms=NULL, other_ms=NULL, llm_calls=0, tool_calls=0, errors=0,"
+                        " input_tokens=0, output_tokens=0, notional_cost_usd=0, last_stop_reason=NULL"
                         " WHERE path=? AND turn_idx=?", (path, t["turn_idx"]))
             continue
-        a = _agg(by_turn.get(t["turn_idx"], []), nested_by_parent)
+        a = _agg(own, nested_by_parent)
         start = t["started_at_ms"]
-        end = max(a["ends"] + ([start] if start is not None else [])) if (a["ends"] or start is not None) else None
-        later = [x["started_at_ms"] for x in live if x["turn_idx"] > t["turn_idx"] and x["started_at_ms"] is not None]
+        if t["inherited"]:  # the prompt happened earlier, elsewhere; time starts at this file's own work
+            start = min(a["starts"], default=None)
+        aggs[t["turn_idx"]] = (t, a, start)
+        live.append((t["turn_idx"], start))
+    for idx, (t, a, start) in aggs.items():
+        end = None
+        if a["complete"] and (a["ends"] or start is not None):
+            end = max(a["ends"] + ([start] if start is not None else []))
+        later = [s for i, s in live if i > idx and s is not None]
         idle = (later[0] - end) if (later and end is not None and later[0] >= end) else None
-        ph = [a["phase"][p] if a["timed"] else None for p in PHASES]
+        ph = [a["phase"][p] for p in PHASES]
         con.execute(
-            "UPDATE turns SET ended_at_ms=?, wall_ms=?, idle_after_ms=?, active_ms=?, llm_ms=?, explore_ms=?,"
-            " edit_ms=?, run_ms=?, delegate_ms=?, owner_ms=?, other_ms=?, llm_calls=?, tool_calls=?, errors=?,"
-            " input_tokens=?, output_tokens=?, notional_cost_usd=?, last_stop_reason=? WHERE path=? AND turn_idx=?",
-            (end, (end - start) if (end is not None and start is not None) else None, idle, a["active"], *ph,
-             a["llm_calls"], a["tool_calls"], a["errors"], a["input"], a["output"], a["cost"], a["stop"],
-             path, t["turn_idx"]))
+            "UPDATE turns SET started_at_ms=?, ended_at_ms=?, wall_ms=?, idle_after_ms=?, timing_complete=?,"
+            " active_ms=?, llm_ms=?, explore_ms=?, edit_ms=?, run_ms=?, delegate_ms=?, owner_ms=?, other_ms=?,"
+            " llm_calls=?, tool_calls=?, errors=?, input_tokens=?, output_tokens=?, notional_cost_usd=?,"
+            " last_stop_reason=? WHERE path=? AND turn_idx=?",
+            (start, end, (end - start) if (end is not None and start is not None) else None, idle,
+             1 if a["complete"] else 0, a["active"], *ph, a["llm_calls"], a["tool_calls"], a["errors"],
+             a["input"], a["output"], a["cost"], a["stop"], path, t["turn_idx"]))
 
     whole = _agg(calls, nested_by_parent)
-    own_calls = [c for c in calls if c["kind"] in ("llm", "tool")]
     started = ses["started_at_ms"]
     ended = max([e for e in [ses["ended_at_ms"]] + whole["ends"] if e is not None], default=None)
     wall = (ended - started) if (ended is not None and started is not None) else None
-    iv_all = [(c["start_ms"], c["end_ms"]) for c in own_calls if c["start_ms"] is not None and c["end_ms"] is not None]
-    covered = union_ms(iv_all) if iv_all else None
+    covered = union_ms(whole["intervals"]) if whole["complete"] else None
     unaccounted = max(0, wall - covered) if (wall is not None and covered is not None) else None
-    ph = whole["phase"]
-    llm_ms = ph["llm"] if whole["timed"] else None
-    tool_ms = sum(ph[p] for p in PHASES if p not in ("llm", "owner")) if whole["timed"] else None
     cost_rows = con.execute(
         "SELECT kind, dup, SUM(cost_usd) cost, SUM(input_tokens) i, SUM(fresh_input_tokens) f,"
         " SUM(cache_read_tokens) cr, SUM(cache_write_tokens) cw, SUM(output_tokens) o FROM calls"
         " WHERE path=? AND kind IN ('llm','overhead') GROUP BY kind, dup", (path,)).fetchall()
-    own = next((r for r in cost_rows if r["kind"] == "llm" and r["dup"] == 0), None)
+    own_row = next((r for r in cost_rows if r["kind"] == "llm" and r["dup"] == 0), None)
     inherited = sum((r["cost"] or 0.0) for r in cost_rows if r["dup"] == 1)
     overhead = sum((r["cost"] or 0.0) for r in cost_rows if r["kind"] == "overhead" and r["dup"] == 0)
     models = sorted({c["model"] for c in calls if c["kind"] == "llm" and c["model"]})
 
     def val(key):
-        return (own[key] if own else 0) or 0
+        return (own_row[key] if own_row else 0) or 0
 
     con.execute(
-        "UPDATE sessions SET ended_at_ms=?, wall_ms=?, active_ms=?, llm_ms=?, tool_ms=?, owner_wait_ms=?,"
-        " unaccounted_ms=?, user_msgs=?, turns=?, llm_calls=?, tool_calls=?, nested_calls=?, llm_errors=?,"
-        " llm_aborts=?, tool_errors=?, input_tokens=?, fresh_input_tokens=?, cache_read_tokens=?,"
+        "UPDATE sessions SET ended_at_ms=?, wall_ms=?, timing_complete=?, active_ms=?, llm_ms=?, tool_ms=?,"
+        " owner_wait_ms=?, unaccounted_ms=?, user_msgs=?, turns=?, llm_calls=?, tool_calls=?, nested_calls=?,"
+        " llm_errors=?, llm_aborts=?, tool_errors=?, input_tokens=?, fresh_input_tokens=?, cache_read_tokens=?,"
         " cache_write_tokens=?, output_tokens=?, notional_cost_usd=?, overhead_cost_usd=?,"
         " inherited_cost_usd=?, models=? WHERE path=?",
-        (ended, wall, whole["active"], llm_ms, tool_ms, whole["owner"], unaccounted,
-         len(live), len(live), whole["llm_calls"], whole["tool_calls"],
+        (ended, wall, 1 if whole["complete"] else 0, whole["active"], whole["phase"]["llm"], whole["tool_ms"],
+         whole["owner"], unaccounted, len(live), len(live), whole["llm_calls"], whole["tool_calls"],
          sum(1 for c in calls if c["kind"] == "nested"),
          sum(1 for c in calls if c["kind"] == "llm" and c["status"] == "error"),
          sum(1 for c in calls if c["kind"] == "llm" and c["status"] == "aborted"),
@@ -770,7 +845,8 @@ def cmd_session(con, args):
     kind = s["kind"] + (f" (child {s['child_id']}, run {s['run_index']})" if s["kind"] == "child" else "")
     o = [f"session   {Path(p).name}", f"kind      {kind}", f"cwd       {s['cwd']}",
          f"started   {fmt_ts(s['started_at_ms'])}   wall {fmt_ms(s['wall_ms'])}",
-         f"timing    {s['timing_quality']}   ({s['calls_timed']} calls timed, {s['calls_untimed']} untimed)",
+         f"timing    {s['timing_quality']}, {'complete' if s['timing_complete'] else 'partial: totals with an untimed call are unknown'}"
+         f"   ({s['calls_timed']} calls timed, {s['calls_untimed']} untimed)",
          f"time      active {fmt_ms(s['active_ms'])} | llm {fmt_ms(s['llm_ms'])} (inclusive) | "
          f"tools {fmt_ms(s['tool_ms'])} (inclusive) | owner-wait {fmt_ms(s['owner_wait_ms'])} | "
          f"unaccounted {fmt_ms(s['unaccounted_ms'])}",
@@ -839,7 +915,19 @@ def cmd_events(con, args):
     return table([(r["kind"], r["n"], r["s"]) for r in rows], ["event", "count", "sessions"])
 
 
+_ALLOWED_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_RECURSIVE, sqlite3.SQLITE_FUNCTION}
+
+
+def _read_only_authorizer(action, *_):
+    return sqlite3.SQLITE_OK if action in _ALLOWED_ACTIONS else sqlite3.SQLITE_DENY
+
+
 def cmd_sql(con, args):
+    # mode=ro protects only the main file: ATTACH and VACUUM INTO can still create files, so the
+    # statement must be a plain SELECT/WITH and every operation is checked by an allow-list.
+    if not re.match(r"\s*(select|with)\b", args.query, re.IGNORECASE):
+        raise sqlite3.DatabaseError("only SELECT or WITH queries are allowed")
+    con.set_authorizer(_read_only_authorizer)
     cur = con.execute(args.query)
     rows = cur.fetchall()
     head = [d[0] for d in cur.description or []]
