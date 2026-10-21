@@ -56,7 +56,7 @@ def read_sends(audit_path, since, show_since=None):
                 entry = calls.setdefault(rec['call'], {'call': rec['call']})
                 entry['start' if rec.get('event') == 'start' else 'end'] = rec
                 entry['start_ts' if rec.get('event') == 'start' else 'end_ts'] = ts
-    sends, unhashed = [], 0
+    sends, unhashed = [], []
     for entry in calls.values():
         rec = entry.get('start') or entry.get('end')
         if 'start_ts' not in entry:  # start record lost to rotation: derive it from the end record
@@ -68,7 +68,7 @@ def read_sends(audit_path, since, show_since=None):
             continue
         if not rec.get('text_hash'):
             if show_since is None or entry['start_ts'] >= show_since:
-                unhashed += 1
+                unhashed.append(rec.get('targets', []))  # kept so --target can narrow this count too
             continue
         end = entry.get('end') or {}
         sends.append({'call': entry['call'], 'kind': kind, 'method': rec.get('method'), 'targets': rec.get('targets', []),
@@ -181,7 +181,7 @@ def main(argv=None):
     # Matching needs the calls just before the shown range: they may hold the landings that later calls would
     # otherwise take. Read back an extra margin; only the display is narrowed to --since/--hours.
     margin = args.window + 3600
-    sends, unhashed = read_sends(args.audit_log, since - margin, since)
+    sends, unhashed_targets = read_sends(args.audit_log, since - margin, since)
     candidates = [s for s in sends if s['kind'] != 'run']  # 'pane run' types into shells, which have no Pi session to land in
     landings = read_landings(args.sessions_dir, since - margin, key, {s['len'] for s in candidates if isinstance(s['len'], int)},
                              {s['hash'] for s in candidates}) if candidates else {}
@@ -190,6 +190,7 @@ def main(argv=None):
     judged = [j for j in judged if shown(j[0])]
     sends = [s for s in sends if shown(s)]
     candidates = [s for s in candidates if shown(s)]
+    unhashed = len([t for t in unhashed_targets if not args.target or args.target in t])
     counts = {}
     for _send, verdict, _lag in judged:
         counts[verdict] = counts.get(verdict, 0) + 1
