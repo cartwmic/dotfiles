@@ -431,12 +431,13 @@ class SendLedgerTests(StdioBridgeTests):
                  ['pane', 'run', 'w5:p5', 'echo', 'w9:p9'],                      # command line is never scanned
                  ['pane', 'send-text', 'w6:p6', '--pane=w9:p9'],                 # option-shaped message text
                  ['pane', 'rename', 'w7:p7', '--workspace', 'w9:p9'],            # option-shaped label
-                 ['pane', 'send-text', 'w8:p8', '--', '--pane=w9:p9']]           # after '--' it is literal text
+                 ['pane', 'send-text', 'w8:p8', '--', '--pane=w9:p9'],
+                 ['pane', 'send-text', None, 'w9:p9']]  # malformed argv must not shift text into a target slot           # after '--' it is literal text
         for argv in calls:
             self.call('herdr_cli', {'argv': argv})
         _path, recs = self.records()
         ends = [r for r in recs if r['event'] == 'end']
-        self.assertEqual([r['targets'] for r in ends], [['w1:p1'], ['w2:p2'], ['w3:p3'], [], [], ['w5:p5'], [], [], ['w8:p8']])
+        self.assertEqual([r['targets'] for r in ends], [['w1:p1'], ['w2:p2'], ['w3:p3'], [], [], ['w5:p5'], [], [], ['w8:p8'], []])
         self.assertNotIn('w9:p9', json.dumps(recs))
 
     def test_duration_counts_from_the_start_record_timestamp(self):
@@ -521,6 +522,27 @@ class SendReportTests(StdioBridgeTests):
         self.assertNotIn('PRIVATE', raw)
         self.assertNotIn('PRIVATE', json.dumps(out))
         self.assertEqual(self.report('--target', 'w3:p1', '--window', '1')['summary']['sends_checked'], 1)
+
+    def settled(self, *args):
+        deadline = time.time() + 6
+        counts = self.report(*args)['summary']['counts']
+        while counts.get('pending') and time.time() < deadline:
+            time.sleep(.3)
+            counts = self.report(*args)['summary']['counts']
+        return counts
+
+    def test_tab_messages_and_cloned_sessions(self):
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'A\tB'}})
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'A\tB'}})
+        entry = json.loads(self.user_entry('A    B'))  # Pi stores pasted tabs as four spaces
+        entry['id'] = 'e1'
+        line = json.dumps(entry) + '\n'
+        (self.sessions / 'orig.jsonl').write_text(line)
+        (self.sessions / 'clone.jsonl').write_text(line)  # /clone copies the entry with the same id
+        self.assertEqual(self.settled('--window', '1'), {'landed': 1, 'unmatched': 1})
+        entry['id'] = 'e2'
+        (self.sessions / 'clone.jsonl').write_text(json.dumps(entry) + '\n')  # a genuinely second message
+        self.assertEqual(self.settled('--window', '1'), {'landed': 2})
 
     def test_error_after_submission_is_still_checked_for_a_landing(self):
         mod = importlib.util.spec_from_file_location('rep2', SRC / 'herdr_send_report.py')

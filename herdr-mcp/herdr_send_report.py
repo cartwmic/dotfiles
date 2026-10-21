@@ -88,7 +88,7 @@ def message_text(message):
 
 def read_landings(sessions_dir, since, key, lengths, hashes):
     """{hash: [timestamps]} for user messages whose hash is one of the sent hashes."""
-    found = {}
+    found, seen_ids = {}, set()
     for dirpath, _dirs, files in os.walk(sessions_dir):
         for name in files:
             if not name.endswith('.jsonl'):
@@ -118,6 +118,11 @@ def read_landings(sessions_dir, since, key, lengths, hashes):
                         continue
                     digest = bridge.hash_text(text, key)
                     if digest in hashes:
+                        entry_id = entry.get('id')
+                        if isinstance(entry_id, str) and entry_id:
+                            if (digest, entry_id) in seen_ids:
+                                continue  # a /clone or fork copies entries with their ids: one delivery, one landing
+                            seen_ids.add((digest, entry_id))
                         found.setdefault(digest, []).append(ts)
     for stamps in found.values():
         stamps.sort()
