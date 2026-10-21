@@ -34,7 +34,7 @@ def kind_of(rec):
     return SEND_KINDS.get(rec.get('method'))
 
 
-def read_sends(audit_path, since):
+def read_sends(audit_path, since, show_since=None):
     """One dict per hashed send: start and end records joined on the call id."""
     calls = {}
     for path in sorted(glob.glob(audit_path + '.*'), reverse=True) + [audit_path]:
@@ -67,7 +67,8 @@ def read_sends(audit_path, since):
         if not kind:
             continue
         if not rec.get('text_hash'):
-            unhashed += 1
+            if show_since is None or entry['start_ts'] >= show_since:
+                unhashed += 1
             continue
         end = entry.get('end') or {}
         sends.append({'call': entry['call'], 'kind': kind, 'method': rec.get('method'), 'targets': rec.get('targets', []),
@@ -177,15 +178,18 @@ def main(argv=None):
         print('herdr-send-report: no text-hash key at %s; the bridge creates it on its first text send' % bridge.HASH_KEY_PATH,
               file=sys.stderr)
         return 2
-    sends, unhashed = read_sends(args.audit_log, since)
+    # Matching needs the calls just before the shown range: they may hold the landings that later calls would
+    # otherwise take. Read back an extra margin; only the display is narrowed to --since/--hours.
+    margin = args.window + 3600
+    sends, unhashed = read_sends(args.audit_log, since - margin, since)
     candidates = [s for s in sends if s['kind'] != 'run']  # 'pane run' types into shells, which have no Pi session to land in
-    landings = read_landings(args.sessions_dir, since, key, {s['len'] for s in candidates if isinstance(s['len'], int)},
+    landings = read_landings(args.sessions_dir, since - margin, key, {s['len'] for s in candidates if isinstance(s['len'], int)},
                              {s['hash'] for s in candidates}) if candidates else {}
     judged = match(candidates, landings, args.window, now)  # judge every send first: a filter must not free landings
-    if args.target:  # the filter only narrows what is shown
-        judged = [j for j in judged if args.target in j[0]['targets']]
-        sends = [s for s in sends if args.target in s['targets']]
-        candidates = [s for s in candidates if args.target in s['targets']]
+    shown = lambda s: s['start'] >= since and (not args.target or args.target in s['targets'])  # filters only narrow what is shown
+    judged = [j for j in judged if shown(j[0])]
+    sends = [s for s in sends if shown(s)]
+    candidates = [s for s in candidates if shown(s)]
     counts = {}
     for _send, verdict, _lag in judged:
         counts[verdict] = counts.get(verdict, 0) + 1
