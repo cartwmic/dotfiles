@@ -178,12 +178,14 @@ def main(argv=None):
               file=sys.stderr)
         return 2
     sends, unhashed = read_sends(args.audit_log, since)
-    if args.target:
-        sends = [s for s in sends if args.target in s['targets']]
     candidates = [s for s in sends if s['kind'] != 'run']  # 'pane run' types into shells, which have no Pi session to land in
     landings = read_landings(args.sessions_dir, since, key, {s['len'] for s in candidates if isinstance(s['len'], int)},
                              {s['hash'] for s in candidates}) if candidates else {}
-    judged = match(candidates, landings, args.window, now)
+    judged = match(candidates, landings, args.window, now)  # judge every send first: a filter must not free landings
+    if args.target:  # the filter only narrows what is shown
+        judged = [j for j in judged if args.target in j[0]['targets']]
+        sends = [s for s in sends if args.target in s['targets']]
+        candidates = [s for s in candidates if args.target in s['targets']]
     counts = {}
     for _send, verdict, _lag in judged:
         counts[verdict] = counts.get(verdict, 0) + 1
