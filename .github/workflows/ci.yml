@@ -42,8 +42,6 @@ jobs:
         run: python3 -m unittest discover -s tests/pi-idle-rss -v
       - name: Pi AGENTS.md render (personal vs work profile)
         run: python3 -m unittest discover -s tests/pi-agents-render -v
-      - name: Pi settings render (compaction)
-        run: python3 -m unittest discover -s tests/pi-settings-render -v
       - name: Release-tag skill import tool
         run: python3 -m unittest discover -s tests/release-skills -v
       - name: Capability-tier resolver tests

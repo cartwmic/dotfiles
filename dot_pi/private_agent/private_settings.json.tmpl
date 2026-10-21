@@ -4,6 +4,12 @@
   Pi's JSON writer. Without this, chezmoi sees drift every time pi runs. We
   preserve whatever's currently on disk and fall back to a sensible default
   on a fresh machine where the file doesn't exist yet.
+
+  Native auto-compaction stays OFF on purpose: the auto-compact extension owns when to compact (percent of the
+  model's window). reserveTokens still matters while native is off: Pi caps every compaction summary at
+  min(0.8 x reserveTokens, model max output). The 16384 default caps summaries at 13107 tokens; the iterative
+  summary grew to that cap and "Summarization failed: generation hit the token cap" killed the budget-steward
+  session's compactions. 100000 gives an 80000-token cap. It does not move any trigger while native is off.
 */ -}}
 {{- $version := "0.70.2" -}}
 {{- $theme := "dark" -}}
@@ -103,31 +109,10 @@
     "npm:@injaneity/pi-computer-use",
     "npm:@narumitw/pi-stamp"
   ],
-{{- /*
-  Personal: native auto-compaction at 40% of each model's window. Pi only takes an absolute reserve
-  (it compacts when context > window - reserveTokens), so each enabled model gets reserve = 60% of its window:
-  1M -> 600000 (compacts above 400000), 872K -> 523200 (above 348800), 272K -> 163200 (above 108800).
-  The ordinary reserve stays at Pi's default so a model without an override can never get a reserve larger
-  than its window. Add an override when you enable another model. Work profile is unchanged (disabled).
-*/ -}}
-{{- if eq .profile "personal" }}
   "compaction": {
-    "enabled": true,
-    "modelOverrides": {
-      "claude-compat/claude-sonnet-5-5": { "reserveTokens": 600000 },
-      "claude-compat/claude-opus-5-5": { "reserveTokens": 600000 },
-      "claude-compat/claude-haiku-5-5": { "reserveTokens": 600000 },
-      "openrouter/z-ai/glm-5.3-flash": { "reserveTokens": 600000 },
-      "openai-codex/gpt-6.1-sol": { "reserveTokens": 523200 },
-      "openai-codex/gpt-6-astra": { "reserveTokens": 523200 },
-      "openai-codex/gpt-6-luna": { "reserveTokens": 163200 }
-    }
+    "enabled": false,
+    "reserveTokens": 100000
   },
-{{- else }}
-  "compaction": {
-    "enabled": false
-  },
-{{- end }}
   "lastChangelogVersion": {{ $version | quote }},
   "theme": {{ $theme | quote }},
   "hideThinkingBlock": {{ $hideThinking }}
