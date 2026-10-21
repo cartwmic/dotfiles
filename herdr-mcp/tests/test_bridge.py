@@ -524,7 +524,7 @@ class SendReportTests(StdioBridgeTests):
         self.assertEqual(self.report('--target', 'w3:p1', '--window', '1')['summary']['sends_checked'], 1)
 
     def settled(self, *args):
-        deadline = time.time() + 6
+        deadline = time.time() + 10
         counts = self.report(*args)['summary']['counts']
         while counts.get('pending') and time.time() < deadline:
             time.sleep(.3)
@@ -540,6 +540,19 @@ class SendReportTests(StdioBridgeTests):
         late = self.report('--window', '1', '--target', 'w2:p1')
         self.assertEqual(late['summary']['sends_checked'], 1)
         self.assertEqual(late['summary']['counts'], {'unmatched': 1})  # w1:p1 took the landing, as unfiltered
+
+    def test_narrowing_the_time_range_does_not_change_verdicts(self):
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'same words'}})
+        time.sleep(1.1)
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w2:p1', 'text': 'same words'}})
+        (self.sessions / 'a.jsonl').write_text(self.user_entry('same words', offset=0.0) + '\n')  # one landing, two sends
+        full = self.settled('--window', '3')
+        self.assertEqual(full, {'landed': 1, 'unmatched': 1})
+        path = self.home / '.local' / 'state' / 'herdr-mcp' / 'audit.log'
+        second_start = [json.loads(l) for l in path.read_text().splitlines()][2]['ts']
+        narrow = self.report('--window', '3', '--since', second_start)
+        self.assertEqual(narrow['summary']['counts'], {'unmatched': 1})  # the earlier call still held the landing
+        self.assertEqual(narrow['summary']['sends_checked'], 1)
 
     def test_tab_messages_and_cloned_sessions(self):
         self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'A\tB'}})
