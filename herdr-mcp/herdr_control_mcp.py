@@ -8,7 +8,7 @@ writes remain unknown. herdr_cli reads its executable path and SHA-256 pin from
 ~/.config/herdr-mcp/config (written by `herdr-mcp-tunnel configure`). Every tool
 call writes metadata-only start/end records to ~/.local/state/herdr-mcp/audit.log.
 """
-import fcntl, hashlib, hmac, json, os, re, secrets, selectors, socket, subprocess, sys, time, uuid
+import fcntl, hashlib, hmac, json, os, re, secrets, selectors, socket, stat, subprocess, sys, time, uuid
 
 CONFIG_PATH = os.path.expanduser('~/.config/herdr-mcp/config')
 CLI_CWD = os.path.expanduser('~')
@@ -330,7 +330,10 @@ def audit_write(record):
 def audit_targets(name, args):
     """Only values shaped like Herdr ids (w1, w1:t2, w15:p2R); never free text."""
     if name == 'herdr_cli':
-        values = args.get('argv') if isinstance(args.get('argv'), list) else []
+        # Only the first positional word after the command is a target slot. Message text,
+        # option values and --session/--machine values are never scanned: they can be ID-shaped.
+        _root, _sub, rest = cli_command(args.get('argv') if isinstance(args.get('argv'), list) else [])
+        values = cli_positionals(rest)[:1]
     else:
         params = args.get('params') if name == 'herdr_request' else args
         params = params if isinstance(params, dict) else {}
@@ -399,7 +402,7 @@ def load_hash_key(create=False):
     """The per-install HMAC key (32 bytes), or None. Created atomically by the bridge only
     (create=True); the report never creates it. Never raises."""
     try:
-        fd = os.open(HASH_KEY_PATH, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(HASH_KEY_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)  # NONBLOCK: a FIFO must not hang a call
     except FileNotFoundError:
         fd = None
     except OSError:
@@ -421,10 +424,13 @@ def load_hash_key(create=False):
                 pass
             finally:
                 os.unlink(tmp)
-            fd = os.open(HASH_KEY_PATH, os.O_RDONLY | os.O_NOFOLLOW)
+            fd = os.open(HASH_KEY_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except OSError:
             return None
     try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077 or st.st_uid != os.geteuid():
+            return None  # only our own private regular file is a key; never modified here
         key = os.read(fd, 64)
     except OSError:
         return None

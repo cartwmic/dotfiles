@@ -321,6 +321,11 @@ class AuditTests(StdioBridgeTests):
         self.assertTrue(all(isinstance(r['duration_ms'], int) and r['duration_ms'] >= 0 for r in ends))
 
 
+def stat_is_fifo(path):
+    import stat as _stat
+    return _stat.S_ISFIFO(os.stat(str(path)).st_mode)
+
+
 class SendLedgerTests(StdioBridgeTests):
     """Text sends log an HMAC of the text and the real CLI subcommand, never the text."""
 
@@ -400,6 +405,39 @@ class SendLedgerTests(StdioBridgeTests):
         self.assertEqual(cc(['--version']), (None, None, []))
         self.assertEqual(cc(['bogus', 'list']), (None, None, []))
         self.assertEqual(bridge.cli_positionals(['--wait', '--until', 'idle', 'w1:p1', '--', '-dash text']), ['w1:p1', '-dash text'])
+
+
+    def test_id_shaped_message_and_option_values_never_reach_targets(self):
+        self.configure_herdr()
+        self.call('herdr_cli', {'argv': ['agent', 'prompt', 'w1:p1', 'w9:p9']})
+        self.call('herdr_cli', {'argv': ['--session', 'w7:p7', '--machine', 'w8', 'pane', 'send-text', 'w2:p2', 'w6:p6']})
+        self.call('herdr_cli', {'argv': ['agent', 'prompt', '--wait', '--until', 'idle', '--timeout', '5', 'w3:p3', 'w5:p5']})
+        _path, recs = self.records()
+        ends = [r for r in recs if r['event'] == 'end']
+        self.assertEqual([r['targets'] for r in ends], [['w1:p1'], ['w2:p2'], ['w3:p3']])
+        for r in recs:
+            for leaked in ('w9:p9', 'w7:p7', 'w8', 'w6:p6', 'w5:p5'):
+                self.assertNotIn(leaked, json.dumps(r))
+
+    def test_fifo_or_loose_key_is_ignored_without_blocking_or_changes(self):
+        self.configure_herdr()
+        state = self.home / '.local' / 'state' / 'herdr-mcp'
+        state.mkdir(parents=True, mode=0o700)
+        key = state / 'text-hash.key'
+        os.mkfifo(str(key))
+        t0 = time.time()
+        out = self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'hello'}})
+        self.assertLess(time.time() - t0, 5)
+        self.assertFalse(out.get('isError'))
+        self.assertTrue(stat_is_fifo(key))
+        key.unlink()
+        key.write_bytes(b'k' * 32)
+        os.chmod(key, 0o644)
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'hello'}})
+        self.assertEqual(key.stat().st_mode & 0o777, 0o644)  # never modified
+        self.assertEqual(key.read_bytes(), b'k' * 32)
+        _path, recs = self.records()
+        self.assertTrue(recs and all('text_hash' not in r for r in recs))
 
 
 class SendReportTests(StdioBridgeTests):
@@ -484,6 +522,42 @@ class SendReportTests(StdioBridgeTests):
         self.assertEqual(out['summary']['sends_without_hash'], 1)
         (self.home / '.local' / 'state' / 'herdr-mcp' / 'text-hash.key').unlink()
         self.report(expect=2)
+    def test_overlapping_calls_use_earliest_deadline_matching(self):
+        mod = importlib.util.spec_from_file_location('rep', SRC / 'herdr_send_report.py')
+        rep = importlib.util.module_from_spec(mod)
+        mod.loader.exec_module(rep)
+        a = {'call': 'A', 'hash': 'h', 'start': 100.0, 'end': 200.0, 'outcome': 'ok'}
+        b = {'call': 'B', 'hash': 'h', 'start': 110.0, 'end': 111.0, 'outcome': 'ok'}
+        res = rep.match([a, b], {'h': [115.0, 205.0]}, 10, 1000.0)
+        self.assertEqual([(s['call'], v) for s, v, _ in res], [('A', 'landed'), ('B', 'landed')])
+
+    def test_call_straddling_since_keeps_its_real_start(self):
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'straddle'}})
+        path = self.home / '.local' / 'state' / 'herdr-mcp' / 'audit.log'
+        recs = [json.loads(l) for l in path.read_text().splitlines()]
+        start, end = recs[0], recs[1]
+        # make the call look long: started 20 s before 'since', ended after it
+        base = time.time()
+        iso = lambda t: time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(t)) + '.000Z'
+        start['ts'], end['ts'], end['duration_ms'] = iso(base - 20), iso(base - 5), 15000
+        path.write_text(json.dumps(start) + '\n' + json.dumps(end) + '\n')
+        (self.sessions / 'a.jsonl').write_text(self.user_entry('straddle', offset=-12) + '\n')
+        since = iso(base - 10)
+        self.assertEqual(self.report('--since', since, '--window', '1')['summary']['sends_checked'], 0)  # started before since
+        # only the end record survives (start lost to rotation): the start is derived, not invented
+        path.write_text(json.dumps(end) + '\n')
+        self.assertEqual(self.report('--since', iso(base - 30), '--window', '1')['summary']['counts'], {'landed': 1})
+
+    def test_plain_python_run_creates_nothing(self):
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'x'}})
+        share = self.home / '.local' / 'share' / 'herdr-mcp'
+        mine = lambda: sorted(str(p) for p in self.home.rglob('*') if 'Library' not in p.parts)  # CLT python caches its own stdlib under ~/Library
+        before = mine()
+        subprocess.run(['/usr/bin/python3', str(self.report_path)], env={'HOME': str(self.home), 'PATH': '/usr/bin:/bin'},
+                       capture_output=True, text=True)
+        self.assertEqual(mine(), before)
+        self.assertFalse((share / '__pycache__').exists())
+
 
 
 class KnownMethodsTests(unittest.TestCase):
