@@ -330,10 +330,13 @@ def audit_write(record):
 def audit_targets(name, args):
     """Only values shaped like Herdr ids (w1, w1:t2, w15:p2R); never free text."""
     if name == 'herdr_cli':
-        # Only the first positional word after the command is a target slot. Message text,
-        # option values and --session/--machine values are never scanned: they can be ID-shaped.
-        _root, _sub, rest = cli_command(args.get('argv') if isinstance(args.get('argv'), list) else [])
-        values = cli_positionals(rest)[:1]
+        # Targets come only from named slots: the first positional of a command that has one, and
+        # target-naming options. Message text, other option values and --session/--machine values
+        # are never scanned (they can be ID-shaped), and an argv with an unknown option yields none.
+        root, sub, rest = cli_command(args.get('argv') if isinstance(args.get('argv'), list) else [])
+        pos, values, ok = cli_parse(root, sub, rest)
+        if ok and sub in CLI_TARGET_FIRST.get(root, ()):
+            values = pos[:1] + values
     else:
         params = args.get('params') if name == 'herdr_request' else args
         params = params if isinstance(params, dict) else {}
@@ -364,7 +367,28 @@ CLI_SUBS = {
 }
 # Native requests whose params.text is a message sent to a pane; the other send methods carry keys only.
 SEND_TEXT_METHODS = frozenset({'agent.prompt', 'pane.send_text', 'pane.send_input'})
-CLI_VALUE_OPTIONS = frozenset({'--until', '--timeout'})  # options of 'agent prompt' that take a value
+# Option arity from 'herdr <root> <sub> --help' (0.9.1). An option not listed here makes the argv
+# ambiguous: nothing is then taken from it as a target or as text (fail closed).
+CLI_VALUE_OPTIONS = frozenset({
+    '--agent', '--agent-session-id', '--agent-session-path', '--amount', '--applies-to-source', '--base', '--body',
+    '--branch', '--clear-token', '--cwd', '--direction', '--display-agent', '--entrypoint', '--env', '--file',
+    '--format', '--kind', '--label', '--limit', '--lines', '--match', '--message', '--output', '--pane', '--path',
+    '--placement', '--plugin', '--position', '--ratio', '--ref', '--regex', '--remote-session', '--right-click',
+    '--seq', '--session-start-source', '--sound', '--source', '--source-pane', '--split', '--state', '--state-label',
+    '--tab', '--tab-label', '--target-pane', '--timeout', '--title', '--token', '--ttl-ms', '--until', '--workspace'})
+CLI_FLAG_OPTIONS = frozenset({
+    '--ansi', '--clear', '--clear-display-agent', '--clear-state-labels', '--clear-title', '--current', '--disabled',
+    '--enabled', '--focus', '--force', '--json', '--new-tab', '--new-workspace', '--no-focus', '--off', '--on',
+    '--outdated-only', '--raw', '--takeover', '--toggle', '--trust-repository', '--verbose', '--wait', '--yes',
+    '-v', '-y', '--help', '-h'})
+# Value options that name a Herdr object, so an ID-shaped value is a target.
+CLI_TARGET_OPTIONS = frozenset({'--pane', '--workspace', '--tab', '--source-pane', '--target-pane'})
+# Commands whose first positional is a target (everything else: its first positional may be free text).
+CLI_TARGET_FIRST = {
+    'pane': {'get', 'layout', 'process-info', 'neighbor', 'edges', 'focus', 'resize', 'zoom', 'read', 'rename', 'input',
+             'split', 'swap', 'move', 'close', 'send-text', 'send-keys', 'wait-output', 'run'},
+    'agent': {'get', 'read', 'send-keys', 'prompt', 'rename', 'focus', 'wait', 'attach', 'explain'},
+    'tab': {'get', 'focus', 'rename', 'close'}, 'workspace': {'get', 'focus', 'rename', 'close'}}
 
 
 def cli_command(argv):
@@ -379,18 +403,33 @@ def cli_command(argv):
     return words[0], sub, words[2 if sub else 1:]
 
 
-def cli_positionals(rest):
-    out, i, literal = [], 0, False
+def cli_parse(root, sub, rest):
+    """Split the words after the command into (positionals, option_targets, ok).
+    ok is False when an option of unknown arity appears: the split is then unreliable, so
+    callers take nothing from it. 'pane run' ends option parsing at its first positional (the
+    rest is the command line)."""
+    pos, opt_targets, i, literal = [], [], 0, False
     while i < len(rest):
         a = rest[i]
-        if literal or not a.startswith('-'):
-            out.append(a)
+        if literal or not a.startswith('-') or a == '-':
+            pos.append(a)
+            if (root, sub) == ('pane', 'run') and len(pos) == 1:
+                pos.extend(rest[i + 1:])
+                break
         elif a == '--':
             literal = True
-        elif a in CLI_VALUE_OPTIONS:
-            i += 1
+        else:
+            name, eq, inline = a.partition('=') if a.startswith('--') else (a, '', '')
+            if name in CLI_VALUE_OPTIONS:
+                value = inline if eq else (rest[i + 1] if i + 1 < len(rest) else None)
+                if not eq:
+                    i += 1
+                if name in CLI_TARGET_OPTIONS and isinstance(value, str) and TARGET_ID.match(value):
+                    opt_targets.append(value)
+            elif name not in CLI_FLAG_OPTIONS or eq:
+                return [], [], False
         i += 1
-    return out
+    return pos, opt_targets, True
 
 
 def normalize_text(text):
@@ -455,8 +494,10 @@ def audit_send(name, args):
             root, sub, rest = cli_command(args.get('argv') if isinstance(args.get('argv'), list) else [])
             if sub:
                 extra['sub'] = sub
-            pos = cli_positionals(rest)
-            if (root, sub) in (('agent', 'prompt'), ('pane', 'send-text')) and len(pos) >= 2:
+            pos, _targets, parsed = cli_parse(root, sub, rest)
+            if not parsed:
+                pass  # ambiguous argv: no text taken, so no hash
+            elif (root, sub) in (('agent', 'prompt'), ('pane', 'send-text')) and len(pos) >= 2:
                 text = pos[1]
             elif (root, sub) == ('pane', 'run') and len(pos) >= 2:
                 text = ' '.join(pos[1:])
@@ -532,8 +573,9 @@ def audited_call(name, args, call_id):
             "targets": audit_targets(tool, safe_args), **audit_send(tool, safe_args)}
     if (isinstance(call_id, int) and not isinstance(call_id, bool)) or (isinstance(call_id, str) and CALL_ID.match(call_id)):
         base["mcp_id"] = call_id
-    audit_write({"ts": audit_now(), "event": "start", **base})
-    started = time.monotonic()
+    start_ts = audit_now()
+    started = time.monotonic()  # duration counts from the start record's timestamp, not from after its write
+    audit_write({"ts": start_ts, "event": "start", **base})
     try:
         result = dispatch(name, args)
         outcome, extra = audit_outcome(tool, result)
