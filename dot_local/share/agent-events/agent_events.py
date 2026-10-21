@@ -422,7 +422,7 @@ def _init_schema(con):
         old = None
         if con.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone():
             row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            old = row[0] if row else None
+            old = row[0] if row else "unversioned"  # meta exists but no version row: an interrupted init
         elif con.execute("SELECT 1 FROM sqlite_master WHERE type IN ('table','view') LIMIT 1").fetchone():
             old = "unversioned"
         if old is not None and old != str(SCHEMA_VERSION):
