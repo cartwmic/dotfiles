@@ -80,7 +80,7 @@ def herdr_responder(request):
     method, params = request['method'], request['params']
     if method == 'ping':
         return {'id': request['id'], 'result': {'version': '0.9.1', 'protocol': 22}}
-    if method in ('pane.read', 'pane.send_input'):
+    if method in ('pane.read', 'pane.send_input', 'agent.prompt', 'pane.send_text'):
         return {'id': request['id'], 'result': {'echo': params}}
     if method == 'agent.list':
         return {'id': request['id'], 'result': {'agents': [{'agent_session': {'value': '/private/store', 'kind': 'pi'}}]}}
@@ -288,7 +288,7 @@ class AuditTests(StdioBridgeTests):
         path, recs = self.records()
         text = path.read_text()
         for leaked in ('SECRET-PAYLOAD', 'rm -rf', 'free text', '/private/store', 'ARG<', 'ENV ', 'Hunter',
-                       'mysecretword', 'send-text', 'leaked', 'Passwd', 'bogus'):
+                       'mysecretword', 'leaked', 'Passwd', 'bogus'):
             self.assertNotIn(leaked, text)
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
@@ -296,8 +296,8 @@ class AuditTests(StdioBridgeTests):
         ends = [r for r in recs if r['event'] == 'end']
         self.assertEqual(len(starts), 10)
         self.assertEqual([r['call'] for r in starts], [r['call'] for r in ends])
-        allowed = {'ts', 'event', 'call', 'tool', 'method', 'targets', 'mcp_id', 'outcome', 'duration_ms',
-                   'exit_code', 'error_code', 'request_id', 'transport_error'}
+        allowed = {'ts', 'event', 'call', 'tool', 'method', 'sub', 'targets', 'text_hash', 'text_len', 'mcp_id', 'outcome',
+                   'duration_ms', 'exit_code', 'error_code', 'request_id', 'transport_error'}
         for r in recs:
             self.assertLessEqual(set(r), allowed, r)
             self.assertRegex(r['ts'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$')
@@ -319,6 +319,171 @@ class AuditTests(StdioBridgeTests):
         self.assertEqual(ends[4]['transport_error'], 'timeout')
         self.assertRegex(ends[4]['request_id'], r'^[0-9a-f-]{36}$')
         self.assertTrue(all(isinstance(r['duration_ms'], int) and r['duration_ms'] >= 0 for r in ends))
+
+
+class SendLedgerTests(StdioBridgeTests):
+    """Text sends log an HMAC of the text and the real CLI subcommand, never the text."""
+
+    def records(self):
+        path = self.home / '.local' / 'state' / 'herdr-mcp' / 'audit.log'
+        return path, [json.loads(l) for l in path.read_text().splitlines()]
+
+    def key(self):
+        return (self.home / '.local' / 'state' / 'herdr-mcp' / 'text-hash.key').read_bytes()
+
+    def expected(self, text):
+        import hmac
+        norm = text.replace('\r\n', '\n').strip()
+        return 'h1:' + hmac.new(self.key(), norm.encode(), hashlib.sha256).hexdigest()[:32]
+
+    def test_sends_record_hash_length_and_subcommand_only(self):
+        self.configure_herdr()
+        msg = 'PRIVATE-MESSAGE-7 please deploy ' + BACKTICK + 'x' + BACKTICK
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': msg}})
+        self.call('herdr_cli', {'argv': ['agent', 'prompt', '--wait', '--timeout', '5000', 'w1:p1', msg]})
+        self.call('herdr_cli', {'argv': ['--session', 'dev', 'pane', 'send-text', 'w1:p1', msg + '\r\n']})
+        self.call('herdr_request', {'method': 'pane.send_text', 'params': {'pane_id': 'w1:p1', 'text': msg}})
+        self.call('herdr_request', {'method': 'pane.send_input', 'params': {'pane_id': 'w1:p1', 'text': msg, 'keys': ['Enter']}})
+        self.call('herdr_cli', {'argv': ['pane', 'run', 'w1:p1', 'echo', 'hi']})
+        self.call('herdr_cli', {'argv': ['pane', 'send-keys', 'w1:p1', 'Enter']})
+        self.call('herdr_cli', {'argv': ['pane', 'bogus-sub', 'w1:p1', msg]})
+        self.call('herdr_request', {'method': 'pane.send_keys', 'params': {'pane_id': 'w1:p1', 'keys': ['h', 'i']}})
+        self.call('herdr_read', {'pane_id': 'w1:p1'})
+        path, recs = self.records()
+        self.assertNotIn('PRIVATE-MESSAGE', path.read_text())
+        self.assertNotIn('echo', path.read_text())
+        key = path.parent / 'text-hash.key'
+        self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(len(key.read_bytes()), 32)
+        ends = [r for r in recs if r['event'] == 'end']
+        starts = [r for r in recs if r['event'] == 'start']
+        h = self.expected(msg)
+        self.assertRegex(h, r'^h1:[0-9a-f]{32}\Z')
+        # start and end carry the same fields, so a call the bridge never finished is still hashed
+        for s, e in zip(starts, ends):
+            self.assertEqual({k: s.get(k) for k in ('sub', 'text_hash', 'text_len')}, {k: e.get(k) for k in ('sub', 'text_hash', 'text_len')})
+        got = [(r['method'], r.get('sub'), r.get('text_hash'), r.get('text_len')) for r in ends]
+        n = len(msg)
+        self.assertEqual(got, [
+            ('agent.prompt', None, h, n),
+            ('cli:agent', 'prompt', h, n),
+            ('cli:pane', 'send-text', h, n),          # --session prefix skipped, CRLF/whitespace normalized
+            ('pane.send_text', None, h, n),
+            ('pane.send_input', None, h, n),
+            ('cli:pane', 'run', self.expected('echo hi'), 7),
+            ('cli:pane', 'send-keys', None, None),   # keys are not message text
+            ('cli:pane', None, None, None),          # unknown subcommand word is never logged
+            ('pane.send_keys', None, None, None),
+            ('pane.read', None, None, None)])
+
+    def test_refused_send_is_still_hashed_and_blank_text_is_not(self):
+        self.call('herdr_cli', {'argv': ['agent', 'prompt', 'w1:p1', 'unconfigured']})  # herdr_cli not configured: rejected
+        self.call('herdr_request', {'method': 'pane.send_text', 'params': {'pane_id': 'w1:p1', 'text': '  \n '}})
+        _path, recs = self.records()
+        ends = [r for r in recs if r['event'] == 'end']
+        self.assertEqual((ends[0]['outcome'], ends[0]['text_hash'], ends[0]['sub']), ('rejected', self.expected('unconfigured'), 'prompt'))
+        self.assertNotIn('text_hash', ends[1])
+
+    def test_unwritable_key_never_blocks_the_send(self):
+        state = self.home / '.local' / 'state' / 'herdr-mcp'
+        state.mkdir(parents=True, mode=0o700)
+        (state / 'text-hash.key').symlink_to('/nonexistent-target')
+        out = self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'hello'}})
+        self.assertFalse(out.get('isError'))
+        _path, recs = self.records()
+        self.assertTrue(recs and all('text_hash' not in r for r in recs))
+
+    def test_cli_command_parsing(self):
+        cc = bridge.cli_command
+        self.assertEqual(cc(['--machine', 'm', '--session=s', 'agent', 'prompt', 'a', 'b']), ('agent', 'prompt', ['a', 'b']))
+        self.assertEqual(cc(['pane', 'nope', 'x']), ('pane', None, ['nope', 'x']))
+        self.assertEqual(cc(['--version']), (None, None, []))
+        self.assertEqual(cc(['bogus', 'list']), (None, None, []))
+        self.assertEqual(bridge.cli_positionals(['--wait', '--until', 'idle', 'w1:p1', '--', '-dash text']), ['w1:p1', '-dash text'])
+
+
+class SendReportTests(StdioBridgeTests):
+    """The report, run as installed (python -I -B), against a real bridge log and fake Pi sessions."""
+
+    def setUp(self):
+        super().setUp()
+        share = self.home / '.local' / 'share' / 'herdr-mcp'
+        shutil.copy(SRC / 'herdr_send_report.py', share / 'herdr_send_report.py')
+        self.report_path = share / 'herdr_send_report.py'
+        self.sessions = self.home / '.pi' / 'agent' / 'sessions' / '--proj--'
+        self.sessions.mkdir(parents=True)
+
+    def user_entry(self, content, offset=0.5):
+        ts = time.time() + offset
+        iso = time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(ts)) + '.000Z'
+        return json.dumps({'type': 'message', 'timestamp': iso,
+                           'message': {'role': 'user', 'content': content, 'timestamp': int(ts * 1000)}})
+
+    def run_report(self, *args):
+        return subprocess.run(['/usr/bin/python3', '-I', '-B', str(self.report_path), *args],
+                              env={'HOME': str(self.home), 'PATH': '/usr/bin:/bin'}, capture_output=True, text=True)
+
+    def report(self, *args, expect=0):
+        r = self.run_report('--json', *args)
+        self.assertEqual(r.returncode, expect, r.stderr)
+        return json.loads(r.stdout) if expect == 0 else r
+
+    def test_lists_only_sends_without_a_landing(self):
+        self.configure_herdr()
+        sent = {'landed': 'first PRIVATE-A', 'blocks': 'second PRIVATE-B\nline two', 'lost': 'third PRIVATE-C',
+                'dup': 'again PRIVATE-D'}
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': sent['landed']}})
+        self.call('herdr_request', {'method': 'pane.send_text', 'params': {'pane_id': 'w2:p1', 'text': sent['blocks'] + '\r\n'}})
+        self.call('herdr_cli', {'argv': ['agent', 'prompt', 'w3:p1', sent['lost']]})
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w4:p1', 'text': sent['dup']}})
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w4:p1', 'text': sent['dup']}})
+        self.call('herdr_cli', {'argv': ['pane', 'run', 'w5:p1', 'ls']})
+        self.call('herdr_read', {'pane_id': 'w1:p1'})
+        self.call('herdr_cli', {'argv': ['agent', 'prompt', 'w9:p9', 'never lands']})  # runs fine, but nothing lands
+        (self.sessions / 'a.jsonl').write_text('\n'.join([
+            self.user_entry(sent['landed']),
+            self.user_entry([{'type': 'text', 'text': sent['blocks']}]),
+            self.user_entry(sent['dup']),                       # one landing for two identical sends
+            self.user_entry('something else entirely'),
+            json.dumps({'type': 'message', 'timestamp': '2026-01-01T00:00:00.000Z',
+                        'message': {'role': 'assistant', 'content': sent['lost'], 'timestamp': 1}})]) + '\n')
+        out = self.report('--window', '1')
+        deadline = time.time() + 6
+        while out['summary']['counts'].get('pending') and time.time() < deadline:
+            time.sleep(.3)
+            out = self.report('--window', '1')
+        self.assertEqual(out['summary']['counts'], {'landed': 3, 'unmatched': 3})
+        self.assertEqual(out['summary']['shell_runs_not_checked'], 1)
+        self.assertEqual([(s['kind'], s['method'], s['targets']) for s in out['unmatched']],
+                         [('prompt', 'cli:agent', ['w3:p1']), ('prompt', 'agent.prompt', ['w4:p1']), ('prompt', 'cli:agent', ['w9:p9'])])
+        self.assertEqual(out['unmatched'][0]['len'], len(sent['lost']))
+        raw = self.run_report('--window', '1').stdout
+        self.assertIn('Unmatched sends', raw)
+        self.assertNotIn('PRIVATE', raw)
+        self.assertNotIn('PRIVATE', json.dumps(out))
+        self.assertEqual(self.report('--target', 'w3:p1', '--window', '1')['summary']['sends_checked'], 1)
+
+    def test_landing_outside_the_window_and_pending(self):
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'late message'}})
+        (self.sessions / 'a.jsonl').write_text(self.user_entry('late message', offset=60) + '\n')
+        self.assertEqual(self.report('--window', '0')['summary']['counts'], {'unmatched': 1})
+        self.assertEqual(self.report('--window', '600')['summary']['counts'], {'landed': 1})
+        (self.sessions / 'a.jsonl').write_text('')
+        self.assertEqual(self.report('--window', '600')['summary']['counts'], {'pending': 1})
+
+    def test_unhashed_sends_and_missing_key(self):
+        r = self.report(expect=2)  # no send yet: the bridge has not created the key
+        self.assertIn('no text-hash key', r.stderr)
+        self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'x' * 10}})
+        path = self.home / '.local' / 'state' / 'herdr-mcp' / 'audit.log'
+        old = {'ts': '2026-10-20T00:00:00.000Z', 'event': 'end', 'call': 'old1', 'tool': 'herdr_request', 'method': 'agent.prompt',
+               'targets': [], 'outcome': 'ok', 'duration_ms': 1}
+        with open(path, 'a') as handle:
+            handle.write(json.dumps(old) + '\n')
+        out = self.report('--since', '2026-10-19T00:00:00Z', '--window', '1')
+        self.assertEqual(out['summary']['sends_without_hash'], 1)
+        (self.home / '.local' / 'state' / 'herdr-mcp' / 'text-hash.key').unlink()
+        self.report(expect=2)
 
 
 class KnownMethodsTests(unittest.TestCase):
