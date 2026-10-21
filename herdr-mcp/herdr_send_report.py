@@ -13,6 +13,8 @@ Run: /usr/bin/python3 -I -B herdr_send_report.py [--hours N | --since ISO] [--wi
 """
 import argparse, datetime, glob, importlib.util, json, os, sys
 
+sys.dont_write_bytecode = True  # loading the bridge must not create __pycache__: the report writes nothing
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location('herdr_control_mcp', os.path.join(HERE, 'herdr_control_mcp.py'))
 bridge = importlib.util.module_from_spec(spec)
@@ -49,7 +51,7 @@ def read_sends(audit_path, since):
                     ts = parse_ts(rec['ts'])
                 except (ValueError, KeyError, TypeError):
                     continue
-                if ts < since or not rec.get('call'):
+                if not rec.get('call'):
                     continue
                 entry = calls.setdefault(rec['call'], {'call': rec['call']})
                 entry['start' if rec.get('event') == 'start' else 'end'] = rec
@@ -57,6 +59,10 @@ def read_sends(audit_path, since):
     sends, unhashed = [], 0
     for entry in calls.values():
         rec = entry.get('start') or entry.get('end')
+        if 'start_ts' not in entry:  # start record lost to rotation: derive it from the end record
+            entry['start_ts'] = entry['end_ts'] - (rec.get('duration_ms') or 0) / 1000.0
+        if entry['start_ts'] < since:  # a call is in range by its real start
+            continue
         kind = kind_of(rec)
         if not kind:
             continue
@@ -119,23 +125,27 @@ def read_landings(sessions_dir, since, key, lengths, hashes):
 
 
 def match(sends, landings, window, now):
-    """Each landing satisfies at most one send. A send is judged only after its window closed."""
-    result = []
+    """Each landing satisfies at most one send. A send is judged only after its window closed.
+    Assignment per hash: landings in time order, each to the eligible send with the earliest
+    deadline, which maximizes matches even when calls overlap with different durations."""
+    verdict = {}
+    by_hash = {}
     for send in sends:
         if send['outcome'] in ('not_sent', 'rejected', 'error'):
-            result.append((send, 'not_delivered', None))
-            continue
-        high = (send['end'] or send['start']) + window
-        pool = landings.get(send['hash'], [])
-        hit = next((t for t in pool if send['start'] - LEAD <= t <= high), None)
-        if hit is not None:
-            pool.remove(hit)
-            result.append((send, 'landed', hit - send['start']))
-        elif now < high:
-            result.append((send, 'pending', None))
+            verdict[send['call']] = ('not_delivered', None)
         else:
-            result.append((send, 'unmatched', None))
-    return result
+            by_hash.setdefault(send['hash'], []).append(send)
+    for digest, group in by_hash.items():
+        open_sends = list(group)
+        for t in sorted(landings.get(digest, [])):
+            eligible = [s for s in open_sends if s['start'] - LEAD <= t <= (s['end'] or s['start']) + window]
+            if eligible:
+                chosen = min(eligible, key=lambda s: ((s['end'] or s['start']), s['start']))
+                open_sends.remove(chosen)
+                verdict[chosen['call']] = ('landed', t - chosen['start'])
+        for s in open_sends:
+            verdict[s['call']] = ('pending', None) if now < (s['end'] or s['start']) + window else ('unmatched', None)
+    return [(s, *verdict[s['call']]) for s in sends]
 
 
 def iso(ts):
