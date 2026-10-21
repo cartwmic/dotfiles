@@ -25,18 +25,24 @@ database or any report.
 ## Use
 
 ```sh
-python3 ~/.local/share/agent-events/agent_events.py build            # first run: ~75 s for ~7.7k files
-python3 ~/.local/share/agent-events/agent_events.py build --since 7d # only recently changed files
-python3 ~/.local/share/agent-events/agent_events.py sessions --since 7d --sort cost
-python3 ~/.local/share/agent-events/agent_events.py session <path-fragment-or-session-id>
-python3 ~/.local/share/agent-events/agent_events.py tools --since 7d
-python3 ~/.local/share/agent-events/agent_events.py events --since 7d
-python3 ~/.local/share/agent-events/agent_events.py sql "SELECT ..."   # read-only
+agent-events build            # first run: ~75 s for ~7.7k files; later runs re-read only changed files (~5 s)
+agent-events build --since 7d # only look at recently modified files
+agent-events sessions --since 7d --sort cost
+agent-events session <path-fragment-or-session-id>
+agent-events tools --since 7d
+agent-events events --since 7d
+agent-events sql "SELECT ..."   # read-only
 ```
 
 Python 3.11 or newer, standard library only. A rebuild skips files whose size and
 mtime did not change; a changed file is parsed again in full. `--since` builds are
 partial and never delete rows for files they did not look at.
+
+Run it whenever you want fresh numbers: `agent-events build` is safe to repeat, incremental and cheap.
+Nothing runs on a schedule. `agent-events` is a small wrapper (`dot_local/bin`) around
+`agent_events.py`; it picks a Python 3.11+ (override with `AGENT_EVENTS_PYTHON`).
+A build that is interrupted marks the database dirty and the next build repairs it.
+`sql` accepts only `SELECT`/`WITH` queries under a read-only authorizer (no `ATTACH`, `VACUUM INTO`, `PRAGMA`).
 
 ## Tables
 
@@ -55,12 +61,18 @@ partial and never delete rows for files they did not look at.
 - **Cost is notional.** It is Pi's price-table figure for the tokens used, not money
   spent. Most traffic here is subscription-backed. Every report says so.
 - **Time is inclusive.** Phase times add each call's own duration, so parallel calls can
-  sum to more than wall time. `active_ms` is the union of LLM and tool intervals (parallel
+  sum to more than wall time. A `codemode` call reports each nested call's duration under its own
+  phase, unscaled; `other` is a lower bound on wrapper time no nested call accounts for.
+  `sessions.tool_ms` is the sum of top-level tool durations (owner questions excluded). `active_ms` is the union of LLM and tool intervals (parallel
   work counted once) and excludes owner-wait. `unaccounted_ms` is wall time with no call
   running: idle panes, waiting for you, gaps between steps.
 - **Owner wait** is the duration of `ask_user_question` / `notify_owner` tool calls. Idle time
   between prompts is separate (`idle_after_ms`).
 - **codemode** time is split by its nested calls; the part no nested call covers is `other`.
+- **Unknown stays unknown.** If any call in a turn or session has no recorded duration, the
+  totals it feeds (that phase, `active_ms`, `wall_ms` for a turn, `unaccounted_ms`) are NULL and
+  `timing_complete` is 0; a phase with no calls at all is a known zero.
+  On the author's history 13 of about 2,500 timed sessions are partial.
 - **Timing quality:** `stamped` sessions have exact intervals (from the pi-stamp extension),
   `duration` sessions have Pi's own `durationMs` (since 2026-10-09), and `none` sessions have
   no timing: their time columns are NULL and reports print `unknown`, never zero.
@@ -68,7 +80,11 @@ partial and never delete rows for files they did not look at.
 - `ttfc_ms` is time to first content block, not time to first token.
 - **No double counting.** An entry copied into another file (a fork, copied child
   history) is counted in the shallowest, earliest file only, keyed on entry id like
-  pi-token-usage. `inherited_cost_usd` shows what was left out.
+  pi-token-usage. `inherited_cost_usd` shows what was left out. A turn whose prompt was
+  copied from another file keeps the calls that are its own; only a turn with nothing of its own
+  left is blanked.
+- Statuses are a fixed vocabulary (`ok, error, aborted, timeout, unfinished, length, unknown`) and
+  tool/model/provider names that are not plain identifiers are stored as `unknown`.
 
 ## Known limits
 

@@ -400,6 +400,174 @@ class CliJourney(Base):
         self.assertEqual(self.build(since_ms=ae.parse_since("2d"))["sessions"], 1)
 
 
+class ReviewFixes(Base):
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, str(CLI), "--db", str(self.db), *args], capture_output=True, text=True)
+
+    def test_sql_subcommand_cannot_write_or_create_files(self):
+        standard_session().write(self.top())
+        self.build()
+        before = sorted(p.name for p in self.db.parent.iterdir())
+        for stmt in (f"ATTACH DATABASE '{self.db.parent}/attached.sqlite' AS aux",
+                     f"VACUUM INTO '{self.db.parent}/copy.sqlite'",
+                     "PRAGMA writable_schema=1", "DELETE FROM calls", "DROP TABLE calls",
+                     "SELECT 1; DELETE FROM calls", "SELECT load_extension('x')",
+                     "WITH x AS (SELECT 1) DELETE FROM calls"):
+            proc = self.run_cli("sql", stmt)
+            self.assertNotEqual(proc.returncode, 0, stmt)
+        self.assertEqual(sorted(p.name for p in self.db.parent.iterdir()), before)
+        self.assertEqual(self.q("SELECT COUNT(*) FROM calls WHERE kind='llm'")[0][0], 4)
+        ok = self.run_cli("sql", "SELECT COUNT(*) AS n FROM calls WHERE kind='llm'")
+        self.assertEqual(ok.stdout.split(), ["n", "4"])
+
+    def test_unrecognised_status_and_name_text_never_stored(self):
+        f = Fixture()
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, calls=["c"], model=f"model {SENTINEL}")
+        f.tool("c", f"tool {SENTINEL}", T + 2500, T + 4000, nested=[("bash", 100, "x")])
+        for e in f.entries:
+            msg = e.get("message") or {}
+            if msg.get("nestedCalls"):
+                msg["nestedCalls"]["calls"][0]["status"] = SENTINEL
+            if e.get("customType") == "pi-stamp" and e["data"].get("kind") == "tool":
+                e["data"]["outcome"] = SENTINEL
+        f.write(self.top())
+        self.build()
+        statuses = {r[0] for r in self.q("SELECT status FROM calls")}
+        self.assertLessEqual(statuses, {"ok", "error", "aborted", "timeout", "unfinished", "length", "unknown"})
+        con = sqlite3.connect(self.db)
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        con.close()
+        blob = b"".join(p.read_bytes() for p in self.db.parent.iterdir())
+        self.assertNotIn(SENTINEL.encode(), blob)
+        self.assertEqual(self.q("SELECT status FROM calls WHERE kind='nested'")[0][0], "unknown")
+        self.assertEqual(self.q("SELECT status FROM calls WHERE kind='tool'")[0][0], "ok")
+
+    def test_untimed_tool_makes_totals_unknown_not_zero(self):
+        f = Fixture(session_id="mix")
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, calls=["b"])
+        f.tool("b", "bash", T + 2500, T + 9000, stamp=False, duration=False)
+        f.llm(T + 9100, T + 9500, stop="stop")
+        f.write(self.top())
+        self.build()
+        s = self.q("SELECT * FROM sessions")[0]
+        self.assertEqual(s["timing_complete"], 0)
+        self.assertIsNone(s["tool_ms"])
+        self.assertIsNone(s["active_ms"])
+        self.assertIsNone(s["unaccounted_ms"])
+        self.assertEqual(s["llm_ms"], 1400)       # LLM calls were all timed
+        t = self.q("SELECT * FROM turns")[0]
+        self.assertIsNone(t["run_ms"])
+        self.assertIsNone(t["wall_ms"])
+        self.assertEqual(t["explore_ms"], 0)      # no explore calls at all: a known zero
+        self.assertEqual(t["timing_complete"], 0)
+        detail = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "session", "mix"],
+                                capture_output=True, text=True).stdout
+        self.assertIn("partial", detail)
+
+    def test_untimed_llm_turn_has_unknown_wall_time(self):
+        f = Fixture(session_id="u")
+        f.user(T + 1000)
+        f.llm(T + 1500, None, stamp=False, stop="stop")
+        f.write(self.top())
+        self.build()
+        t = self.q("SELECT * FROM turns")[0]
+        self.assertIsNone(t["wall_ms"])
+        self.assertIsNone(t["llm_ms"])
+        self.assertIsNone(t["idle_after_ms"])
+
+    def test_parallel_codemode_nested_durations_stay_inclusive(self):
+        f = Fixture(session_id="par")
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, calls=["w"])
+        f.tool("w", "codemode", T + 2500, T + 8500, nested=[("bash", 6000, "a"), ("read", 6000, "b")])
+        f.write(self.top())
+        self.build()
+        t = self.q("SELECT * FROM turns")[0]
+        self.assertEqual((t["run_ms"], t["explore_ms"], t["other_ms"]), (6000, 6000, 0))
+        self.assertEqual(self.q("SELECT tool_ms FROM sessions")[0][0], 6000)  # wrapper time, not the phase sum
+
+    def test_interrupted_finalize_is_repaired_by_next_build(self):
+        from unittest import mock
+        standard_session().write(self.top())
+        with mock.patch.object(ae, "finalize", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                self.build()
+        res = self.build()
+        self.assertEqual((res["parsed"], res["unchanged"]), (0, 1))
+        self.assertTrue(res["refinalized"])
+        s = self.q("SELECT * FROM sessions")[0]
+        self.assertEqual(s["wall_ms"], 201500)
+        self.assertAlmostEqual(s["notional_cost_usd"], 0.18)
+        again = self.build()
+        self.assertFalse(again["refinalized"])
+
+    def test_fork_turn_keeps_its_own_work_when_the_prompt_was_copied(self):
+        o = Fixture(session_id="orig")
+        o.user(T + 1000)
+        o.llm(T + 1500, T + 2500, cost=1.0, stop="stop", eid="o-llm")
+        o.write(self.top("--work-proj--/2026-10-02T00-00-00-000Z_orig.jsonl"))
+        b = Fixture(session_id="fork", start=T + 10_000)
+        b.entries.append(dict(o.entries[1]))  # copied prompt, no new user message afterwards
+        b.llm(T + 20_000, T + 21_000, cost=0.5, stop="stop", eid="f-llm")
+        b.write(self.top("--work-proj--/2026-10-03T00-00-00-000Z_fork.jsonl"))
+        self.build()
+        s = self.q("SELECT * FROM sessions WHERE session_id='fork'")[0]
+        t = self.q("SELECT * FROM turns WHERE path LIKE '%fork.jsonl'")[0]
+        self.assertEqual(s["turns"], 1)
+        self.assertEqual((t["llm_calls"], t["wall_ms"]), (1, 1000))
+        self.assertAlmostEqual(t["notional_cost_usd"], s["notional_cost_usd"])
+        self.assertAlmostEqual(s["notional_cost_usd"], 0.5)
+
+    def test_incremental_build_matches_a_fresh_build_when_ownership_moves(self):
+        o = Fixture(session_id="orig")
+        o.user(T + 1000)
+        o.llm(T + 1500, T + 2500, cost=2.0, stop="stop", eid="shared-llm")
+        b = Fixture(session_id="fork", start=T + 10_000)
+        b.entries.append(dict(o.entries[1]))
+        b.entries.append(dict(o.entries[2]))
+        b.user(T + 20_000)
+        b.llm(T + 20_500, T + 21_500, cost=0.5, stop="stop", eid="fork-new")
+        b.write(self.top("--work-proj--/2026-10-02T00-00-00-000Z_fork.jsonl"))
+        self.build()   # only the fork exists: it owns the shared entries
+        self.assertAlmostEqual(self.q("SELECT notional_cost_usd FROM sessions")[0][0], 2.5)
+        o.write(self.top("--work-proj--/2026-10-01T00-00-00-000Z_orig.jsonl"))
+        self.build()   # the fork file is unchanged, but ownership moves to the earlier file
+        incremental = self.q("SELECT session_id, notional_cost_usd, inherited_cost_usd, turns, wall_ms FROM sessions ORDER BY session_id")
+        fork = [r for r in incremental if r["session_id"] == "fork"][0]
+        self.assertAlmostEqual(fork["notional_cost_usd"], 0.5)
+        self.assertAlmostEqual(fork["inherited_cost_usd"], 2.0)
+        fresh = Path(self._tmp.name) / "fresh.sqlite"
+        ae.build(self.root, fresh)
+        con = sqlite3.connect(fresh)
+        con.row_factory = sqlite3.Row
+        expected = [tuple(r) for r in con.execute("SELECT session_id, notional_cost_usd, inherited_cost_usd, turns, wall_ms FROM sessions ORDER BY session_id")]
+        con.close()
+        self.assertEqual([tuple(r) for r in incremental], expected)
+
+    def test_schema_version_change_discards_derived_data(self):
+        standard_session().write(self.top())
+        self.build()
+        con = sqlite3.connect(self.db)
+        con.execute("UPDATE meta SET value='0' WHERE key='schema_version'")
+        con.commit()
+        con.close()
+        res = self.build()
+        self.assertEqual((res["parsed"], res["unchanged"]), (1, 0))
+
+    def test_wrapper_runs_the_cli(self):
+        wrapper = HERE.parents[1] / "bin" / "executable_agent-events"
+        if not wrapper.exists():
+            self.skipTest("wrapper not present")
+        standard_session().write(self.top())
+        env = {**os.environ, "AGENT_EVENTS_IMPLEMENTATION": str(CLI)}
+        proc = subprocess.run(["sh", str(wrapper), "--db", str(self.db), "build", "--sessions-dir", str(self.root)],
+                              capture_output=True, text=True, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("1 sessions", proc.stdout)
+
+
 class Helpers(unittest.TestCase):
     def test_union_and_phases(self):
         self.assertEqual(ae.union_ms([(0, 10), (5, 20), (30, 40)]), 30)
