@@ -428,12 +428,15 @@ class SendLedgerTests(StdioBridgeTests):
                  ['agent', 'start', 'reviewer', '--kind', 'pi', '--pane', 'w3:p3'],  # target in a named option
                  ['pane', 'read', '--mystery', 'w9:p9', 'w4:p4'],                # unknown option: fail closed
                  ['notification', 'show', 'w9:p9'],                              # first positional is free text here
-                 ['pane', 'run', 'w5:p5', 'echo', 'w9:p9']]                      # command line is never scanned
+                 ['pane', 'run', 'w5:p5', 'echo', 'w9:p9'],                      # command line is never scanned
+                 ['pane', 'send-text', 'w6:p6', '--pane=w9:p9'],                 # option-shaped message text
+                 ['pane', 'rename', 'w7:p7', '--workspace', 'w9:p9'],            # option-shaped label
+                 ['pane', 'send-text', 'w8:p8', '--', '--pane=w9:p9']]           # after '--' it is literal text
         for argv in calls:
             self.call('herdr_cli', {'argv': argv})
         _path, recs = self.records()
         ends = [r for r in recs if r['event'] == 'end']
-        self.assertEqual([r['targets'] for r in ends], [['w1:p1'], ['w2:p2'], ['w3:p3'], [], [], ['w5:p5']])
+        self.assertEqual([r['targets'] for r in ends], [['w1:p1'], ['w2:p2'], ['w3:p3'], [], [], ['w5:p5'], [], [], ['w8:p8']])
         self.assertNotIn('w9:p9', json.dumps(recs))
 
     def test_duration_counts_from_the_start_record_timestamp(self):
@@ -518,6 +521,16 @@ class SendReportTests(StdioBridgeTests):
         self.assertNotIn('PRIVATE', raw)
         self.assertNotIn('PRIVATE', json.dumps(out))
         self.assertEqual(self.report('--target', 'w3:p1', '--window', '1')['summary']['sends_checked'], 1)
+
+    def test_error_after_submission_is_still_checked_for_a_landing(self):
+        mod = importlib.util.spec_from_file_location('rep2', SRC / 'herdr_send_report.py')
+        rep = importlib.util.module_from_spec(mod)
+        mod.loader.exec_module(rep)
+        sends = [{'call': c, 'hash': h, 'start': 100.0, 'end': 101.0, 'outcome': o}
+                 for c, h, o in (('E1', 'a', 'error'), ('E2', 'b', 'error'), ('R', 'c', 'rejected'), ('N', 'd', 'not_sent'))]
+        res = rep.match(sends, {'a': [102.0]}, 10, 1000.0)
+        self.assertEqual([(s['call'], v) for s, v, _ in res],
+                         [('E1', 'landed'), ('E2', 'unmatched'), ('R', 'not_delivered'), ('N', 'not_delivered')])
 
     def test_landing_outside_the_window_and_pending(self):
         self.call('herdr_request', {'method': 'agent.prompt', 'params': {'target': 'w1:p1', 'text': 'late message'}})

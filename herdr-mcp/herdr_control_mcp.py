@@ -367,20 +367,58 @@ CLI_SUBS = {
 }
 # Native requests whose params.text is a message sent to a pane; the other send methods carry keys only.
 SEND_TEXT_METHODS = frozenset({'agent.prompt', 'pane.send_text', 'pane.send_input'})
-# Option arity from 'herdr <root> <sub> --help' (0.9.1). An option not listed here makes the argv
-# ambiguous: nothing is then taken from it as a target or as text (fail closed).
-CLI_VALUE_OPTIONS = frozenset({
-    '--agent', '--agent-session-id', '--agent-session-path', '--amount', '--applies-to-source', '--base', '--body',
-    '--branch', '--clear-token', '--cwd', '--direction', '--display-agent', '--entrypoint', '--env', '--file',
-    '--format', '--kind', '--label', '--limit', '--lines', '--match', '--message', '--output', '--pane', '--path',
-    '--placement', '--plugin', '--position', '--ratio', '--ref', '--regex', '--remote-session', '--right-click',
-    '--seq', '--session-start-source', '--sound', '--source', '--source-pane', '--split', '--state', '--state-label',
-    '--tab', '--tab-label', '--target-pane', '--timeout', '--title', '--token', '--ttl-ms', '--until', '--workspace'})
-CLI_FLAG_OPTIONS = frozenset({
-    '--ansi', '--clear', '--clear-display-agent', '--clear-state-labels', '--clear-title', '--current', '--disabled',
-    '--enabled', '--focus', '--force', '--json', '--new-tab', '--new-workspace', '--no-focus', '--off', '--on',
-    '--outdated-only', '--raw', '--takeover', '--toggle', '--trust-repository', '--verbose', '--wait', '--yes',
-    '-v', '-y', '--help', '-h'})
+# Option arity per command. An option that is not one of THIS command's options (or an argv with no
+# recognized command) makes the argv ambiguous: nothing is taken from it as a target or as text
+# (fail closed). Option-shaped message text such as '--pane=w9:p9' therefore cannot leak.
+CLI_OPTIONS = {  # (root, sub) -> (value options, flag options); from 'herdr <root> <sub> --help' (0.9.1)
+    ('agent', 'attach'): (frozenset([]), frozenset(['--takeover'])),
+    ('agent', 'explain'): (frozenset(['--agent','--file','--format']), frozenset(['--json','--verbose','-v'])),
+    ('agent', 'prompt'): (frozenset(['--timeout','--until']), frozenset(['--wait'])),
+    ('agent', 'read'): (frozenset(['--format','--lines','--source']), frozenset(['--ansi'])),
+    ('agent', 'rename'): (frozenset([]), frozenset(['--clear'])),
+    ('agent', 'start'): (frozenset(['--kind','--pane','--timeout']), frozenset([])),
+    ('agent', 'wait'): (frozenset(['--timeout','--until']), frozenset([])),
+    ('api', 'schema'): (frozenset(['--output']), frozenset(['--json'])),
+    ('integration', 'status'): (frozenset([]), frozenset(['--outdated-only'])),
+    ('machine', 'add'): (frozenset(['--label','--remote-session']), frozenset([])),
+    ('machine', 'list'): (frozenset([]), frozenset(['--json'])),
+    ('machine', 'rename'): (frozenset(['--label']), frozenset([])),
+    ('notification', 'show'): (frozenset(['--body','--position','--sound']), frozenset([])),
+    ('pane', 'current'): (frozenset(['--pane']), frozenset(['--current'])),
+    ('pane', 'edges'): (frozenset(['--pane']), frozenset(['--current'])),
+    ('pane', 'focus'): (frozenset(['--direction','--pane']), frozenset(['--current'])),
+    ('pane', 'input'): (frozenset(['--pane','--right-click']), frozenset(['--current'])),
+    ('pane', 'layout'): (frozenset(['--pane']), frozenset(['--current'])),
+    ('pane', 'list'): (frozenset(['--workspace']), frozenset([])),
+    ('pane', 'move'): (frozenset(['--label','--ratio','--split','--tab','--tab-label','--target-pane','--workspace']), frozenset(['--focus','--new-tab','--new-workspace','--no-focus'])),
+    ('pane', 'neighbor'): (frozenset(['--direction','--pane']), frozenset(['--current'])),
+    ('pane', 'process-info'): (frozenset(['--pane']), frozenset(['--current'])),
+    ('pane', 'read'): (frozenset(['--format','--lines','--source']), frozenset(['--ansi','--raw'])),
+    ('pane', 'release-agent'): (frozenset(['--agent','--seq','--source']), frozenset([])),
+    ('pane', 'rename'): (frozenset([]), frozenset(['--clear'])),
+    ('pane', 'report-agent'): (frozenset(['--agent','--agent-session-id','--agent-session-path','--message','--seq','--source','--state']), frozenset([])),
+    ('pane', 'report-agent-session'): (frozenset(['--agent','--agent-session-id','--agent-session-path','--seq','--session-start-source','--source']), frozenset([])),
+    ('pane', 'report-metadata'): (frozenset(['--agent','--applies-to-source','--clear-token','--display-agent','--seq','--source','--state-label','--title','--token','--ttl-ms']), frozenset(['--clear-display-agent','--clear-state-labels','--clear-title'])),
+    ('pane', 'resize'): (frozenset(['--amount','--direction','--pane']), frozenset(['--current'])),
+    ('pane', 'split'): (frozenset(['--cwd','--direction','--env','--pane','--ratio','--right-click']), frozenset(['--current','--focus','--no-focus'])),
+    ('pane', 'swap'): (frozenset(['--direction','--pane','--source-pane','--target-pane']), frozenset(['--current'])),
+    ('pane', 'wait-output'): (frozenset(['--lines','--match','--regex','--source','--timeout']), frozenset(['--raw'])),
+    ('pane', 'zoom'): (frozenset(['--pane']), frozenset(['--current','--off','--on','--toggle'])),
+    ('plugin', 'install'): (frozenset(['--ref']), frozenset(['--yes','-y'])),
+    ('plugin', 'link'): (frozenset([]), frozenset(['--disabled','--enabled'])),
+    ('plugin', 'list'): (frozenset(['--plugin']), frozenset(['--json'])),
+    ('session', 'delete'): (frozenset([]), frozenset(['--json'])),
+    ('session', 'list'): (frozenset([]), frozenset(['--json'])),
+    ('session', 'stop'): (frozenset([]), frozenset(['--json'])),
+    ('tab', 'create'): (frozenset(['--cwd','--env','--label','--workspace']), frozenset(['--focus','--no-focus'])),
+    ('tab', 'list'): (frozenset(['--workspace']), frozenset([])),
+    ('workspace', 'create'): (frozenset(['--cwd','--env','--label']), frozenset(['--focus','--no-focus'])),
+    ('workspace', 'report-metadata'): (frozenset(['--clear-token','--seq','--source','--token','--ttl-ms']), frozenset([])),
+    ('worktree', 'create'): (frozenset(['--base','--branch','--cwd','--label','--path','--workspace']), frozenset(['--focus','--no-focus','--trust-repository'])),
+    ('worktree', 'list'): (frozenset(['--cwd','--workspace']), frozenset(['--trust-repository'])),
+    ('worktree', 'open'): (frozenset(['--branch','--cwd','--label','--path','--workspace']), frozenset(['--focus','--no-focus','--trust-repository'])),
+    ('worktree', 'remove'): (frozenset(['--workspace']), frozenset(['--force','--trust-repository'])),
+}
 # Value options that name a Herdr object, so an ID-shaped value is a target.
 CLI_TARGET_OPTIONS = frozenset({'--pane', '--workspace', '--tab', '--source-pane', '--target-pane'})
 # Commands whose first positional is a target (everything else: its first positional may be free text).
@@ -408,6 +446,9 @@ def cli_parse(root, sub, rest):
     ok is False when an option of unknown arity appears: the split is then unreliable, so
     callers take nothing from it. 'pane run' ends option parsing at its first positional (the
     rest is the command line)."""
+    values_ok, flags_ok = CLI_OPTIONS.get((root, sub), (frozenset(), frozenset()))
+    if sub is None:
+        return [], [], False
     pos, opt_targets, i, literal = [], [], 0, False
     while i < len(rest):
         a = rest[i]
@@ -420,13 +461,15 @@ def cli_parse(root, sub, rest):
             literal = True
         else:
             name, eq, inline = a.partition('=') if a.startswith('--') else (a, '', '')
-            if name in CLI_VALUE_OPTIONS:
+            if name in ('--help', '-h') and not eq:
+                pass
+            elif name in values_ok:
                 value = inline if eq else (rest[i + 1] if i + 1 < len(rest) else None)
                 if not eq:
                     i += 1
                 if name in CLI_TARGET_OPTIONS and isinstance(value, str) and TARGET_ID.match(value):
                     opt_targets.append(value)
-            elif name not in CLI_FLAG_OPTIONS or eq:
+            elif name not in flags_ok or eq:
                 return [], [], False
         i += 1
     return pos, opt_targets, True

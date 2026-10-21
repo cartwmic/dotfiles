@@ -116,7 +116,7 @@ grep -E 'class=(codex|shell)|to=' ~/.local/state/herdr-mcp/children.log
 /usr/bin/python3 -I -B ~/.local/share/herdr-mcp/herdr_send_report.py [--hours 24 | --since 2026-10-20T00:00:00Z] [--window 300] [--target w1:p2] [--json]
 ```
 
-For each text send in the audit log it looks for a Pi user message with the same `text_hash` in `~/.pi/agent/sessions` between the start of the call and the end of the call plus `--window` seconds (default 300). A landing satisfies one send, so two identical sends need two landings. Each send is `landed`, `pending` (window still open), `unmatched`, or `not_delivered` (the bridge itself rejected it or got an error). Only `unmatched` sends are listed, with time, call id prefix, kind, method, targets, length and hash prefix.
+For each text send in the audit log it looks for a Pi user message with the same `text_hash` in `~/.pi/agent/sessions` between the start of the call and the end of the call plus `--window` seconds (default 300). A landing satisfies one send, so two identical sends need two landings. Each send is `landed`, `pending` (window still open), `unmatched`, or `not_delivered` (the bridge rejected it or never sent it; a call that errored after submission, such as a stalled or timed-out wait, is still checked for a landing). Only `unmatched` sends are listed, with time, call id prefix, kind, method, targets, length and hash prefix.
 
 It is read-only. It reads the audit log, the hash key and Pi session files (it hashes their user messages in memory), creates nothing, and prints no message text. It exits 2 if the key does not exist yet.
 
