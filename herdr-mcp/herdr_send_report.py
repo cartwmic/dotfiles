@@ -131,7 +131,7 @@ def match(sends, landings, window, now):
     verdict = {}
     by_hash = {}
     for send in sends:
-        if send['outcome'] in ('not_sent', 'rejected', 'error'):
+        if send['outcome'] in ('not_sent', 'rejected'):  # definitive: nothing was submitted. 'error' may follow a submission (stalled/timeout waits)
             verdict[send['call']] = ('not_delivered', None)
         else:
             by_hash.setdefault(send['hash'], []).append(send)
