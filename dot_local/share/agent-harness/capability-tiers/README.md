@@ -30,7 +30,7 @@ Tests live in `tests/capability-tiers` and are source-only.
   the roles that should get different models from each other.
 - The personal example matches the owner's decisions: low = Haiku 5.5 xhigh, then Luna max; medium = Sonnet 5.5
   high, then Sol medium; high = **Opus 5.5 medium first**, then Sol xhigh, then Astra high. The work profile is a
-  placeholder (Anthropic only) to replace before relying on it.
+  TODO placeholder (Anthropic only); the owner will fill in the work tiers later, so do not rely on it.
 
 ## Resolution
 

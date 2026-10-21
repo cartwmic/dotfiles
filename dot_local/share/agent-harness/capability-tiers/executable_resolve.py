@@ -91,6 +91,8 @@ def pool_status(pool, quota, now, stale_after, near, forced):
         reset = iso_to_epoch(w["resetAt"]) if w.get("resetAt") else None
         windows.append({"label": w.get("label"), "used_percent": w.get("usedPercent"), "reset_at": w.get("resetAt"), "_reset": reset})
     base = {"pool": pool, "age_seconds": age, "windows": [{k: v for k, v in w.items() if k != "_reset"} for w in windows]}
+    if not windows:
+        return {**base, "status": "unknown", "reason": "quota entry has no usage windows", "reset_at": None}
     if age > stale_after:
         return {**base, "status": "unknown", "reason": f"quota data is stale ({age}s old, limit {stale_after}s)", "reset_at": None}
     live = [w for w in windows if w["_reset"] is None or w["_reset"] > now]

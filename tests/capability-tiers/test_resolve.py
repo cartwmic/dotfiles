@@ -245,11 +245,28 @@ class ResolverTests(unittest.TestCase):
         self.assertIn(SONNET + "@high", result.stdout)
 
     def test_the_resolver_writes_nothing(self):
-        before = sorted(p.name for p in self.dir.iterdir())
-        self.run_resolver(healthy(), "--slot", "driver")
-        after = sorted(p.name for p in self.dir.iterdir())
-        self.assertEqual(before, after)  # quota.json is written by the test helper, so it is in both lists
-        self.assertFalse(any(p.suffix == ".pyc" for p in DIR.rglob("*")))
+        def snapshot(root):
+            return {str(p.relative_to(root)): (p.read_bytes(), p.stat().st_mtime_ns) for p in sorted(root.rglob("*")) if p.is_file()}
+        qpath = self.dir / "quota.json"
+        qpath.write_text(json.dumps(healthy()))
+        before_tmp, before_src = snapshot(self.dir), snapshot(DIR)
+        for extra in ([], ["--json"], ["--exhausted", "anthropic"]):
+            subprocess.run([sys.executable, str(RESOLVER), "--registry", str(self.registry), "--quota", str(qpath), "--now", NOW.isoformat(),
+                            "--slot", "driver", "--slot", "ordinary-reviewer", *extra], capture_output=True, text=True, timeout=60,
+                           env={"PYTHONDONTWRITEBYTECODE": "1", "PATH": "/usr/bin:/bin"})
+        self.assertEqual(snapshot(self.dir), before_tmp)
+        self.assertEqual(snapshot(DIR), before_src)
+        self.assertEqual([p for p in DIR.rglob("*") if p.suffix == ".pyc" or p.name == "__pycache__"], [])
+
+    def test_a_fresh_entry_with_no_windows_is_unknown_not_ok(self):
+        quota = healthy()
+        quota["anthropic"] = pool()
+        code, plan, _ = self.run_resolver(quota, "--slot", "driver")
+        self.assertEqual(code, 0)
+        status = {p["pool"]: p for p in plan["quota"]}["anthropic"]
+        self.assertEqual(status["status"], "unknown")
+        self.assertEqual(plan["assignments"][0]["model"], SONNET)
+        self.assertTrue(any("anthropic" in w for w in plan["warnings"]))
 
     def test_text_output_shows_fallback_and_same_model_review(self):
         quota = healthy()
