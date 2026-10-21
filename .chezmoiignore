@@ -11,6 +11,9 @@
 .local/share/herdr-overview/tests/**
 .local/share/agent-alert/tests/**
 .local/share/passage-review/test_passage_review.py
+.local/share/agent-events/test_agent_events.py
+.local/share/agent-events/__pycache__
+.local/share/agent-events/__pycache__/**
 .pi/agent/extensions/herdr-overview/index.test.ts
 .pi/agent/extensions/recap/automation-fixture.ts
 .pi/agent/extensions/recap/automation-pty.py
