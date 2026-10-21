@@ -1,0 +1,85 @@
+# Capability-tier registry. Owner configuration: every model, effort, order and provider below is a
+# choice you can change. Nothing here is built into the resolver. See README.md in this directory.
+#
+# A candidate is "provider/model@effort". A tier lists candidates in preference order. The resolver walks the
+# list and uses the first candidate whose provider is enabled and whose quota pool is not exhausted. It never
+# leaves the tier. Rendered per chezmoi profile; this file is generated, so edit the source template.
+version = 1
+profile = {{ .profile | quote }}
+default_tier = "medium"
+
+[quota]
+# Quota data older than this many seconds is treated as "unknown" (still selectable, with a warning).
+# Override per run with --stale-after.
+stale_after_seconds = 600
+# A window at or above this percent is flagged "near-limit". It is a hint only: it never excludes a candidate.
+# Only a window at 100%, or an exhaustion you report with --exhausted, excludes a candidate's pool.
+near_limit_percent = 97
+
+# Each provider maps to a quota pool. Pool names match the keys in the pi-sub cache
+# (~/.pi/agent/cache/sub-core/cache.json). Models of one pool share one account window.
+{{- if eq .profile "personal" }}
+
+[providers.claude-compat]
+pool = "anthropic"
+
+[providers.openai-codex]
+pool = "codex"
+
+[providers.openrouter]
+pool = "openrouter"
+enabled = false     # prepaid credit; turn on here when you want it as a lane
+
+[tiers.low]         # bounded execution: goal, context and check are already defined
+candidates = [
+  "claude-compat/claude-haiku-5-5@xhigh",
+  "openai-codex/gpt-6-luna@max",
+]
+
+[tiers.medium]      # decomposition, drafting, single-run driving
+candidates = [
+  "claude-compat/claude-sonnet-5-5@high",
+  "openai-codex/gpt-6.1-sol@medium",
+]
+
+[tiers.high]        # independent or adversarial judgment, architecture, cross-run synthesis
+candidates = [
+  "claude-compat/claude-opus-5-5@medium",
+  "openai-codex/gpt-6.1-sol@xhigh",
+  "openai-codex/gpt-6-astra@high",
+]
+{{- else }}
+
+# Work profile placeholder: one provider, the Anthropic models already enabled in Pi settings for this profile.
+# Replace with the real tiers before relying on it.
+[providers.anthropic]
+pool = "anthropic"
+
+[tiers.low]
+candidates = ["anthropic/claude-haiku-5-5@xhigh"]
+
+[tiers.medium]
+candidates = ["anthropic/claude-sonnet-5-5@high"]
+
+[tiers.high]
+candidates = ["anthropic/claude-opus-5-5@medium"]
+{{- end }}
+
+# Default tier per work role. Overridden by --run-tier, then by a slot's own tier.
+[roles]
+scout = "low"
+implementer = "low"
+driver = "medium"
+author = "medium"
+researcher = "medium"
+ordinary-reviewer = "high"
+challenge-reviewer = "high"
+cold-reader = "high"
+criterion-author = "high"
+oracle = "high"
+coordinator = "high"
+
+# Slots in these roles that resolve to the same tier get different models when the tier has enough available
+# candidates. When it does not, a model is reused and the slot is flagged "same-model review".
+[peers]
+roles = ["ordinary-reviewer", "challenge-reviewer", "cold-reader"]
