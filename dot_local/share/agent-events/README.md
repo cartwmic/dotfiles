@@ -56,7 +56,7 @@ A LaunchAgent, `local.agent-events` (source `Library/LaunchAgents/local.agent-ev
 
 1. an incremental `build` (a few seconds; the first full build takes about 80 s; ticks and manual `agent-events build` runs take one lock, so they wait for each other instead of racing);
 2. an aggregate-metrics push to the homelab OTel collector, when `AGENT_EVENTS_OTLP_ENDPOINT` is set;
-3. a 20-minute watchdog (`AGENT_EVENTS_TICK_LIMIT_S`) so a hung tick cannot hold the lock forever;
+3. a 20-minute watchdog (`AGENT_EVENTS_TICK_LIMIT_S`, a positive number of seconds) that stops a stuck tick so it releases the lock. It is a soft deadline (a SIGALRM handler runs when SQLite or a network call returns), not a hard kill;
 4. `status.json`, `agent.log` (rotated at 1 MB) and a lock file in `~/.local/state/agent-events/`.
 
 Self-healing: a database that is corrupt (not a busy or locked one) or three failed builds in a row set it aside as

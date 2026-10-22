@@ -521,9 +521,15 @@ def run_once(sessions_dir, db):
         # A hung tick would hold the lock and silence every later one: give up after TICK_LIMIT_S.
         def on_alarm(*_):
             raise TickTimeout()
-        previous = signal.signal(signal.SIGALRM, on_alarm)
-        signal.alarm(int(os.environ.get("AGENT_EVENTS_TICK_LIMIT_S") or TICK_LIMIT_S))
         try:
+            limit = int(os.environ.get("AGENT_EVENTS_TICK_LIMIT_S") or TICK_LIMIT_S)
+        except ValueError:
+            limit = TICK_LIMIT_S
+        if limit <= 0:
+            limit = TICK_LIMIT_S
+        previous = signal.signal(signal.SIGALRM, on_alarm)
+        try:
+            signal.alarm(limit)
             return _tick(sessions_dir, db)
         except TickTimeout:
             log("tick: gave up after the time limit; the next scheduled run starts clean")
