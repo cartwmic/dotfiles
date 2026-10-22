@@ -312,8 +312,17 @@ def mark_delivered(state):
         e["ok"] = True
 
 
+STATE_LIMIT = 1e15  # counts, seconds, tokens and dollars are far below this; sums of such values cannot overflow
+
+
 def _finite(x):
-    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    """A usable state number: a real int/float within STATE_LIMIT (rejects bool, NaN, infinities and huge ints)."""
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return False
+    try:
+        return math.isfinite(x) and abs(x) <= STATE_LIMIT
+    except OverflowError:
+        return False
 
 
 def _valid_state(state):
@@ -356,7 +365,11 @@ def load_state():
         state = json.loads(raw)
     except ValueError:
         return {}, True
-    return (state, False) if _valid_state(state) else ({}, True)
+    try:
+        usable = _valid_state(state)
+    except Exception:  # noqa: BLE001 - any surprise in a state file means: start a new epoch
+        usable = False
+    return (state, False) if usable else ({}, True)
 
 
 def save_state(state):
