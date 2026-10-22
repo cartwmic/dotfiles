@@ -108,6 +108,12 @@ bin/**
 05_provision_ssh_keys.sh
 {{- end }}
 
+{{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
+# Always-on agent-events metrics: personal macOS only. Work data never goes to the homelab collector.
+Library/LaunchAgents/local.agent-events.plist
+70_agent_events_launchd.sh
+{{- end }}
+
 {{- if ne .profile "personal" }}
 .local/user_scripts/configure_rustdesk.sh
 .pi/agent/extensions/openrouter-gate

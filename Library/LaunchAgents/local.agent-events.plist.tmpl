@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.agent-events</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/sh</string><string>{{ .chezmoi.homeDir }}/.local/bin/agent-events</string><string>run</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>120</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+  <key>Nice</key><integer>10</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AGENT_EVENTS_OTLP_ENDPOINT</key><string>http://otel-collector.internal.cartwmic.com/v1/metrics</string>
+  </dict>
+  <key>StandardOutPath</key><string>{{ .chezmoi.homeDir }}/.local/state/agent-events/launchd.out</string>
+  <key>StandardErrorPath</key><string>{{ .chezmoi.homeDir }}/.local/state/agent-events/launchd.err</string>
+</dict>
+</plist>

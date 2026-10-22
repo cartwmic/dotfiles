@@ -3,8 +3,10 @@
 Read-only, metadata-only tables over Pi session files. It answers "where did this
 session's time and tokens go" without a backend, a collector or any new capture.
 
-This is Phase 0 of the traces research (dotfiles issue #10). Spans in a trace
-viewer, an emitter extension and a backend are separate, later decisions.
+Phase 0 of the traces research (dotfiles issue #10) built the tables. Phase 1 (below) runs
+it in the background, exports aggregate metrics to Grafana, and adds a local drill-down.
+Spans in a trace viewer and an emitter extension remain separate, later decisions.
+Scope: Pi sessions only.
 
 ## What it does
 
@@ -31,18 +33,69 @@ agent-events sessions --since 7d --sort cost
 agent-events session <path-fragment-or-session-id>
 agent-events tools --since 7d
 agent-events events --since 7d
-agent-events sql "SELECT ..."   # read-only
+agent-events events --kind llm.error --list --since 1d   # individual events, newest first
+agent-events projects --since 1d                         # spend by project (by when each call happened)
+agent-events show <session> --turn 3                     # content of one turn, read from the session file
+agent-events show <session> --errors                     # the error calls, with their error text
+agent-events sql "SELECT project(cwd), ... FROM sessions"   # read-only; project(cwd) is the workstream slug
 ```
 
 Python 3.11 or newer, standard library only. A rebuild skips files whose size and
 mtime did not change; a changed file is parsed again in full. `--since` builds are
 partial and never delete rows for files they did not look at.
 
-Run it whenever you want fresh numbers: `agent-events build` is safe to repeat, incremental and cheap.
-Nothing runs on a schedule. `agent-events` is a small wrapper (`dot_local/bin`) around
+`agent-events build` is safe to repeat, incremental and cheap. `agent-events` is a small wrapper (`dot_local/bin`) around
 `agent_events.py`; it picks a Python 3.11+ (override with `AGENT_EVENTS_PYTHON`).
 A build that is interrupted marks the database dirty and the next build repairs it.
 `sql` accepts only `SELECT`/`WITH` queries under a read-only authorizer (no `ATTACH`, `VACUUM INTO`, `PRAGMA`).
+
+## Always on (personal macOS)
+
+A LaunchAgent, `local.agent-events` (source `Library/LaunchAgents/local.agent-events.plist.tmpl`, loaded by
+`run_onchange_after_70_agent_events_launchd.sh.tmpl`), runs `agent-events run` every 2 minutes at low priority:
+
+1. an incremental `build` (a few seconds; the first full build takes about 80 s; ticks and manual `agent-events build` runs take one lock, so they wait for each other instead of racing);
+2. an aggregate-metrics push to the homelab OTel collector, when `AGENT_EVENTS_OTLP_ENDPOINT` is set;
+3. `status.json`, `agent.log` (rotated at 1 MB) and a lock file in `~/.local/state/agent-events/`.
+
+Self-healing: a database that is corrupt (not a busy or locked one) or three failed builds in a row set it aside as
+`events.sqlite.corrupt`, and it is rebuilt from the session files; the database holds only derived data. A failed
+push never stops the build and is logged once per distinct failure. Logs and `status.json` hold only an exception
+type and an error code, never a path or message text. While the last build failed or the database is dirty, nothing is
+recollected: the last accounted business values are sent again, unchanged, with the health gauges.
+
+`agent-events status` prints the age of the last successful build and push and exits 1 when the build is older
+than 15 minutes. The same age is in Grafana (`pi_agent_events_last_build_success_timestamp_seconds`, "Data age" on the overview).
+The work profile has neither the plist nor an endpoint, so no work data can reach the homelab.
+
+## Metrics (Grafana)
+
+The scheduled `agent-events run` is the only sender; it sends **aggregates only**: counters of sessions, turns, LLM and tool calls,
+seconds (active, LLM, tool, waiting on you, per phase), tokens, notional cost and rule-derived events, plus duration
+histograms for LLM and tool calls. Labels: `project` (the repository the cwd belongs to, folding worktrees and run directories into it;
+only repositories found under `~/git` and `/Volumes/Workshop/macbook/git` or listed in `AGENT_EVENTS_PROJECTS`
+(colon-separated) are named, anything else is `other`), `kind` (`top` or `subagent`), `provider`, `model`, `tool`, `outcome`, `phase`, `event`, `detail` (error class).
+Provider, model and tool names must look like an identifier (a path becomes `other`).
+No session id, path, prompt, tool argument, result or error text. `agent-events export` previews the series per metric (about 1,600) and
+sends nothing (`--dry-run` is accepted and has no effect).
+
+Counters are monotonic by construction. The database is recomputed on every build, so a total can fall (a removed file,
+a moved dedupe owner, an unknown duration). The exporter keeps its own accounting in `export_state.json`: an exported value only
+rises by the positive change since the last tick, so a recomputation never looks like a Prometheus counter reset. The first push,
+a lost or unusable state file, and a changed project map or schema all start a baseline: current totals become the reference and the
+exported values start at 0 (a lost state file also starts a new start time), so history is never counted as activity. After that a new
+series is sent as 0 until that POST succeeds and its growth is added afterwards, so the first error of a new kind is counted. Values are
+checkpointed to disk before each POST, and every known series is sent on every tick, so a series that vanishes keeps its value.
+Known limit: when copied history moves between sessions (forks) a drop in one series and a rise in another can both occur; the rise is
+counted. Dashboards show activity from the first push onward; `agent-events projects` / `sql` give full history locally. Tool metrics
+have no project label (cardinality), so the project and kind variables do not filter tool panels.
+
+Path: OTLP/HTTP (gzip JSON) to `otel-collector.internal.cartwmic.com`, its `metrics/pi` pipeline (`pi_*` names, port 8890),
+Prometheus job `pi-agent-events`, and the four `Pi agents: ...` dashboards in the homelab repo (`k8s/kube-prometheus-stack/pi-*-dashboard.yaml`):
+overview, errors and retries, tools and models, workstream drill-down.
+
+Content-level questions ("what was that error?", "what was the prompt?") are answered locally by `agent-events show`, which
+re-reads the original session file. Nothing it prints is stored or exported.
 
 ## Tables
 
