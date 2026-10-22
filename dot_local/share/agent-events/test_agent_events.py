@@ -110,6 +110,10 @@ class Base(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name) / "sessions"
         self.db = Path(self._tmp.name) / "data" / "events.sqlite"
+        prior = os.environ.get("AGENT_EVENTS_STATE_DIR")  # a manual build takes a lock in the state dir
+        os.environ["AGENT_EVENTS_STATE_DIR"] = str(Path(self._tmp.name) / "state-base")
+        self.addCleanup(lambda: os.environ.__setitem__("AGENT_EVENTS_STATE_DIR", prior) if prior is not None
+                        else os.environ.pop("AGENT_EVENTS_STATE_DIR", None))
 
     def top(self, name="--work-proj--/2026-10-01T00-00-00-000Z_sess-1.jsonl"):
         return self.root / name
@@ -724,8 +728,10 @@ class Tick(Base):
     def setUp(self):
         super().setUp()
         self.state = Path(self._tmp.name) / "state"
-        self._env = {k: os.environ.get(k) for k in ("AGENT_EVENTS_STATE_DIR", "AGENT_EVENTS_OTLP_ENDPOINT")}
+        self._env = {k: os.environ.get(k) for k in ("AGENT_EVENTS_STATE_DIR", "AGENT_EVENTS_OTLP_ENDPOINT",
+                                                      "AGENT_EVENTS_PROJECTS")}
         os.environ["AGENT_EVENTS_STATE_DIR"] = str(self.state)
+        os.environ["AGENT_EVENTS_PROJECTS"] = "proj"  # the synthetic project is an approved workstream
         os.environ.pop("AGENT_EVENTS_OTLP_ENDPOINT", None)
         self.addCleanup(self._restore)
         standard_session().write(self.top())
@@ -821,18 +827,15 @@ class MetricExport(Tick):
         with self.assertRaises(RuntimeError):
             am.export(con, self.db, {}, bad.url)
 
-    def test_cli_export_needs_an_endpoint_and_dry_run_sends_nothing(self):
+    def test_cli_export_only_reports_and_never_sends(self):
         self.build()
-        env = {k: v for k, v in os.environ.items() if k != "AGENT_EVENTS_OTLP_ENDPOINT"}
-        env["AGENT_EVENTS_STATE_DIR"] = str(self.state)
-        no = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "export"], capture_output=True, text=True, env=env)
-        self.assertNotEqual(no.returncode, 0)
-        self.assertIn("AGENT_EVENTS_OTLP_ENDPOINT", no.stderr)
-        dry = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "export", "--dry-run"],
-                             capture_output=True, text=True, env=env)
-        self.assertEqual(dry.returncode, 0, dry.stderr)
-        self.assertIn("dry run: nothing sent", dry.stdout)
-        self.assertNotIn(SENTINEL, dry.stdout)
+        c = self.collector()
+        env = dict(os.environ, AGENT_EVENTS_STATE_DIR=str(self.state))
+        out = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "export"], capture_output=True, text=True, env=env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("nothing is sent by this command", out.stdout)
+        self.assertNotIn(SENTINEL, out.stdout)
+        self.assertEqual(c.requests, [])
 
 
 class AlwaysOn(Tick):
@@ -950,6 +953,154 @@ class DrillDown(Base):
         out = ae.cmd_projects(self.con, type("A", (), {"since": None, "limit": 5}))
         self.assertIn("proj", out)
         self.assertIn("not a bill", out)
+
+
+class ExportSafety(Tick):
+    """Round-2 review: what may leave the machine, what failure paths may write, and counter behaviour."""
+
+    def test_unapproved_directories_and_odd_names_never_become_labels(self):
+        ae._GIT_ROOTS = {"loop-engine"}
+        self.addCleanup(lambda: setattr(ae, "_GIT_ROOTS", None))
+        for cwd, want in [("/private/tmp/tmpabc123", "other"), ("/tmp/some scratch dir", "other"),
+                          ("/Volumes/Workshop/macbook/git/loop-engine-eval-x", "loop-engine"),
+                          ("/work/proj", "proj"), ("/Users/alice/private stuff", "other"), (None, "unknown")]:
+            self.assertEqual(ae.export_project(cwd), want, cwd)
+
+    def test_export_names_reject_paths(self):
+        for bad in ("/Users/alice/private/model.gguf", "Users/alice/x/model", "~/m", "a b", "", None, "../x", "x" * 200):
+            self.assertEqual(am.export_name(bad), "other", bad)
+        for good in ("gpt-6.1-sol", "anthropic/claude-fable-5", "llama3:8b", "mcp__ticktick__create_task", "bash"):
+            self.assertEqual(am.export_name(good), good)
+
+    def test_a_path_shaped_model_does_not_reach_the_payload(self):
+        f = Fixture(session_id="sess-9")
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, model="/Users/alice/private/model.gguf", stop="stop")
+        f.write(self.top("--work-proj--/2026-10-01T00-00-09-000Z_sess-9.jsonl"))
+        self.build()
+        con = ae.connect(self.db, readonly=True)
+        payload = json.dumps(am.otlp_payload(am.collect(con), 1, 2))
+        self.assertNotIn("alice", payload)
+        self.assertNotIn("/Users", payload)
+
+    def test_failure_diagnostics_hold_no_paths_or_text(self):
+        secret = f"/Users/alice/{SENTINEL}/session.jsonl"
+        for exc in (FileNotFoundError(2, "No such file", secret), PermissionError(13, "denied", secret),
+                    sqlite3.OperationalError(f"unable to open {secret}"), ValueError(secret), RuntimeError(secret)):
+            self.assertNotIn(SENTINEL, am.safe_error(exc))
+        self.assertEqual(am.safe_error(FileNotFoundError(2, "x", secret)), "FileNotFoundError: ENOENT")
+
+    def test_a_failing_build_logs_and_stores_no_path_text(self):
+        secret = f"/Users/alice/{SENTINEL}/session.jsonl"
+        real = ae.build
+        ae.build = lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError(2, "No such file", secret))
+        self.addCleanup(lambda: setattr(ae, "build", real))
+        self.assertEqual(am.run_once(self.root, self.db), 1)
+        for p in self.state.iterdir():
+            self.assertNotIn(SENTINEL, p.read_text(errors="replace"), p.name)
+        self.assertEqual(self.status()["last_build_error"], "FileNotFoundError: ENOENT")
+
+    def test_a_session_that_vanishes_during_a_build_is_skipped(self):
+        real = ae.parse_session
+        def vanish(path):
+            raise FileNotFoundError(2, "gone", str(path))
+        ae.parse_session = vanish
+        self.addCleanup(lambda: setattr(ae, "parse_session", real))
+        res = self.build()
+        self.assertEqual((res["parsed"], res["sessions"]), (0, 0))
+
+    def test_a_busy_database_is_reported_never_set_aside(self):
+        self.build()
+        real = ae.build
+        ae.build = lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked"))
+        self.addCleanup(lambda: setattr(ae, "build", real))
+        for _ in range(4):
+            self.assertEqual(am.run_once(self.root, self.db), 1)
+        self.assertTrue(self.db.exists())
+        self.assertFalse(Path(str(self.db) + ".corrupt").exists())
+        self.assertIn("busy", (self.state / "agent.log").read_text())
+
+    def test_failed_or_dirty_build_exports_only_health_gauges(self):
+        c = self.collector()
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        names = lambda req: {m["name"] for m in req["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]}
+        self.assertIn("pi_sessions", names(c.requests[-1]))
+        real = ae.build
+        ae.build = lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked"))
+        self.addCleanup(lambda: setattr(ae, "build", real))
+        am.run_once(self.root, self.db)
+        self.assertTrue(all(n.startswith("pi_agent_events_") for n in names(c.requests[-1])))
+        ae.build = real
+        con = sqlite3.connect(self.db)
+        con.execute("INSERT OR REPLACE INTO meta VALUES ('dirty','1')")
+        con.commit()
+        con.close()
+        ae.build = lambda *a, **k: {"parsed": 0, "unchanged": 1, "removed": 0, "sessions": 1, "malformed_lines": 0, "refinalized": False}
+        am.run_once(self.root, self.db)
+        self.assertTrue(all(n.startswith("pi_agent_events_") for n in names(c.requests[-1])))
+
+    def test_manual_builds_wait_for_the_scheduled_one(self):
+        with am.build_lock(blocking=False) as first:
+            self.assertTrue(first)
+            with am.build_lock(blocking=False) as second:
+                self.assertFalse(second)
+
+    def _fam(self, v, labels=None):
+        return [{"name": "pi_x", "type": "sum", "points": [(labels or {"a": "1"}, v)]}]
+
+    def test_counters_never_decrease_and_decreases_add_nothing(self):
+        state = {}
+        sent = lambda v, **k: am.account(self._fam(v, **k), state)[0]["points"][0][1]
+        self.assertEqual(sent(1000), 1000)   # first run: history is a baseline
+        self.assertEqual(sent(1100), 1100)   # real growth
+        self.assertEqual(sent(900), 1100)    # a rebuild recomputed a lower total: no reset, no phantom activity
+        self.assertEqual(sent(950), 1150)    # growth continues from the corrected baseline
+        self.assertEqual(sent(950), 1150)
+
+    def test_a_new_series_after_the_first_run_is_sent_as_zero_then_grows(self):
+        state = {}
+        am.account(self._fam(5), state)
+        fam = self._fam(5) + [{"name": "pi_y", "type": "sum", "points": [({"detail": "context"}, 1)]}]
+        out = am.account(fam, state)
+        self.assertEqual(out[1]["points"][0][1], 0)       # Prometheus sees the series at 0 first ...
+        fam = self._fam(5) + [{"name": "pi_y", "type": "sum", "points": [({"detail": "context"}, 1)]}]
+        out = am.account(fam, state)
+        self.assertEqual(out[1]["points"][0][1], 1)       # ... then the first occurrence counts
+
+    def test_a_mass_of_new_series_is_a_baseline_not_activity(self):
+        state = {}
+        am.account(self._fam(5), state)
+        many = [{"name": "pi_z", "type": "sum", "points": [({"p": str(i)}, 10) for i in range(am.SEED_LIMIT + 5)]}]
+        out = am.account(many, state)
+        self.assertTrue(all(v == 10 for _, v in out[0]["points"]))
+        out = am.account([{"name": "pi_z", "type": "sum", "points": [({"p": str(i)}, 12) for i in range(am.SEED_LIMIT + 5)]}], state)
+        self.assertTrue(all(v == 12 for _, v in out[0]["points"]))
+
+    def test_histograms_are_accounted_bucket_by_bucket(self):
+        state = {}
+        h = lambda counts, s, n: [{"name": "pi_h", "type": "histogram", "bounds": (1, 2), "points": [({}, (counts, s, n))]}]
+        am.account(h([1, 1, 0], 3.0, 2), state)
+        out = am.account(h([2, 1, 1], 9.0, 4), state)
+        self.assertEqual(out[0]["points"][0][1], ([2, 1, 1], 9.0, 4))
+        out = am.account(h([1, 1, 1], 5.0, 3), state)   # a bucket went down: baseline correction only
+        self.assertEqual(out[0]["points"][0][1], ([2, 1, 1], 9.0, 4))
+
+    def test_ticks_keep_the_exported_session_count_monotonic_when_a_file_is_removed(self):
+        c = self.collector()
+        value = lambda: [m for m in c.requests[-1]["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+                         if m["name"] == "pi_sessions"][0]["sum"]["dataPoints"][0]["asDouble"]
+        am.run_once(self.root, self.db)
+        self.assertEqual(value(), 1)
+        second = Fixture(session_id="sess-2")
+        second.user(T + 1000)
+        second.llm(T + 1500, T + 2500, stop="stop")
+        path = second.write(self.top("--work-proj--/2026-10-01T00-00-02-000Z_sess-2.jsonl"))
+        am.run_once(self.root, self.db)
+        am.run_once(self.root, self.db)
+        self.assertEqual(value(), 2)
+        path.unlink()
+        am.run_once(self.root, self.db)
+        self.assertEqual(value(), 2)   # the database now says 1, the exported counter does not go backwards
 
 
 if __name__ == "__main__":
