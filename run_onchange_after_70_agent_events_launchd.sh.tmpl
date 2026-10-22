@@ -1,0 +1,19 @@
+#!/bin/sh
+# (Re)load the agent-events LaunchAgent when its plist changes. Personal profile on macOS only
+# (.chezmoiignore). The agent runs "agent-events run" every 2 minutes: incremental build, then an
+# aggregate-metrics push to the homelab OTel collector.
+# plist: {{ include "Library/LaunchAgents/local.agent-events.plist.tmpl" | sha256sum }}
+set -eu
+log() { printf '[agent_events_launchd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Darwin ] || exit 0
+plist="$HOME/Library/LaunchAgents/local.agent-events.plist"
+[ -f "$plist" ] || { log WARN "$plist is not installed yet"; exit 0; }
+mkdir -p "$HOME/.local/state/agent-events"
+uid=$(id -u)
+launchctl bootout "gui/$uid/local.agent-events" >/dev/null 2>&1 || true
+if launchctl bootstrap "gui/$uid" "$plist"; then
+  log INFO "loaded local.agent-events (every 2 minutes)"
+else
+  log WARN "could not load the agent (no GUI session?); load it later: launchctl bootstrap gui/$uid $plist"
+fi

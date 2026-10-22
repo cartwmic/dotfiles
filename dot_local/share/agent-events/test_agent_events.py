@@ -679,5 +679,278 @@ class Helpers(unittest.TestCase):
         self.assertEqual(ae.error_bucket("totally new failure"), "other")
 
 
+# ---------------------------------------------------------------- always-on, metrics, drill-down
+
+import agent_events_metrics as am  # noqa: E402
+import agent_events_show as ash  # noqa: E402
+import gzip  # noqa: E402
+import http.server  # noqa: E402
+import threading  # noqa: E402
+import fcntl  # noqa: E402
+import time  # noqa: E402
+
+ALLOWED_LABELS = {"project", "kind", "provider", "model", "outcome", "type", "tool", "nested", "phase", "event", "detail"}
+
+
+class Collector:
+    """A throwaway OTLP/HTTP endpoint that records what it is sent."""
+
+    def __init__(self, status=200, body=b'{"partialSuccess":{}}'):
+        self.requests = []
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                raw = self.rfile.read(int(self.headers["Content-Length"]))
+                outer.requests.append({"path": self.path, "encoding": self.headers.get("Content-Encoding"),
+                                       "body": json.loads(gzip.decompress(raw) if self.headers.get("Content-Encoding") == "gzip" else raw)})
+                self.send_response(status)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/v1/metrics"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class Tick(Base):
+    def setUp(self):
+        super().setUp()
+        self.state = Path(self._tmp.name) / "state"
+        self._env = {k: os.environ.get(k) for k in ("AGENT_EVENTS_STATE_DIR", "AGENT_EVENTS_OTLP_ENDPOINT")}
+        os.environ["AGENT_EVENTS_STATE_DIR"] = str(self.state)
+        os.environ.pop("AGENT_EVENTS_OTLP_ENDPOINT", None)
+        self.addCleanup(self._restore)
+        standard_session().write(self.top())
+
+    def _restore(self):
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def collector(self, **kw):
+        c = Collector(**kw)
+        self.addCleanup(c.close)
+        os.environ["AGENT_EVENTS_OTLP_ENDPOINT"] = c.url
+        return c
+
+    def status(self):
+        return json.loads((self.state / "status.json").read_text())
+
+
+class ProjectSlug(unittest.TestCase):
+    def setUp(self):
+        self._roots, self._bases = ae._GIT_ROOTS, ae._PROJECT_BASES
+        ae._GIT_ROOTS = {"chezmoi", "loop-engine", "budget-steward"}
+        ae._PROJECT_BASES = None
+        self.addCleanup(lambda: (setattr(ae, "_GIT_ROOTS", self._roots), setattr(ae, "_PROJECT_BASES", self._bases)))
+
+    def test_worktrees_and_run_dirs_fold_into_their_repository(self):
+        base = "/Volumes/Workshop/macbook/git/"
+        for cwd, want in [(base + "loop-engine", "loop-engine"), (base + "loop-engine-eval-g", "loop-engine"),
+                          (base + "_chezmoi-herdr-hook", "chezmoi"), (base + "dotfiles-wt-foo", "chezmoi"),
+                          (base + "budget-steward-wt-intent-1", "budget-steward"),
+                          ("/private/tmp/loop-engine-c-20261011", "loop-engine"),
+                          ("/Volumes/Workshop/macbook/loop-engine/runs/run-1/proto", "loop-engine"),
+                          (base.rstrip("/"), "workspace"), (None, "unknown"), ("", "unknown"),
+                          ("/x/Weird Name!", "other"), ("/x/20261020-1906", "other"), ("/work/proj", "proj")]:
+            self.assertEqual(ae.project_of(cwd), want, cwd)
+
+    def test_sql_can_use_project(self):
+        self.addCleanup(lambda: None)
+        with tempfile.TemporaryDirectory() as d:
+            standard_session().write(Path(d) / "s" / "--work-proj--" / "2026-10-01T00-00-00-000Z_sess-1.jsonl")
+            db = Path(d) / "e.sqlite"
+            ae.build(Path(d) / "s", db)
+            con = ae.connect(db, readonly=True)
+            ns = type("A", (), {"query": "SELECT project(cwd) AS p FROM sessions"})
+            self.assertEqual(ae.cmd_sql(con, ns).split("\n")[1], "proj")
+
+
+class MetricExport(Tick):
+    def test_aggregates_match_the_database_and_carry_only_allowed_labels(self):
+        self.build()
+        con = ae.connect(self.db, readonly=True)
+        fams = {m["name"]: m for m in am.collect(con)}
+        cost = sum(v for _, v in fams["pi_notional_cost_usd_total".replace("_total", "")]["points"])
+        s = self.q("SELECT notional_cost_usd + COALESCE(overhead_cost_usd, 0) AS c FROM sessions")[0]["c"]
+        self.assertAlmostEqual(cost, s, places=6)
+        self.assertEqual(sum(v for _, v in fams["pi_llm_calls"]["points"]), 4)
+        self.assertEqual(sum(v for _, v in fams["pi_sessions"]["points"]), 1)
+        for fam in fams.values():
+            for labels, _ in fam["points"]:
+                self.assertLessEqual(set(labels), ALLOWED_LABELS, fam["name"])
+        self.assertEqual({tuple(sorted(l.items())) for l, _ in fams["pi_sessions"]["points"]},
+                         {(("kind", "top"), ("project", "proj"))})
+        # histogram bucket counts add up to the number of timed calls
+        counts, total, n = [v for l, v in fams["pi_llm_call_duration_seconds"]["points"]][0]
+        self.assertEqual(sum(counts), n)
+        self.assertEqual(n, 4)
+        errs = {l["detail"]: v for l, v in fams["pi_events"]["points"] if l["event"] == "llm.error"}
+        self.assertEqual(errs, {"rate_limit": 1})
+
+    def test_payload_has_no_content_session_ids_or_paths(self):
+        self.build()
+        con = ae.connect(self.db, readonly=True)
+        payload = json.dumps(am.otlp_payload(am.collect(con) + am.self_metrics(con, {}, self.db), 1, 2))
+        for needle in (SENTINEL, "sess-1", "/work/proj", str(self.root)):
+            self.assertNotIn(needle, payload)
+
+    def test_post_is_gzipped_otlp_json_and_rejections_fail(self):
+        self.build()
+        c = self.collector()
+        con = ae.connect(self.db, readonly=True)
+        fams, sent = am.export(con, self.db, {"epoch_ns": 5}, c.url)
+        self.assertGreater(sent, 0)
+        req = c.requests[0]
+        self.assertEqual((req["path"], req["encoding"]), ("/v1/metrics", "gzip"))
+        names = {m["name"] for m in req["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]}
+        self.assertIn("pi_notional_cost_usd", names)
+        self.assertIn("pi_agent_events_last_build_success_timestamp_seconds", names)
+        bad = Collector(body=b'{"partialSuccess":{"rejectedDataPoints":"3"}}')
+        self.addCleanup(bad.close)
+        with self.assertRaises(RuntimeError):
+            am.export(con, self.db, {}, bad.url)
+
+    def test_cli_export_needs_an_endpoint_and_dry_run_sends_nothing(self):
+        self.build()
+        env = {k: v for k, v in os.environ.items() if k != "AGENT_EVENTS_OTLP_ENDPOINT"}
+        env["AGENT_EVENTS_STATE_DIR"] = str(self.state)
+        no = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "export"], capture_output=True, text=True, env=env)
+        self.assertNotEqual(no.returncode, 0)
+        self.assertIn("AGENT_EVENTS_OTLP_ENDPOINT", no.stderr)
+        dry = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "export", "--dry-run"],
+                             capture_output=True, text=True, env=env)
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        self.assertIn("dry run: nothing sent", dry.stdout)
+        self.assertNotIn(SENTINEL, dry.stdout)
+
+
+class AlwaysOn(Tick):
+    def test_tick_builds_exports_and_records_status(self):
+        c = self.collector()
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        st = self.status()
+        self.assertEqual((st["consecutive_build_failures"], st["last_parsed"], st["sessions"]), (0, 1, 1))
+        self.assertTrue(st["last_build_ok_ts"] and st["last_export_ok_ts"])
+        self.assertEqual(len(c.requests), 1)
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertEqual(self.status()["last_parsed"], 0)
+        self.assertEqual(self.status()["epoch_ns"], st["epoch_ns"])  # counters keep one start time
+
+    def test_without_an_endpoint_the_tick_builds_and_never_exports(self):
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        st = self.status()
+        self.assertTrue(st["last_build_ok_ts"])
+        self.assertNotIn("last_export_ok_ts", st)
+
+    def test_an_unreachable_collector_does_not_stop_the_build_and_logs_once(self):
+        os.environ["AGENT_EVENTS_OTLP_ENDPOINT"] = "http://127.0.0.1:9/v1/metrics"
+        self.assertEqual(am.run_once(self.root, self.db), 1)
+        self.assertEqual(am.run_once(self.root, self.db), 1)
+        st = self.status()
+        self.assertTrue(st["last_build_ok_ts"])
+        self.assertTrue(st["last_export_error"])
+        self.assertEqual((self.state / "agent.log").read_text().count("export failed"), 1)
+        self.assertEqual(self.q("SELECT COUNT(*) AS n FROM sessions")[0]["n"], 1)
+
+    def test_a_corrupt_database_is_set_aside_and_rebuilt(self):
+        self.build()
+        self.db.write_bytes(b"this is not a sqlite database" * 100)
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertTrue(Path(str(self.db) + ".corrupt").exists())
+        self.assertEqual(self.q("SELECT COUNT(*) AS n FROM sessions")[0]["n"], 1)
+        self.assertIn("setting it aside", (self.state / "agent.log").read_text())
+
+    def test_a_run_that_overlaps_another_is_skipped(self):
+        self.state.mkdir(parents=True)
+        with open(self.state / "lock", "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertFalse(self.db.exists())
+        self.assertIn("skipped", (self.state / "agent.log").read_text())
+
+    def test_log_is_rotated_and_holds_no_content(self):
+        self.state.mkdir(parents=True)
+        (self.state / "agent.log").write_text("x" * (am.LOG_LIMIT + 10))
+        am.run_once(self.root, self.db)
+        self.assertTrue((self.state / "agent.log.1").exists())
+        for p in self.state.iterdir():
+            self.assertNotIn(SENTINEL, p.read_text(errors="replace"))
+
+    def test_status_reports_fresh_stale_and_never(self):
+        text, code = am.cmd_status()
+        self.assertEqual(code, 1)
+        self.assertIn("never", text)
+        am.run_once(self.root, self.db)
+        text, code = am.cmd_status()
+        self.assertEqual(code, 0, text)
+        self.assertIn("fresh", text)
+        st = self.status()
+        st["last_build_ok_ts"] = time.time() - 3600
+        am.save_status(st)
+        text, code = am.cmd_status()
+        self.assertEqual(code, 1)
+        self.assertIn("STALE", text)
+
+    def test_the_cli_runs_a_tick_and_status(self):
+        env = dict(os.environ, AGENT_EVENTS_STATE_DIR=str(self.state), PI_CODING_AGENT_DIR=str(self.root.parent),
+                   XDG_DATA_HOME=str(Path(self._tmp.name) / "xdg"))
+        env.pop("AGENT_EVENTS_OTLP_ENDPOINT", None)
+        run = subprocess.run([sys.executable, str(CLI), "run"], capture_output=True, text=True, env=env)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        st = subprocess.run([sys.executable, str(CLI), "status"], capture_output=True, text=True, env=env)
+        self.assertEqual(st.returncode, 0, st.stdout)
+
+
+class DrillDown(Base):
+    def setUp(self):
+        super().setUp()
+        standard_session().write(self.top())
+        self.build()
+        self.con = ae.connect(self.db, readonly=True)
+
+    def show(self, **kw):
+        args = type("A", (), {"ref": "sess-1", "turn": None, "call": None, "chars": 400, **kw})
+        return ash.cmd_show(self.con, args)
+
+    def test_turn_prints_local_content_from_the_session_file(self):
+        out = self.show(turn=1)
+        self.assertIn(ash.NOTICE, out)
+        self.assertIn(SENTINEL, out)  # content is shown locally, on demand
+        self.assertIn("USER:", out)
+        self.assertNotIn("429 rate limit", out)  # turn 2 is not part of turn 1
+
+    def test_errors_print_the_error_text_and_nothing_is_stored_for_it(self):
+        out = self.show()
+        self.assertIn("429 rate limit", out)
+        stored = json.dumps([tuple(r) for t in ("events", "calls", "sessions") for r in self.q(f"SELECT * FROM {t}")])
+        self.assertNotIn("429 rate limit", stored)
+
+    def test_call_by_seq_and_clipping(self):
+        seq = self.q("SELECT seq FROM calls WHERE kind='llm' ORDER BY seq LIMIT 1")[0]["seq"]
+        out = self.show(call=seq, chars=10)
+        self.assertIn("[+", out)
+
+    def test_events_list_and_projects_report(self):
+        ns = type("A", (), {"since": None, "kind": "llm.error", "list": True, "limit": 5})
+        out = ae.cmd_events(self.con, ns)
+        self.assertIn("proj", out)
+        self.assertIn("agent-events show", out)
+        self.assertNotIn(SENTINEL, out)
+        out = ae.cmd_projects(self.con, type("A", (), {"since": None, "limit": 5}))
+        self.assertIn("proj", out)
+        self.assertIn("not a bill", out)
+
+
 if __name__ == "__main__":
     unittest.main()
