@@ -1156,6 +1156,37 @@ class ExportSafety(Tick):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(c.requests, [])
 
+    def test_state_validation_covers_histograms_and_bad_encoding(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        good = {"n": "pi_h", "t": "histogram", "l": {}, "b": [1, 2], "last": [0] * 5, "sent": [0] * 5, "seen": [0] * 5, "ok": True}
+        path = self.state / "export_state.json"
+        path.write_text(json.dumps({"series": {"k": good}}))
+        self.assertFalse(am.load_state()[1])
+        for mutate in (lambda e: e.pop("b"), lambda e: e.update(last=[0]), lambda e: e.update(b=[]),
+                       lambda e: e.update(b="x"), lambda e: e.update(sent=[0] * 4)):
+            bad = json.loads(json.dumps(good))
+            mutate(bad)
+            path.write_text(json.dumps({"series": {"k": bad}}))
+            self.assertEqual(am.load_state(), ({}, True))
+        path.write_bytes(b"\xff\xfe\x00 not utf8")
+        self.assertEqual(am.load_state(), ({}, True))
+        c = self.collector()
+        self.assertEqual(am.run_once(self.root, self.db), 0)      # recovers instead of failing every tick
+        self.assertFalse(am.load_state()[1])
+
+    def test_a_changed_histogram_layout_restarts_at_zero(self):
+        s = {}
+        h = lambda bounds, counts, sm, n: [{"name": "pi_h", "type": "histogram", "bounds": bounds, "points": [({}, (counts, sm, n))]}]
+        am.account(h((1, 2), [0, 0, 0], 0.0, 0), s, True, "f")
+        am.mark_delivered(s)
+        out = am.account(h((1, 2, 3), [0, 0, 0, 1], 4.0, 1), s, True, "f")[1][0]
+        self.assertEqual(out["bounds"], (1, 2, 3))
+        self.assertEqual(out["points"][0][1], ([0, 0, 0, 0], 0.0, 0))
+        self.assertTrue(am._valid_state(s))
+        am.mark_delivered(s)
+        out = am.account(h((1, 2, 3), [0, 0, 0, 2], 9.0, 2), s, True, "f")[1][0]
+        self.assertEqual(out["points"][0][1], ([0, 0, 0, 1], 5.0, 1))
+
     def test_ticks_keep_the_exported_session_count_monotonic_when_a_file_is_removed(self):
         c = self.collector()
         value = lambda: [m for m in c.requests[-1]["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
