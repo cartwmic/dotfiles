@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run agent-events on demand: agent-events build | sessions | session REF | tools | events | sql
+# Run agent-events: build | sessions | session REF | tools | events | projects | show REF | sql | export | status | run (the LaunchAgent tick)
 set -eu
 
 case "$0" in

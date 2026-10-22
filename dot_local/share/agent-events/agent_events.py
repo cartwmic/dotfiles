@@ -122,6 +122,59 @@ def safe_name(value):
     return value if isinstance(value, str) and SAFE_NAME.fullmatch(value) else "unknown"
 
 
+_PROJECT_BASES = None
+_GIT_ROOTS = None
+
+
+def _project_bases():
+    home = str(Path.home())
+    return ("/Volumes/Workshop/macbook/git/", "/Volumes/Workshop/macbook/", f"{home}/git/", "/private/tmp/",
+            "/tmp/", f"{home}/.local/share/", f"{home}/Documents/", f"{home}/")
+
+
+def _git_roots():
+    """Names of the repositories on this machine (a .git directory, so worktrees do not count)."""
+    global _GIT_ROOTS
+    if _GIT_ROOTS is None:
+        roots = {"chezmoi", "loop-engine"}
+        env = os.environ.get("AGENT_EVENTS_PROJECT_ROOTS")
+        dirs = env.split(":") if env is not None else [str(Path.home() / "git"), "/Volumes/Workshop/macbook/git"]
+        for d in filter(None, dirs):
+            try:
+                roots.update(p.name.lower() for p in Path(d).iterdir() if (p / ".git").is_dir())
+            except OSError:
+                pass
+        _GIT_ROOTS = roots
+    return _GIT_ROOTS
+
+
+def project_of(cwd):
+    """Low-cardinality workstream slug from a working directory: the repository, not the worktree or run dir."""
+    global _PROJECT_BASES
+    if not isinstance(cwd, str) or not cwd:
+        return "unknown"
+    path = cwd.rstrip("/")
+    if path == str(Path.home()):
+        return "home"
+    if _PROJECT_BASES is None:
+        _PROJECT_BASES = _project_bases()
+    name = path.rsplit("/", 1)[-1]
+    for base in _PROJECT_BASES:
+        if path == base.rstrip("/") and base != f"{Path.home()}/":
+            return "scratch" if "tmp" in base else "workspace"
+        if path.startswith(base) and path != base.rstrip("/"):
+            name = path[len(base):].split("/")[0]
+            break
+    name = name.lower().lstrip("_")
+    if name == "dotfiles" or name.startswith("dotfiles-wt"):
+        return "chezmoi"
+    best = max((r for r in _git_roots() if name == r or name.startswith(r + "-")), key=len, default=None)
+    if best:
+        return best
+    token = re.split(r"[-.]", name, maxsplit=1)[0]
+    return token if re.fullmatch(r"[a-z][a-z0-9]{0,30}", token) else "other"
+
+
 def norm_status(value):
     """Fixed vocabulary only: arbitrary status text is never stored."""
     s = value.lower() if isinstance(value, str) else ""
@@ -448,6 +501,7 @@ def connect(db_path, readonly=False):
         con = sqlite3.connect(db_path)
         _init_schema(con)
     con.row_factory = sqlite3.Row
+    con.create_function("project", 1, project_of, deterministic=True)
     return con
 
 
@@ -930,12 +984,47 @@ def cmd_tools(con, args):
     return _tool_table(con, where, params, args.limit) + "\n(durations only where timing was recorded)"
 
 
+def cmd_projects(con, args):
+    since = parse_since(args.since)
+    # attribute cost to when the call happened, not when its session started: sessions run for days
+    where, params = ["c.dup = 0", "c.kind IN ('llm','overhead')"], []
+    if since is not None:
+        where.append("COALESCE(c.end_ms, c.start_ms) >= ?")
+        params.append(since)
+    rows = con.execute(f"SELECT s.cwd, s.kind, COUNT(DISTINCT s.path) n, SUM(c.cost_usd) cost,"
+                       f" SUM(c.kind='llm') calls, SUM(c.status='error') errs FROM calls c JOIN sessions s USING (path)"
+                       f" WHERE {' AND '.join(where)} GROUP BY s.cwd, s.kind", params).fetchall()
+    agg = {}
+    for r in rows:
+        a = agg.setdefault(project_of(r["cwd"]), [0, 0.0, 0, 0, 0.0])
+        a[0] += r["n"]
+        a[1] += r["cost"] or 0
+        a[2] += r["calls"] or 0
+        a[3] += r["errs"] or 0
+        a[4] += (r["cost"] or 0) if r["kind"] == "child" else 0
+    ordered = sorted(agg.items(), key=lambda kv: -kv[1][1])[:args.limit]
+    note = "notional$ = API-equivalent price-table cost by when each call happened; it is not a bill. 'subagents' is the part spent by subagent runs."
+    return table([(k, v[0], v[2], v[3], fmt_cost(v[1]), fmt_cost(v[4])) for k, v in ordered],
+                 ["project", "sessions", "llm calls", "errors", "notional$", "subagents"]) + "\n" + note
+
+
 def cmd_events(con, args):
     since = parse_since(args.since)
     where, params = ["e.dup = 0"], []
     if since is not None:
         where.append("e.ts_ms >= ?")
         params.append(since)
+    if args.kind:
+        where.append("e.kind = ?")
+        params.append(args.kind)
+    if args.list:
+        rows = con.execute(f"SELECT e.ts_ms, e.kind, e.attrs, s.path, s.session_id, s.cwd, e.turn_idx FROM events e"
+                           f" JOIN sessions s USING (path) WHERE {' AND '.join(where)} ORDER BY e.ts_ms DESC LIMIT ?",
+                           params + [args.limit]).fetchall()
+        return table([(fmt_ts(r["ts_ms"]), r["kind"], project_of(r["cwd"]), (r["session_id"] or "")[:13],
+                       r["turn_idx"], r["attrs"]) for r in rows],
+                     ["time", "event", "project", "session", "turn", "attrs"]) + (
+            "\nread the content locally: agent-events show <session> --turn N | --errors")
     rows = con.execute(f"SELECT e.kind, COUNT(*) n, COUNT(DISTINCT e.path) s FROM events e"
                        f" WHERE {' AND '.join(where)} GROUP BY e.kind ORDER BY n DESC", params).fetchall()
     return table([(r["kind"], r["n"], r["s"]) for r in rows], ["event", "count", "sessions"])
@@ -960,6 +1049,18 @@ def cmd_sql(con, args):
     return "\n".join(["\t".join(head)] + ["\t".join("" if v is None else str(v) for v in r) for r in rows])
 
 
+def export_cmd(metrics, con, db, args):
+    status = metrics.load_status()
+    url = None if args.dry_run else metrics.endpoint()
+    if not args.dry_run and not url:
+        raise SystemExit("no OTLP endpoint: set AGENT_EVENTS_OTLP_ENDPOINT (this is how the work profile stays out)")
+    families, sent = metrics.export(con, db, status, url)
+    rows = [(m["name"], m["type"], len(m["points"])) for m in families]
+    head = f"sent {sent} bytes to {url}" if url else "dry run: nothing sent"
+    return head + "\n" + table(rows, ["metric", "type", "series"]) + f"\n{metrics.series_count(families)} series. " + \
+        "Aggregates only: counts, seconds, tokens, notional cost; labels are project, kind, provider, model, tool, outcome."
+
+
 def make_parser():
     ap = argparse.ArgumentParser(prog="agent-events", description=__doc__.split("\n")[0])
     ap.add_argument("--db", default=None, help="database path (default: $XDG_DATA_HOME/agent-events/events.sqlite)")
@@ -980,6 +1081,22 @@ def make_parser():
     t.add_argument("--limit", type=int, default=15)
     e = sub.add_parser("events", help="rule-derived event counts")
     e.add_argument("--since")
+    e.add_argument("--kind", help="only this event kind, e.g. llm.error")
+    e.add_argument("--list", action="store_true", help="list individual events instead of counting")
+    e.add_argument("--limit", type=int, default=30)
+    pr = sub.add_parser("projects", help="spend and errors per project (workstream)")
+    pr.add_argument("--since", default="1d")
+    pr.add_argument("--limit", type=int, default=25)
+    sh = sub.add_parser("show", help="print the content of a turn, a call or the error calls, from the session file")
+    sh.add_argument("ref")
+    sh.add_argument("--turn", type=int, help="the Nth user prompt and everything up to the next one")
+    sh.add_argument("--call", type=int, help="a call by its seq number (see: session, sql)")
+    sh.add_argument("--chars", type=int, default=400)
+    sub.add_parser("run", help="one always-on tick: incremental build, then export when an endpoint is configured")
+    ex = sub.add_parser("export", help="push aggregate metrics to the OTLP endpoint (--dry-run: count only)")
+    ex.add_argument("--dry-run", action="store_true")
+    st = sub.add_parser("status", help="age of the last successful build and export; exit 1 when stale")
+    st.add_argument("--max-age", type=int, default=900, help="seconds")
     q = sub.add_parser("sql", help="read-only SQL against the database")
     q.add_argument("query")
     return ap
@@ -997,12 +1114,28 @@ def main(argv=None):
               f"in {time.time() - started:.1f}s")
         print(f"read-only over {sessions_dir}; {CONTENT_POLICY}.")
         return 0
+    if args.cmd == "run":
+        import agent_events_metrics as metrics
+        return metrics.run_once(default_sessions_dir(), db)
+    if args.cmd == "status":
+        import agent_events_metrics as metrics
+        text, code = metrics.cmd_status(args.max_age)
+        print(text)
+        return code
     if not db.exists():
         print(f"no database at {db}; run 'agent-events build' first", file=sys.stderr)
         return 2
     con = connect(db, readonly=True)
-    handler = {"sessions": cmd_sessions, "session": cmd_session, "tools": cmd_tools,
-               "events": cmd_events, "sql": cmd_sql}[args.cmd]
+    if args.cmd == "show":
+        import agent_events_show as drill
+        handlers = {"show": drill.cmd_show}
+    elif args.cmd == "export":
+        import agent_events_metrics as metrics
+        handlers = {"export": lambda c, a: export_cmd(metrics, c, db, a)}
+    else:
+        handlers = {"sessions": cmd_sessions, "session": cmd_session, "tools": cmd_tools,
+                    "events": cmd_events, "projects": cmd_projects, "sql": cmd_sql}
+    handler = handlers[args.cmd]
     try:
         print(handler(con, args))
     except sqlite3.Error as exc:
