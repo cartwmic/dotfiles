@@ -70,22 +70,25 @@ The work profile has neither the plist nor an endpoint, so no work data can reac
 
 ## Metrics (Grafana)
 
-`agent-events export` (also run by the tick) sends **aggregates only**: counters of sessions, turns, LLM and tool calls,
+The scheduled `agent-events run` is the only sender; it sends **aggregates only**: counters of sessions, turns, LLM and tool calls,
 seconds (active, LLM, tool, waiting on you, per phase), tokens, notional cost and rule-derived events, plus duration
 histograms for LLM and tool calls. Labels: `project` (the repository the cwd belongs to, folding worktrees and run directories into it;
 only repositories found under `~/git` and `/Volumes/Workshop/macbook/git` or listed in `AGENT_EVENTS_PROJECTS`
 (colon-separated) are named, anything else is `other`), `kind` (`top` or `subagent`), `provider`, `model`, `tool`, `outcome`, `phase`, `event`, `detail` (error class).
 Provider, model and tool names must look like an identifier (a path becomes `other`).
-No session id, path, prompt, tool argument, result or error text. `agent-events export` shows the series per metric (about 1,600) and
-sends nothing; only the scheduled `run` sends.
+No session id, path, prompt, tool argument, result or error text. `agent-events export` previews the series per metric (about 1,600) and
+sends nothing (`--dry-run` is accepted and has no effect).
 
 Counters are monotonic by construction. The database is recomputed on every build, so a total can fall (a removed file,
 a moved dedupe owner, an unknown duration). The exporter keeps its own accounting in `export_state.json`: an exported value only
-rises by the positive change since the last tick, so a recomputation never looks like a Prometheus counter reset. The first push
-and any tick with more than 50 brand-new series adopt current totals as the baseline; a few new series after that are sent as 0
-once and then grow, so the first error of a new kind is counted. Dashboards therefore show activity from the first push onward;
-`agent-events projects` / `sql` give full history locally. Tool metrics have no project label (cardinality), so the project and
-kind variables do not filter tool panels.
+rises by the positive change since the last tick, so a recomputation never looks like a Prometheus counter reset. The first push,
+a lost or unusable state file, and a changed project map or schema all start a baseline: current totals become the reference and the
+exported values start at 0 (a lost state file also starts a new start time), so history is never counted as activity. After that a new
+series is sent as 0 until that POST succeeds and its growth is added afterwards, so the first error of a new kind is counted. Values are
+checkpointed to disk before each POST, and every known series is sent on every tick, so a series that vanishes keeps its value.
+Known limit: when copied history moves between sessions (forks) a drop in one series and a rise in another can both occur; the rise is
+counted. Dashboards show activity from the first push onward; `agent-events projects` / `sql` give full history locally. Tool metrics
+have no project label (cardinality), so the project and kind variables do not filter tool panels.
 
 Path: OTLP/HTTP (gzip JSON) to `otel-collector.internal.cartwmic.com`, its `metrics/pi` pipeline (`pi_*` names, port 8890),
 Prometheus job `pi-agent-events`, and the four `Pi agents: ...` dashboards in the homelab repo (`k8s/kube-prometheus-stack/pi-*-dashboard.yaml`):

@@ -8,6 +8,7 @@ import contextlib
 import errno
 import fcntl
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -233,79 +234,140 @@ def series_count(metrics):
     return sum(len(m["points"]) for m in metrics)
 
 
-SEED_LIMIT = 50  # more brand-new series than this in one tick is a reclassification, not activity
-
-
 def _vector(m, value):
     return list(value[0]) + [value[1], value[2]] if m["type"] == "histogram" else [value]
 
 
-def _unvector(m, vec):
-    return (vec[:-2], vec[-2], vec[-1]) if m["type"] == "histogram" else vec[0]
+def _unvector(kind, vec):
+    return (vec[:-2], vec[-2], vec[-1]) if kind == "histogram" else vec[0]
 
 
-def account(metrics, state):
-    """Make the series monotonic. The database is recomputed on every build, so a total can go down (a
-    session file removed, a dedupe owner moved, a project remapped, an unknown duration). Prometheus would
-    read that as a counter reset and invent activity. So the exported value only ever moves up by the
-    positive change since the last tick; a decrease is a baseline correction and adds nothing.
-    The first run, and any tick with more than SEED_LIMIT new series, adopt current totals as the baseline
-    (history is not activity). A few new series after that are real new activity: they are sent as 0 once,
-    then their growth is added, so Prometheus sees the first error of a new kind."""
+def fingerprint():
+    """Changes when the project map or the schema changes: such a change moves history between series."""
+    text = "|".join(sorted(ae.approved_projects())) + f"#{ae.SCHEMA_VERSION}"
+    return hashlib.sha1(text.encode()).hexdigest()[:12]
+
+
+def account(metrics, state, business=True, fp=""):
+    """Make the series monotonic and replace business points with the accounted values.
+
+    The database is recomputed on every build, so a total can fall (a removed file, a moved dedupe owner, an
+    unknown duration). Prometheus would read a fall as a counter reset and invent activity, so the exported
+    value only rises by the positive change since the last tick; a fall is a baseline correction.
+
+    Baseline (first run, lost state, or a changed project map/schema): current totals become the reference and the
+    exported value starts at 0, so history is never activity. After that a new series is real activity: it is
+    sent as 0 first ('ok' false until that POST succeeds) and its growth is added on later ticks. Every known
+    series is sent on every tick, so one that vanishes keeps its value and one that returns is still alive."""
     series = state.setdefault("series", {})
-    todo = []
-    for m in metrics:
-        if m["type"] == "gauge":
-            continue
-        for i, (labels, value) in enumerate(m["points"]):
-            todo.append((m, i, m["name"] + "|" + json.dumps(sorted(labels.items())), _vector(m, value)))
-    fresh = sum(1 for _, _, key, _ in todo if key not in series)
-    baseline = not state.get("seeded") or fresh > SEED_LIMIT
-    for m, i, key, cur in todo:
-        entry = series.get(key)
-        if entry is None:
-            if baseline:
-                entry = series[key] = {"last": cur, "sent": list(cur)}
-            else:  # real new activity: appear at 0 now, add the growth on the next tick
-                entry = series[key] = {"last": [0] * len(cur), "sent": [0] * len(cur)}
-                m["points"][i] = (m["points"][i][0], _unvector(m, entry["sent"]))
+    baseline = business and (not state.get("seeded") or state.get("fp") != fp)
+    if business:
+        created = set()
+        for m in metrics:
+            if m["type"] == "gauge":
                 continue
-        if all(c >= l for c, l in zip(cur, entry["last"])):
-            entry["sent"] = [s + (c - l) for s, c, l in zip(entry["sent"], cur, entry["last"])]
-        entry["last"] = cur
-        m["points"][i] = (m["points"][i][0], _unvector(m, entry["sent"]))
-    state["seeded"] = True
-    return metrics
+            for labels, value in m["points"]:
+                key = m["name"] + "|" + json.dumps(sorted(labels.items()))
+                cur = _vector(m, value)
+                e = series.get(key)
+                if e is None:
+                    series[key] = {"n": m["name"], "t": m["type"], "l": labels, "b": list(m.get("bounds", ())),
+                                   "last": list(cur) if baseline else [0] * len(cur), "sent": [0] * len(cur),
+                                   "seen": cur, "ok": False}
+                    created.add(key)
+                else:
+                    e["seen"] = cur
+        for key, e in series.items():  # every known series, present or not: a vanished one still owes its increment
+            if baseline:
+                e["last"] = list(e["seen"])
+            elif e["ok"] and key not in created:
+                if all(c >= l for c, l in zip(e["seen"], e["last"])):
+                    e["sent"] = [s + (c - l) for s, c, l in zip(e["sent"], e["seen"], e["last"])]
+                e["last"] = list(e["seen"])
+        state["seeded"], state["fp"] = True, fp
+    families = {}
+    for key in sorted(series):
+        e = series[key]
+        fam = families.setdefault(e["n"], {"name": e["n"], "type": e["t"], "points": []})
+        if e["t"] == "histogram":
+            fam["bounds"] = tuple(e["b"])
+        fam["points"].append((e["l"], _unvector(e["t"], e["sent"])))
+    return [m for m in metrics if m["type"] == "gauge"], list(families.values())
+
+
+def mark_delivered(state):
+    for e in state.get("series", {}).values():
+        e["ok"] = True
+
+
+def _valid_state(state):
+    try:
+        if not isinstance(state, dict) or not isinstance(state.get("series"), dict):
+            return False
+        for e in state["series"].values():
+            if not (isinstance(e, dict) and isinstance(e["l"], dict) and e["t"] in ("sum", "histogram")
+                    and isinstance(e["n"], str) and isinstance(e["ok"], bool)):
+                return False
+            for k in ("last", "sent", "seen"):
+                if not (isinstance(e[k], list) and e[k] and all(isinstance(x, (int, float)) for x in e[k])):
+                    return False
+            if not (len(e["last"]) == len(e["sent"]) == len(e["seen"])):
+                return False
+        return True
+    except (KeyError, TypeError):
+        return False
 
 
 def load_state():
+    """Returns (state, lost). Lost means a file existed but could not be used: the exporter then starts a new
+    accounting epoch (see _tick) instead of exporting raw totals that might look like a counter reset."""
+    path = state_dir() / "export_state.json"
     try:
-        return json.loads((state_dir() / "export_state.json").read_text())
-    except (OSError, ValueError):
-        return {}
+        raw = path.read_text()
+    except FileNotFoundError:
+        return {}, False
+    except OSError:
+        return {}, True
+    try:
+        state = json.loads(raw)
+    except ValueError:
+        return {}, True
+    return (state, False) if _valid_state(state) else ({}, True)
 
 
 def save_state(state):
     d = state_dir()
     d.mkdir(parents=True, exist_ok=True)
     tmp = d / "export_state.json.tmp"
-    tmp.write_text(json.dumps(state, separators=(",", ":")))
+    with open(tmp, "w") as fh:
+        fh.write(json.dumps(state, separators=(",", ":")))
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, d / "export_state.json")
 
 
-def export(con, db_path, status, url=None, now=None, state=None, business=True):
-    """Collect and, when a URL is given, push. With business=False only the health gauges are sent (the
-    database is dirty or the last build failed, so its totals are not trustworthy yet).
-    Returns (families, bytes_sent). state=None sends raw totals (dry run)."""
-    metrics = collect(con) if business else []
-    if state is not None:
-        account(metrics, state)
-    metrics = metrics + self_metrics(con, status, db_path)
+def export(con, db_path, status, url=None, now=None, state=None, business=True, persist=False):
+    """Collect and, when a URL is given, push. business=False (the build failed or the database is dirty) skips
+    collection and sends the last accounted values plus the health gauges. state=None sends raw totals and is
+    the preview used by 'agent-events export'. With persist, the proposed values are checkpointed before the POST
+    (so a crash can never let a later, lower value go out) and delivery is recorded after it."""
+    gauges_src = self_metrics(con, status, db_path)
+    if state is None:
+        metrics = (collect(con) if business else []) + gauges_src
+    else:
+        gauges, families = account(collect(con) if business else [], state, business, fingerprint())
+        metrics = families + gauges_src
+        if persist:
+            save_state(state)
     now_ns = int((now or time.time()) * 1e9)
     start_ns = int(status.get("epoch_ns") or now_ns)
     sent = 0
     if url:
         sent = post(url, otlp_payload(metrics, start_ns, now_ns))
+        if state is not None:
+            mark_delivered(state)
+            if persist:
+                save_state(state)
     return metrics, sent
 
 
@@ -448,13 +510,15 @@ def _tick(sessions_dir, db):
     if url and Path(db).exists():
         try:
             con = ae.connect(db, readonly=True)
-            state = load_state()
+            state, lost = load_state()
+            if lost:  # a new accounting epoch: counters restart at 0 with a new start time, history is no activity
+                status["epoch_ns"] = int(time.time() * 1e9)
+                log("export state was unusable; starting a new accounting epoch")
             try:
                 dirty = (con.execute("SELECT value FROM meta WHERE key='dirty'").fetchone() or ("0",))[0] == "1"
-                metrics, sent = export(con, db, status, url, state=state, business=not (dirty or build_failed))
+                metrics, sent = export(con, db, status, url, state=state, business=not (dirty or build_failed), persist=True)
             finally:
                 con.close()
-                save_state(state)
             status.update(last_export_ok_ts=time.time(), last_export_error=None,
                           last_export_series=series_count(metrics), last_export_bytes=sent)
         except Exception as exc:  # noqa: BLE001

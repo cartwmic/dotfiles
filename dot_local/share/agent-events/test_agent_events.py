@@ -1020,87 +1020,159 @@ class ExportSafety(Tick):
         self.assertFalse(Path(str(self.db) + ".corrupt").exists())
         self.assertIn("busy", (self.state / "agent.log").read_text())
 
-    def test_failed_or_dirty_build_exports_only_health_gauges(self):
-        c = self.collector()
-        self.assertEqual(am.run_once(self.root, self.db), 0)
-        names = lambda req: {m["name"] for m in req["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]}
-        self.assertIn("pi_sessions", names(c.requests[-1]))
-        real = ae.build
-        ae.build = lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked"))
-        self.addCleanup(lambda: setattr(ae, "build", real))
-        am.run_once(self.root, self.db)
-        self.assertTrue(all(n.startswith("pi_agent_events_") for n in names(c.requests[-1])))
-        ae.build = real
-        con = sqlite3.connect(self.db)
-        con.execute("INSERT OR REPLACE INTO meta VALUES ('dirty','1')")
-        con.commit()
-        con.close()
-        ae.build = lambda *a, **k: {"parsed": 0, "unchanged": 1, "removed": 0, "sessions": 1, "malformed_lines": 0, "refinalized": False}
-        am.run_once(self.root, self.db)
-        self.assertTrue(all(n.startswith("pi_agent_events_") for n in names(c.requests[-1])))
-
     def test_manual_builds_wait_for_the_scheduled_one(self):
         with am.build_lock(blocking=False) as first:
             self.assertTrue(first)
             with am.build_lock(blocking=False) as second:
                 self.assertFalse(second)
 
-    def _fam(self, v, labels=None):
-        return [{"name": "pi_x", "type": "sum", "points": [(labels or {"a": "1"}, v)]}]
+    def _acc(self, state, values, business=True, fp="f"):
+        """values: {label: number}; returns {label: exported value}."""
+        fam = [{"name": "pi_x", "type": "sum", "points": [({"a": k}, v) for k, v in values.items()]}]
+        _, out = am.account(fam, state, business, fp)
+        return {l["a"]: v for l, v in out[0]["points"]} if out else {}
 
-    def test_counters_never_decrease_and_decreases_add_nothing(self):
-        state = {}
-        sent = lambda v, **k: am.account(self._fam(v, **k), state)[0]["points"][0][1]
-        self.assertEqual(sent(1000), 1000)   # first run: history is a baseline
-        self.assertEqual(sent(1100), 1100)   # real growth
-        self.assertEqual(sent(900), 1100)    # a rebuild recomputed a lower total: no reset, no phantom activity
-        self.assertEqual(sent(950), 1150)    # growth continues from the corrected baseline
-        self.assertEqual(sent(950), 1150)
+    def test_history_is_a_baseline_and_counters_never_decrease(self):
+        s = {}
+        self.assertEqual(self._acc(s, {"1": 1000}), {"1": 0})      # first run: history is not activity
+        self.assertEqual(self._acc(s, {"1": 1000}), {"1": 0})      # first POST not yet confirmed: no growth
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"1": 1100}), {"1": 100})    # real growth
+        self.assertEqual(self._acc(s, {"1": 900}), {"1": 100})     # a recomputed lower total: nothing added, no reset
+        self.assertEqual(self._acc(s, {"1": 950}), {"1": 150})     # growth continues from the corrected baseline
+        self.assertEqual(self._acc(s, {"1": 950}), {"1": 150})
 
-    def test_a_new_series_after_the_first_run_is_sent_as_zero_then_grows(self):
-        state = {}
-        am.account(self._fam(5), state)
-        fam = self._fam(5) + [{"name": "pi_y", "type": "sum", "points": [({"detail": "context"}, 1)]}]
-        out = am.account(fam, state)
-        self.assertEqual(out[1]["points"][0][1], 0)       # Prometheus sees the series at 0 first ...
-        fam = self._fam(5) + [{"name": "pi_y", "type": "sum", "points": [({"detail": "context"}, 1)]}]
-        out = am.account(fam, state)
-        self.assertEqual(out[1]["points"][0][1], 1)       # ... then the first occurrence counts
+    def test_a_new_series_is_sent_as_zero_until_delivered_then_its_first_occurrence_counts(self):
+        s = {}
+        self._acc(s, {"a": 5})
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"a": 5, "b": 1}), {"a": 0, "b": 0})
+        self.assertEqual(self._acc(s, {"a": 5, "b": 1}), {"a": 0, "b": 0})   # the zero POST failed: still no growth
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"a": 5, "b": 1}), {"a": 0, "b": 1})   # delivered: the first occurrence counts
 
-    def test_a_mass_of_new_series_is_a_baseline_not_activity(self):
-        state = {}
-        am.account(self._fam(5), state)
-        many = [{"name": "pi_z", "type": "sum", "points": [({"p": str(i)}, 10) for i in range(am.SEED_LIMIT + 5)]}]
-        out = am.account(many, state)
-        self.assertTrue(all(v == 10 for _, v in out[0]["points"]))
-        out = am.account([{"name": "pi_z", "type": "sum", "points": [({"p": str(i)}, 12) for i in range(am.SEED_LIMIT + 5)]}], state)
-        self.assertTrue(all(v == 12 for _, v in out[0]["points"]))
+    def test_a_series_that_vanishes_keeps_its_value_and_its_pending_increment(self):
+        s = {}
+        self._acc(s, {"a": 5})
+        am.mark_delivered(s)
+        self._acc(s, {"a": 5, "b": 3})
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"a": 5}), {"a": 0, "b": 3})   # b's source vanished: its increment is still sent
+        self.assertEqual(self._acc(s, {"a": 5}, business=False), {"a": 0, "b": 3})
+
+    def test_a_changed_project_map_rebases_instead_of_counting_history(self):
+        s = {}
+        self._acc(s, {"other": 100}, fp="one")
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"other": 100}, fp="one"), {"other": 0})
+        out = self._acc(s, {"other": 0, "newproj": 100}, fp="two")      # 100 errors moved to a newly approved project
+        self.assertEqual(out, {"other": 0, "newproj": 0})
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"other": 0, "newproj": 105}, fp="two"), {"other": 0, "newproj": 5})
 
     def test_histograms_are_accounted_bucket_by_bucket(self):
+        s = {}
+        h = lambda counts, sm, n: [{"name": "pi_h", "type": "histogram", "bounds": (1, 2), "points": [({}, (counts, sm, n))]}]
+        am.account(h([1, 1, 0], 3.0, 2), s, True, "f")
+        am.mark_delivered(s)
+        out = am.account(h([2, 1, 1], 9.0, 4), s, True, "f")[1][0]
+        self.assertEqual(out["points"][0][1], ([1, 0, 1], 6.0, 2))
+        self.assertEqual(out["bounds"], (1, 2))
+        out = am.account(h([1, 1, 1], 5.0, 3), s, True, "f")[1][0]   # a bucket went down: baseline correction only
+        self.assertEqual(out["points"][0][1], ([1, 0, 1], 6.0, 2))
+
+    def test_unusable_state_starts_a_new_epoch_with_zeroed_values(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        c = self.collector()
+        value = lambda: [m for m in c.requests[-1]["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+                         if m["name"] == "pi_sessions"][0]["sum"]["dataPoints"][0]
+        am.run_once(self.root, self.db)
+        first_start = value()["startTimeUnixNano"]
+        for junk in ("null", "[1]", "{not json", '{"series":{"k":{"n":1}}}', '{"series":[]}'):
+            (self.state / "export_state.json").write_text(junk)
+            self.assertEqual(am.load_state(), ({}, True), junk)
+            time.sleep(0.01)
+            am.run_once(self.root, self.db)
+            self.assertEqual(value()["asDouble"], 0, junk)           # never raw history
+            self.assertGreater(int(value()["startTimeUnixNano"]), int(first_start), junk)
+            first_start = value()["startTimeUnixNano"]
+        self.assertEqual(am.load_state()[1], False)
+
+    def test_values_are_checkpointed_before_the_post_and_delivery_after(self):
+        self.build()
+        con = ae.connect(self.db, readonly=True)
         state = {}
-        h = lambda counts, s, n: [{"name": "pi_h", "type": "histogram", "bounds": (1, 2), "points": [({}, (counts, s, n))]}]
-        am.account(h([1, 1, 0], 3.0, 2), state)
-        out = am.account(h([2, 1, 1], 9.0, 4), state)
-        self.assertEqual(out[0]["points"][0][1], ([2, 1, 1], 9.0, 4))
-        out = am.account(h([1, 1, 1], 5.0, 3), state)   # a bucket went down: baseline correction only
-        self.assertEqual(out[0]["points"][0][1], ([2, 1, 1], 9.0, 4))
+        os.environ["AGENT_EVENTS_STATE_DIR"] = str(self.state)
+        bad = Collector(body=b'{"partialSuccess":{"rejectedDataPoints":"1"}}')
+        self.addCleanup(bad.close)
+        with self.assertRaises(RuntimeError):
+            am.export(con, self.db, {}, bad.url, state=state, persist=True)
+        saved, lost = am.load_state()
+        self.assertFalse(lost)
+        self.assertTrue(saved["series"])                                # checkpointed although the POST failed
+        self.assertFalse(any(e["ok"] for e in saved["series"].values()))   # and nothing is marked delivered
+
+    def test_a_failed_or_dirty_build_sends_stale_accounted_values_and_never_collects(self):
+        c = self.collector()
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        real_collect = am.collect
+        am.collect = lambda con: (_ for _ in ()).throw(AssertionError("must not collect"))
+        self.addCleanup(lambda: setattr(am, "collect", real_collect))
+        real = ae.build
+        ae.build = lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked"))
+        self.addCleanup(lambda: setattr(ae, "build", real))
+        self.assertEqual(am.run_once(self.root, self.db), 1)
+        names = {m["name"] for m in c.requests[-1]["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]}
+        self.assertIn("pi_sessions", names)
+        self.assertIn("pi_agent_events_consecutive_build_failures", names)
+
+    def test_a_permission_error_is_a_failed_build_not_a_silent_removal(self):
+        self.build()
+        real = ae.parse_session
+        def deny(path):
+            raise PermissionError(13, "denied", str(path))
+        ae.parse_session = deny
+        self.addCleanup(lambda: setattr(ae, "parse_session", real))
+        self.top().touch()
+        os.utime(self.top(), (1, 1))
+        self.top().write_text(self.top().read_text() + "\n")   # changed file forces a re-parse
+        with self.assertRaises(PermissionError):
+            self.build()
+        self.assertEqual(self.q("SELECT COUNT(*) AS n FROM sessions")[0]["n"], 1)
+
+    def test_extra_hyphenated_project_slugs_resolve(self):
+        ae._GIT_ROOTS = set()
+        self.addCleanup(lambda: setattr(ae, "_GIT_ROOTS", None))
+        os.environ["AGENT_EVENTS_PROJECTS"] = "budget-steward:proj"
+        self.assertEqual(ae.export_project("/work/budget-steward"), "budget-steward")
+        self.assertEqual(ae.export_project("/work/budget-steward-wt-2"), "budget-steward")
+        self.assertEqual(ae.export_project("/work/other-thing"), "other")
+
+    def test_export_accepts_the_dry_run_flag_and_never_sends(self):
+        self.build()
+        c = self.collector()
+        env = dict(os.environ, AGENT_EVENTS_STATE_DIR=str(self.state))
+        out = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "export", "--dry-run"], capture_output=True, text=True, env=env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(c.requests, [])
 
     def test_ticks_keep_the_exported_session_count_monotonic_when_a_file_is_removed(self):
         c = self.collector()
         value = lambda: [m for m in c.requests[-1]["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
                          if m["name"] == "pi_sessions"][0]["sum"]["dataPoints"][0]["asDouble"]
         am.run_once(self.root, self.db)
-        self.assertEqual(value(), 1)
+        self.assertEqual(value(), 0)               # the existing session is history: baseline
         second = Fixture(session_id="sess-2")
         second.user(T + 1000)
         second.llm(T + 1500, T + 2500, stop="stop")
         path = second.write(self.top("--work-proj--/2026-10-01T00-00-02-000Z_sess-2.jsonl"))
         am.run_once(self.root, self.db)
-        am.run_once(self.root, self.db)
-        self.assertEqual(value(), 2)
+        self.assertEqual(value(), 1)               # a new session after the baseline is activity
         path.unlink()
         am.run_once(self.root, self.db)
-        self.assertEqual(value(), 2)   # the database now says 1, the exported counter does not go backwards
+        self.assertEqual(value(), 1)               # the database says 1 again; the exported counter does not go backwards
+        am.run_once(self.root, self.db)
+        self.assertEqual(value(), 1)
 
 
 if __name__ == "__main__":

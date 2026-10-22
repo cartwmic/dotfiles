@@ -9,6 +9,7 @@ event kinds. Cost is notional (API-equivalent price table), never a bill.
 """
 import argparse
 import datetime as dt
+import errno
 import json
 import os
 import re
@@ -168,7 +169,7 @@ def project_of(cwd):
     name = name.lower().lstrip("_")
     if name == "dotfiles" or name.startswith("dotfiles-wt"):
         return "chezmoi"
-    best = max((r for r in _git_roots() if name == r or name.startswith(r + "-")), key=len, default=None)
+    best = max((r for r in _git_roots() | _extra_slugs() if name == r or name.startswith(r + "-")), key=len, default=None)
     if best:
         return best
     token = re.split(r"[-.]", name, maxsplit=1)[0]
@@ -179,14 +180,20 @@ _EXPORT_SLUGS = {"home", "workspace", "scratch", "unknown", "other"}
 _SLUG_RE = re.compile(r"[a-z][a-z0-9-]{0,40}")
 
 
+def _extra_slugs():
+    return {s for s in (os.environ.get("AGENT_EVENTS_PROJECTS") or "").split(":") if _SLUG_RE.fullmatch(s)}
+
+
+def approved_projects():
+    return {r for r in _git_roots() if _SLUG_RE.fullmatch(r)} | _extra_slugs()
+
+
 def export_project(cwd):
     """The only project names that leave the machine: repositories found on this machine (plus extras from
     AGENT_EVENTS_PROJECTS) and a few fixed buckets. Any other directory is 'other', so a scratch or temp
     directory name can never become a label."""
     slug = project_of(cwd)
-    approved = {r for r in _git_roots() if _SLUG_RE.fullmatch(r)}
-    approved.update(s for s in (os.environ.get("AGENT_EVENTS_PROJECTS") or "").split(":") if _SLUG_RE.fullmatch(s))
-    return slug if slug in approved or slug in _EXPORT_SLUGS else "other"
+    return slug if slug in approved_projects() or slug in _EXPORT_SLUGS else "other"
 
 
 def norm_status(value):
@@ -592,7 +599,9 @@ def build(sessions_dir, db_path, since_ms=None, progress=None):
             continue
         try:
             st = path.stat()
-        except OSError:
+        except OSError as exc:
+            if exc.errno not in (errno.ENOENT, errno.ENOTDIR):
+                raise
             continue
         if since_ms is not None and st.st_mtime * 1000 < since_ms:
             continue
@@ -602,8 +611,10 @@ def build(sessions_dir, db_path, since_ms=None, progress=None):
             continue
         try:
             parsed = parse_session(path)
-        except OSError:  # the file vanished between listing and reading; the next build sees the new state
-            seen.discard(str(path))
+        except OSError as exc:
+            if exc.errno not in (errno.ENOENT, errno.ENOTDIR):
+                raise  # permission or I/O trouble is a failed build, never a silent removal
+            seen.discard(str(path))  # it vanished between listing and reading; the next build sees the new state
             continue
         malformed += parsed.malformed
         with con:
@@ -1112,7 +1123,8 @@ def make_parser():
     sh.add_argument("--call", type=int, help="a call by its seq number (see: session, sql)")
     sh.add_argument("--chars", type=int, default=400)
     sub.add_parser("run", help="one always-on tick: incremental build, then export when an endpoint is configured")
-    sub.add_parser("export", help="show what the scheduled run would send (series per metric); sends nothing")
+    ex = sub.add_parser("export", help="show what the scheduled 'run' would send (series per metric); sends nothing")
+    ex.add_argument("--dry-run", action="store_true", help="accepted for compatibility; export never sends")
     st = sub.add_parser("status", help="age of the last successful build and export; exit 1 when stale")
     st.add_argument("--max-age", type=int, default=900, help="seconds")
     q = sub.add_parser("sql", help="read-only SQL against the database")
