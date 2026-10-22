@@ -7,8 +7,9 @@
   <array><string>/bin/sh</string><string>{{ .chezmoi.homeDir }}/.local/bin/agent-events</string><string>run</string></array>
   <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>120</integer>
-  <key>ProcessType</key><string>Background</string>
-  <key>LowPriorityIO</key><true/>
+  <!-- Not ProcessType Background / LowPriorityIO: macOS then throttles the tick to a near stop whenever the
+       machine is busy (observed: a tick stalled for more than 6 minutes at load average 60-85). Plain nice
+       is enough; a tick takes a few seconds. -->
   <key>Nice</key><integer>10</integer>
   <key>EnvironmentVariables</key>
   <dict>
