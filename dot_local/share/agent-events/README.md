@@ -52,11 +52,12 @@ A build that is interrupted marks the database dirty and the next build repairs 
 ## Always on (personal macOS)
 
 A LaunchAgent, `local.agent-events` (source `Library/LaunchAgents/local.agent-events.plist.tmpl`, loaded by
-`run_onchange_after_70_agent_events_launchd.sh.tmpl`), runs `agent-events run` every 2 minutes at low priority:
+`run_onchange_after_70_agent_events_launchd.sh.tmpl`), runs `agent-events run` every 2 minutes (nice 10; not launchd's Background class, which macOS throttles to a standstill on a busy machine):
 
 1. an incremental `build` (a few seconds; the first full build takes about 80 s; ticks and manual `agent-events build` runs take one lock, so they wait for each other instead of racing);
 2. an aggregate-metrics push to the homelab OTel collector, when `AGENT_EVENTS_OTLP_ENDPOINT` is set;
-3. `status.json`, `agent.log` (rotated at 1 MB) and a lock file in `~/.local/state/agent-events/`.
+3. a 20-minute watchdog (`AGENT_EVENTS_TICK_LIMIT_S`, a positive number of seconds) that stops a stuck tick so it releases the lock. It is a soft deadline (a SIGALRM handler runs when SQLite or a network call returns), not a hard kill;
+4. `status.json`, `agent.log` (rotated at 1 MB) and a lock file in `~/.local/state/agent-events/`.
 
 Self-healing: a database that is corrupt (not a busy or locked one) or three failed builds in a row set it aside as
 `events.sqlite.corrupt`, and it is rebuilt from the session files; the database holds only derived data. A failed
