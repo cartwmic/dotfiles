@@ -7,7 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { ASK_TOOL_NAME, TOOL_NAME, corePath, eligible, logPath, registerNotifyOwner, ring } from "./helpers.ts";
+import { ALERT_DOORS, ALERT_KINDS, ALERT_SCOPES, ASK_TOOL_NAME, TOOL_NAME, corePath, eligible, logPath, registerNotifyOwner, ring, validateAlert } from "./helpers.ts";
 
 // A scripted child process for the injected spawner: records how it was started and lets a test fire its events.
 function fakeSpawner() {
@@ -22,7 +22,12 @@ function fakeSpawner() {
   return { started, children, spawnFn };
 }
 
-const Type = { Object: (properties: unknown) => ({ type: "object", properties }), String: (options?: unknown) => ({ type: "string", ...(options as object) }) };
+const Type = {
+  Object: (properties: unknown, options?: unknown) => ({ type: "object", properties, ...(options as object) }),
+  String: (options?: unknown) => ({ type: "string", ...(options as object) }),
+  Array: (items: unknown, options?: unknown) => ({ type: "array", items, ...(options as object) }),
+  Optional: (schema: unknown) => ({ ...(schema as object), optional: true }),
+};
 
 function scratch() {
   const home = mkdtempSync(join(tmpdir(), "notify-owner-"));
@@ -61,7 +66,7 @@ test("the tool is registered and its call runs emit --kind question for this pan
     registerNotifyOwner(pi, Type, s.env);
     const [tool] = pi.tools;
     assert.equal(tool.name, TOOL_NAME);
-    assert.deepEqual(Object.keys(tool.parameters.properties), ["question"]);
+    assert.deepEqual(Object.keys(tool.parameters.properties), ["kind", "summary", "scope", "attachments", "options", "recommendation", "door", "question"]);
     const result = await tool.execute("call-1", { question: "which database?" });
     assert.match(result.content[0].text, /Doorbell dispatched/);
     assert.equal(result.isError, undefined);
@@ -71,17 +76,15 @@ test("the tool is registered and its call runs emit --kind question for this pan
   } finally { s.cleanup(); }
 });
 
-test("an answer-ready call rings as a question, and the tool wording covers both uses", async () => {
+test("a legacy answer-ready call (only question) still rings as a question, unchanged", async () => {
   const s = scratch();
   try {
     const pi = fakePi();
     registerNotifyOwner(pi, Type, s.env);
     const [tool] = pi.tools;
-    assert.match(tool.description, /answered a question/);
-    assert.match(tool.description, /answer ready: <topic>/);
-    assert.match(tool.promptSnippet, /answered a question/);
     const result = await tool.execute("c", { question: "answer ready: database choice" });
     assert.match(result.content[0].text, /question or answer summary/);
+    assert.doesNotMatch(result.content[0].text, /Recorded as/);
     await until(() => s.calls().length === 1);
     assert.match(s.calls()[0], /^emit --worker w1:p2 --kind question /);
     assert.doesNotMatch(s.calls()[0], /database/);
@@ -228,4 +231,102 @@ test("the operator log path is resolved as the core does: env (with ~), then con
     writeFileSync(config, "not json");
     assert.equal(logPath({ HOME: home, AGENT_ALERT_CONFIG: config }), join(home, ".local/state/agent-alert/agent-alert.log"));
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+const fixtures = JSON.parse(readFileSync(new URL("./alert-fixtures.json", import.meta.url), "utf8"));
+
+for (const fixture of fixtures.valid) {
+  test(`fixture valid: ${fixture.name}`, () => {
+    const result = validateAlert(fixture.args);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual((result as { alert: unknown }).alert, fixture.normalized);
+  });
+}
+
+for (const fixture of fixtures.invalid) {
+  test(`fixture invalid: ${fixture.name}`, () => {
+    const result = validateAlert(fixture.args);
+    assert.equal(result.ok, false);
+    const errors = (result as { errors: string[] }).errors;
+    for (const expected of fixture.errors) assert.ok(errors.some((error) => error.includes(expected)), `no error mentions ${expected}: ${errors.join(" | ")}`);
+  });
+}
+
+test("validateAlert reports every problem at once, and rejects non-objects and empty calls", () => {
+  const result = validateAlert({ kind: "decision", summary: "x", options: ["only"], extra: 1 });
+  assert.equal(result.ok, false);
+  const errors = (result as { errors: string[] }).errors;
+  for (const name of ["summary", "options", "recommendation", "door", "extra"]) assert.ok(errors.some((e) => e.startsWith(name)), `${name}: ${errors.join(" | ")}`);
+  for (const args of [null, "text", [], undefined]) assert.equal(validateAlert(args).ok, false);
+  assert.equal(validateAlert({}).ok, false);
+  assert.equal(validateAlert({ question: "   " }).ok, false);
+  assert.equal(validateAlert({ question: "q", urgency: "high" }).ok, false);
+});
+
+test("validateAlert limits: summary controls and length, scope on non-reports, URL and PR attachments", () => {
+  const ok = (args: object) => validateAlert(args).ok;
+  assert.equal(ok({ kind: "report", summary: "line one\nline two" }), true);
+  assert.equal(ok({ kind: "report", summary: "tab\there" }), false);
+  assert.equal(ok({ kind: "report", summary: "x".repeat(600) }), true);
+  assert.equal(ok({ kind: "report", summary: "x".repeat(601) }), false);
+  assert.equal(ok({ kind: "report", summary: "ok done", scope: "forever" }), false);
+  assert.equal(ok({ kind: "blocked", summary: "stuck here", scope: "workstream" }), false);
+  assert.equal(ok({ kind: "blocked", summary: "stuck here", scope: "step", options: ["a", "b"] }), true);
+  assert.equal(ok({ kind: "blocked", summary: "stuck here", options: ["a", "b"], recommendation: "a" }), false);
+  assert.equal(ok({ kind: "report", summary: "all done", attachments: ["https://example.com/a..b", "PR owner/repo#4", "PR #5", "rel/file.md", "~/x/y.png"] }), true);
+  assert.equal(ok({ kind: "report", summary: "all done", attachments: ["bad\u0000path"] }), false);
+  assert.equal(ok({ kind: "report", summary: "all done", attachments: [""] }), false);
+  assert.equal(ok({ kind: "question", summary: "which one?", options: ["a", " b "], recommendation: " b " }), true);
+  assert.equal(ok({ kind: "question", summary: "which one?", options: ["a", "b", "c", "d", "e", "f", "g"], recommendation: "none" }), false);
+});
+
+test("the description tells drivers each kind, each scope, and what review, decision and question need", () => {
+  const s = scratch();
+  try {
+    const pi = fakePi();
+    registerNotifyOwner(pi, Type, s.env);
+    const { description } = pi.tools[0];
+    for (const word of [...ALERT_KINDS, ...ALERT_SCOPES, ...ALERT_DOORS]) assert.ok(description.includes(word), `description lacks ${word}`);
+    assert.match(description, /'step'[^.]*merged PR[^.]*finished phase/);
+    assert.match(description, /WHOLE assignment/);
+    assert.match(description, /review:[^.]*LOOK AT[^.]*needs attachments/);
+    assert.match(description, /question:[^.]*options and a recommendation/);
+    assert.match(description, /decision:[^.]*options, a recommendation and door/);
+    assert.match(description, /rings nothing/);
+  } finally { s.cleanup(); }
+});
+
+test("a malformed call returns an error, one problem per line, and rings nothing", async () => {
+  const s = scratch();
+  try {
+    const { started, spawnFn } = fakeSpawner();
+    const pi = fakePi();
+    registerNotifyOwner(pi, Type, s.env, spawnFn as never);
+    const result = await pi.tools[0].execute("c", { kind: "decision", summary: "Merge it now?", options: ["yes", "no"] });
+    assert.equal(result.isError, true);
+    const lines = result.content[0].text.split("\n");
+    assert.match(lines[0], /^Owner not notified/);
+    assert.deepEqual(lines.slice(1).map((line: string) => line.split(":")[0]), ["recommendation", "door"]);
+    assert.equal((await pi.tools[0].execute("c", {})).isError, true);
+    assert.equal((await pi.tools[0].execute("c", { question: "q", kind: "report", summary: "all done" })).isError, true);
+    assert.equal(started.length, 0);
+  } finally { s.cleanup(); }
+});
+
+test("a valid typed call rings once with the same emit arguments as a legacy call, and says what it recorded", async () => {
+  const s = scratch();
+  try {
+    const { started, spawnFn } = fakeSpawner();
+    const pi = fakePi();
+    registerNotifyOwner(pi, Type, s.env, spawnFn as never);
+    const typed = await pi.tools[0].execute("c", { kind: "review", summary: "Frames are ready to look at.", attachments: ["~/tmp/frames"] });
+    assert.equal(typed.isError, undefined);
+    assert.match(typed.content[0].text, /^Doorbell dispatched\./);
+    assert.match(typed.content[0].text, /Recorded as kind=review\.$/);
+    await pi.tools[0].execute("c", { question: "which database?" });
+    assert.equal(started.length, 2);
+    assert.deepEqual(started[0].args, ["emit", "--worker", "w1:p2", "--kind", "question", "--context", "agent=pi", "--context", "workspace_id=w1"]);
+    assert.deepEqual(started[1].args, started[0].args);
+    assert.equal(started[0].args.join(" ").includes("Frames"), false); // the alert text is never sent
+  } finally { s.cleanup(); }
 });
