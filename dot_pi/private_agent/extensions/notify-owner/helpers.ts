@@ -81,6 +81,157 @@ export function ring(env: Env, kind: Kind = "question", spawnFn: Spawner = spawn
   return "sent";
 }
 
+export const ALERT_KINDS = ["report", "review", "question", "decision", "blocked"] as const;
+export const ALERT_SCOPES = ["step", "workstream"] as const;
+export const ALERT_DOORS = ["none", "push", "force_push", "delete", "deploy", "merge", "spend", "other"] as const;
+export type AlertKind = (typeof ALERT_KINDS)[number];
+
+export interface TypedAlert {
+  kind: AlertKind;
+  summary: string;
+  scope: (typeof ALERT_SCOPES)[number];
+  attachments: string[];
+  options: string[];
+  recommendation: string | null;
+  door: (typeof ALERT_DOORS)[number] | null;
+}
+export interface LegacyAlert {
+  kind: null;
+  summary: string;
+}
+export type AlertResult = { ok: true; alert: TypedAlert | LegacyAlert } | { ok: false; errors: string[] };
+
+const NEW_ARGUMENTS = ["kind", "summary", "scope", "attachments", "options", "recommendation", "door"];
+const KNOWN_ARGUMENTS = [...NEW_ARGUMENTS, "question"];
+const hasControl = (value: string, allowNewline: boolean) => (allowNewline ? /[^\P{Cc}\n]/u : /\p{Cc}/u).test(value);
+const length = (value: string) => [...value].length; // characters, not UTF-16 units
+const oneOf = (values: readonly string[]) => values.join(", ");
+
+/** A trimmed string of `min`..`max` characters, or an error. */
+function boundedString(value: unknown, name: string, min: number, max: number, errors: string[], allowNewline = false): string | undefined {
+  if (typeof value !== "string") {
+    errors.push(`${name}: must be a string`);
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (length(trimmed) < min || length(trimmed) > max) {
+    errors.push(`${name}: must be ${min} to ${max} characters after trimming (got ${length(trimmed)})`);
+    return undefined;
+  }
+  if (hasControl(trimmed, allowNewline)) {
+    errors.push(`${name}: must not contain control characters${allowNewline ? " other than newline" : ""}`);
+    return undefined;
+  }
+  return trimmed;
+}
+
+function stringList(value: unknown, name: string, min: number, max: number, itemMax: number, errors: string[], checkItem?: (item: string, label: string) => string | undefined): string[] | undefined {
+  if (!Array.isArray(value)) {
+    errors.push(`${name}: must be an array of strings`);
+    return undefined;
+  }
+  if (value.length < min || value.length > max) errors.push(`${name}: must have ${min === 0 ? "at most " + max : `${min} to ${max}`} entries (got ${value.length})`);
+  const items: string[] = [];
+  value.forEach((entry, index) => {
+    const label = `${name}[${index}]`;
+    const item = boundedString(entry, label, 1, itemMax, errors);
+    if (item === undefined) return;
+    const problem = checkItem?.(item, label);
+    if (problem) errors.push(problem);
+    else items.push(item);
+  });
+  return value.length >= min && value.length <= max && items.length === value.length ? items : undefined;
+}
+
+// An attachment is an http(s) URL, a PR reference ("PR owner/repo#N" or "PR #N"), or else a file path.
+const URL_RE = /^https?:\/\/\S+$/i;
+const PR_RE = /^PR (?:[\w.-]+\/[\w.-]+)?#\d+$/;
+const checkAttachment = (item: string, label: string) => (URL_RE.test(item) || PR_RE.test(item) || !item.includes("..") ? undefined : `${label}: a path must not contain ".."`);
+
+/**
+ * Check a notify_owner call against the typed contract (README.md, "Arguments") and return the normalized alert
+ * or every problem found. The coordinator parses the same arguments from the worker's session log and is tested
+ * against the same alert-fixtures.json.
+ */
+export function validateAlert(args: unknown): AlertResult {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return { ok: false, errors: ["arguments: must be an object"] };
+  const input = args as Record<string, unknown>;
+  const present = (name: string) => input[name] !== undefined;
+  const errors: string[] = [];
+
+  for (const name of Object.keys(input)) if (!KNOWN_ARGUMENTS.includes(name)) errors.push(`${name}: unknown property (allowed: ${oneOf(KNOWN_ARGUMENTS)})`);
+
+  const typed = NEW_ARGUMENTS.some(present);
+  if (!typed) {
+    if (!present("question")) return { ok: false, errors: [...errors, "kind: required (one of " + oneOf(ALERT_KINDS) + "), with summary"] };
+    if (typeof input.question !== "string" || !input.question.trim()) errors.push("question: must be a non-empty string");
+    return errors.length ? { ok: false, errors } : { ok: true, alert: { kind: null, summary: (input.question as string).trim() } };
+  }
+
+  if (present("question")) errors.push("question: must not be combined with kind or the other typed arguments; use summary");
+  const kind = present("kind") ? (typeof input.kind === "string" && (ALERT_KINDS as readonly string[]).includes(input.kind) ? (input.kind as AlertKind) : undefined) : undefined;
+  if (!present("kind")) errors.push(`kind: required (one of ${oneOf(ALERT_KINDS)})`);
+  else if (!kind) errors.push(`kind: must be one of ${oneOf(ALERT_KINDS)}`);
+
+  const summary = present("summary") ? boundedString(input.summary, "summary", 3, 600, errors, true) : (errors.push("summary: required (3 to 600 characters; it replaces question)"), undefined);
+
+  let scope: TypedAlert["scope"] = "step";
+  if (present("scope")) {
+    if (typeof input.scope !== "string" || !(ALERT_SCOPES as readonly string[]).includes(input.scope)) errors.push(`scope: must be one of ${oneOf(ALERT_SCOPES)}`);
+    else scope = input.scope as TypedAlert["scope"];
+    if (kind && kind !== "report" && scope === "workstream") errors.push(`scope: "workstream" is only for kind report (got kind ${kind}); use "step"`);
+  }
+
+  const attachments = present("attachments") ? stringList(input.attachments, "attachments", 0, 8, 500, errors, checkAttachment) : [];
+  if (kind === "review" && !(present("attachments") && Array.isArray(input.attachments) && input.attachments.length > 0)) errors.push("attachments: required for kind review (at least 1: what the owner should look at)");
+
+  const optionsNeeded = kind === "question" || kind === "decision";
+  const optionsAllowed = optionsNeeded || kind === "blocked";
+  let options: string[] | undefined = [];
+  if (present("options")) {
+    if (kind && !optionsAllowed) errors.push(`options: not allowed for kind ${kind}`);
+    else options = stringList(input.options, "options", 2, 6, 200, errors);
+  } else if (optionsNeeded) errors.push(`options: required for kind ${kind} (2 to 6 choices)`);
+
+  let recommendation: string | null = null;
+  if (present("recommendation")) {
+    if (kind && !optionsNeeded) errors.push(`recommendation: not allowed for kind ${kind}`);
+    else {
+      const value = boundedString(input.recommendation, "recommendation", 1, 200, errors);
+      if (value !== undefined) {
+        recommendation = value;
+        if (value !== "none" && options && !options.includes(value)) errors.push('recommendation: must equal one of options exactly, or be "none"');
+      }
+    }
+  } else if (optionsNeeded) errors.push(`recommendation: required for kind ${kind} (one of options exactly, or "none")`);
+
+  let door: TypedAlert["door"] = null;
+  if (present("door")) {
+    if (kind && kind !== "decision") errors.push(`door: not allowed for kind ${kind}`);
+    else if (typeof input.door !== "string" || !(ALERT_DOORS as readonly string[]).includes(input.door)) errors.push(`door: must be one of ${oneOf(ALERT_DOORS)}`);
+    else door = input.door as TypedAlert["door"];
+  } else if (kind === "decision") errors.push(`door: required for kind decision (one of ${oneOf(ALERT_DOORS)}; none when no one-way door is involved)`);
+
+  if (errors.length || !kind || summary === undefined || !attachments || !options) return { ok: false, errors };
+  return { ok: true, alert: { kind, summary, scope, attachments, options, recommendation, door } };
+}
+
+export const DESCRIPTION =
+  "Ring the owner's doorbell and record a typed alert: a report, a review, a question, a decision or a blocker. " +
+  "It returns at once and does not wait: put the same text in your reply and end your turn. " +
+  "Choose kind. report: you finished work, ask nothing, and nobody has to look at anything. " +
+  "review: something is ready for the owner to LOOK AT (a recording, screenshots, a PR, a document) and you do not wait for an answer; it needs attachments, and it means 'look at this', not 'answer me'. " +
+  "question: you need an answer to continue (a two-way matter, no one-way door); it needs options and a recommendation. " +
+  `decision: you need the owner to decide something, possibly a one-way door; it needs options, a recommendation and door: ${oneOf(ALERT_DOORS)} (none when no one-way door is involved, other for any other irreversible step). ` +
+  "blocked: you cannot continue until the owner does or fixes something. " +
+  "summary is one or two plain sentences (3 to 600 characters). " +
+  "scope applies to report only: 'step' (the default) for a merged PR, a finished phase or a passed review; use 'workstream' only when the WHOLE assignment this pane exists for is finished. " +
+  "attachments: files (absolute, ~/, or relative to your cwd), http(s) URLs, or 'PR owner/repo#N' / 'PR #N'. " +
+  "recommendation is one of options, written exactly, or 'none'. " +
+  "A malformed call is rejected with the list of problems and rings nothing; fix it and call again. " +
+  "Never for progress or for finishing a turn nobody is waiting on, and not for a question you are asking with ask_user_question (that rings by itself). " +
+  "A call with only question (a string) still works as an untyped legacy alert; do not use it.";
+
 const text = (message: string, isError = false) => ({ content: [{ type: "text" as const, text: message }], details: {}, ...(isError ? { isError: true } : {}) });
 
 export interface PiLike {
@@ -88,22 +239,41 @@ export interface PiLike {
   on(event: string, handler: (event: { toolName?: string; reason?: string }, ctx: { hasUI?: boolean; mode?: string }) => void): void;
 }
 
+export interface TypeBoxLike {
+  Object(properties: unknown, options?: unknown): unknown;
+  String(options?: unknown): unknown;
+  Array(items: unknown, options?: unknown): unknown;
+  Optional(schema: unknown): unknown;
+}
+
 /** Register the tool and the listeners. `Type` is TypeBox's, passed in so tests need no Pi. */
-export function registerNotifyOwner(pi: PiLike, Type: { Object(p: unknown): unknown; String(o?: unknown): unknown }, env: Env = process.env, spawnFn?: Spawner): void {
+export function registerNotifyOwner(pi: PiLike, Type: TypeBoxLike, env: Env = process.env, spawnFn?: Spawner): void {
   if (!eligible(env)) return;
   pi.registerTool({
     name: TOOL_NAME,
     label: "Notify Owner",
-    description:
-      "Ring the owner's doorbell because you need their answer or decision, or because you have answered a question " +
-      "they or the coordinator asked you (summary like 'answer ready: <topic>'). It returns at once and does not wait: " +
-      "put the same text in your reply and end your turn. Never for progress or for finishing a turn nobody is waiting on, " +
-      "and not for a question you are asking with ask_user_question (that rings by itself).",
-    promptSnippet: "Ring the owner's doorbell when you need their answer or decision, or when you have answered a question they asked",
-    parameters: Type.Object({ question: Type.String({ description: "The question, or the one-line answer summary. It stays in your transcript; the doorbell sends no text." }) }),
-    async execute() {
+    description: DESCRIPTION,
+    promptSnippet: "Ring the owner's doorbell with a typed alert (kind report, review, question, decision or blocked) when someone should look at or answer something",
+    // Every field is optional and extra properties pass the schema on purpose: Pi checks parameters against it
+    // before execute, and validateAlert then reports every problem at once instead of a generic schema error.
+    parameters: Type.Object(
+      {
+        kind: Type.Optional(Type.String({ description: `One of: ${oneOf(ALERT_KINDS)}. See the tool description for which to choose.` })),
+        summary: Type.Optional(Type.String({ description: "One or two plain sentences, 3 to 600 characters. It stays in your transcript; the doorbell sends no text." })),
+        scope: Type.Optional(Type.String({ description: "report only: step (default) or workstream. workstream only when the WHOLE assignment this pane exists for is finished." })),
+        attachments: Type.Optional(Type.Array(Type.String(), { description: "At most 8: file paths (absolute, ~/, or relative to your cwd; no ..), http(s) URLs, or PR references like 'PR owner/repo#N'. Required for review." })),
+        options: Type.Optional(Type.Array(Type.String(), { description: "2 to 6 choices the owner can pick from. Required for question and decision; allowed for blocked." })),
+        recommendation: Type.Optional(Type.String({ description: "Exactly one of options, or 'none'. Required for question and decision." })),
+        door: Type.Optional(Type.String({ description: `Required for decision: ${oneOf(ALERT_DOORS)}.` })),
+        question: Type.Optional(Type.String({ description: "Legacy, untyped: use kind and summary instead. Never together with kind." })),
+      },
+      { additionalProperties: true },
+    ),
+    async execute(_callId: string, args: unknown) {
+      const checked = validateAlert(args);
+      if (!checked.ok) return text(["Owner not notified: the call is malformed. Fix these and call notify_owner again.", ...checked.errors].join("\n"), true);
       const result = ring(env, "question", spawnFn);
-      if (result === "sent") return text("Doorbell dispatched. Put the question or answer summary in your reply and end your turn; do not wait. (A failure to deliver is logged, not shown here.)");
+      if (result === "sent") return text(`Doorbell dispatched. Put the question or answer summary in your reply and end your turn; do not wait. (A failure to deliver is logged, not shown here.)${checked.alert.kind ? ` Recorded as kind=${checked.alert.kind}.` : ""}`);
       return text(`Owner not notified (${result === "no-core" ? "agent-alert is not installed or not executable on this machine" : "this is not a Herdr pane"}). Put the question or answer summary in your reply anyway.`, true);
     },
   });
