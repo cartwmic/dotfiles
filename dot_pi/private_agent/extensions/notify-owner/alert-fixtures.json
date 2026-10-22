@@ -1,0 +1,426 @@
+{
+ "valid": [
+  {
+   "name": "report step",
+   "args": {
+    "kind": "report",
+    "summary": "PR #27 merged (11dcbdb), live c8bdfee.",
+    "scope": "step"
+   },
+   "normalized": {
+    "kind": "report",
+    "summary": "PR #27 merged (11dcbdb), live c8bdfee.",
+    "scope": "step",
+    "attachments": [],
+    "options": [],
+    "recommendation": null,
+    "door": null
+   }
+  },
+  {
+   "name": "report default scope with attachments",
+   "args": {
+    "kind": "report",
+    "summary": "  Audit done.  ",
+    "attachments": [
+     "/tmp/coordinator-review/pr28-review.md",
+     "PR #28"
+    ]
+   },
+   "normalized": {
+    "kind": "report",
+    "summary": "Audit done.",
+    "scope": "step",
+    "attachments": [
+     "/tmp/coordinator-review/pr28-review.md",
+     "PR #28"
+    ],
+    "options": [],
+    "recommendation": null,
+    "door": null
+   }
+  },
+  {
+   "name": "report workstream",
+   "args": {
+    "kind": "report",
+    "summary": "The whole coordinator roadmap is finished and live.",
+    "scope": "workstream"
+   },
+   "normalized": {
+    "kind": "report",
+    "summary": "The whole coordinator roadmap is finished and live.",
+    "scope": "workstream",
+    "attachments": [],
+    "options": [],
+    "recommendation": null,
+    "door": null
+   }
+  },
+  {
+   "name": "review with attachments",
+   "args": {
+    "kind": "review",
+    "summary": "AC-20 recording frames are ready. Please look at VERDICTS.md and the frames.",
+    "attachments": [
+     "~/tmp/vl-rec6/VERDICTS.md",
+     "~/tmp/vl-rec6/frames"
+    ]
+   },
+   "normalized": {
+    "kind": "review",
+    "summary": "AC-20 recording frames are ready. Please look at VERDICTS.md and the frames.",
+    "scope": "step",
+    "attachments": [
+     "~/tmp/vl-rec6/VERDICTS.md",
+     "~/tmp/vl-rec6/frames"
+    ],
+    "options": [],
+    "recommendation": null,
+    "door": null
+   }
+  },
+  {
+   "name": "question",
+   "args": {
+    "kind": "question",
+    "summary": "Should I use the shorter retry schedule for the nightly job?",
+    "options": [
+     "shorter",
+     "keep the current one"
+    ],
+    "recommendation": "shorter"
+   },
+   "normalized": {
+    "kind": "question",
+    "summary": "Should I use the shorter retry schedule for the nightly job?",
+    "scope": "step",
+    "attachments": [],
+    "options": [
+     "shorter",
+     "keep the current one"
+    ],
+    "recommendation": "shorter",
+    "door": null
+   }
+  },
+  {
+   "name": "decision with a door",
+   "args": {
+    "kind": "decision",
+    "summary": "Budget steward intent 2 is done and the PR is open. Merge and deploy?",
+    "options": [
+     "merge and deploy",
+     "leave it open"
+    ],
+    "recommendation": "merge and deploy",
+    "door": "merge"
+   },
+   "normalized": {
+    "kind": "decision",
+    "summary": "Budget steward intent 2 is done and the PR is open. Merge and deploy?",
+    "scope": "step",
+    "attachments": [],
+    "options": [
+     "merge and deploy",
+     "leave it open"
+    ],
+    "recommendation": "merge and deploy",
+    "door": "merge"
+   }
+  },
+  {
+   "name": "decision without a door, no recommendation",
+   "args": {
+    "kind": "decision",
+    "summary": "Which name for the new tab?",
+    "options": [
+     "Inbox",
+     "Owed"
+    ],
+    "recommendation": "none",
+    "door": "none"
+   },
+   "normalized": {
+    "kind": "decision",
+    "summary": "Which name for the new tab?",
+    "scope": "step",
+    "attachments": [],
+    "options": [
+     "Inbox",
+     "Owed"
+    ],
+    "recommendation": "none",
+    "door": "none"
+   }
+  },
+  {
+   "name": "blocked",
+   "args": {
+    "kind": "blocked",
+    "summary": "The deploy is blocked: the 1Password session expired. Please sign in."
+   },
+   "normalized": {
+    "kind": "blocked",
+    "summary": "The deploy is blocked: the 1Password session expired. Please sign in.",
+    "scope": "step",
+    "attachments": [],
+    "options": [],
+    "recommendation": null,
+    "door": null
+   }
+  },
+  {
+   "name": "legacy untyped",
+   "args": {
+    "question": "answer ready: feed/R2/R4 audit. Nothing is broken."
+   },
+   "normalized": {
+    "kind": null,
+    "summary": "answer ready: feed/R2/R4 audit. Nothing is broken."
+   }
+  }
+ ],
+ "invalid": [
+  {
+   "name": "unknown kind",
+   "args": {
+    "kind": "fyi",
+    "summary": "hello there"
+   },
+   "errors": [
+    "kind"
+   ]
+  },
+  {
+   "name": "missing summary",
+   "args": {
+    "kind": "report"
+   },
+   "errors": [
+    "summary"
+   ]
+  },
+  {
+   "name": "summary too short",
+   "args": {
+    "kind": "report",
+    "summary": "ok"
+   },
+   "errors": [
+    "summary"
+   ]
+  },
+  {
+   "name": "question together with kind",
+   "args": {
+    "kind": "report",
+    "summary": "done with it",
+    "question": "done with it"
+   },
+   "errors": [
+    "question"
+   ]
+  },
+  {
+   "name": "new argument without kind",
+   "args": {
+    "summary": "done with it"
+   },
+   "errors": [
+    "kind"
+   ]
+  },
+  {
+   "name": "review without attachments",
+   "args": {
+    "kind": "review",
+    "summary": "Please look at the frames."
+   },
+   "errors": [
+    "attachments"
+   ]
+  },
+  {
+   "name": "question without options",
+   "args": {
+    "kind": "question",
+    "summary": "Which schedule should I use?"
+   },
+   "errors": [
+    "options"
+   ]
+  },
+  {
+   "name": "one option only",
+   "args": {
+    "kind": "question",
+    "summary": "Which schedule should I use?",
+    "options": [
+     "a"
+    ],
+    "recommendation": "a"
+   },
+   "errors": [
+    "options"
+   ]
+  },
+  {
+   "name": "recommendation not in options",
+   "args": {
+    "kind": "question",
+    "summary": "Which schedule should I use?",
+    "options": [
+     "a",
+     "b"
+    ],
+    "recommendation": "c"
+   },
+   "errors": [
+    "recommendation"
+   ]
+  },
+  {
+   "name": "question without recommendation",
+   "args": {
+    "kind": "question",
+    "summary": "Which schedule should I use?",
+    "options": [
+     "a",
+     "b"
+    ]
+   },
+   "errors": [
+    "recommendation"
+   ]
+  },
+  {
+   "name": "decision without door",
+   "args": {
+    "kind": "decision",
+    "summary": "Merge the PR now?",
+    "options": [
+     "yes",
+     "no"
+    ],
+    "recommendation": "yes"
+   },
+   "errors": [
+    "door"
+   ]
+  },
+  {
+   "name": "door on a report",
+   "args": {
+    "kind": "report",
+    "summary": "All merged and live.",
+    "door": "merge"
+   },
+   "errors": [
+    "door"
+   ]
+  },
+  {
+   "name": "unknown door",
+   "args": {
+    "kind": "decision",
+    "summary": "Merge the PR now?",
+    "options": [
+     "yes",
+     "no"
+    ],
+    "recommendation": "yes",
+    "door": "rm-rf"
+   },
+   "errors": [
+    "door"
+   ]
+  },
+  {
+   "name": "workstream scope on a review",
+   "args": {
+    "kind": "review",
+    "summary": "Please look at the frames.",
+    "attachments": [
+     "/tmp/a.png"
+    ],
+    "scope": "workstream"
+   },
+   "errors": [
+    "scope"
+   ]
+  },
+  {
+   "name": "options on a report",
+   "args": {
+    "kind": "report",
+    "summary": "All merged and live.",
+    "options": [
+     "a",
+     "b"
+    ]
+   },
+   "errors": [
+    "options"
+   ]
+  },
+  {
+   "name": "too many attachments",
+   "args": {
+    "kind": "report",
+    "summary": "All merged and live.",
+    "attachments": [
+     "/tmp/1",
+     "/tmp/2",
+     "/tmp/3",
+     "/tmp/4",
+     "/tmp/5",
+     "/tmp/6",
+     "/tmp/7",
+     "/tmp/8",
+     "/tmp/9"
+    ]
+   },
+   "errors": [
+    "attachments"
+   ]
+  },
+  {
+   "name": "dotdot path",
+   "args": {
+    "kind": "review",
+    "summary": "Please look at this file.",
+    "attachments": [
+     "/tmp/x/../../etc/passwd"
+    ]
+   },
+   "errors": [
+    "attachments"
+   ]
+  },
+  {
+   "name": "unknown property",
+   "args": {
+    "kind": "report",
+    "summary": "All merged and live.",
+    "urgency": "high"
+   },
+   "errors": [
+    "urgency"
+   ]
+  },
+  {
+   "name": "bad attachment type",
+   "args": {
+    "kind": "report",
+    "summary": "All merged and live.",
+    "attachments": [
+     3
+    ]
+   },
+   "errors": [
+    "attachments"
+   ]
+  }
+ ]
+}

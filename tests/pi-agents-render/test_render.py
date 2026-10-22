@@ -32,6 +32,9 @@ one-line summary, in two cases, and put the same text in your reply:
 - You have answered a question the owner or coordinator asked you (`answer ready: <topic>`).
   Someone is waiting on an answer, so it must ring; do not finish it quietly.
 
+Pass `kind` (and `scope`, `attachments`, `options`, `recommendation`, `door` where they apply)
+as the tool description says; use `summary`, not `question`.
+
 End your turn after the call. An `ask_user_question` dialog rings by itself: do not also call
 `notify_owner` for it. Do not ring for progress or for finishing a turn nobody is waiting on:
 that stays silent. Report progress on a separate `Status:` line.
@@ -56,6 +59,7 @@ class AgentsRenderTests(unittest.TestCase):
         text = render("personal")
         self.assertIn("Call the `notify_owner` tool, with a", text)
         self.assertIn("answer ready: <topic>", text)
+        self.assertIn("Pass `kind` (and `scope`", text)
         self.assertNotIn("AWAITING-OWNER: none", text)
         self.assertNotIn("AWAITING-OWNER: <the one question>", text)
         self.assertEqual(text.count(DOORBELL_SECTION), 1)
