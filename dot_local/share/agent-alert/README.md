@@ -122,7 +122,7 @@ not into this directory). It runs `agent-alert emit` for the worker's Herdr pane
 
 | What happens in Pi | Emitted |
 |---|---|
-| The worker calls the `notify_owner(question)` tool | `question` |
+| The worker calls the `notify_owner(kind, summary, ...)` tool (legacy: `notify_owner(question)`) | `question` |
 | An `ask_user_question` dialog opens | `question` |
 | Pi exits cleanly (the quit command, SIGTERM, SIGHUP: closing the pane) | `exited` |
 | Anything else: a finished turn, progress, a Herdr `blocked` status | nothing |
@@ -133,6 +133,9 @@ worker states its question in its reply and the coordinator reads the named pane
 ```sh
 herdr pane read "$PANE" --source recent-unwrapped --lines 40
 ```
+
+A typed `notify_owner` call's arguments (`kind`, `summary`, ...) are not added to the event; they stay in the worker's own
+session log, which the coordinator reads ([extension README](../../../dot_pi/private_agent/extensions/notify-owner/README.md)).
 
 - **Explicit only.** A worker that needs the owner must call the tool (the personal profile's Pi
   `AGENTS.md` says so). A worker that forgets is silent when its turn ends; the coordinator's own periodic
