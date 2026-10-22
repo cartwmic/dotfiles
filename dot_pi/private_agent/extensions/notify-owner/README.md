@@ -44,6 +44,8 @@ The call is checked by `validateAlert` in `helpers.ts` before anything rings. Un
 A malformed call returns an error result (`isError`) with one problem per line and rings nothing. On success the text is the
 usual "Doorbell dispatched..." plus `Recorded as kind=<kind>.`. The tool schema makes every field optional and allows extra
 properties on purpose: Pi validates parameters against it before `execute`, and `validateAlert` then lists every problem at once.
+The schema still checks property types (string, array of strings), so a wrong-typed value can be rejected by Pi before
+`validateAlert` runs, with a shorter error; nothing rings either way.
 
 **Legacy path.** A call with only `question` (a string) and none of the typed arguments is still accepted as an untyped alert,
 with the old success text and no `Recorded as` suffix. `question` together with `kind` is an error. The coordinator counts legacy
