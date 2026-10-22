@@ -42,6 +42,6 @@ Edit `~/.pi/agent/extensions/auto-compact/config.json` or run `/auto-compact` in
 Summary size cap: even with native auto-compaction off, Pi limits the history summary to min(0.8 x `compaction.reserveTokens`,
 model max output) (0.5 x for a split-turn prefix). The chezmoi-managed Pi settings set `reserveTokens` to 100000. At Pi's 16384
 default the history cap is 13107 tokens, which a long session's iterative summary can reach; the compaction then fails with
-"generation hit the token cap", and after `maxIneffectiveCompactions` failed attempts this extension pauses for the session.
+"generation hit the token cap", and after `maxIneffectiveCompactions` failed attempts this extension pauses (see `breakerCooldownSeconds`: it retries once after a cooldown, or stays paused for the session when that is 0).
 
 Config file is a chezmoi `create_` target, so later interactive edits remain machine-local and are not overwritten by `chezmoi apply`.

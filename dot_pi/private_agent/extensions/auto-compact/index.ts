@@ -157,6 +157,8 @@ export function registerAutoCompactExtension(
 	// When the tripped breaker allows one retry (undefined: not paused, or paused with no retry).
 	let pausedUntil: number | undefined;
 	let consecutiveTrips = 0;
+	// Cooldown expired and the one retry has not started yet.
+	let retryPending = false;
 
 	// Visible and durable record of breaker/failure events. Never throws: ctx or pi may be stale after teardown.
 	// 1) JSON line in the log file, 2) a custom session entry (not sent to the model), 3) a UI warning when
@@ -191,6 +193,7 @@ export function registerAutoCompactExtension(
 		autoDisabledForSession = false;
 		pausedUntil = undefined;
 		consecutiveTrips = 0;
+		retryPending = false;
 	};
 
 	const maybeCompact = (
@@ -199,25 +202,14 @@ export function registerAutoCompactExtension(
 		agentWillContinue: boolean,
 	): void => {
 		if (compacting) return;
-		if (autoDisabledForSession && (pausedUntil === undefined || now() < pausedUntil)) return;
 		if (typeof ctx.getContextUsage !== "function" || typeof ctx.compact !== "function") return;
-
-		// Cooldown over: allow exactly one retry. The next ineffective re-trigger trips the breaker again.
-		let retrying = false;
-		if (autoDisabledForSession) {
-			autoDisabledForSession = false;
-			pausedUntil = undefined;
-			lastAttemptTokens = undefined;
-			consecutiveIneffective = Math.max(0, config.maxIneffectiveCompactions - 1);
-			retrying = true;
-		}
 
 		const usage = ctx.getContextUsage();
 		const threshold = usage ? thresholdTokens(usage.contextWindow, config.thresholdPercent) : undefined;
-		// Only a real, finite below-threshold reading clears the attempt guard and
-		// the breaker. Do NOT treat `tokens: null` (returned right after
-		// compaction, before the next assistant response) as below-threshold: that
-		// would reset the breaker every round and defeat it.
+		// Only a real, finite below-threshold reading clears the attempt guard, the breaker, its pause and the
+		// backoff (also while paused: context recovered, e.g. by a manual /compact). Do NOT treat `tokens: null`
+		// (returned right after compaction, before the next assistant response) as below-threshold: that would
+		// reset the breaker every round and defeat it.
 		if (
 			usage &&
 			threshold !== undefined &&
@@ -228,6 +220,20 @@ export function registerAutoCompactExtension(
 			lastAttemptTokens = undefined;
 			consecutiveIneffective = 0;
 			consecutiveTrips = 0;
+			autoDisabledForSession = false;
+			pausedUntil = undefined;
+			retryPending = false;
+		}
+		if (autoDisabledForSession) {
+			if (pausedUntil === undefined || now() < pausedUntil) return;
+			// Cooldown over: allow exactly one retry. The next ineffective re-trigger trips the breaker again.
+			// The retry is recorded when it actually starts (a check at an unconfigured checkpoint or with no
+			// usage reading does not consume it).
+			autoDisabledForSession = false;
+			pausedUntil = undefined;
+			lastAttemptTokens = undefined;
+			consecutiveIneffective = Math.max(0, config.maxIneffectiveCompactions - 1);
+			retryPending = true;
 		}
 		if (!shouldTrigger(config, checkPoint, usage, lastAttemptTokens)) return;
 
@@ -264,7 +270,8 @@ export function registerAutoCompactExtension(
 			}
 		}
 
-		if (retrying) {
+		if (retryPending) {
+			retryPending = false;
 			record(
 				ctx,
 				"breaker_retry",

@@ -532,6 +532,7 @@ describe("auto-compact breaker visibility and retry", () => {
 			ctx, settle, entries, notices, logPath, commands, handlers,
 			calls: () => compactCalls,
 			advance: (ms: number) => { clock += ms; },
+			setTokens: (n: number) => { tokens = n; },
 			setMode: (m: "ineffective" | "fail" | "effective") => { mode = m; },
 			log: () => (existsSync(logPath) ? readFileSync(logPath, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []),
 		};
@@ -580,14 +581,43 @@ describe("auto-compact breaker visibility and retry", () => {
 
 	test("a successful retry clears the pause and the doubling", () => {
 		const t = setup();
+		t.settle(6); // trip #1 (300s)
+		t.advance(301_000);
+		t.settle(6); // retry runs, still ineffective: trip #2 (600s)
+		expect(t.log()[2].retryInSeconds).toBe(600);
+		t.advance(601_000);
+		t.setMode("effective");
+		t.settle(1); // retry succeeds: context drops below threshold
+		expect(t.ctx.getContextUsage().tokens).toBeLessThan(148_800);
+		t.settle(1); // finite below-threshold reading clears breaker state and backoff
+		t.setMode("ineffective");
+		t.setTokens(148_800); // context climbs back to the threshold
+		t.settle(6); // fresh breaker: 2 attempts, then trip
+		const paused = t.log().filter((e: any) => e.kind === "breaker_paused");
+		expect(paused[paused.length - 1].retryInSeconds).toBe(300); // not 1200
+	});
+
+	test("recovery while paused (manual compact) lifts the pause and resets backoff", () => {
+		const t = setup();
+		t.settle(6);
+		expect(t.calls()).toBe(2);
+		t.setTokens(50_000); // user compacted by hand during the cooldown
+		t.settle(1);
+		t.setTokens(148_800);
+		t.settle(6); // no cooldown wait: the breaker was reset
+		expect(t.calls()).toBe(4);
+		const paused = t.log().filter((e: any) => e.kind === "breaker_paused");
+		expect(paused[paused.length - 1].retryInSeconds).toBe(300);
+	});
+
+	test("an expired pause is not recorded as a retry until a compaction actually starts", () => {
+		const t = setup({ config: { ...DEFAULT_CONFIG, checkAt: ["agent_end"] } });
 		t.settle(6);
 		t.advance(301_000);
-		t.setMode("effective");
+		t.handlers.get("turn_end")?.({}, t.ctx);
+		t.handlers.get("turn_start")?.({}, t.ctx); // turn_end is not a configured checkpoint: no attempt, no retry event
+		expect(t.log().map((e: any) => e.kind)).toEqual(["breaker_paused"]);
 		t.settle(1);
-		expect(t.calls()).toBe(3);
-		t.settle(3);
-		expect(t.calls()).toBe(3);
-		expect(t.ctx.getContextUsage().tokens).toBeLessThan(148_800);
 		expect(t.log().map((e: any) => e.kind)).toEqual(["breaker_paused", "breaker_retry"]);
 	});
 
