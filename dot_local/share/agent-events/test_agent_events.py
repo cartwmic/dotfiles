@@ -874,6 +874,28 @@ class AlwaysOn(Tick):
         self.assertEqual(self.q("SELECT COUNT(*) AS n FROM sessions")[0]["n"], 1)
         self.assertIn("setting it aside", (self.state / "agent.log").read_text())
 
+    def test_a_hung_tick_gives_up_and_releases_the_lock(self):
+        os.environ["AGENT_EVENTS_TICK_LIMIT_S"] = "1"
+        self.addCleanup(lambda: os.environ.pop("AGENT_EVENTS_TICK_LIMIT_S", None))
+        real = ae.build
+        ae.build = lambda *a, **k: time.sleep(30)
+        self.addCleanup(lambda: setattr(ae, "build", real))
+        t0 = time.time()
+        self.assertEqual(am.run_once(self.root, self.db), 1)
+        self.assertLess(time.time() - t0, 10)
+        self.assertIn("gave up", (self.state / "agent.log").read_text())
+        with am.build_lock(blocking=False) as got:
+            self.assertTrue(got)
+
+    def test_a_bad_tick_limit_falls_back_and_never_leaves_the_handler_installed(self):
+        import signal
+        before = signal.getsignal(signal.SIGALRM)
+        for bad in ("invalid", "0", "-5"):
+            os.environ["AGENT_EVENTS_TICK_LIMIT_S"] = bad
+            self.assertEqual(am.run_once(self.root, self.db), 0, bad)
+            self.assertIs(signal.getsignal(signal.SIGALRM), before)
+        os.environ.pop("AGENT_EVENTS_TICK_LIMIT_S", None)
+
     def test_a_run_that_overlaps_another_is_skipped(self):
         self.state.mkdir(parents=True)
         with open(self.state / "lock", "w") as held:
