@@ -1187,6 +1187,18 @@ class ExportSafety(Tick):
         self.collector()
         self.assertEqual(am.run_once(self.root, self.db), 0)
 
+    def test_huge_integers_and_overflowing_sums_are_lost_state(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        path = self.state / "export_state.json"
+        huge = "1" + "0" * 400
+        for body in ('{"series":{"k":{"n":"x","t":"sum","l":{},"b":[],"last":[%s],"sent":[0],"seen":[0],"ok":true}}}' % huge,
+                     '{"series":{"k":{"n":"pi_h","t":"histogram","l":{},"b":[1,%s],"last":[0,0,0,0,0],"sent":[0,0,0,0,0],"seen":[0,0,0,0,0],"ok":true}}}' % huge,
+                     '{"series":{"k":{"n":"pi_h","t":"histogram","l":{},"b":[1,2],"last":[0,0,0,0,0],"sent":[1e308,1e308,1e308,1e308,1e308],"seen":[1e308,1e308,1e308,1e308,1e308],"ok":true}}}'):
+            path.write_text(body)
+            self.assertEqual(am.load_state(), ({}, True), body[:60])
+        self.collector()
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+
     def test_a_layout_change_retires_vanished_siblings_too(self):
         s = {}
         h = lambda bounds, pts: [{"name": "pi_h", "type": "histogram", "bounds": bounds,
