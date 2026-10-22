@@ -887,6 +887,15 @@ class AlwaysOn(Tick):
         with am.build_lock(blocking=False) as got:
             self.assertTrue(got)
 
+    def test_a_bad_tick_limit_falls_back_and_never_leaves_the_handler_installed(self):
+        import signal
+        before = signal.getsignal(signal.SIGALRM)
+        for bad in ("invalid", "0", "-5"):
+            os.environ["AGENT_EVENTS_TICK_LIMIT_S"] = bad
+            self.assertEqual(am.run_once(self.root, self.db), 0, bad)
+            self.assertIs(signal.getsignal(signal.SIGALRM), before)
+        os.environ.pop("AGENT_EVENTS_TICK_LIMIT_S", None)
+
     def test_a_run_that_overlaps_another_is_skipped(self):
         self.state.mkdir(parents=True)
         with open(self.state / "lock", "w") as held:
