@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import signal
 import sqlite3
 import sys
 import time
@@ -28,6 +29,11 @@ PHASES = ("llm", "explore", "edit", "run", "delegate", "owner", "other")
 KIND_LABEL = {"top": "top", "child": "subagent"}
 MAX_STALE_S = 900
 LOG_LIMIT = 1_000_000
+TICK_LIMIT_S = 1200
+
+
+class TickTimeout(BaseException):
+    """Raised by the watchdog alarm; a BaseException so the tick's own 'except Exception' cannot swallow it."""
 
 
 def state_dir():
@@ -512,7 +518,19 @@ def run_once(sessions_dir, db):
         if not got:
             log("skipped: a previous run or a manual build is still going")
             return 0
-        return _tick(sessions_dir, db)
+        # A hung tick would hold the lock and silence every later one: give up after TICK_LIMIT_S.
+        def on_alarm(*_):
+            raise TickTimeout()
+        previous = signal.signal(signal.SIGALRM, on_alarm)
+        signal.alarm(int(os.environ.get("AGENT_EVENTS_TICK_LIMIT_S") or TICK_LIMIT_S))
+        try:
+            return _tick(sessions_dir, db)
+        except TickTimeout:
+            log("tick: gave up after the time limit; the next scheduled run starts clean")
+            return 1
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
 
 
 def _tick(sessions_dir, db):
