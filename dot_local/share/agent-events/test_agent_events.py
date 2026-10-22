@@ -110,6 +110,10 @@ class Base(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name) / "sessions"
         self.db = Path(self._tmp.name) / "data" / "events.sqlite"
+        prior = os.environ.get("AGENT_EVENTS_STATE_DIR")  # a manual build takes a lock in the state dir
+        os.environ["AGENT_EVENTS_STATE_DIR"] = str(Path(self._tmp.name) / "state-base")
+        self.addCleanup(lambda: os.environ.__setitem__("AGENT_EVENTS_STATE_DIR", prior) if prior is not None
+                        else os.environ.pop("AGENT_EVENTS_STATE_DIR", None))
 
     def top(self, name="--work-proj--/2026-10-01T00-00-00-000Z_sess-1.jsonl"):
         return self.root / name
@@ -677,6 +681,566 @@ class Helpers(unittest.TestCase):
         self.assertEqual(ae.phase_of("some_mcp_tool"), "other")
         self.assertEqual(ae.error_bucket("HTTP 429 Too Many"), "rate_limit")
         self.assertEqual(ae.error_bucket("totally new failure"), "other")
+
+
+# ---------------------------------------------------------------- always-on, metrics, drill-down
+
+import agent_events_metrics as am  # noqa: E402
+import agent_events_show as ash  # noqa: E402
+import gzip  # noqa: E402
+import http.server  # noqa: E402
+import threading  # noqa: E402
+import fcntl  # noqa: E402
+import time  # noqa: E402
+
+ALLOWED_LABELS = {"project", "kind", "provider", "model", "outcome", "type", "tool", "nested", "phase", "event", "detail"}
+
+
+class Collector:
+    """A throwaway OTLP/HTTP endpoint that records what it is sent."""
+
+    def __init__(self, status=200, body=b'{"partialSuccess":{}}'):
+        self.requests = []
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                raw = self.rfile.read(int(self.headers["Content-Length"]))
+                outer.requests.append({"path": self.path, "encoding": self.headers.get("Content-Encoding"),
+                                       "body": json.loads(gzip.decompress(raw) if self.headers.get("Content-Encoding") == "gzip" else raw)})
+                self.send_response(status)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/v1/metrics"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class Tick(Base):
+    def setUp(self):
+        super().setUp()
+        self.state = Path(self._tmp.name) / "state"
+        self._env = {k: os.environ.get(k) for k in ("AGENT_EVENTS_STATE_DIR", "AGENT_EVENTS_OTLP_ENDPOINT",
+                                                      "AGENT_EVENTS_PROJECTS")}
+        os.environ["AGENT_EVENTS_STATE_DIR"] = str(self.state)
+        os.environ["AGENT_EVENTS_PROJECTS"] = "proj"  # the synthetic project is an approved workstream
+        os.environ.pop("AGENT_EVENTS_OTLP_ENDPOINT", None)
+        self.addCleanup(self._restore)
+        standard_session().write(self.top())
+
+    def _restore(self):
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def collector(self, **kw):
+        c = Collector(**kw)
+        self.addCleanup(c.close)
+        os.environ["AGENT_EVENTS_OTLP_ENDPOINT"] = c.url
+        return c
+
+    def status(self):
+        return json.loads((self.state / "status.json").read_text())
+
+
+class ProjectSlug(unittest.TestCase):
+    def setUp(self):
+        self._roots, self._bases = ae._GIT_ROOTS, ae._PROJECT_BASES
+        ae._GIT_ROOTS = {"chezmoi", "loop-engine", "budget-steward"}
+        ae._PROJECT_BASES = None
+        self.addCleanup(lambda: (setattr(ae, "_GIT_ROOTS", self._roots), setattr(ae, "_PROJECT_BASES", self._bases)))
+
+    def test_worktrees_and_run_dirs_fold_into_their_repository(self):
+        base = "/Volumes/Workshop/macbook/git/"
+        for cwd, want in [(base + "loop-engine", "loop-engine"), (base + "loop-engine-eval-g", "loop-engine"),
+                          (base + "_chezmoi-herdr-hook", "chezmoi"), (base + "dotfiles-wt-foo", "chezmoi"),
+                          (base + "budget-steward-wt-intent-1", "budget-steward"),
+                          ("/private/tmp/loop-engine-c-20261011", "loop-engine"),
+                          ("/Volumes/Workshop/macbook/loop-engine/runs/run-1/proto", "loop-engine"),
+                          (base.rstrip("/"), "workspace"), (None, "unknown"), ("", "unknown"),
+                          ("/x/Weird Name!", "other"), ("/x/20261020-1906", "other"), ("/work/proj", "proj")]:
+            self.assertEqual(ae.project_of(cwd), want, cwd)
+
+    def test_sql_can_use_project(self):
+        self.addCleanup(lambda: None)
+        with tempfile.TemporaryDirectory() as d:
+            standard_session().write(Path(d) / "s" / "--work-proj--" / "2026-10-01T00-00-00-000Z_sess-1.jsonl")
+            db = Path(d) / "e.sqlite"
+            ae.build(Path(d) / "s", db)
+            con = ae.connect(db, readonly=True)
+            ns = type("A", (), {"query": "SELECT project(cwd) AS p FROM sessions"})
+            self.assertEqual(ae.cmd_sql(con, ns).split("\n")[1], "proj")
+
+
+class MetricExport(Tick):
+    def test_aggregates_match_the_database_and_carry_only_allowed_labels(self):
+        self.build()
+        con = ae.connect(self.db, readonly=True)
+        fams = {m["name"]: m for m in am.collect(con)}
+        cost = sum(v for _, v in fams["pi_notional_cost_usd_total".replace("_total", "")]["points"])
+        s = self.q("SELECT notional_cost_usd + COALESCE(overhead_cost_usd, 0) AS c FROM sessions")[0]["c"]
+        self.assertAlmostEqual(cost, s, places=6)
+        self.assertEqual(sum(v for _, v in fams["pi_llm_calls"]["points"]), 4)
+        self.assertEqual(sum(v for _, v in fams["pi_sessions"]["points"]), 1)
+        for fam in fams.values():
+            for labels, _ in fam["points"]:
+                self.assertLessEqual(set(labels), ALLOWED_LABELS, fam["name"])
+        self.assertEqual({tuple(sorted(l.items())) for l, _ in fams["pi_sessions"]["points"]},
+                         {(("kind", "top"), ("project", "proj"))})
+        # histogram bucket counts add up to the number of timed calls
+        counts, total, n = [v for l, v in fams["pi_llm_call_duration_seconds"]["points"]][0]
+        self.assertEqual(sum(counts), n)
+        self.assertEqual(n, 4)
+        errs = {l["detail"]: v for l, v in fams["pi_events"]["points"] if l["event"] == "llm.error"}
+        self.assertEqual(errs, {"rate_limit": 1})
+
+    def test_payload_has_no_content_session_ids_or_paths(self):
+        self.build()
+        con = ae.connect(self.db, readonly=True)
+        payload = json.dumps(am.otlp_payload(am.collect(con) + am.self_metrics(con, {}, self.db), 1, 2))
+        for needle in (SENTINEL, "sess-1", "/work/proj", str(self.root)):
+            self.assertNotIn(needle, payload)
+
+    def test_post_is_gzipped_otlp_json_and_rejections_fail(self):
+        self.build()
+        c = self.collector()
+        con = ae.connect(self.db, readonly=True)
+        fams, sent = am.export(con, self.db, {"epoch_ns": 5}, c.url)
+        self.assertGreater(sent, 0)
+        req = c.requests[0]
+        self.assertEqual((req["path"], req["encoding"]), ("/v1/metrics", "gzip"))
+        names = {m["name"] for m in req["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]}
+        self.assertIn("pi_notional_cost_usd", names)
+        self.assertIn("pi_agent_events_last_build_success_timestamp_seconds", names)
+        bad = Collector(body=b'{"partialSuccess":{"rejectedDataPoints":"3"}}')
+        self.addCleanup(bad.close)
+        with self.assertRaises(RuntimeError):
+            am.export(con, self.db, {}, bad.url)
+
+    def test_cli_export_only_reports_and_never_sends(self):
+        self.build()
+        c = self.collector()
+        env = dict(os.environ, AGENT_EVENTS_STATE_DIR=str(self.state))
+        out = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "export"], capture_output=True, text=True, env=env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("nothing is sent by this command", out.stdout)
+        self.assertNotIn(SENTINEL, out.stdout)
+        self.assertEqual(c.requests, [])
+
+
+class AlwaysOn(Tick):
+    def test_tick_builds_exports_and_records_status(self):
+        c = self.collector()
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        st = self.status()
+        self.assertEqual((st["consecutive_build_failures"], st["last_parsed"], st["sessions"]), (0, 1, 1))
+        self.assertTrue(st["last_build_ok_ts"] and st["last_export_ok_ts"])
+        self.assertEqual(len(c.requests), 1)
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertEqual(self.status()["last_parsed"], 0)
+        self.assertEqual(self.status()["epoch_ns"], st["epoch_ns"])  # counters keep one start time
+
+    def test_without_an_endpoint_the_tick_builds_and_never_exports(self):
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        st = self.status()
+        self.assertTrue(st["last_build_ok_ts"])
+        self.assertNotIn("last_export_ok_ts", st)
+
+    def test_an_unreachable_collector_does_not_stop_the_build_and_logs_once(self):
+        os.environ["AGENT_EVENTS_OTLP_ENDPOINT"] = "http://127.0.0.1:9/v1/metrics"
+        self.assertEqual(am.run_once(self.root, self.db), 1)
+        self.assertEqual(am.run_once(self.root, self.db), 1)
+        st = self.status()
+        self.assertTrue(st["last_build_ok_ts"])
+        self.assertTrue(st["last_export_error"])
+        self.assertEqual((self.state / "agent.log").read_text().count("export failed"), 1)
+        self.assertEqual(self.q("SELECT COUNT(*) AS n FROM sessions")[0]["n"], 1)
+
+    def test_a_corrupt_database_is_set_aside_and_rebuilt(self):
+        self.build()
+        self.db.write_bytes(b"this is not a sqlite database" * 100)
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertTrue(Path(str(self.db) + ".corrupt").exists())
+        self.assertEqual(self.q("SELECT COUNT(*) AS n FROM sessions")[0]["n"], 1)
+        self.assertIn("setting it aside", (self.state / "agent.log").read_text())
+
+    def test_a_run_that_overlaps_another_is_skipped(self):
+        self.state.mkdir(parents=True)
+        with open(self.state / "lock", "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertFalse(self.db.exists())
+        self.assertIn("skipped", (self.state / "agent.log").read_text())
+
+    def test_log_is_rotated_and_holds_no_content(self):
+        self.state.mkdir(parents=True)
+        (self.state / "agent.log").write_text("x" * (am.LOG_LIMIT + 10))
+        am.run_once(self.root, self.db)
+        self.assertTrue((self.state / "agent.log.1").exists())
+        for p in self.state.iterdir():
+            self.assertNotIn(SENTINEL, p.read_text(errors="replace"))
+
+    def test_status_reports_fresh_stale_and_never(self):
+        text, code = am.cmd_status()
+        self.assertEqual(code, 1)
+        self.assertIn("never", text)
+        am.run_once(self.root, self.db)
+        text, code = am.cmd_status()
+        self.assertEqual(code, 0, text)
+        self.assertIn("fresh", text)
+        st = self.status()
+        st["last_build_ok_ts"] = time.time() - 3600
+        am.save_status(st)
+        text, code = am.cmd_status()
+        self.assertEqual(code, 1)
+        self.assertIn("STALE", text)
+
+    def test_the_cli_runs_a_tick_and_status(self):
+        env = dict(os.environ, AGENT_EVENTS_STATE_DIR=str(self.state), PI_CODING_AGENT_DIR=str(self.root.parent),
+                   XDG_DATA_HOME=str(Path(self._tmp.name) / "xdg"))
+        env.pop("AGENT_EVENTS_OTLP_ENDPOINT", None)
+        run = subprocess.run([sys.executable, str(CLI), "run"], capture_output=True, text=True, env=env)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        st = subprocess.run([sys.executable, str(CLI), "status"], capture_output=True, text=True, env=env)
+        self.assertEqual(st.returncode, 0, st.stdout)
+
+
+class DrillDown(Base):
+    def setUp(self):
+        super().setUp()
+        standard_session().write(self.top())
+        self.build()
+        self.con = ae.connect(self.db, readonly=True)
+
+    def show(self, **kw):
+        args = type("A", (), {"ref": "sess-1", "turn": None, "call": None, "chars": 400, **kw})
+        return ash.cmd_show(self.con, args)
+
+    def test_turn_prints_local_content_from_the_session_file(self):
+        out = self.show(turn=1)
+        self.assertIn(ash.NOTICE, out)
+        self.assertIn(SENTINEL, out)  # content is shown locally, on demand
+        self.assertIn("USER:", out)
+        self.assertNotIn("429 rate limit", out)  # turn 2 is not part of turn 1
+
+    def test_errors_print_the_error_text_and_nothing_is_stored_for_it(self):
+        out = self.show()
+        self.assertIn("429 rate limit", out)
+        stored = json.dumps([tuple(r) for t in ("events", "calls", "sessions") for r in self.q(f"SELECT * FROM {t}")])
+        self.assertNotIn("429 rate limit", stored)
+
+    def test_call_by_seq_and_clipping(self):
+        seq = self.q("SELECT seq FROM calls WHERE kind='llm' ORDER BY seq LIMIT 1")[0]["seq"]
+        out = self.show(call=seq, chars=10)
+        self.assertIn("[+", out)
+
+    def test_events_list_and_projects_report(self):
+        ns = type("A", (), {"since": None, "kind": "llm.error", "list": True, "limit": 5})
+        out = ae.cmd_events(self.con, ns)
+        self.assertIn("proj", out)
+        self.assertIn("agent-events show", out)
+        self.assertNotIn(SENTINEL, out)
+        out = ae.cmd_projects(self.con, type("A", (), {"since": None, "limit": 5}))
+        self.assertIn("proj", out)
+        self.assertIn("not a bill", out)
+
+
+class ExportSafety(Tick):
+    """Round-2 review: what may leave the machine, what failure paths may write, and counter behaviour."""
+
+    def test_unapproved_directories_and_odd_names_never_become_labels(self):
+        ae._GIT_ROOTS = {"loop-engine"}
+        self.addCleanup(lambda: setattr(ae, "_GIT_ROOTS", None))
+        for cwd, want in [("/private/tmp/tmpabc123", "other"), ("/tmp/some scratch dir", "other"),
+                          ("/Volumes/Workshop/macbook/git/loop-engine-eval-x", "loop-engine"),
+                          ("/work/proj", "proj"), ("/Users/alice/private stuff", "other"), (None, "unknown")]:
+            self.assertEqual(ae.export_project(cwd), want, cwd)
+
+    def test_export_names_reject_paths(self):
+        for bad in ("/Users/alice/private/model.gguf", "Users/alice/x/model", "~/m", "a b", "", None, "../x", "x" * 200):
+            self.assertEqual(am.export_name(bad), "other", bad)
+        for good in ("gpt-6.1-sol", "anthropic/claude-fable-5", "llama3:8b", "mcp__ticktick__create_task", "bash"):
+            self.assertEqual(am.export_name(good), good)
+
+    def test_a_path_shaped_model_does_not_reach_the_payload(self):
+        f = Fixture(session_id="sess-9")
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, model="/Users/alice/private/model.gguf", stop="stop")
+        f.write(self.top("--work-proj--/2026-10-01T00-00-09-000Z_sess-9.jsonl"))
+        self.build()
+        con = ae.connect(self.db, readonly=True)
+        payload = json.dumps(am.otlp_payload(am.collect(con), 1, 2))
+        self.assertNotIn("alice", payload)
+        self.assertNotIn("/Users", payload)
+
+    def test_failure_diagnostics_hold_no_paths_or_text(self):
+        secret = f"/Users/alice/{SENTINEL}/session.jsonl"
+        for exc in (FileNotFoundError(2, "No such file", secret), PermissionError(13, "denied", secret),
+                    sqlite3.OperationalError(f"unable to open {secret}"), ValueError(secret), RuntimeError(secret)):
+            self.assertNotIn(SENTINEL, am.safe_error(exc))
+        self.assertEqual(am.safe_error(FileNotFoundError(2, "x", secret)), "FileNotFoundError: ENOENT")
+
+    def test_a_failing_build_logs_and_stores_no_path_text(self):
+        secret = f"/Users/alice/{SENTINEL}/session.jsonl"
+        real = ae.build
+        ae.build = lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError(2, "No such file", secret))
+        self.addCleanup(lambda: setattr(ae, "build", real))
+        self.assertEqual(am.run_once(self.root, self.db), 1)
+        for p in self.state.iterdir():
+            self.assertNotIn(SENTINEL, p.read_text(errors="replace"), p.name)
+        self.assertEqual(self.status()["last_build_error"], "FileNotFoundError: ENOENT")
+
+    def test_a_session_that_vanishes_during_a_build_is_skipped(self):
+        real = ae.parse_session
+        def vanish(path):
+            raise FileNotFoundError(2, "gone", str(path))
+        ae.parse_session = vanish
+        self.addCleanup(lambda: setattr(ae, "parse_session", real))
+        res = self.build()
+        self.assertEqual((res["parsed"], res["sessions"]), (0, 0))
+
+    def test_a_busy_database_is_reported_never_set_aside(self):
+        self.build()
+        real = ae.build
+        ae.build = lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked"))
+        self.addCleanup(lambda: setattr(ae, "build", real))
+        for _ in range(4):
+            self.assertEqual(am.run_once(self.root, self.db), 1)
+        self.assertTrue(self.db.exists())
+        self.assertFalse(Path(str(self.db) + ".corrupt").exists())
+        self.assertIn("busy", (self.state / "agent.log").read_text())
+
+    def test_manual_builds_wait_for_the_scheduled_one(self):
+        with am.build_lock(blocking=False) as first:
+            self.assertTrue(first)
+            with am.build_lock(blocking=False) as second:
+                self.assertFalse(second)
+
+    def _acc(self, state, values, business=True, fp="f"):
+        """values: {label: number}; returns {label: exported value}."""
+        fam = [{"name": "pi_x", "type": "sum", "points": [({"a": k}, v) for k, v in values.items()]}]
+        _, out = am.account(fam, state, business, fp)
+        return {l["a"]: v for l, v in out[0]["points"]} if out else {}
+
+    def test_history_is_a_baseline_and_counters_never_decrease(self):
+        s = {}
+        self.assertEqual(self._acc(s, {"1": 1000}), {"1": 0})      # first run: history is not activity
+        self.assertEqual(self._acc(s, {"1": 1000}), {"1": 0})      # first POST not yet confirmed: no growth
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"1": 1100}), {"1": 100})    # real growth
+        self.assertEqual(self._acc(s, {"1": 900}), {"1": 100})     # a recomputed lower total: nothing added, no reset
+        self.assertEqual(self._acc(s, {"1": 950}), {"1": 150})     # growth continues from the corrected baseline
+        self.assertEqual(self._acc(s, {"1": 950}), {"1": 150})
+
+    def test_a_new_series_is_sent_as_zero_until_delivered_then_its_first_occurrence_counts(self):
+        s = {}
+        self._acc(s, {"a": 5})
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"a": 5, "b": 1}), {"a": 0, "b": 0})
+        self.assertEqual(self._acc(s, {"a": 5, "b": 1}), {"a": 0, "b": 0})   # the zero POST failed: still no growth
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"a": 5, "b": 1}), {"a": 0, "b": 1})   # delivered: the first occurrence counts
+
+    def test_a_series_that_vanishes_keeps_its_value_and_its_pending_increment(self):
+        s = {}
+        self._acc(s, {"a": 5})
+        am.mark_delivered(s)
+        self._acc(s, {"a": 5, "b": 3})
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"a": 5}), {"a": 0, "b": 3})   # b's source vanished: its increment is still sent
+        self.assertEqual(self._acc(s, {"a": 5}, business=False), {"a": 0, "b": 3})
+
+    def test_a_changed_project_map_rebases_instead_of_counting_history(self):
+        s = {}
+        self._acc(s, {"other": 100}, fp="one")
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"other": 100}, fp="one"), {"other": 0})
+        out = self._acc(s, {"other": 0, "newproj": 100}, fp="two")      # 100 errors moved to a newly approved project
+        self.assertEqual(out, {"other": 0, "newproj": 0})
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"other": 0, "newproj": 105}, fp="two"), {"other": 0, "newproj": 5})
+
+    def test_histograms_are_accounted_bucket_by_bucket(self):
+        s = {}
+        h = lambda counts, sm, n: [{"name": "pi_h", "type": "histogram", "bounds": (1, 2), "points": [({}, (counts, sm, n))]}]
+        am.account(h([1, 1, 0], 3.0, 2), s, True, "f")
+        am.mark_delivered(s)
+        out = am.account(h([2, 1, 1], 9.0, 4), s, True, "f")[1][0]
+        self.assertEqual(out["points"][0][1], ([1, 0, 1], 6.0, 2))
+        self.assertEqual(out["bounds"], (1, 2))
+        out = am.account(h([1, 1, 1], 5.0, 3), s, True, "f")[1][0]   # a bucket went down: baseline correction only
+        self.assertEqual(out["points"][0][1], ([1, 0, 1], 6.0, 2))
+
+    def test_unusable_state_starts_a_new_epoch_with_zeroed_values(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        c = self.collector()
+        value = lambda: [m for m in c.requests[-1]["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+                         if m["name"] == "pi_sessions"][0]["sum"]["dataPoints"][0]
+        am.run_once(self.root, self.db)
+        first_start = value()["startTimeUnixNano"]
+        for junk in ("null", "[1]", "{not json", '{"series":{"k":{"n":1}}}', '{"series":[]}'):
+            (self.state / "export_state.json").write_text(junk)
+            self.assertEqual(am.load_state(), ({}, True), junk)
+            time.sleep(0.01)
+            am.run_once(self.root, self.db)
+            self.assertEqual(value()["asDouble"], 0, junk)           # never raw history
+            self.assertGreater(int(value()["startTimeUnixNano"]), int(first_start), junk)
+            first_start = value()["startTimeUnixNano"]
+        self.assertEqual(am.load_state()[1], False)
+
+    def test_values_are_checkpointed_before_the_post_and_delivery_after(self):
+        self.build()
+        con = ae.connect(self.db, readonly=True)
+        state = {}
+        os.environ["AGENT_EVENTS_STATE_DIR"] = str(self.state)
+        bad = Collector(body=b'{"partialSuccess":{"rejectedDataPoints":"1"}}')
+        self.addCleanup(bad.close)
+        with self.assertRaises(RuntimeError):
+            am.export(con, self.db, {}, bad.url, state=state, persist=True)
+        saved, lost = am.load_state()
+        self.assertFalse(lost)
+        self.assertTrue(saved["series"])                                # checkpointed although the POST failed
+        self.assertFalse(any(e["ok"] for e in saved["series"].values()))   # and nothing is marked delivered
+
+    def test_a_failed_or_dirty_build_sends_stale_accounted_values_and_never_collects(self):
+        c = self.collector()
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        real_collect = am.collect
+        am.collect = lambda con: (_ for _ in ()).throw(AssertionError("must not collect"))
+        self.addCleanup(lambda: setattr(am, "collect", real_collect))
+        real = ae.build
+        ae.build = lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked"))
+        self.addCleanup(lambda: setattr(ae, "build", real))
+        self.assertEqual(am.run_once(self.root, self.db), 1)
+        names = {m["name"] for m in c.requests[-1]["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]}
+        self.assertIn("pi_sessions", names)
+        self.assertIn("pi_agent_events_consecutive_build_failures", names)
+
+    def test_a_permission_error_is_a_failed_build_not_a_silent_removal(self):
+        self.build()
+        real = ae.parse_session
+        def deny(path):
+            raise PermissionError(13, "denied", str(path))
+        ae.parse_session = deny
+        self.addCleanup(lambda: setattr(ae, "parse_session", real))
+        self.top().touch()
+        os.utime(self.top(), (1, 1))
+        self.top().write_text(self.top().read_text() + "\n")   # changed file forces a re-parse
+        with self.assertRaises(PermissionError):
+            self.build()
+        self.assertEqual(self.q("SELECT COUNT(*) AS n FROM sessions")[0]["n"], 1)
+
+    def test_extra_hyphenated_project_slugs_resolve(self):
+        ae._GIT_ROOTS = set()
+        self.addCleanup(lambda: setattr(ae, "_GIT_ROOTS", None))
+        os.environ["AGENT_EVENTS_PROJECTS"] = "budget-steward:proj"
+        self.assertEqual(ae.export_project("/work/budget-steward"), "budget-steward")
+        self.assertEqual(ae.export_project("/work/budget-steward-wt-2"), "budget-steward")
+        self.assertEqual(ae.export_project("/work/other-thing"), "other")
+
+    def test_export_accepts_the_dry_run_flag_and_never_sends(self):
+        self.build()
+        c = self.collector()
+        env = dict(os.environ, AGENT_EVENTS_STATE_DIR=str(self.state))
+        out = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "export", "--dry-run"], capture_output=True, text=True, env=env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(c.requests, [])
+
+    def test_state_validation_covers_histograms_and_bad_encoding(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        good = {"n": "pi_h", "t": "histogram", "l": {}, "b": [1, 2], "last": [0] * 5, "sent": [0] * 5, "seen": [0] * 5, "ok": True}
+        path = self.state / "export_state.json"
+        path.write_text(json.dumps({"series": {"k": good}}))
+        self.assertFalse(am.load_state()[1])
+        for mutate in (lambda e: e.pop("b"), lambda e: e.update(last=[0]), lambda e: e.update(b=[]),
+                       lambda e: e.update(b="x"), lambda e: e.update(sent=[0] * 4)):
+            bad = json.loads(json.dumps(good))
+            mutate(bad)
+            path.write_text(json.dumps({"series": {"k": bad}}))
+            self.assertEqual(am.load_state(), ({}, True))
+        path.write_bytes(b"\xff\xfe\x00 not utf8")
+        self.assertEqual(am.load_state(), ({}, True))
+        c = self.collector()
+        self.assertEqual(am.run_once(self.root, self.db), 0)      # recovers instead of failing every tick
+        self.assertFalse(am.load_state()[1])
+
+    def test_nonfinite_state_values_are_lost_state(self):
+        good = {"n": "pi_h", "t": "histogram", "l": {}, "b": [1, 2], "last": [0] * 5, "sent": [0] * 5, "seen": [0] * 5, "ok": True}
+        self.state.mkdir(parents=True, exist_ok=True)
+        path = self.state / "export_state.json"
+        for field, vec in (("sent", [0, 0, 0, 0, 1e309]), ("last", [0, 0, 0, 0, float("nan")]), ("b", [1, 1e309])):
+            bad = dict(good, **{field: vec})
+            path.write_text(json.dumps({"series": {"k": bad}}))   # json.dumps writes Infinity/NaN, json.loads reads them
+            self.assertEqual(am.load_state(), ({}, True), field)
+        path.write_text('{"series":{"k":{"n":"x","t":"sum","l":{},"b":[],"last":[0],"sent":[1e999],"seen":[0],"ok":true}}}')
+        self.assertEqual(am.load_state(), ({}, True))
+        self.collector()
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+
+    def test_huge_integers_and_overflowing_sums_are_lost_state(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        path = self.state / "export_state.json"
+        huge = "1" + "0" * 400
+        for body in ('{"series":{"k":{"n":"x","t":"sum","l":{},"b":[],"last":[%s],"sent":[0],"seen":[0],"ok":true}}}' % huge,
+                     '{"series":{"k":{"n":"pi_h","t":"histogram","l":{},"b":[1,%s],"last":[0,0,0,0,0],"sent":[0,0,0,0,0],"seen":[0,0,0,0,0],"ok":true}}}' % huge,
+                     '{"series":{"k":{"n":"pi_h","t":"histogram","l":{},"b":[1,2],"last":[0,0,0,0,0],"sent":[1e308,1e308,1e308,1e308,1e308],"seen":[1e308,1e308,1e308,1e308,1e308],"ok":true}}}'):
+            path.write_text(body)
+            self.assertEqual(am.load_state(), ({}, True), body[:60])
+        self.collector()
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+
+    def test_a_layout_change_retires_vanished_siblings_too(self):
+        s = {}
+        h = lambda bounds, pts: [{"name": "pi_h", "type": "histogram", "bounds": bounds,
+                                  "points": [({"a": k}, (c, sm, n)) for k, (c, sm, n) in pts.items()]}]
+        am.account(h((1, 2), {"a": ([0, 0, 0], 0.0, 0), "b": ([0, 0, 0], 0.0, 0)}), s, True, "f")
+        am.mark_delivered(s)
+        _, fams = am.account(h((1, 2, 3), {"a": ([0, 0, 0, 1], 4.0, 1)}), s, True, "f")
+        self.assertEqual(len(fams[0]["points"]), 1)               # b was retired, not left with a stale layout
+        for labels, (counts, sm, n) in fams[0]["points"]:
+            self.assertEqual(len(counts), len(fams[0]["bounds"]) + 1)
+        self.assertTrue(am._valid_state(s))
+
+    def test_a_changed_histogram_layout_restarts_at_zero(self):
+        s = {}
+        h = lambda bounds, counts, sm, n: [{"name": "pi_h", "type": "histogram", "bounds": bounds, "points": [({}, (counts, sm, n))]}]
+        am.account(h((1, 2), [0, 0, 0], 0.0, 0), s, True, "f")
+        am.mark_delivered(s)
+        out = am.account(h((1, 2, 3), [0, 0, 0, 1], 4.0, 1), s, True, "f")[1][0]
+        self.assertEqual(out["bounds"], (1, 2, 3))
+        self.assertEqual(out["points"][0][1], ([0, 0, 0, 0], 0.0, 0))
+        self.assertTrue(am._valid_state(s))
+        am.mark_delivered(s)
+        out = am.account(h((1, 2, 3), [0, 0, 0, 2], 9.0, 2), s, True, "f")[1][0]
+        self.assertEqual(out["points"][0][1], ([0, 0, 0, 1], 5.0, 1))
+
+    def test_ticks_keep_the_exported_session_count_monotonic_when_a_file_is_removed(self):
+        c = self.collector()
+        value = lambda: [m for m in c.requests[-1]["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+                         if m["name"] == "pi_sessions"][0]["sum"]["dataPoints"][0]["asDouble"]
+        am.run_once(self.root, self.db)
+        self.assertEqual(value(), 0)               # the existing session is history: baseline
+        second = Fixture(session_id="sess-2")
+        second.user(T + 1000)
+        second.llm(T + 1500, T + 2500, stop="stop")
+        path = second.write(self.top("--work-proj--/2026-10-01T00-00-02-000Z_sess-2.jsonl"))
+        am.run_once(self.root, self.db)
+        self.assertEqual(value(), 1)               # a new session after the baseline is activity
+        path.unlink()
+        am.run_once(self.root, self.db)
+        self.assertEqual(value(), 1)               # the database says 1 again; the exported counter does not go backwards
+        am.run_once(self.root, self.db)
+        self.assertEqual(value(), 1)
 
 
 if __name__ == "__main__":
