@@ -54,13 +54,15 @@ A build that is interrupted marks the database dirty and the next build repairs 
 A LaunchAgent, `local.agent-events` (source `Library/LaunchAgents/local.agent-events.plist.tmpl`, loaded by
 `run_onchange_after_70_agent_events_launchd.sh.tmpl`), runs `agent-events run` every 2 minutes at low priority:
 
-1. an incremental `build` (a few seconds; the first full build takes about 80 s and later ticks skip while it runs);
+1. an incremental `build` (a few seconds; the first full build takes about 80 s; ticks and manual `agent-events build` runs take one lock, so they wait for each other instead of racing);
 2. an aggregate-metrics push to the homelab OTel collector, when `AGENT_EVENTS_OTLP_ENDPOINT` is set;
 3. `status.json`, `agent.log` (rotated at 1 MB) and a lock file in `~/.local/state/agent-events/`.
 
-Self-healing: a database that will not open (or three failed builds in a row) is set aside as
-`events.sqlite.corrupt` and rebuilt from the session files, which is cheap because the database holds only
-derived data. A failed push never stops the build and is logged once per distinct failure.
+Self-healing: a database that is corrupt (not a busy or locked one) or three failed builds in a row set it aside as
+`events.sqlite.corrupt`, and it is rebuilt from the session files; the database holds only derived data. A failed
+push never stops the build and is logged once per distinct failure. Logs and `status.json` hold only an exception
+type and an error code, never a path or message text. While the last build failed or the database is dirty, only the
+health gauges are sent, not business totals.
 
 `agent-events status` prints the age of the last successful build and push and exits 1 when the build is older
 than 15 minutes. The same age is in Grafana (`pi_agent_events_last_build_success_timestamp_seconds`, "Data age" on the overview).
@@ -70,11 +72,20 @@ The work profile has neither the plist nor an endpoint, so no work data can reac
 
 `agent-events export` (also run by the tick) sends **aggregates only**: counters of sessions, turns, LLM and tool calls,
 seconds (active, LLM, tool, waiting on you, per phase), tokens, notional cost and rule-derived events, plus duration
-histograms for LLM and tool calls. Labels: `project` (workstream slug from the cwd: the repository, not the worktree or run
-directory), `kind` (`top` or `subagent`), `provider`, `model`, `tool`, `outcome`, `phase`, `event`, `detail` (error class).
-No session id, path, prompt, tool argument, result or error text. `agent-events export --dry-run` shows the series count (about 1,600).
-Counters are totals since the data began; Prometheus `increase()` therefore shows activity from the first push onward, and
-`agent-events projects` / `sql` give full history locally.
+histograms for LLM and tool calls. Labels: `project` (the repository the cwd belongs to, folding worktrees and run directories into it;
+only repositories found under `~/git` and `/Volumes/Workshop/macbook/git` or listed in `AGENT_EVENTS_PROJECTS`
+(colon-separated) are named, anything else is `other`), `kind` (`top` or `subagent`), `provider`, `model`, `tool`, `outcome`, `phase`, `event`, `detail` (error class).
+Provider, model and tool names must look like an identifier (a path becomes `other`).
+No session id, path, prompt, tool argument, result or error text. `agent-events export` shows the series per metric (about 1,600) and
+sends nothing; only the scheduled `run` sends.
+
+Counters are monotonic by construction. The database is recomputed on every build, so a total can fall (a removed file,
+a moved dedupe owner, an unknown duration). The exporter keeps its own accounting in `export_state.json`: an exported value only
+rises by the positive change since the last tick, so a recomputation never looks like a Prometheus counter reset. The first push
+and any tick with more than 50 brand-new series adopt current totals as the baseline; a few new series after that are sent as 0
+once and then grow, so the first error of a new kind is counted. Dashboards therefore show activity from the first push onward;
+`agent-events projects` / `sql` give full history locally. Tool metrics have no project label (cardinality), so the project and
+kind variables do not filter tool panels.
 
 Path: OTLP/HTTP (gzip JSON) to `otel-collector.internal.cartwmic.com`, its `metrics/pi` pipeline (`pi_*` names, port 8890),
 Prometheus job `pi-agent-events`, and the four `Pi agents: ...` dashboards in the homelab repo (`k8s/kube-prometheus-stack/pi-*-dashboard.yaml`):

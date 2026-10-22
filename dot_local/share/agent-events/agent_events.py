@@ -175,6 +175,20 @@ def project_of(cwd):
     return token if re.fullmatch(r"[a-z][a-z0-9]{0,30}", token) else "other"
 
 
+_EXPORT_SLUGS = {"home", "workspace", "scratch", "unknown", "other"}
+_SLUG_RE = re.compile(r"[a-z][a-z0-9-]{0,40}")
+
+
+def export_project(cwd):
+    """The only project names that leave the machine: repositories found on this machine (plus extras from
+    AGENT_EVENTS_PROJECTS) and a few fixed buckets. Any other directory is 'other', so a scratch or temp
+    directory name can never become a label."""
+    slug = project_of(cwd)
+    approved = {r for r in _git_roots() if _SLUG_RE.fullmatch(r)}
+    approved.update(s for s in (os.environ.get("AGENT_EVENTS_PROJECTS") or "").split(":") if _SLUG_RE.fullmatch(s))
+    return slug if slug in approved or slug in _EXPORT_SLUGS else "other"
+
+
 def norm_status(value):
     """Fixed vocabulary only: arbitrary status text is never stored."""
     s = value.lower() if isinstance(value, str) else ""
@@ -576,14 +590,21 @@ def build(sessions_dir, db_path, since_ms=None, progress=None):
         info = classify_path(sessions_dir, path)
         if info is None:
             continue
-        st = path.stat()
+        try:
+            st = path.stat()
+        except OSError:
+            continue
         if since_ms is not None and st.st_mtime * 1000 < since_ms:
             continue
         seen.add(str(path))
         if known.get(str(path)) == (st.st_size, st.st_mtime_ns):
             skipped += 1
             continue
-        parsed = parse_session(path)
+        try:
+            parsed = parse_session(path)
+        except OSError:  # the file vanished between listing and reading; the next build sees the new state
+            seen.discard(str(path))
+            continue
         malformed += parsed.malformed
         with con:
             _delete_file(con, str(path))
@@ -1051,14 +1072,12 @@ def cmd_sql(con, args):
 
 def export_cmd(metrics, con, db, args):
     status = metrics.load_status()
-    url = None if args.dry_run else metrics.endpoint()
-    if not args.dry_run and not url:
-        raise SystemExit("no OTLP endpoint: set AGENT_EVENTS_OTLP_ENDPOINT (this is how the work profile stays out)")
-    families, sent = metrics.export(con, db, status, url)
+    families, _ = metrics.export(con, db, status)  # never sends: the scheduled 'run' is the only sender
     rows = [(m["name"], m["type"], len(m["points"])) for m in families]
-    head = f"sent {sent} bytes to {url}" if url else "dry run: nothing sent"
-    return head + "\n" + table(rows, ["metric", "type", "series"]) + f"\n{metrics.series_count(families)} series. " + \
-        "Aggregates only: counts, seconds, tokens, notional cost; labels are project, kind, provider, model, tool, outcome."
+    where = metrics.endpoint() or "no endpoint set (AGENT_EVENTS_OTLP_ENDPOINT); this machine does not send"
+    return "what the next scheduled run would send (nothing is sent by this command)\n" + table(rows, ["metric", "type", "series"]) + \
+        f"\n{metrics.series_count(families)} series. Aggregates only: counts, seconds, tokens, notional cost; " + \
+        f"labels are project, kind, provider, model, tool, outcome.\nendpoint: {where}"
 
 
 def make_parser():
@@ -1093,8 +1112,7 @@ def make_parser():
     sh.add_argument("--call", type=int, help="a call by its seq number (see: session, sql)")
     sh.add_argument("--chars", type=int, default=400)
     sub.add_parser("run", help="one always-on tick: incremental build, then export when an endpoint is configured")
-    ex = sub.add_parser("export", help="push aggregate metrics to the OTLP endpoint (--dry-run: count only)")
-    ex.add_argument("--dry-run", action="store_true")
+    sub.add_parser("export", help="show what the scheduled run would send (series per metric); sends nothing")
     st = sub.add_parser("status", help="age of the last successful build and export; exit 1 when stale")
     st.add_argument("--max-age", type=int, default=900, help="seconds")
     q = sub.add_parser("sql", help="read-only SQL against the database")
@@ -1108,7 +1126,9 @@ def main(argv=None):
     if args.cmd == "build":
         started = time.time()
         sessions_dir = Path(args.sessions_dir) if args.sessions_dir else default_sessions_dir()
-        res = build(sessions_dir, db, since_ms=parse_since(args.since), progress=lambda m: print(m, file=sys.stderr))
+        import agent_events_metrics as metrics
+        with metrics.build_lock():  # waits for a running scheduled build instead of racing it
+            res = build(sessions_dir, db, since_ms=parse_since(args.since), progress=lambda m: print(m, file=sys.stderr))
         print(f"built {db}: {res['parsed']} parsed, {res['unchanged']} unchanged, {res['removed']} removed, "
               f"{res['sessions']} sessions, {res['malformed_lines']} malformed lines skipped "
               f"in {time.time() - started:.1f}s")

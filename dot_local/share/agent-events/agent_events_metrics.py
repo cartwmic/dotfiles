@@ -4,14 +4,16 @@ Only counts, durations, tokens, notional cost and fixed-vocabulary names leave t
 by low-cardinality labels (project slug, kind, provider, model, tool, outcome). No session ids, no
 paths, no message text, tool arguments or error text. Content stays in the session files.
 """
+import contextlib
+import errno
 import fcntl
 import gzip
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
-import traceback
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -65,14 +67,23 @@ def _hist(rows, bounds):
     return out
 
 
+NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:[/:][A-Za-z0-9][A-Za-z0-9._-]{0,63})?")
+
+
+def export_name(value):
+    """Provider, model and tool names leave the machine only when they look like an identifier
+    (name, vendor/name or name:tag). A filesystem path or any other string becomes 'other'."""
+    return value if isinstance(value, str) and NAME_RE.fullmatch(value) else "other"
+
+
 def collect(con):
-    """Read the database and return metric families. Counters are cumulative totals since the data began."""
-    project = ae.project_of
+    """Read the database and return metric families. Values are cumulative totals recomputed from the
+    current database; account() turns them into a monotonic series before they are sent."""
+    project = ae.export_project
     metrics = []
 
     def counter(name, labels, rows, scale=1.0, index=0):
-        pts = [({k: v for k, v in zip(labels, key)}, vals[index] * scale) for key, vals in sorted(rows.items())
-               if vals[index]]
+        pts = [({k: v for k, v in zip(labels, key)}, vals[index] * scale) for key, vals in sorted(rows.items())]
         metrics.append({"name": name, "type": "sum", "points": pts})
 
     # per project and kind: sessions, turns, time
@@ -102,33 +113,34 @@ def collect(con):
             " FROM calls c JOIN sessions s USING (path) WHERE c.kind='llm' AND c.dup=0"
             " GROUP BY s.cwd, s.kind, c.provider, c.model, c.status"):
         pj, kind = project(r[0]), _kind(r[1])
-        rows_calls.append((pj, kind, r[2], r[3], r[4], r[5]))
+        prov, mdl = export_name(r[2]), export_name(r[3])
+        rows_calls.append((pj, kind, prov, mdl, r[4], r[5]))
         for tp, v in zip(("input", "cache_read", "cache_write", "output"), r[6:10]):
-            rows_tok.append((pj, kind, r[2], r[3], tp, v))
-        rows_cost.append((pj, kind, r[2], r[3], "call", r[10]))
+            rows_tok.append((pj, kind, prov, mdl, tp, v))
+        rows_cost.append((pj, kind, prov, mdl, "call", r[10]))
     for r in con.execute(
             "SELECT s.cwd, s.kind, COALESCE(c.provider,'unknown'), COALESCE(c.model, 'unknown'), SUM(c.cost_usd)"
             " FROM calls c JOIN sessions s USING (path) WHERE c.kind='overhead' AND c.dup=0"
             " GROUP BY s.cwd, s.kind, c.provider, c.model"):
-        rows_cost.append((project(r[0]), _kind(r[1]), r[2], r[3], "overhead", r[4]))
+        rows_cost.append((project(r[0]), _kind(r[1]), export_name(r[2]), export_name(r[3]), "overhead", r[4]))
     counter("pi_llm_calls", ("project", "kind", "provider", "model", "outcome"), _sum_by(rows_calls, 5, 1))
     counter("pi_tokens", ("project", "kind", "provider", "model", "type"), _sum_by(rows_tok, 5, 1))
     counter("pi_notional_cost_usd", ("project", "kind", "provider", "model", "type"), _sum_by(rows_cost, 5, 1))
 
     # tools
-    rows = [(r[0], "true" if r[1] == "nested" else "false", r[2], r[3]) for r in con.execute(
+    rows = [(export_name(r[0]), "true" if r[1] == "nested" else "false", r[2], r[3]) for r in con.execute(
         "SELECT name, kind, status, COUNT(*) FROM calls WHERE kind IN ('tool','nested') AND dup=0"
         " GROUP BY name, kind, status")]
     counter("pi_tool_calls", ("tool", "nested", "outcome"), _sum_by(rows, 3, 1))
 
     cum = ", ".join(f"SUM(dur_ms <= {int(b * 1000)})" for b in TOOL_BOUNDS)
-    thist = _hist([(r[0], "true" if r[1] == "nested" else "false", *r[2:]) for r in con.execute(
+    thist = _hist([(export_name(r[0]), "true" if r[1] == "nested" else "false", *r[2:]) for r in con.execute(
         f"SELECT name, kind, SUM(dur_ms IS NOT NULL), SUM(dur_ms), {cum} FROM calls"
         " WHERE kind IN ('tool','nested') AND dup=0 AND dur_ms IS NOT NULL GROUP BY name, kind")], TOOL_BOUNDS)
     metrics.append({"name": "pi_tool_call_duration_seconds", "type": "histogram", "bounds": TOOL_BOUNDS,
                     "points": [({"tool": k[0], "nested": k[1]}, v) for k, v in sorted(thist.items())]})
     cum = ", ".join(f"SUM(dur_ms <= {int(b * 1000)})" for b in LLM_BOUNDS)
-    lhist = _hist([tuple(r) for r in con.execute(
+    lhist = _hist([(export_name(r[0]), export_name(r[1]), *r[2:]) for r in con.execute(
         f"SELECT provider, model, SUM(dur_ms IS NOT NULL), SUM(dur_ms), {cum} FROM calls"
         " WHERE kind='llm' AND dup=0 AND dur_ms IS NOT NULL GROUP BY provider, model")], LLM_BOUNDS)
     metrics.append({"name": "pi_llm_call_duration_seconds", "type": "histogram", "bounds": LLM_BOUNDS,
@@ -194,6 +206,12 @@ def otlp_payload(metrics, start_ns, now_ns):
         {"scope": {"name": "agent-events"}, "metrics": out}]}]}
 
 
+def _own(message):
+    exc = RuntimeError(message)
+    exc.own_message = True  # text written by this module, safe to log
+    return exc
+
+
 def post(url, payload, timeout=30):
     body = gzip.compress(json.dumps(payload, separators=(",", ":")).encode())
     req = urllib.request.Request(url, data=body, method="POST", headers={
@@ -201,13 +219,13 @@ def post(url, payload, timeout=30):
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         text = resp.read().decode("utf-8", "replace")
         if resp.status != 200:
-            raise RuntimeError(f"collector answered HTTP {resp.status}")
+            raise _own(f"collector answered HTTP {resp.status}")
     try:
         rejected = ((json.loads(text) or {}).get("partialSuccess") or {}).get("rejectedDataPoints")
     except ValueError:
         rejected = None
     if rejected and int(rejected) > 0:
-        raise RuntimeError(f"collector rejected {rejected} data points")
+        raise _own(f"collector rejected {rejected} data points")
     return len(body)
 
 
@@ -215,15 +233,125 @@ def series_count(metrics):
     return sum(len(m["points"]) for m in metrics)
 
 
-def export(con, db_path, status, url=None, now=None):
-    """Collect, then push to the collector when a URL is given. Returns (families, series, bytes_sent)."""
-    metrics = collect(con) + self_metrics(con, status, db_path)
+SEED_LIMIT = 50  # more brand-new series than this in one tick is a reclassification, not activity
+
+
+def _vector(m, value):
+    return list(value[0]) + [value[1], value[2]] if m["type"] == "histogram" else [value]
+
+
+def _unvector(m, vec):
+    return (vec[:-2], vec[-2], vec[-1]) if m["type"] == "histogram" else vec[0]
+
+
+def account(metrics, state):
+    """Make the series monotonic. The database is recomputed on every build, so a total can go down (a
+    session file removed, a dedupe owner moved, a project remapped, an unknown duration). Prometheus would
+    read that as a counter reset and invent activity. So the exported value only ever moves up by the
+    positive change since the last tick; a decrease is a baseline correction and adds nothing.
+    The first run, and any tick with more than SEED_LIMIT new series, adopt current totals as the baseline
+    (history is not activity). A few new series after that are real new activity: they are sent as 0 once,
+    then their growth is added, so Prometheus sees the first error of a new kind."""
+    series = state.setdefault("series", {})
+    todo = []
+    for m in metrics:
+        if m["type"] == "gauge":
+            continue
+        for i, (labels, value) in enumerate(m["points"]):
+            todo.append((m, i, m["name"] + "|" + json.dumps(sorted(labels.items())), _vector(m, value)))
+    fresh = sum(1 for _, _, key, _ in todo if key not in series)
+    baseline = not state.get("seeded") or fresh > SEED_LIMIT
+    for m, i, key, cur in todo:
+        entry = series.get(key)
+        if entry is None:
+            if baseline:
+                entry = series[key] = {"last": cur, "sent": list(cur)}
+            else:  # real new activity: appear at 0 now, add the growth on the next tick
+                entry = series[key] = {"last": [0] * len(cur), "sent": [0] * len(cur)}
+                m["points"][i] = (m["points"][i][0], _unvector(m, entry["sent"]))
+                continue
+        if all(c >= l for c, l in zip(cur, entry["last"])):
+            entry["sent"] = [s + (c - l) for s, c, l in zip(entry["sent"], cur, entry["last"])]
+        entry["last"] = cur
+        m["points"][i] = (m["points"][i][0], _unvector(m, entry["sent"]))
+    state["seeded"] = True
+    return metrics
+
+
+def load_state():
+    try:
+        return json.loads((state_dir() / "export_state.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    d = state_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / "export_state.json.tmp"
+    tmp.write_text(json.dumps(state, separators=(",", ":")))
+    os.replace(tmp, d / "export_state.json")
+
+
+def export(con, db_path, status, url=None, now=None, state=None, business=True):
+    """Collect and, when a URL is given, push. With business=False only the health gauges are sent (the
+    database is dirty or the last build failed, so its totals are not trustworthy yet).
+    Returns (families, bytes_sent). state=None sends raw totals (dry run)."""
+    metrics = collect(con) if business else []
+    if state is not None:
+        account(metrics, state)
+    metrics = metrics + self_metrics(con, status, db_path)
     now_ns = int((now or time.time()) * 1e9)
     start_ns = int(status.get("epoch_ns") or now_ns)
     sent = 0
     if url:
         sent = post(url, otlp_payload(metrics, start_ns, now_ns))
     return metrics, sent
+
+
+def safe_error(exc):
+    """A description of a failure that cannot contain a path, an id or message text: type and code only."""
+    name = type(exc).__name__
+    if isinstance(exc, sqlite3.Error):
+        return f"{name}: {getattr(exc, 'sqlite_errorname', '') or 'sqlite'}"
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"{name}: HTTP {exc.code}"
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        code = errno.errorcode.get(getattr(reason, "errno", None) or 0, "")
+        return f"{name}: {type(reason).__name__} {code}".strip()
+    if isinstance(exc, OSError):
+        return f"{name}: {errno.errorcode.get(exc.errno or 0, 'error')}"
+    if isinstance(exc, RuntimeError) and getattr(exc, "own_message", False):
+        return str(exc)
+    return name
+
+
+def is_busy(exc):
+    text = str(exc).lower()
+    return getattr(exc, "sqlite_errorname", "") in ("SQLITE_BUSY", "SQLITE_LOCKED") or "locked" in text or "busy" in text
+
+
+def is_corrupt(exc):
+    if not isinstance(exc, sqlite3.DatabaseError) or is_busy(exc):
+        return False
+    text = str(exc).lower()
+    return (getattr(exc, "sqlite_errorname", "") in ("SQLITE_NOTADB", "SQLITE_CORRUPT")
+            or "not a database" in text or "malformed" in text)
+
+
+@contextlib.contextmanager
+def build_lock(blocking=True):
+    """One build at a time across the scheduled tick and a manual 'agent-events build'."""
+    d = state_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / "lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            yield False
+            return
+        yield True
 
 
 # ---------------------------------------------------------------- state, tick, status
@@ -272,20 +400,18 @@ def _build_with_healing(sessions_dir, db, status):
     try:
         return ae.build(sessions_dir, db)
     except sqlite3.DatabaseError as exc:
-        log(f"build: database problem ({type(exc).__name__}); setting it aside and rebuilding from the session files")
+        if not is_corrupt(exc):  # busy/locked or another failure: report it, never rename a healthy database
+            raise
+        log(f"build: the database is corrupt ({safe_error(exc)}); setting it aside and rebuilding from the session files")
         quarantine(db)
         return ae.build(sessions_dir, db)
 
 
 def run_once(sessions_dir, db):
     """One tick: incremental build, then export. Never raises; returns the exit code."""
-    d = state_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    with open(d / "lock", "w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            log("skipped: a previous run is still going")
+    with build_lock(blocking=False) as got:
+        if not got:
+            log("skipped: a previous run or a manual build is still going")
             return 0
         return _tick(sessions_dir, db)
 
@@ -295,6 +421,7 @@ def _tick(sessions_dir, db):
     status.setdefault("epoch_ns", int(time.time() * 1e9))
     status["last_attempt_ts"] = time.time()
     code = 0
+    build_failed = False
     t0 = time.time()
     try:
         res = _build_with_healing(sessions_dir, db, status)
@@ -306,11 +433,14 @@ def _tick(sessions_dir, db):
                 f"in {time.time() - t0:.1f}s")
     except Exception as exc:  # noqa: BLE001 - the tick must survive anything and report it
         code = 1
-        status["consecutive_build_failures"] = status.get("consecutive_build_failures", 0) + 1
-        status["last_build_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
-        log(f"build failed ({status['consecutive_build_failures']} in a row): {status['last_build_error']}")
-        log(traceback.format_exc(limit=3).strip().splitlines()[-1])
-        if status["consecutive_build_failures"] >= 3 and Path(db).exists():
+        build_failed = True
+        status["last_build_error"] = safe_error(exc)  # type and code only: never a path or message text
+        if is_busy(exc):
+            log(f"build: database busy ({status['last_build_error']}); trying again next tick")
+        else:
+            status["consecutive_build_failures"] = status.get("consecutive_build_failures", 0) + 1
+            log(f"build failed ({status['consecutive_build_failures']} in a row): {status['last_build_error']}")
+        if status.get("consecutive_build_failures", 0) >= 3 and Path(db).exists():
             log("build: three failures in a row; setting the database aside so the next run rebuilds it")
             quarantine(db)
             status["consecutive_build_failures"] = 0
@@ -318,15 +448,18 @@ def _tick(sessions_dir, db):
     if url and Path(db).exists():
         try:
             con = ae.connect(db, readonly=True)
+            state = load_state()
             try:
-                metrics, sent = export(con, db, status, url)
+                dirty = (con.execute("SELECT value FROM meta WHERE key='dirty'").fetchone() or ("0",))[0] == "1"
+                metrics, sent = export(con, db, status, url, state=state, business=not (dirty or build_failed))
             finally:
                 con.close()
+                save_state(state)
             status.update(last_export_ok_ts=time.time(), last_export_error=None,
                           last_export_series=series_count(metrics), last_export_bytes=sent)
         except Exception as exc:  # noqa: BLE001
             code = code or 1
-            message = f"{type(exc).__name__}: {str(exc)[:200]}"
+            message = safe_error(exc)
             if message != status.get("last_export_error"):  # one line per distinct failure, not one per tick
                 log(f"export failed: {message}")
             status["last_export_error"] = message
