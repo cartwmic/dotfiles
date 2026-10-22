@@ -10,6 +10,7 @@ import fcntl
 import gzip
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -263,6 +264,15 @@ def account(metrics, state, business=True, fp=""):
     baseline = business and (not state.get("seeded") or state.get("fp") != fp)
     if business:
         created = set()
+        relayout = set()  # histogram families whose buckets changed: every retained sibling is retired too
+        for m in metrics:
+            if m["type"] == "histogram" and m["points"]:
+                bounds = list(m.get("bounds", ()))
+                stale = [k for k, e in series.items() if e["n"] == m["name"] and e["b"] != bounds]
+                for k in stale:
+                    del series[k]
+                if stale:
+                    relayout.add(m["name"])
         for m in metrics:
             if m["type"] == "gauge":
                 continue
@@ -270,7 +280,8 @@ def account(metrics, state, business=True, fp=""):
                 key = m["name"] + "|" + json.dumps(sorted(labels.items()))
                 cur = _vector(m, value)
                 e = series.get(key)
-                layout_changed = e is not None and (len(e["seen"]) != len(cur) or e["b"] != list(m.get("bounds", ())))
+                layout_changed = m["name"] in relayout or (
+                    e is not None and (len(e["seen"]) != len(cur) or e["b"] != list(m.get("bounds", ()))))
                 if e is None or layout_changed:  # a new series, or a histogram whose buckets changed: start over at zero
                     series[key] = {"n": m["name"], "t": m["type"], "l": labels, "b": list(m.get("bounds", ())),
                                    "last": list(cur) if (baseline or layout_changed) else [0] * len(cur),
@@ -301,6 +312,10 @@ def mark_delivered(state):
         e["ok"] = True
 
 
+def _finite(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
 def _valid_state(state):
     try:
         if not isinstance(state, dict) or not isinstance(state.get("series"), dict):
@@ -309,7 +324,7 @@ def _valid_state(state):
             if not (isinstance(e, dict) and isinstance(e["l"], dict) and e["t"] in ("sum", "histogram")
                     and isinstance(e["n"], str) and isinstance(e["ok"], bool)):
                 return False
-            if not (isinstance(e.get("b"), list) and all(isinstance(x, (int, float)) for x in e["b"])):
+            if not (isinstance(e.get("b"), list) and all(_finite(x) for x in e["b"])):
                 return False
             width = len(e["b"]) + 3 if e["t"] == "histogram" else 1
             if e["t"] == "histogram" and not e["b"]:
@@ -318,7 +333,7 @@ def _valid_state(state):
                 if len(e[k]) != width:
                     return False
             for k in ("last", "sent", "seen"):
-                if not (isinstance(e[k], list) and e[k] and all(isinstance(x, (int, float)) for x in e[k])):
+                if not (isinstance(e[k], list) and e[k] and all(_finite(x) for x in e[k])):
                     return False
             if not (len(e["last"]) == len(e["sent"]) == len(e["seen"])):
                 return False

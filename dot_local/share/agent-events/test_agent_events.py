@@ -1174,6 +1174,31 @@ class ExportSafety(Tick):
         self.assertEqual(am.run_once(self.root, self.db), 0)      # recovers instead of failing every tick
         self.assertFalse(am.load_state()[1])
 
+    def test_nonfinite_state_values_are_lost_state(self):
+        good = {"n": "pi_h", "t": "histogram", "l": {}, "b": [1, 2], "last": [0] * 5, "sent": [0] * 5, "seen": [0] * 5, "ok": True}
+        self.state.mkdir(parents=True, exist_ok=True)
+        path = self.state / "export_state.json"
+        for field, vec in (("sent", [0, 0, 0, 0, 1e309]), ("last", [0, 0, 0, 0, float("nan")]), ("b", [1, 1e309])):
+            bad = dict(good, **{field: vec})
+            path.write_text(json.dumps({"series": {"k": bad}}))   # json.dumps writes Infinity/NaN, json.loads reads them
+            self.assertEqual(am.load_state(), ({}, True), field)
+        path.write_text('{"series":{"k":{"n":"x","t":"sum","l":{},"b":[],"last":[0],"sent":[1e999],"seen":[0],"ok":true}}}')
+        self.assertEqual(am.load_state(), ({}, True))
+        self.collector()
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+
+    def test_a_layout_change_retires_vanished_siblings_too(self):
+        s = {}
+        h = lambda bounds, pts: [{"name": "pi_h", "type": "histogram", "bounds": bounds,
+                                  "points": [({"a": k}, (c, sm, n)) for k, (c, sm, n) in pts.items()]}]
+        am.account(h((1, 2), {"a": ([0, 0, 0], 0.0, 0), "b": ([0, 0, 0], 0.0, 0)}), s, True, "f")
+        am.mark_delivered(s)
+        _, fams = am.account(h((1, 2, 3), {"a": ([0, 0, 0, 1], 4.0, 1)}), s, True, "f")
+        self.assertEqual(len(fams[0]["points"]), 1)               # b was retired, not left with a stale layout
+        for labels, (counts, sm, n) in fams[0]["points"]:
+            self.assertEqual(len(counts), len(fams[0]["bounds"]) + 1)
+        self.assertTrue(am._valid_state(s))
+
     def test_a_changed_histogram_layout_restarts_at_zero(self):
         s = {}
         h = lambda bounds, counts, sm, n: [{"name": "pi_h", "type": "histogram", "bounds": bounds, "points": [({}, (counts, sm, n))]}]
