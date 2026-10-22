@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { registerAutoCompactExtension } from "./index.ts";
 import { AUTO_COMPACT_WILL_RESUME_EVENT } from "./events.ts";
 import {
 	DEFAULT_CONFIG,
 	DEFAULT_CONTINUATION,
+	breakerCooldownMs,
 	describeConfig,
 	normalizeConfig,
 	normalizeContinuation,
@@ -12,8 +16,9 @@ import {
 	thresholdTokens,
 } from "./config.ts";
 
-const extension = (pi: any): void => {
-	registerAutoCompactExtension(pi, { config: DEFAULT_CONFIG });
+// Tests never write the real log beside the extension.
+const extension = (pi: any, options: Record<string, unknown> = {}): void => {
+	registerAutoCompactExtension(pi, { config: DEFAULT_CONFIG, logPath: null, ...options });
 };
 
 describe("auto-compact config", () => {
@@ -47,7 +52,7 @@ describe("auto-compact config", () => {
 
 	test("describes effective configuration", () => {
 		expect(describeConfig(DEFAULT_CONFIG)).toBe(
-			`auto-compaction ON; threshold 40%; check at turn_end + agent_end; continuation "${DEFAULT_CONTINUATION}"; breaker 2`,
+			`auto-compaction ON; threshold 40%; check at turn_end + agent_end; continuation "${DEFAULT_CONTINUATION}"; breaker 2, retry after 300s (doubling)`,
 		);
 		expect(describeConfig({ ...DEFAULT_CONFIG, continuation: false })).toContain("continuation OFF");
 	});
@@ -59,6 +64,16 @@ describe("auto-compact config", () => {
 		expect(normalizeConfig({ maxIneffectiveCompactions: 0 }).maxIneffectiveCompactions).toBe(2);
 		expect(normalizeConfig({ maxIneffectiveCompactions: -4 }).maxIneffectiveCompactions).toBe(2);
 		expect(normalizeConfig({ maxIneffectiveCompactions: "x" }).maxIneffectiveCompactions).toBe(2);
+		expect(normalizeConfig(undefined).breakerCooldownSeconds).toBe(300);
+		expect(normalizeConfig({ breakerCooldownSeconds: 0 }).breakerCooldownSeconds).toBe(0);
+		expect(normalizeConfig({ breakerCooldownSeconds: 90.9 }).breakerCooldownSeconds).toBe(90);
+		expect(normalizeConfig({ breakerCooldownSeconds: -1 }).breakerCooldownSeconds).toBe(300);
+		expect(normalizeConfig({ breakerCooldownSeconds: "x" }).breakerCooldownSeconds).toBe(300);
+		expect(describeConfig({ ...DEFAULT_CONFIG, breakerCooldownSeconds: 0 })).toContain("no retry");
+		expect(breakerCooldownMs(300, 1)).toBe(300_000);
+		expect(breakerCooldownMs(300, 2)).toBe(600_000);
+		expect(breakerCooldownMs(300, 9)).toBe(3_600_000);
+		expect(breakerCooldownMs(0, 1)).toBeUndefined();
 	});
 
 	test("resumes only after inter-turn compaction when continuation is enabled", () => {
@@ -471,5 +486,178 @@ describe("auto-compact threshold", () => {
 		handlers.get("turn_end")?.({}, ctx);
 		handlers.get("turn_start")?.({}, ctx);
 		expect(followUps).toEqual([DEFAULT_CONTINUATION]);
+	});
+});
+
+describe("auto-compact breaker visibility and retry", () => {
+	const setup = (options: Record<string, unknown> = {}, ui = false) => {
+		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+		const commands = new Map<string, any>();
+		const entries: Array<{ type: string; data: any }> = [];
+		const notices: string[] = [];
+		let clock = 1_000_000;
+		const logPath = join(mkdtempSync(join(tmpdir(), "auto-compact-")), "auto-compact.log");
+		extension(
+			{
+				on: (name: string, handler: (event: unknown, ctx: any) => void) => handlers.set(name, handler),
+				registerCommand: (name: string, def: unknown) => commands.set(name, def),
+				sendUserMessage: () => {},
+				appendEntry: (type: string, data: any) => entries.push({ type, data }),
+			},
+			{ logPath, now: () => clock, ...options },
+		);
+		let tokens = 148_800;
+		let mode: "ineffective" | "fail" | "effective" = "ineffective";
+		let compactCalls = 0;
+		const ctx: any = {
+			hasUI: ui,
+			ui: { notify: (m: string) => notices.push(m) },
+			getContextUsage: () => ({ tokens, contextWindow: 372_000 }),
+			compact: ({ onComplete, onError }: { onComplete: () => void; onError: (e: Error) => void }) => {
+				compactCalls += 1;
+				if (mode === "fail") {
+					onError(new Error("Summarization failed: generation hit the token cap"));
+				} else {
+					handlers.get("session_compact")?.({ fromExtension: true, willRetry: false }, ctx);
+					onComplete();
+				}
+				if (mode === "effective") tokens = 50_000;
+				else tokens += 1_000;
+			},
+		};
+		const settle = (n = 1) => {
+			for (let i = 0; i < n; i++) handlers.get("agent_settled")?.({}, ctx);
+		};
+		return {
+			ctx, settle, entries, notices, logPath, commands, handlers,
+			calls: () => compactCalls,
+			advance: (ms: number) => { clock += ms; },
+			setTokens: (n: number) => { tokens = n; },
+			setMode: (m: "ineffective" | "fail" | "effective") => { mode = m; },
+			log: () => (existsSync(logPath) ? readFileSync(logPath, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []),
+		};
+	};
+
+	test("a tripped breaker is recorded in the log and the session, and warns in the UI", () => {
+		const t = setup({}, true);
+		t.settle(6);
+		expect(t.calls()).toBe(2);
+		const logged = t.log();
+		expect(logged.map((e: any) => e.kind)).toEqual(["breaker_paused"]);
+		expect(logged[0]).toMatchObject({ thresholdPercent: 40, consecutiveIneffective: 2, retryInSeconds: 300 });
+		expect(t.entries.map((e) => e.type)).toEqual(["auto-compact"]);
+		expect(t.entries[0].data.kind).toBe("breaker_paused");
+		expect(t.notices.some((n) => n.includes("paused") && n.includes("retry once in 300s"))).toBe(true);
+	});
+
+	test("a headless session still gets the log and session entries", () => {
+		const t = setup({}, false);
+		t.settle(6);
+		expect(t.notices).toEqual([]);
+		expect(t.log().map((e: any) => e.kind)).toEqual(["breaker_paused"]);
+		expect(t.entries.length).toBe(1);
+	});
+
+	test("after the cooldown exactly one retry runs, then it pauses again with a doubled wait", () => {
+		const t = setup();
+		t.settle(6);
+		expect(t.calls()).toBe(2);
+		t.advance(299_000);
+		t.settle(3);
+		expect(t.calls()).toBe(2);
+		t.advance(2_000);
+		t.settle(6);
+		expect(t.calls()).toBe(3);
+		expect(t.log().map((e: any) => e.kind)).toEqual(["breaker_paused", "breaker_retry", "breaker_paused"]);
+		expect(t.log()[2].retryInSeconds).toBe(600);
+		t.advance(599_000);
+		t.settle(3);
+		expect(t.calls()).toBe(3);
+		t.advance(2_000);
+		t.settle(6);
+		expect(t.calls()).toBe(4);
+		expect(t.log()[4].retryInSeconds).toBe(1200);
+	});
+
+	test("a successful retry clears the pause and the doubling", () => {
+		const t = setup();
+		t.settle(6); // trip #1 (300s)
+		t.advance(301_000);
+		t.settle(6); // retry runs, still ineffective: trip #2 (600s)
+		expect(t.log()[2].retryInSeconds).toBe(600);
+		t.advance(601_000);
+		t.setMode("effective");
+		t.settle(1); // retry succeeds: context drops below threshold
+		expect(t.ctx.getContextUsage().tokens).toBeLessThan(148_800);
+		t.settle(1); // finite below-threshold reading clears breaker state and backoff
+		t.setMode("ineffective");
+		t.setTokens(148_800); // context climbs back to the threshold
+		t.settle(6); // fresh breaker: 2 attempts, then trip
+		const paused = t.log().filter((e: any) => e.kind === "breaker_paused");
+		expect(paused[paused.length - 1].retryInSeconds).toBe(300); // not 1200
+	});
+
+	test("recovery while paused (manual compact) lifts the pause and resets backoff", () => {
+		const t = setup();
+		t.settle(6);
+		expect(t.calls()).toBe(2);
+		t.setTokens(50_000); // user compacted by hand during the cooldown
+		t.settle(1);
+		t.setTokens(148_800);
+		t.settle(6); // no cooldown wait: the breaker was reset
+		expect(t.calls()).toBe(4);
+		const paused = t.log().filter((e: any) => e.kind === "breaker_paused");
+		expect(paused[paused.length - 1].retryInSeconds).toBe(300);
+	});
+
+	test("an expired pause is not recorded as a retry until a compaction actually starts", () => {
+		const t = setup({ config: { ...DEFAULT_CONFIG, checkAt: ["agent_end"] } });
+		t.settle(6);
+		t.advance(301_000);
+		t.handlers.get("turn_end")?.({}, t.ctx);
+		t.handlers.get("turn_start")?.({}, t.ctx); // turn_end is not a configured checkpoint: no attempt, no retry event
+		expect(t.log().map((e: any) => e.kind)).toEqual(["breaker_paused"]);
+		t.settle(1);
+		expect(t.log().map((e: any) => e.kind)).toEqual(["breaker_paused", "breaker_retry"]);
+	});
+
+	test("breakerCooldownSeconds 0 keeps the permanent pause until reload", () => {
+		const t = setup({ config: { ...DEFAULT_CONFIG, breakerCooldownSeconds: 0 } });
+		t.settle(6);
+		expect(t.log()[0].retryInSeconds).toBeNull();
+		t.advance(10 * 3_600_000);
+		t.settle(6);
+		expect(t.calls()).toBe(2);
+		expect(t.log().map((e: any) => e.kind)).toEqual(["breaker_paused"]);
+	});
+
+	test("a failed compaction is logged with its error and counts toward the breaker", () => {
+		const t = setup({}, true);
+		t.setMode("fail");
+		t.settle(6);
+		const kinds = t.log().map((e: any) => e.kind);
+		expect(kinds.filter((k: string) => k === "compaction_failed").length).toBe(2);
+		expect(kinds[kinds.length - 1]).toBe("breaker_paused");
+		expect(t.log()[0].error).toContain("token cap");
+		expect(t.notices.some((n) => n.startsWith("Auto-compaction failed"))).toBe(true);
+	});
+
+	test("/auto-compact status shows the pause and the retry time", () => {
+		const t = setup({}, true);
+		t.settle(6);
+		t.notices.length = 0;
+		t.commands.get("auto-compact").handler("status", t.ctx);
+		expect(t.notices[0]).toContain("PAUSED, retry after");
+		t.commands.get("auto-compact").handler("reload", t.ctx);
+		t.notices.length = 0;
+		t.commands.get("auto-compact").handler("status", t.ctx);
+		expect(t.notices[0]).not.toContain("PAUSED");
+	});
+
+	test("an unwritable log never breaks compaction", () => {
+		const t = setup({ logPath: "/nonexistent-dir/x/auto-compact.log" });
+		t.settle(6);
+		expect(t.calls()).toBe(2);
+		expect(t.entries.length).toBe(1);
 	});
 });

@@ -24,7 +24,15 @@ export interface AutoCompactConfig {
 	 * reliably so the breaker never trips. Minimum 1.
 	 */
 	maxIneffectiveCompactions: number;
+	/**
+	 * Seconds the tripped breaker waits before one retry. Each consecutive trip doubles the wait (capped at
+	 * MAX_BREAKER_COOLDOWN_SECONDS); a below-threshold reading resets it. 0 keeps the old behavior: pause for the
+	 * rest of the session (until /auto-compact reload or a new session).
+	 */
+	breakerCooldownSeconds: number;
 }
+
+export const MAX_BREAKER_COOLDOWN_SECONDS = 3600;
 
 export interface ContextUsage {
 	tokens: number;
@@ -37,6 +45,7 @@ export const DEFAULT_CONFIG: AutoCompactConfig = {
 	checkAt: ["turn_end", "agent_end"],
 	continuation: DEFAULT_CONTINUATION,
 	maxIneffectiveCompactions: 2,
+	breakerCooldownSeconds: 300,
 };
 
 function isCheckPoint(value: unknown): value is CheckPoint {
@@ -65,12 +74,19 @@ export function normalizeConfig(value: unknown): AutoCompactConfig {
 			? Math.floor(rawMax)
 			: DEFAULT_CONFIG.maxIneffectiveCompactions;
 
+	const rawCooldown = raw.breakerCooldownSeconds;
+	const breakerCooldownSeconds =
+		typeof rawCooldown === "number" && Number.isFinite(rawCooldown) && rawCooldown >= 0
+			? Math.floor(rawCooldown)
+			: DEFAULT_CONFIG.breakerCooldownSeconds;
+
 	return {
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_CONFIG.enabled,
 		thresholdPercent,
 		checkAt: checkAt.length > 0 ? checkAt : [...DEFAULT_CONFIG.checkAt],
 		continuation: "continuation" in raw ? normalizeContinuation(raw.continuation) : DEFAULT_CONTINUATION,
 		maxIneffectiveCompactions,
+		breakerCooldownSeconds,
 	};
 }
 
@@ -93,6 +109,13 @@ export function thresholdTokens(contextWindow: number, thresholdPercent: number)
 	if (!Number.isFinite(contextWindow) || contextWindow <= 0) return undefined;
 	if (!Number.isFinite(thresholdPercent) || thresholdPercent <= 0 || thresholdPercent > 100) return undefined;
 	return Math.ceil((thresholdPercent / 100) * contextWindow);
+}
+
+/** Wait before the next breaker retry: base doubled per consecutive trip, capped. undefined = never retry. */
+export function breakerCooldownMs(baseSeconds: number, consecutiveTrips: number): number | undefined {
+	if (!(baseSeconds > 0)) return undefined;
+	const seconds = Math.min(baseSeconds * 2 ** Math.max(0, consecutiveTrips - 1), MAX_BREAKER_COOLDOWN_SECONDS);
+	return seconds * 1000;
 }
 
 export function shouldTrigger(
@@ -126,5 +149,5 @@ export function describeContinuation(continuation: string | false): string {
 
 export function describeConfig(config: AutoCompactConfig): string {
 	const points = config.checkAt.join(" + ");
-	return `auto-compaction ${config.enabled ? "ON" : "OFF"}; threshold ${config.thresholdPercent}%; check at ${points}; continuation ${describeContinuation(config.continuation)}; breaker ${config.maxIneffectiveCompactions}`;
+	return `auto-compaction ${config.enabled ? "ON" : "OFF"}; threshold ${config.thresholdPercent}%; check at ${points}; continuation ${describeContinuation(config.continuation)}; breaker ${config.maxIneffectiveCompactions}, ${config.breakerCooldownSeconds > 0 ? `retry after ${config.breakerCooldownSeconds}s (doubling)` : "no retry"}`;
 }

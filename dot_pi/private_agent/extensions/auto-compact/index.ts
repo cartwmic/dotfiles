@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -9,6 +10,7 @@ import {
 	type AutoCompactConfig,
 	type CheckPoint,
 	DEFAULT_CONTINUATION,
+	breakerCooldownMs,
 	describeConfig,
 	describeContinuation,
 	loadConfig,
@@ -123,6 +125,10 @@ export interface AutoCompactExtensionOptions {
 	/** Test/deployment override; runtime reload still reads configPath. */
 	config?: AutoCompactConfig;
 	configPath?: string;
+	/** Event log (JSON lines). Default: auto-compact.log beside the extension; null disables it. */
+	logPath?: string | null;
+	/** Clock for the breaker cooldown (tests). */
+	now?: () => number;
 }
 
 export function registerAutoCompactExtension(
@@ -130,6 +136,8 @@ export function registerAutoCompactExtension(
 	options: AutoCompactExtensionOptions = {},
 ): void {
 	const configPath = options.configPath ?? join(extensionDir(), "config.json");
+	const logPath = options.logPath === undefined ? join(extensionDir(), "auto-compact.log") : options.logPath;
+	const now = options.now ?? Date.now;
 	let config = options.config ?? loadConfig(configPath);
 	let compacting = false;
 	let lastAttemptTokens: number | undefined;
@@ -146,6 +154,33 @@ export function registerAutoCompactExtension(
 	// real below-threshold reading and on session start/shutdown.
 	let consecutiveIneffective = 0;
 	let autoDisabledForSession = false;
+	// When the tripped breaker allows one retry (undefined: not paused, or paused with no retry).
+	let pausedUntil: number | undefined;
+	let consecutiveTrips = 0;
+	// Cooldown expired and the one retry has not started yet.
+	let retryPending = false;
+
+	// Visible and durable record of breaker/failure events. Never throws: ctx or pi may be stale after teardown.
+	// 1) JSON line in the log file, 2) a custom session entry (not sent to the model), 3) a UI warning when
+	// there is a UI. A headless session still gets 1 and 2.
+	const record = (ctx: ExtensionContext | undefined, kind: string, data: Record<string, unknown>, warn?: string) => {
+		const entry = { at: new Date(now()).toISOString(), kind, ...data };
+		try {
+			if (logPath) appendFileSync(logPath, JSON.stringify(entry) + "\n");
+		} catch {
+			// log is best effort
+		}
+		try {
+			pi.appendEntry?.("auto-compact", entry);
+		} catch {
+			// stale pi after teardown
+		}
+		try {
+			if (warn && ctx?.hasUI) ctx.ui.notify(warn, "warning");
+		} catch {
+			// stale ctx after teardown
+		}
+	};
 
 	const resetAttemptState = () => {
 		compacting = false;
@@ -156,6 +191,9 @@ export function registerAutoCompactExtension(
 		pendingTurnEndCheck = false;
 		consecutiveIneffective = 0;
 		autoDisabledForSession = false;
+		pausedUntil = undefined;
+		consecutiveTrips = 0;
+		retryPending = false;
 	};
 
 	const maybeCompact = (
@@ -163,15 +201,15 @@ export function registerAutoCompactExtension(
 		ctx: ExtensionContext,
 		agentWillContinue: boolean,
 	): void => {
-		if (compacting || autoDisabledForSession) return;
+		if (compacting) return;
 		if (typeof ctx.getContextUsage !== "function" || typeof ctx.compact !== "function") return;
 
 		const usage = ctx.getContextUsage();
 		const threshold = usage ? thresholdTokens(usage.contextWindow, config.thresholdPercent) : undefined;
-		// Only a real, finite below-threshold reading clears the attempt guard and
-		// the breaker. Do NOT treat `tokens: null` (returned right after
-		// compaction, before the next assistant response) as below-threshold: that
-		// would reset the breaker every round and defeat it.
+		// Only a real, finite below-threshold reading clears the attempt guard, the breaker, its pause and the
+		// backoff (also while paused: context recovered, e.g. by a manual /compact). Do NOT treat `tokens: null`
+		// (returned right after compaction, before the next assistant response) as below-threshold: that would
+		// reset the breaker every round and defeat it.
 		if (
 			usage &&
 			threshold !== undefined &&
@@ -181,6 +219,21 @@ export function registerAutoCompactExtension(
 		) {
 			lastAttemptTokens = undefined;
 			consecutiveIneffective = 0;
+			consecutiveTrips = 0;
+			autoDisabledForSession = false;
+			pausedUntil = undefined;
+			retryPending = false;
+		}
+		if (autoDisabledForSession) {
+			if (pausedUntil === undefined || now() < pausedUntil) return;
+			// Cooldown over: allow exactly one retry. The next ineffective re-trigger trips the breaker again.
+			// The retry is recorded when it actually starts (a check at an unconfigured checkpoint or with no
+			// usage reading does not consume it).
+			autoDisabledForSession = false;
+			pausedUntil = undefined;
+			lastAttemptTokens = undefined;
+			consecutiveIneffective = Math.max(0, config.maxIneffectiveCompactions - 1);
+			retryPending = true;
 		}
 		if (!shouldTrigger(config, checkPoint, usage, lastAttemptTokens)) return;
 
@@ -194,16 +247,38 @@ export function registerAutoCompactExtension(
 			consecutiveIneffective += 1;
 			if (consecutiveIneffective >= config.maxIneffectiveCompactions) {
 				autoDisabledForSession = true;
-				if (ctx.hasUI) {
-					ctx.ui.notify(
-						`Auto-compaction paused for this session: ${consecutiveIneffective} consecutive compactions did not reduce context below ${config.thresholdPercent}%. Use /auto-compact reload to re-enable.`,
-						"warning",
-					);
-				}
+				consecutiveTrips += 1;
+				const waitMs = breakerCooldownMs(config.breakerCooldownSeconds, consecutiveTrips);
+				pausedUntil = waitMs === undefined ? undefined : now() + waitMs;
+				const retryText =
+					waitMs === undefined
+						? "Use /auto-compact reload to re-enable."
+						: "Will retry once in " + Math.round(waitMs / 1000) + "s.";
+				record(
+					ctx,
+					"breaker_paused",
+					{
+						tokens,
+						contextWindow,
+						thresholdPercent: config.thresholdPercent,
+						consecutiveIneffective,
+						retryInSeconds: waitMs === undefined ? null : Math.round(waitMs / 1000),
+					},
+					"Auto-compaction paused: " + consecutiveIneffective + " consecutive compactions did not reduce context below " + config.thresholdPercent + "% (" + tokens.toLocaleString() + "/" + contextWindow.toLocaleString() + " tokens). " + retryText,
+				);
 				return;
 			}
 		}
 
+		if (retryPending) {
+			retryPending = false;
+			record(
+				ctx,
+				"breaker_retry",
+				{ tokens, contextWindow, thresholdPercent: config.thresholdPercent },
+				"Auto-compaction retrying after pause (" + tokens.toLocaleString() + "/" + contextWindow.toLocaleString() + " tokens)",
+			);
+		}
 		lastAttemptTokens = tokens;
 		compacting = true;
 		userSpoke = false;
@@ -267,6 +342,7 @@ export function registerAutoCompactExtension(
 					compacting = false;
 					const resume = pendingResume;
 					pendingResume = undefined;
+					record(undefined, "compaction_failed", { tokens, contextWindow, checkPoint, error: formatError(error) });
 					try {
 						sendResume(resume);
 						if (ctx.hasUI) ctx.ui.notify(`Auto-compaction failed: ${formatError(error)}`, "warning");
@@ -345,7 +421,12 @@ export function registerAutoCompactExtension(
 		handler: async (args, ctx) => {
 			const action = args.trim().toLowerCase() || "config";
 			if (action === "status") {
-				ctx.ui.notify(`${describeConfig(config)}; ${configPath}`, "info");
+				const pause = autoDisabledForSession
+					? pausedUntil === undefined
+						? "; PAUSED (no retry; /auto-compact reload)"
+						: "; PAUSED, retry after " + new Date(pausedUntil).toISOString()
+					: "";
+				ctx.ui.notify(describeConfig(config) + pause + "; " + configPath, "info");
 				return;
 			}
 			if (action === "reload") {

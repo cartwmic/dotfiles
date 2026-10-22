@@ -33,12 +33,15 @@ Edit `~/.pi/agent/extensions/auto-compact/config.json` or run `/auto-compact` in
     message after compaction, and the extension sees it through Pi's `input`
     event before its completion callback. Extension slash-commands and
     extension-sent messages do not cancel it.
-- `/auto-compact status`: show active configuration and file path.
+- `maxIneffectiveCompactions` (default 2): circuit breaker. After this many consecutive compactions that fail or do not bring context below the threshold, auto-compaction pauses.
+- `breakerCooldownSeconds` (default 300): a tripped breaker retries **once** after this wait instead of staying paused for the session. Each consecutive trip doubles the wait (capped at 3600s); a reading below the threshold resets it. `0` restores the old behavior: stay paused until `/auto-compact reload` or a new session.
+- Visibility: a failed compaction, a breaker pause and a breaker retry are each written as a JSON line to `auto-compact.log` beside the extension, as an `auto-compact` custom entry in the session file (not sent to the model; this is what a headless session shows), and as a warning in the TUI.
+- `/auto-compact status`: show active configuration, file path, and whether the breaker is paused (with the retry time).
 - `/auto-compact reload`: reload edits made directly to the JSON file.
 
 Summary size cap: even with native auto-compaction off, Pi limits the history summary to min(0.8 x `compaction.reserveTokens`,
 model max output) (0.5 x for a split-turn prefix). The chezmoi-managed Pi settings set `reserveTokens` to 100000. At Pi's 16384
 default the history cap is 13107 tokens, which a long session's iterative summary can reach; the compaction then fails with
-"generation hit the token cap", and after `maxIneffectiveCompactions` failed attempts this extension pauses for the session.
+"generation hit the token cap", and after `maxIneffectiveCompactions` failed attempts this extension pauses (see `breakerCooldownSeconds`: it retries once after a cooldown, or stays paused for the session when that is 0).
 
 Config file is a chezmoi `create_` target, so later interactive edits remain machine-local and are not overwritten by `chezmoi apply`.

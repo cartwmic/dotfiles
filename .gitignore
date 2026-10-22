@@ -17,3 +17,6 @@ lib/
 
 # pi subagent run artifacts
 .pi-subagents/
+
+# runtime log written by the auto-compact extension
+dot_pi/private_agent/extensions/auto-compact/auto-compact.log
