@@ -61,8 +61,8 @@ A LaunchAgent, `local.agent-events` (source `Library/LaunchAgents/local.agent-ev
 Self-healing: a database that is corrupt (not a busy or locked one) or three failed builds in a row set it aside as
 `events.sqlite.corrupt`, and it is rebuilt from the session files; the database holds only derived data. A failed
 push never stops the build and is logged once per distinct failure. Logs and `status.json` hold only an exception
-type and an error code, never a path or message text. While the last build failed or the database is dirty, only the
-health gauges are sent, not business totals.
+type and an error code, never a path or message text. While the last build failed or the database is dirty, nothing is
+recollected: the last accounted business values are sent again, unchanged, with the health gauges.
 
 `agent-events status` prints the age of the last successful build and push and exits 1 when the build is older
 than 15 minutes. The same age is in Grafana (`pi_agent_events_last_build_success_timestamp_seconds`, "Data age" on the overview).

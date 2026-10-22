@@ -270,10 +270,11 @@ def account(metrics, state, business=True, fp=""):
                 key = m["name"] + "|" + json.dumps(sorted(labels.items()))
                 cur = _vector(m, value)
                 e = series.get(key)
-                if e is None:
+                layout_changed = e is not None and (len(e["seen"]) != len(cur) or e["b"] != list(m.get("bounds", ())))
+                if e is None or layout_changed:  # a new series, or a histogram whose buckets changed: start over at zero
                     series[key] = {"n": m["name"], "t": m["type"], "l": labels, "b": list(m.get("bounds", ())),
-                                   "last": list(cur) if baseline else [0] * len(cur), "sent": [0] * len(cur),
-                                   "seen": cur, "ok": False}
+                                   "last": list(cur) if (baseline or layout_changed) else [0] * len(cur),
+                                   "sent": [0] * len(cur), "seen": cur, "ok": False}
                     created.add(key)
                 else:
                     e["seen"] = cur
@@ -308,6 +309,14 @@ def _valid_state(state):
             if not (isinstance(e, dict) and isinstance(e["l"], dict) and e["t"] in ("sum", "histogram")
                     and isinstance(e["n"], str) and isinstance(e["ok"], bool)):
                 return False
+            if not (isinstance(e.get("b"), list) and all(isinstance(x, (int, float)) for x in e["b"])):
+                return False
+            width = len(e["b"]) + 3 if e["t"] == "histogram" else 1
+            if e["t"] == "histogram" and not e["b"]:
+                return False
+            for k in ("last", "sent", "seen"):
+                if len(e[k]) != width:
+                    return False
             for k in ("last", "sent", "seen"):
                 if not (isinstance(e[k], list) and e[k] and all(isinstance(x, (int, float)) for x in e[k])):
                     return False
@@ -326,7 +335,7 @@ def load_state():
         raw = path.read_text()
     except FileNotFoundError:
         return {}, False
-    except OSError:
+    except (OSError, ValueError):  # unreadable, or not valid UTF-8
         return {}, True
     try:
         state = json.loads(raw)
