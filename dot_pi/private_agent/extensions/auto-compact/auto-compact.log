@@ -1,0 +1,6 @@
+{"at":"2026-10-22T00:27:09.336Z","kind":"compaction_failed","tokens":148800,"contextWindow":372000,"checkPoint":"turn_end","error":"summary failed"}
+{"at":"2026-10-22T00:27:09.338Z","kind":"compaction_failed","tokens":148800,"contextWindow":372000,"checkPoint":"turn_end","error":"Compaction aborted"}
+{"at":"2026-10-22T00:27:09.341Z","kind":"breaker_paused","tokens":150800,"contextWindow":372000,"thresholdPercent":40,"consecutiveIneffective":2,"retryInSeconds":300}
+{"at":"2026-10-22T00:27:09.341Z","kind":"breaker_paused","tokens":152800,"contextWindow":372000,"thresholdPercent":40,"consecutiveIneffective":2,"retryInSeconds":300}
+{"at":"2026-10-22T00:27:09.341Z","kind":"breaker_paused","tokens":151000,"contextWindow":372000,"thresholdPercent":40,"consecutiveIneffective":2,"retryInSeconds":300}
+{"at":"2026-10-22T00:27:09.341Z","kind":"compaction_failed","tokens":148800,"contextWindow":372000,"checkPoint":"turn_end","error":"Nothing to compact (session too small)"}
