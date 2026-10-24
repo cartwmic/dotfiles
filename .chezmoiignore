@@ -115,6 +115,11 @@ Library/LaunchAgents/local.agent-events.plist
 70_agent_events_launchd.sh
 {{- end }}
 
+{{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
+# Coordinator v1 daemon (cartwmic/coordinator): personal macOS only, where its Herdr/Pi/Discord setup lives.
+Library/LaunchAgents/local.coordinatord.plist
+{{- end }}
+
 {{- if ne .profile "personal" }}
 .local/user_scripts/configure_rustdesk.sh
 .pi/agent/extensions/openrouter-gate
