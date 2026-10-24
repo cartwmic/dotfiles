@@ -1,8 +1,9 @@
 """agent-events metrics: aggregate-only OTLP export, the always-on tick and the staleness check.
 
 Only counts, durations, tokens, notional cost and fixed-vocabulary names leave the machine, grouped
-by low-cardinality labels (project slug, kind, provider, model, tool, outcome). No session ids, no
-paths, no message text, tool arguments or error text. Content stays in the session files.
+by low-cardinality labels (project slug, kind, provider, model, tool, outcome). No paths, no message text,
+tool arguments or error text. The one exception to "no session ids" is the three pi_cache_*_30m gauges, which carry a
+session id (UUIDs only) for sessions active in the last 30 minutes only (see cache_gauges). Content stays in the session files.
 """
 import contextlib
 import errno
@@ -28,6 +29,10 @@ TOOL_BOUNDS = (0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800)      # second
 PHASES = ("llm", "explore", "edit", "run", "delegate", "owner", "other")
 KIND_LABEL = {"top": "top", "child": "subagent"}
 MAX_STALE_S = 900
+CACHE_WINDOW_S = 1800           # trailing window for the per-session cache gauges
+FULL_MISS_WRITE_TOKENS = 50_000  # a "full miss": more than this many cache-write tokens ...
+FULL_MISS_READ_SHARE = 0.2       # ... while under this share of the prompt was read from cache
+SESSION_LABEL_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 LOG_LIMIT = 1_000_000
 TICK_LIMIT_S = 1200
 
@@ -163,6 +168,49 @@ def collect(con):
         rows.append((project(r[0]), _kind(r[1]), r[2], r[3] or "", r[4]))
     counter("pi_events", ("project", "kind", "event", "detail"), _sum_by(rows, 4, 1))
     return metrics
+
+
+def cache_gauges(con, now):
+    """Prompt-cache health per session and model over the trailing CACHE_WINDOW_S, as gauges.
+
+    pi_cache_hit_ratio_30m        cacheRead / (cacheRead + cacheWrite + fresh input), token weighted
+    pi_cache_calls_30m            LLM calls in the window (calls that report no usage are left out)
+    pi_cache_full_miss_calls_30m  calls with cacheWrite > FULL_MISS_WRITE_TOKENS and cacheRead under
+                                  FULL_MISS_READ_SHARE of the prompt
+    The window ends at now, so the result depends only on the database and now (the replay of past hours relies on it).
+    Labels: session (the whole session id; sessions whose id is not a UUID are skipped, never pooled: a Pi session id is a UUID made of a
+    start time and random bits, so it names the session for 'agent-events session <id>' and carries no content),
+    project, model. Only sessions with a call in the window are sent, so the series count follows what is running
+    now and a finished session's series disappear. Gauges, not counters: the window is the whole state."""
+    since_ms = int((now - CACHE_WINDOW_S) * 1000)
+    rows = con.execute(
+        "SELECT s.session_id, s.cwd, c.model, COUNT(*), SUM(COALESCE(c.cache_read_tokens,0)),"
+        " SUM(COALESCE(c.cache_write_tokens,0)), SUM(COALESCE(c.fresh_input_tokens,0)),"
+        " SUM(COALESCE(c.cache_write_tokens,0) > ? AND COALESCE(c.cache_read_tokens,0) <"
+        " ? * (COALESCE(c.cache_read_tokens,0) + COALESCE(c.cache_write_tokens,0) + COALESCE(c.fresh_input_tokens,0)))"
+        " FROM calls c JOIN sessions s USING (path)"
+        " WHERE c.kind='llm' AND c.dup=0 AND c.end_ms > ? AND c.end_ms <= ?"
+        " AND COALESCE(c.cache_read_tokens,0) + COALESCE(c.cache_write_tokens,0) + COALESCE(c.fresh_input_tokens,0) > 0"
+        " GROUP BY s.session_id, s.cwd, c.model",
+        (FULL_MISS_WRITE_TOKENS, FULL_MISS_READ_SHARE, since_ms, int(now * 1000))).fetchall()
+    acc = {}
+    for sid, cwd, model, n, cr, cw, fi, miss in rows:
+        label = (sid or "").lower()
+        if not SESSION_LABEL_RE.fullmatch(label):
+            continue  # not a Pi session id (Pi writes UUIDs): never exported, and never pooled with others
+        key = (label, ae.export_project(cwd), export_name(model))
+        a = acc.setdefault(key, [0, 0, 0, 0, 0])
+        for i, v in enumerate((n, cr, cw, fi, miss)):
+            a[i] += v or 0
+    ratio, calls, misses = [], [], []
+    for (session, project, model), (n, cr, cw, fi, miss) in sorted(acc.items()):
+        labels = {"session": session, "project": project, "model": model}
+        ratio.append((labels, cr / (cr + cw + fi)))
+        calls.append((labels, float(n)))
+        misses.append((labels, float(miss)))
+    return [{"name": "pi_cache_hit_ratio_30m", "type": "gauge", "points": ratio},
+            {"name": "pi_cache_calls_30m", "type": "gauge", "points": calls},
+            {"name": "pi_cache_full_miss_calls_30m", "type": "gauge", "points": misses}]
 
 
 def self_metrics(con, status, db_path):
@@ -395,6 +443,8 @@ def export(con, db_path, status, url=None, now=None, state=None, business=True, 
     the preview used by 'agent-events export'. With persist, the proposed values are checkpointed before the POST
     (so a crash can never let a later, lower value go out) and delivery is recorded after it."""
     gauges_src = self_metrics(con, status, db_path)
+    if business:
+        gauges_src = gauges_src + cache_gauges(con, now or time.time())
     if state is None:
         metrics = (collect(con) if business else []) + gauges_src
     else:
