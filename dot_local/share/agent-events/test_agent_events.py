@@ -582,6 +582,84 @@ class ReviewFixes(Base):
         self.assertEqual(s["tool_ms"], 6000)
         self.assertIsNotNone(s["active_ms"])
 
+    def test_a_wait_inside_codemode_is_owner_wait_not_active_or_tool_time(self):
+        f = Fixture(session_id="ownnest")
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, calls=["w"])
+        f.tool("w", "codemode", T + 2500, T + 12500,
+               nested=[("ask_user_question", 6000, "q"), ("notify_owner", 10, "n"), ("bash", 1000, "b")])
+        f.llm(T + 12600, T + 13600, stop="stop")
+        f.write(self.top())
+        self.build()
+        s = self.q("SELECT * FROM sessions")[0]
+        t = self.q("SELECT * FROM turns")[0]
+        self.assertEqual(s["owner_wait_ms"], 6010)            # was 0: the wait was booked to codemode
+        self.assertEqual(t["owner_ms"], 6010)                 # the phase breakdown already agreed
+        self.assertEqual(s["tool_ms"], 10000 - 6010)          # the wrapper minus the wait
+        self.assertEqual(s["active_ms"], 1000 + 10000 + 1000 - 6010)
+
+    def test_direct_and_nested_waits_add_up_once(self):
+        f = Fixture(session_id="ownboth")
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, calls=["w", "q"])
+        f.tool("w", "codemode", T + 2500, T + 7500, nested=[("ask_user_question", 4000, "q")])
+        f.tool("q", "ask_user_question", T + 7500, T + 9500)
+        f.llm(T + 9600, T + 10600, stop="stop")
+        f.write(self.top())
+        self.build()
+        s = self.q("SELECT * FROM sessions")[0]
+        self.assertEqual(s["owner_wait_ms"], 4000 + 2000)
+        self.assertEqual(s["tool_ms"], 1000)
+        self.assertEqual(s["active_ms"], 1000 + 5000 + 1000 - 4000)
+
+    def test_a_nested_wait_cannot_push_time_below_zero(self):
+        f = Fixture(session_id="ownover")
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, calls=["w"])
+        f.tool("w", "codemode", T + 2500, T + 3500, nested=[("ask_user_question", 5000, "q")])  # longer than the wrapper
+        f.write(self.top())
+        self.build()
+        s = self.q("SELECT * FROM sessions")[0]
+        self.assertEqual(s["tool_ms"], 0)
+        self.assertEqual(s["active_ms"], 1000)                # only the LLM call: the wrapper is all wait
+        self.assertEqual(s["owner_wait_ms"], 5000)
+
+    def test_a_nested_wait_under_an_owner_call_does_not_take_time_from_other_work(self):
+        f = Fixture(session_id="ownparent")
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, calls=["q"])
+        f.tool("q", "ask_user_question", T + 2500, T + 8500, nested=[("ask_user_question", 4000, "q")])
+        f.write(self.top())
+        self.build()
+        s = self.q("SELECT * FROM sessions")[0]
+        self.assertEqual(s["active_ms"], 1000)      # the disjoint LLM call is untouched: the parent is already owner time
+        self.assertEqual(s["owner_wait_ms"], 6000 + 4000)
+
+    def test_a_nested_wait_with_no_duration_leaves_owner_active_and_tool_time_unknown(self):
+        f = Fixture(session_id="ownunk")
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, calls=["w"])
+        f.tool("w", "codemode", T + 2500, T + 8500, nested=[("ask_user_question", None, "q")])
+        f.llm(T + 8600, T + 9000, stop="stop")
+        f.write(self.top())
+        self.build()
+        s = self.q("SELECT * FROM sessions")[0]
+        self.assertIsNone(s["owner_wait_ms"])
+        self.assertIsNone(s["active_ms"])
+        self.assertIsNone(s["tool_ms"])
+
+    def test_the_schema_bump_forces_a_full_rebuild(self):
+        standard_session().write(self.top())
+        self.build()
+        con = sqlite3.connect(self.db)
+        con.execute("UPDATE meta SET value='3' WHERE key='schema_version'")
+        con.execute("UPDATE sessions SET owner_wait_ms=1")        # a value computed by the old rule
+        con.commit()
+        con.close()
+        res = self.build()
+        self.assertEqual(res["parsed"], 1)                         # re-parsed, not skipped as unchanged
+        self.assertEqual(self.q("SELECT owner_wait_ms FROM sessions")[0][0], 60000)
+
     def test_untimed_wrapper_keeps_known_nested_durations(self):
         f = Fixture(session_id="wrap")
         f.user(T + 1000)
@@ -1091,6 +1169,24 @@ class ExportSafety(Tick):
         self.assertEqual(out, {"other": 0, "newproj": 0})
         am.mark_delivered(s)
         self.assertEqual(self._acc(s, {"other": 0, "newproj": 105}, fp="two"), {"other": 0, "newproj": 5})
+
+    def test_a_schema_rebase_keeps_exported_values_and_adds_no_spike(self):
+        s = {}
+        self._acc(s, {"active": 105000, "owner": 90}, fp="s3")
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"active": 105500, "owner": 95}, fp="s3"), {"active": 500, "owner": 5})
+        am.mark_delivered(s)
+        # schema 4: 12000 s of wait moves from active to owner. Nonzero exported values survive; nothing steps.
+        self.assertEqual(self._acc(s, {"active": 93500, "owner": 12095}, fp="s4"), {"active": 500, "owner": 5})
+        am.mark_delivered(s)
+        self.assertEqual(self._acc(s, {"active": 93600, "owner": 12195}, fp="s4"), {"active": 600, "owner": 105})
+
+    def test_the_real_fingerprint_changes_with_the_schema_version(self):
+        before = am.fingerprint()
+        real = ae.SCHEMA_VERSION
+        ae.SCHEMA_VERSION = real + 1
+        self.addCleanup(lambda: setattr(ae, "SCHEMA_VERSION", real))
+        self.assertNotEqual(before, am.fingerprint())
 
     def test_histograms_are_accounted_bucket_by_bucket(self):
         s = {}
