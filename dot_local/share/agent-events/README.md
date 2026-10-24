@@ -77,12 +77,12 @@ histograms for LLM and tool calls. Labels: `project` (the repository the cwd bel
 only repositories found under `~/git` and `/Volumes/Workshop/macbook/git` or listed in `AGENT_EVENTS_PROJECTS`
 (colon-separated) are named, anything else is `other`), `kind` (`top` or `subagent`), `provider`, `model`, `tool`, `outcome`, `phase`, `event`, `detail` (error class).
 Provider, model and tool names must look like an identifier (a path becomes `other`).
-No path, prompt, tool argument, result or error text. The only session identifier is the whole session id (a UUID, else "other") on the three cache gauges below. `agent-events export` previews the series per metric (about 1,600) and
+No path, prompt, tool argument, result or error text. The only session identifier is the whole session id (a UUID; anything else is not exported) on the three cache gauges below. `agent-events export` previews the series per metric (about 1,600) and
 sends nothing (`--dry-run` is accepted and has no effect).
 
 **Prompt-cache gauges (the cache alerts).** Three gauges per session and model, over the trailing 30 minutes, for sessions with a call in that window only:
 `pi_cache_hit_ratio_30m` (cacheRead / (cacheRead + cacheWrite + fresh input), token weighted), `pi_cache_calls_30m` (LLM calls that report usage) and
-`pi_cache_full_miss_calls_30m` (calls with cacheWrite above 50,000 tokens while under 20% of the prompt came from cache). Labels: `session` (the whole session id, but only when it is a UUID, otherwise `other`, so no free text can leave through it; look it up with `agent-events session <id>`), `project`, `model`.
+`pi_cache_full_miss_calls_30m` (calls with cacheWrite above 50,000 tokens while under 20% of the prompt came from cache). Labels: `session` (the whole session id; a session whose id is not a UUID is skipped, so no free text can leave through it; look it up with `agent-events session <id>`), `project`, `model`.
 They are gauges, so the window is the whole state: they skip the counter accounting, a finished session's series expire, and they are not sent when a build fails.
 The homelab `PrometheusRule` `pi-cache` alerts on them.
 
