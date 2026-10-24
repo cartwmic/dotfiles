@@ -902,7 +902,7 @@ class CacheGauges(Tick):
         self.cache_session("01a16722-a007-7000-8000-000000000006", "f", "claude-x", [(3, 0, 0, 0), (2, 0, 0, 0)])
         self.assertEqual(self.gauges(), {})
 
-    def test_labels_hold_no_path_or_content_and_an_odd_session_id_becomes_other(self):
+    def test_labels_hold_no_path_or_content_and_a_non_uuid_session_is_skipped(self):
         self.cache_session("not a uuid / with spaces", "g", "claude-x", [(3, 100_000, 0, 10)])
         self.cache_session("01a16722-a008-7000-8000-000000000008", "h", "claude-x", [(3, 100_000, 0, 10)], cwd="/some/other/place")
         con = ae.connect(self.db if self.build() else self.db, readonly=True)
@@ -914,9 +914,9 @@ class CacheGauges(Tick):
         for needle in (SENTINEL, "/work/proj", "/some/other/place", str(self.root), "with spaces", "customer", "acme"):
             self.assertNotIn(needle, payload)
         sessions = {labels["session"] for m in am.cache_gauges(con, self.NOW) for labels, _ in m["points"]}
-        self.assertEqual(sessions, {"other", "01a16722-a008-7000-8000-000000000008"})
+        self.assertEqual(sessions, {"01a16722-a008-7000-8000-000000000008"})
         projects = {labels["project"] for m in am.cache_gauges(con, self.NOW) for labels, _ in m["points"]}
-        self.assertEqual(projects, {"proj", "other"})
+        self.assertEqual(projects, {"other"})
 
     def test_export_sends_the_gauges_and_a_failed_build_does_not(self):
         self.cache_session("01a16722-a009-7000-8000-000000000009", "i", "claude-x", [(3, 100_000, 0, 10)])

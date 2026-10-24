@@ -3,7 +3,7 @@
 Only counts, durations, tokens, notional cost and fixed-vocabulary names leave the machine, grouped
 by low-cardinality labels (project slug, kind, provider, model, tool, outcome). No paths, no message text,
 tool arguments or error text. The one exception to "no session ids" is the three pi_cache_*_30m gauges, which carry a
-session id (only when it is a UUID) for sessions active in the last 30 minutes only (see cache_gauges). Content stays in the session files.
+session id (UUIDs only) for sessions active in the last 30 minutes only (see cache_gauges). Content stays in the session files.
 """
 import contextlib
 import errno
@@ -178,7 +178,7 @@ def cache_gauges(con, now):
     pi_cache_full_miss_calls_30m  calls with cacheWrite > FULL_MISS_WRITE_TOKENS and cacheRead under
                                   FULL_MISS_READ_SHARE of the prompt
     The window ends at now, so the result depends only on the database and now (the replay of past hours relies on it).
-    Labels: session (the whole session id when it is a UUID, otherwise 'other': a Pi session id is a UUID made of a
+    Labels: session (the whole session id; sessions whose id is not a UUID are skipped, never pooled: a Pi session id is a UUID made of a
     start time and random bits, so it names the session for 'agent-events session <id>' and carries no content),
     project, model. Only sessions with a call in the window are sent, so the series count follows what is running
     now and a finished session's series disappear. Gauges, not counters: the window is the whole state."""
@@ -196,7 +196,9 @@ def cache_gauges(con, now):
     acc = {}
     for sid, cwd, model, n, cr, cw, fi, miss in rows:
         label = (sid or "").lower()
-        key = (label if SESSION_LABEL_RE.fullmatch(label) else "other", ae.export_project(cwd), export_name(model))
+        if not SESSION_LABEL_RE.fullmatch(label):
+            continue  # not a Pi session id (Pi writes UUIDs): never exported, and never pooled with others
+        key = (label, ae.export_project(cwd), export_name(model))
         a = acc.setdefault(key, [0, 0, 0, 0, 0])
         for i, v in enumerate((n, cr, cw, fi, miss)):
             a[i] += v or 0
