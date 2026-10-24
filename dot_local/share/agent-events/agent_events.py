@@ -1108,7 +1108,8 @@ def export_cmd(metrics, con, db, args):
     where = metrics.endpoint() or "no endpoint set (AGENT_EVENTS_OTLP_ENDPOINT); this machine does not send"
     return "what the next scheduled run would send (nothing is sent by this command)\n" + table(rows, ["metric", "type", "series"]) + \
         f"\n{metrics.series_count(families)} series. Aggregates only: counts, seconds, tokens, notional cost; " + \
-        f"labels are project, kind, provider, model, tool, outcome.\nendpoint: {where}"
+        f"labels are project, kind, provider, model, tool, outcome. The pi_cache_* gauges also carry the session id " + \
+        f"(UUIDs only) of sessions active in the last 30 minutes.\nendpoint: {where}"
 
 
 def make_parser():
