@@ -3,5 +3,8 @@
     "model": "nomic-embed-text:latest",
     "baseUrl": "https://ollama.internal.cartwmic.com",
     "apiKey": "ollama"
+  },
+  "primer": {
+    "enabled": false
   }
 }
