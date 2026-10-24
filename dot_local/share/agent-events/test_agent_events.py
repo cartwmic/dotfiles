@@ -857,11 +857,11 @@ class CacheGauges(Tick):
     def test_ratio_calls_and_full_misses_over_the_window(self):
         HIT = (100_000, 0, 100)
         MISS = (0, 60_000, 50)
-        self.cache_session("01a16722-aaaa-7000-8000-000000000001", "a", "claude-x",
+        self.cache_session("01a16722-a001-7000-8000-000000000001", "a", "claude-x",
                            [(40, *MISS)] +                     # older than the window: ignored
                            [(25, *MISS), (20, *HIT), (15, *MISS), (10, *HIT), (5, *MISS), (1, *HIT)])
         g = self.gauges()
-        key = ("01a16722-aaaa", "proj", "claude-x")
+        key = ("01a16722-a001-7000-8000-000000000001", "proj", "claude-x")
         self.assertEqual(list(g), [key])
         v = g[key]
         self.assertEqual(v["pi_cache_calls_30m"], 6)
@@ -870,45 +870,56 @@ class CacheGauges(Tick):
         self.assertAlmostEqual(v["pi_cache_hit_ratio_30m"], cr / (cr + cw + fi))
 
     def test_full_miss_needs_both_a_large_write_and_a_low_read_share(self):
-        self.cache_session("01a16722-bbbb-7000-8000-000000000002", "b", "claude-x",
+        self.cache_session("01a16722-a002-7000-8000-000000000002", "b", "claude-x",
                            [(10, 0, 49_000, 10),            # write not above 50k: not a full miss
                             (9, 300_000, 60_000, 10),       # large write but 83% read: a partial rebuild, not a full miss
                             (8, 11_000, 60_000, 10),        # 15% read: a full miss
                             (7, 0, 60_000, 0)])             # all write: a full miss
-        v = self.gauges()[("01a16722-bbbb", "proj", "claude-x")]
+        v = self.gauges()[("01a16722-a002-7000-8000-000000000002", "proj", "claude-x")]
         self.assertEqual(v["pi_cache_full_miss_calls_30m"], 2)
 
     def test_sessions_and_models_are_separate_series_and_idle_sessions_drop_out(self):
-        self.cache_session("01a16722-cccc-7000-8000-000000000003", "c1", "claude-x", [(3, 100_000, 0, 10)])
-        self.cache_session("01a16722-dddd-7000-8000-000000000004", "d", "gpt-y", [(2, 1_000, 0, 99_000)])
-        self.cache_session("01a16722-eeee-7000-8000-000000000005", "e", "claude-x", [(45, 0, 90_000, 0)])  # idle for 45 min
+        self.cache_session("01a16722-a003-7000-8000-000000000003", "c1", "claude-x", [(3, 100_000, 0, 10)])
+        self.cache_session("01a16722-a004-7000-8000-000000000004", "d", "gpt-y", [(2, 1_000, 0, 99_000)])
+        self.cache_session("01a16722-a005-7000-8000-000000000005", "e", "claude-x", [(45, 0, 90_000, 0)])  # idle for 45 min
         g = self.gauges()
-        self.assertEqual(set(g), {("01a16722-cccc", "proj", "claude-x"), ("01a16722-dddd", "proj", "gpt-y")})
-        self.assertAlmostEqual(g[("01a16722-dddd", "proj", "gpt-y")]["pi_cache_hit_ratio_30m"], 0.01)
+        self.assertEqual(set(g), {("01a16722-a003-7000-8000-000000000003", "proj", "claude-x"), ("01a16722-a004-7000-8000-000000000004", "proj", "gpt-y")})
+        self.assertAlmostEqual(g[("01a16722-a004-7000-8000-000000000004", "proj", "gpt-y")]["pi_cache_hit_ratio_30m"], 0.01)
+
+    def test_sessions_sharing_a_start_time_prefix_stay_separate(self):
+        self.cache_session("01a16722-a00b-7000-8000-000000000001", "k1", "claude-x", [(t, 0, 10_000, 0) for t in (6, 5, 4, 3, 2)])
+        self.cache_session("01a16722-a00b-7000-8000-000000000002", "k2", "claude-x", [(t, 100_000, 0, 0) for t in (6, 5, 4, 3, 2)])
+        g = self.gauges()
+        self.assertEqual(g["01a16722-a00b-7000-8000-000000000001", "proj", "claude-x"]["pi_cache_hit_ratio_30m"], 0.0)
+        self.assertEqual(g["01a16722-a00b-7000-8000-000000000002", "proj", "claude-x"]["pi_cache_hit_ratio_30m"], 1.0)
 
     def test_a_call_after_the_evaluation_time_is_not_counted(self):
-        self.cache_session("01a16722-jjjj-7000-8000-00000000000a", "j", "claude-x", [(3, 100_000, 0, 10), (-5, 0, 90_000, 0)])
-        v = self.gauges()[("01a16722-jjjj", "proj", "claude-x")]
+        self.cache_session("01a16722-a006-7000-8000-00000000000a", "j", "claude-x", [(3, 100_000, 0, 10), (-5, 0, 90_000, 0)])
+        v = self.gauges()[("01a16722-a006-7000-8000-00000000000a", "proj", "claude-x")]
         self.assertEqual((v["pi_cache_calls_30m"], v["pi_cache_full_miss_calls_30m"]), (1, 0))
 
     def test_calls_without_usage_are_not_counted_and_the_ratio_never_divides_by_zero(self):
-        self.cache_session("01a16722-ffff-7000-8000-000000000006", "f", "claude-x", [(3, 0, 0, 0), (2, 0, 0, 0)])
+        self.cache_session("01a16722-a007-7000-8000-000000000006", "f", "claude-x", [(3, 0, 0, 0), (2, 0, 0, 0)])
         self.assertEqual(self.gauges(), {})
 
     def test_labels_hold_no_path_or_content_and_an_odd_session_id_becomes_other(self):
         self.cache_session("not a uuid / with spaces", "g", "claude-x", [(3, 100_000, 0, 10)])
-        self.cache_session("01a16722-hhhh-7000-8000-000000000008", "h", "claude-x", [(3, 100_000, 0, 10)], cwd="/some/other/place")
+        self.cache_session("01a16722-a008-7000-8000-000000000008", "h", "claude-x", [(3, 100_000, 0, 10)], cwd="/some/other/place")
         con = ae.connect(self.db if self.build() else self.db, readonly=True)
         payload = json.dumps(am.otlp_payload(am.cache_gauges(con, self.NOW), 1, 2))
-        for needle in (SENTINEL, "/work/proj", "/some/other/place", str(self.root), "7000-8000-000000000008", "with spaces"):
+        self.cache_session("customer-data/private", "g2", "claude-x", [(3, 100_000, 0, 10)])
+        self.cache_session("customer-data-private-acme-0001", "g3", "claude-x", [(3, 100_000, 0, 10)])
+        self.build()
+        payload = json.dumps(am.otlp_payload(am.cache_gauges(con, self.NOW), 1, 2))
+        for needle in (SENTINEL, "/work/proj", "/some/other/place", str(self.root), "with spaces", "customer", "acme"):
             self.assertNotIn(needle, payload)
         sessions = {labels["session"] for m in am.cache_gauges(con, self.NOW) for labels, _ in m["points"]}
-        self.assertEqual(sessions, {"other", "01a16722-hhhh"})
+        self.assertEqual(sessions, {"other", "01a16722-a008-7000-8000-000000000008"})
         projects = {labels["project"] for m in am.cache_gauges(con, self.NOW) for labels, _ in m["points"]}
         self.assertEqual(projects, {"proj", "other"})
 
     def test_export_sends_the_gauges_and_a_failed_build_does_not(self):
-        self.cache_session("01a16722-iiii-7000-8000-000000000009", "i", "claude-x", [(3, 100_000, 0, 10)])
+        self.cache_session("01a16722-a009-7000-8000-000000000009", "i", "claude-x", [(3, 100_000, 0, 10)])
         self.build()
         con = ae.connect(self.db, readonly=True)
         c = self.collector()
