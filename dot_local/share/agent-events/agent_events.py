@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4  # 4: owner wait, active and tool time are nested-aware (a wait inside codemode is owner wait)
 CONTENT_POLICY = "no prompts, assistant text, tool args/results or error text are stored"
 
 SCHEMA = """
@@ -728,6 +728,10 @@ def _agg(cs, nested_by_parent):
     phase = {p: 0 for p in PHASES}
     unknown = set()       # phases with an unknown contribution, nested ones included
     top_unknown = set()   # phases of top-level calls with no recorded duration
+    nested_owner = 0      # owner time inside codemode scripts: nested calls have a duration but no timestamps
+    nested_owner_in_span = 0  # the part of it that sits inside a wrapper with a known interval
+    nested_owner_unknown = False
+    tool_own = 0          # top-level tool time minus the owner time nested inside it
     for c in llm:
         if c["dur_ms"] is None:
             unknown.add("llm")
@@ -741,6 +745,18 @@ def _agg(cs, nested_by_parent):
             top_unknown.add(c["phase"])
         for ph, ms in parts.items():
             phase[ph] += ms
+        w = 0
+        for n in nested_by_parent.get(c["call_id"], []):
+            if n["phase"] == "owner":
+                if n["dur_ms"] is None:
+                    nested_owner_unknown = True
+                else:
+                    w += n["dur_ms"]
+        nested_owner += w
+        if c["phase"] != "owner" and c["dur_ms"] is not None:
+            tool_own += max(0, c["dur_ms"] - w)
+        if w and c["start_ms"] is not None and c["end_ms"] is not None:
+            nested_owner_in_span += min(w, c["end_ms"] - c["start_ms"])
     spans = [c for c in llm + tools if c["start_ms"] is not None and c["end_ms"] is not None]
     iv_active = [(c["start_ms"], c["end_ms"]) for c in spans if c["phase"] != "owner"]
     iv_owner = [(c["start_ms"], c["end_ms"]) for c in spans if c["phase"] == "owner"]
@@ -748,9 +764,13 @@ def _agg(cs, nested_by_parent):
         "complete": not unknown and not top_unknown,
         "top_complete": not top_unknown,
         "phase": {p: (None if p in unknown else v) for p, v in phase.items()},
-        "active": union_ms(iv_active) if not (top_unknown - {"owner"}) else None,
-        "owner": union_ms(iv_owner) if "owner" not in top_unknown else None,
-        "tool_ms": None if (top_unknown - {"owner", "llm"}) else sum(c["dur_ms"] for c in tools if c["phase"] != "owner"),
+        # A wait inside codemode sits inside the wrapper's span, so it is taken out of active and tool time and
+        # added to owner wait. Nested calls have no timestamps, so this subtracts a duration, not an interval.
+        "active": (max(0, union_ms(iv_active) - nested_owner_in_span)
+                   if not ((top_unknown - {"owner"}) or nested_owner_unknown) else None),
+        "owner": ((union_ms(iv_owner) + nested_owner)
+                  if ("owner" not in top_unknown and not nested_owner_unknown) else None),
+        "tool_ms": None if ((top_unknown - {"owner", "llm"}) or nested_owner_unknown) else tool_own,
         "llm_calls": len(llm), "tool_calls": len(tools),
         "errors": sum(1 for c in llm + tools if c["status"] == "error"),
         "input": sum(c["input_tokens"] or 0 for c in llm),
