@@ -30,6 +30,12 @@ Remaining digest fields are the package defaults already filled in:
 Ollama's OpenAI-compatible endpoint expects. It is not a credential. The
 internal hostname is already in the JSON and is not a secret.
 
+`primer.enabled: false` in [config.json](./config.json) turns off the package's
+"Recent Sessions" system-prompt primer. The primer's age labels and message
+counts change every few minutes, which changed the system prompt on each agent
+run and forced full prompt-cache re-writes on claude-compat. `session_search`
+and `/find-session` are unaffected.
+
 Runtime artifacts (`index/`, `digests/`) live only at the destination. They are
 not source and must not be added here.
 
@@ -93,10 +99,11 @@ From **this directory**, both files must parse and match the homelab values:
 
 ```sh
 jq -e '.embedder.baseUrl == "https://ollama.internal.cartwmic.com" and .embedder.model == "nomic-embed-text:latest"' config.json
+jq -e '.primer.enabled == false' config.json
 jq -e '.provider == "openai-codex" and .model == "gpt-6-luna"' digest.json
 ```
 
-Both commands must print `true`. Confirm the dest is managed only on personal:
+Each command must print `true`. Confirm the dest is managed only on personal:
 
 ```sh
 chezmoi managed ~/.pi/session-search
