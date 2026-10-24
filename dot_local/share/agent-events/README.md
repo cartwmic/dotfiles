@@ -118,7 +118,7 @@ re-reads the original session file. Nothing it prints is stored or exported.
   sum to more than wall time. A `codemode` call reports each nested call's duration under its own
   phase, unscaled; `other` is a lower bound on wrapper time no nested call accounts for.
   `sessions.tool_ms` is the sum of top-level tool durations, minus owner questions (top-level ones, and ones made inside a `codemode` script). `active_ms` is the union of LLM and tool intervals (parallel
-  work counted once) and excludes owner-wait; a wait inside a `codemode` script is subtracted as a duration, because nested calls carry no timestamps, so `active_ms` can read slightly low if other calls ran during the wait. `unaccounted_ms` is wall time with no call
+  work counted once) and excludes owner-wait; a wait inside a `codemode` script is subtracted as a duration, because nested calls carry no timestamps, so `active_ms` is an approximation that can read low. Parallel `codemode` wrappers that each wait are subtracted separately from one interval union, so overlapping waits can remove time that belongs to unrelated work, down to zero (two overlapping 10 s wrappers that each wait 10 s, plus a separate 5 s LLM call, read 0 s active instead of 15 s). `owner_wait_ms` and the `owner` phase are exact sums. `unaccounted_ms` is wall time with no call
   running: idle panes, waiting for you, gaps between steps.
 - **Owner wait** is the duration of `ask_user_question` / `notify_owner` tool calls, whether made directly or from inside a `codemode` script (before schema 4 only the direct ones counted, so a wait of hours read as milliseconds). Idle time
   between prompts is separate (`idle_after_ms`).
