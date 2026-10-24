@@ -3,6 +3,8 @@ overrides repository procedure for that tree. Do not create `~/AGENTS.md`.
 
 ## Working style
 
+For software intent, design, implementation or review, read and follow `~/.local/share/agent-harness/design-principles.md`.
+
 YAGNI. Do not add code, abstractions, config, or files the current request does not need. Do not design for a future request that has not been made.
 
 KISS. Prefer the smallest change that works. A function beats a new layer. A script beats a service. Do not add complexity to look clever.
