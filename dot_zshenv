@@ -2,6 +2,11 @@
 # so bootstrap-installed tools are available regardless of /etc/zprofile.
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$HOME/bin:$PATH"
 
+# Pi: 1-hour prompt cache (Anthropic default is 5 minutes). Read by every zsh,
+# so it reaches Herdr panes, the coordinator pane and subagents. Override in
+# ~/.zshenv.local or the environment (PI_CACHE_RETENTION=short).
+export PI_CACHE_RETENTION="${PI_CACHE_RETENTION:-long}"
+
 # SSH from kitty sends TERM=xterm-kitty. Kitty only ships that terminfo
 # inside its app bundle (local windows set TERMINFO to it). A remote SSH
 # session does not inherit that, so ZLE has no cursor-addressing and the
