@@ -831,6 +831,95 @@ class Tick(Base):
         return json.loads((self.state / "status.json").read_text())
 
 
+class CacheGauges(Tick):
+    """Per-session prompt-cache gauges for the cache alerts."""
+    NOW = (T + 3 * 3600 * 1000) / 1000.0
+    MIN = 60_000
+
+    def cache_session(self, sid, name, model, calls, cwd="/work/proj"):
+        """calls: (minutes before NOW, cacheRead, cacheWrite, fresh input)."""
+        f = Fixture(session_id=sid, cwd=cwd, start=int(self.NOW * 1000) - 120 * self.MIN)
+        f.user(int(self.NOW * 1000) - 119 * self.MIN)
+        for ago, cr, cw, fresh in calls:
+            end = int(self.NOW * 1000) - int(ago * self.MIN)
+            f.llm(end - 2000, end, cr=cr, cw=cw, fresh=fresh, stop="stop", model=model)
+        f.write(self.root / f"--work-proj--/2026-10-01T00-00-00-000Z_{name}.jsonl")
+
+    def gauges(self):
+        self.build()
+        con = ae.connect(self.db, readonly=True)
+        out = {}
+        for m in am.cache_gauges(con, self.NOW):
+            for labels, v in m["points"]:
+                out.setdefault((labels["session"], labels["project"], labels["model"]), {})[m["name"]] = v
+        return out
+
+    def test_ratio_calls_and_full_misses_over_the_window(self):
+        HIT = (100_000, 0, 100)
+        MISS = (0, 60_000, 50)
+        self.cache_session("01a16722-aaaa-7000-8000-000000000001", "a", "claude-x",
+                           [(40, *MISS)] +                     # older than the window: ignored
+                           [(25, *MISS), (20, *HIT), (15, *MISS), (10, *HIT), (5, *MISS), (1, *HIT)])
+        g = self.gauges()
+        key = ("01a16722-aaaa", "proj", "claude-x")
+        self.assertEqual(list(g), [key])
+        v = g[key]
+        self.assertEqual(v["pi_cache_calls_30m"], 6)
+        self.assertEqual(v["pi_cache_full_miss_calls_30m"], 3)
+        cr, cw, fi = 3 * 100_000, 3 * 60_000, 3 * 100 + 3 * 50
+        self.assertAlmostEqual(v["pi_cache_hit_ratio_30m"], cr / (cr + cw + fi))
+
+    def test_full_miss_needs_both_a_large_write_and_a_low_read_share(self):
+        self.cache_session("01a16722-bbbb-7000-8000-000000000002", "b", "claude-x",
+                           [(10, 0, 49_000, 10),            # write not above 50k: not a full miss
+                            (9, 300_000, 60_000, 10),       # large write but 83% read: a partial rebuild, not a full miss
+                            (8, 11_000, 60_000, 10),        # 15% read: a full miss
+                            (7, 0, 60_000, 0)])             # all write: a full miss
+        v = self.gauges()[("01a16722-bbbb", "proj", "claude-x")]
+        self.assertEqual(v["pi_cache_full_miss_calls_30m"], 2)
+
+    def test_sessions_and_models_are_separate_series_and_idle_sessions_drop_out(self):
+        self.cache_session("01a16722-cccc-7000-8000-000000000003", "c1", "claude-x", [(3, 100_000, 0, 10)])
+        self.cache_session("01a16722-dddd-7000-8000-000000000004", "d", "gpt-y", [(2, 1_000, 0, 99_000)])
+        self.cache_session("01a16722-eeee-7000-8000-000000000005", "e", "claude-x", [(45, 0, 90_000, 0)])  # idle for 45 min
+        g = self.gauges()
+        self.assertEqual(set(g), {("01a16722-cccc", "proj", "claude-x"), ("01a16722-dddd", "proj", "gpt-y")})
+        self.assertAlmostEqual(g[("01a16722-dddd", "proj", "gpt-y")]["pi_cache_hit_ratio_30m"], 0.01)
+
+    def test_a_call_after_the_evaluation_time_is_not_counted(self):
+        self.cache_session("01a16722-jjjj-7000-8000-00000000000a", "j", "claude-x", [(3, 100_000, 0, 10), (-5, 0, 90_000, 0)])
+        v = self.gauges()[("01a16722-jjjj", "proj", "claude-x")]
+        self.assertEqual((v["pi_cache_calls_30m"], v["pi_cache_full_miss_calls_30m"]), (1, 0))
+
+    def test_calls_without_usage_are_not_counted_and_the_ratio_never_divides_by_zero(self):
+        self.cache_session("01a16722-ffff-7000-8000-000000000006", "f", "claude-x", [(3, 0, 0, 0), (2, 0, 0, 0)])
+        self.assertEqual(self.gauges(), {})
+
+    def test_labels_hold_no_path_or_content_and_an_odd_session_id_becomes_other(self):
+        self.cache_session("not a uuid / with spaces", "g", "claude-x", [(3, 100_000, 0, 10)])
+        self.cache_session("01a16722-hhhh-7000-8000-000000000008", "h", "claude-x", [(3, 100_000, 0, 10)], cwd="/some/other/place")
+        con = ae.connect(self.db if self.build() else self.db, readonly=True)
+        payload = json.dumps(am.otlp_payload(am.cache_gauges(con, self.NOW), 1, 2))
+        for needle in (SENTINEL, "/work/proj", "/some/other/place", str(self.root), "7000-8000-000000000008", "with spaces"):
+            self.assertNotIn(needle, payload)
+        sessions = {labels["session"] for m in am.cache_gauges(con, self.NOW) for labels, _ in m["points"]}
+        self.assertEqual(sessions, {"other", "01a16722-hhhh"})
+        projects = {labels["project"] for m in am.cache_gauges(con, self.NOW) for labels, _ in m["points"]}
+        self.assertEqual(projects, {"proj", "other"})
+
+    def test_export_sends_the_gauges_and_a_failed_build_does_not(self):
+        self.cache_session("01a16722-iiii-7000-8000-000000000009", "i", "claude-x", [(3, 100_000, 0, 10)])
+        self.build()
+        con = ae.connect(self.db, readonly=True)
+        c = self.collector()
+        am.export(con, self.db, {"epoch_ns": 5}, c.url, now=self.NOW)
+        names = {m["name"] for m in c.requests[0]["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]}
+        self.assertTrue({"pi_cache_hit_ratio_30m", "pi_cache_calls_30m", "pi_cache_full_miss_calls_30m"} <= names)
+        am.export(con, self.db, {"epoch_ns": 5}, c.url, now=self.NOW, state={}, business=False)
+        names = {m["name"] for m in c.requests[1]["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]}
+        self.assertFalse(any(n.startswith("pi_cache_") for n in names))
+
+
 class ProjectSlug(unittest.TestCase):
     def setUp(self):
         self._roots, self._bases = ae._GIT_ROOTS, ae._PROJECT_BASES
