@@ -77,7 +77,7 @@ histograms for LLM and tool calls. Labels: `project` (the repository the cwd bel
 only repositories found under `~/git` and `/Volumes/Workshop/macbook/git` or listed in `AGENT_EVENTS_PROJECTS`
 (colon-separated) are named, anything else is `other`), `kind` (`top` or `subagent`), `provider`, `model`, `tool`, `outcome`, `phase`, `event`, `detail` (error class).
 Provider, model and tool names must look like an identifier (a path becomes `other`).
-No path, prompt, tool argument, result or error text. The only session identifier is the 13-character prefix on the three cache gauges below. `agent-events export` previews the series per metric (about 1,600) and
+No path, prompt, tool argument, result or error text. The only session identifier is the whole session id (a UUID, else "other") on the three cache gauges below. `agent-events export` previews the series per metric (about 1,600) and
 sends nothing (`--dry-run` is accepted and has no effect).
 
 **Prompt-cache gauges (the cache alerts).** Three gauges per session and model, over the trailing 30 minutes, for sessions with a call in that window only:
