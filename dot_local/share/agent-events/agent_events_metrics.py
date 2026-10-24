@@ -3,7 +3,7 @@
 Only counts, durations, tokens, notional cost and fixed-vocabulary names leave the machine, grouped
 by low-cardinality labels (project slug, kind, provider, model, tool, outcome). No paths, no message text,
 tool arguments or error text. The one exception to "no session ids" is the three pi_cache_*_30m gauges, which carry a
-short session prefix for sessions active in the last 30 minutes only (see cache_gauges). Content stays in the session files.
+session id (only when it is a UUID) for sessions active in the last 30 minutes only (see cache_gauges). Content stays in the session files.
 """
 import contextlib
 import errno
@@ -32,7 +32,7 @@ MAX_STALE_S = 900
 CACHE_WINDOW_S = 1800           # trailing window for the per-session cache gauges
 FULL_MISS_WRITE_TOKENS = 50_000  # a "full miss": more than this many cache-write tokens ...
 FULL_MISS_READ_SHARE = 0.2       # ... while under this share of the prompt was read from cache
-SESSION_LABEL_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z-]{0,12}")
+SESSION_LABEL_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 LOG_LIMIT = 1_000_000
 TICK_LIMIT_S = 1200
 
@@ -178,8 +178,8 @@ def cache_gauges(con, now):
     pi_cache_full_miss_calls_30m  calls with cacheWrite > FULL_MISS_WRITE_TOKENS and cacheRead under
                                   FULL_MISS_READ_SHARE of the prompt
     The window ends at now, so the result depends only on the database and now (the replay of past hours relies on it).
-    Labels: session (the first 13 characters of the session id: a Pi session id is a UUID whose prefix is its start
-    time in milliseconds, so it names the session for 'agent-events session <prefix>' and carries no content),
+    Labels: session (the whole session id when it is a UUID, otherwise 'other': a Pi session id is a UUID made of a
+    start time and random bits, so it names the session for 'agent-events session <id>' and carries no content),
     project, model. Only sessions with a call in the window are sent, so the series count follows what is running
     now and a finished session's series disappear. Gauges, not counters: the window is the whole state."""
     since_ms = int((now - CACHE_WINDOW_S) * 1000)
@@ -195,7 +195,7 @@ def cache_gauges(con, now):
         (FULL_MISS_WRITE_TOKENS, FULL_MISS_READ_SHARE, since_ms, int(now * 1000))).fetchall()
     acc = {}
     for sid, cwd, model, n, cr, cw, fi, miss in rows:
-        label = (sid or "")[:13]
+        label = (sid or "").lower()
         key = (label if SESSION_LABEL_RE.fullmatch(label) else "other", ae.export_project(cwd), export_name(model))
         a = acc.setdefault(key, [0, 0, 0, 0, 0])
         for i, v in enumerate((n, cr, cw, fi, miss)):

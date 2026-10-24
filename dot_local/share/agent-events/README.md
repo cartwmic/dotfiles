@@ -82,8 +82,7 @@ sends nothing (`--dry-run` is accepted and has no effect).
 
 **Prompt-cache gauges (the cache alerts).** Three gauges per session and model, over the trailing 30 minutes, for sessions with a call in that window only:
 `pi_cache_hit_ratio_30m` (cacheRead / (cacheRead + cacheWrite + fresh input), token weighted), `pi_cache_calls_30m` (LLM calls that report usage) and
-`pi_cache_full_miss_calls_30m` (calls with cacheWrite above 50,000 tokens while under 20% of the prompt came from cache). Labels: `session` (the first 13 characters of the
-session id, which is the session's start time in milliseconds plus a few bits; look it up with `agent-events session <prefix>`), `project`, `model`.
+`pi_cache_full_miss_calls_30m` (calls with cacheWrite above 50,000 tokens while under 20% of the prompt came from cache). Labels: `session` (the whole session id, but only when it is a UUID, otherwise `other`, so no free text can leave through it; look it up with `agent-events session <id>`), `project`, `model`.
 They are gauges, so the window is the whole state: they skip the counter accounting, a finished session's series expire, and they are not sent when a build fails.
 The homelab `PrometheusRule` `pi-cache` alerts on them.
 
