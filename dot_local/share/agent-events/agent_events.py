@@ -755,7 +755,7 @@ def _agg(cs, nested_by_parent):
         nested_owner += w
         if c["phase"] != "owner" and c["dur_ms"] is not None:
             tool_own += max(0, c["dur_ms"] - w)
-        if w and c["start_ms"] is not None and c["end_ms"] is not None:
+        if w and c["phase"] != "owner" and c["start_ms"] is not None and c["end_ms"] is not None:
             nested_owner_in_span += min(w, c["end_ms"] - c["start_ms"])
     spans = [c for c in llm + tools if c["start_ms"] is not None and c["end_ms"] is not None]
     iv_active = [(c["start_ms"], c["end_ms"]) for c in spans if c["phase"] != "owner"]
