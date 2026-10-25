@@ -1,0 +1,118 @@
+#!/bin/sh
+#
+# heavy-gate
+#
+# Ask whether this Mac can take a heavy job (cargo, docker, a full test suite) right now,
+# and optionally run the job only when it can. Workers call it instead of each one checking
+# load by hand. macOS only: it reads sysctl, memory_pressure and vm_stat.
+#
+# Usage:
+#   heavy-gate                          check once; exit 0 if allowed, 1 if refused (the reasons on stderr)
+#   heavy-gate [--wait SECONDS] -- CMD  wait up to SECONDS (default 0) for the gate, then run CMD while
+#                                       holding it, so only one heavy job runs at a time; exit with CMD's status
+#
+# The rules, all of which must hold:
+#   load1 < 8    swap free >= 1000 MB    memory pressure level 1 (normal)    memory free >= 30%
+#   Swapouts flat over 60 seconds (the machine is not swapping right now)
+#   no other heavy-gate job holds the gate
+# A figure that cannot be read counts as a refusal.
+#
+# Exit status: 0 allowed (or CMD's own status), 1 refused, 75 still refused after --wait, 2 usage / unsupported system.
+#
+# Environment (for tests): HEAVY_GATE_SWAP_WINDOW seconds to watch Swapouts (60), HEAVY_GATE_POLL seconds between
+# tries while waiting (15), TMPDIR where the gate lock lives.
+
+set -eu
+
+LOAD_MAX=8
+SWAP_FREE_MIN_MB=1000
+MEM_FREE_MIN_PCT=30
+SWAP_WINDOW=${HEAVY_GATE_SWAP_WINDOW:-60}
+POLL=${HEAVY_GATE_POLL:-15}
+LOCK="${TMPDIR:-/tmp}/heavy-gate.lock"
+
+log() { printf 'heavy-gate: %s\n' "$*" >&2; }
+usage() { sed -n '3,24p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+WAIT=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    --wait) [ $# -ge 2 ] || usage; WAIT=$2; shift 2 ;;
+    --) shift; break ;;
+    -h|--help) usage ;;
+    *) log "unknown argument: $1"; usage ;;
+  esac
+done
+case $WAIT in '' | *[!0-9]*) log "--wait takes a whole number of seconds"; exit 2 ;; esac
+[ "$(uname -s)" = Darwin ] || { log "macOS only"; exit 2; }
+
+# ---- the figures (each prints one number, or nothing if unreadable) ----
+load1() { sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}'; }
+swap_free_mb() {
+  sysctl -n vm.swapusage 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "free") {
+    v = $(i + 2); u = substr(v, length(v)); n = v + 0
+    if (u == "G") n *= 1024; else if (u == "K") n /= 1024
+    printf "%d", n } }'
+}
+pressure_level() { sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null; }
+mem_free_pct() { memory_pressure 2>/dev/null | awk '/free percentage/ {gsub("%", "", $NF); print $NF}'; }
+swapouts() { vm_stat 2>/dev/null | awk '/^Swapouts:/ {gsub("\\.", "", $2); print $2}'; }
+
+# $1 figure, $2 operator (lt or ge), $3 limit: true when the figure is a number that meets the rule
+meets() { [ -n "$1" ] && awk -v v="$1" -v l="$3" -v op="$2" 'BEGIN { exit !(op == "lt" ? v + 0 < l + 0 : v + 0 >= l + 0) }'; }
+
+# The cheap rules. Prints one line per broken rule; returns 1 if any is broken.
+cheap_rules() {
+  broken=0
+  v=$(load1);          meets "$v" lt "$LOAD_MAX"          || { log "refused: load1 ${v:-unreadable} (needs < $LOAD_MAX)"; broken=1; }
+  v=$(swap_free_mb);   meets "$v" ge "$SWAP_FREE_MIN_MB"  || { log "refused: swap free ${v:-unreadable} MB (needs >= $SWAP_FREE_MIN_MB)"; broken=1; }
+  v=$(pressure_level); [ "$v" = 1 ]                       || { log "refused: memory pressure level ${v:-unreadable} (needs 1)"; broken=1; }
+  v=$(mem_free_pct);   meets "$v" ge "$MEM_FREE_MIN_PCT"  || { log "refused: memory free ${v:-unreadable}% (needs >= $MEM_FREE_MIN_PCT%)"; broken=1; }
+  return "$broken"
+}
+
+# Swapouts must not move over the window. Returns 1 if they did, or cannot be read.
+swapouts_flat() {
+  a=$(swapouts); [ -n "$a" ] || { log "refused: Swapouts unreadable"; return 1; }
+  sleep "$SWAP_WINDOW"
+  b=$(swapouts); [ -n "$b" ] || { log "refused: Swapouts unreadable"; return 1; }
+  [ "$a" = "$b" ] || { log "refused: Swapouts rose over ${SWAP_WINDOW}s (the machine is swapping)"; return 1; }
+}
+
+# The gate lock is a symlink named for the holder's pid: creating it is atomic. A dead holder's lock is cleared.
+holder() { readlink "$LOCK" 2>/dev/null || true; }
+take_lock() {
+  ln -s "$$" "$LOCK" 2>/dev/null && return 0
+  h=$(holder)
+  if [ -n "$h" ] && ! kill -0 "$h" 2>/dev/null; then rm -f "$LOCK"; ln -s "$$" "$LOCK" 2>/dev/null && return 0; fi
+  log "refused: another heavy job holds the gate (pid ${h:-unknown})"
+  return 1
+}
+drop_lock() { [ "$(holder)" = "$$" ] && rm -f "$LOCK"; return 0; }
+
+# One try. With $1 = 1 the lock is held on success and dropped on refusal.
+try_gate() {
+  if [ "$1" = 1 ]; then take_lock || return 1; else
+    h=$(holder); if [ -n "$h" ] && kill -0 "$h" 2>/dev/null; then log "refused: another heavy job holds the gate (pid $h)"; return 1; fi
+  fi
+  if cheap_rules && swapouts_flat; then return 0; fi
+  [ "$1" = 1 ] && drop_lock
+  return 1
+}
+
+if [ $# -eq 0 ]; then
+  try_gate 0 && { log "allowed"; exit 0; }
+  exit 1
+fi
+
+deadline=$(( $(date +%s) + WAIT ))
+trap 'drop_lock' EXIT
+trap 'exit 143' INT TERM HUP
+until try_gate 1; do
+  [ "$(date +%s)" -lt "$deadline" ] || { log "still refused after ${WAIT}s; not running: $*"; exit 75; }
+  sleep "$POLL"
+done
+log "allowed; running: $*"
+status=0
+"$@" || status=$?
+exit "$status"
