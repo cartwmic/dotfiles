@@ -10,12 +10,14 @@ Edit `~/.pi/agent/extensions/auto-compact/config.json` or run `/auto-compact` in
 {
   "enabled": true,
   "thresholdPercent": 40,
+  "thresholdTokens": 200000,
   "checkAt": ["turn_end", "agent_end"],
   "continuation": "Continue from where you left off."
 }
 ```
 
 - `thresholdPercent`: context-window percentage in `(0, 100]`. Trigger comparison is inclusive.
+- `thresholdTokens` (default 200000): absolute cap. Compaction fires at whichever comes first, `thresholdPercent` of the model's window or this many tokens. A 1M-window model compacts at 200k (not 400k); a 272k-window model still compacts at 40%, about 109k. The default lives in code, so an existing `config.json` without this key picks it up on reload.
 - `checkAt`: one or both of `turn_end` and `agent_end`.
   - `turn_end` checks are deferred until the next lifecycle event: another `turn_start` resumes after compaction; a final `agent_end` compacts without resuming.
   - `agent_end` is the configured final-run checkpoint; its check runs at

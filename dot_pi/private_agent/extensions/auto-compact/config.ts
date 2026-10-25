@@ -9,6 +9,11 @@ export const DEFAULT_CONTINUATION = "Continue from where you left off.";
 export interface AutoCompactConfig {
 	enabled: boolean;
 	thresholdPercent: number;
+	/**
+	 * Absolute cap in tokens. Compaction fires at whichever comes first: thresholdPercent of the model's context
+	 * window or this many tokens. A flat low percentage would compact small-window models far too early.
+	 */
+	thresholdTokens: number;
 	checkAt: CheckPoint[];
 	/**
 	 * Follow-up injected after inter-turn (`turn_end`) compaction.
@@ -42,6 +47,7 @@ export interface ContextUsage {
 export const DEFAULT_CONFIG: AutoCompactConfig = {
 	enabled: true,
 	thresholdPercent: 40,
+	thresholdTokens: 200_000,
 	checkAt: ["turn_end", "agent_end"],
 	continuation: DEFAULT_CONTINUATION,
 	maxIneffectiveCompactions: 2,
@@ -66,6 +72,9 @@ export function normalizeConfig(value: unknown): AutoCompactConfig {
 		typeof threshold === "number" && Number.isFinite(threshold) && threshold > 0 && threshold <= 100
 			? threshold
 			: DEFAULT_CONFIG.thresholdPercent;
+	const cap = raw.thresholdTokens;
+	const thresholdTokens =
+		typeof cap === "number" && Number.isFinite(cap) && cap >= 1 ? Math.floor(cap) : DEFAULT_CONFIG.thresholdTokens;
 	const configuredPoints = Array.isArray(raw.checkAt) ? raw.checkAt.filter(isCheckPoint) : [];
 	const checkAt = CHECK_POINTS.filter((point) => configuredPoints.includes(point));
 	const rawMax = raw.maxIneffectiveCompactions;
@@ -83,6 +92,7 @@ export function normalizeConfig(value: unknown): AutoCompactConfig {
 	return {
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_CONFIG.enabled,
 		thresholdPercent,
+		thresholdTokens,
 		checkAt: checkAt.length > 0 ? checkAt : [...DEFAULT_CONFIG.checkAt],
 		continuation: "continuation" in raw ? normalizeContinuation(raw.continuation) : DEFAULT_CONTINUATION,
 		maxIneffectiveCompactions,
@@ -105,10 +115,12 @@ export function saveConfig(path: string, config: AutoCompactConfig): void {
 	renameSync(temporaryPath, path);
 }
 
-export function thresholdTokens(contextWindow: number, thresholdPercent: number): number | undefined {
+/** Tokens at which compaction fires: the percentage of the window, or capTokens when that is lower. */
+export function thresholdTokens(contextWindow: number, thresholdPercent: number, capTokens?: number): number | undefined {
 	if (!Number.isFinite(contextWindow) || contextWindow <= 0) return undefined;
 	if (!Number.isFinite(thresholdPercent) || thresholdPercent <= 0 || thresholdPercent > 100) return undefined;
-	return Math.ceil((thresholdPercent / 100) * contextWindow);
+	const byPercent = Math.ceil((thresholdPercent / 100) * contextWindow);
+	return capTokens !== undefined && Number.isFinite(capTokens) && capTokens >= 1 ? Math.min(byPercent, capTokens) : byPercent;
 }
 
 /** Wait before the next breaker retry: base doubled per consecutive trip, capped. undefined = never retry. */
@@ -125,7 +137,7 @@ export function shouldTrigger(
 	lastAttemptTokens?: number,
 ): boolean {
 	if (!config.enabled || !config.checkAt.includes(checkPoint) || !usage) return false;
-	const threshold = thresholdTokens(usage.contextWindow, config.thresholdPercent);
+	const threshold = thresholdTokens(usage.contextWindow, config.thresholdPercent, config.thresholdTokens);
 	if (threshold === undefined || !Number.isFinite(usage.tokens) || usage.tokens < threshold) return false;
 	return lastAttemptTokens === undefined || usage.tokens > lastAttemptTokens;
 }
@@ -149,5 +161,5 @@ export function describeContinuation(continuation: string | false): string {
 
 export function describeConfig(config: AutoCompactConfig): string {
 	const points = config.checkAt.join(" + ");
-	return `auto-compaction ${config.enabled ? "ON" : "OFF"}; threshold ${config.thresholdPercent}%; check at ${points}; continuation ${describeContinuation(config.continuation)}; breaker ${config.maxIneffectiveCompactions}, ${config.breakerCooldownSeconds > 0 ? `retry after ${config.breakerCooldownSeconds}s (doubling)` : "no retry"}`;
+	return `auto-compaction ${config.enabled ? "ON" : "OFF"}; threshold ${config.thresholdPercent}% or ${config.thresholdTokens.toLocaleString("en-US")} tokens, whichever is lower; check at ${points}; continuation ${describeContinuation(config.continuation)}; breaker ${config.maxIneffectiveCompactions}, ${config.breakerCooldownSeconds > 0 ? `retry after ${config.breakerCooldownSeconds}s (doubling)` : "no retry"}`;
 }

@@ -48,7 +48,7 @@ async function configure(
 	while (true) {
 		const choice = await ctx.ui.select("Auto-compaction configuration", [
 			`Enabled: ${draft.enabled ? "ON" : "OFF"}`,
-			`Threshold: ${draft.thresholdPercent}%`,
+			`Threshold: ${draft.thresholdPercent}% or ${draft.thresholdTokens.toLocaleString("en-US")} tokens, whichever is lower (edit the token cap in config.json)`,
 			`Check at: ${checkPointSelection(draft)}`,
 			`Continuation: ${describeContinuation(draft.continuation)}`,
 			"Save and close",
@@ -205,7 +205,7 @@ export function registerAutoCompactExtension(
 		if (typeof ctx.getContextUsage !== "function" || typeof ctx.compact !== "function") return;
 
 		const usage = ctx.getContextUsage();
-		const threshold = usage ? thresholdTokens(usage.contextWindow, config.thresholdPercent) : undefined;
+		const threshold = usage ? thresholdTokens(usage.contextWindow, config.thresholdPercent, config.thresholdTokens) : undefined;
 		// Only a real, finite below-threshold reading clears the attempt guard, the breaker, its pause and the
 		// backoff (also while paused: context recovered, e.g. by a manual /compact). Do NOT treat `tokens: null`
 		// (returned right after compaction, before the next assistant response) as below-threshold: that would
@@ -264,7 +264,7 @@ export function registerAutoCompactExtension(
 						consecutiveIneffective,
 						retryInSeconds: waitMs === undefined ? null : Math.round(waitMs / 1000),
 					},
-					"Auto-compaction paused: " + consecutiveIneffective + " consecutive compactions did not reduce context below " + config.thresholdPercent + "% (" + tokens.toLocaleString() + "/" + contextWindow.toLocaleString() + " tokens). " + retryText,
+					"Auto-compaction paused: " + consecutiveIneffective + " consecutive compactions did not reduce context below " + threshold!.toLocaleString() + " tokens (" + tokens.toLocaleString() + "/" + contextWindow.toLocaleString() + "). " + retryText,
 				);
 				return;
 			}
