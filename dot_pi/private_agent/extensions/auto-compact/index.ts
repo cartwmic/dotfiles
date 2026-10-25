@@ -48,7 +48,7 @@ async function configure(
 	while (true) {
 		const choice = await ctx.ui.select("Auto-compaction configuration", [
 			`Enabled: ${draft.enabled ? "ON" : "OFF"}`,
-			`Threshold: ${draft.thresholdPercent}%`,
+			`Threshold: ${draft.thresholdPercent}% or ${draft.thresholdTokens.toLocaleString("en-US")} tokens, whichever is lower (edit the token cap in config.json)`,
 			`Check at: ${checkPointSelection(draft)}`,
 			`Continuation: ${describeContinuation(draft.continuation)}`,
 			"Save and close",
