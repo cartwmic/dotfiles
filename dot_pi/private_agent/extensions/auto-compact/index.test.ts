@@ -52,7 +52,7 @@ describe("auto-compact config", () => {
 
 	test("describes effective configuration", () => {
 		expect(describeConfig(DEFAULT_CONFIG)).toBe(
-			`auto-compaction ON; threshold 40%; check at turn_end + agent_end; continuation "${DEFAULT_CONTINUATION}"; breaker 2, retry after 300s (doubling)`,
+			`auto-compaction ON; threshold 40% or 200,000 tokens, whichever is lower; check at turn_end + agent_end; continuation "${DEFAULT_CONTINUATION}"; breaker 2, retry after 300s (doubling)`,
 		);
 		expect(describeConfig({ ...DEFAULT_CONFIG, continuation: false })).toContain("continuation OFF");
 	});
@@ -86,6 +86,114 @@ describe("auto-compact config", () => {
 		expect(
 			resumeAfterCompact({ ...DEFAULT_CONFIG, continuation: "Keep going." }, "turn_end", true),
 		).toBe("Keep going.");
+	});
+});
+
+describe("auto-compact absolute cap", () => {
+	test("defaults to 200000 tokens, and an old config without the key gets it", () => {
+		expect(DEFAULT_CONFIG.thresholdTokens).toBe(200_000);
+		expect(normalizeConfig({ enabled: true, thresholdPercent: 40, continuation: "x" }).thresholdTokens).toBe(200_000);
+	});
+
+	test("normalizes the cap (custom, floor, invalid)", () => {
+		expect(normalizeConfig({ thresholdTokens: 150_000 }).thresholdTokens).toBe(150_000);
+		expect(normalizeConfig({ thresholdTokens: 150_000.9 }).thresholdTokens).toBe(150_000);
+		for (const bad of [0, -5, "x", null, Number.NaN, Infinity]) {
+			expect(normalizeConfig({ thresholdTokens: bad }).thresholdTokens).toBe(200_000);
+		}
+	});
+
+	test("fires at whichever comes first: the percentage or the cap", () => {
+		expect(thresholdTokens(1_000_000, 40, 200_000)).toBe(200_000); // 400k by percent, so the cap wins
+		expect(thresholdTokens(272_000, 40, 200_000)).toBe(108_800); // 40% is lower than the cap, so it wins
+		expect(thresholdTokens(872_000, 40, 200_000)).toBe(200_000);
+		expect(thresholdTokens(1_000_000, 40)).toBe(400_000); // no cap given: unchanged behaviour
+		expect(thresholdTokens(1_000_000, 40, 0)).toBe(400_000); // an unusable cap is ignored
+		expect(thresholdTokens(1_000_000, 10, 200_000)).toBe(100_000); // a cap never raises the percentage
+	});
+
+	test("shouldTrigger uses the cap, inclusively", () => {
+		expect(shouldTrigger(DEFAULT_CONFIG, "turn_end", { tokens: 199_999, contextWindow: 1_000_000 })).toBe(false);
+		expect(shouldTrigger(DEFAULT_CONFIG, "turn_end", { tokens: 200_000, contextWindow: 1_000_000 })).toBe(true);
+		expect(shouldTrigger(DEFAULT_CONFIG, "turn_end", { tokens: 108_799, contextWindow: 272_000 })).toBe(false);
+		expect(shouldTrigger(DEFAULT_CONFIG, "turn_end", { tokens: 108_800, contextWindow: 272_000 })).toBe(true);
+		const lower = normalizeConfig({ thresholdTokens: 150_000 });
+		expect(shouldTrigger(lower, "turn_end", { tokens: 150_000, contextWindow: 1_000_000 })).toBe(true);
+	});
+
+	// Black box: the registered extension, driven through Pi's events, compacts a session at the right size.
+	const compactsAt = (contextWindow: number, tokens: number, config = DEFAULT_CONFIG): number => {
+		const handlers = new Map<string, (event: any, ctx: any) => void>();
+		extension(
+			{
+				on: (name: string, handler: (event: any, ctx: any) => void) => handlers.set(name, handler),
+				registerCommand: () => {},
+				sendUserMessage: () => {},
+				events: { emit: () => {} },
+			} as any,
+			{ config },
+		);
+		let compactCalls = 0;
+		const ctx = {
+			hasUI: false,
+			getContextUsage: () => ({ tokens, contextWindow }),
+			compact: ({ onComplete }: { onComplete: () => void }) => {
+				compactCalls += 1;
+				onComplete();
+			},
+		};
+		handlers.get("turn_end")?.({}, ctx);
+		handlers.get("turn_start")?.({}, ctx);
+		return compactCalls;
+	};
+
+	test("a 1M-window session compacts at 200k, not 400k", () => {
+		expect(compactsAt(1_000_000, 199_999)).toBe(0);
+		expect(compactsAt(1_000_000, 200_000)).toBe(1);
+		expect(compactsAt(1_000_000, 399_999)).toBe(1);
+	});
+
+	test("a 272k-window session still compacts at 40%, about 109k", () => {
+		expect(compactsAt(272_000, 108_799)).toBe(0);
+		expect(compactsAt(272_000, 108_800)).toBe(1);
+	});
+
+	test("a 872k-window session compacts at the cap", () => {
+		expect(compactsAt(872_000, 199_999)).toBe(0);
+		expect(compactsAt(872_000, 200_000)).toBe(1);
+	});
+
+	test("the breaker judges recovery against the capped threshold", () => {
+		const handlers = new Map<string, (event: any, ctx: any) => void>();
+		const notices: string[] = [];
+		extension({
+			on: (name: string, handler: (event: any, ctx: any) => void) => handlers.set(name, handler),
+			registerCommand: () => {},
+			sendUserMessage: () => {},
+			appendEntry: () => {},
+			events: { emit: () => {} },
+		} as any);
+		let tokens = 250_000; // above the 200k cap, below 40% of 1M: only the cap makes this "over threshold"
+		let compactCalls = 0;
+		const ctx: any = {
+			hasUI: true,
+			ui: { notify: (m: string) => notices.push(m) },
+			getContextUsage: () => ({ tokens, contextWindow: 1_000_000 }),
+			compact: ({ onComplete }: { onComplete: () => void }) => {
+				compactCalls += 1;
+				onComplete();
+				tokens += 1_000; // a compaction that does not shrink the context
+			},
+		};
+		for (let i = 0; i < 6; i++) handlers.get("agent_settled")?.({}, ctx);
+		expect(compactCalls).toBe(2);
+		expect(notices.some((n) => n.includes("paused") && n.includes("below 200,000 tokens"))).toBe(true);
+	});
+
+	test("a configured cap above the percentage changes nothing", () => {
+		const config = normalizeConfig({ thresholdTokens: 900_000 });
+		expect(compactsAt(1_000_000, 399_999, config)).toBe(0);
+		expect(compactsAt(1_000_000, 400_000, config)).toBe(1);
 	});
 });
 
