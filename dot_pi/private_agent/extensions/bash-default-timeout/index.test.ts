@@ -53,7 +53,23 @@ test("the hint is added only when the default limit stopped the command", () => 
 	// Defaulted, but the command failed some other way: no hint.
 	tool_call!({ toolName: "bash", toolCallId: "f", input: {} });
 	assert.equal(tool_result!({ toolCallId: "f", isError: true, content: [{ type: "text", text: "exit code 1" }] }), undefined);
+	// Defaulted, nonzero exit, and the output itself says the words: it carries structuredContent, so it is left alone.
+	tool_call!({ toolName: "bash", toolCallId: "h", input: {} });
+	assert.equal(tool_result!({ ...expired("h"), structuredContent: { exitCode: 1 } }), undefined);
+	tool_call!({ toolName: "bash", toolCallId: "i", input: {} });
+	assert.equal(tool_result!({ toolCallId: "i", isError: true, content: [{ type: "text", text: `Command timed out after ${FALLBACK_TIMEOUT_SECONDS} seconds but not really\n\nexit 1` }] }), undefined);
+	// Output, then the status: hint added.
+	tool_call!({ toolName: "bash", toolCallId: "j", input: {} });
+	assert.equal(tool_result!({ toolCallId: "j", isError: true, content: [{ type: "text", text: `partial output\n\nCommand timed out after ${FALLBACK_TIMEOUT_SECONDS} seconds` }] }).content.length, 2);
 	// Defaulted and succeeded.
 	tool_call!({ toolName: "bash", toolCallId: "g", input: {} });
 	assert.equal(tool_result!({ toolCallId: "g", isError: false, content: [{ type: "text", text: "ok" }] }), undefined);
+});
+
+test("ids of calls that never reach tool_result are dropped when the turn ends", () => {
+	const { tool_call, tool_result, agent_end } = load();
+	tool_call!({ toolName: "bash", toolCallId: "k", input: {} });
+	agent_end!({});
+	// If the id had been kept, this result would get a hint.
+	assert.equal(tool_result!({ toolCallId: "k", isError: true, content: [{ type: "text", text: `Command timed out after ${FALLBACK_TIMEOUT_SECONDS} seconds` }] }), undefined);
 });

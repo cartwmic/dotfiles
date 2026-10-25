@@ -78,8 +78,9 @@ def text_of(result: dict) -> str:
 def main() -> int:
     work = Path(tempfile.mkdtemp(prefix="bash-default-timeout-"))
     try:
-        pidfile = work / "child.pid"
-        hang = f"sh -c 'echo $$ > {pidfile}; sleep 60' ; echo not-reached"
+        shell_pid, sleep_pid = work / "shell.pid", work / "sleep.pid"
+        # A shell that starts a background sleep and waits: the sleep is a descendant, not the shell itself.
+        hang = f"sh -c 'echo $$ > {shell_pid}; sleep 60 & echo $! > {sleep_pid}; wait' ; echo not-reached"
         events, elapsed = run_pi(work, [bash(hang), {"text": "done"}], True, timeout=50)
         [result] = tool_results(events)
         text = text_of(result)
@@ -89,10 +90,15 @@ def main() -> int:
         assert LIMIT <= elapsed < 30, f"stopped after {elapsed:.1f}s, expected about {LIMIT}s"
         print(f"ok 1: no-timeout call stopped after {elapsed:.1f}s with the hint")
 
-        pid = int(pidfile.read_text())
-        time.sleep(0.5)
-        assert not alive(pid), f"process {pid} (the sleep) survived the timeout"
-        print("ok 2: the process tree was killed")
+        pids = [int(shell_pid.read_text()), int(sleep_pid.read_text())]
+        deadline = time.monotonic() + 5
+        while any(alive(pid) for pid in pids) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        survivors = [pid for pid in pids if alive(pid)]
+        for pid in survivors:
+            os.kill(pid, 9)
+        assert not survivors, f"processes {survivors} (the shell and its sleep) survived the timeout"
+        print("ok 2: the process tree was killed (the shell and its background sleep)")
 
         events, elapsed = run_pi(work, [bash("sleep 5; echo finished-on-its-own-limit", timeout=20), {"text": "done"}], True, timeout=50)
         [result] = tool_results(events)

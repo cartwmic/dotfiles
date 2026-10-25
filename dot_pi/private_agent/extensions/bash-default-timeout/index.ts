@@ -37,9 +37,16 @@ export default function (pi: ExtensionAPI) {
 		defaulted.add(event.toolCallId);
 	});
 
+	// A call another handler blocks, or that is cancelled, never reaches tool_result; do not keep its id past the turn.
+	pi.on("agent_end", () => defaulted.clear());
+
 	pi.on("tool_result", (event) => {
 		if (!defaulted.delete(event.toolCallId) || !event.isError) return;
-		const timedOut = event.content.some((block) => block.type === "text" && block.text.includes(`Command timed out after ${seconds} seconds`));
+		// Pi ends the text of a timed-out call with this status and attaches no structured result. Output that merely prints the
+		// words, with a nonzero exit, carries structuredContent and must not be touched (replacing content alone would drop it).
+		const status = `Command timed out after ${seconds} seconds`;
+		const last = event.content.at(-1);
+		const timedOut = event.structuredContent === undefined && last?.type === "text" && (last.text === status || last.text.endsWith(`\n\n${status}`));
 		if (!timedOut) return;
 		return { content: [...event.content, { type: "text" as const, text: timeoutHint(seconds) }] };
 	});

@@ -12,8 +12,10 @@ was a default and that it can run the command again with a larger `timeout`.
   The file is seeded once by [create_config.json](./create_config.json); later applies leave your edit alone.
   A missing file, or a value that is not a positive number up to 2,000,000, falls back to 600.
 - **A call that sets its own `timeout` is untouched**, so builds and gates that need an hour ask for one.
-- **Covers** the model's `bash` calls, including those made from `codemode` scripts. It does not touch the `!` / `!!`
-  commands you type yourself.
+- **Covers** the model's `bash` calls in any Pi session that loads this extension, including calls made from `codemode`
+  scripts. It does not touch the `!` / `!!` commands you type yourself.
+- **Does not cover foreground `pi-subagents` children**: they are launched with extension discovery off, so their bash
+  calls stay unlimited. Background children and ordinary Pi sessions (the Herdr panes) load it.
 - **Restart Pi** after changing the file (the limit is read when the extension loads).
 
 Tests: `node --test dot_pi/private_agent/extensions/bash-default-timeout/index.test.ts` (helpers and handlers) and
