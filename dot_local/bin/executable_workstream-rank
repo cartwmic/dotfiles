@@ -1,0 +1,107 @@
+#!/bin/sh
+# workstream-rank — read the central workstream priority stack.
+#
+#   workstream-rank of [--pane P] [--cwd D] [--cmd C]   print one integer rank
+#   workstream-rank show                                print the stack
+#
+# The coordinator publishes a tab-separated file; this script only reads it.
+# Format v1 (never changes meaning; only more trailing fields / # lines are added):
+#
+#   #workstream-rank v1
+#   # comment lines start with #
+#   RANK<TAB>NAME<TAB>PANE[<TAB>ignored extra fields...]
+#
+# File: $WORKSTREAM_RANK_FILE, else ~/.local/share/coordinator/rank.
+# Lower rank = more important. Ranks are relative positions, so never store one.
+# "of" prints the BEST (lowest) rank among rows whose PANE equals P
+# (default: $HERDR_PANE_ID). If nothing matches it prints UNRANKED (1000),
+# which sorts after any real stack. A missing file, or a file whose line 1 is
+# not '#workstream-rank v1', also prints 1000, with one warning on stderr.
+# It never errors on file problems: exit 0. Bad lines are skipped.
+# --cwd and --cmd are accepted and ignored in v1 (pattern matching is deferred).
+set -eu
+
+UNRANKED=1000
+prog=workstream-rank
+
+warn() { printf '%s: %s\n' "$prog" "$*" >&2; }
+
+usage() {
+    cat <<'EOF'
+usage: workstream-rank of [--pane P] [--cwd D] [--cmd C]
+       workstream-rank show
+
+of    print the best (lowest) rank of workstreams on pane P (default $HERDR_PANE_ID),
+      or 1000 (unranked) if none, or the rank file is missing or unusable.
+      --cwd and --cmd are accepted and ignored (reserved for later).
+show  print the stack, best first: RANK<TAB>NAME<TAB>PANE
+
+File: $WORKSTREAM_RANK_FILE, else ~/.local/share/coordinator/rank
+EOF
+}
+
+die() { warn "$*"; usage >&2; exit 2; }
+
+file=${WORKSTREAM_RANK_FILE:-${HOME:-}/.local/share/coordinator/rank}
+
+# Returns 0 if the file is a readable v1 rank file; otherwise warns once and returns 1.
+usable() {
+    if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+        warn "$file: missing or unreadable; no ranks (unranked = $UNRANKED)"
+        return 1
+    fi
+    first=
+    IFS= read -r first < "$file" || :
+    case $first in
+        "#workstream-rank v1" | "#workstream-rank v1"[[:space:]]*) return 0 ;;
+    esac
+    warn "$file: line 1 is not '#workstream-rank v1'; ignoring the file (unranked = $UNRANKED)"
+    return 1
+}
+
+# Valid rows from the file as RANK<TAB>NAME<TAB>PANE (PANE "-" when absent), one per line.
+# Skipped: fewer than 2 fields, rank not a positive integer. That also drops the
+# header and every # line: "#..." is never a positive integer.
+rows() {
+    awk 'BEGIN { FS = OFS = "\t" }
+        NF < 2 || $1 !~ /^[0-9]+$/ || length($1) > 9 || $1 + 0 < 1 { next }
+        { pane = (NF >= 3 && $3 != "") ? $3 : "-"; print $1 + 0, $2, pane }' < "$file"
+}
+
+cmd_of() {
+    pane=${HERDR_PANE_ID:-}
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --pane | --cwd | --cmd)
+                [ $# -ge 2 ] || die "of: $1 needs a value"
+                if [ "$1" = --pane ]; then pane=$2; fi
+                shift 2
+                ;;
+            *) die "of: unknown argument: $1" ;;
+        esac
+    done
+    if ! usable || [ -z "$pane" ] || [ "$pane" = - ]; then
+        echo "$UNRANKED"
+        return 0
+    fi
+    best=$(rows | PANE=$pane awk -F '\t' -v unranked="$UNRANKED" '
+        $3 == ENVIRON["PANE"] && (!found || $1 + 0 < best) { best = $1 + 0; found = 1 }
+        END { print found ? best : unranked }') || best=$UNRANKED
+    echo "${best:-$UNRANKED}"
+}
+
+cmd_show() {
+    [ $# -eq 0 ] || die "show: takes no arguments"
+    usable || return 0
+    rows | sort -s -n -t "$(printf '\t')" -k1,1 || :
+}
+
+[ $# -ge 1 ] || { usage >&2; exit 2; }
+sub=$1
+shift
+case $sub in
+    of) cmd_of "$@" ;;
+    show) cmd_show "$@" ;;
+    -h | --help | help) usage ;;
+    *) die "unknown command: $sub" ;;
+esac
