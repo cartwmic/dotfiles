@@ -18,7 +18,7 @@ FAKES = {
     "sysctl": '''case "$2" in
   vm.loadavg) cat "$FAKE/loadavg" ;;
   vm.swapusage) cat "$FAKE/swapusage" ;;
-  kern.memorystatus_vm_pressure_level) cat "$FAKE/pressure" ;;
+  kern.memorystatus_vm_pressure_level) echo read >> "$FAKE/pressure_reads"; cat "$FAKE/pressure" ;;
 esac''',
     "memory_pressure": 'cat "$FAKE/memory_pressure"',
     "vm_stat": '''[ -f "$FAKE/on_vm_stat" ] && sh "$FAKE/on_vm_stat"
@@ -243,9 +243,14 @@ class HeavyGate(unittest.TestCase):
         self.set(pressure="4")
         marker = Path(self.tmp.name) / "ran"
         job = self.start("--wait", "2", "--", "touch", str(marker))
-        time.sleep(1)
-        self.set(pressure="1")
-        job.communicate(timeout=30)
+        try:
+            self.assertTrue(self.wait_for(lambda: (self.fake / "pressure_reads").exists()), "the first try has read the busy host")
+            self.set(pressure="1")
+            job.communicate(timeout=30)
+        finally:
+            if job.poll() is None:
+                job.kill()
+                job.communicate()
         self.assertEqual(job.returncode, 75)
         self.assertFalse(marker.exists())
 

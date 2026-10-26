@@ -118,7 +118,9 @@ take_lock() {
   return "$got"
 }
 have_guard=0
-drop_guard() { if [ "$have_guard" = 1 ]; then rmdir "$GUARD" 2>/dev/null || true; have_guard=0; fi; }
+# The flag goes first: a signal between the two steps leaves a guard behind (the next run refuses and says so) and never removes someone else's.
+# A signal between a successful mkdir and have_guard=1 does the same.
+drop_guard() { if [ "$have_guard" = 1 ]; then have_guard=0; rmdir "$GUARD" 2>/dev/null || true; fi; }
 drop_lock() { if [ "$(holder)" = "$$" ]; then rm -f "$LOCK"; fi; return 0; }
 gate_free() { h=$(holder); if alive "$h"; then refuse "another heavy job holds the gate (pid $h)"; return 1; fi; }
 
