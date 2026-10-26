@@ -33,14 +33,24 @@
 # configurable; the load, memory, pressure, Swapouts and swap rules above are fixed and apply to every start.
 #
 # Priority: a lower number is more important; a job with no rule is 5. The number comes from, in order, HEAVY_GATE_PRIORITY
-# (a whole number in the job's environment), then the first rule in the priorities file that matches, then 5. The file is
+# (a whole number in the job's environment), then the central workstream rank (see below), then the first rule in the priorities
+# file that matches, then 5. The file is
 # ${HEAVY_GATE_PRIORITIES:-~/.config/heavy-gate/priorities}: one rule per line, "NUMBER  PATTERN"; PATTERN is plain text and
 # matches a job when it appears in the job's command line or its working directory; '#' starts a comment line. It is read on
 # every try, so an edit reaches jobs that are already waiting. A job waiting with "-- CMD" registers its number under
 # <lock>.waiters/ (pid, number, state, directory, command) and defers its try while another live waiter has a lower number.
 # The same or a higher number does not defer it. Entries of dead pids are ignored. Nothing else orders the queue.
-# Older heavy-gate versions (jobs already running before this one was installed) have no priority and defer to no one. The one-slot
-# version also has no check window; the two-slot version reads its limit once, at its start, and never reads the slots file.
+# Central rank: if workstream-rank is on PATH and its rank file is valid (it lists at least one workstream), a job in a Herdr pane
+# that belongs to a workstream (HERDR_PANE_ID) takes that workstream's rank, 1 for the most important, as its number. The rank and
+# the 1-to-5 rules share one scale by putting every job without a workstream after the whole stack: while the rank is on, such a
+# job's rule or default number plus 1000 (so rules still order the jobs among themselves). The rank file's existence flips every
+# job of this version at once; delete it to go back to the plain 1-to-5 rules. A missing, unreadable or corrupt rank file, a reader
+# that fails or takes more than 2 seconds (HEAVY_GATE_RANK_TIMEOUT, whole seconds), or no workstream-rank or perl, changes nothing. It is
+# read on every try, so a new rank reaches jobs that are already waiting (on this version).
+# Jobs of the version before this one (already waiting or running when this one was installed) keep reading only the rules file:
+# they register a 1-to-5 number and are ordered against this version's numbers as numbers (an old 5 goes before a rank of 6 or
+# worse and before every job with no workstream, which is 1005). Older versions than that have no priority and defer to no one.
+# The one-slot version also has no check window; the two-slot version reads its limit once, at its start, and never reads the slots file.
 #
 # --wait SECONDS bounds when a new try may start (default 0: one try); none starts at or after the deadline. A try that
 # has begun takes about 60 seconds (the Swapouts watch) and is allowed to finish.
@@ -55,7 +65,8 @@
 # Exit status: 0 allowed (or CMD's own status), 1 refused, 75 still refused after --wait, 2 usage / unsupported system.
 #
 # Environment: HEAVY_GATE_SLOTS the slot limit, HEAVY_GATE_SLOTS_FILE its file, HEAVY_GATE_PRIORITY see above, HEAVY_GATE_PRIORITIES the file.
-# For tests: HEAVY_GATE_SWAP_WINDOW seconds to watch Swapouts (60), HEAVY_GATE_POLL seconds between tries while waiting
+# The central rank file is WORKSTREAM_RANK_FILE (read by workstream-rank), else ~/.local/share/coordinator/rank.
+# For tests: HEAVY_GATE_RANK_TIMEOUT seconds the reader may take (2), HEAVY_GATE_SWAP_WINDOW seconds to watch Swapouts (60), HEAVY_GATE_POLL seconds between tries while waiting
 # (15), HEAVY_GATE_LOCK the slot 1 path (/tmp/heavy-gate-<uid>.lock; the other files are named from it).
 
 set -eu
@@ -264,12 +275,45 @@ set_slots() {
 AWK_RULES='function isrule(l) { return l !~ /^[ \t]*#/ && l ~ /^[ \t]*[0-9]+[ \t]+[^ \t]/ }
 function rtext(l) { sub(/^[ \t]*[0-9]+[ \t]+/, "", l); sub(/[ \t]+$/, "", l); return l }'
 # This job's number: the environment, else the first rule matching its command line or directory, else the default. Read on every call.
-# This is the only place that turns a job into a number. The pattern file is an interim source: a central workstream rank is meant to replace it here.
+# This is the only place that turns a job into a number. The pattern file is an interim source that the central workstream rank
+# replaces; it stays as the fallback (and the only source while the rank file is off).
+UNRANKED=1000   # what workstream-rank prints for a job with no workstream; the offset that puts such jobs after the stack
+RANK_TIMEOUT=${HEAVY_GATE_RANK_TIMEOUT:-2}
+[ "$RANK_TIMEOUT" -gt 0 ] 2>/dev/null || RANK_TIMEOUT=2   # not a number, 0 or 00 (no alarm), or too big for test: 2
+# rank_read ARGS: run workstream-rank and print its output; return its exit status (124 if it took more than RANK_TIMEOUT seconds,
+# 127 if it cannot run). Callers use the output only when the status is 0. The gate never waits on the reader: a small perl wrapper
+# (macOS ships perl; macOS has no timeout) runs it in its own process group and kills the whole group at the deadline, and again when
+# the reader has exited (a child it left behind would hold the output pipe), so a hung reader, or a child of it, cannot stall
+# registration, the deadline or --wait. No temporary file. The
+# deadline kill happens while the wrapper still has not reaped the reader. The kill after a normal exit hits only left-over children
+# (an empty group is harmless: no such process). Its stderr is dropped (it warns on every call).
+rank_read() {
+  perl -e '
+    my $t = shift; my $p = fork; defined $p or exit 1;
+    if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 }
+    setpgrp($p, $p);
+    $SIG{ALRM} = sub { kill 9, -$p; waitpid($p, 0); exit 124 };
+    alarm $t; waitpid($p, 0); alarm 0; my $s = $?; kill 9, -$p;
+    exit($s == 0 ? 0 : ($s >> 8) || 1)' "$RANK_TIMEOUT" workstream-rank "$@" 2>/dev/null
+}
+# True when the central rank is on: workstream-rank is installed and succeeds, and its file is valid with at least one workstream
+# (show prints nothing otherwise; a missing workstream-rank fails).
+rank_on() { rk=$(rank_read show) && [ -n "$rk" ]; }
 resolve_priority() {
   if [ -n "${HEAVY_GATE_PRIORITY:-}" ]; then printf '%s' "$HEAVY_GATE_PRIORITY"; return 0; fi
+  base=0
+  if rank_on; then
+    r=$(rank_read of) || r=
+    case $r in '' | *[!0-9]*) r= ;; esac
+    if [ -n "$r" ]; then r=$(cap "$r"); if [ "$r" -lt "$UNRANKED" ]; then printf '%s' "$r"; return 0; fi; fi
+    base=$UNRANKED
+  fi
   r=$(GG_CWD=$PWD GG_CMD=$JOB awk "$AWK_RULES"'
     isrule($0) { t = rtext($0); if (t != "" && (index(ENVIRON["GG_CWD"], t) || index(ENVIRON["GG_CMD"], t))) { n = $1; print n; exit } }' "$PRIORITIES" 2>/dev/null) || r=
-  cap "${r:-$DEFAULT_PRIORITY}"
+  r=$(cap "${r:-$DEFAULT_PRIORITY}")
+  if [ "$base" -eq 0 ]; then printf '%s' "$r"; return 0; fi
+  r=${r#"${r%%[!0]*}"}   # no leading zeros, so 08 is 8 (and never octal)
+  cap "$((base + ${r:-0}))"
 }
 # Numbers are compared as shell integers: a file or entry number of 7 or more digits counts as 999999.
 cap() { case $1 in ???????*) printf '999999' ;; *) printf '%s' "$1" ;; esac; }
@@ -330,6 +374,8 @@ show_priorities() {
   printf 'priorities file: %s\n' "$PRIORITIES"
   if [ -f "$PRIORITIES" ]; then cat "$PRIORITIES"; else printf '(absent: every job is priority %s)\n' "$DEFAULT_PRIORITY"; fi
   printf 'no matching rule: priority %s. HEAVY_GATE_PRIORITY=N in a job'"'"'s environment overrides the file for that job.\n' "$DEFAULT_PRIORITY"
+  if rank_on; then printf 'central rank: on (workstream-rank). A job in a workstream'"'"'s pane takes its rank; any other job takes its file number or %s, plus %s.\n' "$DEFAULT_PRIORITY" "$UNRANKED"
+  else printf 'central rank: off (no workstream-rank, or its file is missing or has no workstreams)\n'; fi
   echo "holders:"
   k=1; held=" "
   while [ "$k" -le "$MAX_SLOTS" ]; do
