@@ -41,7 +41,7 @@ GUARD="$LOCK.guard"
 # log LEVEL message
 log() { level=$1; shift; printf '[heavy-gate] %s: %s\n' "$level" "$*" >&2; }
 refuse() { log WARN "refused: $*"; }
-usage() { sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 number() { awk -v v="$1" 'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/) }'; }
 
 WAIT=0
