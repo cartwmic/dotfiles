@@ -60,3 +60,7 @@ termux
 .local/share/herdr-overview/index.mjs
 .local/share/herdr-overview/package.json
 .local/share/herdr-overview/src
+
+# Retired 2026-10-26: the Termux-only Herdr Overview proof helper. Removes it from the
+# phone on its next targeted apply; no-op on other profiles.
+bin/herdr-overview-proof

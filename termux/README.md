@@ -12,7 +12,6 @@ phone, set `profile: "termux"` and `chezmoi apply` owns:
 | `~/.termux/font.ttf` | `dot_termux/font.ttf` |
 | `~/bin/zellij-jump` | `bin/executable_zellij-jump` |
 | `~/bin/herdr-jump` | `bin/executable_herdr-jump` |
-| `~/bin/herdr-overview-proof` | `bin/executable_herdr-overview-proof` |
 | `~/bin/passage-review` | `bin/executable_passage-review` |
 | `~/.local/bin/passage-review` | `dot_local/bin/executable_passage-review` |
 | `~/.local/share/passage-review/` | `dot_local/share/passage-review/` |
@@ -48,14 +47,13 @@ the current terminal application; it is not the Herdr prefix+O action.
 `extra-keys-border = true` draws faint dividers between keys (Termux fork
 property; stock Termux ignores it).
 
-Each key label shows its swipe-up after the tap name: 🗺️ overview, 🎛️ palette,
+Each key label shows its swipe-up after the tap name: 🎛️ palette,
 ❌ close pane, `^O`/`^P` for Ctrl+O/Ctrl+P, and `⇧⇥` for Shift+Tab.
 
-Four more swipe-ups:
+Three more swipe-ups:
 
 | Key | Macro | Action |
 |-----|-------|--------|
-| **ESC** | `CTRL b O` | Herdr overview (`prefix+shift+o`) |
 | **SHIFT** | `CTRL p` | Ctrl+P (Pi model cycle) |
 | **TAB** | `SHIFT TAB` | Shift+Tab |
 | **ctrl-]** | `CTRL b x` | Herdr `close_pane` (`prefix+x`) |
@@ -64,59 +62,22 @@ After a phone-side chezmoi apply, run `termux-reload-settings` while Termux is
 visible. Confirm every swipe on-device; a desktop config check does not prove
 Android touch behavior.
 
-## Herdr overview from the phone
+## Herdr from the phone
 
-Termux is only the phone-side SSH/jump client. Herdr 0.9.1, its compatible
-protocol-22 server, and the overview plugin run on the desktop. For the everyday
-route, from the phone's Termux shell attach to the managed desktop alias, then
-attach to that desktop's running Herdr session:
+Termux is only the phone-side SSH/jump client. Herdr 0.9.1 and its compatible
+protocol-22 server run on the desktop; no Herdr server or desktop config is
+installed on the phone. From the phone's Termux shell, attach to the managed
+desktop alias, then to that desktop's running Herdr session:
 
 ```sh
 ssh macbook
 herdr
 ```
 
-The phone sees the same desktop session and shared popup as other clients.
-`prefix+shift+o` opens the responsive native map, not a Board/Mosaic background
-tab. `j`/`k` or `[`/`]` selects a pane; Enter expands full names and latest-good
-recap, `d` opens the separate dated digest, `n` selects the next blocked pane,
-and `f` verifies/focuses the selected live terminal. Esc backs out and dismisses;
-`q` dismisses. Stable session/native subjects drive labels, not recap bodies.
-Later failures do not replace good recaps or turn digests into current facts. No Herdr plugin, Herdr server, or desktop config is installed
-on the phone. For workspace/tab/pane navigation and names, recap semantics, and
-the live-prompt/recap distinction, see the root product
-[README](../README.md).
-
-The phone-owned `~/bin/herdr-overview-proof` helper is only for the isolated
-acceptance run. Its desktop fixture uses the transient native popup, not a
-dedicated viewer pane. Local 40-column layout checks are not physical
-Termux-over-SSH evidence. Attended phone, native-move receipts on that route
-and live rollout remain owner-pending until actually run. On the desktop, run `herdr-prepare`, `herdr-wide`, and
-`pi-grouped` from `tests/herdr-overview/proof.py` against the same printed run
-ID; then use that run ID on the phone. After the helper returns, the desktop
-runs `termux-ssh` to validate the receipt, then runs the isolated native pane-move
-proof before `herdr-cleanup` (the move is deliberately last so it cannot change
-the phone's named fixture):
-
-```sh
-herdr-overview-proof RUN_ID macbook
-```
-
-The helper is POSIX shell: it opens the real isolated desktop session over
-phone-to-desktop SSH, guides an attended native-map/detail/digest/exact-focus journey, reviews the
-whole scripted Pi reply and recent pane output in the phone's `passage-review`
-UI, and returns a bounded machine-readable receipt over SSH. It does not need a
-Python package on the phone to run the Herdr client check. The local
-`passage-review` command uses Python 3's standard library (installed by the
-Termux package list below). ADB may start/type the helper into an already
-configured Termux emulator, but must not push the helper, dotfiles, or config;
-the phone's own chezmoi profile owns the deployed helper.
-
-Count the phone journey only when the helper returns a receipt from an
-attended physical phone or ADB-controlled Termux emulator and the host
-`termux-ssh` scenario accepts it. If that control-and-return route is
-unavailable, report the phone scenario as BLOCKED; a local narrow PTY or width
-emulation is not phone proof.
+The phone sees the same desktop session as other clients. For workspace/tab/pane
+navigation, recap semantics and the live-prompt/recap distinction, see the root
+product [README](../README.md). Local narrow PTY or width emulation is layout
+evidence, not physical Termux-over-SSH evidence.
 
 ## Rebuild a phone (Mac-driven)
 
@@ -336,8 +297,7 @@ its profile and hooks, then preview the phone's source and live destinations
 before approving an apply. Do not replace existing configuration with a
 fresh-install example.
 
-After apply (and SSH key provision below), `passage-review` and
-`herdr-overview-proof` are available in `~/bin`.
+After apply (and SSH key provision below), `passage-review` is available in `~/bin`.
 It reviews stdin or files locally in Termux; use `passage-review open REVIEW_ID`
 to select recent pane-output passages even when no Herdr selection adapter is
 available. `vim` supplies the default `vi` comment editor; alternatively set
@@ -438,29 +398,3 @@ scp ssh-phone:.termux/termux.properties dot_termux/termux.properties
 scp ssh-phone:bin/zellij-jump bin/executable_zellij-jump
 scp ssh-phone:bin/herdr-jump bin/executable_herdr-jump
 ```
-
-Herdr Overview uses bordered, padded, word-wrapped cards in native workspace
-order, with two singleton columns and separate multi-pane groups. `M` marks
-manual names; headings show counts; clipped collapsed titles end in an ellipsis.
-`d` enters the dated digest (idempotent there); Esc restores the prior recap
-passage and `q` dismisses immediately. The card floor is actual popup width 32,
-not outer width: outer 40/48/120/180 yield 38/46/92/152; outer32 yields30 and
-may clip. Simultaneously attached clients share one PTY geometry; a wide peer
-can clip the narrow peer. Use one attached client for readable geometry.
-
-Overview arrows and `h/j/k/l` move in displayed directions without wrapping;
-`[`/`]` retain native-order traversal. Every collapsed card shows a two-line
-latest-good recap excerpt, producer-supplied date metadata, and a separate newer
-failure warning. Recap CLI owns timezone formatting; the viewer does not convert it.
-On supported desktop attached clients, the wheel browses the map or expanded
-reading independently of selection, and a click selects only. `f` remains the
-explicit identity-checked terminal focus action. Phone mouse gesture parity is
-not promised. The native red × marks blocked; an actual collapsed or expanded Pi
-question wait also says Awaiting answer. Older settlement-abort v1 makes
-`ctx.isIdle()` false in final handlers and suppresses native READY. Desktop proof
-needs a compatible runtime preserving main-agent idle; compatible stock unpatched
-runtimes do not require this user patch. The reviewed v2 was compatibility-tested
-on a private copy of real Pi 0.99.2, not installed live. Before deployment, complete
-the source-scoped native/visual driver matrix and independent acceptance, then
-obtain explicit apply authorization; private proof does not authorize apply.
-Narrow desktop PTYs are layout evidence, not attended physical-phone proof.

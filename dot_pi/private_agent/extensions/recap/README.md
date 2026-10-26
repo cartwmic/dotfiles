@@ -232,7 +232,6 @@ python3 tests/pi-recap/proof.py cli
 python3 tests/pi-recap/proof.py backend
 python3 tests/pi-recap/proof.py tui
 python3 tests/pi-recap/proof.py lifecycle
-python3 tests/pi-recap/proof.py overview-isolated
 python3 tests/pi-recap/proof.py profiles
 git diff --check
 ```
@@ -255,7 +254,7 @@ privacy cases inspect reasoning exclusion and runtime-auth live-error sanitizati
 retry and coverage-preserving follow-up across records, model requests, transcript
 and captures. Cases fail closed on failed assertions or unavailable prerequisites;
 no overall AC completion is implied. The driver still owns the final stable-tree
-matrix, including privacy rechecks, and native overview execution. Profile mapping
+matrix, including privacy rechecks. Profile mapping
 runs against hook-free private configuration,
 not the owner's effective config. Native preview requires the root-guide
 config/hook/1Password preflight and independent rendered/live reads. Do not
