@@ -2,7 +2,7 @@ import path from "node:path";
 import { HerdrApi } from "./herdr-api.mjs";
 import { normalizeSnapshot } from "./model.mjs";
 import { confirmDisplayNameWrite, evaluateDisplayNamePolicy, recordDisplayNameWrite } from "./display-name-policy.mjs";
-import { readRecapFields, sessionRecapDataRoot } from "./recap-store.mjs";
+import { openRecapIndex, readRecapFields, saveRecapIndex, sessionRecapDataRoot } from "./recap-store.mjs";
 import { readPiSessionFields } from "./pi-session-store.mjs";
 import { applyCompletedGroups, autoPublishEnabled, planRecapCoordinator, runDueGroups, runSessionRecap } from "./recap-coordinator.mjs";
 import { scheduleDeadlineWakeup } from "./deadline-wakeup.mjs";
@@ -43,7 +43,15 @@ export async function reconcileOverview(options = {}) {
     env = process.env,
   } = options;
   const run = { ...options, api, stateDir, dataRoot };
-  let result = await withStateLock(stateDir, () => refreshOverview(run));
+  // Hooks are short-lived processes: carry the recap projections between them.
+  // The index is opened and saved under the state lock, so a hook that waited
+  // for the lock sees what the previous holder saved instead of re-parsing.
+  let result = await withStateLock(stateDir, async () => {
+    await openRecapIndex(dataRoot, path.join(stateDir, "recap-index.json"));
+    const pass = await refreshOverview(run);
+    await saveRecapIndex();
+    return pass;
+  });
   if (!coordinatorWake) return result.state;
 
   const firstPlan = result.plan;
