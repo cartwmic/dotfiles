@@ -81,7 +81,7 @@ class HeavyGate(unittest.TestCase):
         cases = [
             ({"loadavg": "{ 12.40 9.00 5.00 }"}, "load1 12.40 (needs < 8)"),
             ({"loadavg": "{ 8.00 1.00 1.00 }"}, "load1 8.00 (needs < 8)"),
-            ({"swapusage": "total = 8192.00M  used = 7692.00M  free = 500.00M  (encrypted)"}, "swap free 500 MB"),
+            ({"swapusage": "total = 8192.00M  used = 7693.00M  free = 499.00M  (encrypted)"}, "swap free 499 MB (needs >= 500)"),
             ({"pressure": "2"}, "memory pressure level 2"),
             ({"memory_pressure": "System-wide memory free percentage: 20%"}, "memory free 20%"),
             ({"loadavg": ""}, "load1 unreadable"),
@@ -98,6 +98,33 @@ class HeavyGate(unittest.TestCase):
                 result = self.gate()
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn(f"refused: {expected}", result.stderr)
+
+    def test_swap_is_a_safety_floor_not_a_start_rule(self):
+        # 600-999 MB free used to refuse (the old start rule was 1000 MB); now only the 500 MB floor refuses
+        for free in ("999.00M", "600.00M", "500.00M"):
+            with self.subTest(free):
+                self.set(swapusage=f"total = 8192.00M  used = 7000.00M  free = {free}  (encrypted)")
+                result = self.gate()
+                self.assertEqual(result.returncode, 0, result.stderr)
+        for free, shown in (("499.00M", "499"), ("100.00M", "100"), ("0.00M", "0")):
+            with self.subTest(free):
+                self.set(swapusage=f"total = 8192.00M  used = 7000.00M  free = {free}  (encrypted)")
+                result = self.gate()
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f"refused: swap free {shown} MB (needs >= 500)", result.stderr)
+
+    def test_the_swap_floor_holds_if_swap_drops_during_the_watch(self):
+        (self.fake / "on_vm_stat").write_text('echo "total = 8192.00M  used = 7900.00M  free = 292.00M  (encrypted)" > "$FAKE/swapusage"\n')
+        result = self.gate()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("swap free 292 MB", result.stderr)
+
+    def test_a_command_runs_with_swap_between_the_floor_and_the_old_start_rule(self):
+        self.set(swapusage="total = 6144.00M  used = 5268.00M  free = 876.00M  (encrypted)")
+        marker = Path(self.tmp.name) / "ran"
+        result = self.gate("--", "touch", str(marker))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(marker.exists())
 
     def test_swapouts_rising_refuses_and_flat_allows(self):
         self.set(swapouts="5000")
@@ -139,8 +166,10 @@ class HeavyGate(unittest.TestCase):
             self.assertIn(expected, result.stderr)
 
     def test_swap_free_is_read_in_gigabytes_too(self):
+        self.set(swapusage="total = 8.00G  used = 7.75G  free = 0.25G  (encrypted)")
+        self.assertIn("swap free 256 MB", self.gate().stderr)
         self.set(swapusage="total = 8.00G  used = 7.50G  free = 0.50G  (encrypted)")
-        self.assertIn("swap free 512 MB", self.gate().stderr)
+        self.assertEqual(self.gate().returncode, 0)
         self.set(swapusage="total = 8.00G  used = 6.00G  free = 2.00G  (encrypted)")
         self.assertEqual(self.gate().returncode, 0)
 
