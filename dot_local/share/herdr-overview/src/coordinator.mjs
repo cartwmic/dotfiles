@@ -44,9 +44,14 @@ export async function reconcileOverview(options = {}) {
   } = options;
   const run = { ...options, api, stateDir, dataRoot };
   // Hooks are short-lived processes: carry the recap projections between them.
-  await openRecapIndex(dataRoot, path.join(stateDir, "recap-index.json"));
-  let result = await withStateLock(stateDir, () => refreshOverview(run));
-  await saveRecapIndex();
+  // The index is opened and saved under the state lock, so a hook that waited
+  // for the lock sees what the previous holder saved instead of re-parsing.
+  let result = await withStateLock(stateDir, async () => {
+    await openRecapIndex(dataRoot, path.join(stateDir, "recap-index.json"));
+    const pass = await refreshOverview(run);
+    await saveRecapIndex();
+    return pass;
+  });
   if (!coordinatorWake) return result.state;
 
   const firstPlan = result.plan;

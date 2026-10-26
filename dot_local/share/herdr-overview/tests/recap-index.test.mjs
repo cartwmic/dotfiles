@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, truncate, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, truncate, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -143,4 +143,36 @@ test("reconcileOverview saves a coverage-free index beside its state file", asyn
   const index = JSON.parse(await readFile(path.join(stateDir, "recap-index.json"), "utf8"));
   assert.equal(index.entries.length, 2);
   assert.equal(JSON.stringify(index).includes("xxxxxxxx"), false);
+});
+
+test("two hooks started together with no index both finish and leave one valid index", async (t) => {
+  const f = await fixture(t, 40);
+  const stateDir = path.join(f.base, "state");
+  await rm(stateDir, { recursive: true, force: true });
+  const configPath = path.join(f.base, "config.toml");
+  await writeFile(configPath, '[theme]\nname="catppuccin"\n');
+  const coordinatorUrl = new URL("../src/coordinator.mjs", import.meta.url).href;
+  const script = `
+    import { reconcileOverview } from ${JSON.stringify(coordinatorUrl)};
+    const api = {
+      socketPath: "/tmp/overview-index.sock",
+      async snapshot() {
+        return {
+          protocol: 22, focused_workspace_id: "ws-a", focused_tab_id: "tab-a", focused_pane_id: "pane-a",
+          workspaces: [{ workspace_id: "ws-a", number: 1, label: "a", focused: true, active_tab_id: "tab-a", agent_status: "idle" }],
+          tabs: [{ tab_id: "tab-a", workspace_id: "ws-a", number: 1, label: "a", focused: true, agent_status: "idle" }],
+          panes: [{ pane_id: "pane-a", tab_id: "tab-a", workspace_id: "ws-a", terminal_id: "term-a", focused: true, agent: "pi", agent_status: "idle" }],
+          agents: [{ pane_id: "pane-a", agent: "pi" }], layouts: [],
+        };
+      },
+      async readPane() { return ""; }, async processInfo() { return null; }, async renamePane() {}, async renameTab() {},
+    };
+    await reconcileOverview({ api, stateDir: ${JSON.stringify(stateDir)}, dataRoot: ${JSON.stringify(f.root)}, configPath: ${JSON.stringify(configPath)} });`;
+  const hook = () => run(process.execPath, ["--input-type=module", "-e", script]);
+  await Promise.all([hook(), hook(), hook()]);
+  const index = JSON.parse(await readFile(path.join(stateDir, "recap-index.json"), "utf8"));
+  assert.equal(index.entries.length, 40);
+  const leftovers = (await readdir(stateDir)).filter((name) => name.endsWith(".tmp") || name.startsWith("."));
+  assert.deepEqual(leftovers, []);
+  assert.equal(JSON.parse(await readFile(path.join(stateDir, "overview.json"), "utf8")).schema_version, 1);
 });
