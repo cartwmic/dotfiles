@@ -82,9 +82,7 @@ History retains recaps and safe metadata until manual cleanup. No raw input,
 backend argv/auth or stderr archive is intended. The backend receives selected
 public conversation/tool content; recap narratives themselves are stored.
 History review does not change coverage. Legacy history has no invented new
-coverage or migration. The optional overview adapter consumes saved records
-and owns native attribution; it never configures or generates Pi recaps.
-
+coverage or migration. 
 ## Implementation and proof boundaries
 
 `index.ts` registers `/recap`, `/recap view`, `/recap full`, `/recap cancel`,

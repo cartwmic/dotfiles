@@ -46,3 +46,17 @@ termux
 # Retired 2026-10-20: the Herdr hook of agent-alert (inference replaced by the notify-owner Pi extension).
 # Unlink the Herdr plugin first (herdr plugin disable/unlink agent-alert); see agent-alert/README.md.
 .local/share/agent-alert/adapters/herdr
+
+# Retired 2026-10-26: the Herdr Overview plugin and its Pi adapter. Unlink the
+# Herdr plugin first (herdr plugin unlink overview); the live registry points at the
+# chezmoi source tree, so deleting the source leaves a dangling hook until then.
+# The deployed plugin copy is removed file by file: ~/.local/share/herdr-overview/prompts
+# holds private prompt data and stays until the owner decides.
+.pi/agent/extensions/herdr-overview
+.local/share/herdr-overview/AGENTS.md
+.local/share/herdr-overview/README.md
+.local/share/herdr-overview/check-herdr-api.mjs
+.local/share/herdr-overview/herdr-plugin.toml
+.local/share/herdr-overview/index.mjs
+.local/share/herdr-overview/package.json
+.local/share/herdr-overview/src

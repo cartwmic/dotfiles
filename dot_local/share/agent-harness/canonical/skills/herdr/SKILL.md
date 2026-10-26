@@ -43,61 +43,13 @@ Do not run bare `herdr` for discovery; it launches or attaches the TUI. Do not p
 
 Most control commands return JSON. Read identifiers and state from those responses instead of predicting them.
 
-## Overview, names, recaps, and passage review
-
-On the desktop profiles, the source-managed Herdr Overview plugin targets Herdr
-**0.9.1 / protocol 22**. Termux is only an SSH client; it is not a Herdr plugin
-host. The plugin starts with a compatible server start. Linking/installing it
-does not run startup and applying dotfiles never restarts the owner's main
-server. `overview.reconcile` loads/refreshes the linked plugin on a compatible
-running server without opening a view; any server restart remains owner-controlled.
-
-Open the temporary native map with `prefix+shift+o` or `herdr plugin action
-invoke overview.open`. It is one shared 100% pane-canvas
-popup, not a persistent tab. Another modal returns `ui_busy`; clients share
-its geometry. Owner-tab deletion dismisses it natively; reopen ordinarily from
-a surviving pane, without an anchor or resurrection. Startup/events/reconcile
-never open it automatically.
-
-The map keeps native workspace/tab/pane order, shared compact singleton rows
-and grouped multi-pane tabs, adapting to narrow cards or wide workspace columns.
-`j`/`k` and `[`/`]` select panes; Enter expands full tab/pane detail, `d` opens
-the separate dated verified-UUID digest, `n` selects the next blocked pane and
-`r` refreshes passively. Detail keys scroll; Esc backs out through disclosures
-then dismisses, and `q` dismisses. `f` rechecks and focuses the exact live selected
-terminal, closing only on success; vanished/conflicting targets cannot focus
-an unrelated pane. The native map reads supplied prompts, dated latest-good
-recaps and separate newer failures/digests without transcript scraping or
-viewer generation. Missing content leaves native state/navigation available.
-
-Automatic pane/tab names use verified stable Pi session names or honest native
-subjects, never prompt/recap/digest bodies. One-pane tabs use their subject;
-short two-subject tabs combine, otherwise use the first useful subject + N more.
-Manual labels win; workspaces and Pi identity stay owner-controlled. A
-manually published single recap with `--source-id` equal to the native pane ID
-appears in that pane's detail after `herdr plugin action invoke
-overview.reconcile`; reconcile while the source pane is live
-to retain its terminal identity through a later `pane.move`. Failed-attempt
-status is displayed, but a manual recap does not drive Pi automatic naming.
-Preserve any manual pane or tab label. Only the
-owner's explicit return-to-automatic action for that exact pane/tab allows
-naming automation to resume. A tab containing unrelated agents should
-represent both available tasks. Pi session names and identities are not
-renamed. Non-Pi labels must not claim more than native metadata supports.
+## Recaps and passage review
 
 The portable `session-recap` command works without Pi or Herdr. It accepts
 single stdin input or related group JSON and invokes the configured command
 with the rendered prompt on stdin. Nonzero or blank output is failure and must
-not replace the last good recap. Earlier dated records live outside Herdr.
-Pi publishes a settled-session recap; a successful in-workspace Pi publication
-starts/restarts a 30-second quiet interval. At expiry, the coordinator groups
-the latest published recaps for panes currently in that native workspace,
-including manually source-attributed non-Pi panes. A moved pane may join its
-new workspace's group, but a pane no longer present in the original workspace
-and a closed pane are omitted. After a successful workspace group, it can
-publish the all-workspaces session recap from latest workspace records whose
-workspace IDs are still live in the native snapshot. Failed recap attempts do not reset the
-interval. The overview only reads/displays these records.
+not replace the last good recap. Earlier dated records live outside Herdr. Herdr does not group or
+display them; the `session-recap` store and Pi `/recap` own them.
 
 `passage-review` is also standalone. Use `new --file PATH` or pipe a supplied
 snapshot to `new --title TITLE`, then `open REVIEW_ID` to add/revisit passage
@@ -255,12 +207,3 @@ Full-screen agents may use the terminal alternate screen. Rows that disappear fr
 - Never run `herdr server stop` from an active session unless the user explicitly intends to stop the server and its pane processes.
 - Never kill the main Herdr process. Use named test sessions for experiments that need an isolated server.
 - CLI server errors are JSON on stderr with exit status 1. CLI syntax errors exit with status 2.
-
-Herdr Overview uses bordered, padded, word-wrapped cards in native workspace
-order, with two singleton columns and separate multi-pane groups. `M` marks
-manual names; headings show counts; clipped collapsed titles end in an ellipsis.
-`d` enters the dated digest (idempotent there); Esc restores the prior recap
-passage and `q` dismisses immediately. The card floor is actual popup width 32,
-not outer width: outer 40/48/120/180 yield 38/46/92/152; outer32 yields30 and
-may clip. Simultaneously attached clients share one PTY geometry; a wide peer
-can clip the narrow peer. Use one attached client for readable geometry.
