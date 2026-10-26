@@ -1,0 +1,7 @@
+{
+  "provider": "openai-codex",
+  "model": "gpt-6-luna",
+  "reasoning": "low",
+  "maxTokens": 400,
+  "ticketPrefix": false
+}

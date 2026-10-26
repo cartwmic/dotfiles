@@ -146,6 +146,31 @@ A pre-chat toggle survives reload in memory, but cannot be resumed after
 quitting an empty session. Historical branches without a Fast snapshot
 initialize from the current default when first visited.
 
+### Auto session name
+
+The personal profile loads [patlux/pi-auto-session-name](https://github.com/patlux/pi-auto-session-name),
+pinned to commit `19a8355` (0.1.1, 2026-09-01, MIT). It replaces the
+pane titles that pi-session-search used to set. It names a session once, from
+a bounded excerpt (at most 12,000 characters of user and assistant text), with
+one provider call, and leaves names set by `/name` or `--name` alone. It keeps no
+index or other state on disk, has no timers except a 60 s one-shot while a first
+run is still active, and does not rename later when a session changes topic:
+use `/auto-name` for that.
+
+What the package installs: a git checkout at
+`~/.pi/agent/git/github.com/patlux/pi-auto-session-name`. It has no runtime
+dependencies and no `install`, `postinstall` or `prepare` script; Pi runs
+`npm install --omit=dev --legacy-peer-deps` in the checkout, which installs nothing. Updates do not move
+the pin. To change the pin, review the new diff first: the code runs with Pi's
+full permissions.
+
+[create_auto-session-name.json](./create_auto-session-name.json) seeds
+`~/.pi/agent/extensions/auto-session-name.json` once with
+`openai-codex/gpt-6-luna` (the model the digest used); later applies leave it
+alone. `ticketPrefix` is off on purpose: the package's ticket pattern is
+case-insensitive and would prefix titles with things like `GPT-6`. The title
+shows in the footer and the terminal title (`π - <name> - <cwd>`).
+
 ### Profile gates
 
 Gates live in the repo-root `.chezmoiignore`:
@@ -156,6 +181,7 @@ Gates live in the repo-root `.chezmoiignore`:
 | [openrouter-gate](./openrouter-gate/README.md) | `personal` only |
 | [claude-compat-guard](./claude-compat-guard/README.md) | `personal` only |
 | [issue](./issue/README.md) | `axon-work-computer` only |
+| [auto session name](#auto-session-name) (package in settings) | `personal` only |
 | [recap](./recap/README.md) | `personal` and `axon-work-computer`; interactive TUI only; Termux skips `.pi` |
 | [standing-reminder](./standing-reminder/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [learnings-monitor](./learnings-monitor/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
