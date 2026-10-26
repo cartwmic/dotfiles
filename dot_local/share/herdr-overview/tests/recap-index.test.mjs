@@ -44,6 +44,7 @@ async function fixture(t, count = 3) {
 }
 
 test("a new process reuses the saved index: unchanged files are not parsed again", async (t) => {
+  if (process.getuid?.() === 0) return t.skip("root can read a mode-000 file, so reuse cannot be proven");
   const f = await fixture(t);
   const first = await scanInNewProcess(f.root, f.indexPath);
   assert.equal(first.length, 3);
@@ -55,6 +56,7 @@ test("a new process reuses the saved index: unchanged files are not parsed again
 
   // An unreadable file (same mtime, size and inode) breaks any re-parse. Only the index can answer.
   await chmod(f.files[0], 0o000);
+  await assert.rejects(readFile(f.files[0]), { code: "EACCES" });
   assert.deepEqual(await scanInNewProcess(f.root, f.indexPath), first);
 });
 
@@ -88,6 +90,28 @@ test("a corrupt, foreign or outdated index costs a re-parse, not a wrong answer"
   }
   await truncate(f.indexPath, 5);
   assert.deepEqual(await scanInNewProcess(f.root, f.indexPath), expected);
+});
+
+test("a file that could not be read is retried by the next process, not remembered as missing", async (t) => {
+  if (process.getuid?.() === 0) return t.skip("root can read a mode-000 file");
+  const f = await fixture(t, 2);
+  await chmod(f.files[0], 0o000);
+  assert.equal((await scanInNewProcess(f.root, f.indexPath)).length, 1);
+  await chmod(f.files[0], 0o644);
+  assert.equal((await scanInNewProcess(f.root, f.indexPath)).length, 2, "same mtime, size and inode, now readable");
+});
+
+test("index entries outside the root or with a bad shape are ignored", async (t) => {
+  const f = await fixture(t, 1);
+  await scanInNewProcess(f.root, f.indexPath);
+  const saved = JSON.parse(await readFile(f.indexPath, "utf8"));
+  const [file, key] = saved.entries[0];
+  saved.entries = [
+    "junk", [], [42, key, { record_id: "x" }], [file, 7, { record_id: "x" }], [file, key, null], [file, key, "text"],
+    ["/elsewhere/records/2026-10-04/" + hex(5) + ".json", key, { record_id: hex(5), summary: "foreign" }],
+  ];
+  await writeFile(f.indexPath, JSON.stringify(saved));
+  assert.deepEqual((await scanInNewProcess(f.root, f.indexPath)).map(([id, summary]) => [id, summary]), [[hex(1), "Work 1"]]);
 });
 
 test("an unwritable index location never fails the scan", async (t) => {
