@@ -681,6 +681,32 @@ class MarkerFailureTests(unittest.TestCase):
         self.assertTrue(dst.is_symlink())
 
 
+class MarkerShapeTests(unittest.TestCase):
+    """touch succeeds on a directory; a marker that is not a regular file is never ownership (R14)."""
+
+    def setUp(self):
+        self.s = Scratch()
+        self.addCleanup(self.s.cleanup)
+
+    def test_managed_marker_that_is_a_directory_stops_before_the_unit_is_installed(self):
+        self.s.have_config(self.s.coordinator_state)
+        self.s.load("local.coordinatord")
+        (self.s.state_root / "coordinator.managed").mkdir(parents=True)
+        self.s.run(coordinator=True)
+        self.assertEqual(self.s.last.returncode, 0, self.s.output())
+        self.assertIn("cannot record ownership", self.s.output())
+        self.assertFalse(self.s.agents.joinpath("local.coordinatord.plist").exists())
+        self.assertEqual(self.s.calls(), [PRINT_CO])
+
+    def test_configuring_marker_that_is_a_directory_does_not_let_a_partial_config_be_trusted(self):
+        self.s.have_config(self.s.coordinator_state)  # a config exists, as after a half-finished setup
+        (self.s.state_root / "coordinator.configuring").mkdir(parents=True)
+        self.s.run(coordinator=True)
+        self.assertEqual(self.s.last.returncode, 0, self.s.output())
+        self.assertIn("cannot write", self.s.output())
+        self.assertEqual(self.s.calls(), [])
+
+
 class CancellationTests(unittest.TestCase):
     def test_cancelling_the_apply_kills_a_running_setup_script_and_its_children(self):
         import signal
@@ -693,7 +719,8 @@ class CancellationTests(unittest.TestCase):
         env = dict(os.environ, HOME=str(s.home), PATH=str(s.bin) + os.pathsep + os.environ["PATH"], STUB_DIR=str(s.stub),
                    INSTANCES_UNIT_DIR=str(s.units), INSTANCES_TOOL_PATH=str(s.tools), TMPDIR=str(s.base),
                    INSTANCES_COORDINATOR_ENABLED="true", INSTANCES_COORDINATOR_REPO=str(s.co),
-                   INSTANCES_RETRO_ENABLED="", INSTANCES_RETRO_REPO=str(s.re), INSTANCES_RETRO_CHANNEL_ID="", INSTANCES_RETRO_OP_ITEM="")
+                   INSTANCES_RETRO_ENABLED="true", INSTANCES_RETRO_REPO=str(s.re), INSTANCES_RETRO_CHANNEL_ID="", INSTANCES_RETRO_OP_ITEM="")
+        s.have_config(s.retro_state)
         proc = subprocess.Popen(["sh", str(SCRIPT)], env=env, cwd=str(s.base), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             for _ in range(100):
@@ -705,6 +732,8 @@ class CancellationTests(unittest.TestCase):
             proc.wait(timeout=30)
             time.sleep(4)
             self.assertFalse(late.exists(), "the setup script's child survived the cancellation")
+            self.assertNotEqual(proc.returncode, 0, "a cancelled apply must not report success")
+            self.assertEqual(s.calls(), [], "the next instance was reconciled after the cancellation")
         finally:
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGKILL)
