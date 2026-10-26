@@ -284,8 +284,9 @@ RANK_TIMEOUT=${HEAVY_GATE_RANK_TIMEOUT:-2}
 # 127 if it cannot run). Callers use the output only when the status is 0. The gate never waits on the reader: a small perl wrapper
 # (macOS ships perl; macOS has no timeout) runs it in its own process group and kills the whole group at the deadline, and again when
 # the reader has exited (a child it left behind would hold the output pipe), so a hung reader, or a child of it, cannot stall
-# registration, the deadline or --wait. No temporary file, no pid
-# to look up later: the wrapper is the reader's parent and has not reaped it when it kills. Its stderr is dropped (it warns on every call).
+# registration, the deadline or --wait. No temporary file. The
+# deadline kill happens while the wrapper still has not reaped the reader. The kill after a normal exit hits only left-over children
+# (an empty group is harmless: no such process). Its stderr is dropped (it warns on every call).
 rank_read() {
   perl -e '
     my $t = shift; my $p = fork; defined $p or exit 1;
