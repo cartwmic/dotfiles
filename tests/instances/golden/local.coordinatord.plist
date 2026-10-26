@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The coordinator daemon (src/coordinatord/main.ts), from the v1 checkout of cartwmic/coordinator. Source: docs/launchd/local.coordinatord.plist there; see its docs/deploy.md. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.coordinatord</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>node</string>
+    <string>--experimental-strip-types</string>
+    <string>--disable-warning=ExperimentalWarning</string>
+    <string>/Volumes/Workshop/macbook/git/coordinator/src/coordinatord/main.ts</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Volumes/Workshop/macbook/git/coordinator</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- node, herdr (the mise shim), op (Homebrew) and git must be found from here; the coordinator pane's shell has its own PATH. -->
+    <key>PATH</key><string>/Users/test/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <!-- Restart after a crash or kill -9; a clean exit (SIGTERM from `launchctl bootout`) stays stopped. -->
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/Users/test/Library/Logs/coordinator/coordinatord.log</string>
+  <key>StandardErrorPath</key><string>/Users/test/Library/Logs/coordinator/coordinatord.log</string>
+</dict>
+</plist>

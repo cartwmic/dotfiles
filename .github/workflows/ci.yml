@@ -54,6 +54,8 @@ jobs:
         run: python3 -m unittest discover -s tests/heavy-gate -v
       - name: Agent-events tests
         run: python3 -m unittest discover -s dot_local/share/agent-events -p 'test_*.py' -v
+      - name: Instances render, ignore and reconcile-script matrix (stub launchctl; the apply proof is macOS-only)
+        run: python3 -m unittest discover -s tests/instances -v
 
   # macOS: the kubectl task test puts /usr/bin first on PATH, and the ubuntu runner image
   # ships /usr/bin/kubectl, which makes the task skip itself.
@@ -76,3 +78,5 @@ jobs:
       # Includes one expectedFailure (termux palette extra-keys label).
       - name: Mise task tests
         run: python3 -m unittest discover -s tests/mise -v
+      - name: Instances scratch-HOME apply proof (stub launchctl, exact call lists)
+        run: python3 -m unittest discover -s tests/instances -v

@@ -1,0 +1,17 @@
+#!/bin/sh
+# Runs on every apply (run_after_, not run_onchange_: a "not ready" run must be retried by the next apply).
+# It hands the opt-in flags in the local chezmoi.yaml to the reconcile script, which owns every launchd decision:
+# see dot_local/user_scripts/executable_instances_reconcile.sh and the "Instances" section of the README.
+# The script always exits 0, so a missing token or checkout cannot block the rest of the apply.
+SCRIPT="$HOME/.local/user_scripts/instances_reconcile.sh"
+if [ ! -x "$SCRIPT" ]; then
+  echo "[instances] INFO: $SCRIPT not found, skipping"
+  exit 0
+fi
+export INSTANCES_COORDINATOR_ENABLED={{ dig "instances" "coordinator" "enabled" "" . | printf "%v" | squote }}
+export INSTANCES_COORDINATOR_REPO={{ includeTemplate "instance_repo" (dict "root" . "name" "coordinator") | squote }}
+export INSTANCES_RETRO_ENABLED={{ dig "instances" "retro" "enabled" "" . | printf "%v" | squote }}
+export INSTANCES_RETRO_REPO={{ includeTemplate "instance_repo" (dict "root" . "name" "retro") | squote }}
+export INSTANCES_RETRO_CHANNEL_ID={{ dig "instances" "retro" "channelId" "" . | printf "%v" | squote }}
+export INSTANCES_RETRO_OP_ITEM={{ dig "instances" "retro" "opItem" "" . | printf "%v" | squote }}
+exec "$SCRIPT"
