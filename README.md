@@ -507,7 +507,6 @@ Component READMEs cover setup and use:
 - [passage-review](./dot_local/share/passage-review/README.md) and its [Pi `/review` entry point](./dot_pi/private_agent/extensions/passage-review/README.md)
 - [Pi extensions](./dot_pi/private_agent/extensions/README.md) (index for the other extension guides)
 - [Harness skills and MCP](./dot_local/share/agent-harness/README.md), [Pi patches](./dot_local/share/pi-patches/README.md), [Neovim](./dot_config/nvim/README.md), and [Zellij](./dot_config/zellij/README.md)
-- [session-search](./dot_pi/session-search/README.md) for the personal profile
 
 ## Validation
 

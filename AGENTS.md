@@ -229,8 +229,7 @@ For common Pi extension procedure, read
 [dot_pi/private_agent/extensions/README.md](./dot_pi/private_agent/extensions/README.md)
 when editing an extension. Other subtree guides are task-specific:
 [pi-patches](./dot_local/share/pi-patches/README.md),
-[Neovim](./dot_config/nvim/README.md),
-[session-search](./dot_pi/session-search/README.md), and the opt-in
+[Neovim](./dot_config/nvim/README.md), and the opt-in
 [Herdr control MCP tunnel](./herdr-mcp/README.md). Use those guides when
 working in their directories; avoid a second always-on rules file there.
 Ask before adding more nested `AGENTS.md` files. Do not create `~/AGENTS.md`.

@@ -156,7 +156,6 @@ Gates live in the repo-root `.chezmoiignore`:
 | [openrouter-gate](./openrouter-gate/README.md) | `personal` only |
 | [claude-compat-guard](./claude-compat-guard/README.md) | `personal` only |
 | [issue](./issue/README.md) | `axon-work-computer` only |
-| `dot_pi/session-search/` (sibling of `agent/`, not this folder) | `personal` only |
 | [recap](./recap/README.md) | `personal` and `axon-work-computer`; interactive TUI only; Termux skips `.pi` |
 | [standing-reminder](./standing-reminder/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [learnings-monitor](./learnings-monitor/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
