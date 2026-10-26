@@ -1,0 +1,2 @@
+{{- /* shquote: the argument as one POSIX single-quoted word ('\'' for an embedded apostrophe). sprig's squote does not escape. */ -}}
+{{- printf "%v" . | replace "'" "'\\''" | printf "'%s'" -}}

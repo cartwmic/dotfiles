@@ -115,8 +115,16 @@ Library/LaunchAgents/local.agent-events.plist
 {{- end }}
 
 {{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
-# Coordinator v1 daemon (cartwmic/coordinator): personal macOS only, where its Herdr/Pi/Discord setup lives.
-Library/LaunchAgents/local.coordinatord.plist
+# Coordinator and Retro LaunchAgent units (cartwmic/coordinator, cartwmic/retro): personal macOS only for now.
+# They are inert copies; only the reconcile script puts a unit in ~/Library/LaunchAgents, and only for an opted-in instance.
+.local/share/instances/launchd/local.coordinatord.plist
+.local/share/instances/launchd/local.retrod.plist
+{{- end }}
+
+{{- if ne .chezmoi.os "darwin" }}
+# launchd only.
+.local/user_scripts/instances_reconcile.sh
+75_instances_reconcile.sh
 {{- end }}
 
 {{- if ne .profile "personal" }}
