@@ -1,5 +1,7 @@
 """Black-box tests for dot_local/bin/executable_heavy-gate.
 
+HEAVY_GATE_SCRIPT points the suite at a mutated copy (see mutate.py).
+
 The real script runs as a real process. Only the host's figures are scripted: sysctl, memory_pressure, vm_stat and uname are
 small fakes first on PATH that print whatever the test wrote to files, so a busy or quiet Mac can be simulated on any machine.
 """
@@ -11,7 +13,9 @@ import time
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[2] / "dot_local/bin/executable_heavy-gate"
+SCRIPT = Path(os.environ.get("HEAVY_GATE_SCRIPT") or Path(__file__).resolve().parents[2] / "dot_local/bin/executable_heavy-gate")
+# The central-rank reader the gate calls by name (dotfiles PR #76). Tests put it on PATH as workstream-rank when they want the rank on.
+RANK_READER = Path(__file__).resolve().parents[2] / "dot_local/bin/executable_workstream-rank"
 # The gate as it was before the second slot (PR #69), frozen: jobs already running when the new version is installed still run it.
 OLD_SCRIPT = Path(__file__).resolve().parent / "heavy-gate-v69.sh"
 
@@ -51,10 +55,14 @@ class HeavyGate(unittest.TestCase):
             (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
             (bin_dir / name).chmod(0o755)
         self.set(**QUIET)
-        env = {k: v for k, v in os.environ.items() if not k.startswith("HEAVY_GATE_")}  # nothing from the real shell leaks in
+        # nothing from the real shell leaks in: not the gate's settings, not this pane's id or the real rank file
+        env = {k: v for k, v in os.environ.items() if not k.startswith("HEAVY_GATE_") and k not in ("HERDR_PANE_ID", "WORKSTREAM_RANK_FILE")}
         self.env = {**env, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE": str(self.fake), "HEAVY_GATE_LOCK": str(root / "heavy-gate.lock"),
                     "HEAVY_GATE_SWAP_WINDOW": "1", "HEAVY_GATE_POLL": "1", "HEAVY_GATE_PRIORITIES": str(root / "priorities"),
-                    "HEAVY_GATE_SLOTS_FILE": str(root / "slots")}
+                    "HEAVY_GATE_SLOTS_FILE": str(root / "slots"),
+                    "WORKSTREAM_RANK_FILE": str(root / "rank")}
+        self.bin = bin_dir
+        self.rank_file = root / "rank"
         self.lock = root / "heavy-gate.lock"
         self.lock2 = root / "heavy-gate.lock.2"
         self.lock3 = root / "heavy-gate.lock.3"
@@ -794,6 +802,143 @@ exit $rc
             # the waiting job reads the file on its next try (within the poll) and registers the new number
             self.assertTrue(self.wait_for(lambda: (self.waiters / str(d.pid)).read_text().startswith("1\n")), "D picked up the rule without a restart")
         self.assertEqual(self.full_house_order(before_release=set_rule), ["D", "C"])
+
+    # --- central rank ---
+    def use_rank(self, *rows, header="#workstream-rank v1\n"):
+        """Put the real workstream-rank reader on PATH and write a rank file with rows (rank, name, pane)."""
+        (self.bin / "workstream-rank").unlink(missing_ok=True)
+        (self.bin / "workstream-rank").symlink_to(RANK_READER)
+        self.rank_file.write_text(header + "".join(f"{rank}\t{name}\t{pane}\n" for rank, name, pane in rows))
+
+    def stub_reader(self, body):
+        (self.bin / "workstream-rank").unlink(missing_ok=True)
+        (self.bin / "workstream-rank").write_text(f"#!/bin/sh\n{body}\n")
+        (self.bin / "workstream-rank").chmod(0o755)
+
+    def waiting_number(self, env=None, cwd=None):
+        """The number a job registers while it waits: it defers to a waiter of number 0, so it stays a waiter and its entry shows its number."""
+        blocker = self.sleeper()
+        self.entry(blocker.pid, 0)
+        job = self.start("--wait", "60", "--", "sh", "-c", "echo D", env=env, cwd=cwd)
+        self.addCleanup(lambda: (job.kill(), job.wait(), job.stdout.close(), job.stderr.close()))
+        entry = self.waiters / str(job.pid)
+        self.assertTrue(self.wait_for(lambda: entry.exists() and entry.read_text().count("\n") >= 4), "the job registered")
+        return entry.read_text().split("\n")[0]
+
+    RANKED = (("1", "first", "w:p1"), ("3", "third", "w:p3"), ("7", "seventh", "w:p7"))
+
+    def test_a_job_in_a_workstream_pane_takes_the_workstreams_rank(self):
+        self.use_rank(*self.RANKED)
+        for pane, number in (("w:p1", "1"), ("w:p3", "3"), ("w:p7", "7")):
+            with self.subTest(pane):
+                self.assertEqual(self.waiting_number(env={"HERDR_PANE_ID": pane}), number)
+
+    def test_the_rank_beats_the_rules_and_the_environment_beats_the_rank(self):
+        self.use_rank(*self.RANKED)
+        self.priorities.write_text("1  echo D\n")
+        self.assertEqual(self.waiting_number(env={"HERDR_PANE_ID": "w:p7"}), "7", "a rule does not lower a ranked job")
+        self.assertEqual(self.waiting_number(env={"HERDR_PANE_ID": "w:p7", "HEAVY_GATE_PRIORITY": "2"}), "2")
+
+    def test_a_job_with_no_workstream_goes_after_the_whole_stack_and_the_rules_still_order_it(self):
+        self.use_rank(*self.RANKED)
+        for label, env in (("unknown pane", {"HERDR_PANE_ID": "w:other"}), ("no pane at all", {}), ("empty pane", {"HERDR_PANE_ID": ""})):
+            with self.subTest(label):
+                self.assertEqual(self.waiting_number(env=env), "1005", "the default 5, after the stack")
+        self.priorities.write_text("2  echo D\n08  nothing-matches-this\n")
+        self.assertEqual(self.waiting_number(env={"HERDR_PANE_ID": "w:other"}), "1002", "the rule's number, after the stack")
+        self.priorities.write_text("08  echo D\n")
+        self.assertEqual(self.waiting_number(), "1008", "a leading zero is plain decimal, not octal")
+        self.priorities.write_text("999999  echo D\n")
+        self.assertEqual(self.waiting_number(), "999999", "capped like every other number")
+
+    def test_without_a_usable_rank_nothing_changes(self):
+        self.priorities.write_text("2  echo D\n")
+        cases = {
+            "no reader on PATH, no file": lambda: None,
+            "reader, no file": lambda: (self.use_rank(*self.RANKED), self.rank_file.unlink()),
+            "wrong header": lambda: self.use_rank(*self.RANKED, header="#workstream-rank v2\n"),
+            "no header": lambda: self.use_rank(*self.RANKED, header=""),
+            "header only": lambda: self.use_rank(),
+            "garbage rows": lambda: self.use_rank(("soon", "x", "w:p1"), ("-1", "y", "w:p1")),
+            "file is a directory": lambda: (self.use_rank(*self.RANKED), self.rank_file.unlink(), self.rank_file.mkdir()),
+        }
+        for label, setup in cases.items():
+            with self.subTest(label):
+                (self.bin / "workstream-rank").unlink(missing_ok=True)
+                if self.rank_file.is_dir():
+                    self.rank_file.rmdir()
+                setup()
+                self.assertEqual(self.waiting_number(env={"HERDR_PANE_ID": "w:p1"}), "2", "the rule, on the old 1-to-5 scale")
+        self.priorities.unlink()
+        (self.bin / "workstream-rank").unlink(missing_ok=True)
+        self.assertEqual(self.waiting_number(env={"HERDR_PANE_ID": "w:p1"}), "5")
+
+    def test_a_reader_that_fails_or_prints_nonsense_is_ignored(self):
+        self.priorities.write_text("2  echo D\n")
+        stubs = (("exit 2", "exit 2"), ("nothing", "exit 0"), ("words", 'case "$1" in show) echo x ;; of) echo high ;; esac'),
+                 ("negative", 'case "$1" in show) echo x ;; of) echo -3 ;; esac'),
+                 ("fails on of", 'case "$1" in show) echo x ;; of) exit 1 ;; esac'),
+                 ("fails on show", 'case "$1" in of) echo 4 ;; *) exit 1 ;; esac'),
+                 ("empty of", 'case "$1" in show) echo x ;; esac'))
+        for label, body in stubs:
+            with self.subTest(label):
+                self.stub_reader(body)
+                number = self.waiting_number(env={"HERDR_PANE_ID": "w:p1"})
+                self.assertIn(number, ("2", "1002"), "a rule number, never a crash")
+        self.stub_reader('case "$1" in show) echo x ;; of) echo 99999999999999999999 ;; esac')
+        self.assertEqual(self.waiting_number(), "1002", "1000 or more is what the reader prints for no workstream, so it is treated as that")
+
+    def test_the_readers_warnings_are_not_repeated_by_the_gate(self):
+        self.stub_reader('echo "noise on stderr" >&2; case "$1" in show) echo x ;; of) echo 4 ;; esac')
+        marker = Path(self.tmp.name) / "ran"
+        result = self.gate("--", "touch", str(marker), env={"HERDR_PANE_ID": "w:p1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("noise", result.stderr, "the reader would warn at every try")
+        self.assertTrue(marker.exists())
+
+    def test_a_new_rank_reaches_a_job_that_is_already_waiting(self):
+        self.use_rank(*self.RANKED)
+        blocker = self.sleeper()
+        self.entry(blocker.pid, 0)
+        job = self.start("--wait", "60", "--", "sh", "-c", "echo D", env={"HERDR_PANE_ID": "w:p3"})
+        self.addCleanup(lambda: (job.kill(), job.wait(), job.stdout.close(), job.stderr.close()))
+        entry = self.waiters / str(job.pid)
+        self.assertTrue(self.wait_for(lambda: entry.exists() and entry.read_text().startswith("3\n")))
+        self.use_rank(("1", "third", "w:p3"), ("2", "first", "w:p1"))
+        self.assertTrue(self.wait_for(lambda: entry.read_text().startswith("1\n"), 20), "the next try registers the new rank")
+        self.rank_file.unlink()
+        self.assertTrue(self.wait_for(lambda: entry.read_text().startswith("5\n"), 20), "and deleting the file goes back to the rules")
+
+    def test_a_ranked_job_is_admitted_before_one_with_no_workstream(self):
+        self.use_rank(*self.RANKED)
+        self.assertEqual(self.full_house_order(d_env={"HERDR_PANE_ID": "w:p7"}), ["D", "C"], "even the worst rank beats a job with no workstream")
+
+    def test_a_worse_rank_waits_for_a_better_one(self):
+        self.use_rank(*self.RANKED)
+        waiter = self.sleeper()
+        self.entry(waiter.pid, 3)
+        marker = Path(self.tmp.name) / "ran"
+        result = self.gate("--wait", "1", "--", "touch", str(marker), env={"HERDR_PANE_ID": "w:p7"})
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn(f"deferring to the waiting job pid {waiter.pid}, priority 3 (this one is 7)", result.stderr)
+        self.assertEqual(self.gate("--", "touch", str(marker), env={"HERDR_PANE_ID": "w:p1"}).returncode, 0, "a better rank does not defer")
+
+    def test_a_waiter_from_the_older_version_is_ordered_by_its_own_1_to_5_number(self):
+        # A waiter that started before this version is installed registers its rule number (1 to 5) and never reads the rank.
+        self.use_rank(*self.RANKED)
+        waiter = self.sleeper()
+        self.entry(waiter.pid, 5)
+        marker = Path(self.tmp.name) / "ran"
+        self.assertEqual(self.gate("--wait", "1", "--", "touch", str(marker), env={"HERDR_PANE_ID": "w:p7"}).returncode, 75, "rank 7 waits for the old 5")
+        self.assertEqual(self.gate("--wait", "1", "--", "touch", str(marker)).returncode, 75, "no workstream (1005) waits for the old 5")
+        self.assertEqual(self.gate("--", "touch", str(marker), env={"HERDR_PANE_ID": "w:p3"}).returncode, 0, "rank 3 goes first")
+
+    def test_priorities_says_whether_the_central_rank_is_on(self):
+        self.assertIn("central rank: off", self.gate("priorities").stdout)
+        self.use_rank(*self.RANKED)
+        self.assertIn("central rank: on", self.gate("priorities").stdout)
+        self.use_rank()
+        self.assertIn("central rank: off", self.gate("priorities").stdout)
 
     def test_priorities_prints_the_file_and_the_holders_and_waiters_with_their_numbers(self):
         self.priorities.write_text("# a comment\n\n2  pibolt-x\n7 a.started\n  1 \tcoordinator\n")
