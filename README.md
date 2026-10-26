@@ -426,6 +426,35 @@ phone-to-desktop SSH output can be reviewed in the phone UI when direct remote
 selection capture is unavailable. See
 [`dot_local/share/passage-review/README.md`](./dot_local/share/passage-review/README.md).
 
+## Instances (Coordinator and Retro daemons)
+
+One opt-in flag per instance in the local `~/.config/chezmoi/chezmoi.yaml` (not in git). Applying does everything: directories, first-time config, the LaunchAgent, and the start. Removing the flag stops the daemon. Design: the coordinator's `DESIGN.md` addendum (decisions G1 to G5); procedure of record per repo: the coordinator's `docs/deploy.md`, Retro's `docs/DEPLOY.md`.
+
+```yaml
+data:
+  instances:
+    coordinator:
+      enabled: true               # absent or false: off
+      repo: /path/to/coordinator  # default: /Volumes/Workshop/macbook/git/coordinator (personal), ~/git/coordinator (work profile)
+    retro:
+      enabled: true               # the go-live: Discord and model spend (see Retro's docs/LIVE.md). Ships off.
+      repo: /path/to/retro        # default: /Volumes/Workshop/macbook/git/retro (personal), ~/git/retro (work)
+      channelId: "<#retro channel id>"   # first-time config only
+      opItem: op://VAULT/ITEM/bot_token  # first-time config only; a reference, never the token
+```
+
+How it works:
+
+- The units are installed on **personal macOS only** for now; the work-profile units and their defaults arrive with the work-instance change. Dotfiles never clones. The checkout must exist at `repo`; otherwise the instance is NOT READY and the apply says what is missing.
+- chezmoi manages each unit only as an inert copy in `~/.local/share/instances/launchd/`. `~/.local/user_scripts/instances_reconcile.sh` (run by `run_after_75_instances_reconcile.sh.tmpl` on every apply) copies it into `~/Library/LaunchAgents` only when the instance is ready, then starts it. A file there would be loaded at next login, so a half-configured instance never gets one.
+- Every apply prints one status line per instance and the script always exits 0: `READY (started | running | adopted | reloaded)`, `NOT READY: <what>`, `STOP FAILED`, `RELOAD FAILED`. A not-ready instance is retried by the next apply. The last status of an opted-in instance is also kept in `~/.local/state/instances/<name>.status`; an instance that never opted in writes no state, and opt-out removes it.
+- First-time config runs when the instance has no config yet (and again if an earlier run did not finish), from the repo's own script (exit 0 ready, exit 3 with `NOT-READY: <what>` not ready yet). Nothing secret is read or stored by dotfiles.
+- **An apply never restarts a loaded service.** The only `launchctl` calls are: `print` (read-only, once per enabled or started instance), `bootstrap` of an instance that is not loaded, `bootout` on opt-out or a reload you asked for. A changed unit on a running daemon is reported ("NOT restarted"); reload on purpose with `INSTANCES_RELOAD=coordinator chezmoi apply` (or `retro`, or `all`).
+- A service that is already running when you first set `enabled: true` (this Mac's coordinator) is adopted: one `print`, the daemon is not touched, and the installed unit is only rewritten if it differs from the managed one (then reported, not reloaded). With no flag on a Mac that never opted in, an apply makes no `launchctl` call at all.
+- Opt-out (flag false or removed) acts only on an instance dotfiles started or adopted (ownership is recorded before the unit is installed, so a failed start is cleaned up too). It boots the daemon out and removes the unit file; state, config, tokens, playbooks and logs are kept. The Pi pane keeps running (change `PANE_NOTE` and the opt-out branch in the script if that should change).
+
+Tests: `python3 -m unittest discover -s tests/instances -v` (renders against golden units, the reconcile script against a stub `launchctl` with exact call lists, and a scratch-HOME `chezmoi apply` on macOS). `python3 tests/instances/mutate.py` checks the suite catches 22 deliberate breaks of the safety rules.
+
 ## Tool Management with mise
 
 mise selects Node.js and Python versions. rustup selects Rust toolchains:
