@@ -167,10 +167,35 @@ class WorkstreamRank(unittest.TestCase):
 
     def test_malformed_lines_are_skipped(self):
         bad = ["abc|Word rank|pX", "|Empty rank|pX", "-1|Negative|pX", "0|Zero|pX", "1.5|Fraction|pX",
-               " 1|Padded|pX", "1x|Suffix|pX", "9999999999999|Huge|pX", "1", "", "just text"]
+               " 1|Padded|pX", "1x|Suffix|pX", "9999999999999999|Huge|pX", "1", "", "just text"]
         self.write(self.rows(*bad, "7|Good|pX"))
         self.assertEqual(self.of("pX"), "7\n")
         self.assertEqual(self.run_rank("show").stdout, "7" + T + "Good" + T + "pX\n")
+
+    def test_large_ranks_up_to_15_digits_and_leading_zeros_are_fine(self):
+        self.write(self.rows("1000000000|Billion|pB", "0000000001|Padded|pP", "999999999999999|Biggest|pM"))
+        self.assertEqual(self.of("pB"), "1000000000\n")
+        self.assertEqual(self.of("pP"), "1\n")
+        self.assertEqual(self.of("pM"), "999999999999999\n")
+
+    def test_rows_sharing_a_rank_both_count(self):
+        self.write(self.rows("1|First|pA", "1|Duplicate|pB"))
+        self.assertEqual(self.of("pA"), "1\n")
+        self.assertEqual(self.of("pB"), "1\n")
+
+    def test_crlf_line_endings_and_a_missing_final_newline_are_tolerated(self):
+        self.write("#workstream-rank v1\r\n1" + T + "Win" + T + "pX\r\n2" + T + "NoNewline" + T + "pY")
+        self.assertEqual(self.of("pX"), "1\n")
+        self.assertEqual(self.of("pY"), "2\n")
+        self.assertEqual(self.run_rank("show").stdout, "1" + T + "Win" + T + "pX\n2" + T + "NoNewline" + T + "pY\n")
+
+    def test_panes_are_literal_strings_not_patterns(self):
+        self.write(self.rows("1|Glob|p[.*]\\q", "2|Plain|pAq", "3|Num|1", "4|Exp|1e3"))
+        self.assertEqual(self.of("p[.*]\\q"), "1\n")
+        self.assertEqual(self.of("pAq"), "2\n")
+        self.assertEqual(self.of("01"), "1000\n")  # numeric-looking panes compare as text: 01 is not 1
+        self.assertEqual(self.of("1000"), "1000\n")  # and 1e3 is not 1000 (UNRANKED here)
+        self.assertEqual(self.of("1.0"), "1000\n")
 
     def test_a_row_with_two_fields_is_kept_but_has_no_pane(self):
         self.write(self.rows("1|Name only"))

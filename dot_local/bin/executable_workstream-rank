@@ -60,11 +60,13 @@ usable() {
 }
 
 # Valid rows from the file as RANK<TAB>NAME<TAB>PANE (PANE "-" when absent), one per line.
-# Skipped: fewer than 2 fields, rank not a positive integer. That also drops the
-# header and every # line: "#..." is never a positive integer.
+# Skipped: fewer than 2 fields, rank not a positive integer (up to 15 digits, exact in
+# awk doubles). That also drops the header and every # line: "#..." is never a positive
+# integer. A trailing CR is stripped. Rows that share a rank both count.
 rows() {
     awk 'BEGIN { FS = OFS = "\t" }
-        NF < 2 || $1 !~ /^[0-9]+$/ || length($1) > 9 || $1 + 0 < 1 { next }
+        { sub(/\r$/, "") }
+        NF < 2 || $1 !~ /^[0-9]+$/ || length($1) > 15 || $1 + 0 < 1 { next }
         { pane = (NF >= 3 && $3 != "") ? $3 : "-"; print $1 + 0, $2, pane }' < "$file"
 }
 
@@ -85,7 +87,7 @@ cmd_of() {
         return 0
     fi
     best=$(rows | PANE=$pane awk -F '\t' -v unranked="$UNRANKED" '
-        $3 == ENVIRON["PANE"] && (!found || $1 + 0 < best) { best = $1 + 0; found = 1 }
+        $3 "" == ENVIRON["PANE"] "" && (!found || $1 + 0 < best) { best = $1 + 0; found = 1 }
         END { print found ? best : unranked }') || best=$UNRANKED
     echo "${best:-$UNRANKED}"
 }
