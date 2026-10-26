@@ -20,6 +20,7 @@
 .pi/agent/extensions/recap/tui-smoke.py
 .pi/agent/extensions/recap/*.test.*
 .pi/agent/extensions/notify-owner/*.test.*
+.pi/agent/extensions/bash-default-timeout/*.test.*
 .pi/agent/extensions/notify-owner/alert-fixtures.json
 # Source-only instructions for work in the standing-reminder extension tree.
 .pi/agent/extensions/standing-reminder/AGENTS.md
