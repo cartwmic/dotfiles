@@ -55,9 +55,11 @@ class HeavyGate(unittest.TestCase):
             (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
             (bin_dir / name).chmod(0o755)
         self.set(**QUIET)
+        # a workstream-rank installed on this host is not on the test's PATH: tests that want one put it there
+        host_path = [d for d in os.environ["PATH"].split(":") if not (Path(d) / "workstream-rank").exists()]
         # nothing from the real shell leaks in: not the gate's settings, not this pane's id or the real rank file
         env = {k: v for k, v in os.environ.items() if not k.startswith("HEAVY_GATE_") and k not in ("HERDR_PANE_ID", "WORKSTREAM_RANK_FILE")}
-        self.env = {**env, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE": str(self.fake), "HEAVY_GATE_LOCK": str(root / "heavy-gate.lock"),
+        self.env = {**env, "PATH": ":".join([str(bin_dir), *host_path]), "FAKE": str(self.fake), "HEAVY_GATE_LOCK": str(root / "heavy-gate.lock"),
                     "HEAVY_GATE_SWAP_WINDOW": "1", "HEAVY_GATE_POLL": "1", "HEAVY_GATE_PRIORITIES": str(root / "priorities"),
                     "HEAVY_GATE_SLOTS_FILE": str(root / "slots"),
                     "WORKSTREAM_RANK_FILE": str(root / "rank")}
@@ -804,10 +806,11 @@ exit $rc
         self.assertEqual(self.full_house_order(before_release=set_rule), ["D", "C"])
 
     # --- central rank ---
-    def use_rank(self, *rows, header="#workstream-rank v1\n"):
+    def use_rank(self, *rows, header="#workstream-rank v1\n", link=True):
         """Put the real workstream-rank reader on PATH and write a rank file with rows (rank, name, pane)."""
         (self.bin / "workstream-rank").unlink(missing_ok=True)
-        (self.bin / "workstream-rank").symlink_to(RANK_READER)
+        if link:
+            (self.bin / "workstream-rank").symlink_to(RANK_READER)
         self.rank_file.write_text(header + "".join(f"{rank}\t{name}\t{pane}\n" for rank, name, pane in rows))
 
     def stub_reader(self, body):
@@ -855,6 +858,7 @@ exit $rc
         self.priorities.write_text("2  echo D\n")
         cases = {
             "no reader on PATH, no file": lambda: None,
+            "no reader on PATH, a file": lambda: self.use_rank(*self.RANKED, link=False),
             "reader, no file": lambda: (self.use_rank(*self.RANKED), self.rank_file.unlink()),
             "wrong header": lambda: self.use_rank(*self.RANKED, header="#workstream-rank v2\n"),
             "no header": lambda: self.use_rank(*self.RANKED, header=""),
@@ -874,19 +878,47 @@ exit $rc
         self.assertEqual(self.waiting_number(env={"HERDR_PANE_ID": "w:p1"}), "5")
 
     def test_a_reader_that_fails_or_prints_nonsense_is_ignored(self):
+        # (reader stub body, number of a job in w:p1 with the rule 2). A reader whose show fails, or prints nothing, leaves the rank off: the plain rule.
+        # A reader whose show works but whose of fails or prints no number is a rank on and a job with no workstream: the rule plus 1000.
         self.priorities.write_text("2  echo D\n")
-        stubs = (("exit 2", "exit 2"), ("nothing", "exit 0"), ("words", 'case "$1" in show) echo x ;; of) echo high ;; esac'),
-                 ("negative", 'case "$1" in show) echo x ;; of) echo -3 ;; esac'),
-                 ("fails on of", 'case "$1" in show) echo x ;; of) exit 1 ;; esac'),
-                 ("fails on show", 'case "$1" in of) echo 4 ;; *) exit 1 ;; esac'),
-                 ("empty of", 'case "$1" in show) echo x ;; esac'))
-        for label, body in stubs:
+        stubs = (("exit 2", "exit 2", "2"),
+                 ("nothing", "exit 0", "2"),
+                 ("show prints a row, then fails", 'case "$1" in show) echo x; exit 1 ;; of) echo 1 ;; esac', "2"),
+                 ("show fails", 'case "$1" in of) echo 4 ;; *) exit 1 ;; esac', "2"),
+                 ("of prints words", 'case "$1" in show) echo x ;; of) echo high ;; esac', "1002"),
+                 ("of prints a negative", 'case "$1" in show) echo x ;; of) echo -3 ;; esac', "1002"),
+                 ("of fails", 'case "$1" in show) echo x ;; of) exit 1 ;; esac', "1002"),
+                 ("of prints a rank, then fails", 'case "$1" in show) echo x ;; of) echo 4; exit 1 ;; esac', "1002"),
+                 ("of prints nothing", 'case "$1" in show) echo x ;; esac', "1002"),
+                 ("of prints a huge number", 'case "$1" in show) echo x ;; of) echo 99999999999999999999 ;; esac', "1002"))
+        for label, body, expected in stubs:
             with self.subTest(label):
                 self.stub_reader(body)
-                number = self.waiting_number(env={"HERDR_PANE_ID": "w:p1"})
-                self.assertIn(number, ("2", "1002"), "a rule number, never a crash")
-        self.stub_reader('case "$1" in show) echo x ;; of) echo 99999999999999999999 ;; esac')
-        self.assertEqual(self.waiting_number(), "1002", "1000 or more is what the reader prints for no workstream, so it is treated as that")
+                self.assertEqual(self.waiting_number(env={"HERDR_PANE_ID": "w:p1"}), expected)
+
+    def test_a_slow_reader_never_holds_the_gate_up(self):
+        self.priorities.write_text("2  echo D\n")
+        for label, body, expected in (("both calls hang", "sleep 60", "2"),
+                                      ("of hangs", 'case "$1" in show) echo x ;; of) sleep 60 ;; esac', "1002")):
+            with self.subTest(label):
+                self.stub_reader(body)
+                env = {"HERDR_PANE_ID": "w:p1", "HEAVY_GATE_RANK_TIMEOUT": "1"}
+                started = time.monotonic()
+                self.assertEqual(self.waiting_number(env=env), expected)
+                self.assertLess(time.monotonic() - started, 15, "the reader was cut off, not waited for")
+
+    def test_a_hanging_reader_does_not_hold_up_a_job_or_its_deadline(self):
+        self.priorities.write_text("2  echo D\n")
+        self.stub_reader("sleep 60")
+        for timeout in ("1", "soon", ""):   # a bad value means the default, 2 seconds
+            with self.subTest(timeout):
+                marker = Path(self.tmp.name) / f"ran{timeout}"
+                started = time.monotonic()
+                result = self.gate("--wait", "1", "--", "touch", str(marker), env={"HEAVY_GATE_RANK_TIMEOUT": timeout})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertLess(time.monotonic() - started, 20, "the job ran; --wait and the deadline are not held by the reader")
+                self.assertTrue(marker.exists())
+                self.assertNotIn("Killed", result.stderr, "the shell's report of the killed reader is not shown")
 
     def test_the_readers_warnings_are_not_repeated_by_the_gate(self):
         self.stub_reader('echo "noise on stderr" >&2; case "$1" in show) echo x ;; of) echo 4 ;; esac')
