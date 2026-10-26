@@ -1,3 +1,0 @@
-# Private test-only venv; never install into host Python.
-pyte==0.8.2
-wcwidth==0.9.1

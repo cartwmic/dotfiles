@@ -212,8 +212,7 @@ reminder also has an isolated real-Pi journey and a separate capped live cache
 proof; see its [README](./standing-reminder/README.md).
 
 Recap's source-root proof entry point is `python3 tests/pi-recap/proof.py`
-with sections `cli`, `backend`, `tui`, `lifecycle`, `overview-isolated`, and
-`profiles`. Receipts name observed cases and criterion associations; they are
+with sections `cli`, `backend`, `tui`, `lifecycle`, and `profiles`. Receipts name observed cases and criterion associations; they are
 not blanket acceptance. Backend cases drive installed-SDK explicit/virtual routing
 and runtime-auth CLI publication/privacy. Lifecycle cases drive real disposable Pi:
 manual/full reuse, populated history search/view/scroll, settings/defaults/resume,
@@ -221,10 +220,8 @@ tree/fork/clone coverage, cancellation, buffered generated-unsaved consumption,
 and gated switch/return/reload/shutdown with original-session resume. Reasoning
 and authenticated live-error privacy cases inspect records, requests, transcripts
 and captures, with retry and coverage-preserving follow-ups. Failed assertions or
-unavailable prerequisites fail closed. The final stable-tree matrix and native
-overview execution remain driver-owned and pending. The overview section uses a
-private state base and cleans its own prepared fixture even after a failure.
-The profile section uses a disposable explicit config without installing hooks;
+unavailable prerequisites fail closed. The final stable-tree matrix remains
+driver-owned and pending. The profile section uses a disposable explicit config without installing hooks;
 it does not preview or replace host configuration.
 
 Chezmoi apply and secret handling are not validated here; use repo-root

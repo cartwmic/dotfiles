@@ -12,7 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "dot_local" / "bin" / "executable_session-recap"
 IMPLEMENTATION = REPO_ROOT / "dot_local" / "share" / "session-recap" / "session_recap.py"
-FAKE_BACKEND = REPO_ROOT / "tests" / "herdr-overview" / "fake_recap_backend.py"
+FAKE_BACKEND = REPO_ROOT / "tests" / "recap-proof" / "fake_recap_backend.py"
 SUCCESS = "Recent work is complete. Present state: ready for the next step."
 
 

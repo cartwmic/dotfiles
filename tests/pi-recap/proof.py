@@ -16,7 +16,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 CLI = ROOT / 'dot_local/share/session-recap'
 RECAP = ROOT / 'dot_pi/private_agent/extensions/recap'
-OVERVIEW = ROOT / 'tests/herdr-overview/proof.py'
+RECAP_PROOF = ROOT / 'tests/recap-proof/proof.py'
 
 
 def execute(name, criteria, argv, timeout=180):
@@ -58,38 +58,9 @@ def profiles():
                     cleanup='TemporaryDirectory removes only this fixture; native touched-destination previews remain driver-owned')
 
 
-def overview():
-    rows = []
-    # macOS's default /var/folders root exceeds sockaddr_un's path limit.
-    # Keep the isolated socket path short; TemporaryDirectory remains private.
-    with tempfile.TemporaryDirectory(prefix='ro-', dir='/tmp') as temporary:
-        base = [sys.executable, OVERVIEW]
-        state = ['--state-base', temporary]
-        prepared = execute('overview-prepare', ['AC-4'], base + ['herdr-prepare'] + state)
-        rows.append(prepared)
-        try:
-            receipt = json.loads(prepared.get('stdout', '').splitlines()[-1])
-            run_id = receipt.get('run_id')
-        except (ValueError, IndexError):
-            run_id = None
-        if run_id:
-            try:
-                if prepared['status'] == 'PASS':
-                    for scenario in ('herdr-wide', 'pi-grouped'):
-                        row = execute(scenario, ['AC-4'], base + [scenario, '--run-id', run_id] + state, 300)
-                        rows.append(row)
-                        if row['status'] != 'PASS':
-                            break
-            finally:
-                rows.append(execute('overview-cleanup', ['AC-4'], base + ['herdr-cleanup', '--run-id', run_id] + state))
-        elif prepared['status'] == 'PASS':
-            rows.append(dict(case='overview-receipt', status='FAIL', reason='prepare did not provide a run_id'))
-    return rows
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('section', choices=['cli', 'backend', 'tui', 'lifecycle', 'overview-isolated', 'profiles'])
+    parser.add_argument('section', choices=['cli', 'backend', 'tui', 'lifecycle', 'profiles'])
     parser.add_argument('--case', help='run one named case from this existing section')
     args = parser.parse_args()
     if args.case and args.section not in ("cli", "backend", "tui", "lifecycle"):
@@ -104,7 +75,7 @@ def main():
         rows = [execute_case('native-cli-timezone-public', ['UX-timezone'], [py, CLI / 'test_timezone.py']),
                 execute_case('retired-pi-commands-rejected-no-mutation-legacy-list-read-public', ['AC-5'],
                         [py, '-c', 'import sys,unittest; sys.path.insert(0, ' + repr(str(CLI)) + '); import test_session_recap; unittest.main(module=test_session_recap, argv=["proof", "SessionRecapCliTests.test_retired_commands_rejected_without_mutation_and_legacy_history_readable"], verbosity=2)']),
-                execute_case('generic-cli-public', ['AC-5'], [py, OVERVIEW, 'recap']),
+                execute_case('generic-cli-public', ['AC-5'], [py, RECAP_PROOF, 'recap']),
                 execute_case('fenced-requests-recursion-safe-record-fields', ['AC-5', 'AC-8', 'AC-11', 'AC-12'],
                         [py, '-m', 'unittest', 'discover', '-s', CLI, '-p', 'test_requests.py', '-v'])]
     elif args.section == 'backend':
@@ -139,8 +110,6 @@ def main():
                 execute_case('captured-host-departure-original-resume-public', ['AC-1', 'AC-7', 'AC-9', 'AC-12'], [py, ROOT / 'tests/pi-recap/departure.py']),
                 execute_case('coverage-settings-helper-contract', ['AC-9', 'AC-10'], ['node', '--test', RECAP / 'helpers.test.ts']),
                 execute_case('runtime-auth-live-error-privacy-public', ['AC-1', 'AC-7', 'AC-8', 'AC-12'], [py, ROOT / 'tests/pi-recap/auth_error.py'])]
-    elif args.section == 'overview-isolated':
-        rows = overview()
     else:
         try:
             rows = [profiles()]
