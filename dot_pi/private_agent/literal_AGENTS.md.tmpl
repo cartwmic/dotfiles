@@ -2,27 +2,6 @@
 
 {{ include "dot_local/share/agent-harness/canonical/instructions/AGENTS.md" }}
 
-## Scope
-
-These instructions apply on this machine for **every** Pi session. They live
-at `~/.pi/agent/AGENTS.md` (chezmoi source `dot_pi/private_agent/literal_AGENTS.md.tmpl`).
-Pi loads this file from its agent directory first, then walks ancestors from
-the cwd. The source is named `literal_AGENTS.md.tmpl` so Pi’s ancestor walk does
-**not** also pick it up when the cwd is under `dot_pi/private_agent/` in this repo
-(that would be the same text twice: live dest + source).
-
-They are **not** the chezmoi repository guide. That guide is a different
-file with different contents: `~/.local/share/chezmoi/AGENTS.md` (git only;
-chezmoi does not deploy it). Never copy one file over the other.
-
-Do not create `~/AGENTS.md` as a second global copy. Pi’s ancestor walk would
-load it in addition to this file. Chezmoi also cannot manage `~/AGENTS.md`
-while the repo keeps a root `AGENTS.md` (same destination name).
-
-When the cwd is inside `~/.local/share/chezmoi`, both files load. Use this
-file for cross-project habits; use the chezmoi `AGENTS.md` for source
-naming, apply, profiles, and other repo operations.
-
 ## Authority
 
 - Project `AGENTS.md` / `CLAUDE.md` in a working tree adds or overrides
@@ -53,15 +32,7 @@ styles) remain in those files. Shared standing rules come from canonical
 
 ## Workflow
 
-Start by identifying the tree and which instruction files apply:
-
-```bash
-pwd
-git rev-parse --show-toplevel 2>/dev/null || true
-ls -la "$HOME/.pi/agent/AGENTS.md" "$HOME/.local/share/chezmoi/AGENTS.md"
-```
-
-Then:
+Identify the tree and which instruction files apply, then:
 
 1. Read this file as user-global Pi policy.
 2. If a project `AGENTS.md` (or `CLAUDE.md`) exists at the repo root, follow
@@ -75,14 +46,6 @@ Then:
 6. Ask when a consequential choice is underspecified (scope, target,
    approach). Do not guess a destructive default.
 
-Validation for a generic git project (override with the project’s own
-commands when present):
-
-```bash
-git status -sb
-git diff
-```
-
 ## Completion and handoff
 
 Done means:
@@ -91,8 +54,6 @@ Done means:
   concrete reason.
 - Project-local checks named by that repo were run, or you stated why not.
 - No secret landed in git, chat logs, or a gist.
-- Chezmoi source `AGENTS.md` and this file were not collapsed into one
-  document, and `~/AGENTS.md` was not created as a duplicate global.
 
 Handoff must include: repo / cwd, what changed, how it was verified, what
 was not applied or committed, and any follow-up the user still owns.

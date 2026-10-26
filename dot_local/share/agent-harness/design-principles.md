@@ -25,6 +25,8 @@ Inner layers never import outer ones; external concerns are reached only through
 ## 4. YAGNI and KISS
 Don't add code, abstractions, configuration or files the current need doesn't require, and don't design for requests that haven't been made. Prefer the smallest thing that works: a function beats a new layer, a script beats a service. The structure in §2 and §3 defines dependency boundaries. It does not justify speculative abstraction.
 
+Design and plan review may be skipped when the diff fits in one sentence and git can revert it.
+
 Unless asked otherwise, start with the smallest design that completes the required user journey. Add machinery when a concrete requirement or demonstrated failure makes that baseline insufficient; explain why a simpler fix would fail. A requirement citation alone does not justify a particular mechanism.
 
 Count runtime code, configuration, recovery paths, test harnesses, review work and operator burden when judging simplicity.
