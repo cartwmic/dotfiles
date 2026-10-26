@@ -8,10 +8,10 @@ if [ ! -x "$SCRIPT" ]; then
   echo "[instances] INFO: $SCRIPT not found, skipping"
   exit 0
 fi
-export INSTANCES_COORDINATOR_ENABLED={{ dig "instances" "coordinator" "enabled" "" . | printf "%v" | squote }}
-export INSTANCES_COORDINATOR_REPO={{ includeTemplate "instance_repo" (dict "root" . "name" "coordinator") | squote }}
-export INSTANCES_RETRO_ENABLED={{ dig "instances" "retro" "enabled" "" . | printf "%v" | squote }}
-export INSTANCES_RETRO_REPO={{ includeTemplate "instance_repo" (dict "root" . "name" "retro") | squote }}
-export INSTANCES_RETRO_CHANNEL_ID={{ dig "instances" "retro" "channelId" "" . | printf "%v" | squote }}
-export INSTANCES_RETRO_OP_ITEM={{ dig "instances" "retro" "opItem" "" . | printf "%v" | squote }}
+export INSTANCES_COORDINATOR_ENABLED={{ includeTemplate "shquote" (dig "instances" "coordinator" "enabled" "" . | printf "%v") }}
+export INSTANCES_COORDINATOR_REPO={{ includeTemplate "shquote" (includeTemplate "instance_repo" (dict "root" . "name" "coordinator")) }}
+export INSTANCES_RETRO_ENABLED={{ includeTemplate "shquote" (dig "instances" "retro" "enabled" "" . | printf "%v") }}
+export INSTANCES_RETRO_REPO={{ includeTemplate "shquote" (includeTemplate "instance_repo" (dict "root" . "name" "retro")) }}
+export INSTANCES_RETRO_CHANNEL_ID={{ includeTemplate "shquote" (dig "instances" "retro" "channelId" "" . | printf "%v") }}
+export INSTANCES_RETRO_OP_ITEM={{ includeTemplate "shquote" (dig "instances" "retro" "opItem" "" . | printf "%v") }}
 exec "$SCRIPT"

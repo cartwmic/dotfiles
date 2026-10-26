@@ -15,7 +15,7 @@
 #   * Every outcome is one status line and exit 0, so a missing token or room cannot block other chezmoi work. The next run starts over.
 #   * Nothing secret is read, printed or stored here. The repos' own scripts own tokens.
 #
-# Markers: $INSTANCES_STATE_ROOT (default ~/.local/state/instances)/<name>.{managed,unit-sha,seeded,status}.
+# Markers: $INSTANCES_STATE_ROOT (default ~/.local/state/instances)/<name>.{managed,unit-sha,configuring,status}.
 # Test hooks: INSTANCES_STATE_ROOT, INSTANCES_UNIT_DIR, INSTANCES_AGENTS_DIR, INSTANCES_TOOL_PATH, INSTANCES_LIST, INSTANCES_TIMEOUT.
 set -u
 
@@ -39,7 +39,14 @@ say() { printf '[instances] %s\n' "$*"; }
 
 with_timeout() { # with_timeout SECONDS CMD ARGS...
   _secs=$1; shift
-  if command -v perl >/dev/null 2>&1; then perl -e 'alarm shift; exec @ARGV or exit 127' "$_secs" "$@"; else "$@"; fi
+  # The command runs in its own process group, and on timeout the whole group is killed (a setup script's children included). Exit 124.
+  if command -v perl >/dev/null 2>&1; then
+    perl -e 'my $t = shift; my $pid = fork(); defined $pid or exit 127;
+      if (!$pid) { setpgrp(0, 0); exec @ARGV; exit 127 }
+      setpgrp($pid, $pid);
+      $SIG{ALRM} = sub { kill "TERM", -$pid; select(undef, undef, undef, 1); kill "KILL", -$pid; waitpid($pid, 0); exit 124 };
+      alarm $t; waitpid($pid, 0); my $s = $?; exit(($s & 127) ? 128 + ($s & 127) : $s >> 8)' "$_secs" "$@"
+  else "$@"; fi
 }
 first_line() { head -n 1 "$1" 2>/dev/null | cut -c1-200; }
 sha() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
@@ -71,7 +78,7 @@ load_instance() { # load_instance NAME: sets the per-instance variables
     *) say "unknown instance $1"; return 1;;
   esac
   SRC=$UNIT_DIR/$LABEL.plist; DST=$AGENTS_DIR/$LABEL.plist
-  M_MANAGED=$STATE_ROOT/$NAME.managed; M_SHA=$STATE_ROOT/$NAME.unit-sha; M_SEEDED=$STATE_ROOT/$NAME.seeded; M_STATUS=$STATE_ROOT/$NAME.status
+  M_MANAGED=$STATE_ROOT/$NAME.managed; M_SHA=$STATE_ROOT/$NAME.unit-sha; M_CONFIGURING=$STATE_ROOT/$NAME.configuring; M_STATUS=$STATE_ROOT/$NAME.status
 }
 
 finish() { # finish MESSAGE: the one status line of this instance
@@ -91,7 +98,10 @@ opt_out() {
   if [ "$LOADED" = yes ]; then
     if ! run_lc bootout "$DOMAIN/$LABEL"; then finish "STOP FAILED: launchctl bootout: $(first_line "$TMP/lc.out"); unit and markers kept, will retry"; return 0; fi
   fi
-  rm -f "$DST" "$M_MANAGED" "$M_SHA" "$M_SEEDED" "$M_STATUS"
+  # Ownership goes last: if the unit cannot be removed, the next apply must still know it is ours to remove.
+  rm -f "$DST" 2>/dev/null
+  if [ -e "$DST" ]; then finish "STOP FAILED: cannot remove $DST (daemon is stopped); markers kept, will retry"; return 0; fi
+  rm -f "$M_MANAGED" "$M_SHA" "$M_STATUS"
   say "$NAME: opted out: daemon stopped, unit file removed; state, config, tokens, playbooks and logs kept. $PANE_NOTE"
   return 0
 }
@@ -104,10 +114,10 @@ configure() { # create the instance's config when it has none; returns 0 when co
       [ -n "${INSTANCES_RETRO_OP_ITEM:-}" ] || _miss="$_miss instances.retro.opItem"
       if [ -n "$_miss" ]; then finish "NOT READY: no config in $STATE and missing local data:$_miss"; return 1; fi
       [ -f "$REPO/$SETUP" ] || { finish "NOT READY: no config in $STATE and no $REPO/$SETUP to create it"; return 1; }
-      with_timeout "$CONFIG_TIMEOUT" env RETRO_CHANNEL_ID="$INSTANCES_RETRO_CHANNEL_ID" RETRO_OP_ITEM="$INSTANCES_RETRO_OP_ITEM" sh "$REPO/$SETUP" >"$TMP/cfg.out" 2>&1; _rc=$?;;
+      with_timeout "$CONFIG_TIMEOUT" env PATH="$TOOL_PATH:$PATH" RETRO_CHANNEL_ID="$INSTANCES_RETRO_CHANNEL_ID" RETRO_OP_ITEM="$INSTANCES_RETRO_OP_ITEM" sh "$REPO/$SETUP" >"$TMP/cfg.out" 2>&1 </dev/null; _rc=$?;;
     *)
       [ -f "$REPO/$SETUP" ] || { finish "NOT READY: no config in $STATE and no $REPO/$SETUP to create it"; return 1; }
-      with_timeout "$CONFIG_TIMEOUT" env COORDINATOR_STATE_DIR="$STATE" sh "$REPO/$SETUP" >"$TMP/cfg.out" 2>&1; _rc=$?;;
+      with_timeout "$CONFIG_TIMEOUT" env PATH="$TOOL_PATH:$PATH" COORDINATOR_STATE_DIR="$STATE" sh "$REPO/$SETUP" >"$TMP/cfg.out" 2>&1 </dev/null; _rc=$?;;
   esac
   case $_rc in
     0) ;;
@@ -127,31 +137,35 @@ opt_in() {
   if [ -n "$_miss" ]; then finish "NOT READY: missing$_miss"; return 0; fi
 
   mkdir -p "$STATE_ROOT" "$LOGDIR" "$STATE" "$AGENTS_DIR" || { finish "NOT READY: cannot create directories"; return 0; }
-  if [ ! -f "$M_SEEDED" ]; then
-    if [ ! -f "$STATE/config.json" ]; then configure || return 0; fi
-    : >"$M_SEEDED"
+  # A config that exists is the owner's (or an earlier setup run's that finished). One left by a setup run of ours that did not finish
+  # is not: the marker makes the next apply run the setup again instead of trusting half a config.
+  if [ -f "$M_CONFIGURING" ] || [ ! -f "$STATE/config.json" ]; then
+    : >"$M_CONFIGURING"
+    configure || return 0
+    rm -f "$M_CONFIGURING"
   fi
 
   if command -v plutil >/dev/null 2>&1 && ! plutil -lint "$SRC" >"$TMP/lint.out" 2>&1; then
     finish "NOT READY: the unit $SRC is not a valid plist: $(first_line "$TMP/lint.out")"; return 0
   fi
+  # Ask launchd first, then record ownership, and only then change anything on disk or in launchd.
+  if ! probe_loaded; then finish "NOT READY: $LC_ERR"; return 0; fi
   _before=''; [ -f "$DST" ] && _before=$(sha "$DST")
   _want=$(sha "$SRC")
+  _adopted=no
+  if [ ! -f "$M_MANAGED" ]; then
+    if [ "$LOADED" = yes ]; then _adopted=yes; _own=$_before   # running already: record the file it was loaded from, as it is right now
+    else _own=$_want; fi                                         # about to be started by us
+    if ! { printf '%s\n' "$_own" >"$M_SHA" && : >"$M_MANAGED"; }; then finish "NOT READY: cannot record ownership in $STATE_ROOT"; return 0; fi
+  fi
   if [ "$_before" != "$_want" ]; then
     if ! { cp "$SRC" "$DST.new" && chmod 644 "$DST.new" && mv "$DST.new" "$DST"; }; then finish "NOT READY: cannot write $DST"; return 0; fi
   fi
-
-  if ! probe_loaded; then finish "NOT READY: $LC_ERR"; return 0; fi
-  _adopted=no
   if [ "$LOADED" = no ]; then
+    printf '%s\n' "$_want" >"$M_SHA"
     if ! run_lc bootstrap "$DOMAIN" "$DST"; then finish "NOT READY: launchctl bootstrap failed: $(first_line "$TMP/lc.out")"; return 0; fi
-    if ! probe_loaded || [ "$LOADED" != yes ]; then finish "NOT READY: bootstrap returned 0 but $LABEL is not loaded"; return 0; fi
-    : >"$M_MANAGED"; printf '%s\n' "$_want" >"$M_SHA"
+    if ! probe_loaded || [ "$LOADED" != yes ]; then finish "NOT READY: bootstrap returned 0 but $LABEL could not be confirmed loaded"; return 0; fi
     finish "READY (started)"; return 0
-  fi
-  if [ ! -f "$M_MANAGED" ]; then
-    # Adopt a service that is already running: record the file it was loaded from (as it was before this run); touch nothing.
-    _adopted=yes; : >"$M_MANAGED"; printf '%s\n' "$_before" >"$M_SHA"
   fi
   _loaded_sha=$(cat "$M_SHA" 2>/dev/null || true)
   if [ "$_loaded_sha" = "$_want" ]; then

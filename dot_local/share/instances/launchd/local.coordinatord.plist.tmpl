@@ -11,19 +11,19 @@
     <string>node</string>
     <string>--experimental-strip-types</string>
     <string>--disable-warning=ExperimentalWarning</string>
-    <string>{{ $repo }}/src/coordinatord/main.ts</string>
+    <string>{{ $repo | html }}/src/coordinatord/main.ts</string>
   </array>
-  <key>WorkingDirectory</key><string>{{ $repo }}</string>
+  <key>WorkingDirectory</key><string>{{ $repo | html }}</string>
   <key>EnvironmentVariables</key>
   <dict>
     <!-- node, herdr (the mise shim), op (Homebrew) and git must be found from here; the coordinator pane's shell has its own PATH. -->
-    <key>PATH</key><string>{{ .chezmoi.homeDir }}/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>{{ .chezmoi.homeDir | html }}/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <!-- Restart after a crash or kill -9; a clean exit (SIGTERM from `launchctl bootout`) stays stopped. -->
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>{{ .chezmoi.homeDir }}/Library/Logs/coordinator/coordinatord.log</string>
-  <key>StandardErrorPath</key><string>{{ .chezmoi.homeDir }}/Library/Logs/coordinator/coordinatord.log</string>
+  <key>StandardOutPath</key><string>{{ .chezmoi.homeDir | html }}/Library/Logs/coordinator/coordinatord.log</string>
+  <key>StandardErrorPath</key><string>{{ .chezmoi.homeDir | html }}/Library/Logs/coordinator/coordinatord.log</string>
 </dict>
 </plist>
