@@ -20,7 +20,7 @@ MUTATIONS = [
     ("opt-out never boots the service out", 'if [ "$LOADED" = yes ]; then\n    if ! run_lc bootout', 'if [ "$LOADED" = nope ]; then\n    if ! run_lc bootout'),
     ("opt-out forgets the unit and markers even when bootout failed", 'unit and markers kept, will retry"; return 0; fi\n  fi', 'unit and markers kept, will retry"; fi\n  fi'),
     ("a setup script exit 3 is treated as success", '    3) _why=', '    3) return 0;;\n    9) _why='),
-    ("a half-written config from a failed setup run is trusted on the next apply", '[ -f "$M_CONFIGURING" ] || ', ''),
+    ("a half-written config from a failed setup run is trusted on the next apply", '[ -e "$M_CONFIGURING" ] || [ -L "$M_CONFIGURING" ] || ', ''),
     ("ownership is recorded only for adopted services, not for ones we start (R1)", '  if [ ! -f "$M_MANAGED" ]; then\n    if [ "$LOADED" = yes ]; then _adopted=yes', '  if [ ! -f "$M_MANAGED" ] && [ "$LOADED" = yes ]; then\n    if [ "$LOADED" = yes ]; then _adopted=yes'),
     ("opt-out reports success and drops ownership when the unit cannot be removed (R2)", 'if [ -e "$DST" ] || [ -L "$DST" ]; then finish "STOP FAILED: cannot remove', 'if false; then finish "STOP FAILED: cannot remove'),
     ("adoption records the unit as it is after replacement, not as it was loaded (R4)", '_own=$_before', '_own=$_want'),
