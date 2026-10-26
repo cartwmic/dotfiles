@@ -115,10 +115,15 @@ Library/LaunchAgents/local.agent-events.plist
 {{- end }}
 
 {{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
-# Coordinator and Retro LaunchAgent units (cartwmic/coordinator, cartwmic/retro): personal macOS only for now.
+# Coordinator and Retro LaunchAgent units (cartwmic/coordinator, cartwmic/retro): personal macOS.
 # They are inert copies; only the reconcile script puts a unit in ~/Library/LaunchAgents, and only for an opted-in instance.
 .local/share/instances/launchd/local.coordinatord.plist
 .local/share/instances/launchd/local.retrod.plist
+{{- end }}
+
+{{- if or (ne .profile "axon-work-computer") (ne .chezmoi.os "darwin") }}
+# The work coordinator's unit (Matrix; cartwmic/coordinator docs/work-instance.md): work macOS only, inert like the others.
+.local/share/instances/launchd/local.coordinatord.work.plist
 {{- end }}
 
 {{- if ne .chezmoi.os "darwin" }}

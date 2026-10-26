@@ -15,6 +15,8 @@
 #   * Every outcome is one status line and exit 0, so a missing token or room cannot block other chezmoi work. The next run starts over.
 #   * Nothing secret is read, printed or stored here. The repos' own scripts own tokens.
 #
+# Instances: coordinator and retro (personal profile), coordinator-work (axon-work-computer profile: the Matrix coordinator; its flag is still
+# data.instances.coordinator.enabled, the profile picks the variant; the wrapper only exports the variants of its own profile).
 # Markers: $INSTANCES_STATE_ROOT (default ~/.local/state/instances)/<name>.{managed,unit-sha,configuring,status}.
 # Test hooks: INSTANCES_STATE_ROOT, INSTANCES_UNIT_DIR, INSTANCES_AGENTS_DIR, INSTANCES_TOOL_PATH, INSTANCES_LIST, INSTANCES_TIMEOUT.
 set -u
@@ -30,7 +32,8 @@ AGENTS_DIR=${INSTANCES_AGENTS_DIR:-$HOME_DIR/Library/LaunchAgents}
 # The PATH the units give the daemons; the tools they need must be found on it, not on whatever PATH this script has.
 TOOL_PATH=${INSTANCES_TOOL_PATH:-$HOME_DIR/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin}
 TIMEOUT=${INSTANCES_TIMEOUT:-30}
-CONFIG_TIMEOUT=${INSTANCES_CONFIG_TIMEOUT:-120}
+# The ring producer (agent-alert) is deployed here but is not on PATH; the work setup script requires it on PATH (for its own run only).
+AGENT_ALERT_DIR=$HOME_DIR/.local/share/agent-alert/core
 DOMAIN="gui/$(id -u)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/instances.XXXXXX") || exit 0
 trap 'rm -rf "$TMP"' EXIT
@@ -56,9 +59,9 @@ with_timeout() { # with_timeout SECONDS CMD ARGS...
 }
 first_line() { head -n 1 "$1" 2>/dev/null | cut -c1-200; }
 sha() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
-have() { # have TOOL: found on the daemon's PATH
+have() { # have TOOL: found on the daemon's PATH (the unit's PATH: per-instance extra directories first)
   _old=$IFS; IFS=:
-  for _d in $TOOL_PATH; do if [ -x "$_d/$1" ]; then IFS=$_old; return 0; fi; done
+  for _d in $ITP; do if [ -x "$_d/$1" ]; then IFS=$_old; return 0; fi; done
   IFS=$_old; return 1
 }
 
@@ -75,14 +78,21 @@ load_instance() { # load_instance NAME: sets the per-instance variables
   case $1 in
     coordinator)
       LABEL=local.coordinatord; LOGDIR=$HOME_DIR/Library/Logs/coordinator; STATE=$HOME_DIR/.local/share/coordinator
-      MAIN=src/coordinatord/main.ts; SETUP=scripts/instance-setup.sh
+      MAIN=src/coordinatord/main.ts; SETUP=scripts/instance-setup.sh; CFGNAME=coordinator; EXTRA_PATH=''; CFG_TO=${INSTANCES_CONFIG_TIMEOUT:-120}
       ENABLED=${INSTANCES_COORDINATOR_ENABLED:-}; REPO=${INSTANCES_COORDINATOR_REPO:-};;
+    coordinator-work)
+      # The work Matrix coordinator: the paths are the ones the coordinator's own setup script and docs/launchd/local.coordinatord.work.plist use.
+      # Its setup also needs op, a signed-in Pi, the homeserver and a model call, so it gets a long timeout.
+      LABEL=local.coordinatord.work; LOGDIR=$HOME_DIR/Library/Logs/coordinator-work; STATE=$HOME_DIR/.local/share/coordinator-work
+      MAIN=src/coordinatord/main.ts; SETUP=scripts/work-instance-setup.sh; CFGNAME=coordinator; CFG_TO=${INSTANCES_CONFIG_TIMEOUT:-900}
+      ENABLED=${INSTANCES_COORDINATOR_WORK_ENABLED:-}; REPO=${INSTANCES_COORDINATOR_WORK_REPO:-}; EXTRA_PATH=${INSTANCES_COORDINATOR_WORK_EXTRA_PATH:-};;
     retro)
       LABEL=local.retrod; LOGDIR=$HOME_DIR/Library/Logs/retro; STATE=$HOME_DIR/.local/share/retro
-      MAIN=src/retrod/main.ts; SETUP=scripts/configure.sh
+      MAIN=src/retrod/main.ts; SETUP=scripts/configure.sh; CFGNAME=retro; EXTRA_PATH=''; CFG_TO=${INSTANCES_CONFIG_TIMEOUT:-120}
       ENABLED=${INSTANCES_RETRO_ENABLED:-}; REPO=${INSTANCES_RETRO_REPO:-};;
     *) say "unknown instance $1"; return 1;;
   esac
+  ITP=$TOOL_PATH; [ -z "$EXTRA_PATH" ] || ITP=$EXTRA_PATH:$TOOL_PATH
   SRC=$UNIT_DIR/$LABEL.plist; DST=$AGENTS_DIR/$LABEL.plist
   M_MANAGED=$STATE_ROOT/$NAME.managed; M_SHA=$STATE_ROOT/$NAME.unit-sha; M_CONFIGURING=$STATE_ROOT/$NAME.configuring; M_STATUS=$STATE_ROOT/$NAME.status
 }
@@ -120,15 +130,24 @@ configure() { # create the instance's config when it has none; returns 0 when co
       [ -n "${INSTANCES_RETRO_OP_ITEM:-}" ] || _miss="$_miss instances.retro.opItem"
       if [ -n "$_miss" ]; then finish "NOT READY: no config in $STATE and missing local data:$_miss"; return 1; fi
       [ -f "$REPO/$SETUP" ] || { finish "NOT READY: no config in $STATE and no $REPO/$SETUP to create it"; return 1; }
-      with_timeout "$CONFIG_TIMEOUT" env PATH="$TOOL_PATH:$PATH" RETRO_CHANNEL_ID="$INSTANCES_RETRO_CHANNEL_ID" RETRO_OP_ITEM="$INSTANCES_RETRO_OP_ITEM" sh "$REPO/$SETUP" >"$TMP/cfg.out" 2>&1 </dev/null; _rc=$?;;
+      with_timeout "$CFG_TO" env PATH="$ITP:$PATH" RETRO_CHANNEL_ID="$INSTANCES_RETRO_CHANNEL_ID" RETRO_OP_ITEM="$INSTANCES_RETRO_OP_ITEM" sh "$REPO/$SETUP" >"$TMP/cfg.out" 2>&1 </dev/null; _rc=$?;;
+    coordinator-work)
+      # The coordinator repo's setup script. Dotfiles owns the unit and the start, so it is asked for the config half only (--config-only;
+      # until the coordinator repo has that flag the script rejects it and the instance stays NOT READY with that reason). The checkout the
+      # owner cloned by hand is the commit it is asked to accept (--rev HEAD): that checks the tree is clean, not that the commit is reviewed.
+      [ -f "$REPO/$SETUP" ] || { finish "NOT READY: no config in $STATE and no $REPO/$SETUP to create it"; return 1; }
+      _rev=$(env PATH="$ITP:$PATH" git -C "$REPO" rev-parse HEAD 2>/dev/null) || { finish "NOT READY: $REPO is not a git checkout (cannot read its commit)"; return 1; }
+      with_timeout "$CFG_TO" env PATH="$ITP:$AGENT_ALERT_DIR:$PATH" bash "$REPO/$SETUP" --yes-this-is-the-work-computer --config-only --rev "$_rev" --state-dir "$STATE" >"$TMP/cfg.out" 2>&1 </dev/null; _rc=$?;;
     *)
       [ -f "$REPO/$SETUP" ] || { finish "NOT READY: no config in $STATE and no $REPO/$SETUP to create it"; return 1; }
-      with_timeout "$CONFIG_TIMEOUT" env PATH="$TOOL_PATH:$PATH" COORDINATOR_STATE_DIR="$STATE" sh "$REPO/$SETUP" >"$TMP/cfg.out" 2>&1 </dev/null; _rc=$?;;
+      with_timeout "$CFG_TO" env PATH="$ITP:$PATH" COORDINATOR_STATE_DIR="$STATE" sh "$REPO/$SETUP" >"$TMP/cfg.out" 2>&1 </dev/null; _rc=$?;;
   esac
   case $_rc in
     0) ;;
     3) _why=$(grep -m1 '^NOT-READY:' "$TMP/cfg.out" | cut -c11-210); finish "NOT READY:${_why:- the setup script says it is not ready}"; return 1;;
-    *) finish "NOT READY: setup script $SETUP failed (exit $_rc): $(first_line "$TMP/cfg.out")"; return 1;;
+    *) # A script that narrates (the work one prints [ok] lines first) puts the reason on a [FAIL] line; otherwise the first line says it.
+       _why=$(grep -m1 '^\[FAIL\]' "$TMP/cfg.out" | cut -c9-210); [ -n "$_why" ] || _why=$(first_line "$TMP/cfg.out")
+       finish "NOT READY: setup script $SETUP failed (exit $_rc): $_why"; return 1;;
   esac
   [ -f "$STATE/config.json" ] || { finish "NOT READY: $SETUP reported success but $STATE/config.json does not exist"; return 1; }
   return 0
@@ -136,7 +155,7 @@ configure() { # create the instance's config when it has none; returns 0 when co
 
 opt_in() {
   _miss=''
-  [ -n "$REPO" ] || _miss="$_miss instances.$NAME.repo"
+  [ -n "$REPO" ] || _miss="$_miss instances.$CFGNAME.repo"
   if [ -n "$REPO" ] && [ ! -f "$REPO/$MAIN" ]; then _miss="$_miss checkout($REPO/$MAIN)"; fi
   for _t in node herdr op git; do have "$_t" || _miss="$_miss $_t-on-PATH"; done
   [ -f "$SRC" ] || _miss="$_miss unit($SRC; run chezmoi apply)"
@@ -194,7 +213,7 @@ reconcile() {
   case $ENABLED in
     true) opt_in;;
     false|'') opt_out;;
-    *) say "$NAME: NOT READY: instances.$NAME.enabled must be true or false (found '$ENABLED'); nothing done";;
+    *) say "$NAME: NOT READY: instances.$CFGNAME.enabled must be true or false (found '$ENABLED'); nothing done";;
   esac
   return 0
 }

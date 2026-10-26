@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- A second coordinator daemon (the work instance, on Matrix; see docs/work-instance.md). Same program as local.coordinatord.plist with its own label, state directory and logs.
+     __HOME__ is the home directory, __REPO__ the checkout the daemon runs from, __STATE__ the work instance's state directory (never the personal ~/.local/share/coordinator). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.coordinatord.work</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>node</string>
+    <string>--experimental-strip-types</string>
+    <string>--disable-warning=ExperimentalWarning</string>
+    <string>__REPO__/src/coordinatord/main.ts</string>
+  </array>
+  <key>WorkingDirectory</key><string>__REPO__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>COORDINATOR_STATE_DIR</key><string>__STATE__</string>
+    <!-- node, herdr and git (the daemon's tools) must be found from here; adjust to the work computer's layout. Pi is started in the Herdr pane and found through the pane shell's PATH, or set pi_command (docs/work-instance.md). -->
+    <key>PATH</key><string>__HOME__/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/coordinator-work/coordinatord.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/coordinator-work/coordinatord.log</string>
+</dict>
+</plist>
