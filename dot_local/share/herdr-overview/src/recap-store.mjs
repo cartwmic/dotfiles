@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -48,8 +49,12 @@ export async function openRecapIndex(root, indexPath) {
   try {
     const index = JSON.parse(await readFile(indexPath, "utf8"));
     if (index?.version !== INDEX_VERSION || index.root !== root || !Array.isArray(index.entries)) return;
-    for (const [file, key, record] of index.entries) {
-      if (typeof file === "string" && typeof key === "string" && !recordCache.has(file)) recordCache.set(file, { key, record });
+    const prefix = path.join(root, "records") + path.sep;
+    for (const entry of index.entries) {
+      if (!Array.isArray(entry)) continue;
+      const [file, key, record] = entry;
+      if (typeof file === "string" && file.startsWith(prefix) && typeof key === "string"
+        && record && typeof record === "object" && !recordCache.has(file)) recordCache.set(file, { key, record });
     }
   } catch { /* A missing or unreadable index is rebuilt by the next scan. */ }
 }
@@ -62,7 +67,7 @@ export async function saveRecapIndex() {
   index.dirty = false;
   const prefix = path.join(index.root, "records") + path.sep;
   const entries = [...recordCache].filter(([file]) => file.startsWith(prefix)).map(([file, { key, record }]) => [file, key, record]);
-  const temporary = `${index.path}.${process.pid}.tmp`;
+  const temporary = `${index.path}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await mkdir(path.dirname(index.path), { recursive: true });
     await writeFile(temporary, JSON.stringify({ version: INDEX_VERSION, root: index.root, entries }), { mode: 0o600 });
@@ -97,7 +102,12 @@ async function readRecordFile(file) {
   const cached = recordCache.get(file);
   if (cached?.key === key) return cached.record;
   const value = await readJson(file);
-  const record = value ? overviewRecord(value) : null;
+  // A failed read is not cached: the file's stat does not change when it becomes readable.
+  if (!value) {
+    if (recordCache.delete(file) && recapIndex) recapIndex.dirty = true;
+    return null;
+  }
+  const record = overviewRecord(value);
   recordCache.set(file, { key, record });
   if (recapIndex) recapIndex.dirty = true;
   return record;
