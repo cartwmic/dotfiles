@@ -157,7 +157,6 @@ Gates live in the repo-root `.chezmoiignore`:
 | [claude-compat-guard](./claude-compat-guard/README.md) | `personal` only |
 | [issue](./issue/README.md) | `axon-work-computer` only |
 | `dot_pi/session-search/` (sibling of `agent/`, not this folder) | `personal` only |
-| [herdr-overview](./herdr-overview/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [recap](./recap/README.md) | `personal` and `axon-work-computer`; interactive TUI only; Termux skips `.pi` |
 | [standing-reminder](./standing-reminder/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [learnings-monitor](./learnings-monitor/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
@@ -183,7 +182,6 @@ READMEs already in this tree:
 - [learnings-monitor](./learnings-monitor/README.md)
 - [subagent](./subagent/README.md)
 - [passage-review](./passage-review/README.md)
-- [herdr-overview](./herdr-overview/README.md)
 - [recap](./recap/README.md)
 - [web-search](./web-search/README.md)
 - [standing-reminder](./standing-reminder/README.md)
@@ -208,8 +206,8 @@ Other in-tree suites today: `auto-compact/index.test.ts`,
 `issue/index.test.ts`, `ntfy/index.test.ts`, `openrouter-gate/index.test.ts`,
 `web-search/config.test.ts`, `web-search/codex.test.ts`, and
 `learnings-monitor/` (`node --test`).
-`catalog-overlay-nudge` and `subagent` do not have tests yet. `passage-review`,
-`herdr-overview`, and `standing-reminder` have `index.test.ts`. The standing
+`catalog-overlay-nudge` and `subagent` do not have tests yet. `passage-review`
+and `standing-reminder` have `index.test.ts`. The standing
 reminder also has an isolated real-Pi journey and a separate capped live cache
 proof; see its [README](./standing-reminder/README.md).
 

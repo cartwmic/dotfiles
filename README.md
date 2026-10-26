@@ -138,8 +138,8 @@ chezmoi init --apply https://github.com/cartwmic/dotfiles.git
 **AI Tools:**
 
 - Pi coding agent, claude, claude-code-acp, vectorcode, mistral-vibe, mermaid-cli
-- Herdr (pinned; upgrades gated on the plugin's API needs) with a desktop-only overview plugin on `personal` and `axon-work-computer`
-- Portable `session-recap` and `passage-review` workflows; Termux stays an SSH client. It does not host the Herdr plugin.
+- Herdr (pinned) with the upstream command palette plugin on `personal` and `axon-work-computer`
+- Portable `session-recap` and `passage-review` workflows; Termux stays an SSH client.
 
 **Remote access:**
 
@@ -364,59 +364,20 @@ up on **CTRL** to send that sequence; swipe up on **ALT** sends **Ctrl+O**.
 Normal taps still act as modifiers.
 
 The palette starts with upstream built-ins and installed plugin actions,
-including Overview; no custom commands or prompts are configured. Its checkout,
+no custom commands or prompts are configured. Its checkout,
 binary and last-used state stay machine-local, outside chezmoi. Termux does not
 install it; its prefix shortcut works over SSH to a configured desktop.
 
-## Herdr overview and phone route
+## Herdr and phone route
 
-The personal and work desktop profiles pin one Herdr release and
-link the source-managed overview plugin. The Pi adapter publishes a real-user
-prompt and, when opted in, a separate recap after the response settles. The overview reads
-native Herdr pane state and those supplied records. It does not parse a
-transcript or generate a summary. Manual pane/tab labels remain under owner
-control; workspaces are never auto-named. Herdr 0.9.1 has no atomic
-conditional rename, so a manual edit can still race the final automatic write.
-
-`prefix+shift+o` opens a responsive shared pane-canvas popup map; it creates no
-background tab or pane ID. It is a temporary 100% native session-singleton;
-modal `ui_busy` and owner-tab deletion/dismissal are native. Reopen normally
-from a surviving pane; no startup/event/reconcile auto-open. Single-pane tabs combine beneath their workspace; multi-pane
-tabs remain groups. Enter expands full names/recap; `d` opens the separate dated
-digest; `n` selects the next blocked pane; `f` focuses the verified live target.
-Stable current session/native subjects drive automatic names, not recap/digest
-bodies. Latest-good recap, later failure, digest and live agent state stay distinct.
-See the [Herdr plugin guide](./dot_local/share/herdr-overview/README.md) for
-navigation, manual pane-source recaps, naming policy, and move behavior. The
-[Pi adapter guide](./dot_pi/private_agent/extensions/herdr-overview/README.md)
-covers publication.
+The personal and work desktop profiles pin one Herdr release. Termux is an SSH
+client: from the phone, `ssh macbook`, then `herdr` to attach to the desktop's
+running session. The phone installs no Herdr plugin, server, or desktop config.
+See [Termux phone setup](./termux/README.md).
 
 The opt-in [Herdr control MCP tunnel](./herdr-mcp/README.md) lets a ChatGPT
 custom app control local Herdr through an OpenAI Secure MCP Tunnel. Chezmoi
 never deploys it; install it explicitly with `herdr-mcp/install.sh`.
-
-The `install-herdr-overview` mise task (also part of desktop bootstrap)
-checks that the pinned Herdr's bundled API schema offers every method, parameter,
-field, and event the plugin uses (`dot_local/share/herdr-overview/src/herdr-compat.mjs`),
-then links/enables the source manifest. Version and protocol numbers do not matter.
-To upgrade, run `mise run check-herdr-upgrade [version]` (default: latest); if it
-passes, set that version in `dot_config/mise/config.toml` and apply. Linking leaves the
-running server untouched. On a compatible running server,
-`herdr plugin action invoke overview.reconcile` loads the
-linked action and reconciles without opening a view. Invoke `overview.open`
-separately for the popup.
-`herdr server reload-config` separately applies the new keybinding. A later
-owner-controlled server start also runs the plugin's startup hook.
-
-On Android, Termux remains the phone-owned `termux` chezmoi profile and an SSH
-client. It does not install the native Herdr plugin. From the phone, run
-`ssh macbook`, then `herdr` in the desktop shell to attach to that same session.
-The map adapts to the actual phone PTY width; shrinking a local terminal is
-not phone proof. The combined isolated `map_journey.py --scenario all` checks
-interactions and real Pi identity/publication together; use its private pinned
-pyte interpreter. Physical phone and live rollout remain owner-pending; no
-physical-phone popup receipt is claimed. See [Termux phone setup](./termux/README.md) for
-the route and acceptance-proof status.
 
 ## Portable recaps
 
@@ -433,8 +394,7 @@ printf '%s\n' '{"members":[{"label":"api","text":"API work is complete."},{"text
 
 Desktop installs default to `auto_publish = false` with no recap command.
 Configure an unmanaged `~/.config/session-recap/config.local.toml` with an
-executable argv for manual recaps; add `auto_publish = true` to opt in to Herdr
-**group generation**, not Pi generation. The editable prompt templates and local
+executable argv for manual recaps; the editable prompt templates and local
 configuration are covered in [`dot_local/share/session-recap/README.md`](./dot_local/share/session-recap/README.md).
 
 Pi has independent `/recap`, `/recap view`, `/recap history` and `/recap settings`
@@ -445,17 +405,7 @@ with the full narrative available through `/recap view`. Pi's `timeZone` setting
 and CLI `time_zone` / `--time-zone` display local time by default, with UTC/IANA
 options; canonical record timestamps remain UTC. No CLI preferences are imported. See the
 [Pi recap guide](./dot_pi/private_agent/extensions/recap/README.md). Recap works
-without Herdr. The separate overview adapter owns private real-user prompts and
-consumes saved recaps, annotating native membership without duplicate generation.
-Successful attributed Pi publications
-start/restart a 30-second workspace quiet period; when it expires, the group uses
-latest published recaps for panes currently in that native workspace, including
-manual pane-source recaps for non-Pi panes. A successful workspace group can
-trigger a Herdr-session group from workspaces still live in the native snapshot.
-Failed recaps do not replace the last good record or reset that interval. With
-`auto_publish = false`, pending group deadlines stay stored without group
-model calls or wake-ups; a later reconcile after opt-in can catch up. Dated
-history remains outside Herdr.
+without Herdr. Dated history remains outside Herdr.
 
 ## Passage review
 
@@ -553,7 +503,6 @@ and controls apply. Pi's global instructions are a separate source file at
 Component READMEs cover setup and use:
 
 - [Termux and phone SSH](./termux/README.md)
-- [Herdr overview](./dot_local/share/herdr-overview/README.md) and its [Pi adapter](./dot_pi/private_agent/extensions/herdr-overview/README.md)
 - [session-recap](./dot_local/share/session-recap/README.md)
 - [passage-review](./dot_local/share/passage-review/README.md) and its [Pi `/review` entry point](./dot_pi/private_agent/extensions/passage-review/README.md)
 - [Pi extensions](./dot_pi/private_agent/extensions/README.md) (index for the other extension guides)
@@ -586,7 +535,6 @@ After `chezmoi apply`, complete the steps that apply to this host:
 - [macOS] Add XQuartz as a login item.
 - [personal macOS] Launch Docker Desktop once to accept its license and finish setup. See [Docker Provisioning](#docker-provisioning).
 - [personal macOS] Log in and launch RustDesk once on a fresh machine; grant Accessibility, Screen Recording, and, if needed, Input Monitoring permissions. See [RustDesk Provisioning](#rustdesk-provisioning).
-- [desktop Herdr] On an existing compatible server, invoke the overview reconcile action after linking; otherwise use a later owner-controlled server start. Reload config only to pick up the keybinding. See [Herdr overview and phone route](#herdr-overview-and-phone-route) for commands.
 - [recap users] Review Pi defaults/overrides with `/recap settings`; set a host-local CLI command for standalone recaps/Herdr groups if wanted. See [Portable recaps](#portable-recaps).
 
 After installing gvm, use a fresh zsh or load its script in the current shell.
@@ -602,12 +550,3 @@ gvm install "$GO_VERSION" && gvm use "$GO_VERSION" --default
 
 See [AGENTS.md](./AGENTS.md) for repository agent instructions (not deployed).
 See [dot_pi/private_agent/literal_AGENTS.md.tmpl](./dot_pi/private_agent/literal_AGENTS.md.tmpl) for Pi-global agent instructions.
-
-Herdr Overview uses bordered, padded, word-wrapped cards in native workspace
-order, with two singleton columns and separate multi-pane groups. `M` marks
-manual names; headings show counts; clipped collapsed titles end in an ellipsis.
-`d` enters the dated digest (idempotent there); Esc restores the prior recap
-passage and `q` dismisses immediately. The card floor is actual popup width 32,
-not outer width: outer 40/48/120/180 yield 38/46/92/152; outer32 yields30 and
-may clip. Simultaneously attached clients share one PTY geometry; a wide peer
-can clip the narrow peer. Use one attached client for readable geometry.
