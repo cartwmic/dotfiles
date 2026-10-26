@@ -47,6 +47,7 @@ MUTATIONS = [
     ("work: the setup script is not asked for the config half only, so it installs and starts its own unit", '--yes-this-is-the-work-computer --config-only', '--yes-this-is-the-work-computer'),
     ("work: the setup script is not told which commit the checkout is", '--rev "$_rev" --state-dir', '--state-dir'),
     ("work: the setup script gets a different state directory", '--state-dir "$STATE" >', '--state-dir "$HOME_DIR/.local/share/coordinator" >'),
+    ("work: the setup script's PATH puts the caller's PATH before the daemon's tool path", 'env PATH="$ITP:$AGENT_ALERT_DIR:$PATH" bash', 'env PATH="$AGENT_ALERT_DIR:$PATH:$ITP" bash'),
     ("work: the setup script cannot find agent-alert (its directory is not on its PATH)", 'env PATH="$ITP:$AGENT_ALERT_DIR:$PATH" bash', 'env PATH="$ITP:$PATH" bash'),
     ("work: a checkout that is not a git repository still runs the setup script", 'cannot read its commit)"; return 1; }', 'cannot read its commit)"; }'),
     ("work: the work instance is managed under the personal label", 'LABEL=local.coordinatord.work;', 'LABEL=local.coordinatord;'),

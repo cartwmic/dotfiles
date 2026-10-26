@@ -813,9 +813,32 @@ class WorkMatrixTests(unittest.TestCase):
         self.ok()
         self.assertEqual(args.read_text().split("\n")[:-1], ["--yes-this-is-the-work-computer", "--config-only", "--rev",
                                                             "0123456789abcdef0123456789abcdef01234567", "--state-dir", str(self.s.work_state)])
-        # agent-alert is deployed by dotfiles but not on PATH: the script gets its directory for this one run, after the daemon's tool path.
-        self.assertIn(str(self.s.tools), path.read_text())
-        self.assertIn(str(self.s.home / ".local/share/agent-alert/core"), path.read_text())
+        # agent-alert is deployed by dotfiles but not on PATH: the script gets its directory for this one run, after the daemon's tool path and before the caller's PATH.
+        caller = str(self.s.bin) + os.pathsep + os.environ["PATH"]
+        self.assertEqual(path.read_text(), "%s:%s:%s" % (self.s.tools, self.s.home / ".local/share/agent-alert/core", caller))
+        self.assertEqual(self.s.status("coordinator-work"), "READY (started)")
+
+    def test_setup_path_puts_the_owners_extra_directories_first_in_order(self):
+        path = self.s.base / "path"
+        self.work_setup_script('#!/usr/bin/env bash\nprintf "%%s" "$PATH" > "%s"\nexit 0\n' % path)
+        extra = self.s.base / "nvm"
+        write_exec(extra / "node", "#!/bin/sh\nexit 0\n")
+        self.s.run_work(True, INSTANCES_COORDINATOR_WORK_EXTRA_PATH=str(extra))
+        caller = str(self.s.bin) + os.pathsep + os.environ["PATH"]
+        self.assertEqual(path.read_text(), "%s:%s:%s:%s" % (extra, self.s.tools, self.s.home / ".local/share/agent-alert/core", caller))
+
+    def test_failed_seed_then_manual_setup_is_adopted_once_the_stale_marker_is_cleared(self):
+        # The documented fallback for a coordinator script without --config-only: run its handoff by hand, clear the marker, set the flag.
+        self.work_setup_script("#!/bin/sh\necho '[FAIL]  Unknown option --config-only.' >&2\nexit 1\n")
+        self.s.run_work(True)
+        marker = self.s.state_root / "coordinator-work.configuring"
+        self.assertTrue(marker.exists())
+        self.s.have_config(self.s.work_state)  # the manual setup finished
+        self.s.run_work(True)
+        self.assertIn("Unknown option", self.s.status("coordinator-work"))  # the marker still says a seed of ours did not finish
+        self.assertCalls([])
+        marker.unlink()
+        self.s.run_work(True)
         self.assertEqual(self.s.status("coordinator-work"), "READY (started)")
 
     def test_setup_script_exit_3_is_not_ready_with_its_reason_and_the_next_apply_retries(self):
