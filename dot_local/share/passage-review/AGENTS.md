@@ -54,7 +54,7 @@ is unnecessary.
 ```sh
 dot_local/bin/executable_passage-review --help
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s dot_local/share/passage-review -p 'test_*.py' -v
-python3 tests/herdr-overview/proof.py review
+python3 tests/recap-proof/proof.py review
 chezmoi apply --dry-run --verbose ~/.local/bin/passage-review ~/.local/share/passage-review
 ```
 
@@ -66,7 +66,7 @@ chezmoi execute-template '{{ .profile }}'
 chezmoi apply --dry-run --verbose ~/bin/passage-review ~/.local/bin/passage-review ~/.local/share/passage-review
 ```
 
-`python3 tests/herdr-overview/proof.py chezmoi-dry-run` checks profile-gated
+`python3 tests/recap-proof/proof.py chezmoi-dry-run` checks profile-gated
 mappings without a phone apply. If no Termux host is available, report that
 phone destination check as pending. Ask before applying to the phone or
 touching an owner's library.

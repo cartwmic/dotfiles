@@ -8,12 +8,12 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-PROOF = ROOT / "tests/herdr-overview/proof.py"
+PROOF = ROOT / "tests/recap-proof/proof.py"
 
 
 class ChezmoiSourceTests(unittest.TestCase):
     def exercise(self, fail_apply=False):
-        with tempfile.TemporaryDirectory(prefix="herdr-chezmoi-source-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="recap-proof-chezmoi-") as temporary:
             root = Path(temporary)
             mock = root / "bin"
             mock.mkdir()
@@ -40,7 +40,7 @@ elif 'execute-template' in args:
     print('auto_publish = false' if '--file' in args else profile)
 elif 'managed' in args:
     if profile == 'termux':
-        print('bin/herdr-overview-proof\nbin/passage-review')
+        print('bin/passage-review')
     else:
         print('.pi/agent/extensions/recap/index.ts')
 else:
