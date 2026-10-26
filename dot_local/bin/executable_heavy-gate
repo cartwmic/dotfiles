@@ -8,20 +8,29 @@
 #
 # Usage:
 #   heavy-gate                          check once; exit 0 if allowed, 1 if refused (the reasons on stderr)
-#   heavy-gate [--wait SECONDS] -- CMD  try until allowed, then run CMD while holding a slot, so at most two heavy
-#                                       jobs run at a time; exit with CMD's status
+#   heavy-gate [--wait SECONDS] -- CMD  try until allowed, then run CMD while holding a slot, so at most the slot limit
+#                                       (3 unless you change it) heavy jobs run at a time; exit with CMD's status
+#   heavy-gate slots                    print how many jobs may hold the gate, and where that number comes from
+#   heavy-gate slots N                  set it in the slots file (1 to 8)
 #   heavy-gate priorities               print the priorities file, the holders and the waiters with their priority
 #   heavy-gate priority PATTERN NUMBER  set (or update) one rule in the priorities file; a new rule goes first, so it wins
 #
 # The rules, all of which must hold for every start:
 #   load1 < 8    memory pressure level 1 (normal)    memory free >= 30%
 #   Swapouts flat over 60 seconds (the machine is not swapping right now)
-#   a free slot: at most HEAVY_GATE_SLOTS (default 2) heavy-gate jobs hold the gate at once
+#   a free slot: fewer heavy-gate jobs hold the gate than the slot limit (see Slots)
 #   no other job is in its 60-second check: a second start waits until the first has passed it (then it is running)
 #   no waiting job with a lower HEAVY_GATE_PRIORITY number (see below)
 # Swap free is not an admission rule (macOS grows swap as it needs it), but below 500 MB the gate refuses outright: a safety floor.
 # The load, pressure, memory and swap figures are read again after the 60 seconds, so the answer is about now, not a minute ago.
 # A figure that cannot be read as a number counts as a refusal.
+#
+# Slots: the limit on how many heavy-gate jobs hold the gate at once. It comes from, in order, HEAVY_GATE_SLOTS (a whole number in
+# the job's environment), then the first number in ${HEAVY_GATE_SLOTS_FILE:-~/.config/heavy-gate/slots} ('#' lines and blank lines
+# are skipped), then 3. The file is read on every try, so an edit reaches jobs that are already waiting (on this version). The limit
+# is 1 to 8: 8 only guards against a typo (a number above it counts as 8). A value that is 0 or not a whole number is ignored for 3, with a warning.
+# Lowering the limit stops nothing that runs: no new job starts until fewer than the new limit hold the gate. Only the slot limit is
+# configurable; the load, memory, pressure, Swapouts and swap rules above are fixed and apply to every start.
 #
 # Priority: a lower number is more important; a job with no rule is 5. The number comes from, in order, HEAVY_GATE_PRIORITY
 # (a whole number in the job's environment), then the first rule in the priorities file that matches, then 5. The file is
@@ -35,15 +44,15 @@
 # --wait SECONDS bounds when a new try may start (default 0: one try); none starts at or after the deadline. A try that
 # has begun takes about 60 seconds (the Swapouts watch) and is allowed to finish.
 # A slot is a symlink named for the pid of its holder, shared by every heavy-gate of one user. Slot 1 is the lock path
-# itself (/tmp/heavy-gate-<uid>.lock, the only gate older heavy-gate versions know); slot 2 is <lock>.2. A new job takes
-# slot 1 first. Old and new versions exclude each other on slot 1. An old version never looks at slot 2, the check
-# window or priorities, so an old holder plus a new job run together (that is the second slot), and an old job can
+# itself (/tmp/heavy-gate-<uid>.lock, the only gate older heavy-gate versions know); slot N is <lock>.N. A new job takes
+# slot 1 first. Old and new versions exclude each other on slot 1. An old version never looks at slot 2 or above, the
+# check window or priorities, so an old holder plus new jobs run together (new jobs take slots 2, 3, ...), and an old job can
 # start while a new one is in its check. A holder killed with SIGKILL leaves its slot until its pid is seen dead; a
 # recycled pid keeps the slot held until it exits.
 #
 # Exit status: 0 allowed (or CMD's own status), 1 refused, 75 still refused after --wait, 2 usage / unsupported system.
 #
-# Environment: HEAVY_GATE_SLOTS how many jobs may hold the gate (2), HEAVY_GATE_PRIORITY see above, HEAVY_GATE_PRIORITIES the file.
+# Environment: HEAVY_GATE_SLOTS the slot limit, HEAVY_GATE_SLOTS_FILE its file, HEAVY_GATE_PRIORITY see above, HEAVY_GATE_PRIORITIES the file.
 # For tests: HEAVY_GATE_SWAP_WINDOW seconds to watch Swapouts (60), HEAVY_GATE_POLL seconds between tries while waiting
 # (15), HEAVY_GATE_LOCK the slot 1 path (/tmp/heavy-gate-<uid>.lock; the other files are named from it).
 
@@ -54,7 +63,10 @@ SWAP_FLOOR_MB=500
 MEM_FREE_MIN_PCT=30
 SWAP_WINDOW=${HEAVY_GATE_SWAP_WINDOW:-60}
 POLL=${HEAVY_GATE_POLL:-15}
-SLOTS=${HEAVY_GATE_SLOTS:-2}
+DEFAULT_SLOTS=3
+MAX_SLOTS=8
+SLOTS_FILE=${HEAVY_GATE_SLOTS_FILE:-$HOME/.config/heavy-gate/slots}
+SLOTS_WARNED=
 DEFAULT_PRIORITY=5
 PRIORITIES=${HEAVY_GATE_PRIORITIES:-$HOME/.config/heavy-gate/priorities}
 LOCK=${HEAVY_GATE_LOCK:-/tmp/heavy-gate-$(id -u).lock}
@@ -150,34 +162,94 @@ take_admit() {
   esac
   return 1
 }
+# ---- slots ----
+# norm_slots VALUE WHERE: a usable limit in $sv (1 to MAX_SLOTS), or return 1 with the reason added to SLOTS_NOTE.
+norm_slots() {
+  case $1 in *[!0-9]*) SLOTS_NOTE="$SLOTS_NOTE${SLOTS_NOTE:+; }$2 is \"$1\", not a whole number"; return 1 ;; esac
+  sv=${1#"${1%%[!0]*}"}   # no leading zeros, so 007 is 7 (and never octal)
+  case $sv in
+    '') SLOTS_NOTE="$SLOTS_NOTE${SLOTS_NOTE:+; }$2 is $1, but the limit is at least 1"; return 1 ;;
+    ????*) sv=$MAX_SLOTS ;;
+  esac
+  if [ "$sv" -gt "$MAX_SLOTS" ]; then sv=$MAX_SLOTS; fi
+  if [ "$sv" != "${1#"${1%%[!0]*}"}" ]; then SLOTS_NOTE="$SLOTS_NOTE${SLOTS_NOTE:+; }$2 is $1, above the largest limit"; fi
+  return 0
+}
+# The slot limit now: SLOTS, where it came from in SLOTS_FROM, and what was ignored or capped in SLOTS_NOTE (empty if nothing).
+# Call it where the variables are wanted (not inside $(...)). A bad HEAVY_GATE_SLOTS also sets SLOTS_ENV_BAD. Read on every try.
+resolve_slots() {
+  SLOTS_NOTE=; SLOTS_ENV_BAD=0
+  if [ -n "${HEAVY_GATE_SLOTS:-}" ]; then
+    if norm_slots "$HEAVY_GATE_SLOTS" HEAVY_GATE_SLOTS; then SLOTS=$sv; SLOTS_FROM="HEAVY_GATE_SLOTS in the environment"; return 0; fi
+    SLOTS_ENV_BAD=1
+  fi
+  sraw=$(awk '/^[ \t]*(#|$)/ { next } { sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, ""); print; exit }' "$SLOTS_FILE" 2>/dev/null) || sraw=
+  if [ -n "$sraw" ] && norm_slots "$sraw" "the slots file"; then SLOTS=$sv; SLOTS_FROM="the file $SLOTS_FILE"; return 0; fi
+  SLOTS=$DEFAULT_SLOTS; SLOTS_FROM="the default"
+}
+# Say once (per change) that a configured value was ignored or capped, so a typo does not go unnoticed.
+warn_slots() {
+  if [ -n "$SLOTS_NOTE" ] && [ "$SLOTS_NOTE" != "$SLOTS_WARNED" ]; then log WARN "slots: $SLOTS_NOTE; using $SLOTS"; fi
+  SLOTS_WARNED=$SLOTS_NOTE
+}
+# held_slots: how many live jobs hold a slot (nheld), their pids (held) and the numbers of the slots nobody holds (open_slots).
+# It looks at every slot up to MAX_SLOTS, not just up to the limit: a job above a lowered limit is still running and still counts.
+held_slots() {
+  nheld=0; held=; open_slots=; k=1
+  while [ "$k" -le "$MAX_SLOTS" ]; do
+    h=$(holder "$(slot_path "$k")")
+    if alive "$h"; then nheld=$((nheld + 1)); held="$held $h"; else open_slots="$open_slots $k"; fi
+    k=$((k + 1))
+  done
+}
 # Slot 1 first, so an older heavy-gate (which knows only slot 1) is kept out as long as possible.
 take_slot() {
-  k=1; held=
-  while [ "$k" -le "$SLOTS" ]; do
+  held_slots
+  if [ "$nheld" -ge "$SLOTS" ]; then refuse "all $SLOTS heavy slot(s) are held (pid$held)"; return 1; fi
+  for k in $open_slots; do
     rc=0; claim "$(slot_path "$k")" || rc=$?
     case $rc in
       0) mine=$(slot_path "$k"); return 0 ;;
       2) return 1 ;;
     esac
-    held="$held ${h:-unknown}"; k=$((k + 1))
   done
+  held_slots   # an older heavy-gate took the free slot first
   refuse "all $SLOTS heavy slot(s) are held (pid$held)"
   return 1
 }
-# Check only (nothing is taken): is a slot free and nobody in a check?
+# Check only (nothing is taken): is the limit not reached and nobody in a check?
 gate_free() {
-  k=1; held=
-  while [ "$k" -le "$SLOTS" ]; do
-    h=$(holder "$(slot_path "$k")")
-    if ! alive "$h"; then
-      h=$(holder "$ADMIT")
-      if alive "$h"; then refuse "another heavy job is in its check (pid $h)"; return 1; fi
-      return 0
-    fi
-    held="$held $h"; k=$((k + 1))
-  done
-  refuse "all $SLOTS heavy slot(s) are held (pid$held)"
-  return 1
+  held_slots
+  if [ "$nheld" -ge "$SLOTS" ]; then refuse "all $SLOTS heavy slot(s) are held (pid$held)"; return 1; fi
+  h=$(holder "$ADMIT")
+  if alive "$h"; then refuse "another heavy job is in its check (pid $h)"; return 1; fi
+  return 0
+}
+# heavy-gate slots
+show_slots() {
+  resolve_slots; held_slots
+  printf 'slots: %s\nfrom: %s\n' "$SLOTS" "$SLOTS_FROM"
+  [ -z "$SLOTS_NOTE" ] || printf 'note: %s\n' "$SLOTS_NOTE"
+  printf 'order: HEAVY_GATE_SLOTS in the environment, then the first number in %s, then %s (limits 1 to %s)\n' "$SLOTS_FILE" "$DEFAULT_SLOTS" "$MAX_SLOTS"
+  printf 'holding the gate now: %s (lowering the limit never stops a running job)\n' "$nheld"
+}
+# heavy-gate slots N: put N in the slots file, in place of its first number (or at the end), keeping the comments.
+set_slots() {
+  case $1 in '' | *[!0-9]*) sv= ;; *) sv=${1#"${1%%[!0]*}"} ;; esac
+  case $sv in '' | ????*) sv= ;; *) [ "$sv" -le "$MAX_SLOTS" ] || sv= ;; esac
+  [ -n "$sv" ] || { log ERROR "N must be a whole number from 1 to $MAX_SLOTS"; exit 2; }
+  mkdir -p "$(dirname "$SLOTS_FILE")"
+  src=$SLOTS_FILE; [ -f "$src" ] || src=/dev/null
+  GG_NUM=$sv awk '
+    { L[++n] = $0 }
+    END {
+      for (i = 1; i <= n; i++) if (L[i] !~ /^[ \t]*(#|$)/) { L[i] = ENVIRON["GG_NUM"]; found = 1; break }
+      if (!found) L[++n] = ENVIRON["GG_NUM"]
+      for (i = 1; i <= n; i++) print L[i]
+    }' "$src" > "$SLOTS_FILE.new.$$"
+  mv "$SLOTS_FILE.new.$$" "$SLOTS_FILE"
+  printf 'slots %s (%s)\n' "$sv" "$SLOTS_FILE"
+  if [ -n "${HEAVY_GATE_SLOTS:-}" ]; then printf 'note: HEAVY_GATE_SLOTS=%s is set in this environment; a job started with it ignores the file\n' "$HEAVY_GATE_SLOTS"; fi
 }
 
 # ---- priorities ----
@@ -246,12 +318,14 @@ show_job() {
   printf '  %spid %s  priority %s  %s  %s\n' "$1" "$2" "${pr:-unknown (older heavy-gate)}" "$dir" "$cmd"
 }
 show_priorities() {
+  resolve_slots
+  printf 'slots: %s (from %s; heavy-gate slots)\n' "$SLOTS" "$SLOTS_FROM"
   printf 'priorities file: %s\n' "$PRIORITIES"
   if [ -f "$PRIORITIES" ]; then cat "$PRIORITIES"; else printf '(absent: every job is priority %s)\n' "$DEFAULT_PRIORITY"; fi
   printf 'no matching rule: priority %s. HEAVY_GATE_PRIORITY=N in a job'"'"'s environment overrides the file for that job.\n' "$DEFAULT_PRIORITY"
   echo "holders:"
   k=1; held=" "
-  while [ "$k" -le "$SLOTS" ]; do
+  while [ "$k" -le "$MAX_SLOTS" ]; do
     h=$(holder "$(slot_path "$k")")
     if alive "$h"; then show_job "slot $k  " "$h"; held="$held$h "; fi
     k=$((k + 1))
@@ -268,6 +342,7 @@ show_priorities() {
 
 # One try. With $1 = 1 a slot is held on success and everything taken is dropped on refusal.
 try_gate() {
+  resolve_slots; warn_slots
   if [ "$1" = 1 ]; then
     PRIORITY=$(resolve_priority); write_entry waiting
     defer_to_priority || return 1
@@ -284,6 +359,7 @@ try_gate() {
 case ${1:-} in
   priorities) [ $# -eq 1 ] || usage; show_priorities; exit 0 ;;
   priority) [ $# -eq 3 ] || usage; set_priority "$2" "$3"; exit 0 ;;
+  slots) case $# in 1) show_slots ;; 2) set_slots "$2" ;; *) usage ;; esac; exit 0 ;;
 esac
 WAIT=0
 while [ $# -gt 0 ]; do
@@ -296,7 +372,8 @@ while [ $# -gt 0 ]; do
 done
 case $WAIT in '' | *[!0-9]*) log ERROR "--wait takes a whole number of seconds"; exit 2 ;; esac
 if ! number "$SWAP_WINDOW" || ! number "$POLL"; then log ERROR "HEAVY_GATE_SWAP_WINDOW and HEAVY_GATE_POLL must be numbers"; exit 2; fi
-case $SLOTS in '' | *[!0-9]* | 0) log ERROR "HEAVY_GATE_SLOTS must be a whole number, 1 or more"; exit 2 ;; esac
+resolve_slots
+[ "$SLOTS_ENV_BAD" = 0 ] || { log ERROR "HEAVY_GATE_SLOTS must be a whole number, 1 or more"; exit 2; }
 case ${HEAVY_GATE_PRIORITY:-0} in '' | *[!0-9]* | ???????*) log ERROR "HEAVY_GATE_PRIORITY must be a whole number of at most 6 digits (lower is more important)"; exit 2 ;; esac
 [ "$(uname -s)" = Darwin ] || { log ERROR "macOS only"; exit 2; }
 if [ $# -eq 0 ]; then

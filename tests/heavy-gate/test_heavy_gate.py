@@ -53,9 +53,12 @@ class HeavyGate(unittest.TestCase):
         self.set(**QUIET)
         env = {k: v for k, v in os.environ.items() if not k.startswith("HEAVY_GATE_")}  # nothing from the real shell leaks in
         self.env = {**env, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE": str(self.fake), "HEAVY_GATE_LOCK": str(root / "heavy-gate.lock"),
-                    "HEAVY_GATE_SWAP_WINDOW": "1", "HEAVY_GATE_POLL": "1", "HEAVY_GATE_PRIORITIES": str(root / "priorities")}
+                    "HEAVY_GATE_SWAP_WINDOW": "1", "HEAVY_GATE_POLL": "1", "HEAVY_GATE_PRIORITIES": str(root / "priorities"),
+                    "HEAVY_GATE_SLOTS_FILE": str(root / "slots")}
         self.lock = root / "heavy-gate.lock"
         self.lock2 = root / "heavy-gate.lock.2"
+        self.lock3 = root / "heavy-gate.lock.3"
+        self.slots_file = root / "slots"
         self.waiters = root / "heavy-gate.lock.waiters"
         self.priorities = root / "priorities"
 
@@ -352,41 +355,47 @@ class HeavyGate(unittest.TestCase):
         except ProcessLookupError:
             return False
 
-    # --- two slots ---
-    def test_two_jobs_hold_the_gate_and_a_third_is_refused(self):
+    # --- three slots by default ---
+    def test_three_jobs_hold_the_gate_and_a_fourth_is_refused(self):
         a, release_a = self.hold("a")
         b, release_b = self.hold("b")
-        self.assertTrue(self.lock.is_symlink() and self.lock2.is_symlink(), "slot 1 is the lock path, slot 2 is <lock>.2")
-        third = self.gate("--", "true")
-        self.assertEqual(third.returncode, 75, third.stderr)
-        self.assertIn("all 2 heavy slot(s) are held", third.stderr)
+        c, release_c = self.hold("c")
+        self.assertTrue(self.lock.is_symlink() and self.lock2.is_symlink() and self.lock3.is_symlink(), "slots are <lock>, <lock>.2, <lock>.3")
+        fourth = self.gate("--", "true")
+        self.assertEqual(fourth.returncode, 75, fourth.stderr)
+        self.assertIn("all 3 heavy slot(s) are held", fourth.stderr)
         check = self.gate()
         self.assertEqual(check.returncode, 1)
-        self.assertIn("all 2 heavy slot(s) are held", check.stderr)
-        release_a.write_text("")
-        a.wait(timeout=20)
+        self.assertIn("all 3 heavy slot(s) are held", check.stderr)
+        self.end(a, release_a)
         self.assertEqual(self.gate("--", "true").returncode, 0, "a slot is free again once a holder is done")
+        self.end(b, release_b)
+        self.end(c, release_c)
+        for leftover in (self.lock, self.lock2, self.lock3, Path(str(self.lock) + ".admit"), Path(str(self.lock) + ".guard")):
+            self.assertFalse(leftover.is_symlink() or leftover.exists(), leftover)
+        self.assertEqual(list(self.waiters.glob("*")), [])
 
     def test_the_number_of_slots_is_HEAVY_GATE_SLOTS(self):
-        self.env["HEAVY_GATE_SLOTS"] = "3"
-        for name in "abc":
+        self.env["HEAVY_GATE_SLOTS"] = "2"
+        for name in "ab":
             self.hold(name)
+        self.assertFalse(self.lock3.is_symlink())
         self.assertEqual(self.gate("--", "true").returncode, 75)
         self.env["HEAVY_GATE_SLOTS"] = "0"
         self.assertEqual(self.gate().returncode, 2)
         self.env["HEAVY_GATE_SLOTS"] = "two"
         self.assertEqual(self.gate().returncode, 2)
 
-    def test_every_rule_still_refuses_a_second_start(self):
-        self.hold("a")
-        cases = [
-            ({"loadavg": "{ 12.40 9.00 5.00 }"}, "load1 12.40"),
-            ({"swapusage": "total = 8192.00M  used = 7893.00M  free = 299.00M  (encrypted)"}, "swap free 299 MB"),
-            ({"pressure": "2"}, "memory pressure level 2"),
-            ({"memory_pressure": "System-wide memory free percentage: 20%"}, "memory free 20%"),
-            ({"swapouts_step": "40"}, "Swapouts rose"),
-        ]
-        for figures, expected in cases:
+    RULE_CASES = [
+        ({"loadavg": "{ 12.40 9.00 5.00 }"}, "load1 12.40"),
+        ({"swapusage": "total = 8192.00M  used = 7893.00M  free = 299.00M  (encrypted)"}, "swap free 299 MB"),
+        ({"pressure": "2"}, "memory pressure level 2"),
+        ({"memory_pressure": "System-wide memory free percentage: 20%"}, "memory free 20%"),
+        ({"swapouts_step": "40"}, "Swapouts rose"),
+    ]
+
+    def assert_rules_refuse_a_start(self, slot):
+        for figures, expected in self.RULE_CASES:
             with self.subTest(expected):
                 self.set(**QUIET)
                 (self.fake / "swapouts_step").unlink(missing_ok=True)
@@ -395,39 +404,260 @@ class HeavyGate(unittest.TestCase):
                 result = self.gate("--", "touch", str(marker))
                 self.assertEqual(result.returncode, 75, result.stderr)
                 self.assertIn(expected, result.stderr)
-                self.assertFalse(marker.exists(), "a refused second start must not run")
-                self.assertFalse(self.lock2.is_symlink(), "a refused start gives its slot back")
+                self.assertFalse(marker.exists(), "a refused start must not run")
+                self.assertFalse(slot.is_symlink(), "a refused start gives its slot back")
 
-    def test_two_starts_do_not_share_a_check_window(self):
+    def test_every_rule_still_refuses_a_second_start(self):
+        self.hold("a")
+        self.assert_rules_refuse_a_start(self.lock2)
+
+    def test_a_third_start_is_refused_if_the_host_turns_bad_during_its_watch(self):
+        # the figures are read again after the Swapouts window for a start on slot 3 too
+        self.hold("a")
+        self.hold("b")
+        cases = [
+            ('echo 2 > "$FAKE/pressure"', "memory pressure level 2"),
+            ('echo "System-wide memory free percentage: 12%" > "$FAKE/memory_pressure"', "memory free 12%"),
+            ('echo "{ 30.00 20.00 10.00 }" > "$FAKE/loadavg"', "load1 30.00"),
+        ]
+        for hook, expected in cases:
+            with self.subTest(expected):
+                self.set(**QUIET)
+                (self.fake / "on_vm_stat").write_text(hook + "\n")
+                marker = Path(self.tmp.name) / "ran"
+                result = self.gate("--", "touch", str(marker))
+                self.assertEqual(result.returncode, 75, result.stderr)
+                self.assertIn(expected, result.stderr)
+                self.assertFalse(marker.exists())
+                self.assertFalse(self.lock3.is_symlink(), "a refused start gives its slot back")
+        (self.fake / "on_vm_stat").unlink()
+
+    # --- the slot limit, in a file ---
+    def end(self, job, release):
+        release.write_text("")
+        job.wait(timeout=20)
+
+    def slots_out(self, **extra):
+        result = self.gate("slots", **extra)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def test_the_slots_file_can_lower_the_limit_below_the_default(self):
+        self.slots_file.write_text("# how many\n\n2\n")
+        for name in "ab":
+            self.hold(name)
+        third = self.gate("--", "true")
+        self.assertEqual(third.returncode, 75, third.stderr)
+        self.assertIn("all 2 heavy slot(s) are held", third.stderr)
+        self.assertFalse(self.lock3.is_symlink())
+
+    def test_the_slots_file_can_raise_the_limit_above_the_default(self):
+        self.slots_file.write_text("4\n")
+        for name in "abcd":
+            self.hold(name)
+        self.assertTrue(Path(str(self.lock) + ".4").is_symlink(), "a fourth job holds slot 4")
+        fifth = self.gate("--", "true")
+        self.assertEqual(fifth.returncode, 75, fifth.stderr)
+        self.assertIn("all 4 heavy slot(s) are held", fifth.stderr)
+
+    def test_a_limit_of_one_in_the_file_allows_one_job(self):
+        self.slots_file.write_text("1\n")
+        self.hold("a")
+        second = self.gate("--", "true")
+        self.assertEqual(second.returncode, 75, second.stderr)
+        self.assertIn("all 1 heavy slot(s) are held", second.stderr)
+        self.assertFalse(self.lock2.is_symlink())
+
+    def test_every_rule_still_refuses_a_third_start(self):
+        self.hold("a")
+        self.hold("b")
+        self.assert_rules_refuse_a_start(self.lock3)
+
+    def test_the_environment_beats_the_file_and_the_file_beats_the_default(self):
+        self.assertIn("slots: 3\nfrom: the default", self.slots_out())
+        self.slots_file.write_text("4\n")
+        self.assertIn("slots: 4\nfrom: the file " + str(self.slots_file), self.slots_out())
+        out = self.slots_out(env={"HEAVY_GATE_SLOTS": "2"})
+        self.assertIn("slots: 2\nfrom: HEAVY_GATE_SLOTS in the environment", out)
+        # in action: a job with the variable is held to 1 although the file says 4
+        self.hold("a")
+        refused = self.gate("--", "true", env={"HEAVY_GATE_SLOTS": "1"})
+        self.assertEqual(refused.returncode, 75, refused.stderr)
+        self.assertIn("all 1 heavy slot(s) are held", refused.stderr)
+        self.assertEqual(self.gate("--", "true").returncode, 0, "without the variable the file's 4 applies")
+
+    def test_an_edit_reaches_a_waiting_job_without_a_restart(self):
+        self.slots_file.write_text("1\n")
+        self.hold("a")
+        marker = Path(self.tmp.name) / "ran"
+        waiter = self.start("--wait", "60", "--", "touch", str(marker))
+        self.addCleanup(lambda: (waiter.kill(), waiter.wait(), waiter.stdout.close(), waiter.stderr.close()))
+        self.assertTrue(self.wait_for(lambda: (self.waiters / str(waiter.pid)).exists()), "the job is waiting")
+        time.sleep(2.5)
+        self.assertIsNone(waiter.poll(), "one slot, held: still waiting")
+        self.assertFalse(marker.exists())
+        self.slots_file.write_text("2\n")
+        self.assertTrue(self.wait_for(marker.exists, 30), "the waiting job took the new second slot on its next try")
+        waiter.communicate(timeout=20)
+        self.assertEqual(waiter.returncode, 0)
+
+    def test_lowering_the_limit_stops_nothing_and_admits_nobody_until_the_holders_are_below_it(self):
+        self.slots_file.write_text("3\n")
+        a, release_a = self.hold("a")
+        b, release_b = self.hold("b")
+        c, release_c = self.hold("c")
+        self.slots_file.write_text("2\n")
+        time.sleep(0.5)
+        for job in (a, b, c):
+            self.assertIsNone(job.poll(), "a running job is not stopped")
+        third = self.gate("--", "true")
+        self.assertEqual(third.returncode, 75, third.stderr)
+        self.assertIn("all 2 heavy slot(s) are held", third.stderr)
+        self.end(a, release_a)
+        self.assertEqual(self.gate("--", "true").returncode, 75, "two still hold the gate, and the limit is 2")
+        self.end(b, release_b)
+        self.assertEqual(self.gate("--", "true").returncode, 0, "one holds it: below the limit")
+        # the last holder sits on slot 3, above a limit of 1: it still counts
+        self.slots_file.write_text("1\n")
+        self.assertTrue(self.lock3.is_symlink() and not self.lock.is_symlink() and not self.lock2.is_symlink())
+        again = self.gate("--", "true")
+        self.assertEqual(again.returncode, 75, again.stderr)
+        self.assertIn("all 1 heavy slot(s) are held", again.stderr)
+        self.assertEqual(self.gate().returncode, 1, "a plain check says the same")
+        self.end(c, release_c)
+        self.assertEqual(self.gate("--", "true").returncode, 0)
+        for leftover in (self.lock, self.lock2, self.lock3):
+            self.assertFalse(leftover.is_symlink(), leftover)
+        self.assertEqual(list(self.waiters.glob("*")), [])
+
+    def test_a_missing_empty_or_comment_only_file_means_three_without_a_warning(self):
+        for text in (None, "", "\n\n", "# 5\n# only comments\n", "   \n"):
+            with self.subTest(text):
+                self.slots_file.unlink(missing_ok=True)
+                if text is not None:
+                    self.slots_file.write_text(text)
+                out = self.slots_out()
+                self.assertIn("slots: 3\nfrom: the default", out)
+                self.assertNotIn("note:", out)
+                check = self.gate()
+                self.assertEqual(check.returncode, 0, check.stderr)
+                self.assertNotIn("slots:", check.stderr)
+
+    def test_a_bad_value_falls_back_to_three_and_says_so(self):
+        for text in ("abc", "0", "000", "-1", "2.5", "3 jobs", "0x3", "1;2"):
+            with self.subTest(text):
+                self.slots_file.write_text(f"# comment\n{text}\n")
+                out = self.slots_out()
+                self.assertIn("slots: 3\nfrom: the default", out)
+                self.assertIn("note: the slots file is", out)
+                check = self.gate()
+                self.assertEqual(check.returncode, 0, check.stderr)
+                self.assertIn("WARN: slots: ", check.stderr)
+                self.assertIn("using 3", check.stderr)
+        # and it is a real limit of three, not zero and not unlimited
+        self.slots_file.write_text("0\n")
+        for name in "abc":
+            self.hold(name)
+        fourth = self.gate("--", "true")
+        self.assertEqual(fourth.returncode, 75, fourth.stderr)
+        self.assertIn("all 3 heavy slot(s) are held", fourth.stderr)
+
+    def test_a_huge_value_counts_as_eight_and_leading_zeros_are_plain_decimal(self):
+        for text, shown in (("8", "8"), ("9", "8"), ("100", "8"), ("99999999999999999999999999", "8"), ("0000000000000009", "8"),
+                            ("007", "7"), ("08", "8"), ("0003", "3")):
+            with self.subTest(text):
+                self.slots_file.write_text(text + "\n")
+                self.assertIn(f"slots: {shown}\nfrom: the file", self.slots_out())
+        self.slots_file.write_text("100\n")
+        self.assertIn("note: the slots file is 100, above the largest limit", self.slots_out())
+        out = self.slots_out(env={"HEAVY_GATE_SLOTS": "99999999999999999999"})
+        self.assertIn("slots: 8\nfrom: HEAVY_GATE_SLOTS in the environment", out)
+        self.assertEqual(self.gate(env={"HEAVY_GATE_SLOTS": "9999"}).returncode, 0)
+
+    def test_the_first_number_in_the_file_is_the_one_used(self):
+        for text in ("# 5\n\n  3  \n7\n", "3\r\n7\r\n", "\t3\n"):
+            with self.subTest(text):
+                self.slots_file.write_text(text)
+                self.assertIn("slots: 3\n", self.slots_out())
+
+    def test_a_bad_environment_value_is_a_usage_error_but_slots_still_reports(self):
+        for value in ("0", "two", "-1", "1.5"):
+            with self.subTest(value):
+                self.assertEqual(self.gate(env={"HEAVY_GATE_SLOTS": value}).returncode, 2)
+                self.assertEqual(self.gate("--", "true", env={"HEAVY_GATE_SLOTS": value}).returncode, 2)
+                self.slots_file.write_text("3\n")
+                out = self.slots_out(env={"HEAVY_GATE_SLOTS": value})
+                self.assertIn("slots: 3\nfrom: the file", out)
+                self.assertIn("note: HEAVY_GATE_SLOTS is", out)
+
+    def test_the_slots_command_sets_the_number_and_keeps_the_comments(self):
+        nested = Path(self.tmp.name) / "config/heavy-gate/slots"
+        self.env["HEAVY_GATE_SLOTS_FILE"] = str(nested)
+        result = self.gate("slots", "3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"slots 3 ({nested})", result.stdout)
+        self.assertEqual(nested.read_text(), "3\n", "the file and its directory are created")
+        nested.write_text("# header\n# more\n\n2\n# tail\n7\n")
+        self.assertEqual(self.gate("slots", "4").returncode, 0)
+        self.assertEqual(nested.read_text(), "# header\n# more\n\n4\n# tail\n7\n", "the first number is replaced in place")
+        nested.write_text("# only comments\n")
+        self.assertEqual(self.gate("slots", "5").returncode, 0)
+        self.assertEqual(nested.read_text(), "# only comments\n5\n")
+        self.assertEqual(self.gate("slots", "007").returncode, 0)
+        self.assertEqual(nested.read_text(), "# only comments\n7\n")
+        self.assertIn("slots: 7\n", self.slots_out())
+        warned = self.gate("slots", "2", env={"HEAVY_GATE_SLOTS": "6"})
+        self.assertIn("HEAVY_GATE_SLOTS=6 is set", warned.stdout)
+
+    def test_the_slots_command_rejects_bad_arguments(self):
+        for args in (("0",), ("9",), ("abc",), ("-1",), ("",), ("2.5",), ("1000",), ("99999999999999999999",), ("1", "2")):
+            with self.subTest(args):
+                self.assertEqual(self.gate("slots", *args).returncode, 2)
+        self.assertFalse(self.slots_file.exists(), "a rejected command writes nothing")
+        self.slots_file.write_text("3\n")
+        self.assertEqual(self.gate("slots", "9").returncode, 2)
+        self.assertEqual(self.slots_file.read_text(), "3\n")
+
+    def test_slots_reports_the_holders_and_priorities_shows_the_limit(self):
+        self.slots_file.write_text("3\n")
+        self.hold("a")
+        self.assertIn("holding the gate now: 1", self.slots_out())
+        out = self.gate("priorities").stdout
+        self.assertIn("slots: 3 (from the file", out)
+
+    def test_starts_do_not_share_a_check_window(self):
         # vm_stat is read at the start and the end of each job's Swapouts watch; the log says which job read it
         self.env["HEAVY_GATE_SWAP_WINDOW"] = "2"
         (self.fake / "on_vm_stat").write_text('echo "$TAG" >> "$FAKE/vm_log"\n')
-        jobs = [self.start("--wait", "60", "--", "sleep", "1", env={"TAG": tag}) for tag in "AB"]
+        jobs = [self.start("--wait", "90", "--", "sleep", "1", env={"TAG": tag}) for tag in "ABC"]
         for job in jobs:
-            job.communicate(timeout=60)
+            job.communicate(timeout=90)
             self.assertEqual(job.returncode, 0)
         log = (self.fake / "vm_log").read_text().split()
-        self.assertEqual(len(log), 4, log)
-        self.assertEqual(log[0], log[1], f"the first start was alone in its window: {log}")
-        self.assertEqual(log[2], log[3], f"the second start waited for it: {log}")
-        self.assertNotEqual(log[0], log[2])
+        self.assertEqual(len(log), 6, log)
+        for first, second in ((0, 1), (2, 3), (4, 5)):
+            self.assertEqual(log[first], log[second], f"each start was alone in its window: {log}")
+        self.assertEqual(len(set(log)), 3, f"three starts, three separate windows: {log}")
 
     def test_nothing_is_left_behind(self):
         self.assertEqual(self.gate("--", "true").returncode, 0)
-        for leftover in (self.lock, self.lock2, Path(str(self.lock) + ".admit"), Path(str(self.lock) + ".guard")):
+        for leftover in (self.lock, self.lock2, self.lock3, Path(str(self.lock) + ".admit"), Path(str(self.lock) + ".guard")):
             self.assertFalse(leftover.is_symlink() or leftover.exists(), leftover)
         self.assertEqual(list(self.waiters.glob("*")) if self.waiters.exists() else [], [])
 
     # --- old and new gate side by side ---
-    def test_an_old_holder_and_a_new_job_run_together_on_the_two_slots(self):
+    def test_an_old_holder_and_new_jobs_run_together_on_the_other_slots(self):
         old, _ = self.hold("old", script=OLD_SCRIPT)
         self.assertEqual(self.lock.readlink().as_posix(), str(old.pid), "the old gate holds slot 1 as it always did")
         self.assertFalse(self.lock2.exists())
         new, _ = self.hold("new")
         self.assertEqual(self.lock2.readlink().as_posix(), str(new.pid), "the new gate takes slot 2")
+        newer, _ = self.hold("newer")
+        self.assertEqual(self.lock3.readlink().as_posix(), str(newer.pid), "and slot 3")
         self.assertIsNone(old.poll())
-        third = self.gate("--", "true")
-        self.assertEqual(third.returncode, 75, "two are running; a third new job is refused")
+        fourth = self.gate("--", "true")
+        self.assertEqual(fourth.returncode, 75, "three are running; a fourth new job is refused")
+        self.assertIn("all 3 heavy slot(s) are held", fourth.stderr)
         old_waiter = self.gate("--", "true", script=OLD_SCRIPT)
         self.assertEqual(old_waiter.returncode, 75, "an old job still sees slot 1 held")
         self.assertIn("another heavy job holds the gate", old_waiter.stderr)
@@ -476,7 +706,8 @@ class HeavyGate(unittest.TestCase):
         self.assertEqual(self.gate("--", "true").returncode, 0)
 
     def full_house_order(self, d_env=None, d_command="sh", before_release=None):
-        """Two jobs hold both slots; C (no priority) waits first, then D. A slot frees. Returns the order in which C and D ran."""
+        """Two jobs hold both slots (the limit is 2 here); C (no priority) waits first, then D. A slot frees. Returns the order in which C and D ran."""
+        self.env["HEAVY_GATE_SLOTS"] = "2"
         a, release_a = self.hold("a")
         self.hold("b")
         order = Path(self.tmp.name) / "order"
@@ -585,7 +816,7 @@ class HeavyGate(unittest.TestCase):
     def test_the_usage_text_covers_the_new_parts(self):
         result = self.gate("--help")
         self.assertEqual(result.returncode, 2)
-        for expected in ("HEAVY_GATE_SLOTS", "heavy-gate priorities", "heavy-gate priority PATTERN NUMBER", "HEAVY_GATE_PRIORITY", "slot 2"):
+        for expected in ("HEAVY_GATE_SLOTS", "HEAVY_GATE_SLOTS_FILE", "heavy-gate slots", "heavy-gate slots N", "Slots:", "heavy-gate priorities", "heavy-gate priority PATTERN NUMBER", "HEAVY_GATE_PRIORITY", "slot 2"):
             self.assertIn(expected, result.stderr)
         self.assertNotIn("set -eu", result.stderr)
 
