@@ -190,11 +190,13 @@ resolve_priority() {
   if [ -n "${HEAVY_GATE_PRIORITY:-}" ]; then printf '%s' "$HEAVY_GATE_PRIORITY"; return 0; fi
   r=$(GG_CWD=$PWD GG_CMD=$JOB awk "$AWK_RULES"'
     isrule($0) { t = rtext($0); if (t != "" && (index(ENVIRON["GG_CWD"], t) || index(ENVIRON["GG_CMD"], t))) { n = $1; print n; exit } }' "$PRIORITIES" 2>/dev/null) || r=
-  printf '%s' "${r:-$DEFAULT_PRIORITY}"
+  cap "${r:-$DEFAULT_PRIORITY}"
 }
+# Numbers are compared as shell integers: a file or entry number of 7 or more digits counts as 999999.
+cap() { case $1 in ???????*) printf '999999' ;; *) printf '%s' "$1" ;; esac; }
 # heavy-gate priority PATTERN NUMBER: update the rule with this exact PATTERN, or add one before the others so it wins.
 set_priority() {
-  case $2 in '' | *[!0-9]*) log ERROR "NUMBER must be a whole number"; exit 2 ;; esac
+  case $2 in '' | *[!0-9]* | ???????*) log ERROR "NUMBER must be a whole number of at most 6 digits"; exit 2 ;; esac
   pat=$(printf '%s' "$1" | awk '{ sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); print; exit }')
   [ -n "$pat" ] || { log ERROR "PATTERN is empty"; exit 2; }
   mkdir -p "$(dirname "$PRIORITIES")"
@@ -232,6 +234,7 @@ defer_to_priority() {
     { IFS= read -r n; IFS= read -r st; } 2>/dev/null < "$f" || true
     [ "$st" = waiting ] || continue
     case $n in '' | *[!0-9]*) continue ;; esac
+    n=$(cap "$n")
     if [ "$n" -lt "$PRIORITY" ]; then refuse "deferring to the waiting job pid $w, priority $n (this one is $PRIORITY)"; return 1; fi
   done
   return 0
@@ -294,7 +297,7 @@ done
 case $WAIT in '' | *[!0-9]*) log ERROR "--wait takes a whole number of seconds"; exit 2 ;; esac
 if ! number "$SWAP_WINDOW" || ! number "$POLL"; then log ERROR "HEAVY_GATE_SWAP_WINDOW and HEAVY_GATE_POLL must be numbers"; exit 2; fi
 case $SLOTS in '' | *[!0-9]* | 0) log ERROR "HEAVY_GATE_SLOTS must be a whole number, 1 or more"; exit 2 ;; esac
-case ${HEAVY_GATE_PRIORITY:-0} in '' | *[!0-9]*) log ERROR "HEAVY_GATE_PRIORITY must be a whole number (lower is more important)"; exit 2 ;; esac
+case ${HEAVY_GATE_PRIORITY:-0} in '' | *[!0-9]* | ???????*) log ERROR "HEAVY_GATE_PRIORITY must be a whole number of at most 6 digits (lower is more important)"; exit 2 ;; esac
 [ "$(uname -s)" = Darwin ] || { log ERROR "macOS only"; exit 2; }
 if [ $# -eq 0 ]; then
   if try_gate 0; then log INFO "allowed"; exit 0; fi
