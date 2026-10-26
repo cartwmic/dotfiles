@@ -1,6 +1,6 @@
 # Settlement abort
 
-> **Layout:** `patch.mjs` selects `patch.pi-1.1.mjs`, `patch.pi-1.2.mjs` or `patch.pi-1.3.mjs` by installed Pi version (see ../README.md, "Pi version selection"). This README and its proofs describe the Pi 1.2.x payload (`patch.pi-1.2.mjs`); `patch.pi-1.3.mjs` is a byte-identical copy whose anchors all match Pi 1.3.0; the 1.1.x payload is the unchanged pre-port revision.
+> **Layout:** `patch.mjs` selects `patch.pi-1.1.mjs` for Pi 1.1.x and `patch.pi-1.2.mjs` for Pi 1.2.0 and later (see ../README.md, "Pi version selection"). This README and its proofs describe `patch.pi-1.2.mjs`, whose anchors match Pi 1.2.0, 1.3.0 and 1.4.0 unchanged; the 1.1.x payload is the unchanged pre-port revision.
 
 
 Tested against **Pi 1.2.0** (revision 3; the earlier 0.99.2/1.0.0 results predate

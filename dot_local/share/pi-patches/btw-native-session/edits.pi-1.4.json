@@ -1,0 +1,680 @@
+[
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "eturn[this.color(\"\\u2500\".repeat(Math.max(1,width)))]}};var CountdownTimer=class{intervalId;remainingSeconds;tui;onTick;onExpire;constructor(timeoutMs,tui,onTick,onExpire){this.tui=tui,this.onTick=onTick,this.onExpire=onExpire,this.remainingSeconds=Math.ceil(timeoutMs/1e3),this.onTick(this.remainingSeconds),this.intervalId=setInterval(()=>{this.remainingSeconds--,this.onTick(this.remainingSeconds),this.tui?.requestRender(),this.remainingSeconds<=0&&(this.dispose(),this.onExpire())},1e3)}dispose(){this.intervalId&&(clearInterval(this.intervalId),this.intervalId=void 0)}};var ExtensionInputComponent=class extends Container{input;onSubmitCallback;onCancelCallback;titleText;baseTitle;countdown;_focused=!1;get focused(){return this._focused}set focused(value){this._focused=value,this.input.focused=value}constructor(title,_placeholder,onSubmit,onCancel,opts){super(),this.onSubmitCallback=onSubmit,this.onCancelCallback=onCancel,this.baseTitle=title,this.addChild(new DynamicBorder),this.addChild(new Spacer(1)),this.titleText=new Text(theme.fg(\"accent\",title),1,0),this.addChild(this.titleText),opts?.description&&(this.addChild(new Spacer(1)),this.addChild(new Text(theme.fg(\"text\",opts.description),1,0))),this.addChild(new Spacer(1)),opts?.timeout&&opts.timeout>0&&opts.tui&&(this.countdown=new CountdownTimer(opts.timeout,opts.tui,s=>this.titleText.setText(theme.fg(\"accent\",`${this.baseTitle} (${s}s)`)),()=>this.onCancelCallback())),this.input=new Input,opts?.initialValue&&this.input.setValue(opts.initialValue),this.addChild(this.input),this.addChild(new Spacer(1)),this.addChild(new Text(`${keyHint(\"tui.select.confirm\",\"submit\")}  ${keyHint(\"tui.select.cancel\",\"cancel\")}`,1,0)),this.addChild(new Spacer(1)),this.addChild(new DynamicBorder)}handleInput(keyData){let kb=getKeybindings();kb.matches(keyData,\"tui.select.confirm\")||keyData===`\n`?this.onSubmitCallback(this.input.getValue()):kb.matches(keyData,\"tui.select.cancel\")?this.onCancelCallback():this.input.handleInput(keyData)}dispose(){this.countdown?.dispose()}};var ExtensionSelectorComponent=class extends Container{options;selectedIndex=0;listContainer;onSelectCallback;onCancelCallback;titleText;baseTitle;countdown;onToggleToolsExpanded;constructor(title,options,onSelect,onCancel,opts){super(),this.options=options,this.onSelectCallback=onSelect,this.onCancelCallback=onCancel,this.onToggleToolsExpanded=opts?.onToggleToolsExpanded,this.baseTitle=title,this.addChild(new DynamicBorder),this.addChild(new Spacer(1)),this.titleText=new Text(theme.fg(\"accent\",theme.bold(title)),1,0),this.addChild(this.titleText),opts?.description&&(this.addChild(new Spacer(1)),this.addChild(new Text(theme.fg(\"text\",opts.description),1,0))),this.addChild(new Spacer(1)),opts?.timeout&&opts.timeout>0&&opts.tui&&(this.countdown=new CountdownTimer(opts.timeout,opts.tui,s=>this.titleText.setText(theme.fg(\"accent\",theme.bold(`${this.baseTitle} (${s}s)`))),()=>this.onCancelCallback())),this.listContainer=new Container,this.addChild(this.listContainer),this.addChild(new Spacer(1)),this.addChild(new Text(rawKeyHint(\"\\u2191\\u2193\",\"navigate\")+\"  \"+keyHint(\"tui.select.confirm\",\"select\")+\"  \"+keyHint(\"tui.select.cancel\",\"cancel\"),1,0)),this.addChild(new Spacer(1)),this.addChild(new DynamicBorder),this.updateList()}updateList(){this.listContainer.clear();for(let i=0;i<this.options.length;i++){let text=i===this.selectedIndex?theme.fg(\"accent\",\"\\u2192 \")+theme.fg(\"accent\",this.options[i]):`  ${theme.fg(\"text\",this.options[i])}`;this.listContainer.addChild(new Text(text,1,0))}}handleInput(keyData){let kb=getKeybindings();if(kb.matches(keyData,\"app.tools.expand\"))this.onToggleToolsExpanded?.();else if(kb.matches(keyData,\"tui.select.up\")||keyData===\"k\")this.selectedIndex=Math.max(0,this.selectedIndex-1),this.updateList();else if(kb.matches(keyData,\"tui.select.down\")||keyData===\"j\")this.selectedIndex=Math.min(this.options.length-1,this.selectedIndex+1),this.updateList();else if(kb.matches(keyData,\"tui.select.confirm\")||keyData===`\n`){let selected=this.options[this.selectedIndex];selected&&this.onSelectCallback(selected)}else kb.matches(keyData,\"tui.select.cancel\")&&this.onCancelCallback()}dispose(){this.countdown?.dispose()}};import{spawnSync}from\"node:child_proces",
+    "new": "eturn[this.color(\"\\u2500\".repeat(Math.max(1,width)))]}};var CountdownTimer=class {\n    intervalId;\n    remainingSeconds;\n    tui;\n    onTick;\n    onExpire;\n    paused = false;\n    disposed = false;\n    nextTickAt;\n    remainingDelay = 1000;\n    constructor(timeoutMs, tui, onTick, onExpire) {\n        this.tui = tui;\n        this.onTick = onTick;\n        this.onExpire = onExpire;\n        this.remainingSeconds = Math.ceil(timeoutMs / 1000);\n        this.onTick(this.remainingSeconds);\n        this.schedule(1000);\n    }\n    schedule(delay) {\n        if (this.disposed || this.paused) return;\n        this.nextTickAt = performance.now() + delay;\n        this.intervalId = setTimeout(() => {\n            this.intervalId = undefined;\n            if (this.disposed || this.paused) return;\n            this.remainingSeconds--;\n            // Set the next budget before callbacks, which may synchronously hide.\n            this.nextTickAt = performance.now() + 1000;\n            this.onTick(this.remainingSeconds);\n            this.tui?.requestRender();\n            if (this.disposed) return;\n            if (this.remainingSeconds <= 0) {\n                this.dispose();\n                this.onExpire();\n            } else if (!this.paused) {\n                this.schedule(Math.max(0, this.nextTickAt - performance.now()));\n            }\n        }, delay);\n    }\n    pause() {\n        if (this.disposed || this.paused) return;\n        this.paused = true;\n        this.remainingDelay = Math.max(0, this.nextTickAt - performance.now());\n        clearTimeout(this.intervalId);\n        this.intervalId = undefined;\n    }\n    resume() {\n        if (this.disposed || !this.paused) return;\n        this.paused = false;\n        this.schedule(this.remainingDelay);\n    }\n    dispose() {\n        if (this.disposed) return;\n        this.disposed = true;\n        clearTimeout(this.intervalId);\n        this.intervalId = undefined;\n    }\n};var ExtensionInputComponent=class extends Container{input;onSubmitCallback;onCancelCallback;titleText;baseTitle;countdown;_focused=!1;get focused(){return this._focused}set focused(value){this._focused=value,this.input.focused=value}constructor(title,_placeholder,onSubmit,onCancel,opts){super(),this.onSubmitCallback=onSubmit,this.onCancelCallback=onCancel,this.baseTitle=title,this.addChild(new DynamicBorder),this.addChild(new Spacer(1)),this.titleText=new Text(theme.fg(\"accent\",title),1,0),this.addChild(this.titleText),opts?.description&&(this.addChild(new Spacer(1)),this.addChild(new Text(theme.fg(\"text\",opts.description),1,0))),this.addChild(new Spacer(1)),opts?.timeout&&opts.timeout>0&&opts.tui&&(this.countdown=new CountdownTimer(opts.timeout,opts.tui,s=>this.titleText.setText(theme.fg(\"accent\",`${this.baseTitle} (${s}s)`)),()=>this.onCancelCallback())),this.input=new Input,opts?.initialValue&&this.input.setValue(opts.initialValue),this.addChild(this.input),this.addChild(new Spacer(1)),this.addChild(new Text(`${keyHint(\"tui.select.confirm\",\"submit\")}  ${keyHint(\"tui.select.cancel\",\"cancel\")}`,1,0)),this.addChild(new Spacer(1)),this.addChild(new DynamicBorder)}handleInput(keyData){let kb=getKeybindings();kb.matches(keyData,\"tui.select.confirm\")||keyData===`\n`?this.onSubmitCallback(this.input.getValue()):kb.matches(keyData,\"tui.select.cancel\")?this.onCancelCallback():this.input.handleInput(keyData)}setHostVisible(visible){visible?this.countdown?.resume():this.countdown?.pause()}dispose(){this.countdown?.dispose()}};var ExtensionSelectorComponent=class extends Container{options;selectedIndex=0;listContainer;onSelectCallback;onCancelCallback;titleText;baseTitle;countdown;onToggleToolsExpanded;constructor(title,options,onSelect,onCancel,opts){super(),this.options=options,this.onSelectCallback=onSelect,this.onCancelCallback=onCancel,this.onToggleToolsExpanded=opts?.onToggleToolsExpanded,this.baseTitle=title,this.addChild(new DynamicBorder),this.addChild(new Spacer(1)),this.titleText=new Text(theme.fg(\"accent\",theme.bold(title)),1,0),this.addChild(this.titleText),opts?.description&&(this.addChild(new Spacer(1)),this.addChild(new Text(theme.fg(\"text\",opts.description),1,0))),this.addChild(new Spacer(1)),opts?.timeout&&opts.timeout>0&&opts.tui&&(this.countdown=new CountdownTimer(opts.timeout,opts.tui,s=>this.titleText.setText(theme.fg(\"accent\",theme.bold(`${this.baseTitle} (${s}s)`))),()=>this.onCancelCallback())),this.listContainer=new Container,this.addChild(this.listContainer),this.addChild(new Spacer(1)),this.addChild(new Text(rawKeyHint(\"\\u2191\\u2193\",\"navigate\")+\"  \"+keyHint(\"tui.select.confirm\",\"select\")+\"  \"+keyHint(\"tui.select.cancel\",\"cancel\"),1,0)),this.addChild(new Spacer(1)),this.addChild(new DynamicBorder),this.updateList()}updateList(){this.listContainer.clear();for(let i=0;i<this.options.length;i++){let text=i===this.selectedIndex?theme.fg(\"accent\",\"\\u2192 \")+theme.fg(\"accent\",this.options[i]):`  ${theme.fg(\"text\",this.options[i])}`;this.listContainer.addChild(new Text(text,1,0))}}handleInput(keyData){let kb=getKeybindings();if(kb.matches(keyData,\"app.tools.expand\"))this.onToggleToolsExpanded?.();else if(kb.matches(keyData,\"tui.select.up\")||keyData===\"k\")this.selectedIndex=Math.max(0,this.selectedIndex-1),this.updateList();else if(kb.matches(keyData,\"tui.select.down\")||keyData===\"j\")this.selectedIndex=Math.min(this.options.length-1,this.selectedIndex+1),this.updateList();else if(kb.matches(keyData,\"tui.select.confirm\")||keyData===`\n`){let selected=this.options[this.selectedIndex];selected&&this.onSelectCallback(selected)}else kb.matches(keyData,\"tui.select.cancel\")&&this.onCancelCallback()}setHostVisible(visible){visible?this.countdown?.resume():this.countdown?.pause()}dispose(){this.countdown?.dispose()}};import{spawnSync}from\"node:child_proces"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "tPath==\"string\")}async function emitSessionShutdownEvent(extensionRunner,event){return extensionRunner.hasHandlers(\"session_shutdown\")?(await extensionRunner.emit(event),!0):!1}function snapshotEventHandlers(extensions,event){return extensions.map(ext2=>({ext:ext2,handlers:ext2.handlers.get(event)?.slice()??[]}))}function sameMessages(left,right){return left.length===right.length&&left.every((message,index3)=>message===right[index3])}function restoreSystemMessages(current,visible,returned){if(sameMessages(returned,visible))return current;let head=getCurrentSystemMessage(current);return head?[head,...returned]:returned}async function emitProjectTrustEvent(extensionsResult,event,ctx){let errors=[];for(let{ext:ext2,handlers}of snapshotEventHandlers(extensionsResult.extensions,\"project_trust\"))for(let handler of handlers)try{let handlerResult=await handler(event,ctx);if(handlerResult.trusted===\"undecided\")continue;return{result:handlerResult,errors}}catch(error){errors.push({extensionPath:ext2.path,event:event.type,error:error instanceof Error?error.message:String(error),stack:error instanceof Error?error.stack:void 0})}return{errors}}var noOpUIContext={select:async()=>{},confirm:async()=>!1,input:async()=>{},notify:()=>{},onTerminalInput:()=>()=>{},setStatus:()=>{},setWorkingMessage:()=>{},setWorkingVisible:()=>{},setWorkingIndicator:()=>{},setHiddenThinkingLabel:()=>{},setWidget:()=>{},setFooter:()=>{},setHeader:()=>{},setTitle:()=>{},custom:async()=>{},pasteToEditor:()=>{},setEditorText:()=>{},getEditorText:()=>\"\",editor:async()=>{},addAutocompleteProvider:()=>{},setEditorComponent:()=>{},getEditorComponent:()=>{},get theme(){return theme},getAllThemes:()=>[],getTheme:()=>{},setTheme:_theme=>({success:!1,error:\"UI not available\"}),getToolsExpanded:()=>!1,setToolsExpanded:()=>{}},ExtensionRunner=class{extensions;runtime;uiContext;mode=\"print\";cwd;sessionManager;modelRegistry;errorListeners=new Set;getModel=()=>{};getScopedModels=()=>[];isIdleFn=()=>!0;isProjectTrustedFn=()=>!0;getSignalFn=()=>{};waitForIdleFn=async()=>{};abortFn=()=>{};hasPendingMessagesFn=()=>!1;getContextUsageFn=()=>{};compactFn=()=>{};getSystemPromptFn=()=>\"\";getSystemPromptOptionsFn=()=>normalizeBuildSystemPromptOptions({cwd:this.cwd});executeToolFn;getCallableToolsFn=()=>[];reportedMcpServers=new Set;newSessionHandler=async()=>({cancelled:!1});forkHandler=async()=>({cancelled:!1});navigateTreeHandler=async()=>({cancelled:!1});switchSessionHandler=async()=>({cancelled:!1});reloadHandler=async()=>{};shutdownHandler=()=>{};shortcutDiagnostics=[];commandDiagnostics=[];staleMessage;uiPromptDepth=0;activeUIPrompt;constructor(extensions,runtime,cwd,sessionManager,modelRegistry){this.extensions=extensions,this.runtime=runtime,this.uiContext=noOpUIContext,this.cwd=cwd,this.sessionManager=sessionManager,this.modelRegistry=modelRegistry}bindCore(actions,contextActions,providerActions){this.runtime.sendMessage=actions.sendMessage,this.runtime.sendUserMessage=actions.sendUserMessage,this.runtime.appendEntry=actions.appendEntry,this.runtime.setSessionName=actions.setSessionName,this.runtime.getSessionName=actions.getSessionName,this.runtime.setLabel=actions.setLabel,this.runtime.getActiveTools=actions.getActiveTools,this.runtime.getAllTools=actions.getAllTools,this.runtime.getSettings=actions.getSettings,this.runtime.setActiveTools=actions.setActiveTools,this.runtime.refreshTools=actions.refreshTools,this.runtime.getCommands=actions.getCommands,this.runtime.setModel=actions.setModel,this.runtime.getThinkingLevel=actions.getThinkingLevel,this.runtime.setThinkingLevel=actions.setThinkingLevel,this.runtime.createContext=()=>this.createContext(),this.getModel=contextActions.getModel,this.getScopedModels=contextActions.getScopedModels,this.isIdleFn=contextActions.isIdle,this.isProjectTrustedFn=contextActions.isProjectTrusted,this.getSignalFn=contextActions.getSignal,this.abortFn=contextActions.abort,this.hasPendingMessagesFn=contextActions.hasPendingMessages,this.shutdownHandler=contextActions.shutdown,this.getContextUsageFn=contextActions.getContextUsage,this.compactFn=contextActions.compact,this.getSystemPromptFn=contextActions.getSystemPrompt,this.getSystemPromptOptionsFn=contextActions.getSystemPromptOptions??(()=>normalizeBuildSystemPromptOptions({cwd:this.cwd})),this.executeToolFn=contextActions.executeTool,this.getCallableToolsFn=contextActions.getCallableTools??(()=>[]),this.runtime.mcpServers.setChangeListener(()=>{this.emit({type:\"mcp_servers_change\",servers:this.runtime.mcpServers.list()}),this.reportUnhandledMcpServers()});for(let{name,config,extensionPath}of this.runtime.pendingProviderRegistrations)try{providerActions?.registerProvider?providerActions.registerProvider(name,config):this.modelRegistry.registerProvider(name,config)}catch(err){this.emitError({extensionPath,event:\"register_provider\",error:err instanceof Error?err.message:String(err),stack:err instanceof Error?err.stack:void 0})}this.runtime.pendingProviderRegistrations=[];for(let{provider,extensionPath}of this.runtime.pendingNativeProviderRegistrations)try{providerActions?.registerNativeProvider?providerActions.registerNativeProvider(provider):this.modelRegistry.registerProvider(provider)}catch(err){this.emitError({extensionPath,event:\"register_provider\",error:err instanceof Error?err.message:String(err),stack:err instanceof Error?err.stack:void 0})}this.runtime.pendingNativeProviderRegistrations=[];let registerVirtualModel=definition=>{providerActions?.registerVirtualModel?providerActions.registerVirtualModel(definition):this.modelRegistry.registerVirtualModel(definition)};for(let{definition,extensionPath}of this.runtime.pendingVirtualModelRegistrations)try{registerVirtualModel(definition)}catch(err){this.emitError({extensionPath,event:\"register_virtual_model\",error:err instanceof Error?err.message:String(err),stack:err instanceof Error?err.stack:void 0})}this.runtime.pendingVirtualModelRegistrations=[],this.runtime.registerProvider=(name,config)=>{if(providerActions?.registerProvider){providerActions.registerProvider(name,config);return}this.modelRegistry.registerProvider(name,config)},this.runtime.registerNativeProvider=provider=>{if(providerActions?.registerNativeProvider){providerActions.registerNativeProvider(provider);return}this.modelRegistry.registerProvider(provider)},this.runtime.unregisterProvider=name=>{if(providerActions?.unregisterProvider){providerActions.unregisterProvider(name);return}this.modelRegistry.unregisterProvider(name)},this.runtime.registerVirtualModel=registerVirtualModel,this.runtime.unregisterVirtualModel=(provider,id)=>{providerActions?.unregisterVirtualModel?providerActions.unregisterVirtualModel(provider,id):this.modelRegistry.unregisterVirtualModel(provider,id)}}bindCommandContext(actions){if(actions){this.waitForIdleFn=actions.waitForIdle,this.newSessionHandler=actions.newSession,this.forkHandler=actions.fork,this.navigateTreeHandler=actions.navigateTree,this.switchSessionHandler=actions.switchSession,this.reloadHandler=actions.reload;return}this.waitForIdleFn=async()=>{},this.newSessionHandler=async()=>({cancelled:!1}),this.forkHandler=async()=>({cancelled:!1}),this.navigateTreeHandler=async()=>({cancelled:!1}),this.switchSessionHandler=async()=>({cancelled:!1}),this.reloadHandler=async()=>{}}setUIContext(uiContext,mode=\"print\"){this.uiContext=uiContext?this.wrapUIPromptContext(uiContext):noOpUIContext,this.mode=mode}wrapUIPromptContext(ui){return{...ui,select:(title,options,opts)=>this.withUIPrompt(\"select\",title,()=>ui.select(title,options,opts)),confirm:(title,message,opts)=>this.withUIPrompt(\"confirm\",title,()=>ui.confirm(title,message,opts)),input:(title,placeholder,opts)=>this.withUIPrompt(\"input\",title,()=>ui.input(title,placeholder,opts)),editor:(title,prefill)=>this.withUIPrompt(\"editor\",title,()=>ui.editor(title,prefill)),custom:(factory,options)=>this.withUIPrompt(\"custom\",void 0,()=>ui.custom(factory,options))}}withUIPrompt(kind,title,run){this.uiPromptDepth++===0&&(this.activeUIPrompt={kind,title},this.emitUIPromptEvent({type:\"ui_prompt_start\",reason:\"ui_prompt\",kind,...title?{title}:{}}));let finish=()=>{if(--this.uiPromptDepth>0)return;this.uiPromptDepth=0;let prompt=this.activeUIPrompt??{kind,title};this.activeUIPrompt=void 0,this.emitUIPromptEvent({type:\"ui_prompt_end\",reason:\"ui_prompt\",kind:prompt.kind,...prompt.title?{title:prompt.title}:{}})};try{return run().finally(finish)}catch(err){throw finish(),err}}emitUIPromptEvent(event){queueMicrotask(()=>{this.emit(event)})}getUIContext(){return this.uiContext}hasUI(){return this.uiContext!==noOpUIContext}getExtensionPaths(){return this.extensions.map(e=>e.path)}getAllRegisteredTools(){let toolsByName=new Map;for(let ext2 of this.extensions)for(let tool of ext2.tools.values())toolsByName.has(tool.definition.name)||toolsByName.set(tool.definition.name,tool);return Array.from(toolsByName.values())}getToolDefinition(toolName){for(let ext2 of this.extensions){let tool=ext2.tools.get(toolName);if(tool)return tool.definition}}getFlags(){let allFlags=new Map;for(let ext2 of this.extensions)for(let[name,flag]of ext2.flags)allFlags.has(name)||allFlags.set(name,flag);return allFlags}setFlagValue(name,value){this.runtime.flagValues.set(name,value)}getFlagValues(){return new Map(this.runtime.flagValues)}getShortcuts(resolvedKeybindings){this.shortcutDiagnostics=[];let builtinKeybindings=buildBuiltinKeybindings(resolvedKeybindings),extensionShortcuts=new Map,addDiagnostic=(message,extensionPath)=>{this.shortcutDiagnostics.push({type:\"warning\",message,path:extensionPath}),this.hasUI()||console.warn(message)};for(let ext2 of this.extensions)for(let[key,shortcut]of ext2.shortcuts){let normalizedKey=key.toLowerCase(),builtInKeybinding=builtinKeybindings[normalizedKey];if(builtInKeybinding?.restrictOverride===!0){addDiagnostic(`Extension shortcut '${key}' from ${shortcut.extensionPath} conflicts with built-in shortcut. Skipping.`,shortcut.extensionPath);continue}builtInKeybinding?.restrictOverride===!1&&addDiagnostic(`Extension shortcut conflict: '${key}' is built-in shortcut for ${builtInKeybinding.keybinding} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,shortcut.extensionPath);let existingExtensionShortcut=extensionShortcuts.get(normalizedKey);existingExtensionShortcut&&addDiagnostic(`Extension shortcut conflict: '${key}' registered by both ${existingExtensionShortcut.extensionPath} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,shortcut.extensionPath),extensionShortcuts.set(normalizedKey,shortcut)}return extensionShortcuts}getShortcutDiagnostics(){return this.shortcutDiagnostics}invalidate(message=\"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().\"){this.staleMessage||(this.staleMessage=message,this.runtime.invalidate(message))}",
+    "new": "tPath==\"string\")}async function emitSessionShutdownEvent(extensionRunner,event){ extensionRunner.prepareUIShutdown();return extensionRunner.hasHandlers(\"session_shutdown\")?(await extensionRunner.emit(event),!0):!1}function snapshotEventHandlers(extensions,event){return extensions.map(ext2=>({ext:ext2,handlers:ext2.handlers.get(event)?.slice()??[]}))}function sameMessages(left,right){return left.length===right.length&&left.every((message,index3)=>message===right[index3])}function restoreSystemMessages(current,visible,returned){if(sameMessages(returned,visible))return current;let head=getCurrentSystemMessage(current);return head?[head,...returned]:returned}async function emitProjectTrustEvent(extensionsResult,event,ctx){let errors=[];for(let{ext:ext2,handlers}of snapshotEventHandlers(extensionsResult.extensions,\"project_trust\"))for(let handler of handlers)try{let handlerResult=await handler(event,ctx);if(handlerResult.trusted===\"undecided\")continue;return{result:handlerResult,errors}}catch(error){errors.push({extensionPath:ext2.path,event:event.type,error:error instanceof Error?error.message:String(error),stack:error instanceof Error?error.stack:void 0})}return{errors}}var noOpUIContext={select:async()=>{},confirm:async()=>!1,input:async()=>{},notify:()=>{},onTerminalInput:()=>()=>{},setStatus:()=>{},setWorkingMessage:()=>{},setWorkingVisible:()=>{},setWorkingIndicator:()=>{},setHiddenThinkingLabel:()=>{},setWidget:()=>{},setFooter:()=>{},setHeader:()=>{},setTitle:()=>{},custom:async()=>{},pasteToEditor:()=>{},setEditorText:()=>{},getEditorText:()=>\"\",editor:async()=>{},addAutocompleteProvider:()=>{},setEditorComponent:()=>{},getEditorComponent:()=>{},get theme(){return theme},getAllThemes:()=>[],getTheme:()=>{},setTheme:_theme=>({success:!1,error:\"UI not available\"}),getToolsExpanded:()=>!1,setToolsExpanded:()=>{}},ExtensionRunner=class{extensions;runtime;uiContext;mode=\"print\";cwd;sessionManager;modelRegistry;errorListeners=new Set;getModel=()=>{};getScopedModels=()=>[];isIdleFn=()=>!0;isProjectTrustedFn=()=>!0;getSignalFn=()=>{};waitForIdleFn=async()=>{};abortFn=()=>{};hasPendingMessagesFn=()=>!1;getContextUsageFn=()=>{};compactFn=()=>{};getSystemPromptFn=()=>\"\";getSystemPromptOptionsFn=()=>normalizeBuildSystemPromptOptions({cwd:this.cwd});executeToolFn;getCallableToolsFn=()=>[];reportedMcpServers=new Set;newSessionHandler=async()=>({cancelled:!1});forkHandler=async()=>({cancelled:!1});navigateTreeHandler=async()=>({cancelled:!1});switchSessionHandler=async()=>({cancelled:!1});reloadHandler=async()=>{};shutdownHandler=()=>{};shortcutDiagnostics=[];commandDiagnostics=[];staleMessage;uiPromptDepth=0;activeUIPrompt;constructor(extensions,runtime,cwd,sessionManager,modelRegistry){this.extensions=extensions,this.runtime=runtime,this.uiContext=noOpUIContext,this.cwd=cwd,this.sessionManager=sessionManager,this.modelRegistry=modelRegistry}bindCore(actions,contextActions,providerActions){this.runtime.sendMessage=actions.sendMessage,this.runtime.sendUserMessage=actions.sendUserMessage,this.runtime.appendEntry=actions.appendEntry,this.runtime.setSessionName=actions.setSessionName,this.runtime.getSessionName=actions.getSessionName,this.runtime.setLabel=actions.setLabel,this.runtime.getActiveTools=actions.getActiveTools,this.runtime.getAllTools=actions.getAllTools,this.runtime.getSettings=actions.getSettings,this.runtime.setActiveTools=actions.setActiveTools,this.runtime.refreshTools=actions.refreshTools,this.runtime.getCommands=actions.getCommands,this.runtime.setModel=actions.setModel,this.runtime.getThinkingLevel=actions.getThinkingLevel,this.runtime.setThinkingLevel=actions.setThinkingLevel,this.runtime.createContext=()=>this.createContext(),this.getModel=contextActions.getModel,this.getScopedModels=contextActions.getScopedModels,this.isIdleFn=contextActions.isIdle,this.isProjectTrustedFn=contextActions.isProjectTrusted,this.getSignalFn=contextActions.getSignal,this.abortFn=contextActions.abort,this.hasPendingMessagesFn=contextActions.hasPendingMessages,this.shutdownHandler=contextActions.shutdown,this.getContextUsageFn=contextActions.getContextUsage,this.compactFn=contextActions.compact,this.getSystemPromptFn=contextActions.getSystemPrompt,this.getSystemPromptOptionsFn=contextActions.getSystemPromptOptions??(()=>normalizeBuildSystemPromptOptions({cwd:this.cwd})),this.executeToolFn=contextActions.executeTool,this.getCallableToolsFn=contextActions.getCallableTools??(()=>[]),this.runtime.mcpServers.setChangeListener(()=>{this.emit({type:\"mcp_servers_change\",servers:this.runtime.mcpServers.list()}),this.reportUnhandledMcpServers()});for(let{name,config,extensionPath}of this.runtime.pendingProviderRegistrations)try{providerActions?.registerProvider?providerActions.registerProvider(name,config):this.modelRegistry.registerProvider(name,config)}catch(err){this.emitError({extensionPath,event:\"register_provider\",error:err instanceof Error?err.message:String(err),stack:err instanceof Error?err.stack:void 0})}this.runtime.pendingProviderRegistrations=[];for(let{provider,extensionPath}of this.runtime.pendingNativeProviderRegistrations)try{providerActions?.registerNativeProvider?providerActions.registerNativeProvider(provider):this.modelRegistry.registerProvider(provider)}catch(err){this.emitError({extensionPath,event:\"register_provider\",error:err instanceof Error?err.message:String(err),stack:err instanceof Error?err.stack:void 0})}this.runtime.pendingNativeProviderRegistrations=[];let registerVirtualModel=definition=>{providerActions?.registerVirtualModel?providerActions.registerVirtualModel(definition):this.modelRegistry.registerVirtualModel(definition)};for(let{definition,extensionPath}of this.runtime.pendingVirtualModelRegistrations)try{registerVirtualModel(definition)}catch(err){this.emitError({extensionPath,event:\"register_virtual_model\",error:err instanceof Error?err.message:String(err),stack:err instanceof Error?err.stack:void 0})}this.runtime.pendingVirtualModelRegistrations=[],this.runtime.registerProvider=(name,config)=>{if(providerActions?.registerProvider){providerActions.registerProvider(name,config);return}this.modelRegistry.registerProvider(name,config)},this.runtime.registerNativeProvider=provider=>{if(providerActions?.registerNativeProvider){providerActions.registerNativeProvider(provider);return}this.modelRegistry.registerProvider(provider)},this.runtime.unregisterProvider=name=>{if(providerActions?.unregisterProvider){providerActions.unregisterProvider(name);return}this.modelRegistry.unregisterProvider(name)},this.runtime.registerVirtualModel=registerVirtualModel,this.runtime.unregisterVirtualModel=(provider,id)=>{providerActions?.unregisterVirtualModel?providerActions.unregisterVirtualModel(provider,id):this.modelRegistry.unregisterVirtualModel(provider,id)}}bindCommandContext(actions){if(actions){this.waitForIdleFn=actions.waitForIdle,this.newSessionHandler=actions.newSession,this.forkHandler=actions.fork,this.navigateTreeHandler=actions.navigateTree,this.switchSessionHandler=actions.switchSession,this.reloadHandler=actions.reload;return}this.waitForIdleFn=async()=>{},this.newSessionHandler=async()=>({cancelled:!1}),this.forkHandler=async()=>({cancelled:!1}),this.navigateTreeHandler=async()=>({cancelled:!1}),this.switchSessionHandler=async()=>({cancelled:!1}),this.reloadHandler=async()=>{}}beforeUIShutdown;\nuiShutdownPrepared = false;\nhostUIShutdown = false;\nsetBeforeUIShutdown(callback) { this.beforeUIShutdown = callback; }\nprepareUIShutdown() {\n if (this.uiShutdownPrepared) return;\n this.uiShutdownPrepared = true;\n this.hostUIShutdown = this.beforeUIShutdown?.() === true;\n}\nassertUIActive() {\n this.assertActive();\n if (this.hostUIShutdown) throw new Error('Hosted UI runner has shut down');\n}\nsetUIContext(uiContext,mode=\"print\"){this.uiContext=uiContext?this.wrapUIPromptContext(uiContext):noOpUIContext,this.mode=mode}wrapUIPromptContext(ui){return{...ui, ...(ui.setHostVisibility ? {setHostVisibility: visible => {this.assertUIActive();ui.setHostVisibility(visible);}} : {}),select:(title,options,opts)=>this.withUIPrompt(\"select\",title,()=>ui.select(title,options,opts)),confirm:(title,message,opts)=>this.withUIPrompt(\"confirm\",title,()=>ui.confirm(title,message,opts)),input:(title,placeholder,opts)=>this.withUIPrompt(\"input\",title,()=>ui.input(title,placeholder,opts)),editor:(title,prefill)=>this.withUIPrompt(\"editor\",title,()=>ui.editor(title,prefill)),custom:(factory,options)=>this.withUIPrompt(\"custom\",void 0,()=>ui.custom(factory,options))}}withUIPrompt(kind,title,run){ this.assertUIActive();this.uiPromptDepth++===0&&(this.activeUIPrompt={kind,title},this.emitUIPromptEvent({type:\"ui_prompt_start\",reason:\"ui_prompt\",kind,...title?{title}:{}}));let finish=()=>{if(--this.uiPromptDepth>0)return;this.uiPromptDepth=0;let prompt=this.activeUIPrompt??{kind,title};this.activeUIPrompt=void 0,this.emitUIPromptEvent({type:\"ui_prompt_end\",reason:\"ui_prompt\",kind:prompt.kind,...prompt.title?{title:prompt.title}:{}})};try{return run().finally(finish)}catch(err){throw finish(),err}}emitUIPromptEvent(event){queueMicrotask(()=>{this.emit(event)})}getUIContext(){return this.uiContext}hasUI(){return this.uiContext!==noOpUIContext}getExtensionPaths(){return this.extensions.map(e=>e.path)}getAllRegisteredTools(){let toolsByName=new Map;for(let ext2 of this.extensions)for(let tool of ext2.tools.values())toolsByName.has(tool.definition.name)||toolsByName.set(tool.definition.name,tool);return Array.from(toolsByName.values())}getToolDefinition(toolName){for(let ext2 of this.extensions){let tool=ext2.tools.get(toolName);if(tool)return tool.definition}}getFlags(){let allFlags=new Map;for(let ext2 of this.extensions)for(let[name,flag]of ext2.flags)allFlags.has(name)||allFlags.set(name,flag);return allFlags}setFlagValue(name,value){this.runtime.flagValues.set(name,value)}getFlagValues(){return new Map(this.runtime.flagValues)}getShortcuts(resolvedKeybindings){this.shortcutDiagnostics=[];let builtinKeybindings=buildBuiltinKeybindings(resolvedKeybindings),extensionShortcuts=new Map,addDiagnostic=(message,extensionPath)=>{this.shortcutDiagnostics.push({type:\"warning\",message,path:extensionPath}),this.hasUI()||console.warn(message)};for(let ext2 of this.extensions)for(let[key,shortcut]of ext2.shortcuts){let normalizedKey=key.toLowerCase(),builtInKeybinding=builtinKeybindings[normalizedKey];if(builtInKeybinding?.restrictOverride===!0){addDiagnostic(`Extension shortcut '${key}' from ${shortcut.extensionPath} conflicts with built-in shortcut. Skipping.`,shortcut.extensionPath);continue}builtInKeybinding?.restrictOverride===!1&&addDiagnostic(`Extension shortcut conflict: '${key}' is built-in shortcut for ${builtInKeybinding.keybinding} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,shortcut.extensionPath);let existingExtensionShortcut=extensionShortcuts.get(normalizedKey);existingExtensionShortcut&&addDiagnostic(`Extension shortcut conflict: '${key}' registered by both ${existingExtensionShortcut.extensionPath} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,shortcut.extensionPath),extensionShortcuts.set(normalizedKey,shortcut)}return extensionShortcuts}getShortcutDiagnostics(){return this.shortcutDiagnostics}invalidate(message=\"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().\"){this.prepareUIShutdown();this.staleMessage||(this.staleMessage=message,this.runtime.invalidate(message))}"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "turn this.settingsManager.getCompactionEnabled()}async bindExtensions(bindings){bindings.uiContext!==void 0&&(this._extensionUIContext=bindings.uiContext),bindings.mode!==void 0&&(this._extensionMode=bindings.mode),bindings.commandContextActions!==void 0&&(this._extensionCommandContextActions=bindings.commandContextActions),bindings.abortHandler!==void 0&&(this._extensionAbortHandler=bindings.abortHandler),bindings.shutdownHandler!==void 0&&(this._extensionShutdownHandler=bindings.shutdownHandler),bindings.onError!==void 0&&(this._extensionErrorListener=bindings.onError),this._applyExtensionBindings(this._extensionRunner),await this._extensionRunner.emit(this._sessionStartEvent),this._extensionRunner.reportUnhandledMcpServers(),await this.extendResourcesFromExtensions(this._sessionStartEvent.reason===\"reload\"?\"reload\":\"startup\")}async extendResourcesFromExtensions(reason){if(!this._extensionRunner.hasHandlers(\"resources_discover\"))return;let{skillPaths,promptPaths,themePaths}=await this._extensionRunner.emitResourcesDiscover(this._cwd,reason);if(skillPaths.length===0&&promptPaths.length===0&&themePaths.length===0)return;let extensionPaths={skillPaths:this.buildExtensionResourcePaths(skillPaths),promptPaths:this.buildExtensionResourcePaths(promptPaths),themePaths:this.buildExtensionResourcePaths(themePaths)};this._resourceLoader.extendResources(extensionPaths),this._rebuildSystemPrompt(this.getActiveToolNames())}buildExtensionResourcePaths(entries){return entries.map(entry=>{let source=this.getExtensionSourceLabel(entry.extensionPath),baseDir=isSyntheticPath(entry.extensionPath)?void 0:dirname11(entry.extensionPath);return{path:entry.path,metadata:{source,scope:\"temporary\",origin:\"top-level\",baseDir}}})}getExtensionSourceLabel(extensionPath){return isSyntheticPath(extensionPath)?`extension:${extensionPath.replace(/[<>]/g,\"\")}`:`extension:${basename7(extensionPath).replace(/\\.(ts|js)$/,\"\")}`}_applyExtensionBindings(runner){runner.setUIContext(this._extensionUIContext,this._extensionMode),runner.bindCom",
+    "new": "turn this.settingsManager.getCompactionEnabled()}async bindExtensions(bindings){ if (bindings.beforeUIShutdown !== undefined) this._extensionBeforeUIShutdown = bindings.beforeUIShutdown;bindings.uiContext!==void 0&&(this._extensionUIContext=bindings.uiContext),bindings.mode!==void 0&&(this._extensionMode=bindings.mode),bindings.commandContextActions!==void 0&&(this._extensionCommandContextActions=bindings.commandContextActions),bindings.abortHandler!==void 0&&(this._extensionAbortHandler=bindings.abortHandler),bindings.shutdownHandler!==void 0&&(this._extensionShutdownHandler=bindings.shutdownHandler),bindings.onError!==void 0&&(this._extensionErrorListener=bindings.onError),this._applyExtensionBindings(this._extensionRunner),await this._extensionRunner.emit(this._sessionStartEvent),this._extensionRunner.reportUnhandledMcpServers(),await this.extendResourcesFromExtensions(this._sessionStartEvent.reason===\"reload\"?\"reload\":\"startup\")}async extendResourcesFromExtensions(reason){if(!this._extensionRunner.hasHandlers(\"resources_discover\"))return;let{skillPaths,promptPaths,themePaths}=await this._extensionRunner.emitResourcesDiscover(this._cwd,reason);if(skillPaths.length===0&&promptPaths.length===0&&themePaths.length===0)return;let extensionPaths={skillPaths:this.buildExtensionResourcePaths(skillPaths),promptPaths:this.buildExtensionResourcePaths(promptPaths),themePaths:this.buildExtensionResourcePaths(themePaths)};this._resourceLoader.extendResources(extensionPaths),this._rebuildSystemPrompt(this.getActiveToolNames())}buildExtensionResourcePaths(entries){return entries.map(entry=>{let source=this.getExtensionSourceLabel(entry.extensionPath),baseDir=isSyntheticPath(entry.extensionPath)?void 0:dirname11(entry.extensionPath);return{path:entry.path,metadata:{source,scope:\"temporary\",origin:\"top-level\",baseDir}}})}getExtensionSourceLabel(extensionPath){return isSyntheticPath(extensionPath)?`extension:${extensionPath.replace(/[<>]/g,\"\")}`:`extension:${basename7(extensionPath).replace(/\\.(ts|js)$/,\"\")}`}_applyExtensionBindings(runner){ runner.setBeforeUIShutdown(this._extensionBeforeUIShutdown);runner.setUIContext(this._extensionUIContext,this._extensionMode),runner.bindCom"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "))?.cancel===!0}:{cancelled:!1}}async teardownCurrent(reason,targetSessionFile){await this.session.abort(),await emitSessionShutdownEvent(this.session.extension",
+    "new": "))?.cancel===!0}:{cancelled:!1}}async teardownCurrent(reason,targetSessionFile){ this.session.extensionRunner.prepareUIShutdown();await this.session.abort(),await emitSessionShutdownEvent(this.session.extension"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "uiContext,mode:\"tui\",abortHandler:()=>{",
+    "new": "uiContext, beforeUIShutdown: () => this.cancelHostedUI(),mode:\"tui\",abortHandler:()=>{"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "let createContext=()=>({ui:this.createExtensionUIContext(),mode:\"tui\"",
+    "new": "let createContext=()=>({ui: extensionRunner.getUIContext(),mode:\"tui\""
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "resetExtensionUI(){if(this.extensionDialogs.length>0){",
+    "new": "resetExtensionUI(){ this.cancelHostedUI();if(this.extensionDialogs.length>0){"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "createExtensionUIContext(){return{select:(title,options,opts)=>this.showExtensionSelector(title,options,opts),confirm:(title,message,opts)=>this.showExtensionConfirm(title,message,opts),input:(title,placeholder,opts)=>this.showExtensionInput(title,placeholder,opts),",
+    "new": "hostUIEnabled = false;\nhostUIVisible = true;\nhostUIGeneration = 0;\nhostUITickets = new Set();\nsetHostVisibility(visible) {\n this.hostUIEnabled = true;\n if (this.hostUIVisible === visible) return;\n this.hostUIVisible = visible;\n for (const ticket of [...this.hostUITickets]) {\n  ticket.component?.setHostVisible?.(visible);\n  if (visible) ticket.admit();\n }\n}\ncancelHostedUI() {\n this.hostUIGeneration++;\n for (const ticket of [...this.hostUITickets]) ticket.cancel();\n return this.hostUIEnabled;\n}\nrunHostedUIPrompt(kind, opts, open) {\n if (!this.hostUIEnabled) return open(opts);\n const generation = this.hostUIGeneration;\n const operationSignal = this.session.agent.signal;\n const signals = [...new Set([opts?.signal, operationSignal].filter(Boolean))];\n return new Promise((resolve,reject) => {\n  const controller = new AbortController();\n  let settled = false, admitted = false;\n  const finish = (value,error) => {\n   if (settled) return;\n   settled = true;\n   this.hostUITickets.delete(ticket);\n   for (const signal of signals) signal.removeEventListener('abort',ticket.cancel);\n   error ? reject(error) : resolve(value);\n  };\n  const ticket = {generation, component:undefined, cancelNative:undefined,\n   cancel: () => {\n    if (settled) return;\n    controller.abort();\n    ticket.cancelNative?.();\n    finish(kind === 'confirm' ? false : undefined);\n   },\n   admit: () => {\n    if (settled || admitted || !this.hostUIVisible) return;\n    if (generation !== this.hostUIGeneration || signals.some(s=>s.aborted)) {ticket.cancel();return;}\n    admitted = true;\n    try {Promise.resolve(open({...opts,signal:controller.signal},ticket)).then(v=>finish(v),e=>finish(undefined,e));}\n    catch(e) {finish(undefined,e);}\n   }\n  };\n  this.hostUITickets.add(ticket);\n  for (const signal of signals) signal.addEventListener('abort',ticket.cancel,{once:true});\n  if (signals.some(s=>s.aborted)) ticket.cancel(); else ticket.admit();\n });\n}\ncreateExtensionUIContext(){return { setHostVisibility: (visible) => this.setHostVisibility(visible),select: (title, options, opts) => this.runHostedUIPrompt(\"select\", opts, (next,ticket) => this.showExtensionSelector(title, options, next, undefined, ticket)),confirm: (title, message, opts) => this.runHostedUIPrompt(\"confirm\", opts, (next,ticket) => this.showExtensionConfirm(title, message, next, ticket)),input: (title, placeholder, opts) => this.runHostedUIPrompt(\"input\", opts, (next,ticket) => this.showExtensionInput(title, placeholder, next, ticket)),"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "custom:(factory,options)=>this.showExtensionCustom(factory,options),",
+    "new": "custom: (factory, options) => this.runHostedUIPrompt(\"custom\", options, (next,ticket) => this.showExtensionCustom(factory, next, ticket)),"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "editor:(title,prefill)=>this.showExtensionEditor(title,prefill),",
+    "new": "editor: (title, prefill) => this.runHostedUIPrompt(\"editor\", undefined, (next,ticket) => this.showExtensionEditor(title, prefill, ticket)),"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "showExtensionSelector(title,options,opts,blocked={kind:\"question\",message:title}){",
+    "new": "showExtensionSelector(title,options,opts,blocked={kind:\"question\",message:title},ticket){"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "onToggleToolsExpanded:()=>this.toggleToolOutputExpansion()});this.pushExtensionDialog(selector,blocked)})}",
+    "new": "onToggleToolsExpanded:()=>this.toggleToolOutputExpansion()});(ticket && (ticket.component=selector,ticket.component.setHostVisible(this.hostUIVisible)), this.pushExtensionDialog(selector,blocked))})}"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "async showExtensionConfirm(title,message,opts){return await this.showExtensionSelector(`${title}\n${message}`,[\"Yes\",\"No\"],opts,{kind:\"permission\",message:title})===\"Yes\"}",
+    "new": "async showExtensionConfirm(title,message,opts,ticket){return await this.showExtensionSelector(`${title}\n${message}`,[\"Yes\",\"No\"],opts,{kind:\"permission\",message:title}, ticket)===\"Yes\"}"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "showExtensionInput(title,placeholder,opts){",
+    "new": "showExtensionInput(title,placeholder,opts,ticket){"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "{tui:this.ui,timeout:opts?.timeout});this.pushExtensionDialog(input2,{kind:\"question\",message:title})})}",
+    "new": "{tui:this.ui,timeout:opts?.timeout});(ticket && (ticket.component=input2,ticket.component.setHostVisible(this.hostUIVisible)), this.pushExtensionDialog(input2,{kind:\"question\",message:title}))})}"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "showExtensionEditor(title,prefill){return new Promise(resolve16=>{let finish=value=>{this.removeExtensionDialog(editor),resolve16(value)},editor=new ExtensionEditorComponent(this.ui,this.keybindings,title,prefill,value=>finish(value),()=>finish(void 0),void 0,this.settingsManager.getExternalEditorCommand());this.pushExtensionDialog(editor,{kind:\"question\",message:title})})}",
+    "new": "showExtensionEditor(title,prefill,ticket){return new Promise(resolve16=>{let finish=value=>{this.removeExtensionDialog(editor),resolve16(value)},editor=new ExtensionEditorComponent(this.ui,this.keybindings,title,prefill,value=>finish(value),()=>finish(void 0),void 0,this.settingsManager.getExternalEditorCommand());(ticket && (ticket.cancelNative = () => finish(undefined)), this.pushExtensionDialog(editor,{kind:\"question\",message:title}))})}"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "async showExtensionCustom(factory,options){",
+    "new": "async showExtensionCustom(factory,options,ticket){"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "Promise.resolve(factory(this.ui,theme,this.keybindings,close)).then(c=>{",
+    "new": "if (ticket) ticket.cancelNative = () => close(undefined); Promise.resolve(factory(this.ui,theme,this.keybindings,close)).then(c=>{if(closed||(ticket&&ticket.generation!==this.hostUIGeneration)){c?.dispose?.();return}"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/agent-session-runtime.js",
+    "old": ".cancel === true };\n    }\n    async teardownCurrent(reason, targetSessionFile) {\n        // Settle any active response first so the aborted turn (including tool",
+    "new": ".cancel === true };\n    }\n    async teardownCurrent(reason, targetSessionFile) { this.session.extensionRunner.prepareUIShutdown();\n        // Settle any active response first so the aborted turn (including tool"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/agent-session.d.ts",
+    "old": "}\nexport interface ExtensionBindings {\n    uiContext?: ExtensionUIContext;\n    mode?: ExtensionMode;\n",
+    "new": "}\nexport interface ExtensionBindings {\n    beforeUIShutdown?: () => boolean;\n    uiContext?: ExtensionUIContext;\n    mode?: ExtensionMode;\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/agent-session.js",
+    "old": "ttingsManager.getCompactionEnabled();\n    }\n    async bindExtensions(bindings) {\n        if (bindings.uiContext !== undefined) {\n            this._extensionUICo",
+    "new": "ttingsManager.getCompactionEnabled();\n    }\n    async bindExtensions(bindings) { if (bindings.beforeUIShutdown !== undefined) this._extensionBeforeUIShutdown = bindings.beforeUIShutdown;\n        if (bindings.uiContext !== undefined) {\n            this._extensionUICo"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/agent-session.js",
+    "old": "        return `extension:${name}`;\n    }\n    _applyExtensionBindings(runner) {\n        runner.setUIContext(this._extensionUIContext, this._extensionMode);\n   ",
+    "new": "        return `extension:${name}`;\n    }\n    _applyExtensionBindings(runner) { runner.setBeforeUIShutdown(this._extensionBeforeUIShutdown);\n        runner.setUIContext(this._extensionUIContext, this._extensionMode);\n   "
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/runner.d.ts",
+    "old": "\n    bindCommandContext(actions?: ExtensionCommandContextActions): void;\n    setUIContext(uiContext?: ExtensionUIContext, mode?: ExtensionMode): void;\n    priva",
+    "new": "\n    bindCommandContext(actions?: ExtensionCommandContextActions): void;\n    setBeforeUIShutdown(callback?: () => boolean): void;\n    prepareUIShutdown(): void;\n    setUIContext(uiContext?: ExtensionUIContext, mode?: ExtensionMode): void;\n    priva"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/runner.js",
+    "old": "rs.\n */\nexport async function emitSessionShutdownEvent(extensionRunner, event) {\n    if (extensionRunner.hasHandlers(\"session_shutdown\")) {\n        await extens",
+    "new": "rs.\n */\nexport async function emitSessionShutdownEvent(extensionRunner, event) { extensionRunner.prepareUIShutdown();\n    if (extensionRunner.hasHandlers(\"session_shutdown\")) {\n        await extens"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/runner.js",
+    "old": "        this.reloadHandler = async () => { };\n    }\n    setUIContext(uiContext, mode = \"print\") {\n        this.uiContext = uiContext ? t",
+    "new": "        this.reloadHandler = async () => { };\n    }\n    beforeUIShutdown;\nuiShutdownPrepared = false;\nhostUIShutdown = false;\nsetBeforeUIShutdown(callback) { this.beforeUIShutdown = callback; }\nprepareUIShutdown() {\n if (this.uiShutdownPrepared) return;\n this.uiShutdownPrepared = true;\n this.hostUIShutdown = this.beforeUIShutdown?.() === true;\n}\nassertUIActive() {\n this.assertActive();\n if (this.hostUIShutdown) throw new Error('Hosted UI runner has shut down');\n}\nsetUIContext(uiContext, mode = \"print\") {\n        this.uiContext = uiContext ? t"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/runner.js",
+    "old": "    wrapUIPromptContext(ui) {\n        return {\n            ...ui,\n            select: (title, options, opts) => this.withUIPrompt(\"select\", title",
+    "new": "    wrapUIPromptContext(ui) {\n        return {\n            ...ui, ...(ui.setHostVisibility ? {setHostVisibility: visible => {this.assertUIActive();ui.setHostVisibility(visible);}} : {}),\n            select: (title, options, opts) => this.withUIPrompt(\"select\", title"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/runner.js",
+    "old": "        };\n    }\n    withUIPrompt(kind, title, run) {\n        const outerPrompt = this.uiPromptDepth++ === 0;\n        if (outerPrompt",
+    "new": "        };\n    }\n    withUIPrompt(kind, title, run) { this.assertUIActive();\n        const outerPrompt = this.uiPromptDepth++ === 0;\n        if (outerPrompt"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/runner.js",
+    "old": "to withSession. For reload, do not use the old ctx after await ctx.reload().\") {\n        if (!this.staleMessage) {\n            this.staleMessage = message;\n",
+    "new": "to withSession. For reload, do not use the old ctx after await ctx.reload().\") {this.prepareUIShutdown();\n        if (!this.staleMessage) {\n            this.staleMessage = message;\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/types.d.ts",
+    "old": " */\nexport interface ExtensionUIContext {\n    /** Show a selector and return the user's choice. */\n    select(title: string, o",
+    "new": " */\nexport interface ExtensionUIContext {\n    setHostVisibility?: (visible: boolean) => void;\n    /** Show a selector and return the user's choice. */\n    select(title: string, o"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/types.d.ts",
+    "old": "        dispose?(): void;\n    }>, options?: {\n        overlay?: boolean;\n        /** Overlay positioning/sizing options. Can be static",
+    "new": "        dispose?(): void;\n    }>, options?: {\n        signal?: AbortSignal;\n        overlay?: boolean;\n        /** Overlay positioning/sizing options. Can be static"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/types.d.ts",
+    "old": "bility. */\n        onHandle?: (handle: OverlayHandle) => void;\n    }): Promise<T>;\n    /** Paste text into the editor, triggering paste handling (collapse for l",
+    "new": "bility. */\n        onHandle?: (handle: OverlayHandle) => void;\n    }): Promise<T | undefined>;\n    /** Paste text into the editor, triggering paste handling (collapse for l"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/components/countdown-timer.d.ts",
+    "old": " TUI | undefined, onTick: (seconds: number) => void, onExpire: () => void);\n    dispose(): void;\n}\n",
+    "new": " TUI | undefined, onTick: (seconds: number) => void, onExpire: () => void);\n    pause(): void;\n    resume(): void;\n    private schedule;\n    private paused;\n    private disposed;\n    private nextTickAt;\n    private remainingDelay;\n    dispose(): void;\n}\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/components/countdown-timer.js",
+    "old": "/**\n * Reusable countdown timer for dialog components.\n */\nexport class CountdownTimer {\n    intervalId;\n",
+    "new": "/** Reusable native dialog countdown; only hosted dialog owners pause it. */\nexport class CountdownTimer {\n    intervalId;\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/components/countdown-timer.js",
+    "old": "    onTick;\n    onExpire;\n    constructor(timeoutMs, tui, onTick, onExpire) {\n        this.tui = tui;\n",
+    "new": "    onTick;\n    onExpire;\n    paused = false;\n    disposed = false;\n    nextTickAt;\n    remainingDelay = 1000;\n    constructor(timeoutMs, tui, onTick, onExpire) {\n        this.tui = tui;\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/components/countdown-timer.js",
+    "old": "eil(timeoutMs / 1000);\n        this.onTick(this.remainingSeconds);\n        this.intervalId = setInterval(() => {\n            this.remainingSeconds--;\n            this.onTick(this.remainingSeconds);\n            this.tui?.requestRender();\n            if (this.remainingSeconds <= 0) {\n                this.dispose();\n                this.onExpire();\n            }\n        }, 1000);\n    }\n    dispose() {\n        if (this.intervalId) {\n            clearInterval(this.intervalId);\n            this.intervalId = undefined;\n        }\n    }\n}\n//# sourceMappingURL=countdown-timer.js.map",
+    "new": "eil(timeoutMs / 1000);\n        this.onTick(this.remainingSeconds);\n        this.schedule(1000);\n    }\n    schedule(delay) {\n        if (this.disposed || this.paused) return;\n        this.nextTickAt = performance.now() + delay;\n        this.intervalId = setTimeout(() => {\n            this.intervalId = undefined;\n            if (this.disposed || this.paused) return;\n            this.remainingSeconds--;\n            // Set the next budget before callbacks, which may synchronously hide.\n            this.nextTickAt = performance.now() + 1000;\n            this.onTick(this.remainingSeconds);\n            this.tui?.requestRender();\n            if (this.disposed) return;\n            if (this.remainingSeconds <= 0) {\n                this.dispose();\n                this.onExpire();\n            } else if (!this.paused) {\n                this.schedule(Math.max(0, this.nextTickAt - performance.now()));\n            }\n        }, delay);\n    }\n    pause() {\n        if (this.disposed || this.paused) return;\n        this.paused = true;\n        this.remainingDelay = Math.max(0, this.nextTickAt - performance.now());\n        clearTimeout(this.intervalId);\n        this.intervalId = undefined;\n    }\n    resume() {\n        if (this.disposed || !this.paused) return;\n        this.paused = false;\n        this.schedule(this.remainingDelay);\n    }\n    dispose() {\n        if (this.disposed) return;\n        this.disposed = true;\n        clearTimeout(this.intervalId);\n        this.intervalId = undefined;\n    }\n}\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/components/extension-input.d.ts",
+    "old": "oid, opts?: ExtensionInputOptions);\n    handleInput(keyData: string): void;\n    dispose(): void;\n}\n",
+    "new": "oid, opts?: ExtensionInputOptions);\n    handleInput(keyData: string): void;\n    setHostVisible(visible: boolean): void;\n    dispose(): void;\n}\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/components/extension-input.js",
+    "old": "        }\n    }\n    dispose() {\n        this.countdown?.dispose();\n",
+    "new": "        }\n    }\n    setHostVisible(visible) {\n        if (visible) this.countdown?.resume();\n        else this.countdown?.pause();\n    }\n    dispose() {\n        this.countdown?.dispose();\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/components/extension-selector.d.ts",
+    "old": "    private updateList;\n    handleInput(keyData: string): void;\n    dispose(): void;\n}\n",
+    "new": "    private updateList;\n    handleInput(keyData: string): void;\n    setHostVisible(visible: boolean): void;\n    dispose(): void;\n}\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/components/extension-selector.js",
+    "old": "        }\n    }\n    dispose() {\n        this.countdown?.dispose();\n",
+    "new": "        }\n    }\n    setHostVisible(visible) {\n        if (visible) this.countdown?.resume();\n        else this.countdown?.pause();\n    }\n    dispose() {\n        this.countdown?.dispose();\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.d.ts",
+    "old": "}\nexport declare class InteractiveMode {\n    private runtimeHost;\n    private renderer;\n",
+    "new": "}\nexport declare class InteractiveMode {\n    setHostVisibility(visible: boolean): void;\n    private runtimeHost;\n    private renderer;\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "nUIContext();\n        await this.session.bindExtensions({\n            uiContext,\n            mode: \"tui\",\n            abortHandler: () => {\n",
+    "new": "nUIContext();\n        await this.session.bindExtensions({\n            uiContext, beforeUIShutdown: () => this.cancelHostedUI(),\n            mode: \"tui\",\n            abortHandler: () => {\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "xt for shortcut handlers\n        const createContext = () => ({\n            ui: this.createExtensionUIContext(),\n            mode: \"tui\",\n            hasUI: true,\n",
+    "new": "xt for shortcut handlers\n        const createContext = () => ({\n            ui: extensionRunner.getUIContext(),\n            mode: \"tui\",\n            hasUI: true,\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "this.renderWidgets();\n    }\n    resetExtensionUI() {\n        if (this.extensionDialogs.length > 0) {",
+    "new": "this.renderWidgets();\n    }\n    resetExtensionUI() { this.cancelHostedUI();\n        if (this.extensionDialogs.length > 0) {"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "        };\n    }\n    createExtensionUIContext() {\n        return {\n            select: (title, options, opts) => this.showExtensionSelector(title, options, opts),\n            confirm: (title, message, opts) => this.showExtensionConfirm(title, message, opts),\n            input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),\n            notify: (message, type) => this.showExtensionNotify(message, type",
+    "new": "        };\n    }\n    hostUIEnabled = false;\nhostUIVisible = true;\nhostUIGeneration = 0;\nhostUITickets = new Set();\nsetHostVisibility(visible) {\n this.hostUIEnabled = true;\n if (this.hostUIVisible === visible) return;\n this.hostUIVisible = visible;\n for (const ticket of [...this.hostUITickets]) {\n  ticket.component?.setHostVisible?.(visible);\n  if (visible) ticket.admit();\n }\n}\ncancelHostedUI() {\n this.hostUIGeneration++;\n for (const ticket of [...this.hostUITickets]) ticket.cancel();\n return this.hostUIEnabled;\n}\nrunHostedUIPrompt(kind, opts, open) {\n if (!this.hostUIEnabled) return open(opts);\n const generation = this.hostUIGeneration;\n const operationSignal = this.session.agent.signal;\n const signals = [...new Set([opts?.signal, operationSignal].filter(Boolean))];\n return new Promise((resolve,reject) => {\n  const controller = new AbortController();\n  let settled = false, admitted = false;\n  const finish = (value,error) => {\n   if (settled) return;\n   settled = true;\n   this.hostUITickets.delete(ticket);\n   for (const signal of signals) signal.removeEventListener('abort',ticket.cancel);\n   error ? reject(error) : resolve(value);\n  };\n  const ticket = {generation, component:undefined, cancelNative:undefined,\n   cancel: () => {\n    if (settled) return;\n    controller.abort();\n    ticket.cancelNative?.();\n    finish(kind === 'confirm' ? false : undefined);\n   },\n   admit: () => {\n    if (settled || admitted || !this.hostUIVisible) return;\n    if (generation !== this.hostUIGeneration || signals.some(s=>s.aborted)) {ticket.cancel();return;}\n    admitted = true;\n    try {Promise.resolve(open({...opts,signal:controller.signal},ticket)).then(v=>finish(v),e=>finish(undefined,e));}\n    catch(e) {finish(undefined,e);}\n   }\n  };\n  this.hostUITickets.add(ticket);\n  for (const signal of signals) signal.addEventListener('abort',ticket.cancel,{once:true});\n  if (signals.some(s=>s.aborted)) ticket.cancel(); else ticket.admit();\n });\n}\ncreateExtensionUIContext() {\n        return { setHostVisibility: (visible) => this.setHostVisibility(visible),\n            select: (title, options, opts) => this.runHostedUIPrompt(\"select\", opts, (next,ticket) => this.showExtensionSelector(title, options, next, undefined, ticket)),\n            confirm: (title, message, opts) => this.runHostedUIPrompt(\"confirm\", opts, (next,ticket) => this.showExtensionConfirm(title, message, next, ticket)),\n            input: (title, placeholder, opts) => this.runHostedUIPrompt(\"input\", opts, (next,ticket) => this.showExtensionInput(title, placeholder, next, ticket)),\n            notify: (message, type) => this.showExtensionNotify(message, type"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "his.ui.terminal.setTitle(title),\n            custom: (factory, options) => this.showExtensionCustom(factory, options),\n            pasteToEditor: (text) => this.editor.handleInput(`\\x1b[200~${text}\\x1b[201~`),\n            setEditorText: (text) => this.editor.setText(text),\n            getEditorText: () => this.editor.getExpandedText?.() ?? this.editor.getText(),\n            editor: (title, prefill) => this.showExtensionEditor(title, prefill),\n            addAutocompleteProvider: (factory) => {\n                this.auto",
+    "new": "his.ui.terminal.setTitle(title),\n            custom: (factory, options) => this.runHostedUIPrompt(\"custom\", options, (next,ticket) => this.showExtensionCustom(factory, next, ticket)),\n            pasteToEditor: (text) => this.editor.handleInput(`\\x1b[200~${text}\\x1b[201~`),\n            setEditorText: (text) => this.editor.setText(text),\n            getEditorText: () => this.editor.getExpandedText?.() ?? this.editor.getText(),\n            editor: (title, prefill) => this.runHostedUIPrompt(\"editor\", undefined, (next,ticket) => this.showExtensionEditor(title, prefill, ticket)),\n            addAutocompleteProvider: (factory) => {\n                this.auto"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "ionSelector(title, options, opts, blocked = { kind: \"question\", message: title }) {\n        return new Promise((resolve) => {\n            if (opts?.signal?.abor",
+    "new": "ionSelector(title, options, opts, blocked = { kind: \"question\", message: title }, ticket) {\n        return new Promise((resolve) => {\n            if (opts?.signal?.abor"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "onToggleToolsExpanded: () => this.toggleToolOutputExpansion() });\n            this.pushExtensionDialog(selector, blocked);",
+    "new": "onToggleToolsExpanded: () => this.toggleToolOutputExpansion() });\n            (ticket && (ticket.component=selector,ticket.component.setHostVisible(this.hostUIVisible)), this.pushExtensionDialog(selector, blocked));"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "alog for extensions.\n     */\n    async showExtensionConfirm(title, message, opts) {\n        const result = await this.showExtensionSelector(`${title}\\n${message}`, [\"Yes\", \"No\"], opts, {\n            kind: \"permission\",\n            message: title,\n        });\n        return result === \"Yes\";\n    }\n",
+    "new": "alog for extensions.\n     */\n    async showExtensionConfirm(title, message, opts, ticket) {\n        const result = await this.showExtensionSelector(`${title}\\n${message}`, [\"Yes\", \"No\"], opts, {\n            kind: \"permission\",\n            message: title,\n        }, ticket);\n        return result === \"Yes\";\n    }\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "xt input for extensions.\n     */\n    showExtensionInput(title, placeholder, opts) {\n        return new Promise((resolve) => {\n            if (opts?.signal?.abor",
+    "new": "xt input for extensions.\n     */\n    showExtensionInput(title, placeholder, opts, ticket) {\n        return new Promise((resolve) => {\n            if (opts?.signal?.abor"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "{ tui: this.ui, timeout: opts?.timeout });\n            this.pushExtensionDialog(input, { kind: \"question\", message: title });",
+    "new": "{ tui: this.ui, timeout: opts?.timeout });\n            (ticket && (ticket.component=input,ticket.component.setHostVisible(this.hostUIVisible)), this.pushExtensionDialog(input, { kind: \"question\", message: title }));"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "showExtensionEditor(title, prefill) {\n        return new Promise((resolve) => {\n            const finish = (value) => {\n                this.removeExtensionDialog(editor);\n                resolve(value);\n            };\n            const editor = new ExtensionEditorComponent(this.ui, this.keybindings, title, prefill, (value) => finish(value), () => finish(undefined), undefined, this.settingsManager.getExternalEditorCommand());\n            this.pushExtensionDialog(editor, { kind: \"question\", message: title });",
+    "new": "showExtensionEditor(title, prefill, ticket) {\n        return new Promise((resolve) => {\n            const finish = (value) => {\n                this.removeExtensionDialog(editor);\n                resolve(value);\n            };\n            const editor = new ExtensionEditorComponent(this.ui, this.keybindings, title, prefill, (value) => finish(value), () => finish(undefined), undefined, this.settingsManager.getExternalEditorCommand());\n            (ticket && (ticket.cancelNative = () => finish(undefined)), this.pushExtensionDialog(editor, { kind: \"question\", message: title }));"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "rs on top of existing content. */\n    async showExtensionCustom(factory, options) {\n        const savedText = this.editor.getText();\n        const isOverlay = o",
+    "new": "rs on top of existing content. */\n    async showExtensionCustom(factory, options, ticket) {\n        const savedText = this.editor.getText();\n        const isOverlay = o"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "                }\n            };\n            Promise.resolve(factory(this.ui, theme, this.keybindings, close))\n                .then((c) => {\n                if (closed)\n                    return;\n                component = c;\n                if (isOverlay) {\n",
+    "new": "                }\n            };\n            if (ticket) ticket.cancelNative = () => close(undefined); Promise.resolve(factory(this.ui, theme, this.keybindings, close))\n                .then((c) => {\n                if (closed || (ticket && ticket.generation !== this.hostUIGeneration)) {c?.dispose?.();return;} \n                component = c;\n                if (isOverlay) {\n"
+  },
+  {
+    "package": "pi-agent-core",
+    "path": "dist/agent.js",
+    "old": "    async processEvents(event) {",
+    "new": "    async processEvents(event) {\nif(event.type==='agent_start') this.snapshotToolObservations={};\n if(event.type.startsWith('tool_execution_')) {\n  this.snapshotToolObservations??={};\n  const previous=this.snapshotToolObservations[event.toolCallId]??{};\n  this.snapshotToolObservations[event.toolCallId]={...previous,...JSON.parse(JSON.stringify(event)),status:event.type==='tool_execution_end'?'completed':'running'};\n }\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/agent-session.js",
+    "old": "    _refreshFinalizedContext() {",
+    "new": "captureConversationSnapshot() {\n const manager=this.sessionManager, state=this.agent.state;\n const branch=manager.getBranch(manager.getLeafId());\n const selectedIds=new Set(branch.map(entry=>entry.id));\n const finalized=state.messages.map(message=>{\n  let entryId=this._entryIdsByMessage.get(message);\n  if(!entryId) entryId=branch.find(entry=>entry.type==='message' && entry.message===message)?.id;\n  if(entryId && !selectedIds.has(entryId)) throw new Error('Snapshot provenance outside selected branch');\n  return {entryId:entryId??null,message};\n });\n return JSON.stringify({version:1,kind:'pi-conversation-snapshot',source:{sessionId:manager.getSessionId(),sessionFile:manager.getSessionFile(),cwd:manager.getCwd(),header:manager.getHeader(),leafId:manager.getLeafId()},branch,model:{provider:state.model.provider,id:state.model.id,api:state.model.api},thinkingLevel:this.thinkingLevel,runtime:{finalized,streamingMessage:state.streamingMessage??null,pendingToolCalls:[...state.pendingToolCalls],toolObservations:this.agent.snapshotToolObservations??{},isStreaming:state.isStreaming}});\n}\n    _refreshFinalizedContext() {"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/agent-session.js",
+    "old": "            getContextUsage: () => this.getContextUsage(),",
+    "new": "            captureConversationSnapshot: () => this.captureConversationSnapshot(),\n            getContextUsage: () => this.getContextUsage(),"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/runner.js",
+    "old": "    getContextUsageFn = () => undefined;",
+    "new": "    captureConversationSnapshotFn = () => { throw new Error(\"Snapshot unavailable\"); };\n    getContextUsageFn = () => undefined;"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/runner.js",
+    "old": "        this.getContextUsageFn = contextActions.getContextUsage;",
+    "new": "        this.captureConversationSnapshotFn = contextActions.captureConversationSnapshot;\n        this.getContextUsageFn = contextActions.getContextUsage;"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/runner.js",
+    "old": "            getContextUsage: () => {",
+    "new": "            captureConversationSnapshot: () => { runner.assertActive(); return runner.captureConversationSnapshotFn(); },\n            getContextUsage: () => {"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/agent-session.d.ts",
+    "old": "    getContextUsage():",
+    "new": "    captureConversationSnapshot(): string;\n    getContextUsage():"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/types.d.ts",
+    "old": "    getContextUsage():",
+    "new": "    captureConversationSnapshot(): string;\n    getContextUsage():"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/extensions/types.d.ts",
+    "old": "    getContextUsage: () =>",
+    "new": "    captureConversationSnapshot: () => string;\n    getContextUsage: () =>"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "async processEvents(event){",
+    "new": "async processEvents(event){if(event.type==='agent_start') this.snapshotToolObservations={};\n if(event.type.startsWith('tool_execution_')) {\n  this.snapshotToolObservations??={};\n  const previous=this.snapshotToolObservations[event.toolCallId]??{};\n  this.snapshotToolObservations[event.toolCallId]={...previous,...JSON.parse(JSON.stringify(event)),status:event.type==='tool_execution_end'?'completed':'running'};\n }\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "_refreshFinalizedContext(){",
+    "new": "captureConversationSnapshot() {\n const manager=this.sessionManager, state=this.agent.state;\n const branch=manager.getBranch(manager.getLeafId());\n const selectedIds=new Set(branch.map(entry=>entry.id));\n const finalized=state.messages.map(message=>{\n  let entryId=this._entryIdsByMessage.get(message);\n  if(!entryId) entryId=branch.find(entry=>entry.type==='message' && entry.message===message)?.id;\n  if(entryId && !selectedIds.has(entryId)) throw new Error('Snapshot provenance outside selected branch');\n  return {entryId:entryId??null,message};\n });\n return JSON.stringify({version:1,kind:'pi-conversation-snapshot',source:{sessionId:manager.getSessionId(),sessionFile:manager.getSessionFile(),cwd:manager.getCwd(),header:manager.getHeader(),leafId:manager.getLeafId()},branch,model:{provider:state.model.provider,id:state.model.id,api:state.model.api},thinkingLevel:this.thinkingLevel,runtime:{finalized,streamingMessage:state.streamingMessage??null,pendingToolCalls:[...state.pendingToolCalls],toolObservations:this.agent.snapshotToolObservations??{},isStreaming:state.isStreaming}});\n}\n_refreshFinalizedContext(){"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "getContextUsage:()=>this.getContextUsage(),",
+    "new": "captureConversationSnapshot:()=>this.captureConversationSnapshot(),getContextUsage:()=>this.getContextUsage(),"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "getContextUsageFn=()=>{};",
+    "new": "captureConversationSnapshotFn=()=>{throw new Error(\"Snapshot unavailable\")};getContextUsageFn=()=>{};"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "this.getContextUsageFn=contextActions.getContextUsage,",
+    "new": "this.captureConversationSnapshotFn=contextActions.captureConversationSnapshot,this.getContextUsageFn=contextActions.getContextUsage,"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "getContextUsage:()=>(runner.assertActive(),runner.getContextUsageFn()),",
+    "new": "captureConversationSnapshot:()=>(runner.assertActive(),runner.captureConversationSnapshotFn()),getContextUsage:()=>(runner.assertActive(),runner.getContextUsageFn()),"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/sdk.js",
+    "old": "const existingSession = sessionManager.buildSessionContext();",
+    "new": "const existingSession = sessionManager.buildSessionProjection();"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/sdk.js",
+    "old": "    const extensionsResult = resourceLoader.getExtensions();",
+    "new": "    for (const entry of existingSession.entries) for (const message of entry.messages) session._entryIdsByMessage.set(message, entry.sourceEntry.id);\n    const extensionsResult = resourceLoader.getExtensions();"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "let existingSession=sessionManager.buildSessionContext(),",
+    "new": "let existingSession=sessionManager.buildSessionProjection(),"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "}),extensionsResult=resourceLoader.getExtensions();return{session,extensionsResult,modelFallbackMessage}",
+    "new": "});for(const entry of existingSession.entries)for(const message of entry.messages)session._entryIdsByMessage.set(message,entry.sourceEntry.id);let extensionsResult=resourceLoader.getExtensions();return{session,extensionsResult,modelFallbackMessage}"
+  },
+  {
+    "package": "pi-tui",
+    "path": "dist/tui.js",
+    "old": "        if (this.inputListeners.size > 0) {",
+    "new": "        // Parent protocol replies never belong to an overlay input lease.\n        if (this.consumeCellSizeResponse(data)) {\n            return;\n        }\n        const exclusiveOverlay = this.overlayStack.find((o) => o.component === this.focusedComponent);\n        if (exclusiveOverlay?.options?.exclusiveInput && this.isOverlayVisible(exclusiveOverlay) && exclusiveOverlay.component.handleInput) {\n            if (!isKeyRelease(data) || exclusiveOverlay.component.wantsKeyRelease) {\n                exclusiveOverlay.component.handleInput(data);\n                this.requestImmediateRender();\n            }\n            return;\n        }\n        if (this.inputListeners.size > 0) {"
+  },
+  {
+    "package": "pi-tui",
+    "path": "dist/tui.js",
+    "old": "        // Consume terminal cell size responses without blocking unrelated input.\n        if (this.consumeCellSizeResponse(data)) {\n            return;\n        }\n",
+    "new": "        // pi-btw-native: cell replies consumed before overlay input.\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-T726RZZU.js",
+    "old": "handleTerminalInput(data){if(this.consumeTerminalColorResponse(data)||this.consumeTerminalColorSchemeReport(data))return;if(this.inputListeners.size>0)",
+    "new": "handleTerminalInput(data){if(this.consumeTerminalColorResponse(data)||this.consumeTerminalColorSchemeReport(data)||this.consumeCellSizeResponse(data))return;let exclusiveOverlay=this.overlayStack.find(o=>o.component===this.focusedComponent);if(exclusiveOverlay?.options?.exclusiveInput&&this.isOverlayVisible(exclusiveOverlay)&&exclusiveOverlay.component.handleInput){if(!isKeyRelease(data)||exclusiveOverlay.component.wantsKeyRelease)exclusiveOverlay.component.handleInput(data),this.requestImmediateRender();return}if(this.inputListeners.size>0)"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-T726RZZU.js",
+    "old": "if(this.consumeCellSizeResponse(data))return;if(matchesKey(data,\"shift+ctrl+d\")",
+    "new": "if(matchesKey(data,\"shift+ctrl+d\")"
+  },
+  {
+    "package": "pi-tui",
+    "path": "dist/tui.js",
+    "old": "export class TuiBase extends Container {",
+    "new": "export class TuiBase extends Container {\nget btwNativeExclusiveInput(){return true}\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-T726RZZU.js",
+    "old": "TuiBase=class _TuiBase extends Container{",
+    "new": "TuiBase=class _TuiBase extends Container{\nget btwNativeExclusiveInput(){return true}\n"
+  },
+  {
+    "package": "pi-tui",
+    "path": "dist/index.js",
+    "old": "allocateImageId,",
+    "new": "cropKittyImageLine, registerKittyImageMetadata, allocateImageId,"
+  },
+  {
+    "package": "pi-tui",
+    "path": "dist/index.d.ts",
+    "old": "allocateImageId,",
+    "new": "cropKittyImageLine, registerKittyImageMetadata, allocateImageId,"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-T726RZZU.js",
+    "old": "__export(dist_exports,{Box:()=>Box,",
+    "new": "__export(dist_exports,{registerKittyImageMetadata:()=>registerKittyImageMetadata,cropKittyImageLine:()=>cropKittyImageLine,Box:()=>Box,"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "    updatePendingMessagesDisplay() {\n        this.pendingMessagesContainer.clear();",
+    "new": "    updatePendingMessagesDisplay() {\n        this.pendingMessagesContainer.clear();\n        for (const component of this.pendingBashComponents) {\n            this.pendingMessagesContainer.addChild(component);\n        }"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "updatePendingMessagesDisplay(){this.pendingMessagesContainer.clear();",
+    "new": "updatePendingMessagesDisplay(){this.pendingMessagesContainer.clear();for(let component of this.pendingBashComponents)this.pendingMessagesContainer.addChild(component);"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/core/agent-session.js",
+    "old": "        const bashMessage = {\n            role: \"bashExecution\",\n            command,\n            output: result.output,\n",
+    "new": "        const bashMessage = {\n            role: \"bashExecution\",\n            // Link only this execution's live component across history reconstruction.\n            bashExecutionId: options?.id,\n            command,\n            output: result.output,\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "n pending area, moved to chat on submit)\n    pendingBashComponents = [];\n    // Auto-compaction state\n    autoCompactionEscapeHandler;\n",
+    "new": "n pending area, moved to chat on submit)\n    pendingBashComponents = [];\n    // Only live executions own reusable components; historical entries render normally.\n    liveBashComponents = new Map();\n    // Auto-compaction state\n    autoCompactionEscapeHandler;\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "this.entriesRenderedByBoundaryCompaction.add(entryId);\n                    this.footer.invalidate();\n                    this.ui.requestRender();\n",
+    "new": "this.entriesRenderedByBoundaryCompaction.add(entryId);\n                    this.updatePendingMessagesDisplay();\n                    this.footer.invalidate();\n                    this.ui.requestRender();\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "                        });\n                    }\n                    this.footer.invalidate();\n                }\n",
+    "new": "                        });\n                    }\n                    this.updatePendingMessagesDisplay();\n                    this.footer.invalidate();\n                }\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "itch (message.role) {\n            case \"bashExecution\": {\n                const component = new BashExecutionComponent(message.command, this.ui, message.exclude",
+    "new": "itch (message.role) {\n            case \"bashExecution\": {\n                const liveComponent = this.liveBashComponents.get(message.bashExecutionId);\n                if (liveComponent) {\n                    this.pendingMessagesContainer.removeChild(liveComponent);\n                    if (!this.chatContainer.children.includes(liveComponent)) {\n                        this.chatContainer.addChild(liveComponent);\n                    }\n                    break;\n                }\n                const component = new BashExecutionComponent(message.command, this.ui, message.exclude"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "      this.renderSessionEntries(this.sessionManager.buildContextEntries());\n    }\n    // =======================================================================",
+    "new": "      this.renderSessionEntries(this.sessionManager.buildContextEntries());\n        this.updatePendingMessagesDisplay();\n    }\n    // ======================================================================="
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "ar();\n        for (const component of this.pendingBashComponents) {\n            this.pendingMessagesContainer.addChild(component);\n        }\n        const { steering: steeringMessages, followUp: followUpMessage",
+    "new": "ar();\n        for (const component of this.pendingBashComponents) {\n            if (!this.chatContainer.children.includes(component)) {\n                this.pendingMessagesContainer.addChild(component);\n            }\n        }\n        const { steering: steeringMessages, followUp: followUpMessage"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "{\n            this.pendingMessagesContainer.removeChild(component);\n            this.chatContainer.addChild(component);\n        }\n        this.pendingBashComponents = [];\n",
+    "new": "{\n            this.pendingMessagesContainer.removeChild(component);\n            if (!this.chatContainer.children.includes(component)) {\n                this.chatContainer.addChild(component);\n            }\n            if (component.status !== \"running\") {\n                this.liveBashComponents.delete(component.bashExecutionId);\n            }\n        }\n        this.pendingBashComponents = [];\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "            return;\n        }\n        // If extension returned a full result, use it directly\n        if (eventResult?",
+    "new": "            return;\n        }\n        const bashExecutionId = crypto.randomUUID();\n        // If extension returned a full result, use it directly\n        if (eventResult?"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "ionComponent(command, this.ui, excludeFromContext, this.outputPad);\n            if (this.session.isStreaming) {\n                this.pendingMessagesContainer.ad",
+    "new": "ionComponent(command, this.ui, excludeFromContext, this.outputPad);\n            this.bashComponent.bashExecutionId = bashExecutionId;\n            this.liveBashComponents.set(bashExecutionId, this.bashComponent);\n            if (this.session.isStreaming) {\n                this.pendingMessagesContainer.ad"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "\n            this.session.recordBashResult(command, result, { excludeFromContext });\n            this.bashComponent = undefined;\n            this.ui.requestRender()",
+    "new": "\n            this.session.recordBashResult(command, result, { excludeFromContext, id: bashExecutionId });\n            if (!this.pendingBashComponents.includes(this.bashComponent)) {\n                this.liveBashComponents.delete(bashExecutionId);\n            }\n            this.bashComponent = undefined;\n            this.ui.requestRender()"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "ecutionComponent(command, this.ui, excludeFromContext, this.outputPad);\n        if (isDeferred) {\n            // Show in pending area when agent is streaming\n",
+    "new": "ecutionComponent(command, this.ui, excludeFromContext, this.outputPad);\n        this.bashComponent.bashExecutionId = bashExecutionId;\n        this.liveBashComponents.set(bashExecutionId, this.bashComponent);\n        if (isDeferred) {\n            // Show in pending area when agent is streaming\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "this.ui.requestRender();\n                }\n            }, { excludeFromContext, operations: eventResult?.operations });\n            if (this.bashComponent) {\n  ",
+    "new": "this.ui.requestRender();\n                }\n            }, { excludeFromContext, id: bashExecutionId, operations: eventResult?.operations });\n            if (this.bashComponent) {\n  "
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "{error instanceof Error ? error.message : \"Unknown error\"}`);\n        }\n        this.bashComponent = undefined;\n",
+    "new": "{error instanceof Error ? error.message : \"Unknown error\"}`);\n        }\n        if (!this.pendingBashComponents.includes(this.bashComponent)) {\n            this.liveBashComponents.delete(bashExecutionId);\n        }\n        this.bashComponent = undefined;\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "}recordBashResult(command,result,options){let bashMessage={role:\"bashExecution\",command,output:result.output,exitCode:result.exitCode,cancelled:result.cancelled",
+    "new": "}recordBashResult(command,result,options){let bashMessage={role:\"bashExecution\",bashExecutionId:options?.id,command,output:result.output,exitCode:result.exitCode,cancelled:result.cancelled"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "lCleanupHandlers=[];isBashMode=!1;bashComponent=void 0;pendingBashComponents=[];autoCompactionEscapeHandler;retryEscapeHandler;compactionQueuedMessages=[];shutd",
+    "new": "lCleanupHandlers=[];isBashMode=!1;bashComponent=void 0;pendingBashComponents=[];liveBashComponents=new Map;autoCompactionEscapeHandler;retryEscapeHandler;compactionQueuedMessages=[];shutd"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "triesAfterCompaction)this.entriesRenderedByBoundaryCompaction.add(entryId);this.footer.invalidate(),this.ui.requestRender()}break;case\"session_info_changed\":this.updateTerminalTitle(),this.footer.invalidate(),this.ui.requestRender();break;case\"thinking_level_changed\":this.footer.invalidate(),this.updateEditorBorderColor();break;case\"message_start\":event.message.role===\"custom\"?(this.addMessageToChat(event.message),this.ui.requestRender()):event.message.role===\"user\"?(this.addMessageToChat(event.message),this.updatePendingMessagesDisplay(),this.ui.requestRender()):event.message.role===\"assistant\"&&(this.streamingComponent=new AssistantMessageComponent(void 0,this.hideThinkingBlock,this.getMarkdownThemeWithSettings(),this.hiddenThinkingLabel,this.outputPad,this.getMarkdownTransformers()),this.streamingMessage=event.message,this.chatContainer.addChild(this.streamingComponent),this.streamingComponent.updateContent(this.streamingMessage,!0),this.ui.requestRender());break;case\"message_update\":if(this.streamingComponent&&event.message.role===\"assistant\"){this.streamingMessage=event.message,this.streamingComponent.updateContent(this.streamingMessage,!0);for(let content of this.streamingMessage.content)if(content.type===\"toolCall\")if(this.pendingTools.has(content.id)){let component=this.pendingTools.get(content.id);component&&component.updateArgs(content.arguments)}else{let component=new ToolExecutionComponent(content.name,content.id,content.arguments,{showImages:this.settingsManager.getShowImages(),imageWidthCells:this.settingsManager.getImageWidthCells(),outputPad:this.outputPad},this.getRegisteredToolDefinition(content.name),this.ui,this.sessionManager.getCwd());component.setExpanded(this.toolOutputExpanded),this.chatContainer.addChild(component),this.pendingTools.set(content.id,component)}this.ui.requestRender()}break;case\"message_end\":if(event.message.role===\"user\")break;if(this.streamingComponent&&event.message.role===\"assistant\"){this.streamingMessage=event.message;let errorMessage5;if(this.streamingMessage.stopReason===\"aborted\"){let retryAttempt=this.session.retryAttempt;errorMessage5=retryAttempt>0?`Aborted after ${retryAttempt} retry attempt${retryAttempt>1?\"s\":\"\"}`:\"Operation aborted\",this.streamingMessage.errorMessage=errorMessage5}if(this.streamingComponent.updateContent(this.streamingMessage,!1),this.streamingMessage.stopReason===\"aborted\"||this.streamingMessage.stopReason===\"error\"){errorMessage5||(errorMessage5=this.streamingMessage.errorMessage||\"Error\");for(let[,component]of this.pendingTools.entries())component.updateResult({content:[{type:\"text\",text:errorMessage5}],isError:!0});this.pendingTools.clear(),this.maybeSuggestBugReport(this.streamingMessage)}else{for(let[,component]of this.pendingTools.entries())component.setArgsComplete();this.maybeShowThinkingDropNotice(this.streamingMessage),this.maybeShowCacheMissNotice(this.streamingMessage)}this.streamingComponent=void 0,this.streamingMessage=void 0,this.footer.invalidate()}this.ui.requestRender();break;case\"bash_execution_update\":break;case\"tool_execution_start\":{if(event.parentToolCallId)break;let component=this.pendingTools.get(event.toolCallId);component||(component=new ToolExecutionComponent(event.toolName,event.toolCallId,event.args,{showImages:this.settingsManager.getShowImages(),imageWidthCells:this.settingsManager.getImageWidthCells(),outputPad:this.outputPad},this.getRegisteredToolDefinition(event.toolName),this.ui,this.sessionManager.getCwd()),component.setExpanded(this.toolOutputExpanded),this.chatContainer.addChild(component),this.pendingTools.set(event.toolCallId,component)),component.markExecutionStarted(),this.ui.requestRender();break}case\"tool_execution_update\":{let component=this.pendingTools.get(event.toolCallId);component&&(component.updateResult({...event.partialResult,isError:!1},!0),this.ui.requestRender());break}case\"tool_execution_end\":{event.isError&&this.maybeShowInstallChangeWarning();let component=this.pendingTools.get(event.toolCallId);component&&(component.updateResult({...event.result,isError:event.isError,durationMs:event.durationMs}),this.pendingTools.delete(event.toolCallId),this.ui.requestRender());break}case\"agent_end\":this.settingsManager.getShowTerminalProgress()&&this.ui.terminal.setProgress(!1),this.clearStatusIndicator(\"working\"),this.streamingComponent&&(this.chatContainer.removeChild(this.streamingComponent),this.streamingComponent=void 0,this.streamingMessage=void 0),this.pendingTools.clear(),this.ui.requestRender();break;case\"agent_settled\":await this.checkShutdownRequested();break;case\"compaction_start\":{this.settingsManager.getShowTerminalProgress()&&this.ui.terminal.setProgress(!0),this.autoCompactionEscapeHandler=this.defaultEditor.onEscape,this.defaultEditor.onEscape=()=>{this.session.abortCompaction()};let colorFn=isEmbeddedStatus(this.editor)?text=>(this.editor.borderColor??theme.getThinkingBorderColor(this.session.thinkingLevel||\"off\"))(text):void 0;this.showStatusIndicator(new CompactionStatusIndicator(this.ui,event.reason,colorFn)),this.ui.requestRender();break}case\"compaction_end\":{if(this.settingsManager.getShowTerminalProgress()&&this.ui.terminal.setProgress(!1),this.autoCompactionEscapeHandler&&(this.defaultEditor.onEscape=this.autoCompactionEscapeHandler,this.autoCompactionEscapeHandler=void 0),this.clearStatusIndicator(\"compaction\"),event.aborted)event.reason===\"manual\"?this.showError(\"Compaction cancelled\"):this.showStatus(\"Auto-compaction cancelled\");else if(event.result){let entries=this.sessionManager.buildContextEntries();if(entries[0]?.type!==\"compaction\")throw new Error(\"Completed compaction is missing from the session context\");this.chatContainer.clear(),this.renderSessionEntries(entries.slice(1)),this.addMessageToChat(createCompactionSummaryMessage(event.result.summary,event.result.tokensBefore,new Date().toISOString())),event.result.usage&&this.addCompactionCostNotice({type:\"compaction_cost\",kind:\"compaction\",usage:event.result.usage}),this.footer.invalidate()}else if(event.errorMessage)if(event.reason===\"manual\")this.showError(event.errorMessage);else{this.chatContainer.addChild(new Spacer(1));let errorMessage5=event.errorMessage;this.chatContainer.addChild(new ThemedText(()=>theme.fg(\"error\",errorMessage5),1,0))}this.flushCompactionQueue({willRetry:event.willRetry}),this.ui.requestRender();break}case\"auto_retry_start\":{this.retryEscapeHandler=this.defaultEditor.onEscape,this.defaultEditor.onEscape=()=>{this.session.abortRetry()},this.showStatusIndicator(new RetryStatusIndicator(this.ui,event.attempt,event.maxAttempts,event.delayMs)),this.ui.requestRender();break}case\"auto_retry_end\":{this.retryEscapeHandler&&(this.defaultEditor.onEscape=this.retryEscapeHandler,this.retryEscapeHandler=void 0),this.clearStatusIndicator(\"retry\"),event.success||this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError||\"Unknown error\"}`),this.ui.requestRender();break}case\"summarization_retry_scheduled\":{this.showError(event.errorMessage),this.showStatusIndicator(new RetryStatusIndicator(this.ui,event.attempt,event.maxAttempts,event.delayMs)),this.ui.requestRender();break}case\"summarization_retry_attempt_start\":{if(this.clearStatusIndicator(\"retry\"),event.source===\"branchSummary\")this.showStatusIndicator(new BranchSummaryStatusIndicator(this.ui));else{let colorFn=isEmbeddedStatus(this.editor)?text=>(this.editor.borderColor??theme.getThinkingBorderColor(this.session.thinkingLevel||\"off\"))(text):void 0;this.showStatusIndicator(new CompactionStatusIndicator(this.ui,event.reason,colorFn))}this.ui.requestRender();break}case\"summarization_retry_finished\":{this.clearStatusIndicator(\"retry\"),this.ui.requestRender();break}}}getUserMessageText(message){return message.role!==\"user\"?\"\":(typeof message.content==\"string\"?[{type:\"text\",text:message.content}]:message.content.filter(c=>c.type===\"text\")).map(c=>c.text).join(\"\")}showManagedToolStatus(status){this.managedToolStatusStarted||(this.chatContainer.addChild(new Spacer(1)),this.managedToolStatusStarted=!0);let message=status.type===\"warning\"?`Warning: ${status.message}`:status.message,color=status.type===\"warning\"?\"warning\":\"dim\";this.chatContainer.addChild(new ThemedText(()=>theme.fg(color,message),1,0)),this.lastStatusSpacer=void 0,this.lastStatusText=void 0,this.ui.requestRender()}showStatus(message){let children=this.chatContainer.children,last=children.length>0?children[children.length-1]:void 0,secondLast=children.length>1?children[children.length-2]:void 0;if(last&&secondLast&&last===this.lastStatusText&&secondLast===this.lastStatusSpacer){this.lastStatusMessage=message,this.lastStatusText.invalidate(),this.ui.requestRender();return}let spacer=new Spacer(1);this.lastStatusMessage=message;let text=new ThemedText(()=>theme.fg(\"dim\",this.lastStatusMessage),1,0);this.chatContainer.addChild(spacer),this.chatContainer.addChild(text),this.lastStatusSpacer=spacer,this.lastStatusText=text,this.ui.requestRender()}addCustomEntryToChat(entry){let renderer=this.session.extensionRunner.getEntryRenderer(entry.customType);if(!renderer)return;let component=new CustomEntryComponent(entry,renderer,this.outputPad);if(component.setExpanded(this.toolOutputExpanded),!!component.hasContent()){if(this.streamingComponent){let streamingIndex=this.chatContainer.children.indexOf(this.streamingComponent);if(streamingIndex>=0){this.chatContainer.children.splice(streamingIndex,0,component);return}}this.chatContainer.addChild(component)}}addMessageToChat(message,options){switch(message.role){case\"bashExecution\":{let component=new BashExecutionComponent(message.command,this.ui,message.exclude",
+    "new": "triesAfterCompaction)this.entriesRenderedByBoundaryCompaction.add(entryId);this.updatePendingMessagesDisplay(),this.footer.invalidate(),this.ui.requestRender()}break;case\"session_info_changed\":this.updateTerminalTitle(),this.footer.invalidate(),this.ui.requestRender();break;case\"thinking_level_changed\":this.footer.invalidate(),this.updateEditorBorderColor();break;case\"message_start\":event.message.role===\"custom\"?(this.addMessageToChat(event.message),this.ui.requestRender()):event.message.role===\"user\"?(this.addMessageToChat(event.message),this.updatePendingMessagesDisplay(),this.ui.requestRender()):event.message.role===\"assistant\"&&(this.streamingComponent=new AssistantMessageComponent(void 0,this.hideThinkingBlock,this.getMarkdownThemeWithSettings(),this.hiddenThinkingLabel,this.outputPad,this.getMarkdownTransformers()),this.streamingMessage=event.message,this.chatContainer.addChild(this.streamingComponent),this.streamingComponent.updateContent(this.streamingMessage,!0),this.ui.requestRender());break;case\"message_update\":if(this.streamingComponent&&event.message.role===\"assistant\"){this.streamingMessage=event.message,this.streamingComponent.updateContent(this.streamingMessage,!0);for(let content of this.streamingMessage.content)if(content.type===\"toolCall\")if(this.pendingTools.has(content.id)){let component=this.pendingTools.get(content.id);component&&component.updateArgs(content.arguments)}else{let component=new ToolExecutionComponent(content.name,content.id,content.arguments,{showImages:this.settingsManager.getShowImages(),imageWidthCells:this.settingsManager.getImageWidthCells(),outputPad:this.outputPad},this.getRegisteredToolDefinition(content.name),this.ui,this.sessionManager.getCwd());component.setExpanded(this.toolOutputExpanded),this.chatContainer.addChild(component),this.pendingTools.set(content.id,component)}this.ui.requestRender()}break;case\"message_end\":if(event.message.role===\"user\")break;if(this.streamingComponent&&event.message.role===\"assistant\"){this.streamingMessage=event.message;let errorMessage5;if(this.streamingMessage.stopReason===\"aborted\"){let retryAttempt=this.session.retryAttempt;errorMessage5=retryAttempt>0?`Aborted after ${retryAttempt} retry attempt${retryAttempt>1?\"s\":\"\"}`:\"Operation aborted\",this.streamingMessage.errorMessage=errorMessage5}if(this.streamingComponent.updateContent(this.streamingMessage,!1),this.streamingMessage.stopReason===\"aborted\"||this.streamingMessage.stopReason===\"error\"){errorMessage5||(errorMessage5=this.streamingMessage.errorMessage||\"Error\");for(let[,component]of this.pendingTools.entries())component.updateResult({content:[{type:\"text\",text:errorMessage5}],isError:!0});this.pendingTools.clear(),this.maybeSuggestBugReport(this.streamingMessage)}else{for(let[,component]of this.pendingTools.entries())component.setArgsComplete();this.maybeShowThinkingDropNotice(this.streamingMessage),this.maybeShowCacheMissNotice(this.streamingMessage)}this.streamingComponent=void 0,this.streamingMessage=void 0,this.footer.invalidate()}this.ui.requestRender();break;case\"bash_execution_update\":break;case\"tool_execution_start\":{if(event.parentToolCallId)break;let component=this.pendingTools.get(event.toolCallId);component||(component=new ToolExecutionComponent(event.toolName,event.toolCallId,event.args,{showImages:this.settingsManager.getShowImages(),imageWidthCells:this.settingsManager.getImageWidthCells(),outputPad:this.outputPad},this.getRegisteredToolDefinition(event.toolName),this.ui,this.sessionManager.getCwd()),component.setExpanded(this.toolOutputExpanded),this.chatContainer.addChild(component),this.pendingTools.set(event.toolCallId,component)),component.markExecutionStarted(),this.ui.requestRender();break}case\"tool_execution_update\":{let component=this.pendingTools.get(event.toolCallId);component&&(component.updateResult({...event.partialResult,isError:!1},!0),this.ui.requestRender());break}case\"tool_execution_end\":{event.isError&&this.maybeShowInstallChangeWarning();let component=this.pendingTools.get(event.toolCallId);component&&(component.updateResult({...event.result,isError:event.isError,durationMs:event.durationMs}),this.pendingTools.delete(event.toolCallId),this.ui.requestRender());break}case\"agent_end\":this.settingsManager.getShowTerminalProgress()&&this.ui.terminal.setProgress(!1),this.clearStatusIndicator(\"working\"),this.streamingComponent&&(this.chatContainer.removeChild(this.streamingComponent),this.streamingComponent=void 0,this.streamingMessage=void 0),this.pendingTools.clear(),this.ui.requestRender();break;case\"agent_settled\":await this.checkShutdownRequested();break;case\"compaction_start\":{this.settingsManager.getShowTerminalProgress()&&this.ui.terminal.setProgress(!0),this.autoCompactionEscapeHandler=this.defaultEditor.onEscape,this.defaultEditor.onEscape=()=>{this.session.abortCompaction()};let colorFn=isEmbeddedStatus(this.editor)?text=>(this.editor.borderColor??theme.getThinkingBorderColor(this.session.thinkingLevel||\"off\"))(text):void 0;this.showStatusIndicator(new CompactionStatusIndicator(this.ui,event.reason,colorFn)),this.ui.requestRender();break}case\"compaction_end\":{if(this.settingsManager.getShowTerminalProgress()&&this.ui.terminal.setProgress(!1),this.autoCompactionEscapeHandler&&(this.defaultEditor.onEscape=this.autoCompactionEscapeHandler,this.autoCompactionEscapeHandler=void 0),this.clearStatusIndicator(\"compaction\"),event.aborted)event.reason===\"manual\"?this.showError(\"Compaction cancelled\"):this.showStatus(\"Auto-compaction cancelled\");else if(event.result){let entries=this.sessionManager.buildContextEntries();if(entries[0]?.type!==\"compaction\")throw new Error(\"Completed compaction is missing from the session context\");this.chatContainer.clear(),this.renderSessionEntries(entries.slice(1)),this.addMessageToChat(createCompactionSummaryMessage(event.result.summary,event.result.tokensBefore,new Date().toISOString())),event.result.usage&&this.addCompactionCostNotice({type:\"compaction_cost\",kind:\"compaction\",usage:event.result.usage}),this.updatePendingMessagesDisplay(),this.footer.invalidate()}else if(event.errorMessage)if(event.reason===\"manual\")this.showError(event.errorMessage);else{this.chatContainer.addChild(new Spacer(1));let errorMessage5=event.errorMessage;this.chatContainer.addChild(new ThemedText(()=>theme.fg(\"error\",errorMessage5),1,0))}this.flushCompactionQueue({willRetry:event.willRetry}),this.ui.requestRender();break}case\"auto_retry_start\":{this.retryEscapeHandler=this.defaultEditor.onEscape,this.defaultEditor.onEscape=()=>{this.session.abortRetry()},this.showStatusIndicator(new RetryStatusIndicator(this.ui,event.attempt,event.maxAttempts,event.delayMs)),this.ui.requestRender();break}case\"auto_retry_end\":{this.retryEscapeHandler&&(this.defaultEditor.onEscape=this.retryEscapeHandler,this.retryEscapeHandler=void 0),this.clearStatusIndicator(\"retry\"),event.success||this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError||\"Unknown error\"}`),this.ui.requestRender();break}case\"summarization_retry_scheduled\":{this.showError(event.errorMessage),this.showStatusIndicator(new RetryStatusIndicator(this.ui,event.attempt,event.maxAttempts,event.delayMs)),this.ui.requestRender();break}case\"summarization_retry_attempt_start\":{if(this.clearStatusIndicator(\"retry\"),event.source===\"branchSummary\")this.showStatusIndicator(new BranchSummaryStatusIndicator(this.ui));else{let colorFn=isEmbeddedStatus(this.editor)?text=>(this.editor.borderColor??theme.getThinkingBorderColor(this.session.thinkingLevel||\"off\"))(text):void 0;this.showStatusIndicator(new CompactionStatusIndicator(this.ui,event.reason,colorFn))}this.ui.requestRender();break}case\"summarization_retry_finished\":{this.clearStatusIndicator(\"retry\"),this.ui.requestRender();break}}}getUserMessageText(message){return message.role!==\"user\"?\"\":(typeof message.content==\"string\"?[{type:\"text\",text:message.content}]:message.content.filter(c=>c.type===\"text\")).map(c=>c.text).join(\"\")}showManagedToolStatus(status){this.managedToolStatusStarted||(this.chatContainer.addChild(new Spacer(1)),this.managedToolStatusStarted=!0);let message=status.type===\"warning\"?`Warning: ${status.message}`:status.message,color=status.type===\"warning\"?\"warning\":\"dim\";this.chatContainer.addChild(new ThemedText(()=>theme.fg(color,message),1,0)),this.lastStatusSpacer=void 0,this.lastStatusText=void 0,this.ui.requestRender()}showStatus(message){let children=this.chatContainer.children,last=children.length>0?children[children.length-1]:void 0,secondLast=children.length>1?children[children.length-2]:void 0;if(last&&secondLast&&last===this.lastStatusText&&secondLast===this.lastStatusSpacer){this.lastStatusMessage=message,this.lastStatusText.invalidate(),this.ui.requestRender();return}let spacer=new Spacer(1);this.lastStatusMessage=message;let text=new ThemedText(()=>theme.fg(\"dim\",this.lastStatusMessage),1,0);this.chatContainer.addChild(spacer),this.chatContainer.addChild(text),this.lastStatusSpacer=spacer,this.lastStatusText=text,this.ui.requestRender()}addCustomEntryToChat(entry){let renderer=this.session.extensionRunner.getEntryRenderer(entry.customType);if(!renderer)return;let component=new CustomEntryComponent(entry,renderer,this.outputPad);if(component.setExpanded(this.toolOutputExpanded),!!component.hasContent()){if(this.streamingComponent){let streamingIndex=this.chatContainer.children.indexOf(this.streamingComponent);if(streamingIndex>=0){this.chatContainer.children.splice(streamingIndex,0,component);return}}this.chatContainer.addChild(component)}}addMessageToChat(message,options){switch(message.role){case\"bashExecution\":{let liveComponent=this.liveBashComponents.get(message.bashExecutionId);if(liveComponent){this.pendingMessagesContainer.removeChild(liveComponent),this.chatContainer.children.includes(liveComponent)||this.chatContainer.addChild(liveComponent);break}let component=new BashExecutionComponent(message.command,this.ui,message.exclude"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "ner.clear(),this.renderSessionEntries(this.sessionManager.buildContextEntries())}handleCtrlC(){let now=Date.now();now-this.lastSigintTime<500?this.shutdown():(t",
+    "new": "ner.clear(),this.renderSessionEntries(this.sessionManager.buildContextEntries()),this.updatePendingMessagesDisplay()}handleCtrlC(){let now=Date.now();now-this.lastSigintTime<500?this.shutdown():(t"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "gMessagesContainer.clear();for(let component of this.pendingBashComponents)this.pendingMessagesContainer.addChild(component);let{steering:steeringMessages,followUp:followUpMessages}=this.getAllQueuedMessages();if(steeringMessages.length>0||followUpMessages.length>0){this.pendingMessagesContainer.addChild(new Spacer(1));for(let message of steeringMessages){let text=theme.fg(\"dim\",`Steering: ${message}`);this.pendingMessagesContainer.addChild(new TruncatedText(text,1,0))}for(let message of followUpMessages){let text=theme.fg(\"dim\",`Follow-up: ${message}`);this.pendingMessagesContainer.addChild(new TruncatedText(text,1,0))}let dequeueHint=this.getAppKeyDisplay(\"app.message.dequeue\"),hintText=theme.fg(\"dim\",`\\u21B3 ${dequeueHint} to edit all queued messages`);this.pendingMessagesContainer.addChild(new TruncatedText(hintText,1,0))}}restoreQueuedMessagesToEditor(options){let{steering,followUp}=this.clearAllQueues(),allQueued=[...steering,...followUp];if(allQueued.length===0)return this.updatePendingMessagesDisplay(),options?.abort&&this.session.abort(),0;let queuedText=allQueued.join(`\n\n`),currentText=options?.currentText??this.editor.getText(),combinedText=[queuedText,currentText].filter(t=>t.trim()).join(`\n\n`);return this.editor.setText(combinedText),this.updatePendingMessagesDisplay(),options?.abort&&this.session.abort(),allQueued.length}queueCompactionMessage(text,mode){this.compactionQueuedMessages.push({text,mode}),this.editor.addToHistory?.(text),this.editor.setText(\"\"),this.updatePendingMessagesDisplay(),this.showStatus(\"Queued message for after compaction\")}isExtensionCommand(text){if(!text.startsWith(\"/\"))return!1;let extensionRunner=this.session.extensionRunner,spaceIndex=text.indexOf(\" \"),commandName=spaceIndex===-1?text.slice(1):text.slice(1,spaceIndex);return!!extensionRunner.getCommand(commandName)}async flushCompactionQueue(options){if(this.compactionQueuedMessages.length===0)return;let queuedMessages=[...this.compactionQueuedMessages];this.compactionQueuedMessages=[],this.updatePendingMessagesDisplay();let restoreQueue=error=>{this.session.clearQueue(),this.compactionQueuedMessages=queuedMessages,this.updatePendingMessagesDisplay(),this.showError(`Failed to send queued message${queuedMessages.length>1?\"s\":\"\"}: ${error instanceof Error?error.message:String(error)}`)};try{if(options?.willRetry){for(let message of queuedMessages)this.isExtensionCommand(message.text)?await this.session.prompt(message.text):message.mode===\"followUp\"?await this.session.followUp(message.text):await this.session.steer(message.text);this.updatePendingMessagesDisplay();return}let firstPromptIndex=queuedMessages.findIndex(message=>!this.isExtensionCommand(message.text));if(firstPromptIndex===-1){for(let message of queuedMessages)await this.session.prompt(message.text);return}let preCommands=queuedMessages.slice(0,firstPromptIndex),firstPrompt=queuedMessages[firstPromptIndex],rest=queuedMessages.slice(firstPromptIndex+1);for(let message of preCommands)await this.session.prompt(message.text);let promptPromise=this.session.prompt(firstPrompt.text,{streamingBehavior:firstPrompt.mode}).catch(error=>{restoreQueue(error)});for(let message of rest)this.isExtensionCommand(message.text)?await this.session.prompt(message.text):message.mode===\"followUp\"?await this.session.followUp(message.text):await this.session.steer(message.text);this.updatePendingMessagesDisplay()}catch(error){restoreQueue(error)}}flushPendingBashComponents(){for(let component of this.pendingBashComponents)this.pendingMessagesContainer.removeChild(component),this.chatContainer.addChild(component);this.pendingBashComponents=[]}disposeActiveSelector(){let dispose=this.activeSel",
+    "new": "gMessagesContainer.clear();for(let component of this.pendingBashComponents)this.chatContainer.children.includes(component)||this.pendingMessagesContainer.addChild(component);let{steering:steeringMessages,followUp:followUpMessages}=this.getAllQueuedMessages();if(steeringMessages.length>0||followUpMessages.length>0){this.pendingMessagesContainer.addChild(new Spacer(1));for(let message of steeringMessages){let text=theme.fg(\"dim\",`Steering: ${message}`);this.pendingMessagesContainer.addChild(new TruncatedText(text,1,0))}for(let message of followUpMessages){let text=theme.fg(\"dim\",`Follow-up: ${message}`);this.pendingMessagesContainer.addChild(new TruncatedText(text,1,0))}let dequeueHint=this.getAppKeyDisplay(\"app.message.dequeue\"),hintText=theme.fg(\"dim\",`\\u21B3 ${dequeueHint} to edit all queued messages`);this.pendingMessagesContainer.addChild(new TruncatedText(hintText,1,0))}}restoreQueuedMessagesToEditor(options){let{steering,followUp}=this.clearAllQueues(),allQueued=[...steering,...followUp];if(allQueued.length===0)return this.updatePendingMessagesDisplay(),options?.abort&&this.session.abort(),0;let queuedText=allQueued.join(`\n\n`),currentText=options?.currentText??this.editor.getText(),combinedText=[queuedText,currentText].filter(t=>t.trim()).join(`\n\n`);return this.editor.setText(combinedText),this.updatePendingMessagesDisplay(),options?.abort&&this.session.abort(),allQueued.length}queueCompactionMessage(text,mode){this.compactionQueuedMessages.push({text,mode}),this.editor.addToHistory?.(text),this.editor.setText(\"\"),this.updatePendingMessagesDisplay(),this.showStatus(\"Queued message for after compaction\")}isExtensionCommand(text){if(!text.startsWith(\"/\"))return!1;let extensionRunner=this.session.extensionRunner,spaceIndex=text.indexOf(\" \"),commandName=spaceIndex===-1?text.slice(1):text.slice(1,spaceIndex);return!!extensionRunner.getCommand(commandName)}async flushCompactionQueue(options){if(this.compactionQueuedMessages.length===0)return;let queuedMessages=[...this.compactionQueuedMessages];this.compactionQueuedMessages=[],this.updatePendingMessagesDisplay();let restoreQueue=error=>{this.session.clearQueue(),this.compactionQueuedMessages=queuedMessages,this.updatePendingMessagesDisplay(),this.showError(`Failed to send queued message${queuedMessages.length>1?\"s\":\"\"}: ${error instanceof Error?error.message:String(error)}`)};try{if(options?.willRetry){for(let message of queuedMessages)this.isExtensionCommand(message.text)?await this.session.prompt(message.text):message.mode===\"followUp\"?await this.session.followUp(message.text):await this.session.steer(message.text);this.updatePendingMessagesDisplay();return}let firstPromptIndex=queuedMessages.findIndex(message=>!this.isExtensionCommand(message.text));if(firstPromptIndex===-1){for(let message of queuedMessages)await this.session.prompt(message.text);return}let preCommands=queuedMessages.slice(0,firstPromptIndex),firstPrompt=queuedMessages[firstPromptIndex],rest=queuedMessages.slice(firstPromptIndex+1);for(let message of preCommands)await this.session.prompt(message.text);let promptPromise=this.session.prompt(firstPrompt.text,{streamingBehavior:firstPrompt.mode}).catch(error=>{restoreQueue(error)});for(let message of rest)this.isExtensionCommand(message.text)?await this.session.prompt(message.text):message.mode===\"followUp\"?await this.session.followUp(message.text):await this.session.steer(message.text);this.updatePendingMessagesDisplay()}catch(error){restoreQueue(error)}}flushPendingBashComponents(){for(let component of this.pendingBashComponents){this.pendingMessagesContainer.removeChild(component),this.chatContainer.children.includes(component)||this.chatContainer.addChild(component);component.status!==\"running\"&&this.liveBashComponents.delete(component.bashExecutionId)}this.pendingBashComponents=[]}disposeActiveSelector(){let dispose=this.activeSel"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "ash\",command,excludeFromContext,cwd:this.sessionManager.getCwd()})}catch{return}if(eventResult?.result){let result=eventResult.result;this.bashComponent=new BashExecutionComponent(command,this.ui,excludeFromContext,this.outputPad),this.session.isStreaming?(this.pendingMessagesContainer.addChild(this.bashComponent),this.pendingBashComponents.push(this.bashComponent)):this.chatContainer.addChild(this.bashComponent),result.output&&this.bashComponent.appendOutput(result.output),this.bashComponent.setComplete(result.exitCode,result.cancelled,result.truncated?{truncated:!0,content:result.output}:void 0,result.fullOutputPath),this.session.recordBashResult(command,result,{excludeFromContext}),this.bashComponent=void 0,this.ui.requestRender();return}let isDeferred=this.session.isStreaming;this.bashComponent=new BashExecutionComponent(command,this.ui,excludeFromContext,this.outputPad),isDeferred?(this.pendingMessagesContainer.addChild(this.bashComponent),this.pendingBashComponents.push(this.bashComponent)):this.chatContainer.addChild(this.bashComponent),this.ui.requestRender();try{let result=await this.session.executeBash(command,chunk=>{this.bashComponent&&(this.bashComponent.appendOutput(chunk),this.ui.requestRender())},{excludeFromContext,operations:eventResult?.operations});this.bashComponent&&this.bashComponent.setComplete(result.exitCode,result.cancelled,result.truncated?{truncated:!0,content:result.output}:void 0,result.fullOutputPath)}catch(error){this.bashComponent&&this.bashComponent.setComplete(void 0,!1),this.showError(`Bash command failed: ${error instanceof Error?error.message:\"Unknown error\"}`)}this.bashComponent=void 0,this.ui.requestRender()}async handleCompactCommand(cus",
+    "new": "ash\",command,excludeFromContext,cwd:this.sessionManager.getCwd()})}catch{return}let bashExecutionId=crypto2.randomUUID();if(eventResult?.result){let result=eventResult.result;this.bashComponent=new BashExecutionComponent(command,this.ui,excludeFromContext,this.outputPad),this.bashComponent.bashExecutionId=bashExecutionId,this.liveBashComponents.set(bashExecutionId,this.bashComponent),this.session.isStreaming?(this.pendingMessagesContainer.addChild(this.bashComponent),this.pendingBashComponents.push(this.bashComponent)):this.chatContainer.addChild(this.bashComponent),result.output&&this.bashComponent.appendOutput(result.output),this.bashComponent.setComplete(result.exitCode,result.cancelled,result.truncated?{truncated:!0,content:result.output}:void 0,result.fullOutputPath),this.session.recordBashResult(command,result,{excludeFromContext,id:bashExecutionId}),this.pendingBashComponents.includes(this.bashComponent)||this.liveBashComponents.delete(bashExecutionId),this.bashComponent=void 0,this.ui.requestRender();return}let isDeferred=this.session.isStreaming;this.bashComponent=new BashExecutionComponent(command,this.ui,excludeFromContext,this.outputPad),this.bashComponent.bashExecutionId=bashExecutionId,this.liveBashComponents.set(bashExecutionId,this.bashComponent),isDeferred?(this.pendingMessagesContainer.addChild(this.bashComponent),this.pendingBashComponents.push(this.bashComponent)):this.chatContainer.addChild(this.bashComponent),this.ui.requestRender();try{let result=await this.session.executeBash(command,chunk=>{this.bashComponent&&(this.bashComponent.appendOutput(chunk),this.ui.requestRender())},{excludeFromContext,id:bashExecutionId,operations:eventResult?.operations});this.bashComponent&&this.bashComponent.setComplete(result.exitCode,result.cancelled,result.truncated?{truncated:!0,content:result.output}:void 0,result.fullOutputPath)}catch(error){this.bashComponent&&this.bashComponent.setComplete(void 0,!1),this.showError(`Bash command failed: ${error instanceof Error?error.message:\"Unknown error\"}`)}this.pendingBashComponents.includes(this.bashComponent)||this.liveBashComponents.delete(bashExecutionId),this.bashComponent=void 0,this.ui.requestRender()}async handleCompactCommand(cus"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "import * as fs from \"node:fs\";",
+    "new": "import * as fs from \"node:fs\";\nimport * as btwHostFS from \"node:fs\"; // pi-btw-native control\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "import { createRequire as __piCreateRequire } from \"node:module\";",
+    "new": "import { createRequire as __piCreateRequire } from \"node:module\";\nimport * as btwHostFS from \"node:fs\"; // pi-btw-native control\n"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "    async bindCurrentSessionExtensions() {",
+    "new": "publishBtwHostSession() {\n const file=process.env.PI_BTW_NATIVE_CONTROL;if(!file) return;\n const session=this.session.sessionManager;\n const temporary=file+'.session.tmp';\n btwHostFS.writeFileSync(temporary,JSON.stringify({sessionFile:session.getSessionFile(),id:session.getSessionId(),cwd:session.getCwd()}));\n btwHostFS.renameSync(temporary,file+'.session');\n}\ninstallBtwHostControl() {\n const file=process.env.PI_BTW_NATIVE_CONTROL;\n if(!file || this.btwHostPoll) return;\n const update=()=>{\n  try {\n   const value=JSON.parse(btwHostFS.readFileSync(file,'utf8'));\n   if(typeof value.visible!=='boolean'||typeof value.close!=='boolean'||!Number.isInteger(value.revision)) return;\n   if(!this.btwHostInitialModelChecked){\n    this.btwHostInitialModelChecked=true;\n    const model=this.session.model;\n    if(value.expectedModel && (!model || value.expectedModel!==model.provider+'/'+model.id)) {\n     btwHostFS.writeFileSync(file+'.error','Native /btw inherited model is unavailable; refusing model fallback.');\n     void this.shutdown();return;\n    }\n   }\n   this.setHostVisibility(value.visible);\n   const session=this.session.sessionManager;\n   this.publishBtwHostSession();\n   btwHostFS.writeFileSync(file+'.ack',JSON.stringify({revision:value.revision,pid:process.pid,sessionId:session.getSessionId()}));\n   if(value.close) void this.shutdown();\n  } catch(error) { /* Unpublished atomic control is not a visibility acknowledgment. */ }\n };\n this.btwHostPoll=setInterval(update,50);update();\n}\n    async bindCurrentSessionExtensions() {\n        this.publishBtwHostSession();this.installBtwHostControl();"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "async bindCurrentSessionExtensions(){",
+    "new": "publishBtwHostSession() {\n const file=process.env.PI_BTW_NATIVE_CONTROL;if(!file) return;\n const session=this.session.sessionManager;\n const temporary=file+'.session.tmp';\n btwHostFS.writeFileSync(temporary,JSON.stringify({sessionFile:session.getSessionFile(),id:session.getSessionId(),cwd:session.getCwd()}));\n btwHostFS.renameSync(temporary,file+'.session');\n}\ninstallBtwHostControl() {\n const file=process.env.PI_BTW_NATIVE_CONTROL;\n if(!file || this.btwHostPoll) return;\n const update=()=>{\n  try {\n   const value=JSON.parse(btwHostFS.readFileSync(file,'utf8'));\n   if(typeof value.visible!=='boolean'||typeof value.close!=='boolean'||!Number.isInteger(value.revision)) return;\n   if(!this.btwHostInitialModelChecked){\n    this.btwHostInitialModelChecked=true;\n    const model=this.session.model;\n    if(value.expectedModel && (!model || value.expectedModel!==model.provider+'/'+model.id)) {\n     btwHostFS.writeFileSync(file+'.error','Native /btw inherited model is unavailable; refusing model fallback.');\n     void this.shutdown();return;\n    }\n   }\n   this.setHostVisibility(value.visible);\n   const session=this.session.sessionManager;\n   this.publishBtwHostSession();\n   btwHostFS.writeFileSync(file+'.ack',JSON.stringify({revision:value.revision,pid:process.pid,sessionId:session.getSessionId()}));\n   if(value.close) void this.shutdown();\n  } catch(error) { /* Unpublished atomic control is not a visibility acknowledgment. */ }\n };\n this.btwHostPoll=setInterval(update,50);update();\n}\nasync bindCurrentSessionExtensions(){this.publishBtwHostSession();this.installBtwHostControl();"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "    async shutdown(options) {",
+    "new": "    async shutdown(options) {\n        this.publishBtwHostSession();clearInterval(this.btwHostPoll);this.btwHostPoll=undefined;"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "async shutdown(options){",
+    "new": "async shutdown(options){this.publishBtwHostSession();clearInterval(this.btwHostPoll);this.btwHostPoll=undefined;"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "await this.runtimeHost.dispose();\n            this.themeController.disableAutoSync();",
+    "new": "await this.runtimeHost.dispose();\n            this.publishBtwHostSession();\n            this.themeController.disableAutoSync();"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/modes/interactive/interactive-mode.js",
+    "old": "this.stop();\n        await this.runtimeHost.dispose();\n        const resumeCommand",
+    "new": "this.stop();\n        await this.runtimeHost.dispose();\n        this.publishBtwHostSession();\n        const resumeCommand"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "await this.runtimeHost.dispose(),this.themeController.disableAutoSync()",
+    "new": "await this.runtimeHost.dispose(),this.publishBtwHostSession(),this.themeController.disableAutoSync()"
+  },
+  {
+    "package": "pi-coding-agent",
+    "path": "dist/bundle/chunks/chunk-MM3LKT73.js",
+    "old": "this.stop(),await this.runtimeHost.dispose();let resumeCommand",
+    "new": "this.stop(),await this.runtimeHost.dispose();this.publishBtwHostSession();let resumeCommand"
+  }
+]

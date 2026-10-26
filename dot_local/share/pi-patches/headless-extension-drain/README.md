@@ -1,6 +1,6 @@
 # Headless extension compaction drain
 
-> **Layout:** `patch.mjs` selects `patch.pi-1.1.mjs`, `patch.pi-1.2.mjs` or `patch.pi-1.3.mjs` by installed Pi version (see ../README.md, "Pi version selection"). This README and its proofs describe the Pi 1.2.x payload (`patch.pi-1.2.mjs`); `patch.pi-1.3.mjs` is a byte-identical copy whose anchors all match Pi 1.3.0; the 1.1.x payload is the unchanged pre-port revision.
+> **Layout:** `patch.mjs` selects `patch.pi-1.1.mjs` for Pi 1.1.x and `patch.pi-1.2.mjs` for Pi 1.2.0 and later (see ../README.md, "Pi version selection"). This README and its proofs describe `patch.pi-1.2.mjs`, whose anchors match Pi 1.2.0, 1.3.0 and 1.4.0 unchanged; the 1.1.x payload is the unchanged pre-port revision.
 
 
 Pi 0.85.0's `--print` host awaits `session.prompt()` but does not own the
@@ -38,9 +38,9 @@ which now sits before `async _startRun(trigger, onStarted) {` (bundle:
 `async _startRun(trigger,onStarted){`). The `sendUserMessage` and `compact`
 callback anchors and the print-mode `session.prompt` anchors are unchanged.
 Nothing was dropped: 1.2.0 does not own fire-and-forget extension work through
-print shutdown. Pi 1.3.0 keeps every anchor, so `patch.pi-1.3.mjs` is the same
-payload; all four proof scenarios pass on 1.3.0, and stock 1.3.0 still fails
-inter-turn and final-turn. `settlement-abort` shares the `_startRun`
+print shutdown. Pi 1.3.0 and 1.4.0 keep every anchor, so `patch.pi-1.2.mjs`
+serves them; all four proof scenarios pass on 1.3.0 and 1.4.0, and stock 1.3.0
+still fails inter-turn and final-turn. `settlement-abort` shares the `_startRun`
 definition anchor (this patch inserts before it, that one after); the full
 ordered stack was verified together on 1.2.0 and 1.3.0.
 
