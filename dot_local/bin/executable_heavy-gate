@@ -8,26 +8,44 @@
 #
 # Usage:
 #   heavy-gate                          check once; exit 0 if allowed, 1 if refused (the reasons on stderr)
-#   heavy-gate [--wait SECONDS] -- CMD  try until allowed, then run CMD while holding the gate, so only one
-#                                       heavy job runs at a time; exit with CMD's status
+#   heavy-gate [--wait SECONDS] -- CMD  try until allowed, then run CMD while holding a slot, so at most two heavy
+#                                       jobs run at a time; exit with CMD's status
+#   heavy-gate priorities               print the priorities file, the holders and the waiters with their priority
+#   heavy-gate priority PATTERN NUMBER  set (or update) one rule in the priorities file; a new rule goes first, so it wins
 #
-# The rules, all of which must hold:
+# The rules, all of which must hold for every start:
 #   load1 < 8    memory pressure level 1 (normal)    memory free >= 30%
 #   Swapouts flat over 60 seconds (the machine is not swapping right now)
-#   no other heavy-gate job holds the gate
+#   a free slot: at most HEAVY_GATE_SLOTS (default 2) heavy-gate jobs hold the gate at once
+#   no other job is in its 60-second check: a second start waits until the first has passed it (then it is running)
+#   no waiting job with a lower HEAVY_GATE_PRIORITY number (see below)
 # Swap free is not an admission rule (macOS grows swap as it needs it), but below 500 MB the gate refuses outright: a safety floor.
 # The load, pressure, memory and swap figures are read again after the 60 seconds, so the answer is about now, not a minute ago.
 # A figure that cannot be read as a number counts as a refusal.
 #
+# Priority: a lower number is more important; a job with no rule is 5. The number comes from, in order, HEAVY_GATE_PRIORITY
+# (a whole number in the job's environment), then the first rule in the priorities file that matches, then 5. The file is
+# ${HEAVY_GATE_PRIORITIES:-~/.config/heavy-gate/priorities}: one rule per line, "NUMBER  PATTERN"; PATTERN is plain text and
+# matches a job when it appears in the job's command line or its working directory; '#' starts a comment line. It is read on
+# every try, so an edit reaches jobs that are already waiting. A job waiting with "-- CMD" registers its number under
+# <lock>.waiters/ (pid, number, state, directory, command) and defers its try while another live waiter has a lower number.
+# The same or a higher number does not defer it. Entries of dead pids are ignored. Nothing else orders the queue.
+# Older heavy-gate versions (jobs already running before this one was installed) have no priority and defer to no one.
+#
 # --wait SECONDS bounds when a new try may start (default 0: one try); none starts at or after the deadline. A try that
 # has begun takes about 60 seconds (the Swapouts watch) and is allowed to finish.
-# The gate is a lock named for the pid of its holder, shared by every heavy-gate of one user. A holder killed
-# with SIGKILL leaves its lock until its pid is seen dead; a recycled pid keeps the gate held until it exits.
+# A slot is a symlink named for the pid of its holder, shared by every heavy-gate of one user. Slot 1 is the lock path
+# itself (/tmp/heavy-gate-<uid>.lock, the only gate older heavy-gate versions know); slot 2 is <lock>.2. A new job takes
+# slot 1 first. Old and new versions exclude each other on slot 1. An old version never looks at slot 2, the check
+# window or priorities, so an old holder plus a new job run together (that is the second slot), and an old job can
+# start while a new one is in its check. A holder killed with SIGKILL leaves its slot until its pid is seen dead; a
+# recycled pid keeps the slot held until it exits.
 #
 # Exit status: 0 allowed (or CMD's own status), 1 refused, 75 still refused after --wait, 2 usage / unsupported system.
 #
-# Environment (for tests): HEAVY_GATE_SWAP_WINDOW seconds to watch Swapouts (60), HEAVY_GATE_POLL seconds between
-# tries while waiting (15), HEAVY_GATE_LOCK the lock path (/tmp/heavy-gate-<uid>.lock).
+# Environment: HEAVY_GATE_SLOTS how many jobs may hold the gate (2), HEAVY_GATE_PRIORITY see above, HEAVY_GATE_PRIORITIES the file.
+# For tests: HEAVY_GATE_SWAP_WINDOW seconds to watch Swapouts (60), HEAVY_GATE_POLL seconds between tries while waiting
+# (15), HEAVY_GATE_LOCK the slot 1 path (/tmp/heavy-gate-<uid>.lock; the other files are named from it).
 
 set -eu
 
@@ -36,27 +54,20 @@ SWAP_FLOOR_MB=500
 MEM_FREE_MIN_PCT=30
 SWAP_WINDOW=${HEAVY_GATE_SWAP_WINDOW:-60}
 POLL=${HEAVY_GATE_POLL:-15}
+SLOTS=${HEAVY_GATE_SLOTS:-2}
+DEFAULT_PRIORITY=5
+PRIORITIES=${HEAVY_GATE_PRIORITIES:-$HOME/.config/heavy-gate/priorities}
 LOCK=${HEAVY_GATE_LOCK:-/tmp/heavy-gate-$(id -u).lock}
-GUARD="$LOCK.guard"
+GUARD="$LOCK.guard"      # shared by every claim below, and by older versions for slot 1
+ADMIT="$LOCK.admit"      # held by the one job that is in its check; older versions do not know it
+WAITERS="$LOCK.waiters"  # one file per waiting job, named for its pid, holding its priority
 
 # log LEVEL message
 log() { level=$1; shift; printf '[heavy-gate] %s: %s\n' "$level" "$*" >&2; }
 refuse() { log WARN "refused: $*"; }
-usage() { sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '3,/^$/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 number() { awk -v v="$1" 'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/) }'; }
 
-WAIT=0
-while [ $# -gt 0 ]; do
-  case $1 in
-    --wait) [ $# -ge 2 ] || usage; WAIT=$2; shift 2 ;;
-    --) shift; break ;;
-    -h|--help) usage ;;
-    *) log ERROR "unknown argument: $1"; usage ;;
-  esac
-done
-case $WAIT in '' | *[!0-9]*) log ERROR "--wait takes a whole number of seconds"; exit 2 ;; esac
-if ! number "$SWAP_WINDOW" || ! number "$POLL"; then log ERROR "HEAVY_GATE_SWAP_WINDOW and HEAVY_GATE_POLL must be numbers"; exit 2; fi
-[ "$(uname -s)" = Darwin ] || { log ERROR "macOS only"; exit 2; }
 
 # ---- the figures (each prints one value, or nothing if unreadable) ----
 load1() { sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}'; }
@@ -92,54 +103,207 @@ swapouts_flat() {
   [ "$a" = "$b" ] || { refuse "Swapouts rose over ${SWAP_WINDOW}s (the machine is swapping)"; return 1; }
 }
 
-# The gate lock is a symlink named for the holder's pid: creating it is atomic. Clearing a dead holder's lock and taking it
-# is one step done under a short guard (a directory), so two contenders cannot both clear and both take.
-holder() { readlink "$LOCK" 2>/dev/null || true; }
+# A slot (and the admission lock) is a symlink named for the holder's pid: creating it is atomic. Clearing a dead holder's link and
+# taking it is one step done under a short guard (a directory), so two contenders cannot both clear and both take.
+slot_path() { if [ "$1" = 1 ]; then printf '%s' "$LOCK"; else printf '%s.%s' "$LOCK" "$1"; fi; }
+holder() { readlink "$1" 2>/dev/null || true; }
 alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
-take_lock() {
+# claim PATH: 0 taken; 1 held by a live job (its pid in $h); 2 could not get the guard (already reported)
+claim() {
   tries=0
   until mkdir "$GUARD" 2>/dev/null; do
     # The guard is held for a few milliseconds. A guard that stays means a contender was killed (SIGKILL) inside that
     # window; removing it by age or pid cannot be made safe, so refuse and say what to do.
-    tries=$((tries + 1)); [ "$tries" -le 50 ] || { refuse "could not get the gate guard $GUARD; if no heavy-gate is running, remove it"; return 1; }
+    tries=$((tries + 1)); [ "$tries" -le 50 ] || { refuse "could not get the gate guard $GUARD; if no heavy-gate is running, remove it"; return 2; }
     sleep 0.1
   done
   have_guard=1
   got=1; h=
-  if ln -s "$$" "$LOCK" 2>/dev/null; then got=0
+  if ln -s "$$" "$1" 2>/dev/null; then got=0
   else
-    h=$(holder)
+    h=$(holder "$1")
     if [ -n "$h" ] && ! alive "$h"; then
-      rm -f "$LOCK"
-      if ln -s "$$" "$LOCK" 2>/dev/null; then got=0; fi
+      rm -f "$1"
+      if ln -s "$$" "$1" 2>/dev/null; then got=0; fi
     fi
   fi
   drop_guard
-  [ "$got" = 0 ] || refuse "another heavy job holds the gate (pid ${h:-unknown})"
   return "$got"
 }
 have_guard=0
 # The flag goes first: a signal between the two steps leaves a guard behind (the next run refuses and says so) and never removes someone else's.
 # A signal between a successful mkdir and have_guard=1 does the same.
 drop_guard() { if [ "$have_guard" = 1 ]; then have_guard=0; rmdir "$GUARD" 2>/dev/null || true; fi; }
-drop_lock() { if [ "$(holder)" = "$$" ]; then rm -f "$LOCK"; fi; return 0; }
-gate_free() { h=$(holder); if alive "$h"; then refuse "another heavy job holds the gate (pid $h)"; return 1; fi; }
 
-# One try. With $1 = 1 the lock is held on success and dropped on refusal.
-try_gate() {
-  if [ "$1" = 1 ]; then take_lock || return 1; else gate_free || return 1; fi
-  if cheap_rules && swapouts_flat && cheap_rules && { [ "$1" = 1 ] || gate_free; }; then return 0; fi
-  if [ "$1" = 1 ]; then drop_lock; fi
+# The slot this job holds (empty if none), and whether it holds the admission lock.
+mine=
+admitted=0
+drop_slot() { if [ -n "$mine" ] && [ "$(holder "$mine")" = "$$" ]; then rm -f "$mine"; fi; mine=; return 0; }
+drop_admit() { if [ "$admitted" = 1 ]; then admitted=0; if [ "$(holder "$ADMIT")" = "$$" ]; then rm -f "$ADMIT"; fi; fi; return 0; }
+
+# Only one job at a time is in its check, so two starts cannot slip through the same Swapouts window.
+take_admit() {
+  rc=0; claim "$ADMIT" || rc=$?
+  case $rc in
+    0) admitted=1; return 0 ;;
+    1) refuse "another heavy job is in its check (pid ${h:-unknown}); a start waits until the one before it has passed" ;;
+  esac
+  return 1
+}
+# Slot 1 first, so an older heavy-gate (which knows only slot 1) is kept out as long as possible.
+take_slot() {
+  k=1; held=
+  while [ "$k" -le "$SLOTS" ]; do
+    rc=0; claim "$(slot_path "$k")" || rc=$?
+    case $rc in
+      0) mine=$(slot_path "$k"); return 0 ;;
+      2) return 1 ;;
+    esac
+    held="$held ${h:-unknown}"; k=$((k + 1))
+  done
+  refuse "all $SLOTS heavy slot(s) are held (pid$held)"
+  return 1
+}
+# Check only (nothing is taken): is a slot free and nobody in a check?
+gate_free() {
+  k=1; held=
+  while [ "$k" -le "$SLOTS" ]; do
+    h=$(holder "$(slot_path "$k")")
+    if ! alive "$h"; then
+      h=$(holder "$ADMIT")
+      if alive "$h"; then refuse "another heavy job is in its check (pid $h)"; return 1; fi
+      return 0
+    fi
+    held="$held $h"; k=$((k + 1))
+  done
+  refuse "all $SLOTS heavy slot(s) are held (pid$held)"
   return 1
 }
 
+# ---- priorities ----
+# A rule is a line "NUMBER  PATTERN" (not a comment); the PATTERN is the rest of the line. Shared by the reader and the writer.
+AWK_RULES='function isrule(l) { return l !~ /^[ \t]*#/ && l ~ /^[ \t]*[0-9]+[ \t]+[^ \t]/ }
+function rtext(l) { sub(/^[ \t]*[0-9]+[ \t]+/, "", l); sub(/[ \t]+$/, "", l); return l }'
+# This job's number: the environment, else the first rule matching its command line or directory, else the default. Read on every call.
+# This is the only place that turns a job into a number. The pattern file is an interim source: a central workstream rank is meant to replace it here.
+resolve_priority() {
+  if [ -n "${HEAVY_GATE_PRIORITY:-}" ]; then printf '%s' "$HEAVY_GATE_PRIORITY"; return 0; fi
+  r=$(GG_CWD=$PWD GG_CMD=$JOB awk "$AWK_RULES"'
+    isrule($0) { t = rtext($0); if (t != "" && (index(ENVIRON["GG_CWD"], t) || index(ENVIRON["GG_CMD"], t))) { n = $1; print n; exit } }' "$PRIORITIES" 2>/dev/null) || r=
+  printf '%s' "${r:-$DEFAULT_PRIORITY}"
+}
+# heavy-gate priority PATTERN NUMBER: update the rule with this exact PATTERN, or add one before the others so it wins.
+set_priority() {
+  case $2 in '' | *[!0-9]*) log ERROR "NUMBER must be a whole number"; exit 2 ;; esac
+  pat=$(printf '%s' "$1" | awk '{ sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); print; exit }')
+  [ -n "$pat" ] || { log ERROR "PATTERN is empty"; exit 2; }
+  mkdir -p "$(dirname "$PRIORITIES")"
+  src=$PRIORITIES; [ -f "$src" ] || src=/dev/null
+  GG_PAT=$pat GG_NUM=$2 awk "$AWK_RULES"'
+    { L[++n] = $0 }
+    END {
+      pat = ENVIRON["GG_PAT"]; line = ENVIRON["GG_NUM"] "  " pat
+      for (i = 1; i <= n; i++) if (isrule(L[i]) && rtext(L[i]) == pat) { L[i] = line; found = 1; break }
+      if (!found) {
+        at = n + 1
+        for (i = 1; i <= n; i++) if (isrule(L[i])) { at = i; break }
+        for (i = n; i >= at; i--) L[i + 1] = L[i]
+        L[at] = line; n++
+      }
+      for (i = 1; i <= n; i++) print L[i]
+    }' "$src" > "$PRIORITIES.new.$$"
+  mv "$PRIORITIES.new.$$" "$PRIORITIES"
+  printf 'priority %s for "%s" (%s)\n' "$2" "$pat" "$PRIORITIES"
+}
+# An entry per job that uses a command: line 1 number, 2 state (waiting or running), 3 directory, 4 command. Written atomically.
+write_entry() {
+  { mkdir -p "$WAITERS" && printf '%s\n%s\n%s\n%s\n' "$PRIORITY" "$1" "$PWD" "$JOB" > "$WAITERS/$$.new" && mv "$WAITERS/$$.new" "$WAITERS/$$"; } 2>/dev/null ||
+    log WARN "could not write the waiter entry; this job's priority is not seen by others"
+}
+unregister() { rm -f "$WAITERS/$$" "$WAITERS/$$.new"; }
+# A job defers while a live waiter has a lower number. Dead pids are ignored (and swept).
+defer_to_priority() {
+  for f in "$WAITERS"/*; do
+    [ -f "$f" ] || continue
+    w=${f##*/}; case $w in '' | *[!0-9]*) continue ;; esac
+    [ "$w" != "$$" ] || continue
+    alive "$w" || { rm -f "$f"; continue; }
+    n=; st=
+    { IFS= read -r n; IFS= read -r st; } 2>/dev/null < "$f" || true
+    [ "$st" = waiting ] || continue
+    case $n in '' | *[!0-9]*) continue ;; esac
+    if [ "$n" -lt "$PRIORITY" ]; then refuse "deferring to the waiting job pid $w, priority $n (this one is $PRIORITY)"; return 1; fi
+  done
+  return 0
+}
+# heavy-gate priorities
+show_job() {
+  pr=; st=; dir=; cmd=
+  if [ -f "$WAITERS/$2" ]; then { IFS= read -r pr; IFS= read -r st; IFS= read -r dir; IFS= read -r cmd; } 2>/dev/null < "$WAITERS/$2" || true; fi
+  printf '  %spid %s  priority %s  %s  %s\n' "$1" "$2" "${pr:-unknown (older heavy-gate)}" "$dir" "$cmd"
+}
+show_priorities() {
+  printf 'priorities file: %s\n' "$PRIORITIES"
+  if [ -f "$PRIORITIES" ]; then cat "$PRIORITIES"; else printf '(absent: every job is priority %s)\n' "$DEFAULT_PRIORITY"; fi
+  printf 'no matching rule: priority %s. HEAVY_GATE_PRIORITY=N in a job'"'"'s environment overrides the file for that job.\n' "$DEFAULT_PRIORITY"
+  echo "holders:"
+  k=1; held=" "
+  while [ "$k" -le "$SLOTS" ]; do
+    h=$(holder "$(slot_path "$k")")
+    if alive "$h"; then show_job "slot $k  " "$h"; held="$held$h "; fi
+    k=$((k + 1))
+  done
+  echo "waiting:"
+  for f in "$WAITERS"/*; do
+    [ -f "$f" ] || continue
+    w=${f##*/}; case $w in '' | *[!0-9]*) continue ;; esac
+    alive "$w" || continue
+    case $held in *" $w "*) continue ;; esac
+    show_job "" "$w"
+  done
+}
+
+# One try. With $1 = 1 a slot is held on success and everything taken is dropped on refusal.
+try_gate() {
+  if [ "$1" = 1 ]; then
+    PRIORITY=$(resolve_priority); write_entry waiting
+    defer_to_priority || return 1
+    take_admit || return 1
+    take_slot || { drop_admit; return 1; }
+  else
+    gate_free || return 1
+  fi
+  if cheap_rules && swapouts_flat && cheap_rules && { [ "$1" = 1 ] || gate_free; }; then drop_admit; return 0; fi
+  if [ "$1" = 1 ]; then drop_slot; drop_admit; fi
+  return 1
+}
+
+case ${1:-} in
+  priorities) [ $# -eq 1 ] || usage; show_priorities; exit 0 ;;
+  priority) [ $# -eq 3 ] || usage; set_priority "$2" "$3"; exit 0 ;;
+esac
+WAIT=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    --wait) [ $# -ge 2 ] || usage; WAIT=$2; shift 2 ;;
+    --) shift; break ;;
+    -h|--help) usage ;;
+    *) log ERROR "unknown argument: $1"; usage ;;
+  esac
+done
+case $WAIT in '' | *[!0-9]*) log ERROR "--wait takes a whole number of seconds"; exit 2 ;; esac
+if ! number "$SWAP_WINDOW" || ! number "$POLL"; then log ERROR "HEAVY_GATE_SWAP_WINDOW and HEAVY_GATE_POLL must be numbers"; exit 2; fi
+case $SLOTS in '' | *[!0-9]* | 0) log ERROR "HEAVY_GATE_SLOTS must be a whole number, 1 or more"; exit 2 ;; esac
+case ${HEAVY_GATE_PRIORITY:-0} in '' | *[!0-9]*) log ERROR "HEAVY_GATE_PRIORITY must be a whole number (lower is more important)"; exit 2 ;; esac
+[ "$(uname -s)" = Darwin ] || { log ERROR "macOS only"; exit 2; }
 if [ $# -eq 0 ]; then
   if try_gate 0; then log INFO "allowed"; exit 0; fi
   exit 1
 fi
 
 deadline=$(( $(date +%s) + WAIT ))
-trap 'drop_guard; drop_lock' EXIT
+JOB=$*
+trap 'drop_guard; drop_admit; drop_slot; unregister' EXIT
 trap 'exit 143' INT TERM HUP
 until try_gate 1; do
   left=$(( deadline - $(date +%s) ))
@@ -149,6 +313,7 @@ until try_gate 1; do
   # no new try may start at or after the deadline
   if [ "$(date +%s)" -ge "$deadline" ]; then log WARN "still refused after ${WAIT}s; not running: $*"; exit 75; fi
 done
+write_entry running
 log INFO "allowed; running: $*"
 status=0
 "$@" || status=$?
