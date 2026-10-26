@@ -1,0 +1,10 @@
+# heavy-gate slots: how many heavy jobs may run at once. One whole number from 1 to 8 on a line of its own.
+#
+# No number here means 3. Lowering it never stops a running job: no new job starts until fewer than the new number hold the gate.
+# Every start still passes every other rule (load, memory, pressure, Swapouts, swap floor); those are not set here.
+# A value that is 0 or not a whole number is ignored (the default 3 applies, with a warning); a value above 8 counts as 8.
+# The file is read on every try, so an edit reaches jobs that are already waiting (on this version of heavy-gate).
+# HEAVY_GATE_SLOTS=N in a job's environment overrides this file for that one job.
+#
+# Edit by hand, or:  heavy-gate slots N     See the number and where it comes from:  heavy-gate slots
+# chezmoi creates this file only if it is absent and never overwrites it: your edits stay.
