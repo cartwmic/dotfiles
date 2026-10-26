@@ -1,0 +1,35 @@
+{{- $repo := includeTemplate "instance_repo" (dict "root" . "name" "coordinator") | html -}}
+{{- $home := .chezmoi.homeDir | html -}}
+{{- $state := printf "%s/.local/share/coordinator-work" .chezmoi.homeDir | html -}}
+{{- /* extraPath: directories (no trailing colon) the unit's PATH starts with; the setup script puts the directories of node, herdr and git there when they are not in the base PATH. */ -}}
+{{- $extra := "" -}}
+{{- with dig "instances" "coordinator" "extraPath" "" . -}}{{- $extra = printf "%s:" (. | html) -}}{{- end -}}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- A second coordinator daemon (the work instance, on Matrix; see docs/work-instance.md). Same program as local.coordinatord.plist with its own label, state directory and logs.
+     {{ $home }} is the home directory, {{ $repo }} the checkout the daemon runs from, {{ $state }} the work instance's state directory (never the personal ~/.local/share/coordinator). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.coordinatord.work</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>node</string>
+    <string>--experimental-strip-types</string>
+    <string>--disable-warning=ExperimentalWarning</string>
+    <string>{{ $repo }}/src/coordinatord/main.ts</string>
+  </array>
+  <key>WorkingDirectory</key><string>{{ $repo }}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>COORDINATOR_STATE_DIR</key><string>{{ $state }}</string>
+    <!-- node, herdr and git (the daemon's tools) must be found from here; adjust to the work computer's layout. Pi is started in the Herdr pane and found through the pane shell's PATH, or set pi_command (docs/work-instance.md). -->
+    <key>PATH</key><string>{{ $extra }}{{ $home }}/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>{{ $home }}/Library/Logs/coordinator-work/coordinatord.log</string>
+  <key>StandardErrorPath</key><string>{{ $home }}/Library/Logs/coordinator-work/coordinatord.log</string>
+</dict>
+</plist>

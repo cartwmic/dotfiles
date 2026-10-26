@@ -25,6 +25,7 @@ data:
   # instances:
   #   coordinator: {enabled: true}
   #   retro: {enabled: true, channelId: "<#retro channel id>", opItem: "op://VAULT/ITEM/bot_token"}
+  # axon-work-computer: only the Matrix coordinator, same flag: instances: {coordinator: {enabled: true, repo: /Users/you/coordinator-work}}
 
 hooks:
   read-source-state:
