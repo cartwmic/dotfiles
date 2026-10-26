@@ -446,7 +446,7 @@ data:
 
 How it works:
 
-- The units are installed on **personal macOS only** for now; the work-profile units and their defaults arrive with the work-instance change. Dotfiles never clones. The checkout must exist at `repo`; otherwise the instance is NOT READY and the apply says what is missing.
+- The units are installed on macOS only: `local.coordinatord` and `local.retrod` on the personal profile, `local.coordinatord.work` (the Matrix coordinator) on `axon-work-computer`. Work Retro is a later change. Dotfiles never clones. The checkout must exist at `repo`; otherwise the instance is NOT READY and the apply says what is missing.
 - chezmoi manages each unit only as an inert copy in `~/.local/share/instances/launchd/`. `~/.local/user_scripts/instances_reconcile.sh` (run by `run_after_75_instances_reconcile.sh.tmpl` on every apply) copies it into `~/Library/LaunchAgents` only when the instance is ready, then starts it. A file there would be loaded at next login, so a half-configured instance never gets one.
 - Every apply prints one status line per instance and the script always exits 0: `READY (started | running | adopted | reloaded)`, `NOT READY: <what>`, `STOP FAILED`, `RELOAD FAILED`. A not-ready instance is retried by the next apply. The last status of an opted-in instance is also kept in `~/.local/state/instances/<name>.status`; an instance that never opted in writes no state, and opt-out removes it.
 - First-time config runs when the instance has no config yet (and again if an earlier run did not finish), from the repo's own script (exit 0 ready, exit 3 with `NOT-READY: <what>` not ready yet). Nothing secret is read or stored by dotfiles.
@@ -454,7 +454,25 @@ How it works:
 - A service that is already running when you first set `enabled: true` (this Mac's coordinator) is adopted: one `print`, the daemon is not touched, and the installed unit is only rewritten if it differs from the managed one (then reported, not reloaded). With no flag on a Mac that never opted in, an apply makes no `launchctl` call at all.
 - Opt-out (flag false or removed) acts only on an instance dotfiles started or adopted (ownership is recorded before the unit is installed, so a failed start is cleaned up too). It boots the daemon out and removes the unit file; state, config, tokens, playbooks and logs are kept. The Pi pane keeps running (change `PANE_NOTE` and the opt-out branch in the script if that should change).
 
-Tests: `python3 -m unittest discover -s tests/instances -v` (renders against golden units, the reconcile script against a stub `launchctl` with exact call lists, and a scratch-HOME `chezmoi apply` on macOS). `python3 tests/instances/mutate.py` checks the suite catches 22 deliberate breaks of the safety rules.
+### The work Mac (`axon-work-computer`)
+
+The work profile runs one instance, the Matrix coordinator (`cartwmic/coordinator`, `docs/work-instance.md`). Its flag is the same `instances.coordinator.enabled`; the profile picks the variant (instance name `coordinator-work`: unit `local.coordinatord.work`, state `~/.local/share/coordinator-work`, logs `~/Library/Logs/coordinator-work`). `retro` data is ignored on this profile.
+
+```yaml
+data:
+  profile: axon-work-computer
+  instances:
+    coordinator:
+      enabled: true                       # absent or false: off. Ships off.
+      repo: /Users/you/coordinator-work   # ABSOLUTE path of your checkout; default ~/git/coordinator
+      # extraPath: /opt/node/bin:/opt/herdr/bin   # optional: only if the live unit's PATH starts with tool directories (see below)
+```
+
+- **A Mac set up by hand** (the coordinator's `scripts/work-instance-setup.sh` already ran): the config, token file and playbook exist and the daemon runs. Apply once with the flag **off**: it only lays down the inert unit and prints `coordinator-work: not opted in` (no `launchctl` call). Compare it with the live file: `diff ~/.local/share/instances/launchd/local.coordinatord.work.plist ~/Library/LaunchAgents/local.coordinatord.work.plist`. It should be identical (the rendered unit equals what the setup script installs). If the program path and `WorkingDirectory` differ, set `repo` to the checkout the live unit uses; if only the start of `PATH` differs, set `extraPath` to that prefix (no trailing colon). Then set the flag and apply: one `launchctl print`, and the running daemon is **adopted, not restarted**. A unit that still differs is rewritten on disk and reported (`NOT restarted`); reload on purpose with `INSTANCES_RELOAD=coordinator-work chezmoi apply`.
+- **A rebuilt Mac** (no config yet): with the flag on, apply runs the coordinator's `scripts/work-instance-setup.sh --yes-this-is-the-work-computer --config-only --rev <HEAD of the checkout> --state-dir ~/.local/share/coordinator-work` once, with `agent-alert`'s directory on its PATH for that run only. That needs the setup script to support `--config-only` and the exit contract of the instance scripts (exit 0 ready; exit 3 not ready yet, with `NOT-READY: <what>` on stdout, for example the owner has not joined the room; any other exit a failure, whose `[FAIL]` line is shown). Until the coordinator repo has `--config-only` the apply ends `NOT READY: setup script ... failed ... Unknown option --config-only` and installs and starts nothing: run the coordinator's handoff by hand, then set the flag (adoption, above).
+- `op`, a signed-in Pi, the 1Password Developer vault and every secret belong to the setup script. Dotfiles reads and prints none.
+
+Tests: `python3 -m unittest discover -s tests/instances -v` (renders against golden units, the work unit against what the coordinator's setup script installs, the reconcile script against a stub `launchctl` with exact call lists, and a scratch-HOME `chezmoi apply` on macOS). `python3 tests/instances/mutate.py` checks the suite catches deliberate breaks of the safety rules, the work variant and the files that feed the script.
 
 ## Tool Management with mise
 

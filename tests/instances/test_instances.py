@@ -29,12 +29,17 @@ HERE = Path(__file__).resolve().parent
 UNIT_DIR = ROOT / "dot_local" / "share" / "instances" / "launchd"
 COORD_UNIT = UNIT_DIR / "local.coordinatord.plist.tmpl"
 RETRO_UNIT = UNIT_DIR / "local.retrod.plist.tmpl"
+WORK_UNIT = UNIT_DIR / "local.coordinatord.work.plist.tmpl"
 WRAPPER = ROOT / "run_after_75_instances_reconcile.sh.tmpl"
 IGNORE = ROOT / ".chezmoiignore"
 SCRIPT = Path(os.environ.get("INSTANCES_SCRIPT_UNDER_TEST") or ROOT / "dot_local" / "user_scripts" / "executable_instances_reconcile.sh")
 GOLDEN_COORD = HERE / "golden" / "local.coordinatord.plist"
 GOLDEN_RETRO = HERE / "golden" / "local.retrod.plist"
+GOLDEN_WORK = HERE / "golden" / "local.coordinatord.work.plist"
+# docs/launchd/local.coordinatord.work.plist of cartwmic/coordinator (last changed in ef403d3, main 6576675): the template the work setup script renders with sed.
+COORDINATOR_WORK_TEMPLATE = HERE / "golden" / "coordinator-repo.local.coordinatord.work.plist"
 COORD_PATH = "/Volumes/Workshop/macbook/git/coordinator"
+WORK_COORD_PATH = "/Users/test/git/coordinator"
 RETRO_PATH = "/Volumes/Workshop/macbook/git/retro"
 HAVE_CHEZMOI = shutil.which("chezmoi") is not None
 DOMAIN = "gui/%d" % os.getuid()
@@ -76,6 +81,56 @@ class RenderTests(unittest.TestCase):
         data = {"profile": "axon-work-computer"}
         self.assertIn("<string>/Users/test/git/retro/src/retrod/main.ts</string>", render(RETRO_UNIT, data))
         self.assertIn("<string>/Users/test/git/coordinator/src/coordinatord/main.ts</string>", render(COORD_UNIT, data))
+
+    def test_work_coordinator_render_is_byte_identical_to_the_golden_unit(self):
+        self.assertEqual(render(WORK_UNIT, {"profile": "axon-work-computer"}), GOLDEN_WORK.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def setup_script_render(template_text, home, repo, state, extra=""):
+        """What scripts/work-instance-setup.sh does: three sed substitutions, then the tool directories it found are put first on PATH."""
+        text = template_text.replace("__HOME__", home).replace("__REPO__", repo).replace("__STATE__", state)
+        if extra:
+            text = text.replace("<key>PATH</key><string>", "<key>PATH</key><string>" + extra + ":", 1)
+        return text
+
+    def test_work_coordinator_render_is_byte_identical_to_what_the_setup_script_installs(self):
+        # The hand-installed unit on the work Mac is that script's output; adopting it must not see a difference (a difference is only reported, but noisy).
+        want = self.setup_script_render(COORDINATOR_WORK_TEMPLATE.read_text(encoding="utf-8"), "/Users/test", WORK_COORD_PATH, "/Users/test/.local/share/coordinator-work")
+        self.assertEqual(render(WORK_UNIT, {"profile": "axon-work-computer"}), want)
+        # With another checkout and the extra tool directories the script found (it puts them first, each followed by a colon).
+        data = {"profile": "axon-work-computer", "instances": {"coordinator": {"repo": "/Users/test/coordinator-work", "extraPath": "/opt/n/bin:/opt/h/bin"}}}
+        want = self.setup_script_render(COORDINATOR_WORK_TEMPLATE.read_text(encoding="utf-8"), "/Users/test", "/Users/test/coordinator-work",
+                                        "/Users/test/.local/share/coordinator-work", "/opt/n/bin:/opt/h/bin")
+        self.assertEqual(render(WORK_UNIT, data), want)
+
+    def test_work_coordinator_render_matches_a_coordinator_checkout_when_one_is_named(self):
+        checkout = os.environ.get("COORDINATOR_CHECKOUT")
+        template = Path(checkout) / "docs" / "launchd" / "local.coordinatord.work.plist" if checkout else None
+        if not template or not template.exists():
+            self.skipTest("set COORDINATOR_CHECKOUT to a coordinator checkout to compare with its current template")
+        want = self.setup_script_render(template.read_text(encoding="utf-8"), "/Users/test", WORK_COORD_PATH, "/Users/test/.local/share/coordinator-work")
+        self.assertEqual(render(WORK_UNIT, {"profile": "axon-work-computer"}), want)
+
+    def test_work_unit_keeps_its_own_label_state_and_logs_whatever_the_local_data_says(self):
+        text = render(WORK_UNIT, {"profile": "axon-work-computer", "instances": {"coordinator": {"repo": "/srv/co"}}})
+        self.assertIn("<key>Label</key><string>local.coordinatord.work</string>", text)
+        self.assertIn("<key>COORDINATOR_STATE_DIR</key><string>/Users/test/.local/share/coordinator-work</string>", text)
+        self.assertIn("/Users/test/Library/Logs/coordinator-work/coordinatord.log", text)
+        self.assertNotIn(".local/share/coordinator<", text)  # never the personal state directory
+
+    def test_work_wrapper_runs_only_the_work_coordinator_with_the_same_flag(self):
+        data = {"profile": "axon-work-computer", "instances": {"coordinator": {"enabled": True, "extraPath": "/opt/n/bin"}, "retro": {"enabled": True}}}
+        text = render(WRAPPER, data)
+        self.assertIn("export INSTANCES_LIST='coordinator-work'", text)
+        self.assertIn("export INSTANCES_COORDINATOR_WORK_ENABLED='true'", text)
+        self.assertIn("export INSTANCES_COORDINATOR_WORK_REPO='/Users/test/git/coordinator'", text)
+        self.assertIn("export INSTANCES_COORDINATOR_WORK_EXTRA_PATH='/opt/n/bin'", text)
+        self.assertNotIn("INSTANCES_RETRO", text)
+        self.assertNotIn("INSTANCES_COORDINATOR_ENABLED", text)
+        self.assertNotIn("launchctl", text)
+        personal = render(WRAPPER, {"profile": "personal", "instances": {"coordinator": {"enabled": True}}})
+        self.assertNotIn("INSTANCES_LIST", personal)
+        self.assertNotIn("COORDINATOR_WORK", personal)
 
     def test_wrapper_hands_the_flags_and_the_same_default_repo_to_the_script(self):
         text = render(WRAPPER, {"profile": "personal", "instances": {"retro": {"enabled": True, "channelId": "123", "opItem": "op://V/I/bot_token"}}})
@@ -127,8 +182,11 @@ class Scratch:
         self.bin = self.base / "bin"
         write_exec(self.bin / "launchctl", STUB_LAUNCHCTL)
         self.tools = self.base / "tools"
-        for tool in ("node", "herdr", "op", "git"):
+        for tool in ("node", "herdr", "op"):
             write_exec(self.tools / tool, "#!/bin/sh\nexit 0\n")
+        # git: "-C DIR rev-parse HEAD" prints a commit unless GIT_FAIL exists in the stub dir; anything else is a no-op.
+        write_exec(self.tools / "git", '#!/bin/sh\n[ -e "$STUB_DIR/GIT_FAIL" ] && { echo "fatal: not a git repository" >&2; exit 128; }\n'
+                   '[ "$3" = rev-parse ] && echo 0123456789abcdef0123456789abcdef01234567\nexit 0\n')
         self.co = self.base / "co"
         write_exec(self.co / "src" / "coordinatord" / "main.ts", "")
         self.re = self.base / "re"
@@ -137,10 +195,12 @@ class Scratch:
         self.units.mkdir()
         self.set_unit("local.coordinatord", "coordinator-v1")
         self.set_unit("local.retrod", "retro-v1")
+        self.set_unit("local.coordinatord.work", "work-v1")
         self.agents = self.home / "Library" / "LaunchAgents"
         self.state_root = self.home / ".local" / "state" / "instances"
         self.coordinator_state = self.home / ".local" / "share" / "coordinator"
         self.retro_state = self.home / ".local" / "share" / "retro"
+        self.work_state = self.home / ".local" / "share" / "coordinator-work"
         self.last = None
 
     def cleanup(self):
@@ -195,6 +255,22 @@ class Scratch:
         self.last = subprocess.run(["sh", str(SCRIPT)], capture_output=True, text=True, timeout=120, env=env, cwd=str(self.base))
         return self.last
 
+    def run_work(self, enabled=None, reload=None, **extra):
+        """The reconcile script as the work profile's wrapper runs it: only the work coordinator, its own variables."""
+        env = dict(os.environ)
+        env.update(
+            HOME=str(self.home), PATH=str(self.bin) + os.pathsep + os.environ["PATH"], STUB_DIR=str(self.stub),
+            INSTANCES_UNIT_DIR=str(self.units), INSTANCES_TOOL_PATH=str(self.tools), TMPDIR=str(self.base), INSTANCES_LIST="coordinator-work",
+            INSTANCES_COORDINATOR_WORK_ENABLED="" if enabled is None else str(enabled).lower(), INSTANCES_COORDINATOR_WORK_REPO=str(self.co),
+            INSTANCES_COORDINATOR_WORK_EXTRA_PATH="",
+        )
+        env.pop("INSTANCES_RELOAD", None)
+        if reload:
+            env["INSTANCES_RELOAD"] = reload
+        env.update({k: str(v) for k, v in extra.items()})
+        self.last = subprocess.run(["sh", str(SCRIPT)], capture_output=True, text=True, timeout=120, env=env, cwd=str(self.base))
+        return self.last
+
     def output(self):
         return self.last.stdout + self.last.stderr
 
@@ -205,6 +281,7 @@ class Scratch:
 
 PRINT_CO = "print %s/local.coordinatord" % DOMAIN
 PRINT_RE = "print %s/local.retrod" % DOMAIN
+PRINT_WK = "print %s/local.coordinatord.work" % DOMAIN
 
 
 class MatrixTests(unittest.TestCase):
@@ -612,6 +689,232 @@ class MatrixTests(unittest.TestCase):
         self.assertNotIn("op://V/I/bot_token", everything)
 
 
+class WorkMatrixTests(unittest.TestCase):
+    """The work Matrix coordinator (axon-work-computer): the same rules as the personal one, with its own label, state, logs and setup script.
+    The hand-made setup on the work Mac is a service that already runs; opting in must adopt it without touching it."""
+
+    def setUp(self):
+        self.s = Scratch()
+        self.addCleanup(self.s.cleanup)
+        self.dst = self.s.agents / "local.coordinatord.work.plist"
+        self.bootstrap = "bootstrap %s %s" % (DOMAIN, self.dst)
+
+    def assertCalls(self, expected):
+        self.assertEqual(self.s.calls(), expected, self.s.output())
+
+    def ok(self):
+        self.assertEqual(self.s.last.returncode, 0, self.s.output())
+
+    def hand_setup(self):
+        """What the hand-run setup script left behind: config, token file, playbook, a loaded unit in LaunchAgents."""
+        self.s.have_config(self.s.work_state)
+        token = self.s.home / ".config" / "coordinator-work" / "matrix-access-token"
+        token.parent.mkdir(parents=True)
+        token.write_text("not-a-real-token\n")
+        playbook = self.s.home / "coordinator-work-playbook"
+        playbook.mkdir()
+        (playbook / "playbook.md").write_text("work playbook\n")
+        self.s.load("local.coordinatord.work")
+        self.s.agents.mkdir(parents=True)
+        self.dst.write_text(self.s.unit_text("local.coordinatord.work"))
+
+    def work_setup_script(self, body):
+        write_exec(self.s.co / "scripts" / "work-instance-setup.sh", body)
+
+    def test_never_opted_in_makes_no_call_even_with_the_hand_made_service_loaded(self):
+        self.hand_setup()
+        before = self.dst.read_bytes()
+        self.s.run_work()
+        self.ok()
+        self.assertCalls([])
+        self.assertEqual(self.dst.read_bytes(), before)
+        self.assertEqual(self.s.loaded(), ["local.coordinatord.work"])
+        self.assertFalse(self.s.state_root.exists())
+        self.assertIn("coordinator-work: not opted in", self.s.output())
+
+    def test_opt_in_adopts_the_hand_made_service_with_one_read_only_call(self):
+        self.hand_setup()
+        before = self.dst.read_bytes()
+        self.s.run_work(True)
+        self.ok()
+        self.assertCalls([PRINT_WK])
+        self.assertEqual(self.dst.read_bytes(), before)
+        self.assertEqual(self.s.loaded(), ["local.coordinatord.work"])
+        self.assertIn("READY (adopted", self.s.status("coordinator-work"))
+        self.assertTrue((self.s.state_root / "coordinator-work.managed").exists())
+        self.assertFalse((self.s.state_root / "coordinator.managed").exists())
+
+    def test_opt_in_with_a_hand_made_unit_that_differs_reports_and_does_not_restart(self):
+        self.hand_setup()
+        self.dst.write_text("<plist>the unit the setup script rendered, with other tool directories</plist>\n")
+        self.s.run_work(True)
+        self.ok()
+        self.assertCalls([PRINT_WK])
+        self.assertIn("NOT restarted", self.s.status("coordinator-work"))
+        self.assertIn("INSTANCES_RELOAD=coordinator-work", self.s.status("coordinator-work"))
+        self.assertEqual(self.dst.read_text(), self.s.unit_text("local.coordinatord.work"))  # the file is current; the daemon was not touched
+
+    def test_first_opt_in_with_a_config_starts_the_work_label_and_makes_its_log_directory(self):
+        self.s.have_config(self.s.work_state)
+        self.s.run_work(True)
+        self.ok()
+        self.assertCalls([PRINT_WK, self.bootstrap, PRINT_WK])
+        self.assertEqual(self.s.status("coordinator-work"), "READY (started)")
+        self.assertTrue((self.s.home / "Library" / "Logs" / "coordinator-work").is_dir())
+        self.assertFalse((self.s.home / "Library" / "Logs" / "coordinator").exists())
+        self.s.reset_calls()
+        self.s.run_work(True)
+        self.assertCalls([PRINT_WK])
+
+    def test_the_personal_label_is_never_asked_about(self):
+        self.s.load("local.coordinatord")
+        self.s.have_config(self.s.work_state)
+        self.s.run_work(True)
+        self.assertNotIn(PRINT_CO, self.s.calls())
+        self.assertEqual(self.s.loaded(), ["local.coordinatord", "local.coordinatord.work"])
+
+    def test_changed_unit_is_reported_and_reloaded_only_by_name(self):
+        self.s.have_config(self.s.work_state)
+        self.s.run_work(True)
+        self.s.set_unit("local.coordinatord.work", "work-v2")
+        for asked in (None, "coordinator", "retro"):
+            self.s.reset_calls()
+            self.s.run_work(True, reload=asked)
+            self.assertCalls([PRINT_WK])
+            self.assertIn("NOT restarted", self.s.status("coordinator-work"))
+        self.s.reset_calls()
+        self.s.run_work(True, reload="coordinator-work")
+        self.assertCalls([PRINT_WK, "bootout %s/local.coordinatord.work" % DOMAIN, self.bootstrap, PRINT_WK])
+        self.assertEqual(self.s.status("coordinator-work"), "READY (reloaded with the changed unit)")
+
+    def test_opt_out_stops_it_and_keeps_config_token_playbook_state_and_logs(self):
+        self.hand_setup()
+        self.s.run_work(True)
+        self.assertTrue((self.s.home / "Library" / "Logs" / "coordinator-work").is_dir())  # made by the opt-in
+        self.s.reset_calls()
+        self.s.run_work(False)
+        self.ok()
+        self.assertCalls([PRINT_WK, "bootout %s/local.coordinatord.work" % DOMAIN])
+        self.assertEqual(self.s.loaded(), [])
+        self.assertFalse(self.dst.exists())
+        self.assertEqual([p.name for p in self.s.state_root.iterdir()], [])
+        self.assertTrue((self.s.work_state / "config.json").exists())
+        self.assertEqual((self.s.home / ".config" / "coordinator-work" / "matrix-access-token").read_text(), "not-a-real-token\n")
+        self.assertTrue((self.s.home / "coordinator-work-playbook" / "playbook.md").exists())
+        self.assertTrue((self.s.home / "Library" / "Logs" / "coordinator-work").is_dir())
+        self.assertIn("Pi pane keeps running", self.s.output())
+
+    def test_the_setup_script_is_asked_for_the_config_half_with_the_checkouts_commit_and_the_work_state_dir(self):
+        args = self.s.base / "args"
+        path = self.s.base / "path"
+        self.work_setup_script('#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s"\nprintf "%%s" "$PATH" > "%s"\nmkdir -p "$HOME/.local/share/coordinator-work"\n'
+                               'echo "{}" > "$HOME/.local/share/coordinator-work/config.json"\nexit 0\n' % (args, path))
+        self.s.run_work(True)
+        self.ok()
+        self.assertEqual(args.read_text().split("\n")[:-1], ["--yes-this-is-the-work-computer", "--config-only", "--rev",
+                                                            "0123456789abcdef0123456789abcdef01234567", "--state-dir", str(self.s.work_state)])
+        # agent-alert is deployed by dotfiles but not on PATH: the script gets its directory for this one run, after the daemon's tool path.
+        self.assertIn(str(self.s.tools), path.read_text())
+        self.assertIn(str(self.s.home / ".local/share/agent-alert/core"), path.read_text())
+        self.assertEqual(self.s.status("coordinator-work"), "READY (started)")
+
+    def test_setup_script_exit_3_is_not_ready_with_its_reason_and_the_next_apply_retries(self):
+        self.work_setup_script("#!/bin/sh\necho '[ok] a step'\necho 'NOT-READY: owner invited, not joined; accept the invitation in Element'\nexit 3\n")
+        self.s.run_work(True)
+        self.ok()
+        self.assertTrue(self.s.status("coordinator-work").startswith("NOT READY: owner invited, not joined"), self.s.output())
+        self.assertCalls([])
+        self.assertFalse(self.dst.exists())  # no unit while half-configured: it would start at next login
+        self.assertFalse((self.s.state_root / "coordinator-work.managed").exists())
+        self.work_setup_script('#!/bin/sh\nmkdir -p "$HOME/.local/share/coordinator-work"\necho "{}" > "$HOME/.local/share/coordinator-work/config.json"\n')
+        self.s.run_work(True)
+        self.assertCalls([PRINT_WK, self.bootstrap, PRINT_WK])
+
+    def test_setup_script_failure_shows_the_fail_line_not_the_first_line_of_its_narration(self):
+        self.work_setup_script("#!/bin/sh\necho 'work-instance-setup: applying'\necho '[ok]    tools found'\n"
+                               "echo '[FAIL]  The homeserver https://hs.example is not reachable from this computer (HTTP 000).' >&2\necho '        Check the VPN.' >&2\nexit 1\n")
+        self.s.run_work(True)
+        status = self.s.status("coordinator-work")
+        self.assertTrue(status.startswith("NOT READY: setup script scripts/work-instance-setup.sh failed (exit 1): The homeserver"), status)
+        self.assertNotIn("applying", status)
+        self.assertCalls([])
+        self.assertFalse(self.dst.exists())
+
+    def test_a_setup_script_that_rejects_config_only_leaves_the_instance_not_ready(self):
+        # The coordinator script today (no such flag yet): it dies on the unknown option before changing anything.
+        self.work_setup_script("#!/bin/sh\ncase \"$*\" in *--config-only*) echo '[FAIL]  Unknown option --config-only.' >&2; exit 1;; esac\nexit 0\n")
+        self.s.run_work(True)
+        self.assertIn("Unknown option --config-only", self.s.status("coordinator-work"))
+        self.assertCalls([])
+        self.assertFalse((self.s.work_state / "config.json").exists())
+
+    def test_work_setup_that_claims_success_without_a_config_is_not_ready(self):
+        self.work_setup_script("#!/bin/sh\nexit 0\n")
+        self.s.run_work(True)
+        self.assertIn("config.json", self.s.status("coordinator-work"))
+        self.assertCalls([])
+
+    def test_work_setup_runs_once_and_not_again_once_seeded(self):
+        ran = self.s.base / "ran"
+        self.work_setup_script('#!/bin/sh\necho x >> "%s"\nmkdir -p "$HOME/.local/share/coordinator-work"\necho "{}" > "$HOME/.local/share/coordinator-work/config.json"\n' % ran)
+        for _ in range(3):
+            self.s.run_work(True)
+        self.assertEqual(ran.read_text().split(), ["x"])
+
+    def test_an_existing_work_config_is_never_given_to_the_setup_script(self):
+        ran = self.s.base / "ran"
+        self.s.have_config(self.s.work_state)
+        self.work_setup_script("#!/bin/sh\necho x >> '%s'\n" % ran)
+        self.s.run_work(True)
+        self.assertFalse(ran.exists())
+        self.assertEqual(self.s.status("coordinator-work"), "READY (started)")
+
+    def test_no_config_and_no_setup_script_names_the_script(self):
+        self.s.run_work(True)
+        self.assertIn("work-instance-setup.sh", self.s.status("coordinator-work"))
+        self.assertCalls([])
+
+    def test_a_checkout_that_is_not_a_git_repository_is_not_ready_before_the_script_runs(self):
+        ran = self.s.base / "ran"
+        self.work_setup_script("#!/bin/sh\necho x >> '%s'\n" % ran)
+        (self.s.stub / "GIT_FAIL").write_text("")
+        self.s.run_work(True)
+        self.assertIn("not a git checkout", self.s.status("coordinator-work"))
+        self.assertFalse(ran.exists())
+        self.assertCalls([])
+
+    def test_not_ready_messages_name_the_flag_and_data_keys_the_owner_sets(self):
+        self.s.have_config(self.s.work_state)
+        self.s.run_work(True, INSTANCES_COORDINATOR_WORK_REPO="")
+        self.assertIn("instances.coordinator.repo", self.s.status("coordinator-work"))
+        self.s.run_work(INSTANCES_COORDINATOR_WORK_ENABLED="yes")
+        self.assertIn("instances.coordinator.enabled must be true or false", self.s.output())
+        self.assertCalls([])
+
+    def test_a_tool_outside_the_default_unit_path_needs_extra_path_and_then_is_found(self):
+        self.s.have_config(self.s.work_state)
+        extra = self.s.base / "nvm"
+        write_exec(extra / "node", "#!/bin/sh\nexit 0\n")
+        (self.s.tools / "node").unlink()
+        self.s.run_work(True)
+        self.assertIn("node-on-PATH", self.s.status("coordinator-work"))
+        self.assertCalls([])
+        self.s.run_work(True, INSTANCES_COORDINATOR_WORK_EXTRA_PATH=str(extra))
+        self.assertEqual(self.s.status("coordinator-work"), "READY (started)")
+
+    def test_the_extra_path_belongs_to_the_work_coordinator_only(self):
+        # A directory given for the work instance must not make a tool "found" for another instance in the same run.
+        self.s.have_config(self.s.work_state)
+        self.s.have_config(self.s.retro_state)
+        extra = self.s.base / "nvm"
+        write_exec(extra / "node", "#!/bin/sh\nexit 0\n")
+        (self.s.tools / "node").unlink()
+        self.s.run_work(True, INSTANCES_LIST="coordinator-work retro", INSTANCES_COORDINATOR_WORK_EXTRA_PATH=str(extra),
+                        INSTANCES_RETRO_ENABLED="true", INSTANCES_RETRO_REPO=str(self.s.re))
+        self.assertEqual(self.s.status("coordinator-work"), "READY (started)")
+        self.assertIn("node-on-PATH", self.s.status("retro"))
+
+
 class MarkerFailureTests(unittest.TestCase):
     """A state directory that cannot be written must end in a status line and exit 0, never abort the apply (POSIX special builtins abort)."""
 
@@ -889,11 +1192,42 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("opted out", out)
         self.assertTrue((self.s.coordinator_state / "config.json").exists())
 
-    def test_work_profile_has_no_coordinator_unit_so_the_flag_ends_not_ready(self):
-        self.s.have_config(self.s.coordinator_state)
-        out = self.apply({"profile": "axon-work-computer", "instances": {"coordinator": {"enabled": True, "repo": str(self.s.co)}}})
+    def test_work_profile_first_apply_with_no_flag_installs_only_the_inert_work_unit_and_makes_no_call(self):
+        self.s.load("local.coordinatord.work")  # the hand-made service
+        out = self.apply({"profile": "axon-work-computer"})
         self.assertEqual(self.s.calls(), [])
-        self.assertIn("NOT READY", out)
+        self.assertEqual(self.s.loaded(), ["local.coordinatord.work"])
+        d = self.s.home / ".local/share/instances/launchd"
+        self.assertEqual(sorted(p.name for p in d.iterdir()), ["local.coordinatord.work.plist"])
+        self.assertEqual((d / "local.coordinatord.work.plist").read_text(), GOLDEN_WORK.read_text().replace("/Users/test", str(self.s.home)))
+        self.assertFalse((self.s.home / "Library" / "LaunchAgents").exists())
+        self.assertIn("coordinator-work: not opted in", out)
+        self.assertNotIn("[instances] retro:", out)
+
+    def test_work_profile_flag_adopts_the_running_service_then_only_reads(self):
+        # The checkout is where the owner cloned it; the hand-installed unit is what the rendered one is compared with.
+        self.s.have_config(self.s.work_state)
+        self.s.load("local.coordinatord.work")
+        data = {"profile": "axon-work-computer", "instances": {"coordinator": {"enabled": True, "repo": str(self.s.co)}}}
+        self.apply({"profile": "axon-work-computer", "instances": {"coordinator": {"repo": str(self.s.co)}}})  # inert copy only
+        inert = self.s.home / ".local/share/instances/launchd/local.coordinatord.work.plist"
+        live = self.s.home / "Library" / "LaunchAgents" / "local.coordinatord.work.plist"
+        live.parent.mkdir(parents=True)
+        shutil.copy(inert, live)  # the setup script's output for this checkout, which is byte-identical to the rendered one
+        self.s.reset_calls()
+        out = self.apply(data)
+        self.assertEqual(self.s.calls(), [PRINT_WK])
+        self.assertIn("coordinator-work: READY (adopted", out)
+        self.assertEqual(self.s.loaded(), ["local.coordinatord.work"])
+        self.s.reset_calls()
+        self.apply(data)
+        self.assertEqual(self.s.calls(), [PRINT_WK])
+
+    def test_work_profile_ignores_a_retro_flag_and_never_manages_the_personal_units(self):
+        self.s.load("local.retrod")
+        out = self.apply({"profile": "axon-work-computer", "instances": {"retro": {"enabled": True, "repo": str(self.s.re)}}})
+        self.assertEqual(self.s.calls(), [])
+        self.assertNotIn("[instances] retro:", out)
 
 
 @unittest.skipUnless(HAVE_CHEZMOI, "chezmoi not installed")
@@ -914,10 +1248,15 @@ class IgnoreTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
 
-    def test_work_profile_manages_no_unit(self):
+    def test_work_profile_manages_only_the_work_unit_on_macos_and_none_elsewhere(self):
         out = self.managed({"profile": "axon-work-computer"})
         self.assertNotIn("local.coordinatord.plist", out)
         self.assertNotIn("local.retrod.plist", out)
+        self.assertEqual(".local/share/instances/launchd/local.coordinatord.work.plist" in out, sys.platform == "darwin")
+
+    def test_personal_and_termux_profiles_never_get_the_work_unit(self):
+        for profile in ("personal", "termux"):
+            self.assertNotIn("local.coordinatord.work.plist", self.managed({"profile": profile}))
 
     @unittest.skipUnless(sys.platform == "darwin", "the units are managed on personal macOS only")
     def test_personal_macos_manages_both_inert_units_and_the_script(self):
