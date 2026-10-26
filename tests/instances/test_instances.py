@@ -100,9 +100,11 @@ D="$STUB_DIR"
 echo "$@" >> "$D/calls"
 verb=$1
 case $verb in
-  print) label=${2##*/}; if grep -qx "$label" "$D/loaded" 2>/dev/null; then exit 0; else echo "Could not find service" >&2; exit 113; fi;;
+  print) [ -e "$D/FAIL_PRINT" ] && { echo "launchctl print: transient failure" >&2; exit 5; }
+         label=${2##*/}; if grep -qx "$label" "$D/loaded" 2>/dev/null; then exit 0; else echo "Could not find service" >&2; exit 113; fi;;
   bootstrap) [ -e "$D/FAIL_BOOTSTRAP" ] && { echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; }
-             f=$3; label=$(basename "$f" .plist); echo "$label" >> "$D/loaded"; exit 0;;
+             f=$3; label=$(basename "$f" .plist); echo "$label" >> "$D/loaded"
+             [ -e "$D/FAIL_PRINT_AFTER_BOOTSTRAP" ] && : > "$D/FAIL_PRINT"; exit 0;;
   bootout) [ -e "$D/FAIL_BOOTOUT" ] && { echo "Boot-out failed: 5" >&2; exit 5; }
            label=${2##*/}; grep -vx "$label" "$D/loaded" > "$D/loaded.new" 2>/dev/null; mv "$D/loaded.new" "$D/loaded"; exit 0;;
   *) echo "stub launchctl: unexpected verb $verb" >&2; exit 64;;
@@ -396,14 +398,67 @@ class MatrixTests(unittest.TestCase):
         self.s.reset_calls()
         self.check_opted_out()
 
-    def test_instance_that_never_started_is_not_ours_to_stop(self):
+    def test_failed_bootstrap_then_opt_out_removes_the_unit_that_would_start_at_login(self):
         self.s.have_config(self.s.coordinator_state)
         self.s.fail("bootstrap")
         self.s.run(coordinator=True)
-        self.assertFalse((self.s.state_root / "coordinator.managed").exists())
+        self.assertTrue(self.dst().exists())  # installed, not started
         self.s.reset_calls()
         self.s.run()
-        self.assertCalls([])
+        self.ok()
+        self.assertCalls([PRINT_CO])  # not loaded: nothing to boot out
+        self.assertFalse(self.dst().exists())
+        self.assertEqual([p.name for p in self.s.state_root.iterdir()], [])
+
+    def test_started_but_unconfirmed_then_opt_out_stops_it(self):
+        self.s.have_config(self.s.coordinator_state)
+        (self.s.stub / "FAIL_PRINT_AFTER_BOOTSTRAP").write_text("")
+        self.s.run(coordinator=True)
+        self.assertIn("could not be confirmed", self.s.status("coordinator"))
+        self.assertEqual(self.s.loaded(), ["local.coordinatord"])  # it did start
+        (self.s.stub / "FAIL_PRINT").unlink()
+        self.s.reset_calls()
+        self.s.run()
+        self.assertCalls([PRINT_CO, "bootout %s/local.coordinatord" % DOMAIN])
+        self.assertEqual(self.s.loaded(), [])
+        self.assertFalse(self.dst().exists())
+
+    @unittest.skipIf(os.geteuid() == 0, "root can write anywhere")
+    def test_opt_out_that_cannot_remove_the_unit_keeps_ownership_and_retries(self):
+        self.started()
+        self.s.agents.chmod(0o555)
+        try:
+            self.s.run()
+            self.ok()
+            self.assertIn("STOP FAILED", self.s.status("coordinator"))
+            self.assertNotIn("unit file removed", self.s.output())
+            self.assertTrue((self.s.state_root / "coordinator.managed").exists())
+            self.assertEqual(self.s.loaded(), [])  # the daemon was stopped; the unit would start it at login
+        finally:
+            self.s.agents.chmod(0o755)
+        self.s.reset_calls()
+        self.s.run()
+        self.assertCalls([PRINT_CO])
+        self.assertFalse(self.dst().exists())
+        self.assertEqual([p.name for p in self.s.state_root.iterdir()], [])
+
+    def test_probe_failure_leaves_a_running_services_unit_file_alone_and_provenance_survives(self):
+        self.s.have_config(self.s.coordinator_state)
+        self.s.load("local.coordinatord")
+        self.s.agents.mkdir(parents=True)
+        self.dst().write_text("<plist>the unit the running daemon was loaded from</plist>\n")
+        (self.s.stub / "FAIL_PRINT").write_text("")
+        self.s.run(coordinator=True)
+        self.ok()
+        self.assertIn("NOT READY", self.s.status("coordinator"))
+        self.assertEqual(self.dst().read_text(), "<plist>the unit the running daemon was loaded from</plist>\n")
+        self.assertFalse((self.s.state_root / "coordinator.managed").exists())
+        (self.s.stub / "FAIL_PRINT").unlink()
+        self.s.run(coordinator=True)  # adopts the file the daemon was loaded from, then reports the difference
+        self.assertIn("NOT restarted", self.s.status("coordinator"))
+        self.s.reset_calls()
+        self.s.run(coordinator=True, reload="coordinator")  # the old daemon really is older than the file: reload works
+        self.assertIn("bootout %s/local.coordinatord" % DOMAIN, self.s.calls())
 
     def test_opt_out_that_cannot_boot_out_keeps_the_unit_and_retries(self):
         self.started()
@@ -496,16 +551,16 @@ class MatrixTests(unittest.TestCase):
         self.s.run(coordinator=True)
         self.assertEqual(marker.read_text().split(), ["x"])
 
-    def test_bootstrap_failure_is_not_ready_not_managed_and_retried(self):
+    def test_bootstrap_failure_is_not_ready_and_the_next_apply_starts_it(self):
         self.s.have_config(self.s.coordinator_state)
         self.s.fail("bootstrap")
         self.s.run(coordinator=True)
         self.ok()
         self.assertIn("NOT READY: launchctl bootstrap failed", self.s.status("coordinator"))
-        self.assertFalse((self.s.state_root / "coordinator.managed").exists())
         self.s.fail("bootstrap", False)
         self.s.reset_calls()
         self.s.run(coordinator=True)
+        self.assertCalls([PRINT_CO, self.bootstrap(), PRINT_CO])
         self.assertEqual(self.s.status("coordinator"), "READY (started)")
 
     def test_a_flag_that_is_not_true_or_false_does_nothing(self):
@@ -555,6 +610,85 @@ class MatrixTests(unittest.TestCase):
         self.s.run(retro=True, INSTANCES_RETRO_OP_ITEM="op://V/I/bot_token")
         everything = self.s.output() + "".join(p.read_text() for p in self.s.state_root.rglob("*") if p.is_file())
         self.assertNotIn("op://V/I/bot_token", everything)
+
+
+class SetupScriptTests(unittest.TestCase):
+    def setUp(self):
+        self.s = Scratch()
+        self.addCleanup(self.s.cleanup)
+
+    def script(self, repo, name, body):
+        write_exec(repo / "scripts" / name, body)
+
+    def test_a_setup_run_that_wrote_part_of_the_config_and_failed_is_run_again_not_trusted(self):
+        counter = self.s.base / "runs"
+        body = ('#!/bin/sh\necho x >> "%s"\nmkdir -p "$HOME/.local/share/retro"\necho "{}" > "$HOME/.local/share/retro/config.json"\n%s' % (counter, "exit 1\n"))
+        self.script(self.s.re, "configure.sh", body)
+        self.s.run(retro=True, INSTANCES_RETRO_CHANNEL_ID="C1", INSTANCES_RETRO_OP_ITEM="op://x")
+        self.assertTrue(self.s.status("retro").startswith("NOT READY"))
+        self.assertTrue((self.s.retro_state / "config.json").exists())  # half a config is on disk
+        self.script(self.s.re, "configure.sh", body.replace("exit 1", "exit 0"))
+        self.s.run(retro=True, INSTANCES_RETRO_CHANNEL_ID="C1", INSTANCES_RETRO_OP_ITEM="op://x")
+        self.assertEqual(self.s.status("retro"), "READY (started)")
+        self.assertEqual(counter.read_text().split(), ["x", "x"])
+        self.s.run(retro=True, INSTANCES_RETRO_CHANNEL_ID="C1", INSTANCES_RETRO_OP_ITEM="op://x")
+        self.assertEqual(counter.read_text().split(), ["x", "x"])  # seeded now: never again
+
+    def test_exit_3_after_writing_part_of_the_config_is_run_again_too(self):
+        counter = self.s.base / "runs"
+        body = ('#!/bin/sh\necho x >> "%s"\nmkdir -p "$COORDINATOR_STATE_DIR"\necho "{}" > "$COORDINATOR_STATE_DIR/config.json"\n' % counter)
+        self.script(self.s.co, "instance-setup.sh", body + "echo 'NOT-READY: waiting'\nexit 3\n")
+        self.s.run(coordinator=True)
+        self.script(self.s.co, "instance-setup.sh", body)
+        self.s.run(coordinator=True)
+        self.assertEqual(self.s.status("coordinator"), "READY (started)")
+        self.assertEqual(counter.read_text().split(), ["x", "x"])
+
+    def test_setup_script_sees_the_daemons_tool_path_not_the_callers(self):
+        # node exists only in the tools directory (the unit's PATH), never on the PATH this script is started with.
+        self.script(self.s.re, "configure.sh", '#!/bin/sh\ncommand -v node >/dev/null || { echo "node: not found"; exit 1; }\nmkdir -p "$HOME/.local/share/retro"; echo "{}" > "$HOME/.local/share/retro/config.json"\n')
+        self.s.run(retro=True, INSTANCES_RETRO_CHANNEL_ID="C1", INSTANCES_RETRO_OP_ITEM="op://x", PATH=str(self.s.bin) + os.pathsep + "/usr/bin" + os.pathsep + "/bin")
+        self.assertEqual(self.s.status("retro"), "READY (started)")
+
+    def test_a_setup_script_that_hangs_is_killed_with_its_children_and_reported(self):
+        late = self.s.base / "late"
+        self.script(self.s.co, "instance-setup.sh", '#!/bin/sh\n( sleep 3; echo late > "%s" ) &\nsleep 30\n' % late)
+        self.s.run(coordinator=True, INSTANCES_CONFIG_TIMEOUT="1")
+        self.assertIn("NOT READY", self.s.status("coordinator"))
+        self.assertIn("exit 124", self.s.status("coordinator"))
+        import time
+        time.sleep(4)
+        self.assertFalse(late.exists(), "a child of the timed-out setup script kept running and wrote after the timeout")
+        self.assertEqual(self.s.calls(), [])
+
+
+@unittest.skipUnless(HAVE_CHEZMOI, "chezmoi not installed")
+class QuotingTests(unittest.TestCase):
+    NASTY = "/tmp/Michael's R&D \"x\" $HOME `id` <y>/co"
+
+    def test_wrapper_survives_apostrophes_and_shell_metacharacters_in_local_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp).resolve() / "home"
+            dump = home / ".local" / "user_scripts" / "instances_reconcile.sh"
+            write_exec(dump, '#!/bin/sh\nprintf "%s" "$INSTANCES_COORDINATOR_REPO" > "' + tmp + '/repo"\nprintf "%s" "$INSTANCES_RETRO_OP_ITEM" > "' + tmp + '/op"\n')
+            data = {"profile": "personal", "instances": {"coordinator": {"repo": self.NASTY}, "retro": {"opItem": "it's \\ ; rm -rf /"}}}
+            text = render(WRAPPER, data, home=str(home))
+            wrapper = Path(tmp) / "wrapper.sh"
+            write_exec(wrapper, text)
+            result = subprocess.run(["sh", str(wrapper)], capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((Path(tmp) / "repo").read_text(), self.NASTY)
+            self.assertEqual((Path(tmp) / "op").read_text(), "it's \\ ; rm -rf /")
+
+    def test_units_stay_valid_xml_and_keep_the_path_when_it_has_ampersands_and_apostrophes(self):
+        import xml.etree.ElementTree as ET
+        for unit in (COORD_UNIT, RETRO_UNIT):
+            name = "coordinator" if unit is COORD_UNIT else "retro"
+            text = render(unit, {"profile": "personal", "instances": {name: {"repo": self.NASTY}}}, home="/Users/te&st")
+            root = ET.fromstring(text)
+            strings = [e.text for e in root.iter("string")]
+            self.assertTrue(any(t.startswith(self.NASTY + "/src/") for t in strings), strings)
+            self.assertIn("/Users/te&st/Library/Logs/%s/%s" % (name, "coordinatord.log" if name == "coordinator" else "retrod.log"), strings)
 
 
 @unittest.skipUnless(HAVE_CHEZMOI and sys.platform == "darwin", "needs chezmoi on macOS (launchd units and the reconcile script are darwin-only)")
