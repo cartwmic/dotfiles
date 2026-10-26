@@ -43,11 +43,14 @@
 # Central rank: if workstream-rank is on PATH and its rank file is valid (it lists at least one workstream), a job in a Herdr pane
 # that belongs to a workstream (HERDR_PANE_ID) takes that workstream's rank, 1 for the most important, as its number. The rank and
 # the 1-to-5 rules share one scale by putting every job without a workstream after the whole stack: while the rank is on, such a
-# job's rule or default number plus 1000 (so rules still order the jobs among themselves). The rank file's existence flips the
-# whole machine at once; delete it to go back to the plain 1-to-5 rules. A missing, unreadable or corrupt rank file, or no
-# workstream-rank, changes nothing. It is read on every try, so a new rank reaches jobs that are already waiting (on this version).
-# Older heavy-gate versions (jobs already running before this one was installed) have no priority and defer to no one. The one-slot
-# version also has no check window; the two-slot version reads its limit once, at its start, and never reads the slots file.
+# job's rule or default number plus 1000 (so rules still order the jobs among themselves). The rank file's existence flips every
+# job of this version at once; delete it to go back to the plain 1-to-5 rules. A missing, unreadable or corrupt rank file, a reader
+# that fails or takes more than 2 seconds (HEAVY_GATE_RANK_TIMEOUT, whole seconds), or no workstream-rank, changes nothing. It is
+# read on every try, so a new rank reaches jobs that are already waiting (on this version).
+# Jobs of the version before this one (already waiting or running when this one was installed) keep reading only the rules file:
+# they register a 1-to-5 number and are ordered against this version's numbers as numbers (an old 5 goes before a rank of 6 or
+# worse and before every job with no workstream, which is 1005). Older versions than that have no priority and defer to no one.
+# The one-slot version also has no check window; the two-slot version reads its limit once, at its start, and never reads the slots file.
 #
 # --wait SECONDS bounds when a new try may start (default 0: one try); none starts at or after the deadline. A try that
 # has begun takes about 60 seconds (the Swapouts watch) and is allowed to finish.
@@ -63,7 +66,7 @@
 #
 # Environment: HEAVY_GATE_SLOTS the slot limit, HEAVY_GATE_SLOTS_FILE its file, HEAVY_GATE_PRIORITY see above, HEAVY_GATE_PRIORITIES the file.
 # The central rank file is WORKSTREAM_RANK_FILE (read by workstream-rank), else ~/.local/share/coordinator/rank.
-# For tests: HEAVY_GATE_SWAP_WINDOW seconds to watch Swapouts (60), HEAVY_GATE_POLL seconds between tries while waiting
+# For tests: HEAVY_GATE_RANK_TIMEOUT seconds the reader may take (2), HEAVY_GATE_SWAP_WINDOW seconds to watch Swapouts (60), HEAVY_GATE_POLL seconds between tries while waiting
 # (15), HEAVY_GATE_LOCK the slot 1 path (/tmp/heavy-gate-<uid>.lock; the other files are named from it).
 
 set -eu
@@ -275,14 +278,31 @@ function rtext(l) { sub(/^[ \t]*[0-9]+[ \t]+/, "", l); sub(/[ \t]+$/, "", l); re
 # This is the only place that turns a job into a number. The pattern file is an interim source that the central workstream rank
 # replaces; it stays as the fallback (and the only source while the rank file is off).
 UNRANKED=1000   # what workstream-rank prints for a job with no workstream; the offset that puts such jobs after the stack
-# True when the central rank is on: workstream-rank is installed and its file is valid with at least one workstream
-# (show prints nothing otherwise; a missing workstream-rank prints nothing either, its error goes to /dev/null).
-rank_on() { [ -n "$(workstream-rank show 2>/dev/null)" ]; }
+RANK_TIMEOUT=${HEAVY_GATE_RANK_TIMEOUT:-2}
+case $RANK_TIMEOUT in '' | *[!0-9]*) RANK_TIMEOUT=2 ;; esac
+# rank_read ARGS: run workstream-rank and print its output; return its exit status, or non-zero if it takes more than RANK_TIMEOUT
+# seconds (callers use the output only when the status is 0). The gate never waits on the reader: it runs in the background with a watchdog that kills it. Its output goes
+# to a file (never the gate's pipe) and its stderr is dropped (it warns at every call).
+rank_read() {
+  rout="$LOCK.rank.$$"
+  workstream-rank "$@" > "$rout" &
+  rpid=$!
+  ( sleep "$RANK_TIMEOUT"; kill -9 "$rpid" ) >/dev/null 2>&1 &
+  wpid=$!
+  rrc=0; wait "$rpid" 2>/dev/null || rrc=$?
+  kill "$wpid" >/dev/null 2>&1 || true; wait "$wpid" >/dev/null 2>&1 || true
+  cat "$rout" 2>/dev/null || :
+  rm -f "$rout"
+  return "$rrc"
+} 2>/dev/null   # (the shell reports a killed reader on stderr)
+# True when the central rank is on: workstream-rank is installed and succeeds, and its file is valid with at least one workstream
+# (show prints nothing otherwise; a missing workstream-rank fails).
+rank_on() { rk=$(rank_read show) && [ -n "$rk" ]; }
 resolve_priority() {
   if [ -n "${HEAVY_GATE_PRIORITY:-}" ]; then printf '%s' "$HEAVY_GATE_PRIORITY"; return 0; fi
   base=0
   if rank_on; then
-    r=$(workstream-rank of 2>/dev/null) || r=
+    r=$(rank_read of) || r=
     case $r in '' | *[!0-9]*) r= ;; esac
     if [ -n "$r" ]; then r=$(cap "$r"); if [ "$r" -lt "$UNRANKED" ]; then printf '%s' "$r"; return 0; fi; fi
     base=$UNRANKED

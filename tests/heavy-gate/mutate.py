@@ -16,14 +16,14 @@ SCRIPT = HERE.parents[1] / "dot_local/bin/executable_heavy-gate"
 SELECT = ["-k", "rank", "-k", "reader", "-k", "workstream"]
 
 ENV_LINE = 'if [ -n "${HEAVY_GATE_PRIORITY:-}" ]; then printf \'%s\' "$HEAVY_GATE_PRIORITY"; return 0; fi\n  base=0'
-SHOW = '[ -n "$(workstream-rank show 2>/dev/null)" ]'
+SHOW = 'rank_on() { rk=$(rank_read show) && [ -n "$rk" ]; }'
 MAPPED = '    if [ -n "$r" ]; then r=$(cap "$r"); if [ "$r" -lt "$UNRANKED" ]; then printf \'%s\' "$r"; return 0; fi; fi'
 
 MUTATIONS = [
-    ("the rank is never used", '  if rank_on; then\n    r=$(workstream-rank of', '  if false; then\n    r=$(workstream-rank of'),
+    ("the rank is never used", '  if rank_on; then\n    r=$(rank_read of', '  if false; then\n    r=$(rank_read of'),
     ("the environment no longer beats the rank", ENV_LINE, 'base=0'),
-    ("rank is on without a valid file", SHOW, 'true'),
-    ("rank is never on", SHOW, 'false'),
+    ("rank is on without a valid file", SHOW, 'rank_on() { true; }'),
+    ("rank is never on", SHOW, 'rank_on() { false; }'),
     ("a rank of 1000 counts as a workstream", '[ "$r" -lt "$UNRANKED" ]', '[ "$r" -le "$UNRANKED" ]'),
     ("every ranked job is unmapped", '[ "$r" -lt "$UNRANKED" ]', '[ "$r" -lt 0 ]'),
     ("no offset for jobs with no workstream", '    base=$UNRANKED\n', '    base=0\n'),
@@ -33,9 +33,12 @@ MUTATIONS = [
     ("leading zero read as octal", '  r=${r#"${r%%[!0]*}"}   # no leading zeros', '  : # no leading zeros'),
     ("offset number not capped", '  cap "$((base + ${r:-0}))"', '  printf \'%s\' "$((base + ${r:-0}))"'),
     ("a non-number from the reader is used", "case $r in '' | *[!0-9]*) r= ;; esac", "case $r in '') r= ;; esac"),
-    ("the reader's stderr reaches the gate's", 'r=$(workstream-rank of 2>/dev/null) || r=', 'r=$(workstream-rank of) || r='),
-    ("the reader's show stderr reaches the gate's", SHOW, '[ -n "$(workstream-rank show)" ]'),
-    ("a failing reader aborts the gate", 'r=$(workstream-rank of 2>/dev/null) || r=', 'r=$(workstream-rank of 2>/dev/null)'),
+    ("the reader's stderr reaches the gate's", '} 2>/dev/null   # (the shell reports', '}   # (the shell reports'),
+    ("a failed of's rank is used", 'r=$(rank_read of) || r=', 'r=$(rank_read of) || :'),
+    ("a failed show counts as a valid file", 'rk=$(rank_read show) && [ -n "$rk" ]', 'rk=$(rank_read show); [ -n "$rk" ]'),
+    ("the reader is never cut off", '( sleep "$RANK_TIMEOUT"; kill -9 "$rpid" )', '( sleep "$RANK_TIMEOUT"; true )'),
+    ("a bad timeout is used as it is", "case $RANK_TIMEOUT in '' | *[!0-9]*) RANK_TIMEOUT=2 ;; esac", ": no check"),
+    ("the timeout is ignored", 'sleep "$RANK_TIMEOUT"; kill', 'sleep 30; kill'),
     ("a ranked job is off by one", MAPPED, MAPPED.replace('"$r"; return', '"$((r + 1))"; return')),
     ("priorities always says on", "  if rank_on; then printf 'central rank: on", "  if true; then printf 'central rank: on"),
     ("priorities always says off", "  if rank_on; then printf 'central rank: on", "  if false; then printf 'central rank: on"),
