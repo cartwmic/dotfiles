@@ -185,7 +185,8 @@ class WorkstreamRank(unittest.TestCase):
         self.assertEqual(self.of("pQ"), "1000000000000000\n")
         self.assertEqual(self.of("pT"), "2\n")
         self.assertEqual([line.split(T)[0] for line in self.run_rank("show").stdout.splitlines()],
-                         ["2", "11", "12", "123456789", "1234567890", "1000000000000000", big, bigger, huge])
+                         ["2", "11", "12", "123456789", "1234567890", "1000000000000000",
+                          "12345678901234567890", "12345678901234567891", big, bigger, huge])
 
     def test_large_ranks_and_leading_zeros_are_fine(self):
         self.write(self.rows("1000000000|Billion|pB", "0000000001|Padded|pP", "999999999999999|Biggest|pM", "0000000000000001|LongPad|pL"))
