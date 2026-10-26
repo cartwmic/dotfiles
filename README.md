@@ -140,6 +140,7 @@ chezmoi init --apply https://github.com/cartwmic/dotfiles.git
 - Pi coding agent, claude, claude-code-acp, vectorcode, mistral-vibe, mermaid-cli
 - Herdr (pinned) with the upstream command palette plugin on `personal` and `axon-work-computer`
 - Portable `session-recap` and `passage-review` workflows; Termux stays an SSH client.
+- `workstream-rank of [--pane P]` prints a pane's priority (lower is more important; 1000 = unranked) from the coordinator's published `~/.local/share/coordinator/rank` (or `$WORKSTREAM_RANK_FILE`); `workstream-rank show` prints the stack. It never errors on a missing or corrupt file.
 
 **Remote access:**
 
