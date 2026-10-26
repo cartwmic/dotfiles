@@ -589,20 +589,31 @@ class HeavyGate(unittest.TestCase):
         self.assertEqual(self.gate("slots", "5").returncode, 0)
         self.assertEqual(self.slots_file.read_bytes(), b"# comment\r\n\r\n5\n# tail\r\n", "the number replaces the number, not a blank line")
 
-    def test_a_job_that_takes_the_free_slot_during_a_start_does_not_push_it_past_the_limit(self):
-        # An older heavy-gate (which knows only slot 1) takes slot 1 between this start's count and its claim. With a limit of 1 the
-        # start must not move on to slot 2. A readlink that, right after the count (its 8 slot reads), plants that older holder.
-        sleeper = self.sleeper()
-        (self.fake / "sleeper_pid").write_text(f"{sleeper.pid}\n")
+    def fake_readlink(self, plan):
+        """A readlink that does what the real one does, then does something else after its Nth call: an older heavy-gate (which knows
+        only slot 1) taking or giving up slot 1 at an exact point of a new start. plan: {call number: shell command}. The first eight
+        calls are the start's count of the slots; the ninth is its read of the slot it failed to claim."""
         real = "/usr/bin/readlink" if os.path.exists("/usr/bin/readlink") else "/bin/readlink"
         fake = Path(self.tmp.name) / "bin/readlink"
+        cases = "\n".join(f"  {n}) {command} ;;" for n, command in plan.items())
         fake.write_text(f'''#!/bin/sh
 n=$(cat "$FAKE/readlinks" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "$FAKE/readlinks"
 {real} "$@"; rc=$?
-[ "$n" = 8 ] && ln -s "$(cat "$FAKE/sleeper_pid")" "$HEAVY_GATE_LOCK"
+case $n in
+{cases}
+esac
 exit $rc
 ''')
         fake.chmod(0o755)
+
+    def plant(self, name):
+        sleeper = self.sleeper()
+        (self.fake / name).write_text(f"{sleeper.pid}\n")
+        return f'ln -s "$(cat "$FAKE/{name}")" "$HEAVY_GATE_LOCK"'
+
+    def test_a_job_that_takes_the_free_slot_during_a_start_does_not_push_it_past_the_limit(self):
+        # An older heavy-gate takes slot 1 right after this start's count. With a limit of 1 the start must not move on to slot 2.
+        self.fake_readlink({8: self.plant("holder_a")})
         self.slots_file.write_text("1\n")
         marker = Path(self.tmp.name) / "ran"
         result = self.gate("--", "touch", str(marker))
@@ -611,6 +622,18 @@ exit $rc
         self.assertFalse(marker.exists())
         self.assertTrue(self.lock.is_symlink(), "the planted holder is there")
         self.assertFalse(self.lock2.is_symlink(), "and the start did not take slot 2 behind its back")
+
+    def test_a_holder_that_comes_and_goes_during_a_start_does_not_push_it_past_the_limit(self):
+        # Older job A takes slot 1 after the count and is gone again by the time the start looks (call 9 removes it); older job B
+        # takes slot 1 after that. A start that counted again and then went on to slot 2 would run next to B with a limit of 1.
+        self.fake_readlink({8: self.plant("holder_a"), 9: 'rm -f "$HEAVY_GATE_LOCK"', 17: self.plant("holder_b")})
+        self.slots_file.write_text("1\n")
+        marker = Path(self.tmp.name) / "ran"
+        result = self.gate("--", "touch", str(marker))
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn("slot 1 was just taken by another job", result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.lock2.is_symlink(), "the start did not take slot 2")
 
     def test_a_bad_environment_value_is_a_usage_error_but_slots_still_reports(self):
         for value in ("0", "two", "-1", "1.5"):
