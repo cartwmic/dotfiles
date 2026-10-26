@@ -2,7 +2,8 @@
 #
 # chezmoi run_onchange — re-applies pi-coding-agent runtime patches when
 # any of (a) the patch payload, (b) the apply script, or (c) the installed
-# Pi target path, pi-coding-agent, pi-ai, or agent-npm pi-sub-bar version changes.
+# Pi target path, pi-coding-agent, pi-ai, or agent-npm pi-sub-bar /
+# rpiv-ask-user-question version changes.
 #
 # The hash comments below give chezmoi a content-derived trigger; do not
 # edit them by hand — chezmoi templating regenerates them on apply.
@@ -16,6 +17,7 @@
 # patch.mjs (empty-turn-retry):             {{ include "dot_local/share/pi-patches/empty-turn-retry/patch.mjs" | sha256sum }}
 # patch.mjs (cursor-provider):              {{ include "dot_local/share/pi-patches/cursor-provider/patch.mjs" | sha256sum }}
 # patch.mjs (response-visibility):          {{ include "dot_local/share/pi-patches/response-visibility/patch.mjs" | sha256sum }}
+# patch.mjs (ask-user-question-render):     {{ include "dot_local/share/pi-patches/ask-user-question-render/patch.mjs" | sha256sum }}
 # patch.mjs (btw-native-session): {{ include "dot_local/share/pi-patches/btw-native-session/patch.mjs" | sha256sum }}
 # edits.json (btw-native-session): {{ include "dot_local/share/pi-patches/btw-native-session/edits.json" | sha256sum }}
 # payload 1.1 (btw-native-session): {{ include "dot_local/share/pi-patches/btw-native-session/patch.pi-1.1.mjs" | sha256sum }}
@@ -41,6 +43,7 @@
 # Pi target identity and versions (same locator as the patch payloads):
 # pi installed packages: {{ output "sh" "-c" (printf "if command -v node >/dev/null 2>&1; then node --input-type=module <<'NODE'\n%s\nconst pca = piCodingAgentRoot();\nconst ai = piAiRoot(pca);\nconst version = root => root ? JSON.parse(readFileSync(join(root, \"package.json\"), \"utf8\")).version : \"not-installed\";\nconsole.log(JSON.stringify({root: pca ?? null, pi: version(pca), piAi: version(ai)}));\nNODE\nelse printf '%%s\\n' not-installed; fi" (include "dot_local/share/pi-patches/pi-root.mjs")) | trim }}
 # pi-sub-bar installed version:             {{ output "sh" "-c" `if command -v node >/dev/null 2>&1; then exec node -e 'const f=require("fs"),p=require("path"),os=require("os");try{console.log(JSON.parse(f.readFileSync(p.join(os.homedir(),".pi","agent","npm","node_modules","@marckrenn","pi-sub-bar","package.json"),"utf8")).version)}catch(e){console.log("not-installed")}' ; else printf '%s\n' not-installed; fi` | trim }}
+# rpiv-ask-user-question installed version: {{ output "sh" "-c" `if command -v node >/dev/null 2>&1; then exec node -e 'const f=require("fs"),p=require("path"),os=require("os");try{console.log(JSON.parse(f.readFileSync(p.join(os.homedir(),".pi","agent","npm","node_modules","@juicesharp","rpiv-ask-user-question","package.json"),"utf8")).version)}catch(e){console.log("not-installed")}' ; else printf '%s\n' not-installed; fi` | trim }}
 
 set -eu
 

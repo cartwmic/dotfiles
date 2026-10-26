@@ -65,6 +65,7 @@ Per-patch rationale and failure modes stay in the sibling READMEs:
 - [standing-reminder-origin](standing-reminder-origin/README.md) — carry input origin to processed messages on desktop profiles
 - [settlement-abort](settlement-abort/README.md) — cancel through final settlement on desktop profiles
 - [prompt-start-race](prompt-start-race/README.md) — queue a prompt that loses the start race on desktop profiles
+- [ask-user-question-render](ask-user-question-render/README.md) — keep string `questions` in session history from crashing the rpiv-ask-user-question renderer (all profiles)
 - [cursor-provider](cursor-provider/README.md) — retired leftover-splice restore (not desired-state delivery; widget comes from the fork)
 
 ## Setup
