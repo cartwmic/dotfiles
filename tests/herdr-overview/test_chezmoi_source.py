@@ -42,7 +42,7 @@ elif 'managed' in args:
     if profile == 'termux':
         print('bin/herdr-overview-proof\nbin/passage-review')
     else:
-        print('.pi/agent/extensions/herdr-overview/index.ts')
+        print('.pi/agent/extensions/recap/index.ts')
 else:
     raise SystemExit('unexpected command')
 ''')

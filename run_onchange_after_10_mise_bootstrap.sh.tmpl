@@ -52,9 +52,7 @@ log_info "Running mise bootstrap tasks..."
 # Child tasks cannot call chezmoi source-path while this apply holds its state lock.
 export PI_CHEZMOI_PROFILE={{ .profile | quote }}
 export PI_PATCHES_ROOT={{ joinPath .chezmoi.sourceDir "dot_local/share/pi-patches" | quote }}
-export HERDR_OVERVIEW_APPLY_PROFILE={{ .profile | quote }}
 export HERDR_PALETTE_APPLY_PROFILE={{ .profile | quote }}
-export HERDR_OVERVIEW_APPLY_MANIFEST={{ joinPath .chezmoi.sourceDir "dot_local/share/herdr-overview/herdr-plugin.toml" | quote }}
 
 # Run the bootstrap task which includes all custom installations
 mise run bootstrap
