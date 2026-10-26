@@ -214,9 +214,12 @@ take_slot() {
       0) mine=$(slot_path "$k"); return 0 ;;
       2) return 1 ;;
     esac
-    # Held after all: an older heavy-gate took it since the count. Count again before trying a higher slot, so the limit still holds.
-    held_slots
-    if [ "$nheld" -ge "$SLOTS" ]; then break; fi
+    # Held after all: an older heavy-gate took it since the count. Give up this try rather than move to a higher slot on a stale count:
+    # the next try counts afresh and starts at slot 1.
+    lost=${h:-unknown}; lostk=$k; held_slots
+    if [ "$nheld" -ge "$SLOTS" ]; then refuse "all $SLOTS heavy slot(s) are held (pid$held)"
+    else refuse "slot $lostk was just taken by another job (pid $lost); the next try counts again"; fi
+    return 1
   done
   refuse "all $SLOTS heavy slot(s) are held (pid$held)"
   return 1
