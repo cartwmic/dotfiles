@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { nativePiSessionId } from "./pi-session-store.mjs";
@@ -33,12 +33,64 @@ async function recordDays(root) {
 // reuse the parsed projection and parse only new or rewritten files.
 const recordCache = new Map();
 
+// Each Herdr hook is a new node process, so the in-process cache alone starts
+// cold every time and re-parses the whole store (about 1.4 GB of JSON, 3-4 GB
+// of RSS). An optional index file carries the projections between processes.
+// It is only a cache: a missing, stale or corrupt index costs a re-parse and
+// never changes a result. Bump INDEX_VERSION when overviewRecord changes.
+const INDEX_VERSION = 1;
+const READ_CONCURRENCY = 16;
+let recapIndex = null;
+
+export async function openRecapIndex(root, indexPath) {
+  if (recapIndex?.path === indexPath && recapIndex.root === root) return;
+  recapIndex = { path: indexPath, root, dirty: false };
+  try {
+    const index = JSON.parse(await readFile(indexPath, "utf8"));
+    if (index?.version !== INDEX_VERSION || index.root !== root || !Array.isArray(index.entries)) return;
+    for (const [file, key, record] of index.entries) {
+      if (typeof file === "string" && typeof key === "string" && !recordCache.has(file)) recordCache.set(file, { key, record });
+    }
+  } catch { /* A missing or unreadable index is rebuilt by the next scan. */ }
+}
+
+// Writes the index only when the scan changed something. Failure is silent:
+// the next process just parses again.
+export async function saveRecapIndex() {
+  const index = recapIndex;
+  if (!index?.dirty) return;
+  index.dirty = false;
+  const prefix = path.join(index.root, "records") + path.sep;
+  const entries = [...recordCache].filter(([file]) => file.startsWith(prefix)).map(([file, { key, record }]) => [file, key, record]);
+  const temporary = `${index.path}.${process.pid}.tmp`;
+  try {
+    await mkdir(path.dirname(index.path), { recursive: true });
+    await writeFile(temporary, JSON.stringify({ version: INDEX_VERSION, root: index.root, entries }), { mode: 0o600 });
+    await rename(temporary, index.path);
+  } catch {
+    await rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+// Bounded concurrency keeps at most a few raw files in memory at once.
+async function mapLimit(items, limit, callback) {
+  const results = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await callback(items[index]);
+    }
+  }));
+  return results;
+}
+
 async function readRecordFile(file) {
   let info;
   try {
     info = await stat(file);
   } catch {
-    recordCache.delete(file);
+    if (recordCache.delete(file) && recapIndex) recapIndex.dirty = true;
     return null;
   }
   const key = `${info.mtimeMs}:${info.size}:${info.ino}`;
@@ -47,31 +99,30 @@ async function readRecordFile(file) {
   const value = await readJson(file);
   const record = value ? overviewRecord(value) : null;
   recordCache.set(file, { key, record });
+  if (recapIndex) recapIndex.dirty = true;
   return record;
 }
 
 export async function readAllRecapRecords(root = sessionRecapDataRoot()) {
   const days = await recordDays(root);
   const recordsRoot = path.join(root, "records") + path.sep;
-  const seen = new Set();
-  const records = await Promise.all(days.map(async (day) => {
+  const files = (await Promise.all(days.map(async (day) => {
     const directory = path.join(root, "records", day);
-    let names;
     try {
-      names = await readdir(directory);
+      return (await readdir(directory)).filter((name) => name.endsWith(".json")).map((name) => path.join(directory, name));
     } catch {
       return [];
     }
-    return Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => {
-      const file = path.join(directory, name);
-      seen.add(file);
-      return readRecordFile(file);
-    }));
-  }));
+  }))).flat();
+  const seen = new Set(files);
+  const records = await mapLimit(files, READ_CONCURRENCY, readRecordFile);
   for (const file of recordCache.keys()) {
-    if (file.startsWith(recordsRoot) && !seen.has(file)) recordCache.delete(file);
+    if (file.startsWith(recordsRoot) && !seen.has(file)) {
+      recordCache.delete(file);
+      if (recapIndex) recapIndex.dirty = true;
+    }
   }
-  return records.flat().filter(Boolean);
+  return records.filter(Boolean);
 }
 
 // A read-only projection keeps native consumers and legacy records compatible.
