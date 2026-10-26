@@ -89,6 +89,7 @@ class HeavyGate(unittest.TestCase):
             ({"loadavg": "{ nonsense 1 1 }"}, "load1 nonsense"),
             ({"memory_pressure": "System-wide memory free percentage: lots%"}, "memory free lots%"),
             ({"swapusage": "total = 1M  used = 1M  free = lots  (encrypted)"}, "swap free"),
+            ({"swapusage": "total = 9000M  used = 1M  free = 2000oops  (encrypted)"}, "swap free unreadable"),
         ]
         for figures, expected in cases:
             with self.subTest(expected):
@@ -108,7 +109,7 @@ class HeavyGate(unittest.TestCase):
         self.assertEqual(self.gate().returncode, 0)
 
     def test_malformed_swapouts_refuse(self):
-        for value in ("", "many", "5x"):
+        for value in ("", "many", "5x", "5.0"):
             with self.subTest(value):
                 self.set(swapouts=value)
                 result = self.gate()
@@ -183,14 +184,18 @@ class HeavyGate(unittest.TestCase):
     # --- one at a time ---
     def test_only_one_heavy_job_at_a_time(self):
         started = Path(self.tmp.name) / "started"
-        first = self.start("--", "sh", "-c", f"touch {started}; sleep 6")
-        self.assertTrue(self.wait_for(started.exists), "the first job is running")
-        self.assertTrue(self.lock.is_symlink(), "the first job holds the gate")
-        second = self.gate("--", "true")
-        self.assertEqual(second.returncode, 75)
-        self.assertIn("another heavy job holds the gate", second.stderr)
-        self.assertIn("another heavy job holds the gate", self.gate().stderr)
-        first.communicate(timeout=20)
+        release = Path(self.tmp.name) / "release"
+        first = self.start("--", "sh", "-c", f"touch {started}; while [ ! -f {release} ]; do sleep 0.1; done")
+        try:
+            self.assertTrue(self.wait_for(started.exists), "the first job is running")
+            self.assertTrue(self.lock.is_symlink(), "the first job holds the gate")
+            second = self.gate("--", "true")
+            self.assertEqual(second.returncode, 75)
+            self.assertIn("another heavy job holds the gate", second.stderr)
+            self.assertIn("another heavy job holds the gate", self.gate().stderr)
+        finally:
+            release.write_text("")
+            first.communicate(timeout=20)
         self.assertEqual(self.gate("--", "true").returncode, 0, "the gate is free once the first job is done")
 
     def test_a_dead_holders_lock_is_cleared(self):
@@ -217,6 +222,32 @@ class HeavyGate(unittest.TestCase):
                 j.communicate(timeout=30)
                 self.assertEqual(j.returncode, 0)
             self.assertEqual(log.read_text().split(), ["start", "end", "start", "end"], "the two jobs ran one after the other")
+
+    def test_a_left_over_guard_is_refused_with_a_hint_and_nothing_runs(self):
+        guard = Path(str(self.lock) + ".guard")
+        guard.mkdir()
+        marker = Path(self.tmp.name) / "ran"
+        result = self.gate("--", "touch", str(marker))
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn("could not get the gate guard", result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertTrue(guard.is_dir(), "a guard this run did not make is left alone")
+
+    def test_the_guard_is_not_left_behind(self):
+        self.assertEqual(self.gate("--", "true").returncode, 0)
+        self.assertFalse(Path(str(self.lock) + ".guard").exists())
+
+    def test_no_new_try_starts_at_the_deadline(self):
+        # one try fails; the host is quiet again by the time the nap ends, but the deadline has passed, so nothing runs
+        self.env["HEAVY_GATE_POLL"] = "5"
+        self.set(pressure="4")
+        marker = Path(self.tmp.name) / "ran"
+        job = self.start("--wait", "2", "--", "touch", str(marker))
+        time.sleep(1)
+        self.set(pressure="1")
+        job.communicate(timeout=30)
+        self.assertEqual(job.returncode, 75)
+        self.assertFalse(marker.exists())
 
     def test_the_gate_is_released_when_the_job_is_killed(self):
         pidfile = Path(self.tmp.name) / "pid"
