@@ -49,6 +49,10 @@ with_timeout() { # with_timeout SECONDS CMD ARGS...
       $SIG{INT} = sub { $stop->(130) }; $SIG{TERM} = sub { $stop->(143) }; $SIG{HUP} = sub { $stop->(129) };
       alarm $t; waitpid($pid, 0); my $s = $?; exit(($s & 127) ? 128 + ($s & 127) : $s >> 8)' "$_secs" "$@"
   else "$@"; fi
+  _r=$?
+  # Ctrl-C, TERM or HUP reached the command (and the wrapper cleaned up its group): the apply is cancelled, not "that step failed".
+  case $_r in 129|130|143) say "cancelled (signal); stopping"; exit "$_r";; esac
+  return "$_r"
 }
 first_line() { head -n 1 "$1" 2>/dev/null | cut -c1-200; }
 sha() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
@@ -141,8 +145,8 @@ opt_in() {
   mkdir -p "$STATE_ROOT" "$LOGDIR" "$STATE" "$AGENTS_DIR" || { finish "NOT READY: cannot create directories"; return 0; }
   # A config that exists is the owner's (or an earlier setup run's that finished). One left by a setup run of ours that did not finish
   # is not: the marker makes the next apply run the setup again instead of trusting half a config.
-  if [ -f "$M_CONFIGURING" ] || [ ! -f "$STATE/config.json" ]; then
-    if ! touch "$M_CONFIGURING"; then finish "NOT READY: cannot write $M_CONFIGURING"; return 0; fi
+  if [ -e "$M_CONFIGURING" ] || [ -L "$M_CONFIGURING" ] || [ ! -f "$STATE/config.json" ]; then
+    if ! { touch "$M_CONFIGURING" && [ -f "$M_CONFIGURING" ]; }; then finish "NOT READY: cannot write $M_CONFIGURING"; return 0; fi
     configure || return 0
     rm -f "$M_CONFIGURING"
   fi
@@ -158,7 +162,7 @@ opt_in() {
   if [ ! -f "$M_MANAGED" ]; then
     if [ "$LOADED" = yes ]; then _adopted=yes; _own=$_before   # running already: record the file it was loaded from, as it is right now
     else _own=$_want; fi                                         # about to be started by us
-    if ! { printf '%s\n' "$_own" >"$M_SHA" && touch "$M_MANAGED"; }; then finish "NOT READY: cannot record ownership in $STATE_ROOT"; return 0; fi
+    if ! { printf '%s\n' "$_own" >"$M_SHA" && touch "$M_MANAGED" && [ -f "$M_MANAGED" ]; }; then finish "NOT READY: cannot record ownership in $STATE_ROOT"; return 0; fi
   fi
   if [ "$_before" != "$_want" ]; then
     if ! { cp "$SRC" "$DST.new" && chmod 644 "$DST.new" && mv "$DST.new" "$DST"; }; then finish "NOT READY: cannot write $DST"; return 0; fi
