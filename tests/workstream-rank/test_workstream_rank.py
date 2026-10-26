@@ -167,12 +167,27 @@ class WorkstreamRank(unittest.TestCase):
 
     def test_malformed_lines_are_skipped(self):
         bad = ["abc|Word rank|pX", "|Empty rank|pX", "-1|Negative|pX", "0|Zero|pX", "1.5|Fraction|pX",
-               " 1|Padded|pX", "1x|Suffix|pX", "9999999999999999|Huge|pX", "1", "", "just text"]
+               " 1|Padded|pX", "1x|Suffix|pX", "1", "", "just text"]
         self.write(self.rows(*bad, "7|Good|pX"))
         self.assertEqual(self.of("pX"), "7\n")
         self.assertEqual(self.run_rank("show").stdout, "7" + T + "Good" + T + "pX\n")
 
-    def test_large_ranks_up_to_15_digits_and_leading_zeros_are_fine(self):
+    def test_ranks_have_no_upper_bound_and_compare_as_numbers(self):
+        big, bigger = "99999999999999999999", "100000000000000000000"  # 20 and 21 digits
+        huge = "1" + "0" * 40
+        self.write(self.rows(f"{huge}|Huge|pH", f"{bigger}|Bigger|pS", f"{big}|Big|pS", "1000000000000000|Quadrillion|pQ",
+                             "000000000000000000000000000002|PaddedTwo|pT",
+                             "123456789|Nine|p9", "1234567890|Ten|p10", "12|Twelve|p12", "11|Eleven|p11",
+                             "12345678901234567891|Later|pF", "12345678901234567890|Sooner|pF"))
+        self.assertEqual(self.of("pF"), "12345678901234567890\n")  # differs beyond float precision
+        self.assertEqual(self.of("pS"), big + "\n")
+        self.assertEqual(self.of("pH"), huge + "\n")
+        self.assertEqual(self.of("pQ"), "1000000000000000\n")
+        self.assertEqual(self.of("pT"), "2\n")
+        self.assertEqual([line.split(T)[0] for line in self.run_rank("show").stdout.splitlines()],
+                         ["2", "11", "12", "123456789", "1234567890", "1000000000000000", big, bigger, huge])
+
+    def test_large_ranks_and_leading_zeros_are_fine(self):
         self.write(self.rows("1000000000|Billion|pB", "0000000001|Padded|pP", "999999999999999|Biggest|pM", "0000000000000001|LongPad|pL"))
         self.assertEqual(self.of("pL"), "1\n")
         self.assertEqual(self.of("pB"), "1000000000\n")

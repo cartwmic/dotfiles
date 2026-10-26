@@ -59,16 +59,18 @@ usable() {
     return 1
 }
 
-# Valid rows from the file as RANK<TAB>NAME<TAB>PANE (PANE "-" when absent), one per line.
-# Skipped: fewer than 2 fields, rank not a positive integer (leading zeros ignored; up to
-# 15 significant digits, exact in awk doubles). That also drops the header and every # line: "#..." is never a positive
-# integer. A trailing CR is stripped. Rows that share a rank both count.
+# Valid rows from the file as LEN<TAB>RANK<TAB>NAME<TAB>PANE, one per line (PANE "-" when
+# absent). RANK is the rank without leading zeros and LEN its digit count: ranks are
+# compared as digit strings (shorter is smaller, then text order), so there is no upper
+# bound and no float rounding. Skipped: fewer than 2 fields, rank not a positive integer.
+# That also drops the header and every # line: "#..." is never a positive integer.
+# A trailing CR is stripped. Rows that share a rank both count.
 rows() {
     awk 'BEGIN { FS = OFS = "\t" }
         { sub(/\r$/, "") }
         { rank = $1; sub(/^0+/, "", rank) }
-        NF < 2 || rank !~ /^[0-9]+$/ || length(rank) > 15 { next }
-        { pane = (NF >= 3 && $3 != "") ? $3 : "-"; print rank + 0, $2, pane }' < "$file"
+        NF < 2 || rank !~ /^[0-9]+$/ { next }
+        { pane = (NF >= 3 && $3 != "") ? $3 : "-"; print length(rank), rank, $2, pane }' < "$file"
 }
 
 cmd_of() {
@@ -88,7 +90,8 @@ cmd_of() {
         return 0
     fi
     best=$(rows | PANE=$pane awk -F '\t' -v unranked="$UNRANKED" '
-        $3 "" == ENVIRON["PANE"] "" && (!found || $1 + 0 < best) { best = $1 + 0; found = 1 }
+        $4 "" == ENVIRON["PANE"] "" && (!found || $1 < blen || ($1 == blen && $2 "" < best "")) {
+            blen = $1; best = $2; found = 1 }
         END { print found ? best : unranked }') || best=$UNRANKED
     echo "${best:-$UNRANKED}"
 }
@@ -96,7 +99,7 @@ cmd_of() {
 cmd_show() {
     [ $# -eq 0 ] || die "show: takes no arguments"
     usable || return 0
-    rows | sort -s -n -t "$(printf '\t')" -k1,1 || :
+    rows | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1n -k2,2 | cut -f2- || :
 }
 
 [ $# -ge 1 ] || { usage >&2; exit 2; }
