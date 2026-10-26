@@ -127,6 +127,8 @@ Library/LaunchAgents/local.coordinatord.plist
 .pi/agent/extensions/claude-compat-guard/**
 # Codex Fast is configured only in personal Pi settings.
 .pi/agent/extensions/pi-codex-fast.json
+# Session titles use the personal Codex login; the auto-session-name package is personal only.
+.pi/agent/extensions/auto-session-name.json
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 .pi/agent/extensions/issue
