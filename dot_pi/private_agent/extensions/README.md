@@ -150,12 +150,22 @@ initialize from the current default when first visited.
 
 The personal profile loads [patlux/pi-auto-session-name](https://github.com/patlux/pi-auto-session-name),
 pinned to commit `19a8355` (0.1.1, 2026-09-01, MIT). It replaces the
-pane titles that pi-session-search used to set. It names a session once, from
-a bounded excerpt (at most 12,000 characters of user and assistant text), with
-one provider call, and leaves names set by `/name` or `--name` alone. It keeps no
-index or other state on disk, has no timers except a 60 s one-shot while a first
-run is still active, and does not rename later when a session changes topic:
-use `/auto-name` for that.
+pane titles that pi-session-search used to set. When a session has no name,
+it sends one naming request to the configured model after the first run
+settles. The prompt is a bounded excerpt (by default at most 12,000
+characters: the earliest six useful user and assistant messages, plus any
+compaction summary). A failed or empty attempt is retried when the excerpt
+changes or after a 5-minute cooldown; the first success ends automatic
+naming. It leaves names set by `/name` or `--name` alone. It writes no index,
+cache or other file of its own (the name is stored the normal way, as session
+info). Its only timer is a 60 s one-shot (default) that names a first run that
+is still active. It does not follow topic changes: `/auto-name` regenerates the
+name on demand from the same earliest-messages excerpt.
+
+Known limit: the naming call runs before Pi reports the run as settled, and
+its `timeoutMs` covers the response headers, not a stalled stream. A hung
+provider can therefore hold off the settled state of an unnamed session.
+Shutdown or renaming aborts it.
 
 What the package installs: a git checkout at
 `~/.pi/agent/git/github.com/patlux/pi-auto-session-name`. It has no runtime
