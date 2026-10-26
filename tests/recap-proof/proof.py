@@ -31,10 +31,8 @@ SCENARIO_COMMANDS = {
     "review": "proof-review-lifecycle",
     "chezmoi-dry-run": "proof-chezmoi-target-dry-run",
 }
-RUN_ID_RE = __import__("re").compile(r"^[0-9a-f]{16}$")
 REVIEW_ID_RE = __import__("re").compile(r"^rv-[0-9a-f]{12}$")
 NOTE_ID_RE = __import__("re").compile(r"^n-[0-9a-f]{8}$")
-SUCCESS_SUMMARY = "Recent work is complete. Present state: ready for the next step."
 
 
 class ProofBlocked(Exception):
@@ -47,14 +45,6 @@ class ProofFailure(Exception):
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-def json_dump(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(temp, 0o600)
-    os.replace(temp, path)
 
 
 def read_json(path: Path) -> dict[str, Any]:
