@@ -178,6 +178,24 @@ class HeavyGate(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("load1 30.00", result.stderr)
 
+    def test_a_host_that_turns_bad_during_the_watch_is_refused_on_each_rule(self):
+        # each cheap rule is read again after the window; a first reading that was fine is not enough
+        cases = [
+            ('echo 2 > "$FAKE/pressure"', "memory pressure level 2"),
+            ('echo "System-wide memory free percentage: 12%" > "$FAKE/memory_pressure"', "memory free 12%"),
+        ]
+        for hook, expected in cases:
+            with self.subTest(expected):
+                self.set(**QUIET)
+                (self.fake / "on_vm_stat").write_text(hook + "\n")
+                marker = Path(self.tmp.name) / "ran"
+                result = self.gate("--", "touch", str(marker))
+                self.assertEqual(result.returncode, 75, result.stderr)
+                self.assertIn(expected, result.stderr)
+                self.assertFalse(marker.exists())
+                self.assertFalse(self.lock.is_symlink(), "a refused start gives its slot back")
+        (self.fake / "on_vm_stat").unlink()
+
     def test_a_bad_window_or_poll_is_a_usage_error(self):
         for name in ("HEAVY_GATE_SWAP_WINDOW", "HEAVY_GATE_POLL"):
             with self.subTest(name):
@@ -550,8 +568,17 @@ class HeavyGate(unittest.TestCase):
         self.assertFalse(self.priorities.exists(), "a rejected command writes nothing")
         self.assertEqual(self.gate("priorities", "extra").returncode, 2)
 
+    def test_a_huge_number_still_ranks_below_a_lower_one(self):
+        waiter = self.sleeper()
+        self.entry(waiter.pid, 1)
+        self.priorities.write_text("99999999999999999999999999  big\n")
+        result = self.gate("--wait", "1", "--", "echo", "big")
+        self.assertEqual(result.returncode, 75, "a 26-digit number does not slip past a priority-1 waiter")
+        self.assertIn("deferring to the waiting job", result.stderr)
+        self.assertEqual(self.gate("priority", "x", "1000000").returncode, 2)
+
     def test_a_bad_priority_in_the_environment_is_a_usage_error(self):
-        for value in ("high", "-1", "1.5"):
+        for value in ("high", "-1", "1.5", "1234567"):
             with self.subTest(value):
                 self.assertEqual(self.gate(env={"HEAVY_GATE_PRIORITY": value}).returncode, 2)
 
