@@ -54,7 +54,7 @@ latter proof supplies a fake backend and needs no Pi or Herdr process.
 ```sh
 mise exec -- python3 -c 'import sys; assert sys.version_info >= (3, 11)'
 PYTHONDONTWRITEBYTECODE=1 mise exec -- python3 -m unittest discover -s dot_local/share/session-recap -p 'test_*.py' -v
-mise exec -- python3 tests/herdr-overview/proof.py recap
+mise exec -- python3 tests/recap-proof/proof.py recap
 chezmoi apply --dry-run --verbose ~/.local/bin/session-recap ~/.local/share/session-recap ~/.config/session-recap
 ```
 

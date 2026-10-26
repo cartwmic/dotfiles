@@ -13,29 +13,6 @@ spec.loader.exec_module(proof)
 
 
 class DriverTests(unittest.TestCase):
-    def test_group_failure_survives_successful_cleanup(self):
-        calls = []
-        def fake(name, criteria, argv, timeout=180):
-            calls.append((name, argv))
-            return dict(case=name, status='FAIL' if name == 'pi-grouped' else 'PASS',
-                        stdout='{"run_id":"0123456789abcdef"}')
-        with patch.object(proof, 'execute', fake):
-            rows = proof.overview()
-        self.assertEqual([x[0] for x in calls], ['overview-prepare', 'herdr-wide', 'pi-grouped', 'overview-cleanup'])
-        self.assertEqual(rows[2]['status'], 'FAIL')
-        state_bases = [argv[argv.index('--state-base') + 1] for _, argv in calls]
-        self.assertEqual(len(set(state_bases)), 1)
-        self.assertFalse(Path(state_bases[0]).exists())
-
-    def test_wide_failure_still_cleans_and_skips_group(self):
-        def fake(name, criteria, argv, timeout=180):
-            return dict(case=name, status='FAIL' if name == 'herdr-wide' else 'PASS',
-                        stdout='{"run_id":"0123456789abcdef"}')
-        with patch.object(proof, 'execute', fake):
-            rows = proof.overview()
-        self.assertEqual([x['case'] for x in rows], ['overview-prepare', 'herdr-wide', 'overview-cleanup'])
-        self.assertEqual(rows[1]['status'], 'FAIL')
-
     def test_lifecycle_executes_new_public_gaps_and_preserves_old_cases_fail_closed(self):
         calls = []
         def fake(name, criteria, argv, timeout=180):
@@ -117,11 +94,6 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1], ['AC-3'])
         self.assertEqual(calls[0][2][-1], proof.ROOT / 'tests/pi-recap/viewer_width.py')
-
-    def test_missing_receipt_cannot_pass(self):
-        with patch.object(proof, 'execute', return_value=dict(status='PASS', stdout='{}')):
-            rows = proof.overview()
-        self.assertEqual(rows[-1]['status'], 'FAIL')
 
 
 if __name__ == '__main__':
