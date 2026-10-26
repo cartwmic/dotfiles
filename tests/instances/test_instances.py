@@ -612,6 +612,106 @@ class MatrixTests(unittest.TestCase):
         self.assertNotIn("op://V/I/bot_token", everything)
 
 
+class MarkerFailureTests(unittest.TestCase):
+    """A state directory that cannot be written must end in a status line and exit 0, never abort the apply (POSIX special builtins abort)."""
+
+    def setUp(self):
+        self.s = Scratch()
+        self.addCleanup(self.s.cleanup)
+
+    def test_unwritable_ownership_marker_is_reported_and_the_other_instance_still_runs(self):
+        self.s.have_config(self.s.coordinator_state)
+        self.s.have_config(self.s.retro_state)
+        self.s.load("local.coordinatord")
+        (self.s.state_root / "coordinator.unit-sha").mkdir(parents=True)  # printf into a directory fails
+        self.s.run(coordinator=True, retro=True)
+        self.assertEqual(self.s.last.returncode, 0, self.s.output())
+        self.assertIn("cannot record ownership", self.s.output())
+        self.assertFalse((self.s.state_root / "coordinator.managed").exists())
+        self.assertFalse(self.s.agents.joinpath("local.coordinatord.plist").exists())  # nothing replaced
+        self.assertEqual(self.s.status("retro"), "READY (started)")
+        self.assertEqual(self.s.calls()[0], PRINT_CO)
+        self.assertNotIn("bootstrap %s %s" % (DOMAIN, self.s.agents / "local.coordinatord.plist"), self.s.calls())
+
+    @unittest.skipIf(os.geteuid() == 0, "root can write anywhere")
+    def test_marker_that_cannot_be_created_after_the_sha_was_written_is_reported_not_fatal(self):
+        self.s.have_config(self.s.coordinator_state)
+        self.s.have_config(self.s.retro_state)
+        self.s.load("local.coordinatord")
+        self.s.state_root.mkdir(parents=True)
+        (self.s.state_root / "coordinator.unit-sha").write_text("")  # writable file in a read-only directory: only creating .managed fails
+        self.s.state_root.chmod(0o555)
+        try:
+            self.s.run(coordinator=True, retro=True)
+        finally:
+            self.s.state_root.chmod(0o755)
+        self.assertEqual(self.s.last.returncode, 0, self.s.output())
+        self.assertIn("cannot record ownership", self.s.output())
+        self.assertIn("retro: ", self.s.output())
+        self.assertFalse(self.s.agents.joinpath("local.coordinatord.plist").exists())
+
+    @unittest.skipIf(os.geteuid() == 0, "root can write anywhere")
+    def test_unwritable_state_directory_before_setup_is_reported_not_fatal(self):
+        self.s.state_root.mkdir(parents=True)
+        self.s.state_root.chmod(0o555)
+        try:
+            self.s.run(coordinator=True, retro=True)
+        finally:
+            self.s.state_root.chmod(0o755)
+        self.assertEqual(self.s.last.returncode, 0, self.s.output())
+        self.assertIn("cannot write", self.s.output())
+        self.assertIn("retro: ", self.s.output())  # it went on to the second instance
+        self.assertEqual(self.s.calls(), [])
+
+    @unittest.skipIf(os.geteuid() == 0, "root can write anywhere")
+    def test_opt_out_with_a_dangling_symlink_unit_that_cannot_be_removed_keeps_ownership(self):
+        self.s.have_config(self.s.coordinator_state)
+        self.s.run(coordinator=True)
+        dst = self.s.agents / "local.coordinatord.plist"
+        dst.unlink()
+        dst.symlink_to(self.s.base / "gone" / "unit.plist")  # dangling
+        self.s.agents.chmod(0o555)
+        try:
+            self.s.run()
+        finally:
+            self.s.agents.chmod(0o755)
+        self.assertEqual(self.s.last.returncode, 0, self.s.output())
+        self.assertIn("STOP FAILED", self.s.status("coordinator"))
+        self.assertTrue((self.s.state_root / "coordinator.managed").exists())
+        self.assertTrue(dst.is_symlink())
+
+
+class CancellationTests(unittest.TestCase):
+    def test_cancelling_the_apply_kills_a_running_setup_script_and_its_children(self):
+        import signal
+        import time
+        s = Scratch()
+        self.addCleanup(s.cleanup)
+        late = s.base / "late"
+        started = s.base / "started"
+        write_exec(s.co / "scripts" / "instance-setup.sh", '#!/bin/sh\n( sleep 3; echo late > "%s" ) &\necho up > "%s"\nsleep 30\n' % (late, started))
+        env = dict(os.environ, HOME=str(s.home), PATH=str(s.bin) + os.pathsep + os.environ["PATH"], STUB_DIR=str(s.stub),
+                   INSTANCES_UNIT_DIR=str(s.units), INSTANCES_TOOL_PATH=str(s.tools), TMPDIR=str(s.base),
+                   INSTANCES_COORDINATOR_ENABLED="true", INSTANCES_COORDINATOR_REPO=str(s.co),
+                   INSTANCES_RETRO_ENABLED="", INSTANCES_RETRO_REPO=str(s.re), INSTANCES_RETRO_CHANNEL_ID="", INSTANCES_RETRO_OP_ITEM="")
+        proc = subprocess.Popen(["sh", str(SCRIPT)], env=env, cwd=str(s.base), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            for _ in range(100):
+                if started.exists():
+                    break
+                time.sleep(0.1)
+            self.assertTrue(started.exists(), "the setup script never started")
+            os.killpg(proc.pid, signal.SIGINT)  # what Ctrl-C does: the apply's own process group, not the setup script's
+            proc.wait(timeout=30)
+            time.sleep(4)
+            self.assertFalse(late.exists(), "the setup script's child survived the cancellation")
+        finally:
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.stdout.close()
+            subprocess.run(["pkill", "-f", str(s.base)], capture_output=True)
+
+
 class SetupScriptTests(unittest.TestCase):
     def setUp(self):
         self.s = Scratch()

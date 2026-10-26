@@ -44,7 +44,9 @@ with_timeout() { # with_timeout SECONDS CMD ARGS...
     perl -e 'my $t = shift; my $pid = fork(); defined $pid or exit 127;
       if (!$pid) { setpgrp(0, 0); exec @ARGV; exit 127 }
       setpgrp($pid, $pid);
-      $SIG{ALRM} = sub { kill "TERM", -$pid; select(undef, undef, undef, 1); kill "KILL", -$pid; waitpid($pid, 0); exit 124 };
+      my $stop = sub { my $code = shift; kill "TERM", -$pid; select(undef, undef, undef, 1); kill "KILL", -$pid; waitpid($pid, 0); exit $code };
+      $SIG{ALRM} = sub { $stop->(124) };
+      $SIG{INT} = sub { $stop->(130) }; $SIG{TERM} = sub { $stop->(143) }; $SIG{HUP} = sub { $stop->(129) };
       alarm $t; waitpid($pid, 0); my $s = $?; exit(($s & 127) ? 128 + ($s & 127) : $s >> 8)' "$_secs" "$@"
   else "$@"; fi
 }
@@ -100,7 +102,7 @@ opt_out() {
   fi
   # Ownership goes last: if the unit cannot be removed, the next apply must still know it is ours to remove.
   rm -f "$DST" 2>/dev/null
-  if [ -e "$DST" ]; then finish "STOP FAILED: cannot remove $DST (daemon is stopped); markers kept, will retry"; return 0; fi
+  if [ -e "$DST" ] || [ -L "$DST" ]; then finish "STOP FAILED: cannot remove $DST (daemon is stopped); markers kept, will retry"; return 0; fi
   rm -f "$M_MANAGED" "$M_SHA" "$M_STATUS"
   say "$NAME: opted out: daemon stopped, unit file removed; state, config, tokens, playbooks and logs kept. $PANE_NOTE"
   return 0
@@ -140,7 +142,7 @@ opt_in() {
   # A config that exists is the owner's (or an earlier setup run's that finished). One left by a setup run of ours that did not finish
   # is not: the marker makes the next apply run the setup again instead of trusting half a config.
   if [ -f "$M_CONFIGURING" ] || [ ! -f "$STATE/config.json" ]; then
-    : >"$M_CONFIGURING"
+    if ! touch "$M_CONFIGURING"; then finish "NOT READY: cannot write $M_CONFIGURING"; return 0; fi
     configure || return 0
     rm -f "$M_CONFIGURING"
   fi
@@ -156,13 +158,13 @@ opt_in() {
   if [ ! -f "$M_MANAGED" ]; then
     if [ "$LOADED" = yes ]; then _adopted=yes; _own=$_before   # running already: record the file it was loaded from, as it is right now
     else _own=$_want; fi                                         # about to be started by us
-    if ! { printf '%s\n' "$_own" >"$M_SHA" && : >"$M_MANAGED"; }; then finish "NOT READY: cannot record ownership in $STATE_ROOT"; return 0; fi
+    if ! { printf '%s\n' "$_own" >"$M_SHA" && touch "$M_MANAGED"; }; then finish "NOT READY: cannot record ownership in $STATE_ROOT"; return 0; fi
   fi
   if [ "$_before" != "$_want" ]; then
     if ! { cp "$SRC" "$DST.new" && chmod 644 "$DST.new" && mv "$DST.new" "$DST"; }; then finish "NOT READY: cannot write $DST"; return 0; fi
   fi
   if [ "$LOADED" = no ]; then
-    printf '%s\n' "$_want" >"$M_SHA"
+    if ! printf '%s\n' "$_want" >"$M_SHA"; then finish "NOT READY: cannot record ownership in $STATE_ROOT"; return 0; fi
     if ! run_lc bootstrap "$DOMAIN" "$DST"; then finish "NOT READY: launchctl bootstrap failed: $(first_line "$TMP/lc.out")"; return 0; fi
     if ! probe_loaded || [ "$LOADED" != yes ]; then finish "NOT READY: bootstrap returned 0 but $LABEL could not be confirmed loaded"; return 0; fi
     finish "READY (started)"; return 0
@@ -176,7 +178,7 @@ opt_in() {
     if ! run_lc bootout "$DOMAIN/$LABEL"; then finish "RELOAD FAILED: launchctl bootout: $(first_line "$TMP/lc.out"); the old daemon is still running"; return 0; fi
     if ! run_lc bootstrap "$DOMAIN" "$DST"; then finish "RELOAD FAILED: daemon is stopped, bootstrap failed: $(first_line "$TMP/lc.out"); the next apply will start it"; return 0; fi
     if ! probe_loaded || [ "$LOADED" != yes ]; then finish "RELOAD FAILED: bootstrap returned 0 but $LABEL is not loaded; the next apply will start it"; return 0; fi
-    printf '%s\n' "$_want" >"$M_SHA"
+    printf '%s\n' "$_want" >"$M_SHA" || say "$NAME: WARN: cannot record the reloaded unit in $M_SHA; it will be reported as changed"
     finish "READY (reloaded with the changed unit)"; return 0
   fi
   finish "READY (running); the unit file changed and the daemon was NOT restarted. To reload on purpose: INSTANCES_RELOAD=$NAME chezmoi apply"

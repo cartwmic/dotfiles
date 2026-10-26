@@ -503,7 +503,7 @@ How it works:
 - A service that is already running when you first set `enabled: true` (this Mac's coordinator) is adopted: one `print`, the daemon is not touched, and the installed unit is only rewritten if it differs from the managed one (then reported, not reloaded). With no flag on a Mac that never opted in, an apply makes no `launchctl` call at all.
 - Opt-out (flag false or removed) acts only on an instance dotfiles started or adopted (ownership is recorded before the unit is installed, so a failed start is cleaned up too). It boots the daemon out and removes the unit file; state, config, tokens, playbooks and logs are kept. The Pi pane keeps running (change `PANE_NOTE` and the opt-out branch in the script if that should change).
 
-Tests: `python3 -m unittest discover -s tests/instances -v` (renders against golden units, the reconcile script against a stub `launchctl` with exact call lists, and a scratch-HOME `chezmoi apply` on macOS). `python3 tests/instances/mutate.py` checks the suite catches 17 deliberate breaks of the safety rules.
+Tests: `python3 -m unittest discover -s tests/instances -v` (renders against golden units, the reconcile script against a stub `launchctl` with exact call lists, and a scratch-HOME `chezmoi apply` on macOS). `python3 tests/instances/mutate.py` checks the suite catches 19 deliberate breaks of the safety rules.
 
 ## Tool Management with mise
 
