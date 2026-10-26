@@ -580,6 +580,38 @@ class HeavyGate(unittest.TestCase):
                 self.slots_file.write_text(text)
                 self.assertIn("slots: 3\n", self.slots_out())
 
+    def test_a_file_with_windows_line_endings_is_read_and_written_like_any_other(self):
+        for number in ("1", "4"):
+            with self.subTest(number):
+                self.slots_file.write_bytes(f"# comment\r\n\r\n{number}\r\n".encode())
+                self.assertIn(f"slots: {number}\nfrom: the file", self.slots_out())
+        self.slots_file.write_bytes(b"# comment\r\n\r\n1\r\n# tail\r\n")
+        self.assertEqual(self.gate("slots", "5").returncode, 0)
+        self.assertEqual(self.slots_file.read_bytes(), b"# comment\r\n\r\n5\n# tail\r\n", "the number replaces the number, not a blank line")
+
+    def test_a_job_that_takes_the_free_slot_during_a_start_does_not_push_it_past_the_limit(self):
+        # An older heavy-gate (which knows only slot 1) takes slot 1 between this start's count and its claim. With a limit of 1 the
+        # start must not move on to slot 2. A readlink that, right after the count (its 8 slot reads), plants that older holder.
+        sleeper = self.sleeper()
+        (self.fake / "sleeper_pid").write_text(f"{sleeper.pid}\n")
+        real = "/usr/bin/readlink" if os.path.exists("/usr/bin/readlink") else "/bin/readlink"
+        fake = Path(self.tmp.name) / "bin/readlink"
+        fake.write_text(f'''#!/bin/sh
+n=$(cat "$FAKE/readlinks" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "$FAKE/readlinks"
+{real} "$@"; rc=$?
+[ "$n" = 8 ] && ln -s "$(cat "$FAKE/sleeper_pid")" "$HEAVY_GATE_LOCK"
+exit $rc
+''')
+        fake.chmod(0o755)
+        self.slots_file.write_text("1\n")
+        marker = Path(self.tmp.name) / "ran"
+        result = self.gate("--", "touch", str(marker))
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn("all 1 heavy slot(s) are held", result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertTrue(self.lock.is_symlink(), "the planted holder is there")
+        self.assertFalse(self.lock2.is_symlink(), "and the start did not take slot 2 behind its back")
+
     def test_a_bad_environment_value_is_a_usage_error_but_slots_still_reports(self):
         for value in ("0", "two", "-1", "1.5"):
             with self.subTest(value):
