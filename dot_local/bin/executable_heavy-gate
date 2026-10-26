@@ -279,18 +279,21 @@ function rtext(l) { sub(/^[ \t]*[0-9]+[ \t]+/, "", l); sub(/[ \t]+$/, "", l); re
 # replaces; it stays as the fallback (and the only source while the rank file is off).
 UNRANKED=1000   # what workstream-rank prints for a job with no workstream; the offset that puts such jobs after the stack
 RANK_TIMEOUT=${HEAVY_GATE_RANK_TIMEOUT:-2}
-case $RANK_TIMEOUT in '' | *[!0-9]* | 0) RANK_TIMEOUT=2 ;; esac
+[ "$RANK_TIMEOUT" -gt 0 ] 2>/dev/null || RANK_TIMEOUT=2   # not a number, 0 or 00 (no alarm), or too big for test: 2
 # rank_read ARGS: run workstream-rank and print its output; return its exit status (124 if it took more than RANK_TIMEOUT seconds,
 # 127 if it cannot run). Callers use the output only when the status is 0. The gate never waits on the reader: a small perl wrapper
-# (macOS ships perl; macOS has no timeout) runs it in its own process group and kills the whole group at the deadline, so a hung
-# reader, or a child of it, cannot stall registration, the deadline or --wait, nor hold the output pipe. No temporary file, no pid
+# (macOS ships perl; macOS has no timeout) runs it in its own process group and kills the whole group at the deadline, and again when
+# the reader has exited (a child it left behind would hold the output pipe), so a hung reader, or a child of it, cannot stall
+# registration, the deadline or --wait. No temporary file, no pid
 # to look up later: the wrapper is the reader's parent and has not reaped it when it kills. Its stderr is dropped (it warns on every call).
 rank_read() {
   perl -e '
     my $t = shift; my $p = fork; defined $p or exit 1;
     if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 }
+    setpgrp($p, $p);
     $SIG{ALRM} = sub { kill 9, -$p; waitpid($p, 0); exit 124 };
-    alarm $t; waitpid($p, 0); exit($? == 0 ? 0 : ($? >> 8) || 1)' "$RANK_TIMEOUT" workstream-rank "$@" 2>/dev/null
+    alarm $t; waitpid($p, 0); alarm 0; my $s = $?; kill 9, -$p;
+    exit($s == 0 ? 0 : ($s >> 8) || 1)' "$RANK_TIMEOUT" workstream-rank "$@" 2>/dev/null
 }
 # True when the central rank is on: workstream-rank is installed and succeeds, and its file is valid with at least one workstream
 # (show prints nothing otherwise; a missing workstream-rank fails).

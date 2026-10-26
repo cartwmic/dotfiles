@@ -900,7 +900,8 @@ exit $rc
         self.priorities.write_text("2  echo D\n")
         for label, body, expected in (("both calls hang", "sleep 60", "2"),
                                       ("of hangs", 'case "$1" in show) echo x ;; of) sleep 60 ;; esac', "1002"),
-                                      ("a child of the reader hangs, holding its output", 'case "$1" in show) echo x ;; of) sleep 60 & wait ;; esac', "1002")):
+                                      ("a child of the reader hangs, holding its output", 'case "$1" in show) echo x ;; of) sleep 60 & wait ;; esac', "1002"),
+                                      ("the reader exits and leaves a child holding its output", 'case "$1" in show) echo x ;; of) sleep 60 & echo 4 ;; esac', "4")):
             with self.subTest(label):
                 self.stub_reader(body)
                 env = {"HERDR_PANE_ID": "w:p1", "HEAVY_GATE_RANK_TIMEOUT": "1"}
@@ -911,7 +912,7 @@ exit $rc
     def test_a_hanging_reader_does_not_hold_up_a_job_or_its_deadline(self):
         self.priorities.write_text("2  echo D\n")
         self.stub_reader("sleep 60")
-        for timeout in ("1", "soon", "0", ""):   # a bad value, or 0, means the default, 2 seconds
+        for timeout in ("1", "soon", "0", "00", ""):   # a bad value, or 0, means the default, 2 seconds
             with self.subTest(timeout):
                 marker = Path(self.tmp.name) / f"ran{timeout}"
                 started = time.monotonic()
