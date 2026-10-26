@@ -2476,10 +2476,8 @@ def scenario_chezmoi() -> dict[str, Any]:
         "~/.local/share/session-recap",
         "~/.local/bin/passage-review",
         "~/.local/share/passage-review",
-        "~/.local/share/herdr-overview",
         "~/.local/share/agent-harness/canonical/skills/herdr/SKILL.md",
         "~/.pi/agent/extensions/README.md",
-        "~/.pi/agent/extensions/herdr-overview",
         "~/.pi/agent/extensions/passage-review",
     ]
     mappings: dict[str, str] = {}
@@ -2555,8 +2553,8 @@ def scenario_chezmoi() -> dict[str, Any]:
             else:
                 if "bin/herdr-overview-proof" in paths:
                     raise ProofFailure(f"Termux-only proof helper leaked into the {profile} desktop profile")
-                if not any(path.startswith(".pi/agent/extensions/herdr-overview/") for path in paths):
-                    raise ProofFailure(f"{profile} profile omits the desktop Pi publication adapter")
+                if any(path.startswith(".pi/agent/extensions/herdr-overview/") for path in paths):
+                    raise ProofFailure(f"{profile} profile still deploys the retired Herdr Overview Pi adapter")
     return {"targeted_dry_run": True, "current_profile": current_profile,
             "desktop_mappings_checked": mappings, "rendered_profiles": list(rendered_profiles),
             "recap_default_off": True,

@@ -53,7 +53,7 @@ pnpm = "11"
 # =============================================================================
 starship = "latest"                       # Shell prompt
 zellij = "latest"                         # General-purpose terminal multiplexer
-"github:herdrdev/herdr" = "0.9.1"         # Exact pin; check a new release with `mise run check-herdr-upgrade` before bumping
+"github:herdrdev/herdr" = "0.9.1"
 zoxide = "latest"                         # Smart cd replacement
 
 # Zsh tools
@@ -846,83 +846,8 @@ fi
 echo "✅ Zellij plugins installed in $PLUGIN_DIR"
 '''
 
-[tasks."install-herdr-overview"]
-description = "Install the pinned Herdr, check it offers the API Herdr Overview uses, and link the plugin without starting or restarting Herdr"
-run = '''
-set -eu
-PROFILE="${HERDR_OVERVIEW_APPLY_PROFILE:-$(chezmoi data --format json 2>/dev/null | jq -r '.profile // empty' || true)}"
-case "$PROFILE" in
-  personal|axon-work-computer) ;;
-  *)
-    echo "Skipping Herdr Overview for chezmoi profile ${PROFILE:-unknown}"
-    exit 0
-    ;;
-esac
-
-# The version comes from the [tools] pin above.
-mise install github:herdrdev/herdr
-HERDR_BIN="$(mise where github:herdrdev/herdr)/herdr"
-
-# The apply script supplies its active source; standalone runs resolve the configured source.
-MANIFEST="${HERDR_OVERVIEW_APPLY_MANIFEST:-}"
-if [ -z "$MANIFEST" ]; then
-  MANIFEST="$(chezmoi source-path "$HOME/.local/share/herdr-overview/herdr-plugin.toml")"
-fi
-PLUGIN_DIR="${MANIFEST%/herdr-plugin.toml}"
-if [ ! -f "$MANIFEST" ]; then
-  echo "ERROR: Herdr Overview source manifest not found: $MANIFEST" >&2
-  exit 1
-fi
-PLUGIN_DIR="$(cd "$PLUGIN_DIR" && pwd -P)"
-
-# Compatibility is the API the plugin uses, not a version or protocol number.
-# The check reads the binary's bundled schema offline.
-if ! node "$PLUGIN_DIR/check-herdr-api.mjs" "$HERDR_BIN"; then
-  echo "ERROR: $("$HERDR_BIN" --version) does not offer the API Herdr Overview uses; keep the previous pin" >&2
-  exit 1
-fi
-
-# Use a private, nonexistent socket path so link writes the registry offline
-# and never contacts, starts, or restarts the owner's running server.
-LINK_SOCKET="$HOME/.config/herdr/.herdr-overview-link-$$.sock"
-PLUGIN_REGISTRY="${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins.json"
-# Read the on-disk registry so this installer stays offline even if an older
-# Herdr server is still running. Refuse to replace a different plugin ID.
-EXISTING="$(jq -r '.[]? | select(.plugin_id == "overview") | .plugin_root // empty' "$PLUGIN_REGISTRY" 2>/dev/null | head -n 1 || true)"
-if [ -n "$EXISTING" ]; then
-  if [ "$(cd "$EXISTING" 2>/dev/null && pwd -P || printf '%s' "$EXISTING")" = "$PLUGIN_DIR" ]; then
-    echo "Herdr Overview already linked from $PLUGIN_DIR"
-    exit 0
-  fi
-  echo "ERROR: plugin ID 'overview' is already linked from $EXISTING" >&2
-  exit 1
-fi
-
-HERDR_SOCKET_PATH="$LINK_SOCKET" "$HERDR_BIN" plugin link "$PLUGIN_DIR" --enabled
-echo "Herdr Overview linked from $PLUGIN_DIR. Its startup hook runs only after a compatible Herdr server starts; this task did not start or restart a server."
-'''
-
-[tasks."check-herdr-upgrade"]
-description = "Install a Herdr release (default: latest) beside the pinned one and check it offers the API Herdr Overview uses"
-usage = 'arg "[version]" help="Herdr release to check; defaults to the latest"'
-run = '''
-set -eu
-VERSION="${usage_version:-}"
-[ -n "$VERSION" ] || VERSION="$(mise latest github:herdrdev/herdr)"
-mise install "github:herdrdev/herdr@${VERSION}"
-BIN="$(mise where "github:herdrdev/herdr@${VERSION}")/herdr"
-MANIFEST="$(chezmoi source-path "$HOME/.local/share/herdr-overview/herdr-plugin.toml")"
-if node "${MANIFEST%/herdr-plugin.toml}/check-herdr-api.mjs" "$BIN"; then
-  echo "Herdr ${VERSION} is compatible. To upgrade, set \"github:herdrdev/herdr\" = \"${VERSION}\" in dot_config/mise/config.toml and apply."
-else
-  echo "Herdr ${VERSION} is not compatible; keep the current pin." >&2
-  exit 1
-fi
-'''
-
 [tasks."install-herdr-palette"]
 description = "Install the pinned upstream Herdr command palette without contacting the running server"
-depends = ["install-herdr-overview"]
 run = '''
 set -eu
 PROFILE="${HERDR_PALETTE_APPLY_PROFILE:-$(chezmoi data --format json | jq -r '.profile // empty')}"
@@ -934,8 +859,10 @@ case "$PROFILE" in
     ;;
 esac
 
+# The version comes from the [tools] pin above.
+mise install github:herdrdev/herdr
 HERDR_BIN="$(mise where github:herdrdev/herdr)/herdr"
-# Install/register offline, as with Overview. Bootstrap must not touch a live server.
+# Install/register offline. Bootstrap must not touch a live server.
 export HERDR_SOCKET_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/herdr/.herdr-palette-install-$$.sock"
 PLUGINS="$("$HERDR_BIN" plugin list --plugin vjeantet.palette --json)"
 # Idempotent condition: the native manifest, GitHub pin and runnable binary agree.
@@ -983,7 +910,6 @@ depends = [
   "setup-fzf-shell",
   "install-nvim-rosetta",
   "install-zellij-plugins",
-  "install-herdr-overview",
   "install-herdr-palette",
 ]
 run = '''

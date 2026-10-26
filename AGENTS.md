@@ -217,8 +217,6 @@ inside one of these source subtrees loads this file and its local guide:
 - [Learnings monitor](./dot_pi/private_agent/extensions/learnings-monitor/AGENTS.md) — opt-in observer, local records, confirmed promotion, and work-bank verification.
 - [Standing reminder](./dot_pi/private_agent/extensions/standing-reminder/AGENTS.md) — session-current state, input-origin patch, and isolated Pi proof.
 - [System One Pi integration](./dot_pi/private_agent/extensions/system-one/AGENTS.md) — personal/work Git package settings, isolated checks, and rollout.
-- [Herdr plugin runtime](./dot_local/share/herdr-overview/AGENTS.md) — native model, naming, grouping, and isolated server proof.
-- [Herdr Pi adapter](./dot_pi/private_agent/extensions/herdr-overview/AGENTS.md) — settled publication and caller-aware membership.
 - [session-recap](./dot_local/share/session-recap/AGENTS.md) — standalone prompt/store invariants.
 - [passage-review](./dot_local/share/passage-review/AGENTS.md) — snapshot, note, export, and phone-local invariants.
 - [passage-review Pi adapter](./dot_pi/private_agent/extensions/passage-review/AGENTS.md) — `/review` TUI entry and process handoff.
@@ -226,9 +224,6 @@ inside one of these source subtrees loads this file and its local guide:
 For phone config, bootstrap, or SSH/jump changes, load
 [termux/README.md](./termux/README.md); its phone procedure remains subordinate
 to this guide's apply, secrets, and approval rules.
-
-Before Herdr linking or rollout, load the [runtime guide's deployment procedure](./dot_local/share/herdr-overview/AGENTS.md#deployment-from-worktrees)
-for its configured-source limitation and separate worktree proof path.
 
 For common Pi extension procedure, read
 [dot_pi/private_agent/extensions/README.md](./dot_pi/private_agent/extensions/README.md)
