@@ -39,15 +39,17 @@
 # every try, so an edit reaches jobs that are already waiting. A job waiting with "-- CMD" registers its number under
 # <lock>.waiters/ (pid, number, state, directory, command) and defers its try while another live waiter has a lower number.
 # The same or a higher number does not defer it. Entries of dead pids are ignored. Nothing else orders the queue.
-# Older heavy-gate versions (jobs already running before this one was installed) have no priority and defer to no one.
+# Older heavy-gate versions (jobs already running before this one was installed) have no priority and defer to no one. The one-slot
+# version also has no check window; the two-slot version reads its limit once, at its start, and never reads the slots file.
 #
 # --wait SECONDS bounds when a new try may start (default 0: one try); none starts at or after the deadline. A try that
 # has begun takes about 60 seconds (the Swapouts watch) and is allowed to finish.
 # A slot is a symlink named for the pid of its holder, shared by every heavy-gate of one user. Slot 1 is the lock path
 # itself (/tmp/heavy-gate-<uid>.lock, the only gate older heavy-gate versions know); slot N is <lock>.N. A new job takes
-# slot 1 first. Old and new versions exclude each other on slot 1. An old version never looks at slot 2 or above, the
-# check window or priorities, so an old holder plus new jobs run together (new jobs take slots 2, 3, ...), and an old job can
-# start while a new one is in its check. A holder killed with SIGKILL leaves its slot until its pid is seen dead; a
+# slot 1 first. Old and new versions exclude each other on slot 1. The one-slot version never looks at slot 2 or
+# above, the check window or priorities, so its holder plus new jobs run together (new jobs take slots 2, 3, ...), and such a job can
+# start while a new one is in its check. The two-slot version looks at slots 1 to its own limit only (2 unless its environment says
+# otherwise), so after the limit is lowered below the number of holders it can still start a job: the limit is exact among jobs of this version. A holder killed with SIGKILL leaves its slot until its pid is seen dead; a
 # recycled pid keeps the slot held until it exits.
 #
 # Exit status: 0 allowed (or CMD's own status), 1 refused, 75 still refused after --wait, 2 usage / unsupported system.
@@ -183,7 +185,7 @@ resolve_slots() {
     if norm_slots "$HEAVY_GATE_SLOTS" HEAVY_GATE_SLOTS; then SLOTS=$sv; SLOTS_FROM="HEAVY_GATE_SLOTS in the environment"; return 0; fi
     SLOTS_ENV_BAD=1
   fi
-  sraw=$(awk '/^[ \t]*(#|$)/ { next } { sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, ""); print; exit }' "$SLOTS_FILE" 2>/dev/null) || sraw=
+  sraw=$(awk '/^[ \t\r]*(#|$)/ { next } { sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, ""); print; exit }' "$SLOTS_FILE" 2>/dev/null) || sraw=
   if [ -n "$sraw" ] && norm_slots "$sraw" "the slots file"; then SLOTS=$sv; SLOTS_FROM="the file $SLOTS_FILE"; return 0; fi
   SLOTS=$DEFAULT_SLOTS; SLOTS_FROM="the default"
 }
@@ -212,8 +214,10 @@ take_slot() {
       0) mine=$(slot_path "$k"); return 0 ;;
       2) return 1 ;;
     esac
+    # Held after all: an older heavy-gate took it since the count. Count again before trying a higher slot, so the limit still holds.
+    held_slots
+    if [ "$nheld" -ge "$SLOTS" ]; then break; fi
   done
-  held_slots   # an older heavy-gate took the free slot first
   refuse "all $SLOTS heavy slot(s) are held (pid$held)"
   return 1
 }
@@ -243,7 +247,7 @@ set_slots() {
   GG_NUM=$sv awk '
     { L[++n] = $0 }
     END {
-      for (i = 1; i <= n; i++) if (L[i] !~ /^[ \t]*(#|$)/) { L[i] = ENVIRON["GG_NUM"]; found = 1; break }
+      for (i = 1; i <= n; i++) if (L[i] !~ /^[ \t\r]*(#|$)/) { L[i] = ENVIRON["GG_NUM"]; found = 1; break }
       if (!found) L[++n] = ENVIRON["GG_NUM"]
       for (i = 1; i <= n; i++) print L[i]
     }' "$src" > "$SLOTS_FILE.new.$$"
