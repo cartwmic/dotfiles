@@ -1,9 +1,0 @@
-{
-  "provider": "openai-codex",
-  "model": "gpt-6-luna",
-  "debounceSeconds": 60,
-  "resummarizeTokenThreshold": 10000,
-  "maxTokens": 1500,
-  "showWidget": false,
-  "verbose": false
-}
