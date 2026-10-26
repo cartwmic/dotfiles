@@ -21,7 +21,8 @@ FAKES = {
   kern.memorystatus_vm_pressure_level) cat "$FAKE/pressure" ;;
 esac''',
     "memory_pressure": 'cat "$FAKE/memory_pressure"',
-    "vm_stat": '''n=$(cat "$FAKE/swapouts")
+    "vm_stat": '''[ -f "$FAKE/on_vm_stat" ] && sh "$FAKE/on_vm_stat"
+n=$(cat "$FAKE/swapouts")
 [ -f "$FAKE/swapouts_step" ] && echo $((n + $(cat "$FAKE/swapouts_step"))) > "$FAKE/swapouts"
 echo "Swapouts:      $n."''',
 }
@@ -48,7 +49,7 @@ class HeavyGate(unittest.TestCase):
             (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
             (bin_dir / name).chmod(0o755)
         self.set(**QUIET)
-        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE": str(self.fake), "TMPDIR": self.tmp.name,
+        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE": str(self.fake), "HEAVY_GATE_LOCK": str(root / "heavy-gate.lock"),
                     "HEAVY_GATE_SWAP_WINDOW": "1", "HEAVY_GATE_POLL": "1"}
         self.lock = root / "heavy-gate.lock"
 
@@ -60,13 +61,21 @@ class HeavyGate(unittest.TestCase):
         return subprocess.run(["sh", str(SCRIPT), *args], env=self.env, text=True, capture_output=True, timeout=timeout)
 
     def start(self, *args):
-        return subprocess.Popen(["sh", str(SCRIPT), *args], env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return subprocess.Popen(["sh", str(SCRIPT), *args], env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+
+    def wait_for(self, condition, seconds=10):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if condition():
+                return True
+            time.sleep(0.05)
+        return False
 
     # --- one check ---
     def test_quiet_host_is_allowed(self):
         result = self.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("allowed", result.stderr)
+        self.assertIn("[heavy-gate] INFO: allowed", result.stderr)
 
     def test_each_rule_refuses_on_its_own(self):
         cases = [
@@ -77,6 +86,9 @@ class HeavyGate(unittest.TestCase):
             ({"memory_pressure": "System-wide memory free percentage: 20%"}, "memory free 20%"),
             ({"loadavg": ""}, "load1 unreadable"),
             ({"memory_pressure": ""}, "memory free unreadable"),
+            ({"loadavg": "{ nonsense 1 1 }"}, "load1 nonsense"),
+            ({"memory_pressure": "System-wide memory free percentage: lots%"}, "memory free lots%"),
+            ({"swapusage": "total = 1M  used = 1M  free = lots  (encrypted)"}, "swap free"),
         ]
         for figures, expected in cases:
             with self.subTest(expected):
@@ -94,6 +106,29 @@ class HeavyGate(unittest.TestCase):
         self.assertIn("Swapouts rose", result.stderr)
         (self.fake / "swapouts_step").unlink()
         self.assertEqual(self.gate().returncode, 0)
+
+    def test_malformed_swapouts_refuse(self):
+        for value in ("", "many", "5x"):
+            with self.subTest(value):
+                self.set(swapouts=value)
+                result = self.gate()
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("Swapouts unreadable", result.stderr)
+
+    def test_a_host_that_gets_busy_during_the_watch_is_refused(self):
+        # the cheap rules are read again after the Swapouts window: a host that was quiet a minute ago is not enough
+        (self.fake / "on_vm_stat").write_text('echo "{ 30.00 20.00 10.00 }" > "$FAKE/loadavg"\n')
+        result = self.gate()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("load1 30.00", result.stderr)
+
+    def test_a_bad_window_or_poll_is_a_usage_error(self):
+        for name in ("HEAVY_GATE_SWAP_WINDOW", "HEAVY_GATE_POLL"):
+            with self.subTest(name):
+                self.env[name] = "soon"
+                result = self.gate()
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.env[name] = "1"
 
     def test_every_broken_rule_is_reported(self):
         self.set(loadavg="{ 40.00 20.00 10.00 }", pressure="4", memory_pressure="System-wide memory free percentage: 5%")
@@ -147,11 +182,9 @@ class HeavyGate(unittest.TestCase):
 
     # --- one at a time ---
     def test_only_one_heavy_job_at_a_time(self):
-        first = self.start("--", "sleep", "6")
-        for _ in range(40):
-            if self.lock.is_symlink():
-                break
-            time.sleep(0.1)
+        started = Path(self.tmp.name) / "started"
+        first = self.start("--", "sh", "-c", f"touch {started}; sleep 6")
+        self.assertTrue(self.wait_for(started.exists), "the first job is running")
         self.assertTrue(self.lock.is_symlink(), "the first job holds the gate")
         second = self.gate("--", "true")
         self.assertEqual(second.returncode, 75)
@@ -166,17 +199,45 @@ class HeavyGate(unittest.TestCase):
         os.symlink(str(dead.pid), self.lock)
         self.assertEqual(self.gate("--", "true").returncode, 0)
 
-    def test_the_gate_is_released_when_the_job_is_killed(self):
-        job = self.start("--", "sleep", "30")
-        for _ in range(40):
+    def test_two_jobs_racing_for_a_dead_holders_lock_never_overlap(self):
+        # both read the same dead pid; only one may clear it and take the gate
+        self.env["HEAVY_GATE_SWAP_WINDOW"] = "0"
+        self.env["HEAVY_GATE_POLL"] = "1"
+        log = Path(self.tmp.name) / "log"
+        job = f"echo start >> {log}; sleep 0.4; echo end >> {log}"
+        for _ in range(8):
+            log.write_text("")
+            dead = subprocess.Popen(["true"])
+            dead.wait()
             if self.lock.is_symlink():
-                break
-            time.sleep(0.1)
-        os.killpg(os.getpgid(job.pid), 0)  # the group exists
-        job.send_signal(signal.SIGTERM)
-        subprocess.run(["pkill", "-TERM", "-P", str(job.pid)])  # what Pi's process-tree kill does to the children
+                self.lock.unlink()
+            os.symlink(str(dead.pid), self.lock)
+            jobs = [self.start("--wait", "20", "--", "sh", "-c", job) for _ in range(2)]
+            for j in jobs:
+                j.communicate(timeout=30)
+                self.assertEqual(j.returncode, 0)
+            self.assertEqual(log.read_text().split(), ["start", "end", "start", "end"], "the two jobs ran one after the other")
+
+    def test_the_gate_is_released_when_the_job_is_killed(self):
+        pidfile = Path(self.tmp.name) / "pid"
+        job = self.start("--", "sh", "-c", f"echo $$ > {pidfile}; sleep 30")
+        self.assertTrue(self.wait_for(pidfile.exists), "the heavy command started")
+        self.assertTrue(self.wait_for(lambda: pidfile.read_text().strip() != ""))
+        command = int(pidfile.read_text())
+        self.assertTrue(self.lock.is_symlink())
+        os.killpg(job.pid, signal.SIGTERM)  # what Pi's process-tree kill does: the wrapper and everything under it
         job.communicate(timeout=20)
-        self.assertFalse(self.lock.is_symlink())
+        self.assertEqual(job.returncode, 143)
+        self.assertFalse(self.wait_for(lambda: self._alive(command), 1), "the heavy command is gone")
+        self.assertFalse(self.lock.is_symlink(), "the gate is released")
+
+    @staticmethod
+    def _alive(pid):
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
 
     # --- usage ---
     def test_bad_arguments_exit_2(self):
