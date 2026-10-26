@@ -18,7 +18,7 @@ FAKES = {
     "sysctl": '''case "$2" in
   vm.loadavg) cat "$FAKE/loadavg" ;;
   vm.swapusage) cat "$FAKE/swapusage" ;;
-  kern.memorystatus_vm_pressure_level) echo read >> "$FAKE/pressure_reads"; cat "$FAKE/pressure" ;;
+  kern.memorystatus_vm_pressure_level) v=$(cat "$FAKE/pressure"); echo "$v"; echo read >> "$FAKE/pressure_reads" ;;
 esac''',
     "memory_pressure": 'cat "$FAKE/memory_pressure"',
     "vm_stat": '''[ -f "$FAKE/on_vm_stat" ] && sh "$FAKE/on_vm_stat"
