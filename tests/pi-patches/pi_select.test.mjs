@@ -12,6 +12,11 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const PATCHES = join(ROOT, "dot_local/share/pi-patches");
 const VARIANTS = { "1.1": "patch.pi-1.1.mjs", "1.2": "patch.pi-1.2.mjs", "1.3": "patch.pi-1.3.mjs" };
 const FOUR = ["headless-extension-drain", "prompt-start-race", "settlement-abort", "standing-reminder-origin"];
+// Real payload maps: a payload serves its series and every later one until a newer payload exists.
+const REAL = {
+	...Object.fromEntries(FOUR.map((name) => [name, { "1.1": "patch.pi-1.1.mjs", "1.2": "patch.pi-1.2.mjs" }])),
+	"btw-native-session": { "1.1": "patch.pi-1.1.mjs", "1.2": "patch.pi-1.2.mjs", "1.3": "patch.pi-1.3.mjs", "1.4": "patch.pi-1.4.mjs" },
+};
 
 test("seriesOf: minor series only, strict semver shape", () => {
 	assert.equal(seriesOf("1.1.0"), "1.1"); assert.equal(seriesOf("1.2.9"), "1.2"); assert.equal(seriesOf(" 1.2.0 "), "1.2");
@@ -19,13 +24,14 @@ test("seriesOf: minor series only, strict semver shape", () => {
 	for (const bad of ["", "banana", "1.2", "v1.2.0", "1.2.x", undefined, null, 12]) assert.equal(seriesOf(bad), undefined, String(bad));
 });
 
-test("selectPayload: match, unsupported (never prefix-matches), unparseable, unreadable, not installed -> newest", () => {
+test("selectPayload: version floor (newest payload <= installed), older-than-all unsupported, unparseable, unreadable, not installed -> newest", () => {
 	const at = (v) => selectPayload("/x", VARIANTS, () => v);
 	assert.deepEqual([at("1.1.0").kind, at("1.1.0").file], ["match", "patch.pi-1.1.mjs"]);
 	assert.deepEqual([at("1.2.0").kind, at("1.2.0").file], ["match", "patch.pi-1.2.mjs"]);
 	assert.deepEqual([at("1.3.0").kind, at("1.3.0").file], ["match", "patch.pi-1.3.mjs"]);
 	assert.equal(at("1.1.7").file, "patch.pi-1.1.mjs");
-	for (const v of ["1.0.0", "1.4.0", "2.0.0", "0.99.2", "1.10.0", "1.12.0"]) assert.equal(at(v).kind, "unsupported", v);
+	for (const v of ["1.4.0", "1.10.0", "1.12.0", "2.0.0"]) assert.deepEqual([at(v).kind, at(v).file], ["match", "patch.pi-1.3.mjs"], v);
+	for (const v of ["1.0.0", "0.99.2"]) assert.equal(at(v).kind, "unsupported", v);
 	assert.equal(at("banana").kind, "unparseable");
 	assert.equal(selectPayload("/x", VARIANTS, () => { throw new Error("ENOENT"); }).kind, "unreadable");
 	const none = selectPayload(undefined, VARIANTS);
@@ -54,9 +60,9 @@ test("dispatcher end to end: picks the payload, forwards argv, propagates its ex
 		assert.equal(r.code, 11); assert.match(r.out, /RAN 1\.1 args=\["--check"\]/); assert.match(r.out, /Pi 1\.1\.0 -> payload patch\.pi-1\.1\.mjs/);
 		r = s.run({ PI_ROOT: s.pi("1.2.0") }); assert.equal(r.code, 12); assert.match(r.out, /RAN 1\.2 args=\[\]/);
 		r = s.run({ PI_ROOT: s.pi("1.3.0") }); assert.equal(r.code, 13); assert.match(r.out, /RAN 1\.3 args=\[\]/);
-		r = s.run({ PI_ROOT: s.pi("1.4.0") });
-		assert.equal(r.code, 1); assert.doesNotMatch(r.out, /RAN/); assert.match(r.err, /no payload for Pi 1\.4\.0; supported Pi series: 1\.3\.x, 1\.2\.x, 1\.1\.x/);
+		r = s.run({ PI_ROOT: s.pi("1.4.0") }); assert.equal(r.code, 13, "a newer Pi runs the newest payload; its anchors decide"); assert.match(r.out, /Pi 1\.4\.0 -> payload patch\.pi-1\.3\.mjs/);
 		r = s.run({ PI_ROOT: s.pi("1.0.0") }); assert.equal(r.code, 1, "an older Pi must not silently use a newer payload");
+		assert.doesNotMatch(r.out, /RAN/); assert.match(r.err, /no payload for Pi 1\.0\.0; payloads start at Pi 1\.1\.x/);
 		r = s.run({ PI_ROOT: s.pi("banana") }); assert.equal(r.code, 1); assert.match(r.err, /unrecognised Pi version "banana"/);
 		const noPkg = mkdtempSync(join(s.dir, "empty-")); r = s.run({ PI_ROOT: noPkg });
 		assert.equal(r.code, 1); assert.match(r.err, /cannot read Pi version/);
@@ -75,7 +81,7 @@ test("mutant guard: a missing payload file is a loud failure, not a skip", () =>
 test("repository wiring: every dispatching patch has both payloads, the real dispatcher variants map matches, and the onchange script hashes every file", () => {
 	const tmpl = readFileSync(join(ROOT, "run_onchange_after_30_apply_pi_patches.sh.tmpl"), "utf8");
 	assert.ok(tmpl.includes('include "dot_local/share/pi-patches/pi-select.mjs" | sha256sum'));
-	for (const name of FOUR) {
+	for (const [name, VARIANTS] of Object.entries(REAL)) {
 		const dir = join(PATCHES, name);
 		const entry = readFileSync(join(dir, "patch.mjs"), "utf8");
 		assert.match(entry, /dispatchByPiVersion/); assert.match(entry, new RegExp(`name: "${name}"`));

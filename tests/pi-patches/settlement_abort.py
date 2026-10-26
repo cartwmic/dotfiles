@@ -263,7 +263,8 @@ def main():
     trigger=(ROOT/'run_onchange_after_30_apply_pi_patches.sh.tmpl').read_text()
     require(trigger.count('include "dot_local/share/pi-patches/settlement-abort/patch.mjs" | sha256sum')==1, 'expected one source hash trigger')
     version=json.loads((SOURCE/'package.json').read_text())['version']
-    require(version in ('0.99.2','1.0.0','1.2.0','1.3.0'),'requires tested Pi 0.99.2, 1.0.0, 1.2.0 or 1.3.0')
+    # Payloads are anchor-gated from Pi 1.2.0 on; this proof checks behaviour on any of those versions.
+    require(version in ('0.99.2','1.0.0') or tuple(map(int,version.split('-')[0].split('.')))>=(1,2,0),'requires Pi 0.99.2, 1.0.0 or 1.2.0+')
     original=fingerprint(SOURCE)
     print('IDENTITY:', SOURCE, 'Pi', version, json.dumps(original), flush=True)
     print('PAYLOAD:', hashlib.sha256(PATCH.read_bytes()).hexdigest(), flush=True)

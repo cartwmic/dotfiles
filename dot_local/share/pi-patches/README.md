@@ -20,15 +20,16 @@ between Pi minor series, so each directory holds one payload per series and `pat
 |---|---|
 | `patch.mjs` | Entry point the apply loop, the onchange hash and the proofs use. Calls `dispatchByPiVersion` in `pi-select.mjs`. |
 | `patch.pi-1.1.mjs` | Payload for Pi 1.1.x (the revisions before the 1.2.0 port: v1/v1/v2/v2). |
-| `patch.pi-1.2.mjs` | Payload for Pi 1.2.x (the 1.2.0 port: v2/v2/v3/v3). |
-| `patch.pi-1.3.mjs` | Payload for Pi 1.3.x: a byte-identical copy of `patch.pi-1.2.mjs`. Every 1.2 anchor matches 1.3.0 exactly; the only `agent-session.js` change upstream is unrelated tool restore. |
+| `patch.pi-1.2.mjs` | Payload for Pi 1.2.0 and later (the 1.2.0 port: v2/v2/v3/v3). Its anchors match 1.3.0 and 1.4.0 unchanged. |
 
-Selection reads the installed Pi version (same locator and per-patch `PI_*_PACKAGE` override the payloads use) and runs the matching
-payload with the same arguments and environment; its exit code is the result. An installed Pi whose minor series has no payload
-(or whose version cannot be read) **fails with exit 1 and changes nothing**; it never falls back to another series. With no Pi
-installed the newest payload runs and keeps its own "not installed; skipped" / `--check` "cannot verify" behaviour.
-To support a new series, add `patch.pi-<major>.<minor>.mjs`, add it to the `variants` map in the patch's `patch.mjs`, add its
-hash line to `run_onchange_after_30_apply_pi_patches.sh.tmpl` and port that payload's proof. `tests/pi-patches/pi_select.test.mjs`
+Selection is by version floor, and the payload's checked anchors decide the rest. It reads the installed Pi version (same locator and
+per-patch `PI_*_PACKAGE` override the payloads use) and runs the newest payload whose series is at or below it, with the same arguments
+and environment; its exit code is the result. A newer Pi needs no new file while the anchors still match. When they stop matching, the
+payload fails with exit 1 and writes nothing. A Pi older than every payload, or one whose version cannot be read, also fails with exit 1
+and changes nothing. With no Pi installed the newest payload runs and keeps its own "not installed; skipped" / `--check` "cannot verify" behaviour.
+Anchors only prove the text matches, not that the surrounding code still behaves the same; run the patch's proof after a Pi upgrade.
+When anchors drift, add `patch.pi-<major>.<minor>.mjs` for the first series that needs it, add it to the `variants` map in the patch's
+`patch.mjs`, add its hash line to `run_onchange_after_30_apply_pi_patches.sh.tmpl` and port that payload's proof. `tests/pi-patches/pi_select.test.mjs`
 checks the wiring (run: `node --test tests/pi-patches/pi_select.test.mjs`).
 
 `btw-native-session` payloads are exact-version: `patch.pi-1.1.mjs` + `edits.json` need Pi 1.1.0, `patch.pi-1.2.mjs` + `edits.pi-1.2.json` need Pi 1.2.0.
@@ -38,7 +39,13 @@ and added embedded-status colouring). Every other edit is unchanged.
 `patch.pi-1.3.mjs` + `edits.pi-1.3.json` need Pi 1.3.0. `edits.pi-1.3.json` is `edits.pi-1.2.json` with the bundle chunk renamed (`chunk-TJXZSVTD.js` -> `chunk-66G7ITPS.js`)
 and one bundle block (`showExtensionCustom`) re-anchored: upstream 1.3.0 closes an overlay through its own `overlayHandle?.hide()` instead of `this.ui.hideOverlay()` (fix for #10648).
 The same substitution is made in that block's replacement text, so the upstream fix is kept. Every other edit is unchanged.
-`response-visibility` is not version-aware here: its payload lives in `cartwmic/pi-response-visibility`, which matches Pi 1.2.0 from commit `106aa4c` (and no longer matches 1.1.0).
+`patch.pi-1.4.mjs` + `edits.pi-1.4.json` serve Pi 1.4.0 and later with no version check. Chunk paths in `edits.pi-1.4.json` are 1.4.0 hints only:
+the payload finds each chunk as the single bundle file containing that chunk's first block, so a rebuilt bundle with new chunk names still patches.
+`edits.pi-1.4.json` is `edits.pi-1.3.json` with the chunks renamed (`chunk-66G7ITPS.js` -> `chunk-MM3LKT73.js`, `chunk-6MWTY2OB.js` -> `chunk-T726RZZU.js`)
+and the extension-dialog edits ported to upstream 1.4.0's dialog stack (`pushExtensionDialog` / `removeExtensionDialog`): the hosted-UI ticket
+attaches to the selector or input before it is pushed, and the editor's native cancel calls its own `finish`. The one large 1.3 bundle block is split
+into small anchored edits for the same hunks. Every other edit is unchanged.
+`response-visibility` is not version-aware here: its payload lives in `cartwmic/pi-response-visibility`, which is anchor-gated and matches Pi 1.2.0 through 1.4.0.
 
 ## Overview
 
