@@ -1,0 +1,15 @@
+# heavy-gate priorities. One rule per line: NUMBER  PATTERN
+#
+# NUMBER is a whole number; a lower number is more important. A job that matches no rule is priority 5.
+# PATTERN is plain text, not a regex. A rule matches a job when the PATTERN appears in the job's command line or in its
+# working directory. The first matching rule wins. Blank lines and lines starting with # are ignored.
+# While a job with a lower number is waiting for the gate, jobs with a higher number hold back their tries.
+# The file is read on every try, so an edit reaches jobs that are already waiting (on this version of heavy-gate).
+# HEAVY_GATE_PRIORITY=N in a job's environment overrides this file for that one job.
+#
+# Edit by hand, or:  heavy-gate priority PATTERN NUMBER     See who holds and waits:  heavy-gate priorities
+# chezmoi creates this file only if it is absent and never overwrites it: your edits stay.
+#
+# Examples (remove the leading # to use one):
+# 1  coordinator-wt-work-bootstrap
+# 2  pi-bolt
