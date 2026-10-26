@@ -8,10 +8,18 @@ if [ ! -x "$SCRIPT" ]; then
   echo "[instances] INFO: $SCRIPT not found, skipping"
   exit 0
 fi
+{{- if eq .profile "axon-work-computer" }}
+# The work profile runs the Matrix coordinator only (Retro for work is a later change). Its flag is the same instances.coordinator.enabled.
+export INSTANCES_LIST='coordinator-work'
+export INSTANCES_COORDINATOR_WORK_ENABLED={{ includeTemplate "shquote" (dig "instances" "coordinator" "enabled" "" . | printf "%v") }}
+export INSTANCES_COORDINATOR_WORK_REPO={{ includeTemplate "shquote" (includeTemplate "instance_repo" (dict "root" . "name" "coordinator")) }}
+export INSTANCES_COORDINATOR_WORK_EXTRA_PATH={{ includeTemplate "shquote" (dig "instances" "coordinator" "extraPath" "" . | printf "%v") }}
+{{- else }}
 export INSTANCES_COORDINATOR_ENABLED={{ includeTemplate "shquote" (dig "instances" "coordinator" "enabled" "" . | printf "%v") }}
 export INSTANCES_COORDINATOR_REPO={{ includeTemplate "shquote" (includeTemplate "instance_repo" (dict "root" . "name" "coordinator")) }}
 export INSTANCES_RETRO_ENABLED={{ includeTemplate "shquote" (dig "instances" "retro" "enabled" "" . | printf "%v") }}
 export INSTANCES_RETRO_REPO={{ includeTemplate "shquote" (includeTemplate "instance_repo" (dict "root" . "name" "retro")) }}
 export INSTANCES_RETRO_CHANNEL_ID={{ includeTemplate "shquote" (dig "instances" "retro" "channelId" "" . | printf "%v") }}
 export INSTANCES_RETRO_OP_ITEM={{ includeTemplate "shquote" (dig "instances" "retro" "opItem" "" . | printf "%v") }}
+{{- end }}
 exec "$SCRIPT"
