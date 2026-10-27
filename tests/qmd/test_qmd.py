@@ -20,6 +20,7 @@ PERSONAL_ONLY = [
     ".config/mise/conf.d/qmd.toml",
     ".config/qmd/index.yml",
     ".local/bin/qmd-refresh",
+    ".local/bin/qmd-export",
     ".local/share/agent-harness/canonical/skills/searching-with-qmd/SKILL.md",
 ]
 # What qmd 2.8.3 itself writes as the models block; the template carries it so qmd leaves the file byte-identical.
