@@ -180,7 +180,7 @@ q=$(printf "\047")
 case $had in
     "$6") ok=1 ;;
     "") [ "$nvec" = 0 ] && ok=1 || : ;;
-    reembed\ *) [ "$(sqlite3 "$9" "select count(*) from content_vectors where embedded_at < ${q}${had#reembed }${q}" 2>/dev/null || echo unknown)" = 0 ] && ok=1 || : ;;
+    reembed\ *) [ -e "$9" ] && [ "$(sqlite3 "$9" "select count(*) from content_vectors where embedded_at < ${q}${had#reembed }${q}" 2>/dev/null || echo unknown)" = 0 ] && ok=1 || : ;;
 esac
 if [ "$ok" = 1 ]; then echo "$6" > "$7"; else : > "$4/legacy"; fi'
 which=noembed; [ "$embed" = 1 ] && which=embed
