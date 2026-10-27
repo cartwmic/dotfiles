@@ -6,7 +6,7 @@ description: Search Michael's notes, repo docs, Pi session recaps and past Pi se
 QMD indexes markdown: scratch notes (`notes`: ~/tmp/*/*.md), repo docs (`repo-*`), Pi sessions (`sessions`: one file per session, user and assistant text only) and session recaps (`recaps`). Decisions and conventions: ask Hindsight first. Use QMD to find documents and sessions.
 
 **Semantic, the default:** `qmd query "plain-language question"`
-- Slow and heavy: **5-28 s and 1-5 GB of RAM** per call (the first call after idle is the slowest; it loads three models). This Mac is short on memory.
+- Slow and heavy: **5-28 s and 1-5 GB of RAM** per call (every call loads three models afresh). This Mac is short on memory.
 - **Never run it in parallel, in a loop, or from several subagents at once.** One call, read the answer, then decide. Do not retry because it is slow.
 
 **Keyword, when speed matters or you know the exact words:** `qmd search "heavy-gate sync"`
@@ -16,4 +16,4 @@ Both take `-n 5` (result count) and `-c sessions` (one collection; repeat `-c` f
 
 **Read a hit:** `qmd get "#docid"` or `qmd get qmd://sessions/2026-10-26/<id>.md`. A session file is a text-only copy; its frontmatter has the session id and cwd, so look up the full `.jsonl` under `~/.pi/agent/sessions` if you need tool output.
 
-Do not run `qmd update`, `qmd embed`, `qmd pull` or `qmd mcp`. Refreshing the index is the owner's job. If hits look stale, `qmd status` shows when it was updated; say so rather than fixing it.
+Do not run `qmd update`, `qmd embed`, `qmd pull` or `qmd mcp`. Refreshing the index is the owner's job. If hits look stale, `qmd status` shows the newest indexed document; say so rather than fixing it. Sessions and recaps appear only once the owner has built that part of the index.
