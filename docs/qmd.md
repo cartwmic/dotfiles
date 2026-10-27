@@ -99,7 +99,10 @@ sessions and recaps; nothing is copied between machines).
   Measured here: first run 48 s, 203 MB RSS, 8,359 sessions and 8,777 recaps -> 135 MB; second run 2.3 s.
 - **90 days:** sources last modified more than `--days` (default 90) days ago are not exported and their outputs are deleted,
   as are outputs whose source is gone. This bounds the index. It is by modification time, so a session you resume comes back.
-- **Safe to run:** nothing is pruned from a source root that is missing or unreadable (an unmounted disk does not wipe the
+- **Safe to run:** one exporter at a time (a lock in the output directory; a second one exits 3, so `qmd-refresh` fails clearly if a
+  standalone export is running). An output is reused only if it was rendered from the same source file (the state file records
+  which), so when one of two files with the same session id goes away the other is re-rendered, not mixed up. A source that
+  cannot be stat-ed counts as an error and suppresses pruning. Nothing is pruned from a source root that is missing or unreadable (an unmounted disk does not wipe the
   corpus), and the program refuses a non-empty output directory that it did not create (`.qmd-corpus` marker). Files are
   written whole and renamed into place. `--dry-run` changes nothing.
 - The file names are what `qmd get qmd://sessions/<day>/<id>.md` and the skill's hits show.
