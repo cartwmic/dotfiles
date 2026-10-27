@@ -41,7 +41,7 @@
 {
 {{- if eq .profile "personal" }}
   "defaultProvider": "claude-compat",
-  "defaultModel": "claude-sonnet-5-5",
+  "defaultModel": "claude-opus-5-5",
 {{- else }}
   "defaultProvider": "anthropic",
   "defaultModel": "claude-opus-5-5",
@@ -52,13 +52,13 @@
   "modelThinkingLevels": {
     "openai-codex/gpt-6.1-sol": "high",
     "openai-codex/gpt-6-astra": "high",
-    "claude-compat/claude-opus-5-5": "medium",
+    "claude-compat/claude-opus-5-5": "high",
     "claude-compat/claude-sonnet-5-5": "high",
     "claude-compat/claude-haiku-5-5": "xhigh"
   },
 {{- else }}
   "modelThinkingLevels": {
-    "anthropic/claude-opus-5-5": "medium"
+    "anthropic/claude-opus-5-5": "high"
   },
   "subagents": {
     "disableThinking": true

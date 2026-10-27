@@ -29,7 +29,7 @@ Tests live in `tests/capability-tiers` and are source-only.
 - `[roles]` gives each work role its default tier; `default_tier` covers roles not listed. `[peers].roles` are
   the roles that should get different models from each other.
 - The personal example matches the owner's decisions: low = Haiku 5.5 xhigh, then Luna max; medium = Sonnet 5.5
-  high, then Sol medium; high = **Opus 5.5 medium first**, then Sol xhigh, then Astra high. The work profile is a
+  high, then Sol medium; high = **Opus 5.5 high first**, then Sol xhigh, then Astra high. The work profile is a
   TODO placeholder (Anthropic only); the owner will fill in the work tiers later, so do not rely on it.
 
 ## Resolution

@@ -85,7 +85,7 @@ class ResolverTests(unittest.TestCase):
         a = self.by_slot(plan)
         self.assertEqual((a["driver"]["model"], a["driver"]["effort"]), (SONNET, "high"))
         self.assertEqual((a["implementer"]["model"], a["implementer"]["effort"]), (HAIKU, "xhigh"))
-        self.assertEqual((a["ordinary-reviewer"]["model"], a["ordinary-reviewer"]["effort"]), (OPUS, "medium"))
+        self.assertEqual((a["ordinary-reviewer"]["model"], a["ordinary-reviewer"]["effort"]), (OPUS, "high"))
         # two peer reviewers get different models when the tier allows it
         self.assertEqual((a["challenge-reviewer"]["model"], a["challenge-reviewer"]["effort"]), (SOL, "xhigh"))
         self.assertNotIn("same_model_review", a["ordinary-reviewer"])
@@ -112,7 +112,7 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual((a["implementer"]["model"], a["implementer"]["effort"]), (LUNA, "max"))
         self.assertEqual((a["ordinary-reviewer"]["model"], a["ordinary-reviewer"]["effort"]), (SOL, "xhigh"))
         self.assertEqual((a["challenge-reviewer"]["model"], a["challenge-reviewer"]["effort"]), (ASTRA, "high"))
-        self.assertEqual(a["ordinary-reviewer"]["fallback"]["from"], OPUS + "@medium")
+        self.assertEqual(a["ordinary-reviewer"]["fallback"]["from"], OPUS + "@high")
         self.assertIn("exhausted", a["ordinary-reviewer"]["skipped"][0]["reason"])
         self.assertTrue(all(ass["tier"] == t for ass, t in [(a["driver"], "medium"), (a["implementer"], "low")]))
 
@@ -293,7 +293,7 @@ class ResolverTests(unittest.TestCase):
     def test_the_example_registry_orders_tiers_as_the_owner_decided(self):
         text = self.registry.read_text()
         high = text[text.index("[tiers.high]"):text.index("[roles]")]
-        self.assertLess(high.index("claude-opus-5-5@medium"), high.index("gpt-6.1-sol@xhigh"))
+        self.assertLess(high.index("claude-opus-5-5@high"), high.index("gpt-6.1-sol@xhigh"))
         self.assertLess(high.index("gpt-6.1-sol@xhigh"), high.index("gpt-6-astra@high"))
         for line in ("gpt-6-luna@max", "gpt-6.1-sol@medium"):
             self.assertIn(line, text)
