@@ -142,6 +142,26 @@ class ExportTest(Base):
         f.run()                                      # and it stays that way
         self.assertIn("BBB content", (f.out / f.files("sessions")[0]).read_text())
 
+    def test_a_failed_write_does_not_hand_the_old_output_to_the_new_owner(self):
+        f = self.f
+        a = f.sess("dup", sub="--a--", name="a.jsonl", msgs=(("user", "AAA content"), ("assistant", "ok")))
+        f.sess("dup", sub="--b--", name="b.jsonl", msgs=(("user", "BBB content"), ("assistant", "ok")))
+        f.run()
+        a.unlink()
+        day = f.out / "sessions/2026-10-20"
+        day.chmod(0o555)
+        self.addCleanup(lambda: day.chmod(0o755))
+        if os.access(day, os.W_OK):
+            self.skipTest("running as a user that ignores permissions")
+        f.run(check=1)
+        day.chmod(0o755)
+        f.run()
+        files = f.files("sessions")
+        self.assertEqual(len(files), 1)
+        body = (f.out / files[0]).read_text()
+        self.assertIn("BBB content", body)
+        self.assertNotIn("AAA content", body)
+
     def test_nothing_to_index(self):
         f = self.f
         f.sess("empty", msgs=())
