@@ -8,6 +8,7 @@ The real gate is exercised by hand (PR body), not here.
 """
 import fcntl
 import os
+import sqlite3
 import signal
 import subprocess
 import tempfile
@@ -22,6 +23,7 @@ FAKE_QMD = r"""#!/bin/sh
 echo "qmd $* | par=${QMD_EMBED_PARALLELISM:-unset}" >> "$FAKE/calls"
 pwd -P > "$FAKE/cwd"
 cmd=$1
+echo "$cmd ctx=${QMD_EMBED_CONTEXT_SIZE:-unset}" >> "$FAKE/ctx"
 if [ "${FAKE_QMD_SLEEP:-}" = "$cmd" ]; then
   [ -z "${FAKE_QMD_DEAF:-}" ] || trap '' TERM
   echo $$ > "$FAKE/qmd.pid.tmp"; mv "$FAKE/qmd.pid.tmp" "$FAKE/qmd.pid"
@@ -116,6 +118,28 @@ class Env:
     @property
     def qmd_calls(self):
         return [c for c in self.calls if c.startswith("qmd")]
+
+    @property
+    def ctx_calls(self):
+        f = self.fake / "ctx"
+        return f.read_text().splitlines() if f.exists() else []
+
+    @property
+    def index(self):
+        return self.cache / "qmd" / "index.sqlite"
+
+    @property
+    def ectx(self):
+        return self.state / "qmd-refresh" / "embed-context"
+
+    def make_index(self, vectors):
+        """A qmd index file as far as qmd-refresh looks at it: a content_vectors table with that many rows."""
+        self.index.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(str(self.index))
+        db.execute("create table content_vectors (hash text, seq integer)")
+        db.executemany("insert into content_vectors values (?, 0)", [("h%d" % i,) for i in range(vectors)])
+        db.commit()
+        db.close()
 
     @property
     def stamp(self):
@@ -236,6 +260,98 @@ class RefreshTest(Base):
         (shim / "qmd").chmod(0o755)
         self.assertEqual(self.e.run("--no-embed"), 0, self.e.err)
         self.assertIn("shim update", self.e.calls)
+
+
+class EmbedContextTest(Base):
+    """QMD 2.8.3 embeds only the last 512-token batch of a chunk of 511+ tokens (tobi/qmd#897). QMD_EMBED_CONTEXT_SIZE=506
+    makes it clip the input instead, but vectors made earlier stay wrong until `qmd embed -f`."""
+
+    FORCE = "qmd embed -f --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8 | par=1"
+    PLAIN = "qmd embed --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8 | par=1"
+
+    def test_the_embed_job_sees_the_context_size_and_update_does_not_need_it(self):
+        self.assertEqual(self.e.run(), 0, self.e.err)
+        self.assertEqual(self.e.ctx_calls, ["update ctx=unset", "embed ctx=506"])
+
+    def test_a_context_size_in_the_callers_environment_is_overridden(self):
+        self.assertEqual(self.e.run(QMD_EMBED_CONTEXT_SIZE="4096"), 0)
+        self.assertEqual(self.e.ctx_calls, ["update ctx=4096", "embed ctx=506"])
+
+    def test_no_index_yet_means_every_vector_is_made_with_it(self):
+        self.assertEqual(self.e.run(), 0)
+        self.assertEqual(self.e.ectx.read_text().strip(), "506")
+        self.assertNotIn("NOTE", self.e.err)
+        self.e.run("status")
+        self.assertIn("made with QMD_EMBED_CONTEXT_SIZE=506", self.e.out)
+
+    def test_an_index_without_vectors_counts_as_new(self):
+        self.e.make_index(0)
+        self.assertEqual(self.e.run(), 0)
+        self.assertEqual(self.e.ectx.read_text().strip(), "506")
+        self.assertNotIn("NOTE", self.e.err)
+
+    def test_an_index_that_has_vectors_from_before_is_flagged_not_redone(self):
+        self.e.make_index(3)
+        self.e.run("status")
+        self.assertIn("may predate QMD_EMBED_CONTEXT_SIZE=506", self.e.out)
+        self.assertEqual(self.e.run(), 0)
+        self.assertEqual(self.e.qmd_calls[-1], self.PLAIN, "never -f on its own")
+        self.assertIn("NOTE", self.e.err)
+        self.assertIn("qmd-refresh --reembed", self.e.err)
+        self.assertFalse(self.e.ectx.exists(), "unknown vectors are not blessed")
+        self.assertEqual(self.e.run(), 0)
+        self.assertIn("NOTE", self.e.err, "and it keeps saying so")
+        self.e.run("status")
+        self.assertIn("may predate", self.e.out)
+
+    def test_reembed_forces_one_full_embed_and_records_it(self):
+        self.e.make_index(3)
+        self.assertEqual(self.e.run("--reembed"), 0, self.e.err)
+        self.assertEqual(self.e.qmd_calls, ["qmd update | par=unset", self.FORCE])
+        self.assertEqual(self.e.ctx_calls[-1], "embed ctx=506")
+        self.assertEqual(self.e.ectx.read_text().strip(), "506")
+        self.assertNotIn("NOTE", self.e.err)
+        self.assertEqual(self.e.run(), 0)
+        self.assertEqual(self.e.qmd_calls[-1], self.PLAIN, "the next run is a plain one")
+        self.assertNotIn("NOTE", self.e.err)
+
+    def test_an_interrupted_reembed_is_finished_by_a_plain_run_without_clearing_again(self):
+        self.e.make_index(3)
+        self.assertEqual(self.e.run_with("embed", 9) if False else self.e.run("--reembed", FAKE_QMD_FAIL="embed", FAKE_QMD_CODE="9"), 9)
+        self.assertEqual(self.e.ectx.read_text().strip(), "reembed")
+        self.assertFalse(self.e.stamp.exists())
+        self.e.run("status")
+        self.assertIn("full re-embed was started", self.e.out)
+        (self.e.fake / "calls").unlink()
+        self.assertEqual(self.e.run(), 0)
+        self.assertEqual(self.e.qmd_calls, ["qmd update | par=unset", self.PLAIN])
+        self.assertEqual(self.e.ectx.read_text().strip(), "506")
+        self.assertNotIn("NOTE", self.e.err)
+
+    def test_reembed_without_the_model_clears_nothing(self):
+        e = self.make(model=False)
+        e.make_index(3)
+        self.assertEqual(e.run("--reembed"), 0)
+        self.assertEqual(e.qmd_calls, ["qmd update | par=unset"])
+        self.assertFalse(e.ectx.exists())
+
+    def test_reembed_contradicting_no_embed_is_a_usage_error(self):
+        self.assertEqual(self.e.run("--reembed", "--no-embed"), 2)
+        self.assertEqual(self.e.calls, [])
+
+    def test_reembed_with_another_embed_model_is_ignored(self):
+        self.e.make_index(3)
+        self.assertEqual(self.e.run("--reembed", QMD_EMBED_MODEL="hf:x/y/z.gguf"), 0)
+        self.assertEqual(self.e.qmd_calls, ["qmd update | par=unset"])
+        self.assertIn("--reembed ignored", self.e.err)
+        self.assertFalse(self.e.ectx.exists())
+
+    def test_dry_run_shows_the_setting_and_the_force_flag(self):
+        self.assertEqual(self.e.run("--dry-run", "--reembed"), 0)
+        self.assertIn("QMD_EMBED_CONTEXT_SIZE=506", self.e.out)
+        self.assertIn("embed -f --timeout 0", self.e.out)
+        self.assertEqual(self.e.calls, [])
+        self.assertFalse(self.e.state.exists())
 
 
 class ExportStepTest(Base):
