@@ -134,6 +134,12 @@ Library/LaunchAgents/local.agent-events.plist
 {{- end }}
 
 {{- if ne .profile "personal" }}
+# QMD search (docs/qmd.md): personal only. The pin, the collections and the skill that tells agents how to call it.
+.config/mise/conf.d/qmd.toml
+.config/qmd
+.config/qmd/**
+.local/share/agent-harness/canonical/skills/searching-with-qmd
+.local/share/agent-harness/canonical/skills/searching-with-qmd/**
 .local/user_scripts/configure_rustdesk.sh
 .pi/agent/extensions/openrouter-gate
 .pi/agent/extensions/openrouter-gate/**
