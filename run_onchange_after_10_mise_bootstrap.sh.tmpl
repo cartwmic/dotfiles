@@ -6,6 +6,8 @@
 # Hash: {{ include "dot_config/mise/config.toml" | sha256sum }}
 {{- if eq .profile "personal" }}
 # Hash (personal-only QMD pin): {{ include "dot_config/mise/conf.d/qmd.toml" | sha256sum }}
+{{- else if eq .profile "axon-work-computer" }}
+# Hash (work QMD pin): {{ include "dot_config/mise/conf.d/qmd.toml" | sha256sum }}
 {{- end }}
 
 set -eu
