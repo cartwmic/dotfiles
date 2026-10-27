@@ -13,7 +13,7 @@ for notes, repo docs, Pi session recaps and Pi sessions, with hybrid (semantic) 
 | Collections | `dot_config/qmd/index.yml.tmpl` | `~/.config/qmd/index.yml` |
 | Skill | `dot_local/share/agent-harness/canonical/skills/searching-with-qmd` | skill sync links it into Claude, Codex and Pi |
 | Refresh wrapper | `dot_local/bin/executable_qmd-refresh` | `~/.local/bin/qmd-refresh` |
-| Exporter | later PR | `~/.local/share/qmd-corpus` |
+| Exporter | `dot_local/bin/executable_qmd-export` | `~/.local/bin/qmd-export`; writes `~/.local/share/qmd-corpus/{sessions,recaps}` |
 
 All of it is **personal profile only** (`.chezmoiignore`). The work and Termux profiles get none of it, and the
 `run_onchange_after_10_mise_bootstrap` hash covers the new mise file so `mise install` reruns once.
@@ -44,11 +44,11 @@ qmd pull      # downloads the three models, about 2.1 GB, once, into ~/.cache/qm
 ## Refreshing the index: `qmd-refresh`
 
 ```sh
-qmd-refresh [--wait SECONDS] [--no-embed] [--dry-run]
+qmd-refresh [--wait SECONDS] [--no-embed] [--no-export] [--dry-run]
 qmd-refresh status        # when the last refresh finished, and whether one is running
 ```
 
-One blocking command. It runs `qmd update` then `qmd embed` as a single `nice -n 10 heavy-gate --wait 7200 --` job (one slot,
+One blocking command. It runs `qmd-export`, `qmd update` then `qmd embed` as a single `nice -n 10 heavy-gate --wait 7200 --` job (one slot,
 waits for a quiet Mac). Nothing schedules it; the owner or an agent the owner asked runs it.
 
 - Embed uses `QMD_EMBED_PARALLELISM=1 --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8`: 1.9 GB RSS instead of 4.5 GB at
@@ -76,6 +76,36 @@ waits for a quiet Mac). Nothing schedules it; the owner or an agent the owner as
 Verified live (2026-10-27, personal Mac, after `qmd pull`): `qmd-refresh` updated 9 collections and embedded 2,085 chunks from 411
 documents in 2 min 31 s (3 min 8 s wall, 1.6 GB peak RSS), and `~/.config/qmd/index.yml` stayed identical to the chezmoi source
 (`chezmoi diff` empty) — the first proof on the real applied file.
+
+## The session corpus: `qmd-export`
+
+QMD indexes markdown files, so the Pi sessions and session-recap records are exported to markdown first (`qmd-refresh` does
+this as the first step of its job; `qmd-export` also runs alone). Stdlib Python 3.9+, no network.
+
+| Reads | Writes |
+|---|---|
+| `~/.pi/agent/sessions/**/*.jsonl` | `~/.local/share/qmd-corpus/sessions/<day>/<session-id>.md` |
+| `~/.local/share/session-recap/records/<day>/<record>.json` | `~/.local/share/qmd-corpus/recaps/<day>/<record-id>.md` |
+
+Everything is relative to the machine's own home directory, so it is identical on every profile (a work Mac exports its own
+sessions and recaps; nothing is copied between machines).
+
+- **What goes in:** user and assistant text (4000 characters per message), compaction summaries (8000), recap summaries, with
+  the session id, cwd and start time as frontmatter. Tool results, thinking, system and custom entries stay out. Headings
+  inside message text are escaped so they do not split chunks. Sub-agent sessions (`.../run-0/session.jsonl`) are included;
+  two files with one session id get a hash suffix.
+- **Incremental:** a source whose output exists and is not older than it is skipped without reading it (a session's id and day
+  come from its first line). A source with nothing to export is remembered by mtime in `.qmd-export-state.json`.
+  Measured here: first run 48 s, 203 MB RSS, 8,359 sessions and 8,777 recaps -> 135 MB; second run 2.3 s.
+- **90 days:** sources last modified more than `--days` (default 90) days ago are not exported and their outputs are deleted,
+  as are outputs whose source is gone. This bounds the index. It is by modification time, so a session you resume comes back.
+- **Safe to run:** one exporter at a time (a lock in the output directory; a second one exits 3, so `qmd-refresh` fails clearly if a
+  standalone export is running). An output is reused only if it was rendered from the same source file (the state file records
+  which), so when one of two files with the same session id goes away the other is re-rendered, not mixed up. A source that
+  cannot be stat-ed counts as an error and suppresses pruning. Nothing is pruned from a source root that is missing or unreadable (an unmounted disk does not wipe the
+  corpus), and the program refuses a non-empty output directory that it did not create (`.qmd-corpus` marker). Files are
+  written whole and renamed into place. `--dry-run` changes nothing.
+- The file names are what `qmd get qmd://sessions/<day>/<id>.md` and the skill's hits show.
 
 ## Cost (measured 2026-10-26, this Mac, other jobs running)
 
