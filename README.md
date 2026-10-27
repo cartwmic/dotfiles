@@ -140,6 +140,7 @@ chezmoi init --apply https://github.com/cartwmic/dotfiles.git
 - Pi coding agent, claude, claude-code-acp, vectorcode, mistral-vibe, mermaid-cli
 - Herdr (pinned) with the upstream command palette plugin on `personal` and `axon-work-computer`
 - Portable `session-recap` and `passage-review` workflows; Termux stays an SSH client.
+- [QMD](./docs/qmd.md) (`personal` only): local keyword and semantic search over notes, repo docs, Pi recaps and Pi sessions; pinned install, collections and one agent skill.
 - `workstream-rank of [--pane P]` prints a pane's priority (lower is more important; 1000 = unranked) from the coordinator's published `~/.local/share/coordinator/rank` (or `$WORKSTREAM_RANK_FILE`); `workstream-rank show` prints the stack. It never errors on a missing or corrupt file.
 
 **Remote access:**
@@ -552,6 +553,7 @@ Component READMEs cover setup and use:
 
 - [Termux and phone SSH](./termux/README.md)
 - [session-recap](./dot_local/share/session-recap/README.md)
+- [QMD search](./docs/qmd.md)
 - [passage-review](./dot_local/share/passage-review/README.md) and its [Pi `/review` entry point](./dot_pi/private_agent/extensions/passage-review/README.md)
 - [Pi extensions](./dot_pi/private_agent/extensions/README.md) (index for the other extension guides)
 - [Harness skills and MCP](./dot_local/share/agent-harness/README.md), [Pi patches](./dot_local/share/pi-patches/README.md), [Neovim](./dot_config/nvim/README.md), and [Zellij](./dot_config/zellij/README.md)
