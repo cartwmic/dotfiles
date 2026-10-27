@@ -48,7 +48,7 @@
 # job of this version at once; delete it to go back to the plain 1-to-5 rules. A missing, unreadable or corrupt rank file, a reader
 # that fails or takes more than 2 seconds (HEAVY_GATE_RANK_TIMEOUT, whole seconds), or no workstream-rank or perl, changes nothing. It is
 # read on every try, so a new rank reaches jobs that are already waiting (on this version).
-# Jobs of the version before this one (already waiting or running when this one was installed) keep reading only the rules file:
+# Jobs of versions before central-rank support (already waiting or running when that one was installed) keep reading only the rules file:
 # they register a 1-to-5 number and are ordered against this version's numbers as numbers (an old 5 goes before a rank of 6 or
 # worse and before every job with no workstream, which is 1005). Older versions than that have no priority and defer to no one.
 # The one-slot version also has no check window; the two-slot version reads its limit once, at its start, and never reads the slots file.
