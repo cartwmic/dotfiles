@@ -103,7 +103,7 @@ input to its first ~500 tokens, which fit one batch.
     marker stays, the NOTE keeps appearing and `status` says "not confirmed"; run `--reembed` again. If it was interrupted after the
     clear, the next plain `qmd-refresh` embeds what is missing (no second clear) and then confirms it the same way.
     `--reembed` with `--no-embed` is a usage error; with another embed model it is ignored.
-- **Vector rows** are read with `sqlite3` (ships with macOS); if they cannot be read, the index is treated as having old vectors.
+- **Vector rows** are read with `sqlite3` (ships with macOS); if they cannot be read, the index is treated as having old vectors. They are read with a plain open, not `sqlite3 -readonly`: qmd's index is in WAL mode, and a read-only open of it fails when no `-wal`/`-shm` files exist, which is the state after qmd exits (found on the first real full re-embed, 2026-10-27).
 - **When to remove this:** once the pinned QMD contains the #897 fix, drop the variable and the bookkeeping, bump the pin, and do one
   `--reembed` (vectors made from clipped input differ from whole-chunk ones).
 

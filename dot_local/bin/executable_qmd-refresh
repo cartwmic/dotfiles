@@ -105,8 +105,8 @@ if [ "$mode" = status ]; then
     case $ec in
         "$embed_ctx") echo "vectors: made with QMD_EMBED_CONTEXT_SIZE=$embed_ctx (first ~500 tokens of each chunk)" ;;
         reembed\ *) echo "vectors: a full re-embed was started and is not confirmed; run qmd-refresh to finish it (qmd-refresh --reembed if the NOTE stays)" ;;
-        *) nv=$(sqlite3 -readonly "$index" "select count(*) from content_vectors" 2>/dev/null || echo unknown)
-           if [ "$nv" = 0 ] || [ ! -e "$index" ]; then echo "vectors: none yet"
+        *) if [ -e "$index" ]; then nv=$(sqlite3 "$index" "select count(*) from content_vectors" 2>/dev/null || echo unknown); else nv=0; fi
+           if [ "$nv" = 0 ]; then echo "vectors: none yet"
            else echo "vectors: may predate QMD_EMBED_CONTEXT_SIZE=$embed_ctx (long chunks embedded wrongly, tobi/qmd#897); run qmd-refresh --reembed once"; fi ;;
     esac
     exit 0
@@ -154,6 +154,8 @@ fi
 # a full re-embed, $9 = the index file (the job leaves "skipped" and "legacy" in the run directory). The model file is checked
 # here, after the gate wait and the update, because qmd downloads a missing model by itself. A skip is reported out of band so
 # it cannot be confused with a status. Vector count: sqlite3 (ships with macOS); if it cannot be read, assume there are some.
+# Not `sqlite3 -readonly`: qmd's index is in WAL mode, and a read-only open of a WAL database with no -wal/-shm files (the state
+# after qmd exits) fails with "unable to open database file". A plain open reads fine and creates them briefly.
 job='set -e
 [ "$5" = none ] || "$5"
 "$1" update
@@ -164,7 +166,7 @@ if [ ! -f "$3" ]; then
     exit 0
 fi
 had=$(cat "$7" 2>/dev/null || true)
-if [ -e "$9" ]; then nvec=$(sqlite3 -readonly "$9" "select count(*) from content_vectors" 2>/dev/null || echo unknown); else nvec=0; fi
+if [ -e "$9" ]; then nvec=$(sqlite3 "$9" "select count(*) from content_vectors" 2>/dev/null || echo unknown); else nvec=0; fi
 force=
 if [ "$8" = 1 ]; then   # the marker carries the start time: qmd -f clears the vectors, so every vector row must be newer
     force=-f; had="reembed $(date -u +%Y-%m-%dT%H:%M:%S.000Z)"; echo "$had" > "$7"
@@ -178,7 +180,7 @@ q=$(printf "\047")
 case $had in
     "$6") ok=1 ;;
     "") [ "$nvec" = 0 ] && ok=1 || : ;;
-    reembed\ *) [ "$(sqlite3 -readonly "$9" "select count(*) from content_vectors where embedded_at < ${q}${had#reembed }${q}" 2>/dev/null || echo unknown)" = 0 ] && ok=1 || : ;;
+    reembed\ *) [ "$(sqlite3 "$9" "select count(*) from content_vectors where embedded_at < ${q}${had#reembed }${q}" 2>/dev/null || echo unknown)" = 0 ] && ok=1 || : ;;
 esac
 if [ "$ok" = 1 ]; then echo "$6" > "$7"; else : > "$4/legacy"; fi'
 which=noembed; [ "$embed" = 1 ] && which=embed

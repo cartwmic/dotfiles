@@ -26,6 +26,7 @@ cmd=$1
 if [ "$cmd" = embed ] && [ -e "${FAKE_DB:-/nonexistent}" ]; then   # what qmd does to the vectors: -f clears them first, then rows are added
   case " $* " in *" -f "*) [ -n "${FAKE_NOCLEAR:-}" ] || sqlite3 "$FAKE_DB" "delete from content_vectors";; esac
   [ -n "${FAKE_NOWRITE:-}" ] || sqlite3 "$FAKE_DB" "insert or replace into content_vectors values ('new$', 0, strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+  rm -f "$FAKE_DB-wal" "$FAKE_DB-shm"   # qmd closes its database cleanly: no sidecar files are left, as on the real index
 fi
 echo "$cmd ctx=${QMD_EMBED_CONTEXT_SIZE:-unset}" >> "$FAKE/ctx"
 if [ "${FAKE_QMD_SLEEP:-}" = "$cmd" ]; then
@@ -140,6 +141,7 @@ class Env:
         """A qmd index file as far as qmd-refresh looks at it: a content_vectors table with that many rows."""
         self.index.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(str(self.index))
+        db.execute("pragma journal_mode=wal")   # as qmd's index is; once closed it has no -wal/-shm, and sqlite3 -readonly then fails to open it
         db.execute("create table content_vectors (hash text, seq integer, embedded_at text)")
         db.executemany("insert into content_vectors values (?, 0, '2020-01-01T00:00:00.000Z')", [("h%d" % i,) for i in range(vectors)])
         db.commit()
@@ -287,6 +289,15 @@ class EmbedContextTest(Base):
         self.assertNotIn("NOTE", self.e.err)
         self.e.run("status")
         self.assertIn("made with QMD_EMBED_CONTEXT_SIZE=506", self.e.out)
+
+    def test_the_test_index_is_a_wal_database_without_sidecar_files(self):
+        """The precondition that made `sqlite3 -readonly` fail on the real index (#85 left a re-embed unconfirmed)."""
+        self.e.make_index(3)
+        self.assertFalse(Path(str(self.e.index) + "-wal").exists() or Path(str(self.e.index) + "-shm").exists())
+        out = subprocess.run(["sqlite3", "-readonly", str(self.e.index), "select 1"], capture_output=True, text=True)
+        self.assertNotEqual(out.returncode, 0, "a read-only open of this database fails: the script must not use it")
+        out = subprocess.run(["sqlite3", str(self.e.index), "pragma journal_mode"], capture_output=True, text=True)
+        self.assertEqual(out.stdout.strip(), "wal")
 
     def test_an_index_without_vectors_counts_as_new(self):
         self.e.make_index(0)
