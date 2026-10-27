@@ -1,0 +1,198 @@
+#!/bin/sh
+# qmd-refresh — bring the QMD index up to date: `qmd update`, then `qmd embed`, as ONE heavy-gate job.
+#
+#   qmd-refresh [--wait SECONDS] [--no-embed] [--dry-run]
+#   qmd-refresh status
+#
+# Run by the owner (or an agent the owner asked). Nothing schedules it. See docs/qmd.md.
+#
+# Why this wrapper and not bare `qmd embed`:
+#  - heavy: embedding peaks at 1.9 GB RSS with the flags below (4.5 GB without), for up to ~45 min on a full index, and
+#    every qmd process loads its own models (tobi/qmd#942). So the whole job runs under `nice -n 10 heavy-gate --wait N --`,
+#    which holds one slot and waits for a quiet Mac.
+#  - one at a time: an flock(2) on a lock file, taken before heavy-gate starts and inherited by every process of the job.
+#    The kernel drops it when the last of them exits, so there is no pid file to go stale, no pid reuse, and a SIGKILLed
+#    wrapper whose job lives on still holds the lock. A second refresh exits 75 while it is held.
+#  - qmd's own 30-minute embed cap (tobi/qmd#673) is switched off with --timeout 0; resuming is safe anyway (only changed
+#    documents are re-embedded).
+#  - update always runs; embed runs only for the pinned embedding model (QMD_EMBED_MODEL unset, index.yml names no other),
+#    and only if its file is already on disk (checked after the gate wait, just before embedding). qmd has no offline
+#    switch and downloads a missing model by itself, so this is the guard. Otherwise only update runs; keyword search
+#    (`qmd search`) still works and the script says to run `qmd pull`.
+#  - TERM, INT or HUP stop the job's whole process tree (TERM, then KILL after QMD_REFRESH_GRACE seconds, default 10)
+#    and wait for it before exiting, because heavy-gate runs its job in the foreground and a shell defers a signal until
+#    that job ends.
+#
+# Exit: 0 ok (also when embedding was skipped for the missing model) · 2 usage · 75 another refresh is running (reported
+# out of band, never guessed from a status) · 127 qmd, heavy-gate or perl not found · 143 stopped by a signal ·
+# otherwise the job's or heavy-gate's own status, unchanged (75 from heavy-gate means it gave up waiting).
+set -eu
+
+prog=qmd-refresh
+wait_s=7200
+embed=1
+dry=0
+mode=run
+grace=${QMD_REFRESH_GRACE:-10}
+
+log() { printf '%s: %s %s\n' "$prog" "$(date +%H:%M:%S)" "$*" >&2; }
+die() { code=$1; shift; printf '%s: %s\n' "$prog" "$*" >&2; exit "$code"; }
+
+usage() {
+    cat <<'EOF'
+usage: qmd-refresh [--wait SECONDS] [--no-embed] [--dry-run]
+       qmd-refresh status
+
+Runs `qmd update` then `qmd embed` (one process at a time, low memory flags, no 30-minute cap) as a single
+heavy-gate job. --wait is how long heavy-gate may wait for a quiet Mac (default 7200). --no-embed stops after update.
+--dry-run prints the command and runs nothing. status prints when the last refresh finished and whether one is running.
+Models are not downloaded here: run `qmd pull` once (about 2.1 GB). Without the embedding model only update runs.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        status) mode=status ;;
+        --no-embed) embed=0 ;;
+        --dry-run) dry=1 ;;
+        --wait)
+            [ $# -ge 2 ] || { usage >&2; exit 2; }
+            wait_s=$2; shift
+            ;;
+        --wait=*) wait_s=${1#--wait=} ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; exit 2 ;;
+    esac
+    shift
+done
+case $wait_s in ''|*[!0-9]*) die 2 "--wait needs a whole number of seconds, got '$wait_s'" ;; esac
+case $grace in ''|*[!0-9]*) die 2 "QMD_REFRESH_GRACE needs a whole number of seconds, got '$grace'" ;; esac
+
+state=${XDG_STATE_HOME:-$HOME/.local/state}/qmd-refresh
+stamp=$state/last-success
+lockfile=$state/lock
+
+# flock from perl (macOS and Linux both ship it; heavy-gate needs it too). Held by someone else: write $QMD_REFRESH_RUN/busy.
+# The lock is on an open file description with close-on-exec cleared, so exec'd children inherit it.
+locker='use Fcntl qw(:flock F_SETFD); open(my $f, ">>", shift) or die "qmd-refresh: cannot open the lock file: $!\n";
+flock($f, LOCK_EX | LOCK_NB) or do { open(my $b, ">", "$ENV{QMD_REFRESH_RUN}/busy"); exit 73 }; fcntl($f, F_SETFD, 0) or die "qmd-refresh: fcntl: $!\n"; exec @ARGV or exit 127'
+
+if [ "$mode" = status ]; then
+    if [ -f "$stamp" ]; then cat "$stamp"; else echo "never refreshed by qmd-refresh"; fi
+    if [ -f "$lockfile" ] && command -v perl >/dev/null 2>&1; then
+        rc=0; perl -e 'use Fcntl qw(:flock); open(my $f, ">>", shift) or exit 2; exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 1)' "$lockfile" || rc=$?
+        [ "$rc" -ne 1 ] || echo "running now (the lock is held)"
+    fi
+    exit 0
+fi
+
+qmd=${QMD_BIN:-}
+[ -n "$qmd" ] || qmd=$(command -v qmd 2>/dev/null || true)
+[ -n "$qmd" ] || { [ -x "$HOME/.local/share/mise/shims/qmd" ] && qmd=$HOME/.local/share/mise/shims/qmd; } || true
+[ -n "$qmd" ] && [ -x "$qmd" ] || die 127 "qmd not found (mise install, or set QMD_BIN)"
+gate=$(command -v heavy-gate 2>/dev/null || true)
+[ -n "$gate" ] || { [ -x "$HOME/.local/bin/heavy-gate" ] && gate=$HOME/.local/bin/heavy-gate; } || true
+[ -n "$gate" ] && [ -x "$gate" ] || die 127 "heavy-gate not found"
+command -v perl >/dev/null 2>&1 || die 127 "perl not found"
+
+# Embed only the model this wrapper was written for. qmd has no offline switch: it downloads whatever model it resolves if the
+# file is missing, and its choice depends on QMD_EMBED_MODEL, index.yml and a project-local config. node-llama-cpp's cache
+# file naming is not something to re-implement, so instead of mapping arbitrary URIs to files, any sign of a different embed
+# model means update only. The model is pinned in dot_config/qmd/index.yml.tmpl; change both together.
+default_uri=hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf
+model=${XDG_CACHE_HOME:-$HOME/.cache}/qmd/models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf
+cfg=${QMD_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/qmd}/index.yml
+cfg_embed=$(sed -n 's/^[[:space:]]*embed:[[:space:]]*//p' "$cfg" 2>/dev/null | head -n 1 | tr -d "\"'[:space:]")
+if [ "$embed" = 1 ] && { [ -n "${QMD_EMBED_MODEL:-}" ] || { [ -n "$cfg_embed" ] && [ "$cfg_embed" != "$default_uri" ]; }; }; then
+    log "the embedding model is not the pinned $default_uri (QMD_EMBED_MODEL or $cfg): running update only"
+    embed=0
+fi
+
+# The job, as a script of its own so heavy-gate runs exactly one command. $1 = qmd, $2 = embed|noembed, $3 = model file,
+# $4 = run directory (the job leaves "skipped" there). The model file is checked here, after the gate wait and the update,
+# because qmd downloads a missing model by itself. A skip is reported out of band so it cannot be confused with a status.
+job='set -e
+"$1" update
+[ "$2" = embed ] || exit 0
+if [ ! -f "$3" ]; then
+    echo "qmd-refresh: embedding model $3 is not on disk: skipping embed. Run qmd pull once, then qmd-refresh again." >&2
+    : > "$4/skipped"
+    exit 0
+fi
+QMD_EMBED_PARALLELISM=1 exec "$1" embed --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8'
+which=noembed; [ "$embed" = 1 ] && which=embed
+
+if [ "$dry" = 1 ]; then
+    echo "nice -n 10 $gate --wait $wait_s -- sh -c '<update, then embed if the model exists>' sh $qmd $which $model"
+    echo "update: $qmd update"
+    [ "$embed" = 1 ] && echo "embed:  QMD_EMBED_PARALLELISM=1 $qmd embed --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8 (only if $model exists)"
+    exit 0
+fi
+
+mkdir -p "$state"
+rundir=$(mktemp -d "$state/run.XXXXXX")
+trap 'rm -rf "$rundir"' EXIT
+cd "$state"   # qmd prefers a project-local .qmd/index.yaml found from the working directory; do not pick one up by accident
+
+# A process and everything under it, parents first.
+tree_of() {
+    echo "$1"
+    for c in $(pgrep -P "$1" 2>/dev/null || true); do tree_of "$c"; done
+}
+# kill -0 succeeds on an unreaped zombie, so look at the state instead.
+running() { st=$(ps -o stat= -p "$1" 2>/dev/null || true); case $st in ''|Z*) return 1 ;; esac; }
+anyrunning() { for p in $tree; do running "$p" && return 0; done; return 1; }
+# Signal $2 to $1 and its descendants, leaves first.
+killtree() {
+    for c in $(pgrep -P "$1" 2>/dev/null || true); do killtree "$c" "$2"; done
+    kill "-$2" "$1" 2>/dev/null || true
+}
+child=
+tree=
+stop=0
+on_signal() {
+    stop=1
+    trap '' TERM INT HUP
+}
+trap on_signal TERM INT HUP
+
+if [ "$embed" = 1 ]; then what='update + embed'; else what=update; fi
+log "start: $what (waiting up to ${wait_s}s for a quiet Mac)"
+QMD_REFRESH_RUN=$rundir nice -n 10 perl -e "$locker" "$lockfile" "$gate" --wait "$wait_s" -- sh -c "$job" sh "$qmd" "$which" "$model" "$rundir" &
+child=$!
+# Poll instead of a blocking wait: a signal may arrive at any moment, and a wait it has interrupted (or that it arrived
+# just before) must never leave us blocked on a job that ignores TERM.
+while [ "$stop" = 0 ] && running "$child"; do sleep 0.2 || :; done
+if [ "$stop" = 1 ]; then
+    tree=$(tree_of "$child")
+    killtree "$child" TERM
+    n=0
+    while anyrunning && [ "$n" -lt $((grace * 5)) ]; do
+        sleep 0.2 || :; n=$((n + 1))
+        tree="$tree $(tree_of "$child")"          # a TERM handler may have started something new
+    done
+    n=0
+    while anyrunning && [ "$n" -lt 25 ]; do
+        [ "$n" -ne 0 ] || log "job still running ${grace}s after TERM: sending KILL"
+        tree="$tree $(tree_of "$child")"
+        for p in $tree; do kill -KILL "$p" 2>/dev/null || true; done
+        sleep 0.2 || :; n=$((n + 1))
+    done
+    wait "$child" 2>/dev/null || true
+    if anyrunning; then log "stopped by a signal, but some process of the job is still alive and keeps the lock"
+    else log "stopped by a signal"; fi
+    exit 143
+fi
+rc=0
+wait "$child" || rc=$?
+
+[ ! -e "$rundir/busy" ] || die 75 "another refresh is running (lock $lockfile)"
+if [ "$rc" -eq 0 ]; then
+    if [ -e "$rundir/skipped" ]; then what="update (embed skipped: model not on disk)"; fi
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ok: $what" > "$stamp"
+    log "done: $what"
+    exit 0
+fi
+[ "$rc" -ne 75 ] || log "status 75: heavy-gate gave up waiting for a quiet Mac (or the job itself returned 75)"
+log "failed with status $rc (last good refresh: $(cat "$stamp" 2>/dev/null || echo none))"
+exit "$rc"
