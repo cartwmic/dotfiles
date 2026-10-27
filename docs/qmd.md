@@ -44,7 +44,7 @@ qmd pull      # downloads the three models, about 2.1 GB, once, into ~/.cache/qm
 ## Refreshing the index: `qmd-refresh`
 
 ```sh
-qmd-refresh [--wait SECONDS] [--no-embed] [--no-export] [--dry-run]
+qmd-refresh [--wait SECONDS] [--no-embed] [--no-export] [--reembed] [--dry-run]
 qmd-refresh status        # when the last refresh finished, and whether one is running
 ```
 
@@ -76,6 +76,49 @@ waits for a quiet Mac). Nothing schedules it; the owner or an agent the owner as
 Verified live (2026-10-27, personal Mac, after `qmd pull`): `qmd-refresh` updated 9 collections and embedded 2,085 chunks from 411
 documents in 2 min 31 s (3 min 8 s wall, 1.6 GB peak RSS), and `~/.config/qmd/index.yml` stayed identical to the chezmoi source
 (`chezmoi diff` empty) — the first proof on the real applied file.
+
+## Long chunks: `QMD_EMBED_CONTEXT_SIZE=506` (stop-gap for tobi/qmd#897)
+
+QMD 2.8.3 makes chunks of about 900 tokens but builds its embedding context with a 512-token physical batch (open issue
+tobi/qmd#897; fix proposed in #993, unmerged). A chunk of 511+ tokens is then embedded from its last micro-batch only, so the
+vector describes the end of the chunk. Measured on the live index (2026-10-27, read-only, copy of the index): 76.6% of 2,085 chunks
+were 511+ tokens, and their stored vectors had cosine 0.2-0.8 against the same text embedded whole. Chunks up to 510 tokens were
+identical. BM25 and the reranker see the full text and are not affected; only the vector half of `qmd query` and `qmd vsearch`.
+
+`qmd-refresh` therefore runs the embed step with `QMD_EMBED_CONTEXT_SIZE=506` (the update step is not given it). QMD then clips every
+input to its first ~500 tokens, which fit one batch.
+
+- **What it costs:** the vector covers the first ~500 tokens of a chunk (title included); the rest of a long chunk is found by keyword
+  search only. Better than today (end only), not as good as the whole chunk.
+- **Old vectors are not redone by a plain `qmd embed`** (the embedding fingerprint does not include the context size). So
+  `qmd-refresh` records in `~/.local/state/qmd-refresh/embed-context` what made the vectors:
+  - no index or no vectors yet: everything is made with the setting; it records `506`.
+  - an index that already has vectors and no record: they may be wrong. `qmd-refresh` still does the normal refresh, then prints
+    a `NOTE` (every run) and `qmd-refresh status` says "may predate". It never clears vectors by itself.
+  - `qmd-refresh --reembed` runs `qmd embed -f`: clears every vector, then embeds everything (about 80 minutes for the session
+    corpus, estimated from 13.8 chunks/s). It only runs when the pinned model file exists, so a missing model never leaves an empty
+    index. It records `reembed <UTC start time>` first. **`506` is recorded only when it is shown**: after the embed, no vector row
+    (`content_vectors.embedded_at`) may be older than that start. An exit status is not proof (qmd exits 0 without doing anything
+    when another embed holds its lock, and it clears the vectors only later, after taking it). If the clear never happened, the
+    marker stays, the NOTE keeps appearing and `status` says "not confirmed"; run `--reembed` again. If it was interrupted after the
+    clear, the next plain `qmd-refresh` embeds what is missing (no second clear) and then confirms it the same way.
+    `--reembed` with `--no-embed` is a usage error; with another embed model it is ignored.
+- **Vector rows** are read with `sqlite3` (ships with macOS); if they cannot be read, the index is treated as having old vectors.
+- **When to remove this:** once the pinned QMD contains the #897 fix, drop the variable and the bookkeeping, bump the pin, and do one
+  `--reembed` (vectors made from clipped input differ from whole-chunk ones).
+
+### Later decision: the proper fix (not part of this change)
+
+Two ways, both Michael's call:
+1. **Wait for upstream #993, then bump the pin** in `dot_config/mise/conf.d/qmd.toml`. Nothing to maintain; no date.
+2. **Install a patched fork** whose `createEmbeddingContext` calls pass `batchSize: contextSize` (llm.js:842-845 in 2.8.3). mise can
+   install npm packages from Git: its npm backend docs (mise.jdx.dev/dev-tools/backends/npm.html, "Install from Git") show
+   `mise use 'npm:github:owner/repo@v1.2.0'` or `npm:git+https://github.com/owner/repo`, the version being a tag, branch or commit.
+   So the pin line would become a fork ref. **Not verified:** that it works with the mise on this Mac (2026.7.18; the docs read are
+   current), and that the build runs on a Git install. tobi/qmd git-ignores `dist/` and builds it in its `prepare` script
+   (`node scripts/build.mjs`), which needs devDependencies; an install that skips `prepare` would give a package with no `dist`.
+   It must be tried once before relying on it. The work Mac would then fetch a fork from GitHub instead of the npm registry,
+   which the work-profile PR would have to disclose.
 
 ## The session corpus: `qmd-export`
 
