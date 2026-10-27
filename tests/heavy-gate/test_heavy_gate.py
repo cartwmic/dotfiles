@@ -1006,7 +1006,7 @@ exit $rc
         self.assertEqual(self.gate("--", "touch", str(marker), env={"HERDR_PANE_ID": "w:p1"}).returncode, 0, "a better rank does not defer")
 
     def test_a_waiter_from_the_older_version_is_ordered_by_its_own_1_to_5_number(self):
-        # A waiter that started before this version is installed registers its rule number (1 to 5) and never reads the rank.
+        # A waiter of a version before central-rank support registers its rule number (1 to 5) and never reads the rank.
         self.use_rank(*self.RANKED)
         waiter = self.sleeper()
         self.entry(waiter.pid, 5)
