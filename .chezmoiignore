@@ -140,6 +140,7 @@ Library/LaunchAgents/local.agent-events.plist
 .config/qmd/**
 .local/share/agent-harness/canonical/skills/searching-with-qmd
 .local/share/agent-harness/canonical/skills/searching-with-qmd/**
+.local/bin/qmd-refresh
 .local/user_scripts/configure_rustdesk.sh
 .pi/agent/extensions/openrouter-gate
 .pi/agent/extensions/openrouter-gate/**

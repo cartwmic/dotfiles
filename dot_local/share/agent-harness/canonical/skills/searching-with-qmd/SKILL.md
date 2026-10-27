@@ -16,4 +16,4 @@ Both take `-n 5` (result count) and `-c sessions` (one collection; repeat `-c` f
 
 **Read a hit:** `qmd get "#docid"` or `qmd get qmd://sessions/2026-10-26/<id>.md`. A session file is a text-only copy; its frontmatter has the session id and cwd, so look up the full `.jsonl` under `~/.pi/agent/sessions` if you need tool output.
 
-Do not run `qmd update`, `qmd embed`, `qmd pull` or `qmd mcp`. Refreshing the index is the owner's job. If hits look stale, `qmd status` shows the newest indexed document; say so rather than fixing it. Sessions and recaps appear only once the owner has built that part of the index.
+Do not run `qmd update`, `qmd embed`, `qmd pull` or `qmd mcp`. Refreshing the index is the owner's job: run `qmd-refresh` only if they ask (long and heavy; it queues behind heavy-gate). `qmd-refresh status` says when it last finished. If hits look stale, say so rather than fixing it. Sessions and recaps appear only once the owner has built that part of the index.

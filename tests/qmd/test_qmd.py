@@ -19,6 +19,7 @@ BOOTSTRAP = REPO / "run_onchange_after_10_mise_bootstrap.sh.tmpl"
 PERSONAL_ONLY = [
     ".config/mise/conf.d/qmd.toml",
     ".config/qmd/index.yml",
+    ".local/bin/qmd-refresh",
     ".local/share/agent-harness/canonical/skills/searching-with-qmd/SKILL.md",
 ]
 # What qmd 2.8.3 itself writes as the models block; the template carries it so qmd leaves the file byte-identical.
@@ -187,7 +188,8 @@ class SkillTest(unittest.TestCase):
     def test_it_does_not_hand_out_heavy_or_unbuilt_commands(self):
         t = self.text
         self.assertRegex(t, r"Do not run `qmd update`, `qmd embed`, `qmd pull` or `qmd mcp`")
-        self.assertNotIn("qmd-refresh", t)  # lands in a later PR; the skill is updated there
+        self.assertIn("run `qmd-refresh` only if they ask", t)
+        self.assertNotRegex(t, r"(?i)qmd-refresh (--|\n)")  # no flags handed out; only the bare name and `status`
         self.assertNotRegex(t, r"(?i)primer|inject")
 
 
