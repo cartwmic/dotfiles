@@ -15,8 +15,9 @@ for notes, repo docs, Pi session recaps and Pi sessions, with hybrid (semantic) 
 | Refresh wrapper | `dot_local/bin/executable_qmd-refresh` | `~/.local/bin/qmd-refresh` |
 | Exporter | `dot_local/bin/executable_qmd-export` | `~/.local/bin/qmd-export`; writes `~/.local/share/qmd-corpus/{sessions,recaps}` |
 
-All of it is **personal profile only** (`.chezmoiignore`). The work and Termux profiles get none of it, and the
-`run_onchange_after_10_mise_bootstrap` hash covers the new mise file so `mise install` reruns once.
+All of it is on the **personal and work (`axon-work-computer`) profiles**, not Termux (`.chezmoiignore`; decision 303: QMD on both). The
+`run_onchange_after_10_mise_bootstrap` hash covers the mise file on both, so a full apply reruns `mise install` once. See
+[The work profile](#the-work-profile-axon-work-computer).
 
 ## index.yml is written in qmd's own format
 
@@ -149,6 +150,57 @@ sessions and recaps; nothing is copied between machines).
   corpus), and the program refuses a non-empty output directory that it did not create (`.qmd-corpus` marker). Files are
   written whole and renamed into place. `--dry-run` changes nothing.
 - The file names are what `qmd get qmd://sessions/<day>/<id>.md` and the skill's hits show.
+
+## The work profile (axon-work-computer)
+
+The same files land on the work Mac as on the personal one (the pin, `qmd-refresh`, `qmd-export`, the skill, the same models). Only `index.yml.tmpl` renders differently:
+`notes` only if `~/tmp` exists there, and the repo collections are the checkouts that exist under `~/git` (`coordinator`, `retro`) instead of `/Volumes/Workshop/macbook/git`. `repo-dotfiles`, `sessions`, `recaps` are on both. The sessions and
+recaps are the work Mac's own; nothing moves between machines. Termux gets none of it.
+
+**What leaves the machine.** Checked in the pinned `@tobilu/qmd@2.8.3` package (the unpacked `dist/`), on 2026-10-27:
+- The only network call in qmd's own code is `getRemoteEtag` (`dist/llm.js:158-171`): a `HEAD` request to `huggingface.co/<repo>/resolve/main/<file>`, called from `pullModels` (`qmd pull`)
+  to compare a model's ETag. It sends no document or query text. `HF_ENDPOINT` can point it at a mirror.
+- Model files are downloaded by `node-llama-cpp` from the same `hf:` URIs (the three in `index.yml`) during `qmd pull`, or by `embed`/`query` if a model file is
+  missing. After that, search, embed and query run on the Mac; the index never leaves it.
+- A search of `dist/` for telemetry, analytics, crash-report or similar code finds none. The only server code is `qmd mcp --http` (`dist/mcp/server.js`): it binds to `localhost`
+  unless `QMD_HOST` says otherwise and checks `Origin`/`Host` against loopback (`origin-guard.js`, against DNS rebinding). Nothing starts it; the skill tells agents not to.
+- Observed, not just read: while a real `qmd query` ran (models cached, 48 s), `lsof -i` was sampled every 0.3 s on the qmd processes (33 samples, 2 pids): **no sockets at all**.
+- Not covered: the dependencies' own code beyond one look. `node-llama-cpp` can fetch llama.cpp release data from GitHub and compile when no prebuilt binary fits the machine; the Apple Silicon
+  prebuilt (`@node-llama-cpp/mac-arm64-metal`) is in the package here, so that path did not run. Whether the work Mac is Apple Silicon is not known to this change.
+
+**What the work Mac downloads.** All from public hosts, once:
+- `mise install`: the npm package `@tobilu/qmd@2.8.3` and its dependencies from the npm registry (129 packages, about 200 MB unpacked; MIT/ISC/Apache/BlueOak licences). Install scripts run for
+  `node-llama-cpp` (`postinstall`) and five `tree-sitter-*` grammars (`node-gyp-build`, which uses a shipped prebuild and only compiles if there is none).
+- `qmd pull`: the three GGUF models from huggingface.co, 2.1 GB (`embeddinggemma-300M-Q8_0`, `qmd-query-expansion-1.7B-q4_k_m`, `qwen3-reranker-0.6b-q8_0`).
+- If a corporate proxy re-signs TLS, `qmd pull` can fail on the certificate; `NODE_EXTRA_CA_CERTS` is the usual fix. Not tried on the work network.
+  The model files can also be copied into `~/.cache/qmd/models` by hand under the same file names.
+
+**What is stored on the work Mac, in plain text.** `qmd-export` copies the user and assistant text of Pi sessions (90 days) and the recaps to `~/.local/share/qmd-corpus`, and the index
+(with embeddings) is `~/.cache/qmd/index.sqlite`. Neither is in the dotfiles repo or synced. Work conversations are therefore in one more place than before.
+
+**Cost.** Same as above, per machine. The first `qmd-refresh` embeds the whole corpus: on the personal Mac 58,056 chunks took 55 min (about 18 chunks/s, 1.9 GB peak RSS). The work
+corpus is its own size; `qmd-export --dry-run` and then the `qmd update` line of the first run show the document count. Everything above about `QMD_EMBED_CONTEXT_SIZE=506` applies unchanged:
+a fresh work index has no old vectors, so the first `qmd-refresh` records `506` itself and no `--reembed` is needed. If the fork route (above) is chosen later, the work Mac would fetch from GitHub
+instead of npm: that needs a fresh look from the work side.
+
+**Apply on the work Mac** (Michael; scoped, as usual):
+
+```sh
+git -C ~/.local/share/chezmoi pull --ff-only
+chezmoi --source ~/.local/share/chezmoi apply --dry-run --verbose ~/.config/mise/conf.d/qmd.toml ~/.config/qmd/index.yml \
+  ~/.local/bin/qmd-refresh ~/.local/bin/qmd-export ~/.local/share/agent-harness/canonical/skills/searching-with-qmd
+chezmoi --source ~/.local/share/chezmoi apply ~/.config/mise/conf.d/qmd.toml ~/.config/qmd/index.yml \
+  ~/.local/bin/qmd-refresh ~/.local/bin/qmd-export ~/.local/share/agent-harness/canonical/skills/searching-with-qmd
+mise install                          # npm package, about 200 MB
+mise exec -- ~/.local/user_scripts/apply_harness_config.sh   # links the skill into Claude, Codex and Pi (a full chezmoi apply does this too)
+qmd pull                              # 2.1 GB of models, once
+qmd-export --dry-run                  # how many sessions and recaps it would write
+qmd-refresh                           # export, update, embed in one gate job; the first one is long
+qmd-refresh status
+qmd search "something you know is in your notes"
+```
+
+A full `chezmoi apply` also works and re-runs the bootstrap once (the new work hash line in `run_onchange_after_10_mise_bootstrap`), which includes `mise install`.
 
 ## Cost (measured 2026-10-26, this Mac, other jobs running)
 

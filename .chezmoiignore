@@ -133,8 +133,8 @@ Library/LaunchAgents/local.agent-events.plist
 75_instances_reconcile.sh
 {{- end }}
 
-{{- if ne .profile "personal" }}
-# QMD search (docs/qmd.md): personal only. The pin, the collections and the skill that tells agents how to call it.
+{{- if and (ne .profile "personal") (ne .profile "axon-work-computer") }}
+# QMD search (docs/qmd.md): personal and work, not Termux. The pin, the collections, the skill that tells agents how to call it, and the two scripts.
 .config/mise/conf.d/qmd.toml
 .config/qmd
 .config/qmd/**
@@ -142,6 +142,9 @@ Library/LaunchAgents/local.agent-events.plist
 .local/share/agent-harness/canonical/skills/searching-with-qmd/**
 .local/bin/qmd-refresh
 .local/bin/qmd-export
+{{- end }}
+
+{{- if ne .profile "personal" }}
 .local/user_scripts/configure_rustdesk.sh
 .pi/agent/extensions/openrouter-gate
 .pi/agent/extensions/openrouter-gate/**
