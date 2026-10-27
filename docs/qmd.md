@@ -159,7 +159,7 @@ recaps are the work Mac's own; nothing moves between machines. Termux gets none 
 
 **What leaves the machine.** Checked in the pinned `@tobilu/qmd@2.8.3` package (the unpacked `dist/`), on 2026-10-27:
 - The only network call in qmd's own code is `getRemoteEtag` (`dist/llm.js:158-171`): a `HEAD` request to `huggingface.co/<repo>/resolve/main/<file>`, called from `pullModels` (`qmd pull`)
-  to compare a model's ETag. It sends no document or query text. `HF_ENDPOINT` can point it at a mirror.
+  to compare a model's ETag. It sends no document or query text. The URL is fixed to huggingface.co in qmd; `HF_ENDPOINT` is honoured only by the model downloader of the dependency.
 - Model files are downloaded by `node-llama-cpp` from the same `hf:` URIs (the three in `index.yml`) during `qmd pull`, or by `embed`/`query` if a model file is
   missing. After that, search, embed and query run on the Mac; the index never leaves it.
 - A search of `dist/` for telemetry, analytics, crash-report or similar code finds none. The only server code is `qmd mcp --http` (`dist/mcp/server.js`): it binds to `localhost`
@@ -192,7 +192,7 @@ chezmoi --source ~/.local/share/chezmoi apply --dry-run --verbose ~/.config/mise
 chezmoi --source ~/.local/share/chezmoi apply ~/.config/mise/conf.d/qmd.toml ~/.config/qmd/index.yml \
   ~/.local/bin/qmd-refresh ~/.local/bin/qmd-export ~/.local/share/agent-harness/canonical/skills/searching-with-qmd
 mise install                          # npm package, about 200 MB
-mise exec -- ~/.local/user_scripts/apply_harness_config.sh   # links the skill into Claude, Codex and Pi (a full chezmoi apply does this too)
+mise exec -- ~/.local/user_scripts/apply_harness_config.sh   # links the skill into Claude, Codex and Pi (needed after a full apply too)
 qmd pull                              # 2.1 GB of models, once
 qmd-export --dry-run                  # how many sessions and recaps it would write
 qmd-refresh                           # export, update, embed in one gate job; the first one is long
@@ -200,7 +200,7 @@ qmd-refresh status
 qmd search "something you know is in your notes"
 ```
 
-A full `chezmoi apply` also works and re-runs the bootstrap once (the new work hash line in `run_onchange_after_10_mise_bootstrap`), which includes `mise install`.
+A full `chezmoi apply` also works and re-runs the bootstrap once (the new work hash line in `run_onchange_after_10_mise_bootstrap`), which includes `mise install`. It does **not** reliably link the skill: the harness-config script hashes skill names from the source tree, where this skill has existed since #81, so on an up-to-date work Mac it is skipped. Run the `apply_harness_config.sh` line either way.
 
 ## Cost (measured 2026-10-26, this Mac, other jobs running)
 
