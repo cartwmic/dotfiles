@@ -44,7 +44,7 @@ candidates = [
 
 [tiers.high]        # independent or adversarial judgment, architecture, cross-run synthesis
 candidates = [
-  "claude-compat/claude-opus-5-5@medium",
+  "claude-compat/claude-opus-5-5@high",
   "openai-codex/gpt-6.1-sol@xhigh",
   "openai-codex/gpt-6-astra@high",
 ]
@@ -62,7 +62,7 @@ candidates = ["anthropic/claude-haiku-5-5@xhigh"]
 candidates = ["anthropic/claude-sonnet-5-5@high"]
 
 [tiers.high]
-candidates = ["anthropic/claude-opus-5-5@medium"]
+candidates = ["anthropic/claude-opus-5-5@high"]
 {{- end }}
 
 # Default tier per work role. Overridden by --run-tier, then by a slot's own tier.
