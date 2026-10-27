@@ -1,4 +1,5 @@
 """Black-box tests for dot_local/bin/executable_qmd-export (runs the real script on fixture trees)."""
+import fcntl
 import json
 import os
 import subprocess
@@ -123,6 +124,23 @@ class ExportTest(Base):
         self.assertIn("sessions/2026-10-20/dup.md", files)
         self.assertEqual(f.run().returncode, 0)
         self.assertEqual(f.files("sessions"), files, "stable across runs")
+
+    def test_duplicate_ids_keep_the_right_content_when_the_first_one_goes_away(self):
+        f = self.f
+        a = f.sess("dup", sub="--a--", name="a.jsonl", msgs=(("user", "AAA content"), ("assistant", "ok")))
+        f.sess("dup", sub="--b--", name="b.jsonl", msgs=(("user", "BBB content"), ("assistant", "ok")))
+        f.run()
+        texts = sorted((f.out / p).read_text() for p in f.files("sessions"))
+        self.assertTrue("AAA content" in texts[0] + texts[1] and "BBB content" in texts[0] + texts[1])
+        a.unlink()                                   # B now owns the plain name; A's output (newer than B) must not be reused
+        f.run()
+        files = f.files("sessions")
+        self.assertEqual(len(files), 1)
+        body = (f.out / files[0]).read_text()
+        self.assertIn("BBB content", body)
+        self.assertNotIn("AAA content", body)
+        f.run()                                      # and it stays that way
+        self.assertIn("BBB content", (f.out / f.files("sessions")[0]).read_text())
 
     def test_nothing_to_index(self):
         f = self.f
@@ -249,6 +267,36 @@ class PruneTest(Base):
             self.skipTest("running as a user that ignores permissions")
         p = f.run(check=1)
         self.assertEqual(f.files(), mine)
+
+    def test_a_source_that_cannot_be_stat_ed_prunes_nothing(self):
+        f = self.f
+        f.sess("s1", sub="--ok--")
+        f.sess("s2", sub="--locked--", name="b.jsonl")
+        f.run()
+        mine = f.files()
+        d = f.sessions / "--locked--"
+        d.chmod(0o444)                                # listable, but its entries cannot be stat-ed
+        self.addCleanup(lambda: d.chmod(0o755))
+        if os.access(d / "b.jsonl", os.R_OK):
+            self.skipTest("running as a user that ignores permissions")
+        p = f.run(check=1)
+        self.assertIn("Permission denied", p.stderr)
+        self.assertEqual(f.files(), mine)
+
+    def test_a_second_exporter_is_refused_while_one_runs(self):
+        f = self.f
+        f.sess("s1")
+        f.run()
+        before = f.files()
+        with open(f.out / ".qmd-export.lock", "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            f.sess("s2", name="s2.jsonl")
+            p = f.run(check=3)
+            self.assertIn("another qmd-export", p.stderr)
+            self.assertEqual(f.files(), before)
+            f.run("--dry-run")                         # a dry run only reads, so it does not need the lock
+        f.run()
+        self.assertEqual(len(f.files("sessions")), 2)
 
     def test_dry_run_changes_nothing(self):
         f = self.f

@@ -13,12 +13,13 @@ sessions and recaps. Stdlib only, Python 3.9+. Run by qmd-refresh before 'qmd up
 
 Incremental: a source whose output exists and is not older than it is skipped without being read. Sources older than --days
 (by modification time, default 90) are not exported, and their outputs are deleted, as are outputs whose source is gone.
-Nothing is deleted from a source root that is missing or unreadable, or from a directory that is not a corpus this program
+One exporter runs at a time (a lock in the output directory; a second one exits 3). Nothing is deleted from a source root that is missing or unreadable, or from a directory that is not a corpus this program
 made (the .qmd-corpus marker). Files are written whole and renamed into place, so an interrupted run leaves no half file.
 What goes in: user and assistant text (4000 chars per message), compaction summaries (8000), recap summaries; tool results,
 thinking, system and custom entries stay out. Markdown headings inside message text are escaped so they do not split chunks.
 """
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -28,6 +29,7 @@ import time
 
 MARKER = ".qmd-corpus"
 STATE = ".qmd-export-state.json"
+LOCK = ".qmd-export.lock"
 SKIP = ('"role":"toolResult"', '"type":"custom"', '"type":"thinking_level_change"', '"type":"model_change"', '"role":"system"')
 MAXMSG = 4000
 
@@ -103,7 +105,7 @@ def render_recap(path):
     day = (o.get("created_at") or "0000-00-00")[:10]
     meta = (o.get("metadata") or {}).get("pi") or {}
     sid = meta.get("nativeSessionId") or o.get("source_id")
-    pane = ((o.get("annotations") or {}).get("herdr") or {}).get("pane_id")
+    pane = ((o.get("annotations") or {}).get("herdr") or {}).get("pane_id") or o.get("pane_id")
     fm = '---\nsession: %s\nkind: %s\npane: "%s"\ncreated: "%s"\n---\n# recap %s %s\n\n' % (
         sid, o.get("kind"), pane, o.get("created_at"), day, sid)
     return fm + esc(s) + "\n"
@@ -138,13 +140,19 @@ def export_kind(kind, root, suffix, out_dir, cutoff, state, dry, log):
         stats["errors"] += 1
         return stats
     skip = state.setdefault(kind, {})        # source path -> mtime of a source that has nothing to export
+    owners_old = (state.get("owners") or {}).get(kind) or {}      # output path -> the source it was rendered from
+    owners = {}
     wanted = set()
     taken = {}
     seen_src = set()
     for src in files:
         try:
             mtime = os.stat(src).st_mtime
-        except OSError:
+        except FileNotFoundError:
+            continue                          # vanished since the listing
+        except OSError as e:
+            stats["errors"] += 1              # cannot tell: do not prune on a guess
+            log("%s: %s: %s" % (kind, src, e))
             continue
         seen_src.add(src)
         if mtime < cutoff:
@@ -166,8 +174,10 @@ def export_kind(kind, root, suffix, out_dir, cutoff, state, dry, log):
                 dest = os.path.join(out_dir, day, name + ".md")
             else:
                 dest = os.path.join(out_dir, os.path.basename(os.path.dirname(src)), os.path.basename(src)[: -len(suffix)] + ".md")
-            if os.path.exists(dest) and os.stat(dest).st_mtime >= mtime:
+            # Reuse an output only if it was rendered from this very source (a duplicate-id file may have changed owner).
+            if owners_old.get(dest) == src and os.path.exists(dest) and os.stat(dest).st_mtime >= mtime:
                 wanted.add(dest)
+                owners[dest] = src
                 stats["unchanged"] += 1
                 continue
             r = render_session(src) if kind == "sessions" else render_recap(src)
@@ -178,6 +188,7 @@ def export_kind(kind, root, suffix, out_dir, cutoff, state, dry, log):
             if kind == "sessions":
                 dest = os.path.join(out_dir, r[1], os.path.basename(dest))
             wanted.add(dest)
+            owners[dest] = src
             if not dry:
                 write_atomic(dest, body)
             stats["written"] += 1
@@ -186,6 +197,8 @@ def export_kind(kind, root, suffix, out_dir, cutoff, state, dry, log):
             log("%s: %s: %s" % (kind, src, e))
     for src in [s for s in skip if s not in seen_src]:
         del skip[src]
+    # (after an error the prune below is off, so keep what we knew about outputs we did not get to)
+    state.setdefault("owners", {})[kind] = dict(owners_old, **owners) if stats["errors"] else owners
     # Prune: anything .md in the corpus that is not wanted (source gone or too old), stale temp files, empty day dirs.
     if os.path.isdir(out_dir) and not stats["errors"]:
         for d, dirs, fs in os.walk(out_dir, topdown=False):
@@ -228,10 +241,23 @@ def main(argv=None):
             state = json.load(f)
     except (OSError, ValueError):
         state = {}
+    lock = None
     if not a.dry_run:
         os.makedirs(out, exist_ok=True)
         if not os.path.exists(marker):
             open(marker, "w").write("made by qmd-export; its sessions/ and recaps/ are rewritten and pruned on every run\n")
+        # One exporter at a time (also against qmd-refresh's): scan, write, prune and state are one unit. Held until exit.
+        lock = open(os.path.join(out, LOCK), "a")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            log("another qmd-export is running (%s)" % os.path.join(out, LOCK))
+            return 3
+        try:
+            with open(sp) as f:                  # read the state only now that nobody else can change it
+                state = json.load(f)
+        except (OSError, ValueError):
+            state = {}
     res = {}
     for kind, root, suffix in (("sessions", a.sessions_root, ".jsonl"), ("recaps", a.recaps_root, ".json")):
         res[kind] = export_kind(kind, root, suffix, os.path.join(out, kind), cutoff, state, a.dry_run, log)
