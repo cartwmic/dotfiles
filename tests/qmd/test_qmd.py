@@ -16,7 +16,7 @@ INDEX = REPO / "dot_config/qmd/index.yml.tmpl"
 SKILL = REPO / "dot_local/share/agent-harness/canonical/skills/searching-with-qmd/SKILL.md"
 BOOTSTRAP = REPO / "run_onchange_after_10_mise_bootstrap.sh.tmpl"
 
-PERSONAL_ONLY = [
+DESKTOP = [  # personal and axon-work-computer; Termux gets none
     ".config/mise/conf.d/qmd.toml",
     ".config/qmd/index.yml",
     ".local/bin/qmd-refresh",
@@ -74,18 +74,31 @@ class ProfileMatrixTest(unittest.TestCase):
         finally:
             c.close()
 
-    def test_personal_gets_the_files(self):
-        m = self.managed("personal")
-        for p in PERSONAL_ONLY:
-            self.assertIn(p, m)
-
-    def test_work_and_termux_get_nothing(self):
-        for profile in ("axon-work-computer", "termux"):
+    def test_personal_and_work_get_the_files(self):
+        for profile in ("personal", "axon-work-computer"):
             m = self.managed(profile)
-            self.assertEqual([p for p in m if "qmd" in p], [], profile)
+            for p in DESKTOP:
+                self.assertIn(p, m, profile)
 
-    def test_bootstrap_script_hashes_the_pin_on_personal_only(self):
-        # A hash line on the other profiles would rerun their bootstrap once for a file they never get.
+    def test_the_same_qmd_files_land_on_both_desktop_profiles(self):
+        # Work is not a subset or a variant: the pin, the scripts and the skill are identical, only index.yml.tmpl renders differently.
+        pick = lambda m: sorted(p for p in m if "qmd" in p)
+        self.assertEqual(pick(self.managed("personal")), pick(self.managed("axon-work-computer")))
+
+    def test_the_neighbouring_personal_only_ignores_still_hold_on_work(self):
+        # The QMD lines once shared an ignore block with these; widening that block to work would have deployed them.
+        m = self.managed("axon-work-computer")
+        for prefix in (".local/user_scripts/configure_rustdesk.sh", ".pi/agent/extensions/openrouter-gate",
+                       ".pi/agent/extensions/claude-compat-guard", ".pi/agent/extensions/pi-codex-fast.json",
+                       ".pi/agent/extensions/auto-session-name.json"):
+            self.assertEqual([p for p in m if p.startswith(prefix)], [], prefix)
+
+    def test_termux_gets_nothing(self):
+        m = self.managed("termux")
+        self.assertEqual([p for p in m if "qmd" in p], [])
+
+    def test_bootstrap_script_hashes_the_pin_on_personal_and_work_only(self):
+        # A hash line on Termux would rerun its bootstrap once for a file it never gets; on the others it is what makes mise install run.
         outs = {}
         for profile in ("personal", "axon-work-computer", "termux"):
             c = Chezmoi(profile)
@@ -94,7 +107,9 @@ class ProfileMatrixTest(unittest.TestCase):
             finally:
                 c.close()
         self.assertRegex(outs["personal"], r"# Hash \(personal-only QMD pin\): [0-9a-f]{64}\n")
-        self.assertNotIn("QMD", outs["axon-work-computer"])
+        self.assertRegex(outs["axon-work-computer"], r"# Hash \(work QMD pin\): [0-9a-f]{64}\n")
+        self.assertEqual(re.search(r"QMD pin\): ([0-9a-f]{64})", outs["personal"]).group(1),
+                         re.search(r"QMD pin\): ([0-9a-f]{64})", outs["axon-work-computer"]).group(1))
         self.assertNotIn("QMD", outs["termux"])
         # The hash block sits between "# Hash:" and the blank line; off personal that gap must be unchanged, or the script reruns.
         self.assertRegex(outs["termux"], r"# Hash: [0-9a-f]{64}\n\nset -eu")
@@ -159,6 +174,50 @@ class IndexTemplateTest(unittest.TestCase):
         self.assertTrue(paths)
         self.assertTrue(all(p.startswith("/") for p in paths), paths)
         self.assertEqual(len(re.findall(r"^    context:$", self.out, re.M)), len(paths))
+
+
+class WorkIndexTemplateTest(unittest.TestCase):
+    """The work Mac has its own ~/.pi sessions and recaps and its own checkouts (under ~/git); it has no ~/tmp notes unless it makes them."""
+
+    def render(self, profile="axon-work-computer", dirs=()):
+        c = Chezmoi(profile)
+        try:
+            for d in dirs:
+                (c.home / d).mkdir(parents=True)
+            return c.run("execute-template", stdin=INDEX.read_text()), str(c.home)
+        finally:
+            c.close()
+
+    @staticmethod
+    def names(out):
+        return re.findall(r"^  ([a-z0-9-]+):$", out.split("models:")[0], re.M)
+
+    def test_a_bare_work_home_gets_dotfiles_sessions_and_recaps(self):
+        out, home = self.render()
+        self.assertEqual(self.names(out), ["repo-dotfiles", "sessions", "recaps"])
+        self.assertIn("    path: %s/.local/share/qmd-corpus/sessions\n" % home, out)
+        self.assertTrue(out.endswith(MODELS))
+        self.assertFalse([l for l in out.splitlines() if not l.strip() or l.lstrip().startswith("#")])
+
+    def test_work_notes_only_when_the_folder_exists(self):
+        out, home = self.render(dirs=["tmp"])
+        self.assertEqual(self.names(out)[0], "notes")
+        self.assertIn("    path: %s/tmp\n    pattern: \"*/*.md\"" % home, out)
+
+    def test_work_checkouts_are_found_under_home_git_only(self):
+        out, home = self.render(dirs=["git/coordinator", "git/retro", "git/unrelated"])
+        self.assertEqual(self.names(out), ["repo-dotfiles", "repo-coordinator", "repo-retro", "sessions", "recaps"])
+        self.assertIn("    path: %s/git/coordinator\n" % home, out)
+        self.assertNotIn("unrelated", out)
+        self.assertNotIn("/Volumes/Workshop", out)
+
+    def test_work_never_lists_the_personal_only_repos(self):
+        out, _ = self.render(dirs=["git/loop-engine", "git/budget-steward", "git/cartwmic-homelab-v2"])
+        self.assertEqual(self.names(out), ["repo-dotfiles", "sessions", "recaps"])
+
+    def test_personal_still_has_notes_without_a_tmp_folder(self):
+        out, _ = self.render("personal")
+        self.assertEqual(self.names(out)[:2], ["notes", "repo-dotfiles"])
 
 
 class SkillTest(unittest.TestCase):
