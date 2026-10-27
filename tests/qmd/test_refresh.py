@@ -41,6 +41,12 @@ shift 3
 """
 
 
+FAKE_EXPORT = r"""#!/bin/sh
+echo "export cwd=$(pwd -P)" >> "$FAKE/calls"
+exit "${FAKE_EXPORT_CODE:-0}"
+"""
+
+
 def alive(pid):
     try:
         os.kill(pid, 0)
@@ -66,8 +72,9 @@ class Env:
         for d in (self.fake, self.bin, self.home):
             d.mkdir()
         (self.bin / "qmd").write_text(FAKE_QMD)
+        (self.bin / "qmd-export").write_text(FAKE_EXPORT)
         (self.bin / "heavy-gate").write_text(FAKE_GATE)
-        for f in (self.bin / "qmd", self.bin / "heavy-gate"):
+        for f in (self.bin / "qmd", self.bin / "heavy-gate", self.bin / "qmd-export"):
             f.chmod(0o755)
         self.cache = self.root / "cache"
         self.state = self.root / "state"
@@ -229,6 +236,49 @@ class RefreshTest(Base):
         (shim / "qmd").chmod(0o755)
         self.assertEqual(self.e.run("--no-embed"), 0, self.e.err)
         self.assertIn("shim update", self.e.calls)
+
+
+class ExportStepTest(Base):
+    def test_export_runs_first_inside_the_same_gate_job(self):
+        self.assertEqual(self.e.run(), 0, self.e.err)
+        order = [c.split(" ")[0] for c in self.e.calls]
+        self.assertEqual(order, ["heavy-gate", "export", "qmd", "qmd"])
+        self.assertEqual(len([c for c in self.e.calls if c.startswith("heavy-gate")]), 1)
+
+    def test_no_export_skips_it(self):
+        self.assertEqual(self.e.run("--no-export"), 0)
+        self.assertFalse(any(c.startswith("export") for c in self.e.calls))
+        self.assertEqual(len(self.e.qmd_calls), 2)
+
+    def test_a_failing_export_fails_the_job_before_update(self):
+        self.assertEqual(self.e.run(FAKE_EXPORT_CODE="5"), 5)
+        self.assertEqual(self.e.qmd_calls, [])
+        self.assertFalse(self.e.stamp.exists())
+
+    def test_a_missing_exporter_is_reported_but_not_fatal(self):
+        (self.e.bin / "qmd-export").unlink()
+        self.assertEqual(self.e.run(), 0, self.e.err)
+        self.assertIn("qmd-export not found", self.e.err)
+        self.assertEqual(len(self.e.qmd_calls), 2)
+
+    def test_qmd_export_bin_overrides_and_home_bin_is_a_fallback(self):
+        (self.e.bin / "qmd-export").unlink()
+        alt = self.e.root / "alt-export"
+        alt.write_text('#!/bin/sh\necho alt-export >> "$FAKE/calls"\n')
+        alt.chmod(0o755)
+        self.assertEqual(self.e.run(QMD_EXPORT_BIN=str(alt)), 0, self.e.err)
+        self.assertIn("alt-export", self.e.calls)
+        hb = self.e.home / ".local/bin"
+        hb.mkdir(parents=True)
+        (hb / "qmd-export").write_text('#!/bin/sh\necho home-export >> "$FAKE/calls"\n')
+        (hb / "qmd-export").chmod(0o755)
+        self.assertEqual(self.e.run(), 0, self.e.err)
+        self.assertIn("home-export", self.e.calls)
+
+    def test_dry_run_names_the_exporter(self):
+        self.assertEqual(self.e.run("--dry-run"), 0)
+        self.assertIn("export: %s" % (self.e.bin / "qmd-export"), self.e.out)
+        self.assertEqual(self.e.calls, [])
 
 
 class ModelGuardTest(Base):
