@@ -154,7 +154,7 @@ fi
 # a full re-embed, $9 = the index file (the job leaves "skipped" and "legacy" in the run directory). The model file is checked
 # here, after the gate wait and the update, because qmd downloads a missing model by itself. A skip is reported out of band so
 # it cannot be confused with a status. Vector count: sqlite3 (ships with macOS); if it cannot be read, assume there are some.
-# Not `sqlite3 -readonly`: qmd's index is in WAL mode, and a read-only open of a WAL database with no -wal/-shm files (the state
+# Not sqlite3's read-only flag: qmd's index is in WAL mode, and a read-only open of a WAL database with no -wal/-shm files (the state
 # after qmd exits) fails with "unable to open database file". A plain open reads fine and creates them briefly.
 job='set -e
 [ "$5" = none ] || "$5"
