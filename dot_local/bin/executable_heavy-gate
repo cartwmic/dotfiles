@@ -4,7 +4,7 @@
 #
 # Ask whether this Mac can take a heavy job (cargo, docker, a full test suite) right now,
 # and optionally run the job only when it can. Workers call it instead of each one checking
-# load by hand. macOS only: it reads sysctl, memory_pressure and vm_stat.
+# memory by hand. macOS only: it reads sysctl and memory_pressure.
 #
 # Usage:
 #   heavy-gate                          check once; exit 0 if allowed, 1 if refused (the reasons on stderr)
@@ -15,22 +15,23 @@
 #   heavy-gate priorities               print the priorities file, the holders and the waiters with their priority
 #   heavy-gate priority PATTERN NUMBER  set (or update) one rule in the priorities file; a new rule goes first, so it wins
 #
-# The rules, all of which must hold for every start:
-#   load1 < 8    memory pressure level 1 (normal)    memory free >= 30%
-#   Swapouts flat over 60 seconds (the machine is not swapping right now)
+# The rules, all of which must hold for every start. Only memory pressure gates a start (owner decision, 2026-10-26):
+#   memory pressure level 1 (normal)    memory free >= 30% (the kernel's own pressure figure, as memory_pressure reports it)
+#   both hold on two readings 20 seconds apart: read, wait 20 seconds, read again, so the answer is about now, not 20 seconds ago
 #   a free slot: fewer heavy-gate jobs hold the gate than the slot limit (see Slots)
-#   no other job is in its 60-second check: a second start waits until the first has passed it (then it is running)
+#   no other job is in its 20-second check: a second start waits until the first has passed it (then it is running)
 #   no waiting job with a lower HEAVY_GATE_PRIORITY number (see below)
-# Swap free is not an admission rule (macOS grows swap as it needs it), but below 500 MB the gate refuses outright: a safety floor.
-# The load, pressure, memory and swap figures are read again after the 60 seconds, so the answer is about now, not a minute ago.
 # A figure that cannot be read as a number counts as a refusal.
+# Not checked, on purpose: free swap (macOS grows swap on demand), whether Swapouts are rising, and the load average. A start is
+# not held back by any of them, and a running job is never stopped for them. The slot limit is the only cap on how many jobs run.
+# Waiting jobs of the version before this one keep its rules (swap floor, Swapouts, load) until they end and are started again.
 #
 # Slots: the limit on how many heavy-gate jobs hold the gate at once. It comes from, in order, HEAVY_GATE_SLOTS (a whole number in
 # the job's environment), then the first number in ${HEAVY_GATE_SLOTS_FILE:-~/.config/heavy-gate/slots} ('#' lines and blank lines
 # are skipped), then 3. The file is read on every try, so an edit reaches jobs that are already waiting (on this version). The limit
 # is 1 to 8: 8 only guards against a typo (a number above it counts as 8). A value that is 0 or not a whole number is ignored for 3, with a warning.
 # Lowering the limit stops nothing that runs: no new job starts until fewer than the new limit hold the gate. Only the slot limit is
-# configurable; the load, memory, pressure, Swapouts and swap rules above are fixed and apply to every start.
+# configurable; the pressure and memory rules above are fixed and apply to every start.
 #
 # Priority: a lower number is more important; a job with no rule is 5. The number comes from, in order, HEAVY_GATE_PRIORITY
 # (a whole number in the job's environment), then the central workstream rank (see below), then the first rule in the priorities
@@ -53,7 +54,7 @@
 # The one-slot version also has no check window; the two-slot version reads its limit once, at its start, and never reads the slots file.
 #
 # --wait SECONDS bounds when a new try may start (default 0: one try); none starts at or after the deadline. A try that
-# has begun takes about 60 seconds (the Swapouts watch) and is allowed to finish.
+# has begun takes about 20 seconds (the gap between the two readings) and is allowed to finish.
 # A slot is a symlink named for the pid of its holder, shared by every heavy-gate of one user. Slot 1 is the lock path
 # itself (/tmp/heavy-gate-<uid>.lock, the only gate older heavy-gate versions know); slot N is <lock>.N. A new job takes
 # slot 1 first. Old and new versions exclude each other on slot 1. The one-slot version never looks at slot 2 or
@@ -66,15 +67,13 @@
 #
 # Environment: HEAVY_GATE_SLOTS the slot limit, HEAVY_GATE_SLOTS_FILE its file, HEAVY_GATE_PRIORITY see above, HEAVY_GATE_PRIORITIES the file.
 # The central rank file is WORKSTREAM_RANK_FILE (read by workstream-rank), else ~/.local/share/coordinator/rank.
-# For tests: HEAVY_GATE_RANK_TIMEOUT seconds the reader may take (2), HEAVY_GATE_SWAP_WINDOW seconds to watch Swapouts (60), HEAVY_GATE_POLL seconds between tries while waiting
+# For tests: HEAVY_GATE_RANK_TIMEOUT seconds the reader may take (2), HEAVY_GATE_CHECK_WINDOW seconds between the two readings (20), HEAVY_GATE_POLL seconds between tries while waiting
 # (15), HEAVY_GATE_LOCK the slot 1 path (/tmp/heavy-gate-<uid>.lock; the other files are named from it).
 
 set -eu
 
-LOAD_MAX=8
-SWAP_FLOOR_MB=500
 MEM_FREE_MIN_PCT=30
-SWAP_WINDOW=${HEAVY_GATE_SWAP_WINDOW:-60}
+CHECK_WINDOW=${HEAVY_GATE_CHECK_WINDOW:-20}
 POLL=${HEAVY_GATE_POLL:-15}
 DEFAULT_SLOTS=3
 MAX_SLOTS=8
@@ -95,37 +94,23 @@ number() { awk -v v="$1" 'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/) }'; }
 
 
 # ---- the figures (each prints one value, or nothing if unreadable) ----
-load1() { sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}'; }
-swap_free_mb() {
-  sysctl -n vm.swapusage 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "free") {
-    v = $(i + 2); if (v !~ /^[0-9]+(\.[0-9]+)?[KMG]$/) next
-    u = substr(v, length(v)); n = substr(v, 1, length(v) - 1) + 0
-    if (u == "G") n *= 1024; else if (u == "K") n /= 1024
-    printf "%d", n } }'
-}
 pressure_level() { sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null; }
 mem_free_pct() { memory_pressure 2>/dev/null | awk '/free percentage/ {gsub("%", "", $NF); print $NF}'; }
-swapouts() { vm_stat 2>/dev/null | awk '/^Swapouts:/ {sub(/\.$/, "", $2); print $2}'; }
 
 # $1 figure, $2 operator (lt or ge), $3 limit: true when the figure is a number that meets the rule
 meets() { number "$1" && awk -v v="$1" -v l="$3" -v op="$2" 'BEGIN { exit !(op == "lt" ? v + 0 < l + 0 : v + 0 >= l + 0) }'; }
 
-# The cheap rules. Prints one line per broken rule; returns 1 if any is broken.
-cheap_rules() {
+# The memory rules. Prints one line per broken rule; returns 1 if any is broken. The only figures that gate a start.
+memory_rules() {
   broken=0
-  v=$(load1);          meets "$v" lt "$LOAD_MAX"          || { refuse "load1 ${v:-unreadable} (needs < $LOAD_MAX)"; broken=1; }
-  v=$(swap_free_mb);   meets "$v" ge "$SWAP_FLOOR_MB"     || { refuse "swap free ${v:-unreadable} MB (needs >= $SWAP_FLOOR_MB)"; broken=1; }
   v=$(pressure_level); [ "$v" = 1 ]                       || { refuse "memory pressure level ${v:-unreadable} (needs 1)"; broken=1; }
   v=$(mem_free_pct);   meets "$v" ge "$MEM_FREE_MIN_PCT"  || { refuse "memory free ${v:-unreadable}% (needs >= $MEM_FREE_MIN_PCT%)"; broken=1; }
   return "$broken"
 }
 
-# Swapouts must not move over the window. Returns 1 if they did, or cannot be read.
-swapouts_flat() {
-  a=$(swapouts); case $a in '' | *[!0-9]*) refuse "Swapouts unreadable"; return 1 ;; esac
-  sleep "$SWAP_WINDOW" || { refuse "could not wait out the Swapouts window"; return 1; }
-  b=$(swapouts); case $b in '' | *[!0-9]*) refuse "Swapouts unreadable"; return 1 ;; esac
-  [ "$a" = "$b" ] || { refuse "Swapouts rose over ${SWAP_WINDOW}s (the machine is swapping)"; return 1; }
+# The gap between the two readings. Returns 1 if it could not be waited out.
+wait_window() {
+  sleep "$CHECK_WINDOW" || { refuse "could not wait out the ${CHECK_WINDOW}s check window"; return 1; }
 }
 
 # A slot (and the admission lock) is a symlink named for the holder's pid: creating it is atomic. Clearing a dead holder's link and
@@ -166,7 +151,7 @@ admitted=0
 drop_slot() { if [ -n "$mine" ] && [ "$(holder "$mine")" = "$$" ]; then rm -f "$mine"; fi; mine=; return 0; }
 drop_admit() { if [ "$admitted" = 1 ]; then admitted=0; if [ "$(holder "$ADMIT")" = "$$" ]; then rm -f "$ADMIT"; fi; fi; return 0; }
 
-# Only one job at a time is in its check, so two starts cannot slip through the same Swapouts window.
+# Only one job at a time is in its check, so two starts cannot slip through the same check window.
 take_admit() {
   rc=0; claim "$ADMIT" || rc=$?
   case $rc in
@@ -404,7 +389,7 @@ try_gate() {
   else
     gate_free || return 1
   fi
-  if cheap_rules && swapouts_flat && cheap_rules && { [ "$1" = 1 ] || gate_free; }; then drop_admit; return 0; fi
+  if memory_rules && wait_window && memory_rules && { [ "$1" = 1 ] || gate_free; }; then drop_admit; return 0; fi
   if [ "$1" = 1 ]; then drop_slot; drop_admit; fi
   return 1
 }
@@ -424,12 +409,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 case $WAIT in '' | *[!0-9]*) log ERROR "--wait takes a whole number of seconds"; exit 2 ;; esac
-if ! number "$SWAP_WINDOW" || ! number "$POLL"; then log ERROR "HEAVY_GATE_SWAP_WINDOW and HEAVY_GATE_POLL must be numbers"; exit 2; fi
+if ! number "$CHECK_WINDOW" || ! number "$POLL"; then log ERROR "HEAVY_GATE_CHECK_WINDOW and HEAVY_GATE_POLL must be numbers"; exit 2; fi
 resolve_slots
 [ "$SLOTS_ENV_BAD" = 0 ] || { log ERROR "HEAVY_GATE_SLOTS must be a whole number, 1 or more"; exit 2; }
 case ${HEAVY_GATE_PRIORITY:-0} in '' | *[!0-9]* | ???????*) log ERROR "HEAVY_GATE_PRIORITY must be a whole number of at most 6 digits (lower is more important)"; exit 2 ;; esac
 [ "$(uname -s)" = Darwin ] || { log ERROR "macOS only"; exit 2; }
 if [ $# -eq 0 ]; then
+  log INFO "check: a start is admitted on memory pressure only: level 1 and memory free >= $MEM_FREE_MIN_PCT% on two readings ${CHECK_WINDOW}s apart, and a free slot. Not checked: free swap, Swapouts, load average."
   if try_gate 0; then log INFO "allowed"; exit 0; fi
   exit 1
 fi
