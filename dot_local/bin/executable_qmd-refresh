@@ -1,7 +1,7 @@
 #!/bin/sh
-# qmd-refresh — bring the QMD index up to date: `qmd update`, then `qmd embed`, as ONE heavy-gate job.
+# qmd-refresh — bring the QMD index up to date: `qmd-export`, `qmd update`, then `qmd embed`, as ONE heavy-gate job.
 #
-#   qmd-refresh [--wait SECONDS] [--no-embed] [--dry-run]
+#   qmd-refresh [--wait SECONDS] [--no-embed] [--no-export] [--dry-run]
 #   qmd-refresh status
 #
 # Run by the owner (or an agent the owner asked). Nothing schedules it. See docs/qmd.md.
@@ -31,6 +31,7 @@ set -eu
 prog=qmd-refresh
 wait_s=7200
 embed=1
+export_=1
 dry=0
 mode=run
 grace=${QMD_REFRESH_GRACE:-10}
@@ -40,11 +41,11 @@ die() { code=$1; shift; printf '%s: %s\n' "$prog" "$*" >&2; exit "$code"; }
 
 usage() {
     cat <<'EOF'
-usage: qmd-refresh [--wait SECONDS] [--no-embed] [--dry-run]
+usage: qmd-refresh [--wait SECONDS] [--no-embed] [--no-export] [--dry-run]
        qmd-refresh status
 
-Runs `qmd update` then `qmd embed` (one process at a time, low memory flags, no 30-minute cap) as a single
-heavy-gate job. --wait is how long heavy-gate may wait for a quiet Mac (default 7200). --no-embed stops after update.
+Runs `qmd-export` (Pi sessions and recaps -> markdown), `qmd update`, then `qmd embed` (one process at a time, low memory flags, no 30-minute cap) as a single
+heavy-gate job. --wait is how long heavy-gate may wait for a quiet Mac (default 7200). --no-embed stops after update, --no-export skips qmd-export.
 --dry-run prints the command and runs nothing. status prints when the last refresh finished and whether one is running.
 Models are not downloaded here: run `qmd pull` once (about 2.1 GB). Without the embedding model only update runs.
 EOF
@@ -54,6 +55,7 @@ while [ $# -gt 0 ]; do
     case $1 in
         status) mode=status ;;
         --no-embed) embed=0 ;;
+        --no-export) export_=0 ;;
         --dry-run) dry=1 ;;
         --wait)
             [ $# -ge 2 ] || { usage >&2; exit 2; }
@@ -108,10 +110,24 @@ if [ "$embed" = 1 ] && { [ -n "${QMD_EMBED_MODEL:-}" ] || { [ -n "$cfg_embed" ] 
     embed=0
 fi
 
+# qmd-export turns Pi sessions and recaps into the files the sessions and recaps collections index. It runs first, inside the
+# same gate job. A missing exporter is not fatal (the other collections still refresh); a failing one is.
+exporter=none
+if [ "$export_" = 1 ]; then
+    exporter=${QMD_EXPORT_BIN:-}
+    [ -n "$exporter" ] || exporter=$(command -v qmd-export 2>/dev/null || true)
+    [ -n "$exporter" ] || { [ -x "$HOME/.local/bin/qmd-export" ] && exporter=$HOME/.local/bin/qmd-export; } || true
+    if [ -z "$exporter" ] || [ ! -x "$exporter" ]; then
+        log "qmd-export not found: the sessions and recaps collections are not refreshed"
+        exporter=none
+    fi
+fi
+
 # The job, as a script of its own so heavy-gate runs exactly one command. $1 = qmd, $2 = embed|noembed, $3 = model file,
-# $4 = run directory (the job leaves "skipped" there). The model file is checked here, after the gate wait and the update,
+# $4 = run directory, $5 = qmd-export or none (the job leaves "skipped" there). The model file is checked here, after the gate wait and the update,
 # because qmd downloads a missing model by itself. A skip is reported out of band so it cannot be confused with a status.
 job='set -e
+[ "$5" = none ] || "$5"
 "$1" update
 [ "$2" = embed ] || exit 0
 if [ ! -f "$3" ]; then
@@ -123,7 +139,8 @@ QMD_EMBED_PARALLELISM=1 exec "$1" embed --timeout 0 --max-docs-per-batch 50 --ma
 which=noembed; [ "$embed" = 1 ] && which=embed
 
 if [ "$dry" = 1 ]; then
-    echo "nice -n 10 $gate --wait $wait_s -- sh -c '<update, then embed if the model exists>' sh $qmd $which $model"
+    echo "nice -n 10 $gate --wait $wait_s -- sh -c '<export, update, then embed if the model exists>' sh $qmd $which $model <rundir> $exporter"
+    [ "$exporter" = none ] || echo "export: $exporter"
     echo "update: $qmd update"
     [ "$embed" = 1 ] && echo "embed:  QMD_EMBED_PARALLELISM=1 $qmd embed --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8 (only if $model exists)"
     exit 0
@@ -158,7 +175,7 @@ trap on_signal TERM INT HUP
 
 if [ "$embed" = 1 ]; then what='update + embed'; else what=update; fi
 log "start: $what (waiting up to ${wait_s}s for a quiet Mac)"
-QMD_REFRESH_RUN=$rundir nice -n 10 perl -e "$locker" "$lockfile" "$gate" --wait "$wait_s" -- sh -c "$job" sh "$qmd" "$which" "$model" "$rundir" &
+QMD_REFRESH_RUN=$rundir nice -n 10 perl -e "$locker" "$lockfile" "$gate" --wait "$wait_s" -- sh -c "$job" sh "$qmd" "$which" "$model" "$rundir" "$exporter" &
 child=$!
 # Poll instead of a blocking wait: a signal may arrive at any moment, and a wait it has interrupted (or that it arrived
 # just before) must never leave us blocked on a job that ignores TERM.
