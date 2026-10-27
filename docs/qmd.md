@@ -54,10 +54,16 @@ waits for a quiet Mac). Nothing schedules it; the owner or an agent the owner as
 - Embed uses `QMD_EMBED_PARALLELISM=1 --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8`: 1.9 GB RSS instead of 4.5 GB at
   qmd's defaults, same speed; `--timeout 0` removes qmd's hard 30-minute cap (tobi/qmd#673). Only changed documents are
   embedded, so an interrupted run resumes.
-- One refresh at a time: a lock directory (`~/.local/state/qmd-refresh/lock`) makes a second run exit 75; a dead holder's lock is taken over.
-- TERM or Ctrl-C stops the job's whole process tree (heavy-gate runs its job in the foreground and would otherwise defer the
-  signal until a 45-minute embed ended) and frees the lock.
-- If the embedding model is not downloaded, only `update` runs and it says to run `qmd pull`. Keyword search still works.
+- One refresh at a time: an `flock(2)` on `~/.local/state/qmd-refresh/lock`, taken before heavy-gate starts and inherited by
+  every process of the job. A second run exits 75. The kernel drops the lock when the last process of the job exits, so there is
+  no pid file to go stale or be reused, and a wrapper killed with SIGKILL does not free the lock while its job still runs.
+- TERM, INT or HUP stop the job's whole process tree (TERM, then KILL after `QMD_REFRESH_GRACE` seconds, default 10) and wait for
+  it before exiting 143. The wrapper has to do this because heavy-gate runs its job in the foreground and would otherwise defer
+  the signal until a 45-minute embed ended. A SIGKILL of the wrapper itself is not handled; the job lives on and keeps the lock.
+- qmd has no offline switch and downloads a missing model by itself. So embed runs only if the file qmd will resolve
+  (`QMD_EMBED_MODEL`, else `models.embed` in `index.yml`, else the 2.8.3 default; cached as `hf_<org>_<file>` under
+  `~/.cache/qmd/models`) exists, checked after the gate wait, just before embedding. Otherwise only `update` runs and it says to
+  run `qmd pull`. A model URI it cannot map to a file also means update only. Keyword search still works.
 - `--wait` is how long heavy-gate may wait for a quiet Mac, not a run-time limit. Exit: 0 ok, 75 busy or gate gave up,
   127 qmd or heavy-gate missing, otherwise the job's status. The last success is stamped in `~/.local/state/qmd-refresh/last-success`.
 
