@@ -23,6 +23,10 @@ FAKE_QMD = r"""#!/bin/sh
 echo "qmd $* | par=${QMD_EMBED_PARALLELISM:-unset}" >> "$FAKE/calls"
 pwd -P > "$FAKE/cwd"
 cmd=$1
+if [ "$cmd" = embed ] && [ -e "${FAKE_DB:-/nonexistent}" ]; then   # what qmd does to the vectors: -f clears them first, then rows are added
+  case " $* " in *" -f "*) [ -n "${FAKE_NOCLEAR:-}" ] || sqlite3 "$FAKE_DB" "delete from content_vectors";; esac
+  [ -n "${FAKE_NOWRITE:-}" ] || sqlite3 "$FAKE_DB" "insert or replace into content_vectors values ('new$', 0, strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+fi
 echo "$cmd ctx=${QMD_EMBED_CONTEXT_SIZE:-unset}" >> "$FAKE/ctx"
 if [ "${FAKE_QMD_SLEEP:-}" = "$cmd" ]; then
   [ -z "${FAKE_QMD_DEAF:-}" ] || trap '' TERM
@@ -84,7 +88,7 @@ class Env:
         if model:
             self.model.parent.mkdir(parents=True)
             self.model.write_text("x")
-        self.env = dict(os.environ, HOME=str(self.home), FAKE=str(self.fake), XDG_CACHE_HOME=str(self.cache),
+        self.env = dict(os.environ, HOME=str(self.home), FAKE=str(self.fake), FAKE_DB=str(self.cache / "qmd" / "index.sqlite"), XDG_CACHE_HOME=str(self.cache),
                         XDG_STATE_HOME=str(self.state), XDG_CONFIG_HOME=str(self.root / "config"),
                         PATH="%s:/usr/bin:/bin:/usr/sbin:/sbin" % self.bin, QMD_REFRESH_GRACE="1")
         for k in ("QMD_BIN", "QMD_EMBED_PARALLELISM", "QMD_EMBED_MODEL", "QMD_CONFIG_DIR"):
@@ -136,8 +140,8 @@ class Env:
         """A qmd index file as far as qmd-refresh looks at it: a content_vectors table with that many rows."""
         self.index.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(str(self.index))
-        db.execute("create table content_vectors (hash text, seq integer)")
-        db.executemany("insert into content_vectors values (?, 0)", [("h%d" % i,) for i in range(vectors)])
+        db.execute("create table content_vectors (hash text, seq integer, embedded_at text)")
+        db.executemany("insert into content_vectors values (?, 0, '2020-01-01T00:00:00.000Z')", [("h%d" % i,) for i in range(vectors)])
         db.commit()
         db.close()
 
@@ -309,16 +313,25 @@ class EmbedContextTest(Base):
         self.assertEqual(self.e.run("--reembed"), 0, self.e.err)
         self.assertEqual(self.e.qmd_calls, ["qmd update | par=unset", self.FORCE])
         self.assertEqual(self.e.ctx_calls[-1], "embed ctx=506")
+        self.assertEqual(self.rows("embedded_at < '2021'"), 0, "the old vectors are gone")
         self.assertEqual(self.e.ectx.read_text().strip(), "506")
         self.assertNotIn("NOTE", self.e.err)
         self.assertEqual(self.e.run(), 0)
         self.assertEqual(self.e.qmd_calls[-1], self.PLAIN, "the next run is a plain one")
         self.assertNotIn("NOTE", self.e.err)
 
-    def test_an_interrupted_reembed_is_finished_by_a_plain_run_without_clearing_again(self):
+    def rows(self, where="1"):
+        db = sqlite3.connect(str(self.e.index))
+        try:
+            return db.execute("select count(*) from content_vectors where " + where).fetchone()[0]
+        finally:
+            db.close()
+
+    def test_an_interrupted_reembed_after_the_clear_is_finished_by_a_plain_run_without_clearing_again(self):
         self.e.make_index(3)
-        self.assertEqual(self.e.run_with("embed", 9) if False else self.e.run("--reembed", FAKE_QMD_FAIL="embed", FAKE_QMD_CODE="9"), 9)
-        self.assertEqual(self.e.ectx.read_text().strip(), "reembed")
+        self.assertEqual(self.e.run("--reembed", FAKE_QMD_FAIL="embed", FAKE_QMD_CODE="9"), 9)
+        self.assertRegex(self.e.ectx.read_text().strip(), r"^reembed \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$")
+        self.assertEqual(self.rows("embedded_at < '2021'"), 0, "the fake cleared the old rows before failing")
         self.assertFalse(self.e.stamp.exists())
         self.e.run("status")
         self.assertIn("full re-embed was started", self.e.out)
@@ -327,6 +340,27 @@ class EmbedContextTest(Base):
         self.assertEqual(self.e.qmd_calls, ["qmd update | par=unset", self.PLAIN])
         self.assertEqual(self.e.ectx.read_text().strip(), "506")
         self.assertNotIn("NOTE", self.e.err)
+
+    def test_a_forced_run_that_failed_before_clearing_is_not_certified_by_the_next_plain_run(self):
+        self.e.make_index(3)
+        self.assertEqual(self.e.run("--reembed", FAKE_QMD_FAIL="embed", FAKE_QMD_CODE="9", FAKE_NOCLEAR="1"), 9)
+        self.assertEqual(self.rows("embedded_at < '2021'"), 3, "nothing was cleared")
+        self.assertEqual(self.e.run(), 0)
+        self.assertIn("NOTE", self.e.err)
+        self.assertTrue(self.e.ectx.read_text().startswith("reembed "), "still not confirmed")
+        self.e.run("status")
+        self.assertIn("not confirmed", self.e.out)
+        self.assertEqual(self.e.run("--reembed"), 0)
+        self.assertEqual(self.e.ectx.read_text().strip(), "506", "a real re-embed does confirm it")
+        self.assertEqual(self.rows("embedded_at < '2021'"), 0)
+
+    def test_a_forced_run_that_exits_zero_without_clearing_is_not_certified(self):
+        """qmd returns 0 without embedding when another embed holds its own lock (cli/qmd.js, before the clear)."""
+        self.e.make_index(3)
+        self.assertEqual(self.e.run("--reembed", FAKE_NOCLEAR="1", FAKE_NOWRITE="1"), 0)
+        self.assertIn("NOTE", self.e.err)
+        self.assertTrue(self.e.ectx.read_text().startswith("reembed "))
+        self.assertEqual(self.rows("embedded_at < '2021'"), 3)
 
     def test_reembed_without_the_model_clears_nothing(self):
         e = self.make(model=False)
