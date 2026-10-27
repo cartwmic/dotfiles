@@ -162,13 +162,13 @@ QMD_REFRESH_RUN=$rundir nice -n 10 perl -e "$locker" "$lockfile" "$gate" --wait 
 child=$!
 # Poll instead of a blocking wait: a signal may arrive at any moment, and a wait it has interrupted (or that it arrived
 # just before) must never leave us blocked on a job that ignores TERM.
-while [ "$stop" = 0 ] && running "$child"; do sleep 0.2; done
+while [ "$stop" = 0 ] && running "$child"; do sleep 0.2 || :; done
 if [ "$stop" = 1 ]; then
     tree=$(tree_of "$child")
     killtree "$child" TERM
     n=0
     while anyrunning && [ "$n" -lt $((grace * 5)) ]; do
-        sleep 0.2; n=$((n + 1))
+        sleep 0.2 || :; n=$((n + 1))
         tree="$tree $(tree_of "$child")"          # a TERM handler may have started something new
     done
     n=0
@@ -176,7 +176,7 @@ if [ "$stop" = 1 ]; then
         [ "$n" -ne 0 ] || log "job still running ${grace}s after TERM: sending KILL"
         tree="$tree $(tree_of "$child")"
         for p in $tree; do kill -KILL "$p" 2>/dev/null || true; done
-        sleep 0.2; n=$((n + 1))
+        sleep 0.2 || :; n=$((n + 1))
     done
     wait "$child" 2>/dev/null || true
     if anyrunning; then log "stopped by a signal, but some process of the job is still alive and keeps the lock"

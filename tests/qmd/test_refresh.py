@@ -82,9 +82,9 @@ class Env:
             self.env.pop(k, None)
         self.procs = []
 
-    def popen(self, *args, **env):
+    def popen(self, *args, new_session=False, **env):
         p = subprocess.Popen(["/bin/sh", str(SCRIPT), *args], env=dict(self.env, **env), text=True,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=new_session)
         self.procs.append(p)
         return p
 
@@ -378,6 +378,29 @@ class SignalTest(Base):
         self.assertEqual(p.returncode, 143)
         self.assertTrue(until(lambda: not alive(qpid), 5), "TERM-resistant job survived")
         self.assertIn("sending KILL", err)
+
+    def test_ctrl_c_reaches_the_whole_foreground_process_group(self):
+        """A terminal sends SIGINT to every process of the foreground group, including the wrapper's own sleep."""
+        for where, env in (("in the job", dict(FAKE_QMD_SLEEP="embed")), ("in the gate", dict(FAKE_GATE_SLEEP="60"))):
+            with self.subTest(where=where):
+                (self.e.fake / "qmd.pid").unlink(missing_ok=True)
+                p = self.e.popen(new_session=True, **env)
+                if where == "in the job":
+                    qpid = self.e.qmd_pid()
+                    self.assertTrue(self.e.assert_started)
+                else:
+                    self.assertTrue(until((self.e.fake / "gate.pid").exists))
+                    qpid = int((self.e.fake / "gate.pid").read_text())
+                time.sleep(0.5)
+                os.killpg(p.pid, signal.SIGINT)
+                p.communicate(timeout=30)
+                self.assertEqual(p.returncode, 143)
+                self.assertTrue(until(lambda: not alive(qpid), 5), "job survived Ctrl-C")
+                self.assertEqual([x.name for x in (self.e.state / "qmd-refresh").glob("run.*")], [], "run dir left behind")
+                self.assertEqual(self.e.run(), 0, "the lock is free again")
+                for n in ("calls", "qmd.pid", "gate.pid"):
+                    (self.e.fake / n).unlink(missing_ok=True)
+                self.e.stamp.unlink(missing_ok=True)
 
     def test_a_signal_at_any_moment_of_startup_leaves_nothing_running(self):
         for delay in (0, 0.02, 0.05, 0.1, 0.2, 0.4):
