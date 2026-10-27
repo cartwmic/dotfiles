@@ -1,17 +1,26 @@
 global_context: "Michael's agent work: design notes, repo docs, Pi session recaps and Pi sessions"
 collections:
+{{- /* Work: ~/tmp/<project>/ notes only where that folder exists, and the checkouts are the ones under ~/git (as the work instances use). */}}
+{{- if or (eq .profile "personal") (stat (printf "%s/tmp" .chezmoi.homeDir)) }}
   notes:
     path: {{ .chezmoi.homeDir }}/tmp
     pattern: "*/*.md"
     context:
       /: Design notes, plans, findings and reviews that agents wrote in ~/tmp/<project>/
+{{- end }}
   repo-dotfiles:
     path: {{ .chezmoi.homeDir }}/.local/share/chezmoi
     pattern: "**/README.md,**/AGENTS.md,docs/**/*.md"
     context:
       /: Dotfiles source (chezmoi) for the machine setup, agent harness and Pi extensions
-{{- range $name := list "coordinator" "retro" "loop-engine" "cartwmic-homelab-v2" "budget-steward" }}
-{{- $dir := printf "/Volumes/Workshop/macbook/git/%s" $name }}
+{{- $root := "/Volumes/Workshop/macbook/git" }}
+{{- $repos := list "coordinator" "retro" "loop-engine" "cartwmic-homelab-v2" "budget-steward" }}
+{{- if eq .profile "axon-work-computer" }}
+{{- $root = printf "%s/git" .chezmoi.homeDir }}
+{{- $repos = list "coordinator" "retro" }}
+{{- end }}
+{{- range $name := $repos }}
+{{- $dir := printf "%s/%s" $root $name }}
 {{- if stat $dir }}
   repo-{{ $name }}:
     path: {{ $dir }}
