@@ -96,10 +96,14 @@ input to its first ~500 tokens, which fit one batch.
   - an index that already has vectors and no record: they may be wrong. `qmd-refresh` still does the normal refresh, then prints
     a `NOTE` (every run) and `qmd-refresh status` says "may predate". It never clears vectors by itself.
   - `qmd-refresh --reembed` runs `qmd embed -f`: clears every vector, then embeds everything (about 80 minutes for the session
-    corpus, estimated from 13.8 chunks/s). It records `reembed` first; if it is interrupted, the next plain `qmd-refresh` embeds
-    what is missing (without clearing again) and records `506`. It only runs when the pinned model file exists, so a missing model
-    never leaves an empty index. `--reembed` with `--no-embed` is a usage error; with another embed model it is ignored.
-- **Vector count** is read with `sqlite3` (ships with macOS); if it cannot be read, the index is treated as having old vectors.
+    corpus, estimated from 13.8 chunks/s). It only runs when the pinned model file exists, so a missing model never leaves an empty
+    index. It records `reembed <UTC start time>` first. **`506` is recorded only when it is shown**: after the embed, no vector row
+    (`content_vectors.embedded_at`) may be older than that start. An exit status is not proof (qmd exits 0 without doing anything
+    when another embed holds its lock, and it clears the vectors only later, after taking it). If the clear never happened, the
+    marker stays, the NOTE keeps appearing and `status` says "not confirmed"; run `--reembed` again. If it was interrupted after the
+    clear, the next plain `qmd-refresh` embeds what is missing (no second clear) and then confirms it the same way.
+    `--reembed` with `--no-embed` is a usage error; with another embed model it is ignored.
+- **Vector rows** are read with `sqlite3` (ships with macOS); if they cannot be read, the index is treated as having old vectors.
 - **When to remove this:** once the pinned QMD contains the #897 fix, drop the variable and the bookkeeping, bump the pin, and do one
   `--reembed` (vectors made from clipped input differ from whole-chunk ones).
 

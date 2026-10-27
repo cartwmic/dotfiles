@@ -87,7 +87,7 @@ state=${XDG_STATE_HOME:-$HOME/.local/state}/qmd-refresh
 stamp=$state/last-success
 lockfile=$state/lock
 embed_ctx=506                       # QMD_EMBED_CONTEXT_SIZE for the embed step; see the header
-ectx=$state/embed-context           # "506" = every vector was made with it · "reembed" = a full re-embed was started
+ectx=$state/embed-context           # "506" = every vector was made with it · "reembed <UTC start>" = a full re-embed was started
 index=${INDEX_PATH:-${XDG_CACHE_HOME:-$HOME/.cache}/qmd/index.sqlite}
 
 # flock from perl (macOS and Linux both ship it; heavy-gate needs it too). Held by someone else: write $QMD_REFRESH_RUN/busy.
@@ -104,7 +104,7 @@ if [ "$mode" = status ]; then
     ec=$(cat "$ectx" 2>/dev/null || true)
     case $ec in
         "$embed_ctx") echo "vectors: made with QMD_EMBED_CONTEXT_SIZE=$embed_ctx (first ~500 tokens of each chunk)" ;;
-        reembed) echo "vectors: a full re-embed was started and not confirmed; run qmd-refresh to finish it" ;;
+        reembed\ *) echo "vectors: a full re-embed was started and is not confirmed; run qmd-refresh to finish it (qmd-refresh --reembed if the NOTE stays)" ;;
         *) nv=$(sqlite3 -readonly "$index" "select count(*) from content_vectors" 2>/dev/null || echo unknown)
            if [ "$nv" = 0 ] || [ ! -e "$index" ]; then echo "vectors: none yet"
            else echo "vectors: may predate QMD_EMBED_CONTEXT_SIZE=$embed_ctx (long chunks embedded wrongly, tobi/qmd#897); run qmd-refresh --reembed once"; fi ;;
@@ -166,13 +166,21 @@ fi
 had=$(cat "$7" 2>/dev/null || true)
 if [ -e "$9" ]; then nvec=$(sqlite3 -readonly "$9" "select count(*) from content_vectors" 2>/dev/null || echo unknown); else nvec=0; fi
 force=
-if [ "$8" = 1 ]; then force=-f; echo reembed > "$7"; fi   # qmd -f clears the vectors first; if interrupted, a plain run finishes the job
+if [ "$8" = 1 ]; then   # the marker carries the start time: qmd -f clears the vectors, so every vector row must be newer
+    force=-f; had="reembed $(date -u +%Y-%m-%dT%H:%M:%S.000Z)"; echo "$had" > "$7"
+fi
 QMD_EMBED_CONTEXT_SIZE=$6 QMD_EMBED_PARALLELISM=1 "$1" embed $force --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8
-if [ "$8" = 1 ] || [ "$had" = "$6" ] || [ "$had" = reembed ] || { [ -z "$had" ] && [ "$nvec" = 0 ]; }; then
-    echo "$6" > "$7"
-else
-    : > "$4/legacy"
-fi'
+# Record "made with the setting" only when that is shown: nothing was there before, it was recorded before, or a re-embed was
+# started and no vector row older than its start is left. An exit status is not proof: qmd exits 0 when another embed holds its
+# own lock, before it clears anything.
+ok=0
+q=$(printf "\047")
+case $had in
+    "$6") ok=1 ;;
+    "") [ "$nvec" = 0 ] && ok=1 || : ;;
+    reembed\ *) [ "$(sqlite3 -readonly "$9" "select count(*) from content_vectors where embedded_at < ${q}${had#reembed }${q}" 2>/dev/null || echo unknown)" = 0 ] && ok=1 || : ;;
+esac
+if [ "$ok" = 1 ]; then echo "$6" > "$7"; else : > "$4/legacy"; fi'
 which=noembed; [ "$embed" = 1 ] && which=embed
 force=0; [ "$reembed" = 0 ] || force=1
 
