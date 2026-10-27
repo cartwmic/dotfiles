@@ -24,11 +24,12 @@ FAKES = {
     "sysctl": '''case "$2" in
   vm.loadavg) cat "$FAKE/loadavg" ;;
   vm.swapusage) cat "$FAKE/swapusage" ;;
-  kern.memorystatus_vm_pressure_level) v=$(cat "$FAKE/pressure"); echo "$v"; echo read >> "$FAKE/pressure_reads" ;;
+  kern.memorystatus_vm_pressure_level) v=$(cat "$FAKE/pressure"); echo "$v"; echo read >> "$FAKE/pressure_reads"
+    if [ -f "$FAKE/on_pressure" ]; then sh "$FAKE/on_pressure"; fi ;;
 esac''',
-    "memory_pressure": 'cat "$FAKE/memory_pressure"',
-    "vm_stat": '''[ -f "$FAKE/on_vm_stat" ] && sh "$FAKE/on_vm_stat"
-n=$(cat "$FAKE/swapouts")
+    "memory_pressure": 'cat "$FAKE/memory_pressure"\nif [ -f "$FAKE/on_memory_pressure" ]; then sh "$FAKE/on_memory_pressure"; fi',
+    # the gate no longer reads vm_stat; the frozen v69 gate in OLD_SCRIPT does
+    "vm_stat": '''n=$(cat "$FAKE/swapouts")
 [ -f "$FAKE/swapouts_step" ] && echo $((n + $(cat "$FAKE/swapouts_step"))) > "$FAKE/swapouts"
 echo "Swapouts:      $n."''',
 }
@@ -60,7 +61,7 @@ class HeavyGate(unittest.TestCase):
         # nothing from the real shell leaks in: not the gate's settings, not this pane's id or the real rank file
         env = {k: v for k, v in os.environ.items() if not k.startswith("HEAVY_GATE_") and k not in ("HERDR_PANE_ID", "WORKSTREAM_RANK_FILE")}
         self.env = {**env, "PATH": ":".join([str(bin_dir), *host_path]), "FAKE": str(self.fake), "HEAVY_GATE_LOCK": str(root / "heavy-gate.lock"),
-                    "HEAVY_GATE_SWAP_WINDOW": "1", "HEAVY_GATE_POLL": "1", "HEAVY_GATE_PRIORITIES": str(root / "priorities"),
+                    "HEAVY_GATE_CHECK_WINDOW": "1", "HEAVY_GATE_SWAP_WINDOW": "1", "HEAVY_GATE_POLL": "1", "HEAVY_GATE_PRIORITIES": str(root / "priorities"),
                     "HEAVY_GATE_SLOTS_FILE": str(root / "slots"),
                     "WORKSTREAM_RANK_FILE": str(root / "rank")}
         self.bin = bin_dir
@@ -120,17 +121,15 @@ class HeavyGate(unittest.TestCase):
 
     def test_each_rule_refuses_on_its_own(self):
         cases = [
-            ({"loadavg": "{ 12.40 9.00 5.00 }"}, "load1 12.40 (needs < 8)"),
-            ({"loadavg": "{ 8.00 1.00 1.00 }"}, "load1 8.00 (needs < 8)"),
-            ({"swapusage": "total = 8192.00M  used = 7693.00M  free = 499.00M  (encrypted)"}, "swap free 499 MB (needs >= 500)"),
             ({"pressure": "2"}, "memory pressure level 2"),
-            ({"memory_pressure": "System-wide memory free percentage: 20%"}, "memory free 20%"),
-            ({"loadavg": ""}, "load1 unreadable"),
+            ({"pressure": "4"}, "memory pressure level 4"),
+            ({"pressure": "0"}, "memory pressure level 0"),
+            ({"pressure": ""}, "memory pressure level unreadable"),
+            ({"pressure": "1x"}, "memory pressure level 1x"),
+            ({"memory_pressure": "System-wide memory free percentage: 20%"}, "memory free 20% (needs >= 30%)"),
+            ({"memory_pressure": "System-wide memory free percentage: 29%"}, "memory free 29% (needs >= 30%)"),
             ({"memory_pressure": ""}, "memory free unreadable"),
-            ({"loadavg": "{ nonsense 1 1 }"}, "load1 nonsense"),
             ({"memory_pressure": "System-wide memory free percentage: lots%"}, "memory free lots%"),
-            ({"swapusage": "total = 1M  used = 1M  free = lots  (encrypted)"}, "swap free"),
-            ({"swapusage": "total = 9000M  used = 1M  free = 2000oops  (encrypted)"}, "swap free unreadable"),
         ]
         for figures, expected in cases:
             with self.subTest(expected):
@@ -140,97 +139,138 @@ class HeavyGate(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn(f"refused: {expected}", result.stderr)
 
-    def test_swap_is_a_safety_floor_not_a_start_rule(self):
-        # 600-999 MB free used to refuse (the old start rule was 1000 MB); now only the 500 MB floor refuses
-        for free in ("999.00M", "600.00M", "500.00M"):
+    def test_the_edges_of_the_two_memory_rules_are_allowed(self):
+        # level 1 and exactly 30% free are fine; so is 100% free
+        for free in ("30", "31", "100"):
             with self.subTest(free):
-                self.set(swapusage=f"total = 8192.00M  used = 7000.00M  free = {free}  (encrypted)")
+                self.set(memory_pressure=f"System-wide memory free percentage: {free}%")
                 result = self.gate()
                 self.assertEqual(result.returncode, 0, result.stderr)
-        for free, shown in (("499.00M", "499"), ("100.00M", "100"), ("0.00M", "0")):
-            with self.subTest(free):
-                self.set(swapusage=f"total = 8192.00M  used = 7000.00M  free = {free}  (encrypted)")
+
+    # Figures that used to refuse a start and no longer do (owner decision 2026-10-26: only memory pressure gates). Each one is bad
+    # enough to have refused before; memory pressure stays quiet in all of them.
+    RELAXED = [
+        ("load1 12.40", {"loadavg": "{ 12.40 9.00 5.00 }"}),
+        ("load1 8.00", {"loadavg": "{ 8.00 1.00 1.00 }"}),
+        ("load1 40", {"loadavg": "{ 40.00 20.00 10.00 }"}),
+        ("load1 unreadable", {"loadavg": ""}),
+        ("load1 not a number", {"loadavg": "{ nonsense 1 1 }"}),
+        ("swap free 330 MB (the owner's machine on 2026-10-26)", {"swapusage": "total = 4096.00M  used = 3765.62M  free = 330.38M  (encrypted)"}),
+        ("swap free 499 MB", {"swapusage": "total = 8192.00M  used = 7693.00M  free = 499.00M  (encrypted)"}),
+        ("swap free 0 MB", {"swapusage": "total = 8192.00M  used = 8192.00M  free = 0.00M  (encrypted)"}),
+        ("swap free 0.25G", {"swapusage": "total = 8.00G  used = 7.75G  free = 0.25G  (encrypted)"}),
+        ("swap free not a number", {"swapusage": "total = 1M  used = 1M  free = lots  (encrypted)"}),
+        ("swap free with a bad unit", {"swapusage": "total = 9000M  used = 1M  free = 2000oops  (encrypted)"}),
+        ("swap figure missing", {"swapusage": ""}),
+        ("Swapouts rising", {"swapouts_step": "40"}),
+        ("Swapouts unreadable", {"swapouts": ""}),
+        ("Swapouts malformed", {"swapouts": "many"}),
+    ]
+
+    def set_relaxed(self, figures):
+        self.set(**QUIET)
+        (self.fake / "swapouts_step").unlink(missing_ok=True)
+        self.set(**figures)
+
+    def test_the_removed_checks_no_longer_refuse_a_check(self):
+        for name, figures in self.RELAXED:
+            with self.subTest(name):
+                self.set_relaxed(figures)
                 result = self.gate()
-                self.assertEqual(result.returncode, 1, result.stderr)
-                self.assertIn(f"refused: swap free {shown} MB (needs >= 500)", result.stderr)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("INFO: allowed", result.stderr)
+                for word in ("load1", "swap free", "Swapouts"):
+                    self.assertNotIn(f"refused: {word}", result.stderr)
 
-    def test_the_swap_floor_holds_if_swap_drops_during_the_watch(self):
-        (self.fake / "on_vm_stat").write_text('echo "total = 8192.00M  used = 7900.00M  free = 292.00M  (encrypted)" > "$FAKE/swapusage"\n')
-        result = self.gate()
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn("swap free 292 MB", result.stderr)
+    def test_the_removed_checks_no_longer_stop_a_command(self):
+        for name, figures in self.RELAXED:
+            with self.subTest(name):
+                self.set_relaxed(figures)
+                marker = Path(self.tmp.name) / "ran"
+                marker.unlink(missing_ok=True)
+                result = self.gate("--wait", "0", "--", "touch", str(marker))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(marker.exists(), "the job ran")
 
-    def test_a_command_runs_with_swap_between_the_floor_and_the_old_start_rule(self):
-        self.set(swapusage="total = 6144.00M  used = 5268.00M  free = 876.00M  (encrypted)")
+    def test_all_the_removed_checks_at_their_worst_at_once_still_admit_and_run(self):
+        self.set(loadavg="{ 90.00 80.00 70.00 }", swapusage="total = 4096.00M  used = 4096.00M  free = 0.00M  (encrypted)")
+        (self.fake / "swapouts_step").write_text("500\n")
         marker = Path(self.tmp.name) / "ran"
         result = self.gate("--", "touch", str(marker))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(marker.exists())
 
-    def test_swapouts_rising_refuses_and_flat_allows(self):
-        self.set(swapouts="5000")
-        (self.fake / "swapouts_step").write_text("40\n")
-        result = self.gate()
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn("Swapouts rose", result.stderr)
-        (self.fake / "swapouts_step").unlink()
-        self.assertEqual(self.gate().returncode, 0)
+    def test_the_removed_checks_going_bad_during_the_check_window_do_not_refuse(self):
+        # the second reading is memory pressure only: load and swap turning bad between the readings changes nothing
+        (self.fake / "on_pressure").write_text('rm -f "$FAKE/on_pressure"\n'
+                                               'echo "{ 30.00 20.00 10.00 }" > "$FAKE/loadavg"\n'
+                                               'echo "total = 8192.00M  used = 8192.00M  free = 0.00M  (encrypted)" > "$FAKE/swapusage"\n'
+                                               'echo 100 > "$FAKE/swapouts_step"\n')
+        marker = Path(self.tmp.name) / "ran"
+        result = self.gate("--", "touch", str(marker))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(marker.exists())
+        self.assertEqual((self.fake / "loadavg").read_text().split()[1], "30.00", "the hook ran, between the two readings")
 
-    def test_malformed_swapouts_refuse(self):
-        for value in ("", "many", "5x", "5.0"):
-            with self.subTest(value):
-                self.set(swapouts=value)
-                result = self.gate()
-                self.assertEqual(result.returncode, 1, result.stderr)
-                self.assertIn("Swapouts unreadable", result.stderr)
-
-    def test_a_host_that_gets_busy_during_the_watch_is_refused(self):
-        # the cheap rules are read again after the Swapouts window: a host that was quiet a minute ago is not enough
-        (self.fake / "on_vm_stat").write_text('echo "{ 30.00 20.00 10.00 }" > "$FAKE/loadavg"\n')
-        result = self.gate()
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn("load1 30.00", result.stderr)
-
-    def test_a_host_that_turns_bad_during_the_watch_is_refused_on_each_rule(self):
-        # each cheap rule is read again after the window; a first reading that was fine is not enough
+    def test_a_host_that_turns_bad_during_the_check_window_is_refused_on_each_rule(self):
+        # both memory rules are read again after the window; a first reading that was fine is not enough
         cases = [
-            ('echo 2 > "$FAKE/pressure"', "memory pressure level 2"),
-            ('echo "System-wide memory free percentage: 12%" > "$FAKE/memory_pressure"', "memory free 12%"),
+            ("on_pressure", 'echo 2 > "$FAKE/pressure"', "memory pressure level 2"),
+            ("on_memory_pressure", 'echo "System-wide memory free percentage: 12%" > "$FAKE/memory_pressure"', "memory free 12%"),
         ]
-        for hook, expected in cases:
+        for name, hook, expected in cases:
             with self.subTest(expected):
                 self.set(**QUIET)
-                (self.fake / "on_vm_stat").write_text(hook + "\n")
+                (self.fake / name).write_text(f'rm -f "$FAKE/{name}"\n{hook}\n')
                 marker = Path(self.tmp.name) / "ran"
                 result = self.gate("--", "touch", str(marker))
                 self.assertEqual(result.returncode, 75, result.stderr)
                 self.assertIn(expected, result.stderr)
                 self.assertFalse(marker.exists())
                 self.assertFalse(self.lock.is_symlink(), "a refused start gives its slot back")
-        (self.fake / "on_vm_stat").unlink()
+
+    def test_the_two_readings_are_20_seconds_apart(self):
+        # the real window, not the tests' 1 second: the pressure level is read at the start and the end of the check
+        del self.env["HEAVY_GATE_CHECK_WINDOW"]
+        (self.fake / "on_pressure").write_text('date +%s >> "$FAKE/pressure_times"\n')
+        started = time.monotonic()
+        result = self.gate(timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        first, second = (int(t) for t in (self.fake / "pressure_times").read_text().split())
+        self.assertIn(second - first, (19, 20, 21), "whole-second clock, so one second either way")
+        self.assertGreaterEqual(time.monotonic() - started, 19.5)
+        self.assertLess(time.monotonic() - started, 30)
 
     def test_a_bad_window_or_poll_is_a_usage_error(self):
-        for name in ("HEAVY_GATE_SWAP_WINDOW", "HEAVY_GATE_POLL"):
+        for name in ("HEAVY_GATE_CHECK_WINDOW", "HEAVY_GATE_POLL"):
             with self.subTest(name):
                 self.env[name] = "soon"
                 result = self.gate()
                 self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(name, result.stderr)
                 self.env[name] = "1"
 
     def test_every_broken_rule_is_reported(self):
-        self.set(loadavg="{ 40.00 20.00 10.00 }", pressure="4", memory_pressure="System-wide memory free percentage: 5%")
+        self.set(pressure="4", memory_pressure="System-wide memory free percentage: 5%")
         result = self.gate()
         self.assertEqual(result.returncode, 1)
-        for expected in ("load1 40.00", "memory pressure level 4", "memory free 5%"):
+        for expected in ("memory pressure level 4", "memory free 5%"):
             self.assertIn(expected, result.stderr)
 
-    def test_swap_free_is_read_in_gigabytes_too(self):
-        self.set(swapusage="total = 8.00G  used = 7.75G  free = 0.25G  (encrypted)")
-        self.assertIn("swap free 256 MB", self.gate().stderr)
-        self.set(swapusage="total = 8.00G  used = 7.50G  free = 0.50G  (encrypted)")
-        self.assertEqual(self.gate().returncode, 0)
-        self.set(swapusage="total = 8.00G  used = 6.00G  free = 2.00G  (encrypted)")
-        self.assertEqual(self.gate().returncode, 0)
+    def test_a_check_says_the_rule_and_what_it_no_longer_checks(self):
+        for figures in ({}, {"pressure": "4"}):
+            with self.subTest(figures):
+                self.set(**QUIET)
+                self.set(**figures)
+                result = self.gate()
+                self.assertIn("a start is admitted on memory pressure only", result.stderr)
+                self.assertIn("level 1", result.stderr)
+                self.assertIn("memory free >= 30%", result.stderr)
+                self.assertIn("two readings 1s apart", result.stderr)
+                self.assertIn("Not checked: free swap, Swapouts, load average", result.stderr)
+        # a job that waits is not told the rule on every try
+        result = self.gate("--", "true")
+        self.assertNotIn("Not checked", result.stderr)
 
     # --- running a command ---
     def test_runs_the_command_on_a_quiet_host_and_passes_its_status_through(self):
@@ -241,22 +281,22 @@ class HeavyGate(unittest.TestCase):
         self.assertIn("out", result.stdout)
         self.assertFalse(self.lock.is_symlink(), "the gate is released when the command ends")
 
-    def test_does_not_run_the_command_on_a_busy_host(self):
-        self.set(loadavg="{ 30.00 20.00 10.00 }")
+    def test_does_not_run_the_command_when_memory_is_under_pressure(self):
+        self.set(pressure="2")
         marker = Path(self.tmp.name) / "ran"
         result = self.gate("--", "touch", str(marker))
         self.assertEqual(result.returncode, 75, result.stderr)
         self.assertFalse(marker.exists(), "a refused job must not start")
-        self.assertIn("load1 30.00", result.stderr)
+        self.assertIn("memory pressure level 2", result.stderr)
 
     def test_waits_for_the_host_to_quiet_down_then_runs(self):
-        self.set(loadavg="{ 30.00 20.00 10.00 }")
+        self.set(pressure="2")
         marker = Path(self.tmp.name) / "ran"
         job = self.start("--wait", "20", "--", "touch", str(marker))
         time.sleep(2.5)
         self.assertIsNone(job.poll(), "still waiting while the host is busy")
         self.assertFalse(marker.exists())
-        self.set(loadavg="{ 1.00 5.00 9.00 }")
+        self.set(pressure="1")
         job.communicate(timeout=20)
         self.assertEqual(job.returncode, 0)
         self.assertTrue(marker.exists())
@@ -296,7 +336,7 @@ class HeavyGate(unittest.TestCase):
     def test_two_jobs_racing_for_a_dead_holders_lock_never_overlap(self):
         # both read the same dead pid; only one may clear it and take the gate
         self.env["HEAVY_GATE_SLOTS"] = "1"
-        self.env["HEAVY_GATE_SWAP_WINDOW"] = "0"
+        self.env["HEAVY_GATE_CHECK_WINDOW"] = "0"
         self.env["HEAVY_GATE_POLL"] = "1"
         log = Path(self.tmp.name) / "log"
         job = f"echo start >> {log}; sleep 0.4; echo end >> {log}"
@@ -397,11 +437,8 @@ class HeavyGate(unittest.TestCase):
         self.assertEqual(self.gate().returncode, 2)
 
     RULE_CASES = [
-        ({"loadavg": "{ 12.40 9.00 5.00 }"}, "load1 12.40"),
-        ({"swapusage": "total = 8192.00M  used = 7893.00M  free = 299.00M  (encrypted)"}, "swap free 299 MB"),
         ({"pressure": "2"}, "memory pressure level 2"),
         ({"memory_pressure": "System-wide memory free percentage: 20%"}, "memory free 20%"),
-        ({"swapouts_step": "40"}, "Swapouts rose"),
     ]
 
     def assert_rules_refuse_a_start(self, slot):
@@ -421,26 +458,37 @@ class HeavyGate(unittest.TestCase):
         self.hold("a")
         self.assert_rules_refuse_a_start(self.lock2)
 
-    def test_a_third_start_is_refused_if_the_host_turns_bad_during_its_watch(self):
-        # the figures are read again after the Swapouts window for a start on slot 3 too
+    def test_the_removed_checks_do_not_refuse_a_second_or_third_start(self):
+        # the slot cap is the only limit left: with one and then two jobs running, a start on a loaded, swapping host is admitted
+        self.hold("a")
+        for slot in (self.lock2, self.lock3):
+            for name, figures in self.RELAXED:
+                with self.subTest(f"{slot.name}: {name}"):
+                    self.set_relaxed(figures)
+                    result = self.gate("--", "true")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+            self.set(**QUIET)
+            self.hold(f"b{slot.name}")
+        self.assertEqual(self.gate("--", "true").returncode, 75, "three hold the gate: the slot cap still refuses")
+
+    def test_a_third_start_is_refused_if_the_host_turns_bad_during_its_check(self):
+        # the figures are read again after the check window for a start on slot 3 too
         self.hold("a")
         self.hold("b")
         cases = [
-            ('echo 2 > "$FAKE/pressure"', "memory pressure level 2"),
-            ('echo "System-wide memory free percentage: 12%" > "$FAKE/memory_pressure"', "memory free 12%"),
-            ('echo "{ 30.00 20.00 10.00 }" > "$FAKE/loadavg"', "load1 30.00"),
+            ("on_pressure", 'echo 2 > "$FAKE/pressure"', "memory pressure level 2"),
+            ("on_memory_pressure", 'echo "System-wide memory free percentage: 12%" > "$FAKE/memory_pressure"', "memory free 12%"),
         ]
-        for hook, expected in cases:
+        for name, hook, expected in cases:
             with self.subTest(expected):
                 self.set(**QUIET)
-                (self.fake / "on_vm_stat").write_text(hook + "\n")
+                (self.fake / name).write_text(f'rm -f "$FAKE/{name}"\n{hook}\n')
                 marker = Path(self.tmp.name) / "ran"
                 result = self.gate("--", "touch", str(marker))
                 self.assertEqual(result.returncode, 75, result.stderr)
                 self.assertIn(expected, result.stderr)
                 self.assertFalse(marker.exists())
                 self.assertFalse(self.lock3.is_symlink(), "a refused start gives its slot back")
-        (self.fake / "on_vm_stat").unlink()
 
     # --- the slot limit, in a file ---
     def end(self, job, release):
@@ -691,14 +739,14 @@ exit $rc
         self.assertIn("slots: 3 (from the file", out)
 
     def test_starts_do_not_share_a_check_window(self):
-        # vm_stat is read at the start and the end of each job's Swapouts watch; the log says which job read it
-        self.env["HEAVY_GATE_SWAP_WINDOW"] = "2"
-        (self.fake / "on_vm_stat").write_text('echo "$TAG" >> "$FAKE/vm_log"\n')
+        # the pressure level is read at the start and the end of each job's check; the log says which job read it
+        self.env["HEAVY_GATE_CHECK_WINDOW"] = "2"
+        (self.fake / "on_pressure").write_text('echo "$TAG" >> "$FAKE/pressure_log"\n')
         jobs = [self.start("--wait", "90", "--", "sleep", "1", env={"TAG": tag}) for tag in "ABC"]
         for job in jobs:
             job.communicate(timeout=90)
             self.assertEqual(job.returncode, 0)
-        log = (self.fake / "vm_log").read_text().split()
+        log = (self.fake / "pressure_log").read_text().split()
         self.assertEqual(len(log), 6, log)
         for first, second in ((0, 1), (2, 3), (4, 5)):
             self.assertEqual(log[first], log[second], f"each start was alone in its window: {log}")
@@ -1050,8 +1098,11 @@ exit $rc
     def test_the_usage_text_covers_the_new_parts(self):
         result = self.gate("--help")
         self.assertEqual(result.returncode, 2)
-        for expected in ("HEAVY_GATE_SLOTS", "HEAVY_GATE_SLOTS_FILE", "heavy-gate slots", "heavy-gate slots N", "Slots:", "heavy-gate priorities", "heavy-gate priority PATTERN NUMBER", "HEAVY_GATE_PRIORITY", "slot 2"):
+        for expected in ("HEAVY_GATE_SLOTS", "HEAVY_GATE_SLOTS_FILE", "heavy-gate slots", "heavy-gate slots N", "Slots:", "heavy-gate priorities", "heavy-gate priority PATTERN NUMBER", "HEAVY_GATE_PRIORITY", "slot 2",
+                         "Only memory pressure gates a start", "Not checked, on purpose: free swap", "HEAVY_GATE_CHECK_WINDOW"):
             self.assertIn(expected, result.stderr)
+        for stale in ("load1 < 8", "Swapouts flat", "500 MB", "safety floor", "HEAVY_GATE_SWAP_WINDOW"):
+            self.assertNotIn(stale, result.stderr)
         self.assertNotIn("set -eu", result.stderr)
 
     # --- usage ---

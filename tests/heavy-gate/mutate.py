@@ -1,9 +1,13 @@
-"""Mutation check for the central-rank part of heavy-gate: break one rule at a time; the rank tests must fail each time.
+"""Mutation check for heavy-gate: break one rule at a time; the tests for that part must fail each time.
 
-    python3 tests/heavy-gate/mutate.py
+    python3 tests/heavy-gate/mutate.py [rank|gate]      (both by default; MUTATE_ONLY=text runs the mutations whose name has it)
 
-Not part of CI. It proves the tests pin every rule of resolve_priority and rank_on rather than just exercising them.
-Only the tests that name the rank run for each mutant (the whole suite takes minutes); the full suite runs unmutated in CI/by hand.
+Not part of CI. It proves the tests pin every rule rather than just exercising them:
+  rank  resolve_priority and rank_on (the central workstream rank);
+  gate  the admission rules: the two kept memory-pressure checks (each broken in turn), and the three removed checks
+        (load1, the swap floor, Swapouts), each put back, which the "no longer gates" tests must catch.
+Only the tests for that part run for each mutant, and the first failure stops the run (the whole suite takes minutes); the full
+suite runs unmutated in CI/by hand.
 """
 import os
 import subprocess
@@ -13,13 +17,18 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE.parents[1] / "dot_local/bin/executable_heavy-gate"
-SELECT = ["-k", "rank", "-k", "reader", "-k", "workstream"]
+SELECT = {
+    "rank": ["-k", "rank", "-k", "reader", "-k", "workstream"],
+    "gate": [arg for name in ("test_each_rule", "test_the_edges", "test_the_removed", "test_a_host_that", "test_a_check_says", "test_the_usage_text",
+                              "test_a_third_start", "test_every_rule_still", "test_every_broken_rule", "test_waits_for", "test_does_not_run",
+                              "test_the_two_readings", "test_starts_do_not_share", "test_a_bad_window") for arg in ("-k", name)],
+}
 
 ENV_LINE = 'if [ -n "${HEAVY_GATE_PRIORITY:-}" ]; then printf \'%s\' "$HEAVY_GATE_PRIORITY"; return 0; fi\n  base=0'
 SHOW = 'rank_on() { rk=$(rank_read show) && [ -n "$rk" ]; }'
 MAPPED = '    if [ -n "$r" ]; then r=$(cap "$r"); if [ "$r" -lt "$UNRANKED" ]; then printf \'%s\' "$r"; return 0; fi; fi'
 
-MUTATIONS = [
+RANK_MUTATIONS = [
     ("the rank is never used", '  if rank_on; then\n    r=$(rank_read of', '  if false; then\n    r=$(rank_read of'),
     ("the environment no longer beats the rank", ENV_LINE, 'base=0'),
     ("rank is on without a valid file", SHOW, 'rank_on() { true; }'),
@@ -48,24 +57,67 @@ MUTATIONS = [
     ("priorities always says off", "  if rank_on; then printf 'central rank: on", "  if false; then printf 'central rank: on"),
 ]
 
+PRESSURE = '  v=$(pressure_level); [ "$v" = 1 ]                       || {'
+MEMORY = '  v=$(mem_free_pct);   meets "$v" ge "$MEM_FREE_MIN_PCT"  || {'
+TRY = "  if memory_rules && wait_window && memory_rules && {"
+BROKEN0 = "  broken=0\n" + PRESSURE
+WAIT = '  sleep "$CHECK_WINDOW" || { refuse "could not wait out the ${CHECK_WINDOW}s check window"; return 1; }'
+# the three removed checks, as they were before this change
+LOAD_BACK = ('  broken=0\n  v=$(sysctl -n vm.loadavg 2>/dev/null | awk \'{print $2}\'); meets "$v" lt 8 || { refuse "load1 ${v:-unreadable} (needs < 8)"; broken=1; }\n'
+             + PRESSURE)
+SWAP_BACK = ('  broken=0\n  v=$(sysctl -n vm.swapusage 2>/dev/null | awk \'{for (i = 1; i <= NF; i++) if ($i == "free") { v = $(i + 2); if (v !~ /^[0-9]+(\\.[0-9]+)?[KMG]$/) next; '
+             'u = substr(v, length(v)); n = substr(v, 1, length(v) - 1) + 0; if (u == "G") n *= 1024; else if (u == "K") n /= 1024; printf "%d", n } }\'); '
+             'meets "$v" ge 500 || { refuse "swap free ${v:-unreadable} MB (needs >= 500)"; broken=1; }\n' + PRESSURE)
+SWAPOUTS_BACK = ('  a=$(vm_stat | awk \'/^Swapouts:/ {sub(/\\.$/, "", $2); print $2}\'); sleep "$CHECK_WINDOW"; b=$(vm_stat | awk \'/^Swapouts:/ {sub(/\\.$/, "", $2); print $2}\')\n'
+                 '  [ "$a" = "$b" ] || { refuse "Swapouts rose over ${CHECK_WINDOW}s (the machine is swapping)"; return 1; }')
+
+GATE_MUTATIONS = [
+    ("the pressure level is not checked", PRESSURE, '  v=$(pressure_level); true || {'),
+    ("pressure level 2 counts as normal", '[ "$v" = 1 ]', '[ "$v" -le 2 ] 2>/dev/null'),
+    ("an unreadable pressure level counts as normal", '[ "$v" = 1 ]', '[ "${v:-1}" = 1 ]'),
+    ("memory free is not checked", MEMORY, '  v=$(mem_free_pct);   true || {'),
+    ("memory free must be above 30%, not at it", ': v + 0 >= l + 0)', ': v + 0 > l + 0)'),
+    ("memory free needs only 20%", "MEM_FREE_MIN_PCT=30", "MEM_FREE_MIN_PCT=20"),
+    ("memory free needs 31%", "MEM_FREE_MIN_PCT=30", "MEM_FREE_MIN_PCT=31"),
+    ("an unreadable memory free counts as fine", MEMORY, '  v=$(mem_free_pct);   meets "${v:-100}" ge "$MEM_FREE_MIN_PCT"  || {'),
+    ("the first reading is skipped", TRY, "  if wait_window && memory_rules && {"),
+    ("the second reading is skipped", TRY, "  if memory_rules && wait_window && {"),
+    ("the readings are not apart", WAIT, '  sleep 0 || { refuse "x"; return 1; }'),
+    ("the readings are 60 seconds apart", "CHECK_WINDOW=${HEAVY_GATE_CHECK_WINDOW:-20}", "CHECK_WINDOW=${HEAVY_GATE_CHECK_WINDOW:-60}"),
+    ("the check mode does not say the rule", '  log INFO "check: a start is admitted on memory pressure only', '  : log INFO "check: a start is admitted on memory pressure only'),
+    ("the load1 check is back", BROKEN0, LOAD_BACK),
+    ("the swap floor is back", BROKEN0, SWAP_BACK),
+    ("the Swapouts check is back", WAIT, SWAPOUTS_BACK),
+]
+
 
 def main():
+    which = sys.argv[1:] or ["rank", "gate"]
+    mutations = {"rank": RANK_MUTATIONS, "gate": GATE_MUTATIONS}
+    if any(w not in mutations for w in which):
+        sys.exit("usage: mutate.py [rank|gate]")
     text = SCRIPT.read_text()
     survived = []
+    total = 0
     with tempfile.TemporaryDirectory() as tmp:
-        for name, old, new in MUTATIONS:
+        for part, name, old, new in [(w, *m) for w in which for m in mutations[w]]:
+            if os.environ.get("MUTATE_ONLY") and os.environ["MUTATE_ONLY"] not in name:
+                continue
+            total += 1
             if text.count(old) != 1:
                 sys.exit(f"mutation {name!r}: pattern found {text.count(old)} times, want 1")
             mutant = Path(tmp) / "mutant"
             mutant.write_text(text.replace(old, new))
+            if subprocess.run(["sh", "-n", str(mutant)], capture_output=True).returncode != 0:
+                sys.exit(f"mutation {name!r} is not valid shell, so a failure would prove nothing")
             env = {**os.environ, "HEAVY_GATE_SCRIPT": str(mutant), "PYTHONDONTWRITEBYTECODE": "1"}
-            r = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(HERE), "-p", "test_heavy_gate.py", *SELECT], env=env,
+            r = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(HERE), "-p", "test_heavy_gate.py", "-f", *SELECT[part]], env=env,
                                capture_output=True, text=True)
             killed = r.returncode != 0
             print(("killed  " if killed else "SURVIVED"), name, flush=True)
             if not killed:
                 survived.append(name)
-    print(f"{len(MUTATIONS) - len(survived)}/{len(MUTATIONS)} mutations killed")
+    print(f"{total - len(survived)}/{total} mutations killed")
     sys.exit(1 if survived else 0)
 
 
