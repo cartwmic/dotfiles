@@ -1,0 +1,5 @@
+# QMD (github.com/tobi/qmd, MIT): local markdown search engine. Personal profile only (see .chezmoiignore).
+# Pinned exactly. v2.8.3 is the latest release (2026-08-16); main has unreleased fixes. Revisit the pin before changing it.
+# The models (about 2.1 GB) are not fetched at install time: run `qmd pull` once by hand.
+[tools]
+"npm:@tobilu/qmd" = "2.8.3"

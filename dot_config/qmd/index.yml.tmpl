@@ -1,0 +1,36 @@
+global_context: "Michael's agent work: design notes, repo docs, Pi session recaps and Pi sessions"
+collections:
+  notes:
+    path: {{ .chezmoi.homeDir }}/tmp
+    pattern: "*/*.md"
+    context:
+      /: Design notes, plans, findings and reviews that agents wrote in ~/tmp/<project>/
+  repo-dotfiles:
+    path: {{ .chezmoi.homeDir }}/.local/share/chezmoi
+    pattern: "**/README.md,**/AGENTS.md,docs/**/*.md"
+    context:
+      /: Dotfiles source (chezmoi) for the machine setup, agent harness and Pi extensions
+{{- range $name := list "coordinator" "retro" "loop-engine" "cartwmic-homelab-v2" "budget-steward" }}
+{{- $dir := printf "/Volumes/Workshop/macbook/git/%s" $name }}
+{{- if stat $dir }}
+  repo-{{ $name }}:
+    path: {{ $dir }}
+    pattern: "**/README.md,**/AGENTS.md,docs/**/*.md"
+    context:
+      /: Docs of the {{ $name }} repository
+{{- end }}
+{{- end }}
+  sessions:
+    path: {{ .chezmoi.homeDir }}/.local/share/qmd-corpus/sessions
+    pattern: "**/*.md"
+    context:
+      /: Pi session transcripts (user and assistant text only, tool output omitted), frontmatter has the session id and cwd
+  recaps:
+    path: {{ .chezmoi.homeDir }}/.local/share/qmd-corpus/recaps
+    pattern: "**/*.md"
+    context:
+      /: Session-recap records (a short summary of each Pi session or group of sessions)
+models:
+  embed: hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf
+  generate: hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf
+  rerank: hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf

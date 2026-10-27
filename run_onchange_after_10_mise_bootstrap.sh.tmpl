@@ -4,6 +4,9 @@
 #
 # The hash comment below tells chezmoi to re-run this script when mise config changes
 # Hash: {{ include "dot_config/mise/config.toml" | sha256sum }}
+{{- if eq .profile "personal" }}
+# Hash (personal-only QMD pin): {{ include "dot_config/mise/conf.d/qmd.toml" | sha256sum }}
+{{- end }}
 
 set -eu
 
