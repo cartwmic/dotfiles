@@ -188,9 +188,9 @@ def export_kind(kind, root, suffix, out_dir, cutoff, state, dry, log):
             if kind == "sessions":
                 dest = os.path.join(out_dir, r[1], os.path.basename(dest))
             wanted.add(dest)
-            owners[dest] = src
             if not dry:
                 write_atomic(dest, body)
+            owners[dest] = src                    # only once the file is really there: a failed write keeps the old owner
             stats["written"] += 1
         except (OSError, ValueError) as e:
             stats["errors"] += 1
