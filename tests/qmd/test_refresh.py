@@ -20,6 +20,7 @@ MODEL = "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
 
 FAKE_QMD = r"""#!/bin/sh
 echo "qmd $* | par=${QMD_EMBED_PARALLELISM:-unset}" >> "$FAKE/calls"
+pwd -P > "$FAKE/cwd"
 cmd=$1
 if [ "${FAKE_QMD_SLEEP:-}" = "$cmd" ]; then
   [ -z "${FAKE_QMD_DEAF:-}" ] || trap '' TERM
@@ -233,15 +234,15 @@ class RefreshTest(Base):
 class ModelGuardTest(Base):
     """qmd downloads a missing model by itself and has no offline switch, so the wrapper must not let it try."""
 
-    def assert_update_only(self, e, rc):
+    def assert_update_only(self, e, rc, hint="qmd pull"):
         self.assertEqual(rc, 0, e.err)
         self.assertEqual(e.qmd_calls, ["qmd update | par=unset"])
-        self.assertIn("qmd pull", e.err)
-        self.assertIn("ok: update (embed skipped", e.stamp.read_text())
+        self.assertIn(hint, e.err)
 
     def test_no_model(self):
         e = self.make(model=False)
         self.assert_update_only(e, e.run())
+        self.assertIn("ok: update (embed skipped", e.stamp.read_text())
 
     def test_other_quantization_does_not_count(self):
         e = self.make(model=False)
@@ -252,30 +253,54 @@ class ModelGuardTest(Base):
         self.assert_update_only(e, e.run())
 
     def test_model_evicted_while_waiting_for_the_gate(self):
-        rc = self.e.run(FAKE_GATE_EVICT=str(self.e.model))
-        self.assert_update_only(self.e, rc)
+        self.assert_update_only(self.e, self.e.run(FAKE_GATE_EVICT=str(self.e.model)))
 
-    def test_configured_model_decides_which_file_is_needed(self):
+    def config(self, embed):
         cfg = self.e.root / "config" / "qmd"
-        cfg.mkdir(parents=True)
-        (cfg / "index.yml").write_text("collections: {}\nmodels:\n  embed: hf:acme/some-repo/other-Q4.gguf\n  rerank: x\n")
-        # the default model file exists but the configured one does not
-        self.assert_update_only(self.e, self.e.run())
-        (self.e.model.parent / "hf_acme_other-Q4.gguf").write_text("x")
-        (self.e.fake / "calls").unlink()
+        cfg.mkdir(parents=True, exist_ok=True)
+        (cfg / "index.yml").write_text("collections: {}\nmodels:\n  embed: %s\n  rerank: x\n" % embed)
+
+    def test_a_different_configured_model_means_update_only_even_if_a_file_like_it_exists(self):
+        self.config("hf:acme/some-repo/other-Q4.gguf")
+        # node-llama-cpp names this file hf_acme_some-repo_other-Q4.gguf; whatever it is called, we must not embed
+        for name in ("hf_acme_other-Q4.gguf", "hf_acme_some-repo_other-Q4.gguf"):
+            (self.e.model.parent / name).write_text("x")
+        self.assert_update_only(self.e, self.e.run(), "pinned")
+
+    def test_the_pinned_model_in_the_config_embeds(self):
+        self.config("hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf")
         self.assertEqual(self.e.run(), 0, self.e.err)
         self.assertEqual(len(self.e.qmd_calls), 2)
 
-    def test_env_model_overrides_the_config(self):
-        (self.e.model.parent / "hf_acme_env.gguf").write_text("x")
-        self.e.model.unlink()
-        self.assertEqual(self.e.run(QMD_EMBED_MODEL="hf:acme/repo/env.gguf"), 0, self.e.err)
-        self.assertEqual(len(self.e.qmd_calls), 2)
+    def test_quoted_value_and_other_indent_are_read(self):
+        cfg = self.e.root / "config" / "qmd"
+        cfg.mkdir(parents=True)
+        (cfg / "index.yml").write_text("models:\n    embed: 'hf:acme/x/y.gguf'\n")
+        self.assert_update_only(self.e, self.e.run(), "pinned")
 
-    def test_uncheckable_model_uri_runs_update_only(self):
-        self.assertEqual(self.e.run(QMD_EMBED_MODEL="/some/local/model.gguf"), 0)
-        self.assertEqual(self.e.qmd_calls, ["qmd update | par=unset"])
-        self.assertIn("cannot tell which file", self.e.err)
+    def test_env_model_means_update_only_whatever_the_config_says(self):
+        self.config("hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf")
+        self.assert_update_only(self.e, self.e.run(QMD_EMBED_MODEL="hf:acme/repo/env.gguf"), "pinned")
+
+    def test_the_job_runs_in_the_state_dir_so_a_project_local_qmd_config_is_not_picked_up(self):
+        work = self.e.root / "work"
+        (work / ".qmd").mkdir(parents=True)
+        p = subprocess.run(["/bin/sh", str(SCRIPT), "--no-embed"], env=self.e.env, cwd=work, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual((self.e.fake / "cwd").read_text().strip(), str((self.e.state / "qmd-refresh").resolve()))
+
+
+class StatusPassThroughTest(Base):
+    """Only wrapper-made outcomes are reported out of band; a real status is never reinterpreted."""
+
+    def test_real_statuses_survive_and_do_not_stamp(self):
+        for cmd in ("update", "embed"):
+            for code in (64, 73, 75):
+                with self.subTest(cmd=cmd, code=code):
+                    self.assertEqual(self.e.run_with(cmd, code), code, self.e.err)
+                    self.assertFalse(self.e.stamp.exists())
+                    self.assertNotIn("another refresh", self.e.err)
+                    self.assertNotIn("skipped", self.e.err)
 
 
 class LockTest(Base):
@@ -353,6 +378,21 @@ class SignalTest(Base):
         self.assertEqual(p.returncode, 143)
         self.assertTrue(until(lambda: not alive(qpid), 5), "TERM-resistant job survived")
         self.assertIn("sending KILL", err)
+
+    def test_a_signal_at_any_moment_of_startup_leaves_nothing_running(self):
+        for delay in (0, 0.02, 0.05, 0.1, 0.2, 0.4):
+            with self.subTest(delay=delay):
+                p = self.e.popen(FAKE_QMD_SLEEP="update", FAKE_QMD_DEAF="1", QMD_REFRESH_GRACE="1")
+                time.sleep(delay)
+                p.send_signal(signal.SIGTERM)
+                p.communicate(timeout=30)
+                self.assertIn(p.returncode, (143, -signal.SIGTERM))
+                self.assertTrue(until(lambda: subprocess.run(["pgrep", "-f", str(self.e.bin / "qmd")], capture_output=True).returncode != 0, 8),
+                                "a job process survived")
+                self.assertEqual(self.e.run(), 0, "the lock is free again")
+                for n in ("calls", "qmd.pid"):
+                    (self.e.fake / n).unlink(missing_ok=True)
+                self.e.stamp.unlink(missing_ok=True)
 
     def test_signal_while_still_waiting_for_the_gate(self):
         p = self.e.popen(FAKE_GATE_SLEEP="60")
