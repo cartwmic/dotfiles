@@ -57,15 +57,21 @@ waits for a quiet Mac). Nothing schedules it; the owner or an agent the owner as
 - One refresh at a time: an `flock(2)` on `~/.local/state/qmd-refresh/lock`, taken before heavy-gate starts and inherited by
   every process of the job. A second run exits 75. The kernel drops the lock when the last process of the job exits, so there is
   no pid file to go stale or be reused, and a wrapper killed with SIGKILL does not free the lock while its job still runs.
-- TERM, INT or HUP stop the job's whole process tree (TERM, then KILL after `QMD_REFRESH_GRACE` seconds, default 10) and wait for
-  it before exiting 143. The wrapper has to do this because heavy-gate runs its job in the foreground and would otherwise defer
-  the signal until a 45-minute embed ended. A SIGKILL of the wrapper itself is not handled; the job lives on and keeps the lock.
-- qmd has no offline switch and downloads a missing model by itself. So embed runs only if the file qmd will resolve
-  (`QMD_EMBED_MODEL`, else `models.embed` in `index.yml`, else the 2.8.3 default; cached as `hf_<org>_<file>` under
-  `~/.cache/qmd/models`) exists, checked after the gate wait, just before embedding. Otherwise only `update` runs and it says to
-  run `qmd pull`. A model URI it cannot map to a file also means update only. Keyword search still works.
-- `--wait` is how long heavy-gate may wait for a quiet Mac, not a run-time limit. Exit: 0 ok, 75 busy or gate gave up,
-  127 qmd or heavy-gate missing, otherwise the job's status. The last success is stamped in `~/.local/state/qmd-refresh/last-success`.
+- TERM, INT or HUP: the wrapper polls (no blocking wait, so a signal at any moment is handled), sends TERM leaves first, re-snapshots
+  the job's tree for up to `QMD_REFRESH_GRACE` seconds (default 10), then KILLs it, and exits 143. It has to do this because
+  heavy-gate runs its job in the foreground and would otherwise defer the signal until a 45-minute embed ended. Not handled: a
+  SIGKILL of the wrapper itself, or a process that escapes the tree; the job lives on and keeps the lock until it is gone
+  (the wrapper says so when it sees a survivor).
+- qmd has no offline switch and downloads a missing model by itself, and which model it picks depends on `QMD_EMBED_MODEL`,
+  `index.yml` and a project-local config. So embed runs only for the **pinned** model
+  (`embeddinggemma-300M-Q8_0`, as in `index.yml.tmpl`): if `QMD_EMBED_MODEL` is set or `index.yml` names another embed model,
+  only `update` runs. The pinned file (`hf_ggml-org_embeddinggemma-300M-Q8_0.gguf` under `~/.cache/qmd/models`) must also exist,
+  checked after the gate wait, just before embedding; otherwise only `update` runs and it says to run `qmd pull`. The job runs
+  in `~/.local/state/qmd-refresh` so a `.qmd/index.yaml` in the caller's directory is not picked up. To change the model, edit the
+  template and the wrapper together.
+- `--wait` is how long heavy-gate may wait for a quiet Mac, not a run-time limit. Exit: 0 ok, 75 another refresh is running
+  (reported out of band) , 127 qmd, heavy-gate or perl missing, 143 stopped by a signal, otherwise the job's or heavy-gate's own status
+  unchanged (heavy-gate's 75 means it gave up waiting). The last success is stamped in `~/.local/state/qmd-refresh/last-success`.
 
 Verified live (2026-10-27, personal Mac, after `qmd pull`): `qmd-refresh` updated 9 collections and embedded 2,085 chunks from 411
 documents in 2 min 31 s (3 min 8 s wall, 1.6 GB peak RSS), and `~/.config/qmd/index.yml` stayed identical to the chezmoi source
