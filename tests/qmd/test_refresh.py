@@ -291,11 +291,12 @@ class EmbedContextTest(Base):
         self.assertIn("made with QMD_EMBED_CONTEXT_SIZE=506", self.e.out)
 
     def test_the_test_index_is_a_wal_database_without_sidecar_files(self):
-        """The precondition that made `sqlite3 -readonly` fail on the real index (#85 left a re-embed unconfirmed)."""
+        """The precondition that made `sqlite3 -readonly` fail on the real index (#85 left a re-embed unconfirmed), and a guard against bringing it back."""
         self.e.make_index(3)
         self.assertFalse(Path(str(self.e.index) + "-wal").exists() or Path(str(self.e.index) + "-shm").exists())
-        out = subprocess.run(["sqlite3", "-readonly", str(self.e.index), "select 1"], capture_output=True, text=True)
-        self.assertNotEqual(out.returncode, 0, "a read-only open of this database fails: the script must not use it")
+        # macOS's sqlite3 cannot open such a database with -readonly (the bug); the Linux one in CI can, so the script is also
+        # checked statically: no read-only open anywhere.
+        self.assertNotIn("sqlite3 -readonly", SCRIPT.read_text())
         out = subprocess.run(["sqlite3", str(self.e.index), "pragma journal_mode"], capture_output=True, text=True)
         self.assertEqual(out.stdout.strip(), "wal")
 
