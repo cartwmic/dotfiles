@@ -132,6 +132,21 @@ class IndexTemplateTest(unittest.TestCase):
         self.assertIn("    path: %s/.local/share/qmd-corpus/sessions\n" % home, self.out)
         self.assertIn("    path: %s/.local/share/qmd-corpus/recaps\n" % home, self.out)
 
+    def test_masks_and_contexts(self):
+        # Parse each collection block; a wrong mask would silently index nothing (or everything).
+        blocks = re.findall(r"^  ([a-z0-9-]+):\n    path: (.*)\n    pattern: (.*)\n    context:\n      /: (.*)$",
+                            self.out.split("\nmodels:")[0], re.M)
+        by = {b[0]: b for b in blocks}
+        self.assertEqual(len(blocks), len(re.findall(r"^    path: ", self.out, re.M)), "every block parsed")
+        self.assertEqual(by["notes"][2], '"*/*.md"')
+        self.assertEqual(by["sessions"][2], '"**/*.md"')
+        self.assertEqual(by["recaps"][2], '"**/*.md"')
+        self.assertEqual(by["repo-dotfiles"][2], '"**/README.md,**/AGENTS.md,docs/**/*.md"')
+        for name, _path, pattern, ctx in blocks:
+            if name.startswith("repo-"):
+                self.assertEqual(pattern, '"**/README.md,**/AGENTS.md,docs/**/*.md"', name)
+            self.assertTrue(ctx.strip(), name)
+
     def test_repo_collections_exist_only_for_checkouts_present(self):
         for name in ("coordinator", "retro", "loop-engine", "cartwmic-homelab-v2", "budget-steward"):
             present = Path("/Volumes/Workshop/macbook/git", name).exists()

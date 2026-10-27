@@ -19,13 +19,17 @@ All of it is **personal profile only** (`.chezmoiignore`). The work and Termux p
 
 ## index.yml is written in qmd's own format
 
-qmd rewrites `index.yml` on every run: it drops comments and appends a `models:` block. A chezmoi-managed file that
-differed from that output would show as drifted after the first `qmd` call, and a non-TTY `chezmoi apply` stops on a
-destination that changed since chezmoi wrote it. So the template is already in qmd's format (no comments, plain
-scalars, explicit `models:` with the 2.8.3 defaults) and qmd leaves it byte-identical. Checked for `status`, `update`,
-`search`, `collection list`, `get` (tests/qmd/proof.sh). Because of this, **do not use `qmd collection add` or
-`qmd context add`**: edit the template. After bumping the pin, rerun the proof script; if qmd's format changed, re-render
-from its output.
+qmd rewrites `index.yml` (dropping comments and re-serialising) when its `models:` block is missing or incomplete,
+and on `qmd collection add` / `qmd context add`. A chezmoi-managed file that qmd rewrote would show as drifted, and a
+non-TTY `chezmoi apply` stops on a destination that changed since chezmoi wrote it. We saw this directly: a commented
+template without `models:` was rewritten by the first `qmd` call. So the template is plain (no comments, no blank lines,
+unquoted scalars where qmd would not quote them) and carries the full 2.8.3 `models:` block, and qmd leaves it
+byte-identical. Checked after `status`, `update`, `search`, `collection list`, `get` and `query` (tests/qmd/proof.sh).
+Do **not** use `qmd collection add` or `qmd context add`: edit the template. After bumping the pin, rerun the proof
+script and compare qmd's default `models:` block with the template's.
+
+qmd also picks a project-local `.qmd/index.yaml` from the current directory or an ancestor over the global config unless
+`--index` is given. None exist today; do not create one under a repo you search from, or pass `--index index`.
 
 Repo-docs collections (`repo-*`) list only checkouts that exist on the machine at apply time (`stat` in the template).
 Pattern: `**/README.md,**/AGENTS.md,docs/**/*.md`. Add a repo by adding its name to the `range` list.
