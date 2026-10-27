@@ -34,7 +34,7 @@ Count runtime code, configuration, recovery paths, test harnesses, review work a
 If a small feature grows into substantial infrastructure or repeated repair cycles, pause the affected work and reassess. Explain what changed, whether a simpler path remains, and whether an owner trade-off is needed. Continue independent work where safe. Do not silently weaken acceptance to finish.
 
 ## 5. Written contracts and invariants
-Every core has a contract: its schema, its operations, and the invariants it guarantees (for example "status changes only along declared transitions" or "a write with the same idempotency key is applied at most once"). The contract is versioned alongside the code.
+Every core has a contract: its schema, its operations, and the invariants it guarantees (for example "status changes only along declared transitions" or "a write with the same idempotency key is applied at most once"). The contract is versioned alongside the code. The contract also names the log records the component emits.
 
 ## 6. Conformance suites
 Every adapter must pass the component's conformance suite before it can merge. A contract without a conformance suite is not finished.
@@ -73,6 +73,11 @@ A blocking review finding must identify the violated obligation, supporting evid
 Read intent as a whole before choosing mechanisms. Identify requirements that pull against each other, especially simplicity, autonomy, reliability and delivery time. Explain the concrete trade-off and recommend a resolution before building around an assumption. Clarify the operating conditions behind words such as "always", "never" and "automatic". Owner decisions are needed for changes to promised outcomes or unresolved product trade-offs.
 
 Record which guarantees the owner required and which mechanisms the agents selected. Agent-selected mechanisms remain open to simplification. Review acceptance does not turn them into owner requirements. Changing a promised outcome still requires owner agreement.
+
+## 14. Logs that replay the user's experience
+Every component that acts for a user records enough to replay one user action: what the user did, the meaningful steps the component took, and what the user saw. One id per action ties every record together. Records carry time, duration and, where it matters, memory and cost. When something goes wrong, the logs alone say what and where; if they don't, the logging is a defect. Log meaning, not every call (§4). Never log secrets or tokens. Keep metadata 90 days. Bodies (prompts, replies) may be kept in local logs for 30 days and are never exported. This applies to new or touched components; do not retrofit the rest.
+
+**Test:** from the logs alone, replay one action and name a seeded fault (§12).
 
 ## Enforcement (strongest first)
 The Gate lines in §2, §3 and §7 and items 1 and 2 below apply to new components and new cross-component boundaries, not to a small change inside an existing component.
