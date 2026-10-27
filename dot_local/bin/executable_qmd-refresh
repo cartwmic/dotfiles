@@ -1,0 +1,136 @@
+#!/bin/sh
+# qmd-refresh — bring the QMD index up to date: `qmd update`, then `qmd embed`, as ONE heavy-gate job.
+#
+#   qmd-refresh [--wait SECONDS] [--no-embed] [--dry-run]
+#   qmd-refresh status
+#
+# Run by the owner (or an agent the owner asked). Nothing schedules it. See docs/qmd.md.
+#
+# Why this wrapper and not bare `qmd embed`:
+#  - heavy: embedding peaks at 1.9 GB RSS with the flags below (4.5 GB without), for up to ~45 min on a full index, and
+#    every qmd process loads its own models (tobi/qmd#942). So the whole job runs under `nice -n 10 heavy-gate --wait N --`,
+#    which holds one slot and waits for a quiet Mac.
+#  - one at a time: a lock directory refuses a second refresh while one is live (exit 75). A dead holder's lock is taken over.
+#  - qmd's own 30-minute embed cap (tobi/qmd#673) is switched off with --timeout 0; resuming is safe anyway (only changed
+#    documents are re-embedded).
+#  - update always runs; embed runs only if the embedding model is already downloaded (`qmd pull`, once). Without it
+#    keyword search (`qmd search`) still works and the script says so.
+#
+# Exit: 0 ok · 2 usage · 75 another refresh is running · 127 qmd or heavy-gate not found · otherwise the job's own status.
+set -eu
+
+prog=qmd-refresh
+wait_s=7200
+embed=1
+dry=0
+mode=run
+
+log() { printf '%s: %s %s\n' "$prog" "$(date +%H:%M:%S)" "$*" >&2; }
+die() { code=$1; shift; printf '%s: %s\n' "$prog" "$*" >&2; exit "$code"; }
+
+usage() {
+    cat <<'EOF'
+usage: qmd-refresh [--wait SECONDS] [--no-embed] [--dry-run]
+       qmd-refresh status
+
+Runs `qmd update` then `qmd embed` (one process at a time, low memory flags, no 30-minute cap) as a single
+heavy-gate job. --wait is how long heavy-gate may wait for a quiet Mac (default 7200). --no-embed stops after update.
+--dry-run prints the command and runs nothing. status prints when the last refresh finished.
+Models are not downloaded here: run `qmd pull` once (about 2.1 GB). Without the embedding model only update runs.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        status) mode=status ;;
+        --no-embed) embed=0 ;;
+        --dry-run) dry=1 ;;
+        --wait)
+            [ $# -ge 2 ] || { usage >&2; exit 2; }
+            wait_s=$2; shift
+            ;;
+        --wait=*) wait_s=${1#--wait=} ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; exit 2 ;;
+    esac
+    shift
+done
+case $wait_s in ''|*[!0-9]*) die 2 "--wait needs a whole number of seconds, got '$wait_s'" ;; esac
+
+state=${XDG_STATE_HOME:-$HOME/.local/state}/qmd-refresh
+stamp=$state/last-success
+lock=$state/lock
+
+if [ "$mode" = status ]; then
+    if [ -f "$stamp" ]; then cat "$stamp"; else echo "never refreshed by qmd-refresh"; fi
+    if [ -d "$lock" ] && old=$(cat "$lock/pid" 2>/dev/null) && kill -0 "$old" 2>/dev/null; then
+        echo "running now (pid $old)"
+    fi
+    exit 0
+fi
+
+qmd=${QMD_BIN:-}
+[ -n "$qmd" ] || qmd=$(command -v qmd 2>/dev/null || true)
+[ -n "$qmd" ] || { [ -x "$HOME/.local/share/mise/shims/qmd" ] && qmd=$HOME/.local/share/mise/shims/qmd; } || true
+[ -n "$qmd" ] && [ -x "$qmd" ] || die 127 "qmd not found (mise install, or set QMD_BIN)"
+gate=$(command -v heavy-gate 2>/dev/null || true)
+[ -n "$gate" ] || { [ -x "$HOME/.local/bin/heavy-gate" ] && gate=$HOME/.local/bin/heavy-gate; } || true
+[ -n "$gate" ] && [ -x "$gate" ] || die 127 "heavy-gate not found"
+
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/qmd/models
+have_model=0
+for f in "$cache"/*embeddinggemma*.gguf; do [ -e "$f" ] && have_model=1; done
+if [ "$embed" = 1 ] && [ "$have_model" = 0 ]; then
+    log "embedding model not found in $cache: running update only. Run 'qmd pull' once, then qmd-refresh again."
+    embed=0
+fi
+
+# The job, as a script of its own so heavy-gate runs exactly one command. $1 = qmd, $2 = embed|noembed.
+job='set -e
+"$1" update
+[ "$2" = embed ] || exit 0
+QMD_EMBED_PARALLELISM=1 exec "$1" embed --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8'
+which=noembed; [ "$embed" = 1 ] && which=embed
+
+if [ "$dry" = 1 ]; then
+    echo "nice -n 10 $gate --wait $wait_s -- sh -c '<update$( [ "$embed" = 1 ] && echo ', then embed')>' sh $qmd $which"
+    echo "update: $qmd update"
+    [ "$embed" = 1 ] && echo "embed:  QMD_EMBED_PARALLELISM=1 $qmd embed --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8"
+    exit 0
+fi
+
+mkdir -p "$state"
+if ! mkdir "$lock" 2>/dev/null; then
+    old=$(cat "$lock/pid" 2>/dev/null || true)
+    if [ -n "$old" ] && kill -0 "$old" 2>/dev/null; then
+        die 75 "another refresh is running (pid $old)"
+    fi
+    log "taking over the lock of a dead refresh (pid ${old:-unknown})"
+    rm -rf "$lock"
+    mkdir "$lock" 2>/dev/null || die 75 "another refresh just started"
+fi
+echo $$ > "$lock/pid"
+child=
+# heavy-gate runs its job in the foreground, and a shell defers a signal until its foreground job ends, so TERM sent to
+# heavy-gate alone would wait out a 45-minute embed. Stop the job's processes first (leaves before parents), then heavy-gate.
+killtree() {
+    for c in $(pgrep -P "$1" 2>/dev/null || true); do killtree "$c"; done
+    kill -TERM "$1" 2>/dev/null || true
+}
+trap 'rm -rf "$lock"' EXIT
+trap 'trap "" TERM INT HUP; [ -z "$child" ] || killtree "$child"; exit 143' TERM INT HUP
+
+log "start: update$( [ "$embed" = 1 ] && echo ' + embed') (waiting up to ${wait_s}s for a quiet Mac)"
+nice -n 10 "$gate" --wait "$wait_s" -- sh -c "$job" sh "$qmd" "$which" &
+child=$!
+rc=0
+wait "$child" || rc=$?
+child=
+
+if [ "$rc" -eq 0 ]; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ok: update$( [ "$embed" = 1 ] && echo ' + embed')" > "$stamp"
+    log "done"
+else
+    log "failed with status $rc (last good refresh: $(cat "$stamp" 2>/dev/null || echo none))"
+fi
+exit "$rc"

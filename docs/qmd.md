@@ -12,7 +12,8 @@ for notes, repo docs, Pi session recaps and Pi sessions, with hybrid (semantic) 
 | Install, pinned | `dot_config/mise/conf.d/qmd.toml` | `~/.config/mise/conf.d/qmd.toml`; `mise install` fetches `@tobilu/qmd@2.8.3` (200 MB, no models) |
 | Collections | `dot_config/qmd/index.yml.tmpl` | `~/.config/qmd/index.yml` |
 | Skill | `dot_local/share/agent-harness/canonical/skills/searching-with-qmd` | skill sync links it into Claude, Codex and Pi |
-| Refresh wrapper, exporter | later PRs | `qmd-refresh`, `~/.local/share/qmd-corpus` |
+| Refresh wrapper | `dot_local/bin/executable_qmd-refresh` | `~/.local/bin/qmd-refresh` |
+| Exporter | later PR | `~/.local/share/qmd-corpus` |
 
 All of it is **personal profile only** (`.chezmoiignore`). The work and Termux profiles get none of it, and the
 `run_onchange_after_10_mise_bootstrap` hash covers the new mise file so `mise install` reruns once.
@@ -40,9 +41,29 @@ Pattern: `**/README.md,**/AGENTS.md,docs/**/*.md`. Add a repo by adding its name
 qmd pull      # downloads the three models, about 2.1 GB, once, into ~/.cache/qmd/models
 ```
 
-Until the refresh wrapper lands, the index is built by hand: `nice -n 10 heavy-gate --wait 7200 -- qmd update`, then
-`QMD_EMBED_PARALLELISM=1 qmd embed --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8` under heavy-gate. Without
-`QMD_EMBED_PARALLELISM=1` embedding peaks at 4.5 GB RSS instead of 1.9 GB.
+## Refreshing the index: `qmd-refresh`
+
+```sh
+qmd-refresh [--wait SECONDS] [--no-embed] [--dry-run]
+qmd-refresh status        # when the last refresh finished, and whether one is running
+```
+
+One blocking command. It runs `qmd update` then `qmd embed` as a single `nice -n 10 heavy-gate --wait 7200 --` job (one slot,
+waits for a quiet Mac). Nothing schedules it; the owner or an agent the owner asked runs it.
+
+- Embed uses `QMD_EMBED_PARALLELISM=1 --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8`: 1.9 GB RSS instead of 4.5 GB at
+  qmd's defaults, same speed; `--timeout 0` removes qmd's hard 30-minute cap (tobi/qmd#673). Only changed documents are
+  embedded, so an interrupted run resumes.
+- One refresh at a time: a lock directory (`~/.local/state/qmd-refresh/lock`) makes a second run exit 75; a dead holder's lock is taken over.
+- TERM or Ctrl-C stops the job's whole process tree (heavy-gate runs its job in the foreground and would otherwise defer the
+  signal until a 45-minute embed ended) and frees the lock.
+- If the embedding model is not downloaded, only `update` runs and it says to run `qmd pull`. Keyword search still works.
+- `--wait` is how long heavy-gate may wait for a quiet Mac, not a run-time limit. Exit: 0 ok, 75 busy or gate gave up,
+  127 qmd or heavy-gate missing, otherwise the job's status. The last success is stamped in `~/.local/state/qmd-refresh/last-success`.
+
+Verified live (2026-10-27, personal Mac, after `qmd pull`): `qmd-refresh` updated 9 collections and embedded 2,085 chunks from 411
+documents in 2 min 31 s (3 min 8 s wall, 1.6 GB peak RSS), and `~/.config/qmd/index.yml` stayed identical to the chezmoi source
+(`chezmoi diff` empty) — the first proof on the real applied file.
 
 ## Cost (measured 2026-10-26, this Mac, other jobs running)
 
