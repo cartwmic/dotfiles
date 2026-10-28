@@ -160,7 +160,7 @@ a missing model, or with `--no-embed`).
 
 What `qmd cleanup` (2.8.3, `runCleanup` in `store.js`) does, in this order:
 
-- empties qmd's LLM response cache (query expansion and rerank answers, at most 1,000 rows; it was empty here). The next hybrid
+- empties qmd's LLM response cache (query expansion and rerank answers, now and then pruned to the newest 1,000 rows; it was empty here). The next hybrid
   query with the same words computes them again.
 - deletes the vectors whose content no **active** document refers to: old versions of changed documents, and documents whose file
   is gone. A vector an active document uses is never touched (`WHERE NOT EXISTS (… d.hash = cv.hash AND d.active = 1)`).
