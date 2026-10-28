@@ -43,7 +43,7 @@ Removing the companion leaves upstream Compat unguarded, not disabled.
 
 `claude-compat-proxy` is a second, separate provider. It is loaded from the
 cartwmic fork `cartwmic/pi-claude-request-compat`, pinned in Pi settings to
-commit `b322f9d81530d80230483213470674ba8cf048dc` (package `extensions: []`).
+commit `a7b220fe30f1b3adef0a85ad25238a683703cc71` (package `extensions: []`).
 It sends the same validated Claude Code request to the CLIProxyAPI hub at
 `https://cliproxy.internal.cartwmic.com`, which holds the Claude logins.
 
