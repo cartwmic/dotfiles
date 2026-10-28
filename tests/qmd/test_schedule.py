@@ -369,6 +369,37 @@ class RunnerTest(unittest.TestCase):
             self.assertNotIn(noise, log)
         self.assertFalse([l for l in lines if not l.strip()])
 
+    def gate_echo(self, job, args="sh /x/qmd embed /x/model.gguf /x/run none 506 /x/ectx 0 /x/index.sqlite"):
+        return ("qmd-refresh: 17:26:37 start: update + embed (waiting up to 3600s for a quiet Mac)\n"
+                "[heavy-gate] INFO: allowed; running: sh -c %s %s\n"
+                "qmd-export: sessions: 2 written\nIndexed: 0 new, 1 updated, 71 unchanged, 0 removed\n"
+                "qmd-refresh: 17:29:29 done: update + embed + cleanup\n" % (job, args))
+
+    def test_the_whole_real_job_script_is_hidden_and_the_output_after_it_kept(self):
+        # Built from the job text in qmd-refresh itself, so a longer job can never leak into the log again.
+        src = REFRESH.read_text()
+        start = src.index("job='") + len("job='")
+        end = src.index(": end of the qmd-refresh job'", start) + len(": end of the qmd-refresh job")
+        job = src[start:end]
+        self.assertGreater(job.count("\n"), 30)
+        (self.fake / "err").write_text(self.gate_echo(job, "sh /x/qmd embed /x/m /x/run none 506 /x/ectx 0 /x/index.sqlite 1 /x/last-cleanup /x/index.yml"))
+        self.assertEqual(self.run_(), 0, self.err)
+        log = self.day
+        for line in job.splitlines()[1:]:
+            if line.strip() and line.strip() not in ("fi", "esac"):
+                self.assertNotIn(line, log)
+        for kept in ("[heavy-gate] INFO: allowed; running: <the qmd-refresh job>", "qmd-export: sessions: 2 written",
+                     "Indexed: 0 new, 1 updated, 71 unchanged, 0 removed", "done: update + embed + cleanup"):
+            self.assertIn(kept, log)
+
+    def test_the_echo_of_a_job_from_before_the_daily_cleanup_is_hidden_too(self):
+        (self.fake / "err").write_text(self.gate_echo('set -e\n"$1" update\nif [ "$ok" = 1 ]; then echo "$6" > "$7"; else : > "$4/legacy"; fi'))
+        self.assertEqual(self.run_(), 0, self.err)
+        log = self.day
+        self.assertNotIn('"$1" update', log)
+        self.assertIn("qmd-export: sessions: 2 written", log)
+        self.assertIn("Indexed: 0 new, 1 updated", log)
+
     def test_the_noise_filter_keeps_utf8_lines_in_the_c_locale(self):
         # launchd gives the job no LANG: a byte-wise bracket expression would drop every line with a multi-byte character.
         (self.fake / "out").write_text("\u2713 All collections updated.\n")

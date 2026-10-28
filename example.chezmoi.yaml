@@ -30,6 +30,7 @@ data:
   # Change either value and run chezmoi apply: the LaunchAgent is rewritten and reloaded, or removed when disabled.
   # qmd:
   #   refresh: {enabled: true, intervalMinutes: 60}   # 15 to 1440; enabled: false removes the agent
+  #   (add cleanup: false to stop the daily `qmd cleanup` that qmd-refresh runs at most once per 24 h; docs/qmd.md "Daily cleanup")
 
 hooks:
   read-source-state:
