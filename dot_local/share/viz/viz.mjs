@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { locateChromium, screenshot } from './adapters/chromium.mjs';
 import { createFsStore } from './adapters/fs_store.mjs';
+import { createSite } from './adapters/http_site.mjs';
 import { createMermaid } from './adapters/mmdc.mjs';
 import { VizError } from './core/domain.mjs';
 import { runAction } from './core/use_cases.mjs';
@@ -33,6 +34,7 @@ const { output, exitCode } = await runAction(process.argv.slice(2), {
   input,
   browser: { locate: () => locateChromium(env), screenshot },
   mermaid: createMermaid(env),
+  site: createSite(env),
   clock: { now: () => Date.now() },
   random: { hex: () => randomBytes(3).toString('hex') },
   runtime: { node: process.execPath, nodeVersion: process.version },

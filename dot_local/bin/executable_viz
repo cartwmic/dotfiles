@@ -6,4 +6,17 @@ if ! command -v node >/dev/null 2>&1; then
 	echo "[viz] ERROR: node not found on PATH" >&2
 	exit 4
 fi
+if [ "${1-}" = publish ]; then
+	# Michael's site (cartwmic-homelab-v2 k8s/viz) and its upload password, read
+	# from 1Password only when publishing. Either can be set in the environment instead.
+	: "${VIZ_PUBLISH_URL:=https://viz.internal.cartwmic.com}"
+	export VIZ_PUBLISH_URL
+	if [ -z "${VIZ_PUBLISH_PASSWORD-}" ] && command -v op >/dev/null 2>&1; then
+		if VIZ_PUBLISH_PASSWORD=$(op read "op://developer/viz-publish/password"); then
+			export VIZ_PUBLISH_PASSWORD
+		else
+			echo "[viz] WARN: op read op://developer/viz-publish/password failed" >&2
+		fi
+	fi
+fi
 exec node "$HERE/../share/viz/viz.mjs" "$@"
