@@ -44,7 +44,7 @@ not, the Python 3 provider is disabled so startup does not error. First
 launch clones `lazy.nvim` into Neovim's data directory and installs plugins
 from the lockfile. Some specs also expect host tools that this overlay does
 not install: Ranger (`rnvimr`), ImageMagick (`image.nvim`), coursier
-(Metals), `uv` (VectorCode), and `sqlparse` for the Rust SQL formatter.
+(Metals), and `sqlparse` for the Rust SQL formatter.
 
 ## Usage
 
@@ -98,7 +98,6 @@ but turned off by [`disabled.lua.tmpl`](./lua/plugins/disabled.lua.tmpl).
 | [`text-case.lua`](./lua/plugins/text-case.lua) | Case conversion; prefix `<leader>za` |
 | [`abolish.lua`](./lua/plugins/abolish.lua) | vim-abolish |
 | [`colorful-winsep.lua`](./lua/plugins/colorful-winsep.lua) | Active-window separator |
-| [`vectorcode.lua`](./lua/plugins/vectorcode.lua) | VectorCode (`uv tool upgrade vectorcode` on build) |
 | [`vim-just.lua`](./lua/plugins/vim-just.lua) | Justfile syntax |
 
 ### Rendered Markdown

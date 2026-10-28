@@ -1,7 +1,6 @@
 {
   "LazyVim": { "branch": "main", "commit": "999700997f72227187d49d8b92667183dc7fc809" },
   "SchemaStore.nvim": { "branch": "main", "commit": "d93ef1e8365950420ea3e706e82caf65dc9ff968" },
-  "VectorCode": { "branch": "main", "commit": "3eacce5ad1c8e439e7dbeab3a8d6bdb6b8aa1cab" },
   "blink.cmp": { "branch": "main", "commit": "78336bc89ee5365633bcf754d93df01678b5c08f" },
   "catppuccin": { "branch": "main", "commit": "edefef779ab08ce1a4a404713e3012b0d202bd35" },
   "colorful-winsep.nvim": { "branch": "main", "commit": "6134b5cd4a38990c7b720adc90973ed32f726179" },
