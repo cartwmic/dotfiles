@@ -4,6 +4,7 @@ Behaviour: the real qmd-refresh runs against the fake qmd and heavy-gate of test
 Static: the switch (chezmoi data qmd.refresh.cleanup) renders from the real source with a throwaway config and HOME.
 """
 import os
+import sqlite3
 import time
 import unittest
 
@@ -17,6 +18,28 @@ DAY = 86400
 class CleanupTest(Base):
     def setUp(self):
         self.e = self.make(cleanup=True)   # no refresh.conf: the default, on
+        self.notes = self.e.root / "notes"
+        self.notes.mkdir()
+        self.index_with(self.e, [("notes", self.notes, 1)])
+
+    @staticmethod
+    def index_with(e, collections, schema=True):
+        """A qmd index as far as the cleanup guard reads it: store_collections (what qmd update globs) and documents.
+        collections: (name, folder, active) with active 1 (one active document), 0 (only an inactive one) or None (none)."""
+        e.index.parent.mkdir(parents=True, exist_ok=True)
+        if e.index.exists():
+            e.index.unlink()
+        db = sqlite3.connect(str(e.index))
+        db.execute("create table content_vectors (hash text, seq integer, embedded_at text)")
+        if schema:
+            db.execute("create table store_collections (name text primary key, path text not null)")
+            db.execute("create table documents (id integer primary key, collection text, path text, hash text, active integer)")
+            for name, folder, active in collections:
+                db.execute("insert into store_collections values (?, ?)", (name, str(folder)))
+                if active is not None:
+                    db.execute("insert into documents (collection, path, hash, active) values (?, 'a.md', 'h', ?)", (name, active))
+        db.commit()
+        db.close()
 
     @property
     def cstamp(self):
@@ -26,11 +49,6 @@ class CleanupTest(Base):
         d = self.e.root / "config" / "qmd"
         d.mkdir(parents=True, exist_ok=True)
         (d / "refresh.conf").write_text(text)
-
-    def index_yml(self, *paths):
-        d = self.e.root / "config" / "qmd"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "index.yml").write_text("collections:\n" + "".join("  c%d:\n    path: %s\n    pattern: \"**/*.md\"\n" % (i, p) for i, p in enumerate(paths)))
 
     def stamp_age(self, secs):
         self.cstamp.parent.mkdir(parents=True, exist_ok=True)
@@ -86,12 +104,35 @@ class CleanupTest(Base):
         self.assertEqual(self.e.run(), 0, self.e.err)
         self.assertEqual(len(self.cleanups), 1)
 
-    def test_a_bad_value_in_refresh_conf_runs_nothing(self):
-        for v in ("yes", "false", "On", " off"):
-            self.conf("cleanup=%s\n" % v)
-            self.assertEqual(self.e.run(), 2, v)
-            self.assertIn("cleanup must be on or off", self.e.err)
+    def test_a_bad_refresh_conf_runs_nothing(self):
+        # Fail closed: an existing file must say exactly cleanup=on or cleanup=off, once. Only a missing file means on.
+        for text in ("cleanup=yes\n", "cleanup=false\n", "cleanup=On\n", "cleanup= off\n", "cleanup=off \n", "cleanup=\n",
+                     "cleanup =off\n", " cleanup=off\n", "cleanup=off\ncleanup=on\n", "cleanup=yes\ncleanup=off\n",
+                     "cleanup=off\nother=1\n", "", "# only a comment\n\n", "cleanup=off\r\n"):
+            self.conf(text)
+            self.assertEqual(self.e.run(), 2, repr(text))
+            self.assertIn("expected one line, cleanup=on or cleanup=off", self.e.err, repr(text))
+            self.assertEqual(self.e.run("status"), 2, repr(text))
         self.assertEqual(self.e.calls, [])
+
+    def test_an_unreadable_refresh_conf_runs_nothing(self):
+        self.conf("cleanup=on\n")
+        f = self.e.root / "config" / "qmd" / "refresh.conf"
+        f.chmod(0)
+        self.addCleanup(f.chmod, 0o644)
+        if os.access(f, os.R_OK):
+            self.skipTest("running as root")
+        self.assertEqual(self.e.run(), 2)
+        self.assertEqual(self.e.calls, [])
+
+    def test_the_rendered_file_is_read(self):
+        for want, data in (("off", "qmd: {refresh: {cleanup: false}}"), ("on", "")):
+            r, _ = render(CONF, data=data)
+            self.conf(r.stdout)
+            n = len(self.cleanups)
+            self.stamp_age(DAY + 1)
+            self.assertEqual(self.e.run(), 0, self.e.err)
+            self.assertEqual(len(self.cleanups), n + (want == "on"), want)
 
     def test_no_cleanup_flag_skips_it_for_one_run(self):
         self.assertEqual(self.e.run("--no-cleanup"), 0)
@@ -116,10 +157,12 @@ class CleanupTest(Base):
 
     def test_a_missing_collection_folder_holds_the_cleanup(self):
         # An unmounted disk: update deactivates that collection's documents, and cleanup would then drop their vectors.
-        here = self.e.root / "notes"
-        here.mkdir()
-        gone = self.e.root / "Volumes" / "Workshop" / "repo"
-        self.index_yml(here, gone)
+        # The folders come from the index (store_collections, what qmd update globbed), whatever YAML style index.yml uses.
+        gone = self.e.root / "Volumes" / "Work shop" / "repo"
+        self.index_with(self.e, [("notes", self.notes, 1), ("repo", gone, 1)])
+        cfg = self.e.root / "config" / "qmd"
+        cfg.mkdir(parents=True, exist_ok=True)
+        (cfg / "index.yml").write_text('collections: {notes: {"path": "%s"}}\n' % self.notes)   # not consulted
         self.assertEqual(self.e.run(), 0, self.e.err)
         self.assertEqual(self.cleanups, [])
         self.assertIn("qmd cleanup skipped: collection folder %s is missing" % gone, self.e.err)
@@ -128,12 +171,40 @@ class CleanupTest(Base):
         self.assertEqual(self.e.run(), 0, self.e.err)
         self.assertEqual(len(self.cleanups), 1)
 
+    def test_a_collection_left_with_only_inactive_documents_holds_the_cleanup(self):
+        # The folder exists but is empty (an empty mount point): update deactivated every document of the collection.
+        empty = self.e.root / "mnt"
+        empty.mkdir()
+        self.index_with(self.e, [("notes", self.notes, 1), ("disk", empty, 0)])
+        self.assertEqual(self.e.run(), 0, self.e.err)
+        self.assertEqual(self.cleanups, [])
+        self.assertIn("qmd cleanup skipped: collection disk has no active document left", self.e.err)
+        # A collection that never had documents, or still has an active one next to removed files, is fine.
+        self.index_with(self.e, [("notes", self.notes, 1), ("disk", empty, None)])
+        self.assertEqual(self.e.run(), 0, self.e.err)
+        self.assertEqual(len(self.cleanups), 1)
+
+    def test_an_index_it_cannot_read_holds_the_cleanup(self):
+        for setup in ("no index", "no collection table", "no collections"):
+            e = self.make(cleanup=True)
+            if setup == "no collection table":
+                self.index_with(e, [], schema=False)
+            elif setup == "no collections":
+                self.index_with(e, [])
+            self.assertEqual(e.run(), 0, e.err)
+            self.assertEqual([c for c in e.qmd_calls if c.startswith("qmd cleanup")], [], setup)
+            self.assertIn("qmd cleanup skipped: cannot read the collection folders", e.err, setup)
+            self.assertFalse((e.state / "qmd-refresh" / "last-cleanup").exists(), setup)
+            self.assertFalse(e.index.exists() if setup == "no index" else False, "the check must not create an index")
+
     def test_runs_without_the_embedding_model_or_with_no_embed(self):
         e = self.make(model=False, cleanup=True)
+        self.index_with(e, [("notes", self.notes, 1)])
         self.assertEqual(e.run(), 0, e.err)
         self.assertEqual([c.split(" |")[0] for c in e.qmd_calls], ["qmd update", "qmd cleanup"])
         self.assertIn("update (embed skipped: model not on disk) + cleanup", e.stamp.read_text())
         e2 = self.make(cleanup=True)
+        self.index_with(e2, [("notes", self.notes, 1)])
         self.assertEqual(e2.run("--no-embed"), 0, e2.err)
         self.assertEqual([c.split(" |")[0] for c in e2.qmd_calls], ["qmd update", "qmd cleanup"])
 

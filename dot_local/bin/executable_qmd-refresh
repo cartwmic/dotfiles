@@ -32,8 +32,9 @@
 #  - once a day the job ends with `qmd cleanup` (same lock, same gate job): `qmd update` drops a changed document's old text but not
 #    its old vectors, so the index grows by every re-embedded chunk (about 70 to 120 MB a day here). cleanup deletes vectors no
 #    active document refers to, inactive document records, orphaned content and qmd's LLM response cache, compacts FTS and vacuums.
-#    At most once per 24 h ($state/last-cleanup); skipped while any collection folder in index.yml is missing (an unmounted disk
-#    deactivates its documents, and cleanup would then drop their vectors). A failed cleanup does not fail the refresh; the next
+#    At most once per 24 h ($state/last-cleanup). Skipped when a collection folder qmd just indexed is missing, or a collection has
+#    no active document left but has inactive ones (an unmounted or empty disk: update deactivates its documents and cleanup would
+#    drop their vectors), or the index cannot be read; the folders come from the index's store_collections, which is what update used. A failed cleanup does not fail the refresh; the next
 #    run tries again. Off: chezmoi data qmd.refresh.cleanup: false (renders cleanup=off into ~/.config/qmd/refresh.conf), or
 #    --no-cleanup for one run.
 #  - TERM, INT or HUP stop the job's whole process tree (TERM, then KILL after QMD_REFRESH_GRACE seconds, default 10)
@@ -105,12 +106,17 @@ index=${INDEX_PATH:-${XDG_CACHE_HOME:-$HOME/.cache}/qmd/index.sqlite}
 cfgdir=${QMD_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/qmd}
 conf=$cfgdir/refresh.conf           # cleanup=on|off, rendered by chezmoi from qmd.refresh.cleanup; missing means on
 cstamp=$state/last-cleanup          # "<epoch seconds> <UTC time>" of the last successful qmd cleanup
-cleanup_set=$(sed -n 's/^cleanup=//p' "$conf" 2>/dev/null | tail -n 1)
-case $cleanup_set in
-    ''|on) ;;
-    off) cleanup=0 ;;
-    *) die 2 "$conf: cleanup must be on or off, got '$cleanup_set'" ;;
-esac
+# Missing file: on. A file that exists must hold exactly one line besides comments and blanks, cleanup=on or cleanup=off;
+# anything else (unreadable, empty, two lines, "cleanup=", "cleanup =off") stops here, before anything runs.
+cleanup_set=
+if [ -e "$conf" ]; then
+    lines=$(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$conf" 2>/dev/null || true)
+    case $lines in
+        cleanup=on|cleanup=off) cleanup_set=${lines#cleanup=} ;;
+        *) die 2 "$conf: expected one line, cleanup=on or cleanup=off (chezmoi data qmd.refresh.cleanup), got '$(printf '%s' "$lines" | tr '\n' ' ')'" ;;
+    esac
+fi
+[ "$cleanup_set" != off ] || cleanup=0
 
 # flock from perl (macOS and Linux both ship it; heavy-gate needs it too). Held by someone else: write $QMD_REFRESH_RUN/busy.
 # The lock is on an open file description with close-on-exec cleared, so exec'd children inherit it.
@@ -176,7 +182,7 @@ fi
 
 # The job, as a script of its own so heavy-gate runs exactly one command. $1 = qmd, $2 = embed|noembed, $3 = model file,
 # $4 = run directory, $5 = qmd-export or none, $6 = QMD_EMBED_CONTEXT_SIZE, $7 = file recording what made the vectors, $8 = 1 for
-# a full re-embed, $9 = the index file, $10 = 1 for the daily cleanup, $11 = its stamp file, $12 = index.yml (the job leaves
+# a full re-embed, $9 = the index file, $10 = 1 for the daily cleanup, $11 = its stamp file (the job leaves
 # "skipped", "legacy" and "cleaned" in the run directory). Keep ": end of the qmd-refresh job" as its last line: qmd-refresh-scheduled
 # hides heavy-gate's echo of this script up to that line. The model file is checked
 # here, after the gate wait and the update, because qmd downloads a missing model by itself. A skip is reported out of band so
@@ -216,9 +222,21 @@ case $last in ""|*[!0-9]*) last=0 ;; esac
 now=$(date +%s)
 [ "$last" -le "$now" ] || last=0   # a stamp from the future (clock set back) must not hold the cleanup off
 [ $((now - last)) -ge 86400 ] || exit 0
-gone=$(sed -n "s/^[[:space:]]*path:[[:space:]]*//p" "${12}" 2>/dev/null | while IFS= read -r d; do [ -d "$d" ] || { echo "$d"; break; }; done)
+# The folders update just globbed: store_collections, which qmd fills from its own parse of index.yml (no YAML parsing here).
+# Fail closed: no index, an unreadable list or an empty one means no cleanup.
+if [ ! -e "$9" ] || ! cols=$(sqlite3 "$9" "select path from store_collections" 2>/dev/null) || [ -z "$cols" ]; then
+    echo "qmd-refresh: qmd cleanup skipped: cannot read the collection folders from $9; a later refresh tries again" >&2
+    exit 0
+fi
+gone=$(printf "%s\n" "$cols" | while IFS= read -r d; do [ -d "$d" ] || { echo "$d"; break; }; done)
 if [ -n "$gone" ]; then
     echo "qmd-refresh: qmd cleanup skipped: collection folder $gone is missing (its vectors would be dropped); a later refresh runs it" >&2
+    exit 0
+fi
+# A folder that exists but is empty (an empty mount point) deactivates a whole collection too.
+empty=$(sqlite3 "$9" "select name from store_collections s where not exists (select 1 from documents d where d.collection = s.name and d.active = 1) and exists (select 1 from documents d where d.collection = s.name and d.active = 0) limit 1" 2>/dev/null) || empty="(the check could not read $9)"
+if [ -n "$empty" ]; then
+    echo "qmd-refresh: qmd cleanup skipped: collection $empty has no active document left (empty or unmounted folder?); a later refresh tries again" >&2
     exit 0
 fi
 if "$1" cleanup; then
@@ -232,11 +250,11 @@ cflag=$cleanup
 force=0; [ "$reembed" = 0 ] || force=1
 
 if [ "$dry" = 1 ]; then
-    echo "nice -n 10 $gate --wait $wait_s -- sh -c '<export, update, embed if the model exists, daily cleanup>' sh $qmd $which $model <rundir> $exporter $embed_ctx $ectx $force $index $cflag $cstamp $cfg"
+    echo "nice -n 10 $gate --wait $wait_s -- sh -c '<export, update, embed if the model exists, daily cleanup>' sh $qmd $which $model <rundir> $exporter $embed_ctx $ectx $force $index $cflag $cstamp"
     [ "$exporter" = none ] || echo "export: $exporter"
     echo "update: $qmd update"
     [ "$embed" = 1 ] && echo "embed:  QMD_EMBED_CONTEXT_SIZE=$embed_ctx QMD_EMBED_PARALLELISM=1 $qmd embed$([ "$force" = 1 ] && echo ' -f') --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8 (only if $model exists)"
-    if [ "$cleanup" = 1 ]; then echo "cleanup: $qmd cleanup (at most once per 24 h, last: $(cut -d' ' -f2 "$cstamp" 2>/dev/null || echo never); not while a collection folder is missing)"
+    if [ "$cleanup" = 1 ]; then echo "cleanup: $qmd cleanup (at most once per 24 h, last: $(cut -d' ' -f2 "$cstamp" 2>/dev/null || echo never); not while a collection folder is missing or emptied)"
     else echo "cleanup: off"; fi
     exit 0
 fi
@@ -270,7 +288,7 @@ trap on_signal TERM INT HUP
 
 if [ "$embed" = 1 ]; then what='update + embed'; else what=update; fi
 log "start: $what (waiting up to ${wait_s}s for a quiet Mac)"
-QMD_REFRESH_RUN=$rundir nice -n 10 perl -e "$locker" "$lockfile" "$gate" --wait "$wait_s" -- sh -c "$job" sh "$qmd" "$which" "$model" "$rundir" "$exporter" "$embed_ctx" "$ectx" "$force" "$index" "$cflag" "$cstamp" "$cfg" &
+QMD_REFRESH_RUN=$rundir nice -n 10 perl -e "$locker" "$lockfile" "$gate" --wait "$wait_s" -- sh -c "$job" sh "$qmd" "$which" "$model" "$rundir" "$exporter" "$embed_ctx" "$ectx" "$force" "$index" "$cflag" "$cstamp" &
 child=$!
 # Poll instead of a blocking wait: a signal may arrive at any moment, and a wait it has interrupted (or that it arrived
 # just before) must never leave us blocked on a job that ignores TERM.
