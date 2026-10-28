@@ -49,7 +49,7 @@ It sends the same validated Claude Code request to the CLIProxyAPI hub at
 
 - Its only credential is a CLIProxyAPI client key (`cpa_…`), read at request
   time through `op_read_cached.sh` from 1Password item
-  `h4x7srdscdac36wnvuq4xawr5u` field `laptop-pi` (vault `developer`). It never
+  `tb36gtnaocyezjk3dslomp64he` field `laptop-pi` (vault `developer`). It never
   touches the Anthropic login, and Anthropic tokens and API keys are rejected.
 - The same docs guard applies to `claude-compat-proxy` / `claude-compat-proxy-messages`.
 - `PROXY_ORIGIN` in `load.mjs` must match the `baseUrl` in
