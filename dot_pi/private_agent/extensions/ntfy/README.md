@@ -78,6 +78,22 @@ NOT chezmoi-managed) that overrides the `enabled` config default, so live
 toggling survives restarts without drifting the chezmoi source. To reset to the
 config default, delete `state.json`.
 
+## Off for one process (`PI_NTFY_OFF=1`)
+
+Start Pi with `PI_NTFY_OFF=1` in its environment and that Pi process sends no
+push at all: not on turn end, not on `ask_user_question`. Any other value, or
+no value, changes nothing. It beats `/ntfy on` and the `enabled` config, and it
+does not touch `state.json`, so other sessions keep their own setting. Use it
+for panes that already reach you another way. The coordinator sets it for its
+own panes with:
+
+```sh
+coordinator config set pane_env '{"PI_NTFY_OFF":"1"}'
+```
+
+The variable is read on every push, but a running Pi only sees the environment
+it started with, so restart the pane after changing it.
+
 ## Behavior
 
 - Notifies on `agent_settled`, after retries, compaction, and queued continuations
@@ -104,6 +120,7 @@ config default, delete `state.json`.
   JSON API. Unicode session/tab names therefore remain valid.
 - Skips non-interactive sessions (via `ctx.hasUI`).
 - Honors the on/off toggle (`/ntfy` command / `enabled` config); no delivery while off.
+- Sends nothing in a process started with `PI_NTFY_OFF=1` (see above).
 - Delivery remains fire-and-forget with a 5-second timeout. Failures do not
   block turns; each failure produces a TUI warning and a `send.log` entry.
 - Failure diagnostics include request phase, elapsed milliseconds, error

@@ -20,6 +20,10 @@
  *     via the `enabled` field in config.json. The runtime toggle is persisted
  *     to a sidecar `state.json` (NOT chezmoi-managed) that overrides the config
  *     default, so live toggling never drifts the chezmoi source.
+ *   - PI_NTFY_OFF=1 in the Pi process environment turns every push off for
+ *     that process (turn end and ask_user_question alike), whatever the toggle
+ *     says. Meant for panes that reach the owner another way, such as the
+ *     coordinator's (coordinator config set pane_env '{"PI_NTFY_OFF":"1"}').
  *   - Delivery is fire-and-forget with a 5s timeout; failures never block or
  *     crash the turn, but every failure IS surfaced: a TUI warning per failed
  *     send, `/ntfy status` outcome counters, and a capped send.log beside this
@@ -753,6 +757,13 @@ export function reactToSendOutcome(
 	);
 }
 
+/** PI_NTFY_OFF=1 turns every push off for this Pi process. Only the exact value "1" counts. */
+export const NTFY_OFF_ENV = "PI_NTFY_OFF";
+
+export function ntfyOffByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env[NTFY_OFF_ENV] === "1";
+}
+
 function extensionDir(): string {
 	return path.dirname(fileURLToPath(import.meta.url));
 }
@@ -789,6 +800,9 @@ export function registerNtfyExtension(
 	});
 
 	function dispatchNotification(excerpt: string, tags: string, ctx: ExtensionContext): void {
+		// Every push goes through here, so this one check covers both paths.
+		// It runs before the Herdr/Zellij lookup, so nothing is spawned either.
+		if (ntfyOffByEnv()) return;
 		const sm = ctx.sessionManager;
 		const send = (async () => {
 			const location = await resolveLocation({ cwd: sm.getCwd(), config });
