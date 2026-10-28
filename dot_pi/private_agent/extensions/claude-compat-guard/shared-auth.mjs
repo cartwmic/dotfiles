@@ -1,5 +1,5 @@
 // Native Anthropic owns the only OAuth credential and its locked refresh.
-export function withSharedAnthropicAuth(provider, owner, lazyStream) {
+export function ownerAuth(owner) {
 	const hasOwner = async (signal) => (await owner.listCredentials({ signal }))
 		.some(info => info.providerId === "anthropic" && info.type === "oauth");
 	const resolveOwner = async (signal) => {
@@ -12,6 +12,11 @@ export function withSharedAnthropicAuth(provider, owner, lazyStream) {
 		}
 		return { ...resolved, source: "Pi Anthropic OAuth" };
 	};
+	return { hasOwner, resolveOwner };
+}
+
+export function withSharedAnthropicAuth(provider, owner, lazyStream) {
+	const { hasOwner, resolveOwner } = ownerAuth(owner);
 	// Native prepareRequest can reapply caller apiKey overrides after resolution.
 	// Enforce the owner again at the actual dispatch boundary for both APIs.
 	const wrap = (stream) => (model, context, options) => lazyStream(model, async () => {
