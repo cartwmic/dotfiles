@@ -160,17 +160,26 @@ a missing model, or with `--no-embed`).
 
 What `qmd cleanup` (2.8.3, `runCleanup` in `store.js`) does, in this order:
 
+- empties qmd's LLM response cache (query expansion and rerank answers, at most 1,000 rows; it was empty here). The next hybrid
+  query with the same words computes them again.
 - deletes the vectors whose content no **active** document refers to: old versions of changed documents, and documents whose file
   is gone. A vector an active document uses is never touched (`WHERE NOT EXISTS (… d.hash = cv.hash AND d.active = 1)`).
 - deletes inactive document records (files that were removed; `qmd update` only marks them) and content rows nothing refers to.
-- empties qmd's LLM response cache (query expansion and rerank answers, at most 1,000 rows; it was empty here). The next hybrid
-  query with the same words computes them again.
 - compacts the full-text index and runs `VACUUM`, which rewrites the file: it briefly needs free disk about the size of the index
   (550 MB). A `qmd search` or `qmd query` started meanwhile waits (qmd's SQLite busy timeout is 120 s) rather than failing.
 
-**Guard: a missing collection folder.** If any `path:` in `~/.config/qmd/index.yml` does not exist (the `/Volumes/Workshop` disk is
-not mounted, say), `qmd update` marks that collection's documents inactive, and a cleanup would then drop their vectors, so they
-would be embedded again once the disk is back. The cleanup is skipped with one line in the log and tried again on the next refresh.
+**Guard: a missing or emptied collection folder.** `qmd update` does not check that a collection's folder exists: if the
+`/Volumes/Workshop` disk is not mounted, say, it marks that collection's documents inactive, and a cleanup would then drop their
+vectors, so they would be embedded again once the disk is back. So the cleanup is skipped, with one line in the log, and tried
+again on the next refresh, when:
+
+- a collection folder is missing. The folders are read from the index's `store_collections` table, which qmd fills from its own
+  parse of `index.yml` and which `qmd update` globs, so no YAML is parsed here;
+- a collection has inactive documents and no active one left (a folder that exists but is empty, such as an empty mount point);
+- the index or its collection list cannot be read, or the list is empty.
+
+A collection whose files were all really deleted also holds the cleanup off until it is removed from `index.yml` (then qmd drops
+it from the table) or `qmd cleanup` is run by hand.
 
 **When it runs.** `~/.local/state/qmd-refresh/last-cleanup` holds the time of the last successful cleanup. A refresh 24 h or more after
 it runs the cleanup; earlier it skips quietly. A held lock exits 75 as before (nothing runs). A failed cleanup is logged
@@ -187,8 +196,9 @@ data:
 ```
 
 It renders `~/.config/qmd/refresh.conf` (`cleanup=on` or `cleanup=off`), which `qmd-refresh` reads on every run, scheduled or by hand;
-a missing file means on. It is independent of `qmd.refresh.enabled`. Any other value fails the render (`"yes"`, `1`), and any other
-line in the file (`cleanup=yes`) makes `qmd-refresh` exit 2 before it runs anything. `--no-cleanup` skips it for one run.
+a missing file means on. It is independent of `qmd.refresh.enabled`. Any other value fails the render (`"yes"`, `1`). A file that
+exists must hold exactly one line besides comments and blank lines, `cleanup=on` or `cleanup=off`; anything else (`cleanup=yes`,
+`cleanup=`, `cleanup =off`, two lines, an empty or unreadable file) makes `qmd-refresh` exit 2 before it runs anything. `--no-cleanup` skips it for one run.
 
 **Measured** (2026-10-27/28, personal Mac, on a `.backup` copy of the live index, never the index itself):
 
