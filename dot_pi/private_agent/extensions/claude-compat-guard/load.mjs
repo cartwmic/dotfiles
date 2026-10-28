@@ -10,9 +10,12 @@ export const HUB_KEY_REF = "op://developer/tb36gtnaocyezjk3dslomp64he/laptop-pi"
 const HUB_KEY = /^cpa_[A-Za-z0-9_-]{16,}$/;
 
 // Read only in proxy mode, so direct mode never depends on 1Password.
+// The script's own op timeout stays under ours, so a hung 1Password still
+// reaches its stale-cache fallback instead of being killed first.
+export const OP_TIMEOUT_SECONDS = 5;
 export function readHubKey(signal) {
 	return new Promise((resolve, reject) => execFile(join(homedir(), ".local/user_scripts/op_read_cached.sh"), [HUB_KEY_REF],
-		{ encoding: "utf8", timeout: 10000, signal },
+		{ encoding: "utf8", timeout: 10000, signal, env: { ...process.env, OP_READ_TIMEOUT_SECONDS: String(OP_TIMEOUT_SECONDS) } },
 		(error, stdout) => error
 			? reject(new Error("Claude Compat could not read the hub key from 1Password (laptop-pi)"))
 			: resolve(stdout.trim())));
