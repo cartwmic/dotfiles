@@ -1,0 +1,6 @@
+{{- /* qmd_refresh_cleanup: "on" or "off", whether qmd-refresh ends its job with `qmd cleanup` at most once per 24 h (docs/qmd.md "Daily cleanup"). Local chezmoi data: qmd.refresh.cleanup (default true). Any other value fails the whole render, so a typo applies nothing. */ -}}
+{{- $on := dig "qmd" "refresh" "cleanup" true . | printf "%v" -}}
+{{- if not (has $on (list "true" "false")) -}}
+{{-   fail (printf "qmd.refresh.cleanup must be true or false, got %q" $on) -}}
+{{- end -}}
+{{- if eq $on "true" -}}on{{- else -}}off{{- end -}}

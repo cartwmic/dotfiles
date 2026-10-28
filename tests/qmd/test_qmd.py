@@ -19,6 +19,7 @@ BOOTSTRAP = REPO / "run_onchange_after_10_mise_bootstrap.sh.tmpl"
 DESKTOP = [  # personal and axon-work-computer; Termux gets none
     ".config/mise/conf.d/qmd.toml",
     ".config/qmd/index.yml",
+    ".config/qmd/refresh.conf",
     ".local/bin/qmd-refresh",
     ".local/bin/qmd-export",
     ".local/share/agent-harness/canonical/skills/searching-with-qmd/SKILL.md",
