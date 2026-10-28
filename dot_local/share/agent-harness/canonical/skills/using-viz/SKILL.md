@@ -1,6 +1,6 @@
 ---
 name: using-viz
-description: Use when a picture would explain better than text (comparing more than a handful of numbers, a trend, a flow, state machine, architecture, timeline or dependency graph) or when asked for a diagram or chart; renders Mermaid, SVG or HTML to a PNG with viz render, checks it, and shows or sends it to Michael.
+description: Use when a picture would explain better than text (comparing more than a handful of numbers, a trend, a flow, state machine, architecture, timeline or dependency graph) or when asked for a diagram or chart; renders Mermaid, SVG or HTML to a PNG with viz render, checks it, and shows it or sends it to Michael as a PNG plus a viz publish link.
 ---
 
 # Using viz
@@ -71,10 +71,23 @@ what it shows.
 
 ## Send it to Michael
 
-- **A worker** rings `notify_owner` with kind `review`, a one-line `summary` of
-  what the image shows, and the PNG path in `attachments`.
-- **The coordinator** runs `reach send --attach <png>` with one line saying what
-  it shows.
+Publish the checked render, then send the PNG and the link together:
 
-Send the `png` path exactly as `viz render` printed it. `viz` itself never sends
-anything; the only contract is the file path.
+```sh
+viz publish <id>      # the id from viz render; prints "url" and "png_url"
+```
+
+- **A worker** rings `notify_owner` with kind `review`, a one-line `summary` of
+  what the image shows, the PNG path in `attachments`, and the `url` in the reply.
+- **The coordinator** runs `reach send --attach <png>` with one line saying what
+  it shows, followed by the `url`.
+
+Always attach the PNG. The link is on `viz.internal.cartwmic.com`, which only
+opens on the home network or WireGuard, and Discord cannot preview it. It is
+there for zooming in or using an interactive page.
+
+If `viz publish` fails (exit 4 or 5), send the PNG anyway and say the link
+failed, with the message. Do not retry in a loop.
+
+Send the `png` path exactly as `viz` printed it. `viz` itself never sends
+messages; the contract is a file path and a URL.
