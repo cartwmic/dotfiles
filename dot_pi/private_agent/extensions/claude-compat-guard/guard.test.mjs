@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { guardProvider, rewriteContext, rewriteDocs } from "./guard.mjs";
-import { loadCompat } from "./load.mjs";
+import { loadCompat, loadCompatProxy, PROXY_ORIGIN } from "./load.mjs";
 
 const docs = "<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /real/pi/README.md\n- When asked about: models (docs/models.md), pi packages (docs/packages.md), MCP servers (docs/mcp.md)\n- Run pi and read pi docs\n</docs>";
 const fixed = docs.replace("about pi itself", "about Pi itself").replace("pi packages (docs/packages.md)", "Pi packages (docs/packages.md)");
@@ -85,6 +85,36 @@ test("factory registers the guarded raw provider exactly once before any session
 	assert.equal(registrations[0].auth.oauth.isSubscription, true);
 	assert.equal(commands[0][0], "upstream-status");
 	await assert.rejects(loadCompat(pi, api => api.registerProvider({ id: "other" }), {}), /Expected the pinned/);
+});
+test("proxy provider pair is guarded; mixed provider/API pairs are not", () => {
+	const context = fixture();
+	const proxy = { provider: "claude-compat-proxy", api: "claude-compat-proxy-messages" };
+	assert.equal(rewriteContext(proxy, context).messages[0].sections.docs, fixed);
+	for (const candidate of [
+		{ provider: "claude-compat-proxy", api: "claude-compat-messages" },
+		{ provider: "claude-compat", api: "claude-compat-proxy-messages" },
+		{ provider: "anthropic", api: "claude-compat-proxy-messages" },
+	]) assert.equal(rewriteContext(candidate, context), context);
+});
+test("proxy factory gets the hub origin and registers one guarded provider with its own key auth", async () => {
+	const registrations = [], seen = [];
+	const pi = { registerProvider: p => registrations.push(p) };
+	const auth = { apiKey: { name: "proxy key", resolve() {} } };
+	const provider = { id: "claude-compat-proxy", auth, stream() {}, streamSimple() {} };
+	await loadCompatProxy(pi, async (api, options) => { seen.push(options); api.registerProvider(provider); });
+	assert.deepEqual(seen, [{ origin: PROXY_ORIGIN }]);
+	assert.equal(registrations.length, 1);
+	assert.equal(registrations[0].auth, auth, "the proxy never uses the shared Anthropic login");
+	assert.notEqual(registrations[0].stream, provider.stream);
+	await assert.rejects(loadCompatProxy(pi, async api => api.registerProvider({ id: "claude-compat" })), /Expected the pinned Claude Compat Proxy/);
+});
+test("proxy origin matches the claude-compat-proxy models.json baseUrl", () => {
+	const template = readFileSync(new URL("../../private_models.json.tmpl", import.meta.url), "utf8");
+	const block = template.slice(template.indexOf('"claude-compat-proxy": {'));
+	assert.ok(block.length > 0);
+	const urls = [...block.slice(0, block.indexOf('"openai-codex"')).matchAll(/"baseUrl": "([^"]+)"/g)].map(m => m[1]);
+	assert.ok(urls.length >= 3);
+	assert.ok(urls.every(url => url === PROXY_ORIGIN), urls.join(","));
 });
 test("validated full prompt differs by exactly the two documented characters", { skip: !process.env.COMPAT_PROMPT_FIXTURE }, () => {
 	const original = readFileSync(process.env.COMPAT_PROMPT_FIXTURE, "utf8");
