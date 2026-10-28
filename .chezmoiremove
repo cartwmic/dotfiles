@@ -1,3 +1,10 @@
+# Retired 2026-10-27: VectorCode (unused since codecompanion.nvim went in April).
+# Source deletion alone would leave the nvim spec, which still runs
+# `uv tool upgrade vectorcode` on build. The uv tool itself is removed by the
+# mise install-uv-tools task. Prune once every machine has applied.
+.config/nvim/lua/plugins/vectorcode.lua
+.config/zsh-completions/_vectorcode
+
 # Retired 2026-10-02: Claude bridge and its Claude Code → Pi credential
 # copier. Compat now reuses Pi's own Anthropic OAuth login.
 Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
