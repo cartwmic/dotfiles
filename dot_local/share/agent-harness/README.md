@@ -154,7 +154,7 @@ any harness and is wired into none yet.
 
 ## Import Loop Engine Skills From A Release Tag
 
-The six Loop Engine skill bundles (`using-loop-engine`, `coordinating-loop-engine`, `using-software-change-provider`,
+The six Loop Engine skill bundles (`using-loop-engine`, `coordinating-loop-engine`, `using-lean-change-provider`,
 `using-research-provider`, `using-generate-prd`, `using-policy-document-provider`) come from a release tag of
 `cartwmic/loop-engine`. `import_release_skills.py` (source:
 [`dot_local/user_scripts/executable_import_release_skills.py`](../../user_scripts/executable_import_release_skills.py),
@@ -164,9 +164,9 @@ authenticated `gh` and writes nothing without `--apply`.
 ```bash
 REPO="$(git rev-parse --show-toplevel)"
 TOOL="$REPO/dot_local/user_scripts/executable_import_release_skills.py"
-python3 "$TOOL" import v0.28.0 --source "$REPO" --pins               # preview: per-bundle added/changed/orphan files
-python3 "$TOOL" import v0.28.0 --source "$REPO" --pins --apply        # refuses (exit 3) while orphan files exist
-python3 "$TOOL" import v0.28.0 --source "$REPO" --pins --apply --prune  # after you inspected the orphans
+python3 "$TOOL" import v0.30.0 --source "$REPO" --pins               # preview: per-bundle added/changed/orphan files
+python3 "$TOOL" import v0.30.0 --source "$REPO" --pins --apply        # refuses (exit 3) while orphan files exist
+python3 "$TOOL" import v0.30.0 --source "$REPO" --pins --apply --prune  # after you inspected the orphans
 ```
 
 - **The tag.** It must be a published, non-prerelease release. The tool resolves it to one commit (printed; pass
@@ -175,11 +175,12 @@ python3 "$TOOL" import v0.28.0 --source "$REPO" --pins --apply --prune  # after 
   is the thing to record.
 - **The layout** is the one earlier imports used: `skills/<name>/**` or `crates/<crate>/skills/<name>/**` become the
   bundle; a crate's `README.md`, `docs/` and `data/` become `using-<crate>/references/`; `using-loop-engine` also takes
-  five named `docs/` files (`ROOT_REFERENCES` in the script). Importing the current tag changes nothing.
+  four named `docs/` files (`ROOT_REFERENCES` in the script). Importing the current tag changes nothing.
 - **Orphans** are files in a bundle that the tag no longer has. Other skills in `canonical/skills/` are never touched.
   Files chezmoi would read as attributes (`dot_`, `.tmpl`, a leading dot, and so on) or drop (empty files) stop the import.
-- **`--pins`** moves the four `loop-engine`, `software-change`, `policy-document` and `research` pins in
-  `dot_config/mise/config.toml` to the tag's version. `mise install` adds the new version and keeps the older ones, so
+- **`--pins`** moves the four `loop-engine`, `lean-change`, `policy-document` and `research` pins in
+  `dot_config/mise/config.toml` to the tag's version. The `software-change` pin stays where it is: v0.30.0
+  replaced that provider with lean-change, and runs started on it keep the installed version they name. `mise install` adds the new version and keeps the older ones, so
   runs frozen on an older tool version keep it. Do not `mise uninstall` them to tidy up.
 - **Deploy** with the normal flow above: preview the targets, get approval, then
   `chezmoi --source "$REPO" apply ~/.local/share/agent-harness/canonical/skills ~/.config/mise/config.toml` (and
