@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { guardProvider, rewriteContext, rewriteDocs } from "./guard.mjs";
-import { HUB_ORIGIN, loadCompat } from "./load.mjs";
+import { HUB_KEY_REF, HUB_ORIGIN, loadCompat } from "./load.mjs";
 
 const docs = "<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /real/pi/README.md\n- When asked about: models (docs/models.md), pi packages (docs/packages.md), MCP servers (docs/mcp.md)\n- Run pi and read pi docs\n</docs>";
 const fixed = docs.replace("about pi itself", "about Pi itself").replace("pi packages (docs/packages.md)", "Pi packages (docs/packages.md)");
@@ -99,20 +99,34 @@ test("direct mode keeps the shared Anthropic OAuth wrapper and passes only the m
 	assert.equal(registrations.length, 1);
 	assert.match(registrations[0].auth.oauth.name, /shared Pi Anthropic OAuth/);
 });
-test("proxy mode passes the hub origin and an owner-backed direct fallback, and keeps the fork's key auth", async () => {
-	const registrations = [], seen = [];
-	const auth = { apiKey: { name: "hub key", resolve() {} } };
+test("proxy mode passes the hub origin and an owner-backed direct fallback, with the hub key from 1Password", async () => {
+	const registrations = [], seen = [], keyReads = [];
+	const auth = { apiKey: { name: "hub key", resolve() { assert.fail("the fork's own key lookup must not be used"); } } };
 	const provider = { id: "claude-compat", auth, stream() {}, streamSimple() {} };
 	const upstream = async (api, options) => { seen.push(options); api.registerProvider(provider); };
 	const oauth = [{ providerId: "anthropic", type: "oauth" }];
-	await loadCompat({ registerProvider: p => registrations.push(p) }, upstream, ownerWith(oauth, "sk-ant-oat01-owner"), undefined, { mode: "proxy" });
+	const hubKey = async (signal) => { keyReads.push(signal); return "cpa_0123456789abcdef0123456789abcdef"; };
+	await loadCompat({ registerProvider: p => registrations.push(p) }, upstream, ownerWith(oauth, "sk-ant-oat01-owner"), undefined, { mode: "proxy", hubKey });
 	assert.equal(seen.length, 1);
 	assert.equal(seen[0].mode, "proxy");
 	assert.equal(seen[0].origin, HUB_ORIGIN);
 	assert.equal(HUB_ORIGIN, "https://cliproxy.internal.cartwmic.com");
 	assert.deepEqual(await seen[0].directAuth(undefined), { apiKey: "sk-ant-oat01-owner" });
 	assert.equal(registrations.length, 1);
-	assert.equal(registrations[0].auth, auth, "the hub route never uses the shared Anthropic wrapper");
+	const key = registrations[0].auth.apiKey;
+	assert.equal(registrations[0].auth.oauth, undefined, "the hub route never uses the shared Anthropic wrapper");
+	assert.deepEqual(await key.check({}), { type: "api_key", source: "1Password laptop-pi" });
+	const signal = new AbortController().signal;
+	const stored = await key.resolve({ credential: { type: "api_key", key: "sk-ant-oat01-stored" }, signal });
+	assert.deepEqual(stored, { auth: { apiKey: "cpa_0123456789abcdef0123456789abcdef" }, source: "1Password laptop-pi" }, "stored credentials are ignored");
+	assert.equal(keyReads.at(-1), signal);
+	await assert.rejects(key.login(), /comes from 1Password/);
+	for (const bad of ["sk-ant-oat01-x", "", "cpa_short", undefined]) {
+		const registered = [];
+		await loadCompat({ registerProvider: p => registered.push(p) }, async (api) => api.registerProvider(provider), {}, undefined,
+			{ mode: "proxy", hubKey: async () => bad });
+		await assert.rejects(registered[0].auth.apiKey.resolve({ signal }), /not a cpa_ hub client key/);
+	}
 	assert.notEqual(registrations[0].stream, provider.stream, "the prompt guard still wraps it");
 	const noLogin = [];
 	await loadCompat({ registerProvider() {} }, async (_api, options) => noLogin.push(options), ownerWith([], undefined), undefined, { mode: "proxy" });
@@ -128,10 +142,16 @@ test("an unknown mode fails before the fork is called", async () => {
 	}
 	assert.equal(called, false);
 });
-test("models.json gives claude-compat the hub client key by 1Password reference, not a value", () => {
+test("direct mode never reads the hub key", async () => {
+	await loadCompat({ registerProvider() {} }, async (api) => api.registerProvider({ id: "claude-compat", auth: { oauth: {} }, stream() {}, streamSimple() {} }),
+		ownerWith([], undefined), undefined, { mode: "direct", hubKey: async () => assert.fail("direct mode read the hub key") });
+});
+test("the hub key is a 1Password reference; models.json has no claude-compat key and no proxy provider", () => {
+	assert.equal(HUB_KEY_REF, "op://developer/tb36gtnaocyezjk3dslomp64he/laptop-pi");
 	const template = readFileSync(new URL("../../private_models.json.tmpl", import.meta.url), "utf8");
 	const block = template.slice(template.indexOf('"claude-compat": {'), template.indexOf('"openai-codex"'));
-	assert.ok(block.includes('"apiKey": "!$HOME/.local/user_scripts/op_read_cached.sh op://developer/tb36gtnaocyezjk3dslomp64he/laptop-pi"'));
+	assert.ok(block.length > 0);
+	assert.equal(block.includes('"apiKey"'), false, "direct mode must not depend on a configured key");
 	assert.equal(/cpa_[0-9a-f]/.test(template), false);
 	assert.equal(template.includes("claude-compat-proxy"), false);
 	const settings = readFileSync(new URL("../../private_settings.json.tmpl", import.meta.url), "utf8");

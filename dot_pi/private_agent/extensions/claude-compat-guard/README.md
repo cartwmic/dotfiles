@@ -10,10 +10,11 @@ and native registration APIs.
 `PI_CLAUDE_COMPAT_MODE` picks the route when Pi starts. Change it, then restart Pi.
 
 - **Unset or `proxy`:** `claude-compat` requests go to the CLIProxyAPI hub at
-  `https://cliproxy.internal.cartwmic.com` (`HUB_ORIGIN` in `load.mjs`). The client
-  key comes from the `claude-compat` `apiKey` in `private_models.json.tmpl`, read
-  from 1Password item `tb36gtnaocyezjk3dslomp64he` field `laptop-pi`. The hub
-  holds the Anthropic logins.
+  `https://cliproxy.internal.cartwmic.com` (`HUB_ORIGIN` in `load.mjs`). The guard reads
+  the client key per request through `op_read_cached.sh` from 1Password item
+  `tb36gtnaocyezjk3dslomp64he` field `laptop-pi` (`HUB_KEY_REF`), and only in this
+  mode, so direct mode never depends on 1Password. Stored credentials are ignored.
+  The hub holds the Anthropic logins.
 - **Fallback:** only when the hub gives no HTTP response (DNS failure, refused or
   unreachable connection, connect timeout), the request is retried direct on Pi's
   Anthropic OAuth login. Any HTTP response from the hub is final, including 401,
