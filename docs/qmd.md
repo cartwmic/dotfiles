@@ -98,7 +98,9 @@ data:
 Both keys are optional; the defaults are `true` and `60`. Change a value and run `chezmoi apply`: the plist is rewritten and
 `run_onchange_after_71_qmd_refresh_launchd.sh` runs again (its hash covers the plist template and the setting). It does
 `launchctl bootout gui/$UID/local.qmd-refresh`, then `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/local.qmd-refresh.plist`,
-or, when disabled, removes the plist and loads nothing. Any other value (`5`, `90.5`, `hourly`, `enabled: "yes"`) fails the render,
+or, when disabled, removes the plist and loads nothing. If launchd does not end up as the setting asks (the unload or load fails;
+loading needs a GUI login session, so an apply over ssh alone fails here), the script fails the apply and chezmoi runs it again on the
+next apply. Any other value (`5`, `90.5`, `hourly`, `enabled: "yes"`) fails the render,
 so a typo applies nothing rather than scheduling something else. A bootout stops a run in progress (qmd-refresh stops its job tree
 on TERM); the next run starts one interval after the load.
 
@@ -107,7 +109,7 @@ on TERM); the next run starts one interval after the load.
 | `Library/LaunchAgents/local.qmd-refresh.plist.tmpl` | `StartInterval` = interval; `RunAtLoad` false, so an apply or a login does not start a heavy job; `PATH` with the mise shims first (qmd, node, python3) |
 | `~/.local/bin/qmd-refresh-scheduled` | what the agent runs: `qmd-refresh --wait <interval in seconds>`, and the log |
 | `.chezmoitemplates/qmd_refresh_minutes` | reads and checks the setting; used by the plist and the load script |
-| `run_onchange_after_71_qmd_refresh_launchd.sh.tmpl` | bootout, then bootstrap (or remove when off). Only those two `launchctl` verbs |
+| `run_onchange_after_71_qmd_refresh_launchd.sh.tmpl` | `print` (is it loaded?), bootout, then bootstrap (or remove when off). No other `launchctl` verb |
 
 **No second gate.** The agent adds no heavy-gate, `nice`, lock or launchd `Nice` of its own: `qmd-refresh` already runs its job as
 `nice -n 10 heavy-gate --wait N --` under its `flock`. heavy-gate may wait up to one interval for a quiet Mac, then gives up (75)
@@ -119,8 +121,9 @@ so runs cannot pile up. Not `ProcessType` Background: macOS throttles such a job
 after Ns`. It keeps qmd-refresh's own lines and qmd's counts (documents written, indexed, chunks embedded) and collection paths: no
 document text, no environment, no secrets. Status 75 (lock held, or heavy-gate gave up) is one `skipped` line. Dropped: terminal
 escapes, progress bars, heavy-gate's echo of the job script, and the per-chunk "truncated to fit embedding context" warnings (one
-count line instead; they are expected, see below). A run is about 3 KB. Bounded: day files older than 14 days are deleted, a day file
-over 2 MB gets one line per run, and `launchd.log` (the runner's own stray output) is emptied when over 2 MB.
+count line instead; they are expected, see below). A run is about 3 KB. Bounded: day files older than 14 days are deleted; a day file
+never grows past 2 MB (output is filtered as it is read, a run's output is cut to the room left, and a full file gets nothing more
+that day); `launchd.log` (the runner's own stray output) is emptied when over 2 MB.
 
 ```sh
 tail -n 30 ~/Library/Logs/qmd-refresh/qmd-refresh-$(date +%F).log

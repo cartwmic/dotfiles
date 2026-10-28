@@ -11,8 +11,10 @@
 #  - status 75 (another refresh holds the lock, or heavy-gate gave up waiting for a quiet Mac) writes one line, nothing else.
 #  - noise is dropped: terminal escapes, progress bars, heavy-gate's echo of the job script, and the per-chunk "truncated to fit
 #    embedding context" warnings (counted instead; they are expected with QMD_EMBED_CONTEXT_SIZE=506).
-#  - bounded: day files older than QMD_REFRESH_LOG_DAYS (default 14) are deleted; a day file over QMD_REFRESH_LOG_MAX_BYTES
-#    (default 2 MB) gets one line per run; launchd.log (this script's own stray output) is emptied when over the same size.
+#  - bounded: day files older than QMD_REFRESH_LOG_DAYS (default 14) are deleted; a day file never grows past
+#    QMD_REFRESH_LOG_MAX_BYTES (default 2 MB): a run's output is cut to the room left, and once full a run is one line or nothing.
+#    The output is filtered as it is read, so nothing large is kept on disk. launchd.log (this script's own stray output) is
+#    emptied at the start of a run when over the same size.
 #  - what is logged: qmd-refresh's own lines and qmd's counts and collection paths. No document text, no environment, no secrets.
 #
 # TERM, INT or HUP (launchctl bootout, logout) are passed to qmd-refresh, which stops its job tree. Exit: qmd-refresh's status.
@@ -41,19 +43,49 @@ log=$logdir/qmd-refresh-$(date +%Y-%m-%d).log
 find "$logdir" -maxdepth 1 -type f -name 'qmd-refresh-*.log' -mtime "+$keep" -exec rm -f {} + 2>/dev/null || :
 size() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }
 [ ! -f "$logdir/launchd.log" ] || [ "$(size "$logdir/launchd.log")" -le "$cap" ] || : > "$logdir/launchd.log"
+# say LINE: append one line to the day log only if the file stays within the cap.
+say() {
+    n=$(printf '%s\n' "$1" | wc -c | tr -d ' ')
+    [ $(( $(size "$log") + n )) -gt "$cap" ] || printf '%s\n' "$1" >> "$log"
+}
 
-out=$(mktemp "$logdir/.run.XXXXXX")
-trap 'rm -f "$out"' EXIT
 stamp() { date +%Y-%m-%dT%H:%M:%S%z; }
 started=$(stamp)
 t0=$(date +%s)
 
 if [ ! -x "$refresh" ]; then
-    echo "$started rc=127: $refresh not found or not executable" >> "$log"
+    say "$started rc=127: $refresh not found or not executable"
     exit 127
 fi
 
-"$refresh" --wait "$wait_s" > "$out" 2>&1 < /dev/null &
+tmp=$(mktemp -d "$logdir/.run.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+mkfifo "$tmp/fifo" "$tmp/lines"
+# The output is filtered as it arrives, and at most the room left in today's file (less 512 bytes for the start, end and cut lines)
+# is kept; the rest is still read, so qmd-refresh never blocks on a full pipe. LC_ALL=C: awk counts bytes, and the progress-bar
+# pattern is matched as byte sequences (no bracket expression, which would split multi-byte characters).
+room=$(( cap - $(size "$log") - 512 ))
+esc=$(printf '\033')
+cat < "$tmp/fifo" > "$tmp/lines" &
+tpid=$!
+tr '\r' '\n' < "$tmp/lines" | sed "s/${esc}\[[0-9;?]*[A-Za-z]//g" | LC_ALL=C awk -v room="$room" '
+    function out(s) {
+        if (cut) return
+        if (used + length(s) + 1 > room) { cut = 1; return }
+        print s; used += length(s) + 1
+    }
+    /truncated to fit embedding context/ { trunc++; next }
+    skip > 0 { skip--; if ($0 ~ /^if \[ "\$ok" = 1 \]/) skip = 0; next }
+    /^\[heavy-gate\] INFO: allowed; running: sh -c / { out("[heavy-gate] INFO: allowed; running: <the qmd-refresh job>"); skip = 60; next }
+    /^[[:space:]]*$/ { next }
+    /█|░/ { next }
+    { out($0) }
+    END {
+        if (trunc) out(sprintf("(%d \"truncated to fit embedding context\" warnings, expected with QMD_EMBED_CONTEXT_SIZE=506)", trunc))
+        if (cut) print "(output cut: the day log is near its size cap)"
+    }' > "$tmp/out" &
+fpid=$!
+"$refresh" --wait "$wait_s" > "$tmp/fifo" 2>&1 < /dev/null &
 pid=$!
 trap 'kill -TERM "$pid" 2>/dev/null || :' TERM INT HUP
 # A trapped signal interrupts wait with a status above 128; keep waiting until qmd-refresh itself has exited.
@@ -62,30 +94,29 @@ while :; do
     wait "$pid" || rc=$?
     kill -0 "$pid" 2>/dev/null || break
 done
+# A process that outlived qmd-refresh's job could hold the pipe open: give the reader 5 s, then stop it. It is cat, which keeps
+# nothing buffered, so nothing is lost and the filter after it ends cleanly.
+i=0
+while kill -0 "$tpid" 2>/dev/null && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
+kill "$tpid" 2>/dev/null || :
+while kill -0 "$fpid" 2>/dev/null; do wait "$fpid" || :; done
 secs=$(( $(date +%s) - t0 ))
 
 if [ "$rc" -eq 75 ]; then
-    why=$(grep -E '^qmd-refresh: .*(another refresh|gave up)' "$out" | tail -n 1)
-    [ -n "$why" ] || why=$(grep '^qmd-refresh: ' "$out" | tail -n 1)
+    why=$(grep -E '^qmd-refresh: .*(another refresh|gave up)' "$tmp/out" | tail -n 1)
+    [ -n "$why" ] || why=$(grep '^qmd-refresh: ' "$tmp/out" | tail -n 1)
     why=$(printf '%s' "$why" | sed 's/^qmd-refresh: //' | cut -c1-200)
-    echo "$started skipped rc=75 after ${secs}s: ${why:-no reason given}" >> "$log"
+    say "$started skipped rc=75 after ${secs}s: ${why:-no reason given}"
     exit 75
 fi
-if [ "$(size "$log")" -ge "$cap" ]; then
-    echo "$started rc=$rc after ${secs}s (output not kept: this file is over $cap bytes)" >> "$log"
-    exit "$rc"
-fi
-esc=$(printf '\033')
 {
     echo "== $started start (heavy-gate wait up to ${wait_s}s)"
-    tr '\r' '\n' < "$out" | sed "s/${esc}\[[0-9;?]*[A-Za-z]//g" | awk '
-        /truncated to fit embedding context/ { trunc++; next }
-        skip > 0 { skip--; if ($0 ~ /^if \[ "\$ok" = 1 \]/) skip = 0; next }
-        /^\[heavy-gate\] INFO: allowed; running: sh -c / { print "[heavy-gate] INFO: allowed; running: <the qmd-refresh job>"; skip = 60; next }
-        /^[[:space:]]*$/ { next }
-        /█|░/ { next }
-        { print }
-        END { if (trunc) printf "(%d \"truncated to fit embedding context\" warnings, expected with QMD_EMBED_CONTEXT_SIZE=506)\n", trunc }'
+    cat "$tmp/out"
     echo "== $(stamp) end rc=$rc after ${secs}s"
-} >> "$log"
+} > "$tmp/block"
+if [ $(( $(size "$log") + $(size "$tmp/block") )) -le "$cap" ]; then
+    cat "$tmp/block" >> "$log"
+else
+    say "$started rc=$rc after ${secs}s (output not kept: this file is near its $cap-byte cap)"
+fi
 exit "$rc"
