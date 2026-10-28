@@ -1,0 +1,39 @@
+#!/bin/sh
+# Load, reload or unload the scheduled QMD refresh (local.qmd-refresh) when its plist template or its setting changes.
+# personal and axon-work-computer on macOS only (.chezmoiignore). Setting: chezmoi data qmd.refresh (docs/qmd.md "Scheduled refresh").
+# plist: {{ include "Library/LaunchAgents/local.qmd-refresh.plist.tmpl" | sha256sum }}
+# setting: {{ includeTemplate "qmd_refresh_minutes" . }}
+#
+# Fails (and so fails the apply) when launchd does not end up in the state the setting asks for: chezmoi records a run_onchange
+# script only when it succeeds, so the next apply tries again instead of leaving a job running that the setting turned off.
+set -eu
+log() { printf '[qmd_refresh_launchd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Darwin ] || exit 0
+label=local.qmd-refresh
+plist="$HOME/Library/LaunchAgents/$label.plist"
+uid=$(id -u)
+loaded() { launchctl print "gui/$uid/$label" >/dev/null 2>&1; }
+# A run in progress is stopped (qmd-refresh stops its job on TERM); the next one starts on the new schedule.
+if loaded; then
+  launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || :
+  if loaded; then
+    log ERROR "could not unload $label; try: launchctl bootout gui/$uid/$label, then chezmoi apply again"
+    exit 1
+  fi
+fi
+{{- if eq (includeTemplate "qmd_refresh_minutes" .) "off" }}
+rm -f "$plist"
+log INFO "qmd.refresh.enabled is false: $label is not loaded"
+{{- else }}
+if [ ! -f "$plist" ]; then
+  log ERROR "$plist is not installed; apply it too (chezmoi apply $plist), then apply again"
+  exit 1
+fi
+mkdir -p "$HOME/Library/Logs/qmd-refresh"
+if ! launchctl bootstrap "gui/$uid" "$plist"; then
+  log ERROR "could not load $label (no GUI session, e.g. over ssh?); log in and chezmoi apply again, or: launchctl bootstrap gui/$uid $plist"
+  exit 1
+fi
+log INFO "loaded $label (every {{ includeTemplate "qmd_refresh_minutes" . }} minutes; the first run is one interval from now)"
+{{- end }}
