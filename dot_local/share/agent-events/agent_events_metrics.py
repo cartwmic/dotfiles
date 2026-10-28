@@ -2,7 +2,7 @@
 
 Only counts, durations, tokens, notional cost and fixed-vocabulary names leave the machine, grouped
 by low-cardinality labels (project slug, kind, provider, model, tool, outcome). No paths, no message text,
-tool arguments or error text. The one exception to "no session ids" is the three pi_cache_*_30m gauges, which carry a
+tool arguments or error text. The one exception to "no session ids" is the four pi_cache_*_30m gauges, which carry a
 session id (UUIDs only) for sessions active in the last 30 minutes only (see cache_gauges). Content stays in the session files.
 """
 import contextlib
@@ -177,6 +177,8 @@ def cache_gauges(con, now):
     pi_cache_calls_30m            LLM calls in the window (calls that report no usage are left out)
     pi_cache_full_miss_calls_30m  calls with cacheWrite > FULL_MISS_WRITE_TOKENS and cacheRead under
                                   FULL_MISS_READ_SHARE of the prompt
+    pi_cache_uncached_tokens_30m  cacheWrite + fresh input: the prompt tokens not served from cache. The low-hit-ratio alert
+                                  needs it to ignore short sessions whose misses cost little (a 5-call subagent at 0.45)
     The window ends at now, so the result depends only on the database and now (the replay of past hours relies on it).
     Labels: session (the whole session id; sessions whose id is not a UUID are skipped, never pooled: a Pi session id is a UUID made of a
     start time and random bits, so it names the session for 'agent-events session <id>' and carries no content),
@@ -202,15 +204,17 @@ def cache_gauges(con, now):
         a = acc.setdefault(key, [0, 0, 0, 0, 0])
         for i, v in enumerate((n, cr, cw, fi, miss)):
             a[i] += v or 0
-    ratio, calls, misses = [], [], []
+    ratio, calls, misses, uncached = [], [], [], []
     for (session, project, model), (n, cr, cw, fi, miss) in sorted(acc.items()):
         labels = {"session": session, "project": project, "model": model}
         ratio.append((labels, cr / (cr + cw + fi)))
         calls.append((labels, float(n)))
         misses.append((labels, float(miss)))
+        uncached.append((labels, float(cw + fi)))
     return [{"name": "pi_cache_hit_ratio_30m", "type": "gauge", "points": ratio},
             {"name": "pi_cache_calls_30m", "type": "gauge", "points": calls},
-            {"name": "pi_cache_full_miss_calls_30m", "type": "gauge", "points": misses}]
+            {"name": "pi_cache_full_miss_calls_30m", "type": "gauge", "points": misses},
+            {"name": "pi_cache_uncached_tokens_30m", "type": "gauge", "points": uncached}]
 
 
 def self_metrics(con, status, db_path):
