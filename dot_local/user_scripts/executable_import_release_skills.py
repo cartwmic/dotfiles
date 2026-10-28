@@ -10,8 +10,10 @@
 The tag is resolved to one commit; every imported file is read from that commit's archive and
 must match the git blob hash in the commit's tree. Files that sit in a bundle but not in the tag
 are orphans: --apply refuses while any exist, and --prune deletes them. --pins also moves the
-four Loop Engine tool pins in dot_config/mise/config.toml to the tag's version (mise keeps older
-installed versions, so frozen runs keep theirs; this tool never uninstalls anything).
+four Loop Engine tool pins (loop-engine, lean-change, policy-document, research) in
+dot_config/mise/config.toml to the tag's version (mise keeps older installed versions, so frozen
+runs keep theirs; this tool never uninstalls anything). The retired software-change pin is left
+where it is: releases no longer ship it.
 
 `verify-deployed` compares the canonical bundles in the source with the deployed copies byte for
 byte (extra deployed files are orphans: chezmoi apply does not delete them) and checks that each
@@ -46,13 +48,12 @@ CRATE_REFERENCE_DIRS = ("docs", "data")
 ROOT_REFERENCES = {
     "using-loop-engine": (
         "agent-usage.md",
-        "implementation-report-proof.md",
         "operational-ux-capture.schema.json",
         "operational-ux-contracts.md",
         "PRD.md",
     ),
 }
-PIN_LINE = re.compile(r'^((?:loop-engine|software-change|policy-document|research) = \{ version = ")([^"]+)(")', re.M)
+PIN_LINE = re.compile(r'^((?:loop-engine|lean-change|policy-document|research) = \{ version = ")([^"]+)(")', re.M)
 PIN_COUNT = 4
 # Names chezmoi would read as attributes, or drop (an empty file is not deployed without empty_).
 CHEZMOI_SPECIAL = re.compile(

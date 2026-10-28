@@ -62,7 +62,6 @@ def blob_sha(data):
 GOOD_TREE = {
     "skills/using-loop-engine/SKILL.md": b"root skill v1\n",
     "docs/agent-usage.md": b"agent usage v1\n",
-    "docs/implementation-report-proof.md": b"irp\n",
     "docs/operational-ux-capture.schema.json": b"{}\n",
     "docs/operational-ux-contracts.md": b"ux\n",
     "docs/PRD.md": b"prd\n",
@@ -140,7 +139,6 @@ class ImportTests(Fixture):
         expected = {
             "using-loop-engine/SKILL.md": b"root skill v1\n",
             "using-loop-engine/references/agent-usage.md": b"agent usage v1\n",
-            "using-loop-engine/references/implementation-report-proof.md": b"irp\n",
             "using-loop-engine/references/operational-ux-capture.schema.json": b"{}\n",
             "using-loop-engine/references/operational-ux-contracts.md": b"ux\n",
             "using-loop-engine/references/PRD.md": b"prd\n",
@@ -327,7 +325,8 @@ class ImportTests(Fixture):
         original = (
             'gh = "latest"\n'
             'loop-engine = { version = "0.9.0", matching_regex = "^loop-cli-", rename_exe = "loop-engine" }\n'
-            'software-change = { version = "0.9.0", matching_regex = "^software-change-provider-", rename_exe = "software-change" }\n'
+            'lean-change = { version = "0.9.0", matching_regex = "^lean-change-provider-", rename_exe = "lean-change" }\n'
+            'software-change = { version = "0.8.0", matching_regex = "^software-change-provider-", rename_exe = "software-change" }\n'
             'policy-document = { version = "0.9.0", matching_regex = "^policy-document-provider-", rename_exe = "policy-document" }\n'
             'research = { version = "0.9.0", matching_regex = "^research-provider-", rename_exe = "research" }\n'
             'other = { version = "0.9.0" }\n'
@@ -338,6 +337,7 @@ class ImportTests(Fixture):
         self.assertEqual(self.do_import("--pins", "--apply", "--prune").returncode, 0)
         self.assertEqual(config.read_text(), original.replace('version = "0.9.0", matching', 'version = "1.0.0", matching'))
         self.assertIn('other = { version = "0.9.0" }', config.read_text())
+        self.assertIn('software-change = { version = "0.8.0"', config.read_text())  # the retired pin stays
 
     def test_pins_refuse_a_config_that_does_not_have_the_four_lines(self):
         (self.source / "dot_config/mise/config.toml").write_text('gh = "latest"\n')
