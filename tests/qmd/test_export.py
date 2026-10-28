@@ -234,15 +234,15 @@ class PruneTest(Base):
     def test_old_sources_are_not_exported_and_aged_outputs_go(self):
         f = self.f
         f.sess("new", age_days=1)
-        f.sess("old", age_days=100, name="old.jsonl")
+        f.sess("old", age_days=400, name="old.jsonl")
         f.recap("rnew", age_days=1)
-        f.recap("rold", day="2026-05-01", age_days=100)
+        f.recap("rold", day="2026-05-01", age_days=400)
         out = f.run().stdout
         self.assertEqual(f.files(), ["recaps/2026-10-26/rnew.md", "sessions/2026-10-20/new.md"])
-        self.assertIn("1 older than 90 days", out)
+        self.assertIn("1 older than 365 days", out)
         # now the new session ages out
         new = f.sessions / "--w-proj--" / "2026-10-20T10-00-00-000Z_new.jsonl"
-        t = time.time() - 95 * DAY
+        t = time.time() - 370 * DAY
         os.utime(new, (t, t))
         f.run()
         self.assertEqual(f.files("sessions"), [])
