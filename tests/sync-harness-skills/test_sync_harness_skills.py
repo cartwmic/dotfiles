@@ -62,6 +62,8 @@ class SyncHarnessSkillsTest(unittest.TestCase):
         self.assertIn("· gamma", out)
         self.assertIn("old/ (orphan skill)", out)
         self.assertIn("alpha/scripts/executable_run.sh", out)
+        self.assertIn("+alpha v2", out)  # chezmoi diff of the rendered target
+        self.assertIn("+rendered", out)
         self.assertIn("Dry run", out)
         self.assertEqual(self.files(), before)
 
@@ -89,6 +91,35 @@ class SyncHarnessSkillsTest(unittest.TestCase):
         out = self.run_sync("--dry-run", "--prune")
         self.assertIn("Everything is in sync", out)
         self.assertNotIn("Not managed", out)
+
+    def test_prune_handles_spaces_in_names(self):
+        # A whitespace-split list would read "alpha/SKILL.md" and "backup" here.
+        (self.deployed / "alpha/SKILL.md backup").write_text("bak\n")
+        (self.deployed / "my old skill").mkdir()
+        (self.deployed / "my old skill/SKILL.md").write_text("orphan\n")
+        out = self.run_sync("--dry-run", "--prune")
+        self.assertIn("alpha/SKILL.md backup", out)
+        self.assertIn("my old skill/ (orphan skill)", out)
+        self.run_sync("--yes", "--prune")
+        self.assertEqual(self.files(), ["alpha/SKILL.md", "alpha/scripts/run.sh",
+                                        "beta/SKILL.md", "gamma/SKILL.md"])
+
+    def test_first_deploy_into_empty_home(self):
+        shutil.rmtree(self.home)
+        out = self.run_sync("--dry-run")
+        for skill in ("alpha", "beta", "gamma"):
+            self.assertIn(f"+\x1b[0m {skill}", out)
+        self.run_sync("--yes")
+        self.assertEqual(self.files(), ["alpha/SKILL.md", "alpha/scripts/run.sh",
+                                        "beta/SKILL.md", "gamma/SKILL.md"])
+
+    def test_chezmoiremove_entry_is_deleted(self):
+        (self.src / ".chezmoiremove").write_text(SKILLS + "/old\n")
+        out = self.run_sync("--dry-run")
+        self.assertIn("−\x1b[0m old", out)
+        self.assertTrue((self.deployed / "old").exists())
+        self.run_sync("--yes")
+        self.assertFalse((self.deployed / "old").exists())
 
 
 if __name__ == "__main__":
