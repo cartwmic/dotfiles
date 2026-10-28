@@ -1,0 +1,122 @@
+#!/bin/sh
+# qmd-refresh-scheduled — what the launchd agent local.qmd-refresh runs: one plain `qmd-refresh`, logged under ~/Library/Logs.
+#
+#   qmd-refresh-scheduled --wait SECONDS
+#
+# The schedule is set in chezmoi data (qmd.refresh.enabled, qmd.refresh.intervalMinutes; docs/qmd.md "Scheduled refresh").
+# Nothing here gates, niceness-adjusts or locks: qmd-refresh does all of that itself (heavy-gate, nice -n 10, flock). launchd never
+# starts a second copy of a running agent, and qmd-refresh's lock refuses one started by hand, so runs cannot pile up. Never --reembed.
+#
+# Log: ${QMD_REFRESH_LOG_DIR:-~/Library/Logs/qmd-refresh}/qmd-refresh-YYYY-MM-DD.log, one block per run with local timestamps.
+#  - status 75 (another refresh holds the lock, or heavy-gate gave up waiting for a quiet Mac) writes one line, nothing else.
+#  - noise is dropped: terminal escapes, progress bars, heavy-gate's echo of the job script, and the per-chunk "truncated to fit
+#    embedding context" warnings (counted instead; they are expected with QMD_EMBED_CONTEXT_SIZE=506).
+#  - bounded: day files older than QMD_REFRESH_LOG_DAYS (default 14) are deleted; a day file never grows past
+#    QMD_REFRESH_LOG_MAX_BYTES (default 2 MB): a run's output is cut to the room left, and once full a run is one line or nothing.
+#    The output is filtered as it is read, so nothing large is kept on disk. launchd.log (this script's own stray output) is
+#    emptied at the start of a run when over the same size.
+#  - what is logged: qmd-refresh's own lines and qmd's counts and collection paths. No document text, no environment, no secrets.
+#
+# TERM, INT or HUP (launchctl bootout, logout) are passed to qmd-refresh, which stops its job tree. Exit: qmd-refresh's status.
+set -eu
+
+prog=qmd-refresh-scheduled
+wait_s=
+while [ $# -gt 0 ]; do
+    case $1 in
+        --wait) [ $# -ge 2 ] || { echo "usage: $prog --wait SECONDS" >&2; exit 2; }; wait_s=$2; shift ;;
+        -h|--help) echo "usage: $prog --wait SECONDS"; exit 0 ;;
+        *) echo "usage: $prog --wait SECONDS" >&2; exit 2 ;;
+    esac
+    shift
+done
+case $wait_s in ''|*[!0-9]*) echo "$prog: --wait needs a whole number of seconds, got '$wait_s'" >&2; exit 2 ;; esac
+
+logdir=${QMD_REFRESH_LOG_DIR:-$HOME/Library/Logs/qmd-refresh}
+keep=${QMD_REFRESH_LOG_DAYS:-14}
+cap=${QMD_REFRESH_LOG_MAX_BYTES:-2097152}
+refresh=${QMD_REFRESH_BIN:-$HOME/.local/bin/qmd-refresh}
+case $keep$cap in ''|*[!0-9]*) echo "$prog: QMD_REFRESH_LOG_DAYS and QMD_REFRESH_LOG_MAX_BYTES must be whole numbers" >&2; exit 2 ;; esac
+
+mkdir -p "$logdir"
+log=$logdir/qmd-refresh-$(date +%Y-%m-%d).log
+find "$logdir" -maxdepth 1 -type f -name 'qmd-refresh-*.log' -mtime "+$keep" -exec rm -f {} + 2>/dev/null || :
+size() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }
+[ ! -f "$logdir/launchd.log" ] || [ "$(size "$logdir/launchd.log")" -le "$cap" ] || : > "$logdir/launchd.log"
+# say LINE: append one line to the day log only if the file stays within the cap.
+say() {
+    n=$(printf '%s\n' "$1" | wc -c | tr -d ' ')
+    [ $(( $(size "$log") + n )) -gt "$cap" ] || printf '%s\n' "$1" >> "$log"
+}
+
+stamp() { date +%Y-%m-%dT%H:%M:%S%z; }
+started=$(stamp)
+t0=$(date +%s)
+
+if [ ! -x "$refresh" ]; then
+    say "$started rc=127: $refresh not found or not executable"
+    exit 127
+fi
+
+tmp=$(mktemp -d "$logdir/.run.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+mkfifo "$tmp/fifo" "$tmp/lines"
+# The output is filtered as it arrives, and at most the room left in today's file (less 512 bytes for the start, end and cut lines)
+# is kept; the rest is still read, so qmd-refresh never blocks on a full pipe. LC_ALL=C: awk counts bytes, and the progress-bar
+# pattern is matched as byte sequences (no bracket expression, which would split multi-byte characters).
+room=$(( cap - $(size "$log") - 512 ))
+esc=$(printf '\033')
+cat < "$tmp/fifo" > "$tmp/lines" &
+tpid=$!
+tr '\r' '\n' < "$tmp/lines" | sed "s/${esc}\[[0-9;?]*[A-Za-z]//g" | LC_ALL=C awk -v room="$room" '
+    function out(s) {
+        if (cut) return
+        if (used + length(s) + 1 > room) { cut = 1; return }
+        print s; used += length(s) + 1
+    }
+    /truncated to fit embedding context/ { trunc++; next }
+    skip > 0 { skip--; if ($0 ~ /^if \[ "\$ok" = 1 \]/) skip = 0; next }
+    /^\[heavy-gate\] INFO: allowed; running: sh -c / { out("[heavy-gate] INFO: allowed; running: <the qmd-refresh job>"); skip = 60; next }
+    /^[[:space:]]*$/ { next }
+    /█|░/ { next }
+    { out($0) }
+    END {
+        if (trunc) out(sprintf("(%d \"truncated to fit embedding context\" warnings, expected with QMD_EMBED_CONTEXT_SIZE=506)", trunc))
+        if (cut) print "(output cut: the day log is near its size cap)"
+    }' > "$tmp/out" &
+fpid=$!
+"$refresh" --wait "$wait_s" > "$tmp/fifo" 2>&1 < /dev/null &
+pid=$!
+trap 'kill -TERM "$pid" 2>/dev/null || :' TERM INT HUP
+# A trapped signal interrupts wait with a status above 128; keep waiting until qmd-refresh itself has exited.
+while :; do
+    rc=0
+    wait "$pid" || rc=$?
+    kill -0 "$pid" 2>/dev/null || break
+done
+# A process that outlived qmd-refresh's job could hold the pipe open: give the reader 5 s, then stop it. It is cat, which keeps
+# nothing buffered, so nothing is lost and the filter after it ends cleanly.
+i=0
+while kill -0 "$tpid" 2>/dev/null && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
+kill "$tpid" 2>/dev/null || :
+while kill -0 "$fpid" 2>/dev/null; do wait "$fpid" || :; done
+secs=$(( $(date +%s) - t0 ))
+
+if [ "$rc" -eq 75 ]; then
+    why=$(grep -E '^qmd-refresh: .*(another refresh|gave up)' "$tmp/out" | tail -n 1)
+    [ -n "$why" ] || why=$(grep '^qmd-refresh: ' "$tmp/out" | tail -n 1)
+    why=$(printf '%s' "$why" | sed 's/^qmd-refresh: //' | cut -c1-200)
+    say "$started skipped rc=75 after ${secs}s: ${why:-no reason given}"
+    exit 75
+fi
+{
+    echo "== $started start (heavy-gate wait up to ${wait_s}s)"
+    cat "$tmp/out"
+    echo "== $(stamp) end rc=$rc after ${secs}s"
+} > "$tmp/block"
+if [ $(( $(size "$log") + $(size "$tmp/block") )) -le "$cap" ]; then
+    cat "$tmp/block" >> "$log"
+else
+    say "$started rc=$rc after ${secs}s (output not kept: this file is near its $cap-byte cap)"
+fi
+exit "$rc"

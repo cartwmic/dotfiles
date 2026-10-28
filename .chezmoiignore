@@ -142,6 +142,14 @@ Library/LaunchAgents/local.agent-events.plist
 .local/share/agent-harness/canonical/skills/searching-with-qmd/**
 .local/bin/qmd-refresh
 .local/bin/qmd-export
+.local/bin/qmd-refresh-scheduled
+.local/bin/qmd
+{{- end }}
+
+{{- if or (and (ne .profile "personal") (ne .profile "axon-work-computer")) (ne .chezmoi.os "darwin") }}
+# Scheduled QMD refresh: launchd, so macOS on personal and work. On/off and interval: data qmd.refresh (docs/qmd.md); off renders the plist empty.
+Library/LaunchAgents/local.qmd-refresh.plist
+71_qmd_refresh_launchd.sh
 {{- end }}
 
 {{- if ne .profile "personal" }}

@@ -4,7 +4,9 @@
 #   qmd-refresh [--wait SECONDS] [--no-embed] [--no-export] [--reembed] [--dry-run]
 #   qmd-refresh status
 #
-# Run by the owner (or an agent the owner asked). Nothing schedules it. See docs/qmd.md.
+# Run on a schedule by the launchd agent local.qmd-refresh (macOS, personal and work; every 60 minutes unless chezmoi data
+# qmd.refresh says otherwise; it calls qmd-refresh-scheduled, which logs to ~/Library/Logs/qmd-refresh), and by hand by the owner
+# or an agent the owner asked. The schedule adds no gate, nice or lock of its own: the ones below are the only ones. See docs/qmd.md.
 #
 # Why this wrapper and not bare `qmd embed`:
 #  - heavy: embedding peaks at 1.9 GB RSS with the flags below (4.5 GB without), for up to ~45 min on a full index, and

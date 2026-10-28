@@ -1,0 +1,31 @@
+{{- /* Renders empty when qmd.refresh.enabled is false: chezmoi then removes the installed plist, and run_onchange_after_71 unloads the agent. */ -}}
+{{- $min := includeTemplate "qmd_refresh_minutes" . -}}
+{{- if ne $min "off" -}}
+{{- $secs := mul (atoi $min) 60 -}}
+{{- $home := .chezmoi.homeDir | html -}}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Scheduled QMD refresh (docs/qmd.md "Scheduled refresh"): a plain qmd-refresh every {{ $min }} minutes. Interval and on/off: chezmoi data qmd.refresh. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.qmd-refresh</string>
+  <key>ProgramArguments</key>
+  <!-- heavy-gate may wait up to one interval for a quiet Mac; then the run gives up (75) and the next tick tries again. -->
+  <array><string>/bin/sh</string><string>{{ $home }}/.local/bin/qmd-refresh-scheduled</string><string>--wait</string><string>{{ $secs }}</string></array>
+  <key>StartInterval</key><integer>{{ $secs }}</integer>
+  <!-- Not at load: loading it (apply, login) does not start a heavy job; the first run is one interval later. -->
+  <key>RunAtLoad</key><false/>
+  <!-- No Nice key: qmd-refresh already runs its job under nice -n 10, and launchd's Nice would add to that. Not ProcessType
+       Background either: macOS then throttles a job to a near stop on a busy machine (see local.agent-events), and this one holds
+       a heavy-gate slot while it runs. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- mise shims first (qmd, node, python3 for qmd-export), then heavy-gate and the qmd scripts, then the system. -->
+    <key>PATH</key><string>{{ $home }}/.local/share/mise/shims:{{ $home }}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <!-- The runner writes its own day files next to this; launchd.log only catches its stray output and is kept small by it. -->
+  <key>StandardOutPath</key><string>{{ $home }}/Library/Logs/qmd-refresh/launchd.log</string>
+  <key>StandardErrorPath</key><string>{{ $home }}/Library/Logs/qmd-refresh/launchd.log</string>
+</dict>
+</plist>
+{{ end -}}
