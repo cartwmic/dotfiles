@@ -19,23 +19,30 @@ export function readHubKey(signal) {
 }
 
 // The hub key always comes from 1Password; stored credentials and overrides are ignored.
-export function withHubKey(provider, hubKey) {
+export function withHubKey(provider, hubKey, lazyStream) {
 	const source = "1Password laptop-pi";
+	const readKey = async (signal) => {
+		signal?.throwIfAborted();
+		const key = await hubKey(signal);
+		if (typeof key !== "string" || !HUB_KEY.test(key)) {
+			throw new Error("The 1Password laptop-pi value is not a cpa_ hub client key");
+		}
+		return key;
+	};
+	// Native prepareRequest reapplies a caller apiKey over the resolved one, so the
+	// key is set again at the dispatch boundary for both APIs, as in shared-auth.
+	const wrap = (stream) => (model, context, options) => lazyStream(model, async () =>
+		stream.call(provider, model, context, { ...options, apiKey: await readKey(options?.signal) }));
 	return {
 		...provider,
+		stream: wrap(provider.stream),
+		streamSimple: wrap(provider.streamSimple),
 		auth: {
 			apiKey: {
 				name: "Claude Compat hub key (1Password laptop-pi)",
 				login: async () => { throw new Error("The Claude Compat hub key comes from 1Password (laptop-pi); no login is needed."); },
 				check: async () => ({ type: "api_key", source }),
-				resolve: async ({ signal } = {}) => {
-					signal?.throwIfAborted();
-					const key = await hubKey(signal);
-					if (typeof key !== "string" || !HUB_KEY.test(key)) {
-						throw new Error("The 1Password laptop-pi value is not a cpa_ hub client key");
-					}
-					return { auth: { apiKey: key }, source };
-				},
+				resolve: async ({ signal } = {}) => ({ auth: { apiKey: await readKey(signal) }, source }),
 			},
 		},
 	};
@@ -53,7 +60,7 @@ export async function loadCompat(pi, upstream, owner, lazyStream, { mode, origin
 		registerProvider(provider) {
 			if (provider?.id !== "claude-compat") throw new Error("Expected the pinned Claude Compat native provider");
 			pi.registerProvider(guardProvider(mode === "proxy"
-				? withHubKey(provider, hubKey)
+				? withHubKey(provider, hubKey, lazyStream)
 				: withSharedAnthropicAuth(provider, owner, lazyStream)));
 		},
 	}, mode === "proxy"
