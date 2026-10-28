@@ -277,14 +277,18 @@ Guidelines:
 
 Use `sync_harness_skills.sh` to compare canonical skills in this worktree
 with the deployed location. Its default source is the base chezmoi checkout,
-so set `CHEZMOI_SOURCE_DIR` explicitly. The preview lists orphan directories
-that the apply would remove; inspect their ownership before approving it.
+so set `CHEZMOI_SOURCE_DIR` explicitly. chezmoi does the comparing and the
+writing (`chezmoi status`, `diff` and `apply` on the skills path), so deployed
+files get their target names and rendered contents: `executable_run.sh`
+deploys as `run.sh`.
 
 ```bash
 REPO="$(git rev-parse --show-toplevel)"
 CHEZMOI_SOURCE_DIR="$REPO" ~/.local/user_scripts/sync_harness_skills.sh --dry-run
-# After reviewing additions, updates, and orphan removals with the owner:
+# After reviewing additions and updates with the owner:
 CHEZMOI_SOURCE_DIR="$REPO" ~/.local/user_scripts/sync_harness_skills.sh
+# Also delete what chezmoi does not manage there (inspect the list first):
+CHEZMOI_SOURCE_DIR="$REPO" ~/.local/user_scripts/sync_harness_skills.sh --prune
 ```
 
 The script also supports `--yes` for an owner-approved unattended run; it
@@ -292,8 +296,11 @@ skips the interactive confirmation.
 
 The script detects:
 - **Additions**: skills in chezmoi source not yet deployed
-- **Removals**: deployed skills no longer in chezmoi source (orphans)
-- **Updates**: skills present in both but with content differences
+- **Updates**: skills whose rendered source differs from the deployed files
+- **Not managed**: deployed skill directories no longer in source (orphans)
+  and leftover files inside a managed skill (a renamed file, an old raw
+  copy). chezmoi never deletes these. The preview always lists them; only
+  `--prune` deletes them.
 
 After syncing canonical skills it automatically runs `apply_harness_config.sh` to update symlinks and clean up stale links across all harnesses.
 

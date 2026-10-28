@@ -233,12 +233,13 @@ Interactively sync canonical skills (shows diff, prompts before applying):
 ~/.local/user_scripts/sync_harness_skills.sh            # interactive
 ~/.local/user_scripts/sync_harness_skills.sh --dry-run   # preview only
 ~/.local/user_scripts/sync_harness_skills.sh --yes        # no prompt
+~/.local/user_scripts/sync_harness_skills.sh --prune      # also delete unmanaged leftovers
 ```
 
 Behavior:
 
 - Skills are linked into harness skill directories from the canonical `SKILL.md` bundles.
-- `sync_harness_skills.sh` compares chezmoi source against deployed canonical skills, showing additions, removals (orphans), and content changes before applying.
+- `sync_harness_skills.sh` deploys canonical skills with chezmoi (rendered names and contents), showing additions and content changes before applying. It lists orphan skills and leftover files chezmoi does not manage, and deletes them only with `--prune`.
 - Claude MCP is generated as a managed setup script and applied through the Claude CLI when available.
 - Codex MCP is rendered into a managed block inside `~/.codex/config.toml`.
 - Canonical MCP entries are authored in `dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl`.
