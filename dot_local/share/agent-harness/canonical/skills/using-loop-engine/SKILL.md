@@ -32,8 +32,8 @@ Tilde expansion follows path selection.
 Pass explicit --config with machine-local provider TOML, using an absolute command:
 
 ```toml
-[providers.software-change]
-command = "/absolute/path/software-change"
+[providers.lean-change]
+command = "/absolute/path/lean-change"
 args = []
 ```
 
@@ -51,13 +51,11 @@ self-review policy, advice and Bookends state, operating boundaries and work pol
 Copying a shipped profile is not confirmation. Rehash immediately before start;
 any byte change requires renewed confirmation. Never substitute a default afterward.
 
-A software-change profile may carry an optional `model_bindings` key (per-role model and
-thinking level, set through `software-change setup --set binding.<role>=provider/model@thinking`).
+A profile may carry an optional `model_bindings` key (per-role model and thinking level).
 It is part of the confirmed bytes and hash, frozen at start, and absent from shipped
-profiles; without it the run is unchanged. The owner may later add, change or remove
-bindings only through a recorded `model-binding-amendment` (see checkout-root
-`docs/agent-usage.md`, Software-change model bindings). The engine compares declared
-model text only and cannot verify the real session.
+profiles; without it the run is unchanged. The owner may later change bindings only
+through a recorded `model-binding-amendment` (checkout-root `docs/agent-usage.md`, Model
+bindings). The engine compares declared model text only and cannot verify the real session.
 
 Confirm a separate external role-to-model manifest, commands, write ownership,
 owner-set spend/resource limits (none by default), proof owner and escalation owner. Verify the exact model with the
@@ -69,7 +67,7 @@ owner advice-policy-change records change the effective advice map, not the froz
 ## Commands
 
 ```sh
-loop-engine --json --config /absolute/providers.toml start software-change @/absolute/profile.json "change"
+loop-engine --json --config /absolute/providers.toml start lean-change @/absolute/profile.json "change"
 loop-engine --json list
 loop-engine --json show RUN --view full
 loop-engine --json append --record-id RECORD RUN KIND @/absolute/data.json
@@ -83,6 +81,20 @@ start returns result.run.id. Initial input and append data accept inline JSON,
 @FILE or stdin (-). Append stores context, not semantic approval or a transition.
 Use the same resolved database for every operation; pass --database explicitly when
 isolation is authorized. terminate changes workflow state, never cancels external work.
+
+Ending a run the owner has decided to stop: `terminate` takes only the run ID and records
+one history entry. It carries no reason and does not verify the decision or any cited proof, so put the decision on the
+run first.
+1. Observe with show. Confirm no owned work is live; cancel and verify cleanup first if any.
+2. Append the owner's decision as the provider's owner record (for lean-change,
+   `owner-decision`; see docs/agent-usage.md), holding the owner's exact words.
+3. Append one driver-attributed record of an opaque kind (for example `external-close-note`)
+   naming what the driver checked and citing it (merge commits, review verdicts, gate
+   output, owner proofs), and listing what was not proven. It is not owner words.
+4. Observe again, then `terminate`.
+The run ends `terminated`, never `final`, and nothing claims completion. The engine does
+not check the cited records. Use `event --override` along the remaining edges only if the
+owner wants a completed-with-overrides outcome instead.
 
 Capturing providers retain each artifact's exact bytes when a new run leaves its owning
 phase (approval or override) as a `retained-artifacts` context record; read them from
@@ -104,6 +116,8 @@ loop-engine --json show RUN --view action
 loop-engine --json show RUN --view status
 loop-engine monitor --run RUN --database /absolute/loop.db --json --attention-seconds 300
 loop-engine read RUN --kind history --cursor 1 --limit 20
+loop-engine read RUN --kind context --record-kind KIND --limit 20
+loop-engine read RUN --kind record --id RECORD [--pointer /data/field]
 loop-engine explore RUN
 ```
 
@@ -113,6 +127,17 @@ After a meaningful observed change, post a concise source-backed owner update na
 what changed and the needed action/decision before another wait or inspection.
 Use targeted read for bounded history/delta or retained historical output; missing
 execution information is unknown, not success. Explore is a terminal inspection UI.
+
+## Resuming after compaction or a handoff
+
+Read in this order; stop when you can name the next action.
+1. Find the run: `loop-engine --json list --lifecycle active --label PART` (also `--provider NAME`). A driver's directory name is not the run ID; use `result[].id`.
+2. Orient cheaply, no arming: `loop-engine show RUN --compact` (about 0.6 KB).
+3. Read what is owed with `loop-engine --json show RUN` (action view). It arms mutation, so do it when you will act.
+4. See what happened: `loop-engine --json read RUN --kind history --limit 20`. Context entries carry `context_kind`.
+5. See what exists without transcripts: `read RUN --kind context [--record-kind KIND]` pages headers (id, kind, sequence, `data_bytes`, top-level scalars). Fetch one record with `read RUN --kind record --id ID`, or a slice with `--pointer /data/findings`.
+6. Use `show --view full` only to feed a provider helper. It can reach 10 MB; write it to a file, never into your context.
+7. Do not pipe JSON through `head` to shorten it; use `--limit` and `--pointer`. Re-read the artifacts on disk before trusting a summary you wrote earlier.
 
 ## Canonical loop
 
@@ -141,9 +166,7 @@ with no owner ceremony or revise taken only for a new visit. No-admissible-quest
 claims remain explicit. Received successful answers still need reasoned dispositions
 after disablement/removal/revision; scoped exceptions do not waive them.
 
-For software-change obsolescence, use supported record-withdrawal or valid roster/
-ledger retirement, preserve exact sources and unresolved findings, and obtain
-replacement coverage. Diagnostics are not clearance. Invalid writes on admission-
+Diagnostics are not clearance. Invalid writes on admission-
 enabled runtimes store nothing; unavailable required validation fails closed.
 Incomplete source builds without admission are not proof of this guarantee.
 Never bypass a refusal or replace/migrate an older run's frozen executable.

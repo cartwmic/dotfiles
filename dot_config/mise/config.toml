@@ -23,6 +23,7 @@
 [tool_alias]
 loop-engine = "github:cartwmic/loop-engine"
 software-change = "github:cartwmic/loop-engine"
+lean-change = "github:cartwmic/loop-engine"
 policy-document = "github:cartwmic/loop-engine"
 research = "github:cartwmic/loop-engine"
 
@@ -69,10 +70,11 @@ gh = "latest"      # GitHub CLI; also git credential helper (gh auth login is a 
 ripgrep = "latest" # Fast grep alternative
 
 # Durable workflow engine and matching reference providers. Keep versions paired.
-loop-engine = { version = "0.28.0", matching_regex = "^loop-cli-", rename_exe = "loop-engine" }
+loop-engine = { version = "0.30.0", matching_regex = "^loop-cli-", rename_exe = "loop-engine" }
 software-change = { version = "0.28.0", matching_regex = "^software-change-provider-", rename_exe = "software-change" }
-policy-document = { version = "0.28.0", matching_regex = "^policy-document-provider-", rename_exe = "policy-document" }
-research = { version = "0.28.0", matching_regex = "^research-provider-", rename_exe = "research" }
+lean-change = { version = "0.30.0", matching_regex = "^lean-change-provider-", rename_exe = "lean-change" }
+policy-document = { version = "0.30.0", matching_regex = "^policy-document-provider-", rename_exe = "policy-document" }
+research = { version = "0.30.0", matching_regex = "^research-provider-", rename_exe = "research" }
 
 # Build tools & task runners
 "github:go-task/task" = "latest" # Go-based task runner
