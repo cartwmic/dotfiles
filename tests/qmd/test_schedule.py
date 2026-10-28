@@ -7,6 +7,7 @@ launchctl, uname, the mise shim) in scratch directories. Nothing here calls the 
 import os
 import platform
 import plistlib
+import re
 import signal
 import subprocess
 import tempfile
@@ -187,13 +188,23 @@ class ApplyTest(unittest.TestCase):
             subprocess.run(["/usr/bin/plutil", "-lint", str(plist)], check=True, capture_output=True)
 
 
-FAKE_LAUNCHCTL = '#!/bin/sh\necho "launchctl $*" >> "$FAKE/calls"\n[ "$1" != bootstrap ] || exit "${FAKE_BOOTSTRAP_RC:-0}"\nexit "${FAKE_BOOTOUT_RC:-0}"\n'
+# A stateful launchctl: "loaded" is a file. print says whether it is loaded (113 when not, as the real one); bootout unloads
+# unless FAKE_BOOTOUT_STUCK is set; bootstrap loads unless FAKE_BOOTSTRAP_RC is non-zero.
+FAKE_LAUNCHCTL = r"""#!/bin/sh
+echo "launchctl $*" >> "$FAKE/calls"
+case $1 in
+  print) [ -f "$FAKE/loaded" ] || exit 113 ;;
+  bootout) [ -f "$FAKE/loaded" ] || exit 3; [ -z "${FAKE_BOOTOUT_STUCK:-}" ] || exit 5; rm -f "$FAKE/loaded" ;;
+  bootstrap) [ "${FAKE_BOOTSTRAP_RC:-0}" = 0 ] || exit "$FAKE_BOOTSTRAP_RC"; [ ! -f "$FAKE/loaded" ] || exit 5; : > "$FAKE/loaded" ;;
+  *) exit 64 ;;
+esac
+"""
 
 
 class LoaderTest(unittest.TestCase):
     """The run_onchange script, rendered, then run with a fake launchctl and uname first on PATH."""
 
-    def run_loader(self, data="", installed=True, **env):
+    def run_loader(self, data="", installed=True, loaded=False, **env):
         r, home = render(LOADER, data=data)
         script = r.stdout
         tmp = tempfile.TemporaryDirectory()
@@ -209,32 +220,60 @@ class LoaderTest(unittest.TestCase):
         plist = h / "Library/LaunchAgents/local.qmd-refresh.plist"
         if installed:
             plist.write_text("<plist/>")
+        if loaded:
+            (fake / "loaded").write_text("")
         p = subprocess.run(["/bin/sh", "-c", script], capture_output=True, text=True, timeout=30,
                            env=dict(env, HOME=str(h), FAKE=str(fake), PATH="%s:%s" % (bin_, SYS)))
         calls = (fake / "calls").read_text().splitlines() if (fake / "calls").exists() else []
-        return p, calls, plist, h, script
+        self.loaded = (fake / "loaded").exists()
+        return p, [c.split()[1] for c in calls], plist, h, script
 
-    def test_enabled_reloads_by_label_then_bootstraps_the_plist(self):
-        uid = os.getuid()
+    def test_enabled_loads_the_plist(self):
         p, calls, plist, h, _ = self.run_loader()
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(calls, ["launchctl bootout gui/%d/local.qmd-refresh" % uid, "launchctl bootstrap gui/%d %s" % (uid, plist)])
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(calls, ["print", "bootstrap"])
+        self.assertTrue(self.loaded)
         self.assertTrue((h / "Library/Logs/qmd-refresh").is_dir(), "launchd needs the log directory before it starts the job")
         self.assertIn("every 60 minutes", p.stdout)
 
-    def test_off_unloads_and_removes_and_never_bootstraps(self):
-        p, calls, plist, _, _ = self.run_loader("qmd: {refresh: {enabled: false}}")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(calls, ["launchctl bootout gui/%d/local.qmd-refresh" % os.getuid()])
-        self.assertFalse(plist.exists())
+    def test_enabled_and_loaded_reloads_by_label(self):
+        uid = os.getuid()
+        p, calls, plist, h, _ = self.run_loader(loaded=True)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(calls, ["print", "bootout", "print", "bootstrap"])
+        self.assertTrue(self.loaded)
+        calls = (h.parent / "fake/calls").read_text().splitlines()
+        self.assertIn("launchctl bootout gui/%d/local.qmd-refresh" % uid, calls)
+        self.assertIn("launchctl bootstrap gui/%d %s" % (uid, plist), calls)
 
-    def test_not_installed_yet_or_no_gui_session_does_not_fail_the_apply(self):
+    def test_off_unloads_and_removes_and_never_bootstraps(self):
+        for loaded, expect in ((True, ["print", "bootout", "print"]), (False, ["print"])):
+            p, calls, plist, _, _ = self.run_loader("qmd: {refresh: {enabled: false}}", loaded=loaded)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertEqual(calls, expect)
+            self.assertFalse(self.loaded)
+            self.assertFalse(plist.exists())
+
+    def test_an_unload_that_fails_fails_the_apply_so_it_is_retried(self):
+        # chezmoi records a run_onchange script only when it exits 0; a job left running must not be recorded as turned off.
+        for data in ("qmd: {refresh: {enabled: false}}", ""):
+            p, calls, plist, _, _ = self.run_loader(data, loaded=True, FAKE_BOOTOUT_STUCK="1")
+            self.assertNotEqual(p.returncode, 0, data)
+            self.assertIn("could not unload", p.stdout)
+            self.assertNotIn("bootstrap", calls)
+            self.assertTrue(plist.exists(), "the plist stays until the job is really unloaded")
+
+    def test_a_load_that_fails_fails_the_apply(self):
+        p, calls, _, _, _ = self.run_loader(FAKE_BOOTSTRAP_RC="5")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("could not load", p.stdout)
+        self.assertFalse(self.loaded)
+
+    def test_enabled_without_the_plist_fails_the_apply(self):
         p, calls, _, _, _ = self.run_loader(installed=False)
-        self.assertEqual(p.returncode, 0)
-        self.assertEqual([c.split()[1] for c in calls], ["bootout"])
-        p, calls, _, _, _ = self.run_loader(FAKE_BOOTSTRAP_RC="5", FAKE_BOOTOUT_RC="3")
-        self.assertEqual(p.returncode, 0)
-        self.assertIn("launchctl bootstrap gui/", p.stdout)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("is not installed", p.stdout)
+        self.assertNotIn("bootstrap", calls)
 
     def test_the_rendered_script_changes_with_the_setting_so_chezmoi_reruns_it(self):
         a = render(LOADER)[0].stdout
@@ -244,10 +283,10 @@ class LoaderTest(unittest.TestCase):
         self.assertIn("# setting: 60\n", a)
         self.assertRegex(a, r"# plist: [0-9a-f]{64}\n")
 
-    def test_only_bootout_and_bootstrap(self):
+    def test_only_print_bootout_and_bootstrap(self):
         for data in ("", "qmd: {refresh: {enabled: false}}"):
             s = render(LOADER, data=data)[0].stdout
-            self.assertNotRegex(s, r"launchctl (load|unload|kickstart|start|enable)")
+            self.assertEqual(set(re.findall(r"launchctl (\w+)", s)), {"print", "bootout", "bootstrap"} if data == "" else {"print", "bootout"})
             self.assertNotIn("qmd-refresh --", s)
 
 
@@ -258,6 +297,7 @@ if [ -n "${FAKE_TERM_WAIT:-}" ]; then
   trap 'echo term >> "$FAKE/signals"; exit 143' TERM
   sleep 30 & wait
 fi
+[ -z "${FAKE_LEAVE_CHILD:-}" ] || sleep 30 &
 cat "$FAKE/out" 2>/dev/null
 cat "$FAKE/err" >&2 2>/dev/null
 exit "${FAKE_RC:-0}"
@@ -368,7 +408,7 @@ class RunnerTest(unittest.TestCase):
             self.assertEqual(p.returncode, 2, args)
         self.assertFalse((self.fake / "args").exists())
 
-    def test_old_day_files_go_and_todays_file_is_capped(self):
+    def test_old_day_files_go(self):
         self.logs.mkdir()
         old = self.logs / "qmd-refresh-2020-01-01.log"
         recent = self.logs / "qmd-refresh-2020-01-02.log"
@@ -379,17 +419,30 @@ class RunnerTest(unittest.TestCase):
         os.utime(old, (t - 20 * 86400, t - 20 * 86400))
         os.utime(other, (t - 20 * 86400, t - 20 * 86400))
         os.utime(recent, (t - 3 * 86400, t - 3 * 86400))
-        (self.fake / "out").write_text("y" * 400 + "\n")
-        self.assertEqual(self.run_(QMD_REFRESH_LOG_MAX_BYTES="300"), 0)
+        self.assertEqual(self.run_(), 0)
         self.assertFalse(old.exists())
         self.assertTrue(recent.exists() and other.exists())
-        today = [f for f in self.logs.glob("qmd-refresh-*.log") if f != recent][0]
-        self.assertGreater(today.stat().st_size, 300)
-        size = today.stat().st_size
-        self.assertEqual(self.run_(QMD_REFRESH_LOG_MAX_BYTES="300"), 0)
-        tail = today.read_text()[size:]
-        self.assertEqual(len(tail.splitlines()), 1)
-        self.assertIn("output not kept", tail)
+
+    def test_the_day_file_never_passes_the_cap(self):
+        # 1.5 MB of output (more than a pipe holds) against a 4000-byte cap: the run still finishes, its output is cut to fit,
+        # and later runs add a line only while one fits.
+        (self.fake / "out").write_text("".join("line %06d of real output\n" % i for i in range(60000)))
+        cap = 4000
+        for i in range(12):
+            self.assertEqual(self.run_(QMD_REFRESH_LOG_MAX_BYTES=str(cap)), 0)
+            self.assertLessEqual(len(self.day.encode()), cap, i)
+        log = self.day
+        self.assertIn("line 000000 of real output", log)
+        self.assertIn("(output cut: the day log is near its size cap)", log)
+        self.assertNotIn("line 059999", log)
+        self.assertIn("end rc=0 after", log)
+        self.assertEqual(self.run_(QMD_REFRESH_LOG_MAX_BYTES=str(cap)), 0)
+        self.assertEqual(self.day, log, "a full file gets nothing more")
+        (self.fake / "err").write_text("qmd-refresh: another refresh is running (lock /s/lock)\n")
+        for i in range(40):
+            self.run_(FAKE_RC="75", QMD_REFRESH_LOG_MAX_BYTES=str(cap))
+        self.assertLessEqual(len(self.day.encode()), cap)
+        self.assertEqual(list(self.logs.glob(".run.*")), [])
 
     def test_launchd_log_is_emptied_when_over_the_cap(self):
         self.logs.mkdir()
@@ -412,7 +465,16 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(p.returncode, 143)
         self.assertEqual((self.fake / "signals").read_text(), "term\n")
         self.assertIn("end rc=143", self.day)
-        self.assertEqual(list(self.logs.glob(".run.*")), [], "the temporary output file is removed")
+        self.assertEqual(list(self.logs.glob(".run.*")), [], "the temporary files are removed")
+
+    def test_a_process_left_holding_the_output_does_not_hang_the_run(self):
+        # The fake leaves "sleep 30" behind with the output pipe open; the run still ends, within the 5 s grace.
+        (self.fake / "out").write_text("before\n")
+        t = time.time()
+        self.assertEqual(self.run_(FAKE_LEAVE_CHILD="1"), 0)
+        self.assertLess(time.time() - t, 15)
+        self.assertIn("before", self.day)
+        self.assertIn("end rc=0", self.day)
 
 
 class WrapperTest(unittest.TestCase):
