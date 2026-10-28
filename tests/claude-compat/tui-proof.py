@@ -5,18 +5,18 @@ resources=pathlib.Path(__file__).parent
 scratch=tempfile.TemporaryDirectory(prefix='pi-compat-proof-')
 root=pathlib.Path(scratch.name)
 (root/'work').mkdir()
-compat=pathlib.Path(os.environ.get('COMPAT_EXTENSION',str(pathlib.Path.home()/'.pi/agent/git/github.com/vazzma/pi-claude-request-compat/src/extension.js')))
+compat=pathlib.Path(os.environ.get('COMPAT_EXTENSION',str(pathlib.Path.home()/'.pi/agent/git/github.com/cartwmic/pi-claude-request-compat/src/extension.js')))
 guard=pathlib.Path(os.environ.get('COMPAT_GUARD',str(repo/'dot_pi/private_agent/extensions/claude-compat-guard/index.ts')))
 assert compat.is_file() and guard.is_file(), 'Compat and guard entrypoints must exist'
 agent=root/'mock-agent';agent.mkdir(mode=0o700,exist_ok=True)
-(agent/'git/github.com/vazzma').mkdir(parents=True)
-(agent/'git/github.com/vazzma/pi-claude-request-compat').symlink_to(compat.parent.parent)
+(agent/'git/github.com/cartwmic').mkdir(parents=True)
+(agent/'git/github.com/cartwmic/pi-claude-request-compat').symlink_to(compat.parent.parent)
 (agent/'auth.json').write_text(json.dumps({'anthropic':{'type':'oauth','access':'sk-ant-oat-synthetic-test-only','refresh':'disabled','expires':time.time()*1000+3600000}}));(agent/'auth.json').chmod(0o600)
 (agent/'settings.json').write_text(json.dumps({'retry':{'enabled':False},'quietStartup':True}))
 fixture=root/'tool-fixture';fixture.write_text('hidden-result-48271')
 events=root/'tui-events.jsonl';events.write_text('')
 env={k:v for k,v in os.environ.items() if not(k.startswith('ANTHROPIC_') or k.startswith('PI_'))}
-env.update(PI_CODING_AGENT_DIR=str(agent),PI_OFFLINE='1',PI_SKIP_VERSION_CHECK='1',PI_TELEMETRY='0',TERM='xterm-256color',VALIDATION_EVENTS=str(events),VALIDATION_FIXTURE=str(fixture))
+env.update(PI_CLAUDE_COMPAT_MODE='direct',PI_CODING_AGENT_DIR=str(agent),PI_OFFLINE='1',PI_SKIP_VERSION_CHECK='1',PI_TELEMETRY='0',TERM='xterm-256color',VALIDATION_EVENTS=str(events),VALIDATION_FIXTURE=str(fixture))
 common=['pi','--offline','--no-approve','-ne','-ns','-nc','-np','--no-themes','-e',str(resources/'mock-extension.mjs'),'-e',str(guard),'--provider','claude-compat','--model','claude-haiku-4-5','--thinking','high','--tools','Probe_MixedCase,Aux_Check']
 master,slave=pty.openpty()
 fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',40,140,0,0))
