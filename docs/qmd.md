@@ -292,8 +292,8 @@ sessions and recaps; nothing is copied between machines).
 - **Incremental:** a source whose output exists and is not older than it is skipped without reading it (a session's id and day
   come from its first line). A source with nothing to export is remembered by mtime in `.qmd-export-state.json`.
   Measured here: first run 48 s, 203 MB RSS, 8,359 sessions and 8,777 recaps -> 135 MB; second run 2.3 s.
-- **90 days:** sources last modified more than `--days` (default 90) days ago are not exported and their outputs are deleted,
-  as are outputs whose source is gone. This bounds the index. It is by modification time, so a session you resume comes back.
+- **One year:** sources last modified more than `--days` (default 365) days ago are not exported and their outputs are deleted,
+  as are outputs whose source is gone. This bounds the index (the default was 90 days until 2026-10-27). It is by modification time, so a session you resume comes back.
 - **Safe to run:** one exporter at a time (a lock in the output directory; a second one exits 3, so `qmd-refresh` fails clearly if a
   standalone export is running). An output is reused only if it was rendered from the same source file (the state file records
   which), so when one of two files with the same session id goes away the other is re-rendered, not mixed up. A source that
@@ -326,7 +326,7 @@ recaps are the work Mac's own; nothing moves between machines. Termux gets none 
 - If a corporate proxy re-signs TLS, `qmd pull` can fail on the certificate; `NODE_EXTRA_CA_CERTS` is the usual fix. Not tried on the work network.
   The model files can also be copied into `~/.cache/qmd/models` by hand under the same file names.
 
-**What is stored on the work Mac, in plain text.** `qmd-export` copies the user and assistant text of Pi sessions (90 days) and the recaps to `~/.local/share/qmd-corpus`, and the index
+**What is stored on the work Mac, in plain text.** `qmd-export` copies the user and assistant text of Pi sessions (365 days) and the recaps to `~/.local/share/qmd-corpus`, and the index
 (with embeddings) is `~/.cache/qmd/index.sqlite`. Neither is in the dotfiles repo or synced. Work conversations are therefore in one more place than before.
 
 **The hourly job.** The work Mac gets the same launchd agent (`local.qmd-refresh`, [Scheduled refresh](#scheduled-refresh)): a recurring
