@@ -72,7 +72,7 @@ def until(cond, secs=10):
 
 
 class Env:
-    def __init__(self, model=True):
+    def __init__(self, model=True, cleanup=False):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.fake, self.bin, self.home = (self.root / n for n in ("fake", "bin", "home"))
@@ -89,6 +89,9 @@ class Env:
         if model:
             self.model.parent.mkdir(parents=True)
             self.model.write_text("x")
+        if not cleanup:   # these tests pin the refresh steps; the daily qmd cleanup (on when the file is missing) is test_cleanup's
+            (self.root / "config" / "qmd").mkdir(parents=True)
+            (self.root / "config" / "qmd" / "refresh.conf").write_text("cleanup=off\n")
         self.env = dict(os.environ, HOME=str(self.home), FAKE=str(self.fake), FAKE_DB=str(self.cache / "qmd" / "index.sqlite"), XDG_CACHE_HOME=str(self.cache),
                         XDG_STATE_HOME=str(self.state), XDG_CONFIG_HOME=str(self.root / "config"),
                         PATH="%s:/usr/bin:/bin:/usr/sbin:/sbin" % self.bin, QMD_REFRESH_GRACE="1")
@@ -486,7 +489,7 @@ class ModelGuardTest(Base):
 
     def test_quoted_value_and_other_indent_are_read(self):
         cfg = self.e.root / "config" / "qmd"
-        cfg.mkdir(parents=True)
+        cfg.mkdir(parents=True, exist_ok=True)
         (cfg / "index.yml").write_text("models:\n    embed: 'hf:acme/x/y.gguf'\n")
         self.assert_update_only(self.e, self.e.run(), "pinned")
 

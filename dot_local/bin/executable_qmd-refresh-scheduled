@@ -75,8 +75,10 @@ tr '\r' '\n' < "$tmp/lines" | sed "s/${esc}\[[0-9;?]*[A-Za-z]//g" | LC_ALL=C awk
         print s; used += length(s) + 1
     }
     /truncated to fit embedding context/ { trunc++; next }
-    skip > 0 { skip--; if ($0 ~ /^if \[ "\$ok" = 1 \]/) skip = 0; next }
-    /^\[heavy-gate\] INFO: allowed; running: sh -c / { out("[heavy-gate] INFO: allowed; running: <the qmd-refresh job>"); skip = 60; next }
+    # heavy-gate echoes the job script; it ends at its fixed last line (or, from a qmd-refresh before the daily cleanup, the old last
+    # line followed by the job arguments).
+    skip > 0 { skip--; if ($0 ~ /^: end of the qmd-refresh job/ || $0 ~ /^if \[ "\$ok" = 1 \].* sh \//) skip = 0; next }
+    /^\[heavy-gate\] INFO: allowed; running: sh -c / { out("[heavy-gate] INFO: allowed; running: <the qmd-refresh job>"); skip = 120; next }
     /^[[:space:]]*$/ { next }
     /█|░/ { next }
     { out($0) }
