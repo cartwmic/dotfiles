@@ -14,6 +14,8 @@ for notes, repo docs, Pi session recaps and Pi sessions, with hybrid (semantic) 
 | Skill | `dot_local/share/agent-harness/canonical/skills/searching-with-qmd` | skill sync links it into Claude, Codex and Pi |
 | Refresh wrapper | `dot_local/bin/executable_qmd-refresh` | `~/.local/bin/qmd-refresh` |
 | Exporter | `dot_local/bin/executable_qmd-export` | `~/.local/bin/qmd-export`; writes `~/.local/share/qmd-corpus/{sessions,recaps}` |
+| `qmd` on PATH | `dot_local/bin/executable_qmd` | `~/.local/bin/qmd`, a 20-line wrapper around the mise shim ([qmd on PATH](#qmd-on-path)) |
+| Scheduled refresh (macOS) | `Library/LaunchAgents/local.qmd-refresh.plist.tmpl`, `dot_local/bin/executable_qmd-refresh-scheduled`, `run_onchange_after_71_qmd_refresh_launchd.sh.tmpl`, `.chezmoitemplates/qmd_refresh_minutes` | `~/Library/LaunchAgents/local.qmd-refresh.plist`, `~/.local/bin/qmd-refresh-scheduled` ([Scheduled refresh](#scheduled-refresh)) |
 
 All of it is on the **personal and work (`axon-work-computer`) profiles**, not Termux (`.chezmoiignore`; decision 303: QMD on both). The
 `run_onchange_after_10_mise_bootstrap` hash covers the mise file on both, so a full apply reruns `mise install` once. See
@@ -50,7 +52,8 @@ qmd-refresh status        # when the last refresh finished, and whether one is r
 ```
 
 One blocking command. It runs `qmd-export`, `qmd update` then `qmd embed` as a single `nice -n 10 heavy-gate --wait 7200 --` job (one slot,
-waits for a quiet Mac). Nothing schedules it; the owner or an agent the owner asked runs it.
+waits for a quiet Mac). On macOS a launchd agent runs it every hour ([Scheduled refresh](#scheduled-refresh)); the owner, or an agent the
+owner asked, can also run it by hand.
 
 - Embed uses `QMD_EMBED_PARALLELISM=1 --timeout 0 --max-docs-per-batch 50 --max-batch-mb 8`: 1.9 GB RSS instead of 4.5 GB at
   qmd's defaults, same speed; `--timeout 0` removes qmd's hard 30-minute cap (tobi/qmd#673). Only changed documents are
@@ -77,6 +80,86 @@ waits for a quiet Mac). Nothing schedules it; the owner or an agent the owner as
 Verified live (2026-10-27, personal Mac, after `qmd pull`): `qmd-refresh` updated 9 collections and embedded 2,085 chunks from 411
 documents in 2 min 31 s (3 min 8 s wall, 1.6 GB peak RSS), and `~/.config/qmd/index.yml` stayed identical to the chezmoi source
 (`chezmoi diff` empty) — the first proof on the real applied file.
+
+## Scheduled refresh
+
+On macOS (personal and work profiles) a launchd user agent, `local.qmd-refresh`, runs a plain `qmd-refresh` every 60 minutes. Never
+`--reembed`. It is set in **local chezmoi data**, `qmd.refresh.enabled` and `qmd.refresh.intervalMinutes`
+(`~/.config/chezmoi/chezmoi.yaml`, not the repo):
+
+```yaml
+data:
+  qmd:
+    refresh:
+      enabled: true          # false: no agent (chezmoi removes the plist; the apply unloads it)
+      intervalMinutes: 60    # whole minutes, 15 to 1440
+```
+
+Both keys are optional; the defaults are `true` and `60`. Change a value and run `chezmoi apply`: the plist is rewritten and
+`run_onchange_after_71_qmd_refresh_launchd.sh` runs again (its hash covers the plist template and the setting). It does
+`launchctl bootout gui/$UID/local.qmd-refresh`, then `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/local.qmd-refresh.plist`,
+or, when disabled, removes the plist and loads nothing. Any other value (`5`, `90.5`, `hourly`, `enabled: "yes"`) fails the render,
+so a typo applies nothing rather than scheduling something else. A bootout stops a run in progress (qmd-refresh stops its job tree
+on TERM); the next run starts one interval after the load.
+
+| Piece | Does |
+|---|---|
+| `Library/LaunchAgents/local.qmd-refresh.plist.tmpl` | `StartInterval` = interval; `RunAtLoad` false, so an apply or a login does not start a heavy job; `PATH` with the mise shims first (qmd, node, python3) |
+| `~/.local/bin/qmd-refresh-scheduled` | what the agent runs: `qmd-refresh --wait <interval in seconds>`, and the log |
+| `.chezmoitemplates/qmd_refresh_minutes` | reads and checks the setting; used by the plist and the load script |
+| `run_onchange_after_71_qmd_refresh_launchd.sh.tmpl` | bootout, then bootstrap (or remove when off). Only those two `launchctl` verbs |
+
+**No second gate.** The agent adds no heavy-gate, `nice`, lock or launchd `Nice` of its own: `qmd-refresh` already runs its job as
+`nice -n 10 heavy-gate --wait N --` under its `flock`. heavy-gate may wait up to one interval for a quiet Mac, then gives up (75)
+and the next tick tries again. launchd never starts a second copy of a running agent, and the lock refuses one started by hand,
+so runs cannot pile up. Not `ProcessType` Background: macOS throttles such a job to a near stop on a busy Mac (see
+`local.agent-events`), and this one holds a heavy-gate slot while it runs.
+
+**Log:** `~/Library/Logs/qmd-refresh/qmd-refresh-YYYY-MM-DD.log`, one block per run between `== <time> start` and `== <time> end rc=N
+after Ns`. It keeps qmd-refresh's own lines and qmd's counts (documents written, indexed, chunks embedded) and collection paths: no
+document text, no environment, no secrets. Status 75 (lock held, or heavy-gate gave up) is one `skipped` line. Dropped: terminal
+escapes, progress bars, heavy-gate's echo of the job script, and the per-chunk "truncated to fit embedding context" warnings (one
+count line instead; they are expected, see below). A run is about 3 KB. Bounded: day files older than 14 days are deleted, a day file
+over 2 MB gets one line per run, and `launchd.log` (the runner's own stray output) is emptied when over 2 MB.
+
+```sh
+tail -n 30 ~/Library/Logs/qmd-refresh/qmd-refresh-$(date +%F).log
+launchctl print gui/$(id -u)/local.qmd-refresh | grep -E 'state|last exit|run interval'
+qmd-refresh status
+```
+
+Turn it off: set `enabled: false` and apply (as above). By hand, until the next apply: `launchctl bootout gui/$(id -u)/local.qmd-refresh`.
+
+### What an hourly run costs (measured 2026-10-27, personal Mac, other jobs running)
+
+| Run | Wall | CPU (user+sys) | Peak RSS | Work |
+|---|---|---|---|---|
+| after about 2 h | 172 s | 38 s | 1.9 GB | 297 docs exported, 333 docs and 2,374 chunks embedded |
+| 15 min after that | 145 s | 30 s | 1.96 GB | 32 docs exported, 33 docs and 1,689 chunks embedded |
+
+- **It will nearly always have work.** Over the last 24 hours every hour had changed sessions (1 to 36 per hour), recaps (6 to 81) or
+  notes. qmd embeds per document, so a session that changed is embedded again whole: one long Pi session that stays open (the
+  coordinator's, 1,025 chunks) alone means about 1,000 chunks every hour, and busy hours reach about 1,800. The embed runs on the GPU
+  (Metal); hence the low CPU. Expect 2 to 3 minutes and about 2 GB each hour, at `nice 10`, inside one heavy-gate slot.
+- **Disk:** the index (`~/.cache/qmd/index.sqlite`, 557 MB now) keeps the vectors of a document's old version: `qmd update` drops
+  old content but not old vectors (`qmd cleanup` does). About 3 KB per chunk, so 3 to 5 MB per run, roughly 70 to 120 MB a day.
+  `qmd cleanup` on a copy of today's index removed 4,820 such chunks in 4.7 s (115 MB RSS) and shrank it by 15 MB. Not done by this
+  change: a later decision.
+
+## qmd on PATH
+
+mise puts qmd's install directory on PATH only in a shell where mise is activated, at the moment it activates
+(`private_dot_zshrc`). A non-interactive shell does not activate it, and a process keeps the PATH it started with. Pi's bash tool
+runs `bash -c` with the environment of the Pi that started it, so Pi sessions and the coordinator pane often had no `qmd`.
+
+`~/.local/bin/qmd` (`dot_local/bin/executable_qmd`) fixes that: `~/.local/bin` is on PATH in every zsh (`~/.zshenv`), so the one file
+reaches every Pi, its children and sessions already running. It runs the mise shim
+(`${MISE_DATA_DIR:-~/.local/share/mise}/shims/qmd`), which picks the pinned version and puts node on PATH. In an activated shell
+mise's directory comes first and the wrapper is not used. If mise cannot resolve qmd the shim would search PATH and find the wrapper
+again; `QMD_PATH_WRAPPER` stops that loop (exit 127 with a hint), as does a missing shim.
+
+Checked 2026-10-27: a `pi -p` child started with only a running Pi's PATH (no mise directory) could not find `qmd`; with the wrapper
+on that PATH, the same child's bash tool printed `qmd 2.8.3 (facd35e)` in 0.3 s. Not changed: `~/.zshenv`, the mise setup, Pi.
 
 ## Long chunks: `QMD_EMBED_CONTEXT_SIZE=506` (stop-gap for tobi/qmd#897)
 
@@ -153,7 +236,7 @@ sessions and recaps; nothing is copied between machines).
 
 ## The work profile (axon-work-computer)
 
-The same files land on the work Mac as on the personal one (the pin, `qmd-refresh`, `qmd-export`, the skill, the same models). Only `index.yml.tmpl` renders differently:
+The same files land on the work Mac as on the personal one (the pin, `qmd-refresh`, `qmd-export`, the skill, the same models, the `qmd` wrapper and the scheduled refresh). Only `index.yml.tmpl` renders differently:
 `notes` only if `~/tmp` exists there, and the repo collections are the checkouts that exist under `~/git` (`coordinator`, `retro`) instead of `/Volumes/Workshop/macbook/git`. `repo-dotfiles`, `sessions`, `recaps` are on both. The sessions and
 recaps are the work Mac's own; nothing moves between machines. Termux gets none of it.
 
@@ -178,6 +261,20 @@ recaps are the work Mac's own; nothing moves between machines. Termux gets none 
 **What is stored on the work Mac, in plain text.** `qmd-export` copies the user and assistant text of Pi sessions (90 days) and the recaps to `~/.local/share/qmd-corpus`, and the index
 (with embeddings) is `~/.cache/qmd/index.sqlite`. Neither is in the dotfiles repo or synced. Work conversations are therefore in one more place than before.
 
+**The hourly job.** The work Mac gets the same launchd agent (`local.qmd-refresh`, [Scheduled refresh](#scheduled-refresh)): a recurring
+background job on the employer laptop, on by default once the plist is applied, first run one interval after it is loaded.
+- What it runs: `qmd-export`, `qmd update` and, only if the pinned model file is already there, `qmd embed`, as one `nice -n 10`
+  heavy-gate job that waits for a quiet Mac. It never downloads: without the model it skips embedding (qmd downloads a model only in
+  `qmd pull` or an embed/query that runs without it, and `qmd-refresh` checks the file first). No network, no new data leaves the Mac.
+- What it costs: on the personal Mac 2 to 3 minutes, about 30 to 40 s of CPU and 1.9 to 2 GB peak RSS per hourly run, nearly every hour
+  (long open Pi sessions are re-embedded whole). Disk: the index grows by roughly 70 to 120 MB a day until `qmd cleanup` is run
+  (old vectors are kept). The work Mac's numbers depend on its own sessions. The first run after `qmd pull` embeds the whole corpus
+  (55 min on the personal Mac); run `qmd-refresh` by hand once, as in the steps below, so it is not left to a background tick.
+- What it logs: `~/Library/Logs/qmd-refresh/`, one short block per run with qmd's counts and collection paths (no document text,
+  no environment, no secrets), 14 days, 2 MB a day at most.
+- Turn it off: `qmd: {refresh: {enabled: false}}` in `~/.config/chezmoi/chezmoi.yaml` (before the first apply, so it is never
+  loaded, or later), then apply; `launchctl bootout gui/$(id -u)/local.qmd-refresh` stops it at once.
+
 **Cost.** Same as above, per machine. The first `qmd-refresh` embeds the whole corpus: on the personal Mac 58,056 chunks took 55 min (about 18 chunks/s, 1.9 GB peak RSS). The work
 corpus is its own size; `qmd-export --dry-run` and then the `qmd update` line of the first run show the document count. Everything above about `QMD_EMBED_CONTEXT_SIZE=506` applies unchanged:
 a fresh work index has no old vectors, so the first `qmd-refresh` records `506` itself and no `--reembed` is needed. If the fork route (above) is chosen later, the work Mac would fetch from GitHub
@@ -188,9 +285,12 @@ instead of npm: that needs a fresh look from the work side.
 ```sh
 git -C ~/.local/share/chezmoi pull --ff-only
 chezmoi --source ~/.local/share/chezmoi apply --dry-run --verbose ~/.config/mise/conf.d/qmd.toml ~/.config/qmd/index.yml \
-  ~/.local/bin/qmd-refresh ~/.local/bin/qmd-export ~/.local/share/agent-harness/canonical/skills/searching-with-qmd
+  ~/.local/bin/qmd-refresh ~/.local/bin/qmd-export ~/.local/share/agent-harness/canonical/skills/searching-with-qmd \
+  ~/.local/bin/qmd ~/.local/bin/qmd-refresh-scheduled ~/Library/LaunchAgents/local.qmd-refresh.plist ~/71_qmd_refresh_launchd.sh
 chezmoi --source ~/.local/share/chezmoi apply ~/.config/mise/conf.d/qmd.toml ~/.config/qmd/index.yml \
-  ~/.local/bin/qmd-refresh ~/.local/bin/qmd-export ~/.local/share/agent-harness/canonical/skills/searching-with-qmd
+  ~/.local/bin/qmd-refresh ~/.local/bin/qmd-export ~/.local/share/agent-harness/canonical/skills/searching-with-qmd \
+  ~/.local/bin/qmd ~/.local/bin/qmd-refresh-scheduled ~/Library/LaunchAgents/local.qmd-refresh.plist ~/71_qmd_refresh_launchd.sh
+                                      # the last two load the hourly agent (omit them, or set enabled: false, to leave it off)
 mise install                          # npm package, about 200 MB
 mise exec -- ~/.local/user_scripts/apply_harness_config.sh   # links the skill into Claude, Codex and Pi (needed after a full apply too)
 qmd pull                              # 2.1 GB of models, once
@@ -205,7 +305,7 @@ A full `chezmoi apply` also works and re-runs the bootstrap once (the new work h
 ## Cost (measured 2026-10-26, this Mac, other jobs running)
 
 `qmd search` 0.2-1 s, 120-180 MB. `qmd query` cold 23-28 s and 5-5.5 GB RSS, repeat 5-10 s and 1.1-2.2 GB. Models 2.1 GB
-on disk. No daemon runs unless someone starts `qmd mcp --http`. QMD calls do not coordinate: concurrent calls each load their own
+on disk. No daemon runs unless someone starts `qmd mcp --http`; the scheduled refresh is a launchd job that exits after each run. QMD calls do not coordinate: concurrent calls each load their own
 models (upstream issue tobi/qmd#942), so the skill forbids parallel use.
 
 ## Other harnesses

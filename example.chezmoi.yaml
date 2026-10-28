@@ -26,6 +26,10 @@ data:
   #   coordinator: {enabled: true}
   #   retro: {enabled: true, channelId: "<#retro channel id>", opItem: "op://VAULT/ITEM/bot_token"}
   # axon-work-computer: only the Matrix coordinator, same flag: instances: {coordinator: {enabled: true, repo: /Users/you/coordinator-work}}
+  # Scheduled QMD refresh (macOS, personal and axon-work-computer; docs/qmd.md "Scheduled refresh"). On by default, every 60 minutes.
+  # Change either value and run chezmoi apply: the LaunchAgent is rewritten and reloaded, or removed when disabled.
+  # qmd:
+  #   refresh: {enabled: true, intervalMinutes: 60}   # 15 to 1440; enabled: false removes the agent
 
 hooks:
   read-source-state:
