@@ -17,6 +17,11 @@
 # destination is chezmoi's own ($HOME).
 
 set -eu
+# Lists below are newline-separated: paths may contain spaces. No globbing.
+NL='
+'
+IFS=$NL
+set -f
 
 SCRIPT_NAME="sync_harness_skills"
 CHEZMOI_SOURCE="${CHEZMOI_SOURCE_DIR:-$HOME/.local/share/chezmoi}"
@@ -49,9 +54,14 @@ below_skills() {
   awk -v p="$SKILLS_REL/" 'index($0, p) == 1 { print substr($0, length(p) + 1) }'
 }
 
-in_list() { # in_list WORD LIST
-  case " $(printf '%s' "$2" | tr '\n' ' ') " in *" $1 "*) return 0 ;; esac
+in_list() { # in_list WORD NEWLINE-LIST
+  case "$NL$2$NL" in *"$NL$1$NL"*) return 0 ;; esac
   return 1
+}
+
+add() { # add VAR WORD: append WORD to the newline-separated list in VAR
+  eval "_cur=\${$1}"
+  if [ -n "$_cur" ]; then eval "$1=\$_cur\$NL\$2"; else eval "$1=\$2"; fi
 }
 
 # --- diff computation -------------------------------------------------------
@@ -62,33 +72,36 @@ compute_diff() {
   UNCHANGED=""
   ORPHANS=""
   LEFTOVERS=""
+  TO_DELETE=""
 
   # Skills chezmoi manages (top-level directories below the skills path).
   managed=$(cz managed -i dirs "$DEPLOYED_SKILLS" | below_skills | grep -v / || true)
 
   # Skills with any pending change, by chezmoi's own comparison of the
   # rendered target with the deployed file.
-  changed=$(cz status -x scripts "$DEPLOYED_SKILLS" | cut -c4- | below_skills | cut -d/ -f1 | sort -u)
+  PENDING=$(cz status -x scripts "$DEPLOYED_SKILLS")
+  changed=$(printf '%s\n' "$PENDING" | cut -c4- | below_skills | cut -d/ -f1 | sort -u)
 
   for skill in $managed; do
     if in_list "$skill" "$changed"; then
-      if [ -d "$DEPLOYED_SKILLS/$skill" ]; then
-        TO_UPDATE="${TO_UPDATE:+$TO_UPDATE }$skill"
-      else
-        TO_ADD="${TO_ADD:+$TO_ADD }$skill"
-      fi
+      if [ -d "$DEPLOYED_SKILLS/$skill" ]; then add TO_UPDATE "$skill"; else add TO_ADD "$skill"; fi
     else
-      UNCHANGED="${UNCHANGED:+$UNCHANGED }$skill"
+      add UNCHANGED "$skill"
     fi
+  done
+  # Changed but not managed: chezmoi will delete it (.chezmoiremove).
+  for skill in $changed; do
+    in_list "$skill" "$managed" || add TO_DELETE "$skill"
   done
 
   # Entries chezmoi does not manage. A top-level one is an orphan skill (or
   # stray file); anything deeper is a leftover inside a managed skill.
   for rel in $(cz unmanaged "$DEPLOYED_SKILLS" | below_skills); do
     case "$rel" in
-      ''|*..*) continue ;;
-      */*) LEFTOVERS="${LEFTOVERS:+$LEFTOVERS }$rel" ;;
-      *)   ORPHANS="${ORPHANS:+$ORPHANS }$rel" ;;
+      '') continue ;;
+      /*|*/../*|../*|*/..|..) continue ;;
+      */*) add LEFTOVERS "$rel" ;;
+      *)   add ORPHANS "$rel" ;;
     esac
   done
 }
@@ -114,6 +127,12 @@ show_summary() {
     echo ""
   fi
 
+  if [ -n "$TO_DELETE" ]; then
+    bold "  Delete"; echo " (chezmoi removes these, .chezmoiremove):"
+    for skill in $TO_DELETE; do echo "    $(red "−") $skill"; done
+    echo ""
+  fi
+
   if [ -n "$UNCHANGED" ]; then
     bold "  Unchanged"; echo ":"
     for skill in $UNCHANGED; do echo "    $(dim "· $skill")"; done
@@ -133,9 +152,9 @@ show_summary() {
 }
 
 show_detailed_diff() {
-  if [ -n "$TO_ADD$TO_UPDATE" ]; then
+  if [ -n "$PENDING" ]; then
     bold "── chezmoi diff ──────────────────────────────────────"; echo ""
-    cz diff --no-pager -x scripts "$DEPLOYED_SKILLS" || true
+    cz diff --no-pager --recursive -x scripts "$DEPLOYED_SKILLS" || true
     echo ""
   fi
   if [ "$prune" = true ] && [ -n "$ORPHANS" ]; then
@@ -152,12 +171,13 @@ show_detailed_diff() {
 # --- apply ------------------------------------------------------------------
 
 apply_sync() {
-  if [ -n "$TO_ADD$TO_UPDATE" ]; then
+  if [ -n "$PENDING" ]; then
     # --force: the diff above is what was approved; do not stop at chezmoi's
     # "changed since chezmoi last wrote it" prompt.
     cz apply --force -x scripts "$DEPLOYED_SKILLS"
     for skill in $TO_ADD; do log "Added: $skill"; done
     for skill in $TO_UPDATE; do log "Updated: $skill"; done
+    for skill in $TO_DELETE; do log "Deleted: $skill"; done
   fi
 
   if [ "$prune" = true ]; then
@@ -238,7 +258,7 @@ main() {
   compute_diff
   show_summary
 
-  if [ -z "$TO_ADD$TO_UPDATE" ] && { [ "$prune" = false ] || [ -z "$ORPHANS$LEFTOVERS" ]; }; then
+  if [ -z "$PENDING" ] && { [ "$prune" = false ] || [ -z "$ORPHANS$LEFTOVERS" ]; }; then
     log "Everything is in sync. Nothing to do."
     exit 0
   fi
