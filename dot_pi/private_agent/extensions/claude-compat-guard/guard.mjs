@@ -15,8 +15,14 @@ export function rewriteDocs(text) {
 	return text.slice(0, start) + after + text.slice(start + before.length);
 }
 
+// Actual provider and API pairs that send Pi's prompt to Anthropic as Claude Code.
+const GUARDED = new Map([
+	["claude-compat", "claude-compat-messages"],
+	["claude-compat-proxy", "claude-compat-proxy-messages"],
+]);
+
 export function rewriteContext(model, context) {
-	if (model.provider !== "claude-compat" || model.api !== "claude-compat-messages") return context;
+	if (GUARDED.get(model.provider) !== model.api) return context;
 	let changed = false;
 	const messages = context.messages.map((message) => {
 		if (message.role !== "system") return message;

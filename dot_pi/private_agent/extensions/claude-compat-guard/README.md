@@ -39,6 +39,26 @@ Restart Pi after an approved targeted apply (or use `/reload`).
 Codex remains the default. `/claude-compat-status` is the upstream status command.
 Removing the companion leaves upstream Compat unguarded, not disabled.
 
+## Proxy mode (separate provider)
+
+`claude-compat-proxy` is a second, separate provider. It is loaded from the
+cartwmic fork `cartwmic/pi-claude-request-compat`, pinned in Pi settings to
+commit `b322f9d81530d80230483213470674ba8cf048dc` (package `extensions: []`).
+It sends the same validated Claude Code request to the CLIProxyAPI hub at
+`https://cliproxy.internal.cartwmic.com`, which holds the Claude logins.
+
+- Its only credential is a CLIProxyAPI client key (`cpa_…`), read at request
+  time through `op_read_cached.sh` from 1Password item
+  `h4x7srdscdac36wnvuq4xawr5u` field `laptop-pi` (vault `developer`). It never
+  touches the Anthropic login, and Anthropic tokens and API keys are rejected.
+- The same docs guard applies to `claude-compat-proxy` / `claude-compat-proxy-messages`.
+- `PROXY_ORIGIN` in `load.mjs` must match the `baseUrl` in
+  `private_models.json.tmpl`; a test checks this.
+- If the fork is not installed, the proxy is skipped. A proxy load failure shows
+  a warning and never disables `claude-compat`.
+- `claude-compat`, its models and its settings pin are unchanged.
+- Extra usage must stay off on every account the hub holds.
+
 Check from the dotfiles root:
 
 ```sh
