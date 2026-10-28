@@ -12,7 +12,7 @@ Same on every profile: everything is relative to the home directory of the machi
 sessions and recaps. Stdlib only, Python 3.9+. Run by qmd-refresh before 'qmd update'; safe to run alone.
 
 Incremental: a source whose output exists and is not older than it is skipped without being read. Sources older than --days
-(by modification time, default 90) are not exported, and their outputs are deleted, as are outputs whose source is gone.
+(by modification time, default 365) are not exported, and their outputs are deleted, as are outputs whose source is gone.
 One exporter runs at a time (a lock in the output directory; a second one exits 3). Nothing is deleted from a source root that is missing or unreadable, or from a directory that is not a corpus this program
 made (the .qmd-corpus marker). Files are written whole and renamed into place, so an interrupted run leaves no half file.
 What goes in: user and assistant text (4000 chars per message), compaction summaries (8000), recap summaries; tool results,
@@ -219,7 +219,7 @@ def export_kind(kind, root, suffix, out_dir, cutoff, state, dry, log):
 def main(argv=None):
     home = os.path.expanduser("~")
     ap = argparse.ArgumentParser(description="Export Pi sessions and recaps as markdown for QMD.")
-    ap.add_argument("--days", type=int, default=90, help="export sources modified in the last N days (default 90)")
+    ap.add_argument("--days", type=int, default=365, help="export sources modified in the last N days (default 365)")
     ap.add_argument("--out", default=os.path.join(home, ".local/share/qmd-corpus"))
     ap.add_argument("--sessions-root", default=os.path.join(home, ".pi/agent/sessions"))
     ap.add_argument("--recaps-root", default=os.path.join(home, ".local/share/session-recap/records"))
