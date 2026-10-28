@@ -160,8 +160,11 @@ fi
 description = "Install Python tools via uv"
 depends = ["install-uv"]
 run = '''
-if ! command -v vectorcode >/dev/null 2>&1 || ! command -v vibe >/dev/null 2>&1; then
-  uv tool install vectorcode
+# Retired 2026-10-27: VectorCode. Its only consumer (codecompanion.nvim) went in April; remove the old install.
+if uv tool list 2>/dev/null | grep -q '^vectorcode '; then
+  uv tool uninstall vectorcode
+fi
+if ! command -v vibe >/dev/null 2>&1; then
   uv tool install mistral-vibe
 fi
 '''
@@ -1010,7 +1013,6 @@ verbose = false
 #   - jq → jq (mise includes this)
 #
 # ✅ AI/Productivity:
-#   - vectorcode → task (uv tool install)
 #   - mistral-vibe → task (uv tool install)
 #   - mmdc → npm:@mermaid-js/mermaid-cli
 #   - claude → task (custom installer)
