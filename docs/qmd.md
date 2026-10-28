@@ -16,6 +16,7 @@ for notes, repo docs, Pi session recaps and Pi sessions, with hybrid (semantic) 
 | Exporter | `dot_local/bin/executable_qmd-export` | `~/.local/bin/qmd-export`; writes `~/.local/share/qmd-corpus/{sessions,recaps}` |
 | `qmd` on PATH | `dot_local/bin/executable_qmd` | `~/.local/bin/qmd`, a 20-line wrapper around the mise shim ([qmd on PATH](#qmd-on-path)) |
 | Scheduled refresh (macOS) | `Library/LaunchAgents/local.qmd-refresh.plist.tmpl`, `dot_local/bin/executable_qmd-refresh-scheduled`, `run_onchange_after_71_qmd_refresh_launchd.sh.tmpl`, `.chezmoitemplates/qmd_refresh_minutes` | `~/Library/LaunchAgents/local.qmd-refresh.plist`, `~/.local/bin/qmd-refresh-scheduled` ([Scheduled refresh](#scheduled-refresh)) |
+| Daily cleanup switch | `dot_config/qmd/refresh.conf.tmpl`, `.chezmoitemplates/qmd_refresh_cleanup` | `~/.config/qmd/refresh.conf` (`cleanup=on` or `off`; [Daily cleanup](#daily-cleanup)) |
 
 All of it is on the **personal and work (`axon-work-computer`) profiles**, not Termux (`.chezmoiignore`; decision 303: QMD on both). The
 `run_onchange_after_10_mise_bootstrap` hash covers the mise file on both, so a full apply reruns `mise install` once. See
@@ -47,11 +48,11 @@ qmd pull      # downloads the three models, about 2.1 GB, once, into ~/.cache/qm
 ## Refreshing the index: `qmd-refresh`
 
 ```sh
-qmd-refresh [--wait SECONDS] [--no-embed] [--no-export] [--reembed] [--dry-run]
-qmd-refresh status        # when the last refresh finished, and whether one is running
+qmd-refresh [--wait SECONDS] [--no-embed] [--no-export] [--no-cleanup] [--reembed] [--dry-run]
+qmd-refresh status        # when the last refresh and the last cleanup finished, and whether one is running
 ```
 
-One blocking command. It runs `qmd-export`, `qmd update` then `qmd embed` as a single `nice -n 10 heavy-gate --wait 7200 --` job (one slot,
+One blocking command. It runs `qmd-export`, `qmd update`, `qmd embed` and, at most once a day, `qmd cleanup` ([Daily cleanup](#daily-cleanup)) as a single `nice -n 10 heavy-gate --wait 7200 --` job (one slot,
 waits for a quiet Mac). On macOS a launchd agent runs it every hour ([Scheduled refresh](#scheduled-refresh)); the owner, or an agent the
 owner asked, can also run it by hand.
 
@@ -146,8 +147,72 @@ Turn it off: set `enabled: false` and apply (as above). By hand, until the next 
   (Metal); hence the low CPU. Expect 2 to 3 minutes and about 2 GB each hour, at `nice 10`, inside one heavy-gate slot.
 - **Disk:** the index (`~/.cache/qmd/index.sqlite`, 557 MB now) keeps the vectors of a document's old version: `qmd update` drops
   old content but not old vectors (`qmd cleanup` does). About 3 KB per chunk, so 3 to 5 MB per run, roughly 70 to 120 MB a day.
-  `qmd cleanup` on a copy of today's index removed 4,820 such chunks in 4.7 s (115 MB RSS) and shrank it by 15 MB. Not done by this
-  change: a later decision.
+  `qmd cleanup` on a copy of today's index removed 4,820 such chunks in 4.7 s (115 MB RSS) and shrank it by 15 MB. `qmd-refresh`
+  now runs it once a day: [Daily cleanup](#daily-cleanup).
+
+## Daily cleanup
+
+`qmd update` replaces a changed document's text but leaves the vectors of its old version in the index, so the index grows by every
+chunk that is embedded again (3 to 5 MB per hourly run, 70 to 120 MB a day here). `qmd-refresh` therefore ends its job with
+`qmd cleanup`, **at most once per 24 hours**, inside the same lock and the same `nice -n 10 heavy-gate` job as the refresh: no second
+gate, no second lock, no extra launchd agent. It runs only after export, update and embed succeeded (also when embed was skipped for
+a missing model, or with `--no-embed`).
+
+What `qmd cleanup` (2.8.3, `runCleanup` in `store.js`) does, in this order:
+
+- empties qmd's LLM response cache (query expansion and rerank answers, now and then pruned to the newest 1,000 rows; it was
+  empty here). The next hybrid query with the same words computes them again.
+- deletes the vectors whose content no **active** document refers to: old versions of changed documents, and documents whose file
+  is gone. A vector an active document uses is never touched (`WHERE NOT EXISTS (… d.hash = cv.hash AND d.active = 1)`).
+- deletes inactive document records (files that were removed; `qmd update` only marks them) and content rows nothing refers to.
+- compacts the full-text index and runs `VACUUM`, which rewrites the file: it briefly needs free disk about the size of the index
+  (550 MB). A `qmd search` or `qmd query` started meanwhile waits (qmd's SQLite busy timeout is 120 s) rather than failing.
+
+**Guard: a missing or emptied collection folder.** `qmd update` does not check that a collection's folder exists: if the
+`/Volumes/Workshop` disk is not mounted, say, it marks that collection's documents inactive, and a cleanup would then drop their
+vectors, so they would be embedded again once the disk is back. So the cleanup is skipped, with one line in the log, and tried
+again on the next refresh, when:
+
+- a collection folder is missing. The folders are read from the index's `store_collections` table, which qmd fills from its own
+  parse of `index.yml` and which `qmd update` globs, so no YAML is parsed here;
+- a collection has inactive documents and no active one left (a folder that exists but is empty, such as an empty mount point);
+- the index or its collection list cannot be read, or the list is empty.
+
+A collection whose files were all really deleted also holds the cleanup off until it is removed from `index.yml` (then qmd drops
+it from the table) or `qmd cleanup` is run by hand.
+
+**When it runs.** `~/.local/state/qmd-refresh/last-cleanup` holds the time of the last successful cleanup. A refresh 24 h or more after
+it runs the cleanup; earlier it skips quietly. A held lock exits 75 as before (nothing runs). A failed cleanup is logged
+(`qmd cleanup failed (status N)`) but does not fail the refresh, and the next refresh tries again. The scheduled log and
+`qmd-refresh` say `update + embed + cleanup` on the run that did it; `qmd-refresh status` prints the last cleanup.
+
+**Switch.** Local chezmoi data `qmd.refresh.cleanup`, default on:
+
+```yaml
+data:
+  qmd:
+    refresh:
+      cleanup: true          # false: qmd-refresh never runs qmd cleanup
+```
+
+It renders `~/.config/qmd/refresh.conf` (`cleanup=on` or `cleanup=off`), which `qmd-refresh` reads on every run, scheduled or by hand;
+a missing file means on. It is independent of `qmd.refresh.enabled`. Any other value fails the render (`"yes"`, `1`). A file that
+exists must hold exactly one line besides comments and blank lines, `cleanup=on` or `cleanup=off`; anything else (`cleanup=yes`,
+`cleanup=`, `cleanup =off`, two lines, an empty or unreadable file) makes `qmd-refresh` exit 2 before it runs anything. `--no-cleanup` skips it for one run.
+
+**Measured** (2026-10-27/28, personal Mac, on a `.backup` copy of the live index, never the index itself):
+
+| | Before | After |
+|---|---|---|
+| index file | 556.5 MB | 541.1 MB |
+| vectors (chunks) | 63,950 | 59,130 (4,820 orphaned removed) |
+| active documents without vectors | 0 | 0 |
+| time, peak RSS | | 3.5 s (0.9 s user, 2.3 s sys), 117 MB; a first copy earlier the same day took 4.7 s and 115 MB |
+
+**There is no undo.** The removed vectors belong to text no current document has, so nothing a search can find goes away. To get
+them back you would have to re-embed: a plain `qmd-refresh` embeds every active document that lacks vectors (only those), at about
+18 chunks a second and 1.9 GB RSS; a full `qmd-refresh --reembed` redoes everything, about 55 to 80 minutes for this corpus. The
+code itself rolls back with `git revert` and an apply, or `cleanup: false`.
 
 ## qmd on PATH
 
@@ -266,17 +331,20 @@ recaps are the work Mac's own; nothing moves between machines. Termux gets none 
 
 **The hourly job.** The work Mac gets the same launchd agent (`local.qmd-refresh`, [Scheduled refresh](#scheduled-refresh)): a recurring
 background job on the employer laptop, on by default once the plist is applied, first run one interval after it is loaded.
-- What it runs: `qmd-export`, `qmd update` and, only if the pinned model file is already there, `qmd embed`, as one `nice -n 10`
+- What it runs: `qmd-export`, `qmd update`, only if the pinned model file is already there `qmd embed`, and once a day `qmd cleanup`
+  ([Daily cleanup](#daily-cleanup); local SQLite work, no model, no network), as one `nice -n 10`
   heavy-gate job that waits for a quiet Mac. It never downloads: without the model it skips embedding (qmd downloads a model only in
   `qmd pull` or an embed/query that runs without it, and `qmd-refresh` checks the file first). No network, no new data leaves the Mac.
 - What it costs: on the personal Mac 2 to 3 minutes, about 30 to 40 s of CPU and 1.9 to 2 GB peak RSS per hourly run, nearly every hour
-  (long open Pi sessions are re-embedded whole). Disk: the index grows by roughly 70 to 120 MB a day until `qmd cleanup` is run
-  (old vectors are kept). The work Mac's numbers depend on its own sessions. The first run after `qmd pull` embeds the whole corpus
+  (long open Pi sessions are re-embedded whole). Disk: the daily `qmd cleanup` removes the old vectors that would otherwise add
+  roughly 70 to 120 MB a day (on the personal Mac 3.5 s and 117 MB RSS once a day; it rewrites the index, so it needs free disk
+  about the index size for a moment). The work Mac's numbers depend on its own sessions. The first run after `qmd pull` embeds the whole corpus
   (55 min on the personal Mac); run `qmd-refresh` by hand once, as in the steps below, so it is not left to a background tick.
 - What it logs: `~/Library/Logs/qmd-refresh/`, one short block per run with qmd's counts and collection paths (no document text,
   no environment, no secrets), 14 days, 2 MB a day at most.
 - Turn it off: `qmd: {refresh: {enabled: false}}` in `~/.config/chezmoi/chezmoi.yaml` (before the first apply, so it is never
-  loaded, or later), then apply; `launchctl bootout gui/$(id -u)/local.qmd-refresh` stops it at once.
+  loaded, or later), then apply; `launchctl bootout gui/$(id -u)/local.qmd-refresh` stops it at once. The daily cleanup alone:
+  `qmd: {refresh: {cleanup: false}}`, then apply `~/.config/qmd/refresh.conf`.
 
 **Cost.** Same as above, per machine. The first `qmd-refresh` embeds the whole corpus: on the personal Mac 58,056 chunks took 55 min (about 18 chunks/s, 1.9 GB peak RSS). The work
 corpus is its own size; `qmd-export --dry-run` and then the `qmd update` line of the first run show the document count. Everything above about `QMD_EMBED_CONTEXT_SIZE=506` applies unchanged:
@@ -287,10 +355,10 @@ instead of npm: that needs a fresh look from the work side.
 
 ```sh
 git -C ~/.local/share/chezmoi pull --ff-only
-chezmoi --source ~/.local/share/chezmoi apply --dry-run --verbose ~/.config/mise/conf.d/qmd.toml ~/.config/qmd/index.yml \
+chezmoi --source ~/.local/share/chezmoi apply --dry-run --verbose ~/.config/mise/conf.d/qmd.toml ~/.config/qmd/index.yml ~/.config/qmd/refresh.conf \
   ~/.local/bin/qmd-refresh ~/.local/bin/qmd-export ~/.local/share/agent-harness/canonical/skills/searching-with-qmd \
   ~/.local/bin/qmd ~/.local/bin/qmd-refresh-scheduled ~/Library/LaunchAgents/local.qmd-refresh.plist ~/71_qmd_refresh_launchd.sh
-chezmoi --source ~/.local/share/chezmoi apply ~/.config/mise/conf.d/qmd.toml ~/.config/qmd/index.yml \
+chezmoi --source ~/.local/share/chezmoi apply ~/.config/mise/conf.d/qmd.toml ~/.config/qmd/index.yml ~/.config/qmd/refresh.conf \
   ~/.local/bin/qmd-refresh ~/.local/bin/qmd-export ~/.local/share/agent-harness/canonical/skills/searching-with-qmd \
   ~/.local/bin/qmd ~/.local/bin/qmd-refresh-scheduled ~/Library/LaunchAgents/local.qmd-refresh.plist ~/71_qmd_refresh_launchd.sh
                                       # the last two load the hourly agent (omit them, or set enabled: false, to leave it off)

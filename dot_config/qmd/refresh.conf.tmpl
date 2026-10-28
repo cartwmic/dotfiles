@@ -1,0 +1,3 @@
+# Managed by chezmoi (dot_config/qmd/refresh.conf.tmpl). Read by ~/.local/bin/qmd-refresh; see docs/qmd.md "Daily cleanup".
+# cleanup=on: the refresh job ends with `qmd cleanup` at most once per 24 h. Set chezmoi data qmd.refresh.cleanup: false and apply to turn it off.
+cleanup={{ includeTemplate "qmd_refresh_cleanup" . }}
