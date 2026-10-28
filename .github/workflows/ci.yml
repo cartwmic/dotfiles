@@ -88,3 +88,5 @@ jobs:
         run: python3 -m unittest discover -s tests/mise -v
       - name: Instances scratch-HOME apply proof (stub launchctl, exact call lists)
         run: python3 -m unittest discover -s tests/instances -v
+      - name: Work-Mac adoption script (scratch HOME, real chezmoi and git, stub launchctl)
+        run: python3 -m unittest discover -s tests/work-mac-instances -v
