@@ -19,6 +19,7 @@ import {
 	lastAssistantStopReason,
 	loadConfig,
 	loadEnabled,
+	ntfyOffByEnv,
 	parseHerdrLabel,
 	parseHerdrPaneCurrent,
 	parseToggle,
@@ -29,6 +30,10 @@ import {
 	saveEnabled,
 } from "./index.ts";
 import { AUTO_COMPACT_WILL_RESUME_EVENT } from "../auto-compact/events.ts";
+
+// A pane started with PI_NTFY_OFF=1 (coordinator panes) would silence every
+// send these tests expect. Tests that need the switch set it themselves.
+delete process.env.PI_NTFY_OFF;
 
 // --- jump Click deep-link (tap-to-jump) ---
 
@@ -567,6 +572,81 @@ test("lifecycle wiring: end caches, settled+idle sends, question sends immediate
 		assert.equal(sends[1][2], "❓ Choose target?");
 		assert.equal(sends[1][3], "question");
 	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("ntfyOffByEnv: only PI_NTFY_OFF=1 turns pushes off", () => {
+	assert.equal(ntfyOffByEnv({ PI_NTFY_OFF: "1" }), true);
+	assert.equal(ntfyOffByEnv({}), false);
+	assert.equal(ntfyOffByEnv({ PI_NTFY_OFF: "" }), false);
+	assert.equal(ntfyOffByEnv({ PI_NTFY_OFF: "0" }), false);
+	assert.equal(ntfyOffByEnv({ PI_NTFY_OFF: "true" }), false);
+});
+
+test("lifecycle wiring: PI_NTFY_OFF=1 stops turn-end and question pushes before any lookup", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ntfy-env-off-"));
+	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+	const sends: unknown[][] = [];
+	let lookups = 0;
+	const pi = {
+		registerCommand: () => {},
+		on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => {
+			handlers.set(name, handler);
+		},
+		events: { on: () => () => {} },
+	};
+	const ctx = {
+		hasUI: true,
+		isIdle: () => true,
+		sessionManager: {
+			getCwd: () => "/tmp/project",
+			getSessionName: () => "named",
+			getSessionId: () => "abcdef123456",
+		},
+		ui: { notify: () => {} },
+	};
+	const saved = process.env.PI_NTFY_OFF;
+	const turnAndQuestion = async () => {
+		await handlers.get("agent_start")?.({}, ctx);
+		await handlers.get("agent_end")?.({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "final answer" }] }],
+		}, ctx);
+		await handlers.get("agent_settled")?.({}, ctx);
+		await handlers.get("tool_execution_start")?.({
+			toolName: "ask_user_question",
+			args: { questions: [{ question: "Choose target?" }] },
+		}, ctx);
+		await flushAsyncDispatch();
+	};
+	try {
+		registerNtfyExtension(pi as any, {
+			dir,
+			config: {
+				url: "https://ntfy.invalid/topic",
+				maxExcerptChars: 200,
+				enabled: true,
+				jumpDeepLinkBase: "termux://zellij-jump",
+				herdrJumpDeepLinkBase: "termux://herdr-jump",
+			},
+			resolveLocation: async () => { lookups++; return {}; },
+			send: async (...args: unknown[]) => { sends.push(args); },
+		});
+
+		process.env.PI_NTFY_OFF = "1";
+		await turnAndQuestion();
+		assert.equal(sends.length, 0, "PI_NTFY_OFF=1: no push on turn end or question");
+		assert.equal(lookups, 0, "PI_NTFY_OFF=1: no Herdr/Zellij lookup either");
+
+		// Control: the same handlers push both kinds once the switch is off.
+		process.env.PI_NTFY_OFF = "0";
+		await turnAndQuestion();
+		assert.equal(sends.length, 2);
+		assert.equal(sends[0][3], "robot");
+		assert.equal(sends[1][3], "question");
+	} finally {
+		if (saved === undefined) delete process.env.PI_NTFY_OFF;
+		else process.env.PI_NTFY_OFF = saved;
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });
