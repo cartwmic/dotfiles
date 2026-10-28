@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if ! command -v node >/dev/null 2>&1; then
+	printf '%s\n' '{"ok":false,"code":"missing_dependency","message":"node not found on PATH (viz needs Node 24)"}'
+	echo "[viz] ERROR: node not found on PATH" >&2
+	exit 4
+fi
+exec node "$HERE/../share/viz/viz.mjs" "$@"
