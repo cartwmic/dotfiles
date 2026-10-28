@@ -12,7 +12,9 @@ export default async function claudeCompatGuard(pi: ExtensionAPI) {
 		allowModelNetwork: false,
 		refreshOnCreate: false,
 	});
-	const entry = join(agentDir, "git/github.com/vazzma/pi-claude-request-compat/src/extension.js");
-	const { default: upstream } = await import(pathToFileURL(entry).href);
-	await loadCompat(pi, upstream, owner, lazyStream);
+	const entry = join(agentDir, "git/github.com/cartwmic/pi-claude-request-compat/src/extension.js");
+	const { default: upstream, compatMode } = await import(pathToFileURL(entry).href);
+	// PI_CLAUDE_COMPAT_MODE: unset or proxy -> hub; direct -> Anthropic. Anything
+	// else throws here, so claude-compat does not load at all.
+	await loadCompat(pi, upstream, owner, lazyStream, { mode: compatMode() });
 }

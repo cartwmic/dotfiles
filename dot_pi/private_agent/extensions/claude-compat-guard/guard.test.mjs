@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { guardProvider, rewriteContext, rewriteDocs } from "./guard.mjs";
-import { loadCompat } from "./load.mjs";
+import { HUB_ORIGIN, loadCompat } from "./load.mjs";
 
 const docs = "<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /real/pi/README.md\n- When asked about: models (docs/models.md), pi packages (docs/packages.md), MCP servers (docs/mcp.md)\n- Run pi and read pi docs\n</docs>";
 const fixed = docs.replace("about pi itself", "about Pi itself").replace("pi packages (docs/packages.md)", "Pi packages (docs/packages.md)");
@@ -78,13 +78,65 @@ test("factory registers the guarded raw provider exactly once before any session
 	const registrations = [], commands = [];
 	const pi = { registerProvider: p => registrations.push(p), registerCommand: (...args) => commands.push(args) };
 	const provider = { id: "claude-compat", auth: { oauth: { isSubscription: true } }, stream() {}, streamSimple() {} };
-	await loadCompat(pi, api => { api.registerProvider(provider); api.registerCommand("upstream-status", {}); }, {});
+	await loadCompat(pi, api => { api.registerProvider(provider); api.registerCommand("upstream-status", {}); }, {}, undefined, { mode: "direct" });
 	assert.equal(registrations.length, 1);
 	assert.notEqual(registrations[0].stream, provider.stream);
 	assert.notEqual(registrations[0].streamSimple, provider.streamSimple);
 	assert.equal(registrations[0].auth.oauth.isSubscription, true);
 	assert.equal(commands[0][0], "upstream-status");
-	await assert.rejects(loadCompat(pi, api => api.registerProvider({ id: "other" }), {}), /Expected the pinned/);
+	await assert.rejects(loadCompat(pi, api => api.registerProvider({ id: "other" }), {}, undefined, { mode: "direct" }), /Expected the pinned/);
+});
+const ownerWith = (credentials, apiKey) => ({
+	listCredentials: async () => credentials,
+	getAuth: async (id) => id === "anthropic" ? { auth: { apiKey } } : undefined,
+});
+test("direct mode keeps the shared Anthropic OAuth wrapper and passes only the mode", async () => {
+	const registrations = [], seen = [];
+	const provider = { id: "claude-compat", auth: { oauth: { isSubscription: true } }, stream() {}, streamSimple() {} };
+	await loadCompat({ registerProvider: p => registrations.push(p) },
+		async (api, options) => { seen.push(options); api.registerProvider(provider); }, ownerWith([], undefined), undefined, { mode: "direct" });
+	assert.deepEqual(seen, [{ mode: "direct" }]);
+	assert.equal(registrations.length, 1);
+	assert.match(registrations[0].auth.oauth.name, /shared Pi Anthropic OAuth/);
+});
+test("proxy mode passes the hub origin and an owner-backed direct fallback, and keeps the fork's key auth", async () => {
+	const registrations = [], seen = [];
+	const auth = { apiKey: { name: "hub key", resolve() {} } };
+	const provider = { id: "claude-compat", auth, stream() {}, streamSimple() {} };
+	const upstream = async (api, options) => { seen.push(options); api.registerProvider(provider); };
+	const oauth = [{ providerId: "anthropic", type: "oauth" }];
+	await loadCompat({ registerProvider: p => registrations.push(p) }, upstream, ownerWith(oauth, "sk-ant-oat01-owner"), undefined, { mode: "proxy" });
+	assert.equal(seen.length, 1);
+	assert.equal(seen[0].mode, "proxy");
+	assert.equal(seen[0].origin, HUB_ORIGIN);
+	assert.equal(HUB_ORIGIN, "https://cliproxy.internal.cartwmic.com");
+	assert.deepEqual(await seen[0].directAuth(undefined), { apiKey: "sk-ant-oat01-owner" });
+	assert.equal(registrations.length, 1);
+	assert.equal(registrations[0].auth, auth, "the hub route never uses the shared Anthropic wrapper");
+	assert.notEqual(registrations[0].stream, provider.stream, "the prompt guard still wraps it");
+	const noLogin = [];
+	await loadCompat({ registerProvider() {} }, async (_api, options) => noLogin.push(options), ownerWith([], undefined), undefined, { mode: "proxy" });
+	await assert.rejects(noLogin[0].directAuth(undefined), /\/login anthropic/);
+	const apiKeyOwner = [];
+	await loadCompat({ registerProvider() {} }, async (_api, options) => apiKeyOwner.push(options), ownerWith(oauth, "sk-ant-api03-paid"), undefined, { mode: "proxy" });
+	await assert.rejects(apiKeyOwner[0].directAuth(undefined), /OAuth access token/);
+});
+test("an unknown mode fails before the fork is called", async () => {
+	let called = false;
+	for (const mode of [undefined, "", "hub"]) {
+		await assert.rejects(loadCompat({}, async () => { called = true; }, {}, undefined, { mode }), /Unexpected Claude Compat mode/);
+	}
+	assert.equal(called, false);
+});
+test("models.json gives claude-compat the hub client key by 1Password reference, not a value", () => {
+	const template = readFileSync(new URL("../../private_models.json.tmpl", import.meta.url), "utf8");
+	const block = template.slice(template.indexOf('"claude-compat": {'), template.indexOf('"openai-codex"'));
+	assert.ok(block.includes('"apiKey": "!$HOME/.local/user_scripts/op_read_cached.sh op://developer/tb36gtnaocyezjk3dslomp64he/laptop-pi"'));
+	assert.equal(/cpa_[0-9a-f]/.test(template), false);
+	assert.equal(template.includes("claude-compat-proxy"), false);
+	const settings = readFileSync(new URL("../../private_settings.json.tmpl", import.meta.url), "utf8");
+	assert.match(settings, /"source": "git:github\.com\/cartwmic\/pi-claude-request-compat@[0-9a-f]{40}",\n\s*"extensions": \[\]/);
+	assert.equal(settings.includes("vazzma/pi-claude-request-compat"), false);
 });
 test("validated full prompt differs by exactly the two documented characters", { skip: !process.env.COMPAT_PROMPT_FIXTURE }, () => {
 	const original = readFileSync(process.env.COMPAT_PROMPT_FIXTURE, "utf8");

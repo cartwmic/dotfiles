@@ -1,8 +1,33 @@
 # Claude Compat prompt guard
 
-Personal-profile companion to `vazzma/pi-claude-request-compat` 0.2.1, pinned
-in Pi settings to commit `d915546395e31e6a6a6b49268d21c2b9e50cf10a`.
-Pi 0.99.2 supplies the public provider lookup and native registration APIs.
+Personal-profile companion to `cartwmic/pi-claude-request-compat`, a fork of
+`vazzma/pi-claude-request-compat` 0.2.1 (`d915546`) that adds hub mode. Pi
+settings pin the fork by commit. Pi 0.99.2 supplies the public provider lookup
+and native registration APIs.
+
+## Route: hub or direct
+
+`PI_CLAUDE_COMPAT_MODE` picks the route when Pi starts. Change it, then restart Pi.
+
+- **Unset or `proxy`:** `claude-compat` requests go to the CLIProxyAPI hub at
+  `https://cliproxy.internal.cartwmic.com` (`HUB_ORIGIN` in `load.mjs`). The client
+  key comes from the `claude-compat` `apiKey` in `private_models.json.tmpl`, read
+  from 1Password item `tb36gtnaocyezjk3dslomp64he` field `laptop-pi`. The hub
+  holds the Anthropic logins.
+- **Fallback:** only when the hub gives no HTTP response (DNS failure, refused or
+  unreachable connection, connect timeout), the request is retried direct on Pi's
+  Anthropic OAuth login. Any HTTP response from the hub is final, including 401,
+  429 and 5xx. Each fallback shows on the status line and as a warning.
+- **`direct`:** the old behaviour. Requests go to api.anthropic.com on Pi's
+  Anthropic OAuth login, and the hub is never contacted.
+- **Any other value:** the guard throws at load, so `claude-compat` is not
+  registered at all.
+
+Provider, API and model ids are the same in both routes, so sessions, settings
+and subagent model ids need no change. Rollback: start Pi with
+`PI_CLAUDE_COMPAT_MODE=direct`, or revert the swap PR and apply.
+
+## Prompt guard
 
 The companion is the sole loader for the pinned upstream extension; the package
 stays installed with `extensions: []`. Its factory wraps Compat's raw native
@@ -24,7 +49,7 @@ patch. Server acceptance can change; a passing local guard test is not live proo
 
 The personal models template adds exact Sonnet 5.5 metadata because this upstream
 catalog lacks it. Upstream still caps request output at 64,000 tokens.
-Authentication reuses Pi's existing **Anthropic OAuth** login. No separate Compat
+In direct mode, and for the hub fallback, authentication reuses Pi's existing **Anthropic OAuth** login. No separate Compat
 credential is created. Native Pi auth resolves and refreshes only `anthropic`
 under its existing storage lock; the companion never copies refresh tokens.
 Availability checks inspect auth metadata without refreshing. Every request
