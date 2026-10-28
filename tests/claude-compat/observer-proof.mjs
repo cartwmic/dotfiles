@@ -16,13 +16,16 @@ await Promise.all([agentDir, cwd, sessionDir].map(p => fs.mkdir(p, { recursive: 
 await fs.writeFile(path.join(agentDir, "auth.json"), JSON.stringify({ "anthropic": {
 	type: "oauth", access: "sk-ant-oat-synthetic-test-only", refresh: "disabled", expires: Date.now() + 3600000,
 } }), { mode: 0o600 });
-const compat = path.join(os.homedir(), ".pi/agent/git/github.com/vazzma/pi-claude-request-compat/src/extension.js");
+const compat = process.env.COMPAT_EXTENSION ?? path.join(os.homedir(), ".pi/agent/git/github.com/cartwmic/pi-claude-request-compat/src/extension.js");
 const guard = process.env.COMPAT_GUARD ?? path.join(os.homedir(), ".pi/agent/extensions/claude-compat-guard/index.ts");
 const oldFetch = globalThis.fetch;
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+const oldMode = process.env.PI_CLAUDE_COMPAT_MODE;
 process.env.PI_CODING_AGENT_DIR = agentDir;
-await fs.mkdir(path.join(agentDir, "git/github.com/vazzma"), { recursive: true });
-await fs.symlink(path.dirname(path.dirname(compat)), path.join(agentDir, "git/github.com/vazzma/pi-claude-request-compat"));
+// This proof covers the direct route (synthetic Anthropic OAuth, scripted api.anthropic.com).
+process.env.PI_CLAUDE_COMPAT_MODE = "direct";
+await fs.mkdir(path.join(agentDir, "git/github.com/cartwmic"), { recursive: true });
+await fs.symlink(path.dirname(path.dirname(compat)), path.join(agentDir, "git/github.com/cartwmic/pi-claude-request-compat"));
 let calls = 0;
 globalThis.fetch = async (input, init) => {
 	const url = new URL(input instanceof Request ? input.url : String(input));
@@ -78,5 +81,7 @@ try {
 	globalThis.fetch = oldFetch;
 	if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+	if (oldMode === undefined) delete process.env.PI_CLAUDE_COMPAT_MODE;
+	else process.env.PI_CLAUDE_COMPAT_MODE = oldMode;
 	await fs.rm(scratch, { recursive: true, force: true });
 }
