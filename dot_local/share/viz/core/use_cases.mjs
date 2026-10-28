@@ -1,11 +1,13 @@
-// Use cases: render, list, doctor, and the action record every call leaves.
+// Use cases: render, publish, list, doctor, and the action record every call leaves.
 // The outside is reached only through these ports (viz.mjs wires the real ones):
 //   store   { root, isTaken(id), stage(files) -> { path(name) }, add(staging, name, data),
 //             finalPaths(id, names) -> { name: path }, commit(staging, id), discard(staging),
-//             readRenders() -> [meta], appendAction(record) }
+//             readRenders() -> [meta], readRender(id) -> meta|null, readFile(id, name) -> bytes,
+//             appendAction(record) }
 //   input   { read(file) -> { bytes, text, path, baseHref } }   file '-' means stdin (path '-', no baseHref)
 //   browser { locate() -> path, screenshot({ chromium, pagePath, width, scale, clipTo, pad }) -> { png, pageErrors } }
 //   mermaid { locate() -> { mmdc, browser }, toSvg(source, located) -> svg, version(located) -> string|null }
+//   site    { locate() -> base URL, put(path, bytes, contentType) -> HTTP status }   path is '<id>/<name>'
 //   clock   { now() -> epoch ms }
 //   random  { hex() -> short random hex string }
 //   runtime { node, nodeVersion }
@@ -13,7 +15,7 @@
 // Adapters signal failures by throwing VizError with a contract code.
 import {
   EXIT_CODES, PAD, SOURCE_EXT, USAGE, VizError, newId, newestFirst, parseOptions,
-  parsePositiveInteger, parseRenderRequest, pngSize, wrapperPage,
+  parsePositiveInteger, parsePublishRequest, parseRenderRequest, pngSize, publishedUrls, wrapperPage,
 } from './domain.mjs';
 
 async function render(args, ports, ctx) {
@@ -80,6 +82,44 @@ async function render(args, ports, ctx) {
   }
 }
 
+// The files a published render needs, and the names they get on the site.
+const UPLOADS = [
+  { name: 'image.png', remote: 'image.png', type: 'image/png' },
+  { name: 'page.html', remote: 'index.html', type: 'text/html; charset=utf-8' },
+];
+
+async function publish(args, ports, ctx) {
+  const req = parsePublishRequest(args);
+  const base = ports.site.locate(); // before rendering: a missing site config fails fast
+  ctx.step({ step: 'site', base });
+  let rendered;
+  if (req.renderArgs) {
+    rendered = await render(req.renderArgs, ports, ctx);
+  } else {
+    const meta = await ports.store.readRender(req.id);
+    if (!meta) throw new VizError('bad_input', `no render with id ${req.id}; see viz list`);
+    ctx.step({ step: 'render', id: meta.id });
+    rendered = {
+      ok: true, id: meta.id, png: meta.png, html: meta.html, source: meta.source,
+      width: meta.width, height: meta.height, bytes: meta.bytes,
+    };
+  }
+  for (const u of UPLOADS) {
+    const bytes = await ports.store.readFile(rendered.id, u.name);
+    const path = `${rendered.id}/${u.remote}`;
+    let status;
+    try {
+      status = await ports.site.put(path, bytes, u.type);
+    } catch (e) {
+      ctx.step({ step: 'upload', path, bytes: bytes.byteLength, ok: false, message: e.message });
+      if (e instanceof VizError) e.message += `; render ${rendered.id} is kept, retry with: viz publish ${rendered.id}`;
+      throw e;
+    }
+    ctx.step({ step: 'upload', path, bytes: bytes.byteLength, status });
+  }
+  return { ...rendered, ...publishedUrls(base, rendered.id) };
+}
+
 async function list(args, ports, ctx) {
   const { opts, positional } = parseOptions(args, ['limit']);
   if (positional.length) throw new VizError('bad_input', `list takes no arguments\n${USAGE}`);
@@ -141,6 +181,7 @@ export async function runAction(argv, ports) {
   let output;
   try {
     if (command === 'render') output = await render(args, ports, ctx);
+    else if (command === 'publish') output = await publish(args, ports, ctx);
     else if (command === 'list') output = await list(args, ports, ctx);
     else if (command === 'doctor') output = doctor(args, ports, ctx);
     else if (command === 'help' || command === '--help' || command === '-h') output = { ok: true, usage: USAGE };

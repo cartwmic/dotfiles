@@ -37,6 +37,11 @@ const store = {
   commit: (staging, id) => { renders.set(id, staging.files); },
   discard: () => {},
   readRenders: () => [...renders.values()].map((files) => JSON.parse(files['meta.json'])),
+  readRender: (id) => (renders.has(id) ? JSON.parse(renders.get(id)['meta.json']) : null),
+  readFile: (id, name) => {
+    const data = renders.get(id)[name];
+    return typeof data === 'string' ? new TextEncoder().encode(data) : data;
+  },
   appendAction: (record) => { actions.push(record); },
 };
 const sources = new Map([
@@ -68,10 +73,23 @@ const mermaid = {
   },
   version: () => '11.16.0',
 };
+const uploads = [];
+let siteMode = 'ok';
+const site = {
+  locate() {
+    if (siteMode === 'unset') throw new VizError('missing_dependency', 'VIZ_PUBLISH_URL is not set');
+    return 'https://viz.example/';
+  },
+  put(path, bytes, contentType) {
+    if (siteMode === 'down') throw new VizError('publish_failed', 'PUT https://viz.example/' + path + ' failed: ECONNREFUSED');
+    uploads.push({ path, contentType, head: new TextDecoder().decode(bytes.slice(0, 15)), bytes: bytes.byteLength });
+    return 201;
+  },
+};
 let now = Date.UTC(2026, 9, 28, 12, 0, 0);
 let counter = 0;
 const ports = {
-  store, input, browser, mermaid,
+  store, input, browser, mermaid, site,
   clock: { now: () => (now += 7) },
   random: { hex: () => (counter++).toString(16).padStart(6, '0') },
   runtime: { node: '/fake/node', nodeVersion: 'v24.0.0' },
@@ -93,7 +111,28 @@ for (const [argv, p] of [
 ]) results.push({ argv, ...(await runAction(argv, p)) });
 const htmlId = results.at(-1).output.id;
 const htmlPage = new TextDecoder().decode(renders.get(htmlId)['page.html']);
-console.log(JSON.stringify({ results, actions, shots, htmlPage }));
+const coreActions = actions.splice(0);
+const coreShots = shots.splice(0);
+
+const svgId = results[0].output.id;
+const publishes = [];
+for (const [argv, mode] of [
+  [['publish', svgId], 'ok'],
+  [['publish', '/in/a.svg', '--width', '300'], 'ok'],
+  [['publish', '20990101-000000-000-abcdef'], 'ok'],
+  [['publish', svgId, '--width', '300'], 'ok'],
+  [['publish', '/in/a.svg'], 'unset'],
+  [['publish', svgId], 'down'],
+  [['publish', '/in/a.svg'], 'down'],
+]) {
+  siteMode = mode;
+  publishes.push({ argv, ...(await runAction(argv, ports)) });
+}
+const kept = publishes.at(-1).output.message.match(/render (\S+) is kept/);
+console.log(JSON.stringify({
+  results, actions: coreActions, shots: coreShots, htmlPage, svgId, publishes, uploads,
+  publishActions: actions, publishShots: shots.length, keptRender: kept ? store.readRender(kept[1]) : null,
+}));
 """
 
 
@@ -152,6 +191,49 @@ class CoreUseCaseTest(unittest.TestCase):
         self.assertEqual(bad["outcome"], self.results[2]["output"])
         self.assertIn({"step": "mmdc", "ok": False, "mmdc": "/fake/mmdc",
                        "message": "Parse error on line 2: fake parser"}, bad["steps"])
+
+
+    def test_publish_existing_render(self):
+        pub, svg_id = self.run_["publishes"][0], self.run_["svgId"]
+        self.assertEqual(pub["exitCode"], 0, pub)
+        out = pub["output"]
+        self.assertEqual(out["id"], svg_id)
+        self.assertEqual(out["url"], "https://viz.example/%s/" % svg_id)
+        self.assertEqual(out["png_url"], "https://viz.example/%s/image.png" % svg_id)
+        self.assertEqual(out["png"], self.results[0]["output"]["png"])
+        png, page = self.run_["uploads"][:2]
+        self.assertEqual((png["path"], png["contentType"], png["bytes"]), (svg_id + "/image.png", "image/png", 24))
+        self.assertEqual((page["path"], page["contentType"], page["head"]),
+                         (svg_id + "/index.html", "text/html; charset=utf-8", "<!doctype html>"))
+        steps = self.run_["publishActions"][0]["steps"]
+        self.assertEqual(steps[0], {"step": "site", "base": "https://viz.example/"})
+        self.assertEqual([s["status"] for s in steps if s["step"] == "upload"], [201, 201])
+
+    def test_publish_file_renders_then_uploads(self):
+        pub = self.run_["publishes"][1]
+        self.assertEqual(pub["exitCode"], 0, pub)
+        out = pub["output"]
+        self.assertNotEqual(out["id"], self.run_["svgId"])
+        self.assertEqual(out["width"], 600)
+        self.assertEqual(out["url"], "https://viz.example/%s/" % out["id"])
+        self.assertEqual([u["path"] for u in self.run_["uploads"][2:4]],
+                         [out["id"] + "/image.png", out["id"] + "/index.html"])
+
+    def test_publish_failures(self):
+        unknown, with_opts, unset, down, down_file = self.run_["publishes"][2:]
+        self.assertEqual((unknown["exitCode"], unknown["output"]["code"]), (2, "bad_input"))
+        self.assertIn("no render with id", unknown["output"]["message"])
+        self.assertEqual((with_opts["exitCode"], with_opts["output"]["code"]), (2, "bad_input"))
+        self.assertEqual((unset["exitCode"], unset["output"]["code"]), (4, "missing_dependency"))
+        self.assertEqual((down["exitCode"], down["output"]["code"]), (5, "publish_failed"))
+        self.assertIn("viz publish %s" % self.run_["svgId"], down["output"]["message"])
+        self.assertEqual((down_file["exitCode"], down_file["output"]["code"]), (5, "publish_failed"))
+        self.assertIsNotNone(self.run_["keptRender"], "a render made before a failed upload is kept")
+        # The site is checked before rendering: only the two file publishes that reached it rendered.
+        self.assertEqual(self.run_["publishShots"], 2)
+        self.assertEqual(len(self.run_["uploads"]), 4, "failed publishes upload nothing")
+        failed = [s for s in self.run_["publishActions"][5]["steps"] if s["step"] == "upload"]
+        self.assertEqual(failed[0]["ok"], False)
 
 
 if __name__ == "__main__":

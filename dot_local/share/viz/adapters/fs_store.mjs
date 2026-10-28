@@ -39,6 +39,12 @@ export function createFsStore(root) {
       return renders;
     },
 
+    readRender(id) {
+      try { return JSON.parse(readFileSync(join(root, id, 'meta.json'), 'utf8')); } catch { return null; }
+    },
+
+    readFile(id, name) { return readFileSync(join(root, id, name)); },
+
     appendAction(record) {
       mkdirSync(root, { recursive: true });
       appendFileSync(join(root, ACTIONS_FILE), JSON.stringify(record) + '\n');

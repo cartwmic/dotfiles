@@ -3,10 +3,11 @@
 
 export const USAGE = `usage:
   viz render <file|-> [--as mermaid|svg|html] [--width 1200] [--scale 2]
+  viz publish <file|id> [--as mermaid|svg|html] [--width 1200] [--scale 2]
   viz list [--limit N]
   viz doctor`;
 
-export const EXIT_CODES = new Map([['bad_input', 2], ['render_failed', 3], ['missing_dependency', 4]]);
+export const EXIT_CODES = new Map([['bad_input', 2], ['render_failed', 3], ['missing_dependency', 4], ['publish_failed', 5]]);
 export const SOURCE_EXT = new Map([['mermaid', 'mmd'], ['svg', 'svg'], ['html', 'html']]);
 const FORMAT_BY_EXT = new Map([['.mmd', 'mermaid'], ['.svg', 'svg'], ['.html', 'html']]);
 export const PAD = 16; // CSS px of white margin around an SVG or Mermaid drawing
@@ -72,6 +73,27 @@ export function parseRenderRequest(args) {
   const scale = opts.has('scale') ? parsePositiveNumber('scale', opts.get('scale')) : 2;
   return { file, as, width, scale };
 }
+
+/** Validate `publish` arguments: a render id, or a file (or -) to render first with the render options. */
+export function parsePublishRequest(args) {
+  const { opts, positional } = parseOptions(args, ['as', 'width', 'scale']);
+  if (positional.length !== 1) throw badInput(`publish takes exactly one <file|id>\n${USAGE}`);
+  const target = positional[0];
+  if (!isRenderId(target)) return { id: null, renderArgs: args };
+  if (opts.size) throw badInput(`${target} is a render id; --as, --width and --scale apply only when publishing a file`);
+  return { id: target, renderArgs: null };
+}
+
+/** Where a published render is: the page at <base>/<id>/, the PNG beside it. */
+export function publishedUrls(base, id) {
+  const root = `${base.replace(/\/+$/, '')}/${id}/`;
+  return { url: root, png_url: `${root}image.png` };
+}
+
+const ID_PATTERN = /^\d{8}-\d{6}-\d{3}-[0-9a-f]+$/;
+
+/** True for the shape newId makes; anything else is treated as a file. */
+export function isRenderId(s) { return ID_PATTERN.test(s); }
 
 /** Sortable, unique-enough id: UTC time to the millisecond plus random hex. */
 export function newId(nowMs, randomHex) {
