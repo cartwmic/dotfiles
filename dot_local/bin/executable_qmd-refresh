@@ -136,7 +136,7 @@ if [ "$mode" = status ]; then
     case $ec in
         "$embed_ctx") echo "vectors: made with QMD_EMBED_CONTEXT_SIZE=$embed_ctx (first ~500 tokens of each chunk)" ;;
         reembed\ *) echo "vectors: a full re-embed was started and is not confirmed; run qmd-refresh to finish it (qmd-refresh --reembed if the NOTE stays)" ;;
-        *) if [ -e "$index" ]; then nv=$(sqlite3 "$index" "select count(*) from content_vectors" 2>/dev/null || echo unknown); else nv=0; fi
+        *) if [ -e "$index" ]; then nv=$(sqlite3 -init /dev/null -batch -noheader -list "$index" "select count(*) from content_vectors" 2>/dev/null || echo unknown); else nv=0; fi
            if [ "$nv" = 0 ]; then echo "vectors: none yet"
            else echo "vectors: may predate QMD_EMBED_CONTEXT_SIZE=$embed_ctx (long chunks embedded wrongly, tobi/qmd#897); run qmd-refresh --reembed once"; fi ;;
     esac
@@ -197,7 +197,7 @@ if [ "$2" = embed ] && [ ! -f "$3" ]; then
     : > "$4/skipped"
 elif [ "$2" = embed ]; then
 had=$(cat "$7" 2>/dev/null || true)
-if [ -e "$9" ]; then nvec=$(sqlite3 "$9" "select count(*) from content_vectors" 2>/dev/null || echo unknown); else nvec=0; fi
+if [ -e "$9" ]; then nvec=$(sqlite3 -init /dev/null -batch -noheader -list "$9" "select count(*) from content_vectors" 2>/dev/null || echo unknown); else nvec=0; fi
 force=
 if [ "$8" = 1 ]; then   # the marker carries the start time: qmd -f clears the vectors, so every vector row must be newer
     force=-f; had="reembed $(date -u +%Y-%m-%dT%H:%M:%S.000Z)"; echo "$had" > "$7"
@@ -211,7 +211,7 @@ q=$(printf "\047")
 case $had in
     "$6") ok=1 ;;
     "") [ "$nvec" = 0 ] && ok=1 || : ;;
-    reembed\ *) [ -e "$9" ] && [ "$(sqlite3 "$9" "select count(*) from content_vectors where embedded_at < ${q}${had#reembed }${q}" 2>/dev/null || echo unknown)" = 0 ] && ok=1 || : ;;
+    reembed\ *) [ -e "$9" ] && [ "$(sqlite3 -init /dev/null -batch -noheader -list "$9" "select count(*) from content_vectors where embedded_at < ${q}${had#reembed }${q}" 2>/dev/null || echo unknown)" = 0 ] && ok=1 || : ;;
 esac
 if [ "$ok" = 1 ]; then echo "$6" > "$7"; else : > "$4/legacy"; fi
 fi
@@ -224,7 +224,7 @@ now=$(date +%s)
 [ $((now - last)) -ge 86400 ] || exit 0
 # The folders update just globbed: store_collections, which qmd fills from its own parse of index.yml (no YAML parsing here).
 # Fail closed: no index, an unreadable list or an empty one means no cleanup.
-if [ ! -e "$9" ] || ! cols=$(sqlite3 "$9" "select path from store_collections" 2>/dev/null) || [ -z "$cols" ]; then
+if [ ! -e "$9" ] || ! cols=$(sqlite3 -init /dev/null -batch -noheader -list "$9" "select path from store_collections" 2>/dev/null) || [ -z "$cols" ]; then
     echo "qmd-refresh: qmd cleanup skipped: cannot read the collection folders from $9; a later refresh tries again" >&2
     exit 0
 fi
@@ -234,7 +234,7 @@ if [ -n "$gone" ]; then
     exit 0
 fi
 # A folder that exists but is empty (an empty mount point) deactivates a whole collection too.
-empty=$(sqlite3 "$9" "select name from store_collections s where not exists (select 1 from documents d where d.collection = s.name and d.active = 1) and exists (select 1 from documents d where d.collection = s.name and d.active = 0) limit 1" 2>/dev/null) || empty="(the check could not read $9)"
+empty=$(sqlite3 -init /dev/null -batch -noheader -list "$9" "select name from store_collections s where not exists (select 1 from documents d where d.collection = s.name and d.active = 1) and exists (select 1 from documents d where d.collection = s.name and d.active = 0) limit 1" 2>/dev/null) || empty="(the check could not read $9)"
 if [ -n "$empty" ]; then
     echo "qmd-refresh: qmd cleanup skipped: collection $empty has no active document left (empty or unmounted folder?); a later refresh tries again" >&2
     exit 0
