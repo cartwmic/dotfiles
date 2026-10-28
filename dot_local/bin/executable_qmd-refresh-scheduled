@@ -1,0 +1,91 @@
+#!/bin/sh
+# qmd-refresh-scheduled — what the launchd agent local.qmd-refresh runs: one plain `qmd-refresh`, logged under ~/Library/Logs.
+#
+#   qmd-refresh-scheduled --wait SECONDS
+#
+# The schedule is set in chezmoi data (qmd.refresh.enabled, qmd.refresh.intervalMinutes; docs/qmd.md "Scheduled refresh").
+# Nothing here gates, niceness-adjusts or locks: qmd-refresh does all of that itself (heavy-gate, nice -n 10, flock). launchd never
+# starts a second copy of a running agent, and qmd-refresh's lock refuses one started by hand, so runs cannot pile up. Never --reembed.
+#
+# Log: ${QMD_REFRESH_LOG_DIR:-~/Library/Logs/qmd-refresh}/qmd-refresh-YYYY-MM-DD.log, one block per run with local timestamps.
+#  - status 75 (another refresh holds the lock, or heavy-gate gave up waiting for a quiet Mac) writes one line, nothing else.
+#  - noise is dropped: terminal escapes, progress bars, heavy-gate's echo of the job script, and the per-chunk "truncated to fit
+#    embedding context" warnings (counted instead; they are expected with QMD_EMBED_CONTEXT_SIZE=506).
+#  - bounded: day files older than QMD_REFRESH_LOG_DAYS (default 14) are deleted; a day file over QMD_REFRESH_LOG_MAX_BYTES
+#    (default 2 MB) gets one line per run; launchd.log (this script's own stray output) is emptied when over the same size.
+#  - what is logged: qmd-refresh's own lines and qmd's counts and collection paths. No document text, no environment, no secrets.
+#
+# TERM, INT or HUP (launchctl bootout, logout) are passed to qmd-refresh, which stops its job tree. Exit: qmd-refresh's status.
+set -eu
+
+prog=qmd-refresh-scheduled
+wait_s=
+while [ $# -gt 0 ]; do
+    case $1 in
+        --wait) [ $# -ge 2 ] || { echo "usage: $prog --wait SECONDS" >&2; exit 2; }; wait_s=$2; shift ;;
+        -h|--help) echo "usage: $prog --wait SECONDS"; exit 0 ;;
+        *) echo "usage: $prog --wait SECONDS" >&2; exit 2 ;;
+    esac
+    shift
+done
+case $wait_s in ''|*[!0-9]*) echo "$prog: --wait needs a whole number of seconds, got '$wait_s'" >&2; exit 2 ;; esac
+
+logdir=${QMD_REFRESH_LOG_DIR:-$HOME/Library/Logs/qmd-refresh}
+keep=${QMD_REFRESH_LOG_DAYS:-14}
+cap=${QMD_REFRESH_LOG_MAX_BYTES:-2097152}
+refresh=${QMD_REFRESH_BIN:-$HOME/.local/bin/qmd-refresh}
+case $keep$cap in ''|*[!0-9]*) echo "$prog: QMD_REFRESH_LOG_DAYS and QMD_REFRESH_LOG_MAX_BYTES must be whole numbers" >&2; exit 2 ;; esac
+
+mkdir -p "$logdir"
+log=$logdir/qmd-refresh-$(date +%Y-%m-%d).log
+find "$logdir" -maxdepth 1 -type f -name 'qmd-refresh-*.log' -mtime "+$keep" -exec rm -f {} + 2>/dev/null || :
+size() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }
+[ ! -f "$logdir/launchd.log" ] || [ "$(size "$logdir/launchd.log")" -le "$cap" ] || : > "$logdir/launchd.log"
+
+out=$(mktemp "$logdir/.run.XXXXXX")
+trap 'rm -f "$out"' EXIT
+stamp() { date +%Y-%m-%dT%H:%M:%S%z; }
+started=$(stamp)
+t0=$(date +%s)
+
+if [ ! -x "$refresh" ]; then
+    echo "$started rc=127: $refresh not found or not executable" >> "$log"
+    exit 127
+fi
+
+"$refresh" --wait "$wait_s" > "$out" 2>&1 < /dev/null &
+pid=$!
+trap 'kill -TERM "$pid" 2>/dev/null || :' TERM INT HUP
+# A trapped signal interrupts wait with a status above 128; keep waiting until qmd-refresh itself has exited.
+while :; do
+    rc=0
+    wait "$pid" || rc=$?
+    kill -0 "$pid" 2>/dev/null || break
+done
+secs=$(( $(date +%s) - t0 ))
+
+if [ "$rc" -eq 75 ]; then
+    why=$(grep -E '^qmd-refresh: .*(another refresh|gave up)' "$out" | tail -n 1)
+    [ -n "$why" ] || why=$(grep '^qmd-refresh: ' "$out" | tail -n 1)
+    why=$(printf '%s' "$why" | sed 's/^qmd-refresh: //' | cut -c1-200)
+    echo "$started skipped rc=75 after ${secs}s: ${why:-no reason given}" >> "$log"
+    exit 75
+fi
+if [ "$(size "$log")" -ge "$cap" ]; then
+    echo "$started rc=$rc after ${secs}s (output not kept: this file is over $cap bytes)" >> "$log"
+    exit "$rc"
+fi
+esc=$(printf '\033')
+{
+    echo "== $started start (heavy-gate wait up to ${wait_s}s)"
+    tr '\r' '\n' < "$out" | sed "s/${esc}\[[0-9;?]*[A-Za-z]//g" | awk '
+        /truncated to fit embedding context/ { trunc++; next }
+        skip > 0 { skip--; if ($0 ~ /^if \[ "\$ok" = 1 \]/) skip = 0; next }
+        /^\[heavy-gate\] INFO: allowed; running: sh -c / { print "[heavy-gate] INFO: allowed; running: <the qmd-refresh job>"; skip = 60; next }
+        /^[[:space:]]*$/ { next }
+        /█|░/ { next }
+        { print }
+        END { if (trunc) printf "(%d \"truncated to fit embedding context\" warnings, expected with QMD_EMBED_CONTEXT_SIZE=506)\n", trunc }'
+    echo "== $(stamp) end rc=$rc after ${secs}s"
+} >> "$log"
+exit "$rc"

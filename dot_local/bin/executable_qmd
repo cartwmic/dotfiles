@@ -1,0 +1,21 @@
+#!/bin/sh
+# qmd — the QMD CLI from anywhere ~/.local/bin is on PATH (docs/qmd.md, "qmd on PATH").
+#
+# mise installs qmd (dot_config/mise/conf.d/qmd.toml) into a versioned directory that only an activated interactive shell puts on
+# PATH, at the moment it activates. Pi's bash tool runs `/bin/bash -c` with the environment of the Pi that started it, so a Pi (and
+# every child it spawns) started before qmd was installed, or from a shell that never activated mise, cannot find `qmd`.
+# ~/.local/bin is on PATH in every zsh (~/.zshenv), so this one file reaches them all, including sessions already running.
+# In an activated shell mise's directory comes first and this wrapper is not used.
+#
+# It runs the mise shim, which picks the pinned version and puts node on PATH for it. A shim that cannot find qmd in the
+# toolset would search PATH and could land here again; QMD_PATH_WRAPPER stops that loop.
+if [ -n "${QMD_PATH_WRAPPER:-}" ]; then
+    echo "qmd: mise did not resolve qmd (run mise install; see docs/qmd.md)" >&2
+    exit 127
+fi
+shim=${MISE_DATA_DIR:-$HOME/.local/share/mise}/shims/qmd
+if [ ! -x "$shim" ]; then
+    echo "qmd: $shim not found (run mise install; see docs/qmd.md)" >&2
+    exit 127
+fi
+QMD_PATH_WRAPPER=1 exec "$shim" "$@"

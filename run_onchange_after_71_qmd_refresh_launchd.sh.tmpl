@@ -1,0 +1,26 @@
+#!/bin/sh
+# Load, reload or unload the scheduled QMD refresh (local.qmd-refresh) when its plist template or its setting changes.
+# personal and axon-work-computer on macOS only (.chezmoiignore). Setting: chezmoi data qmd.refresh (docs/qmd.md "Scheduled refresh").
+# plist: {{ include "Library/LaunchAgents/local.qmd-refresh.plist.tmpl" | sha256sum }}
+# setting: {{ includeTemplate "qmd_refresh_minutes" . }}
+set -eu
+log() { printf '[qmd_refresh_launchd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Darwin ] || exit 0
+label=local.qmd-refresh
+plist="$HOME/Library/LaunchAgents/$label.plist"
+uid=$(id -u)
+# A run in progress is stopped (qmd-refresh stops its job on TERM); the next one starts on the new schedule.
+launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+{{- if eq (includeTemplate "qmd_refresh_minutes" .) "off" }}
+rm -f "$plist"
+log INFO "qmd.refresh.enabled is false: $label is not loaded"
+{{- else }}
+[ -f "$plist" ] || { log WARN "$plist is not installed yet"; exit 0; }
+mkdir -p "$HOME/Library/Logs/qmd-refresh"
+if launchctl bootstrap "gui/$uid" "$plist"; then
+  log INFO "loaded $label (every {{ includeTemplate "qmd_refresh_minutes" . }} minutes; the first run is one interval from now)"
+else
+  log WARN "could not load the agent (no GUI session?); load it later: launchctl bootstrap gui/$uid $plist"
+fi
+{{- end }}

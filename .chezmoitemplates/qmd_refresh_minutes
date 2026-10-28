@@ -1,0 +1,13 @@
+{{- /* qmd_refresh_minutes: minutes between scheduled qmd-refresh runs, or "off" (docs/qmd.md "Scheduled refresh"). Local chezmoi data: qmd.refresh.enabled (default true), qmd.refresh.intervalMinutes (default 60, 15 to 1440). Any other value fails the whole render, so a typo applies nothing. */ -}}
+{{- $on := dig "qmd" "refresh" "enabled" true . | printf "%v" -}}
+{{- $min := dig "qmd" "refresh" "intervalMinutes" 60 . | printf "%v" -}}
+{{- if not (has $on (list "true" "false")) -}}
+{{-   fail (printf "qmd.refresh.enabled must be true or false, got %q" $on) -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" $min) -}}
+{{-   fail (printf "qmd.refresh.intervalMinutes must be a whole number of minutes, got %q" $min) -}}
+{{- end -}}
+{{- if or (lt (atoi $min) 15) (gt (atoi $min) 1440) -}}
+{{-   fail (printf "qmd.refresh.intervalMinutes must be between 15 and 1440, got %s" $min) -}}
+{{- end -}}
+{{- if eq $on "true" -}}{{ atoi $min }}{{- else -}}off{{- end -}}
