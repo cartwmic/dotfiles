@@ -171,6 +171,19 @@ class CleanupTest(Base):
         self.assertEqual(self.e.run(), 0, self.e.err)
         self.assertEqual(len(self.cleanups), 1)
 
+    def test_the_users_sqliterc_does_not_change_what_the_guard_reads(self):
+        # sqlite3 reads a startup file ($XDG_CONFIG_HOME/sqlite3/sqliterc, or ~/.sqliterc); headers or column mode would turn
+        # "path" or padding into a missing folder, every day.
+        rc = ".headers on\n.mode column\n"
+        (self.e.home / ".sqliterc").write_text(rc)
+        (self.e.root / "config" / "sqlite3").mkdir(parents=True, exist_ok=True)
+        (self.e.root / "config" / "sqlite3" / "sqliterc").write_text(rc)
+        self.assertEqual(self.e.run(), 0, self.e.err)
+        self.assertNotIn("skipped", self.e.err)
+        self.assertEqual(len(self.cleanups), 1)
+        self.assertEqual(self.e.run("status"), 0)
+        self.assertNotIn("may predate", self.e.out, "the vector count is read the same way")
+
     def test_a_collection_left_with_only_inactive_documents_holds_the_cleanup(self):
         # The folder exists but is empty (an empty mount point): update deactivated every document of the collection.
         empty = self.e.root / "mnt"
