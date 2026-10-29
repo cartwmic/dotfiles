@@ -2,8 +2,8 @@
 
 Only counts, durations, tokens, notional cost and fixed-vocabulary names leave the machine, grouped
 by low-cardinality labels (project slug, kind, provider, model, tool, outcome). No paths, no message text,
-tool arguments or error text. The one exception to "no session ids" is the four pi_cache_*_30m gauges, which carry a
-session id (UUIDs only) for sessions active in the last 30 minutes only (see cache_gauges). Content stays in the session files.
+tool arguments or error text. The one exception to "no session ids" is the four pi_cache_*_30m gauges and pi_cache_miss_streak, which carry a
+session id (UUIDs only) for sessions active in the last 30 minutes (the streak: the last hour) only (see cache_gauges). Content stays in the session files.
 Every push names its machine (AGENT_EVENTS_MACHINE, a slug) on the OTLP resource; without a valid one nothing is sent.
 """
 import contextlib
