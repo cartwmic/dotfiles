@@ -4,6 +4,7 @@ Only counts, durations, tokens, notional cost and fixed-vocabulary names leave t
 by low-cardinality labels (project slug, kind, provider, model, tool, outcome). No paths, no message text,
 tool arguments or error text. The one exception to "no session ids" is the four pi_cache_*_30m gauges, which carry a
 session id (UUIDs only) for sessions active in the last 30 minutes only (see cache_gauges). Content stays in the session files.
+Every push names its machine (AGENT_EVENTS_MACHINE, a slug) on the OTLP resource; without a valid one nothing is sent.
 """
 import contextlib
 import errno
@@ -48,6 +49,25 @@ def state_dir():
 
 def endpoint():
     return os.environ.get("AGENT_EVENTS_OTLP_ENDPOINT") or None
+
+
+MACHINE_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")
+
+
+def machine():
+    """The machine label (AGENT_EVENTS_MACHINE) when it is a slug: a lowercase letter, then up to 31 lowercase letters,
+    digits or hyphens. None otherwise. Every series carries it, so two Macs never write the same series; nothing is
+    sent without it."""
+    value = os.environ.get("AGENT_EVENTS_MACHINE") or ""
+    return value if MACHINE_RE.fullmatch(value) else None
+
+
+def require_machine():
+    label = machine()
+    if label is None:
+        raise _own("AGENT_EVENTS_MACHINE is unset or not a slug (a-z, 0-9, -; starting with a letter; at most 32); "
+                   "nothing was sent")
+    return label
 
 
 # ---------------------------------------------------------------- aggregation
@@ -236,7 +256,7 @@ def _attrs(labels):
     return [{"key": k, "value": {"stringValue": str(v)}} for k, v in labels.items()]
 
 
-def otlp_payload(metrics, start_ns, now_ns):
+def otlp_payload(metrics, start_ns, now_ns, machine_label=None):
     out = []
     for m in metrics:
         if not m["points"]:
@@ -262,6 +282,8 @@ def otlp_payload(metrics, start_ns, now_ns):
             body = {"histogram": {"aggregationTemporality": 2, "dataPoints": pts}}
         out.append({"name": m["name"], **body})
     resource = {"attributes": [{"key": "service.name", "value": {"stringValue": "agent-events"}}]}
+    if machine_label is not None:  # the collector turns resource attributes into labels: machine="..." on every series
+        resource["attributes"].append({"key": "machine", "value": {"stringValue": machine_label}})
     return {"resourceMetrics": [{"resource": resource, "scopeMetrics": [
         {"scope": {"name": "agent-events"}, "metrics": out}]}]}
 
@@ -273,6 +295,9 @@ def _own(message):
 
 
 def post(url, payload, timeout=30):
+    resource = payload["resourceMetrics"][0]["resource"]["attributes"]
+    if not any(a["key"] == "machine" and MACHINE_RE.fullmatch(a["value"].get("stringValue") or "") for a in resource):
+        raise _own("refusing to send a payload without a machine label")
     body = gzip.compress(json.dumps(payload, separators=(",", ":")).encode())
     req = urllib.request.Request(url, data=body, method="POST", headers={
         "Content-Type": "application/json", "Content-Encoding": "gzip"})
@@ -302,8 +327,10 @@ def _unvector(kind, vec):
 
 
 def fingerprint():
-    """Changes when the project map or the schema changes: such a change moves history between series."""
-    text = "|".join(sorted(ae.approved_projects())) + f"#{ae.SCHEMA_VERSION}"
+    """Changes when the project map, the schema or the machine label changes: such a change moves history between series.
+    A new machine label (the first run after it was added, or a renamed machine) is a new set of series on the
+    collector, so it starts a clean baseline instead of counting the history it carries as activity."""
+    text = "|".join(sorted(ae.approved_projects())) + f"#{ae.SCHEMA_VERSION}@{machine() or ''}"
     return hashlib.sha1(text.encode()).hexdigest()[:12]
 
 
@@ -446,6 +473,7 @@ def export(con, db_path, status, url=None, now=None, state=None, business=True, 
     collection and sends the last accounted values plus the health gauges. state=None sends raw totals and is
     the preview used by 'agent-events export'. With persist, the proposed values are checkpointed before the POST
     (so a crash can never let a later, lower value go out) and delivery is recorded after it."""
+    label = require_machine() if url else machine()  # before any accounting: a refused send changes no state
     gauges_src = self_metrics(con, status, db_path)
     if business:
         gauges_src = gauges_src + cache_gauges(con, now or time.time())
@@ -460,7 +488,7 @@ def export(con, db_path, status, url=None, now=None, state=None, business=True, 
     start_ns = int(status.get("epoch_ns") or now_ns)
     sent = 0
     if url:
-        sent = post(url, otlp_payload(metrics, start_ns, now_ns))
+        sent = post(url, otlp_payload(metrics, start_ns, now_ns, label))
         if state is not None:
             mark_delivered(state)
             if persist:
@@ -659,6 +687,7 @@ def cmd_status(max_age=MAX_STALE_S):
     build_age, export_age = age("last_build_ok_ts"), age("last_export_ok_ts")
     lines = [f"last successful build : {show(build_age)}",
              f"last successful export: {show(export_age)}" + ("" if endpoint() else "  (no OTLP endpoint configured here)"),
+             f"machine label         : {machine() or 'not set (AGENT_EVENTS_MACHINE); nothing is sent'}",
              f"sessions indexed      : {status.get('sessions', 'unknown')}",
              f"last build took       : {status.get('last_build_seconds', 'unknown')}s"]
     if status.get("last_build_error"):
