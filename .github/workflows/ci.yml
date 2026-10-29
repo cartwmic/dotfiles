@@ -50,6 +50,8 @@ jobs:
         run: python3 -m unittest discover -s tests/capability-tiers -v
       - name: Session-recap store tests
         run: python3 -m unittest discover -s dot_local/share/session-recap -p 'test_*.py' -v
+      - name: Pi op shim tests (fake op, no token)
+        run: python3 -m unittest discover -s tests/pi-op-shim -v
       - name: heavy-gate tests (fake host figures, any OS)
         run: python3 -m unittest discover -s tests/heavy-gate -v
       - name: workstream-rank tests (golden fixture, real script)
