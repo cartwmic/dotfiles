@@ -646,6 +646,24 @@ case "$OS" in
 esac
 '''
 
+[tasks."install-google-chrome"]
+description = "Install Google Chrome on macOS (the agent browser's Chrome; launch with agent-chrome)"
+run = '''
+OS="$(uname -s)"
+case "$OS" in
+  Darwin)
+    if [ -d "${GOOGLE_CHROME_APP_DIR:-/Applications/Google Chrome.app}" ]; then
+      echo "Google Chrome already installed"
+    else
+      brew install --cask google-chrome
+    fi
+    ;;
+  *)
+    echo "Skipping Google Chrome on $OS"
+    ;;
+esac
+'''
+
 [tasks."install-fonts-macos"]
 description = "Install Nerd Fonts on macOS"
 run = '''
@@ -912,6 +930,7 @@ depends = [
   "install-imagemagick-macos",
   "install-imagemagick-ubuntu",
   "install-fonts",
+  "install-google-chrome",
   "setup-fzf-shell",
   "install-nvim-rosetta",
   "install-zellij-plugins",

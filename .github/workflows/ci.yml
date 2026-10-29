@@ -66,6 +66,8 @@ jobs:
         run: python3 -m unittest discover -s tests/profiles -v
       - name: Canonical skill sync (real chezmoi, throwaway source and HOME)
         run: python3 -m unittest discover -s tests/sync-harness-skills -v
+      - name: Agent browser launcher and render (fake Chrome, real chezmoi)
+        run: python3 -m unittest discover -s tests/agent-browser -v
       - name: viz core and boundary tests (render tests skip without chromium and mmdc)
         run: python3 -m unittest discover -s tests/viz -v
 
@@ -96,3 +98,5 @@ jobs:
         run: python3 -m unittest discover -s tests/work-mac-instances -v
       - name: Profile coverage table, macOS-only rows included
         run: python3 -m unittest discover -s tests/profiles -v
+      - name: Agent browser render on macOS (MCP entry and launcher present on both profiles)
+        run: python3 -m unittest discover -s tests/agent-browser -v

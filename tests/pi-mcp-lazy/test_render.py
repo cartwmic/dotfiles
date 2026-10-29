@@ -47,6 +47,7 @@ def render_canonical(profile="personal"):
     t = TMPL.read_text()
     work = "axon-work-computer"
     t = t.replace('{{ if eq .profile "axon-work-computer" }}work{{ else }}cartwmic{{ end }}', "work" if profile == work else "cartwmic")
+    t = re.sub(r'\{\{ if eq \.chezmoi\.os "darwin" \}\},(.*?)\{\{ end \}\}', lambda m: "," + m.group(1), t, flags=re.S)  # rendered as on macOS
     t = re.sub(r'\{\{ if eq \.profile "axon-work-computer" \}\},(.*?)\{\{ end \}\}', (lambda m: "," + m.group(1)) if profile == work else "", t, flags=re.S)
     return json.loads(t)
 

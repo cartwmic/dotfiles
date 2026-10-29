@@ -586,6 +586,7 @@ After `chezmoi apply`, complete the steps that apply to this host:
 - [macOS] Add XQuartz as a login item.
 - [personal macOS] Launch Docker Desktop once to accept its license and finish setup. See [Docker Provisioning](#docker-provisioning).
 - [personal macOS] Log in and launch RustDesk once on a fresh machine; grant Accessibility, Screen Recording, and, if needed, Input Monitoring permissions. See [RustDesk Provisioning](#rustdesk-provisioning).
+- [macOS] Run `agent-chrome` to start the agent browser, then sign in to each site once. See [Agent browser](./dot_local/share/agent-harness/README.md#agent-browser).
 - [recap users] Review Pi defaults/overrides with `/recap settings`; set a host-local CLI command for standalone recaps/Herdr groups if wanted. See [Portable recaps](#portable-recaps).
 
 After installing gvm, use a fresh zsh or load its script in the current shell.
