@@ -1,0 +1,37 @@
+{{- /* agent_events_config: the always-on agent-events exporter's settings as JSON {"enabled", "machine", "endpoint"}
+(dot_local/share/agent-events/README.md "Always on"). Local chezmoi data agentEvents:
+  enabled   true or false. Default: true on the personal profile, false everywhere else (the work Mac sends nothing until it is set there).
+  machine   the machine label on every series: a lowercase letter, then up to 31 lowercase letters, digits or hyphens.
+            Default: personal on the personal profile, work on axon-work-computer, none elsewhere (then required when enabled).
+  endpoint  the collector's OTLP/HTTP metrics URL, http or https, ending in /v1/metrics.
+            Default: http://otel-collector.internal.cartwmic.com/v1/metrics
+Used by the plist, its load script and .chezmoiignore. Any other key or value fails the whole render, so a typo applies nothing. */ -}}
+{{- $raw := dig "agentEvents" dict . -}}
+{{- if not (kindIs "map" $raw) -}}
+{{-   fail (printf "agentEvents must be a map with enabled, machine and endpoint, got %q" (printf "%v" $raw)) -}}
+{{- end -}}
+{{- range $k, $_ := $raw -}}
+{{-   if not (has $k (list "enabled" "machine" "endpoint")) -}}
+{{-     fail (printf "agentEvents.%s is not a setting (enabled, machine, endpoint)" $k) -}}
+{{-   end -}}
+{{- end -}}
+{{- $profile := printf "%v" (dig "profile" "" .) -}}
+{{- $on := printf "%v" (eq $profile "personal") -}}
+{{- if hasKey $raw "enabled" -}}{{- $on = printf "%v" (get $raw "enabled") -}}{{- end -}}
+{{- $machine := get (dict "personal" "personal" "axon-work-computer" "work") $profile -}}
+{{- if hasKey $raw "machine" -}}{{- $machine = printf "%v" (get $raw "machine") -}}{{- end -}}
+{{- $endpoint := "http://otel-collector.internal.cartwmic.com/v1/metrics" -}}
+{{- if hasKey $raw "endpoint" -}}{{- $endpoint = printf "%v" (get $raw "endpoint") -}}{{- end -}}
+{{- if not (has $on (list "true" "false")) -}}
+{{-   fail (printf "agentEvents.enabled must be true or false, got %q" $on) -}}
+{{- end -}}
+{{- if and (eq $on "true") (eq $machine "") -}}
+{{-   fail (printf "agentEvents.machine is required when agentEvents.enabled is true (profile %q has no default)" $profile) -}}
+{{- end -}}
+{{- if and (ne $machine "") (not (regexMatch "^[a-z][a-z0-9-]{0,31}$" $machine)) -}}
+{{-   fail (printf "agentEvents.machine must be a slug (a lowercase letter, then up to 31 of a-z, 0-9, -), got %q" $machine) -}}
+{{- end -}}
+{{- if not (regexMatch "^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?/([A-Za-z0-9._~-]+/)*v1/metrics$" $endpoint) -}}
+{{-   fail (printf "agentEvents.endpoint must be an http(s) OTLP metrics URL ending in /v1/metrics, got %q" $endpoint) -}}
+{{- end -}}
+{{- dict "enabled" (eq $on "true") "machine" $machine "endpoint" $endpoint | toJson -}}

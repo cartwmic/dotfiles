@@ -49,10 +49,10 @@ partial and never delete rows for files they did not look at.
 A build that is interrupted marks the database dirty and the next build repairs it.
 `sql` accepts only `SELECT`/`WITH` queries under a read-only authorizer (no `ATTACH`, `VACUUM INTO`, `PRAGMA`).
 
-## Always on (personal macOS)
+## Always on (macOS, chezmoi data `agentEvents`)
 
 A LaunchAgent, `local.agent-events` (source `Library/LaunchAgents/local.agent-events.plist.tmpl`, loaded by
-`run_onchange_after_70_agent_events_launchd.sh.tmpl`), runs `agent-events run` every 2 minutes (nice 10; not launchd's Background class, which macOS throttles to a standstill on a busy machine):
+`run_onchange_after_70_agent_events_launchd.sh.tmpl`), runs `agent-events run` every 2 minutes on a Mac where `agentEvents.enabled` is true (nice 10; not launchd's Background class, which macOS throttles to a standstill on a busy machine):
 
 1. an incremental `build` (a few seconds; the first full build takes about 80 s; ticks and manual `agent-events build` runs take one lock, so they wait for each other instead of racing);
 2. an aggregate-metrics push to the homelab OTel collector, when `AGENT_EVENTS_OTLP_ENDPOINT` is set;
@@ -67,7 +67,27 @@ recollected: the last accounted business values are sent again, unchanged, with 
 
 `agent-events status` prints the age of the last successful build and push and exits 1 when the build is older
 than 15 minutes. The same age is in Grafana (`pi_agent_events_last_build_success_timestamp_seconds`, "Data age" on the overview).
-The work profile has neither the plist nor an endpoint, so no work data can reach the homelab.
+Settings, in the machine's local chezmoi config (`~/.config/chezmoi/chezmoi.yaml`):
+
+```yaml
+data:
+  agentEvents:
+    enabled: true    # default: true on personal, false on every other profile
+    machine: work    # the machine label on every series; default personal (personal), work (axon-work-computer)
+    endpoint: https://otel-collector.internal.cartwmic.com/v1/metrics   # default http://otel-collector.internal.cartwmic.com/v1/metrics
+```
+
+- `.chezmoitemplates/agent_events_config` checks them: `enabled` is true or false; `machine` is a slug (a lowercase letter, then up to
+  31 lowercase letters, digits or hyphens) and required when enabled; `endpoint` is an http or https URL ending in `/v1/metrics`.
+  Any other key or value fails the render of the plist, its load script and `.chezmoiignore`, so a typo applies nothing.
+- The plist takes `AGENT_EVENTS_OTLP_ENDPOINT` and `AGENT_EVENTS_MACHINE` from them.
+- `.chezmoiignore` gates the agent on macOS and `enabled`, not on the profile. Set `enabled: false` and apply: chezmoi leaves the
+  plist alone and the load script unloads the job, then removes the plist. A failed unload fails the apply and keeps the plist, so the
+  next apply tries again.
+- The work profile is off by default: until `agentEvents` is set there it gets no plist and no load script, as before (the
+  `agent-events` CLI is on both). Before turning it on, check the work Mac reaches the collector (the name resolves only through
+  the home router's DNS): `curl -so /dev/null -w '%{http_code}\n' https://otel-collector.internal.cartwmic.com/v1/metrics`
+  must print `405`.
 
 ## Metrics (Grafana)
 
