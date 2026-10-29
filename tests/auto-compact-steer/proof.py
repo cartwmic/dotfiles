@@ -247,6 +247,9 @@ class Pi:
     def sessions(self):
         return '\n'.join(p.read_text() for p in (self.directory / 'agent').rglob('*.jsonl'))
 
+    def entries(self):
+        return [json.loads(x) for x in self.sessions().splitlines() if x.strip()]
+
     def close(self):
         artifacts = os.environ.get('PI_AUTO_COMPACT_STEER_ARTIFACTS')
         if artifacts:
@@ -331,6 +334,8 @@ def compaction_journey(package, directory, ext_source, mode, key=b'\r', summary=
             wait(lambda: pi.backend.with_user(CONTINUATION), 'continuation request after compaction')
             wait(lambda: 'CONTINUED-OK' in pi.screen_text(), 'continued run reply rendered')
             print('PASS: AC-3 nothing queued -> continuation resumed', flush=True)
+            if ext_source == EXT_SOURCE:
+                pause_markers(pi, resumed=True)
             return
         if not expect_fixed:
             def symptom():
@@ -357,10 +362,44 @@ def compaction_journey(package, directory, ext_source, mode, key=b'\r', summary=
         require('Steering:' not in screen and 'Follow-up:' not in screen, 'queued message still pending on screen')
         require(not pi.backend.with_user(CONTINUATION), 'continuation was sent to the backend')
         require(CONTINUATION not in pi.sessions() and CONTINUATION not in screen, 'continuation appears in the transcript')
+        if ext_source == EXT_SOURCE:
+            pause_markers(pi, resumed=False)
         print('PASS:', 'AC-5 failed compaction' if summary == 'error' else 'AC-2 Alt+Enter' if key != b'\r' else 'AC-1 Enter',
               '+ AC-4 Esc' if esc else '', '-> queued message replaced continuation', flush=True)
     finally:
         pi.close()
+
+
+def pause_markers(pi, resumed):
+    """AC-10: the session file shows the pause: compacting, the aborted turn, the compaction, then
+    compacted (resumeSent) before the continuation; or resumeSent false and no continuation."""
+    entries = pi.entries()
+    def find(pred, after=-1, label=''):
+        for i, e in enumerate(entries):
+            if i > after and pred(e):
+                return i
+        raise RuntimeError('FAIL: AC-10 session file has no ' + label + ': ' + json.dumps(
+            [e.get('customType') and e.get('data') or e.get('type') + ':' + str((e.get('message') or {}).get('role')) + ':' + str((e.get('message') or {}).get('stopReason')) for e in entries]))
+    marker = lambda kind: lambda e: e.get('type') == 'custom' and e.get('customType') == 'auto-compact' and e['data'].get('kind') == kind
+    opened = find(marker('compacting'), label='compacting marker')
+    require(entries[opened]['data'].get('resume') is True, 'AC-10 compacting marker does not say a resume will follow')
+    aborted = find(lambda e: e.get('type') == 'message' and e['message'].get('role') == 'assistant', opened, 'assistant turn after the marker')
+    stop = entries[aborted]['message'].get('stopReason')
+    require(stop in ('aborted', 'error'), f'AC-10 first assistant turn after the marker is not the abort (stopReason {stop})')
+    closed = find(lambda e: marker('compacted')(e) or marker('compaction_failed')(e), aborted, 'closing marker after the abort')
+    compacted = any(e.get('type') == 'compaction' for e in entries[aborted:closed])
+    require(compacted == (entries[closed]['data']['kind'] == 'compacted'), 'AC-10 closing marker kind does not match whether a compaction entry precedes it')
+    # Readers take the last closing marker: a continuation replaced after it was submitted adds a second one with resumeSent false.
+    last = max(i for i, e in enumerate(entries) if i > aborted and (marker('compacted')(e) or marker('compaction_failed')(e)))
+    require(entries[last]['data'].get('resumeSent') is resumed, f'AC-10 last closing marker resumeSent is not {resumed}')
+    later = [e for e in entries[closed + 1:] if e.get('type') == 'message' and e['message'].get('role') == 'user']
+    continuation = [e for e in entries if e.get('type') == 'message' and text_of(e['message'].get('content')) == CONTINUATION]
+    if resumed:
+        require(continuation and text_of(later[0]['message'].get('content')) == CONTINUATION, 'AC-10 continuation does not follow the closing marker')
+    else:
+        require(not continuation, 'AC-10 continuation in the session although resumeSent is false')
+    print(f'PASS: AC-10 pause markers: compacting -> {stop} turn -> {"compaction" if compacted else "failed compaction"} -> {" -> ".join(entries[i]["data"]["kind"] + " resumeSent=" + str(entries[i]["data"].get("resumeSent")) for i in range(closed, last + 1) if marker("compacted")(entries[i]) or marker("compaction_failed")(entries[i]))}',
+          '-> continuation' if resumed else '-> no continuation', flush=True)
 
 
 # ---------------------------------------------------------------- race journeys
