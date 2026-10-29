@@ -326,7 +326,6 @@ class ImportTests(Fixture):
             'gh = "latest"\n'
             'loop-engine = { version = "0.9.0", matching_regex = "^loop-cli-", rename_exe = "loop-engine" }\n'
             'lean-change = { version = "0.9.0", matching_regex = "^lean-change-provider-", rename_exe = "lean-change" }\n'
-            'software-change = { version = "0.8.0", matching_regex = "^software-change-provider-", rename_exe = "software-change" }\n'
             'policy-document = { version = "0.9.0", matching_regex = "^policy-document-provider-", rename_exe = "policy-document" }\n'
             'research = { version = "0.9.0", matching_regex = "^research-provider-", rename_exe = "research" }\n'
             'other = { version = "0.9.0" }\n'
@@ -337,7 +336,6 @@ class ImportTests(Fixture):
         self.assertEqual(self.do_import("--pins", "--apply", "--prune").returncode, 0)
         self.assertEqual(config.read_text(), original.replace('version = "0.9.0", matching', 'version = "1.0.0", matching'))
         self.assertIn('other = { version = "0.9.0" }', config.read_text())
-        self.assertIn('software-change = { version = "0.8.0"', config.read_text())  # the retired pin stays
 
     def test_pins_refuse_a_config_that_does_not_have_the_four_lines(self):
         (self.source / "dot_config/mise/config.toml").write_text('gh = "latest"\n')

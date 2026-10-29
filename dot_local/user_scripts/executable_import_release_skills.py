@@ -12,8 +12,8 @@ must match the git blob hash in the commit's tree. Files that sit in a bundle bu
 are orphans: --apply refuses while any exist, and --prune deletes them. --pins also moves the
 four Loop Engine tool pins (loop-engine, lean-change, policy-document, research) in
 dot_config/mise/config.toml to the tag's version (mise keeps older installed versions, so frozen
-runs keep theirs; this tool never uninstalls anything). The retired software-change pin is left
-where it is: releases no longer ship it.
+runs keep theirs; this tool never uninstalls anything). The software-change pin was removed from
+that file: releases no longer ship it, and installed copies are untouched.
 
 `verify-deployed` compares the canonical bundles in the source with the deployed copies byte for
 byte (extra deployed files are orphans: chezmoi apply does not delete them) and checks that each
