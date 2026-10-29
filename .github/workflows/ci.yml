@@ -60,6 +60,8 @@ jobs:
         run: python3 -m unittest discover -s tests/instances -v
       - name: QMD pin, collections, skill and profile matrix (no qmd binary)
         run: python3 -m unittest discover -s tests/qmd -v
+      - name: Profile coverage table matches chezmoi managed (macOS-only rows skipped here)
+        run: python3 -m unittest discover -s tests/profiles -v
       - name: Canonical skill sync (real chezmoi, throwaway source and HOME)
         run: python3 -m unittest discover -s tests/sync-harness-skills -v
       - name: viz core and boundary tests (render tests skip without chromium and mmdc)
@@ -90,3 +92,5 @@ jobs:
         run: python3 -m unittest discover -s tests/instances -v
       - name: Work-Mac adoption script (scratch HOME, real chezmoi and git, stub launchctl)
         run: python3 -m unittest discover -s tests/work-mac-instances -v
+      - name: Profile coverage table, macOS-only rows included
+        run: python3 -m unittest discover -s tests/profiles -v
