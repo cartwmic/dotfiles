@@ -11,6 +11,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -83,6 +84,9 @@ BAD = (
     "agentEvents: {endpoint: 'http://otel-collector.internal.cartwmic.com/v1/traces'}",
     "agentEvents: {endpoint: 'http://a&b/v1/metrics'}", "agentEvents: {endpoint: 'http://x/v1/metrics</string>'}",
     "agentEvents: {endpoint: 'http://x/v1/metrics?token=1'}", "agentEvents: {endpoint: ''}",
+    "agentEvents: {endpoint: 'http://localhost:99999/v1/metrics'}", "agentEvents: {endpoint: 'http://localhost:65536/v1/metrics'}",
+    "agentEvents: {endpoint: 'http://localhost:0/v1/metrics'}", "agentEvents: {endpoint: 'http://localhost:08080/v1/metrics'}",
+    "agentEvents: {endpoint: 'http://localhost:/v1/metrics'}",
     # enabled, keys, shape
     'agentEvents: {enabled: "yes"}', "agentEvents: {enabled: 1}", "agentEvents: {enabled: null}",
     "agentEvents: {enabeld: false}", "agentEvents: {privacy: strict}", "agentEvents: on", "agentEvents: [personal]",
@@ -111,6 +115,10 @@ class SettingTest(unittest.TestCase):
         env = plist(data="agentEvents: {endpoint: 'http://10.19.1.201:4318/otlp/v1/metrics', machine: %s}" % ("a" * 32))[0]["EnvironmentVariables"]
         self.assertEqual(env["AGENT_EVENTS_OTLP_ENDPOINT"], "http://10.19.1.201:4318/otlp/v1/metrics")
         self.assertEqual(env["AGENT_EVENTS_MACHINE"], "a" * 32)
+        for port in (1, 80, 4318, 9999, 10000, 59999, 64999, 65499, 65529, 65535):  # every branch of the port check
+            url = "http://localhost:%d/v1/metrics" % port
+            self.assertEqual(plist(data="agentEvents: {endpoint: '%s'}" % url)[0]["EnvironmentVariables"]["AGENT_EVENTS_OTLP_ENDPOINT"], url)
+            urllib.parse.urlsplit(url).port  # the exporter's urllib accepts it too
         (a, ha), (b, hb) = plist(data="agentEvents: {enabled: true, machine: personal}"), plist()
         self.assertEqual(str(a).replace(ha, "~"), str(b).replace(hb, "~"), "spelling out the defaults changes nothing")
 
