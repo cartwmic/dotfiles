@@ -1000,7 +1000,9 @@ class CacheGauges(Tick):
         am.export(con, self.db, {"epoch_ns": 5}, c.url, now=self.NOW)
         names = {m["name"] for m in c.requests[0]["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]}
         self.assertTrue({"pi_cache_hit_ratio_30m", "pi_cache_calls_30m", "pi_cache_full_miss_calls_30m",
-                         "pi_cache_uncached_tokens_30m"} <= names)
+                         "pi_cache_uncached_tokens_30m", "pi_cache_miss_streak"} <= names)
+        resource = c.requests[0]["body"]["resourceMetrics"][0]["resource"]["attributes"]
+        self.assertIn({"key": "machine", "value": {"stringValue": "test-mac"}}, resource)  # the streak gauge carries it too
         am.export(con, self.db, {"epoch_ns": 5}, c.url, now=self.NOW, state={}, business=False)
         names = {m["name"] for m in c.requests[1]["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]}
         self.assertFalse(any(n.startswith("pi_cache_") for n in names))
