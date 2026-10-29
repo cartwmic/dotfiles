@@ -147,6 +147,8 @@ export function registerAutoCompactExtension(
 	// awaitingResume: continuation text sent but not yet seen in "input".
 	let userSpoke = false;
 	let awaitingResume: string | undefined;
+	// The closing marker kind written for the continuation in awaitingResume.
+	let awaitingKind = "compacted";
 	let pendingTurnEndCheck = false;
 	// Circuit breaker: consecutive compactions that did not bring context below
 	// threshold. When it reaches config.maxIneffectiveCompactions we pause
@@ -323,15 +325,16 @@ export function registerAutoCompactExtension(
 		// The closing marker records that decision and is written before the
 		// continuation, so it precedes it in the session file.
 		const willResume = (resume: string | undefined): resume is string => Boolean(resume) && !userSpoke;
-		const sendResume = (resume: string): void => {
+		const sendResume = (resume: string, kind: string): void => {
 			awaitingResume = resume;
+			awaitingKind = kind;
 			pi.sendUserMessage(resume, { deliverAs: "followUp" });
 		};
 		// A continuation that could not be submitted (stale runtime after session teardown) gets a second
 		// closing marker with resumeSent false; readers take the last closing marker.
 		const sendOrCorrect = (kind: string, resume: string): void => {
 			try {
-				sendResume(resume);
+				sendResume(resume, kind);
 			} catch (error) {
 				awaitingResume = undefined;
 				mark(kind, { resumeSent: false, error: `continuation not submitted: ${formatError(error)}` });
@@ -406,6 +409,8 @@ export function registerAutoCompactExtension(
 			awaitingResume = undefined;
 			if (userSpoke) {
 				userSpoke = false;
+				// The closing marker said resumeSent true; correct it (readers take the last closing marker).
+				mark(awaitingKind, { resumeSent: false, error: "continuation replaced by a user message" });
 				return { action: "handled" as const };
 			}
 		}

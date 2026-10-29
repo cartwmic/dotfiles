@@ -389,14 +389,16 @@ def pause_markers(pi, resumed):
     closed = find(lambda e: marker('compacted')(e) or marker('compaction_failed')(e), aborted, 'closing marker after the abort')
     compacted = any(e.get('type') == 'compaction' for e in entries[aborted:closed])
     require(compacted == (entries[closed]['data']['kind'] == 'compacted'), 'AC-10 closing marker kind does not match whether a compaction entry precedes it')
-    require(entries[closed]['data'].get('resumeSent') is resumed, f'AC-10 closing marker resumeSent is not {resumed}')
+    # Readers take the last closing marker: a continuation replaced after it was submitted adds a second one with resumeSent false.
+    last = max(i for i, e in enumerate(entries) if i > aborted and (marker('compacted')(e) or marker('compaction_failed')(e)))
+    require(entries[last]['data'].get('resumeSent') is resumed, f'AC-10 last closing marker resumeSent is not {resumed}')
     later = [e for e in entries[closed + 1:] if e.get('type') == 'message' and e['message'].get('role') == 'user']
     continuation = [e for e in entries if e.get('type') == 'message' and text_of(e['message'].get('content')) == CONTINUATION]
     if resumed:
         require(continuation and text_of(later[0]['message'].get('content')) == CONTINUATION, 'AC-10 continuation does not follow the closing marker')
     else:
         require(not continuation, 'AC-10 continuation in the session although resumeSent is false')
-    print(f'PASS: AC-10 pause markers: compacting -> {stop} turn -> {"compaction" if compacted else "failed compaction"} -> {entries[closed]["data"]["kind"]} resumeSent={resumed}',
+    print(f'PASS: AC-10 pause markers: compacting -> {stop} turn -> {"compaction" if compacted else "failed compaction"} -> {" -> ".join(entries[i]["data"]["kind"] + " resumeSent=" + str(entries[i]["data"].get("resumeSent")) for i in range(closed, last + 1) if marker("compacted")(entries[i]) or marker("compaction_failed")(entries[i]))}',
           '-> continuation' if resumed else '-> no continuation', flush=True)
 
 

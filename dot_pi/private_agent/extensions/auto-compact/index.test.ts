@@ -823,6 +823,15 @@ describe("auto-compact pause markers", () => {
 		expect(t.steps.some((s) => s.step === "send")).toBe(false);
 	});
 
+	test("a message typed during compaction that reaches input after onComplete: a second closing marker says resumeSent false", () => {
+		const t = setup((cb) => cb.onComplete());
+		interTurn(t);
+		t.handlers.get("input")?.({ type: "input", text: "STEER", source: "interactive" }, {});
+		expect(t.handlers.get("input")?.({ type: "input", text: DEFAULT_CONTINUATION, source: "extension" }, {})).toEqual({ action: "handled" });
+		expect(t.markers().map((m) => [m.kind, m.resumeSent])).toEqual([["compacting", undefined], ["compacted", true], ["compacted", false]]);
+		expect(t.markers()[2].error).toBe("continuation replaced by a user message");
+	});
+
 	test("a final compaction (agent_settled) is marked with no resume", () => {
 		const t = setup((cb) => cb.onComplete());
 		t.handlers.get("agent_settled")?.({}, t.ctx);
