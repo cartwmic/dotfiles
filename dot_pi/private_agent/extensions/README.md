@@ -180,6 +180,17 @@ alone. `ticketPrefix` is off on purpose: the package's ticket pattern is
 case-insensitive and would prefix titles with things like `GPT-6`. The title
 shows in the footer and the terminal title (`π - <name> - <cwd>`).
 
+### `op` in Pi shells
+
+Not an extension: `dot_pi/private_agent/bin/executable_op` deploys to `~/.pi/agent/bin/op`, which Pi puts first on the
+PATH of its bash tool and `!` commands (unless that directory is already on the PATH Pi started with; then it keeps its
+place). When a 1Password service-account token is available (`OP_SERVICE_ACCOUNT_TOKEN`,
+or `~/.config/agent-harness/op-service-token`), it runs the real `op` with an empty HOME, so a worker's `op` uses the
+service account and never hangs on a locked desktop app; otherwise it runs `op` unchanged. Terminals outside Pi do not
+have that directory on PATH and are unaffected. Not covered: `op` called by absolute path, Claude Code and Codex
+workers. An `!op …` typed inside Pi uses the service account too. Tests: `python3 -m unittest discover -s tests/pi-op-shim -v` (fake op);
+`python3 tests/pi-op-shim/proof.py` runs a real Pi with a scripted model (needs `pi` on PATH).
+
 ### Profile gates
 
 Gates live in the repo-root `.chezmoiignore`:
