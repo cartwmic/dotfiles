@@ -189,7 +189,6 @@ Gates live in the repo-root `.chezmoiignore`:
 | [system-one](./system-one/README.md) (docs only) | `personal` and `axon-work-computer` |
 | [openrouter-gate](./openrouter-gate/README.md) | `personal` only |
 | [claude-compat-guard](./claude-compat-guard/README.md) | `personal` only |
-| [issue](./issue/README.md) | `axon-work-computer` only |
 | [anthropic-stall-retry](./anthropic-stall-retry/README.md) | `axon-work-computer` only |
 | [auto session name](#auto-session-name) (package in settings) | `personal` only |
 | [recap](./recap/README.md) | `personal` and `axon-work-computer`; interactive TUI only; Termux skips `.pi` |
@@ -208,7 +207,6 @@ READMEs already in this tree:
 - [auto-compact](./auto-compact/README.md)
 - [claude-compat-guard](./claude-compat-guard/README.md)
 - [hindsight](./hindsight/README.md)
-- [issue](./issue/README.md)
 - [openrouter-gate](./openrouter-gate/README.md)
 - [pi-patch-guard](./pi-patch-guard/README.md)
 - [catalog-overlay-nudge](./catalog-overlay-nudge/README.md)
@@ -238,7 +236,7 @@ cd ./pi-patch-guard && node --test
 
 Other in-tree suites today: `anthropic-stall-retry/index.test.ts`, `auto-compact/index.test.ts`,
 `goal/helpers.test.ts`, `hindsight/index.test.ts`, `inspect-prompt/index.test.ts`,
-`issue/index.test.ts`, `openrouter-gate/index.test.ts`,
+`openrouter-gate/index.test.ts`,
 `web-search/config.test.ts`, `web-search/codex.test.ts`, and
 `learnings-monitor/` (`node --test`).
 `catalog-overlay-nudge` and `subagent` do not have tests yet. `passage-review`
