@@ -179,6 +179,67 @@
     "kind": null,
     "summary": "answer ready: feed/R2/R4 audit. Nothing is broken."
    }
+  },
+  {
+   "name": "attachments as a JSON string (the shape some models send)",
+   "args": {
+    "kind": "report",
+    "summary": "Loop Engine PR is up; body, review and gate log attached.",
+    "attachments": "[\"/tmp/le-pr-body.md\", \"/tmp/le-sol-review-4.md\", \"/tmp/le-gate.log\"]"
+   },
+   "normalized": {
+    "kind": "report",
+    "summary": "Loop Engine PR is up; body, review and gate log attached.",
+    "scope": "step",
+    "attachments": [
+     "/tmp/le-pr-body.md",
+     "/tmp/le-sol-review-4.md",
+     "/tmp/le-gate.log"
+    ],
+    "options": [],
+    "recommendation": null,
+    "door": null
+   }
+  },
+  {
+   "name": "review with attachments as a JSON string",
+   "args": {
+    "kind": "review",
+    "summary": "Retro PR 9 is ready to look at.",
+    "attachments": "[\"PR cartwmic/retro#9\"]"
+   },
+   "normalized": {
+    "kind": "review",
+    "summary": "Retro PR 9 is ready to look at.",
+    "scope": "step",
+    "attachments": [
+     "PR cartwmic/retro#9"
+    ],
+    "options": [],
+    "recommendation": null,
+    "door": null
+   }
+  },
+  {
+   "name": "options as a JSON string",
+   "args": {
+    "kind": "question",
+    "summary": "Should I use the shorter retry schedule for the nightly job?",
+    "options": "[\"shorter\", \"keep the current one\"]",
+    "recommendation": "shorter"
+   },
+   "normalized": {
+    "kind": "question",
+    "summary": "Should I use the shorter retry schedule for the nightly job?",
+    "scope": "step",
+    "attachments": [],
+    "options": [
+     "shorter",
+     "keep the current one"
+    ],
+    "recommendation": "shorter",
+    "door": null
+   }
   }
  ],
  "invalid": [
@@ -420,6 +481,73 @@
    },
    "errors": [
     "attachments"
+   ]
+  },
+  {
+   "name": "attachments as a bare string",
+   "args": {
+    "kind": "report",
+    "summary": "All merged and live.",
+    "attachments": "/tmp/a.md"
+   },
+   "errors": [
+    "attachments"
+   ]
+  },
+  {
+   "name": "review attachments as a bare string",
+   "args": {
+    "kind": "review",
+    "summary": "Please look at this file.",
+    "attachments": "/tmp/a.md"
+   },
+   "errors": [
+    "attachments"
+   ]
+  },
+  {
+   "name": "attachments as a JSON string of an object",
+   "args": {
+    "kind": "report",
+    "summary": "All merged and live.",
+    "attachments": "{\"path\": \"/tmp/a.md\"}"
+   },
+   "errors": [
+    "attachments"
+   ]
+  },
+  {
+   "name": "attachments as a JSON string of non-strings",
+   "args": {
+    "kind": "report",
+    "summary": "All merged and live.",
+    "attachments": "[3]"
+   },
+   "errors": [
+    "attachments"
+   ]
+  },
+  {
+   "name": "attachments as a number",
+   "args": {
+    "kind": "report",
+    "summary": "All merged and live.",
+    "attachments": 3
+   },
+   "errors": [
+    "attachments"
+   ]
+  },
+  {
+   "name": "options as a bare string",
+   "args": {
+    "kind": "question",
+    "summary": "Which schedule should I use?",
+    "options": "shorter, keep",
+    "recommendation": "shorter"
+   },
+   "errors": [
+    "options"
    ]
   }
  ]

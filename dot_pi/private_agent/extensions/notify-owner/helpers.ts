@@ -125,9 +125,26 @@ function boundedString(value: unknown, name: string, min: number, max: number, e
   return trimmed;
 }
 
-function stringList(value: unknown, name: string, min: number, max: number, itemMax: number, errors: string[], checkItem?: (item: string, label: string) => string | undefined): string[] | undefined {
+/**
+ * A list argument as sent: an array, or a string that holds a JSON array (some models send lists that way; Pi's own
+ * edit tool accepts the same). Anything else is returned unchanged and fails the list check.
+ */
+export function listValue(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : value;
+  } catch {
+    return value;
+  }
+}
+
+const sentAs = (value: unknown) => (typeof value === "string" ? "a string that is not a JSON array" : value === null ? "null" : typeof value);
+
+function stringList(raw: unknown, name: string, min: number, max: number, itemMax: number, errors: string[], checkItem?: (item: string, label: string) => string | undefined): string[] | undefined {
+  const value = listValue(raw);
   if (!Array.isArray(value)) {
-    errors.push(`${name}: must be an array of strings`);
+    errors.push(`${name}: must be an array of strings, like ["first", "second"], or that array as a JSON string (got ${sentAs(value)})`);
     return undefined;
   }
   if (value.length < min || value.length > max) errors.push(`${name}: must have ${min === 0 ? "at most " + max : `${min} to ${max}`} entries (got ${value.length})`);
@@ -183,7 +200,8 @@ export function validateAlert(args: unknown): AlertResult {
   }
 
   const attachments = present("attachments") ? stringList(input.attachments, "attachments", 0, 8, 500, errors, checkAttachment) : [];
-  if (kind === "review" && !(present("attachments") && Array.isArray(input.attachments) && input.attachments.length > 0)) errors.push("attachments: required for kind review (at least 1: what the owner should look at)");
+  const attachmentList = listValue(input.attachments);
+  if (kind === "review" && !(Array.isArray(attachmentList) && attachmentList.length > 0)) errors.push("attachments: required for kind review (at least 1: what the owner should look at)");
 
   const optionsNeeded = kind === "question" || kind === "decision";
   const optionsAllowed = optionsNeeded || kind === "blocked";
@@ -232,6 +250,22 @@ export const DESCRIPTION =
   "Never for progress or for finishing a turn nobody is waiting on, and not for a question you are asking with ask_user_question (that rings by itself). " +
   "A call with only question (a string) still works as an untyped legacy alert; do not use it.";
 
+const malformed = (errors: string[]) => ["Owner not notified: the call is malformed. Fix these and call notify_owner again.", ...errors].join("\n");
+
+/**
+ * Pi's prepareArguments hook: it gets the call exactly as the model sent it, before Pi's schema coercion. That
+ * coercion would turn a bare string into a one-item list (and a number into a string), so the tool would accept a call
+ * that the coordinator, reading the raw call from the session log, rejects. So the raw call is checked here, and a
+ * malformed one fails with every problem and rings nothing. A list sent as a JSON string is handed on as a real list.
+ */
+export function prepareNotifyArguments(args: unknown): unknown {
+  const checked = validateAlert(args);
+  if (!checked.ok) throw new Error(malformed(checked.errors));
+  const prepared = { ...(args as Record<string, unknown>) };
+  for (const name of ["attachments", "options"]) if (prepared[name] !== undefined) prepared[name] = listValue(prepared[name]);
+  return prepared;
+}
+
 const text = (message: string, isError = false) => ({ content: [{ type: "text" as const, text: message }], details: {}, ...(isError ? { isError: true } : {}) });
 
 export interface PiLike {
@@ -261,17 +295,18 @@ export function registerNotifyOwner(pi: PiLike, Type: TypeBoxLike, env: Env = pr
         kind: Type.Optional(Type.String({ description: `One of: ${oneOf(ALERT_KINDS)}. See the tool description for which to choose.` })),
         summary: Type.Optional(Type.String({ description: "One or two plain sentences, 3 to 600 characters. It stays in your transcript; the doorbell sends no text." })),
         scope: Type.Optional(Type.String({ description: "report only: step (default) or workstream. workstream only when the WHOLE assignment this pane exists for is finished." })),
-        attachments: Type.Optional(Type.Array(Type.String(), { description: "At most 8: file paths (absolute, ~/, or relative to your cwd; no ..), http(s) URLs, or PR references like 'PR owner/repo#N'. Required for review." })),
-        options: Type.Optional(Type.Array(Type.String(), { description: "2 to 6 choices the owner can pick from. Required for question and decision; allowed for blocked." })),
+        attachments: Type.Optional(Type.Array(Type.String(), { description: "A list of at most 8: file paths (absolute, ~/, or relative to your cwd; no ..), http(s) URLs, or PR references like 'PR owner/repo#N'. Required for review." })),
+        options: Type.Optional(Type.Array(Type.String(), { description: "A list of 2 to 6 choices the owner can pick from. Required for question and decision; allowed for blocked." })),
         recommendation: Type.Optional(Type.String({ description: "Exactly one of options, or 'none'. Required for question and decision." })),
         door: Type.Optional(Type.String({ description: `Required for decision: ${oneOf(ALERT_DOORS)}.` })),
         question: Type.Optional(Type.String({ description: "Legacy, untyped: use kind and summary instead. Never together with kind." })),
       },
       { additionalProperties: true },
     ),
+    prepareArguments: prepareNotifyArguments,
     async execute(_callId: string, args: unknown) {
       const checked = validateAlert(args);
-      if (!checked.ok) return text(["Owner not notified: the call is malformed. Fix these and call notify_owner again.", ...checked.errors].join("\n"), true);
+      if (!checked.ok) return text(malformed(checked.errors), true);
       const result = ring(env, "question", spawnFn);
       if (result === "sent") return text(`Doorbell dispatched. Put the question or answer summary in your reply and end your turn; do not wait. (A failure to deliver is logged, not shown here.)${checked.alert.kind ? ` Recorded as kind=${checked.alert.kind}.` : ""}`);
       return text(`Owner not notified (${result === "no-core" ? "agent-alert is not installed or not executable on this machine" : "this is not a Herdr pane"}). Put the question or answer summary in your reply anyway.`, true);
