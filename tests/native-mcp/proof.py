@@ -284,7 +284,7 @@ def render_settings(profile, temp):
     op = fake_bin / "op"
     op.write_text("#!/bin/sh\nprintf '%s\\n' '{\"models\": []}'\n")
     op.chmod(0o700)
-    data = {"profile": profile, "privatePiGlmProviderRef": "op://proof/provider/credential"}
+    data = {"profile": profile, "privatePiGlmOtariBaseUrl": "https://otari.proof", "privatePiGlmOtariKeyRef": "op://proof/otari/credential"}
     result = subprocess.run(["chezmoi", "--source", str(ROOT), "--override-data", json.dumps(data),
                              "cat", str(Path.home() / ".pi/agent/settings.json")],
                             env={**os.environ, "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"]},

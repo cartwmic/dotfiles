@@ -24,7 +24,7 @@ Responses path follows the ChatGPT Codex `web_search` tool used by community
 extensions such as Leechael `pi-codex-search`.
 
 The session model (`PI_PROVIDER`) is independent of the search backend.
-The Open Road gateway providers (`private-anthropic`, `private-glm`) only alias
+The Open Road gateway providers (`private-anthropic`, `private-glm-otari`) only alias
 the search tool name to `claude_web_search`.
 
 Do not put tokens in this file or in chezmoi source.
@@ -161,8 +161,8 @@ the page body. Claude is prompted to return content, not commentary.
 
 Both search aliases and `web_fetch` are registered, but the active set omits
 `web_fetch` while Codex is configured. When the active model provider is one of
-`WEB_SEARCH_ALIAS_PROVIDERS` (`private-anthropic`, `private-glm` — both served by
-`litellm.boost-llm.dev`), the search tool name in the active set is
+`WEB_SEARCH_ALIAS_PROVIDERS` (`private-anthropic` on `litellm.boost-llm.dev`,
+`private-glm-otari` on Otari), the search tool name in the active set is
 `claude_web_search` instead of `web_search`. Session start and model changes keep
 the alias in sync. Callers still want search-vs-fetch behavior; only the search
 tool **name** changes.

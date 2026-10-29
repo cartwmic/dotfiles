@@ -2,9 +2,14 @@
 {{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiProviderRef") -}}
 {{-   $privateProvider = output "op" "read" .privatePiProviderRef | fromJson -}}
 {{- end -}}
-{{- $privateGlmProvider := dict -}}
-{{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiGlmProviderRef") -}}
-{{-   $privateGlmProvider = output "op" "read" .privatePiGlmProviderRef | fromJson -}}
+{{- /* Private GLM 5.3 Flash, routed through Otari with the user's own Open Road key.
+       URL and key ref live in local chezmoi data, not in this public repo.
+       Without both keys the provider is not rendered. */ -}}
+{{- $privateGlmOtari := dict -}}
+{{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiGlmOtariBaseUrl") (hasKey . "privatePiGlmOtariKeyRef") -}}
+{{-   $otariCost := dict "input" 0 "output" 0 "cacheRead" 0 "cacheWrite" 0 -}}
+{{-   $otariModel := dict "id" "axong5" "name" "Private GLM 5.3 Flash (Otari)" "contextWindow" 1048576 "maxTokens" 131072 "input" (list "text") "reasoning" true "cost" $otariCost -}}
+{{-   $privateGlmOtari = dict "baseUrl" .privatePiGlmOtariBaseUrl "api" "anthropic-messages" "authHeader" true "compat" (dict "allowEmptySignature" true) "apiKey" (printf "!$HOME/.local/user_scripts/op_read_cached.sh '%s'" .privatePiGlmOtariKeyRef) "models" (list $otariModel) -}}
 {{- end -}}
 {
   "providers": {
@@ -190,8 +195,8 @@
 {{- if $privateProvider }},
     "private-anthropic": {{ $privateProvider | toPrettyJson }}
 {{- end }}
-{{- if $privateGlmProvider }},
-    "private-glm": {{ $privateGlmProvider | toPrettyJson }}
+{{- if $privateGlmOtari }},
+    "private-glm-otari": {{ $privateGlmOtari | toPrettyJson }}
 {{- end }}
   }
 }

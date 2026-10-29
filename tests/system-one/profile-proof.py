@@ -44,7 +44,7 @@ def main():
         config.chmod(0o600)
         # Effective config preflight: this exact file, not the owner's config.
         inspected = json.loads(config.read_text())
-        require("hooks" not in inspected and "privatePiGlmProviderRef" not in inspected["data"], "unsafe controlled config")
+        require("hooks" not in inspected, "unsafe controlled config")
         env = {"PATH": os.environ.get("PATH", os.defpath), "HOME": str(home),
                "XDG_CONFIG_HOME": str(config_home), "XDG_CACHE_HOME": str(cache),
                "XDG_STATE_HOME": str(state), "NO_COLOR": "1"}

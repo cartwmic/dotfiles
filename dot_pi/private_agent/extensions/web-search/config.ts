@@ -32,7 +32,7 @@ export const TOOL_NAME_FETCH = "web_fetch";
 // NOTE: these are *model* providers (keys in ~/.pi/agent/models.json), not search
 // backends. Do not confuse with SEARCH_PROVIDERS above, which selects who performs
 // the search. This list answers a different question: is the current chat model
-// served by the Axon Open Road gateway (litellm.boost-llm.dev)?
+// served by an Axon Open Road gateway (litellm.boost-llm.dev or Otari)?
 //
 // It matters because that gateway intercepts any tool literally named `web_search`
 // as a server-side tool and answers via its OpenAI-completions shim, which emits SSE
@@ -40,7 +40,7 @@ export const TOOL_NAME_FETCH = "web_fetch";
 // `event:`, so it never sees `message_delta`, never gets a stop_reason, and throws
 // "Anthropic stream ended without a stop reason" — then retries forever. Aliasing the
 // tool name keeps the request on the gateway's native Anthropic path.
-export const WEB_SEARCH_ALIAS_PROVIDERS = ["private-anthropic", "private-glm"] as const;
+export const WEB_SEARCH_ALIAS_PROVIDERS = ["private-anthropic", "private-glm-otari"] as const;
 export const SEARCH_TOOL_NAMES = [TOOL_NAME_SEARCH, TOOL_NAME_SEARCH_PRIVATE] as const;
 
 export function searchToolNameForProvider(modelProvider: string | undefined): string {
