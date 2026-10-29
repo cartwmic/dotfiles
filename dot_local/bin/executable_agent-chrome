@@ -1,49 +1,60 @@
 #!/bin/sh
 # Start the dedicated Chrome that the browser-harness MCP server attaches to (docs: agent-harness README, "Agent browser").
 # Own profile directory, remote debugging on 127.0.0.1:9333. Does nothing if that port already answers.
+# Every run appends its outcome to ${XDG_STATE_HOME:-~/.local/state}/agent-chrome/agent-chrome.log; Chrome's own output goes to chrome.log.
 set -eu
 
 SCRIPT_NAME="agent-chrome"
 APP="${AGENT_CHROME_APP:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 PORT="${AGENT_CHROME_PORT:-9333}"
-PROFILE="${AGENT_CHROME_PROFILE:-$HOME/.local/share/agent-chrome-profile}"
-LOG="${AGENT_CHROME_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-chrome/chrome.log}"
+PROFILE="$HOME/.local/share/agent-chrome-profile"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-chrome"
 WAIT="${AGENT_CHROME_WAIT:-20}"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+START=$(date +%s)
 
-log() { echo "[$SCRIPT_NAME] $1"; }
-log_error() { echo "[$SCRIPT_NAME] ERROR: $1" >&2; }
+mkdir -p "$STATE"
+
+# One record per outcome: terminal line plus a persisted line (UTC time, run id, seconds since start).
+log() {
+  level="$1"; shift
+  line="[$SCRIPT_NAME] $level: $*"
+  if [ "$level" = ERROR ]; then echo "$line" >&2; else echo "$line"; fi
+  printf '%s run=%s elapsed=%ss %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "$(($(date +%s) - START))" "$line" >> "$STATE/agent-chrome.log"
+}
 
 up() { curl -fsS --max-time 2 "http://127.0.0.1:$PORT/json/version" >/dev/null 2>&1; }
 
 if up; then
-  log "Chrome already answers on port $PORT"
+  log INFO "Chrome already answers on port $PORT"
   exit 0
 fi
 
 if [ ! -x "$APP" ]; then
-  log_error "Chrome not found at $APP (install it: brew install --cask google-chrome)"
+  log ERROR "Chrome not found at $APP (install it: brew install --cask google-chrome)"
   exit 1
 fi
 
-mkdir -p "$PROFILE" "$(dirname "$LOG")"
+mkdir -p "$PROFILE"
+log INFO "starting Chrome on port $PORT, profile $PROFILE"
 nohup "$APP" \
   --remote-debugging-port="$PORT" \
   --user-data-dir="$PROFILE" \
   --no-first-run \
   --no-default-browser-check \
   --disable-search-engine-choice-screen \
-  about:blank >"$LOG" 2>&1 &
+  about:blank >"$STATE/chrome.log" 2>&1 &
 pid=$!
 
 i=0
 while [ "$i" -lt "$WAIT" ]; do
   if up; then
-    log "Chrome started (pid $pid), port $PORT, profile $PROFILE"
+    log INFO "Chrome started (pid $pid), answering on port $PORT"
     exit 0
   fi
   i=$((i + 1))
   sleep 1
 done
 
-log_error "Chrome did not answer on port $PORT within ${WAIT}s (see $LOG)"
+log ERROR "Chrome (pid $pid) did not answer on port $PORT within ${WAIT}s (see $STATE/chrome.log)"
 exit 1

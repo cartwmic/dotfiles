@@ -1,5 +1,6 @@
 """agent-chrome: the real launcher script against a fake Chrome (a script that serves /json/version) and a scratch HOME.
 Never starts a real Chrome and never touches the real profile directory."""
+import json
 import os
 import subprocess
 import sys
@@ -42,7 +43,6 @@ class LauncherTest(unittest.TestCase):
         self.home.mkdir()
         self.argv = self.root / "argv.log"
         self.port = free_port()
-        self.pids = []
 
     def tearDown(self):
         subprocess.run(["pkill", "-f", str(self.root)], check=False)
@@ -61,18 +61,28 @@ class LauncherTest(unittest.TestCase):
         return subprocess.run(["sh", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=60)
 
     def calls(self):
-        return self.argv.read_text().splitlines() if self.argv.exists() else []
+        return [json.loads(l) for l in self.argv.read_text().splitlines()] if self.argv.exists() else []
+
+    def record(self):
+        """The persisted launcher log (one line per outcome)."""
+        path = self.home / ".local/state/agent-chrome/agent-chrome.log"
+        return path.read_text().splitlines() if path.exists() else []
 
     def test_starts_chrome_with_the_dedicated_profile_and_debug_port(self):
         r = self.run_script(self.fake())
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(len(self.calls()), 1)
-        argv = self.calls()[0]
         profile = self.home / ".local/share/agent-chrome-profile"
-        for flag in ("--remote-debugging-port=%d" % self.port, "--user-data-dir=%s" % profile, "--no-first-run",
-                     "--no-default-browser-check", "--disable-search-engine-choice-screen", "about:blank"):
-            self.assertIn(flag, argv)
+        self.assertEqual(self.calls()[0], [
+            "--remote-debugging-port=%d" % self.port, "--user-data-dir=%s" % profile, "--no-first-run",
+            "--no-default-browser-check", "--disable-search-engine-choice-screen", "about:blank"])
         self.assertTrue(profile.is_dir())
+        log = self.record()
+        self.assertEqual(len(log), 2, log)
+        self.assertIn("INFO: starting Chrome on port %d" % self.port, log[0])
+        self.assertIn("INFO: Chrome started", log[1])
+        for line in log:
+            self.assertRegex(line, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ run=\S+-\d+ elapsed=\d+s \[agent-chrome\] ")
 
     def test_does_nothing_when_the_port_already_answers(self):
         app = self.fake()
@@ -81,18 +91,25 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("already answers", r.stdout)
         self.assertEqual(len(self.calls()), 1)
+        self.assertIn("already answers", self.record()[-1])
 
     def test_missing_chrome_fails_with_the_install_command(self):
         r = self.run_script(self.root / "nope")
         self.assertEqual(r.returncode, 1)
         self.assertIn("brew install --cask google-chrome", r.stderr)
         self.assertEqual(self.calls(), [])
+        self.assertIn("ERROR: Chrome not found", self.record()[-1])
 
     def test_chrome_that_never_answers_fails_after_the_wait(self):
         started = time.time()
         r = self.run_script(self.fake(SILENT_CHROME), wait="2")
         self.assertEqual(r.returncode, 1)
         self.assertIn("did not answer", r.stderr)
+        # The persisted log alone names the fault: Chrome was started, then never answered.
+        log = self.record()
+        self.assertIn("INFO: starting Chrome", log[0])
+        self.assertIn("ERROR: Chrome (pid", log[-1])
+        self.assertIn("did not answer on port %d within 2s" % self.port, log[-1])
         self.assertLess(time.time() - started, 20)
 
 
