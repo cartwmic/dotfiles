@@ -1,3 +1,4 @@
+{{- $agentEvents := includeTemplate "agent_events_config" . | fromJson -}}
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -13,7 +14,9 @@
   <key>Nice</key><integer>10</integer>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>AGENT_EVENTS_OTLP_ENDPOINT</key><string>http://otel-collector.internal.cartwmic.com/v1/metrics</string>
+    <!-- chezmoi data agentEvents (.chezmoitemplates/agent_events_config) -->
+    <key>AGENT_EVENTS_OTLP_ENDPOINT</key><string>{{ $agentEvents.endpoint }}</string>
+    <key>AGENT_EVENTS_MACHINE</key><string>{{ $agentEvents.machine }}</string>
   </dict>
   <key>StandardOutPath</key><string>{{ .chezmoi.homeDir }}/.local/state/agent-events/launchd.out</string>
   <key>StandardErrorPath</key><string>{{ .chezmoi.homeDir }}/.local/state/agent-events/launchd.err</string>

@@ -1,19 +1,33 @@
 #!/bin/sh
-# (Re)load the agent-events LaunchAgent when its plist changes. Personal profile on macOS only
-# (.chezmoiignore). The agent runs "agent-events run" every 2 minutes: incremental build, then an
-# aggregate-metrics push to the homelab OTel collector.
+# Load, reload or unload the agent-events LaunchAgent when its plist or its setting changes. macOS only, and only while
+# chezmoi data agentEvents.enabled is true (default: personal profile only) or the plist is still installed (.chezmoiignore).
+# The agent runs "agent-events run" every 2 minutes: incremental build, then an aggregate-metrics push to the homelab OTel collector.
 # plist: {{ include "Library/LaunchAgents/local.agent-events.plist.tmpl" | sha256sum }}
+# setting: {{ includeTemplate "agent_events_config" . }}
 set -eu
 log() { printf '[agent_events_launchd] %s: %s\n' "$1" "$2"; }
 
 [ "$(uname -s)" = Darwin ] || exit 0
-plist="$HOME/Library/LaunchAgents/local.agent-events.plist"
+label=local.agent-events
+plist="$HOME/Library/LaunchAgents/$label.plist"
+uid=$(id -u)
+{{- if (includeTemplate "agent_events_config" . | fromJson).enabled }}
 [ -f "$plist" ] || { log WARN "$plist is not installed yet"; exit 0; }
 mkdir -p "$HOME/.local/state/agent-events"
-uid=$(id -u)
-launchctl bootout "gui/$uid/local.agent-events" >/dev/null 2>&1 || true
+launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
 if launchctl bootstrap "gui/$uid" "$plist"; then
-  log INFO "loaded local.agent-events (every 2 minutes)"
+  log INFO "loaded $label (every 2 minutes)"
 else
   log WARN "could not load the agent (no GUI session?); load it later: launchctl bootstrap gui/$uid $plist"
 fi
+{{- else }}
+# agentEvents.enabled is false: .chezmoiignore leaves the plist alone, so this script unloads the job, then removes the plist.
+# A failed unload fails the apply and keeps the plist, so the next apply runs this again.
+launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || :
+if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+  log ERROR "could not unload $label; try: launchctl bootout gui/$uid/$label, then chezmoi apply again"
+  exit 1
+fi
+rm -f "$plist"
+log INFO "agentEvents.enabled is false: $label is unloaded and its plist removed"
+{{- end }}

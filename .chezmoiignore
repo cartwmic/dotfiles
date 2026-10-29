@@ -109,9 +109,14 @@ bin/**
 05_provision_ssh_keys.sh
 {{- end }}
 
-{{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
-# Always-on agent-events metrics: personal macOS only. Work data never goes to the homelab collector.
+{{- $agentEvents := includeTemplate "agent_events_config" . | fromJson }}
+{{- if or (ne .chezmoi.os "darwin") (not $agentEvents.enabled) }}
+# Always-on agent-events metrics (local.agent-events): macOS with chezmoi data agentEvents.enabled, which defaults to true on
+# personal only, so the work Mac sends nothing until agentEvents is set there. A bad agentEvents value fails this render.
+# Disabled: chezmoi leaves the plist alone; the load script below unloads the job and removes it.
 Library/LaunchAgents/local.agent-events.plist
+{{- end }}
+{{- if or (ne .chezmoi.os "darwin") (and (not $agentEvents.enabled) (not (stat (joinPath .chezmoi.destDir "Library/LaunchAgents/local.agent-events.plist")))) }}
 70_agent_events_launchd.sh
 {{- end }}
 
