@@ -776,14 +776,14 @@ describe("auto-compact breaker visibility and retry", () => {
 
 describe("auto-compact pause markers", () => {
 	// One ordered log of what the extension does: session entries, compact() calls and continuations.
-	const setup = (compact: (cb: any, h: Map<string, (event: any, ctx: any) => any>) => void, options: Record<string, unknown> = {}) => {
+	const setup = (compact: (cb: any, h: Map<string, (event: any, ctx: any) => any>) => void, options: Record<string, unknown> = {}, send?: (text: string) => void) => {
 		const handlers = new Map<string, (event: any, ctx: any) => any>();
 		const steps: Array<{ step: string; data?: any }> = [];
 		extension(
 			{
 				on: (name: string, handler: (event: any, ctx: any) => any) => handlers.set(name, handler),
 				registerCommand: () => {},
-				sendUserMessage: (text: string) => steps.push({ step: "send", data: text }),
+				sendUserMessage: send ?? ((text: string) => steps.push({ step: "send", data: text })),
 				appendEntry: (type: string, data: any) => steps.push({ step: type, data }),
 				events: { emit: () => {} },
 			} as any,
@@ -834,6 +834,17 @@ describe("auto-compact pause markers", () => {
 		interTurn(t);
 		expect(t.steps.map((s) => (s.step === "auto-compact" ? s.data.kind : s.step))).toEqual(["compacting", "compact", "compaction_failed", "send"]);
 		expect(t.markers()[1]).toMatchObject({ kind: "compaction_failed", resumeSent: true, error: "summary failed" });
+	});
+
+	test("a continuation that cannot be submitted gets a second closing marker with resumeSent false", () => {
+		for (const [finish, kind] of [[(cb: any) => cb.onComplete(), "compacted"], [(cb: any) => cb.onError(new Error("summary failed")), "compaction_failed"]] as const) {
+			const t = setup(finish, {}, () => {
+				throw new Error("This extension ctx is stale after session replacement or reload.");
+			});
+			interTurn(t);
+			expect(t.markers().map((m) => [m.kind, m.resumeSent])).toEqual([["compacting", undefined], [kind, true], [kind, false]]);
+			expect(t.markers()[2].error).toContain("continuation not submitted: This extension ctx is stale");
+		}
 	});
 
 	test("compact() throwing at once closes the pause with resumeSent false", () => {

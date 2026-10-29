@@ -327,6 +327,16 @@ export function registerAutoCompactExtension(
 			awaitingResume = resume;
 			pi.sendUserMessage(resume, { deliverAs: "followUp" });
 		};
+		// A continuation that could not be submitted (stale runtime after session teardown) gets a second
+		// closing marker with resumeSent false; readers take the last closing marker.
+		const sendOrCorrect = (kind: string, resume: string): void => {
+			try {
+				sendResume(resume);
+			} catch (error) {
+				awaitingResume = undefined;
+				mark(kind, { resumeSent: false, error: `continuation not submitted: ${formatError(error)}` });
+			}
+		};
 		mark("compacting", { resume: pendingResume !== undefined, tokens, contextWindow, checkPoint });
 		try {
 			ctx.compact({
@@ -336,8 +346,8 @@ export function registerAutoCompactExtension(
 					pendingResume = undefined;
 					const resumeSent = willResume(resume);
 					mark("compacted", { resumeSent });
+					if (resumeSent) sendOrCorrect("compacted", resume);
 					try {
-						if (resumeSent) sendResume(resume);
 						if (ctx.hasUI) {
 							ctx.ui.notify(
 								resume ? "Auto-compaction completed; continuing" : "Auto-compaction completed",
@@ -345,7 +355,7 @@ export function registerAutoCompactExtension(
 							);
 						}
 					} catch {
-						// Stale ctx after session teardown; nothing left to resume or notify.
+						// Stale ctx after session teardown; nothing left to notify.
 					}
 				},
 				onError: (error) => {
@@ -359,11 +369,11 @@ export function registerAutoCompactExtension(
 					pendingResume = undefined;
 					const resumeSent = willResume(resume);
 					record(undefined, "compaction_failed", { tokens, contextWindow, checkPoint, error: formatError(error), resumeSent });
+					if (resumeSent) sendOrCorrect("compaction_failed", resume);
 					try {
-						if (resumeSent) sendResume(resume);
 						if (ctx.hasUI) ctx.ui.notify(`Auto-compaction failed: ${formatError(error)}`, "warning");
 					} catch {
-						// Stale ctx after session teardown; drop the resume.
+						// Stale ctx after session teardown; nothing left to notify.
 					}
 				},
 			});
