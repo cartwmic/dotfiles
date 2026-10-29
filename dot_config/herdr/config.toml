@@ -97,3 +97,6 @@ key = "prefix+space"
 type = "plugin_action"
 command = "vjeantet.palette.open"
 description = "Command palette"
+
+[ui.sound]
+enabled = false
