@@ -43,9 +43,14 @@ The call is checked by `validateAlert` in `helpers.ts` before anything rings. Un
 
 A malformed call returns an error result (`isError`) with one problem per line and rings nothing. On success the text is the
 usual "Doorbell dispatched..." plus `Recorded as kind=<kind>.`. The tool schema makes every field optional and allows extra
-properties on purpose: Pi validates parameters against it before `execute`, and `validateAlert` then lists every problem at once.
-The schema still checks property types (string, array of strings), so a wrong-typed value can be rejected by Pi before
-`validateAlert` runs, with a shorter error; nothing rings either way.
+properties on purpose, so `validateAlert` lists every problem at once.
+
+**Lists sent as strings.** `attachments` and `options` may also arrive as a string that holds a JSON array
+(`"[\"/tmp/a.md\", \"PR #5\"]"`). Some models send lists that way; Pi's own `edit` tool accepts the same. Any other non-list
+(a bare path, a number, a JSON object, an array with a non-string item) is an error naming the expected shape. The check runs in the
+tool's `prepareArguments` hook, on the call exactly as the model sent it, before Pi's schema coercion. That coercion wraps a bare
+string into a one-item list and turns a number into a string, so without the hook the tool would ring for a call that the
+coordinator, which reads the raw call from the session log, marks invalid.
 
 **Legacy path.** A call with only `question` (a string) and none of the typed arguments is still accepted as an untyped alert,
 with the old success text and no `Recorded as` suffix. `question` together with `kind` is an error. The coordinator counts legacy

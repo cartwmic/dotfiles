@@ -7,7 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { ALERT_DOORS, ALERT_KINDS, ALERT_SCOPES, ASK_TOOL_NAME, TOOL_NAME, corePath, eligible, logPath, registerNotifyOwner, ring, validateAlert } from "./helpers.ts";
+import { ALERT_DOORS, ALERT_KINDS, ALERT_SCOPES, ASK_TOOL_NAME, TOOL_NAME, corePath, eligible, logPath, prepareNotifyArguments, registerNotifyOwner, ring, validateAlert } from "./helpers.ts";
 
 // A scripted child process for the injected spawner: records how it was started and lets a test fire its events.
 function fakeSpawner() {
@@ -330,3 +330,44 @@ test("a valid typed call rings once with the same emit arguments as a legacy cal
     assert.equal(started[0].args.join(" ").includes("Frames"), false); // the alert text is never sent
   } finally { s.cleanup(); }
 });
+
+// The exact call from a real session (2026-10-28): the list sent as a JSON string. Pi's schema coercion used to wrap it
+// into a one-item list, so the tool said "Doorbell dispatched" while the coordinator, reading the raw call, marked it invalid.
+const STRING_LIST_CALL = { kind: "report", summary: "Loop Engine PR is up; body, review and gate log attached.", attachments: '["/tmp/le-pr-body.md", "/tmp/le-sol-review-4.md", "/tmp/le-gate.log"]' };
+
+test("prepareArguments: a list sent as a JSON string becomes a real list before Pi's schema check, and the call rings", async () => {
+  const s = scratch();
+  try {
+    const { started, spawnFn } = fakeSpawner();
+    const pi = fakePi();
+    registerNotifyOwner(pi, Type, s.env, spawnFn as never);
+    const tool = pi.tools[0];
+    assert.equal(tool.prepareArguments, prepareNotifyArguments);
+    const prepared = tool.prepareArguments(structuredClone(STRING_LIST_CALL));
+    assert.deepEqual(prepared.attachments, ["/tmp/le-pr-body.md", "/tmp/le-sol-review-4.md", "/tmp/le-gate.log"]);
+    assert.deepEqual(tool.prepareArguments({ kind: "question", summary: "Which one?", options: '["a", "b"]', recommendation: "a" }).options, ["a", "b"]);
+    const result = await tool.execute("c", prepared);
+    assert.equal(result.isError, undefined);
+    assert.match(result.content[0].text, /Recorded as kind=report\.$/);
+    assert.equal(started.length, 1);
+    // A real list and a legacy call pass through unchanged.
+    assert.deepEqual(tool.prepareArguments({ kind: "review", summary: "Look at this.", attachments: ["PR #5"] }), { kind: "review", summary: "Look at this.", attachments: ["PR #5"] });
+    assert.deepEqual(tool.prepareArguments({ question: "which database?" }), { question: "which database?" });
+  } finally { s.cleanup(); }
+});
+
+test("prepareArguments: a bare string, a non-list JSON string or a non-string item fails the call with what was expected, before Pi could coerce it", () => {
+  for (const attachments of ["/tmp/a.md", '{"path": "/tmp/a.md"}', "[3]", 3, [3]]) {
+    assert.throws(() => prepareNotifyArguments({ kind: "review", summary: "Please look at this file.", attachments }), (error: Error) => {
+      const lines = error.message.split("\n");
+      assert.match(lines[0], /^Owner not notified: the call is malformed/);
+      assert.ok(lines.some((line) => line.startsWith("attachments")), error.message);
+      return true;
+    }, JSON.stringify(attachments));
+  }
+  assert.throws(() => prepareNotifyArguments({ kind: "report", summary: "All merged and live.", attachments: "/tmp/a.md" }), /attachments: must be an array of strings, like \["first", "second"\], or that array as a JSON string \(got a string that is not a JSON array\)/);
+  // Every problem at once, as execute reports them; and a wrong-typed scalar Pi would have coerced (a number summary).
+  assert.throws(() => prepareNotifyArguments({ kind: "decision", summary: "Merge it?", options: "yes or no" }), /options: must be an array[\s\S]*recommendation: required[\s\S]*door: required/);
+  assert.throws(() => prepareNotifyArguments({ kind: "report", summary: 12345 }), /summary: must be a string/);
+});
+
