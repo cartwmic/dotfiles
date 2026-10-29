@@ -211,8 +211,9 @@ python3 "$TOOL" import v0.33.0 --source "$REPO" --pins --apply --prune  # after 
 - **Orphans** are files in a bundle that the tag no longer has. Other skills in `canonical/skills/` are never touched.
   Files chezmoi would read as attributes (`dot_`, `.tmpl`, a leading dot, and so on) or drop (empty files) stop the import.
 - **`--pins`** moves the four `loop-engine`, `lean-change`, `policy-document` and `research` pins in
-  `dot_config/mise/config.toml` to the tag's version. The `software-change` pin stays where it is: v0.30.0
-  replaced that provider with lean-change, and runs started on it keep the installed version they name. `mise install` adds the new version and keeps the older ones, so
+  `dot_config/mise/config.toml` to the tag's version. The `software-change` pin is gone: v0.30.0
+  replaced that provider with lean-change, so new machines do not install it. Copies already installed are kept, and
+  runs started on it keep the installed version they name. `mise install` adds the new version and keeps the older ones, so
   runs frozen on an older tool version keep it. Do not `mise uninstall` them to tidy up.
 - **Deploy** with the normal flow above: preview the targets, get approval, then
   `chezmoi --source "$REPO" apply ~/.local/share/agent-harness/canonical/skills ~/.config/mise/config.toml` (and
