@@ -126,7 +126,7 @@ Closing of a review — a short deficit inventory, no synthesis:
 Doc comments the owner posted on a colleague's design document. This register uses
 questions that carry the objection, hedged pushback, and self-deprecating follow-ups.
 Product, model, person, and company identifiers are replaced. These excerpts are
-unmeasured.
+unmeasured. No thank-you anywhere in a review; the first sentence is the first finding.
 
 > Does this essentially mean "agent driven workflows via chat interface"
 >
