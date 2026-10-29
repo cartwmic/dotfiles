@@ -957,6 +957,16 @@ class CacheGauges(Tick):
         self.assertEqual(self.streaks(), {(live, "proj", "claude-x"): 3})
         self.assertNotIn("pi_cache_calls_30m", g[(live, "proj", "claude-x")])  # outside the 30-minute gauges' window
         self.assertNotIn((idle, "proj", "claude-x"), g)
+        both = "01a16722-a016-7000-8000-000000000016"  # one session, one model idle past the TTL, one still active
+        f = Fixture(session_id=both, cwd="/work/proj", start=int(self.NOW * 1000) - 120 * self.MIN)
+        f.user(int(self.NOW * 1000) - 119 * self.MIN)
+        for ago, model in ((66, "claude-old"), (65, "claude-old"), (5, "claude-x")):
+            end = int(self.NOW * 1000) - ago * self.MIN
+            f.llm(end - 2000, end, cr=0, cw=60_000, fresh=50, stop="stop", model=model)
+        f.write(self.root / "--work-proj--/2026-10-01T00-00-00-000Z_s12.jsonl")
+        g = self.streaks()
+        self.assertEqual(g[(both, "proj", "claude-x")], 1)
+        self.assertNotIn((both, "proj", "claude-old"), g)
 
     def test_miss_streak_skips_a_non_uuid_session(self):
         self.cache_session("not a uuid / with spaces", "s11", "claude-x", [(3, 0, 60_000, 0), (2, 0, 60_000, 0)])
