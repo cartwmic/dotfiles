@@ -1,3 +1,9 @@
+# Retired 2026-10-28: the Pi ntfy push extension (alerts were too noisy; owner
+# alerts go through notify-owner). Removes the whole deployed directory on apply,
+# including its unmanaged send.log, send.log.old and state.json. Prune once every
+# machine has applied.
+.pi/agent/extensions/ntfy
+
 # Retired 2026-10-27: VectorCode (unused since codecompanion.nvim went in April).
 # Source deletion alone would leave the nvim spec, which still runs
 # `uv tool upgrade vectorcode` on build. The uv tool itself is removed by the
