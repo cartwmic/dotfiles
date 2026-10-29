@@ -25,8 +25,8 @@ Edit `~/.pi/agent/extensions/auto-compact/config.json` or run `/auto-compact` in
 - `continuation`: follow-up text injected after **inter-turn** (`turn_end`) compaction.
   - Pi's `ctx.compact()` aborts the active agent first, so without a follow-up the run would stop.
   - Before a resumed abort, auto-compact emits
-    `auto-compact:will-resume-interrupted-run` on Pi's extension event bus. ntfy
-    suppresses that internal settlement; goal preserves its active loop.
+    `auto-compact:will-resume-interrupted-run` on Pi's extension event bus. goal
+    preserves its active loop.
   - Default: `"Continue from where you left off."`
   - Set to `false` (or an empty string) to disable resume.
   - Final-turn and `agent_end` compactions never auto-continue — the run already finished.
