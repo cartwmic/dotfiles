@@ -17,10 +17,7 @@
 {{- $theme := "dark" -}}
 {{- $hideThinking := false -}}
 {{- $deviceId := "" -}}
-{{- $privateGlmProvider := dict "models" (list) -}}
-{{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiGlmProviderRef") -}}
-{{-   $privateGlmProvider = output "op" "read" .privatePiGlmProviderRef | fromJson -}}
-{{- end -}}
+{{- $workGlm := and (eq .profile "axon-work-computer") (hasKey . "workGlmBaseUrl") (hasKey . "workGlmKeyRef") -}}
 {{- $settingsPath := joinPath .chezmoi.homeDir ".pi/agent/settings.json" -}}
 {{- if stat $settingsPath -}}
 {{-   $existingSettings := output "cat" $settingsPath | fromJson -}}
@@ -79,8 +76,8 @@
     "anthropic/claude-opus-5-5",
     "anthropic/claude-sonnet-5-5",
     "anthropic/claude-haiku-5-5"
-{{- range $model := $privateGlmProvider.models }},
-    {{ printf "work-glm/%s" $model.id | quote }}
+{{- if $workGlm }},
+    "work-glm/work-model-g"
 {{- end }}
 {{- end }}
   ],

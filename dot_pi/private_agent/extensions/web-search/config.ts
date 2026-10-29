@@ -32,7 +32,7 @@ export const TOOL_NAME_FETCH = "web_fetch";
 // NOTE: these are *model* providers (keys in ~/.pi/agent/models.json), not search
 // backends. Do not confuse with SEARCH_PROVIDERS above, which selects who performs
 // the search. This list answers a different question: is the current chat model
-// served by the work gateway (llm-gateway.work.example)?
+// served by an work gateway (llm-gateway.work.example or WorkRelay)?
 //
 // It matters because that gateway intercepts any tool literally named `web_search`
 // as a server-side tool and answers via its OpenAI-completions shim, which emits SSE

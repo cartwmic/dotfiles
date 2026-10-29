@@ -2,9 +2,14 @@
 {{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiProviderRef") -}}
 {{-   $privateProvider = output "op" "read" .privatePiProviderRef | fromJson -}}
 {{- end -}}
-{{- $privateGlmProvider := dict -}}
-{{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiGlmProviderRef") -}}
-{{-   $privateGlmProvider = output "op" "read" .privatePiGlmProviderRef | fromJson -}}
+{{- /* Private GLM 5.3 Flash, routed through WorkRelay with the user's own work key.
+       URL and key ref live in local chezmoi data, not in this public repo.
+       Without both keys the provider is not rendered. */ -}}
+{{- $workGlm := dict -}}
+{{- if and (eq .profile "axon-work-computer") (hasKey . "workGlmBaseUrl") (hasKey . "workGlmKeyRef") -}}
+{{-   $workGlmCost := dict "input" 0 "output" 0 "cacheRead" 0 "cacheWrite" 0 -}}
+{{-   $workGlmModel := dict "id" "work-model-g" "name" "Private GLM 5.3 Flash (WorkRelay)" "contextWindow" 1048576 "maxTokens" 131072 "input" (list "text") "reasoning" true "cost" $workGlmCost -}}
+{{-   $workGlm = dict "baseUrl" .workGlmBaseUrl "api" "anthropic-messages" "authHeader" true "compat" (dict "allowEmptySignature" true) "apiKey" (printf "!$HOME/.local/user_scripts/op_read_cached.sh '%s'" .workGlmKeyRef) "models" (list $workGlmModel) -}}
 {{- end -}}
 {
   "providers": {
@@ -190,8 +195,8 @@
 {{- if $privateProvider }},
     "work-anthropic": {{ $privateProvider | toPrettyJson }}
 {{- end }}
-{{- if $privateGlmProvider }},
-    "work-glm": {{ $privateGlmProvider | toPrettyJson }}
+{{- if $workGlm }},
+    "work-glm": {{ $workGlm | toPrettyJson }}
 {{- end }}
   }
 }

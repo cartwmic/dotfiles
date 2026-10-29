@@ -160,7 +160,7 @@ test("active tool listing omits fetch for Codex and restores it for Anthropic", 
   );
   assert.deepEqual(privateTools, ["read", "claude_web_search"]);
 
-  // work-glm shares the work gateway, so it needs the same alias.
+  // work-glm is also an work gateway, so it gets the same alias.
   const privateGlmTools = nextActiveWebSearchTools(
     ["read", "web_search", "web_fetch"],
     "work-glm",

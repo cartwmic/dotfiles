@@ -24,8 +24,8 @@ inspect the effective config and `hooks.read-source-state.pre` risk; a dry-run
 can execute that hook. Do not invoke the owner's hook or replace their config.
 Inspect `.chezmoiremove` too, including persistent directories. Settings render
 reads live JSON to preserve lastChangelogVersion, theme and hideThinkingBlock;
-read it independently and privately. Work data `privatePiGlmProviderRef` can
-invoke `op read`; omit it in controlled proofs. No secret lookup is needed.
+read it independently and privately. Settings render does not read 1Password;
+no secret lookup is needed.
 
 Run only the isolated profile proof for source reconciliation:
 

@@ -161,8 +161,8 @@ the page body. Claude is prompted to return content, not commentary.
 
 Both search aliases and `web_fetch` are registered, but the active set omits
 `web_fetch` while Codex is configured. When the active model provider is one of
-`WEB_SEARCH_ALIAS_PROVIDERS` (`work-anthropic`, `work-glm` — both served by
-`llm-gateway.work.example`), the search tool name in the active set is
+`WEB_SEARCH_ALIAS_PROVIDERS` (`work-anthropic` on `llm-gateway.work.example`,
+`work-glm` on WorkRelay), the search tool name in the active set is
 `claude_web_search` instead of `web_search`. Session start and model changes keep
 the alias in sync. Callers still want search-vs-fetch behavior; only the search
 tool **name** changes.
