@@ -182,6 +182,17 @@ export function registerAutoCompactExtension(
 		}
 	};
 
+	// Pause markers in the session file, read by programs that watch sessions (the coordinator daemon):
+	// "compacting" is written before ctx.compact() aborts the run; "compacted" or "compaction_failed" closes it
+	// and says whether the continuation was sent. Session entry only; never sent to the model.
+	const mark = (kind: string, data: Record<string, unknown>) => {
+		try {
+			pi.appendEntry?.("auto-compact", { at: new Date(now()).toISOString(), kind, ...data });
+		} catch {
+			// stale pi after teardown
+		}
+	};
+
 	const resetAttemptState = () => {
 		compacting = false;
 		lastAttemptTokens = undefined;
@@ -307,22 +318,26 @@ export function registerAutoCompactExtension(
 			// follow-up will resume it, so they do not treat it as a user interrupt.
 			pi.events?.emit(AUTO_COMPACT_WILL_RESUME_EVENT, undefined);
 		}
-		// Send the continuation unless the user already spoke; the input handler
+		// The continuation is sent unless the user already spoke; the input handler
 		// drops it later if the user's queued message is seen after this point.
-		const sendResume = (resume: string | undefined): boolean => {
-			if (!resume || userSpoke) return false;
+		// The closing marker records that decision and is written before the
+		// continuation, so it precedes it in the session file.
+		const willResume = (resume: string | undefined): resume is string => Boolean(resume) && !userSpoke;
+		const sendResume = (resume: string): void => {
 			awaitingResume = resume;
 			pi.sendUserMessage(resume, { deliverAs: "followUp" });
-			return true;
 		};
+		mark("compacting", { resume: pendingResume !== undefined, tokens, contextWindow, checkPoint });
 		try {
 			ctx.compact({
 				onComplete: () => {
 					compacting = false;
 					const resume = pendingResume;
 					pendingResume = undefined;
+					const resumeSent = willResume(resume);
+					mark("compacted", { resumeSent });
 					try {
-						sendResume(resume);
+						if (resumeSent) sendResume(resume);
 						if (ctx.hasUI) {
 							ctx.ui.notify(
 								resume ? "Auto-compaction completed; continuing" : "Auto-compaction completed",
@@ -342,9 +357,10 @@ export function registerAutoCompactExtension(
 					compacting = false;
 					const resume = pendingResume;
 					pendingResume = undefined;
-					record(undefined, "compaction_failed", { tokens, contextWindow, checkPoint, error: formatError(error) });
+					const resumeSent = willResume(resume);
+					record(undefined, "compaction_failed", { tokens, contextWindow, checkPoint, error: formatError(error), resumeSent });
 					try {
-						sendResume(resume);
+						if (resumeSent) sendResume(resume);
 						if (ctx.hasUI) ctx.ui.notify(`Auto-compaction failed: ${formatError(error)}`, "warning");
 					} catch {
 						// Stale ctx after session teardown; drop the resume.
@@ -354,12 +370,16 @@ export function registerAutoCompactExtension(
 		} catch (error) {
 			compacting = false;
 			pendingResume = undefined;
-			if (ctx.hasUI) ctx.ui.notify(`Auto-compaction failed: ${formatError(error)}`, "warning");
+			record(ctx, "compaction_failed", { tokens, contextWindow, checkPoint, error: formatError(error), resumeSent: false }, `Auto-compaction failed: ${formatError(error)}`);
 		}
 	};
 
 	pi.on("session_start", resetAttemptState);
-	pi.on("session_shutdown", resetAttemptState);
+	pi.on("session_shutdown", () => {
+		// Close an open pause marker: this session will not resume it.
+		if (compacting) mark("compaction_failed", { error: "session shut down during compaction", resumeSent: false });
+		resetAttemptState();
+	});
 	// A user message queued while this extension's compaction runs replaces the
 	// continuation. Pi's TUI holds such messages until compaction ends, then
 	// submits them through prompt(). Input handlers run in extension order and are
