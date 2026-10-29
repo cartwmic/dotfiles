@@ -129,13 +129,13 @@ coordinator runs `chezmoi apply` and the mise bootstrap there.
 | Launcher | `dot_local/bin/executable_agent-chrome` | `~/.local/bin/agent-chrome` |
 | MCP server `browser-harness` | `canonical/mcp/servers.json.tmpl` | `uvx --from "browser-harness[mcp]==0.1.13" browser-harness-mcp`, `BU_CDP_URL=http://127.0.0.1:9333` |
 
-The server entry is canonical, so Claude and Codex are given it too, as with every canonical server.
+The server entry is canonical, so Claude and Codex are given it too, as with every canonical server. The Claude adapter stores a server's `env` with `claude mcp add -e` (before this change it only set it for the registering process).
 
 Use:
 
 1. Start the browser: `agent-chrome`. It runs Chrome with `--remote-debugging-port=9333` and its own profile at
-   `~/.local/share/agent-chrome-profile`, and does nothing if port 9333 already answers. Its log is
-   `~/.local/state/agent-chrome/chrome.log`.
+   `~/.local/share/agent-chrome-profile`, and does nothing if port 9333 already answers. Each run appends its outcome (UTC time, run id, elapsed) to
+   `~/.local/state/agent-chrome/agent-chrome.log`; Chrome's own output goes to `chrome.log` in the same directory.
 2. Start or `/reload` Pi after an apply so it picks up the `browser-harness` server (`mcp__browser-harness__*` tools; check with `/mcp`).
 3. Sign in to each site once. The login stays in the profile across Chrome restarts. Either you sign in by hand, or the
    agent does it with Pi's OS-level UI tools (`find_roots`, `observe_ui`, `act_ui`), for example clicking the

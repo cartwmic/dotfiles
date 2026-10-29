@@ -277,14 +277,11 @@ for name, cfg in servers.items():
     if "command" in cfg:
         args = " ".join([json.dumps(a) for a in cfg.get("args", [])])
         cmd = json.dumps(cfg["command"])
-        env_parts = []
-        for key, value in cfg.get("env", {}).items():
-            env_parts.append(f"{key}={json.dumps(value)}")
-        prefix = ""
-        if env_parts:
-            prefix = "env " + " ".join(env_parts) + " "
+        # The server's own environment is stored with -e after the name (a prefix `env K=V claude ...` would only
+        # reach the registering process).
+        env_opts = "".join(f" -e {json.dumps(key + '=' + str(value))}" for key, value in cfg.get("env", {}).items())
         lines.append(
-            f"{prefix}\"${{CLAUDE_BIN:-claude}}\" mcp add -s user {json.dumps(name)} -- {cmd}"
+            f"\"${{CLAUDE_BIN:-claude}}\" mcp add -s user {json.dumps(name)}{env_opts} -- {cmd}"
             + (f" {args}" if args else "")
             + " || true"
         )
