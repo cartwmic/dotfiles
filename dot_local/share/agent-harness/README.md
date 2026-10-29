@@ -326,9 +326,9 @@ MCP changes, verify each harness's result after apply; Pi writes
 ~/.pi/agent/mcp.json`). Do not paste rendered secret values into logs.
 
 From the dotfiles source root, `python3 tests/native-mcp/proof.py` checks both
-Pi settings profiles and completed native MCP/codemode and `/issue` journeys
-through the real CLI, RPC, and TUI. It uses scripted local backends, not live
-providers or user credentials.
+Pi settings profiles and completed native MCP/codemode journeys through the
+real CLI, RPC, and TUI. It uses scripted local backends, not live providers or
+user credentials.
 
 Useful verification commands:
 

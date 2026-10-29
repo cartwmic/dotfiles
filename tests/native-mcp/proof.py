@@ -29,7 +29,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TIMEOUT = 45
 PRIVATE = "PRIVATE_NESTED_RESULT_SENTINEL"
-TITLE = "Native Jira transport proof"
 ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 
 
@@ -60,33 +59,15 @@ def mcp_backend(trace):
                           "capabilities": {"tools": {}},
                           "serverInfo": {"name": "migration-proof", "version": "1"}}
             elif method == "tools/list":
-                result = {"tools": [{"name": name, "description": "Scripted migration proof " + name,
-                                     "inputSchema": {"type": "object", "properties": properties},
-                                     "annotations": {"readOnlyHint": name in {"echo", "get_jira_issue", "get_jira_transitions"}}}
-                                    for name, properties in [
-                                        ("echo", {"marker": {"type": "string"}}),
-                                        ("get_jira_issue", {"issue_key": {"type": "string"}}),
-                                        ("add_jira_comment", {"issue_key": {"type": "string"}, "comment": {"type": "string"}}),
-                                        ("get_jira_transitions", {"issue_key": {"type": "string"}}),
-                                        ("transition_jira_issue", {"issue_key": {"type": "string"}, "transition_id": {"type": "string"}}),
-                                    ]]}
+                result = {"tools": [{"name": "echo", "description": "Scripted migration proof echo",
+                                     "inputSchema": {"type": "object", "properties": {"marker": {"type": "string"}}},
+                                     "annotations": {"readOnlyHint": True}}]}
             elif method == "tools/call":
                 name, args = params["name"], params.get("arguments", {})
                 record({"event": "call", "name": name, "args": args})
-                if name == "echo":
-                    value = {"marker": args["marker"], "private": PRIVATE}
-                elif name == "get_jira_issue":
-                    value = {"key": args["issue_key"],
-                             "self": "https://jira.example.test/rest/api/2/issue/1",
-                             "fields": {"summary": TITLE, "status": {"name": "Open"}}}
-                elif name == "get_jira_transitions":
-                    value = {"transitions": [{"id": "2", "name": "Done"}]}
-                else:
-                    value = {"ok": True}
+                value = {"marker": args["marker"], "private": PRIVATE} if name == "echo" else {"ok": True}
                 result = {"content": [{"type": "text", "text": json.dumps(value)}],
                           "structuredContent": value}
-                if name == "add_jira_comment" and args.get("comment") == "reject-proof":
-                    result = {"isError": True, "content": [{"type": "text", "text": "Scripted Jira rejection"}]}
             elif method == "ping":
                 result = {}
             else:
@@ -206,8 +187,6 @@ class Rpc:
                 continue
             self.events.append(record)
             require("invalid_output" not in record, str(record))
-            if record.get("type") == "extension_ui_request" and record.get("method") == "confirm":
-                self.send({"type": "extension_ui_response", "id": record["id"], "confirmed": True})
             if predicate(record):
                 return record
         raise AssertionError("Timed out waiting for real Pi RPC: " + self.errors.decode(errors="replace"))
@@ -270,20 +249,11 @@ def tui_proof(command, env, cwd, trace):
         os.write(master, b"/mcp\r")
         wait("MCP servers")
         wait("fixture")
-        wait("jira")
-        start = len(output)
         os.write(master, b"\x1b")
         # Keep Escape separate from subsequent bytes (otherwise it is an Alt
         # sequence). Diff-rendered/queued terminal output cannot prove closure;
         # wait for the real custom-dialog completion boundary instead.
         wait("native MCP manager closed", predicate=closed.exists)
-        start = len(output)
-        os.write(master, b"/issue bind jira PROOF-1\r")
-        wait("Bound jira: PROOF-1", start)
-        start = len(output)
-        os.write(master, b"/issue show jira\r")
-        wait(TITLE, start)
-        require("Jira MCP connect failed" not in ANSI.sub("", output.decode(errors="replace")), "TUI Jira failed")
     finally:
         try:
             os.write(master, b"\x04")  # User-facing Ctrl+D exit from the empty editor.
@@ -387,7 +357,7 @@ def main():
         env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"), PI_CODING_AGENT_DIR=str(agent),
                    PI_OFFLINE="1", MCP_PROOF_VALUE="native-env-proof")
         generator_proof(temp, env, agent)
-        write_json(agent / "mcp.json", {"mcpServers": {"fixture": fixture, "jira": fixture}})
+        write_json(agent / "mcp.json", {"mcpServers": {"fixture": fixture}})
         handler = type("BoundModelHandler", (ModelHandler,), {"requests": [], "errors": []})
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -395,9 +365,7 @@ def main():
             "baseUrl": f"http://127.0.0.1:{server.server_port}/v1", "api": "openai-completions", "apiKey": "proof-only",
             "models": [{"id": "proof-model", "reasoning": False, "input": ["text"], "contextWindow": 100000,
                         "maxTokens": 4096, "compat": {"supportsStrictMode": False}}]}}})
-        issue = temp / "issue"
-        shutil.copytree(ROOT / "dot_pi/private_agent/extensions/issue", issue)
-        command = [pi, "--no-session", "--offline", "--no-context-files", "-e", str(issue)]
+        command = [pi, "--no-session", "--offline", "--no-context-files"]
         try:
             listing = subprocess.run([pi, "mcp", "list", "--json"], env=env, cwd=project,
                                      capture_output=True, text=True, check=True, timeout=TIMEOUT)
@@ -417,15 +385,6 @@ def main():
                 require(len(nested) == 6 and {event["toolName"] for event in nested}
                         == {"mcp__fixture__echo", "write", "edit", "read", "bash"},
                         "Calls bypassed native nested-tool events")
-                for message in ("/issue bind jira PROOF-1", "/issue show jira", "/issue sync jira proof-comment",
-                                "/issue transition jira Done", "/issue sync jira reject-proof"):
-                    rpc.command("prompt", message=message)
-                notifications = json.dumps(rpc.events)
-                require(TITLE in notifications and "Synced to jira: PROOF-1" in notifications
-                        and "Transitioned PROOF-1" in notifications, "Jira commands did not complete")
-                require("Scripted Jira rejection" in notifications, "Jira isError was not surfaced")
-                confirms = [event for event in rpc.events if event.get("method") == "confirm"]
-                require(len(confirms) == 3, "Jira write confirmation gates were bypassed")
             finally:
                 rpc.close()
             tui_proof(command, env, project, trace)
@@ -448,10 +407,8 @@ def main():
                 os.kill(pid, signal.SIGTERM)  # Only this proof's own backends.
             require(not remaining, f"Native MCP backend processes survived shutdown: {remaining}")
             require(sum(row.get("name") == "echo" for row in calls) == 2, "Stored probe re-called MCP unexpectedly")
-            require(any(row.get("name") == "transition_jira_issue" and row["args"]["transition_id"] == "2"
-                        for row in calls), "Native Jira client sent the wrong argument shape")
             require(not handler.errors, str(handler.errors))
-            print("PASS: personal/work codemode-only settings; native CLI and /mcp; codemode discovery, parallel calls, filtering, nested events, stored-result coherence; script-only read/write/edit and shell failure; real /issue reads, writes, confirmations, errors; TUI manager and Jira show.")
+            print("PASS: personal/work codemode-only settings; native CLI and /mcp; codemode discovery, parallel calls, filtering, nested events, stored-result coherence; script-only read/write/edit and shell failure; TUI manager.")
             print("No live provider calls, user configuration changes, or persistent test resources.")
         finally:
             server.shutdown()

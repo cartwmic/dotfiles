@@ -169,8 +169,6 @@ Library/LaunchAgents/local.qmd-refresh.plist
 .pi/agent/extensions/auto-session-name.json
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
-.pi/agent/extensions/issue
-.pi/agent/extensions/issue/**
 # Anthropic stalls are only seen on the work profile.
 .pi/agent/extensions/anthropic-stall-retry
 .pi/agent/extensions/anthropic-stall-retry/**

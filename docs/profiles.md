@@ -20,8 +20,7 @@ How to read a row:
 | `.local/share/instances/launchd/local.coordinatord.work.plist` | axon-work-computer (macOS) | The work coordinator's unit (Matrix); personal runs `local.coordinatord.plist`. |
 | `.pi/agent/extensions/pi-codex-fast.json` | personal | Codex Fast is configured only in personal Pi settings. |
 | `.pi/agent/extensions/auto-session-name.json` | personal | Session titles use the personal Codex login. |
-| `.local/user_scripts/configure_rustdesk.sh` | personal | reason needed (owner) |
-| `.pi/agent/extensions/openrouter-gate` | personal | reason needed (owner) |
-| `.pi/agent/extensions/claude-compat-guard` | personal | reason needed (owner) |
-| `.pi/agent/extensions/issue` | axon-work-computer | reason needed (owner) |
+| `.local/user_scripts/configure_rustdesk.sh` | personal | The homelab remote-access setup and its personal vault item do not belong on the work Mac. |
+| `.pi/agent/extensions/openrouter-gate` | personal | The work profile keeps its own OpenRouter posture, not the personal setup. |
+| `.pi/agent/extensions/claude-compat-guard` | personal | It rides on the personal Claude login; work uses its own provider. |
 | `.pi/agent/extensions/anthropic-stall-retry` | axon-work-computer | Anthropic stalls are only seen on the work profile. |
