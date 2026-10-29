@@ -55,7 +55,10 @@ A LaunchAgent, `local.agent-events` (source `Library/LaunchAgents/local.agent-ev
 `run_onchange_after_70_agent_events_launchd.sh.tmpl`), runs `agent-events run` every 2 minutes on a Mac where `agentEvents.enabled` is true (nice 10; not launchd's Background class, which macOS throttles to a standstill on a busy machine):
 
 1. an incremental `build` (a few seconds; the first full build takes about 80 s; ticks and manual `agent-events build` runs take one lock, so they wait for each other instead of racing);
-2. an aggregate-metrics push to the homelab OTel collector, when `AGENT_EVENTS_OTLP_ENDPOINT` is set;
+2. an aggregate-metrics push to the homelab OTel collector, when `AGENT_EVENTS_OTLP_ENDPOINT` is set. It also needs
+   `AGENT_EVENTS_MACHINE`, a slug (a lowercase letter, then up to 31 lowercase letters, digits or hyphens): without one the tick
+   builds but sends nothing and logs that once. Both come from the plist (settings below), so a shell does not have them:
+   `agent-events status` shows the label the last scheduled run used, not the shell's;
 3. a 20-minute watchdog (`AGENT_EVENTS_TICK_LIMIT_S`, a positive number of seconds) that stops a stuck tick so it releases the lock. It is a soft deadline (a SIGALRM handler runs when SQLite or a network call returns), not a hard kill;
 4. `status.json`, `agent.log` (rotated at 1 MB) and a lock file in `~/.local/state/agent-events/`.
 
@@ -97,6 +100,8 @@ histograms for LLM and tool calls. Labels: `project` (the repository the cwd bel
 only repositories found under `~/git` and `/Volumes/Workshop/macbook/git` or listed in `AGENT_EVENTS_PROJECTS`
 (colon-separated) are named, anything else is `other`), `kind` (`top` or `subagent`), `provider`, `model`, `tool`, `outcome`, `phase`, `event`, `detail` (error class).
 Provider, model and tool names must look like an identifier (a path becomes `other`).
+Every series also carries `machine` (`AGENT_EVENTS_MACHINE`; a resource attribute, which the collector turns into a label), so two Macs
+never write the same series.
 No path, prompt, tool argument, result or error text. The only session identifier is the whole session id (a UUID; anything else is not exported) on the four cache gauges below. `agent-events export` previews the series per metric (about 1,600) and
 sends nothing (`--dry-run` is accepted and has no effect).
 
@@ -110,8 +115,9 @@ The homelab `PrometheusRule` `pi-cache` alerts on them.
 Counters are monotonic by construction. The database is recomputed on every build, so a total can fall (a removed file,
 a moved dedupe owner, an unknown duration). The exporter keeps its own accounting in `export_state.json`: an exported value only
 rises by the positive change since the last tick, so a recomputation never looks like a Prometheus counter reset. The first push,
-a lost or unusable state file, and a changed project map or schema all start a baseline: current totals become the reference and the
-exported values start at 0 (a lost state file also starts a new start time), so history is never counted as activity. After that a new
+a lost or unusable state file, and a changed project map, schema or machine label all start a baseline: current totals become the reference,
+so history is never counted as activity. Series new at that point start at 0; known ones keep their exported value and grow from there
+(a lost state file starts every series at 0 with a new start time). Growth during the baseline tick itself is not counted. After that a new
 series is sent as 0 until that POST succeeds and its growth is added afterwards, so the first error of a new kind is counted. Values are
 checkpointed to disk before each POST, and every known series is sent on every tick, so a series that vanishes keeps its value.
 Known limit: when copied history moves between sessions (forks) a drop in one series and a rise in another can both occur; the rise is

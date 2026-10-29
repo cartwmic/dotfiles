@@ -807,9 +807,10 @@ class Tick(Base):
         super().setUp()
         self.state = Path(self._tmp.name) / "state"
         self._env = {k: os.environ.get(k) for k in ("AGENT_EVENTS_STATE_DIR", "AGENT_EVENTS_OTLP_ENDPOINT",
-                                                      "AGENT_EVENTS_PROJECTS")}
+                                                      "AGENT_EVENTS_PROJECTS", "AGENT_EVENTS_MACHINE")}
         os.environ["AGENT_EVENTS_STATE_DIR"] = str(self.state)
         os.environ["AGENT_EVENTS_PROJECTS"] = "proj"  # the synthetic project is an approved workstream
+        os.environ["AGENT_EVENTS_MACHINE"] = "test-mac"  # nothing is sent without a machine label (MachineLabel)
         os.environ.pop("AGENT_EVENTS_OTLP_ENDPOINT", None)
         self.addCleanup(self._restore)
         standard_session().write(self.top())
@@ -1461,6 +1462,140 @@ class ExportSafety(Tick):
         self.assertEqual(value(), 1)               # the database says 1 again; the exported counter does not go backwards
         am.run_once(self.root, self.db)
         self.assertEqual(value(), 1)
+
+
+
+class MachineLabel(Tick):
+    """Every push names its machine (AGENT_EVENTS_MACHINE), so two Macs never write the same series."""
+
+    def metrics_of(self, req):
+        return req["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+
+    def resource_of(self, req):
+        return {a["key"]: a["value"]["stringValue"] for a in req["body"]["resourceMetrics"][0]["resource"]["attributes"]}
+
+    def sessions_value(self, req, project="proj"):
+        fam = [m for m in self.metrics_of(req) if m["name"] == "pi_sessions"][0]
+        pts = {next(a["value"]["stringValue"] for a in p["attributes"] if a["key"] == "project"): p["asDouble"]
+               for p in fam["sum"]["dataPoints"]}
+        return pts.get(project)
+
+    def test_only_a_slug_is_a_machine_label(self):
+        for good in ("personal", "work", "test-fake", "a", "mac2", "a" + "b" * 31):
+            os.environ["AGENT_EVENTS_MACHINE"] = good
+            self.assertEqual(am.machine(), good, good)
+        for bad in ("", "Work", "my mac", "my-mac ", " work", "a/b", "../x", "-x", "1mac", "work_mac", "mac.local",
+                    "mac\n", "a" * 33, "w\u00f6rk", "\u0440ersonal"):
+            os.environ["AGENT_EVENTS_MACHINE"] = bad
+            self.assertIsNone(am.machine(), repr(bad))
+        os.environ.pop("AGENT_EVENTS_MACHINE")
+        self.assertIsNone(am.machine())
+
+    def test_a_tick_without_a_valid_machine_label_sends_nothing_and_says_why(self):
+        c = self.collector()
+        for value in (None, "", "Work Mac", "../x"):
+            if value is None:
+                os.environ.pop("AGENT_EVENTS_MACHINE", None)
+            else:
+                os.environ["AGENT_EVENTS_MACHINE"] = value
+            self.assertEqual(am.run_once(self.root, self.db), 1, repr(value))
+            self.assertEqual(c.requests, [], repr(value))
+            self.assertIn("AGENT_EVENTS_MACHINE", self.status()["last_export_error"], repr(value))
+            self.assertNotIn("last_export_ok_ts", self.status(), repr(value))
+            self.assertTrue(self.status()["last_build_ok_ts"], "the build still runs")
+            # refused before any accounting: no checkpoint, so the first real push is still a clean baseline
+            self.assertFalse((self.state / "export_state.json").exists(), repr(value))
+        self.assertEqual((self.state / "agent.log").read_text().count("AGENT_EVENTS_MACHINE is unset"), 1)
+        text, _ = am.cmd_status()
+        self.assertIn("machine label         : not set in the scheduled run (AGENT_EVENTS_MACHINE)", text)
+        os.environ["AGENT_EVENTS_MACHINE"] = "test-mac"
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertEqual(len(c.requests), 1)
+        self.assertIsNone(self.status()["last_export_error"])
+        self.assertIn("machine label         : test-mac", am.cmd_status()[0])
+
+    def test_status_reports_the_scheduled_runs_label_not_the_shells(self):
+        # The label lives in the LaunchAgent's environment; 'agent-events status' runs in a shell that does not have it.
+        self.build()
+        self.collector()
+        self.assertIn("machine label         : unknown", am.cmd_status()[0])
+        self.assertEqual(am.run_once(self.root, self.db), 0)   # the scheduled run, with AGENT_EVENTS_MACHINE=test-mac
+        del os.environ["AGENT_EVENTS_MACHINE"]                  # the interactive shell
+        self.assertIn("machine label         : test-mac", am.cmd_status()[0])
+        env = dict(os.environ, AGENT_EVENTS_STATE_DIR=str(self.state))
+        out = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "export"], capture_output=True, text=True, env=env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("machine: not set in this shell (AGENT_EVENTS_MACHINE)", out.stdout)
+        self.assertIn("the scheduled run uses the LaunchAgent's environment (chezmoi data agentEvents); its machine label: test-mac", out.stdout)
+
+    def test_post_refuses_a_payload_without_a_machine_label(self):
+        self.build()
+        c = self.collector()
+        con = ae.connect(self.db, readonly=True)
+        self.addCleanup(con.close)
+        metrics = am.collect(con) + am.self_metrics(con, {}, self.db)
+        for label in (None, "Not A Slug"):
+            with self.assertRaises(RuntimeError) as cm:
+                am.post(c.url, am.otlp_payload(metrics, 1, 2, label))
+            self.assertIn("machine label", am.safe_error(cm.exception))
+        self.assertEqual(c.requests, [])
+        am.post(c.url, am.otlp_payload(metrics, 1, 2, "test-mac"))
+        self.assertEqual(len(c.requests), 1)
+
+    def test_every_push_carries_the_machine_on_the_resource_not_on_the_points(self):
+        c = self.collector()
+        os.environ["AGENT_EVENTS_MACHINE"] = "test-fake"
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        req = c.requests[0]
+        self.assertEqual(self.resource_of(req), {"service.name": "agent-events", "machine": "test-fake"})
+        for m in self.metrics_of(req):
+            body = m.get("sum") or m.get("gauge") or m.get("histogram")
+            for p in body["dataPoints"]:
+                self.assertNotIn("machine", {a["key"] for a in p["attributes"]}, m["name"])
+        self.assertIn("pi_agent_events_export_timestamp_seconds", {m["name"] for m in self.metrics_of(req)})
+
+    def test_the_fingerprint_follows_the_machine_label(self):
+        a = am.fingerprint()
+        os.environ["AGENT_EVENTS_MACHINE"] = "other-mac"
+        self.assertNotEqual(a, am.fingerprint())
+        os.environ["AGENT_EVENTS_MACHINE"] = "test-mac"
+        self.assertEqual(a, am.fingerprint())
+
+    def test_a_new_machine_label_is_a_clean_baseline_not_a_history_spike(self):
+        c = self.collector()
+        os.environ["AGENT_EVENTS_MACHINE"] = "old-label"
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertEqual(self.sessions_value(c.requests[-1]), 0)   # first push: history is not activity
+        # The label changes (the first run with a label, or a renamed machine). Meanwhile two sessions with history
+        # appeared in a directory that becomes a new series ("other"); on the collector every series is new too.
+        for i in (2, 3):
+            f = Fixture(session_id=f"sess-{i}", cwd="/x/elsewhere")
+            f.user(T + 1000)
+            f.llm(T + 1500, T + 2500, stop="stop")
+            f.write(self.top(f"--x-elsewhere--/2026-10-01T00-00-0{i}-000Z_sess-{i}.jsonl"))
+        os.environ["AGENT_EVENTS_MACHINE"] = "new-label"
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertEqual(self.resource_of(c.requests[-1])["machine"], "new-label")
+        self.assertEqual(self.sessions_value(c.requests[-1]), 0)
+        self.assertEqual(self.sessions_value(c.requests[-1], "other"), 0)
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertEqual(self.sessions_value(c.requests[-1], "other"), 0, "the history of the new series stays out")
+        # real activity after the change is counted
+        f = Fixture(session_id="sess-4", cwd="/x/elsewhere")
+        f.user(T + 1000)
+        f.llm(T + 1500, T + 2500, stop="stop")
+        f.write(self.top("--x-elsewhere--/2026-10-01T00-00-04-000Z_sess-4.jsonl"))
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertEqual(self.sessions_value(c.requests[-1], "other"), 1)
+
+    def test_the_cli_preview_names_the_machine(self):
+        self.build()
+        env = dict(os.environ, AGENT_EVENTS_STATE_DIR=str(self.state))
+        for value, want in (("test-mac", "machine: test-mac"), ("Bad Label", "machine: not set in this shell (AGENT_EVENTS_MACHINE)")):
+            env["AGENT_EVENTS_MACHINE"] = value
+            out = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "export"], capture_output=True, text=True, env=env)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertIn(want, out.stdout)
 
 
 if __name__ == "__main__":
