@@ -84,7 +84,7 @@ The Gate lines in §2, §3 and §7 and items 1 and 2 below apply to new componen
 
 1. Build gates: dependency-boundary and layer checks (§2, §3, §7) and conformance suites (§6).
 2. Scaffold: new components start with the core/adapter split, the clean-architecture layers, a contract file, an empty conformance suite and the boundary checks configured.
-3. Design review: designs are reviewed against this document before code is written (§1, §3, §4, §8, §9, §10, §11, §12, §13).
+3. Design review: designs are reviewed against this document before code is written (§1, §3, §4, §8, §9, §10, §11, §12, §13, §14).
 4. Agent instructions: AGENTS.md files should reference this document. Instructions alone do not enforce compliance.
 
 Use the proportionality and trade-off checks in the existing design and review steps. Do not add separate gates for each check.
