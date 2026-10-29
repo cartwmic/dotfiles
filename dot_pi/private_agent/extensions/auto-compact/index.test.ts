@@ -597,6 +597,10 @@ describe("auto-compact threshold", () => {
 	});
 });
 
+// Session entries other than the pause markers (compacting / compacted).
+const events = (entries: Array<{ type: string; data: any }>) =>
+	entries.filter((e) => e.data.kind !== "compacting" && e.data.kind !== "compacted");
+
 describe("auto-compact breaker visibility and retry", () => {
 	const setup = (options: Record<string, unknown> = {}, ui = false) => {
 		const handlers = new Map<string, (event: unknown, ctx: any) => void>();
@@ -653,8 +657,8 @@ describe("auto-compact breaker visibility and retry", () => {
 		const logged = t.log();
 		expect(logged.map((e: any) => e.kind)).toEqual(["breaker_paused"]);
 		expect(logged[0]).toMatchObject({ thresholdPercent: 40, consecutiveIneffective: 2, retryInSeconds: 300 });
-		expect(t.entries.map((e) => e.type)).toEqual(["auto-compact"]);
-		expect(t.entries[0].data.kind).toBe("breaker_paused");
+		expect(t.entries.every((e) => e.type === "auto-compact")).toBe(true);
+		expect(events(t.entries).map((e) => e.data.kind)).toEqual(["breaker_paused"]);
 		expect(t.notices.some((n) => n.includes("paused") && n.includes("retry once in 300s"))).toBe(true);
 	});
 
@@ -663,7 +667,7 @@ describe("auto-compact breaker visibility and retry", () => {
 		t.settle(6);
 		expect(t.notices).toEqual([]);
 		expect(t.log().map((e: any) => e.kind)).toEqual(["breaker_paused"]);
-		expect(t.entries.length).toBe(1);
+		expect(events(t.entries).length).toBe(1);
 	});
 
 	test("after the cooldown exactly one retry runs, then it pauses again with a doubled wait", () => {
@@ -766,6 +770,88 @@ describe("auto-compact breaker visibility and retry", () => {
 		const t = setup({ logPath: "/nonexistent-dir/x/auto-compact.log" });
 		t.settle(6);
 		expect(t.calls()).toBe(2);
-		expect(t.entries.length).toBe(1);
+		expect(events(t.entries).length).toBe(1);
+	});
+});
+
+describe("auto-compact pause markers", () => {
+	// One ordered log of what the extension does: session entries, compact() calls and continuations.
+	const setup = (compact: (cb: any, h: Map<string, (event: any, ctx: any) => any>) => void, options: Record<string, unknown> = {}) => {
+		const handlers = new Map<string, (event: any, ctx: any) => any>();
+		const steps: Array<{ step: string; data?: any }> = [];
+		extension(
+			{
+				on: (name: string, handler: (event: any, ctx: any) => any) => handlers.set(name, handler),
+				registerCommand: () => {},
+				sendUserMessage: (text: string) => steps.push({ step: "send", data: text }),
+				appendEntry: (type: string, data: any) => steps.push({ step: type, data }),
+				events: { emit: () => {} },
+			} as any,
+			options,
+		);
+		const ctx = {
+			hasUI: false,
+			getContextUsage: () => ({ tokens: 148_800, contextWindow: 372_000 }),
+			compact: (cb: any) => {
+				steps.push({ step: "compact" });
+				compact(cb, handlers);
+			},
+		};
+		return { handlers, steps, ctx, markers: () => steps.filter((s) => s.step === "auto-compact").map((s) => s.data) };
+	};
+	const interTurn = (t: ReturnType<typeof setup>) => {
+		t.handlers.get("turn_end")?.({}, t.ctx);
+		t.handlers.get("turn_start")?.({}, t.ctx);
+	};
+
+	test("an inter-turn pause: compacting before the abort, compacted (resumeSent) before the continuation", () => {
+		const t = setup((cb) => cb.onComplete());
+		interTurn(t);
+		expect(t.steps.map((s) => (s.step === "auto-compact" ? s.data.kind : s.step))).toEqual(["compacting", "compact", "compacted", "send"]);
+		expect(t.markers()[0]).toMatchObject({ kind: "compacting", resume: true, tokens: 148_800, contextWindow: 372_000, checkPoint: "turn_end" });
+		expect(t.markers()[1]).toMatchObject({ kind: "compacted", resumeSent: true });
+		expect(typeof t.markers()[0].at).toBe("string");
+	});
+
+	test("a message typed during compaction: compacted says resumeSent false", () => {
+		const t = setup((cb, h) => {
+			h.get("input")?.({ type: "input", text: "STEER", source: "interactive" }, {});
+			cb.onComplete();
+		});
+		interTurn(t);
+		expect(t.markers().map((m) => [m.kind, m.resumeSent])).toEqual([["compacting", undefined], ["compacted", false]]);
+		expect(t.steps.some((s) => s.step === "send")).toBe(false);
+	});
+
+	test("a final compaction (agent_settled) is marked with no resume", () => {
+		const t = setup((cb) => cb.onComplete());
+		t.handlers.get("agent_settled")?.({}, t.ctx);
+		expect(t.markers().map((m) => [m.kind, m.resume ?? m.resumeSent])).toEqual([["compacting", false], ["compacted", false]]);
+	});
+
+	test("a failed compaction closes the pause with compaction_failed, before the continuation", () => {
+		const t = setup((cb) => cb.onError(new Error("summary failed")));
+		interTurn(t);
+		expect(t.steps.map((s) => (s.step === "auto-compact" ? s.data.kind : s.step))).toEqual(["compacting", "compact", "compaction_failed", "send"]);
+		expect(t.markers()[1]).toMatchObject({ kind: "compaction_failed", resumeSent: true, error: "summary failed" });
+	});
+
+	test("compact() throwing at once closes the pause with resumeSent false", () => {
+		const t = setup(() => {
+			throw new Error("no model");
+		});
+		interTurn(t);
+		expect(t.markers().map((m) => [m.kind, m.resumeSent])).toEqual([["compacting", undefined], ["compaction_failed", false]]);
+	});
+
+	test("a session shut down during compaction closes the pause; after compaction it writes nothing", () => {
+		const t = setup(() => {}); // compaction never finishes
+		interTurn(t);
+		t.handlers.get("session_shutdown")?.({}, t.ctx);
+		expect(t.markers().map((m) => [m.kind, m.resumeSent])).toEqual([["compacting", undefined], ["compaction_failed", false]]);
+		const done = setup((cb) => cb.onComplete());
+		interTurn(done);
+		done.handlers.get("session_shutdown")?.({}, done.ctx);
+		expect(done.markers().map((m) => m.kind)).toEqual(["compacting", "compacted"]);
 	});
 });
