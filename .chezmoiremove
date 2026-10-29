@@ -1,3 +1,9 @@
+# Retired 2026-10-28: the work-only Pi `issue` extension (the /issue command); no
+# longer needed. Removes the whole deployed directory on apply, including its
+# unmanaged state.json (the extension's own on/off override). No-op on personal,
+# which never received it. Prune once the work Mac has applied.
+.pi/agent/extensions/issue
+
 # Retired 2026-10-28: the Pi ntfy push extension (alerts were too noisy; owner
 # alerts go through notify-owner). Removes the whole deployed directory on apply,
 # including its unmanaged send.log, send.log.old and state.json. Prune once every
