@@ -120,6 +120,11 @@ Library/LaunchAgents/local.agent-events.plist
 70_agent_events_launchd.sh
 {{- end }}
 
+{{- if ne .chezmoi.os "darwin" }}
+# Agent browser (agent-harness README, "Agent browser"): macOS only, both desktop profiles. The Chrome launcher; the MCP entry is gated the same way in servers.json.tmpl.
+.local/bin/agent-chrome
+{{- end }}
+
 {{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
 # Coordinator and Retro LaunchAgent units (cartwmic/coordinator, cartwmic/retro): personal macOS.
 # They are inert copies; only the reconcile script puts a unit in ~/Library/LaunchAgents, and only for an opted-in instance.
