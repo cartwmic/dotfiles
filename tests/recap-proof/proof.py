@@ -573,6 +573,8 @@ def scenario_chezmoi() -> dict[str, Any]:
             if any(path == "bin/herdr-overview-proof" or path.startswith(".pi/agent/extensions/herdr-overview/")
                    or path.startswith(".local/share/herdr-overview/") for path in paths):
                 raise ProofFailure(f"{profile} profile still deploys the retired Herdr Overview")
+            if any(path.startswith(".pi/agent/extensions/recap/") for path in paths):
+                raise ProofFailure(f"{profile} profile still deploys the retired Pi recap extension")
     return {"targeted_dry_run": True, "current_profile": current_profile,
             "desktop_mappings_checked": mappings, "rendered_profiles": list(rendered_profiles),
             "recap_default_off": True,

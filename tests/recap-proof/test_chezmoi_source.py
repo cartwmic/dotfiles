@@ -42,7 +42,7 @@ elif 'managed' in args:
     if profile == 'termux':
         print('bin/passage-review')
     else:
-        print('.pi/agent/extensions/recap/index.ts')
+        print('.pi/agent/extensions/passage-review/index.ts')
 else:
     raise SystemExit('unexpected command')
 ''')

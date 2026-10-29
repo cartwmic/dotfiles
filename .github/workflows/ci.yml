@@ -4,7 +4,7 @@ name: CI
 # Also: Pi AGENTS.md render, release-tag skill import, session-recap store tests (fake backends only),
 # agent-events tests (synthetic session files only).
 # Not run here: *proof.py / journey scripts that drive a real Pi, Herdr or phone, and
-# anything needing 1Password or other secrets (tests/native-mcp, tests/pi-recap, tests/standing-reminder, ...).
+# anything needing 1Password or other secrets (tests/native-mcp, tests/standing-reminder, ...).
 
 on:
   pull_request:

@@ -400,16 +400,6 @@ Configure an unmanaged `~/.config/session-recap/config.local.toml` with an
 executable argv for manual recaps; the editable prompt templates and local
 configuration are covered in [`dot_local/share/session-recap/README.md`](./dot_local/share/session-recap/README.md).
 
-Pi has independent `/recap`, `/recap view`, `/recap history` and `/recap settings`
-commands. New defaults follow the current Pi model and enable settlement,
-active periodic (15 minutes), and before-compaction recaps; saved opt-outs and
-model overrides remain. Saved output is a two-line widget above the editor,
-with the full narrative available through `/recap view`. Pi's `timeZone` setting
-and CLI `time_zone` / `--time-zone` display local time by default, with UTC/IANA
-options; canonical record timestamps remain UTC. No CLI preferences are imported. See the
-[Pi recap guide](./dot_pi/private_agent/extensions/recap/README.md). Recap works
-without Herdr. Dated history remains outside Herdr.
-
 ## Passage review
 
 `passage-review` freezes a selected file or supplied snapshot, stores multiple
@@ -587,7 +577,7 @@ After `chezmoi apply`, complete the steps that apply to this host:
 - [personal macOS] Launch Docker Desktop once to accept its license and finish setup. See [Docker Provisioning](#docker-provisioning).
 - [personal macOS] Log in and launch RustDesk once on a fresh machine; grant Accessibility, Screen Recording, and, if needed, Input Monitoring permissions. See [RustDesk Provisioning](#rustdesk-provisioning).
 - [macOS] Run `agent-chrome` to start the agent browser, then sign in to each site once. See [Agent browser](./dot_local/share/agent-harness/README.md#agent-browser).
-- [recap users] Review Pi defaults/overrides with `/recap settings`; set a host-local CLI command for standalone recaps/Herdr groups if wanted. See [Portable recaps](#portable-recaps).
+- [recap users] Set a host-local CLI command for standalone recaps/Herdr groups if wanted. See [Portable recaps](#portable-recaps).
 
 After installing gvm, use a fresh zsh or load its script in the current shell.
 Select a supported version from `gvm listall` when prompted:
