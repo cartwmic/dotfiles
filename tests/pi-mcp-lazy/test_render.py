@@ -47,6 +47,7 @@ def render_canonical(profile="personal"):
     t = TMPL.read_text()
     work = "axon-work-computer"
     t = t.replace('{{ if eq .profile "axon-work-computer" }}work{{ else }}cartwmic{{ end }}', "work" if profile == work else "cartwmic")
+    t = re.sub(r'\{\{ if eq \.chezmoi\.os "darwin" \}\},(.*?)\{\{ end \}\}', lambda m: "," + m.group(1), t, flags=re.S)  # rendered as on macOS
     t = re.sub(r'\{\{ if eq \.profile "axon-work-computer" \}\},(.*?)\{\{ end \}\}', (lambda m: "," + m.group(1)) if profile == work else "", t, flags=re.S)
     return json.loads(t)
 
@@ -148,6 +149,11 @@ class RenderTests(unittest.TestCase):
             self.skipTest("baseline commit not available in this checkout")
         w_new = self.world()
         w_old = self.world()
+        # The baseline script stores a server's env only for the registering process; the Claude adapter now uses
+        # `claude mcp add -e` (tests/agent-browser), so the one canonical server with an env stays out of this comparison.
+        for w in (w_new, w_old):
+            servers = {k: v for k, v in w.canonical["mcpServers"].items() if k != "browser-harness"}
+            (w.canon / "mcp" / "servers.json").write_text(json.dumps({"mcpServers": servers}, indent=2))
         oldfile = w_old.tmp / "old_apply.sh"
         oldfile.write_text(old.stdout)
         w_old.script = oldfile
