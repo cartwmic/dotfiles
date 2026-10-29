@@ -95,7 +95,7 @@ Ambiguity (dist dir unresolvable, file missing, bad regex) ⇒ quiet.
 }
 ```
 
-Currently watched: none. ntfy and auto-compact now coordinate through a public
+Currently watched: none. goal and auto-compact now coordinate through a public
 extension event-bus contract rather than depending on pi's internal compaction
 abort ordering.
 

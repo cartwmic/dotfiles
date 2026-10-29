@@ -6,7 +6,7 @@
  *
  * state.json is never a chezmoi *source* file and the deployed dir is not an
  * `exact_` dir, so `chezmoi apply` never creates, tracks, or removes it. This
- * mirrors the ntfy / hindsight sidecar idiom and is why runtime edits here
+ * mirrors the hindsight sidecar idiom and is why runtime edits here
  * survive `chezmoi apply` (unlike the pre-existing in-memory-only on/off).
  */
 import * as fs from "node:fs";

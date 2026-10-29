@@ -96,8 +96,7 @@ or “evaluate the goal.” `turn_end` is per internal LLM turn (including retri
 and continuations). It is the wrong default for notify and for goal
 evaluation.
 
-[ntfy](./ntfy/README.md) notifies on `agent_settled`. [goal](./goal/) evaluates
-a completed attempt at `agent_end` and treats an error as terminal only at
+[goal](./goal/) evaluates a completed attempt at `agent_end` and treats an error as terminal only at
 `agent_settled` after Pi has exhausted retries. Some extensions (for example
 [auto-compact](./auto-compact/README.md)) still listen on `turn_end` for
 mid-run work; that does not make `turn_end` the notify/goal hook.
@@ -210,7 +209,6 @@ READMEs already in this tree:
 - [claude-compat-guard](./claude-compat-guard/README.md)
 - [hindsight](./hindsight/README.md)
 - [issue](./issue/README.md)
-- [ntfy](./ntfy/README.md)
 - [openrouter-gate](./openrouter-gate/README.md)
 - [pi-patch-guard](./pi-patch-guard/README.md)
 - [catalog-overlay-nudge](./catalog-overlay-nudge/README.md)
@@ -240,7 +238,7 @@ cd ./pi-patch-guard && node --test
 
 Other in-tree suites today: `anthropic-stall-retry/index.test.ts`, `auto-compact/index.test.ts`,
 `goal/helpers.test.ts`, `hindsight/index.test.ts`, `inspect-prompt/index.test.ts`,
-`issue/index.test.ts`, `ntfy/index.test.ts`, `openrouter-gate/index.test.ts`,
+`issue/index.test.ts`, `openrouter-gate/index.test.ts`,
 `web-search/config.test.ts`, `web-search/codex.test.ts`, and
 `learnings-monitor/` (`node --test`).
 `catalog-overlay-nudge` and `subagent` do not have tests yet. `passage-review`

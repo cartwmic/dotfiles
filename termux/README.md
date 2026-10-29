@@ -244,10 +244,11 @@ the chezmoi source separately.
 1. Launch Termux:Boot once, grant its requested permissions, disable battery
    optimization for Termux/Boot and ntfy as appropriate. Only a **future
    explicit reboot** can prove SSH auto-start; installation alone cannot.
-2. In ntfy subscribe to `https://ntfy.internal.cartwmic.com/pi`, grant
-   notifications, and send one harmless test. Check Android HTTPS trust and
-   DNS both on Wi-Fi and over the WireGuard path. Tap an actual pi notification;
-   a Termux session must be named **`macbook`** to focus that SSH/Herdr path.
+2. In ntfy, grant notifications and send one harmless test. Check Android
+   HTTPS trust and DNS both on Wi-Fi and over the WireGuard path. The Pi ntfy
+   extension that published turn pushes to `https://ntfy.internal.cartwmic.com/pi`
+   was removed on 2026-10-28, so test a jump with a hand-made Click URL. A Termux
+   session must be named **`macbook`** to focus that SSH/Herdr path.
    Name the interactive Work Mac `ssh mac-kvm` session **`mac-kvm`**.
 3. Restore/configure Whisperian's provider/profile/history through supported
    Android/app UI, grant microphone and its keyboard/Accessibility controls.
@@ -333,8 +334,6 @@ does not:
   `?host=` requires that build)
 - set Termux session names — name each visible session exactly the SSH alias
   (`macbook`, `remote`, …)
-- set producer identity — each pi machine needs `data.jumpSshHost` in *its*
-  `~/.config/chezmoi/chezmoi.yaml`, then apply *there*
 
 Do not scp jump scripts from a Mac as a substitute for phone apply.
 
