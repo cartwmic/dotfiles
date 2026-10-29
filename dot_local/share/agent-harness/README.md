@@ -117,6 +117,38 @@ menu. Credentials stay in the harness's local OAuth store, not in canonical
 configuration or 1Password adapter metadata. In a running Pi session, use
 `/reload` after applying, then `/mcp login ticktick`.
 
+## Agent browser
+
+A logged-in Chrome that agents can drive. macOS only, on both desktop profiles (`personal` and `axon-work-computer`).
+The work profile is on by Michael's decision (2026-10-29 11:33 PDT); the work Mac gets it only when Michael or the work
+coordinator runs `chezmoi apply` and the mise bootstrap there.
+
+| Piece | Source | Lands at |
+|---|---|---|
+| Google Chrome (brew cask) | `install-google-chrome` task in `dot_config/mise/config.toml`, part of `bootstrap` | `/Applications/Google Chrome.app` |
+| Launcher | `dot_local/bin/executable_agent-chrome` | `~/.local/bin/agent-chrome` |
+| MCP server `browser-harness` | `canonical/mcp/servers.json.tmpl` | `uvx --from "browser-harness[mcp]==0.1.13" browser-harness-mcp`, `BU_CDP_URL=http://127.0.0.1:9333` |
+
+The server entry is canonical, so Claude and Codex are given it too, as with every canonical server.
+
+Use:
+
+1. Start the browser: `agent-chrome`. It runs Chrome with `--remote-debugging-port=9333` and its own profile at
+   `~/.local/share/agent-chrome-profile`, and does nothing if port 9333 already answers. Its log is
+   `~/.local/state/agent-chrome/chrome.log`.
+2. Start or `/reload` Pi after an apply so it picks up the `browser-harness` server (`mcp__browser-harness__*` tools; check with `/mcp`).
+3. Sign in to each site once. The login stays in the profile across Chrome restarts. Either you sign in by hand, or the
+   agent does it with Pi's OS-level UI tools (`find_roots`, `observe_ui`, `act_ui`), for example clicking the
+   1Password prompt in the Chrome window. Do not use the harness's own clicks (`browser_click`, CDP) for that: they
+   cannot reach the 1Password menu (an extension iframe). Typed text and navigation through the harness are fine.
+4. The 1Password extension has to be installed in that Chrome profile, by hand, on each machine.
+
+Nothing about a login (cookie, password, token) is in this repository; it lives only in the profile directory on the machine.
+
+Run `agent-chrome` before the agent's first browser call; the harness attaches to a running Chrome and does not start one.
+The server is not wrapped by `pi-mcp-lazy` (idle it holds about 120 MB RSS). Add it to `servers.list.tmpl` and ship a seed if that matters.
+Tests: `tests/agent-browser`, `tests/mise/test_install_google_chrome.py`.
+
 ## Add A Canonical Skill
 
 Create a new directory under [`canonical/skills/`](./canonical/skills/) and place a `SKILL.md` file inside it.
