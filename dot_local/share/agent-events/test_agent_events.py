@@ -1507,12 +1507,26 @@ class MachineLabel(Tick):
             self.assertFalse((self.state / "export_state.json").exists(), repr(value))
         self.assertEqual((self.state / "agent.log").read_text().count("AGENT_EVENTS_MACHINE is unset"), 1)
         text, _ = am.cmd_status()
-        self.assertIn("not set (AGENT_EVENTS_MACHINE)", text)
+        self.assertIn("machine label         : not set in the scheduled run (AGENT_EVENTS_MACHINE)", text)
         os.environ["AGENT_EVENTS_MACHINE"] = "test-mac"
         self.assertEqual(am.run_once(self.root, self.db), 0)
         self.assertEqual(len(c.requests), 1)
         self.assertIsNone(self.status()["last_export_error"])
         self.assertIn("machine label         : test-mac", am.cmd_status()[0])
+
+    def test_status_reports_the_scheduled_runs_label_not_the_shells(self):
+        # The label lives in the LaunchAgent's environment; 'agent-events status' runs in a shell that does not have it.
+        self.build()
+        self.collector()
+        self.assertIn("machine label         : unknown", am.cmd_status()[0])
+        self.assertEqual(am.run_once(self.root, self.db), 0)   # the scheduled run, with AGENT_EVENTS_MACHINE=test-mac
+        del os.environ["AGENT_EVENTS_MACHINE"]                  # the interactive shell
+        self.assertIn("machine label         : test-mac", am.cmd_status()[0])
+        env = dict(os.environ, AGENT_EVENTS_STATE_DIR=str(self.state))
+        out = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "export"], capture_output=True, text=True, env=env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("machine: not set in this shell (AGENT_EVENTS_MACHINE)", out.stdout)
+        self.assertIn("the scheduled run uses the LaunchAgent's environment (chezmoi data agentEvents); its machine label: test-mac", out.stdout)
 
     def test_post_refuses_a_payload_without_a_machine_label(self):
         self.build()
@@ -1577,7 +1591,7 @@ class MachineLabel(Tick):
     def test_the_cli_preview_names_the_machine(self):
         self.build()
         env = dict(os.environ, AGENT_EVENTS_STATE_DIR=str(self.state))
-        for value, want in (("test-mac", "machine: test-mac"), ("Bad Label", "machine: not set (AGENT_EVENTS_MACHINE)")):
+        for value, want in (("test-mac", "machine: test-mac"), ("Bad Label", "machine: not set in this shell (AGENT_EVENTS_MACHINE)")):
             env["AGENT_EVENTS_MACHINE"] = value
             out = subprocess.run([sys.executable, str(CLI), "--db", str(self.db), "export"], capture_output=True, text=True, env=env)
             self.assertEqual(out.returncode, 0, out.stderr)

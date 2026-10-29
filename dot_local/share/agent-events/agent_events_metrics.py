@@ -650,6 +650,8 @@ def _tick(sessions_dir, db):
             quarantine(db)
             status["consecutive_build_failures"] = 0
     url = endpoint()
+    if url:  # what this scheduled run sees: 'agent-events status' runs in a shell without the LaunchAgent's environment
+        status["machine"] = machine()
     if url and Path(db).exists():
         try:
             con = ae.connect(db, readonly=True)
@@ -674,6 +676,13 @@ def _tick(sessions_dir, db):
     return code
 
 
+def machine_status(status):
+    """The label the last scheduled run used, not this shell's: the LaunchAgent's environment is not the shell's."""
+    if "machine" not in status:
+        return "unknown (no scheduled run with an endpoint has recorded one)"
+    return status["machine"] or "not set in the scheduled run (AGENT_EVENTS_MACHINE); nothing is sent"
+
+
 def cmd_status(max_age=MAX_STALE_S):
     status = load_status()
     now = time.time()
@@ -687,7 +696,7 @@ def cmd_status(max_age=MAX_STALE_S):
     build_age, export_age = age("last_build_ok_ts"), age("last_export_ok_ts")
     lines = [f"last successful build : {show(build_age)}",
              f"last successful export: {show(export_age)}" + ("" if endpoint() else "  (no OTLP endpoint configured here)"),
-             f"machine label         : {machine() or 'not set (AGENT_EVENTS_MACHINE); nothing is sent'}",
+             f"machine label         : {machine_status(status)}",
              f"sessions indexed      : {status.get('sessions', 'unknown')}",
              f"last build took       : {status.get('last_build_seconds', 'unknown')}s"]
     if status.get("last_build_error"):
