@@ -78,8 +78,8 @@ pi = [
 ]
 
 [ui.toast]
-# Show agent completion/attention inside attached clients. The existing Pi ntfy
-# extension continues to handle Android notifications while Termux is detached.
+# Show agent completion/attention inside attached clients. (The Pi ntfy push
+# extension was removed 2026-10-28; owner alerts go through notify-owner.)
 delivery = "herdr"
 
 [theme]

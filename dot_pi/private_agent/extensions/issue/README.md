@@ -149,7 +149,7 @@ Layered, later wins: **defaults → `config.json` → `state.json`**.
   and is created at runtime. Holds the runtime `on`/`off`/`toggle` state. It is
   never a chezmoi source file and the deployed dir is not `exact_`, so
   `chezmoi apply` never creates, tracks, or removes it — runtime edits survive
-  `apply`. Mirrors the ntfy / hindsight sidecar idiom.
+  `apply`. Mirrors the hindsight sidecar idiom.
 
 ## Nudges
 
