@@ -212,8 +212,7 @@ From the source root:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s dot_local/share/session-recap -p 'test_*.py' -v
-python3 tests/pi-recap/proof.py cli
-python3 tests/pi-recap/proof.py profiles
+python3 tests/recap-proof/proof.py recap
 # test_requests.py drives the public CLI for fences, retry, recursion,
 # storage faults, owned descendants, broken pipes and detached host exit.
 ```

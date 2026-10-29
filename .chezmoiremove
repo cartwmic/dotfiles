@@ -1,3 +1,10 @@
+# Retired 2026-10-29: the Pi recap extension (/recap and automatic periodic,
+# final-response and before-compaction recaps). Its automatic recaps flooded the
+# shared GLM server. Removes the whole deployed directory on apply, including its
+# unmanaged config.json. The standalone session-recap CLI stays. Prune once
+# every machine has applied.
+.pi/agent/extensions/recap
+
 # Retired 2026-10-28: the work-only Pi `issue` extension (the /issue command); no
 # longer needed. Removes the whole deployed directory on apply, including its
 # unmanaged state.json (the extension's own on/off override). No-op on personal,

@@ -13,10 +13,6 @@
 .local/share/agent-events/test_agent_events.py
 .local/share/agent-events/__pycache__
 .local/share/agent-events/__pycache__/**
-.pi/agent/extensions/recap/automation-fixture.ts
-.pi/agent/extensions/recap/automation-pty.py
-.pi/agent/extensions/recap/tui-smoke.py
-.pi/agent/extensions/recap/*.test.*
 .pi/agent/extensions/notify-owner/*.test.*
 .pi/agent/extensions/bash-default-timeout/*.test.*
 .pi/agent/extensions/anthropic-stall-retry/*.test.*

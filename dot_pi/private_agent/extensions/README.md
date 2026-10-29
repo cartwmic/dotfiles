@@ -202,7 +202,6 @@ Gates live in the repo-root `.chezmoiignore`:
 | [claude-compat-guard](./claude-compat-guard/README.md) | `personal` only |
 | [anthropic-stall-retry](./anthropic-stall-retry/README.md) | `axon-work-computer` only |
 | [auto session name](#auto-session-name) (package in settings) | `personal` only |
-| [recap](./recap/README.md) | `personal` and `axon-work-computer`; interactive TUI only; Termux skips `.pi` |
 | [standing-reminder](./standing-reminder/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [learnings-monitor](./learnings-monitor/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [system-one](./system-one/README.md) (docs; package in settings) | `personal` and `axon-work-computer`; Termux skips `.pi` |
@@ -226,7 +225,6 @@ READMEs already in this tree:
 - [learnings-monitor](./learnings-monitor/README.md)
 - [subagent](./subagent/README.md)
 - [passage-review](./passage-review/README.md)
-- [recap](./recap/README.md)
 - [web-search](./web-search/README.md)
 - [standing-reminder](./standing-reminder/README.md)
 - [system-one](./system-one/README.md)
@@ -254,20 +252,3 @@ Other in-tree suites today: `anthropic-stall-retry/index.test.ts`, `auto-compact
 and `standing-reminder` have `index.test.ts`. The standing
 reminder also has an isolated real-Pi journey and a separate capped live cache
 proof; see its [README](./standing-reminder/README.md).
-
-Recap's source-root proof entry point is `python3 tests/pi-recap/proof.py`
-with sections `cli`, `backend`, `tui`, `lifecycle`, and `profiles`. Receipts name observed cases and criterion associations; they are
-not blanket acceptance. Backend cases drive installed-SDK explicit/virtual routing
-and runtime-auth CLI publication/privacy. Lifecycle cases drive real disposable Pi:
-manual/full reuse, populated history search/view/scroll, settings/defaults/resume,
-tree/fork/clone coverage, cancellation, buffered generated-unsaved consumption,
-and gated switch/return/reload/shutdown with original-session resume. Reasoning
-and authenticated live-error privacy cases inspect records, requests, transcripts
-and captures, with retry and coverage-preserving follow-ups. Failed assertions or
-unavailable prerequisites fail closed. The final stable-tree matrix remains
-driver-owned and pending. The profile section uses a disposable explicit config without installing hooks;
-it does not preview or replace host configuration.
-
-Chezmoi apply and secret handling are not validated here; use repo-root
-`AGENTS.md`. Native touched-destination previews still require the effective
-host-config/read-hook and `op` preflight; no proof command authorizes apply.
