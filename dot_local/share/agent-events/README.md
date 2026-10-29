@@ -110,6 +110,11 @@ sends nothing (`--dry-run` is accepted and has no effect).
 `pi_cache_full_miss_calls_30m` (calls with cacheWrite above 50,000 tokens while under 20% of the prompt came from cache) and
 `pi_cache_uncached_tokens_30m` (cacheWrite + fresh input: prompt tokens not served from cache; the low-hit-ratio alert ignores sessions where this is small). Labels: `session` (the whole session id; a session whose id is not a UUID is skipped, so no free text can leave through it; look it up with `agent-events session <id>`), `project`, `model`.
 They are gauges, so the window is the whole state: they skip the counter accounting, a finished session's series expire, and they are not sent when a build fails.
+A fifth gauge, `pi_cache_miss_streak` (same labels), counts back-to-back full misses in one session and model: consecutive
+full-miss calls, each starting less than an hour (`CACHE_TTL_S`, the `PI_CACHE_RETENTION=long` cache lifetime) after the previous
+call ended. A call that is not a full miss resets it to 0; so does an idle gap of an hour or more, because after such a gap the
+cache may simply have expired, and that first miss counts as 1. It is sent while the session's last call ended under an hour ago.
+It never adds calls from different sessions together.
 The homelab `PrometheusRule` `pi-cache` alerts on them.
 
 Counters are monotonic by construction. The database is recomputed on every build, so a total can fall (a removed file,
