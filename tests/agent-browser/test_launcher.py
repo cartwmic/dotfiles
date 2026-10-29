@@ -13,14 +13,15 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/bin/executable_agent-chrome"
 
 FAKE_CHROME = """#!%s
-import http.server, json, os, sys
+import http.server, json, os, socketserver, sys
 open(os.environ["FAKE_ARGV"], "a").write(json.dumps(sys.argv[1:]) + "\\n")
 port = int([a for a in sys.argv if a.startswith("--remote-debugging-port=")][0].split("=")[1])
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
     def log_message(self, *a): pass
-http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
+# TCPServer, not HTTPServer: HTTPServer.server_bind calls getfqdn(), which can stall for many seconds on CI runners.
+socketserver.TCPServer(("127.0.0.1", port), H).serve_forever()
 """ % sys.executable
 
 SILENT_CHROME = "#!/bin/sh\necho \"$@\" >> \"$FAKE_ARGV\"\nsleep 30\n"
