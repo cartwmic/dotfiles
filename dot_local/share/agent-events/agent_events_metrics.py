@@ -33,6 +33,8 @@ MAX_STALE_S = 900
 CACHE_WINDOW_S = 1800           # trailing window for the per-session cache gauges
 FULL_MISS_WRITE_TOKENS = 50_000  # a "full miss": more than this many cache-write tokens ...
 FULL_MISS_READ_SHARE = 0.2       # ... while under this share of the prompt was read from cache
+CACHE_TTL_S = 3600               # prompt-cache lifetime (PI_CACHE_RETENTION=long): a longer idle gap may expire it
+STREAK_LOOKBACK_S = 86400        # how far back pi_cache_miss_streak looks for the start of a streak
 SESSION_LABEL_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 LOG_LIMIT = 1_000_000
 TICK_LIMIT_S = 1200
@@ -199,6 +201,7 @@ def cache_gauges(con, now):
                                   FULL_MISS_READ_SHARE of the prompt
     pi_cache_uncached_tokens_30m  cacheWrite + fresh input: the prompt tokens not served from cache. The low-hit-ratio alert
                                   needs it to ignore short sessions whose misses cost little (a 5-call subagent at 0.45)
+    pi_cache_miss_streak          back-to-back full misses (see miss_streaks; its own CACHE_TTL_S window)
     The window ends at now, so the result depends only on the database and now (the replay of past hours relies on it).
     Labels: session (the whole session id; sessions whose id is not a UUID are skipped, never pooled: a Pi session id is a UUID made of a
     start time and random bits, so it names the session for 'agent-events session <id>' and carries no content),
@@ -234,7 +237,50 @@ def cache_gauges(con, now):
     return [{"name": "pi_cache_hit_ratio_30m", "type": "gauge", "points": ratio},
             {"name": "pi_cache_calls_30m", "type": "gauge", "points": calls},
             {"name": "pi_cache_full_miss_calls_30m", "type": "gauge", "points": misses},
-            {"name": "pi_cache_uncached_tokens_30m", "type": "gauge", "points": uncached}]
+            {"name": "pi_cache_uncached_tokens_30m", "type": "gauge", "points": uncached},
+            {"name": "pi_cache_miss_streak", "type": "gauge", "points": miss_streaks(con, now)}]
+
+
+def _full_miss(cr, cw, fi):
+    return cw > FULL_MISS_WRITE_TOKENS and cr < FULL_MISS_READ_SHARE * (cr + cw + fi)
+
+
+def miss_streaks(con, now):
+    """pi_cache_miss_streak: back-to-back full misses per session and model, as gauge points.
+
+    The value is the number of consecutive full-miss calls at the end of that session and model's calls, where each
+    call started less than CACHE_TTL_S after the previous one ended. A call that is not a full miss ends the streak
+    (value 0), and so does an idle gap of CACHE_TTL_S or more: after such a gap the cache may simply have expired, so
+    the miss right after it counts as 1, not as the next one in a row. A session is exported while its last call ended
+    less than CACHE_TTL_S ago. Calls older than STREAK_LOOKBACK_S are not read, which caps a very long streak, not the
+    alert. Same full-miss test, same labels and same session-id rule as the 30-minute gauges."""
+    now_ms = int(now * 1000)
+    rows = con.execute(
+        "SELECT s.session_id, s.cwd, c.model, c.start_ms, c.end_ms, COALESCE(c.cache_read_tokens,0),"
+        " COALESCE(c.cache_write_tokens,0), COALESCE(c.fresh_input_tokens,0)"
+        " FROM calls c JOIN sessions s USING (path)"
+        " WHERE c.kind='llm' AND c.dup=0 AND c.end_ms > ? AND c.end_ms <= ?"
+        " AND COALESCE(c.cache_read_tokens,0) + COALESCE(c.cache_write_tokens,0) + COALESCE(c.fresh_input_tokens,0) > 0"
+        " AND s.session_id IN (SELECT s2.session_id FROM calls c2 JOIN sessions s2 USING (path)"
+        "   WHERE c2.kind='llm' AND c2.dup=0 AND c2.end_ms > ? AND c2.end_ms <= ?)"
+        " ORDER BY c.end_ms, c.start_ms",
+        (now_ms - STREAK_LOOKBACK_S * 1000, now_ms, now_ms - CACHE_TTL_S * 1000, now_ms)).fetchall()
+    state = {}  # key -> [streak, end_ms of the last call]
+    for sid, cwd, model, start, end, cr, cw, fi in rows:
+        label = (sid or "").lower()
+        if not SESSION_LABEL_RE.fullmatch(label):
+            continue
+        key = (label, ae.export_project(cwd), export_name(model))
+        streak, last_end = state.get(key, (0, None))
+        if not _full_miss(cr, cw, fi):
+            streak = 0
+        elif streak and last_end is not None and (start if start is not None else end) - last_end < CACHE_TTL_S * 1000:
+            streak += 1
+        else:
+            streak = 1
+        state[key] = (streak, end)
+    return [({"session": s, "project": p, "model": m}, float(streak))
+            for (s, p, m), (streak, last_end) in sorted(state.items()) if now_ms - last_end < CACHE_TTL_S * 1000]
 
 
 def self_metrics(con, status, db_path):

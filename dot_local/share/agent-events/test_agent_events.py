@@ -884,7 +884,7 @@ class CacheGauges(Tick):
         self.cache_session("01a16722-a003-7000-8000-000000000003", "c1", "claude-x", [(3, 100_000, 0, 10)])
         self.cache_session("01a16722-a004-7000-8000-000000000004", "d", "gpt-y", [(2, 1_000, 0, 99_000)])
         self.cache_session("01a16722-a005-7000-8000-000000000005", "e", "claude-x", [(45, 0, 90_000, 0)])  # idle for 45 min
-        g = self.gauges()
+        g = {k: v for k, v in self.gauges().items() if "pi_cache_calls_30m" in v}  # the streak gauge has its own window
         self.assertEqual(set(g), {("01a16722-a003-7000-8000-000000000003", "proj", "claude-x"), ("01a16722-a004-7000-8000-000000000004", "proj", "gpt-y")})
         self.assertAlmostEqual(g[("01a16722-a004-7000-8000-000000000004", "proj", "gpt-y")]["pi_cache_hit_ratio_30m"], 0.01)
 
@@ -899,6 +899,68 @@ class CacheGauges(Tick):
         self.cache_session("01a16722-a006-7000-8000-00000000000a", "j", "claude-x", [(3, 100_000, 0, 10), (-5, 0, 90_000, 0)])
         v = self.gauges()[("01a16722-a006-7000-8000-00000000000a", "proj", "claude-x")]
         self.assertEqual((v["pi_cache_calls_30m"], v["pi_cache_full_miss_calls_30m"]), (1, 0))
+
+    def streaks(self):
+        return {k: v["pi_cache_miss_streak"] for k, v in self.gauges().items() if "pi_cache_miss_streak" in v}
+
+    def test_miss_streak_counts_back_to_back_full_misses(self):
+        HIT, MISS = (100_000, 0, 100), (0, 60_000, 50)
+        sid = "01a16722-a00c-7000-8000-00000000000c"
+        self.cache_session(sid, "s1", "claude-x", [(50, *HIT), (40, *MISS), (20, *MISS), (1, *MISS)])  # 20 and 19 min apart
+        self.assertEqual(self.streaks(), {(sid, "proj", "claude-x"): 3})
+
+    def test_a_single_miss_after_an_idle_gap_of_the_ttl_is_a_streak_of_one(self):
+        MISS = (0, 60_000, 50)
+        sid = "01a16722-a00d-7000-8000-00000000000d"
+        # Two misses well before, then 61 min idle (the cache may have expired), then one miss.
+        self.cache_session(sid, "s2", "claude-x", [(80, *MISS), (75, *MISS), (5, *MISS)])
+        self.assertEqual(self.streaks(), {(sid, "proj", "claude-x"): 1})
+
+    def test_a_gap_of_exactly_the_ttl_resets_the_streak(self):
+        MISS = (0, 60_000, 50)
+        sid = "01a16722-a00e-7000-8000-00000000000e"
+        # Each call starts 2 s before it ends, so starting 60 min after the previous end means ending 60 min + 2 s later.
+        self.cache_session(sid, "s3", "claude-x", [(70 + 2 / 60, *MISS), (10, *MISS), (5, *MISS)])
+        self.assertEqual(self.streaks(), {(sid, "proj", "claude-x"): 2})
+
+    def test_a_hit_in_between_resets_the_streak(self):
+        HIT, MISS = (100_000, 0, 100), (0, 60_000, 50)
+        sid = "01a16722-a00f-7000-8000-00000000000f"
+        self.cache_session(sid, "s4", "claude-x", [(9, *MISS), (8, *MISS), (7, *HIT), (6, *MISS), (5, *MISS)])
+        self.assertEqual(self.streaks(), {(sid, "proj", "claude-x"): 2})
+        sid2 = "01a16722-a010-7000-8000-000000000010"
+        self.cache_session(sid2, "s5", "claude-x", [(9, *MISS), (8, *MISS), (7, *MISS), (2, *HIT)])  # ends on a hit
+        self.assertEqual(self.streaks()[(sid2, "proj", "claude-x")], 0)
+
+    def test_sessions_and_models_keep_separate_streaks(self):
+        MISS = (0, 60_000, 50)
+        a, b = "01a16722-a011-7000-8000-000000000011", "01a16722-a012-7000-8000-000000000012"
+        self.cache_session(a, "s6", "claude-x", [(6, *MISS)])
+        self.cache_session(b, "s7", "claude-x", [(5, *MISS)])
+        self.assertEqual(self.streaks(), {(a, "proj", "claude-x"): 1, (b, "proj", "claude-x"): 1})
+        c = "01a16722-a013-7000-8000-000000000013"
+        f = Fixture(session_id=c, cwd="/work/proj", start=int(self.NOW * 1000) - 120 * self.MIN)
+        f.user(int(self.NOW * 1000) - 119 * self.MIN)
+        for ago, model in ((6, "claude-x"), (5, "claude-y"), (4, "claude-x"), (3, "claude-y")):
+            end = int(self.NOW * 1000) - ago * self.MIN
+            f.llm(end - 2000, end, cr=0, cw=60_000, fresh=50, stop="stop", model=model)
+        f.write(self.root / "--work-proj--/2026-10-01T00-00-00-000Z_s8.jsonl")
+        g = self.streaks()
+        self.assertEqual((g[(c, "proj", "claude-x")], g[(c, "proj", "claude-y")]), (2, 2))
+
+    def test_miss_streak_is_exported_while_the_last_call_is_under_the_ttl_old(self):
+        MISS = (0, 60_000, 50)
+        live, idle = "01a16722-a014-7000-8000-000000000014", "01a16722-a015-7000-8000-000000000015"
+        self.cache_session(live, "s9", "claude-x", [(100, *MISS), (70, *MISS), (45, *MISS)])  # last call 45 min ago
+        self.cache_session(idle, "s10", "claude-x", [(63, *MISS), (62, *MISS), (61, *MISS)])  # last call 61 min ago
+        g = self.gauges()
+        self.assertEqual(self.streaks(), {(live, "proj", "claude-x"): 3})
+        self.assertNotIn("pi_cache_calls_30m", g[(live, "proj", "claude-x")])  # outside the 30-minute gauges' window
+        self.assertNotIn((idle, "proj", "claude-x"), g)
+
+    def test_miss_streak_skips_a_non_uuid_session(self):
+        self.cache_session("not a uuid / with spaces", "s11", "claude-x", [(3, 0, 60_000, 0), (2, 0, 60_000, 0)])
+        self.assertEqual(self.streaks(), {})
 
     def test_calls_without_usage_are_not_counted_and_the_ratio_never_divides_by_zero(self):
         self.cache_session("01a16722-a007-7000-8000-000000000006", "f", "claude-x", [(3, 0, 0, 0), (2, 0, 0, 0)])
