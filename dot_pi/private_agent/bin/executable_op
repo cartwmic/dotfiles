@@ -1,0 +1,34 @@
+#!/bin/sh
+# op for shells that Pi starts. Pi puts ~/.pi/agent/bin first on the PATH of its bash tool and of ! commands, unless
+# that directory is already on Pi's own PATH (then it stays where it is). No other shell has it, so a terminal outside
+# Pi runs op unchanged.
+# With a 1Password service-account token (OP_SERVICE_ACCOUNT_TOKEN, or the token file below), the real op runs with an
+# empty HOME, so it uses the service account and never waits on the desktop app (under the real HOME a locked app can
+# hang it). Without a token, op runs unchanged. The token is never printed.
+set -eu
+
+# The real op: the first op on PATH that is not this file.
+real=
+IFS=:
+for dir in $PATH; do
+  [ -n "$dir" ] && [ -f "$dir/op" ] && [ -x "$dir/op" ] || continue
+  [ "$dir/op" -ef "$0" ] && continue
+  real="$dir/op"
+  break
+done
+unset IFS
+if [ -z "$real" ]; then
+  echo "op: the 1Password CLI is not installed (no op on PATH other than $0)" >&2
+  exit 127
+fi
+
+token_file="$HOME/.config/agent-harness/op-service-token"
+if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && [ -r "$token_file" ]; then
+  OP_SERVICE_ACCOUNT_TOKEN=$(cat "$token_file")
+  export OP_SERVICE_ACCOUNT_TOKEN
+fi
+[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] || exec "$real" "$@"
+
+op_home="${TMPDIR:-/tmp}/pi-op-home-$(id -u)"
+mkdir -p -m 700 "$op_home"
+exec env HOME="$op_home" "$real" "$@"
