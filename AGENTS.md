@@ -80,6 +80,10 @@ under `dot_termux/`, `bin/`, `private_dot_ssh/`, and `dot_bash_profile`. Load th
 [Termux guide](./termux/README.md) for the complete mapping and bootstrap traps,
 then verify mapping with the `termux` profile.
 
+Every brief and design for a dotfiles feature targets both the personal and axon-work-computer profiles, or says in one line why one is left out. Nothing is applied on the work Mac by an agent, and anything new an employer might care about is asked before it is built.
+[docs/profiles.md](./docs/profiles.md) lists every path that lands on one
+desktop profile and why; `tests/profiles` fails when a gate has no row.
+
 Shell scripts: POSIX where possible, `set -eu`, helpers from `utils.sh`
 (`is_macos`, `is_ubuntu`), log prefix `[script_name] LEVEL: message`, clean
 up temp dirs with traps.
