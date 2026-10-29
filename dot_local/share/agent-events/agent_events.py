@@ -1109,7 +1109,10 @@ def export_cmd(metrics, con, db, args):
     return "what the next scheduled run would send (nothing is sent by this command)\n" + table(rows, ["metric", "type", "series"]) + \
         f"\n{metrics.series_count(families)} series. Aggregates only: counts, seconds, tokens, notional cost; " + \
         f"labels are project, kind, provider, model, tool, outcome. The pi_cache_* gauges also carry the session id " + \
-        f"(UUIDs only) of sessions active in the last 30 minutes.\nendpoint: {where}"
+        f"(UUIDs only) of sessions active in the last 30 minutes.\nendpoint: {where}" + \
+        f"\nmachine: {metrics.machine() or 'not set in this shell (AGENT_EVENTS_MACHINE)'}" + \
+        f"\nthe scheduled run uses the LaunchAgent's environment (chezmoi data agentEvents); its machine label: " + \
+        metrics.machine_status(status)
 
 
 def make_parser():
