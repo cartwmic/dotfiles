@@ -31,6 +31,12 @@ data:
   # qmd:
   #   refresh: {enabled: true, intervalMinutes: 60}   # 15 to 1440; enabled: false removes the agent
   #   (add cleanup: false to stop the daily `qmd cleanup` that qmd-refresh runs at most once per 24 h; docs/qmd.md "Daily cleanup")
+  # Always-on agent-events metrics (macOS; dot_local/share/agent-events/README.md "Always on"). On by default on personal only.
+  # enabled: false unloads and removes the LaunchAgent on the next apply. A bad value fails the apply.
+  # agentEvents:
+  #   enabled: true
+  #   machine: work    # the machine label on every series: personal / work by default
+  #   endpoint: https://otel-collector.internal.cartwmic.com/v1/metrics
 
 hooks:
   read-source-state:
