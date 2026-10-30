@@ -160,6 +160,8 @@ Library/LaunchAgents/local.qmd-refresh.plist
 
 {{- if ne .profile "personal" }}
 .local/user_scripts/configure_rustdesk.sh
+# The Loop Engine bump applies on this machine; no agent applies on the work Mac (docs/profiles.md).
+.local/user_scripts/loop_engine_bump.py
 .pi/agent/extensions/openrouter-gate
 .pi/agent/extensions/openrouter-gate/**
 .pi/agent/extensions/claude-compat-guard
