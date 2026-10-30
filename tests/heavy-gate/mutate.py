@@ -19,7 +19,7 @@ HERE = Path(__file__).resolve().parent
 SCRIPT = HERE.parents[1] / "dot_local/bin/executable_heavy-gate"
 SELECT = {
     "rank": ["-k", "rank", "-k", "reader", "-k", "workstream"],
-    "gate": [arg for name in ("test_each_rule", "test_the_edges", "test_the_removed", "test_a_host_that", "test_a_check_says", "test_the_usage_text",
+    "gate": [arg for name in ("test_each_rule", "test_level_2", "test_the_edges", "test_the_removed", "test_a_host_that", "test_a_check_says", "test_the_usage_text",
                               "test_a_third_start", "test_every_rule_still", "test_every_broken_rule", "test_waits_for", "test_does_not_run",
                               "test_the_two_readings", "test_starts_do_not_share", "test_a_bad_window") for arg in ("-k", name)],
 }
@@ -57,7 +57,9 @@ RANK_MUTATIONS = [
     ("priorities always says off", "  if rank_on; then printf 'central rank: on", "  if false; then printf 'central rank: on"),
 ]
 
-PRESSURE = '  v=$(pressure_level); [ "$v" = 1 ]                       || {'
+PRESSURE = '  v=$(pressure_level); level_ok "$v"                      || {'
+MAXLEVEL = "MAX_PRESSURE_LEVEL=2  #"
+LEVEL_OK = "level_ok() { case $1 in '' | *[!0-9]*) return 1 ;; esac; awk -v v=\"$1\" -v m=\"$MAX_PRESSURE_LEVEL\" 'BEGIN { exit !(v + 0 >= 1 && v + 0 <= m + 0) }'; }"
 MEMORY = '  v=$(mem_free_pct);   meets "$v" ge "$MEM_FREE_MIN_PCT"  || {'
 TRY = "  if memory_rules && wait_window && memory_rules && {"
 BROKEN0 = "  broken=0\n" + PRESSURE
@@ -73,8 +75,12 @@ SWAPOUTS_BACK = ('  a=$(vm_stat | awk \'/^Swapouts:/ {sub(/\\.$/, "", $2); print
 
 GATE_MUTATIONS = [
     ("the pressure level is not checked", PRESSURE, '  v=$(pressure_level); true || {'),
-    ("pressure level 2 counts as normal", '[ "$v" = 1 ]', '[ "$v" -le 2 ] 2>/dev/null'),
-    ("an unreadable pressure level counts as normal", '[ "$v" = 1 ]', '[ "${v:-1}" = 1 ]'),
+    ("level 2 refuses again (the rule before 2026-10-30)", MAXLEVEL, "MAX_PRESSURE_LEVEL=1  #"),
+    ("level 3 is admitted", MAXLEVEL, "MAX_PRESSURE_LEVEL=3  #"),
+    ("level 4 (critical) is admitted", MAXLEVEL, "MAX_PRESSURE_LEVEL=4  #"),
+    ("level 0 is admitted", LEVEL_OK, LEVEL_OK.replace("v + 0 >= 1 &&", "v + 0 >= 0 &&")),
+    ("a level that is not a whole number is read as one", LEVEL_OK, LEVEL_OK.replace("'' | *[!0-9]*) return 1", "'') return 1")),
+    ("an unreadable pressure level counts as normal", PRESSURE, PRESSURE.replace('level_ok "$v"', 'level_ok "${v:-1}"')),
     ("memory free is not checked", MEMORY, '  v=$(mem_free_pct);   true || {'),
     ("memory free must be above 30%, not at it", ': v + 0 >= l + 0)', ': v + 0 > l + 0)'),
     ("memory free needs only 20%", "MEM_FREE_MIN_PCT=30", "MEM_FREE_MIN_PCT=20"),
