@@ -142,6 +142,7 @@ chezmoi init --apply https://github.com/cartwmic/dotfiles.git
 - Portable `session-recap` and `passage-review` workflows; Termux stays an SSH client.
 - [QMD](./docs/qmd.md) (`personal` and `axon-work-computer`): local keyword and semantic search over notes, repo docs, Pi recaps and Pi sessions; pinned install, collections, one agent skill, `qmd` on PATH for every shell, and an hourly refresh on macOS (launchd; interval and on/off in chezmoi data `qmd.refresh`) that runs `qmd cleanup` once a day (`qmd.refresh.cleanup`).
 - `workstream-rank of [--pane P]` prints a pane's priority (lower is more important; 1000 = unranked) from the coordinator's published `~/.local/share/coordinator/rank` (or `$WORKSTREAM_RANK_FILE`); `workstream-rank show` prints the stack. It never errors on a missing or corrupt file.
+- [`run-and-wake -- CMD`](./docs/run-and-wake.md) runs a job detached (for example `run-and-wake -- heavy-gate --wait 7200 -- CMD`) and, when it exits, sends one tagged `herdr agent prompt` to the Pi session that started it, so a worker can end its turn instead of polling. One log record set per job in `~/.local/state/run-and-wake/log.jsonl`.
 
 **Remote access:**
 

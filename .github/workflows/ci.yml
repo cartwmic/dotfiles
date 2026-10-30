@@ -54,6 +54,8 @@ jobs:
         run: python3 -m unittest discover -s tests/pi-op-shim -v
       - name: heavy-gate tests (fake host figures, any OS)
         run: python3 -m unittest discover -s tests/heavy-gate -v
+      - name: run-and-wake tests (fake herdr, real detach, real heavy-gate)
+        run: python3 -m unittest discover -s tests/run-and-wake -v
       - name: workstream-rank tests (golden fixture, real script)
         run: python3 -m unittest discover -s tests/workstream-rank -v
       - name: Agent-events tests
