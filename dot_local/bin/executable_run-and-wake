@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""run-and-wake: run a command detached, then wake the Pi session that started it.
+
+Usage: run-and-wake [--] CMD [ARGS...]
+       run-and-wake -- heavy-gate --wait 7200 -- CMD...
+
+Contract (docs/run-and-wake.md):
+- Returns at once. Prints the job id, the job's pid and its output file.
+- CMD runs in its own session, so it outlives the tool call or shell that started it.
+  Its stdout and stderr go to the output file.
+- When CMD exits (any status), at most one wake is attempted: one tagged
+  `herdr agent prompt` to the pane in $HERDR_PANE_ID, sent only if, at check time, that
+  pane shows the Pi session in $PI_SESSION_FILE captured at launch. Otherwise the wake is
+  skipped with a reason: no-pane, no-session, pane-gone, session-changed, herdr-error.
+- Best effort on the session (owner-accepted, ask #347): herdr's prompt targets a pane, not a
+  session, so a /new in the milliseconds between the check and the send can put the message
+  in the new session. That is logged as session_after on the wake record, not prevented.
+- If the pane shows a dialog (blocked), it waits for herdr to report another state, then sends.
+- Every job writes to ${XDG_STATE_HOME:-~/.local/state}/run-and-wake/log.jsonl, one JSON
+  record per line, all carrying the job id and a UTC time:
+    start  {cmd, cwd, pane, session, pid, output}
+    end    {exit, signal, duration_s}
+    blocked {}                      (pane showed a dialog; waiting)
+    wake   {result: sent|failed, error?, duration_s, session_after?}  (session_after: the pane
+           showed another session right after the send; herdr cannot make the send conditional)
+    skip   {reason, detail?}
+"""
+import json
+import os
+import secrets
+import shlex
+import signal
+import subprocess
+import sys
+import time
+import traceback
+from datetime import datetime, timezone
+
+NAME = "run-and-wake"
+STATE = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), NAME)
+LOG = os.path.join(STATE, "log.jsonl")
+
+
+def say(level, message):
+    print(f"[{NAME}] {level}: {message}", flush=True)
+
+
+def utc():
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def record(job, event, **fields):
+    line = json.dumps({"ts": utc(), "job": job, "event": event, **fields}, ensure_ascii=False) + "\n"
+    with open(LOG, "a", encoding="utf-8") as log:
+        log.write(line)
+
+
+def human(seconds):
+    s = int(round(seconds))
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m{s % 60:02d}s"
+    return f"{s // 3600}h{s % 3600 // 60:02d}m"
+
+
+# --- decision (pure): send, or skip and why ---
+
+def decide(pane, session, agent):
+    """agent is herdr's `agent get` reply: ("ok", agent_info) or ("error", code, message)."""
+    if not pane:
+        return ("skip", "no-pane", None)
+    if not session:
+        return ("skip", "no-session", None)
+    if agent[0] == "error":
+        if agent[1] in ("agent_not_found", "pane_not_found"):
+            return ("skip", "pane-gone", agent[2])
+        return ("skip", "herdr-error", f"{agent[1]}: {agent[2]}")
+    now = (agent[1].get("agent_session") or {}).get("value")
+    if now != session:
+        return ("skip", "session-changed", now)
+    if agent[1].get("agent_status") == "blocked":
+        return ("wait", "blocked", None)
+    return ("send", None, None)
+
+
+def message(job, status, seconds, cmd, output):
+    # one line: the text is typed into the pane, and a newline would submit early
+    what = " ".join(shlex.join(cmd).split())
+    return f"[{NAME} k:{job}] job finished: {status} after {human(seconds)}: {what}. Output: {output}"
+
+
+# --- herdr (the one external system) ---
+
+def herdr(*args):
+    try:
+        done = subprocess.run(["herdr", *args], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    except OSError as error:
+        return ("error", "herdr-missing", str(error))
+    reply = {}
+    for stream in (done.stdout, done.stderr):  # herdr prints errors as JSON on stderr
+        try:
+            reply = json.loads(stream)
+            break
+        except ValueError:
+            continue
+    if done.returncode != 0 or "error" in reply:
+        err = reply.get("error") or {}
+        return ("error", err.get("code", f"exit-{done.returncode}"), err.get("message", (done.stderr or done.stdout).strip()))
+    return ("ok", (reply.get("result") or {}).get("agent") or {})
+
+
+def wake(job, pane, session, text):
+    started = time.monotonic()
+    while True:
+        action, reason, detail = decide(pane, session, herdr("agent", "get", pane) if pane and session else None)
+        if action == "skip":
+            record(job, "skip", reason=reason, **({"detail": detail} if detail else {}))
+            return
+        if action == "send":
+            break
+        record(job, "blocked")
+        waited = herdr("agent", "wait", pane, "--until", "idle", "--until", "working", "--until", "done", "--until", "unknown")
+        if waited[0] == "error":  # a failed wait ends the wake like a failed get: pane-gone or herdr-error
+            _, reason, detail = decide(pane, session, waited)
+            record(job, "skip", reason=reason, detail=detail)
+            return
+    sent = herdr("agent", "prompt", pane, text)
+    took = round(time.monotonic() - started, 3)
+    if sent[0] == "ok":
+        # herdr's prompt targets a pane, not a session: the check above and this send are two calls. The pane's
+        # session right after the send is logged, so a session swapped in that window shows in the log.
+        after = herdr("agent", "get", pane)
+        now = (after[1].get("agent_session") or {}).get("value") if after[0] == "ok" else None
+        record(job, "wake", result="sent", duration_s=took, **({} if now == session else {"session_after": now}))
+    else:
+        record(job, "wake", result="failed", error=f"{sent[1]}: {sent[2]}", duration_s=took)
+
+
+# --- launch ---
+
+def tell(report, text):
+    """Best effort: the launcher may already be gone (its tool call ended), and the job must still be watched."""
+    try:
+        os.write(report, text.encode())
+    except OSError:
+        pass
+    finally:
+        os.close(report)
+
+
+def watch(job, cmd, output, pane, session, report):
+    """Runs in the detached process: start the job, wait for it, then wake."""
+    started = time.monotonic()
+    with open(output, "ab", buffering=0) as out:
+        try:
+            child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
+        except OSError as error:
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, pid=None, output=output)
+            tell(report, f"failed {error}")
+            out.write(f"[{NAME}] ERROR: could not start: {error}\n".encode())
+            record(job, "end", exit=127, signal=None, error=str(error), duration_s=0.0)
+            status = f"could not start ({error})"
+        else:
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, pid=child.pid, output=output)
+            tell(report, f"pid {child.pid}")
+            code = child.wait()
+            sig = signal.Signals(-code).name if code < 0 else None
+            record(job, "end", exit=code if code >= 0 else None, signal=sig, duration_s=round(time.monotonic() - started, 3))
+            status = f"killed by {sig}" if sig else f"exit {code}"
+    wake(job, pane, session, message(job, status, time.monotonic() - started, cmd, output))
+
+
+def main(argv):
+    if argv[:1] == ["--"]:
+        argv = argv[1:]
+    if argv[:1] in (["-h"], ["--help"]):
+        print(__doc__.strip())
+        return 0
+    if not argv or argv[0].startswith("-"):
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    os.makedirs(os.path.join(STATE, "jobs"), exist_ok=True)
+    job = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(3)
+    output = os.path.join(STATE, "jobs", job + ".log")
+    pane = os.environ.get("HERDR_PANE_ID") or None
+    session = os.environ.get("PI_SESSION_FILE") or None
+    read, report = os.pipe()
+    if os.fork() == 0:  # the watcher: its own session, so killing the launcher's process group leaves it alone
+        os.close(read)
+        os.setsid()
+        null = os.open(os.devnull, os.O_RDWR)
+        logfd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        os.dup2(null, 0)
+        os.dup2(logfd, 1)
+        os.dup2(logfd, 2)
+        try:
+            watch(job, argv, output, pane, session, report)
+        except BaseException:
+            traceback.print_exc()  # into the job's output file
+        finally:
+            os._exit(0)
+    os.close(report)
+    with os.fdopen(read) as pipe:
+        started = pipe.read()
+    if started.startswith("pid "):
+        say("INFO", f"job {job} started, {started}, output {output}")
+    else:
+        say("ERROR", f"job {job} could not start: {started[7:] or 'unknown'}; output {output}")
+    if not pane:
+        say("WARN", "no HERDR_PANE_ID: nothing will wake you when it ends")
+    elif not session:
+        say("WARN", "no PI_SESSION_FILE: nothing will wake you when it ends")
+    else:
+        say("INFO", f"when it ends, pane {pane} gets one prompt tagged [{NAME} k:{job}]; you can end your turn")
+    say("INFO", f"log {LOG}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
