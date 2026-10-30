@@ -79,6 +79,8 @@ The draft has a summary, inline comments, and an event: COMMENT, REQUEST_CHANGES
 - **Out-of-scope findings** get at most one mention in the summary, as pre-existing. They never block.
 - **APPROVE** is never the event while a confirmed blocker is in the draft.
 - **Every inline line** lies inside a diff hunk at head.
+- **Write the summary and inline comments in the owner's voice** with the no-ai-slop skill, review comments register. Change wording only: keep every finding, file:line, identifier and quoted string.
+- **Tell the owner** in your report that you used no-ai-slop for the draft.
 
 ## 6. Owner review, then post
 
