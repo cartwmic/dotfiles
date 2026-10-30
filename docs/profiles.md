@@ -20,6 +20,7 @@ How to read a row:
 | `.local/share/instances/launchd/local.coordinatord.work.plist` | axon-work-computer (macOS) | The work coordinator's unit (Matrix); personal runs `local.coordinatord.plist`. |
 | `.pi/agent/extensions/pi-codex-fast.json` | personal | Codex Fast is configured only in personal Pi settings. |
 | `.pi/agent/extensions/auto-session-name.json` | personal | Session titles use the personal Codex login. |
+| `.local/user_scripts/loop_engine_bump.py` | personal | It merges the Loop Engine bump PR and applies it on the machine it runs on, and an agent never applies on the work Mac, so it has no use there. The work Mac takes the merged pins and skills with the owner's own `chezmoi update`. |
 | `.local/user_scripts/configure_rustdesk.sh` | personal | The homelab remote-access setup and its personal vault item do not belong on the work Mac. |
 | `.pi/agent/extensions/openrouter-gate` | personal | The work profile keeps its own OpenRouter posture, not the personal setup. |
 | `.pi/agent/extensions/claude-compat-guard` | personal | It rides on the personal Claude login; work uses its own provider. |
