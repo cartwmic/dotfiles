@@ -196,9 +196,9 @@ authenticated `gh` and writes nothing without `--apply`.
 ```bash
 REPO="$(git rev-parse --show-toplevel)"
 TOOL="$REPO/dot_local/user_scripts/executable_import_release_skills.py"
-python3 "$TOOL" import v0.33.0 --source "$REPO" --pins               # preview: per-bundle added/changed/orphan files
-python3 "$TOOL" import v0.33.0 --source "$REPO" --pins --apply        # refuses (exit 3) while orphan files exist
-python3 "$TOOL" import v0.33.0 --source "$REPO" --pins --apply --prune  # after you inspected the orphans
+python3 "$TOOL" import v0.34.0 --source "$REPO" --pins               # preview: per-bundle added/changed/orphan files
+python3 "$TOOL" import v0.34.0 --source "$REPO" --pins --apply        # refuses (exit 3) while orphan files exist
+python3 "$TOOL" import v0.34.0 --source "$REPO" --pins --apply --prune  # after you inspected the orphans
 ```
 
 - **The tag.** It must be a published, non-prerelease release. The tool resolves it to one commit (printed; pass
