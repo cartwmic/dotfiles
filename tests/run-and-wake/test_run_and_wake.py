@@ -45,6 +45,8 @@ if verb == "get":
         "pane_id": pane, "agent": "pi", "agent_status": status,
         "agent_session": {"agent": "pi", "kind": "path", "source": "herdr:pi", "value": session}}}}))
 elif verb == "wait":
+    if os.path.exists(os.path.join(fake, "wait_error")):
+        fail("server_unavailable", "herdr server went away")
     time.sleep(0.5)  # the dialog closes
     open(status_file, "w").write("idle\n")
     print(json.dumps({"id": "cli:agent:wait", "result": {"type": "agent_status", "status": "idle"}}))
@@ -53,6 +55,9 @@ elif verb == "prompt":
         fail("agent_blocked", "agent is blocked")
     with open(os.path.join(fake, "prompts"), "a") as f:
         f.write(json.dumps({"pane": pane, "text": args[3]}) + "\n")
+    swap = os.path.join(fake, "swap_on_prompt")  # /new lands between the check and the send
+    if os.path.exists(swap):
+        open(panefile, "w").write(open(swap).read())
     print(json.dumps({"id": "cli:agent:prompt", "result": {"type": "ok"}}))
 '''
 
@@ -232,7 +237,54 @@ class RunAndWake(unittest.TestCase):
         records = self.replay(self.job_id(self.launch("--", "true")))
         self.assertReplay(records, "start", "end", "blocked", "wake")
         self.assertEqual(records[-1]["result"], "sent")
-        self.assertEqual([c[1] for c in self.calls()], ["get", "wait", "get", "prompt"])
+        calls = self.calls()
+        self.assertEqual([c[1] for c in calls], ["get", "wait", "get", "prompt", "get"])
+        self.assertNotIn("blocked", calls[1], "the wait ends on any state but blocked")
+        self.assertEqual(len(self.prompts()), 1)
+
+    def test_a_failed_wait_ends_the_wake_with_its_error(self):
+        (self.fake / "status").write_text("blocked\n")
+        (self.fake / "wait_error").write_text("")
+        records = self.replay(self.job_id(self.launch("--", "true")))
+        self.assertReplay(records, "start", "end", "blocked", "skip")
+        self.assertEqual([records[-1]["reason"], records[-1]["detail"]], ["herdr-error", "server_unavailable: herdr server went away"])
+        time.sleep(1)
+        self.assertEqual([c[1] for c in self.calls()], ["get", "wait"], "no retry loop, no prompt")
+
+    def test_a_session_swapped_during_the_send_shows_in_the_log(self):
+        # herdr's prompt names a pane, not a session; a /new between the check and the send cannot be refused, only seen
+        (self.fake / "swap_on_prompt").write_text("/sessions/after-new.jsonl\n")
+        records = self.replay(self.job_id(self.launch("--", "true")))
+        self.assertReplay(records, "start", "end", "wake")
+        self.assertEqual([records[-1]["result"], records[-1]["session_after"]], ["sent", "/sessions/after-new.jsonl"])
+
+    def test_a_normal_send_logs_no_session_after(self):
+        records = self.replay(self.job_id(self.launch("--", "true")))
+        self.assertNotIn("session_after", records[-1])
+
+    def test_the_watcher_survives_the_launcher_dying_before_it_reports(self):
+        # The watcher tells the launcher the job's pid. If Pi has already killed the launcher's process group, that report
+        # fails; the job must still be watched to its end and woken. The log is a FIFO so the watcher is held at its first
+        # record, before the report, until the launcher is dead.
+        self.log.parent.mkdir(parents=True)
+        os.mkfifo(self.log)
+        cmd, release = self.held_job()
+        launcher = subprocess.Popen([sys.executable, str(SCRIPT), "--", *cmd], env=self.env, cwd=self.root,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        time.sleep(1)
+        self.assertIsNone(launcher.poll(), "the launcher is still waiting for the report")
+        os.killpg(launcher.pid, signal.SIGKILL)
+        launcher.wait()
+        release.write_text("")
+        records = []
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and not (records and records[-1]["event"] in ("wake", "skip")):
+            fd = os.open(self.log, os.O_RDONLY | os.O_NONBLOCK)
+            with os.fdopen(fd) as fifo:
+                time.sleep(0.1)
+                records += [json.loads(line) for line in fifo.read().splitlines()]
+        self.assertReplay(records, "start", "end", "wake")
+        self.assertEqual(records[1]["exit"], 0)
         self.assertEqual(len(self.prompts()), 1)
 
     def test_a_refused_prompt_is_logged_and_not_retried(self):
