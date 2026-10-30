@@ -121,9 +121,11 @@ class HeavyGate(unittest.TestCase):
 
     def test_each_rule_refuses_on_its_own(self):
         cases = [
-            ({"pressure": "2"}, "memory pressure level 2"),
-            ({"pressure": "4"}, "memory pressure level 4"),
+            ({"pressure": "4"}, "memory pressure level 4 (needs 1 to 2)"),
+            ({"pressure": "3"}, "memory pressure level 3 (needs 1 to 2)"),
             ({"pressure": "0"}, "memory pressure level 0"),
+            ({"pressure": "2.5"}, "memory pressure level 2.5"),
+            ({"pressure": "-1"}, "memory pressure level -1"),
             ({"pressure": ""}, "memory pressure level unreadable"),
             ({"pressure": "1x"}, "memory pressure level 1x"),
             ({"memory_pressure": "System-wide memory free percentage: 20%"}, "memory free 20% (needs >= 30%)"),
@@ -138,6 +140,46 @@ class HeavyGate(unittest.TestCase):
                 result = self.gate()
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn(f"refused: {expected}", result.stderr)
+
+    def test_level_2_is_admitted_when_memory_free_is_at_least_30_percent(self):
+        # owner decision 2026-10-30: level 2 (warn) admits like level 1 while memory free is 30% or more; the Mac sat at level 2 and 40% free
+        for free in ("30", "40", "100"):
+            with self.subTest(free):
+                self.set(pressure="2", memory_pressure=f"System-wide memory free percentage: {free}%")
+                self.assertEqual(self.gate().returncode, 0)
+                marker = Path(self.tmp.name) / f"ran{free}"
+                result = self.gate("--", "touch", str(marker))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(marker.exists(), "a job runs at level 2")
+
+    def test_level_2_with_too_little_memory_free_is_refused(self):
+        for free in ("29", "20"):
+            with self.subTest(free):
+                self.set(pressure="2", memory_pressure=f"System-wide memory free percentage: {free}%")
+                result = self.gate()
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f"refused: memory free {free}% (needs >= 30%)", result.stderr)
+                self.assertNotIn("memory pressure level", result.stderr, "the level is fine; only memory free refuses")
+
+    def test_level_2_admits_a_second_and_a_third_start(self):
+        self.hold("a")
+        self.set(pressure="2", memory_pressure="System-wide memory free percentage: 40%")
+        self.assertEqual(self.gate("--", "true").returncode, 0, "slot 2 at level 2")
+        self.hold("b")
+        self.assertEqual(self.gate("--", "true").returncode, 0, "slot 3 at level 2")
+        self.hold("c")
+        self.assertEqual(self.gate("--", "true").returncode, 75, "three hold the gate: the slot cap still refuses")
+
+    def test_level_2_on_both_readings_and_a_turn_to_2_during_the_window_admit(self):
+        for start, hook in (("2", 'echo 2 > "$FAKE/pressure"'), ("1", 'echo 2 > "$FAKE/pressure"'), ("2", 'echo 1 > "$FAKE/pressure"')):
+            with self.subTest(f"{start} then {hook}"):
+                self.set(**QUIET)
+                self.set(pressure=start)
+                (self.fake / "pressure_reads").unlink(missing_ok=True)
+                (self.fake / "on_pressure").write_text(f'rm -f "$FAKE/on_pressure"\n{hook}\n')
+                result = self.gate("--", "true")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len((self.fake / "pressure_reads").read_text().split()), 2, "read before and after the window")
 
     def test_the_edges_of_the_two_memory_rules_are_allowed(self):
         # level 1 and exactly 30% free are fine; so is 100% free
@@ -215,7 +257,7 @@ class HeavyGate(unittest.TestCase):
     def test_a_host_that_turns_bad_during_the_check_window_is_refused_on_each_rule(self):
         # both memory rules are read again after the window; a first reading that was fine is not enough
         cases = [
-            ("on_pressure", 'echo 2 > "$FAKE/pressure"', "memory pressure level 2"),
+            ("on_pressure", 'echo 4 > "$FAKE/pressure"', "memory pressure level 4"),
             ("on_memory_pressure", 'echo "System-wide memory free percentage: 12%" > "$FAKE/memory_pressure"', "memory free 12%"),
         ]
         for name, hook, expected in cases:
@@ -264,7 +306,7 @@ class HeavyGate(unittest.TestCase):
                 self.set(**figures)
                 result = self.gate()
                 self.assertIn("a start is admitted on memory pressure only", result.stderr)
-                self.assertIn("level 1", result.stderr)
+                self.assertIn("level 1 to 2 and memory free", result.stderr)
                 self.assertIn("memory free >= 30%", result.stderr)
                 self.assertIn("two readings 1s apart", result.stderr)
                 self.assertIn("Not checked: free swap, Swapouts, load average", result.stderr)
@@ -282,15 +324,15 @@ class HeavyGate(unittest.TestCase):
         self.assertFalse(self.lock.is_symlink(), "the gate is released when the command ends")
 
     def test_does_not_run_the_command_when_memory_is_under_pressure(self):
-        self.set(pressure="2")
+        self.set(pressure="4")
         marker = Path(self.tmp.name) / "ran"
         result = self.gate("--", "touch", str(marker))
         self.assertEqual(result.returncode, 75, result.stderr)
         self.assertFalse(marker.exists(), "a refused job must not start")
-        self.assertIn("memory pressure level 2", result.stderr)
+        self.assertIn("memory pressure level 4", result.stderr)
 
     def test_waits_for_the_host_to_quiet_down_then_runs(self):
-        self.set(pressure="2")
+        self.set(pressure="4")
         marker = Path(self.tmp.name) / "ran"
         job = self.start("--wait", "20", "--", "touch", str(marker))
         time.sleep(2.5)
@@ -437,7 +479,7 @@ class HeavyGate(unittest.TestCase):
         self.assertEqual(self.gate().returncode, 2)
 
     RULE_CASES = [
-        ({"pressure": "2"}, "memory pressure level 2"),
+        ({"pressure": "4"}, "memory pressure level 4"),
         ({"memory_pressure": "System-wide memory free percentage: 20%"}, "memory free 20%"),
     ]
 
@@ -476,7 +518,7 @@ class HeavyGate(unittest.TestCase):
         self.hold("a")
         self.hold("b")
         cases = [
-            ("on_pressure", 'echo 2 > "$FAKE/pressure"', "memory pressure level 2"),
+            ("on_pressure", 'echo 4 > "$FAKE/pressure"', "memory pressure level 4"),
             ("on_memory_pressure", 'echo "System-wide memory free percentage: 12%" > "$FAKE/memory_pressure"', "memory free 12%"),
         ]
         for name, hook, expected in cases:
@@ -1099,7 +1141,7 @@ exit $rc
         result = self.gate("--help")
         self.assertEqual(result.returncode, 2)
         for expected in ("HEAVY_GATE_SLOTS", "HEAVY_GATE_SLOTS_FILE", "heavy-gate slots", "heavy-gate slots N", "Slots:", "heavy-gate priorities", "heavy-gate priority PATTERN NUMBER", "HEAVY_GATE_PRIORITY", "slot 2",
-                         "Only memory pressure gates a start", "Not checked, on purpose: free swap", "HEAVY_GATE_CHECK_WINDOW"):
+                         "Only memory pressure gates a start", "memory pressure level 1 or 2", "owner decision 2026-10-30: admit at level 2 when free >= 30%", "Not checked, on purpose: free swap", "HEAVY_GATE_CHECK_WINDOW"):
             self.assertIn(expected, result.stderr)
         for stale in ("load1 < 8", "Swapouts flat", "500 MB", "safety floor", "HEAVY_GATE_SWAP_WINDOW"):
             self.assertNotIn(stale, result.stderr)

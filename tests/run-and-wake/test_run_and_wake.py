@@ -313,7 +313,7 @@ class RunAndWake(unittest.TestCase):
             (self.bin / name).write_text(f"#!/bin/sh\n{body}\n")
             (self.bin / name).chmod(0o755)
         (self.bin / "heavy-gate").symlink_to(HEAVY_GATE)
-        for key, value in {**GATE_QUIET, "pressure": "2"}.items():  # memory pressure stays up: the gate gives up
+        for key, value in {**GATE_QUIET, "pressure": "4"}.items():  # memory pressure stays critical: the gate gives up
             (self.fake / key).write_text(value + "\n")
         gate_env = {"HEAVY_GATE_LOCK": str(self.root / "gate.lock"), "HEAVY_GATE_PRIORITIES": str(self.root / "priorities"),
                     "HEAVY_GATE_SLOTS_FILE": str(self.root / "slots"), "HEAVY_GATE_CHECK_WINDOW": "1", "HEAVY_GATE_POLL": "1",
