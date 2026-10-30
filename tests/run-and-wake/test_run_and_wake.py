@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -251,8 +252,10 @@ class RunAndWake(unittest.TestCase):
         time.sleep(1)
         self.assertEqual([c[1] for c in self.calls()], ["get", "wait"], "no retry loop, no prompt")
 
-    def test_a_session_swapped_during_the_send_shows_in_the_log(self):
-        # herdr's prompt names a pane, not a session; a /new between the check and the send cannot be refused, only seen
+    def test_a_session_swapped_at_the_send_is_logged_after_it(self):
+        # This checks post-send logging only, not delivery isolation: the fake accepts the prompt, then swaps the pane's
+        # session. Which session a check/send-race message lands in is not tested and not prevented: herdr's prompt names a
+        # pane, not a session, and Michael accepted that window (ask #347).
         (self.fake / "swap_on_prompt").write_text("/sessions/after-new.jsonl\n")
         records = self.replay(self.job_id(self.launch("--", "true")))
         self.assertReplay(records, "start", "end", "wake")
@@ -265,24 +268,34 @@ class RunAndWake(unittest.TestCase):
     def test_the_watcher_survives_the_launcher_dying_before_it_reports(self):
         # The watcher tells the launcher the job's pid. If Pi has already killed the launcher's process group, that report
         # fails; the job must still be watched to its end and woken. The log is a FIFO so the watcher is held at its first
-        # record, before the report, until the launcher is dead.
+        # record (the start record, written after the job starts and before the report) until the launcher is dead.
         self.log.parent.mkdir(parents=True)
         os.mkfifo(self.log)
-        cmd, release = self.held_job()
+        started, release = self.root / "started", self.root / "release"
+        cmd = ["sh", "-c", f"touch {started}; while [ ! -f {release} ]; do sleep 0.05; done"]
         launcher = subprocess.Popen([sys.executable, str(SCRIPT), "--", *cmd], env=self.env, cwd=self.root,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        time.sleep(1)
+        # Ready: the job runs, so the watcher has forked, left the launcher's session and started it. Its next step is the
+        # start record, which blocks on the FIFO until a reader opens it; the report comes after that.
+        deadline = time.monotonic() + 20
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(started.exists(), "the job started")
         self.assertIsNone(launcher.poll(), "the launcher is still waiting for the report")
         os.killpg(launcher.pid, signal.SIGKILL)
         launcher.wait()
         release.write_text("")
         records = []
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline and not (records and records[-1]["event"] in ("wake", "skip")):
-            fd = os.open(self.log, os.O_RDONLY | os.O_NONBLOCK)
-            with os.fdopen(fd) as fifo:
-                time.sleep(0.1)
-                records += [json.loads(line) for line in fifo.read().splitlines()]
+
+        def drain():  # each record is one open, write, close by the watcher: read each to EOF, whole lines only
+            while not (records and records[-1]["event"] in ("wake", "skip")):
+                with open(self.log) as fifo:  # blocks until the watcher opens it for its next record
+                    records.extend(json.loads(line) for line in fifo.read().splitlines())
+
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
+        reader.join(20)
+        self.assertFalse(reader.is_alive(), f"the watcher wrote a final record: {records}")
         self.assertReplay(records, "start", "end", "wake")
         self.assertEqual(records[1]["exit"], 0)
         self.assertEqual(len(self.prompts()), 1)
