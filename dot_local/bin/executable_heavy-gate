@@ -16,7 +16,9 @@
 #   heavy-gate priority PATTERN NUMBER  set (or update) one rule in the priorities file; a new rule goes first, so it wins
 #
 # The rules, all of which must hold for every start. Only memory pressure gates a start (owner decision, 2026-10-26):
-#   memory pressure level 1 (normal)    memory free >= 30% (the kernel's own pressure figure, as memory_pressure reports it)
+#   memory pressure level 1 or 2        memory free >= 30% (the kernel's own pressure figure, as memory_pressure reports it)
+#   (owner decision 2026-10-30: admit at level 2 when free >= 30%. Level 1 is normal, 2 warn, 4 critical; MAX_PRESSURE_LEVEL=2,
+#   so level 4, or any level that is not a whole number from 1 to 2, refuses)
 #   both hold on two readings 20 seconds apart: read, wait 20 seconds, read again, so the answer is about now, not 20 seconds ago
 #   a free slot: fewer heavy-gate jobs hold the gate than the slot limit (see Slots)
 #   no other job is in its 20-second check: a second start waits until the first has passed it (then it is running)
@@ -73,6 +75,7 @@
 set -eu
 
 MEM_FREE_MIN_PCT=30
+MAX_PRESSURE_LEVEL=2  # owner decision 2026-10-30: admit at level 2 (warn) when free >= 30%; level 4 (critical) refuses
 CHECK_WINDOW=${HEAVY_GATE_CHECK_WINDOW:-20}
 POLL=${HEAVY_GATE_POLL:-15}
 DEFAULT_SLOTS=3
@@ -100,10 +103,13 @@ mem_free_pct() { memory_pressure 2>/dev/null | awk '/free percentage/ {gsub("%",
 # $1 figure, $2 operator (lt or ge), $3 limit: true when the figure is a number that meets the rule
 meets() { number "$1" && awk -v v="$1" -v l="$3" -v op="$2" 'BEGIN { exit !(op == "lt" ? v + 0 < l + 0 : v + 0 >= l + 0) }'; }
 
+# $1 pressure level: true when it is a whole number from 1 to MAX_PRESSURE_LEVEL
+level_ok() { case $1 in '' | *[!0-9]*) return 1 ;; esac; awk -v v="$1" -v m="$MAX_PRESSURE_LEVEL" 'BEGIN { exit !(v + 0 >= 1 && v + 0 <= m + 0) }'; }
+
 # The memory rules. Prints one line per broken rule; returns 1 if any is broken. The only figures that gate a start.
 memory_rules() {
   broken=0
-  v=$(pressure_level); [ "$v" = 1 ]                       || { refuse "memory pressure level ${v:-unreadable} (needs 1)"; broken=1; }
+  v=$(pressure_level); level_ok "$v"                      || { refuse "memory pressure level ${v:-unreadable} (needs 1 to $MAX_PRESSURE_LEVEL)"; broken=1; }
   v=$(mem_free_pct);   meets "$v" ge "$MEM_FREE_MIN_PCT"  || { refuse "memory free ${v:-unreadable}% (needs >= $MEM_FREE_MIN_PCT%)"; broken=1; }
   return "$broken"
 }
@@ -415,7 +421,7 @@ resolve_slots
 case ${HEAVY_GATE_PRIORITY:-0} in '' | *[!0-9]* | ???????*) log ERROR "HEAVY_GATE_PRIORITY must be a whole number of at most 6 digits (lower is more important)"; exit 2 ;; esac
 [ "$(uname -s)" = Darwin ] || { log ERROR "macOS only"; exit 2; }
 if [ $# -eq 0 ]; then
-  log INFO "check: a start is admitted on memory pressure only: level 1 and memory free >= $MEM_FREE_MIN_PCT% on two readings ${CHECK_WINDOW}s apart, and a free slot. Not checked: free swap, Swapouts, load average."
+  log INFO "check: a start is admitted on memory pressure only: level 1 to $MAX_PRESSURE_LEVEL and memory free >= $MEM_FREE_MIN_PCT% on two readings ${CHECK_WINDOW}s apart, and a free slot. Not checked: free swap, Swapouts, load average."
   if try_gate 0; then log INFO "allowed"; exit 0; fi
   exit 1
 fi
