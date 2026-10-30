@@ -9,9 +9,12 @@ Contract (docs/run-and-wake.md):
 - CMD runs in its own session, so it outlives the tool call or shell that started it.
   Its stdout and stderr go to the output file.
 - When CMD exits (any status), at most one wake is attempted: one tagged
-  `herdr agent prompt` to the pane in $HERDR_PANE_ID, and only while that pane still
-  shows the Pi session in $PI_SESSION_FILE captured at launch. Otherwise the wake is
+  `herdr agent prompt` to the pane in $HERDR_PANE_ID, sent only if, at check time, that
+  pane shows the Pi session in $PI_SESSION_FILE captured at launch. Otherwise the wake is
   skipped with a reason: no-pane, no-session, pane-gone, session-changed, herdr-error.
+- Best effort on the session (owner-accepted, ask #347): herdr's prompt targets a pane, not a
+  session, so a /new in the milliseconds between the check and the send can put the message
+  in the new session. That is logged as session_after on the wake record, not prevented.
 - If the pane shows a dialog (blocked), it waits for herdr to report another state, then sends.
 - Every job writes to ${XDG_STATE_HOME:-~/.local/state}/run-and-wake/log.jsonl, one JSON
   record per line, all carrying the job id and a UTC time:
