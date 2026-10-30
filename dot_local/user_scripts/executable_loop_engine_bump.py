@@ -6,14 +6,14 @@
 This is playbook rule 7c57de5a as one command. Personal profile only: it refuses on any other profile before it does
 anything. The steps, and the step a stop names:
 
-  profile  chezmoi's profile must be personal
+  profile  chezmoi's profile must be personal (read with dump-config, which runs no source-state hook)
   pr       find the PR for branch loop-engine-vX.Y.Z; an open or merged one is resumed
   import   fresh worktree from origin/main; import_release_skills.py import TAG --pins --apply; orphans stop it
   publish  commit on loop-engine-vX.Y.Z, push, open the PR; the worktree is removed
   checks   wait for the PR's checks; a red one stops it with the PR left open
   merge    squash-merge and read the merge SHA
   drift    chezmoi status on the skills tree and the mise config; stop on any change the PR did not make
-  apply    chezmoi apply of the mise config; sync_harness_skills.sh --yes for the skills
+  apply    chezmoi apply of exactly the PR's targets; apply_harness_config.sh skills (skill links only, no MCP)
   install  mise install for the four tools
   verify   import_release_skills.py verify-deployed for the changed bundles; mise current equals the version
 
@@ -42,7 +42,7 @@ TOOLS = ("loop-engine", "lean-change", "policy-document", "research")
 SKILLS = "dot_local/share/agent-harness/canonical/skills"
 MISE_CONFIG = "dot_config/mise/config.toml"
 IMPORT_TOOL = "dot_local/user_scripts/executable_import_release_skills.py"
-SYNC_TOOL = "dot_local/user_scripts/executable_sync_harness_skills.sh"
+HARNESS_TOOL = "dot_local/user_scripts/executable_apply_harness_config.sh"
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 NAME = "loop_engine_bump"
 
@@ -100,9 +100,10 @@ def chezmoi(source, *args, step, check=True):
     return run(["chezmoi", "--source", source, "--no-tty", *args], step, check=check)
 
 
-def chezmoi_data(source, step):
-    data = json.loads(chezmoi(source, "data", "--format", "json", step=step).stdout)
-    return data.get("profile"), Path(data["chezmoi"]["destDir"])
+def chezmoi_config(source, step):
+    """(profile, destination) from chezmoi's config. dump-config reads no source state, so no source-state hook runs."""
+    config = json.loads(chezmoi(source, "dump-config", "--format", "json", step=step).stdout)
+    return (config.get("data") or {}).get("profile"), Path(config["destDir"])
 
 
 class Worktree:
@@ -273,15 +274,17 @@ def apply(source, sha, pr, version, log):
     if git(source, "merge-base", "--is-ancestor", sha, "origin/main", step="drift", check=False).returncode != 0:
         raise Stop("drift", "merge commit %s is not on origin/main" % sha)
     with Worktree(source, sha, "drift") as wt:
-        _profile, dest = chezmoi_data(wt.path, "drift")
+        _profile, dest = chezmoi_config(wt.path, "drift")
         targets = pr_targets(wt.path, sha)
         mise_dest = check_drift(wt.path, dest, targets, log)
-        if mise_dest in targets:
-            chezmoi(wt.path, "apply", "--force", "-x", "scripts", mise_dest, step="apply")
+        # A new bundle's directories go first, one level each, so nothing outside the PR is applied.
+        new_dirs = {d for t in targets for d in t.parents if dest in d.parents and not d.is_dir()}
+        # --force: the drift check above showed each live target is the pre-PR or the PR content.
+        chezmoi(wt.path, "apply", "--force", "--recursive=false", "-x", "scripts",
+                *sorted(new_dirs, key=lambda d: len(d.parts)), *sorted(targets), step="apply")
         bundles = sorted({targets[t][0][len(SKILLS) + 1:].split("/")[0] for t in targets if t != mise_dest})
-        if bundles:
-            env = dict(os.environ, CHEZMOI_SOURCE_DIR=str(wt.path), NO_COLOR="1")
-            print(run(["sh", wt.path / SYNC_TOOL, "--yes"], "apply", env=env).stdout, end="", flush=True)
+        if bundles:  # links every run, so a rerun repairs links a failed run left behind
+            print(run(["sh", wt.path / HARNESS_TOOL, "skills"], "apply").stdout, end="", flush=True)
         log.record("apply", "ok", "%d target(s): %s" % (len(targets), ", ".join(str(t) for t in sorted(targets))))
         run(["mise", "install", *TOOLS], "install", cwd=dest)
         log.record("install", "ok", "mise install %s" % " ".join(TOOLS))
@@ -306,7 +309,7 @@ def apply(source, sha, pr, version, log):
 def bump(args, log):
     source = Path(args.source)
     version, branch = args.tag[1:], "loop-engine-" + args.tag
-    profile, dest = chezmoi_data(source, "profile")
+    profile, dest = chezmoi_config(source, "profile")
     if profile != "personal":
         raise Stop("profile", "profile is %r; this script runs only on personal, and nothing was done" % profile)
     log.record("profile", "ok", "personal")

@@ -199,8 +199,8 @@ authenticated `gh` and writes nothing without `--apply`.
 `tests/release-skills`). It imports the tag with `--pins` into a fresh worktree from `origin/main`, opens the PR on
 branch `loop-engine-vX.Y.Z`, waits for its checks, squash-merges it, and applies only the PR's targets here: it runs
 `chezmoi status` and `diff` on the skills tree and the mise config, stops if anything there differs in a way the PR did
-not make, then applies the mise config, runs `mise install` for the four tools, [Sync Skills](#sync-skills) with
-`--yes`, and `verify-deployed`. It prints the PR, the merge SHA and the installed versions, and logs each step to
+not make, then applies exactly the PR's files, relinks skills with `apply_harness_config.sh skills` (skill links
+only; MCP settings are left alone), runs `mise install` for the four tools and `verify-deployed`. It prints the PR, the merge SHA and the installed versions, and logs each step to
 `~/.local/state/loop-engine-bump/log.jsonl`. A stop names its step (orphans, red checks, drift, another profile); a
 rerun resumes the PR, and a version already pinned does nothing. Orphans stay a person's call (`--prune` below). It
 refuses on any profile but personal and is not deployed on the others: the work Mac takes the merged pins with its own
@@ -351,6 +351,7 @@ The script detects:
   `--prune` deletes them.
 
 After syncing canonical skills it automatically runs `apply_harness_config.sh` to update symlinks and clean up stale links across all harnesses.
+`apply_harness_config.sh skills` does the link step alone, without regenerating any MCP settings.
 
 ## Apply And Verify
 

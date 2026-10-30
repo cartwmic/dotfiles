@@ -3,7 +3,7 @@
 Each test runs the real script against a scratch world: a bare git origin holding a small chezmoi source, a clone of it
 as the source checkout, a scratch HOME (chezmoi's destination, config and state) applied from that source, a scripted
 gh that serves a release and the PR (create, checks, squash merge into the bare origin), a fake mise that records
-installs, and a stub harness-link script. chezmoi and git are real. Nothing here reaches GitHub, the real chezmoi
+installs. chezmoi, git and apply_harness_config.sh (skills mode) are real. Nothing here reaches GitHub, the real chezmoi
 source or the real home directory.
 
     python3 -m unittest discover -s tests/release-skills -v
@@ -86,18 +86,6 @@ else:
 json.dump(state, open(path, "w"))
 '''
 
-HARNESS_LINKS = r'''#!/bin/sh
-set -eu
-skills="$HOME/.local/share/agent-harness/canonical/skills"
-for harness in .claude/skills .codex/skills .pi/agent/skills; do
-  mkdir -p "$HOME/$harness"
-  for skill in "$skills"/*; do
-    [ -d "$skill" ] && ln -sfn "$skill" "$HOME/$harness/$(basename "$skill")"
-  done
-done
-'''
-
-
 def pins(version):
     return "".join('%s = { version = "%s", matching_regex = "^x-", rename_exe = "%s" }\n' % (t, version, t) for t in TOOLS)
 
@@ -152,7 +140,7 @@ class BumpTests(Fixture):
             (self.checkout / path).write_text(text)
         tools = self.checkout / "dot_local/user_scripts"
         tools.mkdir(parents=True, exist_ok=True)
-        for name in ("executable_import_release_skills.py", "executable_sync_harness_skills.sh"):
+        for name in ("executable_import_release_skills.py", "executable_apply_harness_config.sh"):
             shutil.copy(ROOT / "dot_local/user_scripts" / name, tools / name)
         self.sh("git", "-C", self.checkout, "add", "-A")
         self.sh("git", "-C", self.checkout, "commit", "-q", "-m", "seed")
@@ -161,10 +149,10 @@ class BumpTests(Fixture):
         config.parent.mkdir(parents=True)
         config.write_text("data:\n  profile: %s\n" % profile)
         self.sh("chezmoi", "--source", self.checkout, "--no-tty", "apply")
-        links = self.home / ".local/user_scripts/apply_harness_config.sh"
-        links.write_text(HARNESS_LINKS)
-        links.chmod(0o755)
-        self.sh("sh", links)
+        self.sh("sh", self.checkout / "dot_local/user_scripts/executable_apply_harness_config.sh", "skills")
+        # Harness settings the bump must leave alone (a full harness apply would rewrite them).
+        (self.home / ".codex").mkdir(exist_ok=True)
+        (self.home / ".codex/config.toml").write_text("# local edit\n")
         self.sh("mise", "install", *TOOLS)
         # Someone else's later change on main, not applied here: the bump must not apply it.
         other = self.dir / "other"
@@ -228,7 +216,11 @@ class BumpTests(Fixture):
         self.assertEqual(self.live(SKILLS_DEST + "/using-loop-engine/references/PRD.md"), "prd\n")
         self.assertEqual(self.live(SKILLS_DEST + "/my-own-skill/SKILL.md"), "mine\n")
         self.assertEqual(self.live(".unrelated"), "unrelated v1\n")
-        self.assertTrue((self.home / ".claude/skills/using-other").is_symlink())
+        for harness in (".claude/skills", ".codex/skills", ".pi/agent/skills", ".agents/skills"):
+            self.assertTrue((self.home / harness / "using-other").is_symlink(), harness)
+        self.assertEqual(self.live(".codex/config.toml"), "# local edit\n")
+        self.assertFalse((self.home / ".pi/agent/mcp.json").exists())
+        self.assertFalse((self.home / ".local/share/agent-harness/generated").exists())
         self.assertEqual(self.mise_installs()[-1], ["install", *TOOLS])
         self.assertIn("PR #100 https://example.test/pull/100", result.stdout)
         self.assertIn("merge " + sha, result.stdout)
@@ -259,6 +251,21 @@ class BumpTests(Fixture):
         self.assertEqual(len(self.gh_calls("checks")), 3)
 
     # d2 -------------------------------------------------------------------------------------------
+
+    def test_d1_a_rerun_repairs_links_a_failed_run_left_behind(self):
+        self.world()
+        blocker = self.home / ".codex/skills"
+        shutil.rmtree(blocker)
+        blocker.write_text("not a directory\n")  # link_skill_dirs cannot mkdir it
+        result = self.bump()
+        self.assert_stopped(result, "apply", "apply_harness_config.sh")
+        self.assertEqual(self.live(SKILLS_DEST + "/using-foo-provider/SKILL.md"), "foo skill v1\n")  # files were applied
+        blocker.unlink()
+        again = self.bump()
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(len(self.gh_calls("create")), 1)
+        self.assertEqual(len(self.gh_calls("merge")), 1)
+        self.assertTrue((self.home / ".codex/skills/using-other").is_symlink())
 
     def test_d2_orphans_stop_at_import_with_the_list(self):
         self.world(extra={SKILLS_SRC + "/using-foo-provider/references/data/old.json": "stale\n"})
@@ -307,8 +314,13 @@ class BumpTests(Fixture):
 
     def refused(self, profile):
         self.world(profile=profile)
+        marker = self.dir / "hook-ran"
+        (self.home / ".config/chezmoi/chezmoi.yaml").write_text(
+            "data:\n  profile: %s\nhooks:\n  read-source-state:\n    pre:\n      command: touch\n      args: [%s]\n"
+            % (profile, json.dumps(str(marker))))
         result = self.bump()
         self.assert_stopped(result, "profile", "profile is '%s'" % profile)
+        self.assertFalse(marker.exists(), "a source-state hook ran before the refusal")
         self.assertEqual(self.load().get("calls", []), [])
         self.assertEqual(self.sh("git", "--git-dir", self.origin, "branch", "--list", "loop-engine-*"), "")
         self.assert_nothing_applied()

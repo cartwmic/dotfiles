@@ -590,6 +590,15 @@ apply_agents_shared() {
   link_skill_dirs "$HOME/.agents/skills"
 }
 
+# Skill links only, for every harness; MCP settings are not touched (loop_engine_bump.py uses this).
+apply_skill_links() {
+  log "Linking canonical skills (skills only; MCP settings untouched)"
+  link_skill_dirs "$HOME/.agents/skills"
+  link_skill_dirs "$HOME/.claude/skills"
+  link_skill_dirs "$HOME/.codex/skills"
+  link_skill_dirs "$HOME/.pi/agent/skills"
+}
+
 apply_all() {
   apply_agents_shared
   apply_claude
@@ -617,6 +626,9 @@ main() {
             ;;
           pi)
             apply_pi
+            ;;
+          skills)
+            apply_skill_links
             ;;
           *)
             log_error "Unsupported harness: $harness"
