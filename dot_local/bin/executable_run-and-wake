@@ -18,7 +18,8 @@ Contract (docs/run-and-wake.md):
     start  {cmd, cwd, pane, session, pid, output}
     end    {exit, signal, duration_s}
     blocked {}                      (pane showed a dialog; waiting)
-    wake   {result: sent|failed, error?, duration_s}
+    wake   {result: sent|failed, error?, duration_s, session_after?}  (session_after: the pane
+           showed another session right after the send; herdr cannot make the send conditional)
     skip   {reason, detail?}
 """
 import json
@@ -29,6 +30,7 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 from datetime import datetime, timezone
 
 NAME = "run-and-wake"
@@ -115,16 +117,34 @@ def wake(job, pane, session, text):
         if action == "send":
             break
         record(job, "blocked")
-        herdr("agent", "wait", pane, "--until", "idle", "--until", "working", "--until", "done", "--until", "unknown")
+        waited = herdr("agent", "wait", pane, "--until", "idle", "--until", "working", "--until", "done", "--until", "unknown")
+        if waited[0] == "error":  # a failed wait ends the wake like a failed get: pane-gone or herdr-error
+            _, reason, detail = decide(pane, session, waited)
+            record(job, "skip", reason=reason, detail=detail)
+            return
     sent = herdr("agent", "prompt", pane, text)
     took = round(time.monotonic() - started, 3)
     if sent[0] == "ok":
-        record(job, "wake", result="sent", duration_s=took)
+        # herdr's prompt targets a pane, not a session: the check above and this send are two calls. The pane's
+        # session right after the send is logged, so a session swapped in that window shows in the log.
+        after = herdr("agent", "get", pane)
+        now = (after[1].get("agent_session") or {}).get("value") if after[0] == "ok" else None
+        record(job, "wake", result="sent", duration_s=took, **({} if now == session else {"session_after": now}))
     else:
         record(job, "wake", result="failed", error=f"{sent[1]}: {sent[2]}", duration_s=took)
 
 
 # --- launch ---
+
+def tell(report, text):
+    """Best effort: the launcher may already be gone (its tool call ended), and the job must still be watched."""
+    try:
+        os.write(report, text.encode())
+    except OSError:
+        pass
+    finally:
+        os.close(report)
+
 
 def watch(job, cmd, output, pane, session, report):
     """Runs in the detached process: start the job, wait for it, then wake."""
@@ -134,15 +154,13 @@ def watch(job, cmd, output, pane, session, report):
             child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
         except OSError as error:
             record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, pid=None, output=output)
-            os.write(report, f"failed {error}".encode())
-            os.close(report)
+            tell(report, f"failed {error}")
             out.write(f"[{NAME}] ERROR: could not start: {error}\n".encode())
             record(job, "end", exit=127, signal=None, error=str(error), duration_s=0.0)
             status = f"could not start ({error})"
         else:
             record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, pid=child.pid, output=output)
-            os.write(report, f"pid {child.pid}".encode())
-            os.close(report)
+            tell(report, f"pid {child.pid}")
             code = child.wait()
             sig = signal.Signals(-code).name if code < 0 else None
             record(job, "end", exit=code if code >= 0 else None, signal=sig, duration_s=round(time.monotonic() - started, 3))
@@ -165,12 +183,9 @@ def main(argv):
     pane = os.environ.get("HERDR_PANE_ID") or None
     session = os.environ.get("PI_SESSION_FILE") or None
     read, report = os.pipe()
-    first = os.fork()
-    if first == 0:  # double fork: the watcher leaves this process group and session
+    if os.fork() == 0:  # the watcher: its own session, so killing the launcher's process group leaves it alone
         os.close(read)
         os.setsid()
-        if os.fork():
-            os._exit(0)
         null = os.open(os.devnull, os.O_RDWR)
         logfd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
         os.dup2(null, 0)
@@ -178,10 +193,11 @@ def main(argv):
         os.dup2(logfd, 2)
         try:
             watch(job, argv, output, pane, session, report)
+        except BaseException:
+            traceback.print_exc()  # into the job's output file
         finally:
             os._exit(0)
     os.close(report)
-    os.waitpid(first, 0)
     with os.fdopen(read) as pipe:
         started = pipe.read()
     if started.startswith("pid "):
