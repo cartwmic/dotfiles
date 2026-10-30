@@ -6,7 +6,7 @@
 This is playbook rule 7c57de5a as one command. Personal profile only: it refuses on any other profile before it does
 anything. The steps, and the step a stop names:
 
-  profile  chezmoi's profile must be personal (read with dump-config, which runs no source-state hook)
+  profile  chezmoi's profile must be personal (read with dump-config, which runs no hook)
   pr       find the PR for branch loop-engine-vX.Y.Z; an open or merged one is resumed
   import   fresh worktree from origin/main; import_release_skills.py import TAG --pins --apply; orphans stop it
   publish  commit on loop-engine-vX.Y.Z, push, open the PR; the worktree is removed
@@ -15,8 +15,9 @@ anything. The steps, and the step a stop names:
   drift    chezmoi status on the skills tree and the mise config; stop on any change the PR did not make
   apply    chezmoi apply of exactly the PR's targets; apply_harness_config.sh skills (skill links only, no MCP)
   install  mise install for the four tools
-  verify   import_release_skills.py verify-deployed for the changed bundles; mise current equals the version
+  verify   import_release_skills.py verify-deployed for the changed bundles; mise's active installed version is the version
 
+Every later chezmoi command runs with a copy of the config that has no hooks, so no configured hook runs.
 A rerun picks up where it stopped. If the version is already pinned on origin/main and the import changes nothing, it
 does nothing. It prints the PR, the merge SHA and the installed versions, and appends one JSON line per step to
 $XDG_STATE_HOME/loop-engine-bump/log.jsonl (default ~/.local/state).
@@ -96,14 +97,17 @@ def git_bytes(source, spec):
     return result.stdout if result.returncode == 0 else None
 
 
+HOOKLESS_CONFIG = []  # the hook-free config file, once bump() has written it
+
+
 def chezmoi(source, *args, step, check=True):
-    return run(["chezmoi", "--source", source, "--no-tty", *args], step, check=check)
+    config = ["--config", HOOKLESS_CONFIG[0], "--config-format", "json"] if HOOKLESS_CONFIG else []
+    return run(["chezmoi", "--source", source, "--no-tty", *config, *args], step, check=check)
 
 
 def chezmoi_config(source, step):
-    """(profile, destination) from chezmoi's config. dump-config reads no source state, so no source-state hook runs."""
-    config = json.loads(chezmoi(source, "dump-config", "--format", "json", step=step).stdout)
-    return (config.get("data") or {}).get("profile"), Path(config["destDir"])
+    """chezmoi's resolved config. dump-config reads no source state, so no hook runs."""
+    return json.loads(chezmoi(source, "dump-config", "--format", "json", step=step).stdout)
 
 
 class Worktree:
@@ -265,16 +269,17 @@ def check_drift(wt, dest, targets, log):
 
 
 def installed_versions(dest):
-    return {tool: run(["mise", "current", tool], "verify", cwd=dest, check=False).stdout.strip() or "(none)"
+    """{tool: the active installed version, or "(not installed)"}, from one query of mise's installed inventory."""
+    inventory = json.loads(run(["mise", "ls", "--installed", "--json"], "verify", cwd=dest).stdout or "{}")
+    return {tool: next((e["version"] for e in inventory.get(tool, []) if e.get("active")), "(not installed)")
             for tool in TOOLS}
 
 
-def apply(source, sha, pr, version, log):
+def apply(source, dest, sha, pr, version, log):
     git(source, "fetch", "-q", "origin", step="drift")
     if git(source, "merge-base", "--is-ancestor", sha, "origin/main", step="drift", check=False).returncode != 0:
         raise Stop("drift", "merge commit %s is not on origin/main" % sha)
     with Worktree(source, sha, "drift") as wt:
-        _profile, dest = chezmoi_config(wt.path, "drift")
         targets = pr_targets(wt.path, sha)
         mise_dest = check_drift(wt.path, dest, targets, log)
         # A new bundle's directories go first, one level each, so nothing outside the PR is applied.
@@ -297,7 +302,7 @@ def apply(source, sha, pr, version, log):
     versions = installed_versions(dest)
     wrong = sorted("%s %s" % (t, v) for t, v in versions.items() if v != version)
     if wrong:
-        raise Stop("verify", "mise current is not %s for: %s" % (version, ", ".join(wrong)))
+        raise Stop("verify", "mise has not installed %s as the active version of: %s" % (version, ", ".join(wrong)))
     installed = ", ".join("%s %s" % kv for kv in versions.items())
     log.record("verify", "ok", "PR #%d, merge %s, installed: %s" % (pr["number"], sha, installed))
     print("PR #%d %s\nmerge %s\ninstalled: %s" % (pr["number"], pr["url"], sha, installed))
@@ -307,12 +312,24 @@ def apply(source, sha, pr, version, log):
 
 
 def bump(args, log):
-    source = Path(args.source)
-    version, branch = args.tag[1:], "loop-engine-" + args.tag
-    profile, dest = chezmoi_config(source, "profile")
+    config = chezmoi_config(Path(args.source), "profile")
+    profile = (config.get("data") or {}).get("profile")
     if profile != "personal":
         raise Stop("profile", "profile is %r; this script runs only on personal, and nothing was done" % profile)
     log.record("profile", "ok", "personal")
+    config.pop("hooks", None)
+    with tempfile.TemporaryDirectory(prefix=NAME + "-") as tmp:
+        HOOKLESS_CONFIG[:] = [Path(tmp) / "chezmoi.json"]
+        HOOKLESS_CONFIG[0].write_text(json.dumps(config))
+        try:
+            return bump_personal(args, Path(config["destDir"]), log)
+        finally:
+            HOOKLESS_CONFIG.clear()
+
+
+def bump_personal(args, dest, log):
+    source = Path(args.source)
+    version, branch = args.tag[1:], "loop-engine-" + args.tag
     git(source, "fetch", "-q", "origin", step="pr")
     pr = find_pr(source, branch)
     if pr is not None:
@@ -335,7 +352,7 @@ def bump(args, log):
     if pr["state"] == "OPEN":
         wait_for_checks(source, pr, args.poll, log)
         pr = merge(source, pr, log)
-    apply(source, pr["mergeCommit"]["oid"], pr, version, log)
+    apply(source, dest, pr["mergeCommit"]["oid"], pr, version, log)
     return 0
 
 

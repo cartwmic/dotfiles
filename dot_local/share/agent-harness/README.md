@@ -200,7 +200,9 @@ authenticated `gh` and writes nothing without `--apply`.
 branch `loop-engine-vX.Y.Z`, waits for its checks, squash-merges it, and applies only the PR's targets here: it runs
 `chezmoi status` and `diff` on the skills tree and the mise config, stops if anything there differs in a way the PR did
 not make, then applies exactly the PR's files, relinks skills with `apply_harness_config.sh skills` (skill links
-only; MCP settings are left alone), runs `mise install` for the four tools and `verify-deployed`. It prints the PR, the merge SHA and the installed versions, and logs each step to
+only; MCP settings are left alone), runs `mise install` for the four tools and `verify-deployed`, and checks that
+mise has each version installed and active. It reads the profile with `chezmoi dump-config` and runs every other chezmoi
+command with a copy of that config without hooks, so no configured chezmoi hook runs. It prints the PR, the merge SHA and the installed versions, and logs each step to
 `~/.local/state/loop-engine-bump/log.jsonl`. A stop names its step (orphans, red checks, drift, another profile); a
 rerun resumes the PR, and a version already pinned does nothing. Orphans stay a person's call (`--prune` below). It
 refuses on any profile but personal and is not deployed on the others: the work Mac takes the merged pins with its own

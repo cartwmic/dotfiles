@@ -78,9 +78,11 @@ def configured(tool):
 if args[0] == "install":
     for tool in args[1:]:
         state["installed"].setdefault(tool, []).append(configured(tool))
-elif args[0] == "current":
-    version = configured(args[1])
-    print(version if version in state["installed"].get(args[1], []) else "")
+elif args[0] == "current":  # as real mise: the configured version, installed or not
+    print(configured(args[1]) or "")
+elif args[:3] == ["ls", "--installed", "--json"]:  # as real mise: installed versions only; active = the configured one
+    print(json.dumps({tool: [{"version": v, "installed": True, "active": v == configured(tool)} for v in sorted(set(vs))]
+                      for tool, vs in state["installed"].items() if vs}))
 else:
     sys.exit(1)
 json.dump(state, open(path, "w"))
@@ -164,6 +166,14 @@ class BumpTests(Fixture):
         self.state.pop("calls", None)
         self.save()
 
+    def hook(self):
+        """Add a side-effecting read-source-state hook to the scratch chezmoi config; return the file it would make."""
+        marker = self.dir / "hook-ran"
+        config = self.home / ".config/chezmoi/chezmoi.yaml"
+        config.write_text(config.read_text() + "hooks:\n  read-source-state:\n    pre:\n      command: touch\n"
+                          "      args: [%s]\n" % json.dumps(str(marker)))
+        return marker
+
     def bump(self, tag="v1.0.0"):
         return subprocess.run([sys.executable, SCRIPT, tag, "--source", self.checkout], env=self.env(),
                               capture_output=True, text=True, timeout=300)
@@ -199,8 +209,10 @@ class BumpTests(Fixture):
 
     def test_d1_happy_path_one_pr_one_merge_only_the_pr_targets_applied(self):
         self.world()
+        marker = self.hook()
         result = self.bump()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(marker.exists(), "a configured chezmoi hook ran")
         self.assertEqual(len(self.gh_calls("create")), 1)
         self.assertEqual(len(self.gh_calls("merge")), 1)
         pr = self.load()["prs"][0]
@@ -303,6 +315,15 @@ class BumpTests(Fixture):
         self.assert_nothing_applied()
         self.assertEqual(self.live(SKILLS_DEST + "/my-own-skill/SKILL.md"), "edited live\n")
 
+    def test_d2_drift_on_personal_stops_before_any_configured_hook_runs(self):
+        self.world()
+        marker = self.hook()
+        (self.home / SKILLS_DEST / "my-own-skill/SKILL.md").write_text("edited live\n")
+        result = self.bump()
+        self.assert_stopped(result, "drift", "changes the PR did not make")
+        self.assertFalse(marker.exists(), "a configured chezmoi hook ran before the drift stop")
+        self.assert_nothing_applied()
+
     def test_d2_a_live_edit_to_a_pr_target_stops_before_apply(self):
         self.world()
         config = self.home / ".config/mise/config.toml"
@@ -314,10 +335,7 @@ class BumpTests(Fixture):
 
     def refused(self, profile):
         self.world(profile=profile)
-        marker = self.dir / "hook-ran"
-        (self.home / ".config/chezmoi/chezmoi.yaml").write_text(
-            "data:\n  profile: %s\nhooks:\n  read-source-state:\n    pre:\n      command: touch\n      args: [%s]\n"
-            % (profile, json.dumps(str(marker))))
+        marker = self.hook()
         result = self.bump()
         self.assert_stopped(result, "profile", "profile is '%s'" % profile)
         self.assertFalse(marker.exists(), "a source-state hook ran before the refusal")
@@ -344,6 +362,20 @@ class BumpTests(Fixture):
         self.assertIn("nothing to do: v1.0.0 is already pinned on origin/main and installed here", result.stdout)
         self.assertEqual(self.gh_calls("create"), [])
         self.assertEqual(len(self.mise_installs()), installs)
+
+    def test_d2_already_pinned_but_not_installed_stops_and_says_so(self):
+        self.world()
+        self.assertEqual(self.bump().returncode, 0)
+        self.load()
+        self.state["prs"] = []  # as if a person had made the bump PR by hand
+        self.save()
+        mise = json.loads((self.dir / "mise.json").read_text())
+        mise["installed"] = {tool: [v for v in versions if v != "1.0.0"] for tool, versions in mise["installed"].items()}
+        (self.dir / "mise.json").write_text(json.dumps(mise))  # the pins are applied, the binaries are not
+        result = self.bump()
+        self.assert_stopped(result, "apply", "v1.0.0 is already pinned on origin/main")
+        self.assertIn("loop-engine (not installed)", result.stderr)
+        self.assertNotIn("nothing to do", result.stdout)
 
 class ReadmeTests(unittest.TestCase):
     def test_d4_readme_names_bump_as_the_one_command(self):
