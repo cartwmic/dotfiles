@@ -193,12 +193,27 @@ The six Loop Engine skill bundles (`using-loop-engine`, `coordinating-loop-engin
 tests: `tests/release-skills`) imports them into `canonical/skills/` and checks the result. It needs an
 authenticated `gh` and writes nothing without `--apply`.
 
+**After a release, one command does the whole bump** (playbook rule 7c57de5a), on the personal profile only:
+`~/.local/user_scripts/loop_engine_bump.py vX.Y.Z` (source:
+[`dot_local/user_scripts/executable_loop_engine_bump.py`](../../user_scripts/executable_loop_engine_bump.py), tests:
+`tests/release-skills`). It imports the tag with `--pins` into a fresh worktree from `origin/main`, opens the PR on
+branch `loop-engine-vX.Y.Z`, waits for its checks, squash-merges it, and applies only the PR's targets here: it runs
+`chezmoi status` and `diff` on the skills tree and the mise config, stops if anything there differs in a way the PR did
+not make, then applies the mise config, runs `mise install` for the four tools, [Sync Skills](#sync-skills) with
+`--yes`, and `verify-deployed`. It prints the PR, the merge SHA and the installed versions, and logs each step to
+`~/.local/state/loop-engine-bump/log.jsonl`. A stop names its step (orphans, red checks, drift, another profile); a
+rerun resumes the PR, and a version already pinned does nothing. Orphans stay a person's call (`--prune` below). It
+refuses on any profile but personal and is not deployed on the others: the work Mac takes the merged pins with its own
+`chezmoi update`.
+
+By hand, the import alone:
+
 ```bash
 REPO="$(git rev-parse --show-toplevel)"
 TOOL="$REPO/dot_local/user_scripts/executable_import_release_skills.py"
-python3 "$TOOL" import v0.34.0 --source "$REPO" --pins               # preview: per-bundle added/changed/orphan files
-python3 "$TOOL" import v0.34.0 --source "$REPO" --pins --apply        # refuses (exit 3) while orphan files exist
-python3 "$TOOL" import v0.34.0 --source "$REPO" --pins --apply --prune  # after you inspected the orphans
+python3 "$TOOL" import vX.Y.Z --source "$REPO" --pins               # preview: per-bundle added/changed/orphan files
+python3 "$TOOL" import vX.Y.Z --source "$REPO" --pins --apply        # refuses (exit 3) while orphan files exist
+python3 "$TOOL" import vX.Y.Z --source "$REPO" --pins --apply --prune  # after you inspected the orphans
 ```
 
 - **The tag.** It must be a published, non-prerelease release. The tool resolves it to one commit (printed; pass
