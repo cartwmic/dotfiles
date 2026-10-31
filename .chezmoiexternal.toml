@@ -1,2 +1,13 @@
 # External resources pulled by chezmoi on apply
 # https://www.chezmoi.io/user-guide/include-files-from-elsewhere/
+
+# Accountable Review's review-map skill (wyeworks/accountable-review), both
+# desktop profiles. Pinned by the commit sha in the URL: a bump is one sha edit.
+# Only skills/review-map is extracted; apply_harness_config.sh links it into
+# Claude, Codex, Pi and ~/.agents like any external skill.
+[".local/share/agent-harness/external-skills/accountable-review"]
+  type = "archive"
+  url = "https://github.com/wyeworks/accountable-review/archive/ed9f8b035701669c75931fea1521d45d06b20ec8.tar.gz"
+  exact = true
+  stripComponents = 2
+  include = ["*/skills/review-map/**"]
