@@ -130,8 +130,10 @@ turn, `/openrouter reload`, `on`, or an `allow` or `deny` that changes the
 allowlist fetches again.
 
 The price is the one on the list when the gate first registered the
-classifier. A later list refresh does not change it until `/openrouter off`
-and `on`, or a new Pi process.
+classifier. A list refresh alone does not overwrite a classifier the gate
+already registered. It is rebuilt from the latest list when something first
+replaces the OpenRouter catalog (pi-openrouter-plus's re-sync on `/reload`,
+`/openrouter off` and `on`), or in a new Pi process.
 
 For the exact legacy plus registration `apiKey: "OPENROUTER_API_KEY"`, the gate
 uses Pi's supported `$OPENROUTER_API_KEY` reference syntax. Pi resolves the
