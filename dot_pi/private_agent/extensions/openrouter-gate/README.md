@@ -70,7 +70,7 @@ Allowlist is a chezmoi `create_` target. After the first apply, edit
 | `/openrouter off` | Persist `enabled: false`, drop the runtime key/env, register zero OpenRouter models. |
 | `/openrouter status` | Toggle, allowlist, stash health, config path (TUI notify; Pi drops command return values). |
 | `/openrouter reload` | Re-read `config.json` (after a hand-edit) and re-apply. |
-| `/openrouter allow` | Searchable overlay of the live OpenRouter catalog (public `/models`, no key). Completions work after `/openrouter allow `. Tab-complete or pick an id; globs (`z-ai/*`) can be typed. Writes `config.json`. |
+| `/openrouter allow` | Searchable overlay of the live OpenRouter catalog (public `/models`, chat and decision models, no key). Completions work after `/openrouter allow `. Tab-complete or pick an id; globs (`z-ai/*`) can be typed. Writes `config.json`. |
 | `/openrouter deny` | Same overlay, but only the current allowlist. Removing the last entry fail-closes. |
 | `/openrouter allow <id>` / `deny <id>` | Skip the picker and edit that entry directly. |
 | `/openrouter stash` | Prompt for an API key and write `openrouter-stashed`. If a live `openrouter` entry exists, adopt it and delete the live key. Does not enable the provider. |
@@ -116,6 +116,16 @@ chat/classifier discovery before applying the same enabled flag and allowlist.
 It preserves native classifier type, API, inputs, limits, cost and headers;
 chat routing and plus headers remain unchanged. Refresh hooks restore typed
 entries after plus overlays the catalog.
+
+Decision models that Pi does not ship (for example `liquid/d1-ultra`) come
+from the live list (`/models?output_modalities=text,decisions`). An allowed
+one registers as a System One classifier: `api: "typesafe-system-one"`,
+OpenRouter's base URL, text input, price from the live list. Pi's builtin
+definition wins when both exist. An allowed id that is neither in the catalog
+nor a decision model still gets the chat stub. Until the live list loads (it
+is fetched at session start), an allowed decision model shows as a chat stub;
+the gate loads the list before the next agent turn and after any
+`/openrouter` change, then registers it as a classifier.
 
 For the exact legacy plus registration `apiKey: "OPENROUTER_API_KEY"`, the gate
 uses Pi's supported `$OPENROUTER_API_KEY` reference syntax. Pi resolves the

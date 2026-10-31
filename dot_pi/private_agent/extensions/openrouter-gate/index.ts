@@ -46,6 +46,7 @@ import {
 	addAllowedModel,
 	commandCompletions,
 	fetchOpenRouterModels,
+	getCachedDecisionModels,
 	getCachedPickerModels,
 	parseCommand,
 	pickerItemsExcluding,
@@ -275,7 +276,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	function applyCatalog(ctx: unknown): void {
 		try {
 			const current = getOpenRouterModels(ctx);
-			const catalog = mergeClassifierCatalog(current, builtinClassifiers);
+			// Pi's builtin classifier definitions win; the live decision list fills in the rest.
+			const catalog = mergeClassifierCatalog(current, [...builtinClassifiers, ...getCachedDecisionModels()]);
 			rememberPickerModels(catalog.filter((model): model is CatalogModel => model.type !== "classifier"));
 			const models = isProviderOpen(config) ? buildAllowedModels(catalog, config.allowedModels) : [];
 			const signature = catalogSignature(
@@ -370,8 +372,17 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		return getCachedPickerModels();
 	}
 
+	/** Without the live list, an allowed decision model would register as a chat stub. */
+	async function ensureDecisionModels(): Promise<void> {
+		if (!isProviderOpen(config) || getCachedDecisionModels().length > 0) return;
+		await fetchOpenRouterModels().catch(() => {
+			// Registry snapshot and chat stubs still apply.
+		});
+	}
+
 	async function applyGate(ctx: unknown): Promise<string | undefined> {
 		const keyError = await syncKey(ctx);
+		await ensureDecisionModels();
 		applyCatalog(ctx);
 		return keyError;
 	}
@@ -401,6 +412,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
 	pi.on("before_agent_start", async (_event: unknown, ctx: any) => {
 		try {
+			await ensureDecisionModels();
 			applyCatalog(ctx);
 		} catch {
 			// Never break a turn.
