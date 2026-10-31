@@ -79,8 +79,8 @@ New sessions honor the persisted `enabled` flag. Session exit still drops the
 in-memory runtime overlay; `session_start` re-injects when enabled.
 
 Plus loads after this extension and re-syncs on `session_start`. The catalog
-is re-filtered on `resources_discover`, `before_agent_start`, and
-`model_select`. `/openrouter-sync` can briefly re-expand the picker until the
+is re-filtered on `resources_discover`, `before_agent_start`, `model_select`,
+and when the session-start fetch of the live list finishes. `/openrouter-sync` can briefly re-expand the picker until the
 next one of those events.
 
 ## Known weak point
@@ -122,10 +122,15 @@ from the live list (`/models?output_modalities=text,decisions`). An allowed
 one registers as a System One classifier: `api: "typesafe-system-one"`,
 OpenRouter's base URL, text input, price from the live list. Pi's builtin
 definition wins when both exist. An allowed id that is neither in the catalog
-nor a decision model still gets the chat stub. Until the live list loads (it
-is fetched at session start), an allowed decision model shows as a chat stub;
-the gate loads the list before the next agent turn and after any
-`/openrouter` change, then registers it as a classifier.
+nor a decision model still gets the chat stub. The list is fetched at session
+start; until it loads, an allowed decision model shows as a chat stub. When
+the fetch finishes the gate re-applies the catalog, so the model is a
+classifier without waiting for a prompt. If that fetch failed, the next agent
+turn, `/openrouter reload`, `on`, `allow` or `deny` fetches again.
+
+The price is the one on the list when the gate first registered the
+classifier. A later list refresh does not change it until `/openrouter off`
+and `on`, or a new Pi process.
 
 For the exact legacy plus registration `apiKey: "OPENROUTER_API_KEY"`, the gate
 uses Pi's supported `$OPENROUTER_API_KEY` reference syntax. Pi resolves the

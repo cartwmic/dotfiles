@@ -30,7 +30,7 @@ try {
     const url = String(input instanceof Request ? input.url : input);
     const body = init.body ? JSON.parse(init.body) : undefined;
     traffic.push({ url, body, headers: Object.fromEntries(new Headers(init.headers)) });
-    if (url === 'https://openrouter.ai/api/v1/models') return Response.json({ data: [chatId, nativeId].map(id => ({ id, name: id, context_length: 8192, architecture: { input_modalities: ['text'] }, pricing: { prompt: '0.000001', completion: '0.000002' }, top_provider: { max_completion_tokens: 512 } })) });
+    if (/^https:\/\/openrouter\.ai\/api\/v1\/models(\?|$)/.test(url)) return Response.json({ data: [chatId, nativeId].map(id => ({ id, name: id, context_length: 8192, architecture: { input_modalities: ['text'] }, pricing: { prompt: '0.000001', completion: '0.000002' }, top_provider: { max_completion_tokens: 512 } })) });
     if (['https://openrouter.ai/api/v1/systemone', 'https://openrouter.ai/api/v1/chat/completions'].includes(url) && new Headers(init.headers).get('authorization') !== 'Bearer fixture-only') return Response.json({ error: { message: 'Invalid API key', code: 401 } }, { status: 401 });
     if (url === 'https://openrouter.ai/api/v1/systemone') return Response.json({ answers: { ready: { type: 'noul', noul: 0.95 } }, usage: { input_tokens: 2, output_tokens: 1 } });
     if (url === 'https://openrouter.ai/api/v1/chat/completions') {
