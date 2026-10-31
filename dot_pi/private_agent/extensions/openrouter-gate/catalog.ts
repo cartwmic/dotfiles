@@ -1,6 +1,7 @@
-import { modelAllowed, OPENROUTER_BASE_URL } from "./config.ts";
+import { type ClassifierCatalogModel, modelAllowed, OPENROUTER_BASE_URL } from "./config.ts";
 
-export const OPENROUTER_MODELS_URL = `${OPENROUTER_BASE_URL}/models`;
+// The default list omits decision models; ask for them alongside chat models.
+export const OPENROUTER_MODELS_URL = `${OPENROUTER_BASE_URL}/models?output_modalities=text,decisions`;
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 15_000;
 
@@ -17,6 +18,7 @@ export type GateCommand =
 	| { kind: "stash"; key?: string };
 
 let cachedModels: PickerModel[] = [];
+let cachedDecisionModels: ClassifierCatalogModel[] = [];
 let cacheTimestamp = 0;
 
 export function isCanonicalOpenRouterId(id: string): boolean {
@@ -62,6 +64,54 @@ export function parseModelsResponse(json: unknown): PickerModel[] {
 		seen.add(id);
 		const name = typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : id;
 		out.push({ id, name });
+	}
+	return out;
+}
+
+/** Same rounding as Pi's OpenRouter catalog: $/token string to $/million tokens. */
+function perMillion(value: unknown): number {
+	const perToken = Number.parseFloat(typeof value === "string" ? value : "");
+	return perToken >= 0 ? Number((perToken * 1_000_000).toFixed(6)) : 0;
+}
+
+/** Decision models on the live list, shaped like Pi's builtin OpenRouter System One classifiers. */
+export function parseDecisionModels(json: unknown): ClassifierCatalogModel[] {
+	const data =
+		json && typeof json === "object" && Array.isArray((json as { data?: unknown }).data)
+			? ((json as { data: unknown[] }).data)
+			: [];
+	const out: ClassifierCatalogModel[] = [];
+	for (const item of data) {
+		if (!item || typeof item !== "object") continue;
+		const raw = item as {
+			id?: unknown;
+			name?: unknown;
+			context_length?: unknown;
+			architecture?: { output_modalities?: unknown };
+			pricing?: Record<string, unknown>;
+			top_provider?: { context_length?: unknown };
+		};
+		const outputs = raw.architecture?.output_modalities;
+		if (!Array.isArray(outputs) || !outputs.includes("decisions")) continue;
+		const id = typeof raw.id === "string" ? raw.id.trim() : "";
+		if (!isCanonicalOpenRouterId(id)) continue;
+		const contextWindow = Number(raw.top_provider?.context_length || raw.context_length) || 0;
+		out.push({
+			type: "classifier",
+			id,
+			name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : id,
+			api: "typesafe-system-one",
+			baseUrl: OPENROUTER_BASE_URL,
+			// Pi's System One transport rejects images, so builtin entries list text only.
+			input: ["text"],
+			cost: {
+				input: perMillion(raw.pricing?.prompt),
+				output: perMillion(raw.pricing?.completion),
+				cacheRead: perMillion(raw.pricing?.input_cache_read),
+				cacheWrite: perMillion(raw.pricing?.input_cache_write),
+			},
+			contextWindow,
+		});
 	}
 	return out;
 }
@@ -196,7 +246,12 @@ export function commandCompletions(
 
 export function resetPickerCache(): void {
 	cachedModels = [];
+	cachedDecisionModels = [];
 	cacheTimestamp = 0;
+}
+
+export function getCachedDecisionModels(): ClassifierCatalogModel[] {
+	return cachedDecisionModels;
 }
 
 export function getCachedPickerModels(): PickerModel[] {
@@ -225,8 +280,9 @@ export async function fetchOpenRouterModels(
 	if (!response.ok) {
 		throw new Error(`OpenRouter models ${response.status} ${response.statusText}`);
 	}
-	const parsed = parseModelsResponse(await response.json());
-	cachedModels = mergePickerModels(cachedModels, parsed);
+	const json = await response.json();
+	cachedModels = mergePickerModels(cachedModels, parseModelsResponse(json));
+	cachedDecisionModels = parseDecisionModels(json);
 	cacheTimestamp = now();
 	return cachedModels;
 }
