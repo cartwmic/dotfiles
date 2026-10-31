@@ -18,7 +18,8 @@
  *
  * Plus load-order: packages load after ~/.pi/agent/extensions, and plus
  * re-syncs on session_start *after* this handler. Re-filter on
- * resources_discover, before_agent_start, and model_select.
+ * resources_discover, before_agent_start, and model_select, and once the
+ * session_start fetch of the live list finishes.
  *
  * Hindsight rerank/embedding is unaffected: its OpenRouter key lives
  * server-side on hindsight-api, not in pi's auth.json.
@@ -394,9 +395,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			if (ctx?.hasUI && readStash().liveEntryPresent) ctx.ui.notify(LIVE_ENTRY_WARNING, "warning");
 			await syncKey(ctx);
 			applyCatalog(ctx);
-			void fetchOpenRouterModels().catch(() => {
-				// Completions still work from the registry snapshot.
-			});
+			// Decision models Pi does not ship arrive with this list; apply it as soon as it lands.
+			void fetchOpenRouterModels()
+				.then(() => applyCatalog(ctx))
+				.catch(() => {
+					// Completions still work from the registry snapshot.
+				});
 		} catch {
 			// Never break a turn.
 		}
