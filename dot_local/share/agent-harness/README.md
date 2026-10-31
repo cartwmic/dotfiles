@@ -178,6 +178,20 @@ After adding a skill:
    - `find ~/.codex/skills -mindepth 1 -maxdepth 1 -type l`
    - `find ~/.pi/agent/skills -mindepth 1 -maxdepth 1 -type l`
 
+## External Skills
+
+A skill kept in someone else's repository is a chezmoi archive external in
+[`.chezmoiexternal.toml`](../../../.chezmoiexternal.toml), pinned by the commit sha in
+its URL. It extracts to `~/.local/share/agent-harness/external-skills/<repo>/<skill>/`
+(`stripComponents` and `include` keep only the skill directories), and
+`apply_harness_config.sh` links every `<repo>/<skill>` with a `SKILL.md` into
+Claude, Codex, Pi and `~/.agents`. Canonical skills win a name collision.
+`.chezmoiexternal.toml` is hashed into the harness onchange script, so an apply
+that changes it re-links.
+
+Current: Accountable Review's `review-map` (wyeworks/accountable-review), both
+desktop profiles. To bump it, edit the sha in its URL and apply.
+
 ## Capability Tiers
 
 [`capability-tiers/`](./capability-tiers/README.md) holds a standalone tier registry (low, medium, high) and a

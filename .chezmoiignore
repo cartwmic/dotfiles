@@ -74,6 +74,8 @@ herdr-mcp/**
 !.local/share/passage-review/passage_review.py
 !.local/share/passage-review/passage_review.lua
 !.local/share/passage-review/README.md
+# .local/share/* stops at one level; .chezmoiexternal.toml targets sit deeper.
+.local/share/agent-harness/**
 .pi
 .pi/**
 .vibe
