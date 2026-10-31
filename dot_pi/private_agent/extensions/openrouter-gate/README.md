@@ -126,7 +126,8 @@ nor a decision model still gets the chat stub. The list is fetched at session
 start; until it loads, an allowed decision model shows as a chat stub. When
 the fetch finishes the gate re-applies the catalog, so the model is a
 classifier without waiting for a prompt. If that fetch failed, the next agent
-turn, `/openrouter reload`, `on`, `allow` or `deny` fetches again.
+turn, `/openrouter reload`, `on`, or an `allow` or `deny` that changes the
+allowlist fetches again.
 
 The price is the one on the list when the gate first registered the
 classifier. A later list refresh does not change it until `/openrouter off`
