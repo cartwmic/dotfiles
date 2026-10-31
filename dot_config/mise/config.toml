@@ -69,10 +69,10 @@ gh = "latest"      # GitHub CLI; also git credential helper (gh auth login is a 
 ripgrep = "latest" # Fast grep alternative
 
 # Durable workflow engine and matching reference providers. Keep versions paired.
-loop-engine = { version = "0.35.0", matching_regex = "^loop-cli-", rename_exe = "loop-engine" }
-lean-change = { version = "0.35.0", matching_regex = "^lean-change-provider-", rename_exe = "lean-change" }
-policy-document = { version = "0.35.0", matching_regex = "^policy-document-provider-", rename_exe = "policy-document" }
-research = { version = "0.35.0", matching_regex = "^research-provider-", rename_exe = "research" }
+loop-engine = { version = "0.36.0", matching_regex = "^loop-cli-", rename_exe = "loop-engine" }
+lean-change = { version = "0.36.0", matching_regex = "^lean-change-provider-", rename_exe = "lean-change" }
+policy-document = { version = "0.36.0", matching_regex = "^policy-document-provider-", rename_exe = "policy-document" }
+research = { version = "0.36.0", matching_regex = "^research-provider-", rename_exe = "research" }
 
 # Build tools & task runners
 "github:go-task/task" = "latest" # Go-based task runner
