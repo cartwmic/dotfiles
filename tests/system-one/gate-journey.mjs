@@ -34,8 +34,6 @@ const MODELS_FIXTURE = { data: [
 		pricing: { prompt: "0.000000075", completion: "0.00000025" } },
 ] };
 
-const sse = (o) => `data: ${JSON.stringify(o)}\n\n`;
-const chunk = (delta, finish) => ({ id: "1", object: "chat.completion.chunk", created: 0, model: "m", choices: [{ index: 0, delta, finish_reason: finish }] });
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 async function journey(mode) {
@@ -59,10 +57,6 @@ async function journey(mode) {
 			calls.push({ url, body: JSON.parse(init.body), auth: new Headers(init.headers).get("authorization") });
 			return json({ answers: { q: { type: "noul", noul: 0.8 } } });
 		}
-		if (url.startsWith("https://fake.invalid/")) {
-			const body = sse(chunk({ role: "assistant", content: "ok" }, null)) + sse(chunk({}, "stop")) + "data: [DONE]\n\n";
-			return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
-		}
 		if (/openrouter\.ai\/api\/v1\/models\?/.test(url)) {
 			await new Promise((r) => setTimeout(r, 1500)); // the live list lands well after session_start
 			setTimeout(listServed, 0);
@@ -71,11 +65,7 @@ async function journey(mode) {
 		return new Response("{}", { status: 404 }); // no other network
 	};
 
-	const fakeChat = (pi) => pi.registerProvider("fakechat", {
-		baseUrl: "https://fake.invalid/v1", apiKey: "fake", api: "openai-completions",
-		models: [{ id: "m", name: "fake", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8000, maxTokens: 1000 }],
-	});
-	const loader = new DefaultResourceLoader({ cwd: home, agentDir, noExtensions: true, additionalExtensionPaths: [join(ext, "index.ts")], extensionFactories: [fakeChat] });
+	const loader = new DefaultResourceLoader({ cwd: home, agentDir, noExtensions: true, additionalExtensionPaths: [join(ext, "index.ts")] });
 	await loader.reload();
 	const { session } = await createAgentSession({ cwd: home, agentDir, resourceLoader: loader, sessionManager: SessionManager.inMemory(home), settingsManager: SettingsManager.inMemory({}) });
 	const notes = [];
