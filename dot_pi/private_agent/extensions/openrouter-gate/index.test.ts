@@ -25,10 +25,12 @@ import {
 	addAllowedModel,
 	commandCompletions,
 	fetchOpenRouterModels,
+	getCachedDecisionModels,
 	getCachedPickerModels,
 	mergePickerModels,
 	normalizeAllowId,
 	parseCommand,
+	parseDecisionModels,
 	parseModelsResponse,
 	pickerItemsExcluding,
 	rankPickerModels,
@@ -212,6 +214,65 @@ test("filterModels and buildAllowedModels: drop others, stub missing exact ids",
 	assert.equal(fallbackModel("z-ai/glm-5.3-flash").contextWindow, 1_048_576);
 });
 
+// Trimmed entries from the live /models?output_modalities=text,decisions list (2026-10-31).
+const LIVE_LIST = {
+	data: [
+		{
+			id: "liquid/d1-ultra",
+			name: "LiquidAI: d1-ultra",
+			context_length: 32768,
+			architecture: { input_modalities: ["text", "image"], output_modalities: ["decisions"] },
+			pricing: { prompt: "0.000000042", completion: "0", input_cache_read: "0.000000042" },
+			top_provider: { context_length: 32768 },
+		},
+		{
+			id: "typesafe/jev-1.13",
+			name: "TypeSafe: Jev 1.13",
+			context_length: 262144,
+			architecture: { input_modalities: ["text", "image"], output_modalities: ["decisions"] },
+			pricing: { prompt: "0.000000042", completion: "0" },
+		},
+		{
+			id: "z-ai/glm-5.3-flash",
+			name: "Z.ai: GLM 5.3 Flash",
+			context_length: 1048576,
+			architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] },
+			pricing: { prompt: "0.000000075", completion: "0.00000025" },
+		},
+	],
+};
+
+test("buildAllowedModels: allowed live decision model registers as a classifier; chat and unknown ids do not", () => {
+	const decisions = parseDecisionModels(LIVE_LIST);
+	assert.deepEqual(decisions.map((m) => m.id), ["liquid/d1-ultra", "typesafe/jev-1.13"]);
+	const builtinJev = { ...decisions[1]!, name: "Builtin Jev", contextWindow: 64000 };
+	const catalog = mergeClassifierCatalog([model("z-ai/glm-5.3-flash")], [builtinJev, ...decisions]);
+	const built = buildAllowedModels(catalog, ["liquid/d1-ultra", "typesafe/jev-1.13", "z-ai/glm-5.3-flash", "acme/unknown"]);
+	const byId = new Map(built.map((m) => [m.id, m]));
+	assert.deepEqual(byId.get("liquid/d1-ultra"), {
+		type: "classifier",
+		id: "liquid/d1-ultra",
+		name: "LiquidAI: d1-ultra",
+		api: "typesafe-system-one",
+		baseUrl: "https://openrouter.ai/api/v1",
+		input: ["text"],
+		inputLimits: undefined,
+		cost: { input: 0.042, output: 0, cacheRead: 0.042, cacheWrite: 0 },
+		contextWindow: 32768,
+		headers: undefined,
+	});
+	// Pi's builtin definition wins over the live list.
+	assert.equal(byId.get("typesafe/jev-1.13")?.name, "Builtin Jev");
+	// A chat model on the list stays chat.
+	assert.equal((byId.get("z-ai/glm-5.3-flash") as { type?: string }).type, undefined);
+	assert.equal(byId.get("z-ai/glm-5.3-flash")?.api, "openai-completions");
+	// An id that is not a decision model gets the chat stub, never a classifier.
+	assert.deepEqual(byId.get("acme/unknown"), fallbackModel("acme/unknown"));
+	// A decision model that is not allowed is not registered.
+	assert.deepEqual(buildAllowedModels(catalog, ["z-ai/glm-5.3-flash"]).map((m) => m.id), ["z-ai/glm-5.3-flash"]);
+	assert.deepEqual(buildAllowedModels(catalog, []), []);
+});
+
 test("loadConfig/saveConfig round-trip; missing file uses defaults", () => {
 	const dir = mkdtempSync(join(tmpdir(), "openrouter-gate-"));
 	try {
@@ -390,6 +451,18 @@ test("fetchOpenRouterModels: caches, skips plus variants, throws on HTTP error",
 	);
 
 	resetPickerCache();
+	let url = "";
+	const fetchLive = (async (input: string) => {
+		url = input;
+		return { ok: true, status: 200, statusText: "OK", json: async () => LIVE_LIST };
+	}) as unknown as typeof fetch;
+	await fetchOpenRouterModels({ fetch: fetchLive, now: () => 1 });
+	assert.match(url, /\/models\?output_modalities=text,decisions$/);
+	assert.deepEqual(getCachedDecisionModels().map((m) => m.id), ["liquid/d1-ultra", "typesafe/jev-1.13"]);
+	assert.ok(getCachedPickerModels().some((m) => m.id === "liquid/d1-ultra"));
+
+	resetPickerCache();
+	assert.deepEqual(getCachedDecisionModels(), []);
 	const fetchFail = (async () => ({ ok: false, status: 502, statusText: "Bad Gateway" })) as typeof fetch;
 	await assert.rejects(() => fetchOpenRouterModels({ fetch: fetchFail, now: () => 1 }), /502/);
 });
