@@ -140,15 +140,17 @@ class IndexTemplateTest(unittest.TestCase):
     def test_collections(self):
         names = re.findall(r"^  ([a-z0-9-]+):$", self.out.split("models:")[0], re.M)
         self.assertEqual(names[:2], ["notes", "repo-dotfiles"])
-        self.assertEqual(names[-2:], ["sessions", "recaps"])
+        self.assertEqual(names[-4:], ["sessions", "claude-sessions", "codex-sessions", "recaps"])
         for n in names:
-            self.assertTrue(n in ("notes", "sessions", "recaps") or n.startswith("repo-"), n)
+            self.assertTrue(n in ("notes", "sessions", "claude-sessions", "codex-sessions", "recaps") or n.startswith("repo-"), n)
         self.assertEqual(len(names), len(set(names)))
         home = str(self.home)
         self.assertIn("    path: %s/tmp\n    pattern: \"*/*.md\"" % home, self.out)
         self.assertIn("    path: %s/.local/share/chezmoi\n" % home, self.out)
         self.assertIn("    path: %s/.local/share/qmd-corpus/sessions\n" % home, self.out)
         self.assertIn("    path: %s/.local/share/qmd-corpus/recaps\n" % home, self.out)
+        self.assertIn("    path: %s/.local/share/qmd-corpus/claude-sessions\n" % home, self.out)
+        self.assertIn("    path: %s/.local/share/qmd-corpus/codex-sessions\n" % home, self.out)
 
     def test_masks_and_contexts(self):
         # Parse each collection block; a wrong mask would silently index nothing (or everything).
@@ -159,6 +161,8 @@ class IndexTemplateTest(unittest.TestCase):
         self.assertEqual(by["notes"][2], '"*/*.md"')
         self.assertEqual(by["sessions"][2], '"**/*.md"')
         self.assertEqual(by["recaps"][2], '"**/*.md"')
+        self.assertEqual(by["claude-sessions"][2], '"**/*.md"')
+        self.assertEqual(by["codex-sessions"][2], '"**/*.md"')
         self.assertEqual(by["repo-dotfiles"][2], '"**/README.md,**/AGENTS.md,docs/**/*.md"')
         for name, _path, pattern, ctx in blocks:
             if name.startswith("repo-"):
@@ -193,9 +197,9 @@ class WorkIndexTemplateTest(unittest.TestCase):
     def names(out):
         return re.findall(r"^  ([a-z0-9-]+):$", out.split("models:")[0], re.M)
 
-    def test_a_bare_work_home_gets_dotfiles_sessions_and_recaps(self):
+    def test_a_bare_work_home_gets_dotfiles_all_sessions_and_recaps(self):
         out, home = self.render()
-        self.assertEqual(self.names(out), ["repo-dotfiles", "sessions", "recaps"])
+        self.assertEqual(self.names(out), ["repo-dotfiles", "sessions", "claude-sessions", "codex-sessions", "recaps"])
         self.assertIn("    path: %s/.local/share/qmd-corpus/sessions\n" % home, out)
         self.assertTrue(out.endswith(MODELS))
         self.assertFalse([l for l in out.splitlines() if not l.strip() or l.lstrip().startswith("#")])
@@ -207,14 +211,14 @@ class WorkIndexTemplateTest(unittest.TestCase):
 
     def test_work_checkouts_are_found_under_home_git_only(self):
         out, home = self.render(dirs=["git/coordinator", "git/retro", "git/unrelated"])
-        self.assertEqual(self.names(out), ["repo-dotfiles", "repo-coordinator", "repo-retro", "sessions", "recaps"])
+        self.assertEqual(self.names(out), ["repo-dotfiles", "repo-coordinator", "repo-retro", "sessions", "claude-sessions", "codex-sessions", "recaps"])
         self.assertIn("    path: %s/git/coordinator\n" % home, out)
         self.assertNotIn("unrelated", out)
         self.assertNotIn("/Volumes/Workshop", out)
 
     def test_work_never_lists_the_personal_only_repos(self):
         out, _ = self.render(dirs=["git/loop-engine", "git/budget-steward", "git/cartwmic-homelab-v2"])
-        self.assertEqual(self.names(out), ["repo-dotfiles", "sessions", "recaps"])
+        self.assertEqual(self.names(out), ["repo-dotfiles", "sessions", "claude-sessions", "codex-sessions", "recaps"])
 
     def test_personal_still_has_notes_without_a_tmp_folder(self):
         out, _ = self.render("personal")
