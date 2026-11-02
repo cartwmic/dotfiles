@@ -172,6 +172,8 @@ Library/LaunchAgents/local.qmd-refresh.plist
 .pi/agent/extensions/pi-codex-fast.json
 # Session titles use the personal Codex login; the auto-session-name package is personal only.
 .pi/agent/extensions/auto-session-name.json
+# kgate runs jobs on the personal homelab Kubernetes cluster.
+.local/bin/kgate
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 # Anthropic stalls are only seen on the work profile.
