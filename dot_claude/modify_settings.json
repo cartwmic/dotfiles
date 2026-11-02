@@ -1,0 +1,16 @@
+#!/bin/sh
+# Own one key of ~/.claude/settings.json and keep everything Claude Code writes there.
+# cleanupPeriodDays: Claude deletes transcripts after this many days (default 30). qmd-export prunes a session's copy once its
+# source is gone, so a year here is what lets the claude-sessions QMD collection match the Pi window (docs/qmd.md).
+set -eu
+
+exec jq -s '
+  if length == 0 then
+    {}
+  elif length == 1 and (.[0] | type) == "object" then
+    .[0]
+  else
+    error("~/.claude/settings.json must be a JSON object")
+  end
+  | .cleanupPeriodDays = 365
+'
