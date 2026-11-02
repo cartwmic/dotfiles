@@ -3,7 +3,7 @@
 [QMD](https://github.com/tobi/qmd) (MIT, Tobi Lütke) is a local markdown search engine: SQLite FTS5 (BM25), sqlite-vec vectors,
 a query-expansion model and a reranker, all run on this Mac through node-llama-cpp. Michael chose it as the one search index
 for notes, repo docs, Pi session recaps and Pi sessions, with hybrid (semantic) search as the default query path
-(ask #159 = C, ask #160 = default; 2026-10-26). Research and measurements: `~/tmp/qmd/PLAN.md` (scratch, not in the repo).
+(ask #159 = C, ask #160 = default; 2026-10-26). Claude Code and Codex sessions were added on 2026-11-02, on both profiles like the Pi sessions. Research and measurements: `~/tmp/qmd/PLAN.md` (scratch, not in the repo).
 
 ## What is in the repo
 
@@ -13,7 +13,7 @@ for notes, repo docs, Pi session recaps and Pi sessions, with hybrid (semantic) 
 | Collections | `dot_config/qmd/index.yml.tmpl` | `~/.config/qmd/index.yml` |
 | Skill | `dot_local/share/agent-harness/canonical/skills/searching-with-qmd` | skill sync links it into Claude, Codex and Pi |
 | Refresh wrapper | `dot_local/bin/executable_qmd-refresh` | `~/.local/bin/qmd-refresh` |
-| Exporter | `dot_local/bin/executable_qmd-export` | `~/.local/bin/qmd-export`; writes `~/.local/share/qmd-corpus/{sessions,recaps}` |
+| Exporter | `dot_local/bin/executable_qmd-export` | `~/.local/bin/qmd-export`; writes `~/.local/share/qmd-corpus/{sessions,claude-sessions,codex-sessions,recaps}` |
 | `qmd` on PATH | `dot_local/bin/executable_qmd` | `~/.local/bin/qmd`, a 20-line wrapper around the mise shim ([qmd on PATH](#qmd-on-path)) |
 | Scheduled refresh (macOS) | `Library/LaunchAgents/local.qmd-refresh.plist.tmpl`, `dot_local/bin/executable_qmd-refresh-scheduled`, `run_onchange_after_71_qmd_refresh_launchd.sh.tmpl`, `.chezmoitemplates/qmd_refresh_minutes` | `~/Library/LaunchAgents/local.qmd-refresh.plist`, `~/.local/bin/qmd-refresh-scheduled` ([Scheduled refresh](#scheduled-refresh)) |
 | Daily cleanup switch | `dot_config/qmd/refresh.conf.tmpl`, `.chezmoitemplates/qmd_refresh_cleanup` | `~/.config/qmd/refresh.conf` (`cleanup=on` or `off`; [Daily cleanup](#daily-cleanup)) |
@@ -274,12 +274,14 @@ Two ways, both Michael's call:
 
 ## The session corpus: `qmd-export`
 
-QMD indexes markdown files, so the Pi sessions and session-recap records are exported to markdown first (`qmd-refresh` does
+QMD indexes markdown files, so the Pi, Claude Code and Codex sessions and the session-recap records are exported to markdown first (`qmd-refresh` does
 this as the first step of its job; `qmd-export` also runs alone). Stdlib Python 3.9+, no network.
 
 | Reads | Writes |
 |---|---|
 | `~/.pi/agent/sessions/**/*.jsonl` | `~/.local/share/qmd-corpus/sessions/<day>/<session-id>.md` |
+| `~/.claude/projects/**/*.jsonl` | `~/.local/share/qmd-corpus/claude-sessions/<day>/<session-id>.md` (sub-agent: `<session-id>-agent-<id>.md`) |
+| `~/.codex/sessions/**/*.jsonl` | `~/.local/share/qmd-corpus/codex-sessions/<day>/<session-id>.md` |
 | `~/.local/share/session-recap/records/<day>/<record>.json` | `~/.local/share/qmd-corpus/recaps/<day>/<record-id>.md` |
 
 Everything is relative to the machine's own home directory, so it is identical on every profile (a work Mac exports its own
@@ -289,6 +291,21 @@ sessions and recaps; nothing is copied between machines).
   the session id, cwd and start time as frontmatter. Tool results, thinking, system and custom entries stay out. Headings
   inside message text are escaped so they do not split chunks. Sub-agent sessions (`.../run-0/session.jsonl`) are included;
   two files with one session id get a hash suffix.
+- **Claude Code** (`claude-sessions`): user prompts and assistant text. Tool calls and results, thinking, attachments (system
+  reminders), `isMeta` entries and request logs stay out; a compact summary (`isCompactSummary`) is a compaction. The title is
+  the session's custom title, else its AI title, else the first prompt. Sub-agent transcripts (`<id>/subagents/agent-*.jsonl`)
+  are included; their frontmatter `session` is the parent's id. Claude has no header line, so the id and day come from the
+  first entry that has a `sessionId` and `timestamp`.
+- **Codex** (`codex-sessions`): user and assistant `response_item` messages and `compacted` summaries. Developer messages,
+  reasoning, tool calls and output and the duplicate `event_msg` copies stay out. The id, cwd and day come from the first
+  line (`session_meta`).
+- **Injected context is dropped** for Claude and Codex: a user text that starts with `# AGENTS.md instructions`, or is one
+  `<tag>...</tag>` block (`<environment_context>`, `<system-reminder>`, `<local-command-caveat>`), is not something the person typed.
+- **Every collection folder exists** even when its source does not (no `~/.codex` yet), because `qmd-refresh` skips the daily
+  cleanup while a collection folder is missing. A collection whose documents all go (no Claude or Codex use for a year)
+  also holds the cleanup back until it has a document again ([Daily cleanup](#daily-cleanup)).
+- **Claude Code deletes its own transcripts** after `cleanupPeriodDays` (30 by default), and a deleted source's output is
+  pruned, so `claude-sessions` keeps only what Claude keeps. Raise `cleanupPeriodDays` in Claude's settings to keep more.
 - **Incremental:** a source whose output exists and is not older than it is skipped without reading it (a session's id and day
   come from its first line). A source with nothing to export is remembered by mtime in `.qmd-export-state.json`.
   Measured here: first run 48 s, 203 MB RSS, 8,359 sessions and 8,777 recaps -> 135 MB; second run 2.3 s.
@@ -305,7 +322,7 @@ sessions and recaps; nothing is copied between machines).
 ## The work profile (axon-work-computer)
 
 The same files land on the work Mac as on the personal one (the pin, `qmd-refresh`, `qmd-export`, the skill, the same models, the `qmd` wrapper and the scheduled refresh). Only `index.yml.tmpl` renders differently:
-`notes` only if `~/tmp` exists there, and the repo collections are the checkouts that exist under `~/git` (`coordinator`, `retro`) instead of `/Volumes/Workshop/macbook/git`. `repo-dotfiles`, `sessions`, `recaps` are on both. The sessions and
+`notes` only if `~/tmp` exists there, and the repo collections are the checkouts that exist under `~/git` (`coordinator`, `retro`) instead of `/Volumes/Workshop/macbook/git`. `repo-dotfiles`, `sessions`, `claude-sessions`, `codex-sessions`, `recaps` are on both. The sessions and
 recaps are the work Mac's own; nothing moves between machines. Termux gets none of it.
 
 **What leaves the machine.** Checked in the pinned `@tobilu/qmd@2.8.3` package (the unpacked `dist/`), on 2026-10-27:
@@ -326,7 +343,7 @@ recaps are the work Mac's own; nothing moves between machines. Termux gets none 
 - If a corporate proxy re-signs TLS, `qmd pull` can fail on the certificate; `NODE_EXTRA_CA_CERTS` is the usual fix. Not tried on the work network.
   The model files can also be copied into `~/.cache/qmd/models` by hand under the same file names.
 
-**What is stored on the work Mac, in plain text.** `qmd-export` copies the user and assistant text of Pi sessions (365 days) and the recaps to `~/.local/share/qmd-corpus`, and the index
+**What is stored on the work Mac, in plain text.** `qmd-export` copies the user and assistant text of Pi, Claude Code and Codex sessions (365 days) and the recaps to `~/.local/share/qmd-corpus`, and the index
 (with embeddings) is `~/.cache/qmd/index.sqlite`. Neither is in the dotfiles repo or synced. Work conversations are therefore in one more place than before.
 
 **The hourly job.** The work Mac gets the same launchd agent (`local.qmd-refresh`, [Scheduled refresh](#scheduled-refresh)): a recurring
@@ -365,7 +382,7 @@ chezmoi --source ~/.local/share/chezmoi apply ~/.config/mise/conf.d/qmd.toml ~/.
 mise install                          # npm package, about 200 MB
 mise exec -- ~/.local/user_scripts/apply_harness_config.sh   # links the skill into Claude, Codex and Pi (needed after a full apply too)
 qmd pull                              # 2.1 GB of models, once
-qmd-export --dry-run                  # how many sessions and recaps it would write
+qmd-export --dry-run                  # how many sessions (Pi, Claude, Codex) and recaps it would write
 qmd-refresh                           # export, update, embed in one gate job; the first one is long
 qmd-refresh status
 qmd search "something you know is in your notes"

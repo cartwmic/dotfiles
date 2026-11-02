@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""qmd-export — turn Pi sessions and session-recap records into markdown files that QMD can index.
+"""qmd-export — turn Pi, Claude Code and Codex sessions and session-recap records into markdown files that QMD can index.
 
-    qmd-export [--days N] [--out DIR] [--sessions-root DIR] [--recaps-root DIR] [--dry-run] [-q]
+    qmd-export [--days N] [--out DIR] [--sessions-root DIR] [--claude-root DIR] [--codex-root DIR] [--recaps-root DIR]
+               [--dry-run] [-q]
 
 Reads  ~/.pi/agent/sessions/**/*.jsonl            (Pi session transcripts)
+       ~/.claude/projects/**/*.jsonl              (Claude Code transcripts, sub-agents under <session>/subagents/)
+       ~/.codex/sessions/**/*.jsonl               (Codex rollouts)
        ~/.local/share/session-recap/records/<day>/<record>.json
 Writes ~/.local/share/qmd-corpus/sessions/<day>/<session-id>.md
+       ~/.local/share/qmd-corpus/claude-sessions/<day>/<session-id>.md   (sub-agent: <session-id>-agent-<id>.md)
+       ~/.local/share/qmd-corpus/codex-sessions/<day>/<session-id>.md
        ~/.local/share/qmd-corpus/recaps/<day>/<record-id>.md
 
 Same on every profile: everything is relative to the home directory of the machine it runs on, so the work Mac exports its own
@@ -16,7 +21,10 @@ Incremental: a source whose output exists and is not older than it is skipped wi
 One exporter runs at a time (a lock in the output directory; a second one exits 3). Nothing is deleted from a source root that is missing or unreadable, or from a directory that is not a corpus this program
 made (the .qmd-corpus marker). Files are written whole and renamed into place, so an interrupted run leaves no half file.
 What goes in: user and assistant text (4000 chars per message), compaction summaries (8000), recap summaries; tool results,
-thinking, system and custom entries stay out. Markdown headings inside message text are escaped so they do not split chunks.
+thinking, system and custom entries stay out, as do the context blocks a harness injects as user text (AGENTS.md, a message
+that is one <tag>...</tag> block such as <environment_context> or <system-reminder>). Markdown headings inside message text
+are escaped so they do not split chunks. Every output directory is created even when its source is missing, so the QMD
+collection folder always exists.
 """
 import argparse
 import fcntl
@@ -46,8 +54,43 @@ def esc(s):
     return re.sub(r"(?m)^(#{1,6} )", r"\\\1", s)
 
 
+# A user message that is only harness context, not something the person typed.
+INJECTED = re.compile(r"\A\s*(?:# AGENTS\.md instructions|<([A-Za-z_][\w-]*)(?:\s[^>]*)?>.*</\1>\s*\Z)", re.S)
+
+
+def injected(x):
+    return bool(INJECTED.match(x))
+
+
+def transcript(sid, cwd, started, title, parts):
+    title = (title or sid).replace('"', "'").replace("\n", " ")
+    fm = '---\nsession: %s\ncwd: "%s"\nstarted: "%s"\n---\n# %s\n\n' % (sid, cwd, started, title)
+    return (started or "0000-00-00")[:10], fm + "\n".join(parts)
+
+
+def message(role, ts, x):
+    return "## %s %s\n\n%s\n" % (role, ts, esc(x[:MAXMSG]))
+
+
+def compaction(ts, x):
+    return "## compaction %s\n\n%s\n" % (ts, esc(x[: MAXMSG * 2]))
+
+
+def jsonl(path):
+    """Each JSON object of a .jsonl file, as (raw line, object); unparseable lines are skipped."""
+    with open(path, "rb") as f:
+        for line in f:
+            s = line.decode("utf-8", "replace")
+            try:
+                o = json.loads(s)
+            except ValueError:
+                continue
+            if isinstance(o, dict):
+                yield s, o
+
+
 def render_session(path):
-    """-> (session id, day, markdown) or None when there is nothing worth indexing."""
+    """Pi. -> (day, markdown) or None when there is nothing worth indexing."""
     sid = cwd = name = started = first = None
     parts = []
     with open(path, "rb") as f:
@@ -67,7 +110,7 @@ def render_session(path):
             elif t == "session_info":
                 name = o.get("name") or name
             elif t == "compaction" and o.get("summary"):
-                parts.append("## compaction %s\n\n%s\n" % (ts, esc(o["summary"][: MAXMSG * 2])))
+                parts.append(compaction(ts, o["summary"]))
             elif t == "message":
                 m = o.get("message") or {}
                 role = m.get("role")
@@ -75,17 +118,15 @@ def render_session(path):
                     x = text_of(m.get("content")).strip()
                     if x:
                         if role == "user" and not first:
-                            first = x[:80].replace("\n", " ")
-                        parts.append("## %s %s\n\n%s\n" % (role, ts, esc(x[:MAXMSG])))
+                            first = x[:80]
+                        parts.append(message(role, ts, x))
     if not sid or not parts:
         return None
-    title = (name or first or sid).replace('"', "'")
-    fm = '---\nsession: %s\ncwd: "%s"\nstarted: "%s"\n---\n# %s\n\n' % (sid, cwd, started, title)
-    return sid, (started or "0000-00-00")[:10], fm + "\n".join(parts)
+    return transcript(sid, cwd, started, name or first, parts)
 
 
 def session_header(path):
-    """The session id and day from the first line only, so an unchanged file is never read whole."""
+    """Pi: the session id and day from the first line only, so an unchanged file is never read whole."""
     with open(path, "rb") as f:
         try:
             o = json.loads(f.readline().decode("utf-8", "replace"))
@@ -94,6 +135,106 @@ def session_header(path):
     if isinstance(o, dict) and o.get("type") == "session" and o.get("id"):
         return str(o["id"]), (o.get("timestamp") or "0000-00-00")[:10]
     return None
+
+
+def claude_name(path, sid):
+    """A main transcript is <session-id>.jsonl; a sub-agent's is <session-id>/subagents/agent-<id>.jsonl."""
+    stem = os.path.basename(path)[: -len(".jsonl")]
+    return stem if stem == sid else "%s-%s" % (sid, stem)
+
+
+def claude_header(path):
+    """Claude Code has no header line: the first entry that carries a session id and a timestamp (a few lines in)."""
+    with open(path, "rb") as f:
+        for _ in range(200):
+            line = f.readline()
+            if not line:
+                break
+            try:
+                o = json.loads(line.decode("utf-8", "replace"))
+            except ValueError:
+                continue
+            if isinstance(o, dict) and o.get("sessionId") and o.get("timestamp"):
+                return claude_name(path, str(o["sessionId"])), o["timestamp"][:10]
+    return None
+
+
+def render_claude(path):
+    """Claude Code: user prompts and assistant text; tool calls, tool results, thinking, attachments (system reminders) and
+    meta entries stay out. A compact summary is a user entry flagged isCompactSummary."""
+    sid = cwd = started = first = None
+    titles = {}
+    parts = []
+    for _, o in jsonl(path):
+        t, ts = o.get("type"), o.get("timestamp")
+        if sid is None and o.get("sessionId") and ts:
+            sid, started = str(o["sessionId"]), ts
+        if t in ("custom-title", "ai-title", "summary"):
+            x = o.get({"custom-title": "customTitle", "ai-title": "aiTitle", "summary": "summary"}[t])
+            if isinstance(x, str) and x.strip():
+                titles[t] = x.strip()
+            continue
+        if t not in ("user", "assistant") or o.get("isMeta"):
+            continue
+        cwd = cwd or o.get("cwd")
+        m = o.get("message") or {}
+        x = text_of(m.get("content")).strip()
+        if not x:
+            continue
+        if t == "user" and o.get("isCompactSummary"):
+            parts.append(compaction(ts, x))
+        elif t == "assistant" or not injected(x):
+            if t == "user" and not first:
+                first = x[:80]
+            parts.append(message(t, ts, x))
+    if not sid or not parts:
+        return None
+    title = titles.get("custom-title") or titles.get("ai-title") or titles.get("summary") or first
+    return transcript(sid, cwd, started, title, parts)     # a sub-agent file names its parent session
+
+
+def codex_header(path):
+    """Codex: the first line is session_meta."""
+    with open(path, "rb") as f:
+        try:
+            o = json.loads(f.readline().decode("utf-8", "replace"))
+        except ValueError:
+            return None
+    p = o.get("payload") if isinstance(o, dict) and o.get("type") == "session_meta" else None
+    if isinstance(p, dict) and p.get("id"):
+        return str(p["id"]), (p.get("timestamp") or o.get("timestamp") or "0000-00-00")[:10]
+    return None
+
+
+def render_codex(path):
+    """Codex: user and assistant messages (response_item); developer messages, reasoning, tool calls and their output, the
+    duplicate event_msg copies and the injected AGENTS.md / <environment_context> user messages stay out."""
+    sid = cwd = started = first = None
+    parts = []
+    for s, o in jsonl(path):
+        head = s[:200]
+        if '"session_meta"' not in head and '"response_item"' not in head and '"compacted"' not in head:
+            continue
+        t, ts, p = o.get("type"), o.get("timestamp"), o.get("payload")
+        if not isinstance(p, dict):
+            continue
+        if t == "session_meta" and sid is None:
+            sid, cwd, started = p.get("id"), p.get("cwd"), p.get("timestamp") or ts
+        elif t == "compacted" and isinstance(p.get("message"), str) and p["message"].strip():
+            parts.append(compaction(ts, p["message"].strip()))
+        elif t == "response_item" and p.get("type") == "message" and p.get("role") in ("user", "assistant"):
+            role = p["role"]
+            blocks = p.get("content") if isinstance(p.get("content"), list) else []
+            texts = [b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") in ("input_text", "output_text")]
+            texts = [x.strip() for x in texts if isinstance(x, str) and x.strip() and (role == "assistant" or not injected(x))]
+            if texts:
+                x = "\n\n".join(texts)
+                if role == "user" and not first:
+                    first = x[:80]
+                parts.append(message(role, ts, x))
+    if not sid or not parts:
+        return None
+    return transcript(str(sid), cwd, started, first, parts)
 
 
 def render_recap(path):
@@ -129,8 +270,20 @@ def write_atomic(path, body):
     os.replace(tmp, path)
 
 
-def export_kind(kind, root, suffix, out_dir, cutoff, state, dry, log):
+# kind -> (source suffix, header reader or None for recaps, renderer). The kind is also the output and state directory name.
+KINDS = {
+    "sessions": (".jsonl", session_header, render_session),
+    "claude-sessions": (".jsonl", claude_header, render_claude),
+    "codex-sessions": (".jsonl", codex_header, render_codex),
+    "recaps": (".json", None, render_recap),
+}
+
+
+def export_kind(kind, root, out_dir, cutoff, state, dry, log):
+    suffix, header, render = KINDS[kind]
     stats = dict(written=0, unchanged=0, skipped=0, pruned=0, errors=0)
+    if not dry:
+        os.makedirs(out_dir, exist_ok=True)   # the collection folder exists even with no source (qmd-refresh's cleanup needs it)
     if not os.path.isdir(root):
         log("%s: source %s does not exist: nothing exported, nothing pruned" % (kind, root))
         return stats
@@ -161,8 +314,8 @@ def export_kind(kind, root, suffix, out_dir, cutoff, state, dry, log):
         if skip.get(src) == mtime:
             continue
         try:
-            if kind == "sessions":
-                head = session_header(src)
+            if header:
+                head = header(src)
                 if not head:
                     skip[src] = mtime
                     continue
@@ -180,13 +333,13 @@ def export_kind(kind, root, suffix, out_dir, cutoff, state, dry, log):
                 owners[dest] = src
                 stats["unchanged"] += 1
                 continue
-            r = render_session(src) if kind == "sessions" else render_recap(src)
+            r = render(src)
             if r is None:
                 skip[src] = mtime
                 continue
-            body = r[2] if kind == "sessions" else r
-            if kind == "sessions":
-                dest = os.path.join(out_dir, r[1], os.path.basename(dest))
+            body = r[1] if header else r
+            if header:
+                dest = os.path.join(out_dir, r[0], os.path.basename(dest))
             wanted.add(dest)
             if not dry:
                 write_atomic(dest, body)
@@ -218,10 +371,12 @@ def export_kind(kind, root, suffix, out_dir, cutoff, state, dry, log):
 
 def main(argv=None):
     home = os.path.expanduser("~")
-    ap = argparse.ArgumentParser(description="Export Pi sessions and recaps as markdown for QMD.")
+    ap = argparse.ArgumentParser(description="Export Pi, Claude Code and Codex sessions and recaps as markdown for QMD.")
     ap.add_argument("--days", type=int, default=365, help="export sources modified in the last N days (default 365)")
     ap.add_argument("--out", default=os.path.join(home, ".local/share/qmd-corpus"))
     ap.add_argument("--sessions-root", default=os.path.join(home, ".pi/agent/sessions"))
+    ap.add_argument("--claude-root", default=os.path.join(home, ".claude/projects"))
+    ap.add_argument("--codex-root", default=os.path.join(home, ".codex/sessions"))
     ap.add_argument("--recaps-root", default=os.path.join(home, ".local/share/session-recap/records"))
     ap.add_argument("--dry-run", action="store_true", help="say what would change, change nothing")
     ap.add_argument("-q", "--quiet", action="store_true")
@@ -245,7 +400,7 @@ def main(argv=None):
     if not a.dry_run:
         os.makedirs(out, exist_ok=True)
         if not os.path.exists(marker):
-            open(marker, "w").write("made by qmd-export; its sessions/ and recaps/ are rewritten and pruned on every run\n")
+            open(marker, "w").write("made by qmd-export; its sessions/, claude-sessions/, codex-sessions/ and recaps/ are rewritten and pruned on every run\n")
         # One exporter at a time (also against qmd-refresh's): scan, write, prune and state are one unit. Held until exit.
         lock = open(os.path.join(out, LOCK), "a")
         try:
@@ -259,8 +414,9 @@ def main(argv=None):
         except (OSError, ValueError):
             state = {}
     res = {}
-    for kind, root, suffix in (("sessions", a.sessions_root, ".jsonl"), ("recaps", a.recaps_root, ".json")):
-        res[kind] = export_kind(kind, root, suffix, os.path.join(out, kind), cutoff, state, a.dry_run, log)
+    roots = {"sessions": a.sessions_root, "claude-sessions": a.claude_root, "codex-sessions": a.codex_root, "recaps": a.recaps_root}
+    for kind, root in roots.items():
+        res[kind] = export_kind(kind, root, os.path.join(out, kind), cutoff, state, a.dry_run, log)
     if not a.dry_run:
         write_atomic(sp, json.dumps(state))
     if not a.quiet:
