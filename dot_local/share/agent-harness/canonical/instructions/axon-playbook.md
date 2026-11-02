@@ -4,5 +4,5 @@ Applies in a git repo whose remote is `git.work.example` or `github.com/axon-*`.
 
 If `~/.local/share/agent-harness/external-skills/axon-agents-playbook` does not exist, ignore this section.
 
-- At session start, run `~/.local/share/agent-harness/external-skills/axon-agents-playbook/bin/playbook-context` and follow what it prints. Claude Code does this for you in a SessionStart hook, so do not run it again there.
+- Claude Code (a SessionStart hook) and Pi (the `axon-playbook` extension) inject the playbook notes for this repo at session start. Follow them. In any other harness (Codex), at session start run `~/.local/share/agent-harness/external-skills/axon-agents-playbook/bin/playbook-context` and follow what it prints.
 - Before you open a PR, mark one ready, push to a PR branch, or ask for review, use the `axon-pr-preflight` skill.
