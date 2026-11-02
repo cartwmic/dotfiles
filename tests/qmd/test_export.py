@@ -25,15 +25,40 @@ def session(sid, started="2026-10-20T10:00:00.000Z", cwd="/w/proj", msgs=(("user
     return jl(*rows)
 
 
+def cc_user(text, ts="2026-10-20T10:00:00.000Z", sid="cc1", **kw):
+    o = {"type": "user", "message": {"role": "user", "content": text}, "timestamp": ts, "sessionId": sid, "cwd": "/w/proj",
+         "isSidechain": False}
+    o.update(kw)
+    return o
+
+
+def cc_asst(blocks, ts="2026-10-20T10:01:00.000Z", sid="cc1"):
+    return {"type": "assistant", "message": {"role": "assistant", "content": blocks}, "timestamp": ts, "sessionId": sid,
+            "cwd": "/w/proj"}
+
+
+def cx_meta(sid="cx1", cwd="/w/codex"):
+    return {"timestamp": "2026-10-20T10:00:01.000Z", "type": "session_meta",
+            "payload": {"id": sid, "timestamp": "2026-10-20T10:00:00.000Z", "cwd": cwd, "base_instructions": {"text": "BASE-INSTR"}}}
+
+
+def cx_msg(role, *texts, ts="2026-10-20T10:01:00.000Z"):
+    kind = "output_text" if role == "assistant" else "input_text"
+    return {"timestamp": ts, "type": "response_item",
+            "payload": {"type": "message", "role": role, "content": [{"type": kind, "text": t} for t in texts]}}
+
+
 class Fx:
     def __init__(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.sessions = self.root / "sessions"
         self.recaps = self.root / "recaps"
+        self.claude = self.root / "claude"
+        self.codex = self.root / "codex"
         self.out = self.root / "corpus"
-        self.sessions.mkdir()
-        self.recaps.mkdir()
+        for d in (self.sessions, self.recaps, self.claude, self.codex):
+            d.mkdir()
 
     def put(self, path, text, age_days=0):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,8 +76,15 @@ class Fx:
         o.update(kw)
         return self.put(self.recaps / day / (rid + ".json"), json.dumps(o), age_days)
 
+    def cc(self, rows, rel="-w-proj/cc1.jsonl", age_days=0):
+        return self.put(self.claude / rel, jl(*rows), age_days)
+
+    def cx(self, rows, rel="2026/10/20/rollout-2026-10-20T10-00-00-cx1.jsonl", age_days=0):
+        return self.put(self.codex / rel, jl(*rows), age_days)
+
     def run(self, *args, check=0):
         p = subprocess.run([sys.executable, str(SCRIPT), "--out", str(self.out), "--sessions-root", str(self.sessions),
+                            "--claude-root", str(self.claude), "--codex-root", str(self.codex),
                             "--recaps-root", str(self.recaps), *args], capture_output=True, text=True, timeout=120)
         self.p = p
         if check is not None:
@@ -170,6 +202,126 @@ class ExportTest(Base):
         f.recap("nosummary", summary="")
         f.run()
         self.assertEqual(f.files(), [])
+
+
+class ClaudeTest(Base):
+    def test_layout_frontmatter_title_and_filters(self):
+        f = self.f
+        f.cc([
+            {"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-20T09:59:59.000Z", "sessionId": "cc1", "content": "QUEUED"},
+            cc_user("find the parser bug"),
+            {"type": "attachment", "attachment": {"type": "environment"}, "timestamp": "t", "sessionId": "cc1",
+             "rendered": [{"content": "<system-reminder>ATTACHED-REMINDER</system-reminder>"}]},
+            cc_user("<local-command-caveat>CAVEAT</local-command-caveat>", isMeta=True),
+            cc_user("<system-reminder>\nINJECTED-REMINDER\n</system-reminder>"),
+            cc_asst([{"type": "thinking", "thinking": "THINK"}, {"type": "text", "text": "# heading\nit is line 4"},
+                     {"type": "tool_use", "name": "Bash", "input": {"command": "TOOL-CALL"}}]),
+            cc_user([{"type": "tool_result", "content": "TOOL-OUTPUT"}]),
+            cc_user([{"type": "text", "text": "and the lexer?"}], ts="2026-10-20T10:02:00.000Z"),
+            cc_user("COMPACT " + "z" * 9000, isCompactSummary=True, ts="2026-10-20T10:03:00.000Z"),
+            {"type": "ai-title", "aiTitle": "Old title", "sessionId": "cc1"},
+            {"type": "ai-title", "aiTitle": "Parser bug hunt", "sessionId": "cc1"},
+            {"type": "api-request-blob", "message": {"role": "user", "content": [{"type": "text", "text": "API-BLOB"}]}},
+        ])
+        f.run()
+        self.assertEqual(f.files("claude-sessions"), ["claude-sessions/2026-10-20/cc1.md"])
+        s = (f.out / "claude-sessions/2026-10-20/cc1.md").read_text()
+        self.assertTrue(s.startswith('---\nsession: cc1\ncwd: "/w/proj"\nstarted: "2026-10-20T09:59:59.000Z"\n---\n# Parser bug hunt\n'), s[:200])
+        self.assertIn("## user 2026-10-20T10:00:00.000Z\n\nfind the parser bug", s)
+        self.assertIn("## assistant 2026-10-20T10:01:00.000Z\n\n\\# heading\nit is line 4", s)
+        self.assertIn("## user 2026-10-20T10:02:00.000Z\n\nand the lexer?", s)
+        self.assertIn("## compaction 2026-10-20T10:03:00.000Z", s)
+        self.assertNotIn("z" * 8000, s)
+        for bad in ("QUEUED", "ATTACHED-REMINDER", "CAVEAT", "INJECTED-REMINDER", "THINK", "TOOL-CALL", "TOOL-OUTPUT", "API-BLOB"):
+            self.assertNotIn(bad, s)
+
+    def test_custom_title_wins_and_first_prompt_is_the_fallback(self):
+        f = self.f
+        f.cc([cc_user("hello there"), cc_asst([{"type": "text", "text": "hi"}]),
+              {"type": "ai-title", "aiTitle": "AI", "sessionId": "cc1"}, {"type": "custom-title", "customTitle": "Mine", "sessionId": "cc1"}])
+        f.cc([cc_user("second prompt", sid="cc2"), cc_asst([{"type": "text", "text": "ok"}], sid="cc2")], rel="-w-proj/cc2.jsonl")
+        f.run()
+        self.assertIn("\n# Mine\n", (f.out / "claude-sessions/2026-10-20/cc1.md").read_text())
+        self.assertIn("\n# second prompt\n", (f.out / "claude-sessions/2026-10-20/cc2.md").read_text())
+
+    def test_subagent_transcripts_name_their_parent(self):
+        f = self.f
+        f.cc([cc_user("main"), cc_asst([{"type": "text", "text": "ok"}])])
+        f.cc([cc_user("sub task", isSidechain=True), cc_asst([{"type": "text", "text": "done"}])],
+             rel="-w-proj/cc1/subagents/agent-a1.jsonl")
+        f.run()
+        self.assertEqual(f.files("claude-sessions"), ["claude-sessions/2026-10-20/cc1-agent-a1.md", "claude-sessions/2026-10-20/cc1.md"])
+        self.assertIn("session: cc1\n", (f.out / "claude-sessions/2026-10-20/cc1-agent-a1.md").read_text())
+
+    def test_nothing_to_index_and_incremental(self):
+        f = self.f
+        f.cc([{"type": "queue-operation", "timestamp": "t", "sessionId": "e"}], rel="-x/e.jsonl")
+        f.cc([cc_user("hi"), cc_asst([{"type": "text", "text": "yo"}])])
+        f.run()
+        self.assertEqual(f.files("claude-sessions"), ["claude-sessions/2026-10-20/cc1.md"])
+        self.assertIn("claude-sessions: 0 written, 1 unchanged", f.run().stdout)
+
+
+class CodexTest(Base):
+    def test_layout_and_filters(self):
+        f = self.f
+        f.cx([
+            cx_meta(),
+            cx_msg("developer", "DEV-PERMISSIONS"),
+            cx_msg("user", "# AGENTS.md instructions for /w\n\n<INSTRUCTIONS>\nAGENTS-BODY\n</INSTRUCTIONS>"),
+            cx_msg("user", "<environment_context>\n  <cwd>/w</cwd>\n</environment_context>"),
+            {"timestamp": "t", "type": "world_state", "payload": {"state": {"agents_md": {"text": "WORLD"}}}},
+            cx_msg("user", "fix the flaky test", ts="2026-10-20T10:02:00.000Z"),
+            {"timestamp": "t", "type": "response_item", "payload": {"type": "reasoning", "summary": [{"type": "summary_text", "text": "REASONING"}]}},
+            {"timestamp": "t", "type": "response_item", "payload": {"type": "function_call", "name": "shell", "arguments": "TOOL-ARGS"}},
+            {"timestamp": "t", "type": "response_item", "payload": {"type": "function_call_output", "output": "TOOL-OUTPUT"}},
+            {"timestamp": "t", "type": "event_msg", "payload": {"type": "agent_message", "message": "EVENT-COPY"}},
+            cx_msg("assistant", "## Done\nretried the clock", ts="2026-10-20T10:03:00.000Z"),
+            {"timestamp": "2026-10-20T10:04:00.000Z", "type": "compacted", "payload": {"message": "COMPACTED SUMMARY"}},
+        ])
+        f.run()
+        self.assertEqual(f.files("codex-sessions"), ["codex-sessions/2026-10-20/cx1.md"])
+        s = (f.out / "codex-sessions/2026-10-20/cx1.md").read_text()
+        self.assertTrue(s.startswith('---\nsession: cx1\ncwd: "/w/codex"\nstarted: "2026-10-20T10:00:00.000Z"\n---\n# fix the flaky test\n'), s[:200])
+        self.assertIn("## user 2026-10-20T10:02:00.000Z\n\nfix the flaky test", s)
+        self.assertIn("## assistant 2026-10-20T10:03:00.000Z\n\n\\## Done\nretried the clock", s)
+        self.assertIn("## compaction 2026-10-20T10:04:00.000Z\n\nCOMPACTED SUMMARY", s)
+        for bad in ("BASE-INSTR", "DEV-PERMISSIONS", "AGENTS-BODY", "environment_context", "WORLD", "REASONING", "TOOL-ARGS",
+                    "TOOL-OUTPUT", "EVENT-COPY"):
+            self.assertNotIn(bad, s)
+
+    def test_only_injected_context_is_nothing_to_index(self):
+        f = self.f
+        f.cx([cx_meta(), cx_msg("user", "<environment_context>x</environment_context>")])
+        f.cx(["not json"], rel="2026/10/20/bad.jsonl")
+        f.run()
+        self.assertEqual(f.files("codex-sessions"), [])
+
+
+class SourcesTest(Base):
+    def test_every_collection_folder_exists_even_without_sources(self):
+        f = self.f
+        for d in (f.claude, f.codex):
+            d.rmdir()
+        p = f.run()
+        self.assertIn("claude-sessions: source", p.stderr)
+        for kind in ("sessions", "claude-sessions", "codex-sessions", "recaps"):
+            self.assertTrue((f.out / kind).is_dir(), kind)
+
+    def test_one_missing_root_does_not_prune_another_kind(self):
+        f = self.f
+        f.cc([cc_user("hi"), cc_asst([{"type": "text", "text": "yo"}])])
+        f.cx([cx_meta(), cx_msg("user", "hi"), cx_msg("assistant", "yo")])
+        f.sess("s1")
+        f.run()
+        mine = f.files()
+        self.assertEqual(len(mine), 3, mine)
+        subprocess.run(["rm", "-rf", str(f.claude)])
+        f.run()
+        self.assertEqual(f.files(), mine, "a missing ~/.claude must not wipe its corpus or the others")
+        (f.codex / "2026/10/20/rollout-2026-10-20T10-00-00-cx1.jsonl").unlink()
+        f.run()
+        self.assertEqual(f.files(), [m for m in mine if not m.startswith("codex-")])
 
 
 class IncrementalTest(Base):
@@ -362,6 +514,8 @@ class ArgsTest(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue((home / ".local/share/qmd-corpus/sessions/2026-10-20/hs.md").exists())
         self.assertTrue((home / ".local/share/qmd-corpus/recaps/2026-10-26/rr.md").exists())
+        self.assertIn("claude-sessions: source %s/.claude/projects does not exist" % home, p.stderr)
+        self.assertIn("codex-sessions: source %s/.codex/sessions does not exist" % home, p.stderr)
 
 
 if __name__ == "__main__":

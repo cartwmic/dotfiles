@@ -1,4 +1,4 @@
-global_context: "Michael's agent work: design notes, repo docs, Pi session recaps and Pi sessions"
+global_context: "Michael's agent work: design notes, repo docs, Pi session recaps and Pi, Claude Code and Codex sessions"
 collections:
 {{- /* Work: ~/tmp/<project>/ notes only where that folder exists, and the checkouts are the ones under ~/git (as the work instances use). */}}
 {{- if or (eq .profile "personal") (stat (printf "%s/tmp" .chezmoi.homeDir)) }}
@@ -34,6 +34,16 @@ collections:
     pattern: "**/*.md"
     context:
       /: Pi session transcripts (user and assistant text only, tool output omitted), frontmatter has the session id and cwd
+  claude-sessions:
+    path: {{ .chezmoi.homeDir }}/.local/share/qmd-corpus/claude-sessions
+    pattern: "**/*.md"
+    context:
+      /: Claude Code session transcripts (user and assistant text only, tool output omitted), frontmatter has the session id and cwd
+  codex-sessions:
+    path: {{ .chezmoi.homeDir }}/.local/share/qmd-corpus/codex-sessions
+    pattern: "**/*.md"
+    context:
+      /: Codex session transcripts (user and assistant text only, tool output omitted), frontmatter has the session id and cwd
   recaps:
     path: {{ .chezmoi.homeDir }}/.local/share/qmd-corpus/recaps
     pattern: "**/*.md"
