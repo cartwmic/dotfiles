@@ -39,6 +39,7 @@ docs/
 .claude/*
 .codex/*
 !.claude/CLAUDE.md
+!.claude/settings.json
 !.codex/AGENTS.md
 !.codex/config.toml
 # Retired staging tree: Termux is first-class via profile "termux"
@@ -152,8 +153,6 @@ Library/LaunchAgents/local.agent-events.plist
 .local/bin/qmd-export
 .local/bin/qmd-refresh-scheduled
 .local/bin/qmd
-# Claude Code keeps transcripts 365 days so claude-sessions matches the Pi window (docs/qmd.md).
-72_claude_transcript_retention.sh
 {{- end }}
 
 {{- if or (and (ne .profile "personal") (ne .profile "axon-work-computer")) (ne .chezmoi.os "darwin") }}

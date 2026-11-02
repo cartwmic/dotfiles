@@ -16,7 +16,7 @@ for notes, repo docs, Pi session recaps and Pi sessions, with hybrid (semantic) 
 | Exporter | `dot_local/bin/executable_qmd-export` | `~/.local/bin/qmd-export`; writes `~/.local/share/qmd-corpus/{sessions,claude-sessions,codex-sessions,recaps}` |
 | `qmd` on PATH | `dot_local/bin/executable_qmd` | `~/.local/bin/qmd`, a 20-line wrapper around the mise shim ([qmd on PATH](#qmd-on-path)) |
 | Scheduled refresh (macOS) | `Library/LaunchAgents/local.qmd-refresh.plist.tmpl`, `dot_local/bin/executable_qmd-refresh-scheduled`, `run_onchange_after_71_qmd_refresh_launchd.sh.tmpl`, `.chezmoitemplates/qmd_refresh_minutes` | `~/Library/LaunchAgents/local.qmd-refresh.plist`, `~/.local/bin/qmd-refresh-scheduled` ([Scheduled refresh](#scheduled-refresh)) |
-| Claude transcript retention | `run_onchange_after_72_claude_transcript_retention.sh` | sets `cleanupPeriodDays: 365` in `~/.claude/settings.json` ([The session corpus](#the-session-corpus-qmd-export)) |
+| Claude transcript retention | `dot_claude/modify_settings.json` | `cleanupPeriodDays: 365` in `~/.claude/settings.json`, other keys kept ([The session corpus](#the-session-corpus-qmd-export)) |
 | Daily cleanup switch | `dot_config/qmd/refresh.conf.tmpl`, `.chezmoitemplates/qmd_refresh_cleanup` | `~/.config/qmd/refresh.conf` (`cleanup=on` or `off`; [Daily cleanup](#daily-cleanup)) |
 
 All of it is on the **personal and work (`axon-work-computer`) profiles**, not Termux (`.chezmoiignore`; decision 303: QMD on both). The
@@ -306,9 +306,9 @@ sessions and recaps; nothing is copied between machines).
   cleanup while a collection folder is missing. A collection whose documents all go (no Claude or Codex use for a year)
   also holds the cleanup back until it has a document again ([Daily cleanup](#daily-cleanup)).
 - **Claude Code deletes its own transcripts** after `cleanupPeriodDays` (30 by default), and a deleted source's output is
-  pruned, so `claude-sessions` keeps only what Claude keeps. `run_onchange_after_72_claude_transcript_retention.sh` sets
-  `cleanupPeriodDays` to 365 in `~/.claude/settings.json` (only that key; the file is not managed by chezmoi), so Claude keeps
-  the same year as the Pi window. It runs again only when the script changes; a later hand edit of the key stays.
+  pruned, so `claude-sessions` keeps only what Claude keeps. `dot_claude/modify_settings.json` (a chezmoi modify script)
+  sets `cleanupPeriodDays` to 365 on every apply and keeps every other key Claude writes, so Claude keeps the same year as the
+  Pi window. A file that is not a JSON object fails the apply instead of being replaced.
 - **Incremental:** a source whose output exists and is not older than it is skipped without reading it (a session's id and day
   come from its first line). A source with nothing to export is remembered by mtime in `.qmd-export-state.json`.
   Measured here: first run 48 s, 203 MB RSS, 8,359 sessions and 8,777 recaps -> 135 MB; second run 2.3 s.
@@ -347,7 +347,7 @@ recaps are the work Mac's own; nothing moves between machines. Termux gets none 
   The model files can also be copied into `~/.cache/qmd/models` by hand under the same file names.
 
 **What is stored on the work Mac, in plain text.** `qmd-export` copies the user and assistant text of Pi, Claude Code and Codex sessions (365 days) and the recaps to `~/.local/share/qmd-corpus`, and the index
-(with embeddings) is `~/.cache/qmd/index.sqlite`. Neither is in the dotfiles repo or synced. Work conversations are therefore in one more place than before. Claude Code also keeps its own full transcripts (tool output included) in `~/.claude/projects` for 365 days instead of 30, through the retention script above.
+(with embeddings) is `~/.cache/qmd/index.sqlite`. Neither is in the dotfiles repo or synced. Work conversations are therefore in one more place than before. Claude Code also keeps its own full transcripts (tool output included) in `~/.claude/projects` for 365 days instead of 30, through `dot_claude/modify_settings.json`.
 
 **The hourly job.** The work Mac gets the same launchd agent (`local.qmd-refresh`, [Scheduled refresh](#scheduled-refresh)): a recurring
 background job on the employer laptop, on by default once the plist is applied, first run one interval after it is loaded.
@@ -378,11 +378,11 @@ git -C ~/.local/share/chezmoi pull --ff-only
 chezmoi --source ~/.local/share/chezmoi apply --dry-run --verbose ~/.config/mise/conf.d/qmd.toml ~/.config/qmd/index.yml ~/.config/qmd/refresh.conf \
   ~/.local/bin/qmd-refresh ~/.local/bin/qmd-export ~/.local/share/agent-harness/canonical/skills/searching-with-qmd \
   ~/.local/bin/qmd ~/.local/bin/qmd-refresh-scheduled ~/Library/LaunchAgents/local.qmd-refresh.plist ~/71_qmd_refresh_launchd.sh \
-  ~/72_claude_transcript_retention.sh
+  ~/.claude/settings.json
 chezmoi --source ~/.local/share/chezmoi apply ~/.config/mise/conf.d/qmd.toml ~/.config/qmd/index.yml ~/.config/qmd/refresh.conf \
   ~/.local/bin/qmd-refresh ~/.local/bin/qmd-export ~/.local/share/agent-harness/canonical/skills/searching-with-qmd \
   ~/.local/bin/qmd ~/.local/bin/qmd-refresh-scheduled ~/Library/LaunchAgents/local.qmd-refresh.plist ~/71_qmd_refresh_launchd.sh \
-  ~/72_claude_transcript_retention.sh
+  ~/.claude/settings.json
                                       # 71 and the plist load the hourly agent (omit them, or set enabled: false, to leave it off)
 mise install                          # npm package, about 200 MB
 mise exec -- ~/.local/user_scripts/apply_harness_config.sh   # links the skill into Claude, Codex and Pi (needed after a full apply too)
