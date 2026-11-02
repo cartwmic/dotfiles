@@ -15,6 +15,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "dot_pi" / "private_agent" / "literal_AGENTS.md.tmpl"
+# Work-profile-only section, included right after the heading block.
+PLAYBOOK_SECTION = (
+    ROOT / "dot_local" / "share" / "agent-harness" / "canonical" / "instructions" / "axon-playbook.md"
+).read_text(encoding="utf-8").rstrip("\n") + "\n\n"
 
 RISK_PARAGRAPH = """- Risk tolerance is high. This is personal, one-person software: good enough
   is the bar. It does not need to be perfect, large-scale, production-grade
@@ -71,9 +75,16 @@ class AgentsRenderTests(unittest.TestCase):
         self.assertNotIn("Doorbell", text)
         self.assertTrue(text.endswith("any follow-up the user still owns.\n"))
 
-    def test_the_profiles_differ_only_by_the_risk_paragraph_and_the_doorbell(self):
+    def test_only_the_work_profile_gets_the_axon_playbook_section(self):
+        self.assertEqual(render("axon-work-computer").count(PLAYBOOK_SECTION), 1)
+        self.assertNotIn("## Axon playbook", render("personal"))
+
+    def test_the_profiles_differ_only_by_the_risk_paragraph_the_doorbell_and_the_playbook(self):
         personal, work = render("personal"), render("axon-work-computer")
-        self.assertEqual(personal.replace(DOORBELL_SECTION, "").replace(RISK_PARAGRAPH, ""), work)
+        self.assertEqual(
+            personal.replace(DOORBELL_SECTION, "").replace(RISK_PARAGRAPH, ""),
+            work.replace(PLAYBOOK_SECTION, "", 1),
+        )
 
 
 if __name__ == "__main__":
