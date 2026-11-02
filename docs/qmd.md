@@ -16,7 +16,7 @@ for notes, repo docs, Pi session recaps and Pi sessions, with hybrid (semantic) 
 | Exporter | `dot_local/bin/executable_qmd-export` | `~/.local/bin/qmd-export`; writes `~/.local/share/qmd-corpus/{sessions,claude-sessions,codex-sessions,recaps}` |
 | `qmd` on PATH | `dot_local/bin/executable_qmd` | `~/.local/bin/qmd`, a 20-line wrapper around the mise shim ([qmd on PATH](#qmd-on-path)) |
 | Scheduled refresh (macOS) | `Library/LaunchAgents/local.qmd-refresh.plist.tmpl`, `dot_local/bin/executable_qmd-refresh-scheduled`, `run_onchange_after_71_qmd_refresh_launchd.sh.tmpl`, `.chezmoitemplates/qmd_refresh_minutes` | `~/Library/LaunchAgents/local.qmd-refresh.plist`, `~/.local/bin/qmd-refresh-scheduled` ([Scheduled refresh](#scheduled-refresh)) |
-| Claude transcript retention | `dot_claude/modify_settings.json` | `cleanupPeriodDays: 365` in `~/.claude/settings.json`, other keys kept ([The session corpus](#the-session-corpus-qmd-export)) |
+| Claude transcript retention | `dot_claude/modify_settings.json.tmpl` | `cleanupPeriodDays: 365` in `~/.claude/settings.json`, other keys kept ([The session corpus](#the-session-corpus-qmd-export)) |
 | Daily cleanup switch | `dot_config/qmd/refresh.conf.tmpl`, `.chezmoitemplates/qmd_refresh_cleanup` | `~/.config/qmd/refresh.conf` (`cleanup=on` or `off`; [Daily cleanup](#daily-cleanup)) |
 
 All of it is on the **personal and work (`axon-work-computer`) profiles**, not Termux (`.chezmoiignore`; decision 303: QMD on both). The
@@ -306,7 +306,7 @@ sessions and recaps; nothing is copied between machines).
   cleanup while a collection folder is missing. A collection whose documents all go (no Claude or Codex use for a year)
   also holds the cleanup back until it has a document again ([Daily cleanup](#daily-cleanup)).
 - **Claude Code deletes its own transcripts** after `cleanupPeriodDays` (30 by default), and a deleted source's output is
-  pruned, so `claude-sessions` keeps only what Claude keeps. `dot_claude/modify_settings.json` (a chezmoi modify script)
+  pruned, so `claude-sessions` keeps only what Claude keeps. `dot_claude/modify_settings.json.tmpl` (a chezmoi modify script)
   sets `cleanupPeriodDays` to 365 on every apply and keeps every other key Claude writes, so Claude keeps the same year as the
   Pi window. A file that is not a JSON object fails the apply instead of being replaced.
 - **Incremental:** a source whose output exists and is not older than it is skipped without reading it (a session's id and day
@@ -347,7 +347,7 @@ recaps are the work Mac's own; nothing moves between machines. Termux gets none 
   The model files can also be copied into `~/.cache/qmd/models` by hand under the same file names.
 
 **What is stored on the work Mac, in plain text.** `qmd-export` copies the user and assistant text of Pi, Claude Code and Codex sessions (365 days) and the recaps to `~/.local/share/qmd-corpus`, and the index
-(with embeddings) is `~/.cache/qmd/index.sqlite`. Neither is in the dotfiles repo or synced. Work conversations are therefore in one more place than before. Claude Code also keeps its own full transcripts (tool output included) in `~/.claude/projects` for 365 days instead of 30, through `dot_claude/modify_settings.json`.
+(with embeddings) is `~/.cache/qmd/index.sqlite`. Neither is in the dotfiles repo or synced. Work conversations are therefore in one more place than before. Claude Code also keeps its own full transcripts (tool output included) in `~/.claude/projects` for 365 days instead of 30, through `dot_claude/modify_settings.json.tmpl`.
 
 **The hourly job.** The work Mac gets the same launchd agent (`local.qmd-refresh`, [Scheduled refresh](#scheduled-refresh)): a recurring
 background job on the employer laptop, on by default once the plist is applied, first run one interval after it is loaded.

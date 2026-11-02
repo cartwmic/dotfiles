@@ -11,3 +11,18 @@
   exact = true
   stripComponents = 2
   include = ["*/skills/review-map/**"]
+
+# Private Axon agents playbook, axon-work-computer only and only when chezmoi data names it.
+# The URL lives in ~/.config/chezmoi/chezmoi.yaml (axonPlaybook.repo), never in this public repo; see
+# example.chezmoi.yaml. Without the key nothing renders. Auth is the existing gh credential helper.
+# apply_harness_config.sh links its skills/<skill> dirs like any external skill; the Claude SessionStart hook
+# (dot_claude/modify_settings.json.tmpl) and the axon-playbook.md instruction fragment run its bin/playbook-context.
+{{- $axonPlaybookRepo := dig "axonPlaybook" "repo" "" . }}
+{{- if and (eq .profile "axon-work-computer") $axonPlaybookRepo }}
+[".local/share/agent-harness/external-skills/axon-agents-playbook"]
+  type = "git-repo"
+  url = {{ $axonPlaybookRepo | toJson }}
+  refreshPeriod = "24h"
+  [".local/share/agent-harness/external-skills/axon-agents-playbook".pull]
+    args = ["--ff-only"]
+{{- end }}
