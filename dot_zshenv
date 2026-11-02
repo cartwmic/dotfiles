@@ -23,12 +23,6 @@ fi
 # Cargo environment (if rust installed via cargo directly)
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
-# NVM is replaced by mise's node support
-# Keeping these lines for backwards compatibility if needed
-export NVM_DIR="$HOME/.config/nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
-
 # antidote and fzf are now sourced in .zshrc after mise activation
 # DO NOT source them here - they're installed by mise and need mise in PATH
 
