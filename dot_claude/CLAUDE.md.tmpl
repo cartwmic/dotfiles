@@ -5,3 +5,6 @@ or extend these as usual.
 
 {{ include "dot_local/share/agent-harness/canonical/instructions/AGENTS.md" }}
 {{ include "dot_local/share/agent-harness/canonical/instructions/hindsight-guidance.md" -}}
+{{ if eq .profile "axon-work-computer" }}
+{{ include "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md" -}}
+{{ end -}}

@@ -230,10 +230,12 @@ link_skill_dirs() {
   # Link canonical skills first (they take precedence)
   _link_skills_from "$SKILLS_ROOT" "$dest_root"
 
-  # Link external skills from each cloned repo
+  # Link external skills from each cloned repo: <repo>/<skill> (archive externals
+  # that extract only skill dirs) and <repo>/skills/<skill> (a whole cloned repo).
   if [ -d "$EXTERNAL_ROOT" ]; then
     find "$EXTERNAL_ROOT" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r repo_dir; do
       _link_skills_from "$repo_dir" "$dest_root"
+      _link_skills_from "$repo_dir/skills" "$dest_root"
     done
   fi
 }

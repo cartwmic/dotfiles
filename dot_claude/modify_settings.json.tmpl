@@ -1,0 +1,53 @@
+#!/bin/sh
+# Own two things in ~/.claude/settings.json and keep everything else Claude Code writes there.
+# cleanupPeriodDays: Claude deletes transcripts after this many days (default 30). qmd-export prunes a session's copy once its
+# source is gone, so a year here is what lets the claude-sessions QMD collection match the Pi window (docs/qmd.md).
+# SessionStart playbook hook (axon-work-computer only): runs the private playbook's bin/playbook-context so the session starts
+# with that repo's context; stdout becomes session context. It is silent when the playbook is not cloned. The entry is found by
+# the playbook path in its command: other profiles remove only that entry, and user-added hooks are never touched.
+set -eu
+
+{{ if eq .profile "axon-work-computer" -}}
+WANT=true
+{{- else -}}
+WANT=false
+{{- end }}
+# Single quotes on purpose: $HOME expands when the hook runs, not here.
+HOOK_COMMAND='p="$HOME/.local/share/agent-harness/external-skills/axon-agents-playbook/bin/playbook-context"; [ -x "$p" ] && "$p" || true'
+HOOK_MARKER='axon-agents-playbook/bin/playbook-context'
+
+exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_MARKER" '
+  def ours: (.command? // "") | contains($marker);
+  def count_ours: [.hooks.SessionStart[]?.hooks[]? | select(ours)] | length;
+  def strip_ours:
+    # Remove our handlers; drop only the groups that held nothing but ours; prune keys we emptied.
+    .hooks.SessionStart |= map(
+      if (.hooks // [] | any(ours))
+      then (.hooks |= map(select(ours | not))) | if (.hooks | length) == 0 then empty else . end
+      else .
+      end
+    )
+    | if (.hooks.SessionStart | length) == 0 then del(.hooks.SessionStart) else . end
+    | if (.hooks | length) == 0 then del(.hooks) else . end;
+  def add_ours:
+    .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [{type: "command", command: $cmd}]}]);
+  def ensure_hook:
+    if $want then
+      if count_ours == 1 and ([.hooks.SessionStart[]?.hooks[]? | select(ours)][0].command) == $cmd
+        and ([.hooks.SessionStart[]?.hooks[]? | select(ours)][0].type) == "command"
+      then .
+      else (if count_ours > 0 then strip_ours else . end) | add_ours
+      end
+    else
+      if count_ours > 0 then strip_ours else . end
+    end;
+  if length == 0 then
+    {}
+  elif length == 1 and (.[0] | type) == "object" then
+    .[0]
+  else
+    error("~/.claude/settings.json must be a JSON object")
+  end
+  | .cleanupPeriodDays = 365
+  | ensure_hook
+'
