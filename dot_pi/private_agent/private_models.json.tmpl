@@ -190,6 +190,16 @@
         "gpt-6-astra": { "contextWindow": 872000 },
         "gpt-6.1-sol": { "contextWindow": 872000 }
       }
+    },
+    "cliproxy": {
+      "baseUrl": "https://cliproxy.internal.cartwmic.com/v1",
+      "api": "openai-responses",
+      "apiKey": "!$HOME/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-pi'",
+      "models": [
+        { "id": "gpt-6.1-terra", "name": "GPT-6.1 Terra (hub)", "reasoning": true, "input": ["text", "image"], "contextWindow": 272000, "maxTokens": 128000 },
+        { "id": "gpt-6.1-sol", "name": "GPT-6.1 Sol (hub)", "reasoning": true, "input": ["text", "image"], "contextWindow": 872000, "maxTokens": 128000 },
+        { "id": "gpt-6-astra", "name": "GPT-6 Astra (hub)", "reasoning": true, "input": ["text", "image"], "contextWindow": 872000, "maxTokens": 128000 }
+      ]
     }
 {{- end }}
 {{- if $privateProvider }},
