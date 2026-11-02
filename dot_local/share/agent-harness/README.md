@@ -60,7 +60,7 @@ Guidelines:
 - Shared standing rules live in [`canonical/instructions/AGENTS.md`](./canonical/instructions/AGENTS.md). Include that file into each harness's `AGENTS.md` (Claude: `CLAUDE.md`). Do not create `~/AGENTS.md`. Do not put shared rules in Pi `APPEND_SYSTEM.md`.
 - Follow [Apply and Verify](#apply-and-verify), then check the live destination files.
 
-Current files: [AGENTS.md](./canonical/instructions/AGENTS.md) (the design-principles pointer, scripts vs skills, voice, subagents, decisions and doors), [hindsight-guidance.md](./canonical/instructions/hindsight-guidance.md), and [axon-playbook.md](./canonical/instructions/axon-playbook.md) (work profile only: run the private playbook's `bin/playbook-context` at session start and use `axon-pr-preflight` before PR actions; each harness template includes it under an `axon-work-computer` gate).
+Current files: [AGENTS.md](./canonical/instructions/AGENTS.md) (the design-principles pointer, scripts vs skills, voice, subagents, decisions and doors), [hindsight-guidance.md](./canonical/instructions/hindsight-guidance.md), and [axon-playbook.md](./canonical/instructions/axon-playbook.md) (work profile only: the private playbook's `bin/playbook-context` output arrives at session start from Claude Code's hook and Pi's `axon-playbook` extension, Codex runs it itself, and every harness uses `axon-pr-preflight` before PR actions; each harness template includes it under an `axon-work-computer` gate).
 
 ## Add A Canonical MCP Server
 
@@ -199,7 +199,7 @@ when chezmoi data has `axonPlaybook.repo` (see `example.chezmoi.yaml`). The URL 
 this public repo never names the private repo. Auth is the existing `gh` credential helper. Work-only because the
 repo is Axon's private material. On the work profile `dot_claude/modify_settings.json.tmpl` keeps one Claude
 SessionStart hook that runs its `bin/playbook-context` (silent when the clone is absent; other profiles remove
-only that entry), and the `axon-playbook.md` fragment tells Codex and Pi to run it. A new playbook skill is
+only that entry), the Pi `axon-playbook` extension (work profile only) injects the same output once per session, and the `axon-playbook.md` fragment tells Codex, which has no hook, to run it. A new playbook skill is
 linked by the next run of `apply_harness_config.sh` (`chezmoi apply` runs it when its inputs change, or run
 `~/.local/user_scripts/apply_harness_config.sh skills`).
 

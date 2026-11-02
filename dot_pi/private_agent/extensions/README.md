@@ -201,6 +201,7 @@ Gates live in the repo-root `.chezmoiignore`:
 | [openrouter-gate](./openrouter-gate/README.md) | `personal` only |
 | [claude-compat-guard](./claude-compat-guard/README.md) | `personal` only |
 | [anthropic-stall-retry](./anthropic-stall-retry/README.md) | `axon-work-computer` only |
+| [axon-playbook](./axon-playbook/README.md) | `axon-work-computer` only |
 | [auto session name](#auto-session-name) (package in settings) | `personal` only |
 | [standing-reminder](./standing-reminder/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [learnings-monitor](./learnings-monitor/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
@@ -215,6 +216,7 @@ READMEs already in this tree:
 
 - [anthropic-stall-retry](./anthropic-stall-retry/README.md)
 - [auto-compact](./auto-compact/README.md)
+- [axon-playbook](./axon-playbook/README.md)
 - [claude-compat-guard](./claude-compat-guard/README.md)
 - [hindsight](./hindsight/README.md)
 - [openrouter-gate](./openrouter-gate/README.md)
@@ -243,7 +245,7 @@ runtime:
 cd ./pi-patch-guard && node --test
 ```
 
-Other in-tree suites today: `anthropic-stall-retry/index.test.ts`, `auto-compact/index.test.ts`,
+Other in-tree suites today: `anthropic-stall-retry/index.test.ts`, `auto-compact/index.test.ts`, `axon-playbook/index.test.ts`,
 `goal/helpers.test.ts`, `hindsight/index.test.ts`, `inspect-prompt/index.test.ts`,
 `openrouter-gate/index.test.ts`,
 `web-search/config.test.ts`, `web-search/codex.test.ts`, and

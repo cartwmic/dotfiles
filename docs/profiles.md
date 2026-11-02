@@ -26,3 +26,4 @@ How to read a row:
 | `.pi/agent/extensions/claude-compat-guard` | personal | It rides on the personal Claude login; work uses its own provider. |
 | `.local/bin/kgate` | personal | It runs jobs on the personal homelab Kubernetes cluster, which the work Mac has no business reaching. |
 | `.pi/agent/extensions/anthropic-stall-retry` | axon-work-computer | Anthropic stalls are only seen on the work profile. |
+| `.pi/agent/extensions/axon-playbook` | axon-work-computer | It injects Axon's private playbook notes, which only the work profile clones. |
