@@ -39,6 +39,7 @@ docs/
 .claude/*
 .codex/*
 !.claude/CLAUDE.md
+!.claude/settings.json
 !.codex/AGENTS.md
 !.codex/config.toml
 # Retired staging tree: Termux is first-class via profile "termux"
