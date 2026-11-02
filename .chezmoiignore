@@ -16,6 +16,7 @@
 .pi/agent/extensions/notify-owner/*.test.*
 .pi/agent/extensions/bash-default-timeout/*.test.*
 .pi/agent/extensions/anthropic-stall-retry/*.test.*
+.pi/agent/extensions/axon-playbook/*.test.*
 .pi/agent/extensions/notify-owner/alert-fixtures.json
 # Source-only instructions for work in the standing-reminder extension tree.
 .pi/agent/extensions/standing-reminder/AGENTS.md
@@ -180,6 +181,9 @@ Library/LaunchAgents/local.qmd-refresh.plist
 # Anthropic stalls are only seen on the work profile.
 .pi/agent/extensions/anthropic-stall-retry
 .pi/agent/extensions/anthropic-stall-retry/**
+# The Axon playbook is Axon's private material (docs/profiles.md).
+.pi/agent/extensions/axon-playbook
+.pi/agent/extensions/axon-playbook/**
 {{- end }}
 
 {{- if and (ne .profile "personal") (ne .profile "axon-work-computer") }}
