@@ -64,7 +64,7 @@ usage() {
 usage: qmd-refresh [--wait SECONDS] [--no-embed] [--no-export] [--no-cleanup] [--reembed] [--dry-run]
        qmd-refresh status
 
-Runs `qmd-export` (Pi sessions and recaps -> markdown), `qmd update`, then `qmd embed` (one process at a time, low memory flags, no 30-minute cap) as a single
+Runs `qmd-export` (Pi, Claude Code and Codex sessions and recaps -> markdown), `qmd update`, then `qmd embed` (one process at a time, low memory flags, no 30-minute cap) as a single
 heavy-gate job. --wait is how long heavy-gate may wait for a quiet Mac (default 7200). --no-embed stops after update, --no-export skips qmd-export.
 --reembed runs `qmd embed -f`: clears every vector and embeds everything again (long). Needed once for an index made before the
 QMD_EMBED_CONTEXT_SIZE=506 setting; the wrapper tells you when. It is never done on its own.
@@ -167,7 +167,7 @@ if [ "$embed" = 1 ] && { [ -n "${QMD_EMBED_MODEL:-}" ] || { [ -n "$cfg_embed" ] 
     reembed=0
 fi
 
-# qmd-export turns Pi sessions and recaps into the files the sessions and recaps collections index. It runs first, inside the
+# qmd-export turns Pi, Claude Code and Codex sessions and recaps into the files the *sessions and recaps collections index. It runs first, inside the
 # same gate job. A missing exporter is not fatal (the other collections still refresh); a failing one is.
 exporter=none
 if [ "$export_" = 1 ]; then
@@ -175,7 +175,7 @@ if [ "$export_" = 1 ]; then
     [ -n "$exporter" ] || exporter=$(command -v qmd-export 2>/dev/null || true)
     [ -n "$exporter" ] || { [ -x "$HOME/.local/bin/qmd-export" ] && exporter=$HOME/.local/bin/qmd-export; } || true
     if [ -z "$exporter" ] || [ ! -x "$exporter" ]; then
-        log "qmd-export not found: the sessions and recaps collections are not refreshed"
+        log "qmd-export not found: the session and recap collections are not refreshed"
         exporter=none
     fi
 fi

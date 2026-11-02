@@ -1,9 +1,9 @@
 ---
 name: searching-with-qmd
-description: Search Michael's notes, repo docs, Pi session recaps and past Pi sessions with QMD (local keyword plus semantic search). Use to find what was written, designed or discussed before. Not for searching source code.
+description: Search Michael's notes, repo docs, Pi session recaps and past Pi, Claude Code and Codex sessions with QMD (local keyword plus semantic search). Use to find what was written, designed or discussed before. Not for searching source code.
 ---
 
-QMD indexes markdown: scratch notes (`notes`: ~/tmp/*/*.md), repo docs (`repo-*`), Pi sessions (`sessions`: one file per session, user and assistant text only) and session recaps (`recaps`). Decisions and conventions: ask Hindsight first. Use QMD to find documents and sessions.
+QMD indexes markdown: scratch notes (`notes`: ~/tmp/*/*.md), repo docs (`repo-*`), Pi sessions (`sessions`), Claude Code sessions (`claude-sessions`) and Codex sessions (`codex-sessions`), one file per session with user and assistant text only, and session recaps (`recaps`). Decisions and conventions: ask Hindsight first. Use QMD to find documents and sessions.
 
 **Semantic, the default:** `qmd query "plain-language question"`
 - Slow and heavy: **5-28 s and 1-5 GB of RAM** per call (every call loads three models afresh). This Mac is short on memory.
@@ -14,6 +14,6 @@ QMD indexes markdown: scratch notes (`notes`: ~/tmp/*/*.md), repo docs (`repo-*`
 
 Both take `-n 5` (result count) and `-c sessions` (one collection; repeat `-c` for several; names above). Results show `qmd://collection/path`, a `#docid` and a score.
 
-**Read a hit:** `qmd get "#docid"` or `qmd get qmd://sessions/2026-10-26/<id>.md`. A session file is a text-only copy; its frontmatter has the session id and cwd, so look up the full `.jsonl` under `~/.pi/agent/sessions` if you need tool output.
+**Read a hit:** `qmd get "#docid"` or `qmd get qmd://sessions/2026-10-26/<id>.md`. A session file is a text-only copy; its frontmatter has the session id and cwd, so look up the full `.jsonl` if you need tool output: `~/.pi/agent/sessions`, `~/.claude/projects/<cwd with / as ->/<id>.jsonl` (a Claude sub-agent file is named `<id>-agent-<x>.md` and lives under `<id>/subagents/`) or `~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*-<id>.jsonl`.
 
 Do not run `qmd update`, `qmd embed`, `qmd pull` or `qmd mcp`. Refreshing the index is the owner's job: run `qmd-refresh` only if they ask (long and heavy; it queues behind heavy-gate). `qmd-refresh status` says when it last finished. If hits look stale, say so rather than fixing it. Sessions and recaps appear only once the owner has built that part of the index.
