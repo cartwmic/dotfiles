@@ -1,0 +1,137 @@
+#!/bin/sh
+# kgate: run a heavy job on the homelab Kubernetes cluster with heavy-gate's command line.
+#
+# Usage: kgate [--wait SECONDS] [--cpu N] [--mem SIZE] [--image IMAGE] [--node NODE]
+#              [--env NAME]... -- CMD [ARGS...]
+#
+# Contract:
+# - Ships the git worktree of $PWD (tracked and untracked files, its .git file, the shared
+#   git folder) to one pod, unpacked at the same absolute paths, and runs CMD in the same $PWD.
+#   node_modules, target and other ignored files stay on the Mac.
+# - Output streams back as it happens. kgate exits with CMD's exit code.
+# - If the job cannot start on the cluster before --wait runs out (not a git worktree, ssh
+#   fails, pod not running), kgate says why and runs "heavy-gate --wait <rest> -- CMD" on the
+#   Mac. A job that started on the cluster is never rerun on the Mac.
+# - The scheduler is the queue: requests --cpu (default 2) and --mem (default 4Gi), no limits.
+#   x86 nodes only. Tolerates the G14's optional taint. npm and cargo caches live in
+#   /var/lib/kgate/cache on each node.
+# - --env NAME copies the Mac's value of NAME into the pod (for example NODE_AUTH_TOKEN).
+# - One JSON line per job in ${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl; full output
+#   in <id>.log next to it. Each start removes this tool's finished pods.
+# Env: KGATE_SSH (default cartwmic@192.0.2.196), KGATE_SSH_KEY (default ~/.ssh/homelab).
+set -u
+wait=3600 cpu=2 mem=4Gi image=node:24-bookworm node='' envs=''
+host=${KGATE_SSH:-cartwmic@192.0.2.196}
+key=${KGATE_SSH_KEY:-$HOME/.ssh/homelab}
+usage() { sed -n '4,5p' "$0" | sed 's/^# //' >&2; exit 64; }
+while [ $# -gt 0 ]; do
+  case $1 in
+    --wait|--cpu|--mem|--image|--node|--env) [ $# -ge 2 ] || usage ;;
+  esac
+  case $1 in
+    --wait) wait=$2; shift 2 ;;
+    --cpu) cpu=$2; shift 2 ;;
+    --mem) mem=$2; shift 2 ;;
+    --image) image=$2; shift 2 ;;
+    --node) node=$2; shift 2 ;;
+    --env) envs="$envs $2"; shift 2 ;;
+    --) shift; break ;;
+    *) usage ;;
+  esac
+done
+[ $# -gt 0 ] || usage
+
+state=${XDG_STATE_HOME:-$HOME/.local/state}/kgate
+mkdir -p "$state"
+t0=$(date +%s)
+id=kgate-$t0-$$
+out=$state/$id.log
+tarf=$state/$id.tar
+cmd=$(python3 -c 'import shlex,sys; print(shlex.join(sys.argv[1:]))' "$@")
+ssh_k() { ssh -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=8 -i "$key" "$host" "$@"; }
+K="sudo kubectl --kubeconfig /etc/kubernetes/admin.conf -n default"
+
+record() { # fallback-reason exit node start_epoch end_epoch bytes
+  KG_ID=$id KG_CWD=$PWD KG_CMD=$cmd KG_IMAGE=$image KG_CPU=$cpu KG_MEM=$mem KG_T0=$t0 \
+  KG_REASON=$1 KG_EXIT=$2 KG_NODE=$3 KG_START=$4 KG_END=$5 KG_BYTES=$6 python3 - "$state/log.jsonl" <<'PY'
+import json, os, sys, datetime
+e = os.environ
+num = lambda k: int(e[k]) if e.get(k, "").lstrip("-").isdigit() else None
+t0, start, end = num("KG_T0"), num("KG_START"), num("KG_END")
+rec = {"id": e["KG_ID"],
+       "start": datetime.datetime.fromtimestamp(t0, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+       "cwd": e["KG_CWD"], "cmd": e["KG_CMD"], "image": e["KG_IMAGE"], "cpu": e["KG_CPU"], "mem": e["KG_MEM"],
+       "node": e["KG_NODE"] or None, "bytes_sent": num("KG_BYTES"),
+       "pending_s": start - t0 if start else None, "run_s": end - start if start and end else None,
+       "exit": num("KG_EXIT"), "fallback": e["KG_REASON"] or None, "output": e["KG_ID"] + ".log"}
+with open(sys.argv[1], "a") as f:
+    f.write(json.dumps(rec) + "\n")
+PY
+}
+
+fallback() { # reason, then CMD
+  reason=$1; shift
+  rest=$(( wait - ($(date +%s) - t0) )); [ "$rest" -lt 0 ] && rest=0
+  echo "kgate: $reason; running on the Mac: heavy-gate --wait $rest" >&2
+  rm -f "$tarf" "$state/$id.rc"
+  heavy-gate --wait "$rest" -- "$@"
+  e=$?
+  record "$reason" "$e" "" "" "" ""
+  exit "$e"
+}
+
+wt=$(git rev-parse --show-toplevel 2>/dev/null) || fallback "not in a git worktree" "$@"
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+( cd "$wt" && git ls-files -co --exclude-standard | sed "s|^|${wt#/}/|"; echo "${wt#/}/.git"; echo "${common#/}" ) \
+  | COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -cf "$tarf" -C / -T - 2>>"$out"
+bytes=$(wc -c < "$tarf" | tr -d ' ')
+
+# Reachability check, and remove this tool's finished pods.
+ssh_k "$K delete pod -l app=kgate --field-selector=status.phase!=Running,status.phase!=Pending --wait=false >/dev/null" 2>>"$out" \
+  || fallback "cluster unreachable over ssh ($host)" "$@"
+
+json=$(KG_ID=$id KG_NODE=$node KG_WT=$wt KG_PWD=$PWD KG_CMD=$cmd KG_IMAGE=$image KG_CPU=$cpu KG_MEM=$mem KG_ENVS=$envs python3 <<'PY'
+import json, os
+e = os.environ
+inner = ('set -e; s=$(date +%s); tar -xf - -C /; '
+         'echo "kgate: start $s node=$KGATE_NODE cpus=$(nproc)"; cd "$KGATE_CWD"; '
+         'git config --global --add safe.directory "*"; set +e; sh -c "$KGATE_CMD"; e=$?; '
+         'echo "kgate: end $(date +%s) exit $e"; exit $e')
+env = [{"name": "KGATE_CWD", "value": e["KG_PWD"]}, {"name": "KGATE_CMD", "value": e["KG_CMD"]},
+       {"name": "KGATE_NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
+       {"name": "npm_config_cache", "value": "/cache/npm"}, {"name": "CI", "value": "1"}]
+env += [{"name": n, "value": e.get(n, "")} for n in e["KG_ENVS"].split()]
+sel = {"kubernetes.io/arch": "amd64"}
+if e["KG_NODE"]:
+    sel["kubernetes.io/hostname"] = e["KG_NODE"]
+print(json.dumps({"spec": {
+    "nodeSelector": sel,
+    "tolerations": [{"key": "homelab.cartwmic.com/optional", "operator": "Exists", "effect": "NoSchedule"}],
+    "volumes": [{"name": "cache", "hostPath": {"path": "/var/lib/kgate/cache", "type": "DirectoryOrCreate"}}],
+    "containers": [{"name": e["KG_ID"], "image": e["KG_IMAGE"], "stdin": True, "stdinOnce": True,
+        "command": ["sh", "-c", inner], "env": env,
+        "resources": {"requests": {"cpu": e["KG_CPU"], "memory": e["KG_MEM"]}},
+        "volumeMounts": [{"name": "cache", "mountPath": "/cache"},
+                         {"name": "cache", "mountPath": "/usr/local/cargo/registry", "subPath": "cargo-registry"}]}]}}))
+PY
+)
+b64=$(printf %s "$json" | base64 | tr -d '\n')
+rest=$(( wait - ($(date +%s) - t0) )); [ "$rest" -lt 1 ] && rest=1
+{
+  ssh_k "$K run $id -i --rm --restart=Never --labels=app=kgate --image=$image --pod-running-timeout=${rest}s --overrides=\"\$(echo $b64 | base64 -d)\"" < "$tarf"
+  echo $? > "$state/$id.rc"
+} 2>&1 | tee -a "$out"
+rc=$(cat "$state/$id.rc" 2>/dev/null || echo 255)
+rm -f "$tarf" "$state/$id.rc"
+
+startline=$(grep -a '^kgate: start ' "$out" | tail -1)
+if [ -z "$startline" ]; then
+  ssh_k "$K delete pod $id --ignore-not-found --wait=false" >/dev/null 2>&1
+  fallback "pod did not start on the cluster (kubectl exit $rc)" "$@"
+fi
+start=$(echo "$startline" | awk '{print $3}')
+podnode=$(echo "$startline" | sed -n 's/.*node=\([^ ]*\).*/\1/p')
+end=$(grep -a '^kgate: end ' "$out" | tail -1 | awk '{print $3}')
+[ -n "$end" ] || end=$(date +%s)
+record "" "$rc" "$podnode" "$start" "$end" "$bytes"
+exit "$rc"

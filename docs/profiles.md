@@ -24,4 +24,5 @@ How to read a row:
 | `.local/user_scripts/configure_rustdesk.sh` | personal | The homelab remote-access setup and its personal vault item do not belong on the work Mac. |
 | `.pi/agent/extensions/openrouter-gate` | personal | The work profile keeps its own OpenRouter posture, not the personal setup. |
 | `.pi/agent/extensions/claude-compat-guard` | personal | It rides on the personal Claude login; work uses its own provider. |
+| `.local/bin/kgate` | personal | It runs jobs on the personal homelab Kubernetes cluster, which the work Mac has no business reaching. |
 | `.pi/agent/extensions/anthropic-stall-retry` | axon-work-computer | Anthropic stalls are only seen on the work profile. |
