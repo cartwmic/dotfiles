@@ -1,0 +1,33 @@
+#!/bin/sh
+# Load or reload the heavy-gate memory watchdog (local.heavy-gate-watchdog) when its plist or the daemon script changes. macOS only (.chezmoiignore).
+# The agent runs ~/.local/bin/heavy-gate-watchdog all the time (KeepAlive); a changed script needs a reload to take effect, hence the hashes.
+# plist: {{ include "Library/LaunchAgents/local.heavy-gate-watchdog.plist.tmpl" | sha256sum }}
+# daemon: {{ include "dot_local/bin/executable_heavy-gate-watchdog" | sha256sum }}
+#
+# Fails (and so fails the apply) when launchd does not end up with the agent loaded: chezmoi records a run_onchange script only when it
+# succeeds, so the next apply tries again instead of leaving a Mac without its memory watchdog.
+set -eu
+log() { printf '[heavy_gate_watchdog_launchd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Darwin ] || exit 0
+label=local.heavy-gate-watchdog
+plist="$HOME/Library/LaunchAgents/$label.plist"
+uid=$(id -u)
+loaded() { launchctl print "gui/$uid/$label" >/dev/null 2>&1; }
+if loaded; then
+  launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || :
+  if loaded; then
+    log ERROR "could not unload $label; try: launchctl bootout gui/$uid/$label, then chezmoi apply again"
+    exit 1
+  fi
+fi
+if [ ! -f "$plist" ]; then
+  log ERROR "$plist is not installed; apply it too (chezmoi apply $plist), then apply again"
+  exit 1
+fi
+mkdir -p "$HOME/Library/Logs"
+if ! launchctl bootstrap "gui/$uid" "$plist"; then
+  log ERROR "could not load $label (no GUI session, e.g. over ssh?); log in and chezmoi apply again, or: launchctl bootstrap gui/$uid $plist"
+  exit 1
+fi
+log INFO "loaded $label (it logs to ~/Library/Logs/heavy-gate-watchdog.log)"

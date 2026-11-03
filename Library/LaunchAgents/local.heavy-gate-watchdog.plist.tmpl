@@ -1,0 +1,23 @@
+{{- $home := .chezmoi.homeDir | html -}}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Memory watchdog for heavy-gate jobs (owner decision 2026-11-03; see the header of ~/.local/bin/heavy-gate-watchdog): it runs all the time,
+     reads free memory every 5 seconds while a heavy-gate job holds the gate, and stops the biggest job when it stays low. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.heavy-gate-watchdog</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/sh</string><string>{{ $home }}/.local/bin/heavy-gate-watchdog</string></array>
+  <!-- Always on: started at load and restarted whenever it exits. -->
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <!-- No Nice and not ProcessType Background: macOS then throttles a job to a near stop on a busy machine (see local.agent-events), and this
+       one has to run exactly when the machine is short of memory. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key><string>{{ $home }}/Library/Logs/heavy-gate-watchdog.log</string>
+  <key>StandardErrorPath</key><string>{{ $home }}/Library/Logs/heavy-gate-watchdog.log</string>
+</dict>
+</plist>
