@@ -8,7 +8,9 @@
 # T3 hook (personal only, and only while <repo>/src/t3-hook/hook.ts exists at apply time; repo is instances.coordinator.repo or the
 # personal default; the instances.coordinator.enabled flag is not read, so chezmoi never has to manage the daemon's unit): the coordinator repo's src/t3-hook/hook.ts gates T3 thread
 # tools with the kill switch and the ledger (see src/t3-hook/README.md there). Four entries: PreToolUse, PostToolUse and
-# PostToolUseFailure on the gated T3 tools, and SessionStart (a no-op unless T3CODE_THREAD_ID is set). They are found by
+# PostToolUseFailure on the gated T3 tools, and SessionStart (a no-op unless T3CODE_THREAD_ID is set). A fifth entry, a second
+# SessionStart group running the hook with "--part rules" (its own group, so it gets its own context budget), is added only when
+# the hook source contains "--part", i.e. the coordinator version that supports it. They are found by
 # "src/t3-hook/hook.ts" in their command: each apply drops them from every event and, when wanted, appends the current ones.
 # Off, or on any other profile, they are removed. axon-work-computer is left out: its Matrix coordinator has another state dir,
 # and nothing new is applied on the work Mac without asking.
@@ -26,14 +28,20 @@ HOOK_MARKER='axon-agents-playbook/bin/playbook-context'
 {{ if and (eq .profile "personal") (stat (printf "%s/src/t3-hook/hook.ts" $t3repo)) }}
 T3_WANT=true
 T3_REPO={{ includeTemplate "shquote" $t3repo }}
+{{- if contains "--part" (include (printf "%s/src/t3-hook/hook.ts" $t3repo)) }}
+T3_RULES=true
+{{- else }}
+T3_RULES=false
+{{- end }}
 {{- else }}
 T3_WANT=false
 T3_REPO=''
+T3_RULES=false
 {{- end }}
 T3_MARKER='src/t3-hook/hook.ts'
 
 exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_MARKER" \
-  --argjson t3want "$T3_WANT" --arg t3repo "$T3_REPO" --arg t3marker "$T3_MARKER" '
+  --argjson t3want "$T3_WANT" --argjson t3rules "$T3_RULES" --arg t3repo "$T3_REPO" --arg t3marker "$T3_MARKER" '
   def ours: (.command? // "") | contains($marker);
   def count_ours: [.hooks.SessionStart[]?.hooks[]? | select(ours)] | length;
   def strip_ours:
@@ -81,7 +89,11 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
     .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: $m, hooks: [entry($run)]}])
     | .hooks.PostToolUse = ((.hooks.PostToolUse // []) + [{matcher: $m, hooks: [entry($run)]}])
     | .hooks.PostToolUseFailure = ((.hooks.PostToolUseFailure // []) + [{matcher: $m, hooks: [entry($run)]}])
-    | .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [entry("[ -n \"$T3CODE_THREAD_ID\" ] || exit 0; " + $run)]}]);
+    | ("[ -n \"$T3CODE_THREAD_ID\" ] || exit 0; ") as $guard
+    | .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [entry($guard + $run)]}])
+    | if $t3rules then
+        .hooks.SessionStart += [{hooks: [entry($guard + ($run | sub(" \\|\\| exit 2$"; " --part rules || exit 2")))]}]
+      else . end;
   def ensure_t3: t3_strip | if $t3want then t3_add else . end;
   if length == 0 then
     {}

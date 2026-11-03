@@ -20,9 +20,12 @@ SCRATCH = Path(tempfile.mkdtemp())
 REPO = str(SCRATCH / "coord")  # holds src/t3-hook/hook.ts
 MISSING = str(SCRATCH / "nohook")  # exists, but has no hook file
 ODD = str(SCRATCH / "it's here")  # holds the hook file; path needs quoting
+RULES = str(SCRATCH / "rules")  # hook source supports --part, so the second SessionStart entry is installed
 for _d in (REPO, ODD):
     os.makedirs(_d + "/src/t3-hook")
     Path(_d + "/src/t3-hook/hook.ts").write_text("")
+os.makedirs(RULES + "/src/t3-hook")
+Path(RULES + "/src/t3-hook/hook.ts").write_text("// supports --part rules\n")
 os.makedirs(MISSING)
 MATCHER = "^mcp__t3-code__(t3_thread_send|t3_thread_send_attachments|delegate_task|t3_thread_launch|create_threads|schedule_task)$"
 RUN = ('COORDINATOR_STATE_DIR="$HOME/.local/share/coordinator" node --experimental-strip-types '
@@ -33,6 +36,8 @@ CASES = {
     "flag_off": {"profile": PERSONAL, "instances": {"coordinator": {"enabled": False, "repo": REPO}}},
     "missing": {"profile": PERSONAL, "instances": {"coordinator": {"repo": MISSING}}},
     "work": {"profile": WORK, "instances": {"coordinator": {"enabled": True, "repo": REPO}}},
+    "rules": {"profile": PERSONAL, "instances": {"coordinator": {"repo": RULES}}},
+    "rules_work": {"profile": WORK, "instances": {"coordinator": {"enabled": True, "repo": RULES}}},
     "custom": {"profile": PERSONAL, "instances": {"coordinator": {"repo": ODD}}},
 }
 USER_HOOK = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo user"}]}
@@ -162,6 +167,45 @@ class T3HookSettingsTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)  # hook.ts is gone, so node fails and the call is blocked
         r = subprocess.run(["sh", "-c", entries["SessionStart"]], env=dict(env, T3CODE_THREAD_ID="t"), capture_output=True,
                            text=True, timeout=30, stdin=subprocess.DEVNULL)
+        self.assertEqual(r.returncode, 2)
+
+    def test_rules_entry_only_when_the_hook_supports_part(self):
+        run = RUN % RULES
+        guard = '[ -n "$T3CODE_THREAD_ID" ] || exit 0; '
+        rules = guard + run.replace(" || exit 2", " --part rules || exit 2")
+        s = self.modify("rules", stale())
+        self.assertEqual(sorted(t3(s)), sorted([
+            ("PreToolUse", MATCHER, run), ("PostToolUse", MATCHER, run), ("PostToolUseFailure", MATCHER, run),
+            ("SessionStart", None, guard + run), ("SessionStart", None, rules)]))
+        groups = [g for g in s["hooks"]["SessionStart"] if any(MARK in h["command"] for h in g["hooks"])]
+        self.assertEqual([len(g["hooks"]) for g in groups], [1, 1])  # its own group, so its own context budget
+        self.assertIn("echo mixed", [h["command"] for g in s["hooks"]["SessionStart"] for h in g["hooks"]])
+        self.assertEqual(s["hooks"]["SessionStart"][0], USER["hooks"]["SessionStart"][0])
+        self.assertEqual(s["hooks"]["PreToolUse"][0], USER_HOOK)
+        self.assertEqual(self.modify("rules", s), s)  # idempotent
+        # a plain hook (no --part) gets exactly one SessionStart entry, and re-applying with --part adds the second
+        plain = self.modify("on", "{}")
+        self.assertEqual(len([x for x in t3(plain) if x[0] == "SessionStart"]), 1)
+        both = self.modify("rules", plain)
+        self.assertEqual(len([x for x in t3(both) if x[0] == "SessionStart"]), 2)
+        # and falling back to a hook without --part drops the second entry again
+        self.assertEqual(self.modify("on", both), plain)
+        self.assertEqual(t3(self.modify("rules_work", both)), [])
+
+    def test_rules_command_is_silent_outside_t3_and_blocks_when_the_hook_is_missing(self):
+        repo = self.tmp / "rules repo"
+        (repo / "src/t3-hook").mkdir(parents=True)
+        (repo / "src/t3-hook/hook.ts").write_text("--part")
+        script = self.tmp / "modify-rules-run"
+        script.write_text(render({"profile": PERSONAL, "instances": {"coordinator": {"repo": str(repo)}}}))
+        s = json.loads(subprocess.run(["sh", str(script)], input="{}", capture_output=True, text=True, timeout=30).stdout)
+        command = [c for e, _, c in t3(s) if e == "SessionStart" and "--part rules" in c][0]
+        (repo / "src/t3-hook/hook.ts").unlink()
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.tmp)}
+        r = subprocess.run(["sh", "-c", command], env=env, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
+        r = subprocess.run(["sh", "-c", command], env=dict(env, T3CODE_THREAD_ID="t"), capture_output=True, text=True,
+                           timeout=30, stdin=subprocess.DEVNULL)
         self.assertEqual(r.returncode, 2)
 
 
