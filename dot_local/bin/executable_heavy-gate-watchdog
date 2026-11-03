@@ -22,6 +22,8 @@
 # one of those it already named that is still the same process (same pid and start time: a child whose parent died on TERM is
 # re-parented to launchd and must still be KILLed, and a reused pid is not the same process). A holder pid counts only while its
 # command is a heavy-gate script, so a pid that was reused is not a holder.
+# Every poll it rewrites $LOCK.watchdog (its poll interval in seconds), the heartbeat heavy-gate checks when a job starts. While no slot
+# link or waiter entry exists it forks nothing but the sleep. It writes the marker only as a new regular file, never through a symlink.
 # It survives its own errors: no set -e, SIGPIPE ignored, every write guarded, a failing ps or memory_pressure just means "nothing".
 #
 # Environment (whole numbers): HEAVY_GATE_WATCH_POLL seconds between readings (5, at least 1), HEAVY_GATE_STOP_FREE_PCT the floor in
@@ -36,6 +38,7 @@ exec 0</dev/null
 
 LOCK=${HEAVY_GATE_LOCK:-/tmp/heavy-gate-$(id -u).lock}
 WAITERS="$LOCK.waiters"
+HEARTBEAT="$LOCK.watchdog"
 MAX_SLOTS=8
 POLL=${HEAVY_GATE_WATCH_POLL:-5}
 FLOOR=${HEAVY_GATE_STOP_FREE_PCT:-10}
@@ -64,13 +67,26 @@ mem_free_pct() { memory_pressure 2>/dev/null | awk '/free percentage/ {gsub("%",
 
 # ---- the holders ----
 slot_path() { if [ "$1" = 1 ]; then printf '%s' "$LOCK"; else printf '%s.%s' "$LOCK" "$1"; fi; }
-# gate_pid PID: true when PID is alive and its command is a heavy-gate script (its first or second word, as in "sh /x/heavy-gate --wait 5")
+# gate_pid PID: true when PID is alive and is a heavy-gate script: the first word of its command is heavy-gate, or a shell and the second
+# word is the heavy-gate script ("/bin/sh /x/heavy-gate --wait 5"). An editor with the script's path as an argument is not.
 gate_pid() {
   case $1 in '' | *[!0-9]*) return 1 ;; esac
   kill -0 "$1" 2>/dev/null || return 1
   ps -o command= -p "$1" 2>/dev/null | awk '
-    { for (i = 1; i <= 2 && i <= NF; i++) { n = split($i, p, "/"); if (p[n] ~ /^(executable_)?heavy-gate$/) ok = 1 } }
+    function base(w,   n, p) { n = split(w, p, "/"); return p[n] }
+    { b1 = base($1); b2 = base($2)
+      if (b1 == "heavy-gate") ok = 1
+      else if ((b1 == "sh" || b1 == "bash" || b1 == "dash" || b1 == "zsh") && (b2 == "heavy-gate" || b2 == "executable_heavy-gate")) ok = 1 }
     END { exit !ok }'
+}
+# start_of PID: the process's start time, five words joined with _ (the same form as in the snapshot)
+start_of() { ps -o lstart= -p "$1" 2>/dev/null | awk 'NF >= 5 { print $1 "_" $2 "_" $3 "_" $4 "_" $5; exit }'; }
+# holder_pid PID: a heavy-gate script whose start time is the one it recorded (line 5 of its waiter entry; a heavy-gate that recorded none
+# is taken on its command alone)
+holder_pid() {
+  gate_pid "$1" || return 1
+  want=; { IFS= read -r _; IFS= read -r _; IFS= read -r _; IFS= read -r _; IFS= read -r want; } 2>/dev/null < "$WAITERS/$1" || true
+  [ -z "$want" ] || [ "$(start_of "$1")" = "$want" ]
 }
 # holders: the live heavy-gate pids that hold a slot or have a waiter entry marked running, one per line, slot order first
 holders() {
@@ -84,8 +100,25 @@ holders() {
       [ "$st" = running ] && printf '%s\n' "$w"
     done
   } 2>/dev/null | awk '!seen[$0]++' | while IFS= read -r h; do
-    if gate_pid "$h"; then printf '%s\n' "$h"; fi
+    if holder_pid "$h"; then printf '%s\n' "$h"; fi
   done
+}
+# any_trace: true when a slot link or a waiter entry exists. Builtins only, so an idle machine costs no fork.
+any_trace() {
+  [ -L "$LOCK" ] && return 0
+  k=2
+  while [ "$k" -le "$MAX_SLOTS" ]; do [ -L "$LOCK.$k" ] && return 0; k=$((k + 1)); done
+  for f in "$WAITERS"/*; do [ -e "$f" ] && return 0; done
+  return 1
+}
+# beat: rewrite the heartbeat (builtins only; never through a symlink)
+beat() { [ -L "$HEARTBEAT" ] || printf '%s\n' "$POLL" 2>/dev/null > "$HEARTBEAT" || true; }
+# write_marker HOLDER REASON: a new regular file; a planted symlink is refused (and an old marker of that name is replaced)
+write_marker() {
+  m="$LOCK.stopped.$1"
+  if [ -L "$m" ]; then log WARN "not writing $m: it is a symlink"; return 0; fi
+  rm -f "$m" 2>/dev/null
+  ( set -C; printf '%s\n' "$2" > "$m" ) 2>/dev/null || true
 }
 # job_command PID: the command the holder runs (its waiter entry's fourth line), else its own command line
 job_command() {
@@ -146,7 +179,7 @@ ids() { for e in $1; do printf '%s ' "${e%%|*}"; done; }
 stop_tree() {
   h=$1; free=$2
   reason="free memory ${free}% (floor ${FLOOR}%), tree RSS $((rss / 1024)) MB, pid $first"
-  printf '%s\n' "$reason" > "$LOCK.stopped.$h" 2>/dev/null || true
+  write_marker "$h" "$reason"
   log WARN "heavy-gate-watchdog stopped pid $first (heavy-gate $h): free memory ${free}%, tree RSS $((rss / 1024)) MB: $(job_command "$h")"
   # TERM goes to what a fresh snapshot shows under the holder now (the snapshot that chose it may be a moment old)
   pids=$(snapshot | live "$h" "$victims")
@@ -155,6 +188,7 @@ stop_tree() {
   t=0
   while [ "$t" -lt "$GRACE" ]; do
     sleep 1 || true
+    beat
     t=$((t + 1))
     pids=$(snapshot | live "$h" "$victims")
     [ -n "$(printf '%s' "$pids" | tr -d ' ')" ] || break
@@ -168,10 +202,13 @@ stop_tree() {
   if ! gate_pid "$h"; then rm -f "$LOCK.stopped.$h" 2>/dev/null || true; fi
 }
 
+beat
 log INFO "watching heavy-gate jobs: every ${POLL}s, stop under ${FLOOR}% free on two readings in a row, grace ${GRACE}s (lock $LOCK)"
 lows=0
 while :; do
   sleep "$POLL" || sleep 1
+  beat
+  any_trace || { lows=0; continue; }
   hs=$(holders | tr '\n' ' ')
   if [ -z "$(printf '%s' "$hs" | tr -d ' ')" ]; then lows=0; continue; fi
   v=$(mem_free_pct)

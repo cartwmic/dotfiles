@@ -36,8 +36,10 @@
 # TERM to that tree, KILL after a grace period. This script does nothing for it except run the job in the foreground, in the
 # caller's process group, as ever (so a kill of the caller's group still reaches the job), and report the stop: the daemon writes
 # $LOCK.stopped.<pid of this heavy-gate> before it sends TERM, and when the job ends and that file is there, heavy-gate prints one
-# line saying the watchdog stopped it and why (so it is not read as a failure of the job) and exits 137. Only memory free is watched;
-# swap, Swapouts and load still stop nothing. It stops jobs of older heavy-gate versions too (they show the job's own status, 143).
+# line saying the watchdog stopped it and why (so it is not read as a failure of the job) and exits 137; a job that had already exited 0
+# keeps 0. The daemon rewrites $LOCK.watchdog every poll; heavy-gate warns when a job starts and that heartbeat is missing or older than
+# three polls (the job is then admitted unwatched). Only memory free is watched; swap, Swapouts and load still stop nothing. It stops
+# jobs of older heavy-gate versions too (they show the job's own status, 143).
 #
 # Slots: the limit on how many heavy-gate jobs hold the gate at once. It comes from, in order, HEAVY_GATE_SLOTS (a whole number in
 # the job's environment), then the first number in ${HEAVY_GATE_SLOTS_FILE:-~/.config/heavy-gate/slots} ('#' lines and blank lines
@@ -77,7 +79,7 @@
 # recycled pid keeps the slot held until it exits.
 #
 # Exit status: 0 allowed (or CMD's own status), 1 refused, 75 still refused after --wait, 2 usage / unsupported system,
-# 137 CMD was stopped by the memory watchdog.
+# 137 CMD was stopped by the memory watchdog (a job that had already exited 0 keeps 0).
 #
 # Environment: HEAVY_GATE_SLOTS the slot limit, HEAVY_GATE_SLOTS_FILE its file, HEAVY_GATE_PRIORITY see above, HEAVY_GATE_PRIORITIES the file.
 # The central rank file is WORKSTREAM_RANK_FILE (read by workstream-rank), else ~/.local/share/coordinator/rank.
@@ -343,9 +345,11 @@ set_priority() {
   mv "$PRIORITIES.new.$$" "$PRIORITIES"
   printf 'priority %s for "%s" (%s)\n' "$2" "$pat" "$PRIORITIES"
 }
-# An entry per job that uses a command: line 1 number, 2 state (waiting or running), 3 directory, 4 command. Written atomically.
+# An entry per job that uses a command: line 1 number, 2 state (waiting or running), 3 directory, 4 command, 5 this heavy-gate's start time
+# (so heavy-gate-watchdog can tell it from a process that reused its pid; older readers stop at line 4). Written atomically.
+GATE_START=
 write_entry() {
-  { mkdir -p "$WAITERS" && printf '%s\n%s\n%s\n%s\n' "$PRIORITY" "$1" "$PWD" "$JOB" > "$WAITERS/$$.new" && mv "$WAITERS/$$.new" "$WAITERS/$$"; } 2>/dev/null ||
+  { mkdir -p "$WAITERS" && printf '%s\n%s\n%s\n%s\n%s\n' "$PRIORITY" "$1" "$PWD" "$JOB" "$GATE_START" > "$WAITERS/$$.new" && mv "$WAITERS/$$.new" "$WAITERS/$$"; } 2>/dev/null ||
     log WARN "could not write the waiter entry; this job's priority is not seen by others"
 }
 unregister() { rm -f "$WAITERS/$$" "$WAITERS/$$.new"; }
@@ -396,6 +400,17 @@ show_priorities() {
   done
 }
 
+# Is heavy-gate-watchdog alive? It rewrites $LOCK.watchdog (its poll interval in seconds) every poll; a heartbeat missing or older than
+# three polls says no. If the age cannot be read (no perl) say nothing.
+watchdog_alive() {
+  [ -f "$LOCK.watchdog" ] && [ ! -L "$LOCK.watchdog" ] || return 1
+  hb=$(cat "$LOCK.watchdog" 2>/dev/null) || hb=
+  case $hb in '' | *[!0-9]*) hb=5 ;; *) hb=${hb#"${hb%%[!0]*}"}; hb=${hb:-5} ;; esac
+  age=$(perl -e 'print time - (stat $ARGV[0])[9]' "$LOCK.watchdog" 2>/dev/null) || return 0
+  case $age in '' | *[!0-9]*) return 0 ;; esac
+  [ "$age" -le $((hb * 3)) ]
+}
+
 # One try. With $1 = 1 a slot is held on success and everything taken is dropped on refusal.
 try_gate() {
   resolve_slots; warn_slots
@@ -440,6 +455,7 @@ fi
 
 deadline=$(( $(date +%s) + WAIT ))
 JOB=$*
+GATE_START=$(ps -o lstart= -p "$$" 2>/dev/null | awk 'NF >= 5 { print $1 "_" $2 "_" $3 "_" $4 "_" $5; exit }')
 trap 'drop_guard; drop_admit; drop_slot; unregister; rm -f "$LOCK.stopped.$$"' EXIT
 trap 'exit 143' INT TERM HUP
 until try_gate 1; do
@@ -452,12 +468,20 @@ until try_gate 1; do
 done
 write_entry running
 log INFO "allowed; running: $*"
+# A marker of an earlier process that had this pid must not turn this job's exit into a false 137.
+rm -f "$LOCK.stopped.$$"
+if ! watchdog_alive; then log WARN "memory watchdog not running; this job is admitted unwatched"; fi
 status=0
 "$@" || status=$?
-# The memory watchdog (heavy-gate-watchdog) leaves $LOCK.stopped.<our pid> before it sends TERM; say so, so the job's death by a
-# signal is not taken for a failure of the job.
-if [ -f "$LOCK.stopped.$$" ]; then
+# The memory watchdog (heavy-gate-watchdog) leaves $LOCK.stopped.<our pid> (a regular file, never a symlink) before it sends TERM. Say so,
+# so the job's death by a signal is not taken for a failure of the job. A job that exited 0 had finished (or finished on its own as TERM
+# came): it keeps 0, so "heavy-gate -- npm test && git push" still pushes a test run that passed.
+if [ -f "$LOCK.stopped.$$" ] && [ ! -L "$LOCK.stopped.$$" ]; then
   why=$(cat "$LOCK.stopped.$$" 2>/dev/null) || why=
+  if [ "$status" -eq 0 ]; then
+    log WARN "the memory watchdog (heavy-gate-watchdog) sent TERM to this job, but the job had already exited 0; keeping exit 0: ${why:-no reason recorded}"
+    exit 0
+  fi
   log ERROR "the memory watchdog (heavy-gate-watchdog) stopped this job; exit 137 is not a failure of the job itself: ${why:-no reason recorded}"
   exit 137
 fi

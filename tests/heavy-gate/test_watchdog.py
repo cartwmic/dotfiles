@@ -29,6 +29,11 @@ MEMORY_PRESSURE = '''if [ -f "$FAKE/mp_seq" ]; then
   case $line in FAIL) exit 1 ;; EMPTY) ;; *) echo "$line" ;; esac
 else cat "$FAKE/memory_pressure"; fi'''
 FAILING_PS = '''if [ -f "$FAKE/ps_fail" ]; then echo "ps: boom" >&2; exit 1; fi
+if [ -n "$(ls "$HEAVY_GATE_LOCK".stopped.* 2>/dev/null)" ]; then echo on > "$FAKE/ps_reuse_on"; fi
+if [ -f "$FAKE/ps_reuse_on" ] && [ -f "$FAKE/ps_reuse_pid" ]; then
+  /bin/ps "$@" | awk -v p="$(cat "$FAKE/ps_reuse_pid")" '$1 == p && NF >= 8 { $4 = "Mon"; $5 = "Jan"; $6 = "1"; $7 = "00:00:00"; $8 = "1999" } { print }'
+  exit 0
+fi
 exec /bin/ps "$@"'''
 
 # about 80 MB resident, so its tree is far bigger than a sleeping shell's
@@ -180,6 +185,19 @@ class Watchdog(WatchdogBase):
         self.assertRegex(lines[0], r"heavy-gate-watchdog stopped pid \d+ \(heavy-gate \d+\): free memory 4%, tree RSS \d+ MB: sh .*job\.big\.sh")
         self.assertFalse(list(self.root.glob("heavy-gate.lock.stopped.*")), "no marker is left behind")
 
+    def test_after_a_stop_the_next_one_needs_two_more_low_readings(self):
+        small = self.gate("small", SMALL)
+        big = self.gate("big", BIG)
+        self.assertTrue(self.wait_for((self.root / "ready.big").exists, 20))
+        self.daemon(env={"HEAVY_GATE_WATCH_POLL": "3"})
+        self.set(memory_pressure=self.LOW)
+        big.wait(timeout=30)
+        stopped_big = time.monotonic()
+        small.wait(timeout=30)
+        gap = time.monotonic() - stopped_big
+        self.assertEqual(small.returncode, 137, self.err("small"))
+        self.assertGreater(gap, 5.0, "two more readings at 3 s each (one reading would take about 4 s with the stop itself)")
+
     def test_heavy_gate_says_the_watchdog_stopped_the_job_and_exits_137(self):
         job = self.gate("big", BIG)
         self.assertTrue(self.wait_for((self.root / "ready.big").exists, 20))
@@ -242,11 +260,11 @@ class Watchdog(WatchdogBase):
     # --- how it stops a tree ---
     def test_a_job_that_handles_term_runs_its_trap(self):
         marker = self.root / "trapped"
-        job = self.gate("a", f"trap 'echo trapped > {marker}; exit 0' TERM\nwhile :; do sleep 0.1; done")
+        job = self.gate("a", f"trap 'sleep 1; echo trapped > {marker}; exit 9' TERM\nwhile :; do sleep 0.1; done")
         self.daemon(env={"HEAVY_GATE_STOP_GRACE": "10"})
         self.set(memory_pressure=self.LOW)
         job.wait(timeout=30)
-        self.assertEqual(job.returncode, 137, "exit 137 whatever the trap's status")
+        self.assertEqual(job.returncode, 137, "exit 137 whatever the trap's non-zero status")
         self.assertEqual(marker.read_text().strip(), "trapped")
 
     def test_a_process_that_ignores_term_is_killed_after_the_grace_period(self):
@@ -262,7 +280,7 @@ class Watchdog(WatchdogBase):
 
     def test_a_child_whose_parent_died_on_term_is_still_killed(self):
         # the parent exits on TERM, so the child is re-parented to launchd (no longer under the holder), and it ignores TERM
-        job = self.gate("a", "(trap '' TERM; exec sleep 300) &\necho $! > child.a\ntrap 'exit 0' TERM\nwait")
+        job = self.gate("a", "(trap '' TERM; exec sleep 300) &\necho $! > child.a\ntrap 'exit 5' TERM\nwait")
         child = self.pid_of("child.a")
         self.daemon()
         self.set(memory_pressure=self.LOW)
@@ -279,9 +297,10 @@ class Watchdog(WatchdogBase):
         return job
 
     def test_the_daemon_survives_a_closed_pipe_on_stdout_and_stderr(self):
-        d = self.daemon(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        d.stdout.close()
-        d.stderr.close()
+        r, w = os.pipe()
+        os.close(r)  # nobody reads: every write to stdout or stderr, from the first log line on, fails with EPIPE
+        d = self.daemon(stdout=w, stderr=w)
+        os.close(w)
         job = self.stop_one_job(d)
         self.assertEqual(job.returncode, 137, self.err("a"))
         self.assertIn("free memory 4%", self.err("a"), "the marker was written even though the log line could not be")
@@ -319,6 +338,157 @@ class Watchdog(WatchdogBase):
         time.sleep(1.5)
         self.assertIsNone(d.poll(), "leading zeros are decimal, not octal")
 
+    # --- only real heavy-gate holders are touched ---
+    def fake_holder(self, state, start=None):
+        """A process that passes for a heavy-gate holder (`sh .../heavy-gate`) with one child (a sleep), and a waiter entry for it."""
+        script = self.root / "fakegate" / "heavy-gate"
+        script.parent.mkdir(exist_ok=True)
+        script.write_text("#!/bin/sh\nsleep 300 &\necho $! > " + str(self.root / "child.fake") + "\nwait\n")
+        proc = subprocess.Popen(["sh", str(script)], start_new_session=True)
+        self.procs.append(proc)
+        child = self.pid_of("child.fake")
+        waiters = self.root / "heavy-gate.lock.waiters"
+        waiters.mkdir(exist_ok=True)
+        real_start = "_".join(subprocess.run(["ps", "-o", "lstart=", "-p", str(proc.pid)], capture_output=True, text=True).stdout.split()[:5])
+        (waiters / str(proc.pid)).write_text(f"5\n{state}\n{self.root}\nfake job\n{real_start if start is None else start}\n")
+        return proc, child, waiters / str(proc.pid), real_start
+
+    def test_a_waiting_entry_is_not_a_holder_but_a_running_one_is(self):
+        proc, child, entry, start = self.fake_holder("waiting")
+        self.daemon()
+        self.set(memory_pressure=self.LOW)
+        time.sleep(4.5)
+        self.assertTrue(self.alive(child), "a waiting entry is not a holder")
+        entry.write_text(f"5\nrunning\n{self.root}\nfake job\n{start}\n")
+        self.gone_soon(child, seconds=10)  # the same process, now marked running, is stopped: the check above was about the state
+
+    def test_a_holder_whose_start_time_is_not_the_recorded_one_is_not_touched(self):
+        proc, child, entry, start = self.fake_holder("running", start="Mon_Jan_1_00:00:00_1999")
+        self.daemon()
+        self.set(memory_pressure=self.LOW)
+        time.sleep(4.5)
+        self.assertTrue(self.alive(child), "a pid whose start time differs from the one heavy-gate recorded is a reused pid")
+        entry.write_text(f"5\nrunning\n{self.root}\nfake job\n{start}\n")
+        self.gone_soon(child, seconds=10)
+
+    def test_a_forged_slot_link_to_a_process_that_is_not_heavy_gate_is_not_followed(self):
+        # `nvim /x/executable_heavy-gate`: the script's path is an argument of something else
+        editor = self.root / "fakeeditor" / "executable_heavy-gate"
+        editor.parent.mkdir()
+        editor.write_text("import subprocess, time\nc = subprocess.Popen(['sleep', '300'])\nopen(" + repr(str(self.root / "child.editor")) + ", 'w').write(str(c.pid))\ntime.sleep(300)\n")
+        proc = subprocess.Popen(["nvim", str(editor)], executable=sys.executable, start_new_session=True)
+        self.procs.append(proc)
+        child = self.pid_of("child.editor")
+        os.symlink(str(proc.pid), self.lock)
+        d = self.daemon()
+        self.set(memory_pressure=self.LOW)
+        time.sleep(4.5)
+        self.assertIsNone(proc.poll(), "the editor was left alone")
+        self.assertTrue(self.alive(child), "and so was its child")
+        self.assertIsNone(d.poll())
+        self.assertNotIn("stopped pid", self.daemon_log())
+
+    def test_a_forged_slot_link_to_any_other_process_is_not_followed_either(self):
+        other = subprocess.Popen(["sh", "-c", "sleep 300 & echo $! > " + str(self.root / "child.other") + "; wait"], start_new_session=True)
+        self.procs.append(other)
+        child = self.pid_of("child.other")
+        os.symlink(str(other.pid), self.lock)
+        self.daemon()
+        self.set(memory_pressure=self.LOW)
+        time.sleep(4.5)
+        self.assertTrue(self.alive(child))
+        self.assertIsNone(other.poll())
+
+    def test_a_process_that_is_not_the_one_named_but_has_its_pid_is_not_signalled(self):
+        # after TERM the parent exits and the child (ignoring TERM) is re-parented; ps now says its pid has another start time (a reused pid)
+        job = self.gate("a", "(trap '' TERM; exec sleep 300) &\necho $! > child.a\ntrap 'exit 5' TERM\nwait")
+        child = self.pid_of("child.a")
+        (self.fake / "ps_reuse_pid").write_text(f"{child}\n")
+        self.daemon(env={"PATH": f"{self.psbin}:{self.env['PATH']}"})
+        self.set(memory_pressure=self.LOW)
+        job.wait(timeout=30)
+        self.assertEqual(job.returncode, 137, self.err("a"))
+        time.sleep(5)  # past the 3 s grace period
+        self.assertTrue(self.alive(child), "a process with a different start time is not the one that was named, so it is not KILLed")
+
+    # --- marker and heartbeat ---
+    def test_a_marker_that_is_a_symlink_is_not_written_through(self):
+        job = self.gate("a", SMALL)
+        victim = self.root / "victim"
+        victim.write_text("keep\n")
+        os.symlink(str(victim), self.root / f"heavy-gate.lock.stopped.{job.pid}")
+        self.daemon()
+        self.set(memory_pressure=self.LOW)
+        job.wait(timeout=30)
+        self.assertEqual(victim.read_text(), "keep\n", "nothing was written through the link")
+        self.assertIn("is a symlink", self.daemon_log())
+        self.assertEqual(job.returncode, 143, "no marker was written, so heavy-gate reports the job's own status: " + self.err("a"))
+        self.assertNotIn("(heavy-gate-watchdog)", self.err("a"), "heavy-gate does not read a symlink either")
+
+    def test_a_stale_marker_of_an_earlier_process_does_not_turn_the_exit_into_137(self):
+        err = open(self.root / "stale.err", "w")
+        self.addCleanup(err.close)
+        proc = subprocess.Popen(["sh", "-c", f'echo stale > {self.root}/heavy-gate.lock.stopped.$$; exec sh "$0" -- sh -c "exit 3"', str(SCRIPT)],
+                                env=self.env, stdout=subprocess.DEVNULL, stderr=err, start_new_session=True)
+        self.procs.append(proc)
+        proc.wait(timeout=30)
+        self.assertEqual(proc.returncode, 3, (self.root / "stale.err").read_text())
+        self.assertNotIn("(heavy-gate-watchdog)", (self.root / "stale.err").read_text())
+        self.assertFalse(list(self.root.glob("heavy-gate.lock.stopped.*")))
+
+    def test_a_job_that_exited_0_keeps_0_even_if_the_marker_is_there(self):
+        # the race: the daemon writes the marker, then the job finishes on its own with 0 before (or as) TERM arrives
+        job = self.gate("a", f"echo 'free memory 4%, tree RSS 80 MB, pid 1' > {self.root}/heavy-gate.lock.stopped.$PPID\nexit 0")
+        job.wait(timeout=30)
+        err = self.err("a")
+        self.assertEqual(job.returncode, 0, err)
+        self.assertIn("sent TERM to this job, but the job had already exited 0; keeping exit 0: free memory 4%", err)
+        self.assertFalse(list(self.root.glob("heavy-gate.lock.stopped.*")))
+        job = self.gate("b", f"echo 'free memory 4%, tree RSS 80 MB, pid 1' > {self.root}/heavy-gate.lock.stopped.$PPID\nexit 4")
+        job.wait(timeout=30)
+        self.assertEqual(job.returncode, 137, "a non-zero status with the marker is a stopped job: " + self.err("b"))
+
+    def heartbeat(self):
+        return self.root / "heavy-gate.lock.watchdog"
+
+    def test_the_daemon_rewrites_a_heartbeat_every_poll(self):
+        self.daemon()
+        self.assertTrue(self.wait_for(self.heartbeat().exists, 10))
+        self.assertEqual(self.heartbeat().read_text().strip(), "1", "it says its poll interval")
+        first = self.heartbeat().stat().st_mtime
+        self.assertTrue(self.wait_for(lambda: self.heartbeat().stat().st_mtime > first, 5), "and rewrites it every poll")
+
+    def test_heavy_gate_warns_when_the_heartbeat_is_missing_or_older_than_three_polls(self):
+        warning = "memory watchdog not running; this job is admitted unwatched"
+        job = self.gate("none", "exit 0")
+        job.wait(timeout=30)
+        self.assertIn(warning, self.err("none"), "no heartbeat file")
+        for name, age, warns in (("fresh", 10, False), ("stale", 20, True)):
+            self.heartbeat().write_text("5\n")
+            now = time.time()
+            os.utime(self.heartbeat(), (now - age, now - age))
+            job = self.gate(name, "exit 0")
+            job.wait(timeout=30)
+            self.assertEqual(warning in self.err(name), warns, f"heartbeat {age} s old, poll 5 s: " + self.err(name))
+        self.daemon()
+        self.assertTrue(self.wait_for(lambda: self.heartbeat().exists() and time.time() - self.heartbeat().stat().st_mtime < 2, 10))
+        job = self.gate("live", "exit 0")
+        job.wait(timeout=30)
+        self.assertNotIn(warning, self.err("live"), "a running daemon's heartbeat")
+
+    def test_an_idle_daemon_forks_nothing_but_sleep(self):
+        spy = self.root / "spy"
+        spy.mkdir()
+        for name in ("ps", "readlink", "awk", "tr", "memory_pressure", "kill", "cat", "id"):
+            (spy / name).write_text(f'#!/bin/sh\necho {name} >> "$FAKE/calls"\nexit 0\n')
+            (spy / name).chmod(0o755)
+        d = self.daemon(env={"PATH": f"{spy}:{self.env['PATH']}"})
+        self.set(memory_pressure=self.LOW)
+        time.sleep(3.5)
+        self.assertIsNone(d.poll())
+        self.assertFalse((self.fake / "calls").exists(), "nothing ran but the shell's own builtins and sleep: " + ((self.fake / "calls").read_text() if (self.fake / "calls").exists() else ""))
+        self.assertTrue(self.heartbeat().exists())
+
     # --- heavy-gate's side ---
     def test_heavy_gate_reports_a_stop_by_the_watchdog_and_exits_137(self):
         # the daemon's marker, written by the job for its parent (heavy-gate) just before it dies of TERM
@@ -333,7 +503,7 @@ class Watchdog(WatchdogBase):
         job = self.gate("a", "kill -TERM $$")
         job.wait(timeout=30)
         self.assertEqual(job.returncode, 143, self.err("a"))
-        self.assertNotIn("memory watchdog", self.err("a"))
+        self.assertNotIn("(heavy-gate-watchdog)", self.err("a"))
         job = self.gate("b", "exit 3")
         job.wait(timeout=30)
         self.assertEqual(job.returncode, 3)
