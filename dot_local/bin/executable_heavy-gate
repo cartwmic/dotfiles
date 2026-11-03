@@ -615,8 +615,13 @@ watchdog "$job" "$$" & watcher=$!
 set +m
 trap 'on_signal' INT TERM HUP
 [ -z "$pending" ] || on_signal
-status=0
-{ wait "$job"; } 2>/dev/null || status=$?
+# Some bashes (5.x) end wait when the job is stopped (status 128 plus the signal), not only when it exits: keep waiting while it is still there, stopped.
+while :; do
+  status=0
+  { wait "$job"; } 2>/dev/null || status=$?
+  [ "$status" -gt 128 ] || break
+  case $(ps -o stat= -p "$job" 2>/dev/null) in *T*) sleep 0.2 ;; *) break ;; esac
+done
 job=
 if [ -f "$STOPPED" ]; then
   wait "$watcher" 2>/dev/null || true   # it is finishing the stop (the KILL after the grace period)

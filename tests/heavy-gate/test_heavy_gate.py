@@ -1465,10 +1465,10 @@ exit $rc
     # --- only the biggest job is stopped ---
     BIG = ("exec python3 -c \"import time; x = b'x' * (80 * 1024 * 1024); open('ready.big', 'w').close(); time.sleep(120)\"")
 
-    def two_jobs(self, small_body):
+    def two_jobs(self, small_body, small_poll="1"):
         big = self.watched(self.BIG, name="big", extra={"HEAVY_GATE_STOP_GRACE": "3"})
         self.assertTrue(self.wait_for((Path(self.tmp.name) / "ready.big").exists, 20), "the big job has its memory")
-        small = self.watched(small_body, name="small")
+        small = self.watched(small_body, name="small", extra={"HEAVY_GATE_WATCH_POLL": small_poll})
         self.readings(self.LOW)  # one constant reading, so the two watchdogs do not compete for a script
         return big, small
 
@@ -1483,7 +1483,8 @@ exit $rc
         self.assertIn("stopped this job", small_err)
 
     def test_when_memory_recovers_after_the_biggest_stops_the_others_keep_running(self):
-        big, small = self.two_jobs("sleep 6\nexit 4")
+        # the small job reads every 3 s, so it is still between two readings when the test says memory has recovered, even on a slow host
+        big, small = self.two_jobs("sleep 9\nexit 4", small_poll="3")
         _, big_err = self.finished(big)
         self.assertEqual(big.returncode, 137, big_err)
         self.readings(self.OK)
