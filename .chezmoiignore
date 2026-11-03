@@ -121,6 +121,13 @@ Library/LaunchAgents/local.agent-events.plist
 {{- end }}
 
 {{- if ne .chezmoi.os "darwin" }}
+# Heavy-gate memory watchdog (local.heavy-gate-watchdog): a LaunchAgent, so macOS only, on every profile that has heavy-gate.
+.local/bin/heavy-gate-watchdog
+Library/LaunchAgents/local.heavy-gate-watchdog.plist
+72_heavy_gate_watchdog_launchd.sh
+{{- end }}
+
+{{- if ne .chezmoi.os "darwin" }}
 # Agent browser (agent-harness README, "Agent browser"): macOS only, both desktop profiles. The Chrome launcher; the MCP entry is gated the same way in servers.json.tmpl.
 .local/bin/agent-chrome
 {{- end }}
