@@ -205,6 +205,12 @@ only that entry), the Pi `axon-playbook` extension (work profile only) injects t
 linked by the next run of `apply_harness_config.sh` (`chezmoi apply` runs it when its inputs change, or run
 `~/.local/user_scripts/apply_harness_config.sh skills`).
 
+The coordinator repo's `model-fit` skill is one more link, both desktop profiles: a chezmoi symlink,
+`external-skills/coordinator/model-fit`, into `<coordinator checkout>/skills/model-fit`. The checkout is the same value
+the instances use (`instances.coordinator.repo` in local chezmoi data, else the profile default; template `instance_repo`).
+The linker follows a symlink to a skill directory, so it links like the rest; only `model-fit` is linked, not the
+coordinator's other skills. It points into the checkout, so a skill change there is live the moment the checkout updates.
+
 ## Retired: Capability Tiers
 
 The tier registry the owner set up on 2026-10-20 was retired on 2026-11-03 and replaced by the seat table in the profile instruction files.

@@ -3,6 +3,7 @@
 Covers, with throwaway dirs and a hook-free chezmoi config (no 1Password, no network, no real HOME):
 - the git-repo external renders only on axon-work-computer with axonPlaybook.repo set, and never names a URL itself;
 - apply_harness_config.sh links <repo>/skills/<skill> next to <repo>/<skill>, cleans stale links, canonical wins;
+- the coordinator's model-fit skill is a chezmoi symlink into the coordinator checkout (both desktop profiles) that the linker follows;
 - dot_claude/modify_settings.json.tmpl keeps exactly one SessionStart hook on work, removes only its own elsewhere;
 - the instruction fragment is included into Claude, Codex and Pi on work and not on personal.
 
@@ -25,6 +26,7 @@ FRAGMENT = ROOT / "dot_local/share/agent-harness/canonical/instructions/axon-pla
 TARGET = ".local/share/agent-harness/external-skills/axon-agents-playbook"
 REPO_URL = "https://example.invalid/someone/axon-agents-playbook.git"
 WORK, PERSONAL = "axon-work-computer", "personal"
+MODEL_FIT = ROOT / "dot_local/share/agent-harness/external-skills/coordinator/symlink_model-fit.tmpl"
 
 
 def render(template, data):
@@ -59,6 +61,21 @@ class ExternalTest(unittest.TestCase):
         self.assertIn("{{ $axonPlaybookRepo | toJson }}", EXTERNAL.read_text())
 
 
+@unittest.skipUnless(shutil.which("chezmoi"), "chezmoi not installed")
+class ModelFitLinkTest(unittest.TestCase):
+    def target(self, data):
+        return render(MODEL_FIT, dict({"chezmoi": {}}, **data)).strip()
+
+    def test_points_at_the_coordinator_checkout_on_both_desktop_profiles(self):
+        self.assertEqual(self.target({"profile": PERSONAL}), "/Volumes/Workshop/macbook/git/coordinator/skills/model-fit")
+        self.assertTrue(self.target({"profile": WORK}).endswith("/git/coordinator/skills/model-fit"))
+
+    def test_the_instances_repo_value_wins_on_both_profiles(self):
+        for profile in (PERSONAL, WORK):
+            data = {"profile": profile, "instances": {"coordinator": {"repo": "/x/coordinator-work"}}}
+            self.assertEqual(self.target(data), "/x/coordinator-work/skills/model-fit", profile)
+
+
 class LinkerTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -88,6 +105,19 @@ class LinkerTest(unittest.TestCase):
     def links(self, harness=".claude/skills"):
         d = self.home / harness
         return {p.name: os.readlink(p) for p in d.iterdir() if p.is_symlink()}
+
+    def test_a_symlinked_skill_dir_is_linked_and_a_dangling_one_is_not(self):
+        checkout = self.tmp / "checkout"
+        self.skill(checkout / "skills/model-fit")
+        (self.ext / "coordinator").mkdir()
+        (self.ext / "coordinator/model-fit").symlink_to(checkout / "skills/model-fit")
+        (self.ext / "coordinator/gone").symlink_to(self.tmp / "missing")
+        self.link()
+        for harness in (".claude/skills", ".codex/skills", ".pi/agent/skills", ".agents/skills"):
+            links = self.links(harness)
+            self.assertEqual(links["model-fit"], str(self.ext / "coordinator/model-fit"), harness)
+            self.assertNotIn("gone", links)
+        self.assertEqual((self.home / ".claude/skills/model-fit/SKILL.md").read_text(), "x\n")
 
     def test_links_flat_and_skills_subdir_and_canonical_wins(self):
         self.link()
