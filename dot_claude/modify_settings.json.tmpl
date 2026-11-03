@@ -1,7 +1,8 @@
 #!/bin/sh
 # Own a few keys in ~/.claude/settings.json and keep everything else Claude Code writes there.
-# model + effortLevel (both desktop profiles): the default is Opus 5.5 at medium effort, as in Pi. effortLevel is the default for
-# models with no saved level; a level saved with /effort or /model lives under modelSettings, which this script never touches.
+# model + modelSettings (both desktop profiles): the default is Opus 5.5 at medium effort, as in Pi. model is set on every apply.
+# Claude Code ignores a top-level effortLevel in user settings for Opus 5.5 (it reads modelSettings), so medium is seeded under
+# modelSettings.claude-opus-5-5.effortLevel only when absent: a level picked later with /effort or /model is kept.
 # cleanupPeriodDays: Claude deletes transcripts after this many days (default 30). qmd-export prunes a session's copy once its
 # source is gone, so a year here is what lets the claude-sessions QMD collection match the Pi window (docs/qmd.md).
 # SessionStart playbook hook (axon-work-computer only): runs the private playbook's bin/playbook-context so the session starts
@@ -106,7 +107,7 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
   end
   | .cleanupPeriodDays = 365
   | .model = "claude-opus-5-5"
-  | .effortLevel = "medium"
+  | .modelSettings["claude-opus-5-5"].effortLevel //= "medium"
   | ensure_hook
   | ensure_t3
 '

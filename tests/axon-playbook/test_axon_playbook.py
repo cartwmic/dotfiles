@@ -188,7 +188,7 @@ class SettingsHookTest(unittest.TestCase):
 
     def test_other_profiles_prune_keys_they_emptied_and_touch_nothing_else(self):
         s = self.run_modify(PERSONAL, json.dumps(self.run_modify(WORK, '{"a": 1}')))
-        owned = {"cleanupPeriodDays": 365, "model": "claude-opus-5-5", "effortLevel": "medium"}  # keys the script sets on every apply
+        owned = {"cleanupPeriodDays": 365, "model": "claude-opus-5-5", "modelSettings": {"claude-opus-5-5": {"effortLevel": "medium"}}}  # keys the script sets on every apply
         self.assertEqual(s, {"a": 1, **owned})
         untouched = {"hooks": {"Stop": []}, **owned}
         self.assertEqual(self.run_modify(PERSONAL, json.dumps(untouched)), untouched)

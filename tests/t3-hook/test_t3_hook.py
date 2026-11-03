@@ -40,6 +40,7 @@ CASES = {
     "rules_work": {"profile": WORK, "instances": {"coordinator": {"enabled": True, "repo": RULES}}},
     "custom": {"profile": PERSONAL, "instances": {"coordinator": {"repo": ODD}}},
 }
+OPUS_MEDIUM = {"claude-opus-5-5": {"effortLevel": "medium"}}
 USER_HOOK = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo user"}]}
 USER = {
     "theme": "dark",
@@ -135,14 +136,18 @@ class T3HookSettingsTest(unittest.TestCase):
     def test_file_gone_after_on_restores_the_original(self):
         original = self.modify("missing", USER)
         self.assertEqual(self.modify("missing", self.modify("on", original)), original)
-        self.assertEqual(self.modify("missing", ""), {"cleanupPeriodDays": 365, "model": "claude-opus-5-5", "effortLevel": "medium"})
+        self.assertEqual(self.modify("missing", ""), {"cleanupPeriodDays": 365, "model": "claude-opus-5-5", "modelSettings": OPUS_MEDIUM})
 
-    def test_default_model_is_opus_at_medium_on_both_profiles_and_saved_levels_are_kept(self):
-        saved = {"modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}
+    def test_default_model_is_opus_at_medium_on_both_profiles_and_a_saved_level_is_kept(self):
+        # Claude Code ignores a top-level effortLevel for Opus 5.5; the level it reads lives under modelSettings.
         for case in ("on", "work"):
-            s = self.modify(case, dict(saved, model="sonnet", effortLevel="high"))
-            self.assertEqual((s["model"], s["effortLevel"]), ("claude-opus-5-5", "medium"), case)
-            self.assertEqual(s["modelSettings"], saved["modelSettings"], case)  # /effort picks live here; never touched
+            s = self.modify(case, {"model": "sonnet", "modelSettings": {"claude-sonnet-5-5": {"effortLevel": "high"}}})
+            self.assertEqual(s["model"], "claude-opus-5-5", case)
+            self.assertEqual(s["modelSettings"]["claude-opus-5-5"], {"effortLevel": "medium"}, case)
+            self.assertEqual(s["modelSettings"]["claude-sonnet-5-5"], {"effortLevel": "high"}, case)  # other models untouched
+            self.assertNotIn("effortLevel", s, case)
+            saved = {"modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}
+            self.assertEqual(self.modify(case, saved)["modelSettings"], saved["modelSettings"], case)  # a later pick wins
 
     def test_flag_is_not_read(self):
         self.assertEqual(len(t3(self.modify("flag_off", "{}"))), 4)
