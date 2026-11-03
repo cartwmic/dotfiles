@@ -9,7 +9,8 @@
 # Usage:
 #   heavy-gate                          check once; exit 0 if allowed, 1 if refused (the reasons on stderr)
 #   heavy-gate [--wait SECONDS] -- CMD  try until allowed, then run CMD while holding a slot, so at most the slot limit
-#                                       (3 unless you change it) heavy jobs run at a time; exit with CMD's status
+#                                       (3 unless you change it) heavy jobs run at a time; exit with CMD's status (or 137 if the
+#                                       running-job watchdog stopped it, 143 if heavy-gate itself got INT, TERM or HUP)
 #   heavy-gate slots                    print how many jobs may hold the gate, and where that number comes from
 #   heavy-gate slots N                  set it in the slots file (1 to 8)
 #   heavy-gate priorities               print the priorities file, the holders and the waiters with their priority
@@ -25,8 +26,19 @@
 #   no waiting job with a lower HEAVY_GATE_PRIORITY number (see below)
 # A figure that cannot be read as a number counts as a refusal.
 # Not checked, on purpose: free swap (macOS grows swap on demand), whether Swapouts are rising, and the load average. A start is
-# not held back by any of them, and a running job is never stopped for them. The slot limit is the only cap on how many jobs run.
+# not held back by any of them, and a running job is not stopped for them either. The slot limit is the only cap on how many jobs run.
 # Waiting jobs of the version before this one keep its rules (swap floor, Swapouts, load) until they end and are started again.
+#
+# Running-job watchdog (owner decision 2026-11-03; only with "-- CMD"): the start check cannot see a job that grows after it
+# (2026-11-02: an admitted, uncapped Jest run, about 14 workers at 2 to 2.7 GB each, outgrew a 24 GB Mac and caused a kernel watchdog
+# panic). So CMD runs in its own process group, and every 5 seconds (HEAVY_GATE_WATCH_POLL) heavy-gate reads memory free as above.
+# If it is under 10% (HEAVY_GATE_STOP_FREE_PCT) on two readings in a row, heavy-gate logs "heavy-gate stopped this job", sends TERM
+# to the whole group, gives it 30 seconds (HEAVY_GATE_STOP_GRACE) to exit, then sends KILL to what is left, and exits 137. A figure
+# that cannot be read counts as not low (it also resets the run of low readings), so a broken memory_pressure never stops a job.
+# Only the memory-free figure is watched; swap, Swapouts and load still stop nothing. When heavy-gate itself gets INT, TERM or HUP it
+# passes TERM to that group the same way (grace period, then KILL) and exits 143. A SIGKILL to heavy-gate cannot be passed on, so it
+# leaves the job running in its own group. A job that reads the terminal (stdin is a tty) is stopped by the shell's job control
+# (SIGTTIN) as a background group would be; jobs run from Pi, run-and-wake or a pipe have no terminal on stdin and are not affected.
 #
 # Slots: the limit on how many heavy-gate jobs hold the gate at once. It comes from, in order, HEAVY_GATE_SLOTS (a whole number in
 # the job's environment), then the first number in ${HEAVY_GATE_SLOTS_FILE:-~/.config/heavy-gate/slots} ('#' lines and blank lines
@@ -65,9 +77,12 @@
 # otherwise), so after the limit is lowered below the number of holders it can still start a job: the limit is exact among jobs of this version. A holder killed with SIGKILL leaves its slot until its pid is seen dead; a
 # recycled pid keeps the slot held until it exits.
 #
-# Exit status: 0 allowed (or CMD's own status), 1 refused, 75 still refused after --wait, 2 usage / unsupported system.
+# Exit status: 0 allowed (or CMD's own status), 1 refused, 75 still refused after --wait, 2 usage / unsupported system,
+# 137 CMD stopped by the watchdog, 143 heavy-gate got INT, TERM or HUP.
 #
 # Environment: HEAVY_GATE_SLOTS the slot limit, HEAVY_GATE_SLOTS_FILE its file, HEAVY_GATE_PRIORITY see above, HEAVY_GATE_PRIORITIES the file.
+# Watchdog (whole numbers): HEAVY_GATE_STOP_FREE_PCT the free-memory floor in percent (10), HEAVY_GATE_STOP_GRACE seconds between TERM
+# and KILL (30), HEAVY_GATE_WATCH_POLL seconds between readings (5, at least 1).
 # The central rank file is WORKSTREAM_RANK_FILE (read by workstream-rank), else ~/.local/share/coordinator/rank.
 # For tests: HEAVY_GATE_RANK_TIMEOUT seconds the reader may take (2), HEAVY_GATE_CHECK_WINDOW seconds between the two readings (20), HEAVY_GATE_POLL seconds between tries while waiting
 # (15), HEAVY_GATE_LOCK the slot 1 path (/tmp/heavy-gate-<uid>.lock; the other files are named from it).
@@ -88,6 +103,9 @@ LOCK=${HEAVY_GATE_LOCK:-/tmp/heavy-gate-$(id -u).lock}
 GUARD="$LOCK.guard"      # shared by every claim below, and by older versions for slot 1
 ADMIT="$LOCK.admit"      # held by the one job that is in its check; older versions do not know it
 WAITERS="$LOCK.waiters"  # one file per waiting job, named for its pid, holding its priority
+STOP_FREE_PCT=${HEAVY_GATE_STOP_FREE_PCT:-10}  # the running-job watchdog (see the header); validated before a job starts
+STOP_GRACE=${HEAVY_GATE_STOP_GRACE:-30}
+WATCH_POLL=${HEAVY_GATE_WATCH_POLL:-5}
 
 # log LEVEL message
 log() { level=$1; shift; printf '[heavy-gate] %s: %s\n' "$level" "$*" >&2; }
@@ -400,6 +418,58 @@ try_gate() {
   return 1
 }
 
+# ---- the running job ----
+job=        # pid of the running CMD, which is also its process group id
+watcher=    # pid of the watchdog, while it runs
+STOPPED=    # a file the watchdog creates when it stops the job
+
+# stop_group PGID: TERM to the group (and CONT, so a job that was stopped, for example by a terminal read, acts on it), up to
+# STOP_GRACE seconds for it to empty, then KILL to whatever is left. The grace period is counted in 0.2-second naps, so it is never short.
+stop_group() {
+  kill -TERM -- "-$1" 2>/dev/null || return 0
+  kill -CONT -- "-$1" 2>/dev/null || true
+  naps=$((STOP_GRACE * 5))
+  while [ "$naps" -gt 0 ] && kill -0 -- "-$1" 2>/dev/null; do sleep 0.2; naps=$((naps - 1)); done
+  kill -KILL -- "-$1" 2>/dev/null || true
+}
+# watchdog PGID (runs in a subshell, in heavy-gate's own group): stop the job after two low readings in a row. It does not reap the
+# job (the shell that started it does), so it sees the job's group until that shell has waited for it, which is at once.
+watchdog() {
+  nap=
+  trap 'if [ -n "$nap" ]; then kill "$nap" 2>/dev/null || true; fi; exit 0' TERM
+  low=0
+  while :; do
+    sleep "$WATCH_POLL" & nap=$!
+    wait "$nap" || true
+    nap=
+    kill -0 "$1" 2>/dev/null || exit 0
+    v=$(mem_free_pct)
+    if meets "$v" lt "$STOP_FREE_PCT"; then low=$((low + 1)); else low=0; fi   # unreadable is not low
+    if [ "$low" -ge 2 ]; then
+      : > "$STOPPED"
+      log ERROR "heavy-gate stopped this job: free memory ${v}% (floor ${STOP_FREE_PCT}%), pid $1: $JOB"
+      stop_group "$1"
+      exit 0
+    fi
+  done
+}
+stop_watcher() {
+  if [ -n "$watcher" ]; then kill "$watcher" 2>/dev/null || true; wait "$watcher" 2>/dev/null || true; watcher=; fi
+  return 0
+}
+# heavy-gate got INT, TERM or HUP: before a job starts, just leave; while it runs, stop its group the same way the watchdog does.
+# shellcheck disable=SC2329  # run by the trap below
+on_signal() {
+  trap '' INT TERM HUP
+  if [ -n "$job" ]; then
+    stop_watcher
+    stop_group "$job" & stopper=$!
+    wait "$job" 2>/dev/null || true   # reaps the job, so its group can be seen to be empty
+    wait "$stopper" 2>/dev/null || true
+  fi
+  exit 143
+}
+
 case ${1:-} in
   priorities) [ $# -eq 1 ] || usage; show_priorities; exit 0 ;;
   priority) [ $# -eq 3 ] || usage; set_priority "$2" "$3"; exit 0 ;;
@@ -426,10 +496,17 @@ if [ $# -eq 0 ]; then
   exit 1
 fi
 
+for v in STOP_FREE_PCT STOP_GRACE WATCH_POLL; do
+  eval "x=\$$v"
+  case $x in '' | *[!0-9]* | ???????*) log ERROR "HEAVY_GATE_$v must be a whole number of at most 6 digits"; exit 2 ;; esac
+  x=${x#"${x%%[!0]*}"}   # no leading zeros, so 08 is 8 (and never octal)
+  eval "$v=\${x:-0}"
+done
+[ "$WATCH_POLL" -ge 1 ] || { log ERROR "HEAVY_GATE_WATCH_POLL must be 1 or more"; exit 2; }
 deadline=$(( $(date +%s) + WAIT ))
 JOB=$*
-trap 'drop_guard; drop_admit; drop_slot; unregister' EXIT
-trap 'exit 143' INT TERM HUP
+trap 'stop_watcher; [ -z "$STOPPED" ] || rm -f "$STOPPED"; drop_guard; drop_admit; drop_slot; unregister' EXIT
+trap 'on_signal' INT TERM HUP
 until try_gate 1; do
   left=$(( deadline - $(date +%s) ))
   if [ "$left" -le 0 ]; then log WARN "still refused after ${WAIT}s; not running: $*"; exit 75; fi
@@ -440,6 +517,30 @@ until try_gate 1; do
 done
 write_entry running
 log INFO "allowed; running: $*"
+# CMD runs in the background in its own process group (set -m makes the group; its id is the child's pid), so one signal reaches the
+# job and everything under it. set +m at once: the job keeps its group and nothing else changes for heavy-gate.
+STOPPED="$LOCK.stopped.$$"
+rm -f "$STOPPED"
+set -m
+"$@" &
+job=$!
+set +m
+# A shell with no job control (dash without a terminal) leaves the job in heavy-gate's own group, where a group signal would also hit
+# heavy-gate and a stop would miss the job. Refuse to run it that way. An empty answer from ps (it failed, or the job is already gone) goes on.
+pg=$(ps -o pgid= -p "$job" 2>/dev/null | tr -d ' ') || pg=
+if [ -n "$pg" ] && [ "$pg" != "$job" ]; then
+  log ERROR "this shell did not put the job in its own process group (it has no job control without a terminal), so it cannot be watched or stopped as a group; stopping it. Run heavy-gate with bash or macOS's /bin/sh."
+  kill -TERM "$job" 2>/dev/null || true
+  wait "$job" 2>/dev/null || true
+  exit 2
+fi
+watchdog "$job" & watcher=$!
 status=0
-"$@" || status=$?
+wait "$job" || status=$?
+if [ -f "$STOPPED" ]; then
+  wait "$watcher" 2>/dev/null || true   # it is finishing the stop (the KILL after the grace period)
+  watcher=
+  exit 137
+fi
+stop_watcher
 exit "$status"

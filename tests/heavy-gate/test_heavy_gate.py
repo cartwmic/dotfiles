@@ -6,6 +6,7 @@ The real script runs as a real process. Only the host's figures are scripted: sy
 small fakes first on PATH that print whatever the test wrote to files, so a busy or quiet Mac can be simulated on any machine.
 """
 import os
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -19,6 +20,18 @@ RANK_READER = Path(__file__).resolve().parents[2] / "dot_local/bin/executable_wo
 # The gate as it was before the second slot (PR #69), frozen: jobs already running when the new version is installed still run it.
 OLD_SCRIPT = Path(__file__).resolve().parent / "heavy-gate-v69.sh"
 
+def _job_control_shell():
+    """The shell that runs the gate. heavy-gate puts its job in its own process group with `set -m`, which macOS's /bin/sh (bash) does
+    with no terminal and dash does not, so on a host whose sh is dash (the CI runner) the suite uses bash."""
+    probe = 'set -m; sleep 5 & p=$!; set +m; [ "$(ps -o pgid= -p $p | tr -d " ")" = "$p" ]; r=$?; kill $p; exit $r'
+    for shell in ("sh", "bash"):
+        if subprocess.run([shell, "-c", probe], stdin=subprocess.DEVNULL, capture_output=True, start_new_session=True).returncode == 0:
+            return shell
+    return "sh"
+
+
+GATE_SH = _job_control_shell()
+
 FAKES = {
     "uname": 'echo Darwin',
     "sysctl": '''case "$2" in
@@ -27,7 +40,13 @@ FAKES = {
   kern.memorystatus_vm_pressure_level) v=$(cat "$FAKE/pressure"); echo "$v"; echo read >> "$FAKE/pressure_reads"
     if [ -f "$FAKE/on_pressure" ]; then sh "$FAKE/on_pressure"; fi ;;
 esac''',
-    "memory_pressure": 'cat "$FAKE/memory_pressure"\nif [ -f "$FAKE/on_memory_pressure" ]; then sh "$FAKE/on_memory_pressure"; fi',
+    # mp_seq, when a test writes it, scripts the readings from then on: one line per call (the last repeats); FAIL exits 1, EMPTY prints nothing
+    "memory_pressure": '''if [ -f "$FAKE/mp_seq" ]; then
+  line=$(head -n 1 "$FAKE/mp_seq")
+  if [ $(wc -l < "$FAKE/mp_seq") -gt 1 ]; then sed 1d "$FAKE/mp_seq" > "$FAKE/mp_seq.tmp"; mv "$FAKE/mp_seq.tmp" "$FAKE/mp_seq"; fi
+  case $line in FAIL) exit 1 ;; EMPTY) ;; *) echo "$line" ;; esac
+else cat "$FAKE/memory_pressure"; fi
+if [ -f "$FAKE/on_memory_pressure" ]; then sh "$FAKE/on_memory_pressure"; fi''',
     # the gate no longer reads vm_stat; the frozen v69 gate in OLD_SCRIPT does
     "vm_stat": '''n=$(cat "$FAKE/swapouts")
 [ -f "$FAKE/swapouts_step" ] && echo $((n + $(cat "$FAKE/swapouts_step"))) > "$FAKE/swapouts"
@@ -78,11 +97,12 @@ class HeavyGate(unittest.TestCase):
             (self.fake / key).write_text(value + "\n")
 
     def gate(self, *args, timeout=30, script=SCRIPT, **extra):
-        return subprocess.run(["sh", str(script), *args], env={**self.env, **extra.pop("env", {})}, text=True, capture_output=True, timeout=timeout, **extra)
+        return subprocess.run([GATE_SH, str(script), *args], env={**self.env, **extra.pop("env", {})}, text=True, capture_output=True, timeout=timeout, **extra)
 
-    def start(self, *args, script=SCRIPT, env=None, cwd=None):
-        return subprocess.Popen(["sh", str(script), *args], env={**self.env, **(env or {})}, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                start_new_session=True)
+    def start(self, *args, script=SCRIPT, env=None, cwd=None, shell=None):
+        # SIGINT back to its default: a suite that was itself started in the background has it ignored, and an ignored signal cannot be trapped
+        return subprocess.Popen([shell or GATE_SH, str(script), *args], env={**self.env, **(env or {})}, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
 
     def hold(self, name, script=SCRIPT, env=None, cwd=None):
         """A heavy job that runs until released. Returns once it is running (it passed its check and holds a slot)."""
@@ -1146,6 +1166,215 @@ exit $rc
         for stale in ("load1 < 8", "Swapouts flat", "500 MB", "safety floor", "HEAVY_GATE_SWAP_WINDOW"):
             self.assertNotIn(stale, result.stderr)
         self.assertNotIn("set -eu", result.stderr)
+
+    # --- the running-job watchdog ---
+    LOW = "System-wide memory free percentage: 4%"
+    OK = "System-wide memory free percentage: 62%"
+
+    def readings(self, *lines):
+        """From now on the fake memory_pressure prints these, one per call, the last one repeating (see FAKES)."""
+        new = self.fake / "mp_seq.new"
+        new.write_text("\n".join(lines) + "\n")
+        new.rename(self.fake / "mp_seq")
+
+    def job_file(self, body):
+        path = Path(self.tmp.name) / "job.sh"
+        path.write_text(body)
+        return path
+
+    def pids(self, name):
+        path = Path(self.tmp.name) / name
+        self.assertTrue(self.wait_for(lambda: path.exists() and path.read_text().strip() != ""), f"{name} was written")
+        return int(path.read_text())
+
+    def watched(self, body, *readings, grace="3", extra=None, **opts):
+        """Start heavy-gate on a job that writes `started` when it runs; then script the memory readings. Returns the process and the result's timing."""
+        started = Path(self.tmp.name) / "started"
+        job = self.start("--", "sh", str(self.job_file(f"cd {self.tmp.name}\ntouch {started}\n{body}")),
+                         env={"HEAVY_GATE_WATCH_POLL": "1", "HEAVY_GATE_STOP_GRACE": grace, **(extra or {})}, **opts)
+        self.addCleanup(lambda: (job.poll() is None and job.kill(), job.communicate(), self.reap_groups()))
+        self.assertTrue(self.wait_for(started.exists, 20), "the job is running")
+        if readings:
+            self.readings(*readings)
+        return job
+
+    def reap_groups(self):
+        """A failed test must not leave a job (it is in its own group) running: KILL whatever the job files named."""
+        for name in ("pid", "child"):
+            path = Path(self.tmp.name) / name
+            try:
+                pid = int(path.read_text())
+                os.killpg(pid, signal.SIGKILL) if name == "pid" else os.kill(pid, signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
+
+    def finished(self, job, timeout=30):
+        out, err = job.communicate(timeout=timeout)
+        return out, err
+
+    def assertGone(self, *pids):
+        for pid in pids:
+            self.assertFalse(self.wait_for(lambda: self._alive(pid), 1), f"pid {pid} is gone")
+
+    def assertReleased(self):
+        self.assertFalse(self.lock.is_symlink(), "the slot is released")
+        self.assertEqual(list(self.waiters.glob("*")), [], "the waiter entry is gone")
+        self.assertEqual(list(self.lock.parent.glob("heavy-gate.lock.stopped.*")), [], "no stop marker is left")
+
+    def test_the_job_runs_in_its_own_process_group(self):
+        job = self.watched("echo $$ > pid\nps -o pgid= -p $$ > pgid\nsleep 1", self.OK)
+        pid = self.pids("pid")
+        self.finished(job)
+        self.assertEqual(int((Path(self.tmp.name) / "pgid").read_text()), pid, "the group id is the job's pid")
+        self.assertNotEqual(pid, os.getpgid(os.getpid()))
+        self.assertEqual(job.returncode, 0)
+
+    def test_a_watched_job_passes_its_status_through(self):
+        for status in (0, 3):
+            with self.subTest(status):
+                job = self.watched(f"sleep 2.5; exit {status}", self.OK)
+                self.finished(job)
+                self.assertEqual(job.returncode, status)
+                self.assertReleased()
+                (self.fake / "mp_seq").unlink()
+                (Path(self.tmp.name) / "started").unlink()
+
+    @unittest.skipUnless(shutil.which("dash"), "dash is not installed")
+    def test_a_shell_without_job_control_refuses_rather_than_run_a_job_it_cannot_stop(self):
+        marker = Path(self.tmp.name) / "ran"
+        job = self.start("--", "sh", "-c", f"sleep 2; touch {marker}", shell="dash")
+        _, err = job.communicate(timeout=30)
+        self.assertEqual(job.returncode, 2, err)
+        self.assertIn("did not put the job in its own process group", err)
+        self.assertFalse(self.wait_for(marker.exists, 3), "the job was stopped before it finished")
+        self.assertReleased()
+
+    def test_the_job_still_reads_standard_input(self):
+        result = self.gate("--", "cat", input="piped in\n")
+        self.assertEqual((result.returncode, result.stdout), (0, "piped in\n"), result.stderr)
+
+    def test_two_low_readings_in_a_row_stop_the_whole_group(self):
+        job = self.watched("echo $$ > pid\nsleep 60 &\necho $! > child\nwait", self.LOW)
+        pid, child = self.pids("pid"), self.pids("child")
+        _, err = self.finished(job)
+        self.assertEqual(job.returncode, 137, err)
+        self.assertEqual(err.count("heavy-gate stopped this job"), 1, err)
+        self.assertIn(f"[heavy-gate] ERROR: heavy-gate stopped this job: free memory 4% (floor 10%), pid {pid}: sh ", err)
+        self.assertGone(pid, child)
+        self.assertReleased()
+
+    def test_one_low_reading_does_not_stop_the_job(self):
+        # low, ok, low, ok: no two in a row
+        job = self.watched("sleep 5\nexit 5", self.LOW, self.OK, self.LOW, self.OK)
+        _, err = self.finished(job)
+        self.assertEqual(job.returncode, 5, err)
+        self.assertNotIn("stopped this job", err)
+
+    def test_the_floor_is_exclusive_and_can_be_changed(self):
+        # 10% is not under the floor of 10
+        job = self.watched("sleep 4\nexit 4", "System-wide memory free percentage: 10%")
+        _, err = self.finished(job)
+        self.assertEqual(job.returncode, 4, err)
+        (self.fake / "mp_seq").unlink()
+        (Path(self.tmp.name) / "started").unlink()
+        job = self.watched("sleep 30", "System-wide memory free percentage: 40%", extra={"HEAVY_GATE_STOP_FREE_PCT": "50"})
+        _, err = self.finished(job)
+        self.assertEqual(job.returncode, 137, err)
+        self.assertIn("free memory 40% (floor 50%)", err)
+
+    def test_an_unreadable_reading_never_stops_the_job_and_breaks_a_run_of_low_ones(self):
+        job = self.watched("sleep 6\nexit 6", "FAIL", "EMPTY", "System-wide memory free percentage: lots%", self.LOW, "FAIL", self.LOW, "EMPTY", self.LOW, self.OK)
+        _, err = self.finished(job)
+        self.assertEqual(job.returncode, 6, err)
+        self.assertNotIn("stopped this job", err)
+
+    def test_a_job_gets_its_grace_period_to_run_its_term_trap(self):
+        marker = Path(self.tmp.name) / "trapped"
+        job = self.watched(f"trap 'sleep 1; echo trapped > {marker}; exit 9' TERM\nwhile :; do sleep 0.1; done", self.LOW, grace="10")
+        _, err = self.finished(job)
+        self.assertEqual(job.returncode, 137, "the stop is reported as 137, not the trap's status")
+        self.assertEqual(marker.read_text().strip(), "trapped", "the trap ran to its end before anything was killed")
+        self.assertIn("stopped this job", err)
+
+    def test_a_job_that_ignores_term_is_killed_after_the_grace_period(self):
+        started = time.monotonic()
+        job = self.watched("trap '' TERM\necho $$ > pid\nwhile :; do sleep 0.1; done", self.LOW, grace="3")
+        pid = self.pids("pid")
+        _, err = self.finished(job)
+        self.assertEqual(job.returncode, 137, err)
+        self.assertGreaterEqual(time.monotonic() - started, 5, "two readings (about 2 s) plus the 3 s grace period")
+        self.assertGone(pid)
+        self.assertReleased()
+
+    def test_a_job_stopped_by_the_terminal_is_still_stopped_by_the_watchdog(self):
+        job = self.watched("echo $$ > pid\nkill -STOP $$\nsleep 60", self.LOW, grace="2")
+        pid = self.pids("pid")
+        _, err = self.finished(job)
+        self.assertEqual(job.returncode, 137, err)
+        self.assertGone(pid)
+
+    def test_a_child_that_ignores_term_outlives_its_parent_only_until_the_grace_period_ends(self):
+        job = self.watched("(trap '' TERM; exec sleep 60) &\necho $! > child\ntrap 'exit 0' TERM\nwait", self.LOW, grace="2")
+        child = self.pids("child")
+        _, err = self.finished(job)
+        self.assertEqual(job.returncode, 137, err)
+        self.assertGone(child)
+
+    def test_heavy_gate_given_a_signal_stops_the_jobs_group_and_exits_143(self):
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            with self.subTest(sig.name):
+                for name in ("pid", "child", "trapped", "started"):
+                    (Path(self.tmp.name) / name).unlink(missing_ok=True)
+                marker = Path(self.tmp.name) / "trapped"
+                job = self.watched(f"echo $$ > pid\nsleep 60 &\necho $! > child\ntrap 'echo trapped > {marker}; exit 0' TERM\nwait", self.OK, grace="10")
+                pid, child = self.pids("pid"), self.pids("child")
+                time.sleep(0.3)
+                os.kill(job.pid, sig)  # heavy-gate alone, not its group: the job is not in it
+                _, err = self.finished(job)
+                self.assertEqual(job.returncode, 143, err)
+                self.assertEqual(marker.read_text().strip(), "trapped", "the job was sent TERM and ran its trap")
+                self.assertGone(pid, child)
+                self.assertReleased()
+
+    def test_heavy_gate_given_a_signal_kills_a_job_that_ignores_term_after_the_grace_period(self):
+        job = self.watched("trap '' TERM\necho $$ > pid\nwhile :; do sleep 0.1; done", self.OK, grace="2")
+        pid = self.pids("pid")
+        time.sleep(0.3)
+        began = time.monotonic()
+        os.kill(job.pid, signal.SIGTERM)
+        self.finished(job)
+        self.assertEqual(job.returncode, 143)
+        self.assertGreaterEqual(time.monotonic() - began, 2, "it waited out the grace period")
+        self.assertGone(pid)
+        self.assertReleased()
+
+    def test_the_watchdog_leaves_nothing_running_when_the_job_ends(self):
+        job = self.watched("sleep 1", self.OK, extra={"HEAVY_GATE_WATCH_POLL": "30"})
+        began = time.monotonic()
+        self.finished(job)
+        self.assertLess(time.monotonic() - began, 5, "a finished job does not wait for the next reading")
+        self.assertEqual(job.returncode, 0)
+        out = subprocess.run(["ps", "-A", "-o", "ppid=,command="], text=True, capture_output=True).stdout
+        self.assertNotIn("sleep 30", out)
+
+    def test_the_watchdog_settings_must_be_whole_numbers(self):
+        marker = Path(self.tmp.name) / "ran"
+        for var, value in (("STOP_FREE_PCT", "ten"), ("STOP_GRACE", "1.5"), ("WATCH_POLL", "0.5"), ("WATCH_POLL", "0"), ("STOP_GRACE", "-1"), ("WATCH_POLL", "1234567")):
+            with self.subTest(var, value=value):
+                result = self.gate("--", "touch", str(marker), env={f"HEAVY_GATE_{var}": value})
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(f"HEAVY_GATE_{var} must be", result.stderr)
+                self.assertFalse(marker.exists(), "a bad setting stops the job before it starts")
+        result = self.gate("--", "sh", "-c", "exit 0", env={"HEAVY_GATE_STOP_FREE_PCT": "08", "HEAVY_GATE_STOP_GRACE": "09", "HEAVY_GATE_WATCH_POLL": "010"})
+        self.assertEqual(result.returncode, 0, "leading zeros are decimal, never octal: " + result.stderr)
+        self.assertEqual(self.gate(env={"HEAVY_GATE_STOP_GRACE": "soon"}).returncode, 0, "a plain check ignores the watchdog settings")
+
+    def test_the_header_describes_the_watchdog(self):
+        err = self.gate("--help").stderr
+        for expected in ("Running-job watchdog (owner decision 2026-11-03", "HEAVY_GATE_STOP_FREE_PCT", "HEAVY_GATE_STOP_GRACE", "HEAVY_GATE_WATCH_POLL", "137", "143"):
+            self.assertIn(expected, err)
+        self.assertNotIn("a running job is never stopped", err)
+        self.assertIn("swap, Swapouts and load still stop nothing", err.replace("\n", " "))
 
     # --- usage ---
     def test_bad_arguments_exit_2(self):
