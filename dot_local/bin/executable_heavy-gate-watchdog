@@ -1,0 +1,227 @@
+#!/bin/sh
+#
+# heavy-gate-watchdog
+#
+# Stops the biggest running heavy-gate job when free memory stays low. macOS only (memory_pressure). It runs all the time as a
+# LaunchAgent (local.heavy-gate-watchdog, KeepAlive), managed by chezmoi; heavy-gate itself only runs its job in the foreground.
+#
+# Why (owner decision 2026-11-03): heavy-gate checks memory only before a job starts. On 2026-11-02 a job it had admitted (an
+# uncapped Jest run: about 14 workers at 2 to 2.7 GB each, 26 to 32 GB of node on a 24 GB Mac) grew after that check and caused a
+# kernel watchdog panic. This daemon keeps checking while jobs run.
+#
+# Every HEAVY_GATE_WATCH_POLL seconds (5), while at least one heavy-gate job holds the gate, it reads the free-memory percentage the
+# way heavy-gate does (memory_pressure). A figure it cannot read counts as not low. If it is under HEAVY_GATE_STOP_FREE_PCT (10) on
+# two readings in a row it:
+#   - lists the live heavy-gate holders (the slot files, and the waiter entries marked running) and, for each, the tree of processes
+#     under it (not heavy-gate itself) and that tree's total RSS, from one `ps` snapshot;
+#   - takes the holder with the largest tree (a tie goes to the first listed), writes the reason to $LOCK.stopped.<heavy-gate pid> (so
+#     heavy-gate can say why its job died and exit 137), logs one line, and sends TERM to every process in the tree;
+#   - gives it HEAVY_GATE_STOP_GRACE seconds (30), re-reading the tree each second, then sends KILL to what is left;
+#   - starts counting again: the next job is stopped only after two more low readings.
+# It only ever signals a process that was under a live heavy-gate holder when a fresh snapshot was read just before the signal, or
+# one of those it already named that is still the same process (same pid and start time: a child whose parent died on TERM is
+# re-parented to launchd and must still be KILLed, and a reused pid is not the same process). A holder pid counts only while its
+# command is a heavy-gate script, so a pid that was reused is not a holder.
+# Every poll it rewrites $LOCK.watchdog (its poll interval in seconds), the heartbeat heavy-gate checks when a job starts. While no slot
+# link or waiter entry exists it forks nothing but the sleep. It writes the marker only as a new regular file, never through a symlink.
+# It survives its own errors: no set -e, SIGPIPE ignored, every write guarded, a failing ps or memory_pressure just means "nothing".
+#
+# Environment (whole numbers): HEAVY_GATE_WATCH_POLL seconds between readings (5, at least 1), HEAVY_GATE_STOP_FREE_PCT the floor in
+# percent (10), HEAVY_GATE_STOP_GRACE seconds between TERM and KILL (30), HEAVY_GATE_LOCK the slot 1 path as in heavy-gate
+# (/tmp/heavy-gate-<uid>.lock; the other files are named from it).
+
+trap '' PIPE
+# A closed stdin, stdout or stderr must not make later writes land in some other file this shell opens.
+exec 0</dev/null
+[ -e /dev/fd/1 ] || exec >/dev/null
+[ -e /dev/fd/2 ] || exec 2>/dev/null
+
+LOCK=${HEAVY_GATE_LOCK:-/tmp/heavy-gate-$(id -u).lock}
+WAITERS="$LOCK.waiters"
+HEARTBEAT="$LOCK.watchdog"
+MAX_SLOTS=8
+POLL=${HEAVY_GATE_WATCH_POLL:-5}
+FLOOR=${HEAVY_GATE_STOP_FREE_PCT:-10}
+GRACE=${HEAVY_GATE_STOP_GRACE:-30}
+
+# log LEVEL message (never fails: stderr may be gone). In a subshell on purpose: a builtin's failed write to a broken pipe leaves its
+# text in this shell's buffer, and bash 3.2 then flushes it into the output of every later $( ) it forks.
+log() { ( printf '[heavy-gate-watchdog] %s: %s\n' "$1" "$2" >&2 ) || true; }
+
+# whole numbers, at most 6 digits, no octal: sets the named variable or exits 2 (before the loop, so a typo is seen at once)
+whole() {
+  eval "val=\$$1"
+  case $val in '' | *[!0-9]* | ???????*) log ERROR "HEAVY_GATE_$2 must be a whole number of at most 6 digits"; exit 2 ;; esac
+  val=${val#"${val%%[!0]*}"}
+  eval "$1=\${val:-0}"
+}
+whole POLL WATCH_POLL
+whole FLOOR STOP_FREE_PCT
+whole GRACE STOP_GRACE
+[ "$POLL" -ge 1 ] || { log ERROR "HEAVY_GATE_WATCH_POLL must be 1 or more"; exit 2; }
+
+number() { awk -v v="$1" 'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/) }'; }
+# low FIGURE: true when the figure is a number under the floor (anything else is "not low")
+low() { number "$1" && awk -v v="$1" -v l="$FLOOR" 'BEGIN { exit !(v + 0 < l + 0) }'; }
+mem_free_pct() { memory_pressure 2>/dev/null | awk '/free percentage/ {gsub("%", "", $NF); print $NF}'; }
+
+# ---- the holders ----
+slot_path() { if [ "$1" = 1 ]; then printf '%s' "$LOCK"; else printf '%s.%s' "$LOCK" "$1"; fi; }
+# gate_pid PID: true when PID is alive and is a heavy-gate script: the first word of its command is heavy-gate, or a shell and the second
+# word is the heavy-gate script ("/bin/sh /x/heavy-gate --wait 5"). An editor with the script's path as an argument is not.
+gate_pid() {
+  case $1 in '' | *[!0-9]*) return 1 ;; esac
+  kill -0 "$1" 2>/dev/null || return 1
+  ps -o command= -p "$1" 2>/dev/null | awk '
+    function base(w,   n, p) { n = split(w, p, "/"); return p[n] }
+    { b1 = base($1); b2 = base($2)
+      if (b1 == "heavy-gate") ok = 1
+      else if ((b1 == "sh" || b1 == "bash" || b1 == "dash" || b1 == "zsh") && (b2 == "heavy-gate" || b2 == "executable_heavy-gate")) ok = 1 }
+    END { exit !ok }'
+}
+# start_of PID: the process's start time, five words joined with _ (the same form as in the snapshot). Always read in the C locale and UTC:
+# heavy-gate records it the same way, so a caller's TZ or locale cannot make the two differ.
+start_of() { LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | awk 'NF >= 5 { print $1 "_" $2 "_" $3 "_" $4 "_" $5; exit }'; }
+# holder_pid PID: a heavy-gate script whose start time is the one it recorded (line 5 of its waiter entry; a heavy-gate that recorded none
+# is taken on its command alone)
+holder_pid() {
+  gate_pid "$1" || return 1
+  want=; { IFS= read -r _; IFS= read -r _; IFS= read -r _; IFS= read -r _; IFS= read -r want; } 2>/dev/null < "$WAITERS/$1" || true
+  [ -z "$want" ] || [ "$(start_of "$1")" = "$want" ]
+}
+# holders: the live heavy-gate pids that hold a slot or have a waiter entry marked running, one per line, slot order first
+holders() {
+  {
+    k=1
+    while [ "$k" -le "$MAX_SLOTS" ]; do readlink "$(slot_path "$k")" 2>/dev/null; k=$((k + 1)); done
+    for f in "$WAITERS"/*; do
+      [ -f "$f" ] || continue
+      w=${f##*/}; case $w in '' | *[!0-9]*) continue ;; esac
+      st=; { IFS= read -r _; IFS= read -r st; } 2>/dev/null < "$f" || true
+      [ "$st" = running ] && printf '%s\n' "$w"
+    done
+  } 2>/dev/null | awk '!seen[$0]++' | while IFS= read -r h; do
+    if holder_pid "$h"; then printf '%s\n' "$h"; fi
+  done
+}
+# any_trace: true when a slot link or a waiter entry exists. Builtins only, so an idle machine costs no fork.
+any_trace() {
+  [ -L "$LOCK" ] && return 0
+  k=2
+  while [ "$k" -le "$MAX_SLOTS" ]; do [ -L "$LOCK.$k" ] && return 0; k=$((k + 1)); done
+  for f in "$WAITERS"/*; do [ -e "$f" ] && return 0; done
+  return 1
+}
+# beat: rewrite the heartbeat (builtins only; never through a symlink)
+beat() { [ -L "$HEARTBEAT" ] || printf '%s\n' "$POLL" 2>/dev/null > "$HEARTBEAT" || true; }
+# write_marker HOLDER REASON: a new regular file; a planted symlink is refused (and an old marker of that name is replaced)
+write_marker() {
+  m="$LOCK.stopped.$1"
+  if [ -L "$m" ]; then log WARN "not writing $m: it is a symlink"; return 0; fi
+  rm -f "$m" 2>/dev/null
+  ( set -C; printf '%s\n' "$2" > "$m" ) 2>/dev/null || true
+}
+# job_command PID: the command the holder runs (its waiter entry's fourth line), else its own command line
+job_command() {
+  c=; { IFS= read -r _; IFS= read -r _; IFS= read -r _; IFS= read -r c; } 2>/dev/null < "$WAITERS/$1" || true
+  [ -n "$c" ] || c=$(ps -o command= -p "$1" 2>/dev/null)
+  if [ "${#c}" -gt 120 ]; then c="$(printf '%.120s' "$c")..."; fi
+  printf '%s' "$c"
+}
+
+# ---- the trees ----
+# One ps snapshot: pid, ppid, rss (KB) and start time (five words, joined with _) per process.
+snapshot() { LC_ALL=C TZ=UTC0 ps -A -o pid=,ppid=,rss=,lstart= 2>/dev/null; }
+# The common part of the awk programs: P[pid]=ppid, R[pid]=rss, I[pid]=identity, nxt[ppid]=children; walk(h) fills Q with the
+# descendants of h (not h) and sets total and cnt.
+# shellcheck disable=SC2016  # awk program
+AWK_TREE='
+{ pid = $1; P[pid] = $2; R[pid] = $3; I[pid] = $4 "_" $5 "_" $6 "_" $7 "_" $8; nxt[$2] = nxt[$2] " " pid }
+function walk(h,   head, tail, c, m, j, kids) {
+  split("", Q); split("", seen); head = 1; tail = 0; total = 0; cnt = 0
+  m = split(nxt[h], kids, " "); for (j = 1; j <= m; j++) Q[++tail] = kids[j]
+  while (head <= tail) {
+    c = Q[head++]; if (c in seen || c == h) continue
+    seen[c] = 1; total += R[c]; cnt++
+    m = split(nxt[c], kids, " "); for (j = 1; j <= m; j++) Q[++tail] = kids[j]
+  }
+}'
+# biggest HOLDERS < snapshot: prints "holder first-child total-rss-KB pid|id pid|id ..." for the holder with the largest tree, or nothing.
+# A holder with no process under it is skipped.
+biggest() {
+  awk -v holders="$1" "$AWK_TREE"'
+  END {
+    n = split(holders, hl, " "); best = ""
+    for (i = 1; i <= n; i++) {
+      h = hl[i]; if (!(h in P)) continue
+      walk(h); if (cnt == 0) continue
+      list = ""; first = ""
+      for (c in seen) { list = list " " c "|" I[c]; if (P[c] == h && (first == "" || c + 0 < first + 0)) first = c }
+      if (best == "" || total > bestrss) { best = h; bestrss = total; bestfirst = first; bestlist = list }
+    }
+    if (best != "") print best, bestfirst, bestrss, bestlist
+  }'
+}
+# live HOLDER OLD < snapshot: the pids (one line, space separated) that are under HOLDER now, plus those in OLD ("pid|id ...") that are
+# still the same process (same pid and start time) wherever they are now.
+live() {
+  awk -v holder="$1" -v old="$2" "$AWK_TREE"'
+  END {
+    out = ""
+    if (holder in P) { walk(holder); for (c in seen) out = out " " c; split("", have); m = split(out, a, " "); for (j = 1; j <= m; j++) have[a[j]] = 1 }
+    n = split(old, o, " ")
+    for (j = 1; j <= n; j++) { split(o[j], x, "|"); if ((x[1] in P) && I[x[1]] == x[2] && !(x[1] in have)) out = out " " x[1] }
+    print out
+  }'
+}
+ids() { for e in $1; do printf '%s ' "${e%%|*}"; done; }
+
+# stop HOLDER FREE: TERM, a grace period of re-reading, then KILL, for the largest tree (picked by the caller: $victims, $first, $rss)
+stop_tree() {
+  h=$1; free=$2
+  reason="free memory ${free}% (floor ${FLOOR}%), tree RSS $((rss / 1024)) MB, pid $first"
+  write_marker "$h" "$reason"
+  log WARN "heavy-gate-watchdog stopped pid $first (heavy-gate $h): free memory ${free}%, tree RSS $((rss / 1024)) MB: $(job_command "$h")"
+  # TERM goes to what a fresh snapshot shows under the holder now (the snapshot that chose it may be a moment old)
+  pids=$(snapshot | live "$h" "$victims")
+  # shellcheck disable=SC2086  # a list of pids
+  [ -z "$pids" ] || kill -TERM $pids 2>/dev/null || true
+  t=0
+  while [ "$t" -lt "$GRACE" ]; do
+    sleep 1 || true
+    beat
+    t=$((t + 1))
+    pids=$(snapshot | live "$h" "$victims")
+    [ -n "$(printf '%s' "$pids" | tr -d ' ')" ] || break
+  done
+  if [ -n "$(printf '%s' "$pids" | tr -d ' ')" ]; then
+    pids=$(snapshot | live "$h" "$victims")
+    # shellcheck disable=SC2086
+    [ -z "$pids" ] || kill -KILL $pids 2>/dev/null || true
+  fi
+  # an older heavy-gate never removes the marker; a newer one has read it by the time the job and it are gone
+  if ! gate_pid "$h"; then rm -f "$LOCK.stopped.$h" 2>/dev/null || true; fi
+}
+
+beat
+log INFO "watching heavy-gate jobs: every ${POLL}s, stop under ${FLOOR}% free on two readings in a row, grace ${GRACE}s (lock $LOCK)"
+lows=0
+while :; do
+  sleep "$POLL" || sleep 1
+  beat
+  any_trace || { lows=0; continue; }
+  hs=$(holders | tr '\n' ' ')
+  if [ -z "$(printf '%s' "$hs" | tr -d ' ')" ]; then lows=0; continue; fi
+  v=$(mem_free_pct)
+  if low "$v"; then lows=$((lows + 1)); else lows=0; fi
+  [ "$lows" -ge 2 ] || continue
+  lows=0
+  pick=$(snapshot | biggest "$hs")
+  [ -n "$pick" ] || continue
+  # holder, first child, tree RSS in KB, then the "pid|id" entries
+  # shellcheck disable=SC2086  # split into words on purpose
+  set -- $pick
+  holder=$1; first=$2; rss=$3; shift 3
+  victims=$*
+  stop_tree "$holder" "$v"
+done
