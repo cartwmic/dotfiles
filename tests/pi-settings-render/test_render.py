@@ -47,6 +47,24 @@ class SettingsRenderTests(unittest.TestCase):
                 self.assertEqual(reserve, 100000)
                 self.assertGreater(int(0.8 * reserve), 13107)  # Pi default cap that was hit
 
+    def test_opus_is_medium_and_every_other_model_keeps_its_level(self):
+        # Models with no modelThinkingLevels entry (other providers, /model switches, resumes) follow defaultThinkingLevel,
+        # so only the Opus routes move and the global default stays high.
+        expected = {
+            "personal": {
+                "openai-codex/gpt-6.1-sol": "high", "openai-codex/gpt-6-astra": "high",
+                "claude-compat/claude-opus-5-5": "medium", "claude-compat/claude-sonnet-5-5": "high",
+                "claude-compat/claude-haiku-5-5": "xhigh",
+            },
+            "axon-work-computer": {"anthropic/claude-opus-5-5": "medium"},
+        }
+        for profile, levels in expected.items():
+            with self.subTest(profile=profile):
+                s = render(profile)
+                self.assertEqual(s["defaultModel"], "claude-opus-5-5")
+                self.assertEqual(s["defaultThinkingLevel"], "high")
+                self.assertEqual(s["modelThinkingLevels"], levels)
+
 
 if __name__ == "__main__":
     unittest.main()
