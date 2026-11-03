@@ -133,13 +133,13 @@ class WatchdogBase(unittest.TestCase):
         return int(path.read_text())
 
     # --- heavy-gate jobs ---
-    def gate(self, name, body):
+    def gate(self, name, body, env=None):
         """A heavy-gate job (a real process tree under a real heavy-gate) running `body`; returns once it is running."""
         job_file = self.root / f"job.{name}.sh"
         job_file.write_text(f"cd {self.root}\ntouch started.{name}\n{body}\n")
         err = open(self.root / f"{name}.err", "w")
         self.addCleanup(err.close)
-        proc = subprocess.Popen(["sh", str(SCRIPT), "--", "sh", str(job_file)], env=self.env, stdout=subprocess.DEVNULL, stderr=err, start_new_session=True)
+        proc = subprocess.Popen(["sh", str(SCRIPT), "--", "sh", str(job_file)], env={**self.env, **(env or {})}, stdout=subprocess.DEVNULL, stderr=err, start_new_session=True)
         self.procs.append(proc)
         self.assertTrue(self.wait_for(lambda: (self.root / f"started.{name}").exists(), 20), f"{name} is running")
         return proc
@@ -349,7 +349,7 @@ class Watchdog(WatchdogBase):
         child = self.pid_of("child.fake")
         waiters = self.root / "heavy-gate.lock.waiters"
         waiters.mkdir(exist_ok=True)
-        real_start = "_".join(subprocess.run(["ps", "-o", "lstart=", "-p", str(proc.pid)], capture_output=True, text=True).stdout.split()[:5])
+        real_start = "_".join(subprocess.run(["ps", "-o", "lstart=", "-p", str(proc.pid)], capture_output=True, text=True, env={**os.environ, "LC_ALL": "C", "TZ": "UTC0"}).stdout.split()[:5])
         (waiters / str(proc.pid)).write_text(f"5\n{state}\n{self.root}\nfake job\n{real_start if start is None else start}\n")
         return proc, child, waiters / str(proc.pid), real_start
 
@@ -370,6 +370,21 @@ class Watchdog(WatchdogBase):
         self.assertTrue(self.alive(child), "a pid whose start time differs from the one heavy-gate recorded is a reused pid")
         entry.write_text(f"5\nrunning\n{self.root}\nfake job\n{start}\n")
         self.gone_soon(child, seconds=10)
+
+    def test_a_callers_time_zone_or_locale_does_not_hide_a_job_from_the_daemon(self):
+        # heavy-gate records its start time and the daemon (launchd: no TZ, C locale) reads it back: both must read it the same way
+        locales = subprocess.run(["locale", "-a"], capture_output=True, text=True).stdout.split() if shutil.which("locale") else []
+        cases = [("TZ=UTC", {"TZ": "UTC"}), ("TZ=Pacific/Auckland", {"TZ": "Pacific/Auckland"})]
+        if "en_GB.UTF-8" in locales:
+            cases.append(("LC_ALL=en_GB.UTF-8", {"LC_ALL": "en_GB.UTF-8"}))
+        self.daemon(env={"TZ": "America/New_York"})
+        for n, (label, env) in enumerate(cases):
+            with self.subTest(label):
+                self.set(memory_pressure=self.OK)  # a start needs memory free
+                job = self.gate(f"c{n}", SMALL, env=env)
+                self.set(memory_pressure=self.LOW)
+                job.wait(timeout=30)
+                self.assertEqual(job.returncode, 137, self.err(f"c{n}"))
 
     def test_a_forged_slot_link_to_a_process_that_is_not_heavy_gate_is_not_followed(self):
         # `nvim /x/executable_heavy-gate`: the script's path is an argument of something else

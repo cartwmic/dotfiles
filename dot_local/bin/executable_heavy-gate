@@ -455,7 +455,8 @@ fi
 
 deadline=$(( $(date +%s) + WAIT ))
 JOB=$*
-GATE_START=$(ps -o lstart= -p "$$" 2>/dev/null | awk 'NF >= 5 { print $1 "_" $2 "_" $3 "_" $4 "_" $5; exit }')
+# C locale and UTC, whatever the caller has: the daemon reads the same string under launchd, which has neither TZ nor a locale
+GATE_START=$(LC_ALL=C TZ=UTC0 ps -o lstart= -p "$$" 2>/dev/null | awk 'NF >= 5 { print $1 "_" $2 "_" $3 "_" $4 "_" $5; exit }')
 trap 'drop_guard; drop_admit; drop_slot; unregister; rm -f "$LOCK.stopped.$$"' EXIT
 trap 'exit 143' INT TERM HUP
 until try_gate 1; do

@@ -79,8 +79,9 @@ gate_pid() {
       else if ((b1 == "sh" || b1 == "bash" || b1 == "dash" || b1 == "zsh") && (b2 == "heavy-gate" || b2 == "executable_heavy-gate")) ok = 1 }
     END { exit !ok }'
 }
-# start_of PID: the process's start time, five words joined with _ (the same form as in the snapshot)
-start_of() { ps -o lstart= -p "$1" 2>/dev/null | awk 'NF >= 5 { print $1 "_" $2 "_" $3 "_" $4 "_" $5; exit }'; }
+# start_of PID: the process's start time, five words joined with _ (the same form as in the snapshot). Always read in the C locale and UTC:
+# heavy-gate records it the same way, so a caller's TZ or locale cannot make the two differ.
+start_of() { LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | awk 'NF >= 5 { print $1 "_" $2 "_" $3 "_" $4 "_" $5; exit }'; }
 # holder_pid PID: a heavy-gate script whose start time is the one it recorded (line 5 of its waiter entry; a heavy-gate that recorded none
 # is taken on its command alone)
 holder_pid() {
@@ -130,7 +131,7 @@ job_command() {
 
 # ---- the trees ----
 # One ps snapshot: pid, ppid, rss (KB) and start time (five words, joined with _) per process.
-snapshot() { ps -A -o pid=,ppid=,rss=,lstart= 2>/dev/null; }
+snapshot() { LC_ALL=C TZ=UTC0 ps -A -o pid=,ppid=,rss=,lstart= 2>/dev/null; }
 # The common part of the awk programs: P[pid]=ppid, R[pid]=rss, I[pid]=identity, nxt[ppid]=children; walk(h) fills Q with the
 # descendants of h (not h) and sets total and cnt.
 # shellcheck disable=SC2016  # awk program
