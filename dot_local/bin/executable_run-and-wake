@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""run-and-wake: run a command detached, then wake the Pi session that started it.
+"""run-and-wake: run a command detached, then wake the Pi session or T3 thread that started it.
 
 Usage: run-and-wake [--] CMD [ARGS...]
        run-and-wake -- heavy-gate --wait 7200 -- CMD...
@@ -12,16 +12,21 @@ Contract (docs/run-and-wake.md):
   `herdr agent prompt` to the pane in $HERDR_PANE_ID, sent only if, at check time, that
   pane shows the Pi session in $PI_SESSION_FILE captured at launch. Otherwise the wake is
   skipped with a reason: no-pane, no-session, pane-gone, session-changed, herdr-error.
+- Started from a T3 Code thread instead (T3CODE_THREAD_ID set, and no Herdr pane plus Pi session to wake): the
+  wake is one `t3 thread send <thread> -` with the same text on stdin, using $T3CODE_CLI_PATH, else ~/.t3/bin/t3.
+  A busy thread takes it as its next turn. If both a pane with a Pi session and a thread are set, the pane wins:
+  Pi sets HERDR_PANE_ID and PI_SESSION_FILE on every bash call, so that pair names the actual caller, while
+  T3CODE_THREAD_ID may only be inherited from the app that launched the shell.
 - Best effort on the session (owner-accepted, ask #347): herdr's prompt targets a pane, not a
   session, so a /new in the milliseconds between the check and the send can put the message
   in the new session. That is logged as session_after on the wake record, not prevented.
 - If the pane shows a dialog (blocked), it waits for herdr to report another state, then sends.
 - Every job writes to ${XDG_STATE_HOME:-~/.local/state}/run-and-wake/log.jsonl, one JSON
   record per line, all carrying the job id and a UTC time:
-    start  {cmd, cwd, pane, session, pid, output}
+    start  {cmd, cwd, pane, session, thread, pid, output}
     end    {exit, signal, duration_s}
     blocked {}                      (pane showed a dialog; waiting)
-    wake   {result: sent|failed, error?, duration_s, session_after?}  (session_after: the pane
+    wake   {target: herdr|t3, result: sent|failed, error?, duration_s, session_after?}  (session_after: the pane
            showed another session right after the send; herdr cannot make the send conditional)
     skip   {reason, detail?}
 """
@@ -110,6 +115,25 @@ def herdr(*args):
     return ("ok", (reply.get("result") or {}).get("agent") or {})
 
 
+def t3_cli():
+    return os.environ.get("T3CODE_CLI_PATH") or os.path.expanduser("~/.t3/bin/t3")
+
+
+def wake_thread(job, thread, text):
+    """One `t3 thread send`: the message goes on stdin, as the coordinator's deliverer sends it."""
+    started = time.monotonic()
+    try:
+        done = subprocess.run([t3_cli(), "thread", "send", thread, "-"], input=text, capture_output=True, text=True)
+        error = None if done.returncode == 0 else f"exit {done.returncode}: {(done.stderr or done.stdout).strip()}"
+    except OSError as err:
+        error = f"t3-missing: {err}"
+    took = round(time.monotonic() - started, 3)
+    if error is None:
+        record(job, "wake", target="t3", result="sent", duration_s=took)
+    else:
+        record(job, "wake", target="t3", result="failed", error=error, duration_s=took)
+
+
 def wake(job, pane, session, text):
     started = time.monotonic()
     while True:
@@ -132,9 +156,9 @@ def wake(job, pane, session, text):
         # session right after the send is logged, so a session swapped in that window shows in the log.
         after = herdr("agent", "get", pane)
         now = (after[1].get("agent_session") or {}).get("value") if after[0] == "ok" else None
-        record(job, "wake", result="sent", duration_s=took, **({} if now == session else {"session_after": now}))
+        record(job, "wake", target="herdr", result="sent", duration_s=took, **({} if now == session else {"session_after": now}))
     else:
-        record(job, "wake", result="failed", error=f"{sent[1]}: {sent[2]}", duration_s=took)
+        record(job, "wake", target="herdr", result="failed", error=f"{sent[1]}: {sent[2]}", duration_s=took)
 
 
 # --- launch ---
@@ -149,26 +173,30 @@ def tell(report, text):
         os.close(report)
 
 
-def watch(job, cmd, output, pane, session, report):
+def watch(job, cmd, output, pane, session, thread, report):
     """Runs in the detached process: start the job, wait for it, then wake."""
     started = time.monotonic()
     with open(output, "ab", buffering=0) as out:
         try:
             child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
         except OSError as error:
-            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, pid=None, output=output)
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=None, output=output)
             tell(report, f"failed {error}")
             out.write(f"[{NAME}] ERROR: could not start: {error}\n".encode())
             record(job, "end", exit=127, signal=None, error=str(error), duration_s=0.0)
             status = f"could not start ({error})"
         else:
-            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, pid=child.pid, output=output)
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=child.pid, output=output)
             tell(report, f"pid {child.pid}")
             code = child.wait()
             sig = signal.Signals(-code).name if code < 0 else None
             record(job, "end", exit=code if code >= 0 else None, signal=sig, duration_s=round(time.monotonic() - started, 3))
             status = f"killed by {sig}" if sig else f"exit {code}"
-    wake(job, pane, session, message(job, status, time.monotonic() - started, cmd, output))
+    text = message(job, status, time.monotonic() - started, cmd, output)
+    if thread:
+        wake_thread(job, thread, text)
+    else:
+        wake(job, pane, session, text)
 
 
 def main(argv):
@@ -185,6 +213,8 @@ def main(argv):
     output = os.path.join(STATE, "jobs", job + ".log")
     pane = os.environ.get("HERDR_PANE_ID") or None
     session = os.environ.get("PI_SESSION_FILE") or None
+    # a pane with its Pi session is the caller Pi names on every bash call; a thread is used only without that pair
+    thread = None if pane and session else os.environ.get("T3CODE_THREAD_ID") or None
     read, report = os.pipe()
     if os.fork() == 0:  # the watcher: its own session, so killing the launcher's process group leaves it alone
         os.close(read)
@@ -195,7 +225,7 @@ def main(argv):
         os.dup2(logfd, 1)
         os.dup2(logfd, 2)
         try:
-            watch(job, argv, output, pane, session, report)
+            watch(job, argv, output, pane, session, thread, report)
         except BaseException:
             traceback.print_exc()  # into the job's output file
         finally:
@@ -207,7 +237,9 @@ def main(argv):
         say("INFO", f"job {job} started, {started}, output {output}")
     else:
         say("ERROR", f"job {job} could not start: {started[7:] or 'unknown'}; output {output}")
-    if not pane:
+    if thread:
+        say("INFO", f"when it ends, T3 thread {thread} gets one message tagged [{NAME} k:{job}]; you can end your turn")
+    elif not pane:
         say("WARN", "no HERDR_PANE_ID: nothing will wake you when it ends")
     elif not session:
         say("WARN", "no PI_SESSION_FILE: nothing will wake you when it ends")
