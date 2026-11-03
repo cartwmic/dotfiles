@@ -6,6 +6,8 @@ The real script runs as a real process. Only the host's figures are scripted: sy
 small fakes first on PATH that print whatever the test wrote to files, so a busy or quiet Mac can be simulated on any machine.
 """
 import os
+import pty
+import select
 import shutil
 import signal
 import subprocess
@@ -1177,8 +1179,8 @@ exit $rc
         new.write_text("\n".join(lines) + "\n")
         new.rename(self.fake / "mp_seq")
 
-    def job_file(self, body):
-        path = Path(self.tmp.name) / "job.sh"
+    def job_file(self, body, name=None):
+        path = Path(self.tmp.name) / (f"job.{name}.sh" if name else "job.sh")
         path.write_text(body)
         return path
 
@@ -1187,12 +1189,12 @@ exit $rc
         self.assertTrue(self.wait_for(lambda: path.exists() and path.read_text().strip() != ""), f"{name} was written")
         return int(path.read_text())
 
-    def watched(self, body, *readings, grace="3", extra=None, **opts):
-        """Start heavy-gate on a job that writes `started` when it runs; then script the memory readings. Returns the process and the result's timing."""
-        started = Path(self.tmp.name) / "started"
-        job = self.start("--", "sh", str(self.job_file(f"cd {self.tmp.name}\ntouch {started}\n{body}")),
+    def watched(self, body, *readings, grace="3", extra=None, name=None, args=(), **opts):
+        """Start heavy-gate on a job that writes `started` (`started.NAME`) when it runs; then script the memory readings. Returns the process."""
+        started = Path(self.tmp.name) / (f"started.{name}" if name else "started")
+        job = self.start("--", "sh", str(self.job_file(f"cd {self.tmp.name}\ntouch {started}\n{body}", name)), *args,
                          env={"HEAVY_GATE_WATCH_POLL": "1", "HEAVY_GATE_STOP_GRACE": grace, **(extra or {})}, **opts)
-        self.addCleanup(lambda: (job.poll() is None and job.kill(), job.communicate(), self.reap_groups()))
+        self.addCleanup(lambda: (self.reap_groups(), job.poll() is None and job.kill(), job.communicate()))
         self.assertTrue(self.wait_for(started.exists, 20), "the job is running")
         if readings:
             self.readings(*readings)
@@ -1200,11 +1202,14 @@ exit $rc
 
     def reap_groups(self):
         """A failed test must not leave a job (it is in its own group) running: KILL whatever the job files named."""
-        for name in ("pid", "child"):
-            path = Path(self.tmp.name) / name
+        for path in Path(self.tmp.name).glob("pid*"):
             try:
-                pid = int(path.read_text())
-                os.killpg(pid, signal.SIGKILL) if name == "pid" else os.kill(pid, signal.SIGKILL)
+                os.killpg(int(path.read_text()), signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
+        for path in Path(self.tmp.name).glob("child*"):
+            try:
+                os.kill(int(path.read_text()), signal.SIGKILL)
             except (OSError, ValueError):
                 pass
 
@@ -1216,10 +1221,16 @@ exit $rc
         for pid in pids:
             self.assertFalse(self.wait_for(lambda: self._alive(pid), 1), f"pid {pid} is gone")
 
+    def assertGoneSoon(self, *pids, seconds=25):
+        for pid in pids:
+            self.assertTrue(self.wait_for(lambda: not self._alive(pid), seconds), f"pid {pid} is gone")
+
     def assertReleased(self):
+        clean = lambda: not self.lock.is_symlink() and not list(self.waiters.glob("*")) and not list(self.lock.parent.glob("heavy-gate.lock.stop*"))
+        self.wait_for(clean, 10)
         self.assertFalse(self.lock.is_symlink(), "the slot is released")
         self.assertEqual(list(self.waiters.glob("*")), [], "the waiter entry is gone")
-        self.assertEqual(list(self.lock.parent.glob("heavy-gate.lock.stopped.*")), [], "no stop marker is left")
+        self.assertEqual(list(self.lock.parent.glob("heavy-gate.lock.stop*")), [], "no stop or stop-request marker is left")
 
     def test_the_job_runs_in_its_own_process_group(self):
         job = self.watched("echo $$ > pid\nps -o pgid= -p $$ > pgid\nsleep 1", self.OK)
@@ -1306,12 +1317,178 @@ exit $rc
         self.assertGone(pid)
         self.assertReleased()
 
-    def test_a_job_stopped_by_the_terminal_is_still_stopped_by_the_watchdog(self):
-        job = self.watched("echo $$ > pid\nkill -STOP $$\nsleep 60", self.LOW, grace="2")
-        pid = self.pids("pid")
+    def test_a_stopped_job_still_runs_its_term_trap(self):
+        # SIGSTOP, and SIGTTIN (what a terminal read in a background group raises): the stop sends CONT, so the trap runs, long before the KILL
+        for sig in ("STOP", "TTIN"):
+            with self.subTest(sig):
+                for name in ("pid", "trapped", "started"):
+                    (Path(self.tmp.name) / name).unlink(missing_ok=True)
+                marker = Path(self.tmp.name) / "trapped"
+                began = time.monotonic()
+                job = self.watched(f"echo $$ > pid\ntrap 'echo trapped > {marker}; exit 0' TERM\nkill -{sig} $$\nsleep 60", self.LOW, grace="20")
+                _, err = self.finished(job)
+                self.assertEqual(job.returncode, 137, err)
+                self.assertEqual(marker.read_text().strip(), "trapped", "the trap ran, so the job was continued")
+                self.assertLess(time.monotonic() - began, 15, "it did not wait for the KILL")
+                (self.fake / "mp_seq").unlink()
+
+    def test_the_jobs_child_gets_term_before_the_kill(self):
+        marker = Path(self.tmp.name) / "childtrap"
+        job = self.watched(f"trap '' TERM\n(trap 'echo child-term > {marker}; exit 0' TERM; while :; do sleep 0.1; done) &\nwait", self.LOW, grace="3")
         _, err = self.finished(job)
         self.assertEqual(job.returncode, 137, err)
-        self.assertGone(pid)
+        self.assertEqual(marker.read_text().strip(), "child-term")
+        self.assertNotIn("Killed", err, "bash's own job-status line for the KILLed job is not shown")
+
+    def test_the_stop_line_shows_the_command_cut_to_about_120_characters(self):
+        job = self.watched("sleep 60", self.LOW, args=("x" * 300,))
+        _, err = self.finished(job)
+        line = next(l for l in err.splitlines() if "stopped this job" in l)
+        command = line.split(": sh ", 1)[1]
+        self.assertTrue(command.endswith("..."), line)
+        self.assertLessEqual(len(command), 128, line)
+        self.assertNotIn("x" * 200, err.split("stopped this job")[1])
+
+    def test_the_waiter_entry_records_the_jobs_process_group(self):
+        job = self.watched("echo $$ > pid\nsleep 3", self.OK)
+        pid = self.pids("pid")
+        self.assertTrue(self.wait_for(lambda: (self.waiters / str(job.pid)).exists() and len((self.waiters / str(job.pid)).read_text().split("\n")) >= 6))
+        lines = (self.waiters / str(job.pid)).read_text().split("\n")
+        self.assertEqual((lines[1], lines[4]), ("running", str(pid)))
+        self.finished(job)
+
+    def test_a_signal_before_heavy_gate_can_pass_it_on_is_not_lost(self):
+        # A slow ps holds heavy-gate in the window between starting the job and being ready to pass a signal on (it checks the job's group there).
+        ps = self.bin / "ps"
+        ps.write_text('#!/bin/sh\nsleep 2\nexec /bin/ps "$@"\n')
+        ps.chmod(0o755)
+        job = self.start("--", "sh", str(self.job_file(f"cd {self.tmp.name}\necho $$ > pid\nsleep 60")), env={"HEAVY_GATE_WATCH_POLL": "1"})
+        self.addCleanup(lambda: (self.reap_groups(), job.poll() is None and job.kill(), job.communicate()))
+        pid = self.pids("pid")  # the job is running, and heavy-gate is still inside the slow ps
+        os.kill(job.pid, signal.SIGTERM)  # heavy-gate alone
+        _, err = job.communicate(timeout=30)
+        self.assertEqual(job.returncode, 143, err)
+        self.assertGoneSoon(pid)
+        self.assertReleased()
+
+    # --- the watchdog outlives a kill of heavy-gate's own group ---
+    def orphan_job(self, grace):
+        job = self.watched("trap '' TERM\necho $$ > pid\n(trap '' TERM; exec sleep 300) &\necho $! > child\nwait", grace=grace)
+        return job, self.pids("pid"), self.pids("child")
+
+    def assertStoppedAndReleased(self, pid, child, job):
+        self.assertGoneSoon(pid, child)
+        self.assertTrue(self.wait_for(lambda: not self.lock.is_symlink(), 10), "the slot is released")
+        self.assertReleased()
+        job.communicate(timeout=20)
+
+    def test_a_sigkill_to_heavy_gates_group_the_pi_way_does_not_leave_the_job_running(self):
+        job, pid, child = self.orphan_job("5")
+        os.killpg(job.pid, signal.SIGKILL)  # process.kill(-pid, SIGKILL)
+        job.wait(timeout=10)
+        self.assertTrue(self.wait_for(lambda: self._alive(pid), 1), "the job is still running just after the kill")
+        time.sleep(2.5)
+        self.assertTrue(self._alive(pid), "still inside the grace period")
+        holder = int(os.readlink(self.lock))
+        self.assertTrue(self._alive(holder) and holder != job.pid, "the slot is held by the watchdog while the job runs, not free")
+        self.assertStoppedAndReleased(pid, child, job)
+
+    def test_term_then_kill_to_heavy_gates_group_the_claude_code_way_does_not_leave_the_job_running(self):
+        job, pid, child = self.orphan_job("5")
+        os.killpg(job.pid, signal.SIGTERM)
+        time.sleep(2)  # Claude Code waits 5 s; the stop must not depend on heavy-gate living through the grace period
+        os.killpg(job.pid, signal.SIGKILL)
+        job.wait(timeout=10)
+        self.assertStoppedAndReleased(pid, child, job)
+
+    # --- a terminal on stdin ---
+    def under_pty(self, body, name):
+        """Run heavy-gate with a terminal as stdin, stdout and stderr (a pty pair). Returns the child pid and the master fd."""
+        job_file = self.job_file(f"cd {self.tmp.name}\n{body}", name)
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.execvpe(GATE_SH, [GATE_SH, str(SCRIPT), "--", "sh", str(job_file)], {**self.env, "HEAVY_GATE_WATCH_POLL": "1"})
+        self.addCleanup(lambda: (self.reap_groups(), os.kill(pid, signal.SIGKILL) if self.alive_pid(pid) else None, os.close(fd)))
+        return pid, fd
+
+    @staticmethod
+    def alive_pid(pid):
+        try:
+            return os.waitpid(pid, os.WNOHANG) == (0, 0)
+        except ChildProcessError:
+            return False
+
+    def drain_until_exit(self, fd, pid, seconds=20):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if select.select([fd], [], [], 0.2)[0]:
+                try:
+                    os.read(fd, 4096)
+                except OSError:
+                    pass
+            if not self.alive_pid(pid):
+                return True
+        return False
+
+    @staticmethod
+    def read_until(fd, needle, seconds=20):
+        buf = b""
+        end = time.monotonic() + seconds
+        while needle.encode() not in buf and time.monotonic() < end:
+            if select.select([fd], [], [], 0.2)[0]:
+                try:
+                    data = os.read(fd, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                buf += data
+        return buf.decode(errors="replace")
+
+    def test_a_job_that_reads_the_terminal_is_warned_about_and_ctrl_c_stops_it(self):
+        pid, fd = self.under_pty("echo $$ > pid\nread x\n", "tty")
+        out = self.read_until(fd, "is stopped (state T)")
+        self.assertIn("WARN: stdin is a terminal: a job that reads it will pause (SIGTTIN)", out)
+        self.assertEqual(out.count("stdin is a terminal"), 1)
+        self.assertIn("WARN: the job is stopped (state T), probably because it reads the terminal; Ctrl-C stops it", out)
+        job_pid = self.pids("pid")
+        os.write(fd, b"\x03")  # Ctrl-C: SIGINT to the terminal's foreground group, which is heavy-gate's
+        self.assertTrue(self.drain_until_exit(fd, pid), "heavy-gate has exited")  # a tty is only closed once its output is read
+        self.assertGoneSoon(job_pid)
+        self.assertReleased()
+
+    def test_no_terminal_no_warning(self):
+        result = self.gate("--", "true")
+        self.assertNotIn("stdin is a terminal", result.stderr)
+
+    # --- only the biggest job is stopped ---
+    BIG = ("exec python3 -c \"import time; x = b'x' * (80 * 1024 * 1024); open('ready.big', 'w').close(); time.sleep(120)\"")
+
+    def two_jobs(self, small_body):
+        big = self.watched(self.BIG, name="big", extra={"HEAVY_GATE_STOP_GRACE": "3"})
+        self.assertTrue(self.wait_for((Path(self.tmp.name) / "ready.big").exists, 20), "the big job has its memory")
+        small = self.watched(small_body, name="small")
+        self.readings(self.LOW)  # one constant reading, so the two watchdogs do not compete for a script
+        return big, small
+
+    def test_when_memory_stays_low_the_biggest_job_stops_first_and_then_the_next(self):
+        big, small = self.two_jobs("exec sleep 120")
+        _, big_err = self.finished(big)
+        self.assertEqual(big.returncode, 137, big_err)
+        self.assertIn("stopped this job", big_err)
+        self.assertIsNone(small.poll(), "the smaller job was not stopped with it")
+        _, small_err = self.finished(small)
+        self.assertEqual(small.returncode, 137, "memory stayed low, so the next biggest goes after two more readings: " + small_err)
+        self.assertIn("stopped this job", small_err)
+
+    def test_when_memory_recovers_after_the_biggest_stops_the_others_keep_running(self):
+        big, small = self.two_jobs("sleep 6\nexit 4")
+        _, big_err = self.finished(big)
+        self.assertEqual(big.returncode, 137, big_err)
+        self.readings(self.OK)
+        _, small_err = self.finished(small)
+        self.assertEqual(small.returncode, 4, small_err)
+        self.assertNotIn("stopped this job", small_err)
 
     def test_a_child_that_ignores_term_outlives_its_parent_only_until_the_grace_period_ends(self):
         job = self.watched("(trap '' TERM; exec sleep 60) &\necho $! > child\ntrap 'exit 0' TERM\nwait", self.LOW, grace="2")
@@ -1371,7 +1548,8 @@ exit $rc
 
     def test_the_header_describes_the_watchdog(self):
         err = self.gate("--help").stderr
-        for expected in ("Running-job watchdog (owner decision 2026-11-03", "HEAVY_GATE_STOP_FREE_PCT", "HEAVY_GATE_STOP_GRACE", "HEAVY_GATE_WATCH_POLL", "137", "143"):
+        for expected in ("Running-job watchdog (owner decision 2026-11-03", "HEAVY_GATE_STOP_FREE_PCT", "HEAVY_GATE_STOP_GRACE", "HEAVY_GATE_WATCH_POLL", "137", "143",
+                         "Only the biggest job is stopped", "in its own process group, so killing heavy-gate's group", "heavy-gate -- x | tee log"):
             self.assertIn(expected, err)
         self.assertNotIn("a running job is never stopped", err)
         self.assertIn("swap, Swapouts and load still stop nothing", err.replace("\n", " "))

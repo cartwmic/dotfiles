@@ -38,8 +38,8 @@
 #    run tries again. Off: chezmoi data qmd.refresh.cleanup: false (renders cleanup=off into ~/.config/qmd/refresh.conf), or
 #    --no-cleanup for one run.
 #  - TERM, INT or HUP stop the job's whole process tree (TERM, then KILL after QMD_REFRESH_GRACE seconds, default 10)
-#    and wait for it before exiting, because heavy-gate runs its job in the foreground and a shell defers a signal until
-#    that job ends.
+#    and wait for it before exiting: the tree is found by parent pid, so it reaches heavy-gate's job and watchdog even though
+#    heavy-gate runs them in process groups of their own, and the job must be gone before this script drops its lock.
 #
 # Exit: 0 ok (also when embedding was skipped for the missing model) · 2 usage · 75 another refresh is running (reported
 # out of band, never guessed from a status) · 127 qmd, heavy-gate or perl not found · 143 stopped by a signal ·
