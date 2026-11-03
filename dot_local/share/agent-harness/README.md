@@ -62,7 +62,7 @@ Guidelines:
 - Shared standing rules live in [`canonical/instructions/AGENTS.md`](./canonical/instructions/AGENTS.md). Include that file into each harness's `AGENTS.md` (Claude: `CLAUDE.md`). Do not create `~/AGENTS.md`. Do not put shared rules in Pi `APPEND_SYSTEM.md`.
 - Follow [Apply and Verify](#apply-and-verify), then check the live destination files.
 
-Current files: [AGENTS.md](./canonical/instructions/AGENTS.md) (the design-principles pointer, scripts vs skills, voice, subagents, decisions and escalation), [hindsight-guidance.md](./canonical/instructions/hindsight-guidance.md), and [axon-playbook.md](./canonical/instructions/axon-playbook.md) (work profile only: the private playbook's `bin/playbook-context` output arrives at session start from Claude Code's hook and Pi's `axon-playbook` extension, Codex runs it itself, and every harness uses `axon-pr-preflight` before PR actions; each harness template includes it under an `axon-work-computer` gate). [profile-work.md](./canonical/instructions/profile-work.md) (`axon-work-computer` only: never merge or deploy without the owner's explicit approval) and [profile-personal.md](./canonical/instructions/profile-personal.md) (`personal` only: merging and deploying approved work is the agent's to do); each of the three harness templates includes them under a profile gate, and termux gets neither.
+Current files: [AGENTS.md](./canonical/instructions/AGENTS.md) (the design-principles pointer, scripts vs skills, voice, subagents, decisions and escalation), [hindsight-guidance.md](./canonical/instructions/hindsight-guidance.md), and [axon-playbook.md](./canonical/instructions/axon-playbook.md) (work profile only: the private playbook's `bin/playbook-context` output arrives at session start from Claude Code's hook and Pi's `axon-playbook` extension, Codex runs it itself, and every harness uses `axon-pr-preflight` before PR actions; each harness template includes it under an `axon-work-computer` gate). [profile-work.md](./canonical/instructions/profile-work.md) (`axon-work-computer` only: never merge or deploy without the owner's explicit approval) and [profile-personal.md](./canonical/instructions/profile-personal.md) (`personal` only: merging and deploying approved work is the agent's to do); each of the three harness templates includes them under a profile gate, and termux gets neither. Both profile files also carry the agent seat table (which model runs the coordinator, lead, planner, reviewer, builder and browser-work seats; a rule for agents to read, with no launch helper); the only difference is the browser-work row.
 
 ## Add A Canonical MCP Server
 
@@ -205,11 +205,9 @@ only that entry), the Pi `axon-playbook` extension (work profile only) injects t
 linked by the next run of `apply_harness_config.sh` (`chezmoi apply` runs it when its inputs change, or run
 `~/.local/user_scripts/apply_harness_config.sh skills`).
 
-## Capability Tiers
+## Retired: Capability Tiers
 
-[`capability-tiers/`](./capability-tiers/README.md) holds a standalone tier registry (low, medium, high) and a
-read-only resolver that previews which model a role would get, using quota data. It is not canonical config for
-any harness and is wired into none yet.
+The tier registry the owner set up on 2026-10-20 was retired on 2026-11-03 and replaced by the seat table in the profile instruction files.
 
 ## Import Loop Engine Skills From A Release Tag
 
