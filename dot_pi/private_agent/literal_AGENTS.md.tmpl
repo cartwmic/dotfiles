@@ -5,6 +5,14 @@
 
 {{ include "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md" | trimSuffix "\n" }}
 {{- end }}
+{{- if eq .profile "axon-work-computer" }}
+
+{{ include "dot_local/share/agent-harness/canonical/instructions/profile-work.md" | trimSuffix "\n" }}
+{{- end }}
+{{- if eq .profile "personal" }}
+
+{{ include "dot_local/share/agent-harness/canonical/instructions/profile-personal.md" | trimSuffix "\n" }}
+{{- end }}
 
 ## Authority
 
