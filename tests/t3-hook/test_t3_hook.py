@@ -135,7 +135,14 @@ class T3HookSettingsTest(unittest.TestCase):
     def test_file_gone_after_on_restores_the_original(self):
         original = self.modify("missing", USER)
         self.assertEqual(self.modify("missing", self.modify("on", original)), original)
-        self.assertEqual(self.modify("missing", ""), {"cleanupPeriodDays": 365})
+        self.assertEqual(self.modify("missing", ""), {"cleanupPeriodDays": 365, "model": "claude-opus-5-5", "effortLevel": "medium"})
+
+    def test_default_model_is_opus_at_medium_on_both_profiles_and_saved_levels_are_kept(self):
+        saved = {"modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}
+        for case in ("on", "work"):
+            s = self.modify(case, dict(saved, model="sonnet", effortLevel="high"))
+            self.assertEqual((s["model"], s["effortLevel"]), ("claude-opus-5-5", "medium"), case)
+            self.assertEqual(s["modelSettings"], saved["modelSettings"], case)  # /effort picks live here; never touched
 
     def test_flag_is_not_read(self):
         self.assertEqual(len(t3(self.modify("flag_off", "{}"))), 4)
