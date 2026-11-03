@@ -139,6 +139,11 @@ export _ZO_ECHO=1
 eval "$(zoxide init zsh)"
 
 [[ -s "$HOME/.gvm/scripts/gvm" ]] && source "$HOME/.gvm/scripts/gvm"
+# Agent shells (Claude Code sets CLAUDECODE=1) replay shell functions from a snapshot
+# but not exported variables, so gvm's cd override runs without GVM_ROOT, prints
+# "GVM_ROOT not set" and returns non-zero, which breaks every `cd X && ...` chain.
+# Keep gvm's Go on PATH there and drop only its cd override.
+[[ -n "$CLAUDECODE" ]] && (( $+functions[cd] )) && unfunction cd
 
 . $HOME/utils.sh
 command -v magick >/dev/null 2>&1 && is_macos && export DISPLAY=:0
