@@ -22,6 +22,18 @@ TEMPLATES = {
 }
 WORK = "Never merge or deploy without my explicit approval for that change."
 PERSONAL = "Merging and deploying approved work is yours to do: if checks pass and it keeps the product requirements, ship it and tell me after."
+SEAT_HEADING = "## Agent seats and models"
+SEAT_ROWS = (
+    "| Coordinator | Opus 5.5 medium |",
+    "| Lead | Opus 5.5 medium |",
+    "| Planner | Sonnet 5.5 high |",
+    "| Reviewer | Opus 5.5 medium |",
+    "| Builder | Sonnet 5.5 high; Haiku 5.5 xhigh when steps are tightly bounded |",
+)
+BROWSER = {
+    "personal": "| Browser work | Terra 6.1 (cliproxy/gpt-6.1-terra) if available, else Sonnet 5.5 high |",
+    "axon-work-computer": "| Browser work | Sonnet 5.5 high |",
+}
 ESCALATION = (
     "Decisions and escalation. Decide anything that doesn't materially matter yourself, and don't ask about it: "
     "library choices, naming, style, reversible implementation details. Escalate only what materially matters: "
@@ -72,6 +84,22 @@ class InstructionProfileTests(unittest.TestCase):
                         self.assertNotIn(PERSONAL, text)
                     self.assertEqual(profile == "axon-work-computer", "## Work computer" in text)
                     self.assertEqual(profile == "personal", "## Personal computer" in text)
+
+
+    def test_seat_table_once_per_harness_with_the_right_browser_row(self):
+        for name, template in TEMPLATES.items():
+            for profile in ("personal", "axon-work-computer", "termux"):
+                with self.subTest(harness=name, profile=profile):
+                    text = render(template, profile)
+                    if profile == "termux":
+                        self.assertNotIn(SEAT_HEADING, text)
+                        continue
+                    self.assertEqual(text.count(SEAT_HEADING), 1)
+                    for row in SEAT_ROWS:
+                        self.assertEqual(text.count(row), 1)
+                    self.assertEqual(text.count("| Browser work |"), 1)
+                    self.assertEqual(text.count(BROWSER[profile]), 1)
+                    self.assertEqual(("Terra" in text), profile == "personal")
 
 
 if __name__ == "__main__":
