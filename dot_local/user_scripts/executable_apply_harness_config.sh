@@ -174,7 +174,8 @@ _link_skills_from() {
 
   [ -d "$source_root" ] || return 0
 
-  find "$source_root" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r skill_dir; do
+  # A symlink to a skill directory counts too (dotfiles links coordinator/model-fit into the checkout).
+  find "$source_root" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) | while IFS= read -r skill_dir; do
     if [ ! -f "$skill_dir/SKILL.md" ]; then
       continue
     fi
