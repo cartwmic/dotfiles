@@ -2,7 +2,7 @@
 
 The real script runs as a real process and its job really detaches. Only herdr is scripted: a fake `herdr` first on PATH
 answers `agent get` from files the test writes (one file per live pane, holding the session it shows), records every call,
-and records each `agent prompt` it accepts. Everything is checked from outside: the launcher's output and exit code, the
+and records each `agent prompt` it accepts. A fake `t3` does the same for `thread send` (argv and stdin). Everything is checked from outside: the launcher's output and exit code, the
 prompts herdr received, and the job log, read back as the replay of each job.
 """
 import json
@@ -63,6 +63,19 @@ elif verb == "prompt":
 '''
 
 
+FAKE_T3 = r'''#!/usr/bin/env python3
+import json, os, sys
+fake = os.environ["FAKE"]
+with open(os.path.join(fake, "t3_sends"), "a") as f:
+    f.write(json.dumps({"argv": sys.argv[1:], "stdin": sys.stdin.read()}) + "\n")
+if os.path.exists(os.path.join(fake, "t3_error")):
+    print("thread not found", file=sys.stderr)
+    sys.exit(1)
+'''
+
+THREAD = "thread-7f3a"
+
+
 class RunAndWake(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -75,9 +88,11 @@ class RunAndWake(unittest.TestCase):
         self.bin.mkdir()
         (self.bin / "herdr").write_text(FAKE_HERDR)
         (self.bin / "herdr").chmod(0o755)
+        (self.bin / "t3").write_text(FAKE_T3)
+        (self.bin / "t3").chmod(0o755)
         self.state = root / "state"
         self.log = self.state / "run-and-wake/log.jsonl"
-        env = {k: v for k, v in os.environ.items() if k not in ("HERDR_PANE_ID", "PI_SESSION_FILE", "PI_SESSION_ID") and not k.startswith("HEAVY_GATE_")}
+        env = {k: v for k, v in os.environ.items() if k not in ("HERDR_PANE_ID", "PI_SESSION_FILE", "PI_SESSION_ID", "T3CODE_THREAD_ID", "T3CODE_CLI_PATH") and not k.startswith("HEAVY_GATE_")}
         self.env = {**env, "PATH": f"{self.bin}:{env['PATH']}", "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
                     "HERDR_PANE_ID": PANE, "PI_SESSION_FILE": SESSION}
         self.show(PANE, SESSION)
@@ -91,6 +106,10 @@ class RunAndWake(unittest.TestCase):
 
     def prompts(self):
         path = self.fake / "prompts"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def t3_sends(self):
+        path = self.fake / "t3_sends"
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def calls(self):
@@ -327,6 +346,64 @@ class RunAndWake(unittest.TestCase):
         output = Path(records[0]["output"]).read_text()
         self.assertIn("[heavy-gate] WARN: still refused", output, "the gate's own messages are in the job output")
         self.assertNotIn("never-runs", output.splitlines(), "the gated command never ran")
+
+    # --- a T3 Code thread: no pane, the wake is one `t3 thread send` ---
+    def t3_env(self, **extra):
+        return {"HERDR_PANE_ID": "", "PI_SESSION_FILE": "", "T3CODE_THREAD_ID": THREAD, "T3CODE_CLI_PATH": str(self.bin / "t3"), **extra}
+
+    def test_a_t3_thread_is_woken_with_the_same_text(self):
+        result = self.launch("--", "sh", "-c", "sleep 1; echo job-output; exit 7", env=self.t3_env())
+        job = self.job_id(result)
+        self.assertIn(f"T3 thread {THREAD} gets one message tagged [run-and-wake k:{job}]", result.stdout)
+        self.assertNotIn("WARN", result.stdout)
+        records = self.replay(job)
+        self.assertReplay(records, "start", "end", "wake")
+        self.assertEqual([records[0]["thread"], records[0]["pane"]], [THREAD, None])
+        self.assertEqual([records[-1]["target"], records[-1]["result"]], ["t3", "sent"])
+        sends = self.t3_sends()
+        self.assertEqual(len(sends), 1, "exactly one send")
+        self.assertEqual(sends[0]["argv"], ["thread", "send", THREAD, "-"], "the message is read from stdin")
+        text = sends[0]["stdin"]
+        self.assertTrue(text.startswith(f"[run-and-wake k:{job}] job finished: exit 7 after 1s: "), text)
+        self.assertIn("sh -c 'sleep 1; echo job-output; exit 7'", text)
+        self.assertIn(f"Output: {records[0]['output']}", text)
+        self.assertEqual(self.calls(), [], "herdr is not called")
+
+    def test_the_t3_cli_defaults_to_the_one_in_home(self):
+        home = self.root / "home"
+        (home / ".t3/bin").mkdir(parents=True)
+        (home / ".t3/bin/t3").symlink_to(self.bin / "t3")
+        env = self.t3_env(HOME=str(home), T3CODE_CLI_PATH="")
+        records = self.replay(self.job_id(self.launch("--", "true", env=env)))
+        self.assertEqual([records[-1]["target"], records[-1]["result"]], ["t3", "sent"])
+        self.assertEqual(len(self.t3_sends()), 1)
+
+    def test_a_failed_t3_send_is_logged_and_not_retried(self):
+        (self.fake / "t3_error").write_text("")
+        records = self.replay(self.job_id(self.launch("--", "true", env=self.t3_env())))
+        self.assertReplay(records, "start", "end", "wake")
+        self.assertEqual([records[-1]["target"], records[-1]["result"]], ["t3", "failed"])
+        self.assertEqual(records[-1]["error"], "exit 1: thread not found")
+        time.sleep(1)
+        self.assertEqual(len(self.t3_sends()), 1, "one attempt per job")
+
+    def test_a_missing_t3_cli_is_logged_as_a_failed_wake(self):
+        records = self.replay(self.job_id(self.launch("--", "true", env=self.t3_env(T3CODE_CLI_PATH=str(self.root / "nope")))))
+        self.assertEqual([records[-1]["target"], records[-1]["result"]], ["t3", "failed"])
+        self.assertIn("t3-missing", records[-1]["error"])
+
+    def test_a_pane_with_its_pi_session_wins_over_a_thread(self):
+        # Pi sets the pane and session on each bash call; the thread id may only be inherited from the app that started the shell.
+        job = self.job_id(self.launch("--", "true", env={"T3CODE_THREAD_ID": THREAD, "T3CODE_CLI_PATH": str(self.bin / "t3")}))
+        records = self.replay(job)
+        self.assertEqual([records[-1]["target"], records[-1]["result"]], ["herdr", "sent"])
+        self.assertEqual(len(self.prompts()), 1)
+        self.assertEqual(self.t3_sends(), [], "the thread is not messaged as well")
+
+    def test_a_pane_without_a_pi_session_does_not_hide_the_thread(self):
+        records = self.replay(self.job_id(self.launch("--", "true", env=self.t3_env(HERDR_PANE_ID=PANE))))
+        self.assertEqual([records[-1]["target"], records[-1]["result"]], ["t3", "sent"])
+        self.assertEqual(self.calls(), [])
 
     def test_usage(self):
         for args in ([], ["--"], ["--log", "x", "--", "true"]):
