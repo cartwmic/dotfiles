@@ -1,6 +1,6 @@
 # run-and-wake
 
-`run-and-wake` runs a command detached and, when it exits, wakes the Pi session that started it with one tagged prompt. A worker can start a long or gated job and end its turn. Nobody polls.
+`run-and-wake` runs a command detached and, when it exits, wakes the Pi session or T3 Code thread that started it with one tagged prompt or message. A worker can start a long or gated job and end its turn. Nobody polls.
 
 ```sh
 run-and-wake -- heavy-gate --wait 7200 -- npm test
@@ -21,7 +21,8 @@ Source: `dot_local/bin/executable_run-and-wake` (Python 3, standard library only
 - **Any exit wakes.** Exit 0, a failure, heavy-gate's 75 (gave up waiting), a signal (`killed by SIGTERM`) and a command that could not start (exit 127) all wake.
 - **Starting session, best effort.** At launch it captures `HERDR_PANE_ID` and `PI_SESSION_FILE` (Pi sets both on every bash call). At exit it asks `herdr agent get <pane>` and sends only if, at check time, that pane shows the same session file. Compaction keeps the session file, so it still wakes; a `/new` or a resume before the check does not.
 - **The check/send window (accepted by Michael, ask #347, 2026-10-29).** herdr's prompt targets a pane, not a session, so the check and the send are two calls milliseconds apart. A `/new` in that window can put the message in the new session. This is not prevented. The pane's session is read again right after the send, and the `wake` record carries `session_after` when it differs.
-- **At most one attempt per job.** One `herdr agent prompt`. A refused or failed prompt is logged and not retried.
+- **T3 Code thread.** A worker started as a T3 thread has no Herdr pane. If `T3CODE_THREAD_ID` is set and there is no pane with a Pi session, the wake is one `t3 thread send <thread> -` with the same one-line text on stdin (CLI: `$T3CODE_CLI_PATH`, else `~/.t3/bin/t3`; the same form the coordinator's deliverer uses). A busy thread takes it as its next turn; an idle one starts a turn. The launcher says "T3 thread X gets one message". A failed send is logged and not retried, and a missing CLI is a failed wake. If both a pane with its Pi session and a thread id are set, the pane wins: Pi sets `HERDR_PANE_ID` and `PI_SESSION_FILE` on every bash call, so that pair names the real caller, while `T3CODE_THREAD_ID` can be inherited from the app that launched the shell.
+- **At most one attempt per job.** One `herdr agent prompt` or one `t3 thread send`. A refused or failed prompt is logged and not retried.
 - **Blocked pane.** If the pane shows a dialog, it waits with `herdr agent wait` until herdr reports another state, re-checks the session, then sends. A failed wait ends the wake as `pane-gone` or `herdr-error`.
 - **Busy pane.** Herdr submits the text; Pi takes it as a queued message after the current tool call.
 - **Every skip is logged with its reason:**
@@ -42,10 +43,10 @@ Not covered: SIGKILL of the watcher or a reboot. The log then shows a `start` wi
 
 | Event | Fields |
 |---|---|
-| `start` | `cmd` (argv), `cwd`, `pane`, `session`, `pid` (null if it could not start), `output` |
+| `start` | `cmd` (argv), `cwd`, `pane`, `session`, `thread` (null unless woken through T3), `pid` (null if it could not start), `output` |
 | `end` | `exit` (null if killed), `signal`, `duration_s`, `error` (could not start) |
 | `blocked` | none: the pane showed a dialog and the wake is waiting |
-| `wake` | `result` (`sent` or `failed`), `error` if failed, `duration_s` (from job end to send), `session_after` if the pane showed another session right after the send |
+| `wake` | `target` (`herdr` or `t3`), `result` (`sent` or `failed`), `error` if failed, `duration_s` (from job end to send), `session_after` if the pane showed another session right after the send (herdr only) |
 | `skip` | `reason`, `detail` |
 
 Replay one job: `grep <job-id> ~/.local/state/run-and-wake/log.jsonl`. Job output files are not pruned.
@@ -56,4 +57,4 @@ It lands on `personal` and `axon-work-computer`, like heavy-gate: `dot_local/bin
 
 ## Tests
 
-`python3 -m unittest discover -s tests/run-and-wake -v` runs the real script with a fake `herdr` first on PATH, in CI. It covers the wake, exit statuses (0, 7, 75, 127, SIGTERM), the job outliving a SIGKILLed launching process group, heavy-gate composition (the real gate giving up with 75), a blocked pane, a failed wait, a refused prompt, a session swapped between check and send (`session_after`), the launcher killed before the watcher reports, and two seeded faults: the pane closed before the job ends (`pane-gone`) and the session swapped (`session-changed`). Each test reads the job back from the log alone.
+`python3 -m unittest discover -s tests/run-and-wake -v` runs the real script with a fake `herdr` and a fake `t3` (records argv and stdin) first on PATH, in CI. It covers the wake, exit statuses (0, 7, 75, 127, SIGTERM), the job outliving a SIGKILLed launching process group, heavy-gate composition (the real gate giving up with 75), a blocked pane, a failed wait, a refused prompt, a session swapped between check and send (`session_after`), the launcher killed before the watcher reports, a T3 thread woken with the same text, a failed or missing T3 CLI, the pane-over-thread choice, and two seeded faults: the pane closed before the job ends (`pane-gone`) and the session swapped (`session-changed`). Each test reads the job back from the log alone.
