@@ -47,20 +47,17 @@ class SettingsRenderTests(unittest.TestCase):
                 self.assertEqual(reserve, 100000)
                 self.assertGreater(int(0.8 * reserve), 13107)  # Pi default cap that was hit
 
-    def test_default_is_opus_at_medium_and_every_other_enabled_model_keeps_high_or_above(self):
-        # Models with no modelThinkingLevels entry follow defaultThinkingLevel, so lowering it must not move them.
+    def test_opus_is_medium_and_the_global_default_is_unchanged(self):
+        # Models with no modelThinkingLevels entry (other providers, /model switches, resumes) follow defaultThinkingLevel,
+        # so only the Opus routes move and the global default stays high.
         for profile, opus in (("personal", "claude-compat/claude-opus-5-5"), ("axon-work-computer", "anthropic/claude-opus-5-5")):
             with self.subTest(profile=profile):
                 s = render(profile)
                 self.assertEqual(s["defaultModel"], "claude-opus-5-5")
-                self.assertEqual(s["defaultThinkingLevel"], "medium")
-                levels = s["modelThinkingLevels"]
-                self.assertEqual(levels[opus], "medium")
-                others = [m for m in s["enabledModels"] if m != opus]
-                self.assertTrue(others)
-                for model in others:
-                    self.assertIn(model, levels)
-                    self.assertIn(levels[model], ("high", "xhigh"), model)
+                self.assertEqual(s["defaultThinkingLevel"], "high")
+                self.assertEqual(s["modelThinkingLevels"][opus], "medium")
+                others = {m: lvl for m, lvl in s["modelThinkingLevels"].items() if m != opus}
+                self.assertTrue(all(lvl in ("high", "xhigh") for lvl in others.values()))
 
 
 if __name__ == "__main__":

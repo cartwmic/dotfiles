@@ -43,28 +43,19 @@
   "defaultProvider": "anthropic",
   "defaultModel": "claude-opus-5-5",
 {{- end }}
-  "defaultThinkingLevel": "medium",
+  "defaultThinkingLevel": "high",
   "tuiMode": "regular",
 {{- if eq .profile "personal" }}
   "modelThinkingLevels": {
     "openai-codex/gpt-6.1-sol": "high",
     "openai-codex/gpt-6-astra": "high",
-    "openrouter/z-ai/glm-5.3-flash": "high",
     "claude-compat/claude-opus-5-5": "medium",
     "claude-compat/claude-sonnet-5-5": "high",
     "claude-compat/claude-haiku-5-5": "xhigh"
   },
 {{- else }}
   "modelThinkingLevels": {
-    "cursor/gpt-5.6-luna": "high",
-    "cursor/gpt-5.6-sol": "high",
-    "cursor/grok-4.7": "high",
-    "anthropic/claude-opus-5-5": "medium",
-    "anthropic/claude-sonnet-5-5": "high",
-    "anthropic/claude-haiku-5-5": "high"
-{{- if $privateGlmOtari }},
-    "private-glm-otari/axong5": "high"
-{{- end }}
+    "anthropic/claude-opus-5-5": "medium"
   },
   "subagents": {
     "disableThinking": true
