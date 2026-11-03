@@ -20,6 +20,11 @@ PLAYBOOK_SECTION = (
     ROOT / "dot_local" / "share" / "agent-harness" / "canonical" / "instructions" / "axon-playbook.md"
 ).read_text(encoding="utf-8").rstrip("\n") + "\n\n"
 
+INSTR = ROOT / "dot_local" / "share" / "agent-harness" / "canonical" / "instructions"
+# Profile rule fragments, each included for one profile right after the playbook position.
+WORK_RULE = (INSTR / "profile-work.md").read_text(encoding="utf-8").rstrip("\n") + "\n\n"
+PERSONAL_RULE = (INSTR / "profile-personal.md").read_text(encoding="utf-8").rstrip("\n") + "\n\n"
+
 RISK_PARAGRAPH = """- Risk tolerance is high. This is personal, one-person software: good enough
   is the bar. It does not need to be perfect, large-scale, production-grade
   secure, or resilient. Nobody else is going to try to break or misuse it.
@@ -82,8 +87,8 @@ class AgentsRenderTests(unittest.TestCase):
     def test_the_profiles_differ_only_by_the_risk_paragraph_the_doorbell_and_the_playbook(self):
         personal, work = render("personal"), render("axon-work-computer")
         self.assertEqual(
-            personal.replace(DOORBELL_SECTION, "").replace(RISK_PARAGRAPH, ""),
-            work.replace(PLAYBOOK_SECTION, "", 1),
+            personal.replace(DOORBELL_SECTION, "").replace(RISK_PARAGRAPH, "").replace(PERSONAL_RULE, "", 1),
+            work.replace(PLAYBOOK_SECTION, "", 1).replace(WORK_RULE, "", 1),
         )
 
 

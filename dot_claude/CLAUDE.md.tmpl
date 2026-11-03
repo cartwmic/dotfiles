@@ -8,3 +8,9 @@ or extend these as usual.
 {{ if eq .profile "axon-work-computer" }}
 {{ include "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md" -}}
 {{ end -}}
+{{ if eq .profile "axon-work-computer" }}
+{{ include "dot_local/share/agent-harness/canonical/instructions/profile-work.md" -}}
+{{ end -}}
+{{ if eq .profile "personal" }}
+{{ include "dot_local/share/agent-harness/canonical/instructions/profile-personal.md" -}}
+{{ end -}}
