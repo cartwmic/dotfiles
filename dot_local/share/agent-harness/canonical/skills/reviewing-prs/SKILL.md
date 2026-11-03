@@ -16,14 +16,19 @@ Review the work, not the person.
 ## Scope
 
 - **For:** a pull request on any of your Git hosts, or a local branch (base..head), written by a person or an agent.
-- **Not for:** your own change, writing fixes, or approving or merging in the owner's place.
+- **Not for:** your own change, writing fixes, or approving or merging in the owner's place. The owner can ask for it on his own PR as a fresh-eyes pass.
 - **Size:** any. Lockfiles, snapshots, and vendored or generated files need no reading. List what you exempted in the draft.
 
 ## 1. Freeze the subject
 
 1. **Fetch the head** into a local clone, for example `git fetch origin pull/N/head` on GitHub. Record the base sha, head sha, merge base, changed files and author (human or agent).
 2. **Save the stated intent** verbatim: the PR body, the linked ticket and any linked plan. If there is none, that is an intent-fit finding.
-3. **Save the repository's own rules** as they stand at head: AGENTS.md, CONTRIBUTING, CODEOWNERS, and lint and format config. These are the standard you review against.
+3. **Save the repository's own rules** in full, as they stand at the PR's base: AGENTS.md, REVIEW.md, lint and format config, and these three groups. These are the standard you review against.
+   - **Every contributing guide that exists:** `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, `docs/CONTRIBUTING.md`, `docs/guides/contributing.md`, and any file the PR template links to as a contribution guide. If none exists, say so in the packet header.
+   - **The PR template:** `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/PULL_REQUEST_TEMPLATE/*`.
+   - **CODEOWNERS:** in `.github/`, the root or `docs/`.
+   - Read each file whole. Never grep one for a single rule.
+   - **Record size and shape** from the diff: the repository's stated size limit, if any, and the files and changed lines per CODEOWNERS owner.
 4. **Use a local reviews folder** outside every repository and synced folder: `~/.local/share/pr-reviews/<repo>-<number>/`. Packets, reviewer output, triage and drafts go there. Keep it after posting.
 
 ## 2. Review: one fresh session per axis
@@ -34,9 +39,9 @@ Review the work, not the person.
 | correctness | Which concrete input, state or sequence makes the changed code behave wrongly (crash, wrong result, data loss, race, regression)? Give the input and the line. |
 | security | Does the change open a path from untrusted input, a credential, or regulated or sensitive data to a place it must not reach: injection, authorization bypass, unsafe deserialization, secrets in code or logs? Name the source, the path and the sink. |
 | tests | Would the tests fail if the changed behavior were wrong? Name a changed behavior with no test, or a test that cannot fail or mirrors the implementation. |
-| maintainability | Does the diff add a lasting cost to the next person who changes this code: duplication, a needless abstraction or layer, a hidden coupling, a misleading name, dead code? Name the cost and who pays it. Judge against the repository's rules and the design principles below. |
+| maintainability | Does the diff add a lasting cost to the next person who changes this code: duplication, a needless abstraction or layer, a hidden coupling, a misleading name, dead code? Name the cost and who pays it. Judge against the repository's rules and the design principles below, including PR size against the stated limit, the split across CODEOWNERS owners, and the PR template. |
 
-1. **Write one packet per axis.** It holds the axis question, the severity bar (section 3), the intent sources, the repository rules, the diff `merge_base..head`, a read-only checkout at head, and the files to cover.
+1. **Write one packet per axis.** It holds the axis question, the severity bar (section 3), the intent sources, the repository rules, the size and shape record, the diff `merge_base..head`, a read-only checkout at head, and the files to cover.
 2. **Start a fresh session for each packet,** with no other context. Run it from the reviews folder, so session files never land in a repository.
    - Confirm delegation with the owner first, unless it is already authorized.
    - Use the model the owner named.
@@ -47,7 +52,10 @@ Review the work, not the person.
    - findings, each with id, severity, path, line, text, obligation, evidence and consequence.
 4. **Split a large PR** across sessions by file. Together they must cover every file that is not exempt.
 5. **For a high-risk change,** add a second correctness session. High risk means auth, data migration, concurrency, money, or regulated or sensitive data.
-6. **Do one pass per axis per head.** Do not repeat review until it comes back clean. A new head means a new review.
+6. **Axon playbook packets.** Applies only if `~/.local/share/agent-harness/external-skills/axon-agents-playbook/rubrics/` exists and the origin remote is on `git.taservs.net` or `github.com/axon-*`. Otherwise skip, silently.
+   - Add one fresh-reviewer packet from `rubrics/conventions-and-shape.md`, and one from `rubrics/backend-hazards.md` when the diff has non-test Go files.
+   - Run `<playbook>/bin/pr-preflight --repo <repo> --head <head> --base <base>` yourself (it is read-only) and put the output in each of these packets.
+7. **Do one pass per axis per head.** Do not repeat review until it comes back clean. A new head means a new review.
 
 ## 3. Severity bar
 
