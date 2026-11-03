@@ -1407,6 +1407,7 @@ exit $rc
         job_file = self.job_file(f"cd {self.tmp.name}\n{body}", name)
         pid, fd = pty.fork()
         if pid == 0:
+            signal.signal(signal.SIGINT, signal.SIG_DFL)  # ignored if the suite was started in the background, and then Ctrl-C could not be trapped
             os.execvpe(GATE_SH, [GATE_SH, str(SCRIPT), "--", "sh", str(job_file)], {**self.env, "HEAVY_GATE_WATCH_POLL": "1"})
         self.addCleanup(lambda: (self.reap_groups(), os.kill(pid, signal.SIGKILL) if self.alive_pid(pid) else None, os.close(fd)))
         return pid, fd
