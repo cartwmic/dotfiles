@@ -48,8 +48,6 @@ jobs:
         run: python3 -m unittest discover -s tests/pi-settings-render -v
       - name: Release-tag skill import tool
         run: python3 -m unittest discover -s tests/release-skills -v
-      - name: Capability-tier resolver tests
-        run: python3 -m unittest discover -s tests/capability-tiers -v
       - name: Session-recap store tests
         run: python3 -m unittest discover -s dot_local/share/session-recap -p 'test_*.py' -v
       - name: Pi op shim tests (fake op, no token)

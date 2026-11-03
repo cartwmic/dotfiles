@@ -90,3 +90,9 @@ termux
 # Retired 2026-10-26: the Termux-only Herdr Overview proof helper. Removes it from the
 # phone on its next targeted apply; no-op on other profiles.
 bin/herdr-overview-proof
+
+# Retired 2026-11-03: the stage-0 capability-tier registry (tiers.toml and
+# resolve.py, set up 2026-10-20). Nothing read it; the seat table in the
+# profile instruction files replaced the tier idea. Removes the whole deployed
+# directory on apply. Prune once every machine has applied.
+.local/share/agent-harness/capability-tiers
