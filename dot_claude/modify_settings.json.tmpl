@@ -5,6 +5,13 @@
 # SessionStart playbook hook (axon-work-computer only): runs the private playbook's bin/playbook-context so the session starts
 # with that repo's context; stdout becomes session context. It is silent when the playbook is not cloned. The entry is found by
 # the playbook path in its command: other profiles remove only that entry, and user-added hooks are never touched.
+# T3 hook (personal only, and only while <repo>/src/t3-hook/hook.ts exists at apply time; repo is instances.coordinator.repo or the
+# personal default; the instances.coordinator.enabled flag is not read, so chezmoi never has to manage the daemon's unit): the coordinator repo's src/t3-hook/hook.ts gates T3 thread
+# tools with the kill switch and the ledger (see src/t3-hook/README.md there). Four entries: PreToolUse, PostToolUse and
+# PostToolUseFailure on the gated T3 tools, and SessionStart (a no-op unless T3CODE_THREAD_ID is set). They are found by
+# "src/t3-hook/hook.ts" in their command: each apply drops them from every event and, when wanted, appends the current ones.
+# Off, or on any other profile, they are removed. axon-work-computer is left out: its Matrix coordinator has another state dir,
+# and nothing new is applied on the work Mac without asking.
 set -eu
 
 {{ if eq .profile "axon-work-computer" -}}
@@ -15,8 +22,18 @@ WANT=false
 # Single quotes on purpose: $HOME expands when the hook runs, not here.
 HOOK_COMMAND='p="$HOME/.local/share/agent-harness/external-skills/axon-agents-playbook/bin/playbook-context"; [ -x "$p" ] && "$p" || true'
 HOOK_MARKER='axon-agents-playbook/bin/playbook-context'
+{{- $t3repo := includeTemplate "instance_repo" (dict "root" . "name" "coordinator") }}
+{{ if and (eq .profile "personal") (stat (printf "%s/src/t3-hook/hook.ts" $t3repo)) }}
+T3_WANT=true
+T3_REPO={{ includeTemplate "shquote" $t3repo }}
+{{- else }}
+T3_WANT=false
+T3_REPO=''
+{{- end }}
+T3_MARKER='src/t3-hook/hook.ts'
 
-exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_MARKER" '
+exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_MARKER" \
+  --argjson t3want "$T3_WANT" --arg t3repo "$T3_REPO" --arg t3marker "$T3_MARKER" '
   def ours: (.command? // "") | contains($marker);
   def count_ours: [.hooks.SessionStart[]?.hooks[]? | select(ours)] | length;
   def strip_ours:
@@ -41,6 +58,31 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
     else
       if count_ours > 0 then strip_ours else . end
     end;
+  # T3 hook. The command text keeps $HOME unexpanded (it expands when the hook runs) and single-quotes the script path.
+  def sq: "\u0027" + gsub("\u0027"; "\u0027\\\u0027\u0027") + "\u0027";
+  def t3_ours: (.command? // "") | contains($t3marker);
+  def t3_group_has: type == "object" and (.hooks // [] | any(t3_ours));
+  def t3_strip:
+    # Touch only events that hold our handlers; drop groups that held nothing else; prune the events we emptied.
+    if (.hooks | type) == "object" and ([.hooks[] | arrays | .[] | select(t3_group_has)] | length) > 0 then
+      .hooks |= with_entries(
+        if (.value | type) == "array" and (.value | any(t3_group_has))
+        then .value |= map(if t3_group_has
+                           then (.hooks |= map(select(t3_ours | not))) | if (.hooks | length) == 0 then empty else . end
+                           else . end)
+             | select(.value != [])
+        else . end)
+      | if (.hooks | length) == 0 then del(.hooks) else . end
+    else . end;
+  def t3_add:
+    ("COORDINATOR_STATE_DIR=\"$HOME/.local/share/coordinator\" node --experimental-strip-types " + (($t3repo + "/src/t3-hook/hook.ts") | sq) + " || exit 2") as $run
+    | ("^mcp__t3-code__(t3_thread_send|t3_thread_send_attachments|delegate_task|t3_thread_launch|create_threads|schedule_task)$") as $m
+    | def entry($cmd): {type: "command", command: $cmd};
+    .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: $m, hooks: [entry($run)]}])
+    | .hooks.PostToolUse = ((.hooks.PostToolUse // []) + [{matcher: $m, hooks: [entry($run)]}])
+    | .hooks.PostToolUseFailure = ((.hooks.PostToolUseFailure // []) + [{matcher: $m, hooks: [entry($run)]}])
+    | .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [entry("[ -n \"$T3CODE_THREAD_ID\" ] || exit 0; " + $run)]}]);
+  def ensure_t3: t3_strip | if $t3want then t3_add else . end;
   if length == 0 then
     {}
   elif length == 1 and (.[0] | type) == "object" then
@@ -50,4 +92,5 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
   end
   | .cleanupPeriodDays = 365
   | ensure_hook
+  | ensure_t3
 '
