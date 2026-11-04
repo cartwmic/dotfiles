@@ -1,0 +1,39 @@
+{"event":"round","at":"2026-11-03T10:00:07Z","round":1,"review_round":1,"stage":"diff","head":"1111111","reviewer":"reviewer-1","verdict":"fail","session":"session-1","model":"claude-opus-5-5","cost_usd":1.5}
+{"event":"finding","at":"2026-11-03T10:00:14Z","id":"r1.f1","round":1,"head":"1111111","reviewer":"reviewer-1","severity":"blocking","effective":"blocking","component":"undo","text":"a","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"finding","at":"2026-11-03T10:00:21Z","id":"r1.f2","round":1,"head":"1111111","reviewer":"reviewer-1","severity":"blocking","effective":"blocking","component":"undo","text":"b","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"finding","at":"2026-11-03T10:00:28Z","id":"r1.f3","round":1,"head":"1111111","reviewer":"reviewer-1","severity":"blocking","effective":"blocking","component":"replay after a stop","text":"c","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"finding","at":"2026-11-03T10:00:35Z","id":"r1.f4","round":1,"head":"1111111","reviewer":"reviewer-1","severity":"blocking","effective":"blocking","component":"checks","text":"d","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"finding","at":"2026-11-03T10:00:42Z","id":"r1.f5","round":1,"head":"1111111","reviewer":"reviewer-1","severity":"blocking","effective":"blocking","component":"settings","text":"e","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"finding","at":"2026-11-03T10:00:49Z","id":"r1.n1","round":1,"head":"1111111","reviewer":"reviewer-1","severity":"note","effective":"note","component":"docs","text":"f"}
+{"event":"label","at":"2026-11-03T10:00:56Z","id":"r1.f1","relation":"new"}
+{"event":"label","at":"2026-11-03T10:01:03Z","id":"r1.f2","relation":"new"}
+{"event":"label","at":"2026-11-03T10:01:10Z","id":"r1.f3","relation":"new"}
+{"event":"label","at":"2026-11-03T10:01:17Z","id":"r1.f4","relation":"new"}
+{"event":"label","at":"2026-11-03T10:01:24Z","id":"r1.f5","relation":"new"}
+{"event":"disposition","at":"2026-11-03T10:01:31Z","id":"r1.f1","outcome":"fixed","sha":"aaaaaaa"}
+{"event":"disposition","at":"2026-11-03T10:01:38Z","id":"r1.f2","outcome":"fixed","sha":"aaaaaaa"}
+{"event":"disposition","at":"2026-11-03T10:01:45Z","id":"r1.f3","outcome":"fixed","sha":"aaaaaaa"}
+{"event":"disposition","at":"2026-11-03T10:01:52Z","id":"r1.f4","outcome":"fixed","sha":"aaaaaaa"}
+{"event":"disposition","at":"2026-11-03T10:01:59Z","id":"r1.f5","outcome":"fixed","sha":"aaaaaaa"}
+{"event":"round","at":"2026-11-03T10:02:06Z","round":2,"review_round":2,"stage":"diff","head":"2222222","reviewer":"reviewer-2","verdict":"fail","session":"session-2","model":"claude-opus-5-5","cost_usd":1.25}
+{"event":"finding","at":"2026-11-03T10:02:13Z","id":"r2.f1","round":2,"head":"2222222","reviewer":"reviewer-2","severity":"blocking","effective":"blocking","component":"undo","text":"g","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"finding","at":"2026-11-03T10:02:20Z","id":"r2.f2","round":2,"head":"2222222","reviewer":"reviewer-2","severity":"blocking","effective":"blocking","component":"undo","text":"h","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"finding","at":"2026-11-03T10:02:27Z","id":"r2.f3","round":2,"head":"2222222","reviewer":"reviewer-2","severity":"blocking","effective":"blocking","component":"replay after a stop","text":"i","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"finding","at":"2026-11-03T10:02:34Z","id":"r2.f4","round":2,"head":"2222222","reviewer":"reviewer-2","severity":"blocking","effective":"blocking","component":"docs","text":"j","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"label","at":"2026-11-03T10:02:41Z","id":"r2.f1","relation":"repeat","of":"r1.f1"}
+{"event":"label","at":"2026-11-03T10:02:48Z","id":"r2.f2","relation":"follow-on","of":"r1.f2"}
+{"event":"label","at":"2026-11-03T10:02:55Z","id":"r2.f3","relation":"follow-on","of":"r1.f3"}
+{"event":"label","at":"2026-11-03T10:03:02Z","id":"r2.f4","relation":"new"}
+{"event":"disposition","at":"2026-11-03T10:03:09Z","id":"r2.f1","outcome":"fixed","sha":"bbbbbbb"}
+{"event":"disposition","at":"2026-11-03T10:03:16Z","id":"r2.f2","outcome":"fixed","sha":"bbbbbbb"}
+{"event":"disposition","at":"2026-11-03T10:03:23Z","id":"r2.f3","outcome":"fixed","sha":"bbbbbbb"}
+{"event":"disposition","at":"2026-11-03T10:03:30Z","id":"r2.f4","outcome":"fixed","sha":"bbbbbbb"}
+{"event":"round","at":"2026-11-03T10:03:37Z","round":3,"review_round":3,"stage":"diff","head":"3333333","reviewer":"reviewer-3","verdict":"fail","session":"session-3","model":"claude-opus-5-5","cost_usd":1.5}
+{"event":"finding","at":"2026-11-03T10:03:44Z","id":"r3.f1","round":3,"head":"3333333","reviewer":"reviewer-3","severity":"blocking","effective":"blocking","component":"undo","text":"k","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"finding","at":"2026-11-03T10:03:51Z","id":"r3.f2","round":3,"head":"3333333","reviewer":"reviewer-3","severity":"blocking","effective":"blocking","component":"replay after a stop","text":"l","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"finding","at":"2026-11-03T10:03:58Z","id":"r3.f3","round":3,"head":"3333333","reviewer":"reviewer-3","severity":"blocking","effective":"blocking","component":"checks","text":"m","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"finding","at":"2026-11-03T10:04:05Z","id":"r3.f4","round":3,"head":"3333333","reviewer":"reviewer-3","severity":"blocking","effective":"blocking","component":"docs","text":"n","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"label","at":"2026-11-03T10:04:12Z","id":"r3.f1","relation":"follow-on","of":"r2.f1"}
+{"event":"label","at":"2026-11-03T10:04:19Z","id":"r3.f2","relation":"follow-on","of":"r2.f3"}
+{"event":"label","at":"2026-11-03T10:04:26Z","id":"r3.f3","relation":"repeat","of":"r1.f4"}
+{"event":"label","at":"2026-11-03T10:04:33Z","id":"r3.f4","relation":"repeat","of":"r2.f4"}
