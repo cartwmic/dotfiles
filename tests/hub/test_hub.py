@@ -328,11 +328,14 @@ class T3Test(unittest.TestCase):
         self.assertEqual(self.modify("off_t3hub_off", on), FIXTURE)
         self.assertFalse(calls.exists())
 
-    def test_t3_moves_the_key_out_of_the_file_and_the_next_apply_sets_it_again(self):
+    def test_once_t3_has_moved_the_key_the_next_apply_leaves_it_and_reads_nothing(self):
         on = json.loads(self.modify("on_t3hub_off", FIXTURE))
         on["usageLimitSources"]["cliproxy-hub"]["managementKey"] = "\u2022\u2022\u2022\u2022\u2022\u2022"  # what T3 leaves after moving it
-        text = json.dumps(on, indent=2)
-        self.assertEqual(json.loads(self.modify("on_t3hub_off", text))["usageLimitSources"], {"cliproxy-hub": USAGE})
+        text = json.dumps(on, indent=2, ensure_ascii=False)
+        self.assertEqual(self.modify("on_t3hub_off", text), text)  # settled: no diff, so no preview can show the key
+        r = run(self.scripts["on_t3hub_off"], text, FAIL_HOME, full=True)  # and the key is not read at all
+        self.assertEqual(r.stdout, text)
+        self.assertNotIn("WARN", r.stderr)
         self.assertEqual(self.modify("off_t3hub_off", text), FIXTURE)  # off removes it with the placeholder too
 
     def test_no_one_password_provider_after_apply(self):
@@ -349,8 +352,8 @@ class T3Test(unittest.TestCase):
         self.assertEqual(list(json.loads(self.modify("on_t3hub_off", json.dumps(old, indent=2)))["secretProviders"]), ["onepassword", "work"])
 
     def test_a_failed_or_wrong_read_leaves_the_entry_warns_and_prints_no_key(self):
-        before = json.loads(self.modify("on_t3hub_off", FIXTURE))
-        before["usageLimitSources"]["cliproxy-hub"]["managementKey"] = "\u2022\u2022\u2022\u2022\u2022\u2022"
+        before = json.loads(FIXTURE)  # not settled yet: the legacy reference entry, as live before this PR
+        before["usageLimitSources"] = {"cliproxy-hub": {**LEGACY_USAGE, "enabled": False}}
         text = json.dumps(before, indent=2)
         for name, home in (("fail", FAIL_HOME), ("junk", JUNK_HOME), ("no script", NO_SCRIPT_HOME)):
             r = run(self.scripts["on_t3hub_off"], text, home, full=True)
