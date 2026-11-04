@@ -9,7 +9,7 @@ How to read a row:
 - A path covers itself and everything under it.
 - `(macOS)` in the profiles column: the gate also needs `.chezmoi.os == "darwin"`. The Linux CI job skips those rows; the macOS CI job checks them.
 - Termux is out of scope here; it has its own block in `.chezmoiignore`.
-- Not covered: profile branches inside templates (`{{ if eq .profile ... }}` in about two dozen templates) and run scripts that skip themselves by profile, such as `60_configure_rustdesk.sh`. The PR body's `Profiles:` line covers those.
+- Not covered: profile branches inside templates (`{{ if eq .profile ... }}` in about two dozen templates) and run scripts that skip themselves by profile, such as `60_configure_rustdesk.sh`. The PR body's `Profiles:` line covers those. The T3 hook in `~/.claude/settings.json` is one of them: it lands on both profiles (each with its own coordinator repo and state dir), so it needs no row.
 
 | Path or feature | Profiles | Reason the other profile is left out |
 |---|---|---|

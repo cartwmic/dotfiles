@@ -8,15 +8,25 @@
 # SessionStart playbook hook (axon-work-computer only): runs the private playbook's bin/playbook-context so the session starts
 # with that repo's context; stdout becomes session context. It is silent when the playbook is not cloned. The entry is found by
 # the playbook path in its command: other profiles remove only that entry, and user-added hooks are never touched.
-# T3 hook (personal only, and only while <repo>/src/t3-hook/hook.ts exists at apply time; repo is instances.coordinator.repo or the
-# personal default; the instances.coordinator.enabled flag is not read, so chezmoi never has to manage the daemon's unit): the coordinator repo's src/t3-hook/hook.ts gates T3 thread
-# tools with the kill switch and the ledger (see src/t3-hook/README.md there). Four entries: PreToolUse, PostToolUse and
-# PostToolUseFailure on the gated T3 tools, and SessionStart (a no-op unless T3CODE_THREAD_ID is set). A fifth entry, a second
-# SessionStart group running the hook with "--part rules" (its own group, so it gets its own context budget), is added only when
-# the hook source contains "--part", i.e. the coordinator version that supports it. They are found by
-# "src/t3-hook/hook.ts" in their command: each apply drops them from every event and, when wanted, appends the current ones.
-# Off, or on any other profile, they are removed. axon-work-computer is left out: its Matrix coordinator has another state dir,
-# and nothing new is applied on the work Mac without asking.
+# T3 hook (both desktop profiles, and only while <repo>/src/t3-hook/hook.ts exists at apply time): the coordinator repo's
+# src/t3-hook/hook.ts gates T3 thread tools with the kill switch and the ledger (see src/t3-hook/README.md there, "Settings"; the
+# entries below follow that snippet). Each profile runs its own coordinator, so it gets its own repo and state dir:
+#   personal            repo instances.coordinator.repo, else the personal default; state $HOME/.local/share/coordinator
+#   axon-work-computer  repo instances.coordinator.repo, else $HOME/coordinator-work (docs/work-instance-handoff.md there);
+#                       state $HOME/.local/share/coordinator-work (docs/work-instance.md there)
+# The instances.coordinator.enabled flag is not read, so chezmoi never has to manage the daemon's unit. Entries, each running the
+# hook with COORDINATOR_STATE_DIR set (the $HOME in it expands when the hook runs, not here):
+#   PreToolUse, PostToolUse, PostToolUseFailure on the six gated T3 tools, ending "|| exit 2" (a failing hook blocks the call).
+#   PreToolUse on ^AskUserQuestion$ (a lead never asks Michael with a question tool, LE-57), with no "|| exit 2": if the hook
+#     cannot load, the question tool runs, so a broken checkout never blocks the coordinator. Added only when hook.ts imports
+#     ./ask-gate.ts.
+#   SessionStart: the default part, then the rules part, each its own group so each gets its own context budget. When hook.ts
+#     contains "--of" the rules part is three commands, "--part rules --page N --of 3" (N = 1 to 3). The 3 is a literal
+#     copied from the README snippet ("pages 1 to 3 of 3"): raise it here and in that README together. When hook.ts has only
+#     "--part", one bare "--part rules" entry. Otherwise no rules entry. Every SessionStart command starts with the
+#     T3CODE_THREAD_ID guard, so it does nothing outside a T3 session.
+# They are found by "src/t3-hook/hook.ts" in their command: each apply drops them from every event and, when wanted, appends the
+# current ones. Off (no hook file, or termux), they are removed. Nothing is applied on the work Mac by an agent: Michael confirms it.
 # Hub (personal profile on macOS, and only while hub.enabled in .chezmoidata.toml is true): points every Claude Code session at the
 # homelab CLIProxyAPI hub. hub.enabled is one switch for Claude, Codex and the T3 codex instance. Sets env.ANTHROPIC_BASE_URL (no /v1)
 # and apiKeyHelper (op_read_cached.sh printing the hub key). Neither ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY is set: either would
@@ -34,19 +44,42 @@ WANT=false
 # Single quotes on purpose: $HOME expands when the hook runs, not here.
 HOOK_COMMAND='p="$HOME/.local/share/agent-harness/external-skills/axon-agents-playbook/bin/playbook-context"; [ -x "$p" ] && "$p" || true'
 HOOK_MARKER='axon-agents-playbook/bin/playbook-context'
-{{- $t3repo := includeTemplate "instance_repo" (dict "root" . "name" "coordinator") }}
-{{ if and (eq .profile "personal") (stat (printf "%s/src/t3-hook/hook.ts" $t3repo)) }}
+{{- $t3repo := "" }}
+{{- $t3state := "" }}
+{{- if eq .profile "personal" }}
+{{-   $t3repo = includeTemplate "instance_repo" (dict "root" . "name" "coordinator") }}
+{{-   $t3state = "$HOME/.local/share/coordinator" }}
+{{- else if eq .profile "axon-work-computer" }}
+{{-   $t3repo = dig "instances" "coordinator" "repo" "" . | default (printf "%s/coordinator-work" .chezmoi.homeDir) }}
+{{-   $t3state = "$HOME/.local/share/coordinator-work" }}
+{{- end }}
+{{ if and $t3repo (stat (printf "%s/src/t3-hook/hook.ts" $t3repo)) }}
+{{- $t3src := include (printf "%s/src/t3-hook/hook.ts" $t3repo) }}
 T3_WANT=true
 T3_REPO={{ includeTemplate "shquote" $t3repo }}
-{{- if contains "--part" (include (printf "%s/src/t3-hook/hook.ts" $t3repo)) }}
+T3_STATE={{ includeTemplate "shquote" $t3state }}
+{{- if contains "--of" $t3src }}
 T3_RULES=true
+T3_RULES_PAGES=3
+{{- else if contains "--part" $t3src }}
+T3_RULES=true
+T3_RULES_PAGES=0
 {{- else }}
 T3_RULES=false
+T3_RULES_PAGES=0
+{{- end }}
+{{- if contains "./ask-gate.ts" $t3src }}
+T3_ASK=true
+{{- else }}
+T3_ASK=false
 {{- end }}
 {{- else }}
 T3_WANT=false
 T3_REPO=''
+T3_STATE=''
 T3_RULES=false
+T3_RULES_PAGES=0
+T3_ASK=false
 {{- end }}
 T3_MARKER='src/t3-hook/hook.ts'
 
@@ -59,7 +92,8 @@ HUB_URL='https://cliproxy.internal.cartwmic.com'
 HUB_HELPER={{ includeTemplate "shquote" (printf "%s/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-claude-code'" .chezmoi.homeDir) }}
 
 exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_MARKER" \
-  --argjson t3want "$T3_WANT" --argjson t3rules "$T3_RULES" --arg t3repo "$T3_REPO" --arg t3marker "$T3_MARKER" \
+  --argjson t3want "$T3_WANT" --argjson t3rules "$T3_RULES" --argjson t3pages "$T3_RULES_PAGES" --argjson t3ask "$T3_ASK" \
+  --arg t3repo "$T3_REPO" --arg t3state "$T3_STATE" --arg t3marker "$T3_MARKER" \
   --argjson hubwant "$HUB_WANT" --arg huburl "$HUB_URL" --arg hubhelper "$HUB_HELPER" '
   def ours: (.command? // "") | contains($marker);
   def count_ours: [.hooks.SessionStart[]?.hooks[]? | select(ours)] | length;
@@ -102,16 +136,20 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
       | if (.hooks | length) == 0 then del(.hooks) else . end
     else . end;
   def t3_add:
-    ("COORDINATOR_STATE_DIR=\"$HOME/.local/share/coordinator\" node --experimental-strip-types " + (($t3repo + "/src/t3-hook/hook.ts") | sq) + " || exit 2") as $run
+    ("COORDINATOR_STATE_DIR=\"" + $t3state + "\" node --experimental-strip-types " + (($t3repo + "/src/t3-hook/hook.ts") | sq)) as $base
+    | ($base + " || exit 2") as $run
     | ("^mcp__t3-code__(t3_thread_send|t3_thread_send_attachments|delegate_task|t3_thread_launch|create_threads|schedule_task)$") as $m
     | def entry($cmd): {type: "command", command: $cmd};
-    .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: $m, hooks: [entry($run)]}])
+    .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: $m, hooks: [entry($run)]}]
+                         + (if $t3ask then [{matcher: "^AskUserQuestion$", hooks: [entry($base)]}] else [] end))
     | .hooks.PostToolUse = ((.hooks.PostToolUse // []) + [{matcher: $m, hooks: [entry($run)]}])
     | .hooks.PostToolUseFailure = ((.hooks.PostToolUseFailure // []) + [{matcher: $m, hooks: [entry($run)]}])
     | ("[ -n \"$T3CODE_THREAD_ID\" ] || exit 0; ") as $guard
     | .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [entry($guard + $run)]}])
-    | if $t3rules then
-        .hooks.SessionStart += [{hooks: [entry($guard + ($run | sub(" \\|\\| exit 2$"; " --part rules || exit 2")))]}]
+    | if $t3pages > 0 then
+        .hooks.SessionStart += [range(1; $t3pages + 1) | {hooks: [entry($guard + $base + " --part rules --page \(.) --of \($t3pages) || exit 2")]}]
+      elif $t3rules then
+        .hooks.SessionStart += [{hooks: [entry($guard + $base + " --part rules || exit 2")]}]
       else . end;
   def ensure_t3: t3_strip | if $t3want then t3_add else . end;
   def ensure_hub:
