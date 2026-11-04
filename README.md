@@ -420,6 +420,30 @@ phone-to-desktop SSH output can be reviewed in the phone UI when direct remote
 selection capture is unavailable. See
 [`dot_local/share/passage-review/README.md`](./dot_local/share/passage-review/README.md).
 
+## T3 hub providers (personal Mac)
+
+Two extra provider instances in T3 Code send their traffic through the homelab CLIProxy hub
+(`https://cliproxy.internal.cartwmic.com`, home LAN or WireGuard): `claude-hub` ("Claude (hub)") and
+`codex-hub` ("Codex (hub)"). They exist on the personal profile on macOS only. `dot_t3/private_userdata/modify_settings.json.tmpl`
+adds exactly those two ids to `~/.t3/userdata/settings.json` and leaves every other key and instance alone. Keys are read
+at run time from 1Password (`op_read_cached.sh`): Claude through the `apiKeyHelper` in
+`~/.config/t3-hub-claude-settings.json`, Codex through a `[model_providers.cliproxy]` block that
+`dot_codex/modify_private_config.toml.tmpl` appends to `~/.codex/config.toml` (the default provider is unchanged; the
+instance selects it with `-c model_provider=cliproxy`). `codex-hub` is not managed, so it keeps `~/.codex` as its home and
+uses T3's downloaded Codex binary; the path is written at apply time from `~/.t3/tools/codex/active.json`, so re-apply after
+T3 updates its Codex. A re-apply also puts back these two instances if they were edited in the T3 UI; other instances are never touched.
+
+The apply targets are exactly `~/.t3/userdata/settings.json`, `~/.config/t3-hub-claude-settings.json` and
+`~/.codex/config.toml` (chezmoi can only target a path whose parent directory exists, so the Claude file is not in its own folder).
+
+**Rollback.** Set `t3Hub.enabled` to `false` under `data:` in `~/.config/chezmoi/chezmoi.yaml` (the default in
+`.chezmoidata.toml` is `true`) and apply those three targets. That removes both ids, strips the Codex block and deletes
+the Claude settings file (a managed file that renders empty is removed). Everything else in those files stays byte for byte.
+Delete the sources afterwards if you want them gone for good. Reverting the commit alone does not remove anything: chezmoi
+stops managing the paths, so set the switch first.
+
+Tests: `python3 -m unittest discover -s tests/t3-hub` (the apply tests run on macOS only).
+
 ## Instances (Coordinator and Retro daemons)
 
 One opt-in flag per instance in the local `~/.config/chezmoi/chezmoi.yaml` (not in git). Applying does everything: directories, first-time config, the LaunchAgent, and the start. Removing the flag stops the daemon. Design: the coordinator's `DESIGN.md` addendum (decisions G1 to G5); procedure of record per repo: the coordinator's `docs/deploy.md`, Retro's `docs/DEPLOY.md`.
