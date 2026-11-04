@@ -42,7 +42,7 @@ STATE = {"personal": "$HOME/.local/share/coordinator", "work": "$HOME/.local/sha
 
 def base(repo, profile):
     """The hook command without its `|| exit 2`."""
-    return 'COORDINATOR_STATE_DIR="%s" node --experimental-strip-types \'%s/src/t3-hook/hook.ts\'' % (STATE[profile], repo)
+    return 'COORDINATOR_STATE_DIR="%s" node --experimental-strip-types --disable-warning=ExperimentalWarning \'%s/src/t3-hook/hook.ts\'' % (STATE[profile], repo)
 
 
 def expected(repo, profile, ask=False, rules=None):
