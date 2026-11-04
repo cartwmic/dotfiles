@@ -32,6 +32,10 @@ CODEX_VERSION = "9.9.9"
 BINARY = "%s/.t3/tools/codex/%s/bin/codex" % (HOME, CODEX_VERSION)
 ORIGINAL_CODEX = {"driver": "codex", "enabled": True, "config": {"setupMode": "managed"}}
 HUB_CODEX = {"driver": "codex", "enabled": True, "config": {"setupMode": "existing", "binaryPath": BINARY}}
+NAMES = {"claudeAgent": "Claude", "coordinator": "Claude (coordinator)", "codex": "Codex"}
+ONEPASSWORD = {"kind": "one_password", "label": "1Password", "config": {"account": "my"}}
+USAGE = {"kind": "cliproxy", "label": "CLIProxy hub", "url": "https://cliproxy.internal.cartwmic.com", "enabled": True,
+         "managementKey": {"provider": "onepassword", "reference": "op://developer/tb36gtnaocyezjk3dslomp64he/management"}}
 GATE = '(eq .chezmoi.os "darwin")'
 CASES = {  # name: (extra chezmoi data, pretend OS, profile)
     "on": ({}, "darwin", "personal"),
@@ -211,7 +215,7 @@ class CodexTest(unittest.TestCase):
     def test_the_provider_block_stays_while_either_switch_is_on(self):
         has = lambda case: "[model_providers.cliproxy]" in self.modify(case, self.BASE)
         self.assertEqual({c: has(c) for c in ("on", "off", "on_t3hub_off", "off_t3hub_off", "on_t3hub_on", "off_t3hub_on", "work", "linux")},
-                         {"on": True, "off": True, "on_t3hub_off": True, "off_t3hub_off": False, "on_t3hub_on": True,
+                         {"on": True, "off": False, "on_t3hub_off": True, "off_t3hub_off": False, "on_t3hub_on": True,
                           "off_t3hub_on": True, "work": False, "linux": False})
         # hub on and t3Hub off: the default needs the block, so the file stays valid for Codex
         toml = tomllib.loads(self.modify("on_t3hub_off", self.BASE))
@@ -234,12 +238,12 @@ class T3Test(unittest.TestCase):
     def test_on_changes_only_the_codex_instance(self):
         out = self.modify("on_t3hub_off", FIXTURE)
         before, after = self.instances(FIXTURE), self.instances(out)
-        self.assertEqual(after["codex"], {"driver": "codex", "enabled": True,
+        self.assertEqual(after["codex"], {"driver": "codex", "enabled": True, "displayName": "Codex",
                                           "config": {"setupMode": "existing", "binaryPath": "%s/.t3/tools/codex/%s/bin/codex" % (HOME_DIR, CODEX_VERSION)}})
         self.assertEqual(list(after), list(before))  # same ids in the same order
-        for untouched in ("claudeAgent", "coordinator"):
-            self.assertEqual(after[untouched], before[untouched])
-        self.assertEqual({k: v for k, v in json.loads(out).items() if k != "providerInstances"},
+        for untouched in ("claudeAgent", "coordinator"):  # only the name changes
+            self.assertEqual({k: v for k, v in after[untouched].items() if k != "displayName"}, before[untouched])
+        self.assertEqual({k: v for k, v in json.loads(out).items() if k not in ("providerInstances", "secretProviders", "usageLimitSources")},
                          {k: v for k, v in json.loads(FIXTURE).items() if k != "providerInstances"})
         self.assertEqual(self.modify("on_t3hub_off", out), out)  # idempotent
 
@@ -263,8 +267,48 @@ class T3Test(unittest.TestCase):
         text = json.dumps(mine, indent=2)
         self.assertEqual(self.modify("off_t3hub_off", text), text)
 
-    def test_without_active_json_the_codex_instance_is_left_alone(self):
-        self.assertEqual(self.modify("on_no_binary", FIXTURE), FIXTURE)
+    def test_without_active_json_the_codex_instance_keeps_its_config(self):
+        codex = self.instances(self.modify("on_no_binary", FIXTURE))["codex"]
+        self.assertEqual(codex, {**ORIGINAL_CODEX, "displayName": "Codex"})
+
+    def test_names_set_only_displayName_and_off_removes_only_ours(self):
+        out = self.modify("on_t3hub_off", FIXTURE)
+        before, after = self.instances(FIXTURE), self.instances(out)
+        for id_, name in NAMES.items():
+            self.assertEqual(after[id_]["displayName"], name)
+            if id_ != "codex":
+                self.assertEqual({k: v for k, v in after[id_].items() if k != "displayName"}, before[id_])
+        self.assertEqual(self.modify("on_t3hub_off", out), out)  # idempotent
+        # A name edited in T3 is kept on the way out; ours goes.
+        edited = json.loads(self.modify("on_t3hub_off", FIXTURE))
+        edited["providerInstances"]["claudeAgent"]["displayName"] = "mine"
+        kept = self.instances(self.modify("off_t3hub_off", json.dumps(edited, indent=2)))
+        self.assertEqual(kept["claudeAgent"]["displayName"], "mine")
+        self.assertNotIn("displayName", kept["coordinator"])
+        self.assertNotIn("displayName", kept["codex"])
+
+    def test_usage_source_on_off_and_idempotent(self):
+        on = self.modify("on_t3hub_off", FIXTURE)
+        data = json.loads(on)
+        self.assertEqual(data["secretProviders"], {"onepassword": ONEPASSWORD})
+        self.assertEqual(data["usageLimitSources"], {"cliproxy-hub": USAGE})
+        self.assertEqual(set(data["usageLimitSources"]["cliproxy-hub"]["managementKey"]), {"provider", "reference"})  # a reference, no value
+        self.assertEqual(self.modify("on_t3hub_off", on), on)
+        # Neighbours in the same maps survive both ways, and a changed entry of ours is kept on the way out.
+        mine = json.loads(on)
+        mine["secretProviders"]["work"] = {"kind": "one_password", "label": "Work", "config": {"account": "x"}}
+        mine["usageLimitSources"]["other"] = {"kind": "cliproxy", "url": "https://x", "managementKey": "k", "enabled": True}
+        off = json.loads(self.modify("off_t3hub_off", json.dumps(mine, indent=2)))
+        self.assertEqual(list(off["secretProviders"]), ["work"])
+        self.assertEqual(list(off["usageLimitSources"]), ["other"])
+        mine["usageLimitSources"]["cliproxy-hub"]["url"] = "https://changed"
+        kept = json.loads(self.modify("off_t3hub_off", json.dumps(mine, indent=2)))
+        self.assertIn("cliproxy-hub", kept["usageLimitSources"])
+        # With nothing else there, off leaves the file as it was.
+        self.assertEqual(self.modify("off_t3hub_off", on), FIXTURE)
+
+    def test_hub_off_leaves_usage_and_names_alone_that_were_never_ours(self):
+        self.assertEqual(self.modify("off_t3hub_off", FIXTURE), FIXTURE)
 
     def test_missing_file_or_no_provider_instances_key(self):
         for text in ("", "not json", "[1]"):
@@ -340,9 +384,12 @@ class ApplyPathTest(unittest.TestCase):
         self.assertEqual((toml["model"], toml["model_provider"]), ("gpt-6", "cliproxy"))
         self.assertIn("cliproxy", toml["model_providers"])
         t3 = json.loads((self.home / ".t3/userdata/settings.json").read_text())["providerInstances"]
-        self.assertEqual(t3["codex"], {"driver": "codex", "enabled": True, "config": {
+        self.assertEqual(t3["codex"], {"driver": "codex", "enabled": True, "displayName": "Codex", "config": {
             "setupMode": "existing", "binaryPath": "%s/.t3/tools/codex/%s/bin/codex" % (self.home, CODEX_VERSION)}})
+        self.assertEqual({k: v["displayName"] for k, v in t3.items()}, NAMES)
         self.assertEqual(list(t3), ["codex", "claudeAgent", "coordinator"])
+        top = json.loads((self.home / ".t3/userdata/settings.json").read_text())
+        self.assertEqual((top["secretProviders"], top["usageLimitSources"]), ({"onepassword": ONEPASSWORD}, {"cliproxy-hub": USAGE}))
         self.assertEqual(stat.S_IMODE((self.home / ".t3/userdata").stat().st_mode), 0o700)
         again = self.read()
         self.apply(*self.targets())
