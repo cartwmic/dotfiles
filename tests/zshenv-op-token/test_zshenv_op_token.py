@@ -13,7 +13,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ZSHENV = Path(__file__).resolve().parents[2] / "dot_zshenv"
+ROOT = Path(__file__).resolve().parents[2]
+ZSHENV = ROOT / "dot_zshenv"
+ZPROFILE = ROOT / "dot_zprofile"
+SHIM = ROOT / "dot_pi/private_agent/bin/executable_op"
 FAKE_TOKEN = "ops_fake-token-for-the-zshenv-test"
 ZSH = shutil.which("zsh")
 
@@ -48,6 +51,34 @@ class ZshenvOpToken(unittest.TestCase):
     def test_no_file_leaves_the_environment_alone(self):
         self.assertEqual(self.token_in_shell(), "unset")
         self.assertEqual(self.token_in_shell(inherited="ops_inherited"), "ops_inherited")
+
+
+@unittest.skipUnless(ZSH, "zsh is not installed")
+class ZshenvOpShim(unittest.TestCase):
+    """A fresh non-interactive zsh finds the op shim before any other op, even Homebrew's.
+
+    What the shim does with HOME and the token is tested in tests/pi-op-shim.
+    """
+
+    def test_fresh_zsh_resolves_op_to_the_shim_symlink(self):
+        home = Path(tempfile.mkdtemp(prefix="zshenv-opshim-"))
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        shutil.copy(ZSHENV, home / ".zshenv")
+        shutil.copy(ZPROFILE, home / ".zprofile")
+        # As chezmoi deploys it: the shim at ~/.pi/agent/bin/op and the symlink ~/.local/share/op-shim/op.
+        (home / ".pi/agent/bin").mkdir(parents=True)
+        shutil.copy(SHIM, home / ".pi/agent/bin/op")
+        (home / ".pi/agent/bin/op").chmod(0o755)
+        link = home / ".local/share/op-shim/op"
+        link.parent.mkdir(parents=True)
+        link.symlink_to((ROOT / "dot_local/share/op-shim/symlink_op").read_text().strip())
+        env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+        out = subprocess.run([ZSH, "-c", "command -v op"], env=env, capture_output=True, text=True, check=True, timeout=30)
+        self.assertEqual(out.stdout.strip(), str(link))
+        # Login shells (Claude Code, Codex): on macOS /etc/zprofile's path_helper reorders PATH after .zshenv.
+        out = subprocess.run([ZSH, "-lc", "command -v op"], env=env, capture_output=True, text=True, check=True, timeout=30)
+        self.assertEqual(out.stdout.strip(), str(link))
+        self.assertTrue(link.resolve().samefile(home / ".pi/agent/bin/op"))
 
 
 if __name__ == "__main__":

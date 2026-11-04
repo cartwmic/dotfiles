@@ -66,6 +66,7 @@ herdr-mcp/**
 # deploy the standalone passage-review CLI for local phone-side reviews.
 .zshrc
 .zshenv
+.zprofile
 .zsh_plugins.txt
 .claude
 .claude/**
