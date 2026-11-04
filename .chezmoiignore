@@ -181,6 +181,11 @@ Library/LaunchAgents/local.qmd-refresh.plist
 .pi/agent/extensions/pi-codex-fast.json
 # Session titles use the personal Codex login; the auto-session-name package is personal only.
 .pi/agent/extensions/auto-session-name.json
+# T3 provider instances that route through the homelab CLIProxy hub: personal Mac only (docs/profiles.md).
+.t3
+.t3/**
+.config/t3-hub
+.config/t3-hub/**
 # kgate runs jobs on the personal homelab Kubernetes cluster.
 .local/bin/kgate
 # /Volumes/Workshop exists only on the personal Mac; the script turns Spotlight off for it.

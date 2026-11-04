@@ -1,0 +1,45 @@
+#!/bin/sh
+# Own two provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there.
+# Personal only (.chezmoiignore): the hub is reachable from the home LAN or WireGuard, and this is Michael's personal machine.
+#   claude-hub  "Claude (hub)"  driver claudeAgent: ANTHROPIC_BASE_URL at the hub, key from ~/.config/t3-hub/claude-settings.json (apiKeyHelper)
+#   codex-hub   "Codex (hub)"   driver codex, not managed: CODEX_HOME stays ~/.codex, `-c model_provider=cliproxy` selects the
+#               [model_providers.cliproxy] block that dot_codex/modify_private_config.toml.tmpl writes
+# Each apply replaces exactly those two ids under providerInstances; no other key or instance is touched. No file, or a file that is
+# not a JSON object, is passed through unchanged. T3 writes the file without a trailing newline, and so does this script.
+# To drop an instance, delete it from WANT: the id is still owned (OWNED), so the next apply removes it.
+set -eu
+
+{{- $home := .chezmoi.homeDir }}
+{{- $codex := dict "driver" "codex" "displayName" "Codex (hub)" "enabled" true }}
+{{- $codexConfig := dict "setupMode" "existing" "launchArgs" "-c model_provider=cliproxy" }}
+{{- $active := printf "%s/.t3/tools/codex/active.json" $home }}
+{{- if stat $active }}
+{{- $_ := set $codexConfig "binaryPath" (printf "%s/.t3/tools/codex/%s/bin/codex" $home (include $active | fromJson).version) }}
+{{- end }}
+{{- $_ := set $codex "config" $codexConfig }}
+{{- $claude := dict "driver" "claudeAgent" "displayName" "Claude (hub)" "enabled" true
+      "environment" (list (dict "name" "ANTHROPIC_BASE_URL" "value" "https://cliproxy.internal.cartwmic.com" "sensitive" false))
+      "config" (dict "launchArgs" (printf "--settings %s/.config/t3-hub/claude-settings.json" $home)) }}
+# WANT stays on one line so a test can swap it. The codex binary is T3's own download, found through ~/.t3/tools/codex/active.json
+# at apply time (T3 does not keep a version-free path); without that file binaryPath is left out.
+WANT={{ dict "claude-hub" $claude "codex-hub" $codex | toJson | squote }}
+OWNED='["claude-hub","codex-hub"]'
+
+input=$(cat; printf x)
+input=${input%x}
+
+if ! printf %s "$input" | jq -e 'type == "object"' >/dev/null 2>&1; then
+  printf %s "$input"
+  exit 0
+fi
+
+out=$(printf %s "$input" | jq --argjson want "$WANT" --argjson owned "$OWNED" '
+  def upsert($id): if $want[$id] then .[$id] = $want[$id] else del(.[$id]) end;
+  (.providerInstances // {}) as $before
+  | ($before | reduce $owned[] as $id (.; upsert($id))) as $after
+  | if ($after | length) == 0 and (.providerInstances | not) then . else .providerInstances = $after end')
+printf %s "$out"
+case $input in
+  *"
+") printf '\n' ;;
+esac
