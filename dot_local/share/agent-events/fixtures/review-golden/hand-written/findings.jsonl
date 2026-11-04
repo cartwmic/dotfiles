@@ -1,0 +1,5 @@
+{"event": "round", "at": "2026-11-01T01:03:00Z", "round": 1, "review_round": 1, "stage": "plan", "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reviewer": "opus-5.5-reviewer", "verdict": "fail", "session": "sess-1", "model": "claude-opus-5-5"}
+{"event": "finding", "at": "2026-11-01T01:04:00Z", "id": "r1.b1", "round": 1, "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reviewer": "opus-5.5-reviewer", "severity": "blocking", "effective": "blocking", "component": "texts", "text": "text of b1", "obligation": "obligation", "evidence": "file.py:1", "consequence": "a user hits it"}
+{"event": "finding", "at": "2026-11-01T01:05:00Z", "id": "r1.n1", "round": 1, "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reviewer": "opus-5.5-reviewer", "severity": "note", "effective": "note", "text": "text of n1"}
+{"event": "disposition", "at": "2026-11-01T01:06:00Z", "id": "r1.b1", "outcome": "residual", "accepted_by": "michael"}
+{"event": "escape", "at": "2026-11-01T01:07:00Z", "item": "d40:rule-pages-plan", "head": "cccccccccccccccccccccccccccccccccccccccc", "round": 1, "found_by": "dotfiles#999", "text": "a defect the review passed", "of": "r1.n1"}

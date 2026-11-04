@@ -1,0 +1,93 @@
+{
+  "report_schema": 1,
+  "findings_schema": 1,
+  "item": "d40:rule-pages-plan",
+  "log": {
+    "lines": 5,
+    "events": {
+      "round": 1,
+      "finding": 2,
+      "label": 0,
+      "disposition": 1,
+      "redesign": 0,
+      "judge": 0,
+      "escape": 1
+    }
+  },
+  "summarises": {
+    "events": [
+      "round",
+      "finding",
+      "label",
+      "disposition",
+      "redesign",
+      "judge",
+      "escape"
+    ],
+    "fields": {
+      "round": [
+        "round",
+        "review_round",
+        "stage",
+        "verdict"
+      ],
+      "finding": [
+        "id",
+        "round",
+        "severity",
+        "effective",
+        "component"
+      ],
+      "label": [
+        "id",
+        "relation",
+        "component"
+      ],
+      "disposition": [
+        "id",
+        "outcome"
+      ],
+      "redesign": [
+        "component",
+        "round"
+      ],
+      "judge": [],
+      "escape": []
+    }
+  },
+  "sequences": [
+    {
+      "sequence": 1,
+      "first_round": 1,
+      "last_round": 1,
+      "stage": "plan"
+    }
+  ],
+  "findings": [
+    {
+      "id": "r1.b1",
+      "round": 1,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": null,
+      "outcome": "residual",
+      "has_component": true
+    },
+    {
+      "id": "r1.n1",
+      "round": 1,
+      "sequence": 1,
+      "effective": "note",
+      "relation": null,
+      "outcome": null,
+      "has_component": false
+    }
+  ],
+  "stuck": [],
+  "counts": {
+    "needs_component": 0,
+    "undisposed_blocking": 0,
+    "skipped_redesigns": 0
+  },
+  "state": "open"
+}

@@ -1,0 +1,12 @@
+{"event": "round", "at": "2026-11-01T00:24:00Z", "round": 1, "review_round": 1, "stage": "design", "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reviewer": "opus-5.5-reviewer", "verdict": "fail", "session": "sess-1", "model": "claude-opus-5-5", "cost_usd": 0.3}
+{"event": "finding", "at": "2026-11-01T00:25:00Z", "id": "r1.f1", "round": 1, "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reviewer": "opus-5.5-reviewer", "severity": "blocking", "effective": "blocking", "component": "rule-pages", "text": "text of f1", "obligation": "obligation", "evidence": "file.py:1", "consequence": "a user hits it"}
+{"event": "label", "at": "2026-11-01T00:26:00Z", "id": "r1.f1", "relation": "new"}
+{"event": "disposition", "at": "2026-11-01T00:27:00Z", "id": "r1.f1", "outcome": "fixed", "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+{"event": "round", "at": "2026-11-01T00:28:00Z", "round": 2, "review_round": 2, "stage": "design", "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reviewer": "opus-5.5-reviewer", "verdict": "fail", "session": "sess-2", "model": "claude-opus-5-5", "cost_usd": 0.25}
+{"event": "finding", "at": "2026-11-01T00:29:00Z", "id": "r2.f1", "round": 2, "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reviewer": "opus-5.5-reviewer", "severity": "blocking", "effective": "blocking", "component": "rule-pages", "text": "text of f1", "obligation": "obligation", "evidence": "file.py:1", "consequence": "a user hits it"}
+{"event": "label", "at": "2026-11-01T00:30:00Z", "id": "r2.f1", "relation": "repeat", "of": "r1.f1"}
+{"event": "disposition", "at": "2026-11-01T00:31:00Z", "id": "r2.f1", "outcome": "fixed", "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+{"event": "round", "at": "2026-11-01T00:32:00Z", "round": 3, "review_round": 1, "stage": "diff", "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reviewer": "opus-5.5-reviewer", "verdict": "fail", "session": "sess-3", "model": "claude-opus-5-5", "cost_usd": 0.5}
+{"event": "finding", "at": "2026-11-01T00:33:00Z", "id": "r3.f1", "round": 3, "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reviewer": "opus-5.5-reviewer", "severity": "blocking", "effective": "blocking", "component": "rule-pages", "text": "text of f1", "obligation": "obligation", "evidence": "file.py:1", "consequence": "a user hits it"}
+{"event": "label", "at": "2026-11-01T00:34:00Z", "id": "r3.f1", "relation": "new"}
+{"event": "disposition", "at": "2026-11-01T00:35:00Z", "id": "r3.f1", "outcome": "fixed", "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}

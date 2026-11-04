@@ -1,0 +1,93 @@
+{
+  "report_schema": 1,
+  "findings_schema": 1,
+  "item": "loop-engine#100",
+  "log": {
+    "lines": 6,
+    "events": {
+      "round": 2,
+      "finding": 2,
+      "label": 1,
+      "disposition": 1,
+      "redesign": 0,
+      "judge": 0,
+      "escape": 0
+    }
+  },
+  "summarises": {
+    "events": [
+      "round",
+      "finding",
+      "label",
+      "disposition",
+      "redesign",
+      "judge",
+      "escape"
+    ],
+    "fields": {
+      "round": [
+        "round",
+        "review_round",
+        "stage",
+        "verdict"
+      ],
+      "finding": [
+        "id",
+        "round",
+        "severity",
+        "effective",
+        "component"
+      ],
+      "label": [
+        "id",
+        "relation",
+        "component"
+      ],
+      "disposition": [
+        "id",
+        "outcome"
+      ],
+      "redesign": [
+        "component",
+        "round"
+      ],
+      "judge": [],
+      "escape": []
+    }
+  },
+  "sequences": [
+    {
+      "sequence": 1,
+      "first_round": 1,
+      "last_round": 2,
+      "stage": "diff"
+    }
+  ],
+  "findings": [
+    {
+      "id": "r1.f1",
+      "round": 1,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "new",
+      "outcome": "fixed",
+      "has_component": true
+    },
+    {
+      "id": "r2.n1",
+      "round": 2,
+      "sequence": 1,
+      "effective": "note",
+      "relation": null,
+      "outcome": null,
+      "has_component": true
+    }
+  ],
+  "stuck": [],
+  "counts": {
+    "needs_component": 0,
+    "undisposed_blocking": 0,
+    "skipped_redesigns": 0
+  },
+  "state": "passed"
+}
