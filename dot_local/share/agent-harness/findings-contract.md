@@ -1,6 +1,6 @@
 # Findings contract, v1
 
-What a reviewer returns, what code may check about it, and the records the review log keeps. `reviewer-brief.md` tells reviewers what to look for; this file says what shape the answer takes. Two implementations follow it (agent-events' review module and Loop Engine's lean-change provider). They share this file and a fixture, and no code.
+What a reviewer returns, what code may check about it, and the records the review log keeps. `reviewer-brief.md` tells reviewers what to look for; this file says what shape the answer takes. Two implementations follow it (the agent-kit `traces` component's review tool and Loop Engine's lean-change provider). They share this file and a fixture, and no code.
 
 ## The return
 
@@ -42,8 +42,8 @@ One JSON object, saved as `findings.json`:
 
 The fixture is `findings-conformance-v1.json`: cases of `{name, input, expected}`. `expected` holds `accepted`, and then either the `verdict` and each finding's `effective` severity and demotion reason, or the `reject` code (a code, not message text). A string `input` is raw file text (for the bad-JSON case). A case whose `expected` has `v0_reader: true` is skipped by an implementation that reads v0 records. A case whose `expected` has `envelope: true` tests the shape of the return itself and not a finding's fields; an implementation that does not parse the envelope skips it (Loop Engine does). The envelope cases are exactly those that reject with `bad-json`, `bad-schema-version`, `blank-reviewer`, `blank-head` or `bad-shape`. Every other case is per-finding and every implementation runs it. `brief_sha256` is not tested by the fixture.
 
-- The fixture is not kept in this folder. Its two copies live in dotfiles (`dot_local/share/agent-events/fixtures/`, not deployed) and loop-engine, as byte-identical copies. The fixture's sha256 is `ffb5f849d93f77fcf723bf396832ec47d23829ef077f44cf3497830b007183f1` (26 cases). Each repo's test pins its copy's sha256.
-- To change the fixture, change both copies and both pins together, in one change set.
+- The fixture is not kept in this folder. Its two copies live in the agent-kit `traces` component (`src/traces/fixtures/`) and loop-engine, as byte-identical copies, and nowhere else. The fixture's sha256 is `ffb5f849d93f77fcf723bf396832ec47d23829ef077f44cf3497830b007183f1` (26 cases). Each repo's test pins its copy's sha256.
+- To change the fixture, change the kit's copy and loop-engine's copy and both pins together, in one change set.
 - "Same schema" means the same finding fields and the same demotion rules. It does not mean the same envelope: Loop Engine runs the fixture's findings through its own per-finding check and its duplicate-id and unknown-severity checks, and does not parse them as its `Review`.
 
 ## The review log
@@ -52,12 +52,13 @@ Reviews of one item are kept in `${AGENT_TRACES_DIR:-~/.local/share/agent-traces
 
 - `round-<N>/`: a folder per round holding the reviewer's `findings.json` and `REVIEW.md`.
 - `findings.jsonl`: the log. Append-only, one JSON object per line, each with `event` and a UTC `at`.
+- `report.json`: a summary derived from `findings.jsonl` alone, defined in "The report" below.
 
 Two round numbers. `N`, the *log round*, is counted across the item's stages, starts at 1 and is never reused; it names the folder and the ids `r<N>.<id>`, and is the `round` of every event. `review_round` is counted within the current review sequence and restarts at 1 when a new sequence starts: the first review at a stage, and a new design after a redesign switch. It is the round number that `reviewer-brief.md` §6 means. A review sequence is the log rounds from one with `review_round` 1 up to the next. The exact rule for when a sequence starts is in the stuck-trigger paragraph below. With one counter, a new design's review would arrive as round 4 and get only the fix diff; with one counter per stage, two stages would collide in `r<N>.<id>`.
 
 `<item>` is `<repo>#<pr>`, a run id, or, for design work, `<folder>:<document>` (the work folder's name, a colon, and the document's name without its extension), so two documents reviewed in one folder do not share an item and a counter. `<repo>` is the repo's git directory name, for example `cartwmic-homelab-v2#94` or `coordinator#217`, so that a project label can be resolved from it.
 
-`agent-events review` writes the log (by hand until it ships). Every finding gets a log-wide id `r<N>.<id>` (round number, then the return's own id), because ids repeat across rounds. Every other record points to a finding by that log id.
+`agent-traces review` writes the log (by hand until it ships). Every finding gets a log-wide id `r<N>.<id>` (round number, then the return's own id), because ids repeat across rounds. Every other record points to a finding by that log id.
 
 | `event` | Fields | Written when |
 |---|---|---|
@@ -71,8 +72,54 @@ Two round numbers. `N`, the *log round*, is counted across the item's stages, st
 
 A finding record with `effective: note` is a residual. It needs no disposition and no label.
 
-**The stuck trigger.** It is computed per component, using the component from the latest `label` of each finding (a label's `component` replaces the finding's own). A component fires the trigger at log round *r* when it has an effectively-blocking finding whose latest relation is `repeat` or `follow-on` in log round *r* and again in log round *r*−1, that is, in two consecutive log rounds *of one review sequence*. It fires at the second of those rounds. A repeat cannot appear before review round 2, so the earliest firing is review round 3. A blocking finding with no component, from the finding or its latest label, is not counted until it has one. A new sequence (a round with `review_round` 1) starts the count afresh. The labeller judges new, repeat or follow-on within the current sequence. The review round follows this rule: a sequence starts (review round 1) at an item's first round, at a round whose stage differs from the previous round's stage, or at a round marked as a new sequence (`--new-sequence`, used for a new design after a redesign switch); otherwise the review round is the previous round's plus 1. `agent-events review add` checks it; by-hand logs follow it too. A trigger is *skipped* when that component has no `redesign` event at or after the log round it fired. One implementation computes this trigger; the findings CLI and the agent-events exporter both call it.
+**The stuck trigger.** It is computed per component, using the component from the latest `label` of each finding (a label's `component` replaces the finding's own). A component fires the trigger at log round *r* when it has an effectively-blocking finding whose latest relation is `repeat` or `follow-on` in log round *r* and again in log round *r*−1, that is, in two consecutive log rounds *of one review sequence*. It fires at the second of those rounds. A repeat cannot appear before review round 2, so the earliest firing is review round 3. A blocking finding with no component, from the finding or its latest label, is not counted until it has one. A new sequence (a round with `review_round` 1) starts the count afresh. The labeller judges new, repeat or follow-on within the current sequence. The review round follows this rule: a sequence starts (review round 1) at an item's first round, at a round whose stage differs from the previous round's stage, or at a round marked as a new sequence (`--new-sequence`, used for a new design after a redesign switch); otherwise the review round is the previous round's plus 1. `agent-traces review add` checks it; by-hand logs follow it too. A trigger is *skipped* when that component has no `redesign` event at or after the log round it fired. The kit's review tool computes the trigger once and writes the result to `report.json`; the agent-events reader reads that file and computes no trigger.
+
+## The report
+
+One file per item, `<item>/report.json`. It is derived from `findings.jsonl` alone and rewritten by every write verb and by `report`. It carries ids, counts and enumerated values only: no component names, no text, no session ids. Canonical bytes: `JSON.stringify(report, null, 2) + "\n"` with keys in the order below, so a golden file compares byte for byte.
+
+```json
+{
+  "report_schema": 1,
+  "findings_schema": 1,
+  "item": "coordinator#217",
+  "log": { "lines": 14, "events": { "round": 3, "finding": 6, "label": 4, "disposition": 1, "redesign": 0, "judge": 0, "escape": 0 } },
+  "summarises": {
+    "events": ["round", "finding", "label", "disposition", "redesign", "judge", "escape"],
+    "fields": {
+      "round": ["round", "review_round", "stage", "verdict"],
+      "finding": ["id", "round", "severity", "effective", "component"],
+      "label": ["id", "relation", "component"],
+      "disposition": ["id", "outcome"],
+      "redesign": ["component", "round"],
+      "judge": [], "escape": []
+    }
+  },
+  "sequences": [ { "sequence": 1, "first_round": 1, "last_round": 3, "stage": "design" } ],
+  "findings": [ { "id": "r1.f1", "round": 1, "sequence": 1, "effective": "blocking", "relation": "new", "outcome": "fixed", "has_component": true } ],
+  "stuck": [ { "sequence": 1, "round": 3, "review_round": 3, "skipped": false } ],
+  "counts": { "needs_component": 0, "undisposed_blocking": 1, "skipped_redesigns": 0 },
+  "state": "open"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `report_schema` | integer; `1`. Any other value is unknown to a v1 reader. |
+| `findings_schema` | integer; the contract's return version the log was written under (`1`). The log lines carry no such field; the tool refuses any return that is not 1, so this records it. |
+| `item` | the item, as in the folder name. |
+| `log.lines` | number of non-empty lines in `findings.jsonl` when the report was written. A reader that counts a different number knows the report is stale. |
+| `log.events` | count of lines per event kind. Their sum equals `lines`. |
+| `summarises.events` | the event kinds this report accounts for. An event kind in the log that is not listed here means the log is newer than the report. |
+| `summarises.fields` | for each kind, the fields the report reads. A provenance list; a reader does not check log lines against it. |
+| `sequences[]` | one per review sequence, in order: its ordinal (1-based), first and last log round, and the stage of its first round. |
+| `findings[]` | one per `finding` event, in log order: log id, log round, the sequence ordinal, `effective` (`blocking` or `note`), `relation` (the latest label, or `null` for a note or an unlabelled finding), `outcome` (the latest disposition: `fixed`, `rejected`, `residual`, or `null`), `has_component` (from the finding or its latest label). |
+| `stuck[]` | one per component firing, in order: the sequence, the log round and review round it fired at, and `skipped` (no `redesign` for that component at or after that round). Two components firing at one round give two entries; the names stay out. |
+| `counts` | `needs_component`: effectively-blocking findings with no component; `undisposed_blocking`: effectively-blocking findings with no outcome; `skipped_redesigns`: `stuck` entries with `skipped` true. |
+| `state` | `passed` when the last `round` event's verdict is `pass`, else `open`. An item with no `round` event has no report. |
+
+A change to a field, a name or a meaning is a new `report_schema`. The golden log pairs (a `findings.jsonl` and its `report.json`) live in the kit and in dotfiles (the reader's test), vendored byte for byte and pinned by a manifest sha256; they change together, in one change set, as with the fixture. The set covers a treadmill (stuck at review round 3), a clean pass, a design-then-diff pair (sequence boundary), a redesign switch (`--new-sequence`), a missing component then a label that supplies it, and a hand-written log.
 
 ## Version
 
-v1. A change to a field, a rule or a record shape is a new version of this file and of the fixture, and both implementations move together. The log-record additions made before any tool wrote the log (`review_round`, `stage`, `model`, `duration_ms`, `escape.of`, the round folder, the `<folder>:<document>` item form) belong to v1. The return and the fixture are unchanged.
+v1. A change to a field, a rule or a record shape is a new version of this file and of the fixture, and both implementations move together. The log-record additions made before any tool wrote the log (`review_round`, `stage`, `model`, `duration_ms`, `escape.of`, the round folder, the `<folder>:<document>` item form) belong to v1. `report.json` and its `report_schema` (1) are added to v1 before any tool writes it; a change to its shape is a new `report_schema`. The return and the fixture are unchanged.
