@@ -334,6 +334,14 @@ class CacheRef(Scratch):
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout)
 
+    def test_a_scratch_that_is_a_live_directory_is_refused(self):
+        live = self.home / ".local/share/agent-events"
+        live.mkdir(parents=True)
+        (live / "events.sqlite").write_bytes(b"")
+        r = self.run_py("cache_ref.py", "--db", live / "events.sqlite", "--scratch", live, "--now", "1")
+        self.assertEqual(r.returncode, 64, r.stderr)
+        self.assertIn("live directory", r.stderr)
+
     def test_returns_what_the_functions_return(self):
         db = self.build_db()
         now = time.time()
@@ -596,6 +604,35 @@ class Freeze(Scratch):
         listed = (out / "strata.txt").read_text().split()
         self.assertIn("--big--/big.jsonl", listed)
         self.assertGreaterEqual(int(counts["untimed"]), 2)
+
+    def test_a_failure_after_the_clone_leaves_nothing_and_a_rerun_works(self):
+        d, _ = self.state_dir()
+        corpus = self.corpus("builder")
+        victim = next(corpus.rglob("*.jsonl"))
+        victim.chmod(0)
+        self.addCleanup(victim.chmod, 0o644)
+        r, out = self.freeze(d, corpus=corpus)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertFalse(out.exists() and any(out.iterdir()), "a partial freeze was left behind")
+        victim.chmod(0o644)
+        r, out = self.freeze(d, corpus=corpus)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_single_file_batch_lists_paths_not_counts(self):
+        d, _ = self.state_dir()
+        corpus = self.tmp / "one"
+        (corpus / "--p--").mkdir(parents=True)
+        (corpus / "--p--" / "a.jsonl").write_text('{"name":"codemode"}\n')
+        r, out = self.freeze(d, corpus=corpus)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((out / "strata.txt").read_text().split(), ["--p--/a.jsonl"])
+
+    def test_no_stored_state_is_said_not_skipped_silently(self):
+        d, _ = self.state_dir()
+        (d / "export_state.json").unlink()
+        r, out = self.freeze(d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no export_state.json", r.stdout)
 
     def test_a_failed_freeze_leaves_no_temp_files(self):
         d, _ = self.state_dir(fp="000000000000")

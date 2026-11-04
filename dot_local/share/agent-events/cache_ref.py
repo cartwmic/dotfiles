@@ -7,7 +7,7 @@ For each `now` it prints what the frozen collector's `cache_gauges(con, now)` an
 points sorted by label. The database is opened read-only. Project labels depend on AGENT_EVENTS_PROJECT_ROOTS and
 AGENT_EVENTS_PROJECTS, so run it with the same values as the sender it checks.
 
-It refuses a --db that is not inside --scratch (exit 64), and, like shadow_py_run.py, exits 2 unless the frozen
+It refuses a --db that is not inside --scratch, and a --scratch that is a live directory (exit 64), and, like shadow_py_run.py, exits 2 unless the frozen
 modules it imports match reference.sha256.
 """
 import argparse
@@ -37,6 +37,10 @@ def main(argv):
     ap.add_argument("--scratch", required=True, help="the directory the database was built in; --db must be inside it")
     ap.add_argument("--now", type=float, nargs="+", required=True, help="epoch seconds; one or many")
     args = ap.parse_args(argv)
+    live = shadow_py_run.inside_live(args.scratch)
+    if live:
+        print(f"cache_ref: --scratch {args.scratch} is the live directory {live}; refusing", file=sys.stderr)
+        return 64
     if not inside(args.db, args.scratch):
         print(f"cache_ref: --db {args.db} is not inside --scratch {args.scratch}; refusing", file=sys.stderr)
         return 64

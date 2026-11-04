@@ -35,7 +35,8 @@ done
 # The default roots are the collector's own default when AGENT_EVENTS_PROJECT_ROOTS is unset.
 [ -n "$roots" ] || roots=${AGENT_EVENTS_PROJECT_ROOTS-$HOME/git:/Volumes/Workshop/macbook/git}
 mkdir -p "$out"
-trap 'rm -f "$out/fp-live.json" "$out/fp-fixture.json" "$out/strata-counts.txt"; rm -rf "$out/.strata"; rmdir "$out" 2>/dev/null || true' EXIT
+# $out was missing or empty above, so on any failure everything in it is ours: remove it, and a rerun starts clean.
+trap 'code=$?; if [ "$code" -ne 0 ]; then rm -rf "$out"; else rm -f "$out/fp-live.json" "$out/fp-fixture.json" "$out/strata-counts.txt"; rm -rf "$out/.strata"; fi' EXIT
 
 echo "freeze: fingerprint from the live environment ($roots, machine $machine)"
 PYTHONDONTWRITEBYTECODE=1 python3 "$here/parity_dump.py" fp --roots "$roots" --machine "$machine" > "$out/fp-live.json"
@@ -48,6 +49,8 @@ if [ -f "$state_file" ]; then
     echo "freeze.sh: the live fingerprint $fp_live is not the one in $state_file ($fp_state); re-freeze after the next tick" >&2
     exit 1
   fi
+else
+  echo "freeze: no export_state.json in $state_src; the fingerprint is not checked against a stored state"
 fi
 
 echo "freeze: cloning the corpus"
@@ -77,7 +80,7 @@ grep '/run-[0-9]*/session\.jsonl$' "$tmp/all" > "$tmp/children" || true
 grep -v '/run-[0-9]*/session\.jsonl$' "$tmp/all" > "$tmp/top" || true
 list < "$tmp/children" > "$tmp/s-children"
 xargs -r grep -l '"parentSession"' < "$tmp/top" 2>/dev/null | list > "$tmp/s-forks" || true
-xargs -r grep -c codemode < "$tmp/top" 2>/dev/null | awk -F: '$NF > 0 { print $NF "\t" $0 }' | sort -rn | head -n "$per" | cut -f2- | sed 's/:[0-9]*$//' > "$tmp/s-codemode" || true
+xargs -r grep -cH codemode < "$tmp/top" 2>/dev/null | awk -F: '$NF > 0 { print $NF "\t" $0 }' | sort -rn | head -n "$per" | cut -f2- | sed 's/:[0-9]*$//' > "$tmp/s-codemode" || true
 xargs -r grep -L -e pi-stamp -e durationMs < "$tmp/top" 2>/dev/null | list > "$tmp/s-untimed" || true
 find "$c" -type f -name '*.jsonl' -size +2000k | sort | while IFS= read -r f; do
   awk 'length($0) > 2000000 { found = 1; exit } END { exit !found }' "$f" && echo "$f"
