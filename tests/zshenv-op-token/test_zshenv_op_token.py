@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ZSHENV = ROOT / "dot_zshenv"
+ZPROFILE = ROOT / "dot_zprofile"
 SHIM = ROOT / "dot_pi/private_agent/bin/executable_op"
 FAKE_TOKEN = "ops_fake-token-for-the-zshenv-test"
 ZSH = shutil.which("zsh")
@@ -63,6 +64,7 @@ class ZshenvOpShim(unittest.TestCase):
         home = Path(tempfile.mkdtemp(prefix="zshenv-opshim-"))
         self.addCleanup(shutil.rmtree, home, ignore_errors=True)
         shutil.copy(ZSHENV, home / ".zshenv")
+        shutil.copy(ZPROFILE, home / ".zprofile")
         # As chezmoi deploys it: the shim at ~/.pi/agent/bin/op and the symlink ~/.local/share/op-shim/op.
         (home / ".pi/agent/bin").mkdir(parents=True)
         shutil.copy(SHIM, home / ".pi/agent/bin/op")
@@ -72,6 +74,9 @@ class ZshenvOpShim(unittest.TestCase):
         link.symlink_to((ROOT / "dot_local/share/op-shim/symlink_op").read_text().strip())
         env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
         out = subprocess.run([ZSH, "-c", "command -v op"], env=env, capture_output=True, text=True, check=True, timeout=30)
+        self.assertEqual(out.stdout.strip(), str(link))
+        # Login shells (Claude Code, Codex): on macOS /etc/zprofile's path_helper reorders PATH after .zshenv.
+        out = subprocess.run([ZSH, "-lc", "command -v op"], env=env, capture_output=True, text=True, check=True, timeout=30)
         self.assertEqual(out.stdout.strip(), str(link))
         self.assertTrue(link.resolve().samefile(home / ".pi/agent/bin/op"))
 

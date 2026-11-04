@@ -1,7 +1,7 @@
 #!/bin/sh
 # op for agent shells. Pi puts ~/.pi/agent/bin first on the PATH of its bash tool and of ! commands, unless that
 # directory is already on Pi's own PATH (then it stays where it is). Every zsh also reaches this file through the
-# symlink ~/.local/share/op-shim/op, which dot_zshenv puts first on PATH.
+# symlink ~/.local/share/op-shim/op, which dot_zshenv (and dot_zprofile, for login shells) puts first on PATH.
 # With a 1Password service-account token (OP_SERVICE_ACCOUNT_TOKEN, or the token file below), the real op runs with an
 # empty HOME, so it uses the service account and never waits on the desktop app (under the real HOME a locked app can
 # hang it, and on the personal Mac op blocks on the app's settings.json in its Group Container even with a token).
