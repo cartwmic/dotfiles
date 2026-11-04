@@ -90,7 +90,10 @@ jobs:
   # macOS: the kubectl task test puts /usr/bin first on PATH, and the ubuntu runner image
   # ships /usr/bin/kubectl, which makes the task skip itself.
   mise-tests:
-    runs-on: macos-latest
+    # Pinned: since 2026-11-04 ~15:00Z GitHub assigns no runner to macos-latest (macos-26-arm64) or macos-26;
+    # jobs queue unassigned and are cancelled. macos-15 still gets runners (probe PR #170). Move back to
+    # macos-latest once its jobs are placed again.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
         with:
