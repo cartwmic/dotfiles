@@ -15,6 +15,8 @@ CLI = HERE / "agent_events.py"
 sys.path.insert(0, str(HERE))
 import agent_events as ae  # noqa: E402
 
+os.environ["AGENT_TRACES_DIR"] = os.path.join(tempfile.mkdtemp(prefix="ae-no-traces-"), "none")  # builds read no real review logs
+
 T = 1_790_000_000_000
 SENTINEL = "SENTINEL-hunter2-Zq9"
 

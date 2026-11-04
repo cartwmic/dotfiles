@@ -24,6 +24,7 @@ import urllib.request
 from pathlib import Path
 
 import agent_events as ae
+import agent_events_review as review_reader
 
 LLM_BOUNDS = (1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 1200)             # seconds
 TOOL_BOUNDS = (0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800)      # seconds
@@ -189,7 +190,7 @@ def collect(con):
             " GROUP BY s.cwd, s.kind, e.kind, 4"):
         rows.append((project(r[0]), _kind(r[1]), r[2], r[3] or "", r[4]))
     counter("pi_events", ("project", "kind", "event", "detail"), _sum_by(rows, 4, 1))
-    return metrics
+    return metrics + review_reader.counters(con, ae.approved_projects())
 
 
 def cache_gauges(con, now):
@@ -380,6 +381,9 @@ def fingerprint():
     return hashlib.sha1(text.encode()).hexdigest()[:12]
 
 
+REVIEW_FAMILY, REVIEW_PREFIX = "pi_review", "pi_review_"
+
+
 def account(metrics, state, business=True, fp=""):
     """Make the series monotonic and replace business points with the accounted values.
 
@@ -388,11 +392,18 @@ def account(metrics, state, business=True, fp=""):
     value only rises by the positive change since the last tick; a fall is a baseline correction.
 
     Baseline (first run, lost state, or a changed project map/schema): current totals become the reference and the
-    exported value starts at 0, so history is never activity. After that a new series is real activity: it is
+    exported value starts at 0, so history is never activity. The pi_review_* families have a baseline of their own,
+    taken once on the first business tick that runs the review reader (state["seeded_families"] gains "pi_review"):
+    review logs kept by hand before then are history, and no existing Pi series is touched. After that a new series is real activity: it is
     sent as 0 first ('ok' false until that POST succeeds) and its growth is added on later ticks. Every known
     series is sent on every tick, so one that vanishes keeps its value and one that returns is still alive."""
     series = state.setdefault("series", {})
     baseline = business and (not state.get("seeded") or state.get("fp") != fp)
+    seeded_families = state.get("seeded_families") if isinstance(state.get("seeded_families"), list) else []
+    review_baseline = business and REVIEW_FAMILY not in seeded_families  # the review series' own one-time baseline
+
+    def base(name):
+        return baseline or (review_baseline and name.startswith(REVIEW_PREFIX))
     if business:
         created = set()
         relayout = set()  # histogram families whose buckets changed: every retained sibling is retired too
@@ -415,19 +426,20 @@ def account(metrics, state, business=True, fp=""):
                     e is not None and (len(e["seen"]) != len(cur) or e["b"] != list(m.get("bounds", ()))))
                 if e is None or layout_changed:  # a new series, or a histogram whose buckets changed: start over at zero
                     series[key] = {"n": m["name"], "t": m["type"], "l": labels, "b": list(m.get("bounds", ())),
-                                   "last": list(cur) if (baseline or layout_changed) else [0] * len(cur),
+                                   "last": list(cur) if (base(m["name"]) or layout_changed) else [0] * len(cur),
                                    "sent": [0] * len(cur), "seen": cur, "ok": False}
                     created.add(key)
                 else:
                     e["seen"] = cur
         for key, e in series.items():  # every known series, present or not: a vanished one still owes its increment
-            if baseline:
+            if base(e["n"]):
                 e["last"] = list(e["seen"])
             elif e["ok"] and key not in created:
                 if all(c >= l for c, l in zip(e["seen"], e["last"])):
                     e["sent"] = [s + (c - l) for s, c, l in zip(e["sent"], e["seen"], e["last"])]
                 e["last"] = list(e["seen"])
         state["seeded"], state["fp"] = True, fp
+        state["seeded_families"] = sorted(set(seeded_families) | {REVIEW_FAMILY})
     families = {}
     for key in sorted(series):
         e = series[key]
@@ -522,7 +534,7 @@ def export(con, db_path, status, url=None, now=None, state=None, business=True, 
     label = require_machine() if url else machine()  # before any accounting: a refused send changes no state
     gauges_src = self_metrics(con, status, db_path)
     if business:
-        gauges_src = gauges_src + cache_gauges(con, now or time.time())
+        gauges_src = gauges_src + cache_gauges(con, now or time.time()) + review_reader.gauges(con, ae.approved_projects())
     if state is None:
         metrics = (collect(con) if business else []) + gauges_src
     else:
@@ -679,6 +691,9 @@ def _tick(sessions_dir, db):
         status.update(last_build_ok_ts=time.time(), last_build_seconds=round(time.time() - t0, 2),
                       consecutive_build_failures=0, last_build_error=None, last_parsed=res["parsed"],
                       sessions=res["sessions"])
+        if res["review"] != status.get("review_reader"):  # reasons and counts only, one line per change
+            log(f"review reader: {'ok' if res['review']['ok'] else 'problems ' + json.dumps(res['review']['problems'])}")
+        status["review_reader"] = res["review"]
         if res["parsed"] or res["removed"]:
             log(f"build ok: {res['parsed']} parsed, {res['removed']} removed, {res['sessions']} sessions "
                 f"in {time.time() - t0:.1f}s")
@@ -745,6 +760,9 @@ def cmd_status(max_age=MAX_STALE_S):
              f"machine label         : {machine_status(status)}",
              f"sessions indexed      : {status.get('sessions', 'unknown')}",
              f"last build took       : {status.get('last_build_seconds', 'unknown')}s"]
+    reader = status.get("review_reader")
+    if reader:
+        lines.append("review reader         : " + ("ok" if reader.get("ok") else "problems " + json.dumps(reader.get("problems"))))
     if status.get("last_build_error"):
         lines.append(f"last build error      : {status['last_build_error']}")
     if status.get("last_export_error"):

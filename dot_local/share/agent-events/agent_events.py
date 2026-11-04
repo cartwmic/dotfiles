@@ -18,6 +18,8 @@ import sys
 import time
 from pathlib import Path
 
+import agent_events_review as review_reader
+
 SCHEMA_VERSION = 4  # 4: owner wait, active and tool time are nested-aware (a wait inside codemode is owner wait)
 CONTENT_POLICY = "no prompts, assistant text, tool args/results or error text are stored"
 
@@ -56,6 +58,22 @@ CREATE TABLE IF NOT EXISTS calls (
   cache_write_tokens INTEGER, output_tokens INTEGER, cost_usd REAL,
   dedupe_key TEXT, dup INTEGER DEFAULT 0, PRIMARY KEY (path, seq));
 CREATE INDEX IF NOT EXISTS calls_key ON calls(dedupe_key);
+CREATE TABLE IF NOT EXISTS review_items (
+  item TEXT PRIMARY KEY, repo TEXT, log_lines INTEGER NOT NULL, state TEXT, hard TEXT NOT NULL, problems TEXT NOT NULL,
+  stale_now INTEGER NOT NULL, partial_now INTEGER NOT NULL, stale_looks INTEGER NOT NULL, partial_looks INTEGER NOT NULL,
+  skipped_redesigns INTEGER, needs_component INTEGER, undisposed_blocking INTEGER);
+CREATE TABLE IF NOT EXISTS review_rounds (
+  item TEXT NOT NULL, round INTEGER NOT NULL, review_round INTEGER NOT NULL, stage TEXT NOT NULL, verdict TEXT NOT NULL,
+  model TEXT, duration_ms INTEGER, cost_usd REAL, at_ms INTEGER, PRIMARY KEY (item, round));
+CREATE TABLE IF NOT EXISTS review_findings (
+  item TEXT NOT NULL, id TEXT NOT NULL, round INTEGER NOT NULL, severity TEXT NOT NULL, effective TEXT NOT NULL,
+  demoted INTEGER NOT NULL, sequence INTEGER, relation TEXT, outcome TEXT, has_component INTEGER, PRIMARY KEY (item, id));
+CREATE TABLE IF NOT EXISTS review_redesigns (
+  item TEXT NOT NULL, seq INTEGER NOT NULL, round INTEGER NOT NULL, action TEXT NOT NULL, makes_impossible TEXT NOT NULL,
+  PRIMARY KEY (item, seq));
+CREATE TABLE IF NOT EXISTS review_escapes (
+  item TEXT NOT NULL, seq INTEGER NOT NULL, round INTEGER NOT NULL, at_ms INTEGER, PRIMARY KEY (item, seq));
+CREATE TABLE IF NOT EXISTS review_problems (reason TEXT PRIMARY KEY, items INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS events (
   path TEXT NOT NULL, seq INTEGER NOT NULL, ts_ms INTEGER, turn_idx INTEGER,
   kind TEXT NOT NULL, severity TEXT, attrs TEXT, call_seq INTEGER, dup INTEGER DEFAULT 0,
@@ -637,9 +655,10 @@ def build(sessions_dir, db_path, since_ms=None, progress=None):
             finalize(con, None if dirty else changed)
             con.execute("INSERT OR REPLACE INTO meta VALUES ('dirty', '0')")
     n_sessions = con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    review = review_reader.update(con)  # a look at the review folder on every build, rebuilt or not
     con.close()
     return {"parsed": parsed_n, "unchanged": skipped, "removed": removed, "refinalized": bool(dirty and not parsed_n and not removed),
-            "malformed_lines": malformed, "sessions": n_sessions}
+            "malformed_lines": malformed, "sessions": n_sessions, "review": review}
 
 
 def _duplicate_set(con, select_sql):
@@ -1168,6 +1187,7 @@ def main(argv=None):
         print(f"built {db}: {res['parsed']} parsed, {res['unchanged']} unchanged, {res['removed']} removed, "
               f"{res['sessions']} sessions, {res['malformed_lines']} malformed lines skipped "
               f"in {time.time() - started:.1f}s")
+        print(f"review log: {'ok' if res['review']['ok'] else 'problems ' + json.dumps(res['review']['problems'])}")
         print(f"read-only over {sessions_dir}; {CONTENT_POLICY}.")
         return 0
     if args.cmd == "run":

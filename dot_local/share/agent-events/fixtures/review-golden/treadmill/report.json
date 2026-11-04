@@ -1,0 +1,136 @@
+{
+  "report_schema": 1,
+  "findings_schema": 1,
+  "item": "coordinator#217",
+  "log": {
+    "lines": 17,
+    "events": {
+      "round": 3,
+      "finding": 6,
+      "label": 4,
+      "disposition": 3,
+      "redesign": 0,
+      "judge": 1,
+      "escape": 0
+    }
+  },
+  "summarises": {
+    "events": [
+      "round",
+      "finding",
+      "label",
+      "disposition",
+      "redesign",
+      "judge",
+      "escape"
+    ],
+    "fields": {
+      "round": [
+        "round",
+        "review_round",
+        "stage",
+        "verdict"
+      ],
+      "finding": [
+        "id",
+        "round",
+        "severity",
+        "effective",
+        "component"
+      ],
+      "label": [
+        "id",
+        "relation",
+        "component"
+      ],
+      "disposition": [
+        "id",
+        "outcome"
+      ],
+      "redesign": [
+        "component",
+        "round"
+      ],
+      "judge": [],
+      "escape": []
+    }
+  },
+  "sequences": [
+    {
+      "sequence": 1,
+      "first_round": 1,
+      "last_round": 3,
+      "stage": "diff"
+    }
+  ],
+  "findings": [
+    {
+      "id": "r1.f1",
+      "round": 1,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "new",
+      "outcome": "fixed",
+      "has_component": true
+    },
+    {
+      "id": "r1.f2",
+      "round": 1,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "new",
+      "outcome": "fixed",
+      "has_component": true
+    },
+    {
+      "id": "r2.f1",
+      "round": 2,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "repeat",
+      "outcome": "fixed",
+      "has_component": true
+    },
+    {
+      "id": "r2.f2",
+      "round": 2,
+      "sequence": 1,
+      "effective": "note",
+      "relation": null,
+      "outcome": null,
+      "has_component": true
+    },
+    {
+      "id": "r3.f1",
+      "round": 3,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "follow-on",
+      "outcome": null,
+      "has_component": true
+    },
+    {
+      "id": "r3.n1",
+      "round": 3,
+      "sequence": 1,
+      "effective": "note",
+      "relation": null,
+      "outcome": null,
+      "has_component": false
+    }
+  ],
+  "stuck": [
+    {
+      "sequence": 1,
+      "round": 3,
+      "review_round": 3,
+      "skipped": true
+    }
+  ],
+  "counts": {
+    "needs_component": 0,
+    "undisposed_blocking": 1,
+    "skipped_redesigns": 1
+  },
+  "state": "open"
+}

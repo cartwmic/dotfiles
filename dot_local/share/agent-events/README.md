@@ -6,7 +6,7 @@ session's time and tokens go" without a backend, a collector or any new capture.
 Phase 0 of the traces research (dotfiles issue #10) built the tables. Phase 1 (below) runs
 it in the background, exports aggregate metrics to Grafana, and adds a local drill-down.
 Spans in a trace viewer and an emitter extension remain separate, later decisions.
-Scope: Pi sessions only.
+Scope: Pi sessions, plus the review log (section "Review log").
 
 ## What it does
 
@@ -135,6 +135,55 @@ overview, errors and retries, tools and models, workstream drill-down.
 
 Content-level questions ("what was that error?", "what was the prompt?") are answered locally by `agent-events show`, which
 re-reads the original session file. Nothing it prints is stored or exported.
+
+## Review log
+
+Every build also reads `${AGENT_TRACES_DIR:-~/.local/share/agent-traces}/emitted/review/<item>/findings.jsonl` and the `report.json`
+beside it (both defined in `~/.local/share/agent-harness/findings-contract.md`). `agent-traces review` writes the log and the report; a
+log kept by hand has no report until `report --all` runs. **The reader computes no trigger.** The stuck trigger, relations, dispositions,
+skipped redesigns and state all come from `report.json`.
+
+Tables (`review_items`, `review_rounds`, `review_findings`, `review_redesigns`, `review_escapes`, `review_problems`) hold the item, log
+round, review round, stage, model name, enumerated values, a demoted flag, cost, duration and the report's counts. They never hold a free-text
+field, a session id or a component name. They are rebuilt in one transaction when a log or report changed in size or mtime.
+
+**Strict.** Each of these is counted per item and shows in `status.json` as `review_reader: {ok, problems: {reason: items}}` (no item names), in
+`agent-events status`, in one `agent.log` line per change, and in the gauge `pi_review_reader_problem_items{reason}` (0 when none):
+
+| reason | when |
+|---|---|
+| `findings_schema` | `report.json` has a `findings_schema` that is not 1 |
+| `report_schema` | a `report_schema` that is not 1, a report that does not parse or is not a v1 report, or one for another item |
+| `unknown_event` | a log line whose `event` is not one of the seven kinds the reader knows (a kind the report lists but the reader does not is still unknown) |
+| `bad_line` | a line that does not parse, has a value outside its vocabulary, repeats a round or a finding, or names a round that has no line; also a final line with no newline that is still unfinished on the next look |
+| `report_missing` | an item with a `round` event and no `report.json` (every hand-kept log, by design) |
+| `report_stale` | the report's `log.lines`, or the sum of its `log.events`, differs from the lines counted; or a logged kind is not in `summarises.events`; or its finding ids differ from the log's |
+
+An item with a problem exports its log-derived series but none of the report-derived ones (`pi_review_relations_total`,
+`pi_review_dispositions_total`, `pi_review_skipped_redesigns`, `pi_review_items`). A bad line is left out of every count.
+
+**Staleness counts looks, not time.** `report_stale` and an unfinished last line are confirmed on the second consecutive *build that looks at the
+folder*, whether or not that build rebuilt the tables. One tick that lands between a writer's log append and its report rename sees one stale look and
+reports nothing; a hand-appended line stays stale and is reported by the next build, even though that build finds nothing changed and rebuilds nothing. I
+chose this over wall-clock age against the log's mtime because it needs no time limit to choose, and "two builds in a row" is what a tick means. A
+manual `agent-events build` is a look too.
+
+Series (names start `pi_` because the collector filters on it): counters `pi_review_rounds_total{project,verdict,stage,model}`,
+`pi_review_findings_total{project,review_round,effective,stage}`, `pi_review_demoted_total{project}`, `pi_review_redesigns_total{project,action,makes_impossible}`,
+`pi_review_escapes_total{project}`, `pi_review_cost_usd_total{project,stage,model}`, `pi_review_relations_total{project,relation}`,
+`pi_review_dispositions_total{project,outcome}`; gauges `pi_review_skipped_redesigns{project}`, `pi_review_items{project,state}`,
+`pi_review_reader_problem_items{reason}`. `project` is the part of the item before `#`, lower-cased, if it is an approved project, else `other`.
+`model` is `unknown` when the round has none and `other` when it is not an identifier.
+
+**Baseline.** The review counters have their own one-time baseline: `export_state.json` gains `seeded_families: ["pi_review"]`. On the first tick
+that runs the reader while that marker is absent, the review series take their current totals as the reference and export 0, and the marker is set
+whether or not any review data existed. After that a new series is real activity, so a log first created later counts as one tick of activity. The
+fingerprint and every Pi series are untouched. Known limit: when an item turns unhealthy its relations and dispositions drop out and, once it is healthy
+again, come back as a rise that is counted a second time; the other counters are append-only and cannot fall.
+
+The golden pairs in `fixtures/review-golden/` (a `findings.jsonl` and its `report.json`, in the contract's canonical bytes) are pinned by `MANIFEST.sha256`,
+whose own sha256 is in `test_agent_events_review.py`. The kit's copy must stay byte for byte the same; change both in one change set. The code deploys to both
+profiles; on the work profile its LaunchAgent is off unless `agentEvents` is turned on there.
 
 ## Tables
 
