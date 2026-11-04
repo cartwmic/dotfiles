@@ -17,6 +17,15 @@ if [ "$TERM" = xterm-kitty ] && command -v infocmp >/dev/null 2>&1; then
   fi
 fi
 
+# 1Password service account for every zsh, including the non-interactive shells agents run (T3,
+# Claude Code, launchd jobs). Those never read ~/.zshrc, so without this `op` falls back to the
+# desktop app and asks for approval on every call. The file wins over an inherited value, so a
+# rotated token is picked up. refresh_op_service_account_token.sh writes it; ~/.zshrc warns when
+# it is missing.
+if [[ -r "$HOME/.config/agent-harness/op-service-token" ]]; then
+  export OP_SERVICE_ACCOUNT_TOKEN="$(<"$HOME/.config/agent-harness/op-service-token")"
+fi
+
 # Source machine-local overrides (not managed by chezmoi)
 [ -f "$HOME/.zshenv.local" ] && . "$HOME/.zshenv.local"
 
