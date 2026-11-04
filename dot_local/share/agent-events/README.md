@@ -181,6 +181,8 @@ whether or not any review data existed. After that a new series is real activity
 fingerprint and every Pi series are untouched. Known limit: when an item turns unhealthy its relations and dispositions drop out and, once it is healthy
 again, come back as a rise that is counted a second time; the other counters are append-only and cannot fall.
 
+**Vendoring pending:** the golden pairs below are hand-authored from the contract until the kit's K2 merges; its real pairs (`src/traces/fixtures/golden/<name>/`) replace them byte for byte, with the manifest pin in the test updated, before this merges.
+
 The golden pairs in `fixtures/review-golden/` (a `findings.jsonl` and its `report.json`, in the contract's canonical bytes) are pinned by `MANIFEST.sha256`,
 whose own sha256 is in `test_agent_events_review.py`. The kit's copy must stay byte for byte the same; change both in one change set. The code deploys to both
 profiles; on the work profile its LaunchAgent is off unless `agentEvents` is turned on there.
