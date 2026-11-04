@@ -1,6 +1,6 @@
 global_context: "Michael's agent work: design notes, repo docs, Pi session recaps and Pi, Claude Code and Codex sessions"
 collections:
-{{- /* Work: ~/tmp/<project>/ notes only where that folder exists, and the checkouts are the ones under ~/git (as the work instances use). */}}
+{{- /* Work: ~/tmp/<project>/ notes only where that folder exists, and the checkouts are the ones the work instances use (the coordinator from instance_repo, the rest under ~/git). */}}
 {{- if or (eq .profile "personal") (stat (printf "%s/tmp" .chezmoi.homeDir)) }}
   notes:
     path: {{ .chezmoi.homeDir }}/tmp
@@ -21,6 +21,9 @@ collections:
 {{- end }}
 {{- range $name := $repos }}
 {{- $dir := printf "%s/%s" $root $name }}
+{{- if and (eq $.profile "axon-work-computer") (eq $name "coordinator") }}
+{{- $dir = includeTemplate "instance_repo" (dict "root" $ "name" "coordinator") }}
+{{- end }}
 {{- if stat $dir }}
   repo-{{ $name }}:
     path: {{ $dir }}
