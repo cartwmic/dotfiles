@@ -162,7 +162,7 @@ class SettingsHookTest(unittest.TestCase):
         for profile in (WORK, PERSONAL):
             path = cls.tmp / ("modify-" + profile)
             # No coordinator checkout here: the T3 hook is installed when <repo>/src/t3-hook/hook.ts exists (tests/t3-hook).
-            path.write_text(render(SETTINGS, {"profile": profile, "instances": {"coordinator": {"repo": "/nonexistent/coordinator"}}}))
+            path.write_text(render(SETTINGS, {"profile": profile, "hub": {"enabled": False}, "instances": {"coordinator": {"repo": "/nonexistent/coordinator"}}}))
             cls.scripts[profile] = path
 
     @classmethod

@@ -1,0 +1,31 @@
+{
+  "defaultModelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-opus-5-5"
+  },
+  "projectSettingsFolded": true,
+  "sidebarAutoSettleAfterDays": 5,
+  "idleCompaction": "onReturn",
+  "linkedEnvironmentsEnabled": true,
+  "sidebarAutoSettleOnMerge": false,
+  "providerInstances": {
+    "codex": {
+      "driver": "codex",
+      "enabled": true,
+      "config": {
+        "setupMode": "managed"
+      }
+    },
+    "claudeAgent": {
+      "driver": "claudeAgent",
+      "enabled": true
+    },
+    "coordinator": {
+      "driver": "claudeAgent",
+      "enabled": true,
+      "config": {
+        "launchArgs": "--append-system-prompt-file /Users/cartwmic/.local/share/coordinator/t3/seat.md --settings /Users/cartwmic/.local/share/coordinator/t3/settings.json"
+      }
+    }
+  }
+}
