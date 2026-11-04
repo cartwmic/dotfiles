@@ -17,6 +17,10 @@ import agent_events_metrics as am  # noqa: E402
 import agent_events_review as rv  # noqa: E402
 import test_agent_events as base  # noqa: E402
 
+# VENDORING PENDING. These six pairs are hand-authored from PLAN-traces-kit.md 1.2 (no K2 output exists yet). The kit's K2 creates the
+# real pairs at src/traces/fixtures/golden/<name>/ with a sha manifest. After K2 merges, vendor them byte for byte into GOLDEN and update
+# the three lines below (path, manifest pin, names) and the item names/counts the Series and Strict tests assert (search "coordinator#217").
+# This PR is not to merge before that is done.
 GOLDEN = HERE / "fixtures" / "review-golden"
 MANIFEST_SHA256 = "e1a464299898aa6871d8103a1d8f38c0367f7d21a4b7c3267c3bdaf144cdc980"  # change the golden pairs and this pin together
 SENTINEL = base.SENTINEL
