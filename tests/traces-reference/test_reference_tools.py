@@ -165,6 +165,19 @@ class ParityDump(Scratch):
         self.assertEqual(self.tree_hash(a), self.tree_hash(b))
         self.assertEqual(json.loads((a / "meta.json").read_text())["malformed_lines"] >= 1, True)
 
+    def test_builder_corpus_dumps_identically_from_corpus_paths_of_different_length(self):
+        """CI found it: the fork copy's parentSession and the SQLite file size both depended on the corpus path length."""
+        args = ["--now", *map(str, NOW), "--replay-ticks", "3"]
+        first, second = self.corpus("builder"), self.tmp / ("deeper-" + "x" * 40) / "sub" / "builder"
+        subprocess.run([sys.executable, str(SYNTH), "builder", str(second)], check=True, capture_output=True, env=self.env())
+        a, b = self.dump(first, self.tmp / "a", *args), self.dump(second, self.tmp / "b", *args)
+        self.assertEqual(self.tree_hash(a), self.tree_hash(b))
+        # the size of the SQLite file depends on the path text stored in it and on the SQLite build: the dump zeroes it
+        for k in range(3):
+            body = json.loads((a / f"tick-{k}/payload.json").read_text())
+            size = [m for m in body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"] if m["name"] == "pi_agent_events_database_bytes"]
+            self.assertEqual([pt["asDouble"] for pt in size[0]["gauge"]["dataPoints"]], [0.0])
+
     def test_refuses_a_dirty_out_and_a_live_state_dir(self):
         corpus = self.corpus("builder")
         (self.tmp / "dirty").mkdir()

@@ -75,7 +75,8 @@ def builder(root):
     fx = Fixture(S1 + "-fork", "/Volumes/Workshop/macbook/git/agent-kit", T)
     fx.entries = [json.loads(line) for line in parent.read_text().splitlines()]
     fx.entries[0]["id"] = S1 + "-fork"
-    fx.entries[0]["parentSession"] = str(parent)
+    # a fixed path, not str(parent): the corpus root differs per machine and would change this file's size, and so the pinned dumps
+    fx.entries[0]["parentSession"] = "/synthetic/sessions/--git-agent-kit--/" + parent.name
     save(root, "--git-agent-kit--", f"2026-10-01T00-00-01-000Z_{S1}-fork.jsonl", fx)
 
 
