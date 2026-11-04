@@ -282,11 +282,14 @@ parity, replay and shadow result recorded under the old hashes as void.
 Tools beside the collector (all exit 2 unless the frozen files match `reference.sha256`):
 
 - `shadow_py_run.py` runs the collector as `agent_events.py` does with the five `pi_cache_*` gauges switched off in memory (the
-  Python control arm of the shadow run). `cache_ref.py --scratch DIR --db DIR/events.sqlite --now EPOCH...` prints what
+  Python control arm of the shadow run). It also exits 64, for every verb, when `AGENT_EVENTS_STATE_DIR` is unset or is the live
+  state dir, or when the database it would open (`--db`, else the default) is the live one; the arm needs its own state dir and
+  `--db` or `XDG_DATA_HOME`. `cache_ref.py --scratch DIR --db DIR/events.sqlite --now EPOCH...` prints what
   `cache_gauges` and `miss_streaks` return for a database, as JSON. Both deploy next to the frozen files, with `reference.sha256`,
   when chezmoi data `agentTracesShadow.enabled` is true (default: personal only).
 - Source-only (listed in `.chezmoiignore`): `parity_dump.py` (the canonical dump of a corpus; `fp` prints the approved-project
-  list and fingerprint), `rollback_drill.py` (can Python load a state file the TS port wrote), `freeze.sh` (a frozen copy of the
+  list and fingerprint), `rollback_drill.py` (can Python load a state file the TS port wrote; `--original-status` is a Python-written status.json whose
+  `epoch_ns` the TS file must match digit for digit), `freeze.sh` (a frozen copy of the
   corpus and state for the parity and replay runs), and `reference_common.py` (shared helpers).
 
 Tests: `python3 -m unittest discover -s tests/traces-reference`. Synthetic corpora only.
