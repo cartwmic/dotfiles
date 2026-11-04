@@ -6,19 +6,20 @@
 # block (delimited by `# chezmoi:caveman-style` markers). Strips that
 # managed section and preserves everything else (model, projects,
 # [features], MCP block managed by apply_harness_config, etc.).
-# Idempotent: a file without the block is passed through unchanged.
+# Idempotent: a file without the block is passed through unchanged (and a file with a block, on a host that should not have
+# one, loses just that block).
 #
-# CLIProxy hub provider (personal only): owns the `# chezmoi:cliproxy-hub` block, which adds
+# CLIProxy hub provider (personal Mac, data switch t3Hub.enabled): owns the `# chezmoi:cliproxy-hub` block, which adds
 # [model_providers.cliproxy] pointing at the homelab hub and reading its key at run time. It does not
 # change the default model_provider; T3's codex-hub instance selects it with `-c model_provider=cliproxy`
-# (dot_t3/userdata/modify_settings.json.tmpl). Other profiles drop the block if it is there.
+# (dot_t3/userdata/modify_settings.json.tmpl). Any other host, or t3Hub.enabled false, drops the block if it is there.
 #
 # Chezmoi runs modify_ scripts with the existing target file content piped
 # on stdin and uses stdout as the new content.
 
 set -eu
 
-{{ if eq .profile "personal" -}}
+{{ if eq (includeTemplate "t3_hub" .) "on" -}}
 HUB_HOME='{{ .chezmoi.homeDir }}'
 {{- else -}}
 HUB_HOME=''

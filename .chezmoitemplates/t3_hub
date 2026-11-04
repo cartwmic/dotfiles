@@ -1,0 +1,10 @@
+{{- /* t3_hub: "on", "off" or "n/a" for the T3 hub providers (README "T3 hub providers"). n/a unless personal on macOS; there the data switch t3Hub.enabled (default true, .chezmoidata.toml) picks on or off. Any other value fails the whole render, so a typo applies nothing. */ -}}
+{{- $on := dig "t3Hub" "enabled" true . | printf "%v" -}}
+{{- if not (has $on (list "true" "false")) -}}
+{{-   fail (printf "t3Hub.enabled must be true or false, got %q" $on) -}}
+{{- end -}}
+{{- if and (eq .profile "personal") (eq .chezmoi.os "darwin") -}}
+{{-   if eq $on "true" -}}on{{- else -}}off{{- end -}}
+{{- else -}}
+n/a
+{{- end -}}
