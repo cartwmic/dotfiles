@@ -180,15 +180,18 @@ alone. `ticketPrefix` is off on purpose: the package's ticket pattern is
 case-insensitive and would prefix titles with things like `GPT-6`. The title
 shows in the footer and the terminal title (`π - <name> - <cwd>`).
 
-### `op` in Pi shells
+### `op` in agent shells
 
 Not an extension: `dot_pi/private_agent/bin/executable_op` deploys to `~/.pi/agent/bin/op`, which Pi puts first on the
 PATH of its bash tool and `!` commands (unless that directory is already on the PATH Pi started with; then it keeps its
-place). When a 1Password service-account token is available (`OP_SERVICE_ACCOUNT_TOKEN`,
-or `~/.config/agent-harness/op-service-token`), it runs the real `op` with an empty HOME, so a worker's `op` uses the
-service account and never hangs on a locked desktop app; otherwise it runs `op` unchanged. Terminals outside Pi do not
-have that directory on PATH and are unaffected. Not covered: `op` called by absolute path, Claude Code and Codex
-workers. An `!op …` typed inside Pi uses the service account too. Tests: `python3 -m unittest discover -s tests/pi-op-shim -v` (fake op);
+place). `dot_zshenv` also puts `~/.local/share/op-shim` first on the PATH of every zsh (T3, Claude Code, Codex, launchd
+jobs); that directory holds one symlink, `op`, to the same file. When a 1Password service-account token is available
+(`OP_SERVICE_ACCOUNT_TOKEN`, or `~/.config/agent-harness/op-service-token`), it runs the real `op` with an empty HOME, so
+a worker's `op` uses the service account and never hangs. Two things hang `op` under the real HOME: a locked desktop
+app, and on the personal Mac an `open()` of the app's `settings.json` in `~/Library/Group Containers/2BUA8C4S2C.com.1password`
+that blocks forever for any process in an agent shell (found 2026-11-04; the empty HOME keeps `op` away from that path).
+Without a token it runs `op` unchanged. Not covered: `op` called by absolute path. `op run -- cmd` gives `cmd` the empty
+HOME too. Tests: `python3 -m unittest discover -s tests/pi-op-shim -v` (fake op);
 `python3 tests/pi-op-shim/proof.py` runs a real Pi with a scripted model (needs `pi` on PATH).
 
 ### Profile gates

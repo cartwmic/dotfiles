@@ -1,6 +1,7 @@
 # Add Homebrew (where mise lives) and user binary directories to PATH early
 # so bootstrap-installed tools are available regardless of /etc/zprofile.
-export PATH="/opt/homebrew/bin:$HOME/.local/bin:$HOME/bin:$PATH"
+# ~/.local/share/op-shim comes first: its `op` runs the real op with a scratch HOME (see below).
+export PATH="$HOME/.local/share/op-shim:/opt/homebrew/bin:$HOME/.local/bin:$HOME/bin:$PATH"
 
 # Pi: 1-hour prompt cache (Anthropic default is 5 minutes). Read by every zsh,
 # so it reaches Herdr panes, the coordinator pane and subagents. Override in
@@ -22,6 +23,9 @@ fi
 # desktop app and asks for approval on every call. The file wins over an inherited value, so a
 # rotated token is picked up. refresh_op_service_account_token.sh writes it; ~/.zshrc warns when
 # it is missing.
+# `op` on PATH is the shim in ~/.local/share/op-shim (first line of this file). With this token it runs the real
+# op under a scratch HOME. Under the real HOME, op opens the 1Password app's settings.json in its Group Container,
+# and on this Mac that open blocks forever in agent shells, so every op call hung with no output.
 if [[ -r "$HOME/.config/agent-harness/op-service-token" ]]; then
   export OP_SERVICE_ACCOUNT_TOKEN="$(<"$HOME/.config/agent-harness/op-service-token")"
 fi
