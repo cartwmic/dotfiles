@@ -1,14 +1,14 @@
 {
   "report_schema": 1,
   "findings_schema": 1,
-  "item": "agent-kit#25",
+  "item": "golden#missing-component",
   "log": {
-    "lines": 9,
+    "lines": 13,
     "events": {
-      "round": 2,
-      "finding": 3,
-      "label": 3,
-      "disposition": 1,
+      "round": 3,
+      "finding": 4,
+      "label": 4,
+      "disposition": 2,
       "redesign": 0,
       "judge": 0,
       "escape": 0
@@ -59,7 +59,7 @@
     {
       "sequence": 1,
       "first_round": 1,
-      "last_round": 2,
+      "last_round": 3,
       "stage": "diff"
     }
   ],
@@ -74,29 +74,45 @@
       "has_component": true
     },
     {
-      "id": "r1.f2",
-      "round": 1,
-      "sequence": 1,
-      "effective": "blocking",
-      "relation": "new",
-      "outcome": null,
-      "has_component": false
-    },
-    {
       "id": "r2.f1",
       "round": 2,
       "sequence": 1,
       "effective": "blocking",
       "relation": "repeat",
+      "outcome": "fixed",
+      "has_component": true
+    },
+    {
+      "id": "r3.f1",
+      "round": 3,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "follow-on",
       "outcome": null,
       "has_component": true
+    },
+    {
+      "id": "r3.f2",
+      "round": 3,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": null,
+      "outcome": null,
+      "has_component": false
     }
   ],
-  "stuck": [],
+  "stuck": [
+    {
+      "sequence": 1,
+      "round": 3,
+      "review_round": 3,
+      "skipped": true
+    }
+  ],
   "counts": {
     "needs_component": 1,
     "undisposed_blocking": 2,
-    "skipped_redesigns": 0
+    "skipped_redesigns": 1
   },
   "state": "open"
 }

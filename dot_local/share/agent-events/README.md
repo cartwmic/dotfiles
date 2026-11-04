@@ -172,7 +172,8 @@ unexpected failure while reading an item is that item's `reader_error` and it ke
 `pi_review_items`) are taken from a report only while the item is healthy and the report matches its log. While an item has a problem, or
 its report is stale, it keeps the values it last had from a fresh report; those are exported unchanged. A project's counter therefore never falls
 because one item had a problem, and on recovery only the true difference is added. Before an item has ever had a fresh report these series
-are simply absent for it. The log-derived counters count every readable line of every item, held or not.
+are simply absent for it. A finding whose line was lost or broke after it was counted keeps its held row. The log-derived counters count every
+readable line of every item, held or not.
 
 **Staleness counts looks, not time.** `report_stale`, `report_missing` and an unfinished last line are confirmed on the second consecutive *build that looks at the
 folder*, whether or not that build rebuilt the tables. One tick that lands between a writer's log append and its report rename sees one stale look and
@@ -190,8 +191,8 @@ Series (names start `pi_` because the collector filters on it): counters `pi_rev
 **Baseline.** The review counters have their own one-time baseline: `export_state.json` gains `seeded_families: ["pi_review"]`. On the first tick
 that runs the reader while that marker is absent, the review series take their current totals as the reference and export 0, and the marker is set
 whether or not any review data existed. After that a new series is real activity, so a log first created later counts as one tick of activity. The
-fingerprint and every Pi series are untouched. Known limits: a counter falls (and the fall is absorbed) when an item folder is removed or renamed, or a
-line already counted is edited into a bad line; if that folder comes back, or the line is repaired, the rise is counted again. Review logs are append-only,
+fingerprint and every Pi series are untouched. Known limits: a counter falls (and the fall is absorbed) when an item folder is removed or renamed, or (for the log-derived
+counters) a line already counted is edited into a bad line or lost; if that folder comes back, or the line is repaired, the rise is counted again. Review logs are append-only,
 so this is an operator action, not something the tools do.
 
 **Vendoring pending:** the golden pairs below are hand-authored from the contract until the kit's K2 merges; its real pairs (`src/traces/fixtures/golden/<name>/`) replace them byte for byte, with the manifest pin in the test updated, before this merges.

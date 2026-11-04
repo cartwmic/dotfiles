@@ -1,14 +1,14 @@
 {
   "report_schema": 1,
   "findings_schema": 1,
-  "item": "cartwmic-homelab-v2#94",
+  "item": "golden#design-then-diff",
   "log": {
-    "lines": 12,
+    "lines": 10,
     "events": {
-      "round": 3,
-      "finding": 3,
-      "label": 3,
-      "disposition": 3,
+      "round": 4,
+      "finding": 2,
+      "label": 2,
+      "disposition": 2,
       "redesign": 0,
       "judge": 0,
       "escape": 0
@@ -65,7 +65,7 @@
     {
       "sequence": 2,
       "first_round": 3,
-      "last_round": 3,
+      "last_round": 4,
       "stage": "diff"
     }
   ],
@@ -76,15 +76,6 @@
       "sequence": 1,
       "effective": "blocking",
       "relation": "new",
-      "outcome": "fixed",
-      "has_component": true
-    },
-    {
-      "id": "r2.f1",
-      "round": 2,
-      "sequence": 1,
-      "effective": "blocking",
-      "relation": "repeat",
       "outcome": "fixed",
       "has_component": true
     },
@@ -104,5 +95,5 @@
     "undisposed_blocking": 0,
     "skipped_redesigns": 0
   },
-  "state": "open"
+  "state": "passed"
 }

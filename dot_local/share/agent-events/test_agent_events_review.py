@@ -17,19 +17,18 @@ import agent_events_metrics as am  # noqa: E402
 import agent_events_review as rv  # noqa: E402
 import test_agent_events as base  # noqa: E402
 
-# VENDORING PENDING. These six pairs are hand-authored from PLAN-traces-kit.md 1.2 (no K2 output exists yet). The kit's K2 creates the
-# real pairs at src/traces/fixtures/golden/<name>/ with a sha manifest. After K2 merges, vendor them byte for byte into GOLDEN and update
-# the three lines below (path, manifest pin, names) and the item names/counts the Series and Strict tests assert (search "coordinator#217").
-# This PR is not to merge before that is done.
+# The golden pairs are the kit's, vendored byte for byte from agent-kit tag v0.17.0 (49ff9f00), src/traces/fixtures/golden/ (six pairs and
+# MANIFEST.sha256). To take a newer set, copy the files, pin the new manifest sha256 below, and update the counts the tests assert.
 GOLDEN = HERE / "fixtures" / "review-golden"
-MANIFEST_SHA256 = "e1a464299898aa6871d8103a1d8f38c0367f7d21a4b7c3267c3bdaf144cdc980"  # change the golden pairs and this pin together
+MANIFEST_SHA256 = "82af2bff6dec642318e9fbe33a6a873b4d76d3bf15d165f3ba56f383de993242"  # change the golden pairs and this pin together
 SENTINEL = base.SENTINEL
-APPROVED = "proj:coordinator:cartwmic-homelab-v2:agent-kit:loop-engine"
+APPROVED = "proj:golden:cartwmic-homelab-v2"
+T, C, R, M, D, H = ("golden#treadmill", "golden#clean-pass", "golden#redesign-switch", "golden#missing-component", "golden#design-then-diff", "golden#hand-written")
 NAMES = ("treadmill", "clean-pass", "design-then-diff", "redesign-switch", "missing-component", "hand-written")
 
 
 def read_lines(name):
-    return [json.loads(x) for x in (GOLDEN / name / "findings.jsonl").read_text().splitlines()]
+    return [json.loads(x) for x in (GOLDEN / name / "findings.jsonl").read_text().splitlines() if x.strip()]  # hand-written has a blank line
 
 
 def item_of(name):
@@ -115,9 +114,13 @@ class ReviewBase(base.Tick):
         self.addCleanup(lambda: setattr(ae, "_GIT_ROOTS", None))
         self.addCleanup(lambda: [os.environ.__setitem__(k, v) if v is not None else os.environ.pop(k, None) for k, v in prior.items()])
 
-    def place(self, *names):
+    def place(self, *names, as_item=None):
+        """Copy golden pairs into the scratch review folder under their own item names; as_item renames one copy (its report too)."""
         for n in names:
-            shutil.copytree(GOLDEN / n, self.review / item_of(n), dirs_exist_ok=True)
+            if as_item is None:
+                shutil.copytree(GOLDEN / n, self.review / item_of(n), dirs_exist_ok=True)
+                continue
+            write_log(self.review / as_item, read_lines(n), json.loads((GOLDEN / n / "report.json").read_text()) | {"item": as_item})
 
     def tables(self, sql, *params):
         return [tuple(r) for r in self.q(sql, *params)]
@@ -154,7 +157,7 @@ class GoldenPairs(unittest.TestCase):
             rep = json.loads(raw)
             self.assertEqual(raw, json.dumps(rep, indent=2) + "\n", n)  # JSON.stringify(report, null, 2) + "\n"
             self.assertEqual(list(rep)[:3], ["report_schema", "findings_schema", "item"])
-            lines = (GOLDEN / n / "findings.jsonl").read_text().splitlines()
+            lines = [x for x in (GOLDEN / n / "findings.jsonl").read_text().splitlines() if x.strip()]
             self.assertEqual(rep["log"]["lines"], len(lines), n)
             self.assertEqual(sum(rep["log"]["events"].values()), len(lines), n)
             self.assertEqual(len(rep["findings"]), rep["log"]["events"]["finding"], n)
@@ -173,43 +176,51 @@ class Series(ReviewBase):
             self.assertEqual(set(got), set(want[key]), name)
             for k, v in want[key].items():
                 self.assertAlmostEqual(got[k], v, places=9, msg=(name, k))
-        self.assertIn(("coordinator", "fail", "diff", "claude-opus-5-5"), series_of(fams, FAMILY["rounds"]))
-        self.assertEqual(series_of(fams, FAMILY["rounds"])[("loop-engine", "pass", "diff", "unknown")], 1)  # no model: unknown
-        self.assertEqual(series_of(fams, FAMILY["relations"])[("coordinator", "repeat")], 2)  # coordinator#217 and coordinator#216
-        self.assertEqual(series_of(fams, FAMILY["demoted"]), {("coordinator",): 1})
-        self.assertEqual(series_of(fams, FAMILY["escapes"]), {("other",): 1})  # d40:... has no '#'
-        self.assertEqual(series_of(fams, FAMILY["findings"])[("coordinator", "3", "blocking", "diff")], 1)
+        rounds = series_of(fams, FAMILY["rounds"])
+        self.assertEqual(rounds[("golden", "fail", "diff", "claude-opus-5-5")], 3 + 0)  # treadmill's three rounds
+        self.assertEqual(rounds[("golden", "fail", "plan", "unknown")], 1)  # hand-written has no model: unknown
+        self.assertEqual(sum(rounds.values()), 3 + 1 + 4 + 5 + 3 + 2)
+        self.assertEqual(series_of(fams, FAMILY["relations"])[("golden", "repeat")], 3 + 1 + 1)  # treadmill, redesign-switch, missing-component
+        self.assertEqual(series_of(fams, FAMILY["demoted"]), {})  # none of the pairs has a demoted finding
+        self.assertEqual(series_of(fams, FAMILY["escapes"]), {("golden",): 1})  # hand-written
+        self.assertEqual(series_of(fams, FAMILY["redesigns"]), {("golden", "switched", "yes"): 1})
+        self.assertEqual(series_of(fams, FAMILY["findings"])[("golden", "3", "blocking", "diff")], 4 + 2 + 1)  # review round 3: treadmill r3, missing-component r3, redesign-switch r3
+        self.assertAlmostEqual(series_of(fams, FAMILY["cost"])[("golden", "diff", "claude-opus-5-5")], 1.5 + 1.25 + 1.5 + 0.42)
 
     def test_gauges_come_from_the_reports(self):
         self.place(*NAMES)
         self.build()
         _, gauges = self.families()
         by = {m["name"]: series_of(gauges, m["name"]) for m in gauges}
-        self.assertEqual(by["pi_review_skipped_redesigns"][("coordinator",)], 1)  # treadmill: coordinator#217; coordinator#216 is 0
-        self.assertEqual(by["pi_review_items"], {("coordinator", "open"): 1, ("coordinator", "passed"): 1, ("loop-engine", "passed"): 1,
-                                                 ("cartwmic-homelab-v2", "open"): 1, ("agent-kit", "open"): 1, ("other", "open"): 1})
+        self.assertEqual(by["pi_review_skipped_redesigns"], {("golden",): 2 + 1})  # treadmill 2, missing-component 1
+        self.assertEqual(by["pi_review_items"], {("golden", "open"): 2, ("golden", "passed"): 4})
         self.assertEqual(by["pi_review_reader_problem_items"], {(r,): 0.0 for r in rv.REASONS})
 
     def test_tables_hold_ids_numbers_and_enumerated_values_only(self):
         self.place("treadmill")
         self.build()
         self.assertEqual(self.tables("SELECT round, review_round, stage, verdict, model, duration_ms, cost_usd FROM review_rounds ORDER BY round"),
-                         [(1, 1, "diff", "fail", "claude-opus-5-5", 91000, 0.42), (2, 2, "diff", "fail", "claude-opus-5-5", 80000, 0.38),
-                          (3, 3, "diff", "fail", "claude-opus-5-5", 77000, 0.35)])
-        self.assertEqual(self.tables("SELECT id, round, severity, effective, demoted, sequence, relation, outcome, has_component FROM review_findings ORDER BY id"),
-                         [("r1.f1", 1, "blocking", "blocking", 0, 1, "new", "fixed", 1), ("r1.f2", 1, "blocking", "blocking", 0, 1, "new", "fixed", 1),
-                          ("r2.f1", 2, "blocking", "blocking", 0, 1, "repeat", "fixed", 1), ("r2.f2", 2, "blocking", "note", 1, 1, None, None, 1),
-                          ("r3.f1", 3, "blocking", "blocking", 0, 1, "follow-on", None, 1), ("r3.n1", 3, "note", "note", 0, 1, None, None, 0)])
+                         [(1, 1, "diff", "fail", "claude-opus-5-5", None, 1.5), (2, 2, "diff", "fail", "claude-opus-5-5", None, 1.25),
+                          (3, 3, "diff", "fail", "claude-opus-5-5", None, 1.5)])
+        rows = self.tables("SELECT id, round, severity, effective, demoted, sequence, relation, outcome, has_component FROM review_findings ORDER BY round, id")
+        self.assertEqual(len(rows), 14)
+        self.assertEqual(rows[0], ("r1.f1", 1, "blocking", "blocking", 0, 1, "new", "fixed", 1))
+        self.assertEqual(rows[5], ("r1.n1", 1, "note", "note", 0, 1, None, None, 1))
+        self.assertEqual(rows[10], ("r3.f1", 3, "blocking", "blocking", 0, 1, "follow-on", None, 1))
         self.assertEqual(self.tables("SELECT item, repo, state, skipped_redesigns, needs_component, undisposed_blocking, problems FROM review_items"),
-                         [("coordinator#217", "coordinator", "open", 1, 0, 1, "")])
+                         [(T, "golden", "open", 2, 0, 4, "")])
+        self.assertEqual(self.tables("SELECT relation, COUNT(*) FROM review_findings WHERE relation IS NOT NULL GROUP BY 1 ORDER BY 1"),
+                         [("follow-on", 4), ("new", 6), ("repeat", 3)])
 
     def test_project_label_rules(self):
-        self.place("design-then-diff", "hand-written")
-        write_log(self.review / "unknownrepo#5", read_lines("clean-pass"), json.loads((GOLDEN / "clean-pass" / "report.json").read_text()) | {"item": "unknownrepo#5"})
+        self.place("clean-pass", as_item="cartwmic-homelab-v2#94")
+        self.place("clean-pass", as_item="unknownrepo#5")
+        self.place("clean-pass", as_item="d40:rule-pages")  # no '#'
+        self.place("clean-pass")
         self.build()
         fams, _ = self.families()
-        projects = {k[0] for k in series_of(fams, FAMILY["rounds"])}
-        self.assertEqual(projects, {"cartwmic-homelab-v2", "other"})  # the hyphenated approved repo is a project; the rest are other
+        rounds = series_of(fams, FAMILY["rounds"])
+        self.assertEqual({k[0]: v for k, v in rounds.items()}, {"cartwmic-homelab-v2": 1, "other": 2, "golden": 1})  # a hyphenated approved repo is a project
 
     def test_a_missing_directory_is_no_rows_and_no_problem(self):
         self.assertEqual(self.problems(), {"ok": True, "problems": {}})
@@ -268,7 +279,7 @@ class Strict(ReviewBase):
         rep["item"] = "someone-else#1"
         (d / "report.json").write_text(json.dumps(rep, indent=2) + "\n")
         self.assertEqual(self.problems()["problems"], {"report_schema": 1})  # a report for another item
-        rep["item"] = "coordinator#217"
+        rep["item"] = T
         rep["findings"][0]["relation"] = "sideways"
         (d / "report.json").write_text(json.dumps(rep, indent=2) + "\n")
         self.assert_reported("report_schema")
@@ -339,7 +350,7 @@ class Strict(ReviewBase):
         text = (d / "findings.jsonl").read_text().rstrip("\n")
         (d / "findings.jsonl").write_text(text)  # an editor that saves no trailing newline
         self.assertEqual(self.problems(), {"ok": True, "problems": {}})
-        self.assertEqual(self.tables("SELECT log_lines FROM review_items"), [(6,)])
+        self.assertEqual(self.tables("SELECT log_lines FROM review_items"), [(2,)])
 
     def test_report_missing_is_confirmed_on_the_second_look_only(self):
         d = self.setup_item()
@@ -361,8 +372,8 @@ class Strict(ReviewBase):
         self.assertEqual(series_of(gauges, "pi_review_items"), {})
 
     def test_an_item_with_no_round_yet_needs_no_report(self):
-        write_log(self.review / "coordinator#300", [])
-        (self.review / "coordinator#301").mkdir(parents=True)
+        write_log(self.review / "golden#t300", [])
+        (self.review / "golden#t301").mkdir(parents=True)
         self.assertEqual(self.problems(), {"ok": True, "problems": {}})
 
 
@@ -377,7 +388,7 @@ class Staleness(ReviewBase):
     def setUp(self):
         super().setUp()
         self.place("treadmill")
-        self.d = self.review / "coordinator#217"
+        self.d = self.review / T
         self.build()
 
     def test_a_hand_appended_line_is_reported_on_the_second_build_even_though_that_build_rebuilds_nothing(self):
@@ -419,7 +430,7 @@ class Staleness(ReviewBase):
     def test_each_kind_of_mismatch_is_stale(self):
         mutate = {"lines": lambda r: r["log"].update(lines=r["log"]["lines"] - 1),
                   "event sum": lambda r: r["log"]["events"].update(finding=r["log"]["events"]["finding"] + 1),
-                  "kind not summarised": lambda r: r["summarises"]["events"].remove("judge"),
+                  "kind not summarised": lambda r: r["summarises"]["events"].remove("label"),
                   "finding ids": lambda r: r["findings"][0].update(id="r1.zz")}
         for what, fn in mutate.items():
             rep = json.loads((GOLDEN / "treadmill" / "report.json").read_text())
@@ -440,12 +451,37 @@ class Staleness(ReviewBase):
             self.assertEqual(series_of(after[0], name), series_of(before[0], name), name)
         self.assertEqual(series_of(after[1], "pi_review_items"), series_of(before[1], "pi_review_items"))
         self.assertEqual(series_of(after[1], "pi_review_skipped_redesigns"), series_of(before[1], "pi_review_skipped_redesigns"))
-        self.assertEqual(series_of(after[0], FAMILY["relations"])[("coordinator", "repeat")], 1)  # treadmill's, still there
-        self.assertEqual(sum(series_of(after[0], FAMILY["rounds"]).values()), 5)  # raw counts: 3 + 2
+        self.assertEqual(series_of(after[0], FAMILY["relations"]), {("golden", "new"): 6, ("golden", "repeat"): 3, ("golden", "follow-on"): 4})  # treadmill's, still there
+        self.assertEqual(sum(series_of(after[0], FAMILY["rounds"]).values()), 4)  # raw counts: 3 + 1
+
+    def test_a_log_that_breaks_after_its_report_was_written_is_stale(self):
+        """K2 refuses an item whose log breaks and leaves the old report.json in place. The reader sees it by comparing the report's
+        log.lines with the non-empty lines it counts (a bad line counts as a line), and never reads the old report as current."""
+        held = self.families()
+        log = self.d / "findings.jsonl"
+        good = log.read_text()
+        rep = json.loads((self.d / "report.json").read_text())
+        self.assertEqual(rep["log"]["lines"], len([x for x in good.splitlines() if x.strip()]))
+        cases = {"a bad line appended": good + "this is not json\n",
+                 "a line replaced by garbage": good.replace(good.splitlines()[5], "garbage", 1),
+                 "a line lost": "\n".join(good.splitlines()[:-1]) + "\n",
+                 "a blank line added": good + "\n\n   \n"}
+        for what, text in cases.items():
+            log.write_text(text)
+            self.problems()
+            res = self.problems()["problems"]
+            if what == "a blank line added":
+                self.assertEqual(res, {}, what)  # blank lines are not lines: the report still matches
+            else:
+                self.assertIn("report_stale", res, what)
+                for name in (FAMILY["relations"], FAMILY["dispositions"]):  # and the report-derived values are held
+                    self.assertEqual(series_of(self.families()[0], name), series_of(held[0], name), (what, name))
+        log.write_text(good)
+        self.assertEqual(self.problems(), {"ok": True, "problems": {}})
 
     def test_a_row_with_no_report_yet_has_no_report_derived_values(self):
         shutil.rmtree(self.review)
-        write_log(self.review / "coordinator#901", read_lines("treadmill"))  # a log, and no report yet
+        write_log(self.review / "golden#t901", read_lines("treadmill"))  # a log, and no report yet
         self.build()
         self.build()
         fams, gauges = self.families()
@@ -476,7 +512,7 @@ class Sentinel(ReviewBase):
         ]
 
     def test_nothing_free_reaches_the_database_the_export_the_payload_status_or_the_log(self):
-        item = "coordinator#400"
+        item = "golden#sentinel"
         report = {"report_schema": 1, "findings_schema": 1, "item": item, "log": {"lines": 8, "events": {"round": 1, "finding": 2, "label": 1, "disposition": 1, "redesign": 1, "judge": 1, "escape": 1}},
                   "summarises": {"events": list(rv.EVENTS), "fields": {}}, "sequences": [{"sequence": 1, "first_round": 1, "last_round": 1, "stage": "diff"}],
                   "findings": [{"id": "r1.f1", "round": 1, "sequence": 1, "effective": "blocking", "relation": "new", "outcome": "fixed", "has_component": True},
@@ -535,8 +571,7 @@ class Baseline(ReviewBase):
         self.assertEqual(am.run_once(self.root, self.db), 0)
         first = c.requests[-1]
         rounds = points(first, FAMILY["rounds"])
-        self.assertEqual(rounds, {("coordinator", "fail", "diff", "claude-opus-5-5"): 0.0, ("loop-engine", "fail", "diff", "claude-opus-5-5"): 0.0,
-                                  ("loop-engine", "pass", "diff", "unknown"): 0.0})
+        self.assertEqual(rounds, {("golden", "fail", "diff", "claude-opus-5-5"): 0.0, ("golden", "pass", "diff", "claude-opus-5-5"): 0.0})
         for fam in FAMILY.values():
             self.assertTrue(all(v == 0 for v in points(first, fam).values()), fam)
         self.assertIn("pi_review", self.state_file()["seeded_families"])
@@ -544,8 +579,8 @@ class Baseline(ReviewBase):
         self.assertEqual(am.run_once(self.root, self.db), 0)
         self.assertTrue(all(v == 0 for v in points(c.requests[-1], FAMILY["rounds"]).values()))
         # the next round adds exactly one
-        d = self.review / "coordinator#217"
-        extra = {"event": "round", "at": "2026-11-03T00:00:00Z", "round": 4, "review_round": 4, "stage": "diff", "verdict": "pass", "model": "claude-opus-5-5", "cost_usd": 0.1}
+        d = self.review / T
+        extra = {"event": "round", "at": "2026-11-03T00:00:00Z", "round": 4, "review_round": 4, "stage": "diff", "verdict": "pass", "model": "claude-sonnet-5-5", "cost_usd": 0.1}
         with open(d / "findings.jsonl", "a") as fh:
             fh.write(json.dumps(extra) + "\n")
         rep = json.loads((d / "report.json").read_text())
@@ -555,19 +590,19 @@ class Baseline(ReviewBase):
         (d / "report.json").write_text(json.dumps(rep, indent=2) + "\n")
         self.assertEqual(am.run_once(self.root, self.db), 0)
         self.assertEqual(am.run_once(self.root, self.db), 0)
-        key = ("coordinator", "pass", "diff", "claude-opus-5-5")  # a new combination: sent as 0 first, then its growth
+        key = ("golden", "pass", "diff", "claude-sonnet-5-5")  # a new combination: sent as 0 first, then its growth
         got = points(c.requests[-1], FAMILY["rounds"])
         self.assertEqual(got[key], 1.0)
-        self.assertEqual(got[("coordinator", "fail", "diff", "claude-opus-5-5")], 0.0)
+        self.assertEqual(got[("golden", "fail", "diff", "claude-opus-5-5")], 0.0)
         # a series that already existed goes up by exactly one
         with open(d / "findings.jsonl", "a") as fh:
-            fh.write(json.dumps(dict(extra, round=5, review_round=5, verdict="fail")) + "\n")
+            fh.write(json.dumps(dict(extra, round=5, review_round=5)) + "\n")
         rep["log"]["lines"] += 1
         rep["log"]["events"]["round"] += 1
         (d / "report.json").write_text(json.dumps(rep, indent=2) + "\n")
         self.assertEqual(am.run_once(self.root, self.db), 0)
-        self.assertEqual(points(c.requests[-1], FAMILY["rounds"])[("coordinator", "fail", "diff", "claude-opus-5-5")], 1.0)
-        self.assertAlmostEqual(points(c.requests[-1], FAMILY["cost"])[("coordinator", "diff", "claude-opus-5-5")], 0.2)  # two rounds of 0.1
+        self.assertEqual(points(c.requests[-1], FAMILY["rounds"])[key], 2.0)
+        self.assertAlmostEqual(points(c.requests[-1], FAMILY["cost"])[("golden", "diff", "claude-sonnet-5-5")], 0.2)  # two rounds of 0.1
 
     def test_the_pi_series_and_the_fingerprint_are_not_disturbed(self):
         c = self.collector()
@@ -597,7 +632,7 @@ class Baseline(ReviewBase):
         self.place("clean-pass")
         self.assertEqual(am.run_once(self.root, self.db), 0)  # the new series are created at 0
         self.assertEqual(am.run_once(self.root, self.db), 0)
-        self.assertEqual(sum(points(c.requests[-1], FAMILY["rounds"]).values()), 2.0)
+        self.assertEqual(sum(points(c.requests[-1], FAMILY["rounds"]).values()), 1.0)  # clean-pass: one round
 
     def test_a_tick_without_a_good_build_does_not_set_the_marker(self):
         state = {}
@@ -623,22 +658,23 @@ class Hold(ReviewBase):
     def exported(self, c, name):
         return points(c.requests[-1], name)
 
-    def test_the_reviewers_repro_new_4_repeat_2_follow_on_2_across_stale_and_recovery(self):
-        self.place("treadmill", "redesign-switch")  # both coordinator: true totals new=4, repeat=2, follow-on=2
+    def test_the_reviewers_repro_totals_hold_across_stale_and_recovery(self):
+        """The round 1 repro: two healthy items in one project, one gets a hand-appended line, spends two looks stale, and its
+        report is rewritten. Treadmill counts new 6, repeat 3, follow-on 4; redesign-switch new 2, repeat 1, follow-on 1."""
+        self.place("treadmill", "redesign-switch")
         c = self.collector()
-        true = {("coordinator", "new"): 0.0, ("coordinator", "repeat"): 0.0, ("coordinator", "follow-on"): 0.0}  # baseline: 0
+        for _ in range(2):  # the baseline: existing history exports 0
+            self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertEqual(self.exported(c, FAMILY["relations"]), {("golden", "new"): 0.0, ("golden", "repeat"): 0.0, ("golden", "follow-on"): 0.0})
+        # a third healthy item arrives with a report: the totals rise by exactly its contribution (treadmill again: 6 / 3 / 4)
+        self.place("treadmill", as_item="golden#t500")
         for _ in range(2):
             self.assertEqual(am.run_once(self.root, self.db), 0)
-        self.assertEqual(self.exported(c, FAMILY["relations"]), true)
-        # a real new relation arrives with a report, so the totals move by exactly that much (a fresh item: 1 new, 1 repeat, 1 follow-on)
-        write_log(self.review / "coordinator#500", read_lines("treadmill"), json.loads((GOLDEN / "treadmill" / "report.json").read_text()) | {"item": "coordinator#500"})
-        for _ in range(2):
-            self.assertEqual(am.run_once(self.root, self.db), 0)
-        self.assertEqual(self.exported(c, FAMILY["relations"]), {("coordinator", "new"): 2.0, ("coordinator", "repeat"): 1.0, ("coordinator", "follow-on"): 1.0})
-        base = self.exported(c, FAMILY["relations"])
-        d = self.review / "coordinator#217"
-        with open(d / "findings.jsonl", "a") as fh:  # the hand-appended line of the reviewer's repro
-            fh.write(json.dumps({"event": "escape", "at": "2026-11-03T00:00:00Z", "item": "coordinator#217", "head": "x", "round": 3, "found_by": "dogfood", "text": "hand"}) + "\n")
+        base = {("golden", "new"): 6.0, ("golden", "repeat"): 3.0, ("golden", "follow-on"): 4.0}
+        self.assertEqual(self.exported(c, FAMILY["relations"]), base)
+        d = self.review / T
+        with open(d / "findings.jsonl", "a") as fh:  # the hand-appended line of the repro
+            fh.write(json.dumps({"event": "escape", "at": "2026-11-03T00:00:00Z", "item": T, "head": "x", "round": 3, "found_by": "dogfood", "text": "hand"}) + "\n")
         seen = []
         for _ in range(3):  # one look, two looks (confirmed stale), a third
             self.assertEqual(am.run_once(self.root, self.db), 0)
@@ -653,13 +689,7 @@ class Hold(ReviewBase):
             self.assertEqual(am.run_once(self.root, self.db), 0)
             self.assertEqual(self.exported(c, FAMILY["relations"]), base)  # recovery adds the true delta, which is 0
         self.assertEqual(self.reader(), {"ok": True, "problems": {}})
-        self.assertEqual(self.sent(FAMILY["relations"]), {("coordinator", "new"): 2.0, ("coordinator", "repeat"): 1.0, ("coordinator", "follow-on"): 1.0})
-        # and a relation that is really new while the item was stale arrives once, on recovery
-        with open(d / "findings.jsonl", "a") as fh:
-            fh.write(json.dumps({"event": "label", "at": "2026-11-03T00:00:00Z", "id": "r3.n1", "relation": "new"}) + "\n")
-        self.assertEqual(am.run_once(self.root, self.db), 0)
-        self.assertEqual(am.run_once(self.root, self.db), 0)
-        self.assertEqual(self.exported(c, FAMILY["relations"]), base)
+        self.assertEqual(self.sent(FAMILY["relations"]), base)
 
     def test_dispositions_and_the_two_gauges_are_held_too(self):
         self.place("treadmill", "redesign-switch")
@@ -668,10 +698,10 @@ class Hold(ReviewBase):
             self.assertEqual(am.run_once(self.root, self.db), 0)
         gauge = lambda n: points(c.requests[-1], n)  # noqa: E731
         items, skipped = gauge("pi_review_items"), gauge("pi_review_skipped_redesigns")
-        self.assertEqual(items, {("coordinator", "open"): 1.0, ("coordinator", "passed"): 1.0})
-        self.assertEqual(skipped, {("coordinator",): 1.0})
+        self.assertEqual(items, {("golden", "open"): 1.0, ("golden", "passed"): 1.0})
+        self.assertEqual(skipped, {("golden",): 2.0})
         disp = self.exported(c, FAMILY["dispositions"])
-        d = self.review / "coordinator#217"
+        d = self.review / T
         for how in ("schema", "unknown_event", "bad_line", "stale", "missing"):
             shutil.copy(GOLDEN / "treadmill" / "report.json", d / "report.json")
             shutil.copy(GOLDEN / "treadmill" / "findings.jsonl", d / "findings.jsonl")
@@ -699,13 +729,13 @@ class Hold(ReviewBase):
                 self.assertEqual(self.exported(c, FAMILY["dispositions"]), disp, how)
                 self.assertEqual(gauge("pi_review_items"), items, how)
                 self.assertEqual(gauge("pi_review_skipped_redesigns"), skipped, how)
-        self.assertEqual(self.sent(FAMILY["relations"]), {("coordinator", "new"): 0.0, ("coordinator", "repeat"): 0.0, ("coordinator", "follow-on"): 0.0})
+        self.assertEqual(self.sent(FAMILY["relations"]), {("golden", "new"): 0.0, ("golden", "repeat"): 0.0, ("golden", "follow-on"): 0.0})
 
     def test_an_unreadable_log_keeps_the_items_previous_rows(self):
         self.place("treadmill")
         self.build()
         before = self.families()
-        log = self.review / "coordinator#217" / "findings.jsonl"
+        log = self.review / T / "findings.jsonl"
         os.chmod(log, 0)
         self.addCleanup(lambda: os.chmod(log, 0o644))
         if os.access(log, os.R_OK):
@@ -722,9 +752,9 @@ class Guarded(ReviewBase):
 
     def test_deep_nesting_in_the_log_or_the_report_is_a_bad_line_or_report_schema_and_the_pi_build_goes_on(self):
         self.place("treadmill", "clean-pass")
-        with open(self.review / "coordinator#217" / "findings.jsonl", "a") as fh:
+        with open(self.review / T / "findings.jsonl", "a") as fh:
             fh.write("[" * 100000 + "\n")
-        (self.review / "loop-engine#100" / "report.json").write_text("[" * 100000)
+        (self.review / C / "report.json").write_text("[" * 100000)
         res = self.build()
         self.assertEqual(res["sessions"], 1)  # the Pi session was ingested
         self.assertEqual(res["review"]["problems"], {"report_schema": 1, "bad_line": 1})
@@ -735,7 +765,7 @@ class Guarded(ReviewBase):
         self.place("treadmill", "clean-pass")
         real = rv.parse_report
         def boom(path, item):
-            if item == "coordinator#217":
+            if item == T:
                 raise RuntimeError(SENTINEL)
             return real(path, item)
         rv.parse_report = boom
@@ -743,7 +773,7 @@ class Guarded(ReviewBase):
         res = self.build()
         self.assertEqual(res["sessions"], 1)
         self.assertEqual(res["review"], {"ok": False, "problems": {"reader_error": 1}})
-        self.assertEqual(self.tables("SELECT item FROM review_items ORDER BY item"), [("coordinator#217",), ("loop-engine#100",)])
+        self.assertEqual(self.tables("SELECT item FROM review_items ORDER BY item"), [(C,), (T,)])
         self.assertEqual(am.run_once(self.root, self.db), 0)
         self.assertNotIn(SENTINEL, (self.state / "agent.log").read_text() + (self.state / "status.json").read_text())
 
@@ -774,7 +804,7 @@ class Unreferenced(ReviewBase):
                            ("disposition", {"event": "disposition", "id": "r1.zz", "outcome": "fixed"})):
             shutil.rmtree(self.review, ignore_errors=True)
             self.place("treadmill")
-            with open(self.review / "coordinator#217" / "findings.jsonl", "a") as fh:
+            with open(self.review / T / "findings.jsonl", "a") as fh:
                 fh.write(json.dumps({"at": "2026-11-03T00:00:00Z", **line}) + "\n")
             self.assertEqual(self.problems()["problems"].get("orphan_ref"), 1, kind)
 
@@ -795,7 +825,7 @@ class Unreferenced(ReviewBase):
         (self.review / ".hidden").mkdir()
         write_log(self.review / ".scratch#1", read_lines("clean-pass"))
         self.assertEqual(self.problems(), {"ok": True, "problems": {}})
-        self.assertEqual(self.tables("SELECT item FROM review_items"), [("loop-engine#100",)])
+        self.assertEqual(self.tables("SELECT item FROM review_items"), [(C,)])
 
     def test_the_stray_text_reaches_nothing(self):
         (self.review).mkdir(parents=True)
@@ -813,7 +843,7 @@ class Ids(ReviewBase):
         ev = [{"event": "round", "at": "2026-11-03T00:00:00Z", "round": 1, "review_round": 1, "stage": "diff", "verdict": "fail"}]
         for i in ids:
             ev.append({"event": "finding", "at": "2026-11-03T00:00:00Z", "id": f"r1.{i}", "round": 1, "severity": "note", "effective": "note"})
-        write_log(self.review / "coordinator#600", ev)
+        write_log(self.review / "golden#ids", ev)
 
     def test_ids_with_spaces_hashes_unicode_and_dots_are_accepted(self):
         ids = ["a b", "item #3", "é", "f1.2", "x" * 200, "-1", "has\nnewline"]
@@ -824,13 +854,13 @@ class Ids(ReviewBase):
     def test_a_blank_id_or_one_without_the_prefix_is_still_a_bad_line(self):
         for bad in ("r1.", "r1.   ", "f1", "x1.f1", "r.f1"):
             self.write([])
-            with open(self.review / "coordinator#600" / "findings.jsonl", "a") as fh:
+            with open(self.review / "golden#ids" / "findings.jsonl", "a") as fh:
                 fh.write(json.dumps({"event": "finding", "at": "2026-11-03T00:00:00Z", "id": bad, "round": 1, "severity": "note", "effective": "note"}) + "\n")
             self.assertEqual(self.problems()["problems"].get("bad_line"), 1, bad)
 
     def test_the_id_must_name_its_round(self):
         self.write([])
-        with open(self.review / "coordinator#600" / "findings.jsonl", "a") as fh:
+        with open(self.review / "golden#ids" / "findings.jsonl", "a") as fh:
             fh.write(json.dumps({"event": "finding", "at": "2026-11-03T00:00:00Z", "id": "r2.f1", "round": 1, "severity": "note", "effective": "note"}) + "\n")
         self.assertEqual(self.problems()["problems"].get("bad_line"), 1)
 

@@ -1,16 +1,16 @@
 {
   "report_schema": 1,
   "findings_schema": 1,
-  "item": "coordinator#217",
+  "item": "golden#treadmill",
   "log": {
-    "lines": 17,
+    "lines": 39,
     "events": {
       "round": 3,
-      "finding": 6,
-      "label": 4,
-      "disposition": 3,
+      "finding": 14,
+      "label": 13,
+      "disposition": 9,
       "redesign": 0,
-      "judge": 1,
+      "judge": 0,
       "escape": 0
     }
   },
@@ -83,6 +83,42 @@
       "has_component": true
     },
     {
+      "id": "r1.f3",
+      "round": 1,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "new",
+      "outcome": "fixed",
+      "has_component": true
+    },
+    {
+      "id": "r1.f4",
+      "round": 1,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "new",
+      "outcome": "fixed",
+      "has_component": true
+    },
+    {
+      "id": "r1.f5",
+      "round": 1,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "new",
+      "outcome": "fixed",
+      "has_component": true
+    },
+    {
+      "id": "r1.n1",
+      "round": 1,
+      "sequence": 1,
+      "effective": "note",
+      "relation": null,
+      "outcome": null,
+      "has_component": true
+    },
+    {
       "id": "r2.f1",
       "round": 2,
       "sequence": 1,
@@ -95,9 +131,27 @@
       "id": "r2.f2",
       "round": 2,
       "sequence": 1,
-      "effective": "note",
-      "relation": null,
-      "outcome": null,
+      "effective": "blocking",
+      "relation": "follow-on",
+      "outcome": "fixed",
+      "has_component": true
+    },
+    {
+      "id": "r2.f3",
+      "round": 2,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "follow-on",
+      "outcome": "fixed",
+      "has_component": true
+    },
+    {
+      "id": "r2.f4",
+      "round": 2,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "new",
+      "outcome": "fixed",
       "has_component": true
     },
     {
@@ -110,16 +164,40 @@
       "has_component": true
     },
     {
-      "id": "r3.n1",
+      "id": "r3.f2",
       "round": 3,
       "sequence": 1,
-      "effective": "note",
-      "relation": null,
+      "effective": "blocking",
+      "relation": "follow-on",
       "outcome": null,
-      "has_component": false
+      "has_component": true
+    },
+    {
+      "id": "r3.f3",
+      "round": 3,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "repeat",
+      "outcome": null,
+      "has_component": true
+    },
+    {
+      "id": "r3.f4",
+      "round": 3,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "repeat",
+      "outcome": null,
+      "has_component": true
     }
   ],
   "stuck": [
+    {
+      "sequence": 1,
+      "round": 3,
+      "review_round": 3,
+      "skipped": true
+    },
     {
       "sequence": 1,
       "round": 3,
@@ -129,8 +207,8 @@
   ],
   "counts": {
     "needs_component": 0,
-    "undisposed_blocking": 1,
-    "skipped_redesigns": 1
+    "undisposed_blocking": 4,
+    "skipped_redesigns": 2
   },
   "state": "open"
 }

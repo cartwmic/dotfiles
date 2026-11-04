@@ -304,8 +304,8 @@ def _read_item(con, d, old):
         now.add("bad_line")
     looks = {r: (json.loads(old["looks"]).get(r, 0) if old else 0) + 1 for r in now}
     fresh = rep is not None and not hard and "report_stale" not in now
-    held = {r[0]: r[1:] for r in con.execute(
-        "SELECT id, sequence, relation, outcome, has_component FROM review_findings WHERE item = ?", (item,))}
+    old_rows = {r[1]: r for r in con.execute("SELECT * FROM review_findings WHERE item = ?", (item,))}
+    held = {i: r[6:] for i, r in old_rows.items()}  # sequence, relation, outcome, has_component
     _log_tables(con, item)
     hard = [r for r in REASONS if r in hard]
     cn = rep["counts"] if fresh else {}
@@ -325,6 +325,10 @@ def _read_item(con, d, old):
         x = by_id.get(f["id"], (None, None, None, None))
         con.execute("INSERT INTO review_findings VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (item, f["id"], f["round"], f["severity"], f["effective"], f["demoted"], *x))
+    if not fresh:  # a finding the log no longer yields (its line was lost or broke) keeps the row it had: the counters never fall
+        for i, r in old_rows.items():
+            if i not in log.findings:
+                con.execute("INSERT INTO review_findings VALUES (?,?,?,?,?,?,?,?,?,?)", r)
     for i, r in enumerate(log.redesigns):
         con.execute("INSERT INTO review_redesigns VALUES (?,?,?,?,?)", (item, i, r["round"], r["action"], r["makes_impossible"]))
     for i, r in enumerate(log.escapes):
