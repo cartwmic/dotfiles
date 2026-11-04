@@ -11,20 +11,29 @@
 #
 # CLIProxy hub provider (personal Mac, data switch t3Hub.enabled): owns the `# chezmoi:cliproxy-hub` block, which adds
 # [model_providers.cliproxy] pointing at the homelab hub and reading its key at run time. It does not
-# change the default model_provider; T3's codex-hub instance selects it with `-c model_provider=cliproxy`
+# change the default model_provider (hub.enabled does, below); T3's codex-hub instance selects it with `-c model_provider=cliproxy`
 # (dot_t3/private_userdata/modify_settings.json.tmpl). Any other host, or t3Hub.enabled false, drops the block if it is there.
+#
+# CLIProxy hub as the default (personal Mac, data switch hub.enabled, one switch with Claude and the T3 codex instance): sets the
+# top-level `model_provider = "cliproxy"`. Off, or on any other host, removes that line only when it equals "cliproxy"; a different
+# value stays. The provider block above is kept while either switch is on, since the default needs it.
 #
 # Chezmoi runs modify_ scripts with the existing target file content piped
 # on stdin and uses stdout as the new content.
 
 set -eu
 
-{{ if eq (includeTemplate "t3_hub" .) "on" -}}
+{{ if or (eq (includeTemplate "t3_hub" .) "on") (eq (includeTemplate "hub" .) "on") -}}
 HUB_HOME='{{ .chezmoi.homeDir }}'
 {{- else -}}
 HUB_HOME=''
 {{- end }}
-export HUB_HOME
+{{ if eq (includeTemplate "hub" .) "on" -}}
+HUB_DEFAULT=1
+{{- else -}}
+HUB_DEFAULT=''
+{{- end }}
+export HUB_HOME HUB_DEFAULT
 
 # Pass the program with -c so stdin stays the target file. A heredoc would
 # replace stdin and make this script emit an empty file.
@@ -46,6 +55,21 @@ hub_re = re.compile(r"\n*# chezmoi:cliproxy-hub:begin\n.*?# chezmoi:cliproxy-hub
 stripped, dropped = hub_re.subn("", stripped)
 if dropped and stripped and not stripped.endswith("\n"):
     stripped += "\n"
+# Default provider: only the top-level region (before the first table header) is looked at.
+m = re.search(r"(?m)^\[", stripped)
+cut = m.start() if m else len(stripped)
+top, rest = stripped[:cut], stripped[cut:]
+key_re = re.compile(r"(?m)^model_provider[ \t]*=.*\n?")
+ours_re = re.compile(r"(?m)^model_provider[ \t]*=[ \t]*([\"\x27])cliproxy\1[ \t]*(#.*)?\n?")
+if os.environ.get("HUB_DEFAULT"):
+    line = "model_provider = \"cliproxy\"\n"
+    if key_re.search(top):
+        top = key_re.sub(lambda _: line, top)
+    else:
+        top = line + ("" if top.strip() or not rest else "\n") + top
+else:
+    top = ours_re.sub("", top)
+stripped = top + rest
 home = os.environ.get("HUB_HOME", "")
 if home:
     hub = """# chezmoi:cliproxy-hub:begin
@@ -61,5 +85,6 @@ args = ["op://developer/tb36gtnaocyezjk3dslomp64he/laptop-codex"]
 # chezmoi:cliproxy-hub:end
 """ % home
     stripped = stripped.rstrip("\n") + ("\n\n" if stripped.strip() else "") + hub
+
 sys.stdout.write(stripped)
 '

@@ -17,12 +17,13 @@
 # "src/t3-hook/hook.ts" in their command: each apply drops them from every event and, when wanted, appends the current ones.
 # Off, or on any other profile, they are removed. axon-work-computer is left out: its Matrix coordinator has another state dir,
 # and nothing new is applied on the work Mac without asking.
-# Hub (personal profile on macOS, and only while .hub.claude in .chezmoidata.toml is true): points every Claude Code session at the
-# homelab CLIProxyAPI hub. Sets env.ANTHROPIC_BASE_URL (no /v1) and apiKeyHelper (op_read_cached.sh printing the hub key). Neither
-# ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY is set: either would outrank apiKeyHelper. Off, or on any other profile or OS, an apply
-# removes env.ANTHROPIC_BASE_URL only when it equals the hub URL and apiKeyHelper only when it equals ours, then prunes env if that
-# emptied it; other env keys and a user's own helper stay. ROLLBACK: set hub.claude = false in .chezmoidata.toml, then apply
-# ~/.claude/settings.json. Deleting this block instead would leave both keys behind, so the switch stays in the template.
+# Hub (personal profile on macOS, and only while hub.enabled in .chezmoidata.toml is true): points every Claude Code session at the
+# homelab CLIProxyAPI hub. hub.enabled is one switch for Claude, Codex and the T3 codex instance. Sets env.ANTHROPIC_BASE_URL (no /v1)
+# and apiKeyHelper (op_read_cached.sh printing the hub key). Neither ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY is set: either would
+# outrank apiKeyHelper. Off, or on any other profile or OS, an apply removes env.ANTHROPIC_BASE_URL only when it equals the hub URL
+# and apiKeyHelper only when it equals ours, then prunes env if that emptied it; other env keys and a user's own helper stay.
+# ROLLBACK: set hub.enabled = false (data in ~/.config/chezmoi/chezmoi.yaml), then apply ~/.claude/settings.json,
+# ~/.codex/config.toml and ~/.t3/userdata/settings.json. Deleting this block instead would leave the keys behind, so the switch stays.
 set -eu
 
 {{ if eq .profile "axon-work-computer" -}}
@@ -49,7 +50,7 @@ T3_RULES=false
 {{- end }}
 T3_MARKER='src/t3-hook/hook.ts'
 
-{{ if and (eq .profile "personal") (eq .chezmoi.os "darwin") .hub.claude -}}
+{{ if eq (includeTemplate "hub" .) "on" -}}
 HUB_WANT=true
 {{- else -}}
 HUB_WANT=false
@@ -132,7 +133,7 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
   | .cleanupPeriodDays = 365
   | .model = "claude-opus-5-5"
   | .modelSettings["claude-opus-5-5"].effortLevel //= "medium"
+  | ensure_hub  # before the hook defs: they delete and re-append .hooks, so anything added after it would reorder on the next apply
   | ensure_hook
   | ensure_t3
-  | ensure_hub
 '
