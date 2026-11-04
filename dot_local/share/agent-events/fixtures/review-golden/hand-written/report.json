@@ -1,16 +1,16 @@
 {
   "report_schema": 1,
   "findings_schema": 1,
-  "item": "d40:rule-pages-plan",
+  "item": "golden#hand-written",
   "log": {
-    "lines": 5,
+    "lines": 14,
     "events": {
-      "round": 1,
-      "finding": 2,
-      "label": 0,
-      "disposition": 1,
+      "round": 2,
+      "finding": 4,
+      "label": 3,
+      "disposition": 3,
       "redesign": 0,
-      "judge": 0,
+      "judge": 1,
       "escape": 1
     }
   },
@@ -59,18 +59,27 @@
     {
       "sequence": 1,
       "first_round": 1,
-      "last_round": 1,
+      "last_round": 2,
       "stage": "plan"
     }
   ],
   "findings": [
     {
-      "id": "r1.b1",
+      "id": "r1.f1",
       "round": 1,
       "sequence": 1,
       "effective": "blocking",
-      "relation": null,
-      "outcome": "residual",
+      "relation": "new",
+      "outcome": "fixed",
+      "has_component": true
+    },
+    {
+      "id": "r1.f2",
+      "round": 1,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "new",
+      "outcome": "rejected",
       "has_component": true
     },
     {
@@ -81,6 +90,15 @@
       "relation": null,
       "outcome": null,
       "has_component": false
+    },
+    {
+      "id": "r2.f1",
+      "round": 2,
+      "sequence": 1,
+      "effective": "blocking",
+      "relation": "new",
+      "outcome": "residual",
+      "has_component": true
     }
   ],
   "stuck": [],
@@ -89,5 +107,5 @@
     "undisposed_blocking": 0,
     "skipped_redesigns": 0
   },
-  "state": "open"
+  "state": "passed"
 }

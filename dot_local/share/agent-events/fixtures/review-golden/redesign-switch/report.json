@@ -1,7 +1,7 @@
 {
   "report_schema": 1,
   "findings_schema": 1,
-  "item": "coordinator#216",
+  "item": "golden#redesign-switch",
   "log": {
     "lines": 18,
     "events": {
@@ -60,17 +60,11 @@
       "sequence": 1,
       "first_round": 1,
       "last_round": 3,
-      "stage": "design"
+      "stage": "diff"
     },
     {
       "sequence": 2,
       "first_round": 4,
-      "last_round": 4,
-      "stage": "design"
-    },
-    {
-      "sequence": 3,
-      "first_round": 5,
       "last_round": 5,
       "stage": "diff"
     }
@@ -100,7 +94,7 @@
       "sequence": 1,
       "effective": "blocking",
       "relation": "follow-on",
-      "outcome": "fixed",
+      "outcome": "rejected",
       "has_component": true
     },
     {
