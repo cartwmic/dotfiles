@@ -59,7 +59,8 @@ The coordinator's findings tool writes the log. Every finding gets a log-wide id
 
 | `event` | Fields | Written when |
 |---|---|---|
-| `finding` | `id` (log id), `round`, `head`, `reviewer`, `severity`, `effective`, `demoted_reason?`, `component`, `text`, `obligation?`, `evidence?`, `consequence?`, `session`, `cost_usd?` | The driver adds a round. `session` is the reviewer's session or thread id (it points back to the transcript). `cost_usd` is the cost of the round. |
+| `round` | `round`, `head`, `reviewer`, `verdict`: `pass` or `fail`, `session`, `cost_usd?` | The driver adds a round. Written once per round, even when the return has no findings, so a clean pass leaves a line. A second add for a round already in the log is refused because of it. `session` is the reviewer's session or thread id (it points back to the transcript). `cost_usd` is the cost of the round. |
+| `finding` | `id` (log id), `round`, `head`, `reviewer`, `severity`, `effective`, `demoted_reason?`, `component`, `text`, `obligation?`, `evidence?`, `consequence?` | The driver adds a round, one record per finding in its return. The round's `session` and `cost_usd` are on its `round` record, not repeated here. |
 | `label` | `id`, `relation`: `new`, `repeat` or `follow-on`; `of?` (an earlier log id); `component?` | A fresh agent that is not the driver labels a blocking finding. The latest label wins. A label may replace `component`, so two spellings of one component count as one. |
 | `disposition` | `id`, `outcome`: `fixed` (`sha`), `rejected` (`reason`) or `residual` (`accepted_by`) | The driver records what became of a blocking finding. |
 | `redesign` | `component`, `round`, `blind_session`, `comparer_session`, `makes_impossible`: `yes` or `no`; `action`: `switched`, `rang-michael` or `kept-fixing` | The lead records the blind redesign check for a stuck component. |
@@ -67,6 +68,8 @@ The coordinator's findings tool writes the log. Every finding gets a log-wide id
 | `escape` | `item`, `head`, `round` (the round that passed the defect), `found_by` (a PR, issue or dogfood id), `text` | Whoever finds a later defect that traces to a reviewed change. |
 
 A finding record with `effective: note` is a residual. It needs no disposition and no label.
+
+**The stuck trigger.** It is computed per component, using the component from the latest `label` of each finding (a label's `component` replaces the finding's own). A component fires the trigger at round *r* when it has an effectively-blocking finding whose latest relation is `repeat` or `follow-on` in round *r* and again in round *r*−1, that is, in two rounds running. It fires at the second of those rounds. A repeat cannot appear before round 2, so the earliest firing is round 3. A trigger is *skipped* when that component has no `redesign` event at or after the round it fired.
 
 ## Version
 
