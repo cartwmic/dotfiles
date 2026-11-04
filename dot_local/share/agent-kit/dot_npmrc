@@ -1,0 +1,3 @@
+@cartwmic:registry=https://npm.pkg.github.com
+# A placeholder, not a token: npm reads the value from the environment (NODE_AUTH_TOKEN=$(gh auth token) npm ci).
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}

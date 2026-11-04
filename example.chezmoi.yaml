@@ -33,6 +33,10 @@ data:
   #   enabled: true
   #   machine: work    # the machine label on every series: personal / work by default
   #   endpoint: https://otel-collector.internal.cartwmic.com/v1/metrics
+  # Pinned agent-kit install for the agent-traces CLI (~/.local/bin/agent-traces; dot_local/share/agent-kit). On by default on personal only.
+  # The install is `npm ci` from GitHub Packages with `gh auth token`. enabled: false (or any other profile) leaves the wrapper exiting 3.
+  # agentKit:
+  #   enabled: true
   # axon-work-computer only: clone the private Axon agents playbook (placeholder; use your own account's URL). Omit the key and nothing is cloned.
   # axonPlaybook: {repo: "https://github.com/<account>/axon-agents-playbook.git"}
 

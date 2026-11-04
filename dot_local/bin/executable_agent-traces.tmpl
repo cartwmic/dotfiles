@@ -1,0 +1,19 @@
+#!/bin/sh
+# agent-traces: the agent-kit traces CLI, for review drivers. Usage: agent-traces review <normalize|add|label|record|report> ...
+# Runs the kit from its pinned install (dot_local/share/agent-kit, installed by run_onchange_after_65_agent_kit_install.sh.tmpl).
+# Exit 3 means the CLI is not installed here; keep the review log by hand (playbook 58fdb05d).
+kit="${AGENT_TRACES_KIT:-$HOME/.local/share/agent-kit}"
+cli="$kit/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+if [ ! -f "$cli" ]; then
+{{- if (includeTemplate "agent_kit_config" . | fromJson).enabled }}
+  echo "agent-traces: the agent-kit install is enabled here but missing or failed; retry with:" >&2
+  echo 'cd ~/.local/share/agent-kit && NODE_AUTH_TOKEN=$(gh auth token) npm ci' >&2
+  echo "agent-traces: until it works, keep the review log by hand (playbook 58fdb05d)" >&2
+{{- else }}
+  echo "agent-traces: not installed here; keep the review log by hand (playbook 58fdb05d)" >&2
+{{- end }}
+  exit 3
+fi
+node="$(command -v node || true)"
+[ -n "$node" ] || node="$HOME/.local/share/mise/shims/node"
+exec "$node" "$cli" "$@"

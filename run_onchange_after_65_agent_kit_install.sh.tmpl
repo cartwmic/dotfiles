@@ -1,0 +1,24 @@
+#!/bin/sh
+# Install the pinned agent-kit (the agent-traces CLI) into ~/.local/share/agent-kit with npm ci. Runs only while chezmoi data
+# agentKit.enabled is true (default: personal profile only; .chezmoiignore leaves this script out otherwise). It runs again when the
+# pin or the lockfile changes. A failed install (offline, bad token) logs a WARN with the retry command and exits 0, so chezmoi apply
+# does not fail; the agent-traces wrapper then exits 3.
+# package.json: {{ include "dot_local/share/agent-kit/package.json" | sha256sum }}
+# package-lock.json: {{ include "dot_local/share/agent-kit/package-lock.json" | sha256sum }}
+set -eu
+log() { printf '[agent_kit_install] %s: %s\n' "$1" "$2"; }
+
+dir="$HOME/.local/share/agent-kit"
+retry='cd ~/.local/share/agent-kit && NODE_AUTH_TOKEN=$(gh auth token) npm ci'
+npm="$(command -v npm || true)"
+[ -n "$npm" ] || npm="$HOME/.local/share/mise/shims/npm"
+[ -x "$npm" ] || { log WARN "npm not found; install it, then retry: $retry"; exit 0; }
+[ -f "$dir/package-lock.json" ] || { log WARN "$dir/package-lock.json is missing; apply the agent-kit files first, then retry: $retry"; exit 0; }
+
+cd "$dir"
+if NODE_AUTH_TOKEN="$(gh auth token 2>/dev/null || true)" "$npm" ci --no-audit --no-fund; then
+  log INFO "installed the pinned agent-kit in $dir"
+else
+  log WARN "npm ci failed (offline or no GitHub token?); retry: $retry"
+fi
+exit 0
