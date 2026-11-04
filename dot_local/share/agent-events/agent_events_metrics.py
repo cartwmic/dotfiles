@@ -190,7 +190,7 @@ def collect(con):
             " GROUP BY s.cwd, s.kind, e.kind, 4"):
         rows.append((project(r[0]), _kind(r[1]), r[2], r[3] or "", r[4]))
     counter("pi_events", ("project", "kind", "event", "detail"), _sum_by(rows, 4, 1))
-    return metrics + review_reader.counters(con, ae.approved_projects())
+    return metrics
 
 
 def cache_gauges(con, now):
@@ -381,7 +381,7 @@ def fingerprint():
     return hashlib.sha1(text.encode()).hexdigest()[:12]
 
 
-REVIEW_FAMILY, REVIEW_PREFIX = "pi_review", "pi_review_"
+REVIEW_FAMILY, REVIEW_PREFIX = review_reader.MARKER, "pi_review_"
 
 
 def account(metrics, state, business=True, fp=""):
@@ -393,8 +393,8 @@ def account(metrics, state, business=True, fp=""):
 
     Baseline (first run, lost state, or a changed project map/schema): current totals become the reference and the
     exported value starts at 0, so history is never activity. The pi_review_* families have a baseline of their own,
-    taken once on the first business tick that runs the review reader (state["seeded_families"] gains "pi_review"):
-    review logs kept by hand before then are history, and no existing Pi series is touched. After that a new series is real activity: it is
+    taken once on the first business tick that runs the review ledger (state["seeded_families"] gains "pi_review@1"; a
+    missing or bad ledger clears it again): review logs kept by hand before then are history, and no Pi series is touched. After that a new series is real activity: it is
     sent as 0 first ('ok' false until that POST succeeds) and its growth is added on later ticks. Every known
     series is sent on every tick, so one that vanishes keeps its value and one that returns is still alive."""
     series = state.setdefault("series", {})
@@ -533,12 +533,19 @@ def export(con, db_path, status, url=None, now=None, state=None, business=True, 
     (so a crash can never let a later, lower value go out) and delivery is recorded after it."""
     label = require_machine() if url else machine()  # before any accounting: a refused send changes no state
     gauges_src = self_metrics(con, status, db_path)
+    review = []
     if business:
-        gauges_src = gauges_src + cache_gauges(con, now or time.time()) + review_reader.gauges(con, ae.approved_projects())
+        approved = ae.approved_projects()
+        # the ledger is updated in memory before account() and saved with the series by the same atomic write; the preview
+        # (state=None) counts into a throwaway ledger and changes nothing
+        led = review_reader.new_ledger() if state is None else review_reader.ledger_for(state)
+        review_reader.apply(con, led, approved)
+        review = review_reader.counters(led)
+        gauges_src = gauges_src + cache_gauges(con, now or time.time()) + review_reader.gauges(con, approved, led)
     if state is None:
-        metrics = (collect(con) if business else []) + gauges_src
+        metrics = (collect(con) + review if business else []) + gauges_src
     else:
-        gauges, families = account(collect(con) if business else [], state, business, fingerprint())
+        gauges, families = account(collect(con) + review if business else [], state, business, fingerprint())
         metrics = families + gauges_src
         if persist:
             save_state(state)

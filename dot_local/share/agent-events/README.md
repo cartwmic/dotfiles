@@ -143,9 +143,10 @@ beside it (both defined in `~/.local/share/agent-harness/findings-contract.md`).
 log kept by hand has no report until `report --all` runs. **The reader computes no trigger.** The stuck trigger, relations, dispositions,
 skipped redesigns and state all come from `report.json`.
 
-Tables (`review_items`, `review_rounds`, `review_findings`, `review_redesigns`, `review_escapes`, `review_problems`) hold the item, log
-round, review round, stage, model name, enumerated values, a demoted flag, cost, duration and the report's counts. They never hold a free-text
-field, a session id or a component name. They are rebuilt in one transaction when a log or report changed in size or mtime.
+Tables (`review_items`, `review_rounds`, `review_findings`, `review_redesigns`, `review_escapes`, `review_problems`) hold what is on disk
+now: the item, log round, review round, stage, model name, enumerated values, a demoted flag, cost, duration, the report's counts, and a hash
+`key` per event. They never hold a free-text field, a session id, a head or a component name. They are rebuilt in one transaction when a log or
+report changed in size or mtime, and are for local queries (`agent-events sql`); the exported totals do not come from them directly (see Accounting).
 
 **Strict.** Each of these is counted per item and shows in `status.json` as `review_reader: {ok, problems: {reason: items}}` (no item names), in
 `agent-events status`, in one `agent.log` line per change, and in the gauge `pi_review_reader_problem_items{reason}` (0 when none):
@@ -165,15 +166,22 @@ field, a session id or a component name. They are rebuilt in one transaction whe
 Entries whose name starts with `.` (`.DS_Store`, a hidden folder) are ignored, and say nothing. A log id is `r<N>.` followed by the
 return's own id, which the contract allows to be any non-blank string, so the reader accepts spaces, `#` and the like. A line with
 deep nesting is a bad line and a report with deep nesting is `report_schema`; nothing in the review folder can fail the Pi build: an
-unexpected failure while reading an item is that item's `reader_error` and it keeps the rows it had. An unreadable `findings.jsonl` is a
-`bad_line` and the item keeps its previous rows too.
+unexpected failure while reading an item is that item's `reader_error`. An unreadable `findings.jsonl` is a `bad_line`.
 
-**Held, not withdrawn.** The report-derived values (`pi_review_relations_total`, `pi_review_dispositions_total`, `pi_review_skipped_redesigns`,
-`pi_review_items`) are taken from a report only while the item is healthy and the report matches its log. While an item has a problem, or
-its report is stale, it keeps the values it last had from a fresh report; those are exported unchanged. A project's counter therefore never falls
-because one item had a problem, and on recovery only the true difference is added. Before an item has ever had a fresh report these series
-are simply absent for it. A finding whose line was lost or broke after it was counted keeps its held row. The log-derived counters count every
-readable line of every item, held or not.
+**Accounting: a ledger, so a total never falls.** The exported totals are sums over a ledger kept in `export_state.json` (`review`), saved in the
+same atomic write as the series. An event is counted once, under a key that is a hash of its repo (the part of the item before `#`), its round's
+head and its round number or finding id (a redesign adds its component, an escape its head, round and `found_by`); the key is never removed.
+Each tick counts into the ledger what the tables hold that it has not counted yet, then exports the ledger's totals through the usual
+`account()`. So however the files change (a broken or lost line, a truncated log, a report that is stale, missing or malformed, a folder moved away
+or renamed, a rebuilt database), a total cannot fall and what comes back is not counted again; `account()` never sees a fall from a review series. A
+report's relation or outcome is counted the first time a *fresh* report gives it. The two gauges (`pi_review_items`, `pi_review_skipped_redesigns`)
+show the folders present now, with each one's last values from a fresh report. The ledger holds hashes, labels and numbers only.
+
+What it cannot guarantee: a counted line whose key field (head, round, id, component, `found_by`) is edited into a different valid value counts
+again, since the key is its meaning; a finding is counted under the relation or outcome first seen in a fresh report, so a later relabel does not move
+it; a lower cost is ignored and a higher one adds the difference; two items of one repo that share a head and a round number share keys, so the second
+is not counted (a real item has its own heads; the golden pairs reuse synthetic ones, so the tests tag them); the ledger never shrinks; it is per
+machine, so a dashboard summing machines counts a folder once per machine; events in a baseline tick are not counted (see Baseline).
 
 **Staleness counts looks, not time.** `report_stale`, `report_missing` and an unfinished last line are confirmed on the second consecutive *build that looks at the
 folder*, whether or not that build rebuilt the tables. One tick that lands between a writer's log append and its report rename sees one stale look and
@@ -188,17 +196,16 @@ Series (names start `pi_` because the collector filters on it): counters `pi_rev
 `pi_review_reader_problem_items{reason}`. `project` is the part of the item before `#`, lower-cased, if it is an approved project, else `other`.
 `model` is `unknown` when the round has none and `other` when it is not an identifier.
 
-**Baseline.** The review counters have their own one-time baseline: `export_state.json` gains `seeded_families: ["pi_review"]`. On the first tick
-that runs the reader while that marker is absent, the review series take their current totals as the reference and export 0, and the marker is set
-whether or not any review data existed. After that a new series is real activity, so a log first created later counts as one tick of activity. The
-fingerprint and every Pi series are untouched. Known limits: a counter falls (and the fall is absorbed) when an item folder is removed or renamed, or (for the log-derived
-counters) a line already counted is edited into a bad line or lost; if that folder comes back, or the line is repaired, the rise is counted again. Review logs are append-only,
-so this is an operator action, not something the tools do.
+**Baseline.** The review counters have their own one-time baseline, set by a versioned marker (`seeded_families: ["pi_review@1"]`) and not by
+the fingerprint, so no Pi series is touched. On the first tick that runs the ledger while the marker is absent, the review series take their
+current totals as the reference and export 0, and the marker is set whether or not any review data existed. A missing or bad ledger is replaced by one
+rebuilt from the files and clears only that marker: the review series baseline again (what they already sent is kept, nothing falls) and the state is
+not treated as lost. After the baseline a new series is real activity, so a log first created later counts. Changing what the ledger counts bumps the
+marker (`pi_review@2`), which baselines the review series again and nothing else.
 
-**Vendoring pending:** the golden pairs below are hand-authored from the contract until the kit's K2 merges; its real pairs (`src/traces/fixtures/golden/<name>/`) replace them byte for byte, with the manifest pin in the test updated, before this merges.
-
-The golden pairs in `fixtures/review-golden/` (a `findings.jsonl` and its `report.json`, in the contract's canonical bytes) are pinned by `MANIFEST.sha256`,
-whose own sha256 is in `test_agent_events_review.py`. The kit's copy must stay byte for byte the same; change both in one change set. The code deploys to both
+The golden pairs in `fixtures/review-golden/` (a `findings.jsonl` and its `report.json`, in the contract's canonical bytes) are the kit's, copied byte for byte
+from agent-kit v0.17.0 (`src/traces/fixtures/golden/`), and pinned by `MANIFEST.sha256`, whose own sha256 is in `test_agent_events_review.py`. Change both
+copies in one change set. The code deploys to both
 profiles; on the work profile its LaunchAgent is off unless `agentEvents` is turned on there.
 
 ## Tables

@@ -2,16 +2,18 @@
 
 Reads ${AGENT_TRACES_DIR:-~/.local/share/agent-traces}/emitted/review/<item>/findings.jsonl and the report.json beside it
 (defined in findings-contract.md, "The report"). It computes no stuck trigger: whatever is derived (relations, dispositions,
-skipped redesigns, state) comes from report.json. Stored in the database: item, log round, review round, stage, model name,
-enumerated values, a demoted flag, cost, duration and the report's counts. Never stored: any free-text field (text, obligation,
-evidence, consequence, component, head, reviewer, session, found_by ...), a session id or a component name.
+skipped redesigns, state) comes from report.json. The database holds what is on disk now (ids, log round, review round, stage, model
+name, enumerated values, a demoted flag, cost, duration, the report's counts, and a hash key per event); it is rebuilt from the
+files and is for local queries. Never stored anywhere: any free-text field (text, obligation, evidence, consequence, component,
+head, reviewer, session, found_by ...), a session id or a component name.
 
 Strict: every problem is counted per item under one reason and shown in status.json and in the gauge
 pi_review_reader_problem_items. Nothing is skipped without a reason (entries whose name starts with "." are ignored).
 
-Counters never fall because an item had a problem. While an item's report is not fresh (a confirmed problem, or a stale
-look), the item keeps the report-derived values it last had from a fresh report (held, not withdrawn); only the true
-difference is added when it recovers. An unreadable log likewise keeps its previous rows.
+Accounting: the exported totals are sums over a ledger in export_state.json (state["review"]), written by the same atomic save as
+the series. An event is counted once, under a key made from a hash of its repo, its round's head and its round or id; a key is never
+removed. So a total never falls, however the files change (a broken line, a truncated log, a moved folder, a rebuilt database), and
+what comes back is not counted again. The ledger is the only mechanism: the tables are not held, and account() never sees a fall.
 """
 import datetime as dt
 import hashlib
@@ -57,6 +59,21 @@ def _num(v):
     return type(v) in (int, float) and math.isfinite(v) and v >= 0
 
 
+def _s(v):
+    """A field that is only hashed into a key: a string as it is, anything else as its JSON, missing as ''."""
+    return "" if v is None else (v if isinstance(v, str) else json.dumps(v, sort_keys=True))
+
+
+def _scope(item):
+    """The repo part of <repo>#<pr>, lower-cased; an item with no '#' is its own scope. Keys use this, not the folder name,
+    so renaming <repo>#PLACEHOLDER to <repo>#217 neither recounts nor drops anything."""
+    return item.split("#", 1)[0].lower() if "#" in item else item
+
+
+def _key(kind, scope, *parts):
+    return hashlib.sha256(json.dumps([kind, scope, *parts]).encode()).hexdigest()[:20]
+
+
 def _log_round(v):
     """The log round in a log id r<N>.<id>, or None when v is not one."""
     m = LOG_ID_RE.fullmatch(v) if isinstance(v, str) else None
@@ -75,7 +92,7 @@ class Log:
     def __init__(self):
         self.lines = 0
         self.kinds = {k: 0 for k in EVENTS}
-        self.unknown = self.bad = self.partial = self.unreadable = self.orphan = False
+        self.unknown = self.bad = self.partial = self.orphan = False
         self.rounds, self.findings, self.redesigns, self.escapes, self.refs = {}, {}, [], [], []
 
 
@@ -91,7 +108,7 @@ def _event(o):
               and o.get("verdict") in VERDICTS and (model is None or isinstance(model, str))
               and (dur is None or _int(dur)) and (cost is None or _num(cost)))
         return {"round": o["round"], "review_round": o["review_round"], "stage": o["stage"], "verdict": o["verdict"],
-                "model": None if model is None else (model if MODEL_RE.fullmatch(model) else "other"),
+                "model": None if model is None else (model if MODEL_RE.fullmatch(model) else "other"), "head": _s(o.get("head")),
                 "duration_ms": dur, "cost_usd": None if cost is None else float(cost), "at_ms": _at_ms(o["at"])} if ok else None
     if k == "finding":
         ok = (_int(o.get("round"), 1) and _log_round(o.get("id")) == o["round"] and o.get("severity") in SEVERITIES
@@ -104,12 +121,13 @@ def _event(o):
         ok = _log_round(o.get("id")) is not None and o.get("outcome") in OUTCOMES
     elif k == "redesign":
         ok = _int(o.get("round"), 1) and o.get("makes_impossible") in IMPOSSIBLE and o.get("action") in ACTIONS
-        return {"round": o["round"], "action": o["action"], "makes_impossible": o["makes_impossible"]} if ok else None
+        return {"round": o["round"], "action": o["action"], "makes_impossible": o["makes_impossible"],
+                "component": _s(o.get("component"))} if ok else None
     elif k == "judge":
         ok = _int(o.get("round"), 1) and o.get("verdict") in JUDGE_VERDICTS
     elif k == "escape":
         ok = _int(o.get("round"), 1)
-        return {"round": o["round"], "at_ms": _at_ms(o["at"])} if ok else None
+        return {"round": o["round"], "at_ms": _at_ms(o["at"]), "head": _s(o.get("head")), "found_by": _s(o.get("found_by"))} if ok else None
     return {} if ok else None
 
 
@@ -127,8 +145,8 @@ def parse_log(path):
         data = path.read_bytes()
     except (FileNotFoundError, NotADirectoryError):
         return log
-    except OSError:  # unreadable: shown as a bad line, never a failed Pi build; the item keeps its previous rows
-        log.bad = log.unreadable = True
+    except OSError:  # unreadable: shown as a bad line, never a failed Pi build
+        log.bad = True
         return log
     chunks = data.split(b"\n")
     tail = chunks.pop()  # b"" when the file ends with a newline
@@ -175,7 +193,11 @@ def parse_log(path):
         if f["round"] not in log.rounds:  # a finding whose round line is missing cannot be joined to a stage
             log.bad = True
             del log.findings[f["id"]]
-    log.orphan = any(r not in log.findings for r in log.refs)  # a label or disposition that names no finding
+    for rd in list(log.redesigns):
+        if rd["round"] not in log.rounds:  # a redesign whose round line is missing has no key yet
+            log.orphan = True
+            log.redesigns.remove(rd)
+    log.orphan = log.orphan or any(r not in log.findings for r in log.refs)  # a label or disposition that names no finding
     return log
 
 
@@ -275,16 +297,11 @@ def _log_tables(con, item):
         con.execute(f"DELETE FROM {table} WHERE item = ?", (item,))
 
 
-def _read_item(con, d, old):
-    """Replace one item's rows. old: its previous review_items row (a dict) or None. Report-derived values come from a fresh
-    report only; otherwise the item keeps the ones it had."""
+def _read_item(con, d, old_looks):
+    """Replace one item's rows with what is on disk now. old_looks: its look counters from the last rebuild ({} if none).
+    Report-derived values are taken from a fresh report only. Nothing is held: the ledger keeps what was counted."""
     item = d.name
     log = parse_log(d / "findings.jsonl")
-    if log.unreadable and old:  # keep every previous row; only the reason changes
-        hard = [r for r in REASONS if r in (set(filter(None, old["hard"].split(","))) | {"bad_line"})]
-        con.execute("UPDATE review_items SET hard=?, problems=? WHERE item=?",
-                    (",".join(hard), ",".join(_confirmed(hard, json.loads(old["looks"]))), item))
-        return
     rep, why = parse_report(d / "report.json", item)
     hard = set()
     if log.unknown:
@@ -302,37 +319,33 @@ def _read_item(con, d, old):
         now.add("report_stale")
     if log.partial:
         now.add("bad_line")
-    looks = {r: (json.loads(old["looks"]).get(r, 0) if old else 0) + 1 for r in now}
+    looks = {r: old_looks.get(r, 0) + 1 for r in now}
     fresh = rep is not None and not hard and "report_stale" not in now
-    old_rows = {r[1]: r for r in con.execute("SELECT * FROM review_findings WHERE item = ?", (item,))}
-    held = {i: r[6:] for i, r in old_rows.items()}  # sequence, relation, outcome, has_component
     _log_tables(con, item)
     hard = [r for r in REASONS if r in hard]
     cn = rep["counts"] if fresh else {}
-    keep = old or {}
+    scope = _scope(item)
     con.execute("INSERT OR REPLACE INTO review_items VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (item, _repo(item), log.lines, rep["state"] if fresh else keep.get("state"), ",".join(hard),
+                (item, _repo(item), log.lines, rep["state"] if fresh else None, ",".join(hard),
                  ",".join(_confirmed(hard, looks)), json.dumps(looks),
-                 cn.get("skipped_redesigns") if fresh else keep.get("skipped_redesigns"),
-                 cn.get("needs_component") if fresh else keep.get("needs_component"),
-                 cn.get("undisposed_blocking") if fresh else keep.get("undisposed_blocking")))
+                 cn.get("skipped_redesigns"), cn.get("needs_component"), cn.get("undisposed_blocking")))
     for r in log.rounds.values():
-        con.execute("INSERT INTO review_rounds VALUES (?,?,?,?,?,?,?,?,?)",
+        con.execute("INSERT INTO review_rounds VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (item, r["round"], r["review_round"], r["stage"], r["verdict"], r["model"],
-                     r["duration_ms"], r["cost_usd"], r["at_ms"]))
-    by_id = {f["id"]: (f["sequence"], f["relation"], f["outcome"], int(f["has_component"])) for f in rep["findings"]} if fresh else held
+                     r["duration_ms"], r["cost_usd"], r["at_ms"], _key("round", scope, r["head"], r["round"])))
+    by_id = {f["id"]: (f["sequence"], f["relation"], f["outcome"], int(f["has_component"])) for f in rep["findings"]} if fresh else {}
     for f in log.findings.values():
         x = by_id.get(f["id"], (None, None, None, None))
-        con.execute("INSERT INTO review_findings VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (item, f["id"], f["round"], f["severity"], f["effective"], f["demoted"], *x))
-    if not fresh:  # a finding the log no longer yields (its line was lost or broke) keeps the row it had: the counters never fall
-        for i, r in old_rows.items():
-            if i not in log.findings:
-                con.execute("INSERT INTO review_findings VALUES (?,?,?,?,?,?,?,?,?,?)", r)
+        con.execute("INSERT INTO review_findings VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (item, f["id"], f["round"], f["severity"], f["effective"], f["demoted"], *x,
+                     _key("finding", scope, log.rounds[f["round"]]["head"], f["id"])))
     for i, r in enumerate(log.redesigns):
-        con.execute("INSERT INTO review_redesigns VALUES (?,?,?,?,?)", (item, i, r["round"], r["action"], r["makes_impossible"]))
+        con.execute("INSERT INTO review_redesigns VALUES (?,?,?,?,?,?)",
+                    (item, i, r["round"], r["action"], r["makes_impossible"],
+                     _key("redesign", scope, log.rounds[r["round"]]["head"], r["round"], r["component"])))
     for i, r in enumerate(log.escapes):
-        con.execute("INSERT INTO review_escapes VALUES (?,?,?,?)", (item, i, r["round"], r["at_ms"]))
+        con.execute("INSERT INTO review_escapes VALUES (?,?,?,?,?)",
+                    (item, i, r["round"], r["at_ms"], _key("escape", scope, r["head"], r["round"], r["found_by"])))
 
 
 def update(con, root=None):
@@ -356,9 +369,7 @@ def update(con, root=None):
                 con.execute("UPDATE review_items SET looks=?, problems=? WHERE item=?",
                             (json.dumps(looks), ",".join(_confirmed([r for r in hard.split(",") if r], looks)), item))
             return _summary(con)
-        cur = con.execute("SELECT * FROM review_items")
-        names = [c[0] for c in cur.description]
-        olds = {r[0]: dict(zip(names, r)) for r in cur.fetchall()}
+        olds = {item: json.loads(looks) for item, looks in con.execute("SELECT item, looks FROM review_items")}
         present = {d.name for d in items}
         for gone in set(olds) - present:
             _log_tables(con, gone)
@@ -366,83 +377,148 @@ def update(con, root=None):
         for d in items:
             con.execute("SAVEPOINT item")
             try:
-                _read_item(con, d, olds.get(d.name))
-            except Exception:  # noqa: BLE001 - one bad item must not fail the Pi build; its previous rows are kept
+                _read_item(con, d, olds.get(d.name, {}))
+            except Exception:  # noqa: BLE001 - one bad item must not fail the Pi build
                 con.execute("ROLLBACK TO item")
-                old = olds.get(d.name)
-                hard = sorted(set(filter(None, (old or {}).get("hard", "").split(","))) | {"reader_error"})
                 con.execute("INSERT OR REPLACE INTO review_items VALUES (?,?,?,?,?,?,?,?,?,?)",
-                            (d.name, _repo(d.name), (old or {}).get("log_lines", 0), (old or {}).get("state"), ",".join(hard),
-                             ",".join(hard), "{}", (old or {}).get("skipped_redesigns"), (old or {}).get("needs_component"),
-                             (old or {}).get("undisposed_blocking")))
+                            (d.name, _repo(d.name), 0, None, "reader_error", "reader_error", "{}", None, None, None))
             con.execute("RELEASE item")
         con.execute("INSERT OR REPLACE INTO meta VALUES ('review_stray', ?)", (str(len(strays)),))
         con.execute("INSERT OR REPLACE INTO meta VALUES ('review_sig', ?)", (sig,))
         return _summary(con)
 
 
-# ---------------------------------------------------------------- series (see agent_events_metrics.collect / export)
+# ---------------------------------------------------------------- the ledger and the series
+
+LEDGER_VERSION = 1
+MARKER = f"pi_review@{LEDGER_VERSION}"  # the review series' baseline marker in export_state.json["seeded_families"]; bump with the ledger
+
+
+def new_ledger():
+    """seen: {event key: 1}, every event ever counted. tot: {series: {labels (JSON): total}}. cost: {round key: [usd, labels]}.
+    g: {hash of the item name: [state, skipped_redesigns]}, the last values from a fresh report, for the gauges."""
+    return {"v": LEDGER_VERSION, "seen": {}, "tot": {}, "cost": {}, "g": {}}
+
+
+def valid_ledger(led):
+    try:
+        return (isinstance(led, dict) and led.get("v") == LEDGER_VERSION and isinstance(led["seen"], dict) and isinstance(led["tot"], dict)
+                and all(isinstance(v, dict) and all(isinstance(k, str) and _num(x) for k, x in v.items()) for v in led["tot"].values())
+                and isinstance(led["cost"], dict) and all(isinstance(v, list) and len(v) == 2 and _num(v[0]) and isinstance(v[1], str)
+                                                         for v in led["cost"].values())
+                and isinstance(led["g"], dict) and all(isinstance(v, list) and len(v) == 2 for v in led["g"].values()))
+    except (KeyError, TypeError):
+        return False
+
+
+def ledger_for(state):
+    """The ledger in the persistent state, valid. A missing or bad one is replaced by an empty one and the review baseline marker is
+    cleared, so only the review series start a baseline (account() keeps what they already sent); nothing else is affected."""
+    led = state.get("review")
+    if not valid_ledger(led):
+        led = state["review"] = new_ledger()
+        marks = state.get("seeded_families")
+        if isinstance(marks, list):
+            state["seeded_families"] = [m for m in marks if m != MARKER]
+    return led
+
+
+def _project(item, approved):
+    repo = _repo(item)
+    return repo if repo in approved else "other"
+
+
+def _add(led, name, labels, value=1):
+    series = led["tot"].setdefault(name, {})
+    k = json.dumps(labels, sort_keys=True)
+    series[k] = series.get(k, 0) + value
+
+
+def _once(led, key):
+    """True the first time a key is seen; it is then in the ledger for good."""
+    if key in led["seen"]:
+        return False
+    led["seen"][key] = 1
+    return True
+
+
+def apply(con, led, approved):
+    """Count into the ledger what the tables hold that it has not counted. Idempotent, and it only adds. A bounded cost: a pass
+    over the rows on disk now."""
+    if not _has_tables(con):
+        return
+    for item, key, verdict, stage, model, cost in con.execute(
+            "SELECT item, key, verdict, stage, model, cost_usd FROM review_rounds ORDER BY item, round").fetchall():
+        project, model = _project(item, approved), model or "unknown"
+        if _once(led, "round:" + key):
+            _add(led, "pi_review_rounds_total", {"project": project, "verdict": verdict, "stage": stage, "model": model})
+        if cost is not None:  # counted once; a later, higher value adds only the difference, a lower one is ignored
+            prev = led["cost"].get("cost:" + key)
+            labels = json.dumps({"project": project, "stage": stage, "model": model}, sort_keys=True)
+            if prev is None:
+                led["cost"]["cost:" + key] = [cost, labels]
+                _add_json(led, "pi_review_cost_usd_total", labels, cost)
+            elif cost > prev[0]:
+                _add_json(led, "pi_review_cost_usd_total", prev[1], cost - prev[0])
+                prev[0] = cost
+    for item, key, effective, demoted, relation, outcome, review_round, stage in con.execute(
+            "SELECT f.item, f.key, f.effective, f.demoted, f.relation, f.outcome, r.review_round, r.stage FROM review_findings f "
+            "JOIN review_rounds r ON r.item = f.item AND r.round = f.round ORDER BY f.item, f.round, f.id").fetchall():
+        project = _project(item, approved)
+        if _once(led, "finding:" + key):
+            _add(led, "pi_review_findings_total", {"project": project, "review_round": "4+" if review_round >= 4 else str(review_round),
+                                                   "effective": effective, "stage": stage})
+        if demoted and _once(led, "demoted:" + key):
+            _add(led, "pi_review_demoted_total", {"project": project})
+        if relation and _once(led, "relation:" + key):  # first seen wins: a later relabel does not move a counted finding
+            _add(led, "pi_review_relations_total", {"project": project, "relation": relation})
+        if outcome and _once(led, "outcome:" + key):
+            _add(led, "pi_review_dispositions_total", {"project": project, "outcome": outcome})
+    for item, key, action, impossible in con.execute("SELECT item, key, action, makes_impossible FROM review_redesigns").fetchall():
+        if _once(led, "redesign:" + key):
+            _add(led, "pi_review_redesigns_total", {"project": _project(item, approved), "action": action, "makes_impossible": impossible})
+    for item, key in con.execute("SELECT item, key FROM review_escapes").fetchall():
+        if _once(led, "escape:" + key):
+            _add(led, "pi_review_escapes_total", {"project": _project(item, approved)})
+    present = {}
+    for item, state, skipped in con.execute("SELECT item, state, skipped_redesigns FROM review_items").fetchall():
+        k = _key("item", item)
+        present[k] = led["g"].get(k)
+        if state is not None:  # only a fresh report moves the gauges' inputs
+            present[k] = [state, skipped]
+    led["g"] = {k: v for k, v in present.items() if v is not None}
+
+
+def _add_json(led, name, labels_json, value):
+    series = led["tot"].setdefault(name, {})
+    series[labels_json] = series.get(labels_json, 0) + value
+
 
 def _has_tables(con):
     return bool(con.execute("SELECT 1 FROM sqlite_master WHERE name='review_items'").fetchone())
 
 
-def _family(name, kind, labels, rows, approved):
-    """rows: (repo, label values..., value); repos outside the approved set merge into 'other'."""
-    acc = {}
-    for r in rows:
-        key = ((r[0] if r[0] in approved else "other"),) + tuple(r[1:-1])
-        acc[key] = acc.get(key, 0) + r[-1]
-    return {"name": name, "type": kind, "points": [(dict(zip(labels, k)), float(v)) for k, v in sorted(acc.items())]}
+def counters(led):
+    """The pi_review_* counters: the ledger's totals. They only ever grow."""
+    return [{"name": name, "type": "sum", "points": [(json.loads(k), float(v)) for k, v in sorted(series.items())]}
+            for name, series in sorted(led["tot"].items())]
 
 
-def counters(con, approved):
-    """The pi_review_* counters, as cumulative totals recomputed from the tables. The two that come from report.json
-    (relations, dispositions) count what each item last had from a fresh report: held while it is unhealthy, so a total
-    never falls because of a problem."""
-    if not _has_tables(con):
-        return []
-    q = lambda sql: con.execute(sql).fetchall()  # noqa: E731
-    rb = "CASE WHEN r.review_round >= 4 THEN '4+' ELSE CAST(r.review_round AS TEXT) END"
-    return [
-        _family("pi_review_rounds_total", "sum", ("project", "verdict", "stage", "model"), q(
-            "SELECT i.repo, r.verdict, r.stage, COALESCE(r.model, 'unknown'), COUNT(*) FROM review_rounds r "
-            "JOIN review_items i USING (item) GROUP BY 1, 2, 3, 4"), approved),
-        _family("pi_review_findings_total", "sum", ("project", "review_round", "effective", "stage"), q(
-            f"SELECT i.repo, {rb}, f.effective, r.stage, COUNT(*) FROM review_findings f "
-            "JOIN review_rounds r ON r.item = f.item AND r.round = f.round JOIN review_items i ON i.item = f.item "
-            "GROUP BY 1, 2, 3, 4"), approved),
-        _family("pi_review_demoted_total", "sum", ("project",), q(
-            "SELECT i.repo, COUNT(*) FROM review_findings f JOIN review_items i USING (item) WHERE f.demoted = 1 GROUP BY 1"),
-            approved),
-        _family("pi_review_redesigns_total", "sum", ("project", "action", "makes_impossible"), q(
-            "SELECT i.repo, d.action, d.makes_impossible, COUNT(*) FROM review_redesigns d "
-            "JOIN review_items i USING (item) GROUP BY 1, 2, 3"), approved),
-        _family("pi_review_escapes_total", "sum", ("project",), q(
-            "SELECT i.repo, COUNT(*) FROM review_escapes e JOIN review_items i USING (item) GROUP BY 1"), approved),
-        _family("pi_review_cost_usd_total", "sum", ("project", "stage", "model"), q(
-            "SELECT i.repo, r.stage, COALESCE(r.model, 'unknown'), SUM(r.cost_usd) FROM review_rounds r "
-            "JOIN review_items i USING (item) WHERE r.cost_usd IS NOT NULL GROUP BY 1, 2, 3"), approved),
-        _family("pi_review_relations_total", "sum", ("project", "relation"), q(
-            "SELECT i.repo, f.relation, COUNT(*) FROM review_findings f JOIN review_items i USING (item) "
-            "WHERE f.relation IS NOT NULL GROUP BY 1, 2"), approved),
-        _family("pi_review_dispositions_total", "sum", ("project", "outcome"), q(
-            "SELECT i.repo, f.outcome, COUNT(*) FROM review_findings f JOIN review_items i USING (item) "
-            "WHERE f.outcome IS NOT NULL GROUP BY 1, 2"), approved),
-    ]
-
-
-def gauges(con, approved):
+def gauges(con, approved, led):
+    """Current state: folders present now (a moved-away folder is gone, which is right for a gauge), with the last good values."""
     if not _has_tables(con):
         return []
     have = dict(con.execute("SELECT reason, items FROM review_problems").fetchall())
+    items, skipped = {}, {}
+    for item in (r[0] for r in con.execute("SELECT item FROM review_items")):
+        g = led["g"].get(_key("item", item))
+        if g is None:
+            continue
+        p = _project(item, approved)
+        items[(p, g[0])] = items.get((p, g[0]), 0) + 1
+        skipped[p] = skipped.get(p, 0) + (g[1] or 0)
     return [
-        _family("pi_review_skipped_redesigns", "gauge", ("project",), con.execute(
-            "SELECT repo, SUM(skipped_redesigns) FROM review_items WHERE state IS NOT NULL GROUP BY 1").fetchall(),
-            approved),
-        _family("pi_review_items", "gauge", ("project", "state"), con.execute(
-            "SELECT repo, state, COUNT(*) FROM review_items WHERE state IS NOT NULL GROUP BY 1, 2").fetchall(),
-            approved),
-        {"name": "pi_review_reader_problem_items", "type": "gauge",
-         "points": [({"reason": r}, float(have.get(r, 0))) for r in REASONS]},
+        {"name": "pi_review_skipped_redesigns", "type": "gauge", "points": [({"project": p}, float(v)) for p, v in sorted(skipped.items())]},
+        {"name": "pi_review_items", "type": "gauge", "points": [({"project": p, "state": st}, float(n)) for (p, st), n in sorted(items.items())]},
+        {"name": "pi_review_reader_problem_items", "type": "gauge", "points": [({"reason": r}, float(have.get(r, 0))) for r in REASONS]},
     ]
