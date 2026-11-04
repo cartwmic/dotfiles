@@ -430,10 +430,10 @@ class RollbackDrill(Scratch):
 
 
 class Freeze(Scratch):
-    def freeze(self, state_dir, *extra, out=None):
+    def freeze(self, state_dir, *extra, out=None, corpus=None):
         out = out or self.tmp / "frozen"
         env = self.env()
-        return subprocess.run(["sh", str(TOOLS / "freeze.sh"), "--out", str(out), "--sessions-src", str(self.corpus("builder")),
+        return subprocess.run(["sh", str(TOOLS / "freeze.sh"), "--out", str(out), "--sessions-src", str(corpus or self.corpus("builder")),
                                "--state-src", str(state_dir), "--roots", str(self.tmp / "roots"), *extra],
                               capture_output=True, text=True, env=env, timeout=300), out
 
@@ -466,6 +466,30 @@ class Freeze(Scratch):
         self.assertTrue(any(p.endswith("-fork.jsonl") for p in listed))
         self.assertIn("forks=1", rec["strata_counts"])
         self.assertIn("python:", (out / "versions.txt").read_text())
+
+    def test_big_line_codemode_and_untimed_strata(self):
+        d, _ = self.state_dir()
+        corpus = self.corpus("builder")
+        proj = corpus / "--big--"
+        proj.mkdir()
+        (proj / "big.jsonl").write_text(json.dumps({"type": "x", "pad": "a" * 2_100_000}) + "\n")
+        (proj / "many-short-lines.jsonl").write_text((json.dumps({"type": "x", "pad": "a" * 100}) + "\n") * 25000)  # over 2 MB, no long line
+        (proj / "code.jsonl").write_text('{"name":"codemode"}\n' * 3)
+        r, out = self.freeze(d, corpus=corpus)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rec = json.loads((out / "FREEZE.json").read_text())
+        counts = dict(kv.split("=") for kv in rec["strata_counts"].split())
+        self.assertEqual(counts["bigline"], "1")
+        self.assertEqual(counts["codemode"], "1")
+        listed = (out / "strata.txt").read_text().split()
+        self.assertIn("--big--/big.jsonl", listed)
+        self.assertGreaterEqual(int(counts["untimed"]), 2)
+
+    def test_a_failed_freeze_leaves_no_temp_files(self):
+        d, _ = self.state_dir(fp="000000000000")
+        r, out = self.freeze(d)
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(out.exists() and any(out.iterdir()))
 
     def test_a_fingerprint_that_is_not_the_recorded_one_says_re_freeze(self):
         d, _ = self.state_dir(fp="000000000000")
