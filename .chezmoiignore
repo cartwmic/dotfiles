@@ -120,6 +120,13 @@ Library/LaunchAgents/local.agent-events.plist
 70_agent_events_launchd.sh
 {{- end }}
 
+{{- if not (includeTemplate "agent_kit_config" . | fromJson).enabled }}
+# Pinned agent-kit install (the agent-traces CLI): chezmoi data agentKit.enabled, default true on personal only (docs/profiles.md). The wrapper and the
+# pin files deploy everywhere; without the setting there is no install, so the wrapper exits 3. A bad agentKit value fails this render.
+65_agent_kit_install.sh
+.local/user_scripts/agent_kit_bump.py
+{{- end }}
+
 {{- if ne .chezmoi.os "darwin" }}
 # Heavy-gate memory watchdog (local.heavy-gate-watchdog): a LaunchAgent, so macOS only, on every profile that has heavy-gate.
 .local/bin/heavy-gate-watchdog

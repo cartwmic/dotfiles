@@ -1,0 +1,19 @@
+{{- /* agent_kit_config: the pinned agent-kit install's setting as JSON {"enabled"}. Local chezmoi data agentKit:
+  enabled   true or false. Default: true on the personal profile, false everywhere else (the work Mac gets the agent-traces wrapper but no
+            install, so the wrapper exits 3, until it is set there; the install needs a GitHub token for a private package).
+Used by the wrapper, the install script and .chezmoiignore. Any other key or value fails the whole render, so a typo applies nothing. */ -}}
+{{- $raw := dig "agentKit" dict . -}}
+{{- if not (kindIs "map" $raw) -}}
+{{-   fail (printf "agentKit must be a map with enabled, got %q" (printf "%v" $raw)) -}}
+{{- end -}}
+{{- range $k, $_ := $raw -}}
+{{-   if ne $k "enabled" -}}
+{{-     fail (printf "agentKit.%s is not a setting (enabled)" $k) -}}
+{{-   end -}}
+{{- end -}}
+{{- $on := printf "%v" (eq (printf "%v" (dig "profile" "" .)) "personal") -}}
+{{- if hasKey $raw "enabled" -}}{{- $on = printf "%v" (get $raw "enabled") -}}{{- end -}}
+{{- if not (has $on (list "true" "false")) -}}
+{{-   fail (printf "agentKit.enabled must be true or false, got %q" $on) -}}
+{{- end -}}
+{{- dict "enabled" (eq $on "true") | toJson -}}
