@@ -1,4 +1,4 @@
-{{- /* Settings file for T3's claude-hub instance (dot_t3/userdata/modify_settings.json.tmpl passes it with --settings). Empty unless the hub is on, and an empty managed file is removed on apply: that is the rollback. */ -}}
+{{- /* Settings file for T3's claude-hub instance (dot_t3/private_userdata/modify_settings.json.tmpl passes it with --settings). Empty unless the hub is on, and an empty managed file is removed on apply: that is the rollback. */ -}}
 {{ if eq (includeTemplate "t3_hub" .) "on" -}}
 {{ dict "apiKeyHelper" (printf "%s/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-claude-code'" .chezmoi.homeDir) | toPrettyJson | trim }}
 {{ end -}}

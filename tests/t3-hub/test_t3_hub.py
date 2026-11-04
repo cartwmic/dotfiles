@@ -1,4 +1,4 @@
-"""T3 hub provider instances: dot_t3/userdata/modify_settings.json.tmpl, the Codex provider block, the Claude settings file.
+"""T3 hub provider instances: dot_t3/private_userdata/modify_settings.json.tmpl, the Codex provider block, the Claude settings file.
 
 Everything runs through chezmoi against the real source with a minimal personal config and a throwaway HOME, so it needs
 chezmoi and jq but no 1Password and no network to the hub. settings.live-shape.json is a copy of the real
@@ -6,6 +6,7 @@ chezmoi and jq but no 1Password and no network to the hub. settings.live-shape.j
 """
 import difflib
 import json
+import stat
 import os
 import subprocess
 import sys
@@ -77,7 +78,7 @@ class SettingsScriptTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.env = Env()
-        cls.script = cls.env.render("dot_t3/userdata/modify_settings.json.tmpl")
+        cls.script = cls.env.render("dot_t3/private_userdata/modify_settings.json.tmpl")
 
     @classmethod
     def tearDownClass(cls):
@@ -156,7 +157,7 @@ class SettingsScriptTest(unittest.TestCase):
     def test_without_active_json_binary_path_is_left_out(self):
         env = Env(codex_active=False)
         try:
-            script = env.render("dot_t3/userdata/modify_settings.json.tmpl")
+            script = env.render("dot_t3/private_userdata/modify_settings.json.tmpl")
         finally:
             env.close()
         cfg = json.loads(run_script(script, FIXTURE))["providerInstances"]["codex-hub"]["config"]
@@ -172,7 +173,8 @@ class ApplyPathTest(unittest.TestCase):
         chezmoi can only target a path whose parent directory exists, which is why the hub file sits directly in ~/.config."""
         env = Env(**kw)
         (env.home / ".config").mkdir()
-        (env.home / ".t3/userdata").mkdir(parents=True)
+        (env.home / ".t3").mkdir(exist_ok=True)
+        (env.home / ".t3/userdata").mkdir(mode=0o700)  # T3 keeps userdata private; the source must not loosen it
         (env.home / ".codex").mkdir()
         (env.home / ".t3/userdata/settings.json").write_text(FIXTURE)
         (env.home / ".codex/config.toml").write_text(CODEX_BASE)
@@ -180,6 +182,17 @@ class ApplyPathTest(unittest.TestCase):
 
     def targets(self, env):
         return [str(env.home / p) for p in TARGETS]
+
+    def test_full_apply_keeps_userdata_private(self):
+        """A full apply of ~/.t3 (as chezmoi apply or update does) leaves T3's userdata directory at 0700, on and off."""
+        for enabled in (True, False):
+            env = self.fresh(**({} if enabled else {"enabled": False}))
+            try:
+                env.chezmoi("apply", str(env.home / ".t3"))
+                self.assertEqual(stat.S_IMODE((env.home / ".t3/userdata").stat().st_mode), 0o700)
+                self.assertEqual(env.chezmoi("diff", str(env.home / ".t3")), "")
+            finally:
+                env.close()
 
     def test_apply_into_a_fresh_home(self):
         env = self.fresh()
