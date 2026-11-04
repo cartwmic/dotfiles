@@ -60,7 +60,7 @@ This is personal, one-person software. Good enough is the bar: it does not need 
 Apply the stated operating environment and accepted risks throughout design, implementation and review. Do not silently strengthen guarantees or repeatedly demand elimination of accepted risks. Accepted risks do not waive promised outcomes; expose any conflict under §13.
 
 ## 11. Prior art before building
-Before building a component, check for existing libraries, packages and projects that cover it, and record the finding: adopt, wrap, borrow ideas, or build, with the reason. Prefer adopting or wrapping when a candidate meets the contract and its footprint fits; borrow ideas when it doesn't. Avoid platforms that would replace the runtime, the memory or the composition.
+Before building a component, check for existing libraries, packages and projects that cover it, and record the finding: adopt, wrap, borrow ideas, or build, with the reason. Prefer adopting or wrapping when a candidate meets the contract and its footprint fits; borrow ideas when it doesn't. Avoid platforms that would replace the runtime, the memory or the composition. Prior art includes what the system you are integrating with already does internally (its own records, undo, history or jobs), not only libraries and packages; check it through that system's real interface before building a copy of it.
 
 When uncertainty could determine the architecture, resolve it with the smallest experiment through the real interface before building dependent machinery. Use existing evidence when sufficient; avoid speculative scaffolding.
 
