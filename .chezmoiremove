@@ -1,3 +1,11 @@
+{{ if eq .profile "personal" -}}
+# Retired 2026-11-03: update_claude_settings.sh (wrote ANTHROPIC_AUTH_TOKEN and a z.ai base URL) and reset_claude_settings.sh
+# (deleted ANTHROPIC_BASE_URL whatever its value). Both fight hub.enabled. Personal only: the work Mac is not touched by this change.
+# Prune once the personal Mac has applied.
+.local/user_scripts/update_claude_settings.sh
+.local/user_scripts/reset_claude_settings.sh
+
+{{ end -}}
 # Retired 2026-10-29: the Pi recap extension (/recap and automatic periodic,
 # final-response and before-compaction recaps). Its automatic recaps flooded the
 # shared GLM server. Removes the whole deployed directory on apply, including its
