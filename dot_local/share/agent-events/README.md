@@ -169,18 +169,19 @@ deep nesting is a bad line and a report with deep nesting is `report_schema`; no
 unexpected failure while reading an item is that item's `reader_error`. An unreadable `findings.jsonl` is a `bad_line`.
 
 **Accounting: a ledger, so a total never falls.** The exported totals are sums over a ledger kept in `export_state.json` (`review`), saved in the
-same atomic write as the series. An event is counted once, under a key that is a hash of its repo (the part of the item before `#`), its round's
-head and its round number or finding id (a redesign adds its component, an escape its head, round and `found_by`); the key is never removed.
+same atomic write as the series. An event is counted once, under a key that is a hash of its repo (the part of the item before `#`), the head and
+round number or finding id it is about, and what tells two real events about the same thing apart: the line's own `at` (every kind), an escape's
+`found_by` and `text`, a redesign's component, action and `makes_impossible`. The key is never removed.
 Each tick counts into the ledger what the tables hold that it has not counted yet, then exports the ledger's totals through the usual
 `account()`. So however the files change (a broken or lost line, a truncated log, a report that is stale, missing or malformed, a folder moved away
 or renamed, a rebuilt database), a total cannot fall and what comes back is not counted again; `account()` never sees a fall from a review series. A
 report's relation or outcome is counted the first time a *fresh* report gives it. The two gauges (`pi_review_items`, `pi_review_skipped_redesigns`)
 show the folders present now, with each one's last values from a fresh report. The ledger holds hashes, labels and numbers only.
 
-What it cannot guarantee: a counted line whose key field (head, round, id, component, `found_by`) is edited into a different valid value counts
-again, since the key is its meaning; a finding is counted under the relation or outcome first seen in a fresh report, so a later relabel does not move
-it; a lower cost is ignored and a higher one adds the difference; two items of one repo that share a head and a round number share keys, so the second
-is not counted (a real item has its own heads; the golden pairs reuse synthetic ones, so the tests tag them); the ledger never shrinks; it is per
+What it cannot guarantee: a counted line whose key field (head, round, id, `at`, component, action, `found_by`, `text`) is edited into a different
+valid value counts again, since the key is its meaning; the same line written twice counts once; a finding is counted under the relation or outcome first seen in a fresh report, so a later relabel does not move
+it; a lower cost is ignored and a higher one adds the difference; two events whose key fields are all equal (same repo, head, round or id, and the same `at` to the second) are one; a blank or missing
+`head` hashes as empty. The golden pairs reuse synthetic heads and timestamps, so the tests tag them; the ledger never shrinks; it is per
 machine, so a dashboard summing machines counts a folder once per machine; events in a baseline tick are not counted (see Baseline).
 
 **Staleness counts looks, not time.** `report_stale`, `report_missing` and an unfinished last line are confirmed on the second consecutive *build that looks at the
@@ -198,7 +199,7 @@ Series (names start `pi_` because the collector filters on it): counters `pi_rev
 
 **Baseline.** The review counters have their own one-time baseline, set by a versioned marker (`seeded_families: ["pi_review@1"]`) and not by
 the fingerprint, so no Pi series is touched. On the first tick that runs the ledger while the marker is absent, the review series take their
-current totals as the reference and export 0, and the marker is set whether or not any review data existed. A missing or bad ledger is replaced by one
+current totals as the reference and export 0, and the marker is set whether or not any review data existed. A missing or bad ledger (wrong shape, a negative or non-finite total, a label key that is not the JSON of an object of strings) is replaced by one
 rebuilt from the files and clears only that marker: the review series baseline again (what they already sent is kept, nothing falls) and the state is
 not treated as lost. After the baseline a new series is real activity, so a log first created later counts. Changing what the ledger counts bumps the
 marker (`pi_review@2`), which baselines the review series again and nothing else.
