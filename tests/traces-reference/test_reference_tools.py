@@ -288,6 +288,7 @@ class CacheRef(Scratch):
 
 
 DRILL_ARGS = ("--machine", "personal", "--home", "/home/parity")
+EPOCH_ORIGINAL_TEXT = '{"epoch_ns": 1790000000123456768, "last_build_ok_ts": 1790000000}'
 
 
 class RollbackDrill(Scratch):
@@ -306,9 +307,11 @@ class RollbackDrill(Scratch):
         r = self.run_py("agent_events.py", "--db", self.py_db, "build", "--sessions-dir", self.corpus_dir,
                         env=self.env(AGENT_EVENTS_STATE_DIR=str(self.tmp / "pystate")))
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.original = self.tmp / "original-status.json"  # what Python wrote; epoch_ns is an exact double, as int(time.time() * 1e9) is
+        self.original.write_text(EPOCH_ORIGINAL_TEXT)
         self.n = 0
 
-    def inputs(self, state=None, status_text='{"epoch_ns": 1790000000123456789, "last_build_ok_ts": 1790000500}'):
+    def inputs(self, state=None, status_text='{"epoch_ns": 1790000000123456768, "last_build_ok_ts": 1790000500}'):
         self.n += 1
         d = self.tmp / f"in{self.n}"
         d.mkdir()
@@ -320,7 +323,7 @@ class RollbackDrill(Scratch):
         self.n += 1
         return self.run_py("rollback_drill.py", "--state", d / "export_state.json", "--status", d / "status.json",
                            "--py-db", self.py_db, "--sessions-dir", self.corpus_dir, "--scratch", self.tmp / f"scratch{self.n}",
-                           "--out", self.tmp / f"result{self.n}.json", *DRILL_ARGS, *extra), self.tmp / f"result{self.n}.json"
+                           "--out", self.tmp / f"result{self.n}.json", *DRILL_ARGS, "--original-status", self.original, *extra), self.tmp / f"result{self.n}.json"
 
     def test_a_python_written_state_passes(self):
         r, out = self.drill(self.inputs())
@@ -340,11 +343,11 @@ class RollbackDrill(Scratch):
                 "    e = [x for x in map(json.loads, lines) if x.get('message', {}).get('role') == 'assistant'][-1]; e = dict(e, id='extra-1')\n"
                 "    e['message'] = dict(e['message'], usage=dict(e['message']['usage'], output=777))\n"
                 "    p.write_text('\\n'.join(lines + [json.dumps(e)]) + '\\n')\n"
-                "a = types.SimpleNamespace(state=%r, status=%r, machine='personal', py_db=%r, sessions_dir=%r, scratch=%r, out='', roots=None,\n"
+                "a = types.SimpleNamespace(state=%r, status=%r, machine='personal', original_status=%r, py_db=%r, sessions_dir=%r, scratch=%r, out='', roots=None,\n"
                 "                          projects=None, home='/home/parity', catchup_limit=600.0, now=None, now2=None)\n"
                 "res = rd.drill(a, between)\n"
                 "print(json.dumps(res))\n") % (str(TOOLS), str(self.corpus_dir), str(d / "export_state.json"), str(d / "status.json"),
-                                               str(self.py_db), str(self.corpus_dir), str(self.tmp / "scratch-grow"))
+                                               str(self.original), str(self.py_db), str(self.corpus_dir), str(self.tmp / "scratch-grow"))
         r = subprocess.run([sys.executable, "-c", grow], capture_output=True, text=True, env=self.env(), cwd=self.tmp)
         self.assertEqual(r.returncode, 0, r.stderr)
         res = json.loads(r.stdout.splitlines()[-1])
@@ -371,17 +374,44 @@ class RollbackDrill(Scratch):
         steps = json.loads(out.read_text())["steps"]
         self.assertFalse(steps["1 load_state is not lost"]["ok"])
 
-    def test_m14_epoch_ns_through_a_float_fails(self):
-        r, out = self.drill(self.inputs(status_text='{"epoch_ns": 1.790000000123457e18, "last_build_ok_ts": 1790000500}'))
+    def test_m14_epoch_ns_through_number_fails(self):
+        """The real fault: the value went through a JS Number. node 24.18.1: JSON.stringify(JSON.parse('1790000000123456768'))
+        is '1790000000123456800'. Still a plain JSON integer, so only the exact comparison with the original catches it."""
+        r, out = self.drill(self.inputs(status_text='{"epoch_ns": 1790000000123456800, "last_build_ok_ts": 1790000500}'))
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("epoch_ns", json.loads(out.read_text())["steps"]["2-3 tick 1 keeps keys, fp, seeded, sent, epoch_ns"]["detail"])
+        step = json.loads(out.read_text())["steps"]["2-3 tick 1 keeps keys, fp, seeded, sent, epoch_ns"]
+        self.assertFalse(step["ok"])
+        self.assertIn("1790000000123456800", step["detail"])
+        self.assertIn("1790000000123456768", step["detail"])
+
+    def test_epoch_ns_off_by_one_nanosecond_fails(self):
+        r, out = self.drill(self.inputs(status_text='{"epoch_ns": 1790000000123456769, "last_build_ok_ts": 1790000500}'))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+    def test_epoch_ns_as_a_float_fails(self):
+        for text in ('1.790000000123457e18', '1790000000123456768.0', '"1790000000123456768"'):
+            with self.subTest(epoch=text):
+                r, out = self.drill(self.inputs(status_text='{"epoch_ns": %s, "last_build_ok_ts": 1790000500}' % text))
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("epoch_ns", json.loads(out.read_text())["steps"]["2-3 tick 1 keeps keys, fp, seeded, sent, epoch_ns"]["detail"])
+
+    def test_a_missing_epoch_ns_fails(self):
+        r, out = self.drill(self.inputs(status_text='{"last_build_ok_ts": 1790000500}'))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+    def test_an_original_without_an_integer_epoch_is_refused(self):
+        self.original.write_text('{"epoch_ns": 1.79e18}')
+        r, out = self.drill(self.inputs())
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("epoch_ns", r.stderr)
+        self.assertFalse(out.exists())
 
     def test_a_wrong_machine_label_starts_a_baseline_and_fails_on_fp(self):
         d = self.inputs()
         self.n += 1
         r = self.run_py("rollback_drill.py", "--state", d / "export_state.json", "--status", d / "status.json", "--py-db", self.py_db,
                         "--sessions-dir", self.corpus_dir, "--scratch", self.tmp / "s-wrong", "--out", self.tmp / "r-wrong.json",
-                        "--machine", "work", "--home", "/home/parity")
+                        "--machine", "work", "--home", "/home/parity", "--original-status", self.original)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("fp/seeded changed", r.stdout)
 
@@ -405,13 +435,13 @@ class RollbackDrill(Scratch):
         live = Path(os.path.expanduser("~")) / ".local/state/agent-events"
         self.n += 1
         r = self.run_py("rollback_drill.py", "--state", live / "export_state.json", "--status", d / "status.json", "--py-db", self.py_db,
-                        "--sessions-dir", self.corpus_dir, "--scratch", self.tmp / "s-live", "--out", self.tmp / "r.json", *DRILL_ARGS)
+                        "--sessions-dir", self.corpus_dir, "--scratch", self.tmp / "s-live", "--out", self.tmp / "r.json", *DRILL_ARGS, "--original-status", self.original)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("live directory", r.stderr)
         (self.tmp / "dirty").mkdir()
         (self.tmp / "dirty/x").write_text("x")
         r = self.run_py("rollback_drill.py", "--state", d / "export_state.json", "--status", d / "status.json", "--py-db", self.py_db,
-                        "--sessions-dir", self.corpus_dir, "--scratch", self.tmp / "dirty", "--out", self.tmp / "r.json", *DRILL_ARGS)
+                        "--sessions-dir", self.corpus_dir, "--scratch", self.tmp / "dirty", "--out", self.tmp / "r.json", *DRILL_ARGS, "--original-status", self.original)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("not empty", r.stderr)
 
@@ -424,7 +454,7 @@ class RollbackDrill(Scratch):
     def test_exits_2_when_a_frozen_file_changed(self):
         d = self.inputs()
         r = self.run_py("rollback_drill.py", "--state", d / "export_state.json", "--status", d / "status.json", "--py-db", self.py_db,
-                        "--sessions-dir", self.corpus_dir, "--scratch", self.tmp / "s-t", "--out", self.tmp / "r.json", *DRILL_ARGS,
+                        "--sessions-dir", self.corpus_dir, "--scratch", self.tmp / "s-t", "--out", self.tmp / "r.json", *DRILL_ARGS, "--original-status", self.original,
                         directory=self.tamper_copy("agent_events_metrics.py"))
         self.assertEqual(r.returncode, 2, r.stderr)
 
