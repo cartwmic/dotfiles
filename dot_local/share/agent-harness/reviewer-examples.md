@@ -28,7 +28,7 @@ Why: data loss through a misleading doc. An operator reads the sentence, takes t
 ## Notes
 
 **N1. coordinator design review D38, round 2: note.** A PR-body principles table marked principle 6 "Partial" instead of pass or fail.
-Why: the label alone is the note. The obligation is real (one row per principle, pass or fail), but no user hits a label. The source reviewer also said the row hid a real principle-6 gap that nobody was asked to accept. That gap is a Fail and is raised as its own finding.
+Why: the label alone is a note: the obligation is real (pass or fail per row), but no user hits a label. The source reviewer also showed the row hid a real principle-6 gap (nothing checks a future template change). Raise such a gap as its own finding and mark the row Fail. Here it is still a note: nothing a user hits in this change, so it goes to the residuals for someone to accept.
 
 **N2. coordinator #206, design review: note.** The review also raised the wording of one requirement (LE-55) and a prose claim about smoke-test coverage.
 Why: both were text fixes in the build brief and changed no behaviour. The same review's stall risk (an unacknowledged prompt row would block every later event) did block.
