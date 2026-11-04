@@ -29,7 +29,7 @@ CODEX_VERSION = "9.9.9"
 class Env:
     """A throwaway HOME plus a chezmoi config for one profile."""
 
-    def __init__(self, profile="personal", codex_active=True, enabled=None):
+    def __init__(self, profile="personal", codex_active=True, enabled=True):  # t3Hub is off by default now; these tests are about it being on
         self._tmp = tempfile.TemporaryDirectory()
         self.home = Path(self._tmp.name) / "home"
         self.home.mkdir()
@@ -270,7 +270,7 @@ class CodexBlockTest(unittest.TestCase):
     SRC = "dot_codex/modify_private_config.toml.tmpl"
     BLOCK = 'a = 1\n\n# chezmoi:cliproxy-hub:begin\n[model_providers.cliproxy]\nname = "stale"\n# chezmoi:cliproxy-hub:end\n'
 
-    def render(self, profile, enabled=None):
+    def render(self, profile, enabled=True):
         env = Env(profile, enabled=enabled)
         try:
             return env.render(self.SRC)
@@ -308,6 +308,20 @@ class CodexBlockTest(unittest.TestCase):
         out = run_script(self.render("axon-work-computer"), '# chezmoi:caveman-style:begin\nx\n# chezmoi:caveman-style:end\nb = 2\n')
         self.assertNotIn("caveman", out)
         self.assertIn("b = 2", out)
+
+
+class DefaultTest(unittest.TestCase):
+    @on_mac
+    def test_test_instances_are_off_unless_data_turns_them_on(self):
+        env = Env()
+        env.cfg.write_text("data:\n  profile: personal\n")  # no t3Hub key: the .chezmoidata.toml default applies
+        try:
+            script = env.render("dot_t3/private_userdata/modify_settings.json.tmpl")
+        finally:
+            env.close()
+        with_ours = run_script(script, FIXTURE, want='{"claude-hub":{"driver":"claudeAgent"},"codex-hub":{"driver":"codex"}}')
+        left = json.loads(run_script(script, with_ours))["providerInstances"]
+        self.assertFalse(set(OURS) & set(left))  # applying the default removes both
 
 
 class ProfileGateTest(unittest.TestCase):

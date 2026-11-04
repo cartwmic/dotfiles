@@ -422,6 +422,11 @@ selection capture is unavailable. See
 
 ## T3 hub providers (personal Mac)
 
+**Retired 2026-11-03.** `t3Hub.enabled` now defaults to `false` in `.chezmoidata.toml`, so the next apply removes the
+`claude-hub` and `codex-hub` test instances, the Claude settings file for `claude-hub` and (while `hub.enabled` is off) the
+`[model_providers.cliproxy]` block. The code stays: set `t3Hub.enabled` to `true` under `data:` to bring them back. What follows
+describes them while on.
+
 Two extra provider instances in T3 Code send their traffic through the homelab CLIProxy hub
 (`https://cliproxy.internal.cartwmic.com`, home LAN or WireGuard): `claude-hub` ("Claude (hub)") and
 `codex-hub` ("Codex (hub)"). They exist on the personal profile on macOS only. `dot_t3/private_userdata/modify_settings.json.tmpl`
@@ -437,7 +442,7 @@ The apply targets are exactly `~/.t3/userdata/settings.json`, `~/.config/t3-hub-
 `~/.codex/config.toml` (chezmoi can only target a path whose parent directory exists, so the Claude file is not in its own folder).
 
 **Rollback.** Set `t3Hub.enabled` to `false` under `data:` in `~/.config/chezmoi/chezmoi.yaml` (the default in
-`.chezmoidata.toml` is `true`) and apply those three targets. That removes both ids, strips the Codex block and deletes
+`.chezmoidata.toml` is `false`) and apply those three targets. That removes both ids, strips the Codex block and deletes
 the Claude settings file (a managed file that renders empty is removed). Everything else in those files stays byte for byte.
 Delete the sources afterwards if you want them gone for good. Reverting the commit alone does not remove anything: chezmoi
 stops managing the paths, so set the switch first.
@@ -455,7 +460,7 @@ his personal machine, and the hub is not reachable from the work network.
 |---|---|---|
 | `~/.claude/settings.json` | `env.ANTHROPIC_BASE_URL` = the hub (no `/v1`) and `apiKeyHelper` = `op_read_cached.sh` on the hub key. `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` are not set: either would outrank the helper. | `dot_claude/modify_settings.json.tmpl` |
 | `~/.codex/config.toml` | top-level `model_provider = "cliproxy"` (the `[model_providers.cliproxy]` block it names is kept while either switch is on). | `dot_codex/modify_private_config.toml.tmpl` |
-| `~/.t3/userdata/settings.json` | the T3 `codex` instance, which is managed and so ignores `~/.codex`, becomes `setupMode: existing` with T3's downloaded Codex binary (from `~/.t3/tools/codex/active.json`, as `codex-hub`). Left alone when that file is missing. `claudeAgent` and `coordinator` are never touched: the global Claude settings cover them. | `dot_t3/private_userdata/modify_settings.json.tmpl` |
+| `~/.t3/userdata/settings.json` | the T3 `codex` instance, which is managed and so ignores `~/.codex`, becomes `setupMode: existing` with T3's downloaded Codex binary (from `~/.t3/tools/codex/active.json`). Its config is left alone when that file is missing. `displayName` is set on `claudeAgent` ("Claude"), `coordinator` ("Claude (coordinator)") and `codex` ("Codex"); no other field of `claudeAgent` or `coordinator` changes (the coordinator repo owns its launchArgs). T3's Usage page reads the hub through `usageLimitSources.cliproxy-hub` and `secretProviders.onepassword` (below). | `dot_t3/private_userdata/modify_settings.json.tmpl` |
 
 **Rollback.** Set `hub.enabled` to `false` under `data:` in `~/.config/chezmoi/chezmoi.yaml`, then apply the three targets
 (`chezmoi apply ~/.claude/settings.json ~/.codex/config.toml ~/.t3/userdata/settings.json`). Each file loses only what it was given:
@@ -464,8 +469,19 @@ the Claude URL only if it equals the hub URL, the helper only if it equals ours,
 entry edited by hand is kept). Other env keys, a different helper and every other key stay. Reverting the commit alone would leave the keys
 behind, because the scripts would no longer remove them, so the switch stays in the templates. Re-apply after T3 updates its Codex.
 
-`t3Hub.enabled` ([T3 hub providers](#t3-hub-providers-personal-mac)) is independent: it only owns the two test instances and the Claude
+**T3 usage from the hub.** Since the switch, T3 can no longer read Claude usage through the claude.ai sign-in. T3 has a built-in
+CLIProxyAPI usage source (`docs/user/usage.md` in pingdotgg/t3code, "Connect a CLIProxyAPI hub"; schema in `packages/contracts/src/settings.ts`).
+With the switch on, `~/.t3/userdata/settings.json` gets `usageLimitSources.cliproxy-hub` (url = the hub, `managementKey` = a
+reference to `op://developer/tb36gtnaocyezjk3dslomp64he/management`, never the value) and `secretProviders.onepassword`
+(`one_password`, account `my`). T3 reads the key with `op --cache=false read --account=my`, which goes through the **1Password
+desktop app**: it works when the app is unlocked and approves the read. T3's provider cannot use the service-account token that
+`op_read_cached.sh` uses. Switch-off removes each of those two entries (and the three displayNames) only while they still equal ours.
+
+`t3Hub.enabled` ([T3 hub providers](#t3-hub-providers-personal-mac)) is independent: it only owns the two retired test instances and the Claude
 settings file for `claude-hub`.
+
+The old `update_claude_settings.sh` and `reset_claude_settings.sh` (z.ai token and URL) are retired and removed from the personal Mac by
+`.chezmoiremove`, with their shell aliases: they wrote `ANTHROPIC_AUTH_TOKEN` or deleted `ANTHROPIC_BASE_URL`, which fights `hub.enabled`.
 
 Tests: `python3 -m unittest discover -s tests/hub -v` (the real-apply tests run on macOS only).
 
