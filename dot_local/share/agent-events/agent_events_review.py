@@ -71,6 +71,9 @@ def _scope(item):
 
 
 def _key(kind, scope, *parts):
+    """The identity of one log line, hashed: its repo scope, the head and number or id it is about, and the fields that tell two real events
+    about the same thing apart (its own `at`; an escape's `text`; a redesign's action). Two distinct events must not share a key (they
+    would count as one); the same line must always give the same key. Only the hash is kept."""
     return hashlib.sha256(json.dumps([kind, scope, *parts]).encode()).hexdigest()[:20]
 
 
@@ -109,11 +112,11 @@ def _event(o):
               and (dur is None or _int(dur)) and (cost is None or _num(cost)))
         return {"round": o["round"], "review_round": o["review_round"], "stage": o["stage"], "verdict": o["verdict"],
                 "model": None if model is None else (model if MODEL_RE.fullmatch(model) else "other"), "head": _s(o.get("head")),
-                "duration_ms": dur, "cost_usd": None if cost is None else float(cost), "at_ms": _at_ms(o["at"])} if ok else None
+                "duration_ms": dur, "cost_usd": None if cost is None else float(cost), "at_ms": _at_ms(o["at"]), "at": o["at"]} if ok else None
     if k == "finding":
         ok = (_int(o.get("round"), 1) and _log_round(o.get("id")) == o["round"] and o.get("severity") in SEVERITIES
               and o.get("effective") in SEVERITIES and not (o["severity"] == "note" and o["effective"] == "blocking"))
-        return {"id": o["id"], "round": o["round"], "severity": o["severity"], "effective": o["effective"],
+        return {"id": o["id"], "round": o["round"], "severity": o["severity"], "effective": o["effective"], "at": o["at"],
                 "demoted": int(o["severity"] == "blocking" and o["effective"] == "note")} if ok else None
     if k == "label":
         ok = _log_round(o.get("id")) is not None and o.get("relation") in RELATIONS
@@ -121,13 +124,14 @@ def _event(o):
         ok = _log_round(o.get("id")) is not None and o.get("outcome") in OUTCOMES
     elif k == "redesign":
         ok = _int(o.get("round"), 1) and o.get("makes_impossible") in IMPOSSIBLE and o.get("action") in ACTIONS
-        return {"round": o["round"], "action": o["action"], "makes_impossible": o["makes_impossible"],
+        return {"round": o["round"], "action": o["action"], "makes_impossible": o["makes_impossible"], "at": o["at"],
                 "component": _s(o.get("component"))} if ok else None
     elif k == "judge":
         ok = _int(o.get("round"), 1) and o.get("verdict") in JUDGE_VERDICTS
     elif k == "escape":
         ok = _int(o.get("round"), 1)
-        return {"round": o["round"], "at_ms": _at_ms(o["at"]), "head": _s(o.get("head")), "found_by": _s(o.get("found_by"))} if ok else None
+        return {"round": o["round"], "at_ms": _at_ms(o["at"]), "head": _s(o.get("head")), "found_by": _s(o.get("found_by")),
+                "at": o["at"], "text": _s(o.get("text"))} if ok else None
     return {} if ok else None
 
 
@@ -332,20 +336,21 @@ def _read_item(con, d, old_looks):
     for r in log.rounds.values():
         con.execute("INSERT INTO review_rounds VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (item, r["round"], r["review_round"], r["stage"], r["verdict"], r["model"],
-                     r["duration_ms"], r["cost_usd"], r["at_ms"], _key("round", scope, r["head"], r["round"])))
+                     r["duration_ms"], r["cost_usd"], r["at_ms"], _key("round", scope, r["head"], r["round"], r["at"])))
     by_id = {f["id"]: (f["sequence"], f["relation"], f["outcome"], int(f["has_component"])) for f in rep["findings"]} if fresh else {}
     for f in log.findings.values():
         x = by_id.get(f["id"], (None, None, None, None))
         con.execute("INSERT INTO review_findings VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (item, f["id"], f["round"], f["severity"], f["effective"], f["demoted"], *x,
-                     _key("finding", scope, log.rounds[f["round"]]["head"], f["id"])))
+                     _key("finding", scope, log.rounds[f["round"]]["head"], f["id"], f["at"])))
     for i, r in enumerate(log.redesigns):
         con.execute("INSERT INTO review_redesigns VALUES (?,?,?,?,?,?)",
                     (item, i, r["round"], r["action"], r["makes_impossible"],
-                     _key("redesign", scope, log.rounds[r["round"]]["head"], r["round"], r["component"])))
+                     _key("redesign", scope, log.rounds[r["round"]]["head"], r["round"], r["component"], r["at"],
+                          r["action"], r["makes_impossible"])))
     for i, r in enumerate(log.escapes):
         con.execute("INSERT INTO review_escapes VALUES (?,?,?,?,?)",
-                    (item, i, r["round"], r["at_ms"], _key("escape", scope, r["head"], r["round"], r["found_by"])))
+                    (item, i, r["round"], r["at_ms"], _key("escape", scope, r["head"], r["round"], r["found_by"], r["at"], r["text"])))
 
 
 def update(con, root=None):
@@ -400,11 +405,20 @@ def new_ledger():
     return {"v": LEDGER_VERSION, "seen": {}, "tot": {}, "cost": {}, "g": {}}
 
 
+def _labels(k):
+    """A series' labels as the ledger stores them: JSON text of an object whose values are strings (counters() reads them back)."""
+    try:
+        d = json.loads(k) if isinstance(k, str) else None
+    except (ValueError, RecursionError):
+        return False
+    return isinstance(d, dict) and all(isinstance(a, str) and isinstance(b, str) for a, b in d.items())
+
+
 def valid_ledger(led):
     try:
         return (isinstance(led, dict) and led.get("v") == LEDGER_VERSION and isinstance(led["seen"], dict) and isinstance(led["tot"], dict)
-                and all(isinstance(v, dict) and all(isinstance(k, str) and _num(x) for k, x in v.items()) for v in led["tot"].values())
-                and isinstance(led["cost"], dict) and all(isinstance(v, list) and len(v) == 2 and _num(v[0]) and isinstance(v[1], str)
+                and all(isinstance(v, dict) and all(_labels(k) and _num(x) for k, x in v.items()) for v in led["tot"].values())
+                and isinstance(led["cost"], dict) and all(isinstance(v, list) and len(v) == 2 and _num(v[0]) and _labels(v[1])
                                                          for v in led["cost"].values())
                 and isinstance(led["g"], dict) and all(isinstance(v, list) and len(v) == 2 for v in led["g"].values()))
     except (KeyError, TypeError):

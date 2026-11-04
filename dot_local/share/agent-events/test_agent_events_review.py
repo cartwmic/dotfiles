@@ -1120,6 +1120,60 @@ class Disturbances(ReviewBase):
     def ledger(self):
         return json.loads((self.state / "export_state.json").read_text())["review"]
 
+    def two_escapes(self, first=("2026-11-03T01:00:00Z", "first defect"), second=("2026-11-03T02:00:00Z", "second defect")):
+        """Round 3 review: one PR finds two defects traced to the same passed round. Same head, round and found_by; the lines differ in
+        their own `at` and `text`. The report is rewritten to match, as the tool would."""
+        with open(self.log, "a") as fh:
+            for at, text in (first, second):
+                fh.write(json.dumps({"event": "escape", "at": at, "item": T, "head": "abc1234", "round": 3, "found_by": "dotfiles#160", "text": text}) + "\n")
+        self.tick(3)
+        rep = json.loads(self.rep.read_text())
+        rep["log"]["lines"] += 2
+        rep["log"]["events"]["escape"] += 2
+        self.rep.write_text(json.dumps(rep, indent=2) + "\n")
+        self.tick(3)
+        self.assertEqual(self.reader(), {"ok": True, "problems": {}})
+
+    def test_two_escapes_from_one_finder_against_one_round_count_as_two(self):  # round 3, B1
+        self.two_escapes()
+        self.check({**self.want, FAMILY["escapes"]: {("golden",): 2.0}})
+
+    def test_two_escapes_in_the_same_second_are_told_apart_by_their_text(self):
+        self.two_escapes(first=("2026-11-03T01:00:00Z", "first defect"), second=("2026-11-03T01:00:00Z", "second defect"))
+        self.check({**self.want, FAMILY["escapes"]: {("golden",): 2.0}})
+
+    def test_the_same_escape_line_written_twice_is_one_escape(self):
+        self.two_escapes(first=("2026-11-03T01:00:00Z", "one defect"), second=("2026-11-03T01:00:00Z", "one defect"))
+        self.check({**self.want, FAMILY["escapes"]: {("golden",): 1.0}})
+
+    def test_red_control_the_old_escape_key_counts_two_escapes_as_one(self):
+        real = rv._key
+        rv._key = lambda kind, scope, *parts: real(kind, scope, *(parts[:3] if kind == "escape" else parts))  # repo, head, round, found_by
+        self.addCleanup(lambda: setattr(rv, "_key", real))
+        self.two_escapes()
+        self.assertEqual(self.totals()[FAMILY["escapes"]], {("golden",): 1.0})  # the second defect is lost: the test above would fail
+
+    def test_a_ledger_whose_label_key_is_not_json_does_not_stop_the_export(self):  # round 3, N1
+        pi_before = self.pi_series()
+        posts = len(self.c.requests)
+        epoch = self.status()["epoch_ns"]
+        for junk in ({"pi_review_rounds_total": {"notjson": 1}}, {"pi_review_rounds_total": {"[]": 1}}, {"pi_review_rounds_total": {"{\"a\": 1}": 1}},
+                     {"pi_review_rounds_total": {"{\"a\": \"b\"": 1}}, {"pi_review_rounds_total": {"\u0000": 1}}, {"x": {"[" * 100000: 1}}):
+            st = json.loads((self.state / "export_state.json").read_text())
+            st["review"]["tot"] = junk
+            (self.state / "export_state.json").write_text(json.dumps(st, separators=(",", ":")))
+            self.tick(2)  # tick() asserts rc 0
+            self.assertIsNone(self.status()["last_export_error"], junk)
+            self.assertEqual(self.pi_series(), pi_before, junk)
+            self.assertEqual(self.status()["epoch_ns"], epoch, junk)
+        self.assertGreater(len(self.c.requests), posts)  # Pi export went on
+        st = json.loads((self.state / "export_state.json").read_text())
+        st["review"]["cost"] = {"cost:k": [1.0, "notjson"]}
+        (self.state / "export_state.json").write_text(json.dumps(st, separators=(",", ":")))
+        self.tick(2)
+        self.assertIsNone(self.status()["last_export_error"])
+        self.check(self.want)
+
     def test_a_missing_ledger_baselines_only_the_review_series(self):
         pi_before = self.pi_series()
         st = json.loads((self.state / "export_state.json").read_text())
@@ -1206,6 +1260,54 @@ class Disturbances(ReviewBase):
         self.tick(3)
         self.assertTrue(self.falls or self.totals() != self.want, "the property did not notice totals recomputed from disk")
         self.assertNotEqual(self.totals(), self.want)  # the comeback was counted again
+
+
+class Keys(ReviewBase):
+    """Two distinct real events must not share a ledger key (they would count as one); the same line must always give the same key."""
+
+    def log_of(self, item, events):
+        write_log(self.review / item, events)
+
+    def count(self, name):
+        self.build()
+        return series_of(self.families()[0], name)
+
+    ROUND = {"event": "round", "at": "2026-11-03T00:00:00Z", "round": 1, "review_round": 1, "stage": "diff", "head": "abc", "verdict": "fail"}
+    FINDING = {"event": "finding", "at": "2026-11-03T00:00:01Z", "id": "r1.f1", "round": 1, "severity": "note", "effective": "note"}
+
+    def test_two_redesigns_of_one_component_in_one_round_are_two_events(self):
+        base = {"event": "redesign", "at": "2026-11-03T00:00:02Z", "component": "gate", "round": 1, "blind_session": "b", "comparer_session": "c"}
+        self.log_of("golden#k1", [self.ROUND, {**base, "makes_impossible": "no", "action": "rang-michael"},
+                                  {**base, "at": "2026-11-03T00:05:00Z", "makes_impossible": "yes", "action": "switched"}])
+        self.assertEqual(self.count(FAMILY["redesigns"]), {("golden", "rang-michael", "no"): 1, ("golden", "switched", "yes"): 1})
+        # even in one second, with the same component and round, a different decision is a different event
+        self.log_of("golden#k2", [self.ROUND, {**base, "makes_impossible": "no", "action": "kept-fixing"}, {**base, "makes_impossible": "yes", "action": "switched"}])
+        self.assertEqual(sum(self.count(FAMILY["redesigns"]).values()), 4)
+
+    def test_two_items_of_one_repo_at_the_same_head_and_round_number_both_count(self):
+        late = {**self.ROUND, "at": "2026-11-03T05:00:00Z"}
+        self.log_of("golden#k1", [self.ROUND, self.FINDING])
+        self.log_of("golden#k2", [late, {**self.FINDING, "at": "2026-11-03T05:00:01Z"}])  # another PR reviewed at the same commit, round 1, finding f1
+        self.assertEqual(sum(self.count(FAMILY["rounds"]).values()), 2)
+        self.assertEqual(sum(self.count(FAMILY["findings"]).values()), 2)
+
+    def test_the_same_lines_always_give_the_same_keys(self):
+        self.log_of("golden#k1", [self.ROUND, self.FINDING])
+        first = self.count(FAMILY["rounds"])
+        shutil.move(str(self.review / "golden#k1"), str(self.review / "golden#k9"))  # a rename
+        self.build()
+        self.assertEqual(self.count(FAMILY["rounds"]), first)
+        self.assertEqual(sum(self.count(FAMILY["findings"]).values()), 1)
+
+    def test_red_control_the_old_keys_merge_distinct_events(self):
+        real = rv._key
+        old = {"round": 2, "finding": 2, "redesign": 3, "escape": 3}  # how many parts each key had before `at`, `text` and `action` joined them
+        rv._key = lambda kind, scope, *parts: real(kind, scope, *parts[:old.get(kind, len(parts))])
+        self.addCleanup(lambda: setattr(rv, "_key", real))
+        late = {**self.ROUND, "at": "2026-11-03T05:00:00Z"}
+        self.log_of("golden#k1", [self.ROUND, self.FINDING])
+        self.log_of("golden#k2", [late, {**self.FINDING, "at": "2026-11-03T05:00:01Z"}])
+        self.assertEqual(sum(self.count(FAMILY["rounds"]).values()), 1)  # the second review at the same head is lost: the test above would fail
 
 
 class Cli(ReviewBase):
