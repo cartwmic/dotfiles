@@ -63,15 +63,16 @@ CREATE TABLE IF NOT EXISTS review_items (
   looks TEXT NOT NULL, skipped_redesigns INTEGER, needs_component INTEGER, undisposed_blocking INTEGER);
 CREATE TABLE IF NOT EXISTS review_rounds (
   item TEXT NOT NULL, round INTEGER NOT NULL, review_round INTEGER NOT NULL, stage TEXT NOT NULL, verdict TEXT NOT NULL,
-  model TEXT, duration_ms INTEGER, cost_usd REAL, at_ms INTEGER, PRIMARY KEY (item, round));
+  model TEXT, duration_ms INTEGER, cost_usd REAL, at_ms INTEGER, key TEXT NOT NULL, PRIMARY KEY (item, round));
 CREATE TABLE IF NOT EXISTS review_findings (
   item TEXT NOT NULL, id TEXT NOT NULL, round INTEGER NOT NULL, severity TEXT NOT NULL, effective TEXT NOT NULL,
-  demoted INTEGER NOT NULL, sequence INTEGER, relation TEXT, outcome TEXT, has_component INTEGER, PRIMARY KEY (item, id));
+  demoted INTEGER NOT NULL, sequence INTEGER, relation TEXT, outcome TEXT, has_component INTEGER, key TEXT NOT NULL,
+  PRIMARY KEY (item, id));
 CREATE TABLE IF NOT EXISTS review_redesigns (
   item TEXT NOT NULL, seq INTEGER NOT NULL, round INTEGER NOT NULL, action TEXT NOT NULL, makes_impossible TEXT NOT NULL,
-  PRIMARY KEY (item, seq));
+  key TEXT NOT NULL, PRIMARY KEY (item, seq));
 CREATE TABLE IF NOT EXISTS review_escapes (
-  item TEXT NOT NULL, seq INTEGER NOT NULL, round INTEGER NOT NULL, at_ms INTEGER, PRIMARY KEY (item, seq));
+  item TEXT NOT NULL, seq INTEGER NOT NULL, round INTEGER NOT NULL, at_ms INTEGER, key TEXT NOT NULL, PRIMARY KEY (item, seq));
 CREATE TABLE IF NOT EXISTS review_problems (reason TEXT PRIMARY KEY, items INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS events (
   path TEXT NOT NULL, seq INTEGER NOT NULL, ts_ms INTEGER, turn_idx INTEGER,

@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sqlite3
@@ -29,6 +30,12 @@ NAMES = ("treadmill", "clean-pass", "design-then-diff", "redesign-switch", "miss
 
 def read_lines(name):
     return [json.loads(x) for x in (GOLDEN / name / "findings.jsonl").read_text().splitlines() if x.strip()]  # hand-written has a blank line
+
+
+def tag_log(text, tag):
+    """The golden logs reuse synthetic heads (1111111...) in every item; real items never share a head. A scratch copy gets its item's tag
+    in each head so ledger keys (repo, head, round or id) do not collide between the items one test places side by side."""
+    return re.sub(r'("head"\s*:\s*")', lambda m: m.group(1) + tag + ":", text)
 
 
 def item_of(name):
@@ -107,6 +114,11 @@ class ReviewBase(base.Tick):
         super().setUp()
         self.traces = Path(self._tmp.name) / "traces"
         self.review = self.traces / "emitted" / "review"
+        self.gold = Path(self._tmp.name) / "gold"  # the golden pairs with each item's heads tagged (see tag_log)
+        for n in NAMES:
+            (self.gold / n).mkdir(parents=True)
+            shutil.copy(GOLDEN / n / "report.json", self.gold / n / "report.json")
+            (self.gold / n / "findings.jsonl").write_text(tag_log((GOLDEN / n / "findings.jsonl").read_text(), item_of(n)))
         prior = {k: os.environ.get(k) for k in ("AGENT_TRACES_DIR", "AGENT_EVENTS_PROJECTS")}
         os.environ["AGENT_TRACES_DIR"] = str(self.traces)
         os.environ["AGENT_EVENTS_PROJECTS"] = APPROVED
@@ -114,21 +126,29 @@ class ReviewBase(base.Tick):
         self.addCleanup(lambda: setattr(ae, "_GIT_ROOTS", None))
         self.addCleanup(lambda: [os.environ.__setitem__(k, v) if v is not None else os.environ.pop(k, None) for k, v in prior.items()])
 
-    def place(self, *names, as_item=None):
+    def place(self, *names, as_item=None, tag=None):
         """Copy golden pairs into the scratch review folder under their own item names; as_item renames one copy (its report too)."""
         for n in names:
             if as_item is None:
-                shutil.copytree(GOLDEN / n, self.review / item_of(n), dirs_exist_ok=True)
+                shutil.copytree(self.gold / n, self.review / item_of(n), dirs_exist_ok=True)
                 continue
-            write_log(self.review / as_item, read_lines(n), json.loads((GOLDEN / n / "report.json").read_text()) | {"item": as_item})
+            dest = self.review / as_item
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "findings.jsonl").write_text(tag_log((GOLDEN / n / "findings.jsonl").read_text(), tag or as_item))
+            (dest / "report.json").write_text(json.dumps(json.loads((GOLDEN / n / "report.json").read_text()) | {"item": as_item}, indent=2) + "\n")
 
     def tables(self, sql, *params):
         return [tuple(r) for r in self.q(sql, *params)]
 
     def families(self):
+        """The review counters and gauges as a tick would produce them: a ledger that lives as long as the test is applied to the
+        tables each call (so a total that fell on disk is held by it, as in production)."""
+        led = self.__dict__.setdefault("ledger", rv.new_ledger())
+        approved = ae.approved_projects()
         con = ae.connect(self.db, readonly=True)
         try:
-            return am.collect(con), am.review_reader.gauges(con, ae.approved_projects())
+            rv.apply(con, led, approved)
+            return rv.counters(led), rv.gauges(con, approved, led)
         finally:
             con.close()
 
@@ -169,7 +189,7 @@ class Series(ReviewBase):
         res = self.problems()
         self.assertEqual(res, {"ok": True, "problems": {}})
         fams, _ = self.families()
-        items = {item_of(n): read_lines(n) for n in NAMES}
+        items = {item_of(n): read_lines(n) for n in NAMES}  # heads are not part of any counted label
         want = expected_from_log(items, set(APPROVED.split(":")))
         for key, name in FAMILY.items():
             got = series_of(fams, name)
@@ -231,8 +251,10 @@ class Series(ReviewBase):
 
     def test_an_old_database_without_the_review_tables_exports_without_them(self):
         con = sqlite3.connect(":memory:")
-        self.assertEqual(rv.counters(con, set()), [])
-        self.assertEqual(rv.gauges(con, set()), [])
+        led = rv.new_ledger()
+        rv.apply(con, led, set())
+        self.assertEqual(rv.counters(led), [])
+        self.assertEqual(rv.gauges(con, set(), led), [])
 
 
 class Strict(ReviewBase):
@@ -275,7 +297,7 @@ class Strict(ReviewBase):
             self.assertEqual(self.problems()["problems"], {"report_schema": 1}, bad)
         (d / "report.json").write_text("{not json")
         self.assertEqual(self.problems()["problems"], {"report_schema": 1})  # an unreadable report is not a v1 report
-        rep = json.loads((GOLDEN / "treadmill" / "report.json").read_text())
+        rep = json.loads((self.gold / "treadmill" / "report.json").read_text())
         rep["item"] = "someone-else#1"
         (d / "report.json").write_text(json.dumps(rep, indent=2) + "\n")
         self.assertEqual(self.problems()["problems"], {"report_schema": 1})  # a report for another item
@@ -357,7 +379,7 @@ class Strict(ReviewBase):
         (d / "report.json").unlink()
         self.assertEqual(self.problems(), {"ok": True, "problems": {}})  # a tool's first round, before its first report
         self.assertEqual(self.problems(), {"ok": False, "problems": {"report_missing": 1}})
-        shutil.copy(GOLDEN / "treadmill" / "report.json", d / "report.json")
+        shutil.copy(self.gold / "treadmill" / "report.json", d / "report.json")
         self.assertEqual(self.problems(), {"ok": True, "problems": {}})
         (d / "report.json").unlink()
         self.assertEqual(self.problems(), {"ok": True, "problems": {}})  # the count starts again
@@ -433,7 +455,7 @@ class Staleness(ReviewBase):
                   "kind not summarised": lambda r: r["summarises"]["events"].remove("label"),
                   "finding ids": lambda r: r["findings"][0].update(id="r1.zz")}
         for what, fn in mutate.items():
-            rep = json.loads((GOLDEN / "treadmill" / "report.json").read_text())
+            rep = json.loads((self.gold / "treadmill" / "report.json").read_text())
             fn(rep)
             (self.d / "report.json").write_text(json.dumps(rep, indent=2) + "\n")
             self.problems()
@@ -481,7 +503,7 @@ class Staleness(ReviewBase):
 
     def test_a_row_with_no_report_yet_has_no_report_derived_values(self):
         shutil.rmtree(self.review)
-        write_log(self.review / "golden#t901", read_lines("treadmill"))  # a log, and no report yet
+        write_log(self.review / "golden#t901", [json.loads(x) for x in (self.gold / "treadmill" / "findings.jsonl").read_text().splitlines()])  # a log, and no report yet
         self.build()
         self.build()
         fams, gauges = self.families()
@@ -574,7 +596,7 @@ class Baseline(ReviewBase):
         self.assertEqual(rounds, {("golden", "fail", "diff", "claude-opus-5-5"): 0.0, ("golden", "pass", "diff", "claude-opus-5-5"): 0.0})
         for fam in FAMILY.values():
             self.assertTrue(all(v == 0 for v in points(first, fam).values()), fam)
-        self.assertIn("pi_review", self.state_file()["seeded_families"])
+        self.assertIn("pi_review@1", self.state_file()["seeded_families"])
         # a restart does not re-baseline: the same history is still 0
         self.assertEqual(am.run_once(self.root, self.db), 0)
         self.assertTrue(all(v == 0 for v in points(c.requests[-1], FAMILY["rounds"]).values()))
@@ -622,7 +644,7 @@ class Baseline(ReviewBase):
         review = {k: v for k, v in after["series"].items() if v["n"].startswith("pi_review")}
         self.assertTrue(review)
         self.assertTrue(all(all(x == 0 for x in e["sent"]) for e in review.values()))
-        self.assertEqual(after["seeded_families"], ["pi_review"])
+        self.assertEqual(after["seeded_families"], ["pi_review@1"])
         for fam in ("pi_sessions", "pi_llm_calls", "pi_tokens"):
             self.assertEqual(points(c.requests[-1], fam), points(c.requests[0], fam), fam)
 
@@ -640,16 +662,17 @@ class Baseline(ReviewBase):
         self.assertNotIn("seeded_families", state)
 
     def test_a_state_marker_that_is_not_a_list_baselines_again(self):
-        state = {"seeded": True, "fp": "x", "seeded_families": "pi_review", "series": {}}
+        state = {"seeded": True, "fp": "x", "seeded_families": "pi_review@1", "series": {}}
         metrics = [{"name": "pi_review_rounds_total", "type": "sum", "points": [({"project": "p"}, 4.0)]}]
         _, fams = am.account(metrics, state, True, "x")
         self.assertEqual(fams[0]["points"][0][1], 0)
-        self.assertEqual(state["seeded_families"], ["pi_review"])
+        self.assertEqual(state["seeded_families"], ["pi_review@1"])
 
 
 class Hold(ReviewBase):
     """B1 of review round 1: withdrawing an unhealthy item's report-derived values made a project's counter fall, account()
-    re-took its baseline, and the item's recovery was counted as new activity. The values are held instead."""
+    re-took its baseline, and the item's recovery was counted as new activity. The ledger counts each event once, so the
+    exported value is the same before, during and after the problem (the Disturbances class covers every other path)."""
 
     def sent(self, name):
         st = json.loads((self.state / "export_state.json").read_text())
@@ -703,8 +726,8 @@ class Hold(ReviewBase):
         disp = self.exported(c, FAMILY["dispositions"])
         d = self.review / T
         for how in ("schema", "unknown_event", "bad_line", "stale", "missing"):
-            shutil.copy(GOLDEN / "treadmill" / "report.json", d / "report.json")
-            shutil.copy(GOLDEN / "treadmill" / "findings.jsonl", d / "findings.jsonl")
+            shutil.copy(self.gold / "treadmill" / "report.json", d / "report.json")
+            shutil.copy(self.gold / "treadmill" / "findings.jsonl", d / "findings.jsonl")
             for _ in range(2):
                 self.assertEqual(am.run_once(self.root, self.db), 0)
             if how == "schema":
@@ -731,7 +754,7 @@ class Hold(ReviewBase):
                 self.assertEqual(gauge("pi_review_skipped_redesigns"), skipped, how)
         self.assertEqual(self.sent(FAMILY["relations"]), {("golden", "new"): 0.0, ("golden", "repeat"): 0.0, ("golden", "follow-on"): 0.0})
 
-    def test_an_unreadable_log_keeps_the_items_previous_rows(self):
+    def test_an_unreadable_log_reads_as_nothing_on_disk_and_the_ledger_keeps_the_totals(self):
         self.place("treadmill")
         self.build()
         before = self.families()
@@ -743,8 +766,11 @@ class Hold(ReviewBase):
         (log.parent / "report.json").touch()  # something changed, so the folder is read again
         res = self.build()["review"]
         self.assertEqual(res["problems"], {"bad_line": 1})
-        self.assertEqual(self.families()[0], before[0])
-        self.assertEqual(self.tables("SELECT COUNT(*) FROM review_rounds"), [(3,)])
+        self.assertEqual(self.tables("SELECT COUNT(*) FROM review_rounds"), [(0,)])  # the tables show the disk
+        self.assertEqual(self.families()[0], before[0])  # the totals are the ledger's
+        os.chmod(log, 0o644)
+        self.build()
+        self.assertEqual(self.families()[0], before[0])  # and what comes back is not counted again
 
 
 class Guarded(ReviewBase):
@@ -823,7 +849,7 @@ class Unreferenced(ReviewBase):
         self.place("clean-pass")
         (self.review / ".DS_Store").write_text("x")
         (self.review / ".hidden").mkdir()
-        write_log(self.review / ".scratch#1", read_lines("clean-pass"))
+        write_log(self.review / ".scratch#1", [json.loads(x) for x in (self.gold / "clean-pass" / "findings.jsonl").read_text().splitlines()])
         self.assertEqual(self.problems(), {"ok": True, "problems": {}})
         self.assertEqual(self.tables("SELECT item FROM review_items"), [(C,)])
 
@@ -865,6 +891,323 @@ class Ids(ReviewBase):
         self.assertEqual(self.problems()["problems"].get("bad_line"), 1)
 
 
+class Disturbances(ReviewBase):
+    """Every disturbance in the blind design, plus both reviewers' repro scripts (round 1 doublecount.sh, round 2 r2paths.py), driven
+    through real ticks. After every tick: no pi_review_* counter fell (and none vanished). At the end: the totals are exactly the
+    true activity, worked out from the log lines. The base is two items baselined at 0, then one item of real activity."""
+
+    def setUp(self):
+        super().setUp()
+        self.place("treadmill", "design-then-diff")
+        self.c = self.collector()
+        self.prev, self.falls = {}, []
+        self.tick(2)  # the baseline: the history on disk exports 0
+        self.place("missing-component")
+        self.tick(2)
+        self.d = self.review / T
+        self.log = self.d / "findings.jsonl"
+        self.rep = self.d / "report.json"
+        self.orig_log, self.orig_rep = self.log.read_bytes(), self.rep.read_bytes()
+        self.want = self.worked_out("missing-component")
+        self.check(self.want)
+
+    # -- the property
+    def tick(self, n=2):
+        for _ in range(n):
+            self.assertEqual(am.run_once(self.root, self.db), 0)
+            self.record()
+
+    def record(self):
+        st = json.loads((self.state / "export_state.json").read_text())
+        cur = {k: e["sent"][0] for k, e in st["series"].items() if e["n"].startswith("pi_review")}
+        for k, v in self.prev.items():
+            if cur.get(k) is None or cur[k] < v - 1e-9:
+                self.falls.append((k, v, cur.get(k)))
+        self.prev = cur
+
+    def totals(self):
+        st = json.loads((self.state / "export_state.json").read_text())
+        out = {}
+        for e in st["series"].values():
+            if e["n"].startswith("pi_review") and e["t"] == "sum" and e["sent"][0]:
+                lab = tuple(v for _, v in sorted(e["l"].items(), key=lambda kv: LABEL_ORDER[e["n"]].index(kv[0])))
+                out.setdefault(e["n"], {})[lab] = round(e["sent"][0], 9)
+        return out
+
+    def worked_out(self, *names):
+        """The true counters for these golden items, from their log lines alone."""
+        want = expected_from_log({item_of(n): read_lines(n) for n in names}, set(APPROVED.split(":")))
+        return {FAMILY[k]: {lab: round(v, 9) for lab, v in d.items() if v} for k, d in want.items() if d}
+
+    def check(self, want, what=""):
+        self.assertEqual(self.falls, [], what)
+        self.assertEqual(self.totals(), want, what)
+
+    def edit_first_line(self):
+        lines = self.orig_log.split(b"\n")
+        lines[0] = lines[0][:-3]
+        self.log.write_bytes(b"\n".join(lines))
+
+    # -- the disturbances
+    def test_a_line_appended_by_hand_then_the_report_rewritten(self):  # round 1: doublecount.sh
+        with open(self.log, "a") as fh:
+            fh.write(json.dumps({"event": "escape", "at": "2026-11-03T00:00:00Z", "item": T, "head": "x", "round": 3, "found_by": "dogfood", "text": "hand"}) + "\n")
+        self.tick(3)  # one look, two (confirmed stale), a third
+        self.assertEqual(self.reader()["problems"], {"report_stale": 1})
+        rep = json.loads(self.rep.read_text())
+        rep["log"]["lines"] += 1
+        rep["log"]["events"]["escape"] += 1
+        self.rep.write_text(json.dumps(rep, indent=2) + "\n")
+        self.tick(3)
+        self.assertEqual(self.reader(), {"ok": True, "problems": {}})
+        self.check({**self.want, FAMILY["escapes"]: {("golden",): 1.0}})  # the one true new event, counted once
+
+    def test_a_round_line_broken_then_repaired(self):  # round 2: breakround
+        self.edit_first_line()
+        self.tick(3)
+        self.assertIn("bad_line", self.reader()["problems"])
+        self.log.write_bytes(self.orig_log)
+        self.tick(3)
+        self.assertEqual(self.reader(), {"ok": True, "problems": {}})
+        self.check(self.want)
+
+    def test_a_finding_line_broken_then_repaired(self):  # round 2: breakfinding
+        lines = self.orig_log.split(b"\n")
+        i = next(n for n, l in enumerate(lines) if b'"finding"' in l)
+        lines[i] = lines[i][:-3]
+        self.log.write_bytes(b"\n".join(lines))
+        self.tick(3)
+        self.log.write_bytes(self.orig_log)
+        self.tick(3)
+        self.check(self.want)
+
+    def test_a_log_truncated_to_nothing_then_restored(self):  # round 2: truncate
+        self.log.write_bytes(b"")
+        self.tick(3)
+        self.log.write_bytes(self.orig_log)
+        self.tick(3)
+        self.check(self.want)
+
+    def test_a_log_cut_to_fifteen_lines_then_restored(self):  # round 2: truncate-partial
+        self.log.write_bytes(b"\n".join(self.orig_log.split(b"\n")[:15]) + b"\n")
+        self.tick(3)
+        self.log.write_bytes(self.orig_log)
+        self.tick(3)
+        self.check(self.want)
+
+    def test_a_log_that_loses_its_last_line_without_a_newline_then_returns(self):
+        self.log.write_bytes(self.orig_log.rstrip(b"\n")[:-5])  # a crash mid-write
+        self.tick(3)
+        self.log.write_bytes(self.orig_log)
+        self.tick(3)
+        self.check(self.want)
+
+    def test_a_report_malformed_missing_and_stale_then_recovered(self):
+        self.rep.write_text("{not json")
+        self.tick(3)
+        self.assertEqual(self.reader()["problems"], {"report_schema": 1})
+        self.rep.write_bytes(self.orig_rep)
+        self.tick(2)
+        self.rep.unlink()
+        self.tick(3)
+        self.assertEqual(self.reader()["problems"], {"report_missing": 1})
+        self.rep.write_bytes(self.orig_rep)
+        self.tick(2)
+        rep = json.loads(self.orig_rep)
+        rep["log"]["lines"] -= 1
+        self.rep.write_text(json.dumps(rep, indent=2) + "\n")
+        self.tick(3)
+        self.assertEqual(self.reader()["problems"], {"report_stale": 1})
+        self.rep.write_bytes(self.orig_rep)
+        self.tick(3)
+        self.assertEqual(self.reader(), {"ok": True, "problems": {}})
+        self.check(self.want)
+
+    def test_a_report_with_an_unknown_schema_then_recovered(self):
+        for field in ("report_schema", "findings_schema"):
+            rep = json.loads(self.orig_rep)
+            rep[field] = 2
+            self.rep.write_text(json.dumps(rep, indent=2) + "\n")
+            self.tick(3)
+            self.assertEqual(self.reader()["problems"], {field: 1})
+            self.rep.write_bytes(self.orig_rep)
+            self.tick(2)
+        self.check(self.want)
+
+    def test_a_folder_moved_away_and_back(self):  # round 2: rmdir
+        def open_items():
+            return sum(points(self.c.requests[-1], "pi_review_items").values())
+        before = open_items()
+        shutil.move(str(self.d), str(Path(self._tmp.name) / "parked"))
+        self.tick(3)
+        self.assertEqual(open_items(), before - 1)  # a gauge is right to drop
+        shutil.move(str(Path(self._tmp.name) / "parked"), str(self.d))
+        self.tick(3)
+        self.assertEqual(open_items(), before)
+        self.check(self.want)
+
+    def test_the_database_deleted_and_rebuilt(self):
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            Path(str(self.db) + suffix).unlink(missing_ok=True)
+        self.tick(3)
+        self.assertEqual(self.tables("SELECT COUNT(*) FROM review_items"), [(3,)])  # rebuilt from the files
+        self.check(self.want)
+
+    def test_a_database_set_aside_as_corrupt_and_rebuilt(self):
+        self.db.write_bytes(b"this is not a database" * 100)
+        self.tick(3)
+        self.check(self.want)
+
+    def test_an_unknown_event_kind_appears_and_goes(self):
+        with open(self.log, "a") as fh:
+            fh.write('{"event": "teleport", "at": "2026-11-03T00:00:00Z"}\n')
+        self.tick(3)
+        self.assertIn("unknown_event", self.reader()["problems"])
+        self.log.write_bytes(self.orig_log)
+        self.tick(3)
+        self.check(self.want)
+
+    def test_the_log_replaced_by_another_and_the_original_restored(self):  # round 2: replace
+        sub = tag_log((GOLDEN / "clean-pass" / "findings.jsonl").read_text(), "substitute")
+        self.log.write_text(sub)
+        self.rep.write_text(json.dumps(json.loads((GOLDEN / "clean-pass" / "report.json").read_text()) | {"item": T}, indent=2) + "\n")
+        self.tick(3)
+        self.log.write_bytes(self.orig_log)
+        self.rep.write_bytes(self.orig_rep)
+        self.tick(3)
+        # the substitute is a different review (other head): its round and its finding are real activity, counted once and kept
+        extra = self.worked_out("clean-pass")
+        want = {fam: {lab: round(self.want.get(fam, {}).get(lab, 0) + extra.get(fam, {}).get(lab, 0), 9)
+                      for lab in set(self.want.get(fam, {})) | set(extra.get(fam, {}))} for fam in set(self.want) | set(extra)}
+        want = {fam: d for fam, d in want.items() if d}
+        want.pop(FAMILY["cost"], None) if FAMILY["cost"] not in extra else None
+        self.check(want)
+
+    def test_a_folder_renamed_from_a_placeholder_to_its_number(self):  # round 2: rename; the live coordinator#PR
+        new = self.review / "golden#9001"
+        shutil.move(str(self.d), str(new))
+        rep = json.loads((new / "report.json").read_text())
+        (new / "report.json").write_text(json.dumps(rep | {"item": "golden#9001"}, indent=2) + "\n")
+        self.tick(3)
+        shutil.move(str(new), str(self.d))
+        (self.d / "report.json").write_bytes(self.orig_rep)
+        self.tick(3)
+        self.check(self.want)  # neither recounted nor dropped, one way or the other
+
+    def test_a_reused_placeholder_name_counts_its_new_reviews(self):  # the comparer's case
+        ph = self.review / "golden#PR"
+        self.place("clean-pass", as_item="golden#PR")  # the first PR to use the name
+        self.tick(3)
+        first = self.worked_out("clean-pass")
+        shutil.rmtree(ph)
+        self.place("hand-written", as_item="golden#PR", tag="the-next-PR")  # the next PR reuses the name; its reviews have other heads
+        self.tick(3)
+        second = self.worked_out("hand-written")
+        want = {}
+        for part in (self.want, first, second):
+            for fam, d in part.items():
+                for lab, v in d.items():
+                    want.setdefault(fam, {})[lab] = round(want.get(fam, {}).get(lab, 0) + v, 9)
+        self.check(want)
+
+    def test_the_same_item_under_two_names_counts_once(self):
+        self.place("missing-component", as_item="golden#9002")  # the same log, copied to another folder name
+        shutil.copy(self.gold / "missing-component" / "findings.jsonl", self.review / "golden#9002" / "findings.jsonl")
+        self.tick(3)
+        self.check(self.want)
+
+    # -- the ledger itself
+    def ledger(self):
+        return json.loads((self.state / "export_state.json").read_text())["review"]
+
+    def test_a_missing_ledger_baselines_only_the_review_series(self):
+        pi_before = self.pi_series()
+        st = json.loads((self.state / "export_state.json").read_text())
+        epoch = self.status()["epoch_ns"]
+        del st["review"]
+        (self.state / "export_state.json").write_text(json.dumps(st, separators=(",", ":")))
+        self.tick(3)
+        self.check(self.want)  # what was exported does not fall and is not counted again
+        self.assertEqual(self.pi_series(), pi_before)
+        self.assertEqual(self.status()["epoch_ns"], epoch)  # not a lost state
+        self.assertTrue(self.ledger()["seen"])  # rebuilt from the files
+        self.assertIn("pi_review@1", json.loads((self.state / "export_state.json").read_text())["seeded_families"])
+
+    def test_a_bad_ledger_baselines_only_the_review_series(self):
+        pi_before = self.pi_series()
+        epoch = self.status()["epoch_ns"]
+        for junk in ("text", [], {"v": 2}, {"v": 1, "seen": [], "tot": {}, "cost": {}, "g": {}}, {"v": 1, "seen": {}, "tot": {"x": {"y": -1}}, "cost": {}, "g": {}},
+                     {"v": 1, "seen": {}, "tot": {}, "cost": {"k": [1]}, "g": {}}):
+            st = json.loads((self.state / "export_state.json").read_text())
+            st["review"] = junk
+            (self.state / "export_state.json").write_text(json.dumps(st, separators=(",", ":")))
+            self.tick(2)
+            self.assertEqual(self.pi_series(), pi_before, junk)
+            self.assertEqual(self.status()["epoch_ns"], epoch, junk)
+        self.check(self.want)
+
+    def test_new_activity_after_a_ledger_rebuild_is_counted_once(self):
+        st = json.loads((self.state / "export_state.json").read_text())
+        del st["review"]
+        (self.state / "export_state.json").write_text(json.dumps(st, separators=(",", ":")))
+        self.tick(2)
+        self.place("hand-written")
+        self.tick(3)
+        self.check(self.merge(self.want, self.worked_out("hand-written")))
+
+    def test_the_ledger_holds_hashes_and_numbers_only(self):
+        led = self.ledger()
+        text = json.dumps(led)
+        for forbidden in ("1111111", "session-", "reviewer-", "undo", T, "golden#"):
+            self.assertNotIn(forbidden, text)
+        self.assertTrue(all(len(k.split(":", 1)[1]) == 20 for k in led["seen"]))
+
+    def test_the_preview_changes_no_state(self):
+        before = (self.state / "export_state.json").read_bytes()
+        env = dict(os.environ, AGENT_EVENTS_STATE_DIR=str(self.state))
+        out = subprocess.run([sys.executable, str(base.CLI), "--db", str(self.db), "export"], capture_output=True, text=True, env=env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual((self.state / "export_state.json").read_bytes(), before)
+
+    def test_the_order_of_items_does_not_matter(self):
+        self.place("hand-written")
+        self.tick(2)
+        shutil.rmtree(self.review / item_of("hand-written"))
+        self.tick(2)
+        self.place("hand-written")
+        self.tick(2)
+        self.check(self.merge(self.want, self.worked_out("hand-written")))
+
+    # -- helpers for the ledger tests
+    def pi_series(self):
+        st = json.loads((self.state / "export_state.json").read_text())
+        return {k: v for k, v in st["series"].items() if not v["n"].startswith("pi_review")}
+
+    @staticmethod
+    def merge(*wants):
+        out = {}
+        for part in wants:
+            for fam, d in part.items():
+                for lab, v in d.items():
+                    out.setdefault(fam, {})[lab] = round(out.get(fam, {}).get(lab, 0) + v, 9)
+        return out
+
+    def test_red_control_totals_recomputed_from_the_files_on_disk_are_caught(self):
+        """The mechanism the ledger replaced: totals are whatever is on disk now. The same property must catch it."""
+        real = rv.ledger_for
+        def from_disk(state):  # a fresh ledger every tick: totals are recomputed from the files, the marker is kept
+            led = state["review"] = rv.new_ledger()
+            return led
+        rv.ledger_for = from_disk
+        self.addCleanup(lambda: setattr(rv, "ledger_for", real))
+        self.edit_first_line()
+        self.tick(3)
+        self.log.write_bytes(self.orig_log)
+        self.tick(3)
+        self.assertTrue(self.falls or self.totals() != self.want, "the property did not notice totals recomputed from disk")
+        self.assertNotEqual(self.totals(), self.want)  # the comeback was counted again
+
+
 class Cli(ReviewBase):
     def test_build_export_and_status_show_the_reader(self):
         self.place("treadmill")
@@ -879,8 +1222,11 @@ class Cli(ReviewBase):
         st = subprocess.run(cli + ["status"], capture_output=True, text=True, env=env)
         self.assertIn("review reader         : ok", st.stdout)
         ex = subprocess.run(cli + ["export"], capture_output=True, text=True, env=env)
-        for name in list(FAMILY.values()) + ["pi_review_skipped_redesigns", "pi_review_items", "pi_review_reader_problem_items"]:
-            self.assertIn(name, ex.stdout)
+        for name in ["pi_review_rounds_total", "pi_review_findings_total", "pi_review_cost_usd_total", "pi_review_relations_total",
+                     "pi_review_dispositions_total", "pi_review_skipped_redesigns", "pi_review_items", "pi_review_reader_problem_items"]:
+            self.assertIn(name, ex.stdout)  # a counter family with nothing counted yet (demoted, redesigns, escapes) is not listed
+        self.assertFalse(Path(self.state / "export_state.json").exists() and "review" in json.loads((self.state / "export_state.json").read_text()),
+                         "the preview must not write the ledger")
 
 
 if __name__ == "__main__":
