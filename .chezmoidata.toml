@@ -3,3 +3,7 @@ server = "192.0.2.1"
 port = 21116
 publicKey = "RCVcc2g81tREfvN6ifSx0KSSFgGuG2yhN2OpThmfYqI="
 passwordReference = "op://developer/RustDesk/password"
+
+# T3 hub providers (README "T3 hub providers"): false retires them on the next apply. Override locally with data t3Hub.enabled.
+[t3Hub]
+enabled = true

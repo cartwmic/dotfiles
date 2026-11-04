@@ -110,5 +110,7 @@ jobs:
         run: python3 -m unittest discover -s tests/spotlight-workshop -v
       - name: Profile coverage table, macOS-only rows included
         run: python3 -m unittest discover -s tests/profiles -v
+      - name: T3 hub provider instances, apply on and off in a scratch HOME (real chezmoi and jq)
+        run: python3 -m unittest discover -s tests/t3-hub -v
       - name: Agent browser render on macOS (MCP entry and launcher present on both profiles)
         run: python3 -m unittest discover -s tests/agent-browser -v
