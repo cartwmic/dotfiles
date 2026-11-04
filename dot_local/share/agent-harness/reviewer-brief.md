@@ -43,6 +43,8 @@ Do not add a privacy or security requirement the intent does not have. Default t
 
 Code treats a blocking finding that lacks obligation, evidence or consequence as a note. It checks presence, not truth. Truth and the "ordinary use" call are yours.
 
+When you cannot tell whether something blocks, read `~/.local/share/agent-harness/reviewer-examples.md`.
+
 ## 6. Re-review scope
 
 The task gives the round number.
