@@ -39,7 +39,7 @@ GOLDEN_WORK = HERE / "golden" / "local.coordinatord.work.plist"
 # docs/launchd/local.coordinatord.work.plist of cartwmic/coordinator (last changed in ef403d3, main 6576675): the template the work setup script renders with sed.
 COORDINATOR_WORK_TEMPLATE = HERE / "golden" / "coordinator-repo.local.coordinatord.work.plist"
 COORD_PATH = "/Volumes/Workshop/macbook/git/coordinator"
-WORK_COORD_PATH = "/Users/test/git/coordinator"
+WORK_COORD_PATH = "/Users/test/coordinator-work"
 RETRO_PATH = "/Volumes/Workshop/macbook/git/retro"
 HAVE_CHEZMOI = shutil.which("chezmoi") is not None
 DOMAIN = "gui/%d" % os.getuid()
@@ -77,10 +77,11 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(render(RETRO_UNIT, data), GOLDEN_RETRO.read_text(encoding="utf-8").replace(RETRO_PATH, "/srv/re"))
         self.assertIn("<key>WorkingDirectory</key><string>/srv/co</string>", render(COORD_UNIT, data))
 
-    def test_work_profile_default_checkouts_are_under_home_git(self):
+    def test_work_profile_default_checkouts(self):
         data = {"profile": "axon-work-computer"}
         self.assertIn("<string>/Users/test/git/retro/src/retrod/main.ts</string>", render(RETRO_UNIT, data))
-        self.assertIn("<string>/Users/test/git/coordinator/src/coordinatord/main.ts</string>", render(COORD_UNIT, data))
+        self.assertIn("<string>/Users/test/coordinator-work/src/coordinatord/main.ts</string>", render(COORD_UNIT, data))
+        self.assertNotIn("/git/coordinator", render(COORD_UNIT, data))
 
     def test_work_coordinator_render_is_byte_identical_to_the_golden_unit(self):
         self.assertEqual(render(WORK_UNIT, {"profile": "axon-work-computer"}), GOLDEN_WORK.read_text(encoding="utf-8"))
@@ -98,8 +99,8 @@ class RenderTests(unittest.TestCase):
         want = self.setup_script_render(COORDINATOR_WORK_TEMPLATE.read_text(encoding="utf-8"), "/Users/test", WORK_COORD_PATH, "/Users/test/.local/share/coordinator-work")
         self.assertEqual(render(WORK_UNIT, {"profile": "axon-work-computer"}), want)
         # With another checkout and the extra tool directories the script found (it puts them first, each followed by a colon).
-        data = {"profile": "axon-work-computer", "instances": {"coordinator": {"repo": "/Users/test/coordinator-work", "extraPath": "/opt/n/bin:/opt/h/bin"}}}
-        want = self.setup_script_render(COORDINATOR_WORK_TEMPLATE.read_text(encoding="utf-8"), "/Users/test", "/Users/test/coordinator-work",
+        data = {"profile": "axon-work-computer", "instances": {"coordinator": {"repo": "/Users/test/other/coordinator", "extraPath": "/opt/n/bin:/opt/h/bin"}}}
+        want = self.setup_script_render(COORDINATOR_WORK_TEMPLATE.read_text(encoding="utf-8"), "/Users/test", "/Users/test/other/coordinator",
                                         "/Users/test/.local/share/coordinator-work", "/opt/n/bin:/opt/h/bin")
         self.assertEqual(render(WORK_UNIT, data), want)
 
@@ -123,7 +124,7 @@ class RenderTests(unittest.TestCase):
         text = render(WRAPPER, data)
         self.assertIn("export INSTANCES_LIST='coordinator-work'", text)
         self.assertIn("export INSTANCES_COORDINATOR_WORK_ENABLED='true'", text)
-        self.assertIn("export INSTANCES_COORDINATOR_WORK_REPO='/Users/test/git/coordinator'", text)
+        self.assertIn("export INSTANCES_COORDINATOR_WORK_REPO='/Users/test/coordinator-work'", text)
         self.assertIn("export INSTANCES_COORDINATOR_WORK_EXTRA_PATH='/opt/n/bin'", text)
         self.assertNotIn("INSTANCES_RETRO", text)
         self.assertNotIn("INSTANCES_COORDINATOR_ENABLED", text)

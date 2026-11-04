@@ -14,7 +14,7 @@
 # Every chezmoi command that reads the dotfiles source runs the hooks of your chezmoi config. Step 1 lists them WITHOUT running them and stops
 # unless each is the dotfiles' 1Password installer with op already installed (then it does nothing) or you pass --allow-hooks.
 # Values from the live unit: if no checkout is given (--coordinator, COORDINATOR_DIR) and your chezmoi data has no instances.coordinator.repo, the checkout is the
-# WorkingDirectory of the installed ~/Library/LaunchAgents/local.coordinatord.work.plist (read-only), else ~/git/coordinator. If the live unit differs from the
+# WorkingDirectory of the installed ~/Library/LaunchAgents/local.coordinatord.work.plist (read-only), else ~/coordinator-work. If the live unit differs from the
 # rendered one only by a PATH prefix and instances.coordinator.extraPath is unset, that prefix is ADDED as extraPath (backup first, read back, never an
 # overwrite). Anything it cannot read or trust there stops the run with the lines to add by hand. --dry-run renders the unit against a copy of the config
 # (chezmoi --config), so it needs no --override-data.
@@ -200,7 +200,7 @@ if [ -n "$COORD_ARG" ]; then COORD=$COORD_ARG; COORD_SRC='argument or COORDINATO
 elif [ -n "$DATA_REPO" ]; then COORD=$DATA_REPO; COORD_SRC='instances.coordinator.repo in your chezmoi data'
 else
   # Nothing given: the checkout the installed live unit runs from (read-only), else the default.
-  COORD=$HOME/git/coordinator; COORD_SRC='default'; LIVE_NOTE='there is no live unit to read it from'
+  COORD=$HOME/coordinator-work; COORD_SRC='default'; LIVE_NOTE='there is no live unit to read it from'
   if [ -f "$LIVE" ]; then
     _lwd=$(plist_wd "$LIVE")
     if [ -z "$_lwd" ]; then LIVE_NOTE="the live unit $LIVE has no WorkingDirectory"
