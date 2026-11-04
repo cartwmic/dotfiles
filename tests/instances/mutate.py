@@ -66,7 +66,7 @@ MUTATIONS = [
     ("work: the work wrapper reads another flag than instances.coordinator.enabled", 'export INSTANCES_COORDINATOR_WORK_ENABLED={{ includeTemplate "shquote" (dig "instances" "coordinator" "enabled"', 'export INSTANCES_COORDINATOR_WORK_ENABLED={{ includeTemplate "shquote" (dig "instances" "coordinatorWork" "enabled"', WRAPPER),
     ("work: the work unit points at the personal state directory", 'printf "%s/.local/share/coordinator-work"', 'printf "%s/.local/share/coordinator"', WORK_UNIT),
     ("work: the work unit differs from what the setup script renders (PATH order)", '<key>PATH</key><string>{{ $extra }}{{ $home }}/.local/share/mise/shims', '<key>PATH</key><string>{{ $home }}/.local/share/mise/shims:{{ $extra }}', WORK_UNIT),
-    ("work: the work unit ignores the checkout path from local data", '{{- $repo := includeTemplate "instance_repo" (dict "root" . "name" "coordinator") | html -}}', '{{- $repo := printf "%s/git/coordinator" .chezmoi.homeDir | html -}}', WORK_UNIT),
+    ("work: the work unit ignores the checkout path from local data", '{{- $repo := includeTemplate "instance_repo" (dict "root" . "name" "coordinator") | html -}}', '{{- $repo := printf "%s/coordinator-work" .chezmoi.homeDir | html -}}', WORK_UNIT),
 ]
 
 

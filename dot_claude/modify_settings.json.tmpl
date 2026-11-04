@@ -50,7 +50,7 @@ HOOK_MARKER='axon-agents-playbook/bin/playbook-context'
 {{-   $t3repo = includeTemplate "instance_repo" (dict "root" . "name" "coordinator") }}
 {{-   $t3state = "$HOME/.local/share/coordinator" }}
 {{- else if eq .profile "axon-work-computer" }}
-{{-   $t3repo = dig "instances" "coordinator" "repo" "" . | default (printf "%s/coordinator-work" .chezmoi.homeDir) }}
+{{-   $t3repo = includeTemplate "instance_repo" (dict "root" . "name" "coordinator") }}
 {{-   $t3state = "$HOME/.local/share/coordinator-work" }}
 {{- end }}
 {{ if and $t3repo (stat (printf "%s/src/t3-hook/hook.ts" $t3repo)) }}
