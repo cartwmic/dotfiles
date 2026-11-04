@@ -185,7 +185,7 @@ shows in the footer and the terminal title (`π - <name> - <cwd>`).
 Not an extension: `dot_pi/private_agent/bin/executable_op` deploys to `~/.pi/agent/bin/op`, which Pi puts first on the
 PATH of its bash tool and `!` commands (unless that directory is already on the PATH Pi started with; then it keeps its
 place). `dot_zshenv` also puts `~/.local/share/op-shim` first on the PATH of every zsh (T3, Claude Code, Codex, launchd
-jobs); that directory holds one symlink, `op`, to the same file. When a 1Password service-account token is available
+jobs), and `dot_zprofile` puts it first again in login shells after `path_helper`; that directory holds one symlink, `op`, to the same file. When a 1Password service-account token is available
 (`OP_SERVICE_ACCOUNT_TOKEN`, or `~/.config/agent-harness/op-service-token`), it runs the real `op` with an empty HOME, so
 a worker's `op` uses the service account and never hangs. Two things hang `op` under the real HOME: a locked desktop
 app, and on the personal Mac an `open()` of the app's `settings.json` in `~/Library/Group Containers/2BUA8C4S2C.com.1password`
