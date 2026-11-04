@@ -13,7 +13,9 @@ reference.sha256 first) and writes, into the empty directory OUT:
     gauges-<now>.json         cache_gauges(con, now), one file for each --now
     project-map.json          every distinct cwd -> project_of, export_project
     tick-<k>/state.json       with --replay-ticks: the accounting state after tick k ...
-    tick-<k>/payload.json     ... and the OTLP body that tick would send (points sorted)
+    tick-<k>/payload.json     ... and the OTLP body that tick would send (points sorted; the value of
+                              pi_agent_events_database_bytes zeroed, like mtime_ns: the size of the SQLite file depends
+                              on the length of the corpus path stored in it and on the SQLite build)
 
 A second run over the same corpus gives byte-identical files: the clock is pinned to the tick's `now`, and nothing
 else in a dump depends on the machine. The scratch state directory and database are made fresh in a temporary
@@ -84,13 +86,19 @@ def families_json(metrics):
     return sorted((family_json(m) for m in metrics), key=lambda f: f["name"])
 
 
+DB_BYTES = "pi_agent_events_database_bytes"
+
+
 def payload_json(payload):
-    """The OTLP body with metrics sorted by name and points by attributes; timeUnixNano is kept."""
+    """The OTLP body with metrics sorted by name and points by attributes; timeUnixNano is kept. The database-size gauge is zeroed."""
     body = json.loads(json.dumps(payload))
     for rm in body["resourceMetrics"]:
         for sm in rm["scopeMetrics"]:
             sm["metrics"].sort(key=lambda m: m["name"])
             for m in sm["metrics"]:
+                if m["name"] == DB_BYTES:
+                    for p in m["gauge"]["dataPoints"]:
+                        p["asDouble"] = 0.0
                 for kind in ("gauge", "sum", "histogram"):
                     if kind in m:
                         m[kind]["dataPoints"].sort(key=lambda p: rc.dumps(p["attributes"]))
