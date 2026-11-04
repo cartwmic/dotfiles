@@ -37,6 +37,9 @@ data:
   # The install is `npm ci` from GitHub Packages with `gh auth token`. enabled: false (or any other profile) leaves the wrapper exiting 3.
   # agentKit:
   #   enabled: true
+  # Traces stage 2 shadow tooling (shadow_py_run.py, cache_ref.py, reference.sha256 beside the frozen collector in ~/.local/share/agent-events). On by default on personal only.
+  # agentTracesShadow:
+  #   enabled: true
   # axon-work-computer only: clone the private Axon agents playbook (placeholder; use your own account's URL). Omit the key and nothing is cloned.
   # axonPlaybook: {repo: "https://github.com/<account>/axon-agents-playbook.git"}
 

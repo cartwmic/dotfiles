@@ -1,0 +1,20 @@
+{{- /* agent_traces_shadow_config: the traces stage 2 shadow tooling's setting as JSON {"enabled"}. Local chezmoi data agentTracesShadow:
+  enabled   true or false. Default: true on the personal profile, false everywhere else (the work Mac gets the shadow tooling only when
+            the owner sets it there; nothing runs on it until then).
+Gates shadow_py_run.py, cache_ref.py and reference.sha256 in .chezmoiignore: the Python control arm's entry and the cache-gauge oracle, deployed
+beside the frozen collector files. Any other key or value fails the whole render, so a typo applies nothing. */ -}}
+{{- $raw := dig "agentTracesShadow" dict . -}}
+{{- if not (kindIs "map" $raw) -}}
+{{-   fail (printf "agentTracesShadow must be a map with enabled, got %q" (printf "%v" $raw)) -}}
+{{- end -}}
+{{- range $k, $_ := $raw -}}
+{{-   if ne $k "enabled" -}}
+{{-     fail (printf "agentTracesShadow.%s is not a setting (enabled)" $k) -}}
+{{-   end -}}
+{{- end -}}
+{{- $on := printf "%v" (eq (printf "%v" (dig "profile" "" .)) "personal") -}}
+{{- if hasKey $raw "enabled" -}}{{- $on = printf "%v" (get $raw "enabled") -}}{{- end -}}
+{{- if not (has $on (list "true" "false")) -}}
+{{-   fail (printf "agentTracesShadow.enabled must be true or false, got %q" $on) -}}
+{{- end -}}
+{{- dict "enabled" (eq $on "true") | toJson -}}
