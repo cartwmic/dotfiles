@@ -10,7 +10,13 @@
 #               setupMode existing with T3's downloaded Codex binary (same active.json lookup as codex-hub), so it reads ~/.codex and
 #               its model_provider = "cliproxy". Without active.json the instance is left alone. Off restores the recorded original
 #               entry exactly, but only while the entry still looks like ours (setupMode existing, binary under ~/.t3/tools/codex).
-#               claudeAgent and coordinator are never touched: the global ~/.claude settings cover them.
+#               claudeAgent and coordinator are never touched apart from the displayName below: the global ~/.claude settings cover them.
+#   names       displayName only on claudeAgent "Claude", coordinator "Claude (coordinator)" and codex "Codex" (no other field of
+#               claudeAgent or coordinator; the coordinator repo owns its launchArgs). Off removes a displayName only if it equals ours.
+#   usage       the hub's usage in T3: secretProviders.onepassword (1Password account "my") and usageLimitSources.cliproxy-hub, whose
+#               managementKey is a 1Password reference, never a value. Off removes each entry only if it still equals ours.
+#               Shape: pingdotgg/t3code packages/contracts/src/settings.ts (UsageLimitSourceConfig, SecretProviderConfig) and
+#               docs/user/usage.md "Connect a CLIProxyAPI hub" (the same entry made in Settings -> Providers -> Usage providers).
 # Each apply replaces exactly those two ids under providerInstances; no other key or instance is touched. No file, or a file that is
 # not a JSON object, is passed through unchanged. T3 writes the file without a trailing newline, and so does this script.
 # To drop an instance, delete it from WANT: the id is still owned (OWNED), so the next apply removes it.
@@ -40,6 +46,9 @@ OWNED='["claude-hub","codex-hub"]'
 # The codex instance. HUB_MODE is on, off or n/a; DEFAULT_BINARY is the Codex binary to write while on (empty without active.json); ORIGINAL is
 # what T3 creates by itself and what off restores; PREFIX tells our entry from one edited by hand.
 HUB_MODE='{{ $hubDefault }}'
+NAMES='{"claudeAgent":"Claude","coordinator":"Claude (coordinator)","codex":"Codex"}'
+SECRET_PROVIDERS='{"onepassword":{"kind":"one_password","label":"1Password","config":{"account":"my"}}}'
+USAGE_SOURCES='{"cliproxy-hub":{"kind":"cliproxy","label":"CLIProxy hub","url":"https://cliproxy.internal.cartwmic.com","managementKey":{"provider":"onepassword","reference":"op://developer/tb36gtnaocyezjk3dslomp64he/management"},"enabled":true}}'
 DEFAULT_BINARY='{{ $defaultBinary }}'
 ORIGINAL='{"driver":"codex","enabled":true,"config":{"setupMode":"managed"}}'
 PREFIX='{{ $home }}/.t3/tools/codex/'
@@ -53,7 +62,8 @@ if ! printf %s "$input" | jq -e 'type == "object"' >/dev/null 2>&1; then
 fi
 
 out=$(printf %s "$input" | jq --argjson want "$WANT" --argjson owned "$OWNED" --arg mode "$HUB_MODE" \
-  --arg bin "$DEFAULT_BINARY" --argjson original "$ORIGINAL" --arg prefix "$PREFIX" '
+  --arg bin "$DEFAULT_BINARY" --argjson original "$ORIGINAL" --arg prefix "$PREFIX" \
+  --argjson names "$NAMES" --argjson secretProviders "$SECRET_PROVIDERS" --argjson usageSources "$USAGE_SOURCES" '
   def upsert($id): if $want[$id] then .[$id] = $want[$id] else del(.[$id]) end;
   (.providerInstances // {}) as $before
   | ($before | reduce $owned[] as $id (.; upsert($id))) as $after
@@ -61,6 +71,14 @@ out=$(printf %s "$input" | jq --argjson want "$WANT" --argjson owned "$OWNED" --
   | def ours: ((.providerInstances.codex? // {}) | (.driver == "codex" and .config.setupMode? == "existing" and ((.config.binaryPath? // "") | startswith($prefix))));
     if $mode == "on" then (if $bin != "" then .providerInstances.codex = {driver: "codex", enabled: true, config: {setupMode: "existing", binaryPath: $bin}} else . end)
     elif (.providerInstances | type) == "object" and ours then .providerInstances.codex = $original
+    else . end
+  | def setNames: reduce ($names | keys[]) as $id (.; if (.providerInstances[$id]? | type) == "object" then .providerInstances[$id].displayName = $names[$id] else . end);
+    def dropNames: reduce ($names | keys[]) as $id (.; if (.providerInstances[$id]? | type) == "object" and .providerInstances[$id].displayName? == $names[$id] then del(.providerInstances[$id].displayName) else . end);
+    def own($key; $entries): reduce ($entries | keys[]) as $id (.; .[$key] = ((if (.[$key] | type) == "object" then .[$key] else {} end) | .[$id] = $entries[$id]));
+    def drop($key; $entries): reduce ($entries | keys[]) as $id (.;
+      if (.[$key] | type) == "object" and .[$key][$id] == $entries[$id] then del(.[$key][$id]) | (if (.[$key] | length) == 0 then del(.[$key]) else . end) else . end);
+    if $mode == "on" then setNames | own("secretProviders"; $secretProviders) | own("usageLimitSources"; $usageSources)
+    elif $mode == "off" then dropNames | drop("usageLimitSources"; $usageSources) | drop("secretProviders"; $secretProviders)
     else . end')
 printf %s "$out"
 case $input in
