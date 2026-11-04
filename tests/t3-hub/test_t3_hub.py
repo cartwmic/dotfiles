@@ -43,6 +43,7 @@ class Env:
 
     def write_config(self, profile, enabled=None):
         extra = "" if enabled is None else "  t3Hub:\n    enabled: %s\n" % ("true" if enabled else "false")
+        extra += "  hub:\n    enabled: false\n"  # the default-provider switch is tests/hub-default's; this suite is about the two test instances
         self.cfg.write_text("data:\n  profile: %s\n%s" % (profile, extra))
 
     def set_enabled(self, enabled):

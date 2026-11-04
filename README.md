@@ -428,7 +428,7 @@ Two extra provider instances in T3 Code send their traffic through the homelab C
 adds exactly those two ids to `~/.t3/userdata/settings.json` and leaves every other key and instance alone. Keys are read
 at run time from 1Password (`op_read_cached.sh`): Claude through the `apiKeyHelper` in
 `~/.config/t3-hub-claude-settings.json`, Codex through a `[model_providers.cliproxy]` block that
-`dot_codex/modify_private_config.toml.tmpl` appends to `~/.codex/config.toml` (the default provider is unchanged; the
+`dot_codex/modify_private_config.toml.tmpl` appends to `~/.codex/config.toml` (this switch leaves the default provider alone; the
 instance selects it with `-c model_provider=cliproxy`). `codex-hub` is not managed, so it keeps `~/.codex` as its home and
 uses T3's downloaded Codex binary; the path is written at apply time from `~/.t3/tools/codex/active.json`, so re-apply after
 T3 updates its Codex. A re-apply also puts back these two instances if they were edited in the T3 UI; other instances are never touched.
@@ -443,6 +443,31 @@ Delete the sources afterwards if you want them gone for good. Reverting the comm
 stops managing the paths, so set the switch first.
 
 Tests: `python3 -m unittest discover -s tests/t3-hub` (the apply tests run on macOS only).
+
+## CLIProxy hub as the default (personal Mac)
+
+Every Claude Code and Codex session on the personal Mac goes through the homelab CLIProxyAPI hub (`https://cliproxy.internal.cartwmic.com`,
+reachable only from home): T3 threads, the coordinator, subagents, terminal sessions and scripts. One switch, `hub.enabled` (default `true`
+in `.chezmoidata.toml`), drives three files, all on the personal profile on macOS only. The work profile is left out: Michael scoped this to
+his personal machine, and the hub is not reachable from the work network.
+
+| File | With the switch on | Source |
+|---|---|---|
+| `~/.claude/settings.json` | `env.ANTHROPIC_BASE_URL` = the hub (no `/v1`) and `apiKeyHelper` = `op_read_cached.sh` on the hub key. `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` are not set: either would outrank the helper. | `dot_claude/modify_settings.json.tmpl` |
+| `~/.codex/config.toml` | top-level `model_provider = "cliproxy"` (the `[model_providers.cliproxy]` block it names is kept while either switch is on). | `dot_codex/modify_private_config.toml.tmpl` |
+| `~/.t3/userdata/settings.json` | the T3 `codex` instance, which is managed and so ignores `~/.codex`, becomes `setupMode: existing` with T3's downloaded Codex binary (from `~/.t3/tools/codex/active.json`, as `codex-hub`). Left alone when that file is missing. `claudeAgent` and `coordinator` are never touched: the global Claude settings cover them. | `dot_t3/private_userdata/modify_settings.json.tmpl` |
+
+**Rollback.** Set `hub.enabled` to `false` under `data:` in `~/.config/chezmoi/chezmoi.yaml`, then apply the three targets
+(`chezmoi apply ~/.claude/settings.json ~/.codex/config.toml ~/.t3/userdata/settings.json`). Each file loses only what it was given:
+the Claude URL only if it equals the hub URL, the helper only if it equals ours, `model_provider` only if it equals `"cliproxy"`, and the
+`codex` instance goes back to `{"driver":"codex","enabled":true,"config":{"setupMode":"managed"}}` only while it still looks like ours (so an
+entry edited by hand is kept). Other env keys, a different helper and every other key stay. Reverting the commit alone would leave the keys
+behind, because the scripts would no longer remove them, so the switch stays in the templates. Re-apply after T3 updates its Codex.
+
+`t3Hub.enabled` ([T3 hub providers](#t3-hub-providers-personal-mac)) is independent: it only owns the two test instances and the Claude
+settings file for `claude-hub`.
+
+Tests: `python3 -m unittest discover -s tests/hub -v` (the real-apply tests run on macOS only).
 
 ## Instances (Coordinator and Retro daemons)
 
@@ -467,7 +492,7 @@ How it works:
 - chezmoi manages each unit only as an inert copy in `~/.local/share/instances/launchd/`. `~/.local/user_scripts/instances_reconcile.sh` (run by `run_after_75_instances_reconcile.sh.tmpl` on every apply) copies it into `~/Library/LaunchAgents` only when the instance is ready, then starts it. A file there would be loaded at next login, so a half-configured instance never gets one.
 - Every apply prints one status line per instance and the script always exits 0: `READY (started | running | adopted | reloaded)`, `NOT READY: <what>`, `STOP FAILED`, `RELOAD FAILED`. A not-ready instance is retried by the next apply. The last status of an opted-in instance is also kept in `~/.local/state/instances/<name>.status`; an instance that never opted in writes no state, and opt-out removes it.
 - On the **personal** profile, when `<repo>/src/t3-hook/hook.ts` exists at apply time (`repo` is `instances.coordinator.repo`, else the personal default; the `enabled` flag is not read, so a daemon installed outside the flag gets the hook without chezmoi managing its unit), `~/.claude/settings.json` also gets the coordinator's T3 hook (`dot_claude/modify_settings.json.tmpl`; four entries running `<repo>/src/t3-hook/hook.ts` with `COORDINATOR_STATE_DIR=$HOME/.local/share/coordinator`; SessionStart does nothing outside a T3 session; when the hook source contains `--part`, a fifth entry adds a second SessionStart group running it with `--part rules`, so it gets its own context budget). If the file is missing, or on any other profile, an apply removes exactly those entries and leaves other hooks alone. The work profile is left out on purpose. Tests: `python3 -m unittest discover -s tests/t3-hook -v`.
-- On the **personal** profile on macOS, `~/.claude/settings.json` points every Claude Code session (terminal, scripts, T3 threads, subagents) at the homelab CLIProxyAPI hub while `hub.claude` in `.chezmoidata.toml` is `true` (the default): `env.ANTHROPIC_BASE_URL = https://cliproxy.internal.cartwmic.com` and `apiKeyHelper` running `op_read_cached.sh` on the hub key (`dot_claude/modify_settings.json.tmpl`). `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` are not set, since either would outrank the helper. The hub is reachable only from home. **Rollback:** set `hub.claude = false`, then apply `~/.claude/settings.json`; that removes the URL only when it equals the hub URL and the helper only when it equals ours, and leaves other env keys and a different helper alone. Do not revert the template instead: it would leave both keys behind. The work profile and other OSes are left out on purpose (the work Mac is not on the home network). Tests: `python3 -m unittest discover -s tests/hub-claude -v`.
+- On the **personal** profile on macOS the CLIProxy hub is the default of Claude Code and Codex; see [CLIProxy hub as the default](#cliproxy-hub-as-the-default-personal-mac).
 - First-time config runs when the instance has no config yet (and again if an earlier run did not finish), from the repo's own script (exit 0 ready, exit 3 with `NOT-READY: <what>` not ready yet). Nothing secret is read or stored by dotfiles.
 - **An apply never restarts a loaded service.** The only `launchctl` calls are: `print` (read-only, once per enabled or started instance), `bootstrap` of an instance that is not loaded, `bootout` on opt-out or a reload you asked for. A changed unit on a running daemon is reported ("NOT restarted"); reload on purpose with `INSTANCES_RELOAD=coordinator chezmoi apply` (or `retro`, or `all`).
 - A service that is already running when you first set `enabled: true` (this Mac's coordinator) is adopted: one `print`, the daemon is not touched, and the installed unit is only rewritten if it differs from the managed one (then reported, not reloaded). With no flag on a Mac that never opted in, an apply makes no `launchctl` call at all.
