@@ -12,6 +12,11 @@
 .local/share/passage-review/test_passage_review.py
 .local/share/agent-events/test_agent_events.py
 .local/share/agent-events/test_agent_events_review.py
+# Traces stage 2 reference tooling (Python side): source-only, run from the source checkout, never deployed.
+.local/share/agent-events/parity_dump.py
+.local/share/agent-events/rollback_drill.py
+.local/share/agent-events/reference_common.py
+.local/share/agent-events/freeze.sh
 .local/share/agent-events/fixtures
 .local/share/agent-events/fixtures/**
 .local/share/agent-events/__pycache__
@@ -128,6 +133,14 @@ Library/LaunchAgents/local.agent-events.plist
 # pin files deploy everywhere; without the setting there is no install, so the wrapper exits 3. A bad agentKit value fails this render.
 65_agent_kit_install.sh
 .local/user_scripts/agent_kit_bump.py
+{{- end }}
+
+{{- if not (includeTemplate "agent_traces_shadow_config" . | fromJson).enabled }}
+# Traces stage 2 shadow tooling: chezmoi data agentTracesShadow.enabled, default true on personal only (docs/profiles.md). The control arm's entry,
+# the cache-gauge oracle and the reference hashes they check deploy beside the frozen collector files only when it is on. A bad value fails this render.
+.local/share/agent-events/shadow_py_run.py
+.local/share/agent-events/cache_ref.py
+.local/share/agent-events/reference.sha256
 {{- end }}
 
 {{- if ne .chezmoi.os "darwin" }}

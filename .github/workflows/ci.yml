@@ -60,6 +60,8 @@ jobs:
         run: python3 -m unittest discover -s tests/workstream-rank -v
       - name: Agent-events tests
         run: python3 -m unittest discover -s dot_local/share/agent-events -p 'test_*.py' -v
+      - name: Traces reference tooling (frozen-file check, dump, control arm, oracle, drill, freeze; synthetic corpora, real chezmoi)
+        run: python3 -m unittest discover -s tests/traces-reference -v
       - name: Instances render, ignore and reconcile-script matrix (stub launchctl; the apply proof is macOS-only)
         run: python3 -m unittest discover -s tests/instances -v
       - name: QMD pin, collections, skill and profile matrix (no qmd binary)
