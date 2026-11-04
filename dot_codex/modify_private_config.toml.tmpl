@@ -6,16 +6,30 @@
 # block (delimited by `# chezmoi:caveman-style` markers). Strips that
 # managed section and preserves everything else (model, projects,
 # [features], MCP block managed by apply_harness_config, etc.).
-# Idempotent: a file without the block is passed through unchanged.
+# Idempotent: a file without the block is passed through unchanged (and a file with a block, on a host that should not have
+# one, loses just that block).
+#
+# CLIProxy hub provider (personal Mac, data switch t3Hub.enabled): owns the `# chezmoi:cliproxy-hub` block, which adds
+# [model_providers.cliproxy] pointing at the homelab hub and reading its key at run time. It does not
+# change the default model_provider; T3's codex-hub instance selects it with `-c model_provider=cliproxy`
+# (dot_t3/private_userdata/modify_settings.json.tmpl). Any other host, or t3Hub.enabled false, drops the block if it is there.
 #
 # Chezmoi runs modify_ scripts with the existing target file content piped
 # on stdin and uses stdout as the new content.
 
 set -eu
 
+{{ if eq (includeTemplate "t3_hub" .) "on" -}}
+HUB_HOME='{{ .chezmoi.homeDir }}'
+{{- else -}}
+HUB_HOME=''
+{{- end }}
+export HUB_HOME
+
 # Pass the program with -c so stdin stays the target file. A heredoc would
 # replace stdin and make this script emit an empty file.
 python3 -c '
+import os
 import re
 import sys
 
@@ -27,5 +41,25 @@ block_re = re.compile(
 stripped = block_re.sub("", existing)
 # A top-of-file strip can leave a leading blank line; drop those only.
 stripped = re.sub(r"^\n+", "", stripped)
+
+hub_re = re.compile(r"\n*# chezmoi:cliproxy-hub:begin\n.*?# chezmoi:cliproxy-hub:end\n?", re.DOTALL)
+stripped, dropped = hub_re.subn("", stripped)
+if dropped and stripped and not stripped.endswith("\n"):
+    stripped += "\n"
+home = os.environ.get("HUB_HOME", "")
+if home:
+    hub = """# chezmoi:cliproxy-hub:begin
+[model_providers.cliproxy]
+name = "CLIProxy hub"
+base_url = "https://cliproxy.internal.cartwmic.com/v1"
+wire_api = "responses"
+supports_websockets = true
+
+[model_providers.cliproxy.auth]
+command = "%s/.local/user_scripts/op_read_cached.sh"
+args = ["op://developer/tb36gtnaocyezjk3dslomp64he/laptop-codex"]
+# chezmoi:cliproxy-hub:end
+""" % home
+    stripped = stripped.rstrip("\n") + ("\n\n" if stripped.strip() else "") + hub
 sys.stdout.write(stripped)
 '

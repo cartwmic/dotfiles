@@ -200,3 +200,11 @@ Library/LaunchAgents/local.qmd-refresh.plist
 .pi/agent/extensions/system-one
 .pi/agent/extensions/system-one/**
 {{- end }}
+
+{{- if eq (includeTemplate "t3_hub" .) "n/a" }}
+# T3 provider instances that route through the homelab CLIProxy hub: personal Mac only (docs/profiles.md). With t3Hub.enabled
+# false the files stay managed so the next apply removes the instances, the settings file and the Codex block.
+.t3
+.t3/**
+.config/t3-hub-claude-settings.json
+{{- end }}
