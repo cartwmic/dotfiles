@@ -33,7 +33,7 @@ Why: the code and the guard that lists every snapshot that would expire were saf
 **N3. coordinator #206, design review: note.** The review also raised the wording of one requirement (LE-55) and a prose claim about smoke-test coverage.
 Why: both were text fixes in the build brief and changed no behaviour. The same review's stall risk (an unacknowledged prompt row would block every later event) did block.
 
-**N4. Eight small homelab PRs: notes.** Each got 3 to 6 findings (unverified post-rollout state, an undo that restores the earlier exposure, test gaps) and all passed in round 1 under "the bar is good enough".
+**N4. Eight small homelab PRs (#83, #84, #85, #87, #88, #89, #90, #92): notes.** Each got 3 to 6 findings (unverified post-rollout state, an undo that restores the earlier exposure, test gaps) and all passed in round 1 under "the bar is good enough".
 Why: the reviewers found no merge blocker in any of them. List them. Do not hold the pass.
 
 **N5. A Pi-host run, diff review: not raised.** A reviewer called the proof weak because the old-tree runs failed at start-up on a missing module, not on behaviour. The driver rejected it.

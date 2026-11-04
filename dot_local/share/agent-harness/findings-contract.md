@@ -53,7 +53,7 @@ Reviews of one item are kept in `$COORDINATOR_STATE_DIR/reviews/<item>/`, which 
 - `round-<N>.json`: each round's saved return.
 - `findings.jsonl`: the log. Append-only, one JSON object per line, each with `event` and a UTC `at`.
 
-`<item>` is `<repo>#<pr>`, a run id, or, for design work with neither, the work folder's name.
+`<item>` is `<repo>#<pr>`, a run id, or, for design work with neither, the work folder's name. `<repo>` is the repo's git directory name, for example `cartwmic-homelab-v2#94` or `coordinator#217`, so that a project label can be resolved from it.
 
 The coordinator's findings tool writes the log. Every finding gets a log-wide id `r<N>.<id>` (round number, then the return's own id), because ids repeat across rounds. Every other record points to a finding by that log id.
 
@@ -69,7 +69,7 @@ The coordinator's findings tool writes the log. Every finding gets a log-wide id
 
 A finding record with `effective: note` is a residual. It needs no disposition and no label.
 
-**The stuck trigger.** It is computed per component, using the component from the latest `label` of each finding (a label's `component` replaces the finding's own). A component fires the trigger at round *r* when it has an effectively-blocking finding whose latest relation is `repeat` or `follow-on` in round *r* and again in round *r*−1, that is, in two rounds running. It fires at the second of those rounds. A repeat cannot appear before round 2, so the earliest firing is round 3. A trigger is *skipped* when that component has no `redesign` event at or after the round it fired.
+**The stuck trigger.** It is computed per component, using the component from the latest `label` of each finding (a label's `component` replaces the finding's own). A component fires the trigger at round *r* when it has an effectively-blocking finding whose latest relation is `repeat` or `follow-on` in round *r* and again in round *r*−1, that is, in two rounds running. It fires at the second of those rounds. A repeat cannot appear before round 2, so the earliest firing is round 3. A trigger is *skipped* when that component has no `redesign` event at or after the round it fired. Two implementations compute this trigger: the findings CLI and the agent-events reader. A change to the trigger changes both, in one change set.
 
 ## Version
 
