@@ -69,7 +69,15 @@ fi
 
 # The management key, read only while the hub is on. op_read_cached.sh uses the service-account token under an empty HOME.
 MGMT_KEY=''
-if [ "$HUB_MODE" = on ]; then
+# Settled: our entry is enabled and T3 has already moved the key into its secret store (the file holds T3's placeholder,
+# not a cpa_ literal). Then skip the read and write nothing, so chezmoi diff and verbose previews never show the key.
+# To rotate the key, delete usageLimitSources.cliproxy-hub in T3 (or set it in T3's UI) and apply.
+settled=$(printf %s "$input" | jq -r --arg usageId "$USAGE_ID" --argjson usageSource "$USAGE_SOURCE" '
+  (.usageLimitSources[$usageId]? // {}) as $s
+  | if ($s.kind == $usageSource.kind and $s.label == $usageSource.label and $s.url == $usageSource.url and $s.enabled == true
+        and ($s.managementKey | type) == "string" and ($s.managementKey | length) > 0 and (($s.managementKey | startswith("cpa_")) | not))
+    then "yes" else "no" end' 2>/dev/null || echo no)
+if [ "$HUB_MODE" = on ] && [ "$settled" != yes ]; then
   if key=$("$HOME/.local/user_scripts/op_read_cached.sh" "$KEY_REF") && case $key in cpa_*) true ;; *) false ;; esac; then
     MGMT_KEY=$key
   else
