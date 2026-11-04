@@ -26,5 +26,6 @@ How to read a row:
 | `.pi/agent/extensions/claude-compat-guard` | personal | It rides on the personal Claude login; work uses its own provider. |
 | `.local/bin/kgate` | personal | It runs jobs on the personal homelab Kubernetes cluster, which the work Mac has no business reaching. |
 | `80_spotlight_off_workshop.sh` | personal | `/Volumes/Workshop` exists only on the personal Mac; the work Mac has no such volume. |
+| `.t3`, `.config/t3-hub` | personal | The T3 `claude-hub` and `codex-hub` provider instances route through the homelab CLIProxy hub, which is reachable only from the home LAN or WireGuard, and Michael scoped them to his personal Mac. (The matching Codex provider block in `.codex/config.toml` is gated inside `modify_private_config.toml.tmpl`.) |
 | `.pi/agent/extensions/anthropic-stall-retry` | axon-work-computer | Anthropic stalls are only seen on the work profile. |
 | `.pi/agent/extensions/axon-playbook` | axon-work-computer | It injects Axon's private playbook notes, which only the work profile clones. |
