@@ -33,9 +33,11 @@ BINARY = "%s/.t3/tools/codex/%s/bin/codex" % (HOME, CODEX_VERSION)
 ORIGINAL_CODEX = {"driver": "codex", "enabled": True, "config": {"setupMode": "managed"}}
 HUB_CODEX = {"driver": "codex", "enabled": True, "config": {"setupMode": "existing", "binaryPath": BINARY}}
 NAMES = {"claudeAgent": "Claude", "coordinator": "Claude (coordinator)", "codex": "Codex"}
-ONEPASSWORD = {"kind": "one_password", "label": "1Password", "config": {"account": "my"}}
-USAGE = {"kind": "cliproxy", "label": "CLIProxy hub", "url": "https://cliproxy.internal.cartwmic.com", "enabled": True,
-         "managementKey": {"provider": "onepassword", "reference": "op://developer/tb36gtnaocyezjk3dslomp64he/management"}}
+KEY_REF = "op://developer/tb36gtnaocyezjk3dslomp64he/management"
+KEY = "cpa_fake-management-key"
+USAGE = {"kind": "cliproxy", "label": "CLIProxy hub", "url": "https://cliproxy.internal.cartwmic.com", "enabled": True, "managementKey": KEY}
+LEGACY_ONEPASSWORD = {"kind": "one_password", "label": "1Password", "config": {"account": "my"}}  # what #158 wrote
+LEGACY_USAGE = {**USAGE, "managementKey": {"provider": "onepassword", "reference": KEY_REF}}
 GATE = '(eq .chezmoi.os "darwin")'
 CASES = {  # name: (extra chezmoi data, pretend OS, profile)
     "on": ({}, "darwin", "personal"),
@@ -48,6 +50,23 @@ CASES = {  # name: (extra chezmoi data, pretend OS, profile)
     "off_t3hub_on": ({"hub": {"enabled": False}, "t3Hub": {"enabled": True}}, "darwin", "personal"),
 }
 SCRATCH = Path(tempfile.mkdtemp())
+
+
+def fake_home(name, body):
+    """A HOME holding a fake op_read_cached.sh (None: no script). It logs its arguments to .calls."""
+    home = SCRATCH / name
+    (home / ".local/user_scripts").mkdir(parents=True)
+    if body is not None:
+        script = home / ".local/user_scripts/op_read_cached.sh"
+        script.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$(dirname "$0")/.calls"\n' + body + '\n')
+        script.chmod(0o755)
+    return home
+
+
+KEY_HOME = fake_home("key-home", "printf %s " + KEY)
+FAIL_HOME = fake_home("fail-home", "echo 'op: boom' >&2; exit 1")
+JUNK_HOME = fake_home("junk-home", "printf 'not-a-hub-key-SECRETJUNK'")
+NO_SCRIPT_HOME = fake_home("no-script-home", None)
 HOME_DIR = SCRATCH / "home"
 (HOME_DIR / ".t3/tools/codex").mkdir(parents=True)
 (HOME_DIR / ".t3/tools/codex/active.json").write_text(json.dumps({"version": CODEX_VERSION}))
@@ -88,10 +107,10 @@ def render(path, case, home=None):
     return chezmoi(source(os_name), data, "execute-template", stdin=(ROOT / path).read_text(), home=home)
 
 
-def run(script, stdin):
-    r = subprocess.run(["sh", "-c", script], input=stdin, capture_output=True, text=True, timeout=30)
+def run(script, stdin, home=None, full=False):
+    r = subprocess.run(["sh", "-c", script], input=stdin, capture_output=True, text=True, timeout=30, env=dict(os.environ, HOME=str(home or KEY_HOME)))
     assert r.returncode == 0, r.stderr
-    return r.stdout
+    return r if full else r.stdout
 
 
 def tearDownModule():
@@ -229,8 +248,8 @@ class T3Test(unittest.TestCase):
         cls.scripts = {c: render(T3, c) for c in CASES}
         cls.scripts["on_no_binary"] = render(T3, "on_t3hub_off", home=EMPTY_HOME)
 
-    def modify(self, case, text):
-        return run(self.scripts[case], text)
+    def modify(self, case, text, home=None):
+        return run(self.scripts[case], text, home)
 
     def instances(self, text):
         return json.loads(text)["providerInstances"]
@@ -288,24 +307,66 @@ class T3Test(unittest.TestCase):
         self.assertNotIn("displayName", kept["codex"])
 
     def test_usage_source_on_off_and_idempotent(self):
+        calls = KEY_HOME / ".local/user_scripts/.calls"
+        calls.unlink(missing_ok=True)
         on = self.modify("on_t3hub_off", FIXTURE)
         data = json.loads(on)
-        self.assertEqual(data["secretProviders"], {"onepassword": ONEPASSWORD})
         self.assertEqual(data["usageLimitSources"], {"cliproxy-hub": USAGE})
-        self.assertEqual(set(data["usageLimitSources"]["cliproxy-hub"]["managementKey"]), {"provider", "reference"})  # a reference, no value
+        self.assertNotIn("secretProviders", data)
+        self.assertEqual(calls.read_text(), KEY_REF + "\n")  # the key is read through op_read_cached.sh, once
         self.assertEqual(self.modify("on_t3hub_off", on), on)
-        # Neighbours in the same maps survive both ways, and a changed entry of ours is kept on the way out.
+        # Neighbours in the same map survive both ways, and a changed entry of ours is kept on the way out.
         mine = json.loads(on)
-        mine["secretProviders"]["work"] = {"kind": "one_password", "label": "Work", "config": {"account": "x"}}
         mine["usageLimitSources"]["other"] = {"kind": "cliproxy", "url": "https://x", "managementKey": "k", "enabled": True}
         off = json.loads(self.modify("off_t3hub_off", json.dumps(mine, indent=2)))
-        self.assertEqual(list(off["secretProviders"]), ["work"])
         self.assertEqual(list(off["usageLimitSources"]), ["other"])
         mine["usageLimitSources"]["cliproxy-hub"]["url"] = "https://changed"
         kept = json.loads(self.modify("off_t3hub_off", json.dumps(mine, indent=2)))
         self.assertIn("cliproxy-hub", kept["usageLimitSources"])
-        # With nothing else there, off leaves the file as it was.
+        # With nothing else there, off leaves the file as it was, and it does not read the key.
+        calls.unlink()
         self.assertEqual(self.modify("off_t3hub_off", on), FIXTURE)
+        self.assertFalse(calls.exists())
+
+    def test_t3_moves_the_key_out_of_the_file_and_the_next_apply_sets_it_again(self):
+        on = json.loads(self.modify("on_t3hub_off", FIXTURE))
+        on["usageLimitSources"]["cliproxy-hub"]["managementKey"] = "\u2022\u2022\u2022\u2022\u2022\u2022"  # what T3 leaves after moving it
+        text = json.dumps(on, indent=2)
+        self.assertEqual(json.loads(self.modify("on_t3hub_off", text))["usageLimitSources"], {"cliproxy-hub": USAGE})
+        self.assertEqual(self.modify("off_t3hub_off", text), FIXTURE)  # off removes it with the placeholder too
+
+    def test_no_one_password_provider_after_apply(self):
+        old = json.loads(FIXTURE)
+        old["secretProviders"] = {"onepassword": LEGACY_ONEPASSWORD}
+        old["usageLimitSources"] = {"cliproxy-hub": {**LEGACY_USAGE, "enabled": False}}
+        for case in ("on_t3hub_off", "off_t3hub_off"):
+            out = json.loads(self.modify(case, json.dumps(old, indent=2)))
+            self.assertNotIn("secretProviders", out, case)
+        on = json.loads(self.modify("on_t3hub_off", json.dumps(old, indent=2)))
+        self.assertEqual(on["usageLimitSources"], {"cliproxy-hub": USAGE})  # the old reference and enabled:false are replaced
+        # A provider of the same id that is not ours stays, and so does a neighbour.
+        old["secretProviders"] = {"onepassword": {**LEGACY_ONEPASSWORD, "label": "Mine"}, "work": LEGACY_ONEPASSWORD}
+        self.assertEqual(list(json.loads(self.modify("on_t3hub_off", json.dumps(old, indent=2)))["secretProviders"]), ["onepassword", "work"])
+
+    def test_a_failed_or_wrong_read_leaves_the_entry_warns_and_prints_no_key(self):
+        before = json.loads(self.modify("on_t3hub_off", FIXTURE))
+        before["usageLimitSources"]["cliproxy-hub"]["managementKey"] = "\u2022\u2022\u2022\u2022\u2022\u2022"
+        text = json.dumps(before, indent=2)
+        for name, home in (("fail", FAIL_HOME), ("junk", JUNK_HOME), ("no script", NO_SCRIPT_HOME)):
+            r = run(self.scripts["on_t3hub_off"], text, home, full=True)
+            self.assertEqual(json.loads(r.stdout)["usageLimitSources"], before["usageLimitSources"], name)
+            self.assertIn("[modify_settings] WARN", r.stderr, name)
+            self.assertNotIn("SECRETJUNK", r.stdout + r.stderr, name)
+            fresh = json.loads(run(self.scripts["on_t3hub_off"], FIXTURE, home))  # no entry yet: none is made, the JSON is still valid
+            self.assertNotIn("usageLimitSources", fresh, name)
+            self.assertEqual(fresh["providerInstances"]["codex"]["config"]["setupMode"], "existing", name)
+        ok = run(self.scripts["on_t3hub_off"], text, KEY_HOME, full=True)
+        self.assertEqual(ok.stderr, "")
+
+    def test_the_template_never_names_a_1password_account(self):
+        text = (ROOT / T3).read_text()
+        for bad in ("--account", '"account"'):
+            self.assertNotIn(bad, text)
 
     def test_hub_off_leaves_usage_and_names_alone_that_were_never_ours(self):
         self.assertEqual(self.modify("off_t3hub_off", FIXTURE), FIXTURE)
@@ -344,6 +405,10 @@ class ApplyPathTest(unittest.TestCase):
         (self.home / ".t3/tools/codex").mkdir(parents=True)
         (self.home / ".t3/tools/codex/active.json").write_text(json.dumps({"version": CODEX_VERSION}))
         (self.home / ".t3/userdata").mkdir(mode=0o700)  # T3 keeps userdata private; the source must not loosen it
+        (self.home / ".local/user_scripts").mkdir(parents=True)  # a fake op_read_cached.sh: no 1Password here
+        fake = self.home / ".local/user_scripts/op_read_cached.sh"
+        fake.write_text("#!/bin/sh\nprintf %s " + KEY + "\n")
+        fake.chmod(0o755)
         (self.home / ".claude/settings.json").write_text('{"theme": "dark", "env": {"FOO": "bar"}}')
         (self.home / ".codex/config.toml").write_text(self.CODEX_BASE)
         (self.home / ".t3/userdata/settings.json").write_text(FIXTURE)
@@ -389,7 +454,8 @@ class ApplyPathTest(unittest.TestCase):
         self.assertEqual({k: v["displayName"] for k, v in t3.items()}, NAMES)
         self.assertEqual(list(t3), ["codex", "claudeAgent", "coordinator"])
         top = json.loads((self.home / ".t3/userdata/settings.json").read_text())
-        self.assertEqual((top["secretProviders"], top["usageLimitSources"]), ({"onepassword": ONEPASSWORD}, {"cliproxy-hub": USAGE}))
+        self.assertEqual(top["usageLimitSources"], {"cliproxy-hub": USAGE})
+        self.assertNotIn("secretProviders", top)
         self.assertEqual(stat.S_IMODE((self.home / ".t3/userdata").stat().st_mode), 0o700)
         again = self.read()
         self.apply(*self.targets())
