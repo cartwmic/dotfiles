@@ -5,29 +5,16 @@ the dump uses. Nothing here touches the live agent-events directories.
 """
 import gzip
 import json
-import os
-import pwd
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from shadow_py_run import live_dirs  # noqa: F401  (one definition, in the deployed file; the guard lives there)
 
 
 def dumps(obj):
     """Canonical JSON: sorted keys, no spaces, floats as the shortest round-trip repr, UTF-8 as is."""
     return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-
-
-def live_dirs():
-    """Where the real collector keeps its state and data, for this user, however HOME is set now."""
-    homes = {Path(pwd.getpwuid(os.getuid()).pw_dir), Path.home()}
-    out = set()
-    for home in homes:
-        out.add(home / ".local/state/agent-events")
-        out.add(home / ".local/share/agent-events")
-    for var, sub in (("XDG_STATE_HOME", "agent-events"), ("XDG_DATA_HOME", "agent-events")):
-        if os.environ.get(var):
-            out.add(Path(os.environ[var]) / sub)
-    return {p.resolve() for p in out}
 
 
 def refuse_live(path, what):

@@ -112,7 +112,8 @@ class FrozenSet(Scratch):
 
     def test_untouched_copy_runs(self):
         d = self.tamper_copy("agent_events.py", "")
-        r = self.run_py("shadow_py_run.py", "status", directory=d, env=self.env(AGENT_EVENTS_STATE_DIR=str(self.tmp / "st")))
+        r = self.run_py("shadow_py_run.py", "status", directory=d,
+                        env=self.env(AGENT_EVENTS_STATE_DIR=str(self.tmp / "st"), XDG_DATA_HOME=str(self.tmp / "data")))
         self.assertIn(r.returncode, (0, 1), r.stderr)  # status answers; it is stale here
         self.assertIn("last successful build", r.stdout)
 
@@ -225,9 +226,90 @@ class ControlArm(Scratch):
         self.assertFalse((self.tmp / "shadow/state").exists())
 
     def test_shadow_shows_the_same_verbs_as_the_collector(self):
-        r = self.run_py("shadow_py_run.py", "--help")
+        r = self.run_py("shadow_py_run.py", "--help", env=self.env(AGENT_EVENTS_STATE_DIR=str(self.tmp / "st"),
+                                                                    XDG_DATA_HOME=str(self.tmp / "data")))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("build", r.stdout)
+
+
+class ControlArmLiveGuard(Scratch):
+    """shadow_py_run.py never touches the live state dir or database, for any verb. On the scratch HOME the 'live'
+    default paths are $HOME/.local/state/agent-events and $HOME/.local/share/agent-events, and they hold sentinels."""
+
+    VERBS = (["run"], ["status"], ["build"], ["export"], ["sessions"], ["sql", "select 1"], ["--help"])
+
+    def setUp(self):
+        super().setUp()
+        self.live_state = self.home / ".local/state/agent-events"
+        self.live_data = self.home / ".local/share/agent-events"
+        for d, name in ((self.live_state, "status.json"), (self.live_data, "events.sqlite")):
+            d.mkdir(parents=True)
+            (d / name).write_bytes(b"live sentinel " + name.encode())
+        self.own = self.tmp / "own"
+        self.sentinel = self.tree_hash(self.home)
+
+    def refused(self, env, *extra):
+        """Every verb exits 64 with a refusal on stderr, prints nothing and writes nothing under HOME or the arm's dirs."""
+        for verb in self.VERBS:
+            with self.subTest(verb=verb):
+                r = self.run_py("shadow_py_run.py", *extra, *verb, env=env)
+                self.assertEqual(r.returncode, 64, (verb, r.stdout, r.stderr))
+                self.assertIn("refusing to run", r.stderr)
+                self.assertEqual(r.stdout, "")
+                self.assertEqual(self.tree_hash(self.home), self.sentinel, "the live sentinels changed or a file was added")
+                self.assertFalse(self.own.exists(), "the arm's own dirs were created")
+
+    def good(self, **extra):
+        return self.env(AGENT_EVENTS_STATE_DIR=str(self.own / "state"), XDG_DATA_HOME=str(self.own / "data"), **extra)
+
+    def test_state_dir_unset(self):
+        self.refused(self.env(XDG_DATA_HOME=str(self.own / "data")))
+
+    def test_state_dir_empty(self):
+        self.refused(self.env(AGENT_EVENTS_STATE_DIR="", XDG_DATA_HOME=str(self.own / "data")))
+
+    def test_state_dir_is_the_live_one(self):
+        self.refused(self.env(AGENT_EVENTS_STATE_DIR=str(self.live_state), XDG_DATA_HOME=str(self.own / "data")))
+
+    def test_state_dir_is_the_live_one_through_a_symlink(self):
+        link = self.tmp / "innocent"
+        link.symlink_to(self.live_state)
+        self.refused(self.env(AGENT_EVENTS_STATE_DIR=str(link), XDG_DATA_HOME=str(self.own / "data")))
+        # the same, through a symlink to a parent and a relative path with ..
+        up = self.tmp / "up"
+        up.symlink_to(self.home / ".local")
+        self.refused(self.env(AGENT_EVENTS_STATE_DIR=str(up / "state/agent-events"), XDG_DATA_HOME=str(self.own / "data")))
+        self.refused(self.env(AGENT_EVENTS_STATE_DIR=str(self.own / ".." / "home/.local/state/agent-events"),
+                              XDG_DATA_HOME=str(self.own / "data")))
+
+    def test_database_is_the_live_default(self):
+        """State dir fine, no --db and no XDG_DATA_HOME: the collector would open $HOME/.local/share/agent-events/events.sqlite."""
+        self.refused(self.env(AGENT_EVENTS_STATE_DIR=str(self.own / "state")))
+
+    def test_database_is_named_live_by_db_or_xdg(self):
+        self.refused(self.env(AGENT_EVENTS_STATE_DIR=str(self.own / "state")), "--db", self.live_data / "events.sqlite")
+        self.refused(self.env(AGENT_EVENTS_STATE_DIR=str(self.own / "state"), XDG_DATA_HOME=str(self.home / ".local/share")))
+        self.refused(self.env(AGENT_EVENTS_STATE_DIR=str(self.own / "state")), "--db=" + str(self.live_data / "events.sqlite"))
+
+    def test_database_is_the_live_one_through_a_symlink(self):
+        link = self.tmp / "db-link.sqlite"
+        link.symlink_to(self.live_data / "events.sqlite")
+        self.refused(self.good(), "--db", link)
+        dirlink = self.tmp / "data-link"
+        dirlink.symlink_to(self.live_data)
+        self.refused(self.good(), "--db", dirlink / "events.sqlite")
+        xdg = self.tmp / "xdg-link"
+        xdg.symlink_to(self.home / ".local/share")
+        self.refused(self.env(AGENT_EVENTS_STATE_DIR=str(self.own / "state"), XDG_DATA_HOME=str(xdg)))
+
+    def test_own_state_and_database_are_allowed(self):
+        """The guard is not a blanket refusal: with its own dirs the verb runs (status answers; it is stale here)."""
+        r = self.run_py("shadow_py_run.py", "status", env=self.good())
+        self.assertIn(r.returncode, (0, 1), r.stderr)
+        self.assertIn("last successful build", r.stdout)
+        r = self.run_py("shadow_py_run.py", "--db", self.own / "x.sqlite", "status", env=self.env(AGENT_EVENTS_STATE_DIR=str(self.own / "state")))
+        self.assertIn(r.returncode, (0, 1), r.stderr)
+        self.assertEqual(self.tree_hash(self.home), self.sentinel)
 
 
 class CacheRef(Scratch):
@@ -591,7 +673,8 @@ class Deployment(Scratch):
             self.assertEqual((target / name).read_bytes(), (TOOLS / name).read_bytes(), name)
         # the deployed set verifies itself and runs the control arm's refusal check from where it is deployed
         r = subprocess.run([sys.executable, str(target / "shadow_py_run.py"), "--help"], capture_output=True, text=True,
-                           env=dict(os.environ, HOME=str(self.home), PYTHONDONTWRITEBYTECODE="1"))
+                           env=dict(os.environ, HOME=str(self.home), PYTHONDONTWRITEBYTECODE="1",
+                                    AGENT_EVENTS_STATE_DIR=str(self.tmp / "arm-state"), XDG_DATA_HOME=str(self.tmp / "arm-data")))
         self.assertEqual(r.returncode, 0, r.stderr)
 
 
