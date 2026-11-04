@@ -64,7 +64,7 @@ def stale():
 def render(data):
     with tempfile.TemporaryDirectory() as tmp:
         cfg = Path(tmp) / "chezmoi.yaml"
-        cfg.write_text(json.dumps({"data": data}))
+        cfg.write_text(json.dumps({"data": dict(data, hub={"claude": False})}))  # the hub keys are tests/hub-claude's
         r = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(cfg), "--config-format", "yaml", "execute-template"],
                            input=SETTINGS.read_text(), capture_output=True, text=True, timeout=120, env=dict(os.environ, HOME=tmp))
     assert r.returncode == 0, r.stderr
