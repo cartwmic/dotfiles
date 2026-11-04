@@ -17,6 +17,12 @@
 # "src/t3-hook/hook.ts" in their command: each apply drops them from every event and, when wanted, appends the current ones.
 # Off, or on any other profile, they are removed. axon-work-computer is left out: its Matrix coordinator has another state dir,
 # and nothing new is applied on the work Mac without asking.
+# Hub (personal profile on macOS, and only while .hub.claude in .chezmoidata.toml is true): points every Claude Code session at the
+# homelab CLIProxyAPI hub. Sets env.ANTHROPIC_BASE_URL (no /v1) and apiKeyHelper (op_read_cached.sh printing the hub key). Neither
+# ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY is set: either would outrank apiKeyHelper. Off, or on any other profile or OS, an apply
+# removes env.ANTHROPIC_BASE_URL only when it equals the hub URL and apiKeyHelper only when it equals ours, then prunes env if that
+# emptied it; other env keys and a user's own helper stay. ROLLBACK: set hub.claude = false in .chezmoidata.toml, then apply
+# ~/.claude/settings.json. Deleting this block instead would leave both keys behind, so the switch stays in the template.
 set -eu
 
 {{ if eq .profile "axon-work-computer" -}}
@@ -43,8 +49,17 @@ T3_RULES=false
 {{- end }}
 T3_MARKER='src/t3-hook/hook.ts'
 
+{{ if and (eq .profile "personal") (eq .chezmoi.os "darwin") .hub.claude -}}
+HUB_WANT=true
+{{- else -}}
+HUB_WANT=false
+{{- end }}
+HUB_URL='https://cliproxy.internal.cartwmic.com'
+HUB_HELPER={{ includeTemplate "shquote" (printf "%s/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-claude-code'" .chezmoi.homeDir) }}
+
 exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_MARKER" \
-  --argjson t3want "$T3_WANT" --argjson t3rules "$T3_RULES" --arg t3repo "$T3_REPO" --arg t3marker "$T3_MARKER" '
+  --argjson t3want "$T3_WANT" --argjson t3rules "$T3_RULES" --arg t3repo "$T3_REPO" --arg t3marker "$T3_MARKER" \
+  --argjson hubwant "$HUB_WANT" --arg huburl "$HUB_URL" --arg hubhelper "$HUB_HELPER" '
   def ours: (.command? // "") | contains($marker);
   def count_ours: [.hooks.SessionStart[]?.hooks[]? | select(ours)] | length;
   def strip_ours:
@@ -98,6 +113,15 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
         .hooks.SessionStart += [{hooks: [entry($guard + ($run | sub(" \\|\\| exit 2$"; " --part rules || exit 2")))]}]
       else . end;
   def ensure_t3: t3_strip | if $t3want then t3_add else . end;
+  def ensure_hub:
+    if $hubwant then
+      .env.ANTHROPIC_BASE_URL = $huburl | .apiKeyHelper = $hubhelper
+    else
+      (if (.env | type) == "object" and .env.ANTHROPIC_BASE_URL == $huburl
+       then del(.env.ANTHROPIC_BASE_URL) | if .env == {} then del(.env) else . end
+       else . end)
+      | if .apiKeyHelper == $hubhelper then del(.apiKeyHelper) else . end
+    end;
   if length == 0 then
     {}
   elif length == 1 and (.[0] | type) == "object" then
@@ -110,4 +134,5 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
   | .modelSettings["claude-opus-5-5"].effortLevel //= "medium"
   | ensure_hook
   | ensure_t3
+  | ensure_hub
 '
