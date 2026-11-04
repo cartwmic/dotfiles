@@ -8,7 +8,7 @@ This directory contains the canonical, harness-agnostic configuration sources an
 dot_local/share/agent-harness/
   reviewer-brief.md      # the one brief every reviewer follows: the blocking bar, inputs, re-review scope, return
   findings-contract.md   # v1: the shape of a reviewer's return and the review log records
-  reviewer-examples.md   # twelve real cases (six blocking, six notes) for calibrating the bar
+  reviewer-examples.md   # twelve real cases (seven blocking, five notes) for calibrating the bar
   canonical/
     instructions/
       AGENTS.md

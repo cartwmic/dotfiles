@@ -9,7 +9,7 @@ One JSON object, saved as `findings.json`:
 ```json
 { "findings_schema": 1,
   "reviewer": "name",
-  "head": "<full sha or tree id>",
+  "head": "<commit SHA, or a document's sha256>",
   "brief_sha256": "<sha256 of reviewer-brief.md>",
   "findings": [ { "id": "f1", "severity": "blocking", "text": "...",
                   "obligation": "...", "evidence": "...", "consequence": "...",
@@ -19,7 +19,7 @@ One JSON object, saved as `findings.json`:
 | Field | Type | Rule |
 |---|---|---|
 | `findings_schema` | integer | Must be `1`. A return without it is a v0 return. Loop Engine reads old stored v0 records as before (blocking, every field as then). The coordinator tool rejects them. |
-| `reviewer`, `head` | string | Required, not blank. |
+| `reviewer`, `head` | string | Required, not blank. `head` is the commit SHA, or for a document review the file's sha256 (Loop Engine may give the tree id it records). |
 | `brief_sha256` | string | The coordinator tool requires it and compares it to the current `reviewer-brief.md`. Optional in Loop Engine, whose reviewers get a packet and not the file. |
 | `findings[].id` | string | Required, not blank, unique within the return. |
 | `findings[].severity` | `"blocking"` or `"note"` | Required. Anything else rejects the return. |
