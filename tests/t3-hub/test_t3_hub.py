@@ -100,7 +100,8 @@ class SettingsScriptTest(unittest.TestCase):
         home = str(self.env.home)
         self.assertEqual(inst["claude-hub"], {
             "driver": "claudeAgent", "displayName": "Claude (hub)", "enabled": True,
-            "environment": [{"name": "ANTHROPIC_BASE_URL", "value": "https://cliproxy.internal.cartwmic.com", "sensitive": False}],
+            "environment": [{"name": "ANTHROPIC_BASE_URL", "value": "https://cliproxy.internal.cartwmic.com", "sensitive": False},
+                            {"name": "ANTHROPIC_API_KEY", "value": "", "sensitive": False}],
             "config": {"launchArgs": "--settings %s/%s" % (home, CLAUDE_FILE)}})
         self.assertEqual(inst["codex-hub"], {
             "driver": "codex", "displayName": "Codex (hub)", "enabled": True,
@@ -194,6 +195,9 @@ class ApplyPathTest(unittest.TestCase):
             self.assertEqual(toml["model"], "gpt-6")
             self.assertNotIn("model_provider", toml)
             self.assertEqual(toml["model_providers"]["cliproxy"]["wire_api"], "responses")
+            self.assertIs(toml["model_providers"]["cliproxy"]["supports_websockets"], True)
+            self.assertNotIn("requires_openai_auth", toml["model_providers"]["cliproxy"])
+            self.assertNotIn("env_key", toml["model_providers"]["cliproxy"])
             self.assertEqual(toml["model_providers"]["cliproxy"]["auth"]["args"], ["op://developer/tb36gtnaocyezjk3dslomp64he/laptop-codex"])
             # A second apply changes nothing.
             before = [Path(t).read_bytes() for t in self.targets(env)]

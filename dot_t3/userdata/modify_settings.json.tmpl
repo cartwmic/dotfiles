@@ -2,7 +2,7 @@
 # Own two provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there.
 # Personal Mac only (.chezmoiignore): the hub is reachable from the home LAN or WireGuard, and this is Michael's personal machine.
 # Data switch t3Hub.enabled (default true): false makes WANT empty, so the next apply removes exactly the two owned ids.
-#   claude-hub  "Claude (hub)"  driver claudeAgent: ANTHROPIC_BASE_URL at the hub, key from ~/.config/t3-hub-claude-settings.json (apiKeyHelper)
+#   claude-hub  "Claude (hub)"  driver claudeAgent: ANTHROPIC_BASE_URL at the hub and an empty ANTHROPIC_API_KEY (an ambient key must not win over the helper's), key from ~/.config/t3-hub-claude-settings.json (apiKeyHelper)
 #   codex-hub   "Codex (hub)"   driver codex, not managed: CODEX_HOME stays ~/.codex, `-c model_provider=cliproxy` selects the
 #               [model_providers.cliproxy] block that dot_codex/modify_private_config.toml.tmpl writes
 # Each apply replaces exactly those two ids under providerInstances; no other key or instance is touched. No file, or a file that is
@@ -20,7 +20,7 @@ set -eu
 {{- end }}
 {{- $_ := set $codex "config" $codexConfig }}
 {{- $claude := dict "driver" "claudeAgent" "displayName" "Claude (hub)" "enabled" true
-      "environment" (list (dict "name" "ANTHROPIC_BASE_URL" "value" "https://cliproxy.internal.cartwmic.com" "sensitive" false))
+      "environment" (list (dict "name" "ANTHROPIC_BASE_URL" "value" "https://cliproxy.internal.cartwmic.com" "sensitive" false) (dict "name" "ANTHROPIC_API_KEY" "value" "" "sensitive" false))
       "config" (dict "launchArgs" (printf "--settings %s/.config/t3-hub-claude-settings.json" $home)) }}
 # WANT stays on one line so a test can swap it. The codex binary is T3's own download, found through ~/.t3/tools/codex/active.json
 # at apply time (T3 does not keep a version-free path); without that file binaryPath is left out.
