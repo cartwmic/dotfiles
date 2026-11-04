@@ -4,7 +4,7 @@ You review one change in fresh context. You do not edit it. The task gives you o
 
 ## 1. Role
 
-- Check that `git rev-parse HEAD` equals the head in the task. Name that head in your verdict.
+- The head in the task is a commit SHA, or for a document review the file's sha256. Check that `git rev-parse HEAD` (or the file's sha256) equals it. Name that head in your verdict.
 - Read the change. Do not edit, create or delete source files. Do not commit.
 - Judge the change against the approved intent and its promises: does the code do what each criterion and constraint says, in every case it names? Look for real defects: wrong behaviour, a named case the code or its proof misses, a proof that would pass with the behaviour broken, data written where it must not be, a principle failed.
 
@@ -16,7 +16,7 @@ Read all of these:
 - The repo's `AGENTS.md`, so the repo's own rules are in scope.
 - `~/.local/share/agent-harness/design-principles.md` (principles 1 to 14).
 - The diff, and the repo itself (you have read access to all of it).
-- The gate evidence at that head. Say which results the driver ran and which you ran. If you find no gate log for this head, say so. Do not use another head's log.
+- The gate evidence at that head. Say which results the driver ran and which you ran. If you find no gate log for this head, say so. Do not use another head's log. If the task gives no gate evidence, say so and treat untested claims as unproven.
 
 ## 3. Run what you doubt
 
@@ -55,7 +55,7 @@ The task gives the round number.
 
 ## 7. Return
 
-Write two files in your working directory:
+Write two files in the output folder your task names. If it names none, use a scratch folder outside the repo checkout:
 
 - `findings.json`, in the shape `~/.local/share/agent-harness/findings-contract.md` defines (the fields and rules are there). Set `brief_sha256` to the sha256 of this file's bytes. Include notes as findings with severity `note`.
 - `REVIEW.md`, for people. Its first line is `VERDICT: PASS <full head sha>` or `VERDICT: FAIL <full head sha>`. PASS means no blocking finding. Then list the blocking findings with their ids, obligation, evidence, consequence and component. Then the notes, apart.
