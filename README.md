@@ -424,7 +424,7 @@ selection capture is unavailable. See
 
 Two extra provider instances in T3 Code send their traffic through the homelab CLIProxy hub
 (`https://cliproxy.internal.cartwmic.com`, home LAN or WireGuard): `claude-hub` ("Claude (hub)") and
-`codex-hub` ("Codex (hub)"). They exist on the personal profile on macOS only. `dot_t3/userdata/modify_settings.json.tmpl`
+`codex-hub` ("Codex (hub)"). They exist on the personal profile on macOS only. `dot_t3/private_userdata/modify_settings.json.tmpl`
 adds exactly those two ids to `~/.t3/userdata/settings.json` and leaves every other key and instance alone. Keys are read
 at run time from 1Password (`op_read_cached.sh`): Claude through the `apiKeyHelper` in
 `~/.config/t3-hub-claude-settings.json`, Codex through a `[model_providers.cliproxy]` block that
