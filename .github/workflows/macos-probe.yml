@@ -1,0 +1,17 @@
+name: macOS runner probe
+# Temporary: which hosted macOS images get a runner. Delete after the diagnosis.
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15, macos-14, macos-15-intel, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - run: uname -a && sw_vers 2>/dev/null || true
