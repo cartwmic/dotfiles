@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- A second coordinator daemon (the work instance, on Matrix; see docs/work-instance.md). Same program as local.coordinatord.plist with its own label, state directory and logs.
-     /Users/test is the home directory, /Users/test/git/coordinator the checkout the daemon runs from, /Users/test/.local/share/coordinator-work the work instance's state directory (never the personal ~/.local/share/coordinator). -->
+     /Users/test is the home directory, /Users/test/coordinator-work the checkout the daemon runs from, /Users/test/.local/share/coordinator-work the work instance's state directory (never the personal ~/.local/share/coordinator). -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>local.coordinatord.work</string>
@@ -11,9 +11,9 @@
     <string>node</string>
     <string>--experimental-strip-types</string>
     <string>--disable-warning=ExperimentalWarning</string>
-    <string>/Users/test/git/coordinator/src/coordinatord/main.ts</string>
+    <string>/Users/test/coordinator-work/src/coordinatord/main.ts</string>
   </array>
-  <key>WorkingDirectory</key><string>/Users/test/git/coordinator</string>
+  <key>WorkingDirectory</key><string>/Users/test/coordinator-work</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>COORDINATOR_STATE_DIR</key><string>/Users/test/.local/share/coordinator-work</string>

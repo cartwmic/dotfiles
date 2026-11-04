@@ -497,7 +497,7 @@ data:
   instances:
     coordinator:
       enabled: true               # absent or false: off
-      repo: /path/to/coordinator  # default: /Volumes/Workshop/macbook/git/coordinator (personal), ~/git/coordinator (work profile)
+      repo: /path/to/coordinator  # default: /Volumes/Workshop/macbook/git/coordinator (personal), ~/coordinator-work (work profile)
     retro:
       enabled: true               # the go-live: Discord and model spend (see Retro's docs/LIVE.md). Ships off.
       repo: /path/to/retro        # default: /Volumes/Workshop/macbook/git/retro (personal), ~/git/retro (work)
@@ -527,7 +527,7 @@ data:
   instances:
     coordinator:
       enabled: true                       # absent or false: off. Ships off.
-      repo: /Users/you/coordinator-work   # ABSOLUTE path of your checkout; default ~/git/coordinator
+      repo: /Users/you/coordinator-work   # ABSOLUTE path of your checkout; default ~/coordinator-work
       # extraPath: /opt/node/bin:/opt/herdr/bin   # optional: only if the live unit's PATH starts with tool directories (see below)
 ```
 

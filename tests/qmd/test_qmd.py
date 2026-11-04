@@ -209,12 +209,17 @@ class WorkIndexTemplateTest(unittest.TestCase):
         self.assertEqual(self.names(out)[0], "notes")
         self.assertIn("    path: %s/tmp\n    pattern: \"*/*.md\"" % home, out)
 
-    def test_work_checkouts_are_found_under_home_git_only(self):
-        out, home = self.render(dirs=["git/coordinator", "git/retro", "git/unrelated"])
+    def test_work_checkouts_are_the_coordinator_work_dir_and_retro_under_home_git(self):
+        out, home = self.render(dirs=["coordinator-work", "git/retro", "git/unrelated"])
         self.assertEqual(self.names(out), ["repo-dotfiles", "repo-coordinator", "repo-retro", "sessions", "claude-sessions", "codex-sessions", "recaps"])
-        self.assertIn("    path: %s/git/coordinator\n" % home, out)
+        self.assertIn("    path: %s/coordinator-work\n" % home, out)
+        self.assertIn("    path: %s/git/retro\n" % home, out)
         self.assertNotIn("unrelated", out)
         self.assertNotIn("/Volumes/Workshop", out)
+
+    def test_work_ignores_a_coordinator_under_home_git(self):
+        out, _ = self.render(dirs=["git/coordinator"])
+        self.assertNotIn("repo-coordinator", out)
 
     def test_work_never_lists_the_personal_only_repos(self):
         out, _ = self.render(dirs=["git/loop-engine", "git/budget-steward", "git/cartwmic-homelab-v2"])
