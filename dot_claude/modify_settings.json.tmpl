@@ -136,7 +136,7 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
       | if (.hooks | length) == 0 then del(.hooks) else . end
     else . end;
   def t3_add:
-    ("COORDINATOR_STATE_DIR=\"" + $t3state + "\" node --experimental-strip-types " + (($t3repo + "/src/t3-hook/hook.ts") | sq)) as $base
+    ("COORDINATOR_STATE_DIR=\"" + $t3state + "\" node --experimental-strip-types --disable-warning=ExperimentalWarning " + (($t3repo + "/src/t3-hook/hook.ts") | sq)) as $base
     | ($base + " || exit 2") as $run
     | ("^mcp__t3-code__(t3_thread_send|t3_thread_send_attachments|delegate_task|t3_thread_launch|create_threads|schedule_task)$") as $m
     | def entry($cmd): {type: "command", command: $cmd};
