@@ -60,8 +60,7 @@ CREATE TABLE IF NOT EXISTS calls (
 CREATE INDEX IF NOT EXISTS calls_key ON calls(dedupe_key);
 CREATE TABLE IF NOT EXISTS review_items (
   item TEXT PRIMARY KEY, repo TEXT, log_lines INTEGER NOT NULL, state TEXT, hard TEXT NOT NULL, problems TEXT NOT NULL,
-  stale_now INTEGER NOT NULL, partial_now INTEGER NOT NULL, stale_looks INTEGER NOT NULL, partial_looks INTEGER NOT NULL,
-  skipped_redesigns INTEGER, needs_component INTEGER, undisposed_blocking INTEGER);
+  looks TEXT NOT NULL, skipped_redesigns INTEGER, needs_component INTEGER, undisposed_blocking INTEGER);
 CREATE TABLE IF NOT EXISTS review_rounds (
   item TEXT NOT NULL, round INTEGER NOT NULL, review_round INTEGER NOT NULL, stage TEXT NOT NULL, verdict TEXT NOT NULL,
   model TEXT, duration_ms INTEGER, cost_usd REAL, at_ms INTEGER, PRIMARY KEY (item, round));
@@ -655,7 +654,10 @@ def build(sessions_dir, db_path, since_ms=None, progress=None):
             finalize(con, None if dirty else changed)
             con.execute("INSERT OR REPLACE INTO meta VALUES ('dirty', '0')")
     n_sessions = con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-    review = review_reader.update(con)  # a look at the review folder on every build, rebuilt or not
+    try:
+        review = review_reader.update(con)  # a look at the review folder on every build, rebuilt or not
+    except Exception:  # noqa: BLE001 - nothing in the review folder may fail the Pi build; shown as a reader problem
+        review = {"ok": False, "problems": {"reader_error": 1}}
     con.close()
     return {"parsed": parsed_n, "unchanged": skipped, "removed": removed, "refinalized": bool(dirty and not parsed_n and not removed),
             "malformed_lines": malformed, "sessions": n_sessions, "review": review}

@@ -156,13 +156,25 @@ field, a session id or a component name. They are rebuilt in one transaction whe
 | `report_schema` | a `report_schema` that is not 1, a report that does not parse or is not a v1 report, or one for another item |
 | `unknown_event` | a log line whose `event` is not one of the seven kinds the reader knows (a kind the report lists but the reader does not is still unknown) |
 | `bad_line` | a line that does not parse, has a value outside its vocabulary, repeats a round or a finding, or names a round that has no line; also a final line with no newline that is still unfinished on the next look |
-| `report_missing` | an item with a `round` event and no `report.json` (every hand-kept log, by design) |
-| `report_stale` | the report's `log.lines`, or the sum of its `log.events`, differs from the lines counted; or a logged kind is not in `summarises.events`; or its finding ids differ from the log's |
+| `report_missing` | an item with a `round` event and no `report.json` (every hand-kept log, by design); confirmed on the second look |
+| `report_stale` | the report's `log.lines`, or the sum of its `log.events`, differs from the lines counted; or a logged kind is not in `summarises.events`; or its finding ids differ from the log's; confirmed on the second look |
+| `orphan_ref` | a `label` or `disposition` whose id names no finding in the log |
+| `stray_entry` | a file (not a folder) directly under `emitted/review/` (counted per entry, not per item) |
+| `reader_error` | reading an item failed in a way the reader did not expect (counted per item), or the folder could not be listed (1) |
 
-An item with a problem exports its log-derived series but none of the report-derived ones (`pi_review_relations_total`,
-`pi_review_dispositions_total`, `pi_review_skipped_redesigns`, `pi_review_items`). A bad line is left out of every count.
+Entries whose name starts with `.` (`.DS_Store`, a hidden folder) are ignored, and say nothing. A log id is `r<N>.` followed by the
+return's own id, which the contract allows to be any non-blank string, so the reader accepts spaces, `#` and the like. A line with
+deep nesting is a bad line and a report with deep nesting is `report_schema`; nothing in the review folder can fail the Pi build: an
+unexpected failure while reading an item is that item's `reader_error` and it keeps the rows it had. An unreadable `findings.jsonl` is a
+`bad_line` and the item keeps its previous rows too.
 
-**Staleness counts looks, not time.** `report_stale` and an unfinished last line are confirmed on the second consecutive *build that looks at the
+**Held, not withdrawn.** The report-derived values (`pi_review_relations_total`, `pi_review_dispositions_total`, `pi_review_skipped_redesigns`,
+`pi_review_items`) are taken from a report only while the item is healthy and the report matches its log. While an item has a problem, or
+its report is stale, it keeps the values it last had from a fresh report; those are exported unchanged. A project's counter therefore never falls
+because one item had a problem, and on recovery only the true difference is added. Before an item has ever had a fresh report these series
+are simply absent for it. The log-derived counters count every readable line of every item, held or not.
+
+**Staleness counts looks, not time.** `report_stale`, `report_missing` and an unfinished last line are confirmed on the second consecutive *build that looks at the
 folder*, whether or not that build rebuilt the tables. One tick that lands between a writer's log append and its report rename sees one stale look and
 reports nothing; a hand-appended line stays stale and is reported by the next build, even though that build finds nothing changed and rebuilds nothing. I
 chose this over wall-clock age against the log's mtime because it needs no time limit to choose, and "two builds in a row" is what a tick means. A
@@ -178,8 +190,9 @@ Series (names start `pi_` because the collector filters on it): counters `pi_rev
 **Baseline.** The review counters have their own one-time baseline: `export_state.json` gains `seeded_families: ["pi_review"]`. On the first tick
 that runs the reader while that marker is absent, the review series take their current totals as the reference and export 0, and the marker is set
 whether or not any review data existed. After that a new series is real activity, so a log first created later counts as one tick of activity. The
-fingerprint and every Pi series are untouched. Known limit: when an item turns unhealthy its relations and dispositions drop out and, once it is healthy
-again, come back as a rise that is counted a second time; the other counters are append-only and cannot fall.
+fingerprint and every Pi series are untouched. Known limits: a counter falls (and the fall is absorbed) when an item folder is removed or renamed, or a
+line already counted is edited into a bad line; if that folder comes back, or the line is repaired, the rise is counted again. Review logs are append-only,
+so this is an operator action, not something the tools do.
 
 **Vendoring pending:** the golden pairs below are hand-authored from the contract until the kit's K2 merges; its real pairs (`src/traces/fixtures/golden/<name>/`) replace them byte for byte, with the manifest pin in the test updated, before this merges.
 

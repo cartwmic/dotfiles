@@ -232,8 +232,11 @@ class Strict(ReviewBase):
         return self.review / item_of(name)
 
     def assert_reported(self, reason):
-        """The first build reports the reason alone; the tick (a second look) may add report_stale, because a log with a
-        problem line never matches a report written before it. status.json and the gauge carry the reason either way."""
+        """The first build reports the reason alone (a look-confirmed reason needs a second build); the tick may add
+        report_stale, because a log with a problem line never matches a report written before it. status.json and the gauge
+        carry the reason either way."""
+        if reason in ("report_missing", "report_stale"):
+            self.assertTrue(self.problems()["ok"])
         res = self.problems()
         self.assertEqual(res, {"ok": False, "problems": {reason: 1}})
         self.assertEqual(am.run_once(self.root, self.db), 0)
@@ -338,6 +341,16 @@ class Strict(ReviewBase):
         self.assertEqual(self.problems(), {"ok": True, "problems": {}})
         self.assertEqual(self.tables("SELECT log_lines FROM review_items"), [(6,)])
 
+    def test_report_missing_is_confirmed_on_the_second_look_only(self):
+        d = self.setup_item()
+        (d / "report.json").unlink()
+        self.assertEqual(self.problems(), {"ok": True, "problems": {}})  # a tool's first round, before its first report
+        self.assertEqual(self.problems(), {"ok": False, "problems": {"report_missing": 1}})
+        shutil.copy(GOLDEN / "treadmill" / "report.json", d / "report.json")
+        self.assertEqual(self.problems(), {"ok": True, "problems": {}})
+        (d / "report.json").unlink()
+        self.assertEqual(self.problems(), {"ok": True, "problems": {}})  # the count starts again
+
     def test_report_missing(self):
         d = self.setup_item()
         (d / "report.json").unlink()
@@ -391,7 +404,7 @@ class Staleness(ReviewBase):
         (self.d / "report.json").write_text(json.dumps(rep, indent=2) + "\n")
         self.assertEqual(self.problems(), {"ok": True, "problems": {}})
         self.assertEqual(self.problems(), {"ok": True, "problems": {}})
-        self.assertEqual(self.tables("SELECT stale_looks FROM review_items"), [(0,)])
+        self.assertEqual(self.tables("SELECT looks FROM review_items"), [("{}",)])
 
     def test_it_clears_when_the_report_catches_up(self):
         self.hand_append(self.d)
@@ -415,15 +428,31 @@ class Staleness(ReviewBase):
             self.problems()
             self.assertEqual(self.problems()["problems"], {"report_stale": 1}, what)
 
-    def test_unhealthy_items_lose_only_their_report_derived_series(self):
+    def test_a_stale_item_keeps_the_report_derived_values_it_last_had(self):
         self.place("clean-pass")
+        self.build()
+        before = self.families()
         self.hand_append(self.d)
         self.problems()
-        self.problems()
+        self.assertEqual(self.problems()["problems"], {"report_stale": 1})
+        after = self.families()
+        for name in (FAMILY["relations"], FAMILY["dispositions"]):
+            self.assertEqual(series_of(after[0], name), series_of(before[0], name), name)
+        self.assertEqual(series_of(after[1], "pi_review_items"), series_of(before[1], "pi_review_items"))
+        self.assertEqual(series_of(after[1], "pi_review_skipped_redesigns"), series_of(before[1], "pi_review_skipped_redesigns"))
+        self.assertEqual(series_of(after[0], FAMILY["relations"])[("coordinator", "repeat")], 1)  # treadmill's, still there
+        self.assertEqual(sum(series_of(after[0], FAMILY["rounds"]).values()), 5)  # raw counts: 3 + 2
+
+    def test_a_row_with_no_report_yet_has_no_report_derived_values(self):
+        shutil.rmtree(self.review)
+        write_log(self.review / "coordinator#901", read_lines("treadmill"))  # a log, and no report yet
+        self.build()
+        self.build()
         fams, gauges = self.families()
-        self.assertEqual(series_of(fams, FAMILY["relations"]), {("loop-engine", "new"): 1})  # clean-pass only
-        self.assertEqual(sum(series_of(fams, FAMILY["rounds"]).values()), 5)  # raw counts: 3 + 2
-        self.assertEqual(series_of(gauges, "pi_review_items"), {("loop-engine", "passed"): 1})
+        self.assertEqual(series_of(fams, FAMILY["relations"]), {})
+        self.assertEqual(series_of(fams, FAMILY["dispositions"]), {})
+        self.assertEqual(series_of(gauges, "pi_review_items"), {})
+        self.assertEqual(sum(series_of(fams, FAMILY["rounds"]).values()), 3)
 
 
 class Sentinel(ReviewBase):
@@ -581,6 +610,229 @@ class Baseline(ReviewBase):
         _, fams = am.account(metrics, state, True, "x")
         self.assertEqual(fams[0]["points"][0][1], 0)
         self.assertEqual(state["seeded_families"], ["pi_review"])
+
+
+class Hold(ReviewBase):
+    """B1 of review round 1: withdrawing an unhealthy item's report-derived values made a project's counter fall, account()
+    re-took its baseline, and the item's recovery was counted as new activity. The values are held instead."""
+
+    def sent(self, name):
+        st = json.loads((self.state / "export_state.json").read_text())
+        return {tuple(v for _, v in sorted(e["l"].items())): e["sent"][0] for e in st["series"].values() if e["n"] == name}
+
+    def exported(self, c, name):
+        return points(c.requests[-1], name)
+
+    def test_the_reviewers_repro_new_4_repeat_2_follow_on_2_across_stale_and_recovery(self):
+        self.place("treadmill", "redesign-switch")  # both coordinator: true totals new=4, repeat=2, follow-on=2
+        c = self.collector()
+        true = {("coordinator", "new"): 0.0, ("coordinator", "repeat"): 0.0, ("coordinator", "follow-on"): 0.0}  # baseline: 0
+        for _ in range(2):
+            self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertEqual(self.exported(c, FAMILY["relations"]), true)
+        # a real new relation arrives with a report, so the totals move by exactly that much (a fresh item: 1 new, 1 repeat, 1 follow-on)
+        write_log(self.review / "coordinator#500", read_lines("treadmill"), json.loads((GOLDEN / "treadmill" / "report.json").read_text()) | {"item": "coordinator#500"})
+        for _ in range(2):
+            self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertEqual(self.exported(c, FAMILY["relations"]), {("coordinator", "new"): 2.0, ("coordinator", "repeat"): 1.0, ("coordinator", "follow-on"): 1.0})
+        base = self.exported(c, FAMILY["relations"])
+        d = self.review / "coordinator#217"
+        with open(d / "findings.jsonl", "a") as fh:  # the hand-appended line of the reviewer's repro
+            fh.write(json.dumps({"event": "escape", "at": "2026-11-03T00:00:00Z", "item": "coordinator#217", "head": "x", "round": 3, "found_by": "dogfood", "text": "hand"}) + "\n")
+        seen = []
+        for _ in range(3):  # one look, two looks (confirmed stale), a third
+            self.assertEqual(am.run_once(self.root, self.db), 0)
+            seen.append(self.exported(c, FAMILY["relations"]))
+        self.assertEqual(self.reader()["problems"], {"report_stale": 1})
+        self.assertTrue(all(x == base for x in seen), seen)  # held: neither withdrawn nor changed
+        rep = json.loads((d / "report.json").read_text())
+        rep["log"]["lines"] += 1
+        rep["log"]["events"]["escape"] += 1
+        (d / "report.json").write_text(json.dumps(rep, indent=2) + "\n")
+        for _ in range(3):
+            self.assertEqual(am.run_once(self.root, self.db), 0)
+            self.assertEqual(self.exported(c, FAMILY["relations"]), base)  # recovery adds the true delta, which is 0
+        self.assertEqual(self.reader(), {"ok": True, "problems": {}})
+        self.assertEqual(self.sent(FAMILY["relations"]), {("coordinator", "new"): 2.0, ("coordinator", "repeat"): 1.0, ("coordinator", "follow-on"): 1.0})
+        # and a relation that is really new while the item was stale arrives once, on recovery
+        with open(d / "findings.jsonl", "a") as fh:
+            fh.write(json.dumps({"event": "label", "at": "2026-11-03T00:00:00Z", "id": "r3.n1", "relation": "new"}) + "\n")
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertEqual(self.exported(c, FAMILY["relations"]), base)
+
+    def test_dispositions_and_the_two_gauges_are_held_too(self):
+        self.place("treadmill", "redesign-switch")
+        c = self.collector()
+        for _ in range(2):
+            self.assertEqual(am.run_once(self.root, self.db), 0)
+        gauge = lambda n: points(c.requests[-1], n)  # noqa: E731
+        items, skipped = gauge("pi_review_items"), gauge("pi_review_skipped_redesigns")
+        self.assertEqual(items, {("coordinator", "open"): 1.0, ("coordinator", "passed"): 1.0})
+        self.assertEqual(skipped, {("coordinator",): 1.0})
+        disp = self.exported(c, FAMILY["dispositions"])
+        d = self.review / "coordinator#217"
+        for how in ("schema", "unknown_event", "bad_line", "stale", "missing"):
+            shutil.copy(GOLDEN / "treadmill" / "report.json", d / "report.json")
+            shutil.copy(GOLDEN / "treadmill" / "findings.jsonl", d / "findings.jsonl")
+            for _ in range(2):
+                self.assertEqual(am.run_once(self.root, self.db), 0)
+            if how == "schema":
+                rep = json.loads((d / "report.json").read_text())
+                rep["report_schema"] = 2
+                (d / "report.json").write_text(json.dumps(rep, indent=2) + "\n")
+            elif how == "unknown_event":
+                with open(d / "findings.jsonl", "a") as fh:
+                    fh.write('{"event": "teleport", "at": "2026-11-03T00:00:00Z"}\n')
+            elif how == "bad_line":
+                with open(d / "findings.jsonl", "a") as fh:
+                    fh.write("garbage\n")
+            elif how == "stale":
+                with open(d / "findings.jsonl", "a") as fh:
+                    fh.write(json.dumps({"event": "judge", "at": "2026-11-03T00:00:00Z", "round": 3, "session": "s", "verdict": "churning"}) + "\n")
+            else:
+                (d / "report.json").unlink()
+            for look in (1, 2):
+                self.assertEqual(am.run_once(self.root, self.db), 0)
+                if look == 2 or how in ("schema", "unknown_event", "bad_line"):
+                    self.assertFalse(self.reader()["ok"], how)  # stale and missing are confirmed on the second look
+                self.assertEqual(self.exported(c, FAMILY["dispositions"]), disp, how)
+                self.assertEqual(gauge("pi_review_items"), items, how)
+                self.assertEqual(gauge("pi_review_skipped_redesigns"), skipped, how)
+        self.assertEqual(self.sent(FAMILY["relations"]), {("coordinator", "new"): 0.0, ("coordinator", "repeat"): 0.0, ("coordinator", "follow-on"): 0.0})
+
+    def test_an_unreadable_log_keeps_the_items_previous_rows(self):
+        self.place("treadmill")
+        self.build()
+        before = self.families()
+        log = self.review / "coordinator#217" / "findings.jsonl"
+        os.chmod(log, 0)
+        self.addCleanup(lambda: os.chmod(log, 0o644))
+        if os.access(log, os.R_OK):
+            self.skipTest("running as a user that can read a mode 0 file")
+        (log.parent / "report.json").touch()  # something changed, so the folder is read again
+        res = self.build()["review"]
+        self.assertEqual(res["problems"], {"bad_line": 1})
+        self.assertEqual(self.families()[0], before[0])
+        self.assertEqual(self.tables("SELECT COUNT(*) FROM review_rounds"), [(3,)])
+
+
+class Guarded(ReviewBase):
+    """n1: nothing in the review folder may fail the Pi build."""
+
+    def test_deep_nesting_in_the_log_or_the_report_is_a_bad_line_or_report_schema_and_the_pi_build_goes_on(self):
+        self.place("treadmill", "clean-pass")
+        with open(self.review / "coordinator#217" / "findings.jsonl", "a") as fh:
+            fh.write("[" * 100000 + "\n")
+        (self.review / "loop-engine#100" / "report.json").write_text("[" * 100000)
+        res = self.build()
+        self.assertEqual(res["sessions"], 1)  # the Pi session was ingested
+        self.assertEqual(res["review"]["problems"], {"report_schema": 1, "bad_line": 1})
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertIsNone(self.status()["last_build_error"])
+
+    def test_anything_else_that_goes_wrong_reading_an_item_is_its_reader_error(self):
+        self.place("treadmill", "clean-pass")
+        real = rv.parse_report
+        def boom(path, item):
+            if item == "coordinator#217":
+                raise RuntimeError(SENTINEL)
+            return real(path, item)
+        rv.parse_report = boom
+        self.addCleanup(lambda: setattr(rv, "parse_report", real))
+        res = self.build()
+        self.assertEqual(res["sessions"], 1)
+        self.assertEqual(res["review"], {"ok": False, "problems": {"reader_error": 1}})
+        self.assertEqual(self.tables("SELECT item FROM review_items ORDER BY item"), [("coordinator#217",), ("loop-engine#100",)])
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        self.assertNotIn(SENTINEL, (self.state / "agent.log").read_text() + (self.state / "status.json").read_text())
+
+    def test_a_folder_that_cannot_be_listed_is_a_reader_error_and_not_a_failed_build(self):
+        self.place("clean-pass")
+        self.build()
+        real = rv._scan
+        rv._scan = lambda root: (_ for _ in ()).throw(PermissionError(13, "denied", SENTINEL))
+        self.addCleanup(lambda: setattr(rv, "_scan", real))
+        res = self.build()
+        self.assertEqual(res["review"], {"ok": False, "problems": {"reader_error": 1}})
+        self.assertEqual(self.tables("SELECT COUNT(*) FROM review_items"), [(1,)])  # the tables are kept
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+
+    def test_an_outer_failure_in_the_reader_is_a_reader_error_too(self):
+        real = rv.update
+        ae.review_reader.update = lambda con: (_ for _ in ()).throw(RuntimeError("x"))
+        self.addCleanup(lambda: setattr(ae.review_reader, "update", real))
+        res = self.build()
+        self.assertEqual((res["sessions"], res["review"]), (1, {"ok": False, "problems": {"reader_error": 1}}))
+
+
+class Unreferenced(ReviewBase):
+    """n3: a reference to no finding and an entry that is not an item each get a counted reason; dot entries are ignored."""
+
+    def test_a_label_or_disposition_that_names_no_finding_is_orphan_ref(self):
+        for kind, line in (("label", {"event": "label", "id": "r9.zz", "relation": "new"}),
+                           ("disposition", {"event": "disposition", "id": "r1.zz", "outcome": "fixed"})):
+            shutil.rmtree(self.review, ignore_errors=True)
+            self.place("treadmill")
+            with open(self.review / "coordinator#217" / "findings.jsonl", "a") as fh:
+                fh.write(json.dumps({"at": "2026-11-03T00:00:00Z", **line}) + "\n")
+            self.assertEqual(self.problems()["problems"].get("orphan_ref"), 1, kind)
+
+    def test_a_stray_file_in_the_review_folder_is_a_stray_entry_and_is_noticed_when_nothing_else_changes(self):
+        self.place("clean-pass")
+        self.assertEqual(self.problems(), {"ok": True, "problems": {}})
+        (self.review / "notes.txt").write_text(SENTINEL)
+        self.assertEqual(self.problems(), {"ok": False, "problems": {"stray_entry": 1}})
+        (self.review / "more.md").write_text("x")
+        self.assertEqual(self.problems(), {"ok": False, "problems": {"stray_entry": 2}})
+        (self.review / "notes.txt").unlink()
+        (self.review / "more.md").unlink()
+        self.assertEqual(self.problems(), {"ok": True, "problems": {}})
+
+    def test_dot_entries_are_ignored(self):
+        self.place("clean-pass")
+        (self.review / ".DS_Store").write_text("x")
+        (self.review / ".hidden").mkdir()
+        write_log(self.review / ".scratch#1", read_lines("clean-pass"))
+        self.assertEqual(self.problems(), {"ok": True, "problems": {}})
+        self.assertEqual(self.tables("SELECT item FROM review_items"), [("loop-engine#100",)])
+
+    def test_the_stray_text_reaches_nothing(self):
+        (self.review).mkdir(parents=True)
+        (self.review / f"{SENTINEL}.txt").write_text(SENTINEL)
+        self.assertEqual(self.problems()["problems"], {"stray_entry": 1})
+        self.assertEqual(am.run_once(self.root, self.db), 0)
+        for p in list(self.db.parent.iterdir()) + list(self.state.iterdir()):
+            self.assertNotIn(SENTINEL.encode(), p.read_bytes(), p.name)
+
+
+class Ids(ReviewBase):
+    """n4: a log id is r<N>. followed by the return's own id, any non-blank string; the reader is not stricter."""
+
+    def write(self, ids):
+        ev = [{"event": "round", "at": "2026-11-03T00:00:00Z", "round": 1, "review_round": 1, "stage": "diff", "verdict": "fail"}]
+        for i in ids:
+            ev.append({"event": "finding", "at": "2026-11-03T00:00:00Z", "id": f"r1.{i}", "round": 1, "severity": "note", "effective": "note"})
+        write_log(self.review / "coordinator#600", ev)
+
+    def test_ids_with_spaces_hashes_unicode_and_dots_are_accepted(self):
+        ids = ["a b", "item #3", "é", "f1.2", "x" * 200, "-1", "has\nnewline"]
+        self.write(ids)
+        self.assertNotIn("bad_line", self.problems()["problems"])
+        self.assertEqual(self.tables("SELECT COUNT(*) FROM review_findings"), [(len(ids),)])
+
+    def test_a_blank_id_or_one_without_the_prefix_is_still_a_bad_line(self):
+        for bad in ("r1.", "r1.   ", "f1", "x1.f1", "r.f1"):
+            self.write([])
+            with open(self.review / "coordinator#600" / "findings.jsonl", "a") as fh:
+                fh.write(json.dumps({"event": "finding", "at": "2026-11-03T00:00:00Z", "id": bad, "round": 1, "severity": "note", "effective": "note"}) + "\n")
+            self.assertEqual(self.problems()["problems"].get("bad_line"), 1, bad)
+
+    def test_the_id_must_name_its_round(self):
+        self.write([])
+        with open(self.review / "coordinator#600" / "findings.jsonl", "a") as fh:
+            fh.write(json.dumps({"event": "finding", "at": "2026-11-03T00:00:00Z", "id": "r2.f1", "round": 1, "severity": "note", "effective": "note"}) + "\n")
+        self.assertEqual(self.problems()["problems"].get("bad_line"), 1)
 
 
 class Cli(ReviewBase):
