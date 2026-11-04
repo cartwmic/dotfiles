@@ -183,6 +183,8 @@ Library/LaunchAgents/local.qmd-refresh.plist
 .pi/agent/extensions/auto-session-name.json
 # kgate runs jobs on the personal homelab Kubernetes cluster.
 .local/bin/kgate
+# /Volumes/Workshop exists only on the personal Mac; the script turns Spotlight off for it.
+80_spotlight_off_workshop.sh
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 # Anthropic stalls are only seen on the work profile.

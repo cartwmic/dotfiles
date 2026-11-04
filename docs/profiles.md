@@ -25,5 +25,6 @@ How to read a row:
 | `.pi/agent/extensions/openrouter-gate` | personal | The work profile keeps its own OpenRouter posture, not the personal setup. |
 | `.pi/agent/extensions/claude-compat-guard` | personal | It rides on the personal Claude login; work uses its own provider. |
 | `.local/bin/kgate` | personal | It runs jobs on the personal homelab Kubernetes cluster, which the work Mac has no business reaching. |
+| `80_spotlight_off_workshop.sh` | personal | `/Volumes/Workshop` exists only on the personal Mac; the work Mac has no such volume. |
 | `.pi/agent/extensions/anthropic-stall-retry` | axon-work-computer | Anthropic stalls are only seen on the work profile. |
 | `.pi/agent/extensions/axon-playbook` | axon-work-computer | It injects Axon's private playbook notes, which only the work profile clones. |
