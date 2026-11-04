@@ -9,6 +9,7 @@ hook, a stale t3-hook entry and other keys. No real HOME, no network.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -248,6 +249,15 @@ class T3HookSettingsTest(unittest.TestCase):
         self.assertEqual(len(commands), 8)
         self.assertTrue(all('COORDINATOR_STATE_DIR="$HOME/.local/share/coordinator-work"' in c for c in commands))
         self.assertTrue(all("/coordinator-work/src/t3-hook/hook.ts'" in c for c in commands))
+        # The hook and the work unit take the checkout from the same instance_repo default.
+        repo = re.search(r"'(/[^']*)/src/t3-hook/hook.ts'", commands[0]).group(1)
+        home = repo[: -len("/coordinator-work")]
+        cfg = SCRATCH / "unit.yaml"
+        cfg.write_text(json.dumps({"data": {"profile": WORK}}))
+        unit = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(cfg), "--config-format", "yaml", "execute-template"],
+                              input=(ROOT / "dot_local/share/instances/launchd/local.coordinatord.work.plist.tmpl").read_text(),
+                              capture_output=True, text=True, timeout=120, env=dict(os.environ, HOME=home)).stdout
+        self.assertIn("<key>WorkingDirectory</key><string>%s</string>" % repo, unit)
         # Personal and work never share a state dir.
         for c in (c for _, _, c in t3(self.modify("new", "{}"))):
             self.assertIn('COORDINATOR_STATE_DIR="$HOME/.local/share/coordinator"', c)

@@ -67,7 +67,7 @@ class WorkMacTestCase(unittest.TestCase):
                          GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com", GIT_TERMINAL_PROMPT="0")
         self.source = self.home / ".local/share/chezmoi"
         self.make_source()
-        self.coord = self.home / "git" / "coordinator"
+        self.coord = self.home / "coordinator-work"
         self.make_coordinator(self.coord)
         self.config = self.home / ".config/chezmoi/chezmoi.yaml"
         self.write_config(CFG_BASE)
@@ -126,7 +126,7 @@ class WorkMacTestCase(unittest.TestCase):
         self.git("commit", "-q", "-m", "local " + name, cwd=self.source)
 
     def live_unit(self, extra="", repo=None):
-        text = GOLDEN_WORK.read_text().replace("/Users/test/git/coordinator", str(repo or self.coord)).replace("/Users/test", str(self.home))
+        text = GOLDEN_WORK.read_text().replace("/Users/test/coordinator-work", str(repo or self.coord)).replace("/Users/test", str(self.home))
         if extra:
             text = text.replace("<key>PATH</key><string>", "<key>PATH</key><string>" + extra + ":", 1)
         path = self.home / "Library/LaunchAgents" / (LABEL + ".plist")
@@ -326,9 +326,9 @@ class PreflightTests(WorkMacTestCase):
         self.assertNotIn("env-coordinator", self.out())
 
     def test_a_tilde_path_is_expanded_and_a_relative_one_refused(self):
-        self.run_script("--dry-run", "--coordinator", "~/git/coordinator")
+        self.run_script("--dry-run", "--coordinator", "~/coordinator-work")
         self.assertOK()
-        self.run_script("--dry-run", "--coordinator", "git/coordinator")
+        self.run_script("--dry-run", "--coordinator", "coordinator-work")
         self.assertFails(1, "must be absolute")
 
     def test_a_checkout_that_is_missing_not_git_or_not_the_coordinator_stops(self):
@@ -846,7 +846,7 @@ class DerivedFromTheLiveUnitTests(WorkMacTestCase):
     def live_path(self):
         return self.home / "Library/LaunchAgents" / (LABEL + ".plist")
 
-    def other_checkout(self, name="coordinator-work"):
+    def other_checkout(self, name="other-coordinator"):
         d = self.home / name
         self.make_coordinator(d)
         return d
