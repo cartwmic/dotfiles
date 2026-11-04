@@ -13,10 +13,15 @@
 #               claudeAgent and coordinator are never touched apart from the displayName below: the global ~/.claude settings cover them.
 #   names       displayName only on claudeAgent "Claude", coordinator "Claude (coordinator)" and codex "Codex" (no other field of
 #               claudeAgent or coordinator; the coordinator repo owns its launchArgs). Off removes a displayName only if it equals ours.
-#   usage       the hub's usage in T3: secretProviders.onepassword (1Password account "my") and usageLimitSources.cliproxy-hub, whose
-#               managementKey is a 1Password reference, never a value. Off removes each entry only if it still equals ours.
-#               Shape: pingdotgg/t3code packages/contracts/src/settings.ts (UsageLimitSourceConfig, SecretProviderConfig) and
-#               docs/user/usage.md "Connect a CLIProxyAPI hub" (the same entry made in Settings -> Providers -> Usage providers).
+#   usage       the hub's usage in T3: usageLimitSources.cliproxy-hub. While on, the apply reads the management key with
+#               ~/.local/user_scripts/op_read_cached.sh (service-account token only, never the 1Password app) and writes it as a literal
+#               string into managementKey. T3 then moves a literal into its own secret store and leaves a placeholder in this file, so the
+#               next apply writes it again. A failed read, or one that does not return a cpa_ key, leaves the entry as it is and warns on
+#               stderr. T3 must never be given a 1Password reference: it would run `op` through the desktop app and prompt for unlock.
+#               An older secretProviders.onepassword entry that equals the one this script used to write is removed (on and off).
+#               Off removes the source if its kind, label and url are ours (the key is not compared: T3 may have replaced it).
+#               Shape: pingdotgg/t3code packages/contracts/src/settings.ts (UsageLimitSourceConfig) and
+#               docs/user/usage.md "Connect a CLIProxyAPI hub".
 # Each apply replaces exactly those two ids under providerInstances; no other key or instance is touched. No file, or a file that is
 # not a JSON object, is passed through unchanged. T3 writes the file without a trailing newline, and so does this script.
 # To drop an instance, delete it from WANT: the id is still owned (OWNED), so the next apply removes it.
@@ -47,8 +52,9 @@ OWNED='["claude-hub","codex-hub"]'
 # what T3 creates by itself and what off restores; PREFIX tells our entry from one edited by hand.
 HUB_MODE='{{ $hubDefault }}'
 NAMES='{"claudeAgent":"Claude","coordinator":"Claude (coordinator)","codex":"Codex"}'
-SECRET_PROVIDERS='{"onepassword":{"kind":"one_password","label":"1Password","config":{"account":"my"}}}'
-USAGE_SOURCES='{"cliproxy-hub":{"kind":"cliproxy","label":"CLIProxy hub","url":"https://cliproxy.internal.cartwmic.com","managementKey":{"provider":"onepassword","reference":"op://developer/tb36gtnaocyezjk3dslomp64he/management"},"enabled":true}}'
+KEY_REF='op://developer/tb36gtnaocyezjk3dslomp64he/management'
+USAGE_ID='cliproxy-hub'
+USAGE_SOURCE='{"kind":"cliproxy","label":"CLIProxy hub","url":"https://cliproxy.internal.cartwmic.com","enabled":true}'
 DEFAULT_BINARY='{{ $defaultBinary }}'
 ORIGINAL='{"driver":"codex","enabled":true,"config":{"setupMode":"managed"}}'
 PREFIX='{{ $home }}/.t3/tools/codex/'
@@ -61,9 +67,27 @@ if ! printf %s "$input" | jq -e 'type == "object"' >/dev/null 2>&1; then
   exit 0
 fi
 
-out=$(printf %s "$input" | jq --argjson want "$WANT" --argjson owned "$OWNED" --arg mode "$HUB_MODE" \
+# The management key, read only while the hub is on. op_read_cached.sh uses the service-account token under an empty HOME.
+MGMT_KEY=''
+# Settled: our entry is enabled and T3 has already moved the key into its secret store (the file holds T3's placeholder,
+# not a cpa_ literal). Then skip the read and write nothing, so chezmoi diff and verbose previews never show the key.
+# To rotate the key, delete usageLimitSources.cliproxy-hub in T3 (or set it in T3's UI) and apply.
+settled=$(printf %s "$input" | jq -r --arg usageId "$USAGE_ID" --argjson usageSource "$USAGE_SOURCE" '
+  (.usageLimitSources[$usageId]? // {}) as $s
+  | if ($s.kind == $usageSource.kind and $s.label == $usageSource.label and $s.url == $usageSource.url and $s.enabled == true
+        and ($s.managementKey | type) == "string" and ($s.managementKey | length) > 0 and (($s.managementKey | startswith("cpa_")) | not))
+    then "yes" else "no" end' 2>/dev/null || echo no)
+if [ "$HUB_MODE" = on ] && [ "$settled" != yes ]; then
+  if key=$("$HOME/.local/user_scripts/op_read_cached.sh" "$KEY_REF") && case $key in cpa_*) true ;; *) false ;; esac; then
+    MGMT_KEY=$key
+  else
+    printf '[modify_settings] WARN: could not read the hub management key; usageLimitSources.%s left as it is\n' "$USAGE_ID" >&2
+  fi
+fi
+
+out=$(printf %s "$input" | MGMT_KEY=$MGMT_KEY jq --argjson want "$WANT" --argjson owned "$OWNED" --arg mode "$HUB_MODE" \
   --arg bin "$DEFAULT_BINARY" --argjson original "$ORIGINAL" --arg prefix "$PREFIX" \
-  --argjson names "$NAMES" --argjson secretProviders "$SECRET_PROVIDERS" --argjson usageSources "$USAGE_SOURCES" '
+  --argjson names "$NAMES" --arg usageId "$USAGE_ID" --argjson usageSource "$USAGE_SOURCE" '
   def upsert($id): if $want[$id] then .[$id] = $want[$id] else del(.[$id]) end;
   (.providerInstances // {}) as $before
   | ($before | reduce $owned[] as $id (.; upsert($id))) as $after
@@ -74,11 +98,14 @@ out=$(printf %s "$input" | jq --argjson want "$WANT" --argjson owned "$OWNED" --
     else . end
   | def setNames: reduce ($names | keys[]) as $id (.; if (.providerInstances[$id]? | type) == "object" then .providerInstances[$id].displayName = $names[$id] else . end);
     def dropNames: reduce ($names | keys[]) as $id (.; if (.providerInstances[$id]? | type) == "object" and .providerInstances[$id].displayName? == $names[$id] then del(.providerInstances[$id].displayName) else . end);
-    def own($key; $entries): reduce ($entries | keys[]) as $id (.; .[$key] = ((if (.[$key] | type) == "object" then .[$key] else {} end) | .[$id] = $entries[$id]));
-    def drop($key; $entries): reduce ($entries | keys[]) as $id (.;
-      if (.[$key] | type) == "object" and .[$key][$id] == $entries[$id] then del(.[$key][$id]) | (if (.[$key] | length) == 0 then del(.[$key]) else . end) else . end);
-    if $mode == "on" then setNames | own("secretProviders"; $secretProviders) | own("usageLimitSources"; $usageSources)
-    elif $mode == "off" then dropNames | drop("usageLimitSources"; $usageSources) | drop("secretProviders"; $secretProviders)
+    def prune($key): if (.[$key] | type) == "object" and (.[$key] | length) == 0 then del(.[$key]) else . end;
+    def ownSource: if ($ENV.MGMT_KEY | length) > 0 then .usageLimitSources = ((if (.usageLimitSources | type) == "object" then .usageLimitSources else {} end) | .[$usageId] = ($usageSource + {managementKey: $ENV.MGMT_KEY})) else . end;
+    def dropSource: if (.usageLimitSources | type) == "object" and ((.usageLimitSources[$usageId]? // {}) | (.kind == $usageSource.kind and .label == $usageSource.label and .url == $usageSource.url))
+      then del(.usageLimitSources[$usageId]) | prune("usageLimitSources") else . end;
+    def dropOnePassword: if ((.secretProviders | type) == "object") and ((.secretProviders.onepassword? // {}) | (.kind == "one_password" and .label == "1Password" and ((.config // {}) | to_entries | map(.value)) == ["my"]))
+      then del(.secretProviders.onepassword) | prune("secretProviders") else . end;
+    if $mode == "on" then setNames | dropOnePassword | ownSource
+    elif $mode == "off" then dropNames | dropSource | dropOnePassword
     else . end')
 printf %s "$out"
 case $input in

@@ -84,7 +84,7 @@ jobs:
         run: python3 -m unittest discover -s tests/axon-playbook -v
       - name: Spotlight-off script (fake mdutil; macOS only, skipped here)
         run: python3 -m unittest discover -s tests/spotlight-workshop -v
-      - name: T3 hook in Claude settings (personal and coordinator enabled only; real chezmoi and jq)
+      - name: T3 hook in Claude settings (both profiles; real chezmoi and jq)
         run: python3 -m unittest discover -s tests/t3-hook -v
       - name: T3 hub provider instances (settings modify script, Codex block, Claude settings; real chezmoi and jq)
         run: python3 -m unittest discover -s tests/t3-hub -v
@@ -94,7 +94,10 @@ jobs:
   # macOS: the kubectl task test puts /usr/bin first on PATH, and the ubuntu runner image
   # ships /usr/bin/kubectl, which makes the task skip itself.
   mise-tests:
-    runs-on: macos-latest
+    # Pinned: since 2026-11-04 ~15:00Z GitHub assigns no runner to macos-latest (macos-26-arm64) or macos-26;
+    # jobs queue unassigned and are cancelled. macos-15 still gets runners (probe PR #170). Move back to
+    # macos-latest once its jobs are placed again.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
         with:
