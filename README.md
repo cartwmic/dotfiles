@@ -460,7 +460,7 @@ his personal machine, and the hub is not reachable from the work network.
 |---|---|---|
 | `~/.claude/settings.json` | `env.ANTHROPIC_BASE_URL` = the hub (no `/v1`) and `apiKeyHelper` = `op_read_cached.sh` on the hub key. `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` are not set: either would outrank the helper. | `dot_claude/modify_settings.json.tmpl` |
 | `~/.codex/config.toml` | top-level `model_provider = "cliproxy"` (the `[model_providers.cliproxy]` block it names is kept while either switch is on). | `dot_codex/modify_private_config.toml.tmpl` |
-| `~/.t3/userdata/settings.json` | the T3 `codex` instance, which is managed and so ignores `~/.codex`, becomes `setupMode: existing` with T3's downloaded Codex binary (from `~/.t3/tools/codex/active.json`). Its config is left alone when that file is missing. `displayName` is set on `claudeAgent` ("Claude"), `coordinator` ("Claude (coordinator)") and `codex` ("Codex"); no other field of `claudeAgent` or `coordinator` changes (the coordinator repo owns its launchArgs). T3's Usage page reads the hub through `usageLimitSources.cliproxy-hub` and `secretProviders.onepassword` (below). | `dot_t3/private_userdata/modify_settings.json.tmpl` |
+| `~/.t3/userdata/settings.json` | the T3 `codex` instance, which is managed and so ignores `~/.codex`, becomes `setupMode: existing` with T3's downloaded Codex binary (from `~/.t3/tools/codex/active.json`). Its config is left alone when that file is missing. `displayName` is set on `claudeAgent` ("Claude"), `coordinator` ("Claude (coordinator)") and `codex` ("Codex"); no other field of `claudeAgent` or `coordinator` changes (the coordinator repo owns its launchArgs). T3's Usage page reads the hub through `usageLimitSources.cliproxy-hub` (below). | `dot_t3/private_userdata/modify_settings.json.tmpl` |
 
 **Rollback.** Set `hub.enabled` to `false` under `data:` in `~/.config/chezmoi/chezmoi.yaml`, then apply the three targets
 (`chezmoi apply ~/.claude/settings.json ~/.codex/config.toml ~/.t3/userdata/settings.json`). Each file loses only what it was given:
@@ -471,11 +471,14 @@ behind, because the scripts would no longer remove them, so the switch stays in 
 
 **T3 usage from the hub.** Since the switch, T3 can no longer read Claude usage through the claude.ai sign-in. T3 has a built-in
 CLIProxyAPI usage source (`docs/user/usage.md` in pingdotgg/t3code, "Connect a CLIProxyAPI hub"; schema in `packages/contracts/src/settings.ts`).
-With the switch on, `~/.t3/userdata/settings.json` gets `usageLimitSources.cliproxy-hub` (url = the hub, `managementKey` = a
-reference to `op://developer/tb36gtnaocyezjk3dslomp64he/management`, never the value) and `secretProviders.onepassword`
-(`one_password`, account `my`). T3 reads the key with `op --cache=false read --account=my`, which goes through the **1Password
-desktop app**: it works when the app is unlocked and approves the read. T3's provider cannot use the service-account token that
-`op_read_cached.sh` uses. Switch-off removes each of those two entries (and the three displayNames) only while they still equal ours.
+With the switch on, the apply reads the management key (`op://developer/tb36gtnaocyezjk3dslomp64he/management`) with
+`~/.local/user_scripts/op_read_cached.sh`, which uses only the service-account token, and writes it as a literal string into
+`usageLimitSources.cliproxy-hub.managementKey` (url = the hub, `enabled: true`). T3 moves a literal into its own secret store
+(`~/.t3/userdata/secrets`) and leaves a placeholder in `settings.json`, so each apply sets it again. A 1Password reference there
+would make T3 run `op` through the desktop app and prompt for unlock, so none is written, and the `secretProviders.onepassword` entry
+that #158 added is removed when it still equals that one. If the read fails or does not return a `cpa_` key, the entry is left as it
+is and `[modify_settings] WARN` goes to stderr. Switch-off removes the source (and the three displayNames) only while its kind,
+label and url are ours.
 
 `t3Hub.enabled` ([T3 hub providers](#t3-hub-providers-personal-mac)) is independent: it only owns the two retired test instances and the Claude
 settings file for `claude-hub`.
