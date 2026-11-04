@@ -1,0 +1,10 @@
+{"event":"round","at":"2026-11-03T10:00:07Z","round":1,"review_round":1,"stage":"design","head":"1111111","reviewer":"reviewer-1","verdict":"fail","session":"session-1","model":"claude-opus-5-5"}
+{"event":"finding","at":"2026-11-03T10:00:14Z","id":"r1.f1","round":1,"head":"1111111","reviewer":"reviewer-1","severity":"blocking","effective":"blocking","component":"storage","text":"a","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"label","at":"2026-11-03T10:00:21Z","id":"r1.f1","relation":"new"}
+{"event":"disposition","at":"2026-11-03T10:00:28Z","id":"r1.f1","outcome":"fixed","sha":"ccccccc"}
+{"event":"round","at":"2026-11-03T10:00:35Z","round":2,"review_round":2,"stage":"design","head":"2222222","reviewer":"reviewer-2","verdict":"pass","session":"session-2","model":"claude-opus-5-5"}
+{"event":"round","at":"2026-11-03T10:00:42Z","round":3,"review_round":1,"stage":"diff","head":"3333333","reviewer":"reviewer-3","verdict":"fail","session":"session-3","model":"claude-sonnet-5-5"}
+{"event":"finding","at":"2026-11-03T10:00:49Z","id":"r3.f1","round":3,"head":"3333333","reviewer":"reviewer-3","severity":"blocking","effective":"blocking","component":"cli","text":"b","obligation":"o","evidence":"e","consequence":"c"}
+{"event":"label","at":"2026-11-03T10:00:56Z","id":"r3.f1","relation":"new"}
+{"event":"disposition","at":"2026-11-03T10:01:03Z","id":"r3.f1","outcome":"fixed","sha":"ddddddd"}
+{"event":"round","at":"2026-11-03T10:01:10Z","round":4,"review_round":2,"stage":"diff","head":"4444444","reviewer":"reviewer-4","verdict":"pass","session":"session-4","model":"claude-sonnet-5-5"}

@@ -1,0 +1,15 @@
+{"event": "round", "at": "2026-11-03T10:00:07Z", "round": 1, "review_round": 1, "stage": "plan", "head": "1111111", "reviewer": "reviewer-1", "verdict": "fail", "session": "session-1"}
+{"event": "finding", "at": "2026-11-03T10:00:14Z", "id": "r1.f1", "round": 1, "head": "1111111", "reviewer": "reviewer-1", "severity": "blocking", "effective": "blocking", "component": "intro", "text": "a", "obligation": "o", "evidence": "e", "consequence": "c"}
+{"event": "finding", "at": "2026-11-03T10:00:21Z", "id": "r1.f2", "round": 1, "head": "1111111", "reviewer": "reviewer-1", "severity": "blocking", "effective": "blocking", "component": "intro", "text": "b", "obligation": "o", "evidence": "e", "consequence": "c"}
+{"event": "finding", "at": "2026-11-03T10:00:28Z", "id": "r1.n1", "round": 1, "head": "1111111", "reviewer": "reviewer-1", "severity": "note", "effective": "note", "text": "c"}
+{"event": "label", "at": "2026-11-03T10:00:35Z", "id": "r1.f1", "relation": "new"}
+{"event": "label", "at": "2026-11-03T10:00:42Z", "id": "r1.f2", "relation": "new"}
+
+{"event": "disposition", "at": "2026-11-03T10:00:49Z", "id": "r1.f1", "outcome": "fixed", "sha": "3333333"}
+{"event": "disposition", "at": "2026-11-03T10:00:56Z", "id": "r1.f2", "outcome": "rejected", "reason": "out of scope"}
+{"event": "judge", "at": "2026-11-03T10:01:03Z", "round": 1, "session": "judge-1", "verdict": "not-churning"}
+{"event": "round", "at": "2026-11-03T10:01:10Z", "round": 2, "review_round": 2, "stage": "plan", "head": "2222222", "reviewer": "reviewer-2", "verdict": "pass", "session": "session-2"}
+{"event": "finding", "at": "2026-11-03T10:01:17Z", "id": "r2.f1", "round": 2, "head": "2222222", "reviewer": "reviewer-2", "severity": "blocking", "effective": "blocking", "component": "outro", "text": "d", "obligation": "o", "evidence": "e", "consequence": "c"}
+{"event": "label", "at": "2026-11-03T10:01:24Z", "id": "r2.f1", "relation": "new"}
+{"event": "disposition", "at": "2026-11-03T10:01:31Z", "id": "r2.f1", "outcome": "residual", "accepted_by": "michael"}
+{"event": "escape", "at": "2026-11-03T10:01:38Z", "item": "golden#hand-written", "head": "4444444", "round": 2, "found_by": "issue-9", "text": "the outro was wrong"}
