@@ -22,7 +22,7 @@ Contract
 - One JSON line per job in ${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl (keyed by the run-and-wake job id when
   there is one); the full output is in <id>.log beside it.
 
-Env: KGATE_SSH (default cartwmic@192.0.2.196), KGATE_SSH_KEY (default ~/.ssh/homelab).
+Env: KGATE_SSH (default: the one line in ~/.config/kgate/host, rendered from the chezmoi data key sshHosts.kgate), KGATE_SSH_KEY (default ~/.ssh/homelab).
 The same file runs in the pod as `kgate.py --pod JOB.json`: it verifies the tree hash, checks the tool versions,
 runs CMD and reports peak memory. Needs python3 3.11+ in the image.
 """
@@ -45,7 +45,15 @@ import time
 import tomllib
 
 NAMESPACE = "kgate"
-HOST = os.environ.get("KGATE_SSH", "cartwmic@192.0.2.196")
+def _default_host():
+    try:
+        with open(os.path.expanduser("~/.config/kgate/host")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+HOST = os.environ.get("KGATE_SSH") or _default_host()
 KEY = os.environ.get("KGATE_SSH_KEY", os.path.expanduser("~/.ssh/homelab"))
 # cartwmic-g14-wsl: its wall clock steps back about 2.8 s every 30 s (measured 2026-11-05), which fails tests that compare times; agent-1/2/3 are steady.
 EXCLUDED_NODES = ("ubuntu-server-k8s-agent-4", "ubuntu-server-k8s-master-1", "mac-mini-worker", "cartwmic-g14-wsl")
@@ -432,6 +440,9 @@ class Job:
         return image, cpu, mem, prof
 
     def reachable(self):
+        if not HOST:
+            raise Unavailable("no cluster host: set KGATE_SSH, or set sshHosts.kgate (address, user) in ~/.config/chezmoi/chezmoi.yaml "
+                              "so chezmoi renders ~/.config/kgate/host (docs/profiles.md, \"Local data keys\")")
         done = self.cluster.run(["get", "namespace", NAMESPACE, "-o", "name"])
         if done.returncode != 0:
             why = (done.stderr.decode(errors="replace").strip().splitlines() or ["no message"])[-1]
@@ -526,6 +537,8 @@ class Job:
         self.note("/out -> %s (%d files)" % (target, self.rec["out_files"]))
 
     def cleanup(self):
+        if not HOST:  # no cluster address: nothing was created, and an ssh attempt would only add noise to the exit-69 message
+            return
         names = ["pod/" + self.id, "secret/" + self.id + "-env", "secret/" + self.id + "-pull"]
         done = self.cluster.run(["delete", *names, "--ignore-not-found", "--grace-period=0", "--wait=true"])
         self.rec["cleanup"] = done.returncode == 0

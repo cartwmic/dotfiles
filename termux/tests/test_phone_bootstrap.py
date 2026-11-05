@@ -176,6 +176,7 @@ class PhoneCLITest(unittest.TestCase):
         self.save()
         self.env = dict(os.environ, HOME=str(self.home), PATH=str(bin_dir) + os.pathsep + os.environ["PATH"],
                         ANDROID_BUILD_TOOLS=str(bin_dir), PHONE_TEST_STATE=str(self.state_path),
+                        HOMELAB_ROUTER="192.0.2.1", HOMELAB_LAN_CIDR="192.0.2.0/24", HOMELAB_WG_CIDR="198.51.100.0/24",
                         PHONE_TEST_CERT=CERT, PHONE_TEST_PUBLIC=PUBLIC, PHONE_TEST_PRIVATE=PRIVATE,
                         PHONE_TEST_OLD_PUBLIC=OLD_PUBLIC, PHONE_TEST_OLD_PRIVATE=OLD_PRIVATE,
                         PHONE_TEST_HOMELAB="SHA256:s1NF+DDqZKlvvy/wDQXBACMs3jb/cjkvy/UpOYbypOQ",

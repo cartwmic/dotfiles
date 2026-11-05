@@ -17,7 +17,8 @@
 {{- $theme := "dark" -}}
 {{- $hideThinking := false -}}
 {{- $deviceId := "" -}}
-{{- $workGlm := and (eq .profile "axon-work-computer") (hasKey . "workGlmBaseUrl") (hasKey . "workGlmKeyRef") -}}
+{{- $_ := includeTemplate "require_work_data" . -}}
+{{- $workGlm := and (eq .profile "axon-work-computer") (hasKey . "workGlmBaseUrl") (hasKey . "workGlmKeyRef") (hasKey . "workGlmModelId") -}}
 {{- $settingsPath := joinPath .chezmoi.homeDir ".pi/agent/settings.json" -}}
 {{- if stat $settingsPath -}}
 {{-   $existingSettings := output "cat" $settingsPath | fromJson -}}
@@ -77,7 +78,7 @@
     "anthropic/claude-sonnet-5-5",
     "anthropic/claude-haiku-5-5"
 {{- if $workGlm }},
-    "work-glm/work-model-g"
+    "work-glm/{{ .workGlmModelId }}"
 {{- end }}
 {{- end }}
   ],

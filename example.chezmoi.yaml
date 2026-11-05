@@ -47,6 +47,22 @@ data:
   #   arm: [ts, py, seed]      # default all three with agentKit on, else [py]; ts and seed need agentKit.enabled
   # axon-work-computer only: clone the private Axon agents playbook (placeholder; use your own account's URL). Omit the key and nothing is cloned.
   # axonPlaybook: {repo: "https://github.com/<account>/axon-agents-playbook.git"}
+  # Machine-specific names and addresses. Placeholders only; the full list per profile is docs/profiles.md, "Local data keys".
+  # axon-work-computer profile (all six required; a missing key fails the render and names it):
+  # workGitHost: "git.example.com"
+  # workGlmBaseUrl: "https://gateway.example.com"
+  # workGlmKeyRef: "op://<vault>/<item>/credential"
+  # workGlmModelId: "<model-id>"
+  # workAwsProfile: "<aws-profile>"
+  # workDevportalMcpUrlRef: "op://<vault>/<item>/credential"
+  # personal profile (required; a missing key fails the render and names it):
+  # rustdesk: {server: "192.0.2.1"}
+  # sshHosts:
+  #   server: {address: "192.0.2.10", user: "<user>"}
+  #   laptop: {address: "192.0.2.11", user: "<user>"}
+  #   kgate: {address: "192.0.2.12", user: "<user>"}
+  #   dailyPhone: {wgAddress: "198.51.100.6", lanAddress: "192.0.2.22", user: "<user>"}
+  #   sshPhone: {wgAddress: "198.51.100.8", lanAddress: "192.0.2.23", user: "<user>"}
 
 hooks:
   read-source-state:

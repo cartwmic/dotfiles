@@ -36,6 +36,11 @@ exit 0
 """
 
 
+# The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
+WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
+             "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
+
+
 def render_list(profile="personal"):
     """servers.list.tmpl as chezmoi renders it for a profile (the one conditional block is the only template syntax)."""
     t = LIST.read_text()
@@ -48,6 +53,9 @@ def render_canonical(profile="personal"):
     work = "axon-work-computer"
     t = t.replace('{{ if eq .profile "axon-work-computer" }}work{{ else }}cartwmic{{ end }}', "work" if profile == work else "cartwmic")
     t = re.sub(r'\{\{ if eq \.chezmoi\.os "darwin" \}\},(.*?)\{\{ end \}\}', lambda m: "," + m.group(1), t, flags=re.S)  # rendered as on macOS
+    t = t.replace('{{ $_ := includeTemplate "require_work_data" . }}', "")  # fails the render on work when a key is missing; nothing in the output
+    # the optional work devportal server: present when the local data key workDevportalMcpUrlRef is set (assumed set on work)
+    t = re.sub(r'\{\{ if hasKey \. "workDevportalMcpUrlRef" \}\},(.*?)\{\{ end \}\}', (lambda m: "," + m.group(1)) if profile == work else "", t, flags=re.S)
     t = re.sub(r'\{\{ if eq \.profile "axon-work-computer" \}\},(.*?)\{\{ end \}\}', (lambda m: "," + m.group(1)) if profile == work else "", t, flags=re.S)
     return json.loads(t)
 
@@ -306,7 +314,7 @@ class JiraTests(unittest.TestCase):
         if not shutil.which("chezmoi"):
             self.skipTest("chezmoi not installed")
         for profile in ("personal", "axon-work-computer"):
-            r = subprocess.run(["chezmoi", "--source", str(ROOT), "execute-template", "--override-data", json.dumps({"profile": profile})],
+            r = subprocess.run(["chezmoi", "--source", str(ROOT), "execute-template", "--override-data", json.dumps({"profile": profile, **(WORK_DATA if profile == "axon-work-computer" else {})})],
                                input=LIST.read_text(), capture_output=True, text=True, timeout=120)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(r.stdout, render_list(profile), profile)

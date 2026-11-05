@@ -91,7 +91,7 @@ up temp dirs with traps.
 Secrets: never commit API keys, tokens, or passwords. Read secrets at
 runtime with 1Password (`op read`, service-account token at
 `~/.config/agent-harness/op-service-token`, mode 0600, outside this repo).
-`private_dot_zshrc` is the pattern. `rage`/age is available for files that
+`private_dot_zshrc.tmpl` is the pattern. `rage`/age is available for files that
 must be encrypted in source. On supported personal desktops, changed RustDesk
 onchange inputs run the helper; unchanged inputs skip it, and WSL is excluded.
 The helper stops when `op` cannot read `op://developer/RustDesk/password`.

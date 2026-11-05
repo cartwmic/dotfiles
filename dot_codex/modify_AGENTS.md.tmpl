@@ -25,7 +25,7 @@ cat > "$WORK/managed" <<'BLOCK_END'
 {{ include "dot_local/share/agent-harness/canonical/instructions/AGENTS.md" }}
 {{ include "dot_local/share/agent-harness/canonical/instructions/hindsight-guidance.md" -}}
 {{ if eq .profile "axon-work-computer" }}
-{{ include "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md" -}}
+{{ includeTemplate "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md.tmpl" . -}}
 {{ end -}}
 {{ if eq .profile "axon-work-computer" }}
 {{ include "dot_local/share/agent-harness/canonical/instructions/profile-work.md" -}}

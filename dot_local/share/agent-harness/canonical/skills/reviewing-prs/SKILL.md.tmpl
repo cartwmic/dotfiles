@@ -52,7 +52,7 @@ Review the work, not the person.
    - findings, each with id, severity, path, line, text, obligation, evidence and consequence.
 4. **Split a large PR** across sessions by file. Together they must cover every file that is not exempt.
 5. **For a high-risk change,** add a second correctness session. High risk means auth, data migration, concurrency, money, or regulated or sensitive data.
-6. **Axon playbook packets.** Applies only if `~/.local/share/agent-harness/external-skills/axon-agents-playbook/rubrics/` exists and the origin remote is on `git.work.example` or `github.com/axon-*`. Otherwise skip, silently.
+6. **Axon playbook packets.** Applies only if `~/.local/share/agent-harness/external-skills/axon-agents-playbook/rubrics/` exists and the origin remote is on {{ $_ := includeTemplate "require_work_data" . }}{{ if hasKey . "workGitHost" }}`{{ .workGitHost }}` or {{ end }}`github.com/axon-*`. Otherwise skip, silently.
    - Add one fresh-reviewer packet from `rubrics/conventions-and-shape.md`, and one from `rubrics/backend-hazards.md` when the diff has non-test Go files.
    - Run `<playbook>/bin/pr-preflight --repo <repo> --head <head> --base <base>` yourself (it is read-only) and put the output in each of these packets.
 7. **Do one pass per axis per head.** Do not repeat review until it comes back clean. A new head means a new review.

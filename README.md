@@ -575,7 +575,7 @@ dot_config/
   └── zellij/                    # Zellij multiplexer (see dot_config/zellij/README.md for plugin/fork notes)
 run_once_after_00_install_mise.sh          # Installs mise first in post-apply phase
 run_onchange_after_10_mise_bootstrap.sh.tmpl # Installs tools after mise is available
-private_dot_zshrc                # Zsh configuration
+private_dot_zshrc.tmpl           # Zsh configuration
 dot_zsh_plugins.txt              # Antidote plugin list
 ```
 

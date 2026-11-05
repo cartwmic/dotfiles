@@ -15,6 +15,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import homelab_env
+
 PHP = Path(__file__).with_name("opnsense-phone.php")
 PLANS = Path.home() / ".cache/dotfiles-termux/router-plans"
 PASSWORD_REF = "op://developer/opnsense/password"
@@ -35,7 +37,7 @@ def router(command):
         env.update(SSH_ASKPASS=str(askpass), SSH_ASKPASS_REQUIRE="force", DISPLAY=":0")
         args = ["ssh", "-o", "StrictHostKeyChecking=yes", "-o", "PreferredAuthentications=password",
                 "-o", "PubkeyAuthentication=no", "-o", "NumberOfPasswordPrompts=1",
-                "-o", "ConnectTimeout=8", "root@192.0.2.1", "sh -s"]
+                "-o", "ConnectTimeout=8", "root@" + homelab_env.require("HOMELAB_ROUTER", Failed), "sh -s"]
         try:
             result = subprocess.run(args, input=command.encode(), capture_output=True, env=env, timeout=45)
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -51,7 +53,10 @@ def call_php(spec):
     script = PHP.read_text()
     if "\nPHONE_PHP\n" in script:
         raise Failed("invalid PHP delimiter in source")
-    payload = f"PHONE_SPEC_B64={shlex.quote(encoded)} php <<'PHONE_PHP'\n{script}\nPHONE_PHP\n"
+    lan_prefix = homelab_env.prefix24(homelab_env.network("HOMELAB_LAN_CIDR", Failed))
+    wg_prefix = homelab_env.prefix24(homelab_env.network("HOMELAB_WG_CIDR", Failed))
+    payload = (f"HOMELAB_LAN_PREFIX={shlex.quote(lan_prefix)} HOMELAB_WG_PREFIX={shlex.quote(wg_prefix)} "
+               f"PHONE_SPEC_B64={shlex.quote(encoded)} php <<'PHONE_PHP'\n{script}\nPHONE_PHP\n")
     try:
         value = json.loads(router(payload))
     except (ValueError, json.JSONDecodeError) as exc:
@@ -104,14 +109,10 @@ def verify_runtime(spec, old_public):
 
 
 def alias_is_candidate(spec, user):
-    source = Path(__file__).resolve().parent.parent / "private_dot_ssh/modify_config.tmpl"
-    content = source.read_text()
-    match = re.search(r"# ssh-phone \([^\n]*\).*?Host ssh-phone\n(.*?\n)    IdentityFile ~/.ssh/homelab", content, re.S)
-    if not match or spec["address"].removesuffix("/32") not in match.group(0) or spec["lan"] not in match.group(0) or f"User {user}" not in match.group(0):
-        raise Failed("Mac managed SSH source is not cut over to the candidate; run update-phone-alias.py first")
+    # The ssh-phone host values are local chezmoi data (sshHosts.sshPhone); the live alias is the proof.
     result = subprocess.run(["ssh", "-G", "ssh-phone"], capture_output=True, timeout=10)
     if result.returncode:
-        raise Failed("Mac generated ssh-phone alias is invalid; apply the managed source first")
+        raise Failed("Mac generated ssh-phone alias is invalid; update sshHosts.sshPhone in local chezmoi data and apply")
     fields = dict(line.split(" ", 1) for line in result.stdout.decode().splitlines() if " " in line)
     if fields.get("hostname") not in (spec["address"].removesuffix("/32"), spec["lan"]) or fields.get("user") != user:
         raise Failed("Mac live ssh-phone alias still targets old hardware; do not retire its router peer")

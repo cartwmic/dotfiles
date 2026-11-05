@@ -1,5 +1,5 @@
 # This file is managed by chezmoi. See ~/.local/share/chezmoi
-{{- if eq .profile "axon-work-computer" }}
+{{- $_ := includeTemplate "require_work_data" . }}{{ if and (eq .profile "axon-work-computer") (hasKey . "workGitHost") }}
 services:
-  'git.work.example': 'github:git.work.example'
+  '{{ .workGitHost }}': 'github:{{ .workGitHost }}'
 {{- end }}

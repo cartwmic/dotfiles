@@ -18,6 +18,11 @@ FACT = "Cobalt-lantern-42"
 URL = "https://example.com/search-proof"
 
 
+# The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
+WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
+             "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
@@ -25,7 +30,7 @@ def require(condition: bool, message: str) -> None:
 
 def profile_script(profile: str) -> str:
     result = subprocess.run(
-        ["chezmoi", "--source", str(ROOT), "--override-data", json.dumps({"profile": profile}),
+        ["chezmoi", "--source", str(ROOT), "--override-data", json.dumps({"profile": profile, **(WORK_DATA if profile == "axon-work-computer" else {})}),
          "execute-template"],
         input=(SOURCE / "modify_config.json.tmpl").read_text(),
         text=True, capture_output=True, check=True, timeout=20,

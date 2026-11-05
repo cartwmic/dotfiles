@@ -87,7 +87,7 @@ zellij() (
 pi-bedrock() {
   local profile region
 
-  profile="${AWS_PROFILE:-${AWS_DEFAULT_PROFILE:-work-aws-profile}}"
+  profile="${AWS_PROFILE:-${AWS_DEFAULT_PROFILE:-{{ $_ := includeTemplate "require_work_data" . }}{{ if hasKey . "workAwsProfile" }}{{ .workAwsProfile }}{{ else }}default{{ end }}}}"
 
   if [[ -n "${AWS_REGION:-}" ]]; then
     region="$AWS_REGION"
@@ -230,7 +230,7 @@ fi
 # fi
 
 # bun completions
-[ -s "/Users/me/.bun/_bun" ] && source "/Users/me/.bun/_bun"
+[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
 
 # bun
 export BUN_INSTALL="$HOME/.bun"

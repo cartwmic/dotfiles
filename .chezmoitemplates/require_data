@@ -1,0 +1,17 @@
+{{- /*
+  Fails the render when a local chezmoi data key is missing or empty. Prints nothing otherwise.
+  Call:  {{- $_ := includeTemplate "require_data" (dict "data" . "path" "sshHosts.server.address") -}}
+  Machine-specific values (hosts, addresses, vault items) live in ~/.config/chezmoi/chezmoi.yaml,
+  not in this public repo. The keys each machine needs are listed in docs/profiles.md, "Local data keys".
+*/ -}}
+{{- $cur := .data -}}
+{{- range $part := splitList "." .path -}}
+{{-   if and (kindIs "map" $cur) (hasKey $cur $part) -}}
+{{-     $cur = get $cur $part -}}
+{{-   else -}}
+{{-     $cur = "" -}}
+{{-   end -}}
+{{- end -}}
+{{- if not $cur -}}
+{{-   fail (printf "chezmoi data key %s is not set. Add it to ~/.config/chezmoi/chezmoi.yaml; the keys each machine needs are listed in docs/profiles.md, section \"Local data keys\"." .path) -}}
+{{- end -}}

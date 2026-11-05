@@ -405,6 +405,18 @@ class Black(unittest.TestCase):
         self.assertEqual((rec["exit"], rec["ran"]), (69, False))
         self.assertIn("unreachable", rec["reason"])
 
+    def test_no_host_is_69_names_the_key_and_makes_no_ssh_call(self):
+        marker = self.tmp / "cmd-ran"
+        home = self.tmp / "no-host-home"
+        home.mkdir()
+        done = self.kgate("--", "sh", "-c", "touch %s" % marker, host="", env={"HOME": str(home)})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertFalse(marker.exists())
+        self.assertIn("sshHosts.kgate", done.stdout)
+        self.assertNotIn("cleanup", done.stdout)
+        self.assertEqual(self.calls(), [])  # no ssh attempt, not even the cleanup one
+        self.assertEqual(self.records()[-1]["exit"], 69)
+
     def test_pod_that_cannot_pull_its_image_is_69_and_is_cleaned_up(self):
         done = self.kgate("--", "true", env={"FAKE_POD": "pullfail"})
         self.assertEqual(done.returncode, 69, done.stdout)

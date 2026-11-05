@@ -34,9 +34,9 @@ def managed(profile):
 
 
 def rows():
-    """(paths, profile, macos_only, reason) for each table row in docs/profiles.md."""
+    """(paths, profile, macos_only, reason) for each coverage table row in docs/profiles.md (the table ends at "## Local data keys")."""
     out = []
-    for line in DOC.read_text().splitlines():
+    for line in DOC.read_text().split("\n## Local data keys")[0].splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if not line.startswith("|") or len(cells) != 3 or not cells[0].startswith("`"):
             continue
