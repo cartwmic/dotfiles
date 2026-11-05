@@ -1,0 +1,8 @@
+# kgate profile for the dotfiles heavy suites (tests/heavy-gate, about 9 minutes, and tests/workstream-rank). Contract: docs/kgate.md.
+# Run: run-and-wake -- kgate -- sh -c 'export PYTHONDONTWRITEBYTECODE=1; python3 -m unittest discover -s tests/heavy-gate && python3 -m unittest discover -s tests/workstream-rank'
+image  = "ghcr.io/cartwmic/kgate@sha256:41dc179299aade303686e2047a361444668e5b3237c3b95b40cef94ddacc4a2d"
+cpu    = 2
+memory = "4Gi"
+
+[tools]
+python3 = "3.14.6"

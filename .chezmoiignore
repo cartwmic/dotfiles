@@ -41,6 +41,8 @@
 # ./README.md is the product README; do not also land it at ~/README.md.
 ./AGENTS.md
 ./README.md
+# The kgate profile of this repo's heavy suites (source-only; run from the checkout).
+./kgate.toml
 docs/
 # T8 proof driver/backend are source-only; no repository tests deploy into $HOME.
 ./tests/
