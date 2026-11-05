@@ -144,6 +144,21 @@ Library/LaunchAgents/local.agent-events.plist
 .local/share/agent-events/reference.sha256
 {{- end }}
 
+{{- $shadow := includeTemplate "agent_traces_shadow_config" . | fromJson }}
+{{- range $arm, $label := dict "ts" "local.agent-traces-shadow" "py" "local.agent-traces-shadow-py" "seed" "local.agent-traces-seed" }}
+{{-   if or (ne $.chezmoi.os "darwin") (not $shadow.enabled) (not (has $arm $shadow.arm)) }}
+# Traces stage 2 shadow LaunchAgent {{ $label }}: macOS with chezmoi data agentTracesShadow.enabled and this arm in agentTracesShadow.arm (default: personal only, all
+# three arms). Left out: chezmoi leaves an installed plist alone; the load script below unloads the job and removes the plist.
+Library/LaunchAgents/{{ $label }}.plist
+{{-   end }}
+{{- end }}
+{{- $shadowPlists := list "local.agent-traces-shadow" "local.agent-traces-shadow-py" "local.agent-traces-seed" }}
+{{- $shadowInstalled := false }}
+{{- range $shadowPlists }}{{ if stat (joinPath (toString $.chezmoi.destDir) (printf "Library/LaunchAgents/%s.plist" .)) }}{{ $shadowInstalled = true }}{{ end }}{{ end }}
+{{- if or (ne .chezmoi.os "darwin") (and (not $shadow.enabled) (not $shadowInstalled)) }}
+73_agent_traces_shadow_launchd.sh
+{{- end }}
+
 {{- if ne .chezmoi.os "darwin" }}
 # Heavy-gate memory watchdog (local.heavy-gate-watchdog): a LaunchAgent, so macOS only, on every profile that has heavy-gate.
 .local/bin/heavy-gate-watchdog

@@ -72,8 +72,10 @@ jobs:
         run: python3 -m unittest discover -s tests/qmd -v
       - name: Profile coverage table matches chezmoi managed (macOS-only rows skipped here)
         run: python3 -m unittest discover -s tests/profiles -v
-      - name: Pinned agent-kit install (agentKit gate, agent-traces exit 3, install WARN; real chezmoi, fake npm)
+      - name: Pinned agent-kit install and the agent-traces wrapper's node handling (agentKit gate, exit 3, install WARN, AGENT_TRACES_NODE, 22.19 floor; real chezmoi, fake npm and node)
         run: python3 -m unittest discover -s tests/agent-kit -v
+      - name: Traces shadow agents (setting, plists, load script, engine key, shim; real chezmoi, stub launchctl) and the Python arm run under env -i against a scripted receiver
+        run: python3 -m unittest discover -s tests/agent_traces_shadow -v
       - name: Canonical skill sync (real chezmoi, throwaway source and HOME)
         run: python3 -m unittest discover -s tests/sync-harness-skills -v
       - name: Agent browser launcher and render (fake Chrome, real chezmoi)
