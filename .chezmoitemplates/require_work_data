@@ -1,0 +1,12 @@
+{{- /*
+  On the axon-work-computer profile, fails the render when any of the local chezmoi data keys the work
+  features need is missing or empty. Prints nothing otherwise, and nothing on other profiles.
+  Call (the template checks the profile itself):  {{- $_ := includeTemplate "require_work_data" . -}}
+  Every template that uses one of these keys calls it, so a work machine cannot render with the keys missing and
+  silently drop a feature. The keys and their meaning are listed in docs/profiles.md, "Local data keys".
+*/ -}}
+{{- if eq .profile "axon-work-computer" -}}
+{{-   range $key := list "workGitHost" "workGlmBaseUrl" "workGlmKeyRef" "workGlmModelId" "workAwsProfile" "workDevportalMcpUrlRef" -}}
+{{-     $_ := includeTemplate "require_data" (dict "data" $ "path" $key) -}}
+{{-   end -}}
+{{- end -}}

@@ -1,15 +1,16 @@
 {{- $privateProvider := dict -}}
+{{- $_ := includeTemplate "require_work_data" . -}}
 {{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiProviderRef") -}}
 {{-   $privateProvider = output "op" "read" .privatePiProviderRef | fromJson -}}
 {{- end -}}
-{{- /* Private GLM 5.3 Flash, routed through Otari with the user's own Open Road key.
-       URL and key ref live in local chezmoi data, not in this public repo.
-       Without both keys the provider is not rendered. */ -}}
-{{- $privateGlmOtari := dict -}}
-{{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiGlmOtariBaseUrl") (hasKey . "privatePiGlmOtariKeyRef") -}}
-{{-   $otariCost := dict "input" 0 "output" 0 "cacheRead" 0 "cacheWrite" 0 -}}
-{{-   $otariModel := dict "id" "axong5" "name" "Private GLM 5.3 Flash (Otari)" "contextWindow" 1048576 "maxTokens" 131072 "input" (list "text") "reasoning" true "cost" $otariCost -}}
-{{-   $privateGlmOtari = dict "baseUrl" .privatePiGlmOtariBaseUrl "api" "anthropic-messages" "authHeader" true "compat" (dict "allowEmptySignature" true) "apiKey" (printf "!$HOME/.local/user_scripts/op_read_cached.sh '%s'" .privatePiGlmOtariKeyRef) "models" (list $otariModel) -}}
+{{- /* Work GLM 5.3 Flash, routed through the work LLM gateway with the user's own key.
+       URL, key ref and model id live in local chezmoi data (workGlmBaseUrl, workGlmKeyRef,
+       workGlmModelId), not in this public repo. Without all three keys the provider is not rendered. */ -}}
+{{- $workGlm := dict -}}
+{{- if and (eq .profile "axon-work-computer") (hasKey . "workGlmBaseUrl") (hasKey . "workGlmKeyRef") (hasKey . "workGlmModelId") -}}
+{{-   $workGlmCost := dict "input" 0 "output" 0 "cacheRead" 0 "cacheWrite" 0 -}}
+{{-   $workGlmModel := dict "id" .workGlmModelId "name" "Work GLM 5.3 Flash" "contextWindow" 1048576 "maxTokens" 131072 "input" (list "text") "reasoning" true "cost" $workGlmCost -}}
+{{-   $workGlm = dict "baseUrl" .workGlmBaseUrl "api" "anthropic-messages" "authHeader" true "compat" (dict "allowEmptySignature" true) "apiKey" (printf "!$HOME/.local/user_scripts/op_read_cached.sh '%s'" .workGlmKeyRef) "models" (list $workGlmModel) -}}
 {{- end -}}
 {
   "providers": {
@@ -203,10 +204,10 @@
     }
 {{- end }}
 {{- if $privateProvider }},
-    "private-anthropic": {{ $privateProvider | toPrettyJson }}
+    "work-anthropic": {{ $privateProvider | toPrettyJson }}
 {{- end }}
-{{- if $privateGlmOtari }},
-    "private-glm-otari": {{ $privateGlmOtari | toPrettyJson }}
+{{- if $workGlm }},
+    "work-glm": {{ $workGlm | toPrettyJson }}
 {{- end }}
   }
 }

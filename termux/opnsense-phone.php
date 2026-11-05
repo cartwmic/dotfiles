@@ -86,14 +86,19 @@ if ($action === 'inspect') {
     exit(0);
 }
 
+// Subnet prefixes ("a.b.c.") come from the caller's environment (router-phone.py), not from this public repo.
+$lanPrefix = getenv('HOMELAB_LAN_PREFIX') ?: '';
+$wgPrefix = getenv('HOMELAB_WG_PREFIX') ?: '';
+if (!preg_match('/^\d{1,3}\.\d{1,3}\.\d{1,3}\.$/', $lanPrefix) || !preg_match('/^\d{1,3}\.\d{1,3}\.\d{1,3}\.$/', $wgPrefix))
+    fail_phone('HOMELAB_LAN_PREFIX and HOMELAB_WG_PREFIX are required');
 $mac = strtolower($spec['mac'] ?? '');
 $lan = $spec['lan'] ?? '';
 $address = $spec['address'] ?? '';
 $pub = $spec['public_key'] ?? '';
 if (!preg_match('/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/', $mac)
     || !filter_var($lan, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
-    || !str_starts_with($lan, '10.19.1.') || !str_starts_with($address, '10.21.1.')
-    || !preg_match('/^10\.21\.1\.(\d{1,3})\/32$/', $address, $matches)
+    || !str_starts_with($lan, $lanPrefix) || !str_starts_with($address, $wgPrefix)
+    || !preg_match('/^' . preg_quote($wgPrefix, '/') . '(\d{1,3})\/32$/', $address, $matches)
     || (int)$matches[1] < 2 || (int)$matches[1] > 254
     || (int)substr($lan, strrpos($lan, '.') + 1) < 2
     || (int)substr($lan, strrpos($lan, '.') + 1) > 254

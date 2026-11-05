@@ -45,12 +45,17 @@ ESCALATION = (
 )
 
 
+# The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
+WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
+             "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
+
+
 def render(template, profile):
     with tempfile.TemporaryDirectory() as home:
         config = Path(home) / "chezmoi.yaml"
         config.write_text("{}\n")
         result = subprocess.run(
-            ["chezmoi", "--source", str(ROOT), "--config", str(config), "execute-template", "--override-data", json.dumps({"profile": profile})],
+            ["chezmoi", "--source", str(ROOT), "--config", str(config), "execute-template", "--override-data", json.dumps({"profile": profile, **(WORK_DATA if profile == "axon-work-computer" else {})})],
             input=template.read_text(encoding="utf-8"), capture_output=True, text=True, timeout=120,
         )
     assert result.returncode == 0, result.stderr

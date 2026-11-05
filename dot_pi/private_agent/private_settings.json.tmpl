@@ -17,7 +17,8 @@
 {{- $theme := "dark" -}}
 {{- $hideThinking := false -}}
 {{- $deviceId := "" -}}
-{{- $privateGlmOtari := and (eq .profile "axon-work-computer") (hasKey . "privatePiGlmOtariBaseUrl") (hasKey . "privatePiGlmOtariKeyRef") -}}
+{{- $_ := includeTemplate "require_work_data" . -}}
+{{- $workGlm := and (eq .profile "axon-work-computer") (hasKey . "workGlmBaseUrl") (hasKey . "workGlmKeyRef") (hasKey . "workGlmModelId") -}}
 {{- $settingsPath := joinPath .chezmoi.homeDir ".pi/agent/settings.json" -}}
 {{- if stat $settingsPath -}}
 {{-   $existingSettings := output "cat" $settingsPath | fromJson -}}
@@ -76,8 +77,8 @@
     "anthropic/claude-opus-5-5",
     "anthropic/claude-sonnet-5-5",
     "anthropic/claude-haiku-5-5"
-{{- if $privateGlmOtari }},
-    "private-glm-otari/axong5"
+{{- if $workGlm }},
+    "work-glm/{{ .workGlmModelId }}"
 {{- end }}
 {{- end }}
   ],

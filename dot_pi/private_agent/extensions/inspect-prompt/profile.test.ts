@@ -28,7 +28,14 @@ test("desktop profiles render fullscreen and include inspect-prompt without appl
 			const overrideData = {
 				profile,
 				...(profile === "axon-work-computer"
-					? { privatePiGlmOtariBaseUrl: "https://otari.test", privatePiGlmOtariKeyRef: "op://test/otari" }
+					? {
+							workGitHost: "git.example.test",
+							workGlmBaseUrl: "https://gateway.test",
+							workGlmKeyRef: "op://test/gateway",
+							workGlmModelId: "test-model",
+							workAwsProfile: "test-aws",
+							workDevportalMcpUrlRef: "op://test/devportal",
+						}
 					: {}),
 			};
 			const chezmoiArgs = [

@@ -1,6 +1,6 @@
 ## Axon playbook
 
-Applies in a git repo whose remote is `git.taservs.net` or `github.com/axon-*`. Elsewhere, ignore this section.
+Applies in a git repo whose remote is {{ $_ := includeTemplate "require_work_data" . }}{{ if hasKey . "workGitHost" }}`{{ .workGitHost }}` or {{ end }}`github.com/axon-*`. Elsewhere, ignore this section.
 
 If `~/.local/share/agent-harness/external-skills/axon-agents-playbook` does not exist, ignore this section.
 

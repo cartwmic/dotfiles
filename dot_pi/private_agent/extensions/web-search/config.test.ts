@@ -154,16 +154,16 @@ test("active tool listing omits fetch for Codex and restores it for Anthropic", 
 
   const privateTools = nextActiveWebSearchTools(
     ["read", "web_search", "web_fetch"],
-    "private-anthropic",
+    "work-anthropic",
     "openrouter",
     "codex"
   );
   assert.deepEqual(privateTools, ["read", "claude_web_search"]);
 
-  // private-glm-otari is also an Open Road gateway, so it gets the same alias.
+  // work-glm is also served by the work LLM gateway, so it gets the same alias.
   const privateGlmTools = nextActiveWebSearchTools(
     ["read", "web_search", "web_fetch"],
-    "private-glm-otari",
+    "work-glm",
     "openrouter",
     "codex"
   );
@@ -173,7 +173,7 @@ test("active tool listing omits fetch for Codex and restores it for Anthropic", 
   const backToPublic = nextActiveWebSearchTools(
     ["read", "claude_web_search"],
     "anthropic",
-    "private-glm-otari",
+    "work-glm",
     "codex"
   );
   assert.deepEqual(backToPublic, ["read", "web_search"]);
