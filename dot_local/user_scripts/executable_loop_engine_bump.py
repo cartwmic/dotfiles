@@ -14,7 +14,7 @@ anything. The steps, and the step a stop names:
   merge    squash-merge and read the merge SHA
   drift    chezmoi status on the skills tree and the mise config; stop on any change the PR did not make
   apply    chezmoi apply of exactly the PR's targets; apply_harness_config.sh skills (skill links only, no MCP)
-  install  mise install for the four tools
+  install  mise install for the five tools
   verify   import_release_skills.py verify-deployed for the changed bundles; mise's active installed version is the version
 
 Every later chezmoi command runs with a copy of the config that has no hooks, so no configured hook runs.
@@ -39,7 +39,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-TOOLS = ("loop-engine", "lean-change", "policy-document", "research")
+TOOLS = ("loop-engine", "lean-change", "policy-document", "research", "bookends-check")
 SKILLS = "dot_local/share/agent-harness/canonical/skills"
 MISE_CONFIG = "dot_config/mise/config.toml"
 IMPORT_TOOL = "dot_local/user_scripts/executable_import_release_skills.py"
@@ -168,7 +168,7 @@ def publish(source, tag, branch, log):
         git(wt.path, "add", "-A", step="publish")
         git(wt.path, "commit", "-q", "-m", title, step="publish")
         git(wt.path, "push", "-q", "--force", "origin", "HEAD:refs/heads/" + branch, step="publish")
-        body = ("Import of the %s skill bundles and the four Loop Engine pins (%s), made by "
+        body = ("Import of the %s skill bundles and the five Loop Engine pins (%s), made by "
                 "`loop_engine_bump.py %s` (playbook rule 7c57de5a).\n\n```\n%s```\n\n"
                 "Profiles: both. The pins and canonical skills land on personal and axon-work-computer; the script "
                 "applies them on personal only, and the work Mac gets them with its own chezmoi update.\n"
