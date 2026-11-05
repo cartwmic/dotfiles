@@ -1,5 +1,6 @@
-"""The agent-traces wrapper's node handling: the AGENT_TRACES_NODE override, the 22.19 floor (exit 3), no node (exit 3, was 127), and the
---disable-warning flag on the node command line.
+"""The agent-traces wrapper's node handling: the AGENT_TRACES_NODE override, mise's shim before node on PATH (launchd's PATH names the
+install-path node, which hangs on the external disk), the 22.19 floor (exit 3), no node (exit 3, was 127), and the --disable-warning flag on
+the node command line.
 
 The wrapper is rendered by real chezmoi and run under `env -i` (no PATH unless a case gives one) against fake node scripts and a fake kit file,
 so nothing here needs the kit or a real node. Needs chezmoi, sh.
@@ -88,16 +89,44 @@ class WrapperNodeTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(rig.ran()[0], str(chosen))
 
-    def test_node_on_path_beats_the_mise_shim_and_the_shim_is_the_fallback_with_no_path(self):
+    def test_the_mise_shim_beats_node_on_path(self):
         rig = Rig(self)
         shim = rig.fake_node(rig.home / ".local/share/mise/shims")
-        on_path = rig.fake_node(rig.root / "on-path")
-        self.assertEqual(rig.run("x", path=rig.root / "on-path").returncode, 0)
-        self.assertEqual(rig.ran()[0], str(on_path))
-        rig.log.unlink()
-        r = rig.run("x", path=rig.empty)
+        rig.fake_node(rig.root / "on-path")
+        r = rig.run("x", path=rig.root / "on-path")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(rig.ran()[0], str(shim))
+        rig.log.unlink()
+        r = rig.run("x", path=rig.empty)  # and it is found with nothing on PATH
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(rig.ran()[0], str(shim))
+
+    def test_a_missing_or_unrunnable_shim_falls_back_to_node_on_path(self):
+        rig = Rig(self)
+        on_path = rig.fake_node(rig.root / "on-path")
+        r = rig.run("x", path=rig.root / "on-path")  # no shim at all
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(rig.ran()[0], str(on_path))
+        rig.log.unlink()
+        shim = rig.fake_node(rig.home / ".local/share/mise/shims")
+        shim.chmod(0o644)  # there, but not executable
+        r = rig.run("x", path=rig.root / "on-path")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(rig.ran()[0], str(on_path))
+
+    def test_the_floor_applies_through_the_shim(self):
+        rig = Rig(self)
+        shim = rig.fake_node(rig.home / ".local/share/mise/shims")
+        rig.fake_node(rig.root / "on-path")
+        r = rig.run("x", path=rig.root / "on-path", FAKE_NODE_VERSION="22.18.0")
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertIn("too old", r.stderr)
+        self.assertIn(str(shim), r.stderr)
+        self.assertIsNone(rig.ran(), "the CLI must not run below the floor")
+        r = rig.run("x", path=rig.empty, FAKE_NODE_VERSION="22.19.0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(rig.ran()[0], str(shim))
+        self.assertEqual(rig.ran()[1], FLAG)
 
     def test_the_22_19_floor_exits_3_below_it_and_runs_at_and_above_it(self):
         rig = Rig(self)
