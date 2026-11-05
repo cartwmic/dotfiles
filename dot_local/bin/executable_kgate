@@ -47,7 +47,8 @@ import tomllib
 NAMESPACE = "kgate"
 HOST = os.environ.get("KGATE_SSH", "cartwmic@10.19.1.196")
 KEY = os.environ.get("KGATE_SSH_KEY", os.path.expanduser("~/.ssh/homelab"))
-EXCLUDED_NODES = ("ubuntu-server-k8s-agent-4", "ubuntu-server-k8s-master-1", "mac-mini-worker")
+# cartwmic-g14-wsl: its wall clock steps back about 2.8 s every 30 s (measured 2026-11-05), which fails tests that compare times; agent-1/2/3 are steady.
+EXCLUDED_NODES = ("ubuntu-server-k8s-agent-4", "ubuntu-server-k8s-master-1", "mac-mini-worker", "cartwmic-g14-wsl")
 # image registries that need a pull credential: host -> (user, 1Password reference of the token)
 PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/password")}
 MAX_RUN_S = 8 * 3600  # the pod ends itself: a pod whose client died must not hold its memory for ever
@@ -166,10 +167,9 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000):
            {"name": "CARGO_BUILD_JOBS", "value": str(cpu)}, {"name": "RAYON_NUM_THREADS", "value": str(cpu)},
            {"name": "MAKEFLAGS", "value": "-j%d" % cpu}]
     container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",
-                 "command": ["sh", "-c", "exec sleep infinity"], "env": env,
+                 "command": ["tini", "--", "sleep", "infinity"], "env": env,
                  "resources": {"requests": {"cpu": str(cpu), "memory": memory}, "limits": {"memory": memory}},
                  "volumeMounts": [{"name": "cache", "mountPath": "/cache"},
-                                  {"name": "cache", "mountPath": "/usr/local/cargo/registry", "subPath": "cargo-registry-u%d" % uid},
                                   {"name": "out", "mountPath": "/out"}]}
     if secret_env:
         container["envFrom"] = [{"secretRef": {"name": job + "-env"}}]
@@ -258,7 +258,7 @@ def prepare_user(job, euid=None, chown=os.lchown, root=""):
     if (os.geteuid() if euid is None else euid) != 0 or uid == 0:
         return {}, {}
     home, cache = "/cache/u%d/home" % uid, "/cache/u%d" % uid
-    for path in (cache, home, cache + "/npm", "/out", "/usr/local/cargo/registry"):
+    for path in (cache, home, cache + "/npm", cache + "/cargo", "/out"):
         os.makedirs(root + path, exist_ok=True)
         chown(root + path, uid, gid)
     for top in job["own"]:
@@ -266,7 +266,7 @@ def prepare_user(job, euid=None, chown=os.lchown, root=""):
         for here, dirs, files in os.walk(top):
             for name in dirs + files:
                 chown(os.path.join(here, name), uid, gid)
-    return {"user": uid, "group": gid, "extra_groups": []}, {"HOME": home, "npm_config_cache": cache + "/npm"}
+    return {"user": uid, "group": gid, "extra_groups": []}, {"HOME": home, "npm_config_cache": cache + "/npm", "CARGO_HOME": cache + "/cargo"}
 
 
 def pod_main(jobfile):
