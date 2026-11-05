@@ -1,137 +1,634 @@
-#!/bin/sh
-# kgate: run a heavy job on the homelab Kubernetes cluster with heavy-gate's command line.
-#
-# Usage: kgate [--wait SECONDS] [--cpu N] [--mem SIZE] [--image IMAGE] [--node NODE]
-#              [--env NAME]... -- CMD [ARGS...]
-#
-# Contract:
-# - Ships the git worktree of $PWD (tracked and untracked files, its .git file, the shared
-#   git folder) to one pod, unpacked at the same absolute paths, and runs CMD in the same $PWD.
-#   node_modules, target and other ignored files stay on the Mac.
-# - Output streams back as it happens. kgate exits with CMD's exit code.
-# - If the job cannot start on the cluster before --wait runs out (not a git worktree, ssh
-#   fails, pod not running), kgate says why and runs "heavy-gate --wait <rest> -- CMD" on the
-#   Mac. A job that started on the cluster is never rerun on the Mac.
-# - The scheduler is the queue: requests --cpu (default 2) and --mem (default 4Gi), no limits.
-#   x86 nodes only. Tolerates the G14's optional taint. npm and cargo caches live in
-#   /var/lib/kgate/cache on each node.
-# - --env NAME copies the Mac's value of NAME into the pod (for example NODE_AUTH_TOKEN).
-# - One JSON line per job in ${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl; full output
-#   in <id>.log next to it. Each start removes this tool's finished pods.
-# Env: KGATE_SSH (default cartwmic@192.0.2.196), KGATE_SSH_KEY (default ~/.ssh/homelab).
-set -u
-wait=3600 cpu=2 mem=4Gi image=node:24-bookworm node='' envs=''
-host=${KGATE_SSH:-cartwmic@192.0.2.196}
-key=${KGATE_SSH_KEY:-$HOME/.ssh/homelab}
-usage() { sed -n '4,5p' "$0" | sed 's/^# //' >&2; exit 64; }
-while [ $# -gt 0 ]; do
-  case $1 in
-    --wait|--cpu|--mem|--image|--node|--env) [ $# -ge 2 ] || usage ;;
-  esac
-  case $1 in
-    --wait) wait=$2; shift 2 ;;
-    --cpu) cpu=$2; shift 2 ;;
-    --mem) mem=$2; shift 2 ;;
-    --image) image=$2; shift 2 ;;
-    --node) node=$2; shift 2 ;;
-    --env) envs="$envs $2"; shift 2 ;;
-    --) shift; break ;;
-    *) usage ;;
-  esac
-done
-[ $# -gt 0 ] || usage
+#!/usr/bin/env python3
+"""kgate: run a heavy gate on the homelab Kubernetes cluster instead of this Mac. Full doc: docs/kgate.md.
 
-state=${XDG_STATE_HOME:-$HOME/.local/state}/kgate
-mkdir -p "$state"
-t0=$(date +%s)
-id=kgate-$t0-$$
-out=$state/$id.log
-tarf=$state/$id.tar
-cmd=$(python3 -c 'import shlex,sys; print(shlex.join(sys.argv[1:]))' "$@")
-ssh_k() { ssh -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=8 -i "$key" "$host" "$@"; }
-K="sudo kubectl --kubeconfig /etc/kubernetes/admin.conf -n default"
+    kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]
 
-record() { # fallback-reason exit node start_epoch end_epoch bytes
-  KG_ID=$id KG_CWD=$PWD KG_CMD=$cmd KG_IMAGE=$image KG_CPU=$cpu KG_MEM=$mem KG_T0=$t0 \
-  KG_REASON=$1 KG_EXIT=$2 KG_NODE=$3 KG_START=$4 KG_END=$5 KG_BYTES=$6 python3 - "$state/log.jsonl" <<'PY'
-import json, os, sys, datetime
-e = os.environ
-num = lambda k: int(e[k]) if e.get(k, "").lstrip("-").isdigit() else None
-t0, start, end = num("KG_T0"), num("KG_START"), num("KG_END")
-rec = {"id": e["KG_ID"],
-       "start": datetime.datetime.fromtimestamp(t0, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-       "cwd": e["KG_CWD"], "cmd": e["KG_CMD"], "image": e["KG_IMAGE"], "cpu": e["KG_CPU"], "mem": e["KG_MEM"],
-       "node": e["KG_NODE"] or None, "bytes_sent": num("KG_BYTES"),
-       "pending_s": start - t0 if start else None, "run_s": end - start if start and end else None,
-       "exit": num("KG_EXIT"), "fallback": e["KG_REASON"] or None, "output": e["KG_ID"] + ".log"}
-with open(sys.argv[1], "a") as f:
-    f.write(json.dumps(rec) + "\n")
-PY
-}
+heavy-gate's command line (`--wait SECONDS -- CMD`) plus the profile and a few overrides. Run it under
+`run-and-wake -- kgate -- CMD` and the pane is woken when the job ends.
 
-fallback() { # reason, then CMD
-  reason=$1; shift
-  rest=$(( wait - ($(date +%s) - t0) )); [ "$rest" -lt 0 ] && rest=0
-  echo "kgate: $reason; running on the Mac: heavy-gate --wait $rest" >&2
-  rm -f "$tarf" "$state/$id.rc"
-  heavy-gate --wait "$rest" -- "$@"
-  e=$?
-  record "$reason" "$e" "" "" "" ""
-  exit "$e"
-}
+Contract
+- Ships the git worktree of $PWD (tracked and untracked, non-ignored files, its .git file and the shared git
+  folder) to one pod, unpacked at the same absolute paths, and runs CMD in the same $PWD. Ignored files stay here.
+- Tree hash: the git tree hash of the shipped files is computed here and again in the pod after unpacking. A
+  difference fails the job before CMD runs.
+- Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu, memory, the exact tool
+  versions the gate needs, 1Password references for its secrets. The pod checks the versions before CMD; a mismatch
+  fails the job with the tool, expected and found.
+- Exit status: CMD's own exit code when CMD ran to its end. 64 for a bad command line. 69 when the job could not
+  start or finish on the cluster: unreachable, bad or missing profile, secret unreadable, pod never started, tree hash
+  differs, tool version differs, the connection to a started pod was lost. kgate NEVER runs CMD on this Mac and never
+  reruns a job that started. A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart.
+- Files CMD writes to /out in the pod come back to <state>/<id>.out/ before the pod is deleted.
+- One JSON line per job in ${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl (keyed by the run-and-wake job id when
+  there is one); the full output is in <id>.log beside it.
 
-wt=$(git rev-parse --show-toplevel 2>/dev/null) || fallback "not in a git worktree" "$@"
-common=$(git rev-parse --path-format=absolute --git-common-dir)
-( cd "$wt" && git ls-files -co --exclude-standard | sed "s|^|${wt#/}/|"; echo "${wt#/}/.git"; echo "${common#/}" ) \
-  | COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -cf "$tarf" -C / -T - 2>>"$out"
-bytes=$(wc -c < "$tarf" | tr -d ' ')
+Env: KGATE_SSH (default cartwmic@192.0.2.196), KGATE_SSH_KEY (default ~/.ssh/homelab).
+The same file runs in the pod as `kgate.py --pod JOB.json`: it verifies the tree hash, checks the tool versions,
+runs CMD and reports peak memory. Needs python3 3.11+ in the image.
+"""
+import argparse
+import base64
+import datetime
+import hashlib
+import io
+import json
+import os
+import re
+import shlex
+import signal
+import stat
+import subprocess
+import sys
+import tarfile
+import threading
+import time
+import tomllib
 
-# Reachability check, and remove this tool's finished pods.
-ssh_k "$K delete pod -l app=kgate --field-selector=status.phase!=Running,status.phase!=Pending --wait=false >/dev/null" 2>>"$out" \
-  || fallback "cluster unreachable over ssh ($host)" "$@"
+NAMESPACE = "kgate"
+HOST = os.environ.get("KGATE_SSH", "cartwmic@192.0.2.196")
+KEY = os.environ.get("KGATE_SSH_KEY", os.path.expanduser("~/.ssh/homelab"))
+EXCLUDED_NODES = ("ubuntu-server-k8s-agent-4", "ubuntu-server-k8s-master-1", "mac-mini-worker")
+# image registries that need a pull credential: host -> (user, 1Password reference of the token)
+PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/password")}
+MAX_RUN_S = 8 * 3600  # the pod ends itself: a pod whose client died must not hold its memory for ever
+UNAVAILABLE = 69
+USAGE = 64
+FATAL_WAITING = ("ErrImagePull", "ImagePullBackOff", "InvalidImageName", "CreateContainerConfigError", "ErrImageNeverPull")
 
-json=$(KG_ID=$id KG_NODE=$node KG_WT=$wt KG_PWD=$PWD KG_CMD=$cmd KG_IMAGE=$image KG_CPU=$cpu KG_MEM=$mem KG_ENVS=$envs python3 <<'PY'
-import json, os
-e = os.environ
-inner = ('set -e; s=$(date +%s); tar -xf - -C /; '
-         'echo "kgate: start $s node=$KGATE_NODE cpus=$(nproc)"; cd "$KGATE_CWD"; '
-         'git config --global --add safe.directory "*"; set +e; sh -c "$KGATE_CMD"; e=$?; '
-         'echo "kgate: end $(date +%s) exit $e"; exit $e')
-env = [{"name": "KGATE_CWD", "value": e["KG_PWD"]}, {"name": "KGATE_CMD", "value": e["KG_CMD"]},
-       {"name": "KGATE_NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
-       {"name": "npm_config_cache", "value": "/cache/npm"}, {"name": "CI", "value": "1"}]
-env += [{"name": n, "value": e.get(n, "")} for n in e["KG_ENVS"].split()]
-sel = {"kubernetes.io/arch": "amd64"}
-if e["KG_NODE"]:
-    sel["kubernetes.io/hostname"] = e["KG_NODE"]
-print(json.dumps({"spec": {
-    "nodeSelector": sel,
-    "tolerations": [{"key": "homelab.cartwmic.com/optional", "operator": "Exists", "effect": "NoSchedule"}],
-    "volumes": [{"name": "cache", "hostPath": {"path": "/var/lib/kgate/cache", "type": "DirectoryOrCreate"}}],
-    "containers": [{"name": e["KG_ID"], "image": e["KG_IMAGE"], "stdin": True, "stdinOnce": True,
-        "command": ["sh", "-c", inner], "env": env,
-        "resources": {"requests": {"cpu": e["KG_CPU"], "memory": e["KG_MEM"]}},
-        "volumeMounts": [{"name": "cache", "mountPath": "/cache"},
-                         {"name": "cache", "mountPath": "/usr/local/cargo/registry", "subPath": "cargo-registry"}]}]}}))
-PY
-)
-b64=$(printf %s "$json" | base64 | tr -d '\n')
-rest=$(( wait - ($(date +%s) - t0) )); [ "$rest" -lt 1 ] && rest=1
-{
-  ssh_k "$K run $id -i --rm --restart=Never --labels=app=kgate --image=$image --pod-running-timeout=${rest}s --overrides=\"\$(echo $b64 | base64 -d)\"" < "$tarf"
-  echo $? > "$state/$id.rc"
-} 2>&1 | tee -a "$out"
-rc=$(cat "$state/$id.rc" 2>/dev/null || echo 255)
-rm -f "$tarf" "$state/$id.rc"
 
-startline=$(grep -a '^kgate: start ' "$out" | tail -1)
-if [ -z "$startline" ]; then
-  ssh_k "$K delete pod $id --ignore-not-found --wait=false" >/dev/null 2>&1
-  fallback "pod did not start on the cluster (kubectl exit $rc)" "$@"
-fi
-start=$(echo "$startline" | awk '{print $3}')
-podnode=$(echo "$startline" | sed -n 's/.*node=\([^ ]*\).*/\1/p')
-end=$(grep -a '^kgate: end ' "$out" | tail -1 | awk '{print $3}')
-[ -n "$end" ] || end=$(date +%s)
-record "" "$rc" "$podnode" "$start" "$end" "$bytes"
-exit "$rc"
+class Unavailable(Exception):
+    """The job cannot start or finish on the cluster. Exit 69, with this text as the reason."""
+
+
+# ---------------------------------------------------------------- pure: tree hash (runs here and in the pod)
+
+def _blob(data=None, path=None, size=0):
+    h = hashlib.sha1(b"blob %d\0" % (len(data) if data is not None else size))
+    if data is not None:
+        h.update(data)
+    else:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    return h.digest()
+
+
+def tree_hash(root, files):
+    """The git tree hash `git write-tree` gives for an index holding exactly `files` (paths relative to root)."""
+    top = {}
+    for rel in files:
+        path = os.path.join(root, rel)
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode):
+            entry = (b"120000", _blob(data=os.fsencode(os.readlink(path))))
+        elif stat.S_ISREG(st.st_mode):
+            entry = (b"100755" if st.st_mode & 0o100 else b"100644", _blob(path=path, size=st.st_size))
+        else:
+            raise ValueError("not a file or symlink: " + rel)
+        node = top
+        parts = os.fsencode(rel).split(b"/")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = entry
+
+    def write(node):
+        rows = sorted(node.items(), key=lambda kv: kv[0] + (b"/" if isinstance(kv[1], dict) else b""))
+        body = b"".join((b"40000" if isinstance(v, dict) else v[0]) + b" " + k + b"\0"
+                        + (write(v) if isinstance(v, dict) else v[1]) for k, v in rows)
+        return hashlib.sha1(b"tree %d\0" % len(body) + body).digest()
+
+    return write(top).hex()
+
+
+# ---------------------------------------------------------------- pure: profile, versions, pod spec
+
+def parse_profile(text):
+    """Profile TOML -> dict with image, cpu, memory, tools {name: (version, cmd|None)}, secrets {ENV: op ref}, services."""
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        raise Unavailable("profile is not valid TOML: %s" % e)
+    known = {"image", "cpu", "memory", "tools", "secrets", "services"}
+    if set(raw) - known:
+        raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
+    tools = {}
+    for name, spec in (raw.get("tools") or {}).items():
+        if isinstance(spec, str):
+            spec = {"version": spec}
+        if not isinstance(spec, dict) or not isinstance(spec.get("version"), str) or not spec["version"] \
+                or set(spec) - {"version", "cmd"} or not isinstance(spec.get("cmd", ""), str):
+            raise Unavailable("profile tool %r must be a version string or {version, cmd}" % name)
+        tools[name] = (spec["version"], spec.get("cmd") or None)
+    secrets = dict(raw.get("secrets") or {})
+    for name, ref in secrets.items():
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or not (isinstance(ref, str) and ref.startswith("op://")):
+            raise Unavailable("profile secret %r must be NAME = \"op://vault/item/field\"" % name)
+    services = raw.get("services") or []
+    if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
+        raise Unavailable("profile services must be a list of names")
+    return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"),
+            "tools": tools, "secrets": secrets, "services": services}
+
+
+def check_settings(image, cpu, memory):
+    if not image or not re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", image):
+        raise Unavailable("image must be pinned by digest (name@sha256:<64 hex>), got %r" % (image,))
+    if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu < 1:
+        raise Unavailable("cpu must be a whole number of at least 1, got %r" % (cpu,))
+    if not isinstance(memory, str) or not re.fullmatch(r"[1-9][0-9]*(Mi|Gi)", memory):
+        raise Unavailable("memory must look like 4Gi or 512Mi, got %r" % (memory,))
+
+
+def version_found(text, expected):
+    """True when `expected` appears in `text` as a whole version (1.98.0 is not in 11.98.0 or 1.98.01)."""
+    return re.search(r"(?<![0-9])(?<![0-9]\.)" + re.escape(expected) + r"(?![0-9])(?!\.[0-9])", text) is not None
+
+
+def pod_manifests(job, image, cpu, memory, node, secret_env, pull):
+    """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name)."""
+    labels = {"app": "kgate", "kgate-job": job}
+    items = []
+    if secret_env:
+        items.append({"apiVersion": "v1", "kind": "Secret", "metadata": {"name": job + "-env", "labels": labels},
+                      "type": "Opaque", "data": {k: base64.b64encode(v).decode() for k, v in secret_env.items()}})
+    if pull:
+        auth = base64.b64encode(pull[1].encode() + b":" + pull[2]).decode()
+        config = json.dumps({"auths": {pull[0]: {"auth": auth}}}).encode()
+        items.append({"apiVersion": "v1", "kind": "Secret", "metadata": {"name": job + "-pull", "labels": labels},
+                      "type": "kubernetes.io/dockerconfigjson",
+                      "data": {".dockerconfigjson": base64.b64encode(config).decode()}})
+    env = [{"name": "KGATE_OUT", "value": "/out"}, {"name": "CI", "value": "1"},
+           {"name": "npm_config_cache", "value": "/cache/npm"},
+           {"name": "KGATE_NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
+           {"name": "CARGO_BUILD_JOBS", "value": str(cpu)}, {"name": "RAYON_NUM_THREADS", "value": str(cpu)},
+           {"name": "MAKEFLAGS", "value": "-j%d" % cpu}]
+    container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",
+                 "command": ["sh", "-c", "exec sleep infinity"], "env": env,
+                 "resources": {"requests": {"cpu": str(cpu), "memory": memory}, "limits": {"memory": memory}},
+                 "volumeMounts": [{"name": "cache", "mountPath": "/cache"},
+                                  {"name": "cache", "mountPath": "/usr/local/cargo/registry", "subPath": "cargo-registry"},
+                                  {"name": "out", "mountPath": "/out"}]}
+    if secret_env:
+        container["envFrom"] = [{"secretRef": {"name": job + "-env"}}]
+    match = [{"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]},
+             {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": list(EXCLUDED_NODES)}]
+    if node:
+        match = [match[0], {"key": "kubernetes.io/hostname", "operator": "In", "values": [node]}]
+    pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": MAX_RUN_S,
+           "affinity": {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
+               "nodeSelectorTerms": [{"matchExpressions": match}]}}},
+           "tolerations": [{"key": "homelab.cartwmic.com/optional", "operator": "Exists", "effect": "NoSchedule"}],
+           "volumes": [{"name": "cache", "hostPath": {"path": "/var/lib/kgate/cache", "type": "DirectoryOrCreate"}},
+                       {"name": "out", "emptyDir": {}}],
+           "containers": [container]}
+    if pull:
+        pod["imagePullSecrets"] = [{"name": job + "-pull"}]
+    items.append({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": job, "labels": labels}, "spec": pod})
+    return {"apiVersion": "v1", "kind": "List", "items": items}
+
+
+MARKER = r"kgate\[%s\]: (start|running|peak|end|hash|preflight)\b(.*)"
+
+
+class Markers:
+    """Reads the pod's marker lines out of the byte stream CMD and the pod share."""
+
+    def __init__(self, job):
+        self.pattern = re.compile(MARKER % re.escape(job))
+        self.buf = ""
+        self.seen = {}
+
+    def feed(self, chunk):
+        self.buf += chunk.decode("utf-8", "replace")
+        *lines, self.buf = self.buf.split("\n")
+        for line in lines:
+            self._line(line)
+
+    def close(self):
+        if self.buf:
+            self._line(self.buf)
+            self.buf = ""
+
+    def _line(self, line):
+        m = self.pattern.fullmatch(line.rstrip("\r"))
+        if m:
+            self.seen[m.group(1)] = m.group(2).strip()
+
+
+# ---------------------------------------------------------------- the pod side
+
+def read_int(path):
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+class PeakMeter:
+    """Peak memory of this container's cgroup: memory.peak when the kernel has it, else the highest memory.current sampled."""
+
+    def __init__(self, base="/sys/fs/cgroup"):
+        self.base, self.peak, self.stop_flag, self.thread = base, 0, threading.Event(), None
+        self.source = "cgroup" if os.path.exists(base + "/memory.peak") else "sampled"
+
+    def start(self):
+        if self.source == "sampled":
+            def sample():
+                while not self.stop_flag.wait(0.5):
+                    self.peak = max(self.peak, read_int(self.base + "/memory.current") or 0)
+            self.thread = threading.Thread(target=sample, daemon=True)
+            self.thread.start()
+
+    def stop(self):
+        self.stop_flag.set()
+        if self.source == "cgroup":
+            return read_int(self.base + "/memory.peak"), "cgroup"
+        self.peak = max(self.peak, read_int(self.base + "/memory.current") or 0)
+        return (self.peak or None), "sampled"
+
+
+def pod_main(jobfile):
+    """Inside the pod: verify the tree hash, check the tool versions, run CMD, report peak memory and its exit code."""
+    with open(jobfile) as f:
+        job = json.load(f)
+    tag = "kgate[%s]" % job["id"]
+    out = lambda text: (sys.stdout.write(text.replace("kgate:", tag + ":", 1)), sys.stdout.flush())
+    out("kgate: start %d node=%s cpus=%d\n" % (time.time(), os.environ.get("KGATE_NODE", "?"), os.cpu_count() or 0))
+    found = tree_hash(job["root"], job["files"])
+    if found != job["tree"]:
+        out("kgate: hash MISMATCH expected=%s found=%s\n" % (job["tree"], found))
+        return 70
+    out("kgate: hash ok %s\n" % found)
+    for name, (version, cmd) in job["tools"].items():
+        cmd = cmd or name + " --version"
+        run = subprocess.run(cmd, shell=True, cwd=job["cwd"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+        text = run.stdout or ""
+        if run.returncode != 0 or not version_found(text, version):
+            line = next((x.strip() for x in text.splitlines() if x.strip()), "no output")
+            out("kgate: preflight FAILED tool=%s expected=%s found=%s (%s exit %d)\n"
+                % (name, version, json.dumps(line[:120]), cmd, run.returncode))
+            return 71
+    out("kgate: preflight ok %d tools\n" % len(job["tools"]))
+    meter = PeakMeter()
+    meter.start()
+    out("kgate: running %s\n" % json.dumps(job["argv"]))
+    try:
+        code = subprocess.call(job["argv"], cwd=job["cwd"])
+    except OSError as e:
+        out("kgate: cannot start %s: %s\n" % (job["argv"][0], e))
+        code = 127
+    peak, source = meter.stop()
+    out("\nkgate: peak %s %s\n" % (peak if peak is not None else "unknown", source))
+    out("kgate: end %d exit %d\n" % (time.time(), code if code >= 0 else 128 - code))
+    return code if code >= 0 else 128 - code
+
+
+# ---------------------------------------------------------------- the Mac side
+
+def utc(t=None):
+    return datetime.datetime.fromtimestamp(t if t is not None else time.time(), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def git(cwd, *args):
+    done = subprocess.run(["git", "-C", cwd, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if done.returncode != 0:
+        raise Unavailable("git %s failed: %s" % (args[0], done.stderr.decode(errors="replace").strip()))
+    return done.stdout
+
+
+def worktree(cwd):
+    wt = git(cwd, "rev-parse", "--show-toplevel").decode().strip()
+    common = git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").decode().strip()
+    files = [os.fsdecode(p) for p in git(wt, "ls-files", "-co", "--exclude-standard", "-z").split(b"\0") if p]
+    files = [p for p in files if os.path.lexists(os.path.join(wt, p))]  # deleted but not yet staged
+    for p in files:
+        full = os.path.join(wt, p)
+        if os.path.isdir(full) and not os.path.islink(full):
+            raise Unavailable("%s is a directory in the file list (a submodule); kgate does not ship those" % p)
+    return wt, common, files
+
+
+def archive(wt, common, files, extra):
+    """The tar stream (bytes) of the worktree files, its .git and the shared git folder, plus extra {name: bytes}."""
+    buf = io.BytesIO()
+    root = lambda tarinfo: (setattr(tarinfo, "uid", 0), setattr(tarinfo, "gid", 0),
+                            setattr(tarinfo, "uname", ""), setattr(tarinfo, "gname", ""), tarinfo)[-1]
+    with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        for p in files:
+            tar.add(os.path.join(wt, p), arcname=(wt + "/" + p).lstrip("/"), recursive=False, filter=root)
+        tar.add(os.path.join(wt, ".git"), arcname=(wt + "/.git").lstrip("/"), filter=root)
+        if os.path.realpath(common) != os.path.realpath(os.path.join(wt, ".git")):
+            tar.add(common, arcname=common.lstrip("/"), filter=root)
+        for name, data in extra.items():
+            info = tarfile.TarInfo(name)
+            info.size, info.mode, info.mtime = len(data), 0o644, int(time.time())
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+class Cluster:
+    """The one adapter: kubectl on the control plane over ssh. Nothing else on this machine touches the cluster."""
+
+    def __init__(self, host, key):
+        self.ssh = ["ssh", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=8",
+                    "-o", "ServerAliveInterval=30", "-i", key, host]
+
+    def argv(self, kargs):
+        return self.ssh + ["sudo kubectl --kubeconfig /etc/kubernetes/admin.conf -n %s %s" % (NAMESPACE, shlex.join(kargs))]
+
+    def run(self, kargs, stdin=b""):
+        return subprocess.run(self.argv(kargs), input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def popen(self, kargs, stdin, stdout):
+        return subprocess.Popen(self.argv(kargs), stdin=stdin, stdout=stdout, stderr=subprocess.STDOUT)
+
+
+def op_read(ref):
+    try:
+        done = subprocess.run(["op", "read", ref], stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, timeout=30)
+    except subprocess.TimeoutExpired:
+        raise Unavailable("op read %s gave no answer in 30 s" % ref)
+    except OSError as e:
+        raise Unavailable("cannot run op to read %s: %s" % (ref, e))
+    if done.returncode != 0:
+        why = (done.stderr.decode(errors="replace").strip().splitlines() or ["no message"])[-1]
+        raise Unavailable("op read %s failed: %s" % (ref, why))
+    return done.stdout.rstrip(b"\r\n")
+
+
+class Job:
+    def __init__(self, opts):
+        self.o = opts
+        self.t0 = time.time()
+        self.id = "kgate-%d-%d" % (self.t0, os.getpid())
+        self.state = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "kgate")
+        os.makedirs(self.state, exist_ok=True)
+        self.logpath = os.path.join(self.state, self.id + ".log")
+        self.log = open(self.logpath, "ab", buffering=0)
+        self.console = True
+        self.rec = {"id": self.id, "job": os.environ.get("RUN_AND_WAKE_JOB"), "start": utc(self.t0), "cwd": os.getcwd(),
+                    "cmd": shlex.join(opts.command), "repo": None, "head": None, "tree": None, "node": None, "image": None,
+                    "profile": None, "cpu": None, "mem": None, "peak_bytes": None, "peak_source": None, "ran": False,
+                    "exit": None, "reason": None, "out_files": 0, "cleanup": None, "output": self.id + ".log"}
+        self.cluster = Cluster(HOST, KEY)
+
+    def emit(self, data):
+        self.log.write(data)
+        if self.console:
+            try:
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+            except BrokenPipeError:
+                self.console = False
+
+    def note(self, text):
+        self.emit(("kgate: " + text + "\n").encode())
+
+    # -- steps
+
+    def settings(self, wt):
+        o = self.o
+        path = o.profile or os.path.join(wt, "kgate.toml")
+        prof = {"image": None, "cpu": None, "memory": None, "tools": {}, "secrets": {}, "services": []}
+        if os.path.exists(path):
+            with open(path) as f:
+                prof = parse_profile(f.read())
+            self.rec["profile"] = path
+        elif o.profile:
+            raise Unavailable("profile %s not found" % path)
+        image = o.image or prof["image"]
+        cpu = o.cpu if o.cpu is not None else (prof["cpu"] if prof["cpu"] is not None else 2)
+        mem = o.mem or prof["memory"] or "4Gi"
+        check_settings(image, cpu, mem)
+        if prof["services"]:
+            raise Unavailable("the gate needs %s, which kgate cannot provide; this gate cannot run on kgate" % ", ".join(prof["services"]))
+        if o.node and o.node in EXCLUDED_NODES:
+            raise Unavailable("node %s is excluded from kgate" % o.node)
+        self.rec.update(image=image, cpu=cpu, mem=mem)
+        return image, cpu, mem, prof
+
+    def reachable(self):
+        done = self.cluster.run(["get", "namespace", NAMESPACE, "-o", "name"])
+        if done.returncode != 0:
+            why = (done.stderr.decode(errors="replace").strip().splitlines() or ["no message"])[-1]
+            raise Unavailable("cluster unreachable (%s): %s" % (HOST, why))
+
+    def sweep(self):
+        """Remove what an earlier client that died left behind: finished pods, and Secrets whose pod is gone."""
+        self.cluster.run(["delete", "pod", "-l", "app=kgate", "--field-selector=status.phase!=Running,status.phase!=Pending", "--wait=false"])
+        pods = self.cluster.run(["get", "pods", "-l", "app=kgate", "-o", "json"])
+        secrets = self.cluster.run(["get", "secrets", "-l", "app=kgate", "-o", "json"])
+        try:
+            live = {p["metadata"]["name"] for p in json.loads(pods.stdout)["items"]}
+            stale = [s["metadata"]["name"] for s in json.loads(secrets.stdout)["items"]
+                     if s["metadata"]["labels"].get("kgate-job") not in live
+                     and time.time() - datetime.datetime.strptime(s["metadata"]["creationTimestamp"], "%Y-%m-%dT%H:%M:%SZ")
+                     .replace(tzinfo=datetime.timezone.utc).timestamp() > 600]
+        except (ValueError, KeyError):
+            return
+        if stale:
+            self.cluster.run(["delete", "secret", *stale, "--ignore-not-found", "--wait=false"])
+
+    def start_pod(self, manifests):
+        done = self.cluster.run(["create", "-f", "-"], stdin=json.dumps(manifests).encode())
+        if done.returncode != 0:
+            raise Unavailable("could not create the pod: " + done.stderr.decode(errors="replace").strip())
+        deadline = self.t0 + self.o.wait
+        last = None
+        while True:
+            done = self.cluster.run(["get", "pod", self.id, "-o", "json"])
+            if done.returncode != 0:
+                raise Unavailable("lost the pod while waiting for it: " + done.stderr.decode(errors="replace").strip())
+            status = json.loads(done.stdout).get("status", {})
+            cs = (status.get("containerStatuses") or [{}])[0]
+            waiting = (cs.get("state") or {}).get("waiting") or {}
+            ready = status.get("phase") == "Running" and cs.get("ready")
+            if ready:
+                self.rec["node"] = json.loads(done.stdout)["spec"].get("nodeName")
+                return
+            sched = next((c for c in status.get("conditions", []) if c.get("type") == "PodScheduled" and c.get("status") == "False"), None)
+            what = waiting.get("reason") or (sched and sched.get("reason")) or status.get("phase")
+            detail = waiting.get("message") or (sched and sched.get("message")) or status.get("message") or ""
+            if status.get("phase") in ("Failed", "Succeeded") or waiting.get("reason") in FATAL_WAITING:
+                raise Unavailable("pod did not start: %s %s" % (what, detail[:300]))
+            if what != last:
+                self.note("waiting for the pod: %s" % what)
+                last = what
+            if time.time() > deadline:
+                raise Unavailable("pod did not start within %ds: %s %s" % (self.o.wait, what, detail[:300]))
+            time.sleep(2)
+
+    def execute(self, tar_bytes):
+        """One exec: unpack, verify, run. Returns (markers, transport exit)."""
+        script = ("tar -xf - --no-same-owner -C / && exec python3 /tmp/%s/kgate.py --pod /tmp/%s/job.json" % (self.id, self.id))
+        read, write = os.pipe()
+        proc = self.cluster.popen(["exec", "-i", self.id, "--", "sh", "-c", script], stdin=subprocess.PIPE, stdout=write)
+        os.close(write)
+        feeder = threading.Thread(target=lambda: self._send(proc, tar_bytes), daemon=True)
+        feeder.start()
+        markers = Markers(self.id)
+        try:
+            with os.fdopen(read, "rb", buffering=0) as stream:
+                for chunk in iter(lambda: stream.read(65536), b""):
+                    self.emit(chunk)
+                    markers.feed(chunk)
+            markers.close()
+            feeder.join()
+            return markers.seen, proc.wait()
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+
+    @staticmethod
+    def _send(proc, data):
+        try:
+            proc.stdin.write(data)
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+    def fetch_out(self):
+        done = self.cluster.run(["exec", self.id, "--", "sh", "-c", "tar -cf - -C /out ."])
+        if done.returncode != 0:
+            self.note("could not copy /out back: " + done.stderr.decode(errors="replace").strip()[:200])
+            return
+        target = os.path.join(self.state, self.id + ".out")
+        with tarfile.open(fileobj=io.BytesIO(done.stdout)) as tar:
+            members = [m for m in tar.getmembers() if m.name not in (".", "./")]
+            if not members:
+                return
+            tar.extractall(target, members=members, filter="data")
+        self.rec["out_files"] = sum(1 for m in members if m.isfile())
+        self.note("/out -> %s (%d files)" % (target, self.rec["out_files"]))
+
+    def cleanup(self):
+        names = ["pod/" + self.id, "secret/" + self.id + "-env", "secret/" + self.id + "-pull"]
+        done = self.cluster.run(["delete", *names, "--ignore-not-found", "--grace-period=0", "--wait=true"])
+        self.rec["cleanup"] = done.returncode == 0
+        if done.returncode != 0:
+            self.note("cleanup not confirmed for %s: %s" % (self.id, done.stderr.decode(errors="replace").strip()[:200]))
+
+    # -- the whole job
+
+    def run(self):
+        o = self.o
+        wt, common, files = worktree(os.getcwd())
+        self.rec["repo"] = os.path.basename(os.path.dirname(common)) if common.endswith("/.git") else os.path.basename(common)
+        head = subprocess.run(["git", "-C", wt, "rev-parse", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.rec["head"] = head.stdout.decode().strip() or None
+        image, cpu, mem, prof = self.settings(wt)
+        tree = self.rec["tree"] = tree_hash(wt, files)
+        job = {"id": self.id, "root": wt, "cwd": os.getcwd(), "files": files, "tree": tree, "argv": o.command,
+               "tools": {k: list(v) for k, v in prof["tools"].items()}}
+        tar_bytes = archive(wt, common, files, {"tmp/%s/job.json" % self.id: json.dumps(job).encode(),
+                                                "tmp/%s/kgate.py" % self.id: open(os.path.realpath(__file__), "rb").read()})
+        self.note("%s %s tree %s, %d files, %.1f MB" % (self.rec["repo"], (self.rec["head"] or "no HEAD")[:12], tree[:12], len(files), len(tar_bytes) / 1e6))
+        self.reachable()
+        self.sweep()
+        secret_env = {k: op_read(ref) for k, ref in prof["secrets"].items()}
+        host = image.split("/")[0]
+        pull = None
+        if host in PULL:
+            pull = (host, PULL[host][0], op_read(PULL[host][1]))
+        self.note("pod %s on %s: image %s, %d cpu, %s" % (self.id, o.node or "any node", image.split("@")[0], cpu, mem))
+        self.start_pod(pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull))
+        del secret_env, pull
+        self.note("pod running on %s" % self.rec["node"])
+        seen, transport = self.execute(tar_bytes)
+        self.rec["ran"] = "running" in seen
+        peak = seen.get("peak", "").split()
+        if peak and peak[0].isdigit():
+            self.rec["peak_bytes"], self.rec["peak_source"] = int(peak[0]), (peak[1] if len(peak) > 1 else None)
+        if "hash" in seen and seen["hash"].startswith("MISMATCH"):
+            raise Unavailable("tree hash differs: " + seen["hash"].replace("MISMATCH", "").strip() + " (CMD not run)")
+        if seen.get("preflight", "").startswith("FAILED"):
+            raise Unavailable("tool version differs: " + seen["preflight"][len("FAILED"):].strip() + " (CMD not run)")
+        m = re.fullmatch(r"\d+ exit (\d+)", seen.get("end", ""))
+        if "running" not in seen or not m:
+            raise Unavailable("lost the pod before CMD finished (kubectl exit %d); the result is unknown and the job is not rerun" % transport)
+        code = int(m.group(1))
+        if transport != code:
+            raise Unavailable("kubectl exited %d but CMD reported %d; not trusted" % (transport, code))
+        return code
+
+    def finish(self, code, reason):
+        end = time.time()
+        self.rec.update({"end": utc(end), "duration_s": round(end - self.t0, 3), "exit": code, "reason": reason})
+        with open(os.path.join(self.state, "log.jsonl"), "a") as f:
+            f.write(json.dumps(self.rec) + "\n")
+        self.note("exit %d%s node=%s peak=%s log=%s" % (code, " (" + reason + ")" if reason else "", self.rec["node"],
+                                                        self.rec["peak_bytes"], self.logpath))
+
+
+def parse_args(argv):
+    if "--" not in argv:
+        raise SystemExit(USAGE_TEXT)
+    cut = argv.index("--")
+    p = argparse.ArgumentParser(prog="kgate", add_help=False)
+    p.add_argument("--profile")
+    p.add_argument("--wait", type=int, default=3600)
+    p.add_argument("--cpu", type=int)
+    p.add_argument("--mem")
+    p.add_argument("--image")
+    p.add_argument("--node")
+    try:
+        opts = p.parse_args(argv[:cut])
+    except SystemExit:
+        raise SystemExit(USAGE_TEXT)
+    opts.command = argv[cut + 1:]
+    if not opts.command:
+        raise SystemExit(USAGE_TEXT)
+    return opts
+
+
+USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]\n" \
+             "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac). See docs/kgate.md."
+
+
+def main(argv):
+    if argv[:1] in (["-h"], ["--help"]):
+        print(__doc__.strip())
+        return 0
+    if argv[:1] == ["--pod"]:
+        return pod_main(argv[1])
+    try:
+        opts = parse_args(argv)
+    except SystemExit as e:
+        print(e.code if isinstance(e.code, str) else USAGE_TEXT, file=sys.stderr)
+        return USAGE
+    job = Job(opts)
+
+    def interrupted(signum, _frame):
+        raise KeyboardInterrupt(signal.Signals(signum).name, signum)
+    signal.signal(signal.SIGTERM, interrupted)
+    code, reason, started = UNAVAILABLE, None, False
+    try:
+        code = job.run()
+        started = True
+    except Unavailable as e:
+        reason = str(e)
+        job.note("%s; exit 69, CMD was not run on this Mac" % reason)
+    except KeyboardInterrupt as e:
+        reason = "interrupted (%s)" % (e.args[0] if e.args else "SIGINT")
+        job.note(reason)
+        code = 128 + (e.args[1] if len(e.args) > 1 else signal.SIGINT)
+    except Exception as e:  # a bug in kgate itself must not turn into a Mac run or a silent pass
+        reason = "kgate error: %s: %s" % (type(e).__name__, e)
+        job.note(reason)
+    finally:
+        try:
+            if job.rec["ran"] or started:
+                job.fetch_out()
+        except Exception as e:
+            job.note("could not copy /out back: %s" % e)
+        try:
+            job.cleanup()
+        except Exception as e:
+            job.note("cleanup failed: %s" % e)
+    job.finish(code, reason)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
