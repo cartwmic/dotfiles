@@ -225,6 +225,18 @@ class PlistShapeTest(unittest.TestCase):
             self.assertTrue(p["EnvironmentVariables"]["AGENT_TRACES_DIR"].startswith(str(c.home) + "/.local/share/agent-traces-"))
             self.assertNotIn("AGENT_EVENTS_IMPLEMENTATION", p["EnvironmentVariables"])
 
+    def test_no_arm_names_a_node(self):
+        """The ts and seed arms reach node only through the wrapper (which prefers mise's shim: under launchd an install-path node hangs on the
+        external disk). No arm sets AGENT_TRACES_NODE or a PATH, and nothing in a plist names a node binary."""
+        c = Chezmoi(self)
+        for kind in ARMS:
+            with self.subTest(kind=kind):
+                p = c.plist(kind)
+                self.assertNotIn("AGENT_TRACES_NODE", p["EnvironmentVariables"])
+                self.assertNotIn("PATH", p["EnvironmentVariables"])
+                self.assertNotIn("/mise/installs/", json.dumps(p))
+                self.assertNotRegex(json.dumps(p["ProgramArguments"]), r"/node\b")
+
     def test_py_runs_the_shim_into_shadow_py_run_with_its_own_data_dir(self):
         c = Chezmoi(self)
         p = c.plist("py")

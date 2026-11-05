@@ -14,13 +14,16 @@ if [ ! -f "$cli" ]; then
 {{- end }}
   exit 3
 fi
-# Which node: AGENT_TRACES_NODE, else node on PATH, else mise's shim (launchd's PATH has no node). Exit 3 for no node or one below the floor,
-# the same code as "not installed here"; the kit needs node:sqlite (22.19 or later, kit CONTRACT.md "The wrapper").
+# Which node: AGENT_TRACES_NODE, else mise's shim when it is there, else node on PATH. The shim comes before PATH on purpose: under launchd,
+# macOS blocks a node started from its install path (mise/installs/node/<ver>/bin/node, which launchd's PATH names) on the external disk
+# (/Volumes/Workshop) with no prompt and no log, while the same read through the shim is attributed to mise, which holds the Removable Volumes grant.
+# The shim resolves the node version itself. Exit 3 for no node or one below the floor, the same code as "not installed here";
+# the kit needs node:sqlite (22.19 or later, kit CONTRACT.md "The wrapper").
 node="${AGENT_TRACES_NODE:-}"
+[ -n "$node" ] || { [ -x "$HOME/.local/share/mise/shims/node" ] && node="$HOME/.local/share/mise/shims/node"; }
 [ -n "$node" ] || node="$(command -v node || true)"
-[ -n "$node" ] || node="$HOME/.local/share/mise/shims/node"
 if [ ! -x "$node" ]; then
-  echo "agent-traces: no node found (looked at AGENT_TRACES_NODE, PATH and $HOME/.local/share/mise/shims/node); the kit needs node 22.19 or later" >&2
+  echo "agent-traces: no node found (looked at AGENT_TRACES_NODE, $HOME/.local/share/mise/shims/node and PATH); the kit needs node 22.19 or later" >&2
   echo "agent-traces: install it with mise, or set AGENT_TRACES_NODE to a node binary" >&2
   exit 3
 fi
