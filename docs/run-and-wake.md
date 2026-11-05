@@ -18,6 +18,7 @@ Source: `dot_local/bin/executable_run-and-wake` (Python 3, standard library only
 ## Contract
 
 - **Detached.** A watcher process in its own session (`fork` plus `setsid`) starts the job and waits for it. Ending the launching tool call, which kills that call's process group, ends neither, even if it happens before the watcher reports the pid to the launcher. The job's stdout and stderr go to `jobs/<id>.log`; a watcher crash prints its traceback there too.
+- **The job knows its id.** The job's environment has `RUN_AND_WAKE_JOB=<job id>`, so a tool it runs (kgate) can key its own record by the same id.
 - **Any exit wakes.** Exit 0, a failure, heavy-gate's 75 (gave up waiting), a signal (`killed by SIGTERM`) and a command that could not start (exit 127) all wake.
 - **Starting session, best effort.** At launch it captures `HERDR_PANE_ID` and `PI_SESSION_FILE` (Pi sets both on every bash call). At exit it asks `herdr agent get <pane>` and sends only if, at check time, that pane shows the same session file. Compaction keeps the session file, so it still wakes; a `/new` or a resume before the check does not.
 - **The check/send window (accepted by Michael, ask #347, 2026-10-29).** herdr's prompt targets a pane, not a session, so the check and the send are two calls milliseconds apart. A `/new` in that window can put the message in the new session. This is not prevented. The pane's session is read again right after the send, and the `wake` record carries `session_after` when it differs.

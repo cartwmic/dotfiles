@@ -178,7 +178,7 @@ def watch(job, cmd, output, pane, session, thread, report):
     started = time.monotonic()
     with open(output, "ab", buffering=0) as out:
         try:
-            child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
+            child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env={**os.environ, "RUN_AND_WAKE_JOB": job})
         except OSError as error:
             record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=None, output=output)
             tell(report, f"failed {error}")
