@@ -320,7 +320,7 @@ class ImportTests(Fixture):
         self.release("v1.0.0", {"README.md": b"x\n"})
         self.assertEqual(self.do_import().returncode, 1)
 
-    def test_pins_move_with_the_import_and_only_the_four_tool_lines(self):
+    def test_pins_move_with_the_import_and_only_the_five_tool_lines(self):
         config = self.source / "dot_config/mise/config.toml"
         original = (
             'gh = "latest"\n'
@@ -328,6 +328,7 @@ class ImportTests(Fixture):
             'lean-change = { version = "0.9.0", matching_regex = "^lean-change-provider-", rename_exe = "lean-change" }\n'
             'policy-document = { version = "0.9.0", matching_regex = "^policy-document-provider-", rename_exe = "policy-document" }\n'
             'research = { version = "0.9.0", matching_regex = "^research-provider-", rename_exe = "research" }\n'
+            'bookends-check = { version = "0.9.0", matching_regex = "^bookends-check-", rename_exe = "bookends-check" }\n'
             'other = { version = "0.9.0" }\n'
         )
         config.write_text(original)
@@ -337,7 +338,28 @@ class ImportTests(Fixture):
         self.assertEqual(config.read_text(), original.replace('version = "0.9.0", matching', 'version = "1.0.0", matching'))
         self.assertIn('other = { version = "0.9.0" }', config.read_text())
 
-    def test_pins_refuse_a_config_that_does_not_have_the_four_lines(self):
+    def test_pins_move_the_bookends_check_pin(self):
+        config = self.source / "dot_config/mise/config.toml"
+        line = 'bookends-check = { version = "%s", matching_regex = "^bookends-check-", rename_exe = "bookends-check" }\n'
+        others = "".join(
+            '%s = { version = "0.9.0", matching_regex = "^%s-", rename_exe = "%s" }\n' % (n, n, n)
+            for n in ("loop-engine", "lean-change", "policy-document", "research")
+        )
+        config.write_text(others + line % "0.9.0")
+        self.assertEqual(self.do_import("--pins", "--apply", "--prune").returncode, 0)
+        self.assertIn(line % "1.0.0", config.read_text())
+
+    def test_pins_refuse_a_config_without_the_bookends_check_pin(self):
+        config = self.source / "dot_config/mise/config.toml"
+        config.write_text("".join(
+            '%s = { version = "0.9.0", matching_regex = "^%s-", rename_exe = "%s" }\n' % (n, n, n)
+            for n in ("loop-engine", "lean-change", "policy-document", "research")
+        ))
+        result = self.do_import("--pins", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("found 4", result.stderr)
+
+    def test_pins_refuse_a_config_that_does_not_have_the_five_lines(self):
         (self.source / "dot_config/mise/config.toml").write_text('gh = "latest"\n')
         result = self.do_import("--pins", "--apply")
         self.assertEqual(result.returncode, 1)
