@@ -191,6 +191,13 @@ class RunAndWake(unittest.TestCase):
                 text = next(p["text"] for p in self.prompts() if f"k:{job}]" in p["text"])
                 self.assertIn(f"job finished: {said}", text)
 
+    def test_the_job_sees_its_own_id_in_RUN_AND_WAKE_JOB(self):
+        # kgate keys its record by it, so a record can be joined to this log by id
+        out = self.root / "seen-id"
+        job = self.job_id(self.launch("--", "sh", "-c", f'printf %s "$RUN_AND_WAKE_JOB" > {out}'))
+        self.replay(job)
+        self.assertEqual(out.read_text(), job)
+
     def test_a_killed_job_still_wakes(self):
         cmd, _ = self.held_job()
         result = self.launch("--", *cmd)

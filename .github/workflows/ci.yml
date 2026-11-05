@@ -58,6 +58,8 @@ jobs:
           python3 -m unittest discover -s tests/zshenv-op-token -v
       - name: heavy-gate tests (fake host figures, any OS)
         run: python3 -m unittest discover -s tests/heavy-gate -v
+      - name: kgate tests (tree hash against real git; the client against a fake ssh cluster and fake op)
+        run: python3 -m unittest discover -s tests/kgate -v
       - name: run-and-wake tests (fake herdr, real detach, real heavy-gate)
         run: python3 -m unittest discover -s tests/run-and-wake -v
       - name: workstream-rank tests (golden fixture, real script)
