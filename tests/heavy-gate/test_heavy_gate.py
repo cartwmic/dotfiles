@@ -78,10 +78,13 @@ class HeavyGate(unittest.TestCase):
             (self.fake / key).write_text(value + "\n")
 
     def gate(self, *args, timeout=30, script=SCRIPT, **extra):
+        extra.setdefault("cwd", self.tmp.name)   # see start()
         return subprocess.run(["sh", str(script), *args], env={**self.env, **extra.pop("env", {})}, text=True, capture_output=True, timeout=timeout, **extra)
 
     def start(self, *args, script=SCRIPT, env=None, cwd=None):
-        return subprocess.Popen(["sh", str(script), *args], env={**self.env, **(env or {})}, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        # A job runs in the test's temp dir unless the test names one: priority rules match the directory, so the checkout's path
+        # (for example one with "coordinator" in it) must not decide a job's number.
+        return subprocess.Popen(["sh", str(script), *args], env={**self.env, **(env or {})}, cwd=cwd or self.tmp.name, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 start_new_session=True)
 
     def hold(self, name, script=SCRIPT, env=None, cwd=None):
