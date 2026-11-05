@@ -80,9 +80,9 @@ services = ["docker"]                            # optional; see below
 
 - **Tools.** The pod runs the command and the expected version must appear in its output as a whole version (`1.98.0` does not match `11.98.0` or `1.98.01`). Any tool with a version command fits without changing kgate: `cargo`, `rustc`, `helm`, `kustomize`, `ansible-lint`, `python3`.
 - **Secrets.** Read with `op read` on this Mac at run time into a temporary pod Secret and passed as environment variables. Never in the image, a profile value or the log. If `op read` fails the job exits 69.
-- **Services.** If the gate needs something the image cannot provide (Docker, a database), list it. kgate refuses the job with 69 and the gate stays on the Mac.
+- **Services.** If the gate needs something the image cannot provide (Docker, a database), list it. kgate refuses the job with 69; that gate is not a kgate gate.
 - **Image pull.** The image registry `ghcr.io` is private; kgate reads the 1Password item `kgate-github-packages-read` for each job's temporary pull Secret (expires about 2026-12-02; see the homelab `docs/kgate.md`).
-- The image needs `python3` (3.11 or later) and `git`: the same script runs in the pod to verify the hash and check versions.
+- The image needs `python3` (3.11 or later): the same script runs in the pod to verify the hash and check versions. The version commands run in the job's directory, so per-directory tools (rustup with a `rust-toolchain.toml`) report what CMD will use. `git` is needed when the gate itself uses it.
 
 ## Switching a gate: the parity run
 

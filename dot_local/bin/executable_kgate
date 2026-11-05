@@ -187,13 +187,14 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull):
     return {"apiVersion": "v1", "kind": "List", "items": items}
 
 
-MARKER = re.compile(r"kgate: (start|running|peak|end|hash|preflight)\b(.*)")
+MARKER = r"kgate\[%s\]: (start|running|peak|end|hash|preflight)\b(.*)"
 
 
 class Markers:
     """Reads the pod's marker lines out of the byte stream CMD and the pod share."""
 
-    def __init__(self):
+    def __init__(self, job):
+        self.pattern = re.compile(MARKER % re.escape(job))
         self.buf = ""
         self.seen = {}
 
@@ -209,7 +210,7 @@ class Markers:
             self.buf = ""
 
     def _line(self, line):
-        m = MARKER.fullmatch(line.rstrip("\r"))
+        m = self.pattern.fullmatch(line.rstrip("\r"))
         if m:
             self.seen[m.group(1)] = m.group(2).strip()
 
@@ -251,7 +252,8 @@ def pod_main(jobfile):
     """Inside the pod: verify the tree hash, check the tool versions, run CMD, report peak memory and its exit code."""
     with open(jobfile) as f:
         job = json.load(f)
-    out = lambda text: (sys.stdout.write(text), sys.stdout.flush())
+    tag = "kgate[%s]" % job["id"]
+    out = lambda text: (sys.stdout.write(text.replace("kgate:", tag + ":", 1)), sys.stdout.flush())
     out("kgate: start %d node=%s cpus=%d\n" % (time.time(), os.environ.get("KGATE_NODE", "?"), os.cpu_count() or 0))
     found = tree_hash(job["root"], job["files"])
     if found != job["tree"]:
@@ -260,7 +262,7 @@ def pod_main(jobfile):
     out("kgate: hash ok %s\n" % found)
     for name, (version, cmd) in job["tools"].items():
         cmd = cmd or name + " --version"
-        run = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+        run = subprocess.run(cmd, shell=True, cwd=job["cwd"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         text = run.stdout or ""
         if run.returncode != 0 or not version_found(text, version):
             line = next((x.strip() for x in text.splitlines() if x.strip()), "no output")
@@ -400,7 +402,7 @@ class Job:
         mem = o.mem or prof["memory"] or "4Gi"
         check_settings(image, cpu, mem)
         if prof["services"]:
-            raise Unavailable("the gate needs %s, which kgate cannot provide; this gate stays on the Mac" % ", ".join(prof["services"]))
+            raise Unavailable("the gate needs %s, which kgate cannot provide; this gate cannot run on kgate" % ", ".join(prof["services"]))
         if o.node and o.node in EXCLUDED_NODES:
             raise Unavailable("node %s is excluded from kgate" % o.node)
         self.rec.update(image=image, cpu=cpu, mem=mem)
@@ -465,7 +467,7 @@ class Job:
         os.close(write)
         feeder = threading.Thread(target=lambda: self._send(proc, tar_bytes), daemon=True)
         feeder.start()
-        markers = Markers()
+        markers = Markers(self.id)
         try:
             with os.fdopen(read, "rb", buffering=0) as stream:
                 for chunk in iter(lambda: stream.read(65536), b""):
@@ -598,7 +600,7 @@ def main(argv):
     job = Job(opts)
 
     def interrupted(signum, _frame):
-        raise KeyboardInterrupt(signal.Signals(signum).name)
+        raise KeyboardInterrupt(signal.Signals(signum).name, signum)
     signal.signal(signal.SIGTERM, interrupted)
     code, reason, started = UNAVAILABLE, None, False
     try:
@@ -610,7 +612,7 @@ def main(argv):
     except KeyboardInterrupt as e:
         reason = "interrupted (%s)" % (e.args[0] if e.args else "SIGINT")
         job.note(reason)
-        code = 130
+        code = 128 + (e.args[1] if len(e.args) > 1 else signal.SIGINT)
     except Exception as e:  # a bug in kgate itself must not turn into a Mac run or a silent pass
         reason = "kgate error: %s: %s" % (type(e).__name__, e)
         job.note(reason)
