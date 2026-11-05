@@ -20,6 +20,9 @@
     <key>AGENT_EVENTS_IMPLEMENTATION</key><string>{{ .chezmoi.homeDir }}/.local/share/agent-events/shadow_py_run.py</string>
     <key>AGENT_EVENTS_STATE_DIR</key><string>{{ .chezmoi.homeDir }}/.local/state/agent-traces-shadow-py</string>
     <key>XDG_DATA_HOME</key><string>{{ .chezmoi.homeDir }}/.local/share/agent-traces-shadow-py/data</string>
+    <!-- mise's data dir defaults to $XDG_DATA_HOME/mise, which the line above moves. The agent-events shim's python3 is mise's shim
+         (~/.local/share/mise/shims/python3), so keep mise pointed at its real installs. -->
+    <key>MISE_DATA_DIR</key><string>{{ .chezmoi.homeDir }}/.local/share/mise</string>
   </dict>
   <key>StandardOutPath</key><string>{{ .chezmoi.homeDir }}/.local/state/agent-traces-shadow-py/launchd.out</string>
   <key>StandardErrorPath</key><string>{{ .chezmoi.homeDir }}/.local/state/agent-traces-shadow-py/launchd.err</string>
