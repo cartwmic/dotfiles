@@ -1,0 +1,27 @@
+{{- $agentEvents := includeTemplate "agent_events_config" . | fromJson -}}
+{{- $shadow := includeTemplate "agent_traces_shadow_config" . | fromJson -}}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Traces stage 2 shadow, TS arm (docs/profiles.md; chezmoi data agentTracesShadow). The agent-kit port sending under its own test label,
+       with its own state dir and database, and without the cache gauges (the per-session cache alerts would fire twice for one session).
+       Nothing here is a production path. -->
+  <key>Label</key><string>local.agent-traces-shadow</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/sh</string><string>{{ .chezmoi.homeDir }}/.local/bin/agent-traces</string><string>pi</string><string>run</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>120</integer>
+  <key>Nice</key><integer>10</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AGENT_EVENTS_OTLP_ENDPOINT</key><string>{{ $agentEvents.endpoint }}</string>
+    <key>AGENT_EVENTS_MACHINE</key><string>{{ $shadow.machine }}-ts</string>
+    <key>AGENT_EVENTS_CACHE_GAUGES</key><string>0</string>
+    <key>AGENT_EVENTS_STATE_DIR</key><string>{{ .chezmoi.homeDir }}/.local/state/agent-traces-shadow</string>
+    <key>AGENT_TRACES_DIR</key><string>{{ .chezmoi.homeDir }}/.local/share/agent-traces-shadow</string>
+  </dict>
+  <key>StandardOutPath</key><string>{{ .chezmoi.homeDir }}/.local/state/agent-traces-shadow/launchd.out</string>
+  <key>StandardErrorPath</key><string>{{ .chezmoi.homeDir }}/.local/state/agent-traces-shadow/launchd.err</string>
+</dict>
+</plist>

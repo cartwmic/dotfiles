@@ -1,20 +1,56 @@
-{{- /* agent_traces_shadow_config: the traces stage 2 shadow tooling's setting as JSON {"enabled"}. Local chezmoi data agentTracesShadow:
+{{- /* agent_traces_shadow_config: the traces stage 2 shadow tooling's setting as JSON {"enabled", "machine", "arm"}. Local chezmoi data agentTracesShadow:
   enabled   true or false. Default: true on the personal profile, false everywhere else (the work Mac gets the shadow tooling only when
             the owner sets it there; nothing runs on it until then).
-Gates shadow_py_run.py, cache_ref.py and reference.sha256 in .chezmoiignore: the Python control arm's entry and the cache-gauge oracle, deployed
-beside the frozen collector files. Any other key or value fails the whole render, so a typo applies nothing. */ -}}
+  machine   the test label the TS and Python arms send under, with -ts and -py added: test-personal gives test-personal-ts and test-personal-py.
+            A lowercase "test-" then 1 to 24 of a-z, 0-9, - (so label plus suffix stays a valid agent-events machine label). Default: test-personal on
+            the personal profile, test-work on axon-work-computer, none elsewhere (then required when enabled). The seed arm is always test-seed.
+  arm       the arms to install, a list of ts, py and seed. Default: all three while agentKit.enabled is true, else py only. The ts and seed arms
+            run the agent-kit port, so naming one here fails the render when agentKit.enabled is false on this machine; py alone does not need the kit.
+Gates, in .chezmoiignore: shadow_py_run.py, cache_ref.py and reference.sha256 (the Python control arm's entry and the cache-gauge oracle, deployed
+beside the frozen collector files) when enabled; and the three LaunchAgents local.agent-traces-shadow (ts), local.agent-traces-shadow-py (py) and
+local.agent-traces-seed (seed), with their load script, by arm. Any other key or value fails the whole render, so a typo applies nothing. */ -}}
 {{- $raw := dig "agentTracesShadow" dict . -}}
 {{- if not (kindIs "map" $raw) -}}
-{{-   fail (printf "agentTracesShadow must be a map with enabled, got %q" (printf "%v" $raw)) -}}
+{{-   fail (printf "agentTracesShadow must be a map with enabled, machine and arm, got %q" (printf "%v" $raw)) -}}
 {{- end -}}
 {{- range $k, $_ := $raw -}}
-{{-   if ne $k "enabled" -}}
-{{-     fail (printf "agentTracesShadow.%s is not a setting (enabled)" $k) -}}
+{{-   if not (has $k (list "enabled" "machine" "arm")) -}}
+{{-     fail (printf "agentTracesShadow.%s is not a setting (enabled, machine, arm)" $k) -}}
 {{-   end -}}
 {{- end -}}
-{{- $on := printf "%v" (eq (printf "%v" (dig "profile" "" .)) "personal") -}}
+{{- $profile := printf "%v" (dig "profile" "" .) -}}
+{{- $on := printf "%v" (eq $profile "personal") -}}
 {{- if hasKey $raw "enabled" -}}{{- $on = printf "%v" (get $raw "enabled") -}}{{- end -}}
 {{- if not (has $on (list "true" "false")) -}}
 {{-   fail (printf "agentTracesShadow.enabled must be true or false, got %q" $on) -}}
 {{- end -}}
-{{- dict "enabled" (eq $on "true") | toJson -}}
+{{- $machine := get (dict "personal" "test-personal" "axon-work-computer" "test-work") $profile -}}
+{{- if hasKey $raw "machine" -}}{{- $machine = printf "%v" (get $raw "machine") -}}{{- end -}}
+{{- if and (eq $on "true") (eq $machine "") -}}
+{{-   fail (printf "agentTracesShadow.machine is required when agentTracesShadow.enabled is true (profile %q has no default)" $profile) -}}
+{{- end -}}
+{{- if and (ne $machine "") (not (regexMatch "^test-[a-z0-9-]{1,24}$" $machine)) -}}
+{{-   fail (printf "agentTracesShadow.machine must be \"test-\" then 1 to 24 of a-z, 0-9, -, got %q" $machine) -}}
+{{- end -}}
+{{- $kit := (includeTemplate "agent_kit_config" . | fromJson).enabled -}}
+{{- $want := list "py" -}}
+{{- if $kit -}}{{- $want = list "ts" "py" "seed" -}}{{- end -}}
+{{- if hasKey $raw "arm" -}}
+{{-   $given := get $raw "arm" -}}
+{{-   if not (kindIs "slice" $given) -}}
+{{-     fail (printf "agentTracesShadow.arm must be a list of ts, py, seed, got %q" (printf "%v" $given)) -}}
+{{-   end -}}
+{{-   range $a := $given -}}
+{{-     if not (has $a (list "ts" "py" "seed")) -}}
+{{-       fail (printf "agentTracesShadow.arm has %q, which is not an arm (ts, py, seed)" (printf "%v" $a)) -}}
+{{-     end -}}
+{{-   end -}}
+{{-   $want = list -}}
+{{-   range $a := (list "ts" "py" "seed") -}}
+{{-     if has $a $given -}}{{- $want = append $want $a -}}{{- end -}}
+{{-   end -}}
+{{- end -}}
+{{- if and (eq $on "true") (or (has "ts" $want) (has "seed" $want)) (not $kit) -}}
+{{-   fail "agentTracesShadow.arm has ts or seed but agentKit.enabled is false on this machine: those arms run the kit's wrapper (set arm: [py] or turn agentKit on)" -}}
+{{- end -}}
+{{- dict "enabled" (eq $on "true") "machine" $machine "arm" $want | toJson -}}

@@ -1,0 +1,63 @@
+#!/bin/sh
+# Traces stage 2 shadow agents (docs/profiles.md; chezmoi data agentTracesShadow). macOS only, and only while agentTracesShadow.enabled is true
+# (default: personal profile only) or one of the three plists is still installed (.chezmoiignore).
+#   local.agent-traces-shadow     the TS arm: loaded here, every 2 minutes, under the label <machine>-ts
+#   local.agent-traces-shadow-py  the Python control arm: its plist is installed, NOT loaded here
+#   local.agent-traces-seed       the throwaway seed arm: its plist is installed, NOT loaded here
+# The control and seed arms are started by hand, one at a time, each after the previous arm's status.json shows last_build_ok_ts and after
+# `traces pi proof arm-check` passes on the installed plist (plan 3.3, n11): launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
+# An arm that is not wanted (setting off, or left out of agentTracesShadow.arm) is unloaded and its plist removed, so ending the shadow is
+# agentTracesShadow.enabled: false and an apply. Its state and database directories are left alone.
+# plist ts: {{ include "Library/LaunchAgents/local.agent-traces-shadow.plist.tmpl" | sha256sum }}
+# plist py: {{ include "Library/LaunchAgents/local.agent-traces-shadow-py.plist.tmpl" | sha256sum }}
+# plist seed: {{ include "Library/LaunchAgents/local.agent-traces-seed.plist.tmpl" | sha256sum }}
+# setting: {{ includeTemplate "agent_traces_shadow_config" . }}
+# endpoint: {{ (includeTemplate "agent_events_config" . | fromJson).endpoint }}
+set -eu
+log() { printf '[agent_traces_shadow_launchd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Darwin ] || exit 0
+uid=$(id -u)
+rc=0
+
+# unload LABEL: unload the job, then remove its plist. A failed unload keeps the plist and fails the apply, so the next apply runs this again.
+unload() {
+  launchctl bootout "gui/$uid/$1" >/dev/null 2>&1 || :
+  if launchctl print "gui/$uid/$1" >/dev/null 2>&1; then
+    log ERROR "could not unload $1; try: launchctl bootout gui/$uid/$1, then chezmoi apply again"
+    rc=1
+    return 0
+  fi
+  rm -f "$HOME/Library/LaunchAgents/$1.plist"
+  log INFO "$1 is not wanted: unloaded and its plist removed"
+}
+{{- $shadow := includeTemplate "agent_traces_shadow_config" . | fromJson }}
+{{- $arms := dict "ts" (dict "label" "local.agent-traces-shadow" "state" "agent-traces-shadow") "py" (dict "label" "local.agent-traces-shadow-py" "state" "agent-traces-shadow-py") "seed" (dict "label" "local.agent-traces-seed" "state" "agent-traces-seed") }}
+{{- range $name := list "ts" "py" "seed" }}
+{{-   $arm := get $arms $name }}
+{{-   if and $shadow.enabled (has $name $shadow.arm) }}
+
+# {{ $name }} arm: {{ $arm.label }}
+mkdir -p "$HOME/.local/state/{{ $arm.state }}"
+{{-     if eq $name "ts" }}
+plist="$HOME/Library/LaunchAgents/{{ $arm.label }}.plist"
+if [ -f "$plist" ]; then
+  launchctl bootout "gui/$uid/{{ $arm.label }}" >/dev/null 2>&1 || true
+  if launchctl bootstrap "gui/$uid" "$plist"; then
+    log INFO "loaded {{ $arm.label }} (every 2 minutes, label {{ $shadow.machine }}-ts)"
+  else
+    log WARN "could not load {{ $arm.label }} (no GUI session?); load it later: launchctl bootstrap gui/$uid $plist"
+  fi
+else
+  log WARN "$plist is not installed yet"
+fi
+{{-     else }}
+log INFO "{{ $arm.label }} plist is installed, not loaded: start it by hand after arm-check passes (launchctl bootstrap gui/$uid ~/Library/LaunchAgents/{{ $arm.label }}.plist)"
+{{-     end }}
+{{-   else }}
+
+# {{ $name }} arm: {{ $arm.label }} is not wanted
+unload {{ $arm.label }}
+{{-   end }}
+{{- end }}
+exit "$rc"
