@@ -105,4 +105,4 @@ Personal only: kgate uses the personal homelab cluster (`.chezmoiignore`; row in
 
 ## Gates in this repo
 
-`kgate.toml` is the profile of the dotfiles heavy suites (`tests/heavy-gate`, `tests/workstream-rank`); the command is in `AGENTS.md`. Parity at 141c0d04 on the Mac and on agent-1: 115 + 35 tests, OK on both (Mac 571.8 s, kgate 466.6 s + 0.2 s). The first runs on the G14 failed on process-table and clock tests; the G14's clock steps back (see above), and with it excluded the suite passes.
+`kgate.toml` is the profile of the dotfiles heavy suites (`tests/heavy-gate`, `tests/workstream-rank`); the command is in `AGENTS.md`. Parity at 141c0d04 on the Mac and on agent-1: 115 + 35 tests, OK on both (tests only: Mac 550.7 s, kgate 466.6 s; 2 tests skip on kgate because the image has no chezmoi, CI runs them). The first runs on the G14 failed on process-table and clock tests; the G14's clock steps back (see above), and with it excluded the suite passes.

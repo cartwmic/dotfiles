@@ -250,7 +250,7 @@ Done means all of the following that apply:
   destination passed. Mark failed, skipped, or unavailable checks blocked or
   pending with a reason; do not describe unverified behavior as done. For ignored
   source-only docs, confirm they remain ignored; there is no live target to preview.
-- The heavy suites, `tests/heavy-gate` (about 9 minutes) and `tests/workstream-rank`, run on the cluster, not on this Mac: `run-and-wake -- kgate -- sh -c 'export PYTHONDONTWRITEBYTECODE=1; python3 -m unittest discover -s tests/heavy-gate && python3 -m unittest discover -s tests/workstream-rank'` (profile `kgate.toml`, moved there 2026-11-05 after a parity run matched; contract in `docs/kgate.md`). Undo: run the same commands under `heavy-gate --wait 7200 --` on the Mac. Other suites run directly.
+- On the personal Mac (the work profile has no kgate), the heavy suites, `tests/heavy-gate` (about 9 minutes) and `tests/workstream-rank`, run on the cluster, not on this Mac: `run-and-wake -- kgate -- sh -c 'export PYTHONDONTWRITEBYTECODE=1; python3 -m unittest discover -s tests/heavy-gate && python3 -m unittest discover -s tests/workstream-rank'` (profile `kgate.toml`, moved there 2026-11-05 after a parity run matched; contract in `docs/kgate.md`). Undo: run the same commands under `heavy-gate --wait 7200 --` on the Mac. Other suites run directly.
 - A real `chezmoi apply` ran only with explicit user approval. If verification
   requires materializing and approval is absent, name that check as pending.
 - No commit or push unless the user asked.
