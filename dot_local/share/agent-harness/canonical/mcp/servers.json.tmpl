@@ -75,10 +75,10 @@
     "incident-io": {
       "type": "http",
       "url": "${INCIDENT_IO_MCP_URL}"
-    },
+    }{{ $_ := includeTemplate "require_work_data" . }}{{ if hasKey . "workDevportalMcpUrlRef" }},
     "work-devportal": {
       "type": "http",
       "url": "${WORK_DEVPORTAL_MCP_URL}"
-    }{{ end }}
+    }{{ end }}{{ end }}
   }
 }

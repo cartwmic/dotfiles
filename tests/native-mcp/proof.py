@@ -32,6 +32,11 @@ PRIVATE = "PRIVATE_NESTED_RESULT_SENTINEL"
 ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 
 
+# The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
+WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
+             "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
+
+
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
@@ -284,7 +289,7 @@ def render_settings(profile, temp):
     op = fake_bin / "op"
     op.write_text("#!/bin/sh\nprintf '%s\\n' '{\"models\": []}'\n")
     op.chmod(0o700)
-    data = {"profile": profile, "workGlmBaseUrl": "https://workrelay.proof", "workGlmKeyRef": "op://proof/workrelay/credential"}
+    data = {"profile": profile, **WORK_DATA}
     result = subprocess.run(["chezmoi", "--source", str(ROOT), "--override-data", json.dumps(data),
                              "cat", str(Path.home() / ".pi/agent/settings.json")],
                             env={**os.environ, "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"]},
@@ -304,7 +309,7 @@ def generator_proof(temp, env, agent):
     manual = {"url": "http://127.0.0.1:9/mcp", "enabled": False, "exposure": "direct"}
     ticktick = {"type": "http", "url": "https://mcp.ticktick.com"}
     for profile in ("personal", "axon-work-computer"):
-        rendered = subprocess.run(["chezmoi", "--source", str(ROOT), "--override-data", json.dumps({"profile": profile}),
+        rendered = subprocess.run(["chezmoi", "--source", str(ROOT), "--override-data", json.dumps({"profile": profile, **(WORK_DATA if profile == "axon-work-computer" else {})}),
                                    "execute-template"], input=(ROOT / "dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl").read_text(),
                                   text=True, capture_output=True, check=True, timeout=TIMEOUT)
         servers = json.loads(rendered.stdout)["mcpServers"]

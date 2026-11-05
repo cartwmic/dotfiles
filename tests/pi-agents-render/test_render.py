@@ -16,9 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "dot_pi" / "private_agent" / "literal_AGENTS.md.tmpl"
 # Work-profile-only section, included right after the heading block.
-PLAYBOOK_SECTION = (
-    ROOT / "dot_local" / "share" / "agent-harness" / "canonical" / "instructions" / "axon-playbook.md"
-).read_text(encoding="utf-8").rstrip("\n") + "\n\n"
+PLAYBOOK_TEMPLATE = ROOT / "dot_local" / "share" / "agent-harness" / "canonical" / "instructions" / "axon-playbook.md.tmpl"
 
 INSTR = ROOT / "dot_local" / "share" / "agent-harness" / "canonical" / "instructions"
 # Profile rule fragments, each included for one profile right after the playbook position.
@@ -50,16 +48,25 @@ that stays silent. Report progress on a separate `Status:` line.
 """
 
 
-def render(profile):
+# The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
+WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
+             "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
+
+
+def render(profile, template=None):
     with tempfile.TemporaryDirectory() as home:
         config = Path(home) / "chezmoi.yaml"
         config.write_text("{}\n")  # no hooks from the developer's own config
         result = subprocess.run(
-            ["chezmoi", "--source", str(ROOT), "--config", str(config), "execute-template", "--override-data", json.dumps({"profile": profile})],
-            input=TEMPLATE.read_text(encoding="utf-8"), capture_output=True, text=True, timeout=120,
+            ["chezmoi", "--source", str(ROOT), "--config", str(config), "execute-template", "--override-data", json.dumps({"profile": profile, **(WORK_DATA if profile == "axon-work-computer" else {})})],
+            input=(template or TEMPLATE).read_text(encoding="utf-8"), capture_output=True, text=True, timeout=120,
         )
     assert result.returncode == 0, result.stderr
     return result.stdout
+
+
+# The playbook fragment as the work profile renders it (no workGitHost set), included right after the heading block.
+PLAYBOOK_SECTION = render("axon-work-computer", PLAYBOOK_TEMPLATE).rstrip("\n") + "\n\n"
 
 
 @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi not installed")

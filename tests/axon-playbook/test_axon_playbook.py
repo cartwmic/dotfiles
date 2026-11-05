@@ -22,10 +22,13 @@ ROOT = Path(__file__).resolve().parents[2]
 APPLY = ROOT / "dot_local/user_scripts/executable_apply_harness_config.sh"
 EXTERNAL = ROOT / ".chezmoiexternal.toml"
 SETTINGS = ROOT / "dot_claude/modify_settings.json.tmpl"
-FRAGMENT = ROOT / "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md"
+FRAGMENT = ROOT / "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md.tmpl"
 TARGET = ".local/share/agent-harness/external-skills/axon-agents-playbook"
 REPO_URL = "https://example.invalid/someone/axon-agents-playbook.git"
 WORK, PERSONAL = "axon-work-computer", "personal"
+# The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
+WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
+             "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
 MODEL_FIT = ROOT / "dot_local/share/agent-harness/external-skills/coordinator/symlink_model-fit.tmpl"
 
 
@@ -257,20 +260,35 @@ class FragmentTest(unittest.TestCase):
     TEMPLATES = ("dot_claude/CLAUDE.md.tmpl", "dot_codex/modify_AGENTS.md.tmpl", "dot_pi/private_agent/literal_AGENTS.md.tmpl")
 
     def test_fragment_is_includable_and_plain(self):
-        text = FRAGMENT.read_text()
-        self.assertTrue(text.startswith("## "))
-        self.assertNotIn("\n# ", "\n" + text)
-        self.assertIn("axon-pr-preflight", text)
-        self.assertIn("playbook-context", text)
+        for data in ({"profile": WORK, **WORK_DATA}, {"profile": PERSONAL, "workGitHost": "git.example.test"}):
+            text = render(FRAGMENT, data)
+            self.assertTrue(text.startswith("## "))
+            self.assertNotIn("\n# ", "\n" + text)
+            self.assertIn("axon-pr-preflight", text)
+            self.assertIn("playbook-context", text)
+
+    def test_work_git_host_comes_from_data_only(self):
+        work = render(FRAGMENT, {"profile": WORK, **WORK_DATA})
+        self.assertIn("`git.example.test` or `github.com/axon-*`", work)
+        # off the work profile the key is optional: unset leaves the host out
+        self.assertIn("remote is `github.com/axon-*`.", render(FRAGMENT, {"profile": PERSONAL}))
+
+    def test_work_profile_fails_loudly_without_its_keys(self):
+        for key in WORK_DATA:
+            data = {"profile": WORK, **{k: v for k, v in WORK_DATA.items() if k != key}}
+            with self.assertRaises(AssertionError) as cm:
+                render(FRAGMENT, data)
+            self.assertIn("chezmoi data key %s is not set" % key, str(cm.exception))
 
     def test_included_on_work_only(self):
-        body = FRAGMENT.read_text().strip()
+        data = {"profile": WORK, **WORK_DATA}
+        body = render(FRAGMENT, data).strip()
         for t in self.TEMPLATES:
-            self.assertIn(body, render(ROOT / t, {"profile": WORK}), t)
+            self.assertIn(body, render(ROOT / t, data), t)
             self.assertNotIn("Axon playbook", render(ROOT / t, {"profile": PERSONAL}), t)
 
     def test_codex_fragment_sits_inside_the_managed_block(self):
-        out = render(ROOT / self.TEMPLATES[1], {"profile": WORK})
+        out = render(ROOT / self.TEMPLATES[1], {"profile": WORK, **WORK_DATA})
         self.assertLess(out.index("## Axon playbook"), out.index("chezmoi:mcp-memory-guidance:end"))
 
 

@@ -17,6 +17,24 @@
 #   termux   — outbound phone→homelab Host blocks (cartwmic-server/remote,
 #              macbook, laptop, whonix ProxyJump) including ControlMaster for jumps
 
+{{/*
+  Host addresses and users come from the local chezmoi data key `sshHosts` (not in this public
+  repo). A missing host or field fails the render (require_data), so a machine never gets a
+  silently empty SSH config. Keys per machine: docs/profiles.md, "Local data keys".
+*/ -}}
+{{- $sshNeed := dict -}}
+{{- if eq .profile "personal" -}}
+{{-   $sshNeed = dict "dailyPhone" (list "wgAddress" "lanAddress" "user") "sshPhone" (list "wgAddress" "lanAddress" "user") "server" (list "address" "user") "laptop" (list "address" "user") -}}
+{{- else if eq .profile "termux" -}}
+{{-   $sshNeed = dict "server" (list "address" "user") "macbook" (list "address" "user") "laptop" (list "address" "user") "macKvm" (list "address" "user") "whonixGw" (list "address" "user") "whonixWs" (list "address" "user") -}}
+{{- end -}}
+{{- range $host, $fields := $sshNeed -}}
+{{-   range $fields -}}
+{{-     $_ := includeTemplate "require_data" (dict "data" $ "path" (printf "sshHosts.%s.%s" $host .)) -}}
+{{-   end -}}
+{{- end -}}
+{{- $ssh := dict -}}
+{{- if $sshNeed -}}{{- $ssh = .sshHosts -}}{{- end -}}
 set -eu
 
 PHONE_BEGIN='# >>> chezmoi-managed: phone ssh >>>'
@@ -85,35 +103,35 @@ esac
 cat <<EOF
 $PHONE_BEGIN
 # daily-phone (Z Fold 7 Termux sshd on :8022). Auto-pick the reachable path:
-#   - 198.51.100.6   = its WireGuard IP (wg1 peer on OPNsense). Works whenever
-#                   the tunnel is up, home or remote, routed via the gateway.
-#   - 192.0.2.222 = its home Wi-Fi IP. Works only on LAN with WG off.
+#   - wgAddress  = its WireGuard IP (wg1 peer on OPNsense). Works whenever
+#                  the tunnel is up, home or remote, routed via the gateway.
+#   - lanAddress = its home Wi-Fi IP. Works only on LAN with WG off.
 # First-obtained HostName wins, so the WG probe is tried first.
-Match host daily-phone exec "/usr/bin/nc -z -G 1 -w 1 198.51.100.6 8022 >/dev/null 2>&1"
-    HostName 198.51.100.6
+Match host daily-phone exec "/usr/bin/nc -z -G 1 -w 1 {{ $ssh.dailyPhone.wgAddress }} 8022 >/dev/null 2>&1"
+    HostName {{ $ssh.dailyPhone.wgAddress }}
 
-Match host daily-phone exec "/usr/bin/nc -z -G 1 -w 1 192.0.2.222 8022 >/dev/null 2>&1"
-    HostName 192.0.2.222
+Match host daily-phone exec "/usr/bin/nc -z -G 1 -w 1 {{ $ssh.dailyPhone.lanAddress }} 8022 >/dev/null 2>&1"
+    HostName {{ $ssh.dailyPhone.lanAddress }}
 
 Host daily-phone
-    HostName 198.51.100.6
+    HostName {{ $ssh.dailyPhone.wgAddress }}
     Port 8022
-    User u0_a000
+    User {{ $ssh.dailyPhone.user }}
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
 
 # ssh-phone (Moto Razr 2024). Prefer its WireGuard peer when up;
 # fall back to its OPNsense-reserved home Wi-Fi address when the tunnel is off.
-Match host ssh-phone exec "/usr/bin/nc -z -G 1 -w 1 198.51.100.8 8022 >/dev/null 2>&1"
-    HostName 198.51.100.8
+Match host ssh-phone exec "/usr/bin/nc -z -G 1 -w 1 {{ $ssh.sshPhone.wgAddress }} 8022 >/dev/null 2>&1"
+    HostName {{ $ssh.sshPhone.wgAddress }}
 
-Match host ssh-phone exec "/usr/bin/nc -z -G 1 -w 1 192.0.2.93 8022 >/dev/null 2>&1"
-    HostName 192.0.2.93
+Match host ssh-phone exec "/usr/bin/nc -z -G 1 -w 1 {{ $ssh.sshPhone.lanAddress }} 8022 >/dev/null 2>&1"
+    HostName {{ $ssh.sshPhone.lanAddress }}
 
 Host ssh-phone
-    HostName 198.51.100.8
+    HostName {{ $ssh.sshPhone.wgAddress }}
     Port 8022
-    User u0_a000
+    User {{ $ssh.sshPhone.user }}
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
 $PHONE_END
@@ -130,14 +148,14 @@ $HOMELAB_BEGIN
 # this pin those get offered first and can exhaust MaxAuthTries before the
 # right key is ever tried.
 Host mac-mini cartwmic-server remote
-    HostName 192.0.2.221
-    User cartwmic
+    HostName {{ $ssh.server.address }}
+    User {{ $ssh.server.user }}
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
 
 Host laptop
-    HostName 192.0.2.112
-    User michael
+    HostName {{ $ssh.laptop.address }}
+    User {{ $ssh.laptop.user }}
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
 $HOMELAB_END
@@ -159,8 +177,8 @@ $TERMUX_BEGIN
 # still sshs over that ControlMaster. Jumpable aliases (mac-mini, remote,
 # cartwmic-server, macbook, laptop) all share ControlMaster/ControlPath/ControlPersist.
 Host mac-mini cartwmic-server remote
-    HostName 192.0.2.221
-    User cartwmic
+    HostName {{ $ssh.server.address }}
+    User {{ $ssh.server.user }}
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
     ControlMaster auto
@@ -168,8 +186,8 @@ Host mac-mini cartwmic-server remote
     ControlPersist 10m
 
 Host macbook
-    HostName 192.0.2.200
-    User cartwmic
+    HostName {{ $ssh.macbook.address }}
+    User {{ $ssh.macbook.user }}
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
     ControlMaster auto
@@ -177,8 +195,8 @@ Host macbook
     ControlPersist 10m
 
 Host laptop
-    HostName 192.0.2.112
-    User michael
+    HostName {{ $ssh.laptop.address }}
+    User {{ $ssh.laptop.user }}
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
     ControlMaster auto
@@ -188,9 +206,9 @@ Host laptop
 # macOS shell over NanoKVM USB. SSH terminates on NanoKVM, not macOS.
 # One interactive session; no command execution, SFTP, forwarding or multiplexing.
 Host mac-kvm
-    HostName 192.0.2.223
+    HostName {{ $ssh.macKvm.address }}
     Port 22
-    User macbridge
+    User {{ $ssh.macKvm.user }}
     IdentityFile ~/.ssh/homelab
     IdentitiesOnly yes
     IdentityAgent none
@@ -202,20 +220,20 @@ Host mac-kvm
     ServerAliveCountMax 2
 
 # Whonix Workstation via Gateway ProxyJump.
-# Path: phone -> user@192.0.2.210 (gw) -> user@203.0.113.11 (ws).
+# Path: phone -> whonix-gw -> whonix-ws.
 # Key: ~/.ssh/whonix-homelab (also provisioned by 05_provision_termux_ssh_keys).
 # NOTE: /home/user on the workstation is root-owned (Kicksecure) -> write to /tmp only.
 Host whonix-gw
     StrictHostKeyChecking accept-new
-    HostName 192.0.2.210
-    User user
+    HostName {{ $ssh.whonixGw.address }}
+    User {{ $ssh.whonixGw.user }}
     IdentityFile ~/.ssh/whonix-homelab
     IdentitiesOnly yes
 
 Host whonix-ws
     StrictHostKeyChecking accept-new
-    HostName 203.0.113.11
-    User user
+    HostName {{ $ssh.whonixWs.address }}
+    User {{ $ssh.whonixWs.user }}
     ProxyJump whonix-gw
     IdentityFile ~/.ssh/whonix-homelab
     IdentitiesOnly yes

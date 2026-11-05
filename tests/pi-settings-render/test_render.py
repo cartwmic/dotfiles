@@ -18,13 +18,18 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "dot_pi" / "private_agent" / "private_settings.json.tmpl"
 
 
+# The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
+WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
+             "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
+
+
 def render(profile):
     with tempfile.TemporaryDirectory() as home:
         config = Path(home) / "chezmoi.yaml"
         config.write_text("{}\n")  # no hooks from the developer's own config
         result = subprocess.run(
             ["chezmoi", "--source", str(ROOT), "--config", str(config), "--destination", home,
-             "execute-template", "--override-data", json.dumps({"profile": profile})],
+             "execute-template", "--override-data", json.dumps({"profile": profile, **(WORK_DATA if profile == "axon-work-computer" else {})})],
             input=TEMPLATE.read_text(encoding="utf-8"), capture_output=True, text=True, timeout=120,
         )
     assert result.returncode == 0, result.stderr

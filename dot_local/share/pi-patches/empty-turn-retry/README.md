@@ -7,7 +7,7 @@ instead of ending the turn silently.
 ## Problem
 
 Gateway models sometimes sample EOS immediately. GLM-5.3 via
-`llm-gateway.work.example` does this in two shapes (both verified in pi session
+the work LLM gateway does this in two shapes (both verified in pi session
 transcripts, 23 instances across recent sessions):
 
 1. **Empty turn after a tool call.** The assistant emits a tool call, the tool
@@ -23,7 +23,7 @@ response contains tool-call blocks — regardless of stop reason. But a response
 with *no* content and `end_turn` falls through to the checkpoint path and the
 turn ends silently. No error is shown.
 
-Example transcript shape (work-repo session, 2026-09-10):
+Example transcript shape (work-project session, 2026-09-10):
 
 ```
 [1174] assistant sr=toolUse: toolCall(bash)
@@ -108,7 +108,7 @@ Expected: `empty-text` and `thinking-only` surface the retryable error;
 ## Related
 
 - Gateway-side counterpart (not implemented): the same degenerate close could
-  be caught in `apps/gateway/litellm-image/anthropic_stream_fix.py`
+  be caught in the gateway's Anthropic stream-fix module
   (`_axon_is_degenerate` currently only catches `max_tokens`) — that would fix
   Claude Code and Cursor clients on the same gateway too.
 - Sibling patches: `anthropic-idle-watchdog` (same target file),

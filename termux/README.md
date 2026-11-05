@@ -148,8 +148,14 @@ Google login/biometric/install approvals on-device. Package IDs:
 
 ### Router and VPN (preview, stage, cut over)
 
+The Mac-side helpers (`router-phone.py`, `wireguard-phone.py`, `update-phone-alias.py`) read the
+router address and the two subnets from the environment, not from this public repo. Export
+`HOMELAB_ROUTER`, `HOMELAB_LAN_CIDR` (a /24) and `HOMELAB_WG_CIDR` (a /24) first; the values and
+the rest of the machine-specific data are in [docs/profiles.md](../docs/profiles.md), "Local data keys".
+A missing value stops the helper with a message naming it.
+
 `router-phone.py inspect` reads only public peer identifiers and DHCP metadata
-from `root@192.0.2.1`, using its password from
+from `root@$HOMELAB_ROUTER`, using its password from
 `op://developer/opnsense/password`. It never prints router private keys or
 config.xml. SSH host-key verification must already be established. The current
 peer, LAN IP, and MAC are in its output; **do not assume** `.7`/`.88` remain
@@ -201,16 +207,16 @@ runtime wg1 peer. A failed service/runtime check reports an incomplete apply;
 inspect the router backup rather than blindly retrying a different plan.
 Both the old and candidate clients can coexist during testing.
 
-Enable the new tunnel on Android as a split tunnel (`192.0.2.0/24` and
-`198.51.100.0/24`, DNS `192.0.2.1`, endpoint `cartwmic.com:61583`). Enable
+Enable the new tunnel on Android as a split tunnel (`$HOMELAB_LAN_CIDR` and
+`$HOMELAB_WG_CIDR`, DNS `$HOMELAB_ROUTER`, endpoint `cartwmic.com:61583`). Enable
 always-on VPN **without lockdown** on-device. Prove direct candidate SSH and
 `ssh macbook` -> visible Herdr (not just installed binaries), then test an
 external network when available. To switch the Mac alias after that proof:
 
 ```bash
-python3 termux/update-phone-alias.py plan --wg NEW_WG_IP --lan NEW_LAN_IP --user NEW_TERMUX_USER
-python3 termux/update-phone-alias.py apply --wg NEW_WG_IP --lan NEW_LAN_IP \
-  --user NEW_TERMUX_USER --attest-candidate --confirm-alias
+python3 termux/update-phone-alias.py --wg NEW_WG_IP --lan NEW_LAN_IP --user NEW_TERMUX_USER
+# put the printed sshHosts.sshPhone entry in ~/.config/chezmoi/chezmoi.yaml, then:
+chezmoi apply ~/.ssh/config
 ssh -G ssh-phone | grep -E '^(hostname|user) '
 python3 termux/router-phone.py plan --mode retire --mac NEW_WIFI_MAC \
   --lan NEW_LAN_IP --address NEW_WG_IP/32 --public-key NEW_PUBLIC_KEY
@@ -229,15 +235,15 @@ apply saved config but service reload failed, inspect its reported backup,
 then explicitly run `router-phone.py reconcile --confirm RELOAD-ROUTER-SERVICES`
 to reload template/configure/DHCP and check wg1 without rewriting config.xml.
 
-Retirement requires the managed SSH **source and applied live alias** to
+Retirement requires the **applied live alias** (`ssh -G ssh-phone`) to
 point at the candidate; it then removes only the old `cartwmic-ssh-phone`
 peer and `ssh-phone` DHCP mapping. If an off-home-network test is impossible,
 `--defer-off-lan` is an explicit override in place of `--attest-off-lan`:
 report the remote test as **pending**, not passed. Do not retire a lost phone
 and assume its shared homelab SSH key is revoked; wipe it or rotate that key
 separately. The router-local backup includes secrets; do not copy it into Git.
-No script commits or pushes the new public alias values; review and publish
-the chezmoi source separately.
+`update-phone-alias.py` edits nothing and no script commits or pushes alias values: the
+addresses live only in local chezmoi data.
 
 ### Android completion and checks
 
@@ -307,11 +313,14 @@ existing dictation keyboard can supply comment text. The library stays
 under `~/.local/share/passage-review` (or `$XDG_DATA_HOME` if set); it is not
 sent back to the desktop.
 
-- `ssh cartwmic-server` / `ssh remote` → `cartwmic@192.0.2.221` via `~/.ssh/homelab` (ControlMaster)
-- `ssh macbook` → `cartwmic@192.0.2.200` via `~/.ssh/homelab` (ControlMaster)
-- `ssh laptop` → `michael@192.0.2.112` via `~/.ssh/homelab` (ControlMaster)
+Host addresses and users come from the local chezmoi data key `sshHosts` (docs/profiles.md, "Local data keys");
+a missing entry fails the apply.
+
+- `ssh cartwmic-server` / `ssh remote` → `sshHosts.server` via `~/.ssh/homelab` (ControlMaster)
+- `ssh macbook` → `sshHosts.macbook` via `~/.ssh/homelab` (ControlMaster)
+- `ssh laptop` → `sshHosts.laptop` via `~/.ssh/homelab` (ControlMaster)
 - `ssh mac-kvm` → normal-user macOS shell over NanoKVM USB. SSH terminates as
-  `macbridge@192.0.2.223`, using `~/.ssh/homelab`. The address is reserved in
+  `sshHosts.macKvm`, using `~/.ssh/homelab`. The address is reserved in
   OPNsense for NanoKVM Ethernet MAC `48:da:35:6f:61:ad`. A PTY is forced and
   multiplexing disabled: one interactive shell, no remote commands, SFTP or
   forwarding. The Mac user bridge must be running (configured to start at login).
