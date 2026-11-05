@@ -127,7 +127,13 @@ class WrapperNodeTest(unittest.TestCase):
 
     def test_no_node_anywhere_exits_3_not_127(self):
         rig = Rig(self)
-        for case, kw in (("empty PATH, no shim", dict(path=rig.empty)), ("no PATH at all, no shim", {})):
+        cases = [("empty PATH, no shim", dict(path=rig.empty))]
+        # With no PATH at all, /bin/sh searches its own default path. On a host whose default path holds a node (the ubuntu CI
+        # runner has one in /usr/local/bin) that node is a real find, not a fault, so this case runs only where the default
+        # path has none.
+        if subprocess.run(["/usr/bin/env", "-i", "/bin/sh", "-c", "command -v node"], capture_output=True).returncode != 0:
+            cases.append(("no PATH at all, no shim", {}))
+        for case, kw in cases:
             with self.subTest(case=case):
                 r = rig.run("x", **kw)
                 self.assertEqual(r.returncode, 3, r.stderr)
