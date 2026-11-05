@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.agent-events</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/sh</string><string>HOME/.local/bin/agent-events</string><string>run</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>120</integer>
+  <!-- Not ProcessType Background / LowPriorityIO: macOS then throttles the tick to a near stop whenever the
+       machine is busy (observed: a tick stalled for more than 6 minutes at load average 60-85). Plain nice
+       is enough; a tick takes a few seconds. -->
+  <key>Nice</key><integer>10</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- chezmoi data agentEvents (.chezmoitemplates/agent_events_config) -->
+    <key>AGENT_EVENTS_OTLP_ENDPOINT</key><string>http://otel-collector.internal.cartwmic.com/v1/metrics</string>
+    <key>AGENT_EVENTS_MACHINE</key><string>personal</string>
+  </dict>
+  <key>StandardOutPath</key><string>HOME/.local/state/agent-events/launchd.out</string>
+  <key>StandardErrorPath</key><string>HOME/.local/state/agent-events/launchd.err</string>
+</dict>
+</plist>
