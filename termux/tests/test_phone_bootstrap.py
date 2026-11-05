@@ -68,6 +68,8 @@ if name=='ssh':
         if 'PHONE_SPEC_B64=' in source:
             encoded=re.search(r'PHONE_SPEC_B64=([A-Za-z0-9+/=]+)',source).group(1)
             spec=json.loads(base64.b64decode(encoded)); action=spec['action']; mode=spec['mode']
+            env=re.match(r'HOMELAB_LAN_PREFIX=(\S+) HOMELAB_WG_PREFIX=(\S+) PHONE_SPEC_B64=',source)
+            state['php_prefixes']=list(env.groups()) if env else None
             old=dict(uuid='old-uuid',name='cartwmic-ssh-phone',public_key=state['old_public'],address='198.51.100.7/32')
             oldmap=dict(mac=state.get('old_mac','5e:51:a2:24:38:79'),lan='192.0.2.88',hostname='ssh-phone')
             candidate=(dict(uuid='new-uuid',name='cartwmic-ssh-phone-candidate',public_key=state['new_public'],address=state['new_address']) if state.get('staged') else None)
@@ -292,6 +294,7 @@ class PhoneCLITest(unittest.TestCase):
         result = self.invoke("router-phone.py", "plan", "--mode", "stage", "--mac", "5e:51:a2:24:38:7a",
                              "--lan", "192.0.2.89", "--address", "198.51.100.8/32", "--public-key", PUBLIC)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.state['php_prefixes'], ['192.0.2.', '198.51.100.'])  # from the environment, to the PHP
         path = next(line.removeprefix('PLAN: ').split('. Review', 1)[0]
                     for line in result.stdout.splitlines() if line.startswith('PLAN: '))
         denied = self.invoke("router-phone.py", "apply", "--plan", path, "--confirm", "NO")
@@ -307,6 +310,17 @@ class PhoneCLITest(unittest.TestCase):
         self.assertEqual(reload, configure)  # Both in one set -eu script; ordering checked below.
         self.assertLess(calls[reload].index('template reload'), calls[reload].index('wireguard configure'))
         self.assertIn('configctl dhcpd restart', ' '.join(calls))
+
+    def test_router_inspect_without_subnet_env_stops_before_any_router_call(self):
+        for name in ("HOMELAB_LAN_CIDR", "HOMELAB_WG_CIDR"):
+            with self.subTest(missing=name):
+                del_env = dict(self.env)
+                del del_env[name]
+                result = subprocess.run([sys.executable, str(ROOT / "termux/router-phone.py"), "inspect"],
+                                        env=del_env, capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(name, result.stderr)
+                self.assertEqual(json.loads(self.state_path.read_text())['calls'], [])
 
     def test_wiped_phone_reuses_existing_wireguard_key_and_mapping(self):
         qr = self.invoke("wireguard-phone.py", "prepare", "--mode", "restore", "--serial", SERIAL,

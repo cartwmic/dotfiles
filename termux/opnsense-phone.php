@@ -51,6 +51,15 @@ $mode = $spec['mode'] ?? '';
 if (!in_array($action, ['inspect', 'plan', 'apply'], true)
     || !in_array($mode, ['inspect', 'stage', 'restore', 'retire'], true)) fail_phone('unknown action/mode');
 
+// Subnet prefixes ("a.b.c.") come from the caller's environment (router-phone.py), not from this public repo.
+// A missing or malformed prefix stops every action: preg_quote of an empty prefix would match any address.
+$prefixPattern = '/^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}\z/';
+$lanPrefix = getenv('HOMELAB_LAN_PREFIX') ?: '';
+$wgPrefix = getenv('HOMELAB_WG_PREFIX') ?: '';
+if (!preg_match($prefixPattern, $lanPrefix) || !preg_match($prefixPattern, $wgPrefix))
+    fail_phone('HOMELAB_LAN_PREFIX and HOMELAB_WG_PREFIX are required, each as a.b.c.');
+$lastOctet = '([2-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-4])';
+
 $wg =& $config['OPNsense']['wireguard'];
 $clients =& $wg['client']['clients']['client'];
 $servers =& $wg['server']['servers'];
@@ -67,8 +76,8 @@ $nextMapIndex = one_named($maps, 'ssh-phone-candidate', 'hostname');
 if ($oldIndex === null || $oldMapIndex === null) fail_phone('existing ssh-phone peer/reservation missing');
 $old = $clients[$oldIndex];
 $oldMap = $maps[$oldMapIndex];
-if (!preg_match('/^198\\.51\\.100\\.([2-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-4])\\/32$/', $old['tunneladdress'] ?? '')
-    || !preg_match('/^192\\.0\\.2\\.([2-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-4])$/', $oldMap['ipaddr'] ?? '')
+if (!preg_match('/^' . preg_quote($wgPrefix, '/') . $lastOctet . '\/32$/', $old['tunneladdress'] ?? '')
+    || !preg_match('/^' . preg_quote($lanPrefix, '/') . $lastOctet . '$/', $oldMap['ipaddr'] ?? '')
     || !public_key($old['pubkey'] ?? '')) fail_phone('existing ssh-phone identity has unsupported address/key');
 $peers = array_filter(explode(',', $server['peers'] ?? ''));
 if (!in_array($old['@attributes']['uuid'] ?? '', $peers, true)) fail_phone('old peer not attached to wg1');
@@ -86,11 +95,6 @@ if ($action === 'inspect') {
     exit(0);
 }
 
-// Subnet prefixes ("a.b.c.") come from the caller's environment (router-phone.py), not from this public repo.
-$lanPrefix = getenv('HOMELAB_LAN_PREFIX') ?: '';
-$wgPrefix = getenv('HOMELAB_WG_PREFIX') ?: '';
-if (!preg_match('/^\d{1,3}\.\d{1,3}\.\d{1,3}\.$/', $lanPrefix) || !preg_match('/^\d{1,3}\.\d{1,3}\.\d{1,3}\.$/', $wgPrefix))
-    fail_phone('HOMELAB_LAN_PREFIX and HOMELAB_WG_PREFIX are required');
 $mac = strtolower($spec['mac'] ?? '');
 $lan = $spec['lan'] ?? '';
 $address = $spec['address'] ?? '';
