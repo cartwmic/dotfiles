@@ -67,6 +67,7 @@ A TOML file in the gate's repo. Keep it small.
 image  = "ghcr.io/cartwmic/kgate@sha256:..."   # required, pinned by digest
 cpu    = 2                                      # whole CPUs; default 2
 memory = "4Gi"                                  # default 4Gi; the limit equals it
+user   = "1000:1000"                            # uid:gid CMD runs as; default 1000:1000; "0:0" for root
 
 [tools]                                          # exact versions; checked in the pod before CMD
 node = "24.22.2"                                 # runs `node --version`
@@ -80,6 +81,7 @@ services = ["docker"]                            # optional; see below
 
 - **Tools.** The pod runs the command and the expected version must appear in its output as a whole version (`1.98.0` does not match `11.98.0` or `1.98.01`). Any tool with a version command fits without changing kgate: `cargo`, `rustc`, `helm`, `kustomize`, `ansible-lint`, `python3`.
 - **Secrets.** Read with `op read` on this Mac at run time into a temporary pod Secret and passed as environment variables. Never in the image, a profile value or the log. If `op read` fails the job exits 69.
+- **User.** The pod's exec starts as root to unpack. kgate then gives the shipped tree, `/out`, a home and the caches (`/cache/u<uid>`) to `user` and runs the version checks and CMD as it, as on a developer's Mac. (As root, `chmod 000` tests pass that a user fails.)
 - **Services.** If the gate needs something the image cannot provide (Docker, a database), list it. kgate refuses the job with 69; that gate is not a kgate gate.
 - **Image pull.** The image registry `ghcr.io` is private; kgate reads the 1Password item `kgate-github-packages-read` for each job's temporary pull Secret (expires about 2026-12-02; see the homelab `docs/kgate.md`).
 - The image needs `python3` (3.11 or later): the same script runs in the pod to verify the hash and check versions. The version commands run in the job's directory, so per-directory tools (rustup with a `rust-toolchain.toml`) report what CMD will use. `git` is needed when the gate itself uses it.
