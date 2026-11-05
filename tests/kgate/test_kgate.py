@@ -156,12 +156,17 @@ class PodSpec(unittest.TestCase):
 
 class Pieces(unittest.TestCase):
     def test_markers_across_chunks_and_unterminated_output(self):
-        m = K.Markers()
-        for chunk in [b"progress 10%\r", b"progress 100%\nkgate: pe", b"ak 4096 cgroup\nkgate: end 17 ex", b"it 3\n", b"tail without newline"]:
+        m = K.Markers("kgate-1-2")
+        for chunk in [b"progress 10%\r", b"progress 100%\nkgate[kgate-1-2]: pe", b"ak 4096 cgroup\nkgate[kgate-1-2]: end 17 ex", b"it 3\n", b"tail without newline"]:
             m.feed(chunk)
         m.close()
         self.assertEqual(m.seen["peak"], "4096 cgroup")
         self.assertEqual(m.seen["end"], "17 exit 3")
+
+    def test_markers_of_another_job_or_printed_by_cmd_are_ignored(self):
+        m = K.Markers("kgate-1-2")
+        m.feed(b"kgate: hash MISMATCH expected=a found=b\nkgate[kgate-9-9]: end 1 exit 0\nkgate[kgate-1-2]: end 5 exit 0\n")
+        self.assertEqual(m.seen, {"end": "5 exit 0"})
 
     def test_peak_meter_reads_the_kernels_peak(self):
         with tempfile.TemporaryDirectory() as d:
@@ -229,7 +234,12 @@ if a[0] == "exec" and "-i" in a:
             f.write(b"x")
     env = dict(os.environ, KGATE_OUT=os.path.join(fake, "out"), KGATE_NODE="fake-node")
     os.makedirs(env["KGATE_OUT"], exist_ok=True)
-    sys.exit(subprocess.call([sys.executable, "%s/tmp/%s/kgate.py" % (jobroot, job), "--pod", "%s/tmp/%s/job.json" % (jobroot, job)], env=env))
+    proc = subprocess.Popen([sys.executable, "%s/tmp/%s/kgate.py" % (jobroot, job), "--pod", "%s/tmp/%s/job.json" % (jobroot, job)], env=env, stdout=subprocess.PIPE)
+    for line in iter(proc.stdout.readline, b""):
+        sys.stdout.buffer.write(line); sys.stdout.buffer.flush()
+        if os.environ.get("FAKE_DIE") and b"]: running" in line:
+            proc.kill(); sys.stderr.write("error: lost connection to pod\n"); sys.exit(255)
+    sys.exit(proc.wait())
 if a[0] == "exec":
     out = os.path.join(fake, "out")
     os.makedirs(out, exist_ok=True)
@@ -317,7 +327,7 @@ class Black(unittest.TestCase):
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
         rec = self.records()[-1]
-        self.assertIn("kgate: hash ok " + rec["tree"], done.stdout)
+        self.assertIn("kgate[%s]: hash ok %s" % (rec["id"], rec["tree"]), done.stdout)
 
     def test_cmd_failure_is_cmds_exit_code_not_69(self):
         done = self.kgate("--", "sh", "-c", "echo boom; exit 3")
@@ -378,6 +388,62 @@ class Black(unittest.TestCase):
         done = self.kgate("--wait", "3", "--", "true", env={"FAKE_POD": "pending"})
         self.assertEqual(done.returncode, 69, done.stdout)
         self.assertIn("pod did not start within 3s: Unschedulable", done.stdout)
+
+    def test_version_commands_run_in_the_jobs_directory(self):
+        # rustup picks the toolchain by directory, so a preflight that ran elsewhere would check the wrong tool
+        sub = self.repo / "sub-9.8.7"
+        sub.mkdir()
+        (sub / "f.txt").write_text("x")
+        self.profile(tools='dir = { version = "9.8.7", cmd = "pwd" }')
+        done = subprocess.run([sys.executable, str(SCRIPT), "--", "pwd"], cwd=sub, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                              env={**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake),
+                                   "XDG_STATE_HOME": str(self.state), "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("sub-9.8.7", done.stdout)
+
+    def test_a_linked_worktree_ships_and_hashes(self):
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "second")
+        linked = self.tmp / "linked"
+        git(self.repo, "worktree", "add", "-q", str(linked), "-b", "side")
+        (linked / "only-here.txt").write_text("linked\n")
+        done = subprocess.run([sys.executable, str(SCRIPT), "--", "sh", "-c", "git rev-parse --show-toplevel && cat only-here.txt"], cwd=linked,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                              env={**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake),
+                                   "XDG_STATE_HOME": str(self.state), "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("linked", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual(rec["repo"], "repo")  # named for the main repo, not the worktree folder
+        self.assertIn("hash ok " + rec["tree"], done.stdout)
+
+    def test_a_lost_connection_after_start_is_69_unknown_and_not_rerun(self):
+        done = self.kgate("--", "sh", "-c", "echo started; sleep 1", env={"FAKE_DIE": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("lost the pod before CMD finished", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["ran"]), (69, True))
+        self.assertEqual(sum(1 for c in self.calls() if c.get("kubectl", [""])[0] == "exec" and "-i" in c["kubectl"]), 1)  # one exec: no rerun
+
+    def test_a_command_that_prints_marker_lines_cannot_fake_the_outcome(self):
+        done = self.kgate("--", "sh", "-c", "echo 'kgate: hash MISMATCH expected=a found=b'; echo 'kgate: end 1 exit 9'")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_sigterm_cleans_up_and_exits_143(self):
+        import signal as sig
+        e = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
+             "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null"}
+        proc = subprocess.Popen([sys.executable, str(SCRIPT), "--", "sh", "-c", "echo up; sleep 6"], cwd=self.repo, env=e,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in proc.stdout:
+            if "]: running" in line:
+                break
+        proc.send_signal(sig.SIGTERM)
+        rest = proc.stdout.read()
+        self.assertEqual(proc.wait(timeout=30), 143, rest)
+        self.assertIn("interrupted (SIGTERM)", rest)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["cleanup"]), (143, True))
 
     def test_secret_unreadable_is_69_before_anything_is_created(self):
         self.profile(secrets='TOK = "op://developer/item/password"')
