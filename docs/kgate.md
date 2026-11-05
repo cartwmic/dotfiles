@@ -102,3 +102,7 @@ Personal only: kgate uses the personal homelab cluster (`.chezmoiignore`; row in
 ## Tests
 
 `python3 -m unittest discover -s tests/kgate -v`: the tree hash against real `git write-tree`, the profile, the version match and the pod spec directly; and the real script as a process against a fake `ssh` (a scripted cluster whose "pod" runs on this machine) and a fake `op`: pass, CMD failure, `/out`, hash mismatch, wrong version, unreachable cluster with nothing run locally, image pull failure, pod never scheduled, unreadable secret, secrets kept out of the pod spec and the logs.
+
+## Gates in this repo
+
+`kgate.toml` is the profile of the dotfiles heavy suites (`tests/heavy-gate`, `tests/workstream-rank`); the command is in `AGENTS.md`. Parity at 141c0d04 on the Mac and on agent-1: 115 + 35 tests, OK on both (Mac 571.8 s, kgate 466.6 s + 0.2 s). The first runs on the G14 failed on process-table and clock tests; the G14's clock steps back (see above), and with it excluded the suite passes.
