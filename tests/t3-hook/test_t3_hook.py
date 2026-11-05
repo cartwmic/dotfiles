@@ -220,7 +220,7 @@ class T3HookSettingsTest(unittest.TestCase):
     def test_file_gone_after_on_restores_the_original(self):
         original = self.modify("missing", USER)
         self.assertEqual(self.modify("missing", self.modify("on", original)), original)
-        self.assertEqual(self.modify("missing", ""), {"cleanupPeriodDays": 365, "model": "claude-opus-5-5", "modelSettings": OPUS_MEDIUM})
+        self.assertEqual(self.modify("missing", ""), {"cleanupPeriodDays": 365, "model": "claude-opus-5-5", "promptCacheTtl": "1h", "modelSettings": OPUS_MEDIUM})
 
     def test_default_model_is_opus_at_medium_on_both_profiles_and_a_saved_level_is_kept(self):
         # Claude Code ignores a top-level effortLevel for Opus 5.5; the level it reads lives under modelSettings.
