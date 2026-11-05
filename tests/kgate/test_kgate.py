@@ -140,7 +140,7 @@ class PodSpec(unittest.TestCase):
         env = {e["name"]: e.get("value") for e in c["env"]}
         self.assertEqual((env["CARGO_BUILD_JOBS"], env["RAYON_NUM_THREADS"], env["MAKEFLAGS"]), ("3", "3", "-j3"))
         self.assertEqual(c["image"], DIGEST)
-        self.assertIn({"name": "cache", "mountPath": "/usr/local/cargo/registry", "subPath": "cargo-registry-u1000"}, c["volumeMounts"])
+        self.assertEqual(c["command"], ["tini", "--", "sleep", "infinity"], "PID 1 is an init, so orphans are reaped")
 
     def test_keeps_off_excluded_nodes(self):
         pod, _ = self.pod()
@@ -172,7 +172,7 @@ class RunAsUser(unittest.TestCase):
             job = {"uid": 1000, "gid": 1001, "own": [str(tree)]}
             how, env = K.prepare_user(job, euid=0, chown=lambda p, u, g: owned.append((p, u, g)), root=d)
             self.assertEqual(how, {"user": 1000, "group": 1001, "extra_groups": []})
-            self.assertEqual(env, {"HOME": "/cache/u1000/home", "npm_config_cache": "/cache/u1000/npm"})
+            self.assertEqual(env, {"HOME": "/cache/u1000/home", "npm_config_cache": "/cache/u1000/npm", "CARGO_HOME": "/cache/u1000/cargo"})
             paths = {p for p, u, g in owned}
             self.assertTrue({str(tree), str(tree / "sub"), str(tree / "sub" / "f"), d + "/out", d + "/cache/u1000/home"} <= paths)
             self.assertTrue(all((u, g) == (1000, 1001) for p, u, g in owned))
