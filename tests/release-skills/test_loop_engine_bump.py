@@ -25,7 +25,7 @@ SCRIPT = ROOT / "dot_local/user_scripts/executable_loop_engine_bump.py"
 README = ROOT / "dot_local/share/agent-harness/README.md"
 SKILLS_SRC = "dot_local/share/agent-harness/canonical/skills"
 SKILLS_DEST = ".local/share/agent-harness/canonical/skills"
-TOOLS = ("loop-engine", "lean-change", "policy-document", "research")
+TOOLS = ("loop-engine", "lean-change", "policy-document", "research", "bookends-check")
 
 PR_GH = r'''import subprocess
 state.setdefault("calls", []).append(args)
@@ -236,7 +236,7 @@ class BumpTests(Fixture):
         self.assertEqual(self.mise_installs()[-1], ["install", *TOOLS])
         self.assertIn("PR #100 https://example.test/pull/100", result.stdout)
         self.assertIn("merge " + sha, result.stdout)
-        self.assertIn("installed: loop-engine 1.0.0, lean-change 1.0.0, policy-document 1.0.0, research 1.0.0", result.stdout)
+        self.assertIn("installed: loop-engine 1.0.0, lean-change 1.0.0, policy-document 1.0.0, research 1.0.0, bookends-check 1.0.0", result.stdout)
         self.assertIn("+foo skill v1", result.stdout)  # the diff it checked
         lines = self.log_lines()
         self.assertEqual(len({line["id"] for line in lines}), 1)

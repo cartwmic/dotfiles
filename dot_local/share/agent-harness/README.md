@@ -234,7 +234,7 @@ authenticated `gh` and writes nothing without `--apply`.
 branch `loop-engine-vX.Y.Z`, waits for its checks, squash-merges it, and applies only the PR's targets here: it runs
 `chezmoi status` and `diff` on the skills tree and the mise config, stops if anything there differs in a way the PR did
 not make, then applies exactly the PR's files, relinks skills with `apply_harness_config.sh skills` (skill links
-only; MCP settings are left alone), runs `mise install` for the four tools and `verify-deployed`, and checks that
+only; MCP settings are left alone), runs `mise install` for the five tools and `verify-deployed`, and checks that
 mise has each version installed and active. It reads the profile with `chezmoi dump-config` and runs every other chezmoi
 command with a copy of that config without hooks, so no configured chezmoi hook runs. It prints the PR, the merge SHA and the installed versions, and logs each step to
 `~/.local/state/loop-engine-bump/log.jsonl`. A stop names its step (orphans, red checks, drift, another profile); a

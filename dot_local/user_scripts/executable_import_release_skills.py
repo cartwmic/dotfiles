@@ -10,7 +10,7 @@
 The tag is resolved to one commit; every imported file is read from that commit's archive and
 must match the git blob hash in the commit's tree. Files that sit in a bundle but not in the tag
 are orphans: --apply refuses while any exist, and --prune deletes them. --pins also moves the
-four Loop Engine tool pins (loop-engine, lean-change, policy-document, research) in
+five Loop Engine tool pins (loop-engine, lean-change, policy-document, research, bookends-check) in
 dot_config/mise/config.toml to the tag's version (mise keeps older installed versions, so frozen
 runs keep theirs; this tool never uninstalls anything). The software-change pin was removed from
 that file: releases no longer ship it, and installed copies are untouched.
@@ -53,8 +53,8 @@ ROOT_REFERENCES = {
         "PRD.md",
     ),
 }
-PIN_LINE = re.compile(r'^((?:loop-engine|lean-change|policy-document|research) = \{ version = ")([^"]+)(")', re.M)
-PIN_COUNT = 4
+PIN_LINE = re.compile(r'^((?:loop-engine|lean-change|policy-document|research|bookends-check) = \{ version = ")([^"]+)(")', re.M)
+PIN_COUNT = 5
 # Names chezmoi would read as attributes, or drop (an empty file is not deployed without empty_).
 CHEZMOI_SPECIAL = re.compile(
     r"^(?:\.|(?:after|before|create|dot|empty|encrypted|exact|executable|external|literal|modify|once|onchange|"
@@ -323,7 +323,7 @@ def main(argv=None):
     importing.add_argument("tag")
     importing.add_argument("--repo", default=DEFAULT_REPO)
     importing.add_argument("--expect-commit", help="fail unless the tag resolves to a commit starting with this")
-    importing.add_argument("--pins", action="store_true", help="also move the four mise tool pins to the tag's version")
+    importing.add_argument("--pins", action="store_true", help="also move the five mise tool pins to the tag's version")
     importing.add_argument("--apply", action="store_true")
     importing.add_argument("--prune", action="store_true", help="with --apply: delete orphan files in the bundles")
     verifying = commands.add_parser("verify-deployed", help="check the deployed bundles and harness links against the source")
