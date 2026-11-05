@@ -96,6 +96,13 @@ NODE_AUTH_TOKEN = "op://developer/item/password"
         self.assertEqual(p["tools"], {"node": ("24.22.2", None), "helm": ("4.2.3", "helm version --short")})
         self.assertEqual(p["secrets"], {"NODE_AUTH_TOKEN": "op://developer/item/password"})
 
+    def test_user_defaults_to_non_root_and_must_be_uid_gid(self):
+        self.assertEqual(K.parse_profile("")["user"], "1000:1000")
+        self.assertEqual(K.parse_profile('user = "0:0"')["user"], "0:0")
+        for bad in ('user = "node"', 'user = 1000', 'user = "1000"'):
+            with self.assertRaises(K.Unavailable, msg=bad):
+                K.parse_profile(bad)
+
     def test_rejects_bad_shapes(self):
         for bad in ['nope = 1', '[tools]\nnode = 24', '[tools]\nnode = {cmd = "x"}', '[secrets]\nX = "plain"',
                     '[secrets]\n"1X" = "op://a/b/c"', 'services = "docker"', 'image = ']:
@@ -133,6 +140,7 @@ class PodSpec(unittest.TestCase):
         env = {e["name"]: e.get("value") for e in c["env"]}
         self.assertEqual((env["CARGO_BUILD_JOBS"], env["RAYON_NUM_THREADS"], env["MAKEFLAGS"]), ("3", "3", "-j3"))
         self.assertEqual(c["image"], DIGEST)
+        self.assertIn({"name": "cache", "mountPath": "/usr/local/cargo/registry", "subPath": "cargo-registry-u1000"}, c["volumeMounts"])
 
     def test_keeps_off_excluded_nodes(self):
         pod, _ = self.pod()
@@ -152,6 +160,26 @@ class PodSpec(unittest.TestCase):
         self.assertEqual({s["metadata"]["name"] for s in secrets}, {"kgate-1-2-env", "kgate-1-2-pull"})
         self.assertEqual(pod["spec"]["containers"][0]["envFrom"], [{"secretRef": {"name": "kgate-1-2-env"}}])
         self.assertEqual(pod["spec"]["imagePullSecrets"], [{"name": "kgate-1-2-pull"}])
+
+
+class RunAsUser(unittest.TestCase):
+    def test_root_in_the_pod_hands_the_tree_to_the_user(self):
+        with tempfile.TemporaryDirectory() as d:
+            tree = Path(d) / "wt"
+            (tree / "sub").mkdir(parents=True)
+            (tree / "sub" / "f").write_text("x")
+            owned = []
+            job = {"uid": 1000, "gid": 1001, "own": [str(tree)]}
+            how, env = K.prepare_user(job, euid=0, chown=lambda p, u, g: owned.append((p, u, g)), root=d)
+            self.assertEqual(how, {"user": 1000, "group": 1001, "extra_groups": []})
+            self.assertEqual(env, {"HOME": "/cache/u1000/home", "npm_config_cache": "/cache/u1000/npm"})
+            paths = {p for p, u, g in owned}
+            self.assertTrue({str(tree), str(tree / "sub"), str(tree / "sub" / "f"), d + "/out", d + "/cache/u1000/home"} <= paths)
+            self.assertTrue(all((u, g) == (1000, 1001) for p, u, g in owned))
+
+    def test_uid_zero_or_a_non_root_pod_changes_nothing(self):
+        self.assertEqual(K.prepare_user({"uid": 0, "gid": 0, "own": []}, euid=0), ({}, {}))
+        self.assertEqual(K.prepare_user({"uid": 1000, "gid": 1000, "own": []}, euid=1000), ({}, {}))
 
 
 class Pieces(unittest.TestCase):

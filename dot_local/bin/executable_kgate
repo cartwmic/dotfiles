@@ -108,7 +108,7 @@ def parse_profile(text):
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "tools", "secrets", "services"}
+    known = {"image", "cpu", "memory", "user", "tools", "secrets", "services"}
     if set(raw) - known:
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
     tools = {}
@@ -126,7 +126,10 @@ def parse_profile(text):
     services = raw.get("services") or []
     if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
         raise Unavailable("profile services must be a list of names")
-    return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"),
+    user = raw.get("user", "1000:1000")
+    if not isinstance(user, str) or not re.fullmatch(r"[0-9]+:[0-9]+", user):
+        raise Unavailable("profile user must look like 1000:1000, got %r" % (user,))
+    return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"), "user": user,
             "tools": tools, "secrets": secrets, "services": services}
 
 
@@ -144,7 +147,7 @@ def version_found(text, expected):
     return re.search(r"(?<![0-9])(?<![0-9]\.)" + re.escape(expected) + r"(?![0-9])(?!\.[0-9])", text) is not None
 
 
-def pod_manifests(job, image, cpu, memory, node, secret_env, pull):
+def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000):
     """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name)."""
     labels = {"app": "kgate", "kgate-job": job}
     items = []
@@ -166,7 +169,7 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull):
                  "command": ["sh", "-c", "exec sleep infinity"], "env": env,
                  "resources": {"requests": {"cpu": str(cpu), "memory": memory}, "limits": {"memory": memory}},
                  "volumeMounts": [{"name": "cache", "mountPath": "/cache"},
-                                  {"name": "cache", "mountPath": "/usr/local/cargo/registry", "subPath": "cargo-registry"},
+                                  {"name": "cache", "mountPath": "/usr/local/cargo/registry", "subPath": "cargo-registry-u%d" % uid},
                                   {"name": "out", "mountPath": "/out"}]}
     if secret_env:
         container["envFrom"] = [{"secretRef": {"name": job + "-env"}}]
@@ -248,6 +251,24 @@ class PeakMeter:
         return (self.peak or None), "sampled"
 
 
+def prepare_user(job, euid=None, chown=os.lchown, root=""):
+    """CMD should run as the profile's user, like on a developer's Mac, not as root (root passes chmod-based tests a user fails).
+    The pod's exec starts as root: give that user the shipped tree, /out, a home and its own caches, and return how to start a process as it."""
+    uid, gid = job["uid"], job["gid"]
+    if (os.geteuid() if euid is None else euid) != 0 or uid == 0:
+        return {}, {}
+    home, cache = "/cache/u%d/home" % uid, "/cache/u%d" % uid
+    for path in (cache, home, cache + "/npm", "/out", "/usr/local/cargo/registry"):
+        os.makedirs(root + path, exist_ok=True)
+        chown(root + path, uid, gid)
+    for top in job["own"]:
+        chown(top, uid, gid)
+        for here, dirs, files in os.walk(top):
+            for name in dirs + files:
+                chown(os.path.join(here, name), uid, gid)
+    return {"user": uid, "group": gid, "extra_groups": []}, {"HOME": home, "npm_config_cache": cache + "/npm"}
+
+
 def pod_main(jobfile):
     """Inside the pod: verify the tree hash, check the tool versions, run CMD, report peak memory and its exit code."""
     with open(jobfile) as f:
@@ -260,9 +281,11 @@ def pod_main(jobfile):
         out("kgate: hash MISMATCH expected=%s found=%s\n" % (job["tree"], found))
         return 70
     out("kgate: hash ok %s\n" % found)
+    as_user, env_user = prepare_user(job)
+    env = {**os.environ, **env_user}
     for name, (version, cmd) in job["tools"].items():
         cmd = cmd or name + " --version"
-        run = subprocess.run(cmd, shell=True, cwd=job["cwd"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+        run = subprocess.run(cmd, shell=True, cwd=job["cwd"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", **as_user)
         text = run.stdout or ""
         if run.returncode != 0 or not version_found(text, version):
             line = next((x.strip() for x in text.splitlines() if x.strip()), "no output")
@@ -274,7 +297,7 @@ def pod_main(jobfile):
     meter.start()
     out("kgate: running %s\n" % json.dumps(job["argv"]))
     try:
-        code = subprocess.call(job["argv"], cwd=job["cwd"])
+        code = subprocess.call(job["argv"], cwd=job["cwd"], env=env, **as_user)
     except OSError as e:
         out("kgate: cannot start %s: %s\n" % (job["argv"][0], e))
         code = 127
@@ -390,7 +413,7 @@ class Job:
     def settings(self, wt):
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
-        prof = {"image": None, "cpu": None, "memory": None, "tools": {}, "secrets": {}, "services": []}
+        prof = {"image": None, "cpu": None, "memory": None, "user": "1000:1000", "tools": {}, "secrets": {}, "services": []}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())
@@ -520,6 +543,8 @@ class Job:
         image, cpu, mem, prof = self.settings(wt)
         tree = self.rec["tree"] = tree_hash(wt, files)
         job = {"id": self.id, "root": wt, "cwd": os.getcwd(), "files": files, "tree": tree, "argv": o.command,
+               "uid": int(prof["user"].split(":")[0]), "gid": int(prof["user"].split(":")[1]),
+               "own": [wt] + ([common] if not common.startswith(wt + "/") else []),
                "tools": {k: list(v) for k, v in prof["tools"].items()}}
         tar_bytes = archive(wt, common, files, {"tmp/%s/job.json" % self.id: json.dumps(job).encode(),
                                                 "tmp/%s/kgate.py" % self.id: open(os.path.realpath(__file__), "rb").read()})
@@ -532,7 +557,7 @@ class Job:
         if host in PULL:
             pull = (host, PULL[host][0], op_read(PULL[host][1]))
         self.note("pod %s on %s: image %s, %d cpu, %s" % (self.id, o.node or "any node", image.split("@")[0], cpu, mem))
-        self.start_pod(pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull))
+        self.start_pod(pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"]))
         del secret_env, pull
         self.note("pod running on %s" % self.rec["node"])
         seen, transport = self.execute(tar_bytes)
