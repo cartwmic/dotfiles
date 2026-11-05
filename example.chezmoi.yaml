@@ -33,13 +33,18 @@ data:
   #   enabled: true
   #   machine: work    # the machine label on every series: personal / work by default
   #   endpoint: https://otel-collector.internal.cartwmic.com/v1/metrics
+  #   engine: python   # python (default) or ts: what ~/.local/bin/agent-events runs. ts needs agentKit.enabled; a render fails without it
   # Pinned agent-kit install for the agent-traces CLI (~/.local/bin/agent-traces; dot_local/share/agent-kit). On by default on personal only.
   # The install is `npm ci` from GitHub Packages with `gh auth token`. enabled: false (or any other profile) leaves the wrapper exiting 3.
   # agentKit:
   #   enabled: true
-  # Traces stage 2 shadow tooling (shadow_py_run.py, cache_ref.py, reference.sha256 beside the frozen collector in ~/.local/share/agent-events). On by default on personal only.
+  # Traces stage 2 shadow tooling (shadow_py_run.py, cache_ref.py, reference.sha256 beside the frozen collector in ~/.local/share/agent-events) and its
+  # three LaunchAgents: local.agent-traces-shadow (TS), local.agent-traces-shadow-py (Python control), local.agent-traces-seed (seeded failures only).
+  # On by default on personal only. Only the TS arm is loaded by the apply; the others are started by hand. enabled: false unloads and removes all three.
   # agentTracesShadow:
   #   enabled: true
+  #   machine: test-personal   # the arms send as <machine>-ts and <machine>-py; the seed arm is test-seed
+  #   arm: [ts, py, seed]      # default all three with agentKit on, else [py]; ts and seed need agentKit.enabled
   # axon-work-computer only: clone the private Axon agents playbook (placeholder; use your own account's URL). Omit the key and nothing is cloned.
   # axonPlaybook: {repo: "https://github.com/<account>/axon-agents-playbook.git"}
 

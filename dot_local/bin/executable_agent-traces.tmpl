@@ -1,7 +1,7 @@
 #!/bin/sh
 # agent-traces: the agent-kit traces CLI, for review drivers. Usage: agent-traces review <normalize|add|label|record|report> ...
 # Runs the kit from its pinned install (dot_local/share/agent-kit, installed by run_onchange_after_65_agent_kit_install.sh.tmpl).
-# Exit 3 means the CLI is not installed here; keep the review log by hand (playbook 58fdb05d).
+# Exit 3 means the CLI is not installed here, or no usable node is (none found, or older than 22.19); keep the review log by hand (playbook 58fdb05d).
 kit="${AGENT_TRACES_KIT:-$HOME/.local/share/agent-kit}"
 cli="$kit/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
 if [ ! -f "$cli" ]; then
@@ -14,6 +14,29 @@ if [ ! -f "$cli" ]; then
 {{- end }}
   exit 3
 fi
-node="$(command -v node || true)"
+# Which node: AGENT_TRACES_NODE, else node on PATH, else mise's shim (launchd's PATH has no node). Exit 3 for no node or one below the floor,
+# the same code as "not installed here"; the kit needs node:sqlite (22.19 or later, kit CONTRACT.md "The wrapper").
+node="${AGENT_TRACES_NODE:-}"
+[ -n "$node" ] || node="$(command -v node || true)"
 [ -n "$node" ] || node="$HOME/.local/share/mise/shims/node"
-exec "$node" "$cli" "$@"
+if [ ! -x "$node" ]; then
+  echo "agent-traces: no node found (looked at AGENT_TRACES_NODE, PATH and $HOME/.local/share/mise/shims/node); the kit needs node 22.19 or later" >&2
+  echo "agent-traces: install it with mise, or set AGENT_TRACES_NODE to a node binary" >&2
+  exit 3
+fi
+version="$("$node" -p 'process.versions.node' 2>/dev/null || true)"
+case "$version" in
+  [0-9]*.[0-9]*.[0-9]*) ;;
+  *)
+    echo "agent-traces: could not read the node version from $node; the kit needs node 22.19 or later" >&2
+    exit 3
+    ;;
+esac
+major="${version%%.*}"
+rest="${version#*.}"
+minor="${rest%%.*}"
+if [ "$major" -lt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -lt 19 ]; }; then
+  echo "agent-traces: node $version at $node is too old; the kit needs node 22.19 or later (set AGENT_TRACES_NODE to a newer node)" >&2
+  exit 3
+fi
+exec "$node" --disable-warning=ExperimentalWarning "$cli" "$@"
