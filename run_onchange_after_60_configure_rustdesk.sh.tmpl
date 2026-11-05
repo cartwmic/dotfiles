@@ -1,7 +1,8 @@
 #!/bin/sh
 # Configure RustDesk after mise bootstrap has installed the application.
 # Helper hash: {{ include "dot_local/user_scripts/executable_configure_rustdesk.sh.tmpl" | sha256sum }}
-# Server: {{ .rustdesk.server }}:{{ .rustdesk.port }}
+{{- $server := "" }}{{ if eq .profile "personal" }}{{ $_ := includeTemplate "require_data" (dict "data" . "path" "rustdesk.server") }}{{ $server = .rustdesk.server }}{{ end }}
+# Server: {{ $server }}:{{ .rustdesk.port }}
 # Public key hash: {{ .rustdesk.publicKey | sha256sum }}
 # Password reference: {{ .rustdesk.passwordReference }}
 

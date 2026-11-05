@@ -20,7 +20,7 @@
  *
  * Scope guard: only provider entries whose ONLY key is "models" are considered
  * catalog stopgaps. Entries that also configure baseUrl/apiKey/compat/etc.
- * (deepseek, private-anthropic) are permanent custom providers and are skipped.
+ * (deepseek, work-anthropic) are permanent custom providers and are skipped.
  */
 
 import * as fs from "node:fs";

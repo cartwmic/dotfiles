@@ -37,7 +37,7 @@ of `extensions/`). The warning names that source path.
 **Skip custom providers.** Only provider objects whose **only** key is
 `models` are treated as catalog stopgaps. Entries that also set `baseUrl`,
 `apiKey`, `compat`, `api`, or any other key (for example `deepseek` and
-`private-anthropic` in the same template) are permanent custom providers and
+`work-anthropic` in the same template) are permanent custom providers and
 are skipped. A provider with no upstream catalog ids is also skipped.
 
 Interactive sessions only (`ctx.hasUI`). Headless and subagent runs stay

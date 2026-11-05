@@ -78,7 +78,7 @@ def main():
         require(config_json["packages"].count(PACKAGE) == 1, "expected exactly one Git entry")
         require(all(config_json[k] == v for k, v in seed.items()), "live UI/changelog preservation failed")
         personal = profile == "personal"
-        require(config_json["defaultProvider"] == ("openai-codex" if personal else "private-glm"), "chat provider changed")
+        require(config_json["defaultProvider"] == ("openai-codex" if personal else "work-glm"), "chat provider changed")
         require(config_json["defaultModel"] == ("gpt-6.1-sol" if personal else "glm-5.3-flash"), "chat model changed")
         require(config_json["codemode"] == {"mode": "only"} and config_json["defaultTools"] == ["+codemode"], "chat/tool configuration changed")
         require(("https://github.com/olixis/pi-openrouter-plus" in config_json["packages"]) == personal, "plus gate changed")

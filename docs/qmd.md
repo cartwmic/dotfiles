@@ -218,7 +218,7 @@ code itself rolls back with `git revert` and an apply, or `cleanup: false`.
 ## qmd on PATH
 
 mise puts qmd's install directory on PATH only in a shell where mise is activated, at the moment it activates
-(`private_dot_zshrc`). A non-interactive shell does not activate it, and a process keeps the PATH it started with. Pi's bash tool
+(`private_dot_zshrc.tmpl`). A non-interactive shell does not activate it, and a process keeps the PATH it started with. Pi's bash tool
 runs `bash -c` with the environment of the Pi that started it, so Pi sessions and the coordinator pane often had no `qmd`.
 
 `~/.local/bin/qmd` (`dot_local/bin/executable_qmd`) fixes that: `~/.local/bin` is on PATH in every zsh (`~/.zshenv`), so the one file

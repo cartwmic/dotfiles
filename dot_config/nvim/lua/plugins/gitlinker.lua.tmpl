@@ -5,13 +5,15 @@ return {
     opts = {
       router = {
         browse = {
-          ["git.taservs.net"] = "https://git.taservs.net/"
+{{- $_ := includeTemplate "require_work_data" . }}{{ if hasKey . "workGitHost" }}
+          ["{{ .workGitHost }}"] = "https://{{ .workGitHost }}/"
             .. "{_A.ORG}/"
             .. "{_A.REPO}/blob/"
             .. "{_A.REV}/"
             .. "{_A.FILE}?plain=1" -- '?plain=1'
             .. "#L{_A.LSTART}"
             .. "{(_A.LEND > _A.LSTART and ('-L' .. _A.LEND) or '')}",
+{{- end }}
         }
       }
     },

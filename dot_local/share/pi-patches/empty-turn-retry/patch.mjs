@@ -3,7 +3,7 @@
 //
 // Surfaces degenerate empty assistant turns as retryable provider errors
 // inside pi-ai's anthropic-messages stream function. Gateway models (GLM-5.3
-// via boost-litellm) sometimes sample EOS immediately: the response carries
+// via the work LLM gateway) sometimes sample EOS immediately: the response carries
 // an empty text block (or thinking-only content) with rawStopReason
 // "end_turn" and 0 output tokens. pi's agent loop continues whenever a
 // response contains tool-call blocks, but treats stop-with-no-content as a

@@ -47,7 +47,7 @@ const { stream } = await import(`file://${locatePiAiStream()}`);
 const model = {
 	id: "glm-5.3-flash",
 	api: "anthropic-messages",
-	provider: "private-glm",
+	provider: "work-glm",
 	baseUrl: "http://127.0.0.1:9317",
 	contextWindow: 1048576,
 	maxTokens: 131072,

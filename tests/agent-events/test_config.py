@@ -112,8 +112,8 @@ class SettingTest(unittest.TestCase):
         env = plist(WORK, "agentEvents: {enabled: true, machine: work-laptop, endpoint: 'https://otel-collector.internal.cartwmic.com/v1/metrics'}")[0]["EnvironmentVariables"]
         self.assertEqual(env, {"AGENT_EVENTS_OTLP_ENDPOINT": "https://otel-collector.internal.cartwmic.com/v1/metrics",
                                "AGENT_EVENTS_MACHINE": "work-laptop"})
-        env = plist(data="agentEvents: {endpoint: 'http://10.19.1.201:4318/otlp/v1/metrics', machine: %s}" % ("a" * 32))[0]["EnvironmentVariables"]
-        self.assertEqual(env["AGENT_EVENTS_OTLP_ENDPOINT"], "http://10.19.1.201:4318/otlp/v1/metrics")
+        env = plist(data="agentEvents: {endpoint: 'http://192.0.2.10:4318/otlp/v1/metrics', machine: %s}" % ("a" * 32))[0]["EnvironmentVariables"]
+        self.assertEqual(env["AGENT_EVENTS_OTLP_ENDPOINT"], "http://192.0.2.10:4318/otlp/v1/metrics")
         self.assertEqual(env["AGENT_EVENTS_MACHINE"], "a" * 32)
         for port in (1, 80, 4318, 9999, 10000, 59999, 64999, 65499, 65529, 65535):  # every branch of the port check
             url = "http://localhost:%d/v1/metrics" % port

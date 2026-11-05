@@ -3,7 +3,7 @@
 {{ include "dot_local/share/agent-harness/canonical/instructions/AGENTS.md" }}
 {{- if eq .profile "axon-work-computer" }}
 
-{{ include "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md" | trimSuffix "\n" }}
+{{ includeTemplate "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md.tmpl" . | trimSuffix "\n" }}
 {{- end }}
 {{- if eq .profile "axon-work-computer" }}
 

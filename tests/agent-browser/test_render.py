@@ -20,12 +20,17 @@ ENTRY = {
 }
 
 
+# The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
+WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
+             "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
+
+
 def chezmoi(profile, *args, stdin=None):
     with tempfile.TemporaryDirectory() as tmp:
         home = Path(tmp) / "home"
         home.mkdir()
         cfg = Path(tmp) / "chezmoi.yaml"
-        cfg.write_text("data:\n  profile: %s\n" % profile)
+        cfg.write_text("data:\n  profile: %s\n" % profile + "".join("  %s: %s\n" % kv for kv in (WORK_DATA.items() if profile == "axon-work-computer" else ())))
         r = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(cfg), "--config-format", "yaml",
                             "--destination", str(home), *args],
                            input=stdin, capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=120)

@@ -1,0 +1,3 @@
+{{- $_ := includeTemplate "require_data" (dict "data" . "path" "sshHosts.kgate.address") -}}
+{{- $_ := includeTemplate "require_data" (dict "data" . "path" "sshHosts.kgate.user") -}}
+{{ .sshHosts.kgate.user }}@{{ .sshHosts.kgate.address }}

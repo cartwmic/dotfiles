@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import homelab_env
+
 CACHE = Path.home() / ".cache/dotfiles-termux"
 
 
@@ -106,10 +108,13 @@ def prepare(args):
     image = folder / f"{name}.png"
     if image.exists():
         raise Failed(f"existing QR at {image}; import then run cleanup before another prepare")
+    router = homelab_env.require("HOMELAB_ROUTER", Failed)
+    lan_net = homelab_env.network("HOMELAB_LAN_CIDR", Failed)
+    wg_net = homelab_env.network("HOMELAB_WG_CIDR", Failed)
     contents = (f"[Interface]\nPrivateKey = {secret.decode()}\n"
-                f"Address = {address}\nDNS = 10.19.1.1\n\n"
+                f"Address = {address}\nDNS = {router}\n\n"
                 f"[Peer]\nPublicKey = {args.server_key}\n"
-                "AllowedIPs = 10.19.1.0/24, 10.21.1.0/24\n"
+                f"AllowedIPs = {lan_net}, {wg_net}\n"
                 "Endpoint = cartwmic.com:61583\nPersistentKeepalive = 25\n")
     try:
         run(["qrencode", "-o", str(image)], data=contents.encode())

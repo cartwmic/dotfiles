@@ -63,13 +63,13 @@ if name=='aapt':
     pkg,version=Path(args[-1]).read_text().split(',')
     finish(output=f"package: name='{pkg}' versionCode='{version}' versionName='test'\n")
 if name=='ssh':
-    if 'root@10.19.1.1' in args:
+    if 'root@192.0.2.1' in args:
         source=sys.stdin.read()
         if 'PHONE_SPEC_B64=' in source:
             encoded=re.search(r'PHONE_SPEC_B64=([A-Za-z0-9+/=]+)',source).group(1)
             spec=json.loads(base64.b64decode(encoded)); action=spec['action']; mode=spec['mode']
-            old=dict(uuid='old-uuid',name='cartwmic-ssh-phone',public_key=state['old_public'],address='10.21.1.7/32')
-            oldmap=dict(mac=state.get('old_mac','5e:51:a2:24:38:79'),lan='10.19.1.88',hostname='ssh-phone')
+            old=dict(uuid='old-uuid',name='cartwmic-ssh-phone',public_key=state['old_public'],address='198.51.100.7/32')
+            oldmap=dict(mac=state.get('old_mac','5e:51:a2:24:38:79'),lan='192.0.2.88',hostname='ssh-phone')
             candidate=(dict(uuid='new-uuid',name='cartwmic-ssh-phone-candidate',public_key=state['new_public'],address=state['new_address']) if state.get('staged') else None)
             newmap=(dict(mac=state['new_mac'],lan=state['new_lan'],hostname='ssh-phone-candidate') if state.get('staged') else None)
             summary=dict(fingerprint=('after-stage' if state.get('staged') else 'before-stage'),server_public_key=os.environ['PHONE_TEST_PUBLIC'],old_peer=old,old_reservation=oldmap,candidate_peer=candidate,candidate_reservation=newmap)
@@ -89,7 +89,7 @@ if name=='ssh':
         if 'wg show wg1 allowed-ips' in source:
             finish(output=state['new_public']+'\t'+state['new_address']+'\n')
         finish(output='OK\n')
-    if '-G' in args: finish(output='hostname 10.21.1.8\nuser u0_a999\n')
+    if '-G' in args: finish(output='hostname 198.51.100.8\nuser u0_a999\n')
     command=args[-1]; note('phone ssh '+('key-stream' if 'cat >' in command else ('macbook_login' if 'zsh -lic' in command else command[:65])))
     if command=='true' and not state['ready']: finish(255)
     if 'ssh-keygen -lf ~/.ssh/' in command:
@@ -176,6 +176,7 @@ class PhoneCLITest(unittest.TestCase):
         self.save()
         self.env = dict(os.environ, HOME=str(self.home), PATH=str(bin_dir) + os.pathsep + os.environ["PATH"],
                         ANDROID_BUILD_TOOLS=str(bin_dir), PHONE_TEST_STATE=str(self.state_path),
+                        HOMELAB_ROUTER="192.0.2.1", HOMELAB_LAN_CIDR="192.0.2.0/24", HOMELAB_WG_CIDR="198.51.100.0/24",
                         PHONE_TEST_CERT=CERT, PHONE_TEST_PUBLIC=PUBLIC, PHONE_TEST_PRIVATE=PRIVATE,
                         PHONE_TEST_OLD_PUBLIC=OLD_PUBLIC, PHONE_TEST_OLD_PRIVATE=OLD_PRIVATE,
                         PHONE_TEST_HOMELAB="SHA256:s1NF+DDqZKlvvy/wDQXBACMs3jb/cjkvy/UpOYbypOQ",
@@ -289,7 +290,7 @@ class PhoneCLITest(unittest.TestCase):
 
     def test_router_plan_requires_separate_confirmation_and_preserves_old_peer(self):
         result = self.invoke("router-phone.py", "plan", "--mode", "stage", "--mac", "5e:51:a2:24:38:7a",
-                             "--lan", "10.19.1.89", "--address", "10.21.1.8/32", "--public-key", PUBLIC)
+                             "--lan", "192.0.2.89", "--address", "198.51.100.8/32", "--public-key", PUBLIC)
         self.assertEqual(result.returncode, 0, result.stderr)
         path = next(line.removeprefix('PLAN: ').split('. Review', 1)[0]
                     for line in result.stdout.splitlines() if line.startswith('PLAN: '))
@@ -309,12 +310,12 @@ class PhoneCLITest(unittest.TestCase):
 
     def test_wiped_phone_reuses_existing_wireguard_key_and_mapping(self):
         qr = self.invoke("wireguard-phone.py", "prepare", "--mode", "restore", "--serial", SERIAL,
-                         "--address", "10.21.1.7/32", "--server-key", PUBLIC)
+                         "--address", "198.51.100.7/32", "--server-key", PUBLIC)
         self.assertEqual(qr.returncode, 0, qr.stderr)
         self.assertIn('mode=restore', qr.stdout)
         self.assertIn('public_key=' + OLD_PUBLIC, qr.stdout)
         plan = self.invoke("router-phone.py", "plan", "--mode", "restore", "--mac", "5e:51:a2:24:38:7b",
-                           "--lan", "10.19.1.88", "--address", "10.21.1.7/32", "--public-key", OLD_PUBLIC)
+                           "--lan", "192.0.2.88", "--address", "198.51.100.7/32", "--public-key", OLD_PUBLIC)
         self.assertEqual(plan.returncode, 0, plan.stderr)
         path = next(line.removeprefix('PLAN: ').split('. Review', 1)[0]
                     for line in plan.stdout.splitlines() if line.startswith('PLAN: '))
@@ -325,7 +326,7 @@ class PhoneCLITest(unittest.TestCase):
 
     def test_wireguard_candidate_saved_without_echoing_secret(self):
         result = self.invoke("wireguard-phone.py", "prepare", "--mode", "replace", "--serial", SERIAL,
-                             "--address", "10.21.1.8/32", "--server-key", PUBLIC)
+                             "--address", "198.51.100.8/32", "--server-key", PUBLIC)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Private key', self.state['op_item_fields'])
         png = self.home / '.cache/dotfiles-termux/wg-import/TEST-MOTO.png'
@@ -337,7 +338,7 @@ class PhoneCLITest(unittest.TestCase):
 
     def test_promote_requires_router_retirement_and_keeps_old_item(self):
         prepare = self.invoke("wireguard-phone.py", "prepare", "--mode", "replace", "--serial", SERIAL,
-                              "--address", "10.21.1.8/32", "--server-key", PUBLIC)
+                              "--address", "198.51.100.8/32", "--server-key", PUBLIC)
         self.assertEqual(prepare.returncode, 0, prepare.stderr)
         early = self.invoke("wireguard-phone.py", "promote", "--serial", SERIAL,
                             "--expected-public-key", PUBLIC, "--confirm-promote")

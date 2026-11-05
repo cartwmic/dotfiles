@@ -5,7 +5,7 @@
 # Fetch the 1Password service-account token from 1Password using the regular
 # `op` CLI (which will prompt for biometric / desktop-app auth — this is the
 # one place we accept a prompt) and write it to the file expected by:
-#   - private_dot_zshrc (sources it into $OP_SERVICE_ACCOUNT_TOKEN at shell start)
+#   - private_dot_zshrc.tmpl (sources it into $OP_SERVICE_ACCOUNT_TOKEN at shell start)
 #   - executable_apply_harness_config.sh (resolve_secret reads the file directly
 #     when $OP_SERVICE_ACCOUNT_TOKEN isn't already set)
 #

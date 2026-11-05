@@ -5,7 +5,8 @@ set -eu
 
 SCRIPT_NAME="$(basename "$0")"
 LOG_PREFIX="[${SCRIPT_NAME}]"
-SERVER={{ .rustdesk.server | quote }}
+{{- $server := "" }}{{ if eq .profile "personal" }}{{ $_ := includeTemplate "require_data" (dict "data" . "path" "rustdesk.server") }}{{ $server = .rustdesk.server }}{{ end }}
+SERVER={{ $server | quote }}
 PORT={{ printf "%v" .rustdesk.port | quote }}
 PUBLIC_KEY={{ .rustdesk.publicKey | quote }}
 PASSWORD_REFERENCE={{ .rustdesk.passwordReference | quote }}

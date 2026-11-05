@@ -81,7 +81,7 @@ but turned off by [`disabled.lua.tmpl`](./lua/plugins/disabled.lua.tmpl).
 | [`grapple.lua`](./lua/plugins/grapple.lua) | Git-scoped file tags; `<leader>1`–`5` and `<leader>zg*` |
 | [`lualine.lua`](./lua/plugins/lualine.lua) | Grapple in the statusline |
 | [`fzf.lua`](./lua/plugins/fzf.lua) | fzf-lua: `<C-o>` to normal mode; grep `ctrl-alt-g` |
-| [`gitlinker.lua`](./lua/plugins/gitlinker.lua) | `<leader>gy` / `<leader>gY`; browse host `git.taservs.net` |
+| [`gitlinker.lua.tmpl`](./lua/plugins/gitlinker.lua.tmpl) | `<leader>gy` / `<leader>gY`; browse host from the local chezmoi data key `workGitHost` (required on the work profile; elsewhere left out when unset) |
 | [`vim-fugitive.lua`](./lua/plugins/vim-fugitive.lua) | Fugitive |
 | [`neotree.lua`](./lua/plugins/neotree.lua) | `Y` copies a chosen path form |
 | [`ranger.lua`](./lua/plugins/ranger.lua) | `<leader>r` floating Ranger (`rnvimr`) |
