@@ -247,6 +247,15 @@ class PlistShapeTest(unittest.TestCase):
         self.assertEqual(env["AGENT_EVENTS_STATE_DIR"], str(c.home) + "/.local/state/agent-traces-shadow-py")
         self.assertNotIn("AGENT_EVENTS_CACHE_GAUGES", env, "shadow_py_run.py drops the gauges in memory; the collector has no such switch")
 
+    def test_py_points_mise_at_its_real_data_dir_outside_the_moved_xdg_dir(self):
+        """XDG_DATA_HOME moves mise's default data dir, so the shim's mise python would lose its installs and the shim would find no tomllib."""
+        for profile, data in (("personal", ""), (WORK, "")):
+            with self.subTest(profile=profile):
+                c = Chezmoi(self, profile, data)
+                env = c.plist("py")["EnvironmentVariables"]
+                self.assertEqual(env["MISE_DATA_DIR"], str(c.home) + "/.local/share/mise")
+                self.assertFalse(env["MISE_DATA_DIR"].startswith(env["XDG_DATA_HOME"] + "/"), env["MISE_DATA_DIR"])
+
     def test_the_work_label_and_the_endpoint_follow_the_settings(self):
         c = Chezmoi(self, WORK, "agentTracesShadow: {enabled: true}\nagentEvents: {endpoint: 'https://x.example/v1/metrics'}")
         self.assertEqual(c.plist("py")["EnvironmentVariables"]["AGENT_EVENTS_MACHINE"], "test-work-py")
@@ -607,6 +616,29 @@ class PythonArmTest(unittest.TestCase):
         (arm.pi / "sessions").mkdir()
         problems = arm.check()
         self.assertTrue(any("control run" in p for p in problems), problems)
+
+
+class PyArmMiseTest(unittest.TestCase):
+    """The Python arm's shim finds a python with tomllib through mise, under the arm's own env, on the real home.
+
+    The plist is rendered against the real home (execute-template writes nothing), so MISE_DATA_DIR names mise's real data dir. The only thing
+    run is the shim's python with `import tomllib`, under env -i with exactly the plist's EnvironmentVariables plus HOME. Skipped where mise or its
+    python3 shim is absent (CI).
+    """
+
+    def test_the_arm_env_reaches_a_python_with_tomllib_through_the_real_mise_shim(self):
+        if not shutil.which("mise"):
+            self.skipTest("no mise on PATH: the mise python3 shim cannot be checked here")
+        home = Path.home()
+        shim = home / ".local/share/mise/shims/python3"
+        if not shim.is_file():
+            self.skipTest("no mise python3 shim at %s: nothing to check here" % shim)
+        c = Chezmoi(self)
+        rendered = c.run("execute-template", stdin=(REPO / AGENTS / ("%s.plist.tmpl" % ARMS["py"][0])).read_text(), home=home).stdout
+        env = plistlib.loads(rendered.encode())["EnvironmentVariables"]
+        argv = ["/usr/bin/env", "-i", *("%s=%s" % kv for kv in env.items()), "HOME=%s" % home, str(shim), "-c", "import tomllib"]
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, "the arm's env does not reach a python with tomllib through mise: %s" % (r.stderr.strip() or r.stdout.strip()))
 
 
 @unittest.skipUnless(KIT_INSTALL and NODE_BIN, "the TS half needs AGENT_TRACES_KIT_INSTALL (an installed kit) and node 22.19 or later")
