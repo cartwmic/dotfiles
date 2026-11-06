@@ -3,7 +3,7 @@
 HEAVY_GATE_SCRIPT points the suite at a mutated copy (see mutate.py).
 
 The real script runs as a real process. Only the host's figures are scripted: sysctl, memory_pressure, vm_stat and uname are
-small fakes first on PATH that print whatever the test wrote to files, so a busy or quiet Mac can be simulated on any machine.
+small fakes first on PATH that print whatever the test wrote to files (df too, for the disk floor), so a busy or quiet Mac can be simulated on any machine.
 """
 import os
 import signal
@@ -27,6 +27,7 @@ FAKES = {
   kern.memorystatus_vm_pressure_level) v=$(cat "$FAKE/pressure"); echo "$v"; echo read >> "$FAKE/pressure_reads"
     if [ -f "$FAKE/on_pressure" ]; then sh "$FAKE/on_pressure"; fi ;;
 esac''',
+    "df": 'cat "$FAKE/df"',
     "memory_pressure": 'cat "$FAKE/memory_pressure"\nif [ -f "$FAKE/on_memory_pressure" ]; then sh "$FAKE/on_memory_pressure"; fi',
     # the gate no longer reads vm_stat; the frozen v69 gate in OLD_SCRIPT does
     "vm_stat": '''n=$(cat "$FAKE/swapouts")
@@ -34,12 +35,23 @@ esac''',
 echo "Swapouts:      $n."''',
 }
 
+DF_HEADER = "Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on"
+
+
+def df_output(free_gb, mount="/System/Volumes/Data"):
+    """What `df -k $HOME` prints on macOS for a volume with this much free space (GiB; the blocks are 1 TiB)."""
+    kb = int(free_gb * 1048576)
+    total = 1024 * 1048576
+    return f"{DF_HEADER}\n/dev/disk3s5   {total} {total - kb} {kb}    99% 1234567 9876543   11%   {mount}"
+
+
 QUIET = {
     "loadavg": "{ 2.10 3.00 4.00 }",
     "swapusage": "total = 8192.00M  used = 1000.00M  free = 7192.00M  (encrypted)",
     "pressure": "1",
     "memory_pressure": "System-wide memory free percentage: 62%",
     "swapouts": "5000",
+    "df": df_output(500),   # plenty free; tests of the disk floor use set_free
 }
 
 
@@ -76,6 +88,12 @@ class HeavyGate(unittest.TestCase):
     def set(self, **figures):
         for key, value in figures.items():
             (self.fake / key).write_text(value + "\n")
+
+    def set_free(self, free_gb, mount="/System/Volumes/Data"):
+        """Fake `df`: written to a temp name, then renamed, so the gate never reads half a file."""
+        tmp = self.fake / "df.new"
+        tmp.write_text(df_output(free_gb, mount) + "\n")
+        os.replace(tmp, self.fake / "df")
 
     def gate(self, *args, timeout=30, script=SCRIPT, **extra):
         extra.setdefault("cwd", self.tmp.name)   # see start()
@@ -308,7 +326,7 @@ class HeavyGate(unittest.TestCase):
                 self.set(**QUIET)
                 self.set(**figures)
                 result = self.gate()
-                self.assertIn("a start is admitted on memory pressure only", result.stderr)
+                self.assertIn("a start is admitted on free disk space and memory pressure only: >= 15 GB free on the volume that holds $HOME, level 1 to 2", result.stderr)
                 self.assertIn("level 1 to 2 and memory free", result.stderr)
                 self.assertIn("memory free >= 30%", result.stderr)
                 self.assertIn("two readings 1s apart", result.stderr)
@@ -316,6 +334,86 @@ class HeavyGate(unittest.TestCase):
         # a job that waits is not told the rule on every try
         result = self.gate("--", "true")
         self.assertNotIn("Not checked", result.stderr)
+
+    # --- the disk floor ---
+    def test_free_space_under_the_floor_refuses_with_one_line_and_its_own_exit_code(self):
+        self.set_free(9.8)
+        result = self.gate()
+        self.assertEqual(result.returncode, 76, result.stderr)
+        self.assertIn("[heavy-gate] REFUSED: 9.8 GB free on /System/Volumes/Data, under the 15 GB floor; free space and retry", result.stderr)
+        self.assertNotIn("allowed", result.stderr.replace("is admitted", ""))   # no "INFO: allowed" line
+
+    def test_free_space_over_the_floor_is_admitted(self):
+        self.set_free(15.1)
+        result = self.gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("REFUSED", result.stderr)
+
+    def test_the_edge_of_the_floor_is_admitted_and_just_under_it_is_not(self):
+        self.set_free(15)
+        self.assertEqual(self.gate().returncode, 0)
+        self.set_free(14.99)
+        self.assertEqual(self.gate().returncode, 76)
+
+    def test_the_floor_can_be_set_by_HEAVY_GATE_MIN_FREE_GB(self):
+        self.set_free(20)
+        self.assertEqual(self.gate().returncode, 0)
+        result = self.gate(env={"HEAVY_GATE_MIN_FREE_GB": "25"})
+        self.assertEqual(result.returncode, 76, result.stderr)
+        self.assertIn("20.0 GB free on /System/Volumes/Data, under the 25 GB floor", result.stderr)
+        self.set_free(9.8)
+        self.assertEqual(self.gate(env={"HEAVY_GATE_MIN_FREE_GB": "5"}).returncode, 0)
+        self.assertEqual(self.gate(env={"HEAVY_GATE_MIN_FREE_GB": "0"}).returncode, 0)
+
+    def test_a_bad_floor_is_a_usage_error(self):
+        for value in ("lots", "-1", "1.2.3"):
+            with self.subTest(value):
+                result = self.gate(env={"HEAVY_GATE_MIN_FREE_GB": value})
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("HEAVY_GATE_MIN_FREE_GB", result.stderr)
+
+    def test_free_space_that_cannot_be_read_refuses(self):
+        for output in ("", "df: nope", DF_HEADER + "\n/dev/disk3s5 1 2 lots 99% 1 2 11% /"):
+            with self.subTest(output):
+                (self.fake / "df").write_text(output + "\n")
+                result = self.gate()
+                self.assertEqual(result.returncode, 76, result.stderr)
+                self.assertIn("REFUSED: free space on the volume that holds", result.stderr)
+
+    def test_a_mount_point_with_a_space_is_named_whole(self):
+        self.set_free(3, mount="/Volumes/My Disk")
+        self.assertIn("3.0 GB free on /Volumes/My Disk, under", self.gate().stderr)
+
+    def test_the_gate_reads_the_volume_that_holds_HOME(self):
+        (self.bin / "df").write_text('#!/bin/sh\necho "$@" > "$FAKE/df_args"\ncat "$FAKE/df"\n')
+        self.gate(env={"HOME": "/some/home"})
+        self.assertEqual((self.fake / "df_args").read_text().split(), ["-k", "/some/home"])
+
+    def test_a_command_is_not_run_under_the_floor_and_the_exit_code_stays_distinct(self):
+        self.set_free(9.8)
+        marker = Path(self.tmp.name) / "ran"
+        result = self.gate("--", "touch", str(marker))
+        self.assertEqual(result.returncode, 76, result.stderr)   # not 75: the last try was refused for disk space
+        self.assertFalse(marker.exists(), "a refused job must not start")
+        self.assertIn("REFUSED: 9.8 GB free", result.stderr)
+        self.assertFalse(self.lock.is_symlink(), "nothing is held")
+
+    def test_a_job_that_waits_runs_once_space_is_freed(self):
+        self.set_free(9.8)
+        marker = Path(self.tmp.name) / "ran"
+        job = self.start("--wait", "20", "--", "touch", str(marker))
+        time.sleep(2.5)
+        self.assertIsNone(job.poll(), "still waiting while the disk is low")
+        self.assertFalse(marker.exists())
+        self.set_free(40)
+        job.communicate(timeout=20)
+        self.assertEqual(job.returncode, 0)
+        self.assertTrue(marker.exists())
+
+    def test_memory_refusal_after_wait_is_still_75(self):
+        self.set(pressure="4")
+        self.assertEqual(self.gate("--wait", "1", "--", "true").returncode, 75)
+        self.assertEqual(self.gate().returncode, 1)
 
     # --- running a command ---
     def test_runs_the_command_on_a_quiet_host_and_passes_its_status_through(self):
@@ -1144,7 +1242,7 @@ exit $rc
         result = self.gate("--help")
         self.assertEqual(result.returncode, 2)
         for expected in ("HEAVY_GATE_SLOTS", "HEAVY_GATE_SLOTS_FILE", "heavy-gate slots", "heavy-gate slots N", "Slots:", "heavy-gate priorities", "heavy-gate priority PATTERN NUMBER", "HEAVY_GATE_PRIORITY", "slot 2",
-                         "Only memory pressure gates a start", "memory pressure level 1 or 2", "owner decision 2026-10-30: admit at level 2 when free >= 30%", "Not checked, on purpose: free swap", "HEAVY_GATE_CHECK_WINDOW"):
+                         "Memory pressure and free disk space gate a start", "HEAVY_GATE_MIN_FREE_GB", "REFUSED: 9.8 GB free on /System/Volumes/Data, under the 15 GB floor", "memory pressure level 1 or 2", "owner decision 2026-10-30: admit at level 2 when free >= 30%", "Not checked, on purpose: free swap", "HEAVY_GATE_CHECK_WINDOW"):
             self.assertIn(expected, result.stderr)
         for stale in ("load1 < 8", "Swapouts flat", "500 MB", "safety floor", "HEAVY_GATE_SWAP_WINDOW"):
             self.assertNotIn(stale, result.stderr)
