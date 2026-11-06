@@ -1,0 +1,31 @@
+#!/bin/sh
+# cargo for agent shells: one target dir per project on the Workshop SSD, then the real cargo. Personal macOS only (.chezmoiignore).
+#
+# dot_zshenv puts this directory first on PATH only in an agent shell (CLAUDECODE or T3CODE_THREAD_ID is set), so a terminal never
+# sees it. If CARGO_TARGET_DIR (or CARGO_BUILD_TARGET_DIR) is already set it is left alone, which is how a brief or a skill picks
+# its own. Otherwise the target dir is $AGENT_TMP/cargo-target/<name of the git top-level directory, or of the current directory>.
+# An environment variable cannot do this alone: cargo expands {workspace-root} only in a config file, and the variable is fixed
+# when the shell starts, before anyone has chosen a project.
+# If Workshop is not mounted the target dir is under the missing Workshop path and cargo fails with an error; there is no fallback.
+# Reproduce: chezmoi apply. Undo: remove this file and the PATH line in dot_zshenv. Docs: docs/agent-scratch.md.
+self=$(cd "$(dirname "$0")" && pwd -P)
+real=
+oldifs=$IFS
+IFS=:
+for d in $PATH; do
+  [ -n "$d" ] && [ -x "$d/cargo" ] || continue
+  [ "$(cd "$d" && pwd -P)" = "$self" ] && continue
+  real=$d/cargo
+  break
+done
+IFS=$oldifs
+if [ -z "$real" ]; then
+  echo "cargo (agent-scratch shim): no other cargo on PATH" >&2
+  exit 127
+fi
+if [ -z "${CARGO_TARGET_DIR-}" ] && [ -z "${CARGO_BUILD_TARGET_DIR-}" ] && [ -n "${AGENT_TMP-}" ]; then
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || top=$PWD
+  CARGO_TARGET_DIR=$AGENT_TMP/cargo-target/$(basename "$top")
+  export CARGO_TARGET_DIR
+fi
+exec "$real" "$@"

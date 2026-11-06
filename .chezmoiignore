@@ -252,6 +252,8 @@ Library/Preferences/pnpm/**
 .config/heavy-gate/volumes
 81_agent_scratch_workshop.sh
 .local/user_scripts/agent_tmp_move.py
+.local/share/agent-scratch
+.local/share/agent-scratch/**
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 # Anthropic stalls are only seen on the work profile.

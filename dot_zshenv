@@ -41,6 +41,16 @@ fi
 # Cargo environment (if rust installed via cargo directly)
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
+# Agent shells only (CLAUDECODE is set by Claude Code, T3CODE_THREAD_ID by T3 Code): a `cargo` that gives each project its own
+# target dir on the Workshop SSD. After ~/.cargo/env so it comes first; the directory exists on the personal Mac only, so this
+# does nothing elsewhere. See docs/agent-scratch.md.
+if [ -n "${CLAUDECODE-}${T3CODE_THREAD_ID-}" ] && [ -d "$HOME/.local/share/agent-scratch/bin" ]; then
+  case ":$PATH:" in
+    *":$HOME/.local/share/agent-scratch/bin:"*) ;;
+    *) export PATH="$HOME/.local/share/agent-scratch/bin:$PATH" ;;
+  esac
+fi
+
 # antidote and fzf are now sourced in .zshrc after mise activation
 # DO NOT source them here - they're installed by mise and need mise in PATH
 

@@ -45,3 +45,11 @@ The coordinator ledger and daemon state, T3's own sqlite and userdata, the qmd i
 ## Launchd jobs
 
 Background jobs reach Workshop through the mise route (the macOS privacy grant for removable volumes is held by mise). `qmd-refresh` reads the notes; qmd does not follow links, so it cannot read a moved subtree through `~/tmp/<name>`. The qmd `notes` collection reads `/Volumes/Workshop/macbook/tmp-home` and `notes-internal` reads what is still a real directory in `~/tmp` (docs/qmd.md, "The notes collections and the Workshop SSD"). Prove a change with `launchctl kickstart gui/$(id -u)/local.qmd-refresh`, read `~/Library/Logs/qmd-refresh/`, and check that `qmd status` still shows the `notes` file count.
+
+## cargo target directories (agent shells only)
+
+An agent shell is one where `CLAUDECODE` (Claude Code) or `T3CODE_THREAD_ID` (T3 Code) is set. There `dot_zshenv` puts `~/.local/share/agent-scratch/bin` first on `PATH`, after `~/.cargo/env`, and its `cargo` sets `CARGO_TARGET_DIR=$AGENT_TMP/cargo-target/<name>` and runs the real cargo. `<name>` is the git top-level directory's name (or the current directory's name outside git), so each project gets its own target directory and projects do not rebuild each other's work or fight over one lock. An existing `CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`) is left alone, so a brief that names one still wins.
+
+Why a wrapper: a target directory per project cannot be set in an environment variable, because the variable is fixed when the shell starts and cargo expands `{workspace-root}` only in config files. The only global config file is `~/.cargo/config.toml`, which stays unmanaged. A terminal never sees the wrapper, so hand builds stay on the internal disk.
+
+Not covered: Pi and standalone Codex shells have no marker that was verified, so their builds stay internal until a brief sets `CARGO_TARGET_DIR=$AGENT_TMP/cargo-target/<repo>`. Unmounted Workshop: the target is under the missing Workshop path and cargo fails with an error; there is no fallback. Timing (clean `cargo build --offline` of loop-engine, one run each): 116 s with the target on the internal disk, 91 s on Workshop. Undo: remove the wrapper directory and the `PATH` block in `dot_zshenv`, then apply.
