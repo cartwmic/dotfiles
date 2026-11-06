@@ -1,7 +1,18 @@
 global_context: "Michael's agent work: design notes, repo docs, Pi session recaps and Pi, Claude Code and Codex sessions"
 collections:
-{{- /* Work: ~/tmp/<project>/ notes only where that folder exists, and the checkouts are the ones the work instances use (the coordinator from instance_repo, the rest under ~/git). */}}
-{{- if or (eq .profile "personal") (stat (printf "%s/tmp" .chezmoi.homeDir)) }}
+{{- /* Personal: agent scratch lives on the Workshop SSD (docs/agent-scratch.md) and ~/tmp holds a link for each subtree that moved; qmd does not follow links (fast-glob followSymbolicLinks: false), so `notes` reads the real directory and `notes-internal` reads what is still a real directory in ~/tmp (the links are skipped, so nothing is indexed twice). Work: ~/tmp/<project>/ notes only where that folder exists, and the checkouts are the ones the work instances use (the coordinator from instance_repo, the rest under ~/git). */}}
+{{- if eq .profile "personal" }}
+  notes:
+    path: /Volumes/Workshop/macbook/tmp-home
+    pattern: "*/*.md"
+    context:
+      /: Design notes, plans, findings and reviews that agents wrote in $AGENT_TMP/<project>/ (~/tmp/<project>/ links to it)
+  notes-internal:
+    path: {{ .chezmoi.homeDir }}/tmp
+    pattern: "*/*.md"
+    context:
+      /: Design notes, plans, findings and reviews in ~/tmp/<project>/ that have not moved to the Workshop SSD yet
+{{- else if stat (printf "%s/tmp" .chezmoi.homeDir) }}
   notes:
     path: {{ .chezmoi.homeDir }}/tmp
     pattern: "*/*.md"
