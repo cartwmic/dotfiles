@@ -14,7 +14,7 @@ Read all of these:
 
 - The approved intent or promise list. Not the builder's PR summary.
 - The repo's `AGENTS.md`, so the repo's own rules are in scope.
-- `~/.local/share/agent-harness/design-principles.md` (principles 1 to 14).
+- `~/.local/share/agent-harness/design-principles.md` (principles 1 to 15).
 - The diff, and the repo itself (you have read access to all of it).
 - The gate evidence at that head. Say which results the driver ran and which you ran. If you find no gate log for this head, say so. Do not use another head's log. If the task gives no gate evidence, say so and treat untested claims as unproven.
 
