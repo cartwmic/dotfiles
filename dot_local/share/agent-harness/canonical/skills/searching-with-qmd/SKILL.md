@@ -3,7 +3,7 @@ name: searching-with-qmd
 description: Search Michael's notes, repo docs, Pi session recaps and past Pi, Claude Code and Codex sessions with QMD (local keyword plus semantic search). Use to find what was written, designed or discussed before. Not for searching source code.
 ---
 
-QMD indexes markdown: scratch notes (`notes`: `*/*.md` in the agent scratch folder, which is `$AGENT_TMP` on the personal Mac and `~/tmp` on the work Mac; `notes-internal`: `~/tmp/*/*.md` not yet moved there, personal Mac only, so use `-c notes -c notes-internal` there; `notes-internal` goes away when nothing is left in `~/tmp`, and `-c` on a missing collection fails, so drop it then), repo docs (`repo-*`), Pi sessions (`sessions`), Claude Code sessions (`claude-sessions`) and Codex sessions (`codex-sessions`), one file per session with user and assistant text only, and session recaps (`recaps`). Decisions and conventions: ask Hindsight first. Use QMD to find documents and sessions.
+QMD indexes markdown: scratch notes (`notes`: `*/*.md` in the agent scratch folder, which is `$AGENT_TMP` on the personal Mac and `~/tmp` on the work Mac; `notes-internal`: `~/tmp/*/*.md` not yet moved there, personal Mac only, so use `-c notes -c notes-internal` there), repo docs (`repo-*`), Pi sessions (`sessions`), Claude Code sessions (`claude-sessions`) and Codex sessions (`codex-sessions`), one file per session with user and assistant text only, and session recaps (`recaps`). Decisions and conventions: ask Hindsight first. Use QMD to find documents and sessions.
 
 **Semantic, the default:** `qmd query "plain-language question"`
 - Slow and heavy: **5-28 s and 1-5 GB of RAM** per call (every call loads three models afresh). This Mac is short on memory.

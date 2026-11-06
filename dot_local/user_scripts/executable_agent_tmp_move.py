@@ -4,8 +4,6 @@
     agent_tmp_move.py                 dry run: what would move and what is held back, with the reason
     agent_tmp_move.py --apply         move every subtree that qualifies, one at a time
     agent_tmp_move.py --apply --only NAME [NAME ...]
-    agent_tmp_move.py --finish        (dry run) can ~/tmp itself become a link to $AGENT_TMP?
-    agent_tmp_move.py --finish --apply
 
 Personal Mac only (.chezmoiignore). Deterministic, no judgment. Docs: docs/agent-scratch.md.
 
@@ -23,8 +21,7 @@ while copying), look at lsof once more, rename the original aside, link <source>
 original. Nothing is removed before the check passes. A failed or held-back entry stays where it is; the partial copy stays too
 (a rerun reuses it). Each decision of an --apply run (moved, held, failed, with the reason) is one line in the log (--log).
 
---finish needs every entry of ~/tmp to be a link into $AGENT_TMP and nothing open under ~/tmp. It renames the directory of links
-to ~/tmp.links-old-<time> (still there; delete it when you like) and links ~/tmp itself to $AGENT_TMP.
+~/tmp itself stays a real directory holding the links (qmd does not follow links; docs/qmd.md).
 
 Undo for one entry: rm ~/tmp/NAME (the link), then mv $AGENT_TMP/NAME ~/tmp/NAME (a copy across disks: rsync -a first).
 If Workshop is not mounted the script stops before it changes anything.
@@ -261,36 +258,10 @@ class Mover:
             ("moved" if self.apply else "would move", moved, held, failed, moved_bytes / 1e9))
         return 1 if failed else 0
 
-    def finish(self):
-        if self.src.is_symlink():
-            say("~/tmp is already a link: %s" % os.readlink(self.src))
-            return 0
-        bad = []
-        for name in sorted(os.listdir(self.src)):
-            p = self.src / name
-            if not p.is_symlink() or not os.readlink(p).startswith(str(self.dst) + "/"):
-                bad.append(name)
-        if bad:
-            say("NOT READY   %d entries are still real or point elsewhere: %s%s" % (len(bad), ", ".join(bad[:12]), " ..." if len(bad) > 12 else ""))
-            return 1
-        h = held_by(open_paths(), self.src)
-        if h:
-            say("NOT READY   %s is open or is a process's current directory: %s" % (self.src, h))
-            return 1
-        if not self.apply:
-            say("READY       %s holds only links into %s; --apply would link it" % (self.src, self.dst))
-            return 0
-        old = self.src.with_name(self.src.name + ".links-old-" + time.strftime("%Y%m%d%H%M%S"))
-        os.rename(self.src, old)
-        os.symlink(self.dst, self.src)
-        say("LINKED      %s -> %s (the old directory of links is %s)" % (self.src, self.dst, old))
-        return 0
-
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--apply", action="store_true", help="do it (the default is a dry run)")
-    ap.add_argument("--finish", action="store_true", help="the last step: link ~/tmp itself")
     ap.add_argument("--only", nargs="+", default=[], metavar="NAME")
     ap.add_argument("--keep", nargs="*", default=[], metavar="NAME", help="more entries to leave where they are")
     ap.add_argument("--source", default=str(Path.home() / "tmp"))
@@ -310,7 +281,7 @@ def main(argv=None):
         say("ERROR: %s is not a directory" % a.source)
         return 2
     m = Mover(a)
-    return m.finish() if a.finish else m.run(a.only)
+    return m.run(a.only)
 
 
 if __name__ == "__main__":

@@ -7,15 +7,11 @@ collections:
     pattern: "*/*.md"
     context:
       /: Design notes, plans, findings and reviews that agents wrote in $AGENT_TMP/<project>/ (~/tmp/<project>/ links to it)
-{{- /* Only while ~/tmp is a real directory: once `agent_tmp_move.py --finish` makes ~/tmp itself a link to the Workshop folder, qmd follows a link given as the collection folder and would index every note a second time. Re-apply after --finish. */}}
-{{- $tmp := lstat (printf "%s/tmp" .chezmoi.homeDir) }}
-{{- if and $tmp (eq $tmp.type "dir") }}
   notes-internal:
     path: {{ .chezmoi.homeDir }}/tmp
     pattern: "*/*.md"
     context:
       /: Design notes, plans, findings and reviews in ~/tmp/<project>/ that have not moved to the Workshop SSD yet
-{{- end }}
 {{- else if stat (printf "%s/tmp" .chezmoi.homeDir) }}
   notes:
     path: {{ .chezmoi.homeDir }}/tmp

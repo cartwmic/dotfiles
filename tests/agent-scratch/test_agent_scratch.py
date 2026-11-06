@@ -318,36 +318,6 @@ class MoveScriptTest(unittest.TestCase):
         self.assertIn("MOVED       b", r.stdout)
         self.assertFalse((self.src / "a").is_symlink())
 
-    def test_finish_links_tmp_only_when_every_entry_is_a_link_into_dest(self):
-        self.tree("one")
-        self.tree("two")
-        self.run_move("--apply", "--only", "one")
-        r = self.run_move("--finish", "--apply")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("NOT READY", r.stdout)
-        self.assertIn("two", r.stdout)
-        self.assertFalse(self.src.is_symlink())
-        self.run_move("--apply", "--only", "two")
-        r = self.run_move("--finish")
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("READY", r.stdout)
-        self.assertFalse(self.src.is_symlink())  # a dry run changes nothing
-        r = self.run_move("--finish", "--apply")
-        self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertTrue(self.src.is_symlink())
-        self.assertEqual(os.readlink(self.src), str(self.dst))
-        self.assertEqual((self.src / "two/sub/f2.md").read_text(), "two 2\n" * 3)
-        self.assertEqual(len(list(self.t.glob("tmp.links-old-*"))), 1)
-
-    def test_finish_waits_while_a_process_sits_in_tmp(self):
-        self.tree("one")
-        self.run_move("--apply")
-        self.hold_cwd(self.src)
-        r = self.run_move("--finish", "--apply")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("NOT READY", r.stdout)
-        self.assertFalse(self.src.is_symlink())
-
 
 if __name__ == "__main__":
     unittest.main()

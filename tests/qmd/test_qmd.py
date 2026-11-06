@@ -121,7 +121,6 @@ class IndexTemplateTest(unittest.TestCase):
     def setUpClass(cls):
         c = Chezmoi("personal")
         cls.home = c.home
-        (c.home / "tmp").mkdir()   # a real ~/tmp: notes-internal is rendered
         try:
             cls.out = c.run("execute-template", stdin=INDEX.read_text())
         finally:
@@ -229,21 +228,10 @@ class WorkIndexTemplateTest(unittest.TestCase):
         out, _ = self.render(dirs=["git/loop-engine", "git/budget-steward", "git/cartwmic-homelab-v2"])
         self.assertEqual(self.names(out), ["repo-dotfiles", "sessions", "claude-sessions", "codex-sessions", "recaps"])
 
-    def test_personal_still_has_notes_without_a_tmp_folder(self):
+    def test_personal_has_both_notes_collections_without_a_tmp_folder(self):
+        # Static on purpose: ~/tmp stays a real directory of links (docs/agent-scratch.md), so nothing depends on its state.
         out, _ = self.render("personal")
-        self.assertEqual(self.names(out)[:2], ["notes", "repo-dotfiles"])
-
-    def test_personal_has_no_notes_internal_once_tmp_is_a_link(self):
-        # After `agent_tmp_move.py --finish` ~/tmp is a link to the Workshop folder; qmd follows a link given as a collection
-        # folder, so notes-internal would index every note twice.
-        c = Chezmoi("personal")
-        try:
-            (c.home / "real").mkdir()
-            (c.home / "tmp").symlink_to(c.home / "real")
-            out = c.run("execute-template", stdin=INDEX.read_text())
-        finally:
-            c.close()
-        self.assertEqual(self.names(out)[:2], ["notes", "repo-dotfiles"])
+        self.assertEqual(self.names(out)[:3], ["notes", "notes-internal", "repo-dotfiles"])
 
     def test_work_never_gets_notes_internal(self):
         out, _ = self.render(dirs=["tmp"])
