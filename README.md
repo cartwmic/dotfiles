@@ -53,6 +53,8 @@ otherwise it stops before apply. Even dry-runs invoke configured source-read
 hooks; see [hook preflight](./AGENTS.md#workflow). The minimal config below
 omits that hook.
 
+Before the first `chezmoi apply`, add the local data keys your profile needs to the `data:` block of `~/.config/chezmoi/chezmoi.yaml`. A missing key stops apply and names it; the list is in [Local data keys](./docs/profiles.md#local-data-keys).
+
 ```bash
 (
 set -eu
