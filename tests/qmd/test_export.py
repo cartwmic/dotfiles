@@ -1,12 +1,17 @@
 """Black-box tests for dot_local/bin/executable_qmd-export (runs the real script on fixture trees)."""
 import fcntl
+import hashlib
+import importlib.machinery
+import importlib.util
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SCRIPT = Path(os.environ.get("QMD_EXPORT_SCRIPT") or Path(__file__).resolve().parents[2] / "dot_local/bin/executable_qmd-export")
@@ -57,6 +62,7 @@ class Fx:
         self.claude = self.root / "claude"
         self.codex = self.root / "codex"
         self.out = self.root / "corpus"
+        self.t3db = self.root / "no-t3.sqlite"          # the T3 db the exporter reads; missing unless a test sets one
         for d in (self.sessions, self.recaps, self.claude, self.codex):
             d.mkdir()
 
@@ -85,7 +91,8 @@ class Fx:
     def run(self, *args, check=0):
         p = subprocess.run([sys.executable, str(SCRIPT), "--out", str(self.out), "--sessions-root", str(self.sessions),
                             "--claude-root", str(self.claude), "--codex-root", str(self.codex),
-                            "--recaps-root", str(self.recaps), *args], capture_output=True, text=True, timeout=120)
+                            "--recaps-root", str(self.recaps), *args], capture_output=True, text=True, timeout=120,
+                           env=dict(os.environ, QMD_EXPORT_T3_DB=str(self.t3db)))
         self.p = p
         if check is not None:
             assert p.returncode == check, (p.returncode, p.stdout, p.stderr)
@@ -516,6 +523,254 @@ class ArgsTest(Base):
         self.assertTrue((home / ".local/share/qmd-corpus/recaps/2026-10-26/rr.md").exists())
         self.assertIn("claude-sessions: source %s/.claude/projects does not exist" % home, p.stderr)
         self.assertIn("codex-sessions: source %s/.codex/sessions does not exist" % home, p.stderr)
+
+
+def ts_at(s):
+    """A T3-style stamp s seconds after 2026-10-20T10:00:00Z (the day the fixtures use)."""
+    t = datetime(2026, 10, 20, 10, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=s)
+    return t.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def t3_db(path, threads, projects=(("p1", "widgets"),)):
+    """A T3 state db with T3's table and column names (the ones the exporter reads, plus the NOT NULL ones), written with the
+    sqlite3 module here. A thread: id, title, claude (a Claude session id), codex (a Codex session id), parent (a thread id),
+    updated, project, and messages [(stamp, text, 'user' or 'agent')] in order."""
+    db = sqlite3.connect(str(path))
+    db.executescript("""
+        CREATE TABLE projection_projects (project_id TEXT PRIMARY KEY, title TEXT NOT NULL);
+        CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, title TEXT NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, payload_json TEXT NOT NULL);
+        CREATE TABLE orchestration_v2_projection_provider_threads (provider_thread_id TEXT PRIMARY KEY, thread_id TEXT,
+            driver TEXT, payload_json TEXT NOT NULL);
+        CREATE TABLE orchestration_v2_projection_messages (message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, role TEXT NOT NULL,
+            streaming INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL);
+    """)
+    db.executemany("INSERT INTO projection_projects VALUES (?, ?)", projects)
+    for t in threads:
+        last = t["messages"][-1][0] if t.get("messages") else ts_at(0)
+        lineage = {"lineage": {"parentThreadId": t["parent"]}} if t.get("parent") else {}
+        db.execute("INSERT INTO orchestration_v2_projection_threads VALUES (?, ?, ?, ?, ?, NULL, ?)",
+                   (t["id"], t.get("project", "p1"), t["title"], last, t.get("updated", last), json.dumps({"id": t["id"], **lineage})))
+        for driver, key in (("claudeAgent", "claude"), ("codex", "codex")):
+            if t.get(key):
+                db.execute("INSERT INTO orchestration_v2_projection_provider_threads VALUES (?, ?, ?, ?)",
+                           ("pt-%s-%s" % (t["id"], driver), t["id"], driver,
+                            json.dumps({"driver": driver, "nativeThreadRef": {"driver": driver, "nativeId": t[key]}})))
+        for i, (at, text, by) in enumerate(t.get("messages", [])):
+            db.execute("INSERT INTO orchestration_v2_projection_messages VALUES (?, ?, 'user', 0, ?, ?, ?)",
+                       ("%s-m%d" % (t["id"], i), t["id"], at, at, json.dumps({"text": text, "createdBy": by})))
+    db.commit()
+    db.close()
+
+
+class T3Test(Base):
+    def setUp(self):
+        super().setUp()
+        self.db = self.f.root / "statev2.sqlite"
+
+    def use(self, threads, **kw):
+        t3_db(self.db, threads, **kw)
+        self.f.t3db = self.db
+
+    def db_exec(self, sql, args=()):
+        db = sqlite3.connect(str(self.db))
+        db.execute(sql, args)
+        db.commit()
+        db.close()
+
+    def claude_out(self, name="cc1"):
+        return (self.f.out / ("claude-sessions/2026-10-20/%s.md" % name)).read_text()
+
+    def test_header_carries_the_thread_title_project_and_parent(self):
+        f = self.f
+        f.cc([cc_user("plan the work"), cc_asst([{"type": "text", "text": "ok"}])])
+        self.use([{"id": "P1", "title": "Coordinator"},
+                  {"id": "T1", "title": "Fix   the build", "claude": "cc1", "parent": "P1", "messages": [(ts_at(0), "plan the work", "agent")]}])
+        f.run()
+        self.assertTrue(self.claude_out().startswith(
+            '---\nsession: cc1\ncwd: "/w/proj"\nstarted: "2026-10-20T10:00:00.000Z"\n'
+            't3_thread: "T1"\nt3_title: "Fix the build"\nt3_project: "widgets"\nt3_parent: "P1"\nt3_parent_title: "Coordinator"\n'
+            '---\n# Fix the build\n'), self.claude_out()[:300])
+
+    def test_owner_and_agent_turns_are_marked_and_unmatched_turns_stay_user(self):
+        f = self.f
+        f.cc([cc_user("plan the work", ts="2026-10-20T10:00:00.050Z"),
+              cc_asst([{"type": "text", "text": "planned"}]),
+              cc_user("no,   not that\nthe other one", ts="2026-10-20T10:01:00.070Z"),
+              cc_user("typed in a terminal", ts="2026-10-20T10:05:00.000Z")])
+        self.use([{"id": "T1", "title": "Fix", "claude": "cc1", "messages": [
+            (ts_at(0), "plan the work", "agent"), (ts_at(60), "no, not that the other one", "user")]}])
+        f.run()
+        s = self.claude_out()
+        self.assertIn("## agentturn 2026-10-20T10:00:00.050Z\n\nplan the work\n", s)
+        self.assertIn("## ownerturn 2026-10-20T10:01:00.070Z\n\nno,   not that\nthe other one\n", s)
+        self.assertIn("## user 2026-10-20T10:05:00.000Z\n\ntyped in a terminal\n", s)
+        self.assertIn("## assistant 2026-10-20T10:01:00.000Z\n\nplanned\n", s)
+        self.assertEqual((s.count("## ownerturn "), s.count("## agentturn ")), (1, 1))
+
+    def test_repeated_text_pairs_by_time_and_each_t3_message_is_used_once(self):
+        f = self.f
+        f.cc([cc_user("yes", ts="2026-10-20T10:00:30.100Z"), cc_user("yes", ts="2026-10-20T10:00:10.100Z"),
+              cc_user("yes", ts="2026-10-20T10:00:50.000Z")])
+        self.use([{"id": "T1", "title": "Yes", "claude": "cc1", "messages": [(ts_at(10), "yes", "user"), (ts_at(30), "yes", "agent")]}])
+        f.run()
+        s = self.claude_out()
+        self.assertIn("## agentturn 2026-10-20T10:00:30.100Z\n\nyes", s)
+        self.assertIn("## ownerturn 2026-10-20T10:00:10.100Z\n\nyes", s)
+        self.assertIn("## user 2026-10-20T10:00:50.000Z\n\nyes", s)     # no T3 message is left for it
+
+    def test_subagent_files_carry_the_parent_title_and_no_marks(self):
+        f = self.f
+        f.cc([cc_user("plan the work", ts="2026-10-20T10:00:00.050Z")])
+        f.cc([cc_user("plan the work", ts="2026-10-20T10:00:00.060Z", isSidechain=True)], rel="-w-proj/cc1/subagents/agent-a1.jsonl")
+        self.use([{"id": "T1", "title": "Parent work", "claude": "cc1", "messages": [(ts_at(0), "plan the work", "agent")]}])
+        f.run()
+        sub = (f.out / "claude-sessions/2026-10-20/cc1-agent-a1.md").read_text()
+        self.assertIn("## agentturn 2026-10-20T10:00:00.050Z", self.claude_out())
+        self.assertIn('t3_title: "Parent work"\n', sub)
+        self.assertIn("\n# Parent work\n", sub)
+        self.assertIn("## user 2026-10-20T10:00:00.060Z\n\nplan the work", sub)
+        self.assertNotIn("## ownerturn ", sub)
+        self.assertNotIn("## agentturn ", sub)
+
+    def test_sessions_without_a_t3_thread_are_as_before(self):
+        f = self.f
+        f.cc([cc_user("plan the work"), cc_asst([{"type": "text", "text": "ok"}])])
+        self.use([{"id": "T9", "title": "Other", "claude": "cc9", "messages": [(ts_at(0), "plan the work", "agent")]}])
+        f.run()
+        s = self.claude_out()
+        self.assertTrue(s.startswith('---\nsession: cc1\ncwd: "/w/proj"\nstarted: "2026-10-20T10:00:00.000Z"\n---\n# plan the work\n'), s[:200])
+        self.assertIn("## user 2026-10-20T10:00:00.000Z\n\nplan the work", s)
+        self.assertNotIn("t3_", s)
+
+    def test_a_missing_db_is_silent_and_adds_nothing(self):
+        f = self.f
+        f.cc([cc_user("plan the work")])
+        p = f.run()                                  # self.f.t3db is the missing default
+        self.assertEqual(p.stderr, "")
+        self.assertNotIn("t3_", self.claude_out())
+        self.assertIn("## user 2026-10-20T10:00:00.000Z", self.claude_out())
+
+    def test_a_foreign_schema_or_a_file_that_is_not_a_database_is_silent(self):
+        f = self.f
+        f.cc([cc_user("plan the work")])
+        db = sqlite3.connect(str(self.db))
+        db.execute("CREATE TABLE other (x TEXT)")
+        db.commit()
+        db.close()
+        f.t3db = self.db
+        p = f.run()
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        self.assertNotIn("t3_", self.claude_out())
+        junk = f.root / "junk.sqlite"
+        junk.write_bytes(b"not a database\n" * 20)
+        f.t3db = junk
+        p = f.run()
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+
+    def test_the_db_is_never_written(self):
+        f = self.f
+        f.cc([cc_user("plan the work")])
+        self.use([{"id": "T1", "title": "Fix", "claude": "cc1", "messages": [(ts_at(0), "plan the work", "agent")]}])
+        before = hashlib.sha256(self.db.read_bytes()).hexdigest()
+        f.run()
+        f.run()
+        self.assertEqual(hashlib.sha256(self.db.read_bytes()).hexdigest(), before)
+        self.assertFalse(Path(str(self.db) + "-journal").exists())
+
+    def test_a_t3_title_change_re_renders_the_session_and_nothing_else(self):
+        f = self.f
+        src = f.cc([cc_user("plan the work", ts="2026-10-20T10:00:00.050Z")])
+        self.use([{"id": "T1", "title": "Old title", "claude": "cc1", "messages": [(ts_at(0), "plan the work", "agent")]}])
+        f.run()
+        self.assertIn("\n# Old title\n", self.claude_out())
+        src_mtime = src.stat().st_mtime_ns
+        self.db_exec("UPDATE orchestration_v2_projection_threads SET title = 'New title' WHERE thread_id = 'T1'")
+        self.assertIn("claude-sessions: 1 written", f.run().stdout)
+        self.assertIn('t3_title: "New title"\n', self.claude_out())
+        self.assertIn("\n# New title\n", self.claude_out())
+        self.assertEqual(src.stat().st_mtime_ns, src_mtime)
+        self.assertIn("claude-sessions: 0 written, 1 unchanged", f.run().stdout)
+
+    def test_a_t3_message_change_re_renders_the_marks(self):
+        f = self.f
+        f.cc([cc_user("plan the work", ts="2026-10-20T10:00:00.050Z")])
+        self.use([{"id": "T1", "title": "Fix", "claude": "cc1", "messages": [(ts_at(0), "plan the work", "agent")]}])
+        f.run()
+        self.assertIn("## agentturn 2026-10-20T10:00:00.050Z", self.claude_out())
+        self.db_exec("UPDATE orchestration_v2_projection_messages SET payload_json = ? WHERE message_id = 'T1-m0'",
+                     (json.dumps({"text": "plan the work", "createdBy": "user"}),))
+        self.assertIn("claude-sessions: 1 written", f.run().stdout)
+        self.assertIn("## ownerturn 2026-10-20T10:00:00.050Z", self.claude_out())
+
+    def test_removing_the_db_re_renders_without_t3_fields(self):
+        f = self.f
+        f.cc([cc_user("plan the work", ts="2026-10-20T10:00:00.050Z")])
+        self.use([{"id": "T1", "title": "Fix", "claude": "cc1", "messages": [(ts_at(0), "plan the work", "agent")]}])
+        f.run()
+        self.assertIn("t3_title", self.claude_out())
+        f.t3db = f.root / "gone.sqlite"
+        self.assertIn("claude-sessions: 1 written", f.run().stdout)
+        self.assertNotIn("t3_", self.claude_out())
+        self.assertIn("## user 2026-10-20T10:00:00.050Z", self.claude_out())
+
+    def test_a_codex_thread_is_not_a_claude_session_and_is_not_exported_twice(self):
+        f = self.f
+        f.cx([cx_meta("cx1"), cx_msg("user", "plan the work")])
+        self.use([{"id": "C1", "title": "Codex thread", "codex": "cx1", "messages": [(ts_at(0), "plan the work", "user")]}])
+        f.run()
+        self.assertEqual(f.files("codex-sessions"), ["codex-sessions/2026-10-20/cx1.md"])
+        self.assertNotIn("t3_", (f.out / "codex-sessions/2026-10-20/cx1.md").read_text())
+        self.assertEqual(f.files("claude-sessions"), [])
+
+
+def load_script():
+    """The script as a module, for the matching rules (the black-box tests above cover the files)."""
+    loader = importlib.machinery.SourceFileLoader("qmd_export", str(SCRIPT))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader("qmd_export", loader))
+    loader.exec_module(module)
+    return module
+
+
+class MarkTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load_script()
+
+    def marks(self, turns, messages):
+        return self.m.mark_authors([(ts_at(s), t) for s, t in turns], [(ts_at(s), t, who) for s, t, who in messages])
+
+    def test_same_text_after_whitespace_normalisation_in_order(self):
+        self.assertEqual(self.marks([(0.05, "Plan   the work"), (60.1, "no, not that the other one")],
+                                    [(0, "Plan the work", "agent"), (60, "no,   not that\nthe other one", "owner")]), ["agent", "owner"])
+
+    def test_each_t3_message_is_used_once_and_repeats_pair_by_time(self):
+        self.assertEqual(self.marks([(30.1, "yes"), (10.1, "yes")], [(10, "yes", "owner"), (30, "yes", "agent")]), ["agent", "owner"])
+        self.assertEqual(self.marks([(10, "yes"), (11, "yes"), (12, "yes")], [(10, "yes", "owner"), (11, "yes", "owner")]),
+                         ["owner", "owner", None])
+
+    def test_wrapper_text_around_the_t3_text(self):
+        self.assertEqual(self.marks([(5.2, "<system-reminder>\nThe date changed.\n</system-reminder>\ndo the thing please")],
+                                    [(5, "do the thing please", "owner")]), ["owner"])
+
+    def test_wrapped_text_far_away_in_time_does_not_match(self):
+        self.assertEqual(self.marks([(50, "<system-reminder>x</system-reminder> ok")], [(5, "ok", "owner")]), [None])
+
+    def test_time_fallback_when_the_text_differs(self):
+        self.assertEqual(self.marks([(7.4, "Ultrathink: fix it")], [(7, "fix it", "owner")]), ["owner"])
+        self.assertEqual(self.marks([(7.4, "Ultrathink: fix that")], [(7, "fix it", "owner")]), ["owner"])
+
+    def test_nothing_fits_stays_unmarked(self):
+        self.assertEqual(self.marks([(40, "[Request interrupted by user]"), (41, "something else")], [(0, "Plan the work", "agent")]),
+                         [None, None])
+
+    def test_time_fallback_does_not_steal_a_message_another_turn_matches_by_text(self):
+        self.assertEqual(self.marks([(10.1, "first"), (10.3, "mystery")], [(10, "first", "owner")]), ["owner", None])
+
+    def test_stamps(self):
+        self.assertEqual(self.m.ms_of("2026-10-20T10:00:00.050Z") - self.m.ms_of("2026-10-20T10:00:00.000Z"), 50)
+        self.assertEqual(self.m.ms_of("2026-10-20T11:00:00.000+01:00"), self.m.ms_of("2026-10-20T10:00:00.000Z"))
+        self.assertIsNone(self.m.ms_of("yesterday"))
 
 
 if __name__ == "__main__":

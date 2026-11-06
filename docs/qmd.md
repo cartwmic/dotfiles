@@ -297,6 +297,15 @@ sessions and recaps; nothing is copied between machines).
   the session's custom title, else its AI title, else the first prompt. Sub-agent transcripts (`<id>/subagents/agent-*.jsonl`)
   are included; their frontmatter `session` is the parent's id. Claude has no header line, so the id and day come from the
   first entry that has a `sessionId` and `timestamp`.
+- **T3 context** (`claude-sessions`, for a session T3 ran): the T3 thread's title heads the file (the title above is the fallback),
+  and the frontmatter gets `t3_thread`, `t3_title`, `t3_project` and, for a fork or a sub-agent thread, `t3_parent` and
+  `t3_parent_title`. Each user turn that T3 matches is headed `## ownerturn` (Michael typed it) or `## agentturn` (a coordinator or a lead
+  talking); the other user turns stay `## user`. A turn is matched by its text, then by its place in T3's order and its time, with
+  the rules in Retro's `src/episodes/t3.ts`. Sub-agent files get the title but no marks, because their prompts are the parent's words.
+  T3's state db (`~/.t3/userdata/statev2.sqlite`; `QMD_EXPORT_T3_DB` overrides it, for tests) is opened read-only, once per run, and
+  never written or copied. (A read-only open of a WAL db can create its `-wal` and `-shm` side files if they are absent; the db file itself is not written.) A missing db, an unreadable one or one from another T3 version adds nothing and says nothing, so the output
+  is what it is without T3. The change is inert on every profile where there is no T3 db.
+  **Only what Michael typed:** `qmd search ownerturn -c claude-sessions -n 5` finds the sessions with an owner turn. `ownerturn` is not ordinary text, so the search itself filters. `qmd get --no-line-numbers "#docid" | awk '/^## /{p = /^## ownerturn /} p'` prints only those turns.
 - **Codex** (`codex-sessions`): user and assistant `response_item` messages and `compacted` summaries. Developer messages,
   reasoning, tool calls and output and the duplicate `event_msg` copies stay out. The id, cwd and day come from the first
   line (`session_meta`).
@@ -310,7 +319,9 @@ sessions and recaps; nothing is copied between machines).
   sets `cleanupPeriodDays` to 365 on every apply and keeps every other key Claude writes, so Claude keeps the same year as the
   Pi window. A file that is not a JSON object fails the apply instead of being replaced.
 - **Incremental:** a source whose output exists and is not older than it is skipped without reading it (a session's id and day
-  come from its first line). A source with nothing to export is remembered by mtime in `.qmd-export-state.json`.
+  come from its first line). A source with nothing to export is remembered by mtime in `.qmd-export-state.json`. A Claude session's output also records a digest of
+  the T3 facts it was rendered with (the thread's title, project, parent, last update and user messages), so a T3 change re-renders
+  that session without touching its source; the T3 db is read once per run, not once per file.
   Measured here: first run 48 s, 203 MB RSS, 8,359 sessions and 8,777 recaps -> 135 MB; second run 2.3 s.
 - **One year:** sources last modified more than `--days` (default 365) days ago are not exported and their outputs are deleted,
   as are outputs whose source is gone. This bounds the index (the default was 90 days until 2026-10-27). It is by modification time, so a session you resume comes back.

@@ -12,6 +12,8 @@ QMD indexes markdown: scratch notes (`notes`: `*/*.md` in the agent scratch fold
 **Keyword, when speed matters or you know the exact words:** `qmd search "heavy-gate sync"`
 - 0.2-1 s, about 150 MB, no models. Good for names, identifiers and error strings. Every word must match, so use two or three distinctive ones. Cheap enough to repeat with different words.
 
+T3 sessions: heading = thread title. `## ownerturn` marks Michael's turns, `## agentturn` agents'. Find his: `qmd search ownerturn`.
+
 Both take `-n 5` (result count) and `-c sessions` (one collection; repeat `-c` for several; names above). Results show `qmd://collection/path`, a `#docid` and a score.
 
 **Read a hit:** `qmd get "#docid"` or `qmd get qmd://sessions/2026-10-26/<id>.md`. A session file is a text-only copy; its frontmatter has the session id and cwd, so look up the full `.jsonl` if you need tool output: `~/.pi/agent/sessions`, `~/.claude/projects/<cwd with / as ->/<id>.jsonl` (a Claude sub-agent file is named `<id>-agent-<x>.md` and lives under `<id>/subagents/`) or `~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*-<id>.jsonl`.
