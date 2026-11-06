@@ -4,6 +4,6 @@
   "private": true,
   "description": "Pinned install of the agent-kit traces CLI for ~/.local/bin/agent-traces. Bump with dot_local/user_scripts/agent_kit_bump.py.",
   "dependencies": {
-    "@cartwmic/agent-kit": "0.28.1"
+    "@cartwmic/agent-kit": "0.29.0"
   }
 }
