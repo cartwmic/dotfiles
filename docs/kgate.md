@@ -66,11 +66,12 @@ Every other exit-69 reason (a bad profile, a tree hash or tool version mismatch,
 **What callers do.**
 
 - Wait. Pass `--wait 1200` for short gates.
-- On exit 69 whose `reason` starts `pod did not start within` and contains `Unschedulable`, the caller may run heavy-gate once. It must report "(2) no kgate capacity" and quote the reason.
+- On exit 69 whose `reason` starts `pod did not start within` and contains `Unschedulable`, the caller may run heavy-gate once, but only when the profile fits some kgate node (see the node table in "How many jobs at once"). Every committed profile does. Then it must report "(2) no kgate capacity" and quote the reason.
+- A profile bigger than every node is a profile bug. Report it as one, with the reason quoted. Never run heavy-gate for it as (2).
 - Every other exit 69 is not a capacity problem. Report it as it is. Never report it as a Mac run in disguise.
 - The client never falls back to the Mac. A fallback inside the client would make a result's origin ambiguous.
 
-**The limit.** `Unschedulable` means no node can take the pod now. It does not say that no node ever could. A profile bigger than every node gets the same prefix, with `Insufficient memory` or `Insufficient cpu` in the scheduler message, and so does a `--node` that matches no node. The caller rule above does not separate those cases from a full cluster.
+**The limit.** `Unschedulable` means no node can take the pod now. It does not say that no node ever could. A profile bigger than every node gets the same prefix, with `Insufficient memory` or `Insufficient cpu` in the scheduler message, and so does a `--node` that matches no node. The reason alone cannot separate those cases from a full cluster, so the caller's fit check does.
 
 ## How many jobs at once
 
@@ -87,7 +88,7 @@ At that time about 41 CPU and 40 GiB were unrequested across the four nodes.
 
 Planning count:
 
-- **About 8 jobs of mixed sizes.** At most 2 of them big: a Loop Engine job (12 cpu, 8Gi) fits only agent-1 or the G14. The rest are small or medium gates of 1 to 4 GiB, about 6 of them.
+- **About 8 jobs of mixed sizes.** At most 2 of them big: a Loop Engine job (12 cpu, 8Gi) fits only agent-1 or the G14. A steward job (4 cpu, 7Gi) is big too: at the measured requests it fits only agent-1 or the G14. The rest are small or medium gates of 1 to 4 GiB, about 6 of them.
 - **Up to about 12 when every job is small.**
 - **Past that, pods queue.** That is fine; the scheduler is the queue.
 
@@ -97,9 +98,12 @@ Profile sizes in use, from each repo's `kgate.toml` on origin/main (2026-11-06):
 |---|---|---|---|
 | agent-kit unit gate | `agent-kit` | 2 | `3584Mi` (3.5 Gi) |
 | coordinator unit gate | `coordinator` | 4 | `3Gi` |
+| budget-steward unit gate | `budget-steward` (gitea) | 4 | `7Gi` |
 | homelab static checks | `cartwmic-homelab-v2` | 2 | `1Gi` |
 | dotfiles heavy suites | `dotfiles` | 2 | `1Gi` |
 | Loop Engine baseline | `loop-engine` | 12 | `8Gi` |
+
+Before you change a profile's size, check it against the node table above.
 
 Jobs that only wait for model API calls (evals) are not heavy. They should not use heavy-gate or kgate slots; they run as plain background jobs.
 
