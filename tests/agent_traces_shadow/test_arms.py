@@ -94,6 +94,7 @@ LOADER = "run_onchange_after_73_agent_traces_shadow_launchd.sh.tmpl"
 SHIM = "dot_local/bin/executable_agent-events.tmpl"
 PROD_PLIST = "%s/local.agent-events.plist.tmpl" % AGENTS
 WORK = "axon-work-computer"
+SHADOW_ON = "agentTracesShadow: {enabled: true}"  # the shadow tooling is off by default on every profile; the arm tests name it
 ENDPOINT = "http://otel-collector.internal.cartwmic.com/v1/metrics"
 
 
@@ -101,14 +102,15 @@ class SettingTest(unittest.TestCase):
     def cfg(self, profile="personal", data=""):
         return json.loads(render(self, CONFIG, profile, data).stdout)
 
-    def test_defaults_personal_runs_all_three_and_work_none_but_names_py_only_if_turned_on(self):
-        self.assertEqual(self.cfg(), {"enabled": True, "machine": "test-personal", "arm": ["ts", "py", "seed"]})
+    def test_off_by_default_on_every_profile_and_turning_it_on_names_the_arms(self):
+        self.assertEqual(self.cfg(), {"enabled": False, "machine": "test-personal", "arm": ["ts", "py", "seed"]}, "personal: off, and the kit is on there")
+        self.assertEqual(self.cfg(data=SHADOW_ON)["arm"], ["ts", "py", "seed"])
         self.assertEqual(self.cfg(WORK), {"enabled": False, "machine": "test-work", "arm": ["py"]}, "work: off, and the kit is not on by default there")
         self.assertEqual(self.cfg(WORK, "agentTracesShadow: {enabled: true}")["arm"], ["py"])
         self.assertEqual(self.cfg(WORK, "agentTracesShadow: {enabled: true}\nagentKit: {enabled: true}")["arm"], ["ts", "py", "seed"])
 
     def test_the_settings_are_read(self):
-        c = self.cfg(data="agentTracesShadow: {machine: test-abc-1, arm: [seed, ts]}")
+        c = self.cfg(data="agentTracesShadow: {enabled: true, machine: test-abc-1, arm: [seed, ts]}")
         self.assertEqual(c, {"enabled": True, "machine": "test-abc-1", "arm": ["ts", "seed"]}, "arms come out in the fixed order")
         self.assertEqual(self.cfg(data="agentTracesShadow: {arm: []}")["arm"], [])
         self.assertFalse(self.cfg(data="agentTracesShadow: {enabled: false}")["enabled"])
@@ -117,9 +119,10 @@ class SettingTest(unittest.TestCase):
         bad = ("agentTracesShadow: {enabled: maybe}", "agentTracesShadow: {version: 1}", "agentTracesShadow: {machine: personal}",
                "agentTracesShadow: {machine: test-}", "agentTracesShadow: {machine: test-%s}" % ("a" * 25), "agentTracesShadow: {machine: Test-x}",
                "agentTracesShadow: {arm: ts}", "agentTracesShadow: {arm: [rust]}", "agentTracesShadow: {arm: [ts, bogus]}",
-               "agentTracesShadow: on", "agentTracesShadow: {arm: [ts]}\nagentKit: {enabled: false}\nagentEvents: {engine: python}",
-               "agentTracesShadow: {arm: [seed]}\nagentKit: {enabled: false}\nagentEvents: {engine: python}")
-        # engine python: on personal the events default is ts, which fails first with a message about agentEvents when agentKit is off.
+               "agentTracesShadow: on", "agentTracesShadow: {enabled: true, arm: [ts]}\nagentKit: {enabled: false}\nagentEvents: {engine: python}",
+               "agentTracesShadow: {enabled: true, arm: [seed]}\nagentKit: {enabled: false}\nagentEvents: {engine: python}")
+        # The ts and seed arm rules bite only while enabled is true, so those two name it. Engine python: on personal the events default is ts,
+        # which fails first with a message about agentEvents when agentKit is off.
         for data in bad:
             for rel in (CONFIG, LOADER, ".chezmoiignore", "%s/%s.plist.tmpl" % (AGENTS, ARMS["py"][0])):
                 with self.subTest(data=data, file=rel):
@@ -130,7 +133,7 @@ class SettingTest(unittest.TestCase):
     def test_the_longest_machine_label_plus_its_suffix_is_still_a_valid_agent_events_label(self):
         label = "test-" + "a" * 24
         for kind, suffix in (("ts", "-ts"), ("py", "-py")):
-            env = Chezmoi(self, data="agentTracesShadow: {machine: %s}" % label).plist(kind)["EnvironmentVariables"]
+            env = Chezmoi(self, data="agentTracesShadow: {enabled: true, machine: %s}" % label).plist(kind)["EnvironmentVariables"]
             self.assertEqual(env["AGENT_EVENTS_MACHINE"], label + suffix)
             self.assertRegex(env["AGENT_EVENTS_MACHINE"], r"^[a-z][a-z0-9-]{0,31}$")
 
@@ -233,7 +236,7 @@ class EngineDefaultTest(unittest.TestCase):
 
 class PlistShapeTest(unittest.TestCase):
     def test_each_arm_has_its_label_its_own_places_and_no_production_path(self):
-        c = Chezmoi(self)
+        c = Chezmoi(self, data=SHADOW_ON)
         home = str(c.home)
         prod_state, prod_data = home + "/.local/state/agent-events", home + "/.local/share/agent-events"
         for kind, (label, machine) in ARMS.items():
@@ -255,7 +258,7 @@ class PlistShapeTest(unittest.TestCase):
         self.assertEqual(len({c.plist(k)["EnvironmentVariables"]["AGENT_EVENTS_STATE_DIR"] for k in ARMS}), 3, "each arm has its own state dir")
 
     def test_ts_and_seed_run_the_wrapper_with_the_cache_switch_off(self):
-        c = Chezmoi(self)
+        c = Chezmoi(self, data=SHADOW_ON)
         for kind in ("ts", "seed"):
             p = c.plist(kind)
             self.assertEqual(p["ProgramArguments"], ["/bin/sh", str(c.home) + "/.local/bin/agent-traces", "pi", "run"])
@@ -266,7 +269,7 @@ class PlistShapeTest(unittest.TestCase):
     def test_no_arm_names_a_node(self):
         """The ts and seed arms reach node only through the wrapper (which prefers mise's shim: under launchd an install-path node hangs on the
         external disk). No arm sets AGENT_TRACES_NODE or a PATH, and nothing in a plist names a node binary."""
-        c = Chezmoi(self)
+        c = Chezmoi(self, data=SHADOW_ON)
         for kind in ARMS:
             with self.subTest(kind=kind):
                 p = c.plist(kind)
@@ -276,7 +279,7 @@ class PlistShapeTest(unittest.TestCase):
                 self.assertNotRegex(json.dumps(p["ProgramArguments"]), r"/node\b")
 
     def test_py_runs_the_shim_into_shadow_py_run_with_its_own_data_dir(self):
-        c = Chezmoi(self)
+        c = Chezmoi(self, data=SHADOW_ON)
         p = c.plist("py")
         self.assertEqual(p["ProgramArguments"], ["/bin/sh", str(c.home) + "/.local/bin/agent-events", "run"])
         env = p["EnvironmentVariables"]
@@ -287,7 +290,7 @@ class PlistShapeTest(unittest.TestCase):
 
     def test_py_points_mise_at_its_real_data_dir_outside_the_moved_xdg_dir(self):
         """XDG_DATA_HOME moves mise's default data dir, so the shim's mise python would lose its installs and the shim would find no tomllib."""
-        for profile, data in (("personal", ""), (WORK, "")):
+        for profile, data in (("personal", SHADOW_ON), (WORK, SHADOW_ON)):
             with self.subTest(profile=profile):
                 c = Chezmoi(self, profile, data)
                 env = c.plist("py")["EnvironmentVariables"]
@@ -302,7 +305,7 @@ class PlistShapeTest(unittest.TestCase):
 
     @unittest.skipUnless(Path("/usr/bin/plutil").exists(), "plutil is macOS only")
     def test_plutil_lints_each_arm(self):
-        c = Chezmoi(self)
+        c = Chezmoi(self, data=SHADOW_ON)
         for kind, (label, _) in ARMS.items():
             f = c.root / (label + ".plist")
             f.write_text(c.render("%s/%s.plist.tmpl" % (AGENTS, label)).stdout)
@@ -323,10 +326,22 @@ class GateTest(unittest.TestCase):
             (c.home / self.PLISTS[kind]).write_text("<plist/>")
         return c.managed()
 
-    def test_personal_default_manages_all_three_and_the_script(self):
-        m = self.managed()
+    def test_enabled_on_personal_manages_all_three_and_the_script(self):
+        m = self.managed(data=SHADOW_ON)
         self.assertTrue(set(self.PLISTS.values()) | {self.SCRIPT} <= m)
         self.assertIn(".local/share/agent-events/shadow_py_run.py", m)
+
+    def test_off_by_default_on_every_profile_manages_none_of_them(self):
+        for profile in ("personal", WORK):
+            with self.subTest(profile=profile):
+                m = self.managed(profile)
+                self.assertFalse((set(self.PLISTS.values()) | {self.SCRIPT, ".local/share/agent-events/shadow_py_run.py"}) & m)
+
+    def test_off_by_default_keeps_the_unload_script_while_a_plist_is_installed(self):
+        m = self.managed(installed=["ts", "py", "seed"])
+        self.assertFalse(set(self.PLISTS.values()) & m, "chezmoi leaves the plists alone")
+        self.assertIn(self.SCRIPT, m, "the script unloads them and removes the plists, so it is managed while any is installed")
+        self.assertNotIn(self.SCRIPT, self.managed())
 
     def test_work_default_manages_none_of_them_but_still_gets_the_shim_and_wrapper(self):
         m = self.managed(WORK)
@@ -335,7 +350,7 @@ class GateTest(unittest.TestCase):
         self.assertTrue({".local/bin/agent-events", ".local/bin/agent-traces"} <= m)
 
     def test_the_arm_list_picks_the_plists(self):
-        m = self.managed(data="agentTracesShadow: {arm: [py]}")
+        m = self.managed(data="agentTracesShadow: {enabled: true, arm: [py]}")
         self.assertIn(self.PLISTS["py"], m)
         self.assertFalse({self.PLISTS["ts"], self.PLISTS["seed"]} & m)
         self.assertIn(self.SCRIPT, m)
@@ -371,7 +386,7 @@ esac
 
 
 class LoaderTest(unittest.TestCase):
-    def run_loader(self, data="", profile="personal", installed=("ts", "py", "seed"), loaded=(), **env):
+    def run_loader(self, data=SHADOW_ON, profile="personal", installed=("ts", "py", "seed"), loaded=(), **env):
         script = render(self, LOADER, profile, data).stdout
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -422,11 +437,17 @@ class LoaderTest(unittest.TestCase):
         self.assertEqual({c.split()[1] for c in calls}, {"bootout", "print"})
 
     def test_an_arm_left_out_of_the_list_is_unloaded_and_the_others_stay(self):
-        p, calls = self.run_loader("agentTracesShadow: {arm: [ts, py]}", loaded=("ts", "seed"))
+        p, calls = self.run_loader("agentTracesShadow: {enabled: true, arm: [ts, py]}", loaded=("ts", "seed"))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(self.now_loaded, {"ts"}, "seed unloaded; ts reloaded")
         self.assertFalse(self.plist_of("seed").exists())
         self.assertTrue(self.plist_of("py").exists() and self.plist_of("ts").exists())
+
+    def test_off_by_default_unloads_every_arm_and_removes_the_plists(self):
+        p, calls = self.run_loader("", loaded=("ts", "py", "seed"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.now_loaded, set())
+        self.assertFalse(any(self.plist_of(k).exists() for k in ARMS))
 
     def test_a_failed_unload_fails_the_apply_and_keeps_that_plist_so_it_is_retried(self):
         p, calls = self.run_loader("agentTracesShadow: {enabled: false}", loaded=("ts", "py"), FAKE_STUCK="local.agent-traces-shadow-py")
@@ -441,17 +462,17 @@ class LoaderTest(unittest.TestCase):
         self.assertIn("is not installed yet", p.stdout)
 
     def test_the_script_changes_with_each_setting_so_chezmoi_reruns_it(self):
-        outs = {render(self, LOADER, data=d).stdout for d in ("", "agentTracesShadow: {enabled: false}", "agentTracesShadow: {machine: test-x}",
+        outs = {render(self, LOADER, data=d).stdout for d in ("", "agentTracesShadow: {enabled: true}", "agentTracesShadow: {machine: test-x}",
                                                              "agentTracesShadow: {arm: [py]}", "agentEvents: {endpoint: 'http://a.example/v1/metrics'}")}
         self.assertEqual(len(outs), 5)
         s = render(self, LOADER).stdout
-        self.assertIn('# setting: {"arm":["ts","py","seed"],"enabled":true,"machine":"test-personal"}\n', s)
+        self.assertIn('# setting: {"arm":["ts","py","seed"],"enabled":false,"machine":"test-personal"}\n', s)
         self.assertEqual(len(re.findall(r"# plist (?:ts|py|seed): [0-9a-f]{64}\n", s)), 3)
 
     def test_the_real_apply_into_a_scratch_home_writes_the_plists_and_runs_the_script_against_the_stub(self):
         if not DARWIN:
             self.skipTest("macOS only: the gate needs darwin")
-        c = Chezmoi(self)
+        c = Chezmoi(self, data=SHADOW_ON)
         fake = c.root / "fake"
         bin_ = c.root / "bin"
         fake.mkdir()
@@ -504,7 +525,7 @@ def arm_corpus(root, now=None):
 class ArmCheck:
     """Deploys what an arm runs into a scratch HOME with real `chezmoi apply`, runs its plist command under env -i, and returns the problems."""
 
-    def __init__(self, test, kind, data=""):
+    def __init__(self, test, kind, data=SHADOW_ON):
         self.test, self.kind = test, kind
         self.c = Chezmoi(test, "personal", data)
         self.home = self.c.home
@@ -671,7 +692,7 @@ class PyArmMiseTest(unittest.TestCase):
         shim = home / ".local/share/mise/shims/python3"
         if not shim.is_file():
             self.skipTest("no mise python3 shim at %s: nothing to check here" % shim)
-        c = Chezmoi(self)
+        c = Chezmoi(self, data=SHADOW_ON)
         rendered = c.run("execute-template", stdin=(REPO / AGENTS / ("%s.plist.tmpl" % ARMS["py"][0])).read_text(), home=home).stdout
         env = plistlib.loads(rendered.encode())["EnvironmentVariables"]
         argv = ["/usr/bin/env", "-i", *("%s=%s" % kv for kv in env.items()), "HOME=%s" % home, str(shim), "-c", "import tomllib"]

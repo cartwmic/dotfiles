@@ -36,7 +36,7 @@ data:
   #   enabled: true
   # Traces stage 2 shadow tooling (shadow_py_run.py, cache_ref.py, reference.sha256 beside the frozen collector in ~/.local/share/agent-events) and its
   # three LaunchAgents: local.agent-traces-shadow (TS), local.agent-traces-shadow-py (Python control), local.agent-traces-seed (seeded failures only).
-  # On by default on personal only. Only the TS arm is loaded by the apply; the others are started by hand. enabled: false unloads and removes all three.
+  # Off by default on every profile (the shadow run is finished). Only the TS arm is loaded by the apply; the others are started by hand. enabled: false unloads and removes all three.
   # agentTracesShadow:
   #   enabled: true
   #   machine: test-personal   # the arms send as <machine>-ts and <machine>-py; the seed arm is test-seed

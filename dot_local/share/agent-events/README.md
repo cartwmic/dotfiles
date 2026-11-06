@@ -295,7 +295,7 @@ Tools beside the collector (all exit 2 unless the frozen files match `reference.
   state dir, or when the database it would open (`--db`, else the default) is the live one; the arm needs its own state dir and
   `--db` or `XDG_DATA_HOME`. `cache_ref.py --scratch DIR --db DIR/events.sqlite --now EPOCH...` prints what
   `cache_gauges` and `miss_streaks` return for a database, as JSON. Both deploy next to the frozen files, with `reference.sha256`,
-  when chezmoi data `agentTracesShadow.enabled` is true (default: personal only).
+  when chezmoi data `agentTracesShadow.enabled` is true (default: off on every profile).
 - Source-only (listed in `.chezmoiignore`): `parity_dump.py` (the canonical dump of a corpus; `fp` prints the approved-project
   list and fingerprint), `rollback_drill.py` (can Python load a state file the TS port wrote; `--original-status` is a Python-written status.json whose
   `epoch_ns` the TS file must match digit for digit), `freeze.sh` (a frozen copy of the
