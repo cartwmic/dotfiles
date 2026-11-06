@@ -15,8 +15,8 @@
   <key>WorkingDirectory</key><string>/Volumes/Workshop/macbook/git/retro</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <!-- node, herdr (the mise shim), op (Homebrew), pi and git must be found from here; the retro pane's shell has its own PATH. -->
-    <key>PATH</key><string>/Users/test/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <!-- node, herdr (the mise shims) and git must be found from here. op is the op-shim (~/.local/share/op-shim), first on PATH: it reads with OP_SERVICE_ACCOUNT_TOKEN and never the desktop app. For session_host process, pi is Retro's absolute pi_command, so ~/.local/bin is not needed. The retro pane's shell has its own PATH. -->
+    <key>PATH</key><string>/Users/test/.local/share/op-shim:/Users/test/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <!-- Restart after a crash or kill -9; a clean exit (SIGTERM from `launchctl bootout`) stays stopped. -->
