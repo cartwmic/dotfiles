@@ -1,0 +1,130 @@
+#!/bin/sh
+#
+# git-worktree-reap
+#
+# Remove the worktrees of a repo that are finished: a builder runs it on their repo after a merge.
+#
+# Usage:
+#   git-worktree-reap [--dry-run] [--min-age HOURS] [REPO]     REPO is any path inside the repo (default: the current directory)
+#
+# A worktree is removed only when all of these hold:
+#   1. its HEAD is merged into origin/main. Merged means either `git merge-base --is-ancestor` says so (origin is fetched first, and if
+#      the fetch fails the local origin/main is used, with a warning), or its PR is merged and the branch tip equals that PR's head
+#      (`gh pr list --head BRANCH --base main --state merged --json headRefOid,number`), which is how a squash or rebase merge shows: nothing was
+#      committed after the merge. Without gh the ancestor rule stands alone and a branch that is not an ancestor is
+#      "kept: merged state unknown (no gh)".
+#   2. it is not brand new. A worktree with no commits of its own (its HEAD is on origin/main's first-parent line) may be a builder's
+#      fresh worktree waiting between tool calls, so it is kept until it is older than --min-age hours (default 24), judged by the newer
+#      of the worktree's `.git` file and its index. "kept: no own commits or fast-forward merged, younger than 24h" (a fresh branch and a fast-forward-merged one look the same).
+#   3. no process has a file open in it (`lsof +D`, which counts a shell whose current directory is inside)
+#   4. it has no modifications: `git status --porcelain --untracked-files=all` is empty (whatever status.showUntrackedFiles says), and
+#      `git worktree remove` runs without --force. Ignored files (a local .env, node_modules) are not modifications: they go with the worktree.
+# It prints one line per worktree:
+#   removed PATH (BRANCH)            gone (with --dry-run: "would remove")
+#   kept PATH: REASON                left as it was
+# It never touches the main checkout (the first worktree git lists) and never deletes a branch: the branch ref stays.
+#
+# Environment (for tests): GIT_WORKTREE_REAP_GH names the gh command (default gh).
+# Exit status: 0 done (kept lines are not failures), 2 usage, not a repo, no origin/main, or no lsof or perl.
+
+set -euf
+
+log() { level=$1; shift; printf '[git-worktree-reap] %s: %s\n' "$level" "$*" >&2; }
+usage() { sed -n '3,/^$/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+DRY=0
+REPO=.
+MIN_AGE_H=24
+GH=${GIT_WORKTREE_REAP_GH:-gh}
+while [ $# -gt 0 ]; do
+  case $1 in
+    --dry-run) DRY=1; shift ;;
+    --min-age) [ $# -ge 2 ] || usage; MIN_AGE_H=$2; shift 2 ;;
+    -h|--help) usage ;;
+    -*) log ERROR "unknown argument: $1"; usage ;;
+    *) REPO=$1; shift ;;
+  esac
+done
+
+awk -v v="$MIN_AGE_H" 'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/) }' || { log ERROR "--min-age takes a number of hours"; exit 2; }
+command -v perl >/dev/null 2>&1 || { log ERROR "perl is not installed; cannot read a worktree's age"; exit 2; }
+command -v lsof >/dev/null 2>&1 || { log ERROR "lsof is not installed; cannot tell whether a worktree is in use"; exit 2; }
+git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || { log ERROR "not a git repo: $REPO"; exit 2; }
+
+git -C "$REPO" fetch --quiet origin main 2>/dev/null || log WARN "could not fetch origin main; using the local origin/main"
+git -C "$REPO" rev-parse --verify --quiet refs/remotes/origin/main >/dev/null || { log ERROR "no origin/main in $REPO"; exit 2; }
+
+# One record per worktree, blank-line separated: path, HEAD sha, then branch / detached / bare, locked.
+list=$(git -C "$REPO" worktree list --porcelain)
+main_checkout=
+path=; sha=; branch=; state=
+flush() {
+  [ -n "$path" ] || return 0
+  if [ -z "$main_checkout" ]; then
+    main_checkout=$path
+    printf 'kept %s: main checkout\n' "$path"
+  else
+    reap_one
+  fi
+  path=; sha=; branch=; state=
+}
+
+# Is $sha on origin/main's first-parent line, i.e. a worktree that was cut from main and has no commits of its own?
+# (A branch merged with a merge commit has its tip on the second-parent side; a fast-forwarded one looks the same as a fresh one.)
+on_main_line() {
+  [ -n "${main_line+x}" ] || main_line=$(git -C "$main_checkout" rev-list --first-parent refs/remotes/origin/main)
+  printf '%s\n' "$main_line" | grep -qx "$sha"
+}
+# Is the worktree older than MIN_AGE_H hours? Its age is that of the newer of its .git file and its index, read before anything touches them.
+old_enough() {
+  gitdir=$(git -C "$path" rev-parse --absolute-git-dir 2>/dev/null) || gitdir=
+  newest=$(perl -e 'my $m = 0; for (@ARGV) { my $t = (stat $_)[9]; $m = $t if defined $t && $t > $m } print $m' "$path/.git" "$gitdir/index")
+  awk -v n="$(date +%s)" -v m="$newest" -v h="$MIN_AGE_H" 'BEGIN { exit !(m > 0 && n - m >= h * 3600) }'
+}
+# Not an ancestor of origin/main: merged anyway if gh says the branch's PR is merged with the branch tip as its head. Else prints why it is kept.
+pr_merged() {
+  if ! command -v "$GH" >/dev/null 2>&1; then printf 'kept %s: merged state unknown (no gh)\n' "$path"; return 1; fi
+  if ! prs=$(cd "$main_checkout" && "$GH" pr list --head "$branch" --base main --state merged --json headRefOid,number 2>&1); then
+    printf 'kept %s: merged state unknown (gh failed: %s)\n' "$path" "$(printf '%s' "$prs" | head -n 1)"; return 1
+  fi
+  if printf '%s' "$prs" | grep -Eq "\"headRefOid\": *\"$sha\""; then return 0; fi
+  printf 'kept %s: %s not merged into origin/main\n' "$path" "$name"; return 1
+}
+
+# Decide on the worktree in $path/$sha/$branch/$state. Prints the one line.
+reap_one() {
+  name=${branch:-detached}
+  case $state in
+    bare) printf 'kept %s: bare\n' "$path"; return 0 ;;
+    locked*) printf 'kept %s: locked\n' "$path"; return 0 ;;
+  esac
+  if [ -z "$branch" ]; then printf 'kept %s: detached HEAD, no branch to check\n' "$path"; return 0; fi
+  if [ ! -d "$path" ]; then printf 'kept %s: directory is missing (git worktree prune clears it)\n' "$path"; return 0; fi
+  if git -C "$main_checkout" merge-base --is-ancestor "$sha" refs/remotes/origin/main 2>/dev/null; then
+    if on_main_line && ! old_enough; then printf 'kept %s: no own commits or fast-forward merged, younger than %sh\n' "$path" "$MIN_AGE_H"; return 0; fi
+  else
+    pr_merged || return 0
+  fi
+  real=$(cd "$path" && pwd -P)
+  if [ -n "$(lsof +D "$real" 2>/dev/null | head -n 2)" ]; then printf 'kept %s: a process has files open in it\n' "$path"; return 0; fi
+  if [ -n "$(git -C "$path" status --porcelain --untracked-files=all 2>/dev/null | head -n 1)" ]; then printf 'kept %s: has modifications\n' "$path"; return 0; fi
+  if [ "$DRY" = 1 ]; then printf 'would remove %s (%s)\n' "$path" "$name"; return 0; fi
+  if err=$(git -C "$main_checkout" worktree remove "$path" 2>&1); then printf 'removed %s (%s)\n' "$path" "$name"
+  else printf 'kept %s: git refused: %s\n' "$path" "$(printf '%s' "$err" | head -n 1)"; fi
+}
+
+# The list ends with a blank line only sometimes; the extra "" record below flushes the last worktree.
+old_ifs=$IFS
+IFS='
+'
+for line in $list ""; do
+  case $line in
+    "worktree "*) flush; path=${line#worktree } ;;
+    "HEAD "*) sha=${line#HEAD } ;;
+    "branch refs/heads/"*) branch=${line#branch refs/heads/} ;;
+    bare) state=bare ;;
+    locked*) state=locked ;;
+    "") flush ;;
+  esac
+done
+IFS=$old_ifs
