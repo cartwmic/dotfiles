@@ -111,9 +111,11 @@ config="$config_dir/chezmoi.yaml"
 pkg install -y chezmoi git openssh coreutils termux-api python vim
 mkdir -p "$(dirname "$config")"
 printf 'data:\n  profile: "termux"\n' > "$config"
-chezmoi init --apply https://github.com/cartwmic/dotfiles.git
+chezmoi init https://github.com/cartwmic/dotfiles.git
 )
 ```
+
+Then add these keys to the `data:` block of `~/.config/chezmoi/chezmoi.yaml`: `sshHosts.server`, `sshHosts.laptop`, `sshHosts.macbook`, `sshHosts.macKvm`, `sshHosts.whonixGw` and `sshHosts.whonixWs`, each with `address` and `user` (the list is in [Local data keys](./docs/profiles.md#local-data-keys)). A missing key stops apply and names it. Then run `chezmoi apply`.
 
 ## What's Included
 
