@@ -24,6 +24,7 @@ on_mac = unittest.skipUnless(DARWIN, "the T3 hub is gated to personal macOS")
 CLAUDE_FILE = ".config/t3-hub-claude-settings.json"
 TARGETS = (".t3/userdata/settings.json", CLAUDE_FILE, ".codex/config.toml")
 CODEX_VERSION = "9.9.9"
+WORKTREES = "/Volumes/Workshop/macbook/t3-worktrees"
 
 
 class Env:
@@ -97,6 +98,20 @@ class SettingsScriptTest(unittest.TestCase):
         self.assertEqual({k: v for k, v in out.items() if k != "providerInstances"},
                          {k: v for k, v in before.items() if k != "providerInstances"})
 
+    def test_worktrees_directory_is_set_and_nothing_else_moves(self):
+        """New T3 worktrees go to Workshop. The key is added when absent, replaces a different value, and every other key is as T3 wrote it."""
+        before = json.loads(FIXTURE)
+        without = {k: v for k, v in before.items() if k != "worktreesDirectory"}
+        for start in (without, dict(before, worktreesDirectory=""), dict(before, worktreesDirectory="/somewhere/else")):
+            out = json.loads(self.apply(json.dumps(start, indent=2)))
+            self.assertEqual(out["worktreesDirectory"], WORKTREES)
+            self.assertEqual({k: v for k, v in out.items() if k not in ("providerInstances", "worktreesDirectory")},
+                             {k: v for k, v in before.items() if k not in ("providerInstances", "worktreesDirectory")})
+
+    def test_worktrees_directory_is_set_while_the_hub_is_off(self):
+        out = json.loads(self.apply('{"a": 1}', want="{}"))
+        self.assertEqual(out["worktreesDirectory"], WORKTREES)
+
     def test_instance_shapes(self):
         inst = json.loads(self.apply(FIXTURE))["providerInstances"]
         home = str(self.env.home)
@@ -149,7 +164,7 @@ class SettingsScriptTest(unittest.TestCase):
     def test_no_provider_instances_key(self):
         out = json.loads(self.apply('{"a": 1}'))
         self.assertEqual(list(out["providerInstances"]), list(OURS))
-        self.assertEqual(json.loads(self.apply('{"a": 1}', want="{}")), {"a": 1})
+        self.assertEqual(json.loads(self.apply('{"a": 1}', want="{}")), {"a": 1, "worktreesDirectory": WORKTREES})
 
     def test_missing_or_invalid_input_is_unchanged(self):
         for text in ("", "not json", '{"a": ', "[1, 2]", "null"):

@@ -157,7 +157,7 @@ disk_rule() {
   while IFS= read -r vol; do
     [ -n "$vol" ] || continue
     v=$(disk_free "$vol"); kb=${v%% *}; mnt=${v#* }
-    if [ -z "$v" ] || [ "$mnt" != "$vol" ]; then
+    if [ "$mnt" != "$vol" ]; then   # df could not read the path (v is empty), or answered for another volume
       broken=1; log REFUSED "$vol is not mounted; mount it and retry"
     elif ! meets "$kb" ge "$floor_kb"; then
       broken=1

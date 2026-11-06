@@ -27,5 +27,6 @@
         "launchArgs": "--append-system-prompt-file /Users/cartwmic/.local/share/coordinator/t3/seat.md --settings /Users/cartwmic/.local/share/coordinator/t3/settings.json"
       }
     }
-  }
+  },
+  "worktreesDirectory": "/Volumes/Workshop/macbook/t3-worktrees"
 }
