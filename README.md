@@ -77,9 +77,11 @@ if [ "$(uname -s)" = Linux ]; then
 fi
 mkdir -p "$(dirname "$config")"
 printf 'data:\n  profile: "%s"\n' "$profile" > "$config"
-sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" init --apply cartwmic
-) && exec zsh
+sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" init cartwmic
+)
 ```
+
+Then add the local data keys your profile needs to the `data:` block of `~/.config/chezmoi/chezmoi.yaml`. A missing key stops apply and names it; the list is in [Local data keys](./docs/profiles.md#local-data-keys). Then run `"$HOME/.local/bin/chezmoi" apply`, then `exec zsh`.
 
 Complete the applicable [manual steps](#manual-steps) after installation.
 
@@ -109,9 +111,11 @@ config="$config_dir/chezmoi.yaml"
 pkg install -y chezmoi git openssh coreutils termux-api python vim
 mkdir -p "$(dirname "$config")"
 printf 'data:\n  profile: "termux"\n' > "$config"
-chezmoi init --apply https://github.com/cartwmic/dotfiles.git
+chezmoi init https://github.com/cartwmic/dotfiles.git
 )
 ```
+
+Then add these keys to the `data:` block of `~/.config/chezmoi/chezmoi.yaml`: `sshHosts.server`, `sshHosts.laptop`, `sshHosts.macbook`, `sshHosts.macKvm`, `sshHosts.whonixGw` and `sshHosts.whonixWs`, each with `address` and `user` (the list is in [Local data keys](./docs/profiles.md#local-data-keys)). A missing key stops apply and names it. Then run `chezmoi apply`.
 
 ## What's Included
 
