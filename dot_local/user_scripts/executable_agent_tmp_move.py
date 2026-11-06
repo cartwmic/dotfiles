@@ -20,7 +20,7 @@ A top-level entry of ~/tmp moves only when ALL of these hold:
 The move: rsync -a into <dest>/.NAME.partial, check the copy (entry count and file bytes, and that the source did not change
 while copying), look at lsof once more, rename the original aside, link <source>/NAME -> <dest>/NAME, and remove the renamed
 original. Nothing is removed before the check passes. A failed or held-back entry stays where it is; the partial copy stays too
-(a rerun reuses it). Each move is one line in the log (--log).
+(a rerun reuses it). Each decision of an --apply run (moved, held, failed, with the reason) is one line in the log (--log).
 
 --finish needs every entry of ~/tmp to be a link into $AGENT_TMP and nothing open under ~/tmp. It renames the directory of links
 to ~/tmp.links-old-<time> (still there; delete it when you like) and links ~/tmp itself to $AGENT_TMP.
@@ -137,7 +137,7 @@ def worktree_conflict(worktrees, entry):
 
 def rsync(src, dst):
     src_arg = str(src) + ("/" if os.path.isdir(src) and not os.path.islink(src) else "")
-    r = subprocess.run(["rsync", "-a", src_arg, str(dst)], capture_output=True, text=True)
+    r = subprocess.run(["rsync", "-a", "--delete", src_arg, str(dst)], capture_output=True, text=True)
     return r.returncode, r.stderr.strip()
 
 
@@ -199,12 +199,15 @@ class Mover:
         os.rename(p, aside)
         os.symlink(final, p)
         remove_tree(aside)
-        rec = {"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "name": name, "entries": stats[0],
-               "bytes": stats[1], "seconds": round(time.time() - t0, 1), "to": str(final)}
+        self.record(name, "moved", entries=stats[0], bytes=stats[1], seconds=round(time.time() - t0, 1), to=str(final))
+        return True, ""
+
+    def record(self, name, result, **more):
+        """One JSON line per entry the apply run decided on: moved, held or failed, with the reason."""
+        rec = dict(time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), name=name, result=result, **more)
         self.log.parent.mkdir(parents=True, exist_ok=True)
         with open(self.log, "a") as f:
             f.write(json.dumps(rec) + "\n")
-        return True, ""
 
     def run(self, only):
         names = sorted(os.listdir(self.src))
@@ -223,6 +226,8 @@ class Mover:
             if reason:
                 held += 1
                 say("HOLD        %-40s %s" % (name, reason))
+                if self.apply:
+                    self.record(name, "held", why=reason)
                 continue
             gb = stats[1] / 1e9
             if not self.apply:
@@ -238,6 +243,7 @@ class Mover:
             else:
                 failed += 1
                 say("FAILED      %-40s %s" % (name, why))
+                self.record(name, "failed", why=why)
         say("%s %d, held back %d, failed %d, %.3f GB of files" %
             ("moved" if self.apply else "would move", moved, held, failed, moved_bytes / 1e9))
         return 1 if failed else 0

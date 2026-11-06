@@ -34,13 +34,13 @@ Many agents have live worktrees and scratch in `~/tmp`. So: ship `AGENT_TMP` fir
 
 An entry moves only if it is not a link, is not on the keep list (`ssd-move`, `ssd-scratch`, `--keep NAME`), has nothing open in it (an `lsof` snapshot taken right before the move, checked against the old and the new path; a process whose current directory is inside it counts), has a newest mtime older than 2 hours (`--min-age-hours`), and holds no registered git worktree and is not inside one (`git worktree list` of the repos under `/Volumes/Workshop/macbook/git`, `~/.local/share/chezmoi` and `~/.t3/worktrees/*/*`).
 
-The copy is `rsync -a` into `$AGENT_TMP/.NAME.partial`. It is checked (entry count, file bytes, and that the source did not change while copying), `lsof` is looked at once more, then the partial is renamed to `$AGENT_TMP/NAME`, the original is renamed aside, a link takes its place and the renamed original is removed. Nothing is removed before the check passes. A failure leaves the original in place and the partial copy for a rerun. Each move is a line in `~/.local/state/agent-tmp-move/moves.jsonl`.
+The copy is `rsync -a` into `$AGENT_TMP/.NAME.partial`. It is checked (entry count, file bytes, and that the source did not change while copying), `lsof` is looked at once more, then the partial is renamed to `$AGENT_TMP/NAME`, the original is renamed aside, a link takes its place and the renamed original is removed. Nothing is removed before the check passes. A failure leaves the original in place and the partial copy; a rerun syncs into it again (`rsync --delete` inside the partial only), so a stale partial does not block the entry. Each decision of an `--apply` run (moved, held, failed, with the reason) is a line in `~/.local/state/agent-tmp-move/moves.jsonl`.
 
 `--finish` replaces `~/tmp` with a link to `$AGENT_TMP`, only when every entry of `~/tmp` is already a link into `$AGENT_TMP` and no process has `~/tmp` itself as its current directory. The old directory of links is renamed `~/tmp.links-old-<time>`, not deleted.
 
 **Reproduce:** `chezmoi apply`, then run the script with `--apply` again whenever more subtrees have gone idle.
 
-**Undo one entry:** `rm ~/tmp/NAME` (the link), then `rsync -a $AGENT_TMP/NAME/ ~/tmp/NAME/` and check it before removing the Workshop copy. **Undo it all:** remove the source line from `~/.zshenv`; new work goes back to wherever it was told to go.
+**Undo one entry:** `rm ~/tmp/NAME` (the link), then `rsync -a $AGENT_TMP/NAME/ ~/tmp/NAME/` and check it before removing the Workshop copy. **Stop using Workshop for new work:** remove `dot_config/agent-scratch` and the `dot_zshenv` line from the source and apply (editing `~/.zshenv` by hand is undone by the next apply). Moved subtrees stay on Workshop behind their links. **Undo `--finish`:** `rm ~/tmp` (the link) and `mv ~/tmp.links-old-<time> ~/tmp`.
 
 ## What stays internal
 

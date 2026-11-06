@@ -195,7 +195,27 @@ class MoveScriptTest(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.src.iterdir()), ["idle"])
         self.assertEqual(sorted(p.name for p in self.dst.iterdir()), ["idle"])
         rec = json.loads(self.log.read_text().splitlines()[0])
-        self.assertEqual((rec["name"], rec["entries"]), ("idle", 6))
+        self.assertEqual((rec["name"], rec["entries"], rec["result"]), ("idle", 6, "moved"))
+
+    def test_held_and_failed_entries_are_logged_with_the_reason(self):
+        self.tree("fresh", hours=0.5)
+        self.tree("dup")
+        (self.dst / "dup").mkdir()
+        self.run_move("--apply")
+        recs = {r["name"]: r for r in map(json.loads, self.log.read_text().splitlines())}
+        self.assertEqual((recs["fresh"]["result"], recs["dup"]["result"]), ("held", "failed"))
+        self.assertIn("newest mtime", recs["fresh"]["why"])
+        self.assertIn("already exists", recs["dup"]["why"])
+
+    def test_a_stale_partial_copy_does_not_block_a_rerun(self):
+        d = self.tree("again")
+        part = self.dst / ".again.partial"
+        shutil.copytree(d, part, symlinks=True)
+        (part / "sub/stale.txt").write_text("left from a source that has since changed")
+        r = self.run_move("--apply")
+        self.assertIn("MOVED       again", r.stdout)
+        self.assertFalse((self.dst / "again/sub/stale.txt").exists())
+        self.assertFalse(part.exists())
 
     def test_a_file_moves_too(self):
         f = self.src / "note.sh"

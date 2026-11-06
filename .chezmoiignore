@@ -230,7 +230,11 @@ Library/LaunchAgents/local.qmd-refresh.plist
 .config/kgate
 # /Volumes/Workshop exists only on the personal Mac; the script turns Spotlight off for it.
 80_spotlight_off_workshop.sh
-# Agent scratch on the Workshop SSD (docs/agent-scratch.md): the env file dot_zshenv sources, the script that makes its directory, and the ~/tmp move script.
+{{- end }}
+
+{{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
+# Agent scratch on the Workshop SSD (docs/agent-scratch.md): personal macOS only, because /Volumes/Workshop is that Mac's disk. The env file
+# dot_zshenv sources (without it that line does nothing), the script that makes its directory, and the ~/tmp move script.
 .config/agent-scratch
 .config/agent-scratch/**
 81_agent_scratch_workshop.sh
