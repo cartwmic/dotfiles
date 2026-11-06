@@ -25,10 +25,10 @@ PERSONAL = "Merging and deploying approved work is yours to do: if checks pass a
 SEAT_HEADING = "## Agent seats and models"
 SEAT_ROWS = (
     "| Coordinator | Opus 5.5 medium |",
-    "| Lead | Opus 5.5 medium |",
+    "| Lead | Sonnet 5.5 high |",
     "| Planner | Sonnet 5.5 high |",
     "| Reviewer | Opus 5.5 medium |",
-    "| Builder | Sonnet 5.5 high; Haiku 5.5 xhigh when steps are tightly bounded |",
+    "| Builder | Haiku 5.5 xhigh; escalate to Sonnet 5.5 high on failure, or when the work is ambiguous |",
 )
 BROWSER = {
     "personal": "| Browser work | Terra 6.1 (cliproxy/gpt-6.1-terra) if available, else Sonnet 5.5 high |",
