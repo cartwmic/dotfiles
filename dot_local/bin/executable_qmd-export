@@ -28,7 +28,8 @@ are escaped so they do not split chunks. Every output directory is created even 
 collection folder always exists.
 
 T3: a Claude session that T3 ran is headed with its T3 thread (title, project, parent thread), and each user turn that T3
-matches is headed "## owner" (Michael typed it) or "## agent"; other user turns stay "## user". Without a T3 db, or with one
+matches is headed "## ownerturn" (Michael typed it) or "## agentturn"; other user turns stay "## user". The words are not
+ordinary text on purpose: qmd search cannot filter on "owner", which is common in prose. Without a T3 db, or with one
 that is unreadable or from another T3 version, the output is what it is without T3, and nothing is said.
 """
 import argparse
@@ -178,6 +179,10 @@ FALLBACK_MS = 3000
 STAMP = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)?\Z")
 
 
+# The heading word of a matched turn. "owner" and "agent" are ordinary text, so a search for them would match everywhere.
+TURN_HEADING = {"owner": "ownerturn", "agent": "agentturn"}
+
+
 def t3_db_path():
     return os.environ.get("QMD_EXPORT_T3_DB") or os.path.join(os.path.expanduser("~"), ".t3", "userdata", "statev2.sqlite")
 
@@ -310,7 +315,7 @@ def render_claude(path, info=None):
     """Claude Code: user prompts and assistant text; tool calls, tool results, thinking, attachments (system reminders) and
     meta entries stay out. A compact summary is a user entry flagged isCompactSummary. `info` is the T3 thread that ran this
     session, or None: its title heads the file (the transcript's own title is the fallback), and in a main transcript each user
-    turn that T3 matches is headed 'owner' or 'agent'. A sub-agent's prompts are its parent's, so they are not marked."""
+    turn that T3 matches is headed with TURN_HEADING (ownerturn or agentturn). A sub-agent's prompts are its parent's, so they are not marked."""
     sid = cwd = started = first = None
     titles = {}
     parts = []
@@ -349,7 +354,7 @@ def render_claude(path, info=None):
         if os.path.basename(os.path.dirname(path)) != "subagents":
             for (i, ts, x), who in zip(turns, mark_authors([(ts, x) for _, ts, x in turns], info["userMessages"])):
                 if who:
-                    parts[i] = message(who, ts, x)
+                    parts[i] = message(TURN_HEADING[who], ts, x)
     return transcript(sid, cwd, started, title, parts, extra)     # a sub-agent file names its parent session
 
 

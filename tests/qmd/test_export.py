@@ -602,11 +602,11 @@ class T3Test(Base):
             (ts_at(0), "plan the work", "agent"), (ts_at(60), "no, not that the other one", "user")]}])
         f.run()
         s = self.claude_out()
-        self.assertIn("## agent 2026-10-20T10:00:00.050Z\n\nplan the work\n", s)
-        self.assertIn("## owner 2026-10-20T10:01:00.070Z\n\nno,   not that\nthe other one\n", s)
+        self.assertIn("## agentturn 2026-10-20T10:00:00.050Z\n\nplan the work\n", s)
+        self.assertIn("## ownerturn 2026-10-20T10:01:00.070Z\n\nno,   not that\nthe other one\n", s)
         self.assertIn("## user 2026-10-20T10:05:00.000Z\n\ntyped in a terminal\n", s)
         self.assertIn("## assistant 2026-10-20T10:01:00.000Z\n\nplanned\n", s)
-        self.assertEqual((s.count("## owner "), s.count("## agent ")), (1, 1))
+        self.assertEqual((s.count("## ownerturn "), s.count("## agentturn ")), (1, 1))
 
     def test_repeated_text_pairs_by_time_and_each_t3_message_is_used_once(self):
         f = self.f
@@ -615,8 +615,8 @@ class T3Test(Base):
         self.use([{"id": "T1", "title": "Yes", "claude": "cc1", "messages": [(ts_at(10), "yes", "user"), (ts_at(30), "yes", "agent")]}])
         f.run()
         s = self.claude_out()
-        self.assertIn("## agent 2026-10-20T10:00:30.100Z\n\nyes", s)
-        self.assertIn("## owner 2026-10-20T10:00:10.100Z\n\nyes", s)
+        self.assertIn("## agentturn 2026-10-20T10:00:30.100Z\n\nyes", s)
+        self.assertIn("## ownerturn 2026-10-20T10:00:10.100Z\n\nyes", s)
         self.assertIn("## user 2026-10-20T10:00:50.000Z\n\nyes", s)     # no T3 message is left for it
 
     def test_subagent_files_carry_the_parent_title_and_no_marks(self):
@@ -626,12 +626,12 @@ class T3Test(Base):
         self.use([{"id": "T1", "title": "Parent work", "claude": "cc1", "messages": [(ts_at(0), "plan the work", "agent")]}])
         f.run()
         sub = (f.out / "claude-sessions/2026-10-20/cc1-agent-a1.md").read_text()
-        self.assertIn("## agent 2026-10-20T10:00:00.050Z", self.claude_out())
+        self.assertIn("## agentturn 2026-10-20T10:00:00.050Z", self.claude_out())
         self.assertIn('t3_title: "Parent work"\n', sub)
         self.assertIn("\n# Parent work\n", sub)
         self.assertIn("## user 2026-10-20T10:00:00.060Z\n\nplan the work", sub)
-        self.assertNotIn("## owner ", sub)
-        self.assertNotIn("## agent ", sub)
+        self.assertNotIn("## ownerturn ", sub)
+        self.assertNotIn("## agentturn ", sub)
 
     def test_sessions_without_a_t3_thread_are_as_before(self):
         f = self.f
@@ -697,11 +697,11 @@ class T3Test(Base):
         f.cc([cc_user("plan the work", ts="2026-10-20T10:00:00.050Z")])
         self.use([{"id": "T1", "title": "Fix", "claude": "cc1", "messages": [(ts_at(0), "plan the work", "agent")]}])
         f.run()
-        self.assertIn("## agent 2026-10-20T10:00:00.050Z", self.claude_out())
+        self.assertIn("## agentturn 2026-10-20T10:00:00.050Z", self.claude_out())
         self.db_exec("UPDATE orchestration_v2_projection_messages SET payload_json = ? WHERE message_id = 'T1-m0'",
                      (json.dumps({"text": "plan the work", "createdBy": "user"}),))
         self.assertIn("claude-sessions: 1 written", f.run().stdout)
-        self.assertIn("## owner 2026-10-20T10:00:00.050Z", self.claude_out())
+        self.assertIn("## ownerturn 2026-10-20T10:00:00.050Z", self.claude_out())
 
     def test_removing_the_db_re_renders_without_t3_fields(self):
         f = self.f
