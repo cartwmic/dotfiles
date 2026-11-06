@@ -79,6 +79,9 @@ Every component that acts for a user records enough to replay one user action: w
 
 **Test:** from the logs alone, replay one action and name a seeded fault (§12).
 
+## 15. Fast proof
+Observable proof tests and journeys should be optimized aggressively for time. In practice, wait for a fact when one can be observed instead of sleeping a fixed time, run independent tests and journeys in parallel, measure and report suite time, and treat a slow suite as a defect.
+
 ## Enforcement (strongest first)
 The Gate lines in §2, §3 and §7 and items 1 and 2 below apply to new components and new cross-component boundaries, not to a small change inside an existing component.
 
