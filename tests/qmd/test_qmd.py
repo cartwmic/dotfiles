@@ -139,13 +139,15 @@ class IndexTemplateTest(unittest.TestCase):
 
     def test_collections(self):
         names = re.findall(r"^  ([a-z0-9-]+):$", self.out.split("models:")[0], re.M)
-        self.assertEqual(names[:2], ["notes", "repo-dotfiles"])
+        self.assertEqual(names[:3], ["notes", "notes-internal", "repo-dotfiles"])
         self.assertEqual(names[-4:], ["sessions", "claude-sessions", "codex-sessions", "recaps"])
         for n in names:
-            self.assertTrue(n in ("notes", "sessions", "claude-sessions", "codex-sessions", "recaps") or n.startswith("repo-"), n)
+            self.assertTrue(n in ("notes", "notes-internal", "sessions", "claude-sessions", "codex-sessions", "recaps") or n.startswith("repo-"), n)
         self.assertEqual(len(names), len(set(names)))
         home = str(self.home)
-        self.assertIn("    path: %s/tmp\n    pattern: \"*/*.md\"" % home, self.out)
+        # qmd does not follow links: `notes` reads the real directory on the Workshop SSD, `notes-internal` the ~/tmp that has not moved.
+        self.assertIn("  notes:\n    path: /Volumes/Workshop/macbook/tmp-home\n    pattern: \"*/*.md\"", self.out)
+        self.assertIn("  notes-internal:\n    path: %s/tmp\n    pattern: \"*/*.md\"" % home, self.out)
         self.assertIn("    path: %s/.local/share/chezmoi\n" % home, self.out)
         self.assertIn("    path: %s/.local/share/qmd-corpus/sessions\n" % home, self.out)
         self.assertIn("    path: %s/.local/share/qmd-corpus/recaps\n" % home, self.out)
@@ -159,6 +161,7 @@ class IndexTemplateTest(unittest.TestCase):
         by = {b[0]: b for b in blocks}
         self.assertEqual(len(blocks), len(re.findall(r"^    path: ", self.out, re.M)), "every block parsed")
         self.assertEqual(by["notes"][2], '"*/*.md"')
+        self.assertEqual(by["notes-internal"][2], '"*/*.md"')
         self.assertEqual(by["sessions"][2], '"**/*.md"')
         self.assertEqual(by["recaps"][2], '"**/*.md"')
         self.assertEqual(by["claude-sessions"][2], '"**/*.md"')
@@ -225,9 +228,14 @@ class WorkIndexTemplateTest(unittest.TestCase):
         out, _ = self.render(dirs=["git/loop-engine", "git/budget-steward", "git/cartwmic-homelab-v2"])
         self.assertEqual(self.names(out), ["repo-dotfiles", "sessions", "claude-sessions", "codex-sessions", "recaps"])
 
-    def test_personal_still_has_notes_without_a_tmp_folder(self):
+    def test_personal_has_both_notes_collections_without_a_tmp_folder(self):
+        # Static on purpose: ~/tmp stays a real directory of links (docs/agent-scratch.md), so nothing depends on its state.
         out, _ = self.render("personal")
-        self.assertEqual(self.names(out)[:2], ["notes", "repo-dotfiles"])
+        self.assertEqual(self.names(out)[:3], ["notes", "notes-internal", "repo-dotfiles"])
+
+    def test_work_never_gets_notes_internal(self):
+        out, _ = self.render(dirs=["tmp"])
+        self.assertNotIn("notes-internal", out)
 
 
 class SkillTest(unittest.TestCase):

@@ -322,6 +322,17 @@ sessions and recaps; nothing is copied between machines).
   written whole and renamed into place. `--dry-run` changes nothing.
 - The file names are what `qmd get qmd://sessions/<day>/<id>.md` and the skill's hits show.
 
+## The notes collections and the Workshop SSD (personal)
+
+Agent scratch lives on the Workshop SSD (`docs/agent-scratch.md`), and `~/tmp/<name>` is a link to `/Volumes/Workshop/macbook/tmp-home/<name>` for each subtree that moved. `~/tmp` itself stays a real directory for good. qmd's glob does not follow links (`followSymbolicLinks: false` in qmd 2.8.3, `dist/store.js`), so a collection at `~/tmp` stops seeing a subtree the moment it moves, `qmd update` marks its notes inactive, and the next daily cleanup would drop their vectors. So on the personal profile:
+
+- `notes` is `/Volumes/Workshop/macbook/tmp-home`, pattern `*/*.md`. New scratch (`$AGENT_TMP`) and everything that moved is here.
+- `notes-internal` is `~/tmp`, the same pattern, for what is still a real directory there. The links are skipped, so nothing is indexed twice.
+
+The config is the same in every state, so nothing needs re-applying when more subtrees move. A moved note keeps its path inside the collection, so it reactivates under `notes` with its vectors. The work profile has no Workshop and keeps one `notes` collection at `~/tmp`. If the Workshop disk is not mounted the `notes` folder is missing and the cleanup is skipped (see the guard above).
+
+**Known edge.** The cleanup guard holds the cleanup off when a collection has inactive documents and no active one left. If `~/tmp` ever holds no real directory with a `.md` in it, `notes-internal` trips that guard: the cleanup is skipped (nothing is lost). Fix: remove the `notes-internal` collection from `index.yml.tmpl` and apply.
+
 ## The work profile (axon-work-computer)
 
 The same files land on the work Mac as on the personal one (the pin, `qmd-refresh`, `qmd-export`, the skill, the same models, the `qmd` wrapper and the scheduled refresh). Only `index.yml.tmpl` renders differently:
