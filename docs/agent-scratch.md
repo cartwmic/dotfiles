@@ -38,6 +38,23 @@ The copy is `rsync -a` into `$AGENT_TMP/.NAME.partial`. It is checked (entry cou
 
 **Undo one entry:** `rm ~/tmp/NAME` (the link), then `rsync -a $AGENT_TMP/NAME/ ~/tmp/NAME/` and check it before removing the Workshop copy. **Stop using Workshop for new work:** remove `dot_config/agent-scratch` and the `dot_zshenv` line from the source and apply (editing `~/.zshenv` by hand is undone by the next apply). Moved subtrees stay on Workshop behind their links. 
 
+## Caches
+
+| Cache | Setting | Where it lands |
+|---|---|---|
+| npm | `NPM_CONFIG_CACHE` in `workshop.env` (no `~/.npmrc` is shipped) | `/Volumes/Workshop/macbook/cache/npm` |
+
+A cache only, so every shell shares it. Every zsh reads `~/.zshenv`, so a terminal gets the variable too; to use the internal npm cache, `unset NPM_CONFIG_CACHE` in `~/.zshenv.local`. Unmounted: npm fails on the Workshop path; there is no fallback.
+
+uv (10.6 GB) and cargo are not set here yet. uv's `cache-dir` waits until its cache can be moved (a running `uvx` process holds it), so nothing creates the new directory first. cargo: a single `CARGO_TARGET_DIR` for every shell and project would make workspaces share one target dir, and a per-project path cannot be expressed in an environment variable (cargo expands `{workspace-root}` only in a config file).
+
+The existing npm cache was moved with the same script (the age check is off, a cache is always being touched; the old path became a link, so a tool that ignores the setting still lands on Workshop):
+
+    mkdir -p /Volumes/Workshop/macbook/cache/npm
+    agent_tmp_move.py --apply --source ~/.npm --dest /Volumes/Workshop/macbook/cache/npm --only _cacache --min-age-hours 0
+
+Undo: `rm ~/.npm/_cacache` (the link) and `rsync -a` the directory back.
+
 ## What stays internal
 
 The coordinator ledger and daemon state, T3's own sqlite and userdata, the qmd index, sockets, `~/.local/share/agent-traces`, mise installs and shims, rustup and `~/.cargo` registry. End-to-end test and journey scratch stays in `/tmp`: never set a global `TMPDIR` to Workshop, because socket paths have a ~104-byte limit.

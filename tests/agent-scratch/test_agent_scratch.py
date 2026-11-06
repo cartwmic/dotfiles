@@ -53,6 +53,22 @@ class EnvFileTest(unittest.TestCase):
         self.assertEqual(r.stdout, str(self.home / "ws/macbook/tmp-home"))
         self.assertEqual(r.stderr, "")
 
+    def test_npm_cache_is_set_under_workshop_and_cargo_is_not_set(self):
+        self.deploy_env_file()
+        (self.home / "ws/macbook").mkdir(parents=True)
+        root = self.home / "ws"
+        r = subprocess.run([ZSH, "-c", 'printf "%s\\n%s" "$NPM_CONFIG_CACHE" "${CARGO_TARGET_DIR-unset}"'],
+                           env=clean_env(self.home, AGENT_WORKSHOP_ROOT=str(root)), capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.stdout.split("\n"), [str(root / "macbook/cache/npm"), "unset"])
+
+    def test_unmounted_keeps_the_npm_cache_path_on_workshop_too(self):
+        self.deploy_env_file()
+        root = self.home / "gone"
+        r = subprocess.run([ZSH, "-c", 'printf "%s" "$NPM_CONFIG_CACHE"'],
+                           env=clean_env(self.home, AGENT_WORKSHOP_ROOT=str(root)), capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.stdout, str(root / "macbook/cache/npm"))
+        self.assertFalse(root.exists())
+
     def test_default_root_is_the_workshop_volume(self):
         self.deploy_env_file()
         r = self.shell()
@@ -99,7 +115,7 @@ class CreateScriptTest(unittest.TestCase):
             r = self.run_script(t)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertTrue((Path(t) / "macbook/tmp-home").is_dir())
-            self.assertEqual(sorted(p.name for p in (Path(t) / "macbook").iterdir()), ["keep.txt", "tmp-home"])
+            self.assertEqual(sorted(p.name for p in (Path(t) / "macbook").iterdir()), ["cache", "keep.txt", "tmp-home"])
             self.assertEqual(self.run_script(t).returncode, 0)  # idempotent
 
     def test_fails_loudly_and_creates_nothing_when_unmounted(self):
