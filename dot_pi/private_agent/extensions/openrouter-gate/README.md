@@ -34,6 +34,9 @@ live `openrouter` key so the provider stays default-off. Then `/openrouter on`.
 Do not pass the key as a slash-command argument in the TUI — it lands in the
 session transcript. Headless/scripts may use `/openrouter stash sk-or-...`.
 
+The stash should hold the `pi-daily` key. The keys for each application, and how
+to rotate them, are in [docs/openrouter-keys.md](../../../../docs/openrouter-keys.md).
+
 Hand-edit still works if you prefer:
 
 ```diff
