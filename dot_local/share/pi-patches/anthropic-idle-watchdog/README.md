@@ -1,7 +1,7 @@
 # Anthropic SSE idle watchdog
 
 This chezmoi-managed patch adds a per-read idle timeout and forwards Anthropic
-`ping` events. Revision 2 is tested against Pi 0.99.1.
+`ping` events. Revision 2 is tested against Pi 0.99.1 and applies unchanged to Pi 1.2.0 through 1.5.0 (see below).
 
 ## Why it exists
 
@@ -14,6 +14,12 @@ pings. The original investigation concerned
 Pi 0.99.1 added `onProviderStreamEvent` to the normalization loop; that callback
 is not an idle watchdog. Revision 1's exact anchor no longer matches it.
 Revision 2 preserves the callback and runs it before handling pings.
+
+Pi 1.5.0 rewrote the statements just before the CLI bundle's event loop (`let blocks=output.content;` became `let openBlocks=new Map,...`).
+The edit never touched them, so the "CLI stream" anchor is now the loop head alone
+(`for await(let event of iterateAnthropicEvents(response,options?.signal))if(await options?.onProviderStreamEvent?.(event,model),event.type==="message_start")`).
+It is still exactly once in the Anthropic chunk of Pi 1.2.0, 1.3.0, 1.4.0 and 1.5.0, and the patched text is byte-identical to before,
+so there is no versioned payload and no revision bump; trees already patched by the earlier anchor still verify.
 
 ## Runtime targets
 
@@ -58,6 +64,10 @@ From the chezmoi source root:
 node dot_local/share/pi-patches/anthropic-idle-watchdog/patch.mjs --check
 python3 tests/pi-patches/anthropic_watchdog.py
 ```
+
+The proof reads the global npm Pi (`npm root -g`) and expects Pi 0.99.1. To run it against another Pi, point npm at a private global install and
+name the version: `npm install -g --prefix "$P" --ignore-scripts @earendil-works/pi-coding-agent@1.5.0`, then
+`npm_config_prefix="$P" PI_WATCHDOG_PROOF_VERSION=1.5.0 python3 tests/pi-patches/anthropic_watchdog.py`.
 
 The first command checks the installed SDK and CLI copies without writes. The
 second copies Pi 0.99.1 privately, patches that copy, and drives its real CLI

@@ -15,7 +15,7 @@ const FOUR = ["headless-extension-drain", "prompt-start-race", "settlement-abort
 // Real payload maps: a payload serves its series and every later one until a newer payload exists.
 const REAL = {
 	...Object.fromEntries(FOUR.map((name) => [name, { "1.1": "patch.pi-1.1.mjs", "1.2": "patch.pi-1.2.mjs" }])),
-	"btw-native-session": { "1.1": "patch.pi-1.1.mjs", "1.2": "patch.pi-1.2.mjs", "1.3": "patch.pi-1.3.mjs", "1.4": "patch.pi-1.4.mjs" },
+	"btw-native-session": { "1.1": "patch.pi-1.1.mjs", "1.2": "patch.pi-1.2.mjs", "1.3": "patch.pi-1.3.mjs", "1.4": "patch.pi-1.4.mjs", "1.5": "patch.pi-1.5.mjs" },
 };
 
 test("seriesOf: minor series only, strict semver shape", () => {
@@ -93,4 +93,38 @@ test("repository wiring: every dispatching patch has both payloads, the real dis
 		assert.ok(tmpl.includes(`include "dot_local/share/pi-patches/${name}/patch.mjs" | sha256sum`));
 		assert.deepEqual(readdirSync(dir).filter((f) => /^patch\.pi-.*\.mjs$/.test(f)).sort(), Object.values(VARIANTS).sort(), `${name}: no unmapped payload files`);
 	}
+});
+
+// The real btw-native-session entry point against package.json-only roots. The payload then fails (there are no bundle chunks), but the
+// dispatcher's own line says which payload it chose, which is what is under test. Older than every payload, unparseable: loud exit 1, nothing run.
+test("real btw-native-session selector: 1.1 to 1.5 each pick their own payload, 1.5.x and later pick the 1.5 payload, unsupported and unparseable fail loudly", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-btw-select-"));
+	try {
+		const pi = (v) => { const r = mkdtempSync(join(dir, "pi-")); writeFileSync(join(r, "package.json"), JSON.stringify({ version: v })); return r; };
+		const run = (v) => spawnSync(process.execPath, [join(PATCHES, "btw-native-session/patch.mjs"), "--check"], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir, PI_ROOT: pi(v), PI_CHEZMOI_PROFILE: "personal" } });
+		const expected = { "1.1.0": "1.1", "1.1.9": "1.1", "1.2.0": "1.2", "1.3.0": "1.3", "1.4.0": "1.4", "1.4.7": "1.4", "1.5.0": "1.5", "1.5.3": "1.5", "1.6.0": "1.5", "2.0.0": "1.5" };
+		for (const [version, series] of Object.entries(expected)) {
+			const r = run(version);
+			assert.match(r.stdout, new RegExp(`Pi ${version.replace(/\./g, "\\.")} -> payload patch\\.pi-${series.replace(".", "\\.")}\\.mjs`), `${version} -> ${series}`);
+		}
+		let r = run("1.0.0"); assert.equal(r.status, 1); assert.doesNotMatch(r.stdout, /payload/); assert.match(r.stderr, /no payload for Pi 1\.0\.0; payloads start at Pi 1\.1\.x/);
+		r = run("banana"); assert.equal(r.status, 1); assert.doesNotMatch(r.stdout, /payload/); assert.match(r.stderr, /unrecognised Pi version "banana"/);
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("btw-native-session edits: every payload's edits file is hashed by the onchange script, and edits.pi-1.5.json differs from 1.4 only in the four edits Pi 1.5.0 forced (plus chunk-name hints)", () => {
+	const tmpl = readFileSync(join(ROOT, "run_onchange_after_30_apply_pi_patches.sh.tmpl"), "utf8");
+	const dir = join(PATCHES, "btw-native-session");
+	for (const f of ["edits.json", "edits.pi-1.2.json", "edits.pi-1.3.json", "edits.pi-1.4.json", "edits.pi-1.5.json"]) {
+		assert.ok(existsSync(join(dir, f)), f);
+		assert.ok(tmpl.includes(`include "dot_local/share/pi-patches/btw-native-session/${f}" | sha256sum`), `onchange hashes ${f}`);
+	}
+	const load = (f) => JSON.parse(readFileSync(join(dir, f), "utf8"));
+	const [e4, e5] = [load("edits.pi-1.4.json"), load("edits.pi-1.5.json")];
+	assert.equal(e5.length, e4.length);
+	const changed = e5.map((e, i) => (e.old !== e4[i].old || e.new !== e4[i].new ? i : -1)).filter((i) => i >= 0);
+	assert.deepEqual(changed, [2, 15, 30, 99]);
+	for (const i of changed) assert.notEqual(e5[i].old, e5[i].new);
+	for (const [i, e] of e5.entries()) assert.equal(e.package, e4[i].package);
+	for (const e of e5) assert.ok(!e.path.includes("chunk-MM3LKT73") && !e.path.includes("chunk-T726RZZU"), "chunk hints are the 1.5.0 names");
 });

@@ -287,8 +287,10 @@ const bundleEdits = [
 	},
 	{
 		name: "CLI stream — provider callback before ping handling",
-		find: 'stream2.push({type:"start",partial:output});let blocks=output.content;for await(let event of iterateAnthropicEvents(response,options?.signal))if(await options?.onProviderStreamEvent?.(event,model),event.type==="message_start")',
-		replace: `stream2.push({type:"start",partial:output});let blocks=output.content;for await(let event of iterateAnthropicEvents(response,options?.signal))if(await options?.onProviderStreamEvent?.(event,model),event.type==="ping"){/* ${MARKER} */stream2.push({type:"ping",partial:output})}else if(event.type==="message_start")`,
+		// Anchored on the loop head alone. Pi 1.5.0 changed the statements before it (`let blocks=output.content;` became
+		// `let openBlocks=new Map,...`); the edit never touched them, so the patched text is the same on 1.2 to 1.5.
+		find: 'for await(let event of iterateAnthropicEvents(response,options?.signal))if(await options?.onProviderStreamEvent?.(event,model),event.type==="message_start")',
+		replace: `for await(let event of iterateAnthropicEvents(response,options?.signal))if(await options?.onProviderStreamEvent?.(event,model),event.type==="ping"){/* ${MARKER} */stream2.push({type:"ping",partial:output})}else if(event.type==="message_start")`,
 	},
 ];
 
