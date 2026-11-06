@@ -5,11 +5,14 @@
             Default: personal on the personal profile, work on axon-work-computer, none elsewhere (then required when enabled).
   endpoint  the collector's OTLP/HTTP metrics URL, http or https, ending in /v1/metrics.
             Default: http://otel-collector.internal.cartwmic.com/v1/metrics
-  engine    python or ts: what ~/.local/bin/agent-events runs when AGENT_EVENTS_IMPLEMENTATION is not set. Default: python, the frozen collector.
-            ts runs the agent-kit traces port (agent-traces pi ...) and fails the render when agentKit.enabled is false on this machine,
-            because the shim would otherwise exec a wrapper with no install and the exporter would go silently stale. The JSON carries
-            "engine" only when it is "ts", so with the default the output of this template, and every file made from it, is what it was
-            before the key existed. (It is not called "implementation": the shim already reads AGENT_EVENTS_IMPLEMENTATION, a file path.)
+  engine    python or ts: what ~/.local/bin/agent-events runs when AGENT_EVENTS_IMPLEMENTATION is not set.
+            Default: ts on the personal profile (the agent-kit traces port, agent-traces pi ...), python on every other profile
+            (the frozen collector, agent_events.py). Set engine: python on personal to keep the Python shim there.
+            ts fails the render when agentKit.enabled is false on this machine: the shim would otherwise exec a wrapper with no install
+            and the exporter would go silently stale. So a machine with agentKit off must name engine: python.
+            The JSON carries "engine" only when it is "ts". On personal it does now, so the load script's "# setting:" line changes and
+            the script reruns. On every other profile the output is what it was before the key existed.
+            (It is not called "implementation": the shim already reads AGENT_EVENTS_IMPLEMENTATION, a file path.)
 Used by the plist, its load script, the shim, the shadow agents and .chezmoiignore. Any other key or value fails the whole render, so a typo applies nothing. */ -}}
 {{- $raw := dig "agentEvents" dict . -}}
 {{- if not (kindIs "map" $raw) -}}
@@ -28,6 +31,7 @@ Used by the plist, its load script, the shim, the shadow agents and .chezmoiigno
 {{- $endpoint := "http://otel-collector.internal.cartwmic.com/v1/metrics" -}}
 {{- if hasKey $raw "endpoint" -}}{{- $endpoint = printf "%v" (get $raw "endpoint") -}}{{- end -}}
 {{- $engine := "python" -}}
+{{- if eq $profile "personal" -}}{{- $engine = "ts" -}}{{- end -}}
 {{- if hasKey $raw "engine" -}}{{- $engine = printf "%v" (get $raw "engine") -}}{{- end -}}
 {{- if not (has $on (list "true" "false")) -}}
 {{-   fail (printf "agentEvents.enabled must be true or false, got %q" $on) -}}

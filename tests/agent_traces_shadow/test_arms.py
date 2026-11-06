@@ -117,7 +117,9 @@ class SettingTest(unittest.TestCase):
         bad = ("agentTracesShadow: {enabled: maybe}", "agentTracesShadow: {version: 1}", "agentTracesShadow: {machine: personal}",
                "agentTracesShadow: {machine: test-}", "agentTracesShadow: {machine: test-%s}" % ("a" * 25), "agentTracesShadow: {machine: Test-x}",
                "agentTracesShadow: {arm: ts}", "agentTracesShadow: {arm: [rust]}", "agentTracesShadow: {arm: [ts, bogus]}",
-               "agentTracesShadow: on", "agentTracesShadow: {arm: [ts]}\nagentKit: {enabled: false}", "agentTracesShadow: {arm: [seed]}\nagentKit: {enabled: false}")
+               "agentTracesShadow: on", "agentTracesShadow: {arm: [ts]}\nagentKit: {enabled: false}\nagentEvents: {engine: python}",
+               "agentTracesShadow: {arm: [seed]}\nagentKit: {enabled: false}\nagentEvents: {engine: python}")
+        # engine python: on personal the events default is ts, which fails first with a message about agentEvents when agentKit is off.
         for data in bad:
             for rel in (CONFIG, LOADER, ".chezmoiignore", "%s/%s.plist.tmpl" % (AGENTS, ARMS["py"][0])):
                 with self.subTest(data=data, file=rel):
@@ -132,10 +134,13 @@ class SettingTest(unittest.TestCase):
             self.assertEqual(env["AGENT_EVENTS_MACHINE"], label + suffix)
             self.assertRegex(env["AGENT_EVENTS_MACHINE"], r"^[a-z][a-z0-9-]{0,31}$")
 
-    def test_engine_python_is_the_default_and_changes_nothing_in_the_events_setting(self):
-        self.assertEqual(render(self, EVENTS_CONFIG).stdout, '{"enabled":true,"endpoint":"%s","machine":"personal"}' % ENDPOINT)
-        self.assertEqual(render(self, EVENTS_CONFIG, data="agentEvents: {engine: python}").stdout, render(self, EVENTS_CONFIG).stdout)
-        self.assertEqual(json.loads(render(self, EVENTS_CONFIG, data="agentEvents: {engine: ts}").stdout)["engine"], "ts")
+    def test_engine_defaults_to_ts_on_personal_and_python_elsewhere(self):
+        self.assertEqual(render(self, EVENTS_CONFIG).stdout, '{"enabled":true,"endpoint":"%s","engine":"ts","machine":"personal"}' % ENDPOINT)
+        self.assertEqual(render(self, EVENTS_CONFIG, data="agentEvents: {engine: ts}").stdout, render(self, EVENTS_CONFIG).stdout)
+        self.assertEqual(render(self, EVENTS_CONFIG, data="agentEvents: {engine: python}").stdout,
+                         '{"enabled":true,"endpoint":"%s","machine":"personal"}' % ENDPOINT, "explicit python: no engine key")
+        self.assertEqual(render(self, EVENTS_CONFIG, WORK).stdout, '{"enabled":false,"endpoint":"%s","machine":"work"}' % ENDPOINT,
+                         "work: no engine key, so its output is what it was before the key existed")
 
     def test_engine_rejects_other_values_and_ts_without_the_kit(self):
         for data in ("agentEvents: {engine: rust}", "agentEvents: {engine: ''}", "agentEvents: {engine: null}", "agentEvents: {engine: TS}",
@@ -150,17 +155,26 @@ class SettingTest(unittest.TestCase):
         ok = render(self, SHIM, WORK, "agentEvents: {engine: ts}\nagentKit: {enabled: true}")
         self.assertIn('exec "$script_dir/agent-traces" pi "$@"', ok.stdout)
 
+    def test_personal_with_the_kit_off_fails_every_render_until_it_names_python(self):
+        """The default is ts on personal, so a personal machine with agentKit off fails each render that reads engine, until it sets python."""
+        for rel in (EVENTS_CONFIG, SHIM, PROD_PLIST, ".chezmoiignore"):
+            with self.subTest(file=rel):
+                r = render(self, rel, data="agentKit: {enabled: false}", check=False)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("agentEvents.engine is ts", r.stderr)
+                self.assertTrue(render(self, rel, data="agentKit: {enabled: false}\nagentEvents: {engine: python}").stdout)
+
 
 class ProductionUnchangedTest(unittest.TestCase):
-    """With engine python the production plist and the shim render to what they were before D2 (origin/main a0f35206; copies in fixtures/)."""
+    """The production plist renders to what it did before D2 on every profile. The shim does on work and with engine python; personal's
+    default is ts now (EngineDefaultTest). Copies of the pre-D2 files are in fixtures/ (origin/main a0f35206)."""
 
     ORIGINAL_SHIM = REPO / "tests/agent_traces_shadow/fixtures/agent-events.sh"
     ORIGINAL_PLIST = REPO / "tests/agent_traces_shadow/fixtures/local.agent-events.plist.rendered"
 
     def test_the_shim_renders_to_the_bytes_it_had_before(self):
         want = self.ORIGINAL_SHIM.read_bytes()
-        for profile in ("personal", WORK):
-            self.assertEqual(render(self, SHIM, profile).stdout.encode(), want, profile)
+        self.assertEqual(render(self, SHIM, WORK).stdout.encode(), want, WORK)
         self.assertEqual(render(self, SHIM, data="agentEvents: {engine: python}").stdout.encode(), want)
 
     def test_the_shim_with_engine_ts_differs_by_exactly_the_one_branch(self):
@@ -191,6 +205,30 @@ class ProductionUnchangedTest(unittest.TestCase):
     def test_the_production_plist_never_carries_the_cache_switch(self):
         prod = plistlib.loads(Chezmoi(self).render(PROD_PLIST).stdout.encode())
         self.assertNotIn("AGENT_EVENTS_CACHE_GAUGES", prod["EnvironmentVariables"])
+
+
+class EngineDefaultTest(unittest.TestCase):
+    """D3: the default engine is ts on personal and python on every other profile. The shim follows the engine; the setting's JSON carries
+    "engine" only when it is ts, so work's output is unchanged; engine python on personal gives the Python shim back."""
+
+    PRE_D2_SHIM = ProductionUnchangedTest.ORIGINAL_SHIM
+
+    def test_personal_default_is_ts_and_the_shim_execs_the_agent_kit_port(self):
+        shim = render(self, SHIM).stdout
+        self.assertEqual(shim, render(self, SHIM, data="agentEvents: {engine: ts}").stdout)
+        self.assertIn('exec "$script_dir/agent-traces" pi "$@"', shim)
+        self.assertEqual(json.loads(render(self, EVENTS_CONFIG).stdout)["engine"], "ts")
+
+    def test_work_renders_no_engine_key_and_the_shim_has_no_ts_branch(self):
+        self.assertNotIn("engine", render(self, EVENTS_CONFIG, WORK).stdout)
+        shim = render(self, SHIM, WORK).stdout.encode()
+        self.assertNotIn(b"agent-traces", shim)
+        self.assertEqual(shim, self.PRE_D2_SHIM.read_bytes(), "work: the shim is byte-identical to the pre-D2 rendering")
+
+    def test_personal_with_explicit_python_renders_the_python_shim(self):
+        data = "agentEvents: {engine: python}"
+        self.assertNotIn("engine", render(self, EVENTS_CONFIG, data=data).stdout)
+        self.assertEqual(render(self, SHIM, data=data).stdout.encode(), self.PRE_D2_SHIM.read_bytes())
 
 
 class PlistShapeTest(unittest.TestCase):

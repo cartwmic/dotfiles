@@ -139,13 +139,15 @@ class SettingTest(unittest.TestCase):
 
     def test_the_setting_template_is_the_one_source_of_the_values(self):
         out = render(CONFIG)[0].stdout
-        self.assertEqual(out, '{"enabled":true,"endpoint":"%s","machine":"personal"}' % DEFAULT_ENDPOINT)
+        self.assertEqual(out, '{"enabled":true,"endpoint":"%s","engine":"ts","machine":"personal"}' % DEFAULT_ENDPOINT)
         self.assertEqual(render(CONFIG, WORK)[0].stdout, '{"enabled":false,"endpoint":"%s","machine":"work"}' % DEFAULT_ENDPOINT)
         self.assertEqual(render(CONFIG, "termux")[0].stdout, '{"enabled":false,"endpoint":"%s","machine":""}' % DEFAULT_ENDPOINT)
         self.assertEqual(render(CONFIG, data="agentEvents: {enabled: false}")[0].stdout,
-                         '{"enabled":false,"endpoint":"%s","machine":"personal"}' % DEFAULT_ENDPOINT)
+                         '{"enabled":false,"endpoint":"%s","engine":"ts","machine":"personal"}' % DEFAULT_ENDPOINT)
         self.assertEqual(render(CONFIG, data='agentEvents: {enabled: "false"}')[0].stdout,
-                         '{"enabled":false,"endpoint":"%s","machine":"personal"}' % DEFAULT_ENDPOINT)
+                         '{"enabled":false,"endpoint":"%s","engine":"ts","machine":"personal"}' % DEFAULT_ENDPOINT)
+        self.assertEqual(render(CONFIG, data="agentEvents: {engine: python}")[0].stdout,
+                         '{"enabled":true,"endpoint":"%s","machine":"personal"}' % DEFAULT_ENDPOINT)
 
 
 @unittest.skipUnless(DARWIN, "the agent is managed on macOS only")
@@ -283,10 +285,12 @@ class LoaderTest(unittest.TestCase):
 
     def test_the_script_changes_with_the_setting_so_chezmoi_reruns_it(self):
         outs = {render(LOADER, data=d)[0].stdout for d in ("", "agentEvents: {enabled: false}", "agentEvents: {machine: laptop}",
-                                                          "agentEvents: {endpoint: 'https://otel-collector.internal.cartwmic.com/v1/metrics'}")}
-        self.assertEqual(len(outs), 4)
+                                                          "agentEvents: {endpoint: 'https://otel-collector.internal.cartwmic.com/v1/metrics'}",
+                                                          "agentEvents: {engine: python}")}
+        self.assertEqual(len(outs), 5)
         s = render(LOADER)[0].stdout
-        self.assertIn('# setting: {"enabled":true,"endpoint":"%s","machine":"personal"}\n' % DEFAULT_ENDPOINT, s)
+        self.assertIn('# setting: {"enabled":true,"endpoint":"%s","engine":"ts","machine":"personal"}\n' % DEFAULT_ENDPOINT, s)
+        self.assertIn('# setting: {"enabled":false,"endpoint":"%s","machine":"work"}\n' % DEFAULT_ENDPOINT, render(LOADER, WORK)[0].stdout)
         self.assertRegex(s, r"# plist: [0-9a-f]{64}\n")
         self.assertEqual(set(re.findall(r"launchctl (\w+)", render(LOADER, data="agentEvents: {enabled: false}")[0].stdout)), {"bootout", "print"})
 
