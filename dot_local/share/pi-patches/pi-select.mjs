@@ -52,7 +52,8 @@ export function dispatchByPiVersion(metaUrl, { name, packageEnv, variants }) {
 	if (pick.kind === "unsupported") { console.error(`[pi-patch:${name}] ERROR: no payload for Pi ${pick.version}; payloads start at Pi ${pick.supported.at(-1)}.x (${list}). No files were changed`); process.exit(1); }
 	const file = join(dir, pick.file);
 	if (!existsSync(file)) { console.error(`[pi-patch:${name}] ERROR: payload ${pick.file} is missing from ${dir}; no files were changed`); process.exit(1); }
-	log(pick.kind === "match" ? `Pi ${pick.version} -> payload ${pick.file}` : `Pi not installed -> ${pick.file} decides (skip or cannot-verify)`);
+	// Pi not installed: the payload prints its own one-line skip (or cannot-verify) notice, so the dispatcher stays quiet.
+	if (pick.kind === "match") log(`Pi ${pick.version} -> payload ${pick.file}`);
 	const run = spawnSync(process.execPath, [file, ...process.argv.slice(2)], { stdio: "inherit", env: process.env });
 	if (run.error) { console.error(`[pi-patch:${name}] ERROR: could not run ${pick.file}: ${run.error.message}`); process.exit(1); }
 	process.exit(run.status ?? (run.signal ? 1 : 0));

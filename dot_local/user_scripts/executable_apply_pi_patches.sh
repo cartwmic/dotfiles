@@ -2,7 +2,7 @@
 #
 # Applies all chezmoi-managed runtime patches to the user's installed
 # pi-coding-agent / pi-ai trees. Idempotent. Safe to run on machines
-# without pi installed (exits 0 with a notice).
+# without pi installed (exits 0, one notice line per skipped patch).
 #
 # See: ~/.local/share/chezmoi/dot_local/share/pi-patches/<patch>/README.md
 

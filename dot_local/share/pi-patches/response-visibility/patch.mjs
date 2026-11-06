@@ -17,6 +17,14 @@ if (args.length > 1 || (args.length && !actions[args[0]])) {
   console.error('Usage: patch.mjs [--check|--rollback|check|apply|rollback]');
   process.exit(1);
 }
+// PI_ROOT override, then Pi's managed install, then the npm global root. Checked before the helper:
+// with no Pi there is nothing for the helper to patch, so the helper is not needed.
+const root = piCodingAgentRoot();
+if (!root) {
+  if (actions[args[0]] === 'check') { console.error('[response-visibility] Pi is not installed; cannot verify'); process.exit(1); }
+  console.log('[response-visibility] Pi is not installed; skipped');
+  process.exit(0);
+}
 // Prefer an explicit helper, then a package bin, then Pi's installed Git package.
 // This is discovery/delegation only: never download or duplicate the patch payload.
 const helper = process.env.PI_RESPONSE_VISIBILITY_HELPER || (process.env.PATH || '')
@@ -27,13 +35,6 @@ if (!helper || !existsSync(helper)) {
   process.exit(1);
 }
 const forwarded = [helper, actions[args[0]] || 'apply'];
-// PI_ROOT override, then Pi's managed install, then the npm global root.
-const root = piCodingAgentRoot();
-if (!root) {
-  if (actions[args[0]] === 'check') { console.error('[response-visibility] Pi is not installed; cannot verify'); process.exit(1); }
-  console.log('[response-visibility] Pi is not installed; skipped');
-  process.exit(0);
-}
 forwarded.push('--pi-root', root);
 const result = spawnSync(process.execPath, forwarded, { stdio: 'inherit' });
 if (result.error) console.error(result.error.message);
