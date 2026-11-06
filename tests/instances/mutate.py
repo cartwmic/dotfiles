@@ -42,6 +42,9 @@ MUTATIONS = [
     ("the unit is installed even when the checkout is missing", '  if [ -n "$_miss" ]; then finish "NOT READY: missing$_miss"; return 0; fi\n', '  if [ -n "$_miss" ]; then mkdir -p "$AGENTS_DIR"; cp "$SRC" "$DST"; finish "NOT READY: missing$_miss"; return 0; fi\n'),
     ("a service that is not running is never started", '  if [ "$LOADED" = no ]; then\n    if ! printf', '  if [ "$LOADED" = never ]; then\n    if ! printf'),
     ("opt-out of a half-started instance stops whatever is loaded", '  if [ ! -f "$M_MANAGED" ]; then say "$NAME: not opted in"; return 0; fi\n', '  if [ ! -f "$M_MANAGED" ]; then run_lc bootout "$DOMAIN/$LABEL"; return 0; fi\n'),
+    ("a reload bootstraps without waiting for the bootout to finish", '    if ! launchd_wait_gone "$LABEL"; then', '    if false; then'),
+    ("a reload does not retry a failed bootstrap", '    if ! launchd_bootstrap "$LABEL" "$DST"; then', '    if ! run_lc bootstrap "$DOMAIN" "$DST"; then LAUNCHD_ERR=$(first_line "$TMP/lc.out");'),
+    ("a reload with no helper installed stops the daemon anyway", '    if ! command -v launchd_bootstrap >/dev/null 2>&1; then', '    if false; then'),
     ("the reload switch reloads an instance whose unit did not change", '  _loaded_sha=$(cat "$M_SHA" 2>/dev/null || true)\n  if [ "$_loaded_sha" = "$_want" ]; then', '  _loaded_sha=$(cat "$M_SHA" 2>/dev/null || true)\n  if [ "$_loaded_sha" = "$_want" ] && ! reload_requested; then'),
     # --- the work coordinator (PR 3)
     ("work: the setup script is not asked for the config half only, so it installs and starts its own unit", '--yes-this-is-the-work-computer --config-only', '--yes-this-is-the-work-computer'),

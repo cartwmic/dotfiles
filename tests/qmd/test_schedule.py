@@ -8,6 +8,7 @@ import os
 import platform
 import plistlib
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -19,6 +20,7 @@ from test_qmd import REPO
 
 PLIST = REPO / "Library/LaunchAgents/local.qmd-refresh.plist.tmpl"
 LOADER = REPO / "run_onchange_after_71_qmd_refresh_launchd.sh.tmpl"
+LIB = REPO / "dot_local/share/launchd-reload/launchd_reload.sh"
 RUNNER = REPO / "dot_local/bin/executable_qmd-refresh-scheduled"
 WRAPPER = REPO / "dot_local/bin/executable_qmd"
 REFRESH = REPO / "dot_local/bin/executable_qmd-refresh"
@@ -189,13 +191,20 @@ class ApplyTest(unittest.TestCase):
 
 
 # A stateful launchctl: "loaded" is a file. print says whether it is loaded (113 when not, as the real one); bootout unloads
-# unless FAKE_BOOTOUT_STUCK is set; bootstrap loads unless FAKE_BOOTSTRAP_RC is non-zero.
+# unless FAKE_BOOTOUT_STUCK is set; bootstrap loads unless FAKE_BOOTSTRAP_RC is non-zero. FAKE_TEARDOWN=<n>: after a bootout the job
+# stays for n more prints and a bootstrap meanwhile fails with 5 (a teardown in progress).
 FAKE_LAUNCHCTL = r"""#!/bin/sh
 echo "launchctl $*" >> "$FAKE/calls"
 case $1 in
-  print) [ -f "$FAKE/loaded" ] || exit 113 ;;
-  bootout) [ -f "$FAKE/loaded" ] || exit 3; [ -z "${FAKE_BOOTOUT_STUCK:-}" ] || exit 5; rm -f "$FAKE/loaded" ;;
-  bootstrap) [ "${FAKE_BOOTSTRAP_RC:-0}" = 0 ] || exit "$FAKE_BOOTSTRAP_RC"; [ ! -f "$FAKE/loaded" ] || exit 5; : > "$FAKE/loaded" ;;
+  print)
+    if [ -f "$FAKE/teardown" ]; then
+      n=$(cat "$FAKE/teardown"); if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$FAKE/teardown"; exit 0; fi
+      rm -f "$FAKE/teardown" "$FAKE/loaded"
+    fi
+    [ -f "$FAKE/loaded" ] || exit 113 ;;
+  bootout) [ -f "$FAKE/loaded" ] || exit 3; [ -z "${FAKE_BOOTOUT_STUCK:-}" ] || exit 5
+    if [ -n "${FAKE_TEARDOWN:-}" ]; then echo "$FAKE_TEARDOWN" > "$FAKE/teardown"; else rm -f "$FAKE/loaded"; fi ;;
+  bootstrap) [ ! -f "$FAKE/teardown" ] || exit 5; [ "${FAKE_BOOTSTRAP_RC:-0}" = 0 ] || exit "$FAKE_BOOTSTRAP_RC"; [ ! -f "$FAKE/loaded" ] || exit 5; : > "$FAKE/loaded" ;;
   *) exit 64 ;;
 esac
 """
@@ -217,13 +226,15 @@ class LoaderTest(unittest.TestCase):
         (bin_ / "uname").write_text("#!/bin/sh\necho Darwin\n")
         for f in bin_.iterdir():
             f.chmod(0o755)
+        (h / ".local/share/launchd-reload").mkdir(parents=True)
+        shutil.copy(LIB, h / ".local/share/launchd-reload/launchd_reload.sh")
         plist = h / "Library/LaunchAgents/local.qmd-refresh.plist"
         if installed:
             plist.write_text("<plist/>")
         if loaded:
             (fake / "loaded").write_text("")
         p = subprocess.run(["/bin/sh", "-c", script], capture_output=True, text=True, timeout=30,
-                           env=dict(env, HOME=str(h), FAKE=str(fake), PATH="%s:%s" % (bin_, SYS)))
+                           env=dict(env, HOME=str(h), FAKE=str(fake), PATH="%s:%s" % (bin_, SYS), LAUNCHD_POLL_SLEEP="0.01", LAUNCHD_RETRY_SLEEP="0"))
         calls = (fake / "calls").read_text().splitlines() if (fake / "calls").exists() else []
         self.loaded = (fake / "loaded").exists()
         return p, [c.split()[1] for c in calls], plist, h, script
@@ -268,6 +279,14 @@ class LoaderTest(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("could not load", p.stdout)
         self.assertFalse(self.loaded)
+        self.assertEqual(calls.count("bootstrap"), 4, "one try and three retries")
+
+    def test_a_reload_waits_for_the_bootout_to_finish_before_it_bootstraps(self):
+        # launchd keeps the job for 3 more prints after the bootout and refuses a bootstrap meanwhile.
+        p, calls, _, _, _ = self.run_loader(loaded=True, FAKE_TEARDOWN="3")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(calls, ["print", "bootout", "print", "print", "print", "print", "bootstrap"])
+        self.assertTrue(self.loaded)
 
     def test_enabled_without_the_plist_fails_the_apply(self):
         p, calls, _, _, _ = self.run_loader(installed=False)
@@ -286,7 +305,9 @@ class LoaderTest(unittest.TestCase):
     def test_only_print_bootout_and_bootstrap(self):
         for data in ("", "qmd: {refresh: {enabled: false}}"):
             s = render(LOADER, data=data)[0].stdout
-            self.assertEqual(set(re.findall(r"launchctl (\w+)", s)), {"print", "bootout", "bootstrap"} if data == "" else {"print", "bootout"})
+            # The bootstrap is the shared helper's (launchd_bootstrap); the script itself only asks and boots out.
+            self.assertEqual(set(re.findall(r"launchctl (\w+)", s)), {"print", "bootout"})
+            self.assertEqual("launchd_bootstrap" in s, data == "")
             self.assertNotIn("qmd-refresh --", s)
 
 

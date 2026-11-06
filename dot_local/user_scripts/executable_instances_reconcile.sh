@@ -7,8 +7,8 @@
 #   false or unset  opt out, but only for an instance this script started or adopted (marker). A Mac that never opted in is left alone.
 #
 # The safety rules, in force on every run:
-#   * launchctl is called for exactly: print (read-only, once per enabled or managed instance), bootstrap (the instance is not loaded),
-#     bootout (opt out, or a requested reload). A loaded service is never booted out or kicked because a template re-rendered.
+#   * launchctl is called for exactly: print (read-only, once per enabled or managed instance; a reload also polls it until the job is gone),
+#     bootstrap (the instance is not loaded; a reload retries it), bootout (opt out, or a requested reload). A loaded service is never booted out or kicked because a template re-rendered.
 #   * A unit file that differs from the one the service was loaded with is REPORTED (reload needed). It is reloaded only when
 #     INSTANCES_RELOAD names the instance (or "all") on that run, and only if the unit really changed.
 #   * Opt-out never deletes state, config, tokens, playbooks or logs. It removes the unit file and the markers.
@@ -67,6 +67,12 @@ have() { # have TOOL: found on the daemon's PATH (the unit's PATH: per-instance 
 
 # launchctl, by name (so a test can put a stub first on PATH). OUT is its combined output.
 run_lc() { with_timeout "$TIMEOUT" launchctl "$@" >"$TMP/lc.out" 2>&1; }
+# The reload waits for the bootout to finish and retries the bootstrap: the one shared helper (dot_local/share/launchd-reload).
+# Its launchctl calls run under the same timeout as run_lc. Missing helper: a reload is refused before it stops anything.
+LAUNCHD_LIB=$HOME_DIR/.local/share/launchd-reload/launchd_reload.sh
+LAUNCHD_TAG=instances
+LAUNCHD_RUN="with_timeout $TIMEOUT"
+[ ! -r "$LAUNCHD_LIB" ] || . "$LAUNCHD_LIB"
 probe_loaded() { # sets LOADED=yes|no; returns 1 if launchd cannot be asked
   run_lc print "$DOMAIN/$LABEL"; _rc=$?
   case $_rc in 0) LOADED=yes;; 113) LOADED=no;; *) LC_ERR="launchctl print exited $_rc: $(first_line "$TMP/lc.out")"; return 1;; esac
@@ -198,8 +204,10 @@ opt_in() {
     return 0
   fi
   if reload_requested; then
+    if ! command -v launchd_bootstrap >/dev/null 2>&1; then finish "RELOAD FAILED: $LAUNCHD_LIB is not installed (chezmoi apply it); the old daemon is still running"; return 0; fi
     if ! run_lc bootout "$DOMAIN/$LABEL"; then finish "RELOAD FAILED: launchctl bootout: $(first_line "$TMP/lc.out"); the old daemon is still running"; return 0; fi
-    if ! run_lc bootstrap "$DOMAIN" "$DST"; then finish "RELOAD FAILED: daemon is stopped, bootstrap failed: $(first_line "$TMP/lc.out"); the next apply will start it"; return 0; fi
+    if ! launchd_wait_gone "$LABEL"; then finish "RELOAD FAILED: $LABEL is still loaded 10 s after bootout; the next apply will start it"; return 0; fi
+    if ! launchd_bootstrap "$LABEL" "$DST"; then finish "RELOAD FAILED: daemon is stopped, bootstrap failed: $LAUNCHD_ERR; the next apply will start it"; return 0; fi
     if ! probe_loaded || [ "$LOADED" != yes ]; then finish "RELOAD FAILED: bootstrap returned 0 but $LABEL is not loaded; the next apply will start it"; return 0; fi
     printf '%s\n' "$_want" >"$M_SHA" || say "$NAME: WARN: cannot record the reloaded unit in $M_SHA; it will be reported as changed"
     finish "READY (reloaded with the changed unit)"; return 0

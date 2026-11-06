@@ -575,7 +575,8 @@ class Install(unittest.TestCase):
         r = subprocess.run(["sh", "-n"], input=script, text=True, capture_output=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("local.heavy-gate-watchdog", script)
-        self.assertIn("launchctl bootstrap", script)
+        self.assertIn("launchd_bootstrap", script, "the load goes through the shared wait-then-bootstrap helper")
+        self.assertIn("launchd_wait_gone", script)
         self.assertIn("launchctl bootout", script)
         # run_onchange: the rendered text must change when the plist or the daemon does
         import hashlib
