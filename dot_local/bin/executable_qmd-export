@@ -8,6 +8,7 @@ Reads  ~/.pi/agent/sessions/**/*.jsonl            (Pi session transcripts)
        ~/.claude/projects/**/*.jsonl              (Claude Code transcripts, sub-agents under <session>/subagents/)
        ~/.codex/sessions/**/*.jsonl               (Codex rollouts)
        ~/.local/share/session-recap/records/<day>/<record>.json
+       ~/.t3/userdata/statev2.sqlite              (T3's state db: read once per run, read-only; see T3 below)
 Writes ~/.local/share/qmd-corpus/sessions/<day>/<session-id>.md
        ~/.local/share/qmd-corpus/claude-sessions/<day>/<session-id>.md   (sub-agent: <session-id>-agent-<id>.md)
        ~/.local/share/qmd-corpus/codex-sessions/<day>/<session-id>.md
@@ -25,6 +26,10 @@ thinking, system and custom entries stay out, as do the context blocks a harness
 that is one <tag>...</tag> block such as <environment_context> or <system-reminder>). Markdown headings inside message text
 are escaped so they do not split chunks. Every output directory is created even when its source is missing, so the QMD
 collection folder always exists.
+
+T3: a Claude session that T3 ran is headed with its T3 thread (title, project, parent thread), and each user turn that T3
+matches is headed "## owner" (Michael typed it) or "## agent"; other user turns stay "## user". Without a T3 db, or with one
+that is unreadable or from another T3 version, the output is what it is without T3, and nothing is said.
 """
 import argparse
 import fcntl
@@ -32,8 +37,11 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import sys
 import time
+from datetime import datetime
+from urllib.parse import quote
 
 MARKER = ".qmd-corpus"
 STATE = ".qmd-export-state.json"
@@ -62,9 +70,10 @@ def injected(x):
     return bool(INJECTED.match(x))
 
 
-def transcript(sid, cwd, started, title, parts):
+def transcript(sid, cwd, started, title, parts, extra=()):
     title = (title or sid).replace('"', "'").replace("\n", " ")
-    fm = '---\nsession: %s\ncwd: "%s"\nstarted: "%s"\n---\n# %s\n\n' % (sid, cwd, started, title)
+    fields = "".join("%s: %s\n" % kv for kv in extra)
+    fm = '---\nsession: %s\ncwd: "%s"\nstarted: "%s"\n%s---\n# %s\n\n' % (sid, cwd, started, fields, title)
     return (started or "0000-00-00")[:10], fm + "\n".join(parts)
 
 
@@ -89,7 +98,7 @@ def jsonl(path):
                 yield s, o
 
 
-def render_session(path):
+def render_session(path, info=None):
     """Pi. -> (day, markdown) or None when there is nothing worth indexing."""
     sid = cwd = name = started = first = None
     parts = []
@@ -126,14 +135,14 @@ def render_session(path):
 
 
 def session_header(path):
-    """Pi: the session id and day from the first line only, so an unchanged file is never read whole."""
+    """Pi: (file name, day, session id) from the first line only, so an unchanged file is never read whole."""
     with open(path, "rb") as f:
         try:
             o = json.loads(f.readline().decode("utf-8", "replace"))
         except ValueError:
             return None
     if isinstance(o, dict) and o.get("type") == "session" and o.get("id"):
-        return str(o["id"]), (o.get("timestamp") or "0000-00-00")[:10]
+        return str(o["id"]), (o.get("timestamp") or "0000-00-00")[:10], str(o["id"])
     return None
 
 
@@ -144,7 +153,8 @@ def claude_name(path, sid):
 
 
 def claude_header(path):
-    """Claude Code has no header line: the first entry that carries a session id and a timestamp (a few lines in)."""
+    """Claude Code has no header line: the first entry that carries a session id and a timestamp (a few lines in).
+    -> (file name, day, session id)."""
     with open(path, "rb") as f:
         for _ in range(200):
             line = f.readline()
@@ -155,16 +165,156 @@ def claude_header(path):
             except ValueError:
                 continue
             if isinstance(o, dict) and o.get("sessionId") and o.get("timestamp"):
-                return claude_name(path, str(o["sessionId"])), o["timestamp"][:10]
+                sid = str(o["sessionId"])
+                return claude_name(path, sid), o["timestamp"][:10], sid
     return None
 
 
-def render_claude(path):
+# T3 (the agent UI) keeps a state db beside the Claude transcripts it drives. Read here, once per run and read-only, it says which
+# Claude session each T3 thread ran (the thread's title, project and parent thread) and who typed each user message: T3 records
+# payload.createdBy, 'user' for Michael and anything else for an agent. A missing, unreadable or foreign-schema db is no data.
+NEAR_MS = 5000      # Claude's entry stamp follows T3's message stamp by well under this (measured: up to ~1.3 s)
+FALLBACK_MS = 3000
+STAMP = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)?\Z")
+
+
+def t3_db_path():
+    return os.environ.get("QMD_EXPORT_T3_DB") or os.path.join(os.path.expanduser("~"), ".t3", "userdata", "statev2.sqlite")
+
+
+def t3_index(path):
+    """Claude session id -> its T3 thread: threadId, title, updatedAt, projectName and parentThreadId/parentTitle when set, and
+    userMessages, [(at, text, author)] in T3's order (author 'owner' or 'agent'). Opened with mode=ro: never written, never copied.
+    A missing, unreadable or foreign-schema db gives {} and says nothing."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        db = sqlite3.connect("file:%s?mode=ro" % quote(path), uri=True)
+    except sqlite3.Error:
+        return {}
+    try:
+        return _t3_index(db)
+    except sqlite3.Error:
+        return {}
+    finally:
+        db.close()
+
+
+def _t3_index(db):
+    titles = dict(db.execute("SELECT thread_id, title FROM orchestration_v2_projection_threads"))
+    projects = dict(db.execute("SELECT project_id, title FROM projection_projects"))
+    threads = db.execute(
+        "SELECT p.thread_id, json_extract(p.payload_json, '$.nativeThreadRef.nativeId'), t.title, t.project_id, t.updated_at, "
+        "json_extract(t.payload_json, '$.lineage.parentThreadId') "
+        "FROM orchestration_v2_projection_provider_threads p "
+        "JOIN orchestration_v2_projection_threads t ON t.thread_id = p.thread_id "
+        "WHERE p.driver = 'claudeAgent' AND json_extract(p.payload_json, '$.nativeThreadRef.nativeId') IS NOT NULL").fetchall()
+    messages = {}
+    for tid, at, text, by in db.execute(
+            "SELECT thread_id, created_at, json_extract(payload_json, '$.text'), json_extract(payload_json, '$.createdBy') "
+            "FROM orchestration_v2_projection_messages WHERE role = 'user' AND streaming = 0 ORDER BY thread_id, created_at, message_id"):
+        messages.setdefault(tid, []).append((at, text or "", "owner" if by == "user" else "agent"))
+    index = {}
+    for tid, nid, title, pid, updated, parent in threads:
+        info = {"threadId": tid, "title": title or "", "updatedAt": updated, "userMessages": messages.get(tid, [])}
+        if projects.get(pid):
+            info["projectName"] = projects[pid]
+        if parent:
+            info["parentThreadId"] = parent
+            info["parentTitle"] = titles.get(parent) or ""
+        index[nid] = info
+    return index
+
+
+def ms_of(stamp):
+    """An ISO 8601 UTC stamp as milliseconds since the epoch, or None."""
+    m = STAMP.match(stamp) if isinstance(stamp, str) else None
+    if not m:
+        return None
+    base, frac, tz = m.groups()
+    dt = datetime.fromisoformat("%s.%s%s" % (base, (frac or "0")[:6].ljust(6, "0"), "+00:00" if tz in (None, "Z") else tz))
+    return round(dt.timestamp() * 1000)
+
+
+def norm(s):
+    return " ".join(s.split())
+
+
+def mark_authors(turns, messages):
+    """Who typed each Claude user turn. turns: [(timestamp, text)] in file order. messages: T3's finished user messages in T3's
+    order, as t3_index has them. Returns an author ('owner' or 'agent') or None per turn. Each T3 message is used once. Per turn,
+    the first rule that hits wins:
+      1. the same text after whitespace normalisation (for repeats: the unused one nearest in time);
+      2. the T3 text sits inside the Claude text, which carries wrapper text such as system-reminder blocks (the longest such
+         text within NEAR_MS);
+      3. order and time: the unused T3 message nearest in time within FALLBACK_MS, if its text equals no Claude turn's text.
+    A turn nothing matches stays None."""
+    mtext = [norm(text) for _, text, _ in messages]
+    mtime = [ms_of(at) for at, _, _ in messages]
+    ctexts = {norm(text) for _, text in turns}
+    used = set()
+
+    def within(i, at, limit):
+        return at is not None and mtime[i] is not None and abs(mtime[i] - at) <= limit
+
+    def nearest(candidates, at):
+        best = None
+        for i in candidates:
+            if i in used:
+                continue
+            if best is None or (at is not None and mtime[i] is not None and mtime[best] is not None
+                                and abs(mtime[i] - at) < abs(mtime[best] - at)):
+                best = i
+        return best
+
+    out = []
+    for ts, text in turns:
+        t = norm(text)
+        at = ms_of(ts)
+        hit = nearest([i for i in range(len(messages)) if mtext[i] == t], at) if t else None
+        if hit is None and t:
+            inside = [i for i in range(len(messages)) if i not in used and mtext[i] and mtext[i] in t and within(i, at, NEAR_MS)]
+            hit = max(inside, key=lambda i: len(mtext[i]), default=None)
+        if hit is None:
+            hit = nearest([i for i in range(len(messages)) if within(i, at, FALLBACK_MS) and mtext[i] not in ctexts], at)
+        if hit is None:
+            out.append(None)
+        else:
+            used.add(hit)
+            out.append(messages[hit][2])
+    return out
+
+
+def t3_stamp(info):
+    """The T3 facts a rendered session depends on, as one digest. A change to any of them re-renders the session (export_kind)."""
+    if info is None:
+        return None
+    facts = [info["threadId"], info["title"], info.get("projectName"), info.get("parentThreadId"), info.get("parentTitle"),
+             info["updatedAt"], info["userMessages"]]
+    return hashlib.sha1(json.dumps(facts).encode("utf-8")).hexdigest()
+
+
+def t3_fields(info):
+    """The frontmatter lines a T3 thread adds. JSON-quoted values are valid YAML double-quoted strings."""
+    fields = [("t3_thread", info["threadId"]), ("t3_title", norm(info["title"]))]
+    if info.get("projectName"):
+        fields.append(("t3_project", info["projectName"]))
+    if info.get("parentThreadId"):
+        fields.append(("t3_parent", info["parentThreadId"]))
+        if info.get("parentTitle"):
+            fields.append(("t3_parent_title", norm(info["parentTitle"])))
+    return [(k, json.dumps(v, ensure_ascii=False)) for k, v in fields]
+
+
+def render_claude(path, info=None):
     """Claude Code: user prompts and assistant text; tool calls, tool results, thinking, attachments (system reminders) and
-    meta entries stay out. A compact summary is a user entry flagged isCompactSummary."""
+    meta entries stay out. A compact summary is a user entry flagged isCompactSummary. `info` is the T3 thread that ran this
+    session, or None: its title heads the file (the transcript's own title is the fallback), and in a main transcript each user
+    turn that T3 matches is headed 'owner' or 'agent'. A sub-agent's prompts are its parent's, so they are not marked."""
     sid = cwd = started = first = None
     titles = {}
     parts = []
+    turns = []     # (index in parts, timestamp, text) of each user turn rendered as text
     for _, o in jsonl(path):
         t, ts = o.get("type"), o.get("timestamp")
         if sid is None and o.get("sessionId") and ts:
@@ -186,15 +336,25 @@ def render_claude(path):
         elif t == "assistant" or not injected(x):
             if t == "user" and not first:
                 first = x[:80]
+            if t == "user":
+                turns.append((len(parts), ts, x))
             parts.append(message(t, ts, x))
     if not sid or not parts:
         return None
     title = titles.get("custom-title") or titles.get("ai-title") or titles.get("summary") or first
-    return transcript(sid, cwd, started, title, parts)     # a sub-agent file names its parent session
+    extra = ()
+    if info:
+        title = norm(info["title"]) or title
+        extra = t3_fields(info)
+        if os.path.basename(os.path.dirname(path)) != "subagents":
+            for (i, ts, x), who in zip(turns, mark_authors([(ts, x) for _, ts, x in turns], info["userMessages"])):
+                if who:
+                    parts[i] = message(who, ts, x)
+    return transcript(sid, cwd, started, title, parts, extra)     # a sub-agent file names its parent session
 
 
 def codex_header(path):
-    """Codex: the first line is session_meta."""
+    """Codex: the first line is session_meta. -> (file name, day, session id)."""
     with open(path, "rb") as f:
         try:
             o = json.loads(f.readline().decode("utf-8", "replace"))
@@ -202,11 +362,11 @@ def codex_header(path):
             return None
     p = o.get("payload") if isinstance(o, dict) and o.get("type") == "session_meta" else None
     if isinstance(p, dict) and p.get("id"):
-        return str(p["id"]), (p.get("timestamp") or o.get("timestamp") or "0000-00-00")[:10]
+        return str(p["id"]), (p.get("timestamp") or o.get("timestamp") or "0000-00-00")[:10], str(p["id"])
     return None
 
 
-def render_codex(path):
+def render_codex(path, info=None):
     """Codex: user and assistant messages (response_item); developer messages, reasoning, tool calls and their output, the
     duplicate event_msg copies and the injected AGENTS.md / <environment_context> user messages stay out."""
     sid = cwd = started = first = None
@@ -237,7 +397,7 @@ def render_codex(path):
     return transcript(str(sid), cwd, started, first, parts)
 
 
-def render_recap(path):
+def render_recap(path, info=None):
     with open(path, encoding="utf-8") as f:
         o = json.load(f)
     s = o.get("summary") if isinstance(o, dict) else None
@@ -271,6 +431,7 @@ def write_atomic(path, body):
 
 
 # kind -> (source suffix, header reader or None for recaps, renderer). The kind is also the output and state directory name.
+# A header returns (file name, day, session id); a renderer takes (path, T3 thread or None).
 KINDS = {
     "sessions": (".jsonl", session_header, render_session),
     "claude-sessions": (".jsonl", claude_header, render_claude),
@@ -279,7 +440,7 @@ KINDS = {
 }
 
 
-def export_kind(kind, root, out_dir, cutoff, state, dry, log):
+def export_kind(kind, root, out_dir, cutoff, state, dry, log, t3=None):
     suffix, header, render = KINDS[kind]
     stats = dict(written=0, unchanged=0, skipped=0, pruned=0, errors=0)
     if not dry:
@@ -294,7 +455,9 @@ def export_kind(kind, root, out_dir, cutoff, state, dry, log):
         return stats
     skip = state.setdefault(kind, {})        # source path -> mtime of a source that has nothing to export
     owners_old = (state.get("owners") or {}).get(kind) or {}      # output path -> the source it was rendered from
+    sigs_old = (state.get("signatures") or {}).get(kind) or {}    # output path -> the T3 facts it was rendered with
     owners = {}
+    sigs = {}
     wanted = set()
     taken = {}
     seen_src = set()
@@ -314,12 +477,15 @@ def export_kind(kind, root, out_dir, cutoff, state, dry, log):
         if skip.get(src) == mtime:
             continue
         try:
+            info = sig = None
             if header:
                 head = header(src)
                 if not head:
                     skip[src] = mtime
                     continue
-                sid, day = head
+                sid, day, key = head
+                info = (t3 or {}).get(key)     # the T3 thread that ran this session, if any
+                sig = t3_stamp(info)
                 name = sid
                 if taken.get(sid, src) != src:                       # two files claim one session id
                     name = "%s-%s" % (sid, hashlib.sha1(src.encode()).hexdigest()[:6])
@@ -327,13 +493,16 @@ def export_kind(kind, root, out_dir, cutoff, state, dry, log):
                 dest = os.path.join(out_dir, day, name + ".md")
             else:
                 dest = os.path.join(out_dir, os.path.basename(os.path.dirname(src)), os.path.basename(src)[: -len(suffix)] + ".md")
-            # Reuse an output only if it was rendered from this very source (a duplicate-id file may have changed owner).
-            if owners_old.get(dest) == src and os.path.exists(dest) and os.stat(dest).st_mtime >= mtime:
+            # Reuse an output only if it was rendered from this very source (a duplicate-id file may have changed owner) and from
+            # the same T3 facts (a T3 title, project or message change re-renders it without touching the source).
+            if owners_old.get(dest) == src and os.path.exists(dest) and os.stat(dest).st_mtime >= mtime and sigs_old.get(dest) == sig:
                 wanted.add(dest)
                 owners[dest] = src
+                if sig is not None:
+                    sigs[dest] = sig
                 stats["unchanged"] += 1
                 continue
-            r = render(src)
+            r = render(src, info)
             if r is None:
                 skip[src] = mtime
                 continue
@@ -344,6 +513,8 @@ def export_kind(kind, root, out_dir, cutoff, state, dry, log):
             if not dry:
                 write_atomic(dest, body)
             owners[dest] = src                    # only once the file is really there: a failed write keeps the old owner
+            if sig is not None:
+                sigs[dest] = sig
             stats["written"] += 1
         except (OSError, ValueError) as e:
             stats["errors"] += 1
@@ -352,6 +523,7 @@ def export_kind(kind, root, out_dir, cutoff, state, dry, log):
         del skip[src]
     # (after an error the prune below is off, so keep what we knew about outputs we did not get to)
     state.setdefault("owners", {})[kind] = dict(owners_old, **owners) if stats["errors"] else owners
+    state.setdefault("signatures", {})[kind] = {**sigs_old, **sigs} if stats["errors"] else sigs
     # Prune: anything .md in the corpus that is not wanted (source gone or too old), stale temp files, empty day dirs.
     if os.path.isdir(out_dir) and not stats["errors"]:
         for d, dirs, fs in os.walk(out_dir, topdown=False):
@@ -413,10 +585,12 @@ def main(argv=None):
                 state = json.load(f)
         except (OSError, ValueError):
             state = {}
+    t3 = t3_index(t3_db_path())               # read once per run; only the Claude exports use it
     res = {}
     roots = {"sessions": a.sessions_root, "claude-sessions": a.claude_root, "codex-sessions": a.codex_root, "recaps": a.recaps_root}
     for kind, root in roots.items():
-        res[kind] = export_kind(kind, root, os.path.join(out, kind), cutoff, state, a.dry_run, log)
+        res[kind] = export_kind(kind, root, os.path.join(out, kind), cutoff, state, a.dry_run, log,
+                                t3 if kind == "claude-sessions" else None)
     if not a.dry_run:
         write_atomic(sp, json.dumps(state))
     if not a.quiet:
