@@ -53,6 +53,8 @@ test("Pi 1.5.0 installed: apply exits 0, a second apply exits 0 and changes noth
 		const first = apply(s.env);
 		assert.equal(first.status, 0, first.stdout + first.stderr);
 		assert.doesNotMatch(first.stdout + first.stderr, /ERROR/);
+		// With Pi installed the loop still names each patch before it runs.
+		assert.equal(first.stdout.split("\n").filter((l) => l.startsWith("[apply_pi_patches] applying patch: ")).length, 11);
 		const afterFirst = tree(s.scope);
 		const second = apply(s.env);
 		assert.equal(second.status, 0, second.stdout + second.stderr);

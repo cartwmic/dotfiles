@@ -39,8 +39,10 @@ for (const profile of ["personal", "axon-work-computer"]) {
 			const r = spawnSync("/bin/sh", [SCRIPT], { encoding: "utf8", env: { ...s.env, PI_CHEZMOI_PROFILE: profile } });
 			assert.equal(r.status, 0, `exit ${r.status}\n${r.stdout}${r.stderr}`);
 			assert.equal(r.stderr, "");
-			const lines = r.stdout.split("\n").filter((l) => l && !l.startsWith("[apply_pi_patches] applying patch: "));
-			assert.equal(lines.length, NAMES.length, `one notice per patch (${NAMES.length}), got:\n${lines.join("\n")}`);
+			// Every stdout line counts, including any loop header: with no Pi a skipped patch prints exactly its own one line.
+			const lines = r.stdout.split("\n").filter((l) => l);
+			assert.equal(lines.length, NAMES.length, `one line per patch (${NAMES.length}), got:\n${lines.join("\n")}`);
+			assert.ok(lines.every((l) => !l.startsWith("[apply_pi_patches] ")), "no loop line when Pi is absent");
 			for (const name of NAMES) assert.ok(existsSync(join(PATCHES, name, "patch.mjs")), `${name} is a patch directory`);
 			for (const name of NAMES) {
 				const hits = lines.filter((l) => l.startsWith(`[pi-patch:${name}] `) || l.startsWith(`[${name}] `));

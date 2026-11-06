@@ -26,7 +26,7 @@ Selection is by version floor, and the payload's checked anchors decide the rest
 per-patch `PI_*_PACKAGE` override the payloads use) and runs the newest payload whose series is at or below it, with the same arguments
 and environment; its exit code is the result. A newer Pi needs no new file while the anchors still match. When they stop matching, the
 payload fails with exit 1 and writes nothing. A Pi older than every payload, or one whose version cannot be read, also fails with exit 1
-and changes nothing. With no Pi installed the newest payload runs and keeps its own "not installed; skipped" / `--check` "cannot verify" behaviour: each patch prints one notice line, the dispatcher prints nothing, and the script exits 0.
+and changes nothing. With no Pi installed the newest payload runs and keeps its own "not installed; skipped" / `--check` "cannot verify" behaviour: each patch prints one notice line, the dispatcher and the loop print nothing else, and the script exits 0. With Pi installed the loop still prints `applying patch: <name>` before each patch.
 Anchors only prove the text matches, not that the surrounding code still behaves the same; run the patch's proof after a Pi upgrade.
 When anchors drift, add `patch.pi-<major>.<minor>.mjs` for the first series that needs it, add it to the `variants` map in the patch's
 `patch.mjs`, add its hash line to `run_onchange_after_30_apply_pi_patches.sh.tmpl` and port that payload's proof. `tests/pi-patches/pi_select.test.mjs`
