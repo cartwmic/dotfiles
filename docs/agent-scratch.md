@@ -11,7 +11,7 @@ Agent scratch (work dirs, review checkouts, build targets, dumps) fills the inte
 | `run_onchange_after_81_agent_scratch_workshop.sh` | runs on `chezmoi apply` | Makes `/Volumes/Workshop/macbook/tmp-home`. Moves nothing. |
 | `dot_local/user_scripts/executable_agent_tmp_move.py` | `~/.local/user_scripts/agent_tmp_move.py` | Moves idle `~/tmp` subtrees to `AGENT_TMP`. Dry run by default. |
 
-New scratch goes under `$AGENT_TMP`. `~/tmp` stays as the name every note, ledger entry and qmd collection already uses: each subtree that moves leaves a link at its old path, and once everything has moved `~/tmp` itself becomes a link.
+New scratch goes under `$AGENT_TMP`. `~/tmp` stays as the name every note and ledger entry already uses (qmd is the exception: it does not follow links, see "Launchd jobs"): each subtree that moves leaves a link at its old path, and once everything has moved `~/tmp` itself becomes a link.
 
 ## Workshop not mounted
 
@@ -36,7 +36,7 @@ An entry moves only if it is not a link, is not on the keep list (`ssd-move`, `s
 
 The copy is `rsync -a` into `$AGENT_TMP/.NAME.partial`. It is checked (entry count, file bytes, and that the source did not change while copying), `lsof` is looked at once more, then the partial is renamed to `$AGENT_TMP/NAME`, the original is renamed aside, a link takes its place and the renamed original is removed. Nothing is removed before the check passes. A failure leaves the original in place and the partial copy; a rerun syncs into it again (`rsync --delete` inside the partial only), so a stale partial does not block the entry. Each decision of an `--apply` run (moved, held, failed, with the reason) is a line in `~/.local/state/agent-tmp-move/moves.jsonl`.
 
-`--finish` replaces `~/tmp` with a link to `$AGENT_TMP`, only when every entry of `~/tmp` is already a link into `$AGENT_TMP` and no process has `~/tmp` itself as its current directory. The old directory of links is renamed `~/tmp.links-old-<time>`, not deleted.
+`--finish` replaces `~/tmp` with a link to `$AGENT_TMP`, only when every entry of `~/tmp` is already a link into `$AGENT_TMP` and no process has `~/tmp` itself as its current directory. The old directory of links is renamed `~/tmp.links-old-<time>`, not deleted. **Then run `chezmoi apply ~/.config/qmd/index.yml`**: once `~/tmp` is a link, `notes-internal` would index every note a second time, and the template drops it only when the file is re-rendered.
 
 **Reproduce:** `chezmoi apply`, then run the script with `--apply` again whenever more subtrees have gone idle.
 
@@ -48,4 +48,4 @@ The coordinator ledger and daemon state, T3's own sqlite and userdata, the qmd i
 
 ## Launchd jobs
 
-Background jobs reach Workshop through the mise route (the macOS privacy grant for removable volumes is held by mise). `qmd-refresh` reads `~/tmp/*/*.md`; after a subtree moves, the read goes through the link. Prove it with `launchctl kickstart gui/$(id -u)/local.qmd-refresh` and read `~/Library/Logs/qmd-refresh/`.
+Background jobs reach Workshop through the mise route (the macOS privacy grant for removable volumes is held by mise). `qmd-refresh` reads the notes; qmd does not follow links, so it cannot read a moved subtree through `~/tmp/<name>`. The qmd `notes` collection reads `/Volumes/Workshop/macbook/tmp-home` and `notes-internal` reads what is still a real directory in `~/tmp` (docs/qmd.md, "The notes collections and the Workshop SSD"). Prove a change with `launchctl kickstart gui/$(id -u)/local.qmd-refresh`, read `~/Library/Logs/qmd-refresh/`, and check that `qmd status` still shows the `notes` file count.
