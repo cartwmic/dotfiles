@@ -378,7 +378,7 @@ class T3Test(unittest.TestCase):
         for text in ("", "not json", "[1]"):
             self.assertEqual(self.modify("on_t3hub_off", text), text)
         self.assertEqual(self.instances(self.modify("on_t3hub_off", '{"a": 1}'))["codex"]["config"]["setupMode"], "existing")
-        self.assertEqual(json.loads(self.modify("off_t3hub_off", '{"a": 1}')), {"a": 1})
+        self.assertEqual(json.loads(self.modify("off_t3hub_off", '{"a": 1}')), {"a": 1, "worktreesDirectory": "/Volumes/Workshop/macbook/t3-worktrees"})  # the one key the script always sets
 
     def test_the_two_switches_are_independent(self):
         ids = lambda out: [k for k in self.instances(out) if k.endswith("-hub")]
