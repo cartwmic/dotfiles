@@ -228,6 +228,17 @@ class MoveScriptTest(unittest.TestCase):
         self.assertEqual(list(self.dst.iterdir()), [])
         self.assertEqual(json.loads(self.log.read_text().splitlines()[0])["result"], "held")
 
+    def test_a_tree_with_read_only_directories_moves(self):
+        d = self.tree("gomod")
+        os.chmod(d / "sub", 0o555)  # like a Go module cache: files and directories without write permission
+        os.chmod(d / "sub/f0.md", 0o444)
+        self.addCleanup(lambda: [os.chmod(p, 0o755) for p in self.dst.glob("gomod/sub")])
+        r = self.run_move("--apply")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("MOVED       gomod", r.stdout)
+        self.assertEqual([p.name for p in self.src.iterdir()], ["gomod"])
+        self.assertTrue((self.src / "gomod").is_symlink())
+
     def test_a_file_moves_too(self):
         f = self.src / "note.sh"
         f.write_text("echo hi\n")
