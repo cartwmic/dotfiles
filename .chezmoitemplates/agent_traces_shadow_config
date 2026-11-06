@@ -1,6 +1,6 @@
 {{- /* agent_traces_shadow_config: the traces stage 2 shadow tooling's setting as JSON {"enabled", "machine", "arm"}. Local chezmoi data agentTracesShadow:
-  enabled   true or false. Default: true on the personal profile, false everywhere else (the work Mac gets the shadow tooling only when
-            the owner sets it there; nothing runs on it until then).
+  enabled   true or false. Default: false on every profile, because the shadow run is finished (G3 PASS, 2026-11-06); the tooling stays
+            available for later runs, and true turns it on again.
   machine   the test label the TS and Python arms send under, with -ts and -py added: test-personal gives test-personal-ts and test-personal-py.
             A lowercase "test-" then 1 to 24 of a-z, 0-9, - (so label plus suffix stays a valid agent-events machine label). Default: test-personal on
             the personal profile, test-work on axon-work-computer, none elsewhere (then required when enabled). The seed arm is always test-seed.
@@ -19,7 +19,7 @@ local.agent-traces-seed (seed), with their load script, by arm. Any other key or
 {{-   end -}}
 {{- end -}}
 {{- $profile := printf "%v" (dig "profile" "" .) -}}
-{{- $on := printf "%v" (eq $profile "personal") -}}
+{{- $on := "false" -}}
 {{- if hasKey $raw "enabled" -}}{{- $on = printf "%v" (get $raw "enabled") -}}{{- end -}}
 {{- if not (has $on (list "true" "false")) -}}
 {{-   fail (printf "agentTracesShadow.enabled must be true or false, got %q" $on) -}}

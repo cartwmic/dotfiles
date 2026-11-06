@@ -139,7 +139,7 @@ Library/LaunchAgents/local.agent-events.plist
 {{- end }}
 
 {{- if not (includeTemplate "agent_traces_shadow_config" . | fromJson).enabled }}
-# Traces stage 2 shadow tooling: chezmoi data agentTracesShadow.enabled, default true on personal only (docs/profiles.md). The control arm's entry,
+# Traces stage 2 shadow tooling: chezmoi data agentTracesShadow.enabled, default false on every profile (docs/profiles.md). The control arm's entry,
 # the cache-gauge oracle and the reference hashes they check deploy beside the frozen collector files only when it is on. A bad value fails this render.
 .local/share/agent-events/shadow_py_run.py
 .local/share/agent-events/cache_ref.py
@@ -149,7 +149,7 @@ Library/LaunchAgents/local.agent-events.plist
 {{- $shadow := includeTemplate "agent_traces_shadow_config" . | fromJson }}
 {{- range $arm, $label := dict "ts" "local.agent-traces-shadow" "py" "local.agent-traces-shadow-py" "seed" "local.agent-traces-seed" }}
 {{-   if or (ne $.chezmoi.os "darwin") (not $shadow.enabled) (not (has $arm $shadow.arm)) }}
-# Traces stage 2 shadow LaunchAgent {{ $label }}: macOS with chezmoi data agentTracesShadow.enabled and this arm in agentTracesShadow.arm (default: personal only, all
+# Traces stage 2 shadow LaunchAgent {{ $label }}: macOS with chezmoi data agentTracesShadow.enabled and this arm in agentTracesShadow.arm (default: off, all
 # three arms). Left out: chezmoi leaves an installed plist alone; the load script below unloads the job and removes the plist.
 Library/LaunchAgents/{{ $label }}.plist
 {{-   end }}

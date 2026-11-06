@@ -687,11 +687,10 @@ class Deployment(Scratch):
                             str(self.home), "managed"], capture_output=True, text=True, env=dict(os.environ, HOME=str(self.home)))
         return r
 
-    def test_personal_deploys_the_three_and_work_none(self):
+    def test_the_shadow_files_are_off_by_default_on_every_profile(self):
         personal = set(self.managed("personal").stdout.split())
         work = set(self.managed("axon-work-computer").stdout.split())
-        self.assertTrue(self.SHADOW <= personal)
-        self.assertFalse(self.SHADOW & work)
+        self.assertFalse(self.SHADOW & (personal | work), "the shadow run is finished: off unless agentTracesShadow.enabled is true")
         self.assertFalse((self.SOURCE_ONLY | {".local/share/agent-events/test_agent_events.py"}) & (personal | work))
         for name in FROZEN:
             self.assertIn(".local/share/agent-events/" + name, personal & work)
@@ -710,7 +709,7 @@ class Deployment(Scratch):
         if not shutil.which("chezmoi"):
             self.skipTest("no chezmoi")
         cfg = self.tmp / "chezmoi.yaml"
-        cfg.write_text("data:\n  profile: personal\n")
+        cfg.write_text("data:\n  profile: personal\n  agentTracesShadow: {enabled: true}\n")
         dest = self.tmp / "dest"
         dest.mkdir()
         target = dest / ".local/share/agent-events"
