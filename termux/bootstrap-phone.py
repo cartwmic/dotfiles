@@ -6,6 +6,7 @@ private-key UI fields. An absent manual approval is an incomplete deployment.
 """
 import argparse
 from contextlib import contextmanager
+import json
 import os
 import re
 import shlex
@@ -28,6 +29,12 @@ PACKAGES = {
 EXPECTED_VERSIONS = {"com.termux": 1010, "com.termux.api": 1004, "com.termux.boot": 1000}
 PLAY_PACKAGES = ("com.wireguard.android", "io.heckel.ntfy", "app.whisperian.client")
 REPO = Path(__file__).resolve().parent.parent
+# The local data the termux profile renders with (docs/profiles.md, "Local data keys"):
+# the sshHosts entries below, each with an address and a user. No other key goes to the phone.
+TERMUX_SSH_HOSTS = ("server", "macbook", "laptop", "macKvm", "whonixGw", "whonixWs")
+TERMUX_HOST_FIELDS = ("address", "user")
+LOCAL_DATA_DOC = ("chezmoi personal.yaml (personal machines)", "developer")
+OP_TOKEN_FILE = Path.home() / ".config/agent-harness/op-service-token"
 
 
 class BootstrapError(Exception):
@@ -44,6 +51,137 @@ def run(argv, *, data=None, check=True, timeout=60, env=None):
         # an external tool could include key material in a diagnostic.
         raise BootstrapError(f"{Path(argv[0]).name} failed (exit {result.returncode})")
     return result
+
+
+def select_termux_data(doc):
+    """Pick the termux sshHosts entries out of the local data document. Returns {host: {field: value}}.
+
+    The document is the owner's snippet: `sshHosts:` with one flow map per host,
+    `name: {address: "...", user: "..."}`. Errors name the key, never a value.
+    """
+    lines = doc.splitlines()
+    start = next((i for i, line in enumerate(lines) if re.fullmatch(r"\s*sshHosts:\s*(#.*)?", line)), None)
+    if start is None:
+        raise BootstrapError("local data document has no key sshHosts")
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    found = {}
+    for line in lines[start + 1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if len(line) - len(line.lstrip()) <= indent:
+            break
+        match = re.fullmatch(r"\s*([A-Za-z0-9_]+):\s*\{(.*)\}\s*(#.*)?", line)
+        if match:
+            found[match.group(1)] = match.group(2)
+    selected = {}
+    for host in TERMUX_SSH_HOSTS:
+        if host not in found:
+            raise BootstrapError(f"local data document is missing sshHosts.{host}")
+        selected[host] = {}
+        for field in TERMUX_HOST_FIELDS:
+            match = re.search(rf'(?:^|,)\s*{field}:\s*(?:"([^"\n]+)"|([^\s,"]+))\s*(?=,|$)', found[host])
+            value = match and (match.group(1) or match.group(2))
+            if not value:
+                raise BootstrapError(f"local data document is missing sshHosts.{host}.{field}")
+            selected[host][field] = value
+    return selected
+
+
+def render_chezmoi_yaml(selected):
+    """The phone's chezmoi.yaml: profile termux plus the selected local data."""
+    out = ["data:", '  profile: "termux"', "  sshHosts:"]
+    for host in TERMUX_SSH_HOSTS:
+        fields = ", ".join(f"{f}: {json.dumps(selected[host][f])}" for f in TERMUX_HOST_FIELDS)
+        out.append(f"    {host}: {{{fields}}}")
+    return "\n".join(out) + "\n"
+
+
+def _indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def _significant(line):
+    return bool(line.strip()) and not line.lstrip().startswith("#")
+
+
+def merge_chezmoi_yaml(existing, selected):
+    """Add the termux sshHosts entries an existing phone chezmoi.yaml lacks. Returns (text, added hosts).
+
+    Every line already present is kept as it is; nothing is overwritten. The profile must be termux.
+    A host that is present but lacks a field is an error (the key is named), not a rewrite.
+    """
+    if not existing.strip():
+        return render_chezmoi_yaml(selected), list(TERMUX_SSH_HOSTS)
+    lines = existing.splitlines()
+    profile = next((m for m in (re.fullmatch(r"\s*profile:\s*[\"']?([^\"'\s#]*)[\"']?\s*(#.*)?", l) for l in lines) if m), None)
+    if not profile or profile.group(1) != "termux":
+        found = profile.group(1) if profile else "(none)"
+        raise BootstrapError(f"existing phone chezmoi profile is {found}, not termux; nothing was changed")
+    data = next((i for i, l in enumerate(lines) if re.fullmatch(r"data:\s*(#.*)?", l)), None)
+    if data is None:
+        raise BootstrapError("existing phone chezmoi.yaml has no data: block; cannot add keys, nothing was changed")
+    block = []  # line indexes of the data: block
+    for i in range(data + 1, len(lines)):
+        if _significant(lines[i]) and _indent(lines[i]) == 0:
+            break
+        block.append(i)
+    first = next((i for i in block if _significant(lines[i])), None)
+    child = _indent(lines[first]) if first is not None else 2
+    hosts_at = next((i for i in block if _significant(lines[i]) and _indent(lines[i]) == child
+                     and re.match(r"sshHosts:", lines[i].lstrip())), None)
+    present = {}
+    host_indent = child + 2
+    if hosts_at is not None:
+        if not re.fullmatch(r"\s*sshHosts:\s*(#.*)?", lines[hosts_at]):
+            raise BootstrapError("existing phone sshHosts is not a block; cannot add keys, nothing was changed")
+        entries = []
+        for i in block:
+            if i > hosts_at and _significant(lines[i]):
+                if _indent(lines[i]) <= child:
+                    break
+                entries.append(i)
+        if entries:
+            host_indent = _indent(lines[entries[0]])
+        for n, i in enumerate(entries):
+            match = re.fullmatch(r"\s*([A-Za-z0-9_]+):\s*(\{(.*)\})?\s*(#.*)?", lines[i])
+            if not match or _indent(lines[i]) != host_indent:
+                continue
+            if match.group(2) is not None:
+                fields = set(re.findall(r"(?:^|[{,])\s*([A-Za-z0-9_]+):", "{" + match.group(3)))
+            else:
+                fields = set()
+                for j in entries[n + 1:]:
+                    if _indent(lines[j]) <= host_indent:
+                        break
+                    sub = re.match(r"\s*([A-Za-z0-9_]+):", lines[j])
+                    if sub:
+                        fields.add(sub.group(1))
+            present[match.group(1)] = fields
+    for host in TERMUX_SSH_HOSTS:
+        for field in TERMUX_HOST_FIELDS:
+            if host in present and field not in present[host]:
+                raise BootstrapError(f"existing phone config has sshHosts.{host} without {field}; nothing was changed")
+    missing = [h for h in TERMUX_SSH_HOSTS if h not in present]
+    if not missing:
+        return existing, []
+    new = []
+    for host in missing:
+        fields = ", ".join(f"{f}: {json.dumps(selected[host][f])}" for f in TERMUX_HOST_FIELDS)
+        new.append(f"{' ' * host_indent}{host}: {{{fields}}}")
+    if hosts_at is not None:
+        lines[hosts_at + 1:hosts_at + 1] = new
+    else:
+        lines[data + 1:data + 1] = [f"{' ' * child}sshHosts:", *new]
+    return "\n".join(lines) + "\n", missing
+
+
+def read_termux_data():
+    env = os.environ.copy()
+    if OP_TOKEN_FILE.is_file():
+        env["OP_SERVICE_ACCOUNT_TOKEN"] = OP_TOKEN_FILE.read_text().strip()
+    title, vault = LOCAL_DATA_DOC
+    result = run(["op", "document", "get", title, "--vault", vault], env=env)
+    return select_termux_data(result.stdout.decode(errors="replace"))
 
 
 def adb(serial, *args, check=True, timeout=60):
@@ -291,22 +429,29 @@ def provision(args):
     if installed(args.serial, "com.termux") is None:
         raise BootstrapError("install the three matching Termux APKs first")
     source = choose_key_source(args.key_source)
+    local_data = read_termux_data()  # fails here, before the phone is touched, naming any missing key
     if source == "phone" and not args.ready_phone_token and args.packages_ready:
         raise BootstrapError("phone-side retrieval needs --ready-phone-token AFTER you copy the service token on-device")
     with usb_connection(args.serial, args.start_ui, args.packages_ready) as (port, user):
         if source == "phone" and not args.ready_phone_token:
             raise BootstrapError("phone-side retrieval needs --ready-phone-token AFTER you copy the service token on-device")
+        existing = text(phone_ssh(args.serial, port, user, "sh", "-c",
+                                  "test -e ~/.config/chezmoi/chezmoi.yaml && cat ~/.config/chezmoi/chezmoi.yaml || true"))
+        # Decide the config first: a non-termux profile or an unmergeable file stops before anything is written.
+        config, added = merge_chezmoi_yaml(existing, local_data)
         if source == "mac":
             for name, (fingerprint, ref) in FINGERPRINTS.items():
                 install_key(args.serial, port, user, name, fingerprint, ref)
-        existing = text(phone_ssh(args.serial, port, user, "sh", "-c",
-                                  "test -e ~/.config/chezmoi/chezmoi.yaml && cat ~/.config/chezmoi/chezmoi.yaml || true"))
-        if existing and not re.search(r'^\s*profile:\s*["\']?termux["\']?\s*$', existing, re.M):
-            raise BootstrapError("existing chezmoi profile is not termux; refusing to replace it")
-        if not existing:
+        if added:
+            # The values travel on SSH stdin, never argv. Temp file is 0600, then renamed into place.
             phone_ssh(args.serial, port, user, "sh", "-c",
-                      "mkdir -p ~/.config/chezmoi; chmod 700 ~/.config/chezmoi; "
-                      "umask 077; printf '%s\\n' 'data:' '  profile: \"termux\"' > ~/.config/chezmoi/chezmoi.yaml")
+                      "set -eu; umask 077; mkdir -p ~/.config/chezmoi; chmod 700 ~/.config/chezmoi; "
+                      "tmp=$(mktemp ~/.config/chezmoi/.chezmoi.yaml.XXXXXX); trap 'rm -f \"$tmp\"' EXIT; "
+                      "cat > \"$tmp\"; chmod 600 \"$tmp\"; mv \"$tmp\" ~/.config/chezmoi/chezmoi.yaml",
+                      data=config.encode())
+            print("phone chezmoi.yaml: added " + ", ".join(f"sshHosts.{h}" for h in added))
+        else:
+            print("phone chezmoi.yaml: termux keys already present, left as is")
         print("phone owns its configuration: chezmoi init --apply (HTTPS, profile termux)")
         phone_ssh(args.serial, port, user, "chezmoi", "init", "--apply", "https://github.com/cartwmic/dotfiles.git")
         for name, (fingerprint, _) in FINGERPRINTS.items():

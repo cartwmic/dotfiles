@@ -5,16 +5,12 @@
 #   axon-work-computer — work laptop (subset of personal)
 #   termux             — Android Termux (SSH jump host + .termux + jump scripts)
 #
-# Termux bootstrap (phone-only; needs Termux:API app):
-#   pkg install -y chezmoi git openssh coreutils termux-api
-#   mkdir -p ~/.config/chezmoi
-#   cat > ~/.config/chezmoi/chezmoi.yaml <<'EOF'
-#   data:
-#     profile: "termux"
-#   EOF
-#   # Repo is public — no GitHub auth required for init.
-#   chezmoi init --apply https://github.com/cartwmic/dotfiles.git
-#   See termux/README.md for ops_... clipboard SSH key provision.
+# Termux bootstrap (phone-only; needs Termux:API app): termux/bootstrap-phone.py provision writes
+# the phone's chezmoi.yaml (profile "termux" plus the termux sshHosts keys, read from 1Password on
+# the Mac), then runs `chezmoi init --apply https://github.com/cartwmic/dotfiles.git` on the phone.
+# By hand, write that file first: init --apply stops while the termux keys (sshHosts.server, macbook,
+# laptop, macKvm, whonixGw, whonixWs; docs/profiles.md "Local data keys") are missing.
+# See termux/README.md for ops_... clipboard SSH key provision.
 data:
   profile: "personal"
   # Coordinator and Retro daemons: one opt-in flag each; apply sets up and starts them. See README "Instances".
