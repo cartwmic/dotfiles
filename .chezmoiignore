@@ -189,6 +189,9 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 # launchd only.
 .local/user_scripts/instances_reconcile.sh
 75_instances_reconcile.sh
+# The shared wait-then-bootstrap helper those scripts and the LaunchAgent loaders (71, 72, 73) source.
+.local/share/launchd-reload
+.local/share/launchd-reload/**
 {{- end }}
 
 {{- if and (ne .profile "personal") (ne .profile "axon-work-computer") }}

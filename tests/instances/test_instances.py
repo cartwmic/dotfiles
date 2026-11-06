@@ -33,6 +33,9 @@ WORK_UNIT = UNIT_DIR / "local.coordinatord.work.plist.tmpl"
 WRAPPER = ROOT / "run_after_75_instances_reconcile.sh.tmpl"
 IGNORE = ROOT / ".chezmoiignore"
 SCRIPT = Path(os.environ.get("INSTANCES_SCRIPT_UNDER_TEST") or ROOT / "dot_local" / "user_scripts" / "executable_instances_reconcile.sh")
+LAUNCHD_LIB = ROOT / "dot_local" / "share" / "launchd-reload" / "launchd_reload.sh"
+# The helper's waits, shortened: the numbers (20 polls, 3 retries) stay as they ship.
+FAST = {"LAUNCHD_POLL_SLEEP": "0.01", "LAUNCHD_RETRY_SLEEP": "0"}
 GOLDEN_COORD = HERE / "golden" / "local.coordinatord.plist"
 GOLDEN_RETRO = HERE / "golden" / "local.retrod.plist"
 GOLDEN_WORK = HERE / "golden" / "local.coordinatord.work.plist"
@@ -157,12 +160,26 @@ echo "$@" >> "$D/calls"
 verb=$1
 case $verb in
   print) [ -e "$D/FAIL_PRINT" ] && { echo "launchctl print: transient failure" >&2; exit 5; }
-         label=${2##*/}; if grep -qx "$label" "$D/loaded" 2>/dev/null; then exit 0; else echo "Could not find service" >&2; exit 113; fi;;
+         label=${2##*/}
+         # A teardown in progress (the TEARDOWN file holds how many prints it lasts): the job is still there until the count runs out.
+         if [ -e "$D/teardown.$label" ]; then n=$(cat "$D/teardown.$label")
+           if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$D/teardown.$label"; exit 0; fi
+           rm -f "$D/teardown.$label"; grep -vx "$label" "$D/loaded" > "$D/loaded.new" 2>/dev/null; mv "$D/loaded.new" "$D/loaded"
+         fi
+         if grep -qx "$label" "$D/loaded" 2>/dev/null; then exit 0; else echo "Could not find service" >&2; exit 113; fi;;
   bootstrap) [ -e "$D/FAIL_BOOTSTRAP" ] && { echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; }
-             f=$3; label=$(basename "$f" .plist); echo "$label" >> "$D/loaded"
+             f=$3; label=$(basename "$f" .plist)
+             # launchd refuses a bootstrap while the old job is still being torn down; FAIL_BOOTSTRAP_N=<n> fails the first n tries.
+             [ -e "$D/teardown.$label" ] && { echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; }
+             if [ -e "$D/FAIL_BOOTSTRAP_N" ]; then n=$(cat "$D/FAIL_BOOTSTRAP_N")
+               if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$D/FAIL_BOOTSTRAP_N"; echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; fi
+             fi
+             echo "$label" >> "$D/loaded"
              [ -e "$D/FAIL_PRINT_AFTER_BOOTSTRAP" ] && : > "$D/FAIL_PRINT"; exit 0;;
   bootout) [ -e "$D/FAIL_BOOTOUT" ] && { echo "Boot-out failed: 5" >&2; exit 5; }
-           label=${2##*/}; grep -vx "$label" "$D/loaded" > "$D/loaded.new" 2>/dev/null; mv "$D/loaded.new" "$D/loaded"; exit 0;;
+           label=${2##*/}
+           if [ -e "$D/TEARDOWN" ]; then cp "$D/TEARDOWN" "$D/teardown.$label"; exit 0; fi
+           grep -vx "$label" "$D/loaded" > "$D/loaded.new" 2>/dev/null; mv "$D/loaded.new" "$D/loaded"; exit 0;;
   *) echo "stub launchctl: unexpected verb $verb" >&2; exit 64;;
 esac
 """
@@ -197,6 +214,8 @@ class Scratch:
         self.set_unit("local.coordinatord", "coordinator-v1")
         self.set_unit("local.retrod", "retro-v1")
         self.set_unit("local.coordinatord.work", "work-v1")
+        (self.home / ".local" / "share" / "launchd-reload").mkdir(parents=True)
+        shutil.copy(LAUNCHD_LIB, self.home / ".local" / "share" / "launchd-reload" / "launchd_reload.sh")
         self.agents = self.home / "Library" / "LaunchAgents"
         self.state_root = self.home / ".local" / "state" / "instances"
         self.coordinator_state = self.home / ".local" / "share" / "coordinator"
@@ -247,7 +266,7 @@ class Scratch:
             INSTANCES_UNIT_DIR=str(self.units), INSTANCES_TOOL_PATH=str(self.tools), TMPDIR=str(self.base),
             INSTANCES_COORDINATOR_ENABLED="" if coordinator is None else str(coordinator).lower(), INSTANCES_COORDINATOR_REPO=str(self.co),
             INSTANCES_RETRO_ENABLED="" if retro is None else str(retro).lower(), INSTANCES_RETRO_REPO=str(self.re),
-            INSTANCES_RETRO_CHANNEL_ID="", INSTANCES_RETRO_OP_ITEM="",
+            INSTANCES_RETRO_CHANNEL_ID="", INSTANCES_RETRO_OP_ITEM="", **FAST,
         )
         env.pop("INSTANCES_RELOAD", None)
         if reload:
@@ -263,7 +282,7 @@ class Scratch:
             HOME=str(self.home), PATH=str(self.bin) + os.pathsep + os.environ["PATH"], STUB_DIR=str(self.stub),
             INSTANCES_UNIT_DIR=str(self.units), INSTANCES_TOOL_PATH=str(self.tools), TMPDIR=str(self.base), INSTANCES_LIST="coordinator-work",
             INSTANCES_COORDINATOR_WORK_ENABLED="" if enabled is None else str(enabled).lower(), INSTANCES_COORDINATOR_WORK_REPO=str(self.co),
-            INSTANCES_COORDINATOR_WORK_EXTRA_PATH="",
+            INSTANCES_COORDINATOR_WORK_EXTRA_PATH="", **FAST,
         )
         env.pop("INSTANCES_RELOAD", None)
         if reload:
@@ -399,12 +418,63 @@ class MatrixTests(unittest.TestCase):
         self.s.reset_calls()
         self.s.run(coordinator=True, reload="coordinator")
         self.ok()
-        self.assertCalls([PRINT_CO, "bootout %s/local.coordinatord" % DOMAIN, self.bootstrap(), PRINT_CO])
+        self.assertCalls([PRINT_CO, "bootout %s/local.coordinatord" % DOMAIN, PRINT_CO, self.bootstrap(), PRINT_CO])  # the second print is the wait for the bootout
         self.assertEqual(self.s.status("coordinator"), "READY (reloaded with the changed unit)")
         self.s.reset_calls()
         self.s.run(coordinator=True)
         self.assertCalls([PRINT_CO])  # settled: no longer reported
         self.assertEqual(self.s.status("coordinator"), "READY (running)")
+
+    def reload_setup(self):
+        self.s.have_config(self.s.coordinator_state)
+        self.s.run(coordinator=True)
+        self.s.set_unit("local.coordinatord", "coordinator-v2")
+        self.s.reset_calls()
+
+    def test_reload_without_the_helper_installed_stops_nothing(self):
+        self.reload_setup()
+        (self.s.home / ".local" / "share" / "launchd-reload" / "launchd_reload.sh").unlink()
+        self.s.run(coordinator=True, reload="coordinator")
+        self.ok()
+        self.assertCalls([PRINT_CO])
+        self.assertIn("RELOAD FAILED:", self.s.status("coordinator"))
+        self.assertEqual(self.s.loaded(), ["local.coordinatord"], "the old daemon keeps running")
+
+    def test_reload_waits_for_the_old_job_to_go_then_loads_it(self):
+        # launchd still has the job for 3 more prints after the bootout and refuses a bootstrap meanwhile (the stub models both).
+        self.reload_setup()
+        (self.s.stub / "TEARDOWN").write_text("3\n")
+        self.s.run(coordinator=True, reload="coordinator")
+        self.ok()
+        self.assertCalls([PRINT_CO, "bootout %s/local.coordinatord" % DOMAIN] + [PRINT_CO] * 4 + [self.bootstrap(), PRINT_CO])
+        self.assertEqual(self.s.status("coordinator"), "READY (reloaded with the changed unit)")
+        self.assertEqual(self.s.loaded(), ["local.coordinatord"])
+
+    def test_reload_retries_a_bootstrap_that_fails_and_then_loads_it(self):
+        self.reload_setup()
+        (self.s.stub / "FAIL_BOOTSTRAP_N").write_text("2\n")
+        self.s.run(coordinator=True, reload="coordinator")
+        self.ok()
+        self.assertEqual(sum(c.startswith("bootstrap") for c in self.s.calls()), 3)
+        self.assertEqual(self.s.status("coordinator"), "READY (reloaded with the changed unit)")
+        self.assertEqual(self.s.loaded(), ["local.coordinatord"])
+
+    def test_reload_that_never_loads_says_so_and_the_next_apply_starts_it(self):
+        self.reload_setup()
+        self.s.fail("bootstrap")
+        self.s.run(coordinator=True, reload="coordinator")
+        self.ok()
+        self.assertEqual(sum(c.startswith("bootstrap") for c in self.s.calls()), 4, "one try and three retries")
+        self.assertIn("RELOAD FAILED: daemon is stopped, bootstrap failed: Bootstrap failed: 5", self.s.status("coordinator"))
+        self.assertIn("ERROR: could not load local.coordinatord from", self.s.output())
+
+    def test_reload_with_a_job_that_never_goes_away_fails_and_does_not_bootstrap(self):
+        self.reload_setup()
+        (self.s.stub / "TEARDOWN").write_text("1000\n")
+        self.s.run(coordinator=True, reload="coordinator")
+        self.ok()
+        self.assertFalse(any(c.startswith("bootstrap") for c in self.s.calls()))
+        self.assertIn("RELOAD FAILED: local.coordinatord is still loaded 10 s after bootout", self.s.status("coordinator"))
 
     def test_reload_for_another_instance_does_not_reload_this_one(self):
         self.s.have_config(self.s.coordinator_state)
@@ -785,7 +855,7 @@ class WorkMatrixTests(unittest.TestCase):
             self.assertIn("NOT restarted", self.s.status("coordinator-work"))
         self.s.reset_calls()
         self.s.run_work(True, reload="coordinator-work")
-        self.assertCalls([PRINT_WK, "bootout %s/local.coordinatord.work" % DOMAIN, self.bootstrap, PRINT_WK])
+        self.assertCalls([PRINT_WK, "bootout %s/local.coordinatord.work" % DOMAIN, PRINT_WK, self.bootstrap, PRINT_WK])
         self.assertEqual(self.s.status("coordinator-work"), "READY (reloaded with the changed unit)")
 
     def test_opt_out_stops_it_and_keeps_config_token_playbook_state_and_logs(self):
@@ -1046,7 +1116,7 @@ class CancellationTests(unittest.TestCase):
         env = dict(os.environ, HOME=str(s.home), PATH=str(s.bin) + os.pathsep + os.environ["PATH"], STUB_DIR=str(s.stub),
                    INSTANCES_UNIT_DIR=str(s.units), INSTANCES_TOOL_PATH=str(s.tools), TMPDIR=str(s.base),
                    INSTANCES_COORDINATOR_ENABLED="true", INSTANCES_COORDINATOR_REPO=str(s.co),
-                   INSTANCES_RETRO_ENABLED="true", INSTANCES_RETRO_REPO=str(s.re), INSTANCES_RETRO_CHANNEL_ID="", INSTANCES_RETRO_OP_ITEM="")
+                   INSTANCES_RETRO_ENABLED="true", INSTANCES_RETRO_REPO=str(s.re), INSTANCES_RETRO_CHANNEL_ID="", INSTANCES_RETRO_OP_ITEM="", **FAST)
         s.have_config(s.retro_state)
         proc = subprocess.Popen(["sh", str(SCRIPT)], env=env, cwd=str(s.base), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
         try:

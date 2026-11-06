@@ -6,17 +6,25 @@
 #
 # Fails (and so fails the apply) when launchd does not end up with the agent loaded: chezmoi records a run_onchange script only when it
 # succeeds, so the next apply tries again instead of leaving a Mac without its memory watchdog.
+# Reload: bootout, wait until launchd no longer has the job, then bootstrap with a few retries (dot_local/share/launchd-reload).
 set -eu
 log() { printf '[heavy_gate_watchdog_launchd] %s: %s\n' "$1" "$2"; }
 
 [ "$(uname -s)" = Darwin ] || exit 0
 label=local.heavy-gate-watchdog
 plist="$HOME/Library/LaunchAgents/$label.plist"
+lib="$HOME/.local/share/launchd-reload/launchd_reload.sh"
+if [ ! -r "$lib" ]; then
+  log ERROR "$lib is not installed; apply it too (chezmoi apply $lib), then apply again"
+  exit 1
+fi
+LAUNCHD_TAG=heavy_gate_watchdog_launchd
+. "$lib"
 uid=$(id -u)
 loaded() { launchctl print "gui/$uid/$label" >/dev/null 2>&1; }
 if loaded; then
   launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || :
-  if loaded; then
+  if ! launchd_wait_gone "$label"; then
     log ERROR "could not unload $label; try: launchctl bootout gui/$uid/$label, then chezmoi apply again"
     exit 1
   fi
@@ -26,8 +34,5 @@ if [ ! -f "$plist" ]; then
   exit 1
 fi
 mkdir -p "$HOME/Library/Logs"
-if ! launchctl bootstrap "gui/$uid" "$plist"; then
-  log ERROR "could not load $label (no GUI session, e.g. over ssh?); log in and chezmoi apply again, or: launchctl bootstrap gui/$uid $plist"
-  exit 1
-fi
+launchd_bootstrap "$label" "$plist" || exit 1
 log INFO "loaded $label (it logs to ~/Library/Logs/heavy-gate-watchdog.log)"
