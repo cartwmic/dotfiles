@@ -31,6 +31,34 @@ unload() {
   rm -f "$HOME/Library/LaunchAgents/$1.plist"
   log INFO "$1 is not wanted: unloaded and its plist removed"
 }
+
+# wait_gone LABEL: after a bootout, poll `launchctl print` every 0.5 s until launchd no longer has the job, for at most 10 s (20 polls).
+# A bootstrap sent while the job is still tearing down fails with "Input/output error" (5), so the load waits for this first.
+wait_gone() {
+  n=0
+  while launchctl print "gui/$uid/$1" >/dev/null 2>&1; do
+    [ "$n" -lt 20 ] || return 1
+    n=$((n + 1))
+    sleep 0.5
+  done
+}
+
+# load_arm LABEL PLIST: bootout, wait for the job to be gone, then bootstrap. A failed bootstrap is retried 3 times, 1 s apart. If it still
+# fails, log ERROR with the command to run by hand and return 1, so the apply exits non-zero.
+load_arm() {
+  launchctl bootout "gui/$uid/$1" >/dev/null 2>&1 || :
+  wait_gone "$1" || log WARN "$1 is still loaded 10 s after bootout; bootstrapping anyway"
+  tries=0
+  until launchctl bootstrap "gui/$uid" "$2"; do
+    if [ "$tries" -ge 3 ]; then
+      log ERROR "$1 did not load after 4 bootstrap tries; run by hand: launchctl bootstrap gui/$uid $2"
+      return 1
+    fi
+    tries=$((tries + 1))
+    log WARN "bootstrap of $1 failed; retry $tries of 3 in 1 s"
+    sleep 1
+  done
+}
 {{- $shadow := includeTemplate "agent_traces_shadow_config" . | fromJson }}
 {{- $arms := dict "ts" (dict "label" "local.agent-traces-shadow" "state" "agent-traces-shadow") "py" (dict "label" "local.agent-traces-shadow-py" "state" "agent-traces-shadow-py") "seed" (dict "label" "local.agent-traces-seed" "state" "agent-traces-seed") }}
 {{- range $name := list "ts" "py" "seed" }}
@@ -42,11 +70,10 @@ mkdir -p "$HOME/.local/state/{{ $arm.state }}"
 {{-     if eq $name "ts" }}
 plist="$HOME/Library/LaunchAgents/{{ $arm.label }}.plist"
 if [ -f "$plist" ]; then
-  launchctl bootout "gui/$uid/{{ $arm.label }}" >/dev/null 2>&1 || true
-  if launchctl bootstrap "gui/$uid" "$plist"; then
+  if load_arm {{ $arm.label }} "$plist"; then
     log INFO "loaded {{ $arm.label }} (every 2 minutes, label {{ $shadow.machine }}-ts)"
   else
-    log WARN "could not load {{ $arm.label }} (no GUI session?); load it later: launchctl bootstrap gui/$uid $plist"
+    rc=1
   fi
 else
   log WARN "$plist is not installed yet"

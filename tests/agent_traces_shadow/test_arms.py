@@ -320,13 +320,29 @@ class GateTest(unittest.TestCase):
 
 
 # A stateful launchctl: "loaded" is a file per label; every call is recorded in full.
+# Knobs: FAKE_STUCK=<label> (bootout fails, job stays); FAKE_TEARDOWN=<n> (bootout leaves the job for n more prints, a teardown in progress);
+# FAKE_BOOTSTRAP_FAILS=<n> (the first n bootstraps fail with 5); FAKE_BOOTSTRAP_RC=<rc> (every bootstrap fails with rc).
 FAKE_LAUNCHCTL = r"""#!/bin/sh
 echo "launchctl $*" >> "$FAKE/calls"
 label=${2##*/}
 case $1 in
-  print) [ -f "$FAKE/loaded.$label" ] || exit 113 ;;
-  bootout) [ -f "$FAKE/loaded.$label" ] || exit 3; case " ${FAKE_STUCK:-} " in *" $label "*) exit 5 ;; esac; rm -f "$FAKE/loaded.$label" ;;
-  bootstrap) label=$(basename "$3" .plist); [ "${FAKE_BOOTSTRAP_RC:-0}" = 0 ] || exit "$FAKE_BOOTSTRAP_RC"; [ ! -f "$FAKE/loaded.$label" ] || exit 5; : > "$FAKE/loaded.$label" ;;
+  print)
+    if [ -f "$FAKE/teardown.$label" ]; then
+      n=$(cat "$FAKE/teardown.$label")
+      if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$FAKE/teardown.$label"; exit 0; fi
+      rm -f "$FAKE/teardown.$label" "$FAKE/loaded.$label"
+    fi
+    [ -f "$FAKE/loaded.$label" ] || exit 113 ;;
+  bootout)
+    [ -f "$FAKE/loaded.$label" ] || exit 3
+    case " ${FAKE_STUCK:-} " in *" $label "*) exit 5 ;; esac
+    if [ -n "${FAKE_TEARDOWN:-}" ]; then echo "$FAKE_TEARDOWN" > "$FAKE/teardown.$label"; else rm -f "$FAKE/loaded.$label"; fi ;;
+  bootstrap)
+    label=$(basename "$3" .plist)
+    c=$(cat "$FAKE/bootstrap.calls" 2>/dev/null || echo 0); echo $((c + 1)) > "$FAKE/bootstrap.calls"
+    [ "$c" -ge "${FAKE_BOOTSTRAP_FAILS:-0}" ] || exit 5
+    [ "${FAKE_BOOTSTRAP_RC:-0}" = 0 ] || exit "$FAKE_BOOTSTRAP_RC"
+    [ ! -f "$FAKE/loaded.$label" ] || exit 5; : > "$FAKE/loaded.$label" ;;
   *) exit 64 ;;
 esac
 """
@@ -364,7 +380,7 @@ class LoaderTest(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(self.now_loaded, {"ts"}, "the control and seed arms are bootstrapped by hand, one at a time")
         self.assertTrue(all("agent-traces-shadow-py" not in c and "agent-traces-seed" not in c for c in calls), calls)
-        self.assertEqual([c.split()[1] for c in calls], ["bootout", "bootstrap"])
+        self.assertEqual([c.split()[1] for c in calls], ["bootout", "print", "bootstrap"], "one print after the bootout: the wait finds the job gone")
         for kind in ("ts", "py", "seed"):
             self.assertTrue(self.plist_of(kind).exists())
             self.assertTrue((self.home / (".local/state/" + re.sub(r"^local\.", "", ARMS[kind][0]))).is_dir(), "launchd's log dir exists")
@@ -438,6 +454,38 @@ class LoaderTest(unittest.TestCase):
         for kind, (label, _) in ARMS.items():
             self.assertTrue((c.home / AGENTS / (label + ".plist")).exists(), label)
         self.assertEqual({p.name for p in fake.glob("loaded.*")}, {"loaded.local.agent-traces-shadow"})
+
+    def test_the_bootstrap_waits_for_the_bootout_to_finish_before_it_is_sent(self):
+        # launchd still has the job for three polls after the bootout (a teardown in progress) and refuses a bootstrap while it is there.
+        # So the load must poll print until it fails, and then bootstrap once.
+        p, calls = self.run_loader(loaded=("ts",), FAKE_TEARDOWN="3")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual([c.split()[1] for c in calls], ["bootout", "print", "print", "print", "print", "bootstrap"], calls)
+        self.assertEqual(self.now_loaded, {"ts"})
+        self.assertIn("loaded local.agent-traces-shadow (every 2 minutes", p.stdout)
+
+    def test_a_bootstrap_that_fails_twice_is_retried_and_then_the_arm_is_loaded(self):
+        p, calls = self.run_loader(FAKE_BOOTSTRAP_FAILS="2")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(sum(c.split()[1] == "bootstrap" for c in calls), 3, calls)
+        self.assertEqual(self.now_loaded, {"ts"})
+        self.assertNotIn("ERROR", p.stdout)
+
+    def test_a_bootstrap_that_always_fails_exits_non_zero_with_the_command_to_run_by_hand(self):
+        p, calls = self.run_loader(FAKE_BOOTSTRAP_RC="5")
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(sum(c.split()[1] == "bootstrap" for c in calls), 4, "one try and three retries")
+        self.assertFalse(self.now_loaded)
+        want = ("ERROR: local.agent-traces-shadow did not load after 4 bootstrap tries; "
+                "run by hand: launchctl bootstrap gui/%d %s" % (os.getuid(), self.plist_of("ts")))
+        self.assertIn(want, p.stdout)
+
+    def test_a_job_still_loaded_after_ten_seconds_is_bootstrapped_anyway_and_fails_loudly(self):
+        p, calls = self.run_loader(loaded=("ts",), FAKE_STUCK="local.agent-traces-shadow")
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(sum(c.split()[1] == "print" for c in calls), 21, "the bounded wait: 20 half-second sleeps, then bootstrap anyway")
+        self.assertIn("still loaded 10 s after bootout", p.stdout)
+        self.assertIn("ERROR: local.agent-traces-shadow did not load", p.stdout)
 
 
 # ---- the arm check ----
