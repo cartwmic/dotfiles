@@ -168,7 +168,8 @@ class MoveScriptTest(unittest.TestCase):
 
     def run_move(self, *args):
         r = subprocess.run([sys.executable, str(MOVE), "--source", str(self.src), "--dest", str(self.dst), "--log", str(self.log),
-                            "--repo", str(self.repo), *args], capture_output=True, text=True, timeout=120)
+                            "--repo", str(self.repo), *(() if "--reserve-gb" in args else ("--reserve-gb", "0")), *args],
+                           capture_output=True, text=True, timeout=120)
         return r
 
     def test_dry_run_changes_nothing_and_says_what_it_would_do(self):
@@ -216,6 +217,16 @@ class MoveScriptTest(unittest.TestCase):
         self.assertIn("MOVED       again", r.stdout)
         self.assertFalse((self.dst / "again/sub/stale.txt").exists())
         self.assertFalse(part.exists())
+
+    def test_a_move_that_would_break_the_free_space_reserve_is_held_back(self):
+        self.tree("big")
+        free_gb = shutil.disk_usage(self.dst).free / 1e9
+        r = self.run_move("--apply", "--reserve-gb", str(free_gb + 10))
+        self.assertIn("HOLD        big", r.stdout)
+        self.assertIn("reserve", r.stdout)
+        self.assertFalse((self.src / "big").is_symlink())
+        self.assertEqual(list(self.dst.iterdir()), [])
+        self.assertEqual(json.loads(self.log.read_text().splitlines()[0])["result"], "held")
 
     def test_a_file_moves_too(self):
         f = self.src / "note.sh"

@@ -14,6 +14,7 @@ A top-level entry of ~/tmp moves only when ALL of these hold:
   - nothing has it open: one `lsof` snapshot, taken right before the move, checked against its old and new path
     (an open file or a process whose current directory is inside it holds it);
   - its newest mtime (the entry, every directory and every file in it) is older than --min-age-hours (default 2);
+  - copying it leaves at least --reserve-gb (default 100) GB free on the destination disk, checked with df right before each copy;
   - it holds no registered git worktree, and is not inside one: `git worktree list` of the repos under
     /Volumes/Workshop/macbook/git, ~/.local/share/chezmoi and ~/.t3/worktrees/*/* (or the --repo list).
 
@@ -156,6 +157,7 @@ class Mover:
         self.keep = set(DEFAULT_KEEP) | set(a.keep)
         self.log = Path(a.log)
         self.apply = a.apply
+        self.reserve = int(a.reserve_gb * 1e9)
         self.worktrees = registered_worktrees([Path(r) for r in a.repo] if a.repo else default_repos())
 
     def verdict(self, name, paths):
@@ -191,7 +193,8 @@ class Mover:
         copy = walk_stats(part)
         if copy[:2] != stats[:2]:
             return False, "copy differs: source %s entries %s bytes, copy %s entries %s bytes" % (stats[0], stats[1], copy[0], copy[1])
-        held = held_by(open_paths(), p)
+        paths = open_paths()
+        held = held_by(paths, p) or held_by(paths, final)
         if held:
             return False, "opened while copying: " + held
         os.rename(part, final)
@@ -230,6 +233,16 @@ class Mover:
                     self.record(name, "held", why=reason)
                 continue
             gb = stats[1] / 1e9
+            # df right before each copy (a dry run subtracts what it already planned): keep the reserve free on Workshop.
+            free = shutil.disk_usage(self.dst).free - (0 if self.apply else moved_bytes)
+            if free - stats[1] < self.reserve:
+                held += 1
+                why = "would leave %.0f GB free on Workshop, under the %.0f GB reserve (%.0f GB free, %.3f GB to copy)" % (
+                    (free - stats[1]) / 1e9, self.reserve / 1e9, free / 1e9, gb)
+                say("HOLD        %-40s %s" % (name, why))
+                if self.apply:
+                    self.record(name, "held", why=why)
+                continue
             if not self.apply:
                 moved += 1
                 moved_bytes += stats[1]
@@ -284,6 +297,7 @@ def main(argv=None):
     ap.add_argument("--dest", default=os.environ.get("AGENT_TMP", ""))
     ap.add_argument("--min-age-hours", type=float, default=2.0)
     ap.add_argument("--repo", nargs="*", default=[], help="repos whose worktree lists to check (default: Workshop git, chezmoi, T3 worktrees)")
+    ap.add_argument("--reserve-gb", type=float, default=100.0, help="keep this much free on the destination disk after each copy (default 100)")
     ap.add_argument("--log", default=str(Path.home() / ".local/state/agent-tmp-move/moves.jsonl"))
     a = ap.parse_args(argv)
     if not a.dest:
