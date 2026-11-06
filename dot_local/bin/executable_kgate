@@ -55,8 +55,8 @@ def _default_host():
 
 HOST = os.environ.get("KGATE_SSH") or _default_host()
 KEY = os.environ.get("KGATE_SSH_KEY", os.path.expanduser("~/.ssh/homelab"))
-# cartwmic-g14-wsl: its wall clock steps back about 2.8 s every 30 s (measured 2026-11-05), which fails tests that compare times; agent-1/2/3 are steady.
-EXCLUDED_NODES = ("ubuntu-server-k8s-agent-4", "ubuntu-server-k8s-master-1", "mac-mini-worker", "cartwmic-g14-wsl")
+# cartwmic-g14-wsl is schedulable again (2026-11-06). Its clock steps were fixed by homelab#101 (9f6ef66, 2026-11-05). It now follows the Windows clock, which slews up to 8% for ~15 s about every 9 h, and it reads up to ~2 s ahead of other nodes.
+EXCLUDED_NODES = ("ubuntu-server-k8s-agent-4", "ubuntu-server-k8s-master-1", "mac-mini-worker")
 # image registries that need a pull credential: host -> (user, 1Password reference of the token)
 PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/password")}
 MAX_RUN_S = 8 * 3600  # the pod ends itself: a pod whose client died must not hold its memory for ever
