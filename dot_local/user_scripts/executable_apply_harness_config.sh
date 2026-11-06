@@ -381,6 +381,11 @@ out_file.write_text("\n".join(lines) + "\n")
 PY
 }
 
+# Rewrite the harness block in ~/.codex/config.toml. Anything the Codex app wrote between the
+# markers that the harness did not render is kept: top-level key lines (e.g. `notify`) go above the
+# first table of the file, other tables (e.g. [mcp_servers.node_repl] and its subtables) go after
+# END. Tables of the harness's own servers are replaced. The result must parse as TOML, or the
+# file is left as it was and this exits non-zero. Same code on the personal and work profiles.
 merge_codex_config() {
   block_file="$1"
   config_file="$HOME/.codex/config.toml"
@@ -389,35 +394,80 @@ merge_codex_config() {
 
   python3 - "$block_file" "$config_file" <<'PY'
 import pathlib
+import re
 import sys
+import tomllib
 
 block = pathlib.Path(sys.argv[1]).read_text().rstrip() + "\n"
 config_path = pathlib.Path(sys.argv[2])
 begin = "# BEGIN CHEZMOI AGENT HARNESS MCP"
 end = "# END CHEZMOI AGENT HARNESS MCP"
+header_re = re.compile(r"^\s*\[")
 
-if config_path.exists():
-    content = config_path.read_text()
-else:
-    content = ""
+content = config_path.read_text() if config_path.exists() else ""
+rendered = set(tomllib.loads(block).get("mcp_servers", {}))
+block_lines = set(block.splitlines())
 
+
+def owned(header):
+    """True when this table header belongs to a server the harness renders."""
+    servers = tomllib.loads(header.strip() + "\n").get("mcp_servers")
+    return isinstance(servers, dict) and next(iter(servers), None) in rendered
+
+
+top_keys, foreign_tables = [], []
 if begin in content and end in content:
     start = content.index(begin)
     finish = content.index(end, start) + len(end)
-    new_content = content[:start].rstrip()
-    if new_content:
-        new_content += "\n\n"
-    new_content += block
-    suffix = content[finish:].lstrip("\n")
-    if suffix:
-        new_content += "\n" + suffix
+    old = content[start + len(begin):content.index(end, start)].splitlines()
+    segments, current = [], None  # table segments: [header, lines]
+    for line in old:
+        if header_re.match(line):
+            current = [line, [line]]
+            segments.append(current)
+        elif current is None:
+            top_keys.append(line)
+        else:
+            current[1].append(line)
+    # Comment lines the harness itself renders (e.g. "# Skipped x") are not foreign.
+    drop = lambda ls: [l for l in ls if not (l.strip().startswith("#") and l in block_lines)]
+    for header, lines in segments:
+        if not owned(header):
+            foreign_tables += drop(lines)
+    top_keys = drop(top_keys)
+    prefix, suffix = content[:start], content[finish:].lstrip("\n")
 else:
-    new_content = content.rstrip()
-    if new_content:
-        new_content += "\n\n"
-    new_content += block
+    prefix, suffix = content, ""
 
-config_path.write_text(new_content.rstrip() + "\n")
+top_text = "\n".join(top_keys).strip("\n")
+tables_text = "\n".join(foreign_tables).strip("\n")
+
+prefix = prefix.rstrip()
+if top_text:
+    lines = prefix.splitlines()
+    idx = next((i for i, l in enumerate(lines) if header_re.match(l)), len(lines))
+    head = "\n".join(lines[:idx]).rstrip()
+    tail = "\n".join(lines[idx:])
+    prefix = (head + "\n" if head else "") + top_text + "\n" + ("\n" + tail if tail else "")
+    prefix = prefix.rstrip()
+
+new_content = prefix
+if new_content:
+    new_content += "\n\n"
+new_content += block
+if tables_text:
+    new_content += "\n" + tables_text + "\n"
+if suffix:
+    new_content += "\n" + suffix
+new_content = new_content.rstrip() + "\n"
+
+try:
+    tomllib.loads(new_content)
+except tomllib.TOMLDecodeError as exc:
+    sys.exit(f"[apply_harness_config] ERROR: merged Codex config does not parse ({exc}); {config_path} left unchanged")
+
+if new_content != content:
+    config_path.write_text(new_content)
 PY
 }
 
