@@ -12,7 +12,7 @@ QMD indexes markdown: scratch notes (`notes`: `*/*.md` in the agent scratch fold
 **Keyword, when speed matters or you know the exact words:** `qmd search "heavy-gate sync"`
 - 0.2-1 s, about 150 MB, no models. Good for names, identifiers and error strings. Every word must match, so use two or three distinctive ones. Cheap enough to repeat with different words.
 
-A Claude Code session that T3 ran has its T3 thread title as its heading and as `t3_title` in its frontmatter (also `t3_project`, and `t3_parent`/`t3_parent_title` for a sub-thread). Its user turns are headed `## owner` when Michael typed them and `## agent` when a coordinator or lead did; other user turns stay `## user`. To find only what Michael typed: `qmd search "owner" -c claude-sessions -n 5`, then read a hit with `qmd get "#docid" | awk '/^## /{p = /^## owner /} p'`. The word "owner" also appears in other text, so check the awk output.
+T3 sessions: heading is the thread title. `## owner` turns are Michael's, `## agent` the agents'. `qmd search owner -c claude-sessions`.
 
 Both take `-n 5` (result count) and `-c sessions` (one collection; repeat `-c` for several; names above). Results show `qmd://collection/path`, a `#docid` and a score.
 
