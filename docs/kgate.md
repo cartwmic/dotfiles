@@ -42,7 +42,7 @@ The pod's first process is `tini` (`tini -- sleep infinity`), so processes a gat
 
 69 covers: cluster unreachable, no or bad profile, image not pinned by digest, a secret or the pull token unreadable, a service the gate needs that the pod cannot provide, pod never started (wait ran out, image pull failed), tree hash differs, tool version differs, and a lost connection to a pod after CMD started.
 
-**kgate never runs CMD on this Mac, and never reruns a job that started.** A cluster outage shows as failed gates. A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart (it is empty when CMD ran to its end).
+**kgate never runs CMD on this Mac, and never reruns a job that started.** A cluster outage shows as failed gates. A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart (it is JSON `null` when CMD ran to its end, and a text reason otherwise).
 
 ## Record
 
