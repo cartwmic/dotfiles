@@ -1,0 +1,11 @@
+#!/bin/sh
+# Stand-in for the 1Password CLI, used by test_models_op_read.py. It is never the real op. It appends what it was called
+# with to $FAKE_OP_LOG (its HOME, whether OP_SERVICE_ACCOUNT_TOKEN is set, never the value, and the arguments), then
+# prints fixed JSON.
+set -eu
+{
+  printf 'HOME=%s\n' "$HOME"
+  if [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then echo 'token=set'; else echo 'token=unset'; fi
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "$FAKE_OP_LOG"
+echo '{"baseUrl":"https://provider.test/v1","api":"anthropic-messages","apiKey":"stand-in-key"}'

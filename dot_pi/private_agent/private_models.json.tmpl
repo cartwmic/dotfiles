@@ -1,7 +1,18 @@
 {{- $privateProvider := dict -}}
 {{- $_ := includeTemplate "require_work_data" . -}}
 {{- if and (eq .profile "axon-work-computer") (hasKey . "privatePiProviderRef") -}}
-{{-   $privateProvider = output "op" "read" .privatePiProviderRef | fromJson -}}
+{{- /* Service account only. The op shim runs the real op under an empty HOME, so the desktop app is never reached.
+       Without a token the shim would fall back to the app, so the render stops first and calls nothing. Read fresh on
+       every render; no cache, so a rotated key shows up at once. docs/profiles.md, "1Password service-account token". */ -}}
+{{-   $opToken := env "OP_SERVICE_ACCOUNT_TOKEN" -}}
+{{-   $tokenFile := joinPath .chezmoi.homeDir ".config" "agent-harness" "op-service-token" -}}
+{{-   if and (not $opToken) (stat $tokenFile) -}}
+{{-     $opToken = output "cat" $tokenFile | trim -}}
+{{-   end -}}
+{{-   if not $opToken -}}
+{{-     fail (printf "private_models.json: no 1Password service-account token. Set OP_SERVICE_ACCOUNT_TOKEN, or write it to %s (mode 0600). See docs/profiles.md, 1Password service-account token." $tokenFile) -}}
+{{-   end -}}
+{{-   $privateProvider = output "sh" (joinPath .chezmoi.sourceDir "dot_pi" "private_agent" "bin" "executable_op") "read" .privatePiProviderRef | fromJson -}}
 {{- end -}}
 {{- /* Work GLM 5.3 Flash, routed through the work LLM gateway with the user's own key.
        URL, key ref and model id live in local chezmoi data (workGlmBaseUrl, workGlmKeyRef,
