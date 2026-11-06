@@ -53,8 +53,6 @@ otherwise it stops before apply. Even dry-runs invoke configured source-read
 hooks; see [hook preflight](./AGENTS.md#workflow). The minimal config below
 omits that hook.
 
-Before the first `chezmoi apply`, add the local data keys your profile needs to the `data:` block of `~/.config/chezmoi/chezmoi.yaml`. A missing key stops apply and names it; the list is in [Local data keys](./docs/profiles.md#local-data-keys).
-
 ```bash
 (
 set -eu
@@ -79,9 +77,11 @@ if [ "$(uname -s)" = Linux ]; then
 fi
 mkdir -p "$(dirname "$config")"
 printf 'data:\n  profile: "%s"\n' "$profile" > "$config"
-sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" init --apply cartwmic
+sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" init cartwmic
 ) && exec zsh
 ```
+
+Then add the local data keys your profile needs to the `data:` block of `~/.config/chezmoi/chezmoi.yaml`. A missing key stops apply and names it; the list is in [Local data keys](./docs/profiles.md#local-data-keys). Then run `"$HOME/.local/bin/chezmoi" apply`.
 
 Complete the applicable [manual steps](#manual-steps) after installation.
 
