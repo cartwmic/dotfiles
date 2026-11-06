@@ -169,6 +169,11 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 
 {{- if ne .chezmoi.os "darwin" }}
+# Chromium wrapper (viz and Pi launch_browser find "chromium" on PATH): macOS only, both desktop profiles. The path it runs is the macOS arm64 Playwright cache.
+.local/bin/chromium
+{{- end }}
+
+{{- if ne .chezmoi.os "darwin" }}
 # Agent browser (agent-harness README, "Agent browser"): macOS only, both desktop profiles. The Chrome launcher; the MCP entry is gated the same way in servers.json.tmpl.
 .local/bin/agent-chrome
 {{- end }}
@@ -239,6 +244,12 @@ Library/LaunchAgents/local.qmd-refresh.plist
 .config/pnpm/**
 Library/Preferences/pnpm
 Library/Preferences/pnpm/**
+# Agent scratch on the Workshop SSD (docs/agent-scratch.md): personal macOS only, because /Volumes/Workshop is that Mac's disk. The env file
+# dot_zshenv sources (without it that line does nothing), the script that makes its directory, and the ~/tmp move script.
+.config/agent-scratch
+.config/agent-scratch/**
+81_agent_scratch_workshop.sh
+.local/user_scripts/agent_tmp_move.py
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 # Anthropic stalls are only seen on the work profile.

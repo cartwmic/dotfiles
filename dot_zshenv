@@ -31,6 +31,10 @@ if [[ -r "$HOME/.config/agent-harness/op-service-token" ]]; then
   export OP_SERVICE_ACCOUNT_TOKEN="$(<"$HOME/.config/agent-harness/op-service-token")"
 fi
 
+# Agent scratch on the Workshop SSD (AGENT_TMP): personal Mac only. The file is not deployed on other profiles, so this
+# line does nothing there. See docs/agent-scratch.md.
+[ -f "$HOME/.config/agent-scratch/workshop.env" ] && . "$HOME/.config/agent-scratch/workshop.env"
+
 # Source machine-local overrides (not managed by chezmoi)
 [ -f "$HOME/.zshenv.local" ] && . "$HOME/.zshenv.local"
 

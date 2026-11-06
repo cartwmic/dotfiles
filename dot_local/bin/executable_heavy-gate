@@ -16,7 +16,12 @@
 #   heavy-gate priorities               print the priorities file, the holders and the waiters with their priority
 #   heavy-gate priority PATTERN NUMBER  set (or update) one rule in the priorities file; a new rule goes first, so it wins
 #
-# The rules, all of which must hold for every start. Only memory pressure gates a start (owner decision, 2026-10-26):
+# The rules, all of which must hold for every start. Memory pressure and free disk space gate a start (memory only until 2026-11-06, owner decision 2026-10-26):
+#   free disk space >= the floor        the volume that holds $HOME (`df -k "$HOME"`; on macOS /System/Volumes/Data) has at least
+#   HEAVY_GATE_MIN_FREE_GB free (a number, default 15; GB are 1024^3 bytes). Read once per try, first, before anything is taken.
+#   Under it, or unreadable, the try is refused with one line: "REFUSED: 9.8 GB free on /System/Volumes/Data, under the 15 GB floor;
+#   free space and retry". Why: on 2026-11-06 the data volume hit 99% (5.2 GiB free) and journeys failed with "database or disk is full".
+#   Freeing space is not something this script does, so a job with --wait keeps trying until the deadline in case something else frees it.
 #   memory pressure level 1 or 2        memory free >= 30% (the kernel's own pressure figure, as memory_pressure reports it)
 #   (owner decision 2026-10-30: admit at level 2 when free >= 30%. Level 1 is normal, 2 warn, 4 critical; MAX_PRESSURE_LEVEL=2,
 #   so level 4, or any level that is not a whole number from 1 to 2, refuses)
@@ -79,9 +84,10 @@
 # recycled pid keeps the slot held until it exits.
 #
 # Exit status: 0 allowed (or CMD's own status), 1 refused, 75 still refused after --wait, 2 usage / unsupported system,
-# 137 CMD was stopped by the memory watchdog (a job that had already exited 0 keeps 0).
+# 137 CMD was stopped by the memory watchdog (a job that had already exited 0 keeps 0),
+# 76 refused for free disk space (the disk floor; the last try's reason, for a check and for a job whose --wait ran out).
 #
-# Environment: HEAVY_GATE_SLOTS the slot limit, HEAVY_GATE_SLOTS_FILE its file, HEAVY_GATE_PRIORITY see above, HEAVY_GATE_PRIORITIES the file.
+# Environment: HEAVY_GATE_MIN_FREE_GB the disk floor in GB (15), HEAVY_GATE_SLOTS the slot limit, HEAVY_GATE_SLOTS_FILE its file, HEAVY_GATE_PRIORITY see above, HEAVY_GATE_PRIORITIES the file.
 # The central rank file is WORKSTREAM_RANK_FILE (read by workstream-rank), else ~/.local/share/coordinator/rank.
 # For tests: HEAVY_GATE_RANK_TIMEOUT seconds the reader may take (2), HEAVY_GATE_CHECK_WINDOW seconds between the two readings (20), HEAVY_GATE_POLL seconds between tries while waiting
 # (15), HEAVY_GATE_LOCK the slot 1 path (/tmp/heavy-gate-<uid>.lock; the other files are named from it).
@@ -89,6 +95,8 @@
 set -eu
 
 MEM_FREE_MIN_PCT=30
+EXIT_DISK=76
+MIN_FREE_GB=${HEAVY_GATE_MIN_FREE_GB:-15}
 MAX_PRESSURE_LEVEL=2  # owner decision 2026-10-30: admit at level 2 (warn) when free >= 30%; level 4 (critical) refuses
 CHECK_WINDOW=${HEAVY_GATE_CHECK_WINDOW:-20}
 POLL=${HEAVY_GATE_POLL:-15}
@@ -119,6 +127,18 @@ meets() { number "$1" && awk -v v="$1" -v l="$3" -v op="$2" 'BEGIN { exit !(op =
 
 # $1 pressure level: true when it is a whole number from 1 to MAX_PRESSURE_LEVEL
 level_ok() { case $1 in '' | *[!0-9]*) return 1 ;; esac; awk -v v="$1" -v m="$MAX_PRESSURE_LEVEL" 'BEGIN { exit !(v + 0 >= 1 && v + 0 <= m + 0) }'; }
+
+# The disk floor. Prints the one REFUSED line and returns 1 when the volume holding $HOME has less than MIN_FREE_GB free or cannot be read.
+# df prints the available KB in field 4 and the mount point after the last field that ends in '%' (macOS: %iused; Linux: Use%).
+disk_free() { df -k "$HOME" 2>/dev/null | awk 'NR == 2 { for (i = NF; i > 1; i--) if ($i ~ /%$/) break; m = $(i + 1); for (j = i + 2; j <= NF; j++) m = m " " $j; print $4, m; exit }'; }
+disk_rule() {
+  v=$(disk_free); kb=${v%% *}; mnt=${v#* }
+  floor_kb=$(awk -v g="$MIN_FREE_GB" 'BEGIN { printf "%d", g * 1048576 }')
+  if meets "$kb" ge "$floor_kb"; then return 0; fi
+  if number "$kb"; then log REFUSED "$(awk -v k="$kb" 'BEGIN { printf "%.1f", k / 1048576 }') GB free on $mnt, under the $MIN_FREE_GB GB floor; free space and retry"
+  else log REFUSED "free space on the volume that holds $HOME is unreadable; free space and retry"; fi
+  return 1
+}
 
 # The memory rules. Prints one line per broken rule; returns 1 if any is broken. The only figures that gate a start.
 memory_rules() {
@@ -413,6 +433,8 @@ watchdog_alive() {
 
 # One try. With $1 = 1 a slot is held on success and everything taken is dropped on refusal.
 try_gate() {
+  DISK_REFUSED=0
+  disk_rule || { DISK_REFUSED=1; return 1; }
   resolve_slots; warn_slots
   if [ "$1" = 1 ]; then
     PRIORITY=$(resolve_priority); write_entry waiting
@@ -441,15 +463,19 @@ while [ $# -gt 0 ]; do
     *) log ERROR "unknown argument: $1"; usage ;;
   esac
 done
+# --wait ran out: 76 if the last try was refused for disk space, else 75
+give_up() { if [ "$DISK_REFUSED" = 1 ]; then exit "$EXIT_DISK"; fi; exit 75; }
 case $WAIT in '' | *[!0-9]*) log ERROR "--wait takes a whole number of seconds"; exit 2 ;; esac
 if ! number "$CHECK_WINDOW" || ! number "$POLL"; then log ERROR "HEAVY_GATE_CHECK_WINDOW and HEAVY_GATE_POLL must be numbers"; exit 2; fi
+number "$MIN_FREE_GB" || { log ERROR "HEAVY_GATE_MIN_FREE_GB must be a number of GB"; exit 2; }
 resolve_slots
 [ "$SLOTS_ENV_BAD" = 0 ] || { log ERROR "HEAVY_GATE_SLOTS must be a whole number, 1 or more"; exit 2; }
 case ${HEAVY_GATE_PRIORITY:-0} in '' | *[!0-9]* | ???????*) log ERROR "HEAVY_GATE_PRIORITY must be a whole number of at most 6 digits (lower is more important)"; exit 2 ;; esac
 [ "$(uname -s)" = Darwin ] || { log ERROR "macOS only"; exit 2; }
 if [ $# -eq 0 ]; then
-  log INFO "check: a start is admitted on memory pressure only: level 1 to $MAX_PRESSURE_LEVEL and memory free >= $MEM_FREE_MIN_PCT% on two readings ${CHECK_WINDOW}s apart, and a free slot. Not checked: free swap, Swapouts, load average."
+  log INFO "check: a start is admitted on free disk space and memory pressure only: >= $MIN_FREE_GB GB free on the volume that holds \$HOME, level 1 to $MAX_PRESSURE_LEVEL and memory free >= $MEM_FREE_MIN_PCT% on two readings ${CHECK_WINDOW}s apart, and a free slot. Not checked: free swap, Swapouts, load average."
   if try_gate 0; then log INFO "allowed"; exit 0; fi
+  [ "$DISK_REFUSED" = 0 ] || exit "$EXIT_DISK"
   exit 1
 fi
 
@@ -461,11 +487,11 @@ trap 'drop_guard; drop_admit; drop_slot; unregister; rm -f "$LOCK.stopped.$$"' E
 trap 'exit 143' INT TERM HUP
 until try_gate 1; do
   left=$(( deadline - $(date +%s) ))
-  if [ "$left" -le 0 ]; then log WARN "still refused after ${WAIT}s; not running: $*"; exit 75; fi
+  if [ "$left" -le 0 ]; then log WARN "still refused after ${WAIT}s; not running: $*"; give_up; fi
   nap=$POLL; if [ "$left" -lt "${POLL%.*}" ]; then nap=$left; fi
   sleep "$nap"
   # no new try may start at or after the deadline
-  if [ "$(date +%s)" -ge "$deadline" ]; then log WARN "still refused after ${WAIT}s; not running: $*"; exit 75; fi
+  if [ "$(date +%s)" -ge "$deadline" ]; then log WARN "still refused after ${WAIT}s; not running: $*"; give_up; fi
 done
 write_entry running
 log INFO "allowed; running: $*"
