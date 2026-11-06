@@ -1,8 +1,8 @@
 // Browser port: drive Chromium over the DevTools Protocol on
 // --remote-debugging-pipe (fd 3: we write, fd 4: Chromium writes; messages are
 // NUL-terminated JSON). No npm packages and no debugging port.
-import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { closeSync, mkdtempSync, openSync, readSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -45,6 +45,28 @@ export function locateChromium(env) {
   const found = which('chromium', env.PATH || '');
   if (!found) throw new VizError('missing_dependency', 'no chromium on PATH; set VIZ_CHROMIUM to a Chromium or Chrome binary');
   return found;
+}
+
+// The managed ~/.local/bin/chromium wrapper carries this text; only then does it take --ensure.
+const ENSURE_MARKER = 'chromium-wrapper: --ensure';
+
+/**
+ * Run `chromium --ensure` (installs the pinned Playwright build if missing, then exits 0) when the chromium
+ * on PATH is the managed wrapper. Any other Chromium would launch on an unknown flag, so it is never asked.
+ * Returns true when the wrapper ran and exited 0.
+ */
+export function ensureChromium(env) {
+  if (env.VIZ_CHROMIUM) return false;
+  const found = which('chromium', env.PATH || '');
+  if (!found) return false;
+  const head = Buffer.alloc(2048);
+  let n = 0;
+  try {
+    const fd = openSync(found, 'r');
+    try { n = readSync(fd, head, 0, head.length, 0); } finally { closeSync(fd); }
+  } catch { return false; }
+  if (!head.subarray(0, n).toString('latin1').includes(ENSURE_MARKER)) return false;
+  return spawnSync(found, ['--ensure'], { stdio: ['ignore', 'ignore', 'inherit'] }).status === 0;
 }
 
 /**

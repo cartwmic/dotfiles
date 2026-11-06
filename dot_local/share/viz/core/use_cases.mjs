@@ -6,7 +6,7 @@
 //             appendAction(record) }
 //   input   { read(file) -> { bytes, text, path, baseHref } }   file '-' means stdin (path '-', no baseHref)
 //   browser { locate() -> path, screenshot({ chromium, pagePath, width, scale, clipTo, pad }) -> { png, pageErrors } }
-//   mermaid { locate() -> { mmdc, browser }, toSvg(source, located) -> svg, version(located) -> string|null }
+//   mermaid { locate() -> { mmdc, browser, ensured? }, toSvg(source, located) -> svg, version(located) -> string|null }
 //   site    { locate() -> base URL, put(path, bytes, contentType) -> HTTP status }   path is '<id>/<name>'
 //   clock   { now() -> epoch ms }
 //   random  { hex() -> short random hex string }
@@ -39,7 +39,7 @@ async function render(args, ports, ctx) {
       ctx.step({ step: 'mmdc', ok: false, mmdc: located.mmdc, message: e.message });
       throw e;
     }
-    ctx.step({ step: 'mmdc', ok: true, mmdc: located.mmdc });
+    ctx.step({ step: 'mmdc', ok: true, mmdc: located.mmdc, ...(located.ensured ? { ensured: true } : {}) });
     clipTo = '#viz-root > svg';
   } else if (req.as === 'svg') {
     page = wrapperPage(input.text, input.baseHref);
