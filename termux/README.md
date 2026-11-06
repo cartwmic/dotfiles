@@ -124,8 +124,10 @@ from the 1Password document `chezmoi personal.yaml (personal machines)` in the
 `developer` vault, using the token in `~/.config/agent-harness/op-service-token`.
 No other key goes to the phone. The values go over SSH stdin, are never printed,
 and a missing document or key stops the run before the phone is touched, naming
-the key. An existing phone config is left as it is; delete it first to have it
-rewritten.
+the key. If the phone already has a `chezmoi.yaml` with `profile: termux`, the
+script adds only the termux keys it lacks, keeps every key already there, and
+writes through a 0600 temp file renamed into place. A rerun adds nothing. A
+different profile stops the run, naming it, with nothing written.
 
 ```bash
 python3 termux/bootstrap-phone.py provision --serial "$SERIAL" \

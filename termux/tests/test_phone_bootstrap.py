@@ -21,6 +21,7 @@ _spec.loader.exec_module(_bootstrap)
 BootstrapError = _bootstrap.BootstrapError
 select_termux_data = _bootstrap.select_termux_data
 render_chezmoi_yaml = _bootstrap.render_chezmoi_yaml
+merge_chezmoi_yaml = _bootstrap.merge_chezmoi_yaml
 FAKE_TOKEN = "fake-op-token-not-real"
 HOSTS = ("server", "macbook", "laptop", "macKvm", "whonixGw", "whonixWs")
 # Fake local data document in the owner's snippet shape. The extra keys must never reach the phone.
@@ -119,7 +120,7 @@ if name=='ssh':
             finish(output=state['new_public']+'\t'+state['new_address']+'\n')
         finish(output='OK\n')
     if '-G' in args: finish(output='hostname 198.51.100.8\nuser u0_a999\n')
-    command=args[-1]; note('phone ssh '+('config-write' if 'cat > ~/.config/chezmoi' in command else 'key-stream' if 'cat >' in command else ('macbook_login' if 'zsh -lic' in command else command[:65])))
+    command=args[-1]; note('phone ssh '+('config-write' if 'mktemp' in command and 'chezmoi.yaml' in command else 'key-stream' if 'cat >' in command else ('macbook_login' if 'zsh -lic' in command else command[:65])))
     if command=='true' and not state['ready']: finish(255)
     if 'ssh-keygen -lf ~/.ssh/' in command:
         key=re.search(r'ssh-keygen -lf ~/.ssh/([\w-]+)',command).group(1)
@@ -129,9 +130,10 @@ if name=='ssh':
         state['keys'][key]=os.environ['PHONE_TEST_HOMELAB'] if key=='homelab' else os.environ['PHONE_TEST_WHONIX']
         _secret=sys.stdin.read(); finish()
     if 'chezmoi.yaml' in command and 'cat ~/.config' in command:
-        finish(output=('data:\n  profile: "termux"\n' if state['profile'] else ''))
-    if 'umask 077' in command and 'cat > ~/.config/chezmoi/chezmoi.yaml' in command:
-        state['profile']=True; state['phone_yaml']=sys.stdin.read(); state['phone_yaml_argv']=' '.join(args); finish()
+        finish(output=state.get('phone_yaml', 'data:\n  profile: "termux"\n' if state['profile'] else ''))
+    if 'mktemp' in command and 'chezmoi.yaml' in command:
+        state['profile']=True; state['phone_yaml']=sys.stdin.read(); state['phone_yaml_argv']=' '.join(args)
+        state['yaml_writes']=state.get('yaml_writes',0)+1; state['yaml_write_script']=command; finish()
     if 'chezmoi' in command and 'init' in command:
         state['profile']=True
         if os.environ.get('PHONE_TEST_PHONE_TOKEN')=='1':
@@ -483,13 +485,62 @@ class PhoneCLITest(unittest.TestCase):
                 self.assertFalse(any(c.startswith('phone ssh') for c in self.state['calls']))
                 self.assertNotIn('phone_yaml', self.state)
 
-    def test_existing_phone_config_is_left_alone(self):
+    def test_existing_termux_config_gets_only_the_missing_keys(self):
         self.ready_phone()
-        self.state['profile'] = True
+        existing = ('data:\n  profile: "termux"\n  note: keep-me\n  sshHosts:\n'
+                    '    server: {address: "kept-server", user: "kept-user"}\n'
+                    '    laptop:\n      address: "kept-laptop"\n      user: "kept-luser"\n')
+        self.state['phone_yaml'] = existing
         self.save()
         result = self.invoke(*self.provision_args())
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn('phone_yaml', self.state)
+        written = self.state['phone_yaml']
+        self.assertEqual(self.state['yaml_writes'], 1)
+        for kept in existing.splitlines():
+            self.assertIn(kept, written.splitlines())  # every existing line untouched
+        self.assertNotIn("10.99.0.1", written)  # server not overwritten
+        self.assertNotIn("10.99.0.3", written)  # laptop not overwritten
+        for host in ("macbook", "macKvm", "whonixGw", "whonixWs"):
+            self.assertIn(f"    {host}: {{address:", written)
+        self.assertEqual(written.count("    server:"), 1)
+        self.assertEqual(written.count("    laptop:"), 1)
+        self.assertEqual(written, merge_chezmoi_yaml(existing, select_termux_data(FAKE_DOC))[0])
+        # atomic: 0600 temp file, renamed into place; values on stdin only
+        script = self.state['yaml_write_script']
+        self.assertIn("umask 077", script)
+        self.assertIn("mktemp", script)
+        self.assertIn("chmod 600", script)
+        self.assertIn("mv ", script)
+        self.assertNotIn("10.99.", self.state['phone_yaml_argv'])
+        self.assertNotIn("10.99.", result.stdout + result.stderr)
+        self.assertIn("added sshHosts.macbook", result.stdout)
+        # a second run is a no-op
+        again = self.invoke(*self.provision_args())
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(self.state['yaml_writes'], 1)
+        self.assertEqual(self.state['phone_yaml'], written)
+
+    def test_profile_only_config_is_filled_in_and_then_left_alone(self):
+        self.ready_phone()
+        self.state['phone_yaml'] = 'data:\n  profile: "termux"\n'
+        self.save()
+        self.assertEqual(self.invoke(*self.provision_args()).returncode, 0)
+        self.assertEqual(sorted(self.state['phone_yaml'].splitlines()),
+                         sorted(render_chezmoi_yaml(select_termux_data(FAKE_DOC)).splitlines()))
+        self.assertEqual(self.invoke(*self.provision_args()).returncode, 0)
+        self.assertEqual(self.state['yaml_writes'], 1)
+
+    def test_non_termux_profile_stops_with_no_write(self):
+        self.ready_phone()
+        self.state['phone_yaml'] = 'data:\n  profile: "personal"\n'
+        self.save()
+        result = self.invoke(*self.provision_args())
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("personal", result.stderr)
+        self.assertNotIn('yaml_writes', self.state)
+        self.assertEqual(self.state['phone_yaml'], 'data:\n  profile: "personal"\n')
+        self.assertFalse(any(c in ('op read ref', 'phone ssh key-stream', 'phone ssh config-write') or 'init --apply' in c
+                             for c in self.state['calls']))
 
 
 class LocalDataTest(unittest.TestCase):
@@ -513,6 +564,28 @@ class LocalDataTest(unittest.TestCase):
         with self.assertRaises(BootstrapError) as caught:
             select_termux_data(doc)
         self.assertIn("sshHosts.whonixWs", str(caught.exception))
+
+    def test_merge_adds_sshhosts_block_when_absent_and_keeps_other_keys(self):
+        existing = 'data:\n  profile: "termux"\n  other: {a: 1}\nhooks:\n  x: y\n'
+        merged, added = merge_chezmoi_yaml(existing, select_termux_data(FAKE_DOC))
+        self.assertEqual(added, list(HOSTS))
+        self.assertTrue(merged.startswith('data:\n  sshHosts:\n    server: {address'))
+        for kept in existing.splitlines():
+            self.assertIn(kept, merged.splitlines())
+
+    def test_merge_stops_on_a_host_missing_a_field_and_on_non_block_sshhosts(self):
+        data = select_termux_data(FAKE_DOC)
+        for key, existing in (("sshHosts.macbook without user", 'data:\n  profile: "termux"\n  sshHosts:\n    macbook: {address: "a"}\n'),
+                              ("not a block", 'data:\n  profile: "termux"\n  sshHosts: {}\n'),
+                              ("no data: block", 'profile: "termux"\n')):
+            with self.subTest(key=key), self.assertRaises(BootstrapError) as caught:
+                merge_chezmoi_yaml(existing, data)
+            self.assertIn(key.split(" ", 1)[0] if key.startswith("sshHosts") else key, str(caught.exception))
+
+    def test_merge_does_not_pick_up_a_host_nested_elsewhere(self):
+        existing = 'data:\n  profile: "termux"\n  other:\n    server: {address: "x", user: "y"}\n'
+        merged, added = merge_chezmoi_yaml(existing, select_termux_data(FAKE_DOC))
+        self.assertIn("server", added)
 
     @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi is required to render the phone profile")
     def test_written_yaml_renders_the_termux_ssh_config(self):

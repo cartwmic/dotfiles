@@ -96,6 +96,85 @@ def render_chezmoi_yaml(selected):
     return "\n".join(out) + "\n"
 
 
+def _indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def _significant(line):
+    return bool(line.strip()) and not line.lstrip().startswith("#")
+
+
+def merge_chezmoi_yaml(existing, selected):
+    """Add the termux sshHosts entries an existing phone chezmoi.yaml lacks. Returns (text, added hosts).
+
+    Every line already present is kept as it is; nothing is overwritten. The profile must be termux.
+    A host that is present but lacks a field is an error (the key is named), not a rewrite.
+    """
+    if not existing.strip():
+        return render_chezmoi_yaml(selected), list(TERMUX_SSH_HOSTS)
+    lines = existing.splitlines()
+    profile = next((m for m in (re.fullmatch(r"\s*profile:\s*[\"']?([^\"'\s#]*)[\"']?\s*(#.*)?", l) for l in lines) if m), None)
+    if not profile or profile.group(1) != "termux":
+        found = profile.group(1) if profile else "(none)"
+        raise BootstrapError(f"existing phone chezmoi profile is {found}, not termux; nothing was changed")
+    data = next((i for i, l in enumerate(lines) if re.fullmatch(r"data:\s*(#.*)?", l)), None)
+    if data is None:
+        raise BootstrapError("existing phone chezmoi.yaml has no data: block; cannot add keys, nothing was changed")
+    block = []  # line indexes of the data: block
+    for i in range(data + 1, len(lines)):
+        if _significant(lines[i]) and _indent(lines[i]) == 0:
+            break
+        block.append(i)
+    first = next((i for i in block if _significant(lines[i])), None)
+    child = _indent(lines[first]) if first is not None else 2
+    hosts_at = next((i for i in block if _significant(lines[i]) and _indent(lines[i]) == child
+                     and re.match(r"sshHosts:", lines[i].lstrip())), None)
+    present = {}
+    host_indent = child + 2
+    if hosts_at is not None:
+        if not re.fullmatch(r"\s*sshHosts:\s*(#.*)?", lines[hosts_at]):
+            raise BootstrapError("existing phone sshHosts is not a block; cannot add keys, nothing was changed")
+        entries = []
+        for i in block:
+            if i > hosts_at and _significant(lines[i]):
+                if _indent(lines[i]) <= child:
+                    break
+                entries.append(i)
+        if entries:
+            host_indent = _indent(lines[entries[0]])
+        for n, i in enumerate(entries):
+            match = re.fullmatch(r"\s*([A-Za-z0-9_]+):\s*(\{(.*)\})?\s*(#.*)?", lines[i])
+            if not match or _indent(lines[i]) != host_indent:
+                continue
+            if match.group(2) is not None:
+                fields = set(re.findall(r"(?:^|[{,])\s*([A-Za-z0-9_]+):", "{" + match.group(3)))
+            else:
+                fields = set()
+                for j in entries[n + 1:]:
+                    if _indent(lines[j]) <= host_indent:
+                        break
+                    sub = re.match(r"\s*([A-Za-z0-9_]+):", lines[j])
+                    if sub:
+                        fields.add(sub.group(1))
+            present[match.group(1)] = fields
+    for host in TERMUX_SSH_HOSTS:
+        for field in TERMUX_HOST_FIELDS:
+            if host in present and field not in present[host]:
+                raise BootstrapError(f"existing phone config has sshHosts.{host} without {field}; nothing was changed")
+    missing = [h for h in TERMUX_SSH_HOSTS if h not in present]
+    if not missing:
+        return existing, []
+    new = []
+    for host in missing:
+        fields = ", ".join(f"{f}: {json.dumps(selected[host][f])}" for f in TERMUX_HOST_FIELDS)
+        new.append(f"{' ' * host_indent}{host}: {{{fields}}}")
+    if hosts_at is not None:
+        lines[hosts_at + 1:hosts_at + 1] = new
+    else:
+        lines[data + 1:data + 1] = [f"{' ' * child}sshHosts:", *new]
+    return "\n".join(lines) + "\n", missing
+
+
 def read_termux_data():
     env = os.environ.copy()
     if OP_TOKEN_FILE.is_file():
@@ -356,19 +435,23 @@ def provision(args):
     with usb_connection(args.serial, args.start_ui, args.packages_ready) as (port, user):
         if source == "phone" and not args.ready_phone_token:
             raise BootstrapError("phone-side retrieval needs --ready-phone-token AFTER you copy the service token on-device")
+        existing = text(phone_ssh(args.serial, port, user, "sh", "-c",
+                                  "test -e ~/.config/chezmoi/chezmoi.yaml && cat ~/.config/chezmoi/chezmoi.yaml || true"))
+        # Decide the config first: a non-termux profile or an unmergeable file stops before anything is written.
+        config, added = merge_chezmoi_yaml(existing, local_data)
         if source == "mac":
             for name, (fingerprint, ref) in FINGERPRINTS.items():
                 install_key(args.serial, port, user, name, fingerprint, ref)
-        existing = text(phone_ssh(args.serial, port, user, "sh", "-c",
-                                  "test -e ~/.config/chezmoi/chezmoi.yaml && cat ~/.config/chezmoi/chezmoi.yaml || true"))
-        if existing and not re.search(r'^\s*profile:\s*["\']?termux["\']?\s*$', existing, re.M):
-            raise BootstrapError("existing chezmoi profile is not termux; refusing to replace it")
-        if not existing:
-            # The values travel on SSH stdin, never argv.
+        if added:
+            # The values travel on SSH stdin, never argv. Temp file is 0600, then renamed into place.
             phone_ssh(args.serial, port, user, "sh", "-c",
-                      "mkdir -p ~/.config/chezmoi; chmod 700 ~/.config/chezmoi; "
-                      "umask 077; cat > ~/.config/chezmoi/chezmoi.yaml",
-                      data=render_chezmoi_yaml(local_data).encode())
+                      "set -eu; umask 077; mkdir -p ~/.config/chezmoi; chmod 700 ~/.config/chezmoi; "
+                      "tmp=$(mktemp ~/.config/chezmoi/.chezmoi.yaml.XXXXXX); trap 'rm -f \"$tmp\"' EXIT; "
+                      "cat > \"$tmp\"; chmod 600 \"$tmp\"; mv \"$tmp\" ~/.config/chezmoi/chezmoi.yaml",
+                      data=config.encode())
+            print("phone chezmoi.yaml: added " + ", ".join(f"sshHosts.{h}" for h in added))
+        else:
+            print("phone chezmoi.yaml: termux keys already present, left as is")
         print("phone owns its configuration: chezmoi init --apply (HTTPS, profile termux)")
         phone_ssh(args.serial, port, user, "chezmoi", "init", "--apply", "https://github.com/cartwmic/dotfiles.git")
         for name, (fingerprint, _) in FINGERPRINTS.items():
