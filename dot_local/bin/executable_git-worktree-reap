@@ -10,14 +10,15 @@
 # A worktree is removed only when all of these hold:
 #   1. its HEAD is merged into origin/main. Merged means either `git merge-base --is-ancestor` says so (origin is fetched first, and if
 #      the fetch fails the local origin/main is used, with a warning), or its PR is merged and the branch tip equals that PR's head
-#      (`gh pr list --head BRANCH --state merged --json headRefOid,number`), which is how a squash or rebase merge shows: nothing was
+#      (`gh pr list --head BRANCH --base main --state merged --json headRefOid,number`), which is how a squash or rebase merge shows: nothing was
 #      committed after the merge. Without gh the ancestor rule stands alone and a branch that is not an ancestor is
 #      "kept: merged state unknown (no gh)".
 #   2. it is not brand new. A worktree with no commits of its own (its HEAD is on origin/main's first-parent line) may be a builder's
 #      fresh worktree waiting between tool calls, so it is kept until it is older than --min-age hours (default 24), judged by the newer
-#      of the worktree's `.git` file and its index. "kept: no own commits, younger than 24h".
+#      of the worktree's `.git` file and its index. "kept: no own commits or fast-forward merged, younger than 24h" (a fresh branch and a fast-forward-merged one look the same).
 #   3. no process has a file open in it (`lsof +D`, which counts a shell whose current directory is inside)
-#   4. it has no modifications: `git worktree remove` runs without --force, and git refuses a tree with changes or untracked files
+#   4. it has no modifications: `git status --porcelain --untracked-files=all` is empty (whatever status.showUntrackedFiles says), and
+#      `git worktree remove` runs without --force. Ignored files (a local .env, node_modules) are not modifications: they go with the worktree.
 # It prints one line per worktree:
 #   removed PATH (BRANCH)            gone (with --dry-run: "would remove")
 #   kept PATH: REASON                left as it was
@@ -83,7 +84,7 @@ old_enough() {
 # Not an ancestor of origin/main: merged anyway if gh says the branch's PR is merged with the branch tip as its head. Else prints why it is kept.
 pr_merged() {
   if ! command -v "$GH" >/dev/null 2>&1; then printf 'kept %s: merged state unknown (no gh)\n' "$path"; return 1; fi
-  if ! prs=$(cd "$main_checkout" && "$GH" pr list --head "$branch" --state merged --json headRefOid,number 2>&1); then
+  if ! prs=$(cd "$main_checkout" && "$GH" pr list --head "$branch" --base main --state merged --json headRefOid,number 2>&1); then
     printf 'kept %s: merged state unknown (gh failed: %s)\n' "$path" "$(printf '%s' "$prs" | head -n 1)"; return 1
   fi
   if printf '%s' "$prs" | grep -Eq "\"headRefOid\": *\"$sha\""; then return 0; fi
@@ -100,13 +101,13 @@ reap_one() {
   if [ -z "$branch" ]; then printf 'kept %s: detached HEAD, no branch to check\n' "$path"; return 0; fi
   if [ ! -d "$path" ]; then printf 'kept %s: directory is missing (git worktree prune clears it)\n' "$path"; return 0; fi
   if git -C "$main_checkout" merge-base --is-ancestor "$sha" refs/remotes/origin/main 2>/dev/null; then
-    if on_main_line && ! old_enough; then printf 'kept %s: no own commits, younger than %sh\n' "$path" "$MIN_AGE_H"; return 0; fi
+    if on_main_line && ! old_enough; then printf 'kept %s: no own commits or fast-forward merged, younger than %sh\n' "$path" "$MIN_AGE_H"; return 0; fi
   else
     pr_merged || return 0
   fi
   real=$(cd "$path" && pwd -P)
   if [ -n "$(lsof +D "$real" 2>/dev/null | head -n 2)" ]; then printf 'kept %s: a process has files open in it\n' "$path"; return 0; fi
-  if [ -n "$(git -C "$path" status --porcelain 2>/dev/null | head -n 1)" ]; then printf 'kept %s: has modifications\n' "$path"; return 0; fi
+  if [ -n "$(git -C "$path" status --porcelain --untracked-files=all 2>/dev/null | head -n 1)" ]; then printf 'kept %s: has modifications\n' "$path"; return 0; fi
   if [ "$DRY" = 1 ]; then printf 'would remove %s (%s)\n' "$path" "$name"; return 0; fi
   if err=$(git -C "$main_checkout" worktree remove "$path" 2>&1); then printf 'removed %s (%s)\n' "$path" "$name"
   else printf 'kept %s: git refused: %s\n' "$path" "$(printf '%s' "$err" | head -n 1)"; fi

@@ -13,8 +13,9 @@ import unittest
 from pathlib import Path
 
 FAKE_GH = """#!/bin/sh
-while [ $# -gt 0 ]; do case $1 in --head) br=$2; shift ;; esac; shift; done
+while [ $# -gt 0 ]; do case $1 in --head) br=$2; shift ;; --base) base=$2; shift ;; esac; shift; done
 echo "$br" >> "$FAKE/gh_calls"
+if [ "${base:-}" != main ]; then echo "[]"; exit 0; fi   # a PR into any other base is not a merge into main
 if [ -f "$FAKE/gh_fail" ]; then echo "gh: To get started with GitHub CLI, please run: gh auth login" >&2; exit 1; fi
 if [ -f "$FAKE/gh_$br.json" ]; then cat "$FAKE/gh_$br.json"; else echo "[]"; fi
 """
@@ -208,6 +209,16 @@ class WorktreeReap(unittest.TestCase):
         self.assertIn(f"kept {self.wt['unmerged']}: merged state unknown (gh failed: gh: To get started", result.stdout)
         self.assertTrue(self.wt["unmerged"].exists())
 
+    def test_the_pr_must_have_been_merged_into_main(self):
+        self.add("stacked", commit=True)
+        self.pr_merged("stacked", git(self.wt["stacked"], "rev-parse", "HEAD"))
+        result = self.reap(str(self.main))   # the fake gh answers only for --base main; this passes because the script asks for it
+        self.assertIn(f"removed {self.wt['stacked']} (stacked)", result.stdout)
+        mutant = self.mutant('"$branch" --base main', '"$branch"')
+        self.add("stacked2", commit=True)
+        self.pr_merged("stacked2", git(self.wt["stacked2"], "rev-parse", "HEAD"))
+        self.assertIn(f"kept {self.wt['stacked2']}: stacked2 not merged into origin/main", self.reap(str(self.main), script=mutant).stdout)
+
     # --- fresh worktrees ---
     def fresh(self, name="fresh"):
         path = self.root / "wt" / name
@@ -218,7 +229,7 @@ class WorktreeReap(unittest.TestCase):
     def test_a_fresh_worktree_with_no_commits_of_its_own_is_kept(self):
         path = self.fresh()
         result = self.reap(str(self.main))
-        self.assertIn(f"kept {path}: no own commits, younger than 24h", result.stdout)
+        self.assertIn(f"kept {path}: no own commits or fast-forward merged, younger than 24h", result.stdout)
         self.assertTrue(path.exists())
 
     def test_an_old_worktree_with_no_commits_of_its_own_is_removed(self):
@@ -269,14 +280,36 @@ class WorktreeReap(unittest.TestCase):
         self.assertIn(f"removed {self.wt['busy']} (busy)", result.stdout)
 
     def test_red_with_force_a_dirty_worktree_is_removed(self):
-        mutant = self.mutant('  if [ -n "$(git -C "$path" status --porcelain 2>/dev/null | head -n 1)" ]; then printf \'kept %s: has modifications\\n\' "$path"; return 0; fi\n', '')
+        mutant = self.mutant('  if [ -n "$(git -C "$path" status --porcelain --untracked-files=all 2>/dev/null | head -n 1)" ]; then printf \'kept %s: has modifications\\n\' "$path"; return 0; fi\n', '')
         mutant = self.mutant_on(mutant, 'worktree remove "$path"', 'worktree remove --force "$path"')
         result = self.reap(str(self.main), script=mutant)
         self.assertIn(f"removed {self.wt['dirty']} (dirty)", result.stdout)
 
+    def test_untracked_files_are_found_even_if_the_repo_hides_them(self):
+        git(self.main, "config", "status.showUntrackedFiles", "no")   # the config is shared by every worktree
+        (self.wt["merged"] / "notes.txt").write_text("not committed\n")
+        result = self.reap(str(self.main))
+        self.assertIn(f"kept {self.wt['merged']}: has modifications", result.stdout)
+        self.assertEqual((self.wt["merged"] / "notes.txt").read_text(), "not committed\n")
+
+    def test_red_without_untracked_files_all_a_hidden_untracked_file_is_deleted(self):
+        git(self.main, "config", "status.showUntrackedFiles", "no")
+        (self.wt["merged"] / "notes.txt").write_text("not committed\n")
+        mutant = self.mutant('"$path" status --porcelain --untracked-files=all', '"$path" status --porcelain')
+        result = self.reap(str(self.main), script=mutant)
+        self.assertIn(f"removed {self.wt['merged']} (merged)", result.stdout)
+
+    def test_ignored_files_go_with_the_worktree(self):
+        exclude = Path(git(self.wt["merged"], "rev-parse", "--git-common-dir")) / "info" / "exclude"
+        exclude.parent.mkdir(exist_ok=True)
+        exclude.write_text(".env\n")
+        (self.wt["merged"] / ".env").write_text("SECRET=1\n")
+        self.assertIn(f"removed {self.wt['merged']} (merged)", self.reap(str(self.main)).stdout)
+        self.assertFalse(self.wt["merged"].exists())
+
     def test_red_without_git_refusing_a_dirty_worktree_stays_kept_by_git(self):
         # the status pre-check is for the message and for --dry-run; git itself still refuses without --force
-        mutant = self.mutant('  if [ -n "$(git -C "$path" status --porcelain 2>/dev/null | head -n 1)" ]; then printf \'kept %s: has modifications\\n\' "$path"; return 0; fi\n', '')
+        mutant = self.mutant('  if [ -n "$(git -C "$path" status --porcelain --untracked-files=all 2>/dev/null | head -n 1)" ]; then printf \'kept %s: has modifications\\n\' "$path"; return 0; fi\n', '')
         result = self.reap(str(self.main), script=mutant)
         self.assertIn(f"kept {self.wt['dirty']}: git refused:", result.stdout)
         self.assertTrue(self.wt["dirty"].exists())
