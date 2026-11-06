@@ -231,6 +231,15 @@ Library/LaunchAgents/local.qmd-refresh.plist
 # /Volumes/Workshop exists only on the personal Mac; the script turns Spotlight off for it.
 80_spotlight_off_workshop.sh
 {{- end }}
+
+{{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
+# The pnpm store is on /Volumes/Workshop, which exists only on the personal Mac. pnpm 11 reads the global config from
+# ~/.config/pnpm when XDG_CONFIG_HOME is set (interactive shells) and from ~/Library/Preferences/pnpm when it is not (T3, launchd).
+.config/pnpm
+.config/pnpm/**
+Library/Preferences/pnpm
+Library/Preferences/pnpm/**
+{{- end }}
 {{- if ne .profile "axon-work-computer" }}
 # Anthropic stalls are only seen on the work profile.
 .pi/agent/extensions/anthropic-stall-retry
