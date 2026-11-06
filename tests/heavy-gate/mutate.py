@@ -96,7 +96,7 @@ GATE_MUTATIONS = [
     ("the check mode does not say the rule", '  log INFO "check: a start is admitted on free disk space', '  : log INFO "check: a start is admitted on free disk space'),
     ("the disk floor is not checked", '  disk_rule || { DISK_REFUSED=1; return 1; }', '  true || { DISK_REFUSED=1; return 1; }'),
     ("an unreadable disk figure counts as fine", 'mnt=${v#* }\n  if ! meets "$kb" ge "$floor_kb"; then', 'mnt=${v#* }\n  if ! meets "${kb:-999999999}" ge "$floor_kb"; then'),
-    ("an unreadable volume figure counts as fine", 'elif ! meets "$kb" ge "$floor_kb"; then', 'elif ! meets "${kb:-999999999}" ge "$floor_kb"; then'),
+    ("an unreadable volume figure counts as fine", 'elif ! meets "$kb" ge "$floor_kb"; then', 'elif number "$kb" && ! meets "$kb" ge "$floor_kb"; then'),
     ("a watched volume under the floor is admitted", 'elif ! meets "$kb" ge "$floor_kb"; then', 'elif false; then'),
     ("the volumes file is not read", 'VOLUMES_FILE=${HEAVY_GATE_VOLUMES_FILE:-$HOME/.config/heavy-gate/volumes}', 'VOLUMES_FILE=/dev/null'),
     ("the watched volumes are not checked", '  volumes=$(watched_volumes)\n', '  volumes=\n'),

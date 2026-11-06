@@ -476,6 +476,13 @@ class HeavyGate(unittest.TestCase):
         self.assertEqual(result.returncode, 76, result.stderr)
         self.assertIn("REFUSED: /Volumes/Workshop is not mounted; mount it and retry", result.stderr)
 
+    def test_a_watched_volume_whose_free_space_is_unreadable_refuses(self):
+        self.watch(self.WORKSHOP)
+        (self.fake / "df_Volumes_Workshop").write_text(DF_HEADER + "\n/dev/disk7s1 1 2 lots 99% 1 2 11% /Volumes/Workshop\n")
+        result = self.gate()
+        self.assertEqual(result.returncode, 76, result.stderr)
+        self.assertIn("REFUSED: free space on /Volumes/Workshop is unreadable; free space and retry", result.stderr)
+
     def test_every_broken_volume_gets_its_own_line(self):
         self.watch(self.WORKSHOP, "/Volumes/Other")
         self.set_free(9.8)
