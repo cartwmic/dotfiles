@@ -118,6 +118,14 @@ No npm packages. Only `publish` uses the network.
   scale, load the page (the original HTML file, else `page.html`), measure the content, then `Page.captureScreenshot`
   with a clip and `captureBeyondViewport`. A plain `--screenshot` would crop to
   the window size.
+  On macOS (both desktop profiles) `chromium` is the chezmoi-managed wrapper
+  `~/.local/bin/chromium` (source `dot_local/bin/executable_chromium.tmpl`). It runs
+  the Playwright Chrome for Testing build pinned in `.chezmoidata.toml`
+  (`playwrightChromium`: version `1.64.1`, build `1248`). If that build is
+  missing from the Playwright cache, it runs `npx -y playwright@1.64.1 install chromium`
+  once, then starts the browser. A failed install prints one `ERROR` line with that
+  command and exits 1. The first render after a cache cleanup is slower while it
+  downloads. Linux has no wrapper: set `VIZ_CHROMIUM` or put a Chromium on `PATH`.
 - **Mermaid:** `mmdc` on `PATH` (11.16.0, mise task `install-mermaid-cli`) turns
   the source into SVG, with `-p` pointing its puppeteer at the newest Playwright
   `chrome-headless-shell` (under `$PLAYWRIGHT_BROWSERS_PATH`, else the
