@@ -146,7 +146,7 @@ class PodSpec(unittest.TestCase):
         pod, _ = self.pod()
         exprs = pod["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"]
         notin = next(e for e in exprs if e["operator"] == "NotIn")
-        self.assertEqual(set(notin["values"]), {"ubuntu-server-k8s-agent-4", "ubuntu-server-k8s-master-1", "mac-mini-worker", "cartwmic-g14-wsl"})
+        self.assertEqual(set(notin["values"]), {"ubuntu-server-k8s-agent-4", "ubuntu-server-k8s-master-1", "mac-mini-worker"})
         self.assertIn({"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]}, exprs)
 
     def test_pinned_node(self):
