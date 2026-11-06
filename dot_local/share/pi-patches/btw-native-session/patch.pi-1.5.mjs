@@ -7,7 +7,7 @@ import path from 'node:path';
 import { piCodingAgentRoot } from '../pi-root.mjs';
 const args=process.argv.slice(2);if(args.some(a=>!['--check','--rollback'].includes(a)))throw Error('Usage: patch.mjs [--check|--rollback]');
 const check=args.includes('--check'),rollback=args.includes('--rollback')||!['personal','axon-work-computer'].includes(process.env.PI_CHEZMOI_PROFILE);
-const root=piCodingAgentRoot();if(!root)throw Error('Pi package root unavailable');
+const root=piCodingAgentRoot();if(!root){if(check){console.error('[pi-patch:btw-native-session] Pi is not installed; cannot verify');process.exit(1)}console.log('[pi-patch:btw-native-session] Pi is not installed; skipped');process.exit(0)}
 const version=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8')).version;
 const edits=JSON.parse(fs.readFileSync(new URL('./edits.pi-1.5.json',import.meta.url),'utf8'));const staged=new Map();
 const chunkDir=path.join(root,'dist/bundle/chunks');const chunkNames=fs.existsSync(chunkDir)?fs.readdirSync(chunkDir).filter(n=>n.endsWith('.js')):[];

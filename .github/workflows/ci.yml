@@ -46,6 +46,8 @@ jobs:
         run: python3 -m unittest discover -s tests/instructions-profile -v
       - name: Pi patch version selector (floor per series, 1.5 payload wiring; temp dirs, no Pi install)
         run: node --test tests/pi-patches/pi_select.test.mjs
+      - name: Pi patch apply with Pi absent (real apply script, throwaway HOME and PATH, fake npm; exit 0 and one notice per patch)
+        run: node --test tests/pi-patches/apply_no_pi.test.mjs
       - name: Pi settings render (compaction)
         run: python3 -m unittest discover -s tests/pi-settings-render -v
       - name: Release-tag skill import tool

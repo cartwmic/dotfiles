@@ -2,7 +2,7 @@
 #
 # Applies all chezmoi-managed runtime patches to the user's installed
 # pi-coding-agent / pi-ai trees. Idempotent. Safe to run on machines
-# without pi installed (exits 0 with a notice).
+# without pi installed (exits 0, one notice line per skipped patch).
 #
 # See: ~/.local/share/chezmoi/dot_local/share/pi-patches/<patch>/README.md
 
@@ -29,6 +29,11 @@ if [ ! -d "$PATCHES_ROOT" ]; then
   exit 0
 fi
 
+# One Pi-installed check, the same locator every patch uses (pi-root.mjs). With no Pi, the
+# "applying patch" line is left out, so a skipped patch prints exactly its own notice line.
+# If the check itself cannot run, keep the line; the patches then fail or report as they always did.
+pi_present=$(node --input-type=module -e 'import { pathToFileURL } from "node:url"; const { piCodingAgentRoot } = await import(pathToFileURL(process.argv[1]).href); process.stdout.write(piCodingAgentRoot() ? "yes" : "no");' "$PATCHES_ROOT/pi-root.mjs") || pi_present=unknown
+
 # Iterate every patch directory containing a patch.mjs.
 exit_code=0
 for patch_dir in "$PATCHES_ROOT"/*/; do
@@ -39,7 +44,9 @@ for patch_dir in "$PATCHES_ROOT"/*/; do
   fi
 
   patch_name=$(basename "$patch_dir")
-  log "applying patch: $patch_name"
+  if [ "$pi_present" != no ]; then
+    log "applying patch: $patch_name"
+  fi
   if ! node "$patch_script"; then
     log_error "patch $patch_name failed — see diagnostic above"
     exit_code=1

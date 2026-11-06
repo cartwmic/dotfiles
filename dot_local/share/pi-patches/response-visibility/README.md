@@ -9,7 +9,7 @@ Prerequisites: Node >=22.19, a Pi version whose patch anchors all match, and the
 from `https://github.com/cartwmic/pi-response-visibility`. Desktop Pi settings
 declare that package. The wrapper finds its helper in Pi's installed Git checkout;
 an explicit `PI_RESPONSE_VISIBILITY_HELPER` or a package bin on PATH takes precedence.
-A missing helper fails on desktop profiles; it is not silently downloaded.
+With Pi installed, a missing helper fails on desktop profiles; with no Pi the wrapper skips before it looks for the helper. The helper is not silently downloaded.
 This source change does not install or publish the package or configure a remote.
 For developer/private tests, explicitly set `PI_RESPONSE_VISIBILITY_HELPER` to an
 absolute package `bin/core.mjs` and `PI_ROOT` to an absolute private Pi package root.

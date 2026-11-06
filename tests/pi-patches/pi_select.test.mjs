@@ -68,7 +68,7 @@ test("dispatcher end to end: picks the payload, forwards argv, propagates its ex
 		assert.equal(r.code, 1); assert.match(r.err, /cannot read Pi version/);
 		r = s.run({ PI_ROOT: s.pi("1.1.0"), PI_DEMO_PACKAGE: s.pi("1.2.0") }); assert.equal(r.code, 12, "the per-patch package override wins over PI_ROOT, like the payloads");
 		r = s.run({ HOME: s.dir, PI_CODING_AGENT_DIR: join(s.dir, "none"), PATH: "/usr/bin:/bin" });
-		assert.equal(r.code, 13); assert.match(r.out, /Pi not installed -> patch\.pi-1\.3\.mjs decides/);
+		assert.equal(r.code, 13); assert.equal(r.out, "RAN 1.3 args=[] root=\n", "no Pi: the dispatcher prints nothing; the newest payload runs and prints its own notice");
 	} finally { rmSync(s.dir, { recursive: true, force: true }); }
 });
 
