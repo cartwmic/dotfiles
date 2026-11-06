@@ -18,7 +18,7 @@ Termux config is managed by chezmoi with:
 On the phone:
   pkg install -y chezmoi git openssh
   mkdir -p ~/.config/chezmoi
-  printf 'data:\n  profile: "termux"\n' > ~/.config/chezmoi/chezmoi.yaml
+  # write chezmoi.yaml: profile "termux" plus the termux sshHosts keys (docs/profiles.md, "Local data keys")
   chezmoi init --apply <dotfiles-git-remote>
 
 Canonical sources:

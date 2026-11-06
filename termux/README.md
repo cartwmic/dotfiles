@@ -113,8 +113,19 @@ installation and Play Protect prompts **on-device**.
 Launch Termux once and unlock the phone. Choose where **this run** retrieves
 SSH keys; the choice is not saved. For Mac retrieval, the script types only
 public bootstrap commands via ADB, streams two private keys from 1Password
-over USB-forwarded, key-only SSH directly into Termux-private storage, then
-has the phone run `chezmoi init --apply` itself:
+over USB-forwarded, key-only SSH directly into Termux-private storage, writes
+the phone's `~/.config/chezmoi/chezmoi.yaml`, then has the phone run
+`chezmoi init --apply` itself.
+
+The config file is `profile: termux` plus the termux `sshHosts` keys (`server`,
+`macbook`, `laptop`, `macKvm`, `whonixGw`, `whonixWs`; see
+[docs/profiles.md](../docs/profiles.md), "Local data keys"). The Mac reads them
+from the 1Password document `chezmoi personal.yaml (personal machines)` in the
+`developer` vault, using the token in `~/.config/agent-harness/op-service-token`.
+No other key goes to the phone. The values go over SSH stdin, are never printed,
+and a missing document or key stops the run before the phone is touched, naming
+the key. An existing phone config is left as it is; delete it first to have it
+rewritten.
 
 ```bash
 python3 termux/bootstrap-phone.py provision --serial "$SERIAL" \

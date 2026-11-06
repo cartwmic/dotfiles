@@ -6,6 +6,7 @@ private-key UI fields. An absent manual approval is an incomplete deployment.
 """
 import argparse
 from contextlib import contextmanager
+import json
 import os
 import re
 import shlex
@@ -28,6 +29,12 @@ PACKAGES = {
 EXPECTED_VERSIONS = {"com.termux": 1010, "com.termux.api": 1004, "com.termux.boot": 1000}
 PLAY_PACKAGES = ("com.wireguard.android", "io.heckel.ntfy", "app.whisperian.client")
 REPO = Path(__file__).resolve().parent.parent
+# The local data the termux profile renders with (docs/profiles.md, "Local data keys"):
+# the sshHosts entries below, each with an address and a user. No other key goes to the phone.
+TERMUX_SSH_HOSTS = ("server", "macbook", "laptop", "macKvm", "whonixGw", "whonixWs")
+TERMUX_HOST_FIELDS = ("address", "user")
+LOCAL_DATA_DOC = ("chezmoi personal.yaml (personal machines)", "developer")
+OP_TOKEN_FILE = Path.home() / ".config/agent-harness/op-service-token"
 
 
 class BootstrapError(Exception):
@@ -44,6 +51,58 @@ def run(argv, *, data=None, check=True, timeout=60, env=None):
         # an external tool could include key material in a diagnostic.
         raise BootstrapError(f"{Path(argv[0]).name} failed (exit {result.returncode})")
     return result
+
+
+def select_termux_data(doc):
+    """Pick the termux sshHosts entries out of the local data document. Returns {host: {field: value}}.
+
+    The document is the owner's snippet: `sshHosts:` with one flow map per host,
+    `name: {address: "...", user: "..."}`. Errors name the key, never a value.
+    """
+    lines = doc.splitlines()
+    start = next((i for i, line in enumerate(lines) if re.fullmatch(r"\s*sshHosts:\s*(#.*)?", line)), None)
+    if start is None:
+        raise BootstrapError("local data document has no key sshHosts")
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    found = {}
+    for line in lines[start + 1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if len(line) - len(line.lstrip()) <= indent:
+            break
+        match = re.fullmatch(r"\s*([A-Za-z0-9_]+):\s*\{(.*)\}\s*(#.*)?", line)
+        if match:
+            found[match.group(1)] = match.group(2)
+    selected = {}
+    for host in TERMUX_SSH_HOSTS:
+        if host not in found:
+            raise BootstrapError(f"local data document is missing sshHosts.{host}")
+        selected[host] = {}
+        for field in TERMUX_HOST_FIELDS:
+            match = re.search(rf'(?:^|,)\s*{field}:\s*(?:"([^"\n]+)"|([^\s,"]+))\s*(?=,|$)', found[host])
+            value = match and (match.group(1) or match.group(2))
+            if not value:
+                raise BootstrapError(f"local data document is missing sshHosts.{host}.{field}")
+            selected[host][field] = value
+    return selected
+
+
+def render_chezmoi_yaml(selected):
+    """The phone's chezmoi.yaml: profile termux plus the selected local data."""
+    out = ["data:", '  profile: "termux"', "  sshHosts:"]
+    for host in TERMUX_SSH_HOSTS:
+        fields = ", ".join(f"{f}: {json.dumps(selected[host][f])}" for f in TERMUX_HOST_FIELDS)
+        out.append(f"    {host}: {{{fields}}}")
+    return "\n".join(out) + "\n"
+
+
+def read_termux_data():
+    env = os.environ.copy()
+    if OP_TOKEN_FILE.is_file():
+        env["OP_SERVICE_ACCOUNT_TOKEN"] = OP_TOKEN_FILE.read_text().strip()
+    title, vault = LOCAL_DATA_DOC
+    result = run(["op", "document", "get", title, "--vault", vault], env=env)
+    return select_termux_data(result.stdout.decode(errors="replace"))
 
 
 def adb(serial, *args, check=True, timeout=60):
@@ -291,6 +350,7 @@ def provision(args):
     if installed(args.serial, "com.termux") is None:
         raise BootstrapError("install the three matching Termux APKs first")
     source = choose_key_source(args.key_source)
+    local_data = read_termux_data()  # fails here, before the phone is touched, naming any missing key
     if source == "phone" and not args.ready_phone_token and args.packages_ready:
         raise BootstrapError("phone-side retrieval needs --ready-phone-token AFTER you copy the service token on-device")
     with usb_connection(args.serial, args.start_ui, args.packages_ready) as (port, user):
@@ -304,9 +364,11 @@ def provision(args):
         if existing and not re.search(r'^\s*profile:\s*["\']?termux["\']?\s*$', existing, re.M):
             raise BootstrapError("existing chezmoi profile is not termux; refusing to replace it")
         if not existing:
+            # The values travel on SSH stdin, never argv.
             phone_ssh(args.serial, port, user, "sh", "-c",
                       "mkdir -p ~/.config/chezmoi; chmod 700 ~/.config/chezmoi; "
-                      "umask 077; printf '%s\\n' 'data:' '  profile: \"termux\"' > ~/.config/chezmoi/chezmoi.yaml")
+                      "umask 077; cat > ~/.config/chezmoi/chezmoi.yaml",
+                      data=render_chezmoi_yaml(local_data).encode())
         print("phone owns its configuration: chezmoi init --apply (HTTPS, profile termux)")
         phone_ssh(args.serial, port, user, "chezmoi", "init", "--apply", "https://github.com/cartwmic/dotfiles.git")
         for name, (fingerprint, _) in FINGERPRINTS.items():
