@@ -42,7 +42,7 @@ fi
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
 # Agent shells only (CLAUDECODE is set by Claude Code, T3CODE_THREAD_ID by T3 Code): a `cargo` that gives each project its own
-# target dir on the Workshop SSD. After ~/.cargo/env so it comes first; the directory exists on the personal Mac only, so this
+# target dir on the Workshop SSD. After ~/.cargo/env, so it lands before ~/.cargo/bin (bun, gvm and mise entries may still precede it); the directory exists on the personal Mac only, so this
 # does nothing elsewhere. See docs/agent-scratch.md.
 if [ -n "${CLAUDECODE-}${T3CODE_THREAD_ID-}" ] && [ -d "$HOME/.local/share/agent-scratch/bin" ]; then
   case ":$PATH:" in

@@ -6,10 +6,11 @@ Agent scratch (work dirs, review checkouts, build targets, dumps) fills the inte
 
 | Piece | Where | Does |
 |---|---|---|
-| `dot_config/agent-scratch/workshop.env` | `~/.config/agent-scratch/workshop.env` | Sets `AGENT_TMP=/Volumes/Workshop/macbook/tmp-home`. |
-| one line in `dot_zshenv` | `~/.zshenv` | Sources that file if it exists. Every zsh reads it, so T3, Claude Code and Pi shells get `AGENT_TMP`. On the work profile the file is not deployed and the line does nothing. |
-| `run_onchange_after_81_agent_scratch_workshop.sh` | runs on `chezmoi apply` | Makes `/Volumes/Workshop/macbook/tmp-home`. Moves nothing. |
+| `dot_config/agent-scratch/workshop.env` | `~/.config/agent-scratch/workshop.env` | Sets `AGENT_TMP=/Volumes/Workshop/macbook/tmp-home` and `NPM_CONFIG_CACHE=/Volumes/Workshop/macbook/cache/npm`. |
+| one line in `dot_zshenv` | `~/.zshenv` | Sources that file if it exists. Every zsh reads it, so T3, Claude Code and Pi shells get `AGENT_TMP` and `NPM_CONFIG_CACHE`. On the work profile the file is not deployed and the line does nothing. |
+| `run_onchange_after_81_agent_scratch_workshop.sh` | runs on `chezmoi apply` | Makes `/Volumes/Workshop/macbook/tmp-home` and `/Volumes/Workshop/macbook/cache`. Moves nothing. |
 | `dot_local/user_scripts/executable_agent_tmp_move.py` | `~/.local/user_scripts/agent_tmp_move.py` | Moves idle `~/tmp` subtrees to `AGENT_TMP`. Dry run by default. |
+| `dot_local/share/agent-scratch/bin/executable_cargo`, a block in `dot_zshenv` | `~/.local/share/agent-scratch/bin/cargo` | A `cargo` for agent shells only that gives each project its own target dir under `AGENT_TMP` (section below). |
 
 New scratch goes under `$AGENT_TMP`. `~/tmp` stays as the name every note and ledger entry already uses (qmd is the exception: it does not follow links, see "Launchd jobs"): each subtree that moves leaves a link at its old path. `~/tmp` itself stays a real directory holding those links and is not meant to become a link: the qmd config (docs/qmd.md) is the same in every state only while it is a directory.
 
@@ -18,9 +19,9 @@ New scratch goes under `$AGENT_TMP`. `~/tmp` stays as the name every note and le
 Nothing falls back to the internal disk.
 
 - A new shell prints one line on stderr (`agent-scratch: /Volumes/Workshop is not mounted ...`) and still sets `AGENT_TMP` to the Workshop path. Child shells stay quiet.
-- A write under `$AGENT_TMP` fails with an error: `/Volumes` is root-owned, so no user process can recreate the path on the internal disk.
+- A write under `$AGENT_TMP`, a `cargo` target dir or the npm cache fails with an error: `/Volumes` is root-owned, so no user process can recreate the path on the internal disk.
 - `81_agent_scratch_workshop.sh` exits 1 and creates nothing. `agent_tmp_move.py` stops before changing anything.
-- Every `~/tmp/<name>` link dangles until the disk is back.
+- Every `~/tmp/<name>` link, and the moved `~/.npm/_cacache` and `~/.npm/_npx` links, dangle until the disk is back.
 
 ## Moving what is already in `~/tmp`
 
@@ -51,9 +52,9 @@ uv (10.6 GB) and cargo are not set here yet. uv's `cache-dir` waits until its ca
 The existing npm cache was moved with the same script (the age check is off, a cache is always being touched; the old path became a link, so a tool that ignores the setting still lands on Workshop):
 
     mkdir -p /Volumes/Workshop/macbook/cache/npm
-    agent_tmp_move.py --apply --source ~/.npm --dest /Volumes/Workshop/macbook/cache/npm --only _cacache --min-age-hours 0
+    agent_tmp_move.py --apply --source ~/.npm --dest /Volumes/Workshop/macbook/cache/npm --only _cacache _npx --min-age-hours 0
 
-Undo: `rm ~/.npm/_cacache` (the link) and `rsync -a` the directory back.
+Undo: `rm ~/.npm/_cacache` (the link) and `rsync -a` the directory back; the same for `_npx`. (`npx` keeps its cache in `<npm cache>/_npx`, so the moved `_npx` is the live one.)
 
 ## What stays internal
 
@@ -70,5 +71,7 @@ An agent shell is one where `CLAUDECODE` (Claude Code) or `T3CODE_THREAD_ID` (T3
 Why a wrapper: a target directory per project cannot be set in an environment variable, because the variable is fixed when the shell starts and cargo expands `{workspace-root}` only in config files. The only global config file is `~/.cargo/config.toml`, which stays unmanaged. A terminal never sees the wrapper, so hand builds stay on the internal disk. (Unverified: whether T3's own built-in terminal sets `T3CODE_THREAD_ID`; if it does, a hand terminal inside T3 gets the wrapper too.)
 
 Where the build output is: in an agent shell a build no longer lands in `./target`. Ask cargo: `cargo metadata --format-version 1 --no-deps | jq -r .target_directory`, or read `$CARGO_TARGET_DIR`. A script or README that runs `target/debug/<bin>` must use that directory. Each worktree has its own directory (named by its top-level directory) and they are not cleaned up when a worktree is deleted; the wrapper also overrides a project's own `build.target-dir` (none of the local repos sets one).
+
+Claude Code runs each tool call from a snapshot of `PATH` taken when the session starts, and that snapshot replaces what `~/.zshenv` set. A session that started before the wrapper was applied therefore calls the real cargo directly (a child `zsh -c` still gets the wrapper); check a fresh session with `command -v cargo`. Until that is confirmed, name `CARGO_TARGET_DIR=$AGENT_TMP/cargo-target/<repo>` explicitly in builder briefs.
 
 Not covered: Pi and standalone Codex shells have no marker that was verified, so their builds stay internal until a brief sets `CARGO_TARGET_DIR=$AGENT_TMP/cargo-target/<repo>`. Unmounted Workshop: the target is under the missing Workshop path and cargo fails with an error; there is no fallback. Timing (clean `cargo build --offline` of loop-engine, one run each): 116 s with the target on the internal disk, 91 s on Workshop. Undo: remove the wrapper directory and the `PATH` block in `dot_zshenv`, then apply.

@@ -1,7 +1,7 @@
 #!/bin/sh
 # cargo for agent shells: one target dir per project on the Workshop SSD, then the real cargo. Personal macOS only (.chezmoiignore).
 #
-# dot_zshenv puts this directory first on PATH only in an agent shell (CLAUDECODE or T3CODE_THREAD_ID is set), so a terminal never
+# dot_zshenv puts this directory on PATH, before ~/.cargo/bin, only in an agent shell (CLAUDECODE or T3CODE_THREAD_ID is set), so a terminal never
 # sees it. If CARGO_TARGET_DIR (or CARGO_BUILD_TARGET_DIR) is already set it is left alone, which is how a brief or a skill picks
 # its own. Otherwise the target dir is $AGENT_TMP/cargo-target/<name of the git top-level directory, or of the current directory>.
 # An environment variable cannot do this alone: cargo expands {workspace-root} only in a config file, and the variable is fixed
