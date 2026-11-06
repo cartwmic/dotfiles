@@ -80,7 +80,7 @@ jobs:
         run: python3 -m unittest discover -s tests/agent_traces_shadow -v
       - name: Canonical skill sync (real chezmoi, throwaway source and HOME)
         run: python3 -m unittest discover -s tests/sync-harness-skills -v
-      - name: Codex config merge keeps the Codex app's entries (real script, throwaway HOME; RED control skips on a shallow clone)
+      - name: Codex config merge keeps the Codex app's entries (real script, throwaway HOME; vendored old merge as RED control)
         run: python3 -m unittest discover -s tests/codex-merge -v
       - name: Agent browser launcher and render (fake Chrome, real chezmoi)
         run: python3 -m unittest discover -s tests/agent-browser -v

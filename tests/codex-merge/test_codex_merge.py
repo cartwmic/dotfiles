@@ -13,12 +13,37 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "dot_local/user_scripts/executable_apply_harness_config.sh"
-BASE_SHA = "0a5524f6"  # main before the fix; the RED control runs its script
 
 BEGIN = "# BEGIN CHEZMOI AGENT HARNESS MCP"
 END = "# END CHEZMOI AGENT HARNESS MCP"
 
-# What the Codex app leaves inside the markers (fake paths).
+
+
+def old_merge(block, content):
+    """The merge as it was before the fix (apply_harness_config.sh at 0a5524f6), for the RED control."""
+    begin = "# BEGIN CHEZMOI AGENT HARNESS MCP"
+    end = "# END CHEZMOI AGENT HARNESS MCP"
+    block = block.rstrip() + "\n"
+    if begin in content and end in content:
+        start = content.index(begin)
+        finish = content.index(end, start) + len(end)
+        new_content = content[:start].rstrip()
+        if new_content:
+            new_content += "\n\n"
+        new_content += block
+        suffix = content[finish:].lstrip("\n")
+        if suffix:
+            new_content += "\n" + suffix
+    else:
+        new_content = content.rstrip()
+        if new_content:
+            new_content += "\n\n"
+        new_content += block
+    return new_content.rstrip() + "\n"
+
+
+# What the Codex app leaves inside the markers (fake paths). No harness-servers line: written by an
+# older apply, so `legacy` (not rendered now) cannot be told from the app's entries and moves out.
 CONFIG = f'''model = "gpt-test"
 
 [features]
@@ -35,6 +60,9 @@ args = ["--flag"]
 
 [mcp_servers.node_repl.env]
 FAKE_VAR = "x"
+
+[mcp_servers.legacy]
+command = "old-legacy"
 {END}
 
 [projects."/tmp/fake/project"]
@@ -61,13 +89,13 @@ class CodexMergeTest(unittest.TestCase):
         self.cfg.parent.mkdir(parents=True)
         self.cfg.write_text(CONFIG)
 
-    def run_script(self, script=SCRIPT):
-        env = {"PATH": os.environ["PATH"], "HOME": str(self.home),
+    def run_script(self, extra_env=None):
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.home), **(extra_env or {}),
                "AGENT_HARNESS_CANONICAL_ROOT": str(self.canon),
                "AGENT_HARNESS_GENERATED_ROOT": str(self.home / "gen"),
                "AGENT_HARNESS_ADAPTERS_ROOT": str(self.home / "adapters"),
                "AGENT_HARNESS_EXTERNAL_ROOT": str(self.home / "ext")}
-        return subprocess.run(["sh", str(script), "codex"], env=env, capture_output=True,
+        return subprocess.run(["sh", str(SCRIPT), "codex"], env=env, capture_output=True,
                               text=True, stdin=subprocess.DEVNULL, timeout=60)
 
     def test_foreign_entries_survive_and_harness_servers_refresh(self):
@@ -116,16 +144,45 @@ class CodexMergeTest(unittest.TestCase):
         data = tomllib.loads(self.cfg.read_text())
         self.assertEqual(data["mcp_servers"]["alpha"]["command"], "new-alpha")
 
+    def test_dropped_harness_server_is_removed_on_next_merge(self):
+        self.assertEqual(self.run_script().returncode, 0)
+        first = tomllib.loads(self.cfg.read_text())
+        self.assertIn("beta", first["mcp_servers"])
+        self.assertIn("# harness-servers: alpha,beta", self.cfg.read_text())
+        # beta leaves the canonical set: it is the harness's own, so it goes; node_repl stays.
+        (self.canon / "mcp/servers.json").write_text(
+            '{"mcpServers": {"alpha": {"command": "new-alpha", "args": ["--a", "--b"]}}}')
+        self.assertEqual(self.run_script().returncode, 0)
+        text = self.cfg.read_text()
+        data = tomllib.loads(text)
+        self.assertNotIn("beta", data["mcp_servers"])
+        self.assertEqual(data["mcp_servers"]["alpha"]["command"], "new-alpha")
+        self.assertIn("node_repl", data["mcp_servers"])
+        self.assertIn("legacy", data["mcp_servers"])
+        self.assertEqual(data["notify"], ["/tmp/fake/notify.sh", "--arg"])
+
+    def test_old_block_without_ownership_line_moves_unrendered_servers_out(self):
+        self.assertEqual(self.run_script().returncode, 0)
+        text = self.cfg.read_text()
+        self.assertGreater(text.index("[mcp_servers.legacy]"), text.index(END))
+
+    def test_without_tomllib_merges_and_says_so(self):
+        shim = Path(self.tmp.name) / "shim"
+        shim.mkdir()
+        (shim / "tomllib.py").write_text("raise ImportError('shim: no tomllib')\n")
+        r = self.run_script({"PYTHONPATH": str(shim)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("tomllib unavailable", r.stdout)
+        text = self.cfg.read_text()
+        self.assertLess(text.index("notify ="), text.index("[features]"))
+        self.assertGreater(text.index("[mcp_servers.node_repl]"), text.index(END))
+        self.assertTrue(tomllib.loads(text))  # the test's own parse
+
     def test_red_control_old_merge_drops_them(self):
-        old = subprocess.run(["git", "-C", str(REPO), "show",
-                              f"{BASE_SHA}:dot_local/user_scripts/executable_apply_harness_config.sh"],
-                             capture_output=True, text=True)
-        if old.returncode != 0:
-            self.skipTest(f"{BASE_SHA} not in this checkout")
-        old_script = Path(self.tmp.name) / "old_apply.sh"
-        old_script.write_text(old.stdout)
-        self.assertEqual(self.run_script(old_script).returncode, 0)
-        data = tomllib.loads(self.cfg.read_text())
+        # Get the rendered block from the real script, then merge it the old way.
+        self.assertEqual(self.run_script().returncode, 0)
+        block = (self.home / "gen/codex/mcp.toml").read_text()
+        data = tomllib.loads(old_merge(block, CONFIG))
         self.assertNotIn("notify", data)
         self.assertNotIn("node_repl", data["mcp_servers"])
 
