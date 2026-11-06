@@ -68,6 +68,8 @@ neovim = "latest"  # Editor
 lazygit = "latest" # Git TUI
 gh = "latest"      # GitHub CLI; also git credential helper (gh auth login is a manual post-provision step)
 ripgrep = "latest" # Fast grep alternative
+# Matches the chezmoi installer in .github/workflows/ci.yml; tests/mise/test_chezmoi_pin.py fails if they differ.
+chezmoi = "2.71.1"
 
 # Durable workflow engine and matching reference providers. Keep versions paired.
 loop-engine = { version = "0.43.5", matching_regex = "^loop-cli-", rename_exe = "loop-engine" }
