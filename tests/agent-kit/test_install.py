@@ -44,7 +44,8 @@ class Home:
 
 class AgentKitInstallTest(unittest.TestCase):
     def test_disabled_has_no_install_script_and_wrapper_exits_3(self):
-        for profile, extra in (("personal", "  agentKit: {enabled: false}\n"), ("axon-work-computer", "")):
+        # Personal defaults agentEvents.engine to ts, and ts needs the kit, so with the kit off personal must name python.
+        for profile, extra in (("personal", "  agentKit: {enabled: false}\n  agentEvents: {engine: python}\n"), ("axon-work-computer", "")):
             with self.subTest(profile=profile):
                 home = Home(self, profile, extra)
                 self.assertFalse(home.script_managed())

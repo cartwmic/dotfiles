@@ -29,7 +29,7 @@ data:
   #   enabled: true
   #   machine: work    # the machine label on every series: personal / work by default
   #   endpoint: https://otel-collector.internal.cartwmic.com/v1/metrics
-  #   engine: python   # python (default) or ts: what ~/.local/bin/agent-events runs. ts needs agentKit.enabled; a render fails without it
+  #   engine: python   # python or ts: what ~/.local/bin/agent-events runs. Default ts on personal, python elsewhere. ts needs agentKit.enabled; a render fails without it
   # Pinned agent-kit install for the agent-traces CLI (~/.local/bin/agent-traces; dot_local/share/agent-kit). On by default on personal only.
   # The install is `npm ci` from GitHub Packages with `gh auth token`. enabled: false (or any other profile) leaves the wrapper exiting 3.
   # agentKit:

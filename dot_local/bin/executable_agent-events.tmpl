@@ -1,4 +1,4 @@
-{{- /* engine: .chezmoitemplates/agent_events_config. With python (the default) none of this file's template text reaches the output. */ -}}
+{{- /* engine: .chezmoitemplates/agent_events_config. Default ts on personal, python elsewhere. With python, the ts branch below is not in the output. */ -}}
 {{- $ts := eq (get (includeTemplate "agent_events_config" . | fromJson) "engine") "ts" -}}
 #!/bin/sh
 # Run agent-events: build | sessions | session REF | tools | events | projects | show REF | sql | export | status | run (the LaunchAgent tick)

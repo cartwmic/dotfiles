@@ -45,14 +45,17 @@ mtime did not change; a changed file is parsed again in full. `--since` builds a
 partial and never delete rows for files they did not look at.
 
 `agent-events build` is safe to repeat, incremental and cheap. `agent-events` is a small wrapper (`dot_local/bin`) around
-`agent_events.py`; it picks a Python 3.11+ (override with `AGENT_EVENTS_PYTHON`).
+`agent_events.py`; it picks a Python 3.11+ (override with `AGENT_EVENTS_PYTHON`). With the default `engine: ts` on personal,
+the wrapper execs the agent-kit port (`agent-traces pi`) for every verb instead; see "Always on". The rest of this README describes the Python engine.
 A build that is interrupted marks the database dirty and the next build repairs it.
 `sql` accepts only `SELECT`/`WITH` queries under a read-only authorizer (no `ATTACH`, `VACUUM INTO`, `PRAGMA`).
 
 ## Always on (macOS, chezmoi data `agentEvents`)
 
 A LaunchAgent, `local.agent-events` (source `Library/LaunchAgents/local.agent-events.plist.tmpl`, loaded by
-`run_onchange_after_70_agent_events_launchd.sh.tmpl`), runs `agent-events run` every 2 minutes on a Mac where `agentEvents.enabled` is true (nice 10; not launchd's Background class, which macOS throttles to a standstill on a busy machine):
+`run_onchange_after_70_agent_events_launchd.sh.tmpl`), runs `agent-events run` every 2 minutes on a Mac where `agentEvents.enabled` is true (nice 10; not launchd's Background class, which macOS throttles to a standstill on a busy machine).
+Its tick is the engine set by `agentEvents.engine`: `ts` (the default on personal) runs the agent-kit port, `agent-traces pi run`; `python` runs
+the steps below, the frozen collector's. The steps below describe the Python engine:
 
 1. an incremental `build` (a few seconds; the first full build takes about 80 s; ticks and manual `agent-events build` runs take one lock, so they wait for each other instead of racing);
 2. an aggregate-metrics push to the homelab OTel collector, when `AGENT_EVENTS_OTLP_ENDPOINT` is set. It also needs
@@ -78,12 +81,18 @@ data:
     enabled: true    # default: true on personal, false on every other profile
     machine: work    # the machine label on every series; default personal (personal), work (axon-work-computer)
     endpoint: https://otel-collector.internal.cartwmic.com/v1/metrics   # default http://otel-collector.internal.cartwmic.com/v1/metrics
+    engine: python   # default ts on personal, python on every other profile; ts needs agentKit.enabled on this machine
 ```
 
 - `.chezmoitemplates/agent_events_config` checks them: `enabled` is true or false; `machine` is a slug (a lowercase letter, then up to
-  31 lowercase letters, digits or hyphens) and required when enabled; `endpoint` is an http or https URL ending in `/v1/metrics`.
+  31 lowercase letters, digits or hyphens) and required when enabled; `endpoint` is an http or https URL ending in `/v1/metrics`;
+  `engine` is `python` or `ts`.
   Any other key or value fails the render of the plist, its load script and `.chezmoiignore`, so a typo applies nothing.
 - The plist takes `AGENT_EVENTS_OTLP_ENDPOINT` and `AGENT_EVENTS_MACHINE` from them.
+- `engine` sets what `~/.local/bin/agent-events` runs when `AGENT_EVENTS_IMPLEMENTATION` is not set. On personal the default `ts` makes
+  the wrapper exec `agent-traces pi` (the agent-kit port) for every verb, and the tick runs `agent-traces pi run`. `python` runs `agent_events.py`.
+  `ts` fails the render when `agentKit.enabled` is false on that machine, so a personal Mac with agentKit off must set `engine: python`.
+  The shadow arms do not depend on it: the Python arm sets `AGENT_EVENTS_IMPLEMENTATION`, and the TS and seed arms run `agent-traces` directly.
 - `.chezmoiignore` gates the agent on macOS and `enabled`, not on the profile. Set `enabled: false` and apply: chezmoi leaves the
   plist alone and the load script unloads the job, then removes the plist. A failed unload fails the apply and keeps the plist, so the
   next apply tries again.
