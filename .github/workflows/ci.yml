@@ -56,6 +56,10 @@ jobs:
         run: |
           sudo apt-get install -y -qq zsh >/dev/null
           python3 -m unittest discover -s tests/zshenv-op-token -v
+      - name: Agent scratch on Workshop (env file in real zsh; the ~/tmp move script against throwaway dirs, real lsof, rsync and git worktrees)
+        run: |
+          sudo apt-get install -y -qq zsh lsof rsync >/dev/null
+          python3 -m unittest discover -s tests/agent-scratch -v
       - name: heavy-gate tests (fake host figures, any OS)
         run: python3 -m unittest discover -s tests/heavy-gate -v
       - name: kgate tests (tree hash against real git; the client against a fake ssh cluster and fake op)
@@ -133,6 +137,8 @@ jobs:
         run: python3 -m unittest discover -s tests/launchd-reload -v
       - name: Spotlight-off script (fake mdutil)
         run: python3 -m unittest discover -s tests/spotlight-workshop -v
+      - name: Agent scratch on Workshop (create script included; the rest as on Linux)
+        run: python3 -m unittest discover -s tests/agent-scratch -v
       - name: Traces shadow agents on macOS (managed sets per profile and arm, load script and real apply against a stub launchctl)
         run: python3 -m unittest discover -s tests/agent_traces_shadow -v
       - name: Profile coverage table, macOS-only rows included
