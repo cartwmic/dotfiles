@@ -85,7 +85,7 @@ to `$VIZ_STATE_DIR/actions.jsonl`, whatever the outcome. `list` ignores it.
 | `id` | action id; for a render it is the render id (and directory name) |
 | `ts`, `duration_ms` | UTC start time and how long the call took |
 | `command`, `args` | what was run: arguments and paths, never source bodies |
-| `steps` | what viz did: `request` (input as given, resolved format, width, scale), `input` (absolute path, bytes), `chromium` (path), `mmdc` (`ok`, and the parser `message` on failure), `screenshot` (page loaded, PNG size, bytes, page errors), `site` (publish base URL), `render` (id of a saved render being published), `upload` (remote path, bytes, HTTP status, or `ok: false` and the message), `list` (count), `doctor` (missing dependencies). Never the password. |
+| `steps` | what viz did: `request` (input as given, resolved format, width, scale), `input` (absolute path, bytes), `chromium` (path), `mmdc` (`ok`, `ensured` when the Playwright cache was restored first, and the parser `message` on failure), `screenshot` (page loaded, PNG size, bytes, page errors), `site` (publish base URL), `render` (id of a saved render being published), `upload` (remote path, bytes, HTTP status, or `ok: false` and the message), `list` (count), `doctor` (missing dependencies). Never the password. |
 | `outcome` | the JSON object printed on stdout (`list` records its count instead of the renders) |
 
 A failed Mermaid render leaves no render directory, but its record names the
@@ -121,15 +121,24 @@ No npm packages. Only `publish` uses the network.
   On macOS (both desktop profiles) `chromium` is the chezmoi-managed wrapper
   `~/.local/bin/chromium` (source `dot_local/bin/executable_chromium.tmpl`). It runs
   the Playwright Chrome for Testing build pinned in `.chezmoidata.toml`
-  (`playwrightChromium`: version `1.64.1`, build `1248`). If that build is
-  missing from the Playwright cache, it runs `npx -y playwright@1.64.1 install chromium`
-  once, then starts the browser. A failed install prints one `ERROR` line with that
-  command and exits 1. The first render after a cache cleanup is slower while it
-  downloads. Linux has no wrapper: set `VIZ_CHROMIUM` or put a Chromium on `PATH`.
+  (`playwrightChromium`: version `1.64.1`, build `1248`). The build counts as
+  present only when Playwright's `INSTALLATION_COMPLETE` marker exists for chromium
+  and its headless shell. If not, the wrapper runs `npx -y playwright@1.64.1 install chromium`
+  once (under a `mkdir` lock, in its own process group), then starts the browser.
+  A failed install prints one `ERROR` line with that command and exits 1.
+  `chromium --ensure` does the install and exits without starting a browser. The first
+  render after a cache cleanup is slower while it downloads. Linux has no wrapper: set
+  `VIZ_CHROMIUM` or put a Chromium on `PATH`.
 - **Mermaid:** `mmdc` on `PATH` (11.16.0, mise task `install-mermaid-cli`) turns
   the source into SVG, with `-p` pointing its puppeteer at the newest Playwright
   `chrome-headless-shell` (under `$PLAYWRIGHT_BROWSERS_PATH`, else the
   Playwright cache). The SVG is then shot like any other page.
+  When no headless shell is found and the `chromium` on `PATH` is the managed wrapper
+  (it carries the text `chromium-wrapper: --ensure`; any other Chromium is never
+  asked), viz runs `chromium --ensure` once and looks again, so a pruned cache is
+  restored by the first Mermaid render, or by `viz doctor`. The `mmdc` step of the
+  action record then carries `ensured: true`. If that fails, the result is
+  `missing_dependency` as before.
 
 `viz doctor` reports the paths it would use.
 

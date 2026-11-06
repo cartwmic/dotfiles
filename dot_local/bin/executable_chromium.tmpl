@@ -1,17 +1,57 @@
 #!/bin/sh
 # Pi's launch_browser and viz look for "chromium" on PATH; point it at the Playwright Chrome for Testing build.
-# The version and build are pinned in .chezmoidata.toml (playwrightChromium). When the build is missing (a cache cleanup
-# removed it), install it once with npx, then run it. A failed install is one ERROR line and a non-zero exit.
+# The version and build are pinned in .chezmoidata.toml (playwrightChromium).
+# chromium-wrapper: --ensure   (viz looks for this marker; `chromium --ensure` installs the pinned build if missing, then exits 0)
+# The build counts as present only when Playwright's INSTALLATION_COMPLETE marker exists for chromium and its headless shell.
+# When it is missing (a cache cleanup removed it), install it once with npx, then run it. A mkdir lock keeps two callers from
+# installing at once; the install runs in its own process group so a caller that is killed does not leave half an install.
+# A failed install is one ERROR line and a non-zero exit.
 set -eu
 VERSION="{{ .playwrightChromium.version }}"
 BUILD="{{ .playwrightChromium.build }}"
 CACHE="$HOME/Library/Caches/ms-playwright"
 BIN="$CACHE/chromium-$BUILD/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
-if [ ! -x "$BIN" ]; then
-	echo "[chromium] INFO: chromium-$BUILD is missing; installing it with: npx -y playwright@$VERSION install chromium" >&2
-	if ! PLAYWRIGHT_BROWSERS_PATH="$CACHE" npx -y "playwright@$VERSION" install chromium >&2 || [ ! -x "$BIN" ]; then
-		echo "[chromium] ERROR: chromium-$BUILD is missing and the install failed; run by hand: npx -y playwright@$VERSION install chromium" >&2
+LOCK="$CACHE/.chromium-install.lock"
+HAND="npx -y playwright@$VERSION install chromium"
+
+present() {
+	[ -x "$BIN" ] && [ -f "$CACHE/chromium-$BUILD/INSTALLATION_COMPLETE" ] && [ -f "$CACHE/chromium_headless_shell-$BUILD/INSTALLATION_COMPLETE" ]
+}
+
+install() {
+	mkdir -p "$CACHE"
+	until mkdir "$LOCK" 2>/dev/null; do
+		present && return 0
+		# A lock whose installer is gone is stale: remove it and take it.
+		pid=$(cat "$LOCK/pid" 2>/dev/null || true)
+		if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+			rm -f "$LOCK/pid"
+			rmdir "$LOCK" 2>/dev/null || true
+		fi
+		sleep 1
+	done
+	rc=0
+	if ! present; then
+		echo "[chromium] INFO: chromium-$BUILD is missing; installing it with: $HAND" >&2
+		set -m
+		PLAYWRIGHT_BROWSERS_PATH="$CACHE" npx -y "playwright@$VERSION" install chromium >&2 &
+		pid=$!
+		echo "$pid" > "$LOCK/pid"
+		wait "$pid" || rc=$?
+		set +m
+	fi
+	rm -f "$LOCK/pid"
+	rmdir "$LOCK"
+	return "$rc"
+}
+
+if ! present; then
+	if ! install || ! present; then
+		echo "[chromium] ERROR: chromium-$BUILD is missing and the install failed; run by hand: $HAND" >&2
 		exit 1
 	fi
+fi
+if [ "${1-}" = "--ensure" ]; then
+	exit 0
 fi
 exec "$BIN" "$@"

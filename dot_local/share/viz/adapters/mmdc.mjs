@@ -44,12 +44,18 @@ function parserMessage(stderr) {
   return kept.join('\n').replace(/^Error:\s*/, '').trim();
 }
 
-export function createMermaid(env) {
+// `ensure()` may restore a pruned Playwright cache (see ensureChromium); it is tried once when the headless shell is missing.
+export function createMermaid(env, ensure = () => false) {
   return {
     locate() {
       const mmdc = which('mmdc', env.PATH || '');
       if (!mmdc) throw new VizError('missing_dependency', 'no mmdc on PATH (mise task install-mermaid-cli installs @mermaid-js/mermaid-cli)');
-      return { mmdc, browser: findHeadlessShell(env) };
+      try {
+        return { mmdc, browser: findHeadlessShell(env) };
+      } catch (e) {
+        if (!ensure()) throw e;
+        return { mmdc, browser: findHeadlessShell(env), ensured: true };
+      }
     },
 
     toSvg(source, { mmdc, browser }) {

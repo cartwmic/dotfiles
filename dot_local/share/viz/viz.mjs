@@ -5,7 +5,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { locateChromium, screenshot } from './adapters/chromium.mjs';
+import { ensureChromium, locateChromium, screenshot } from './adapters/chromium.mjs';
 import { createFsStore } from './adapters/fs_store.mjs';
 import { createSite } from './adapters/http_site.mjs';
 import { createMermaid } from './adapters/mmdc.mjs';
@@ -33,7 +33,7 @@ const { output, exitCode } = await runAction(process.argv.slice(2), {
   store: createFsStore(resolve(env.VIZ_STATE_DIR || join(homedir(), '.local', 'state', 'viz'))),
   input,
   browser: { locate: () => locateChromium(env), screenshot },
-  mermaid: createMermaid(env),
+  mermaid: createMermaid(env, () => ensureChromium(env)),
   site: createSite(env),
   clock: { now: () => Date.now() },
   random: { hex: () => randomBytes(3).toString('hex') },

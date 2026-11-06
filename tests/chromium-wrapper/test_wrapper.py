@@ -5,9 +5,11 @@ and a fake Playwright cache in a scratch HOME. No real Playwright install runs a
 RED control: the wrapper as it was before this change (vendored below) fails with exit 126 on a missing build."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -34,6 +36,7 @@ WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gatew
 FAKE_NPX = """#!/bin/sh
 printf 'npx %s\\n' "$*" >> "$FAKE_LOG"
 printf 'browsers_path %s\\n' "${PLAYWRIGHT_BROWSERS_PATH-unset}" >> "$FAKE_LOG"
+printf 'pgid %s\\n' "$(ps -o pgid= -p $$ | tr -d ' ')" >> "$FAKE_LOG"
 case "${FAKE_NPX-}" in
 	fail) echo "fake npx: network down" >&2; exit 1 ;;
 	noop) exit 0 ;;
@@ -43,6 +46,9 @@ mkdir -p "$dir"
 cp "$FAKE_BROWSER_SRC" "$dir/.tmp-browser"
 chmod 755 "$dir/.tmp-browser"
 mv "$dir/.tmp-browser" "$dir/Google Chrome for Testing"
+cache="$HOME/Library/Caches/ms-playwright"
+mkdir -p "$cache/chromium_headless_shell-1248"
+touch "$cache/chromium_headless_shell-1248/INSTALLATION_COMPLETE" "$cache/chromium-1248/INSTALLATION_COMPLETE"
 """
 
 FAKE_BROWSER = """#!/bin/sh
@@ -90,8 +96,13 @@ class WrapperTest(unittest.TestCase):
         self.bin = self.root / "bin"
         write_atomic(self.bin / "npx", FAKE_NPX)
 
-    def install_build(self):
+    def install_build(self, markers=True):
         write_atomic(self.home / EXE, FAKE_BROWSER)
+        if markers:
+            cache = self.home / "Library/Caches/ms-playwright"
+            (cache / ("chromium_headless_shell-%s" % BUILD)).mkdir(parents=True, exist_ok=True)
+            for d in ("chromium-%s" % BUILD, "chromium_headless_shell-%s" % BUILD):
+                (cache / d / "INSTALLATION_COMPLETE").touch()
 
     def run_wrapper(self, text, *args, **env):
         script = self.root / "chromium"
@@ -128,10 +139,15 @@ class NewWrapperTest(WrapperTest):
         for text in self.each_profile():
             r = self.run_wrapper(text, "--headless", "about:blank")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertEqual(self.calls(), [
+            calls = self.calls()
+            self.assertEqual([c for c in calls if not c.startswith("pgid ")], [
                 "npx " + " ".join(INSTALL_ARGS),
                 "browsers_path %s/Library/Caches/ms-playwright" % self.home,
                 "browser --headless about:blank"])
+            pgid = [c for c in calls if c.startswith("pgid ")]
+            self.assertEqual(len(pgid), 1)
+            self.assertNotEqual(int(pgid[0].split()[1]), os.getpgrp(), "the install runs in its own process group")
+            self.assertFalse((self.home / "Library/Caches/ms-playwright/.chromium-install.lock").exists(), "lock released")
             lines = r.stderr.splitlines()
             self.assertEqual(len(lines), 1, r.stderr)
             self.assertTrue(lines[0].startswith("[chromium] INFO: "), lines[0])
@@ -141,6 +157,63 @@ class NewWrapperTest(WrapperTest):
             r2 = self.run_wrapper(text, "--version")
             self.assertEqual(r2.returncode, 0, r2.stderr)
             self.assertEqual(self.calls(), ["browser --version"])
+
+    def test_ensure_installs_a_missing_build_and_does_not_launch(self):
+        for text in self.each_profile():
+            r = self.run_wrapper(text, "--ensure")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual([c for c in self.calls() if c.startswith(("npx ", "browser "))], ["npx " + " ".join(INSTALL_ARGS)])
+            # Present again: --ensure is a no-op.
+            self.log.unlink()
+            r2 = self.run_wrapper(text, "--ensure")
+            self.assertEqual((r2.returncode, r2.stderr, self.calls()), (0, "", []))
+
+    def test_ensure_restores_a_pruned_headless_shell_alone(self):
+        for text in self.each_profile():
+            self.install_build()
+            shutil.rmtree(self.home / "Library/Caches/ms-playwright" / ("chromium_headless_shell-%s" % BUILD))
+            r = self.run_wrapper(text, "--ensure")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(len([c for c in self.calls() if c.startswith("npx ")]), 1)
+
+    def test_executable_without_the_completion_marker_is_not_present(self):
+        for text in self.each_profile():
+            self.install_build(markers=False)  # a half-extracted install: the file is there, the marker is not
+            r = self.run_wrapper(text, "--version")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(len([c for c in self.calls() if c.startswith("npx ")]), 1)
+
+    def test_a_live_lock_makes_the_second_caller_wait_instead_of_installing(self):
+        for text in self.each_profile():
+            cache = self.home / "Library/Caches/ms-playwright"
+            lock = cache / ".chromium-install.lock"
+            lock.mkdir(parents=True)
+            (lock / "pid").write_text(str(os.getpid()))  # this test process stands in for the installer: alive
+
+            def finish():
+                self.install_build()
+                (lock / "pid").unlink()
+                lock.rmdir()
+            timer = threading.Timer(1.5, finish)
+            timer.start()
+            try:
+                r = self.run_wrapper(text, "--version")
+            finally:
+                timer.join()
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(self.calls(), ["browser --version"], "no second install")
+
+    def test_a_stale_lock_is_taken_over(self):
+        for text in self.each_profile():
+            dead = subprocess.Popen(["/bin/sh", "-c", "exit 0"])
+            dead.wait()
+            lock = self.home / "Library/Caches/ms-playwright/.chromium-install.lock"
+            lock.mkdir(parents=True)
+            (lock / "pid").write_text(str(dead.pid))
+            r = self.run_wrapper(text, "--version")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(len([c for c in self.calls() if c.startswith("npx ")]), 1)
+            self.assertFalse(lock.exists())
 
     def test_failed_install_prints_one_error_line_and_exits_nonzero(self):
         for text in self.each_profile():
@@ -185,6 +258,10 @@ class RedControlTest(WrapperTest):
         r = self.run_wrapper(OLD_WRAPPER, "--headless")
         self.assertEqual(r.returncode, 126, r.stderr)
         self.assertEqual(self.calls(), [], "the old wrapper never installs")
+
+    def test_old_wrapper_does_not_know_ensure(self):
+        r = self.run_wrapper(OLD_WRAPPER, "--ensure")
+        self.assertEqual(r.returncode, 126)
 
     def test_old_wrapper_runs_a_present_build(self):
         self.install_build()
