@@ -98,7 +98,7 @@ class EnvFileTest(unittest.TestCase):
         self.assertEqual((r.stdout, r.stderr, r.returncode), ("unset", "", 0))
 
     def test_zshenv_has_one_guarded_source_line(self):
-        lines = [ln for ln in ZSHENV.read_text().splitlines() if "agent-scratch" in ln and not ln.startswith("#")]
+        lines = [ln for ln in ZSHENV.read_text().splitlines() if "workshop.env" in ln and not ln.startswith("#")]
         self.assertEqual(lines, ['[ -f "$HOME/.config/agent-scratch/workshop.env" ] && . "$HOME/.config/agent-scratch/workshop.env"'])
 
 
