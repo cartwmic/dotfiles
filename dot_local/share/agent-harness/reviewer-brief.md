@@ -20,7 +20,7 @@ Read all of these:
 
 ## 3. Run what you doubt
 
-If a finding depends on behaviour you cannot settle by reading, run it: the journey, the test or the command. Use scratch space and keep the repo clean. Say what you ran and what it printed.
+If a finding depends on behaviour you cannot settle by reading, run it: the journey, the test or the command. Use scratch space and keep the repo clean. Delete only paths you created yourself, never with a glob over a shared directory such as `/tmp` or `/var/folders`. Kill only processes whose PIDs you started. Say what you ran and what it printed.
 
 ## 4. Report everything at once
 
