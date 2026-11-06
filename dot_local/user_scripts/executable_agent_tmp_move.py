@@ -143,8 +143,14 @@ def rsync(src, dst):
 
 
 def remove_tree(path):
+    """Remove a verified-moved original. Read-only directories (Go module caches, for one) are made writable first."""
     if os.path.isdir(path) and not os.path.islink(path):
-        shutil.rmtree(path)
+        try:
+            shutil.rmtree(path)
+        except PermissionError:
+            for dp, _dn, _fn in os.walk(path):
+                os.chmod(dp, os.lstat(dp).st_mode | 0o700)
+            shutil.rmtree(path)
     else:
         os.unlink(path)
 
@@ -201,7 +207,11 @@ class Mover:
         aside = self.src / (name + ".moving-%d" % os.getpid())
         os.rename(p, aside)
         os.symlink(final, p)
-        remove_tree(aside)
+        try:
+            remove_tree(aside)
+        except OSError as e:
+            self.record(name, "failed", why="moved and linked, but the original is still at %s: %s" % (aside, e))
+            return False, "moved and linked, but could not remove the original, still at %s: %s" % (aside, e)
         self.record(name, "moved", entries=stats[0], bytes=stats[1], seconds=round(time.time() - t0, 1), to=str(final))
         return True, ""
 
