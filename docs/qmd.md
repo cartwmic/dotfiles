@@ -305,7 +305,7 @@ sessions and recaps; nothing is copied between machines).
   T3's state db (`~/.t3/userdata/statev2.sqlite`; `QMD_EXPORT_T3_DB` overrides it, for tests) is opened read-only, once per run, and
   never written or copied. (A read-only open of a WAL db can create its `-wal` and `-shm` side files if they are absent; the db file itself is not written.) A missing db, an unreadable one or one from another T3 version adds nothing and says nothing, so the output
   is what it is without T3. The change is inert on every profile where there is no T3 db.
-  **Only what Michael typed:** `qmd search ownerturn -c claude-sessions -n 5` finds the sessions with an owner turn. `ownerturn` is not ordinary text, so the search itself filters. `qmd get "#docid" | awk '/^## /{p = /^## ownerturn /} p'` prints only those turns.
+  **Only what Michael typed:** `qmd search ownerturn -c claude-sessions -n 5` finds the sessions with an owner turn. `ownerturn` is not ordinary text, so the search itself filters. `qmd get --no-line-numbers "#docid" | awk '/^## /{p = /^## ownerturn /} p'` prints only those turns.
 - **Codex** (`codex-sessions`): user and assistant `response_item` messages and `compacted` summaries. Developer messages,
   reasoning, tool calls and output and the duplicate `event_msg` copies stay out. The id, cwd and day come from the first
   line (`session_meta`).
