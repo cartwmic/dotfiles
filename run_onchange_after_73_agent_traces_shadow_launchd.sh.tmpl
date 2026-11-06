@@ -14,7 +14,7 @@
 # setting: {{ includeTemplate "agent_traces_shadow_config" . }}
 # endpoint: {{ (includeTemplate "agent_events_config" . | fromJson).endpoint }}
 set -eu
-log() { printf '[agent_traces_shadow_launchd] %s: %s\n' "$1" "$2"; }
+log() { printf '%s [agent_traces_shadow_launchd] %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2"; }
 
 [ "$(uname -s)" = Darwin ] || exit 0
 uid=$(id -u)
@@ -23,8 +23,8 @@ rc=0
 # unload LABEL: unload the job, then remove its plist. A failed unload keeps the plist and fails the apply, so the next apply runs this again.
 unload() {
   launchctl bootout "gui/$uid/$1" >/dev/null 2>&1 || :
-  if launchctl print "gui/$uid/$1" >/dev/null 2>&1; then
-    log ERROR "could not unload $1; try: launchctl bootout gui/$uid/$1, then chezmoi apply again"
+  if ! wait_gone "$1"; then
+    log ERROR "could not unload $1 (still loaded 10 s after bootout); run by hand: launchctl bootout gui/$uid/$1 && rm -f $HOME/Library/LaunchAgents/$1.plist"
     rc=1
     return 0
   fi
