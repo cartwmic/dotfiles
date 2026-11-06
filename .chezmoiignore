@@ -230,6 +230,11 @@ Library/LaunchAgents/local.qmd-refresh.plist
 .config/kgate
 # /Volumes/Workshop exists only on the personal Mac; the script turns Spotlight off for it.
 80_spotlight_off_workshop.sh
+# Agent scratch on the Workshop SSD (docs/agent-scratch.md): the env file dot_zshenv sources, the script that makes its directory, and the ~/tmp move script.
+.config/agent-scratch
+.config/agent-scratch/**
+81_agent_scratch_workshop.sh
+.local/user_scripts/agent_tmp_move.py
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 # Anthropic stalls are only seen on the work profile.
