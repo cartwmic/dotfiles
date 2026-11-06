@@ -17,6 +17,9 @@ ROOT = Path(__file__).resolve().parents[2]
 TMPL = ROOT / "dot_local/bin/executable_chromium.tmpl"
 PROFILES = ("personal", "axon-work-computer")
 DARWIN = sys.platform == "darwin"
+# macOS /bin/sh is bash (the wrapper's real shell); Linux CI runs dash. CHROMIUM_TEST_SH=/bin/dash reproduces CI on a Mac.
+SH = os.environ.get("CHROMIUM_TEST_SH", "/bin/sh")
+DASH = os.path.basename(os.path.realpath(SH)) == "dash"
 VERSION, BUILD = "1.64.1", "1248"
 EXE = "Library/Caches/ms-playwright/chromium-%s/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" % BUILD
 INSTALL_ARGS = ["-y", "playwright@" + VERSION, "install", "chromium"]
@@ -110,7 +113,7 @@ class WrapperTest(unittest.TestCase):
         full = {"PATH": "%s:/usr/bin:/bin" % self.bin, "HOME": str(self.home), "FAKE_LOG": str(self.log),
                 "FAKE_BROWSER_SRC": str(self.browser_src)}
         full.update(env)
-        return subprocess.run(["/bin/sh", str(script), *args], env=full, capture_output=True, text=True, timeout=60)
+        return subprocess.run([SH, str(script), *args], env=full, capture_output=True, text=True, timeout=60)
 
     def calls(self):
         return self.log.read_text().splitlines() if self.log.exists() else []
@@ -146,7 +149,8 @@ class NewWrapperTest(WrapperTest):
                 "browser --headless about:blank"])
             pgid = [c for c in calls if c.startswith("pgid ")]
             self.assertEqual(len(pgid), 1)
-            self.assertNotEqual(int(pgid[0].split()[1]), os.getpgrp(), "the install runs in its own process group")
+            if not DASH:  # dash has no job control without a tty; the wrapper only deploys to macOS (bash)
+                self.assertNotEqual(int(pgid[0].split()[1]), os.getpgrp(), "the install runs in its own process group")
             self.assertFalse((self.home / "Library/Caches/ms-playwright/.chromium-install.lock").exists(), "lock released")
             lines = r.stderr.splitlines()
             self.assertEqual(len(lines), 1, r.stderr)
@@ -256,12 +260,12 @@ class NewWrapperTest(WrapperTest):
 class RedControlTest(WrapperTest):
     def test_old_wrapper_without_an_install_step_fails_126_on_a_missing_build(self):
         r = self.run_wrapper(OLD_WRAPPER, "--headless")
-        self.assertEqual(r.returncode, 126, r.stderr)
+        self.assertEqual(r.returncode, 127 if DASH else 126, r.stderr)  # exec of a missing file: bash says 126, dash 127
         self.assertEqual(self.calls(), [], "the old wrapper never installs")
 
     def test_old_wrapper_does_not_know_ensure(self):
         r = self.run_wrapper(OLD_WRAPPER, "--ensure")
-        self.assertEqual(r.returncode, 126)
+        self.assertEqual(r.returncode, 127 if DASH else 126)
 
     def test_old_wrapper_runs_a_present_build(self):
         self.install_build()

@@ -33,7 +33,7 @@ install() {
 	rc=0
 	if ! present; then
 		echo "[chromium] INFO: chromium-$BUILD is missing; installing it with: $HAND" >&2
-		set -m
+		set -m 2>/dev/null || true
 		PLAYWRIGHT_BROWSERS_PATH="$CACHE" npx -y "playwright@$VERSION" install chromium >&2 &
 		pid=$!
 		echo "$pid" > "$LOCK/pid"
