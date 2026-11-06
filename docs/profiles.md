@@ -58,9 +58,13 @@ Machine-specific values (hosts, addresses, vault items, work names) are not in t
 
 | Key | Effect when set | Effect when unset |
 |---|---|---|
-| `privatePiProviderRef` | The `work-anthropic` Pi provider, read from 1Password (work profile). | No `work-anthropic` provider. |
+| `privatePiProviderRef` | The `work-anthropic` Pi provider, read from 1Password through the service account (work profile; see the next section). | No `work-anthropic` provider. |
 | `axonPlaybook.repo` | Clones the Axon playbook (work profile; see `example.chezmoi.yaml`). | Nothing is cloned. |
 | `workGitHost`, `workAwsProfile` on the personal profile | The host appears in the gitlinker map, the playbook text and the skill; the AWS default is used in `~/.zshrc`. | Left out; the AWS default is `default`. |
+
+### 1Password service-account token
+
+The work profile reads `privatePiProviderRef` with `op` through the service account only, never the 1Password desktop app. The token comes from `OP_SERVICE_ACCOUNT_TOKEN`, or else from `~/.config/agent-harness/op-service-token` (mode 0600, outside git). The read runs the real `op` under an empty HOME, so the app cannot answer it. With no token the render stops with a message that names the token file, and nothing calls `op`. Each render reads the secret fresh and nothing is cached, so a rotated key shows up on the next render.
 
 ### Environment for the Mac-side phone helpers
 
