@@ -81,4 +81,4 @@ The old names and the exact old-to-new key pairs are kept outside this public re
 
 - Claude Code's user config still lists the old work devportal entry. The apply adds `work-devportal` and does not remove names it no longer renders for Claude. Remove the old entry once with `claude mcp remove -s user <old-name>`.
 - `~/.t3/userdata/settings.json` still has the old work GLM favourite, which now points at nothing. Pick the new `work-glm` model as the favourite.
-- Pi removes its recorded old MCP name by itself, and Codex needs nothing: the old work devportal block sits inside the managed block of `~/.codex/config.toml`, which every apply rewrites whole.
+- Pi removes its recorded old MCP name by itself. Codex is different: existing `~/.codex/config.toml` files have no `# harness-servers:` line, so on the first apply after that line was added, a server the harness no longer renders (the old work devportal server is one) moves below the `END` marker and stays there. Delete its `[mcp_servers.<name>]` table (and any subtables) from `~/.codex/config.toml` once by hand; later removals are handled by the apply.

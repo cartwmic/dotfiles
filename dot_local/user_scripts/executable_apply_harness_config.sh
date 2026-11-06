@@ -352,6 +352,11 @@ data = json.loads(mcp_file.read_text())
 servers = data.get("mcpServers", {})
 
 lines = ["# BEGIN CHEZMOI AGENT HARNESS MCP"]
+# Names of the servers rendered below. The next merge treats these as the harness's own
+# (replaced, or dropped once no longer rendered); any other table in the block is foreign.
+lines.append("# harness-servers: " + ",".join(
+    n for n, c in servers.items() if "command" in c or c.get("type") == "http" or "url" in c
+))
 for name, cfg in servers.items():
     if "command" in cfg:
         lines.append(f"[mcp_servers.{name}]")
@@ -381,6 +386,14 @@ out_file.write_text("\n".join(lines) + "\n")
 PY
 }
 
+# Rewrite the harness block in ~/.codex/config.toml. Anything the Codex app wrote between the
+# markers is kept: top-level key lines (e.g. `notify`) go above the first table of the file, other
+# tables (e.g. [mcp_servers.node_repl] and its subtables) go after END. The harness's own servers
+# are the ones the old block's `# harness-servers:` line names plus the ones rendered now; their
+# tables are replaced, or dropped when no longer rendered. An old block with no such line (written
+# before it existed) owns only what is rendered now, so older leftovers move out once. The result
+# must parse as TOML (checked when tomllib exists, Python 3.11+), or the file is left as it was and
+# this exits non-zero. Same code on the personal and work profiles.
 merge_codex_config() {
   block_file="$1"
   config_file="$HOME/.codex/config.toml"
@@ -389,35 +402,96 @@ merge_codex_config() {
 
   python3 - "$block_file" "$config_file" <<'PY'
 import pathlib
+import re
 import sys
+
+try:
+    import tomllib
+except ImportError:  # Python < 3.11: merge without the parse check
+    tomllib = None
 
 block = pathlib.Path(sys.argv[1]).read_text().rstrip() + "\n"
 config_path = pathlib.Path(sys.argv[2])
 begin = "# BEGIN CHEZMOI AGENT HARNESS MCP"
 end = "# END CHEZMOI AGENT HARNESS MCP"
+header_re = re.compile(r"^\s*\[")
+server_re = re.compile(r"""^\s*\[\[?\s*mcp_servers\s*\.\s*("[^"]*"|'[^']*'|[A-Za-z0-9_-]+)""")
+owners_re = re.compile(r"^# harness-servers:(.*)$", re.M)
 
-if config_path.exists():
-    content = config_path.read_text()
-else:
-    content = ""
+content = config_path.read_text() if config_path.exists() else ""
+block_lines = set(block.splitlines())
 
+
+def server_name(header):
+    m = server_re.match(header)
+    return m.group(1).strip("\"'") if m else None
+
+
+def names(text):
+    return {n.strip() for n in owners_re.search(text).group(1).split(",") if n.strip()} if owners_re.search(text) else set()
+
+
+harness = names(block)  # rendered now
+
+
+top_keys, foreign_tables = [], []
 if begin in content and end in content:
     start = content.index(begin)
     finish = content.index(end, start) + len(end)
-    new_content = content[:start].rstrip()
-    if new_content:
-        new_content += "\n\n"
-    new_content += block
-    suffix = content[finish:].lstrip("\n")
-    if suffix:
-        new_content += "\n" + suffix
+    old_text = content[start + len(begin):content.index(end, start)]
+    old = old_text.splitlines()
+    harness |= names(old_text)
+    segments, current = [], None  # table segments: [header, lines]
+    for line in old:
+        if header_re.match(line):
+            current = [line, [line]]
+            segments.append(current)
+        elif current is None:
+            top_keys.append(line)
+        else:
+            current[1].append(line)
+    # Comment lines the harness itself renders (e.g. "# Skipped x") are not foreign.
+    drop = lambda ls: [l for l in ls if not (l.strip().startswith("#") and (l in block_lines or l.startswith("# harness-servers:")))]
+    for header, lines in segments:
+        if server_name(header) not in harness:
+            foreign_tables += drop(lines)
+    top_keys = drop(top_keys)
+    prefix, suffix = content[:start], content[finish:].lstrip("\n")
 else:
-    new_content = content.rstrip()
-    if new_content:
-        new_content += "\n\n"
-    new_content += block
+    prefix, suffix = content, ""
 
-config_path.write_text(new_content.rstrip() + "\n")
+top_text = "\n".join(top_keys).strip("\n")
+tables_text = "\n".join(foreign_tables).strip("\n")
+
+prefix = prefix.rstrip()
+if top_text:
+    lines = prefix.splitlines()
+    idx = next((i for i, l in enumerate(lines) if header_re.match(l)), len(lines))
+    head = "\n".join(lines[:idx]).rstrip()
+    tail = "\n".join(lines[idx:])
+    prefix = (head + "\n" if head else "") + top_text + "\n" + ("\n" + tail if tail else "")
+    prefix = prefix.rstrip()
+
+new_content = prefix
+if new_content:
+    new_content += "\n\n"
+new_content += block
+if tables_text:
+    new_content += "\n" + tables_text + "\n"
+if suffix:
+    new_content += "\n" + suffix
+new_content = new_content.rstrip() + "\n"
+
+if tomllib is None:
+    print("[apply_harness_config] WARN: tomllib unavailable (Python < 3.11); Codex config merged without the parse check")
+else:
+    try:
+        tomllib.loads(new_content)
+    except tomllib.TOMLDecodeError as exc:
+        sys.exit(f"[apply_harness_config] ERROR: merged Codex config does not parse ({exc}); {config_path} left unchanged")
+
+if new_content != content:
+    config_path.write_text(new_content)
 PY
 }
 
