@@ -27,7 +27,10 @@ FAKES = {
   kern.memorystatus_vm_pressure_level) v=$(cat "$FAKE/pressure"); echo "$v"; echo read >> "$FAKE/pressure_reads"
     if [ -f "$FAKE/on_pressure" ]; then sh "$FAKE/on_pressure"; fi ;;
 esac''',
-    "df": 'cat "$FAKE/df"',
+    "df": '''for p; do :; done
+f="$FAKE/df$(printf %s "$p" | tr / _)"
+if [ -f "$f" ] && [ "$(cat "$f")" = MISSING ]; then echo "df: $p: No such file or directory" >&2; exit 1; fi
+if [ -f "$f" ]; then cat "$f"; else cat "$FAKE/df"; fi''',
     "memory_pressure": 'cat "$FAKE/memory_pressure"\nif [ -f "$FAKE/on_memory_pressure" ]; then sh "$FAKE/on_memory_pressure"; fi',
     # the gate no longer reads vm_stat; the frozen v69 gate in OLD_SCRIPT does
     "vm_stat": '''n=$(cat "$FAKE/swapouts")
@@ -74,7 +77,7 @@ class HeavyGate(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith("HEAVY_GATE_") and k not in ("HERDR_PANE_ID", "WORKSTREAM_RANK_FILE")}
         self.env = {**env, "PATH": ":".join([str(bin_dir), *host_path]), "FAKE": str(self.fake), "HEAVY_GATE_LOCK": str(root / "heavy-gate.lock"),
                     "HEAVY_GATE_CHECK_WINDOW": "1", "HEAVY_GATE_SWAP_WINDOW": "1", "HEAVY_GATE_POLL": "1", "HEAVY_GATE_PRIORITIES": str(root / "priorities"),
-                    "HEAVY_GATE_SLOTS_FILE": str(root / "slots"),
+                    "HEAVY_GATE_SLOTS_FILE": str(root / "slots"), "HEAVY_GATE_VOLUMES_FILE": str(root / "volumes"),
                     "WORKSTREAM_RANK_FILE": str(root / "rank")}
         self.bin = bin_dir
         self.rank_file = root / "rank"
@@ -82,6 +85,7 @@ class HeavyGate(unittest.TestCase):
         self.lock2 = root / "heavy-gate.lock.2"
         self.lock3 = root / "heavy-gate.lock.3"
         self.slots_file = root / "slots"
+        self.volumes_file = root / "volumes"
         self.waiters = root / "heavy-gate.lock.waiters"
         self.priorities = root / "priorities"
 
@@ -94,6 +98,22 @@ class HeavyGate(unittest.TestCase):
         tmp = self.fake / "df.new"
         tmp.write_text(df_output(free_gb, mount) + "\n")
         os.replace(tmp, self.fake / "df")
+
+    def watch(self, *paths):
+        """The volumes file: one path per line."""
+        self.volumes_file.write_text("".join(f"{p}\n" for p in paths))
+
+    def set_volume(self, path, free_gb):
+        """Fake `df <path>` for a watched volume that is mounted there with this much free space."""
+        tmp = self.fake / "df.new"
+        tmp.write_text(df_output(free_gb, path) + "\n")
+        os.replace(tmp, self.fake / ("df" + path.replace("/", "_")))
+
+    def unmount(self, path):
+        """Fake `df <path>` for a path that is not there (what df prints and does when the volume is not mounted)."""
+        tmp = self.fake / "df.new"
+        tmp.write_text("MISSING\n")
+        os.replace(tmp, self.fake / ("df" + path.replace("/", "_")))
 
     def gate(self, *args, timeout=30, script=SCRIPT, **extra):
         extra.setdefault("cwd", self.tmp.name)   # see start()
@@ -385,7 +405,7 @@ class HeavyGate(unittest.TestCase):
         self.assertIn("3.0 GB free on /Volumes/My Disk, under", self.gate().stderr)
 
     def test_the_gate_reads_the_volume_that_holds_HOME(self):
-        (self.bin / "df").write_text('#!/bin/sh\necho "$@" > "$FAKE/df_args"\ncat "$FAKE/df"\n')
+        (self.bin / "df").write_text('#!/bin/sh\necho "$@" > "$FAKE/df_args"\ncat "$FAKE/df"\n')   # no volumes file here: one call
         self.gate(env={"HOME": "/some/home"})
         self.assertEqual((self.fake / "df_args").read_text().split(), ["-k", "/some/home"])
 
@@ -409,6 +429,111 @@ class HeavyGate(unittest.TestCase):
         job.communicate(timeout=20)
         self.assertEqual(job.returncode, 0)
         self.assertTrue(marker.exists())
+
+    # --- watched volumes (the volumes file): the same floor, and a volume that is not mounted is its own refusal ---
+    WORKSHOP = "/Volumes/Workshop"
+
+    def test_a_watched_volume_over_the_floor_is_admitted_and_df_reads_each_path(self):
+        self.watch(self.WORKSHOP)
+        self.set_volume(self.WORKSHOP, 200)
+        (self.bin / "df").write_text('#!/bin/sh\necho "$@" >> "$FAKE/df_calls"\n' + FAKES["df"] + "\n")
+        result = self.gate(env={"HOME": "/some/home"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([c.split() for c in (self.fake / "df_calls").read_text().splitlines()], [["-k", "/some/home"], ["-k", self.WORKSHOP]])
+
+    def test_a_watched_volume_under_the_floor_refuses_with_76_naming_it(self):
+        self.watch(self.WORKSHOP)
+        self.set_volume(self.WORKSHOP, 9.8)
+        result = self.gate()
+        self.assertEqual(result.returncode, 76, result.stderr)
+        self.assertIn("[heavy-gate] REFUSED: 9.8 GB free on /Volumes/Workshop, under the 15 GB floor; free space and retry", result.stderr)
+        self.assertNotIn("/System/Volumes/Data", result.stderr)   # the internal disk is fine; only Workshop is named
+
+    def test_a_watched_volume_uses_the_same_floor_and_its_edge(self):
+        self.watch(self.WORKSHOP)
+        self.set_volume(self.WORKSHOP, 15)
+        self.assertEqual(self.gate().returncode, 0)
+        self.set_volume(self.WORKSHOP, 14.99)
+        self.assertEqual(self.gate().returncode, 76)
+        self.set_volume(self.WORKSHOP, 20)
+        result = self.gate(env={"HEAVY_GATE_MIN_FREE_GB": "25"})
+        self.assertEqual(result.returncode, 76, result.stderr)
+        self.assertIn("20.0 GB free on /Volumes/Workshop, under the 25 GB floor", result.stderr)
+
+    def test_a_watched_volume_that_is_not_mounted_is_a_loud_refusal_with_76(self):
+        self.watch(self.WORKSHOP)
+        self.unmount(self.WORKSHOP)
+        result = self.gate()
+        self.assertEqual(result.returncode, 76, result.stderr)
+        self.assertEqual([l for l in result.stderr.splitlines() if "REFUSED" in l], ["[heavy-gate] REFUSED: /Volumes/Workshop is not mounted; mount it and retry"])
+
+    def test_a_watched_path_that_df_reports_on_another_volume_counts_as_not_mounted(self):
+        # the mount point is gone but the directory is not: df answers with the volume that holds it
+        self.watch(self.WORKSHOP)
+        self.set_volume(self.WORKSHOP, 500)
+        (self.fake / "df_Volumes_Workshop").write_text(df_output(500, "/") + "\n")
+        result = self.gate()
+        self.assertEqual(result.returncode, 76, result.stderr)
+        self.assertIn("REFUSED: /Volumes/Workshop is not mounted; mount it and retry", result.stderr)
+
+    def test_a_watched_volume_whose_free_space_is_unreadable_refuses(self):
+        self.watch(self.WORKSHOP)
+        (self.fake / "df_Volumes_Workshop").write_text(DF_HEADER + "\n/dev/disk7s1 1 2 lots 99% 1 2 11% /Volumes/Workshop\n")
+        result = self.gate()
+        self.assertEqual(result.returncode, 76, result.stderr)
+        self.assertIn("REFUSED: free space on /Volumes/Workshop is unreadable; free space and retry", result.stderr)
+
+    def test_every_broken_volume_gets_its_own_line(self):
+        self.watch(self.WORKSHOP, "/Volumes/Other")
+        self.set_free(9.8)
+        self.unmount(self.WORKSHOP)
+        self.set_volume("/Volumes/Other", 3)
+        lines = [l for l in self.gate().stderr.splitlines() if "REFUSED" in l]
+        self.assertEqual(lines, ["[heavy-gate] REFUSED: 9.8 GB free on /System/Volumes/Data, under the 15 GB floor; free space and retry",
+                                 "[heavy-gate] REFUSED: /Volumes/Workshop is not mounted; mount it and retry",
+                                 "[heavy-gate] REFUSED: 3.0 GB free on /Volumes/Other, under the 15 GB floor; free space and retry"])
+
+    def test_the_volumes_file_ignores_comments_blank_lines_and_a_trailing_slash(self):
+        self.volumes_file.write_text(f"# watched\n\n   \n  {self.WORKSHOP}/  \n")
+        self.unmount(self.WORKSHOP)
+        self.assertIn("REFUSED: /Volumes/Workshop is not mounted", self.gate().stderr)
+        self.set_volume(self.WORKSHOP, 100)
+        self.assertEqual(self.gate().returncode, 0)
+
+    def test_no_volumes_file_or_an_empty_one_watches_nothing_extra(self):
+        self.unmount(self.WORKSHOP)   # would refuse if it were watched
+        self.assertEqual(self.gate().returncode, 0)
+        self.volumes_file.write_text("# nothing\n")
+        self.assertEqual(self.gate().returncode, 0)
+
+    def test_a_command_is_not_run_while_a_watched_volume_is_not_mounted(self):
+        self.watch(self.WORKSHOP)
+        self.unmount(self.WORKSHOP)
+        marker = Path(self.tmp.name) / "ran"
+        result = self.gate("--wait", "1", "--", "touch", str(marker))
+        self.assertEqual(result.returncode, 76, result.stderr)   # not 75: the last try was refused for disk
+        self.assertFalse(marker.exists(), "a refused job must not start")
+        self.assertIn("REFUSED: /Volumes/Workshop is not mounted", result.stderr)
+        self.assertFalse(self.lock.is_symlink(), "nothing is held")
+
+    def test_a_job_that_waits_runs_once_the_volume_is_mounted(self):
+        self.watch(self.WORKSHOP)
+        self.unmount(self.WORKSHOP)
+        marker = Path(self.tmp.name) / "ran"
+        job = self.start("--wait", "20", "--", "touch", str(marker))
+        time.sleep(2.5)
+        self.assertIsNone(job.poll(), "still waiting while Workshop is not mounted")
+        self.assertFalse(marker.exists())
+        self.set_volume(self.WORKSHOP, 200)
+        job.communicate(timeout=20)
+        self.assertEqual(job.returncode, 0)
+        self.assertTrue(marker.exists())
+
+    def test_the_check_says_it_also_watches_the_volumes_file(self):
+        self.watch(self.WORKSHOP)
+        self.set_volume(self.WORKSHOP, 200)
+        result = self.gate()
+        self.assertIn(f"on each volume in {self.volumes_file}", result.stderr)
 
     def test_memory_refusal_after_wait_is_still_75(self):
         self.set(pressure="4")
@@ -1242,7 +1367,7 @@ exit $rc
         result = self.gate("--help")
         self.assertEqual(result.returncode, 2)
         for expected in ("HEAVY_GATE_SLOTS", "HEAVY_GATE_SLOTS_FILE", "heavy-gate slots", "heavy-gate slots N", "Slots:", "heavy-gate priorities", "heavy-gate priority PATTERN NUMBER", "HEAVY_GATE_PRIORITY", "slot 2",
-                         "Memory pressure and free disk space gate a start", "HEAVY_GATE_MIN_FREE_GB", "REFUSED: 9.8 GB free on /System/Volumes/Data, under the 15 GB floor", "memory pressure level 1 or 2", "owner decision 2026-10-30: admit at level 2 when free >= 30%", "Not checked, on purpose: free swap", "HEAVY_GATE_CHECK_WINDOW"):
+                         "Memory pressure and free disk space gate a start", "HEAVY_GATE_MIN_FREE_GB", "HEAVY_GATE_VOLUMES_FILE", "REFUSED: /Volumes/Workshop is not mounted; mount it and retry", "REFUSED: 9.8 GB free on /System/Volumes/Data, under the 15 GB floor", "memory pressure level 1 or 2", "owner decision 2026-10-30: admit at level 2 when free >= 30%", "Not checked, on purpose: free swap", "HEAVY_GATE_CHECK_WINDOW"):
             self.assertIn(expected, result.stderr)
         for stale in ("load1 < 8", "Swapouts flat", "500 MB", "safety floor", "HEAVY_GATE_SWAP_WINDOW"):
             self.assertNotIn(stale, result.stderr)
