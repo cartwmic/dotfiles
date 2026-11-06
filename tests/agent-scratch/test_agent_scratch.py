@@ -111,6 +111,25 @@ class CreateScriptTest(unittest.TestCase):
             self.assertFalse(root.exists())
 
 
+UV_TOML = ROOT / "dot_config/uv/uv.toml"
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is not installed")
+class UvConfigTest(unittest.TestCase):
+    def test_uv_reads_cache_dir_from_the_deployed_file(self):
+        with tempfile.TemporaryDirectory() as t:
+            cfg = Path(t) / ".config/uv"
+            cfg.mkdir(parents=True)
+            shutil.copy(UV_TOML, cfg / "uv.toml")
+            env = dict(clean_env(t), XDG_CONFIG_HOME=str(Path(t) / ".config"))
+            r = subprocess.run(["uv", "cache", "dir"], env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, "/Volumes/Workshop/macbook/cache/uv"), r.stderr)
+
+    def test_the_file_sets_only_cache_dir(self):
+        lines = [ln for ln in UV_TOML.read_text().splitlines() if ln.strip() and not ln.startswith("#")]
+        self.assertEqual(lines, ['cache-dir = "/Volumes/Workshop/macbook/cache/uv"'])
+
+
 def git(*args, cwd):
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True,
                    env=dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t"))

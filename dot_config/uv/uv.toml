@@ -1,0 +1,6 @@
+# uv's user config. Personal macOS only (.chezmoiignore): the cache lives on the Workshop SSD (docs/agent-scratch.md).
+# A file setting, not a shell variable, so launchd jobs and every shell read it. If Workshop is not mounted uv fails with an
+# error on this path; /Volumes is root-owned, so it cannot be recreated on the internal disk. Never add a fallback.
+# Tools installed from a Workshop cache into internal venvs copy files instead of linking; that is fine.
+# Undo: remove this file from the chezmoi source and apply.
+cache-dir = "/Volumes/Workshop/macbook/cache/uv"

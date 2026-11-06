@@ -252,6 +252,9 @@ Library/Preferences/pnpm/**
 .config/heavy-gate/volumes
 81_agent_scratch_workshop.sh
 .local/user_scripts/agent_tmp_move.py
+# uv's cache-dir setting (uv.toml; the uv installer's uv-receipt.json in the same directory is not managed).
+.config/uv
+.config/uv/**
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 # Anthropic stalls are only seen on the work profile.
