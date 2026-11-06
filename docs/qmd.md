@@ -329,7 +329,7 @@ Agent scratch lives on the Workshop SSD (`docs/agent-scratch.md`), and `~/tmp/<n
 - `notes` is `/Volumes/Workshop/macbook/tmp-home`, pattern `*/*.md`. New scratch (`$AGENT_TMP`) and everything that moved is here.
 - `notes-internal` is `~/tmp`, the same pattern, for the subtrees that have not moved yet. Links in `~/tmp` are skipped, so nothing is indexed twice.
 
-A moved note keeps its path inside the collection, so it reactivates under `notes` with its vectors. The work profile has no Workshop and keeps one `notes` collection at `~/tmp`. If the Workshop disk is not mounted the `notes` folder is missing and the cleanup is skipped (see the guard above).
+`notes-internal` is rendered only while `~/tmp` is a real directory. When `agent_tmp_move.py --finish` makes `~/tmp` a link to the Workshop folder, qmd does follow a link given as a collection folder, so `notes-internal` would index every note a second time; re-apply the qmd `index.yml` after `--finish` and the collection goes away. A moved note keeps its path inside the collection, so it reactivates under `notes` with its vectors. The work profile has no Workshop and keeps one `notes` collection at `~/tmp`. If the Workshop disk is not mounted the `notes` folder is missing and the cleanup is skipped (see the guard above).
 
 ## The work profile (axon-work-computer)
 

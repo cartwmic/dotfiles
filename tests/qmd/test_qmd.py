@@ -121,6 +121,7 @@ class IndexTemplateTest(unittest.TestCase):
     def setUpClass(cls):
         c = Chezmoi("personal")
         cls.home = c.home
+        (c.home / "tmp").mkdir()   # a real ~/tmp: notes-internal is rendered
         try:
             cls.out = c.run("execute-template", stdin=INDEX.read_text())
         finally:
@@ -230,7 +231,23 @@ class WorkIndexTemplateTest(unittest.TestCase):
 
     def test_personal_still_has_notes_without_a_tmp_folder(self):
         out, _ = self.render("personal")
-        self.assertEqual(self.names(out)[:3], ["notes", "notes-internal", "repo-dotfiles"])
+        self.assertEqual(self.names(out)[:2], ["notes", "repo-dotfiles"])
+
+    def test_personal_has_no_notes_internal_once_tmp_is_a_link(self):
+        # After `agent_tmp_move.py --finish` ~/tmp is a link to the Workshop folder; qmd follows a link given as a collection
+        # folder, so notes-internal would index every note twice.
+        c = Chezmoi("personal")
+        try:
+            (c.home / "real").mkdir()
+            (c.home / "tmp").symlink_to(c.home / "real")
+            out = c.run("execute-template", stdin=INDEX.read_text())
+        finally:
+            c.close()
+        self.assertEqual(self.names(out)[:2], ["notes", "repo-dotfiles"])
+
+    def test_work_never_gets_notes_internal(self):
+        out, _ = self.render(dirs=["tmp"])
+        self.assertNotIn("notes-internal", out)
 
 
 class SkillTest(unittest.TestCase):
