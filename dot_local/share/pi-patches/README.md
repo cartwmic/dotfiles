@@ -45,7 +45,13 @@ the payload finds each chunk as the single bundle file containing that chunk's f
 and the extension-dialog edits ported to upstream 1.4.0's dialog stack (`pushExtensionDialog` / `removeExtensionDialog`): the hosted-UI ticket
 attaches to the selector or input before it is pushed, and the editor's native cancel calls its own `finish`. The one large 1.3 bundle block is split
 into small anchored edits for the same hunks. Every other edit is unchanged.
-`response-visibility` is not version-aware here: its payload lives in `cartwmic/pi-response-visibility`, which is anchor-gated and matches Pi 1.2.0 through 1.4.0.
+`patch.pi-1.5.mjs` + `edits.pi-1.5.json` serve Pi 1.5.0 and later with the same chunk lookup; `patch.pi-1.4.mjs` now serves only the 1.4 series.
+`edits.pi-1.5.json` is `edits.pi-1.4.json` with the chunks renamed (`chunk-MM3LKT73.js` -> `chunk-44DLKSKE.js`, `chunk-T726RZZU.js` -> `chunk-4EYXVSA5.js`)
+and four edits re-anchored for Pi 1.5.0: two bundle blocks and one bundle edit follow upstream's minifier renames
+(`entries` -> `entries2` in `buildExtensionResourcePaths` and in the compaction-restore block, `resolve16` -> `resolve15` in `showExtensionEditor`),
+and the `custom()` declaration in `extensions/types.d.ts` now carries upstream's new `blocked` option inside its anchor. The replacements are otherwise unchanged.
+`anthropic-idle-watchdog` has no versioned payload: its CLI anchor was shortened to the loop head, which is exactly once on Pi 1.2.0 through 1.5.0 (see its README).
+`response-visibility` is not version-aware here: its payload lives in `cartwmic/pi-response-visibility`, which is anchor-gated and matches Pi 1.2.0 through 1.5.0 at `cartwmic/pi-response-visibility` `f1f74eb` or later (an older checkout fails on 1.5.0).
 
 ## Overview
 

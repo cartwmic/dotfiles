@@ -80,7 +80,9 @@ class Backend(http.server.ThreadingHTTPServer):
 
 def main() -> None:
     source = Path(subprocess.check_output(["npm", "root", "-g"], text=True).strip()) / "@earendil-works/pi-coding-agent"
-    require(json.loads((source / "package.json").read_text())["version"] == "0.99.1", "proof is prepared for Pi 0.99.1")
+    # Source is the global npm tree (set npm_config_prefix to point at a private install). Pi 0.99.1 by default; Pi 1.5.0 also passes.
+    expected = os.environ.get("PI_WATCHDOG_PROOF_VERSION", "0.99.1")
+    require(json.loads((source / "package.json").read_text())["version"] == expected, f"proof is prepared for Pi {expected}")
     bundles = list((source / "dist/bundle/chunks").glob("anthropic-messages-*.js"))
     require(len(bundles) == 1, "expected one installed Anthropic bundle")
     source_hashes = {path: hashlib.sha256(path.read_bytes()).digest() for path in [source / TARGET, bundles[0]]}
@@ -150,7 +152,7 @@ export default function(pi) {
                 result = subprocess.run([str(cli), "--mode", "json", "--no-session", "--no-extensions",
                     "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-approve",
                     "--extension", str(observer), "Return the completion marker."], cwd=root, env=env,
-                    capture_output=True, text=True, timeout=15)
+                    capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)  # Pi reads piped stdin to EOF
                 require(len(backend.requests) == before + 1, f"{mode}: expected exactly one local provider request: {result.stderr}")
                 records = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
                 answers = [record["message"] for record in records if record.get("type") == "message_end"
