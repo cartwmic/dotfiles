@@ -44,6 +44,65 @@ The pod's first process is `tini` (`tini -- sleep infinity`), so processes a gat
 
 **kgate never runs CMD on this Mac, and never reruns a job that started.** A cluster outage shows as failed gates. A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart (it is JSON `null` when CMD ran to its end, and a text reason otherwise).
 
+## When the cluster is full
+
+When no node has room for the pod's CPU or memory request, the pod stays `Pending`. kgate waits for room and then gives up with exit 69. It never runs the job on the Mac.
+
+- A full cluster leaves the pod `Pending`, with `PodScheduled` `False` and reason `Unschedulable`. The client waits by itself. It prints `kgate: waiting for the pod: Unschedulable` to the job log when that state first appears.
+- It keeps waiting until `--wait` seconds (default 3600) after the job started.
+- If the wait runs out, it exits 69. The record's `reason` is `pod did not start within <N>s: Unschedulable <scheduler message>`. kgate copies the scheduler message unchanged, up to 300 characters. Kubernetes scheduler messages look like `0/N nodes are available: ... Insufficient memory`.
+
+The reason tells a full cluster apart from the other ways a job fails to start. These are the prefixes kgate writes:
+
+| `reason` starts with | Cause | Capacity? |
+|---|---|---|
+| `pod did not start within <N>s: Unschedulable` | No node had room for the whole wait. | Yes |
+| `pod did not start: ` (for example `ErrImagePull`, `ImagePullBackOff`, `CreateContainerConfigError`, or a pod phase of `Failed`) | The pod failed before CMD ran. | No |
+| `cluster unreachable (` | The cluster or its ssh route is down. | No |
+| `could not create the pod: ` | The cluster refused to create the pod. | No |
+
+Every other exit-69 reason (a bad profile, a tree hash or tool version mismatch, an unreadable secret) is not a capacity problem either.
+
+**What callers do.**
+
+- Wait. Pass `--wait 1200` for short gates.
+- On exit 69 whose `reason` starts `pod did not start within` and contains `Unschedulable`, the caller may run heavy-gate once. It must report "(2) no kgate capacity" and quote the reason.
+- Every other exit 69 is not a capacity problem. Report it as it is. Never report it as a Mac run in disguise.
+- The client never falls back to the Mac. A fallback inside the client would make a result's origin ambiguous.
+
+**The limit.** `Unschedulable` means no node can take the pod now. It does not say that no node ever could. A profile bigger than every node gets the same prefix, with `Insufficient memory` or `Insufficient cpu` in the scheduler message, and so does a `--node` that matches no node. The caller rule above does not separate those cases from a full cluster.
+
+## How many jobs at once
+
+Measured on 2026-11-06 from one day's node requests (`kubectl describe node`) and Prometheus. Re-measure when the coordinator's journey tests move to kgate. The scheduler places pods by their requests, not by real use: real CPU use was 5 to 12%.
+
+| Node | CPU | Memory (allocatable) |
+|---|---|---|
+| agent-1 | 16 | 15.5 GiB |
+| agent-2 | 8 | 7.7 GiB |
+| agent-3 | 8 | 7.7 GiB |
+| `cartwmic-g14-wsl` (G14) | 16 | 23.4 GiB |
+
+At that time about 41 CPU and 40 GiB were unrequested across the four nodes.
+
+Planning count:
+
+- **About 8 jobs of mixed sizes.** At most 2 of them big: a Loop Engine job (12 cpu, 8Gi) fits only agent-1 or the G14. The rest are small or medium gates of 1 to 4 GiB, about 6 of them.
+- **Up to about 12 when every job is small.**
+- **Past that, pods queue.** That is fine; the scheduler is the queue.
+
+Profile sizes in use, from each repo's `kgate.toml` on origin/main (2026-11-06):
+
+| Gate | Repo | cpu | memory |
+|---|---|---|---|
+| agent-kit unit gate | `agent-kit` | 2 | `3584Mi` (3.5 Gi) |
+| coordinator unit gate | `coordinator` | 4 | `3Gi` |
+| homelab static checks | `cartwmic-homelab-v2` | 2 | `1Gi` |
+| dotfiles heavy suites | `dotfiles` | 2 | `1Gi` |
+| Loop Engine baseline | `loop-engine` | 12 | `8Gi` |
+
+Jobs that only wait for model API calls (evals) are not heavy. They should not use heavy-gate or kgate slots; they run as plain background jobs.
+
 ## Record
 
 One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; the full output is `<id>.log` beside it. The older lines from before this version (with a `fallback` field) have a different shape.
