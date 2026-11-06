@@ -77,7 +77,7 @@ owner asked, can also run it by hand.
   template and the wrapper together.
 - `--wait` is how long heavy-gate may wait for a quiet Mac, not a run-time limit. Exit: 0 ok, 75 another refresh is running
   (reported out of band) , 127 qmd, heavy-gate or perl missing, 143 stopped by a signal, otherwise the job's or heavy-gate's own status
-  unchanged (heavy-gate's 75 means it gave up waiting; its 76 means refused: disk under the floor, `HEAVY_GATE_MIN_FREE_GB`, 15 GB by default). The last success is stamped in `~/.local/state/qmd-refresh/last-success`.
+  unchanged (heavy-gate's 75 means it gave up waiting; its 76 means refused for disk: the volume that holds `$HOME`, or a volume in `~/.config/heavy-gate/volumes` (`/Volumes/Workshop`), is under the floor `HEAVY_GATE_MIN_FREE_GB`, 15 GB by default, or that volume is not mounted). The last success is stamped in `~/.local/state/qmd-refresh/last-success`.
 
 Verified live (2026-10-27, personal Mac, after `qmd pull`): `qmd-refresh` updated 9 collections and embedded 2,085 chunks from 411
 documents in 2 min 31 s (3 min 8 s wall, 1.6 GB peak RSS), and `~/.config/qmd/index.yml` stayed identical to the chezmoi source
@@ -114,7 +114,7 @@ on TERM); the next run starts one interval after the load.
 | `run_onchange_after_71_qmd_refresh_launchd.sh.tmpl` | `print` (is it loaded?), bootout, then bootstrap (or remove when off). No other `launchctl` verb |
 
 **No second gate.** The agent adds no heavy-gate, `nice`, lock or launchd `Nice` of its own: `qmd-refresh` already runs its job as
-`nice -n 10 heavy-gate --wait N --` under its `flock`. heavy-gate may wait up to one interval for a quiet Mac, then gives up (75, or 76 when the disk is under heavy-gate's free-space floor)
+`nice -n 10 heavy-gate --wait N --` under its `flock`. heavy-gate may wait up to one interval for a quiet Mac, then gives up (75, or 76 when a disk is under heavy-gate's free-space floor or `/Volumes/Workshop` is not mounted)
 and the next tick tries again. launchd never starts a second copy of a running agent, and the lock refuses one started by hand,
 so runs cannot pile up. Not `ProcessType` Background: macOS throttles such a job to a near stop on a busy Mac (see
 `local.agent-events`), and this one holds a heavy-gate slot while it runs.

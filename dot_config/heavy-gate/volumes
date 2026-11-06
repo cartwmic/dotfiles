@@ -1,0 +1,8 @@
+# heavy-gate volumes: extra volumes whose free space gates a start, one absolute mount point per line. '#' lines and blank lines are ignored.
+#
+# Every start already needs the volume that holds $HOME to have HEAVY_GATE_MIN_FREE_GB free (15 by default). Each volume listed here must
+# meet the same floor. A listed volume that is not mounted refuses the start with "REFUSED: <path> is not mounted; mount it and retry"
+# and exit 76; it is never skipped. No file, or no line, watches nothing extra.
+#
+# /Volumes/Workshop holds agent scratch (AGENT_TMP), the T3 worktrees, the pnpm store and the Docker disk. It exists only on the personal Mac.
+/Volumes/Workshop

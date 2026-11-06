@@ -242,6 +242,8 @@ Library/LaunchAgents/local.qmd-refresh.plist
 # dot_zshenv sources (without it that line does nothing), the script that makes its directory, and the ~/tmp move script.
 .config/agent-scratch
 .config/agent-scratch/**
+# heavy-gate also watches /Volumes/Workshop's free space; the work Mac has no such volume, so it gets no volumes file and watches nothing extra.
+.config/heavy-gate/volumes
 81_agent_scratch_workshop.sh
 .local/user_scripts/agent_tmp_move.py
 {{- end }}
