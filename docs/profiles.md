@@ -34,8 +34,6 @@ How to read a row:
 | `.pi/agent/extensions/anthropic-stall-retry` | axon-work-computer | Anthropic stalls are only seen on the work profile. |
 | `.pi/agent/extensions/axon-playbook` | axon-work-computer | It injects Axon's private playbook notes, which only the work profile clones. |
 
-The traces stage 2 shadow tooling has no row. It is off by default on every profile, because the shadow run finished on 2026-11-06 (G3 PASS). Its paths land on neither profile unless the owner sets `agentTracesShadow.enabled: true`: `shadow_py_run.py`, `cache_ref.py` and `reference.sha256` in `.local/share/agent-events`, the three `local.agent-traces-*` LaunchAgents, and `73_agent_traces_shadow_launchd.sh`. The setting is per profile: the owner turns it on on the personal Mac, and on the work Mac only when they decide to install it there. The TS and seed arms also need `agentKit.enabled`; the render fails if `arm` names one without it. `enabled: false` unloads and removes the three LaunchAgents on the next apply. The oracle files stay on disk, unmanaged.
-
 ## Local data keys
 
 Machine-specific values (hosts, addresses, vault items, work names) are not in this public repo. They live in the `data:` block of `~/.config/chezmoi/chezmoi.yaml` on each machine, next to `profile`. A key a profile needs fails the render with a message naming the key (`.chezmoitemplates/require_data`, and `require_work_data` for the work keys), so a machine never renders with a feature silently missing. Add the keys before you apply a change that needs them. `example.chezmoi.yaml` shows the shape with placeholder values.

@@ -1,19 +1,19 @@
 {{- /* agent_events_config: the always-on agent-events exporter's settings as JSON {"enabled", "machine", "endpoint"} plus "engine" when it is "ts"
-(dot_local/share/agent-events/README.md "Always on"). Local chezmoi data agentEvents:
+(dot_local/share/agent-events/README.md). Local chezmoi data agentEvents:
   enabled   true or false. Default: true on the personal profile, false everywhere else (the work Mac sends nothing until it is set there).
   machine   the machine label on every series: a lowercase letter, then up to 31 lowercase letters, digits or hyphens.
             Default: personal on the personal profile, work on axon-work-computer, none elsewhere (then required when enabled).
   endpoint  the collector's OTLP/HTTP metrics URL, http or https, ending in /v1/metrics.
             Default: http://otel-collector.internal.cartwmic.com/v1/metrics
-  engine    python or ts: what ~/.local/bin/agent-events runs when AGENT_EVENTS_IMPLEMENTATION is not set.
-            Default: ts on the personal profile (the agent-kit traces port, agent-traces pi ...), python on every other profile
-            (the frozen collector, agent_events.py). Set engine: python on personal to keep the Python shim there.
+  engine    ts is the only engine: ~/.local/bin/agent-events always runs the agent-kit port (agent-traces pi ...). The key is kept so a
+            data file that already says engine: ts still renders. engine: python fails the render: the Python collector was retired on
+            2026-11-07 (git tag agent-events-python-final). Default: ts on the personal profile, no key elsewhere.
             ts fails the render when agentKit.enabled is false on this machine: the shim would otherwise exec a wrapper with no install
-            and the exporter would go silently stale. So a machine with agentKit off must name engine: python.
-            The JSON carries "engine" only when it is "ts". On personal it does now, so the load script's "# setting:" line changes and
-            the script reruns. On every other profile the output is what it was before the key existed.
-            (It is not called "implementation": the shim already reads AGENT_EVENTS_IMPLEMENTATION, a file path.)
-Used by the plist, its load script, the shim, the shadow agents and .chezmoiignore. Any other key or value fails the whole render, so a typo applies nothing. */ -}}
+            and the exporter would go silently stale.
+            The JSON carries "engine" only when it is "ts" (so the load script's "# setting:" line stays what it was and the exporter is not
+            restarted). Work with no key renders no engine.
+            (It is not called "implementation": that name belonged to the retired AGENT_EVENTS_IMPLEMENTATION path override.)
+Used by the plist, its load script and .chezmoiignore. Any other key or value fails the whole render, so a typo applies nothing. */ -}}
 {{- $raw := dig "agentEvents" dict . -}}
 {{- if not (kindIs "map" $raw) -}}
 {{-   fail (printf "agentEvents must be a map with enabled, machine, endpoint and engine, got %q" (printf "%v" $raw)) -}}
@@ -30,17 +30,20 @@ Used by the plist, its load script, the shim, the shadow agents and .chezmoiigno
 {{- if hasKey $raw "machine" -}}{{- $machine = printf "%v" (get $raw "machine") -}}{{- end -}}
 {{- $endpoint := "http://otel-collector.internal.cartwmic.com/v1/metrics" -}}
 {{- if hasKey $raw "endpoint" -}}{{- $endpoint = printf "%v" (get $raw "endpoint") -}}{{- end -}}
-{{- $engine := "python" -}}
+{{- $engine := "" -}}
 {{- if eq $profile "personal" -}}{{- $engine = "ts" -}}{{- end -}}
 {{- if hasKey $raw "engine" -}}{{- $engine = printf "%v" (get $raw "engine") -}}{{- end -}}
 {{- if not (has $on (list "true" "false")) -}}
 {{-   fail (printf "agentEvents.enabled must be true or false, got %q" $on) -}}
 {{- end -}}
-{{- if not (has $engine (list "python" "ts")) -}}
-{{-   fail (printf "agentEvents.engine must be python or ts, got %q" $engine) -}}
+{{- if eq $engine "python" -}}
+{{-   fail "agentEvents.engine is python, but the Python collector was retired on 2026-11-07; remove agentEvents.engine or set it to ts" -}}
+{{- end -}}
+{{- if and (hasKey $raw "engine") (ne $engine "ts") -}}
+{{-   fail (printf "agentEvents.engine must be ts (python was retired on 2026-11-07), got %q" $engine) -}}
 {{- end -}}
 {{- if and (eq $engine "ts") (not (includeTemplate "agent_kit_config" . | fromJson).enabled) -}}
-{{-   fail "agentEvents.engine is ts but agentKit.enabled is false on this machine: the shim would run a wrapper with no install" -}}
+{{-   fail "agentEvents.engine is ts but agentKit.enabled is false on this machine: the shim would run a wrapper with no install (set agentKit.enabled to true)" -}}
 {{- end -}}
 {{- if and (eq $on "true") (eq $machine "") -}}
 {{-   fail (printf "agentEvents.machine is required when agentEvents.enabled is true (profile %q has no default)" $profile) -}}
