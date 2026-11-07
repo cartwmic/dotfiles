@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """kgate: run a heavy gate on the homelab Kubernetes cluster instead of this Mac. Full doc: docs/kgate.md.
 
-    kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]
+    kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]
 
 heavy-gate's command line (`--wait SECONDS -- CMD`) plus the profile and a few overrides. Run it under
 `run-and-wake -- kgate -- CMD` and the pane is woken when the job ends.
@@ -11,7 +11,8 @@ Contract
   folder) to one pod, unpacked at the same absolute paths, and runs CMD in the same $PWD. Ignored files stay here.
 - Tree hash: the git tree hash of the shipped files is computed here and again in the pod after unpacking. A
   difference fails the job before CMD runs.
-- Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu, memory, the exact tool
+- Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu, memory (the request),
+  memory_limit (optional: the limit, default equal to memory), the exact tool
   versions the gate needs, 1Password references for its secrets. The pod checks the versions before CMD; a mismatch
   fails the job with the tool, expected and found.
 - Exit status: CMD's own exit code when CMD ran to its end. 64 for a bad command line. 69 when the job could not
@@ -112,12 +113,12 @@ def tree_hash(root, files):
 # ---------------------------------------------------------------- pure: profile, versions, pod spec
 
 def parse_profile(text):
-    """Profile TOML -> dict with image, cpu, memory, tools {name: (version, cmd|None)}, secrets {ENV: op ref}, services."""
+    """Profile TOML -> dict with image, cpu, memory, memory_limit, tools {name: (version, cmd|None)}, secrets {ENV: op ref}, services."""
     try:
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "user", "tools", "secrets", "services"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "tools", "secrets", "services"}
     if set(raw) - known:
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
     tools = {}
@@ -138,17 +139,31 @@ def parse_profile(text):
     user = raw.get("user", "1000:1000")
     if not isinstance(user, str) or not re.fullmatch(r"[0-9]+:[0-9]+", user):
         raise Unavailable("profile user must look like 1000:1000, got %r" % (user,))
-    return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"), "user": user,
+    return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"),
+            "memory_limit": raw.get("memory_limit"), "user": user,
             "tools": tools, "secrets": secrets, "services": services}
 
 
-def check_settings(image, cpu, memory):
+MEM_SIZE = r"[1-9][0-9]*(Mi|Gi)"
+
+
+def mem_bytes(size):
+    return int(size[:-2]) << (20 if size.endswith("Mi") else 30)
+
+
+def check_settings(image, cpu, memory, memory_limit=None):
     if not image or not re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", image):
         raise Unavailable("image must be pinned by digest (name@sha256:<64 hex>), got %r" % (image,))
     if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu < 1:
         raise Unavailable("cpu must be a whole number of at least 1, got %r" % (cpu,))
-    if not isinstance(memory, str) or not re.fullmatch(r"[1-9][0-9]*(Mi|Gi)", memory):
+    if not isinstance(memory, str) or not re.fullmatch(MEM_SIZE, memory):
         raise Unavailable("memory must look like 4Gi or 512Mi, got %r" % (memory,))
+    if memory_limit is None:
+        return
+    if not isinstance(memory_limit, str) or not re.fullmatch(MEM_SIZE, memory_limit):
+        raise Unavailable("memory_limit must look like 4Gi or 512Mi, got %r" % (memory_limit,))
+    if mem_bytes(memory_limit) < mem_bytes(memory):
+        raise Unavailable("memory_limit must be at least memory, got memory_limit=%r and memory=%r" % (memory_limit, memory))
 
 
 def version_found(text, expected):
@@ -156,7 +171,7 @@ def version_found(text, expected):
     return re.search(r"(?<![0-9])(?<![0-9]\.)" + re.escape(expected) + r"(?![0-9])(?!\.[0-9])", text) is not None
 
 
-def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000):
+def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None):
     """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name)."""
     labels = {"app": "kgate", "kgate-job": job}
     items = []
@@ -176,7 +191,7 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000):
            {"name": "MAKEFLAGS", "value": "-j%d" % cpu}]
     container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",
                  "command": ["tini", "--", "sleep", "infinity"], "env": env,
-                 "resources": {"requests": {"cpu": str(cpu), "memory": memory}, "limits": {"memory": memory}},
+                 "resources": {"requests": {"cpu": str(cpu), "memory": memory}, "limits": {"memory": memory_limit or memory}},
                  "volumeMounts": [{"name": "cache", "mountPath": "/cache"},
                                   {"name": "out", "mountPath": "/out"}]}
     if secret_env:
@@ -400,7 +415,7 @@ class Job:
         self.console = True
         self.rec = {"id": self.id, "job": os.environ.get("RUN_AND_WAKE_JOB"), "start": utc(self.t0), "cwd": os.getcwd(),
                     "cmd": shlex.join(opts.command), "repo": None, "head": None, "tree": None, "node": None, "image": None,
-                    "profile": None, "cpu": None, "mem": None, "peak_bytes": None, "peak_source": None, "ran": False,
+                    "profile": None, "cpu": None, "mem": None, "mem_limit": None, "peak_bytes": None, "peak_source": None, "ran": False,
                     "exit": None, "reason": None, "out_files": 0, "cleanup": None, "output": self.id + ".log"}
         self.cluster = Cluster(HOST, KEY)
 
@@ -421,7 +436,7 @@ class Job:
     def settings(self, wt):
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
-        prof = {"image": None, "cpu": None, "memory": None, "user": "1000:1000", "tools": {}, "secrets": {}, "services": []}
+        prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "tools": {}, "secrets": {}, "services": []}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())
@@ -431,13 +446,14 @@ class Job:
         image = o.image or prof["image"]
         cpu = o.cpu if o.cpu is not None else (prof["cpu"] if prof["cpu"] is not None else 2)
         mem = o.mem or prof["memory"] or "4Gi"
-        check_settings(image, cpu, mem)
+        mem_limit = o.mem_limit or prof["memory_limit"] or mem
+        check_settings(image, cpu, mem, mem_limit)
         if prof["services"]:
             raise Unavailable("the gate needs %s, which kgate cannot provide; this gate cannot run on kgate" % ", ".join(prof["services"]))
         if o.node and o.node in EXCLUDED_NODES:
             raise Unavailable("node %s is excluded from kgate" % o.node)
-        self.rec.update(image=image, cpu=cpu, mem=mem)
-        return image, cpu, mem, prof
+        self.rec.update(image=image, cpu=cpu, mem=mem, mem_limit=mem_limit)
+        return image, cpu, mem, mem_limit, prof
 
     def reachable(self):
         if not HOST:
@@ -553,7 +569,7 @@ class Job:
         self.rec["repo"] = os.path.basename(os.path.dirname(common)) if common.endswith("/.git") else os.path.basename(common)
         head = subprocess.run(["git", "-C", wt, "rev-parse", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.rec["head"] = head.stdout.decode().strip() or None
-        image, cpu, mem, prof = self.settings(wt)
+        image, cpu, mem, mem_limit, prof = self.settings(wt)
         tree = self.rec["tree"] = tree_hash(wt, files)
         job = {"id": self.id, "root": wt, "cwd": os.getcwd(), "files": files, "tree": tree, "argv": o.command,
                "uid": int(prof["user"].split(":")[0]), "gid": int(prof["user"].split(":")[1]),
@@ -569,8 +585,9 @@ class Job:
         pull = None
         if host in PULL:
             pull = (host, PULL[host][0], op_read(PULL[host][1]))
-        self.note("pod %s on %s: image %s, %d cpu, %s" % (self.id, o.node or "any node", image.split("@")[0], cpu, mem))
-        self.start_pod(pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"]))
+        limit = "" if mem_limit == mem else ", %s limit" % mem_limit
+        self.note("pod %s on %s: image %s, %d cpu, %s memory request%s" % (self.id, o.node or "any node", image.split("@")[0], cpu, mem, limit))
+        self.start_pod(pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit))
         del secret_env, pull
         self.note("pod running on %s" % self.rec["node"])
         seen, transport = self.execute(tar_bytes)
@@ -608,6 +625,7 @@ def parse_args(argv):
     p.add_argument("--wait", type=int, default=3600)
     p.add_argument("--cpu", type=int)
     p.add_argument("--mem")
+    p.add_argument("--mem-limit")
     p.add_argument("--image")
     p.add_argument("--node")
     try:
@@ -620,7 +638,7 @@ def parse_args(argv):
     return opts
 
 
-USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]\n" \
+USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]\n" \
              "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac). See docs/kgate.md."
 
 
