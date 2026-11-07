@@ -21,6 +21,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(os.environ.get("KGATE_SCRIPT") or ROOT / "dot_local/bin/executable_kgate")
 DIGEST = "ghcr.io/cartwmic/kgate@sha256:" + "ab" * 32
+FAKE_TOKEN = "ops_fake-token-for-tests-only"  # a stand-in service-account token; never a real one
+NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
 
 
 def load():
@@ -277,6 +279,11 @@ sys.stderr.write("fake kubectl: unexpected " + repr(a) + "\n"); sys.exit(2)
 
 FAKE_OP = r'''#!/bin/sh
 echo "$*" >> "$FAKE/op-calls"
+case "${OP_SERVICE_ACCOUNT_TOKEN-}" in
+"") echo unset >> "$FAKE/op-token-checks" ;;
+"$FAKE_TOKEN") echo ok >> "$FAKE/op-token-checks" ;;
+*) echo wrong >> "$FAKE/op-token-checks" ;;
+esac
 [ -n "$FAKE_OP_HANG" ] && sleep 120
 [ -n "$FAKE_OP_FAIL" ] && { echo "[ERROR] item not found" >&2; exit 1; }
 printf 'value-of-%s' "$(basename "$2")"
@@ -290,7 +297,8 @@ class Black(unittest.TestCase):
         self.bin = self.tmp / "bin"
         self.fake = self.tmp / "fake"
         self.state = self.tmp / "state"
-        for d in (self.bin, self.fake):
+        self.home = self.tmp / "home"  # no token file here, so the real ~/.config is never read
+        for d in (self.bin, self.fake, self.home):
             d.mkdir()
         for name, text in (("ssh", FAKE_SSH), ("op", FAKE_OP)):
             (self.bin / name).write_text(text)
@@ -310,11 +318,13 @@ class Black(unittest.TestCase):
     def profile(self, tools="", extra="", secrets=""):
         (self.repo / "kgate.toml").write_text('image = "%s"\ncpu = 2\nmemory = "1Gi"\n%s\n[tools]\n%s\n[secrets]\n%s\n' % (DIGEST, extra, tools, secrets))
 
+    def op_env(self):
+        """The 1Password token and HOME every test starts with: a stand-in token, and a HOME with no token file."""
+        return {"HOME": str(self.home), "OP_SERVICE_ACCOUNT_TOKEN": FAKE_TOKEN, "FAKE_TOKEN": FAKE_TOKEN}
+
     def kgate(self, *args, host="fake", env=None):
         e = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
-             "KGATE_SSH": host, "KGATE_SSH_KEY": "/dev/null", "RUN_AND_WAKE_JOB": "20261104T000000Z-abcdef", **(env or {})}
-        for k in ("OP_SERVICE_ACCOUNT_TOKEN",):
-            e.pop(k, None)
+             "KGATE_SSH": host, "KGATE_SSH_KEY": "/dev/null", "RUN_AND_WAKE_JOB": "20261104T000000Z-abcdef", **self.op_env(), **(env or {})}
         # the module reads KGATE_SSH at import, so run the script as a process
         return subprocess.run([sys.executable, str(SCRIPT), *args], cwd=self.repo, env=e, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True, timeout=120)
@@ -326,6 +336,11 @@ class Black(unittest.TestCase):
     def calls(self):
         path = self.fake / "calls.jsonl"
         return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+
+    def op_token_checks(self):
+        """What each fake `op` run saw in OP_SERVICE_ACCOUNT_TOKEN: ok (the token), unset, or wrong."""
+        path = self.fake / "op-token-checks"
+        return path.read_text().split() if path.exists() else []
 
     # --- the journeys
 
@@ -437,7 +452,7 @@ class Black(unittest.TestCase):
         self.profile(tools='dir = { version = "9.8.7", cmd = "pwd" }')
         done = subprocess.run([sys.executable, str(SCRIPT), "--", "pwd"], cwd=sub, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                               env={**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake),
-                                   "XDG_STATE_HOME": str(self.state), "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null"})
+                                   "XDG_STATE_HOME": str(self.state), "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null", **self.op_env()})
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertIn("sub-9.8.7", done.stdout)
 
@@ -450,7 +465,7 @@ class Black(unittest.TestCase):
         done = subprocess.run([sys.executable, str(SCRIPT), "--", "sh", "-c", "git rev-parse --show-toplevel && cat only-here.txt"], cwd=linked,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                               env={**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake),
-                                   "XDG_STATE_HOME": str(self.state), "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null"})
+                                   "XDG_STATE_HOME": str(self.state), "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null", **self.op_env()})
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertIn("linked", done.stdout)
         rec = self.records()[-1]
@@ -472,7 +487,7 @@ class Black(unittest.TestCase):
     def test_sigterm_cleans_up_and_exits_143(self):
         import signal as sig
         e = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
-             "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null"}
+             "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null", **self.op_env()}
         proc = subprocess.Popen([sys.executable, str(SCRIPT), "--", "sh", "-c", "echo up; sleep 6"], cwd=self.repo, env=e,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         for line in proc.stdout:
@@ -501,7 +516,7 @@ class Black(unittest.TestCase):
                   "l = m.SourceFileLoader('k', %r); s = u.spec_from_loader('k', l); mod = u.module_from_spec(s); l.exec_module(mod)\n"
                   "sys.exit(mod.main(sys.argv[1:]))\n" % str(SCRIPT))
         e = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
-             "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null", "FAKE_OP_HANG": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+             "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null", "FAKE_OP_HANG": "1", "PYTHONDONTWRITEBYTECODE": "1", **self.op_env()}
         done = subprocess.run([sys.executable, "-c", script, "--", "true"], cwd=self.repo, env=e, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
         self.assertEqual(done.returncode, 69, done.stdout)
         self.assertIn("gave no answer", done.stdout)
@@ -547,7 +562,7 @@ class Black(unittest.TestCase):
 
     def test_outside_a_git_worktree_is_69_not_a_mac_run(self):
         marker = self.tmp / "cmd-ran"
-        e = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state), "KGATE_SSH": "fake"}
+        e = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state), "KGATE_SSH": "fake", **self.op_env()}
         done = subprocess.run([sys.executable, str(SCRIPT), "--", "touch", str(marker)], cwd=self.tmp, env=e, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         self.assertEqual(done.returncode, 69, done.stdout)
         self.assertFalse(marker.exists())
@@ -557,6 +572,54 @@ class Black(unittest.TestCase):
             done = self.kgate(*args)
             self.assertEqual(done.returncode, 64, (args, done.stdout))
         self.assertEqual(self.records(), [])
+
+    # --- the 1Password service-account token: the environment, else the token file. Never the desktop app.
+
+    def assert_no_token(self, *texts):
+        for text in texts:
+            self.assertNotIn(FAKE_TOKEN, text)
+
+    def test_token_from_the_environment_reaches_every_op_read(self):
+        self.profile(secrets='TOK = "op://developer/item/password"')
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.op_token_checks(), ["ok", "ok"])  # the secret, then the pull credential
+        rec = self.records()[-1]
+        self.assert_no_token(done.stdout, (self.state / "kgate" / rec["output"]).read_text(), json.dumps(self.records()))
+
+    def test_token_from_the_file_reaches_op_when_the_environment_has_none(self):
+        (self.home / ".config/agent-harness").mkdir(parents=True)
+        (self.home / ".config/agent-harness/op-service-token").write_text(FAKE_TOKEN + "\n")
+        self.profile(secrets='TOK = "op://developer/item/password"')
+        done = self.kgate("--", "true", env={"OP_SERVICE_ACCOUNT_TOKEN": ""})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.op_token_checks(), ["ok", "ok"])
+        rec = self.records()[-1]
+        self.assert_no_token(done.stdout, (self.state / "kgate" / rec["output"]).read_text(), json.dumps(self.records()))
+
+    def test_no_token_is_69_with_the_exact_message_and_op_never_runs(self):
+        self.profile(secrets='TOK = "op://developer/item/password"')
+        marker = self.tmp / "cmd-ran"
+        done = self.kgate("--", "sh", "-c", "touch %s" % marker, env={"OP_SERVICE_ACCOUNT_TOKEN": ""})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn(NO_TOKEN + "; exit 69, CMD was not run on this Mac", done.stdout)
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.fake / "op-calls").exists(), "op was never run, so it could not fall back to the desktop app")
+        self.assertFalse(any("manifest" in c for c in self.calls()), "no pod was created")
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["ran"], rec["reason"]), (69, False, NO_TOKEN))
+
+    def test_no_token_also_refuses_a_job_that_only_needs_the_pull_credential(self):
+        done = self.kgate("--", "true", env={"OP_SERVICE_ACCOUNT_TOKEN": ""})  # no profile secrets: the ghcr pull credential still needs op
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn(NO_TOKEN, done.stdout)
+        self.assertFalse((self.fake / "op-calls").exists())
+
+    def test_a_job_with_no_op_read_needs_no_token(self):
+        # no profile secrets and an image on a registry that needs no pull credential: kgate never calls op, so no token is needed
+        done = self.kgate("--image", "docker.io/library/alpine@sha256:" + "ef" * 32, "--", "true", env={"OP_SERVICE_ACCOUNT_TOKEN": ""})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse((self.fake / "op-calls").exists())
 
     def test_the_pod_is_sent_the_limits(self):
         self.assertEqual(self.kgate("--cpu", "3", "--mem", "2Gi", "--", "true").returncode, 0)

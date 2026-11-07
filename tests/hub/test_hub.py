@@ -178,7 +178,7 @@ class ClaudeTest(unittest.TestCase):
         (bindir / "op").write_text("#!/bin/sh\nprintf 'sk-test-key'\n")
         (bindir / "op").chmod(0o755)
         env = dict(os.environ, PATH=str(bindir) + ":" + os.environ["PATH"], HOME=str(SCRATCH),
-                   OP_READ_CACHE_DIR=str(SCRATCH / "cache"), OP_SERVICE_ACCOUNT_TOKEN="")
+                   OP_READ_CACHE_DIR=str(SCRATCH / "cache"), OP_SERVICE_ACCOUNT_TOKEN="ops_fake-token-for-tests-only")
         for _ in range(2):
             r = subprocess.run(["sh", str(ROOT / "dot_local/user_scripts/executable_op_read_cached.sh"), "op://developer/x/y"],
                                capture_output=True, text=True, timeout=30, env=env)

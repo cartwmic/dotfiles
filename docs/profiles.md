@@ -66,6 +66,19 @@ Machine-specific values (hosts, addresses, vault items, work names) are not in t
 
 The work profile reads `privatePiProviderRef` with `op` through the service account only, never the 1Password desktop app. The token comes from `OP_SERVICE_ACCOUNT_TOKEN`, or else from `~/.config/agent-harness/op-service-token` (mode 0600, outside git). The read runs the real `op` under an empty HOME, so the app cannot answer it. With no token the render stops with a message that names the token file, and nothing calls `op`. Each render reads the secret fresh and nothing is cached, so a rotated key shows up on the next render.
 
+### Agent jobs never reach the desktop app (playbook 78819cbd)
+
+1Password reads by agent jobs use the service-account token only. The scripts an agent runs apply the same two sources, in this order: `OP_SERVICE_ACCOUNT_TOKEN`, then the token file. Without either, the script refuses with exit 69 (`viz`: 4) and prints `1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)`. It runs no `op`, so `op` cannot fall back to the desktop app and prompt for an unlock.
+
+| Script | Where it reads | Without a token |
+|---|---|---|
+| `kgate` (`dot_local/bin/executable_kgate`) | profile secrets and the pull credential, through `op read` | exit 69 before `op` runs, no pod created |
+| `viz publish` (`dot_local/bin/executable_viz`) | the upload password, when `VIZ_PUBLISH_PASSWORD` is not set | exit 4, `missing_dependency` JSON, no `op` |
+| `op_read_cached.sh` (`dot_local/user_scripts/`) | a secret on a cache miss (a fresh cache hit needs no `op`) | no `op`; a stale cached value is served with a WARN, else exit 69 |
+| `run-and-wake` (`dot_local/bin/executable_run-and-wake`) | passes no read itself: gives the job the token from its file when this process has none | the job runs without the variable |
+
+The token never goes in argv, a log, a job record or a job's output. The human-run flows keep their own fallbacks: fresh-machine provisioning (`run_after_05_provision_ssh_keys.sh.tmpl`), the token refresh (`refresh_op_service_account_token.sh`, biometric on purpose), and the RustDesk and harness-config apply hooks.
+
 ### Environment for the Mac-side phone helpers
 
 `termux/router-phone.py`, `termux/wireguard-phone.py` and `termux/update-phone-alias.py` are not templates, so they read the network from the environment. Export these in the shell that runs them. A missing or invalid value stops the helper with a message naming it. `update-phone-alias.py` prints the new `sshHosts.sshPhone` entry as YAML; it edits nothing and applies nothing.

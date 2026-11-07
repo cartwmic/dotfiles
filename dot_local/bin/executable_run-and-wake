@@ -21,9 +21,13 @@ Contract (docs/run-and-wake.md):
   session, so a /new in the milliseconds between the check and the send can put the message
   in the new session. That is logged as session_after on the wake record, not prevented.
 - If the pane shows a dialog (blocked), it waits for herdr to report another state, then sends.
+- 1Password token: when this process has no OP_SERVICE_ACCOUNT_TOKEN, the job gets the one in ~/.config/agent-harness/op-service-token
+  in its environment, and only there: not in argv, the log, the job record or the job's output. So a job reads 1Password with the
+  service account and never the desktop app (playbook 78819cbd). No token file and no variable: the job runs without one.
 - Every job writes to ${XDG_STATE_HOME:-~/.local/state}/run-and-wake/log.jsonl, one JSON
   record per line, all carrying the job id and a UTC time:
-    start  {cmd, cwd, pane, session, thread, pid, output}
+    start  {cmd, cwd, pane, session, thread, pid, output, op_token}  (op_token: env, file, or null: where the job's
+           1Password token came from; the value is never logged)
     end    {exit, signal, duration_s}
     blocked {}                      (pane showed a dialog; waiting)
     wake   {target: herdr|t3, result: sent|failed, error?, duration_s, session_after?}  (session_after: the pane
@@ -44,6 +48,7 @@ from datetime import datetime, timezone
 NAME = "run-and-wake"
 STATE = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), NAME)
 LOG = os.path.join(STATE, "log.jsonl")
+TOKEN_FILE = os.path.expanduser("~/.config/agent-harness/op-service-token")
 
 
 def say(level, message):
@@ -173,20 +178,37 @@ def tell(report, text):
         os.close(report)
 
 
+def job_env(job):
+    """(environment, source): ours plus the 1Password token from its file when we have none. source: env, file or None."""
+    env = {**os.environ, "RUN_AND_WAKE_JOB": job}
+    if env.get("OP_SERVICE_ACCOUNT_TOKEN"):
+        return env, "env"
+    try:
+        with open(TOKEN_FILE) as f:
+            token = f.read().strip()
+    except OSError:
+        token = ""
+    if not token:
+        return env, None
+    env["OP_SERVICE_ACCOUNT_TOKEN"] = token
+    return env, "file"
+
+
 def watch(job, cmd, output, pane, session, thread, report):
     """Runs in the detached process: start the job, wait for it, then wake."""
     started = time.monotonic()
+    env, op_token = job_env(job)
     with open(output, "ab", buffering=0) as out:
         try:
-            child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env={**os.environ, "RUN_AND_WAKE_JOB": job})
+            child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env)
         except OSError as error:
-            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=None, output=output)
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=None, output=output, op_token=op_token)
             tell(report, f"failed {error}")
             out.write(f"[{NAME}] ERROR: could not start: {error}\n".encode())
             record(job, "end", exit=127, signal=None, error=str(error), duration_s=0.0)
             status = f"could not start ({error})"
         else:
-            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=child.pid, output=output)
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=child.pid, output=output, op_token=op_token)
             tell(report, f"pid {child.pid}")
             code = child.wait()
             sig = signal.Signals(-code).name if code < 0 else None

@@ -18,6 +18,8 @@ Contract
   start or finish on the cluster: unreachable, bad or missing profile, secret unreadable, pod never started, tree hash
   differs, tool version differs, the connection to a started pod was lost. kgate NEVER runs CMD on this Mac and never
   reruns a job that started. A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart.
+- 1Password reads (profile secrets and the pull token) use the service-account token only: OP_SERVICE_ACCOUNT_TOKEN, else
+  ~/.config/agent-harness/op-service-token. With neither, the job exits 69 before `op` runs; `op` never reaches the desktop app.
 - Files CMD writes to /out in the pod come back to <state>/<id>.out/ before the pod is deleted.
 - One JSON line per job in ${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl (keyed by the run-and-wake job id when
   there is one); the full output is in <id>.log beside it.
@@ -62,6 +64,8 @@ PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/passw
 MAX_RUN_S = 8 * 3600  # the pod ends itself: a pod whose client died must not hold its memory for ever
 UNAVAILABLE = 69
 USAGE = 64
+TOKEN_FILE = os.path.expanduser("~/.config/agent-harness/op-service-token")
+NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
 FATAL_WAITING = ("ErrImagePull", "ImagePullBackOff", "InvalidImageName", "CreateContainerConfigError", "ErrImageNeverPull")
 
 
@@ -375,9 +379,25 @@ class Cluster:
         return subprocess.Popen(self.argv(kargs), stdin=stdin, stdout=stdout, stderr=subprocess.STDOUT)
 
 
-def op_read(ref):
+def op_token():
+    """The 1Password service-account token: OP_SERVICE_ACCOUNT_TOKEN, else the token file. None when neither has one."""
+    token = os.environ.get("OP_SERVICE_ACCOUNT_TOKEN")
+    if token:
+        return token
     try:
-        done = subprocess.run(["op", "read", ref], stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, timeout=30)
+        with open(TOKEN_FILE) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def op_read(ref):
+    token = op_token()
+    if token is None:  # refused before `op` runs: without the token, op falls back to the desktop app
+        raise Unavailable(NO_TOKEN)
+    try:
+        done = subprocess.run(["op", "read", ref], stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, timeout=30,
+                              env={**os.environ, "OP_SERVICE_ACCOUNT_TOKEN": token})
     except subprocess.TimeoutExpired:
         raise Unavailable("op read %s gave no answer in 30 s" % ref)
     except OSError as e:

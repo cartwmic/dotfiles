@@ -74,6 +74,7 @@ if os.path.exists(os.path.join(fake, "t3_error")):
 '''
 
 THREAD = "thread-7f3a"
+FAKE_TOKEN = "ops_fake-token-for-tests-only"  # a stand-in service-account token; never a real one
 
 
 class RunAndWake(unittest.TestCase):
@@ -92,9 +93,11 @@ class RunAndWake(unittest.TestCase):
         (self.bin / "t3").chmod(0o755)
         self.state = root / "state"
         self.log = self.state / "run-and-wake/log.jsonl"
-        env = {k: v for k, v in os.environ.items() if k not in ("HERDR_PANE_ID", "PI_SESSION_FILE", "PI_SESSION_ID", "T3CODE_THREAD_ID", "T3CODE_CLI_PATH") and not k.startswith("HEAVY_GATE_")}
+        env = {k: v for k, v in os.environ.items() if k not in ("HERDR_PANE_ID", "PI_SESSION_FILE", "PI_SESSION_ID", "T3CODE_THREAD_ID", "T3CODE_CLI_PATH", "OP_SERVICE_ACCOUNT_TOKEN") and not k.startswith("HEAVY_GATE_")}
+        self.op_home = root / "op-home"  # HOME with no token file, so the real ~/.config is never read
+        self.op_home.mkdir()
         self.env = {**env, "PATH": f"{self.bin}:{env['PATH']}", "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
-                    "HERDR_PANE_ID": PANE, "PI_SESSION_FILE": SESSION}
+                    "HERDR_PANE_ID": PANE, "PI_SESSION_FILE": SESSION, "HOME": str(self.op_home)}
         self.show(PANE, SESSION)
 
     # --- the scripted herdr ---
@@ -146,6 +149,11 @@ class RunAndWake(unittest.TestCase):
         release = self.root / name
         return ["sh", "-c", f"while [ ! -f {release} ]; do sleep 0.05; done; echo released"], release
 
+    def token_file(self, token):
+        path = self.op_home / ".config/agent-harness/op-service-token"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(token + "\n")
+
     def assertReplay(self, records, *events):
         self.assertEqual([r["event"] for r in records], list(events))
         for r in records:
@@ -190,6 +198,32 @@ class RunAndWake(unittest.TestCase):
                 self.assertEqual({k: records[1][k] for k in end}, end)
                 text = next(p["text"] for p in self.prompts() if f"k:{job}]" in p["text"])
                 self.assertIn(f"job finished: {said}", text)
+
+    def test_the_job_gets_the_token_from_its_file_when_this_process_has_none(self):
+        self.token_file(FAKE_TOKEN)
+        probe = self.root / "probe"  # the job writes the token here: not to its output, so the job log holds none of it
+        result = self.launch("--", "sh", "-c", f'printf %s "$OP_SERVICE_ACCOUNT_TOKEN" > {probe}')
+        records = self.replay(self.job_id(result))
+        self.assertEqual(probe.read_text(), FAKE_TOKEN)
+        self.assertEqual(records[0]["op_token"], "file", "the replay says where the token came from, never its value")
+        for text in (result.stdout, result.stderr, self.log.read_text(), Path(records[0]["output"]).read_text(), json.dumps(records)):
+            self.assertNotIn(FAKE_TOKEN, text)
+
+    def test_a_token_in_this_environment_is_passed_on_and_the_file_is_not_used(self):
+        self.token_file(FAKE_TOKEN)
+        probe = self.root / "probe"
+        records = self.replay(self.job_id(self.launch("--", "sh", "-c", f'printf %s "$OP_SERVICE_ACCOUNT_TOKEN" > {probe}',
+                                                       env={"OP_SERVICE_ACCOUNT_TOKEN": "ops_from-the-environment"})))
+        self.assertEqual(probe.read_text(), "ops_from-the-environment")
+        self.assertEqual(records[0]["op_token"], "env")
+        self.assertNotIn(FAKE_TOKEN, json.dumps(records))
+
+    def test_no_token_in_the_environment_or_the_file_means_the_job_has_none(self):
+        probe = self.root / "probe"
+        records = self.replay(self.job_id(self.launch("--", "sh", "-c", f'printf %s "${{OP_SERVICE_ACCOUNT_TOKEN-unset}}" > {probe}')))
+        self.assertEqual(probe.read_text(), "unset")
+        self.assertIsNone(records[0]["op_token"])
+        self.assertEqual(records[-1]["event"], "wake")
 
     def test_the_job_sees_its_own_id_in_RUN_AND_WAKE_JOB(self):
         # kgate keys its record by it, so a record can be joined to this log by id
