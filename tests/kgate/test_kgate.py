@@ -270,6 +270,8 @@ if a[:2] == ["create", "-f"]:
     manifest = json.load(sys.stdin)
     log({"manifest": manifest})
     sys.exit(0)
+if a[:2] == ["get", "pod"] and any(x.startswith("jsonpath=") for x in a):
+    print(os.environ.get("FAKE_LABEL", "kgate"), end=""); sys.exit(0)
 if a[:2] == ["get", "pod"]:
     if scenario == "ready":
         st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
@@ -316,6 +318,23 @@ esac
 [ -n "$FAKE_OP_HANG" ] && sleep 120
 [ -n "$FAKE_OP_FAIL" ] && { echo "[ERROR] item not found" >&2; exit 1; }
 printf 'value-of-%s' "$(basename "$2")"
+'''
+
+
+FAKE_CLIENT = r'''import json, os, signal, sys, time
+state, job_id, run_id, mode = sys.argv[1:5]
+def term(*_):
+    if mode == "ignore":
+        return
+    marked = os.path.exists(os.path.join(state, "active", job_id + ".cancel"))
+    with open(os.path.join(state, "log.jsonl"), "a") as f:
+        f.write(json.dumps({"id": job_id, "job": run_id, "exit": 143,
+                            "reason": "cancelled by kgate cancel" if marked else "interrupted (SIGTERM)"}) + "\n")
+    os._exit(143)
+signal.signal(signal.SIGTERM, term)
+print("ready", flush=True)
+while True:
+    time.sleep(0.1)
 '''
 
 
@@ -716,6 +735,243 @@ class Black(unittest.TestCase):
         self.assertEqual(done.returncode, 69, done.stdout)
         self.assertIn("memory_limit must be at least memory", done.stdout)
         self.assertFalse(any("manifest" in c for c in self.calls()))
+
+    # --- kgate cancel
+
+    def active(self):
+        return self.state / "kgate" / "active"
+
+    def add_entry(self, job_id, run_id, pid, tamper_start=False, node="fake-node"):
+        """A registry entry for the process `pid`, as the running client would have written it."""
+        start, command = K.proc_identity(pid)
+        self.active().mkdir(parents=True, exist_ok=True)
+        (self.active() / (job_id + ".json")).write_text(json.dumps({
+            "id": job_id, "job": run_id, "pid": pid, "start": "other" if tamper_start else start, "proc_cmd": command,
+            "cwd": str(self.repo), "argv": ["kgate", "--", "sleep"], "cmd": "sleep 300", "node": node}))
+
+    def dead_entry(self, job_id, run_id, **kw):
+        """An entry whose client was killed -9: the pid is gone."""
+        corpse = subprocess.Popen(["sleep", "300"])
+        self.add_entry(job_id, run_id, corpse.pid, **kw)
+        corpse.kill()
+        corpse.wait()
+
+    def fake_client(self, job_id, run_id, mode="term"):
+        """A live stand-in for a kgate client that I start, in a process group of its own (so a wrong group signal cannot reach the
+        test run): on SIGTERM it writes its end line like the real one."""
+        script = self.tmp / "fakeclient.py"
+        script.write_text(FAKE_CLIENT)
+        (self.state / "kgate").mkdir(parents=True, exist_ok=True)
+        proc = subprocess.Popen([sys.executable, str(script), str(self.state / "kgate"), job_id, run_id, mode], stdout=subprocess.PIPE, text=True,
+                                preexec_fn=lambda: os.setpgid(0, 0))
+        def reap():
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+            proc.stdout.close()
+        self.addCleanup(reap)
+        self.assertEqual(proc.stdout.readline().strip(), "ready")
+        self.add_entry(job_id, run_id, proc.pid)
+        return proc
+
+    def deletes(self):
+        return [c["kubectl"] for c in self.calls() if c.get("kubectl", [""])[0] == "delete"]
+
+    def test_cancel_by_kgate_id_signals_that_one_pid_and_no_other(self):
+        a = self.fake_client("kgate-1700000001-111", "20261107T000000Z-aaaaaa")
+        b = self.fake_client("kgate-1700000002-222", "20261107T000000Z-bbbbbb")
+        done = self.kgate("cancel", "kgate-1700000001-111")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(a.wait(timeout=10), 143)
+        self.assertIsNone(b.poll())                                        # the other job's client is untouched
+        self.assertTrue((self.active() / "kgate-1700000002-222.json").exists())
+        end = [r for r in self.records() if r["id"] == "kgate-1700000001-111"]
+        self.assertEqual([r["reason"] for r in end], ["cancelled by kgate cancel"])   # the marker was there when SIGTERM came
+        self.assertIn("kgate-1700000001-111 ended: exit 143 (cancelled by kgate cancel)", done.stdout)
+        self.assertEqual(self.calls(), [])                                 # a live client cleans up itself; cancel touched no cluster
+
+    def test_cancel_by_run_and_wake_id(self):
+        a = self.fake_client("kgate-1700000001-111", "20261107T000000Z-aaaaaa")
+        b = self.fake_client("kgate-1700000002-222", "20261107T000000Z-bbbbbb")
+        done = self.kgate("cancel", "20261107T000000Z-bbbbbb")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(b.wait(timeout=10), 143)
+        self.assertIsNone(a.poll())
+
+    def test_cancel_does_not_signal_the_process_group(self):
+        a = self.fake_client("kgate-1700000001-111", "20261107T000000Z-aaaaaa")
+        bystander = subprocess.Popen(["sleep", "300"], preexec_fn=lambda: os.setpgid(0, a.pid))  # same group as a
+        self.addCleanup(lambda: (bystander.kill(), bystander.wait()))
+        self.assertEqual(os.getpgid(bystander.pid), os.getpgid(a.pid))
+        done = self.kgate("cancel", "kgate-1700000001-111")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(a.wait(timeout=10), 143)
+        self.assertIsNone(bystander.poll())
+
+    def test_cancel_matches_the_whole_id_only(self):
+        a = self.fake_client("kgate-1700000001-111", "20261107T000000Z-aaaaaa")
+        for prefix in ("kgate-1700000001", "kgate-17", "kgate", "20261107T000000Z", "20261107T000000Z-aaaaa", "*", ""):
+            done = self.kgate("cancel", prefix)
+            self.assertEqual(done.returncode, 64, (prefix, done.stdout))
+        self.assertIsNone(a.poll())
+        self.assertEqual(self.records(), [])
+
+    def test_two_matches_refuse_and_signal_nothing(self):
+        a = self.fake_client("kgate-1700000001-111", "20261107T000000Z-same00")
+        b = self.fake_client("kgate-1700000002-222", "20261107T000000Z-same00")
+        done = self.kgate("cancel", "20261107T000000Z-same00")
+        self.assertEqual(done.returncode, 64, done.stdout)
+        self.assertIn("2 running jobs have the id", done.stdout)
+        self.assertEqual((a.poll(), b.poll()), (None, None))
+        self.assertEqual(self.records(), [])
+
+    def test_no_match_refuses(self):
+        a = self.fake_client("kgate-1700000001-111", "20261107T000000Z-aaaaaa")
+        done = self.kgate("cancel", "kgate-1700000009-999")
+        self.assertEqual(done.returncode, 64, done.stdout)
+        self.assertIn("nothing was signalled", done.stdout)
+        self.assertIsNone(a.poll())
+
+    def test_a_dead_pid_is_not_signalled_and_goes_the_orphan_way(self):
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")
+        done = self.kgate("cancel", "20261107T000000Z-cccccc")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.deletes(), [["delete", "pod/kgate-1700000003-333", "secret/kgate-1700000003-333-env", "secret/kgate-1700000003-333-pull",
+                                           "--ignore-not-found", "--grace-period=0", "--wait=true"]])   # exactly these three, nothing else
+        rec = self.records()[-1]
+        self.assertEqual((rec["id"], rec["job"], rec["exit"], rec["cleanup"], rec["cancelled"]),
+                         ("kgate-1700000003-333", "20261107T000000Z-cccccc", 143, True, True))
+        self.assertEqual(rec["reason"], "cancelled by kgate cancel (client already gone)")
+        self.assertFalse((self.active() / "kgate-1700000003-333.json").exists())
+
+    def test_a_recycled_pid_is_not_signalled(self):
+        stranger = subprocess.Popen(["sleep", "300"])                 # alive, but not the process the entry was written for
+        self.addCleanup(lambda: (stranger.kill(), stranger.wait()))
+        self.add_entry("kgate-1700000004-444", "20261107T000000Z-dddddd", stranger.pid, tamper_start=True)
+        done = self.kgate("cancel", "kgate-1700000004-444")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIsNone(stranger.poll())
+        self.assertEqual(len(self.deletes()), 1)
+        self.assertEqual(self.records()[-1]["reason"], "cancelled by kgate cancel (client already gone)")
+
+    def test_orphan_stops_when_the_pod_is_not_a_kgate_pod(self):
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")
+        done = self.kgate("cancel", "kgate-1700000003-333", env={"FAKE_LABEL": "something-else"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertEqual(self.deletes(), [])
+        self.assertTrue((self.active() / "kgate-1700000003-333.json").exists())    # still there to retry
+
+    def test_orphan_with_an_unreachable_cluster_keeps_the_entry(self):
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")
+        done = self.kgate("cancel", "kgate-1700000003-333", host="cartwmic@unreachable")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("cluster unreachable", done.stdout)
+        self.assertTrue((self.active() / "kgate-1700000003-333.json").exists())
+        self.assertEqual(self.records(), [])
+
+    def test_an_entry_whose_job_already_ended_only_loses_its_entry(self):
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")
+        (self.state / "kgate" / "log.jsonl").write_text(json.dumps({"id": "kgate-1700000003-333", "job": None, "exit": 0, "reason": None}) + "\n")
+        done = self.kgate("cancel", "kgate-1700000003-333")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ended: exit 0", done.stdout)
+        self.assertEqual((self.calls(), len(self.records())), ([], 1))
+        self.assertFalse((self.active() / "kgate-1700000003-333.json").exists())
+
+    def test_a_client_that_does_not_end_in_time_is_69_and_is_not_forced(self):
+        stubborn = self.fake_client("kgate-1700000005-555", "20261107T000000Z-eeeeee", mode="ignore")
+        done = self.kgate("cancel", "--wait", "1", "kgate-1700000005-555")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("still running as pid %d" % stubborn.pid, done.stdout)
+        self.assertIn("kill -9 %d" % stubborn.pid, done.stdout)
+        self.assertIsNone(stubborn.poll())
+
+    def test_list_shows_the_running_jobs_and_changes_nothing(self):
+        a = self.fake_client("kgate-1700000001-111", "20261107T000000Z-aaaaaa")
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc", node="agent-2")
+        before = sorted(p.name for p in self.active().iterdir())
+        done = self.kgate("cancel", "--list")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        lines = done.stdout.splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertRegex(lines[0], r"^kgate-1700000001-111 job=20261107T000000Z-aaaaaa pid=%d node=fake-node age=\S+ cwd=%s cmd=sleep 300$" % (a.pid, re.escape(str(self.repo))))
+        self.assertRegex(lines[1], r"^kgate-1700000003-333 job=20261107T000000Z-cccccc pid=\d+ \(client gone\) node=agent-2 ")
+        self.assertEqual(sorted(p.name for p in self.active().iterdir()), before)
+        self.assertEqual((self.calls(), self.records(), a.poll()), ([], [], None))
+        self.assertIn("no kgate jobs running", self.kgate("cancel", "--list", env={"XDG_STATE_HOME": str(self.tmp / "empty")}).stdout)
+
+    def test_cancel_command_line_errors_are_64(self):
+        a = self.fake_client("kgate-1700000001-111", "20261107T000000Z-aaaaaa")
+        for args in ((), ("--list", "kgate-1700000001-111"), ("--all",), ("--li",), ("--wait", "x", "kgate-1700000001-111"),
+                     ("--wait", "-1", "kgate-1700000001-111"), ("one", "two")):
+            done = self.kgate("cancel", *args)
+            self.assertEqual(done.returncode, 64, (args, done.stdout))
+            self.assertIn("kgate cancel", done.stdout)
+        self.assertIsNone(a.poll())
+
+    def test_usage_and_help_name_cancel_and_the_job_command_line_still_works(self):
+        self.assertIn("kgate cancel", self.kgate("--help").stdout)
+        done = self.kgate("--wait", "5")
+        self.assertEqual(done.returncode, 64)
+        self.assertIn("kgate cancel --list", done.stdout)
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+
+    def test_the_active_entry_exists_while_the_job_runs_and_is_gone_after(self):
+        proc = self.start_job("echo up; sleep 6")
+        entries = list(self.active().glob("*.json"))
+        self.assertEqual(len(entries), 1)
+        e = json.loads(entries[0].read_text())
+        self.assertEqual((e["pid"], e["job"], e["node"], e["id"]), (proc.pid, "20261104T000000Z-abcdef", "fake-node", entries[0].stem))
+        proc.terminate()
+        proc.stdout.read()
+        self.assertEqual(proc.wait(timeout=30), 143)
+        self.assertEqual(list(self.active().iterdir()), [])
+
+    def test_the_active_entry_is_gone_after_a_normal_finish_and_after_failures(self):
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        self.assertEqual(self.kgate("--", "sh", "-c", "exit 3").returncode, 3)
+        self.assertEqual(self.kgate("--", "true", host="cartwmic@unreachable").returncode, 69)
+        (self.repo / "kgate.toml").write_bytes(b"\xff\xfe")               # reading the profile now fails in a way kgate did not expect
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("kgate error: UnicodeDecodeError", done.stdout)
+        self.assertEqual(len(self.records()), 4)
+        self.assertEqual(list(self.active().iterdir()), [])
+
+    def start_job(self, shell_cmd):
+        e = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
+             "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null", "RUN_AND_WAKE_JOB": "20261104T000000Z-abcdef", **self.op_env()}
+        proc = subprocess.Popen([sys.executable, str(SCRIPT), "--", "sh", "-c", shell_cmd], cwd=self.repo, env=e,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)  # own group: see fake_client
+        def reap():
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+            proc.stdout.close()
+        self.addCleanup(reap)
+        for line in proc.stdout:
+            if "]: running" in line:
+                return proc
+        self.fail("the job never reached running")
+
+    def test_cancel_stops_a_real_client_through_the_whole_path(self):
+        job = self.start_job("echo up; sleep 30")
+        other = self.start_job("echo up; sleep 30")
+        mine = [json.loads(p.read_text()) for p in self.active().glob("*.json") if json.loads(p.read_text())["pid"] == job.pid][0]
+        done = self.kgate("cancel", mine["id"])
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(job.wait(timeout=30), 143)
+        self.assertIsNone(other.poll())                                  # the second real client is still running
+        rec = [r for r in self.records() if r["id"] == mine["id"]][0]
+        self.assertEqual((rec["exit"], rec["reason"], rec["cancelled"], rec["cleanup"]), (143, "cancelled by kgate cancel", True, True))
+        self.assertEqual(rec["job"], "20261104T000000Z-abcdef")
+        self.assertIn(["delete", "pod/" + mine["id"], "secret/%s-env" % mine["id"], "secret/%s-pull" % mine["id"],
+                       "--ignore-not-found", "--grace-period=0", "--wait=true"], self.deletes())
+        self.assertEqual(len(list(self.active().glob("*.json"))), 1)     # only the other job is left
+        self.assertFalse((self.active() / (mine["id"] + ".cancel")).exists())
+        other.terminate()
+        other.stdout.read()
+        other.wait(timeout=30)
 
 
 if __name__ == "__main__":
