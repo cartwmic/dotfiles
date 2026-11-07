@@ -190,7 +190,7 @@ jobs), and `dot_zprofile` puts it first again in login shells after `path_helper
 a worker's `op` uses the service account and never hangs. Two things hang `op` under the real HOME: a locked desktop
 app, and on the personal Mac an `open()` of the app's `settings.json` in `~/Library/Group Containers/2BUA8C4S2C.com.1password`
 that blocks forever for any process in an agent shell (found 2026-11-04; the empty HOME keeps `op` away from that path).
-Without a token it runs `op` unchanged. Not covered: `op` called by absolute path. `op run -- cmd` gives `cmd` the empty
+Without a token, the Pi name (`~/.pi/agent/bin/op`, and every call through it) refuses with exit 69 and the message `1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)`, and `op` does not run. The zsh name (the same file, through `~/.local/share/op-shim/op`) refuses only in an agent shell, when one of the markers in `docs/profiles.md` is set; otherwise it runs `op` unchanged, the desktop-app path Michael's terminals keep. Not covered: `op` called by absolute path. `op run -- cmd` gives `cmd` the empty
 HOME too. Tests: `python3 -m unittest discover -s tests/pi-op-shim -v` (fake op);
 `python3 tests/pi-op-shim/proof.py` runs a real Pi with a scripted model (needs `pi` on PATH).
 

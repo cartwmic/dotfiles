@@ -87,7 +87,9 @@ Known gaps:
 - A Codex run with its sandbox off sets no marker, so it gets the terminal fallback.
 - A terminal started inside an agent app inherits its marker and refuses without a token. The herdr skill reads `HERDR_ENV=1` as "inside a herdr pane", so a terminal run inside herdr may be classed as an agent shell too; not checked on this Mac.
 - Retro's pane shells are zsh. They refuse only if a marker is set in them; without one they keep the terminal fallback.
-- `viz` run by Pi's process rather than its bash tool carries no marker, so it keeps the terminal fallback.
+- A zsh started from inside Pi's bash tool (for example `zsh -c 'op whoami'`) has no marker, and `dot_zshenv` puts the zsh name first, so its `op` runs the real CLI with the desktop-app fallback. Confirmed in a scratch run: the Homebrew `op` ran (scratch HOME, no token), because `dot_zshenv` puts Homebrew ahead of the rest of the PATH.
+- `viz publish` from Pi's bash tool has no marker, so viz skips its own refusal. Its `op read` reaches Pi's copy, which refuses, so no desktop path runs. viz then reports `VIZ_PUBLISH_PASSWORD is not set` and logs that outcome, not the token refusal. Confirmed in a scratch run.
+- The shim's own refusal writes its message to stderr and no log record. The viz and `op_read_cached.sh` refusals are logged; the shim's is not (principle 14).
 
 The human-run flows keep their own fallbacks: fresh-machine provisioning (`run_after_05_provision_ssh_keys.sh.tmpl`), the token refresh (`refresh_op_service_account_token.sh`, biometric on purpose), and the zshrc warning block.
 
