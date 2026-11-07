@@ -1,11 +1,12 @@
 """Mutation check for heavy-gate: break one rule at a time; the tests for that part must fail each time.
 
-    python3 tests/heavy-gate/mutate.py [rank|gate]      (both by default; MUTATE_ONLY=text runs the mutations whose name has it)
+    python3 tests/heavy-gate/mutate.py [rank|gate|load]      (all by default; MUTATE_ONLY=text runs the mutations whose name has it)
 
 Not part of CI. It proves the tests pin every rule rather than just exercising them:
   rank  resolve_priority and rank_on (the central workstream rank);
-  gate  the admission rules: the two kept memory-pressure checks (each broken in turn), and the three removed checks
-        (load1, the swap floor, Swapouts), each put back, which the "no longer gates" tests must catch.
+  gate  the admission rules: the two kept memory-pressure checks (each broken in turn), and the removed checks (load1, the swap floor,
+        Swapouts), each put back, which the "no longer gates" tests must catch;
+  load  the 5-minute load limit: its rule, figure, default, sources, warning and message.
 Only the tests for that part run for each mutant, and the first failure stops the run (the whole suite takes minutes); the full
 suite runs unmutated in CI/by hand.
 """
@@ -24,7 +25,13 @@ SELECT = {
                               "test_the_two_readings", "test_starts_do_not_share", "test_a_bad_window",
                               "test_free_space", "test_the_edge_of_the_floor", "test_the_floor", "test_a_bad_floor", "test_a_mount", "test_the_gate_reads", "test_a_command_is_not_run",
                               "test_a_job_that_waits", "test_memory_refusal",
-                              "test_a_watched", "test_every_broken_volume", "test_the_volumes_file", "test_no_volumes_file", "test_the_check_says") for arg in ("-k", name)],
+                              "test_a_watched", "test_every_broken_volume", "test_the_volumes_file", "test_no_volumes_file",
+                              "test_the_check_says") for arg in ("-k", name)],
+    # the 5-minute load limit: only its own tests (about a minute per mutant)
+    "load": [arg for name in ("test_a_5_minute", "test_only_the_5", "test_the_cores", "test_a_missing_sysctl", "test_the_load_rule", "test_load_is_not_read",
+                              "test_the_memory_and_disk_rules_still", "test_the_limit_comes", "test_a_bad_limit", "test_a_waiting_job_prints",
+                              "test_an_edit_of_the_limit", "test_a_job_that_is_running", "test_the_check_names", "test_the_default_limit",
+                              "test_every_broken_rule_is_reported_together", "test_a_check_says") for arg in ("-k", name)],
 }
 
 ENV_LINE = 'if [ -n "${HEAVY_GATE_PRIORITY:-}" ]; then printf \'%s\' "$HEAVY_GATE_PRIORITY"; return 0; fi\n  base=0'
@@ -64,7 +71,11 @@ PRESSURE = '  v=$(pressure_level); level_ok "$v"                      || {'
 MAXLEVEL = "MAX_PRESSURE_LEVEL=2  #"
 LEVEL_OK = "level_ok() { case $1 in '' | *[!0-9]*) return 1 ;; esac; awk -v v=\"$1\" -v m=\"$MAX_PRESSURE_LEVEL\" 'BEGIN { exit !(v + 0 >= 1 && v + 0 <= m + 0) }'; }"
 MEMORY = '  v=$(mem_free_pct);   meets "$v" ge "$MEM_FREE_MIN_PCT"  || {'
-TRY = "  if memory_rules && wait_window && memory_rules && {"
+TRY = "  if host_rules && wait_window && host_rules && {"
+HOST = "host_rules() { rc=0; memory_rules || rc=1; load_rule || rc=1; return \"$rc\"; }"
+LOADV = "load5() { sysctl -n vm.loadavg 2>/dev/null | awk '{print $3}'; }"
+LOADOK = 'if meets "$v" le "$MAX_LOAD"; then return 0; fi'
+
 BROKEN0 = "  broken=0\n" + PRESSURE
 WAIT = '  sleep "$CHECK_WINDOW" || { refuse "could not wait out the ${CHECK_WINDOW}s check window"; return 1; }'
 # the three removed checks, as they were before this change
@@ -75,6 +86,30 @@ SWAP_BACK = ('  broken=0\n  v=$(sysctl -n vm.swapusage 2>/dev/null | awk \'{for 
              'meets "$v" ge 500 || { refuse "swap free ${v:-unreadable} MB (needs >= 500)"; broken=1; }\n' + PRESSURE)
 SWAPOUTS_BACK = ('  a=$(vm_stat | awk \'/^Swapouts:/ {sub(/\\.$/, "", $2); print $2}\'); sleep "$CHECK_WINDOW"; b=$(vm_stat | awk \'/^Swapouts:/ {sub(/\\.$/, "", $2); print $2}\')\n'
                  '  [ "$a" = "$b" ] || { refuse "Swapouts rose over ${CHECK_WINDOW}s (the machine is swapping)"; return 1; }')
+
+LOAD_MUTATIONS = [
+    ("the load rule is not checked", HOST, HOST.replace("load_rule || rc=1", "true || rc=1")),
+    ("the memory rules are not checked once the load rule is added", HOST, HOST.replace("memory_rules || rc=1", "true || rc=1")),
+    ("only the first broken rule is reported", HOST, "host_rules() { memory_rules && load_rule; }"),
+    ("the load rule is read on the first reading only", HOST, "host_rules() { rc=0; memory_rules || rc=1; if [ ! -f \"$LOCK.once\" ]; then : > \"$LOCK.once\"; load_rule || rc=1; fi; return \"$rc\"; }"),
+    ("the 1-minute load is read, not the 5-minute", LOADV, LOADV.replace("$3", "$2")),
+    ("the 15-minute load is read, not the 5-minute", LOADV, LOADV.replace("$3", "$4")),
+    ("a load at the limit is refused", LOADOK, LOADOK.replace(" le ", " lt ")),
+    ("a load just above the limit is admitted", LOADOK, 'if meets "$v" le "$((MAX_LOAD + 1))"; then return 0; fi'),
+    ("an unreadable load counts as fine", LOADOK, 'if meets "${v:-0}" le "$MAX_LOAD" || ! number "$v"; then return 0; fi'),
+    ("the default load limit is 8", "DEFAULT_MAX_LOAD=12", "DEFAULT_MAX_LOAD=8"),
+    ("the default load limit is 20", "DEFAULT_MAX_LOAD=12", "DEFAULT_MAX_LOAD=20"),
+    ("the load limit in the environment is ignored", 'if [ -n "${HEAVY_GATE_MAX_LOAD:-}" ]; then\n    if positive', 'if false; then\n    if positive'),
+    ("the load limit file is not read", 'MAX_LOAD_FILE=${HEAVY_GATE_MAX_LOAD_FILE:-$HOME/.config/heavy-gate/max-load}', 'MAX_LOAD_FILE=/dev/null'),
+    ("the load limit file beats the environment", 'if positive "$HEAVY_GATE_MAX_LOAD"; then MAX_LOAD=$HEAVY_GATE_MAX_LOAD; return 0; fi', 'if positive "$HEAVY_GATE_MAX_LOAD" && [ ! -s "$MAX_LOAD_FILE" ]; then MAX_LOAD=$HEAVY_GATE_MAX_LOAD; return 0; fi'),
+    ("a load limit of 0 is accepted", "positive() { number \"$1\" && awk -v v=\"$1\" 'BEGIN { exit !(v + 0 > 0) }'; }", "positive() { number \"$1\"; }"),
+    ("a bad load limit is ignored without a warning", 'if [ -n "$MAX_LOAD_NOTE" ] && [ "$MAX_LOAD_NOTE" != "$MAX_LOAD_WARNED" ]; then log WARN', 'if false; then log WARN'),
+    ("a bad load limit warns on every try", "  MAX_LOAD_WARNED=$MAX_LOAD_NOTE\n}", "  :\n}"),
+    ("the load limit is not read again on each try", "  resolve_max_load; warn_max_load\n", "  [ -n \"${MAX_LOAD:-}\" ] || { resolve_max_load; warn_max_load; }\n"),
+    ("the load refusal leaves out that running jobs are not stopped", "; running jobs are not stopped\"\n  else", "\"\n  else"),
+    ("the load refusal leaves out the core count", '${c:+ ($c cores)}', ''),
+    ("the check mode does not name the load limit", "and a 5-minute load average of at most $MAX_LOAD on two", "and nothing on load on two"),
+]
 
 GATE_MUTATIONS = [
     ("the pressure level is not checked", PRESSURE, '  v=$(pressure_level); true || {'),
@@ -89,8 +124,8 @@ GATE_MUTATIONS = [
     ("memory free needs only 20%", "MEM_FREE_MIN_PCT=30", "MEM_FREE_MIN_PCT=20"),
     ("memory free needs 31%", "MEM_FREE_MIN_PCT=30", "MEM_FREE_MIN_PCT=31"),
     ("an unreadable memory free counts as fine", MEMORY, '  v=$(mem_free_pct);   meets "${v:-100}" ge "$MEM_FREE_MIN_PCT"  || {'),
-    ("the first reading is skipped", TRY, "  if wait_window && memory_rules && {"),
-    ("the second reading is skipped", TRY, "  if memory_rules && wait_window && {"),
+    ("the first reading is skipped", TRY, "  if wait_window && host_rules && {"),
+    ("the second reading is skipped", TRY, "  if host_rules && wait_window && {"),
     ("the readings are not apart", WAIT, '  sleep 0 || { refuse "x"; return 1; }'),
     ("the readings are 60 seconds apart", "CHECK_WINDOW=${HEAVY_GATE_CHECK_WINDOW:-20}", "CHECK_WINDOW=${HEAVY_GATE_CHECK_WINDOW:-60}"),
     ("the check mode does not say the rule", '  log INFO "check: a start is admitted on free disk space', '  : log INFO "check: a start is admitted on free disk space'),
@@ -116,10 +151,10 @@ GATE_MUTATIONS = [
 
 
 def main():
-    which = sys.argv[1:] or ["rank", "gate"]
-    mutations = {"rank": RANK_MUTATIONS, "gate": GATE_MUTATIONS}
+    which = sys.argv[1:] or ["rank", "gate", "load"]
+    mutations = {"rank": RANK_MUTATIONS, "gate": GATE_MUTATIONS, "load": LOAD_MUTATIONS}
     if any(w not in mutations for w in which):
-        sys.exit("usage: mutate.py [rank|gate]")
+        sys.exit("usage: mutate.py [rank|gate|load]")
     text = SCRIPT.read_text()
     survived = []
     total = 0
