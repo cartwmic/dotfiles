@@ -23,6 +23,8 @@ FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 NODE = shutil.which("node")
 RENDER_DEPS = bool(NODE and shutil.which("mmdc") and (os.environ.get("VIZ_CHROMIUM") or shutil.which("chromium")))
 PASSWORD = "test-password-not-a-secret"
+SA_TOKEN = "ops_fake-token-for-tests-only"  # a stand-in service-account token; never a real one
+NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
 RENDER_ID = "20261028-120000-000-abc123"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16 + b"rest of a png"
 PAGE = b"<!doctype html><p>chart</p>\n"
@@ -136,17 +138,41 @@ class PublishTest(unittest.TestCase):
         self.assertEqual(out["code"], "missing_dependency")
         self.assertIn("VIZ_PUBLISH_PASSWORD", out["message"])
 
-    def test_shim_reads_the_password_from_op_only_for_publish(self):
+    def fake_op(self, token_check=None):
+        """A fake op on PATH that logs its arguments and prints the password. With token_check, it fails unless the token matches."""
         calls = os.path.join(self.bin, "op-calls")
+        check = '[ "${OP_SERVICE_ACCOUNT_TOKEN-}" = "%s" ] || { echo "no token" >&2; exit 1; }\n' % token_check if token_check else ""
         with open(os.path.join(self.bin, "op"), "w") as f:
-            f.write("#!/bin/sh\necho \"$*\" >> %s\nprintf '%%s\\n' '%s'\n" % (calls, PASSWORD))
+            f.write("#!/bin/sh\necho \"$*\" >> %s\n%sprintf '%%s\\n' '%s'\n" % (calls, check, PASSWORD))
         os.chmod(os.path.join(self.bin, "op"), 0o755)
+        return calls
+
+    def test_shim_reads_the_password_from_op_only_for_publish(self):
+        calls = self.fake_op()
         self.viz("list", env={"VIZ_PUBLISH_PASSWORD": None})
         self.assertFalse(os.path.exists(calls), "op must not run for other commands")
-        self.viz("publish", RENDER_ID, env={"VIZ_PUBLISH_PASSWORD": None})
+        self.viz("publish", RENDER_ID, env={"VIZ_PUBLISH_PASSWORD": None, "OP_SERVICE_ACCOUNT_TOKEN": SA_TOKEN})
         with open(calls) as f:
             self.assertEqual(f.read(), "read op://developer/viz-publish/password\n")
         self.assertEqual(len(Site.files), 2)
+
+    def test_the_token_from_the_file_reaches_op(self):
+        os.makedirs(os.path.join(self.state.name, ".config", "agent-harness"))
+        with open(os.path.join(self.state.name, ".config", "agent-harness", "op-service-token"), "w") as f:
+            f.write(SA_TOKEN + "\n")
+        calls = self.fake_op(token_check=SA_TOKEN)
+        out = self.viz("publish", RENDER_ID, env={"VIZ_PUBLISH_PASSWORD": None, "OP_SERVICE_ACCOUNT_TOKEN": None})
+        self.assertTrue(out["ok"], out)
+        with open(calls) as f:
+            self.assertEqual(f.read(), "read op://developer/viz-publish/password\n")
+        self.assertNotIn(SA_TOKEN, json.dumps(out))
+
+    def test_no_token_refuses_before_op_runs_and_never_falls_back(self):
+        calls = self.fake_op()
+        out = self.viz("publish", RENDER_ID, env={"VIZ_PUBLISH_PASSWORD": None, "OP_SERVICE_ACCOUNT_TOKEN": None}, code=4)
+        self.assertEqual(out, {"ok": False, "code": "missing_dependency", "message": NO_TOKEN})
+        self.assertFalse(os.path.exists(calls), "op was never run, so it could not fall back to the desktop app")
+        self.assertEqual(Site.files, {})
 
     def test_bad_input(self):
         for args in (("publish",), ("publish", "20990101-000000-000-abcdef"),

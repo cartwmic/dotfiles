@@ -34,6 +34,9 @@
 #   OP_READ_CACHE_TTL_MINUTES  cache lifetime in minutes (default 720 = 12h)
 #   OP_READ_CACHE_DIR          cache location (default ~/.cache/agent-harness/secrets)
 #
+# Exit 69 when a read would need `op` and there is no service-account token (OP_SERVICE_ACCOUNT_TOKEN, else the token
+# file): `op` is not run, because without the token it would fall back to the desktop app.
+#
 # Cache entries are plaintext secrets in a 0700 directory with 0600 files,
 # outside any git tree. They are NOT in this repository.
 #
@@ -153,6 +156,18 @@ if [ "$refresh" = false ] && cache_is_fresh; then
 fi
 
 (umask 077 && mkdir -p "$cache_dir")
+
+# Without a service-account token `op` would fall back to the desktop app, so never run it (playbook 78819cbd). A fresh
+# cache hit above needs no `op`. A stale entry is still served, as on any other op failure, so a caller is not broken.
+if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+	if [ -s "$cache_file" ]; then
+		log "WARN: 1Password service account token not set; refusing to use the desktop app (playbook 78819cbd); serving stale cached value for $ref"
+		emit_cache
+		exit 0
+	fi
+	log "ERROR: 1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
+	exit 69
+fi
 
 value=""
 # Pure service-account mode. With OP_SERVICE_ACCOUNT_TOKEN set, `op` should
