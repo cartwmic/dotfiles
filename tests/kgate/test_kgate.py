@@ -5,6 +5,7 @@ The client also runs as a real process against a scripted cluster: a fake `ssh` 
 commands the client sends and runs the "pod" on this machine, and a fake `op` returns scripted secrets. Everything is
 checked from outside: exit codes, output, the job record, files that came back, and what the fake cluster was sent.
 """
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
@@ -115,6 +116,17 @@ NODE_AUTH_TOKEN = "op://developer/item/password"
             with self.assertRaises(K.Unavailable, msg=str(args)):
                 K.check_settings(*args)
 
+    def test_memory_limit_parses_and_defaults_to_none(self):
+        self.assertIsNone(K.parse_profile(self.GOOD)["memory_limit"])
+        self.assertEqual(K.parse_profile('memory = "1Gi"\nmemory_limit = "2Gi"')["memory_limit"], "2Gi")
+
+    def test_memory_limit_must_be_at_least_the_request(self):
+        K.check_settings(DIGEST, 2, "256Mi", "512Mi")
+        K.check_settings(DIGEST, 2, "1Gi", "1024Mi")  # equal is the old behaviour
+        for args in [(DIGEST, 2, "1Gi", "512Mi"), (DIGEST, 2, "1Gi", "2G"), (DIGEST, 2, "1Gi", "0Mi"), (DIGEST, 2, "1Gi", 512)]:
+            with self.assertRaises(K.Unavailable, msg=str(args)):
+                K.check_settings(*args)
+
     def test_version_match_is_whole_version(self):
         self.assertTrue(K.version_found("v24.22.2", "24.22.2"))
         self.assertTrue(K.version_found("ansible-lint 26.10.1 using ansible-core:2.19.14", "2.19.14"))
@@ -127,9 +139,10 @@ NODE_AUTH_TOKEN = "op://developer/item/password"
 
 class PodSpec(unittest.TestCase):
     def pod(self, **kw):
-        args = dict(job="kgate-1-2", image=DIGEST, cpu=3, memory="6Gi", node=None, secret_env={}, pull=None)
+        args = dict(job="kgate-1-2", image=DIGEST, cpu=3, memory="6Gi", node=None, secret_env={}, pull=None, memory_limit=None)
         args.update(kw)
-        items = K.pod_manifests(args["job"], args["image"], args["cpu"], args["memory"], args["node"], args["secret_env"], args["pull"])["items"]
+        items = K.pod_manifests(args["job"], args["image"], args["cpu"], args["memory"], args["node"], args["secret_env"], args["pull"],
+                                memory_limit=args["memory_limit"])["items"]
         return items[-1], items[:-1]
 
     def test_limits_and_jobs_follow_the_request(self):
@@ -141,6 +154,22 @@ class PodSpec(unittest.TestCase):
         self.assertEqual((env["CARGO_BUILD_JOBS"], env["RAYON_NUM_THREADS"], env["MAKEFLAGS"]), ("3", "3", "-j3"))
         self.assertEqual(c["image"], DIGEST)
         self.assertEqual(c["command"], ["tini", "--", "sleep", "infinity"], "PID 1 is an init, so orphans are reaped")
+
+    def test_request_and_limit_render_separately(self):
+        pod, _ = self.pod(memory="256Mi", memory_limit="512Mi")
+        c = pod["spec"]["containers"][0]
+        self.assertEqual(c["resources"], {"requests": {"cpu": "3", "memory": "256Mi"}, "limits": {"memory": "512Mi"}})
+
+    def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
+        # sha256 of json.dumps(manifests), rendered at dotfiles 4ef32ef1 (before memory_limit existed)
+        cases = [
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "c9e27b26261b0fee7224c60592d8c52b7cb5b49394f66a8c8254b53a5c80c4cd"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
+             "14691f0e800910c10c79eb70fe83e38198181236b2944f66e739558bedb4672a"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "193128c5ec1c80b8fa10ee210d67766833c44f2de3b6072388606b5503f3d2b5"),
+        ]
+        for manifests, want in cases:
+            self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
 
     def test_keeps_off_excluded_nodes(self):
         pod, _ = self.pod()
@@ -307,8 +336,8 @@ class Black(unittest.TestCase):
         (self.repo / "tracked.txt").write_text("tracked and changed\n")
         (self.repo / "ignored.txt").write_text("stays here\n")
 
-    def profile(self, tools="", extra="", secrets=""):
-        (self.repo / "kgate.toml").write_text('image = "%s"\ncpu = 2\nmemory = "1Gi"\n%s\n[tools]\n%s\n[secrets]\n%s\n' % (DIGEST, extra, tools, secrets))
+    def profile(self, tools="", extra="", secrets="", memory="1Gi"):
+        (self.repo / "kgate.toml").write_text('image = "%s"\ncpu = 2\nmemory = "%s"\n%s\n[tools]\n%s\n[secrets]\n%s\n' % (DIGEST, memory, extra, tools, secrets))
 
     def kgate(self, *args, host="fake", env=None):
         e = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
@@ -564,6 +593,66 @@ class Black(unittest.TestCase):
         c = manifest["items"][-1]["spec"]["containers"][0]
         self.assertEqual(c["resources"]["limits"], {"memory": "2Gi"})
         self.assertEqual(c["resources"]["requests"], {"cpu": "3", "memory": "2Gi"})
+
+    def pod_resources(self):
+        manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
+        return manifest["items"][-1]["spec"]["containers"][0]["resources"]
+
+    def test_request_and_limit_reach_the_pod_and_the_record(self):
+        self.profile(memory="256Mi", extra='memory_limit = "512Mi"')
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "256Mi"}, "limits": {"memory": "512Mi"}})
+        rec = self.records()[-1]
+        self.assertEqual((rec["mem"], rec["mem_limit"]), ("256Mi", "512Mi"))
+        self.assertIn("256Mi memory request, 512Mi limit", done.stdout)
+
+    def test_without_memory_limit_the_limit_is_the_request(self):
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi"}, "limits": {"memory": "1Gi"}})
+        rec = self.records()[-1]
+        self.assertEqual((rec["mem"], rec["mem_limit"]), ("1Gi", "1Gi"))
+        self.assertIn("1Gi memory request\n", done.stdout)
+
+    def test_limit_below_request_is_refused_before_anything_is_created(self):
+        marker = self.tmp / "cmd-ran"
+        self.profile(memory="1Gi", extra='memory_limit = "512Mi"')
+        done = self.kgate("--", "sh", "-c", "touch %s" % marker)
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("memory_limit must be at least memory", done.stdout)
+        self.assertFalse(marker.exists())
+        self.assertFalse(any("manifest" in c for c in self.calls()))
+        self.assertEqual((self.records()[-1]["exit"], self.records()[-1]["ran"]), (69, False))
+
+    def test_memory_limit_that_is_not_a_size_is_refused(self):
+        self.profile(extra='memory_limit = "2G"')
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("memory_limit must look like 4Gi or 512Mi", done.stdout)
+        self.assertFalse(any("manifest" in c for c in self.calls()))
+
+    def test_mem_sets_the_request_and_the_profile_limit_stays(self):
+        self.profile(memory="1Gi", extra='memory_limit = "2Gi"')
+        self.assertEqual(self.kgate("--mem", "512Mi", "--", "true").returncode, 0)
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "512Mi"}, "limits": {"memory": "2Gi"}})
+
+    def test_mem_above_the_profile_limit_is_refused(self):
+        self.profile(memory="1Gi", extra='memory_limit = "2Gi"')
+        done = self.kgate("--mem", "4Gi", "--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("memory_limit must be at least memory", done.stdout)
+        self.assertFalse(any("manifest" in c for c in self.calls()))
+
+    def test_mem_limit_flag_sets_the_limit(self):
+        self.assertEqual(self.kgate("--mem-limit", "3Gi", "--", "true").returncode, 0)
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi"}, "limits": {"memory": "3Gi"}})
+
+    def test_mem_limit_flag_below_the_request_is_refused(self):
+        done = self.kgate("--mem-limit", "512Mi", "--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("memory_limit must be at least memory", done.stdout)
+        self.assertFalse(any("manifest" in c for c in self.calls()))
 
 
 if __name__ == "__main__":

@@ -13,12 +13,12 @@ The pane that started the job is woken when it ends, with the exit code and the 
 ## CLI
 
 ```
-kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]
+kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]
 ```
 
 - `--profile FILE`: the gate's profile. Default `kgate.toml` at the worktree root. A repo with several gates keeps one profile per gate next to its script and passes `--profile`.
 - `--wait`: how long to wait for the pod to start (default 3600).
-- `--cpu`, `--mem`, `--image`: override the profile. `--node`: pin one node (never an excluded one).
+- `--cpu`, `--mem`, `--mem-limit`, `--image`: override the profile. `--mem` sets the memory request, `--mem-limit` the limit (see "Memory: request and limit"). `--node`: pin one node (never an excluded one).
 - CMD runs in the same directory, at the same absolute path, inside the pod.
 
 ## What it does
@@ -30,7 +30,7 @@ kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--image REF] [--
 5. **`/out`.** Whatever CMD writes to `/out` (also `$KGATE_OUT`) in the pod is copied to `<state>/<id>.out/` before the pod is deleted, whether CMD passed or failed.
 6. Deletes the pod and its Secrets. At each start it also removes what a client that died left behind.
 
-The pod's first process is `tini` (`tini -- sleep infinity`), so processes a gate orphans are reaped, not left as zombies. The pod's memory limit equals its request. `CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS` and `MAKEFLAGS=-jN` are set to the CPU request. The image is pinned by digest. The scheduler is the queue. Pods run on amd64 nodes other than agent-4, the control plane and the Mac mini (`EXCLUDED_NODES` in the script). The G14 laptop (`cartwmic-g14-wsl`) is schedulable again since 2026-11-06; `--node cartwmic-g14-wsl` pins a job there. Until homelab#101 (9f6ef66, 2026-11-05, systemd-timesyncd off) its WSL2 wall clock stepped back about 2.8 s every 30 s (a probe on 2026-11-05: 11 s of drift in two minutes; agent-1 had none), so tests that compare times flaked there (an agent-kit watchdog test, a heavy-gate 20-second check). It now follows the Windows clock, which slews up to 8% for about 15 s roughly every 9 h, and it can read up to about 2 s ahead of other nodes.
+The pod's first process is `tini` (`tini -- sleep infinity`), so processes a gate orphans are reaped, not left as zombies. The pod's memory request is `memory` and its limit is `memory_limit`, which equals `memory` unless the profile sets it (see "Memory: request and limit"). `CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS` and `MAKEFLAGS=-jN` are set to the CPU request. The image is pinned by digest. The scheduler is the queue. Pods run on amd64 nodes other than agent-4, the control plane and the Mac mini (`EXCLUDED_NODES` in the script). The G14 laptop (`cartwmic-g14-wsl`) is schedulable again since 2026-11-06; `--node cartwmic-g14-wsl` pins a job there. Until homelab#101 (9f6ef66, 2026-11-05, systemd-timesyncd off) its WSL2 wall clock stepped back about 2.8 s every 30 s (a probe on 2026-11-05: 11 s of drift in two minutes; agent-1 had none), so tests that compare times flaked there (an agent-kit watchdog test, a heavy-gate 20-second check). It now follows the Windows clock, which slews up to 8% for about 15 s roughly every 9 h, and it can read up to about 2 s ahead of other nodes.
 
 ## No fallback; exit codes
 
@@ -118,7 +118,7 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 | `start`, `end`, `duration_s` | UTC times and seconds |
 | `repo`, `cwd`, `head` | repo name, working directory, Mac HEAD |
 | `tree` | the tree hash of what was shipped |
-| `node`, `image`, `profile`, `cpu`, `mem` | where and how it ran |
+| `node`, `image`, `profile`, `cpu`, `mem`, `mem_limit` | where and how it ran; `mem` is the memory request and `mem_limit` the limit |
 | `peak_bytes`, `peak_source` | the container's peak memory: `cgroup` (`memory.peak`, kernel 5.19 and later) or `sampled` (highest `memory.current` seen every 0.5 s, on older kernels). It includes page cache. |
 | `ran` | CMD started |
 | `exit`, `reason` | exit code; the reason when it is 69 |
@@ -131,7 +131,8 @@ A TOML file in the gate's repo. Keep it small.
 ```toml
 image  = "ghcr.io/cartwmic/kgate@sha256:..."   # required, pinned by digest
 cpu    = 2                                      # whole CPUs; default 2
-memory = "4Gi"                                  # default 4Gi; the limit equals it
+memory = "4Gi"                                  # the request, what the scheduler reserves; default 4Gi
+memory_limit = "8Gi"                             # optional: the limit, the OOM-kill line; default equal to memory
 user   = "1000:1000"                            # uid:gid CMD runs as; default 1000:1000; "0:0" for root
 
 [tools]                                          # exact versions; checked in the pod before CMD
@@ -151,6 +152,14 @@ services = ["docker"]                            # optional; see below
 - **Image pull.** The image registry `ghcr.io` is private; kgate reads the 1Password item `kgate-github-packages-read` for each job's temporary pull Secret (expires about 2026-12-02; see the homelab `docs/kgate.md`).
 - The image needs `tini` (the pod's first process) and `python3` (3.11 or later): the same script runs in the pod to verify the hash and check versions. The version commands run in the job's directory, so per-directory tools (rustup with a `rust-toolchain.toml`) report what CMD will use. `git` is needed when the gate itself uses it.
 
+## Memory: request and limit
+
+- `memory` is the pod's **request**: what the scheduler reserves on a node to place it. It decides where a job fits.
+- `memory_limit` is the pod's **limit**: the line at which the pod is OOM-killed. It is optional. When set, it must be at least `memory`, and it takes the same format (`Gi` or `Mi`). Without it the limit equals the request, which is how every profile ran before this key existed.
+- A pod whose request is below its limit is Burstable. Under node memory pressure Kubernetes evicts pods that use more than their request first. Above the limit the pod is killed whatever the node has free.
+- Rule of thumb for a profile: set `memory` to about 1.2 times the highest measured peak, and `memory_limit` to at least the peak plus a margin. The peak kgate records (`peak_bytes`) is the container's cgroup peak, and it includes page cache. The kernel can reclaim page cache, so the peak overstates what the job needs; read it as an upper bound.
+- Overrides: `--mem` sets the request. `--mem-limit` sets the limit. A `--mem` above the profile's `memory_limit` is refused unless `--mem-limit` is given too.
+
 ## Switching a gate: the parity run
 
 A gate moves to kgate one at a time, each with its profile in its own repo:
@@ -166,7 +175,7 @@ Personal only: kgate uses the personal homelab cluster (`.chezmoiignore`; row in
 
 ## Tests
 
-`python3 -m unittest discover -s tests/kgate -v`: the tree hash against real `git write-tree`, the profile, the version match and the pod spec directly; and the real script as a process against a fake `ssh` (a scripted cluster whose "pod" runs on this machine) and a fake `op`: pass, CMD failure, `/out`, hash mismatch, wrong version, unreachable cluster with nothing run locally, image pull failure, pod never scheduled, unreadable secret, secrets kept out of the pod spec and the logs.
+`python3 -m unittest discover -s tests/kgate -v`: the tree hash against real `git write-tree`, the profile, the version match and the pod spec directly (the memory request and limit, and a byte-identical default render); and the real script as a process against a fake `ssh` (a scripted cluster whose "pod" runs on this machine) and a fake `op`: pass, CMD failure, `/out`, hash mismatch, wrong version, unreachable cluster with nothing run locally, image pull failure, pod never scheduled, unreadable secret, secrets kept out of the pod spec and the logs.
 
 ## Gates in this repo
 
