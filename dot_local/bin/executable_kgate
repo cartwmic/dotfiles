@@ -6,6 +6,11 @@
 heavy-gate's command line (`--wait SECONDS -- CMD`) plus the profile and a few overrides. Run it under
 `run-and-wake -- kgate -- CMD` and the pane is woken when the job ends.
 
+    kgate cancel [--wait SECONDS] JOB_ID      stop that one job (kgate's id or the run-and-wake id; exact match only)
+    kgate cancel --list                       the jobs that are running now
+
+`cancel` is the only supported way to stop a job: it signals that job's one client and nothing else. Never pkill.
+
 Contract
 - Ships the git worktree of $PWD (tracked and untracked, non-ignored files, its .git file and the shared git
   folder) to one pod, unpacked at the same absolute paths, and runs CMD in the same $PWD. Ignored files stay here.
@@ -65,6 +70,8 @@ PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/passw
 MAX_RUN_S = 8 * 3600  # the pod ends itself: a pod whose client died must not hold its memory for ever
 UNAVAILABLE = 69
 USAGE = 64
+CANCELLED = "cancelled by kgate cancel"
+JOB_ID = r"kgate-[0-9]+-[0-9]+"
 TOKEN_FILE = os.path.expanduser("~/.config/agent-harness/op-service-token")
 NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
 FATAL_WAITING = ("ErrImagePull", "ImagePullBackOff", "InvalidImageName", "CreateContainerConfigError", "ErrImageNeverPull")
@@ -377,6 +384,43 @@ def archive(wt, common, files, extra):
     return buf.getvalue()
 
 
+def state_dir():
+    return os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "kgate")
+
+
+def proc_identity(pid):
+    """(start, command) of the live process `pid`, or None when it is gone (a zombie counts as gone).
+    Both are compared as opaque text: the same process always gives the same pair, and a recycled pid does not."""
+    if os.path.isdir("/proc/self"):
+        try:
+            with open("/proc/%d/stat" % pid) as f:
+                fields = f.read().rsplit(")", 1)[1].split()
+            with open("/proc/%d/cmdline" % pid, "rb") as f:
+                command = f.read().replace(b"\0", b" ").decode(errors="replace").strip()
+        except (OSError, IndexError):
+            return None
+        return None if fields[0] == "Z" else (fields[19], command)
+    done = subprocess.run(["ps", "-ww", "-o", "stat=,lstart=,command=", "-p", str(pid)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                          env={**os.environ, "LC_ALL": "C"})
+    m = re.match(r"\s*(\S+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)", done.stdout.decode(errors="replace").strip())
+    return None if not m or m.group(1).startswith("Z") else (m.group(2), m.group(3))
+
+
+def write_json_atomic(path, obj):
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    with open(tmp, "w") as f:
+        json.dump(obj, f)
+    os.replace(tmp, path)
+
+
+def forget(*paths):
+    for path in paths:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+
 class Cluster:
     """The one adapter: kubectl on the control plane over ssh. Nothing else on this machine touches the cluster."""
 
@@ -423,13 +467,31 @@ def op_read(ref):
     return done.stdout.rstrip(b"\r\n")
 
 
+def check_reachable(cluster):
+    if not HOST:
+        raise Unavailable("no cluster host: set KGATE_SSH, or set sshHosts.kgate (address, user) in ~/.config/chezmoi/chezmoi.yaml "
+                          "so chezmoi renders ~/.config/kgate/host (docs/profiles.md, \"Local data keys\")")
+    done = cluster.run(["get", "namespace", NAMESPACE, "-o", "name"])
+    if done.returncode != 0:
+        why = (done.stderr.decode(errors="replace").strip().splitlines() or ["no message"])[-1]
+        raise Unavailable("cluster unreachable (%s): %s" % (HOST, why))
+
+
+def delete_job_objects(cluster, job_id):
+    """Delete one job's pod and its two Secrets (the names the job created). Returns the kubectl result."""
+    names = ["pod/" + job_id, "secret/" + job_id + "-env", "secret/" + job_id + "-pull"]
+    return cluster.run(["delete", *names, "--ignore-not-found", "--grace-period=0", "--wait=true"])
+
+
 class Job:
     def __init__(self, opts):
         self.o = opts
         self.t0 = time.time()
         self.id = "kgate-%d-%d" % (self.t0, os.getpid())
-        self.state = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "kgate")
+        self.state = state_dir()
         os.makedirs(self.state, exist_ok=True)
+        self.entry = os.path.join(self.state, "active", self.id + ".json")  # the running-jobs registry `kgate cancel` reads
+        self.cancel_marker = os.path.join(self.state, "active", self.id + ".cancel")
         self.logpath = os.path.join(self.state, self.id + ".log")
         self.log = open(self.logpath, "ab", buffering=0)
         self.console = True
@@ -450,6 +512,19 @@ class Job:
 
     def note(self, text):
         self.emit(("kgate: " + text + "\n").encode())
+
+    def register(self):
+        """Write (or rewrite) this job's entry in the running-jobs registry. Removed by unregister()."""
+        ident = proc_identity(os.getpid())
+        if ident is None:
+            raise RuntimeError("cannot read this process's start time and command")
+        os.makedirs(os.path.dirname(self.entry), exist_ok=True)
+        write_json_atomic(self.entry, {"id": self.id, "job": self.rec["job"] or None, "pid": os.getpid(), "start": ident[0],
+                                       "proc_cmd": ident[1], "cwd": self.rec["cwd"], "argv": sys.argv[:3], "cmd": self.rec["cmd"],
+                                       "node": self.rec["node"]})
+
+    def unregister(self):
+        forget(self.entry, self.cancel_marker)
 
     # -- steps
 
@@ -476,13 +551,7 @@ class Job:
         return image, cpu, mem, mem_limit, prof
 
     def reachable(self):
-        if not HOST:
-            raise Unavailable("no cluster host: set KGATE_SSH, or set sshHosts.kgate (address, user) in ~/.config/chezmoi/chezmoi.yaml "
-                              "so chezmoi renders ~/.config/kgate/host (docs/profiles.md, \"Local data keys\")")
-        done = self.cluster.run(["get", "namespace", NAMESPACE, "-o", "name"])
-        if done.returncode != 0:
-            why = (done.stderr.decode(errors="replace").strip().splitlines() or ["no message"])[-1]
-            raise Unavailable("cluster unreachable (%s): %s" % (HOST, why))
+        check_reachable(self.cluster)
 
     def sweep(self):
         """Remove what an earlier client that died left behind: finished pods, and Secrets whose pod is gone."""
@@ -575,8 +644,7 @@ class Job:
     def cleanup(self):
         if not HOST:  # no cluster address: nothing was created, and an ssh attempt would only add noise to the exit-69 message
             return
-        names = ["pod/" + self.id, "secret/" + self.id + "-env", "secret/" + self.id + "-pull"]
-        done = self.cluster.run(["delete", *names, "--ignore-not-found", "--grace-period=0", "--wait=true"])
+        done = delete_job_objects(self.cluster, self.id)
         self.rec["cleanup"] = done.returncode == 0
         if done.returncode != 0:
             self.note("cleanup not confirmed for %s: %s" % (self.id, done.stderr.decode(errors="replace").strip()[:200]))
@@ -610,6 +678,7 @@ class Job:
         self.start_pod(pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit))
         del secret_env, pull
         self.note("pod running on %s" % self.rec["node"])
+        self.register()  # again, now that the node is known (kgate cancel --list shows it)
         seen, transport = self.execute(tar_bytes)
         self.rec["ran"] = "running" in seen
         peak = seen.get("peak", "").split()
@@ -659,7 +728,165 @@ def parse_args(argv):
 
 
 USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]\n" \
+             "       kgate cancel [--wait SECONDS] JOB_ID     stop that one job (kgate's id or the run-and-wake id); exit 0 once it ended, 69 if it did not in time\n" \
+             "       kgate cancel --list                      the jobs running now\n" \
              "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac). See docs/kgate.md."
+
+
+# ---------------------------------------------------------------- kgate cancel
+
+def active_entries(state):
+    """The running-jobs registry: every readable entry whose file name is its job id."""
+    found = []
+    folder = os.path.join(state, "active")
+    try:
+        names = sorted(os.listdir(folder))
+    except FileNotFoundError:
+        return found
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(folder, name)) as f:
+                e = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(e, dict) and e.get("id") == name[:-5] and re.fullmatch(JOB_ID, name[:-5]) and isinstance(e.get("pid"), int):
+            found.append(e)
+    return found
+
+
+def end_line(state, job_id, offset=0):
+    """(the end record of job_id in log.jsonl or None, offset to read from next time). Reads whole lines only."""
+    try:
+        with open(os.path.join(state, "log.jsonl"), "rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except FileNotFoundError:
+        return None, offset
+    data = data[:data.rfind(b"\n") + 1]
+    for line in data.splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and rec.get("id") == job_id and "exit" in rec:
+            return rec, offset + len(data)
+    return None, offset + len(data)
+
+
+def age(entry):
+    m = re.fullmatch(r"kgate-([0-9]+)-[0-9]+", entry["id"])
+    secs = max(0, int(time.time() - int(m.group(1))))
+    return "%dh%02dm" % (secs // 3600, secs % 3600 // 60) if secs >= 3600 else "%dm%02ds" % (secs // 60, secs % 60)
+
+
+def list_active(state):
+    entries = active_entries(state)
+    if not entries:
+        print("no kgate jobs running")
+    for e in entries:
+        gone = "" if proc_identity(e["pid"]) == (e.get("start"), e.get("proc_cmd")) else " (client gone)"
+        print("%s job=%s pid=%d%s node=%s age=%s cwd=%s cmd=%s" % (e["id"], e.get("job") or "-", e["pid"], gone, e.get("node") or "-", age(e),
+                                                                  e.get("cwd"), e.get("cmd")))
+    return 0
+
+
+def report_end(rec):
+    print("kgate cancel: %s ended: exit %s%s" % (rec["id"], rec["exit"], " (%s)" % rec["reason"] if rec.get("reason") else ""))
+    print(json.dumps(rec))
+    return 0
+
+
+def cancel_orphan(state, e):
+    """The client is gone and wrote no end line: delete exactly this job's pod and Secrets, and write the end line."""
+    cluster = Cluster(HOST, KEY)
+    try:
+        check_reachable(cluster)
+    except Unavailable as err:
+        print("kgate cancel: %s (the job's pod and Secrets are not deleted; run it again)" % err, file=sys.stderr)
+        return UNAVAILABLE
+    label = cluster.run(["get", "pod", e["id"], "--ignore-not-found", "-o", "jsonpath={.metadata.labels.app}"])
+    if label.returncode != 0:
+        print("kgate cancel: could not look up pod %s: %s; nothing deleted" % (e["id"], label.stderr.decode(errors="replace").strip()[:200]), file=sys.stderr)
+        return UNAVAILABLE
+    if label.stdout.decode().strip() not in ("", "kgate"):
+        print("kgate cancel: pod %s is not a kgate pod; nothing deleted" % e["id"], file=sys.stderr)
+        return UNAVAILABLE
+    done = delete_job_objects(cluster, e["id"])
+    t0 = int(e["id"].split("-")[1])
+    now = time.time()
+    rec = {"id": e["id"], "job": e.get("job"), "start": utc(t0), "end": utc(now), "duration_s": round(now - t0, 3), "cwd": e.get("cwd"),
+           "cmd": e.get("cmd"), "node": e.get("node"), "ran": None, "exit": 143, "reason": CANCELLED + " (client already gone)",
+           "cleanup": done.returncode == 0, "cancelled": True}
+    with open(os.path.join(state, "log.jsonl"), "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    forget(os.path.join(state, "active", e["id"] + ".json"), os.path.join(state, "active", e["id"] + ".cancel"))
+    if done.returncode != 0:
+        print("kgate cancel: delete not confirmed: %s (delete pod/%s secret/%s-env secret/%s-pull by hand)"
+              % (done.stderr.decode(errors="replace").strip()[:200], e["id"], e["id"], e["id"]), file=sys.stderr)
+    return report_end(rec)
+
+
+def cancel_live(state, e, wait):
+    """Send SIGTERM to the one verified client of this job; wait for its end line."""
+    ident = (e["start"], e["proc_cmd"])
+    deadline = time.time() + wait
+    marker = os.path.join(state, "active", e["id"] + ".cancel")
+    open(marker, "w").close()
+    try:
+        os.kill(e["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    offset = 0
+    while True:
+        rec, offset = end_line(state, e["id"], offset)
+        if rec:
+            return report_end(rec)
+        if proc_identity(e["pid"]) != ident:  # the client is gone; its end line is written before it exits
+            rec, offset = end_line(state, e["id"], offset)
+            return report_end(rec) if rec else cancel_orphan(state, e)
+        if time.time() >= deadline:
+            print("kgate cancel: %s was sent SIGTERM and has not ended after %gs; its client is still running as pid %d. "
+                  "kgate cancel does not force it. To force it, run: kill -9 %d" % (e["id"], wait, e["pid"], e["pid"]), file=sys.stderr)
+            return UNAVAILABLE
+        time.sleep(0.2)
+
+
+class _Quiet(argparse.ArgumentParser):
+    def error(self, message):
+        raise SystemExit(USAGE_TEXT)
+
+
+def cancel_main(argv):
+    p = _Quiet(prog="kgate cancel", add_help=False, allow_abbrev=False)
+    p.add_argument("--list", action="store_true")
+    p.add_argument("--wait", type=float, default=120)
+    p.add_argument("id", nargs="?")
+    try:
+        o = p.parse_args(argv)
+        if o.wait < 0 or o.list == bool(o.id):
+            raise SystemExit(USAGE_TEXT)
+    except SystemExit as err:
+        print(err.code if isinstance(err.code, str) else USAGE_TEXT, file=sys.stderr)
+        return USAGE
+    state = state_dir()
+    if o.list:
+        return list_active(state)
+    hits = [e for e in active_entries(state) if o.id in (e["id"], e.get("job"))]
+    if len(hits) != 1:
+        print("kgate cancel: %s; nothing was signalled (kgate cancel --list shows the running jobs)"
+              % ("no running job has the id " + o.id if not hits else "%d running jobs have the id %s: %s" % (len(hits), o.id, ", ".join(e["id"] for e in hits))),
+              file=sys.stderr)
+        return USAGE
+    e = hits[0]
+    rec, _ = end_line(state, e["id"])
+    if rec:  # it ended; only its registry entry was left behind
+        forget(os.path.join(state, "active", e["id"] + ".json"), os.path.join(state, "active", e["id"] + ".cancel"))
+        return report_end(rec)
+    if proc_identity(e["pid"]) == (e.get("start"), e.get("proc_cmd")):
+        return cancel_live(state, e, o.wait)
+    return cancel_orphan(state, e)
 
 
 def main(argv):
@@ -668,6 +895,8 @@ def main(argv):
         return 0
     if argv[:1] == ["--pod"]:
         return pod_main(argv[1])
+    if argv[:1] == ["cancel"]:
+        return cancel_main(argv[1:])
     try:
         opts = parse_args(argv)
     except SystemExit as e:
@@ -678,32 +907,41 @@ def main(argv):
     def interrupted(signum, _frame):
         raise KeyboardInterrupt(signal.Signals(signum).name, signum)
     signal.signal(signal.SIGTERM, interrupted)
-    code, reason, started = UNAVAILABLE, None, False
     try:
-        code = job.run()
-        started = True
-    except Unavailable as e:
-        reason = str(e)
-        job.note("%s; exit 69, CMD was not run on this Mac" % reason)
-    except KeyboardInterrupt as e:
-        reason = "interrupted (%s)" % (e.args[0] if e.args else "SIGINT")
-        job.note(reason)
-        code = 128 + (e.args[1] if len(e.args) > 1 else signal.SIGINT)
-    except Exception as e:  # a bug in kgate itself must not turn into a Mac run or a silent pass
-        reason = "kgate error: %s: %s" % (type(e).__name__, e)
-        job.note(reason)
+        code, reason, started = UNAVAILABLE, None, False
+        try:
+            job.register()
+            code = job.run()
+            started = True
+        except Unavailable as e:
+            reason = str(e)
+            job.note("%s; exit 69, CMD was not run on this Mac" % reason)
+        except KeyboardInterrupt as e:
+            by = e.args[0] if e.args else "SIGINT"
+            if by == "SIGTERM" and os.path.exists(job.cancel_marker):
+                reason = CANCELLED
+                job.rec["cancelled"] = True
+            else:
+                reason = "interrupted (%s)" % by
+            job.note(reason)
+            code = 128 + (e.args[1] if len(e.args) > 1 else signal.SIGINT)
+        except Exception as e:  # a bug in kgate itself must not turn into a Mac run or a silent pass
+            reason = "kgate error: %s: %s" % (type(e).__name__, e)
+            job.note(reason)
+        finally:
+            try:
+                if job.rec["ran"] or started:
+                    job.fetch_out()
+            except Exception as e:
+                job.note("could not copy /out back: %s" % e)
+            try:
+                job.cleanup()
+            except Exception as e:
+                job.note("cleanup failed: %s" % e)
+        job.finish(code, reason)
+        return code
     finally:
-        try:
-            if job.rec["ran"] or started:
-                job.fetch_out()
-        except Exception as e:
-            job.note("could not copy /out back: %s" % e)
-        try:
-            job.cleanup()
-        except Exception as e:
-            job.note("cleanup failed: %s" % e)
-    job.finish(code, reason)
-    return code
+        job.unregister()
 
 
 if __name__ == "__main__":

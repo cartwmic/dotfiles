@@ -20,6 +20,7 @@ kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE
 - `--wait`: how long to wait for the pod to start (default 3600).
 - `--cpu`, `--mem`, `--mem-limit`, `--image`: override the profile. `--mem` sets the memory request, `--mem-limit` the limit (see "Memory: request and limit"). `--node`: pin one node (never an excluded one).
 - CMD runs in the same directory, at the same absolute path, inside the pod.
+- `kgate cancel [--wait SECONDS] JOB_ID` and `kgate cancel --list` stop one job and list the running ones; see "Cancelling a job".
 
 ## What it does
 
@@ -31,6 +32,30 @@ kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE
 6. Deletes the pod and its Secrets. At each start it also removes what a client that died left behind.
 
 The pod's first process is `tini` (`tini -- sleep infinity`), so processes a gate orphans are reaped, not left as zombies. The pod's memory request is `memory` and its limit is `memory_limit`, which equals `memory` unless the profile sets it (see "Memory: request and limit"). `CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS` and `MAKEFLAGS=-jN` are set to the CPU request. The image is pinned by digest. The scheduler is the queue. Pods run on amd64 nodes other than agent-4, the control plane and the Mac mini (`EXCLUDED_NODES` in the script). The G14 laptop (`cartwmic-g14-wsl`) is schedulable again since 2026-11-06; `--node cartwmic-g14-wsl` pins a job there. Until homelab#101 (9f6ef66, 2026-11-05, systemd-timesyncd off) its WSL2 wall clock stepped back about 2.8 s every 30 s (a probe on 2026-11-05: 11 s of drift in two minutes; agent-1 had none), so tests that compare times flaked there (an agent-kit watchdog test, a heavy-gate 20-second check). It now follows the Windows clock, which slews up to 8% for about 15 s roughly every 9 h, and it can read up to about 2 s ahead of other nodes.
+
+## Cancelling a job
+
+```sh
+kgate cancel --list                     # the jobs running now: id, run-and-wake job id, pid, node, age, cwd, command
+kgate cancel [--wait SECONDS] JOB_ID    # stop that one job (default wait 120)
+```
+
+**Never `pkill`, `killall` or `kill $(pgrep ...)` to stop a kgate job.** A pattern kills every seat's job that matches it, on every node. `kgate cancel` is the only supported way, and a caller cancels **its own job id only**.
+
+How it works:
+
+- Each running client has an entry in `<state>/active/<kgate id>.json` (id, run-and-wake job id, pid, the process's start time and command, cwd, node once known). It is written when the job starts and removed when the job ends, including when kgate fails with an unexpected error.
+- `JOB_ID` is kgate's id (`kgate-<epoch>-<pid>`, printed in the job log and the record) or the run-and-wake job id (`RUN_AND_WAKE_JOB`, `job` in the record). The match is exact. A prefix, a pattern, or an id that matches no job or more than one job is refused with exit 64, and nothing is signalled. There is no cancel-all.
+- Before signalling, cancel checks that the pid is still the same process (same start time and command as the entry). Then it writes `<state>/active/<id>.cancel` and sends SIGTERM to that one pid: not a process group, not a parent, not a child, not the `run-and-wake` wrapper. The client's SIGTERM path runs as it always did: copy `/out` back, delete the pod and both Secrets, write the record, exit 143. Because the marker is there, the record's `reason` is `cancelled by kgate cancel` (and `"cancelled": true`), not `interrupted (SIGTERM)`.
+- Cancel waits up to `--wait` seconds for that job's end line in `log.jsonl`, prints it, and exits 0. The job's own exit code (143) is in the line. If the job has not ended by then, cancel exits 69, prints the client's pid and says it did not force it. Cancel never escalates to SIGKILL by itself; the caller decides (`kill -9 <that pid>`).
+- **Orphan.** If the client is already gone (killed -9, or the Mac rebooted) and left no end line, cancel deletes exactly that job's `pod/<id>`, `secret/<id>-env` and `secret/<id>-pull` (after checking that the pod, if it exists, carries the `app=kgate` label), writes an end line with exit 143, `reason` `cancelled by kgate cancel (client already gone)`, `cleanup` true or false and `"cancelled": true`, and removes the entry. If the cluster is unreachable it exits 69 and keeps the entry so you can run it again.
+- A job that ended on its own but left its entry behind is reported from its end line and the entry is removed.
+
+| Exit | Meaning |
+|---|---|
+| 0 | The job ended. Its end line is printed. |
+| 64 | Bad command line, or the id matched no running job or more than one. Nothing was signalled. |
+| 69 | The job was signalled and did not end in `--wait` seconds, or the orphan cleanup could not reach the cluster. |
 
 ## No fallback; exit codes
 
@@ -124,6 +149,7 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 | `ran` | CMD started |
 | `exit`, `reason` | exit code; the reason when it is 69 |
 | `out_files`, `cleanup`, `output`, `cmd` | files copied back; pod and Secrets confirmed deleted; log file; the command |
+| `cancelled` | only on a job stopped by `kgate cancel`: `true` |
 
 ## Gate profile
 
@@ -176,7 +202,7 @@ Personal only: kgate uses the personal homelab cluster (`.chezmoiignore`; row in
 
 ## Tests
 
-`python3 -m unittest discover -s tests/kgate -v`: the tree hash against real `git write-tree`, the profile, the version match and the pod spec directly (the memory request and limit, and a byte-identical default render); and the real script as a process against a fake `ssh` (a scripted cluster whose "pod" runs on this machine) and a fake `op`: pass, CMD failure, `/out`, hash mismatch, wrong version, unreachable cluster with nothing run locally, image pull failure, pod never scheduled, unreadable secret, secrets kept out of the pod spec and the logs.
+`python3 -m unittest discover -s tests/kgate -v`: the tree hash against real `git write-tree`, the profile, the version match and the pod spec directly (the memory request and limit, and a byte-identical default render); and `kgate cancel` (by kgate id and by run-and-wake id, exactly one pid signalled and a second live client untouched, a bystander in the same process group untouched, prefixes and double matches refused, a dead or recycled pid not signalled, the orphan path's three delete names, `--list`, the registry entry gone after normal and failed finishes, and a real client cancelled end to end against the fake cluster); and the real script as a process against a fake `ssh` (a scripted cluster whose "pod" runs on this machine) and a fake `op`: pass, CMD failure, `/out`, hash mismatch, wrong version, unreachable cluster with nothing run locally, image pull failure, pod never scheduled, unreadable secret, secrets kept out of the pod spec and the logs.
 
 ## Gates in this repo
 
