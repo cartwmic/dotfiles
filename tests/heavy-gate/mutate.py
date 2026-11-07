@@ -1,11 +1,12 @@
 """Mutation check for heavy-gate: break one rule at a time; the tests for that part must fail each time.
 
-    python3 tests/heavy-gate/mutate.py [rank|gate]      (both by default; MUTATE_ONLY=text runs the mutations whose name has it)
+    python3 tests/heavy-gate/mutate.py [rank|gate|load]      (all by default; MUTATE_ONLY=text runs the mutations whose name has it)
 
 Not part of CI. It proves the tests pin every rule rather than just exercising them:
   rank  resolve_priority and rank_on (the central workstream rank);
-  gate  the admission rules: the two kept memory-pressure checks and the 5-minute load limit (each broken in turn), and the
-        removed checks (load1, the swap floor, Swapouts), each put back, which the "no longer gates" tests must catch.
+  gate  the admission rules: the two kept memory-pressure checks (each broken in turn), and the removed checks (load1, the swap floor,
+        Swapouts), each put back, which the "no longer gates" tests must catch;
+  load  the 5-minute load limit: its rule, figure, default, sources, warning and message.
 Only the tests for that part run for each mutant, and the first failure stops the run (the whole suite takes minutes); the full
 suite runs unmutated in CI/by hand.
 """
@@ -24,10 +25,13 @@ SELECT = {
                               "test_the_two_readings", "test_starts_do_not_share", "test_a_bad_window",
                               "test_free_space", "test_the_edge_of_the_floor", "test_the_floor", "test_a_bad_floor", "test_a_mount", "test_the_gate_reads", "test_a_command_is_not_run",
                               "test_a_job_that_waits", "test_memory_refusal",
-                              "test_a_watched", "test_every_broken_volume", "test_the_volumes_file", "test_no_volumes_file", "test_the_check_says",
-                              "test_a_5_minute", "test_only_the_5", "test_the_cores", "test_a_missing_sysctl", "test_the_load_rule", "test_load_is_not_read",
+                              "test_a_watched", "test_every_broken_volume", "test_the_volumes_file", "test_no_volumes_file",
+                              "test_the_check_says") for arg in ("-k", name)],
+    # the 5-minute load limit: only its own tests (about a minute per mutant)
+    "load": [arg for name in ("test_a_5_minute", "test_only_the_5", "test_the_cores", "test_a_missing_sysctl", "test_the_load_rule", "test_load_is_not_read",
                               "test_the_memory_and_disk_rules_still", "test_the_limit_comes", "test_a_bad_limit", "test_a_waiting_job_prints",
-                              "test_an_edit_of_the_limit", "test_a_job_that_is_running", "test_the_check_names", "test_the_default_limit") for arg in ("-k", name)],
+                              "test_an_edit_of_the_limit", "test_a_job_that_is_running", "test_the_check_names", "test_the_default_limit",
+                              "test_every_broken_rule_is_reported_together", "test_a_check_says") for arg in ("-k", name)],
 }
 
 ENV_LINE = 'if [ -n "${HEAVY_GATE_PRIORITY:-}" ]; then printf \'%s\' "$HEAVY_GATE_PRIORITY"; return 0; fi\n  base=0'
@@ -83,21 +87,7 @@ SWAP_BACK = ('  broken=0\n  v=$(sysctl -n vm.swapusage 2>/dev/null | awk \'{for 
 SWAPOUTS_BACK = ('  a=$(vm_stat | awk \'/^Swapouts:/ {sub(/\\.$/, "", $2); print $2}\'); sleep "$CHECK_WINDOW"; b=$(vm_stat | awk \'/^Swapouts:/ {sub(/\\.$/, "", $2); print $2}\')\n'
                  '  [ "$a" = "$b" ] || { refuse "Swapouts rose over ${CHECK_WINDOW}s (the machine is swapping)"; return 1; }')
 
-GATE_MUTATIONS = [
-    ("the pressure level is not checked", PRESSURE, '  v=$(pressure_level); true || {'),
-    ("level 2 refuses again (the rule before 2026-10-30)", MAXLEVEL, "MAX_PRESSURE_LEVEL=1  #"),
-    ("level 3 is admitted", MAXLEVEL, "MAX_PRESSURE_LEVEL=3  #"),
-    ("level 4 (critical) is admitted", MAXLEVEL, "MAX_PRESSURE_LEVEL=4  #"),
-    ("level 0 is admitted", LEVEL_OK, LEVEL_OK.replace("v + 0 >= 1 &&", "v + 0 >= 0 &&")),
-    ("a level that is not a whole number is read as one", LEVEL_OK, LEVEL_OK.replace("'' | *[!0-9]*) return 1", "'') return 1")),
-    ("an unreadable pressure level counts as normal", PRESSURE, PRESSURE.replace('level_ok "$v"', 'level_ok "${v:-1}"')),
-    ("memory free is not checked", MEMORY, '  v=$(mem_free_pct);   true || {'),
-    ("memory free must be above 30%, not at it", ': v + 0 >= l + 0)', ': v + 0 > l + 0)'),
-    ("memory free needs only 20%", "MEM_FREE_MIN_PCT=30", "MEM_FREE_MIN_PCT=20"),
-    ("memory free needs 31%", "MEM_FREE_MIN_PCT=30", "MEM_FREE_MIN_PCT=31"),
-    ("an unreadable memory free counts as fine", MEMORY, '  v=$(mem_free_pct);   meets "${v:-100}" ge "$MEM_FREE_MIN_PCT"  || {'),
-    ("the first reading is skipped", TRY, "  if wait_window && host_rules && {"),
-    ("the second reading is skipped", TRY, "  if host_rules && wait_window && {"),
+LOAD_MUTATIONS = [
     ("the load rule is not checked", HOST, HOST.replace("load_rule || rc=1", "true || rc=1")),
     ("the memory rules are not checked once the load rule is added", HOST, HOST.replace("memory_rules || rc=1", "true || rc=1")),
     ("only the first broken rule is reported", HOST, "host_rules() { memory_rules && load_rule; }"),
@@ -119,6 +109,23 @@ GATE_MUTATIONS = [
     ("the load refusal leaves out that running jobs are not stopped", "; running jobs are not stopped\"\n  else", "\"\n  else"),
     ("the load refusal leaves out the core count", '${c:+ ($c cores)}', ''),
     ("the check mode does not name the load limit", "and a 5-minute load average of at most $MAX_LOAD on two", "and nothing on load on two"),
+]
+
+GATE_MUTATIONS = [
+    ("the pressure level is not checked", PRESSURE, '  v=$(pressure_level); true || {'),
+    ("level 2 refuses again (the rule before 2026-10-30)", MAXLEVEL, "MAX_PRESSURE_LEVEL=1  #"),
+    ("level 3 is admitted", MAXLEVEL, "MAX_PRESSURE_LEVEL=3  #"),
+    ("level 4 (critical) is admitted", MAXLEVEL, "MAX_PRESSURE_LEVEL=4  #"),
+    ("level 0 is admitted", LEVEL_OK, LEVEL_OK.replace("v + 0 >= 1 &&", "v + 0 >= 0 &&")),
+    ("a level that is not a whole number is read as one", LEVEL_OK, LEVEL_OK.replace("'' | *[!0-9]*) return 1", "'') return 1")),
+    ("an unreadable pressure level counts as normal", PRESSURE, PRESSURE.replace('level_ok "$v"', 'level_ok "${v:-1}"')),
+    ("memory free is not checked", MEMORY, '  v=$(mem_free_pct);   true || {'),
+    ("memory free must be above 30%, not at it", ': v + 0 >= l + 0)', ': v + 0 > l + 0)'),
+    ("memory free needs only 20%", "MEM_FREE_MIN_PCT=30", "MEM_FREE_MIN_PCT=20"),
+    ("memory free needs 31%", "MEM_FREE_MIN_PCT=30", "MEM_FREE_MIN_PCT=31"),
+    ("an unreadable memory free counts as fine", MEMORY, '  v=$(mem_free_pct);   meets "${v:-100}" ge "$MEM_FREE_MIN_PCT"  || {'),
+    ("the first reading is skipped", TRY, "  if wait_window && host_rules && {"),
+    ("the second reading is skipped", TRY, "  if host_rules && wait_window && {"),
     ("the readings are not apart", WAIT, '  sleep 0 || { refuse "x"; return 1; }'),
     ("the readings are 60 seconds apart", "CHECK_WINDOW=${HEAVY_GATE_CHECK_WINDOW:-20}", "CHECK_WINDOW=${HEAVY_GATE_CHECK_WINDOW:-60}"),
     ("the check mode does not say the rule", '  log INFO "check: a start is admitted on free disk space', '  : log INFO "check: a start is admitted on free disk space'),
@@ -144,10 +151,10 @@ GATE_MUTATIONS = [
 
 
 def main():
-    which = sys.argv[1:] or ["rank", "gate"]
-    mutations = {"rank": RANK_MUTATIONS, "gate": GATE_MUTATIONS}
+    which = sys.argv[1:] or ["rank", "gate", "load"]
+    mutations = {"rank": RANK_MUTATIONS, "gate": GATE_MUTATIONS, "load": LOAD_MUTATIONS}
     if any(w not in mutations for w in which):
-        sys.exit("usage: mutate.py [rank|gate]")
+        sys.exit("usage: mutate.py [rank|gate|load]")
     text = SCRIPT.read_text()
     survived = []
     total = 0
