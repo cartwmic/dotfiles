@@ -6,21 +6,51 @@ if ! command -v node >/dev/null 2>&1; then
 	echo "[viz] ERROR: node not found on PATH" >&2
 	exit 4
 fi
+NO_TOKEN_MESSAGE='1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)'
+
+# Is this an agent shell? One of these markers is set and not empty: Claude Code, a T3 thread, a herdr pane, a Codex
+# sandbox (the same list as the op shim in ~/.pi/agent/bin/op, which has the reasons).
+agent_shell() {
+	[ -n "${CLAUDECODE:-}" ] || [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] || [ -n "${T3CODE_THREAD_ID:-}" ] \
+		|| [ -n "${HERDR_ENV:-}" ] || [ -n "${CODEX_SANDBOX:-}" ]
+}
+
+# A refused publish is one call in the action log, as the core writes every other call, and one JSON document on stdout.
+# argv: the state dir, the message, then the command and its arguments.
+refuse() {
+	node -e '
+const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
+const [dir, message, command, ...args] = process.argv.slice(1);
+const outcome = { ok: false, code: "missing_dependency", message };
+process.stdout.write(JSON.stringify(outcome) + "\n");
+try {
+  fs.mkdirSync(dir, { recursive: true });
+  const started = Date.now();
+  const record = { id: `${started.toString(36)}-${crypto.randomBytes(3).toString("hex")}`, ts: new Date(started).toISOString(),
+    duration_ms: 0, command, args, steps: [], outcome };
+  fs.appendFileSync(path.join(dir, "actions.jsonl"), JSON.stringify(record) + "\n");
+} catch (e) {
+  process.stderr.write(`[viz] WARN: cannot append the action record: ${e.message}\n`);
+}
+' "${VIZ_STATE_DIR:-$HOME/.local/state/viz}" "$NO_TOKEN_MESSAGE" "$@"
+}
+
 if [ "${1-}" = publish ]; then
 	# Michael's site (cartwmic-homelab-v2 k8s/viz) and its upload password, read
 	# from 1Password only when publishing. Either can be set in the environment instead.
 	: "${VIZ_PUBLISH_URL:=https://viz.internal.cartwmic.com}"
 	export VIZ_PUBLISH_URL
 	if [ -z "${VIZ_PUBLISH_PASSWORD-}" ] && command -v op >/dev/null 2>&1; then
-		# The 1Password service-account token: the environment, else its file (playbook 78819cbd). Without one, refuse
-		# before `op` runs: it would fall back to the desktop app.
+		# The 1Password service-account token: the environment, else its file (playbook 78819cbd).
 		if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && [ -r "$HOME/.config/agent-harness/op-service-token" ]; then
 			OP_SERVICE_ACCOUNT_TOKEN=$(cat "$HOME/.config/agent-harness/op-service-token")
 			export OP_SERVICE_ACCOUNT_TOKEN
 		fi
-		if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
-			printf '%s\n' '{"ok":false,"code":"missing_dependency","message":"1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"}'
-			echo "[viz] ERROR: 1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)" >&2
+		# Without a token, an agent shell refuses before `op` runs, and the refusal is logged. Michael's own terminal keeps
+		# the desktop-app path (no marker set).
+		if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && agent_shell; then
+			refuse "$@"
+			echo "[viz] ERROR: $NO_TOKEN_MESSAGE" >&2
 			exit 4
 		fi
 		if VIZ_PUBLISH_PASSWORD=$(op read "op://developer/viz-publish/password"); then

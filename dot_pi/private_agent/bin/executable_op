@@ -1,12 +1,30 @@
 #!/bin/sh
-# op for agent shells. Pi puts ~/.pi/agent/bin first on the PATH of its bash tool and of ! commands, unless that
-# directory is already on Pi's own PATH (then it stays where it is). Every zsh also reaches this file through the
-# symlink ~/.local/share/op-shim/op, which dot_zshenv (and dot_zprofile, for login shells) puts first on PATH.
+# op for agent shells, Pi and Michael's terminals. One file, two names:
+#   ~/.pi/agent/bin/op          Pi's bash tool and ! commands (Pi puts this directory first), and Retro's launchd PATH.
+#   ~/.local/share/op-shim/op   a symlink to this file. dot_zshenv puts its directory first on every zsh.
 # With a 1Password service-account token (OP_SERVICE_ACCOUNT_TOKEN, or the token file below), the real op runs with an
 # empty HOME, so it uses the service account and never waits on the desktop app (under the real HOME a locked app can
 # hang it, and on the personal Mac op blocks on the app's settings.json in its Group Container even with a token).
-# Without a token, op runs unchanged. The token is never printed.
+# Without a token, an agent shell refuses: exit 69, the message below, and op does not run, so it cannot reach the
+# desktop app. Any other shell runs op unchanged, which is the desktop-app path Michael's own terminals keep.
+# An agent shell is: any call by the Pi name; or a call by the zsh name while one of the markers in agent_shell is set.
+# The token is never printed.
 set -eu
+
+NO_TOKEN_MESSAGE='1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)'
+
+# Is this an agent shell? Any name other than the zsh one is (Pi's bash tool, Retro's PATH). The zsh name is an agent when
+# one of these markers is set and not empty: CLAUDECODE and CLAUDE_CODE_ENTRYPOINT (Claude Code), T3CODE_THREAD_ID (a T3
+# thread), HERDR_ENV (a herdr pane), CODEX_SANDBOX (Codex's seatbelt sandbox, seen as "seatbelt"). Codex with its sandbox
+# off sets none of these; a terminal started inside one of these apps is classed as an agent. Easy to extend here.
+agent_shell() {
+  case "$0" in
+    */.local/share/op-shim/op) ;;
+    *) return 0 ;;
+  esac
+  [ -n "${CLAUDECODE:-}" ] || [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] || [ -n "${T3CODE_THREAD_ID:-}" ] \
+    || [ -n "${HERDR_ENV:-}" ] || [ -n "${CODEX_SANDBOX:-}" ]
+}
 
 # The real op: the first op on PATH that is not this file.
 real=
@@ -28,7 +46,13 @@ if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && [ -r "$token_file" ]; then
   OP_SERVICE_ACCOUNT_TOKEN=$(cat "$token_file")
   export OP_SERVICE_ACCOUNT_TOKEN
 fi
-[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] || exec "$real" "$@"
+if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+  if agent_shell; then
+    printf '%s\n' "$NO_TOKEN_MESSAGE" >&2
+    exit 69
+  fi
+  exec "$real" "$@"
+fi
 
 op_home="${TMPDIR:-/tmp}/pi-op-home-$(id -u)"
 mkdir -p -m 700 "$op_home"

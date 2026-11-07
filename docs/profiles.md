@@ -68,16 +68,28 @@ The work profile reads `privatePiProviderRef` with `op` through the service acco
 
 ### Agent jobs never reach the desktop app (playbook 78819cbd)
 
-1Password reads by agent jobs use the service-account token only. The scripts an agent runs apply the same two sources, in this order: `OP_SERVICE_ACCOUNT_TOKEN`, then the token file. Without either, the script refuses with exit 69 (`viz`: 4) and prints `1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)`. It runs no `op`, so `op` cannot fall back to the desktop app and prompt for an unlock.
+1Password reads use the service-account token only. Each script takes it from `OP_SERVICE_ACCOUNT_TOKEN`, else from `~/.config/agent-harness/op-service-token`. A caller that refuses without a token stops before it runs `op`, so `op` cannot fall back to the desktop app. The refusal text is `1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)`.
 
-| Script | Where it reads | Without a token |
+| Caller | Without a token | With a token |
 |---|---|---|
-| `kgate` (`dot_local/bin/executable_kgate`) | profile secrets and the pull credential, through `op read` | exit 69 before `op` runs, no pod created |
-| `viz publish` (`dot_local/bin/executable_viz`) | the upload password, when `VIZ_PUBLISH_PASSWORD` is not set | exit 4, `missing_dependency` JSON, no `op` |
-| `op_read_cached.sh` (`dot_local/user_scripts/`) | a secret on a cache miss (a fresh cache hit needs no `op`) | no `op`; a stale cached value is served with a WARN, else exit 69 |
-| `run-and-wake` (`dot_local/bin/executable_run-and-wake`) | passes no read itself: gives the job the token from its file when this process has none | the job runs without the variable |
+| `~/.pi/agent/bin/op`: Pi's bash tool and `!` commands, and Retro's launchd PATH | refuses, exit 69, always | the real `op` with the service account (empty HOME) |
+| `~/.local/share/op-shim/op`: the same file, reached by every zsh (`dot_zshenv`) | refuses (exit 69) only in an agent shell, when one of `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `T3CODE_THREAD_ID`, `HERDR_ENV`, `CODEX_SANDBOX` is set and not empty; in any other shell runs `op` unchanged (the desktop-app path) | the real `op` with the service account |
+| `viz publish` (`dot_local/bin/executable_viz`) | refuses (exit 4, `missing_dependency` JSON) only in an agent shell, with the same markers, and logs the refusal in `$VIZ_STATE_DIR/actions.jsonl`; other shells run `op` unchanged | the service account |
+| `kgate` (profile secrets and the ghcr pull credential) | refuses (exit 69) before `op` runs, no pod created | the service account |
+| `op_read_cached.sh` (pi's model keys, work GLM key) | refuses (exit 69) on a cache miss, never runs `op`; a stale cached value is served with a WARN; refusals and stale serves are logged in `$XDG_STATE_HOME/agent-harness/op-read-cached.jsonl` (reference only, no value) | a cache miss reads with the service account |
+| `apply_harness_config.sh` (`resolve_secret`, during `chezmoi apply`) | the secret is unavailable and the apply goes on | the service account |
+| `configure_rustdesk.sh` (the RustDesk password read) | stops with the message before the read (exit 1) | the service account |
+| run-and-wake | runs the job without a token | gives the job the token from its file, never in argv, the log, the job record or the job's output; the `start` record says `op_token: env` or `file` |
 
-The token never goes in argv, a log, a job record or a job's output. The human-run flows keep their own fallbacks: fresh-machine provisioning (`run_after_05_provision_ssh_keys.sh.tmpl`), the token refresh (`refresh_op_service_account_token.sh`, biometric on purpose), and the RustDesk and harness-config apply hooks.
+**The agent-shell rule is a heuristic, and it is easy to extend.** The markers are the ones this Mac has observed. `CODEX_SANDBOX=seatbelt` was seen in the command shell of Codex's sandbox (`codex sandbox`); it is not seen in a model-driven Codex turn. Edit the `agent_shell` function in `dot_pi/private_agent/bin/executable_op` and in `dot_local/bin/executable_viz` together to add one.
+
+Known gaps:
+- A Codex run with its sandbox off sets no marker, so it gets the terminal fallback.
+- A terminal started inside an agent app inherits its marker and refuses without a token. The herdr skill reads `HERDR_ENV=1` as "inside a herdr pane", so a terminal run inside herdr may be classed as an agent shell too; not checked on this Mac.
+- Retro's pane shells are zsh. They refuse only if a marker is set in them; without one they keep the terminal fallback.
+- `viz` run by Pi's process rather than its bash tool carries no marker, so it keeps the terminal fallback.
+
+The human-run flows keep their own fallbacks: fresh-machine provisioning (`run_after_05_provision_ssh_keys.sh.tmpl`), the token refresh (`refresh_op_service_account_token.sh`, biometric on purpose), and the zshrc warning block.
 
 ### Environment for the Mac-side phone helpers
 

@@ -157,15 +157,27 @@ fi
 
 (umask 077 && mkdir -p "$cache_dir")
 
+# One line per refusal or stale serve, in $XDG_STATE_HOME/agent-harness/op-read-cached.jsonl: a time, the event and the
+# reference. Never a value. Best effort: a write that fails does not change the outcome.
+record_event() {
+	state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-harness"
+	(umask 077 && mkdir -p "$state_dir") 2>/dev/null || return 0
+	escaped_ref=$(printf '%s' "$2" | sed 's/\\/\\\\/g; s/"/\\"/g')
+	printf '{"ts":"%s","event":"%s","ref":"%s","script":"op_read_cached.sh"}\n' \
+		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$escaped_ref" >> "$state_dir/op-read-cached.jsonl" 2>/dev/null || true
+}
+
 # Without a service-account token `op` would fall back to the desktop app, so never run it (playbook 78819cbd). A fresh
 # cache hit above needs no `op`. A stale entry is still served, as on any other op failure, so a caller is not broken.
 if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
 	if [ -s "$cache_file" ]; then
 		log "WARN: 1Password service account token not set; refusing to use the desktop app (playbook 78819cbd); serving stale cached value for $ref"
+		record_event stale-served "$ref"
 		emit_cache
 		exit 0
 	fi
 	log "ERROR: 1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
+	record_event refused "$ref"
 	exit 69
 fi
 

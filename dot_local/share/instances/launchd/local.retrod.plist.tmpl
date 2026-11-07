@@ -16,8 +16,8 @@
   <key>WorkingDirectory</key><string>{{ $repo | html }}</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <!-- node, herdr (the mise shims) and git must be found from here. op is the op-shim (~/.local/share/op-shim), first on PATH: it reads with OP_SERVICE_ACCOUNT_TOKEN and never the desktop app. For session_host process, pi is Retro's absolute pi_command, so ~/.local/bin is not needed. The retro pane's shell has its own PATH. -->
-    <key>PATH</key><string>{{ .chezmoi.homeDir | html }}/.local/share/op-shim:{{ .chezmoi.homeDir | html }}/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <!-- node, herdr (the mise shims) and git must be found from here. op is the Pi copy of the op shim (~/.pi/agent/bin/op), first on PATH: it reads with OP_SERVICE_ACCOUNT_TOKEN, refuses without a token, and never runs the desktop app for this job. Its directory also holds pi and fd; pi is Retro's absolute pi_command. For session_host process, pi is Retro's absolute pi_command, so ~/.local/bin is not needed. The retro pane's shell has its own PATH. -->
+    <key>PATH</key><string>{{ .chezmoi.homeDir | html }}/.pi/agent/bin:{{ .chezmoi.homeDir | html }}/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <!-- Restart after a crash or kill -9; a clean exit (SIGTERM from `launchctl bootout`) stays stopped. -->
