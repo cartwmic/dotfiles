@@ -44,16 +44,19 @@ class Home:
 
 class AgentKitInstallTest(unittest.TestCase):
     def test_disabled_has_no_install_script_and_wrapper_exits_3(self):
-        # Personal defaults agentEvents.engine to ts, and ts needs the kit, so with the kit off personal must name python.
-        for profile, extra in (("personal", "  agentKit: {enabled: false}\n  agentEvents: {engine: python}\n"), ("axon-work-computer", "")):
-            with self.subTest(profile=profile):
-                home = Home(self, profile, extra)
-                self.assertFalse(home.script_managed())
-                r = home.install_wrapper()
-                self.assertEqual(r.returncode, 3)
-                self.assertIn("not installed here; keep the review log by hand (playbook 58fdb05d)", r.stderr)
-                self.assertNotIn(RETRY, r.stderr)
-                self.assertTrue((home.home / ".local/share/agent-kit/package.json").is_file())
+        home = Home(self, "axon-work-computer")
+        self.assertFalse(home.script_managed())
+        r = home.install_wrapper()
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("not installed here; keep the review log by hand (playbook 58fdb05d)", r.stderr)
+        self.assertNotIn(RETRY, r.stderr)
+        self.assertTrue((home.home / ".local/share/agent-kit/package.json").is_file())
+
+    def test_personal_with_the_kit_off_fails_the_render_because_agent_events_always_runs_the_port(self):
+        # Personal defaults agentEvents.engine to ts, the only engine since the Python collector was retired, and ts needs the kit.
+        r = Home(self, "personal", "  agentKit: {enabled: false}\n").chezmoi("managed")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("agentKit.enabled is false", r.stderr)
 
     def test_enabled_by_default_on_personal_and_wrapper_prints_the_retry_line(self):
         home = Home(self, "personal")

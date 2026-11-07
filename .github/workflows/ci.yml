@@ -1,8 +1,7 @@
 name: CI
 
 # Fast, secret-free tests only: pi-mcp-lazy (incl. render), pi-idle-rss seam tests, mise tasks.
-# Also: Pi AGENTS.md render, release-tag skill import, session-recap store tests (fake backends only),
-# agent-events tests (synthetic session files only).
+# Also: Pi AGENTS.md render, release-tag skill import, session-recap store tests (fake backends only).
 # Not run here: *proof.py / journey scripts that drive a real Pi, Herdr or phone, and
 # anything needing 1Password or other secrets (tests/native-mcp, tests/standing-reminder, ...).
 
@@ -76,10 +75,8 @@ jobs:
         run: python3 -m unittest discover -s tests/worktree-reap -v
       - name: workstream-rank tests (golden fixture, real script)
         run: python3 -m unittest discover -s tests/workstream-rank -v
-      - name: Agent-events tests
-        run: python3 -m unittest discover -s dot_local/share/agent-events -p 'test_*.py' -v
-      - name: Traces reference tooling (frozen-file check, dump, control arm, oracle, drill, freeze; synthetic corpora, real chezmoi)
-        run: python3 -m unittest discover -s tests/traces-reference -v
+      - name: agent-events setting, plist, load script, shim and retired-file removal (real chezmoi, stub launchctl, fake agent-traces)
+        run: python3 -m unittest discover -s tests/agent-events -v
       - name: Instances render, ignore and reconcile-script matrix (stub launchctl; the apply proof is macOS-only)
         run: python3 -m unittest discover -s tests/instances -v
       - name: QMD pin, collections, skill and profile matrix (no qmd binary)
@@ -90,8 +87,6 @@ jobs:
         run: python3 -m unittest discover -s tests/profiles -v
       - name: Pinned agent-kit install and the agent-traces wrapper's node handling (agentKit gate, exit 3, install WARN, AGENT_TRACES_NODE, 22.19 floor; real chezmoi, fake npm and node)
         run: python3 -m unittest discover -s tests/agent-kit -v
-      - name: Traces shadow agents (setting, plists, load script, engine key, shim; real chezmoi, stub launchctl) and the Python arm run under env -i against a scripted receiver
-        run: python3 -m unittest discover -s tests/agent_traces_shadow -v
       - name: Canonical skill sync (real chezmoi, throwaway source and HOME)
         run: python3 -m unittest discover -s tests/sync-harness-skills -v
       - name: Codex config merge keeps the Codex app's entries (real script, throwaway HOME; vendored old merge as RED control)
@@ -149,8 +144,8 @@ jobs:
         run: python3 -m unittest discover -s tests/spotlight-workshop -v
       - name: Agent scratch on Workshop (create script included; the rest as on Linux)
         run: python3 -m unittest discover -s tests/agent-scratch -v
-      - name: Traces shadow agents on macOS (managed sets per profile and arm, load script and real apply against a stub launchctl)
-        run: python3 -m unittest discover -s tests/agent_traces_shadow -v
+      - name: agent-events gates and load script on macOS (managed sets per profile, stub launchctl)
+        run: python3 -m unittest discover -s tests/agent-events -v
       - name: Profile coverage table, macOS-only rows included
         run: python3 -m unittest discover -s tests/profiles -v
       - name: T3 hub provider instances, apply on and off in a scratch HOME (real chezmoi and jq)

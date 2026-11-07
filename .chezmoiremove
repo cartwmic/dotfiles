@@ -104,3 +104,18 @@ bin/herdr-overview-proof
 # profile instruction files replaced the tier idea. Removes the whole deployed
 # directory on apply. Prune once every machine has applied.
 .local/share/agent-harness/capability-tiers
+
+# Retired 2026-11-07: the Python agent-events collector and its stage 2 gate tools (D5). `agent-events` is now an alias
+# for the agent-kit port (`agent-traces pi`); the last commit that holds the Python code is the git tag agent-events-python-final.
+# Only the deployed code files are listed. events.sqlite, its .corrupt copies and the state dir ~/.local/state/agent-events stay:
+# the Python databases are removed by hand after a backup, and the state dir is shared with the port. Prune once every machine has applied.
+.local/share/agent-events/agent_events.py
+.local/share/agent-events/agent_events_metrics.py
+.local/share/agent-events/agent_events_review.py
+.local/share/agent-events/agent_events_show.py
+.local/share/agent-events/cache_ref.py
+.local/share/agent-events/shadow_py_run.py
+.local/share/agent-events/reference.sha256
+.local/share/agent-events/test_agent_events.py
+.local/share/agent-events/test_agent_events_review.py
+.local/share/agent-events/__pycache__

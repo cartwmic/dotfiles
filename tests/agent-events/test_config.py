@@ -1,4 +1,5 @@
-"""The always-on agent-events exporter's chezmoi setting (data agentEvents: enabled, machine, endpoint).
+"""The always-on agent-events exporter's chezmoi setting (data agentEvents: enabled, machine, endpoint, engine), the shim that always runs the
+agent-kit port, and the removal of the retired Python collector's deployed files.
 
 Rendered from the real source with a throwaway config (no hooks) and a scratch HOME/destination: the plist, its load script and
 .chezmoiignore. The load script also runs against a fake launchctl and uname. Nothing here calls the real launchctl or touches a
@@ -8,6 +9,7 @@ import os
 import platform
 import plistlib
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -19,6 +21,7 @@ PLIST = REPO / "Library/LaunchAgents/local.agent-events.plist.tmpl"
 LOADER = REPO / "run_onchange_after_70_agent_events_launchd.sh.tmpl"
 IGNORE = REPO / ".chezmoiignore"
 CONFIG = REPO / ".chezmoitemplates/agent_events_config"
+SHIM = REPO / "dot_local/bin/executable_agent-events.tmpl"
 DARWIN = platform.system() == "Darwin"
 SYS = "/usr/bin:/bin:/usr/sbin:/sbin"
 DEST_PLIST = "Library/LaunchAgents/local.agent-events.plist"
@@ -87,6 +90,9 @@ BAD = (
     "agentEvents: {endpoint: 'http://localhost:99999/v1/metrics'}", "agentEvents: {endpoint: 'http://localhost:65536/v1/metrics'}",
     "agentEvents: {endpoint: 'http://localhost:0/v1/metrics'}", "agentEvents: {endpoint: 'http://localhost:08080/v1/metrics'}",
     "agentEvents: {endpoint: 'http://localhost:/v1/metrics'}",
+    # engine: ts is the only value; python was retired, anything else is a typo
+    "agentEvents: {engine: python}", "agentEvents: {engine: rust}", "agentEvents: {engine: ''}", "agentEvents: {engine: null}",
+    "agentEvents: {engine: TS}",
     # enabled, keys, shape
     'agentEvents: {enabled: "yes"}', "agentEvents: {enabled: 1}", "agentEvents: {enabled: null}",
     "agentEvents: {enabeld: false}", "agentEvents: {privacy: strict}", "agentEvents: on", "agentEvents: [personal]",
@@ -146,8 +152,149 @@ class SettingTest(unittest.TestCase):
                          '{"enabled":false,"endpoint":"%s","engine":"ts","machine":"personal"}' % DEFAULT_ENDPOINT)
         self.assertEqual(render(CONFIG, data='agentEvents: {enabled: "false"}')[0].stdout,
                          '{"enabled":false,"endpoint":"%s","engine":"ts","machine":"personal"}' % DEFAULT_ENDPOINT)
-        self.assertEqual(render(CONFIG, data="agentEvents: {engine: python}")[0].stdout,
-                         '{"enabled":true,"endpoint":"%s","machine":"personal"}' % DEFAULT_ENDPOINT)
+        self.assertEqual(render(CONFIG, data="agentEvents: {engine: ts}")[0].stdout, out, "engine: ts is the personal default spelled out")
+
+
+WORK_TS = "agentEvents: {enabled: true, machine: work, endpoint: 'https://otel-collector.internal.cartwmic.com/v1/metrics', engine: ts}\nagentKit: {enabled: true}"
+
+
+class EngineTest(unittest.TestCase):
+    """ts is the only engine. The key stays so a data file that says engine: ts still renders; python is retired and fails the render.
+    The JSON carries "engine" only when it is ts, so the load script's "# setting:" line (and with it the exporter) does not change."""
+
+    def test_the_work_mac_data_file_with_engine_ts_renders_the_json_it_rendered_before(self):
+        out = render(CONFIG, WORK, WORK_TS)[0].stdout
+        self.assertEqual(out, '{"enabled":true,"endpoint":"https://otel-collector.internal.cartwmic.com/v1/metrics","engine":"ts","machine":"work"}')
+        for path in (PLIST, LOADER, IGNORE):
+            self.assertEqual(render(path, WORK, WORK_TS)[0].returncode, 0, path.name)
+        self.assertIn("# setting: " + out + "\n", render(LOADER, WORK, WORK_TS)[0].stdout)
+
+    def test_no_engine_key_renders_everywhere(self):
+        self.assertNotIn("engine", render(CONFIG, WORK)[0].stdout, "work with no key: no engine in the JSON")
+        self.assertNotIn("engine", render(CONFIG, "termux")[0].stdout)
+        self.assertIn('"engine":"ts"', render(CONFIG)[0].stdout, "personal default")
+
+    def test_engine_python_fails_with_the_retirement_message(self):
+        for profile in ("personal", WORK):
+            for path in (CONFIG, PLIST, LOADER, IGNORE):
+                r, _ = render(path, profile, "agentEvents: {engine: python}\nagentKit: {enabled: true}", check=False)
+                self.assertNotEqual(r.returncode, 0, (profile, path.name))
+                self.assertIn("the Python collector was retired on 2026-11-07; remove agentEvents.engine or set it to ts", r.stderr)
+
+    def test_engine_ts_still_needs_the_kit(self):
+        r, _ = render(CONFIG, WORK, "agentEvents: {engine: ts}", check=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("agentKit.enabled is false", r.stderr)
+        r, _ = render(CONFIG, data="agentKit: {enabled: false}", check=False)
+        self.assertNotEqual(r.returncode, 0, "personal defaults to ts, so a personal machine with the kit off fails")
+        self.assertIn("agentEvents.engine is ts", r.stderr)
+
+
+class ShimTest(unittest.TestCase):
+    """The shim always execs the agent-kit port, from its own directory (launchd's PATH has no ~/.local/bin). The kit is a fake that records argv."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.bin = Path(self.tmp.name) / "bin"
+        self.bin.mkdir()
+        self.log = Path(self.tmp.name) / "argv"
+        (self.bin / "agent-traces").write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$FAKE_LOG"\n')
+        (self.bin / "agent-traces").chmod(0o755)
+
+    def shim(self, profile="personal", data=""):
+        text = render(SHIM, profile, data)[0].stdout
+        (self.bin / "agent-events").write_text(text)
+        (self.bin / "agent-events").chmod(0o755)
+        return text
+
+    def run_shim(self, *args, **env):
+        self.log.unlink(missing_ok=True)
+        # The path form launchd uses: /bin/sh <absolute path>, with a PATH that has neither agent-traces nor python.
+        r = subprocess.run(["/bin/sh", str(self.bin / "agent-events"), *args], capture_output=True, text=True, timeout=30,
+                           env=dict(env, FAKE_LOG=str(self.log), PATH=SYS, HOME=self.tmp.name))
+        return r, self.log.read_text().splitlines() if self.log.exists() else None
+
+    def test_run_and_status_exec_agent_traces_pi(self):
+        self.shim()
+        for args in (("run",), ("status",), ("sql", "select 1"), ("show", "ref one")):
+            r, argv = self.run_shim(*args)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(argv, ["pi", *args])
+
+    def test_every_profile_gets_the_same_shim_with_no_python_branch(self):
+        base = self.shim()
+        for profile, data in ((WORK, ""), (WORK, WORK_TS), ("termux", "")):
+            self.assertEqual(self.shim(profile, data), base)
+        for gone in ("python", "AGENT_EVENTS_IMPLEMENTATION", "AGENT_EVENTS_PYTHON", "tomllib", "agent_events.py"):
+            self.assertNotIn(gone, base.replace("Python collector was retired", "").replace("agent-events-python-final", ""), gone)
+        self.assertIn('exec "$script_dir/agent-traces" pi "$@"', base)
+
+    def test_the_old_overrides_no_longer_change_what_runs(self):
+        self.shim()
+        r, argv = self.run_shim("run", AGENT_EVENTS_IMPLEMENTATION="/nonexistent/agent_events.py", AGENT_EVENTS_PYTHON="/nonexistent/python3")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(argv, ["pi", "run"])
+
+    def test_a_relative_path_invocation_finds_the_sibling_too(self):
+        self.shim()
+        self.log.unlink(missing_ok=True)
+        r = subprocess.run(["/bin/sh", "./agent-events", "status"], cwd=self.bin, capture_output=True, text=True, timeout=30,
+                           env=dict(FAKE_LOG=str(self.log), PATH=SYS, HOME=self.tmp.name))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.log.read_text().splitlines(), ["pi", "status"])
+
+    def test_without_the_kit_the_real_wrapper_exits_3(self):
+        """The kit-not-installed case: the real agent-traces wrapper, with no install under the scratch HOME, exits 3 and says so."""
+        wrapper = render(REPO / "dot_local/bin/executable_agent-traces.tmpl", WORK)[0].stdout
+        (self.bin / "agent-traces").write_text(wrapper)
+        self.shim(WORK)
+        r, _ = self.run_shim("status")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("agent-traces:", r.stderr)
+
+
+class RetiredFilesTest(unittest.TestCase):
+    """.chezmoiremove takes the deployed Python code files off both Macs and leaves the databases and the state dir alone. A real apply into a scratch HOME."""
+
+    CODE = ("agent_events.py", "agent_events_metrics.py", "agent_events_review.py", "agent_events_show.py", "cache_ref.py", "shadow_py_run.py",
+            "reference.sha256", "test_agent_events.py", "test_agent_events_review.py")
+    KEEP = ("events.sqlite", "events.sqlite.corrupt", "events.sqlite-journal.corrupt")
+
+    def apply(self, profile, data=""):
+        """chezmoi with a source dir that holds only a copy of .chezmoiremove (the full source pulls a GitHub archive on any remove), against a
+        scratch HOME that holds the deployed files, the databases and the state dir."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        src, home = root / "src", root / "home"
+        src.mkdir()
+        shutil.copy(REPO / ".chezmoiremove", src / ".chezmoiremove")
+        d = home / ".local/share/agent-events"
+        (d / "__pycache__").mkdir(parents=True)
+        (home / ".local/state/agent-events").mkdir(parents=True)
+        for f in self.CODE + self.KEEP:
+            (d / f).write_text("x")
+        (d / "__pycache__/a.pyc").write_text("x")
+        (home / ".local/state/agent-events/export_state.json").write_text("{}")
+        cfg = root / "chezmoi.yaml"
+        cfg.write_text("data:\n  profile: %s\n%s" % (profile, "".join("  %s\n" % l for l in data.splitlines())))
+        r = subprocess.run(["chezmoi", "--source", str(src), "--config", str(cfg), "--config-format", "yaml", "--destination", str(home),
+                            "--persistent-state", str(root / "state.boltdb"), "--no-tty", "apply", "--exclude=scripts"],
+                           capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return home, d
+
+    def test_the_code_files_go_and_the_databases_and_state_dir_stay_on_both_profiles(self):
+        for profile, data in (("personal", ""), (WORK, WORK_TS)):
+            home, d = self.apply(profile, data)
+            for f in self.CODE:
+                self.assertFalse((d / f).exists(), (profile, f))
+            self.assertFalse((d / "__pycache__").exists(), profile)
+            for f in self.KEEP:
+                self.assertTrue((d / f).exists(), (profile, f))
+            self.assertTrue((home / ".local/state/agent-events/export_state.json").exists(), profile)
+            self.assertTrue(d.is_dir(), profile)
 
 
 @unittest.skipUnless(DARWIN, "the agent is managed on macOS only")
@@ -286,8 +433,8 @@ class LoaderTest(unittest.TestCase):
     def test_the_script_changes_with_the_setting_so_chezmoi_reruns_it(self):
         outs = {render(LOADER, data=d)[0].stdout for d in ("", "agentEvents: {enabled: false}", "agentEvents: {machine: laptop}",
                                                           "agentEvents: {endpoint: 'https://otel-collector.internal.cartwmic.com/v1/metrics'}",
-                                                          "agentEvents: {engine: python}")}
-        self.assertEqual(len(outs), 5)
+                                                          )}
+        self.assertEqual(len(outs), 4)
         s = render(LOADER)[0].stdout
         self.assertIn('# setting: {"enabled":true,"endpoint":"%s","engine":"ts","machine":"personal"}\n' % DEFAULT_ENDPOINT, s)
         self.assertIn('# setting: {"enabled":false,"endpoint":"%s","machine":"work"}\n' % DEFAULT_ENDPOINT, render(LOADER, WORK)[0].stdout)
