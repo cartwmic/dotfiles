@@ -16,7 +16,7 @@
 #   heavy-gate priorities               print the priorities file, the holders and the waiters with their priority
 #   heavy-gate priority PATTERN NUMBER  set (or update) one rule in the priorities file; a new rule goes first, so it wins
 #
-# The rules, all of which must hold for every start. Memory pressure and free disk space gate a start (memory only until 2026-11-06, owner decision 2026-10-26):
+# The rules, all of which must hold for every start. Memory pressure, free disk space and the 5-minute load average gate a start (memory only until 2026-11-06, owner decision 2026-10-26; load added 2026-11-07, owner decision, ask 724):
 #   free disk space >= the floor        the volume that holds $HOME (`df -k "$HOME"`; on macOS /System/Volumes/Data) has at least
 #   HEAVY_GATE_MIN_FREE_GB free (a number, default 15; GB are 1024^3 bytes). Read once per try, first, before anything is taken.
 #   Under it, or unreadable, the try is refused with one line: "REFUSED: 9.8 GB free on /System/Volumes/Data, under the 15 GB floor;
@@ -31,14 +31,25 @@
 #   memory pressure level 1 or 2        memory free >= 30% (the kernel's own pressure figure, as memory_pressure reports it)
 #   (owner decision 2026-10-30: admit at level 2 when free >= 30%. Level 1 is normal, 2 warn, 4 critical; MAX_PRESSURE_LEVEL=2,
 #   so level 4, or any level that is not a whole number from 1 to 2, refuses)
-#   both hold on two readings 20 seconds apart: read, wait 20 seconds, read again, so the answer is about now, not 20 seconds ago
+#   5-minute load average <= the limit  the second figure of `sysctl -n vm.loadavg` ({ 1m 5m 15m }) is at most HEAVY_GATE_MAX_LOAD (a
+#   number, default 12 on this 8-core Mac; see Load limit). Above it, or unreadable, the try is refused with one line: "refused: 5-minute
+#   load average 14.2 is above the 12 limit (8 cores); no new heavy job starts until it falls; running jobs are not stopped". Why: jobs
+#   that each pass the memory rules can still pile CPU work on the Mac and slow every other job and the owner's session. A job with
+#   --wait keeps trying until the deadline: the average falls by itself once the load goes away. Exit 1 in a check, 75 after --wait.
+#   memory and load both hold on two readings 20 seconds apart: read, wait 20 seconds, read again, so the answer is about now, not 20 seconds ago
 #   a free slot: fewer heavy-gate jobs hold the gate than the slot limit (see Slots)
 #   no other job is in its 20-second check: a second start waits until the first has passed it (then it is running)
 #   no waiting job with a lower HEAVY_GATE_PRIORITY number (see below)
 # A figure that cannot be read as a number counts as a refusal.
-# Not checked, on purpose: free swap (macOS grows swap on demand), whether Swapouts are rising, and the load average. A start is
-# not held back by any of them, and a running job is not stopped for them either. The slot limit is the only cap on how many jobs run.
-# Waiting jobs of the version before this one keep its rules (swap floor, Swapouts, load) until they end and are started again.
+# Not checked, on purpose: free swap (macOS grows swap on demand) and whether Swapouts are rising. A start is not held back by
+# either, and a running job is not stopped for them either. Load gates a start only: it never stops or slows a job that is running.
+# Waiting jobs of the versions before this one keep their own rules until they end and are started again (the version just before
+# this one had no load rule; older ones had a swap floor, Swapouts and a 1-minute load limit of 8).
+#
+# Load limit: the 5-minute load average above which no new job starts. It comes from, in order, HEAVY_GATE_MAX_LOAD (in the job's
+# environment), then the first number in ${HEAVY_GATE_MAX_LOAD_FILE:-~/.config/heavy-gate/max-load} ('#' lines and blank lines are
+# skipped), then 12. A number above 0, fractions allowed. A value that is not one is ignored for the next source, with one warning. The
+# file is read on every try, so an edit reaches jobs that are already waiting (on this version).
 #
 # Running-job memory watchdog (owner decision 2026-11-03): the start check cannot see a job that grows after it (2026-11-02: an
 # admitted, uncapped Jest run, about 14 workers at 2 to 2.7 GB each, outgrew a 24 GB Mac and caused a kernel watchdog panic). A
@@ -49,15 +60,15 @@
 # $LOCK.stopped.<pid of this heavy-gate> before it sends TERM, and when the job ends and that file is there, heavy-gate prints one
 # line saying the watchdog stopped it and why (so it is not read as a failure of the job) and exits 137; a job that had already exited 0
 # keeps 0. The daemon rewrites $LOCK.watchdog every poll; heavy-gate warns when a job starts and that heartbeat is missing or older than
-# three polls (the job is then admitted unwatched). Only memory free is watched; swap, Swapouts and load still stop nothing. It stops
+# three polls (the job is then admitted unwatched). Only memory free is watched; swap, Swapouts and load stop no running job. It stops
 # jobs of older heavy-gate versions too (they show the job's own status, 143).
 #
 # Slots: the limit on how many heavy-gate jobs hold the gate at once. It comes from, in order, HEAVY_GATE_SLOTS (a whole number in
 # the job's environment), then the first number in ${HEAVY_GATE_SLOTS_FILE:-~/.config/heavy-gate/slots} ('#' lines and blank lines
 # are skipped), then 3. The file is read on every try, so an edit reaches jobs that are already waiting (on this version). The limit
 # is 1 to 8: 8 only guards against a typo (a number above it counts as 8). A value that is 0 or not a whole number is ignored for 3, with a warning.
-# Lowering the limit stops nothing that runs: no new job starts until fewer than the new limit hold the gate. Only the slot limit is
-# configurable; the pressure and memory rules above are fixed and apply to every start.
+# Lowering the limit stops nothing that runs: no new job starts until fewer than the new limit hold the gate. The slot limit and the load limit
+# are configurable; the pressure and memory rules above are fixed and apply to every start.
 #
 # Priority: a lower number is more important; a job with no rule is 5. The number comes from, in order, HEAVY_GATE_PRIORITY
 # (a whole number in the job's environment), then the central workstream rank (see below), then the first rule in the priorities
@@ -89,11 +100,11 @@
 # otherwise), so after the limit is lowered below the number of holders it can still start a job: the limit is exact among jobs of this version. A holder killed with SIGKILL leaves its slot until its pid is seen dead; a
 # recycled pid keeps the slot held until it exits.
 #
-# Exit status: 0 allowed (or CMD's own status), 1 refused, 75 still refused after --wait, 2 usage / unsupported system,
+# Exit status: 0 allowed (or CMD's own status), 1 refused (for load too), 75 still refused after --wait (for load too), 2 usage / unsupported system,
 # 137 CMD was stopped by the memory watchdog (a job that had already exited 0 keeps 0),
 # 76 refused for free disk space (the disk floor, or a watched volume that is not mounted; the last try's reason, for a check and for a job whose --wait ran out).
 #
-# Environment: HEAVY_GATE_MIN_FREE_GB the disk floor in GB (15), HEAVY_GATE_VOLUMES_FILE the extra volumes to watch, HEAVY_GATE_SLOTS the slot limit, HEAVY_GATE_SLOTS_FILE its file, HEAVY_GATE_PRIORITY see above, HEAVY_GATE_PRIORITIES the file.
+# Environment: HEAVY_GATE_MIN_FREE_GB the disk floor in GB (15), HEAVY_GATE_VOLUMES_FILE the extra volumes to watch, HEAVY_GATE_SLOTS the slot limit, HEAVY_GATE_SLOTS_FILE its file, HEAVY_GATE_MAX_LOAD the 5-minute load limit (12), HEAVY_GATE_MAX_LOAD_FILE its file, HEAVY_GATE_PRIORITY see above, HEAVY_GATE_PRIORITIES the file.
 # The central rank file is WORKSTREAM_RANK_FILE (read by workstream-rank), else ~/.local/share/coordinator/rank.
 # For tests: HEAVY_GATE_RANK_TIMEOUT seconds the reader may take (2), HEAVY_GATE_CHECK_WINDOW seconds between the two readings (20), HEAVY_GATE_POLL seconds between tries while waiting
 # (15), HEAVY_GATE_LOCK the slot 1 path (/tmp/heavy-gate-<uid>.lock; the other files are named from it).
@@ -109,6 +120,9 @@ POLL=${HEAVY_GATE_POLL:-15}
 DEFAULT_SLOTS=3
 MAX_SLOTS=8
 SLOTS_FILE=${HEAVY_GATE_SLOTS_FILE:-$HOME/.config/heavy-gate/slots}
+DEFAULT_MAX_LOAD=12
+MAX_LOAD_FILE=${HEAVY_GATE_MAX_LOAD_FILE:-$HOME/.config/heavy-gate/max-load}
+MAX_LOAD_WARNED=
 VOLUMES_FILE=${HEAVY_GATE_VOLUMES_FILE:-$HOME/.config/heavy-gate/volumes}
 SLOTS_WARNED=
 DEFAULT_PRIORITY=5
@@ -129,8 +143,11 @@ number() { awk -v v="$1" 'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/) }'; }
 pressure_level() { sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null; }
 mem_free_pct() { memory_pressure 2>/dev/null | awk '/free percentage/ {gsub("%", "", $NF); print $NF}'; }
 
-# $1 figure, $2 operator (lt or ge), $3 limit: true when the figure is a number that meets the rule
-meets() { number "$1" && awk -v v="$1" -v l="$3" -v op="$2" 'BEGIN { exit !(op == "lt" ? v + 0 < l + 0 : v + 0 >= l + 0) }'; }
+load5() { sysctl -n vm.loadavg 2>/dev/null | awk '{print $3}'; }   # "{ 1m 5m 15m }": the second figure is field 3
+ncores() { sysctl -n hw.ncpu 2>/dev/null; }
+
+# $1 figure, $2 operator (lt, le or ge), $3 limit: true when the figure is a number that meets the rule
+meets() { number "$1" && awk -v v="$1" -v l="$3" -v op="$2" 'BEGIN { exit !(op == "lt" ? v + 0 < l + 0 : op == "le" ? v + 0 <= l + 0 : v + 0 >= l + 0) }'; }
 
 # $1 pressure level: true when it is a whole number from 1 to MAX_PRESSURE_LEVEL
 level_ok() { case $1 in '' | *[!0-9]*) return 1 ;; esac; awk -v v="$1" -v m="$MAX_PRESSURE_LEVEL" 'BEGIN { exit !(v + 0 >= 1 && v + 0 <= m + 0) }'; }
@@ -170,13 +187,50 @@ VOLUMES
   return "$broken"
 }
 
-# The memory rules. Prints one line per broken rule; returns 1 if any is broken. The only figures that gate a start.
+# The memory rules. Prints one line per broken rule; returns 1 if any is broken.
 memory_rules() {
   broken=0
   v=$(pressure_level); level_ok "$v"                      || { refuse "memory pressure level ${v:-unreadable} (needs 1 to $MAX_PRESSURE_LEVEL)"; broken=1; }
   v=$(mem_free_pct);   meets "$v" ge "$MEM_FREE_MIN_PCT"  || { refuse "memory free ${v:-unreadable}% (needs >= $MEM_FREE_MIN_PCT%)"; broken=1; }
   return "$broken"
 }
+
+# ---- the load limit ----
+# The limit now in MAX_LOAD; what was ignored in MAX_LOAD_NOTE (empty if nothing). Read on every try.
+positive() { number "$1" && awk -v v="$1" 'BEGIN { exit !(v + 0 > 0) }'; }
+resolve_max_load() {
+  MAX_LOAD_NOTE=
+  if [ -n "${HEAVY_GATE_MAX_LOAD:-}" ]; then
+    if positive "$HEAVY_GATE_MAX_LOAD"; then MAX_LOAD=$HEAVY_GATE_MAX_LOAD; return 0; fi
+    MAX_LOAD_NOTE="HEAVY_GATE_MAX_LOAD is \"$HEAVY_GATE_MAX_LOAD\", not a number above 0"
+  fi
+  lraw=$(awk '/^[ \t\r]*(#|$)/ { next } { sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, ""); print; exit }' "$MAX_LOAD_FILE" 2>/dev/null) || lraw=
+  if [ -n "$lraw" ]; then
+    if positive "$lraw"; then MAX_LOAD=$lraw; return 0; fi
+    MAX_LOAD_NOTE="$MAX_LOAD_NOTE${MAX_LOAD_NOTE:+; }the max-load file is \"$lraw\", not a number above 0"
+  fi
+  MAX_LOAD=$DEFAULT_MAX_LOAD
+}
+# Say once (per change) that a configured value was ignored, so a typo does not go unnoticed.
+warn_max_load() {
+  if [ -n "$MAX_LOAD_NOTE" ] && [ "$MAX_LOAD_NOTE" != "$MAX_LOAD_WARNED" ]; then log WARN "max load: $MAX_LOAD_NOTE; using $MAX_LOAD"; fi
+  MAX_LOAD_WARNED=$MAX_LOAD_NOTE
+}
+# The load rule. Prints one line and returns 1 when the 5-minute load average is above MAX_LOAD or cannot be read as a number.
+load_rule() {
+  v=$(load5)
+  if meets "$v" le "$MAX_LOAD"; then return 0; fi
+  if number "$v"; then
+    c=$(ncores); case $c in '' | *[!0-9]*) c= ;; esac
+    refuse "5-minute load average $v is above the $MAX_LOAD limit${c:+ ($c cores)}; no new heavy job starts until it falls; running jobs are not stopped"
+  else
+    if [ -n "$v" ]; then what="$v is not a number"; else what="is unreadable"; fi
+    refuse "5-minute load average $what; no new heavy job starts until it can be read; running jobs are not stopped"
+  fi
+  return 1
+}
+# Both figure rules; every broken one is reported. These are the only figures read on both readings.
+host_rules() { rc=0; memory_rules || rc=1; load_rule || rc=1; return "$rc"; }
 
 # The gap between the two readings. Returns 1 if it could not be waited out.
 wait_window() {
@@ -466,6 +520,7 @@ try_gate() {
   DISK_REFUSED=0
   disk_rule || { DISK_REFUSED=1; return 1; }
   resolve_slots; warn_slots
+  resolve_max_load; warn_max_load
   if [ "$1" = 1 ]; then
     PRIORITY=$(resolve_priority); write_entry waiting
     defer_to_priority || return 1
@@ -474,7 +529,7 @@ try_gate() {
   else
     gate_free || return 1
   fi
-  if memory_rules && wait_window && memory_rules && { [ "$1" = 1 ] || gate_free; }; then drop_admit; return 0; fi
+  if host_rules && wait_window && host_rules && { [ "$1" = 1 ] || gate_free; }; then drop_admit; return 0; fi
   if [ "$1" = 1 ]; then drop_slot; drop_admit; fi
   return 1
 }
@@ -499,11 +554,12 @@ case $WAIT in '' | *[!0-9]*) log ERROR "--wait takes a whole number of seconds";
 if ! number "$CHECK_WINDOW" || ! number "$POLL"; then log ERROR "HEAVY_GATE_CHECK_WINDOW and HEAVY_GATE_POLL must be numbers"; exit 2; fi
 number "$MIN_FREE_GB" || { log ERROR "HEAVY_GATE_MIN_FREE_GB must be a number of GB"; exit 2; }
 resolve_slots
+resolve_max_load
 [ "$SLOTS_ENV_BAD" = 0 ] || { log ERROR "HEAVY_GATE_SLOTS must be a whole number, 1 or more"; exit 2; }
 case ${HEAVY_GATE_PRIORITY:-0} in '' | *[!0-9]* | ???????*) log ERROR "HEAVY_GATE_PRIORITY must be a whole number of at most 6 digits (lower is more important)"; exit 2 ;; esac
 [ "$(uname -s)" = Darwin ] || { log ERROR "macOS only"; exit 2; }
 if [ $# -eq 0 ]; then
-  log INFO "check: a start is admitted on free disk space and memory pressure only: >= $MIN_FREE_GB GB free on the volume that holds \$HOME$(also_watched), level 1 to $MAX_PRESSURE_LEVEL and memory free >= $MEM_FREE_MIN_PCT% on two readings ${CHECK_WINDOW}s apart, and a free slot. Not checked: free swap, Swapouts, load average."
+  log INFO "check: a start is admitted on free disk space, memory pressure and the 5-minute load average: >= $MIN_FREE_GB GB free on the volume that holds \$HOME$(also_watched), level 1 to $MAX_PRESSURE_LEVEL, memory free >= $MEM_FREE_MIN_PCT% and a 5-minute load average of at most $MAX_LOAD on two readings ${CHECK_WINDOW}s apart, and a free slot. Not checked: free swap, Swapouts."
   if try_gate 0; then log INFO "allowed"; exit 0; fi
   [ "$DISK_REFUSED" = 0 ] || exit "$EXIT_DISK"
   exit 1

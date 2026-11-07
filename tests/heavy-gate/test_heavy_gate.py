@@ -22,7 +22,8 @@ OLD_SCRIPT = Path(__file__).resolve().parent / "heavy-gate-v69.sh"
 FAKES = {
     "uname": 'echo Darwin',
     "sysctl": '''case "$2" in
-  vm.loadavg) cat "$FAKE/loadavg" ;;
+  vm.loadavg) cat "$FAKE/loadavg"; echo read >> "$FAKE/loadavg_reads" ;;
+  hw.ncpu) if [ -f "$FAKE/ncpu" ]; then cat "$FAKE/ncpu"; else echo 8; fi ;;
   vm.swapusage) cat "$FAKE/swapusage" ;;
   kern.memorystatus_vm_pressure_level) v=$(cat "$FAKE/pressure"); echo "$v"; echo read >> "$FAKE/pressure_reads"
     if [ -f "$FAKE/on_pressure" ]; then sh "$FAKE/on_pressure"; fi ;;
@@ -77,7 +78,7 @@ class HeavyGate(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith("HEAVY_GATE_") and k not in ("HERDR_PANE_ID", "WORKSTREAM_RANK_FILE")}
         self.env = {**env, "PATH": ":".join([str(bin_dir), *host_path]), "FAKE": str(self.fake), "HEAVY_GATE_LOCK": str(root / "heavy-gate.lock"),
                     "HEAVY_GATE_CHECK_WINDOW": "1", "HEAVY_GATE_SWAP_WINDOW": "1", "HEAVY_GATE_POLL": "1", "HEAVY_GATE_PRIORITIES": str(root / "priorities"),
-                    "HEAVY_GATE_SLOTS_FILE": str(root / "slots"), "HEAVY_GATE_VOLUMES_FILE": str(root / "volumes"),
+                    "HEAVY_GATE_SLOTS_FILE": str(root / "slots"), "HEAVY_GATE_VOLUMES_FILE": str(root / "volumes"), "HEAVY_GATE_MAX_LOAD_FILE": str(root / "max-load"),
                     "WORKSTREAM_RANK_FILE": str(root / "rank")}
         self.bin = bin_dir
         self.rank_file = root / "rank"
@@ -86,6 +87,7 @@ class HeavyGate(unittest.TestCase):
         self.lock3 = root / "heavy-gate.lock.3"
         self.slots_file = root / "slots"
         self.volumes_file = root / "volumes"
+        self.max_load_file = root / "max-load"
         self.waiters = root / "heavy-gate.lock.waiters"
         self.priorities = root / "priorities"
 
@@ -230,13 +232,14 @@ class HeavyGate(unittest.TestCase):
                 result = self.gate()
                 self.assertEqual(result.returncode, 0, result.stderr)
 
-    # Figures that used to refuse a start and no longer do (owner decision 2026-10-26: only memory pressure gates). Each one is bad
+    # Figures that used to refuse a start and no longer do (owner decision 2026-10-26: memory pressure gates; 2026-11-07 added the
+    # 5-minute load average, tested below, so the 1-minute and 15-minute figures are still ignored). Each one is bad
     # enough to have refused before; memory pressure stays quiet in all of them.
     RELAXED = [
         ("load1 12.40", {"loadavg": "{ 12.40 9.00 5.00 }"}),
         ("load1 8.00", {"loadavg": "{ 8.00 1.00 1.00 }"}),
-        ("load1 40", {"loadavg": "{ 40.00 20.00 10.00 }"}),
-        ("load1 unreadable", {"loadavg": ""}),
+        ("load1 40 with a quiet 5-minute figure", {"loadavg": "{ 40.00 3.00 3.00 }"}),
+        ("load15 40 with a quiet 5-minute figure", {"loadavg": "{ 3.00 3.00 40.00 }"}),
         ("load1 not a number", {"loadavg": "{ nonsense 1 1 }"}),
         ("swap free 330 MB (the owner's machine on 2026-10-26)", {"swapusage": "total = 4096.00M  used = 3765.62M  free = 330.38M  (encrypted)"}),
         ("swap free 499 MB", {"swapusage": "total = 8192.00M  used = 7693.00M  free = 499.00M  (encrypted)"}),
@@ -262,7 +265,7 @@ class HeavyGate(unittest.TestCase):
                 result = self.gate()
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("INFO: allowed", result.stderr)
-                for word in ("load1", "swap free", "Swapouts"):
+                for word in ("load1", "5-minute load", "swap free", "Swapouts"):
                     self.assertNotIn(f"refused: {word}", result.stderr)
 
     def test_the_removed_checks_no_longer_stop_a_command(self):
@@ -276,7 +279,7 @@ class HeavyGate(unittest.TestCase):
                 self.assertTrue(marker.exists(), "the job ran")
 
     def test_all_the_removed_checks_at_their_worst_at_once_still_admit_and_run(self):
-        self.set(loadavg="{ 90.00 80.00 70.00 }", swapusage="total = 4096.00M  used = 4096.00M  free = 0.00M  (encrypted)")
+        self.set(loadavg="{ 90.00 3.00 70.00 }", swapusage="total = 4096.00M  used = 4096.00M  free = 0.00M  (encrypted)")
         (self.fake / "swapouts_step").write_text("500\n")
         marker = Path(self.tmp.name) / "ran"
         result = self.gate("--", "touch", str(marker))
@@ -284,9 +287,9 @@ class HeavyGate(unittest.TestCase):
         self.assertTrue(marker.exists())
 
     def test_the_removed_checks_going_bad_during_the_check_window_do_not_refuse(self):
-        # the second reading is memory pressure only: load and swap turning bad between the readings changes nothing
+        # swap and Swapouts are not read again after the window: turning bad between the readings changes nothing
         (self.fake / "on_pressure").write_text('rm -f "$FAKE/on_pressure"\n'
-                                               'echo "{ 30.00 20.00 10.00 }" > "$FAKE/loadavg"\n'
+                                               'echo "{ 30.00 3.00 10.00 }" > "$FAKE/loadavg"\n'
                                                'echo "total = 8192.00M  used = 8192.00M  free = 0.00M  (encrypted)" > "$FAKE/swapusage"\n'
                                                'echo 100 > "$FAKE/swapouts_step"\n')
         marker = Path(self.tmp.name) / "ran"
@@ -294,6 +297,7 @@ class HeavyGate(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(marker.exists())
         self.assertEqual((self.fake / "loadavg").read_text().split()[1], "30.00", "the hook ran, between the two readings")
+        self.assertEqual(self.fake.joinpath("swapouts_step").read_text().strip(), "100")
 
     def test_a_host_that_turns_bad_during_the_check_window_is_refused_on_each_rule(self):
         # both memory rules are read again after the window; a first reading that was fine is not enough
@@ -346,14 +350,229 @@ class HeavyGate(unittest.TestCase):
                 self.set(**QUIET)
                 self.set(**figures)
                 result = self.gate()
-                self.assertIn("a start is admitted on free disk space and memory pressure only: >= 15 GB free on the volume that holds $HOME, level 1 to 2", result.stderr)
-                self.assertIn("level 1 to 2 and memory free", result.stderr)
+                self.assertIn("a start is admitted on free disk space, memory pressure and the 5-minute load average: >= 15 GB free on the volume that holds $HOME, level 1 to 2", result.stderr)
                 self.assertIn("memory free >= 30%", result.stderr)
                 self.assertIn("two readings 1s apart", result.stderr)
-                self.assertIn("Not checked: free swap, Swapouts, load average", result.stderr)
+                self.assertIn("a 5-minute load average of at most 12 on two readings 1s apart", result.stderr)
+                self.assertIn("Not checked: free swap, Swapouts.", result.stderr)
+                self.assertNotIn("load average.", result.stderr)
         # a job that waits is not told the rule on every try
         result = self.gate("--", "true")
         self.assertNotIn("Not checked", result.stderr)
+
+    # --- the load limit (owner decision 2026-11-07, ask 724): the 5-minute load average gates a start, never a running job ---
+    def load(self, five, one="1.00", fifteen="1.00"):
+        self.set(loadavg=f"{{ {one} {five} {fifteen} }}")
+
+    def load_reads(self):
+        path = self.fake / "loadavg_reads"
+        return len(path.read_text().split()) if path.exists() else 0
+
+    def test_a_5_minute_load_above_the_limit_refuses_a_check_with_one_line_and_exit_1(self):
+        self.load("14.20")
+        result = self.gate()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("[heavy-gate] WARN: refused: 5-minute load average 14.20 is above the 12 limit (8 cores); "
+                      "no new heavy job starts until it falls; running jobs are not stopped\n", result.stderr)
+        self.assertEqual(result.stderr.count("5-minute load average 14.20"), 1, "one line for one refusal")
+        self.assertNotIn("INFO: allowed", result.stderr)
+
+    def test_a_5_minute_load_above_the_limit_refuses_a_command_and_exits_75_after_the_wait(self):
+        self.load("14.20")
+        marker = Path(self.tmp.name) / "ran"
+        result = self.gate("--wait", "0", "--", "touch", str(marker))
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn("refused: 5-minute load average 14.20 is above the 12 limit", result.stderr)
+        self.assertIn("still refused after 0s; not running", result.stderr)
+        self.assertFalse(marker.exists(), "a refused start must not run")
+        self.assertFalse(self.lock.is_symlink(), "a refused start gives its slot back")
+
+    def test_a_5_minute_load_at_or_below_the_limit_is_allowed(self):
+        for five in ("0.00", "11.99", "12", "12.0", "12.00"):
+            with self.subTest(five):
+                self.load(five)
+                self.assertEqual(self.gate().returncode, 0)
+                marker = Path(self.tmp.name) / f"ran{five}"
+                self.assertEqual(self.gate("--", "touch", str(marker)).returncode, 0)
+                self.assertTrue(marker.exists())
+        for five in ("12.01", "12.5", "100"):
+            with self.subTest(five):
+                self.load(five)
+                self.assertEqual(self.gate().returncode, 1)
+
+    def test_only_the_5_minute_figure_decides(self):
+        self.load("3.00", one="90.00", fifteen="90.00")
+        self.assertEqual(self.gate().returncode, 0)
+        self.load("30.00", one="0.10", fifteen="0.10")
+        self.assertEqual(self.gate().returncode, 1)
+
+    def test_the_cores_are_left_out_of_the_line_when_they_cannot_be_read(self):
+        self.load("14.20")
+        self.set(ncpu="many")
+        result = self.gate()
+        self.assertIn("is above the 12 limit; no new heavy job starts", result.stderr)
+
+    def test_a_5_minute_figure_that_cannot_be_read_as_a_number_refuses(self):
+        for raw in ("", "{ 1.00 nonsense 1.00 }", "{ 1.00 }", "{ 1.00 -3.00 1.00 }", "garbage"):
+            with self.subTest(raw):
+                self.set(loadavg=raw)
+                result = self.gate()
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertRegex(result.stderr, r"refused: 5-minute load average (\S+ is not a number|is unreadable); no new heavy job starts until it can be read")
+                self.assertEqual(self.gate("--wait", "0", "--", "true").returncode, 75)
+
+    def test_a_missing_sysctl_figure_is_unreadable(self):
+        (self.fake / "loadavg").unlink()
+        result = self.gate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("refused: 5-minute load average is unreadable; no new heavy job starts until it can be read; running jobs are not stopped", result.stderr)
+
+    def load_turns_bad_after_the_first_reading(self):
+        """Fake sysctl: the load jumps to 25 once the pressure level has been read twice (the second reading of a try)."""
+        (self.fake / "on_pressure").write_text('if [ "$(wc -l < "$FAKE/pressure_reads")" -ge 2 ]; then echo "{ 1.00 25.00 1.00 }" > "$FAKE/loadavg"; fi\n')
+
+    def test_the_load_rule_holds_on_the_second_reading_too(self):
+        # fine on the first reading, bad after the window: refused, nothing runs, the slot is given back
+        self.load_turns_bad_after_the_first_reading()
+        marker = Path(self.tmp.name) / "ran"
+        result = self.gate("--", "touch", str(marker))
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn("5-minute load average 25.00 is above the 12 limit", result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.lock.is_symlink())
+        self.assertEqual(self.load_reads(), 2, "read before and after the window")
+
+    def test_the_load_rule_is_read_on_both_readings_of_a_start_on_a_later_slot(self):
+        self.hold("a")
+        self.load("2.00")
+        (self.fake / "pressure_reads").unlink()   # count only this start's readings
+        self.load_turns_bad_after_the_first_reading()
+        result = self.gate("--", "true")
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn("5-minute load average 25.00", result.stderr)
+        self.assertFalse(self.lock2.is_symlink())
+
+    def test_every_broken_rule_is_reported_together_with_load(self):
+        self.set(pressure="4", memory_pressure="System-wide memory free percentage: 5%")
+        self.load("30.00")
+        result = self.gate()
+        self.assertEqual(result.returncode, 1)
+        for expected in ("memory pressure level 4", "memory free 5%", "5-minute load average 30.00 is above the 12 limit"):
+            self.assertIn(expected, result.stderr)
+
+    def test_load_is_not_read_when_the_disk_floor_already_refused(self):
+        self.set_free(5)
+        self.load("30.00")
+        result = self.gate()
+        self.assertEqual(result.returncode, 76, "the disk refusal keeps its own exit code")
+        self.assertNotIn("refused: 5-minute load", result.stderr)
+
+    def test_the_memory_and_disk_rules_still_refuse_at_a_quiet_load(self):
+        self.load("1.00")
+        self.set(pressure="4")
+        result = self.gate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("memory pressure level 4", result.stderr)
+        self.assertNotIn("refused: 5-minute load", result.stderr)
+        self.set(**QUIET)
+        self.set_free(5)
+        self.assertEqual(self.gate().returncode, 76)
+
+    def test_the_limit_comes_from_the_environment_then_the_file_then_12(self):
+        self.load("14.20")
+        self.assertEqual(self.gate().returncode, 1, "the default is 12")
+        self.assertEqual(self.gate(env={"HEAVY_GATE_MAX_LOAD": "20"}).returncode, 0)
+        self.assertIn("is above the 10 limit", self.gate(env={"HEAVY_GATE_MAX_LOAD": "10"}).stderr)
+        self.load("12.30")
+        self.assertEqual(self.gate(env={"HEAVY_GATE_MAX_LOAD": "12.5"}).returncode, 0, "a fractional limit")
+        self.assertIn("is above the 12.2 limit", self.gate(env={"HEAVY_GATE_MAX_LOAD": "12.2"}).stderr)
+        self.load("14.20")
+        self.max_load_file.write_text("# the limit\n\n  16  \n20\n")
+        self.assertEqual(self.gate().returncode, 0, "the first number in the file")
+        self.assertEqual(self.gate(env={"HEAVY_GATE_MAX_LOAD": "13"}).returncode, 1, "the environment beats the file")
+        self.max_load_file.write_text("# only comments\n")
+        self.assertEqual(self.gate().returncode, 1, "a file with no number means 12")
+        self.max_load_file.unlink()
+        self.assertEqual(self.gate().returncode, 1, "no file means 12")
+
+    def test_a_bad_limit_is_ignored_for_the_next_source_with_one_warning(self):
+        self.load("14.20")
+        for value in ("0", "0.0", "-2", "many", "1e3", "5,5"):
+            with self.subTest(value):
+                result = self.gate(env={"HEAVY_GATE_MAX_LOAD": value})
+                self.assertEqual(result.returncode, 1, "falls back to 12, so 14.20 is refused")
+                self.assertEqual(result.stderr.count("WARN: max load:"), 1)
+                self.assertIn(f'HEAVY_GATE_MAX_LOAD is "{value}", not a number above 0; using 12', result.stderr)
+                self.max_load_file.write_text("20\n")
+                result = self.gate(env={"HEAVY_GATE_MAX_LOAD": value})
+                self.assertEqual(result.returncode, 0, "falls to the file")
+                self.assertIn("using 20", result.stderr)
+                self.max_load_file.unlink()
+        for value in ("0", "-1", "fast"):
+            with self.subTest(f"file {value}"):
+                self.max_load_file.write_text(f"{value}\n")
+                result = self.gate()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f'the max-load file is "{value}", not a number above 0; using 12', result.stderr)
+        self.max_load_file.unlink()
+
+    def test_a_bad_limit_warns_once_however_many_tries_a_waiting_job_makes(self):
+        self.load("14.20")
+        result = self.gate("--wait", "3", "--", "true", env={"HEAVY_GATE_MAX_LOAD": "zero"})
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertGreater(result.stderr.count("5-minute load average 14.20"), 1, "it tried more than once")
+        self.assertEqual(result.stderr.count("WARN: max load:"), 1)
+
+    def test_a_waiting_job_prints_one_line_per_try_and_starts_when_the_load_falls(self):
+        self.load("14.20")
+        marker = Path(self.tmp.name) / "ran"
+        job = self.start("--wait", "60", "--", "touch", str(marker))
+        self.addCleanup(lambda: (job.poll() is None and job.kill(), job.wait(), job.stdout.close(), job.stderr.close()))
+        self.assertTrue(self.wait_for(lambda: self.load_reads() >= 2, 20), "it tried more than once")
+        self.assertIsNone(job.poll(), "still waiting")
+        self.assertFalse(marker.exists())
+        self.load("11.90")
+        out, err = job.communicate(timeout=30)
+        self.assertEqual(job.returncode, 0, err)
+        self.assertTrue(marker.exists(), "it started by itself")
+        self.assertEqual(err.count("refused: 5-minute load average 14.20"), err.count("is above the 12 limit"))
+        self.assertGreaterEqual(err.count("refused: 5-minute load average 14.20"), 2)
+        self.assertLessEqual(err.count("refused: 5-minute load average 14.20"), self.load_reads(), "at most one line per reading")
+        self.assertIn("allowed; running: touch", err)
+
+    def test_an_edit_of_the_limit_file_reaches_a_job_that_is_already_waiting(self):
+        self.load("14.20")
+        marker = Path(self.tmp.name) / "ran"
+        job = self.start("--wait", "60", "--", "touch", str(marker))
+        self.addCleanup(lambda: (job.poll() is None and job.kill(), job.wait(), job.stdout.close(), job.stderr.close()))
+        self.assertTrue(self.wait_for(lambda: self.load_reads() >= 2, 20))
+        self.max_load_file.write_text("16\n")
+        out, err = job.communicate(timeout=30)
+        self.assertEqual(job.returncode, 0, err)
+        self.assertTrue(marker.exists())
+
+    def test_a_job_that_is_running_is_not_touched_when_the_load_rises(self):
+        job, release = self.hold("a")
+        self.load("40.00")
+        refused = self.gate("--wait", "0", "--", "true")
+        self.assertEqual(refused.returncode, 75, refused.stderr)
+        self.assertIn("running jobs are not stopped", refused.stderr)
+        time.sleep(1.5)
+        self.assertIsNone(job.poll(), "the running job was left alone")
+        self.assertTrue(self.lock.is_symlink(), "it still holds its slot")
+        release.write_text("")
+        job.wait(timeout=30)
+        self.assertEqual(job.returncode, 0, "it ran to its own end")
+
+    def test_the_check_names_the_limit_it_uses(self):
+        result = self.gate(env={"HEAVY_GATE_MAX_LOAD": "9.5"})
+        self.assertIn("a 5-minute load average of at most 9.5 on two readings", result.stderr)
+
+    def test_the_default_limit_file_pins_no_number(self):
+        shipped = Path(__file__).resolve().parents[2] / "dot_config/heavy-gate/create_max-load"
+        self.assertTrue(shipped.exists(), "chezmoi creates ~/.config/heavy-gate/max-load once")
+        lines = [line for line in shipped.read_text().splitlines() if line.strip() and not line.lstrip().startswith("#")]
+        self.assertEqual(lines, [], "comments only, so the script's default stays the default")
 
     # --- the disk floor ---
     def test_free_space_under_the_floor_refuses_with_one_line_and_its_own_exit_code(self):
@@ -1367,9 +1586,9 @@ exit $rc
         result = self.gate("--help")
         self.assertEqual(result.returncode, 2)
         for expected in ("HEAVY_GATE_SLOTS", "HEAVY_GATE_SLOTS_FILE", "heavy-gate slots", "heavy-gate slots N", "Slots:", "heavy-gate priorities", "heavy-gate priority PATTERN NUMBER", "HEAVY_GATE_PRIORITY", "slot 2",
-                         "Memory pressure and free disk space gate a start", "HEAVY_GATE_MIN_FREE_GB", "HEAVY_GATE_VOLUMES_FILE", "REFUSED: /Volumes/Workshop is not mounted; mount it and retry", "REFUSED: 9.8 GB free on /System/Volumes/Data, under the 15 GB floor", "memory pressure level 1 or 2", "owner decision 2026-10-30: admit at level 2 when free >= 30%", "Not checked, on purpose: free swap", "HEAVY_GATE_CHECK_WINDOW"):
+                         "Memory pressure, free disk space and the 5-minute load average gate a start", "Load limit:", "HEAVY_GATE_MAX_LOAD", "HEAVY_GATE_MAX_LOAD_FILE", "5-minute load average <= the limit", "HEAVY_GATE_MIN_FREE_GB", "HEAVY_GATE_VOLUMES_FILE", "REFUSED: /Volumes/Workshop is not mounted; mount it and retry", "REFUSED: 9.8 GB free on /System/Volumes/Data, under the 15 GB floor", "memory pressure level 1 or 2", "owner decision 2026-10-30: admit at level 2 when free >= 30%", "Not checked, on purpose: free swap", "HEAVY_GATE_CHECK_WINDOW"):
             self.assertIn(expected, result.stderr)
-        for stale in ("load1 < 8", "Swapouts flat", "500 MB", "safety floor", "HEAVY_GATE_SWAP_WINDOW"):
+        for stale in ("load1 < 8", "Swapouts flat", "500 MB", "safety floor", "HEAVY_GATE_SWAP_WINDOW", "and the load average. A start", "Not checked, on purpose: free swap (macOS grows swap on demand), whether Swapouts are rising, and"):
             self.assertNotIn(stale, result.stderr)
         self.assertNotIn("set -eu", result.stderr)
 
