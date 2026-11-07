@@ -807,7 +807,10 @@ def cancel_orphan(state, e):
         print("kgate cancel: %s (the job's pod and Secrets are not deleted; run it again)" % err, file=sys.stderr)
         return UNAVAILABLE
     label = cluster.run(["get", "pod", e["id"], "--ignore-not-found", "-o", "jsonpath={.metadata.labels.app}"])
-    if label.returncode != 0 or label.stdout.decode().strip() not in ("", "kgate"):
+    if label.returncode != 0:
+        print("kgate cancel: could not look up pod %s: %s; nothing deleted" % (e["id"], label.stderr.decode(errors="replace").strip()[:200]), file=sys.stderr)
+        return UNAVAILABLE
+    if label.stdout.decode().strip() not in ("", "kgate"):
         print("kgate cancel: pod %s is not a kgate pod; nothing deleted" % e["id"], file=sys.stderr)
         return UNAVAILABLE
     done = delete_job_objects(cluster, e["id"])
@@ -845,7 +848,7 @@ def cancel_live(state, e, wait):
             return report_end(rec) if rec else cancel_orphan(state, e)
         if time.time() >= deadline:
             print("kgate cancel: %s was sent SIGTERM and has not ended after %gs; its client is still running as pid %d. "
-                  "kgate cancel does not force it; to, run: kill -9 %d" % (e["id"], wait, e["pid"], e["pid"]), file=sys.stderr)
+                  "kgate cancel does not force it. To force it, run: kill -9 %d" % (e["id"], wait, e["pid"], e["pid"]), file=sys.stderr)
             return UNAVAILABLE
         time.sleep(0.2)
 
