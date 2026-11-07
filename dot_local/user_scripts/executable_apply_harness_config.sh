@@ -56,6 +56,13 @@ resolve_secret() {
     fi
   fi
 
+  # Without a token `op` would fall back to the desktop app: refuse, and never call it (playbook 78819cbd). The caller
+  # logs the secret as unavailable, as it does for any failed read.
+  if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+    log_error "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
+    return 1
+  fi
+
   op read "$secret_ref" --no-newline 2>/dev/null
 }
 

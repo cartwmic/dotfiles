@@ -15,7 +15,12 @@ import unittest
 from pathlib import Path
 
 SHIM = Path(__file__).resolve().parents[2] / "dot_pi/private_agent/bin/executable_op"
-FAKE_TOKEN = "ops_fake-token-for-the-shim-test"
+FAKE_TOKEN = "ops_fake-token-for-the-shim-test"  # a stand-in service-account token; never a real one
+NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
+MARKERS = {  # one per agent shell marker the shim reads; each is set to a non-empty value
+    "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli", "T3CODE_THREAD_ID": "thread-1", "HERDR_ENV": "1",
+    "CODEX_SANDBOX": "seatbelt",
+}
 
 FAKE_OP = """#!/bin/sh
 out="$FAKE_OP_OUT"
@@ -48,6 +53,10 @@ class OpShim(unittest.TestCase):
         self.out = self.tmp / "op-call.txt"
         self.tmpdir = self.tmp / "tmpdir"
         self.tmpdir.mkdir()
+        # The same file under the zsh name, as dot_zshenv puts it on every zsh's PATH.
+        self.zsh_dir = self.home / ".local/share/op-shim"
+        self.zsh_dir.mkdir(parents=True)
+        (self.zsh_dir / "op").symlink_to(self.shim)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -56,6 +65,15 @@ class OpShim(unittest.TestCase):
         token = self.home / ".config/agent-harness/op-service-token"
         token.write_text(FAKE_TOKEN + "\n")
         token.chmod(0o600)
+
+    def run_zsh_name(self, args, env=None):
+        """Run op through the zsh name: its directory first on PATH, as in every zsh; the real op after it."""
+        base = {
+            "HOME": str(self.home), "TMPDIR": str(self.tmpdir), "PATH": f"{self.zsh_dir}:{self.real_dir}:/usr/bin:/bin",
+            "FAKE_OP_OUT": str(self.out), "FAKE_TOKEN_EXPECTED": FAKE_TOKEN,
+        }
+        base.update(env or {})
+        return subprocess.run(["op", *args], env=base, capture_output=True, text=True, timeout=30)
 
     def run_shim(self, args, env=None, path=None, stdin=None):
         base = {
@@ -103,13 +121,47 @@ class OpShim(unittest.TestCase):
         self.assertEqual(call["token"], "the-test-token")
         self.assertNotEqual(call["home"], str(self.home))
 
-    def test_without_a_token_op_runs_unchanged(self):
+    def test_without_a_token_the_pi_name_refuses_and_op_never_runs(self):
+        # Pi's bash tool and Retro's PATH reach this file by the Pi name: always an agent, so no desktop-app fallback.
         result = self.run_shim(["signin", "--account", "my"])
+        self.assertEqual(result.returncode, 69, result.stderr)
+        self.assertEqual(result.stderr, NO_TOKEN + "\n")
+        self.assertEqual(result.stdout, "")
+        self.assertFalse(self.out.exists(), "op never ran")
+
+    def test_zsh_name_clean_terminal_without_a_token_runs_the_real_op_unchanged(self):
+        # Michael's own terminal: no agent marker, so the desktop-app path is kept.
+        result = self.run_zsh_name(["signin", "--account", "my"])
         self.assertEqual(result.returncode, 0, result.stderr)
         call = self.call()
         self.assertEqual(call["home"], str(self.home))
         self.assertEqual(call["token"], "unset")
         self.assertEqual(call["args"], ["signin", "--account", "my"])
+        self.assertNotIn("refusing", result.stderr)
+
+    def test_zsh_name_in_an_agent_shell_without_a_token_refuses_for_each_marker(self):
+        for name, value in MARKERS.items():
+            with self.subTest(marker=name):
+                if self.out.exists():
+                    self.out.unlink()
+                result = self.run_zsh_name(["whoami"], env={name: value})
+                self.assertEqual(result.returncode, 69, (name, result.stderr))
+                self.assertEqual(result.stderr, NO_TOKEN + "\n", name)
+                self.assertFalse(self.out.exists(), f"{name}: op never ran")
+
+    def test_an_empty_marker_is_not_an_agent_shell(self):
+        result = self.run_zsh_name(["whoami"], env={"CLAUDECODE": ""})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.call()["token"], "unset")
+
+    def test_zsh_name_in_an_agent_shell_with_the_token_uses_the_service_account(self):
+        self.write_token()
+        result = self.run_zsh_name(["whoami"], env={"CLAUDECODE": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        call = self.call()
+        self.assertEqual(call["token"], "the-test-token")
+        self.assertNotEqual(call["home"], str(self.home))
+        self.assert_no_token_in_output(result)
 
     def test_an_unreadable_token_file_counts_as_no_token(self):
         if os.geteuid() == 0:
@@ -117,8 +169,8 @@ class OpShim(unittest.TestCase):
         self.write_token()
         (self.home / ".config/agent-harness/op-service-token").chmod(0)
         result = self.run_shim(["whoami"])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.call()["home"], str(self.home))
+        self.assertEqual(result.returncode, 69, result.stderr)
+        self.assertFalse(self.out.exists(), "op never ran")
 
     def test_exit_status_stdin_and_odd_arguments_pass_through(self):
         self.write_token()

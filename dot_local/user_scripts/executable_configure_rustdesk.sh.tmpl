@@ -545,6 +545,8 @@ apply_password() {
     fi
   fi
 
+  # Without a token `op` would fall back to the desktop app: refuse before the read (playbook 78819cbd).
+  [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] || die "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
   if ! PASSWORD="$($OP_BIN read "$PASSWORD_REFERENCE" --no-newline 2>/dev/null)"; then
     die "unable to read RustDesk password from $PASSWORD_REFERENCE"
   fi

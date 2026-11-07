@@ -40,7 +40,7 @@ class OpReadCached(unittest.TestCase):
             (self.home / ".config/agent-harness").mkdir(parents=True, exist_ok=True)
             (self.home / ".config/agent-harness/op-service-token").write_text(token_file)
         env = {"PATH": "%s:/usr/bin:/bin" % self.bin, "HOME": str(self.home), "OP_READ_CACHE_DIR": str(self.tmp / "cache"),
-               "FAKE_CALLS": str(self.calls), "EXPECT_TOKEN": TOKEN}
+               "XDG_STATE_HOME": str(self.tmp / "state"), "FAKE_CALLS": str(self.calls), "EXPECT_TOKEN": TOKEN}
         if token_env is not None:
             env["OP_SERVICE_ACCOUNT_TOKEN"] = token_env
         return subprocess.run(["sh", str(SCRIPT), *args], env=env, capture_output=True, text=True, timeout=60)
@@ -81,6 +81,28 @@ class OpReadCached(unittest.TestCase):
         self.assertEqual((done.returncode, done.stdout), (0, "secret-value"), done.stderr)
         self.assertIn(NO_TOKEN, done.stderr)
         self.assertEqual(self.op_calls(), [], "op was not run")
+
+    def records(self):
+        path = self.tmp / "state/agent-harness/op-read-cached.jsonl"
+        return path.read_text().splitlines() if path.exists() else []
+
+    def test_a_refusal_is_recorded_with_the_reference_and_no_value(self):
+        done = self.run_script(REF)
+        self.assertEqual(done.returncode, 69)
+        lines = self.records()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn('"event":"refused"', lines[0])
+        self.assertIn('"ref":"%s"' % REF, lines[0])
+        self.assertNotIn("secret-value", lines[0])
+
+    def test_a_stale_serve_is_recorded_as_stale_served(self):
+        self.assertEqual(self.run_script(REF, token_env=TOKEN).returncode, 0)
+        cache = next((self.tmp / "cache").iterdir())
+        old = os.stat(cache).st_mtime - 3 * 24 * 3600
+        os.utime(cache, (old, old))
+        self.assertEqual(self.run_script(REF, token_env="").returncode, 0)
+        self.assertEqual([l for l in self.records() if "stale-served" in l].__len__(), 1, self.records())
+        self.assertNotIn("secret-value", "\n".join(self.records()))
 
     def test_a_fresh_cache_hit_needs_no_op_and_no_token(self):
         self.assertEqual(self.run_script(REF, token_env=TOKEN).returncode, 0)  # a miss: reads and caches the value

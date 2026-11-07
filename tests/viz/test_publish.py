@@ -167,12 +167,23 @@ class PublishTest(unittest.TestCase):
             self.assertEqual(f.read(), "read op://developer/viz-publish/password\n")
         self.assertNotIn(SA_TOKEN, json.dumps(out))
 
-    def test_no_token_refuses_before_op_runs_and_never_falls_back(self):
+    def test_no_token_in_an_agent_shell_refuses_before_op_runs_and_is_logged(self):
         calls = self.fake_op()
-        out = self.viz("publish", RENDER_ID, env={"VIZ_PUBLISH_PASSWORD": None, "OP_SERVICE_ACCOUNT_TOKEN": None}, code=4)
+        out = self.viz("publish", RENDER_ID, env={"VIZ_PUBLISH_PASSWORD": None, "OP_SERVICE_ACCOUNT_TOKEN": None, "CLAUDECODE": "1"}, code=4)
         self.assertEqual(out, {"ok": False, "code": "missing_dependency", "message": NO_TOKEN})
         self.assertFalse(os.path.exists(calls), "op was never run, so it could not fall back to the desktop app")
         self.assertEqual(Site.files, {})
+        record = self.last_record()
+        self.assertEqual((record["command"], record["args"], record["outcome"]), ("publish", [RENDER_ID], out))
+
+    def test_no_token_in_a_terminal_keeps_the_desktop_app_path(self):
+        # No agent marker: Michael's own terminal. op runs as before, and the publish goes through.
+        calls = self.fake_op()
+        out = self.viz("publish", RENDER_ID, env={"VIZ_PUBLISH_PASSWORD": None, "OP_SERVICE_ACCOUNT_TOKEN": None})
+        self.assertTrue(out["ok"], out)
+        with open(calls) as f:
+            self.assertEqual(f.read(), "read op://developer/viz-publish/password\n")
+        self.assertEqual(len(Site.files), 2)
 
     def test_bad_input(self):
         for args in (("publish",), ("publish", "20990101-000000-000-abcdef"),
