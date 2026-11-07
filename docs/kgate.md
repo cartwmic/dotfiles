@@ -92,16 +92,17 @@ Planning count:
 - **Up to about 12 when every job is small.**
 - **Past that, pods queue.** That is fine; the scheduler is the queue.
 
-Profile sizes in use, from each repo's `kgate.toml` on origin/main (2026-11-06):
+Profile sizes after the 2026-11-06 trim: `memory` is the request the scheduler reserves, `memory_limit` the OOM limit (unchanged from before). Each row is what its repo's `kgate.toml` says once that repo's profile PR has merged; until then the repo's `kgate.toml` on origin/main still has the old request.
 
-| Gate | Repo | cpu | memory |
-|---|---|---|---|
-| agent-kit unit gate | `agent-kit` | 2 | `3584Mi` (3.5 Gi) |
-| coordinator unit gate | `coordinator` | 4 | `3Gi` |
-| budget-steward unit gate | `budget-steward` (gitea) | 4 | `7Gi` |
-| homelab static checks | `cartwmic-homelab-v2` | 2 | `1Gi` |
-| dotfiles heavy suites | `dotfiles` | 2 | `1Gi` |
-| Loop Engine baseline | `loop-engine` | 12 | `8Gi` |
+| Gate | Repo | cpu | memory (request) | memory_limit (limit) |
+|---|---|---|---|---|
+| Loop Engine baseline | `loop-engine` | 12 | `3584Mi` (3.5 Gi) | `8Gi` |
+| coordinator journeys gate | `coordinator` | 4 | `3584Mi` (3.5 Gi) | `6Gi` |
+| coordinator unit gate | `coordinator` | 4 | `2.5Gi` | `3Gi` |
+| agent-kit unit gate | `agent-kit` | 2 | `3Gi` | `3584Mi` (3.5 Gi) |
+| budget-steward unit gate | `budget-steward` (gitea) | 4 | `6Gi` | `7Gi` |
+| homelab static checks | `cartwmic-homelab-v2` | 2 | `512Mi` | `1Gi` |
+| dotfiles heavy suites | `dotfiles` | 2 | `512Mi` | `1Gi` |
 
 Before you change a profile's size, check it against the node table above.
 
@@ -157,7 +158,7 @@ services = ["docker"]                            # optional; see below
 - `memory` is the pod's **request**: what the scheduler reserves on a node to place it. It decides where a job fits.
 - `memory_limit` is the pod's **limit**: the line at which the pod is OOM-killed. It is optional. When set, it must be at least `memory`, and it takes the same format (`Gi` or `Mi`). Without it the limit equals the request, which is how every profile ran before this key existed.
 - A pod whose request is below its limit is Burstable. Under node memory pressure Kubernetes evicts pods that use more than their request first. Above the limit the pod is killed whatever the node has free.
-- Rule of thumb for a profile: set `memory` to about 1.2 times the highest measured peak, and `memory_limit` to at least the peak plus a margin. The peak kgate records (`peak_bytes`) is the container's cgroup peak, and it includes page cache. The kernel can reclaim page cache, so the peak overstates what the job needs; read it as an upper bound.
+- Sizing rule for a profile: set `memory` (the request) to 1.2 times the highest measured peak, rounded up to 0.5 GiB, with a floor of 0.5 GiB. Keep `memory_limit` as the OOM guard: sizing the request does not raise or lower the limit. The peak kgate records (`peak_bytes`) is the container's cgroup peak, and it includes page cache. The kernel can reclaim page cache, so the peak overstates what the job needs; read it as an upper bound.
 - Overrides: `--mem` sets the request. `--mem-limit` sets the limit. A `--mem` above the profile's `memory_limit` is refused unless `--mem-limit` is given too.
 
 ## Switching a gate: the parity run
