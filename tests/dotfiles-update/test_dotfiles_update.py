@@ -559,7 +559,8 @@ class DotfilesUpdate(unittest.TestCase):
         self.assertIn("would apply 1 file(s):\n  ~/.b\n", r.stdout)
         self.assertIn("  ~/.a   edited here; apply would add 1 and remove 1 line(s)", r.stdout)
         self.assertIn("  ~/.c   edited here", r.stdout)
-        self.assertIn("would run 1 changed script(s): 10_mark.sh", r.stdout)
+        self.assertIn("would hold back 1 changed script(s): 10_mark.sh", r.stdout)  # a held path means no script runs
+        self.assertNotIn("would run", r.stdout)
 
     def test_dry_run_counts_reconcile_with_chezmoi_status_and_name_the_always_run_scripts(self):
         # Why the counts differed: a run_after_ script is listed by `chezmoi status` on every apply, and the report used to count it only when
@@ -570,7 +571,8 @@ class DotfilesUpdate(unittest.TestCase):
         status = [line for line in self.chezmoi("status", "--path-style", "absolute").stdout.splitlines() if len(line) > 3 and line[2] == " "]
         r = self.update("--dry-run")
         self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
-        self.assertIn("would run 1 always-run script(s): 75_reconcile.sh", r.stdout)
+        self.assertIn("would hold back 1 always-run script(s): 75_reconcile.sh", r.stdout)  # a path is held: no script would run
+        self.assertNotIn("would run", r.stdout)
         match = re.search(r"chezmoi status listed (\d+) entries = (\d+) to apply \+ (\d+) held \+ (\d+) waiting \+ (\d+) kept \+ (\d+) script\(s\) "
                           r"\((\d+) changed \+ (\d+) always-run\)", r.stdout)
         self.assertIsNotNone(match, r.stdout)

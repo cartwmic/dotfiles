@@ -287,7 +287,7 @@ class Wrapper(unittest.TestCase):
         r = self.run_wrapper("#!/bin/sh\nexit 3\n")  # exits at once: app-server never answers
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("ERROR: the Codex guard hook is not confirmed trusted", r.stdout)
-        self.assertIn("make 'codex app-server' start", r.stdout)  # the next step is named
+        self.assertIn("codex app-server did not answer, make it start", r.stdout)  # the next step is named
         self.assertIn("codex_trust_hooks.py", r.stdout)
 
     def test_a_missing_codex_binary_fails_the_wrapper_with_the_same_error(self):

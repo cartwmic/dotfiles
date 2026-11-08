@@ -509,11 +509,13 @@ def run(args, record):
     if externals:
         print("  checked %d git-repo external(s) (chezmoi runs the `git pull` the external is configured with)." % len(externals))
     print_script_runs(runs)  # a real run: every script that ran, changed and always-run alike
+    # While any path is held, no script runs (a real run holds them all back), so the dry run must not say "would run".
+    script_verb = "would hold back" if unresolved else "would run"
     if args.dry_run and changed_scripts:
-        print("  would run %d changed script(s): %s" % (len(changed_scripts), script_names(changed_scripts)))
+        print("  %s %d changed script(s): %s" % (script_verb, len(changed_scripts), script_names(changed_scripts)))
     if args.dry_run and always:
-        print("  would run %d always-run script(s): %s (run_after_/run_before_: chezmoi lists them on every apply and they run on every apply, so they are not a pending change)"
-              % (len(always), script_names(always)))
+        print("  %s %d always-run script(s): %s (run_after_/run_before_: chezmoi lists them on every apply and they run on every apply, so they are not a pending change)"
+              % (script_verb, len(always), script_names(always)))
     for path in taken:
         saved = counts[path][0] if counts[path] else None
         where = "<on a real run>" if args.dry_run else (tilde(saved, home) if saved else None)
