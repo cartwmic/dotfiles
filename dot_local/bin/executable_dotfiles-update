@@ -305,6 +305,10 @@ def tilde(path, home):
     return "~" + path[len(home):] if path.startswith(home + os.sep) else path
 
 
+def script_names(paths):
+    return ", ".join(os.path.basename(p) for p in paths)
+
+
 def git_externals():
     """Absolute paths of the git-repo externals (chezmoi runs `git pull` in them). `chezmoi status` never lists one that is due a refresh and a path-less
     apply is not run here, so they are refreshed by name (round 4 f3). Each is asked for alone: a bare `chezmoi dump` would print every managed file."""
@@ -498,13 +502,18 @@ def run(args, record):
             else:
                 print_script_runs(runs)
         return 0
-    print("dotfiles-update: %s %d file(s)%s." % (verb, len(clean) + len(taken) + len(follow),
-                                                 (", ran %d script(s)" % len(runs)) if runs else ""))
+    apply_now = sorted(clean + taken + follow)
+    print("dotfiles-update: %s %d file(s)%s%s" % (verb, len(apply_now), (", ran %d script(s)" % len(runs)) if runs else "", ":" if apply_now else "."))
+    for path in apply_now:
+        print("  %s" % tilde(path, home))
     if externals:
         print("  checked %d git-repo external(s) (chezmoi runs the `git pull` the external is configured with)." % len(externals))
-    print_script_runs(runs)
+    print_script_runs(runs)  # a real run: every script that ran, changed and always-run alike
     if args.dry_run and changed_scripts:
-        print("  would run %d changed script(s): %s" % (len(changed_scripts), ", ".join(os.path.relpath(p, home) for p in changed_scripts)))
+        print("  would run %d changed script(s): %s" % (len(changed_scripts), script_names(changed_scripts)))
+    if args.dry_run and always:
+        print("  would run %d always-run script(s): %s (run_after_/run_before_: chezmoi lists them on every apply and they run on every apply, so they are not a pending change)"
+              % (len(always), script_names(always)))
     for path in taken:
         saved = counts[path][0] if counts[path] else None
         where = "<on a real run>" if args.dry_run else (tilde(saved, home) if saved else None)
@@ -514,7 +523,10 @@ def run(args, record):
     if still_waiting:
         print("  waiting on a held directory, not applied: %s (they apply once that directory is settled)" % ", ".join(tilde(p, home) for p in still_waiting))
     if scripts and unresolved:
-        print("  held back %d script(s): they run once no conflict is left." % len(scripts))
+        print("  held back %d script(s): %s; they run once no conflict is left." % (len(scripts), script_names(scripts)))
+    # Every `chezmoi status` entry lands in exactly one bucket, so the numbers add up to the entry count.
+    print("  chezmoi status listed %d entries = %d to apply + %d held + %d waiting + %d kept + %d script(s) (%d changed + %d always-run)"
+          % (len(entries), len(apply_now), len(unresolved), len(still_waiting), len(kept), len(scripts), len(changed_scripts), len(always)))
     if unresolved:
         print("HELD: %d path(s) were NOT applied, because chezmoi could not be shown to hold only its own unedited work there. Nothing of yours was overwritten:" % len(unresolved))
         for path in unresolved:
