@@ -617,21 +617,30 @@ chezmoi apply
 `dotfiles-update` (deployed to `~/.local/bin` on both desktop profiles) is the one command that brings a machine up to date, with no TTY.
 Plain `chezmoi update` stops with exit 1 at the first file that was edited on the machine and that the source also wants to change
 ("has changed since chezmoi last wrote it?", then "could not open a new TTY"), and applies nothing past it. This command instead pulls the
-source, sorts every pending file, applies the clean ones, and **never overwrites or silently skips an edited file**:
+source and decides each pending path from chezmoi's own record of what it last wrote (`chezmoi state dump`), never from a status code
+(`chezmoi status` shows a blank first column for a path chezmoi never recorded even when a different file is already there, and shows
+only the directory itself for a directory it would remove). **It applies a path only when that loses nothing, and holds everything else:**
 
-| State of a file | What `dotfiles-update` does |
+| The pending path | What `dotfiles-update` does |
 |---|---|
-| not edited here | applies it |
-| edited here and apply would change it (a conflict) | does not apply it; lists it with the lines apply would add and remove |
-| `run_` scripts | run only when no conflict is left (a script may depend on a held-back file) |
+| does not exist here (a new file) | applies it |
+| exactly what chezmoi last wrote (same type, bytes and permissions) | applies it |
+| a directory that stays a directory | applies it as itself, never its contents |
+| a directory the source drops, every file in it unedited chezmoi work | applies it (removes it) |
+| edited here, or a file chezmoi never wrote is in the way, or you deleted it here | HOLDS it, with the reason and what an apply would add and remove |
+| a directory the source drops that holds files chezmoi did not write (even a `.DS_Store`), a different case spelling, a symlinked parent | HOLDS it |
+| `run_` scripts | run only when nothing is held (a script may depend on a held-back path) |
 
-Exit 0: everything applied. Exit 3: a conflict needs a decision (the list is printed). Exit 1: the pull or an apply failed.
-Decide each conflict with a flag, no prompts, then run it again: `--take-source PATH` saves your copy under
-`~/.local/state/dotfiles-update/<UTC time>/` and applies the source version of that file; `--keep-local PATH` leaves your edit for now
+Exit 0: everything applied. Exit 3: something is held and needs a decision (the list is printed). Exit 1: the pull, a read or an apply failed.
+Decide each held path with a flag, no prompts, then run it again: `--take-source PATH` saves your copy under
+`~/.local/state/dotfiles-update/<UTC time>/` and applies the source version of that path; `--keep-local PATH` leaves it as it is for now
 (it is listed again next run). There is no "take everything" flag. `--dry-run` reports only; `--no-pull` skips the pull.
+A machine whose files chezmoi never recorded (a fresh state, or paths applied before chezmoi tracked them) holds every pending path that already
+exists, because nothing proves it is chezmoi's own; settle each once. A `modify_` target that an app has rewritten (Claude or Codex settings) is held on a source
+change for the same reason, until you take or keep it.
 First install on a machine that has not got it yet (for example the work Mac, where `chezmoi update` already fails): `chezmoi update --apply=false`
 then `chezmoi apply ~/.local/bin/dotfiles-update`, and from then on `dotfiles-update`.
-Like `chezmoi apply`, it also deletes unmanaged files inside an `exact_` directory, and a `run_` script's output is shown only when it fails.
+Like `chezmoi apply`, it also deletes unmanaged files inside an `exact_` directory only when every one of them is unedited chezmoi work, and a `run_` script's output is shown only when it fails.
 To keep a local edit for good, adopt it: `chezmoi re-add PATH` (plain files) or change the template.
 Tests: `tests/dotfiles-update` (real chezmoi, scratch repository and HOME; the red control is plain `chezmoi apply` failing in the same state).
 

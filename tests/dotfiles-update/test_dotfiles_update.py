@@ -86,7 +86,7 @@ class DotfilesUpdate(unittest.TestCase):
         self.assertEqual(self.read(".c"), "local-c\n")
         self.assertEqual(self.read(".b"), "two\n")  # the clean file applied
         self.assertFalse((self.home / "script-ran").exists())  # scripts held back while a conflict is open
-        self.assertIn("CONFLICTS: 2 file(s)", r.stdout)
+        self.assertIn("HELD: 2 path(s)", r.stdout)
         self.assertIn("~/.a", r.stdout)
         self.assertIn("~/.c", r.stdout)
         self.assertIn("held back 1 script(s)", r.stdout)
@@ -95,7 +95,7 @@ class DotfilesUpdate(unittest.TestCase):
     def test_the_report_shows_real_line_counts(self):
         self.conflict_state()
         r = self.update()
-        self.assertIn("~/.a   (apply would add 1 and remove 1 line(s))", r.stdout)
+        self.assertIn("~/.a   edited here; apply would add 1 and remove 1 line(s)", r.stdout)
 
     def test_a_pending_directory_never_overwrites_an_edited_file_inside_it(self):
         # Round 1 review: `chezmoi apply --force DIR` recurses, so a directory pending on its own (here its attributes changed) took an edited file with it.
@@ -136,6 +136,52 @@ class DotfilesUpdate(unittest.TestCase):
     def test_a_directory_that_becomes_a_file_is_a_conflict_not_a_silent_delete(self):
         self.drop_directory("becomes_file")
 
+    def test_a_new_source_file_over_a_local_file_chezmoi_never_wrote_is_held(self):
+        # Round 3 review: chezmoi leaves the first status column blank for a path it never recorded, so blank did not mean "not edited here".
+        (self.home / ".x").write_text("mine\n")
+        self.write("dot_x", "from source\n")
+        self.commit("source adds x")
+        r = self.update()
+        self.assertEqual(self.read(".x"), "mine\n", r.stdout)
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn("chezmoi has no record of writing it", r.stdout)
+
+    def test_a_source_symlink_over_a_local_file_is_held(self):
+        (self.home / ".lnk").write_text("mine\n")
+        os.symlink("dot_a", self.src / "symlink_dot_lnk")
+        self.commit("source adds a symlink")
+        r = self.update()
+        self.assertFalse((self.home / ".lnk").is_symlink(), r.stdout)
+        self.assertEqual(self.read(".lnk"), "mine\n")
+        self.assertEqual(r.returncode, 3, r.stdout)
+
+    def test_a_mode_only_local_edit_is_held(self):
+        os.chmod(self.home / ".b", 0o600)
+        self.write("dot_b", "two\n")
+        self.commit("source changes b")
+        r = self.update()
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn("~/.b", r.stdout)
+        self.assertEqual(self.read(".b"), "one\n")
+
+    def test_a_dropped_directory_of_only_unedited_chezmoi_files_is_removed_but_junk_in_it_holds_it(self):
+        (self.src / "dot_dd").mkdir()
+        self.write("dot_dd/f", "one\n")
+        self.commit("dir")
+        self.chezmoi("apply")
+        subprocess.run(["git", "-C", str(self.src), "rm", "-rq", "dot_dd"], check=True)
+        self.write(".chezmoiremove", ".dd\n")
+        self.commit("source drops the directory")
+        (self.home / ".dd/.DS_Store").write_text("junk\n")  # not written by chezmoi
+        held = self.update()
+        self.assertEqual(held.returncode, 3, held.stdout)
+        self.assertTrue((self.home / ".dd/f").exists())
+        self.assertIn("inside that chezmoi did not write", held.stdout)
+        (self.home / ".dd/.DS_Store").unlink()
+        r = self.update()  # now every file in it is unedited chezmoi work: nothing is lost by removing it
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertFalse((self.home / ".dd").exists())
+
     def test_line_counts_include_lines_that_start_with_dashes_or_pluses(self):
         self.write("dot_lua", "-- one\n-- two\nreal\n++ plus\n")
         self.commit("lua")
@@ -145,7 +191,7 @@ class DotfilesUpdate(unittest.TestCase):
         self.commit("lua changes")
         r = self.update()
         self.assertEqual(r.returncode, 3, r.stdout)
-        self.assertIn("~/.lua   (apply would add 3 and remove 1 line(s))", r.stdout)
+        self.assertIn("~/.lua   edited here; apply would add 3 and remove 1 line(s)", r.stdout)
 
     def test_take_source_on_a_file_deleted_here_says_there_was_no_copy(self):
         self.conflict_state()
@@ -165,14 +211,14 @@ class DotfilesUpdate(unittest.TestCase):
         self.assertEqual(len(saved), 1)
         self.assertEqual(saved[0].read_text(), "local-a\n")
         self.assertTrue((self.home / "script-ran").exists())  # no conflict left: scripts run
-        self.assertIn("kept your local edit of ~/.c", r.stdout)
+        self.assertIn("kept your local version of ~/.c", r.stdout)
 
     def test_a_partial_decision_still_exits_3_for_the_rest(self):
         self.conflict_state()
         r = self.update("--take-source", ".a")
         self.assertEqual(r.returncode, 3)
         self.assertEqual(self.read(".a"), "two\n")
-        self.assertIn("CONFLICTS: 1 file(s)", r.stdout)
+        self.assertIn("HELD: 1 path(s)", r.stdout)
         self.assertFalse((self.home / "script-ran").exists())
 
     def test_dry_run_changes_nothing(self):
@@ -202,7 +248,7 @@ class DotfilesUpdate(unittest.TestCase):
         self.conflict_state()
         r = self.update("--take-source", ".b", "--keep-local", ".a", "--keep-local", ".c")
         self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertIn("~/.b is not in the conflict list", r.stdout)
+        self.assertIn("~/.b is not held", r.stdout)
 
     def test_the_same_path_in_both_flags_is_refused(self):
         self.conflict_state()

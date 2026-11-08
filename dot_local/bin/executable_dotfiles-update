@@ -1,32 +1,46 @@
 #!/usr/bin/env python3
-"""dotfiles-update: update this machine from the dotfiles source in one command, with no TTY and a stated policy for locally edited files.
+"""dotfiles-update: update this machine from the dotfiles source in one command, with no TTY and a stated policy for local content.
 
     dotfiles-update [--dry-run] [--no-pull] [--keep-local PATH]... [--take-source PATH]...
 
-`chezmoi update` stops with exit 1 when a file was edited on this machine and the source also wants it ("has changed since chezmoi last
+`chezmoi update` stops with exit 1 when a file was edited on the machine and the source also wants it ("has changed since chezmoi last
 wrote it?", then "could not open a new TTY"), and it stops there, leaving every other pending entry unapplied. This command instead:
 
   1. pulls the source (`chezmoi update --apply=false`; skipped with --no-pull or --dry-run),
-  2. reads `chezmoi status` and sorts every pending file:
-       clean      nothing edited here: applied
-       conflict   edited here AND apply would change it: NOT applied, never overwritten silently, listed with its line counts
-  3. applies every clean file, then the run_ scripts, but only when no conflict is left (a script may depend on a file that was held back),
-  4. prints what it did and exits 0 (all applied), 3 (a conflict needs your decision, named below) or 1 (the pull or an apply failed).
+  2. lists the pending paths from `chezmoi status` and decides each from chezmoi's own record of what it last wrote (`chezmoi state dump`),
+     never from a status code: a path is applied only when that loses nothing, that is, when
+       - it does not exist here (a new file), or
+       - it is exactly what chezmoi last wrote (same type, same bytes, same permissions), or
+       - it is a directory that stays a directory (applied as itself, never its contents), or
+       - it is a directory the source drops, and every file in it is unedited work of chezmoi.
+     Everything else is HELD, with the reason: edited here, a file chezmoi never wrote is in the way, you deleted it here, a directory
+     holds files chezmoi did not write, its spelling differs in case, a parent is a symlink.
+  3. applies the safe paths one non-recursive apply, then the run_ scripts, but only when nothing is held (a script may depend on a file
+     that was held back),
+  4. prints what it did and exits 0 (all applied), 3 (something is held and needs your decision, named below) or 1 (a pull, a read or an
+     apply failed).
 
-Decide a conflict per file, no prompts:
-    --take-source PATH   save your copy under ~/.local/state/dotfiles-update/<UTC time>/, then apply the source version of that file
-    --keep-local PATH    leave your edit; this run no longer treats it as a conflict (it is listed again next run until it is taken or adopted)
+Decide each held path per path, no prompts:
+    --take-source PATH   save your copy under ~/.local/state/dotfiles-update/<UTC time>/, then apply the source version of that path
+    --keep-local PATH    leave it as it is; this run no longer holds it back (it is listed again next run until it is taken or adopted)
 PATH may be absolute, relative to $HOME, or start with ~. There is no "take everything" flag on purpose.
 To adopt a local edit into the source instead, use `chezmoi re-add PATH` (plain files) or edit the template.
+
+A machine whose files chezmoi never recorded (a fresh state, or paths applied before chezmoi tracked them) holds every pending path that
+already exists there, because nothing proves the content is chezmoi's own; settle each once with --take-source or --keep-local.
 
 Works the same on both desktop profiles. Tests: tests/dotfiles-update. Environment: DOTFILES_UPDATE_CHEZMOI_ARGS adds global chezmoi flags
 (used by the tests for a scratch source and destination).
 """
 import argparse
 import datetime
+import difflib
+import hashlib
+import json
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -65,41 +79,114 @@ def managed_dirs():
     return set(chezmoi("managed", "--include=dirs", "--path-style", "absolute", check=True).stdout.splitlines())
 
 
-def classify(entries, dirs=frozenset()):
-    """clean files (apply would only update them), conflicts (a local edit apply would overwrite), scripts (run_ scripts that would run).
+def recorded():
+    """What chezmoi last wrote, per absolute path: {type, mode, contentsSHA256}. It is the only proof a path holds chezmoi's own work."""
+    return json.loads(chezmoi("state", "dump", "--format=json", check=True).stdout).get("entryState", {})
 
-    `chezmoi status` shows only the directory itself for a directory it would remove or replace (the source dropped it, turned it into a
-    file or a symlink, listed it in .chezmoiremove, or an exact_ parent no longer has it) and never the files inside, so a directory that
-    exists here and that the source no longer has as a directory is a conflict: applying it would delete whatever is inside."""
-    clean, conflicts, scripts = [], [], []
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def is_chezmoi_own(path, record):
+    """True when what is on disk is exactly what chezmoi last wrote there: same type, same bytes, same permission bits."""
+    if not record:
+        return False
+    info = os.lstat(path)
+    if stat.S_ISLNK(info.st_mode):
+        return record.get("type") == "symlink" and sha256(os.readlink(path).encode()) == record.get("contentsSHA256")
+    if stat.S_ISREG(info.st_mode):
+        if record.get("type") != "file" or (info.st_mode & 0o777) != (int(record.get("mode", 0)) & 0o777):
+            return False
+        with open(path, "rb") as handle:
+            return sha256(handle.read()) == record.get("contentsSHA256")
+    return False
+
+
+def foreign_items(directory, state):
+    """The paths under a directory that are not unedited work of chezmoi (an item with no record, or one that differs from its record)."""
+    bad = []
+    for root, dirnames, filenames in os.walk(directory, followlinks=False):
+        for name in filenames + [d for d in dirnames if os.path.islink(os.path.join(root, d))]:
+            item = os.path.join(root, name)
+            if not is_chezmoi_own(item, state.get(item)):
+                bad.append(item)
+    return bad
+
+
+def hold_reason(path, code, state, dirs, home):
+    """None when applying this entry provably loses nothing; else why it is held. `chezmoi status` is used only to list candidates: its
+    first column is blank for a path chezmoi never recorded even when a different file is already there, and it shows only the directory
+    itself for a directory it would remove or replace, so nothing is called clean because of a status code. Apply only when the target does
+    not exist, or is exactly what chezmoi last wrote (unedited), or is a directory that stays a directory, or is a directory whose every
+    file chezmoi wrote and nobody edited."""
+    if code[1] == " ":
+        return None  # disk already equals the target: apply only brings chezmoi's record up to date
+    if not os.path.lexists(path):
+        return "you deleted it here" if path in state else None
+    parent = os.path.dirname(path)
+    while parent.startswith(home) and parent != home:
+        if os.path.islink(parent):
+            return "a parent directory is a symlink"
+        parent = os.path.dirname(parent)
+    if os.path.basename(path) not in os.listdir(os.path.dirname(path)):
+        return "its spelling on disk differs in case from the source"
+    if os.path.isdir(path) and not os.path.islink(path):
+        if path in dirs:
+            return None  # a directory that stays a directory: applied as itself only, never its contents
+        bad = foreign_items(path, state)
+        return ("a directory the source no longer has, with %d item(s) inside that chezmoi did not write or that were edited" % len(bad)) if bad else None
+    if is_chezmoi_own(path, state.get(path)):
+        return None
+    return "edited here" if path in state else "exists here and chezmoi has no record of writing it"
+
+
+def classify(entries, state, dirs, home):
+    """clean paths (apply provably loses nothing), held {path: reason} (apply could destroy local content), scripts (run_ scripts that would run)."""
+    clean, held, scripts = [], {}, []
     for code, path in entries:
-        local, apply_ = code[0], code[1]
-        if apply_ == "R":
+        if code[1] == "R":
             scripts.append(path)
-        elif local != " " and apply_ != " ":
-            conflicts.append(path)
-        elif apply_ != " " and os.path.isdir(path) and not os.path.islink(path) and path not in dirs:
-            conflicts.append(path)
-        else:
+            continue
+        reason = hold_reason(path, code, state, dirs, home)
+        if reason is None:
             clean.append(path)
-    return clean, conflicts, scripts
+        else:
+            held[path] = reason
+    return clean, held, scripts
 
 
-def line_counts(path):
-    """Lines the apply would add and remove, counted inside the hunks only (a removed line that starts with -- is a removed line)."""
-    diff = chezmoi("diff", "--", path, check=True).stdout
+def describe(path, state, dirs):
+    """What an apply would do to a held path, for the report, and the counts as (added, removed) for a text file else None."""
+    if not os.path.lexists(path):
+        return "apply would recreate it", None
+    if os.path.islink(path):
+        return "a symlink here would be replaced", None
+    if os.path.isdir(path):
+        files = dirs_ = 0
+        for _, dirnames, filenames in os.walk(path, followlinks=False):
+            files += len(filenames)
+            dirs_ += len(dirnames)
+        return "apply would remove or replace it: %d file(s) and %d subdirectorie(s) inside" % (files, dirs_), None
+    managed = set(chezmoi("managed", "--path-style", "absolute", check=True).stdout.splitlines())
+    if path not in managed:
+        return "the source no longer has it, apply would delete it", None
+    cat = chezmoi("cat", path)
+    if cat.returncode != 0:
+        raise RuntimeError("chezmoi cat %s failed: %s" % (path, (cat.stderr or cat.stdout).strip()))
+    try:
+        with open(path, "rb") as handle:
+            local = handle.read().decode().splitlines()
+        target = cat.stdout.splitlines()
+    except UnicodeDecodeError:
+        return "binary file, apply would replace it", None
     added = removed = 0
-    in_hunk = False
-    for line in diff.splitlines():
-        if line.startswith("diff --git"):
-            in_hunk = False
-        elif line.startswith("@@"):
-            in_hunk = True
-        elif in_hunk and line.startswith("+"):
-            added += 1
-        elif in_hunk and line.startswith("-"):
-            removed += 1
-    return added, removed
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, local, target).get_opcodes():
+        if tag in ("replace", "delete"):
+            removed += i2 - i1
+        if tag in ("replace", "insert"):
+            added += j2 - j1
+    return "apply would add %d and remove %d line(s)" % (added, removed), (added, removed)
 
 
 def backup(path, home, stamp):
@@ -135,7 +222,9 @@ def main(argv):
             if pull.returncode != 0:
                 print("dotfiles-update: the pull failed (exit %d); nothing was applied.\n%s" % (pull.returncode, (pull.stderr or pull.stdout).strip()))
                 return 1
-        clean, conflicts, scripts = classify(pending(), managed_dirs())
+        entries = pending()
+        clean, held, scripts = classify(entries, recorded(), managed_dirs(), home)
+        conflicts = list(held)
     except RuntimeError as error:
         print("dotfiles-update: %s" % error)
         return 1
@@ -143,7 +232,7 @@ def main(argv):
     keep = {normalize(p, home) for p in args.keep_local}
     take = {normalize(p, home) for p in args.take_source}
     for path in sorted((keep | take) - set(conflicts)):
-        print("note: %s is not in the conflict list, so --keep-local/--take-source did nothing for it" % tilde(path, home))
+        print("note: %s is not held, so --keep-local/--take-source did nothing for it" % tilde(path, home))
     both = keep & take
     if both:
         print("dotfiles-update: %s is named in both --keep-local and --take-source" % ", ".join(tilde(p, home) for p in sorted(both)))
@@ -159,16 +248,18 @@ def main(argv):
         else:
             unresolved.append(path)
     try:
-        counts = {p: line_counts(p) for p in unresolved + taken}
+        state, dirs = recorded(), managed_dirs()
+        summaries = {p: describe(p, state, dirs)[0] for p in unresolved + taken}
     except RuntimeError as error:
         print("dotfiles-update: %s" % error)
         return 1
+    counts = {p: () for p in unresolved + taken}
 
     applied_files, ran_scripts = 0, 0
     if not args.dry_run:
         try:
             for path in taken:
-                counts[path] = counts[path] + (backup(path, home, stamp),)
+                counts[path] = (backup(path, home, stamp),)
             targets = clean + taken
             if targets:
                 # --recursive=false: a pending directory is applied as itself, never as everything inside it, which could hold an edited file
@@ -189,21 +280,20 @@ def main(argv):
     print("dotfiles-update: %s %d file(s)%s." % (verb, len(clean) + len(taken),
                                                  (", ran %d script(s)" % len(scripts)) if scripts and not unresolved and not args.dry_run else ""))
     for path in taken:
-        saved = counts[path][2] if len(counts[path]) > 2 else None
+        saved = counts[path][0] if counts[path] else None
         where = "<on a real run>" if args.dry_run else (tilde(saved, home) if saved else None)
         print("  took the source version of %s%s" % (tilde(path, home), (" (your copy saved as %s)" % where) if where else " (you had no copy here to save)"))
     for path in kept:
-        print("  kept your local edit of %s" % tilde(path, home))
+        print("  kept your local version of %s" % tilde(path, home))
     if scripts and unresolved:
         print("  held back %d script(s): they run once no conflict is left." % len(scripts))
     if unresolved:
-        print("CONFLICTS: %d file(s) were edited here and the source also wants to change them. They were NOT applied and nothing of yours was overwritten:" % len(unresolved))
+        print("HELD: %d path(s) were NOT applied, because chezmoi could not be shown to hold only its own unedited work there. Nothing of yours was overwritten:" % len(unresolved))
         for path in unresolved:
-            added, removed = counts[path]
-            print("  %s   (apply would add %d and remove %d line(s))" % (tilde(path, home), added, removed))
-        print("See a diff with `chezmoi diff PATH`. Then decide each file and run dotfiles-update again:")
+            print("  %s   %s; %s" % (tilde(path, home), held[path], summaries[path]))
+        print("See a diff with `chezmoi diff PATH`. Then decide each path and run dotfiles-update again:")
         print("  dotfiles-update --take-source PATH   save your copy under ~/.local/state/dotfiles-update/<time of that run>/, apply the source version")
-        print("  dotfiles-update --keep-local PATH    leave your edit for now")
+        print("  dotfiles-update --keep-local PATH    leave it as it is for now")
         return EXIT_CONFLICT
     return 0
 
