@@ -547,7 +547,7 @@ class Job:
     def settings(self, wt):
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
-        prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "tools": {}, "secrets": {}, "services": []}
+        prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "prefer_nodes": True, "tools": {}, "secrets": {}, "services": []}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())

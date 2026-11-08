@@ -709,6 +709,23 @@ class Black(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertFalse((self.fake / "op-calls").exists())
 
+    def preferred_hosts(self):
+        manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
+        pref = manifest["items"][-1]["spec"]["affinity"]["nodeAffinity"]["preferredDuringSchedulingIgnoredDuringExecution"]
+        return [(t["preference"]["matchExpressions"][0]["operator"], t["preference"]["matchExpressions"][0]["values"]) for t in pref]
+
+    def test_a_job_with_no_profile_file_still_prefers_the_g14(self):
+        (self.repo / "kgate.toml").unlink()
+        done = self.kgate("--image", "docker.io/library/alpine@sha256:" + "ef" * 32, "--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.preferred_hosts(), [("In", ["cartwmic-g14-wsl"]), ("NotIn", ["ubuntu-server-k8s-agent-4"])])
+
+    def test_a_profile_with_prefer_nodes_false_sends_no_g14_term(self):
+        self.profile(extra="prefer_nodes = false")
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.preferred_hosts(), [("NotIn", ["ubuntu-server-k8s-agent-4"])])
+
     def test_the_pod_is_sent_the_limits(self):
         self.assertEqual(self.kgate("--cpu", "3", "--mem", "2Gi", "--", "true").returncode, 0)
         manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
