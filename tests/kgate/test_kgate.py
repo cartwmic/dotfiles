@@ -141,10 +141,10 @@ NODE_AUTH_TOKEN = "op://developer/item/password"
 
 class PodSpec(unittest.TestCase):
     def pod(self, **kw):
-        args = dict(job="kgate-1-2", image=DIGEST, cpu=3, memory="6Gi", node=None, secret_env={}, pull=None, memory_limit=None)
+        args = dict(job="kgate-1-2", image=DIGEST, cpu=3, memory="6Gi", node=None, secret_env={}, pull=None, memory_limit=None, prefer_nodes=True)
         args.update(kw)
         items = K.pod_manifests(args["job"], args["image"], args["cpu"], args["memory"], args["node"], args["secret_env"], args["pull"],
-                                memory_limit=args["memory_limit"])["items"]
+                                memory_limit=args["memory_limit"], prefer_nodes=args["prefer_nodes"])["items"]
         return items[-1], items[:-1]
 
     def test_limits_and_jobs_follow_the_request(self):
@@ -188,6 +188,20 @@ class PodSpec(unittest.TestCase):
                 {"key": "kubernetes.io/hostname", "operator": "In", "values": ["cartwmic-g14-wsl"]}]}},
             {"weight": 100, "preference": {"matchExpressions": [
                 {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-agent-4"]}]}}])
+
+    def test_a_profile_can_leave_the_g14_preference_out(self):
+        pod, _ = self.pod(prefer_nodes=False)
+        pref = pod["spec"]["affinity"]["nodeAffinity"]["preferredDuringSchedulingIgnoredDuringExecution"]
+        self.assertEqual(pref, [
+            {"weight": 100, "preference": {"matchExpressions": [
+                {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-agent-4"]}]}}])
+
+    def test_prefer_nodes_in_a_profile_is_a_bool_and_defaults_true(self):
+        base = 'image = "%s"\n' % DIGEST
+        self.assertTrue(K.parse_profile(base)["prefer_nodes"])
+        self.assertFalse(K.parse_profile(base + "prefer_nodes = false\n")["prefer_nodes"])
+        with self.assertRaises(K.Unavailable):
+            K.parse_profile(base + 'prefer_nodes = "no"\n')
 
     def test_the_preference_does_not_widen_the_required_match(self):
         pod, _ = self.pod()
