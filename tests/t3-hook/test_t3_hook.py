@@ -61,6 +61,21 @@ def expected(repo, profile, ask=False, rules=None):
     return out
 
 
+
+def without_guard(settings):
+    """The settings without the pattern-kill guard hook, which every render adds (tests/agent-kill-guard covers it)."""
+    pre = [g for g in settings.get("hooks", {}).get("PreToolUse", [])
+           if not any("refuse_pattern_kill.py" in h.get("command", "") for h in g.get("hooks", []))]
+    if "hooks" in settings:
+        if pre:
+            settings["hooks"]["PreToolUse"] = pre
+        else:
+            settings["hooks"].pop("PreToolUse", None)
+        if not settings["hooks"]:
+            del settings["hooks"]
+    return settings
+
+
 CASES = {
     "on": {"profile": PERSONAL, "instances": {"coordinator": {"repo": PLAIN}}},  # the enabled flag is not read
     "flag_off": {"profile": PERSONAL, "instances": {"coordinator": {"enabled": False, "repo": PLAIN}}},
@@ -134,7 +149,7 @@ class T3HookSettingsTest(unittest.TestCase):
         text = settings if isinstance(settings, str) else json.dumps(settings)
         r = subprocess.run(["sh", str(self.scripts[case])], input=text, capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
-        return json.loads(r.stdout)
+        return without_guard(json.loads(r.stdout))
 
     def ours(self, case, text="{}"):
         return t3(self.modify(case, text))

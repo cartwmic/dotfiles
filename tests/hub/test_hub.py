@@ -121,6 +121,21 @@ needs = unittest.skipUnless(shutil.which("chezmoi") and shutil.which("jq") and s
 
 
 @needs
+
+def without_guard(settings):
+    """The settings without the pattern-kill guard hook, which every render adds (tests/agent-kill-guard covers it)."""
+    pre = [g for g in settings.get("hooks", {}).get("PreToolUse", [])
+           if not any("refuse_pattern_kill.py" in h.get("command", "") for h in g.get("hooks", []))]
+    if "hooks" in settings:
+        if pre:
+            settings["hooks"]["PreToolUse"] = pre
+        else:
+            settings["hooks"].pop("PreToolUse", None)
+        if not settings["hooks"]:
+            del settings["hooks"]
+    return settings
+
+
 class ClaudeTest(unittest.TestCase):
     USER = {"theme": "dark", "env": {"FOO": "bar"}, "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo stop"}]}]}}
 
@@ -132,7 +147,7 @@ class ClaudeTest(unittest.TestCase):
 
     def modify(self, case, settings):
         text = settings if isinstance(settings, str) else json.dumps(settings)
-        return json.loads(run(self.scripts[case], text))
+        return without_guard(json.loads(run(self.scripts[case], text)))
 
     def test_on_sets_both_keys_and_keeps_everything_else(self):
         s = self.modify("on", self.USER)

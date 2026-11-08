@@ -12,6 +12,7 @@
 .local/share/passage-review/test_passage_review.py
 .pi/agent/extensions/notify-owner/*.test.*
 .pi/agent/extensions/bash-default-timeout/*.test.*
+.pi/agent/extensions/refuse-pattern-kill/*.test.*
 .pi/agent/extensions/anthropic-stall-retry/*.test.*
 .pi/agent/extensions/axon-playbook/*.test.*
 .pi/agent/extensions/notify-owner/alert-fixtures.json
@@ -42,6 +43,7 @@ docs/
 !.claude/settings.json
 !.codex/AGENTS.md
 !.codex/config.toml
+!.codex/rules
 # Retired staging tree: Termux is first-class via profile "termux"
 # (.termux/, bin/*-jump, .ssh). Keep the git `termux/` docs/helpers, but do
 # not deploy them to ~/termux on any profile.

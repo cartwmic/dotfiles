@@ -30,6 +30,10 @@
 #     T3CODE_THREAD_ID guard, so it does nothing outside a T3 session.
 # They are found by "src/t3-hook/hook.ts" in their command: each apply drops them from every event and, when wanted, appends the
 # current ones. Off (no hook file, or termux), they are removed. Nothing is applied on the work Mac by an agent: Michael confirms it.
+# Pattern-kill guard (both desktop profiles): a PreToolUse hook on Bash that refuses pkill and killall, so an agent's pattern kill
+# cannot hit another agent's jobs (the script is dot_local/share/agent-harness/hooks/refuse_pattern_kill.py, agent-harness README,
+# "Pattern-kill guard"). The entry is found by that script's path in its command: each apply drops it and appends the current one.
+# A hook that cannot run (python3 missing) exits non-2, so it never blocks. Michael's own terminal is not an agent session.
 # Hub (personal profile on macOS, and only while hub.enabled in .chezmoidata.toml is true): points every Claude Code session at the
 # homelab CLIProxyAPI hub. hub.enabled is one switch for Claude, Codex and the T3 codex instance. Sets env.ANTHROPIC_BASE_URL (no /v1)
 # and apiKeyHelper (op_read_cached.sh printing the hub key). Neither ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY is set: either would
@@ -91,13 +95,19 @@ HUB_WANT=true
 {{- else -}}
 HUB_WANT=false
 {{- end }}
+# Single quotes on purpose: $HOME expands when the hook runs, not here.
+# Only the script's own exit 2 blocks: a missing script exits 0 here (python3 would exit 2 on a missing file and block every command).
+GUARD_COMMAND='g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py"; [ -f "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0'
+GUARD_MARKER='agent-harness/hooks/refuse_pattern_kill.py'
+
 HUB_URL='https://cliproxy.internal.cartwmic.com'
 HUB_HELPER={{ includeTemplate "shquote" (printf "%s/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-claude-code'" .chezmoi.homeDir) }}
 
 exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_MARKER" \
   --argjson t3want "$T3_WANT" --argjson t3rules "$T3_RULES" --argjson t3pages "$T3_RULES_PAGES" --argjson t3ask "$T3_ASK" \
   --arg t3repo "$T3_REPO" --arg t3state "$T3_STATE" --arg t3marker "$T3_MARKER" \
-  --argjson hubwant "$HUB_WANT" --arg huburl "$HUB_URL" --arg hubhelper "$HUB_HELPER" '
+  --argjson hubwant "$HUB_WANT" --arg huburl "$HUB_URL" --arg hubhelper "$HUB_HELPER" \
+  --arg guardcmd "$GUARD_COMMAND" --arg guardmarker "$GUARD_MARKER" '
   def ours: (.command? // "") | contains($marker);
   def count_ours: [.hooks.SessionStart[]?.hooks[]? | select(ours)] | length;
   def strip_ours:
@@ -155,6 +165,19 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
         .hooks.SessionStart += [{hooks: [entry($guard + $base + " --part rules || exit 2")]}]
       else . end;
   def ensure_t3: t3_strip | if $t3want then t3_add else . end;
+  # Pattern-kill guard: one PreToolUse group on Bash. Strip every handler of ours (other handlers and groups stay), then append the current one.
+  def guard_ours: (.command? // "") | contains($guardmarker);
+  def guard_group_has: type == "object" and (.hooks // [] | any(guard_ours));
+  def guard_strip:
+    if (.hooks.PreToolUse | type) == "array" and (.hooks.PreToolUse | any(guard_group_has)) then
+      .hooks.PreToolUse |= map(if guard_group_has
+                               then (.hooks |= map(select(guard_ours | not))) | if (.hooks | length) == 0 then empty else . end
+                               else . end)
+      | if (.hooks.PreToolUse | length) == 0 then del(.hooks.PreToolUse) else . end
+    else . end;
+  def ensure_guard:
+    guard_strip
+    | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: "Bash", hooks: [{type: "command", command: $guardcmd}]}]);
   def ensure_hub:
     if $hubwant then
       .env.ANTHROPIC_BASE_URL = $huburl | .apiKeyHelper = $hubhelper
@@ -178,4 +201,5 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
   | ensure_hub  # before the hook defs: they delete and re-append .hooks, so anything added after it would reorder on the next apply
   | ensure_hook
   | ensure_t3
+  | ensure_guard
 '
