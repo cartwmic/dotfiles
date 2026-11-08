@@ -5,6 +5,7 @@ it exits 1 ("could not open a new TTY") and applies nothing past the conflict, w
 """
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -548,6 +549,45 @@ class DotfilesUpdate(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("would run 1 changed script(s): 10_mark.sh", r.stdout)
         self.assertFalse((self.home / "script-ran").exists())
+
+    # --- the report names every path, and its counts agree with `chezmoi status` ---
+
+    def test_dry_run_names_each_path_it_would_apply_and_each_held_path_with_its_reason(self):
+        self.conflict_state()  # .b applies; .a and .c are held
+        r = self.update("--dry-run")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("would apply 1 file(s):\n  ~/.b\n", r.stdout)
+        self.assertIn("  ~/.a   edited here; apply would add 1 and remove 1 line(s)", r.stdout)
+        self.assertIn("  ~/.c   edited here", r.stdout)
+        self.assertIn("would hold back 1 changed script(s): 10_mark.sh", r.stdout)  # a held path means no script runs
+        self.assertNotIn("would run", r.stdout)
+
+    def test_dry_run_counts_reconcile_with_chezmoi_status_and_name_the_always_run_scripts(self):
+        # Why the counts differed: a run_after_ script is listed by `chezmoi status` on every apply, and the report used to count it only when
+        # nothing else was pending, so 1 changed script plus 2 always-run ones read as "1 script". Now each entry is in exactly one bucket.
+        self.conflict_state()
+        self.write("run_after_75_reconcile.sh", "#!/bin/sh\nexit 0\n")
+        self.commit("always-run script")
+        status = [line for line in self.chezmoi("status", "--path-style", "absolute").stdout.splitlines() if len(line) > 3 and line[2] == " "]
+        r = self.update("--dry-run")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("would hold back 1 always-run script(s): 75_reconcile.sh", r.stdout)  # a path is held: no script would run
+        self.assertNotIn("would run", r.stdout)
+        match = re.search(r"chezmoi status listed (\d+) entries = (\d+) to apply \+ (\d+) held \+ (\d+) waiting \+ (\d+) kept \+ (\d+) script\(s\) "
+                          r"\((\d+) changed \+ (\d+) always-run\)", r.stdout)
+        self.assertIsNotNone(match, r.stdout)
+        entries, apply_n, held, waiting, kept, scripts, changed, always = map(int, match.groups())
+        self.assertEqual(entries, len(status))  # every status line is counted once
+        self.assertEqual(apply_n + held + waiting + kept + scripts, entries)
+        self.assertEqual(changed + always, scripts)
+        self.assertEqual((held, changed, always), (2, 1, 1))
+
+    def test_a_real_run_names_each_path_it_applied(self):
+        self.write("dot_b", "two\n")
+        self.commit("b changes")
+        r = self.update()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("applied 1 file(s):\n  ~/.b\n", r.stdout)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,18 @@
+#!/bin/sh
+# Runs after every full chezmoi apply (not only when a hashed input changed): Codex skips a hook that is not trusted, and its trust is
+# lost whenever the key or the definition of the hook changes, so this re-checks and re-grants it through Codex's own API
+# (dot_local/user_scripts/executable_codex_trust_hooks.py, which trusts only the hook whose command equals ours). When Codex cannot confirm
+# that the hook is trusted (for example `codex app-server` does not start), this exits 1 with an ERROR line that names the next step, so the
+# failure shows in dotfiles-update's script report. The number 90 puts it after every other script: chezmoi runs scripts in numeric order, and a
+# failure here stops only the apply's last step, so the other scripts (30 pi patches, 65 agent kit, 75 instances) are never skipped by it.
+# A machine with no codex binary at all is INFO and exit 0 (codex_trust_hooks.py).
+# `chezmoi apply <path>` runs no scripts at all: run ~/.local/user_scripts/codex_trust_hooks.py by hand after a scoped apply.
+CMD={{ includeTemplate "shquote" (includeTemplate "codex_guard_command" .) }}
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+script="$HOME/.local/user_scripts/codex_trust_hooks.py"
+[ -f "$script" ] || exit 0
+if ! python3 "$script" --command "$CMD"; then
+  echo "[codex_hook_trust] ERROR: the Codex guard hook is not confirmed trusted. Next step: read the WARN line above. If codex app-server did not answer, make it start on this machine, then run dotfiles-update again; this script runs again and trusts the hook."
+  exit 1
+fi
+exit 0

@@ -1,6 +1,6 @@
 """Codex's PreToolUse guard hook: ~/.codex/hooks.json (dot_codex/modify_hooks.json.tmpl), the [hooks.state] anchor in config.toml
 (dot_codex/modify_private_config.toml.tmpl), and the step that trusts exactly that hook through Codex's own API
-(dot_local/user_scripts/executable_codex_trust_hooks.py, run after every full apply by run_after_26_codex_hook_trust.sh.tmpl).
+(dot_local/user_scripts/executable_codex_trust_hooks.py, run after every full apply by run_after_90_codex_hook_trust.sh.tmpl).
 
 The modify scripts are rendered with real chezmoi for both profiles. The trust step runs against a real `codex app-server` in a scratch
 CODEX_HOME (skipped without a codex binary); nothing here calls a model.
@@ -232,11 +232,99 @@ class Trust(unittest.TestCase):
         self.assertIn("WARN", r.stdout)
         self.assertIn("no guard hook", r.stdout)
 
-    def test_a_missing_codex_binary_never_fails_an_apply(self):
+    def test_a_missing_codex_binary_is_a_python_failure_that_the_wrapper_reports(self):
         env = dict(self.env, CODEX_BIN="/nonexistent/codex")
         r = subprocess.run([sys.executable, str(TRUST), "--command", COMMAND], capture_output=True, text=True, env=env, timeout=60)
-        self.assertEqual(r.returncode, 1)  # a missing binary executable is an error to report; the runner swallows it
+        self.assertEqual(r.returncode, 1)  # the wrapper turns this into a failing script with an ERROR line (see Wrapper)
         self.assertIn("WARN", r.stdout)
+
+
+WRAPPER_TMPL = ROOT / "run_after_90_codex_hook_trust.sh.tmpl"
+FAKE_TRUSTED = '''#!%s
+import json, os, sys
+# A fake `codex app-server`: answers initialize and hooks/list, with our guard hook already trusted.
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg:
+        continue
+    if msg["method"] == "hooks/list":
+        hook = {"command": os.environ["GUARD_COMMAND"], "eventName": "preToolUse", "sourcePath": "/x/hooks.json", "key": "k",
+                "currentHash": "h", "trustStatus": "trusted"}
+        result = {"data": [{"hooks": [hook]}]}
+    else:
+        result = {}
+    print(json.dumps({"id": msg["id"], "result": result}), flush=True)
+''' % sys.executable
+
+
+class Wrapper(unittest.TestCase):
+    """run_after_90_codex_hook_trust.sh.tmpl, rendered by chezmoi and run as chezmoi runs it: its exit code is what decides whether later scripts run."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.script = render(WRAPPER_TMPL, PERSONAL_HUB)
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        (self.home / ".local/user_scripts").mkdir(parents=True)
+        shutil.copy(TRUST, self.home / ".local/user_scripts/codex_trust_hooks.py")
+        self.wrapper = self.home / "wrapper.sh"
+        self.wrapper.write_text(self.script)
+        self.fake = self.home / "fake-codex"
+        self.env = dict(os.environ, HOME=str(self.home), GUARD_COMMAND=COMMAND)
+
+    def tearDown(self):
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def run_wrapper(self, codex_body=None, codex_bin=None):
+        if codex_body is not None:
+            self.fake.write_text(codex_body)
+            self.fake.chmod(0o755)
+        env = dict(self.env, CODEX_BIN=codex_bin or str(self.fake))
+        return subprocess.run(["sh", str(self.wrapper)], capture_output=True, text=True, env=env, timeout=120)
+
+    def test_when_codex_app_server_will_not_start_the_wrapper_exits_1_with_an_error_naming_the_next_step(self):
+        r = self.run_wrapper("#!/bin/sh\nexit 3\n")  # exits at once: app-server never answers
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("ERROR: the Codex guard hook is not confirmed trusted", r.stdout)
+        self.assertIn("codex app-server did not answer, make it start", r.stdout)  # the next step is named
+        self.assertIn("then run dotfiles-update again", r.stdout)  # a step that needs no quoting, so pasting it works
+        self.assertNotIn("$", r.stdout.split("ERROR", 1)[1])  # no shell variable left unexpanded in the printed step
+
+    def test_a_missing_codex_binary_fails_the_wrapper_with_the_same_error(self):
+        r = self.run_wrapper(codex_bin="/nonexistent/codex")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("ERROR", r.stdout)
+
+    def test_when_the_hook_is_trusted_the_wrapper_exits_0_with_no_error(self):
+        r = self.run_wrapper(FAKE_TRUSTED)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("ERROR", r.stdout)
+        self.assertIn("Codex guard hook trusted", r.stdout)
+
+
+class ScriptOrder(unittest.TestCase):
+    """Real chezmoi, scratch source and HOME. Scripts run in numeric order, so the trust script is numbered 90, after 30, 65 and 75, and a
+    failing trust script must not stop them."""
+
+    def test_the_trust_script_is_numbered_last_and_a_failure_there_skips_nothing_before_it(self):
+        self.assertTrue((ROOT / "run_after_90_codex_hook_trust.sh.tmpl").is_file())
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            src, home = tmp / "src", tmp / "home"
+            src.mkdir()
+            home.mkdir()
+            cfg = tmp / "chezmoi.yaml"
+            cfg.write_text("sourceDir: %s\n" % src)
+            for name, marker in (("run_onchange_after_30_a.sh", "30"), ("run_onchange_after_65_b.sh", "65"), ("run_after_75_c.sh", "75")):
+                (src / name).write_text('#!/bin/sh\necho %s >> "$HOME/order.log"\n' % marker)
+            (src / "run_after_90_d.sh").write_text('#!/bin/sh\necho 90 >> "$HOME/order.log"\necho "ERROR: simulated codex failure" >&2\nexit 1\n')
+            env = dict(os.environ, HOME=str(home))
+            r = subprocess.run(["chezmoi", "--no-tty", "--config", str(cfg), "--config-format", "yaml", "--source", str(src), "--destination", str(home),
+                                "--persistent-state", str(tmp / "state.boltdb"), "apply"], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               env=env, timeout=120)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertEqual((home / "order.log").read_text().split(), ["30", "65", "75", "90"], r.stdout)
 
 
 class NoCodex(unittest.TestCase):
