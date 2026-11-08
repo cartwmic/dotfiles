@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Trust the pattern-kill guard hook in Codex.
 
-Codex runs a hook only after it is trusted: a hash of the hook's definition is kept under [hooks.state] in ~/.codex/config.toml, and
-a hook that is new or changed is skipped (that is what Codex's own `/hooks` review fixes by hand). This script does the same review for
-exactly one hook, ours, through Codex's own app-server API: it asks Codex for the hooks it sees, finds the one whose command runs
-refuse_pattern_kill.py, and writes that hook's current hash as trusted. Every other hook, trusted or not, is left alone.
+Codex runs a hook only after it is trusted: a hash of the hook's definition is kept under [hooks.state] in ~/.codex/config.toml, keyed by
+the hook's position, and a hook that is new, changed or at another position is skipped silently (that is what Codex's own `/hooks` review
+fixes by hand). This script does the same review for exactly one hook, ours, through Codex's own API (`codex app-server`): it asks Codex
+for the hooks it sees, picks the one in hooks.json whose command is EQUAL to the guard command, and writes that hook's current key and hash
+as trusted. Every other hook, trusted or not, is left alone, and nothing is written when ours is already trusted.
 
-    codex_trust_hooks.py            trust our hook when it is untrusted or modified
-    codex_trust_hooks.py --check    only report; exit 1 when our hook is not trusted
+    codex_trust_hooks.py --command CMD            trust our hook when it is untrusted or modified; exit 1 and a loud line when it is missing
+                                                  or still not trusted afterwards
+    codex_trust_hooks.py --command CMD --check    only report; exit 1 when our hook is not trusted
 
-Run by apply_harness_config.sh after the Codex config is written. It never fails an apply: no codex binary, or any error, prints one
-warning line and exits 0 (use --check to see the truth). The binary: $CODEX_BIN, else `codex` on PATH, else the newest
-~/.t3/tools/codex/<version>/bin/codex. $CODEX_HOME is passed through.
+CMD is the guard command (.chezmoitemplates/codex_guard_command), passed by run_after_26_codex_hook_trust.sh and also read from
+$CODEX_GUARD_COMMAND. With no codex binary it prints one INFO line and exits 0 (--check: 1). The binary: $CODEX_BIN, else `codex` on PATH,
+else the newest ~/.t3/tools/codex/<version>/bin/codex. $CODEX_HOME is passed through.
 """
 import glob
 import json
@@ -21,7 +23,6 @@ import subprocess
 import sys
 import threading
 
-MARKER = "agent-harness/hooks/refuse_pattern_kill.py"
 WATCHDOG_SECONDS = 60  # the whole run: an app-server that never answers must not hang an apply
 
 
@@ -80,24 +81,32 @@ class Server:
             self.proc.kill()
 
 
-def our_hooks(server):
+def our_hooks(server, command):
+    """The hooks Codex lists that are ours: in a hooks.json, a PreToolUse handler whose command equals the guard command exactly."""
     result = server.call("hooks/list", {"cwds": [os.path.expanduser("~")]})
-    return [h for entry in result.get("data", []) for h in entry.get("hooks", []) if MARKER in (h.get("command") or "")]
+    return [h for entry in result.get("data", []) for h in entry.get("hooks", [])
+            if h.get("command") == command and h.get("eventName") == "preToolUse" and str(h.get("sourcePath", "")).endswith("hooks.json")]
 
 
 def main(argv):
     check = "--check" in argv
+    command = os.environ.get("CODEX_GUARD_COMMAND", "")
+    if "--command" in argv and argv.index("--command") + 1 < len(argv):
+        command = argv[argv.index("--command") + 1]
+    if not command:
+        print("[codex_trust_hooks] ERROR: no guard command (pass --command CMD or set CODEX_GUARD_COMMAND)")
+        return 1
     codex = find_codex()
     if not codex:
-        print("[codex_trust_hooks] INFO: no codex binary found; the Codex hook stays untrusted (rules/agent-guard.rules still applies)")
+        print("[codex_trust_hooks] INFO: no codex binary found; the Codex guard hook cannot be trusted here (rules/agent-guard.rules still applies)")
         return 1 if check else 0
     server = None
     try:
         server = Server(codex)
-        hooks = our_hooks(server)
+        hooks = our_hooks(server, command)
         if not hooks:
-            print("[codex_trust_hooks] WARN: Codex lists no refuse_pattern_kill hook (is the agent-guard block in ~/.codex/config.toml?)")
-            return 1 if check else 0
+            print("[codex_trust_hooks] WARN: Codex lists no guard hook in a hooks.json (is ~/.codex/hooks.json valid JSON with the guard group?)")
+            return 1
         pending = [h for h in hooks if h.get("trustStatus") not in ("trusted", "managed")]
         if check:
             print("[codex_trust_hooks] %s: %s" % (codex, ", ".join("%s %s" % (h["key"], h.get("trustStatus")) for h in hooks)))
@@ -105,16 +114,15 @@ def main(argv):
         for hook in pending:
             server.call("config/value/write", {"keyPath": "hooks.state", "mergeStrategy": "upsert",
                                                 "value": {hook["key"]: {"trusted_hash": hook["currentHash"]}}})
-        after = our_hooks(server)
-        still = [h for h in after if h.get("trustStatus") not in ("trusted", "managed")]
+        still = [h for h in our_hooks(server, command) if h.get("trustStatus") not in ("trusted", "managed")]
         if still:
-            print("[codex_trust_hooks] WARN: the Codex hook is still %s after trusting it" % still[0].get("trustStatus"))
-        else:
-            print("[codex_trust_hooks] Codex hook trusted: %d trusted now, %d already were" % (len(pending), len(hooks) - len(pending)))
+            print("[codex_trust_hooks] WARN: the Codex guard hook is still %s after trusting it" % still[0].get("trustStatus"))
+            return 1
+        print("[codex_trust_hooks] Codex guard hook trusted: %d trusted now, %d already were" % (len(pending), len(hooks) - len(pending)))
         return 0
-    except Exception as error:  # an apply must never fail on this
+    except Exception as error:  # reported loudly; the caller decides whether it fails anything
         print("[codex_trust_hooks] WARN: %s" % error)
-        return 1 if check else 0
+        return 1
     finally:
         if server:
             server.close()

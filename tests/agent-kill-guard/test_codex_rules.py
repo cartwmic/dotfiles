@@ -59,8 +59,8 @@ class DeployTest(unittest.TestCase):
         for profile, want in (("personal", True), ("axon-work-computer", True), ("termux", False)):
             with self.subTest(profile=profile):
                 files = self.managed(profile)
-                for path in (".codex/rules/agent-guard.rules", ".local/share/agent-harness/hooks/refuse_pattern_kill.py",
-                             ".pi/agent/extensions/refuse-pattern-kill/index.ts"):
+                for path in (".codex/rules/agent-guard.rules", ".codex/hooks.json", ".local/user_scripts/codex_trust_hooks.py",
+                             ".local/share/agent-harness/hooks/refuse_pattern_kill.py", ".pi/agent/extensions/refuse-pattern-kill/index.ts"):
                     self.assertEqual(path in files, want, path)
 
 

@@ -44,6 +44,7 @@ docs/
 !.codex/AGENTS.md
 !.codex/config.toml
 !.codex/rules
+!.codex/hooks.json
 # Retired staging tree: Termux is first-class via profile "termux"
 # (.termux/, bin/*-jump, .ssh). Keep the git `termux/` docs/helpers, but do
 # not deploy them to ~/termux on any profile.
@@ -91,6 +92,7 @@ utils.sh
 00_install_mise.sh
 10_mise_bootstrap.sh
 20_apply_harness_config.sh
+26_codex_hook_trust.sh
 30_apply_pi_patches.sh
 40_apply_zellij_permissions.sh
 60_configure_rustdesk.sh

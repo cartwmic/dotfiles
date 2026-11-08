@@ -546,12 +546,6 @@ apply_codex() {
   render_codex_mcp_block "$resolved_mcp" "$codex_block"
   merge_codex_config "$codex_block"
   log "Updated Codex config: $HOME/.codex/config.toml"
-
-  # Codex skips a hook until its hash is trusted (the guard hook in the agent-guard block of config.toml); trust ours through Codex's API.
-  trust_script="$HOME/.local/user_scripts/codex_trust_hooks.py"
-  if [ -f "$trust_script" ]; then
-    python3 "$trust_script" || log "WARN: codex_trust_hooks.py failed; the Codex hook may be untrusted (run it with --check)"
-  fi
 }
 
 # Pi only: wrap the local MCP servers named in servers.list in the lazy stand-in, so a

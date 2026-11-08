@@ -1,0 +1,1 @@
+f=$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py; [ -r "$f" ] || exit 0; command -v python3 >/dev/null || exit 0; exec python3 "$f"

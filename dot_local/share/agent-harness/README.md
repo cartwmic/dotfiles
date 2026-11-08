@@ -135,7 +135,7 @@ reviewer's `pkill -f "sleep 30" -P 1`). Decision: Michael, ask 744, "Add the gua
 |---|---|---|---|
 | Claude Code | PreToolUse hook on Bash, running the classifier | `dot_claude/modify_settings.json.tmpl` (the `ensure_guard` step) | `~/.claude/settings.json` |
 | Pi | extension that blocks the `bash` tool call, running the same classifier | `dot_pi/private_agent/extensions/refuse-pattern-kill/` | `~/.pi/agent/extensions/refuse-pattern-kill/` |
-| Codex | PreToolUse hook on its Bash tool, running the same classifier; Codex runs a hook only once it is trusted, so `codex_trust_hooks.py` trusts exactly this hook through Codex's own API at apply time. A rules file is the second layer for the time the hook is untrusted | `dot_codex/modify_private_config.toml.tmpl` (the `chezmoi:agent-guard` block), `dot_local/user_scripts/executable_codex_trust_hooks.py`, `dot_codex/rules/agent-guard.rules` | `~/.codex/config.toml`, `~/.local/user_scripts/codex_trust_hooks.py`, `~/.codex/rules/agent-guard.rules` |
+| Codex | PreToolUse hook on its Bash tool, running the same classifier, in `~/.codex/hooks.json` (a JSON `modify_` script that appends our group and finds it by exact command, never by a substring); Codex runs a hook only once it is trusted, so `codex_trust_hooks.py` trusts exactly that hook through Codex's own API after every full apply. A rules file is the second layer for the time the hook is untrusted | `dot_codex/modify_hooks.json.tmpl`, `.chezmoitemplates/codex_guard_command`, `run_after_26_codex_hook_trust.sh.tmpl`, `dot_local/user_scripts/executable_codex_trust_hooks.py`, `dot_codex/rules/agent-guard.rules`; `dot_codex/modify_private_config.toml.tmpl` only adds an empty `[hooks.state]` header | `~/.codex/hooks.json`, `~/.codex/rules/agent-guard.rules`, `~/.local/user_scripts/codex_trust_hooks.py` |
 | shared classifier | command-position parser: sees through quotes, `;`, `&&`, `\|`, `$( )`, `sh -c`, `eval`, wrappers, `find -exec` | `dot_local/share/agent-harness/hooks/refuse_pattern_kill.py` | `~/.local/share/agent-harness/hooks/` |
 
 Both desktop profiles, macOS and Linux; not Termux. Michael's own terminal, and Pi's own `!` command, are not agent tool calls and are not touched.
@@ -144,8 +144,12 @@ A new session picks it up: start a new Claude session, restart Pi, and start a n
 
 Claude's hook also covers the Monitor tool (it runs shell commands). Codex's rules alone cannot see a redirect or `&` in the script
 (`pkill -f x 2>/dev/null; true` runs; only `||`, `&&`, `;` and `|` of plain words are checked, which a real Codex session showed), which is why the hook is the
-main Codex mechanism and the rules the backup. If a Codex update changes how hooks are hashed, the hook shows as `modified` and is skipped until trusted again:
-run `~/.local/user_scripts/codex_trust_hooks.py` (it trusts only this hook), or `--check` to see the state.
+main Codex mechanism and the rules the backup. The hook is in its own file because Codex edits `config.toml` itself (it writes the trust of a hook there, and can move
+tables and the comments above them), so nothing of ours is cut out of that file; the one thing added to it is an empty `[hooks.state]` header above the managed blocks, so
+Codex's trust tables land beside it and never inside the hub block. Trust is checked and re-granted by `run_after_26_codex_hook_trust.sh` on every full apply (a scoped
+`chezmoi apply <path>` runs no scripts: then run `~/.local/user_scripts/codex_trust_hooks.py --command "$(cat ~/.local/share/chezmoi/.chezmoitemplates/codex_guard_command)"`,
+add `--check` to only look). The hook command text is frozen, so its hash changes only if its position changes: another group inserted above ours in `hooks.json` (the owner's,
+or one Codex imports) leaves ours untrusted, and so skipped, until the next full apply.
 
 What is not covered (each is named in the code or the tests):
 - the word as an argument is fine (`grep pkill x`, a commit message that mentions it): only the command position counts;

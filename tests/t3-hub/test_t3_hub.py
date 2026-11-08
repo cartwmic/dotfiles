@@ -30,8 +30,8 @@ WORKTREES = "/Volumes/Workshop/macbook/t3-worktrees"
 
 
 def without_codex_guard(text):
-    """The Codex config without the pattern-kill guard block (and the empty [hooks.state] that follows it), which every render adds."""
-    text, dropped = re.subn(r"# chezmoi:agent-guard:begin\n.*?# chezmoi:agent-guard:end\n\n?(?:\[hooks\.state\]\n\n?)?", "", text, flags=re.DOTALL)
+    """The Codex config without the empty [hooks.state] anchor header that every render adds for the guard hook's trust."""
+    text, dropped = re.subn(r"(?m)^\[hooks\.state\]\n\n?", "", text, count=1)
     return text.rstrip("\n") + "\n" if dropped and text.strip() else text
 
 

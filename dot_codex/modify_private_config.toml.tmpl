@@ -18,11 +18,11 @@
 # top-level `model_provider = "cliproxy"`. Off, or on any other host, removes that line only when it equals "cliproxy"; a different
 # value stays. The provider block above is kept while either switch is on, since the default needs it.
 #
-# Pattern-kill guard (both desktop profiles): owns the `# chezmoi:agent-guard` block, a PreToolUse hook on Codex's Bash tool that runs
-# the shared classifier (agent-harness README, "Pattern-kill guard"). Codex runs a hook only after it is trusted, by a hash of its
-# definition kept under [hooks.state] in this same file; the apply step codex_trust_hooks.py (run by apply_harness_config.sh) trusts
-# exactly this hook through Codex's own API, and everything else in [hooks.state] is kept. rules/agent-guard.rules is the second layer
-# that works even while the hook is untrusted.
+# Pattern-kill guard (both desktop profiles): the guard hook itself is not here, it is in ~/.codex/hooks.json (modify_hooks.json.tmpl).
+# Codex keeps the trust of a hook as [hooks.state."<key>"] tables in THIS file and writes them itself, next to an existing [hooks.state]
+# header or, failing that, before the file's last comment, which on the personal profile is inside the hub block below and would be stripped
+# on the next apply. So this script does one structural thing for it: when no [hooks.state table exists once the hub block is stripped, it
+# inserts an empty [hooks.state] header above the first table or managed block. No markers, no stripping, nothing else.
 # Chezmoi runs modify_ scripts with the existing target file content piped
 # on stdin and uses stdout as the new content.
 
@@ -60,25 +60,6 @@ hub_re = re.compile(r"\n*# chezmoi:cliproxy-hub:begin\n.*?# chezmoi:cliproxy-hub
 stripped, dropped = hub_re.subn("", stripped)
 if dropped and stripped and not stripped.endswith("\n"):
     stripped += "\n"
-# The guard hook is dropped first and re-inserted last, so it never sits between the hub block and its neighbours. It is found by what
-# it is, never by the markers around it: Codex edits this file (it writes the trust of the hook under [hooks.state] and can move that
-# table and the comment above it), so a span between the markers is not stable. Only two sections of ours go: the handler that runs the
-# classifier and, when it holds nothing else, the group header just above it. The marker comments are dropped wherever they are.
-GUARD_MARK = "agent-harness/hooks/refuse_pattern_kill.py"
-before = stripped
-stripped = re.sub(r"(?m)^# chezmoi:agent-guard:(?:begin|end)[ \t]*\n", "", stripped)
-pieces = re.split(r"(?m)^(?=\[)", stripped)
-head_text, sections = pieces[0], pieces[1:]
-gone = set()
-for k, section in enumerate(sections):
-    if section.startswith("[[hooks.PreToolUse.hooks]]") and GUARD_MARK in section:
-        gone.add(k)
-        alone = k + 1 >= len(sections) or not sections[k + 1].startswith("[[hooks.PreToolUse.hooks]]")
-        if k > 0 and sections[k - 1].startswith("[[hooks.PreToolUse]]") and alone:
-            gone.add(k - 1)
-stripped = head_text + "".join(sec for k, sec in enumerate(sections) if k not in gone)
-if stripped != before and stripped and not stripped.endswith("\n"):
-    stripped += "\n"
 # Default provider: only the top-level region (before the first table header) is looked at.
 m = re.search(r"(?m)^\[", stripped)
 cut = m.start() if m else len(stripped)
@@ -94,6 +75,12 @@ if os.environ.get("HUB_DEFAULT"):
 else:
     top = ours_re.sub("", top)
 stripped = top + rest
+if not re.search(r"(?m)^\[hooks\.state", stripped):
+    boundary = re.search(r"(?m)^(?:\[|# BEGIN CHEZMOI|# chezmoi:[a-z-]+:begin)", stripped)
+    at = boundary.start() if boundary else len(stripped)
+    head, tail = stripped[:at], stripped[at:]
+    head = head.rstrip("\n") + ("\n\n" if head.strip() else "")
+    stripped = head + "[hooks.state]\n" + ("\n" + tail if tail else "")
 home = os.environ.get("HUB_HOME", "")
 if home:
     hub = """# chezmoi:cliproxy-hub:begin
@@ -109,26 +96,6 @@ args = ["op://developer/tb36gtnaocyezjk3dslomp64he/laptop-codex"]
 # chezmoi:cliproxy-hub:end
 """ % home
     stripped = stripped.rstrip("\n") + ("\n\n" if stripped.strip() else "") + hub
-
-guard = """# chezmoi:agent-guard:begin
-[[hooks.PreToolUse]]
-matcher = "^Bash$"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = \x27\x27\x27g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py"; [ -r "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0\x27\x27\x27
-timeout = 10
-# chezmoi:agent-guard:end
-"""
-# Inserted before the first table header or managed block, so ours is the first PreToolUse hook in the file (Codex keys the trust of a hook by
-# its position) and no top-level key ends up under our tables. An empty [hooks.state] follows when none exists, so Codex writes the
-# trust entries outside this block.
-boundary = re.search(r"(?m)^(?:\[|# BEGIN CHEZMOI|# chezmoi:[a-z-]+:begin)", stripped)
-at = boundary.start() if boundary else len(stripped)
-head, tail = stripped[:at], stripped[at:]
-state = "" if re.search(r"(?m)^\[hooks\.state", stripped) else "[hooks.state]\n\n"
-head = head.rstrip("\n") + ("\n\n" if head.strip() else "")
-stripped = head + guard + "\n" + state + (tail if tail else "")
 
 sys.stdout.write(stripped)
 '
