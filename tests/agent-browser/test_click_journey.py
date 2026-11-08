@@ -104,6 +104,17 @@ class ClickJourney(unittest.TestCase):
             s.close()
         self.http.shutdown()
 
+    def wait_until(self, condition, what, timeout=20):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if condition():
+                return
+            time.sleep(0.1)
+        self.fail("timed out waiting for %s: %s" % (what, self.events))
+
+    def events_of(self, page, ev):
+        return [e for e in self.events if e.get("page") == page and e.get("ev") == ev]
+
     def clicks(self, page):
         return [e for e in self.events if e.get("page") == page and e.get("ev") == "click"]
 
@@ -113,12 +124,12 @@ class ClickJourney(unittest.TestCase):
         tab_a = a.tool("browser_new_tab", url=self.base + "?page=A")["targetId"]
         tab_b = b.tool("browser_new_tab", url=self.base + "?page=B")["targetId"]  # moves a shared daemon's current tab; must not move A's
         self.assertNotEqual(tab_a, tab_b)
-        for s in (a, b):
-            s.tool("browser_wait_for_load")
-        time.sleep(0.5)
+        self.assertEqual(a.tool("browser_ensure_real_tab")["targetId"], tab_a)  # stock switches to Chrome's first real page
+        self.wait_until(lambda: self.events_of("A", "load") and self.events_of("B", "load"), "both pages to load")
         a.tool("browser_click", x=200, y=140)
         b.tool("browser_click", x=200, y=140)
-        time.sleep(1.0)
+        self.wait_until(lambda: self.clicks("A") and self.clicks("B"), "a click on each page")
+        time.sleep(0.5)  # a stray second click on either page would show up here
         self.assertEqual(len(self.clicks("A")), 1, self.events)
         self.assertEqual(len(self.clicks("B")), 1, self.events)
         for page in ("A", "B"):

@@ -2,7 +2,7 @@
 
 Run it as:  uvx --from "browser-harness[mcp]==0.1.13" python -I server.py   (servers.json.tmpl does).
 
-It starts the stock server and changes two things, both found when several agents shared one Chrome:
+It starts the stock server and changes three things, both found when several agents shared one Chrome:
 
 1. Own tab. The stock server uses one daemon, named "default", for every MCP process on the machine, and the daemon
    keeps ONE current tab. A second agent's browser_new_tab or browser_switch_tab moved every other agent's tab, and
@@ -11,6 +11,7 @@ It starts the stock server and changes two things, both found when several agent
 2. Real clicks on a background tab. Chrome drops mouse and key input to a hidden tab with no error, so
    browser_click answered success and the page never saw it. Focus emulation makes the page visible and focused
    to itself, so input arrives with no tab or window change. It is turned on for the current tab before every tool call.
+3. browser_ensure_real_tab no longer switches tabs (the stock one attaches to the first real page in Chrome); it reports the current tab.
 """
 import atexit
 import os
@@ -28,14 +29,21 @@ _stock_ensure_daemon = mcp_server.ensure_daemon
 
 def ensure_daemon(*args, **kwargs):
     result = _stock_ensure_daemon(*args, **kwargs)
-    try:
+    # A failure here reaches the agent as the tool's error: swallowing it would bring back the silent dropped click.
+    # With a native dialog open the page's thread is frozen, so leave the tab alone until the agent handles the dialog.
+    if not helpers._send({"meta": "pending_dialog"}).get("dialog"):
         helpers.cdp("Emulation.setFocusEmulationEnabled", enabled=True)
-    except Exception:
-        pass  # the tool call itself reports a real browser failure
     return result
 
 
+def ensure_real_tab():
+    """Report the tab this agent is on. The stock tool switches to the first real page in Chrome when the current tab
+    looks internal, and that page can be a signed-in tab that belongs to a person or another agent."""
+    return helpers.current_tab()
+
+
 mcp_server.ensure_daemon = ensure_daemon
+mcp_server.ensure_real_tab = ensure_real_tab
 
 
 def _alive(pid):

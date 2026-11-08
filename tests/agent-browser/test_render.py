@@ -56,6 +56,12 @@ class AgentBrowserRenderTest(unittest.TestCase):
                 else:
                     self.assertNotIn("browser-harness", servers)
 
+    def test_mcp_server_launcher_deploys_on_macos_for_both_profiles(self):
+        for profile in PROFILES:
+            with self.subTest(profile=profile):
+                managed = set(chezmoi(profile, "managed").split())
+                self.assertEqual(".local/share/browser-harness-mcp/server.py" in managed, DARWIN)
+
     def test_launcher_deploys_on_macos_for_both_profiles(self):
         for profile in PROFILES:
             with self.subTest(profile=profile):
