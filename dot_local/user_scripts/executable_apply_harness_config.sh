@@ -259,6 +259,7 @@ render_claude_mcp_commands() {
 import json
 import pathlib
 import re
+import shlex
 import sys
 
 mcp_file = pathlib.Path(sys.argv[1])
@@ -281,6 +282,38 @@ lines = [
     "  exit 0",
     "fi",
     "",
+    "# Claude's registration command skips a name that exists, so a changed canonical entry never reached Claude. Compare the stored user-scope",
+    "# entry with the canonical one: missing -> add; same -> leave it alone (a server's stored sign-in survives); different -> remove, then add.",
+    "stored_state() {",
+    "  python3 - \"$1\" \"$2\" <<'EOF'",
+    "import json, os, sys",
+    "name, desired = sys.argv[1], json.loads(sys.argv[2])",
+    "path = os.path.join(os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~'), '.claude.json')",
+    "try:",
+    "    stored = json.load(open(path)).get('mcpServers', {}).get(name)",
+    "except (OSError, ValueError):",
+    "    stored = None",
+    "def norm(e):",
+    "    return {'type': e.get('type', 'stdio'), 'command': e.get('command'), 'url': e.get('url'), 'args': e.get('args') or [],",
+    "            'env': e.get('env') or {}, 'headers': e.get('headers') or {}}",
+    "sys.exit(10 if stored is None else (0 if norm(stored) == norm(desired) else 11))",
+    "EOF",
+    "}",
+    "",
+    "sync_server() {",
+    "  name=$1; desired=$2; shift 2",
+    "  state=0",
+    "  stored_state \"$name\" \"$desired\" || state=$?",
+    "  case $state in",
+    "    0) log \"$name: unchanged\" ;;",
+    "    11)",
+    "      log \"$name: changed in canonical, replacing\"",
+    "      \"${CLAUDE_BIN:-claude}\" mcp remove -s user \"$name\" >/dev/null 2>&1 || true",
+    "      \"$@\" || true ;;",
+    "    *) \"$@\" || true ;;",
+    "  esac",
+    "}",
+    "",
 ]
 
 for name, cfg in servers.items():
@@ -290,10 +323,10 @@ for name, cfg in servers.items():
         # The server's own environment is stored with -e after the name (a prefix `env K=V claude ...` would only
         # reach the registering process).
         env_opts = "".join(f" -e {json.dumps(key + '=' + str(value))}" for key, value in cfg.get("env", {}).items())
+        desired = {"type": "stdio", "command": cfg["command"], "args": cfg.get("args", []), "env": cfg.get("env", {})}
         lines.append(
-            f"\"${{CLAUDE_BIN:-claude}}\" mcp add -s user {json.dumps(name)}{env_opts} -- {cmd}"
+            f"sync_server {json.dumps(name)} {shlex.quote(json.dumps(desired))} \"${{CLAUDE_BIN:-claude}}\" mcp add -s user {json.dumps(name)}{env_opts} -- {cmd}"
             + (f" {args}" if args else "")
-            + " || true"
         )
     elif cfg.get("type") == "http" or "url" in cfg:
         parts = [f"\"${{CLAUDE_BIN:-claude}}\" mcp add -s user --transport http {json.dumps(name)} {json.dumps(cfg['url'])}"]
@@ -308,7 +341,8 @@ for name, cfg in servers.items():
                 if refs:
                     required_env_names.extend(refs)
             parts.append(f"--header {json.dumps(f'{header_name}: {header_value}')}")
-        command = " ".join(parts) + " || true"
+        desired = {"type": "http", "url": cfg["url"], "headers": {k: v for k, v in cfg.get("headers", {}).items() if isinstance(v, str)}}
+        command = f"sync_server {json.dumps(name)} {shlex.quote(json.dumps(desired))} " + " ".join(parts)
         if required_env_names:
             condition = " || ".join([f"[ -z \"${{{env_name}:-}}\" ]" for env_name in required_env_names])
             missing_names = ", ".join(required_env_names)
