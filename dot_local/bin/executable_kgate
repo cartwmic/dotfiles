@@ -64,7 +64,10 @@ def _default_host():
 HOST = os.environ.get("KGATE_SSH") or _default_host()
 KEY = os.environ.get("KGATE_SSH_KEY", os.path.expanduser("~/.ssh/homelab"))
 # cartwmic-g14-wsl is schedulable again (2026-11-06). Its clock steps were fixed by homelab#101 (9f6ef66, 2026-11-05). It now follows the Windows clock, which slews up to 8% for ~15 s about every 9 h, and it reads up to ~2 s ahead of other nodes.
-EXCLUDED_NODES = ("ubuntu-server-k8s-agent-4", "ubuntu-server-k8s-master-1", "mac-mini-worker")
+# ubuntu-server-k8s-agent-4 is the GPU node (frigate and the GPU services run there) and a gate bursts to 8 to 16 cores,
+# so it takes kgate jobs only as overflow: eligible, but it scores lowest. 2026-11-08, Michael, ask 742.
+NEVER_NODES = ("ubuntu-server-k8s-master-1", "mac-mini-worker")
+OVERFLOW_NODES = ("ubuntu-server-k8s-agent-4",)
 # image registries that need a pull credential: host -> (user, 1Password reference of the token)
 PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/password")}
 MAX_RUN_S = 8 * 3600  # the pod ends itself: a pod whose client died must not hold its memory for ever
@@ -208,12 +211,14 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
     if secret_env:
         container["envFrom"] = [{"secretRef": {"name": job + "-env"}}]
     match = [{"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]},
-             {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": list(EXCLUDED_NODES)}]
+             {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": list(NEVER_NODES)}]
     if node:
         match = [match[0], {"key": "kubernetes.io/hostname", "operator": "In", "values": [node]}]
     pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": MAX_RUN_S,
            "affinity": {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
-               "nodeSelectorTerms": [{"matchExpressions": match}]}}},
+               "nodeSelectorTerms": [{"matchExpressions": match}]},
+               "preferredDuringSchedulingIgnoredDuringExecution": [{"weight": 100, "preference": {"matchExpressions": [
+                   {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": list(OVERFLOW_NODES)}]}}]}},
            "tolerations": [{"key": "homelab.cartwmic.com/optional", "operator": "Exists", "effect": "NoSchedule"}],
            "volumes": [{"name": "cache", "hostPath": {"path": "/var/lib/kgate/cache", "type": "DirectoryOrCreate"}},
                        {"name": "out", "emptyDir": {}}],
@@ -545,8 +550,10 @@ class Job:
         check_settings(image, cpu, mem, mem_limit)
         if prof["services"]:
             raise Unavailable("the gate needs %s, which kgate cannot provide; this gate cannot run on kgate" % ", ".join(prof["services"]))
-        if o.node and o.node in EXCLUDED_NODES:
+        if o.node in NEVER_NODES:
             raise Unavailable("node %s is excluded from kgate" % o.node)
+        if o.node in OVERFLOW_NODES:
+            raise Unavailable("node %s only takes kgate overflow; it cannot be pinned" % o.node)
         self.rec.update(image=image, cpu=cpu, mem=mem, mem_limit=mem_limit)
         return image, cpu, mem, mem_limit, prof
 

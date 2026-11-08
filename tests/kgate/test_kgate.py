@@ -163,12 +163,12 @@ class PodSpec(unittest.TestCase):
         self.assertEqual(c["resources"], {"requests": {"cpu": "3", "memory": "256Mi"}, "limits": {"memory": "512Mi"}})
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
-        # sha256 of json.dumps(manifests), rendered at dotfiles 4ef32ef1 (before memory_limit existed)
+        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the agent-4 overflow preference (the only change from the 4ef32ef1 render)
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "c9e27b26261b0fee7224c60592d8c52b7cb5b49394f66a8c8254b53a5c80c4cd"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "c0a96c550ba45917cc2a732409384936977b8a5a42567db9891af4419efa6dd7"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
-             "14691f0e800910c10c79eb70fe83e38198181236b2944f66e739558bedb4672a"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "193128c5ec1c80b8fa10ee210d67766833c44f2de3b6072388606b5503f3d2b5"),
+             "f9f91a171d9cbcc3cff44901ebd23a5506fff9db5cb8880153f0fe3f7c11d6b7"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "dc281cecdc8b40c2a06e9b5b67d792874a73998a59dad9297abfa8e271608d4a"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -177,8 +177,14 @@ class PodSpec(unittest.TestCase):
         pod, _ = self.pod()
         exprs = pod["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"]
         notin = next(e for e in exprs if e["operator"] == "NotIn")
-        self.assertEqual(set(notin["values"]), {"ubuntu-server-k8s-agent-4", "ubuntu-server-k8s-master-1", "mac-mini-worker"})
+        self.assertEqual(notin["values"], ["ubuntu-server-k8s-master-1", "mac-mini-worker"])
         self.assertIn({"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]}, exprs)
+
+    def test_gpu_node_is_overflow_only(self):
+        pod, _ = self.pod()
+        pref = pod["spec"]["affinity"]["nodeAffinity"]["preferredDuringSchedulingIgnoredDuringExecution"]
+        self.assertEqual(pref, [{"weight": 100, "preference": {"matchExpressions": [
+            {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-agent-4"]}]}}])
 
     def test_pinned_node(self):
         pod, _ = self.pod(node="ubuntu-server-k8s-agent-1")
@@ -597,8 +603,13 @@ class Black(unittest.TestCase):
         self.assertEqual(done.returncode, 69)
         self.assertIn("pinned by digest", done.stdout)
 
-    def test_excluded_node_is_refused(self):
+    def test_overflow_node_pin_is_refused(self):
         done = self.kgate("--node", "ubuntu-server-k8s-agent-4", "--", "true")
+        self.assertEqual(done.returncode, 69)
+        self.assertIn("overflow", done.stdout)
+
+    def test_never_node_is_refused(self):
+        done = self.kgate("--node", "mac-mini-worker", "--", "true")
         self.assertEqual(done.returncode, 69)
         self.assertIn("excluded", done.stdout)
 
