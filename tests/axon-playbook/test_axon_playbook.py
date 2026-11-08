@@ -44,8 +44,6 @@ def render(template, data):
     return r.stdout
 
 
-@unittest.skipUnless(shutil.which("chezmoi"), "chezmoi not installed")
-
 def without_guard(settings):
     """The settings without the pattern-kill guard hook, which every render adds (tests/agent-kill-guard covers it)."""
     pre = [g for g in settings.get("hooks", {}).get("PreToolUse", [])
@@ -60,6 +58,7 @@ def without_guard(settings):
     return settings
 
 
+@unittest.skipUnless(shutil.which("chezmoi"), "chezmoi not installed")
 class ExternalTest(unittest.TestCase):
     def test_work_with_repo_renders_the_git_repo_external(self):
         ext = tomllib.loads(render(EXTERNAL, {"profile": WORK, "axonPlaybook": {"repo": REPO_URL}}))[TARGET]

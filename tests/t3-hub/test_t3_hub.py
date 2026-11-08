@@ -6,6 +6,7 @@ chezmoi and jq but no 1Password and no network to the hub. settings.live-shape.j
 """
 import difflib
 import json
+import re
 import stat
 import os
 import subprocess
@@ -25,6 +26,13 @@ CLAUDE_FILE = ".config/t3-hub-claude-settings.json"
 TARGETS = (".t3/userdata/settings.json", CLAUDE_FILE, ".codex/config.toml")
 CODEX_VERSION = "9.9.9"
 WORKTREES = "/Volumes/Workshop/macbook/t3-worktrees"
+
+
+
+def without_codex_guard(text):
+    """The Codex config without the pattern-kill guard block, which every render adds (tests/agent-kill-guard covers it)."""
+    text, dropped = re.subn(r"\n*# chezmoi:agent-guard:begin\n.*?# chezmoi:agent-guard:end\n?", "", text, flags=re.DOTALL)
+    return text + "\n" if dropped and text and not text.endswith("\n") else text
 
 
 class Env:
@@ -220,7 +228,7 @@ class ApplyPathTest(unittest.TestCase):
             helper = json.loads((env.home / CLAUDE_FILE).read_text())
             self.assertEqual(list(helper), ["apiKeyHelper"])
             self.assertEqual(helper["apiKeyHelper"], "%s/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-claude-code'" % env.home)
-            toml = tomllib.loads((env.home / ".codex/config.toml").read_text())
+            toml = tomllib.loads(without_codex_guard((env.home / ".codex/config.toml").read_text()))
             self.assertEqual(toml["model"], "gpt-6")
             self.assertNotIn("model_provider", toml)
             self.assertEqual(toml["model_providers"]["cliproxy"]["wire_api"], "responses")
@@ -243,7 +251,7 @@ class ApplyPathTest(unittest.TestCase):
             env.set_enabled(False)
             env.chezmoi("apply", *self.targets(env))
             self.assertEqual((env.home / ".t3/userdata/settings.json").read_text(), FIXTURE)
-            self.assertEqual((env.home / ".codex/config.toml").read_text(), CODEX_BASE)
+            self.assertEqual(without_codex_guard((env.home / ".codex/config.toml").read_text()), CODEX_BASE)
             self.assertFalse((env.home / CLAUDE_FILE).exists())
             # Off is stable, and back on restores all three.
             env.chezmoi("apply", *self.targets(env))
@@ -311,13 +319,13 @@ class CodexBlockTest(unittest.TestCase):
     @on_mac
     def test_switch_off_drops_the_block(self):
         script = self.render("personal", enabled=False)
-        self.assertEqual(run_script(script, 'a = 1\n'), 'a = 1\n')
-        self.assertEqual(run_script(script, self.BLOCK), 'a = 1\n')
+        self.assertEqual(without_codex_guard(run_script(script, 'a = 1\n')), 'a = 1\n')
+        self.assertEqual(without_codex_guard(run_script(script, self.BLOCK)), 'a = 1\n')
 
     def test_other_profiles_add_nothing_and_drop_a_stale_block(self):
         script = self.render("axon-work-computer")
-        self.assertEqual(run_script(script, 'a = 1\n'), 'a = 1\n')
-        self.assertEqual(run_script(script, self.BLOCK), 'a = 1\n')
+        self.assertEqual(without_codex_guard(run_script(script, 'a = 1\n')), 'a = 1\n')
+        self.assertEqual(without_codex_guard(run_script(script, self.BLOCK)), 'a = 1\n')
 
     def test_caveman_strip_still_works(self):
         out = run_script(self.render("axon-work-computer"), '# chezmoi:caveman-style:begin\nx\n# chezmoi:caveman-style:end\nb = 2\n')

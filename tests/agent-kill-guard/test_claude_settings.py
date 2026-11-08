@@ -1,4 +1,4 @@
-"""dot_claude/modify_settings.json.tmpl installs the pattern-kill guard (a PreToolUse hook on Bash) on both desktop profiles,
+"""dot_claude/modify_settings.json.tmpl installs the pattern-kill guard (a PreToolUse hook on Bash and Monitor) on both desktop profiles,
 replaces a stale copy of it, is idempotent, and leaves every other hook alone. Real chezmoi and jq, no real HOME."""
 import json
 import os
@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS = ROOT / "dot_claude/modify_settings.json.tmpl"
-COMMAND = 'g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py"; [ -f "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0'
+COMMAND = 'g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py"; [ -r "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0'
 MARK = "refuse_pattern_kill.py"
 USER_HOOK = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo user"}]}
 
@@ -51,7 +51,7 @@ class GuardSettingsTest(unittest.TestCase):
     def test_both_profiles_get_exactly_one_guard_on_bash(self):
         for profile in self.scripts:
             with self.subTest(profile=profile):
-                self.assertEqual(guards(self.modify(profile, {})), [("Bash", COMMAND)])
+                self.assertEqual(guards(self.modify(profile, {})), [("Bash|Monitor", COMMAND)])
 
     def test_user_hooks_and_other_keys_are_kept_and_it_is_idempotent(self):
         for profile in self.scripts:
@@ -61,7 +61,7 @@ class GuardSettingsTest(unittest.TestCase):
                 self.assertEqual(once["theme"], "dark")
                 self.assertIn(USER_HOOK, once["hooks"]["PreToolUse"])
                 self.assertEqual(once["hooks"]["Stop"], start["hooks"]["Stop"])
-                self.assertEqual(guards(once), [("Bash", COMMAND)])
+                self.assertEqual(guards(once), [("Bash|Monitor", COMMAND)])
                 self.assertEqual(self.modify(profile, once), once)
 
     def test_a_stale_copy_is_replaced_not_duplicated(self):
@@ -71,7 +71,7 @@ class GuardSettingsTest(unittest.TestCase):
         for profile in self.scripts:
             with self.subTest(profile=profile):
                 out = self.modify(profile, stale)
-                self.assertEqual(guards(out), [("Bash", COMMAND)])
+                self.assertEqual(guards(out), [("Bash|Monitor", COMMAND)])
                 self.assertIn({"matcher": "Bash", "hooks": [{"type": "command", "command": "echo keep-me"}]}, out["hooks"]["PreToolUse"])
 
     def test_the_command_blocks_a_pattern_kill_and_never_blocks_when_the_script_is_missing(self):

@@ -27,9 +27,16 @@ MESSAGE = (
     "For a kgate job use `kgate cancel <id>`."
 )
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "ash"}
-# After these the real command follows somewhere in the words; look at every word, since their options and arguments vary.
-WRAPPERS = {"env", "sudo", "doas", "command", "exec", "nohup", "nice", "ionice", "time", "timeout", "stdbuf", "setsid", "caffeinate",
-            "builtin", "xargs", "unbuffer", "chronic", "watch", "script", "arch", "run-and-wake", "heavy-gate"}
+# Wrappers run the command that follows them. Value: the options that take an argument (skipped with it) and how many leading
+# plain arguments precede the command (timeout DURATION, nice -n N is an option).
+WRAPPERS = {
+    "env": ({"-u", "-C", "-S", "--unset", "--chdir"}, 0), "sudo": ({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-T", "-U"}, 0),
+    "doas": ({"-u", "-C"}, 0), "command": (set(), 0), "exec": ({"-a"}, 0), "nohup": (set(), 0), "nice": ({"-n"}, 0),
+    "ionice": ({"-c", "-n", "-p"}, 0), "time": ({"-f", "-o"}, 0), "timeout": ({"-s", "-k", "--signal", "--kill-after"}, 1),
+    "stdbuf": ({"-i", "-o", "-e"}, 0), "setsid": (set(), 0), "caffeinate": ({"-t", "-w"}, 0), "builtin": (set(), 0),
+    "xargs": ({"-n", "-I", "-P", "-L", "-d", "-s", "-E", "-a", "-J", "-R", "-S"}, 0), "unbuffer": (set(), 0), "chronic": (set(), 0),
+    "watch": ({"-n", "-d"}, 0), "arch": ({"-arch"}, 0), "run-and-wake": (set(), 0), "heavy-gate": ({"--wait"}, 0),
+}
 SKIP = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "case", "esac", "fi", "done", "for", "function"}
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
 REDIRECT = re.compile(r"^[0-9]*[<>]")
@@ -243,17 +250,15 @@ def find_refused(text, depth=0):
         if name == "kgate":
             continue
         if name in WRAPPERS:
-            for w in rest:
-                if _base(w) in REFUSED:
-                    return _base(w)
-            hit = _shell_text(rest, depth)
+            hit = _wrapped(name, rest, depth)
             if hit:
                 return hit
-        if name == "find" or name == "fd":
-            if any(w in ("-exec", "-execdir", "-ok", "-okdir", "-x", "--exec") for w in rest):
-                for w in rest:
-                    if _base(w) in REFUSED:
-                        return _base(w)
+        if name in ("find", "fd"):
+            for k, w in enumerate(rest):
+                if w in ("-exec", "-execdir", "-ok", "-okdir", "-x", "--exec") and k + 1 < len(rest):
+                    hit = _wrapped("command", rest[k + 1:], depth)
+                    if hit:
+                        return hit
         if name in SHELLS:
             hit = _shell_text(words, depth)
             if hit:
@@ -267,6 +272,41 @@ def find_refused(text, depth=0):
             if hit:
                 return hit
     return None
+
+
+def _wrapped(wrapper, rest, depth):
+    """Look at the command a wrapper runs: skip its options (and their arguments) and its leading plain arguments, then test that word."""
+    takes_arg, plain = WRAPPERS[wrapper]
+    i = 0
+    if wrapper == "command" and rest and rest[0] in ("-v", "-V"):
+        return None  # `command -v pkill` only looks the name up
+    while i < len(rest):
+        w = rest[i]
+        if w == "--":
+            i += 1
+            break
+        if w in takes_arg:
+            i += 2
+        elif w.startswith("-") and len(w) > 1:
+            i += 1
+        elif ASSIGN.match(w):
+            i += 1
+        elif plain:
+            plain -= 1
+            i += 1
+        else:
+            break
+    command = rest[i:]
+    if not command:
+        return None
+    if _base(command[0]) in REFUSED:
+        return _base(command[0])
+    # The wrapped command can itself be a shell, an eval or another wrapper: run the whole check on it.
+    return find_refused(" ".join(_quote(w) for w in command), depth + 1)
+
+
+def _quote(word):
+    return "'" + word.replace("'", "'\\''") + "'"
 
 
 def _shell_text(words, depth):

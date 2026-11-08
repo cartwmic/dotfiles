@@ -135,20 +135,25 @@ reviewer's `pkill -f "sleep 30" -P 1`). Decision: Michael, ask 744, "Add the gua
 |---|---|---|---|
 | Claude Code | PreToolUse hook on Bash, running the classifier | `dot_claude/modify_settings.json.tmpl` (the `ensure_guard` step) | `~/.claude/settings.json` |
 | Pi | extension that blocks the `bash` tool call, running the same classifier | `dot_pi/private_agent/extensions/refuse-pattern-kill/` | `~/.pi/agent/extensions/refuse-pattern-kill/` |
-| Codex | exec-policy rules, enforced by Codex itself (a hook would need a persisted trust step per hook) | `dot_codex/rules/agent-guard.rules` | `~/.codex/rules/agent-guard.rules` |
+| Codex | PreToolUse hook on its Bash tool, running the same classifier; Codex runs a hook only once it is trusted, so `codex_trust_hooks.py` trusts exactly this hook through Codex's own API at apply time. A rules file is the second layer for the time the hook is untrusted | `dot_codex/modify_private_config.toml.tmpl` (the `chezmoi:agent-guard` block), `dot_local/user_scripts/executable_codex_trust_hooks.py`, `dot_codex/rules/agent-guard.rules` | `~/.codex/config.toml`, `~/.local/user_scripts/codex_trust_hooks.py`, `~/.codex/rules/agent-guard.rules` |
 | shared classifier | command-position parser: sees through quotes, `;`, `&&`, `\|`, `$( )`, `sh -c`, `eval`, wrappers, `find -exec` | `dot_local/share/agent-harness/hooks/refuse_pattern_kill.py` | `~/.local/share/agent-harness/hooks/` |
 
 Both desktop profiles, macOS and Linux; not Termux. Michael's own terminal, and Pi's own `!` command, are not agent tool calls and are not touched.
 It fails open: a missing script, a missing `python3` or an unreadable input allows the command, so a fault in the guard never stops an agent from working.
 A new session picks it up: start a new Claude session, restart Pi, and start a new Codex session (the T3 app-server reads `~/.codex` when it starts a thread).
 
+Claude's hook also covers the Monitor tool (it runs shell commands). Codex's rules alone cannot see a redirect or `&` in the script
+(`pkill -f x 2>/dev/null; true` runs; only `||`, `&&`, `;` and `|` of plain words are checked, which a real Codex session showed), which is why the hook is the
+main Codex mechanism and the rules the backup. If a Codex update changes how hooks are hashed, the hook shows as `modified` and is skipped until trusted again:
+run `~/.local/user_scripts/codex_trust_hooks.py` (it trusts only this hook), or `--check` to see the state.
+
 What is not covered (each is named in the code or the tests):
 - the word as an argument is fine (`grep pkill x`, a commit message that mentions it): only the command position counts;
-- a command built at run time (`$cmd`), a script file, `python -c`, and `kill $(pgrep -f x)` (a pgrep-fed kill is not a `pkill`);
-- Codex's rules cannot see inside `sh -c '...'`, nor a wrapper with options first (`sudo -u root pkill x`);
+- a command built at run time (`$cmd`, `$'pkill'`), a script file, `python -c`, `echo 'pkill x' | sh` and `sh <<< 'pkill x'`, an unquoted heredoc whose body is `$(pkill x)`, `fish -c`, osascript, and `kill $(pgrep -f x)` (a pgrep-fed kill is not a `pkill`);
+- while the Codex hook is untrusted, the rules file cannot see inside `sh -c '...'`, a redirect or `&`, nor a wrapper with options first (`sudo -u root pkill x`);
 - Pi foreground `pi-subagents` children are launched with extension discovery off, so they do not load the extension.
 
-Tests: `tests/agent-kill-guard` (classifier, Claude settings on both profiles, Codex rules with Codex's own `execpolicy check`, deploy per profile) and
+Tests: `tests/agent-kill-guard` (classifier, Claude settings on both profiles, the Codex hook block and its trust step against a real `codex app-server`, Codex rules with Codex's own `execpolicy check`, deploy per profile) and
 `node --test dot_pi/private_agent/extensions/refuse-pattern-kill/index.test.ts`. Proof in a real session of each harness: the PR description.
 
 ## Agent browser

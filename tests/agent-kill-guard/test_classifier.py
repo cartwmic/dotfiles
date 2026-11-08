@@ -53,6 +53,20 @@ REFUSED = [
     "pkill -f \"sleep 30\" -P 1 2>/dev/null; true",
     "run-and-wake -- pkill x",
     "1>/dev/null pkill x",
+    "sudo -u root pkill x",
+    "env FOO=1 pkill x",
+    "/usr/bin/env pkill x",
+    "timeout -s KILL 5 pkill x",
+    "xargs -n 1 pkill",
+    "nice -n 10 killall x",
+    "sudo -E bash -c 'pkill x'",
+    "bash -x -c 'pkill x'",
+    "sh -euc 'pkill x'",
+    "find . -name x -exec killall {} +",
+    "pkill -f x 2>/dev/null; true",
+    "pkill -f x || true",
+    "pkill -f \"sleep 30\" -P 1 2>/dev/null; true",
+    "time -p pkill x",
 ]
 
 ALLOWED = [
@@ -81,6 +95,14 @@ ALLOWED = [
     "kgate -- sh -c 'pkill -f x'",
     "run-and-wake -- kgate -- pkill x",
     "echo \"a;pkill b\"",
+    "timeout 30 rg pkill .",
+    "command -v pkill",
+    "command -V killall",
+    "find . -exec grep -l pkill {} +",
+    "sudo -u root ls pkill-notes",
+    "xargs -n 1 echo pkill",
+    "env FOO=pkill echo hi",
+    "nice -n 5 grep killall file",
     "",
 ]
 
