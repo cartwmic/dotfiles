@@ -93,6 +93,8 @@ jobs:
         run: python3 -m unittest discover -s tests/codex-merge -v
       - name: Agent browser launcher and render (fake Chrome, real chezmoi)
         run: python3 -m unittest discover -s tests/agent-browser -v
+      - name: dotfiles-update (non-interactive update with a conflict policy; real chezmoi and git, scratch repository and HOME)
+        run: python3 -m unittest discover -s tests/dotfiles-update -v
       - name: Pattern-kill guard (classifier, Claude settings entry on both profiles, Codex rules deploy; real chezmoi and jq; codex check skips without the binary)
         run: python3 -m unittest discover -s tests/agent-kill-guard -v
       - name: Pi settings modify script (merge, seed, union; real chezmoi and jq)

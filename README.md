@@ -631,6 +631,54 @@ chezmoi apply
 `.tmpl` in this tree instead. `chezmoi diff` shows live destination on the
 **a/** side and source on **b/** (inverted from a usual source→target diff).
 
+## Updating a machine: `dotfiles-update`
+
+`dotfiles-update` (deployed to `~/.local/bin` on both desktop profiles) is the one command that brings a machine up to date, with no TTY.
+Plain `chezmoi update` stops with exit 1 at the first file that was edited on the machine and that the source also wants to change
+("has changed since chezmoi last wrote it?", then "could not open a new TTY"), and applies nothing past it. This command instead pulls the
+source and decides each pending path from chezmoi's own record of what it last wrote (`chezmoi state dump`), never from a status code
+(`chezmoi status` shows a blank first column for a path chezmoi never recorded even when a different file is already there, and shows
+only the directory itself for a directory it would remove). **It applies a path only when that loses nothing, and holds everything else:**
+
+| The pending path | What `dotfiles-update` does |
+|---|---|
+| does not exist here (a new file) | applies it |
+| exactly what chezmoi last wrote (same type, bytes and permissions) | applies it |
+| a directory that stays a directory | applies it as itself, never its contents |
+| a directory the source drops, every file in it unedited chezmoi work | applies it (removes it) |
+| edited here, or a file chezmoi never wrote is in the way, or you deleted it here | HOLDS it, with the reason and what an apply would add and remove |
+| a directory the source drops that holds files chezmoi did not write (even a `.DS_Store`), a different case spelling, a symlinked parent | HOLDS it |
+| a new file inside a directory that is held (for example one you deleted) | waits, listed as such; it is applied right after that directory when you `--take-source` it |
+| a path the source REMOVES (`.chezmoiremove`, `remove_`, an `exact_` directory's extras) that is edited here or was never written by chezmoi | HOLDS it ("the source removes it, apply would delete it") |
+| a git-repo external (`.chezmoiexternal.toml`, `type = "git-repo"`) | refreshed by name with the `git pull` its definition sets (this repo's uses `--ff-only`) when its `refreshPeriod` is due; `chezmoi status` never lists one. A failed pull prints git's last lines and exits 1 |
+| `--take-source` on a path inside a held directory whose directory is not taken in the same run | stays held, and says so (its parent would be missing) |
+| `run_` scripts | run only when nothing is held (a script may depend on a held-back path); a script that fails has the end of its output printed and recorded |
+
+What it prints, every time:
+- `source at <sha>, was <sha>`: the source checkout's commit after the pull and before it (`(no new commits)` when they are equal).
+- Each `run_` script that ran, with its exit code: `script 65_agent_kit_install.sh   exit 0   (its output says: ...)`. The note shows the first
+  output lines that say warn, error or fail (any case, so a harmless "0 failed" is flagged too), because a script can exit 0 while failing inside (the agent-kit install did). A script that exits
+  non-zero stops the run: it is named with its code and `dotfiles-update` exits 1. (`chezmoi apply --verbose` shows neither. Each due script is run by chezmoi on its own, `chezmoi apply --include=scripts PATH`, into its own file, so chezmoi keeps its normal run record and nothing a script prints is ever parsed; the exit code is read from chezmoi's own last line.)
+- `nothing to update.` when no file or changed script is pending. `chezmoi status` still lists every `run_after_` script after every apply (they run on
+  every apply by design, for example `75_instances_reconcile.sh`); that is not a pending change, so it says `clean: N always-run script(s)` and why,
+  and still runs them as `chezmoi apply` would.
+- A record of every real run (not `--dry-run`): one JSON line in `~/.local/state/dotfiles-update/log.jsonl` with the source commits, what was applied, taken (and
+  where your copy was saved), kept, held (with the reason), waiting, the scripts with their exit codes, and the exit code.
+
+Exit 0: everything applied. Exit 3: something is held and needs a decision (the list is printed). Exit 1: the pull, a read or an apply failed.
+Decide each held path with a flag, no prompts, then run it again: `--take-source PATH` saves your copy under
+`~/.local/state/dotfiles-update/<UTC time>/` and applies the source version of that path; `--keep-local PATH` leaves it as it is for now
+(it is listed again next run). There is no "take everything" flag. `--dry-run` reports only; `--no-pull` skips the pull.
+A machine whose files chezmoi never recorded (a fresh state, or paths applied before chezmoi tracked them) holds every pending path that already
+exists, because nothing proves it is chezmoi's own; settle each once. A `modify_` target that an app has rewritten (Claude or Codex settings) is held on a source
+change for the same reason, until you take or keep it.
+First install on a machine that has not got it yet (for example the work Mac, where `chezmoi update` already fails): `chezmoi update --apply=false`
+then `chezmoi apply ~/.local/bin/dotfiles-update`, and from then on `dotfiles-update`.
+Like `chezmoi apply`, it also deletes unmanaged files inside an `exact_` directory only when every one of them is unedited chezmoi work, and a `run_` script's output is shown when it fails (its last 15 lines).
+Known limits: when a script template does not render, `chezmoi status` fails, so nothing is applied and it exits 1 with chezmoi's error (plain `chezmoi apply` would apply the files and run the earlier scripts first). `run_before_` scripts run after the files and the `run_after_` scripts, not before the files as plain `chezmoi apply` orders them (none exist in this repo). And when the source turns a plain file into a directory, `chezmoi status` itself fails (`.foo/bar: not a directory`), so `dotfiles-update` prints that error, applies nothing and exits 1. Look at the path with `chezmoi diff PATH`, then `chezmoi apply PATH` it yourself.
+To keep a local edit for good, adopt it: `chezmoi re-add PATH` (plain files) or change the template.
+Tests: `tests/dotfiles-update` (real chezmoi, scratch repository and HOME; the red control is plain `chezmoi apply` failing in the same state).
+
 ## Docs map
 
 Start here for machine setup and user workflows. For work in this source tree,

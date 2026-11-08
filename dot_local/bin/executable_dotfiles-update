@@ -1,0 +1,531 @@
+#!/usr/bin/env python3
+"""dotfiles-update: update this machine from the dotfiles source in one command, with no TTY and a stated policy for local content.
+
+    dotfiles-update [--dry-run] [--no-pull] [--keep-local PATH]... [--take-source PATH]...
+
+`chezmoi update` stops with exit 1 when a file was edited on the machine and the source also wants it ("has changed since chezmoi last
+wrote it?", then "could not open a new TTY"), and it stops there, leaving every other pending entry unapplied. This command instead:
+
+  1. pulls the source (`chezmoi update --apply=false`; skipped with --no-pull or --dry-run),
+  2. lists the pending paths from `chezmoi status` and decides each from chezmoi's own record of what it last wrote (`chezmoi state dump`),
+     never from a status code: a path is applied only when that loses nothing, that is, when
+       - it does not exist here (a new file), or
+       - it is exactly what chezmoi last wrote (same type, same bytes, same permissions), or
+       - it is a directory that stays a directory (applied as itself, never its contents), or
+       - it is a directory the source drops, and every file in it is unedited work of chezmoi.
+     Everything else is HELD, with the reason: edited here, a file chezmoi never wrote is in the way, you deleted it here, a directory
+     holds files chezmoi did not write, its spelling differs in case, a parent is a symlink.
+  3. applies the safe paths one non-recursive apply, then the run_ scripts, but only when nothing is held (a script may depend on a file
+     that was held back),
+  4. prints what it did and exits 0 (all applied), 3 (something is held and needs your decision, named below) or 1 (a pull, a read or an
+     apply failed).
+
+Decide each held path per path, no prompts:
+    --take-source PATH   save your copy under ~/.local/state/dotfiles-update/<UTC time>/, then apply the source version of that path
+    --keep-local PATH    leave it as it is; this run no longer holds it back (it is listed again next run until it is taken or adopted)
+PATH may be absolute, relative to $HOME, or start with ~. There is no "take everything" flag on purpose.
+To adopt a local edit into the source instead, use `chezmoi re-add PATH` (plain files) or edit the template.
+
+A machine whose files chezmoi never recorded (a fresh state, or paths applied before chezmoi tracked them) holds every pending path that
+already exists there, because nothing proves the content is chezmoi's own; settle each once with --take-source or --keep-local.
+
+Works the same on both desktop profiles. Tests: tests/dotfiles-update. Environment: DOTFILES_UPDATE_CHEZMOI_ARGS adds global chezmoi flags
+(used by the tests for a scratch source and destination).
+"""
+import argparse
+import datetime
+import difflib
+import hashlib
+import json
+import os
+import re
+import shlex
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+
+EXIT_CONFLICT = 3
+
+
+def chezmoi_cmd(*args):
+    return ["chezmoi", "--no-tty", *shlex.split(os.environ.get("DOTFILES_UPDATE_CHEZMOI_ARGS", "")), *args]
+
+
+def chezmoi(*args, check=False, capture=True, merge=False):
+    cmd = chezmoi_cmd(*args)
+    if merge:  # one stream, so a script's own output stays in order with chezmoi's log lines
+        result = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    else:
+        result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=capture, text=True, errors="replace")
+    if check and result.returncode != 0:
+        raise RuntimeError("%s failed (exit %d): %s" % (" ".join(cmd[:4]), result.returncode, (result.stderr or result.stdout).strip()))
+    return result
+
+
+def destination():
+    return chezmoi("execute-template", "{{ .chezmoi.destDir }}", check=True).stdout.strip() or os.path.expanduser("~")
+
+
+def source_head():
+    """The first 12 characters of the source checkout's HEAD commit (E19), or None when the source is not a git checkout."""
+    try:
+        source = chezmoi("source-path", check=True).stdout.strip()
+        head = subprocess.run(["git", "-C", source, "rev-parse", "--short=12", "HEAD"], stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    except (RuntimeError, OSError):
+        return None
+    return head.stdout.strip() if head.returncode == 0 and head.stdout.strip() else None
+
+
+def always_runs(path):
+    """True for a run_after_ or run_before_ script (not run_onchange_ or run_once_): chezmoi runs it on every apply, so `chezmoi status` lists it
+    after every apply (E22). Looked up by the script's source file name."""
+    result = chezmoi("source-path", path)
+    name = os.path.basename(result.stdout.strip()) if result.returncode == 0 else ""
+    return name.startswith(("run_after_", "run_before_"))
+
+
+FLAG_WORDS = re.compile(rb"warn|error|fail|\berr\b", re.IGNORECASE)
+TAIL = 15  # lines of a failing script's output that are shown and recorded
+
+
+def still_due(path):
+    """Whether chezmoi still lists this script as due (an earlier script can change that), asked just before it runs."""
+    listed = chezmoi("status", "--include=scripts", "--path-style", "absolute", path)
+    return listed.returncode == 0 and any(line.startswith(" R ") and line[3:] == path for line in listed.stdout.splitlines())
+
+
+def run_script(name, path):
+    """Run ONE script through chezmoi (`chezmoi apply --include=scripts PATH`, so chezmoi keeps its own run record) with the script's stdout and stderr and
+    chezmoi's own message going to one private file. Nothing the script prints is ever parsed: its output is told apart from chezmoi's by the process, not by
+    reading it. The exit code is the only thing read, from chezmoi's last line `chezmoi: NAME: exit status N`, written after the script has gone, so it is the
+    last bytes of the file (a script that printed such a line earlier is not mistaken for it: the LAST one counts). Returns (name, exit or None, flagged, tail).
+    The first two lines with warn/error/fail are the flagged ones; the tail is the last TAIL lines. Bytes, decoded with errors replaced (round 5 f3, round 6 f1,
+    round 7 f1: the earlier design parsed chezmoi's --debug log, which has the script's output mixed into it)."""
+    with tempfile.TemporaryFile() as out:
+        code = subprocess.run(chezmoi_cmd("apply", "--force", "--include=scripts", path), stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT).returncode
+        size = out.seek(0, 2)
+        exit_code = 0
+        if code:
+            exit_code, mark = None, ("chezmoi: %s: " % name).encode()
+            out.seek(max(0, size - 4096))
+            tail = out.read()
+            at = tail.rfind(mark)
+            found = re.fullmatch(rb"(?:exit status (\d+)|[^\n]*)\n?", tail[at + len(mark):]) if at >= 0 else None
+            if found:
+                exit_code = int(found.group(1)) if found.group(1) else None
+                if exit_code == 0:  # chezmoi failed, so a script that says it exited 0 did not succeed: never report success
+                    exit_code = None
+                size -= len(tail) - at  # what is left is the script's own output
+                out.truncate(size)
+        out.seek(0)
+        flagged = []
+        for chunk in iter(lambda: out.readline(65536), b""):  # bounded memory, whatever the line length
+            if FLAG_WORDS.search(chunk):
+                flagged.append(chunk.decode("utf-8", "replace").strip()[:160])
+                if len(flagged) == 2:
+                    break
+        out.seek(max(0, size - 65536))
+        lines = out.read(size - out.tell()).decode("utf-8", "replace").splitlines()
+    return (name, exit_code, flagged, [line.rstrip()[:200] for line in lines[-TAIL:]])
+
+
+def normalize(path, home):
+    path = os.path.expanduser(path)
+    return os.path.normpath(path if os.path.isabs(path) else os.path.join(home, path))
+
+
+def pending():
+    """[(status code, absolute target path)] from `chezmoi status`, which reports one entry per target that differs."""
+    out = chezmoi("status", "--path-style", "absolute", check=True).stdout
+    entries = []
+    for line in out.splitlines():
+        if len(line) > 3 and line[2] == " ":
+            entries.append((line[:2], line[3:]))
+    return entries
+
+
+def managed_dirs():
+    return set(chezmoi("managed", "--include=dirs", "--path-style", "absolute", check=True).stdout.splitlines())
+
+
+def recorded():
+    """What chezmoi last wrote, per absolute path: {type, mode, contentsSHA256}. It is the only proof a path holds chezmoi's own work."""
+    return json.loads(chezmoi("state", "dump", "--format=json", check=True).stdout).get("entryState", {})
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def is_chezmoi_own(path, record):
+    """True when what is on disk is exactly what chezmoi last wrote there: same type, same bytes, same permission bits."""
+    if not record:
+        return False
+    info = os.lstat(path)
+    if stat.S_ISLNK(info.st_mode):
+        return record.get("type") == "symlink" and sha256(os.readlink(path).encode()) == record.get("contentsSHA256")
+    if stat.S_ISREG(info.st_mode):
+        if record.get("type") != "file" or (info.st_mode & 0o777) != (int(record.get("mode", 0)) & 0o777):
+            return False
+        with open(path, "rb") as handle:
+            return sha256(handle.read()) == record.get("contentsSHA256")
+    return False
+
+
+def foreign_items(directory, state):
+    """The paths under a directory that are not unedited work of chezmoi (an item with no record, or one that differs from its record)."""
+    bad = []
+    for root, dirnames, filenames in os.walk(directory, followlinks=False):
+        for name in filenames + [d for d in dirnames if os.path.islink(os.path.join(root, d))]:
+            item = os.path.join(root, name)
+            if not is_chezmoi_own(item, state.get(item)):
+                bad.append(item)
+    return bad
+
+
+def hold_reason(path, code, state, dirs, home):
+    """None when applying this entry provably loses nothing; else why it is held. `chezmoi status` is used only to list candidates: its
+    first column is blank for a path chezmoi never recorded even when a different file is already there, and it shows only the directory
+    itself for a directory it would remove or replace, so nothing is called clean because of a status code. Apply only when the target does
+    not exist, or is exactly what chezmoi last wrote (unedited), or is a directory that stays a directory, or is a directory whose every
+    file chezmoi wrote and nobody edited."""
+    if code[1] == " ":
+        return None  # disk already equals the target: apply only brings chezmoi's record up to date
+    if not os.path.lexists(path):
+        return "you deleted it here" if path in state else None
+    parent = os.path.dirname(path)
+    while parent.startswith(home) and parent != home:
+        if os.path.islink(parent):
+            return "a parent directory is a symlink"
+        parent = os.path.dirname(parent)
+    if os.path.basename(path) not in os.listdir(os.path.dirname(path)):
+        return "its spelling on disk differs in case from the source"
+    if os.path.isdir(path) and not os.path.islink(path):
+        if path in dirs:
+            return None  # a directory that stays a directory: applied as itself only, never its contents
+        bad = foreign_items(path, state)
+        return ("a directory the source no longer has, with %d item(s) inside that chezmoi did not write or that were edited" % len(bad)) if bad else None
+    if is_chezmoi_own(path, state.get(path)):
+        return None
+    return "edited here" if path in state else "exists here and chezmoi has no record of writing it"
+
+
+def classify(entries, state, dirs, home):
+    """clean paths (apply provably loses nothing), held {path: reason}, scripts (run_ scripts that would run), and waiting {path: held ancestor}: a path that
+    is clean on its own but sits inside a directory that is held (a deleted directory the source adds a file to), which cannot be applied until that
+    directory is settled (round 4 f4)."""
+    clean, held, scripts, waiting = [], {}, [], {}
+    for code, path in sorted(entries, key=lambda entry: entry[1]):  # parents first
+        if code[1] == "R":
+            scripts.append(path)
+            continue
+        reason = hold_reason(path, code, state, dirs, home)
+        if reason is not None:
+            held[path] = reason
+            continue
+        ancestor = next((h for h in held if path.startswith(h + os.sep)), None)
+        if ancestor:
+            waiting[path] = ancestor
+        else:
+            clean.append(path)
+    return clean, held, scripts, waiting
+
+
+def describe(path, state, dirs):
+    """What an apply would do to a held path, for the report, and the counts as (added, removed) for a text file else None."""
+    if not os.path.lexists(path):
+        return "apply would recreate it", None
+    if os.path.islink(path):
+        return "a symlink here would be replaced", None
+    if os.path.isdir(path):
+        files = dirs_ = 0
+        for _, dirnames, filenames in os.walk(path, followlinks=False):
+            files += len(filenames)
+            dirs_ += len(dirnames)
+        return "apply would remove or replace it: %d file(s) and %d subdirectorie(s) inside" % (files, dirs_), None
+    managed = set(chezmoi("managed", "--path-style", "absolute", check=True).stdout.splitlines())
+    if path not in managed:
+        return "the source no longer has it, apply would delete it", None
+    # bytes, not text: a binary source file must not crash the report (round 4 f2)
+    cat = subprocess.run(chezmoi_cmd("cat", path), stdin=subprocess.DEVNULL, capture_output=True)
+    if cat.returncode != 0:
+        message = cat.stderr.decode(errors="replace").strip()
+        if "not a file, script, or symlink" in message:
+            # `chezmoi managed` also lists what the source REMOVES (.chezmoiremove, remove_, an exact_ directory's extras); nothing to show a diff of
+            return "the source removes it, apply would delete it", None
+        raise RuntimeError("chezmoi cat %s failed: %s" % (path, message))
+    try:
+        with open(path, "rb") as handle:
+            local = handle.read().decode().splitlines()
+        target = cat.stdout.decode().splitlines()
+    except UnicodeDecodeError:
+        return "binary file, apply would replace it", None
+    added = removed = 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, local, target).get_opcodes():
+        if tag in ("replace", "delete"):
+            removed += i2 - i1
+        if tag in ("replace", "insert"):
+            added += j2 - j1
+    return "apply would add %d and remove %d line(s)" % (added, removed), (added, removed)
+
+
+def backup(path, home, stamp):
+    """Save your copy before it is replaced; returns where, or None when there is nothing here to save (a file you deleted)."""
+    if not os.path.lexists(path):
+        return None
+    rel = os.path.relpath(path, home) if path.startswith(home + os.sep) else path.lstrip(os.sep)
+    target = os.path.join(home, ".local/state/dotfiles-update", stamp, rel)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.copytree(path, target, symlinks=True)
+    else:
+        shutil.copy2(path, target, follow_symlinks=False)
+    return target
+
+
+def chezmoi_error(output):
+    """chezmoi's own error line from merged output (it starts with `chezmoi:`), else the last line."""
+    lines = [line for line in output.splitlines() if line.startswith("chezmoi:")]
+    return lines[-1] if lines else (output.strip().splitlines() or ["no output"])[-1]
+
+
+def print_script_runs(runs):
+    """One line per script that ran, with its exit code, and the first output lines that say warn, error or fail (E20: a script can exit 0 and fail inside).
+    A script that exited non-zero also has the end of its output printed: chezmoi's own log is not shown, so this is the only place it appears."""
+    for name, code, flagged, tail in runs:
+        print("  script %s   exit %s%s" % (name, "?" if code is None else code, "   (its output says: %s)" % " | ".join(flagged) if flagged else ""))
+        if code != 0:
+            for line in tail:
+                print("      | %s" % line)
+
+
+def tilde(path, home):
+    return "~" + path[len(home):] if path.startswith(home + os.sep) else path
+
+
+def git_externals():
+    """Absolute paths of the git-repo externals (chezmoi runs `git pull` in them). `chezmoi status` never lists one that is due a refresh and a path-less
+    apply is not run here, so they are refreshed by name (round 4 f3). Each is asked for alone: a bare `chezmoi dump` would print every managed file."""
+    found = []
+    for path in chezmoi("managed", "--include=externals", "--path-style", "absolute", check=True).stdout.splitlines():
+        dumped = chezmoi("dump", "--format=json", path)
+        if dumped.returncode != 0:
+            continue
+        entry = json.loads(dumped.stdout).get(path, {})
+        if entry.get("type") == "command" and entry.get("args", [])[:2] == ["git", "pull"]:
+            found.append(path)
+    return found
+
+
+def write_record(home, record):
+    """One JSON line per real run in ~/.local/state/dotfiles-update/log.jsonl: what was applied, taken, kept, held, run, and the exit code (design
+    principle 14: a record that survives the terminal). A failure to write it is said, not fatal."""
+    try:
+        directory = os.path.join(home, ".local/state/dotfiles-update")
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "log.jsonl"), "a") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError as error:
+        print("dotfiles-update: could not write its run record: %s" % error)
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(prog="dotfiles-update", description=__doc__.split("\n\n")[0])
+    parser.add_argument("--dry-run", action="store_true", help="report only: no pull, no apply")
+    parser.add_argument("--no-pull", action="store_true", help="skip the pull; apply what the source already holds")
+    parser.add_argument("--keep-local", action="append", default=[], metavar="PATH")
+    parser.add_argument("--take-source", action="append", default=[], metavar="PATH")
+    args = parser.parse_args(argv)
+    record = {"time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "argv": argv}
+    try:
+        code = run(args, record)
+    except BaseException as error:  # an unexpected failure or Ctrl-C is recorded too, then raised as it is
+        record.update(exit=1, error="%s: %s" % (type(error).__name__, error))
+        if not args.dry_run and record.get("home"):
+            write_record(record.pop("home"), record)
+        raise
+    record["exit"] = code
+    if not args.dry_run and record.get("home"):
+        write_record(record.pop("home"), record)
+    return code
+
+
+def run(args, record):
+    try:
+        home = destination()
+        record["home"] = home
+        was = source_head()
+        if not (args.dry_run or args.no_pull):
+            pull = chezmoi("update", "--apply=false")
+            if pull.returncode != 0:
+                print("dotfiles-update: the pull failed (exit %d); nothing was applied.\n%s" % (pull.returncode, (pull.stderr or pull.stdout).strip()))
+                record["error"] = "pull failed"
+                return 1
+        now = source_head()
+        record.update(source_was=was, source_now=now)
+        if now or was:
+            print("dotfiles-update: source at %s, was %s%s" % (now or "unknown", was or "unknown", " (no new commits)" if now == was else ""))
+        entries = pending()
+        clean, held, scripts, waiting = classify(entries, recorded(), managed_dirs(), home)
+        conflicts = list(held)
+        # E22: a run_after_ script is listed by `chezmoi status` after every apply because it runs on every apply. It is not a pending change.
+        always = [path for path in scripts if always_runs(path)]
+        changed_scripts = [path for path in scripts if path not in always]
+    except RuntimeError as error:
+        print("dotfiles-update: %s" % error)
+        record["error"] = str(error)
+        return 1
+
+    keep = {normalize(p, home) for p in args.keep_local}
+    take = {normalize(p, home) for p in args.take_source}
+    for path in sorted((keep | take) - set(conflicts)):
+        print("note: %s is not held, so --keep-local/--take-source did nothing for it" % tilde(path, home))
+    both = keep & take
+    if both:
+        print("dotfiles-update: %s is named in both --keep-local and --take-source" % ", ".join(tilde(p, home) for p in sorted(both)))
+        return 1
+
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    taken, kept, unresolved = [], [], []
+    for path in conflicts:
+        if path in take:
+            taken.append(path)
+        elif path in keep:
+            kept.append(path)
+        else:
+            unresolved.append(path)
+    try:
+        state, dirs = recorded(), managed_dirs()
+        summaries = {p: describe(p, state, dirs)[0] for p in unresolved + taken}
+    except RuntimeError as error:
+        print("dotfiles-update: %s" % error)
+        record["error"] = str(error)
+        return 1
+    counts = {p: () for p in unresolved + taken}
+
+    def ancestors(path):
+        return [h for h in held if path.startswith(h + os.sep)]
+
+    # A path taken from under a held directory cannot be applied unless that directory is taken in the same run (its parent would be missing):
+    # it stays held, with that said, however many levels deep (round 5 f2).
+    moved = True
+    while moved:
+        moved = False
+        for path in list(taken):
+            missing = [h for h in ancestors(path) if h not in taken]
+            if missing:
+                taken.remove(path)
+                unresolved.append(path)
+                held[path] += "; its directory %s is held too, so take that as well in the same run" % tilde(missing[0], home)
+                moved = True
+    # Paths inside a held directory follow it: applied right after it when every held ancestor is taken, otherwise they wait (round 4 f4, round 5 f2).
+    follow = sorted(p for p in waiting if all(h in taken for h in ancestors(p)))
+    still_waiting = sorted(p for p in waiting if p not in follow)
+    taken.sort()
+
+    runs, externals, applied_paths = [], [], []
+
+    def partial():
+        """On a run that stops after changing files, say what was already done: the record has it too (round 5 f1)."""
+        if applied_paths or any(counts[p] for p in taken):
+            print("  before it stopped, dotfiles-update had applied %d path(s)%s" % (len(applied_paths), "".join(
+                "; saved your copy of %s as %s (the source version may not have been written)" % (tilde(p, home), tilde(counts[p][0], home))
+                for p in taken if counts[p] and counts[p][0])))
+
+    try:
+        if not args.dry_run:
+            try:
+                for path in taken:
+                    counts[path] = (backup(path, home, stamp),)
+                targets = clean + taken
+                if targets:
+                    # --recursive=false: a pending directory is applied as itself, never as everything inside it, which could hold an edited file
+                    chezmoi("apply", "--force", "--recursive=false", *sorted(targets), check=True)
+                    applied_paths += targets
+                if follow:
+                    chezmoi("apply", "--force", "--recursive=false", *follow, check=True)
+                    applied_paths += follow
+                externals = git_externals()
+                if externals:
+                    refreshed = chezmoi("apply", "--force", "--include=externals", *externals, merge=True)
+                    if refreshed.returncode != 0:
+                        print("dotfiles-update: refreshing a git-repo external failed (%s):" % chezmoi_error(refreshed.stdout))
+                        for line in refreshed.stdout.strip().splitlines()[-TAIL:]:
+                            print("      | %s" % line)
+                        record["error"] = "external refresh failed"
+                        record["external_output"] = refreshed.stdout.strip().splitlines()[-TAIL:]
+                        partial()
+                        return 1
+                if scripts and not unresolved:
+                    for path in scripts:
+                        if not still_due(path):
+                            continue
+                        runs.append(run_script(os.path.relpath(path, home), path))
+                        if runs[-1][1] != 0:  # chezmoi stops at the first failing script, and so do we
+                            break
+                    record["scripts"] = [{"name": n, "exit": c, "flagged": f, "tail": t if c != 0 else []} for n, c, f, t in runs]
+                    failed = [name for name, code, _, _ in runs if code != 0]
+                    if failed:
+                        print_script_runs(runs)
+                        print("dotfiles-update: the script run stopped: %s did not exit 0" % ", ".join(failed))
+                        record["error"] = "script run stopped"
+                        partial()
+                        return 1
+            except RuntimeError as error:
+                print("dotfiles-update: %s" % error)
+                record["error"] = str(error)
+                partial()
+                return 1
+    finally:
+        record.update(applied=[tilde(p, home) for p in (applied_paths if not args.dry_run else clean + taken + follow)],
+                      taken=[{"path": tilde(p, home), "saved": counts[p][0] if counts[p] else None} for p in taken], kept=[tilde(p, home) for p in kept],
+                      held=[{"path": tilde(p, home), "reason": held[p]} for p in unresolved], waiting=[tilde(p, home) for p in still_waiting],
+                      externals=[tilde(p, home) for p in externals])
+
+    verb = "would apply" if args.dry_run else "applied"
+    nothing = not (clean or conflicts or changed_scripts or waiting)
+    if nothing:
+        print("dotfiles-update: nothing to update.")
+        if externals:
+            print("  checked %d git-repo external(s) (chezmoi runs the `git pull` the external is configured with)." % len(externals))
+        if always:
+            print("  clean: %d always-run script(s) (run_after_/run_before_) are listed by `chezmoi status` after every apply because they run on every apply; "
+                  "that is not a pending change." % len(always))
+            if args.dry_run:
+                print("  they would run now: %s" % ", ".join(os.path.basename(p) for p in always))
+            else:
+                print_script_runs(runs)
+        return 0
+    print("dotfiles-update: %s %d file(s)%s." % (verb, len(clean) + len(taken) + len(follow),
+                                                 (", ran %d script(s)" % len(runs)) if runs else ""))
+    if externals:
+        print("  checked %d git-repo external(s) (chezmoi runs the `git pull` the external is configured with)." % len(externals))
+    print_script_runs(runs)
+    if args.dry_run and changed_scripts:
+        print("  would run %d changed script(s): %s" % (len(changed_scripts), ", ".join(os.path.relpath(p, home) for p in changed_scripts)))
+    for path in taken:
+        saved = counts[path][0] if counts[path] else None
+        where = "<on a real run>" if args.dry_run else (tilde(saved, home) if saved else None)
+        print("  took the source version of %s%s" % (tilde(path, home), (" (your copy saved as %s)" % where) if where else " (you had no copy here to save)"))
+    for path in kept:
+        print("  kept your local version of %s" % tilde(path, home))
+    if still_waiting:
+        print("  waiting on a held directory, not applied: %s (they apply once that directory is settled)" % ", ".join(tilde(p, home) for p in still_waiting))
+    if scripts and unresolved:
+        print("  held back %d script(s): they run once no conflict is left." % len(scripts))
+    if unresolved:
+        print("HELD: %d path(s) were NOT applied, because chezmoi could not be shown to hold only its own unedited work there. Nothing of yours was overwritten:" % len(unresolved))
+        for path in unresolved:
+            print("  %s   %s; %s" % (tilde(path, home), held[path], summaries[path]))
+        print("See a diff with `chezmoi diff PATH`. Then decide each path and run dotfiles-update again:")
+        print("  dotfiles-update --take-source PATH   save your copy under ~/.local/state/dotfiles-update/<time of that run>/, apply the source version")
+        print("  dotfiles-update --keep-local PATH    leave it as it is for now")
+        print("Every real run is recorded in ~/.local/state/dotfiles-update/log.jsonl.")
+        return EXIT_CONFLICT
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

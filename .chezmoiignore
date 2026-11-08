@@ -6,6 +6,8 @@
 .local/share/session-recap/test_session_recap.py
 .local/share/session-recap/test_requests.py
 .local/share/session-recap/test_timezone.py
+.local/bin/__pycache__
+.local/bin/__pycache__/**
 .local/share/session-recap/__pycache__
 .local/share/session-recap/__pycache__/**
 .local/share/agent-alert/tests/**
@@ -194,7 +196,7 @@ Library/LaunchAgents/local.qmd-refresh.plist
 
 {{- if ne .profile "personal" }}
 .local/user_scripts/configure_rustdesk.sh
-# The Loop Engine bump applies on this machine; no agent applies on the work Mac (docs/profiles.md).
+# The Loop Engine bump applies on this machine without asking; an agent applies on the work Mac only with Michael's confirmation for that action (docs/profiles.md).
 .local/user_scripts/loop_engine_bump.py
 .pi/agent/extensions/openrouter-gate
 .pi/agent/extensions/openrouter-gate/**

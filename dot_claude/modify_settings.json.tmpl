@@ -29,7 +29,7 @@
 #     "--part", one bare "--part rules" entry. Otherwise no rules entry. Every SessionStart command starts with the
 #     T3CODE_THREAD_ID guard, so it does nothing outside a T3 session.
 # They are found by "src/t3-hook/hook.ts" in their command: each apply drops them from every event and, when wanted, appends the
-# current ones. Off (no hook file, or termux), they are removed. Nothing is applied on the work Mac by an agent: Michael confirms it.
+# current ones. Off (no hook file, or termux), they are removed. An agent applies on the work Mac only with Michael's confirmation for that action.
 # Pattern-kill guard (both desktop profiles): a PreToolUse hook on Bash and Monitor (both run shell commands) that refuses pkill and killall, so an agent's pattern kill
 # cannot hit another agent's jobs (the script is dot_local/share/agent-harness/hooks/refuse_pattern_kill.py, agent-harness README,
 # "Pattern-kill guard"). The entry is found by that script's path in its command: each apply drops it and appends the current one.
