@@ -2,7 +2,7 @@
 
 Run it as:  uvx --from "browser-harness[mcp]==0.1.13" python -I server.py   (servers.json.tmpl does).
 
-It starts the stock server and changes four things, both found when several agents shared one Chrome:
+It starts the stock server and changes four things, found when several agents shared one Chrome:
 
 1. Own tab. The stock server uses one daemon, named "default", for every MCP process on the machine, and the daemon
    keeps ONE current tab. A second agent's browser_new_tab or browser_switch_tab moved every other agent's tab, and
@@ -14,8 +14,9 @@ It starts the stock server and changes four things, both found when several agen
 3. browser_ensure_real_tab no longer switches tabs (the stock one attaches to the first real page in Chrome); it reports the current tab.
 4. A closed tab fails loudly. When the tab this session was using is closed (from outside, or by its own browser_close_tab), the stock daemon
    quietly attaches to a fresh about:blank and the next browser_click answers {"ok": true} on nothing. Here every action tool refuses with
-   a message that names the closed tab until the agent opens or switches to a tab (browser_new_tab, browser_switch_tab). Nothing is done on
-   the replacement page.
+   a message that names the closed tab until the agent opens or switches to a tab (browser_new_tab, browser_switch_tab). The check runs before
+   each tool call: a tab that closes in the middle of one long call (wait_for_load, wait_for_element, fill) can still make that one call
+   answer on the replacement page; the next call is refused. A dead daemon that is restarted is not detected (it attaches to a fresh about:blank).
 """
 import atexit
 import os
