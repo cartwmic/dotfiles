@@ -226,7 +226,7 @@ A gate moves to kgate one at a time, each with its profile in its own repo:
 
 ## Profiles
 
-Personal only: kgate uses the personal homelab cluster (`.chezmoiignore`; row in [profiles.md](./profiles.md)). The work profile is left out for that reason, and nothing is applied on the work Mac.
+Personal only: kgate uses the personal homelab cluster (`.chezmoiignore`; row in [profiles.md](./profiles.md)). The work profile is left out for that reason.
 
 ## Tests
 

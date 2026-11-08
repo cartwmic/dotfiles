@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""dotfiles-update: update this machine from the dotfiles source in one command, with no TTY and a stated policy for locally edited files.
+
+    dotfiles-update [--dry-run] [--no-pull] [--keep-local PATH]... [--take-source PATH]...
+
+`chezmoi update` stops with exit 1 when a file was edited on this machine and the source also wants it ("has changed since chezmoi last
+wrote it?", then "could not open a new TTY"), and it stops there, leaving every other pending entry unapplied. This command instead:
+
+  1. pulls the source (`chezmoi update --apply=false`; skipped with --no-pull or --dry-run),
+  2. reads `chezmoi status` and sorts every pending file:
+       clean      nothing edited here: applied
+       conflict   edited here AND apply would change it: NOT applied, never overwritten silently, listed with its line counts
+  3. applies every clean file, then the run_ scripts, but only when no conflict is left (a script may depend on a file that was held back),
+  4. prints what it did and exits 0 (all applied), 3 (a conflict needs your decision, named below) or 1 (the pull or an apply failed).
+
+Decide a conflict per file, no prompts:
+    --take-source PATH   save your copy under ~/.local/state/dotfiles-update/<UTC time>/, then apply the source version of that file
+    --keep-local PATH    leave your edit; this run no longer treats it as a conflict (it is listed again next run until it is taken or adopted)
+PATH may be absolute, relative to $HOME, or start with ~. There is no "take everything" flag on purpose.
+To adopt a local edit into the source instead, use `chezmoi re-add PATH` (plain files) or edit the template.
+
+Works the same on both desktop profiles. Tests: tests/dotfiles-update. Environment: DOTFILES_UPDATE_CHEZMOI_ARGS adds global chezmoi flags
+(used by the tests for a scratch source and destination).
+"""
+import argparse
+import datetime
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+
+EXIT_CONFLICT = 3
+
+
+def chezmoi(*args, check=False, capture=True):
+    extra = shlex.split(os.environ.get("DOTFILES_UPDATE_CHEZMOI_ARGS", ""))
+    cmd = ["chezmoi", "--no-tty", *extra, *args]
+    result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=capture, text=True)
+    if check and result.returncode != 0:
+        raise RuntimeError("%s failed (exit %d): %s" % (" ".join(cmd[:4]), result.returncode, (result.stderr or result.stdout).strip()))
+    return result
+
+
+def destination():
+    return chezmoi("execute-template", "{{ .chezmoi.destDir }}", check=True).stdout.strip() or os.path.expanduser("~")
+
+
+def normalize(path, home):
+    path = os.path.expanduser(path)
+    return os.path.normpath(path if os.path.isabs(path) else os.path.join(home, path))
+
+
+def pending():
+    """[(status code, absolute target path)] from `chezmoi status`, which reports one entry per target that differs."""
+    out = chezmoi("status", "--path-style", "absolute", check=True).stdout
+    entries = []
+    for line in out.splitlines():
+        if len(line) > 3 and line[2] == " ":
+            entries.append((line[:2], line[3:]))
+    return entries
+
+
+def classify(entries):
+    """clean files (apply would only update them), conflicts (a local edit apply would overwrite), scripts (run_ scripts that would run)."""
+    clean, conflicts, scripts = [], [], []
+    for code, path in entries:
+        local, apply_ = code[0], code[1]
+        if apply_ == "R":
+            scripts.append(path)
+        elif local != " " and apply_ != " ":
+            conflicts.append(path)
+        else:
+            clean.append(path)
+    return clean, conflicts, scripts
+
+
+def line_counts(path):
+    diff = chezmoi("diff", "--path-style", "absolute", path).stdout
+    added = sum(1 for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++"))
+    removed = sum(1 for l in diff.splitlines() if l.startswith("-") and not l.startswith("---"))
+    return added, removed
+
+
+def backup(path, home, stamp):
+    rel = os.path.relpath(path, home) if path.startswith(home + os.sep) else path.lstrip(os.sep)
+    target = os.path.join(home, ".local/state/dotfiles-update", stamp, rel)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if os.path.lexists(path):
+        shutil.copy2(path, target, follow_symlinks=False)
+    return target
+
+
+def tilde(path, home):
+    return "~" + path[len(home):] if path.startswith(home + os.sep) else path
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(prog="dotfiles-update", description=__doc__.split("\n\n")[0])
+    parser.add_argument("--dry-run", action="store_true", help="report only: no pull, no apply")
+    parser.add_argument("--no-pull", action="store_true", help="skip the pull; apply what the source already holds")
+    parser.add_argument("--keep-local", action="append", default=[], metavar="PATH")
+    parser.add_argument("--take-source", action="append", default=[], metavar="PATH")
+    args = parser.parse_args(argv)
+
+    try:
+        home = destination()
+        if not (args.dry_run or args.no_pull):
+            pull = chezmoi("update", "--apply=false")
+            if pull.returncode != 0:
+                print("dotfiles-update: the pull failed (exit %d); nothing was applied.\n%s" % (pull.returncode, (pull.stderr or pull.stdout).strip()))
+                return 1
+        clean, conflicts, scripts = classify(pending())
+    except RuntimeError as error:
+        print("dotfiles-update: %s" % error)
+        return 1
+
+    keep = {normalize(p, home) for p in args.keep_local}
+    take = {normalize(p, home) for p in args.take_source}
+    for path in sorted((keep | take) - set(conflicts)):
+        print("note: %s is not in the conflict list, so --keep-local/--take-source did nothing for it" % tilde(path, home))
+    both = keep & take
+    if both:
+        print("dotfiles-update: %s is named in both --keep-local and --take-source" % ", ".join(tilde(p, home) for p in sorted(both)))
+        return 1
+
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    taken, kept, unresolved = [], [], []
+    for path in conflicts:
+        if path in take:
+            taken.append(path)
+        elif path in keep:
+            kept.append(path)
+        else:
+            unresolved.append(path)
+    counts = {p: line_counts(p) for p in unresolved + taken}
+
+    applied_files, ran_scripts = 0, 0
+    if not args.dry_run:
+        try:
+            for path in taken:
+                counts[path] = counts[path] + (backup(path, home, stamp),)
+            targets = clean + taken
+            if targets:
+                chezmoi("apply", "--force", *targets, check=True)
+                applied_files = len(targets)
+            if scripts and not unresolved:
+                chezmoi("apply", "--force", "--include=scripts", check=True)
+                ran_scripts = len(scripts)
+        except RuntimeError as error:
+            print("dotfiles-update: %s" % error)
+            return 1
+
+    verb = "would apply" if args.dry_run else "applied"
+    nothing = not (clean or conflicts or scripts)
+    if nothing:
+        print("dotfiles-update: nothing to update.")
+        return 0
+    print("dotfiles-update: %s %d file(s)%s." % (verb, len(clean) + len(taken),
+                                                 (", ran %d script(s)" % len(scripts)) if scripts and not unresolved and not args.dry_run else ""))
+    for path in taken:
+        print("  took the source version of %s (your copy saved as %s)" % (tilde(path, home), tilde(counts[path][2], home) if not args.dry_run else "<on a real run>"))
+    for path in kept:
+        print("  kept your local edit of %s" % tilde(path, home))
+    if scripts and unresolved:
+        print("  held back %d script(s): they run once no conflict is left." % len(scripts))
+    if unresolved:
+        print("CONFLICTS: %d file(s) were edited here and the source also wants to change them. They were NOT applied and nothing of yours was overwritten:" % len(unresolved))
+        for path in unresolved:
+            added, removed = counts[path]
+            print("  %s   (apply would add %d and remove %d line(s))" % (tilde(path, home), added, removed))
+        print("See a diff with `chezmoi diff PATH`. Then decide each file and run dotfiles-update again:")
+        print("  dotfiles-update --take-source PATH   save your copy under ~/.local/state/dotfiles-update/%s/, apply the source version" % stamp)
+        print("  dotfiles-update --keep-local PATH    leave your edit for now")
+        return EXIT_CONFLICT
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

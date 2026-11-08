@@ -29,7 +29,7 @@
 #     "--part", one bare "--part rules" entry. Otherwise no rules entry. Every SessionStart command starts with the
 #     T3CODE_THREAD_ID guard, so it does nothing outside a T3 session.
 # They are found by "src/t3-hook/hook.ts" in their command: each apply drops them from every event and, when wanted, appends the
-# current ones. Off (no hook file, or termux), they are removed. Nothing is applied on the work Mac by an agent: Michael confirms it.
+# current ones. Off (no hook file, or termux), they are removed. An agent applies on the work Mac only with Michael's confirmation for that action.
 # Hub (personal profile on macOS, and only while hub.enabled in .chezmoidata.toml is true): points every Claude Code session at the
 # homelab CLIProxyAPI hub. hub.enabled is one switch for Claude, Codex and the T3 codex instance. Sets env.ANTHROPIC_BASE_URL (no /v1)
 # and apiKeyHelper (op_read_cached.sh printing the hub key). Neither ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY is set: either would

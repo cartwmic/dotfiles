@@ -612,6 +612,26 @@ chezmoi apply
 `.tmpl` in this tree instead. `chezmoi diff` shows live destination on the
 **a/** side and source on **b/** (inverted from a usual source→target diff).
 
+## Updating a machine: `dotfiles-update`
+
+`dotfiles-update` (deployed to `~/.local/bin` on both desktop profiles) is the one command that brings a machine up to date, with no TTY.
+Plain `chezmoi update` stops with exit 1 at the first file that was edited on the machine and that the source also wants to change
+("has changed since chezmoi last wrote it?", then "could not open a new TTY"), and applies nothing past it. This command instead pulls the
+source, sorts every pending file, applies the clean ones, and **never overwrites or silently skips an edited file**:
+
+| State of a file | What `dotfiles-update` does |
+|---|---|
+| not edited here | applies it |
+| edited here and apply would change it (a conflict) | does not apply it; lists it with the lines apply would add and remove |
+| `run_` scripts | run only when no conflict is left (a script may depend on a held-back file) |
+
+Exit 0: everything applied. Exit 3: a conflict needs a decision (the list is printed). Exit 1: the pull or an apply failed.
+Decide each conflict with a flag, no prompts, then run it again: `--take-source PATH` saves your copy under
+`~/.local/state/dotfiles-update/<UTC time>/` and applies the source version of that file; `--keep-local PATH` leaves your edit for now
+(it is listed again next run). There is no "take everything" flag. `--dry-run` reports only; `--no-pull` skips the pull.
+To keep a local edit for good, adopt it: `chezmoi re-add PATH` (plain files) or change the template.
+Tests: `tests/dotfiles-update` (real chezmoi, scratch repository and HOME; the red control is plain `chezmoi apply` failing in the same state).
+
 ## Docs map
 
 Start here for machine setup and user workflows. For work in this source tree,
