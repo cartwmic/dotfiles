@@ -288,7 +288,8 @@ class Wrapper(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("ERROR: the Codex guard hook is not confirmed trusted", r.stdout)
         self.assertIn("codex app-server did not answer, make it start", r.stdout)  # the next step is named
-        self.assertIn("codex_trust_hooks.py", r.stdout)
+        self.assertIn("then run dotfiles-update again", r.stdout)  # a step that needs no quoting, so pasting it works
+        self.assertNotIn("$", r.stdout.split("ERROR", 1)[1])  # no shell variable left unexpanded in the printed step
 
     def test_a_missing_codex_binary_fails_the_wrapper_with_the_same_error(self):
         r = self.run_wrapper(codex_bin="/nonexistent/codex")

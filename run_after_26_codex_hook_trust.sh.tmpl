@@ -11,7 +11,7 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 script="$HOME/.local/user_scripts/codex_trust_hooks.py"
 [ -f "$script" ] || exit 0
 if ! python3 "$script" --command "$CMD"; then
-  echo "[codex_hook_trust] ERROR: the Codex guard hook is not confirmed trusted. Next step: read the WARN line above. If codex app-server did not answer, make it start on this machine. Then run: python3 \"$script\" --command \"$CMD\""
+  echo "[codex_hook_trust] ERROR: the Codex guard hook is not confirmed trusted. Next step: read the WARN line above. If codex app-server did not answer, make it start on this machine, then run dotfiles-update again; this script runs again and trusts the hook."
   exit 1
 fi
 exit 0
