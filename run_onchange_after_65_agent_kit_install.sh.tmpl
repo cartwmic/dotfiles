@@ -1,24 +1,64 @@
 #!/bin/sh
 # Install the pinned agent-kit (the agent-traces CLI) into ~/.local/share/agent-kit with npm ci. Runs only while chezmoi data
 # agentKit.enabled is true (default: personal profile only; .chezmoiignore leaves this script out otherwise). It runs again when the
-# pin or the lockfile changes. A failed install (offline, bad token) logs a WARN with the retry command and exits 0, so chezmoi apply
-# does not fail; the agent-traces wrapper then exits 3.
+# pin or the lockfile changes. The install needs a gh account that can read the private package: NODE_AUTH_TOKEN if set, else the first logged-in gh account, the
+# active one first, whose token the registry accepts (the same order as install-deps.ts in the coordinator repo; the active account on the work Mac is the
+# work account and cannot read it). npm ci runs in a staging directory and node_modules is swapped in only when it succeeded, so a failed install keeps
+# the previous node_modules, prints an ERROR naming the accounts tried, and exits 1 (chezmoi stops there and runs this script again at the next apply).
 # package.json: {{ include "dot_local/share/agent-kit/package.json" | sha256sum }}
 # package-lock.json: {{ include "dot_local/share/agent-kit/package-lock.json" | sha256sum }}
 set -eu
 log() { printf '[agent_kit_install] %s: %s\n' "$1" "$2"; }
+fail() { log ERROR "$1 chezmoi stops the apply at this script, so the scripts after it (70 to 81: launchd jobs, instances reconcile, scratch dirs) did not run in this apply; they run at the next apply that gets past this one." >&2; exit 1; }
 
 dir="$HOME/.local/share/agent-kit"
-retry='cd ~/.local/share/agent-kit && NODE_AUTH_TOKEN=$(gh auth token) npm ci'
+retry='chezmoi apply (this script is retried at every apply until it succeeds)'
+registry="${COORDINATOR_PACKAGE_REGISTRY:-https://npm.pkg.github.com}"
 npm="$(command -v npm || true)"
 [ -n "$npm" ] || npm="$HOME/.local/share/mise/shims/npm"
-[ -x "$npm" ] || { log WARN "npm not found; install it, then retry: $retry"; exit 0; }
-[ -f "$dir/package-lock.json" ] || { log WARN "$dir/package-lock.json is missing; apply the agent-kit files first, then retry: $retry"; exit 0; }
+[ -x "$npm" ] || fail "npm not found; install it, then retry: $retry"
+[ -f "$dir/package-lock.json" ] || fail "$dir/package-lock.json is missing; apply the agent-kit files first, then retry: $retry"
 
-cd "$dir"
-if NODE_AUTH_TOKEN="$(gh auth token 2>/dev/null || true)" "$npm" ci --no-audit --no-fund; then
-  log INFO "installed the pinned agent-kit in $dir"
-else
-  log WARN "npm ci failed (offline or no GitHub token?); retry: $retry"
+# Whether a token can read the package: one GET of its registry document, 200 yes, anything else (401, 403, 404, no answer in 10 s) no.
+can_read() {
+  command -v curl >/dev/null 2>&1 || return 1
+  # The token goes to curl on stdin (-K -), never on its command line, where `ps` would show it.
+  [ "$(printf 'header = "Authorization: Bearer %s"\n' "$1" | curl -s -o /dev/null -m 10 -w '%{http_code}' -K - -H 'Accept: application/json' "${registry%/}/@cartwmic%2Fagent-kit" 2>/dev/null)" = 200 ]
+}
+
+tried=""
+if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+  status="$(gh auth status 2>&1 || true)"
+  active="$(printf '%s\n' "$status" | awk '/Logged in to github\.com account/ {a=$0; sub(/.*account /, "", a); sub(/ .*/, "", a); cur=a} /Active account: *true/ {print cur; exit}')"
+  names="$(printf '%s\n' "$status" | sed -n 's/.*Logged in to github\.com account \([^ ]*\).*/\1/p')"
+  order="$active"
+  for n in $names; do [ "$n" = "$active" ] || order="$order $n"; done
+  for n in $order; do
+    t="$(gh auth token --user "$n" 2>/dev/null || true)"
+    tried="$tried $n"
+    if [ -n "$t" ] && can_read "$t"; then
+      NODE_AUTH_TOKEN="$t"; log INFO "npm ci token: gh account $n"; break
+    fi
+  done
+  # None can read it (or gh lists no account): fall back to the active token and let npm report its own error.
+  [ -n "${NODE_AUTH_TOKEN:-}" ] || NODE_AUTH_TOKEN="$(gh auth token 2>/dev/null || true)"
 fi
-exit 0
+export NODE_AUTH_TOKEN
+
+# npm ci deletes node_modules first, so it runs in a staging directory and node_modules is replaced only when it succeeded.
+rm -rf "$dir"/.install-staging.* # left by a run that was killed
+stage="$(mktemp -d "$dir/.install-staging.XXXXXX")"
+trap 'rm -rf "$stage"' EXIT
+cp "$dir/package.json" "$dir/package-lock.json" "$stage/"
+[ ! -f "$dir/.npmrc" ] || cp "$dir/.npmrc" "$stage/"
+if ! out="$(cd "$stage" && "$npm" ci --no-audit --no-fund 2>&1)"; then
+  printf '%s\n' "$out" | tail -n 10 >&2
+  who=""; [ -z "$tried" ] || who="; no logged-in gh account could read @cartwmic/agent-kit (tried:$tried): run gh auth login with one that can, or set NODE_AUTH_TOKEN"
+  fail "npm ci failed, so $dir/node_modules was left as it was$who; retry: $retry"
+fi
+[ -d "$stage/node_modules" ] || fail "npm ci produced no node_modules, so $dir/node_modules was left as it was; retry: $retry"
+rm -rf "$dir/node_modules.previous"
+[ ! -e "$dir/node_modules" ] || mv "$dir/node_modules" "$dir/node_modules.previous"
+mv "$stage/node_modules" "$dir/node_modules"
+rm -rf "$dir/node_modules.previous"
+log INFO "installed the pinned agent-kit in $dir"
