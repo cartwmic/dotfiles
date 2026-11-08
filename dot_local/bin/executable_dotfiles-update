@@ -115,6 +115,8 @@ def run_script(name, path):
             found = re.fullmatch(rb"(?:exit status (\d+)|[^\n]*)\n?", tail[at + len(mark):]) if at >= 0 else None
             if found:
                 exit_code = int(found.group(1)) if found.group(1) else None
+                if exit_code == 0:  # chezmoi failed, so a script that says it exited 0 did not succeed: never report success
+                    exit_code = None
                 size -= len(tail) - at  # what is left is the script's own output
                 out.truncate(size)
         out.seek(0)
@@ -501,6 +503,8 @@ def run(args, record):
     if externals:
         print("  checked %d git-repo external(s) (chezmoi runs the `git pull` the external is configured with)." % len(externals))
     print_script_runs(runs)
+    if args.dry_run and changed_scripts:
+        print("  would run %d changed script(s): %s" % (len(changed_scripts), ", ".join(os.path.relpath(p, home) for p in changed_scripts)))
     for path in taken:
         saved = counts[path][0] if counts[path] else None
         where = "<on a real run>" if args.dry_run else (tilde(saved, home) if saved else None)

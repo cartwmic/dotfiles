@@ -541,6 +541,14 @@ class DotfilesUpdate(unittest.TestCase):
         self.assertEqual(self.read("script-ran"), "ran\n")  # not run again
         self.assertIn("nothing to update", r.stdout)
 
+    def test_dry_run_names_the_changed_scripts_it_would_run(self):
+        self.write("run_onchange_after_10_mark.sh", "#!/bin/sh\necho ran >> \"$HOME/script-ran\"\n# v2\n")
+        self.commit("script change")
+        r = self.update("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("would run 1 changed script(s): 10_mark.sh", r.stdout)
+        self.assertFalse((self.home / "script-ran").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

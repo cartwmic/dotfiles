@@ -675,7 +675,7 @@ change for the same reason, until you take or keep it.
 First install on a machine that has not got it yet (for example the work Mac, where `chezmoi update` already fails): `chezmoi update --apply=false`
 then `chezmoi apply ~/.local/bin/dotfiles-update`, and from then on `dotfiles-update`.
 Like `chezmoi apply`, it also deletes unmanaged files inside an `exact_` directory only when every one of them is unedited chezmoi work, and a `run_` script's output is shown when it fails (its last 15 lines).
-Known limit: when the source turns a plain file into a directory (or the reverse), `chezmoi status` itself fails (`.foo/bar: not a directory`), so `dotfiles-update` prints that error, applies nothing and exits 1. Look at the path with `chezmoi diff PATH`, then `chezmoi apply PATH` it yourself.
+Known limits: when a script template does not render, `chezmoi status` fails, so nothing is applied and it exits 1 with chezmoi's error (plain `chezmoi apply` would apply the files and run the earlier scripts first). `run_before_` scripts run after the files and the `run_after_` scripts, not before the files as plain `chezmoi apply` orders them (none exist in this repo). And when the source turns a plain file into a directory, `chezmoi status` itself fails (`.foo/bar: not a directory`), so `dotfiles-update` prints that error, applies nothing and exits 1. Look at the path with `chezmoi diff PATH`, then `chezmoi apply PATH` it yourself.
 To keep a local edit for good, adopt it: `chezmoi re-add PATH` (plain files) or change the template.
 Tests: `tests/dotfiles-update` (real chezmoi, scratch repository and HOME; the red control is plain `chezmoi apply` failing in the same state).
 
