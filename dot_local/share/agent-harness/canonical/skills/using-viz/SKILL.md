@@ -64,6 +64,21 @@ Read the PNG with your file-reading tool before you show or send it. Look for
 cut-off or overlapping labels, unreadable text, wrong numbers, empty space and
 a wrong title or axis. If anything is wrong, fix the source and render again.
 
+## Keep it phone-friendly
+
+Michael opens pages on his phone over the VPN. Keep every image about 2 MB or smaller.
+
+- The PNG is a screenshot of the whole page, so its size follows width x height x scale squared. A page of text and tables costs about 0.25 MB per 1,000 px of height at `--width 1000 --scale 1`, so 2 MB fits roughly 8,000 px. After `viz render`, read `bytes`. If it is over 2,000,000, render again with `--scale 1` and `--width 1000` or less. Use the default `--scale 2` only for small diagrams.
+- If it is still over, the page is too long for one PNG. Publish it and send the `url` alone, without the PNG, and say why. The page is self-contained HTML and small; it is the deliverable. `png_url` stays available as a download if Michael asks for the full-size image.
+- Images inside an HTML page: downscale each to the width it displays at (1200 px at most), save as WebP or a compressed PNG or JPEG, and keep each under 2 MB. Link a full-size file as a download only when it is needed. Do not embed it.
+- After `viz publish`, print what a phone downloads and report the total:
+
+```sh
+for u in <url> <png_url>; do curl -sS -o /dev/null -w '%{size_download} %{url_effective}\n' "$u"; done
+```
+
+  Count the page, plus the PNG only if you send it, plus any image the page loads.
+
 ## Show it in Pi or Claude Code
 
 Read the PNG path from the JSON; the image appears inline. Add one line saying
@@ -82,11 +97,11 @@ viz publish <id>      # the id from viz render; prints "url" and "png_url"
 - **The coordinator** runs `reach send --attach <png>` with one line saying what
   it shows, followed by the `url`.
 
-Always attach the PNG. The link is on `viz.internal.cartwmic.com`, which only
+Attach the PNG when it is within the size cap above; otherwise send the link alone. The link is on `viz.internal.cartwmic.com`, which only
 opens on the home network or WireGuard, and Discord cannot preview it. It is
 there for zooming in or using an interactive page.
 
-If `viz publish` fails (exit 4 or 5), send the PNG anyway and say the link
+If `viz publish` fails (exit 4 or 5), send the PNG anyway (if it is within the cap) and say the link
 failed, with the message. Do not retry in a loop.
 
 Send the `png` path exactly as `viz` printed it. `viz` itself never sends
