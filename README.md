@@ -629,7 +629,21 @@ only the directory itself for a directory it would remove). **It applies a path 
 | a directory the source drops, every file in it unedited chezmoi work | applies it (removes it) |
 | edited here, or a file chezmoi never wrote is in the way, or you deleted it here | HOLDS it, with the reason and what an apply would add and remove |
 | a directory the source drops that holds files chezmoi did not write (even a `.DS_Store`), a different case spelling, a symlinked parent | HOLDS it |
+| a new file inside a directory that is held (for example one you deleted) | waits, listed as such; it is applied right after that directory when you `--take-source` it |
+| a path the source REMOVES (`.chezmoiremove`, `remove_`, an `exact_` directory's extras) that is edited here or was never written by chezmoi | HOLDS it ("the source removes it, apply would delete it") |
+| a git-repo external (`.chezmoiexternal.toml`, `type = "git-repo"`) | refreshed by name with `git pull` (chezmoi's own, fast-forward only) when its `refreshPeriod` is due; `chezmoi status` never lists one |
 | `run_` scripts | run only when nothing is held (a script may depend on a held-back path) |
+
+What it prints, every time:
+- `source at <sha>, was <sha>`: the source checkout's commit after the pull and before it (`(no new commits)` when they are equal).
+- Each `run_` script that ran, with its exit code: `script 65_agent_kit_install.sh   exit 0   (its output says: ...)`. The note shows the first
+  output lines that say WARN, ERROR or FAIL, because a script can exit 0 while failing inside (the agent-kit install did). A script that exits
+  non-zero stops the run: it is named with its code and `dotfiles-update` exits 1. (`chezmoi apply --verbose` shows neither; the codes are read from `--debug`.)
+- `nothing to update.` when no file or changed script is pending. `chezmoi status` still lists every `run_after_` script after every apply (they run on
+  every apply by design, for example `75_instances_reconcile.sh`); that is not a pending change, so it says `clean: N always-run script(s)` and why,
+  and still runs them as `chezmoi apply` would.
+- A record of every real run (not `--dry-run`): one JSON line in `~/.local/state/dotfiles-update/log.jsonl` with the source commits, what was applied, taken (and
+  where your copy was saved), kept, held (with the reason), waiting, the scripts with their exit codes, and the exit code.
 
 Exit 0: everything applied. Exit 3: something is held and needs a decision (the list is printed). Exit 1: the pull, a read or an apply failed.
 Decide each held path with a flag, no prompts, then run it again: `--take-source PATH` saves your copy under

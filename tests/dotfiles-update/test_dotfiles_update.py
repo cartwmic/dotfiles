@@ -58,6 +58,9 @@ class DotfilesUpdate(unittest.TestCase):
         return subprocess.run(["python3", str(SCRIPT), *([] if pull else ["--no-pull"]), *args], stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, env=self.env, timeout=180)
 
+    def git_head(self):
+        return subprocess.run(["git", "-C", str(self.src), "rev-parse", "--short=12", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+
     def read(self, name):
         return (self.home / name).read_text()
 
@@ -231,7 +234,10 @@ class DotfilesUpdate(unittest.TestCase):
 
     def test_nothing_pending_is_exit_0(self):
         r = self.update()
-        self.assertEqual((r.returncode, r.stdout.strip()), (0, "dotfiles-update: nothing to update."))
+        head = self.git_head()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.strip().splitlines(), ["dotfiles-update: source at %s, was %s (no new commits)" % (head, head),
+                                                         "dotfiles-update: nothing to update."])
 
     def test_pulls_the_source_first(self):
         other = self.tmp / "other"
@@ -240,9 +246,12 @@ class DotfilesUpdate(unittest.TestCase):
         subprocess.run(["git", "-C", str(other), "add", "-A"], check=True)
         subprocess.run(["git", "-C", str(other), *GIT[1:], "commit", "-qm", "remote"], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "HEAD:main"], check=True, capture_output=True)
+        was = self.git_head()
         r = self.update(pull=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.read(".b"), "from-remote\n")
+        self.assertIn("source at %s, was %s\n" % (self.git_head(), was), r.stdout)  # E19: the commit that was applied, and the one before
+        self.assertNotEqual(self.git_head(), was)
 
     def test_a_path_outside_the_conflict_list_is_reported_not_acted_on(self):
         self.conflict_state()
@@ -255,6 +264,175 @@ class DotfilesUpdate(unittest.TestCase):
         r = self.update("--take-source", ".a", "--keep-local", ".a")
         self.assertEqual(r.returncode, 1)
         self.assertEqual(self.read(".a"), "local-a\n")
+
+    # --- E20: each script that ran is reported with its exit code ---
+
+    def test_every_script_that_ran_is_reported_with_its_exit_code(self):
+        self.write("run_onchange_after_10_mark.sh", "#!/bin/sh\necho ran >> \"$HOME/script-ran\"\n# v2\n")
+        self.write("run_onchange_after_20_quiet.sh", "#!/bin/sh\nexit 0\n")
+        self.commit("scripts")
+        r = self.update()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ran 2 script(s)", r.stdout)
+        self.assertIn("  script 10_mark.sh   exit 0\n", r.stdout)
+        self.assertIn("  script 20_quiet.sh   exit 0\n", r.stdout)
+
+    def test_a_script_that_exits_0_but_says_it_failed_inside_is_visible(self):
+        # E21: the kit install printed WARN and exited 0, and `apply --verbose` showed nothing about it.
+        self.write("run_onchange_after_20_kit.sh", "#!/bin/sh\necho '[kit] WARN: npm ci failed' >&2\necho fine\nexit 0\n")
+        self.commit("script that fails inside")
+        r = self.update()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("  script 20_kit.sh   exit 0   (its output says: [kit] WARN: npm ci failed)", r.stdout)
+
+    def test_a_script_that_fails_is_named_with_its_exit_code_and_the_run_exits_1(self):
+        self.write("run_onchange_after_20_bad.sh", "#!/bin/sh\necho 'ERROR: boom' >&2\nexit 7\n")
+        self.commit("failing script")
+        r = self.update()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("  script 20_bad.sh   exit 7   (its output says: ERROR: boom)", r.stdout)
+        self.assertIn("20_bad.sh exited non-zero", r.stdout)
+
+    # --- E22: a run_after_ script is listed by `chezmoi status` after every apply; that is not a pending change ---
+
+    def test_an_always_run_script_in_status_is_reported_clean_with_the_reason_and_still_runs(self):
+        self.write("run_after_75_reconcile.sh", "#!/bin/sh\necho ran >> \"$HOME/always-ran\"\n")
+        self.commit("always-run script")
+        self.chezmoi("apply")
+        (self.home / "always-ran").unlink()
+        status = self.chezmoi("status")
+        self.assertIn("75_reconcile.sh", status.stdout)  # the symptom: a clean machine, and status still lists it
+        r = self.update()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("dotfiles-update: nothing to update.", r.stdout)
+        self.assertIn("clean: 1 always-run script(s) (run_after_/run_before_) are listed by `chezmoi status` after every apply", r.stdout)
+        self.assertIn("  script 75_reconcile.sh   exit 0", r.stdout)
+        self.assertEqual(self.read("always-ran"), "ran\n")  # it still runs, as `chezmoi apply` would (instances_reconcile retries on every apply)
+
+    def test_dry_run_names_the_always_run_scripts_and_runs_nothing(self):
+        self.write("run_after_75_reconcile.sh", "#!/bin/sh\necho ran >> \"$HOME/always-ran\"\n")
+        self.commit("always-run script")
+        self.chezmoi("apply")
+        (self.home / "always-ran").unlink()
+        r = self.update("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("they would run now: 75_reconcile.sh", r.stdout)
+        self.assertFalse((self.home / "always-ran").exists())
+
+    def test_a_changed_script_is_not_called_clean(self):
+        self.write("run_onchange_after_10_mark.sh", "#!/bin/sh\necho ran >> \"$HOME/script-ran\"\n# v2\n")
+        self.commit("script change")
+        r = self.update()
+        self.assertNotIn("nothing to update", r.stdout)
+        self.assertNotIn("clean:", r.stdout)
+
+    # --- review round 4 ---
+
+    def test_a_held_removal_is_held_and_reported_not_a_crash(self):
+        # f1: an edited file the source REMOVES (.chezmoiremove) and a local file inside an exact_ directory used to end the run with exit 1.
+        self.write(".chezmoiremove", ".rm\n")
+        (self.home / ".rm").write_text("mine\n")  # chezmoi never wrote it: removing it would lose it
+        (self.src / "exact_dot_ex").mkdir()
+        self.write("exact_dot_ex/kept", "k\n")
+        self.write("dot_z", "z\n")
+        self.commit("remove, exact dir, new file")
+        self.chezmoi("apply", str(self.home / ".ex"), str(self.home / ".z"))
+        (self.home / ".ex/mine").write_text("local\n")
+        r = self.update()
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertEqual(self.read(".rm"), "mine\n")
+        self.assertEqual(self.read(".ex/mine"), "local\n")
+        self.assertIn("~/.rm", r.stdout)
+        self.assertIn("the source removes it, apply would delete it", r.stdout)
+        self.assertIn("~/.ex/mine", r.stdout)
+        r = self.update("--take-source", ".rm", "--keep-local", ".ex/mine")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((self.home / ".rm").exists())
+        saved = list((self.home / ".local/state/dotfiles-update").glob("*/.rm"))
+        self.assertEqual([p.read_text() for p in saved], ["mine\n"])  # the copy was saved before the removal
+
+    def test_a_binary_source_file_over_a_held_path_does_not_crash(self):
+        # f2: chezmoi cat of non-UTF-8 content raised UnicodeDecodeError in the report.
+        self.write("dot_bin", "text\n")
+        self.commit("bin v1")
+        self.chezmoi("apply", str(self.home / ".bin"))
+        (self.home / ".bin").write_text("local edit\n")
+        (self.src / "dot_bin").write_bytes(b"\xff\xfe\x00\x01\x80")
+        self.commit("bin v2 is binary")
+        r = self.update()
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("binary file, apply would replace it", r.stdout)
+        self.assertNotIn("Traceback", r.stderr)
+        r = self.update("--take-source", ".bin")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((self.home / ".bin").read_bytes(), b"\xff\xfe\x00\x01\x80")
+
+    def test_git_repo_externals_are_refreshed_though_status_does_not_list_them(self):
+        # f3: `chezmoi status` never lists a git-repo external that is due a pull, and no full apply ran.
+        remote = self.tmp / "ext-remote"
+        subprocess.run(["git", "init", "-q", "-b", "main", str(remote)], check=True)
+        (remote / "f").write_text("f\n")
+        subprocess.run(["git", "-C", str(remote), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(remote), *GIT[1:], "commit", "-qm", "i"], check=True, capture_output=True)
+        self.write(".chezmoiexternal.toml", '[".ext"]\n  type = "git-repo"\n  url = "%s"\n  refreshPeriod = "1s"\n' % remote)
+        self.commit("external")
+        self.assertEqual(self.chezmoi("apply").returncode, 0)  # clones it
+        (remote / "g").write_text("g\n")
+        subprocess.run(["git", "-C", str(remote), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(remote), *GIT[1:], "commit", "-qm", "g"], check=True, capture_output=True)
+        import time
+        time.sleep(2)
+        self.assertNotIn(".ext", self.chezmoi("status").stdout)  # the review's red: nothing pending as far as status knows
+        r = self.update()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue((self.home / ".ext/g").exists())
+        self.assertIn("checked 1 git-repo external(s)", r.stdout)
+
+    def test_a_new_file_in_a_directory_you_deleted_waits_and_nothing_else_stops(self):
+        # f4: the new file was called clean, the batched apply failed on the missing parent and updated nothing.
+        (self.src / "dot_d").mkdir()
+        self.write("dot_d/a", "a\n")
+        self.commit("d")
+        self.chezmoi("apply")
+        shutil.rmtree(self.home / ".d")
+        self.write("dot_d/new", "n\n")
+        self.write("dot_a", "two\n")
+        self.commit("new file in the deleted directory, and another change")
+        r = self.update()
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertEqual(self.read(".a"), "two\n")  # the rest still applied
+        self.assertIn("~/.d   you deleted it here", r.stdout)
+        self.assertIn("waiting on a held directory", r.stdout)
+        self.assertFalse((self.home / ".d").exists())
+        r = self.update("--take-source", ".d", "--take-source", ".d/a")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((self.read(".d/a"), self.read(".d/new")), ("a\n", "n\n"))  # the waiting file followed its directory
+
+    def test_no_build_cache_is_committed_or_deployable(self):
+        # f5: a .pyc under dot_local/bin was committed and would have been deployed to every machine.
+        if not (ROOT / ".git").exists():
+            self.skipTest("not a git checkout")
+        tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "*__pycache__*", "*.pyc"], capture_output=True, text=True).stdout.split()
+        self.assertEqual(tracked, [])
+        ignored = subprocess.run(["git", "-C", str(ROOT), "check-ignore", "-q", "dot_local/bin/__pycache__/x.pyc"])
+        self.assertEqual(ignored.returncode, 0)
+
+    def test_every_real_run_leaves_a_record_and_a_dry_run_leaves_none(self):
+        # f6: design principle 14, a record that survives the terminal.
+        self.conflict_state()
+        self.update("--dry-run")
+        self.assertFalse((self.home / ".local/state/dotfiles-update/log.jsonl").exists())
+        r = self.update("--take-source", ".a")
+        self.assertEqual(r.returncode, 3)
+        lines = (self.home / ".local/state/dotfiles-update/log.jsonl").read_text().splitlines()
+        self.assertEqual(len(lines), 1)
+        record = json.loads(lines[0])
+        self.assertEqual(record["exit"], 3)
+        self.assertIn("~/.b", record["applied"])
+        self.assertEqual([t["path"] for t in record["taken"]], ["~/.a"])
+        self.assertTrue(record["taken"][0]["saved"].endswith("/.a"))
+        self.assertEqual([h["path"] for h in record["held"]], ["~/.c"])
+        self.assertEqual(record["source_was"], record["source_now"])
 
 
 if __name__ == "__main__":

@@ -6,6 +6,8 @@
 .local/share/session-recap/test_session_recap.py
 .local/share/session-recap/test_requests.py
 .local/share/session-recap/test_timezone.py
+.local/bin/__pycache__
+.local/bin/__pycache__/**
 .local/share/session-recap/__pycache__
 .local/share/session-recap/__pycache__/**
 .local/share/agent-alert/tests/**
