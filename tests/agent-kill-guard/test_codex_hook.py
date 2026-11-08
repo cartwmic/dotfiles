@@ -1,6 +1,6 @@
 """Codex's PreToolUse guard hook: ~/.codex/hooks.json (dot_codex/modify_hooks.json.tmpl), the [hooks.state] anchor in config.toml
 (dot_codex/modify_private_config.toml.tmpl), and the step that trusts exactly that hook through Codex's own API
-(dot_local/user_scripts/executable_codex_trust_hooks.py, run after every full apply by run_after_26_codex_hook_trust.sh.tmpl).
+(dot_local/user_scripts/executable_codex_trust_hooks.py, run after every full apply by run_after_90_codex_hook_trust.sh.tmpl).
 
 The modify scripts are rendered with real chezmoi for both profiles. The trust step runs against a real `codex app-server` in a scratch
 CODEX_HOME (skipped without a codex binary); nothing here calls a model.
@@ -239,7 +239,7 @@ class Trust(unittest.TestCase):
         self.assertIn("WARN", r.stdout)
 
 
-WRAPPER_TMPL = ROOT / "run_after_26_codex_hook_trust.sh.tmpl"
+WRAPPER_TMPL = ROOT / "run_after_90_codex_hook_trust.sh.tmpl"
 FAKE_TRUSTED = '''#!%s
 import json, os, sys
 # A fake `codex app-server`: answers initialize and hooks/list, with our guard hook already trusted.
@@ -258,7 +258,7 @@ for line in sys.stdin:
 
 
 class Wrapper(unittest.TestCase):
-    """run_after_26_codex_hook_trust.sh.tmpl, rendered by chezmoi and run as chezmoi runs it: its exit code is what decides whether later scripts run."""
+    """run_after_90_codex_hook_trust.sh.tmpl, rendered by chezmoi and run as chezmoi runs it: its exit code is what decides whether later scripts run."""
 
     @classmethod
     def setUpClass(cls):
@@ -301,6 +301,30 @@ class Wrapper(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertNotIn("ERROR", r.stdout)
         self.assertIn("Codex guard hook trusted", r.stdout)
+
+
+class ScriptOrder(unittest.TestCase):
+    """Real chezmoi, scratch source and HOME. Scripts run in numeric order, so the trust script is numbered 90, after 30, 65 and 75, and a
+    failing trust script must not stop them."""
+
+    def test_the_trust_script_is_numbered_last_and_a_failure_there_skips_nothing_before_it(self):
+        self.assertTrue((ROOT / "run_after_90_codex_hook_trust.sh.tmpl").is_file())
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            src, home = tmp / "src", tmp / "home"
+            src.mkdir()
+            home.mkdir()
+            cfg = tmp / "chezmoi.yaml"
+            cfg.write_text("sourceDir: %s\n" % src)
+            for name, marker in (("run_onchange_after_30_a.sh", "30"), ("run_onchange_after_65_b.sh", "65"), ("run_after_75_c.sh", "75")):
+                (src / name).write_text('#!/bin/sh\necho %s >> "$HOME/order.log"\n' % marker)
+            (src / "run_after_90_d.sh").write_text('#!/bin/sh\necho 90 >> "$HOME/order.log"\necho "ERROR: simulated codex failure" >&2\nexit 1\n')
+            env = dict(os.environ, HOME=str(home))
+            r = subprocess.run(["chezmoi", "--no-tty", "--config", str(cfg), "--config-format", "yaml", "--source", str(src), "--destination", str(home),
+                                "--persistent-state", str(tmp / "state.boltdb"), "apply"], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               env=env, timeout=120)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertEqual((home / "order.log").read_text().split(), ["30", "65", "75", "90"], r.stdout)
 
 
 class NoCodex(unittest.TestCase):

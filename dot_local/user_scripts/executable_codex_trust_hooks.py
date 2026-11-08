@@ -11,7 +11,7 @@ as trusted. Every other hook, trusted or not, is left alone, and nothing is writ
                                                   or still not trusted afterwards
     codex_trust_hooks.py --command CMD --check    only report; exit 1 when our hook is not trusted
 
-CMD is the guard command (.chezmoitemplates/codex_guard_command), passed by run_after_26_codex_hook_trust.sh and also read from
+CMD is the guard command (.chezmoitemplates/codex_guard_command), passed by run_after_90_codex_hook_trust.sh and also read from
 $CODEX_GUARD_COMMAND. With no codex binary it prints one INFO line and exits 0 (--check: 1). The binary: $CODEX_BIN, else `codex` on PATH,
 else the newest ~/.t3/tools/codex/<version>/bin/codex. $CODEX_HOME is passed through.
 """
