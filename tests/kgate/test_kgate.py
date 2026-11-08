@@ -163,12 +163,12 @@ class PodSpec(unittest.TestCase):
         self.assertEqual(c["resources"], {"requests": {"cpu": "3", "memory": "256Mi"}, "limits": {"memory": "512Mi"}})
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
-        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the agent-4 overflow preference (the only change from the 4ef32ef1 render)
+        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263)
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "c0a96c550ba45917cc2a732409384936977b8a5a42567db9891af4419efa6dd7"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "f44b99db04abdaf19b660d7a867f35fcdf93563847275dd3d960634618853fcf"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
-             "f9f91a171d9cbcc3cff44901ebd23a5506fff9db5cb8880153f0fe3f7c11d6b7"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "dc281cecdc8b40c2a06e9b5b67d792874a73998a59dad9297abfa8e271608d4a"),
+             "b617cec77bf154a3136dc35e106cc35dd5634e70fd4bf7798f3911a556597fdc"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "40a862dd4f7ce2be79587289297d553af695ea0be994185d15b28ba8cde64fb3"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -180,16 +180,31 @@ class PodSpec(unittest.TestCase):
         self.assertEqual(notin["values"], ["ubuntu-server-k8s-master-1", "mac-mini-worker"])
         self.assertIn({"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]}, exprs)
 
-    def test_gpu_node_is_overflow_only(self):
+    def test_g14_is_preferred_and_the_gpu_node_is_overflow_only(self):
         pod, _ = self.pod()
         pref = pod["spec"]["affinity"]["nodeAffinity"]["preferredDuringSchedulingIgnoredDuringExecution"]
-        self.assertEqual(pref, [{"weight": 100, "preference": {"matchExpressions": [
-            {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-agent-4"]}]}}])
+        self.assertEqual(pref, [
+            {"weight": 100, "preference": {"matchExpressions": [
+                {"key": "kubernetes.io/hostname", "operator": "In", "values": ["cartwmic-g14-wsl"]}]}},
+            {"weight": 100, "preference": {"matchExpressions": [
+                {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-agent-4"]}]}}])
+
+    def test_the_preference_does_not_widen_the_required_match(self):
+        pod, _ = self.pod()
+        exprs = pod["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"]
+        self.assertEqual(exprs, [
+            {"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]},
+            {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-master-1", "mac-mini-worker"]}])
+
+    def test_prefer_and_overflow_nodes_do_not_overlap(self):
+        self.assertFalse(set(K.PREFER_NODES) & set(K.OVERFLOW_NODES))
+        self.assertFalse(set(K.PREFER_NODES) & set(K.NEVER_NODES))
 
     def test_pinned_node(self):
         pod, _ = self.pod(node="ubuntu-server-k8s-agent-1")
         exprs = pod["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"]
-        self.assertIn({"key": "kubernetes.io/hostname", "operator": "In", "values": ["ubuntu-server-k8s-agent-1"]}, exprs)
+        self.assertEqual(exprs, [{"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]},
+                                 {"key": "kubernetes.io/hostname", "operator": "In", "values": ["ubuntu-server-k8s-agent-1"]}])
 
     def test_secrets_are_secrets_not_env_values(self):
         pod, secrets = self.pod(secret_env={"TOK": b"s3cret"}, pull=("ghcr.io", "u", b"pw"))
