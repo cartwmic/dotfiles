@@ -73,13 +73,17 @@ class ModifyScript(unittest.TestCase):
                 else:
                     self.assertEqual(s["modelThinkingLevels"]["claude-compat/claude-opus-5-5"], "medium")
 
-    def test_an_empty_file_is_a_fresh_machine_and_output_has_no_final_newline(self):
+    def test_an_empty_file_is_a_fresh_machine_and_the_final_newline_follows_the_file(self):
         for profile in self.scripts:
             with self.subTest(profile=profile):
                 r = self.run_script(profile, "")
                 self.assertEqual(r.returncode, 0, r.stderr)
-                self.assertFalse(r.stdout.endswith("\n"))
                 self.assertEqual(json.loads(r.stdout), self.modify(profile, {}))
+                self.assertFalse(r.stdout.endswith("\n"))
+                with_newline = self.run_script(profile, "{}\n").stdout
+                self.assertTrue(with_newline.endswith("}\n"))
+                self.assertFalse(self.run_script(profile, "{}").stdout.endswith("\n"))
+                self.assertEqual(self.run_script(profile, with_newline).stdout, with_newline)  # unchanged file, unchanged bytes
 
     def test_what_pi_and_the_user_write_is_kept(self):
         live = {"theme": "light", "hideThinkingBlock": True, "lastChangelogVersion": "9.9.9", "deviceId": "abc", "defaultThinkingLevel": "low",

@@ -16,14 +16,20 @@
 #     enabledModels (ours are always present; a model you added stays; one of ours you removed comes back).
 #   Every other key is left exactly as it is, including deviceId and any key a newer Pi adds.
 #
-# The output has no final newline, as Pi's own JSON writer writes none, so chezmoi sees no difference after Pi saves.
+# The output ends with a newline exactly when the file on disk does, so an unchanged file stays byte-for-byte unchanged.
 # An unreadable (not JSON) settings.json is an error, never overwritten. Nothing is applied on the work Mac by an agent without
 # Michael's confirmation for that action.
 set -eu
 
 WANT={{ includeTemplate "shquote" (includeTemplate "pi_settings_desired" .) }}
 
-out=$(jq -s --argjson want "$WANT" '
+input=$(cat; printf x)
+input=${input%x}
+nl=$(printf '\n.')
+nl=${nl%.}
+case $input in *"$nl") end_nl=1 ;; *) end_nl= ;; esac
+
+out=$(printf '%s' "$input" | jq -s --argjson want "$WANT" '
   # The identity of a package entry: its source with a trailing @ref (a git sha or an npm version) removed.
   def pkgid: (if type == "object" then .source else . end) | sub("@[^@/]+$"; "");
   def union_by($ours; id): $ours + [ .[] | select((id) as $i | ($ours | map(id) | index($i)) == null) ];
@@ -48,3 +54,4 @@ out=$(jq -s --argjson want "$WANT" '
 ')
 
 printf '%s' "$out"
+[ -z "$end_nl" ] || printf '\n'
