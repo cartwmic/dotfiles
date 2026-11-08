@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS = ROOT / "dot_claude/modify_settings.json.tmpl"
 COMMAND = 'g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py"; [ -r "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0'
-MARK = "refuse_pattern_kill.py"
+MARK = 'g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py";'
 USER_HOOK = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo user"}]}
 
 
@@ -66,13 +66,16 @@ class GuardSettingsTest(unittest.TestCase):
 
     def test_a_stale_copy_is_replaced_not_duplicated(self):
         stale = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
-            {"type": "command", "command": "python3 /old/path/agent-harness/hooks/refuse_pattern_kill.py"},
+            {"type": "command", "command": MARK + " [ -r \"$g\" ] || exit 0; python3 \"$g\""},
+            {"type": "command", "command": "echo mentions agent-harness/hooks/refuse_pattern_kill.py but is the owner's"},
             {"type": "command", "command": "echo keep-me"}]}]}}
         for profile in self.scripts:
             with self.subTest(profile=profile):
                 out = self.modify(profile, stale)
                 self.assertEqual(guards(out), [("Bash|Monitor", COMMAND)])
-                self.assertIn({"matcher": "Bash", "hooks": [{"type": "command", "command": "echo keep-me"}]}, out["hooks"]["PreToolUse"])
+                kept = [h["command"] for g in out["hooks"]["PreToolUse"] for h in g["hooks"]]
+                self.assertIn("echo keep-me", kept)
+                self.assertIn("echo mentions agent-harness/hooks/refuse_pattern_kill.py but is the owner's", kept)  # a mention is not ours
 
     def test_the_command_blocks_a_pattern_kill_and_never_blocks_when_the_script_is_missing(self):
         out = self.modify("personal", {})

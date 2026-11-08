@@ -98,7 +98,7 @@ HUB_WANT=false
 # Single quotes on purpose: $HOME expands when the hook runs, not here.
 # Only the script's own exit 2 blocks: a missing or unreadable script exits 0 here (python3 would exit 2 on a missing file and block every command).
 GUARD_COMMAND='g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py"; [ -r "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0'
-GUARD_MARKER='agent-harness/hooks/refuse_pattern_kill.py'
+GUARD_MARKER='g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py";'
 
 HUB_URL='https://cliproxy.internal.cartwmic.com'
 HUB_HELPER={{ includeTemplate "shquote" (printf "%s/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-claude-code'" .chezmoi.homeDir) }}
@@ -166,7 +166,7 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
       else . end;
   def ensure_t3: t3_strip | if $t3want then t3_add else . end;
   # Pattern-kill guard: one PreToolUse group on Bash and Monitor. Strip every handler of ours (other handlers and groups stay), then append the current one.
-  def guard_ours: (.command? // "") | contains($guardmarker);
+  def guard_ours: (.command? // "") | startswith($guardmarker);
   def guard_group_has: type == "object" and (.hooks // [] | any(guard_ours));
   def guard_strip:
     if (.hooks.PreToolUse | type) == "array" and (.hooks.PreToolUse | any(guard_group_has)) then

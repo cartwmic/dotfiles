@@ -1,5 +1,5 @@
 # Pattern-kill guard for Codex, second layer (agent-harness README, "Pattern-kill guard"). Managed by chezmoi: edit the source, not this file.
-# The main mechanism is the PreToolUse hook in config.toml, which sees every form; this file still refuses the plain ones while the hook is untrusted.
+# The main mechanism is the PreToolUse hook in ~/.codex/hooks.json, which sees every form; this file still refuses the plain ones while the hook is untrusted.
 # Codex's own exec policy refuses these commands before they run, in every sandbox and approval mode, and tells the model why.
 # Covers pkill and killall as the command, with or without a path, and after a simple wrapper. It does not see inside `sh -c '...'`,
 # nor a wrapper that takes options first (`sudo -u root pkill x`, `env FOO=1 pkill x`); Claude's hook and Pi's extension do.

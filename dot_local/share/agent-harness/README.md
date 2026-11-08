@@ -148,7 +148,7 @@ main Codex mechanism and the rules the backup. The hook is in its own file becau
 tables and the comments above them), so nothing of ours is cut out of that file; the one thing added to it is an empty `[hooks.state]` header above the managed blocks, so
 Codex's trust tables land beside it and never inside the hub block. Trust is checked and re-granted by `run_after_26_codex_hook_trust.sh` on every full apply (a scoped
 `chezmoi apply <path>` runs no scripts: then run `~/.local/user_scripts/codex_trust_hooks.py --command "$(cat ~/.local/share/chezmoi/.chezmoitemplates/codex_guard_command)"`,
-add `--check` to only look). The hook command text is frozen, so its hash changes only if its position changes: another group inserted above ours in `hooks.json` (the owner's,
+add `--check` to only look). The hook command text is frozen, so its trust (kept by Codex under a key made of the file and the position) is lost only if its position changes: another group inserted above ours in `hooks.json` (the owner's,
 or one Codex imports) leaves ours untrusted, and so skipped, until the next full apply.
 
 What is not covered (each is named in the code or the tests):
