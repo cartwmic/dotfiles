@@ -83,11 +83,12 @@ def always_runs(path):
 
 
 RUN_LINE = re.compile(r"\bmsg=Run ")  # not msg=RunScript
-LOOKS_FAILED = re.compile(r"\b(WARN|WARNING|ERROR|FAIL|FAILED)\b")
+LOOKS_FAILED = re.compile(r"\b(warn|warning|error|err|fail|failed|failure)\b", re.IGNORECASE)
+TAIL = 15  # lines of a failing script's output that are shown and recorded
 
 
 def script_runs(log):
-    """[(script name, exit code or None, [output lines that say WARN, ERROR or FAIL])] from the `chezmoi apply --debug` log (E20). Each run is one
+    """[(script name, exit code or None, [output lines that say warn, error or fail], [the last lines of its output])] from the `chezmoi apply --debug` log (E20). Each run is one
     `msg=Run cmd=<tmp dir>/<id>.<script name> ... err=<nil>` (exit 0) or `level=ERROR msg=Run err="exit status N" cmd=... exitCode=N`; the script's own
     output is what came before it."""
     runs, output = [], []
@@ -97,7 +98,7 @@ def script_runs(log):
             name = os.path.basename(found.group(1)).split(".", 1)[-1]
             exit_code = re.search(r"\bexitCode=(\d+)", line)
             code = int(exit_code.group(1)) if exit_code else (0 if re.search(r"\berr=<nil>", line) else None)
-            runs.append((name, code, [l.strip()[:160] for l in output if LOOKS_FAILED.search(l)][:2]))
+            runs.append((name, code, [l.strip()[:160] for l in output if LOOKS_FAILED.search(l)][:2], [l.rstrip()[:200] for l in output][-TAIL:]))
             output = []
         elif not line.startswith("time="):
             output.append(line)
@@ -266,9 +267,13 @@ def chezmoi_error(output):
 
 
 def print_script_runs(runs):
-    """One line per script that ran, with its exit code, and the first output lines that say WARN, ERROR or FAIL (E20: a script can exit 0 and fail inside)."""
-    for name, code, flagged in runs:
+    """One line per script that ran, with its exit code, and the first output lines that say warn, error or fail (E20: a script can exit 0 and fail inside).
+    A script that exited non-zero also has the end of its output printed: chezmoi's own log is not shown, so this is the only place it appears."""
+    for name, code, flagged, tail in runs:
         print("  script %s   exit %s%s" % (name, "?" if code is None else code, "   (its output says: %s)" % " | ".join(flagged) if flagged else ""))
+        if code != 0:
+            for line in tail:
+                print("      | %s" % line)
 
 
 def tilde(path, home):
@@ -309,7 +314,13 @@ def main(argv):
     parser.add_argument("--take-source", action="append", default=[], metavar="PATH")
     args = parser.parse_args(argv)
     record = {"time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "argv": argv}
-    code = run(args, record)
+    try:
+        code = run(args, record)
+    except Exception as error:  # an unexpected failure is recorded too, then raised as the traceback it is
+        record.update(exit=1, error="%s: %s" % (type(error).__name__, error))
+        if not args.dry_run and record.get("home"):
+            write_record(record.pop("home"), record)
+        raise
     record["exit"] = code
     if not args.dry_run and record.get("home"):
         write_record(record.pop("home"), record)
@@ -368,55 +379,89 @@ def run(args, record):
         record["error"] = str(error)
         return 1
     counts = {p: () for p in unresolved + taken}
-    # Paths inside a held directory follow it: applied right after it when it is taken, otherwise they wait (round 4 f4).
-    follow = sorted(p for p, ancestor in waiting.items() if ancestor in taken)
-    still_waiting = sorted(p for p, ancestor in waiting.items() if ancestor not in taken)
 
-    applied_files, runs, externals = 0, [], []
-    if not args.dry_run:
-        try:
-            for path in taken:
-                counts[path] = (backup(path, home, stamp),)
-            targets = clean + taken
-            if targets:
-                # --recursive=false: a pending directory is applied as itself, never as everything inside it, which could hold an edited file
-                chezmoi("apply", "--force", "--recursive=false", *targets, check=True)
-                applied_files = len(targets)
-            if follow:
-                chezmoi("apply", "--force", "--recursive=false", *follow, check=True)
-                applied_files += len(follow)
-            externals = git_externals()
-            if externals:
-                refreshed = chezmoi("apply", "--force", "--include=externals", *externals, merge=True)
-                if refreshed.returncode != 0:
-                    print("dotfiles-update: refreshing a git-repo external failed: %s" % chezmoi_error(refreshed.stdout))
-                    record["error"] = "external refresh failed"
-                    return 1
-            if scripts and not unresolved:
-                # E20: --debug is the only place chezmoi says each script's exit status; the log is read here and not printed.
-                result = chezmoi("apply", "--force", "--include=scripts", "--debug", merge=True)
-                runs = script_runs(result.stdout)
-                record["scripts"] = [{"name": n, "exit": c, "flagged": f} for n, c, f in runs]
-                if result.returncode != 0:
-                    print_script_runs(runs)
-                    failed = [name for name, code, _ in runs if code != 0]
-                    print("dotfiles-update: the script run stopped%s (%s)" % (": %s exited non-zero" % ", ".join(failed) if failed else "", chezmoi_error(result.stdout)))
-                    return 1
-        except RuntimeError as error:
-            print("dotfiles-update: %s" % error)
-            record["error"] = str(error)
-            return 1
-    record.update(applied=[tilde(p, home) for p in clean + taken + (follow if not args.dry_run else [])],
-                  taken=[{"path": tilde(p, home), "saved": counts[p][0] if counts[p] else None} for p in taken], kept=[tilde(p, home) for p in kept],
-                  held=[{"path": tilde(p, home), "reason": held[p]} for p in unresolved], waiting=[tilde(p, home) for p in still_waiting],
-                  externals=[tilde(p, home) for p in externals])
+    def ancestors(path):
+        return [h for h in held if path.startswith(h + os.sep)]
+
+    # A path taken from under a held directory cannot be applied unless that directory is taken in the same run (its parent would be missing):
+    # it stays held, with that said, however many levels deep (round 5 f2).
+    moved = True
+    while moved:
+        moved = False
+        for path in list(taken):
+            missing = [h for h in ancestors(path) if h not in taken]
+            if missing:
+                taken.remove(path)
+                unresolved.append(path)
+                held[path] += "; its directory %s is held too, so take that as well in the same run" % tilde(missing[0], home)
+                moved = True
+    # Paths inside a held directory follow it: applied right after it when every held ancestor is taken, otherwise they wait (round 4 f4, round 5 f2).
+    follow = sorted(p for p in waiting if all(h in taken for h in ancestors(p)))
+    still_waiting = sorted(p for p in waiting if p not in follow)
+    taken.sort()
+
+    runs, externals, applied_paths = [], [], []
+
+    def partial():
+        """On a run that stops after changing files, say what was already done: the record has it too (round 5 f1)."""
+        if applied_paths or any(counts[p] for p in taken):
+            print("  before it stopped, dotfiles-update had applied %d file(s)%s" % (len(applied_paths), "".join(
+                "; took the source version of %s (your copy saved as %s)" % (tilde(p, home), tilde(counts[p][0], home) if counts[p] and counts[p][0] else "-")
+                for p in taken if counts[p])))
+
+    try:
+        if not args.dry_run:
+            try:
+                for path in taken:
+                    counts[path] = (backup(path, home, stamp),)
+                targets = clean + taken
+                if targets:
+                    # --recursive=false: a pending directory is applied as itself, never as everything inside it, which could hold an edited file
+                    chezmoi("apply", "--force", "--recursive=false", *sorted(targets), check=True)
+                    applied_paths += targets
+                if follow:
+                    chezmoi("apply", "--force", "--recursive=false", *follow, check=True)
+                    applied_paths += follow
+                externals = git_externals()
+                if externals:
+                    refreshed = chezmoi("apply", "--force", "--include=externals", *externals, merge=True)
+                    if refreshed.returncode != 0:
+                        print("dotfiles-update: refreshing a git-repo external failed (%s):" % chezmoi_error(refreshed.stdout))
+                        for line in refreshed.stdout.strip().splitlines()[-TAIL:]:
+                            print("      | %s" % line)
+                        record["error"] = "external refresh failed"
+                        record["external_output"] = refreshed.stdout.strip().splitlines()[-TAIL:]
+                        partial()
+                        return 1
+                if scripts and not unresolved:
+                    # E20: --debug is the only place chezmoi says each script's exit status; the log is read here and not printed.
+                    result = chezmoi("apply", "--force", "--include=scripts", "--debug", merge=True)
+                    runs = script_runs(result.stdout)
+                    record["scripts"] = [{"name": n, "exit": c, "flagged": f, "tail": t if c != 0 else []} for n, c, f, t in runs]
+                    if result.returncode != 0:
+                        print_script_runs(runs)
+                        failed = [name for name, code, _, _ in runs if code != 0]
+                        print("dotfiles-update: the script run stopped%s (%s)" % (": %s exited non-zero" % ", ".join(failed) if failed else "", chezmoi_error(result.stdout)))
+                        record["error"] = "script run stopped"
+                        partial()
+                        return 1
+            except RuntimeError as error:
+                print("dotfiles-update: %s" % error)
+                record["error"] = str(error)
+                partial()
+                return 1
+    finally:
+        record.update(applied=[tilde(p, home) for p in (applied_paths if not args.dry_run else clean + taken + follow)],
+                      taken=[{"path": tilde(p, home), "saved": counts[p][0] if counts[p] else None} for p in taken], kept=[tilde(p, home) for p in kept],
+                      held=[{"path": tilde(p, home), "reason": held[p]} for p in unresolved], waiting=[tilde(p, home) for p in still_waiting],
+                      externals=[tilde(p, home) for p in externals])
 
     verb = "would apply" if args.dry_run else "applied"
     nothing = not (clean or conflicts or changed_scripts or waiting)
     if nothing:
         print("dotfiles-update: nothing to update.")
         if externals:
-            print("  checked %d git-repo external(s) (`git pull`, fast-forward only)." % len(externals))
+            print("  checked %d git-repo external(s) (chezmoi runs the `git pull` the external is configured with)." % len(externals))
         if always:
             print("  clean: %d always-run script(s) (run_after_/run_before_) are listed by `chezmoi status` after every apply because they run on every apply; "
                   "that is not a pending change." % len(always))
@@ -425,10 +470,10 @@ def run(args, record):
             else:
                 print_script_runs(runs)
         return 0
-    print("dotfiles-update: %s %d file(s)%s." % (verb, len(clean) + len(taken) + (len(follow) if not args.dry_run else 0),
+    print("dotfiles-update: %s %d file(s)%s." % (verb, len(clean) + len(taken) + len(follow),
                                                  (", ran %d script(s)" % len(runs)) if runs else ""))
     if externals:
-        print("  checked %d git-repo external(s) (`git pull`, fast-forward only)." % len(externals))
+        print("  checked %d git-repo external(s) (chezmoi runs the `git pull` the external is configured with)." % len(externals))
     print_script_runs(runs)
     for path in taken:
         saved = counts[path][0] if counts[path] else None

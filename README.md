@@ -650,8 +650,9 @@ only the directory itself for a directory it would remove). **It applies a path 
 | a directory the source drops that holds files chezmoi did not write (even a `.DS_Store`), a different case spelling, a symlinked parent | HOLDS it |
 | a new file inside a directory that is held (for example one you deleted) | waits, listed as such; it is applied right after that directory when you `--take-source` it |
 | a path the source REMOVES (`.chezmoiremove`, `remove_`, an `exact_` directory's extras) that is edited here or was never written by chezmoi | HOLDS it ("the source removes it, apply would delete it") |
-| a git-repo external (`.chezmoiexternal.toml`, `type = "git-repo"`) | refreshed by name with `git pull` (chezmoi's own, fast-forward only) when its `refreshPeriod` is due; `chezmoi status` never lists one |
-| `run_` scripts | run only when nothing is held (a script may depend on a held-back path) |
+| a git-repo external (`.chezmoiexternal.toml`, `type = "git-repo"`) | refreshed by name with the `git pull` its definition sets (this repo's uses `--ff-only`) when its `refreshPeriod` is due; `chezmoi status` never lists one. A failed pull prints git's last lines and exits 1 |
+| `--take-source` on a path inside a held directory whose directory is not taken in the same run | stays held, and says so (its parent would be missing) |
+| `run_` scripts | run only when nothing is held (a script may depend on a held-back path); a script that fails has the end of its output printed and recorded |
 
 What it prints, every time:
 - `source at <sha>, was <sha>`: the source checkout's commit after the pull and before it (`(no new commits)` when they are equal).
@@ -673,7 +674,7 @@ exists, because nothing proves it is chezmoi's own; settle each once. A `modify_
 change for the same reason, until you take or keep it.
 First install on a machine that has not got it yet (for example the work Mac, where `chezmoi update` already fails): `chezmoi update --apply=false`
 then `chezmoi apply ~/.local/bin/dotfiles-update`, and from then on `dotfiles-update`.
-Like `chezmoi apply`, it also deletes unmanaged files inside an `exact_` directory only when every one of them is unedited chezmoi work, and a `run_` script's output is shown only when it fails.
+Like `chezmoi apply`, it also deletes unmanaged files inside an `exact_` directory only when every one of them is unedited chezmoi work, and a `run_` script's output is shown when it fails (its last 15 lines).
 To keep a local edit for good, adopt it: `chezmoi re-add PATH` (plain files) or change the template.
 Tests: `tests/dotfiles-update` (real chezmoi, scratch repository and HOME; the red control is plain `chezmoi apply` failing in the same state).
 

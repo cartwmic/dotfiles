@@ -434,6 +434,63 @@ class DotfilesUpdate(unittest.TestCase):
         self.assertEqual([h["path"] for h in record["held"]], ["~/.c"])
         self.assertEqual(record["source_was"], record["source_now"])
 
+    # --- review round 5 ---
+
+    def test_a_run_that_stops_in_a_script_still_records_and_says_what_it_already_changed(self):
+        # f1: the record was written only on exit 0 or 3, so a failed run lost the applied and taken lists and the backup path.
+        self.conflict_state()
+        self.write("run_onchange_after_20_bad.sh", "#!/bin/sh\necho 'npm ERR! code E401' >&2\nexit 1\n")
+        self.commit("failing script")
+        r = self.update("--take-source", ".a", "--keep-local", ".c")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(self.read(".a"), "two\n")
+        self.assertIn("before it stopped, dotfiles-update had applied", r.stdout)
+        self.assertIn("took the source version of ~/.a (your copy saved as ~/.local/state/dotfiles-update/", r.stdout)
+        record = json.loads((self.home / ".local/state/dotfiles-update/log.jsonl").read_text().splitlines()[-1])
+        self.assertEqual(record["exit"], 1)
+        self.assertIn("~/.b", record["applied"])
+        self.assertTrue(record["taken"][0]["saved"].endswith("/.a"))
+        self.assertTrue(Path(record["taken"][0]["saved"]).is_file())
+
+    def test_a_failing_scripts_own_output_is_shown_and_recorded(self):
+        # f3: since E20 the output was swallowed: only "exit 1" was shown.
+        self.write("run_onchange_after_20_bad.sh", "#!/bin/sh\necho 'npm ERR! code E401'\necho 'second line' >&2\nexit 1\n")
+        self.write("run_onchange_after_10_soft.sh", "#!/bin/sh\necho 'Error: could not reach the registry'\nexit 0\n")
+        self.commit("scripts")
+        r = self.update()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("      | npm ERR! code E401", r.stdout)
+        self.assertIn("      | second line", r.stdout)
+        self.assertIn("script 10_soft.sh   exit 0   (its output says: Error: could not reach the registry)", r.stdout)
+        record = json.loads((self.home / ".local/state/dotfiles-update/log.jsonl").read_text().splitlines()[-1])
+        bad = [x for x in record["scripts"] if x["name"] == "20_bad.sh"][0]
+        self.assertEqual((bad["exit"], bad["tail"][:1]), (1, ["npm ERR! code E401"]))
+
+    def test_waiting_works_at_every_depth_and_a_taken_child_needs_its_held_parent_taken(self):
+        # f2: with .d and .d/e both deleted, taking only .d, or only .d/a, made the batched apply fail on a missing parent.
+        (self.src / "dot_d/e").mkdir(parents=True)
+        self.write("dot_d/a", "a\n")
+        self.write("dot_d/e/g", "g\n")
+        self.commit("tree")
+        self.chezmoi("apply")
+        shutil.rmtree(self.home / ".d")
+        self.write("dot_d/e/new", "n\n")
+        self.write("dot_a", "two\n")
+        self.commit("deep new file and another change")
+        r = self.update("--take-source", ".d/a")  # its parent .d is held and not taken
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertEqual(self.read(".a"), "two\n")  # the rest still applied, nothing exited 1
+        self.assertIn("~/.d/a", r.stdout)
+        self.assertIn("its directory ~/.d is held too, so take that as well in the same run", r.stdout)
+        self.assertFalse((self.home / ".d").exists())
+        r = self.update("--take-source", ".d")  # .d/e is held and not taken: .d/e/new must keep waiting
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertTrue((self.home / ".d").is_dir())
+        self.assertFalse((self.home / ".d/e/new").exists())
+        r = self.update("--take-source", ".d/a", "--take-source", ".d/e", "--take-source", ".d/e/g")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((self.read(".d/a"), self.read(".d/e/g"), self.read(".d/e/new")), ("a\n", "g\n", "n\n"))
+
 
 if __name__ == "__main__":
     unittest.main()
