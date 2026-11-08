@@ -233,10 +233,82 @@ class Trust(unittest.TestCase):
         self.assertIn("no guard hook", r.stdout)
 
     def test_a_missing_codex_binary_is_a_python_failure_that_the_wrapper_reports(self):
-        env = dict(self.env, CODEX_BIN="/nonexistent/codex")
+        # HOME is this test's own, so no T3-bundled codex is found and the fallback has nothing to try.
+        env = dict(self.env, CODEX_BIN="/nonexistent/codex", HOME=str(self.home), PATH="/usr/bin:/bin")
         r = subprocess.run([sys.executable, str(TRUST), "--command", COMMAND], capture_output=True, text=True, env=env, timeout=60)
         self.assertEqual(r.returncode, 1)  # the wrapper turns this into a failing script with an ERROR line (see Wrapper)
         self.assertIn("WARN", r.stdout)
+        self.assertIn("no codex binary answered", r.stdout)
+
+
+class CodexFallback(unittest.TestCase):
+    """The default `codex` on PATH can be present but unable to start (the npm install whose native binary is gone). The helper then tries
+    $CODEX_BIN, and then T3's bundled Codex, and fails only when none of them answers. Fake codex binaries; no model is called."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        self.bin = self.home / "bin"  # the only PATH entry: a `codex` here is the "default" one
+        self.bin.mkdir()
+        self.env = {"PATH": "%s:/usr/bin:/bin" % self.bin, "HOME": str(self.home), "CODEX_HOME": str(self.home / "codex-home"),
+                    "GUARD_COMMAND": COMMAND}
+
+    def tearDown(self):
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def fake(self, path, body):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+        path.chmod(0o755)
+        return path
+
+    def broken(self, path):
+        return self.fake(path, "#!/bin/sh\nexit 3\n")  # starts and exits at once: app-server never answers
+
+    def working(self, path):
+        return self.fake(path, FAKE_TRUSTED)  # answers initialize and hooks/list, with our hook already trusted
+
+    def run_trust(self, env_extra=None):
+        env = dict(self.env, **(env_extra or {}))
+        return subprocess.run([sys.executable, str(TRUST), "--command", COMMAND, "--check"], capture_output=True, text=True, env=env, timeout=120)
+
+    def t3(self, version):
+        return self.home / ".t3/tools/codex" / version / "bin/codex"
+
+    def test_the_default_codex_that_will_not_start_falls_back_to_t3_bundled_codex(self):
+        self.broken(self.bin / "codex")
+        self.working(self.t3("0.166.0"))
+        r = self.run_trust()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("%s did not start" % (self.bin / "codex"), r.stdout)  # the skipped candidate is named
+        self.assertIn("k trusted", r.stdout)  # the fake app-server's hook, listed as trusted
+        self.assertIn(str(self.t3("0.166.0")), r.stdout)  # the one that answered is named
+
+    def test_the_newest_t3_bundled_codex_is_tried_first(self):
+        self.broken(self.bin / "codex")
+        self.working(self.t3("0.156.1"))
+        self.working(self.t3("0.166.0"))
+        r = self.run_trust()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(str(self.t3("0.166.0")), r.stdout)
+        self.assertNotIn(str(self.t3("0.156.1")), r.stdout)
+
+    def test_codex_bin_when_set_is_used_before_t3_even_with_a_broken_default(self):  # CODEX_BIN is first in the order, then PATH, then T3
+        self.broken(self.bin / "codex")
+        self.working(self.home / "custom" / "codex")
+        self.working(self.t3("0.166.0"))
+        r = self.run_trust({"CODEX_BIN": str(self.home / "custom" / "codex")})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(str(self.home / "custom" / "codex"), r.stdout)
+        self.assertNotIn(str(self.t3("0.166.0")), r.stdout)
+
+    def test_when_no_candidate_answers_it_fails_and_names_each_one(self):
+        self.broken(self.bin / "codex")
+        self.broken(self.t3("0.166.0"))
+        r = self.run_trust()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("WARN: no codex binary answered", r.stdout)
+        self.assertIn(str(self.bin / "codex"), r.stdout)
+        self.assertIn(str(self.t3("0.166.0")), r.stdout)
 
 
 WRAPPER_TMPL = ROOT / "run_after_90_codex_hook_trust.sh.tmpl"

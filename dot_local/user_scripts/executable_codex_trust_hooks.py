@@ -12,8 +12,9 @@ as trusted. Every other hook, trusted or not, is left alone, and nothing is writ
     codex_trust_hooks.py --command CMD --check    only report; exit 1 when our hook is not trusted
 
 CMD is the guard command (.chezmoitemplates/codex_guard_command), passed by run_after_90_codex_hook_trust.sh and also read from
-$CODEX_GUARD_COMMAND. With no codex binary it prints one INFO line and exits 0 (--check: 1). The binary: $CODEX_BIN, else `codex` on PATH,
-else the newest ~/.t3/tools/codex/<version>/bin/codex. $CODEX_HOME is passed through.
+$CODEX_GUARD_COMMAND. With no codex binary it prints one INFO line and exits 0 (--check: 1). The candidates, tried in this order: $CODEX_BIN,
+`codex` on PATH, then the T3-bundled ~/.t3/tools/codex/<version>/bin/codex, newest first. The first one that starts and answers is used; one
+that will not start (for example an npm `codex` whose native binary is gone) is skipped with an INFO line. $CODEX_HOME is passed through.
 """
 import glob
 import json
@@ -26,19 +27,22 @@ import threading
 WATCHDOG_SECONDS = 60  # the whole run: an app-server that never answers must not hang an apply
 
 
-def find_codex():
-    if os.environ.get("CODEX_BIN"):
-        return os.environ["CODEX_BIN"]
-    found = shutil.which("codex")
-    if found:
-        return found
-    candidates = glob.glob(os.path.expanduser("~/.t3/tools/codex/*/bin/codex"))
-
+def t3_bundled():
+    """T3's bundled Codex binaries, newest version first: ~/.t3/tools/codex/<version>/bin/codex."""
     def version(path):
         name = path.split("/")[-3]
         return tuple(int(p) if p.isdigit() else 0 for p in name.replace("-", ".").split("."))
 
-    return max(candidates, key=version) if candidates else None
+    return sorted(glob.glob(os.path.expanduser("~/.t3/tools/codex/*/bin/codex")), key=version, reverse=True)
+
+
+def codex_candidates():
+    """The Codex binaries to try, in order, without duplicates: $CODEX_BIN, `codex` on PATH, then T3's bundled ones. A candidate that will
+    not start or answer (an npm `codex` whose native binary is gone, for example) is skipped for the next one."""
+    names = [os.environ["CODEX_BIN"]] if os.environ.get("CODEX_BIN") else []
+    names += [shutil.which("codex")] if shutil.which("codex") else []
+    names += t3_bundled()
+    return list(dict.fromkeys(names))
 
 
 class Server:
@@ -88,6 +92,26 @@ def our_hooks(server, command):
             if h.get("command") == command and h.get("eventName") == "preToolUse" and str(h.get("sourcePath", "")).endswith("hooks.json")]
 
 
+def connect(candidates, command):
+    """The first candidate that starts and answers hooks/list, as (server, codex, our hooks). A candidate that cannot start or cannot answer
+    is reported on one INFO line and skipped. Raises RuntimeError with every failure when none answers."""
+    failures = []
+    for codex in candidates:
+        try:
+            server = Server(codex)
+        except Exception as error:
+            failures.append("%s: %s" % (codex, error))
+            print("[codex_trust_hooks] INFO: %s did not start (%s); trying the next codex" % (codex, error))
+            continue
+        try:
+            return server, codex, our_hooks(server, command)
+        except Exception as error:
+            server.close()
+            failures.append("%s: %s" % (codex, error))
+            print("[codex_trust_hooks] INFO: %s started but did not answer (%s); trying the next codex" % (codex, error))
+    raise RuntimeError("no codex binary answered (%s)" % "; ".join(failures))
+
+
 def main(argv):
     check = "--check" in argv
     command = os.environ.get("CODEX_GUARD_COMMAND", "")
@@ -96,14 +120,16 @@ def main(argv):
     if not command:
         print("[codex_trust_hooks] ERROR: no guard command (pass --command CMD or set CODEX_GUARD_COMMAND)")
         return 1
-    codex = find_codex()
-    if not codex:
+    candidates = codex_candidates()
+    if not candidates:
         print("[codex_trust_hooks] INFO: no codex binary found; the Codex guard hook cannot be trusted here (rules/agent-guard.rules still applies)")
         return 1 if check else 0
-    server = None
     try:
-        server = Server(codex)
-        hooks = our_hooks(server, command)
+        server, codex, hooks = connect(candidates, command)
+    except RuntimeError as error:
+        print("[codex_trust_hooks] WARN: %s" % error)
+        return 1
+    try:
         if not hooks:
             print("[codex_trust_hooks] WARN: Codex lists no guard hook in a hooks.json (is ~/.codex/hooks.json valid JSON with the guard group?)")
             return 1
@@ -118,14 +144,13 @@ def main(argv):
         if still:
             print("[codex_trust_hooks] WARN: the Codex guard hook is still %s after trusting it" % still[0].get("trustStatus"))
             return 1
-        print("[codex_trust_hooks] Codex guard hook trusted: %d trusted now, %d already were" % (len(pending), len(hooks) - len(pending)))
+        print("[codex_trust_hooks] Codex guard hook trusted: %d trusted now, %d already were (codex %s)" % (len(pending), len(hooks) - len(pending), codex))
         return 0
     except Exception as error:  # reported loudly; the caller decides whether it fails anything
         print("[codex_trust_hooks] WARN: %s" % error)
         return 1
     finally:
-        if server:
-            server.close()
+        server.close()
 
 
 if __name__ == "__main__":
