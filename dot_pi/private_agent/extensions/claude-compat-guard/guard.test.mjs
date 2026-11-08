@@ -154,7 +154,7 @@ test("the hub key is a 1Password reference; models.json has no claude-compat key
 	assert.equal(block.includes('"apiKey"'), false, "direct mode must not depend on a configured key");
 	assert.equal(/cpa_[0-9a-f]/.test(template), false);
 	assert.equal(template.includes("claude-compat-proxy"), false);
-	const settings = readFileSync(new URL("../../private_settings.json.tmpl", import.meta.url), "utf8");
+	const settings = readFileSync(new URL("../../../../.chezmoitemplates/pi_settings_desired", import.meta.url), "utf8");
 	assert.match(settings, /"source": "git:github\.com\/cartwmic\/pi-claude-request-compat@[0-9a-f]{40}",\n\s*"extensions": \[\]/);
 	assert.equal(settings.includes("vazzma/pi-claude-request-compat"), false);
 });

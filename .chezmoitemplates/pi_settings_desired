@@ -1,9 +1,8 @@
 {{- /*
-  Read the existing lastChangelogVersion from the live file (pi auto-bumps it
-  on every CLI run). Keep this template without a final newline to match
-  Pi's JSON writer. Without this, chezmoi sees drift every time pi runs. We
-  preserve whatever's currently on disk and fall back to a sensible default
-  on a fresh machine where the file doesn't exist yet.
+  pi_settings_desired: the Pi settings this repository wants, as JSON, for the keys it has a view on. It is not a file that lands in
+  ~/.pi/agent/settings.json: dot_pi/private_agent/modify_private_settings.json.tmpl merges it into the live file (see there for which keys
+  it owns, which it only seeds, and which it unions). Pi rewrites that file itself (changelog version, theme, model choices, installed
+  packages), so the old whole-file render collided with every such change.
 
   Native auto-compaction stays OFF on purpose: the auto-compact extension owns when to compact (percent of the
   model's window). reserveTokens still matters while native is off: Pi caps every compaction summary at
@@ -13,29 +12,8 @@
   session's compactions. 100000 gives an 80000-token history cap (still bounded by the model's max output).
   It does not move any trigger while native is off.
 */ -}}
-{{- $version := "0.70.2" -}}
-{{- $theme := "dark" -}}
-{{- $hideThinking := false -}}
-{{- $deviceId := "" -}}
 {{- $_ := includeTemplate "require_work_data" . -}}
 {{- $workGlm := and (eq .profile "axon-work-computer") (hasKey . "workGlmBaseUrl") (hasKey . "workGlmKeyRef") (hasKey . "workGlmModelId") -}}
-{{- $settingsPath := joinPath .chezmoi.homeDir ".pi/agent/settings.json" -}}
-{{- if stat $settingsPath -}}
-{{-   $existingSettings := output "cat" $settingsPath | fromJson -}}
-{{-   $found := get $existingSettings "lastChangelogVersion" -}}
-{{-   if $found -}}
-{{-     $version = $found -}}
-{{-   end -}}
-{{-   $themeFound := get $existingSettings "theme" -}}
-{{-   if $themeFound -}}
-{{-     $theme = $themeFound -}}
-{{-   end -}}
-{{-   $hideThinking = get $existingSettings "hideThinkingBlock" -}}
-{{-   $deviceId = get $existingSettings "deviceId" -}}
-{{- end -}}
-{{- if not $hideThinking -}}
-{{-   $hideThinking = false -}}
-{{- end -}}
 {
 {{- if eq .profile "personal" }}
   "defaultProvider": "claude-compat",
@@ -112,11 +90,5 @@
   "compaction": {
     "enabled": false,
     "reserveTokens": 100000
-  },
-  "lastChangelogVersion": {{ $version | quote }},
-  "theme": {{ $theme | quote }},
-  "hideThinkingBlock": {{ $hideThinking }}
-{{- if $deviceId }},
-  "deviceId": {{ $deviceId | quote }}
-{{- end }}
+  }
 }

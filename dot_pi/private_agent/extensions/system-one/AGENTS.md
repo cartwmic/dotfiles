@@ -3,7 +3,7 @@
 ## Scope and authority
 
 This directory is chezmoi documentation for the single Git package in
-`dot_pi/private_agent/private_settings.json.tmpl`, not an extension entry point.
+`.chezmoitemplates/pi_settings_desired` (merged into `~/.pi/agent/settings.json` by `dot_pi/private_agent/modify_private_settings.json.tmpl`), not an extension entry point.
 Pi loads code from `cartwmic/system-one-tools`; runtime changes belong there
 under its repository procedure. Never add `index.js` or `index.ts`: that would
 register tools twice. Repo-root `AGENTS.md` owns source naming, profiles, apply,
