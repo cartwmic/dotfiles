@@ -61,8 +61,16 @@ def pending():
     return entries
 
 
-def classify(entries):
-    """clean files (apply would only update them), conflicts (a local edit apply would overwrite), scripts (run_ scripts that would run)."""
+def managed_dirs():
+    return set(chezmoi("managed", "--include=dirs", "--path-style", "absolute", check=True).stdout.splitlines())
+
+
+def classify(entries, dirs=frozenset()):
+    """clean files (apply would only update them), conflicts (a local edit apply would overwrite), scripts (run_ scripts that would run).
+
+    `chezmoi status` shows only the directory itself for a directory it would remove or replace (the source dropped it, turned it into a
+    file or a symlink, listed it in .chezmoiremove, or an exact_ parent no longer has it) and never the files inside, so a directory that
+    exists here and that the source no longer has as a directory is a conflict: applying it would delete whatever is inside."""
     clean, conflicts, scripts = [], [], []
     for code, path in entries:
         local, apply_ = code[0], code[1]
@@ -70,15 +78,27 @@ def classify(entries):
             scripts.append(path)
         elif local != " " and apply_ != " ":
             conflicts.append(path)
+        elif apply_ != " " and os.path.isdir(path) and not os.path.islink(path) and path not in dirs:
+            conflicts.append(path)
         else:
             clean.append(path)
     return clean, conflicts, scripts
 
 
 def line_counts(path):
+    """Lines the apply would add and remove, counted inside the hunks only (a removed line that starts with -- is a removed line)."""
     diff = chezmoi("diff", "--", path, check=True).stdout
-    added = sum(1 for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++"))
-    removed = sum(1 for l in diff.splitlines() if l.startswith("-") and not l.startswith("---"))
+    added = removed = 0
+    in_hunk = False
+    for line in diff.splitlines():
+        if line.startswith("diff --git"):
+            in_hunk = False
+        elif line.startswith("@@"):
+            in_hunk = True
+        elif in_hunk and line.startswith("+"):
+            added += 1
+        elif in_hunk and line.startswith("-"):
+            removed += 1
     return added, removed
 
 
@@ -115,7 +135,7 @@ def main(argv):
             if pull.returncode != 0:
                 print("dotfiles-update: the pull failed (exit %d); nothing was applied.\n%s" % (pull.returncode, (pull.stderr or pull.stdout).strip()))
                 return 1
-        clean, conflicts, scripts = classify(pending())
+        clean, conflicts, scripts = classify(pending(), managed_dirs())
     except RuntimeError as error:
         print("dotfiles-update: %s" % error)
         return 1
@@ -138,7 +158,11 @@ def main(argv):
             kept.append(path)
         else:
             unresolved.append(path)
-    counts = {p: line_counts(p) for p in unresolved + taken}
+    try:
+        counts = {p: line_counts(p) for p in unresolved + taken}
+    except RuntimeError as error:
+        print("dotfiles-update: %s" % error)
+        return 1
 
     applied_files, ran_scripts = 0, 0
     if not args.dry_run:

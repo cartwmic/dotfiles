@@ -112,6 +112,41 @@ class DotfilesUpdate(unittest.TestCase):
         self.assertEqual(r.returncode, 3, r.stdout)
         self.assertIn("~/.d/f", r.stdout)
 
+    def drop_directory(self, how):
+        # Round 2 review: `chezmoi status` shows only the directory for a removal or replacement, never the edited file inside it.
+        (self.src / "dot_dd").mkdir()
+        self.write("dot_dd/f", "one\n")
+        self.commit("dir")
+        self.chezmoi("apply")
+        (self.home / ".dd/f").write_text("local-dd\n")
+        subprocess.run(["git", "-C", str(self.src), "rm", "-rq", "dot_dd"], check=True)
+        if how == "chezmoiremove":
+            self.write(".chezmoiremove", ".dd\n")
+        else:
+            self.write("dot_dd", "now a file\n")
+        self.commit("source drops the directory")
+        r = self.update()
+        self.assertEqual(self.read(".dd/f"), "local-dd\n", r.stdout)  # still there
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn("~/.dd", r.stdout)
+
+    def test_a_directory_in_chezmoiremove_is_a_conflict_not_a_silent_delete(self):
+        self.drop_directory("chezmoiremove")
+
+    def test_a_directory_that_becomes_a_file_is_a_conflict_not_a_silent_delete(self):
+        self.drop_directory("becomes_file")
+
+    def test_line_counts_include_lines_that_start_with_dashes_or_pluses(self):
+        self.write("dot_lua", "-- one\n-- two\nreal\n++ plus\n")
+        self.commit("lua")
+        self.chezmoi("apply")
+        (self.home / ".lua").write_text("edited\n")
+        self.write("dot_lua", "real\n-- three\n++ other\n")
+        self.commit("lua changes")
+        r = self.update()
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn("~/.lua   (apply would add 3 and remove 1 line(s))", r.stdout)
+
     def test_take_source_on_a_file_deleted_here_says_there_was_no_copy(self):
         self.conflict_state()
         (self.home / ".a").unlink()
