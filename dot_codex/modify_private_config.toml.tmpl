@@ -60,17 +60,24 @@ hub_re = re.compile(r"\n*# chezmoi:cliproxy-hub:begin\n.*?# chezmoi:cliproxy-hub
 stripped, dropped = hub_re.subn("", stripped)
 if dropped and stripped and not stripped.endswith("\n"):
     stripped += "\n"
-# The guard block is stripped first and re-inserted last, so it never sits between the hub block and its neighbours. Codex writes the
-# trust of the hook (`[hooks.state."<key>"]`) next to the own tables of the hook, which can be inside this block, so those tables are kept
-# and moved out before the block is dropped.
-guard_re = re.compile(r"\n*# chezmoi:agent-guard:begin\n(.*?)# chezmoi:agent-guard:end\n?", re.DOTALL)
-salvaged = []
-def _drop_guard(match):
-    for table in re.findall(r"(?ms)^\[hooks\.state[^\n]*\n.*?(?=^\[|\Z)", match.group(1)):
-        salvaged.append(table.strip("\n") + "\n")
-    return ""
-stripped, dropped = guard_re.subn(_drop_guard, stripped)
-if dropped and stripped and not stripped.endswith("\n"):
+# The guard hook is dropped first and re-inserted last, so it never sits between the hub block and its neighbours. It is found by what
+# it is, never by the markers around it: Codex edits this file (it writes the trust of the hook under [hooks.state] and can move that
+# table and the comment above it), so a span between the markers is not stable. Only two sections of ours go: the handler that runs the
+# classifier and, when it holds nothing else, the group header just above it. The marker comments are dropped wherever they are.
+GUARD_MARK = "agent-harness/hooks/refuse_pattern_kill.py"
+before = stripped
+stripped = re.sub(r"(?m)^# chezmoi:agent-guard:(?:begin|end)[ \t]*\n", "", stripped)
+pieces = re.split(r"(?m)^(?=\[)", stripped)
+head_text, sections = pieces[0], pieces[1:]
+gone = set()
+for k, section in enumerate(sections):
+    if section.startswith("[[hooks.PreToolUse.hooks]]") and GUARD_MARK in section:
+        gone.add(k)
+        alone = k + 1 >= len(sections) or not sections[k + 1].startswith("[[hooks.PreToolUse.hooks]]")
+        if k > 0 and sections[k - 1].startswith("[[hooks.PreToolUse]]") and alone:
+            gone.add(k - 1)
+stripped = head_text + "".join(sec for k, sec in enumerate(sections) if k not in gone)
+if stripped != before and stripped and not stripped.endswith("\n"):
     stripped += "\n"
 # Default provider: only the top-level region (before the first table header) is looked at.
 m = re.search(r"(?m)^\[", stripped)
@@ -119,13 +126,9 @@ timeout = 10
 boundary = re.search(r"(?m)^(?:\[|# BEGIN CHEZMOI|# chezmoi:[a-z-]+:begin)", stripped)
 at = boundary.start() if boundary else len(stripped)
 head, tail = stripped[:at], stripped[at:]
-have = lambda header: re.search(r"(?m)^" + re.escape(header) + r"\s*$", stripped)
-state = "" if re.search(r"(?m)^\[hooks\.state", stripped) or salvaged else "[hooks.state]\n\n"
-kept = "".join(t + "\n" for t in salvaged if not have(t.split("\n", 1)[0]))
+state = "" if re.search(r"(?m)^\[hooks\.state", stripped) else "[hooks.state]\n\n"
 head = head.rstrip("\n") + ("\n\n" if head.strip() else "")
 stripped = head + guard + "\n" + state + (tail if tail else "")
-if kept:
-    stripped = stripped.rstrip("\n") + "\n\n" + kept
 
 sys.stdout.write(stripped)
 '

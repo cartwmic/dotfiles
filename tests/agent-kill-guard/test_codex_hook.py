@@ -69,7 +69,7 @@ class ManagedBlock(unittest.TestCase):
 
     def test_idempotent_keeps_trust_state_and_other_content_and_replaces_a_stale_block(self):
         existing = ('model = "x"\n\n[hooks.state."/old/config.toml:pre_tool_use:0:0"]\ntrusted_hash = "sha256:abc"\n\n'
-                    "# chezmoi:agent-guard:begin\n[[hooks.PreToolUse]]\nmatcher = \"stale\"\n# chezmoi:agent-guard:end\n\n[other]\nk = 1\n")
+                    "# chezmoi:agent-guard:begin\n[[hooks.PreToolUse]]\nmatcher = \"stale\"\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"python3 /old/agent-harness/hooks/refuse_pattern_kill.py\"\n# chezmoi:agent-guard:end\n\n[other]\nk = 1\n")
         for profile, script in self.scripts.items():
             with self.subTest(profile=profile):
                 once = modify(script, existing)
@@ -95,15 +95,15 @@ class ManagedBlock(unittest.TestCase):
                 self.assertEqual(modify(script, out), out)
 
     def test_trust_tables_codex_wrote_inside_the_block_survive_the_next_apply(self):
-        inside = ("model = \"x\"\n\n# chezmoi:agent-guard:begin\n[[hooks.PreToolUse]]\nmatcher = \"old\"\n\n"
+        inside = ("model = \"x\"\n\n# chezmoi:agent-guard:begin\n[[hooks.PreToolUse]]\nmatcher = \"old\"\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\n"
+                  "command = \"python3 /old/agent-harness/hooks/refuse_pattern_kill.py\"\n\n"
                   "[hooks.state.\"/h/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"sha256:keep\"\n# chezmoi:agent-guard:end\n")
         for profile, script in self.scripts.items():
             with self.subTest(profile=profile):
                 out = modify(script, inside)
                 config = tomllib.loads(out)
                 self.assertEqual(config["hooks"]["state"]["/h/config.toml:pre_tool_use:0:0"]["trusted_hash"], "sha256:keep")
-                block = out[out.index("chezmoi:agent-guard:begin"):out.index("chezmoi:agent-guard:end")]
-                self.assertNotIn("hooks.state", block)
+                self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["^Bash$"])
                 self.assertEqual(modify(script, out), out)
 
     def test_a_state_table_is_provided_outside_the_block_when_none_exists(self):
@@ -159,6 +159,41 @@ class Trust(unittest.TestCase):
         checked = self.run_trust("--check")
         self.assertEqual(checked.returncode, 0, checked.stdout)
         self.assertIn("pre_tool_use:0:0 trusted", checked.stdout)
+
+    def test_trusting_another_hook_never_costs_the_next_apply_any_table(self):
+        # Round 3's data loss: with another PreToolUse hook in the file, Codex moved [hooks.state] (and the end comment above it) below that
+        # hook, and a span-based strip then deleted every table in between. Section-based removal keeps all of them.
+        many = ('model = "x"\n\n# BEGIN CHEZMOI AGENT HARNESS MCP\n[mcp_servers.a]\nurl = "x"\n[mcp_servers.node_repl]\ncommand = "n"\n'
+                '# END CHEZMOI AGENT HARNESS MCP\n\n[desktop]\nk = 1\n\n[marketplaces.m]\nsource = "s"\n\n[plugins.p]\nenabled = true\n\n[projects."/x"]\ntrust_level = "trusted"\n')
+        self.config(modify(self.script, many))
+        with open(self.home / "config.toml", "a") as f:
+            f.write("\n" + OTHER)  # Michael adds a hook of his own, after everything
+        self.assertEqual(self.run_trust().returncode, 0)
+        os.environ["CODEX_HOME"] = str(self.home)
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("trust", TRUST)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            server = module.Server(CODEX)
+            try:  # he trusts his hook through the same API Codex's /hooks review uses
+                listing = server.call("hooks/list", {"cwds": [str(self.home)]})
+                theirs = [h for e in listing["data"] for h in e["hooks"] if "someone-elses-hook" in (h.get("command") or "")]
+                self.assertEqual(len(theirs), 1)
+                server.call("config/value/write", {"keyPath": "hooks.state", "mergeStrategy": "upsert",
+                                                   "value": {theirs[0]["key"]: {"trusted_hash": theirs[0]["currentHash"]}}})
+            finally:
+                server.close()
+        finally:
+            del os.environ["CODEX_HOME"]
+        before = tomllib.loads((self.home / "config.toml").read_text())
+        after_text = modify(self.script, (self.home / "config.toml").read_text())
+        after = tomllib.loads(after_text)
+        for table in ("mcp_servers", "desktop", "marketplaces", "plugins", "projects"):
+            self.assertEqual(after[table], before[table], table)
+        self.assertEqual(len(after["hooks"]["PreToolUse"]), 2)
+        self.assertEqual(modify(self.script, after_text), after_text)
+        self.assertEqual(self.run_trust("--check").returncode, 0)  # ours is still trusted after the apply
 
     def test_a_missing_codex_binary_never_fails_an_apply(self):
         env = dict(self.env, CODEX_BIN="/nonexistent/codex")

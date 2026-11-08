@@ -285,28 +285,40 @@ def _wrapped(wrapper, rest, depth):
     """Look at the command a wrapper runs: skip its options (and their arguments) and its leading plain arguments, then test that word."""
     takes_arg, plain = WRAPPERS[wrapper]
     short_with_arg = {o[1] for o in takes_arg if len(o) == 2}
+    no_command = NO_COMMAND_FLAGS.get(wrapper, ())
     if wrapper == "command" and rest and rest[0] in ("-v", "-V"):
         return None  # `command -v pkill` only looks the name up
-    if any(w in NO_COMMAND_FLAGS.get(wrapper, ()) for w in rest):
-        return None
     i = 0
     while i < len(rest):
         w = rest[i]
+        if w in no_command:
+            return None  # `sudo -l` and friends only report; only the wrapper's own options are looked at here
         if w == "--":
             i += 1
             break
-        if wrapper == "env" and w in STRING_OPTIONS and i + 1 < len(rest):
-            hit = find_refused(rest[i + 1], depth + 1)
+        if wrapper == "env" and (w in STRING_OPTIONS or w.startswith("--split-string=") or (w.startswith("-S") and len(w) > 2)):
+            if w in STRING_OPTIONS:
+                text, step = (rest[i + 1] if i + 1 < len(rest) else ""), 2
+            elif w.startswith("--split-string="):
+                text, step = w.split("=", 1)[1], 1
+            else:
+                text, step = w[2:], 1
+            hit = find_refused(text, depth + 1)
             if hit:
                 return hit
-            i += 2
+            i += step
         elif w in takes_arg:
             i += 2
         elif w.startswith("--") and "=" in w:
             i += 1
-        elif w.startswith("-") and len(w) > 1:
+        elif w.startswith("-") and len(w) > 1 and not w.startswith("--"):
+            # A short cluster such as -iu: the first letter that takes an argument ends it. Its value is the rest of the cluster
+            # (-uroot) or, when nothing follows it, the next word (-iu root).
             letters = w[1:]
-            i += 2 if not w.startswith("--") and letters[-1] in short_with_arg and w not in ("-",) else 1
+            position = next((n for n, c in enumerate(letters) if c in short_with_arg), None)
+            i += 2 if position is not None and position == len(letters) - 1 else 1
+        elif w.startswith("-") and len(w) > 1:
+            i += 1
         elif ASSIGN.match(w):
             i += 1
         elif plain:

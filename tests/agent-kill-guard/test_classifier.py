@@ -77,6 +77,11 @@ REFUSED = [
     "env -S \"pkill x\"",
     "env -i FOO=1 pkill x",
     "xargs -I{} pkill {}",
+    "sudo -uroot pkill x",
+    "sudo pkill -l -f x",
+    "env --split-string=\"pkill x\"",
+    "env -S\"pkill x\"",
+    "env -S \"FOO=1 pkill x\"",
 ]
 
 ALLOWED = [
