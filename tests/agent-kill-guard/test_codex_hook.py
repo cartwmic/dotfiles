@@ -143,10 +143,14 @@ class StateAnchor(unittest.TestCase):
     def test_trust_that_sat_inside_the_hub_block_is_not_what_decides_the_anchor(self):
         # The anchor is looked for after the hub block is stripped; an old [hooks.state] inside it must not suppress the one above it.
         inside = 'model = "x"\n\n# chezmoi:cliproxy-hub:begin\n[model_providers.cliproxy]\nname = "stale"\n[hooks.state]\n# chezmoi:cliproxy-hub:end\n'
-        out = modify(self.hub, inside)
-        self.assertLess(out.index("[hooks.state]"), out.index("# chezmoi:cliproxy-hub:begin"))
-        self.assertEqual(out.count("[hooks.state]"), 1)
-        self.assertEqual(modify(self.hub, out), out)
+        # The hub block is only written back on macOS (the template is "n/a" elsewhere, e.g. the Linux CI runner), but it is stripped everywhere.
+        for name, script in (("hub", self.hub), ("work", self.work)):
+            with self.subTest(profile=name):
+                out = modify(script, inside)
+                self.assertEqual(out.count("[hooks.state]"), 1)
+                if "# chezmoi:cliproxy-hub:begin" in out:
+                    self.assertLess(out.index("[hooks.state]"), out.index("# chezmoi:cliproxy-hub:begin"))
+                self.assertEqual(modify(script, out), out)
 
 
 @unittest.skipUnless(CODEX and shutil.which("chezmoi") and shutil.which("jq") and tomllib, "needs a codex binary, chezmoi, jq and Python 3.11+")
