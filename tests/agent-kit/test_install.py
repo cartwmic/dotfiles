@@ -5,6 +5,7 @@ a fake npm, a fake gh with two accounts and a loopback registry (answers 200 onl
 """
 import http.server
 import os
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -13,7 +14,8 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-RETRY = "cd ~/.local/share/agent-kit && NODE_AUTH_TOKEN=$(gh auth token) npm ci"
+RETRY = "cd ~/.local/share/agent-kit && NODE_AUTH_TOKEN=$(gh auth token --user ACCOUNT) npm ci"
+SCRIPT_RETRY = "chezmoi apply ~/65_agent_kit_install.sh"
 
 
 class Home:
@@ -107,12 +109,14 @@ echo "npm ci token: $NODE_AUTH_TOKEN" >> "$NPM_LOG"
 if [ "$NODE_AUTH_TOKEN" != token-cartwmic ]; then echo "npm error code E403: 403 Forbidden - GET https://npm.pkg.github.com/@cartwmic%2fagent-kit" >&2; exit 1; fi
 mkdir -p node_modules/@cartwmic/agent-kit && echo new > node_modules/@cartwmic/agent-kit/new-install
 """)
+        # curl: records its argv (what `ps` would show) and hands over to the real one.
+        self.write_exe(bindir / "curl", "#!/bin/sh\necho \"$@\" >> \"$CURL_ARGS\"\nexec %s \"$@\"\n" % shutil.which("curl"))
         registry = http.server.HTTPServer(("127.0.0.1", 0), self.handler())
         threading.Thread(target=registry.serve_forever, daemon=True).start()
         self.addCleanup(registry.server_close)
         self.addCleanup(registry.shutdown)
         npm_log = home.root / "npm.log"
-        env = dict(os.environ, HOME=str(home.home), PATH="%s:%s" % (bindir, os.environ["PATH"]), NPM_LOG=str(npm_log),
+        env = dict(os.environ, HOME=str(home.home), PATH="%s:%s" % (bindir, os.environ["PATH"]), NPM_LOG=str(npm_log), CURL_ARGS=str(home.root / "curl.args"),
                    COORDINATOR_PACKAGE_REGISTRY="http://127.0.0.1:%d" % registry.server_address[1])
         env.pop("NODE_AUTH_TOKEN", None)
 
@@ -147,6 +151,13 @@ mkdir -p node_modules/@cartwmic/agent-kit && echo new > node_modules/@cartwmic/a
         self.assertFalse((kit / "node_modules/@cartwmic/agent-kit/previous-install").exists())
         self.assertEqual(sorted(p.name for p in kit.iterdir()), ["node_modules", "package-lock.json", "package.json"])  # no staging or .previous left
 
+    def test_no_token_is_ever_on_a_command_line(self):
+        home, kit, run, npm_log = self.setup_install(["work", "cartwmic"])
+        self.assertEqual(run().returncode, 0)
+        args = (home.root / "curl.args").read_text()
+        self.assertIn("/@cartwmic%2Fagent-kit", args)  # the probe ran
+        self.assertNotIn("token-", args)  # round 1 f1: the token went to curl on stdin, not in argv where `ps` shows it
+
     def test_the_active_account_is_tried_first_and_a_given_NODE_AUTH_TOKEN_wins(self):
         _, kit, run, npm_log = self.setup_install(["cartwmic", "work"])
         self.assertEqual(run().returncode, 0)
@@ -162,7 +173,8 @@ mkdir -p node_modules/@cartwmic/agent-kit && echo new > node_modules/@cartwmic/a
         self.assertIn("[agent_kit_install] ERROR: npm ci failed, so", r.stderr)
         self.assertIn("node_modules was left as it was", r.stderr)
         self.assertIn("tried: work other", r.stderr)
-        self.assertIn(RETRY, r.stderr)
+        self.assertIn(SCRIPT_RETRY, r.stderr)
+        self.assertNotIn("NODE_AUTH_TOKEN=$(gh auth token)", r.stderr)  # the old advice empties node_modules with the work account (round 1 f2)
         self.assertNotIn("token-", r.stderr.replace("token-ed", ""))  # accounts are named, tokens are not printed
         self.assertTrue((kit / "node_modules/@cartwmic/agent-kit/previous-install").is_file())  # the old install is still there
         self.assertFalse((kit / ".install-staging").exists())

@@ -12,7 +12,7 @@ log() { printf '[agent_kit_install] %s: %s\n' "$1" "$2"; }
 fail() { log ERROR "$1" >&2; exit 1; }
 
 dir="$HOME/.local/share/agent-kit"
-retry='cd ~/.local/share/agent-kit && NODE_AUTH_TOKEN=$(gh auth token) npm ci'
+retry='chezmoi apply ~/65_agent_kit_install.sh (this script is retried until it succeeds)'
 registry="${COORDINATOR_PACKAGE_REGISTRY:-https://npm.pkg.github.com}"
 npm="$(command -v npm || true)"
 [ -n "$npm" ] || npm="$HOME/.local/share/mise/shims/npm"
@@ -22,7 +22,8 @@ npm="$(command -v npm || true)"
 # Whether a token can read the package: one GET of its registry document, 200 yes, anything else (401, 403, 404, no answer in 10 s) no.
 can_read() {
   command -v curl >/dev/null 2>&1 || return 1
-  [ "$(curl -s -o /dev/null -m 10 -w '%{http_code}' -H "Authorization: Bearer $1" -H 'Accept: application/json' "${registry%/}/@cartwmic%2Fagent-kit" 2>/dev/null)" = 200 ]
+  # The token goes to curl on stdin (-K -), never on its command line, where `ps` would show it.
+  [ "$(printf 'header = "Authorization: Bearer %s"\n' "$1" | curl -s -o /dev/null -m 10 -w '%{http_code}' -K - -H 'Accept: application/json' "${registry%/}/@cartwmic%2Fagent-kit" 2>/dev/null)" = 200 ]
 }
 
 tried=""
