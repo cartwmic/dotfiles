@@ -629,6 +629,9 @@ Exit 0: everything applied. Exit 3: a conflict needs a decision (the list is pri
 Decide each conflict with a flag, no prompts, then run it again: `--take-source PATH` saves your copy under
 `~/.local/state/dotfiles-update/<UTC time>/` and applies the source version of that file; `--keep-local PATH` leaves your edit for now
 (it is listed again next run). There is no "take everything" flag. `--dry-run` reports only; `--no-pull` skips the pull.
+First install on a machine that has not got it yet (for example the work Mac, where `chezmoi update` already fails): `chezmoi update --apply=false`
+then `chezmoi apply ~/.local/bin/dotfiles-update`, and from then on `dotfiles-update`.
+Like `chezmoi apply`, it also deletes unmanaged files inside an `exact_` directory, and a `run_` script's output is shown only when it fails.
 To keep a local edit for good, adopt it: `chezmoi re-add PATH` (plain files) or change the template.
 Tests: `tests/dotfiles-update` (real chezmoi, scratch repository and HOME; the red control is plain `chezmoi apply` failing in the same state).
 

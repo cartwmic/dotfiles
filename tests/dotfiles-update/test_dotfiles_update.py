@@ -92,6 +92,34 @@ class DotfilesUpdate(unittest.TestCase):
         self.assertIn("held back 1 script(s)", r.stdout)
         self.assertIn("--take-source PATH", r.stdout)
 
+    def test_the_report_shows_real_line_counts(self):
+        self.conflict_state()
+        r = self.update()
+        self.assertIn("~/.a   (apply would add 1 and remove 1 line(s))", r.stdout)
+
+    def test_a_pending_directory_never_overwrites_an_edited_file_inside_it(self):
+        # Round 1 review: `chezmoi apply --force DIR` recurses, so a directory pending on its own (here its attributes changed) took an edited file with it.
+        (self.src / "dot_d").mkdir()
+        self.write("dot_d/f", "one\n")
+        self.commit("dir")
+        self.chezmoi("apply")
+        (self.home / ".d/f").write_text("local-d\n")
+        subprocess.run(["git", "-C", str(self.src), "mv", "dot_d", "private_dot_d"], check=True)
+        self.write("private_dot_d/f", "two\n")
+        self.commit("directory attributes and the file inside change")
+        r = self.update()
+        self.assertEqual(self.read(".d/f"), "local-d\n", r.stdout)  # not overwritten
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn("~/.d/f", r.stdout)
+
+    def test_take_source_on_a_file_deleted_here_says_there_was_no_copy(self):
+        self.conflict_state()
+        (self.home / ".a").unlink()
+        r = self.update("--take-source", ".a", "--keep-local", ".c")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("you had no copy here to save", r.stdout)
+        self.assertEqual(self.read(".a"), "two\n")
+
     def test_take_source_saves_the_local_copy_then_applies_the_source(self):
         self.conflict_state()
         r = self.update("--take-source", ".a", "--keep-local", ".c")

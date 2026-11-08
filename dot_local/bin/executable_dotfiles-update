@@ -76,17 +76,22 @@ def classify(entries):
 
 
 def line_counts(path):
-    diff = chezmoi("diff", "--path-style", "absolute", path).stdout
+    diff = chezmoi("diff", "--", path, check=True).stdout
     added = sum(1 for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++"))
     removed = sum(1 for l in diff.splitlines() if l.startswith("-") and not l.startswith("---"))
     return added, removed
 
 
 def backup(path, home, stamp):
+    """Save your copy before it is replaced; returns where, or None when there is nothing here to save (a file you deleted)."""
+    if not os.path.lexists(path):
+        return None
     rel = os.path.relpath(path, home) if path.startswith(home + os.sep) else path.lstrip(os.sep)
     target = os.path.join(home, ".local/state/dotfiles-update", stamp, rel)
     os.makedirs(os.path.dirname(target), exist_ok=True)
-    if os.path.lexists(path):
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.copytree(path, target, symlinks=True)
+    else:
         shutil.copy2(path, target, follow_symlinks=False)
     return target
 
@@ -142,7 +147,8 @@ def main(argv):
                 counts[path] = counts[path] + (backup(path, home, stamp),)
             targets = clean + taken
             if targets:
-                chezmoi("apply", "--force", *targets, check=True)
+                # --recursive=false: a pending directory is applied as itself, never as everything inside it, which could hold an edited file
+                chezmoi("apply", "--force", "--recursive=false", *targets, check=True)
                 applied_files = len(targets)
             if scripts and not unresolved:
                 chezmoi("apply", "--force", "--include=scripts", check=True)
@@ -159,7 +165,9 @@ def main(argv):
     print("dotfiles-update: %s %d file(s)%s." % (verb, len(clean) + len(taken),
                                                  (", ran %d script(s)" % len(scripts)) if scripts and not unresolved and not args.dry_run else ""))
     for path in taken:
-        print("  took the source version of %s (your copy saved as %s)" % (tilde(path, home), tilde(counts[path][2], home) if not args.dry_run else "<on a real run>"))
+        saved = counts[path][2] if len(counts[path]) > 2 else None
+        where = "<on a real run>" if args.dry_run else (tilde(saved, home) if saved else None)
+        print("  took the source version of %s%s" % (tilde(path, home), (" (your copy saved as %s)" % where) if where else " (you had no copy here to save)"))
     for path in kept:
         print("  kept your local edit of %s" % tilde(path, home))
     if scripts and unresolved:
@@ -170,7 +178,7 @@ def main(argv):
             added, removed = counts[path]
             print("  %s   (apply would add %d and remove %d line(s))" % (tilde(path, home), added, removed))
         print("See a diff with `chezmoi diff PATH`. Then decide each file and run dotfiles-update again:")
-        print("  dotfiles-update --take-source PATH   save your copy under ~/.local/state/dotfiles-update/%s/, apply the source version" % stamp)
+        print("  dotfiles-update --take-source PATH   save your copy under ~/.local/state/dotfiles-update/<time of that run>/, apply the source version")
         print("  dotfiles-update --keep-local PATH    leave your edit for now")
         return EXIT_CONFLICT
     return 0
