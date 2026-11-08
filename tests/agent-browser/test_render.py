@@ -15,7 +15,7 @@ DARWIN = sys.platform == "darwin"
 LAUNCHER = ".local/bin/agent-chrome"
 ENTRY = {
     "command": "uvx",
-    "args": ["--from", "browser-harness[mcp]==0.1.13", "browser-harness-mcp"],
+    "args": ["--from", "browser-harness[mcp]==0.1.13", "python", "-I", "<server.py>"],
     "env": {"BU_CDP_URL": "http://127.0.0.1:9333"},
 }
 
@@ -48,7 +48,11 @@ class AgentBrowserRenderTest(unittest.TestCase):
             with self.subTest(profile=profile):
                 servers = self.servers(profile)
                 if DARWIN:
-                    self.assertEqual(servers["browser-harness"], ENTRY)
+                    entry = dict(servers["browser-harness"])
+                    server = entry["args"][-1]
+                    self.assertTrue(server.endswith("/.local/share/browser-harness-mcp/server.py"), server)
+                    entry["args"] = entry["args"][:-1] + ["<server.py>"]
+                    self.assertEqual(entry, ENTRY)
                 else:
                     self.assertNotIn("browser-harness", servers)
 
