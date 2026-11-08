@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const sourceDir = fileURLToPath(new URL("../../../../", import.meta.url));
-const settingsTemplate = path.join(sourceDir, "dot_pi/private_agent/private_settings.json.tmpl");
+const settingsTemplate = path.join(sourceDir, ".chezmoitemplates/pi_settings_desired");
 const inspectPromptTarget = ".pi/agent/extensions/inspect-prompt";
 const desktopProfiles = ["personal", "axon-work-computer"];
 

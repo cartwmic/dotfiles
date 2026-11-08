@@ -1,0 +1,57 @@
+#!/bin/sh
+# Own some keys in ~/.pi/agent/settings.json and keep everything Pi (or Michael) writes there.
+#
+# Before this, the file was rendered whole from a template and kept only four live keys. Pi rewrites it itself (the changelog version, the
+# theme, a model or thinking-level choice, `pi install` adding a package), so every such change was a local edit of a full-file target,
+# and the next `chezmoi update` stopped on it with exit 1 and no TTY (work Mac, dogfood log E16). A modify_ script never collides: it
+# merges what this repository wants into whatever is on disk. What it wants is .chezmoitemplates/pi_settings_desired (JSON).
+#
+#   OWNED, set on every apply (the setup this repository depends on):
+#     defaultProvider, defaultModel, tuiMode, defaultTools, codemode, compaction, and on the work profile subagents.
+#   SEEDED, set only while the key is absent (a choice made in Pi or by hand is kept):
+#     defaultThinkingLevel, theme, hideThinkingBlock, lastChangelogVersion, and each entry of modelThinkingLevels on its own
+#     (an entry you changed stays; a model this repository adds an entry for gets it).
+#   UNIONED (ours first, in our order; anything else you added stays):
+#     packages (an entry of ours replaces yours with the same source, so a pin bump arrives; a package you installed stays),
+#     enabledModels (ours are always present; a model you added stays; one of ours you removed comes back).
+#   Every other key is left exactly as it is, including deviceId and any key a newer Pi adds.
+#
+# The output ends with a newline exactly when the file on disk does, so an unchanged file stays byte-for-byte unchanged.
+# An unreadable (not JSON) settings.json is an error, never overwritten. Nothing is applied on the work Mac by an agent without
+# Michael's confirmation for that action.
+set -eu
+
+WANT={{ includeTemplate "shquote" (includeTemplate "pi_settings_desired" .) }}
+
+input=$(cat; printf x)
+input=${input%x}
+nl=$(printf '\n.')
+nl=${nl%.}
+case $input in *"$nl") end_nl=1 ;; *) end_nl= ;; esac
+
+out=$(printf '%s' "$input" | jq -s --argjson want "$WANT" '
+  # The identity of a package entry: its source with a trailing @ref (a git sha or an npm version) removed.
+  def pkgid: (if type == "object" then .source else . end) | sub("@[^@/]+$"; "");
+  def union_by($ours; id): $ours + [ .[] | select((id) as $i | ($ours | map(id) | index($i)) == null) ];
+  if length == 0 then {}
+  elif length == 1 and (.[0] | type) == "object" then .[0]
+  else error("~/.pi/agent/settings.json must be a JSON object")
+  end
+  | .defaultProvider = $want.defaultProvider
+  | .defaultModel = $want.defaultModel
+  | .tuiMode = $want.tuiMode
+  | .defaultTools = $want.defaultTools
+  | .codemode = $want.codemode
+  | .compaction = $want.compaction
+  | (if $want.subagents then .subagents = $want.subagents else . end)
+  | .defaultThinkingLevel //= $want.defaultThinkingLevel
+  | .theme //= "dark"
+  | .hideThinkingBlock //= false
+  | .lastChangelogVersion //= "0.70.2"
+  | .modelThinkingLevels = ($want.modelThinkingLevels + (.modelThinkingLevels // {}))
+  | .enabledModels = ((.enabledModels // []) | union_by($want.enabledModels; .))
+  | .packages = ((.packages // []) | union_by($want.packages; pkgid))
+')
+
+printf '%s' "$out"
+[ -z "$end_nl" ] || printf '\n'

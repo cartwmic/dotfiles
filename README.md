@@ -256,6 +256,25 @@ Notes:
 - Secret-backed adapter metadata is resolved through the 1Password CLI via `op read`.
 - Harness instruction files are hand-maintained and split: repo [AGENTS.md](./AGENTS.md) (chezmoi source, not deployed), Pi-global [dot_pi/private_agent/literal_AGENTS.md.tmpl](./dot_pi/private_agent/literal_AGENTS.md.tmpl) (`~/.pi/agent/AGENTS.md`). Claude still uses `~/.claude/CLAUDE.md`; Codex still uses `~/.codex/AGENTS.md`.
 
+## Pi settings (`~/.pi/agent/settings.json`)
+
+Pi rewrites this file itself (the changelog version, the theme, a model or thinking-level choice, `pi install` adding a package). It used to be
+rendered whole from a template, so every such write was a local edit of a full-file target and the next `chezmoi update` stopped on it with
+exit 1 and no TTY (work Mac, dogfood log E16). It is now a `modify_` script
+(`dot_pi/private_agent/modify_private_settings.json.tmpl`) that merges what this repository wants (`.chezmoitemplates/pi_settings_desired`)
+into whatever is on disk, and never collides:
+
+| Policy | Keys |
+|---|---|
+| owned, set on every apply | `defaultProvider`, `defaultModel`, `tuiMode`, `defaultTools`, `codemode`, `compaction`, and on the work profile `subagents` |
+| seeded, set only while absent (a choice made in Pi is kept) | `defaultThinkingLevel`, `theme`, `hideThinkingBlock`, `lastChangelogVersion`, and each `modelThinkingLevels` entry on its own |
+| unioned (ours first, yours kept) | `packages` (an entry of ours replaces yours with the same source, so a pin bump arrives), `enabledModels` |
+| untouched | everything else, including `deviceId` and any key a newer Pi adds |
+
+To change a seeded default on a machine that already has it, change it in Pi (or edit the file); the source value only reaches a machine that has none.
+A package or model removed from the source stays on machines that already have it (remove it in Pi), and a package written under another form of the same address (`git:github.com/x/y` and `https://github.com/x/y`) counts as a different entry.
+Tests: `tests/pi-settings-modify` and `tests/pi-settings-render` (the desired-state template).
+
 ## Reading a streaming Pi session
 
 Desktop Pi settings use regular mode on personal and work machines.
