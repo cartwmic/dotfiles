@@ -657,7 +657,7 @@ only the directory itself for a directory it would remove). **It applies a path 
 What it prints, every time:
 - `source at <sha>, was <sha>`: the source checkout's commit after the pull and before it (`(no new commits)` when they are equal).
 - Each `run_` script that ran, with its exit code: `script 65_agent_kit_install.sh   exit 0   (its output says: ...)`. The note shows the first
-  output lines that say WARN, ERROR or FAIL, because a script can exit 0 while failing inside (the agent-kit install did). A script that exits
+  output lines that say warn, error or fail (any case, so a harmless "0 failed" is flagged too), because a script can exit 0 while failing inside (the agent-kit install did). A script that exits
   non-zero stops the run: it is named with its code and `dotfiles-update` exits 1. (`chezmoi apply --verbose` shows neither; the codes are read from `--debug`.)
 - `nothing to update.` when no file or changed script is pending. `chezmoi status` still lists every `run_after_` script after every apply (they run on
   every apply by design, for example `75_instances_reconcile.sh`); that is not a pending change, so it says `clean: N always-run script(s)` and why,
@@ -675,6 +675,7 @@ change for the same reason, until you take or keep it.
 First install on a machine that has not got it yet (for example the work Mac, where `chezmoi update` already fails): `chezmoi update --apply=false`
 then `chezmoi apply ~/.local/bin/dotfiles-update`, and from then on `dotfiles-update`.
 Like `chezmoi apply`, it also deletes unmanaged files inside an `exact_` directory only when every one of them is unedited chezmoi work, and a `run_` script's output is shown when it fails (its last 15 lines).
+Known limit: when the source turns a plain file into a directory (or the reverse), `chezmoi status` itself fails (`.foo/bar: not a directory`), so `dotfiles-update` prints that error, applies nothing and exits 1. Look at the path with `chezmoi diff PATH`, then `chezmoi apply PATH` it yourself.
 To keep a local edit for good, adopt it: `chezmoi re-add PATH` (plain files) or change the template.
 Tests: `tests/dotfiles-update` (real chezmoi, scratch repository and HOME; the red control is plain `chezmoi apply` failing in the same state).
 

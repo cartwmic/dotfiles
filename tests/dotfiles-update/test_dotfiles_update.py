@@ -445,7 +445,7 @@ class DotfilesUpdate(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertEqual(self.read(".a"), "two\n")
         self.assertIn("before it stopped, dotfiles-update had applied", r.stdout)
-        self.assertIn("took the source version of ~/.a (your copy saved as ~/.local/state/dotfiles-update/", r.stdout)
+        self.assertIn("saved your copy of ~/.a as ~/.local/state/dotfiles-update/", r.stdout)
         record = json.loads((self.home / ".local/state/dotfiles-update/log.jsonl").read_text().splitlines()[-1])
         self.assertEqual(record["exit"], 1)
         self.assertIn("~/.b", record["applied"])
@@ -490,6 +490,17 @@ class DotfilesUpdate(unittest.TestCase):
         r = self.update("--take-source", ".d/a", "--take-source", ".d/e", "--take-source", ".d/e/g")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual((self.read(".d/a"), self.read(".d/e/g"), self.read(".d/e/new")), ("a\n", "g\n", "n\n"))
+
+    def test_script_output_that_is_not_utf8_does_not_crash_the_report(self):
+        # round 6 f1: the merged --debug log was decoded strictly, so one stray byte ended the run in a traceback.
+        self.write("run_onchange_after_20_latin.sh", "#!/bin/sh\nprintf 'caf\\351 ERROR \\377\\n'\nexit 1\n")
+        self.write("run_onchange_after_10_ok.sh", "#!/bin/sh\nprintf 'caf\\351\\n'\nexit 0\n")
+        self.commit("scripts that print latin-1 bytes")
+        r = self.update()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("script 10_ok.sh   exit 0", r.stdout)
+        self.assertIn("script 20_latin.sh   exit 1", r.stdout)
 
 
 if __name__ == "__main__":

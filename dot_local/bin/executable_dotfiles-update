@@ -52,9 +52,9 @@ def chezmoi(*args, check=False, capture=True, merge=False):
     extra = shlex.split(os.environ.get("DOTFILES_UPDATE_CHEZMOI_ARGS", ""))
     cmd = ["chezmoi", "--no-tty", *extra, *args]
     if merge:  # one stream, so a script's own output stays in order with chezmoi's log lines
-        result = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        result = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
     else:
-        result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=capture, text=True)
+        result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=capture, text=True, errors="replace")
     if check and result.returncode != 0:
         raise RuntimeError("%s failed (exit %d): %s" % (" ".join(cmd[:4]), result.returncode, (result.stderr or result.stdout).strip()))
     return result
@@ -316,7 +316,7 @@ def main(argv):
     record = {"time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "argv": argv}
     try:
         code = run(args, record)
-    except Exception as error:  # an unexpected failure is recorded too, then raised as the traceback it is
+    except BaseException as error:  # an unexpected failure or Ctrl-C is recorded too, then raised as it is
         record.update(exit=1, error="%s: %s" % (type(error).__name__, error))
         if not args.dry_run and record.get("home"):
             write_record(record.pop("home"), record)
@@ -405,9 +405,9 @@ def run(args, record):
     def partial():
         """On a run that stops after changing files, say what was already done: the record has it too (round 5 f1)."""
         if applied_paths or any(counts[p] for p in taken):
-            print("  before it stopped, dotfiles-update had applied %d file(s)%s" % (len(applied_paths), "".join(
-                "; took the source version of %s (your copy saved as %s)" % (tilde(p, home), tilde(counts[p][0], home) if counts[p] and counts[p][0] else "-")
-                for p in taken if counts[p])))
+            print("  before it stopped, dotfiles-update had applied %d path(s)%s" % (len(applied_paths), "".join(
+                "; saved your copy of %s as %s (the source version may not have been written)" % (tilde(p, home), tilde(counts[p][0], home))
+                for p in taken if counts[p] and counts[p][0])))
 
     try:
         if not args.dry_run:
