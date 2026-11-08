@@ -3,8 +3,8 @@
   from source defaults. This template owns metricSet and display.barStyle.
 
   Read the live file (the widget writes the rest of the document) so chezmoi
-  apply does not clobber other keys — same pattern as lastChangelogVersion in
-  .chezmoitemplates/pi_settings_desired (merged into ~/.pi/agent/settings.json by dot_pi/private_agent/modify_private_settings.json.tmpl). Membership, remaining-versus-spend, and percent-
+  apply does not clobber other keys — the same idea as the settings.json modify script
+  (dot_pi/private_agent/modify_private_settings.json.tmpl), which keeps every key Pi writes. Membership, remaining-versus-spend, and percent-
   versus-dollars live only here. Cursor dollar caps come from the Cursor API
   (capAmount), never from chezmoi data or compiled pi-sub constants. Claude
   remaining dollars on the work profile use Anthropic extra-usage credits

@@ -87,12 +87,12 @@ class ModifyScript(unittest.TestCase):
 
     def test_what_pi_and_the_user_write_is_kept(self):
         live = {"theme": "light", "hideThinkingBlock": True, "lastChangelogVersion": "9.9.9", "deviceId": "abc", "defaultThinkingLevel": "low",
-                "tuiMode": "fullscreen", "futureKey": {"a": [1, 2]}, "modelThinkingLevels": {"my/model": "low"},
+                "futureKey": {"a": [1, 2]}, "modelThinkingLevels": {"my/model": "low"},
                 "enabledModels": ["my/model"], "packages": ["npm:my-own-package", {"source": "npm:object-form", "extensions": ["x"]}]}
         for profile in self.scripts:
             with self.subTest(profile=profile):
                 s = self.modify(profile, live)
-                for key in ("theme", "hideThinkingBlock", "lastChangelogVersion", "deviceId", "defaultThinkingLevel", "tuiMode", "futureKey"):
+                for key in ("theme", "hideThinkingBlock", "lastChangelogVersion", "deviceId", "defaultThinkingLevel", "futureKey"):
                     self.assertEqual(s[key], live[key], key)
                 self.assertEqual(s["modelThinkingLevels"]["my/model"], "low")
                 self.assertIn("claude-opus-5-5", json.dumps(s["modelThinkingLevels"]))  # ours added beside it
@@ -101,12 +101,13 @@ class ModifyScript(unittest.TestCase):
                 self.assertIn({"source": "npm:object-form", "extensions": ["x"]}, s["packages"])
 
     def test_owned_keys_are_set_again_and_a_changed_thinking_entry_of_ours_is_kept(self):
-        live = {"defaultModel": "something-else", "defaultProvider": "other", "compaction": {"enabled": True}, "codemode": {"mode": "off"},
+        live = {"defaultModel": "something-else", "defaultProvider": "other", "tuiMode": "fullscreen", "compaction": {"enabled": True}, "codemode": {"mode": "off"},
                 "modelThinkingLevels": {"claude-compat/claude-opus-5-5": "xhigh", "anthropic/claude-opus-5-5": "xhigh"}}
         for profile in self.scripts:
             with self.subTest(profile=profile):
                 s = self.modify(profile, live)
                 self.assertEqual(s["defaultModel"], "claude-opus-5-5")
+                self.assertEqual(s["tuiMode"], "regular")  # owned: the documented way to change it is the template
                 self.assertEqual(s["compaction"]["enabled"], False)
                 self.assertEqual(s["codemode"], {"mode": "only"})
                 key = "claude-compat/claude-opus-5-5" if profile == "personal" else "anthropic/claude-opus-5-5"

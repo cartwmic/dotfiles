@@ -7,9 +7,9 @@
 # merges what this repository wants into whatever is on disk. What it wants is .chezmoitemplates/pi_settings_desired (JSON).
 #
 #   OWNED, set on every apply (the setup this repository depends on):
-#     defaultProvider, defaultModel, defaultTools, codemode, compaction, and on the work profile subagents.
+#     defaultProvider, defaultModel, tuiMode, defaultTools, codemode, compaction, and on the work profile subagents.
 #   SEEDED, set only while the key is absent (a choice made in Pi or by hand is kept):
-#     defaultThinkingLevel, tuiMode, theme, hideThinkingBlock, lastChangelogVersion, and each entry of modelThinkingLevels on its own
+#     defaultThinkingLevel, theme, hideThinkingBlock, lastChangelogVersion, and each entry of modelThinkingLevels on its own
 #     (an entry you changed stays; a model this repository adds an entry for gets it).
 #   UNIONED (ours first, in our order; anything else you added stays):
 #     packages (an entry of ours replaces yours with the same source, so a pin bump arrives; a package you installed stays),
@@ -39,12 +39,12 @@ out=$(printf '%s' "$input" | jq -s --argjson want "$WANT" '
   end
   | .defaultProvider = $want.defaultProvider
   | .defaultModel = $want.defaultModel
+  | .tuiMode = $want.tuiMode
   | .defaultTools = $want.defaultTools
   | .codemode = $want.codemode
   | .compaction = $want.compaction
   | (if $want.subagents then .subagents = $want.subagents else . end)
   | .defaultThinkingLevel //= $want.defaultThinkingLevel
-  | .tuiMode //= $want.tuiMode
   | .theme //= "dark"
   | .hideThinkingBlock //= false
   | .lastChangelogVersion //= "0.70.2"

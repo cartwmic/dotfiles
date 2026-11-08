@@ -266,12 +266,13 @@ into whatever is on disk, and never collides:
 
 | Policy | Keys |
 |---|---|
-| owned, set on every apply | `defaultProvider`, `defaultModel`, `defaultTools`, `codemode`, `compaction`, and on the work profile `subagents` |
-| seeded, set only while absent (a choice made in Pi is kept) | `defaultThinkingLevel`, `tuiMode`, `theme`, `hideThinkingBlock`, `lastChangelogVersion`, and each `modelThinkingLevels` entry on its own |
+| owned, set on every apply | `defaultProvider`, `defaultModel`, `tuiMode`, `defaultTools`, `codemode`, `compaction`, and on the work profile `subagents` |
+| seeded, set only while absent (a choice made in Pi is kept) | `defaultThinkingLevel`, `theme`, `hideThinkingBlock`, `lastChangelogVersion`, and each `modelThinkingLevels` entry on its own |
 | unioned (ours first, yours kept) | `packages` (an entry of ours replaces yours with the same source, so a pin bump arrives), `enabledModels` |
 | untouched | everything else, including `deviceId` and any key a newer Pi adds |
 
 To change a seeded default on a machine that already has it, change it in Pi (or edit the file); the source value only reaches a machine that has none.
+A package or model removed from the source stays on machines that already have it (remove it in Pi), and a package written under another form of the same address (`git:github.com/x/y` and `https://github.com/x/y`) counts as a different entry.
 Tests: `tests/pi-settings-modify` and `tests/pi-settings-render` (the desired-state template).
 
 ## Reading a streaming Pi session
