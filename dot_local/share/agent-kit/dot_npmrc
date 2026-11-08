@@ -1,3 +1,3 @@
 @cartwmic:registry=https://npm.pkg.github.com
-# A placeholder, not a token: npm reads the value from the environment (NODE_AUTH_TOKEN=$(gh auth token) npm ci).
+# A placeholder, not a token: npm reads the value from the environment (65_agent_kit_install.sh sets it from a gh account that can read the package).
 //npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}

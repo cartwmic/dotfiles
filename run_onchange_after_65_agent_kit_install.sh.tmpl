@@ -9,10 +9,10 @@
 # package-lock.json: {{ include "dot_local/share/agent-kit/package-lock.json" | sha256sum }}
 set -eu
 log() { printf '[agent_kit_install] %s: %s\n' "$1" "$2"; }
-fail() { log ERROR "$1" >&2; exit 1; }
+fail() { log ERROR "$1 chezmoi stops the apply at this script, so the scripts after it (70 to 81: launchd jobs, instances reconcile, scratch dirs) did not run in this apply; they run at the next apply that gets past this one." >&2; exit 1; }
 
 dir="$HOME/.local/share/agent-kit"
-retry='chezmoi apply ~/65_agent_kit_install.sh (this script is retried until it succeeds)'
+retry='chezmoi apply (this script is retried at every apply until it succeeds)'
 registry="${COORDINATOR_PACKAGE_REGISTRY:-https://npm.pkg.github.com}"
 npm="$(command -v npm || true)"
 [ -n "$npm" ] || npm="$HOME/.local/share/mise/shims/npm"
@@ -46,9 +46,8 @@ fi
 export NODE_AUTH_TOKEN
 
 # npm ci deletes node_modules first, so it runs in a staging directory and node_modules is replaced only when it succeeded.
-stage="$dir/.install-staging"
-rm -rf "$stage"
-mkdir "$stage"
+rm -rf "$dir"/.install-staging.* # left by a run that was killed
+stage="$(mktemp -d "$dir/.install-staging.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 cp "$dir/package.json" "$dir/package-lock.json" "$stage/"
 [ ! -f "$dir/.npmrc" ] || cp "$dir/.npmrc" "$stage/"

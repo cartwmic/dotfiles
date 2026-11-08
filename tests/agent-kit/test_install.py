@@ -15,7 +15,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 RETRY = "cd ~/.local/share/agent-kit && NODE_AUTH_TOKEN=$(gh auth token --user ACCOUNT) npm ci"
-SCRIPT_RETRY = "chezmoi apply ~/65_agent_kit_install.sh"
+SCRIPT_RETRY = "retry: chezmoi apply (this script is retried at every apply until it succeeds)"
 
 
 class Home:
@@ -177,7 +177,8 @@ mkdir -p node_modules/@cartwmic/agent-kit && echo new > node_modules/@cartwmic/a
         self.assertNotIn("NODE_AUTH_TOKEN=$(gh auth token)", r.stderr)  # the old advice empties node_modules with the work account (round 1 f2)
         self.assertNotIn("token-", r.stderr.replace("token-ed", ""))  # accounts are named, tokens are not printed
         self.assertTrue((kit / "node_modules/@cartwmic/agent-kit/previous-install").is_file())  # the old install is still there
-        self.assertFalse((kit / ".install-staging").exists())
+        self.assertIn("scripts after it (70 to 81", r.stderr)
+        self.assertEqual(sorted(p.name for p in kit.iterdir()), ["node_modules", "package-lock.json", "package.json"])  # no staging left
 
     def test_red_control_the_previous_script_empties_node_modules_and_exits_0(self):
         # The pre-fix install step, verbatim: default gh account, npm ci in place, WARN and exit 0.
