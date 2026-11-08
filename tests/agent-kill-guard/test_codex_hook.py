@@ -292,7 +292,7 @@ class CodexFallback(unittest.TestCase):
         self.assertIn(str(self.t3("0.166.0")), r.stdout)
         self.assertNotIn(str(self.t3("0.156.1")), r.stdout)
 
-    def test_codex_bin_is_tried_before_t3_and_after_a_broken_default_when_it_is_set(self):
+    def test_codex_bin_when_set_is_used_before_t3_even_with_a_broken_default(self):  # CODEX_BIN is first in the order, then PATH, then T3
         self.broken(self.bin / "codex")
         self.working(self.home / "custom" / "codex")
         self.working(self.t3("0.166.0"))
