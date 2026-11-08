@@ -1,0 +1,13 @@
+<!doctype html><meta charset="utf-8"><title>click test</title>
+<style>body{margin:0;font:16px sans-serif}#b{position:absolute;left:100px;top:100px;width:200px;height:80px;font-size:20px}#s{position:absolute;left:100px;top:220px}</style>
+<button id="b">Click me</button><pre id="s"></pre>
+<script>
+const page=new URLSearchParams(location.search).get('page')||'?';
+document.title='click test '+page;
+function log(ev,extra){const body=JSON.stringify(Object.assign({page,ev,t:Date.now(),vis:document.visibilityState,focus:document.hasFocus()},extra||{}));
+ navigator.sendBeacon('/log',body);document.getElementById('s').textContent+=ev+' '+(extra&&extra.isTrusted)+'\n';}
+log('load');
+const b=document.getElementById('b');
+for(const t of ['mousedown','mouseup','click'])b.addEventListener(t,e=>log(t,{isTrusted:e.isTrusted,x:e.clientX,y:e.clientY}));
+document.addEventListener('visibilitychange',()=>log('visibilitychange'));
+</script>

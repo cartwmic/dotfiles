@@ -50,7 +50,8 @@ class ClaudeEnvTest(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                 stored = json.loads((home / ".claude.json").read_text())["mcpServers"]["browser-harness"]
                 self.assertEqual(stored["env"], {"BU_CDP_URL": "http://127.0.0.1:9333"})
-                self.assertEqual(stored["args"], ["--from", "browser-harness[mcp]==0.1.13", "browser-harness-mcp"])
+                self.assertEqual(stored["args"][:4], ["--from", "browser-harness[mcp]==0.1.13", "python", "-I"])
+                self.assertTrue(stored["args"][4].endswith("/.local/share/browser-harness-mcp/server.py"))
 
 
 if __name__ == "__main__":

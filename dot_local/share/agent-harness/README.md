@@ -133,7 +133,8 @@ coordinator runs `chezmoi apply` and the mise bootstrap there.
 |---|---|---|
 | Google Chrome (brew cask) | `install-google-chrome` task in `dot_config/mise/config.toml`, part of `bootstrap` | `/Applications/Google Chrome.app` |
 | Launcher | `dot_local/bin/executable_agent-chrome` | `~/.local/bin/agent-chrome` |
-| MCP server `browser-harness` | `canonical/mcp/servers.json.tmpl` | `uvx --from "browser-harness[mcp]==0.1.13" browser-harness-mcp`, `BU_CDP_URL=http://127.0.0.1:9333` |
+| MCP server launcher | `dot_local/share/browser-harness-mcp/server.py` | `~/.local/share/browser-harness-mcp/server.py` |
+| MCP server `browser-harness` | `canonical/mcp/servers.json.tmpl` | `uvx --from "browser-harness[mcp]==0.1.13" python -I ~/.local/share/browser-harness-mcp/server.py`, `BU_CDP_URL=http://127.0.0.1:9333` |
 
 The server entry is canonical, so Claude and Codex are given it too, as with every canonical server. The Claude adapter stores a server's `env` with `claude mcp add -e` (before this change it only set it for the registering process).
 
@@ -150,6 +151,22 @@ Use:
 4. The 1Password extension has to be installed in that Chrome profile, by hand, on each machine.
 
 Nothing about a login (cookie, password, token) is in this repository; it lives only in the profile directory on the machine.
+
+**Own tab, and clicks that land (`server.py`).** The stock `browser-harness-mcp` has two faults that show up when several agents share this Chrome,
+both reproduced on a local click-logger page (2026-11-08):
+
+- *One shared tab.* Every MCP process used one daemon, `default`, with one current tab. A second agent's `browser_new_tab` or
+  `browser_switch_tab` moved every other agent's tab, so its click landed on the other agent's page; and when a tab went stale the daemon re-attached
+  to the first page in Chrome, which can be a signed-in tab of yours (the `default` daemon log showed 40 such re-attaches to one signed-in page).
+  The launcher gives each MCP process its own daemon (`BU_NAME=mcp-<pid>`) and its own dedicated tab, stops that daemon when the process exits, and
+  stops leftover `mcp-<pid>` daemons whose process is gone.
+- *Silent dropped clicks.* A tab opened by `browser_new_tab` is in the background (`visibilityState: hidden`). Chrome drops mouse and key input to a
+  hidden tab with no error, so `browser_click` answered success and the page saw nothing. The launcher turns on CDP focus emulation
+  (`Emulation.setFocusEmulationEnabled`) for the current tab before every tool call; no tab or window changes.
+
+An MCP process picks the launcher up when it starts: sessions started before an apply keep the stock server (and the shared `default` daemon) until they restart.
+Do not call `browser_ensure_real_tab`: it attaches to the first real page in Chrome, which can be someone else's tab.
+Journey test (skips without the agent Chrome): `tests/agent-browser/test_click_journey.py`.
 
 Run `agent-chrome` before the agent's first browser call; the harness attaches to a running Chrome and does not start one.
 The server is not wrapped by `pi-mcp-lazy` (idle it holds about 120 MB RSS). Add it to `servers.list.tmpl` and ship a seed if that matters.

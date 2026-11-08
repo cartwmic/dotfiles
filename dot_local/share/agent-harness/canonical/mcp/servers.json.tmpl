@@ -34,7 +34,9 @@
       "args": [
         "--from",
         "browser-harness[mcp]==0.1.13",
-        "browser-harness-mcp"
+        "python",
+        "-I",
+        "{{ .chezmoi.homeDir }}/.local/share/browser-harness-mcp/server.py"
       ],
       "env": {
         "BU_CDP_URL": "http://127.0.0.1:9333"
