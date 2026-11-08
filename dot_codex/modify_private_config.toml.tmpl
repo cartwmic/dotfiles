@@ -60,9 +60,16 @@ hub_re = re.compile(r"\n*# chezmoi:cliproxy-hub:begin\n.*?# chezmoi:cliproxy-hub
 stripped, dropped = hub_re.subn("", stripped)
 if dropped and stripped and not stripped.endswith("\n"):
     stripped += "\n"
-# The guard block goes first and is re-added last, so it never sits between the hub block and its neighbours.
-guard_re = re.compile(r"\n*# chezmoi:agent-guard:begin\n.*?# chezmoi:agent-guard:end\n?", re.DOTALL)
-stripped, dropped = guard_re.subn("", stripped)
+# The guard block is stripped first and re-inserted last, so it never sits between the hub block and its neighbours. Codex writes the
+# trust of the hook (`[hooks.state."<key>"]`) next to the own tables of the hook, which can be inside this block, so those tables are kept
+# and moved out before the block is dropped.
+guard_re = re.compile(r"\n*# chezmoi:agent-guard:begin\n(.*?)# chezmoi:agent-guard:end\n?", re.DOTALL)
+salvaged = []
+def _drop_guard(match):
+    for table in re.findall(r"(?ms)^\[hooks\.state[^\n]*\n.*?(?=^\[|\Z)", match.group(1)):
+        salvaged.append(table.strip("\n") + "\n")
+    return ""
+stripped, dropped = guard_re.subn(_drop_guard, stripped)
 if dropped and stripped and not stripped.endswith("\n"):
     stripped += "\n"
 # Default provider: only the top-level region (before the first table header) is looked at.
@@ -106,7 +113,19 @@ command = \x27\x27\x27g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_k
 timeout = 10
 # chezmoi:agent-guard:end
 """
-stripped = stripped.rstrip("\n") + ("\n\n" if stripped.strip() else "") + guard
+# Inserted before the first table header or managed block, so ours is the first PreToolUse hook in the file (Codex keys the trust of a hook by
+# its position) and no top-level key ends up under our tables. An empty [hooks.state] follows when none exists, so Codex writes the
+# trust entries outside this block.
+boundary = re.search(r"(?m)^(?:\[|# BEGIN CHEZMOI|# chezmoi:[a-z-]+:begin)", stripped)
+at = boundary.start() if boundary else len(stripped)
+head, tail = stripped[:at], stripped[at:]
+have = lambda header: re.search(r"(?m)^" + re.escape(header) + r"\s*$", stripped)
+state = "" if re.search(r"(?m)^\[hooks\.state", stripped) or salvaged else "[hooks.state]\n\n"
+kept = "".join(t + "\n" for t in salvaged if not have(t.split("\n", 1)[0]))
+head = head.rstrip("\n") + ("\n\n" if head.strip() else "")
+stripped = head + guard + "\n" + state + (tail if tail else "")
+if kept:
+    stripped = stripped.rstrip("\n") + "\n\n" + kept
 
 sys.stdout.write(stripped)
 '

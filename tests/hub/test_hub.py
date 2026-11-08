@@ -122,9 +122,9 @@ needs = unittest.skipUnless(shutil.which("chezmoi") and shutil.which("jq") and s
 
 
 def without_codex_guard(text):
-    """The Codex config without the pattern-kill guard block, which every render adds (tests/agent-kill-guard covers it)."""
-    text, dropped = re.subn(r"\n*# chezmoi:agent-guard:begin\n.*?# chezmoi:agent-guard:end\n?", "", text, flags=re.DOTALL)
-    return text + "\n" if dropped and text and not text.endswith("\n") else text
+    """The Codex config without the pattern-kill guard block (and the empty [hooks.state] that follows it), which every render adds."""
+    text, dropped = re.subn(r"# chezmoi:agent-guard:begin\n.*?# chezmoi:agent-guard:end\n\n?(?:\[hooks\.state\]\n\n?)?", "", text, flags=re.DOTALL)
+    return text.rstrip("\n") + "\n" if dropped and text.strip() else text
 
 
 def without_guard(settings):

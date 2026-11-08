@@ -149,6 +149,7 @@ run `~/.local/user_scripts/codex_trust_hooks.py` (it trusts only this hook), or 
 
 What is not covered (each is named in the code or the tests):
 - the word as an argument is fine (`grep pkill x`, a commit message that mentions it): only the command position counts;
+- a wrapper with an option the classifier does not know (`sudo --some-new-option arg pkill x`) hides the command from it; the option tables cover sudo, env, xargs, timeout, nice, watch, script and the other listed wrappers, including clustered short options (`sudo -iu root`) and long ones;
 - a command built at run time (`$cmd`, `$'pkill'`), a script file, `python -c`, `echo 'pkill x' | sh` and `sh <<< 'pkill x'`, an unquoted heredoc whose body is `$(pkill x)`, `fish -c`, osascript, and `kill $(pgrep -f x)` (a pgrep-fed kill is not a `pkill`);
 - while the Codex hook is untrusted, the rules file cannot see inside `sh -c '...'`, a redirect or `&`, nor a wrapper with options first (`sudo -u root pkill x`);
 - Pi foreground `pi-subagents` children are launched with extension discovery off, so they do not load the extension.

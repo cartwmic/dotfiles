@@ -30,13 +30,20 @@ SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "ash"}
 # Wrappers run the command that follows them. Value: the options that take an argument (skipped with it) and how many leading
 # plain arguments precede the command (timeout DURATION, nice -n N is an option).
 WRAPPERS = {
-    "env": ({"-u", "-C", "-S", "--unset", "--chdir"}, 0), "sudo": ({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-T", "-U"}, 0),
-    "doas": ({"-u", "-C"}, 0), "command": (set(), 0), "exec": ({"-a"}, 0), "nohup": (set(), 0), "nice": ({"-n"}, 0),
-    "ionice": ({"-c", "-n", "-p"}, 0), "time": ({"-f", "-o"}, 0), "timeout": ({"-s", "-k", "--signal", "--kill-after"}, 1),
+    "env": ({"-u", "-C", "--unset", "--chdir"}, 0), "sudo": ({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-T", "-U", "--user", "--group",
+        "--chdir", "--host", "--prompt", "--role", "--type", "--other-user", "--close-from", "--command-timeout"}, 0),
+    "doas": ({"-u", "-C"}, 0), "command": (set(), 0), "exec": ({"-a"}, 0), "nohup": (set(), 0), "nice": ({"-n", "--adjustment"}, 0),
+    "ionice": ({"-c", "-n", "-p", "--class", "--classdata"}, 0), "time": ({"-f", "-o"}, 0), "timeout": ({"-s", "-k", "--signal", "--kill-after"}, 1),
     "stdbuf": ({"-i", "-o", "-e"}, 0), "setsid": (set(), 0), "caffeinate": ({"-t", "-w"}, 0), "builtin": (set(), 0),
-    "xargs": ({"-n", "-I", "-P", "-L", "-d", "-s", "-E", "-a", "-J", "-R", "-S"}, 0), "unbuffer": (set(), 0), "chronic": (set(), 0),
-    "watch": ({"-n", "-d"}, 0), "arch": ({"-arch"}, 0), "run-and-wake": (set(), 0), "heavy-gate": ({"--wait"}, 0),
+    "xargs": ({"-n", "-I", "-P", "-L", "-d", "-s", "-E", "-a", "-J", "-R", "-S", "--max-args", "--max-procs", "--delimiter", "--max-lines",
+        "--arg-file", "--eof", "--max-chars"}, 0),
+    "unbuffer": (set(), 0), "chronic": (set(), 0), "watch": ({"-n", "-d", "--interval"}, 0), "arch": ({"-arch"}, 0), "script": ({"-t"}, 1),
+    "run-and-wake": (set(), 0), "heavy-gate": ({"--wait"}, 0),
 }
+# Options whose argument is itself a command string (env -S "pkill x").
+STRING_OPTIONS = {"-S", "--split-string"}
+# `sudo -l` and friends only report; they run nothing.
+NO_COMMAND_FLAGS = {"sudo": {"-l", "-ll", "-V", "--list", "--version"}, "doas": set()}
 SKIP = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "case", "esac", "fi", "done", "for", "function"}
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
 REDIRECT = re.compile(r"^[0-9]*[<>]")
@@ -277,18 +284,29 @@ def find_refused(text, depth=0):
 def _wrapped(wrapper, rest, depth):
     """Look at the command a wrapper runs: skip its options (and their arguments) and its leading plain arguments, then test that word."""
     takes_arg, plain = WRAPPERS[wrapper]
-    i = 0
+    short_with_arg = {o[1] for o in takes_arg if len(o) == 2}
     if wrapper == "command" and rest and rest[0] in ("-v", "-V"):
         return None  # `command -v pkill` only looks the name up
+    if any(w in NO_COMMAND_FLAGS.get(wrapper, ()) for w in rest):
+        return None
+    i = 0
     while i < len(rest):
         w = rest[i]
         if w == "--":
             i += 1
             break
-        if w in takes_arg:
+        if wrapper == "env" and w in STRING_OPTIONS and i + 1 < len(rest):
+            hit = find_refused(rest[i + 1], depth + 1)
+            if hit:
+                return hit
             i += 2
-        elif w.startswith("-") and len(w) > 1:
+        elif w in takes_arg:
+            i += 2
+        elif w.startswith("--") and "=" in w:
             i += 1
+        elif w.startswith("-") and len(w) > 1:
+            letters = w[1:]
+            i += 2 if not w.startswith("--") and letters[-1] in short_with_arg and w not in ("-",) else 1
         elif ASSIGN.match(w):
             i += 1
         elif plain:
@@ -301,6 +319,10 @@ def _wrapped(wrapper, rest, depth):
         return None
     if _base(command[0]) in REFUSED:
         return _base(command[0])
+    if " " in command[0] or "\n" in command[0]:  # watch "pkill x": the one argument is a whole command line
+        hit = find_refused(command[0], depth + 1)
+        if hit:
+            return hit
     # The wrapped command can itself be a shell, an eval or another wrapper: run the whole check on it.
     return find_refused(" ".join(_quote(w) for w in command), depth + 1)
 

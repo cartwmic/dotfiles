@@ -80,6 +80,39 @@ class ManagedBlock(unittest.TestCase):
                 self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["^Bash$"])
                 self.assertEqual(once.count("chezmoi:agent-guard:begin"), 1)
 
+    def test_the_block_sits_first_so_the_hook_is_index_0_and_the_mcp_block_is_untouched(self):
+        mcp = "# BEGIN CHEZMOI AGENT HARNESS MCP\n[mcp_servers.a]\nurl = \"x\"\n# END CHEZMOI AGENT HARNESS MCP\n"
+        existing = 'model = "x"\n\n' + mcp + OTHER.replace("[[hooks", "\n[[hooks", 1)
+        for profile, script in self.scripts.items():
+            with self.subTest(profile=profile):
+                out = modify(script, existing)
+                self.assertLess(out.index("chezmoi:agent-guard:begin"), out.index("# BEGIN CHEZMOI AGENT HARNESS MCP"))
+                self.assertLess(out.index('model = "x"'), out.index("chezmoi:agent-guard:begin"))  # top-level keys stay above any table
+                self.assertIn(mcp, out)
+                config = tomllib.loads(out)
+                self.assertIn(MARK, config["hooks"]["PreToolUse"][0]["hooks"][0]["command"])  # ours is first
+                self.assertEqual(config["hooks"]["PreToolUse"][1]["hooks"][0]["command"], "echo someone-elses-hook")
+                self.assertEqual(modify(script, out), out)
+
+    def test_trust_tables_codex_wrote_inside_the_block_survive_the_next_apply(self):
+        inside = ("model = \"x\"\n\n# chezmoi:agent-guard:begin\n[[hooks.PreToolUse]]\nmatcher = \"old\"\n\n"
+                  "[hooks.state.\"/h/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"sha256:keep\"\n# chezmoi:agent-guard:end\n")
+        for profile, script in self.scripts.items():
+            with self.subTest(profile=profile):
+                out = modify(script, inside)
+                config = tomllib.loads(out)
+                self.assertEqual(config["hooks"]["state"]["/h/config.toml:pre_tool_use:0:0"]["trusted_hash"], "sha256:keep")
+                block = out[out.index("chezmoi:agent-guard:begin"):out.index("chezmoi:agent-guard:end")]
+                self.assertNotIn("hooks.state", block)
+                self.assertEqual(modify(script, out), out)
+
+    def test_a_state_table_is_provided_outside_the_block_when_none_exists(self):
+        for profile, script in self.scripts.items():
+            with self.subTest(profile=profile):
+                out = modify(script, 'model = "x"\n')
+                self.assertIn("\n[hooks.state]\n", out)
+                self.assertGreater(out.index("[hooks.state]"), out.index("chezmoi:agent-guard:end"))
+
 
 @unittest.skipUnless(CODEX and shutil.which("chezmoi") and tomllib, "needs a codex binary, chezmoi and Python 3.11+")
 class Trust(unittest.TestCase):
@@ -98,17 +131,17 @@ class Trust(unittest.TestCase):
         return subprocess.run([sys.executable, str(TRUST), *args], capture_output=True, text=True, env=self.env, timeout=120)
 
     def test_untrusted_then_trusted_then_modified_then_trusted_again_and_only_ours(self):
-        self.config(modify(self.script, OTHER))  # someone else's hook first, ours second
+        self.config(modify(self.script, OTHER))  # someone else's hook is in the file; ours is placed first
         self.assertEqual(self.run_trust("--check").returncode, 1)  # untrusted
         r = self.run_trust()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("Codex hook trusted", r.stdout)
         checked = self.run_trust("--check")
         self.assertEqual(checked.returncode, 0, checked.stdout)
-        self.assertIn("pre_tool_use:1:0 trusted", checked.stdout)  # ours is the second hook
+        self.assertIn("pre_tool_use:0:0 trusted", checked.stdout)  # ours is the first hook
         state = tomllib.loads((self.home / "config.toml").read_text())["hooks"]["state"]
         self.assertEqual(len(state), 1)  # the other hook was not trusted
-        self.assertTrue(next(iter(state)).endswith("pre_tool_use:1:0"))
+        self.assertTrue(next(iter(state)).endswith("pre_tool_use:0:0"))
         # the definition changes: Codex calls it modified and skips it until it is trusted again
         text = (self.home / "config.toml").read_text().replace("timeout = 10", "timeout = 11")
         self.config(text)
@@ -116,6 +149,16 @@ class Trust(unittest.TestCase):
         self.assertIn("modified", self.run_trust("--check").stdout)
         self.assertEqual(self.run_trust().returncode, 0)
         self.assertEqual(self.run_trust("--check").returncode, 0)
+
+    def test_trust_survives_the_next_apply_when_the_config_had_no_state_table(self):
+        # The round trip the live Mac takes: render, trust, render again (the next chezmoi apply), check.
+        self.config(modify(self.script, 'model = "x"\n'))
+        self.assertEqual(self.run_trust().returncode, 0)
+        self.assertEqual(self.run_trust("--check").returncode, 0)
+        self.config(modify(self.script, (self.home / "config.toml").read_text()))
+        checked = self.run_trust("--check")
+        self.assertEqual(checked.returncode, 0, checked.stdout)
+        self.assertIn("pre_tool_use:0:0 trusted", checked.stdout)
 
     def test_a_missing_codex_binary_never_fails_an_apply(self):
         env = dict(self.env, CODEX_BIN="/nonexistent/codex")

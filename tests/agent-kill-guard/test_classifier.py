@@ -67,6 +67,16 @@ REFUSED = [
     "pkill -f x || true",
     "pkill -f \"sleep 30\" -P 1 2>/dev/null; true",
     "time -p pkill x",
+    "script -q /dev/null pkill x",
+    "sudo -iu root pkill x",
+    "sudo --user root pkill x",
+    "xargs --max-args 1 pkill",
+    "xargs --max-args=1 pkill",
+    "watch \"pkill x\"",
+    "watch -n 5 pkill x",
+    "env -S \"pkill x\"",
+    "env -i FOO=1 pkill x",
+    "xargs -I{} pkill {}",
 ]
 
 ALLOWED = [
@@ -103,6 +113,10 @@ ALLOWED = [
     "xargs -n 1 echo pkill",
     "env FOO=pkill echo hi",
     "nice -n 5 grep killall file",
+    "sudo -l pkill",
+    "sudo -iu root ls pkill-notes",
+    "xargs --max-args 1 echo killall",
+    "env -S \"echo pkill\"",
     "",
 ]
 

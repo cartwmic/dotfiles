@@ -49,9 +49,13 @@ class Server:
         self.watchdog = threading.Timer(WATCHDOG_SECONDS, self.proc.kill)
         self.watchdog.daemon = True
         self.watchdog.start()
-        self.call("initialize", {"clientInfo": {"name": "codex_trust_hooks", "version": "1"}, "capabilities": {}})
-        self.proc.stdin.write(json.dumps({"method": "initialized"}) + "\n")
-        self.proc.stdin.flush()
+        try:
+            self.call("initialize", {"clientInfo": {"name": "codex_trust_hooks", "version": "1"}, "capabilities": {}})
+            self.proc.stdin.write(json.dumps({"method": "initialized"}) + "\n")
+            self.proc.stdin.flush()
+        except Exception:
+            self.close()  # a failed handshake must not leave the child running
+            raise
 
     def call(self, method, params):
         self.n += 1
