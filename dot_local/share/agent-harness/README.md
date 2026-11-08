@@ -167,7 +167,7 @@ both reproduced on a local click-logger page (2026-11-08):
 - *Silent success on nothing.* When the tab a session was using is closed (from outside, or by its own `browser_close_tab`), the stock daemon quietly
   attaches to a fresh `about:blank` and the next `browser_click` answers `{"ok": true}` on nothing. The launcher remembers the tab it is on and, before it
   talks to the browser for any tool, checks with `Target.getTargets` (a call that takes no session, so it cannot trigger that re-attach) that the tab still exists. When it
-  is gone every action tool (click, type, press, scroll, goto, js, screenshot, page_info, waits, upload, recording, raw `browser_cdp` except `Target.*`) refuses with
+  is gone every action tool (click, type, fill, press, scroll, goto, js, screenshot, page_info, waits, upload, recording, raw `browser_cdp` except `Target.*`) refuses with
   "The tab this session was using (<id>) was closed, so nothing was done. Open a tab with browser_new_tab, or attach to an open one with browser_switch_tab", until the agent
   opens or switches to a tab. Focus emulation is also switched on the moment a tab is created or switched to, so the first click after `browser_new_tab` is not dropped.
   Test: `tests/agent-browser/test_closed_tab.py` (red control: the stock server answers ok on `about:blank`).
