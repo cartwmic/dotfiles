@@ -44,6 +44,20 @@ def render(template, data):
     return r.stdout
 
 
+def without_guard(settings):
+    """The settings without the pattern-kill guard hook, which every render adds (tests/agent-kill-guard covers it)."""
+    pre = [g for g in settings.get("hooks", {}).get("PreToolUse", [])
+           if not any("refuse_pattern_kill.py" in h.get("command", "") for h in g.get("hooks", []))]
+    if "hooks" in settings:
+        if pre:
+            settings["hooks"]["PreToolUse"] = pre
+        else:
+            settings["hooks"].pop("PreToolUse", None)
+        if not settings["hooks"]:
+            del settings["hooks"]
+    return settings
+
+
 @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi not installed")
 class ExternalTest(unittest.TestCase):
     def test_work_with_repo_renders_the_git_repo_external(self):
@@ -175,7 +189,7 @@ class SettingsHookTest(unittest.TestCase):
     def run_modify(self, profile, text):
         r = subprocess.run(["sh", str(self.scripts[profile])], input=text, capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
-        return json.loads(r.stdout)
+        return without_guard(json.loads(r.stdout))
 
     def ours(self, settings):
         return [h for g in settings.get("hooks", {}).get("SessionStart", []) for h in g.get("hooks", [])

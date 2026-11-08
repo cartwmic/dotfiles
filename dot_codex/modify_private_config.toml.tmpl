@@ -18,6 +18,11 @@
 # top-level `model_provider = "cliproxy"`. Off, or on any other host, removes that line only when it equals "cliproxy"; a different
 # value stays. The provider block above is kept while either switch is on, since the default needs it.
 #
+# Pattern-kill guard (both desktop profiles): the guard hook itself is not here, it is in ~/.codex/hooks.json (modify_hooks.json.tmpl).
+# Codex keeps the trust of a hook as [hooks.state."<key>"] tables in THIS file and writes them itself, next to an existing [hooks.state]
+# header or, failing that, before the file's last comment, which on the personal profile is inside the hub block below and would be stripped
+# on the next apply. So this script does one structural thing for it: when no [hooks.state table exists once the hub block is stripped, it
+# inserts an empty [hooks.state] header above the first table or managed block. No markers, no stripping, nothing else.
 # Chezmoi runs modify_ scripts with the existing target file content piped
 # on stdin and uses stdout as the new content.
 
@@ -70,6 +75,12 @@ if os.environ.get("HUB_DEFAULT"):
 else:
     top = ours_re.sub("", top)
 stripped = top + rest
+if not re.search(r"(?m)^\[hooks\.state", stripped):
+    boundary = re.search(r"(?m)^(?:\[|# BEGIN CHEZMOI|# chezmoi:[a-z-]+:begin)", stripped)
+    at = boundary.start() if boundary else len(stripped)
+    head, tail = stripped[:at], stripped[at:]
+    head = head.rstrip("\n") + ("\n\n" if head.strip() else "")
+    stripped = head + "[hooks.state]\n" + ("\n" + tail if tail else "")
 home = os.environ.get("HUB_HOME", "")
 if home:
     hub = """# chezmoi:cliproxy-hub:begin

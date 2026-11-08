@@ -1,0 +1,40 @@
+#!/bin/sh
+# Install the pattern-kill guard in ~/.codex/hooks.json (agent-harness README, "Pattern-kill guard") without touching anything else there.
+#
+# One PreToolUse group on Bash whose handler command is the frozen text of .chezmoitemplates/codex_guard_command (it runs the shared
+# classifier and fails open). Ours is found by that command compared for EQUALITY, never by a substring. Behaviour changes go in the Python
+# classifier, so this command, and with it the hash Codex trusts, never changes because of us.
+#   no file or an empty one   a new document holding only our group
+#   ours already present      the input, byte for byte
+#   otherwise                 our group is APPENDED (never inserted, so the groups the owner trusted keep their positions and their trust)
+#   not a JSON object, no jq  the input unchanged and a warning: the guard is then not installed, and codex_trust_hooks.py says so
+# Codex keeps the trust of a hook in ~/.codex/config.toml (see modify_private_config.toml.tmpl); codex_trust_hooks.py grants it.
+set -eu
+
+CMD={{ includeTemplate "shquote" (includeTemplate "codex_guard_command" .) }}
+
+input=$(cat; printf x)
+input=${input%x}
+nl=$(printf '\n.')
+nl=${nl%.}
+case $input in *"$nl") end_nl=1 ;; *) end_nl= ;; esac
+
+warn() { echo "[modify_hooks.json] WARN: $1" >&2; }
+keep() { printf '%s' "$input"; exit 0; }
+
+ours='{matcher: "^Bash$", hooks: [{type: "command", command: $cmd, timeout: 10}]}'
+
+if [ -z "$(printf '%s' "$input" | tr -d '[:space:]')" ]; then
+  command -v jq >/dev/null 2>&1 || { warn "jq not found; ~/.codex/hooks.json was not written"; keep; }
+  jq -n --arg cmd "$CMD" "{hooks: {PreToolUse: [$ours]}}"
+  exit 0
+fi
+command -v jq >/dev/null 2>&1 || { warn "jq not found; ~/.codex/hooks.json left as it is"; keep; }
+printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1 || { warn "~/.codex/hooks.json is not a JSON object; left as it is, so the guard hook is not installed"; keep; }
+if printf '%s' "$input" | jq -e --arg cmd "$CMD" '[(.hooks.PreToolUse // [])[]? | (.hooks // [])[]? | select(.command == $cmd)] | length > 0' >/dev/null 2>&1; then
+  keep
+fi
+out=$(printf '%s' "$input" | jq --arg cmd "$CMD" ".hooks.PreToolUse = ((.hooks.PreToolUse // []) + [$ours])" 2>/dev/null) \
+  || { warn "~/.codex/hooks.json has an unexpected shape; left as it is, so the guard hook is not installed"; keep; }
+printf '%s' "$out"
+[ -z "$end_nl" ] || printf '\n'
