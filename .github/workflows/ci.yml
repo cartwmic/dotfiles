@@ -93,6 +93,8 @@ jobs:
         run: python3 -m unittest discover -s tests/codex-merge -v
       - name: Agent browser launcher and render (fake Chrome, real chezmoi)
         run: python3 -m unittest discover -s tests/agent-browser -v
+      - name: dotfiles-update (non-interactive update with a conflict policy; real chezmoi and git, scratch repository and HOME)
+        run: python3 -m unittest discover -s tests/dotfiles-update -v
       - name: Managed chromium wrapper (real chezmoi render, fake npx and cache; old wrapper as RED control)
         run: python3 -m unittest discover -s tests/chromium-wrapper -v
       - name: viz core and boundary tests (render tests skip without chromium and mmdc)
