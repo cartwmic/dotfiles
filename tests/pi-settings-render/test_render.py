@@ -1,4 +1,4 @@
-"""Render dot_pi/private_agent/private_settings.json.tmpl for both desktop profiles with the real chezmoi.
+"""Render .chezmoitemplates/pi_settings_desired (the Pi settings this repository wants; the modify script merges it into the live file) for both desktop profiles with the real chezmoi.
 
 Native Pi auto-compaction stays off (the auto-compact extension decides when to compact), but compaction.reserveTokens
 sets the summary output cap (min(0.8 x reserveTokens, model max output)). Pi's default of 16384 caps summaries at
@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-TEMPLATE = ROOT / "dot_pi" / "private_agent" / "private_settings.json.tmpl"
+TEMPLATE = ROOT / ".chezmoitemplates" / "pi_settings_desired"
 
 
 # The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.

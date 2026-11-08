@@ -16,7 +16,7 @@ in [AGENTS.md](./AGENTS.md).
 Pi needs an interactive TUI and an external editor. `/inspect-session` also
 requires fullscreen mode (`tuiMode: "fullscreen"`). Managed settings now use
 regular mode on both desktop profiles. To use the conversation reader, change
-`dot_pi/private_agent/private_settings.json.tmpl`, apply
+`.chezmoitemplates/pi_settings_desired` (merged into the live file by `dot_pi/private_agent/modify_private_settings.json.tmpl`), apply
 `~/.pi/agent/settings.json` after approval, and start a new Pi process.
 The project `.pi/settings.json` `externalEditor` key takes precedence over
 the Pi-global key. If neither supplies a usable command, it tries `$VISUAL`,

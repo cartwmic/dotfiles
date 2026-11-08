@@ -63,7 +63,7 @@ def main():
         seed = {"lastChangelogVersion": "0.99.2", "theme": "proof-theme", "hideThinkingBlock": True}
         settings.write_text(json.dumps(seed))
         targets = [settings, home / ".pi/agent/extensions/system-one/README.md", home / ".pi/agent/extensions/system-one/AGENTS.md"]
-        sources = [ROOT / "dot_pi/private_agent/private_settings.json.tmpl", ROOT / DOCS / "README.md", ROOT / DOCS / "AGENTS.md"]
+        sources = [ROOT / ".chezmoitemplates/pi_settings_desired", ROOT / DOCS / "README.md", ROOT / DOCS / "AGENTS.md"]
         managed = set(invoke(["managed", "--include=files", "--path-style=absolute"]).splitlines())
         require(all(str(t) in managed for t in targets), "missing managed target")
         require(str(home / "AGENTS.md") not in managed and str(home / "README.md") not in managed, "root docs must remain ignored")
