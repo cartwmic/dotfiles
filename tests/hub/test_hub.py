@@ -11,6 +11,7 @@ overridden by config data), then run as modify scripts. The ApplyPathTest class 
     python3 -m unittest discover -s tests/hub -v
 """
 import json
+import re
 import os
 import shutil
 import stat
@@ -120,6 +121,26 @@ def tearDownModule():
 needs = unittest.skipUnless(shutil.which("chezmoi") and shutil.which("jq") and shutil.which("python3"), "chezmoi and jq needed")
 
 
+def without_codex_guard(text):
+    """The Codex config without the empty [hooks.state] anchor header that every render adds for the guard hook's trust."""
+    text, dropped = re.subn(r"(?m)^\[hooks\.state\]\n\n?", "", text, count=1)
+    return text.rstrip("\n") + "\n" if dropped and text.strip() else text
+
+
+def without_guard(settings):
+    """The settings without the pattern-kill guard hook, which every render adds (tests/agent-kill-guard covers it)."""
+    pre = [g for g in settings.get("hooks", {}).get("PreToolUse", [])
+           if not any("refuse_pattern_kill.py" in h.get("command", "") for h in g.get("hooks", []))]
+    if "hooks" in settings:
+        if pre:
+            settings["hooks"]["PreToolUse"] = pre
+        else:
+            settings["hooks"].pop("PreToolUse", None)
+        if not settings["hooks"]:
+            del settings["hooks"]
+    return settings
+
+
 @needs
 class ClaudeTest(unittest.TestCase):
     USER = {"theme": "dark", "env": {"FOO": "bar"}, "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo stop"}]}]}}
@@ -132,7 +153,7 @@ class ClaudeTest(unittest.TestCase):
 
     def modify(self, case, settings):
         text = settings if isinstance(settings, str) else json.dumps(settings)
-        return json.loads(run(self.scripts[case], text))
+        return without_guard(json.loads(run(self.scripts[case], text)))
 
     def test_on_sets_both_keys_and_keeps_everything_else(self):
         s = self.modify("on", self.USER)
@@ -195,7 +216,7 @@ class CodexTest(unittest.TestCase):
         cls.scripts = {c: render(CODEX, c) for c in CASES}
 
     def modify(self, case, text):
-        return run(self.scripts[case], text)
+        return without_codex_guard(run(self.scripts[case], text))
 
     def test_on_adds_the_top_level_key_the_block_and_keeps_the_rest(self):
         out = self.modify("on", self.BASE)
@@ -435,7 +456,7 @@ class ApplyPathTest(unittest.TestCase):
         return [str(self.home / t) for t in self.TARGETS]
 
     def read(self):
-        return {t: (self.home / t).read_text() for t in self.TARGETS}
+        return {t: without_codex_guard((self.home / t).read_text()) if t.endswith("config.toml") else (self.home / t).read_text() for t in self.TARGETS}
 
     def test_on_then_off_through_the_real_targets(self):
         self.set_switch(False)
@@ -448,7 +469,7 @@ class ApplyPathTest(unittest.TestCase):
         claude = json.loads((self.home / ".claude/settings.json").read_text())
         self.assertEqual(claude["env"], {"FOO": "bar", "ANTHROPIC_BASE_URL": URL})
         self.assertEqual(claude["apiKeyHelper"], "%s/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-claude-code'" % self.home)
-        toml = tomllib.loads((self.home / ".codex/config.toml").read_text())
+        toml = tomllib.loads(without_codex_guard((self.home / ".codex/config.toml").read_text()))
         self.assertEqual((toml["model"], toml["model_provider"]), ("gpt-6", "cliproxy"))
         self.assertIn("cliproxy", toml["model_providers"])
         t3 = json.loads((self.home / ".t3/userdata/settings.json").read_text())["providerInstances"]

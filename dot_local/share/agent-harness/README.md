@@ -9,6 +9,8 @@ dot_local/share/agent-harness/
   reviewer-brief.md      # the one brief every reviewer follows: the blocking bar, inputs, re-review scope, return
   findings-contract.md   # v1: the shape of a reviewer's return and the review log records
   reviewer-examples.md   # twelve real cases (seven blocking, five notes) for calibrating the bar
+  hooks/
+    refuse_pattern_kill.py   # the pkill/killall classifier that Claude's hook and Pi's extension run (see "Pattern-kill guard")
   canonical/
     instructions/
       AGENTS.md
@@ -123,6 +125,42 @@ menu. Credentials stay in the harness's local OAuth store, not in canonical
 configuration or 1Password adapter metadata. In a running Pi session, use
 `/reload` after applying, then `/mcp login ticktick`.
 
+## Pattern-kill guard
+
+Agent sessions refuse `pkill` and `killall`, so a pattern kill cannot hit another agent's jobs (three incidents in two days, including a
+reviewer's `pkill -f "sleep 30" -P 1`). Decision: Michael, ask 744, "Add the guard". The refusal text tells the agent to kill an exact PID
+(`kill <pid>`, the PID from `$!`) and to use `kgate cancel <id>` for a kgate job.
+
+| Harness | Mechanism | Source | Lands at |
+|---|---|---|---|
+| Claude Code | PreToolUse hook on Bash, running the classifier | `dot_claude/modify_settings.json.tmpl` (the `ensure_guard` step) | `~/.claude/settings.json` |
+| Pi | extension that blocks the `bash` tool call, running the same classifier | `dot_pi/private_agent/extensions/refuse-pattern-kill/` | `~/.pi/agent/extensions/refuse-pattern-kill/` |
+| Codex | PreToolUse hook on its Bash tool, running the same classifier, in `~/.codex/hooks.json` (a JSON `modify_` script that appends our group and finds it by exact command, never by a substring); Codex runs a hook only once it is trusted, so `codex_trust_hooks.py` trusts exactly that hook through Codex's own API after every full apply. A rules file is the second layer for the time the hook is untrusted | `dot_codex/modify_hooks.json.tmpl`, `.chezmoitemplates/codex_guard_command`, `run_after_26_codex_hook_trust.sh.tmpl`, `dot_local/user_scripts/executable_codex_trust_hooks.py`, `dot_codex/rules/agent-guard.rules`; `dot_codex/modify_private_config.toml.tmpl` only adds an empty `[hooks.state]` header | `~/.codex/hooks.json`, `~/.codex/rules/agent-guard.rules`, `~/.local/user_scripts/codex_trust_hooks.py` |
+| shared classifier | command-position parser: sees through quotes, `;`, `&&`, `\|`, `$( )`, `sh -c`, `eval`, wrappers, `find -exec` | `dot_local/share/agent-harness/hooks/refuse_pattern_kill.py` | `~/.local/share/agent-harness/hooks/` |
+
+Both desktop profiles, macOS and Linux; not Termux. Michael's own terminal, and Pi's own `!` command, are not agent tool calls and are not touched.
+It fails open: a missing script, a missing `python3` or an unreadable input allows the command, so a fault in the guard never stops an agent from working.
+A new session picks it up: start a new Claude session, restart Pi, and start a new Codex session (the T3 app-server reads `~/.codex` when it starts a thread).
+
+Claude's hook also covers the Monitor tool (it runs shell commands). Codex's rules alone cannot see a redirect or `&` in the script
+(`pkill -f x 2>/dev/null; true` runs; only `||`, `&&`, `;` and `|` of plain words are checked, which a real Codex session showed), which is why the hook is the
+main Codex mechanism and the rules the backup. The hook is in its own file because Codex edits `config.toml` itself (it writes the trust of a hook there, and can move
+tables and the comments above them), so nothing of ours is cut out of that file; the one thing added to it is an empty `[hooks.state]` header above the managed blocks, so
+Codex's trust tables land beside it and never inside the hub block. Trust is checked and re-granted by `run_after_26_codex_hook_trust.sh` on every full apply (a scoped
+`chezmoi apply <path>` runs no scripts: then run `~/.local/user_scripts/codex_trust_hooks.py --command "$(cat ~/.local/share/chezmoi/.chezmoitemplates/codex_guard_command)"`,
+add `--check` to only look). The hook command text is frozen, so its trust (kept by Codex under a key made of the file and the position) is lost only if its position changes: another group inserted above ours in `hooks.json` (the owner's,
+or one Codex imports) leaves ours untrusted, and so skipped, until the next full apply.
+
+What is not covered (each is named in the code or the tests):
+- the word as an argument is fine (`grep pkill x`, a commit message that mentions it): only the command position counts;
+- a wrapper with an option the classifier does not know (`sudo --some-new-option arg pkill x`) hides the command from it; the option tables cover sudo, env, xargs, timeout, nice, watch, script and the other listed wrappers, including clustered short options (`sudo -iu root`) and long ones;
+- a command built at run time (`$cmd`, `$'pkill'`), a script file, `python -c`, `echo 'pkill x' | sh` and `sh <<< 'pkill x'`, an unquoted heredoc whose body is `$(pkill x)`, `fish -c`, osascript, and `kill $(pgrep -f x)` (a pgrep-fed kill is not a `pkill`);
+- while the Codex hook is untrusted, the rules file cannot see inside `sh -c '...'`, a redirect or `&`, nor a wrapper with options first (`sudo -u root pkill x`);
+- Pi foreground `pi-subagents` children are launched with extension discovery off, so they do not load the extension.
+
+Tests: `tests/agent-kill-guard` (classifier, Claude settings on both profiles, the Codex hook block and its trust step against a real `codex app-server`, Codex rules with Codex's own `execpolicy check`, deploy per profile) and
+`node --test dot_pi/private_agent/extensions/refuse-pattern-kill/index.test.ts`. Proof in a real session of each harness: the PR description.
+
 ## Agent browser
 
 A logged-in Chrome that agents can drive. macOS only, on both desktop profiles (`personal` and `axon-work-computer`).
@@ -163,6 +201,14 @@ both reproduced on a local click-logger page (2026-11-08):
 - *Silent dropped clicks.* A tab opened by `browser_new_tab` is in the background (`visibilityState: hidden`). Chrome drops mouse and key input to a
   hidden tab with no error, so `browser_click` answered success and the page saw nothing. The launcher turns on CDP focus emulation
   (`Emulation.setFocusEmulationEnabled`) for the current tab before every tool call; no tab or window changes.
+
+- *Silent success on nothing.* When the tab a session was using is closed (from outside, or by its own `browser_close_tab`), the stock daemon quietly
+  attaches to a fresh `about:blank` and the next `browser_click` answers `{"ok": true}` on nothing. The launcher remembers the tab it is on and, before it
+  talks to the browser for any tool, checks with `Target.getTargets` (a call that takes no session, so it cannot trigger that re-attach) that the tab still exists. When it
+  is gone every action tool (click, type, fill, press, scroll, goto, js, screenshot, page_info, waits, upload, recording, raw `browser_cdp` except `Target.*`) refuses with
+  "The tab this session was using (<id>) was closed, so nothing was done. Open a tab with browser_new_tab, or attach to an open one with browser_switch_tab", until the agent
+  opens or switches to a tab. Focus emulation is also switched on the moment a tab is created or switched to, so the first click after `browser_new_tab` is not dropped.
+  Test: `tests/agent-browser/test_closed_tab.py` (red control: the stock server answers ok on `about:blank`).
 
 An MCP process picks the launcher up when it starts: sessions started before an apply keep the stock server (and the shared `default` daemon) until they restart.
 Do not call `browser_ensure_real_tab`: it attaches to the first real page in Chrome, which can be someone else's tab.
