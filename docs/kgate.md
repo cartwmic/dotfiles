@@ -117,17 +117,35 @@ Planning count:
 - **Up to about 12 when every job is small.**
 - **Past that, pods queue.** That is fine; the scheduler is the queue.
 
-Profile sizes after the 2026-11-06 trim: `memory` is the request the scheduler reserves, `memory_limit` the OOM limit (unchanged from before). Each row is what its repo's `kgate.toml` says once that repo's profile PR has merged; until then the repo's `kgate.toml` on origin/main still has the old request.
+Profile sizes after the 2026-11-08 right-sizing: `memory` is the request the scheduler reserves, `memory_limit` the OOM limit. Each request is about 1.2 times the highest cache-free (working-set) peak in kgate's log and Prometheus, rounded up to 0.5 GiB. The limit stays above the highest peak that includes page cache. CPU is the p95 of the per-job average cores, never above the old value, and where a job is CPU-bound it is left alone (loop-engine, agent-kit, the unit gate: they use more cores than they book because there is no CPU limit).
 
-| Gate | Repo | cpu | memory (request) | memory_limit (limit) |
-|---|---|---|---|---|
-| Loop Engine baseline | `loop-engine` | 12 | `3584Mi` (3.5 Gi) | `8Gi` |
-| coordinator journeys gate | `coordinator` | 4 | `3584Mi` (3.5 Gi) | `6Gi` |
-| coordinator unit gate | `coordinator` | 4 | `2.5Gi` | `3Gi` |
-| agent-kit unit gate | `agent-kit` | 2 | `3Gi` | `3584Mi` (3.5 Gi) |
-| budget-steward unit gate | `budget-steward` (gitea) | 4 | `6Gi` | `7Gi` |
-| homelab static checks | `cartwmic-homelab-v2` | 2 | `512Mi` | `1Gi` |
-| dotfiles heavy suites | `dotfiles` | 2 | `512Mi` | `1Gi` |
+| Gate | Repo | cpu | memory (request) | memory_limit (limit) | Highest working set (n runs) |
+|---|---|---|---|---|---|
+| Loop Engine baseline | `loop-engine` | 12 | `5632Mi` (5.5 Gi) | `8Gi` | 4.56 GiB (14) |
+| coordinator journeys gate | `coordinator` | 3 | `3584Mi` (3.5 Gi) | `4Gi` | 2.50 GiB (96) |
+| coordinator unit gate | `coordinator` | 4 | `3Gi` | `3Gi` | 1.76 GiB (230) |
+| agent-kit unit gate | `agent-kit` | 2 | `2560Mi` (2.5 Gi) | `3584Mi` (3.5 Gi) | 1.79 GiB (63) |
+| budget-steward unit gate | `budget-steward` (gitea) | 4 | `5632Mi` (5.5 Gi) | `7Gi` | 4.24 GiB (11) |
+| homelab static checks | `cartwmic-homelab-v2` | 1 | `512Mi` | `1Gi` | 0.25 GiB (28) |
+| dotfiles heavy suites | `dotfiles` | 1 | `512Mi` | `1Gi` | 0.27 GiB (66) |
+
+What changed on 2026-11-08 and why: journeys 6Gi to 3.5Gi, limit 6Gi to 4Gi, cpu 4 to 3 (it averages 2.0 cores, at most 3.3); loop-engine request up from 3.5Gi to 5.5Gi, because its working set is 3.6 to 4.5 GiB and the old request sat below it, which makes the pod the first to be evicted (its "8.00 GiB peak" in the record is page cache filling the limit, not use); agent-kit and steward 0.5 GiB down; homelab and dotfiles cpu 2 to 1 (0.6 and 0.1 cores used). The coordinator unit gate stays at 3Gi: its peak including cache is 2.52 GiB, which would not fit 2.5Gi.
+
+One measured run per profile after the change, no OOM, no exit 137 (2026-11-08; peak is the cgroup peak including page cache):
+
+| Gate | Job | Node | Exit | Time | Peak | Working set |
+|---|---|---|---|---|---|---|
+| journeys | `kgate-1794109545-95978` | agent-1 | 0 | 984 s | 1.64 GiB (sampled) | 1.29 GiB |
+| loop-engine | `kgate-1794109540-95546` | G14 | 0 | 222 s | 8.00 GiB (cache at the limit) | 4.56 GiB |
+| agent-kit | `kgate-1794110539-64647` | G14 | 0 | 74 s | 2.14 GiB | 1.49 GiB |
+| coordinator unit | `kgate-1794110612-67987` | G14 | 0 | 213 s | 2.13 GiB | 1.34 GiB |
+| budget-steward | `kgate-1794109421-86375` | G14 | 0 | 86 s | 5.07 GiB | n/a |
+| homelab | `kgate-1794109465-91020` | G14 | 0 | 36 s | 0.40 GiB | n/a |
+| dotfiles | `kgate-1794109465-91022` | G14 | 0 | 544 s | 0.34 GiB | n/a |
+
+Two timing-sensitive gates failed on 5 s and 60 s test timeouts when four jobs ran on agent-1 at once (agent-kit: 5 tests, peak 1.79 GiB; unit: 1 test, peak 1.96 GiB). Both passed alone. The scheduler counts requests, but agent-kit and the unit gate burst to 8 to 16 cores, so several of them on one 8-core node can starve each other. That is a CPU problem, not a memory one.
+
+Packing by request on 2026-11-07 (agents 1 to 3, the other pods' load as it was): the realistic mix of 11 jobs (1 loop-engine, 1 steward, 2 journeys, 3 unit, 2 agent-kit, 1 homelab, 1 dotfiles) fit 4 on the three agents before, 5 after; journeys alone 2 before, 4 after; homelab or dotfiles alone 12 before, 26 after. With the G14 awake: 9 before, 11 after. Jobs do wait: in Prometheus 46 kgate pods sat Unschedulable, 6.2 hours in all, the longest 56 minutes. Nothing gave up waiting.
 
 Before you change a profile's size, check it against the node table above.
 
