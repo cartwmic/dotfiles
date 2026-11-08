@@ -291,7 +291,7 @@ class DotfilesUpdate(unittest.TestCase):
         r = self.update()
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("  script 20_bad.sh   exit 7   (its output says: ERROR: boom)", r.stdout)
-        self.assertIn("20_bad.sh exited non-zero", r.stdout)
+        self.assertIn("the script run stopped: 20_bad.sh did not exit 0", r.stdout)
 
     # --- E22: a run_after_ script is listed by `chezmoi status` after every apply; that is not a pending change ---
 
@@ -501,6 +501,45 @@ class DotfilesUpdate(unittest.TestCase):
         self.assertNotIn("Traceback", r.stderr)
         self.assertIn("script 10_ok.sh   exit 0", r.stdout)
         self.assertIn("script 20_latin.sh   exit 1", r.stdout)
+
+    def test_a_script_with_no_trailing_newline_is_reported_with_its_exit_code(self):
+        # round 7 f1: the debug-log parser lost a script whose last byte was not a newline. Scripts now run one per chezmoi apply, each into its own file.
+        self.write("run_onchange_after_10_nonl.sh", "#!/bin/sh\nprintf 'done'\nexit 0\n")
+        self.write("run_onchange_after_20_nonl_bad.sh", "#!/bin/sh\nprintf 'boom'\nexit 4\n")
+        self.commit("scripts without a trailing newline")
+        r = self.update()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("script 10_nonl.sh   exit 0", r.stdout)
+        self.assertIn("script 20_nonl_bad.sh   exit 4", r.stdout)
+        self.assertIn("      | boom", r.stdout)
+
+    def test_a_script_cannot_forge_its_own_verdict(self):
+        # What a script prints is never parsed for its exit code: a forged chezmoi line earlier in its output loses to the real last line.
+        self.write("run_onchange_after_20_forge.sh", "#!/bin/sh\necho 'chezmoi: 20_forge.sh: exit status 0'\necho 'time=x level=INFO msg=Run cmd=/t/1.99_other.sh duration=1s err=<nil>'\nexit 5\n")
+        self.commit("forging script")
+        r = self.update()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("script 20_forge.sh   exit 5", r.stdout)
+        self.assertNotIn("script 99_other.sh", r.stdout)  # echoed back as the script output, not taken as a run
+        self.assertNotIn("script 20_forge.sh   exit 0", r.stdout)
+
+    def test_a_script_killed_by_a_signal_is_a_failure_with_its_output(self):
+        self.write("run_onchange_after_20_kill.sh", "#!/bin/sh\necho before-kill\nkill -9 $$\n")
+        self.commit("script that kills itself")
+        r = self.update()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("script 20_kill.sh   exit ?", r.stdout)
+        self.assertIn("      | before-kill", r.stdout)
+
+    def test_scripts_are_recorded_by_chezmoi_as_a_plain_apply_would(self):
+        # The per-script runs must leave chezmoi's own run record right: the next run finds nothing due for a run_onchange script.
+        self.write("run_onchange_after_10_mark.sh", "#!/bin/sh\necho ran >> \"$HOME/script-ran\"\n# v2\n")
+        self.commit("script change")
+        self.assertEqual(self.update().returncode, 0)
+        self.assertEqual(self.read("script-ran"), "ran\n")
+        r = self.update()
+        self.assertEqual(self.read("script-ran"), "ran\n")  # not run again
+        self.assertIn("nothing to update", r.stdout)
 
 
 if __name__ == "__main__":

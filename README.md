@@ -658,7 +658,7 @@ What it prints, every time:
 - `source at <sha>, was <sha>`: the source checkout's commit after the pull and before it (`(no new commits)` when they are equal).
 - Each `run_` script that ran, with its exit code: `script 65_agent_kit_install.sh   exit 0   (its output says: ...)`. The note shows the first
   output lines that say warn, error or fail (any case, so a harmless "0 failed" is flagged too), because a script can exit 0 while failing inside (the agent-kit install did). A script that exits
-  non-zero stops the run: it is named with its code and `dotfiles-update` exits 1. (`chezmoi apply --verbose` shows neither; the codes are read from `--debug`.)
+  non-zero stops the run: it is named with its code and `dotfiles-update` exits 1. (`chezmoi apply --verbose` shows neither. Each due script is run by chezmoi on its own, `chezmoi apply --include=scripts PATH`, into its own file, so chezmoi keeps its normal run record and nothing a script prints is ever parsed; the exit code is read from chezmoi's own last line.)
 - `nothing to update.` when no file or changed script is pending. `chezmoi status` still lists every `run_after_` script after every apply (they run on
   every apply by design, for example `75_instances_reconcile.sh`); that is not a pending change, so it says `clean: N always-run script(s)` and why,
   and still runs them as `chezmoi apply` would.

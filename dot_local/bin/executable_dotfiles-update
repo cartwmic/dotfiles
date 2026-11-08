@@ -44,13 +44,17 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 
 EXIT_CONFLICT = 3
 
 
+def chezmoi_cmd(*args):
+    return ["chezmoi", "--no-tty", *shlex.split(os.environ.get("DOTFILES_UPDATE_CHEZMOI_ARGS", "")), *args]
+
+
 def chezmoi(*args, check=False, capture=True, merge=False):
-    extra = shlex.split(os.environ.get("DOTFILES_UPDATE_CHEZMOI_ARGS", ""))
-    cmd = ["chezmoi", "--no-tty", *extra, *args]
+    cmd = chezmoi_cmd(*args)
     if merge:  # one stream, so a script's own output stays in order with chezmoi's log lines
         result = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
     else:
@@ -82,27 +86,47 @@ def always_runs(path):
     return name.startswith(("run_after_", "run_before_"))
 
 
-RUN_LINE = re.compile(r"\bmsg=Run ")  # not msg=RunScript
-LOOKS_FAILED = re.compile(r"\b(warn|warning|error|err|fail|failed|failure)\b", re.IGNORECASE)
+FLAG_WORDS = re.compile(rb"warn|error|fail|\berr\b", re.IGNORECASE)
 TAIL = 15  # lines of a failing script's output that are shown and recorded
 
 
-def script_runs(log):
-    """[(script name, exit code or None, [output lines that say warn, error or fail], [the last lines of its output])] from the `chezmoi apply --debug` log (E20). Each run is one
-    `msg=Run cmd=<tmp dir>/<id>.<script name> ... err=<nil>` (exit 0) or `level=ERROR msg=Run err="exit status N" cmd=... exitCode=N`; the script's own
-    output is what came before it."""
-    runs, output = [], []
-    for line in log.splitlines():
-        found = line.startswith("time=") and RUN_LINE.search(line) and re.search(r"\bcmd=(\S+)", line)
-        if found:
-            name = os.path.basename(found.group(1)).split(".", 1)[-1]
-            exit_code = re.search(r"\bexitCode=(\d+)", line)
-            code = int(exit_code.group(1)) if exit_code else (0 if re.search(r"\berr=<nil>", line) else None)
-            runs.append((name, code, [l.strip()[:160] for l in output if LOOKS_FAILED.search(l)][:2], [l.rstrip()[:200] for l in output][-TAIL:]))
-            output = []
-        elif not line.startswith("time="):
-            output.append(line)
-    return runs
+def still_due(path):
+    """Whether chezmoi still lists this script as due (an earlier script can change that), asked just before it runs."""
+    listed = chezmoi("status", "--include=scripts", "--path-style", "absolute", path)
+    return listed.returncode == 0 and any(line.startswith(" R ") and line[3:] == path for line in listed.stdout.splitlines())
+
+
+def run_script(name, path):
+    """Run ONE script through chezmoi (`chezmoi apply --include=scripts PATH`, so chezmoi keeps its own run record) with the script's stdout and stderr and
+    chezmoi's own message going to one private file. Nothing the script prints is ever parsed: its output is told apart from chezmoi's by the process, not by
+    reading it. The exit code is the only thing read, from chezmoi's last line `chezmoi: NAME: exit status N`, written after the script has gone, so it is the
+    last bytes of the file (a script that printed such a line earlier is not mistaken for it: the LAST one counts). Returns (name, exit or None, flagged, tail).
+    The first two lines with warn/error/fail are the flagged ones; the tail is the last TAIL lines. Bytes, decoded with errors replaced (round 5 f3, round 6 f1,
+    round 7 f1: the earlier design parsed chezmoi's --debug log, which has the script's output mixed into it)."""
+    with tempfile.TemporaryFile() as out:
+        code = subprocess.run(chezmoi_cmd("apply", "--force", "--include=scripts", path), stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT).returncode
+        size = out.seek(0, 2)
+        exit_code = 0
+        if code:
+            exit_code, mark = None, ("chezmoi: %s: " % name).encode()
+            out.seek(max(0, size - 4096))
+            tail = out.read()
+            at = tail.rfind(mark)
+            found = re.fullmatch(rb"(?:exit status (\d+)|[^\n]*)\n?", tail[at + len(mark):]) if at >= 0 else None
+            if found:
+                exit_code = int(found.group(1)) if found.group(1) else None
+                size -= len(tail) - at  # what is left is the script's own output
+                out.truncate(size)
+        out.seek(0)
+        flagged = []
+        for chunk in iter(lambda: out.readline(65536), b""):  # bounded memory, whatever the line length
+            if FLAG_WORDS.search(chunk):
+                flagged.append(chunk.decode("utf-8", "replace").strip()[:160])
+                if len(flagged) == 2:
+                    break
+        out.seek(max(0, size - 65536))
+        lines = out.read(size - out.tell()).decode("utf-8", "replace").splitlines()
+    return (name, exit_code, flagged, [line.rstrip()[:200] for line in lines[-TAIL:]])
 
 
 def normalize(path, home):
@@ -223,8 +247,7 @@ def describe(path, state, dirs):
     if path not in managed:
         return "the source no longer has it, apply would delete it", None
     # bytes, not text: a binary source file must not crash the report (round 4 f2)
-    extra = shlex.split(os.environ.get("DOTFILES_UPDATE_CHEZMOI_ARGS", ""))
-    cat = subprocess.run(["chezmoi", "--no-tty", *extra, "cat", path], stdin=subprocess.DEVNULL, capture_output=True)
+    cat = subprocess.run(chezmoi_cmd("cat", path), stdin=subprocess.DEVNULL, capture_output=True)
     if cat.returncode != 0:
         message = cat.stderr.decode(errors="replace").strip()
         if "not a file, script, or symlink" in message:
@@ -261,7 +284,7 @@ def backup(path, home, stamp):
 
 
 def chezmoi_error(output):
-    """chezmoi's own error line from a merged --debug log (it starts with `chezmoi:`), else the last line."""
+    """chezmoi's own error line from merged output (it starts with `chezmoi:`), else the last line."""
     lines = [line for line in output.splitlines() if line.startswith("chezmoi:")]
     return lines[-1] if lines else (output.strip().splitlines() or ["no output"])[-1]
 
@@ -434,14 +457,17 @@ def run(args, record):
                         partial()
                         return 1
                 if scripts and not unresolved:
-                    # E20: --debug is the only place chezmoi says each script's exit status; the log is read here and not printed.
-                    result = chezmoi("apply", "--force", "--include=scripts", "--debug", merge=True)
-                    runs = script_runs(result.stdout)
+                    for path in scripts:
+                        if not still_due(path):
+                            continue
+                        runs.append(run_script(os.path.relpath(path, home), path))
+                        if runs[-1][1] != 0:  # chezmoi stops at the first failing script, and so do we
+                            break
                     record["scripts"] = [{"name": n, "exit": c, "flagged": f, "tail": t if c != 0 else []} for n, c, f, t in runs]
-                    if result.returncode != 0:
+                    failed = [name for name, code, _, _ in runs if code != 0]
+                    if failed:
                         print_script_runs(runs)
-                        failed = [name for name, code, _, _ in runs if code != 0]
-                        print("dotfiles-update: the script run stopped%s (%s)" % (": %s exited non-zero" % ", ".join(failed) if failed else "", chezmoi_error(result.stdout)))
+                        print("dotfiles-update: the script run stopped: %s did not exit 0" % ", ".join(failed))
                         record["error"] = "script run stopped"
                         partial()
                         return 1
