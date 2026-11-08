@@ -26,6 +26,21 @@ CLAUDE_FILE = ".config/t3-hub-claude-settings.json"
 TARGETS = (".t3/userdata/settings.json", CLAUDE_FILE, ".codex/config.toml")
 CODEX_VERSION = "9.9.9"
 WORKTREES = "/Volumes/Workshop/macbook/t3-worktrees"
+WINDOW = "500000"  # T3's "Auto-compact after" (autoCompactWindow), a string; Michael's pick on ask 755
+WINDOW_IDS = ("claudeAgent", "coordinator")
+
+
+def with_window(data):
+    """data with autoCompactWindow added to the config of claudeAgent and coordinator, appended last the way the script does."""
+    out = json.loads(json.dumps(data))
+    for i in WINDOW_IDS:
+        if isinstance(out.get("providerInstances", {}).get(i), dict):
+            out["providerInstances"][i]["config"] = {**out["providerInstances"][i].get("config", {}), "autoCompactWindow": WINDOW}
+    return out
+
+
+# The live-shape settings once the window is in place: what every apply after the first sees, and what the switch-off tests expect back.
+SETTLED = json.dumps(with_window(json.loads(FIXTURE)), indent=2, ensure_ascii=False)
 
 
 
@@ -73,11 +88,13 @@ class Env:
         self._tmp.cleanup()
 
 
-def run_script(script, stdin, want=None):
-    """Run a rendered modify script. want replaces the one-line WANT definition."""
+def run_script(script, stdin, want=None, window=None):
+    """Run a rendered modify script. want replaces the one-line WANT definition, window the AUTO_COMPACT_WINDOW one."""
     if want is not None:
         lines = script.splitlines(keepends=True)
         script = "".join("WANT='%s'\n" % want if l.startswith("WANT=") else l for l in lines)
+    if window is not None:
+        script = "".join("AUTO_COMPACT_WINDOW='%s'\n" % window if l.startswith("AUTO_COMPACT_WINDOW=") else l for l in script.splitlines(keepends=True))
     r = subprocess.run(["sh", "-c", script], input=stdin, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     return r.stdout
@@ -102,7 +119,7 @@ class SettingsScriptTest(unittest.TestCase):
         before = json.loads(FIXTURE)
         self.assertEqual(list(out["providerInstances"]), list(before["providerInstances"]) + list(OURS))
         theirs = {k: v for k, v in out["providerInstances"].items() if k not in OURS}
-        self.assertEqual(theirs, before["providerInstances"])
+        self.assertEqual(theirs, with_window(before)["providerInstances"])
         self.assertEqual({k: v for k, v in out.items() if k != "providerInstances"},
                          {k: v for k, v in before.items() if k != "providerInstances"})
 
@@ -139,9 +156,9 @@ class SettingsScriptTest(unittest.TestCase):
 
     def test_only_additions_in_the_text(self):
         """Line by line, the diff is two new objects and the comma on the object before them. Nothing else, to the last line."""
-        once = self.apply(FIXTURE)
-        ops = difflib.SequenceMatcher(None, FIXTURE.splitlines(), once.splitlines(), autojunk=False).get_opcodes()
-        changes = [(tag, FIXTURE.splitlines()[a1:a2], once.splitlines()[b1:b2]) for tag, a1, a2, b1, b2 in ops if tag != "equal"]
+        once = self.apply(SETTLED)
+        ops = difflib.SequenceMatcher(None, SETTLED.splitlines(), once.splitlines(), autojunk=False).get_opcodes()
+        changes = [(tag, SETTLED.splitlines()[a1:a2], once.splitlines()[b1:b2]) for tag, a1, a2, b1, b2 in ops if tag != "equal"]
         self.assertTrue(changes)
         for tag, old, new in changes:
             self.assertNotEqual(tag, "delete", old)
@@ -154,6 +171,46 @@ class SettingsScriptTest(unittest.TestCase):
         self.assertFalse(self.apply(FIXTURE).endswith("\n"))
         self.assertTrue(self.apply(FIXTURE + "\n").endswith("}\n"))
 
+    def test_auto_compact_window_is_set_on_the_two_claude_instances_only(self):
+        """claudeAgent gains a config holding just the window; coordinator keeps its launchArgs and gains the window; codex and the rest are as T3 wrote them."""
+        before = json.loads(FIXTURE)["providerInstances"]
+        inst = json.loads(self.apply(FIXTURE))["providerInstances"]
+        self.assertEqual(inst["claudeAgent"], {"driver": "claudeAgent", "enabled": True, "config": {"autoCompactWindow": WINDOW}})
+        self.assertEqual(inst["coordinator"]["config"], {**before["coordinator"]["config"], "autoCompactWindow": WINDOW})
+        self.assertEqual({k: v for k, v in inst["coordinator"].items() if k != "config"}, {k: v for k, v in before["coordinator"].items() if k != "config"})
+        self.assertEqual(inst["codex"], before["codex"])
+        for i in OURS:
+            self.assertNotIn("autoCompactWindow", inst[i].get("config", {}))
+        self.assertIsInstance(inst["claudeAgent"]["config"]["autoCompactWindow"], str)
+
+    def test_auto_compact_window_does_not_depend_on_the_hub_switch(self):
+        inst = json.loads(self.apply(FIXTURE, want="{}"))["providerInstances"]
+        self.assertEqual([inst[i]["config"]["autoCompactWindow"] for i in WINDOW_IDS], [WINDOW, WINDOW])
+
+    def test_auto_compact_window_replaces_a_different_value(self):
+        data = json.loads(FIXTURE)
+        data["providerInstances"]["coordinator"]["config"]["autoCompactWindow"] = "300000"
+        data["providerInstances"]["claudeAgent"]["config"] = {"autoCompactWindow": "", "binaryPath": "/x/claude"}
+        inst = json.loads(self.apply(json.dumps(data, indent=2)))["providerInstances"]
+        self.assertEqual(inst["coordinator"]["config"]["autoCompactWindow"], WINDOW)
+        self.assertEqual(inst["claudeAgent"]["config"], {"autoCompactWindow": WINDOW, "binaryPath": "/x/claude"})
+
+    def test_auto_compact_window_does_not_create_an_absent_instance(self):
+        data = json.loads(FIXTURE)
+        del data["providerInstances"]["coordinator"]
+        inst = json.loads(self.apply(json.dumps(data, indent=2), want="{}"))["providerInstances"]
+        self.assertNotIn("coordinator", inst)
+        self.assertEqual(json.loads(self.apply('{"a": 1}', want="{}")), {"a": 1, "worktreesDirectory": WORKTREES})
+
+    def test_empty_auto_compact_window_removes_only_our_key(self):
+        data = json.loads(self.apply(FIXTURE))
+        data["providerInstances"]["coordinator"]["config"]["other"] = 1
+        out = json.loads(self.apply(json.dumps(data, indent=2), window=""))["providerInstances"]
+        self.assertEqual(out["coordinator"]["config"], {"launchArgs": data["providerInstances"]["coordinator"]["config"]["launchArgs"], "other": 1})
+        self.assertEqual(out["claudeAgent"].get("config"), {})
+        # With no window ever set, an empty value leaves the file exactly as T3 wrote it (no config key invented).
+        self.assertEqual(json.loads(self.apply(FIXTURE, want="{}", window=""))["providerInstances"], json.loads(FIXTURE)["providerInstances"])
+
     def test_stale_hub_entries_are_replaced_in_place(self):
         data = json.loads(FIXTURE)
         data["providerInstances"] = {"claude-hub": {"driver": "claudeAgent", "displayName": "old"},
@@ -165,7 +222,7 @@ class SettingsScriptTest(unittest.TestCase):
 
     def test_removing_the_definition_removes_only_these_two(self):
         with_ours = self.apply(FIXTURE)
-        self.assertEqual(json.loads(self.apply(with_ours, want="{}")), json.loads(FIXTURE))
+        self.assertEqual(json.loads(self.apply(with_ours, want="{}")), with_window(json.loads(FIXTURE)))
         only_claude = json.loads(self.apply(with_ours, want=json.dumps({"claude-hub": {"driver": "claudeAgent"}})))
         self.assertEqual(list(only_claude["providerInstances"]), ["codex", "claudeAgent", "coordinator", "claude-hub"])
 
@@ -250,12 +307,12 @@ class ApplyPathTest(unittest.TestCase):
             self.assertTrue((env.home / CLAUDE_FILE).exists())
             env.set_enabled(False)
             env.chezmoi("apply", *self.targets(env))
-            self.assertEqual((env.home / ".t3/userdata/settings.json").read_text(), FIXTURE)
+            self.assertEqual((env.home / ".t3/userdata/settings.json").read_text(), SETTLED)
             self.assertEqual(without_codex_guard((env.home / ".codex/config.toml").read_text()), CODEX_BASE)
             self.assertFalse((env.home / CLAUDE_FILE).exists())
             # Off is stable, and back on restores all three.
             env.chezmoi("apply", *self.targets(env))
-            self.assertEqual((env.home / ".t3/userdata/settings.json").read_text(), FIXTURE)
+            self.assertEqual((env.home / ".t3/userdata/settings.json").read_text(), SETTLED)
             env.set_enabled(True)
             env.chezmoi("apply", *self.targets(env))
             self.assertEqual(list(json.loads((env.home / ".t3/userdata/settings.json").read_text())["providerInstances"])[-2:], list(OURS))

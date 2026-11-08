@@ -105,7 +105,10 @@ def render(path, case, home=None):
     data = dict({"profile": profile, "instances": {"coordinator": {"repo": "/nonexistent/coordinator"}}}, **extra)
     if home is None:  # the T3 script reads active.json through the HOME the template sees
         home = HOME_DIR
-    return chezmoi(source(os_name), data, "execute-template", stdin=(ROOT / path).read_text(), home=home)
+    text = chezmoi(source(os_name), data, "execute-template", stdin=(ROOT / path).read_text(), home=home)
+    # These tests are about the hub and the names. The "Auto-compact after" value the T3 script also sets on claudeAgent and coordinator
+    # is tests/t3-hub's; blank it here (an empty value adds nothing) so the fixture comparisons stay about the hub.
+    return text.replace("AUTO_COMPACT_WINDOW='500000'", "AUTO_COMPACT_WINDOW=''") if path == T3 else text
 
 
 def run(script, stdin, home=None, full=False):
@@ -462,7 +465,10 @@ class ApplyPathTest(unittest.TestCase):
         self.set_switch(False)
         self.apply(*self.targets())
         baseline = self.read()  # what an apply leaves with the hub off: the other keys these scripts own are added here
-        self.assertEqual(baseline[".t3/userdata/settings.json"], FIXTURE)
+        settled = json.loads(FIXTURE)  # plus the "Auto-compact after" value the script sets on claudeAgent and coordinator (tests/t3-hub covers it)
+        for i in ("claudeAgent", "coordinator"):
+            settled["providerInstances"][i]["config"] = {**settled["providerInstances"][i].get("config", {}), "autoCompactWindow": "500000"}
+        self.assertEqual(baseline[".t3/userdata/settings.json"], json.dumps(settled, indent=2, ensure_ascii=False))
         self.assertEqual(baseline[".codex/config.toml"], self.CODEX_BASE)
         self.set_switch(True)
         self.apply(*self.targets())
