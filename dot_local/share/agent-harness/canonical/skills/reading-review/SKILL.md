@@ -27,7 +27,7 @@ Open the page with a one-line verdict and, if there is one, a top recommendation
 
 ## Output
 
-1. **One viz page** (the `using-viz` skill). Write self-contained HTML in a scratch directory (not in a repo), run `viz publish <file> --as html`, then open the `url` once and confirm it loads and renders. If the viz host is unreachable from where you run (the link opens only on the home network or WireGuard), hand over the HTML file and say so.
+1. **One viz page** (the `using-viz` skill). Write self-contained HTML in a scratch directory (not in a repo). Michael reads on a phone, so follow the size rules in `using-viz`: run `viz render <file> --as html --width 1000 --scale 1`, read `bytes`, and keep each image about 2 MB or smaller. A long report is often over that as a PNG; publish it anyway and give only the link. Run `viz publish <id>`, print the sizes of `url` and `png_url` with `curl -w '%{size_download}'`, and report the total. Then open the `url` once and confirm it loads and renders. If the viz host is unreachable from where you run (the link opens only on the home network or WireGuard), hand over the HTML file and say so.
 2. **A Review item**, when you work under Michael's coordinator. The first line of its TickTick content is the viz URL, then a one-line verdict. Research results become Review items that are never auto-closed. Create it with
    `coordinator board write ticktick create <Personal list id> --title "Review: <title>" --content="<url>
 <one-line verdict>" --grant 13 --why R --event E`.
