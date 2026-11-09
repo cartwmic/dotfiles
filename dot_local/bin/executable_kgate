@@ -70,8 +70,8 @@ NEVER_NODES = ("ubuntu-server-k8s-master-1", "mac-mini-worker")
 OVERFLOW_NODES = ("ubuntu-server-k8s-agent-4",)
 # The G14 runs the same gate about twice as fast (unit gate median 237 s against about 500 s on the agents) and was Ready 100% of
 # the last 20 days, so jobs go there first. If it is down, NotReady or full, the preference does not apply and the pod goes to an
-# agent. A pinned --node ignores it, and a profile with prefer_nodes = false (the coordinator journeys) leaves it out. 2026-11-08, Michael,
-# ask 765.
+# agent. A pinned --node ignores it, and a profile with exclude_nodes = ["cartwmic-g14-wsl"] (the coordinator journeys)
+# keeps its pods off the G14 altogether. 2026-11-08, Michael, ask 765.
 PREFER_NODES = ("cartwmic-g14-wsl",)
 # image registries that need a pull credential: host -> (user, 1Password reference of the token)
 PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/password")}
@@ -137,7 +137,7 @@ def parse_profile(text):
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "exclude_nodes", "tools", "secrets", "services"}
     if set(raw) - known:
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
     tools = {}
@@ -155,14 +155,14 @@ def parse_profile(text):
     services = raw.get("services") or []
     if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
         raise Unavailable("profile services must be a list of names")
-    prefer = raw.get("prefer_nodes", True)
-    if not isinstance(prefer, bool):
-        raise Unavailable("profile prefer_nodes must be true or false, got %r" % (prefer,))
+    exclude = raw.get("exclude_nodes") or []
+    if not isinstance(exclude, list) or not all(isinstance(n, str) and n for n in exclude):
+        raise Unavailable("profile exclude_nodes must be a list of node names")
     user = raw.get("user", "1000:1000")
     if not isinstance(user, str) or not re.fullmatch(r"[0-9]+:[0-9]+", user):
         raise Unavailable("profile user must look like 1000:1000, got %r" % (user,))
     return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"),
-            "memory_limit": raw.get("memory_limit"), "user": user, "prefer_nodes": prefer,
+            "memory_limit": raw.get("memory_limit"), "user": user, "exclude_nodes": exclude,
             "tools": tools, "secrets": secrets, "services": services}
 
 
@@ -193,7 +193,7 @@ def version_found(text, expected):
     return re.search(r"(?<![0-9])(?<![0-9]\.)" + re.escape(expected) + r"(?![0-9])(?!\.[0-9])", text) is not None
 
 
-def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True):
+def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, exclude_nodes=()):
     """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name)."""
     labels = {"app": "kgate", "kgate-job": job}
     items = []
@@ -219,17 +219,17 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
     if secret_env:
         container["envFrom"] = [{"secretRef": {"name": job + "-env"}}]
     match = [{"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]},
-             {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": list(NEVER_NODES)}]
+             {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": list(NEVER_NODES) + list(exclude_nodes)}]
     if node:
         match = [match[0], {"key": "kubernetes.io/hostname", "operator": "In", "values": [node]}]
     pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": MAX_RUN_S,
            "affinity": {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
                "nodeSelectorTerms": [{"matchExpressions": match}]},
-               "preferredDuringSchedulingIgnoredDuringExecution": (
-                   [{"weight": 100, "preference": {"matchExpressions": [
-                       {"key": "kubernetes.io/hostname", "operator": "In", "values": list(PREFER_NODES)}]}}] if prefer_nodes else []
-               ) + [{"weight": 100, "preference": {"matchExpressions": [
-                   {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": list(OVERFLOW_NODES)}]}}]}},
+               "preferredDuringSchedulingIgnoredDuringExecution": [
+                   {"weight": 100, "preference": {"matchExpressions": [
+                       {"key": "kubernetes.io/hostname", "operator": "In", "values": list(PREFER_NODES)}]}},
+                   {"weight": 100, "preference": {"matchExpressions": [
+                       {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": list(OVERFLOW_NODES)}]}}]}},
            "tolerations": [{"key": "homelab.cartwmic.com/optional", "operator": "Exists", "effect": "NoSchedule"}],
            "volumes": [{"name": "cache", "hostPath": {"path": "/var/lib/kgate/cache", "type": "DirectoryOrCreate"}},
                        {"name": "out", "emptyDir": {}}],
@@ -547,7 +547,7 @@ class Job:
     def settings(self, wt):
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
-        prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "prefer_nodes": True, "tools": {}, "secrets": {}, "services": []}
+        prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "exclude_nodes": [], "tools": {}, "secrets": {}, "services": []}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())
@@ -563,6 +563,8 @@ class Job:
             raise Unavailable("the gate needs %s, which kgate cannot provide; this gate cannot run on kgate" % ", ".join(prof["services"]))
         if o.node in NEVER_NODES:
             raise Unavailable("node %s is excluded from kgate" % o.node)
+        if o.node in prof["exclude_nodes"]:
+            raise Unavailable("node %s is excluded by the profile" % o.node)
         if o.node in OVERFLOW_NODES:
             raise Unavailable("node %s only takes kgate overflow; it cannot be pinned" % o.node)
         self.rec.update(image=image, cpu=cpu, mem=mem, mem_limit=mem_limit)
@@ -694,7 +696,7 @@ class Job:
         limit = "" if mem_limit == mem else ", %s limit" % mem_limit
         self.note("pod %s on %s: image %s, %d cpu, %s memory request%s" % (self.id, o.node or "any node", image.split("@")[0], cpu, mem, limit))
         self.start_pod(pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit,
-                                          prefer_nodes=prof["prefer_nodes"]))
+                                          exclude_nodes=prof["exclude_nodes"]))
         del secret_env, pull
         self.note("pod running on %s" % self.rec["node"])
         self.register()  # again, now that the node is known (kgate cancel --list shows it)

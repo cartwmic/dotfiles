@@ -141,10 +141,10 @@ NODE_AUTH_TOKEN = "op://developer/item/password"
 
 class PodSpec(unittest.TestCase):
     def pod(self, **kw):
-        args = dict(job="kgate-1-2", image=DIGEST, cpu=3, memory="6Gi", node=None, secret_env={}, pull=None, memory_limit=None, prefer_nodes=True)
+        args = dict(job="kgate-1-2", image=DIGEST, cpu=3, memory="6Gi", node=None, secret_env={}, pull=None, memory_limit=None, exclude_nodes=())
         args.update(kw)
         items = K.pod_manifests(args["job"], args["image"], args["cpu"], args["memory"], args["node"], args["secret_env"], args["pull"],
-                                memory_limit=args["memory_limit"], prefer_nodes=args["prefer_nodes"])["items"]
+                                memory_limit=args["memory_limit"], exclude_nodes=args["exclude_nodes"])["items"]
         return items[-1], items[:-1]
 
     def test_limits_and_jobs_follow_the_request(self):
@@ -189,19 +189,19 @@ class PodSpec(unittest.TestCase):
             {"weight": 100, "preference": {"matchExpressions": [
                 {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-agent-4"]}]}}])
 
-    def test_a_profile_can_leave_the_g14_preference_out(self):
-        pod, _ = self.pod(prefer_nodes=False)
-        pref = pod["spec"]["affinity"]["nodeAffinity"]["preferredDuringSchedulingIgnoredDuringExecution"]
-        self.assertEqual(pref, [
-            {"weight": 100, "preference": {"matchExpressions": [
-                {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-agent-4"]}]}}])
+    def test_a_profile_can_exclude_nodes_from_the_required_match(self):
+        pod, _ = self.pod(exclude_nodes=["cartwmic-g14-wsl"])
+        exprs = pod["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"]
+        self.assertEqual(exprs[1], {"key": "kubernetes.io/hostname", "operator": "NotIn",
+                                    "values": ["ubuntu-server-k8s-master-1", "mac-mini-worker", "cartwmic-g14-wsl"]})
 
-    def test_prefer_nodes_in_a_profile_is_a_bool_and_defaults_true(self):
+    def test_exclude_nodes_in_a_profile_is_a_list_of_names_and_defaults_empty(self):
         base = 'image = "%s"\n' % DIGEST
-        self.assertTrue(K.parse_profile(base)["prefer_nodes"])
-        self.assertFalse(K.parse_profile(base + "prefer_nodes = false\n")["prefer_nodes"])
-        with self.assertRaises(K.Unavailable):
-            K.parse_profile(base + 'prefer_nodes = "no"\n')
+        self.assertEqual(K.parse_profile(base)["exclude_nodes"], [])
+        self.assertEqual(K.parse_profile(base + 'exclude_nodes = ["a"]\n')["exclude_nodes"], ["a"])
+        for bad in ('exclude_nodes = "a"\n', 'exclude_nodes = [1]\n', 'exclude_nodes = [""]\n'):
+            with self.assertRaises(K.Unavailable):
+                K.parse_profile(base + bad)
 
     def test_the_preference_does_not_widen_the_required_match(self):
         pod, _ = self.pod()
@@ -720,11 +720,23 @@ class Black(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertEqual(self.preferred_hosts(), [("In", ["cartwmic-g14-wsl"]), ("NotIn", ["ubuntu-server-k8s-agent-4"])])
 
-    def test_a_profile_with_prefer_nodes_false_sends_no_g14_term(self):
-        self.profile(extra="prefer_nodes = false")
+    def required_hostname_notin(self):
+        manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
+        exprs = manifest["items"][-1]["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"]
+        return next(e["values"] for e in exprs if e["operator"] == "NotIn")
+
+    def test_a_profile_that_excludes_the_g14_keeps_the_pod_off_it(self):
+        self.profile(extra='exclude_nodes = ["cartwmic-g14-wsl"]')
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertEqual(self.preferred_hosts(), [("NotIn", ["ubuntu-server-k8s-agent-4"])])
+        self.assertIn("cartwmic-g14-wsl", self.required_hostname_notin())
+
+    def test_pinning_a_node_the_profile_excludes_is_refused(self):
+        self.profile(extra='exclude_nodes = ["cartwmic-g14-wsl"]')
+        done = self.kgate("--node", "cartwmic-g14-wsl", "--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("excluded by the profile", done.stdout)
+        self.assertFalse([c for c in self.calls() if "manifest" in c])
 
     def test_the_pod_is_sent_the_limits(self):
         self.assertEqual(self.kgate("--cpu", "3", "--mem", "2Gi", "--", "true").returncode, 0)
