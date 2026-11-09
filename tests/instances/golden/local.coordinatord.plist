@@ -12,7 +12,8 @@
     <string>--disable-warning=ExperimentalWarning</string>
     <string>/Volumes/Workshop/macbook/git/coordinator/src/coordinatord/main.ts</string>
   </array>
-  <key>WorkingDirectory</key><string>/Volumes/Workshop/macbook/git/coordinator</string>
+  <!-- Home, not the checkout: a launchd process whose working directory is on /Volumes/Workshop hung silently in the mise node shim's getcwd on a macOS removable-volume prompt (2026-11-09, 12 min). main.ts is still loaded by its absolute path and the daemon does not use its cwd. -->
+  <key>WorkingDirectory</key><string>/Users/test</string>
   <key>EnvironmentVariables</key>
   <dict>
     <!-- node, herdr (the mise shim), op (Homebrew) and git must be found from here; the coordinator pane's shell has its own PATH. -->
