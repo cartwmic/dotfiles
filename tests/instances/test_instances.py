@@ -78,7 +78,9 @@ class RenderTests(unittest.TestCase):
         data = {"profile": "personal", "instances": {"coordinator": {"repo": "/srv/co"}, "retro": {"repo": "/srv/re"}}}
         self.assertEqual(render(COORD_UNIT, data), GOLDEN_COORD.read_text(encoding="utf-8").replace(COORD_PATH, "/srv/co"))
         self.assertEqual(render(RETRO_UNIT, data), GOLDEN_RETRO.read_text(encoding="utf-8").replace(RETRO_PATH, "/srv/re"))
-        self.assertIn("<key>WorkingDirectory</key><string>/srv/co</string>", render(COORD_UNIT, data))
+        # The working directory is home, not the checkout: a launchd process cwd'd on /Volumes/Workshop hung on a macOS removable-volume prompt (2026-11-09).
+        self.assertIn("<key>WorkingDirectory</key><string>/Users/test</string>", render(COORD_UNIT, data))
+        self.assertIn("<string>/srv/co/src/coordinatord/main.ts</string>", render(COORD_UNIT, data))
 
     def test_work_profile_default_checkouts(self):
         data = {"profile": "axon-work-computer"}
