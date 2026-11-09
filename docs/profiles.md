@@ -70,8 +70,8 @@ The work profile reads `privatePiProviderRef` with `op` through the service acco
 
 | Caller | Without a token | With a token |
 |---|---|---|
-| `~/.pi/agent/bin/op`: Pi's bash tool and `!` commands, and Retro's launchd PATH | refuses, exit 69, always | the real `op` with the service account (empty HOME) |
-| `~/.local/share/op-shim/op`: the same file, reached by every zsh (`dot_zshenv`) | refuses (exit 69) only in an agent shell, when one of `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `T3CODE_THREAD_ID`, `HERDR_ENV`, `CODEX_SANDBOX` is set and not empty; in any other shell runs `op` unchanged (the desktop-app path) | the real `op` with the service account |
+| `~/.pi/agent/bin/op`: Pi's bash tool and `!` commands, and Retro's launchd PATH | refuses, exit 69, always | the real `op` with the service account (empty HOME; the read-only subcommands with no path option also run from that HOME, see `takes_no_path`) |
+| `~/.local/share/op-shim/op`: the same file, reached by every zsh (`dot_zshenv`) | refuses (exit 69) only in an agent shell, when one of `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `T3CODE_THREAD_ID`, `HERDR_ENV`, `CODEX_SANDBOX` is set and not empty; in any other shell runs `op` unchanged (the desktop-app path) | the real `op` with the service account (same directory rule as the row above) |
 | `viz publish` (`dot_local/bin/executable_viz`) | refuses (exit 4, `missing_dependency` JSON) only in an agent shell, with the same markers, and logs the refusal in `$VIZ_STATE_DIR/actions.jsonl`; other shells run `op` unchanged | the service account |
 | `kgate` (profile secrets and the ghcr pull credential) | refuses (exit 69) before `op` runs, no pod created | the service account |
 | `op_read_cached.sh` (pi's model keys, work GLM key) | refuses (exit 69) on a cache miss, never runs `op`; a stale cached value is served with a WARN; refusals and stale serves are logged in `$XDG_STATE_HOME/agent-harness/op-read-cached.jsonl` (reference only, no value) | a cache miss reads with the service account |
@@ -88,6 +88,7 @@ Known gaps:
 - A zsh started from inside Pi's bash tool (for example `zsh -c 'op whoami'`) has no marker, and `dot_zshenv` puts the zsh name first, so its `op` runs the real CLI with the desktop-app fallback. Confirmed in a scratch run: the Homebrew `op` ran (scratch HOME, no token), because `dot_zshenv` puts Homebrew ahead of the rest of the PATH.
 - `viz publish` from Pi's bash tool has no marker, so viz skips its own refusal. Its `op read` reaches Pi's copy, which refuses, so no desktop path runs. viz then reports `VIZ_PUBLISH_PASSWORD is not set` and logs that outcome, not the token refusal. Confirmed in a scratch run.
 - The shim's own refusal writes its message to stderr and no log record. The viz and `op_read_cached.sh` refusals are logged; the shim's is not (principle 14).
+- `takes_no_path` lists six subcommands (`read`, `whoami`, `item get`, `item list`, `vault list`, `account list`) and treats five option names as path options. A flag the list does not know about that takes a relative path would resolve against the op home, not the caller's directory. The list was not checked against the full flag set of each `op` release.
 
 The human-run flows keep their own fallbacks: fresh-machine provisioning (`run_after_05_provision_ssh_keys.sh.tmpl`), the token refresh (`refresh_op_service_account_token.sh`, biometric on purpose), and the zshrc warning block.
 

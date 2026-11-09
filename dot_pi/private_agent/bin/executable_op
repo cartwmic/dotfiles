@@ -5,6 +5,8 @@
 # With a 1Password service-account token (OP_SERVICE_ACCOUNT_TOKEN, or the token file below), the real op runs with an
 # empty HOME, so it uses the service account and never waits on the desktop app (under the real HOME a locked app can
 # hang it, and on the personal Mac op blocks on the app's settings.json in its Group Container even with a token).
+# The subcommands that take no file path (takes_no_path) also run from that empty HOME, not the caller's directory, so
+# op never asks for access to a caller's directory on a removable volume such as /Volumes/Workshop.
 # Without a token, an agent shell refuses: exit 69, the message below, and op does not run, so it cannot reach the
 # desktop app. Any other shell runs op unchanged, which is the desktop-app path Michael's own terminals keep.
 # An agent shell is: any call by the Pi name; or a call by the zsh name while one of the markers in agent_shell is set.
@@ -24,6 +26,23 @@ agent_shell() {
   esac
   [ -n "${CLAUDECODE:-}" ] || [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] || [ -n "${T3CODE_THREAD_ID:-}" ] \
     || [ -n "${HERDR_ENV:-}" ] || [ -n "${CODEX_SANDBOX:-}" ]
+}
+
+# Does this call take no file path? Only these subcommands: read, whoami, item get|list, vault list, account list. A
+# call with a path option (--out-file, -o, --out, -i, --in-file, with or without =value) keeps the caller's directory.
+takes_no_path() {
+  case "${1-}" in
+    read | whoami) ;;
+    item) [ "${2-}" = get ] || [ "${2-}" = list ] || return 1 ;;
+    vault | account) [ "${2-}" = list ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  for arg in "$@"; do
+    case "$arg" in
+      --out-file | --out-file=* | --out | --out=* | -o | --in-file | --in-file=* | -i) return 1 ;;
+    esac
+  done
+  return 0
 }
 
 # The real op: the first op on PATH that is not this file.
@@ -56,4 +75,7 @@ fi
 
 op_home="${TMPDIR:-/tmp}/pi-op-home-$(id -u)"
 mkdir -p -m 700 "$op_home"
+if takes_no_path "$@"; then
+  cd "$op_home"
+fi
 exec env HOME="$op_home" "$real" "$@"
