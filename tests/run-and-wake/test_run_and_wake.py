@@ -74,6 +74,9 @@ if os.path.exists(os.path.join(fake, "t3_error")):
 '''
 
 THREAD = "thread-7f3a"
+CHILD = "thread:delegated-task:6c1e0a"  # a delegated child's thread: its wake also asks it to message its lead
+CHILD_LINE = ("If this wake finishes your task or your next turn ends it, send your lead a short message (the thread id in your brief) "
+              "before you end the turn: T3 does not notify a lead for runs woken this way (pingdotgg/t3code#33432; remove this line once that is fixed).")
 FAKE_TOKEN = "ops_fake-token-for-tests-only"  # a stand-in service-account token; never a real one
 
 
@@ -445,6 +448,32 @@ class RunAndWake(unittest.TestCase):
         records = self.replay(self.job_id(self.launch("--", "true", env=self.t3_env(HERDR_PANE_ID=PANE))))
         self.assertEqual([records[-1]["target"], records[-1]["result"]], ["t3", "sent"])
         self.assertEqual(self.calls(), [])
+
+    def test_a_delegated_child_thread_is_asked_to_message_its_lead(self):
+        # T3 does not notify a lead when a child's run is woken by `t3 thread send` (pingdotgg/t3code#33432): the wake asks the child to.
+        records = self.replay(self.job_id(self.launch("--", "true", env=self.t3_env(T3CODE_THREAD_ID=CHILD))))
+        self.assertEqual([records[0]["thread"], records[-1]["target"], records[-1]["result"]], [CHILD, "t3", "sent"])
+        sends = self.t3_sends()
+        self.assertEqual([s["argv"] for s in sends], [["thread", "send", CHILD, "-"]])
+        job = records[0]["job"]
+        wake_text = f"[run-and-wake k:{job}] job finished: exit 0 after 0s: true. Output: {records[0]['output']}"
+        self.assertEqual(sends[0]["stdin"], f"{wake_text}\n{CHILD_LINE}", "the same wake text, then one line asking the child to message its lead")
+
+    def test_any_other_thread_gets_the_wake_text_unchanged(self):
+        records = self.replay(self.job_id(self.launch("--", "true", env=self.t3_env())))
+        job = records[0]["job"]
+        self.assertEqual([s["stdin"] for s in self.t3_sends()],
+                         [f"[run-and-wake k:{job}] job finished: exit 0 after 0s: true. Output: {records[0]['output']}"])
+
+    def test_the_pi_path_is_unchanged_for_a_delegated_child(self):
+        # a pane with its Pi session wins over the thread, so the child line must not reach herdr either
+        env = {"T3CODE_THREAD_ID": CHILD, "T3CODE_CLI_PATH": str(self.bin / "t3")}
+        records = self.replay(self.job_id(self.launch("--", "true", env=env)))
+        self.assertEqual([records[-1]["target"], records[-1]["result"]], ["herdr", "sent"])
+        job = records[0]["job"]
+        self.assertEqual([p["text"] for p in self.prompts()],
+                         [f"[run-and-wake k:{job}] job finished: exit 0 after 0s: true. Output: {records[0]['output']}"])
+        self.assertEqual(self.t3_sends(), [], "the thread is not messaged")
 
     def test_usage(self):
         for args in ([], ["--"], ["--log", "x", "--", "true"]):
