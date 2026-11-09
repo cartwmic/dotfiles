@@ -22,7 +22,7 @@ Exit codes: 0 done, 1 a step failed, 2 bad usage, 4 you must do one thing by han
 
 ## Values it reads from the live unit
 
-- **Checkout.** With no `--coordinator`, no `COORDINATOR_DIR` and no `instances.coordinator.repo`, it uses the `WorkingDirectory` of the installed live unit, if that is a usable coordinator checkout; otherwise `~/coordinator-work`. If neither works it stops and says why. An argument or an existing value always wins.
+- **Checkout.** With no `--coordinator`, no `COORDINATOR_DIR` and no `instances.coordinator.repo`, it uses the `WorkingDirectory` of the installed live unit, if that is a usable coordinator checkout; otherwise `~/coordinator-work`. If neither works it stops and says why. An argument or an existing value always wins. The work unit therefore keeps its `WorkingDirectory` on the checkout; the personal unit uses the home directory since 2026-11-09 (a launchd cwd on `/Volumes/Workshop` waited on a macOS removable-volume prompt), which does not apply here because the work checkout is under home.
 - **`extraPath`.** If the live unit differs from the rendered one only by a PATH prefix (for example the mise node and herdr directories) and `extraPath` is unset, it adds that prefix to your config (backup first, read back through chezmoi, unit applied again, compared again). An `extraPath` that is already set is never overwritten: it prints the live value and stops (exit 4). A prefix that is not absolute directories of plain characters is printed, not written.
 - **`--dry-run`** renders the unit against a copy of your config with the lines it would add (`chezmoi --config`), so it works with a chezmoi that has no `--override-data`.
 
