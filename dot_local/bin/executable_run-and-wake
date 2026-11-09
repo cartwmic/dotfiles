@@ -124,8 +124,19 @@ def t3_cli():
     return os.environ.get("T3CODE_CLI_PATH") or os.path.expanduser("~/.t3/bin/t3")
 
 
+# REMOVE when pingdotgg/t3code#33432 is fixed
+# T3 does not notify a lead when a delegated child's run was woken by `t3 thread send` from a shell: the child is asked to.
+DELEGATED_CHILD = "thread:delegated-task:"
+CHILD_LINE = (
+    "If this wake finishes your task or your next turn ends it, send your lead a short message (the thread id in your brief) "
+    "before you end the turn: T3 does not notify a lead for runs woken this way (pingdotgg/t3code#33432; remove this line once that is fixed)."
+)
+
+
 def wake_thread(job, thread, text):
     """One `t3 thread send`: the message goes on stdin, as the coordinator's deliverer sends it."""
+    if thread.startswith(DELEGATED_CHILD):  # REMOVE when pingdotgg/t3code#33432 is fixed
+        text = f"{text}\n{CHILD_LINE}"
     started = time.monotonic()
     try:
         done = subprocess.run([t3_cli(), "thread", "send", thread, "-"], input=text, capture_output=True, text=True)
