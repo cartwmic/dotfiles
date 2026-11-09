@@ -28,6 +28,7 @@ printf 'HOME=%s\n' "$HOME" > "$out"
 if [ "${OP_SERVICE_ACCOUNT_TOKEN-unset}" = unset ]; then echo "token=unset" >> "$out"
 elif [ "$OP_SERVICE_ACCOUNT_TOKEN" = "$FAKE_TOKEN_EXPECTED" ]; then echo "token=the-test-token" >> "$out"
 else echo "token=other" >> "$out"; fi
+printf 'cwd=%s\n' "$(pwd -P)" >> "$out"
 for a in "$@"; do printf 'arg=%s\n' "$a" >> "$out"; done
 if [ -n "${FAKE_OP_READ_STDIN:-}" ]; then printf 'stdin=%s\n' "$(cat)" >> "$out"; fi
 exit "${FAKE_OP_EXIT:-0}"
@@ -66,16 +67,16 @@ class OpShim(unittest.TestCase):
         token.write_text(FAKE_TOKEN + "\n")
         token.chmod(0o600)
 
-    def run_zsh_name(self, args, env=None):
+    def run_zsh_name(self, args, env=None, cwd=None):
         """Run op through the zsh name: its directory first on PATH, as in every zsh; the real op after it."""
         base = {
             "HOME": str(self.home), "TMPDIR": str(self.tmpdir), "PATH": f"{self.zsh_dir}:{self.real_dir}:/usr/bin:/bin",
             "FAKE_OP_OUT": str(self.out), "FAKE_TOKEN_EXPECTED": FAKE_TOKEN,
         }
         base.update(env or {})
-        return subprocess.run(["op", *args], env=base, capture_output=True, text=True, timeout=30)
+        return subprocess.run(["op", *args], env=base, cwd=cwd, capture_output=True, text=True, timeout=30)
 
-    def run_shim(self, args, env=None, path=None, stdin=None):
+    def run_shim(self, args, env=None, path=None, stdin=None, cwd=None):
         base = {
             "HOME": str(self.home),
             "TMPDIR": str(self.tmpdir),
@@ -85,19 +86,29 @@ class OpShim(unittest.TestCase):
             "FAKE_TOKEN_EXPECTED": FAKE_TOKEN,
         }
         base.update(env or {})
-        return subprocess.run(["op", *args], env=base, input=stdin, capture_output=True, text=True, timeout=30)
+        return subprocess.run(["op", *args], env=base, input=stdin, cwd=cwd, capture_output=True, text=True, timeout=30)
 
     def call(self):
         lines = self.out.read_text().splitlines()
         return {
             "home": lines[0].removeprefix("HOME="),
             "token": lines[1].removeprefix("token="),
+            "cwd": lines[2].removeprefix("cwd="),
             "args": [l.removeprefix("arg=") for l in lines if l.startswith("arg=")],
             "stdin": next((l.removeprefix("stdin=") for l in lines if l.startswith("stdin=")), None),
         }
 
     def assert_no_token_in_output(self, result):
         self.assertNotIn(FAKE_TOKEN, result.stdout + result.stderr)
+
+    def caller_dir(self):
+        """The directory the caller (an agent's repo, say) is in: its own directory, not the op home."""
+        d = self.tmp / "caller"
+        d.mkdir(exist_ok=True)
+        return d
+
+    def assert_op_ran_in(self, expected):
+        self.assertEqual(os.path.realpath(self.call()["cwd"]), os.path.realpath(expected))
 
     def test_with_the_token_file_op_runs_with_an_empty_home_and_the_service_account(self):
         self.write_token()
@@ -162,6 +173,55 @@ class OpShim(unittest.TestCase):
         self.assertEqual(call["token"], "the-test-token")
         self.assertNotEqual(call["home"], str(self.home))
         self.assert_no_token_in_output(result)
+
+    def test_read_only_subcommands_run_in_the_op_home_whatever_the_callers_directory(self):
+        # The subcommands that take no file path: op runs in its empty HOME, so it never reads the caller's directory.
+        self.write_token()
+        for args in (["read", "op://v/i/f"], ["whoami"], ["item", "get", "My Item", "--vault", "dev"],
+                     ["item", "list"], ["vault", "list"], ["account", "list"]):
+            with self.subTest(args=args):
+                if self.out.exists():
+                    self.out.unlink()
+                result = self.run_shim(args, cwd=self.caller_dir())
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.call()["args"], args)
+                self.assert_op_ran_in(self.call()["home"])
+                self.assertNotEqual(self.call()["home"], str(self.home))
+
+    def test_other_subcommands_keep_the_callers_directory(self):
+        # They may take relative paths (inject -i, run, document get --out-file), so op runs where the caller is.
+        self.write_token()
+        for args in (["inject", "-i", "x"], ["run", "--", "cmd"], ["document", "get", "doc", "--out-file", "f"]):
+            with self.subTest(args=args):
+                if self.out.exists():
+                    self.out.unlink()
+                result = self.run_shim(args, cwd=self.caller_dir())
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_op_ran_in(self.caller_dir())
+
+    def test_a_read_only_subcommand_with_a_path_option_keeps_the_callers_directory(self):
+        self.write_token()
+        for args in (["read", "--out-file", "f", "op://v/i/f"], ["read", "--out-file=f", "op://v/i/f"],
+                     ["read", "op://v/i/f", "--out", "f"], ["read", "op://v/i/f", "--out=f"],
+                     ["read", "op://v/i/f", "-o", "f"], ["item", "get", "My Item", "--in-file", "f"],
+                     ["item", "get", "My Item", "-i", "f"]):
+            with self.subTest(args=args):
+                if self.out.exists():
+                    self.out.unlink()
+                result = self.run_shim(args, cwd=self.caller_dir())
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_op_ran_in(self.caller_dir())
+
+    def test_without_a_token_read_only_subcommands_keep_the_callers_directory(self):
+        # Michael's own terminal: no change of directory, the same as before.
+        for args in (["read", "op://v/i/f"], ["item", "get", "My Item"], ["whoami"]):
+            with self.subTest(args=args):
+                if self.out.exists():
+                    self.out.unlink()
+                result = self.run_zsh_name(args, cwd=self.caller_dir())
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.call()["home"], str(self.home))
+                self.assert_op_ran_in(self.caller_dir())
 
     def test_an_unreadable_token_file_counts_as_no_token(self):
         if os.geteuid() == 0:
