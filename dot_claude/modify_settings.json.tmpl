@@ -11,25 +11,21 @@
 # SessionStart playbook hook (axon-work-computer only): runs the private playbook's bin/playbook-context so the session starts
 # with that repo's context; stdout becomes session context. It is silent when the playbook is not cloned. The entry is found by
 # the playbook path in its command: other profiles remove only that entry, and user-added hooks are never touched.
-# T3 hook (both desktop profiles, and only while <repo>/src/t3-hook/hook.ts exists at apply time): the coordinator repo's
-# src/t3-hook/hook.ts gates T3 thread tools with the kill switch and the ledger (see src/t3-hook/README.md there, "Settings"; the
-# entries below follow that snippet). Each profile runs its own coordinator, so it gets its own repo and state dir:
+# T3 hook (both desktop profiles, and only while <repo>/src/t3-hook/hook.ts exists at apply time): the coordinator's hook prints the
+# settings entries it needs (`hook.ts --print-settings-json`; src/t3-hook/settings-entries.ts and the "Settings" section of
+# src/t3-hook/README.md there). Each apply installs exactly those entries, in the order printed, one group per entry, so a change to
+# what the hook needs reaches every profile with no edit here. The template reads no hook source text. Each profile runs its own
+# coordinator, so it gets its own repo and state dir:
 #   personal            repo instances.coordinator.repo, else the personal default; state $HOME/.local/share/coordinator
 #   axon-work-computer  repo instances.coordinator.repo, else $HOME/coordinator-work (docs/work-instance-handoff.md there);
 #                       state $HOME/.local/share/coordinator-work (docs/work-instance.md there)
-# The instances.coordinator.enabled flag is not read, so chezmoi never has to manage the daemon's unit. Entries, each running the
-# hook with COORDINATOR_STATE_DIR set (the $HOME in it expands when the hook runs, not here):
-#   PreToolUse, PostToolUse, PostToolUseFailure on the six gated T3 tools, ending "|| exit 2" (a failing hook blocks the call).
-#   PreToolUse on ^AskUserQuestion$ (a lead never asks Michael with a question tool, LE-57), with no "|| exit 2": if the hook
-#     cannot load, the question tool runs, so a broken checkout never blocks the coordinator. Added only when hook.ts imports
-#     ./ask-gate.ts.
-#   SessionStart: the default part, then the rules part, each its own group so each gets its own context budget. When hook.ts
-#     contains "--of" the rules part is three commands, "--part rules --page N --of 3" (N = 1 to 3). The 3 is a literal
-#     copied from the README snippet ("pages 1 to 3 of 3"): raise it here and in that README together. When hook.ts has only
-#     "--part", one bare "--part rules" entry. Otherwise no rules entry. Every SessionStart command starts with the
-#     T3CODE_THREAD_ID guard, so it does nothing outside a T3 session.
-# They are found by "src/t3-hook/hook.ts" in their command: each apply drops them from every event and, when wanted, appends the
-# current ones. Off (no hook file, or termux), they are removed. An agent applies on the work Mac only with Michael's confirmation for that action.
+# The instances.coordinator.enabled flag is not read, so chezmoi never has to manage the daemon's unit. Each command runs the hook with
+# COORDINATOR_STATE_DIR set (the $HOME in it expands when the hook runs, not here), then the entry's args. failClosed ends the command
+# with "|| exit 2" (a failing hook blocks the call). t3Only starts it with the T3CODE_THREAD_ID guard, so it does nothing outside a T3 session.
+# They are found by "src/t3-hook/hook.ts" in their command: each apply drops them from every event and appends the printed ones.
+# Off (no hook file, or termux), they are removed. A checkout that cannot print its entries (an older hook without the flag, output that
+# is not schema 1 JSON, or a run that fails here) keeps the entries it already has: nothing is added or removed, and one line goes to stderr.
+# An agent applies on the work Mac only with Michael's confirmation for that action.
 # Pattern-kill guard (both desktop profiles): a PreToolUse hook on Bash and Monitor (both run shell commands) that refuses pkill and killall, so an agent's pattern kill
 # cannot hit another agent's jobs (the script is dot_local/share/agent-harness/hooks/refuse_pattern_kill.py, agent-harness README,
 # "Pattern-kill guard"). The entry is found by that script's path in its command: each apply drops it and appends the current one.
@@ -60,34 +56,18 @@ HOOK_MARKER='axon-agents-playbook/bin/playbook-context'
 {{-   $t3repo = includeTemplate "instance_repo" (dict "root" . "name" "coordinator") }}
 {{-   $t3state = "$HOME/.local/share/coordinator-work" }}
 {{- end }}
-{{ if and $t3repo (stat (printf "%s/src/t3-hook/hook.ts" $t3repo)) }}
-{{- $t3src := include (printf "%s/src/t3-hook/hook.ts" $t3repo) }}
+{{ $t3hook := printf "%s/src/t3-hook/hook.ts" $t3repo }}
+{{- $t3printed := "" }}
+{{- if and $t3repo (stat $t3hook) }}
+{{- /* Run at render time. A checkout that cannot print its entries gives "" here, and the modify script then keeps what is installed. */ -}}
+{{-   $t3printed = output "sh" "-c" `node --experimental-strip-types --disable-warning=ExperimentalWarning "$1" --print-settings-json </dev/null 2>/dev/null || true` "sh" $t3hook }}
 T3_WANT=true
-T3_REPO={{ includeTemplate "shquote" $t3repo }}
-T3_STATE={{ includeTemplate "shquote" $t3state }}
-{{- if contains "--of" $t3src }}
-T3_RULES=true
-T3_RULES_PAGES=3
-{{- else if contains "--part" $t3src }}
-T3_RULES=true
-T3_RULES_PAGES=0
-{{- else }}
-T3_RULES=false
-T3_RULES_PAGES=0
-{{- end }}
-{{- if contains "./ask-gate.ts" $t3src }}
-T3_ASK=true
-{{- else }}
-T3_ASK=false
-{{- end }}
 {{- else }}
 T3_WANT=false
-T3_REPO=''
-T3_STATE=''
-T3_RULES=false
-T3_RULES_PAGES=0
-T3_ASK=false
 {{- end }}
+T3_REPO={{ includeTemplate "shquote" $t3repo }}
+T3_STATE={{ includeTemplate "shquote" $t3state }}
+T3_PRINTED={{ includeTemplate "shquote" $t3printed }}
 T3_MARKER='src/t3-hook/hook.ts'
 
 {{ if eq (includeTemplate "hub" .) "on" -}}
@@ -103,8 +83,21 @@ GUARD_MARKER='g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py";
 HUB_URL='https://cliproxy.internal.cartwmic.com'
 HUB_HELPER={{ includeTemplate "shquote" (printf "%s/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-claude-code'" .chezmoi.homeDir) }}
 
+# T3 mode: set (install the printed entries), keep (leave the installed entries as they are) or off (remove them).
+T3_MODE=off
+T3_JSON=null
+if [ "$T3_WANT" = true ]; then
+  if printf '%s' "$T3_PRINTED" | jq -e '.schema == 1 and (.entries | type == "array")' >/dev/null 2>&1; then
+    T3_MODE=set
+    T3_JSON=$T3_PRINTED
+  else
+    T3_MODE=keep
+    printf '[modify_settings] WARN: %s/src/t3-hook/hook.ts did not print its settings entries (no --print-settings-json, or it did not run here); the t3-hook entries in settings.json were left as they are\n' "$T3_REPO" >&2
+  fi
+fi
+
 exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_MARKER" \
-  --argjson t3want "$T3_WANT" --argjson t3rules "$T3_RULES" --argjson t3pages "$T3_RULES_PAGES" --argjson t3ask "$T3_ASK" \
+  --arg t3mode "$T3_MODE" --argjson t3printed "$T3_JSON" \
   --arg t3repo "$T3_REPO" --arg t3state "$T3_STATE" --arg t3marker "$T3_MARKER" \
   --argjson hubwant "$HUB_WANT" --arg huburl "$HUB_URL" --arg hubhelper "$HUB_HELPER" \
   --arg guardcmd "$GUARD_COMMAND" --arg guardmarker "$GUARD_MARKER" '
@@ -148,23 +141,23 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
         else . end)
       | if (.hooks | length) == 0 then del(.hooks) else . end
     else . end;
+  # The printed entries (schema 1), one group per entry, appended under its event in the printed order. The command is the hook run
+  # with the state directory, the args of the entry, then "|| exit 2" when failClosed; t3Only puts the T3CODE_THREAD_ID guard in front.
+  # A group carries the matcher of the entry only when the entry has one. (No apostrophes in this program: it is one shell single-quoted word.)
+  def t3_command($e):
+    ("COORDINATOR_STATE_DIR=\"" + $t3state + "\" node --experimental-strip-types --disable-warning=ExperimentalWarning " + (($t3repo + "/src/t3-hook/hook.ts") | sq)
+     + (if ($e.args | length) > 0 then " " + ($e.args | join(" ")) else "" end)
+     + (if $e.failClosed then " || exit 2" else "" end)) as $run
+    | if $e.t3Only then "[ -n \"$T3CODE_THREAD_ID\" ] || exit 0; " + $run else $run end;
+  def t3_group($e):
+    {type: "command", command: t3_command($e)} as $h
+    | if $e.matcher != null then {matcher: $e.matcher, hooks: [$h]} else {hooks: [$h]} end;
   def t3_add:
-    ("COORDINATOR_STATE_DIR=\"" + $t3state + "\" node --experimental-strip-types --disable-warning=ExperimentalWarning " + (($t3repo + "/src/t3-hook/hook.ts") | sq)) as $base
-    | ($base + " || exit 2") as $run
-    | ("^mcp__t3-code__(t3_thread_send|t3_thread_send_attachments|delegate_task|t3_thread_launch|create_threads|schedule_task)$") as $m
-    | def entry($cmd): {type: "command", command: $cmd};
-    .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: $m, hooks: [entry($run)]}]
-                         + (if $t3ask then [{matcher: "^AskUserQuestion$", hooks: [entry($base)]}] else [] end))
-    | .hooks.PostToolUse = ((.hooks.PostToolUse // []) + [{matcher: $m, hooks: [entry($run)]}])
-    | .hooks.PostToolUseFailure = ((.hooks.PostToolUseFailure // []) + [{matcher: $m, hooks: [entry($run)]}])
-    | ("[ -n \"$T3CODE_THREAD_ID\" ] || exit 0; ") as $guard
-    | .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [entry($guard + $run)]}])
-    | if $t3pages > 0 then
-        .hooks.SessionStart += [range(1; $t3pages + 1) | {hooks: [entry($guard + $base + " --part rules --page \(.) --of \($t3pages) || exit 2")]}]
-      elif $t3rules then
-        .hooks.SessionStart += [{hooks: [entry($guard + $base + " --part rules || exit 2")]}]
-      else . end;
-  def ensure_t3: t3_strip | if $t3want then t3_add else . end;
+    reduce $t3printed.entries[] as $e (.; .hooks[$e.event] = ((.hooks[$e.event] // []) + [t3_group($e)]));
+  def ensure_t3:
+    if $t3mode == "keep" then .
+    else (t3_strip | if $t3mode == "set" then t3_add else . end)
+    end;
   # Pattern-kill guard: one PreToolUse group on Bash and Monitor. Strip every handler of ours (other handlers and groups stay), then append the current one.
   def guard_ours: (.command? // "") | startswith($guardmarker);
   def guard_group_has: type == "object" and (.hooks // [] | any(guard_ours));
