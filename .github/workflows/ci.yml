@@ -49,6 +49,8 @@ jobs:
         run: node --test tests/pi-patches/apply_no_pi.test.mjs
       - name: Pi patch failure chain (a failed patch does not stop later scripts, is reported, and fails the apply at the end)
         run: node --test tests/pi-patches/patch_failure_chain.test.mjs
+      - name: Pi extension refresh and dotfiles verify (fake pi and chezmoi; refresh before the patch loop, verify passes clean and fails broken)
+        run: node --test tests/pi-patches/refresh_and_verify.test.mjs
       - name: Pi settings render (compaction)
         run: python3 -m unittest discover -s tests/pi-settings-render -v
       - name: Release-tag skill import tool

@@ -64,6 +64,15 @@ it exits 0, so 65 (agent kit), 75 (instances) and 90 (codex hook trust) still ru
 A run where every patch passes removes the marker (also `mise run apply-pi-patches` and `mise run update-pi`). Re-running is safe on a release that is already partly patched: each patch checks its own blocks and does nothing when they are already in place.
 After you fix the cause, run `mise run apply-pi-patches`; the next `chezmoi apply` is then clean.
 
+## Extension refresh and verify
+
+Before the loop, `apply_pi_patches.sh` runs `pi update --extension https://github.com/cartwmic/pi-response-visibility` (list: `$PI_PATCH_EXTENSIONS`; empty means none). Plain `pi update` only updates Pi, and the `response-visibility` patch runs code from that git extension,
+so a stale checkout fails on a newer Pi. A refresh that fails (offline) is a WARN and the installed copy is used. A new helper revision cannot recognise a Pi tree patched by the previous one, so when the refresh moves the checkout,
+the old revision (`git archive` of the pre-refresh HEAD) rolls its patch back first, then the loop applies the new one. Pinned `git:...@sha` extensions are not touched; change the sha in `.chezmoitemplates/pi_settings_desired` and run `pi install` for those.
+
+`~/.local/user_scripts/verify_dotfiles.sh` proves a clean apply. Plain `chezmoi verify` always exits 1 because the run_after scripts (75, 90, 99) are always pending; use the script instead.
+It exits 0 when managed files match the source (`chezmoi verify --exclude=scripts`), no patch failure marker exists, and every Pi patch's `--check` passes on the installed Pi; it exits 1 and prints a FAIL line for each problem otherwise.
+
 ## Overview
 
 Each subdirectory here is one patch. The apply script walks every

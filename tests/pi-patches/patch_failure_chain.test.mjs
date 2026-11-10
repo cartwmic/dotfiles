@@ -21,7 +21,7 @@ function sandbox() {
 	copyFileSync(join(ROOT, "dot_local/share/pi-patches/pi-root.mjs"), join(patches, "pi-root.mjs"));
 	const addPatch = (name, body) => { mkdirSync(join(patches, name), { recursive: true }); writeFileSync(join(patches, name, "patch.mjs"), body); };
 	const marker = join(dir, "state", "failed");
-	const env = { HOME: dir, PI_PATCHES_ROOT: patches, PI_PATCH_FAILURE_MARKER: marker, PI_CODING_AGENT_DIR: join(dir, "none") };
+	const env = { HOME: dir, PI_PATCHES_ROOT: patches, PI_PATCH_FAILURE_MARKER: marker, PI_CODING_AGENT_DIR: join(dir, "none"), PI_PATCH_EXTENSIONS: "" };
 	return { dir, patches, addPatch, marker, env, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 const touches = (file) => `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(file)}, "ran");\n`;

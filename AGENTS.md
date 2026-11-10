@@ -129,6 +129,10 @@ standing-reminder extension also requires its input-origin patch. Validate
 that pair through `tests/standing-reminder/isolated_pi.py`, which patches a
 private Pi copy rather than the installed runtime.
 
+After `chezmoi apply`, prove it with `~/.local/user_scripts/verify_dotfiles.sh` (exit 0 clean, 1 broken). Plain `chezmoi verify`
+always exits 1 because the run_after scripts are always pending. The apply also refreshes the response-visibility git extension
+before patching; see the "Extension refresh and verify" section of `dot_local/share/pi-patches/README.md`.
+
 OpenSpec/`opsx` is retired; do not revive it. Do not write ADRs. Put current
 product/design guidance in the relevant component README and agent procedure
 in its scoped guide; follow the task-specific skill for workflow artifacts.
