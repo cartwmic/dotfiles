@@ -21,7 +21,7 @@ Use what exists and name in the output which you used.
 | review-map pages | the caller's links | What recently moved and what it reaches |
 | Owner intent | the prompt | The goal in Step 0 |
 
-Reading a `requirements/1` file: cite its ids, never re-mint them. Requirements come from the register (`R-n`; ignore `incidental` rows when drawing boundaries), state machines from `SM-n` (reference; redraw only to add what you found) with their `writers:` lines, invariants from `I-n`, reachable defects from `F-n` and unenforced invariants from `U-n` (Step 4 failures), `fit` and `enforced` gaps as Step 6 proof gaps only where a decision depends on them, and `Q-n` as candidates for Step 8. Check its `commit` against the pinned rev and its `not-read` against your scope. **It is an input, not a fact: re-check every item a ranked failure or decision rests on against the code** (it can be wrong, stale or encode the bug as a requirement). Findings you add get ids `DF-n`. For any other shape version, read it as free text and say so.
+Reading a `requirements/1` file: cite its ids, never re-mint them. Requirements come from the register (`R-n`; ignore `incidental` rows when drawing boundaries), state machines from `SM-n` (reference; redraw only to add what you found) with their `writers:` lines, invariants from `I-n`, reachable defects from `F-n` and unenforced invariants from `U-n` (Step 4 failures), `fit` and `enforced` gaps as Step 6 proof gaps only where a decision depends on them, and `Q-n` as candidates for Step 8. Check its `commit` against the pinned rev and its `not-read` against your scope. **It is an input, not a fact: re-check every item a ranked failure or decision rests on against the code** (it can be wrong, stale or encode the bug as a requirement); record each refutation with its command in a short Re-check table in Section 3. Findings you add get ids `DF-n`. For any other shape version, read it as free text and say so.
 
 A bare repo must still work: infer from README, `AGENTS.md`, manifests, entry points and tests, and label every such claim `inferred`.
 
@@ -29,7 +29,7 @@ A bare repo must still work: infer from README, `AGENTS.md`, manifests, entry po
 
 **0. Frame.** Write the goal in one sentence, the scope (whole repo or named component), the inputs found, and any parts the caller names. Check every named path, part and artifact against the pinned rev and report the ones that do not exist before designing. If the goal is "make it better" with no pull, get the one pain that matters (slow to change, hard to test, hard to reuse). Do not design without a pull (§4).
 
-**1. Orient and gather facts.** Pin the rev (`git rev-parse HEAD`; again at the end; if it moved, say so). Extract what you will read once (`git archive REV PATHS | tar -x -C SCRATCH`) and read from there; in zsh write `${REV}:path`. Then run the bundled script, which does every count so you do not:
+**1. Orient and gather facts.** Pin the rev (`git rev-parse HEAD`; again at the end; if it moved, say so). Extract what you will read once (`git archive REV PATHS | tar -x -C SCRATCH`) and read from there, unless the copy you were given is already a read-only checkout of the pin; in zsh write `${REV}:path`. Then run the bundled script, which does every count so you do not:
 
 ```sh
 python3 <skill-dir>/scripts/repo_facts.py REPO --rev REV [--scope 'GLOB' ...] [--parts parts.tsv] --out facts.json
@@ -39,7 +39,7 @@ Use `--scope` for a named slice. Do not read the JSON whole; query the keys you 
 
 Then read, in this order: a component scope's `CONTRACT.md`, the repo's architecture gate (it is the repo's statement of its layout), the sections of README and `AGENTS.md` that say how a change is proven here (commands and what each costs), manifests and entry points. If the repo has no architecture gate, the gate is whatever proves a change.
 
-**Work already in flight is prior art (§11).** From `in_flight` / `branches_touching_scope`, read what touches scope. Record each move's state (merged, unmerged, reviewed) and adopt, extend or reject it with a reason. A design that ignores a half-finished move in the same repo is wrong. A history-clean copy has no branches; say so and look for the move in the code's own plan words.
+**Work already in flight is prior art (§11).** From `in_flight` / `branches_touching_scope`, read what touches scope. Settle each move's state with `git cherry REV BRANCH` (merged or not) and by reading its review record, and adopt, extend or reject it with a reason. A design that ignores a half-finished move in the same repo is wrong. A history-clean copy has history but no branches; say so and look for the move in the commits touching scope and the code's own plan words.
 
 Write a ≤1-page orientation a cold agent could read instead of the repo.
 
@@ -47,7 +47,7 @@ Write a ≤1-page orientation a cold agent could read instead of the repo.
 
 **3. Requirements.** From the inputs if present, else infer: the journeys the entry points serve and the invariants the code relies on (note which nothing enforces). Separate enduring obligations from incidental implementation. Mark each `given` (cite the id or document) or `inferred` (`IR-n` requirements, `II-n` invariants). Where a component is a state machine in disguise and none is given, draw it as Mermaid `stateDiagram-v2`.
 
-**4. Diagnose.** For each principle 1–15 give a verdict with its **scope** (pass at module level, fail inside one module: write both) and evidence from `facts.json` or a command. An `n/a` row needs one sentence, no more. Then name the 3–5 tensions that matter (§13) and rank the failures by proven harm. **Reproduce each ranked failure** with a small script against the extracted pin (symlink `node_modules`; no installs) or a scratch clone, and say so; otherwise label it `read only`, and make the experiment the first increment in Step 6. Check that each test double the proof relies on does what the real adapter does (a fake that records nothing the real one records hides the race). Where the owner's goal is "separable" or "testable on its own", that is not reuse: satisfy it with a contract-level test and an import fence, not a folder, unless a second user exists.
+**4. Diagnose.** For each principle 1–15 give a verdict with its **scope** (pass at module level, fail inside one module: write both) and evidence from `facts.json` or a command. An `n/a` row needs one sentence, no more. Then name the 3–5 tensions that matter (§13) and rank the failures by proven harm. **Reproduce each ranked failure** with a small script against the extracted pin (symlink `node_modules`; no installs; on Node 22.18+ a `.mjs` can import `.ts` directly) or a scratch clone, and say so; otherwise label it `read only`, and make the experiment the first increment in Step 6. Check that each test double the proof relies on does what the real adapter does (a fake that records nothing the real one records hides the race): re-run the reproduction with the double the unit tests use and say whether the suite could see the failure. Where the owner's goal is "separable" or "testable on its own", that is not reuse: satisfy it with a contract-level test and an import fence, not a folder, unless a second user exists.
 
 **5. Design the target.** The smallest design that meets the goal and the requirements:
 - The kind of each part and its single job. A component needs a second real use (§1); without one it stays inside its neighbour or becomes a use-case folder.
@@ -59,7 +59,7 @@ Write a ≤1-page orientation a cold agent could read instead of the repo.
 - What stays as it is, and why.
 Every new boundary, layer or abstraction needs a concrete requirement or a demonstrated failure; if it only reads well, cut it (§4). Before changing any key, name or format, count its literal uses. Before finalising, ask what can be deleted and still meet the requirements.
 
-**6. Path.** Ordered increments, each shippable alone and proved from outside the way this repo proves changes (§12, §15). Say which can run in parallel and which must be serial, one line why. Start with the increment that removes the worst proven failure. For a race, the proof places the interleaving at every `await` window, not one; and tie a record to the thing it was made for by an identity (a key or id carrying it), never by comparing timestamps written by different processes. Add build gates in the increment that creates the boundary, not before.
+**6. Path.** Ordered increments, each shippable alone and proved from outside the way this repo proves changes (§12, §15). Say which can run in parallel and which must be serial, one line why. Start with the increment that removes the worst proven failure. For a race, list the awaits with one grep and place the interleaving at every `await` window, not one; and tie a record to the thing it was made for by an identity (a key or id carrying it), never by comparing timestamps written by different processes. Add build gates in the increment that creates the boundary, not before.
 
 **7. Write `DESIGN.md`** in the shape below, then verify:
 - every `fail` maps to a decision, or is `fail (accepted)` and tied to a Section 7 item with the trigger that would reopen it;
@@ -71,7 +71,7 @@ Every new boundary, layer or abstraction needs a concrete requirement or a demon
 
 ```markdown
 # Design: <scope>
-Goal · Scope · Rev (start / end) · Inputs used (given / inferred) · In-flight work relied on (and its state) · Top 3 decisions
+Goal · Scope · Names in the goal that do not exist in the repo (Step 0) · Rev (start / end) · Inputs used (given / inferred) · In-flight work relied on (and its state) · Top 3 decisions
 
 ## 1. Orientation            (≤1 page: what it is, entry points, size, how a change is proven, where to start; Evidence: the commands behind every number)
 ## 2. As found               (parts table with kind; edge list; Mermaid diagram; excluded trees)

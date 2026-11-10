@@ -63,6 +63,8 @@ def build_refs_repo(repo):
     write(repo, 'docs/readme.md', 'see k8s/app/storage.yaml\n')
     write(repo, 'eval/run.sh', 'cat k8s/base/deploy.yaml\n')
     write(repo, '.github/workflows/ci.yml', 'jobs:\n  check:\n    run: make check\n')
+    write(repo, 'k8s/app/charts/check.sh', 'echo hi\n')
+    write(repo, 'openspec/changes/archive/verify.md', '# verify\n')
     return commit(repo, 'refs fixture')
 
 
@@ -124,6 +126,8 @@ def build_repo(repo):
     write(wt2, 'src/ledger/b.ts', "import { a } from './a';\n\nexport const b = () => 1;\nexport const q = 2;\n")
     bend = commit(wt2, 'bend ledger b')
     git(repo, 'update-ref', 'refs/remotes/origin/lane/a10', bend)
+    # A remote-tracking twin of bend-ledger at the same commit: one entry in branches_touching_scope.
+    git(repo, 'update-ref', 'refs/remotes/origin/bend-ledger', bend)
     # Untracked scratch file: must be ignored, because the rev is analysed, not the working tree.
     write(repo, 'scratch/untracked.ts', "import { a } from '../src/ledger/a';\n")
     return c1, wt
@@ -143,18 +147,41 @@ class PathRefsTest(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def test_proof_commands_files_and_scripts(self):
-        files = [p['file'] for p in self.facts['proof_commands'] if 'script' not in p]
-        self.assertEqual(files, ['.github/workflows/ci.yml', 'Makefile', 'kgate.toml',
-                                 'scripts/check_manifests.py', 'scripts/gate.sh', 'scripts/test_check.py'])
-        self.assertIn({'file': 'scripts/gate.sh'}, self.facts['proof_commands'])
-        self.assertIn({'file': 'kgate.toml'}, self.facts['proof_commands'])
-        scripts = [p for p in self.facts['proof_commands'] if 'script' in p]
-        self.assertEqual(scripts, [
-            {'file': 'package.json', 'script': 'gate', 'command': 'sh scripts/gate.sh'},
-            {'file': 'package.json', 'script': 'lint', 'command': 'eslint .'},
-            {'file': 'package.json', 'script': 'test', 'command': 'node test.js'},
+    def test_proof_commands_ranked_with_first_line_and_skips(self):
+        proof = self.facts['proof_commands']
+        self.assertEqual([(p['rank'], p['file']) for p in proof], [
+            (1, 'Makefile'), (1, 'kgate.toml'), (1, 'package.json'), (1, 'package.json'),
+            (1, 'package.json'), (1, 'scripts/check_manifests.py'), (1, 'scripts/gate.sh'),
+            (1, 'scripts/test_check.py'), (2, '.github/workflows/ci.yml'),
         ])
+        by_file = {p['file']: p for p in proof if 'script' not in p}
+        self.assertEqual(by_file['Makefile']['first_line'], 'check')
+        self.assertEqual(by_file['.github/workflows/ci.yml']['first_line'], 'check')
+        self.assertEqual(by_file['scripts/check_manifests.py']['first_line'], 'see scripts/check_manifests.py')
+        self.assertEqual(by_file['scripts/gate.sh']['first_line'], '')
+        self.assertIn({'file': 'scripts/gate.sh', 'rank': 1, 'first_line': ''}, proof)
+        self.assertIn({'file': 'kgate.toml', 'rank': 1, 'first_line': ''}, proof)
+        scripts = [p for p in proof if 'script' in p]
+        self.assertEqual(scripts, [
+            {'file': 'package.json', 'rank': 1, 'script': 'gate', 'command': 'sh scripts/gate.sh',
+             'first_line': 'sh scripts/gate.sh'},
+            {'file': 'package.json', 'rank': 1, 'script': 'lint', 'command': 'eslint .',
+             'first_line': 'eslint .'},
+            {'file': 'package.json', 'rank': 1, 'script': 'test', 'command': 'node test.js',
+             'first_line': 'node test.js'},
+        ])
+        # charts/ and openspec/changes/archive/ matches are skipped and counted.
+        self.assertEqual(self.facts['proof_commands_skipped'], 2)
+        self.assertFalse(any('charts' in p['file'] or 'archive' in p['file'] for p in proof))
+
+    def test_gates_empty_has_note(self):
+        self.assertEqual(self.facts['gates'], [])
+        self.assertEqual(self.facts['gates_note'], 'no architecture gate found; see proof_commands')
+
+    def test_globs_matched_counts_tracked_files(self):
+        self.assertEqual(self.scoped['scope']['globs_matched'], {'scripts/**': 4})
+        both = run_json(self.repo, '--scope', 'scripts/**', 'nothing/**')
+        self.assertEqual(both['scope']['globs_matched'], {'scripts/**': 4, 'nothing/**': 0})
 
     def test_test_lines_count_test_prefixed_python(self):
         self.assertEqual(self.facts['sizes']['scripts']['test_lines'], 2)
@@ -200,13 +227,46 @@ class PathRefsTest(unittest.TestCase):
 
     def test_path_refs_scope_keeps_touching_edges(self):
         refs = self.scoped['path_refs']
-        self.assertEqual(refs['edge_count'], 5)
+        self.assertEqual(refs['edge_count'], 9)
+        self.assertEqual(refs['scope_edge_count'], 5)
+        self.assertEqual(len(refs['edges']), 5)
         for e in refs['edges']:
             self.assertTrue(e['from'].startswith('scripts/') or e['to'].startswith('scripts/'), e)
+        self.assertEqual(refs['other_edge_count'], 4)
+        self.assertEqual(len(refs['other_edges']), 4)
+        for e in refs['other_edges']:
+            self.assertFalse(e['from'].startswith('scripts/') or e['to'].startswith('scripts/'), e)
 
     def test_rev_arg_and_resolved_rev(self):
         self.assertEqual(self.facts['rev_arg'], 'HEAD')
         self.assertEqual(self.facts['rev'], git(self.repo, 'rev-parse', 'HEAD'))
+
+
+class TestsCapTest(unittest.TestCase):
+    """More than 30 test files reference one scope file: count plus the 30 closest."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='repo_cap_test-')
+        cls.repo = os.path.join(cls.tmp, 'cap-repo')
+        os.mkdir(cls.repo)
+        git(cls.repo, 'init', '-q', '-b', 'main')
+        write(cls.repo, 'src/a.ts', 'export const a = 1;\n')
+        write(cls.repo, 'src/a.test.ts', "import { a } from './a';\n")
+        for i in range(1, 31):
+            write(cls.repo, f'tests/t{i:02d}.test.ts', "import { a } from '../src/a';\n")
+        commit(cls.repo, 'cap fixture')
+        cls.scoped = run_json(cls.repo, '--scope', 'src/a.ts')
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_count_and_closest_first(self):
+        s = self.scoped['scope']
+        self.assertEqual(s['tests_count'], 31)
+        self.assertEqual(len(s['tests']), 30)
+        self.assertEqual(s['tests'][0]['file'], 'src/a.test.ts')
 
 
 class RepoFactsTest(unittest.TestCase):
@@ -252,6 +312,29 @@ class RepoFactsTest(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn('**', res.stdout)
         self.assertIn('--scope', res.stdout)
+        self.assertIn('before --scope', res.stdout)
+
+    def test_missing_repo_after_scope_exits_2_with_hint(self):
+        res = run_script('--scope', 'scripts/**', self.repo)
+        self.assertEqual(res.returncode, 2)
+        self.assertEqual(len(res.stderr.strip().splitlines()), 1)
+        self.assertIn('before --scope', res.stderr)
+
+    def test_summary_one_line_per_key(self):
+        res = run_script(self.repo, '--summary')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        lines = res.stdout.splitlines()
+        self.assertEqual([line.split()[0] for line in lines], list(self.facts))
+        self.assertTrue(all(len(line) < 140 for line in lines))
+        self.assertIn('object', [line.split()[1] for line in lines])
+
+    def test_summary_still_writes_json_to_out(self):
+        out = os.path.join(self.tmp, 'summary.json')
+        res = run_script(self.repo, '--summary', '--out', out)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(res.stdout.startswith('rev_arg'))
+        with open(out, encoding='utf-8') as fh:
+            self.assertEqual(json.load(fh)['rev'], self.facts['rev'])
 
     def test_notes_explain_line_counts(self):
         self.assertIn('wc -l', self.facts['notes']['lines'])
@@ -261,8 +344,9 @@ class RepoFactsTest(unittest.TestCase):
         self.assertEqual(self.facts['languages']['.py'], 3)
         self.assertEqual(self.facts['languages']['.md'], 4)
         self.assertEqual(self.facts['languages']['.tsx'], 1)
-        self.assertEqual(self.facts['parsed'], ['.js', '.py', '.ts', '.tsx'])
-        self.assertEqual(self.facts['unparsed'], ['.json', '.md', '.toml'])
+        self.assertEqual(set(self.facts['parsed']), {'.js', '.py', '.ts', '.tsx'})
+        self.assertEqual(self.facts['parsed']['.js'], 1)
+        self.assertEqual(self.facts['unparsed'], {'.json': 1, '.md': 4, '.toml': 1})
 
     def test_excluded_names_fixtures_eval_and_lockfile(self):
         self.assertEqual(self.facts['excluded'], {
@@ -352,7 +436,7 @@ class RepoFactsTest(unittest.TestCase):
         inf = self.facts['in_flight']
         refs = [b['ref'] for b in inf['branches_not_merged_into_rev']]
         self.assertEqual(refs, ['refs/heads/bend-ledger', 'refs/heads/feature/lane-x',
-                                'refs/remotes/origin/lane/a10'])
+                                'refs/remotes/origin/bend-ledger', 'refs/remotes/origin/lane/a10'])
         self.assertRegex(inf['branches_not_merged_into_rev'][0]['last_commit'], r'^\d{4}-\d{2}-\d{2}T')
         self.assertEqual(len(inf['worktrees']), 3)
         self.assertTrue(any(w['branch'] == 'feature/lane-x' for w in inf['worktrees']))
@@ -368,6 +452,9 @@ class RepoFactsTest(unittest.TestCase):
                          '// Boundary checks: core must not import ledger.\n// Enforced by dependency-cruiser.')
         self.assertEqual(gates[2]['header'], '{}')
         self.assertNotIn('header', gates[3])
+
+    def test_gates_present_has_no_note(self):
+        self.assertNotIn('gates_note', self.facts)
 
     def test_gates_and_docs_skip_excluded_trees(self):
         self.assertNotIn('eval/architecture-boundary.ts', [g['file'] for g in self.facts['gates']])
@@ -460,10 +547,11 @@ class RepoFactsTest(unittest.TestCase):
         self.assertNotIn('external_packages', facts)
         self.assertEqual(facts['edge_count'], 10)
         self.assertEqual(facts['external_package_count'], 2)
-        self.assertEqual(facts['in_flight'], {'branches_not_merged_into_rev': 3,
+        self.assertEqual(facts['in_flight'], {'branches_not_merged_into_rev': 4,
                                               'worktrees': 3, 'plan_commits_14d': 1})
 
     def test_scope_tests_import_or_name_scope_files(self):
+        self.assertEqual(self.scope_ledger['scope']['tests_count'], 2)
         self.assertEqual(self.scope_ledger['scope']['tests'], [
             {'file': 'src/ledger/a.test.ts', 'scope_files': ['src/ledger/a.ts']},
             # tests/smoke.ts imports a.ts and names b.ts in a comment.
@@ -480,7 +568,11 @@ class RepoFactsTest(unittest.TestCase):
         self.assertEqual(bend['files_changed'], 1)
         self.assertEqual(bend['files'], ['src/ledger/b.ts'])
         self.assertRegex(bend['last_commit'], r'^\d{4}-\d{2}-\d{2}T')
-        self.assertEqual(s['plan_commits_touching_scope'], [])
+        self.assertNotIn('plan_commits_touching_scope', s)
+        self.assertEqual(s['recent_commits_touching_scope'], [])
+        self.assertEqual(bend['remote_ref'], 'refs/remotes/origin/bend-ledger')
+        self.assertEqual(bend['unmerged_patches'], 1)
+        self.assertEqual(branches['refs/remotes/origin/lane/a10']['unmerged_patches'], 1)
 
     def test_scope_core_file_sees_plan_commit_and_no_branches(self):
         s = self.scope_core['scope']
@@ -490,7 +582,7 @@ class RepoFactsTest(unittest.TestCase):
         self.assertEqual(s['tests'], [])
         self.assertEqual(len(s['cycles']), 1)
         self.assertEqual(s['branches_touching_scope'], [])
-        plan = s['plan_commits_touching_scope']
+        plan = s['recent_commits_touching_scope']
         self.assertEqual([p['subject'] for p in plan], ['S2: split core helper'])
         self.assertEqual(plan[0]['files'], ['src/core/c.ts'])
 

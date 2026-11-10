@@ -60,7 +60,13 @@ NOTES = {
     'cochange': 'with --scope, only commits touching a scope file count, and top_file_pairs lists '
                 'only pairs with a scope file',
     'path_refs': 'tokens with a slash that name a tracked file or directory; ./ and ../ resolve from '
-                 'the referring file; self and own-directory references are dropped',
+                 'the referring file; self and own-directory references are dropped; with --scope, '
+                 'edges lists every scope-touching edge and other_edges the capped remainder',
+    'recent_commits_touching_scope': 'commits on REV in the last 14 days whose subject matches the '
+                                     'plan-word pattern and whose files touch scope',
+    'branches_touching_scope': 'unmerged_patches counts branch commits with no patch-equivalent on REV '
+                               '(git cherry); a local branch and its remote twin at the same commit are '
+                               'one entry, with remote_ref',
 }
 PLAN_DAYS = 14
 TOP = 20
@@ -76,6 +82,10 @@ PATH_TOKEN_RE = re.compile(r'[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+')
 PROOF_RE = re.compile(r'gate|check|verify|test-all|(^|[-_.])ci([-_.]|$)', re.I)
 SCRIPT_NAMES = {'test', 'check', 'lint', 'gate'}
 PATH_EDGE_CAP = 200
+TESTS_CAP = 30
+PROOF_SKIP = ('vendor', 'charts', 'archive', 'openspec/changes/archive', 'node_modules')
+DOC_NAMES = ('README.md', 'CLAUDE.md', 'AGENTS.md')
+TARGET_RE = re.compile(r'^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?!=)', re.M)
 
 
 def die(msg):
@@ -85,19 +95,25 @@ def die(msg):
 
 class _Parser(argparse.ArgumentParser):
     def error(self, message):
+        if 'required: repo' in message:
+            die('REPO is missing: put it before --scope, which takes every following word as a glob')
         die(message)
 
 
 def parse_args(argv):
-    p = _Parser(description='Structural facts about a git repo at a pinned rev.')
+    p = _Parser(description='Structural facts about a git repo at a pinned rev.',
+                epilog='Put REPO before --scope: --scope takes every following word as a glob.')
     p.add_argument('repo')
     p.add_argument('--rev', default='HEAD')
     p.add_argument('--parts', help='TSV lines: GLOB<TAB>PART NAME, first match wins. '
                                    '* stays in one path segment, ** crosses /')
-    p.add_argument('--scope', nargs='+', metavar='GLOB', help='files to detail; glob rules as --parts')
+    p.add_argument('--scope', nargs='+', metavar='GLOB',
+                   help='files to detail; glob rules as --parts; REPO must come first')
     p.add_argument('--since-days', type=int, default=120)
     p.add_argument('--max-commit-files', type=int, default=15)
     p.add_argument('--out', help='write JSON here instead of stdout')
+    p.add_argument('--summary', action='store_true',
+                   help='print one line per top-level key instead of the JSON (JSON still goes to --out)')
     a = p.parse_args(argv)
     if a.since_days < 0 or a.max_commit_files < 1:
         die('--since-days must be >= 0 and --max-commit-files must be >= 1')
@@ -460,12 +476,21 @@ def scope_branches(repo, sha, specs, wts):
     fmt = '--format=%(refname)%09%(objectname)%09%(committerdate:iso-strict)'
     refs = [line.split('\t') for line in git(repo, 'for-each-ref', fmt, 'refs/heads', 'refs/remotes').splitlines()]
     cands = [tuple(r) for r in refs if not r[0].endswith('/HEAD')]
+    heads = {ref: obj for ref, obj, _date in cands if ref.startswith('refs/heads/')}
+    twins, kept = {}, []
+    for ref, obj, date in cands:
+        parts = ref.split('/', 3)
+        local = 'refs/heads/' + parts[3] if ref.startswith('refs/remotes/') and len(parts) == 4 else None
+        if local and heads.get(local) == obj:
+            twins[local] = ref
+        else:
+            kept.append((ref, obj, date))
     for wt in wts:
         if wt['head'] and not wt['branch']:
             date = git(repo, 'log', '-1', '--format=%cI', wt['head']).strip()
-            cands.append((f"worktree:{wt['path']}", wt['head'], date))
+            kept.append((f"worktree:{wt['path']}", wt['head'], date))
     rows = []
-    for ref, obj, date in sorted(cands):
+    for ref, obj, date in sorted(kept):
         rng = f'{sha}...{obj}'
         try:
             changed = git(repo, '-c', 'core.quotepath=off', 'diff', '--name-only', rng,
@@ -475,8 +500,13 @@ def scope_branches(repo, sha, specs, wts):
             continue
         if changed:
             behind, ahead = git(repo, 'rev-list', '--left-right', '--count', rng).split()
-            rows.append({'ref': ref, 'last_commit': date, 'ahead': int(ahead), 'behind': int(behind),
-                         'files_changed': len(changed), 'files': changed[:SAMPLE]})
+            cherry = git(repo, 'cherry', sha, obj).splitlines()
+            row = {'ref': ref, 'last_commit': date, 'ahead': int(ahead), 'behind': int(behind),
+                   'unmerged_patches': sum(1 for line in cherry if line.startswith('+')),
+                   'files_changed': len(changed), 'files': changed[:SAMPLE]}
+            if ref in twins:
+                row['remote_ref'] = twins[ref]
+            rows.append(row)
     return rows
 
 
@@ -500,7 +530,20 @@ def in_scope(node, chosen):
     return node in chosen or (node.endswith('/') and any(p.startswith(node) for p in chosen))
 
 
-def scope_report(repo, sha, globs, files, edges, texts, comps, flight):
+def dir_closeness(test, scope_files):
+    """Most leading directory components the test shares with one of its scope files."""
+    td = [x for x in posixpath.dirname(test).split('/') if x]
+    best = 0
+    for f in scope_files:
+        sd = [x for x in posixpath.dirname(f).split('/') if x]
+        n = 0
+        while n < min(len(td), len(sd)) and td[n] == sd[n]:
+            n += 1
+        best = max(best, n)
+    return best
+
+
+def scope_report(repo, sha, globs, names, files, edges, texts, comps, flight):
     specs = [':(glob)' + g for g in globs]
     picked = matching(files, globs)
     chosen = set(picked)
@@ -513,21 +556,25 @@ def scope_report(repo, sha, globs, files, edges, texts, comps, flight):
             imports[a].append(b)
         if b in chosen:
             importers[b].append(a)
-    tests = []
+    found = []
     for path in sorted(p for p in files if files[p]['test']):
         text = texts.get(path, '')
         named = {s for s in picked if re.search(re.escape(posixpath.splitext(s)[0]) + r'(?![\w-])', text)}
-        if named | (adj[path] & chosen):
-            tests.append({'file': path, 'scope_files': sorted(named | (adj[path] & chosen))})
+        hit = sorted(named | (adj[path] & chosen))
+        if hit:
+            found.append((path, hit))
+    found.sort(key=lambda t: (-dir_closeness(t[0], t[1]), t[0]))
     return {
         'globs': globs,
+        'globs_matched': {g: sum(1 for p in names if glob_re(g).match(p)) for g in globs},
         'files': [{'file': p, 'lines': files[p]['lines'], 'code_lines': files[p]['code_lines'],
                    'imports': sorted(imports[p]), 'importers': sorted(importers[p])}
                   for p in picked],
-        'tests': tests,
+        'tests_count': len(found),
+        'tests': [{'file': p, 'scope_files': h} for p, h in found[:TESTS_CAP]],
         'cycles': cycle_rows([c for c in comps if chosen & set(c)]),
         'branches_touching_scope': scope_branches(repo, sha, specs, flight['worktrees']),
-        'plan_commits_touching_scope': plan_touching(repo, specs, flight['plan_commits_14d']),
+        'recent_commits_touching_scope': plan_touching(repo, specs, flight['plan_commits_14d']),
     }
 
 
@@ -612,23 +659,97 @@ def parts_report(rules, files, edges):
 
 # --- proof commands and path references ----------------------------------
 
+def read_text(tree, path):
+    with open(os.path.join(tree, path), 'rb') as fh:
+        return fh.read().decode('utf-8', 'replace')
+
+
+def section_keys(text, section):
+    """Two-space-indented keys under a top-level `section:` (Taskfile tasks, workflow jobs)."""
+    keys, inside = [], False
+    for line in text.splitlines():
+        if line and not line[0].isspace():
+            inside = line.rstrip() == section + ':'
+        elif inside:
+            m = re.match(r'^  ([A-Za-z0-9_.:/-]+):\s*$', line)
+            if m:
+                keys.append(m.group(1))
+    return keys
+
+
+def proof_first_line(path, text):
+    base = posixpath.basename(path)
+    if base == 'Makefile':
+        names = [m.group(1) for m in TARGET_RE.finditer(text)]
+    elif base.startswith('Taskfile'):
+        names = section_keys(text, 'tasks')
+    elif path.startswith('.github/workflows/'):
+        names = section_keys(text, 'jobs')
+    else:
+        names = []
+    if names:
+        return ', '.join(names[:3])[:120]
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith('#!'):
+            continue
+        if s.startswith(('#', '//', '--', '/*')) or 'usage' in s.lower():
+            return s.lstrip('#/-* ').strip()[:120]
+    return ''
+
+
+def proof_rank(path, docs):
+    named = any(posixpath.basename(path) in d or path in d for d in docs)
+    return 1 if (path.startswith('scripts/') or posixpath.dirname(path) == '' or named) else 2
+
+
 def proof_commands(files, tree):
-    out = []
+    """(entries sorted by rank then path, count of matches skipped by PROOF_SKIP)."""
+    docs = [read_text(tree, d) for d in DOC_NAMES if d in files]
+    out, skipped = [], 0
     for p in sorted(files):
         base = posixpath.basename(p)
-        if (PROOF_RE.search(base) or base in ('Makefile', 'justfile') or base.startswith('Taskfile')
-                or p.startswith('.github/workflows/')):
-            out.append({'file': p})
+        proof = bool(PROOF_RE.search(base)) or base in ('Makefile', 'justfile') \
+            or base.startswith('Taskfile') or p.startswith('.github/workflows/')
+        if not (proof or base == 'package.json'):
+            continue
+        if any(s in p for s in PROOF_SKIP):
+            skipped += 1
+            continue
+        text = read_text(tree, p)
+        rank = proof_rank(p, docs)
+        if proof:
+            out.append({'file': p, 'rank': rank, 'first_line': proof_first_line(p, text)})
         if base == 'package.json':
             try:
-                with open(os.path.join(tree, p), 'rb') as fh:
-                    scripts = json.loads(fh.read().decode('utf-8', 'replace')).get('scripts')
+                scripts = json.loads(text).get('scripts')
             except (ValueError, AttributeError):
                 continue
             if isinstance(scripts, dict):
-                out += [{'file': p, 'script': n, 'command': str(scripts[n])}
+                out += [{'file': p, 'rank': rank, 'script': n, 'command': str(scripts[n]),
+                         'first_line': str(scripts[n])[:120]}
                         for n in sorted(scripts) if n in SCRIPT_NAMES]
-    return out
+    return sorted(out, key=lambda r: (r['rank'], r['file'])), skipped
+
+
+def summarize(facts):
+    lines = []
+    for k, v in facts.items():
+        if isinstance(v, dict):
+            typ, size = 'object', len(v)
+        elif isinstance(v, list):
+            typ, size = 'array', len(v)
+        elif isinstance(v, str):
+            typ, size = 'string', len(v)
+        elif isinstance(v, bool):
+            typ, size = 'bool', '-'
+        elif v is None:
+            typ, size = 'null', '-'
+        else:
+            typ, size = 'number', '-'
+        rep = json.dumps(v, separators=(',', ':'), ensure_ascii=False)[:80]
+        lines.append(f'{k:<24} {typ:<7} {size!s:>6}  {rep}')
+    return '\n'.join(lines) + '\n'
 
 
 def is_ref_source(path):
@@ -669,20 +790,32 @@ def depth2(node):
 
 
 def path_ref_report(counts, chosen):
-    if chosen is not None:
-        counts = {k: v for k, v in counts.items() if in_scope(k[0], chosen) or in_scope(k[1], chosen)}
-    pairs = set(counts)
-    dirs = group_edges(pairs, depth2)
-    dpairs = {(depth2(s), depth2(t)) for s, t in pairs if depth2(s) != depth2(t)}
-    rows = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    return {
+    if chosen is None:
+        inside, outside = counts, {}
+    else:
+        inside = {k: v for k, v in counts.items() if in_scope(k[0], chosen) or in_scope(k[1], chosen)}
+        outside = {k: v for k, v in counts.items() if k not in inside}
+    dirs = group_edges(set(inside), depth2)
+    dpairs = {(depth2(s), depth2(t)) for s, t in inside if depth2(s) != depth2(t)}
+
+    def rows(d):
+        return [{'from': s, 'to': t, 'count': n}
+                for (s, t), n in sorted(d.items(), key=lambda kv: (-kv[1], kv[0]))]
+    out = {
         'edge_count': len(counts),
-        'edge_cap': PATH_EDGE_CAP,
-        'edges': [{'from': s, 'to': t, 'count': n} for (s, t), n in rows[:PATH_EDGE_CAP]],
         'dir_pair_count': len(dirs),
         'dir_pairs': dirs[:PAIR_TOP],
         'cycles': cycle_rows(scc_components({x for pr in dpairs for x in pr}, dpairs)),
     }
+    if chosen is None:
+        out['edge_cap'] = PATH_EDGE_CAP
+        out['edges'] = rows(inside)[:PATH_EDGE_CAP]
+    else:
+        out['scope_edge_count'] = len(inside)
+        out['edges'] = rows(inside)
+        out['other_edge_count'] = len(outside)
+        out['other_edges'] = rows(outside)[:PATH_EDGE_CAP]
+    return out
 
 
 # --- driver ---------------------------------------------------------------
@@ -734,11 +867,13 @@ def analyse(repo, sha, args, rules, tmp):
     file_comps = scc_components(set(files), edges)
     dir_comps = scc_components({dir_key(p) for p in files}, [(r['from'], r['to']) for r in dirs])
     flight = in_flight(repo, sha)
+    gate_list = gates(tree, [p for p in files if GATE_RE.search(p)])
+    proof_list, proof_skipped = proof_commands(files, tree)
     out = {
         'notes': NOTES,
         'languages': dict(sorted(languages.items())),
-        'parsed': sorted(e for e in languages if e in PARSED_EXTS),
-        'unparsed': sorted(e for e in languages if e not in PARSED_EXTS),
+        'parsed': {e: n for e, n in sorted(languages.items()) if e in PARSED_EXTS},
+        'unparsed': {e: n for e, n in sorted(languages.items()) if e not in PARSED_EXTS},
         'excluded': dict(sorted(excluded.items())),
         'sizes': dir_sizes(files),
         'external_test_imports': test_ext,
@@ -749,17 +884,20 @@ def analyse(repo, sha, args, rules, tmp):
         'top_files_by_size': [{'file': p, 'lines': files[p]['lines'], 'code_lines': files[p]['code_lines']}
                               for p in sorted(files, key=lambda p: (-files[p]['lines'], p))[:TOP]],
         'cochange': cochange(repo, sha, set(names), args.since_days, args.max_commit_files, chosen),
-        'proof_commands': proof_commands(files, tree),
+        'proof_commands': proof_list,
+        'proof_commands_skipped': proof_skipped,
         'path_refs': path_ref_report(path_ref_counts(ref_texts, set(names), dir_set(names)), chosen),
-        'gates': gates(tree, [p for p in files if GATE_RE.search(p)]),
+        'gates': gate_list,
         'docs_found': [{'path': p, 'bytes': names[p]} for p in sorted(files) if DOC_RE.search(p)],
         'skipped': {'count': sum(skipped.values()), 'by_reason': dict(sorted(skipped.items()))},
     }
+    if not gate_list:
+        out['gates_note'] = 'no architecture gate found; see proof_commands'
     if args.scope:
         out['edge_count'] = len(edges)
         out['external_package_count'] = len({pkg for c in external.values() for pkg in c})
         out['in_flight'] = {k: len(v) for k, v in flight.items()}
-        out['scope'] = scope_report(repo, sha, args.scope, files, edges, texts, file_comps, flight)
+        out['scope'] = scope_report(repo, sha, args.scope, names, files, edges, texts, file_comps, flight)
     else:
         out['edges'] = [list(e) for e in sorted(edges)]
         out['external_packages'] = {d: dict(sorted(c.items())) for d, c in sorted(external.items())}
@@ -797,7 +935,9 @@ def main(argv=None):
                 fh.write(text)
         except OSError as exc:
             die(f'cannot write --out: {exc.strerror}')
-    else:
+    if args.summary:
+        sys.stdout.write(summarize(facts))
+    elif not args.out:
         sys.stdout.write(text)
     return 0
 
