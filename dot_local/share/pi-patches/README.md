@@ -55,7 +55,7 @@ and four edits re-anchored for Pi 1.5.0: two bundle blocks and one bundle edit f
 (`entries` -> `entries2` in `buildExtensionResourcePaths` and in the compaction-restore block, `resolve16` -> `resolve15` in `showExtensionEditor`),
 and the `custom()` declaration in `extensions/types.d.ts` now carries upstream's new `blocked` option inside its anchor. The replacements are otherwise unchanged.
 `anthropic-idle-watchdog` has no versioned payload: its CLI anchor was shortened to the loop head, which is exactly once on Pi 1.2.0 through 1.5.0 (see its README).
-`response-visibility` is not version-aware here: its payload lives in `cartwmic/pi-response-visibility`, which is anchor-gated and matches Pi 1.2.0 through 1.5.0 at `cartwmic/pi-response-visibility` `f1f74eb` or later (an older checkout fails on 1.5.0).
+`response-visibility` is not version-aware here: its payload lives in `cartwmic/pi-response-visibility`, which is anchor-gated and matches Pi 1.2.0 through 1.5.0 at `cartwmic/pi-response-visibility` `f1f74eb` or later, and Pi 1.5.2 at `b0d2ed7` or later (an older checkout fails on 1.5.2: the bundle splits the model runtime and the runner into separate chunks). After a Pi upgrade, run `pi update` so the Git package is current before `chezmoi apply`.
 
 ## When a patch fails
 
