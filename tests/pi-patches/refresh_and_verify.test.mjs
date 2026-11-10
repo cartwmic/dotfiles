@@ -113,3 +113,28 @@ test("verify: with Pi absent the Pi patches are not checked, and the files check
 		assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /Pi is not installed/);
 	} finally { s.cleanup(); }
 });
+
+test("verify: checks the patches in the chezmoi source, so an orphan of a retired patch in the deployed directory cannot fail a clean machine", () => {
+	const s = sandbox();
+	try {
+		const source = join(s.dir, "src"), sourcePatches = join(source, "dot_local", "share", "pi-patches"), deployed = join(s.dir, ".local", "share", "pi-patches");
+		mkdirSync(sourcePatches, { recursive: true }); mkdirSync(join(deployed, "openai-codex-gpt-6-astra"), { recursive: true });
+		copyFileSync(join(ROOT, "dot_local/share/pi-patches/pi-root.mjs"), join(sourcePatches, "pi-root.mjs"));
+		copyFileSync(join(ROOT, "dot_local/share/pi-patches/pi-root.mjs"), join(deployed, "pi-root.mjs"));
+		mkdirSync(join(sourcePatches, "good"), { recursive: true }); writeFileSync(join(sourcePatches, "good", "patch.mjs"), "process.exit(0);\n");
+		writeFileSync(join(deployed, "openai-codex-gpt-6-astra", "patch.mjs"), `console.error("pi openai-codex catalog not installed; cannot verify patch"); process.exit(1);\n`);
+		exe(join(s.bin, "chezmoi"), `[ "$1" = "source-path" ] && { echo "${source}"; exit 0; }; exit 0`);
+		const env = { ...s.env }; delete env.PI_PATCHES_ROOT;
+		const r = run(VERIFY, env);
+		assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /ok: Pi patch good/); assert.doesNotMatch(r.stdout + r.stderr, /astra/);
+	} finally { s.cleanup(); }
+});
+
+test(".chezmoiremove: the retired openai-codex-gpt-6-astra patch directory is removed on every profile", () => {
+	const text = readFileSync(join(ROOT, ".chezmoiremove"), "utf8");
+	const index = text.indexOf(".local/share/pi-patches/openai-codex-gpt-6-astra");
+	assert.ok(index > 0);
+	// Not inside a profile-gated block: every `{{ if` before it has been closed by an `{{ end`.
+	const before = text.slice(0, index);
+	assert.equal((before.match(/\{\{-? *if /g) ?? []).length, (before.match(/\{\{-? *end/g) ?? []).length);
+});

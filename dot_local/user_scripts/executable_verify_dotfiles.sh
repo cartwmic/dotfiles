@@ -6,14 +6,26 @@
 # them as pending and exits 1 even right after a clean apply. This checks what a clean apply guarantees instead:
 #   1. every managed file, directory and symlink matches the source (`chezmoi verify --exclude=scripts`)
 #   2. no Pi patch failure is recorded (the marker apply_pi_patches.sh writes, see run_after_99_report_pi_patch_failures.sh)
-#   3. with Pi installed, every Pi patch still verifies against the installed Pi (each patch.mjs --check)
+#   3. with Pi installed, every Pi patch in the chezmoi source still verifies against the installed Pi (each patch.mjs --check)
 # Run it after `chezmoi apply`:  ~/.local/user_scripts/verify_dotfiles.sh
 # Not covered: codex hook trust (script 90 prints its own error) and whether run_onchange scripts ran.
 
-PATCHES_ROOT="${PI_PATCHES_ROOT:-$HOME/.local/share/pi-patches}"
 FAILURE_MARKER="${PI_PATCH_FAILURE_MARKER:-${XDG_STATE_HOME:-$HOME/.local/state}/pi-patches/failed}"
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 status=0
+
+# The patches to check are the ones in the chezmoi source, the same set script 30 applies. The deployed ~/.local/share/pi-patches can also
+# hold orphans of retired patches (chezmoi does not delete removed files from it), and those must not fail a clean machine.
+if [ -z "${PI_PATCHES_ROOT:-}" ]; then
+  source_dir=$(chezmoi source-path 2>/dev/null)
+  if [ -n "$source_dir" ] && [ -d "$source_dir/dot_local/share/pi-patches" ]; then
+    PATCHES_ROOT="$source_dir/dot_local/share/pi-patches"
+  else
+    PATCHES_ROOT="$HOME/.local/share/pi-patches"
+  fi
+else
+  PATCHES_ROOT="$PI_PATCHES_ROOT"
+fi
 
 pass() { echo "[verify_dotfiles] ok: $1"; }
 fail() { echo "[verify_dotfiles] FAIL: $1" >&2; status=1; }
