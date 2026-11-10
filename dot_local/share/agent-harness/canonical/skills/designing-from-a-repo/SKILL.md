@@ -15,7 +15,7 @@ Use what exists and name in the output which you used.
 
 | Input | Where | Use |
 |---|---|---|
-| Requirements report | a `REQUIREMENTS.md` whose header says `shape: requirements/1` (the requirements skill) | Replaces Step 3 inference; see below |
+| Requirements report | a `REQUIREMENTS.md` whose header says `shape: requirements/1` (the `distilling-requirements` skill) | Replaces Step 3 inference; see below |
 | Repo's own documents | `docs/PRD.md`, a component's `CONTRACT.md`, specs, ADRs, a `prd-candidate.md` from using-generate-prd | `given` requirements, even when the caller says "bare" |
 | Validation points, journeys, e2e tests | `tests/`, `journeys/` | Behaviour without rediscovery from code |
 | review-map pages | the caller's links | What recently moved and what it reaches |
@@ -35,7 +35,7 @@ A bare repo must still work: infer from README, `AGENTS.md`, manifests, entry po
 python3 <skill-dir>/scripts/repo_facts.py REPO --rev REV [--scope 'GLOB' ...] [--parts parts.tsv] --out facts.json
 ```
 
-Use `--scope` for a named slice. Do not read the JSON whole; query the keys you need. It analyses the pinned rev: sizes (code and tests apart, excluded trees named), imports and cycles (TypeScript/JavaScript and Python only; says what it did not parse), path references between files, fan-in, co-change, in-flight branches touching scope, the repo's own architecture gate and proof commands, and the documents found.
+Use `--scope` for a named slice. Do not read the JSON whole; query the keys you need. It analyses the pinned rev: sizes (code and tests apart, excluded trees named), imports and cycles (TypeScript/JavaScript and Python only; tsconfig path aliases and workspace package names are not resolved, so they show as external packages; says which languages it did not parse), path references between files, fan-in, co-change, in-flight branches touching scope, the repo's own architecture gate and proof commands, and the documents found.
 
 Then read, in this order: a component scope's `CONTRACT.md`, the repo's architecture gate (it is the repo's statement of its layout), the sections of README and `AGENTS.md` that say how a change is proven here (commands and what each costs), manifests and entry points. If the repo has no architecture gate, the gate is whatever proves a change.
 
