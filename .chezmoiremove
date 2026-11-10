@@ -119,3 +119,7 @@ bin/herdr-overview-proof
 .local/share/agent-events/test_agent_events.py
 .local/share/agent-events/test_agent_events_review.py
 .local/share/agent-events/__pycache__
+
+# Retired 2026-09-05 (5d63eac5): the openai-codex-gpt-6-astra Pi patch, replaced by a context window override. A machine that applied it
+# before then still has the deployed directory, which chezmoi does not delete by itself; its --check fails when Pi has no such catalog.
+.local/share/pi-patches/openai-codex-gpt-6-astra
