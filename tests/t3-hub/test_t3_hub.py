@@ -1,4 +1,5 @@
-"""T3 hub provider instances: dot_t3/private_userdata/modify_settings.json.tmpl, the Codex provider block, the Claude settings file.
+"""T3 hub provider instances: dot_t3/private_userdata/modify_settings.json.tmpl, the Codex provider block, the Claude settings file,
+and accountWeights on the hub usage source (UsageWeightsTest, UsagePlanTest).
 
 Everything runs through chezmoi against the real source with a minimal personal config and a throwaway HOME, so it needs
 chezmoi and jq but no 1Password and no network to the hub. settings.live-shape.json is a copy of the real
@@ -26,8 +27,17 @@ CLAUDE_FILE = ".config/t3-hub-claude-settings.json"
 TARGETS = (".t3/userdata/settings.json", CLAUDE_FILE, ".codex/config.toml")
 CODEX_VERSION = "9.9.9"
 WORKTREES = "/Volumes/Workshop/macbook/t3-worktrees"
+SETTINGS_SRC = "dot_t3/private_userdata/modify_settings.json.tmpl"
 WINDOW = "500000"  # T3's "Auto-compact after" (autoCompactWindow), a string; Michael's pick on ask 755
 WINDOW_IDS = ("claudeAgent", "coordinator")
+USAGE_SOURCE = {"kind": "cliproxy", "label": "CLIProxy hub", "url": "https://cliproxy.internal.cartwmic.com", "enabled": True}
+PLACEHOLDER = "•" * 6  # what T3 leaves in settings.json once it has moved the key into its own store
+# hub.usageAccounts is local data (machine-specific), so the tests inject these placeholder accounts; the repo names none.
+ACCOUNTS = [{"driver": "claudeAgent", "email": "ultra-one@example.com", "plan": "ultra"},
+            {"driver": "claudeAgent", "email": "ultra-two@example.com", "plan": "ultra"},
+            {"driver": "claudeAgent", "email": "max@example.com", "plan": "max"}]
+# accountWeights for ACCOUNTS with the repo's plan table (ultra = 2, max = 1).
+EXPECTED_WEIGHTS = {"claudeAgent:ultra-one@example.com": 2, "claudeAgent:ultra-two@example.com": 2, "claudeAgent:max@example.com": 1}
 
 
 def with_window(data):
@@ -65,9 +75,15 @@ class Env:
             tools.mkdir(parents=True)
             (tools / "active.json").write_text(json.dumps({"version": CODEX_VERSION}))
 
-    def write_config(self, profile, enabled=None):
+    def write_config(self, profile, enabled=None, hub=False, accounts=None, plans=None):
         extra = "" if enabled is None else "  t3Hub:\n    enabled: %s\n" % ("true" if enabled else "false")
-        extra += "  hub:\n    enabled: false\n"  # the default-provider switch is tests/hub-default's; this suite is about the two test instances
+        # the default-provider switch is tests/hub's; here it is on only for the usage-weights tests, and accounts and plans
+        # (JSON is YAML) replace the .chezmoidata.toml lists and plan weights when given
+        extra += "  hub:\n    enabled: %s\n" % ("true" if hub else "false")
+        if accounts is not None:
+            extra += "    usageAccounts: %s\n" % json.dumps(accounts)
+        if plans is not None:
+            extra += "    usagePlanWeights: %s\n" % json.dumps(plans)
         self.cfg.write_text("data:\n  profile: %s\n%s" % (profile, extra))
 
     def set_enabled(self, enabled):
@@ -88,14 +104,16 @@ class Env:
         self._tmp.cleanup()
 
 
-def run_script(script, stdin, want=None, window=None):
-    """Run a rendered modify script. want replaces the one-line WANT definition, window the AUTO_COMPACT_WINDOW one."""
+def run_script(script, stdin, want=None, window=None, home=None):
+    """Run a rendered modify script. want replaces the one-line WANT definition, window the AUTO_COMPACT_WINDOW one.
+    home sets HOME for the run, so the script's op_read_cached.sh is looked up there (a fake in a throwaway home)."""
     if want is not None:
         lines = script.splitlines(keepends=True)
         script = "".join("WANT='%s'\n" % want if l.startswith("WANT=") else l for l in lines)
     if window is not None:
         script = "".join("AUTO_COMPACT_WINDOW='%s'\n" % window if l.startswith("AUTO_COMPACT_WINDOW=") else l for l in script.splitlines(keepends=True))
-    r = subprocess.run(["sh", "-c", script], input=stdin, capture_output=True, text=True, timeout=30)
+    r = subprocess.run(["sh", "-c", script], input=stdin, capture_output=True, text=True, timeout=30,
+                       env=dict(os.environ, HOME=str(home)) if home is not None else None)
     assert r.returncode == 0, r.stderr
     return r.stdout
 
@@ -345,6 +363,21 @@ class ApplyPathTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_apply_writes_the_account_weights_with_the_key_settled(self):
+        """A real chezmoi apply of the settings file: the usage entry gets accountWeights, and T3's placeholder key stays."""
+        env = self.fresh()
+        try:
+            path = env.home / ".t3/userdata/settings.json"
+            data = json.loads(FIXTURE)
+            data["usageLimitSources"] = {"cliproxy-hub": {**USAGE_SOURCE, "managementKey": PLACEHOLDER}}
+            path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+            env.write_config("personal", hub=True, accounts=ACCOUNTS)
+            env.chezmoi("apply", str(path))
+            self.assertEqual(json.loads(path.read_text())["usageLimitSources"],
+                             {"cliproxy-hub": {**USAGE_SOURCE, "managementKey": PLACEHOLDER, "accountWeights": EXPECTED_WEIGHTS}})
+        finally:
+            env.close()
+
 
 class CodexBlockTest(unittest.TestCase):
     SRC = "dot_codex/modify_private_config.toml.tmpl"
@@ -402,6 +435,121 @@ class DefaultTest(unittest.TestCase):
         with_ours = run_script(script, FIXTURE, want='{"claude-hub":{"driver":"claudeAgent"},"codex-hub":{"driver":"codex"}}')
         left = json.loads(run_script(script, with_ours))["providerInstances"]
         self.assertFalse(set(OURS) & set(left))  # applying the default removes both
+
+
+class UsagePlanTest(unittest.TestCase):
+    """A plan or account the weights cannot be made from fails the render, so a typo applies nothing. Runs on any OS (the check is not gated)."""
+
+    def assert_render_fails(self, data, message):
+        env = Env()
+        try:
+            env.write_config("personal", hub=True, **data)
+            with self.assertRaisesRegex(AssertionError, message):
+                env.render(SETTINGS_SRC)
+        finally:
+            env.close()
+
+    def test_an_account_on_a_plan_missing_from_the_table_fails_the_render(self):
+        self.assert_render_fails({"accounts": [{"driver": "claudeAgent", "email": "a@example.test", "plan": "team"}]},
+                                 r'names plan "team", which is not in hub\.usagePlanWeights')
+
+    def test_a_plan_weight_that_is_not_a_positive_number_fails_the_render(self):
+        for weight in (0, -1, "2", True):
+            with self.subTest(weight=weight):
+                self.assert_render_fails({"accounts": ACCOUNTS[:1], "plans": {"ultra": weight}}, "must be a positive number")
+
+    def test_an_account_needs_a_driver_and_an_email(self):
+        self.assert_render_fails({"accounts": [{"driver": "claudeAgent", "plan": "max"}]}, "needs a driver and an email")
+
+    def test_absent_accounts_write_no_weights_and_fail_nothing(self):
+        env = Env()
+        try:
+            env.write_config("personal", hub=True)  # no hub.usageAccounts in local data
+            self.assertIn("ACCOUNT_WEIGHTS='{}'", env.render(SETTINGS_SRC))
+        finally:
+            env.close()
+
+    def test_the_repo_names_no_accounts(self):
+        with open(REPO / ".chezmoidata.toml", "rb") as f:
+            hub = tomllib.load(f)["hub"]
+        self.assertNotIn("usageAccounts", hub)
+        self.assertEqual(hub["usagePlanWeights"], {"ultra": 2, "max": 1})
+
+
+@on_mac
+class UsageWeightsTest(unittest.TestCase):
+    """accountWeights on the hub usage source: written on every apply while the hub is on, to our entry only, and without reading the key."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.env = Env()
+        cls.env.write_config("personal", hub=True, accounts=ACCOUNTS)
+        cls.script = cls.env.render(SETTINGS_SRC)
+        # A fake op_read_cached.sh that records each call, so a test can see whether the key was read.
+        bin_dir = cls.env.home / ".local/user_scripts"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "op_read_cached.sh").write_text('#!/bin/sh\necho "$*" >> "$HOME/.calls"\necho cpa_must_not_be_used\n')
+        (bin_dir / "op_read_cached.sh").chmod(0o755)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.env.close()
+
+    def setUp(self):
+        (self.env.home / ".calls").unlink(missing_ok=True)
+
+    def script_for(self, accounts=None, plans=None, hub=True):
+        self.env.write_config("personal", hub=hub, accounts=accounts, plans=plans)
+        return self.env.render(SETTINGS_SRC)
+
+    def apply(self, entry, script=None, home=None):
+        """Run the script over settings whose usage entry is entry; returns that entry as the script wrote it."""
+        data = {"usageLimitSources": {"cliproxy-hub": entry}}
+        out = run_script(script or self.script, json.dumps(data), home=home or self.env.home)
+        return json.loads(out)["usageLimitSources"]["cliproxy-hub"]
+
+    def test_weights_come_from_the_plan_table_and_the_local_accounts(self):
+        self.assertEqual(self.apply({**USAGE_SOURCE, "managementKey": PLACEHOLDER})["accountWeights"], EXPECTED_WEIGHTS)
+
+    def test_weights_are_refreshed_while_settled_and_the_key_is_neither_read_nor_changed(self):
+        stale = {**USAGE_SOURCE, "managementKey": PLACEHOLDER, "accountWeights": {"claudeAgent:stale@example.com": 1}}
+        self.assertEqual(self.apply(stale), {**USAGE_SOURCE, "managementKey": PLACEHOLDER, "accountWeights": EXPECTED_WEIGHTS})
+        self.assertFalse((self.env.home / ".calls").exists())  # settled: op_read_cached.sh is not run
+
+    def test_other_keys_of_the_entry_are_kept(self):
+        entry = self.apply({**USAGE_SOURCE, "managementKey": PLACEHOLDER, "pollSeconds": 60})
+        self.assertEqual(entry, {**USAGE_SOURCE, "managementKey": PLACEHOLDER, "pollSeconds": 60, "accountWeights": EXPECTED_WEIGHTS})
+
+    def test_emails_are_lowercased_in_the_key(self):
+        script = self.script_for(accounts=[{"driver": "claudeAgent", "email": "Mixed.Case@Example.TEST", "plan": "max"}], plans={"max": 3})
+        self.assertEqual(self.apply({**USAGE_SOURCE, "managementKey": PLACEHOLDER}, script)["accountWeights"],
+                         {"claudeAgent:mixed.case@example.test": 3})
+
+    def test_absent_accounts_remove_the_weights_one_wrote_before(self):
+        script = self.script_for()  # hub.usageAccounts not set: no weights, and no error
+        entry = self.apply({**USAGE_SOURCE, "managementKey": PLACEHOLDER, "pollSeconds": 60, "accountWeights": EXPECTED_WEIGHTS}, script)
+        self.assertEqual(entry, {**USAGE_SOURCE, "managementKey": PLACEHOLDER, "pollSeconds": 60})
+
+    def test_no_accounts_removes_the_weights_and_nothing_else(self):
+        script = self.script_for(accounts=[])
+        entry = self.apply({**USAGE_SOURCE, "managementKey": PLACEHOLDER, "pollSeconds": 60, "accountWeights": EXPECTED_WEIGHTS}, script)
+        self.assertEqual(entry, {**USAGE_SOURCE, "managementKey": PLACEHOLDER, "pollSeconds": 60})
+
+    def test_an_entry_that_is_not_ours_gets_no_weights(self):
+        theirs = {**USAGE_SOURCE, "url": "https://other.example.test", "managementKey": PLACEHOLDER}
+        with tempfile.TemporaryDirectory() as bare:  # no op_read_cached.sh here: the key read fails, so the entry is left as it is
+            self.assertEqual(self.apply(theirs, home=Path(bare)), theirs)
+
+    def test_switch_off_removes_the_whole_entry_with_its_weights(self):
+        script = self.script_for(hub=False)
+        entry = {**USAGE_SOURCE, "managementKey": PLACEHOLDER, "accountWeights": EXPECTED_WEIGHTS}
+        out = run_script(script, json.dumps({"usageLimitSources": {"cliproxy-hub": entry}}), home=self.env.home)
+        self.assertNotIn("usageLimitSources", json.loads(out))
+
+    def test_idempotent(self):
+        once = run_script(self.script, json.dumps({"usageLimitSources": {"cliproxy-hub": {**USAGE_SOURCE, "managementKey": PLACEHOLDER}}}),
+                          home=self.env.home)
+        self.assertEqual(run_script(self.script, once, home=self.env.home), once)
 
 
 class ProfileGateTest(unittest.TestCase):

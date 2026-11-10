@@ -15,6 +15,13 @@ enabled = false
 [hub]
 enabled = true
 
+# Relative capacity per plan for T3's Usage -> Limits headline (README "T3 usage from the hub"). T3 counts every account as one part;
+# these weights say how much capacity each plan has. Change a plan's number here, not in the template. The accounts that use a plan are
+# machine-specific: they are the local data key hub.usageAccounts (docs/profiles.md, "Local data keys"), not in this repo.
+[hub.usagePlanWeights]
+ultra = 2
+max = 1
+
 # The Chromium that ~/.local/bin/chromium (viz, Pi launch_browser) runs: Playwright's Chrome for Testing. The wrapper installs it
 # with `npx -y playwright@<version> install chromium` when `chromium-<build>` is missing from the Playwright cache. Bump both
 # together: <build> is the revision that <version> downloads (read it from the install output or ~/Library/Caches/ms-playwright).

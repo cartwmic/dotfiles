@@ -103,6 +103,8 @@ def render(path, case, home=None):
     extra, os_name, profile = CASES[case]
     # a missing coordinator repo keeps the T3 hook out of the Claude settings
     data = dict({"profile": profile, "instances": {"coordinator": {"repo": "/nonexistent/coordinator"}}}, **extra)
+    # No accountWeights here: tests/t3-hub covers them, and these comparisons are about the hub (as the window note below).
+    data["hub"] = {"usageAccounts": [], **data.get("hub", {})}
     if home is None:  # the T3 script reads active.json through the HOME the template sees
         home = HOME_DIR
     text = chezmoi(source(os_name), data, "execute-template", stdin=(ROOT / path).read_text(), home=home)
@@ -446,8 +448,10 @@ class ApplyPathTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def set_switch(self, on):
-        # t3Hub off: the two test instances and the Claude helper file are tests/t3-hub's; here only the default is under test
-        self.cfg.write_text("data:\n  profile: personal\n  hub:\n    enabled: %s\n  t3Hub:\n    enabled: false\n" % ("true" if on else "false"))
+        # t3Hub off: the two test instances and the Claude helper file are tests/t3-hub's; here only the default is under test.
+        # No usage accounts either: accountWeights are tests/t3-hub's, and these comparisons are about the usage source itself.
+        self.cfg.write_text("data:\n  profile: personal\n  hub:\n    enabled: %s\n    usageAccounts: []\n  t3Hub:\n    enabled: false\n"
+                            % ("true" if on else "false"))
 
     def apply(self, *paths):
         r = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(self.cfg), "--config-format", "yaml",

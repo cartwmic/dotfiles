@@ -36,6 +36,11 @@ data:
   #   enabled: true
   # axon-work-computer only: clone the private Axon agents playbook (placeholder; use your own account's URL). Omit the key and nothing is cloned.
   # axonPlaybook: {repo: "https://github.com/<account>/axon-agents-playbook.git"}
+  # personal Mac: the accounts whose T3 usage is weighted by plan (plan weights are hub.usagePlanWeights in .chezmoidata.toml). Omit: no weights.
+  # hub:
+  #   usageAccounts:
+  #     - {driver: claudeAgent, email: first@example.com, plan: ultra}
+  #     - {driver: claudeAgent, email: second@example.com, plan: max}
   # Machine-specific names and addresses. Placeholders only; the full list per profile is docs/profiles.md, "Local data keys".
   # axon-work-computer profile (all six required; a missing key fails the render and names it):
   # workGitHost: "git.example.com"

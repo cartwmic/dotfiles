@@ -28,7 +28,7 @@ How to read a row:
 | `.local/bin/kgate`, `.config/kgate` | personal | It runs jobs on the personal homelab Kubernetes cluster, which the work Mac has no business reaching. |
 | `80_spotlight_off_workshop.sh` | personal | `/Volumes/Workshop` exists only on the personal Mac; the work Mac has no such volume. |
 | `.config/agent-scratch`, `81_agent_scratch_workshop.sh`, `.local/user_scripts/agent_tmp_move.py`, `.local/share/agent-scratch` | personal (macOS) | `/Volumes/Workshop` exists only on the personal Mac; the work Mac and the Linux and WSL hosts have no such volume. The one line in `dot_zshenv` that sources the env file does nothing without it. |
-| `.t3`, `.config/t3-hub-claude-settings.json` | personal (macOS) | The T3 `claude-hub` and `codex-hub` provider instances route through the homelab CLIProxy hub, which is reachable only from the home LAN or WireGuard, and Michael scoped them to his personal Mac. Linux and WSL personal hosts do not get them. (The matching Codex provider block in `.codex/config.toml` is gated the same way inside `modify_private_config.toml.tmpl`.) After T3 updates its bundled Codex, re-apply `~/.t3/userdata/settings.json`: the `binaryPath` of the `codex` instance names a version. The same settings script sets `worktreesDirectory` to `/Volumes/Workshop/macbook/t3-worktrees` (Workshop exists only on the personal Mac): new worktrees go there, existing ones under `~/.t3/worktrees` stay where they are and stay managed. |
+| `.t3`, `.config/t3-hub-claude-settings.json` | personal (macOS) | The T3 `claude-hub` and `codex-hub` provider instances route through the homelab CLIProxy hub, which is reachable only from the home LAN or WireGuard, and Michael scoped them to his personal Mac. Linux and WSL personal hosts do not get them. (The matching Codex provider block in `.codex/config.toml` is gated the same way inside `modify_private_config.toml.tmpl`.) After T3 updates its bundled Codex, re-apply `~/.t3/userdata/settings.json`: the `binaryPath` of the `codex` instance names a version. The same settings script sets `worktreesDirectory` to `/Volumes/Workshop/macbook/t3-worktrees` (Workshop exists only on the personal Mac): new worktrees go there, existing ones under `~/.t3/worktrees` stay where they are and stay managed. The same script also writes `accountWeights` into the hub usage source: plan weights from `.chezmoidata.toml`, accounts from the local key `hub.usageAccounts` (see Local data keys). |
 | `.config/pnpm`, `Library/Preferences/pnpm` | personal (macOS) | pnpm's `storeDir` is on `/Volumes/Workshop`, which exists only on the personal Mac, so Workshop worktrees can hardlink from the store. pnpm 11 reads `~/.config/pnpm` when `XDG_CONFIG_HOME` is set (interactive shells) and `~/Library/Preferences/pnpm` when it is not (T3, launchd), so both files carry the same line (a test checks they match). With Workshop unmounted `pnpm install` fails with an error; there is no fallback to the internal disk. The old store (`~/Library/pnpm/store`) is not moved or deleted. |
 | `.config/heavy-gate/volumes` | personal (macOS) | It names `/Volumes/Workshop`, which heavy-gate must find mounted with its free-space floor met before it admits a start. The work Mac has no such volume, so it gets no volumes file and heavy-gate watches only the volume that holds `$HOME` there. |
 | `.pi/agent/extensions/anthropic-stall-retry` | axon-work-computer | Anthropic stalls are only seen on the work profile. |
@@ -59,6 +59,17 @@ Machine-specific values (hosts, addresses, vault items, work names) are not in t
 | `privatePiProviderRef` | The `work-anthropic` Pi provider, read from 1Password through the service account (work profile; see the next section). | No `work-anthropic` provider. |
 | `axonPlaybook.repo` | Clones the Axon playbook (work profile; see `example.chezmoi.yaml`). | Nothing is cloned. |
 | `workGitHost`, `workAwsProfile` on the personal profile | The host appears in the gitlinker map, the playbook text and the skill; the AWS default is used in `~/.zshrc`. | Left out; the AWS default is `default`. |
+| `hub.usageAccounts` (personal Mac; a list of `{driver, email, plan}`) | T3's Usage headline weights each account by its plan: the apply writes `usageLimitSources.cliproxy-hub.accountWeights` as `{"<driver>:<email lowercased>": weight}`, the weight being `hub.usagePlanWeights[plan]` from `.chezmoidata.toml`. A plan missing from that table fails the render. | No `accountWeights` is written (one written before is removed); nothing fails. Accounts not listed count 1 in T3. |
+
+`hub.usageAccounts` is machine-specific (the accounts' emails), so it lives here and not in the repo. Example, with placeholder addresses:
+
+```yaml
+data:
+  hub:
+    usageAccounts:
+      - {driver: claudeAgent, email: first@example.com, plan: ultra}
+      - {driver: claudeAgent, email: second@example.com, plan: max}
+```
 
 ### 1Password service-account token
 

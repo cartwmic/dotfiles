@@ -504,6 +504,13 @@ that #158 added is removed when it still equals that one. If the read fails or d
 is and `[modify_settings] WARN` goes to stderr. Switch-off removes the source (and the three displayNames) only while its kind,
 label and url are ours.
 
+**Account weights.** T3's Usage headline counts every account as one part, but an Ultra account has twice the capacity of a Max account.
+The plan table `hub.usagePlanWeights` (`ultra = 2`, `max = 1`) is in `.chezmoidata.toml`. Which accounts use which plan is machine-specific,
+so it is the local key `hub.usageAccounts` (a list of `{driver, email, plan}`; example in [docs/profiles.md](./docs/profiles.md#local-data-keys)).
+The apply sets `usageLimitSources.cliproxy-hub.accountWeights` to `{"<driver>:<email lowercased>": weight}`, and an account not listed counts 1.
+While the switch is on, every apply writes the weights, even when the key is settled; with no `hub.usageAccounts` it writes none and removes
+one it wrote before, and a plan missing from the table or a non-positive weight fails the render.
+
 `t3Hub.enabled` ([T3 hub providers](#t3-hub-providers-personal-mac)) is independent: it only owns the two retired test instances and the Claude
 settings file for `claude-hub`.
 

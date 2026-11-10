@@ -20,6 +20,10 @@
 #               stderr. T3 must never be given a 1Password reference: it would run `op` through the desktop app and prompt for unlock.
 #               An older secretProviders.onepassword entry that equals the one this script used to write is removed (on and off).
 #               Off removes the source if its kind, label and url are ours (the key is not compared: T3 may have replaced it).
+#               accountWeights: relative capacity per hub account, from hub.usagePlanWeights (.chezmoidata.toml) and hub.usageAccounts
+#               (local data, docs/profiles.md "Local data keys"). While on, it is written on every apply when the entry is ours, even when
+#               settled (no key read). hub.usageAccounts absent or empty: the key is removed from the entry, and nothing fails. Off removes
+#               the whole entry, as above.
 #               Shape: pingdotgg/t3code packages/contracts/src/settings.ts (UsageLimitSourceConfig) and
 #               docs/user/usage.md "Connect a CLIProxyAPI hub".
 # worktreesDirectory: new T3 worktrees go to <dir>/<repo>/<branch> on the Workshop SSD (/Volumes/Workshop exists only on the personal Mac,
@@ -51,6 +55,27 @@ set -eu
 {{- if and (eq $hubDefault "on") (stat $active) }}
 {{- $defaultBinary = get $codexConfig "binaryPath" }}
 {{- end }}
+{{- /* accountWeights: T3's headline counts every account as one part. These are relative capacity: the plan table is in .chezmoidata.toml, the accounts are the optional local key hub.usageAccounts (README "T3 usage from the hub"). No accounts: no weights, no error. An account on a plan missing from the table, or a non-positive weight, fails the render. */ -}}
+{{- $plans := dig "hub" "usagePlanWeights" (dict) . }}
+{{- $weights := dict }}
+{{- range $a := dig "hub" "usageAccounts" (list) . }}
+{{- $driver := index $a "driver" | default "" }}
+{{- $email := index $a "email" | default "" }}
+{{- $plan := index $a "plan" | default "" }}
+{{- if or (eq $driver "") (eq $email "") }}
+{{-   fail "hub.usageAccounts: each account needs a driver and an email" }}
+{{- end }}
+{{- $key := printf "%s:%s" $driver (lower $email) }}
+{{- if not (hasKey $plans $plan) }}
+{{-   fail (printf "hub.usageAccounts %s names plan %q, which is not in hub.usagePlanWeights" $key $plan) }}
+{{- end }}
+{{- $w := index $plans $plan }}
+{{- $number := or (kindIs "int" $w) (kindIs "int64" $w) (kindIs "uint64" $w) (kindIs "float64" $w) }}
+{{- if not (and $number (gt (float64 $w) 0.0)) }}
+{{-   fail (printf "hub.usagePlanWeights.%s must be a positive number, got %v" $plan $w) }}
+{{- end }}
+{{- $_ := set $weights $key $w }}
+{{- end }}
 {{- $claude := dict "driver" "claudeAgent" "displayName" "Claude (hub)" "enabled" true
       "environment" (list (dict "name" "ANTHROPIC_BASE_URL" "value" "https://cliproxy.internal.cartwmic.com" "sensitive" false) (dict "name" "ANTHROPIC_API_KEY" "value" "" "sensitive" false))
       "config" (dict "launchArgs" (printf "--settings %s/.config/t3-hub-claude-settings.json" $home)) }}
@@ -71,6 +96,8 @@ WORKTREES_DIR='/Volumes/Workshop/macbook/t3-worktrees'
 AUTO_COMPACT_WINDOW='500000'
 AUTO_COMPACT_IDS='["claudeAgent","coordinator"]'
 PREFIX='{{ $home }}/.t3/tools/codex/'
+# accountWeights for the usage source: {"<driver>:<email lowercased>": weight} from hub.usageAccounts and hub.usagePlanWeights. {} when none.
+ACCOUNT_WEIGHTS={{ $weights | toJson | squote }}
 
 input=$(cat; printf x)
 input=${input%x}
@@ -100,7 +127,8 @@ fi
 
 out=$(printf %s "$input" | MGMT_KEY=$MGMT_KEY jq --argjson want "$WANT" --argjson owned "$OWNED" --arg mode "$HUB_MODE" \
   --arg bin "$DEFAULT_BINARY" --argjson original "$ORIGINAL" --arg prefix "$PREFIX" \
-  --argjson names "$NAMES" --arg worktrees "$WORKTREES_DIR" --arg compact "$AUTO_COMPACT_WINDOW" --argjson compactIds "$AUTO_COMPACT_IDS" --arg usageId "$USAGE_ID" --argjson usageSource "$USAGE_SOURCE" '
+  --argjson names "$NAMES" --arg worktrees "$WORKTREES_DIR" --arg compact "$AUTO_COMPACT_WINDOW" --argjson compactIds "$AUTO_COMPACT_IDS" --arg usageId "$USAGE_ID" --argjson usageSource "$USAGE_SOURCE" \
+  --argjson weights "$ACCOUNT_WEIGHTS" '
   def upsert($id): if $want[$id] then .[$id] = $want[$id] else del(.[$id]) end;
   (.providerInstances // {}) as $before
   | ($before | reduce $owned[] as $id (.; upsert($id))) as $after
@@ -113,11 +141,12 @@ out=$(printf %s "$input" | MGMT_KEY=$MGMT_KEY jq --argjson want "$WANT" --argjso
     def dropNames: reduce ($names | keys[]) as $id (.; if (.providerInstances[$id]? | type) == "object" and .providerInstances[$id].displayName? == $names[$id] then del(.providerInstances[$id].displayName) else . end);
     def prune($key): if (.[$key] | type) == "object" and (.[$key] | length) == 0 then del(.[$key]) else . end;
     def ownSource: if ($ENV.MGMT_KEY | length) > 0 then .usageLimitSources = ((if (.usageLimitSources | type) == "object" then .usageLimitSources else {} end) | .[$usageId] = ($usageSource + {managementKey: $ENV.MGMT_KEY})) else . end;
-    def dropSource: if (.usageLimitSources | type) == "object" and ((.usageLimitSources[$usageId]? // {}) | (.kind == $usageSource.kind and .label == $usageSource.label and .url == $usageSource.url))
-      then del(.usageLimitSources[$usageId]) | prune("usageLimitSources") else . end;
+    def ownedUsage: (.usageLimitSources[$usageId]? | objects | (.kind == $usageSource.kind and .label == $usageSource.label and .url == $usageSource.url)) // false;
+    def dropSource: if ownedUsage then del(.usageLimitSources[$usageId]) | prune("usageLimitSources") else . end;
+    def setWeights: if ownedUsage then .usageLimitSources[$usageId] |= (if ($weights | length) > 0 then . + {accountWeights: $weights} else del(.accountWeights) end) else . end;
     def dropOnePassword: if ((.secretProviders | type) == "object") and ((.secretProviders.onepassword? // {}) | (.kind == "one_password" and .label == "1Password" and ((.config // {}) | to_entries | map(.value)) == ["my"]))
       then del(.secretProviders.onepassword) | prune("secretProviders") else . end;
-    if $mode == "on" then setNames | dropOnePassword | ownSource
+    if $mode == "on" then setNames | dropOnePassword | ownSource | setWeights
     elif $mode == "off" then dropNames | dropSource | dropOnePassword
     else . end
   | def setCompact: reduce $compactIds[] as $id (.; if (.providerInstances[$id]? | type) == "object" then
