@@ -77,3 +77,29 @@ test("Pi 1.5.0 installed, one anchor drifted: apply exits 1 and names the patch"
 		assert.match(r.stderr, /ERROR: patch btw-native-session failed/);
 	} finally { s.cleanup(); }
 });
+
+// Pi 1.5.2 (anchors changed in 1.5.1): every patch except response-visibility (its payload lives in cartwmic/pi-response-visibility) applies,
+// a second apply is a no-op, and a failed response-visibility run does not stop the others. Needs a pristine 1.5.2 tree:
+//   npm install --ignore-scripts --prefix <dir2> @earendil-works/pi-coding-agent@1.5.2 ; PI_1_5_2_NODE_MODULES=<dir2>/node_modules
+const PRISTINE_152 = process.env.PI_1_5_2_NODE_MODULES;
+test("Pi 1.5.2 installed: all patches apply (response-visibility aside), second apply changes nothing, failures are only response-visibility", { skip: PRISTINE_152 ? false : "set PI_1_5_2_NODE_MODULES (see comment)" }, () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-apply-152-"));
+	try {
+		const scope = join(dir, "node_modules", "@earendil-works");
+		cpSync(join(PRISTINE_152, "@earendil-works"), scope, { recursive: true });
+		const home = join(dir, "home"), agent = join(dir, "agent"), marker = join(dir, "failed");
+		mkdirSync(home); mkdirSync(agent);
+		const env = {
+			HOME: home, PATH: [dirname(process.execPath), "/usr/bin", "/bin"].join(":"), PI_CODING_AGENT_DIR: agent, PI_PATCHES_ROOT: PATCHES,
+			PI_ROOT: join(scope, "pi-coding-agent"), PI_CHEZMOI_PROFILE: "personal", PI_PATCH_FAILURE_MARKER: marker,
+			PI_RESPONSE_VISIBILITY_HELPER: HELPER ?? join(dir, "no-helper.mjs"),
+		};
+		const first = apply(env);
+		const failed = [...(first.stderr.matchAll(/ERROR: patch (\S+) failed/g))].map((m) => m[1]);
+		assert.deepEqual(failed.filter((n) => n !== "response-visibility"), [], first.stdout + first.stderr);
+		const afterFirst = tree(scope);
+		const second = apply(env);
+		assert.deepEqual(tree(scope), afterFirst, "second apply is a no-op on the Pi tree");
+		assert.equal(second.status, first.status);
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});

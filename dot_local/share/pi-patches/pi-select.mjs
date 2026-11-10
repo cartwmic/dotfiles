@@ -3,6 +3,8 @@
 //
 // A patch directory keeps one payload per Pi minor series where anchors changed (patch.pi-1.1.mjs, patch.pi-1.2.mjs).
 // A payload is named for the first series it supports and serves every later series until a newer payload exists.
+// A variants key may also be a full version ("1.5.1") when anchors changed inside a minor series; that payload
+// serves that version and every later one until a newer payload exists.
 // patch.mjs stays the single entry point the apply loop, the onchange hash and the proofs already use.
 //
 // Selection is by version floor; whether a payload fits is decided by its own checked anchors, which fail
@@ -23,10 +25,13 @@ export function seriesOf(version) {
 	return m ? `${m[1]}.${m[2]}` : undefined;
 }
 
+// Floor keys are "major.minor" or "major.minor.patch" (patch defaults to 0); compared newest first.
+const floorParts = (key) => { const [major, minor, patch = 0] = key.split(".").map(Number); return [major, minor, patch]; };
 const newestFirst = (a, b) => {
-	const [am, an] = a.split(".").map(Number), [bm, bn] = b.split(".").map(Number);
-	return bm - am || bn - an;
+	const [am, an, ap] = floorParts(a), [bm, bn, bp] = floorParts(b);
+	return bm - am || bn - an || bp - ap;
 };
+const versionParts = (version) => { const m = SERIES.exec(String(version).trim()); return `${m[1]}.${m[2]}.${m[3]}`; };
 
 /** Pure selection, exported for tests. root === undefined means "Pi not installed". */
 export function selectPayload(root, variants, readVersion = (r) => JSON.parse(readFileSync(join(r, "package.json"), "utf8")).version) {
@@ -36,7 +41,7 @@ export function selectPayload(root, variants, readVersion = (r) => JSON.parse(re
 	try { version = readVersion(root); } catch (error) { return { kind: "unreadable", error: String(error?.message ?? error), supported }; }
 	const series = seriesOf(version);
 	if (!series) return { kind: "unparseable", version, supported };
-	const floor = supported.find((s) => newestFirst(s, series) >= 0);
+	const floor = supported.find((s) => newestFirst(s, versionParts(version)) >= 0);
 	if (!floor) return { kind: "unsupported", version, supported };
 	return { kind: "match", version, series: floor, file: variants[floor], supported };
 }
@@ -46,7 +51,7 @@ export function dispatchByPiVersion(metaUrl, { name, packageEnv, variants }) {
 	const log = (m) => console.log(`[pi-patch:${name}] ${m}`);
 	const root = (packageEnv && process.env[packageEnv]) || piCodingAgentRoot();
 	const pick = selectPayload(root, variants);
-	const list = pick.supported.map((s) => `${s}.x`).join(", ");
+	const list = pick.supported.map((s) => (s.split(".").length > 2 ? `${s}+` : `${s}.x`)).join(", ");
 	if (pick.kind === "unreadable") { console.error(`[pi-patch:${name}] ERROR: cannot read Pi version from ${root}/package.json (${pick.error}); supported Pi series: ${list}; no files were changed`); process.exit(1); }
 	if (pick.kind === "unparseable") { console.error(`[pi-patch:${name}] ERROR: unrecognised Pi version "${pick.version}"; supported Pi series: ${list}; no files were changed`); process.exit(1); }
 	if (pick.kind === "unsupported") { console.error(`[pi-patch:${name}] ERROR: no payload for Pi ${pick.version}; payloads start at Pi ${pick.supported.at(-1)}.x (${list}). No files were changed`); process.exit(1); }

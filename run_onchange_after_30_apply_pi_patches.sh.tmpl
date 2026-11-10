@@ -37,6 +37,10 @@
 # payload 1.2 (settlement-abort): {{ include "dot_local/share/pi-patches/settlement-abort/patch.pi-1.2.mjs" | sha256sum }}
 # payload 1.1 (standing-reminder-origin): {{ include "dot_local/share/pi-patches/standing-reminder-origin/patch.pi-1.1.mjs" | sha256sum }}
 # payload 1.2 (standing-reminder-origin): {{ include "dot_local/share/pi-patches/standing-reminder-origin/patch.pi-1.2.mjs" | sha256sum }}
+# payload 1.5.1 (btw-native-session): {{ include "dot_local/share/pi-patches/btw-native-session/patch.pi-1.5.1.mjs" | sha256sum }}
+# edits 1.5.1 (btw-native-session): {{ include "dot_local/share/pi-patches/btw-native-session/edits.pi-1.5.1.json" | sha256sum }}
+# payload 1.5.1 (prompt-start-race): {{ include "dot_local/share/pi-patches/prompt-start-race/patch.pi-1.5.1.mjs" | sha256sum }}
+# payload 1.5.1 (standing-reminder-origin): {{ include "dot_local/share/pi-patches/standing-reminder-origin/patch.pi-1.5.1.mjs" | sha256sum }}
 # pi-select.mjs (version selector):          {{ include "dot_local/share/pi-patches/pi-select.mjs" | sha256sum }}
 # pi-root.mjs (shared locator):             {{ include "dot_local/share/pi-patches/pi-root.mjs" | sha256sum }}
 # apply script:                             {{ include "dot_local/user_scripts/executable_apply_pi_patches.sh" | sha256sum }}
@@ -56,4 +60,15 @@ set -eu
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 export PI_CHEZMOI_PROFILE={{ .profile | quote }}
 export PI_PATCHES_ROOT={{ joinPath .chezmoi.sourceDir "dot_local/share/pi-patches" | quote }}
-exec mise run apply-pi-patches
+# A failed patch must not stop chezmoi here: it would skip the later scripts (65 agent kit, 75 instances, 90 codex
+# trust). Report it loudly, leave the failure marker, exit 0; run_after_99_report_pi_patch_failures exits 1 at the end.
+status=0
+mise run apply-pi-patches || status=$?
+[ "$status" -eq 0 ] && exit 0
+echo "[apply_pi_patches] ERROR: Pi patches failed (exit $status). Later setup scripts still run; this apply exits non-zero at the end." >&2
+marker="${PI_PATCH_FAILURE_MARKER:-${XDG_STATE_HOME:-$HOME/.local/state}/pi-patches/failed}"
+if [ ! -s "$marker" ]; then
+  mkdir -p "$(dirname "$marker")"
+  echo "apply-pi-patches exited $status before reporting patch names" > "$marker"
+fi
+exit 0

@@ -1,6 +1,6 @@
 # Prompt start race
 
-> **Layout:** `patch.mjs` selects `patch.pi-1.1.mjs` for Pi 1.1.x and `patch.pi-1.2.mjs` for Pi 1.2.0 and later (see ../README.md, "Pi version selection"). This README and its proofs describe `patch.pi-1.2.mjs`, whose anchors match Pi 1.2.0, 1.3.0 and 1.4.0 unchanged; the 1.1.x payload is the unchanged pre-port revision.
+> **Layout:** `patch.mjs` selects `patch.pi-1.1.mjs` for Pi 1.1.x and `patch.pi-1.2.mjs` for Pi 1.2.0 to 1.5.0 and `patch.pi-1.5.1.mjs` for Pi 1.5.1 and later (see ../README.md, "Pi version selection"). This README and its proofs describe `patch.pi-1.2.mjs`, whose anchors match Pi 1.2.0, 1.3.0 and 1.4.0 unchanged; the 1.1.x payload is the unchanged pre-port revision.
 
 
 Tested against **Pi 1.2.0** (module `dist/core/agent-session.js` and the bundled
@@ -19,6 +19,10 @@ anchor and the late test schedule are gone. The early branch is still needed
 (an idle TUI submit without `streamingBehavior` still throws), and a narrow
 window remains while `prompt()` awaits `checkAuth` just before `_startRun`, so
 the late check moved to just before `await this._startRun({ messageType: "user"`.
+
+## Pi 1.5.1 and later (`patch.pi-1.5.1.mjs`, revision 3)
+
+Pi 1.5.1 split `prompt()` into `prompt()` and `_preparePrompt()`. The early wait and the early steer default are still in the streaming part, now inside `_preparePrompt`. `_preparePrompt` returns a run trigger (`{ messageType: "user", prompt, images }`) after the auth check, and `prompt()` calls `_startRun(trigger, ...)`. The late check moved to `prompt()`, directly before `_startRun`, so it still has no `await` between the check and the start. When it queues, it uses `trigger.prompt` and `trigger.images`. `_startRun` still marks the run active synchronously. Tested on Pi 1.5.2.
 
 ## Problem (as of Pi 1.0.0; see above for 1.2.0)
 
