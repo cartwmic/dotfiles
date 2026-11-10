@@ -1,13 +1,13 @@
 ---
 name: distilling-requirements
-description: Use when you need to know what a repo is required to do, from its code, tests, docs and behavior, not from a diff. Produces one REQUIREMENTS.md with a requirements register (explicit and implicit, product, behavioral and technical), the repo's state machines and invariants, invariants it relies on but never enforces, reachable invalid states with evidence, and which test covers each requirement. Use for backfilling a PRD, auditing an unfamiliar or agent-written repo, or finding hidden bugs. Not for reviewing a PR (review-map), not for a Loop Engine PRD candidate (using-generate-prd), not for designing.
+description: Use when you need to know what a repo is required to do, from its code, tests, docs and behavior, not from a diff. Produces one REQUIREMENTS.md with a requirements register (explicit and implicit, product, behavioral and technical), the repo's state machines and invariants, invariants it relies on but never enforces, reachable invalid states with evidence, and which test covers each requirement. Use for backfilling a PRD, auditing an unfamiliar or agent-written repo, or listing candidate bugs and races to check (a first pass: it finds real code behavior but misses known defects often, so verify each finding). Not for reviewing a PR (review-map), not for a Loop Engine PRD candidate (using-generate-prd), not for designing.
 ---
 
 # Distilling Requirements
 
 Read a repo and write down what it must do, including what nobody wrote down, with evidence for every line and the test that covers it. The output is one file in a fixed shape ([references/output-shape.md](references/output-shape.md)) so a person, another skill or a later run reads it the same way.
 
-**How it differs from neighbours.** `using-generate-prd` drives a Loop Engine research run to a schema-valid `LE-n` PRD candidate; it needs the engine and covers product obligations only. `review-map` explains a diff. This skill needs only the repo, covers three lenses, and adds state machines, unenforced invariants and test-coverage gaps. Its register can seed a PRD candidate later; it mints no `LE-n` ids.
+**How it differs from neighbours.** `using-generate-prd` drives a Loop Engine research run to a schema-valid `LE-n` PRD candidate and needs the engine; it has no state machines, unenforced invariants or per-requirement test coverage. `review-map` explains a diff. This skill needs only the repo, covers three lenses, and adds state machines, unenforced invariants and test-coverage gaps. Its register can seed a PRD candidate later; it mints no `LE-n` ids.
 
 ## Inputs
 
