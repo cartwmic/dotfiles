@@ -1,6 +1,6 @@
 # REQUIREMENTS.md shape
 
-Read this when writing or reading the file. The headings, table columns and id formats below are the contract; a reader (person or skill) can rely on them. A `|` inside a cell breaks the tables: write `/` instead. Add rows, not columns. If the shape must change, bump `shape:` in the header.
+Read this when writing or reading the file. The headings, table columns and id formats below are the contract; a reader (person or skill) can rely on them. A `|` inside a cell breaks the tables: write `/` instead; a `;` in a test name becomes `,`. Write an id token (`R-1`) only as a real id, never in prose that is not one. Add rows, not columns. If the shape must change, bump `shape:` in the header.
 
 ## Contents
 - Header
@@ -19,7 +19,8 @@ The file starts with this fenced block of `key: value` lines; the title goes bel
 shape: requirements/1
 repo: <name>
 commit: <full sha>
-scope: <whole repo | path list>
+scope: <whole repo | path list; callees and callers read in part as path (lines)>
+source: <git | archive>   (optional; archive means no history, so no drift check)
 date: <YYYY-MM-DD>
 not-read: <paths or areas skipped, or "none">
 counts: R=<n> SM=<n> I=<n> U=<n> F=<n> Q=<n>
@@ -48,7 +49,7 @@ One subsection per machine, `### SM-<n>: <name>`, then:
 
 - `where:` the `path:line` of the state field or enum
 - States: a table `| state | meaning | evidence |`
-- Invariants: a table `| id | invariant | enforced by | evidence |` with ids `I-<n>`, where `enforced by` is `type` | `check` | `constraint` | `test` | `none`; or the line `- Invariants: none found`
+- Invariants: a table `| id | invariant | enforced by | evidence |` with ids `I-<n>`, where `enforced by` is `type` | `check` | `constraint` | `convention` (callers keep to it, nothing enforces it) | `test` | `none`; or the line `- Invariants: none found`
 - Transitions: a table `| from | event | guard | to | effects | evidence |`; `*` allowed in `from`; write "except X" in `guard` for any state but X
 - `writers:` each process or caller that writes the state, and whether it passes a stale-write guard (the read-then-write races come from here)
 - `unreachable-by-design:` states or transitions the code forbids, if any
@@ -72,7 +73,7 @@ Reachable invalid states or transitions and other confirmed defects. Ids `F-<n>`
 |---|---|---|---|---|---|---|---|
 
 - `impact`: `high` (wrong data, lost work, stuck) | `medium` | `low`
-- `confidence`: `confirmed` (reproduced or unambiguous path) | `suspected`
+- `confidence`: `confirmed` (reproduced or unambiguous path) | `likely` (code path certain, external behavior assumed) | `suspected`
 - `machine/ref`: ids separated by `;` (for example `SM-1; R-19; U-2`)
 - `path to it`: the numbered steps, including any retry or concurrent writer
 - `issue group`: a short label shared by findings with one fix

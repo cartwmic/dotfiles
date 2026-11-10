@@ -22,11 +22,11 @@ ENUMS = {
     "status": {"proposed", "accepted", "disputed"},
     "fit": {"full", "partial", "none", "title"},
     "impact": {"high", "medium", "low"},
-    "confidence": {"confirmed", "suspected"},
+    "confidence": {"confirmed", "likely", "suspected"},
 }
 
 
-ENFORCED = {"R": {"yes", "partial", "no"}, "I": {"type", "check", "constraint", "test", "none"}}
+ENFORCED = {"R": {"yes", "partial", "no"}, "I": {"type", "check", "constraint", "convention", "test", "none"}}
 
 
 def cells(line):
