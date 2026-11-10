@@ -4,12 +4,18 @@
 # pi-coding-agent / pi-ai trees. Idempotent. Safe to run on machines
 # without pi installed (exits 0, one notice line per skipped patch).
 #
+# A failing patch does not stop the loop: every patch runs, each failure is named, and the script exits 1
+# at the end. It also keeps a failure marker (names of the failed patches) at $PI_PATCH_FAILURE_MARKER, or
+# ${XDG_STATE_HOME:-~/.local/state}/pi-patches/failed, which run_after_99_report_pi_patch_failures reads so
+# a failed patch run never hides the scripts that come after it. A run where every patch passes removes it.
+#
 # See: ~/.local/share/chezmoi/dot_local/share/pi-patches/<patch>/README.md
 
 set -eu
 
 SCRIPT_NAME="apply_pi_patches"
 PATCHES_ROOT="${PI_PATCHES_ROOT:-$HOME/.local/share/chezmoi/dot_local/share/pi-patches}"
+FAILURE_MARKER="${PI_PATCH_FAILURE_MARKER:-${XDG_STATE_HOME:-$HOME/.local/state}/pi-patches/failed}"
 
 log() {
   echo "[$SCRIPT_NAME] $1"
@@ -36,6 +42,7 @@ pi_present=$(node --input-type=module -e 'import { pathToFileURL } from "node:ur
 
 # Iterate every patch directory containing a patch.mjs.
 exit_code=0
+failed_patches=""
 for patch_dir in "$PATCHES_ROOT"/*/; do
   [ -d "$patch_dir" ] || continue
   patch_script="${patch_dir}patch.mjs"
@@ -50,7 +57,15 @@ for patch_dir in "$PATCHES_ROOT"/*/; do
   if ! node "$patch_script"; then
     log_error "patch $patch_name failed — see diagnostic above"
     exit_code=1
+    failed_patches="$failed_patches $patch_name"
   fi
 done
 
+if [ "$exit_code" -ne 0 ]; then
+  log_error "failed patches:$failed_patches — fix them, then run: mise run apply-pi-patches"
+  mkdir -p "$(dirname "$FAILURE_MARKER")"
+  printf '%s\n' "$failed_patches" > "$FAILURE_MARKER"
+else
+  rm -f "$FAILURE_MARKER"
+fi
 exit "$exit_code"

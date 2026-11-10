@@ -20,9 +20,10 @@ between Pi minor series, so each directory holds one payload per series and `pat
 |---|---|
 | `patch.mjs` | Entry point the apply loop, the onchange hash and the proofs use. Calls `dispatchByPiVersion` in `pi-select.mjs`. |
 | `patch.pi-1.1.mjs` | Payload for Pi 1.1.x (the revisions before the 1.2.0 port: v1/v1/v2/v2). |
-| `patch.pi-1.2.mjs` | Payload for Pi 1.2.0 and later (the 1.2.0 port: v2/v2/v3/v3). Its anchors match 1.3.0 and 1.4.0 unchanged. |
+| `patch.pi-1.2.mjs` | Payload for Pi 1.2.0 and later (the 1.2.0 port: v2/v2/v3/v3). Its anchors match 1.3.0, 1.4.0 and 1.5.0 unchanged. |
+| `patch.pi-1.5.1.mjs` | prompt-start-race (v3) and standing-reminder-origin (v4) only: Pi 1.5.1 and later. 1.5.1 split `AgentSession.prompt()` into `prompt()` + `_preparePrompt()` and gave `_queueSteer` / `_queueFollowUp` an image-normalisation line, so the 1.2 anchors fail from 1.5.1 on (identical `agent-session.js` in 1.5.1 and 1.5.2). |
 
-Selection is by version floor, and the payload's checked anchors decide the rest. It reads the installed Pi version (same locator and
+Selection is by version floor, and the payload's checked anchors decide the rest. A `variants` key is a series (`"1.2"`) or a full version (`"1.5.1"`, for anchors that changed inside a series); the newest floor at or below the installed version wins. It reads the installed Pi version (same locator and
 per-patch `PI_*_PACKAGE` override the payloads use) and runs the newest payload whose series is at or below it, with the same arguments
 and environment; its exit code is the result. A newer Pi needs no new file while the anchors still match. When they stop matching, the
 payload fails with exit 1 and writes nothing. A Pi older than every payload, or one whose version cannot be read, also fails with exit 1
@@ -45,13 +46,23 @@ the payload finds each chunk as the single bundle file containing that chunk's f
 and the extension-dialog edits ported to upstream 1.4.0's dialog stack (`pushExtensionDialog` / `removeExtensionDialog`): the hosted-UI ticket
 attaches to the selector or input before it is pushed, and the editor's native cancel calls its own `finish`. The one large 1.3 bundle block is split
 into small anchored edits for the same hunks. Every other edit is unchanged.
-`patch.pi-1.5.mjs` + `edits.pi-1.5.json` serve Pi 1.5.0 and later with the same chunk lookup; `patch.pi-1.4.mjs` now serves only the 1.4 series.
+`patch.pi-1.5.mjs` + `edits.pi-1.5.json` serve Pi 1.5.0 only (same chunk lookup); `patch.pi-1.4.mjs` serves only the 1.4 series. `patch.pi-1.5.1.mjs` + `edits.pi-1.5.1.json` serve Pi 1.5.1 and later.
+`edits.pi-1.5.1.json` is `edits.pi-1.5.json` re-anchored for Pi 1.5.2 (1.5.1 and 1.5.2 ship the same `agent-session.js`): nine blocks drifted and were merged token by token (the old text and our replacement each keep their own change),
+the `showExtensionCustom`/`custom()` return type is now `Promise<T | undefined>`, the extension-selector list scrolls, `emitSessionShutdownEvent` and `bindExtensions` carry upstream's UI-shutdown hooks, and `BashExecutionComponent` is followed by upstream's `setExpanded(...)`.
+Two edits (the first `updatePendingMessagesDisplay` hunk, source and bundle) were dropped: 1.5.2 now loops over `pendingBashComponents` there itself, and the later guard edit anchors on that upstream loop. 111 edits instead of 113.
 `edits.pi-1.5.json` is `edits.pi-1.4.json` with the chunks renamed (`chunk-MM3LKT73.js` -> `chunk-44DLKSKE.js`, `chunk-T726RZZU.js` -> `chunk-4EYXVSA5.js`)
 and four edits re-anchored for Pi 1.5.0: two bundle blocks and one bundle edit follow upstream's minifier renames
 (`entries` -> `entries2` in `buildExtensionResourcePaths` and in the compaction-restore block, `resolve16` -> `resolve15` in `showExtensionEditor`),
 and the `custom()` declaration in `extensions/types.d.ts` now carries upstream's new `blocked` option inside its anchor. The replacements are otherwise unchanged.
 `anthropic-idle-watchdog` has no versioned payload: its CLI anchor was shortened to the loop head, which is exactly once on Pi 1.2.0 through 1.5.0 (see its README).
-`response-visibility` is not version-aware here: its payload lives in `cartwmic/pi-response-visibility`, which is anchor-gated and matches Pi 1.2.0 through 1.5.0 at `cartwmic/pi-response-visibility` `f1f74eb` or later (an older checkout fails on 1.5.0).
+`response-visibility` is not version-aware here: its payload lives in `cartwmic/pi-response-visibility`, which is anchor-gated and matches Pi 1.2.0 through 1.5.0 at `cartwmic/pi-response-visibility` `f1f74eb` or later, and Pi 1.5.2 at `b0d2ed7` or later (an older checkout fails on 1.5.2: the bundle splits the model runtime and the runner into separate chunks). After a Pi upgrade, run `pi update` so the Git package is current before `chezmoi apply`.
+
+## When a patch fails
+
+The apply loop runs every patch even after one fails, names each failure, and exits 1. Under chezmoi the wrapper (`run_onchange_after_30_apply_pi_patches.sh.tmpl`) does not let that stop the apply:
+it exits 0, so 65 (agent kit), 75 (instances) and 90 (codex hook trust) still run, and leaves a marker (`~/.local/state/pi-patches/failed`, the failed patch names). `run_after_99_report_pi_patch_failures.sh` runs last and exits 1 while the marker exists, so the apply ends non-zero and says which patches failed.
+A run where every patch passes removes the marker (also `mise run apply-pi-patches` and `mise run update-pi`). Re-running is safe on a release that is already partly patched: each patch checks its own blocks and does nothing when they are already in place.
+After you fix the cause, run `mise run apply-pi-patches`; the next `chezmoi apply` is then clean.
 
 ## Overview
 

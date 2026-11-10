@@ -1,6 +1,6 @@
 # Standing-reminder input origin bridge
 
-> **Layout:** `patch.mjs` selects `patch.pi-1.1.mjs` for Pi 1.1.x and `patch.pi-1.2.mjs` for Pi 1.2.0 and later (see ../README.md, "Pi version selection"). This README and its proofs describe `patch.pi-1.2.mjs`, whose anchors match Pi 1.2.0, 1.3.0 and 1.4.0 unchanged; the 1.1.x payload is the unchanged pre-port revision.
+> **Layout:** `patch.mjs` selects `patch.pi-1.1.mjs` for Pi 1.1.x and `patch.pi-1.2.mjs` for Pi 1.2.0 to 1.5.0 and `patch.pi-1.5.1.mjs` for Pi 1.5.1 and later (see ../README.md, "Pi version selection"). This README and its proofs describe `patch.pi-1.2.mjs`, whose anchors match Pi 1.2.0, 1.3.0 and 1.4.0 unchanged; the 1.1.x payload is the unchanged pre-port revision.
 
 
 Pi exposes `input.source` before a message is processed, but the later
@@ -26,6 +26,8 @@ extensions:
 - The discovered `dist/bundle/chunks/*.js` containing Pi's input queue — CLI
   runtime actually loaded by the executable
 - `dist/core/extensions/types.d.ts` — `MessageStartEvent.source?: InputSource`
+
+Pi 1.5.1 and later use `patch.pi-1.5.1.mjs` (revision 4): `_queueSteer` and `_queueFollowUp` now also record queued messages that carry images (`_queuedMessagesWithImages`), so those two anchors include that line and the origin is set before it. Every other block is unchanged. Tested on Pi 1.5.2.
 
 Revision 3 is tested on **Pi 1.2.0** (only that version; older pins are not
 claimed). Pi 1.2.0 replaced `_runAgentPrompt(messages)` with
